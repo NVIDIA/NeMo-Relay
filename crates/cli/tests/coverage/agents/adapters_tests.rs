@@ -1441,3 +1441,30 @@ fn mcp_metadata_is_not_inferred_from_arguments_results_or_non_tool_hooks() {
         assert!(event.metadata.get("mcp.method.name").is_none());
     }
 }
+
+#[test]
+fn claude_stop_failure_is_a_failed_nonterminal_turn_boundary() {
+    for details in [None, Some(json!({"message": "model unavailable"}))] {
+        let mut payload = json!({
+            "session_id": "failed-session",
+            "hook_event_name": "StopFailure",
+            "error": "model_not_found"
+        });
+        if let Some(details) = &details {
+            payload["error_details"] = details.clone();
+        }
+        let outcome = claude_code::adapt(payload, &HeaderMap::new());
+        assert_eq!(outcome.response, json!({"continue": true}));
+        assert_eq!(outcome.events.len(), 1);
+        assert!(!outcome.events[0].is_terminal());
+        let NormalizedEvent::TurnEnded(event) = &outcome.events[0] else {
+            panic!("StopFailure must close a turn: {:?}", outcome.events);
+        };
+        assert_eq!(event.session_id, "failed-session");
+        assert_eq!(event.payload["status"], "error");
+        assert_eq!(event.payload["error"], "model_not_found");
+        assert_eq!(event.payload.get("error_details"), details.as_ref());
+        assert_eq!(event.metadata["otel.status_code"], "ERROR");
+        assert_eq!(event.metadata["error.type"], "model_not_found");
+    }
+}

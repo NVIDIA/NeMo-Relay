@@ -85,6 +85,12 @@ args_codec = DataclassCodec(SearchArgs)
 result_codec = PydanticCodec(SearchResult)
 passthrough = JsonPassthrough()
 ```
+
+`DataclassCodec` encodes fields set to `None` as JSON `null`, including fields
+in nested dataclasses, lists, and dictionaries. When decoding, an omitted field uses its
+dataclass default, while an omitted required field raises `TypeError`. Explicit
+`null` decodes to `None` without applying a default.
+
 </Tab>
 
 <Tab title="Node.js" language="node">
@@ -205,12 +211,7 @@ search_result = result.result
 
 <Tab title="Node.js" language="node">
 ```ts
-import {
-  JsonPassthrough,
-  typedToolExecute,
-  type Codec,
-  type JsonValue,
-} from 'nemo-relay-node/typed';
+import { typedToolExecute, type Codec, type JsonValue } from 'nemo-relay-node/typed';
 
 type SearchArgs = { query: string };
 type SearchResult = { echo: string };
@@ -219,13 +220,17 @@ const argsCodec: Codec<SearchArgs, JsonValue> = {
   toJson: (value) => value,
   fromJson: (json) => json as SearchArgs,
 };
+const resultCodec: Codec<SearchResult, JsonValue> = {
+  toJson: (value) => value,
+  fromJson: (json) => json as SearchResult,
+};
 
 const result = await typedToolExecute<SearchArgs, SearchResult>(
   'search',
   { query: 'weather' },
   async (args) => ({ result: { echo: args.query } }),
   argsCodec,
-  new JsonPassthrough(),
+  resultCodec,
 );
 const searchResult = result.result;
 ```

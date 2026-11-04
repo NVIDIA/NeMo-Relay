@@ -22,3 +22,7 @@ def test_exact_validation_rejects_typed_host_diagnostics():
 def test_exact_validation_accepts_static_plugin_config():
     report = plugin.validate_exact(plugin.PluginConfig())
     assert report["dynamic_plugins"] == []
+
+
+def test_all_builtin_kinds_are_available_without_component_helpers() -> None:
+    assert {"observability", "pricing", "resource_metrics", "adaptive", "pii_redaction"} <= set(plugin.list_kinds())

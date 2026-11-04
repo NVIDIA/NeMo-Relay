@@ -63,7 +63,7 @@ The Node.js package provides the following capabilities:
 Install the npm package in a Node.js 24.13.1 or newer project:
 
 ```bash
-npm install nemo-relay-node@0.11.0
+npm install nemo-relay-node@1.0.0
 ```
 
 On Windows, the native runtime remains loaded until process exit, including
@@ -109,7 +109,7 @@ helpers apply result codecs only to the application-owned `result`, while Relay
 preserves the optional opaque `annotation` as adjacent metadata:
 
 ```js
-const { toolCallExecuteAsync } = require('nemo-relay-node');
+import { toolCallExecuteAsync } from 'nemo-relay-node';
 
 const execution = await toolCallExecuteAsync('lookup', { query: 'relay' }, async (args) => ({
   result: { answer: args.query.toUpperCase() },

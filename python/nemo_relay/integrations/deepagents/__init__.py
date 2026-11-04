@@ -6,7 +6,7 @@
 from __future__ import annotations
 
 from collections.abc import Mapping, Sequence
-from typing import Any
+from typing import Any, Literal
 
 from nemo_relay.integrations.deepagents.callbacks import NemoRelayDeepAgentsCallbackHandler
 from nemo_relay.integrations.deepagents.middleware import NemoRelayDeepAgentsMiddleware
@@ -16,6 +16,7 @@ def add_nemo_relay_integration(
     kwargs: Mapping[str, Any] | None = None,
     *,
     instrument_subagents: bool = True,
+    position: Literal["outer", "inner"] = "inner",
     **overrides: Any,
 ) -> dict[str, Any]:
     """Attach NeMo Relay observability to ``create_deep_agent`` keyword arguments.
@@ -29,11 +30,24 @@ def add_nemo_relay_integration(
         kwargs: Existing keyword arguments for ``create_deep_agent``.
         instrument_subagents: Whether to add Relay middleware to dictionary
             subagents that do not inherit parent middleware.
+        position: Where to add Relay in the user middleware list. ``"inner"``
+            adds it at the end by default. ``"outer"`` adds it at the start.
+            With ``"outer"``, Relay records tool results after user wrappers
+            change them.
+            This setting also applies to custom subagents defined as dictionaries.
+            Deep Agents controls the order of built-in middleware. Existing
+            Relay middleware keeps its position.
         **overrides: Keyword arguments that override values from ``kwargs``.
 
     Returns:
         dict[str, Any]: Arguments ready to pass to ``create_deep_agent``.
+
+    Raises:
+        ValueError: If ``position`` is not ``"outer"`` or ``"inner"``.
     """
+    if position not in ("outer", "inner"):
+        raise ValueError('position must be "outer" or "inner"')
+
     observed = dict(kwargs or {})
     observed.update(overrides)
 
@@ -44,7 +58,7 @@ def add_nemo_relay_integration(
     backend_name = type(backend).__name__ if backend is not None else None
 
     middleware = list(observed.get("middleware") or ())
-    _append_middleware(
+    _insert_middleware(
         middleware,
         NemoRelayDeepAgentsMiddleware(
             agent_name=observed.get("name"),
@@ -52,34 +66,43 @@ def add_nemo_relay_integration(
             subagents=subagent_summaries,
             backend_name=backend_name,
         ),
+        position,
     )
     observed["middleware"] = middleware
 
     if instrument_subagents and subagents:
-        observed["subagents"] = [_instrument_subagent(subagent) for subagent in subagents]
+        observed["subagents"] = [_instrument_subagent(subagent, position) for subagent in subagents]
 
     return observed
 
 
-def _append_middleware(middleware: list[Any], new_middleware: NemoRelayDeepAgentsMiddleware) -> None:
+def _insert_middleware(
+    middleware: list[Any],
+    new_middleware: NemoRelayDeepAgentsMiddleware,
+    position: Literal["outer", "inner"],
+) -> None:
     if any(isinstance(item, NemoRelayDeepAgentsMiddleware) for item in middleware):
         return
-    middleware.append(new_middleware)
+    if position == "outer":
+        middleware.insert(0, new_middleware)
+    else:
+        middleware.append(new_middleware)
 
 
-def _instrument_subagent(subagent: Any) -> Any:
+def _instrument_subagent(subagent: Any, position: Literal["outer", "inner"]) -> Any:
     if not isinstance(subagent, dict):
         return subagent
 
     observed = dict(subagent)
     middleware = list(observed.get("middleware") or ())
-    _append_middleware(
+    _insert_middleware(
         middleware,
         NemoRelayDeepAgentsMiddleware(
             agent_name=observed.get("name"),
             skills=_string_sequence(observed.get("skills")),
             subagents=None,
         ),
+        position,
     )
     observed["middleware"] = middleware
     return observed

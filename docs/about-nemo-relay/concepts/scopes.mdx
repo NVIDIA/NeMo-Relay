@@ -249,14 +249,7 @@ async def main() -> None:
 </Tab>
 <Tab title="Rust" language="rust">
 
-```rust
-use nemo_relay::api::runtime::{TASK_SCOPE_STACK, fork_scope_stack};
-
-let stack = fork_scope_stack()?;
-tokio::spawn(TASK_SCOPE_STACK.scope(stack, async {
-    // Relay work in an isolated child task.
-}));
-```
+<Code src="_code/fork_task.rs" language="rust" />
 
 </Tab>
 <Tab title="Node.js" language="javascript">
@@ -347,37 +340,7 @@ async def run_agent(request, provider):
 </Tab>
 <Tab title="Rust" language="rust">
 
-```rust
-use nemo_relay::api::llm::{llm_call_execute, LlmCallExecuteParams, LlmRequest};
-use nemo_relay::api::runtime::{capture_traceparent, LlmExecutionNextFn};
-use nemo_relay::api::scope::{pop_scope, push_scope, PopScopeParams, PushScopeParams, ScopeType};
-use nemo_relay::{error::Result, json::Json};
-
-async fn run_agent(request: LlmRequest, provider: LlmExecutionNextFn) -> Result<(Json, String)> {
-    let agent = push_scope(
-        PushScopeParams::builder()
-            .name("agent-run")
-            .scope_type(ScopeType::Agent)
-            .build(),
-    )?;
-    let outcome = llm_call_execute(
-        LlmCallExecuteParams::builder()
-            .name("provider")
-            .request(request)
-            .func(provider)
-            .build(),
-    )
-    .await
-    .and_then(|result| {
-        // The LLM scope has closed. The Agent scope is still active.
-        let agent_traceparent = capture_traceparent()?;
-        Ok((result, agent_traceparent))
-    });
-    // Close the Agent scope even if execution or capture returned an error.
-    pop_scope(PopScopeParams::builder().handle_uuid(&agent.uuid).build())?;
-    outcome
-}
-```
+<Code src="_code/run_agent.rs" language="rust" />
 
 </Tab>
 <Tab title="Node.js" language="javascript">
@@ -455,18 +418,7 @@ agent_scope_uuid = next(
 ```
 </Tab>
 <Tab title="Rust" language="rust">
-```rust
-use nemo_relay::api::runtime::current_scope_stack_snapshot;
-use nemo_relay::api::scope::ScopeType;
-
-let snapshot = current_scope_stack_snapshot()?;
-let agent_scope_uuid = snapshot.as_ref().and_then(|snapshot| {
-    snapshot.scopes.iter().rev()
-        .find(|entry| entry.scope_type == ScopeType::Agent)
-        .map(|entry| entry.scope_id)
-});
-// Correlate callbacks that share this Agent using (agent_scope_uuid, tool_call_id).
-```
+<Code src="_code/correlate_agent.rs" language="rust" />
 </Tab>
 <Tab title="Node.js" language="javascript">
 ```javascript

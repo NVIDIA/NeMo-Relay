@@ -20,34 +20,41 @@ use futures_util::{Stream, StreamExt};
 use hyper_util::rt::TokioIo;
 use nemo_relay_types::api::event::{BaseEvent, Event, MarkEvent, PendingMarkSpec};
 use nemo_relay_worker::{
-    ANNOTATED_LLM_REQUEST_SCHEMA, DataSchema, EmitMarkOptions, EventCategory, Json, JsonStream,
-    LlmNext, LlmRequest, LlmStreamNext, LogSeverity, MetricKind, MetricMeasurement,
-    MetricValueType, PluginContext, PluginLogLevel, PluginRuntime, Result, RuntimeRegistrationKind,
-    ScopeType, ToolExecutionInterceptOutcome, ToolNext, WorkerPlugin, WorkerSdkError,
-    WorkerServerConfig, serve_plugin, serve_plugin_arc, serve_plugin_arc_with_config,
+    DataSchema, EmitMarkOptions, EventCategory, Json, JsonStream, LlmNext, LlmRequest,
+    LlmStreamNext, LogSeverity, MetricKind, MetricMeasurement, MetricValueType, PluginContext,
+    PluginLogLevel, PluginRuntime, Result, RuntimeRegistrationKind, ScopeType,
+    ToolExecutionInterceptOutcome, ToolNext, WorkerPlugin, WorkerSdkError, WorkerServerConfig,
+    serve_plugin, serve_plugin_arc, serve_plugin_arc_with_config,
 };
-use nemo_relay_worker_proto::v1::plugin_worker_client::PluginWorkerClient;
-use nemo_relay_worker_proto::v1::relay_host_runtime_server::{
-    RelayHostRuntime, RelayHostRuntimeServer,
+use nemo_relay_worker_proto::nvidia_worker_v1 as pb;
+#[path = "support/typed_invocations.rs"]
+mod fixtures;
+use fixtures::{
+    ExecutionCodecContext, InvocationFixture as InvokeRequest, LlmInvocation, Payload,
+    PluginWorkerClient, SanitizeContext, ToolInvocation,
 };
-use nemo_relay_worker_proto::v1::{
+use nemo_relay_worker_proto::conversions::{self};
+use nemo_relay_worker_proto::nvidia_worker_v1::relay_host_runtime_service_server::{
+    RelayHostRuntimeService as RelayHostRuntime,
+    RelayHostRuntimeServiceServer as RelayHostRuntimeServer,
+};
+use pb::WORKER_PROTOCOL;
+use pb::{
     CancelInvocationRequest, CreateScopeStackRequest, CreateScopeStackResponse,
     DeregisterConditionalMiddlewareGuardrailRequest,
     DeregisterConditionalMiddlewareGuardrailResponse, DropScopeStackRequest, EmitMarkRequest,
     GetRuntimeDiagnosticsRequest, GetRuntimeDiagnosticsResponse, HandshakeRequest, HealthRequest,
-    HostAck, InvokeRequest, InvokeResponse, JsonEnvelope, JsonResult,
-    ListRuntimeRegistrationsRequest, ListRuntimeRegistrationsResponse, LlmInvocation,
-    LlmNextRequest, LlmStreamNextRequest, LogLevel, LogRequest, PopScopeRequest, PushScopeRequest,
-    PushScopeResponse, RegisterConditionalMiddlewareGuardrailRequest,
+    InvokeResponse, ListRuntimeRegistrationsRequest, ListRuntimeRegistrationsResponse,
+    LlmNextRequest, LlmStreamNextRequest, LogRequest, LogSeverity as LogLevel, PopScopeRequest,
+    PushScopeRequest, PushScopeResponse, RegisterConditionalMiddlewareGuardrailRequest,
     RegisterConditionalMiddlewareGuardrailResponse, RegisterRequest, RegistrationSurface,
-    RuntimeDiagnostic as ProtoRuntimeDiagnostic, ScopeContext, ShutdownRequest, StreamChunk,
+    RuntimeDiagnostic as ProtoRuntimeDiagnostic, ScopeContext, ShutdownRequest,
     ToolExecutionInterceptOutcome as ProtoToolExecutionInterceptOutcome,
-    ToolExecutionResult as ProtoToolExecutionResult, ToolExecutionResultResponse, ToolInvocation,
-    ToolNextRequest, ValidateRequest, WorkerError,
+    ToolExecutionResult as ProtoToolExecutionResult, ToolNextRequest, ValidateRequest, WorkerError,
 };
-use nemo_relay_worker_proto::{
-    WORKER_PROTOCOL_GRPC_V1, decode_json_envelope, decode_json_value, json_envelope, json_value,
-};
+type JsonEnvelope = pb::JsonValue;
+type StreamChunk = pb::InvokeStreamResponse;
+type ToolExecutionResultResponse = pb::ToolNextResponse;
 use serde_json::json;
 #[cfg(unix)]
 use tokio::net::{UnixListener, UnixStream};
@@ -148,7 +155,7 @@ fn runtime_registration_dtos_reexport_shared_types() {
         local_name: "subscriber".into(),
         effective_name: "subscriber".into(),
         owner: nemo_relay_worker::RuntimeRegistrationOwner {
-            kind: nemo_relay_worker::RuntimeRegistrationOwnerKind::GlobalApi,
+            kind: nemo_relay_types::api::registry::RuntimeRegistrationOwnerKind::Core,
             plugin_kind: None,
             component_ordinal: None,
         },
@@ -166,44 +173,69 @@ async fn worker_service_enforces_auth_and_reports_registrations() {
 
     let bad_handshake = client
         .handshake(Request::new(HandshakeRequest {
-            activation_id: ACTIVATION_ID.into(),
             plugin_id: PLUGIN_ID.into(),
             relay_version: "0.8.0".into(),
-            worker_protocol: WORKER_PROTOCOL_GRPC_V1.into(),
-            auth_token: "bad-token".into(),
             host_endpoint: "http://127.0.0.1:9".into(),
+            credentials: Some(pb::Credentials {
+                activation_id: ACTIVATION_ID.into(),
+                auth_token: "bad-token".into(),
+            }),
+            protocol: Some(pb::ProtocolIdentity {
+                name: WORKER_PROTOCOL.into(),
+                version: "1.0.0".into(),
+            }),
         }))
         .await
         .expect_err("invalid token should fail");
-    assert_eq!(bad_handshake.code(), tonic::Code::PermissionDenied);
+    assert_eq!(bad_handshake.code(), tonic::Code::Unauthenticated);
 
     let bad_activation = client
         .handshake(Request::new(HandshakeRequest {
-            activation_id: "wrong-activation".into(),
             plugin_id: PLUGIN_ID.into(),
             relay_version: "0.8.0".into(),
-            worker_protocol: WORKER_PROTOCOL_GRPC_V1.into(),
-            auth_token: AUTH_TOKEN.into(),
             host_endpoint: "http://127.0.0.1:9".into(),
+            credentials: Some(pb::Credentials {
+                activation_id: "wrong-activation".into(),
+                auth_token: AUTH_TOKEN.into(),
+            }),
+            protocol: Some(pb::ProtocolIdentity {
+                name: WORKER_PROTOCOL.into(),
+                version: "1.0.0".into(),
+            }),
         }))
         .await
         .expect_err("invalid activation should fail");
-    assert_eq!(bad_activation.code(), tonic::Code::PermissionDenied);
+    assert_eq!(bad_activation.code(), tonic::Code::Unauthenticated);
 
     let handshake = client
         .handshake(Request::new(HandshakeRequest {
-            activation_id: ACTIVATION_ID.into(),
             plugin_id: PLUGIN_ID.into(),
             relay_version: "0.8.0".into(),
-            worker_protocol: WORKER_PROTOCOL_GRPC_V1.into(),
-            auth_token: AUTH_TOKEN.into(),
             host_endpoint: "http://127.0.0.1:9".into(),
+            credentials: Some(pb::Credentials {
+                activation_id: ACTIVATION_ID.into(),
+                auth_token: AUTH_TOKEN.into(),
+            }),
+            protocol: Some(pb::ProtocolIdentity {
+                name: WORKER_PROTOCOL.into(),
+                version: "1.0.0".into(),
+            }),
         }))
         .await
         .expect("handshake succeeds")
         .into_inner();
-    assert_eq!(handshake.plugin_id, PLUGIN_ID);
-    assert_eq!(handshake.worker_protocol, WORKER_PROTOCOL_GRPC_V1);
+    assert_eq!(handshake.identity.as_ref().unwrap().plugin_id, PLUGIN_ID);
+    assert_eq!(
+        handshake
+            .identity
+            .as_ref()
+            .unwrap()
+            .protocol
+            .as_ref()
+            .unwrap()
+            .name,
+        WORKER_PROTOCOL
+    );
     assert!(
         handshake
             .supported_surfaces
@@ -217,45 +249,66 @@ async fn worker_service_enforces_auth_and_reports_registrations() {
 
     let bad_health = client
         .health(Request::new(HealthRequest {
-            activation_id: ACTIVATION_ID.into(),
-            auth_token: "bad-token".into(),
+            credentials: Some(pb::Credentials {
+                activation_id: ACTIVATION_ID.into(),
+                auth_token: "bad-token".into(),
+            }),
         }))
         .await
         .expect_err("health auth should fail");
-    assert_eq!(bad_health.code(), tonic::Code::PermissionDenied);
+    assert_eq!(bad_health.code(), tonic::Code::Unauthenticated);
 
     let health = client
         .health(Request::new(HealthRequest {
-            activation_id: ACTIVATION_ID.into(),
-            auth_token: AUTH_TOKEN.into(),
+            credentials: Some(pb::Credentials {
+                activation_id: ACTIVATION_ID.into(),
+                auth_token: AUTH_TOKEN.into(),
+            }),
         }))
         .await
         .expect("health succeeds")
         .into_inner();
-    assert!(health.ok);
+    assert!(health.status == pb::WorkerHealthStatus::Ready as i32);
     assert_eq!(health.message, "ready");
-    assert_eq!(health.plugin_id, PLUGIN_ID);
-    assert_eq!(health.worker_protocol, WORKER_PROTOCOL_GRPC_V1);
-    assert_eq!(health.sdk_name, "nemo-relay-worker");
-    assert_eq!(health.runtime_name, "rust");
+    assert_eq!(health.identity.as_ref().unwrap().plugin_id, PLUGIN_ID);
+    assert_eq!(
+        health
+            .identity
+            .as_ref()
+            .unwrap()
+            .protocol
+            .as_ref()
+            .unwrap()
+            .name,
+        WORKER_PROTOCOL
+    );
+    assert_eq!(
+        health.identity.as_ref().unwrap().sdk_name,
+        "nemo-relay-worker"
+    );
+    assert_eq!(health.identity.as_ref().unwrap().runtime_name, "rust");
 
     let validate_err = client
         .validate(Request::new(ValidateRequest {
-            activation_id: ACTIVATION_ID.into(),
             plugin_id: PLUGIN_ID.into(),
-            auth_token: "bad-token".into(),
             config: Some(json_env(json!({"diagnostic": true}))),
+            credentials: Some(pb::Credentials {
+                activation_id: ACTIVATION_ID.into(),
+                auth_token: "bad-token".into(),
+            }),
         }))
         .await
         .expect_err("validate auth should fail");
-    assert_eq!(validate_err.code(), tonic::Code::PermissionDenied);
+    assert_eq!(validate_err.code(), tonic::Code::Unauthenticated);
 
     let invalid_validate_config = client
         .validate(Request::new(ValidateRequest {
-            activation_id: ACTIVATION_ID.into(),
             plugin_id: PLUGIN_ID.into(),
-            auth_token: AUTH_TOKEN.into(),
-            config: Some(invalid_json_env("nemo.relay.Json@1")),
+            config: Some(invalid_json_value()),
+            credentials: Some(pb::Credentials {
+                activation_id: ACTIVATION_ID.into(),
+                auth_token: AUTH_TOKEN.into(),
+            }),
         }))
         .await
         .expect_err("invalid validate config should fail");
@@ -263,37 +316,42 @@ async fn worker_service_enforces_auth_and_reports_registrations() {
 
     let diagnostics = client
         .validate(Request::new(ValidateRequest {
-            activation_id: ACTIVATION_ID.into(),
             plugin_id: PLUGIN_ID.into(),
-            auth_token: AUTH_TOKEN.into(),
             config: Some(json_env(json!({"diagnostic": true}))),
+            credentials: Some(pb::Credentials {
+                activation_id: ACTIVATION_ID.into(),
+                auth_token: AUTH_TOKEN.into(),
+            }),
         }))
         .await
         .expect("validate succeeds")
         .into_inner()
-        .diagnostics
+        .diagnostics()
         .expect("diagnostics envelope");
-    let diagnostics: Vec<nemo_relay_worker::ConfigDiagnostic> =
-        decode_json_envelope(&diagnostics).expect("decode diagnostics");
+
     assert_eq!(diagnostics.len(), 1);
 
     let register_err = client
         .register(Request::new(RegisterRequest {
-            activation_id: ACTIVATION_ID.into(),
             plugin_id: PLUGIN_ID.into(),
-            auth_token: "bad-token".into(),
             config: Some(json_env(json!({}))),
+            credentials: Some(pb::Credentials {
+                activation_id: ACTIVATION_ID.into(),
+                auth_token: "bad-token".into(),
+            }),
         }))
         .await
         .expect_err("register auth should fail");
-    assert_eq!(register_err.code(), tonic::Code::PermissionDenied);
+    assert_eq!(register_err.code(), tonic::Code::Unauthenticated);
 
     let invalid_register_config = client
         .register(Request::new(RegisterRequest {
-            activation_id: ACTIVATION_ID.into(),
             plugin_id: PLUGIN_ID.into(),
-            auth_token: AUTH_TOKEN.into(),
-            config: Some(invalid_json_env("nemo.relay.Json@1")),
+            config: Some(invalid_json_value()),
+            credentials: Some(pb::Credentials {
+                activation_id: ACTIVATION_ID.into(),
+                auth_token: AUTH_TOKEN.into(),
+            }),
         }))
         .await
         .expect_err("invalid register config should fail");
@@ -333,7 +391,10 @@ async fn worker_service_enforces_auth_and_reports_registrations() {
 
     let invoke_err = client
         .invoke(Request::new(InvokeRequest {
-            auth_token: "bad-token".into(),
+            credentials: Some(pb::Credentials {
+                activation_id: ACTIVATION_ID.into(),
+                auth_token: "bad-token".into(),
+            }),
             ..tool_invoke(
                 "tool-request",
                 RegistrationSurface::ToolRequestIntercept,
@@ -342,14 +403,16 @@ async fn worker_service_enforces_auth_and_reports_registrations() {
         }))
         .await
         .expect_err("invoke auth should fail");
-    assert_eq!(invoke_err.code(), tonic::Code::PermissionDenied);
+    assert_eq!(invoke_err.code(), tonic::Code::Unauthenticated);
 
     let cancel = client
         .cancel_invocation(Request::new(CancelInvocationRequest {
-            activation_id: ACTIVATION_ID.into(),
             invocation_id: "invoke-1".into(),
-            auth_token: AUTH_TOKEN.into(),
             reason: "test".into(),
+            credentials: Some(pb::Credentials {
+                activation_id: ACTIVATION_ID.into(),
+                auth_token: AUTH_TOKEN.into(),
+            }),
         }))
         .await
         .expect("cancel returns ack")
@@ -359,17 +422,130 @@ async fn worker_service_enforces_auth_and_reports_registrations() {
 
     let shutdown = client
         .shutdown(Request::new(ShutdownRequest {
-            activation_id: ACTIVATION_ID.into(),
-            auth_token: AUTH_TOKEN.into(),
             reason: "test".into(),
+            credentials: Some(pb::Credentials {
+                activation_id: ACTIVATION_ID.into(),
+                auth_token: AUTH_TOKEN.into(),
+            }),
         }))
         .await
         .expect("shutdown returns ack")
         .into_inner();
-    assert!(!shutdown.accepted);
-    assert!(shutdown.message.contains("not implemented"));
+    assert!(shutdown == pb::ShutdownResponse::default());
+    assert!(shutdown == pb::ShutdownResponse::default());
 
     handle.abort();
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn worker_service_shutdown_closes_tcp_health_watches() {
+    let endpoint = unused_http_endpoint();
+    let worker = tokio::spawn(serve_plugin_arc_with_config(
+        Arc::new(SurfacePlugin::default()),
+        server_config(&endpoint),
+    ));
+    wait_for_port(&endpoint).await;
+    let channel = Channel::from_shared(endpoint)
+        .unwrap()
+        .connect()
+        .await
+        .unwrap();
+    assert_shutdown_closes_health_watches(worker, channel).await;
+}
+
+#[cfg(unix)]
+#[tokio::test(flavor = "multi_thread")]
+async fn worker_service_shutdown_closes_unix_health_watches() {
+    let path = unique_temp_path("nrw-health-watch");
+    let endpoint = format!("unix://{}", path.display());
+    let worker = tokio::spawn(serve_plugin_arc_with_config(
+        Arc::new(SurfacePlugin::default()),
+        server_config(&endpoint),
+    ));
+    wait_for_unix_socket(&path).await;
+    let connect_path = path.clone();
+    let channel = Endpoint::try_from("http://[::]:50051")
+        .unwrap()
+        .connect_with_connector(service_fn(move |_| {
+            let path = connect_path.clone();
+            async move { UnixStream::connect(path).await.map(TokioIo::new) }
+        }))
+        .await
+        .unwrap();
+    assert_shutdown_closes_health_watches(worker, channel).await;
+    let _ = std::fs::remove_file(path);
+}
+
+/// The server must exit while the client still holds both standard health streams.
+async fn assert_shutdown_closes_health_watches(
+    mut worker: JoinHandle<Result<()>>,
+    channel: Channel,
+) {
+    use tonic_health::pb::health_check_response::ServingStatus;
+    use tonic_health::pb::{HealthCheckRequest, health_client::HealthClient};
+
+    let mut health = HealthClient::new(channel.clone());
+    let mut watches = Vec::new();
+    for service in ["", "nvidia.nemo.relay.worker.v1.PluginWorkerService"] {
+        let mut watch = health
+            .watch(HealthCheckRequest {
+                service: service.into(),
+            })
+            .await
+            .unwrap()
+            .into_inner();
+        assert_eq!(
+            watch.message().await.unwrap().unwrap().status,
+            ServingStatus::Serving as i32
+        );
+        watches.push(watch);
+    }
+    let mut client = pb::plugin_worker_service_client::PluginWorkerServiceClient::new(channel);
+    let rejected = client
+        .shutdown(ShutdownRequest {
+            credentials: Some(pb::Credentials {
+                activation_id: ACTIVATION_ID.into(),
+                auth_token: "incorrect".into(),
+            }),
+            reason: "unauthorized probe".into(),
+        })
+        .await
+        .unwrap_err();
+    assert_eq!(rejected.code(), tonic::Code::Unauthenticated);
+    assert_eq!(
+        health
+            .check(HealthCheckRequest { service: "".into() })
+            .await
+            .unwrap()
+            .into_inner()
+            .status,
+        ServingStatus::Serving as i32
+    );
+    client
+        .shutdown(ShutdownRequest {
+            credentials: Some(pb::Credentials {
+                activation_id: ACTIVATION_ID.into(),
+                auth_token: AUTH_TOKEN.into(),
+            }),
+            reason: "test shutdown with health monitors".into(),
+        })
+        .await
+        .unwrap();
+    let exited = tokio::time::timeout(Duration::from_secs(3), &mut worker).await;
+    if exited.is_err() {
+        worker.abort();
+    }
+    exited
+        .expect("health watches must not prevent worker shutdown")
+        .expect("worker task must not panic")
+        .expect("worker server must shut down successfully");
+    for mut watch in watches {
+        assert_eq!(
+            watch.message().await.unwrap().unwrap().status,
+            ServingStatus::NotServing as i32
+        );
+        assert!(watch.message().await.unwrap().is_none());
+    }
 }
 
 #[tokio::test(flavor = "multi_thread")]
@@ -382,22 +558,24 @@ async fn worker_service_rejects_duplicate_registration_names_on_one_surface() {
 
     let response = client
         .register(Request::new(RegisterRequest {
-            activation_id: ACTIVATION_ID.into(),
             plugin_id: PLUGIN_ID.into(),
-            auth_token: AUTH_TOKEN.into(),
             config: Some(json_env(json!({}))),
+            credentials: Some(pb::Credentials {
+                activation_id: ACTIVATION_ID.into(),
+                auth_token: AUTH_TOKEN.into(),
+            }),
         }))
         .await
         .expect("duplicate registration should return protocol data")
         .into_inner();
-    assert!(response.registrations.is_empty());
+    assert!(response.error().is_some());
     let error = response
-        .error
+        .error()
         .expect("duplicate registration should return an error");
     assert_eq!(error.code, "worker.error");
     assert_eq!(
         error.message,
-        "invalid input: duplicate registration 'duplicate' for surface MARK_SANITIZE_GUARDRAIL"
+        "invalid input: duplicate registration 'duplicate' for surface REGISTRATION_SURFACE_MARK_SANITIZE_GUARDRAIL"
     );
 
     handle.abort();
@@ -420,40 +598,42 @@ async fn worker_service_validates_initial_conditional_middleware_guardrails() {
         .await;
         let response = client
             .register(Request::new(RegisterRequest {
-                activation_id: ACTIVATION_ID.into(),
                 plugin_id: PLUGIN_ID.into(),
-                auth_token: AUTH_TOKEN.into(),
                 config: Some(json_env(json!({}))),
+                credentials: Some(pb::Credentials {
+                    activation_id: ACTIVATION_ID.into(),
+                    auth_token: AUTH_TOKEN.into(),
+                }),
             }))
             .await
             .expect("invalid initial gate should return protocol data")
             .into_inner();
-        assert!(response.registrations.is_empty());
-        assert!(response.conditional_middleware_guardrails.is_empty());
-        assert!(response.error.unwrap().message.contains(expected));
+        assert!(response.error().is_some());
+        assert!(response.error().is_some());
+        assert!(response.error().unwrap().message.contains(expected));
         let invoke = client
             .invoke(Request::new(InvokeRequest {
-                activation_id: ACTIVATION_ID.into(),
                 invocation_id: "invalid-initial-gate".into(),
                 registration_name: "initial-gate".into(),
                 surface: RegistrationSurface::ConditionalMiddlewareGuardrail as i32,
                 continuation_id: String::new(),
                 scope: None,
-                auth_token: AUTH_TOKEN.into(),
-                payload: Some(
-                    nemo_relay_worker_proto::v1::invoke_request::Payload::ConditionalMiddleware(
-                        nemo_relay_worker_proto::v1::ConditionalMiddlewareInvocation {
-                            kinds: vec![RegistrationSurface::Subscriber as i32],
-                            registration_name: "target-subscriber".into(),
-                        },
-                    ),
-                ),
+                payload: Some(Payload::ConditionalMiddleware(
+                    pb::ConditionalMiddlewareInvocation {
+                        kinds: vec![RegistrationSurface::Subscriber as i32],
+                        registration_name: "target-subscriber".into(),
+                    },
+                )),
+                credentials: Some(pb::Credentials {
+                    activation_id: ACTIVATION_ID.into(),
+                    auth_token: AUTH_TOKEN.into(),
+                }),
             }))
             .await
             .expect("failed registration callback lookup should return protocol data")
             .into_inner();
         let message = match invoke.result.expect("invoke result") {
-            nemo_relay_worker_proto::v1::invoke_response::Result::Error(error) => error.message,
+            pb::invoke_response::Result::Error(error) => error.message,
             other => panic!("unexpected invoke result after failed registration: {other:?}"),
         };
         assert!(message.contains("is not registered"), "{message}");
@@ -491,10 +671,12 @@ async fn worker_service_cancels_unary_and_stream_invocations_by_id() {
     let unary_ack = tokio::time::timeout(
         timeout,
         client.cancel_invocation(Request::new(CancelInvocationRequest {
-            activation_id: ACTIVATION_ID.into(),
             invocation_id: "cancel-unary".into(),
-            auth_token: AUTH_TOKEN.into(),
             reason: "test timeout".into(),
+            credentials: Some(pb::Credentials {
+                activation_id: ACTIVATION_ID.into(),
+                auth_token: AUTH_TOKEN.into(),
+            }),
         })),
     )
     .await
@@ -507,7 +689,7 @@ async fn worker_service_cancels_unary_and_stream_invocations_by_id() {
         .expect("unary invocation should finish after cancellation")
         .expect("unary client task should join");
     let unary_error = match unary_response.result {
-        Some(nemo_relay_worker_proto::v1::invoke_response::Result::Error(error)) => error,
+        Some(pb::invoke_response::Result::Error(error)) => error,
         other => panic!("expected cancellation error, got {other:?}"),
     };
     assert!(unary_ack.accepted);
@@ -517,10 +699,12 @@ async fn worker_service_cancels_unary_and_stream_invocations_by_id() {
     let repeated = tokio::time::timeout(
         timeout,
         client.cancel_invocation(Request::new(CancelInvocationRequest {
-            activation_id: ACTIVATION_ID.into(),
             invocation_id: "cancel-unary".into(),
-            auth_token: AUTH_TOKEN.into(),
             reason: "repeat".into(),
+            credentials: Some(pb::Credentials {
+                activation_id: ACTIVATION_ID.into(),
+                auth_token: AUTH_TOKEN.into(),
+            }),
         })),
     )
     .await
@@ -553,10 +737,12 @@ async fn worker_service_cancels_unary_and_stream_invocations_by_id() {
     let stream_ack = tokio::time::timeout(
         timeout,
         client.cancel_invocation(Request::new(CancelInvocationRequest {
-            activation_id: ACTIVATION_ID.into(),
             invocation_id: "cancel-stream".into(),
-            auth_token: AUTH_TOKEN.into(),
             reason: "stream abandoned".into(),
+            credentials: Some(pb::Credentials {
+                activation_id: ACTIVATION_ID.into(),
+                auth_token: AUTH_TOKEN.into(),
+            }),
         })),
     )
     .await
@@ -571,8 +757,7 @@ async fn worker_service_cancels_unary_and_stream_invocations_by_id() {
                 .await
                 .expect("cancelled stream should yield a terminal error")
                 .expect("cancelled stream chunk should be protocol data");
-            if let Some(nemo_relay_worker_proto::v1::stream_chunk::Item::Error(error)) = chunk.item
-            {
+            if let Some(pb::invoke_stream_response::Item::Error(error)) = chunk.item {
                 break error;
             }
         }
@@ -619,10 +804,12 @@ async fn worker_service_cancels_stream_during_async_setup() {
     let ack = tokio::time::timeout(
         timeout,
         client.cancel_invocation(Request::new(CancelInvocationRequest {
-            activation_id: ACTIVATION_ID.into(),
             invocation_id: "cancel-stream-setup".into(),
-            auth_token: AUTH_TOKEN.into(),
             reason: "cancel setup".into(),
+            credentials: Some(pb::Credentials {
+                activation_id: ACTIVATION_ID.into(),
+                auth_token: AUTH_TOKEN.into(),
+            }),
         })),
     )
     .await
@@ -641,7 +828,7 @@ async fn worker_service_cancels_stream_during_async_setup() {
         .expect("cancelled setup stream should yield a terminal error")
         .expect("cancelled setup stream chunk should be protocol data");
     let error = match chunk.item {
-        Some(nemo_relay_worker_proto::v1::stream_chunk::Item::Error(error)) => error,
+        Some(pb::invoke_stream_response::Item::Error(error)) => error,
         other => panic!("expected stream setup cancellation error, got {other:?}"),
     };
 
@@ -773,9 +960,7 @@ async fn worker_service_invokes_every_registration_surface() {
         RegistrationSurface::ToolExecutionIntercept,
         json!({}),
     );
-    let Some(nemo_relay_worker_proto::v1::invoke_request::Payload::Tool(invocation)) =
-        tool_execution_request.payload.as_mut()
-    else {
+    let Some(Payload::Tool(invocation)) = tool_execution_request.payload.as_mut() else {
         panic!("tool execution request must contain a tool invocation");
     };
     invocation.tool_call_id = Some("call-worker-1".into());
@@ -808,7 +993,7 @@ async fn worker_service_invokes_every_registration_surface() {
     assert_eq!(logs[0].message, "trace message");
     assert_eq!(logs[4].message, "error message");
     assert_eq!(
-        decode_json_value::<Json>(logs[0].fields.as_ref().expect("trace fields")).unwrap(),
+        decode_wire_value::<Json, _>(logs[0].fields.as_ref().expect("trace fields")).unwrap(),
         json!({"nested": {"ok": true}, "ordinal": 0})
     );
     assert!(logs[1].fields.is_none());
@@ -826,27 +1011,27 @@ async fn worker_service_invokes_every_registration_surface() {
         assert_eq!(request.message, "method message");
         assert_eq!(request.target, "plugin.methods");
         assert_eq!(
-            decode_json_value::<Json>(request.fields.as_ref().unwrap()).unwrap(),
+            decode_wire_value::<Json, _>(request.fields.as_ref().unwrap()).unwrap(),
             json!({"method": true})
         );
     }
     let conditional_middleware = client
         .invoke(Request::new(InvokeRequest {
-            activation_id: ACTIVATION_ID.into(),
             invocation_id: "conditional-middleware".into(),
             registration_name: "initial-gate".into(),
             surface: RegistrationSurface::ConditionalMiddlewareGuardrail as i32,
             continuation_id: String::new(),
             scope: None,
-            auth_token: AUTH_TOKEN.into(),
-            payload: Some(
-                nemo_relay_worker_proto::v1::invoke_request::Payload::ConditionalMiddleware(
-                    nemo_relay_worker_proto::v1::ConditionalMiddlewareInvocation {
-                        kinds: vec![RegistrationSurface::Subscriber as i32],
-                        registration_name: "missing-target".into(),
-                    },
-                ),
-            ),
+            payload: Some(Payload::ConditionalMiddleware(
+                pb::ConditionalMiddlewareInvocation {
+                    kinds: vec![RegistrationSurface::Subscriber as i32],
+                    registration_name: "missing-target".into(),
+                },
+            )),
+            credentials: Some(pb::Credentials {
+                activation_id: ACTIVATION_ID.into(),
+                auth_token: AUTH_TOKEN.into(),
+            }),
         }))
         .await
         .expect("conditional middleware invoke")
@@ -854,21 +1039,21 @@ async fn worker_service_invokes_every_registration_surface() {
     assert_eq!(guardrail_reason(conditional_middleware), "initial gate");
     let allowed_conditional_middleware = client
         .invoke(Request::new(InvokeRequest {
-            activation_id: ACTIVATION_ID.into(),
             invocation_id: "conditional-middleware-allowed".into(),
             registration_name: "initial-gate".into(),
             surface: RegistrationSurface::ConditionalMiddlewareGuardrail as i32,
             continuation_id: String::new(),
             scope: None,
-            auth_token: AUTH_TOKEN.into(),
-            payload: Some(
-                nemo_relay_worker_proto::v1::invoke_request::Payload::ConditionalMiddleware(
-                    nemo_relay_worker_proto::v1::ConditionalMiddlewareInvocation {
-                        kinds: vec![RegistrationSurface::Subscriber as i32],
-                        registration_name: "allowed-target".into(),
-                    },
-                ),
-            ),
+            payload: Some(Payload::ConditionalMiddleware(
+                pb::ConditionalMiddlewareInvocation {
+                    kinds: vec![RegistrationSurface::Subscriber as i32],
+                    registration_name: "allowed-target".into(),
+                },
+            )),
+            credentials: Some(pb::Credentials {
+                activation_id: ACTIVATION_ID.into(),
+                auth_token: AUTH_TOKEN.into(),
+            }),
         }))
         .await
         .expect("allowed conditional middleware invoke")
@@ -1022,7 +1207,10 @@ async fn worker_service_invokes_every_registration_surface() {
 
     let stream_auth = client
         .invoke_stream(Request::new(InvokeRequest {
-            auth_token: "bad-token".into(),
+            credentials: Some(pb::Credentials {
+                activation_id: ACTIVATION_ID.into(),
+                auth_token: "bad-token".into(),
+            }),
             ..llm_invoke(
                 "llm-stream",
                 RegistrationSurface::LlmStreamExecutionIntercept,
@@ -1033,7 +1221,7 @@ async fn worker_service_invokes_every_registration_surface() {
         }))
         .await
         .expect_err("stream auth should fail");
-    assert_eq!(stream_auth.code(), tonic::Code::PermissionDenied);
+    assert_eq!(stream_auth.code(), tonic::Code::Unauthenticated);
 
     let calls = host.calls();
     let runtime_registration_requests = host.runtime_registration_requests();
@@ -1043,8 +1231,14 @@ async fn worker_service_invokes_every_registration_surface() {
     );
     for (index, (kind, surface)) in REGISTRATION_KIND_SURFACES.iter().enumerate() {
         let recorded = &runtime_registration_requests.list[index];
-        assert_eq!(recorded.activation_id, ACTIVATION_ID);
-        assert_eq!(recorded.auth_token, AUTH_TOKEN);
+        assert_eq!(
+            recorded.credentials.as_ref().unwrap().activation_id,
+            ACTIVATION_ID
+        );
+        assert_eq!(
+            recorded.credentials.as_ref().unwrap().auth_token,
+            AUTH_TOKEN
+        );
         assert_eq!(
             recorded.kinds,
             vec![*surface as i32],
@@ -1053,30 +1247,67 @@ async fn worker_service_invokes_every_registration_surface() {
     }
     assert_eq!(runtime_registration_requests.register.len(), 1);
     assert_eq!(
-        runtime_registration_requests.register[0].activation_id,
+        runtime_registration_requests.register[0]
+            .credentials
+            .as_ref()
+            .unwrap()
+            .activation_id,
         ACTIVATION_ID
     );
     assert_eq!(
-        runtime_registration_requests.register[0].auth_token,
+        runtime_registration_requests.register[0]
+            .credentials
+            .as_ref()
+            .unwrap()
+            .auth_token,
         AUTH_TOKEN
     );
-    assert_eq!(runtime_registration_requests.register[0].name, "timer-gate");
     assert_eq!(
-        runtime_registration_requests.register[0].kinds,
+        runtime_registration_requests.register[0]
+            .registration
+            .as_ref()
+            .unwrap()
+            .name,
+        "timer-gate"
+    );
+    assert_eq!(
+        runtime_registration_requests.register[0]
+            .registration
+            .as_ref()
+            .unwrap()
+            .kinds,
         vec![RegistrationSurface::Subscriber as i32]
     );
     assert_eq!(
-        runtime_registration_requests.register[0].registration_name,
+        runtime_registration_requests.register[0]
+            .registration
+            .as_ref()
+            .unwrap()
+            .registration_name,
         "target-subscriber"
     );
-    assert!(runtime_registration_requests.register[0].callback);
+    assert!(
+        runtime_registration_requests.register[0]
+            .registration
+            .as_ref()
+            .unwrap()
+            .callback
+    );
     assert_eq!(runtime_registration_requests.deregister.len(), 1);
     assert_eq!(
-        runtime_registration_requests.deregister[0].activation_id,
+        runtime_registration_requests.deregister[0]
+            .credentials
+            .as_ref()
+            .unwrap()
+            .activation_id,
         ACTIVATION_ID
     );
     assert_eq!(
-        runtime_registration_requests.deregister[0].auth_token,
+        runtime_registration_requests.deregister[0]
+            .credentials
+            .as_ref()
+            .unwrap()
+            .auth_token,
         AUTH_TOKEN
     );
     assert_eq!(
@@ -1106,30 +1337,59 @@ async fn worker_service_invokes_every_registration_surface() {
         .iter()
         .find(|request| request.name == "worker-scope")
         .expect("historical scope push");
-    assert_eq!(historical_push.timestamp_unix_micros, Some(-2));
+    assert_eq!(
+        historical_push
+            .time
+            .as_ref()
+            .map(|v| v.seconds * 1_000_000 + i64::from(v.nanos) / 1000),
+        Some(-2)
+    );
     let historical_pop = scope_requests
         .pop
         .iter()
         .find(|request| request.scope_handle_id == "scope-handle-1")
         .expect("historical scope pop");
-    assert_eq!(historical_pop.timestamp_unix_micros, Some(0));
+    assert_eq!(
+        historical_pop
+            .time
+            .as_ref()
+            .map(|v| v.seconds * 1_000_000 + i64::from(v.nanos) / 1000),
+        Some(0)
+    );
     let ordinary_push = scope_requests
         .push
         .iter()
         .find(|request| request.name == "scope-agent")
         .expect("ordinary scope push");
-    assert_eq!(ordinary_push.timestamp_unix_micros, None);
+    assert_eq!(
+        ordinary_push
+            .time
+            .as_ref()
+            .map(|v| v.seconds * 1_000_000 + i64::from(v.nanos) / 1000),
+        None
+    );
     let telemetry_mark = host
         .marks()
         .into_iter()
-        .find(|request| request.name == "tool-exec-telemetry")
+        .find(|request| request.mark.as_ref().unwrap().name == "tool-exec-telemetry")
         .expect("extended mark request");
-    assert_eq!(telemetry_mark.severity, "warn");
-    assert_eq!(telemetry_mark.category, "custom");
-    let data_schema = telemetry_mark.data_schema.expect("mark data schema");
-    assert_eq!(data_schema.schema, "nemo.relay.DataSchema@1");
     assert_eq!(
-        decode_json_envelope::<DataSchema>(&data_schema).unwrap(),
+        telemetry_mark.mark.as_ref().unwrap().severity,
+        Some(pb::LogSeverity::Warn as i32)
+    );
+    assert_eq!(
+        telemetry_mark.mark.as_ref().unwrap().category.as_deref(),
+        Some("custom")
+    );
+    let data_schema = telemetry_mark
+        .mark
+        .as_ref()
+        .unwrap()
+        .data_schema
+        .clone()
+        .expect("mark data schema");
+    assert_eq!(
+        decode_wire_value::<DataSchema, _>(&data_schema).unwrap(),
         DataSchema::builder()
             .name("nemo.relay.metric_measurements")
             .version("1")
@@ -1138,19 +1398,37 @@ async fn worker_service_invokes_every_registration_surface() {
     let metric_mark = host
         .marks()
         .into_iter()
-        .find(|request| request.name == "tool-exec-metric")
+        .find(|request| request.mark.as_ref().unwrap().name == "tool-exec-metric")
         .expect("metric mark request");
-    assert_eq!(metric_mark.category, "custom");
-    let metric_schema = metric_mark.data_schema.expect("metric data schema");
     assert_eq!(
-        decode_json_envelope::<DataSchema>(&metric_schema).unwrap(),
+        metric_mark.mark.as_ref().unwrap().category.as_deref(),
+        Some("custom")
+    );
+    let metric_schema = metric_mark
+        .mark
+        .as_ref()
+        .unwrap()
+        .data_schema
+        .clone()
+        .expect("metric data schema");
+    assert_eq!(
+        decode_wire_value::<DataSchema, _>(&metric_schema).unwrap(),
         DataSchema::builder()
             .name("nemo.relay.metric_measurements")
             .version("1")
             .build()
     );
     assert_eq!(
-        decode_json_envelope::<Json>(&metric_mark.data.expect("metric data")).unwrap(),
+        decode_wire_value::<Json, _>(
+            &metric_mark
+                .mark
+                .as_ref()
+                .unwrap()
+                .data
+                .clone()
+                .expect("metric data")
+        )
+        .unwrap(),
         json!({
             "measurements": [{
                 "name": "worker.requests",
@@ -1178,20 +1456,22 @@ async fn worker_service_reports_structured_callback_and_payload_errors() {
     .await;
     register_plugin(&mut client).await;
 
-    assert_worker_error(
+    let mut invalid = tool_invoke(
+        "tool-request",
+        RegistrationSurface::ToolRequestIntercept,
+        json!({}),
+    )
+    .into_wire()
+    .unwrap();
+    invalid.invocation = None;
+    assert_eq!(
         client
-            .invoke(Request::new(InvokeRequest {
-                surface: 999,
-                ..tool_invoke(
-                    "tool-request",
-                    RegistrationSurface::ToolRequestIntercept,
-                    json!({}),
-                )
-            }))
+            .wire()
+            .invoke(Request::new(invalid))
             .await
-            .expect("unknown surface returns structured error")
-            .into_inner(),
-        "unknown registration surface",
+            .unwrap_err()
+            .code(),
+        tonic::Code::InvalidArgument
     );
     assert_worker_error(
         client
@@ -1201,48 +1481,9 @@ async fn worker_service_reports_structured_callback_and_payload_errors() {
                 json!({}),
             )))
             .await
-            .expect("unknown registration returns structured error")
+            .unwrap()
             .into_inner(),
         "not registered",
-    );
-    assert_worker_error(
-        client
-            .invoke(Request::new(InvokeRequest {
-                payload: None,
-                ..tool_invoke(
-                    "tool-request",
-                    RegistrationSurface::ToolRequestIntercept,
-                    json!({}),
-                )
-            }))
-            .await
-            .expect("invalid payload returns structured error")
-            .into_inner(),
-        "expected tool payload",
-    );
-    assert_worker_error(
-        client
-            .invoke(Request::new(InvokeRequest {
-                payload: Some(nemo_relay_worker_proto::v1::invoke_request::Payload::Tool(
-                    ToolInvocation {
-                        tool_name: "tool".into(),
-                        value: Some(JsonEnvelope {
-                            schema: "nemo.relay.Json@1".into(),
-                            json: b"{".to_vec(),
-                        }),
-                        tool_call_id: None,
-                    },
-                )),
-                ..tool_invoke(
-                    "tool-request",
-                    RegistrationSurface::ToolRequestIntercept,
-                    json!({}),
-                )
-            }))
-            .await
-            .expect("invalid JSON returns structured error")
-            .into_inner(),
-        "EOF while parsing",
     );
     assert_worker_error(
         client
@@ -1274,7 +1515,7 @@ async fn worker_service_reports_structured_callback_and_payload_errors() {
         .expect("stream item")
         .expect("stream chunk");
     match stream_error_chunk.item.expect("stream item") {
-        nemo_relay_worker_proto::v1::stream_chunk::Item::Error(error) => {
+        pb::invoke_stream_response::Item::Error(error) => {
             assert!(error.message.contains("stream boom"));
         }
         other => panic!("unexpected stream item: {other:?}"),
@@ -1426,13 +1667,15 @@ async fn worker_service_announces_ephemeral_tcp_endpoint_file() {
     let mut client = connect_worker(&endpoint).await;
     let health = client
         .health(Request::new(HealthRequest {
-            activation_id: ACTIVATION_ID.into(),
-            auth_token: AUTH_TOKEN.into(),
+            credentials: Some(pb::Credentials {
+                activation_id: ACTIVATION_ID.into(),
+                auth_token: AUTH_TOKEN.into(),
+            }),
         }))
         .await
         .expect("announced endpoint should accept connections")
         .into_inner();
-    assert!(health.ok);
+    assert!(health.status == pb::WorkerHealthStatus::Ready as i32);
 
     handle.abort();
     let _ = std::fs::remove_file(endpoint_file);
@@ -1616,181 +1859,75 @@ async fn worker_service_reports_missing_handlers_and_malformed_payloads() {
         );
     }
 
-    assert_worker_error(
-        client
-            .invoke(Request::new(InvokeRequest {
-                payload: None,
-                ..event_invoke("subscriber")
-            }))
-            .await
-            .expect("missing event payload returns structured error")
-            .into_inner(),
-        "expected event payload",
-    );
-    assert_worker_error(
-        client
-            .invoke(Request::new(InvokeRequest {
-                payload: None,
-                ..event_invoke_surface("mark-sanitize", RegistrationSurface::MarkSanitizeGuardrail)
-            }))
-            .await
-            .expect("missing sanitizer event payload returns structured error")
-            .into_inner(),
-        "expected event payload",
-    );
-    assert_worker_error(
-        client
-            .invoke(Request::new(InvokeRequest {
-                payload: None,
-                ..llm_invoke(
-                    "llm-exec",
-                    RegistrationSurface::LlmExecutionIntercept,
-                    llm_request(),
-                    None,
-                    None,
-                )
-            }))
-            .await
-            .expect("missing llm payload returns structured error")
-            .into_inner(),
-        "expected llm payload",
-    );
-    assert_worker_error(
-        client
-            .invoke(Request::new(llm_invoke_without_request(
-                "llm-sanitize-request",
-                RegistrationSurface::LlmSanitizeRequestGuardrail,
-            )))
-            .await
-            .expect("missing llm request returns structured error")
-            .into_inner(),
-        "llm request is missing",
-    );
-    assert_worker_error(
-        client
-            .invoke(Request::new(llm_invoke(
-                "llm-sanitize-response",
-                RegistrationSurface::LlmSanitizeResponseGuardrail,
-                llm_request(),
-                None,
-                None,
-            )))
-            .await
-            .expect("missing llm response returns structured error")
-            .into_inner(),
-        "llm response is missing",
-    );
-    assert_worker_error(
-        client
-            .invoke(Request::new(InvokeRequest {
-                surface: RegistrationSurface::Unspecified as i32,
-                ..tool_invoke(
-                    "tool-request",
-                    RegistrationSurface::ToolRequestIntercept,
-                    json!({}),
-                )
-            }))
-            .await
-            .expect("unspecified surface returns structured error")
-            .into_inner(),
-        "unspecified",
-    );
-    assert_worker_error(
-        client
-            .invoke(Request::new(llm_invoke(
-                "llm-stream",
-                RegistrationSurface::LlmStreamExecutionIntercept,
-                llm_request(),
-                None,
-                None,
-            )))
-            .await
-            .expect("stream surface on unary invoke returns structured error")
-            .into_inner(),
-        "InvokeStream",
-    );
-    assert_worker_error(
-        client
-            .invoke(Request::new(llm_invoke_with_bad_annotation("llm-request")))
-            .await
-            .expect("bad annotation returns structured error")
-            .into_inner(),
-        "EOF while parsing",
-    );
-    assert_worker_error(
-        client
-            .invoke(Request::new(llm_invoke_with_legacy_annotation(
-                "llm-request",
-            )))
-            .await
-            .expect("legacy annotation schema returns structured error")
-            .into_inner(),
-        "expected \"nemo.relay.AnnotatedLlmRequest@2\"",
-    );
-
-    let unknown_stream_surface = client
-        .invoke_stream(Request::new(InvokeRequest {
-            surface: 999,
-            ..llm_invoke(
-                "llm-stream",
-                RegistrationSurface::LlmStreamExecutionIntercept,
-                llm_request(),
-                None,
-                None,
-            )
-        }))
-        .await
-        .expect_err("unknown stream surface fails transport call");
-    assert_eq!(unknown_stream_surface.code(), tonic::Code::InvalidArgument);
-
-    let missing_stream = client
-        .invoke_stream(Request::new(llm_invoke(
-            "missing-llm-stream",
-            RegistrationSurface::LlmStreamExecutionIntercept,
-            llm_request(),
-            None,
-            None,
-        )))
-        .await
-        .expect_err("missing stream handler fails transport call");
-    assert_eq!(missing_stream.code(), tonic::Code::NotFound);
-
-    let missing_stream_payload = client
-        .invoke_stream(Request::new(InvokeRequest {
-            payload: None,
-            ..llm_invoke(
-                "llm-stream",
-                RegistrationSurface::LlmStreamExecutionIntercept,
-                llm_request(),
-                None,
-                None,
-            )
-        }))
-        .await
-        .expect_err("missing stream payload fails transport call");
-    assert_status_message(missing_stream_payload, "expected llm payload");
-
-    let missing_stream_request = client
-        .invoke_stream(Request::new(llm_invoke_without_request(
-            "llm-stream",
-            RegistrationSurface::LlmStreamExecutionIntercept,
-        )))
-        .await
-        .expect_err("missing stream request fails transport call");
-    assert_status_message(missing_stream_request, "llm request is missing");
-
-    let open_error = client
-        .invoke_stream(Request::new(llm_invoke(
-            "llm-stream-open-error",
-            RegistrationSurface::LlmStreamExecutionIntercept,
-            llm_request(),
-            None,
-            None,
-        )))
-        .await
-        .expect_err("stream open callback error fails transport call");
-    assert_status_message(open_error, "stream open boom");
-
+    let base = tool_invoke(
+        "tool-request",
+        RegistrationSurface::ToolRequestIntercept,
+        json!({}),
+    )
+    .into_wire()
+    .unwrap();
+    let invalid = vec![
+        pb::InvokeRequest {
+            invocation: None,
+            ..base.clone()
+        },
+        pb::InvokeRequest {
+            invocation: Some(pb::invoke_request::Invocation::ToolRequestIntercept(
+                pb::ToolValueInvocation {
+                    tool_name: "tool".into(),
+                    value: None,
+                },
+            )),
+            ..base.clone()
+        },
+        pb::InvokeRequest {
+            invocation: Some(pb::invoke_request::Invocation::ToolRequestIntercept(
+                pb::ToolValueInvocation {
+                    tool_name: "tool".into(),
+                    value: Some(pb::JsonValue {
+                        json: b"{".to_vec(),
+                    }),
+                },
+            )),
+            ..base.clone()
+        },
+        pb::InvokeRequest {
+            invocation: Some(pb::invoke_request::Invocation::Subscriber(
+                pb::Event::default(),
+            )),
+            ..base.clone()
+        },
+        pb::InvokeRequest {
+            invocation: Some(pb::invoke_request::Invocation::LlmSanitizeRequestGuardrail(
+                pb::LlmSanitizeRequestInvocation::default(),
+            )),
+            ..base.clone()
+        },
+        pb::InvokeRequest {
+            invocation: Some(pb::invoke_request::Invocation::LlmRequestIntercept(
+                pb::LlmRequestInvocation {
+                    request: Some(conversions::encode(llm_request()).unwrap()),
+                    annotated_request: Some(Box::new(pb::AnnotatedLlmRequest {
+                        messages: vec![pb::LlmMessage::default()],
+                        ..Default::default()
+                    })),
+                    model_name: "model".into(),
+                },
+            )),
+            ..base
+        },
+    ];
+    for request in invalid {
+        assert_eq!(
+            client
+                .wire()
+                .invoke(Request::new(request))
+                .await
+                .unwrap_err()
+                .code(),
+            tonic::Code::InvalidArgument
+        );
+    }
     handle.abort();
 }
 
@@ -1811,7 +1948,7 @@ async fn worker_service_propagates_host_runtime_errors() {
                 runtime_diagnostics_unimplemented: true,
                 ..Default::default()
             },
-            "runtime diagnostics require a Relay host with the grpc-v1 diagnostics extension",
+            "runtime diagnostics require a Relay host with the worker v1 diagnostics contract",
         ),
         (
             MockHostFailures {
@@ -1822,7 +1959,7 @@ async fn worker_service_propagates_host_runtime_errors() {
         ),
         (
             MockHostFailures {
-                emit_mark: HostFailure::EmptyAck,
+                emit_mark: HostFailure::TransportFailure,
                 ..Default::default()
             },
             "host call failed",
@@ -1867,7 +2004,7 @@ async fn worker_service_propagates_host_runtime_errors() {
                 tool_next_missing_result: true,
                 ..Default::default()
             },
-            "tool execution result.result is missing",
+            "value.result: value is required",
         ),
     ] {
         host.set_failures(failures);
@@ -2244,10 +2381,7 @@ impl WorkerPlugin for DiscoveryPlugin {
 
 #[tokio::test(flavor = "multi_thread")]
 async fn worker_runtime_discovery_validates_host_identities_and_preserves_owner_kinds() {
-    use nemo_relay_worker_proto::v1::{
-        RuntimeRegistrationIdentity as Identity, RuntimeRegistrationOwner as Owner,
-        RuntimeRegistrationOwnerKind as OwnerKind,
-    };
+    use pb::{RuntimeRegistrationIdentity as Identity, RuntimeRegistrationOwner as Owner};
 
     let host = MockHost::default();
     let (host_handle, host_endpoint) = spawn_host(host.clone()).await;
@@ -2259,21 +2393,29 @@ async fn worker_runtime_discovery_validates_host_identities_and_preserves_owner_
         local_name: "local".into(),
         effective_name: "effective".into(),
         owner: Some(Owner {
-            kind: OwnerKind::Plugin as i32,
-            plugin_kind: Some("acme.owner".into()),
-            component_ordinal: Some(3),
+            owner: Some(pb::runtime_registration_owner::Owner::Plugin(
+                pb::PluginRegistrationOwner {
+                    plugin_kind: "acme.owner".into(),
+                    component_ordinal: Some(3),
+                },
+            )),
         }),
     };
     for (kind, expected) in [
-        (OwnerKind::Core, "core"),
-        (OwnerKind::GlobalApi, "global_api"),
-        (OwnerKind::Plugin, "plugin"),
+        (pb::runtime_registration_owner::Owner::Core(()), "core"),
+        (
+            pb::runtime_registration_owner::Owner::GlobalApi(()),
+            "global_api",
+        ),
+        (
+            valid.owner.as_ref().unwrap().owner.clone().unwrap(),
+            "plugin",
+        ),
     ] {
         let mut identity = valid.clone();
-        identity.owner.as_mut().unwrap().kind = kind as i32;
+        identity.owner.as_mut().unwrap().owner = Some(kind);
         *host.registration_response.lock().unwrap() = Some(ListRuntimeRegistrationsResponse {
             registrations: vec![identity],
-            error: None,
         });
         let result = invoke_json(
             &mut client,
@@ -2288,55 +2430,51 @@ async fn worker_runtime_discovery_validates_host_identities_and_preserves_owner_
         assert_eq!(result[0]["local_name"], "local");
         assert_eq!(result[0]["effective_name"], "effective");
         assert_eq!(result[0]["owner"]["kind"], expected);
-        assert_eq!(result[0]["owner"]["plugin_kind"], "acme.owner");
-        assert_eq!(result[0]["owner"]["component_ordinal"], 3);
+        if expected == "plugin" {
+            assert_eq!(result[0]["owner"]["plugin_kind"], "acme.owner");
+            assert_eq!(result[0]["owner"]["component_ordinal"], 3);
+        }
     }
-    let owner = |kind| {
-        Some(Owner {
-            kind,
-            ..valid.owner.clone().unwrap()
-        })
-    };
+    let owner = |_| Some(Owner { owner: None });
     for (identity, expected) in [
         (
             Identity {
                 kind: i32::MAX,
                 ..valid.clone()
             },
-            "unknown registration kind",
+            "unknown RegistrationSurface",
         ),
         (
             Identity {
                 kind: RegistrationSurface::Unspecified as i32,
                 ..valid.clone()
             },
-            "surface is not a runtime registration kind",
+            "unknown RegistrationSurface",
         ),
         (
             Identity {
                 owner: None,
                 ..valid.clone()
             },
-            "runtime registration owner is missing",
+            "missing required value.owner",
         ),
         (
             Identity {
                 owner: owner(i32::MAX),
                 ..valid.clone()
             },
-            "unknown registration owner kind",
+            "missing required registration owner",
         ),
         (
             Identity {
-                owner: owner(OwnerKind::Unspecified as i32),
+                owner: owner(0),
                 ..valid.clone()
             },
-            "registration owner kind is unspecified",
+            "missing required registration owner",
         ),
     ] {
         *host.registration_response.lock().unwrap() = Some(ListRuntimeRegistrationsResponse {
             registrations: vec![identity],
-            error: None,
         });
         assert_worker_error(
             client
@@ -2351,10 +2489,7 @@ async fn worker_runtime_discovery_validates_host_identities_and_preserves_owner_
             expected,
         );
     }
-    *host.registration_response.lock().unwrap() = Some(ListRuntimeRegistrationsResponse {
-        registrations: vec![],
-        error: Some(worker_error("host discovery failed")),
-    });
+    *host.registration_error.lock().unwrap() = Some(Status::internal("host discovery failed"));
     assert_worker_error(
         client
             .invoke(Request::new(tool_invoke(
@@ -2790,7 +2925,7 @@ enum HostFailure {
     #[default]
     None,
     WorkerError,
-    EmptyAck,
+    TransportFailure,
 }
 
 #[derive(Clone, Copy, Default)]
@@ -2804,6 +2939,9 @@ enum MockStreamMode {
 
 #[derive(Clone, Copy, Default)]
 struct MockHostFailures {
+    empty_gate_handle: bool,
+    empty_scope_stack_id: bool,
+    empty_scope_handle_id: bool,
     runtime_diagnostics_unimplemented: bool,
     emit_mark: HostFailure,
     create_scope_stack: bool,
@@ -2841,8 +2979,9 @@ struct MockHost {
     runtime_registration_requests: Arc<Mutex<RuntimeRegistrationRequests>>,
     scope_requests: Arc<Mutex<ScopeRequests>>,
     registration_response: Arc<Mutex<Option<ListRuntimeRegistrationsResponse>>>,
-    snapshot_response:
-        Arc<Mutex<Option<nemo_relay_worker_proto::v1::GetCurrentScopeStackSnapshotResponse>>>,
+    registration_error: Arc<Mutex<Option<Status>>>,
+    snapshot_error: Arc<Mutex<Option<Status>>>,
+    snapshot_response: Arc<Mutex<Option<pb::GetCurrentScopeStackSnapshotResponse>>>,
 }
 
 impl MockHost {
@@ -2889,13 +3028,14 @@ impl MockHost {
 impl RelayHostRuntime for MockHost {
     async fn get_current_scope_stack_snapshot(
         &self,
-        request: Request<nemo_relay_worker_proto::v1::GetCurrentScopeStackSnapshotRequest>,
-    ) -> std::result::Result<
-        Response<nemo_relay_worker_proto::v1::GetCurrentScopeStackSnapshotResponse>,
-        Status,
-    > {
+        request: Request<pb::GetCurrentScopeStackSnapshotRequest>,
+    ) -> std::result::Result<Response<pb::GetCurrentScopeStackSnapshotResponse>, Status> {
         let request = request.into_inner();
-        authorize_host(&request.activation_id, &request.auth_token)?;
+        let credentials = request.credentials.as_ref().unwrap();
+        authorize_host(&credentials.activation_id, &credentials.auth_token)?;
+        if let Some(error) = self.snapshot_error.lock().unwrap().clone() {
+            return Err(error);
+        }
         self.snapshot_response
             .lock()
             .unwrap()
@@ -2907,9 +3047,10 @@ impl RelayHostRuntime for MockHost {
     async fn log(
         &self,
         request: Request<LogRequest>,
-    ) -> std::result::Result<Response<HostAck>, Status> {
+    ) -> std::result::Result<Response<pb::LogResponse>, Status> {
         let request = request.into_inner();
-        authorize_host(&request.activation_id, &request.auth_token)?;
+        let credentials = request.credentials.as_ref().unwrap();
+        authorize_host(&credentials.activation_id, &credentials.auth_token)?;
         self.logs.lock().expect("logs lock").push(request.clone());
         self.record(format!("log:{}:{}", request.target, request.message));
         Ok(Response::new(host_ack()))
@@ -2920,35 +3061,38 @@ impl RelayHostRuntime for MockHost {
         request: Request<ListRuntimeRegistrationsRequest>,
     ) -> std::result::Result<Response<ListRuntimeRegistrationsResponse>, Status> {
         let request = request.into_inner();
-        authorize_host(&request.activation_id, &request.auth_token)?;
+        let credentials = request.credentials.as_ref().unwrap();
+        authorize_host(&credentials.activation_id, &credentials.auth_token)?;
         self.runtime_registration_requests
             .lock()
             .expect("runtime registration requests lock")
             .list
             .push(request);
+        if let Some(error) = self.registration_error.lock().unwrap().clone() {
+            return Err(error);
+        }
         if let Some(response) = self.registration_response.lock().unwrap().clone() {
             return Ok(Response::new(response));
         }
         Ok(Response::new(ListRuntimeRegistrationsResponse {
             registrations: REGISTRATION_KIND_SURFACES
                 .iter()
-                .map(
-                    |(_, surface)| nemo_relay_worker_proto::v1::RuntimeRegistrationIdentity {
-                        kind: *surface as i32,
-                        // Names the surface that produced the record, so the
-                        // decoded kind is checked against it.
-                        local_name: format!("surface-{}", *surface as i32),
-                        effective_name: format!("effective-{}", *surface as i32),
-                        owner: Some(nemo_relay_worker_proto::v1::RuntimeRegistrationOwner {
-                            kind: nemo_relay_worker_proto::v1::RuntimeRegistrationOwnerKind::Plugin
-                                as i32,
-                            plugin_kind: Some("worker-sdk-tests".into()),
-                            component_ordinal: Some(0),
-                        }),
-                    },
-                )
+                .map(|(_, surface)| pb::RuntimeRegistrationIdentity {
+                    kind: *surface as i32,
+                    // Names the surface that produced the record, so the
+                    // decoded kind is checked against it.
+                    local_name: format!("surface-{}", *surface as i32),
+                    effective_name: format!("effective-{}", *surface as i32),
+                    owner: Some(pb::RuntimeRegistrationOwner {
+                        owner: Some(pb::runtime_registration_owner::Owner::Plugin(
+                            pb::PluginRegistrationOwner {
+                                plugin_kind: "worker-sdk-tests".into(),
+                                component_ordinal: Some(0),
+                            },
+                        )),
+                    }),
+                })
                 .collect(),
-            error: None,
         }))
     }
 
@@ -2957,7 +3101,8 @@ impl RelayHostRuntime for MockHost {
         request: Request<RegisterConditionalMiddlewareGuardrailRequest>,
     ) -> std::result::Result<Response<RegisterConditionalMiddlewareGuardrailResponse>, Status> {
         let request = request.into_inner();
-        authorize_host(&request.activation_id, &request.auth_token)?;
+        let credentials = request.credentials.as_ref().unwrap();
+        authorize_host(&credentials.activation_id, &credentials.auth_token)?;
         self.runtime_registration_requests
             .lock()
             .expect("runtime registration requests lock")
@@ -2965,8 +3110,11 @@ impl RelayHostRuntime for MockHost {
             .push(request);
         Ok(Response::new(
             RegisterConditionalMiddlewareGuardrailResponse {
-                handle: "gate-handle".into(),
-                error: None,
+                handle: if self.failures().empty_gate_handle {
+                    String::new()
+                } else {
+                    "gate-handle".into()
+                },
             },
         ))
     }
@@ -2977,17 +3125,15 @@ impl RelayHostRuntime for MockHost {
     ) -> std::result::Result<Response<DeregisterConditionalMiddlewareGuardrailResponse>, Status>
     {
         let request = request.into_inner();
-        authorize_host(&request.activation_id, &request.auth_token)?;
+        let credentials = request.credentials.as_ref().unwrap();
+        authorize_host(&credentials.activation_id, &credentials.auth_token)?;
         self.runtime_registration_requests
             .lock()
             .expect("runtime registration requests lock")
             .deregister
             .push(request);
         Ok(Response::new(
-            DeregisterConditionalMiddlewareGuardrailResponse {
-                removed: true,
-                error: None,
-            },
+            DeregisterConditionalMiddlewareGuardrailResponse { removed: true },
         ))
     }
 
@@ -2996,7 +3142,8 @@ impl RelayHostRuntime for MockHost {
         request: Request<GetRuntimeDiagnosticsRequest>,
     ) -> std::result::Result<Response<GetRuntimeDiagnosticsResponse>, Status> {
         let request = request.into_inner();
-        authorize_host(&request.activation_id, &request.auth_token)?;
+        let credentials = request.credentials.as_ref().unwrap();
+        authorize_host(&credentials.activation_id, &credentials.auth_token)?;
         self.record("runtime_diagnostics");
         if self.failures().runtime_diagnostics_unimplemented {
             return Err(Status::unimplemented("runtime diagnostics are unavailable"));
@@ -3013,25 +3160,25 @@ impl RelayHostRuntime for MockHost {
     async fn emit_mark(
         &self,
         request: Request<EmitMarkRequest>,
-    ) -> std::result::Result<Response<HostAck>, Status> {
+    ) -> std::result::Result<Response<pb::EmitMarkResponse>, Status> {
         let request = request.into_inner();
-        authorize_host(&request.activation_id, &request.auth_token)?;
+        let credentials = request.credentials.as_ref().unwrap();
+        authorize_host(&credentials.activation_id, &credentials.auth_token)?;
         self.marks.lock().expect("marks lock").push(request.clone());
         let scope = request.scope.expect("scope context");
         self.record(format!(
             "mark:{}:{}:{}",
-            request.name, scope.scope_stack_id, scope.parent_scope_id
+            request.mark.as_ref().unwrap().name,
+            scope.scope_stack_id,
+            scope.parent_scope_id
         ));
         match self.failures().emit_mark {
             HostFailure::None => {}
             HostFailure::WorkerError => {
-                return Ok(Response::new(host_ack_error("emit mark failed")));
+                return Err(Status::internal("emit mark failed"));
             }
-            HostFailure::EmptyAck => {
-                return Ok(Response::new(HostAck {
-                    ok: false,
-                    error: None,
-                }));
+            HostFailure::TransportFailure => {
+                return Err(Status::unavailable("host call failed"));
             }
         }
         Ok(Response::new(host_ack()))
@@ -3042,7 +3189,8 @@ impl RelayHostRuntime for MockHost {
         request: Request<PushScopeRequest>,
     ) -> std::result::Result<Response<PushScopeResponse>, Status> {
         let request = request.into_inner();
-        authorize_host(&request.activation_id, &request.auth_token)?;
+        let credentials = request.credentials.as_ref().unwrap();
+        authorize_host(&credentials.activation_id, &credentials.auth_token)?;
         self.scope_requests
             .lock()
             .expect("scope requests lock")
@@ -3054,23 +3202,26 @@ impl RelayHostRuntime for MockHost {
             request.name, scope.scope_stack_id, scope.parent_scope_id
         ));
         if self.failures().push_scope {
-            return Ok(Response::new(PushScopeResponse {
-                scope_handle_id: String::new(),
-                error: Some(worker_error("push scope failed")),
-            }));
+            return Err(Status::internal(
+                (worker_error("push scope failed")).message,
+            ));
         }
         Ok(Response::new(PushScopeResponse {
-            scope_handle_id: "scope-handle-1".into(),
-            error: None,
+            scope_handle_id: if self.failures().empty_scope_handle_id {
+                String::new()
+            } else {
+                "scope-handle-1".into()
+            },
         }))
     }
 
     async fn pop_scope(
         &self,
         request: Request<PopScopeRequest>,
-    ) -> std::result::Result<Response<HostAck>, Status> {
+    ) -> std::result::Result<Response<pb::PopScopeResponse>, Status> {
         let request = request.into_inner();
-        authorize_host(&request.activation_id, &request.auth_token)?;
+        let credentials = request.credentials.as_ref().unwrap();
+        authorize_host(&credentials.activation_id, &credentials.auth_token)?;
         self.scope_requests
             .lock()
             .expect("scope requests lock")
@@ -3080,13 +3231,10 @@ impl RelayHostRuntime for MockHost {
         match self.failures().pop_scope {
             HostFailure::None => {}
             HostFailure::WorkerError => {
-                return Ok(Response::new(host_ack_error("pop scope failed")));
+                return Err(Status::internal("pop scope failed"));
             }
-            HostFailure::EmptyAck => {
-                return Ok(Response::new(HostAck {
-                    ok: false,
-                    error: None,
-                }));
+            HostFailure::TransportFailure => {
+                return Err(Status::unavailable("host call failed"));
             }
         }
         Ok(Response::new(host_ack()))
@@ -3097,37 +3245,38 @@ impl RelayHostRuntime for MockHost {
         request: Request<CreateScopeStackRequest>,
     ) -> std::result::Result<Response<CreateScopeStackResponse>, Status> {
         let request = request.into_inner();
-        authorize_host(&request.activation_id, &request.auth_token)?;
+        let credentials = request.credentials.as_ref().unwrap();
+        authorize_host(&credentials.activation_id, &credentials.auth_token)?;
         self.record("create_scope_stack");
         if self.failures().create_scope_stack {
-            return Ok(Response::new(CreateScopeStackResponse {
-                scope_stack_id: String::new(),
-                error: Some(worker_error("create scope stack failed")),
-            }));
+            return Err(Status::internal(
+                (worker_error("create scope stack failed")).message,
+            ));
         }
         Ok(Response::new(CreateScopeStackResponse {
-            scope_stack_id: "isolated-stack".into(),
-            error: None,
+            scope_stack_id: if self.failures().empty_scope_stack_id {
+                String::new()
+            } else {
+                "isolated-stack".into()
+            },
         }))
     }
 
     async fn drop_scope_stack(
         &self,
         request: Request<DropScopeStackRequest>,
-    ) -> std::result::Result<Response<HostAck>, Status> {
+    ) -> std::result::Result<Response<pb::DropScopeStackResponse>, Status> {
         let request = request.into_inner();
-        authorize_host(&request.activation_id, &request.auth_token)?;
+        let credentials = request.credentials.as_ref().unwrap();
+        authorize_host(&credentials.activation_id, &credentials.auth_token)?;
         self.record(format!("drop:{}", request.scope_stack_id));
         match self.failures().drop_scope_stack {
             HostFailure::None => {}
             HostFailure::WorkerError => {
-                return Ok(Response::new(host_ack_error("drop scope stack failed")));
+                return Err(Status::internal("drop scope stack failed"));
             }
-            HostFailure::EmptyAck => {
-                return Ok(Response::new(HostAck {
-                    ok: false,
-                    error: None,
-                }));
+            HostFailure::TransportFailure => {
+                return Err(Status::unavailable("host call failed"));
             }
         }
         Ok(Response::new(host_ack()))
@@ -3138,13 +3287,11 @@ impl RelayHostRuntime for MockHost {
         request: Request<ToolNextRequest>,
     ) -> std::result::Result<Response<ToolExecutionResultResponse>, Status> {
         let request = request.into_inner();
-        authorize_host(&request.activation_id, &request.auth_token)?;
+        let credentials = request.credentials.as_ref().unwrap();
+        authorize_host(&credentials.activation_id, &credentials.auth_token)?;
         self.record(format!("tool_next:{}", request.continuation_id));
         if self.failures().tool_next {
-            return Ok(Response::new(ToolExecutionResultResponse {
-                value: None,
-                error: Some(worker_error("tool next failed")),
-            }));
+            return Err(Status::internal((worker_error("tool next failed")).message));
         }
         let value = if self.failures().tool_next_missing_result {
             ProtoToolExecutionResult {
@@ -3159,57 +3306,60 @@ impl RelayHostRuntime for MockHost {
                 ),
             }
         };
-        Ok(Response::new(ToolExecutionResultResponse {
-            value: Some(value),
-            error: None,
+        Ok(Response::new(pb::ToolNextResponse {
+            result: Some(pb::tool_next_response::Result::Value(value)),
         }))
     }
 
     async fn llm_next(
         &self,
         request: Request<LlmNextRequest>,
-    ) -> std::result::Result<Response<JsonResult>, Status> {
+    ) -> std::result::Result<Response<pb::LlmNextResponse>, Status> {
         let request = request.into_inner();
-        authorize_host(&request.activation_id, &request.auth_token)?;
+        let credentials = request.credentials.as_ref().unwrap();
+        authorize_host(&credentials.activation_id, &credentials.auth_token)?;
         self.record(format!("llm_next:{}", request.continuation_id));
         if self.failures().llm_next {
-            return Ok(Response::new(JsonResult {
-                value: None,
-                error: Some(worker_error("llm next failed")),
+            return Ok(Response::new(pb::LlmNextResponse {
+                result: Some(pb::llm_next_response::Result::Error(worker_error(
+                    "llm next failed",
+                ))),
             }));
         }
-        Ok(Response::new(JsonResult {
-            value: Some(json_env(json!({"next": "llm"}))),
-            error: None,
+        Ok(Response::new(pb::LlmNextResponse {
+            result: Some(pb::llm_next_response::Result::Value(json_env(
+                json!({"next": "llm"}),
+            ))),
         }))
     }
 
     type LlmStreamNextStream =
-        Pin<Box<dyn Stream<Item = std::result::Result<StreamChunk, Status>> + Send>>;
+        Pin<Box<dyn Stream<Item = std::result::Result<pb::LlmStreamNextResponse, Status>> + Send>>;
 
     async fn llm_stream_next(
         &self,
         request: Request<LlmStreamNextRequest>,
     ) -> std::result::Result<Response<Self::LlmStreamNextStream>, Status> {
         let request = request.into_inner();
-        authorize_host(&request.activation_id, &request.auth_token)?;
+        let credentials = request.credentials.as_ref().unwrap();
+        authorize_host(&credentials.activation_id, &credentials.auth_token)?;
         self.record(format!("llm_stream_next:{}", request.continuation_id));
-        let chunks: Vec<std::result::Result<StreamChunk, Status>> =
+        let chunks: Vec<std::result::Result<pb::LlmStreamNextResponse, Status>> =
             match self.failures().llm_stream_mode {
-                MockStreamMode::Value => vec![Ok(StreamChunk {
-                    item: Some(nemo_relay_worker_proto::v1::stream_chunk::Item::Value(
-                        json_env(json!({"next": "llm_stream"})),
-                    )),
+                MockStreamMode::Value => vec![Ok(pb::LlmStreamNextResponse {
+                    item: Some(pb::llm_stream_next_response::Item::Value(json_env(
+                        json!({"next": "llm_stream"}),
+                    ))),
                 })],
-                MockStreamMode::WorkerError => vec![Ok(StreamChunk {
-                    item: Some(nemo_relay_worker_proto::v1::stream_chunk::Item::Error(
-                        worker_error("stream worker failed"),
-                    )),
+                MockStreamMode::WorkerError => vec![Ok(pb::LlmStreamNextResponse {
+                    item: Some(pb::llm_stream_next_response::Item::Error(worker_error(
+                        "stream worker failed",
+                    ))),
                 })],
                 MockStreamMode::TransportError => {
                     vec![Err(Status::unavailable("stream status failed"))]
                 }
-                MockStreamMode::EmptyChunk => vec![Ok(StreamChunk { item: None })],
+                MockStreamMode::EmptyChunk => vec![Ok(pb::LlmStreamNextResponse { item: None })],
             };
         let stream = tokio_stream::iter(chunks);
         Ok(Response::new(Box::pin(stream)))
@@ -3217,76 +3367,76 @@ impl RelayHostRuntime for MockHost {
 
     async fn decode_llm_codec_request(
         &self,
-        request: Request<nemo_relay_worker_proto::v1::LlmCodecDecodeRequest>,
-    ) -> std::result::Result<Response<JsonResult>, Status> {
+        request: Request<pb::DecodeLlmCodecRequestRequest>,
+    ) -> std::result::Result<Response<pb::DecodeLlmCodecRequestResponse>, Status> {
         let request = request.into_inner();
-        authorize_host(&request.activation_id, &request.auth_token)?;
+        let credentials = request.credentials.as_ref().unwrap();
+        authorize_host(&credentials.activation_id, &credentials.auth_token)?;
         self.record(format!(
             "codec_request_decode:{}",
             request.codec_capability_id
         ));
         if self.failures().codec_request_decode {
-            return Ok(Response::new(JsonResult {
-                value: None,
-                error: Some(worker_error("codec request decode failed")),
+            return Ok(Response::new(pb::DecodeLlmCodecRequestResponse {
+                result: Some(pb::decode_llm_codec_request_response::Result::Error(
+                    worker_error("codec request decode failed"),
+                )),
             }));
         }
-        Ok(Response::new(JsonResult {
-            value: Some(
-                json_envelope("nemo.relay.AnnotatedLlmRequest@2", &json!({}))
-                    .expect("encode annotated request"),
-            ),
-            error: None,
+        Ok(Response::new(pb::DecodeLlmCodecRequestResponse {
+            result: Some(pb::decode_llm_codec_request_response::Result::Value(
+                Box::default(),
+            )),
         }))
     }
 
     async fn encode_llm_codec_request(
         &self,
-        request: Request<nemo_relay_worker_proto::v1::LlmCodecEncodeRequest>,
-    ) -> std::result::Result<Response<JsonResult>, Status> {
+        request: Request<pb::EncodeLlmCodecRequestRequest>,
+    ) -> std::result::Result<Response<pb::EncodeLlmCodecRequestResponse>, Status> {
         let request = request.into_inner();
-        authorize_host(&request.activation_id, &request.auth_token)?;
+        let credentials = request.credentials.as_ref().unwrap();
+        authorize_host(&credentials.activation_id, &credentials.auth_token)?;
         self.record(format!(
             "codec_request_encode:{}",
             request.codec_capability_id
         ));
         if self.failures().codec_request_encode {
-            return Ok(Response::new(JsonResult {
-                value: None,
-                error: Some(worker_error("codec request encode failed")),
+            return Ok(Response::new(pb::EncodeLlmCodecRequestResponse {
+                result: Some(pb::encode_llm_codec_request_response::Result::Error(
+                    worker_error("codec request encode failed"),
+                )),
             }));
         }
-        Ok(Response::new(JsonResult {
-            value: Some(
-                json_envelope(
-                    "nemo.relay.LlmRequest@1",
-                    &json!({"headers": {}, "content": {}}),
-                )
-                .expect("encode LLM request"),
-            ),
-            error: None,
+        Ok(Response::new(pb::EncodeLlmCodecRequestResponse {
+            result: Some(pb::encode_llm_codec_request_response::Result::Value(
+                wire_value(&json!({"headers": {}, "content": {}})).expect("encode LLM request"),
+            )),
         }))
     }
 
     async fn decode_llm_codec_response(
         &self,
-        request: Request<nemo_relay_worker_proto::v1::LlmCodecDecodeResponse>,
-    ) -> std::result::Result<Response<JsonResult>, Status> {
+        request: Request<pb::DecodeLlmCodecResponseRequest>,
+    ) -> std::result::Result<Response<pb::DecodeLlmCodecResponseResponse>, Status> {
         let request = request.into_inner();
-        authorize_host(&request.activation_id, &request.auth_token)?;
+        let credentials = request.credentials.as_ref().unwrap();
+        authorize_host(&credentials.activation_id, &credentials.auth_token)?;
         self.record(format!(
             "codec_response_decode:{}",
             request.codec_capability_id
         ));
         if self.failures().codec_response_decode {
-            return Ok(Response::new(JsonResult {
-                value: None,
-                error: Some(worker_error("codec response decode failed")),
+            return Ok(Response::new(pb::DecodeLlmCodecResponseResponse {
+                result: Some(pb::decode_llm_codec_response_response::Result::Error(
+                    worker_error("codec response decode failed"),
+                )),
             }));
         }
-        Ok(Response::new(JsonResult {
-            value: Some(json_env(json!({}))),
-            error: None,
+        Ok(Response::new(pb::DecodeLlmCodecResponseResponse {
+            result: Some(pb::decode_llm_codec_response_response::Result::Value(
+                Box::default(),
+            )),
         }))
     }
 }
@@ -3422,19 +3572,32 @@ async fn wait_for_unix_socket(path: &Path) {
     panic!("server did not start at {}", path.display());
 }
 
-async fn register_plugin(
-    client: &mut PluginWorkerClient<Channel>,
-) -> Vec<nemo_relay_worker_proto::v1::Registration> {
+async fn register_plugin(client: &mut PluginWorkerClient<Channel>) -> Vec<pb::Registration> {
+    let identity = client
+        .health(Request::new(HealthRequest {
+            credentials: Some(pb::Credentials {
+                activation_id: ACTIVATION_ID.into(),
+                auth_token: AUTH_TOKEN.into(),
+            }),
+        }))
+        .await
+        .unwrap()
+        .into_inner()
+        .identity
+        .unwrap();
     client
         .register(Request::new(RegisterRequest {
-            activation_id: ACTIVATION_ID.into(),
-            plugin_id: PLUGIN_ID.into(),
-            auth_token: AUTH_TOKEN.into(),
+            plugin_id: identity.plugin_id,
             config: Some(json_env(json!({}))),
+            credentials: Some(pb::Credentials {
+                activation_id: ACTIVATION_ID.into(),
+                auth_token: AUTH_TOKEN.into(),
+            }),
         }))
         .await
         .expect("register succeeds")
         .into_inner()
+        .plan()
         .registrations
 }
 
@@ -3462,12 +3625,11 @@ fn tcp_endpoint(http_endpoint: &str) -> String {
 }
 
 fn json_env(value: Json) -> JsonEnvelope {
-    json_envelope("nemo.relay.Json@1", &value).expect("encode JSON envelope")
+    conversions::encode(value).unwrap()
 }
 
-fn invalid_json_env(schema: &str) -> JsonEnvelope {
+fn invalid_json_value() -> JsonEnvelope {
     JsonEnvelope {
-        schema: schema.into(),
         json: b"{".to_vec(),
     }
 }
@@ -3485,17 +3647,39 @@ fn event_invoke_surface(registration_name: &str, surface: RegistrationSurface) -
         None,
         None,
     ));
+    let event = match surface {
+        RegistrationSurface::ScopeSanitizeStartGuardrail
+        | RegistrationSurface::ScopeSanitizeEndGuardrail => {
+            Event::Scope(nemo_relay_types::api::event::ScopeEvent {
+                base: BaseEvent::builder()
+                    .name("subscriber-event")
+                    .data(json!({"raw":true}))
+                    .build(),
+                scope_category: if surface == RegistrationSurface::ScopeSanitizeStartGuardrail {
+                    nemo_relay_types::api::event::ScopeCategory::Start
+                } else {
+                    nemo_relay_types::api::event::ScopeCategory::End
+                },
+                attributes: vec![],
+                category: nemo_relay_types::api::event::EventCategory::custom(),
+                category_profile: None,
+            })
+        }
+        _ => event,
+    };
     InvokeRequest {
-        activation_id: ACTIVATION_ID.into(),
         invocation_id: "invoke-1".into(),
         registration_name: registration_name.into(),
         surface: surface as i32,
         continuation_id: "next-1".into(),
         scope: Some(scope_context()),
-        auth_token: AUTH_TOKEN.into(),
-        payload: Some(nemo_relay_worker_proto::v1::invoke_request::Payload::Event(
-            json_envelope("nemo.relay.Event@1", &event).expect("encode event"),
-        )),
+        payload: Some(Payload::Event(Box::new(
+            wire_value(&event).expect("encode event"),
+        ))),
+        credentials: Some(pb::Credentials {
+            activation_id: ACTIVATION_ID.into(),
+            auth_token: AUTH_TOKEN.into(),
+        }),
     }
 }
 
@@ -3505,20 +3689,20 @@ fn tool_invoke(
     value: Json,
 ) -> InvokeRequest {
     InvokeRequest {
-        activation_id: ACTIVATION_ID.into(),
         invocation_id: "invoke-1".into(),
         registration_name: registration_name.into(),
         surface: surface as i32,
         continuation_id: "next-1".into(),
         scope: Some(scope_context()),
-        auth_token: AUTH_TOKEN.into(),
-        payload: Some(nemo_relay_worker_proto::v1::invoke_request::Payload::Tool(
-            ToolInvocation {
-                tool_name: "tool".into(),
-                value: Some(json_env(value)),
-                tool_call_id: None,
-            },
-        )),
+        payload: Some(Payload::Tool(ToolInvocation {
+            tool_name: "tool".into(),
+            value: Some(json_env(value)),
+            tool_call_id: None,
+        })),
+        credentials: Some(pb::Credentials {
+            activation_id: ACTIVATION_ID.into(),
+            auth_token: AUTH_TOKEN.into(),
+        }),
     }
 }
 
@@ -3531,129 +3715,58 @@ fn llm_invoke(
 ) -> InvokeRequest {
     let execution_codec_context = execution_codec_context_for(surface);
     InvokeRequest {
-        activation_id: ACTIVATION_ID.into(),
         invocation_id: "invoke-1".into(),
         registration_name: registration_name.into(),
         surface: surface as i32,
         continuation_id: "next-1".into(),
         scope: Some(scope_context()),
-        auth_token: AUTH_TOKEN.into(),
-        payload: Some(nemo_relay_worker_proto::v1::invoke_request::Payload::Llm(
-            LlmInvocation {
-                model_name: "model".into(),
-                request: Some(
-                    json_envelope("nemo.relay.LlmRequest@1", &request).expect("encode request"),
-                ),
-                annotated_request: annotated_request.map(json_env),
-                response: response.map(json_env),
-                sanitize_context: None,
-                execution_codec_context,
-            },
-        )),
+        payload: Some(Payload::Llm(Box::new(LlmInvocation {
+            model_name: "model".into(),
+            request: Some(wire_value(&request).expect("encode request")),
+            annotated_request: annotated_request.map(|v| wire_value(&v).unwrap()),
+            response: response.map(json_env),
+            sanitize_context: None,
+            execution_codec_context,
+        }))),
+        credentials: Some(pb::Credentials {
+            activation_id: ACTIVATION_ID.into(),
+            auth_token: AUTH_TOKEN.into(),
+        }),
     }
 }
 
-fn execution_codec_context_for(
-    surface: RegistrationSurface,
-) -> Option<Box<nemo_relay_worker_proto::v1::LlmExecutionCodecContext>> {
+fn execution_codec_context_for(surface: RegistrationSurface) -> Option<Box<ExecutionCodecContext>> {
     match surface {
-        RegistrationSurface::LlmExecutionIntercept => Some(Box::new(
-            nemo_relay_worker_proto::v1::LlmExecutionCodecContext {
-                request: Some(empty_request_codec_context()),
-                response: Some(empty_response_codec_context()),
-            },
-        )),
-        RegistrationSurface::LlmStreamExecutionIntercept => Some(Box::new(
-            nemo_relay_worker_proto::v1::LlmExecutionCodecContext {
-                request: Some(empty_request_codec_context()),
-                response: None,
-            },
-        )),
+        RegistrationSurface::LlmExecutionIntercept => Some(Box::new(ExecutionCodecContext {
+            request: Some(empty_request_codec_context()),
+            response: Some(empty_response_codec_context()),
+        })),
+        RegistrationSurface::LlmStreamExecutionIntercept => Some(Box::new(ExecutionCodecContext {
+            request: Some(empty_request_codec_context()),
+            response: None,
+        })),
         _ => None,
     }
 }
 
-fn llm_invoke_without_request(
-    registration_name: &str,
-    surface: RegistrationSurface,
-) -> InvokeRequest {
-    InvokeRequest {
-        activation_id: ACTIVATION_ID.into(),
-        invocation_id: "invoke-1".into(),
-        registration_name: registration_name.into(),
-        surface: surface as i32,
-        continuation_id: "next-1".into(),
-        scope: Some(scope_context()),
-        auth_token: AUTH_TOKEN.into(),
-        payload: Some(nemo_relay_worker_proto::v1::invoke_request::Payload::Llm(
-            LlmInvocation {
-                model_name: "model".into(),
-                request: None,
-                annotated_request: None,
-                response: None,
-                sanitize_context: None,
-                execution_codec_context: execution_codec_context_for(surface),
-            },
-        )),
-    }
-}
-
-fn empty_request_codec_context() -> nemo_relay_worker_proto::v1::LlmSanitizeRequestContext {
-    nemo_relay_worker_proto::v1::LlmSanitizeRequestContext {
-        codec: Some(nemo_relay_worker_proto::v1::LlmCodecIdentity {
-            kind: nemo_relay_worker_proto::v1::LlmCodecKind::Unspecified as i32,
+fn empty_request_codec_context() -> pb::LlmCodecContext {
+    pb::LlmCodecContext {
+        codec: Some(pb::LlmCodecReference {
+            kind: "none".into(),
             id: None,
         }),
-        codec_capability_id: None,
+        capability_id: None,
     }
 }
 
-fn empty_response_codec_context() -> nemo_relay_worker_proto::v1::LlmSanitizeResponseContext {
-    nemo_relay_worker_proto::v1::LlmSanitizeResponseContext {
-        codec: Some(nemo_relay_worker_proto::v1::LlmCodecIdentity {
-            kind: nemo_relay_worker_proto::v1::LlmCodecKind::Unspecified as i32,
+fn empty_response_codec_context() -> pb::LlmCodecContext {
+    pb::LlmCodecContext {
+        codec: Some(pb::LlmCodecReference {
+            kind: "none".into(),
             id: None,
         }),
-        codec_capability_id: None,
+        capability_id: None,
     }
-}
-
-fn llm_invoke_with_bad_annotation(registration_name: &str) -> InvokeRequest {
-    let mut request = llm_invoke(
-        registration_name,
-        RegistrationSurface::LlmRequestIntercept,
-        llm_request(),
-        None,
-        None,
-    );
-    if let Some(nemo_relay_worker_proto::v1::invoke_request::Payload::Llm(payload)) =
-        request.payload.as_mut()
-    {
-        payload.annotated_request = Some(JsonEnvelope {
-            schema: ANNOTATED_LLM_REQUEST_SCHEMA.into(),
-            json: b"{".to_vec(),
-        });
-    }
-    request
-}
-
-fn llm_invoke_with_legacy_annotation(registration_name: &str) -> InvokeRequest {
-    let mut request = llm_invoke(
-        registration_name,
-        RegistrationSurface::LlmRequestIntercept,
-        llm_request(),
-        None,
-        None,
-    );
-    if let Some(nemo_relay_worker_proto::v1::invoke_request::Payload::Llm(payload)) =
-        request.payload.as_mut()
-    {
-        payload.annotated_request = Some(JsonEnvelope {
-            schema: "nemo.relay.AnnotatedLlmRequest@1".into(),
-            json: br#"{"messages":[]}"#.to_vec(),
-        });
-    }
-    request
 }
 
 fn scope_context() -> ScopeContext {
@@ -3685,20 +3798,16 @@ fn llm_request_codec_invoke() -> InvokeRequest {
         None,
         None,
     );
-    if let Some(nemo_relay_worker_proto::v1::invoke_request::Payload::Llm(invocation)) =
-        request.payload.as_mut()
-    {
-        invocation.sanitize_context = Some(
-            nemo_relay_worker_proto::v1::llm_invocation::SanitizeContext::RequestSanitizeContext(
-                nemo_relay_worker_proto::v1::LlmSanitizeRequestContext {
-                    codec: Some(nemo_relay_worker_proto::v1::LlmCodecIdentity {
-                        kind: nemo_relay_worker_proto::v1::LlmCodecKind::Builtin as i32,
-                        id: Some("openai_chat".into()),
-                    }),
-                    codec_capability_id: Some("request-capability".into()),
-                },
-            ),
-        );
+    if let Some(Payload::Llm(invocation)) = request.payload.as_mut() {
+        invocation.sanitize_context = Some(SanitizeContext::RequestSanitizeContext(
+            pb::LlmCodecContext {
+                codec: Some(pb::LlmCodecReference {
+                    kind: "builtin".into(),
+                    id: Some("openai_chat".into()),
+                }),
+                capability_id: Some("request-capability".into()),
+            },
+        ));
     }
     request
 }
@@ -3711,20 +3820,16 @@ fn llm_response_codec_invoke() -> InvokeRequest {
         None,
         Some(json!({"value": "secret"})),
     );
-    if let Some(nemo_relay_worker_proto::v1::invoke_request::Payload::Llm(invocation)) =
-        request.payload.as_mut()
-    {
-        invocation.sanitize_context = Some(
-            nemo_relay_worker_proto::v1::llm_invocation::SanitizeContext::ResponseSanitizeContext(
-                nemo_relay_worker_proto::v1::LlmSanitizeResponseContext {
-                    codec: Some(nemo_relay_worker_proto::v1::LlmCodecIdentity {
-                        kind: nemo_relay_worker_proto::v1::LlmCodecKind::Opaque as i32,
-                        id: None,
-                    }),
-                    codec_capability_id: Some("response-capability".into()),
-                },
-            ),
-        );
+    if let Some(Payload::Llm(invocation)) = request.payload.as_mut() {
+        invocation.sanitize_context = Some(SanitizeContext::ResponseSanitizeContext(
+            pb::LlmCodecContext {
+                codec: Some(pb::LlmCodecReference {
+                    kind: "opaque".into(),
+                    id: None,
+                }),
+                capability_id: Some("response-capability".into()),
+            },
+        ));
     }
     request
 }
@@ -3753,11 +3858,20 @@ async fn invoke_json(client: &mut PluginWorkerClient<Channel>, request: InvokeRe
         .expect("invoke succeeds")
         .into_inner();
     match response.result.expect("invoke result") {
-        nemo_relay_worker_proto::v1::invoke_response::Result::Json(result) => {
-            decode_json_envelope(&result.value.expect("json value")).expect("decode JSON result")
+        pb::invoke_response::Result::ToolValue(value)
+        | pb::invoke_response::Result::LlmResponse(value) => conversions::decode(value).unwrap(),
+        pb::invoke_response::Result::LlmRequest(value) => {
+            serde_json::to_value(conversions::decode::<LlmRequest, _>(value).unwrap()).unwrap()
         }
-        nemo_relay_worker_proto::v1::invoke_response::Result::ToolExecution(result) => {
-            decode_tool_execution_outcome(result.outcome.expect("tool execution outcome")).result
+        pb::invoke_response::Result::MetadataAdditions(value) => {
+            conversions::decode(value).unwrap()
+        }
+        pb::invoke_response::Result::EventSanitize(value) => serde_json::to_value(
+            conversions::decode::<nemo_relay_worker::EventSanitizeFields, _>(*value).unwrap(),
+        )
+        .unwrap(),
+        pb::invoke_response::Result::ToolExecutionOutcome(result) => {
+            decode_tool_execution_outcome(result).result
         }
         other => panic!("unexpected invoke result: {other:?}"),
     }
@@ -3773,8 +3887,8 @@ async fn invoke_tool_execution(
         .expect("invoke succeeds")
         .into_inner();
     match response.result.expect("invoke result") {
-        nemo_relay_worker_proto::v1::invoke_response::Result::ToolExecution(result) => {
-            let outcome = result.outcome.expect("tool execution outcome");
+        pb::invoke_response::Result::ToolExecutionOutcome(result) => {
+            let outcome = result;
             decode_tool_execution_outcome(outcome)
         }
         other => panic!("unexpected invoke result: {other:?}"),
@@ -3784,24 +3898,7 @@ async fn invoke_tool_execution(
 fn decode_tool_execution_outcome(
     outcome: ProtoToolExecutionInterceptOutcome,
 ) -> ToolExecutionInterceptOutcome {
-    ToolExecutionInterceptOutcome {
-        result: decode_json_value(outcome.result.as_ref().expect("tool execution result"))
-            .expect("decode tool execution result"),
-        annotation: outcome
-            .annotation
-            .as_ref()
-            .map(decode_json_value)
-            .transpose()
-            .expect("decode tool execution annotation")
-            .filter(|value: &Json| !value.is_null()),
-        pending_marks: outcome
-            .pending_marks
-            .as_ref()
-            .map(decode_json_value)
-            .transpose()
-            .expect("decode pending marks")
-            .unwrap_or_default(),
-    }
+    conversions::decode(outcome).unwrap()
 }
 
 async fn invoke_guardrail(
@@ -3814,18 +3911,20 @@ async fn invoke_guardrail(
         .expect("invoke succeeds")
         .into_inner();
     match response.result.expect("invoke result") {
-        nemo_relay_worker_proto::v1::invoke_response::Result::Guardrail(result) => {
-            result.block_reason
-        }
+        pb::invoke_response::Result::Guardrail(result) => match result.decision.unwrap() {
+            pb::guardrail_decision::Decision::Allow(()) => String::new(),
+            pb::guardrail_decision::Decision::BlockReason(reason) => reason,
+        },
         other => panic!("unexpected invoke result: {other:?}"),
     }
 }
 
 fn guardrail_reason(response: InvokeResponse) -> String {
     match response.result.expect("invoke result") {
-        nemo_relay_worker_proto::v1::invoke_response::Result::Guardrail(result) => {
-            result.block_reason
-        }
+        pb::invoke_response::Result::Guardrail(result) => match result.decision.unwrap() {
+            pb::guardrail_decision::Decision::Allow(()) => String::new(),
+            pb::guardrail_decision::Decision::BlockReason(reason) => reason,
+        },
         other => panic!("unexpected invoke result: {other:?}"),
     }
 }
@@ -3840,12 +3939,10 @@ async fn invoke_llm_request(
         .expect("invoke succeeds")
         .into_inner();
     match response.result.expect("invoke result") {
-        nemo_relay_worker_proto::v1::invoke_response::Result::LlmRequest(result) => {
-            decode_json_envelope::<nemo_relay_worker::LlmRequestInterceptOutcome>(
-                &result.outcome.expect("llm request outcome"),
-            )
-            .expect("decode LLM request outcome")
-            .request
+        pb::invoke_response::Result::LlmRequestOutcome(result) => {
+            conversions::decode::<nemo_relay_worker::LlmRequestInterceptOutcome, _>(*result)
+                .unwrap()
+                .request
         }
         other => panic!("unexpected invoke result: {other:?}"),
     }
@@ -3853,8 +3950,8 @@ async fn invoke_llm_request(
 
 fn stream_json(chunk: StreamChunk) -> Json {
     match chunk.item.expect("stream chunk item") {
-        nemo_relay_worker_proto::v1::stream_chunk::Item::Value(value) => {
-            decode_json_envelope(&value).expect("decode stream value")
+        pb::invoke_stream_response::Item::Value(value) => {
+            decode_wire_value(&value).expect("decode stream value")
         }
         other => panic!("unexpected stream chunk: {other:?}"),
     }
@@ -3863,7 +3960,7 @@ fn stream_json(chunk: StreamChunk) -> Json {
 fn assert_empty_response(response: InvokeResponse) {
     assert!(matches!(
         response.result.expect("invoke result"),
-        nemo_relay_worker_proto::v1::invoke_response::Result::Empty(_)
+        pb::invoke_response::Result::Completed(_) | pb::invoke_response::Result::Unchanged(_)
     ));
 }
 
@@ -3873,7 +3970,7 @@ fn assert_json_field(value: Json, key: &str, expected: &str) {
 
 fn assert_worker_error(response: InvokeResponse, expected: &str) {
     match response.result.expect("invoke result") {
-        nemo_relay_worker_proto::v1::invoke_response::Result::Error(error) => {
+        pb::invoke_response::Result::Error(error) => {
             assert!(
                 error.message.contains(expected),
                 "expected '{expected}' in '{}'",
@@ -3886,7 +3983,7 @@ fn assert_worker_error(response: InvokeResponse, expected: &str) {
 
 fn assert_stream_error(chunk: StreamChunk, expected: &str) {
     match chunk.item.expect("stream item") {
-        nemo_relay_worker_proto::v1::stream_chunk::Item::Error(error) => {
+        pb::invoke_stream_response::Item::Error(error) => {
             assert!(
                 error.message.contains(expected),
                 "expected '{expected}' in '{}'",
@@ -3895,14 +3992,6 @@ fn assert_stream_error(chunk: StreamChunk, expected: &str) {
         }
         other => panic!("unexpected stream item: {other:?}"),
     }
-}
-
-fn assert_status_message(status: Status, expected: &str) {
-    assert!(
-        status.message().contains(expected),
-        "expected '{expected}' in '{}'",
-        status.message()
-    );
 }
 
 fn assert_error_contains(error: WorkerSdkError, expected: &str) {
@@ -3996,18 +4085,8 @@ fn unique_temp_path(prefix: &str) -> std::path::PathBuf {
     PathBuf::from(format!("/tmp/{prefix}-{}-{nanos}.sock", std::process::id()))
 }
 
-fn host_ack() -> HostAck {
-    HostAck {
-        ok: true,
-        error: None,
-    }
-}
-
-fn host_ack_error(message: &str) -> HostAck {
-    HostAck {
-        ok: false,
-        error: Some(worker_error(message)),
-    }
+fn host_ack<R: Default>() -> R {
+    R::default()
 }
 
 fn worker_error(message: &str) -> WorkerError {
@@ -4016,6 +4095,7 @@ fn worker_error(message: &str) -> WorkerError {
         message: message.into(),
         retryable: false,
         downstream_continuation_id: None,
+        http_status: None,
     }
 }
 
@@ -4047,9 +4127,7 @@ impl WorkerPlugin for SnapshotPlugin {
 
 #[tokio::test(flavor = "multi_thread")]
 async fn scope_stack_snapshot_worker_decodes_fresh_values_and_explicit_errors() {
-    use nemo_relay_worker_proto::v1::{
-        GetCurrentScopeStackSnapshotResponse, ScopeStackEntry, ScopeStackSnapshot,
-    };
+    use pb::{GetCurrentScopeStackSnapshotResponse, ScopeStackEntry, ScopeStackSnapshot};
     let host = MockHost::default();
     let (host_handle, host_endpoint) = spawn_host(host.clone()).await;
     let (worker_handle, mut client) =
@@ -4086,8 +4164,11 @@ async fn scope_stack_snapshot_worker_decodes_fresh_values_and_explicit_errors() 
         })
         .collect();
     *host.snapshot_response.lock().unwrap() = Some(GetCurrentScopeStackSnapshotResponse {
-        snapshot: Some(ScopeStackSnapshot { scopes }),
-        error: None,
+        result: Some(
+            pb::get_current_scope_stack_snapshot_response::Result::Snapshot(ScopeStackSnapshot {
+                scopes,
+            }),
+        ),
     });
     let first = invoke_json(
         &mut client,
@@ -4113,13 +4194,16 @@ async fn scope_stack_snapshot_worker_decodes_fresh_values_and_explicit_errors() 
         (11, "unknown"),
     ] {
         *host.snapshot_response.lock().unwrap() = Some(GetCurrentScopeStackSnapshotResponse {
-            snapshot: Some(ScopeStackSnapshot {
-                scopes: vec![ScopeStackEntry {
-                    scope_id: fixture.scopes[0].scope_id.to_string(),
-                    scope_type: discriminant,
-                }],
-            }),
-            error: None,
+            result: Some(
+                pb::get_current_scope_stack_snapshot_response::Result::Snapshot(
+                    ScopeStackSnapshot {
+                        scopes: vec![ScopeStackEntry {
+                            scope_id: fixture.scopes[0].scope_id.to_string(),
+                            scope_type: discriminant,
+                        }],
+                    },
+                ),
+            ),
         });
         let value = invoke_json(
             &mut client,
@@ -4134,28 +4218,30 @@ async fn scope_stack_snapshot_worker_decodes_fresh_values_and_explicit_errors() 
     }
     for discriminant in [0, i32::MAX] {
         *host.snapshot_response.lock().unwrap() = Some(GetCurrentScopeStackSnapshotResponse {
-            snapshot: Some(ScopeStackSnapshot {
-                scopes: vec![ScopeStackEntry {
-                    scope_id: fixture.scopes[0].scope_id.to_string(),
-                    scope_type: discriminant,
-                }],
-            }),
-            error: None,
+            result: Some(
+                pb::get_current_scope_stack_snapshot_response::Result::Snapshot(
+                    ScopeStackSnapshot {
+                        scopes: vec![ScopeStackEntry {
+                            scope_id: fixture.scopes[0].scope_id.to_string(),
+                            scope_type: discriminant,
+                        }],
+                    },
+                ),
+            ),
         });
-        let value = invoke_json(
-            &mut client,
-            tool_invoke(
+        let response = client
+            .invoke(Request::new(tool_invoke(
                 "snapshot",
                 RegistrationSurface::ToolRequestIntercept,
                 json!({}),
-            ),
-        )
-        .await;
-        assert_eq!(value["scopes"][0]["scope_type"], "unknown");
+            )))
+            .await
+            .unwrap()
+            .into_inner();
+        assert_worker_error(response, "unknown ScopeType");
     }
     *host.snapshot_response.lock().unwrap() = Some(GetCurrentScopeStackSnapshotResponse {
-        snapshot: None,
-        error: None,
+        result: Some(pb::get_current_scope_stack_snapshot_response::Result::NoContext(())),
     });
     assert_eq!(
         invoke_json(
@@ -4170,13 +4256,14 @@ async fn scope_stack_snapshot_worker_decodes_fresh_values_and_explicit_errors() 
         Json::Null
     );
     *host.snapshot_response.lock().unwrap() = Some(GetCurrentScopeStackSnapshotResponse {
-        snapshot: Some(ScopeStackSnapshot {
-            scopes: vec![ScopeStackEntry {
-                scope_id: "invalid".into(),
-                scope_type: 1,
-            }],
-        }),
-        error: None,
+        result: Some(
+            pb::get_current_scope_stack_snapshot_response::Result::Snapshot(ScopeStackSnapshot {
+                scopes: vec![ScopeStackEntry {
+                    scope_id: "invalid".into(),
+                    scope_type: 1,
+                }],
+            }),
+        ),
     });
     assert_worker_error(
         client
@@ -4188,12 +4275,10 @@ async fn scope_stack_snapshot_worker_decodes_fresh_values_and_explicit_errors() 
             .await
             .unwrap()
             .into_inner(),
-        "invalid snapshot scope UUID",
+        "invalid UUID",
     );
-    *host.snapshot_response.lock().unwrap() = Some(GetCurrentScopeStackSnapshotResponse {
-        snapshot: None,
-        error: Some(worker_error("expired snapshot binding")),
-    });
+    *host.snapshot_error.lock().unwrap() =
+        Some(Status::failed_precondition("expired snapshot binding"));
     assert_worker_error(
         client
             .invoke(Request::new(tool_invoke(
@@ -4209,4 +4294,189 @@ async fn scope_stack_snapshot_worker_decodes_fresh_values_and_explicit_errors() 
     assert_eq!(first, serde_json::to_value(&fixture).unwrap());
     worker_handle.abort();
     host_handle.abort();
+}
+
+fn wire_value<D: serde::Serialize, W: prost::Message + Default + prost::Name>(
+    value: &D,
+) -> std::result::Result<W, Box<dyn std::error::Error>> {
+    let json = serde_json::to_value(value)?;
+    let bytes = match W::NAME {
+        "Event" => prost::Message::encode_to_vec(&conversions::encode::<
+            nemo_relay_types::api::event::Event,
+            pb::Event,
+        >(serde_json::from_value(json)?)?),
+        "LlmRequest" => prost::Message::encode_to_vec(&conversions::encode::<
+            LlmRequest,
+            pb::LlmRequest,
+        >(serde_json::from_value(json)?)?),
+        "AnnotatedLlmRequest" => {
+            prost::Message::encode_to_vec(&conversions::encode::<
+                nemo_relay_types::codec::request::AnnotatedLlmRequest,
+                pb::AnnotatedLlmRequest,
+            >(serde_json::from_value(json)?)?)
+        }
+        "DataSchema" => prost::Message::encode_to_vec(&conversions::encode::<
+            DataSchema,
+            pb::DataSchema,
+        >(serde_json::from_value(json)?)?),
+        "JsonValue" => {
+            prost::Message::encode_to_vec(&conversions::encode::<Json, pb::JsonValue>(json)?)
+        }
+        other => panic!("unhandled typed fixture {other}"),
+    };
+    Ok(W::decode(bytes.as_slice())?)
+}
+fn decode_wire_value<D: serde::de::DeserializeOwned, W: prost::Message + prost::Name>(
+    value: &W,
+) -> std::result::Result<D, Box<dyn std::error::Error>> {
+    let bytes = value.encode_to_vec();
+    use prost::Message;
+    let json = match W::NAME {
+        "Event" => serde_json::to_value(conversions::decode::<
+            nemo_relay_types::api::event::Event,
+            _,
+        >(pb::Event::decode(bytes.as_slice())?)?)?,
+        "LlmRequest" => serde_json::to_value(conversions::decode::<LlmRequest, _>(
+            pb::LlmRequest::decode(bytes.as_slice())?,
+        )?)?,
+        "DataSchema" => serde_json::to_value(conversions::decode::<DataSchema, _>(
+            pb::DataSchema::decode(bytes.as_slice())?,
+        )?)?,
+        "AnnotatedLlmRequest" => serde_json::to_value(conversions::decode::<
+            nemo_relay_types::codec::request::AnnotatedLlmRequest,
+            _,
+        >(
+            pb::AnnotatedLlmRequest::decode(bytes.as_slice())?,
+        )?)?,
+        "JsonObject" => conversions::decode::<Json, _>(pb::JsonObject::decode(bytes.as_slice())?)?,
+        "JsonValue" => conversions::decode::<Json, _>(pb::JsonValue::decode(bytes.as_slice())?)?,
+        other => panic!("unhandled typed fixture {other}"),
+    };
+    Ok(serde_json::from_value(json)?)
+}
+fn json_value(value: &Json) -> std::result::Result<pb::JsonValue, conversions::ConversionError> {
+    conversions::encode(value.clone())
+}
+trait RegistrationResult {
+    fn plan(&self) -> pb::RegistrationPlan;
+    fn error(&self) -> Option<WorkerError>;
+}
+impl RegistrationResult for pb::RegisterResponse {
+    fn plan(&self) -> pb::RegistrationPlan {
+        match &self.result {
+            Some(pb::register_response::Result::Plan(v)) => v.clone(),
+            other => panic!("unexpected registration {other:?}"),
+        }
+    }
+    fn error(&self) -> Option<WorkerError> {
+        match &self.result {
+            Some(pb::register_response::Result::Error(v)) => Some(v.clone()),
+            _ => None,
+        }
+    }
+}
+trait ValidationResult {
+    fn diagnostics(&self) -> Option<Vec<nemo_relay_worker::ConfigDiagnostic>>;
+}
+impl ValidationResult for pb::ValidateResponse {
+    fn diagnostics(&self) -> Option<Vec<nemo_relay_worker::ConfigDiagnostic>> {
+        match &self.result {
+            Some(pb::validate_response::Result::Diagnostics(v)) => Some(
+                v.entries
+                    .iter()
+                    .cloned()
+                    .map(|v| conversions::decode(v).unwrap())
+                    .collect(),
+            ),
+            _ => None,
+        }
+    }
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn runtime_rejects_malformed_host_handles_and_allows_registration_retry() {
+    struct CaptureRuntime(Arc<Mutex<Option<PluginRuntime>>>);
+    impl WorkerPlugin for CaptureRuntime {
+        fn plugin_id(&self) -> &str {
+            "test.host-handles"
+        }
+        fn register(&self, context: &mut PluginContext, _: &Json) -> Result<()> {
+            *self.0.lock().unwrap() = context.runtime();
+            Ok(())
+        }
+    }
+    let captured = Arc::new(Mutex::new(None));
+    let host = MockHost::default();
+    let (host_task, endpoint) = spawn_host(host.clone()).await;
+    let (worker, mut client) =
+        spawn_worker(Arc::new(CaptureRuntime(captured.clone())), endpoint).await;
+    register_plugin(&mut client).await;
+    let runtime = captured.lock().unwrap().take().unwrap();
+    host.set_failures(MockHostFailures {
+        empty_gate_handle: true,
+        empty_scope_stack_id: true,
+        empty_scope_handle_id: true,
+        ..Default::default()
+    });
+    let error = runtime
+        .register_conditional_middleware_guardrail(
+            "retryable",
+            BTreeSet::from([RuntimeRegistrationKind::Subscriber]),
+            "target",
+            |_, _| async { Ok(None) },
+        )
+        .await
+        .unwrap_err();
+    assert!(matches!(error, WorkerSdkError::InvalidInput(_)));
+    assert!(matches!(
+        runtime.create_scope_stack().await,
+        Err(WorkerSdkError::InvalidInput(_))
+    ));
+    assert!(matches!(
+        runtime
+            .push_scope(
+                Some("isolated-stack"),
+                "child",
+                ScopeType::Custom,
+                None,
+                None,
+                None
+            )
+            .await,
+        Err(WorkerSdkError::InvalidInput(_))
+    ));
+    assert!(matches!(
+        runtime.drop_scope_stack("").await,
+        Err(WorkerSdkError::InvalidInput(_))
+    ));
+    assert!(!host.calls().contains(&"drop:".to_owned()));
+
+    host.set_failures(MockHostFailures::default());
+    let gate = runtime
+        .register_conditional_middleware_guardrail(
+            "retryable",
+            BTreeSet::from([RuntimeRegistrationKind::Subscriber]),
+            "target",
+            |_, _| async { Ok(None) },
+        )
+        .await
+        .expect("invalid host handle must release the callback name");
+    assert!(
+        runtime
+            .deregister_conditional_middleware_guardrail(&gate)
+            .await
+            .unwrap()
+    );
+    let stack = runtime.create_scope_stack().await.unwrap();
+    assert_eq!(stack, "isolated-stack");
+    let handle = runtime
+        .push_scope(Some(&stack), "child", ScopeType::Custom, None, None, None)
+        .await
+        .unwrap();
+    assert_eq!(handle, "scope-handle-1");
+    runtime.pop_scope(&handle, None, None).await.unwrap();
+    runtime.drop_scope_stack(&stack).await.unwrap();
+    assert_eq!(host.runtime_registration_requests().register.len(), 2);
+    worker.abort();
+    host_task.abort();
 }

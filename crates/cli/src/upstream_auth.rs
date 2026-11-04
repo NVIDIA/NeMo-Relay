@@ -1,14 +1,17 @@
 // SPDX-FileCopyrightText: Copyright (c) 2026, NVIDIA CORPORATION & AFFILIATES. All rights reserved.
 // SPDX-License-Identifier: Apache-2.0
 
-//! Request-local upstream credentials, shared by personal gateways and daemon dispatchers.
+//! Upstream credentials, shared by personal gateways and daemon dispatchers.
 
 use std::process::Stdio;
+use std::sync::Arc;
 use std::time::Duration;
 
 use http::{HeaderMap, HeaderName, HeaderValue, header::AUTHORIZATION};
 use serde::{Deserialize, Serialize};
 use tokio::io::AsyncReadExt;
+use tokio::sync::{Mutex, watch};
+use tokio::time::Instant;
 
 use crate::configuration::GatewayConfig;
 use crate::error::CliError;
@@ -25,9 +28,15 @@ pub(crate) struct ApiKeyHelper {
     pub(crate) args: Vec<String>,
     #[serde(default = "default_timeout_ms")]
     pub(crate) timeout_ms: u64,
+    /// Zero, the default, runs the helper for every request.
+    #[serde(default)]
+    pub(crate) cache_ttl_ms: u64,
     /// Absent means the provider's standard scheme (OpenAI bearer, Anthropic x-api-key).
     #[serde(default)]
     pub(crate) auth_scheme: Option<AuthScheme>,
+    /// Runtime copies share this cache. Serialized configuration never includes it.
+    #[serde(skip)]
+    pub(crate) cache: Arc<Mutex<Option<HelperCache>>>,
 }
 
 // Arguments may contain secrets. Never render them in Debug-derived config diagnostics.
@@ -37,7 +46,7 @@ impl std::fmt::Debug for ApiKeyHelper {
     }
 }
 
-#[derive(Debug, Clone, Copy, Deserialize, Serialize)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Deserialize, Serialize)]
 #[serde(rename_all = "snake_case")]
 pub(crate) enum AuthScheme {
     Bearer,
@@ -91,6 +100,14 @@ pub(crate) fn validate_config(config: &GatewayConfig) -> Result<(), CliError> {
                 return Err(CliError::Config(
                     "OpenAI API key helpers require bearer authentication".into(),
                 ));
+            }
+            if Instant::now()
+                .checked_add(Duration::from_millis(helper.cache_ttl_ms))
+                .is_none()
+            {
+                return Err(CliError::Config(format!(
+                    "upstream.{provider}_api_key_helper cache_ttl_ms is too large"
+                )));
             }
         }
     }
@@ -229,7 +246,7 @@ pub(crate) async fn apply_for_destination(
     apply(headers, anthropic, allow_configured_auth, config).await
 }
 
-/// Resolve immediately before dispatch. No result is stored or shared across requests.
+/// Choose credentials before sending a request. Cache helper output only when enabled.
 pub(crate) async fn apply(
     headers: &mut HeaderMap,
     anthropic: bool,
@@ -256,7 +273,12 @@ pub(crate) async fn apply(
         )
     };
     let (name, mut value) = if let Some(helper) = helper {
-        let token = helper.token(provider).await?;
+        let base_url = if anthropic {
+            &config.anthropic_base_url
+        } else {
+            &config.openai_base_url
+        };
+        let token = helper.resolve_token(provider, base_url).await?;
         token_header(
             &token,
             helper.auth_scheme.unwrap_or(if anthropic {
@@ -342,7 +364,103 @@ fn token_header(token: &str, scheme: AuthScheme) -> Result<(HeaderName, HeaderVa
     Ok((name, value))
 }
 
+// Do not add Debug or Serialize: arguments and results can contain secrets.
+#[derive(PartialEq, Eq)]
+struct HelperIdentity {
+    provider: String,
+    base_url: String,
+    command: String,
+    args: Vec<String>,
+    timeout_ms: u64,
+    cache_ttl_ms: u64,
+    auth_scheme: Option<AuthScheme>,
+}
+
+#[derive(Clone)]
+struct CachedToken {
+    token: String,
+    expires_at: Instant,
+}
+
+type RefreshResult = Result<CachedToken, String>;
+
+pub(crate) struct HelperCache {
+    identity: HelperIdentity,
+    result: watch::Receiver<Option<RefreshResult>>,
+}
+
 impl ApiKeyHelper {
+    async fn resolve_token(&self, provider: &str, base_url: &str) -> Result<String, CliError> {
+        if self.cache_ttl_ms == 0 {
+            // Clear any earlier cache when caching is disabled.
+            *self.cache.lock().await = None;
+            return self.token(provider).await;
+        }
+        let identity = HelperIdentity {
+            provider: provider.to_owned(),
+            base_url: base_url.to_owned(),
+            command: self.command.clone(),
+            args: self.args.clone(),
+            timeout_ms: self.timeout_ms,
+            cache_ttl_ms: self.cache_ttl_ms,
+            auth_scheme: self.auth_scheme,
+        };
+        let mut cache = self.cache.lock().await;
+        let existing = cache.as_ref().filter(|entry| entry.identity == identity);
+        let mut result = if let Some(entry) =
+            existing.filter(|entry| match entry.result.borrow().as_ref() {
+                None => entry.result.has_changed().is_ok(),
+                Some(Ok(token)) => Instant::now() < token.expires_at,
+                Some(Err(_)) => false,
+            }) {
+            entry.result.clone()
+        } else {
+            let (sender, receiver) = watch::channel(None);
+            *cache = Some(HelperCache {
+                identity,
+                result: receiver.clone(),
+            });
+            let helper = self.clone();
+            let provider = provider.to_owned();
+            // Cancelling a request must not cancel the refresh other requests share.
+            // The helper timeout limits how long this task and its process tree can run.
+            tokio::spawn(async move {
+                let result = helper.token(&provider).await.and_then(|token| {
+                    let expires_at = Instant::now()
+                        .checked_add(Duration::from_millis(helper.cache_ttl_ms))
+                        .ok_or_else(|| {
+                            CliError::Launch(format!(
+                                "{provider} API key helper cache TTL is too large"
+                            ))
+                        })?;
+                    Ok(CachedToken { token, expires_at })
+                });
+                // Share helper errors without including command output or arguments.
+                sender.send_replace(Some(result.map_err(|error| match error {
+                    CliError::Launch(message) => message,
+                    _ => format!("{provider} API key helper refresh failed"),
+                })));
+            });
+            receiver
+        };
+        drop(cache);
+        let completed = result
+            .wait_for(|value| value.is_some())
+            .await
+            .map_err(|_| {
+                CliError::Launch(format!("{provider} API key helper refresh interrupted"))
+            })?
+            .clone()
+            .expect("completed helper refresh");
+        let token = completed.map_err(CliError::Launch)?;
+        if Instant::now() >= token.expires_at {
+            return Err(CliError::Launch(format!(
+                "{provider} API key helper token expired before dispatch"
+            )));
+        }
+        Ok(token.token)
+    }
+
     async fn token(&self, provider: &str) -> Result<String, CliError> {
         let fail = |reason: &str| CliError::Launch(format!("{provider} API key helper {reason}"));
         let mut command = tokio::process::Command::new(&self.command);

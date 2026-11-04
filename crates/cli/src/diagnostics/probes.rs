@@ -44,6 +44,7 @@ pub(super) fn check_dir_writable(directory: &Path) -> Result<(), std::io::Error>
     std::fs::remove_file(probe)
 }
 
+/// Check HTTP reachability with GET without claiming authenticated trace delivery.
 pub(super) async fn probe_otlp_http_named(name: &'static str, url: &str) -> Check {
     let client = match reqwest::Client::builder().timeout(NETWORK_TIMEOUT).build() {
         Ok(client) => client,
@@ -67,7 +68,7 @@ pub(super) async fn probe_otlp_http_named(name: &'static str, url: &str) -> Chec
                 Status::Warn
             },
             details: format!(
-                "{} (live HTTP reachability probe returned HTTP {})",
+                "{} (live HTTP reachability probe returned HTTP {}); unauthenticated GET only; authentication and OTLP ingestion unverified",
                 url,
                 response.status().as_u16()
             ),

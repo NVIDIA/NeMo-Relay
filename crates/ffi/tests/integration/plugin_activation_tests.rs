@@ -479,7 +479,7 @@ id = "fixture_native"
 kind = "rust_dynamic"
 
 [compat]
-relay = "={version}"
+relay = ">=1.0.0,<2.0"
 native_api = "1"
 
 [defaults]
@@ -498,7 +498,6 @@ sha256 = "sha256:{digest}"
 library = {library:?}
 symbol = "nemo_relay_fixture_native_plugin"
 "#,
-            version = env!("CARGO_PKG_VERSION"),
             library = library.to_string_lossy(),
             digest = sha256_file(library),
         ),
@@ -520,8 +519,8 @@ id = "fixture_worker"
 kind = "worker"
 
 [compat]
-relay = "={version}"
-worker_protocol = "grpc-v1"
+relay = ">=1.0.0,<2.0"
+worker_protocol = "nvidia.nemo.relay.worker.v1"
 
 [defaults]
 enabled = false
@@ -539,7 +538,6 @@ sha256 = "sha256:{digest}"
 runtime = "rust"
 entrypoint = {entrypoint:?}
 "#,
-            version = env!("CARGO_PKG_VERSION"),
             entrypoint = binary.to_string_lossy(),
             digest = sha256_file(binary),
         ),

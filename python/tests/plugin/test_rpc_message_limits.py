@@ -21,6 +21,27 @@ from nemo_relay_plugin._message_limits import (  # noqa: E402
     MessageLimitInterceptor,
     named_message_limits,
 )
+from nemo_relay_plugin._proto.nvidia.nemo.relay.worker.v1 import (  # noqa: E402
+    common_pb2 as common_pb,
+)
+from nemo_relay_plugin._proto.nvidia.nemo.relay.worker.v1 import (  # noqa: E402
+    llm_pb2 as llm_pb,
+)
+from nemo_relay_plugin._proto.nvidia.nemo.relay.worker.v1 import (  # noqa: E402
+    plugin_worker_service_pb2 as worker_pb,
+)
+from nemo_relay_plugin._proto.nvidia.nemo.relay.worker.v1 import (  # noqa: E402
+    plugin_worker_service_pb2_grpc as worker_grpc,
+)
+from nemo_relay_plugin._proto.nvidia.nemo.relay.worker.v1 import (  # noqa: E402
+    relay_host_runtime_service_pb2 as host_pb,
+)
+from nemo_relay_plugin._proto.nvidia.nemo.relay.worker.v1 import (  # noqa: E402
+    relay_host_runtime_service_pb2_grpc as host_grpc,
+)
+from nemo_relay_plugin._proto.nvidia.nemo.relay.worker.v1 import (  # noqa: E402
+    runtime_pb2 as runtime_pb,
+)
 
 MIB = 1024 * 1024
 
@@ -62,41 +83,47 @@ def test_named_limit_defaults_and_boundaries(monkeypatch: pytest.MonkeyPatch) ->
 
 def result_value(request: Any, worker: bool) -> Any:
     """Generate a response independently of request size when requested."""
-    envelope = request.tool.value if worker else request.request
-    value = api._decode_required_envelope(envelope, "request", envelope.schema)
+    if worker and request.DESCRIPTOR.name == "InvokeRequest":
+        value = api._protocol.unpack(request.tool_request_intercept.value)
+    else:
+        value = api._protocol.unpack(request.request)["content"]
     return {"text": "x" * value["response_bytes"]} if "response_bytes" in value else value
 
 
-class WorkerPeer(api.pb_grpc.PluginWorkerServicer):
+class WorkerPeer(worker_grpc.PluginWorkerServiceServicer):
     """Permissive synthetic worker; production codec/interceptor supplies the limit."""
 
     async def Invoke(self, request: Any, context: Any) -> Any:
-        return api.pb.InvokeResponse(
-            json=api.pb.JsonResult(value=api._json_envelope(api.JSON_SCHEMA, result_value(request, True)))
+        return worker_pb.InvokeResponse(
+            tool_value=api._encode_payload(common_pb.JsonValue, result_value(request, True))
         )
 
     async def InvokeStream(self, request: Any, context: Any) -> Any:
-        yield api.pb.StreamChunk(value=api._json_envelope(api.JSON_SCHEMA, result_value(request, True)))
+        yield worker_pb.InvokeStreamResponse(
+            value=api._encode_payload(common_pb.JsonValue, result_value(request, True))
+        )
 
     async def Health(self, request: Any, context: Any) -> Any:
-        return api.pb.HealthResponse(ok=True)
+        return worker_pb.HealthResponse(status=runtime_pb.WORKER_HEALTH_STATUS_READY)
 
 
-class HostPeer(api.pb_grpc.RelayHostRuntimeServicer):
+class HostPeer(host_grpc.RelayHostRuntimeServiceServicer):
     """Permissive continuation peer isolates the maintained SDK channel limits."""
 
     async def ToolNext(self, request: Any, context: Any) -> Any:
-        value = api._decode_required_envelope(request.value, "request")
-        return api.pb.ToolExecutionResultResponse(value=api.pb.ToolExecutionResult(result=api._json_value(value)))
+        value = api._decode_payload(request.value, "request")
+        return host_pb.ToolNextResponse(value=runtime_pb.ToolExecutionResult(result=api._json_value(value)))
 
     async def LlmNext(self, request: Any, context: Any) -> Any:
-        return api.pb.JsonResult(value=api._json_envelope(api.JSON_SCHEMA, result_value(request, False)))
+        return host_pb.LlmNextResponse(value=api._encode_payload(common_pb.JsonValue, result_value(request, False)))
 
     async def LlmStreamNext(self, request: Any, context: Any) -> Any:
-        yield api.pb.StreamChunk(value=api._json_envelope(api.JSON_SCHEMA, result_value(request, False)))
+        yield host_pb.LlmStreamNextResponse(
+            value=api._encode_payload(common_pb.JsonValue, result_value(request, False))
+        )
 
     async def Log(self, request: Any, context: Any) -> Any:
-        return api.pb.HostAck(ok=True)
+        return host_pb.LogResponse()
 
 
 @asynccontextmanager
@@ -106,14 +133,44 @@ async def method_peer(limits: dict[str, int], enforce_server: bool) -> Any:
         options=api._worker_grpc_options(16 * MIB),
         interceptors=(MessageLimitInterceptor(4 * MIB, limits),) if enforce_server else (),
     )
-    api.pb_grpc.add_PluginWorkerServicer_to_server(WorkerPeer(), server)
-    api.pb_grpc.add_RelayHostRuntimeServicer_to_server(HostPeer(), server)
+    worker_grpc.add_PluginWorkerServiceServicer_to_server(WorkerPeer(), server)
+    host_grpc.add_RelayHostRuntimeServiceServicer_to_server(HostPeer(), server)
     port = server.add_insecure_port("127.0.0.1:0")
     await server.start()
     try:
         yield f"http://127.0.0.1:{port}"
     finally:
         await server.stop(grace=0)
+
+
+async def _assert_callback_metadata_rejected(stub: Any, rpc: str, callback: str, stream: bool) -> None:
+    for metadata in ((), ((CALLBACK_METADATA, b"wrong-callback"),)):
+        request = (
+            worker_pb.InvokeStreamRequest(
+                registration_name=callback,
+                request=api._protocol.pack(
+                    llm_pb.LlmRequest,
+                    {
+                        "headers": {},
+                        "content": api._protocol.unpack(api._encode_payload(common_pb.JsonValue, {"text": ""})),
+                    },
+                ),
+            )
+            if stream
+            else worker_pb.InvokeRequest(
+                registration_name=callback,
+                tool_request_intercept=runtime_pb.ToolValueInvocation(
+                    value=api._encode_payload(common_pb.JsonValue, {"text": ""})
+                ),
+            )
+        )
+        with pytest.raises(grpc.aio.AioRpcError) as error:
+            response = getattr(stub, rpc)(request, timeout=5, metadata=metadata)
+            if stream:
+                _ = [item async for item in response]
+            else:
+                await response
+        assert error.value.code() == grpc.StatusCode.INVALID_ARGUMENT
 
 
 @pytest.mark.parametrize("worker", [True, False])
@@ -134,18 +191,37 @@ async def test_callbacks_on_the_same_rpc_have_independent_limits(
             else api._open_host_channel(endpoint, max_message_bytes=4 * MIB, by_name=limits)
         )
         try:
-            stub = api.pb_grpc.PluginWorkerStub(channel) if worker else api.pb_grpc.RelayHostRuntimeStub(channel)
+            stub = (
+                worker_grpc.PluginWorkerServiceStub(channel)
+                if worker
+                else host_grpc.RelayHostRuntimeServiceStub(channel)
+            )
 
             async def call(size: int, name: str = callback) -> Any:
                 value = {"response_bytes": size} if direction == "response" else {"text": "x" * size}
                 request = (
-                    api.pb.InvokeRequest(
-                        registration_name=name,
-                        tool=api.pb.ToolInvocation(value=api._json_envelope(api.JSON_SCHEMA, value)),
+                    (
+                        worker_pb.InvokeStreamRequest(
+                            registration_name=name,
+                            request=api._protocol.pack(
+                                llm_pb.LlmRequest,
+                                {
+                                    "headers": {},
+                                    "content": api._protocol.unpack(api._encode_payload(common_pb.JsonValue, value)),
+                                },
+                            ),
+                        )
+                        if stream
+                        else worker_pb.InvokeRequest(
+                            registration_name=name,
+                            tool_request_intercept=runtime_pb.ToolValueInvocation(
+                                value=api._encode_payload(common_pb.JsonValue, value)
+                            ),
+                        )
                     )
                     if worker
-                    else (api.pb.LlmStreamNextRequest if stream else api.pb.LlmNextRequest)(
-                        request=api._json_envelope(api.JSON_SCHEMA, value)
+                    else (host_pb.LlmStreamNextRequest if stream else host_pb.LlmNextRequest)(
+                        request=api._protocol.pack(llm_pb.LlmRequest, {"headers": {}, "content": value})
                     )
                 )
                 if direction == "response":
@@ -159,8 +235,8 @@ async def test_callbacks_on_the_same_rpc_have_independent_limits(
                         envelope = chunks[0].value
                     else:
                         response = await response
-                        envelope = response.json.value if worker else response.value
-                    return api._decode_required_envelope(envelope, "response")
+                        envelope = response.tool_value if worker else response.value
+                    return api._decode_payload(envelope, "response")
                 finally:
                     CALLBACK_NAME.reset(token)
 
@@ -174,11 +250,11 @@ async def test_callbacks_on_the_same_rpc_have_independent_limits(
                 await call(9 * MIB)
             assert error.value.code() == grpc.StatusCode.RESOURCE_EXHAUSTED
             await asyncio.gather(call(5 * MIB), small_callback_is_bounded(), call(5 * MIB), small_callback_is_bounded())
-            control = stub.Health if worker else stub.Log
+            control = getattr(stub, "Health" if worker else "Log")
             request = (
-                api.pb.HealthRequest(auth_token="x" * (5 * MIB))
+                worker_pb.HealthRequest(credentials=common_pb.Credentials(activation_id="", auth_token="x" * (5 * MIB)))
                 if worker
-                else api.pb.LogRequest(message="x" * (5 * MIB))
+                else host_pb.LogRequest(message="x" * (5 * MIB))
             )
             with pytest.raises(grpc.aio.AioRpcError) as error:
                 control_metadata = ((CALLBACK_METADATA, callback.encode("utf-8")),) if worker and enforce_server else ()
@@ -187,21 +263,10 @@ async def test_callbacks_on_the_same_rpc_have_independent_limits(
             assert (await call(0))["text"] == ""
             assert (await call(0, "small-guardrail"))["text"] == ""
             assert CALLBACK_NAME.get() is None
-            assert (await control(api.pb.HealthRequest() if worker else api.pb.LogRequest(), timeout=5)).ok
+            await control(worker_pb.HealthRequest() if worker else host_pb.LogRequest(), timeout=5)
             if enforce_server:
                 if worker:
-                    for metadata in ((), ((CALLBACK_METADATA, b"wrong-callback"),)):
-                        request = api.pb.InvokeRequest(
-                            registration_name=callback,
-                            tool=api.pb.ToolInvocation(value=api._json_envelope(api.JSON_SCHEMA, {"text": ""})),
-                        )
-                        with pytest.raises(grpc.aio.AioRpcError) as error:
-                            response = getattr(stub, rpc)(request, timeout=5, metadata=metadata)
-                            if stream:
-                                _ = [item async for item in response]
-                            else:
-                                await response
-                        assert error.value.code() == grpc.StatusCode.INVALID_ARGUMENT
+                    await _assert_callback_metadata_rejected(stub, rpc, callback, stream)
                 with pytest.raises(grpc.aio.AioRpcError) as error:
                     await channel.unary_unary("/missing/Unknown")(b"", timeout=5)
                 assert error.value.code() == grpc.StatusCode.UNIMPLEMENTED
@@ -218,7 +283,7 @@ async def test_continuations_keep_their_owners_limit_in_a_foreign_callback(kind:
         channel = api._open_host_channel(endpoint, max_message_bytes=4 * MIB, by_name={large: 8 * MIB})
         try:
             runtime = api.PluginRuntime(
-                activation_id="test", auth_token="test", host_stub=api.pb_grpc.RelayHostRuntimeStub(channel)
+                activation_id="test", auth_token="test", host_stub=host_grpc.RelayHostRuntimeServiceStub(channel)
             )
 
             def handle(owner: str) -> Any:
@@ -233,7 +298,11 @@ async def test_continuations_keep_their_owners_limit_in_a_foreign_callback(kind:
             async def call(next_call: Any, foreign: str) -> Any:
                 token = CALLBACK_NAME.set(foreign)
                 try:
-                    result = next_call.call({"text": "x" * (5 * MIB)})
+                    result = next_call.call(
+                        {"text": "x" * (5 * MIB)}
+                        if kind is api.ToolNext
+                        else {"headers": {}, "content": {"text": "x" * (5 * MIB)}}
+                    )
                     if kind is api.LlmStreamNext:
                         return [value async for value in result][0]
                     value = await result

@@ -713,6 +713,147 @@ def test_add_nemo_relay_integration_preserves_backend(deepagents_integration_mod
     assert kwargs["subagents"][1] is mock_compiled_subagent
 
 
+@pytest.mark.parametrize("position", ["outer", "inner"])
+def test_integration_position_preserves_explicit_middleware(
+    position: str,
+    deepagents_integration_module: types.ModuleType,
+) -> None:
+    relay = deepagents_integration_module.NemoRelayDeepAgentsMiddleware()
+    user_middleware = MagicMock(name="user_middleware")
+    middleware = [user_middleware, relay]
+    subagent = {"name": "reviewer", "middleware": middleware}
+    original = {"middleware": middleware, "subagents": [subagent]}
+
+    observed = deepagents_integration_module.add_nemo_relay_integration(original, position=position)
+    repeated = deepagents_integration_module.add_nemo_relay_integration(observed, position=position)
+
+    assert repeated["middleware"] == middleware
+    assert repeated["subagents"][0]["middleware"] == middleware
+    assert observed["middleware"] is not middleware
+    assert observed["subagents"][0] is not subagent
+    assert observed["subagents"][0]["middleware"] is not middleware
+    assert original == {"middleware": [user_middleware, relay], "subagents": [subagent]}
+
+
+def test_integration_rejects_invalid_position(deepagents_integration_module: types.ModuleType) -> None:
+    with pytest.raises(ValueError, match='position must be "outer" or "inner"'):
+        deepagents_integration_module.add_nemo_relay_integration(position="invalid")
+
+
+def test_outer_position_can_skip_subagent_instrumentation(deepagents_integration_module: types.ModuleType) -> None:
+    subagent = {"name": "worker", "middleware": [MagicMock(name="user_middleware")]}
+    observed = deepagents_integration_module.add_nemo_relay_integration(
+        subagents=[subagent], position="outer", instrument_subagents=False
+    )
+    assert observed["subagents"][0] is subagent
+    assert len(subagent["middleware"]) == 1
+
+
+@pytest.mark.parametrize("use_async", [False, True])
+@pytest.mark.parametrize("position", [None, "inner", "outer"])
+@pytest.mark.parametrize("subagent", [False, True])
+def test_middleware_position_controls_recorded_tool_result(
+    use_async: bool,
+    position: str | None,
+    subagent: bool,
+    subscribed_events: list[nemo_relay.Event],
+    deepagents_integration_module: types.ModuleType,
+) -> None:
+    from deepagents import create_deep_agent
+    from langchain.agents.middleware import AgentMiddleware
+    from langchain_core.messages import AIMessage, ToolMessage
+
+    status = "\nSTATUS: valid; time left 10s"
+
+    class AddStatusMiddleware(AgentMiddleware):
+        def wrap_tool_call(self, request: Any, handler: Any) -> Any:
+            result = handler(request)
+            return result.model_copy(update={"content": result.content + status})
+
+        async def awrap_tool_call(self, request: Any, handler: Any) -> Any:
+            result = await handler(request)
+            return result.model_copy(update={"content": result.content + status})
+
+    def lookup() -> str:
+        """Return the original tool result."""
+        return "original result"
+
+    worker: dict[str, Any] = {
+        "model": _mock_deepagents_chat_model(
+            [
+                AIMessage(content="", tool_calls=[{"name": "lookup", "args": {}, "id": "call-lookup"}]),
+                AIMessage(content="done"),
+            ]
+        ),
+        "tools": [lookup],
+        "middleware": [AddStatusMiddleware()],
+    }
+    kwargs = worker
+    if subagent:
+        kwargs = {
+            "model": _mock_deepagents_chat_model(
+                [
+                    AIMessage(
+                        content="",
+                        tool_calls=[
+                            {
+                                "name": "task",
+                                "args": {"description": "Call lookup.", "subagent_type": "worker"},
+                                "id": "call-task",
+                            }
+                        ],
+                    ),
+                    AIMessage(content="done"),
+                ]
+            ),
+            "subagents": [
+                {"name": "worker", "description": "Look up a result.", "system_prompt": "Call lookup.", **worker}
+            ],
+        }
+    options: dict[str, Any] = {} if position is None else {"position": position}
+    observed = deepagents_integration_module.add_nemo_relay_integration(kwargs, **options)
+    assert "position" not in observed
+    assert len(worker["middleware"]) == 1
+    agent = create_deep_agent(**observed)
+    exporter = nemo_relay.AtifExporter("middleware-order", "agent", "1")
+    subscriber_name = f"middleware-order-{uuid4().hex}"
+    exporter.register(subscriber_name)
+    try:
+        with nemo_relay.scope.scope("request", nemo_relay.ScopeType.Agent):
+            payload = {"messages": [{"role": "user", "content": "Call lookup."}]}
+            result = asyncio.run(agent.ainvoke(payload)) if use_async else agent.invoke(payload)
+        nemo_relay.subscribers.flush()
+        trajectory = cast(dict[str, Any], exporter.export())
+    finally:
+        exporter.deregister(subscriber_name)
+
+    if not subagent:
+        message = next(message for message in result["messages"] if isinstance(message, ToolMessage))
+        assert message.content == "original result" + status
+    llm_inputs = [
+        event.data
+        for event in subscribed_events
+        if isinstance(event, nemo_relay.ScopeEvent) and event.category == "llm" and event.scope_category == "start"
+    ]
+    assert status.strip() in json.dumps(llm_inputs)
+    tool_end = next(
+        event
+        for event in subscribed_events
+        if isinstance(event, nemo_relay.ScopeEvent) and event.name == "lookup" and event.scope_category == "end"
+    )
+    expected = "original result" + (status if position == "outer" else "")
+    assert isinstance(tool_end.data, dict)
+    assert tool_end.data["content"] == expected
+    observations = [
+        observation
+        for step in trajectory["steps"]
+        for observation in step.get("observation", {}).get("results", [])
+        if observation.get("source_call_id") == "call-lookup"
+    ]
+    assert len(observations) == 1
+    assert observations[0]["content"] == expected
+
+
 @pytest.mark.parametrize("use_async", [False, True])
 def test_e2e_agent(
     use_async: bool,

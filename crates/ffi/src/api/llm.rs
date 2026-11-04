@@ -7,10 +7,11 @@ use super::{
     LlmRequest, LlmStreamExecutionNextFn, NemoRelayCodecDecodeFn, NemoRelayCodecEncodeFn,
     NemoRelayCollectorCb, NemoRelayFinalizerCb, NemoRelayFreeFn, NemoRelayLlmExecCb,
     NemoRelayStatus, TASK_SCOPE_STACK, c_char, c_str_to_json, c_str_to_opt_json, c_str_to_string,
-    clear_last_error, core_llm_api, current_scope_stack, json_to_c_string, set_last_error,
+    clear_last_error, core_llm_api, entry_scope_stack, json_to_c_string, set_last_error,
     status_from_error, tokio_runtime, unix_micros_to_opt_timestamp, wrap_codec_fn,
-    wrap_collector_fn, wrap_finalizer_fn, wrap_llm_exec_fn, wrap_llm_stream_exec_fn,
+    wrap_llm_exec_fn, wrap_llm_stream_exec_fn, wrap_stream_callbacks,
 };
+use nemo_relay_runtime::api::runtime::LlmFinalizer;
 use std::panic::{AssertUnwindSafe, catch_unwind};
 use tokio_stream::StreamExt;
 
@@ -337,8 +338,10 @@ pub unsafe extern "C" fn nemo_relay_llm_call_end(
 #[unsafe(no_mangle)]
 pub extern "C" fn nemo_relay_openai_chat_codec_new() -> *mut FfiCodecHandle {
     Box::into_raw(Box::new(FfiCodecHandle {
-        codec: Arc::new(nemo_relay::codec::openai_chat::OpenAIChatCodec),
-        response_codec: Arc::new(nemo_relay::codec::openai_chat::OpenAIChatCodec),
+        codec: Arc::new(nemo_relay_codecs::openai_chat::OpenAIChatCodec),
+        response_codec: nemo_relay_runtime::codec::response_codec(
+            nemo_relay_codecs::resolve::ProviderSurface::OpenAIChat,
+        ),
     }))
 }
 
@@ -352,8 +355,10 @@ pub extern "C" fn nemo_relay_openai_chat_codec_new() -> *mut FfiCodecHandle {
 #[unsafe(no_mangle)]
 pub extern "C" fn nemo_relay_openai_responses_codec_new() -> *mut FfiCodecHandle {
     Box::into_raw(Box::new(FfiCodecHandle {
-        codec: Arc::new(nemo_relay::codec::openai_responses::OpenAIResponsesCodec),
-        response_codec: Arc::new(nemo_relay::codec::openai_responses::OpenAIResponsesCodec),
+        codec: Arc::new(nemo_relay_codecs::openai_responses::OpenAIResponsesCodec),
+        response_codec: nemo_relay_runtime::codec::response_codec(
+            nemo_relay_codecs::resolve::ProviderSurface::OpenAIResponses,
+        ),
     }))
 }
 
@@ -367,8 +372,10 @@ pub extern "C" fn nemo_relay_openai_responses_codec_new() -> *mut FfiCodecHandle
 #[unsafe(no_mangle)]
 pub extern "C" fn nemo_relay_anthropic_messages_codec_new() -> *mut FfiCodecHandle {
     Box::into_raw(Box::new(FfiCodecHandle {
-        codec: Arc::new(nemo_relay::codec::anthropic::AnthropicMessagesCodec),
-        response_codec: Arc::new(nemo_relay::codec::anthropic::AnthropicMessagesCodec),
+        codec: Arc::new(nemo_relay_codecs::anthropic::AnthropicMessagesCodec),
+        response_codec: nemo_relay_runtime::codec::response_codec(
+            nemo_relay_codecs::resolve::ProviderSurface::AnthropicMessages,
+        ),
     }))
 }
 
@@ -382,9 +389,9 @@ pub extern "C" fn nemo_relay_anthropic_messages_codec_new() -> *mut FfiCodecHand
 #[unsafe(no_mangle)]
 pub extern "C" fn nemo_relay_gemini_generate_content_codec_new() -> *mut FfiCodecHandle {
     Box::into_raw(Box::new(FfiCodecHandle {
-        codec: Arc::new(nemo_relay::codec::gemini_generate_content::GeminiGenerateContentCodec),
-        response_codec: Arc::new(
-            nemo_relay::codec::gemini_generate_content::GeminiGenerateContentCodec,
+        codec: Arc::new(nemo_relay_codecs::gemini_generate_content::GeminiGenerateContentCodec),
+        response_codec: nemo_relay_runtime::codec::response_codec(
+            nemo_relay_codecs::resolve::ProviderSurface::GeminiGenerateContent,
         ),
     }))
 }
@@ -392,13 +399,13 @@ pub extern "C" fn nemo_relay_gemini_generate_content_codec_new() -> *mut FfiCode
 struct ParsedExecuteInputs {
     name: String,
     request: LlmRequest,
-    parent_handle: Option<nemo_relay::api::scope::ScopeHandle>,
+    parent_handle: Option<nemo_relay_runtime::api::scope::ScopeHandle>,
     attrs: LlmAttributes,
     data: Option<serde_json::Value>,
     metadata: Option<serde_json::Value>,
     model_name: Option<String>,
-    codec: Option<Arc<dyn nemo_relay::codec::traits::LlmCodec>>,
-    response_codec: Option<Arc<dyn nemo_relay::codec::traits::LlmResponseCodec>>,
+    codec: Option<Arc<dyn nemo_relay_types::codec::traits::LlmCodec>>,
+    response_codec: Option<Arc<dyn nemo_relay_types::codec::traits::LlmResponseCodec>>,
 }
 
 struct RawExecuteInputs {
@@ -547,8 +554,7 @@ pub unsafe extern "C" fn nemo_relay_llm_call_execute(
     let exec_fn = wrap_llm_exec_fn(func, func_user_data, func_free);
     let default_fn: LlmExecutionNextFn = Arc::new(move |request| exec_fn(request));
 
-    let scope_stack = current_scope_stack();
-    let result = tokio_runtime().block_on(TASK_SCOPE_STACK.scope(scope_stack, async {
+    let result = super::block_on(async {
         core_llm_api::llm_call_execute(
             core_llm_api::LlmCallExecuteParams::builder()
                 .name(parsed.name)
@@ -564,7 +570,7 @@ pub unsafe extern "C" fn nemo_relay_llm_call_execute(
                 .build(),
         )
         .await
-    }));
+    });
 
     match result {
         Ok(json) => {
@@ -582,43 +588,71 @@ pub unsafe extern "C" fn nemo_relay_llm_call_execute(
 /// Opaque stream handle for consuming LLM streaming responses chunk by chunk.
 /// Use `nemo_relay_stream_next` to poll and `nemo_relay_stream_free` to release.
 pub struct FfiStream {
+    pub(crate) pending: std::sync::Mutex<Option<ForwarderParts>>,
     pub(crate) receiver:
         tokio::sync::Mutex<tokio::sync::mpsc::Receiver<FlowResult<serde_json::Value>>>,
     pub(crate) cancel: tokio::sync::watch::Sender<bool>,
     pub(crate) closed: tokio::sync::watch::Receiver<Option<Result<(), String>>>,
+    pub(crate) callbacks: Arc<crate::callable::StreamCallbackState>,
+    pub(crate) close_result: tokio::sync::Mutex<Option<Result<(), String>>>,
+}
+
+pub(crate) struct ForwarderParts {
+    pub(crate) stream: nemo_relay_runtime::api::runtime::LlmJsonStream,
+    pub(crate) tx: tokio::sync::mpsc::Sender<FlowResult<serde_json::Value>>,
+    pub(crate) cancel_rx: tokio::sync::watch::Receiver<bool>,
+    pub(crate) closed: tokio::sync::watch::Sender<Option<Result<(), String>>>,
+    pub(crate) scope_stack: nemo_relay_runtime::api::runtime::ScopeStackHandle,
+}
+
+impl FfiStream {
+    fn start(&self) {
+        let parts = self
+            .pending
+            .lock()
+            .unwrap_or_else(|poisoned| poisoned.into_inner())
+            .take();
+        if let Some(parts) = parts {
+            tokio_runtime().spawn(TASK_SCOPE_STACK.scope(
+                parts.scope_stack,
+                forward_stream_to_channel(parts.stream, parts.tx, parts.cancel_rx, parts.closed),
+            ));
+        }
+    }
 }
 
 impl Drop for FfiStream {
     fn drop(&mut self) {
         self.cancel.send_replace(true);
+        self.start();
     }
 }
 
 async fn forward_stream_to_channel(
-    mut stream: nemo_relay::api::runtime::LlmJsonStream,
+    mut stream: nemo_relay_runtime::api::runtime::LlmJsonStream,
     tx: tokio::sync::mpsc::Sender<FlowResult<serde_json::Value>>,
     mut cancel: tokio::sync::watch::Receiver<bool>,
     closed: tokio::sync::watch::Sender<Option<Result<(), String>>>,
 ) {
+    // Reserve before pulling so a cancel never consumes a chunk or error it cannot deliver.
     loop {
-        if *cancel.borrow() {
-            break;
-        }
+        let permit = tokio::select! {
+            biased;
+            _ = cancel.changed() => break,
+            permit = tx.reserve() => match permit {
+                Ok(permit) => permit,
+                Err(_) => break,
+            },
+        };
         let item = tokio::select! {
+            biased;
             _ = cancel.changed() => break,
             item = stream.next() => item,
         };
         let Some(item) = item else {
             break;
         };
-        tokio::select! {
-            _ = cancel.changed() => break,
-            result = tx.send(item) => {
-                if result.is_err() {
-                    break;
-                }
-            }
-        }
+        permit.send(item);
     }
     closed.send_replace(Some(
         stream.close().await.map_err(|error| error.to_string()),
@@ -640,7 +674,10 @@ async fn forward_stream_to_channel(
 ///   May be null, in which case chunks are not collected.
 /// - `finalizer`: Callback invoked once when the stream is exhausted to produce
 ///   the aggregated response as a JSON C string. May be null, in which case the
-///   finalizer returns `Json::Null`.
+///   finalizer returns `Json::Null`. A null or non-JSON result marks the LLM end
+///   event ERROR with a null response and is reported by `nemo_relay_stream_close`.
+/// - `callback_user_data`: Opaque pointer passed to `collector` and `finalizer`.
+/// - `callback_free`: Optional destructor for `callback_user_data`.
 /// - `parent`: Optional parent scope handle, or null.
 /// - `attributes`: Bitfield of LLM attributes.
 /// - `data_json`: Optional JSON data, or null.
@@ -660,6 +697,8 @@ pub unsafe extern "C" fn nemo_relay_llm_stream_call_execute(
     func_free: NemoRelayFreeFn,
     collector: Option<NemoRelayCollectorCb>,
     finalizer: Option<NemoRelayFinalizerCb>,
+    callback_user_data: *mut libc::c_void,
+    callback_free: NemoRelayFreeFn,
     parent: *const FfiScopeHandle,
     attributes: u32,
     data_json: *const c_char,
@@ -673,6 +712,9 @@ pub unsafe extern "C" fn nemo_relay_llm_stream_call_execute(
     out: *mut *mut FfiStream,
 ) -> NemoRelayStatus {
     clear_last_error();
+    let exec_fn = wrap_llm_stream_exec_fn(func, func_user_data, func_free);
+    let (wrapped_collector, wrapped_finalizer, callbacks) =
+        wrap_stream_callbacks(collector, finalizer, callback_user_data, callback_free);
     if out.is_null() {
         set_last_error("null pointer argument");
         return NemoRelayStatus::NullPointer;
@@ -695,29 +737,17 @@ pub unsafe extern "C" fn nemo_relay_llm_stream_call_execute(
         Err(status) => return status,
     };
 
-    let exec_fn = wrap_llm_stream_exec_fn(func, func_user_data, func_free);
     let default_fn: LlmStreamExecutionNextFn = Arc::new(move |request| exec_fn(request));
 
-    let wrapped_collector: Box<dyn FnMut(serde_json::Value) -> FlowResult<()> + Send> =
-        match collector {
-            Some(cb) => wrap_collector_fn(cb),
-            None => Box::new(|_: serde_json::Value| Ok(())),
-        };
-
-    let wrapped_finalizer: Box<dyn FnOnce() -> serde_json::Value + Send> = match finalizer {
-        Some(cb) => wrap_finalizer_fn(cb),
-        None => Box::new(|| serde_json::Value::Null),
-    };
-
-    let scope_stack = current_scope_stack();
-    let result = tokio_runtime().block_on(TASK_SCOPE_STACK.scope(scope_stack, async {
+    let scope_stack = entry_scope_stack();
+    let result = super::block_on(async {
         core_llm_api::llm_stream_call_execute(
             core_llm_api::LlmStreamCallExecuteParams::builder()
                 .name(parsed.name)
                 .request(parsed.request)
                 .func(default_fn)
                 .collector(wrapped_collector)
-                .finalizer(wrapped_finalizer)
+                .finalizer(LlmFinalizer::Fallible(wrapped_finalizer))
                 .parent_opt(parsed.parent_handle)
                 .attributes(parsed.attrs)
                 .data_opt(parsed.data)
@@ -728,23 +758,26 @@ pub unsafe extern "C" fn nemo_relay_llm_stream_call_execute(
                 .build(),
         )
         .await
-    }));
+    });
 
     match result {
         Ok(rust_stream) => {
             let (tx, rx) = tokio::sync::mpsc::channel(32);
             let (cancel, cancel_rx) = tokio::sync::watch::channel(false);
             let (closed, closed_rx) = tokio::sync::watch::channel(None);
-            tokio_runtime().spawn(forward_stream_to_channel(
-                rust_stream,
-                tx,
-                cancel_rx,
-                closed,
-            ));
             let ffi_stream = Box::new(FfiStream {
+                pending: std::sync::Mutex::new(Some(ForwarderParts {
+                    stream: rust_stream,
+                    tx,
+                    cancel_rx,
+                    closed,
+                    scope_stack,
+                })),
                 receiver: tokio::sync::Mutex::new(rx),
                 cancel,
                 closed: closed_rx,
+                callbacks,
+                close_result: tokio::sync::Mutex::new(None),
             });
             unsafe { *out = Box::into_raw(ffi_stream) };
             NemoRelayStatus::Ok
@@ -756,7 +789,10 @@ pub unsafe extern "C" fn nemo_relay_llm_stream_call_execute(
 /// Stop a stream producer and wait for cleanup to complete.
 ///
 /// This operation is idempotent. It does not free `stream`; callers must still
-/// release the handle with [`nemo_relay_stream_free`].
+/// release the handle with [`nemo_relay_stream_free`]. A call from inside this
+/// stream's own collector or finalizer requests cancellation and returns `Ok`
+/// at once. Cleanup finishes after the callback returns, and a later call
+/// reports its result.
 ///
 /// # Safety
 /// `stream` must be a valid `FfiStream` pointer returned by
@@ -769,24 +805,59 @@ pub unsafe extern "C" fn nemo_relay_stream_close(stream: *mut FfiStream) -> Nemo
         return NemoRelayStatus::NullPointer;
     }
     let stream = unsafe { &*stream };
-    let result = tokio_runtime().block_on(async {
-        stream.cancel.send_replace(true);
-        let mut closed = stream.closed.clone();
-        while closed.borrow().is_none() {
-            closed.changed().await.map_err(|_| {
-                nemo_relay::error::FlowError::Internal("stream close task ended early".into())
-            })?;
-        }
-        let result = closed.borrow().clone().expect("close state checked above");
-        let mut receiver = stream.receiver.lock().await;
-        receiver.close();
-        while receiver.try_recv().is_ok() {}
-        result.map_err(nemo_relay::error::FlowError::Internal)
-    });
+    stream.cancel.send_replace(true);
+    stream.start();
+    if stream.callbacks.on_callback_thread() {
+        return NemoRelayStatus::Ok;
+    }
+    let result = match super::block_on(async { Ok(finish_close(stream).await) }) {
+        Ok(result) => result,
+        Err(error) => Err(error.to_string()),
+    };
     match result {
         Ok(()) => NemoRelayStatus::Ok,
-        Err(error) => status_from_error(&error),
+        Err(message) => {
+            set_last_error(&message);
+            NemoRelayStatus::Internal
+        }
     }
+}
+
+async fn finish_close(stream: &FfiStream) -> Result<(), String> {
+    let mut close_result = stream.close_result.lock().await;
+    if let Some(result) = close_result.as_ref() {
+        return result.clone();
+    }
+    let cleanup = stream
+        .closed
+        .clone()
+        .wait_for(Option::is_some)
+        .await
+        .map_err(|_| "stream close task ended early".to_string())?
+        .clone()
+        .expect("close state checked above");
+    let mut receiver = stream.receiver.lock().await;
+    receiver.close();
+    let mut undelivered = None;
+    while let Ok(item) = receiver.try_recv() {
+        if let Err(error) = item {
+            undelivered.get_or_insert(error.to_string());
+        }
+    }
+    let finalizer_error = stream.callbacks.take_failure();
+    let result = combine_close_errors([undelivered, finalizer_error, cleanup.err()]);
+    *close_result = Some(result.clone());
+    result
+}
+
+fn combine_close_errors(errors: [Option<String>; 3]) -> Result<(), String> {
+    let mut errors = errors.into_iter().flatten();
+    let Some(first) = errors.next() else {
+        return Ok(());
+    };
+    Err(errors.fold(first, |acc, next| {
+        format!("{acc}; stream cleanup also failed: {next}")
+    }))
 }
 
 /// Poll the next chunk from a streaming LLM response. Blocks until a chunk is
@@ -796,7 +867,9 @@ pub unsafe extern "C" fn nemo_relay_stream_close(stream: *mut FfiStream) -> Nemo
 /// - `1`: A chunk was written to `*out_chunk`. Caller must free with
 ///   `nemo_relay_string_free`.
 /// - `0`: The stream is complete (no more chunks).
-/// - `-1`: An error occurred. Call `nemo_relay_last_error` for details.
+/// - `-1`: An error occurred. Call `nemo_relay_last_error` for details. A call
+///   from inside this stream's own collector or finalizer fails this way
+///   instead of waiting on itself.
 ///
 /// # Safety
 /// `stream` and `out_chunk` must be valid, non-null pointers.
@@ -810,17 +883,24 @@ pub unsafe extern "C" fn nemo_relay_stream_next(
         return -1;
     }
     let stream = unsafe { &*stream };
-    let result = tokio_runtime().block_on(async {
+    if stream.callbacks.on_callback_thread() {
+        set_last_error(
+            "nemo_relay_stream_next called from inside the stream's own collector or finalizer",
+        );
+        return -1;
+    }
+    stream.start();
+    let result = super::block_on(async {
         let mut guard = stream.receiver.lock().await;
-        guard.recv().await
+        Ok(guard.recv().await)
     });
     match result {
-        None => 0, // stream done
-        Some(Ok(chunk)) => {
+        Ok(None) => 0, // stream done
+        Ok(Some(Ok(chunk))) => {
             unsafe { *out_chunk = json_to_c_string(&chunk) };
             1
         }
-        Some(Err(e)) => {
+        Ok(Some(Err(e))) | Err(e) => {
             set_last_error(&e.to_string());
             -1
         }

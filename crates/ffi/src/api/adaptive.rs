@@ -3,13 +3,13 @@
 
 use chrono::{DateTime, Utc};
 use libc::c_char;
-use nemo_relay::codec::request::AnnotatedLlmRequest;
-use nemo_relay::codec::response::Usage;
 use nemo_relay_adaptive::acg::{
     AgentIdentity, CacheRequestFacts, CacheTelemetryEvent, CacheTelemetryProvider,
 };
 use nemo_relay_adaptive::context_helpers::set_latency_sensitivity;
 use nemo_relay_adaptive::{AdaptiveConfig, AdaptiveRuntime};
+use nemo_relay_types::codec::request::AnnotatedLlmRequest;
+use nemo_relay_types::codec::response::Usage;
 use serde::Deserialize;
 use serde_json::Value as Json;
 use uuid::Uuid;
@@ -17,8 +17,6 @@ use uuid::Uuid;
 use crate::convert::{c_str_to_json, json_to_c_string};
 use crate::error::{NemoRelayStatus, clear_last_error, set_last_error};
 use crate::types::{FfiAdaptiveRuntime, FfiScopeHandle};
-
-use super::tokio_runtime;
 
 #[derive(Debug, Deserialize)]
 #[serde(rename_all = "camelCase")]
@@ -167,8 +165,8 @@ pub unsafe extern "C" fn nemo_relay_adaptive_runtime_create(
         Ok(config) => config,
         Err(status) => return status,
     };
-    match tokio_runtime().block_on(AdaptiveRuntime::new(config)) {
-        Ok(runtime) => {
+    match super::block_on(async { Ok(AdaptiveRuntime::new(config).await) }) {
+        Ok(Ok(runtime)) => {
             unsafe {
                 *out = Box::into_raw(Box::new(FfiAdaptiveRuntime(std::sync::Mutex::new(Some(
                     runtime,
@@ -176,9 +174,13 @@ pub unsafe extern "C" fn nemo_relay_adaptive_runtime_create(
             };
             NemoRelayStatus::Ok
         }
-        Err(error) => {
+        Ok(Err(error)) => {
             set_last_error(&error.to_string());
             NemoRelayStatus::InvalidArg
+        }
+        Err(error) => {
+            set_last_error(&error.to_string());
+            NemoRelayStatus::Internal
         }
     }
 }
@@ -193,12 +195,17 @@ pub unsafe extern "C" fn nemo_relay_adaptive_runtime_register(
 ) -> NemoRelayStatus {
     clear_last_error();
     match with_runtime_mut(runtime, |runtime| {
-        tokio_runtime()
-            .block_on(runtime.register())
-            .map_err(|error| {
+        match super::block_on(async { Ok(runtime.register().await) }) {
+            Ok(Ok(())) => Ok(()),
+            Ok(Err(error)) => {
                 set_last_error(&error.to_string());
-                NemoRelayStatus::Internal
-            })
+                Err(NemoRelayStatus::Internal)
+            }
+            Err(error) => {
+                set_last_error(&error.to_string());
+                Err(NemoRelayStatus::Internal)
+            }
+        }
     }) {
         Ok(()) => NemoRelayStatus::Ok,
         Err(status) => status,
@@ -242,8 +249,12 @@ pub unsafe extern "C" fn nemo_relay_adaptive_runtime_shutdown(
         set_last_error("adaptive runtime already shut down");
         return NemoRelayStatus::InvalidArg;
     };
-    match tokio_runtime().block_on(runtime.shutdown()) {
-        Ok(()) => NemoRelayStatus::Ok,
+    match super::block_on(async { Ok(runtime.shutdown().await) }) {
+        Ok(Ok(())) => NemoRelayStatus::Ok,
+        Ok(Err(error)) => {
+            set_last_error(&error.to_string());
+            NemoRelayStatus::Internal
+        }
         Err(error) => {
             set_last_error(&error.to_string());
             NemoRelayStatus::Internal

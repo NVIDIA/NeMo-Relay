@@ -9,16 +9,52 @@ import asyncio
 import importlib
 from collections.abc import Callable, Sequence
 from dataclasses import dataclass
+from enum import IntEnum
 from typing import Any
 
-grpc: Any = importlib.import_module("grpc")
-pb: Any = importlib.import_module("._proto.plugin_worker_pb2", __package__)
+from google.protobuf.empty_pb2 import Empty
 
-DiagnosticCodeDefinition = pb.DiagnosticCodeDefinition
-DiagnosticExtensionDefinition = pb.DiagnosticExtensionDefinition
-DiagnosticObservation = pb.DiagnosticObservation
-DiagnosticObservationOutcome = pb.DiagnosticObservationOutcome
-DiagnosticObservationSeverity = pb.DiagnosticObservationSeverity
+from . import _protocol
+from ._proto.nvidia.nemo.relay.worker.v1 import (
+    common_pb2 as common_pb,
+)
+from ._proto.nvidia.nemo.relay.worker.v1 import (
+    diagnostics_pb2 as diagnostics_pb,
+)
+from ._proto.nvidia.nemo.relay.worker.v1 import (
+    relay_diagnostics_service_pb2 as diagnostics_service_pb,
+)
+from ._protocol import (
+    DIAGNOSTIC_PROVENANCE_CONTRACT_VERSION,
+    DIAGNOSTIC_SNAPSHOT_CONTRACT_VERSION,
+    PACKAGE,
+    VERSION,
+)
+
+grpc: Any = importlib.import_module("grpc")
+
+DiagnosticCodeDefinition = diagnostics_pb.DiagnosticCodeDefinition
+DiagnosticExtensionDefinition = diagnostics_pb.DiagnosticExtensionDefinition
+DiagnosticObservation = diagnostics_pb.DiagnosticObservation
+
+
+class DiagnosticObservationOutcome(IntEnum):
+    """Explicit operation outcome independent of evidence severity."""
+
+    UNKNOWN = diagnostics_pb.DIAGNOSTIC_OBSERVATION_OUTCOME_UNSPECIFIED
+    SUCCESS = diagnostics_pb.DIAGNOSTIC_OBSERVATION_OUTCOME_SUCCESS
+    FAILURE = diagnostics_pb.DIAGNOSTIC_OBSERVATION_OUTCOME_FAILURE
+
+
+class DiagnosticObservationSeverity(IntEnum):
+    """Evidence severity independent of operation outcome."""
+
+    TRACE = diagnostics_pb.DIAGNOSTIC_OBSERVATION_SEVERITY_TRACE
+    DEBUG = diagnostics_pb.DIAGNOSTIC_OBSERVATION_SEVERITY_DEBUG
+    INFO = diagnostics_pb.DIAGNOSTIC_OBSERVATION_SEVERITY_INFO
+    WARNING = diagnostics_pb.DIAGNOSTIC_OBSERVATION_SEVERITY_WARNING
+    ERROR = diagnostics_pb.DIAGNOSTIC_OBSERVATION_SEVERITY_ERROR
+
 
 # Document the SDK's aliases without changing generated protobuf sources.
 DiagnosticCodeDefinition.__doc__ = "Built-in canonical name or a DiagnosticExtensionDefinition."
@@ -69,12 +105,14 @@ class _DeliveryPolicy:
 
     @classmethod
     def from_capabilities(cls, capability: Any) -> _DeliveryPolicy | None:
+        timeout_millis = (
+            capability.retry_timeout_duration.seconds * 1000 + capability.retry_timeout_duration.nanos / 1_000_000
+        )
         values = (
             capability.max_request_bytes,
             capability.max_response_bytes,
             capability.max_pending_submissions,
             capability.retry_attempts,
-            capability.retry_timeout_millis,
         )
         if any(not isinstance(value, int) or value <= 0 for value in values):
             return None
@@ -85,7 +123,7 @@ class _DeliveryPolicy:
             or capability.max_response_bytes > _MAX_RESPONSE_BYTES
             or capability.max_pending_submissions > _MAX_PENDING_SUBMISSIONS
             or capability.retry_attempts > _MAX_RETRY_ATTEMPTS
-            or capability.retry_timeout_millis > _MAX_RETRY_TIMEOUT * 1000
+            or not 0 < timeout_millis <= _MAX_RETRY_TIMEOUT * 1000
         ):
             return None
         return cls(
@@ -93,7 +131,7 @@ class _DeliveryPolicy:
             max_response_bytes=capability.max_response_bytes,
             max_pending_submissions=capability.max_pending_submissions,
             retry_attempts=capability.retry_attempts,
-            retry_timeout=capability.retry_timeout_millis / 1000,
+            retry_timeout=timeout_millis / 1000,
         )
 
 
@@ -114,6 +152,23 @@ class DiagnosticDeliveryStats:
     uncertain: int = 0
 
 
+def _failure_disposition(failure: grpc.RpcError) -> str:
+    if failure.code() == grpc.StatusCode.INVALID_ARGUMENT or (
+        failure.code() == grpc.StatusCode.RESOURCE_EXHAUSTED
+        and _NOT_CONSUMED_METADATA in tuple(failure.trailing_metadata() or ())
+    ):
+        return "not_consumed"
+    if failure.code() in (
+        grpc.StatusCode.PERMISSION_DENIED,
+        grpc.StatusCode.UNAUTHENTICATED,
+        grpc.StatusCode.FAILED_PRECONDITION,
+        grpc.StatusCode.OUT_OF_RANGE,
+        grpc.StatusCode.ALREADY_EXISTS,
+    ):
+        return "stop"
+    return "uncertain"
+
+
 class WorkerDiagnostics:
     """One negotiated, activation-owned bounded delivery facade."""
 
@@ -132,24 +187,34 @@ class WorkerDiagnostics:
     @classmethod
     def inert(cls, stub: Any, activation_id: str, auth_token: str) -> WorkerDiagnostics:
         """Return an unavailable facade after host negotiation was cancelled."""
-        return cls(stub, pb.DiagnosticCredentials(activation_id=activation_id, auth_token=auth_token))
+        return cls(stub, common_pb.Credentials(activation_id=activation_id, auth_token=auth_token))
 
     @classmethod
     async def connect(cls, stub: Any, activation_id: str, auth_token: str) -> WorkerDiagnostics:
         """Negotiate once; old or disabled hosts produce an inert facade."""
-        facade = cls(stub, pb.DiagnosticCredentials(activation_id=activation_id, auth_token=auth_token))
+        facade = cls(stub, common_pb.Credentials(activation_id=activation_id, auth_token=auth_token))
         if stub is None:
             facade.availability = "unsupported"
             return facade
         try:
-            capability = await stub.GetDiagnosticCapabilities(facade._credentials, timeout=_BOOTSTRAP_TIMEOUT)
+            response = await stub.GetDiagnosticCapabilities(
+                diagnostics_service_pb.GetDiagnosticCapabilitiesRequest(credentials=facade._credentials),
+                timeout=_BOOTSTRAP_TIMEOUT,
+            )
+            try:
+                _protocol.validate(response)
+            except (ValueError, TypeError, _protocol.protovalidate.ValidationError):
+                facade.availability = "unsupported"
+                return facade
+            capability = response.capabilities
             if not capability.enabled:
                 facade.availability = "disabled"
                 return facade
             if (
-                capability.protocol_version != 1
-                or capability.provenance_version != 1
-                or capability.snapshot_version != 1
+                capability.protocol.name != PACKAGE
+                or capability.protocol.version != VERSION
+                or capability.provenance_contract_version != DIAGNOSTIC_PROVENANCE_CONTRACT_VERSION
+                or capability.snapshot_contract_version != DIAGNOSTIC_SNAPSHOT_CONTRACT_VERSION
             ):
                 facade.availability = "unsupported"
                 return facade
@@ -158,17 +223,22 @@ class WorkerDiagnostics:
                 facade.availability = "unsupported"
                 return facade
             session = await stub.OpenDiagnosticSession(
-                pb.DiagnosticOpenRequest(
+                diagnostics_service_pb.OpenDiagnosticSessionRequest(
                     credentials=facade._credentials,
-                    protocol_version=1,
-                    snapshot_version=1,
-                    provenance_version=1,
+                    protocol=common_pb.ProtocolIdentity(name=PACKAGE, version=VERSION),
+                    snapshot_contract_version=DIAGNOSTIC_SNAPSHOT_CONTRACT_VERSION,
+                    provenance_contract_version=DIAGNOSTIC_PROVENANCE_CONTRACT_VERSION,
                 ),
                 timeout=_BOOTSTRAP_TIMEOUT,
             )
         except grpc.RpcError as error:
             if error.code() == grpc.StatusCode.UNIMPLEMENTED:
                 facade.availability = "unsupported"
+            return facade
+        try:
+            _protocol.validate(session)
+        except (ValueError, TypeError, _protocol.protovalidate.ValidationError):
+            facade.availability = "unsupported"
             return facade
         if not session.HasField("capabilities"):
             facade.availability = "unsupported"
@@ -182,8 +252,6 @@ class WorkerDiagnostics:
         session_policy = _DeliveryPolicy.from_capabilities(session.capabilities)
         if session_policy is None:
             facade.availability = "unsupported"
-            return facade
-        if len(session.session_id) != 16:
             return facade
         facade._session = session.session_id
         facade._policy = session_policy
@@ -204,9 +272,11 @@ class WorkerDiagnostics:
         if self._queue is None:
             return DiagnosticComponent(self, 0)
         result = await self._submit(
-            pb.DiagnosticSubmission(register_component=pb.DiagnosticComponentRegistration(local_name=name, codes=codes))
+            diagnostics_service_pb.SubmitDiagnosticRequest(
+                register_component=diagnostics_pb.DiagnosticComponentRegistration(local_name=name, codes=codes)
+            )
         )
-        if result.status != pb.DIAGNOSTIC_RECEIPT_STATUS_REGISTERED:
+        if result.status != diagnostics_pb.DIAGNOSTIC_RECEIPT_STATUS_REGISTERED:
             raise DiagnosticDeliveryError("rejected")
         return DiagnosticComponent(self, result.component)
 
@@ -255,7 +325,7 @@ class WorkerDiagnostics:
         try:
             async with asyncio.timeout(timeout):
                 await self.flush(timeout)
-                await self._submit(pb.DiagnosticSubmission(close_session=pb.DiagnosticSessionClose()))
+                await self._submit(diagnostics_service_pb.SubmitDiagnosticRequest(close_session=Empty()))
         except TimeoutError as error:
             raise DiagnosticDeliveryError("uncertain") from error
         finally:
@@ -274,19 +344,96 @@ class WorkerDiagnostics:
                 if future is not None and not future.done():
                     future.set_exception(DiagnosticDeliveryError("closed"))
 
+    async def _send_attempts(
+        self, request: Any, policy: _DeliveryPolicy, sequence: int
+    ) -> tuple[Any, DiagnosticDeliveryError, int]:
+        result: Any = None
+        error = DiagnosticDeliveryError("uncertain")
+        acceptance_uncertain = False
+        for _ in range(policy.retry_attempts):
+            try:
+                result = await self._stub.SubmitDiagnostic(request, timeout=policy.retry_timeout)
+            except grpc.RpcError as failure:
+                disposition = _failure_disposition(failure)
+                if disposition == "not_consumed":
+                    if not acceptance_uncertain:
+                        self._increment("rejected")
+                        error = DiagnosticDeliveryError("not_consumed")
+                        break
+                    continue
+                if disposition == "stop":
+                    break
+                acceptance_uncertain = True
+                continue
+            if result.ByteSize() > policy.max_response_bytes:
+                result = None
+                break
+            try:
+                _protocol.validate(result)
+            except (ValueError, TypeError, _protocol.protovalidate.ValidationError):
+                result = None
+                break
+            result = result.receipt
+            operation = request.WhichOneof("operation")
+            expected_status = (
+                diagnostics_pb.DIAGNOSTIC_RECEIPT_STATUS_REGISTERED
+                if operation == "register_component"
+                else diagnostics_pb.DIAGNOSTIC_RECEIPT_STATUS_RECORDED
+                if operation == "record"
+                else diagnostics_pb.DIAGNOSTIC_RECEIPT_STATUS_CLOSED
+            )
+            if (
+                result.submission_sequence != sequence
+                or result.status
+                not in (
+                    expected_status,
+                    diagnostics_pb.DIAGNOSTIC_RECEIPT_STATUS_DISABLED,
+                    diagnostics_pb.DIAGNOSTIC_RECEIPT_STATUS_REJECTED,
+                )
+                or (
+                    result.status == diagnostics_pb.DIAGNOSTIC_RECEIPT_STATUS_REGISTERED
+                    and result.code_count != len(request.register_component.codes)
+                )
+            ):
+                result = None
+                break
+            sequence += 1
+            if sequence > _MAX_COUNT:
+                self._stopped = True
+            if result.status == diagnostics_pb.DIAGNOSTIC_RECEIPT_STATUS_REJECTED:
+                self._increment("rejected")
+                error = DiagnosticDeliveryError("rejected")
+                result = None
+            break
+        return result, error, sequence
+
+    def _complete_barrier(self, future: Any) -> None:
+        if future is None or future.done():
+            return
+        if self._stats["uncertain"]:
+            future.set_exception(DiagnosticDeliveryError("uncertain"))
+        elif self._stopped:
+            future.set_exception(DiagnosticDeliveryError("closed"))
+        else:
+            future.set_result(None)
+
+    def _complete_submission(self, future: Any, result: Any, error: DiagnosticDeliveryError) -> None:
+        if result is None and error.kind == "uncertain":
+            self._increment("uncertain")
+            self._stopped = True
+        if future is not None and not future.done():
+            if result is None:
+                future.set_exception(error)
+            else:
+                future.set_result(result)
+
     async def _deliver(self) -> None:
         assert self._queue is not None
         sequence = 1
         while True:
             frozen, future = await self._queue.get()
             if frozen is None:
-                if future is not None and not future.done():
-                    if self._stats["uncertain"]:
-                        future.set_exception(DiagnosticDeliveryError("uncertain"))
-                    elif self._stopped:
-                        future.set_exception(DiagnosticDeliveryError("closed"))
-                    else:
-                        future.set_result(None)
+                self._complete_barrier(future)
                 continue
             result: Any = None
             error = DiagnosticDeliveryError("uncertain")
@@ -294,7 +441,7 @@ class WorkerDiagnostics:
                 self._increment("dropped")
                 error = DiagnosticDeliveryError("closed")
             else:
-                request = pb.DiagnosticSubmission.FromString(frozen)
+                request = diagnostics_service_pb.SubmitDiagnosticRequest.FromString(frozen)
                 request.credentials.CopyFrom(self._credentials)
                 request.session_id = self._session
                 request.sequence = sequence
@@ -303,61 +450,14 @@ class WorkerDiagnostics:
                     self._increment("dropped")
                     error = DiagnosticDeliveryError("invalid")
                 else:
-                    acceptance_uncertain = False
                     try:
-                        for _ in range(policy.retry_attempts):
-                            try:
-                                result = await self._stub.SubmitDiagnostic(request, timeout=policy.retry_timeout)
-                            except grpc.RpcError as failure:
-                                not_consumed = failure.code() == grpc.StatusCode.INVALID_ARGUMENT or (
-                                    failure.code() == grpc.StatusCode.RESOURCE_EXHAUSTED
-                                    and _NOT_CONSUMED_METADATA in tuple(failure.trailing_metadata() or ())
-                                )
-                                if not_consumed:
-                                    # This attempt was rejected; earlier attempts may have
-                                    # been accepted despite losing their response.
-                                    if not acceptance_uncertain:
-                                        self._increment("rejected")
-                                        error = DiagnosticDeliveryError("not_consumed")
-                                        break
-                                    continue
-                                if failure.code() in (
-                                    grpc.StatusCode.PERMISSION_DENIED,
-                                    grpc.StatusCode.UNAUTHENTICATED,
-                                    grpc.StatusCode.FAILED_PRECONDITION,
-                                    grpc.StatusCode.OUT_OF_RANGE,
-                                    grpc.StatusCode.ALREADY_EXISTS,
-                                ):
-                                    break
-                                acceptance_uncertain = True
-                                continue
-                            if result.ByteSize() > policy.max_response_bytes:
-                                result = None
-                                break
-                            if result.submission_sequence != sequence or result.status not in range(1, 6):
-                                result = None
-                                break
-                            sequence += 1
-                            if sequence > _MAX_COUNT:
-                                self._stopped = True
-                            if result.status == pb.DIAGNOSTIC_RECEIPT_STATUS_REJECTED:
-                                self._increment("rejected")
-                                error = DiagnosticDeliveryError("rejected")
-                                result = None
-                            break
+                        result, error, sequence = await self._send_attempts(request, policy, sequence)
                     except asyncio.CancelledError:
                         self._increment("uncertain")
                         if future is not None and not future.done():
                             future.set_exception(DiagnosticDeliveryError("uncertain"))
                         raise
-            if result is None and error.kind == "uncertain":
-                self._increment("uncertain")
-                self._stopped = True
-            if future is not None and not future.done():
-                if result is None:
-                    future.set_exception(error)
-                else:
-                    future.set_result(result)
+            self._complete_submission(future, result, error)
 
 
 class DiagnosticComponent:
@@ -380,7 +480,7 @@ class DiagnosticComponent:
         observation = make()
         if observation.count == 0:
             raise DiagnosticDeliveryError("invalid")
-        request = pb.DiagnosticSubmission(record=observation)
+        request = diagnostics_service_pb.SubmitDiagnosticRequest(record=observation)
         request.record.component = self._handle
         self._diagnostics._enqueue(request, None)
 
@@ -388,5 +488,7 @@ class DiagnosticComponent:
         """Close registration through the ordered receipt boundary."""
         if self._handle != 0:
             await self._diagnostics._submit(
-                pb.DiagnosticSubmission(close_component=pb.DiagnosticComponentClose(component=self._handle))
+                diagnostics_service_pb.SubmitDiagnosticRequest(
+                    close_component=diagnostics_pb.DiagnosticComponentClose(component=self._handle)
+                )
             )

@@ -167,8 +167,8 @@ void (async () => {
 <Tab title="Rust" language="rust">
 ```rust
 use nemo_relay::plugin::PluginConfig;
-use nemo_relay::plugin::dynamic::{initialize, validate};
-use nemo_relay_adaptive::plugin_component::{register_adaptive_component, ComponentSpec};
+use nemo_relay::plugin::{initialize, validate};
+use nemo_relay_adaptive::plugin_component::ComponentSpec;
 use nemo_relay_adaptive::{AdaptiveConfig, ResponseCacheConfig};
 
 #[tokio::main]
@@ -183,7 +183,6 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     let mut plugin_config = PluginConfig::default();
     plugin_config.components.push(ComponentSpec::new(adaptive).into());
 
-    register_adaptive_component()?;
     let report = validate(plugin_config.clone(), None)?;
     assert!(!report.config.has_errors());
 
@@ -469,8 +468,8 @@ Framework results must also support replay in a new call. For
 the codec must set `cache.replayable` to `true`. The cache skips stored wrappers
 that lack this flag. LangChain and LangGraph codecs set it for portable results
 with a known tool-call ID. They bind replayed tool messages to the current call.
-Results with custom Python objects stay in the original call's memory, so Relay
-runs those tools again.
+Results that hold other Python objects, such as artifacts or state objects, stay
+with the call that returned them. Relay runs those tools again.
 These rules do not change caching for ordinary JSON results.
 
 ### Tool Errors and Middleware Order
@@ -490,10 +489,9 @@ payloads only; they do not change the real arguments, result, or cache key.
 outermost. A hit returns before later execution interceptors and the managed
 callback.
 
-LLM and tool caches use priority `150` by default. NeMo Guardrails uses `100`.
-Lower values run first, so guardrails runs before the cache. This keeps
-guardrails active on cache hits. The LLM cache does not run when remote NeMo
-Guardrails handles a call.
+LLM and tool caches use priority `150` by default. Lower values run first.
+Give guardrails a lower priority than the cache so guardrails run on cache
+hits.
 
 For custom priorities, give each cache a higher value than any policy check
 that must run on hits. Review custom values when you upgrade.
@@ -545,7 +543,7 @@ cacheable classes and cacheable overrides, plus the default policy.
 | `cache_nondeterministic` | `false` | Only requests with an explicit numeric `temperature = 0` are eligible. Set `true` to cache and reuse sampled responses. |
 | `key_strategy` | `"exact_request"` | What counts as the same request: `"exact_request"` or `"logical"`. Refer to [Key Strategies](#key-strategies). |
 | `header_allowlist` | `[]` | Trusted, non-secret response-affecting headers folded into the key (case-insensitive). A non-empty normalized allowlist policy also partitions the key. Known auth headers are rejected. |
-| `backend.kind` | `"in_memory"` | `"in_memory"`, or `"redis"` (requires building with the `redis-backend` feature). |
+| `backend.kind` | `"in_memory"` | `"in_memory"` or `"redis"`. |
 | `backend.config.max_bytes` | 256 MiB | In-memory size budget; the oldest entries are evicted first. |
 | `backend.config.url` | — | Redis connection URL. Required for the `redis` backend. |
 | `backend.config.key_prefix` | `"nemo-relay:llm-cache:"` | Prefix for keys in Redis. |
@@ -591,8 +589,7 @@ Redis capacity and eviction in Redis itself.
   `x-api-key`.
 - `in_memory` `max_bytes` is zero or is not an integer.
 - `backend.kind` is unknown; or `redis` has a missing, non-string, or
-  whitespace-only `backend.config.url`, uses a non-string `key_prefix`, or is
-  unavailable because Relay was built without the `redis-backend` feature.
+  whitespace-only `backend.config.url`, or uses a non-string `key_prefix`.
 - A tool policy sets `ttl_seconds = 0` or a `bypass_rate` outside `[0.0, 1.0]`,
   or the same member name or pattern appears in two classes.
 - A tool class member or override key uses an unsupported wildcard form.

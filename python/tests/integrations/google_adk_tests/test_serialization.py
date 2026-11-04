@@ -26,11 +26,12 @@ from google.adk.tools import FunctionTool
 from google.genai import types
 
 import nemo_relay
-from nemo_relay.integrations.google_adk._backends._anthropic import ANTHROPIC_CODEC, CACHE_WRITE_KEY
+from nemo_relay.integrations.google_adk._backends._anthropic import ANTHROPIC_CODEC
 from nemo_relay.integrations.google_adk._backends._chat_completions import CHAT_CODEC
 from nemo_relay.integrations.google_adk._backends._gemini import GEMINI_CODEC, URL_CONTEXT_KEY
 from nemo_relay.integrations.google_adk._backends._responses import RESPONSES_CODEC
 from nemo_relay.integrations.google_adk._serialization import (
+    CACHE_WRITE_KEY,
     RECORDED_ID_KEY,
     RECORDED_KEY,
     RECORDED_USAGE_KEY,

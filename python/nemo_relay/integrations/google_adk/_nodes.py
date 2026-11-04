@@ -7,7 +7,7 @@ from __future__ import annotations
 
 import asyncio
 import contextlib
-from collections.abc import AsyncGenerator, Mapping
+from collections.abc import AsyncGenerator
 from typing import TYPE_CHECKING, TypeAlias, TypeVar
 
 from google.adk.agents import BaseAgent
@@ -26,7 +26,7 @@ from nemo_relay.integrations.google_adk._context import (
     parent_handle,
 )
 from nemo_relay.integrations.google_adk._serialization import json_safe
-from nemo_relay.integrations.google_adk._swap import swap_class
+from nemo_relay.integrations.google_adk._swap import Methods, swap_class
 
 if TYPE_CHECKING:
     from google.adk.agents.context import Context
@@ -49,7 +49,7 @@ def wrap_node(node: _NodeT) -> _NodeT:
     return node
 
 
-def _methods(cls: type[BaseNode]) -> Mapping[str, object]:
+def _methods(cls: type[BaseNode]) -> Methods[BaseNode]:
     original = cls._run_impl
     scope_type = ScopeType.Agent if issubclass(cls, Workflow) else ScopeType.Function
 

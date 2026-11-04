@@ -35,8 +35,8 @@ impl Drop for Queue {
 }
 
 pub(super) async fn run(
-    mut client: wire::relay_diagnostics_client::RelayDiagnosticsClient<Channel>,
-    credentials: wire::DiagnosticCredentials,
+    mut client: wire::relay_diagnostics_service_client::RelayDiagnosticsServiceClient<Channel>,
+    credentials: wire::Credentials,
     session_id: Vec<u8>,
     receiver: mpsc::Receiver<Pending>,
     state: Arc<DeliveryState>,
@@ -68,7 +68,7 @@ pub(super) async fn run(
                     }
                     continue;
                 }
-                let mut request = wire::DiagnosticSubmission::decode(frozen.as_slice())
+                let mut request = wire::SubmitDiagnosticRequest::decode(frozen.as_slice())
                     .expect("SDK-frozen request");
                 request.credentials = Some(credentials.clone());
                 request.session_id = session_id.clone();
@@ -89,8 +89,8 @@ pub(super) async fn run(
 }
 
 async fn deliver(
-    client: &mut wire::relay_diagnostics_client::RelayDiagnosticsClient<Channel>,
-    request: &wire::DiagnosticSubmission,
+    client: &mut wire::relay_diagnostics_service_client::RelayDiagnosticsServiceClient<Channel>,
+    request: &wire::SubmitDiagnosticRequest,
     state: &DeliveryState,
     sequence: &mut u64,
     policy: DeliveryPolicy,
@@ -108,14 +108,23 @@ async fn deliver(
         let mut rpc = tonic::Request::new(request.clone());
         rpc.set_timeout(policy.retry_timeout);
         match tokio::time::timeout(policy.retry_timeout, client.submit_diagnostic(rpc)).await {
-            Ok(Ok(response)) if response.get_ref().submission_sequence == *sequence => {
+            Ok(Ok(response))
+                if response
+                    .get_ref()
+                    .receipt
+                    .as_ref()
+                    .is_some_and(|v| v.submission_sequence == *sequence) =>
+            {
                 let response = response.into_inner();
-                if response.encoded_len() > policy.max_response_bytes {
+                if response.encoded_len() > policy.max_response_bytes
+                    || nemo_relay_worker_proto::validation::validate(&response).is_err()
+                {
                     break;
                 }
-                let valid = DiagnosticReceiptStatus::try_from(response.status)
-                    .is_ok_and(|s| s != DiagnosticReceiptStatus::Unspecified);
-                if !valid {
+                let Some(response) = response.receipt else {
+                    break;
+                };
+                if !receipt_matches_operation(&response, request.operation.as_ref()) {
                     break;
                 }
                 if let Some(next) = sequence.checked_add(1) {
@@ -163,4 +172,27 @@ async fn deliver(
         }
     }
     result
+}
+
+/// A receipt acknowledges this operation, not merely a consumed sequence.
+fn receipt_matches_operation(
+    receipt: &DiagnosticReceipt,
+    operation: Option<&wire::submit_diagnostic_request::Operation>,
+) -> bool {
+    use wire::submit_diagnostic_request::Operation;
+    match DiagnosticReceiptStatus::try_from(receipt.status) {
+        Ok(DiagnosticReceiptStatus::Disabled | DiagnosticReceiptStatus::Rejected) => true,
+        Ok(DiagnosticReceiptStatus::Registered) => match operation {
+            Some(Operation::RegisterComponent(registration)) => {
+                receipt.code_count as usize == registration.codes.len()
+            }
+            _ => false,
+        },
+        Ok(DiagnosticReceiptStatus::Recorded) => matches!(operation, Some(Operation::Record(_))),
+        Ok(DiagnosticReceiptStatus::Closed) => matches!(
+            operation,
+            Some(Operation::CloseComponent(_) | Operation::CloseSession(_))
+        ),
+        _ => false,
+    }
 }

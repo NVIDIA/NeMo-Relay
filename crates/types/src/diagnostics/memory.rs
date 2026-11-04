@@ -10,8 +10,9 @@ use serde::{Deserialize, Serialize};
 /// Initial version of the separate memory inspection envelope.
 pub const DIAGNOSTIC_MEMORY_VERSION: u32 = 1;
 
-#[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
-#[derive(Debug, Default, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(
+    schemars::JsonSchema, Debug, Default, Clone, Copy, PartialEq, Eq, Serialize, Deserialize,
+)]
 /// Backing capacity and current occupancy of one context.
 ///
 /// These gauges describe the bounded backend rather than whole-process RSS.
@@ -22,83 +23,83 @@ pub const DIAGNOSTIC_MEMORY_VERSION: u32 = 1;
 pub struct DiagnosticMemoryUsage {
     /// Bytes reserved for context-owned backend backing storage.
     #[serde(with = "native_number")]
-    #[cfg_attr(feature = "schema", schemars(with = "DiagnosticNumber"))]
+    #[schemars(with = "DiagnosticNumber")]
     pub reserved_bytes: usize,
     /// Occupied active or retained closed component slots.
     #[serde(with = "native_number")]
-    #[cfg_attr(feature = "schema", schemars(with = "DiagnosticNumber"))]
+    #[schemars(with = "DiagnosticNumber")]
     pub components: usize,
     /// Occupied lifetime code-counter slots across admitted components.
     #[serde(with = "native_number")]
-    #[cfg_attr(feature = "schema", schemars(with = "DiagnosticNumber"))]
+    #[schemars(with = "DiagnosticNumber")]
     pub counters: usize,
     /// Currently retained shared circular-history event headers.
     #[serde(with = "native_number")]
-    #[cfg_attr(feature = "schema", schemars(with = "DiagnosticNumber"))]
+    #[schemars(with = "DiagnosticNumber")]
     pub events: usize,
     /// Compiled size of one fixed event slot, excluding separately stored text.
     #[serde(with = "native_number")]
-    #[cfg_attr(feature = "schema", schemars(with = "DiagnosticNumber"))]
+    #[schemars(with = "DiagnosticNumber")]
     pub event_slot_bytes: usize,
     /// Event slots admitted for the shared circular history.
     #[serde(with = "native_number")]
-    #[cfg_attr(feature = "schema", schemars(with = "DiagnosticNumber"))]
+    #[schemars(with = "DiagnosticNumber")]
     pub event_capacity: usize,
     /// Complete history allocation, including all slots, shared header, and padding.
     #[serde(with = "native_number")]
-    #[cfg_attr(feature = "schema", schemars(with = "DiagnosticNumber"))]
+    #[schemars(with = "DiagnosticNumber")]
     pub history_reserved_bytes: usize,
     /// Retained slot bytes; excludes the shared history header and separate text pool.
     #[serde(with = "native_number")]
-    #[cfg_attr(feature = "schema", schemars(with = "DiagnosticNumber"))]
+    #[schemars(with = "DiagnosticNumber")]
     pub history_occupied_bytes: usize,
     /// Pool payload bytes occupied in whole reclaimable blocks.
     #[serde(with = "native_number")]
-    #[cfg_attr(feature = "schema", schemars(with = "DiagnosticNumber"))]
+    #[schemars(with = "DiagnosticNumber")]
     pub detail_bytes: usize,
     /// Actual payload capacity, rounded down to whole detail blocks.
     #[serde(with = "native_number")]
-    #[cfg_attr(feature = "schema", schemars(with = "DiagnosticNumber"))]
+    #[schemars(with = "DiagnosticNumber")]
     pub detail_capacity_bytes: usize,
     /// Complete detail-pool backing: payload capacity plus all block metadata.
     #[serde(with = "native_number")]
-    #[cfg_attr(feature = "schema", schemars(with = "DiagnosticNumber"))]
+    #[schemars(with = "DiagnosticNumber")]
     pub detail_reserved_bytes: usize,
     /// Reserved metadata bytes for all detail blocks, occupied or free.
     #[serde(with = "native_number")]
-    #[cfg_attr(feature = "schema", schemars(with = "DiagnosticNumber"))]
+    #[schemars(with = "DiagnosticNumber")]
     pub detail_metadata_bytes: usize,
     /// Retained UTF-8 message and correlation bytes, excluding block slack.
     #[serde(with = "native_number")]
-    #[cfg_attr(feature = "schema", schemars(with = "DiagnosticNumber"))]
+    #[schemars(with = "DiagnosticNumber")]
     pub detail_logical_bytes: usize,
     /// Unused payload bytes inside occupied blocks; excludes entirely free blocks.
     #[serde(with = "native_number")]
-    #[cfg_attr(feature = "schema", schemars(with = "DiagnosticNumber"))]
+    #[schemars(with = "DiagnosticNumber")]
     pub detail_slack_bytes: usize,
     /// Admitted key, ownership, and extension metadata content bytes.
     #[serde(with = "native_number")]
-    #[cfg_attr(feature = "schema", schemars(with = "DiagnosticNumber"))]
+    #[schemars(with = "DiagnosticNumber")]
     pub metadata_bytes: usize,
     /// Reserved rolling outcome-bucket slots belonging to components.
     #[serde(with = "native_number")]
-    #[cfg_attr(feature = "schema", schemars(with = "DiagnosticNumber"))]
+    #[schemars(with = "DiagnosticNumber")]
     pub window_buckets: usize,
     /// Admitted extension descriptors, including retained closed components.
     #[serde(with = "native_number")]
-    #[cfg_attr(feature = "schema", schemars(with = "DiagnosticNumber"))]
+    #[schemars(with = "DiagnosticNumber")]
     pub extensions: usize,
     /// Query leases currently holding preallocated materialization buffers.
     #[serde(with = "native_number")]
-    #[cfg_attr(feature = "schema", schemars(with = "DiagnosticNumber"))]
+    #[schemars(with = "DiagnosticNumber")]
     pub query_workspaces: usize,
     /// Optional projection subscriptions currently admitted.
     #[serde(with = "native_number")]
-    #[cfg_attr(feature = "schema", schemars(with = "DiagnosticNumber"))]
+    #[schemars(with = "DiagnosticNumber")]
     pub projections: usize,
     /// Projection workspaces currently materializing or delivering evidence.
     #[serde(with = "native_number")]
-    #[cfg_attr(feature = "schema", schemars(with = "DiagnosticNumber"))]
+    #[schemars(with = "DiagnosticNumber")]
     pub projection_workspaces: usize,
 }
 
@@ -116,8 +117,9 @@ mod native_number {
 }
 
 /// Occupied backing for one retained observation; these quantities overlap.
-#[derive(Debug, Default, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
-#[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
+#[derive(
+    Debug, Default, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, schemars::JsonSchema,
+)]
 pub struct EntryMemoryFootprint {
     /// Fixed event slot, excluding text.
     pub header_bytes: DiagnosticNumber,
@@ -133,8 +135,9 @@ pub struct EntryMemoryFootprint {
     pub occupied_bytes: DiagnosticNumber,
 }
 /// Assigned diagnostic storage for one component incarnation, not its heap or RSS.
-#[derive(Debug, Default, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
-#[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
+#[derive(
+    Debug, Default, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, schemars::JsonSchema,
+)]
 pub struct ComponentMemoryFootprint {
     /// Occupied registration element, including inline text and padding.
     pub registration_bytes: DiagnosticNumber,
@@ -152,8 +155,7 @@ pub struct ComponentMemoryFootprint {
     pub occupied_bytes: DiagnosticNumber,
 }
 /// One retained entry, identified within the enclosing source incarnation.
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
-#[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, schemars::JsonSchema)]
 pub struct EntryMemoryUsage {
     /// Acceptance sequence, distinct from the capture revision.
     pub sequence: DiagnosticNumber,
@@ -164,8 +166,7 @@ pub struct EntryMemoryUsage {
     pub footprint: EntryMemoryFootprint,
 }
 /// One retained registration's diagnostic backing.
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
-#[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, schemars::JsonSchema)]
 pub struct ComponentMemoryUsage {
     /// Registration identity; replacement instances remain distinct.
     pub component: ComponentIdentity,
@@ -174,8 +175,9 @@ pub struct ComponentMemoryUsage {
     pub footprint: ComponentMemoryFootprint,
 }
 /// Whole-selection totals, distinct from the rows present in this page.
-#[derive(Debug, Default, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
-#[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
+#[derive(
+    Debug, Default, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, schemars::JsonSchema,
+)]
 pub struct MemorySelectionTotals {
     /// Matching component registrations across all pages.
     pub components: DiagnosticNumber,
@@ -187,12 +189,11 @@ pub struct MemorySelectionTotals {
     pub entry_occupied_bytes: DiagnosticNumber,
 }
 /// Bounded independent memory view; inspection neither records nor freezes history.
-#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
-#[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize, schemars::JsonSchema)]
 pub struct DiagnosticMemoryPage {
     /// Separate envelope version, unrelated to snapshot/catalogue versions.
     #[serde(deserialize_with = "memory_version")]
-    #[cfg_attr(feature = "schema", schemars(schema_with = "memory_version_schema"))]
+    #[schemars(schema_with = "memory_version_schema")]
     pub schema_version: u32,
     /// Diagnostic source incarnation.
     pub source: SourceIdentity,
@@ -231,7 +232,6 @@ fn memory_version<'de, D: serde::Deserializer<'de>>(d: D) -> Result<u32, D::Erro
     Ok(version)
 }
 
-#[cfg(feature = "schema")]
 fn memory_version_schema(
     generator: &mut schemars::r#gen::SchemaGenerator,
 ) -> schemars::schema::Schema {

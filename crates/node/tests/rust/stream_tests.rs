@@ -2,7 +2,7 @@
 // SPDX-License-Identifier: Apache-2.0
 
 use super::*;
-use nemo_relay::api::runtime::LlmStreamInner;
+use nemo_relay_runtime::api::runtime::LlmStreamInner;
 
 struct CancelDuringPoll {
     cancel: Option<tokio::sync::watch::Sender<bool>>,

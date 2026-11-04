@@ -5,7 +5,7 @@
 use super::common::{control::now_unix_ms, protocol::SensitiveString};
 use crate::error::CliError;
 use base64::{Engine, engine::general_purpose::URL_SAFE_NO_PAD};
-use nemo_relay::diagnostics::*;
+use nemo_relay_diagnostics::*;
 use serde::{Deserialize, Serialize};
 use std::sync::{Arc, RwLock};
 pub(crate) const CAPABILITY: &str = "daemon_diagnostics_v1";
@@ -139,8 +139,10 @@ impl DaemonErrorClassifier {
             CliError::Io(_) => FailureClass::Io,
             CliError::Http(_) => FailureClass::InvalidInput,
             CliError::ProviderFailure(failure) => match failure.class {
-                nemo_relay::error::UpstreamFailureClass::Timeout => FailureClass::Timeout,
-                nemo_relay::error::UpstreamFailureClass::Connection => FailureClass::Unavailable,
+                nemo_relay_types::error::UpstreamFailureClass::Timeout => FailureClass::Timeout,
+                nemo_relay_types::error::UpstreamFailureClass::Connection => {
+                    FailureClass::Unavailable
+                }
                 _ => FailureClass::Unknown,
             },
             CliError::InvalidPayload(_) => FailureClass::InvalidInput,

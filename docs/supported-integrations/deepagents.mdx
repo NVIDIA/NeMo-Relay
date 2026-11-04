@@ -89,6 +89,66 @@ print(f"Final response: {final_message.content}")
 Add `skills=[...]` or subagent configuration after this minimal path is working
 when you need to capture Deep Agents skill or subagent marks.
 
+## Middleware Ordering
+
+Use the `position` option in `add_nemo_relay_integration` to choose where to add
+Relay in your middleware list. Pass this option by name.
+
+| Position | Placement | Recorded tool result |
+| --- | --- | --- |
+| `"inner"` (default) | After your middleware | Before your wrappers change the result |
+| `"outer"` | Before your middleware | After your wrappers change the result |
+
+Use `position="outer"` to record text that your middleware adds to tool
+results. This can include status text or review notes. Relay tool events and
+ATIF observations then include that text. This example uses your
+`status_middleware` instance:
+
+```python
+agent = create_deep_agent(
+    **add_nemo_relay_integration(
+        model="nvidia:nvidia/nemotron-3-nano-omni-30b-a3b-reasoning",
+        tools=[],
+        middleware=[status_middleware],
+        position="outer",
+    )
+)
+```
+
+Refer to the
+[LangChain middleware example](/supported-integrations/langchain#middleware-ordering)
+for a status wrapper with sync and async methods. The same wrapper order applies
+to `invoke` and `ainvoke`.
+
+The default is `position="inner"`. In this mode, text that your wrappers add
+still reaches the model. Relay's recorded tool result does not include it.
+The next LLM request event can contain that text. ATIF uses the tool
+observation to record the tool result.
+
+The helper uses the same position for custom subagents that you define as
+dictionaries. Set `instrument_subagents=False` to skip adding Relay to them.
+The helper copies middleware lists and subagent dictionaries. It does not
+change the lists or dictionaries that you pass in.
+
+If a list already contains `NemoRelayDeepAgentsMiddleware`, the helper keeps
+that instance in place. To move it, change its position in the list yourself.
+
+Deep Agents controls the order of its built-in middleware. The `position`
+option only places Relay before or after your middleware. Even with `"outer"`,
+built-in wrappers can run outside Relay. Relay does not record their later
+changes to the result. It also does not record changes from graph hooks that
+run after its wrapper returns.
+
+This option does not add Relay to precompiled, remote, or automatically
+generated subagents. Refer to [Observability](#observability) for the support
+limits for those subagents.
+
+Order also affects model calls. An outer Relay wrapper records a request
+before inner wrappers change it. It records a response after they return.
+Refer to
+[LangChain middleware ordering](/supported-integrations/langchain#middleware-ordering)
+for guidance on retries and caches.
+
 ## Verify the Integration
 
 The integration works correctly when:

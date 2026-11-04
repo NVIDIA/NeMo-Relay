@@ -8,6 +8,8 @@ use clap::{ArgGroup, Args, Subcommand};
 
 use crate::error::CliError;
 
+mod run;
+
 /// Args for `nemo-relay model-pricing`.
 #[derive(Debug, Clone, Args)]
 pub(crate) struct PricingCommand {
@@ -101,52 +103,13 @@ impl From<PricingScopeArgs> for crate::plugins::ConfigurationScope {
         }
     }
 }
-impl PricingValidateCommand {
-    pub(crate) fn into_runtime(self) -> crate::plugins::PricingValidateRequest {
-        crate::plugins::PricingValidateRequest { path: self.path }
-    }
-}
-impl PricingInitCommand {
-    pub(crate) fn into_runtime(self) -> crate::plugins::PricingInitRequest {
-        crate::plugins::PricingInitRequest {
-            scope: self.scope.into(),
-        }
-    }
-}
-impl PricingAddSourceCommand {
-    pub(crate) fn into_runtime(self) -> crate::plugins::PricingAddSourceRequest {
-        crate::plugins::PricingAddSourceRequest {
-            scope: self.scope.into(),
-            path: self.path,
-            append: self.append,
-        }
-    }
-}
-impl PricingResolveCommand {
-    pub(crate) fn into_runtime(self) -> crate::plugins::PricingResolveRequest {
-        crate::plugins::PricingResolveRequest {
-            model: self.model,
-            provider: self.provider,
-            prompt_tokens: self.prompt_tokens,
-            completion_tokens: self.completion_tokens,
-            cache_read_tokens: self.cache_read_tokens,
-            cache_write_tokens: self.cache_write_tokens,
-        }
-    }
-}
 
 pub(super) fn execute(command: PricingCommand) -> Result<ExitCode, CliError> {
     match command.command {
-        PricingSubcommand::Validate(command) => {
-            crate::plugins::pricing::validate(command.into_runtime())?
-        }
-        PricingSubcommand::Init(command) => crate::plugins::pricing::init(command.into_runtime())?,
-        PricingSubcommand::AddSource(command) => {
-            crate::plugins::pricing::add_source(command.into_runtime())?
-        }
-        PricingSubcommand::Resolve(command) => {
-            crate::plugins::pricing::resolve(command.into_runtime())?
-        }
+        PricingSubcommand::Validate(command) => run::validate(command)?,
+        PricingSubcommand::Init(command) => run::init(command)?,
+        PricingSubcommand::AddSource(command) => run::add_source(command)?,
+        PricingSubcommand::Resolve(command) => run::resolve(command)?,
     }
     Ok(ExitCode::SUCCESS)
 }

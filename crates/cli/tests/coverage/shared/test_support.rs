@@ -11,21 +11,26 @@ use std::time::{Duration, Instant};
 
 static TEST_LOGGING: Once = Once::new();
 
-/// Bind a local provider on a non-loopback interface without sending external packets.
-pub(crate) async fn http_model_listener() -> (tokio::net::TcpListener, std::net::SocketAddr) {
-    let route = std::net::UdpSocket::bind("0.0.0.0:0").unwrap();
-    route.connect("192.0.2.1:9").unwrap();
-    let ip = route.local_addr().unwrap().ip();
-    assert!(!ip.is_loopback());
-    let listener = tokio::net::TcpListener::bind((ip, 0)).await.unwrap();
-    let address = listener.local_addr().unwrap();
+/// Exercise the explicit HTTP host policy over a local connection.
+///
+/// The absolute DNS name `localhost.` resolves to loopback (RFC 6761), but requires the explicit
+/// host allowance because it is neither the literal `localhost` nor a loopback IP in the URL.
+/// Avoid binding the default route's interface: it can be a VPN tunnel or change during a test.
+pub(crate) async fn http_model_listener() -> (tokio::net::TcpListener, http::uri::Authority) {
+    let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+    let address = format!("localhost.:{}", listener.local_addr().unwrap().port())
+        .parse::<http::uri::Authority>()
+        .unwrap();
+    assert!(crate::configuration::remote_http(
+        &reqwest::Url::parse(&format!("http://{address}")).unwrap()
+    ));
     (listener, address)
 }
 
 pub(crate) fn enable_operational_logs() {
     TEST_LOGGING.call_once(|| {
         let runtime =
-            nemo_relay::logging::init_logging(&nemo_relay::logging::LoggingConfig::default())
+            nemo_relay_logging::init_logging(&nemo_relay_logging::LoggingConfig::default())
                 .expect("test logging should initialize");
         Box::leak(Box::new(runtime));
     });
@@ -173,3 +178,6 @@ pub(crate) fn header(request: &str, name: &str) -> String {
         })
         .unwrap_or_else(|| panic!("missing {name} header in {request:?}"))
 }
+
+#[path = "plugin_host.rs"]
+pub(crate) mod plugin_host;

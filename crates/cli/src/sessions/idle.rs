@@ -7,7 +7,7 @@ use std::collections::{HashMap, HashSet};
 use std::sync::Arc;
 use std::time::{Duration, Instant};
 
-use nemo_relay::api::runtime::TASK_SCOPE_STACK;
+use nemo_relay_runtime::api::runtime::TASK_SCOPE_STACK;
 use tokio::sync::Mutex;
 
 use crate::agents::shared::alignment::SessionAlignmentState;

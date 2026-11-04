@@ -4,7 +4,7 @@
 //! Unit tests for registry in the NeMo Relay FFI crate.
 
 use super::*;
-use nemo_relay::plugin::rollback_registrations;
+use nemo_relay_plugin_host::rollback_registrations;
 use std::io::{Read, Write};
 use std::net::{TcpListener, TcpStream};
 use std::sync::mpsc::{self, Receiver};
@@ -757,7 +757,7 @@ fn test_ffi_event_sanitizer_registries_and_error_paths() {
         }
         drop(events);
 
-        let mut context = PluginRegistrationContext::with_namespace(unique_name("ffi_plugin_"));
+        let mut context = HostPluginRegistrationContext::with_namespace(unique_name("ffi_plugin_"));
         let mut ffi_context = FfiPluginContext(&mut context);
         for (name, status) in [
             (
@@ -3123,6 +3123,8 @@ fn test_ffi_llm_execute_stream_and_atif_exporter() {
                 None,
                 Some(collector_cb),
                 Some(finalizer_cb),
+                ptr::null_mut(),
+                None,
                 ptr::null(),
                 0,
                 ptr::null(),

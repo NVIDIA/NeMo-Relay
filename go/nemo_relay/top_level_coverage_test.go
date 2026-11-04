@@ -110,16 +110,14 @@ func drainLlmStream(t *testing.T, stream *LlmStream) {
 func assertCheckedValueFailureCoverage(t *testing.T) {
 	t.Helper()
 
-	setLastErrorMessage("forced checkedValue failure")
-	_, err := checkedValue(5, 1)
+	_, err := checkedValue(errors.New("forced checkedValue failure"), 1)
 	assertErrorContains(t, err, "forced checkedValue failure", "checkedValue")
 }
 
 func assertCheckedJSONStringFailureCoverage(t *testing.T) {
 	t.Helper()
 
-	setLastErrorMessage("forced checkedJSONString failure")
-	_, err := checkedJSONString(5, func() string { return "{}" }, noOpCheckedJSONStringFree)
+	_, err := checkedJSONString(errors.New("forced checkedJSONString failure"), func() string { return "{}" }, noOpCheckedJSONStringFree)
 	assertErrorContains(t, err, "forced checkedJSONString failure", "checkedJSONString")
 }
 
@@ -458,8 +456,16 @@ func TestTopLevelPluginCoverage(t *testing.T) {
 }
 
 func TestTopLevelStreamCoverage(t *testing.T) {
-	setLastErrorMessage("forced stream next failure")
-	if _, err := llmStreamNextResult(-1, nil, nil, nil); err == nil || !strings.Contains(err.Error(), "forced stream next failure") {
-		t.Fatalf("expected llmStreamNextResult error, got %v", err)
+	stream, err := LlmStreamCallExecute("top_level_stream_coverage", makeRequest(),
+		func(json.RawMessage) (json.RawMessage, error) { return json.RawMessage(`{"chunk": 1}`), nil },
+		func(json.RawMessage) { panic("forced stream next failure") },
+		nil,
+	)
+	if err != nil {
+		t.Fatalf("LlmStreamCallExecute failed: %v", err)
+	}
+	defer stream.Close()
+	if _, err := stream.Next(); err == nil || !strings.Contains(err.Error(), "forced stream next failure") {
+		t.Fatalf("expected collector panic to surface from Next, got %v", err)
 	}
 }

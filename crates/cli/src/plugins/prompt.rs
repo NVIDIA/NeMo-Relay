@@ -175,10 +175,6 @@ fn edit_component_field(
             edit_config_field(theme, &mut state.config, field)?;
             state.mark_config_touched();
         }
-        EditableComponent::NemoGuardrails(state) => {
-            edit_config_field(theme, &mut state.config, field)?;
-            state.mark_config_touched();
-        }
         EditableComponent::PiiRedaction(state) => {
             edit_config_field(theme, &mut state.config, field)?;
             state.mark_config_touched();
@@ -511,7 +507,7 @@ pub(crate) fn edit_string_list(
         prompt,
         &mut value,
         None,
-        &nemo_relay::config_editor::STRING_LIST_ITEM,
+        &nemo_relay_runtime::config_editor::STRING_LIST_ITEM,
         document_name,
     )?;
     if result.changed || result.explicitly_set {
@@ -533,7 +529,7 @@ fn edit_list_value(
     prompt: &str,
     value: &mut Value,
     default: Option<Value>,
-    item: &nemo_relay::config_editor::EditorListItemSpec,
+    item: &nemo_relay_runtime::config_editor::EditorListItemSpec,
 ) -> Result<bool, CliError> {
     Ok(edit_list_value_in_document(theme, prompt, value, default, item, "plugins.toml")?.changed)
 }
@@ -543,7 +539,7 @@ fn edit_list_value_in_document(
     prompt: &str,
     value: &mut Value,
     default: Option<Value>,
-    item: &nemo_relay::config_editor::EditorListItemSpec,
+    item: &nemo_relay_runtime::config_editor::EditorListItemSpec,
     document_name: &str,
 ) -> Result<ListEditResult, CliError> {
     if !value.is_array() {
@@ -675,7 +671,7 @@ fn edit_map_value(
     prompt: &str,
     value: &mut Value,
     default: Option<Value>,
-    item: &nemo_relay::config_editor::EditorListItemSpec,
+    item: &nemo_relay_runtime::config_editor::EditorListItemSpec,
 ) -> Result<bool, CliError> {
     if !value.is_object() {
         *value = default.clone().unwrap_or_else(|| json!({}));
@@ -742,7 +738,7 @@ fn edit_existing_map_entry(
     prompt: &str,
     value: &mut Value,
     key: &str,
-    item: &nemo_relay::config_editor::EditorListItemSpec,
+    item: &nemo_relay_runtime::config_editor::EditorListItemSpec,
 ) -> Result<(), CliError> {
     let actions = [
         MenuItem::new("Edit value"),
@@ -813,7 +809,7 @@ fn edit_existing_list_item(
     prompt: &str,
     value: &mut Value,
     index: usize,
-    item: &nemo_relay::config_editor::EditorListItemSpec,
+    item: &nemo_relay_runtime::config_editor::EditorListItemSpec,
 ) -> Result<(), CliError> {
     let actions = [
         MenuItem::new("Edit item"),
@@ -842,7 +838,7 @@ fn edit_existing_list_item(
 
 fn new_editor_item(
     theme: &ColorfulTheme,
-    item: &nemo_relay::config_editor::EditorListItemSpec,
+    item: &nemo_relay_runtime::config_editor::EditorListItemSpec,
 ) -> Result<Value, CliError> {
     if let Some(tagged_union) = item.tagged_union {
         return new_tagged_union_value(theme, tagged_union);
@@ -854,7 +850,7 @@ fn edit_editor_item(
     theme: &ColorfulTheme,
     prompt: &str,
     value: &mut Value,
-    item: &nemo_relay::config_editor::EditorListItemSpec,
+    item: &nemo_relay_runtime::config_editor::EditorListItemSpec,
 ) -> Result<(), CliError> {
     if let Some(tagged_union) = item.tagged_union {
         return edit_tagged_union_payload(theme, prompt, value, tagged_union);
@@ -903,7 +899,7 @@ fn edit_editor_item(
 
 fn select_tagged_union_variant(
     theme: &ColorfulTheme,
-    tagged_union: &nemo_relay::config_editor::EditorTaggedUnionSpec,
+    tagged_union: &nemo_relay_runtime::config_editor::EditorTaggedUnionSpec,
 ) -> Result<usize, CliError> {
     if tagged_union.variants.is_empty() {
         return Err(CliError::Config("tagged union has no variants".into()));
@@ -924,7 +920,7 @@ fn select_tagged_union_variant(
 
 fn new_tagged_union_value(
     theme: &ColorfulTheme,
-    tagged_union: &nemo_relay::config_editor::EditorTaggedUnionSpec,
+    tagged_union: &nemo_relay_runtime::config_editor::EditorTaggedUnionSpec,
 ) -> Result<Value, CliError> {
     tagged_union_variant_value(
         tagged_union,
@@ -936,7 +932,7 @@ fn edit_tagged_union_payload(
     theme: &ColorfulTheme,
     prompt: &str,
     value: &mut Value,
-    tagged_union: &nemo_relay::config_editor::EditorTaggedUnionSpec,
+    tagged_union: &nemo_relay_runtime::config_editor::EditorTaggedUnionSpec,
 ) -> Result<(), CliError> {
     if !value.is_object() {
         *value = new_tagged_union_value(theme, tagged_union)?;
@@ -959,7 +955,7 @@ fn edit_tagged_union_field(
     prompt: &str,
     current: Option<Value>,
     default: Option<Value>,
-    tagged_union: &nemo_relay::config_editor::EditorTaggedUnionSpec,
+    tagged_union: &nemo_relay_runtime::config_editor::EditorTaggedUnionSpec,
 ) -> Result<TaggedUnionFieldEdit, CliError> {
     let mut state = TaggedUnionFieldState::new(current, default);
     loop {
@@ -1156,7 +1152,7 @@ fn edit_value_section(
     theme: &ColorfulTheme,
     prompt: &str,
     value: &mut Value,
-    schema: &nemo_relay::config_editor::EditorSchema,
+    schema: &nemo_relay_runtime::config_editor::EditorSchema,
     default: Option<Value>,
 ) -> Result<bool, CliError> {
     ensure_object(value);
@@ -1201,7 +1197,7 @@ fn edit_selected_value_item(
     theme: &ColorfulTheme,
     prompt: &str,
     value: &mut Value,
-    schema: &nemo_relay::config_editor::EditorSchema,
+    schema: &nemo_relay_runtime::config_editor::EditorSchema,
     default: Option<&Value>,
     selection: usize,
 ) -> Result<bool, CliError> {
@@ -1221,7 +1217,7 @@ fn edit_value_field(
     theme: &ColorfulTheme,
     prompt: &str,
     value: &mut Value,
-    schema: &nemo_relay::config_editor::EditorSchema,
+    schema: &nemo_relay_runtime::config_editor::EditorSchema,
     field: EditorFieldSpec,
     default: Option<&Value>,
 ) -> Result<(), CliError> {
@@ -1421,7 +1417,7 @@ fn edit_discriminated_value_section(
 
 fn reset_discriminated_value_sections(
     value: &mut Value,
-    schema: &nemo_relay::config_editor::EditorSchema,
+    schema: &nemo_relay_runtime::config_editor::EditorSchema,
     discriminator: &str,
 ) {
     let tag = value

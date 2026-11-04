@@ -15,18 +15,20 @@ use crate::plugins::{
 };
 use crate::server::GatewayOverrides;
 use base64::Engine;
-use nemo_relay::plugin::dynamic::{
-    DynamicPluginFailurePhase, WorkerPluginLoadSpec, load_worker_plugins,
-};
 use ring::rand::SystemRandom;
 use ring::signature::{Ed25519KeyPair, KeyPair};
 use sha2::{Digest, Sha256};
+use {
+    nemo_relay_plugin_host::dynamic::DynamicPluginFailurePhase,
+    nemo_relay_plugin_host::dynamic::WorkerPluginLoadSpec,
+    nemo_relay_plugin_host::dynamic::load_worker_plugins,
+};
 
 fn allow_unsigned_test_plugins(resolved: &mut ResolvedConfig) {
     resolved.dynamic_plugin_policy.defaults.startup =
-        Some(nemo_relay::plugin::dynamic::DynamicPluginStartupClass::Optional);
+        Some(nemo_relay_plugin_host::dynamic::DynamicPluginStartupClass::Optional);
     resolved.dynamic_plugin_policy.defaults.attestation =
-        Some(nemo_relay::plugin::dynamic::DynamicPluginAttestationMode::IntegrityOnly);
+        Some(nemo_relay_plugin_host::dynamic::DynamicPluginAttestationMode::IntegrityOnly);
 }
 
 #[cfg(unix)]
@@ -85,7 +87,7 @@ fn hydration_adds_the_effective_plugin_to_its_own_lifecycle_scope() {
     let (user_manifest, user_manifest_ref) =
         DynamicPluginManifest::load_from_path(&user_manifest_path).unwrap();
 
-    let mut user_registry = nemo_relay::plugin::dynamic::DynamicPluginRegistry::new();
+    let mut user_registry = nemo_relay_plugin_host::dynamic::DynamicPluginRegistry::new();
     user_registry
         .add(user_manifest.into_record(Some(user_manifest_ref)).unwrap())
         .unwrap();
@@ -100,7 +102,7 @@ fn hydration_adds_the_effective_plugin_to_its_own_lifecycle_scope() {
             scope: RegistryScope::Global,
             plugins_toml_path: system_plugins_toml.clone(),
             state_path: temp.path().join("system/.dynamic-plugins.json"),
-            registry: nemo_relay::plugin::dynamic::DynamicPluginRegistry::new(),
+            registry: nemo_relay_plugin_host::dynamic::DynamicPluginRegistry::new(),
         },
     ];
     let mut resolved = ResolvedConfig {
@@ -133,6 +135,147 @@ fn hydration_adds_the_effective_plugin_to_its_own_lifecycle_scope() {
 }
 
 #[test]
+fn remove_and_reinstall_recover_a_persisted_legacy_worker() {
+    let temp = tempfile::tempdir().unwrap();
+    let _env = EnvScope::hermetic(&temp);
+    let _cwd = CurrentDirGuard::enter(temp.path());
+    let id = "acme.legacy-worker";
+    let plugin_dir = temp.path().join("plugin");
+    std::fs::create_dir_all(&plugin_dir).unwrap();
+    let manifest_path = write_dynamic_manifest(&plugin_dir, id);
+    let server = GatewayOverrides::default();
+    add(
+        PluginsAddRequest {
+            scope: ConfigurationScope::User,
+            path: plugin_dir.clone(),
+        },
+        &server,
+    )
+    .unwrap();
+    let scopes = load_scoped_registries(None).unwrap();
+    let entry = find_record_by_id(&scopes, id).unwrap().unwrap();
+    let mut state: serde_json::Value =
+        serde_json::from_slice(&std::fs::read(&entry.state_path).unwrap()).unwrap();
+    state["records"][0]["compatibility"]["worker"]["worker_protocol"] =
+        serde_json::json!("grpc-v1");
+    std::fs::write(&entry.state_path, serde_json::to_vec(&state).unwrap()).unwrap();
+    let manifest = std::fs::read_to_string(&manifest_path).unwrap();
+    std::fs::write(
+        &manifest_path,
+        manifest.replace("nvidia.nemo.relay.worker.v1", "grpc-v1"),
+    )
+    .unwrap();
+
+    let assert_inspectable = || {
+        let resolved = resolve_plugins_config(None).unwrap();
+        let scopes = load_and_hydrate_scopes(None, &resolved).unwrap();
+        let entry = find_record_by_id(&scopes, id).unwrap().unwrap();
+        assert_eq!(
+            entry.record.status.validation.compatibility,
+            DynamicPluginCheckState::Invalid
+        );
+        assert!(
+            entry
+                .record
+                .status
+                .validation
+                .message
+                .as_ref()
+                .unwrap()
+                .contains("worker protocol")
+        );
+        assert!(!entry.record.spec.enabled);
+        let (stale, stale_ref) = load_manifest_for_action("inspect", &manifest_path).unwrap();
+        let policy = evaluate_dynamic_plugin_host_policy(&resolved.dynamic_plugin_policy, &stale);
+        let trust = evaluate_dynamic_plugin_trust(&stale, &stale_ref, &policy);
+        let response = serde_json::to_value(validate_success(ValidateResponseInput {
+            command: "plugins validate",
+            target: Some(id),
+            target_kind: "plugin_id",
+            resolved_plugin_id: Some(id),
+            manifest: &stale,
+            manifest_ref: &stale_ref,
+            entry: Some(&entry),
+            host_config: None,
+            policy: &policy,
+            trust: &trust,
+        }))
+        .unwrap();
+        assert_eq!(response["data"]["valid"], false);
+        assert!(
+            response["data"]["errors"]
+                .as_array()
+                .unwrap()
+                .iter()
+                .any(|error| error.as_str().unwrap().contains("worker_protocol"))
+        );
+    };
+    assert_inspectable();
+    // A declaration in plugins.toml must also hydrate without a persisted record.
+    let state_path = entry.state_path.clone();
+    let saved = std::fs::read(&state_path).unwrap();
+    std::fs::remove_file(&state_path).unwrap();
+    assert_inspectable();
+    std::fs::write(&state_path, saved).unwrap();
+    inspect(
+        PluginsInspectRequest {
+            id: id.into(),
+            json: true,
+        },
+        &server,
+    )
+    .unwrap();
+    validate(
+        PluginsValidateRequest {
+            target: id.into(),
+            json: true,
+        },
+        &server,
+    )
+    .unwrap();
+    assert_inspectable();
+    assert!(enable(PluginsEnableRequest { id: id.into() }, &server).is_err());
+    let unrelated = temp.path().join("unrelated-plugin");
+    std::fs::create_dir_all(&unrelated).unwrap();
+    write_dynamic_manifest(&unrelated, "acme.unrelated-worker");
+    add(
+        PluginsAddRequest {
+            scope: ConfigurationScope::User,
+            path: unrelated,
+        },
+        &server,
+    )
+    .unwrap();
+
+    remove(PluginsRemoveRequest { id: id.into() }, &server).unwrap();
+    let scopes = load_scoped_registries(None).unwrap();
+    assert!(
+        find_record_by_id(&scopes, id)
+            .unwrap()
+            .unwrap()
+            .record
+            .is_tombstoned()
+    );
+    std::fs::write(&manifest_path, manifest).unwrap();
+    add(
+        PluginsAddRequest {
+            scope: ConfigurationScope::User,
+            path: plugin_dir,
+        },
+        &server,
+    )
+    .unwrap();
+    let scopes = load_scoped_registries(None).unwrap();
+    assert!(
+        !find_record_by_id(&scopes, id)
+            .unwrap()
+            .unwrap()
+            .record
+            .is_tombstoned()
+    );
+}
+
+#[test]
 fn unscoped_remove_detects_a_manifest_without_saved_registry_state() {
     let temp = tempfile::tempdir().unwrap();
     let id = "acme.layered";
@@ -143,7 +286,7 @@ fn unscoped_remove_detects_a_manifest_without_saved_registry_state() {
     let user_manifest = write_dynamic_manifest(&user_dir, id);
     let system_manifest = write_dynamic_manifest(&system_dir, id);
     let (manifest, manifest_ref) = DynamicPluginManifest::load_from_path(&user_manifest).unwrap();
-    let mut user_registry = nemo_relay::plugin::dynamic::DynamicPluginRegistry::new();
+    let mut user_registry = nemo_relay_plugin_host::dynamic::DynamicPluginRegistry::new();
     user_registry
         .add(manifest.into_record(Some(manifest_ref)).unwrap())
         .unwrap();
@@ -167,7 +310,7 @@ fn unscoped_remove_detects_a_manifest_without_saved_registry_state() {
             scope: RegistryScope::Global,
             plugins_toml_path: system_config.clone(),
             state_path: temp.path().join("system/.dynamic-plugins.json"),
-            registry: nemo_relay::plugin::dynamic::DynamicPluginRegistry::new(),
+            registry: nemo_relay_plugin_host::dynamic::DynamicPluginRegistry::new(),
         },
     ];
     let error = ensure_remove_scope_unambiguous(&scopes, id).unwrap_err();
@@ -211,7 +354,7 @@ fn scoped_list_applies_global_policy_without_loading_its_manifest() {
             .unwrap()
             .join(".dynamic-plugins.json"),
         plugins_toml_path,
-        registry: nemo_relay::plugin::dynamic::DynamicPluginRegistry::new(),
+        registry: nemo_relay_plugin_host::dynamic::DynamicPluginRegistry::new(),
     })
     .collect();
     let (scopes, _) =
@@ -261,7 +404,7 @@ fn scoped_global_list_reads_without_writing_global_state() {
         scope: RegistryScope::Global,
         plugins_toml_path: global_config.clone(),
         state_path: state_path.clone(),
-        registry: nemo_relay::plugin::dynamic::DynamicPluginRegistry::new(),
+        registry: nemo_relay_plugin_host::dynamic::DynamicPluginRegistry::new(),
     };
     let (scopes, _) = hydrate_selected_scopes(
         vec![scope],
@@ -305,7 +448,7 @@ fn hydration_replaces_declaration_fields_but_preserves_lifecycle_state() {
     old_record.spec.enabled = true;
     old_record.spec.config_ref = Some("lifecycle-config".into());
     old_record.metadata.generation = 7;
-    let mut registry = nemo_relay::plugin::dynamic::DynamicPluginRegistry::new();
+    let mut registry = nemo_relay_plugin_host::dynamic::DynamicPluginRegistry::new();
     registry.add(old_record).unwrap();
     let mut scopes = vec![ScopedRegistry {
         scope: RegistryScope::Global,
@@ -428,8 +571,8 @@ id = "acme.external-entrypoint"
 kind = "worker"
 
 [compat]
-relay = ">=0.8.0,<1.0"
-worker_protocol = "grpc-v1"
+relay = ">=1.0.0,<2.0"
+worker_protocol = "nvidia.nemo.relay.worker.v1"
 
 [defaults]
 enabled = false
@@ -748,8 +891,8 @@ id = "{plugin_id}"
 kind = "worker"
 
 [compat]
-relay = ">=0.8.0,<1.0"
-worker_protocol = "grpc-v1"
+relay = ">=1.0.0,<2.0"
+worker_protocol = "nvidia.nemo.relay.worker.v1"
 
 [defaults]
 enabled = false
@@ -841,8 +984,8 @@ id = "{plugin_id}"
 kind = "worker"
 
 [compat]
-relay = ">=0.8.0,<1.0"
-worker_protocol = "grpc-v1"
+relay = ">=1.0.0,<2.0"
+worker_protocol = "nvidia.nemo.relay.worker.v1"
 
 [defaults]
 enabled = false
@@ -1036,9 +1179,9 @@ fn trust_evaluation_short_circuits_when_policy_is_blocked() {
     let blocked_policy = crate::plugins::policy::EvaluatedDynamicPluginHostPolicy {
         native_diagnostics_read_context: false,
         policy_satisfied: false,
-        startup_class: nemo_relay::plugin::dynamic::DynamicPluginStartupClass::Required,
+        startup_class: nemo_relay_plugin_host::dynamic::DynamicPluginStartupClass::Required,
         attestation_mode:
-            nemo_relay::plugin::dynamic::DynamicPluginAttestationMode::SignatureRequired,
+            nemo_relay_plugin_host::dynamic::DynamicPluginAttestationMode::SignatureRequired,
         trusted_public_keys: Vec::new(),
         failure: Some(crate::plugins::policy::DynamicPluginHostPolicyFailure::Blocked),
     };
@@ -1072,7 +1215,7 @@ id = "{plugin_id}"
 kind = "rust_dynamic"
 
 [compat]
-relay = ">=0.8.0,<1.0"
+relay = ">=1.0.0,<2.0"
 native_api = "1"
 
 [defaults]
@@ -1223,8 +1366,8 @@ id = "acme.snapshot-race"
 kind = "worker"
 
 [compat]
-relay = ">=0.8.0,<1.0"
-worker_protocol = "grpc-v1"
+relay = ">=1.0.0,<2.0"
+worker_protocol = "nvidia.nemo.relay.worker.v1"
 
 [defaults]
 enabled = false
@@ -1379,7 +1522,7 @@ id = "acme.external-native-closure"
 kind = "rust_dynamic"
 
 [compat]
-relay = ">=0.8.0,<1.0"
+relay = ">=1.0.0,<2.0"
 native_api = "1"
 
 [defaults]
@@ -3286,7 +3429,7 @@ fn active_dynamic_plugin_components_accept_worker_records_without_manifest_ref()
         .expect("worker record should exist")
         .source
         .manifest_ref = None;
-    scope.registry = nemo_relay::plugin::dynamic::DynamicPluginRegistry::from_records(records)
+    scope.registry = nemo_relay_plugin_host::dynamic::DynamicPluginRegistry::from_records(records)
         .expect("registry should accept worker without manifest_ref");
     scope.save().unwrap();
 
@@ -5190,7 +5333,7 @@ fn required_lifecycle_record(
     let scopes = load_scoped_registries(None).unwrap();
     let mut entry = find_record_by_id(&scopes, plugin_id).unwrap().unwrap();
     entry.record.status.startup_class =
-        Some(nemo_relay::plugin::dynamic::DynamicPluginStartupClass::Required);
+        Some(nemo_relay_plugin_host::dynamic::DynamicPluginStartupClass::Required);
     entry
 }
 
@@ -5323,7 +5466,7 @@ fn required_startup_failure_accepts_optional_and_readable_plugins() {
     assert_eq!(required_startup_failure(&entry, &[]), None);
 
     entry.record.status.startup_class =
-        Some(nemo_relay::plugin::dynamic::DynamicPluginStartupClass::Optional);
+        Some(nemo_relay_plugin_host::dynamic::DynamicPluginStartupClass::Optional);
     entry.record.status.validation.policy_satisfied = DynamicPluginCheckState::Invalid;
     assert_eq!(required_startup_failure(&entry, &[]), None);
 }
@@ -5537,7 +5680,7 @@ fn gateway_skips_optional_plugins_with_failed_integrity_or_attestation() {
         );
 
         resolved.dynamic_plugin_policy.defaults.attestation =
-            Some(nemo_relay::plugin::dynamic::DynamicPluginAttestationMode::SignatureRequired);
+            Some(nemo_relay_plugin_host::dynamic::DynamicPluginAttestationMode::SignatureRequired);
         assert!(
             active_dynamic_plugin_components(None, &resolved)
                 .unwrap()
@@ -5560,7 +5703,7 @@ fn gateway_skips_optional_plugins_with_failed_integrity_or_attestation() {
         assert!(enforce_required_dynamic_plugin_startup(None, &resolved).is_ok());
 
         resolved.dynamic_plugin_policy.defaults.startup =
-            Some(nemo_relay::plugin::dynamic::DynamicPluginStartupClass::Required);
+            Some(nemo_relay_plugin_host::dynamic::DynamicPluginStartupClass::Required);
         assert!(enforce_required_dynamic_plugin_startup(None, &resolved).is_err());
     }
 }
@@ -5606,4 +5749,88 @@ fn streamed_integrity_hashes_preserve_existing_digest_formats_and_snapshot_bytes
     )
     .unwrap();
     assert_eq!(std::fs::read(destination).unwrap(), payload);
+}
+
+#[test]
+fn incompatible_workers_cannot_activate_after_validation_refresh() {
+    let temp = tempfile::tempdir().unwrap();
+    let _env = EnvScope::hermetic(&temp);
+    let _cwd = CurrentDirGuard::enter(temp.path());
+    let id = "acme.incompatible-worker";
+    let plugin_dir = temp.path().join("plugin");
+    std::fs::create_dir_all(&plugin_dir).unwrap();
+    let manifest_path = write_dynamic_manifest(&plugin_dir, id);
+    let server = GatewayOverrides::default();
+    add(
+        PluginsAddRequest {
+            scope: ConfigurationScope::User,
+            path: plugin_dir,
+        },
+        &server,
+    )
+    .unwrap();
+    enable(PluginsEnableRequest { id: id.into() }, &server).unwrap();
+    let mut resolved = resolve_plugins_config(None).unwrap();
+    allow_unsigned_test_plugins(&mut resolved);
+    resolved.dynamic_plugin_policy.defaults.startup =
+        Some(nemo_relay_plugin_host::dynamic::DynamicPluginStartupClass::Required);
+    assert_eq!(
+        active_dynamic_plugin_components(None, &resolved)
+            .unwrap()
+            .len(),
+        1
+    );
+    for stale_manifest in [false, true] {
+        let mut scopes = load_and_hydrate_scopes(None, &resolved).unwrap();
+        let entry = find_record_by_id(&scopes, id).unwrap().unwrap();
+        let scope = &mut scopes[entry.scope_index];
+        let mut records = scope.registry.cloned_records(true);
+        let record = records
+            .iter_mut()
+            .find(|record| record.metadata.id == id)
+            .unwrap();
+        // Invalid workers must be excluded before even snapshotting the manifest directory.
+        record.source.manifest_ref = Some(
+            temp.path()
+                .join("missing/relay-plugin.toml")
+                .display()
+                .to_string(),
+        );
+        if !stale_manifest {
+            let nemo_relay_plugin_host::dynamic::DynamicPluginCompatibility::Worker(compatibility) =
+                &mut record.compatibility
+            else {
+                unreachable!()
+            };
+            compatibility.worker_protocol = "grpc-v1".into();
+        }
+        scope.registry =
+            nemo_relay_plugin_host::dynamic::DynamicPluginRegistry::from_records(records).unwrap();
+        let (mut manifest, manifest_ref) =
+            load_manifest_for_action("test", &manifest_path).unwrap();
+        if stale_manifest {
+            manifest.compat.worker_protocol = Some("grpc-v1".into());
+        }
+        let policy =
+            evaluate_dynamic_plugin_host_policy(&resolved.dynamic_plugin_policy, &manifest);
+        let trust = evaluate_dynamic_plugin_trust(&manifest, &manifest_ref, &policy);
+        update_registry_validation_status(scope, id, &manifest, &policy, &trust).unwrap();
+        let record = scope.registry.get(id).unwrap();
+        assert!(record.spec.enabled);
+        assert_eq!(
+            record.status.validation.compatibility,
+            DynamicPluginCheckState::Invalid
+        );
+        for snapshots in [false, true] {
+            assert!(
+                active_dynamic_plugin_components_from_scopes(&scopes, &resolved, snapshots)
+                    .unwrap()
+                    .is_empty()
+            );
+        }
+        let entry = find_record_by_id(&scopes, id).unwrap().unwrap();
+        let failure = required_startup_failure(&entry, &resolved.dynamic_plugins).unwrap();
+        assert!(failure.contains(id), "{failure}");
+        assert!(failure.contains("rebuild and reinstall"), "{failure}");
+    }
 }

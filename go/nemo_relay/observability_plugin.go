@@ -188,7 +188,8 @@ func (config ObservabilityAtofStreamSinkConfig) MarshalJSON() ([]byte, error) {
 	}{Type: "stream", alias: alias(config)})
 }
 
-// ObservabilityAtofEndpoint is the deprecated name for an ATOF stream sink.
+// ObservabilityAtofEndpoint is the former name of ObservabilityAtofStreamSinkConfig.
+//
 // Deprecated: Use ObservabilityAtofStreamSinkConfig.
 type ObservabilityAtofEndpoint = ObservabilityAtofStreamSinkConfig
 

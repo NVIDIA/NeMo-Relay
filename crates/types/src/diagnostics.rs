@@ -36,6 +36,11 @@ pub use catalogue::{
 };
 mod reason;
 pub use reason::DiagnosticReadReason;
+mod http;
+pub use http::{
+    DiagnosticHttpError, DiagnosticHttpErrorDetails, DiagnosticHttpReason,
+    MAX_DIAGNOSTIC_HTTP_ERROR_BYTES,
+};
 mod recording;
 pub use recording::{EvidenceDisposition, RecordOutcome, RecordReceipt};
 mod number;
@@ -67,8 +72,9 @@ mod snapshot;
 pub use snapshot::{ComponentSnapshot, DiagnosticSnapshot};
 
 /// Side-effect-free discovery, available even when snapshot queries are disabled.
-#[derive(Debug, Clone, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
-#[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
+#[derive(
+    Debug, Clone, PartialEq, Eq, serde::Serialize, serde::Deserialize, schemars::JsonSchema,
+)]
 pub struct DiagnosticDiscovery {
     /// Version of this discovery contract.
     pub discovery_version: u32,
@@ -118,8 +124,9 @@ pub struct DiagnosticDiscovery {
 
 /// One finite integration entry. Support is independent of collection enablement,
 /// configured/admitted registrations, observed evidence, and read authority.
-#[derive(Debug, Clone, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
-#[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
+#[derive(
+    Debug, Clone, PartialEq, Eq, serde::Serialize, serde::Deserialize, schemars::JsonSchema,
+)]
 pub struct DiagnosticProducerSupport {
     /// Stable integration name; unfamiliar names may be preserved by consumers.
     pub name: String,
