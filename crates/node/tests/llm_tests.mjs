@@ -3,7 +3,7 @@
 
 import { describe, it } from 'node:test';
 import assert from 'node:assert/strict';
-import { execFileSync } from 'node:child_process';
+import { execFileSync, spawnSync } from 'node:child_process';
 import { createRequire } from 'node:module';
 import { readFileSync } from 'node:fs';
 import path from 'node:path';
@@ -4240,5 +4240,55 @@ describe('LLM event fields', () => {
       deregisterSubscriber('node_llm_field_sub');
       popScope(scope);
     }
+  });
+});
+
+describe('process exit with queued codec callbacks', () => {
+  it('refuses a response codec call queued during exit instead of aborting the process', () => {
+    const script = `
+      const {
+        LlmRequest,
+        llmCallExecute,
+        registerLlmSanitizeResponseGuardrail,
+        OpenAIChatCodec,
+      } = require(${JSON.stringify(path.join(nodeDir, 'index.js'))});
+      let release;
+      registerLlmSanitizeResponseGuardrail('exit_window', 10, (response) => new Promise((resolve) => {
+        release = () => resolve(response);
+      }));
+      const codec = new OpenAIChatCodec();
+      process.on('exit', () => {
+        release();
+        Promise.resolve().then(() => {}).then(() => {}).then(() => {}).then(() => {
+          const end = Date.now() + 300;
+          while (Date.now() < end) {}
+        });
+      });
+      (async () => {
+        await llmCallExecute(
+          'openai-chat',
+          new LlmRequest({}, { model: 'gpt-4o-mini', messages: [] }),
+          () => ({ choices: [] }),
+          null,
+          null,
+          null,
+          null,
+          'gpt-4o-mini',
+          (request) => codec.decode(request),
+          (args) => codec.encode(args.annotated, args.original),
+          (response) => codec.decodeResponse(response),
+        );
+        while (release === undefined) {
+          await new Promise((resolve) => setTimeout(resolve, 1));
+        }
+      })();
+    `;
+    const result = spawnSync(process.execPath, ['--eval', script], { encoding: 'utf8', timeout: 30_000 });
+    assert.equal(result.signal, null, result.stderr);
+    assert.equal(result.status, 0, result.stderr);
+    assert.match(
+      result.stderr,
+      /JS response codec decode callback failed: could not queue the callback: Node environment is shutting down/,
+    );
   });
 });
