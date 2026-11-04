@@ -67,8 +67,26 @@ class DocsRetentionTests(unittest.TestCase):
         self.publish("0.11.0")
         self.assert_layout(["v0.11.0", "v0.10.4"], "v0.11.0")
 
-    def test_prerelease_only_layout_has_no_dangling_latest(self) -> None:
+    def test_patch_prereleases_preserve_newest_stable_until_promotion(self) -> None:
+        self.publish("0.7.0", "0.8.0", "0.9.0", "0.10.0", "0.11.0")
+        for tag in ("0.11.1-beta.1", "0.11.1-rc.1"):
+            with self.subTest(tag=tag):
+                self.publish(tag)
+                expected = ["v0.11.1", "v0.11.0", "v0.10.0", "v0.9.0", "v0.8.0", "v0.7.0"]
+                self.assert_layout(expected, "v0.11.0")
+                stable_page = self.target / "fern" / "pages-v0.11.0" / "guide.mdx"
+                self.assertIn("blob/0.11.0/README.md", stable_page.read_text())
+                SYNC.sync_dev(self.source, self.target)
+                self.assert_layout(expected, "v0.11.0")
+        self.publish("0.11.1")
+        self.assert_layout(["v0.11.1", "v0.10.0", "v0.9.0", "v0.8.0", "v0.7.0"], "v0.11.1")
+
+    def test_patch_prerelease_preserves_only_stable_snapshot(self) -> None:
         self.publish("0.10.0", "0.10.1-rc.1")
+        self.assert_layout(["v0.10.1", "v0.10.0"], "v0.10.0")
+
+    def test_prerelease_only_layout_has_no_dangling_latest(self) -> None:
+        self.publish("0.10.0-beta.1", "0.10.1-rc.1")
         self.assert_layout(["v0.10.1"], None)
 
     def test_repository_redirects_survive_release_retention_and_dev_sync(self) -> None:
