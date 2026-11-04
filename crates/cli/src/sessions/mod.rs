@@ -3435,28 +3435,31 @@ impl Session {
         self.tool_argument_transform.take()
     }
 
-    // Emits a mark event after ensuring an enclosing scope exists. Generic and unknown hooks use
-    // this path so unsupported agent events remain visible without changing scope structure.
-    //
-    // Which scope encloses it depends on the harness. Codex and Claude Code report no turn start,
-    // so a mark has to open the turn it belongs to or it would have nowhere to land. pi does
-    // report one, and for it a mark arriving between turns is genuinely between turns -- run-level
-    // events such as `agent_end` and `agent_settled` trail the last `turn_end`, and opening a turn
-    // for them produced an empty turn scope at the end of every run.
+    // Most Claude/Codex marks lazily open a turn when none is active. Claude notifications do
+    // not establish turn boundaries and can remain orphan marks. Pi reports turn starts
+    // explicitly, so marks between its turns must not open one either. Explicit child ownership
+    // remains independent of these root-turn rules.
     fn mark(&mut self, name: &str, event_payload: SessionEvent) -> Result<(), CliError> {
+        let claude_notification =
+            self.agent_kind == AgentKind::ClaudeCode && name == "notification";
         let child_parent = self
             .child_turn_owner(&event_payload)
             .filter(|id| self.subagents.contains_key(id))
             .and_then(|id| self.child_work_scope(&id));
-        if child_parent.is_none() {
+        if child_parent.is_none() && !claude_notification {
             if self.agent_kind.has_explicit_turn_start() {
                 self.ensure_agent_started(event_payload.metadata.clone())?;
             } else {
                 self.ensure_turn_started(event_payload.metadata.clone())?;
             }
         }
-        let mut metadata = event_payload.metadata;
-        self.insert_agent_version(&mut metadata);
+        let metadata = if claude_notification {
+            self.scope_metadata(event_payload.metadata)
+        } else {
+            let mut metadata = event_payload.metadata;
+            self.insert_agent_version(&mut metadata);
+            metadata
+        };
         emit_mark_event(
             EmitMarkEventParams::builder()
                 .name(name)
