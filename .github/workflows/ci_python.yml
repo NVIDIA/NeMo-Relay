@@ -106,6 +106,7 @@ jobs:
         with:
           cache: false
           toolchain: ${{ steps.ci-config.outputs.rust_version }}
+          components: llvm-tools
 
       - uses: Swatinem/rust-cache@c19371144df3bb44fab255c43d04cbc2ab54d1c4 # v2.9.1
         with:
@@ -152,17 +153,33 @@ jobs:
         run: just --set ci true --set output_dir "${{ github.workspace }}" test-python-google-adk
 
       - name: Upload Python coverage to Codecov
-        uses: codecov/codecov-action@e53489f4d376d79066609109e7a95a29eb3740b1 # v7.0.0
+        id: codecov-upload
+        continue-on-error: true
+        uses: codecov/codecov-action@fb8b3582c8e4def4969c97caa2f19720cb33a72f # v7.0.0
         with:
           token: ${{ secrets.CODECOV_TOKEN }}
           disable_search: true
           files: >-
             ${{ matrix.platform == 'windows-arm64' && 'python-coverage.xml'
-                || inputs.run_integration_google_adk && 'python-coverage.xml,python-rust.xml,python-google-adk-coverage.xml'
-                || 'python-coverage.xml,python-rust.xml' }}
+                || inputs.run_integration_google_adk && 'python-coverage.xml,python-rust.lcov,python-google-adk-coverage.xml'
+                || 'python-coverage.xml,python-rust.lcov' }}
           flags: python-${{ matrix.platform }}
           name: python-${{ matrix.platform }}
           verbose: true
+          fail_ci_if_error: true
+
+      - name: Record the failed Codecov upload
+        if: ${{ steps.codecov-upload.outcome == 'failure' }}
+        env:
+          MARKER: codecov-upload-failed-python-${{ matrix.platform }}
+        run: printf '%s\n' "$MARKER" > "$MARKER"
+
+      - name: Keep the failed Codecov upload marker
+        if: ${{ steps.codecov-upload.outcome == 'failure' }}
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: codecov-upload-failed-python-${{ matrix.platform }}
+          path: codecov-upload-failed-python-${{ matrix.platform }}
 
       - name: Prune uv cache
         working-directory: ${{ env.NEMO_RELAY_CI_WORKSPACE }}
