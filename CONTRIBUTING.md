@@ -28,8 +28,8 @@ Go and the raw FFI surface are currently experimental and remain source-first.
 Install these tools before you start:
 
 - **Rust** (stable toolchain) -- install with [rustup](https://rustup.rs/)
-- **Protocol Buffers compiler** (`protoc`) >= 31.1 -- required by worker validation dependencies
-- **Buf** >= 1.75.0 -- resolves the pinned worker protobuf validation schema
+- **Protocol Buffers compiler** (`protoc`) 31.1 or later -- needed to build worker validation code
+- **Buf** 1.75.0 or later -- downloads the worker validation schema version recorded in `buf.lock`
 - **Python** >= 3.11 -- use [uv](https://docs.astral.sh/uv/) for environment management
 - **just** -- `cargo install just --locked`
 - **Go** >= 1.21
