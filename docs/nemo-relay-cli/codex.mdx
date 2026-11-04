@@ -584,18 +584,3 @@ Codex can request `/models` during provider discovery, before it launches plugin
 MCP servers. Codex retries the pre-MCP request if it fails. The
 required MCP server still blocks the captured turn and `/responses` request
 until the shared Relay gateway is ready.
-
-## Custom Tool Correlation Hints
-
-Relay recognizes OpenAI Responses function and custom tool calls as provider
-hints for hook ownership. Custom hints retain the invocation `call_id`, tool
-name, and free-form input without parsing that input as JSON. An output item ID
-is not substituted for a missing custom invocation ID.
-
-Direct custom tools, such as `apply_patch`, can match when the host exposes
-the invocation ID on the tool hook. Hints use existing explicit-ID or
-unambiguous name-and-argument matching.
-Ambiguous matches retain fallback ownership. Relay does not rewrite native
-execution IDs or infer that an inner `exec-*` tool execution belongs to a
-`call_*` wrapper from its timing or position. A wrapper-to-execution relationship
-requires an explicit signal from the host.
