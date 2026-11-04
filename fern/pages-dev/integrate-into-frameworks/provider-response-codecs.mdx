@@ -516,7 +516,7 @@ response = await nemo_relay.llm.execute(
 
 <Tab title="Node.js" language="node">
 ```ts
-import { OpenAIChatCodec } from 'nemo-relay-node';
+import { OpenAIChatCodec, flushSubscribers } from 'nemo-relay-node';
 import { JsonPassthrough, typedLlmExecute } from 'nemo-relay-node/typed';
 
 const codec = new OpenAIChatCodec();
@@ -541,6 +541,7 @@ const response = await typedLlmExecute(
     responseCodec: codec,
   },
 );
+await flushSubscribers();
 ```
 </Tab>
 
