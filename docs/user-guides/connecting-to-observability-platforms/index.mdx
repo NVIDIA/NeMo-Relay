@@ -17,7 +17,13 @@ The optional [NVIDIA Brev](https://brev.nvidia.com/) example uses a small Python
 application and [Arize Phoenix](https://arize.com/phoenix/).
 It reads synthetic incident requests, asks a model to prioritize them, and writes
 a handoff. [Nous Research Hermes Agent](https://github.com/NousResearch/hermes-agent)
-is another example choice; neither harness is required for your deployment.
+is an alternative harness; neither example choice is required for your deployment.
+
+<Tip title="Try the complete example on Brev">
+[Run the Brev example](#run-the-brev-example) to provision a CPU VM, capture an
+instrumented Python workload, and verify its traces in Phoenix. The example
+includes all setup; you do not need to complete the linked capture-path guides first.
+</Tip>
 
 ## Before you start
 
@@ -57,7 +63,8 @@ HERMES_NEMO_RELAY_PLUGINS_TOML; a separate CLI gateway is unnecessary.
 </Card>
 </CardGroup>
 
-Confirm capture with one agent or turn scope, one model call, and one tool call.
+For an existing deployment, finish the selected integration setup, then return
+here once you can capture one agent or turn scope, one model call, and one tool call.
 An exporter sends existing events; it does not add instrumentation. The
 [support matrix](/reference/support-matrix) describes each integration's coverage.
 
@@ -132,10 +139,100 @@ Run work with a clear expected outcome. Keep the service name, run time, and
 local event log so you can find the same activity in the destination.
 Approve payload fields and redaction policy before enabling payload capture.
 
-<Accordion title="Brev example: instrumented Python application">
-Use a disposable CPU instance with the [shared runtime setup](/user-guides/about#example-runtimes).
-The SDK example also runs on macOS using the same virtual-environment commands.
-On Brev, connect with `brev shell YOUR_INSTANCE`, then:
+## 4. Verify capture and destination delivery
+
+Accept the integration when all these checks pass:
+
+| Check | Evidence |
+| --- | --- |
+| Correct destination | The intended project and service contain the run at its recorded time. |
+| Captured activity | Expected agent or turn, LLM, and tool spans exist for the chosen capture path. |
+| Correlation | Observed calls share the trace and have the expected parents; exported parents are present. |
+| Useful fields | Model identity and usage appear when the capture path supplies them. |
+| Privacy | Restricted payloads are absent or redacted according to the approved policy. |
+
+Local ATOF records prove capture. Inspect the destination tree to prove delivery;
+an HTTP success or a closed model scope alone is insufficient.
+
+### Reference trace
+
+The instrumented Python workload delivered four correlated spans to Phoenix:
+
+```text
+support-triage                       AGENT
+├─ read_file                         TOOL
+├─ openai.chat_completions            LLM
+└─ write_file                        TOOL
+```
+
+The metadata-only and synthetic-redaction runs both passed local parentage and
+Phoenix delivery checks. The redaction run also confirmed that the synthetic
+contact was absent from emitted payloads.
+
+A Hermes run exported 12 spans, including a session, turn, logical-call parents,
+four model calls, and two tools. Counts depend on the workload and capture path.
+Hosted-platform export checks establish request contracts; confirm authenticated
+delivery in your destination.
+
+## Next steps
+
+Apply the same exporter settings to your chosen capture path. Use
+[exporter diagnostics](/configure-plugins/observability/configuration) to distinguish
+capture gaps, authentication failures, and delivery problems.
+
+## Run the Brev example
+
+Follow this section from start to finish. It supplies the instrumentation and
+exporter configuration used by the workload; the earlier manual configuration
+steps explain how to adapt your own deployment. Supporting links are optional.
+
+### 1. Provision and connect to a VM
+
+In the [Brev Console](https://brev.nvidia.com/), create a fresh instance using
+these recommended starting resources. See [Brev provisioning](https://docs.nvidia.com/brev/cli/instance-creation)
+for instance selection; available CPU types depend on your organization and provider.
+
+| Setting | Recommendation |
+| --- | --- |
+| Operating system | Ubuntu 24.04 LTS, x86_64 |
+| CPU and memory | 4 vCPUs and 16 GB RAM |
+| Storage | At least 40 GB |
+| GPU | None; inference runs on the model provider |
+| Access | Administrator account with sudo and outbound HTTPS |
+
+These are starting resources for the example, not Relay sizing requirements.
+Use a separate VM from the other examples, because system-wide plugin policy
+can affect other Relay processes on the same host.
+
+On your **local computer**, install the Brev CLI if needed. On macOS:
+
+```bash
+brew install brevdev/homebrew-brev/brev
+```
+
+For other operating systems, use the [Brev CLI installation instructions](https://docs.nvidia.com/brev/getting-started/quickstart).
+Connect to the instance you created:
+
+```bash
+brev login
+brev refresh
+brev list
+brev shell YOUR_INSTANCE
+```
+
+Run the remaining setup in **Bash on the VM host**.
+
+### 2. Install the runtime and run the workload
+
+```bash
+sudo apt-get update
+sudo apt-get install -y ca-certificates curl git python3.12 python3.12-venv xz-utils
+curl -LsSf https://astral.sh/uv/install.sh | sh
+export PATH="$HOME/.local/bin:$PATH"
+python3.12 --version
+uv --version
+git --version
+```
 
 ```bash
 git clone --depth 1 https://github.com/NVIDIA/NeMo-Relay.git relay-observability
@@ -166,17 +263,31 @@ local event parentage, and Phoenix delivery. It preserves failed runs for inspec
 For a hosted destination, use that recipe's environment variables and
 `--destination langsmith`, `weave`, or `datadog`; `--verify` is Phoenix-specific.
 
-From your local computer, forward the Phoenix UI:
+In another terminal on your **local computer**, forward the Phoenix UI:
 
 ```bash
 brev port-forward YOUR_INSTANCE --port 6006:6006
 ```
 
-Open `http://localhost:6006`. Use `--host` only if both services run on a reachable
-Brev VM host rather than its workspace container.
-</Accordion>
+Open `http://localhost:6006` and find project and service `relay-support-triage`.
+The runner should report successful workload and trace verification. In the trace
+tree, confirm the agent, model, and tool spans have their expected parents.
+Inspect `logs/events.jsonl` and `delivery.json` under the chosen output directory
+if verification fails. Use a new output directory for every run.
 
-<Accordion title="Brev alternative: use Hermes">
+### 3. Check synthetic redaction
+
+Use only the supplied synthetic fixture. This second run explicitly enables
+payloads and an email redaction profile:
+
+```bash
+.venv/bin/python run.py --destination phoenix --output /tmp/relay-triage-redacted --redaction-demo --verify
+```
+
+The runner checks that the synthetic contact is absent from emitted payloads.
+The source file and provider conversation retain it; redaction affects telemetry.
+
+<Accordion title="Optional: use Hermes instead of the Python workload">
 Install and authenticate a Hermes build with native Relay support using the
 [Hermes quickstart](/getting-started/quick-start/hermes). In the same example directory:
 
@@ -189,59 +300,8 @@ Hermes manages its own Relay dependency. Check the NeMo Relay Plugins section
 of `hermes doctor` before running.
 </Accordion>
 
-## 4. Verify capture and destination delivery
+### 4. Clean up
 
-Accept the integration when all these checks pass:
-
-| Check | Evidence |
-| --- | --- |
-| Correct destination | The intended project and service contain the run at its recorded time. |
-| Captured activity | Expected agent or turn, LLM, and tool spans exist for the chosen capture path. |
-| Correlation | Observed calls share the trace and have the expected parents; exported parents are present. |
-| Useful fields | Model identity and usage appear when the capture path supplies them. |
-| Privacy | Restricted payloads are absent or redacted according to the approved policy. |
-
-Local ATOF records prove capture. Inspect the destination tree to prove delivery;
-an HTTP success or a closed model scope alone is insufficient.
-
-<Accordion title="Brev example: verify synthetic redaction">
-Use only the supplied synthetic fixture. This second run explicitly enables
-payloads and an email redaction profile:
-
-```bash
-.venv/bin/python run.py --destination phoenix --output /tmp/relay-triage-redacted --redaction-demo --verify
-```
-
-The runner checks that the synthetic contact is absent from emitted payloads.
-The source file and provider conversation retain it; redaction affects telemetry.
-</Accordion>
-
-### Reference trace
-
-The instrumented Python workload delivered four correlated spans to Phoenix:
-
-```text
-support-triage                       AGENT
-├─ read_file                         TOOL
-├─ openai.chat_completions            LLM
-└─ write_file                        TOOL
-```
-
-The metadata-only and synthetic-redaction runs both passed local parentage and
-Phoenix delivery checks. The redaction run also confirmed that the synthetic
-contact was absent from emitted payloads.
-
-A Hermes run exported 12 spans, including a session, turn, logical-call parents,
-four model calls, and two tools. Counts depend on the workload and capture path.
-Hosted-platform export checks establish request contracts; confirm authenticated
-delivery in your destination.
-
-## Cleanup and next steps
-
-Stop the disposable Phoenix process and retain any evidence you need before
-removing your chosen output directories and virtual environment. Leave shared
-collectors and other users' configurations running.
-
-Apply the same exporter settings to your chosen capture path. Use
-[exporter diagnostics](/configure-plugins/observability/configuration) to distinguish
-capture gaps, authentication failures, and delivery problems.
+Retain the run evidence, stop the Phoenix process you started, and remove the
+example virtual environment and output directories. Stop or delete the Brev
+instance when you finish.

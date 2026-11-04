@@ -18,10 +18,10 @@ process with specific products.
 <Card title="Connecting to Observability Platforms" icon="fa-solid fa-chart-line" href="/user-guides/connecting-to-observability-platforms">
 Bring agent, model, and tool activity into your team's tracing platform.
 </Card>
-<Card title="Deploy Relay to Govern Coding Agents Across an Organization" icon="fa-solid fa-shield" href="/user-guides/govern-coding-agents">
+<Card title="Deploy Relay Across Organization Coding Agents" icon="fa-solid fa-shield" href="/user-guides/govern-coding-agents">
 Apply a shared policy while keeping developers' supported coding harnesses.
 </Card>
-<Card title="Evaluate Model Routing with Switchyard" icon="fa-solid fa-code-branch" href="/user-guides/evaluate-model-routing-with-switchyard">
+<Card title="Routing Models with NeMo Switchyard" icon="fa-solid fa-code-branch" href="/user-guides/evaluate-model-routing-with-switchyard">
 Compare fixed-model and routed tasks before changing a model policy.
 </Card>
 </CardGroup>
@@ -49,9 +49,9 @@ deployment before trying another example. A separate virtual environment does
 not isolate system plugin policy.
 </Warning>
 
-Each guide separates **Your deployment** from **Brev example** instructions.
-Follow the deployment process with your existing setup, or use the example
-panels to see each step in a disposable environment. Accounts, model access,
+Each guide explains the enterprise deployment process first. A self-contained
+**Run the Brev example** section at the end provides provisioning, setup, and
+verification instructions for the selected example. Accounts, model access,
 and compute charges depend on the products you select.
 
 
@@ -65,7 +65,6 @@ uv python install 3.12
 uv python find 3.12
 ```
 
-The routing example also uses Node.js 24.13.1+ and pi 0.84.0.
-Authenticate providers before allowing time for a run: observability makes one
-model request, governance runs two interactive coding sessions, and routing
-runs 27 attempts with `--repeat 3`. Use `--repeat 1` for its first check.
+Each example includes its own runtime installation and prerequisite checks.
+The routing example starts with `--repeat 1`; use repeated trials when evaluating
+a policy for your workload.
