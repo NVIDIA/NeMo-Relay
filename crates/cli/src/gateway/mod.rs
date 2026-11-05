@@ -430,18 +430,34 @@ impl CapturedUpstreamFailures {
         FlowError::Internal(format!("{CAPTURED_UPSTREAM_FAILURE_PREFIX}{token}"))
     }
 
+    /// Takes the single distinct captured attempt named in a worker-wrapped error.
+    ///
+    /// Repeated mentions of the same token are allowed in gRPC error dumps.
+    /// Ambiguous messages leave every captured failure available for later retrieval.
     fn take(&self, error: &FlowError) -> Option<CapturedUpstreamFailure> {
         let FlowError::Internal(message) = error else {
             return None;
         };
-        let token = message
-            .strip_prefix(CAPTURED_UPSTREAM_FAILURE_PREFIX)?
-            .parse()
-            .ok()?;
-        self.entries
+        let mut entries = self
+            .entries
             .lock()
-            .expect("captured upstream failures lock poisoned")
-            .remove(&token)
+            .expect("captured upstream failures lock poisoned");
+        let mut tokens = message
+            .split(CAPTURED_UPSTREAM_FAILURE_PREFIX)
+            .skip(1)
+            .filter_map(|suffix| {
+                suffix
+                    .split(|c: char| !c.is_alphanumeric() && c != '-' && c != '_')
+                    .next()?
+                    .parse::<uuid::Uuid>()
+                    .ok()
+            })
+            .filter(|token| entries.contains_key(token));
+        let token = tokens.next()?;
+        if tokens.any(|other| other != token) {
+            return None;
+        }
+        entries.remove(&token)
     }
 }
 
