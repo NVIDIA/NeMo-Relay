@@ -5437,6 +5437,7 @@ async fn inferred_skill_load_hook_marks_use_the_stable_event_contract() {
         "expected one inferred skill mark: {events:#?}"
     );
     assert_eq!(marks[0]["data"], json!({"skill_name": "review"}));
+    assert_eq!(marks[0]["metadata"]["session_id"], "inferred-skill-load");
     assert_eq!(marks[0]["metadata"]["agent_kind"], "claude-code");
     assert_eq!(
         marks[0]["metadata"]["skill_load_source"],
@@ -5905,6 +5906,9 @@ async fn claude_direct_gateway_request_seeds_turn_input_before_prompt_hook() {
                 .metadata()
                 .and_then(|metadata| metadata.get("session_id"))
                 .and_then(Value::as_str);
+            if event_session_id != Some("claude-direct-race") {
+                return;
+            }
             if event.name() == "prompt_submitted"
                 && event.data().cloned().unwrap_or(Value::Null)
                     == json!({ "prompt": "inspect direct mode" })
@@ -5914,9 +5918,6 @@ async fn claude_direct_gateway_request_seeds_turn_input_before_prompt_hook() {
                     "data": event.data().cloned().unwrap_or(Value::Null),
                     "metadata": event.metadata().cloned().unwrap_or(Value::Null)
                 }));
-                return;
-            }
-            if event_session_id != Some("claude-direct-race") {
                 return;
             }
             if event.scope_category() == Some(ScopeCategory::Start)

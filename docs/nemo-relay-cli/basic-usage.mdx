@@ -42,10 +42,12 @@ The adapters preserve vendor fields such as session IDs, working directories,
 transcript paths, model names, tool payloads, shell payloads, MCP payloads, file
 payloads, user identity, and subagent metadata in NeMo Relay event metadata.
 
-Compaction, notification, and generic hook marks include `session_id` and
-`session_instance_id` in their metadata, along with configured and session
-metadata. Custom subscribers can filter marks by session without parsing the
-agent-specific payload.
+Compaction, notification, generic hook, and `skill.load.inferred` marks include
+`session_id` and `session_instance_id` in their metadata, along with configured
+and session metadata. The `prompt_submitted` mark emitted when a gateway request
+opens the turn before the prompt hook includes the same metadata. Custom
+subscribers can filter these marks by session without parsing the agent-specific
+payload.
 
 For fields copied from the hook payload into event metadata, non-null values
 override configured and session metadata. Relay supplies the session identity
