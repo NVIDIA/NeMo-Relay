@@ -606,6 +606,88 @@ fn atif_storage_http_non_2xx_retries_on_the_next_trajectory() {
 }
 
 #[test]
+fn slow_atif_http_upload_does_not_hold_the_dispatcher_but_flush_waits_for_it() {
+    let _guard = PLUGIN_TEST_LOCK.lock().unwrap();
+    reset_runtime();
+    let delay = Duration::from_millis(1500);
+    let listener = std::net::TcpListener::bind("127.0.0.1:0").expect("bind slow receiver");
+    let endpoint = format!("http://{}/atif", listener.local_addr().unwrap());
+    let received = std::sync::Arc::new(std::sync::atomic::AtomicUsize::new(0));
+    let server_received = std::sync::Arc::clone(&received);
+    let server = std::thread::spawn(move || {
+        let (mut stream, _) = listener.accept().expect("accept upload");
+        let _ = read_http_request(&mut stream);
+        std::thread::sleep(delay);
+        write_http_response(&mut stream, 200);
+        server_received.fetch_add(1, std::sync::atomic::Ordering::SeqCst);
+    });
+    // SAFETY: this uniquely named env var is only touched by this module under the test lock.
+    unsafe {
+        std::env::set_var("NEMO_RELAY_ATIF_HTTP_TEST_TOKEN", "Bearer test-token");
+    }
+    futures::executor::block_on(test_initialize_plugin_host_exact(
+        build_http_observability_config(&[endpoint]),
+    ))
+    .expect("observability plugin should initialize with HTTP storage");
+
+    let (seen_tx, seen_rx) = std::sync::mpsc::channel();
+    let seen_tx = std::sync::Mutex::new(seen_tx);
+    nemo_relay::api::subscriber::register_subscriber(
+        "after-slow-upload",
+        std::sync::Arc::new(move |event: &nemo_relay::api::event::Event| {
+            if event.name() == "after-slow-upload" {
+                let _ = seen_tx.lock().unwrap().send(());
+            }
+        }),
+    )
+    .expect("register probe subscriber");
+
+    let trajectory = push_scope(
+        PushScopeParams::builder()
+            .name("slow-upload")
+            .scope_type(ScopeType::Agent)
+            .build(),
+    )
+    .expect("push agent scope");
+    pop_scope(
+        PopScopeParams::builder()
+            .handle_uuid(&trajectory.uuid)
+            .build(),
+    )
+    .expect("pop agent scope");
+    let later = push_scope(
+        PushScopeParams::builder()
+            .name("after-slow-upload")
+            .scope_type(ScopeType::Custom)
+            .build(),
+    )
+    .expect("push later scope");
+
+    seen_rx
+        .recv_timeout(delay / 3)
+        .expect("a later event should not wait for the slow upload");
+    assert_eq!(received.load(std::sync::atomic::Ordering::SeqCst), 0);
+
+    flush_subscribers().expect("flush should wait for the upload");
+    assert_eq!(
+        received.load(std::sync::atomic::Ordering::SeqCst),
+        1,
+        "flush_subscribers must not return before the upload finishes"
+    );
+
+    pop_scope(PopScopeParams::builder().handle_uuid(&later.uuid).build()).expect("pop later scope");
+    server.join().expect("slow receiver should finish");
+    nemo_relay::api::subscriber::deregister_subscriber("after-slow-upload")
+        .expect("deregister probe subscriber");
+    test_close_plugin_host().expect("plugin teardown should succeed");
+    // SAFETY: cleanup of test-only env var.
+    unsafe {
+        std::env::remove_var("NEMO_RELAY_ATIF_HTTP_TEST_TOKEN");
+    }
+    reset_runtime();
+}
+
+#[test]
 fn s3_test_env_truthy_parsing() {
     assert!(!env_value_is_truthy(None));
     assert!(!env_value_is_truthy(Some("")));

@@ -1669,6 +1669,12 @@ fn atif_shutdown_cleanup(
     manager: Arc<Mutex<AtifDispatcher>>,
     shutdown_storage: AtifStorageList,
 ) -> PluginRegistrationCleanupOutcome {
+    if let Ok(queue) = manager
+        .lock()
+        .map(|guard| Arc::clone(&guard.delivery_queue))
+    {
+        queue.drain();
+    }
     let (work, deregistration_error) = match flush_atif_shutdown_work(&manager) {
         Ok(work) => work,
         Err(error) => return PluginRegistrationCleanupOutcome::NotRemoved(error),
@@ -3248,6 +3254,63 @@ fn shutdown_indexed_opentelemetry_providers(
     errors
 }
 
+/// Runs remote ATIF uploads off the subscriber dispatcher thread, in submission order.
+#[derive(Default)]
+struct AtifDeliveryQueue {
+    sender: Mutex<Option<std::sync::mpsc::Sender<AtifDeliveryJob>>>,
+}
+
+enum AtifDeliveryJob {
+    Deliver(Box<dyn FnOnce() + Send>),
+    Drain(std::sync::mpsc::Sender<()>),
+}
+
+impl AtifDeliveryQueue {
+    fn send(&self, job: AtifDeliveryJob) -> Result<(), AtifDeliveryJob> {
+        let Ok(mut guard) = self.sender.lock() else {
+            return Err(job);
+        };
+        if guard.is_none() {
+            let (sender, receiver) = std::sync::mpsc::channel::<AtifDeliveryJob>();
+            let spawned = std::thread::Builder::new()
+                .name("nemo-relay-atif-delivery".to_string())
+                .spawn(move || {
+                    for job in receiver {
+                        match job {
+                            AtifDeliveryJob::Deliver(work) => work(),
+                            AtifDeliveryJob::Drain(done) => {
+                                let _ = done.send(());
+                            }
+                        }
+                    }
+                });
+            if spawned.is_err() {
+                return Err(job);
+            }
+            *guard = Some(sender);
+        }
+        match guard.as_ref() {
+            Some(sender) => sender.send(job).map_err(|error| error.0),
+            None => Err(job),
+        }
+    }
+
+    fn submit(&self, work: Box<dyn FnOnce() + Send>) {
+        // Delivering inline is slower but keeps the trajectory if the thread is gone.
+        if let Err(AtifDeliveryJob::Deliver(work)) = self.send(AtifDeliveryJob::Deliver(work)) {
+            work();
+        }
+    }
+
+    /// Waits for every upload submitted before this call.
+    fn drain(&self) {
+        let (done, finished) = std::sync::mpsc::channel();
+        if self.send(AtifDeliveryJob::Drain(done)).is_ok() {
+            let _ = finished.recv();
+        }
+    }
+}
+
 struct AtifDispatcher {
     config: AtifSectionConfig,
     agents: HashMap<Uuid, ManagedAtifExporter>,
@@ -3259,6 +3322,7 @@ struct AtifDispatcher {
     fatal_error: Option<String>,
     runtime_failures: Vec<RuntimeDiagnostic>,
     validated_sinks: HashSet<SinkLabel>,
+    delivery_queue: Arc<AtifDeliveryQueue>,
 }
 
 #[derive(Clone, Copy)]
@@ -3378,6 +3442,7 @@ impl AtifDispatcher {
             fatal_error: None,
             runtime_failures: Vec::new(),
             validated_sinks: HashSet::new(),
+            delivery_queue: Arc::default(),
         }
     }
 
@@ -3925,16 +3990,7 @@ fn atif_dispatcher_subscriber(
         let Some((write, targets)) = pending else {
             return;
         };
-        let results = write_atif(&write, storage.as_slice(), &targets);
-        let scope_subscriber = {
-            let Ok(mut guard) = manager.lock() else {
-                return;
-            };
-            guard.complete_scope_write(write.agent_uuid, results)
-        };
-        if let Some((scope_uuid, name)) = scope_subscriber {
-            let _ = try_scope_deregister_subscriber(&scope_uuid, &name);
-        }
+        finish_atif_write(&manager, &storage, write, targets);
     })
 }
 
@@ -3953,17 +4009,71 @@ fn atif_scope_subscriber(
         let Some((write, targets)) = pending else {
             return;
         };
-        let results = write_atif(&write, storage.as_slice(), &targets);
-        let scope_subscriber = {
-            let Ok(mut guard) = manager.lock() else {
-                return;
-            };
-            guard.complete_scope_write(write.agent_uuid, results)
-        };
-        if let Some((scope_uuid, name)) = scope_subscriber {
-            let _ = try_scope_deregister_subscriber(&scope_uuid, &name);
-        }
+        finish_atif_write(&manager, &storage, write, targets);
     })
+}
+
+/// Writes local copies inline and hands remote uploads to the delivery queue.
+///
+/// Subscriber callbacks run on the process-wide dispatcher thread, so waiting on a
+/// receiver here would stall every session behind it. The retained publication
+/// keeps `flush_subscribers` waiting for the upload; a hook's delivery receipt
+/// does not.
+fn finish_atif_write(
+    manager: &Arc<Mutex<AtifDispatcher>>,
+    storage: &AtifStorageList,
+    write: PendingAtifWrite,
+    targets: Vec<SinkLabel>,
+) {
+    let (remote, local): (Vec<_>, Vec<_>) = targets
+        .into_iter()
+        .partition(|label| matches!(label, SinkLabel::Remote(_)));
+    let local_results = write_atif(&write, storage.as_slice(), &local);
+    if remote.is_empty() {
+        complete_atif_write(manager, write.agent_uuid, local_results);
+        return;
+    }
+    let queue = {
+        let Ok(guard) = manager.lock() else {
+            return;
+        };
+        Arc::clone(&guard.delivery_queue)
+    };
+    let retained = crate::api::runtime::subscriber_dispatcher::retain_current_publication();
+    let manager = Arc::clone(manager);
+    let storage = Arc::clone(storage);
+    queue.submit(Box::new(move || {
+        let _retained = retained;
+        let mut results = local_results;
+        if results.is_empty() {
+            results = write_atif(&write, storage.as_slice(), &remote);
+        } else {
+            results.extend(remote.iter().filter_map(|label| match label {
+                SinkLabel::Remote(index) => Some((
+                    label.clone(),
+                    write_atif_remote(storage.as_slice(), *index, &write),
+                )),
+                SinkLabel::Local => None,
+            }));
+        }
+        complete_atif_write(&manager, write.agent_uuid, results);
+    }));
+}
+
+fn complete_atif_write(
+    manager: &Arc<Mutex<AtifDispatcher>>,
+    agent_uuid: Uuid,
+    results: Vec<(SinkLabel, std::io::Result<()>)>,
+) {
+    let scope_subscriber = {
+        let Ok(mut guard) = manager.lock() else {
+            return;
+        };
+        guard.complete_scope_write(agent_uuid, results)
+    };
+    if let Some((scope_uuid, name)) = scope_subscriber {
+        let _ = try_scope_deregister_subscriber(&scope_uuid, &name);
+    }
 }
 
 fn prepare_atif_file(
