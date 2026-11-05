@@ -1831,6 +1831,8 @@ async fn nests_agent_subagent_and_tool_lifecycle() {
         max_hook_payload_bytes: crate::configuration::DEFAULT_MAX_HOOK_PAYLOAD_BYTES,
         launched_agent: None,
         max_passthrough_body_bytes: crate::configuration::DEFAULT_MAX_PASSTHROUGH_BODY_BYTES,
+        openai_oidc: None,
+        anthropic_oidc: None,
     };
     let manager = SessionManager::new(config);
     let headers = HeaderMap::new();
@@ -3928,6 +3930,8 @@ async fn writes_atif_on_session_end_from_plugin_config() {
         max_hook_payload_bytes: crate::configuration::DEFAULT_MAX_HOOK_PAYLOAD_BYTES,
         launched_agent: None,
         max_passthrough_body_bytes: crate::configuration::DEFAULT_MAX_PASSTHROUGH_BODY_BYTES,
+        openai_oidc: None,
+        anthropic_oidc: None,
     };
     let manager = SessionManager::new(config);
     let mut headers = HeaderMap::new();
@@ -5133,6 +5137,8 @@ async fn duplicate_agent_end_does_not_overwrite_atif_with_empty_session() {
         max_hook_payload_bytes: crate::configuration::DEFAULT_MAX_HOOK_PAYLOAD_BYTES,
         launched_agent: None,
         max_passthrough_body_bytes: crate::configuration::DEFAULT_MAX_PASSTHROUGH_BODY_BYTES,
+        openai_oidc: None,
+        anthropic_oidc: None,
     };
     let manager = SessionManager::new(config);
     let headers = HeaderMap::new();
@@ -5466,6 +5472,8 @@ async fn handles_out_of_order_subagent_and_tool_end_events() {
         max_hook_payload_bytes: crate::configuration::DEFAULT_MAX_HOOK_PAYLOAD_BYTES,
         launched_agent: None,
         max_passthrough_body_bytes: crate::configuration::DEFAULT_MAX_PASSTHROUGH_BODY_BYTES,
+        openai_oidc: None,
+        anthropic_oidc: None,
     };
     let manager = SessionManager::new(config);
     let headers = HeaderMap::new();
@@ -5552,6 +5560,8 @@ async fn out_of_order_started_subagent_end_does_not_leak_scope() {
         max_hook_payload_bytes: crate::configuration::DEFAULT_MAX_HOOK_PAYLOAD_BYTES,
         launched_agent: None,
         max_passthrough_body_bytes: crate::configuration::DEFAULT_MAX_PASSTHROUGH_BODY_BYTES,
+        openai_oidc: None,
+        anthropic_oidc: None,
     };
     let manager = SessionManager::new(config);
     let headers = HeaderMap::new();
@@ -5634,6 +5644,8 @@ async fn agent_end_closes_nested_active_subagents_lifo() {
         max_hook_payload_bytes: crate::configuration::DEFAULT_MAX_HOOK_PAYLOAD_BYTES,
         launched_agent: None,
         max_passthrough_body_bytes: crate::configuration::DEFAULT_MAX_PASSTHROUGH_BODY_BYTES,
+        openai_oidc: None,
+        anthropic_oidc: None,
     };
     let manager = SessionManager::new(config);
     let headers = HeaderMap::new();
@@ -5700,6 +5712,8 @@ async fn llm_lifecycle_starts_implicit_gateway_session() {
         max_hook_payload_bytes: crate::configuration::DEFAULT_MAX_HOOK_PAYLOAD_BYTES,
         launched_agent: None,
         max_passthrough_body_bytes: crate::configuration::DEFAULT_MAX_PASSTHROUGH_BODY_BYTES,
+        openai_oidc: None,
+        anthropic_oidc: None,
     };
     let manager = SessionManager::new(config);
     let active = manager
@@ -6506,6 +6520,8 @@ async fn llm_lifecycle_uses_single_active_hook_session_when_header_is_missing() 
         max_hook_payload_bytes: crate::configuration::DEFAULT_MAX_HOOK_PAYLOAD_BYTES,
         launched_agent: None,
         max_passthrough_body_bytes: crate::configuration::DEFAULT_MAX_PASSTHROUGH_BODY_BYTES,
+        openai_oidc: None,
+        anthropic_oidc: None,
     };
     let manager = SessionManager::new(config);
     manager
@@ -6651,6 +6667,8 @@ async fn single_pending_llm_hint_claims_next_gateway_llm() {
         max_hook_payload_bytes: crate::configuration::DEFAULT_MAX_HOOK_PAYLOAD_BYTES,
         launched_agent: None,
         max_passthrough_body_bytes: crate::configuration::DEFAULT_MAX_PASSTHROUGH_BODY_BYTES,
+        openai_oidc: None,
+        anthropic_oidc: None,
     };
     let manager = SessionManager::new(config);
     manager
@@ -6758,6 +6776,8 @@ async fn multiple_llm_hints_resolve_by_generation_id() {
         max_hook_payload_bytes: crate::configuration::DEFAULT_MAX_HOOK_PAYLOAD_BYTES,
         launched_agent: None,
         max_passthrough_body_bytes: crate::configuration::DEFAULT_MAX_PASSTHROUGH_BODY_BYTES,
+        openai_oidc: None,
+        anthropic_oidc: None,
     };
     let manager = SessionManager::new(config);
     manager
@@ -6883,6 +6903,8 @@ async fn ambiguous_llm_hints_fall_back_to_agent_scope() {
         max_hook_payload_bytes: crate::configuration::DEFAULT_MAX_HOOK_PAYLOAD_BYTES,
         launched_agent: None,
         max_passthrough_body_bytes: crate::configuration::DEFAULT_MAX_PASSTHROUGH_BODY_BYTES,
+        openai_oidc: None,
+        anthropic_oidc: None,
     };
     let manager = SessionManager::new(config);
     manager
@@ -6986,6 +7008,8 @@ async fn no_active_hint_reuses_last_llm_owner() {
         max_hook_payload_bytes: crate::configuration::DEFAULT_MAX_HOOK_PAYLOAD_BYTES,
         launched_agent: None,
         max_passthrough_body_bytes: crate::configuration::DEFAULT_MAX_PASSTHROUGH_BODY_BYTES,
+        openai_oidc: None,
+        anthropic_oidc: None,
     };
     let manager = SessionManager::new(config);
     manager
@@ -8831,6 +8855,8 @@ fn session_test_config() -> GatewayConfig {
         max_hook_payload_bytes: crate::configuration::DEFAULT_MAX_HOOK_PAYLOAD_BYTES,
         launched_agent: None,
         max_passthrough_body_bytes: crate::configuration::DEFAULT_MAX_PASSTHROUGH_BODY_BYTES,
+        openai_oidc: None,
+        anthropic_oidc: None,
     }
 }
 
@@ -8855,6 +8881,8 @@ async fn turn_ended_is_noop_without_active_turn_scope() {
         max_hook_payload_bytes: crate::configuration::DEFAULT_MAX_HOOK_PAYLOAD_BYTES,
         launched_agent: None,
         max_passthrough_body_bytes: crate::configuration::DEFAULT_MAX_PASSTHROUGH_BODY_BYTES,
+        openai_oidc: None,
+        anthropic_oidc: None,
     };
     let manager = SessionManager::new(config);
     manager

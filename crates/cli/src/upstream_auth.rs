@@ -58,13 +58,14 @@ fn default_timeout_ms() -> u64 {
 }
 
 pub(crate) fn validate_config(config: &GatewayConfig) -> Result<(), CliError> {
-    for (provider, base_url, key, header, helper) in [
+    for (provider, base_url, key, header, helper, oidc) in [
         (
             "openai",
             &config.openai_base_url,
             &config.openai_api_key,
             &config.openai_auth_header,
             &config.openai_api_key_helper,
+            &config.openai_oidc,
         ),
         (
             "anthropic",
@@ -72,23 +73,28 @@ pub(crate) fn validate_config(config: &GatewayConfig) -> Result<(), CliError> {
             &config.anthropic_api_key,
             &config.anthropic_auth_header,
             &config.anthropic_api_key_helper,
+            &config.anthropic_oidc,
         ),
     ] {
         if reqwest::Url::parse(base_url).is_ok_and(|url| crate::configuration::remote_http(&url))
-            && (key.is_some() || header.is_some() || helper.is_some())
+            && (key.is_some() || header.is_some() || helper.is_some() || oidc.is_some())
         {
             return Err(CliError::Config(format!(
-                "upstream.{provider}: remote HTTP model upstreams cannot configure api_key, auth_header, or api_key_helper"
+                "upstream.{provider}: remote HTTP model upstreams cannot configure api_key, auth_header, or api_key_helper, or oidc"
             )));
         }
         if usize::from(key.is_some())
             + usize::from(header.is_some())
             + usize::from(helper.is_some())
+            + usize::from(oidc.is_some())
             > 1
         {
             return Err(CliError::Config(format!(
-                "upstream.{provider}: api_key, auth_header, and api_key_helper are mutually exclusive"
+                "upstream.{provider}: api_key, auth_header, api_key_helper, and oidc are mutually exclusive"
             )));
+        }
+        if let Some(oidc) = oidc {
+            oidc.validate(&format!("upstream.{provider}_oidc"))?;
         }
         if let Some(helper) = helper {
             if helper.command.trim().is_empty() || helper.timeout_ms == 0 {
@@ -117,11 +123,11 @@ pub(crate) fn validate_config(config: &GatewayConfig) -> Result<(), CliError> {
 pub(crate) fn warn_ignored_environment(config: &GatewayConfig) {
     for (enabled, names) in [
         (
-            config.openai_api_key_helper.is_some(),
+            mints_credential(config, false),
             &["OPENAI_API_KEY", "NEMO_RELAY_OPENAI_AUTH_HEADER"][..],
         ),
         (
-            config.anthropic_api_key_helper.is_some(),
+            mints_credential(config, true),
             &[
                 "ANTHROPIC_API_KEY",
                 "ANTHROPIC_AUTH_TOKEN",
@@ -136,8 +142,8 @@ pub(crate) fn warn_ignored_environment(config: &GatewayConfig) {
                         target: "nemo_relay.configuration",
                         event = "provider_environment_auth_ignored",
                         environment_variable = *name,
-                        reason = "api_key_helper_configured";
-                        "Provider environment credential ignored because an API key helper is configured"
+                        reason = "relay_credential_configured";
+                        "Provider environment credential ignored because Relay supplies this provider's credential"
                     );
                 }
             }
@@ -153,7 +159,25 @@ pub(crate) fn helper(config: &GatewayConfig, anthropic: bool) -> Option<&ApiKeyH
     }
 }
 
+/// The OpenID Connect sign-in configured for a provider.
+pub(crate) fn oidc(config: &GatewayConfig, anthropic: bool) -> Option<&crate::oidc::OidcSource> {
+    if anthropic {
+        config.anthropic_oidc.as_ref()
+    } else {
+        config.openai_oidc.as_ref()
+    }
+}
+
+/// Whether Relay obtains this provider's credential per request (a helper or a sign-in), which
+/// replaces the caller's credential and must never follow redirects or be retried elsewhere.
+pub(crate) fn mints_credential(config: &GatewayConfig, anthropic: bool) -> bool {
+    helper(config, anthropic).is_some() || oidc(config, anthropic).is_some()
+}
+
 pub(crate) fn has_replacement(config: &GatewayConfig, anthropic: bool) -> bool {
+    if oidc(config, anthropic).is_some() {
+        return true;
+    }
     if anthropic {
         config.anthropic_api_key_helper.is_some()
             || config.anthropic_api_key.is_some()
@@ -272,7 +296,13 @@ pub(crate) async fn apply(
             &config.openai_auth_header,
         )
     };
-    let (name, mut value) = if let Some(helper) = helper {
+    let (name, mut value) = if let Some(oidc) = oidc(config, anthropic) {
+        // Read for each request, so the token's expiry and a logout apply immediately.
+        token_header(
+            &crate::oidc::upstream_token(oidc).await?,
+            AuthScheme::Bearer,
+        )?
+    } else if let Some(helper) = helper {
         let base_url = if anthropic {
             &config.anthropic_base_url
         } else {

@@ -109,6 +109,9 @@ pub(crate) enum CliError {
     PayloadTooLarge(String),
     #[error("unauthorized gateway client: {0}")]
     Unauthorized(String),
+    /// The upstream needs an OpenID Connect sign-in that is missing or no longer valid.
+    #[error("sign-in required: {0}")]
+    SignInRequired(String),
     /// The daemon definitively rejected the route credential; retrying cannot succeed.
     #[error("route credential rejected: {0}")]
     RouteCredentialRejected(String),
@@ -177,6 +180,7 @@ impl CliError {
             Self::InvalidPayload(_) => "invalid_payload",
             Self::PayloadTooLarge(_) => "payload_too_large",
             Self::Unauthorized(_) => "unauthorized",
+            Self::SignInRequired(_) => "sign_in_required",
             Self::RouteCredentialRejected(_) => "route_credential_rejected",
             Self::Upstream(_) | Self::UpstreamTransport(_) => "upstream",
             Self::ProviderFailure(_) => "provider_failure",
@@ -256,9 +260,9 @@ impl IntoResponse for CliError {
 fn response_status(error: &CliError) -> StatusCode {
     match error {
         CliError::PayloadTooLarge(_) => StatusCode::PAYLOAD_TOO_LARGE,
-        CliError::Unauthorized(_) | CliError::RouteCredentialRejected(_) => {
-            StatusCode::UNAUTHORIZED
-        }
+        CliError::Unauthorized(_)
+        | CliError::RouteCredentialRejected(_)
+        | CliError::SignInRequired(_) => StatusCode::UNAUTHORIZED,
         CliError::InvalidPayload(_) => StatusCode::BAD_REQUEST,
         CliError::HookHttpFailure { status, .. } => *status,
         CliError::Upstream(_) | CliError::UpstreamTransport(_) => StatusCode::BAD_GATEWAY,
