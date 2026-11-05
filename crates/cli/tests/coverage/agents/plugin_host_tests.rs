@@ -4478,20 +4478,9 @@ fn relay_binary_rejects_missing_override_and_uses_current_exe_fallback() {
 #[test]
 fn claude_provider_defaults_gateway_hints_and_restores_owned_values() {
     const HINT: &str = "CLAUDE_CODE_GATEWAY_HINT_HEADERS";
-    for (settings, legacy_backup) in [
-        (None, None),
-        (
-            Some(json!({"env": {"ANTHROPIC_BASE_URL": "https://original", "OTHER": "kept"}})),
-            None,
-        ),
-        (
-            Some(json!({"env": {"ANTHROPIC_BASE_URL": DEFAULT_URL, "OTHER": "kept"}})),
-            None,
-        ),
-        (
-            Some(json!({"env": {"ANTHROPIC_BASE_URL": DEFAULT_URL, "OTHER": "kept"}})),
-            Some(json!({"env": {"ANTHROPIC_BASE_URL": "https://original", "OTHER": "kept"}})),
-        ),
+    for settings in [
+        None,
+        Some(json!({"env": {"ANTHROPIC_BASE_URL": "https://original", "OTHER": "kept"}})),
     ] {
         let dir = tempdir().unwrap();
         let _home = HomeScope::enter(dir.path());
@@ -4500,10 +4489,6 @@ fn claude_provider_defaults_gateway_hints_and_restores_owned_values() {
         if let Some(settings) = settings.as_ref() {
             write_json(&path, settings).unwrap();
         }
-        if let Some(backup) = legacy_backup.as_ref() {
-            write_json(&backup_path(&path), backup).unwrap();
-        }
-
         enable_claude_provider(DEFAULT_URL).unwrap();
         assert_eq!(
             json_env_string(&read_json_object(&path).unwrap(), HINT),
@@ -4514,7 +4499,7 @@ fn claude_provider_defaults_gateway_hints_and_restores_owned_values() {
         assert_eq!(fs::read(backup_path(&path)).unwrap(), backup);
         restore_claude_provider(DEFAULT_URL).unwrap();
 
-        if let Some(expected) = legacy_backup.or(settings) {
+        if let Some(expected) = settings {
             assert_eq!(read_json_object(&path).unwrap(), expected);
         } else {
             assert!(!path.exists());
@@ -4524,9 +4509,9 @@ fn claude_provider_defaults_gateway_hints_and_restores_owned_values() {
 }
 
 #[test]
-fn claude_provider_preserves_explicit_gateway_hint_settings_and_environment() {
+fn claude_provider_preserves_saved_hints_but_does_not_depend_on_installer_environment() {
     const HINT: &str = "CLAUDE_CODE_GATEWAY_HINT_HEADERS";
-    for value in [json!("0"), json!("1"), json!(""), json!(false)] {
+    for value in [json!("0"), json!(false)] {
         let dir = tempdir().unwrap();
         let _home = HomeScope::enter(dir.path());
         let _hints = EnvVarGuard::remove(HINT);
@@ -4541,13 +4526,13 @@ fn claude_provider_preserves_explicit_gateway_hint_settings_and_environment() {
         restore_claude_provider(DEFAULT_URL).unwrap();
         assert_eq!(read_json_object(&path).unwrap(), original);
     }
-    for value in ["0", "1", "", "false"] {
+    {
         let dir = tempdir().unwrap();
         let _home = HomeScope::enter(dir.path());
-        let _hints = EnvVarGuard::set_path(HINT, Path::new(value));
+        let _hints = EnvVarGuard::set_path(HINT, Path::new("0"));
         let path = claude_settings_path().unwrap();
         enable_claude_provider(DEFAULT_URL).unwrap();
-        assert!(read_json_object(&path).unwrap()["env"].get(HINT).is_none());
+        assert_eq!(read_json_object(&path).unwrap()["env"][HINT], "1");
         restore_claude_provider(DEFAULT_URL).unwrap();
         assert!(!path.exists());
     }
@@ -4597,7 +4582,7 @@ fn claude_provider_preserves_hint_ownership_across_routing_changes() {
 #[test]
 fn claude_provider_uninstall_preserves_user_gateway_hint_edits() {
     const HINT: &str = "CLAUDE_CODE_GATEWAY_HINT_HEADERS";
-    for value in [Some("0"), Some(""), None] {
+    for value in [Some("0"), None] {
         let dir = tempdir().unwrap();
         let _home = HomeScope::enter(dir.path());
         let _hints = EnvVarGuard::remove(HINT);

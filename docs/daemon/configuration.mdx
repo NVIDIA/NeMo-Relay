@@ -526,7 +526,8 @@ per-client admission controls at the proxy for larger deployments.
 A managed bundle is an administrator-owned deployment artifact, not an output
 of personal `nemo-relay install`. For each agent, platform, and deployment, its
 plugin configuration and settings must remain byte-for-byte identical across
-users and Relay binary releases.
+users. A deployed bundle is immutable; a new Relay release can change the
+generated artifacts.
 
 The bundle follows these rules:
 
@@ -536,8 +537,8 @@ The bundle follows these rules:
 - A stable administrator-owned dispatcher command or path survives Relay
   upgrades.
 - Refresh validates immutable artifacts and never rewrites them.
-- An incompatible settings change uses a separately named v2 artifact rather
-  than replacing v1 bytes.
+- When generated artifacts change, deploy a replacement bundle in a new
+  directory and provision its new digest separately.
 
 Enterprise bootstrap owns credential provisioning and login-environment
 injection. Relay validates the resolved route credential from
@@ -546,9 +547,9 @@ injection. Relay validates the resolved route credential from
 an operating-system-specific login agent.
 
 <Warning>
-NeMo Relay 0.11 intentionally changes the managed v1 Claude hook bundle to
-capture `StopFailure`. Older bundles containing Claude Code no longer match
-the canonical bytes expected by doctor, managed refresh, or output reuse.
+The generated Claude Code bundle captures `StopFailure` and enables gateway
+hints. Older Claude bundles that lack either addition no longer match the
+canonical bytes expected by doctor, managed refresh, or output reuse.
 Generate a replacement in a new directory using the same deployment values,
 deploy it, provision its newly printed digest separately, and update the
 Claude launch paths. Refresh does not migrate or overwrite the old bundle.
@@ -728,15 +729,9 @@ for configuration layers and [Operations](/daemon/operations) for end-to-end che
 
 ### Claude Code
 
-Enable gateway hints in the client bootstrap or managed launcher so Claude Code
-reports each model request's class. The daemon cannot enable these headers for
-its clients. The commands below set a default only when the variable is absent,
-preserving an existing value, including `0`.
-
 Launch Claude Code with both generated artifacts. On Linux and macOS:
 
 ```bash
-export CLAUDE_CODE_GATEWAY_HINT_HEADERS="${CLAUDE_CODE_GATEWAY_HINT_HEADERS-1}"
 claude --plugin-dir /opt/nvidia/share/nemo-relay-managed-v1/claude-code/plugin-v1 \
   --settings /opt/nvidia/share/nemo-relay-managed-v1/claude-code/settings-v1/managed-settings.json
 ```
@@ -744,9 +739,6 @@ claude --plugin-dir /opt/nvidia/share/nemo-relay-managed-v1/claude-code/plugin-v
 On Windows:
 
 ```powershell
-if (-not (Test-Path Env:CLAUDE_CODE_GATEWAY_HINT_HEADERS)) {
-    $env:CLAUDE_CODE_GATEWAY_HINT_HEADERS = '1'
-}
 claude --plugin-dir 'C:\ProgramData\NVIDIA\NeMoRelay\nemo-relay-managed-v1\claude-code\plugin-v1' `
   --settings 'C:\ProgramData\NVIDIA\NeMoRelay\nemo-relay-managed-v1\claude-code\settings-v1\managed-settings.json'
 ```
@@ -755,26 +747,12 @@ Use these arguments in the managed launcher for every session. The filename
 `managed-settings.json` does not itself enforce policy when passed with
 `--settings`; enforced deployments must install it through Claude Code's managed
 settings mechanism. Preserve any existing organization policy when merging its
-`env.ANTHROPIC_BASE_URL` value. The plugin and its MCP/hook files remain unchanged.
+`env` values. The plugin and its MCP/hook files remain unchanged.
 See Claude Code's [plugin loading guide](https://code.claude.com/docs/en/plugins)
 and [settings reference](https://code.claude.com/docs/en/settings).
 
-Claude settings `env` values can override the launch environment. Preserve
-explicit user and administrator settings. To disable hints when a settings
-source enables them, set `CLAUDE_CODE_GATEWAY_HINT_HEADERS` to `0` in that
-settings source rather than relying on a shell override.
-
-Keep the hint setting in the administrator-owned client bootstrap or Claude
-policy, outside the immutable bundle. Do not edit
-`claude-code/settings-v1/managed-settings.json`. Existing bundle bytes and their
-trusted digest remain unchanged. A daemon binary upgrade or managed refresh does
-not configure Claude's environment. Restart Claude after changing its client
-configuration.
-
-Request classes require Claude Code 2.1.273 or newer. When hints are unavailable
-or disabled, Relay records the request class as `unknown`. See
-[Separate Model Request Classes](/nemo-relay-cli/claude-code#separate-model-request-classes)
-for class meanings and export settings.
+For Claude request classes and export settings, see
+[Separate Model Request Classes](/nemo-relay-cli/claude-code#separate-model-request-classes).
 
 Hooks and MCP can use the per-user token file when the launch environment has
 no `NEMO_RELAY_CLIENT_TOKEN`. Gateway model routing still needs

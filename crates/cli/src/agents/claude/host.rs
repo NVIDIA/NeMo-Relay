@@ -68,8 +68,7 @@ pub(crate) fn enable_claude_provider(gateway_url: &str) -> Result<(), String> {
     let add_gateway_hints = settings
         .get("env")
         .and_then(|env| env.get(GATEWAY_HINT_HEADERS_ENV))
-        .is_none()
-        && std::env::var_os(GATEWAY_HINT_HEADERS_ENV).is_none();
+        .is_none();
     let owns_gateway_hints = previous_backup.as_ref().is_some_and(|backup| {
         backup.get(MANAGED_GATEWAY_HINT_HEADERS_BACKUP_KEY) == Some(&Value::Bool(true))
     }) && json_env_string(&settings, GATEWAY_HINT_HEADERS_ENV)

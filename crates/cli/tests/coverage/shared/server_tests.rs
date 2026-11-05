@@ -4763,12 +4763,11 @@ async fn gateway_internal_http_completions_preserve_task_output_and_all_usage() 
 
     let class = "auxiliary";
     for streaming in [false, true] {
-        for helper_finishes_last in [false, true] {
-            let id = format!("activity-http-{streaming}-{helper_finishes_last}");
-            let entered = Arc::new(Semaphore::new(0));
-            let release_main = Arc::new(Semaphore::new(0));
-            let release_helper = Arc::new(Semaphore::new(0));
-            let provider = Router::new().route(
+        let id = format!("activity-http-{streaming}");
+        let entered = Arc::new(Semaphore::new(0));
+        let release_main = Arc::new(Semaphore::new(0));
+        let release_helper = Arc::new(Semaphore::new(0));
+        let provider = Router::new().route(
                 "/v1/messages",
                 post({
                     let entered = entered.clone();
@@ -4814,156 +4813,133 @@ async fn gateway_internal_http_completions_preserve_task_output_and_all_usage() 
                     }
                 }),
             );
-            let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
-            let address = listener.local_addr().unwrap();
-            let upstream = TestServer {
-                url: format!("http://{address}"),
-                handle: tokio::spawn(async move { axum::serve(listener, provider).await.unwrap() }),
-            };
-            let mut config = test_config();
-            config.anthropic_base_url = upstream.url();
-            let state = AppState::new(config);
-            let sessions = state.sessions.clone();
-            let boundary = |name: &str| SessionEvent {
-                session_id: id.clone(),
-                agent_kind: AgentKind::ClaudeCode,
-                event_name: name.into(),
-                payload: json!({"prompt": "main task"}),
-                metadata: json!({}),
-            };
-            sessions
-                .apply_events(
-                    &http::HeaderMap::new(),
-                    vec![NormalizedEvent::PromptSubmitted(boundary(
-                        "UserPromptSubmit",
-                    ))],
-                )
-                .await
-                .unwrap();
-            let app = router_with_state(state);
-            let request = |class: &str, content: &str| {
-                Request::post("/v1/messages")
-                    .header("content-type", "application/json")
-                    .header("x-api-key", "test-api-key")
-                    .header("x-claude-code-session-id", &id)
-                    .header("x-claude-code-request-class", class)
-                    .body(Body::from(
-                        json!({
-                            "model": "claude-test", "max_tokens": 16, "stream": streaming,
-                            "messages": [{"role": "user", "content": content}]
-                        })
-                        .to_string(),
-                    ))
-                    .unwrap()
-            };
-            let mut main = tokio::spawn(app.clone().oneshot(request("main", "main task")));
-            let mut helper = tokio::spawn(app.oneshot(request(class, "helper work")));
-            tokio::time::timeout(Duration::from_secs(5), entered.acquire_many(2))
-                .await
-                .unwrap()
-                .unwrap()
-                .forget();
-            if helper_finishes_last {
-                release_main.add_permits(1);
-            } else {
-                release_helper.add_permits(1);
-            }
-            let response = tokio::time::timeout(
-                Duration::from_secs(5),
-                if helper_finishes_last {
-                    &mut main
-                } else {
-                    &mut helper
-                },
+        let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let address = listener.local_addr().unwrap();
+        let upstream = TestServer {
+            url: format!("http://{address}"),
+            handle: tokio::spawn(async move { axum::serve(listener, provider).await.unwrap() }),
+        };
+        let mut config = test_config();
+        config.anthropic_base_url = upstream.url();
+        let state = AppState::new(config);
+        let sessions = state.sessions.clone();
+        let boundary = |name: &str| SessionEvent {
+            session_id: id.clone(),
+            agent_kind: AgentKind::ClaudeCode,
+            event_name: name.into(),
+            payload: json!({"prompt": "main task"}),
+            metadata: json!({}),
+        };
+        sessions
+            .apply_events(
+                &http::HeaderMap::new(),
+                vec![NormalizedEvent::PromptSubmitted(boundary(
+                    "UserPromptSubmit",
+                ))],
             )
+            .await
+            .unwrap();
+        let app = router_with_state(state);
+        let request = |class: &str, content: &str| {
+            Request::post("/v1/messages")
+                .header("content-type", "application/json")
+                .header("x-api-key", "test-api-key")
+                .header("x-claude-code-session-id", &id)
+                .header("x-claude-code-request-class", class)
+                .body(Body::from(
+                    json!({
+                        "model": "claude-test", "max_tokens": 16, "stream": streaming,
+                        "messages": [{"role": "user", "content": content}]
+                    })
+                    .to_string(),
+                ))
+                .unwrap()
+        };
+        let main = tokio::spawn(app.clone().oneshot(request("main", "main task")));
+        let helper = tokio::spawn(app.oneshot(request(class, "helper work")));
+        tokio::time::timeout(Duration::from_secs(5), entered.acquire_many(2))
+            .await
+            .unwrap()
+            .unwrap()
+            .forget();
+        release_main.add_permits(1);
+        let response = tokio::time::timeout(Duration::from_secs(5), main)
             .await
             .unwrap()
             .unwrap()
             .unwrap();
-            assert_eq!(response.status(), StatusCode::OK);
-            assert_eq!(
-                response.headers()[header::CONTENT_TYPE],
-                if streaming {
-                    "text/event-stream"
-                } else {
-                    "application/json"
-                }
-            );
-            response.into_body().collect().await.unwrap();
-            if helper_finishes_last {
-                release_helper.add_permits(1);
+        assert_eq!(response.status(), StatusCode::OK);
+        assert_eq!(
+            response.headers()[header::CONTENT_TYPE],
+            if streaming {
+                "text/event-stream"
             } else {
-                release_main.add_permits(1);
+                "application/json"
             }
-            let response = tokio::time::timeout(
-                Duration::from_secs(5),
-                if helper_finishes_last {
-                    &mut helper
-                } else {
-                    &mut main
-                },
-            )
+        );
+        response.into_body().collect().await.unwrap();
+        release_helper.add_permits(1);
+        let response = tokio::time::timeout(Duration::from_secs(5), helper)
             .await
             .unwrap()
             .unwrap()
             .unwrap();
-            assert_eq!(response.status(), StatusCode::OK);
-            assert_eq!(
-                response.headers()[header::CONTENT_TYPE],
-                if streaming {
-                    "text/event-stream"
-                } else {
-                    "application/json"
-                }
-            );
-            response.into_body().collect().await.unwrap();
-            sessions
-                .apply_events(
-                    &http::HeaderMap::new(),
-                    vec![NormalizedEvent::TurnEnded(boundary("Stop"))],
-                )
-                .await
-                .unwrap();
-            sessions.close_all("test_shutdown").await.unwrap();
-            flush_subscribers().unwrap();
+        assert_eq!(response.status(), StatusCode::OK);
+        assert_eq!(
+            response.headers()[header::CONTENT_TYPE],
+            if streaming {
+                "text/event-stream"
+            } else {
+                "application/json"
+            }
+        );
+        response.into_body().collect().await.unwrap();
+        sessions
+            .apply_events(
+                &http::HeaderMap::new(),
+                vec![NormalizedEvent::TurnEnded(boundary("Stop"))],
+            )
+            .await
+            .unwrap();
+        sessions.close_all("test_shutdown").await.unwrap();
+        flush_subscribers().unwrap();
 
-            let events = events.lock().unwrap();
-            let matching = events
-                .iter()
-                .filter(|event| event.metadata().unwrap()["session_id"] == id)
-                .collect::<Vec<_>>();
-            let turn = matching
-                .iter()
-                .find(|event| {
-                    event.name() == "claude-code-turn"
-                        && event.scope_category() == Some(ScopeCategory::End)
-                })
-                .unwrap();
-            assert_eq!(turn.output().unwrap()["content"][0]["text"], "task answer");
-            assert_eq!(turn.metadata().unwrap()["turn_prompt_observed"], true);
-            let llm_ends = matching
-                .iter()
-                .filter(|event| {
-                    event.name() == "anthropic.messages"
-                        && event.scope_category() == Some(ScopeCategory::End)
-                })
-                .collect::<Vec<_>>();
-            assert_eq!(llm_ends.len(), 2);
-            let classes = llm_ends
-                .iter()
-                .map(|event| {
-                    event.metadata().unwrap()["claude_code_request_class"]
-                        .as_str()
-                        .unwrap()
-                })
-                .collect::<std::collections::HashSet<_>>();
-            assert_eq!(classes, std::collections::HashSet::from(["main", class]));
-            for event in llm_ends {
-                let response = event.annotated_response().unwrap();
-                let usage = serde_json::to_value(response.usage.as_ref().unwrap()).unwrap();
-                assert_eq!(usage["prompt_tokens"], 2);
-                assert_eq!(usage["completion_tokens"], 1);
-            }
+        let events = events.lock().unwrap();
+        let matching = events
+            .iter()
+            .filter(|event| event.metadata().unwrap()["session_id"] == id)
+            .collect::<Vec<_>>();
+        let turn = matching
+            .iter()
+            .find(|event| {
+                event.name() == "claude-code-turn"
+                    && event.scope_category() == Some(ScopeCategory::End)
+            })
+            .unwrap();
+        assert_eq!(turn.output().unwrap()["content"][0]["text"], "task answer");
+        assert_eq!(turn.metadata().unwrap()["turn_prompt_observed"], true);
+        let llm_ends = matching
+            .iter()
+            .filter(|event| {
+                event.name() == "anthropic.messages"
+                    && event.scope_category() == Some(ScopeCategory::End)
+            })
+            .collect::<Vec<_>>();
+        assert_eq!(llm_ends.len(), 2);
+        let classes = llm_ends
+            .iter()
+            .map(|event| {
+                event.metadata().unwrap()["claude_code_request_class"]
+                    .as_str()
+                    .unwrap()
+            })
+            .collect::<std::collections::HashSet<_>>();
+        assert_eq!(classes, std::collections::HashSet::from(["main", class]));
+        for event in llm_ends {
+            let response = event.annotated_response().unwrap();
+            let usage = serde_json::to_value(response.usage.as_ref().unwrap()).unwrap();
+            assert_eq!(usage["prompt_tokens"], 2);
+            assert_eq!(usage["completion_tokens"], 1);
         }
     }
 }

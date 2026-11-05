@@ -71,10 +71,9 @@ The installer creates a local marketplace, installs
 `nemo-relay-plugin@nemo-relay-local` at user scope, and enables Claude Code
 provider routing through the local NeMo Relay sidecar. It uses the existing
 `nemo-relay` binary on `PATH`; it does not install a plugin-local Relay binary.
-The installer also adds a gateway-hint default to Claude's user settings when
-neither that file nor the installer's environment defines it. See
-[Model Request Classes](#separate-model-request-classes) for settings precedence
-and opt-outs.
+The installer also enables gateway hints in Claude's user settings unless that
+setting is already present. See [Model Request Classes](#separate-model-request-classes)
+for the metadata these hints provide.
 
 The plugin starts `nemo-relay mcp`, a lightweight Rust lifecycle client that
 starts or reuses the shared gateway on `127.0.0.1:47632` immediately when the
@@ -204,7 +203,6 @@ Launch Claude Code from another terminal with the gateway environment:
 
 ```bash
 export ANTHROPIC_BASE_URL=http://127.0.0.1:4040
-export CLAUDE_CODE_GATEWAY_HINT_HEADERS=1
 claude
 ```
 
@@ -326,10 +324,17 @@ establish the purpose of a separate model call.
 
 ## Separate Model Request Classes
 
-Claude Code 2.1.273 or newer can send
+Claude Code 2.1.273 or newer labels model requests with
 [`x-claude-code-request-class`](https://code.claude.com/docs/en/llm-gateway-protocol#gateway-hint-headers)
-before a model call runs. Relay records its normalized value in the LLM event
-metadata as `claude_code_request_class`:
+when gateway hints are enabled. Relay's wrapper,
+[persistent installer](#persistent-plugin-install), and
+`nemo-relay integrations refresh` enable hints by default and preserve explicit
+gateway-hint settings. Generated managed settings also enable hints.
+[Replace older managed bundles](/daemon/configuration#distribute-immutable-managed-settings)
+to include the setting.
+
+Relay records the normalized class in LLM event metadata as
+`claude_code_request_class`:
 
 | Class | Operation |
 | --- | --- |
@@ -340,77 +345,25 @@ metadata as `claude_code_request_class`:
 | `auxiliary` | A side request, such as a title, classifier, or summary. |
 | `unknown` | No usable supported class was received. |
 
-Filter `auxiliary` and `compaction` for internal operations. Keep `unknown`
-separate rather than treating it as conversation work. A class is
-client-reported attribution, not authenticated identity or proof that a person
-initiated the operation. A person can invoke compaction; an automated process
-can submit conversation work. The class does not identify a specific auxiliary
-subtype, such as a quota check or prompt suggestion.
+Calls labeled `auxiliary` or `compaction` remain in traces with their reported
+usage. They still run the configured middleware and cache policy, but do not
+open main turns, replace task output, or provide hints for matching tool calls.
+An internal call between turns has no enclosing ATIF trajectory. Use ATOF or
+OpenTelemetry to include these calls in usage totals.
 
-Gateway hints must be enabled in Claude Code, not in the Relay daemon or MCP
-server:
-
-- **Wrapped execution:** Relay supplies `CLAUDE_CODE_GATEWAY_HINT_HEADERS=1`
-  only when Claude inherits no value.
-- **Persistent plugin:** Installation and refresh add
-  `env.CLAUDE_CODE_GATEWAY_HINT_HEADERS` with the value `"1"` to Claude's user
-  settings only when the key is absent and the installer inherits no value.
-  Inherited values are not copied into the settings file. For an existing
-  installation, run `nemo-relay integrations refresh`, then start a new Claude
-  session.
-- **Managed deployment:** Configure the flag in the administrator-owned client
-  environment or Claude policy. Follow the
-  [managed Claude setup](/daemon/configuration#claude-code); the existing v1
-  bundle remains unchanged.
-
-For a manual gateway or source-marketplace installation, set
-`CLAUDE_CODE_GATEWAY_HINT_HEADERS=1` in Claude's environment or settings.
-To disable hints, set `env.CLAUDE_CODE_GATEWAY_HINT_HEADERS` to `"0"` in the
-Claude settings source that controls the session. A settings value can override
-a shell export, and managed policy takes precedence over user settings.
-Restart Claude after changing this configuration.
-
-The integration still supports Claude Code 2.1.121 or newer. Versions before
-2.1.273, disabled hints, missing headers, invalid or repeated values, and future
-class values produce `unknown`. They retain the existing generic turn and owner
-resolution. Hints follow the existing upstream header-forwarding policy. If a
-custom upstream rejects them, disable them in Claude's effective configuration.
-
-Internal calls still run configured middleware and response-cache policy and
-retain their LLM events and reported usage. Relay no longer bypasses managed
-execution for a request containing only `test` with `max_tokens: 1`. That
-request shape does not prove its purpose.
-
-Known internal calls do not open main turns or supply task output or tool
-correlation hints. They retain an existing structural parent when present,
-preserving scope-local policy and ATIF context. Between turns, an internal call
-is a root LLM span. Compaction hooks can still open implicit turns; these are
-not prompt observations, so do not expect every internal operation to disappear
-from the root count.
-
-Use ATOF or OpenTelemetry as the ledger of observed managed model invocations,
-including internal calls. An idle root LLM has no automatic ATIF trajectory.
-For calls inside a trajectory, ATIF retains event metadata in
-`extra.observed_events` only when `include_observed_events` is enabled, not in
-ordinary step `extra`. Keep internal and unknown usage in overall totals.
-Missing usage is not zero, and cached usage is not proof of a new provider call.
-Guardrails or request intercepts can reject before an LLM scope exists, so model
-span counts do not count every rejected HTTP request.
+The integration minimum remains Claude Code 2.1.121. Versions before 2.1.273
+and missing, invalid, or unsupported classes remain `unknown` and keep the
+existing turn handling and parent selection. Classes describe operations, not
+whether a person initiated them. Do not treat `unknown` as confirmed
+conversation work.
 
 ## Count Turns with Observed Prompts
 
-The final `turn_prompt_observed` metadata on a completed Claude main turn is
-`true` when Relay observed a prompt hook for that turn, including a late hook.
-It is `false` when no prompt hook was observed; a missing field is unknown.
-Delegated-agent prompts do not set the parent's flag. This is not a human-action
-count or a purpose label for every model call within the turn.
-
-Use the final value because a late prompt can join a gateway-created turn.
-`turn_source` and the opening input remain unchanged. With unknown legacy
-traffic, a prompt hook can join a container whose opening request had different
-content; the flag does not prove that the opening request served that prompt.
-The later `prompt_submitted` mark retains the hook payload in ATOF, separately
-from the opening input. GenAI omits that mark.
+Count completed main turns with final `turn_prompt_observed=true`, rather than
+counting trace roots. This flag includes late prompt hooks; `false` means no
+prompt hook was observed, and a missing field is unknown. Subagent prompts do
+not set the parent's flag. Gateway requests and compaction hooks can open turns
+without a prompt hook.
 
 ### Export Class and Prompt Evidence to GenAI
 
@@ -432,17 +385,10 @@ attribute_mappings = [
 ]
 ```
 
-These are custom aliases, not standard GenAI attributes. The first mapping
-copies one class string on model spans; the second copies the final boolean on
-turn spans. They do not export request headers or require native Claude traces,
-a second receiver, or a cross-export join. Existing sanitizers still apply;
+These custom aliases expose the class on model spans and the final prompt flag
+on turn spans. They are not standard GenAI attributes. See
 [attribute mappings](/configure-plugins/observability/opentelemetry#attribute-mappings)
-omit removed values and resolve when the span completes.
-
-Count completed spans with `gen_ai.operation.name=invoke_agent` and
-`client.turn.prompt_observed=true` for prompt-observed main turns. Count model
-invocations separately by Relay span identity; do not count child model spans
-as additional prompts or sum parent and child usage together.
+for configuration and sanitization behavior.
 
 ## Hook Limitations
 

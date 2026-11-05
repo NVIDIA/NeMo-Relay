@@ -1,13 +1,13 @@
 ---
 title: "Migration Guides"
-description: "Migrate worker plugins to NeMo Relay 1.0.0 and review the 0.11.0 upgrade."
+description: "Migrate worker plugins and managed Claude bundles to NeMo Relay 1.0.0, or review the 0.11.0 upgrade."
 position: 6
 ---
 {/* SPDX-FileCopyrightText: Copyright (c) 2026, NVIDIA CORPORATION & AFFILIATES. All rights reserved.
 SPDX-License-Identifier: Apache-2.0 */}
 
-Use this page to migrate worker plugins to NeMo Relay 1.0.0 or review the upgrade
-from NeMo Relay 0.10.0 to 0.11.0.
+Use this page to migrate worker plugins and managed Claude bundles to NeMo Relay
+1.0.0, or review the upgrade from NeMo Relay 0.10.0 to 0.11.0.
 
 The historical 0.11.0 guide below includes fixes from the 0.10
 patch releases. Configuration changes from earlier patch upgrades still apply.
@@ -45,6 +45,16 @@ alternative is invalid. Runtime failures use standard gRPC status codes.
 The old `grpc-v1` schema and generated bindings have been removed. Historical
 definitions remain in Git history, and no automatic adapter is provided. Refer to the
 [gRPC protocol reference](/build-plugins/workers/grpc-v1-protocol) for the contract.
+
+## Update Managed Claude Bundles for NeMo Relay 1.0.0
+
+Generated Claude settings now enable gateway hints by default. Previously
+generated Claude bundles no longer match canonical validation. Generate a
+replacement in a new directory, redeploy it, and provision its new trusted
+digest separately. Refresh does not rewrite existing bundles. Follow
+[Distribute Immutable Managed Settings](/daemon/configuration#distribute-immutable-managed-settings)
+for the generation and validation commands. Codex-only and Pi-only bundles are
+unaffected.
 
 ## Upgrade to NeMo Relay 0.11.0
 

@@ -45,7 +45,7 @@ fn session_id_from_headers_reads_claude_native_header() {
 }
 
 #[test]
-fn test_request_class_known_value_preserves_class_and_internal_status() {
+fn test_request_class_classifies_only_single_canonical_headers() {
     for (value, expected, internal) in [
         ("main", RequestClass::Main, false),
         ("subagent", RequestClass::Subagent, false),
@@ -63,10 +63,6 @@ fn test_request_class_known_value_preserves_class_and_internal_status() {
         assert_eq!(actual.as_str(), value);
         assert_eq!(actual.is_internal(), internal);
     }
-}
-
-#[test]
-fn test_request_class_missing_or_noncanonical_value_is_unknown() {
     let mut headers = HeaderMap::new();
     assert_eq!(request_class(&headers), RequestClass::Unknown);
     for value in [
@@ -92,10 +88,6 @@ fn test_request_class_missing_or_noncanonical_value_is_unknown() {
     assert_eq!(request_class(&headers), RequestClass::Unknown);
     assert_eq!(RequestClass::Unknown.as_str(), "unknown");
     assert!(!RequestClass::Unknown.is_internal());
-}
-
-#[test]
-fn test_request_class_repeated_value_is_unknown() {
     for second in ["auxiliary", "main"] {
         let mut headers = HeaderMap::new();
         headers.append(
