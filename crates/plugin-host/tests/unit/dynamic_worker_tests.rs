@@ -7286,7 +7286,7 @@ async fn public_worker_stream_close_bounds_host_cleanup() {
 #[path = "worker_scope_lifetime_tests.rs"]
 mod scope_lifetime_tests;
 
-#[tokio::test]
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn component_workers_reuse_configurations_and_reject_registration_after_shutdown() {
     let (owner, _owner_shutdown) = fake_worker_instance(Vec::new()).await;
     let (mut child, _child_shutdown) = fake_worker_instance(Vec::new()).await;
@@ -7296,7 +7296,7 @@ async fn component_workers_reuse_configurations_and_reject_registration_after_sh
     let selected = owner.component_worker(child.config.clone()).unwrap();
     assert!(Arc::ptr_eq(&child, &selected));
     selected.prepare_registrations().await.unwrap();
-    owner.shutdown_checked();
+    assert!(owner.shutdown_checked().errors.is_empty());
     assert!(
         selected
             .prepare_registrations()
