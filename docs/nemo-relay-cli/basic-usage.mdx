@@ -42,6 +42,12 @@ The adapters preserve vendor fields such as session IDs, working directories,
 transcript paths, model names, tool payloads, shell payloads, MCP payloads, file
 payloads, user identity, and subagent metadata in NeMo Relay event metadata.
 
+Compaction, notification, and generic hook marks include `session_id` and
+`session_instance_id` in their metadata, along with configured and session
+metadata. Subscribers can filter marks by session without parsing the
+agent-specific payload. Non-null event metadata overrides configured and
+session values, but cannot replace the canonical session identity.
+
 ## Gateway Routes
 
 The gateway supports these provider routes. Some routes record LLM lifecycle
