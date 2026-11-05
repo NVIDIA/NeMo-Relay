@@ -80,6 +80,10 @@ Build and install the CLI from crates.io with Cargo:
 cargo install nemo-relay-cli
 ```
 
+Building from source requires `protoc` 31.1 or later and Buf 1.75.0 or later.
+Install both on `PATH`, or select them with `PROTOC` and `BUF`. The first build
+needs access to the Buf Schema Registry to download the locked validation schema.
+
 Unix curl:
 
 ```bash
