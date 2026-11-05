@@ -84,6 +84,10 @@ Install the published crate in a Rust application:
 cargo add nemo-relay serde_json
 ```
 
+Building this crate requires `protoc` 31.1 or later and Buf 1.75.0 or later.
+Install both on `PATH`, or select them with `PROTOC` and `BUF`. The first build
+needs access to the Buf Schema Registry to download the locked validation schema.
+
 Adaptive and PII redaction are registered by default. To use typed adaptive
 configuration and imperative helpers, install the companion crate too:
 
