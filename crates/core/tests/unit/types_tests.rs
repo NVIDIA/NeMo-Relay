@@ -861,12 +861,46 @@ fn telemetry_request_uses_sanitized_annotation_and_cannot_restore_removed_payloa
     assert!(event.telemetry_llm_tool_calls().is_none());
 }
 
+/// Verifies malformed entries preserve valid calls and positional fallback IDs.
+#[test]
+fn telemetry_tool_calls_skip_non_object_entries_without_renumbering() {
+    for invalid in [
+        json!(null),
+        json!(false),
+        json!(42),
+        json!("invalid"),
+        json!([]),
+    ] {
+        let event = llm_end_event(
+            json!({"tool_calls": [
+                {"id": "call-1", "name": "first", "arguments": {"q": "one"}},
+                invalid,
+                {"name": "later", "arguments": {"q": "two"}}
+            ]}),
+            CategoryProfile::default(),
+        );
+        let calls = event
+            .telemetry_llm_tool_calls()
+            .expect("valid calls survive");
+        assert_eq!(calls.len(), 2);
+        assert_eq!(calls[0].id, "call-1");
+        assert_eq!(calls[0].arguments, json!({"q": "one"}));
+        assert_eq!(calls[1].id, "later:3");
+        assert_eq!(calls[1].arguments, json!({"q": "two"}));
+
+        let invalid_only =
+            llm_end_event(json!({"tool_calls": [invalid]}), CategoryProfile::default());
+        assert!(invalid_only.telemetry_llm_tool_calls().is_none());
+    }
+}
+
 #[test]
 fn telemetry_tool_calls_use_annotated_semantics_and_preserve_matching_metadata() {
     use crate::codec::response::ResponseToolCall;
     let event = llm_end_event(
         json!({"tool_calls": [
             {"id": "call-1", "name": "exec", "arguments": "raw-secret", "provider_data": {"status": "ok"}},
+            null,
             {"id": "raw-only", "name": "other", "arguments": "{}"}
         ]}),
         CategoryProfile::builder()

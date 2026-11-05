@@ -100,7 +100,9 @@ fn raw_tool_calls(output: &Json) -> Option<Vec<TelemetryToolCall>> {
     };
     let mut calls = Vec::with_capacity(arr.len());
     for (index, tc) in arr.iter().enumerate() {
-        let tc_obj = tc.as_object()?;
+        let Some(tc_obj) = tc.as_object() else {
+            continue;
+        };
         let mut id = tool_call_id_for_origin(tc_obj, origin)
             .unwrap_or("")
             .to_string();
