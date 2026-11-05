@@ -3289,3 +3289,83 @@ async fn scope_stack_snapshot_worker_correlates_parallel_agent_llm_and_tool_call
     assert_ne!(first_llm, second_llm);
     loaded.clear();
 }
+
+/// Distinct configurations use independent workers and both processes close with the owner.
+#[tokio::test]
+async fn worker_multiple_component_configurations_are_isolated_and_cleaned_up() {
+    const MODE: &str = "NEMO_RELAY_TEST_WORKER_MULTIPLE_COMPONENTS";
+    if std::env::var_os(MODE).is_none() {
+        // Isolate the forwarded fixture setting from other tests in this process.
+        let status = std::process::Command::new(std::env::current_exe().unwrap())
+            .args(["--exact", "worker_plugin_integration_tests::worker_multiple_component_configurations_are_isolated_and_cleaned_up", "--nocapture"])
+            .env(MODE, "1")
+            .status()
+            .unwrap();
+        assert!(
+            status.success(),
+            "component worker subprocess failed: {status}"
+        );
+        return;
+    }
+    let _guard = WORKER_PLUGIN_TEST_LOCK.lock().await;
+    let fixture = build_fixture_worker();
+    let (_manifest_dir, manifest_ref) = write_manifest(fixture.binary_path());
+    let manifest = std::fs::read_to_string(&manifest_ref).unwrap();
+    std::fs::write(
+        &manifest_ref,
+        format!("{manifest}\nforward_env = [\"{MODE}\"]\n"),
+    )
+    .unwrap();
+    for flag in ["tool_request_error", "reject"] {
+        let diagnostics = enabled_worker_diagnostics();
+        let activation = load_worker_plugins_with_diagnostics(
+            [WorkerPluginLoadSpec {
+                plugin_id: "fixture_worker".into(),
+                manifest_ref: manifest_ref.display().to_string(),
+                environment_ref: None,
+                config: Map::new(),
+            }],
+            &diagnostics,
+        )
+        .unwrap();
+        let mut config = PluginConfig::default();
+        for component_config in [Map::new(), Map::from_iter([(flag.into(), json!(true))])] {
+            config.components.push(PluginComponentSpec {
+                kind: "fixture_worker".into(),
+                enabled: true,
+                config: component_config,
+            });
+        }
+        let initialized = test_initialize_plugin_host_exact(config).await;
+        if flag == "reject" {
+            let error =
+                initialized.expect_err("invalid additional configuration must fail activation");
+            assert!(
+                error.to_string().contains("fixture rejection requested"),
+                "{error}"
+            );
+        } else {
+            initialized.unwrap();
+            let error = tool_request_intercepts("demo_tool", json!({"input": "value"}))
+                .await
+                .expect_err("the second worker must apply its own configuration");
+            assert!(
+                error
+                    .to_string()
+                    .contains("fixture tool request error requested"),
+                "{error}"
+            );
+        }
+        test_close_plugin_host().unwrap();
+        activation.clear();
+        let snapshot = worker_diagnostic_snapshot(&diagnostics);
+        assert_eq!(
+            snapshot
+                .events
+                .iter()
+                .filter(|event| event.code() == "plugin.worker.process_cleaned")
+                .count(),
+            2
+        );
+    }
+}

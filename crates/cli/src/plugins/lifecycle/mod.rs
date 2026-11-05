@@ -2648,6 +2648,11 @@ fn update_registry_validation_status(
         .and_then(|record| record.source.environment_ref.as_deref());
     let environment = environment_state(manifest, &scope.state_path, environment_ref);
     let environment_error = environment_last_error(plugin_id, environment, environment_ref);
+    let native_error = manifest
+        .compat
+        .native_api
+        .as_deref()
+        .and_then(|api| nemo_relay_plugin_host::dynamic::native_api_support(api).err());
     let compatibility_error = manifest.validate().err();
     scope
         .registry
@@ -2655,7 +2660,7 @@ fn update_registry_validation_status(
             plugin_id,
             DynamicPluginValidationStatus {
                 manifest: DynamicPluginCheckState::Valid,
-                compatibility: if compatibility_error.is_some() {
+                compatibility: if compatibility_error.is_some() || native_error.is_some() {
                     DynamicPluginCheckState::Invalid
                 } else {
                     DynamicPluginCheckState::Valid
@@ -2666,9 +2671,10 @@ fn update_registry_validation_status(
                 policy_satisfied: policy.check_state(),
                 checked_at: None,
                 message: Some(
-                    compatibility_error
+                    native_error
                         .as_ref()
-                        .map_or_else(|| VALIDATION_MESSAGE.into(), ToString::to_string),
+                        .or(compatibility_error.as_ref())
+                        .map_or_else(|| VALIDATION_MESSAGE.into(), |error| error.to_string()),
                 ),
             },
         )
@@ -2678,8 +2684,13 @@ fn update_registry_validation_status(
         .registry
         .update_last_error(
             plugin_id,
-            policy
-                .last_error(plugin_id)
+            native_error
+                .map(|error| DynamicPluginFailure {
+                    phase: DynamicPluginFailurePhase::Validation,
+                    code: "native_api_unsupported".into(),
+                    message: error.to_string(),
+                })
+                .or_else(|| policy.last_error(plugin_id))
                 .or_else(|| trust.last_error(plugin_id))
                 .or(environment_error),
         )

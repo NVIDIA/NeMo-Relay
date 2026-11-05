@@ -284,14 +284,24 @@ impl Plugin for WorkerPluginAdapter {
     }
 
     fn validate(&self, plugin_config: &Map<String, Json>) -> Vec<ConfigDiagnostic> {
-        if plugin_config != &self.instance.config {
+        if plugin_config != &self.instance.config && !self.allows_multiple_components {
             return vec![worker_error_diagnostic(
                 &self.plugin_kind,
                 "plugin.worker_config_mismatch",
                 "worker plugin config changed after dynamic activation; reload the worker activation",
             )];
         }
-        self.instance.validation_diagnostics.clone()
+        if plugin_config == &self.instance.config {
+            return self.instance.validation_diagnostics.clone();
+        }
+        match self.instance.component_worker(plugin_config.clone()) {
+            Ok(worker) => worker.validation_diagnostics.clone(),
+            Err(error) => vec![worker_error_diagnostic(
+                &self.plugin_kind,
+                "plugin.worker_validation_failed",
+                &error.to_string(),
+            )],
+        }
     }
 
     fn register<'a>(
@@ -299,21 +309,55 @@ impl Plugin for WorkerPluginAdapter {
         plugin_config: &Map<String, Json>,
         ctx: &'a mut dyn crate::PluginRegistrationContext,
     ) -> Pin<Box<dyn Future<Output = crate::Result<()>> + Send + 'a>> {
-        let config_matches = plugin_config == &self.instance.config;
+        let config = plugin_config.clone();
+        let owner = self.instance.clone();
+        let multiple = self.allows_multiple_components;
         Box::pin(async move {
-            if !config_matches {
+            let instance = if config == owner.config {
+                owner.clone()
+            } else if multiple {
+                tokio::task::spawn_blocking(move || owner.component_worker(config))
+                    .await
+                    .map_err(|error| PluginError::RegistrationFailed(error.to_string()))??
+            } else {
                 return Err(PluginError::RegistrationFailed(
                     "worker plugin config changed after dynamic activation; reload the worker activation"
                         .into(),
                 ));
+            };
+            if diagnostics_have_errors(&instance.validation_diagnostics) {
+                return Err(PluginError::RegistrationFailed(format!(
+                    "worker component configuration failed validation: {}",
+                    instance
+                        .validation_diagnostics
+                        .iter()
+                        .map(|diagnostic| diagnostic.message.as_str())
+                        .collect::<Vec<_>>()
+                        .join("; ")
+                )));
             }
-            self.instance.prepare_registrations().await?;
-            self.instance.install_registrations(ctx)
+            instance.prepare_registrations().await?;
+            if self.instance.teardown_started.load(Ordering::Acquire)
+                || instance.teardown_started.load(Ordering::Acquire)
+            {
+                return Err(PluginError::RegistrationFailed(
+                    "worker activation is closing".into(),
+                ));
+            }
+            instance.install_registrations(ctx)
         })
     }
 }
 
+struct WorkerSource {
+    spec: WorkerPluginLoadSpec,
+    manifest: DynamicPluginManifest,
+    diagnostics: nemo_relay_diagnostics::Diagnostics,
+}
+
 struct WorkerPluginInstance {
+    source: Option<WorkerSource>,
+    component_workers: Mutex<Vec<Arc<WorkerPluginInstance>>>,
     callback_timeouts: super::WorkerCallbackTimeouts,
     plugin_kind: String,
     allows_multiple_components: bool,
@@ -347,10 +391,51 @@ impl Drop for WorkerPluginInstance {
 }
 
 impl WorkerPluginInstance {
+    /// Own one independently authenticated worker for each distinct configuration.
+    fn component_worker(&self, config: Map<String, Json>) -> crate::Result<Arc<Self>> {
+        let mut workers = self.component_workers.lock().map_err(|error| {
+            PluginError::RegistrationFailed(format!("worker component lock poisoned: {error}"))
+        })?;
+        if self.teardown_started.load(Ordering::Acquire) {
+            return Err(PluginError::RegistrationFailed(
+                "worker activation is closing".into(),
+            ));
+        }
+        if let Some(worker) = workers.iter().find(|worker| worker.config == config) {
+            return Ok(worker.clone());
+        }
+        let source = self.source.as_ref().ok_or_else(|| {
+            PluginError::RegistrationFailed("worker activation has no launch settings".into())
+        })?;
+        let spec = WorkerPluginLoadSpec {
+            config,
+            ..source.spec.clone()
+        };
+        let worker = load_one_worker_plugin(
+            &spec,
+            true,
+            Some(source.manifest.clone()),
+            &source.diagnostics,
+        )?;
+        workers.push(worker.clone());
+        Ok(worker)
+    }
+
     fn shutdown_checked(&self) -> DynamicPluginTeardownOutcome {
         let mut outcome = DynamicPluginTeardownOutcome::success();
         if self.teardown_started.swap(true, Ordering::AcqRel) {
             return outcome;
+        }
+
+        match self.component_workers.lock() {
+            Ok(workers) => {
+                for worker in workers.iter().rev() {
+                    outcome.merge(worker.shutdown_checked());
+                }
+            }
+            Err(error) => {
+                outcome.record_error(format!("worker component lock poisoned: {error}"), false)
+            }
         }
 
         log::info!(
@@ -907,6 +992,12 @@ fn load_one_worker_plugin(
     }
 
     let instance = Arc::new(WorkerPluginInstance {
+        source: Some(WorkerSource {
+            spec: spec.clone(),
+            manifest: manifest.clone(),
+            diagnostics: diagnostics.clone(),
+        }),
+        component_workers: Mutex::new(Vec::new()),
         callback_timeouts,
         plugin_kind: spec.plugin_id.clone(),
         allows_multiple_components: handshake.allows_multiple_components,
@@ -1404,6 +1495,11 @@ impl WorkerPluginInstance {
     // Register needs the preceding components' live runtime registrations.
     // Cache its plan once per worker so multiple components do not repeat setup.
     async fn prepare_registrations(&self) -> crate::Result<()> {
+        if self.teardown_started.load(Ordering::Acquire) {
+            return Err(PluginError::RegistrationFailed(
+                "worker activation is closing".into(),
+            ));
+        }
         self.registrations
             .get_or_try_init(|| async {
                 let result = self.request_registration_plan().await;

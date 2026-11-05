@@ -4710,6 +4710,8 @@ async fn fake_worker_instance(
     std::fs::create_dir_all(&activation_dir).expect("unit activation dir should be created");
     (
         WorkerPluginInstance {
+            source: None,
+            component_workers: Mutex::new(Vec::new()),
             callback_timeouts: Default::default(),
             plugin_kind: "fixture_worker".into(),
             allows_multiple_components: false,
@@ -7283,3 +7285,32 @@ async fn public_worker_stream_close_bounds_host_cleanup() {
 
 #[path = "worker_scope_lifetime_tests.rs"]
 mod scope_lifetime_tests;
+
+#[tokio::test]
+async fn component_workers_reuse_configurations_and_reject_registration_after_shutdown() {
+    let (owner, _owner_shutdown) = fake_worker_instance(Vec::new()).await;
+    let (mut child, _child_shutdown) = fake_worker_instance(Vec::new()).await;
+    child.config.insert("component".into(), json!(2));
+    let child = Arc::new(child);
+    owner.component_workers.lock().unwrap().push(child.clone());
+    let selected = owner.component_worker(child.config.clone()).unwrap();
+    assert!(Arc::ptr_eq(&child, &selected));
+    selected.prepare_registrations().await.unwrap();
+    owner.shutdown_checked();
+    assert!(
+        selected
+            .prepare_registrations()
+            .await
+            .unwrap_err()
+            .to_string()
+            .contains("closing")
+    );
+    assert!(
+        owner
+            .component_worker(child.config.clone())
+            .err()
+            .unwrap()
+            .to_string()
+            .contains("closing")
+    );
+}

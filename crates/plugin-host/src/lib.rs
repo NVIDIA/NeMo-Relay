@@ -22,7 +22,8 @@ use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::{Arc, LazyLock, Mutex, OnceLock, RwLock};
 
 use serde::{Deserialize, Serialize};
-use serde_json::{Map, Value as Json};
+pub use serde_json::Map;
+use serde_json::Value as Json;
 
 use nemo_relay_diagnostics::{
     ComponentRecorder, ComponentRegistration, DiagnosticDetailRef, DiagnosticObservation,

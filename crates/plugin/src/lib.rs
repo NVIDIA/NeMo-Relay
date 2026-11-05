@@ -64,6 +64,7 @@ pub use nemo_relay_types::codec::request::AnnotatedLlmRequest;
 pub use nemo_relay_types::codec::response::AnnotatedLlmResponse;
 pub use nemo_relay_types::plugin::http_error_message;
 pub use nemo_relay_types::plugin::{ConfigDiagnostic, DiagnosticLevel, PluginError, PluginFuture};
+pub use serde_json::Map;
 /// Result returned by native SDK helpers.
 pub type Result<T> = checked::Result<T>;
 

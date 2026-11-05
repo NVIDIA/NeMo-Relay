@@ -152,29 +152,29 @@ impl NativeLibraryArtifact {
         };
         let mut hash = Sha256::new();
         hash.update(b"nemo.relay.native.artifact.v1\0");
-        hash_field(&mut hash, artifact.library.as_os_str().as_encoded_bytes());
+        hash_path(&mut hash, &artifact.library);
         let entries = artifact.entries().collect::<BTreeMap<_, _>>();
         for (path, (bytes, _)) in entries {
-            hash_field(&mut hash, path.as_os_str().as_encoded_bytes());
+            hash_path(&mut hash, path);
             hash_field(&mut hash, bytes);
         }
         // Link topology changes @loader_path semantics even when bytes match.
         if !artifact.symlinks.is_empty() {
             hash.update(b"nemo.relay.native.symlinks.v1\0");
             for (alias, target) in &artifact.symlinks {
-                hash_field(&mut hash, alias.as_os_str().as_encoded_bytes());
-                hash_field(&mut hash, target.as_os_str().as_encoded_bytes());
+                hash_path(&mut hash, alias);
+                hash_path(&mut hash, target);
             }
         }
         if !artifact.directories.is_empty() || !artifact.directory_links.is_empty() {
             hash.update(b"nemo.relay.native.directories.v1\0");
             for directory in &artifact.directories {
-                hash_field(&mut hash, directory.as_os_str().as_encoded_bytes());
+                hash_path(&mut hash, directory);
             }
             hash.update(b"nemo.relay.native.directory.links.v1\0");
             for (alias, target) in &artifact.directory_links {
-                hash_field(&mut hash, alias.as_os_str().as_encoded_bytes());
-                hash_field(&mut hash, target.as_os_str().as_encoded_bytes());
+                hash_path(&mut hash, alias);
+                hash_path(&mut hash, target);
             }
         }
         artifact.identity = hash.finalize().into();
@@ -365,6 +365,12 @@ fn relative_link(alias: &Path, target: &Path) -> PathBuf {
         relative.push(".");
     }
     relative
+}
+
+/// Hash path components so equivalent separator spellings share an identity.
+fn hash_path(hash: &mut Sha256, path: &Path) {
+    let normalized: PathBuf = path.components().collect();
+    hash_field(hash, normalized.as_os_str().as_encoded_bytes());
 }
 
 fn hash_field(hash: &mut Sha256, bytes: &[u8]) {

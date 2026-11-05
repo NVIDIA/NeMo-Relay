@@ -45,6 +45,12 @@ This model keeps plugin dependencies and crashes outside the Relay process, whil
 SDK retains the shared runtime contract and manages authentication, cancellation, and
 shutdown.
 
+Workers allow multiple components by default. Each distinct component configuration
+uses its own worker process, runtime capabilities, and callback state. Components
+with the same configuration share an activation. Closing the plugin host stops all
+of these workers. Override `allows_multiple_components()` to return `false` when
+only one component should use the plugin kind.
+
 ## Propagating Continuation Errors
 
 Propagate an unchanged `ToolNext`, `LlmNext`, or `LlmStreamNext` error with `?`
@@ -84,7 +90,7 @@ Refer to [execution message limits](https://docs.nvidia.com/nemo/relay/build-plu
 Implement a worker and serve it from an async entrypoint:
 
 ```rust
-use nemo_relay_worker::{Json, Plugin, PluginContext, Result, serve_plugin};
+use nemo_relay_worker::{Json, Map, Plugin, PluginContext, Result, serve_plugin};
 
 struct ExampleWorker;
 
@@ -98,7 +104,7 @@ impl Plugin for ExampleWorker {
 
     fn register<'a>(
         &'a self,
-        _config: &'a serde_json::Map<String, Json>,
+        _config: &'a Map<String, Json>,
         ctx: &'a mut PluginContext,
     ) -> nemo_relay_worker::PluginFuture<'a, ()> {
         Box::pin(async move {

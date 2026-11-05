@@ -102,7 +102,7 @@ async fn native_scope_timestamps_preserve_signed_microseconds() {
                 None,
                 None,
                 None,
-                UNIX_EPOCH - Duration::from_nanos(1),
+                UNIX_EPOCH - Duration::from_nanos(100),
             )
             .unwrap();
         guard
@@ -212,7 +212,7 @@ async fn native_scope_and_mark_options_preserve_flags_parents_and_times() {
                 None,
                 EmitMarkOptions {
                     parent: Some(&parent),
-                    timestamp: Some(UNIX_EPOCH - Duration::from_nanos(1)),
+                    timestamp: Some(UNIX_EPOCH - Duration::from_nanos(100)),
                     ..Default::default()
                 },
             )

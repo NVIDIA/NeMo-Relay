@@ -83,7 +83,7 @@ impl WorkerPlugin for FixtureWorkerPlugin {
     }
 
     fn allows_multiple_components(&self) -> bool {
-        false
+        std::env::var_os("NEMO_RELAY_TEST_WORKER_MULTIPLE_COMPONENTS").is_some()
     }
 
     fn register<'a>(

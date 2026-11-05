@@ -78,7 +78,7 @@ type JsonEnvelope = wire::JsonValue;
 type StreamChunk = wire::InvokeStreamResponse;
 type LogLevel = wire::LogSeverity;
 type ProtoRuntimeDiagnostic = wire::RuntimeDiagnostic;
-use serde_json::Map;
+pub use serde_json::Map;
 use tokio::net::TcpListener;
 #[cfg(unix)]
 use tokio::net::{UnixListener, UnixStream};

@@ -361,3 +361,14 @@ impl nemo_relay_plugin::abi::diagnostics::Diagnostics for EmptyDiagnostics {
         Err(2).into()
     }
 }
+
+#[test]
+fn artifact_identity_normalizes_equivalent_path_separators() {
+    let build = |path: std::path::PathBuf| {
+        NativeLibraryArtifact::new(path.clone(), [(path, vec![1, 2, 3])]).unwrap()
+    };
+    assert_eq!(
+        build(std::path::PathBuf::from("deps//plugin.bin")).identity(),
+        build(std::path::PathBuf::from("deps").join("plugin.bin")).identity(),
+    );
+}
