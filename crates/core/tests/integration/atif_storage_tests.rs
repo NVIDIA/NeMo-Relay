@@ -21,7 +21,10 @@ use std::time::Duration;
 use nemo_relay::api::runtime::{
     NemoRelayContextState, create_scope_stack, global_context, set_thread_scope_stack,
 };
-use nemo_relay::api::scope::{PopScopeParams, PushScopeParams, ScopeType, pop_scope, push_scope};
+use nemo_relay::api::scope::{
+    PopScopeParams, PushScopeParams, ScopeType, pop_scope, pop_scope_with_subscriber_delivery,
+    push_scope,
+};
 use nemo_relay::api::subscriber::flush_subscribers;
 use nemo_relay::observability::plugin_component::OBSERVABILITY_PLUGIN_KIND;
 use nemo_relay::plugin::{PluginComponentSpec, PluginConfig};
@@ -649,12 +652,18 @@ fn slow_atif_http_upload_does_not_hold_the_dispatcher_but_flush_waits_for_it() {
             .build(),
     )
     .expect("push agent scope");
-    pop_scope(
+    let delivery = pop_scope_with_subscriber_delivery(
         PopScopeParams::builder()
             .handle_uuid(&trajectory.uuid)
             .build(),
     )
     .expect("pop agent scope");
+    futures::executor::block_on(delivery.wait()).expect("delivery receipt should complete");
+    assert_eq!(
+        received.load(std::sync::atomic::Ordering::SeqCst),
+        0,
+        "a hook's delivery receipt must not wait for the upload"
+    );
     let later = push_scope(
         PushScopeParams::builder()
             .name("after-slow-upload")

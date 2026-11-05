@@ -40,7 +40,9 @@ use uuid::Uuid;
 use super::otel_file::OtlpFileFormat;
 use super::private_file::atomic_private_write;
 use crate::api::event::{Event, LogSeverity, ScopeCategory, ValidatedMetricMeasurement};
-use crate::api::runtime::{EventSubscriberFn, current_scope_stack, global_context};
+use crate::api::runtime::{
+    EventSubscriberFn, current_scope_stack, global_context, set_thread_scope_stack,
+};
 use crate::api::scope::ScopeType;
 use crate::api::subscriber::{
     flush_subscribers, scope_deregister_subscriber, try_scope_deregister_subscriber,
@@ -3304,6 +3306,10 @@ impl AtifDeliveryQueue {
 
     /// Waits for every upload submitted before this call.
     fn drain(&self) {
+        let started = self.sender.lock().is_ok_and(|sender| sender.is_some());
+        if !started {
+            return;
+        }
         let (done, finished) = std::sync::mpsc::channel();
         if self.send(AtifDeliveryJob::Drain(done)).is_ok() {
             let _ = finished.recv();
@@ -4025,12 +4031,13 @@ fn finish_atif_write(
     write: PendingAtifWrite,
     targets: Vec<SinkLabel>,
 ) {
-    let (remote, local): (Vec<_>, Vec<_>) = targets
-        .into_iter()
-        .partition(|label| matches!(label, SinkLabel::Remote(_)));
-    let local_results = write_atif(&write, storage.as_slice(), &local);
-    if remote.is_empty() {
-        complete_atif_write(manager, write.agent_uuid, local_results);
+    // `sink_targets` returns one local target or only remote targets.
+    if !targets
+        .iter()
+        .any(|label| matches!(label, SinkLabel::Remote(_)))
+    {
+        let results = write_atif(&write, storage.as_slice(), &targets);
+        complete_atif_write(manager, write.agent_uuid, results);
         return;
     }
     let queue = {
@@ -4040,22 +4047,14 @@ fn finish_atif_write(
         Arc::clone(&guard.delivery_queue)
     };
     let retained = crate::api::runtime::subscriber_dispatcher::retain_current_publication();
+    // Deregistration below resolves the scope through this thread's stack.
+    let scope_stack = current_scope_stack();
     let manager = Arc::clone(manager);
     let storage = Arc::clone(storage);
     queue.submit(Box::new(move || {
         let _retained = retained;
-        let mut results = local_results;
-        if results.is_empty() {
-            results = write_atif(&write, storage.as_slice(), &remote);
-        } else {
-            results.extend(remote.iter().filter_map(|label| match label {
-                SinkLabel::Remote(index) => Some((
-                    label.clone(),
-                    write_atif_remote(storage.as_slice(), *index, &write),
-                )),
-                SinkLabel::Local => None,
-            }));
-        }
+        set_thread_scope_stack(scope_stack);
+        let results = write_atif(&write, storage.as_slice(), &targets);
         complete_atif_write(&manager, write.agent_uuid, results);
     }));
 }
