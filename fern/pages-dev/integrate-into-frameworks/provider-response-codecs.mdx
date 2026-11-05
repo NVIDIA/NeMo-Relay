@@ -121,7 +121,7 @@ Each catalog entry declares:
 - `aliases` for dated or provider-specific model IDs.
 - `currency`, defaulting to `USD`.
 - `unit`, defaulting to `per_token`. Relay estimates only `per_token` entries in this version. `per_request`, `per_second`, and `gpu_hour` are representable for future source integrations but are not estimated.
-- `rates` per one million input, output, cache-read, and cache-write tokens for flat `per_token` entries.
+- `rates` per one million input, output, cache-read, cache-write, and one-hour cache-write tokens for flat `per_token` entries.
 - `rate_schedule` for data-driven threshold-based model pricing, such as models whose full-request input/output rates change after a prompt-token threshold.
 - `prompt_cache.read_accounting` to tell Relay whether prompt tokens include cache-read tokens. Relay ignores it for usage with `uncached_input_tokens`.
 - `pricing_as_of` and `pricing_source` for auditability.
