@@ -1,7 +1,7 @@
 // SPDX-FileCopyrightText: Copyright (c) 2026, NVIDIA CORPORATION & AFFILIATES. All rights reserved.
 // SPDX-License-Identifier: Apache-2.0
 
-//! The stored sign-in: one owner-only file per issuer and client, and the lock around it.
+//! The stored sign-in: one owner-only file per issuer, client and scope, and the lock around it.
 
 use std::path::{Path, PathBuf};
 use std::time::Duration;
@@ -65,9 +65,15 @@ pub(crate) fn ensure_sessions_dir(dir: &Path) -> Result<(), CliError> {
     }
 }
 
-/// One file per issuer and client, so sign-ins to several providers do not collide.
+/// One file per issuer, client and scope, so sign-ins to several providers, or with other
+/// scopes, do not collide.
 pub(crate) fn session_path(dir: &Path, source: &OidcSource) -> PathBuf {
-    let digest = Sha256::digest(format!("{}\n{}", source.issuer(), source.client_id));
+    let digest = Sha256::digest(format!(
+        "{}\n{}\n{}",
+        source.issuer(),
+        source.client_id,
+        source.scope
+    ));
     let name: String = digest[..16]
         .iter()
         .map(|byte| format!("{byte:02x}"))
@@ -92,6 +98,11 @@ pub(super) struct SessionLock(std::fs::File);
 
 impl SessionLock {
     pub(super) async fn acquire(session: &Path) -> Result<Self, CliError> {
+        Self::try_acquire(session).await?.ok_or_else(lock_timeout)
+    }
+
+    /// Returns `None` when another update holds the lock for the whole wait.
+    pub(super) async fn try_acquire(session: &Path) -> Result<Option<Self>, CliError> {
         let file = std::fs::OpenOptions::new()
             .create(true)
             .truncate(false)
@@ -102,14 +113,16 @@ impl SessionLock {
             == crate::filesystem::LockAttempt::Contended
         {
             if tokio::time::Instant::now() >= deadline {
-                return Err(auth_error(
-                    "another sign-in update did not finish in time".into(),
-                ));
+                return Ok(None);
             }
             tokio::time::sleep(Duration::from_millis(50)).await;
         }
-        Ok(Self(file))
+        Ok(Some(Self(file)))
     }
+}
+
+pub(super) fn lock_timeout() -> CliError {
+    auth_error("another sign-in update did not finish in time".into())
 }
 
 impl Drop for SessionLock {

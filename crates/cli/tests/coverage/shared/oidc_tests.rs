@@ -574,3 +574,45 @@ async fn a_slow_refresh_reply_does_not_shorten_the_stored_lifetime() {
     assert_eq!(token, "access-2");
     assert_eq!(saved(dir.path(), &source).expires_at, 1_002 + 3600);
 }
+
+#[tokio::test(start_paused = true)]
+async fn a_lock_wait_timeout_keeps_using_an_unexpired_token() {
+    let (source, issuer) = start_issuer().await;
+    let dir = tempfile::tempdir().unwrap();
+    store(dir.path(), &source, Some("refresh-1"), 1_000 + 60);
+    let _held = super::session::SessionLock::acquire(&session_path(dir.path(), &source))
+        .await
+        .unwrap();
+
+    let token = current_token(dir.path(), &source, &|| 1_000).await.unwrap();
+
+    assert_eq!(token, "access-1");
+    assert!(issuer.lock().unwrap().grants.is_empty());
+}
+
+#[tokio::test(start_paused = true)]
+async fn a_lock_wait_timeout_does_not_return_an_expired_token() {
+    let (source, _issuer) = start_issuer().await;
+    let dir = tempfile::tempdir().unwrap();
+    store(dir.path(), &source, Some("refresh-1"), 1_000);
+    let _held = super::session::SessionLock::acquire(&session_path(dir.path(), &source))
+        .await
+        .unwrap();
+
+    let error = error_text(current_token(dir.path(), &source, &|| 1_000).await);
+
+    assert!(error.contains("did not finish in time"), "{error}");
+}
+
+#[tokio::test]
+async fn a_sign_in_for_one_scope_is_never_used_for_another() {
+    let (source, _issuer) = start_issuer().await;
+    let dir = tempfile::tempdir().unwrap();
+    store(dir.path(), &source, Some("refresh-1"), 10_000);
+    let other = OidcSource::new(&source.issuer, CLIENT_ID, Some("openid other-scope"));
+
+    let error = error_text(current_token(dir.path(), &other, &|| 1_000).await);
+
+    assert!(error.contains("nemo-relay auth login"), "{error}");
+    assert_eq!(saved(dir.path(), &source).access_token, "access-1");
+}
