@@ -19,7 +19,9 @@ use std::time::{Duration, SystemTime, UNIX_EPOCH};
 use serde::{Deserialize, Serialize};
 
 use self::client::{OidcClient, secure_origin};
-use self::session::{SessionLock, ensure_sessions_dir, read_session, session_path, write_session};
+use self::session::{
+    SessionLock, ensure_sessions_dir, lock_timeout, read_session, session_path, write_session,
+};
 use crate::error::CliError;
 
 pub(crate) use self::session::sessions_dir;
@@ -189,7 +191,13 @@ pub(crate) async fn current_token(
     if !dir.exists() {
         return Err(login_required(source.issuer()));
     }
-    let _lock = SessionLock::acquire(&path).await?;
+    let Some(_lock) = SessionLock::try_acquire(&path).await? else {
+        // A slow update by another request must not drop a token that is still valid.
+        return match read_session(&path, source)? {
+            Some(session) if session.expires_at > now() => Ok(session.access_token),
+            _ => Err(lock_timeout()),
+        };
+    };
     let session = read_session(&path, source)?.ok_or_else(|| login_required(source.issuer()))?;
     if session.expires_at > now().saturating_add(REFRESH_MARGIN_SECS) {
         return Ok(session.access_token);
