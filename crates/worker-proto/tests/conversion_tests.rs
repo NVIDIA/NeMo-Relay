@@ -12,6 +12,153 @@ use prost::Message;
 use serde::{Serialize, de::DeserializeOwned};
 use serde_json::json;
 
+#[test]
+#[allow(deprecated)] // Exercise the aggregate fields retained for older worker readers.
+fn cache_write_usage_preserves_canonical_entries_and_projects_legacy_counts() {
+    use nemo_relay_types::codec::response::Usage;
+
+    for (value, total, one_hour) in [
+        (json!({}), None, None),
+        (json!({"cache_write_tokens": []}), Some(0), None),
+        (json!({"cache_write_tokens": [{"count": 0}]}), Some(0), None),
+        (
+            json!({"cache_write_tokens": [{"count": 0, "duration": 3600}]}),
+            Some(0),
+            Some(0),
+        ),
+        (
+            json!({
+                "prompt_tokens": 0, "completion_tokens": 2, "total_tokens": 2,
+                "cache_read_tokens": 0, "uncached_input_tokens": 0,
+                "cost": {"total": 0.25, "currency": "USD", "source": "provider_reported"},
+                "cache_write_tokens": [
+                    {"count": u64::MAX},
+                    {"count": 1, "duration": 3600},
+                    {"count": 2, "duration": 0},
+                    {"count": 0, "duration": 999},
+                    {"count": 4, "duration": 3600},
+                    {"count": 3, "duration": u64::MAX}
+                ]
+            }),
+            Some(u64::MAX),
+            Some(5),
+        ),
+        (
+            json!({"cache_write_tokens": [
+                {"count": u64::MAX, "duration": 3600},
+                {"count": 1, "duration": 3600}
+            ]}),
+            Some(u64::MAX),
+            Some(u64::MAX),
+        ),
+    ] {
+        let usage: Usage = serde_json::from_value(value).unwrap();
+        let expected = serde_json::to_value(&usage).unwrap();
+        let wire: pb::Usage = encode(usage).unwrap();
+        assert_eq!(wire.cache_write_tokens, total);
+        assert_eq!(wire.cache_write_1h_tokens, one_hour);
+        let wire = pb::Usage::decode(wire.encode_to_vec().as_slice()).unwrap();
+        let returned: Usage = decode(wire).unwrap();
+        assert_eq!(serde_json::to_value(returned).unwrap(), expected);
+    }
+}
+
+#[test]
+#[allow(deprecated)] // Conflicting old-reader projections must not override the canonical list.
+fn canonical_cache_write_usage_overrides_contradictory_legacy_counts() {
+    use nemo_relay_types::codec::response::Usage;
+
+    for entries in [
+        json!([]),
+        json!([{"count": 0, "duration": 0}]),
+        json!([{"count": 7}, {"count": 2, "duration": 3600}]),
+    ] {
+        let expected = json!({"cache_write_tokens": entries});
+        let usage: Usage = serde_json::from_value(expected.clone()).unwrap();
+        let mut wire: pb::Usage = encode(usage).unwrap();
+        wire.cache_write_tokens = Some(1);
+        wire.cache_write_1h_tokens = Some(9);
+        let wire = pb::Usage::decode(wire.encode_to_vec().as_slice()).unwrap();
+        let returned: Usage = decode(wire).unwrap();
+        assert_eq!(serde_json::to_value(returned).unwrap(), expected);
+    }
+}
+
+#[test]
+#[allow(deprecated)] // Decode messages containing only the original scalar fields.
+fn legacy_cache_write_usage_uses_authoritative_total_normalization() {
+    use nemo_relay_types::codec::response::Usage;
+
+    for (total, one_hour, expected) in [
+        (None, None, json!({})),
+        (None, Some(0), json!({})),
+        (None, Some(7), json!({})),
+        (Some(0), None, json!({"cache_write_tokens": [{"count": 0}]})),
+        (
+            Some(0),
+            Some(9),
+            json!({"cache_write_tokens": [{"count": 0}]}),
+        ),
+        (
+            Some(10),
+            None,
+            json!({"cache_write_tokens": [{"count": 10}]}),
+        ),
+        (
+            Some(10),
+            Some(0),
+            json!({"cache_write_tokens": [{"count": 10}]}),
+        ),
+        (
+            Some(10),
+            Some(4),
+            json!({"cache_write_tokens": [{"count": 6}, {"count": 4, "duration": 3600}]}),
+        ),
+        (
+            Some(10),
+            Some(12),
+            json!({"cache_write_tokens": [{"count": 10, "duration": 3600}]}),
+        ),
+    ] {
+        let wire = pb::Usage {
+            cache_write_tokens: total,
+            cache_write_1h_tokens: one_hour,
+            ..Default::default()
+        };
+        let wire = pb::Usage::decode(wire.encode_to_vec().as_slice()).unwrap();
+        let returned: Usage = decode(wire).unwrap();
+        assert_eq!(serde_json::to_value(returned).unwrap(), expected);
+    }
+}
+
+#[test]
+fn cache_write_usage_rejects_an_entry_without_a_count() {
+    use nemo_relay_types::codec::response::Usage;
+
+    // Usage tag 9 contains list.values[0] with duration = 1 but no count.
+    let wire = pb::Usage::decode([0x4a, 4, 0x0a, 2, 0x10, 1].as_slice()).unwrap();
+    assert!(decode::<Usage, _>(wire).is_err());
+}
+
+#[test]
+fn annotated_response_preserves_distinct_nested_cache_write_usage() {
+    use nemo_relay_types::codec::response::AnnotatedLlmResponse;
+
+    let value: AnnotatedLlmResponse = serde_json::from_value(json!({
+        "usage": {"cache_write_tokens": [{"count": 0, "duration": 0}, {"count": 7}]},
+        "optimization_summary": {
+            "schema_version": "1.0.0", "calculation_version": "1.0.0", "status": "partial",
+            "effective_usage": {"cache_write_tokens": []},
+            "baseline_usage": {"cache_write_tokens": [
+                {"count": u64::MAX, "duration": 999}, {"count": 2, "duration": 3600}
+            ]},
+            "tokens_saved": {}, "contributions": []
+        }
+    }))
+    .unwrap();
+    roundtrip::<_, pb::AnnotatedLlmResponse>(value);
+}
+
 fn roundtrip<D, W>(domain: D)
 where
     D: WireValue<W> + Serialize + DeserializeOwned,

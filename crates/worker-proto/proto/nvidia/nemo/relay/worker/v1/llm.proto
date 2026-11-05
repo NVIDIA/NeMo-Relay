@@ -437,15 +437,31 @@ message Usage {
   optional uint64 total_tokens = 3;
   // Tokens served from prompt cache (read).
   optional uint64 cache_read_tokens = 4;
-  // Tokens written to prompt cache.
-  optional uint64 cache_write_tokens = 5;
-  // The subset of prompt-cache write tokens retained for one hour.
-  optional uint64 cache_write_1h_tokens = 6;
+  // Legacy aggregate prompt-cache write count; use cache_write_token_counts when present.
+  optional uint64 cache_write_tokens = 5 [deprecated = true];
+  // Legacy one-hour subset of the aggregate prompt-cache write count.
+  optional uint64 cache_write_1h_tokens = 6 [deprecated = true];
   // Input tokens neither read from nor written to the provider's prompt cache. Include this
   // value only when the provider's usage rules define this split. Absence does not mean zero.
   optional uint64 uncached_input_tokens = 7;
   // Optional cost reported by provider data or estimated from Relay model pricing.
   CostEstimate cost = 8;
+  // Ordered duration-aware cache writes; presence overrides both legacy cache-write fields.
+  CacheWriteTokenCountsList cache_write_token_counts = 9;
+}
+
+// Presence-bearing duration-aware prompt-cache write counts.
+message CacheWriteTokenCountsList {
+  // Ordered entries; a present empty wrapper preserves an explicitly empty collection.
+  repeated CacheWriteTokenCounts values = 1;
+}
+
+// Prompt-cache write tokens retained for one cache duration.
+message CacheWriteTokenCounts {
+  // Tokens written for this duration; explicit zero is valid, but absence is not.
+  optional uint64 count = 1 [(buf.validate.field).required = true];
+  // Cache duration in seconds, absent when the provider does not report it.
+  optional uint64 duration = 2;
 }
 
 // Origin of a cost value, separating pricing estimates from provider reports.

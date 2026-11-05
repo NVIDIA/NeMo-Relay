@@ -106,15 +106,9 @@ dto!(nemo_relay_types::codec::response::ResponseToolCall => ResponseToolCall {
     arguments: required,
 });
 
-dto!(nemo_relay_types::codec::response::Usage => Usage {
-    prompt_tokens: optional,
-    completion_tokens: optional,
-    total_tokens: optional,
-    cache_read_tokens: optional,
-    cache_write_tokens: optional,
-    cache_write_1h_tokens: optional,
-    uncached_input_tokens: optional,
-    cost: optional,
+dto!(nemo_relay_types::codec::response::CacheWriteTokenCounts => CacheWriteTokenCounts {
+    count: required,
+    duration: optional,
 });
 
 dto!(nemo_relay_types::codec::response::CostEstimate => CostEstimate {
@@ -809,6 +803,7 @@ list_codec!(nemo_relay_types::codec::request::ContentPart => ContentPartList);
 list_codec!(nemo_relay_types::codec::request::ToolCall => ToolCallList);
 list_codec!(nemo_relay_types::codec::request::ToolDefinition => ToolDefinitionList);
 list_codec!(nemo_relay_types::codec::response::ResponseToolCall => ResponseToolCallList);
+list_codec!(nemo_relay_types::codec::response::CacheWriteTokenCounts => CacheWriteTokenCountsList);
 
 dto!(nemo_relay_types::diagnostics::PluginObservationContext => DiagnosticPluginContext {
     execution: optional,
