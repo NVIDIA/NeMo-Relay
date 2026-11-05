@@ -137,6 +137,20 @@ repos:
         files: '(^|/)(Cargo\.toml|Cargo\.lock)$'
         pass_filenames: false
 
+      - id: native-abi-version-check
+        name: Native ABI release version and SDK pin agree
+        entry: uv run --no-sync python scripts/native_abi_release.py check
+        language: system
+        files: '^(Cargo\.toml|crates/plugin-abi/Cargo\.toml|scripts/native_abi_release\.py|\.github/workflows/release_native_abi\.yml)$'
+        pass_filenames: false
+
+      - id: native-abi-fixture-lockfile-check
+        name: Native ABI fixture lockfiles are up to date
+        entry: bash scripts/build_native_abi_fixtures.sh --check-lockfiles
+        language: system
+        files: '^(crates/plugin-abi/tests/fixtures/.*Cargo\.(toml|lock)|scripts/build_native_abi_fixtures\.sh|\.pre-commit-config\.yaml)$'
+        pass_filenames: false
+
       - id: uv-lockfile-check
         name: uv.lock is up to date
         entry: uv lock

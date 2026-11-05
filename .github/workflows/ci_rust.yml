@@ -149,6 +149,12 @@ jobs:
         with:
           tool: cargo-llvm-cov@${{ steps.ci-config.outputs.cargo_llvm_cov_version }},cargo-nextest@${{ steps.ci-config.outputs.cargo_nextest_version }},just@${{ steps.ci-config.outputs.just_version }}
 
+      - name: Check unchanged native binaries across Rust toolchains
+        run: |
+          source .github/ci-tool-versions.env
+          rustup toolchain install "$NEMO_RELAY_CI_NATIVE_ABI_FIXTURE_RUST_VERSION" --profile minimal
+          just test-native-abi-toolchains "$NEMO_RELAY_CI_NATIVE_ABI_FIXTURE_RUST_VERSION"
+
       - name: Run Rust tests with coverage
         working-directory: ${{ env.NEMO_RELAY_CI_WORKSPACE }}
         run: |

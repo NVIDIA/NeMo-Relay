@@ -11,6 +11,7 @@ on:
       - 'release/**'
     tags:
       - '*'
+      - '!native-abi/**'
 
 # This allows a subsequently queued workflow run to interrupt previous runs
 concurrency:
@@ -427,28 +428,13 @@ jobs:
         run: |
           set -euo pipefail
           version="${{ github.ref_name }}"
-          # Dependencies first; the standalone Rust SDK is published last.
-          packages=(
-            nemo-relay-types
-            nemo-relay-worker-proto
-            nemo-relay-codecs
-            nemo-relay-plugin
-            nemo-relay-worker
-            nemo-relay-diagnostics
-            nemo-relay-model-pricing
-            nemo-relay-logging
-            nemo-relay-observability
-            nemo-relay-resource-metrics
-            nemo-relay-runtime
-            nemo-relay-plugin-host
-            nemo-relay-adaptive
-            nemo-relay-pii-redaction
-            nemo-relay-builtins
-            nemo-relay-ffi
-            nemo-relay-cli
-            nemo-relay
-          )
+          # The interface is released independently and must exist first.
+          just check-native-abi-published
+          mapfile -t packages < <(just published-cargo-packages)
           for package in "${packages[@]}"; do
+            if [[ "$package" == nemo-relay-plugin-abi ]]; then
+              continue
+            fi
             if cargo info "${package}@${version}" --registry crates-io >/dev/null 2>&1; then
               echo "${package} ${version} already exists on crates.io; skipping"
               continue

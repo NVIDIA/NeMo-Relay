@@ -2,9 +2,13 @@
 # SPDX-License-Identifier: Apache-2.0
 
 ci:
+  - '.github/ci-tool-versions.env'
+  - 'scripts/check_native_abi_toolchains.py'
   - '.github/actionlint.yaml'
   - '.github/ci-path-filters.yml'
   - '.github/workflows/**'
+  - 'scripts/native_abi_release.py'
+  - 'scripts/tests/test_native_abi_release.py'
   - 'codecov.yml'
 
 installer:
@@ -41,6 +45,10 @@ shared:
   - 'crates/model-pricing/src/**'
   - 'crates/observability/Cargo.toml'
   - 'crates/observability/src/**'
+  - 'crates/plugin-abi/Cargo.toml'
+  - 'crates/plugin-abi/src/**'
+  - 'crates/plugin-abi/tests/**'
+  - 'scripts/build_native_abi_fixtures.sh'
   - 'crates/plugin-host/Cargo.toml'
   - 'crates/plugin-host/src/**'
   - 'crates/plugin-host/tests/**'
@@ -94,6 +102,10 @@ rust_package:
   - 'crates/model-pricing/src/**'
   - 'crates/observability/Cargo.toml'
   - 'crates/observability/src/**'
+  - 'crates/plugin-abi/Cargo.toml'
+  - 'crates/plugin-abi/src/**'
+  - 'crates/plugin-abi/tests/**'
+  - 'scripts/build_native_abi_fixtures.sh'
   - 'crates/plugin-host/Cargo.toml'
   - 'crates/plugin-host/src/**'
   - 'crates/plugin-host/tests/**'
@@ -148,6 +160,10 @@ node_package:
   - 'crates/node/src/**'
   - 'crates/observability/Cargo.toml'
   - 'crates/observability/src/**'
+  - 'crates/plugin-abi/Cargo.toml'
+  - 'crates/plugin-abi/src/**'
+  - 'crates/plugin-abi/tests/**'
+  - 'scripts/build_native_abi_fixtures.sh'
   - 'crates/plugin-host/Cargo.toml'
   - 'crates/plugin-host/src/**'
   - 'crates/plugin-host/tests/**'
@@ -193,6 +209,10 @@ python_package:
   - 'crates/model-pricing/src/**'
   - 'crates/observability/Cargo.toml'
   - 'crates/observability/src/**'
+  - 'crates/plugin-abi/Cargo.toml'
+  - 'crates/plugin-abi/src/**'
+  - 'crates/plugin-abi/tests/**'
+  - 'scripts/build_native_abi_fixtures.sh'
   - 'crates/plugin-host/Cargo.toml'
   - 'crates/plugin-host/src/**'
   - 'crates/plugin-host/tests/**'
@@ -297,6 +317,10 @@ docs:
   - 'scripts/tests/test_rust_library_reference.py'
 
 rust:
+  - 'scripts/native_plugin_benchmark/**'
+  - 'scripts/tests/test_native_plugin_benchmark.py'
+  - 'scripts/check_native_abi_toolchains.py'
+  - 'scripts/build_native_abi_fixtures.sh'
   - '.agents/plugins/marketplace.json'
   - '.claude-plugin/marketplace.json'
   - 'Cargo.lock'
