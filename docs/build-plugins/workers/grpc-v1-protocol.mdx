@@ -12,12 +12,9 @@ The canonical protobuf files live under
 `crates/worker-proto/proto/nvidia/nemo/relay/worker/v1/`.
 Crate and wheel release versions remain independent of this contract version.
 
-Upgrade the host and workers together. Set
-`compat.worker_protocol = "nvidia.nemo.relay.worker.v1"` and
-`compat.relay = ">=1.0.0,<2.0"` in worker manifests. Regenerate custom bindings or
-rebuild workers with the new SDK. Old `grpc-v1` workers cannot connect. The old
-schema and generated bindings have been removed. Their definitions remain in
-Git history.
+Set `compat.worker_protocol = "nvidia.nemo.relay.worker.v1"` and
+`compat.relay = ">=1.0.0,<2.0"` in worker manifests. Generate custom bindings from
+the protobuf files in this repository.
 
 SDK callbacks use shared domain types in Rust and authoring dictionaries and
 dataclasses in Python. Private converters translate those values into typed
@@ -151,9 +148,9 @@ It exposes six RPCs:
 Its decode and admission limits are separate from `RelayHostRuntimeService`, logging,
 and execution payload limits.
 
-Older hosts return `UNIMPLEMENTED`. For unsupported hosts or disabled collection,
-the SDK returns an inactive helper that skips lazy observation factories. Diagnostic
-availability does not decide whether a plugin executes.
+If the diagnostics service is unavailable or collection is disabled, the SDK
+returns an inactive helper. It skips lazy observation factories. A plugin can
+execute regardless of diagnostic availability.
 
 ### Negotiate Settings and Authority
 
@@ -248,13 +245,11 @@ shutdown allowance. Activation teardown stops submissions and closes registratio
 The runtime context remains available.
 
 Restricted evidence uses state-only recording. It never enters `Log`, `EmitMark`,
-legacy reports, or exporters.
+host-level runtime reports, or exporters.
 
 ## Execution Protocol Compatibility
 
-The active protocol is `nvidia.nemo.relay.worker.v1`, contract `1.0.0`.
-Workers built for `grpc-v1` must rebuild with the updated SDK and update their
-manifest's `worker_protocol`. There is no automatic adapter between namespaces.
+Use `nvidia.nemo.relay.worker.v1`, contract `1.0.0`, for execution messages.
 Generate custom clients from the protobuf source in `crates/worker-proto/proto/`.
 
 The worker implements `PluginWorkerService`. Relay implements

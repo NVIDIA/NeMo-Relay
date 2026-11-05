@@ -11,11 +11,10 @@ A worker plugin runs outside the Relay process. It implements
 types. It can call the host's remaining execution chain through continuations,
 use codecs during a callback, emit marks, and manage scope stacks.
 
-The current contract is `nvidia.nemo.relay.worker.v1`, version `1.0.0`, introduced
-in Relay 1.0. Upgrade the host and worker SDK together, regenerate custom bindings,
-and set `compat.worker_protocol = "nvidia.nemo.relay.worker.v1"` in the manifest.
-Set `compat.relay = ">=1.0.0,<2.0"` for the current SDK. Old `grpc-v1` workers
-cannot use these services. Package versions continue to follow Relay releases.
+The protocol contract is `nvidia.nemo.relay.worker.v1`, version `1.0.0`.
+Set `compat.worker_protocol = "nvidia.nemo.relay.worker.v1"` and
+`compat.relay = ">=1.0.0,<2.0"` in the manifest for this SDK.
+SDK package versions follow Relay releases.
 
 Tool callbacks and `ToolNext` continuations preserve an application `result` and
 optional opaque `annotation`; execution intercepts can add Relay-owned pending
@@ -24,8 +23,8 @@ request codecs and a response codec for non-streaming callbacks.
 
 Workers can add a data schema, log severity, and semantic category to a mark, emit validated metric
 measurements, and read the current host-level runtime diagnostics. These diagnostics are
-ordered by code and are not attributed to a particular plugin. They are the legacy
-report, not canonical snapshots. Rust and Python workers can also record internal
+ordered by code and describe the host as a whole. Use canonical diagnostics for
+plugin-specific observations and snapshots. Rust and Python workers can also record internal
 observations through the canonical diagnostics delivery API. Refer to
 [Plugin Diagnostics](/build-plugins/diagnostics) for matching examples and delivery
 limits. Worker recording does not grant canonical read access.
@@ -54,7 +53,7 @@ cleanup in a guaranteed finalizer.
 
 ## Let the SDK Own the Transport
 
-Implement `WorkerPlugin` and let the SDK run the protobuf server. `serve_plugin`
+Implement `Plugin` and let the SDK run the protobuf server. `serve_plugin`
 reads Relay's activation environment and opens the authenticated local endpoint.
 It handles handshake, health, validation, registration, callbacks, cancellation,
 and shutdown.
@@ -80,9 +79,9 @@ export NEMO_RELAY_PLUGIN_SNAPSHOT_DIR=/var/tmp/nrs
 
 ```python title="Python"
 import asyncio
-from nemo_relay_plugin import ConfigDiagnostic, Json, PluginContext, WorkerPlugin, serve_plugin
+from nemo_relay_plugin import ConfigDiagnostic, Json, PluginContext, Plugin, serve_plugin
 
-class ExamplePythonWorker(WorkerPlugin):
+class ExamplePythonWorker(Plugin):
     plugin_id = "examples.python_grpc_worker"
     allows_multiple_components = False
 
@@ -115,36 +114,41 @@ if __name__ == "__main__":
 
 ```rust title="Rust"
 use nemo_relay_worker::{
-    ConfigDiagnostic, Json, PluginContext, Result,
-    WorkerPlugin, WorkerSdkError, serve_plugin,
+    ConfigDiagnostic, Json, Plugin, PluginContext, Result, WorkerSdkError, serve_plugin,
 };
 
 struct DocumentationWorker;
 
-impl WorkerPlugin for DocumentationWorker {
-    fn plugin_id(&self) -> &str {
+impl Plugin for DocumentationWorker {
+    fn plugin_kind(&self) -> &str {
         "examples.rust_grpc_worker"
     }
-
     fn allows_multiple_components(&self) -> bool {
         false
     }
-
-    fn validate(&self, config: &Json) -> Vec<ConfigDiagnostic> {
+    fn validate(&self, config: &serde_json::Map<String, Json>) -> Vec<ConfigDiagnostic> {
+        let config = &Json::Object(config.clone());
         validate_config(config)
     }
 
-    fn register(&self, context: &mut PluginContext, config: &Json) -> Result<()> {
-        let settings = ExampleConfig::parse(config)
-            .map_err(WorkerSdkError::InvalidInput)?;
-        if settings.observe.enabled {
-            register_observation(context, &settings);
-        }
-        if settings.requests.enabled {
-            register_requests(context, &settings);
-        }
-        register_execution(context, &settings);
-        Ok(())
+    fn register<'a>(
+        &'a self,
+        config: &'a serde_json::Map<String, Json>,
+        context: &'a mut PluginContext,
+    ) -> nemo_relay_worker::PluginFuture<'a, ()> {
+        Box::pin(async move {
+            let config = &Json::Object(config.clone());
+
+            let settings = ExampleConfig::parse(config).map_err(WorkerSdkError::InvalidInput)?;
+            if settings.observe.enabled {
+                register_observation(context, &settings);
+            }
+            if settings.requests.enabled {
+                register_requests(context, &settings);
+            }
+            register_execution(context, &settings);
+            Ok(())
+        })
     }
 }
 
@@ -156,11 +160,11 @@ async fn main() -> Result<()> {
 
 </CodeBlocks>
 
-The examples above use synchronous `register` methods to declare callbacks during
-activation. Python also supports an asynchronous registration method. Rust
-registration stays synchronous. The installed callbacks can be asynchronous.
+Python supports synchronous or asynchronous registration. Rust registration returns
+a future that the SDK awaits before sending the registration response. The installed callbacks can be asynchronous.
 
-The `plugin_id` must match the manifest ID and handshake identity. A mismatch
+Rust `plugin_kind()` and Python `plugin_id` must match the manifest ID and handshake
+identity. A mismatch
 fails activation before any callback runs.
 
 ## Complete Path

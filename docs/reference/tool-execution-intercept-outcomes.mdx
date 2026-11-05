@@ -52,9 +52,8 @@ registration APIs to produce pending marks, and return the canonical outcome
 from every registered callback. Use a
 [mark event sanitizer](/reference/event-sanitizers) when the emitted pending
 mark's `data`, `category_profile`, or `metadata` must be sanitized. Public APIs,
-native API 1 plugins, and `nvidia.nemo.relay.worker.v1` workers require canonical
-tool callback and intercept returns. Relay does not provide a legacy raw-result
-adapter.
+native `v1.0` plugins, and `nvidia.nemo.relay.worker.v1` workers require canonical
+tool callback and intercept returns.
 
 ## Event and Exporter Projection
 
@@ -248,9 +247,7 @@ registerToolExecutionIntercept('measure', 10, async (context, next) => {
 });
 ```
 
-This is a breaking callback change: migrate Rust, Python, and Go callbacks from
-`(tool_name, arguments, next)` to `(context, next)`, and migrate Node.js and C
-callbacks from their argument-only shape to the context shape. In Node.js the
+Rust, Python, and Go execution intercepts receive `(context, next)`. In Node.js the
 context object uses `toolName`, `args`, and `toolCallId`, where
 `toolCallId` is `string | null`. The public C callback receives a single
 `context_json` string carrying `tool_name`, `args`, and `tool_call_id`;
@@ -275,7 +272,7 @@ Execution intercepts add lifecycle-owned pending marks to that shape:
 | Surface | Execution-intercept Outcome |
 | --- | --- |
 | Python | `ToolExecutionInterceptOutcome` |
-| Rust and native API 1 | `ToolExecutionInterceptOutcome` |
+| Rust and native `v1.0` SDK | `ToolExecutionInterceptOutcome` |
 | Go | `ToolExecutionInterceptOutcome` |
 | Node.js | `{ result, annotation?, pendingMarks? }`; JavaScript pending-mark DTOs use `categoryProfile` |
 | Public C | Canonical JSON with `result`, optional `annotation`, and optional `pending_marks` |
@@ -284,35 +281,12 @@ Execution intercepts add lifecycle-owned pending marks to that shape:
 Canonical JSON uses `annotation`, `pending_marks`, and `category_profile`
 across bindings.
 
-Relay 0.8 established this canonical result as the native API 1 and `grpc-v1`
-baseline, using native ABI v4. Workers used the `nemo.relay.worker.v1` package;
-that release changed the `ToolNext` response and tool-execution outcome types.
-Relay 0.9 then replaced the tool execution callback shape, using native ABI v5,
-while retaining those worker result messages.
+Native plugins declare `compat.native_api = "v1.0"`. Their build SDK sets the
+minimum host contract they require. The `compat.relay` range selects supported
+Relay releases. Refer to [Native ABI Reference](/build-plugins/native/native-abi-reference).
+Workers use `nvidia.nemo.relay.worker.v1`, contract version `1.0.0`.
 
-Relay 1.0 requires the `nvidia.nemo.relay.worker.v1` worker protocol. Regenerate
-worker protobuf bindings or rebuild with the updated SDK, and declare
-`compat.relay = ">=1.0.0,<2.0"`. The current native host supplies ABI v8 and retains
-v7 callback compatibility. Scope-stack inspection requires v8.
-Future incompatible contract changes must increment the corresponding native
-API or worker protocol version.
-
-## Migration
-
-When upgrading from a release before Relay 0.8, make these tool-result changes
-together:
-
-1. Wrap every managed tool callback return in `ToolExecutionResult`.
-2. Treat every execution intercept's `next(args)` return as
-   `ToolExecutionResult`.
-3. Return the downstream `result` and `annotation` from forwarding intercepts,
-   or deliberately replace or remove the annotation.
-4. Read `.result` when an application or framework needs the original business
-   payload.
-5. Wrap the result passed to a manual tool end helper in
-   `ToolExecutionResult`.
-
-### Return-Shape Errors
+## Return-Shape Errors
 
 Python distinguishes `ToolExecutionResult` from
 `ToolExecutionInterceptOutcome`. A callback that returns a raw dictionary is
@@ -333,13 +307,9 @@ form.
 
 Node.js represents both values as compatible object shapes. Therefore,
 `return await next(args)` is a valid forwarding intercept in Node.js. Raw tool
-callback returns and raw intercept outcomes are still rejected with guidance to
+callback returns and raw intercept outcomes are rejected with guidance to
 return `{ result: payload }` or
 `{ result: downstream.result, annotation: downstream.annotation }`.
-
-Rebuild native plugins and workers against the same NeMo Relay release that
-hosts them. For release-specific upgrade actions, refer to the
-[Migration Guides](/reference/migration-guides).
 
 LLM request intercepts use a different outcome because they must preserve an
 annotated request and codec authority. That contract is described in [LLM

@@ -79,9 +79,6 @@ The main compatibility changes affect these areas:
   run before response caches. The default cache priority is now `150`.
 - Local hooks use verified TLS connections. Fail-closed delivery failures
   return exit code `2`. Refresh personal hooks and restart affected processes.
-- Native plugins can use application binary interface (ABI) v8 scope snapshots.
-  Existing v7 callback layouts remain compatible. Worker snapshots require the
-  new `grpc-v1` extension.
 - Rust worker SDK error matches must handle `WorkerSdkError::Downstream`.
   Python worker error checks must allow `WorkerSdkError` subclasses. Preserve
   the original error so diagnostics can identify where the failure began.

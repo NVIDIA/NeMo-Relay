@@ -1,6 +1,6 @@
 ---
 title: "Build and Package"
-description: "Build, validate, register, exercise, and unload the Rust native example."
+description: "Build, validate, register, exercise, and close the Rust native example."
 position: 21
 ---
 {/* SPDX-FileCopyrightText: Copyright (c) 2026, NVIDIA CORPORATION & AFFILIATES. All rights reserved.
@@ -14,9 +14,8 @@ with a strict schema. Run every command in this procedure from
 
 The example crate exposes both `cdylib` and `rlib`. Relay loads the `cdylib`; the `rlib`
 lets the example integration tests call validation helpers without loading an unsafe
-dynamic boundary. The dependencies use the current 1.0.0 public SDK rather than a Git
-revision or an older package line. The `path = "../../crates/plugin"` override exists
-only because this checked example builds inside the NeMo Relay repository. A standalone
+dynamic boundary. The dependencies use the 1.0.0 public SDK. The
+`path = "../../crates/plugin"` setting lets the example build inside this repository. A standalone
 plugin depends on the published `nemo-relay-plugin = "1.0.0"` package without `path`.
 
 The checked example uses the following package and dependency configuration:
@@ -29,7 +28,7 @@ Build and materialize the platform-specific library as follows:
 
    ```bash
    cargo nextest run
-   cargo build
+   cargo build --target-dir target
    ```
 
 2. Copy `relay-plugin.toml` to `relay-plugin.local.toml`. Replace
@@ -51,9 +50,9 @@ and the digest describes those exact bytes.
 
 The checked [manifest](/build-plugins/package-discoverable-plugins) template declares
 the plugin identity, version contracts, schema,
-library path, and exported symbol:
+library path, and integrity evidence:
 
-<Code src="../_code/rust_native_policy/relay-plugin.toml" language="toml" title="relay-plugin.toml" lines="4-31" showLineNumbers={false} />
+<Code src="../_code/rust_native_policy/relay-plugin.toml" language="toml" title="relay-plugin.toml" lines="4-30" showLineNumbers={false} />
 
 The `source.artifact` and `load.library` paths must identify the same library. Replace
 `<artifact-sha256>` with the lowercase digest of those bytes. The exported descriptor's
@@ -82,6 +81,23 @@ so direct activation and package validation agree.
   }
 }
 ```
+
+## Package Native Dependencies
+
+Include linked native libraries in the package. Keep the relative paths used by
+the library's runtime search paths. These paths tell the operating system where
+to find dependencies after Relay copies the package into protected staging.
+For example, use `$ORIGIN` paths on Linux or `@loader_path` and `@rpath` paths on
+macOS. On Windows, place sidecar DLLs beside the plugin DLL.
+
+Relay reads the binary imports and copies the package-local dependency chain.
+Use loader-relative paths for package dependencies. Relay rejects absolute
+package paths and sidecars whose library names conflict with different bytes
+already loaded in the process. Give different sidecar implementations unique
+library names.
+
+System libraries use the operating system's search rules. Libraries and their
+captured dependencies stay loaded until Relay exits.
 
 ## Validate and Activate
 

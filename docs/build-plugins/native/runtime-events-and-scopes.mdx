@@ -37,10 +37,9 @@ bound root-only stack returns its root. Synthetic propagated entries retain
 stored types, so a synthetic Agent root is not evidence of a known upstream
 Agent. See the [visible-stack contract](/about-nemo-relay/concepts/scopes#inspect-the-visible-stack).
 
-The getter requires the additive ABI v8 extension. A compatible v7 host
-returns an explicit unsupported error. The SDK validates the table's version
-and size, copies the result, and releases the host's buffer even if decoding
-fails. Async callbacks inspect their restored binding on each read.
+The getter is included in the checked v1.0 runtime interface. A revoked runtime
+returns an error. The SDK converts the owned checked result without retaining
+host buffers. Async callbacks inspect their restored binding on each read.
 
 ## Preserve Stack Ownership
 
@@ -113,6 +112,29 @@ When a plugin replays work captured earlier, `runtime.scope_at` and
 `ScopeGuard::close_at` accept the original `SystemTime` values while preserving the same
 guard ownership and cleanup behavior.
 
+Use `ScopeOptions` with `scope_with_options` or `push_scope_with_options` to set
+an explicit parent, start time, or `PARALLEL` and `RELOCATABLE` flags. The default
+uses the current parent, the current time, and empty flags.
+
+```rust
+use nemo_relay_plugin::{ScopeAttributes, ScopeOptions};
+
+let parent = runtime.current_scope()?;
+let mut child = runtime.scope_with_options(
+    "example.native.parallel",
+    ScopeType::Custom,
+    None,
+    None,
+    None,
+    ScopeOptions {
+        parent: Some(&parent),
+        attributes: ScopeAttributes::PARALLEL,
+        ..Default::default()
+    },
+)?;
+child.close(None, None)?;
+```
+
 ## Emit Typed Telemetry and Read Diagnostics
 
 Use `emit_mark_with_options` when a mark needs a data schema or log severity. Use
@@ -139,17 +161,23 @@ if let Some(diagnostic) = diagnostics.get("otel.metric_mark_invalid") {
 }
 ```
 
+Use `emit_mark_with_context` with `EmitMarkOptions` when a mark needs an explicit
+parent or timestamp. The same options record also accepts a data schema and
+severity. A retained scope handle can parent a mark after that scope closes.
+Timestamps use `SystemTime`, including times before the Unix epoch.
+
 The diagnostic snapshot is bounded and ordered by code. It is a host-level view, so it
 does not identify the plugin that recorded a diagnostic. These operations require the
-native host ABI v4 extensions.
+checked v1.0 runtime interface.
 
-`runtime_diagnostics()` reads the legacy host report. For canonical recording and
-authorized reads, use `runtime.diagnostics()` as described in
+`runtime_diagnostics()` reads the host-level report. To record plugin observations
+or read canonical diagnostics with host permission, use `runtime.diagnostics()`.
+Refer to
 [Native Plugin Diagnostics](/build-plugins/native/diagnostics).
 
 ## Control Global Runtime Registrations
 
-Native host ABI v4 adds activation-owned registration discovery and conditional
+The checked runtime provides activation-owned registration discovery and conditional
 middleware guardrail control. `PluginRuntime::list_runtime_registrations`
 returns structured global identities. A background plugin task can call
 `register_conditional_middleware_guardrail`, retain the returned opaque handle,
@@ -159,7 +187,7 @@ be eligible for future snapshots again.
 Relay evaluates the callback synchronously in the trusted in-process plugin and
 fails open if the callback reports an ABI error. The plugin can remove only gates
 owned by its activation, and Relay removes remaining gates and releases their
-callback state before unloading the library. Use
+callback state while keeping library code resident. Use
 `PluginContext::register_conditional_middleware_guardrail` for a gate that must
 exist as part of the initial registration transaction.
 
@@ -192,7 +220,7 @@ if config.registration_control.enabled {
 
 The first callback returns a reason and disables its matching registration. The second
 callback returns `None` and leaves its matching registration enabled. The callback
-registration functions are an append-only native ABI v4 extension; the original
+registration functions use checked ABI-safe descriptors; the original
 constant-reason v4 slots remain at their existing offsets for binary compatibility.
 Refer to
 [Conditional Middleware Guardrails](/about-nemo-relay/concepts/conditional-middleware-guardrails)
@@ -200,7 +228,7 @@ for the complete discovery, ordering, snapshot, and cleanup contract.
 
 ## Configure the SDK Executor
 
-`NativePlugin::executor_config` supplies the plugin-wide default. The SDK default and the
+`Plugin::executor_config` supplies the plugin-wide default. The SDK default and the
 example default are two worker threads. `executor_config_for_component` can derive a
 component override; the standard implementation recognizes a positive
 `executor.worker_threads` integer. Because the example schema rejects unknown values, it
@@ -211,11 +239,7 @@ CPU-bound or blocking callbacks safe. A host with many active native components 
 executor per component, so an unnecessarily large value multiplies thread use.
 
 ```rust
-impl NativePlugin for ExampleNativePlugin {
-    fn executor_config(&self) -> NativeExecutorConfig {
-        NativeExecutorConfig { worker_threads: 2 }
-    }
-
+impl Plugin for ExampleNativePlugin {
     fn validate(&self, config: &Map<String, Json>) -> Vec<ConfigDiagnostic> {
         let mut diagnostics = config::validate(config);
         if let Err(message) = self.executor_config_for_component(config) {
@@ -228,6 +252,10 @@ impl NativePlugin for ExampleNativePlugin {
             });
         }
         diagnostics
+    }
+
+    fn executor_config(&self) -> NativeExecutorConfig {
+        NativeExecutorConfig { worker_threads: 2 }
     }
 }
 ```
@@ -252,12 +280,11 @@ failure cleanup:
    scope guard closes the scope, `with_current` restores the former stack, and dropping
    the isolated stack releases its host handle.
 5. Run unrelated work on the same runtime thread and confirm its current stack is
-   unchanged. Then clear the plugin and wait for active callbacks to finish before
-   unloading the library.
+   unchanged. Then close the component and verify that its tasks and executor stop.
 
 Success means event parentage is intentional, no scope or isolated stack leaks on
-failure, later work regains its original context, and unload begins only after callback
-ownership has ended.
+failure, later work regains its original context, and component cleanup releases
+callback ownership while its library remains resident.
 
 ## Record Internal Diagnostics
 

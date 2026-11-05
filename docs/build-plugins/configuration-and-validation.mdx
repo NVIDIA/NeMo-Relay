@@ -160,7 +160,7 @@ from silently interpreting omitted fields differently.
 
 The Rust worker intentionally uses a permissive schema with
 `additionalProperties: true`, then reports unknown keys from its validation hook as
-warnings. This demonstrates a warning-based migration policy. Do not copy the strict
+warnings. This lets the worker accept unknown keys while warning the operator. Do not copy the strict
 schema into that worker unless unknown keys should become activation errors; the schema
 and validator must express the same operator contract.
 

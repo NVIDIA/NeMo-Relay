@@ -20,10 +20,9 @@ SPDX-License-Identifier: Apache-2.0
 in a separate process and calls Relay through `nvidia.nemo.relay.worker.v1`.
 
 The protocol is `nvidia.nemo.relay.worker.v1`, with contract version `1.0.0`.
-Upgrade the host and worker SDK together. Rebuild workers and set these manifest
-values: `compat.worker_protocol = "nvidia.nemo.relay.worker.v1"` and
-`compat.relay = ">=1.0.0,<2.0"`. Old `grpc-v1` workers cannot connect.
-Crate and wheel releases continue to follow the Relay release version.
+Set `compat.worker_protocol = "nvidia.nemo.relay.worker.v1"` and
+`compat.relay = ">=1.0.0,<2.0"` in the plugin manifest.
+Crate and wheel versions follow Relay releases.
 
 Callbacks use shared application types. The SDK converts Relay-owned values to
 protobuf messages for transport. It preserves application and provider JSON,
@@ -35,7 +34,7 @@ The SDK provides the following types and helpers:
 
 | Surface | Role |
 |---|---|
-| `WorkerPlugin` | Defines plugin identity, validation, registration, and multiple-component behavior in the worker process. |
+| `Plugin` | Defines plugin identity, validation, registration, and multiple-component behavior in the worker process. |
 | `PluginContext` | Installs typed handlers for all 17 supported registration surfaces. |
 | `PluginRuntime` and continuations | Emit marks, manage scopes, and call the remaining tool or LLM execution chain through the authenticated host service. |
 | `LlmExecutionContext` | Reports the selected request and completed-response codecs and provides codec operations while the callback is active. |
@@ -50,8 +49,7 @@ shutdown.
 
 Propagate an unchanged `ToolNext`, `LlmNext`, or `LlmStreamNext` error with `?`
 to preserve its downstream origin. `WorkerSdkError::Downstream` carries the
-original SDK error and the host-issued continuation identity. Its display and
-existing wire error text remain unchanged. Construct a new callback error only
+original SDK error and the continuation identity issued by the host. Construct a new callback error only
 when reporting a distinct plugin failure.
 
 The host uses this identity to exclude forwarded errors from plugin callback
@@ -86,23 +84,37 @@ Refer to [execution message limits](https://docs.nvidia.com/nemo/relay/build-plu
 Implement a worker and serve it from an async entrypoint:
 
 ```rust
-use nemo_relay_worker::{Json, PluginContext, Result, WorkerPlugin, serve_plugin};
+use nemo_relay_worker::{Json, Plugin, PluginContext, Result, serve_plugin};
 
 struct ExampleWorker;
 
-impl WorkerPlugin for ExampleWorker {
-    fn plugin_id(&self) -> &str {
+impl Plugin for ExampleWorker {
+    fn plugin_kind(&self) -> &str {
         "example.worker"
     }
+    fn allows_multiple_components(&self) -> bool {
+        false
+    }
 
-    fn register(&self, ctx: &mut PluginContext, _config: &Json) -> Result<()> {
-        ctx.register_tool_request_intercept("tag-request", 0, false, |_name, mut args| async move {
-            if let Some(object) = args.as_object_mut() {
-                object.insert("checked".into(), true.into());
-            }
-            Ok(args)
-        });
-        Ok(())
+    fn register<'a>(
+        &'a self,
+        _config: &'a serde_json::Map<String, Json>,
+        ctx: &'a mut PluginContext,
+    ) -> nemo_relay_worker::PluginFuture<'a, ()> {
+        Box::pin(async move {
+            ctx.register_tool_request_intercept(
+                "tag-request",
+                0,
+                false,
+                |_name, mut args| async move {
+                    if let Some(object) = args.as_object_mut() {
+                        object.insert("checked".into(), true.into());
+                    }
+                    Ok(args)
+                },
+            );
+            Ok(())
+        })
     }
 }
 

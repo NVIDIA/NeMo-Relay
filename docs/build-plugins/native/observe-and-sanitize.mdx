@@ -34,10 +34,9 @@ pub(crate) fn register(
         move |event| subscriber_mark(&runtime, &tag, event)
     })?;
 
-    let sanitize =
-        |fields: EventSanitizeFields, tag: String, keys: Vec<String>| async move {
-            sanitize_event_fields(fields, &tag, &keys)
-        };
+    let sanitize = |fields: EventSanitizeFields, tag: String, keys: Vec<String>| async move {
+        sanitize_event_fields(fields, &tag, &keys)
+    };
     context.register_mark_sanitize_guardrail("documentation_mark_sanitizer", 10, {
         let tag = config.tag.clone();
         let keys = config.observe.redact_keys.clone();
@@ -52,15 +51,11 @@ pub(crate) fn register(
             move |_event, fields| sanitize(fields, tag.clone(), keys.clone())
         },
     )?;
-    context.register_scope_sanitize_end_guardrail(
-        "documentation_scope_end_sanitizer",
-        10,
-        {
-            let tag = config.tag.clone();
-            let keys = config.observe.redact_keys.clone();
-            move |_event, fields| sanitize(fields, tag.clone(), keys.clone())
-        },
-    )?;
+    context.register_scope_sanitize_end_guardrail("documentation_scope_end_sanitizer", 10, {
+        let tag = config.tag.clone();
+        let keys = config.observe.redact_keys.clone();
+        move |_event, fields| sanitize(fields, tag.clone(), keys.clone())
+    })?;
     context.register_tool_sanitize_request_guardrail(
         "documentation_tool_request_sanitizer",
         10,
@@ -142,8 +137,7 @@ fn sanitize_event_fields(
     fields.data = fields.data.map(|value| redact_json(value, redact_keys));
     fields.metadata = Some(tagged_metadata(fields.metadata, tag, redact_keys));
     if let Some(profile) = fields.category_profile.take() {
-        let value = serde_json::to_value(profile)
-            .map_err(|error| error.to_string())?;
+        let value = serde_json::to_value(profile).map_err(|error| error.to_string())?;
         fields.category_profile = Some(
             serde_json::from_value(redact_json(value, redact_keys))
                 .map_err(|error| error.to_string())?,
@@ -165,7 +159,8 @@ fn redact_json(value: Json, redact_keys: &[String]) -> Json {
             Json::Object(object)
         }
         Json::Array(values) => Json::Array(
-            values.into_iter()
+            values
+                .into_iter()
                 .map(|value| redact_json(value, redact_keys))
                 .collect(),
         ),

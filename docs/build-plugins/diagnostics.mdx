@@ -222,7 +222,7 @@ narrow that permission.
 
 Rust and Python gRPC workers cannot read canonical snapshots or memory pages.
 Their recording credentials do not grant read access. Use an authorized host
-reader to inspect worker observations. The older `runtime_diagnostics()` report
+reader to inspect worker observations. The host-level `runtime_diagnostics()` report
 is a separate API and does not substitute for canonical reads.
 
 For native plugins, explicit component close fences all clones. Last drop also
