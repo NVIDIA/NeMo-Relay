@@ -65,8 +65,8 @@ pub(super) async fn execute(
     match command.command {
         AuthSubcommand::Login(args) => {
             let source = select_source(args, load)?;
-            crate::oidc::login(&dir, &source, |prompt| eprintln!("{prompt}")).await?;
-            eprintln!("Signed in to {}.", source.issuer);
+            crate::oidc::login(&dir, &source, |prompt| println!("{prompt}")).await?;
+            println!("Signed in to {}.", source.issuer);
         }
         AuthSubcommand::Token(args) => {
             let source = select_source(args, load)?;
@@ -76,9 +76,9 @@ pub(super) async fn execute(
         AuthSubcommand::Logout(args) => {
             let source = select_source(args, load)?;
             if crate::oidc::logout(&dir, &source).await? {
-                eprintln!("Removed the sign-in for {}.", source.issuer);
+                println!("Removed the sign-in for {}.", source.issuer);
             } else {
-                eprintln!("No sign-in is stored for {}.", source.issuer);
+                println!("No sign-in is stored for {}.", source.issuer);
             }
         }
     }

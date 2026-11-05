@@ -5,6 +5,7 @@
 
 use super::*;
 use chrono::{TimeZone, Utc};
+use nemo_relay_types::codec::response::CacheWriteTokenCounts;
 use nemo_relay_types::codec::response::Usage;
 use uuid::Uuid;
 
@@ -167,8 +168,10 @@ fn test_anthropic_cache_telemetry_event_reconstructs_total_prompt_tokens() {
         completion_tokens: None,
         total_tokens: None,
         cache_read_tokens: Some(500),
-        cache_write_tokens: Some(200),
-        cache_write_1h_tokens: None,
+        cache_write_tokens: Some(vec![CacheWriteTokenCounts {
+            count: 200,
+            duration: None,
+        }]),
         uncached_input_tokens: None,
         cost: None,
     };
@@ -198,8 +201,10 @@ fn test_anthropic_cache_telemetry_event_maps_write_only_zero_read_to_cold_start(
         completion_tokens: None,
         total_tokens: None,
         cache_read_tokens: Some(0),
-        cache_write_tokens: Some(700),
-        cache_write_1h_tokens: None,
+        cache_write_tokens: Some(vec![CacheWriteTokenCounts {
+            count: 700,
+            duration: None,
+        }]),
         uncached_input_tokens: None,
         cost: None,
     };
@@ -226,8 +231,10 @@ fn test_anthropic_cache_telemetry_event_returns_none_without_prompt_tokens() {
         completion_tokens: None,
         total_tokens: None,
         cache_read_tokens: Some(500),
-        cache_write_tokens: Some(200),
-        cache_write_1h_tokens: None,
+        cache_write_tokens: Some(vec![CacheWriteTokenCounts {
+            count: 200,
+            duration: None,
+        }]),
         uncached_input_tokens: None,
         cost: None,
     };
@@ -251,8 +258,10 @@ fn test_openai_cache_telemetry_event_normalizes_creation_tokens_to_zero() {
         completion_tokens: None,
         total_tokens: None,
         cache_read_tokens: Some(600),
-        cache_write_tokens: Some(999),
-        cache_write_1h_tokens: None,
+        cache_write_tokens: Some(vec![CacheWriteTokenCounts {
+            count: 999,
+            duration: None,
+        }]),
         uncached_input_tokens: None,
         cost: None,
     };
@@ -281,8 +290,10 @@ fn test_openai_cache_telemetry_event_maps_zero_read_to_unknown() {
         completion_tokens: None,
         total_tokens: None,
         cache_read_tokens: Some(0),
-        cache_write_tokens: Some(999),
-        cache_write_1h_tokens: None,
+        cache_write_tokens: Some(vec![CacheWriteTokenCounts {
+            count: 999,
+            duration: None,
+        }]),
         uncached_input_tokens: None,
         cost: None,
     };
@@ -317,8 +328,10 @@ fn telemetry_observability_keeps_request_facts_optional_for_anthropic_unknown_mi
         completion_tokens: None,
         total_tokens: None,
         cache_read_tokens: Some(0),
-        cache_write_tokens: Some(0),
-        cache_write_1h_tokens: None,
+        cache_write_tokens: Some(vec![CacheWriteTokenCounts {
+            count: 0,
+            duration: None,
+        }]),
         uncached_input_tokens: None,
         cost: None,
     };
@@ -357,8 +370,10 @@ fn test_from_usage_uses_prefix_mismatch_diagnosis_when_request_facts_are_availab
         completion_tokens: None,
         total_tokens: None,
         cache_read_tokens: Some(0),
-        cache_write_tokens: Some(0),
-        cache_write_1h_tokens: None,
+        cache_write_tokens: Some(vec![CacheWriteTokenCounts {
+            count: 0,
+            duration: None,
+        }]),
         uncached_input_tokens: None,
         cost: None,
     };
@@ -428,8 +443,10 @@ fn test_cache_miss_diagnosis_prefix_mismatch_is_bounded_and_serialized() {
             completion_tokens: None,
             total_tokens: None,
             cache_read_tokens: Some(0),
-            cache_write_tokens: Some(0),
-            cache_write_1h_tokens: None,
+            cache_write_tokens: Some(vec![CacheWriteTokenCounts {
+                count: 0,
+                duration: None,
+            }]),
             uncached_input_tokens: None,
             cost: None,
         },
@@ -498,8 +515,10 @@ fn test_cache_miss_diagnosis_below_minimum_threshold_reports_exact_token_counts(
             completion_tokens: None,
             total_tokens: None,
             cache_read_tokens: Some(0),
-            cache_write_tokens: Some(0),
-            cache_write_1h_tokens: None,
+            cache_write_tokens: Some(vec![CacheWriteTokenCounts {
+                count: 0,
+                duration: None,
+            }]),
             uncached_input_tokens: None,
             cost: None,
         },
@@ -555,8 +574,10 @@ fn test_cache_miss_diagnosis_retention_expired_reports_gap_and_window() {
             completion_tokens: None,
             total_tokens: None,
             cache_read_tokens: Some(0),
-            cache_write_tokens: Some(0),
-            cache_write_1h_tokens: None,
+            cache_write_tokens: Some(vec![CacheWriteTokenCounts {
+                count: 0,
+                duration: None,
+            }]),
             uncached_input_tokens: None,
             cost: None,
         },
@@ -613,8 +634,10 @@ fn test_cache_miss_diagnosis_unknown_preserves_missing_facts() {
             completion_tokens: None,
             total_tokens: None,
             cache_read_tokens: Some(0),
-            cache_write_tokens: Some(0),
-            cache_write_1h_tokens: None,
+            cache_write_tokens: Some(vec![CacheWriteTokenCounts {
+                count: 0,
+                duration: None,
+            }]),
             uncached_input_tokens: None,
             cost: None,
         },
@@ -668,8 +691,10 @@ fn test_no_write_anthropic_cache_miss_diagnosis_uses_threshold_facts_without_loc
             completion_tokens: None,
             total_tokens: None,
             cache_read_tokens: Some(0),
-            cache_write_tokens: Some(0),
-            cache_write_1h_tokens: None,
+            cache_write_tokens: Some(vec![CacheWriteTokenCounts {
+                count: 0,
+                duration: None,
+            }]),
             uncached_input_tokens: None,
             cost: None,
         },
@@ -711,8 +736,10 @@ fn test_anthropic_multi_breakpoint_telemetry_event_uses_normalized_usage_totals(
             completion_tokens: None,
             total_tokens: None,
             cache_read_tokens: Some(900),
-            cache_write_tokens: Some(600),
-            cache_write_1h_tokens: None,
+            cache_write_tokens: Some(vec![CacheWriteTokenCounts {
+                count: 600,
+                duration: None,
+            }]),
             uncached_input_tokens: None,
             cost: None,
         },

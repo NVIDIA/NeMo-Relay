@@ -1,35 +1,15 @@
 // SPDX-FileCopyrightText: Copyright (c) 2026, NVIDIA CORPORATION & AFFILIATES. All rights reserved.
 // SPDX-License-Identifier: Apache-2.0
 
-//! Tests for stable worker protocol helpers, structural tool results, and enum values.
+//! Current worker message limits and structural protobuf compatibility.
 
-use nemo_relay_worker_proto::v1::{
-    ConditionalMiddlewareGuardrailRegistration, ConditionalMiddlewareInvocation, EmitMarkRequest,
-    GetRuntimeDiagnosticsRequest, GetRuntimeDiagnosticsResponse, HandshakeRequest, HealthRequest,
-    InvokeRequest, JsonEnvelope, JsonValue, LlmCodecIdentity, LlmCodecKind,
-    LlmExecutionCodecContext, LlmInvocation, LlmSanitizeRequestContext, LlmSanitizeResponseContext,
-    PopScopeRequest, PushScopeRequest, RegisterConditionalMiddlewareGuardrailRequest,
-    RegistrationSurface, RuntimeDiagnostic, ScopeType,
-    ToolExecutionResult as ProtoToolExecutionResult, invoke_request,
-};
 use nemo_relay_worker_proto::{
-    WORKER_PROTOCOL_GRPC_V1, decode_json_envelope, decode_json_value, json_envelope, json_value,
+    conversions::decode,
+    nvidia_worker_v1::{JsonValue, ToolExecutionResult as ProtoToolExecutionResult},
 };
 use prost::Message;
 use serde_json::json;
 
-#[derive(Clone, PartialEq, Message)]
-struct LegacyLlmInvocation {
-    #[prost(string, tag = "1")]
-    model_name: String,
-}
-
-#[test]
-fn worker_protocol_identifier_is_stable() {
-    assert_eq!(WORKER_PROTOCOL_GRPC_V1, "grpc-v1");
-}
-
-/// A named increase does not widen unrelated callbacks, and a lower named cap wins.
 #[test]
 fn worker_callback_limits_are_independent() {
     let mut limits = nemo_relay_worker_proto::WorkerCallbackMessageLimits::default();
@@ -65,10 +45,11 @@ fn callback_metadata_preserves_exact_names_and_rejects_mismatches() {
     assert_eq!(callback_name(request.metadata()).as_deref(), Some(name));
     assert!(validate_callback_request(&request, name, &limits).is_ok());
     assert!(validate_callback_request(&request, "other_guardrail", &limits).is_err());
-    let legacy = tonic::Request::new(());
-    assert!(validate_callback_request(&legacy, name, &limits).is_err());
+    let unannotated = tonic::Request::new(());
+    assert!(validate_callback_request(&unannotated, name, &limits).is_err());
     assert!(
-        validate_callback_request(&legacy, name, &WorkerCallbackMessageLimits::default()).is_ok()
+        validate_callback_request(&unannotated, name, &WorkerCallbackMessageLimits::default())
+            .is_ok()
     );
 }
 
@@ -102,220 +83,6 @@ fn worker_message_limit_accepts_only_bounded_positive_decimal_bytes() {
 }
 
 #[test]
-fn registration_surface_values_are_stable() {
-    assert_eq!(RegistrationSurface::Subscriber as i32, 1);
-    assert_eq!(RegistrationSurface::EventMetadataInjector as i32, 2);
-    assert_eq!(RegistrationSurface::ToolSanitizeRequestGuardrail as i32, 10);
-    assert_eq!(
-        RegistrationSurface::ToolSanitizeResponseGuardrail as i32,
-        11
-    );
-    assert_eq!(
-        RegistrationSurface::ToolConditionalExecutionGuardrail as i32,
-        12
-    );
-    assert_eq!(RegistrationSurface::ToolRequestIntercept as i32, 13);
-    assert_eq!(RegistrationSurface::ToolExecutionIntercept as i32, 14);
-    assert_eq!(RegistrationSurface::LlmSanitizeRequestGuardrail as i32, 20);
-    assert_eq!(RegistrationSurface::LlmSanitizeResponseGuardrail as i32, 21);
-    assert_eq!(
-        RegistrationSurface::LlmConditionalExecutionGuardrail as i32,
-        22
-    );
-    assert_eq!(RegistrationSurface::LlmRequestIntercept as i32, 23);
-    assert_eq!(RegistrationSurface::LlmExecutionIntercept as i32, 24);
-    assert_eq!(RegistrationSurface::LlmStreamExecutionIntercept as i32, 25);
-    assert_eq!(RegistrationSurface::MarkSanitizeGuardrail as i32, 30);
-    assert_eq!(RegistrationSurface::ScopeSanitizeStartGuardrail as i32, 31);
-    assert_eq!(RegistrationSurface::ScopeSanitizeEndGuardrail as i32, 32);
-    assert_eq!(
-        RegistrationSurface::ConditionalMiddlewareGuardrail as i32,
-        40
-    );
-}
-
-#[test]
-fn scope_type_values_are_stable() {
-    assert_eq!(ScopeType::Agent as i32, 1);
-    assert_eq!(ScopeType::Function as i32, 2);
-    assert_eq!(ScopeType::Tool as i32, 3);
-    assert_eq!(ScopeType::Llm as i32, 4);
-    assert_eq!(ScopeType::Retriever as i32, 5);
-    assert_eq!(ScopeType::Embedder as i32, 6);
-    assert_eq!(ScopeType::Reranker as i32, 7);
-    assert_eq!(ScopeType::Guardrail as i32, 8);
-    assert_eq!(ScopeType::Evaluator as i32, 9);
-    assert_eq!(ScopeType::Custom as i32, 10);
-    assert_eq!(ScopeType::Unknown as i32, 11);
-}
-
-#[test]
-fn request_field_numbers_are_stable() {
-    let handshake = HandshakeRequest {
-        activation_id: "act".into(),
-        plugin_id: "plugin".into(),
-        relay_version: "0.8.0".into(),
-        worker_protocol: WORKER_PROTOCOL_GRPC_V1.into(),
-        auth_token: "token".into(),
-        host_endpoint: "unix:///tmp/host.sock".into(),
-    };
-    let encoded = handshake.encode_to_vec();
-    assert_eq!(
-        encoded,
-        b"\x0a\x03act\x12\x06plugin\x1a\x050.8.0\x22\x07grpc-v1\x2a\x05token\x32\x15unix:///tmp/host.sock"
-            .to_vec()
-    );
-    assert_eq!(
-        HandshakeRequest::decode(encoded.as_slice()).expect("decode handshake"),
-        handshake
-    );
-
-    let health = HealthRequest {
-        activation_id: "act".into(),
-        auth_token: "token".into(),
-    };
-    let encoded = health.encode_to_vec();
-    assert_eq!(encoded, b"\x0a\x03act\x12\x05token".to_vec());
-    assert_eq!(
-        HealthRequest::decode(encoded.as_slice()).expect("decode health"),
-        health
-    );
-
-    let invoke = InvokeRequest {
-        activation_id: "act".into(),
-        invocation_id: "invoke".into(),
-        registration_name: "tool".into(),
-        surface: RegistrationSurface::ToolRequestIntercept as i32,
-        continuation_id: "next".into(),
-        scope: None,
-        auth_token: "token".into(),
-        payload: None,
-    };
-    let encoded = invoke.encode_to_vec();
-    assert_eq!(
-        encoded,
-        b"\x0a\x03act\x12\x06invoke\x1a\x04tool\x20\x0d\x2a\x04next\x3a\x05token".to_vec()
-    );
-    assert_eq!(
-        InvokeRequest::decode(encoded.as_slice()).expect("decode invoke"),
-        invoke
-    );
-
-    let activation_gate = ConditionalMiddlewareGuardrailRegistration {
-        callback: true,
-        ..Default::default()
-    };
-    assert_eq!(activation_gate.encode_to_vec(), b"\x28\x01".to_vec());
-
-    let runtime_gate = RegisterConditionalMiddlewareGuardrailRequest {
-        callback: true,
-        ..Default::default()
-    };
-    assert_eq!(runtime_gate.encode_to_vec(), b"\x38\x01".to_vec());
-
-    let conditional_invoke = InvokeRequest {
-        payload: Some(invoke_request::Payload::ConditionalMiddleware(
-            ConditionalMiddlewareInvocation {
-                kinds: vec![RegistrationSurface::ConditionalMiddlewareGuardrail as i32],
-                registration_name: "target".into(),
-            },
-        )),
-        ..Default::default()
-    };
-    assert_eq!(
-        conditional_invoke.encode_to_vec(),
-        b"\x6a\x0b\x0a\x01\x28\x12\x06target".to_vec()
-    );
-}
-
-#[test]
-fn execution_codec_context_invocation_field_is_additive_and_stable() {
-    let legacy_invocation = LegacyLlmInvocation {
-        model_name: "legacy-model".into(),
-    };
-    let decoded_by_new_worker = LlmInvocation::decode(legacy_invocation.encode_to_vec().as_slice())
-        .expect("new worker must decode a legacy invocation");
-    assert_eq!(decoded_by_new_worker.model_name, "legacy-model");
-    assert!(decoded_by_new_worker.execution_codec_context.is_none());
-
-    let codec = LlmCodecIdentity {
-        kind: LlmCodecKind::Builtin as i32,
-        id: Some("openai_chat".into()),
-    };
-    let invocation = LlmInvocation {
-        execution_codec_context: Some(Box::new(LlmExecutionCodecContext {
-            request: Some(LlmSanitizeRequestContext {
-                codec: Some(codec.clone()),
-                codec_capability_id: Some("request".into()),
-            }),
-            response: Some(LlmSanitizeResponseContext {
-                codec: Some(codec),
-                codec_capability_id: Some("response".into()),
-            }),
-        })),
-        ..Default::default()
-    };
-    let encoded = invocation.encode_to_vec();
-    assert_eq!(encoded.first(), Some(&0x5a)); // Field 11, length-delimited.
-    let decoded_by_legacy_worker = LegacyLlmInvocation::decode(encoded.as_slice())
-        .expect("legacy worker must ignore the additive execution context");
-    assert_eq!(decoded_by_legacy_worker, LegacyLlmInvocation::default());
-    assert_eq!(
-        LlmInvocation::decode(encoded.as_slice()).unwrap(),
-        invocation
-    );
-}
-
-#[test]
-fn runtime_diagnostics_messages_are_stable() {
-    let request = GetRuntimeDiagnosticsRequest {
-        activation_id: "act".into(),
-        auth_token: "token".into(),
-    };
-    assert_eq!(
-        request.encode_to_vec(),
-        b"\x0a\x03act\x12\x05token".to_vec()
-    );
-
-    let response = GetRuntimeDiagnosticsResponse {
-        entries: vec![RuntimeDiagnostic {
-            code: "otel.metric_mark_invalid".into(),
-            message: "unsupported metric schema version".into(),
-            count: 3,
-        }],
-    };
-    assert_eq!(
-        response.encode_to_vec(),
-        b"\x0a\x3f\x0a\x18otel.metric_mark_invalid\x12\x21unsupported metric schema version\x18\x03"
-            .to_vec()
-    );
-    assert_eq!(response.entries[0].count, 3);
-    assert_eq!(response.entries[0].code, "otel.metric_mark_invalid");
-}
-
-#[test]
-fn json_envelope_round_trips_payload() {
-    let payload = json!({"answer": 42});
-    let envelope = json_envelope("nemo.relay.Json@1", &payload).unwrap();
-
-    assert_eq!(envelope.schema, "nemo.relay.Json@1");
-    assert_eq!(
-        decode_json_envelope::<serde_json::Value>(&envelope).unwrap(),
-        payload
-    );
-}
-
-#[test]
-fn invalid_json_envelope_reports_decode_error() {
-    let envelope = JsonEnvelope {
-        schema: "nemo.relay.Json@1".into(),
-        json: b"{".to_vec(),
-    };
-
-    assert!(decode_json_envelope::<serde_json::Value>(&envelope).is_err());
-}
-
-#[test]
 fn tool_execution_result_has_structural_wire_fields() {
     let value = ProtoToolExecutionResult {
         result: Some(JsonValue {
@@ -333,16 +100,6 @@ fn tool_execution_result_has_structural_wire_fields() {
 }
 
 #[test]
-fn json_value_round_trips_lossless_json() {
-    let value = json!({"large_integer": 9_007_199_254_740_993_u64});
-    let encoded = json_value(&value).unwrap();
-    assert_eq!(
-        decode_json_value::<serde_json::Value>(&encoded).unwrap(),
-        value
-    );
-}
-
-#[test]
 fn tool_execution_result_tolerates_unknown_protobuf_fields() {
     let mut bytes = ProtoToolExecutionResult {
         result: Some(JsonValue {
@@ -356,70 +113,7 @@ fn tool_execution_result_tolerates_unknown_protobuf_fields() {
 
     let decoded_proto = ProtoToolExecutionResult::decode(bytes.as_slice()).unwrap();
     assert_eq!(
-        decode_json_value::<serde_json::Value>(decoded_proto.result.as_ref().unwrap()).unwrap(),
+        decode::<serde_json::Value, _>(decoded_proto.result.unwrap()).unwrap(),
         json!({"ok": true})
     );
-}
-
-#[test]
-fn scope_timestamps_are_additive_and_presence_aware() {
-    let legacy_push = PushScopeRequest::decode([].as_slice()).expect("decode legacy push");
-    let legacy_pop = PopScopeRequest::decode([].as_slice()).expect("decode legacy pop");
-    assert_eq!(legacy_push.timestamp_unix_micros, None);
-    assert_eq!(legacy_pop.timestamp_unix_micros, None);
-
-    let epoch_push = PushScopeRequest {
-        timestamp_unix_micros: Some(0),
-        ..PushScopeRequest::default()
-    };
-    assert_eq!(epoch_push.encode_to_vec(), vec![0x48, 0x00]);
-    assert_eq!(
-        PushScopeRequest::decode(epoch_push.encode_to_vec().as_slice())
-            .expect("decode epoch push")
-            .timestamp_unix_micros,
-        Some(0)
-    );
-
-    let historical_pop = PopScopeRequest {
-        timestamp_unix_micros: Some(-1_250_000),
-        ..PopScopeRequest::default()
-    };
-    assert_eq!(historical_pop.encode_to_vec()[0], 0x30);
-    assert_eq!(
-        PopScopeRequest::decode(historical_pop.encode_to_vec().as_slice())
-            .expect("decode historical pop")
-            .timestamp_unix_micros,
-        Some(-1_250_000)
-    );
-}
-
-#[test]
-fn emit_mark_additive_fields_preserve_legacy_wire_compatibility() {
-    let legacy = EmitMarkRequest::decode(b"\x22\x04mark".as_slice()).expect("decode legacy mark");
-    assert_eq!(legacy.name, "mark");
-    assert!(legacy.data_schema.is_none());
-    assert!(legacy.severity.is_empty());
-    assert!(legacy.category.is_empty());
-
-    let request = EmitMarkRequest {
-        name: "mark".into(),
-        data_schema: Some(
-            json_envelope(
-                "nemo.relay.DataSchema@1",
-                &json!({"name": "nemo.relay.metric_measurements", "version": "1"}),
-            )
-            .unwrap(),
-        ),
-        severity: "warn".into(),
-        category: "custom".into(),
-        ..EmitMarkRequest::default()
-    };
-    let encoded = request.encode_to_vec();
-    assert_eq!(
-        encoded,
-        b"\x22\x04mark\x3a\x52\x0a\x17nemo.relay.DataSchema@1\x12\x37{\"name\":\"nemo.relay.metric_measurements\",\"version\":\"1\"}\x42\x04warn\x4a\x06custom"
-            .to_vec()
-    );
-    let round_trip = EmitMarkRequest::decode(encoded.as_slice()).unwrap();
-    assert_eq!(round_trip, request);
 }

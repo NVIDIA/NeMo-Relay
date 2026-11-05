@@ -222,9 +222,12 @@ nemo_relay.intercepts.register_llm_request(
 )
 
 async def invoke_provider(request: LLMRequest) -> dict[str, object]:
+    content = request.content
+    if not isinstance(content, dict):
+        raise TypeError("Provider request content must be an object")
     return {
         "id": "chatcmpl-demo",
-        "model": request.content["model"],
+        "model": content["model"],
         "choices": [
             {"message": {"role": "assistant", "content": "Codec-enabled response."}},
         ],
@@ -255,6 +258,7 @@ response = await nemo_relay.llm.execute(
 ```ts
 import {
   OpenAIChatCodec,
+  flushSubscribers,
   registerLlmRequestIntercept,
 } from 'nemo-relay-node';
 import {
@@ -311,6 +315,7 @@ const response = await typedLlmExecute(
     responseCodec: codec,
   },
 );
+await flushSubscribers();
 ```
 </Tab>
 
@@ -416,6 +421,8 @@ from nemo_relay.codecs import LlmCodec
 class FrameworkChatCodec(LlmCodec):
     def decode(self, request: LLMRequest) -> AnnotatedLLMRequest:
         content = request.content
+        if not isinstance(content, dict):
+            raise TypeError("Framework request content must be an object")
         params = {}
         if "temperature" in content:
             params["temperature"] = content["temperature"]
@@ -429,8 +436,11 @@ class FrameworkChatCodec(LlmCodec):
         )
 
     def encode(self, annotated: AnnotatedLLMRequest, original: LLMRequest) -> LLMRequest:
+        original_content = original.content
+        if not isinstance(original_content, dict):
+            raise TypeError("Framework request content must be an object")
         content = {
-            **original.content,
+            **original_content,
             "turns": annotated.messages,
         }
         if annotated.model is not None:

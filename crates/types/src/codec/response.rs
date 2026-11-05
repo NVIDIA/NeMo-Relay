@@ -88,12 +88,11 @@ pub struct Usage {
     /// Tokens served from prompt cache (read).
     #[serde(skip_serializing_if = "Option::is_none")]
     pub cache_read_tokens: Option<u64>,
-    /// Tokens written to prompt cache.
+    /// Tokens written to prompt cache, one entry per cache duration.
+    ///
+    /// Use [`Usage::cache_write_total`] for the combined count.
     #[serde(skip_serializing_if = "Option::is_none")]
-    pub cache_write_tokens: Option<u64>,
-    /// The subset of prompt-cache write tokens retained for one hour.
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub cache_write_1h_tokens: Option<u64>,
+    pub cache_write_tokens: Option<Vec<CacheWriteTokenCounts>>,
     /// Input tokens that were neither served from nor written to a provider
     /// prompt cache.
     ///
@@ -104,6 +103,67 @@ pub struct Usage {
     /// Optional cost reported by provider data or estimated from Relay model pricing.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub cost: Option<CostEstimate>,
+}
+
+/// Prompt-cache write tokens retained for one cache duration.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, Default)]
+pub struct CacheWriteTokenCounts {
+    /// Tokens written to the cache for this duration.
+    pub count: u64,
+    /// Cache duration in seconds, or `None` when the provider does not say.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub duration: Option<u64>,
+}
+
+/// One-hour prompt-cache duration, in seconds.
+pub const CACHE_WRITE_ONE_HOUR_SECONDS: u64 = 3_600;
+
+impl CacheWriteTokenCounts {
+    /// Build entries from a cache-write total and its one-hour subset, the
+    /// shape Anthropic reports.
+    ///
+    /// The rest of the total gets `rest_duration`, and a one-hour count above
+    /// the total is capped to it. Returns `None` without a total.
+    #[must_use]
+    pub fn from_total_and_one_hour(
+        total: Option<u64>,
+        one_hour: Option<u64>,
+        rest_duration: Option<u64>,
+    ) -> Option<Vec<Self>> {
+        // Without a total there is nothing to split. The total is authoritative,
+        // so a one-hour subset above it is capped.
+        let total = total?;
+        let one_hour = one_hour
+            .map(|count| count.min(total))
+            .filter(|count| *count > 0);
+        let mut writes = Vec::new();
+        let rest = total.saturating_sub(one_hour.unwrap_or(0));
+        if rest > 0 || one_hour.is_none() {
+            writes.push(Self {
+                count: rest,
+                duration: rest_duration,
+            });
+        }
+        if let Some(count) = one_hour {
+            writes.push(Self {
+                count,
+                duration: Some(CACHE_WRITE_ONE_HOUR_SECONDS),
+            });
+        }
+        Some(writes)
+    }
+}
+
+impl Usage {
+    /// Total prompt-cache write tokens across every cache duration.
+    #[must_use]
+    pub fn cache_write_total(&self) -> Option<u64> {
+        self.cache_write_tokens.as_ref().map(|writes| {
+            writes
+                .iter()
+                .fold(0_u64, |total, write| total.saturating_add(write.count))
+        })
+    }
 }
 
 /// Source of a normalized cost value.

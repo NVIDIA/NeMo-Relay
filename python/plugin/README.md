@@ -16,32 +16,30 @@ SPDX-License-Identifier: Apache-2.0
 
 # nemo-relay-plugin
 
-`nemo-relay-plugin` is the Python authoring SDK for NeMo Relay out-of-process
-dynamic worker plugins. Use it when plugin code should run in its own Python
-process and communicate with Relay through the versioned `grpc-v1` worker
-protocol.
+`nemo-relay-plugin` is the Python SDK for NeMo Relay worker plugins. A worker
+runs in its own Python process and calls Relay through
+`nvidia.nemo.relay.worker.v1`.
 
-Relay 0.8 establishes canonical tool results as the `grpc-v1` baseline. Workers and
-custom bindings built for earlier releases must regenerate protobuf bindings, rebuild,
-and declare `compat.relay` beginning at `0.8.0`. `ToolNext.call()` returns
-`ToolExecutionResult`, preserving opaque annotation metadata independently of the
-application result JSON.
+The protocol is `nvidia.nemo.relay.worker.v1`, with contract version `1.0.0`.
+Upgrade the host and worker SDK together. Rebuild workers and set these manifest
+values: `compat.worker_protocol = "nvidia.nemo.relay.worker.v1"` and
+`compat.relay = ">=1.0.0,<2.0"`. Old `grpc-v1` workers cannot connect.
+Crate and wheel releases continue to follow the Relay release version.
 
-Relay 0.10 adds `LlmExecutionContext` to non-streaming and streaming LLM
-execution callbacks. Workers that register either surface must update their
-callback signatures, rebuild with the 0.10 SDK, and set `compat.relay` to begin
-at `0.10.0`. The protocol remains `grpc-v1`.
+Callbacks use shared application types. The SDK converts Relay-owned values to
+protobuf messages for transport. It preserves application and provider JSON,
+tool annotations, pending marks, codec access, cancellation, and scope ownership.
 
 ## Authoring Surface
 
-The following rows describe the plugin authoring surfaces available through this SDK.
+The SDK provides the following types and helpers.
 
 | Surface | Role |
 |---|---|
-| `WorkerPlugin` and `PluginContext` | Define validation and install all 16 worker-owned subscriber and middleware registrations. |
+| `WorkerPlugin` and `PluginContext` | Define validation and install all 17 worker-owned subscriber and middleware registrations. |
 | `serve_plugin` | Starts an AsyncIO gRPC server from the Relay-managed environment and authenticated local activation endpoints. |
 | Typed runtime helpers | Share JSON, event, scope, middleware, continuation, and diagnostic contracts with the Relay host. |
-| Canonical tool results | Preserve application results and opaque annotations across tool callbacks and continuations. |
+| Tool results | Preserve application results and opaque annotations across tool callbacks and continuations. |
 | `LlmExecutionContext` | Provides the selected request codec and, for non-streaming calls, the completed-response codec while the callback is active. |
 | Generated transport bindings | Ship private protobuf bindings in the wheel, so installation does not require `protoc` or `grpcio-tools`. |
 
@@ -51,17 +49,25 @@ host-owned execution, event, scope, cancellation, and shutdown semantics.
 ## Propagating Continuation Errors
 
 Re-raise an unchanged error from `ToolNext`, `LlmNext`, or `LlmStreamNext` to
-preserve its downstream origin. Host-returned error envelopes remain catchable
+preserve its downstream origin. Typed errors returned by the host remain catchable
 as `WorkerSdkError`; stream transport failures retain their gRPC exception type.
 Constructing a new exception represents a distinct plugin failure.
 
 The SDK preserves the host-issued continuation identity through callback and
 stream responses. The host excludes a forwarded error from plugin callback
 failure counts only when that identity matches the current invocation. Existing
-error text and execution behavior are preserved. Older SDKs may discard this
-additive provenance; absent identity retains the existing attribution behavior.
+error text and execution behavior are preserved. If the identity is missing or does not match, the host uses its normal error
+attribution rules.
 
 ## Installation
+
+Prebuilt wheels contain generated protobuf bindings and need neither Buf nor
+protoc. Source and editable builds require [Buf](https://buf.build/docs/installation/)
+1.75.0 or later on `PATH`, or an executable selected with `BUF`. They download
+the exact validation schema version recorded in the packaged `buf.lock`. The
+first download needs access to the Buf Schema Registry. The source package does
+not contain a copy of that upstream schema.
+
 
 Add the SDK to the Python worker project's dependencies:
 
@@ -91,13 +97,12 @@ environment. `plugins remove <plugin_id>` deletes that environment.
 
 ## Configuration
 
-Use `[load.max_message_bytes]` in `relay-plugin.toml` with `default_bytes` and
-`by_name` overrides for exact callback registration names, just like callback
-timeouts. A callback's limit also applies to its continuations; unrelated
-callbacks and control RPCs retain their fallback. Host environment overrides
-take precedence; the fallback defaults to 4 MiB. Restart
-the host and workers after changes and upgrade both sides together. See
-[execution message limits](https://docs.nvidia.com/nemo/relay/build-plugins/workers/grpc-v1-protocol#configure-execution-message-size).
+Set `[load.max_message_bytes]` in `relay-plugin.toml`. Use `default_bytes` for
+the default limit and `by_name` for limits on exact callback registration names.
+A callback's limit also applies to its continuations. Other callbacks and control
+RPCs keep their own defaults. Host environment overrides take priority. The
+default limit is 4 MiB. Restart the host and workers after changing these settings.
+Refer to [execution message limits](https://docs.nvidia.com/nemo/relay/build-plugins/workers/grpc-v1-protocol#configure-execution-message-size).
 
 ## Getting Started
 
@@ -124,8 +129,8 @@ async def main() -> None:
     await serve_plugin(PolicyPlugin())
 ```
 
-Marks can also declare a typed data schema, exported-log severity, and semantic category without
-changing the stable `grpc-v1` protocol identifier:
+Use the optional mark fields to set a data schema, log severity, and category,
+as shown in this example:
 
 ```python
 from nemo_relay_plugin import DataSchema, EventCategory, LogSeverity
@@ -150,8 +155,8 @@ read an immutable, host-level `RuntimeDiagnostics` snapshot. Each entry has
 `code`, `message`, and `count`; `entries` is ordered by code and `get(code)`
 looks up one entry. Relay aggregates repeated codes, retains the latest
 message, saturates counts, and caps the snapshot at 32 entries. Entries do not
-identify the emitting plugin. An older host returns gRPC `UNIMPLEMENTED`, which
-the SDK reports as an unsupported-runtime-diagnostics error.
+identify the emitting plugin. A host that does not implement this RPC returns gRPC `UNIMPLEMENTED`, which
+the SDK reports as an unsupported runtime diagnostics error.
 
 Set `load.entrypoint` to `your_module:main` in `relay-plugin.toml`. Relay
 imports that function and awaits the returned coroutine when it starts the
@@ -179,10 +184,9 @@ def intercept(
     )
 ```
 
-When `annotated` is present, it is authoritative for provider-body content:
-leave raw `request["content"]` unchanged, edit normalized fields or provider
-extensions through the annotation, and use `request["headers"]` for transport
-headers.
+When `annotated` is present, Relay uses it as the source of provider-body content.
+Leave raw `request["content"]` unchanged. Edit normalized fields or provider
+extensions through the annotation. Use `request["headers"]` for transport headers.
 
 ## Callback Concurrency
 
@@ -217,10 +221,9 @@ task cancellation. A blocking synchronous callback can delay both the
 cancellation RPC and all other worker RPCs, so offload blocking work and make
 its own cancellation behavior explicit.
 
-`grpc-v1` workers are expected to implement this best-effort cancellation
-contract. Relay remains compatible with older workers that return
-`accepted = false`; in that case it still drops the transport request, but it
-cannot guarantee worker-side interruption.
+Worker v1 implementations are expected to implement this best-effort cancellation
+contract. If a worker returns `accepted = false`, Relay still drops the transport
+request, but it cannot guarantee worker-side interruption.
 
 Windows ARM64 is not currently supported because `grpcio` does not publish a
 usable wheel for that platform. The NeMo Relay workspace skips installation and

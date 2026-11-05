@@ -5,11 +5,13 @@ use super::*;
 use std::sync::Mutex;
 use std::sync::atomic::{AtomicBool, AtomicUsize};
 use tonic::{Request, Response, Status};
-use wire::relay_diagnostics_server::{RelayDiagnostics, RelayDiagnosticsServer};
+use wire::relay_diagnostics_service_server::{
+    RelayDiagnosticsService, RelayDiagnosticsServiceServer,
+};
 
 #[derive(Clone, Default)]
 struct Host {
-    requests: Arc<Mutex<Vec<wire::DiagnosticSubmission>>>,
+    requests: Arc<Mutex<Vec<wire::SubmitDiagnosticRequest>>>,
     failures: Arc<AtomicUsize>,
     invalid_arguments: Arc<AtomicUsize>,
     record_errors: Arc<Mutex<std::collections::VecDeque<Status>>>,
@@ -21,24 +23,33 @@ struct Host {
     unsupported: bool,
     bootstrap_error: Option<tonic::Code>,
     open_error: Option<tonic::Code>,
-    session: Option<wire::DiagnosticSession>,
+    session: Option<wire::OpenDiagnosticSessionResponse>,
     record_gate: Option<Arc<tokio::sync::Notify>>,
     record_entered: Arc<tokio::sync::Notify>,
     receipt_status: Option<i32>,
+    receipt_evidence: Option<i32>,
+    registration_receipt: Option<wire::DiagnosticReceipt>,
     wrong_sequence: bool,
     open_calls: Arc<AtomicUsize>,
 }
 impl Host {
     fn capabilities(&self) -> wire::DiagnosticCapabilities {
-        let mut capabilities = self.policy.unwrap_or(wire::DiagnosticCapabilities {
-            protocol_version: 1,
-            snapshot_version: 1,
-            provenance_version: 1,
+        let mut capabilities = self.policy.clone().unwrap_or(wire::DiagnosticCapabilities {
+            protocol: Some(wire::ProtocolIdentity {
+                name: wire::WORKER_PROTOCOL.into(),
+                version: wire::CONTRACT_VERSION.into(),
+            }),
+            snapshot_contract_version: wire::DIAGNOSTIC_SNAPSHOT_CONTRACT_VERSION.into(),
+            provenance_contract_version: wire::DIAGNOSTIC_PROVENANCE_CONTRACT_VERSION.into(),
+            max_components: 1,
             max_request_bytes: MAX_REQUEST_BYTES as u32,
             max_response_bytes: MAX_RESPONSE_BYTES as u32,
             max_pending_submissions: MAX_PENDING_SUBMISSIONS as u32,
             retry_attempts: 3,
-            retry_timeout_millis: 2000,
+            retry_timeout_duration: Some(prost_types::Duration {
+                seconds: 2,
+                nanos: 0,
+            }),
             ..Default::default()
         });
         capabilities.enabled = !self.disabled;
@@ -46,23 +57,25 @@ impl Host {
     }
 }
 #[tonic::async_trait]
-impl RelayDiagnostics for Host {
+impl RelayDiagnosticsService for Host {
     async fn get_diagnostic_capabilities(
         &self,
-        _: Request<wire::DiagnosticCredentials>,
-    ) -> Result<Response<wire::DiagnosticCapabilities>, Status> {
+        _: Request<wire::GetDiagnosticCapabilitiesRequest>,
+    ) -> Result<Response<wire::GetDiagnosticCapabilitiesResponse>, Status> {
         if let Some(code) = self.bootstrap_error {
             return Err(Status::new(code, "bootstrap unavailable"));
         }
         if self.unsupported {
             return Err(Status::unimplemented("diagnostics unavailable"));
         }
-        Ok(Response::new(self.capabilities()))
+        Ok(Response::new(wire::GetDiagnosticCapabilitiesResponse {
+            capabilities: Some(self.capabilities()),
+        }))
     }
     async fn open_diagnostic_session(
         &self,
-        _: Request<wire::DiagnosticOpenRequest>,
-    ) -> Result<Response<wire::DiagnosticSession>, Status> {
+        _: Request<wire::OpenDiagnosticSessionRequest>,
+    ) -> Result<Response<wire::OpenDiagnosticSessionResponse>, Status> {
         self.open_calls.fetch_add(1, Ordering::Relaxed);
         if let Some(code) = self.open_error {
             return Err(Status::new(code, "open unavailable"));
@@ -70,20 +83,20 @@ impl RelayDiagnostics for Host {
         if let Some(session) = &self.session {
             return Ok(Response::new(session.clone()));
         }
-        Ok(Response::new(wire::DiagnosticSession {
+        Ok(Response::new(wire::OpenDiagnosticSessionResponse {
             session_id: vec![1; 16],
-            capabilities: Some(self.open_policy.unwrap_or(self.capabilities())),
+            capabilities: Some(self.open_policy.clone().unwrap_or(self.capabilities())),
         }))
     }
     async fn submit_diagnostic(
         &self,
-        request: Request<wire::DiagnosticSubmission>,
-    ) -> Result<Response<wire::DiagnosticReceipt>, Status> {
+        request: Request<wire::SubmitDiagnosticRequest>,
+    ) -> Result<Response<wire::SubmitDiagnosticResponse>, Status> {
         let request = request.into_inner();
         self.requests.lock().unwrap().push(request.clone());
         if matches!(
             &request.operation,
-            Some(wire::diagnostic_submission::Operation::Record(_))
+            Some(wire::submit_diagnostic_request::Operation::Record(_))
         ) && let Some(error) = self.record_errors.lock().unwrap().pop_front()
         {
             return Err(error);
@@ -100,7 +113,7 @@ impl RelayDiagnostics for Host {
         }
         if matches!(
             &request.operation,
-            Some(wire::diagnostic_submission::Operation::Record(_))
+            Some(wire::submit_diagnostic_request::Operation::Record(_))
         ) && self
             .invalid_arguments
             .fetch_update(Ordering::Relaxed, Ordering::Relaxed, |v| v.checked_sub(1))
@@ -110,7 +123,7 @@ impl RelayDiagnostics for Host {
         }
         let is_record = matches!(
             &request.operation,
-            Some(wire::diagnostic_submission::Operation::Record(_))
+            Some(wire::submit_diagnostic_request::Operation::Record(_))
         );
         if is_record {
             self.record_entered.notify_one();
@@ -118,22 +131,46 @@ impl RelayDiagnostics for Host {
                 gate.notified().await;
             }
         }
+        let code_count = match request.operation.as_ref() {
+            Some(wire::submit_diagnostic_request::Operation::RegisterComponent(value)) => {
+                value.codes.len() as u32
+            }
+            _ => 0,
+        };
         let status = match request.operation.unwrap() {
-            wire::diagnostic_submission::Operation::RegisterComponent(_) => {
+            wire::submit_diagnostic_request::Operation::RegisterComponent(_) => {
                 DiagnosticReceiptStatus::Registered
             }
-            wire::diagnostic_submission::Operation::Record(_) => DiagnosticReceiptStatus::Recorded,
+            wire::submit_diagnostic_request::Operation::Record(_) => {
+                DiagnosticReceiptStatus::Recorded
+            }
             _ => DiagnosticReceiptStatus::Closed,
         };
         let mut response = wire::DiagnosticReceipt {
             submission_sequence: request.sequence,
             status: status as i32,
             component: 1,
+            code_count,
             ..Default::default()
         };
+        if status == DiagnosticReceiptStatus::Registered
+            && let Some(receipt) = &self.registration_receipt
+        {
+            response = receipt.clone();
+            response.submission_sequence = request.sequence;
+        }
         if is_record {
             if let Some(status) = self.receipt_status {
                 response.status = status;
+            }
+            if response.status == DiagnosticReceiptStatus::Recorded as i32 {
+                response.evidence = DiagnosticEvidenceRetention::Retained as i32;
+            }
+            if let Some(evidence) = self.receipt_evidence {
+                response.evidence = evidence;
+            }
+            if response.status == DiagnosticReceiptStatus::Registered as i32 {
+                response.code_count = 1;
             }
             if self.wrong_sequence {
                 response.submission_sequence += 1;
@@ -142,12 +179,26 @@ impl RelayDiagnostics for Host {
         if self.oversized_response.load(Ordering::Relaxed) && is_record {
             response.reason = "x".repeat(5000);
         }
-        Ok(Response::new(response))
+        Ok(Response::new(wire::SubmitDiagnosticResponse {
+            receipt: Some(response),
+        }))
     }
     async fn read_diagnostic_page(
         &self,
-        _: Request<wire::DiagnosticReadRequest>,
-    ) -> Result<Response<wire::DiagnosticReadResponse>, Status> {
+        _: Request<wire::ReadDiagnosticPageRequest>,
+    ) -> Result<Response<wire::ReadDiagnosticPageResponse>, Status> {
+        Err(Status::permission_denied("no read grant"))
+    }
+    async fn get_diagnostic_discovery(
+        &self,
+        _: Request<wire::GetDiagnosticDiscoveryRequest>,
+    ) -> Result<Response<wire::GetDiagnosticDiscoveryResponse>, Status> {
+        Err(Status::permission_denied("no read grant"))
+    }
+    async fn inspect_diagnostic_memory(
+        &self,
+        _: Request<wire::InspectDiagnosticMemoryRequest>,
+    ) -> Result<Response<wire::InspectDiagnosticMemoryResponse>, Status> {
         Err(Status::permission_denied("no read grant"))
     }
 }
@@ -162,7 +213,7 @@ async fn start_host(host: Host) -> (Channel, Server) {
     let endpoint = format!("http://{}", listener.local_addr().unwrap());
     let server = tokio::spawn(async move {
         tonic::transport::Server::builder()
-            .add_service(RelayDiagnosticsServer::new(host))
+            .add_service(RelayDiagnosticsServiceServer::new(host))
             .serve_with_incoming(tokio_stream::wrappers::TcpListenerStream::new(listener))
             .await
             .unwrap();
@@ -181,6 +232,14 @@ async fn connect(host: Host) -> (WorkerDiagnostics, Server) {
         server,
     )
 }
+fn code_definitions() -> Vec<DiagnosticCodeDefinition> {
+    vec![DiagnosticCodeDefinition {
+        definition: Some(wire::diagnostic_code_definition::Definition::BuiltinName(
+            "plugin.internal".into(),
+        )),
+    }]
+}
+
 fn observation() -> DiagnosticObservation {
     DiagnosticObservation {
         code: 1,
@@ -202,7 +261,7 @@ async fn disabled_facade_skips_authoring_and_registration() {
     let (facade, _server) = connect(host.clone()).await;
     assert_eq!(facade.availability(), DiagnosticAvailability::Disabled);
     facade
-        .component("internal", vec![])
+        .component("internal", code_definitions())
         .await
         .unwrap()
         .try_record_lazy(|| panic!("disabled factory ran"))
@@ -216,7 +275,10 @@ async fn disabled_facade_skips_authoring_and_registration() {
 async fn retry_is_identical_and_fences_after_unknown_acceptance() {
     let host = Host::default();
     let (facade, _server) = connect(host.clone()).await;
-    let component = facade.component("internal", vec![]).await.unwrap();
+    let component = facade
+        .component("internal", code_definitions())
+        .await
+        .unwrap();
     host.failures.store(1, Ordering::Relaxed);
     component.try_record_lazy(observation).unwrap();
     facade.flush(Duration::from_secs(2)).await.unwrap();
@@ -251,7 +313,10 @@ async fn invalid_argument_counts_rejection_without_consuming_sequence() {
     let host = Host::default();
     host.invalid_arguments.store(1, Ordering::Relaxed);
     let (facade, _server) = connect(host.clone()).await;
-    let component = facade.component("internal", vec![]).await.unwrap();
+    let component = facade
+        .component("internal", code_definitions())
+        .await
+        .unwrap();
 
     component.try_record_lazy(observation).unwrap();
     facade.flush(Duration::from_secs(2)).await.unwrap();
@@ -268,7 +333,7 @@ async fn invalid_argument_counts_rejection_without_consuming_sequence() {
         .filter(|request| {
             matches!(
                 request.operation,
-                Some(wire::diagnostic_submission::Operation::Record(_))
+                Some(wire::submit_diagnostic_request::Operation::Record(_))
             )
         })
         .map(|request| request.sequence)
@@ -284,7 +349,10 @@ async fn applies_host_delivery_policy_and_rejects_invalid_policy_inertly() {
     capabilities.max_response_bytes = 4096;
     capabilities.max_pending_submissions = 2;
     capabilities.retry_attempts = 2;
-    capabilities.retry_timeout_millis = 25;
+    capabilities.retry_timeout_duration = Some(prost_types::Duration {
+        seconds: 0,
+        nanos: 25_000_000,
+    });
     let host = Host {
         policy: Some(capabilities),
         ..Default::default()
@@ -298,7 +366,10 @@ async fn applies_host_delivery_policy_and_rejects_invalid_policy_inertly() {
     assert_eq!(policy.retry_timeout, Duration::from_millis(25));
     assert_eq!(facade.sender.as_ref().unwrap().max_capacity(), 2);
 
-    let component = facade.component("internal", vec![]).await.unwrap();
+    let component = facade
+        .component("internal", code_definitions())
+        .await
+        .unwrap();
     let mut over_limit = observation();
     over_limit.detail = Some("x".repeat(800));
     assert_eq!(
@@ -335,7 +406,7 @@ async fn applies_host_delivery_policy_and_rejects_invalid_policy_inertly() {
         .store(true, Ordering::Relaxed);
     let (response_limited, _server) = connect(response_host).await;
     let response_component = response_limited
-        .component("internal", vec![])
+        .component("internal", code_definitions())
         .await
         .unwrap();
     response_component.try_record_lazy(observation).unwrap();
@@ -365,7 +436,10 @@ async fn applies_host_delivery_policy_and_rejects_invalid_policy_inertly() {
     };
     let (inert, _server) = connect(invalid_host.clone()).await;
     assert_eq!(inert.availability(), DiagnosticAvailability::Unsupported);
-    inert.component("internal", vec![]).await.unwrap();
+    inert
+        .component("internal", code_definitions())
+        .await
+        .unwrap();
     assert!(invalid_host.requests.lock().unwrap().is_empty());
 
     let old_host = Host {
@@ -417,8 +491,8 @@ async fn queue_admission_skips_factory_and_freezes_bounded_bytes() {
     let Pending::Submission { frozen, .. } = receiver.recv().await.unwrap() else {
         panic!("expected submission")
     };
-    let request = wire::DiagnosticSubmission::decode(frozen.as_slice()).unwrap();
-    let Some(wire::diagnostic_submission::Operation::Record(observation)) = request.operation
+    let request = wire::SubmitDiagnosticRequest::decode(frozen.as_slice()).unwrap();
+    let Some(wire::submit_diagnostic_request::Operation::Record(observation)) = request.operation
     else {
         panic!("expected record")
     };
@@ -433,7 +507,10 @@ async fn closing_aborts_real_delivery_and_completes_queued_waiters() {
         ..Default::default()
     };
     let (facade, _server) = connect(host.clone()).await;
-    let component = facade.component("internal", vec![]).await.unwrap();
+    let component = facade
+        .component("internal", code_definitions())
+        .await
+        .unwrap();
     component.try_record_lazy(observation).unwrap();
     tokio::time::timeout(Duration::from_secs(2), host.record_entered.notified())
         .await
@@ -441,7 +518,7 @@ async fn closing_aborts_real_delivery_and_completes_queued_waiters() {
     component.try_record_lazy(observation).unwrap();
     // Poll these public calls once so their requests are queued behind the
     // blocked record, without relying on scheduler sleeps.
-    let registration = facade.component("queued", vec![]);
+    let registration = facade.component("queued", code_definitions());
     tokio::pin!(registration);
     assert!(futures_util::poll!(&mut registration).is_pending());
     let flush = facade.flush(Duration::from_secs(2));
@@ -478,7 +555,10 @@ async fn closing_aborts_real_delivery_and_completes_queued_waiters() {
 async fn component_and_session_close_follow_record_sequence() {
     let host = Host::default();
     let (facade, _server) = connect(host.clone()).await;
-    let component = facade.component("internal", vec![]).await.unwrap();
+    let component = facade
+        .component("internal", code_definitions())
+        .await
+        .unwrap();
     component.try_record_lazy(observation).unwrap();
     component.close().await.unwrap();
     facade.close(Duration::from_secs(2)).await.unwrap();
@@ -489,13 +569,13 @@ async fn component_and_session_close_follow_record_sequence() {
     );
     assert!(matches!(
         requests[2].operation,
-        Some(wire::diagnostic_submission::Operation::CloseComponent(
+        Some(wire::submit_diagnostic_request::Operation::CloseComponent(
             wire::DiagnosticComponentClose { component: 1 }
         ))
     ));
     assert!(matches!(
         requests[3].operation,
-        Some(wire::diagnostic_submission::Operation::CloseSession(_))
+        Some(wire::submit_diagnostic_request::Operation::CloseSession(_))
     ));
     assert_eq!(facade.delivery_stats(), DiagnosticDeliveryStats::default());
 }
@@ -517,7 +597,10 @@ async fn capacity_rejection_counts_loss_and_keeps_delivery_open() {
         .unwrap()
         .push_back(admission_rejection());
     let (facade, _server) = connect(host.clone()).await;
-    let component = facade.component("internal", vec![]).await.unwrap();
+    let component = facade
+        .component("internal", code_definitions())
+        .await
+        .unwrap();
     component.try_record_lazy(observation).unwrap();
     facade.flush(Duration::from_secs(2)).await.unwrap();
     assert_eq!(facade.delivery_stats().rejected, 1);
@@ -546,7 +629,10 @@ async fn rejection_cannot_erase_an_earlier_unknown_acceptance() {
             }
             host.record_errors.lock().unwrap().extend(errors);
             let (facade, _server) = connect(host.clone()).await;
-            let component = facade.component("internal", vec![]).await.unwrap();
+            let component = facade
+                .component("internal", code_definitions())
+                .await
+                .unwrap();
             component.try_record_lazy(observation).unwrap();
             let flushed = facade.flush(Duration::from_secs(2)).await;
             assert_eq!(facade.delivery_stats().rejected, 0);
@@ -581,7 +667,10 @@ async fn unmarked_resource_errors_do_not_claim_nonacceptance() {
         .unwrap()
         .extend((0..3).map(|_| Status::resource_exhausted("local receive limit")));
     let (facade, _server) = connect(host).await;
-    let component = facade.component("internal", vec![]).await.unwrap();
+    let component = facade
+        .component("internal", code_definitions())
+        .await
+        .unwrap();
     component.try_record_lazy(observation).unwrap();
     assert_eq!(
         facade.flush(Duration::from_secs(2)).await,
@@ -596,11 +685,11 @@ async fn incompatible_or_unavailable_sessions_are_inert() {
     let baseline = Host::default().capabilities();
     let mut cases = Vec::new();
     for field in 0..3 {
-        let mut policy = baseline;
+        let mut policy = baseline.clone();
         match field {
-            0 => policy.protocol_version = 2,
-            1 => policy.snapshot_version = 2,
-            _ => policy.provenance_version = 2,
+            0 => policy.protocol.as_mut().unwrap().version = "2.0.0".into(),
+            1 => policy.snapshot_contract_version = "2.0.0".into(),
+            _ => policy.provenance_contract_version = "2.0.0".into(),
         }
         cases.push((
             Host {
@@ -612,28 +701,28 @@ async fn incompatible_or_unavailable_sessions_are_inert() {
     }
     for (session, availability) in [
         (
-            wire::DiagnosticSession {
+            wire::OpenDiagnosticSessionResponse {
                 session_id: vec![1; 16],
                 capabilities: None,
             },
             DiagnosticAvailability::Unsupported,
         ),
         (
-            wire::DiagnosticSession {
+            wire::OpenDiagnosticSessionResponse {
                 session_id: vec![1; 16],
                 capabilities: Some(wire::DiagnosticCapabilities {
                     enabled: false,
-                    ..baseline
+                    ..baseline.clone()
                 }),
             },
             DiagnosticAvailability::Disabled,
         ),
         (
-            wire::DiagnosticSession {
+            wire::OpenDiagnosticSessionResponse {
                 session_id: vec![1; 15],
-                capabilities: Some(baseline),
+                capabilities: Some(baseline.clone()),
             },
-            DiagnosticAvailability::Unavailable,
+            DiagnosticAvailability::Unsupported,
         ),
     ] {
         cases.push((
@@ -661,7 +750,10 @@ async fn incompatible_or_unavailable_sessions_are_inert() {
     for (host, availability) in cases {
         let (facade, _server) = connect(host.clone()).await;
         assert_eq!(facade.availability(), availability);
-        let component = facade.component("internal", vec![]).await.unwrap();
+        let component = facade
+            .component("internal", code_definitions())
+            .await
+            .unwrap();
         component
             .try_record_lazy(|| panic!("inert factory ran"))
             .unwrap();
@@ -688,7 +780,12 @@ async fn delivery_policy_safety_boundaries_are_enforced_at_initialization() {
                 "response" => policy.max_response_bytes = value,
                 "pending" => policy.max_pending_submissions = value,
                 "attempts" => policy.retry_attempts = value,
-                _ => policy.retry_timeout_millis = value,
+                _ => {
+                    policy.retry_timeout_duration = Some(prost_types::Duration {
+                        seconds: (value / 1000) as i64,
+                        nanos: ((value % 1000) * 1_000_000) as i32,
+                    })
+                }
             }
             let (facade, _server) = connect(Host {
                 policy: Some(policy),
@@ -707,7 +804,7 @@ async fn delivery_policy_safety_boundaries_are_enforced_at_initialization() {
             );
             if !accepted {
                 facade
-                    .component("internal", vec![])
+                    .component("internal", code_definitions())
                     .await
                     .unwrap()
                     .try_record_lazy(|| panic!("invalid policy ran producer"))
@@ -726,7 +823,10 @@ async fn malformed_receipts_fence_delivery_without_claiming_rejection() {
             ..Default::default()
         };
         let (facade, _server) = connect(host).await;
-        let component = facade.component("internal", vec![]).await.unwrap();
+        let component = facade
+            .component("internal", code_definitions())
+            .await
+            .unwrap();
         component.try_record_lazy(observation).unwrap();
         assert_eq!(
             facade.flush(Duration::from_secs(2)).await,
@@ -753,7 +853,10 @@ async fn terminal_rejection_consumes_sequence_and_delivery_continues() {
         ..Default::default()
     };
     let (facade, _server) = connect(host.clone()).await;
-    let component = facade.component("internal", vec![]).await.unwrap();
+    let component = facade
+        .component("internal", code_definitions())
+        .await
+        .unwrap();
     component.try_record_lazy(observation).unwrap();
     facade.flush(Duration::from_secs(2)).await.unwrap();
     component.close().await.unwrap();
@@ -804,14 +907,17 @@ async fn hydrated_frame_limit_drops_without_transmission_or_sequence_consumption
     let mut policy = Host::default().capabilities();
     policy.max_request_bytes = 1024;
     let host = Host {
-        policy: Some(policy),
+        policy: Some(policy.clone()),
         ..Default::default()
     };
     let (channel, _server) = start_host(host.clone()).await;
     let facade =
         WorkerDiagnostics::connect(Ok(channel), "activation".into(), "t".repeat(900)).await;
     assert_eq!(facade.availability(), DiagnosticAvailability::Available);
-    let component = facade.component("internal", vec![]).await.unwrap();
+    let component = facade
+        .component("internal", code_definitions())
+        .await
+        .unwrap();
 
     // This payload passes local admission, but its credentials and session
     // envelope bring the complete submission above the negotiated frame cap.
@@ -839,7 +945,7 @@ async fn hydrated_frame_limit_drops_without_transmission_or_sequence_consumption
         assert!(requests[1].encoded_len() <= policy.max_request_bytes as usize);
         assert!(matches!(
             &requests[1].operation,
-            Some(wire::diagnostic_submission::Operation::Record(record)) if record.count == 3
+            Some(wire::submit_diagnostic_request::Operation::Record(record)) if record.count == 3
         ));
     }
     assert_eq!(
@@ -867,7 +973,10 @@ async fn terminal_authorization_and_session_errors_fence_without_retrying() {
             .unwrap()
             .push_back(Status::new(code, "terminal session failure"));
         let (facade, _server) = connect(host.clone()).await;
-        let component = facade.component("internal", vec![]).await.unwrap();
+        let component = facade
+            .component("internal", code_definitions())
+            .await
+            .unwrap();
         component.try_record_lazy(observation).unwrap();
         assert_eq!(
             facade.flush(Duration::from_secs(2)).await,
@@ -892,5 +1001,162 @@ async fn terminal_authorization_and_session_errors_fence_without_retrying() {
             facade.close(Duration::from_secs(2)).await,
             Err(DiagnosticDeliveryError::Uncertain)
         );
+    }
+}
+
+#[tokio::test]
+async fn malformed_evidence_and_operation_receipts_fence_delivery() {
+    for host in [
+        Host {
+            receipt_evidence: Some(0),
+            ..Default::default()
+        },
+        Host {
+            receipt_evidence: Some(999),
+            ..Default::default()
+        },
+        Host {
+            receipt_status: Some(DiagnosticReceiptStatus::Registered as i32),
+            ..Default::default()
+        },
+        Host {
+            receipt_status: Some(DiagnosticReceiptStatus::Closed as i32),
+            ..Default::default()
+        },
+        Host {
+            receipt_status: Some(DiagnosticReceiptStatus::Disabled as i32),
+            receipt_evidence: Some(1),
+            ..Default::default()
+        },
+    ] {
+        let (facade, _server) = connect(host.clone()).await;
+        let component = facade
+            .component("internal", code_definitions())
+            .await
+            .unwrap();
+        component.try_record_lazy(observation).unwrap();
+        assert_eq!(
+            facade.flush(Duration::from_secs(2)).await,
+            Err(DiagnosticDeliveryError::Uncertain)
+        );
+        assert_eq!(
+            facade.delivery_stats(),
+            DiagnosticDeliveryStats {
+                uncertain: 1,
+                ..Default::default()
+            }
+        );
+        assert_eq!(
+            component.try_record_lazy(|| panic!("fenced producer ran")),
+            Err(DiagnosticDeliveryError::Closed)
+        );
+        assert_eq!(host.requests.lock().unwrap().len(), 2);
+    }
+}
+
+#[tokio::test]
+async fn invalid_registration_acknowledgements_do_not_create_inert_components() {
+    for (status, component, code_count) in [
+        (DiagnosticReceiptStatus::Registered, 0, 1),
+        (DiagnosticReceiptStatus::Registered, 1, 0),
+        (DiagnosticReceiptStatus::Registered, 1, 2),
+        (DiagnosticReceiptStatus::Closed, 1, 1),
+    ] {
+        let host = Host {
+            registration_receipt: Some(wire::DiagnosticReceipt {
+                status: status as i32,
+                component,
+                code_count,
+                ..Default::default()
+            }),
+            ..Default::default()
+        };
+        let (facade, _server) = connect(host.clone()).await;
+        assert!(matches!(
+            facade.component("internal", code_definitions()).await,
+            Err(DiagnosticDeliveryError::Uncertain)
+        ));
+        assert_eq!(
+            facade.flush(Duration::from_secs(2)).await,
+            Err(DiagnosticDeliveryError::Uncertain)
+        );
+        assert_eq!(
+            facade.delivery_stats(),
+            DiagnosticDeliveryStats {
+                uncertain: 1,
+                ..Default::default()
+            }
+        );
+        assert_eq!(host.requests.lock().unwrap().len(), 1);
+    }
+}
+
+#[tokio::test]
+async fn disabled_record_receipts_consume_sequence_without_fencing() {
+    let host = Host {
+        receipt_status: Some(DiagnosticReceiptStatus::Disabled as i32),
+        ..Default::default()
+    };
+    let (facade, _server) = connect(host.clone()).await;
+    let component = facade
+        .component("internal", code_definitions())
+        .await
+        .unwrap();
+    component.try_record_lazy(observation).unwrap();
+    facade.flush(Duration::from_secs(2)).await.unwrap();
+    component.close().await.unwrap();
+    assert_eq!(facade.delivery_stats(), DiagnosticDeliveryStats::default());
+    assert_eq!(
+        host.requests
+            .lock()
+            .unwrap()
+            .iter()
+            .map(|request| request.sequence)
+            .collect::<Vec<_>>(),
+        [1, 2, 3]
+    );
+}
+
+#[tokio::test]
+async fn rejected_and_disabled_registrations_remain_valid_acknowledgements() {
+    for status in [
+        DiagnosticReceiptStatus::Rejected,
+        DiagnosticReceiptStatus::Disabled,
+    ] {
+        let host = Host {
+            registration_receipt: Some(wire::DiagnosticReceipt {
+                status: status as i32,
+                ..Default::default()
+            }),
+            ..Default::default()
+        };
+        let (facade, _server) = connect(host.clone()).await;
+        // The real host rejects empty vocabularies; neither rejection nor a
+        // concurrent disablement creates a component or fences delivery.
+        assert!(matches!(
+            facade.component("internal", vec![]).await,
+            Err(DiagnosticDeliveryError::Rejected)
+        ));
+        facade.flush(Duration::from_secs(2)).await.unwrap();
+        facade.close(Duration::from_secs(2)).await.unwrap();
+        assert_eq!(facade.delivery_stats().uncertain, 0);
+        assert_eq!(host.requests.lock().unwrap()[1].sequence, 2);
+    }
+}
+
+#[tokio::test]
+async fn invalid_diagnostic_capabilities_do_not_open_a_session() {
+    for disabled in [false, true] {
+        let mut policy = Host::default().capabilities();
+        policy.max_components = 0;
+        let host = Host {
+            policy: Some(policy),
+            disabled,
+            ..Default::default()
+        };
+        let (facade, _server) = connect(host.clone()).await;
+        assert_eq!(facade.availability(), DiagnosticAvailability::Unsupported);
+        assert_eq!(host.open_calls.load(Ordering::Relaxed), 0);
+        assert!(host.requests.lock().unwrap().is_empty());
     }
 }

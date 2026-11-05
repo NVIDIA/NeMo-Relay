@@ -59,30 +59,38 @@ the framework's business payload before closing the tool span.
 import nemo_relay
 from nemo_relay import LLMRequest
 
-def framework_tool_started(name: str, args: dict[str, object]) -> nemo_relay.ToolCallHandle:
+def framework_tool_started(name: str, args: dict[str, object]) -> nemo_relay.ToolHandle:
     return nemo_relay.tools.call(name, args)
 
-def framework_tool_finished(handle: nemo_relay.ToolCallHandle, result: dict[str, object]) -> None:
+def framework_tool_finished(handle: nemo_relay.ToolHandle, result: dict[str, object]) -> None:
     nemo_relay.tools.call_end(handle, nemo_relay.ToolExecutionResult(result))
 
-def framework_llm_started(provider: str, payload: dict[str, object]) -> nemo_relay.LLMCallHandle:
+def framework_llm_started(provider: str, payload: dict[str, object]) -> nemo_relay.LLMHandle:
     request = LLMRequest({}, payload)
     return nemo_relay.llm.call(provider, request, model_name=payload.get("model"))
 
-def framework_llm_finished(handle: nemo_relay.LLMCallHandle, response: dict[str, object]) -> None:
+def framework_llm_finished(handle: nemo_relay.LLMHandle, response: dict[str, object]) -> None:
     nemo_relay.llm.call_end(handle, response)
 ```
 </Tab>
 
 <Tab title="Node.js" language="node">
 ```ts
-import { LlmRequest, llmCall, llmCallEnd, toolCall, toolCallEnd } from 'nemo-relay-node';
+import {
+  LlmRequest,
+  llmCall,
+  llmCallEnd,
+  toolCall,
+  toolCallEnd,
+  type LlmHandle,
+  type ToolHandle,
+} from 'nemo-relay-node';
 
 export function frameworkToolStarted(name: string, args: unknown) {
   return toolCall(name, args, null, null, null, null, null);
 }
 
-export function frameworkToolFinished(handle: unknown, result: unknown): void {
+export function frameworkToolFinished(handle: ToolHandle, result: unknown): void {
   toolCallEnd(handle, { result }, null, null);
 }
 
@@ -91,7 +99,7 @@ export function frameworkLlmStarted(provider: string, payload: { model?: string 
   return llmCall(provider, request, null, null, null, null, payload.model ?? null);
 }
 
-export function frameworkLlmFinished(handle: unknown, response: unknown): void {
+export function frameworkLlmFinished(handle: LlmHandle, response: unknown): void {
   llmCallEnd(handle, response, null, null);
 }
 ```

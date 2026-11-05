@@ -17,6 +17,10 @@ linux_glibc_version := "2.17"
 node_platform := ""
 node_target := ""
 node_build_strategy := "native"
+# Release packaging remains the default; source Quick Start runs use host dev builds.
+package_profile := "release"
+# Release CI packs the metapackage on Linux only; local host runs need both tarballs.
+node_metapackage := "false"
 
 bash_helpers := '''
 set -euo pipefail
@@ -930,6 +934,37 @@ python_plugin_sync_args() {
     fi
 }
 
+run_python_worker_proto_tests() {
+    local python_executable=""
+    python_executable="$(uv_python_executable)"
+    if ! python_plugin_grpc_dependencies_supported "$python_executable"; then
+        echo "Skipping Python worker proto tests on Windows ARM64"
+        return
+    fi
+    local requirements=""
+    requirements="$("$python_executable" - <<'PY'
+import tomllib
+from pathlib import Path
+
+locked = tomllib.loads(Path("uv.lock").read_text())["package"]
+for name in ("pytest", "pytest-asyncio"):
+    package = next(package for package in locked if package["name"] == name)
+    print(f"{name}=={package['version']}")
+dependencies = tomllib.loads(Path("python/plugin/pyproject.toml").read_text())["project"]["dependencies"]
+print(next(requirement for requirement in dependencies if requirement.startswith("protovalidate==")))
+PY
+)"
+    local test_dependencies=()
+    local requirement=""
+    while IFS= read -r requirement; do
+        test_dependencies+=(--with "$requirement")
+    done <<< "$requirements"
+    local grpcio_tools_version=""
+    grpcio_tools_version="$(python_plugin_grpcio_tools_version)"
+    uvx --from "grpcio-tools==$grpcio_tools_version" "${test_dependencies[@]}" python -m pytest \
+        python/tests/plugin/test_nvidia_worker_proto_v1.py -q -o asyncio_default_fixture_loop_scope=function
+}
+
 python_plugin_grpcio_tools_version() {
     local python_executable=""
     python_executable="$(uv_python_executable)"
@@ -1063,6 +1098,16 @@ check-quickstarts:
         scripts.tests.test_quickstart_jq
     "$python_executable" scripts/check-quickstarts.py check
 
+# Execute credential-free Quick Starts against explicit release, build, or local assets.
+[positional-arguments]
+test-quickstarts *args:
+    #!/usr/bin/env bash
+    {{ bash_helpers }}
+    cd "$NEMO_RELAY_REPO_ROOT"
+    uv sync --frozen --inexact --no-default-groups --group dev --no-install-project
+    python_executable="$(project_python_executable)"
+    "$python_executable" scripts/run-quickstarts.py "$@"
+
 # validate the documentation site, links, navigation, and generated references
 docs: docs-examples
     #!/usr/bin/env bash
@@ -1093,6 +1138,13 @@ docs-api-reference:
     {{ bash_helpers }}
     ensure_docs_dependencies
     generate_docs_api_references
+
+# --set [package_profile=release|dev]
+build-cli:
+    #!/usr/bin/env bash
+    {{ bash_helpers }}
+    cd "$NEMO_RELAY_REPO_ROOT"
+    cargo build --locked --profile "{{ package_profile }}" -p nemo-relay-cli
 
 # --set [ci=true|false]
 build-rust:
@@ -1150,62 +1202,31 @@ generate-python-worker-proto:
     cd "$NEMO_RELAY_REPO_ROOT"
     generate_python_worker_proto_files python/plugin/src/nemo_relay_plugin/_proto
 
-check-python-worker-proto:
+# Lint, format, and independently test the current worker contract.
+# Install Buf 1.75.0 or newer, or set BUF to its executable path.
+check-worker-proto:
+    #!/usr/bin/env bash
+    {{ bash_helpers }}
+    cd "$NEMO_RELAY_REPO_ROOT"
+    buf_executable="${BUF:-buf}"
+    "$buf_executable" lint crates/worker-proto
+    "$buf_executable" format crates/worker-proto --path crates/worker-proto/proto/nvidia/nemo/relay/worker/v1 --diff --exit-code
+    run_python_worker_proto_tests
+
+# Resolve the locked validation dependency into the ignored build cache.
+resolve-worker-proto-deps:
     #!/usr/bin/env bash
     {{ bash_helpers }}
     cd "$NEMO_RELAY_REPO_ROOT"
     python_executable="$(uv_python_executable)"
-    if ! python_plugin_grpc_dependencies_supported "$python_executable"; then
-        echo "Skipping Python worker proto check on Windows ARM64"
-        exit 0
-    fi
-    tmp_dir="$(mktemp -d)"
-    cleanup_proto_tmp() {
-        rm -rf "$tmp_dir"
-    }
-    trap cleanup_proto_tmp EXIT
-    generate_python_worker_proto_files "$tmp_dir"
-    "$python_executable" - "$tmp_dir" <<'PY'
-    from pathlib import Path
-    import sys
+    "$python_executable" scripts/proto_dependencies.py
 
-    sys.path.insert(0, str(Path(sys.argv[1])))
-    import plugin_worker_pb2 as pb
+check-python-worker-proto:
+    #!/usr/bin/env bash
+    {{ bash_helpers }}
+    cd "$NEMO_RELAY_REPO_ROOT"
+    run_python_worker_proto_tests
 
-    assert pb.HandshakeRequest.DESCRIPTOR.fields_by_name["worker_protocol"].number == 4
-    assert pb.InvokeRequest.DESCRIPTOR.fields_by_name["auth_token"].number == 7
-    assert {method.name for method in pb.DESCRIPTOR.services_by_name["PluginWorker"].methods} == {
-        "Handshake", "Health", "Validate", "Register", "Invoke", "InvokeStream", "CancelInvocation", "Shutdown"
-    }
-    assert pb.SUBSCRIBER == 1
-    assert pb.LLM_STREAM_EXECUTION_INTERCEPT == 25
-    execution_context = pb.LlmInvocation.DESCRIPTOR.fields_by_name["execution_codec_context"]
-    assert execution_context.number == 11
-    assert execution_context.containing_oneof is None
-    assert {
-        field.name for field in pb.LlmInvocation.DESCRIPTOR.oneofs_by_name["sanitize_context"].fields
-    } == {"request_sanitize_context", "response_sanitize_context"}
-    tool_next = pb.DESCRIPTOR.services_by_name["RelayHostRuntime"].methods_by_name["ToolNext"]
-    assert tool_next.output_type.full_name == "nemo.relay.worker.v1.ToolExecutionResultResponse"
-    runtime_diagnostics = pb.DESCRIPTOR.services_by_name["RelayHostRuntime"].methods_by_name["GetRuntimeDiagnostics"]
-    assert runtime_diagnostics.input_type.full_name == "nemo.relay.worker.v1.GetRuntimeDiagnosticsRequest"
-    assert runtime_diagnostics.output_type.full_name == "nemo.relay.worker.v1.GetRuntimeDiagnosticsResponse"
-    runtime_diagnostic = pb.RuntimeDiagnostic.DESCRIPTOR.fields_by_name
-    assert runtime_diagnostic["code"].number == 1
-    assert runtime_diagnostic["message"].number == 2
-    assert runtime_diagnostic["count"].number == 3
-    runtime_diagnostics_response = pb.GetRuntimeDiagnosticsResponse.DESCRIPTOR.fields_by_name
-    assert runtime_diagnostics_response["entries"].number == 1
-    emit_mark = pb.EmitMarkRequest.DESCRIPTOR.fields_by_name
-    assert emit_mark["data_schema"].number == 7
-    assert emit_mark["severity"].number == 8
-    assert emit_mark["category"].number == 9
-    tool_result = pb.ToolExecutionResult.DESCRIPTOR.fields_by_name
-    assert tool_result["result"].message_type.full_name == "nemo.relay.worker.v1.JsonValue"
-    assert tool_result["annotation"].message_type.full_name == "nemo.relay.worker.v1.JsonValue"
-    outcome = pb.ToolExecutionInterceptResult.DESCRIPTOR.fields_by_name["outcome"]
-    assert outcome.message_type.full_name == "nemo.relay.worker.v1.ToolExecutionInterceptOutcome"
-    PY
 
 generate-test-plugin-lockfiles:
     #!/usr/bin/env bash
@@ -1476,6 +1497,8 @@ test-python:
     test_config_home="$(mktemp -d)"
     trap 'rm -rf "$test_config_home"' EXIT
     export XDG_CONFIG_HOME="$test_config_home"
+    mkdir -p "$test_config_home/system"
+    export NEMO_RELAY_TEST_SYSTEM_CONFIG_DIR="$test_config_home/system"
     export NEMO_RELAY_TEST_SKIP_IMPLICIT_CONFIG=1
     export_uv_python_runtime
     if is_true "{{ ci }}"; then
@@ -1582,6 +1605,8 @@ test-python-plugin-e2e:
     trap cleanup EXIT
 
     uv build --wheel --out-dir "$tmp/wheels" python/plugin
+    worker_wheels=("$tmp"/wheels/nemo_relay_plugin-*.whl)
+    "$python_executable" -c 'from pathlib import Path; import sys; print("nemo-relay-plugin @ " + Path(sys.argv[1]).resolve().as_uri())' "${worker_wheels[0]}" > "$tmp/worker-constraints.txt"
     cargo build -p nemo-relay-cli --features __skip-implicit-config
     cli="$NEMO_RELAY_REPO_ROOT/target/debug/nemo-relay"
     config="$tmp/gateway.toml"
@@ -1589,7 +1614,7 @@ test-python-plugin-e2e:
     : > "$config"
     printf '[plugins.policy.defaults]\nattestation = "integrity_only"\n' > "$tmp/plugins.toml"
     manifest="$NEMO_RELAY_REPO_ROOT/examples/python-grpc-worker-plugin/relay-plugin.toml"
-    PIP_FIND_LINKS="$tmp/wheels" NEMO_RELAY_PYTHON="$python_executable" \
+    PIP_FIND_LINKS="$tmp/wheels" PIP_CONSTRAINT="$tmp/worker-constraints.txt" NEMO_RELAY_PYTHON="$python_executable" \
         "$cli" --config "$config" plugins add "$manifest"
     "$cli" --config "$config" plugins enable examples.python_grpc_worker
     environment_ref="$("$python_executable" -c \
@@ -1974,6 +1999,7 @@ package-rust:
                 ;;
             nemo-relay-worker)
                 cargo_package_config+=(--config 'patch.crates-io.nemo-relay-types.path="crates/types"')
+                cargo_package_config+=(--config 'patch.crates-io.nemo-relay-plugin.path="crates/plugin"')
                 cargo_package_config+=(--config 'patch.crates-io.nemo-relay-worker-proto.path="crates/worker-proto"')
                 ;;
             nemo-relay-resource-metrics|nemo-relay-model-pricing)
@@ -1981,7 +2007,7 @@ package-rust:
                 cargo_package_config+=(--config 'patch.crates-io.nemo-relay-types.path="crates/types"')
                 cargo_package_config+=(--config 'patch.crates-io.nemo-relay-plugin.path="crates/plugin"')
                 ;;
-            nemo-relay-plugin|nemo-relay-codecs)
+            nemo-relay-plugin|nemo-relay-codecs|nemo-relay-worker-proto)
                 cargo_package_config+=(--config 'patch.crates-io.nemo-relay-types.path="crates/types"')
                 ;;
             nemo-relay-pii-redaction)
@@ -2030,13 +2056,12 @@ package-rust:
         exit 1
     fi
 
-# --set [output_dir=<path>] [ref_name=<name>]
+# --set [output_dir=<path>] [ref_name=<name>] [package_profile=release|dev] [node_metapackage=true|false]
 package-node:
     #!/usr/bin/env bash
     {{ bash_helpers }}
     # If `ref_name` is empty, append the current short HEAD SHA to the version.
     # If `ref_name` is set, write it as the exact package version before packing.
-    linux_glibc_version="{{ linux_glibc_version }}"
     node_platform="{{ node_platform }}"
     node_target="{{ node_target }}"
     node_build_strategy="{{ node_build_strategy }}"
@@ -2062,31 +2087,41 @@ package-node:
         set_npm_package_dependency_version integrations/openclaw/package.json package-lock.json integrations/openclaw nemo-relay-node "$package_version"
         set_npm_package_dependency_version examples/language-binding-plugin/node/package.json package-lock.json examples/language-binding-plugin/node nemo-relay-node "$package_version"
     fi
-    build_args=(build --)
-    if [[ -n "$node_target" ]]; then
-        build_args+=(--target "$node_target")
-    fi
-    if [[ "$node_target" == *-unknown-linux-musl ]]; then
-        # Native plugins must share the Node host's dynamically linked musl libc.
-        export RUSTFLAGS="${RUSTFLAGS:+$RUSTFLAGS }-C target-feature=-crt-static"
-    fi
-    if [[ "$node_build_strategy" == "zig" ]]; then
-        # Zig is provided by the uv.lock `ziglang` entry; keep any explicit CI
-        # Zig version pin aligned with that lockfile version.
-        uv sync --inexact --no-install-project --no-install-package nemo-relay --no-default-groups --group dev
-        activate_project_venv
-        prepend_ziglang_to_path "$(project_python_executable)"
-        build_args+=(--zig)
-        if [[ "$node_target" == *-unknown-linux-gnu ]]; then
-            build_args+=(--zig-abi-suffix "$linux_glibc_version")
-        fi
-    elif is_true "{{ ci }}" && [[ "$(uname -s)" == "Linux" ]]; then
-        # Preserve the local CI-style build behavior when no cross target is set.
-        uv sync --inexact --no-install-project --no-install-package nemo-relay --no-default-groups --group dev
-        activate_project_venv
-        prepend_ziglang_to_path "$(project_python_executable)"
-        build_args+=(--zig --zig-abi-suffix "$linux_glibc_version")
-    fi
+    case "{{ package_profile }}" in
+        release) build_args=(build --) ;;
+        dev) build_args=(build-debug --) ;;
+        *) echo "Error: package_profile must be release or dev" >&2; exit 1 ;;
+    esac
+    case "$node_build_strategy" in
+        native)
+            if [[ -n "$node_target" ]]; then
+                build_args+=(--target "$node_target")
+            fi
+            ;;
+        napi-cross)
+            # Links against glibc 2.17.
+            if [[ "$node_target" != *-unknown-linux-gnu ]]; then
+                echo "Error: node_build_strategy=napi-cross needs a *-unknown-linux-gnu node_target, got '$node_target'" >&2
+                exit 1
+            fi
+            build_args+=(--use-napi-cross --target "$node_target")
+            ;;
+        zig)
+            # Zig is provided by the uv.lock `ziglang` entry.
+            if [[ "$node_target" != *-unknown-linux-musl ]]; then
+                echo "Error: node_build_strategy=zig needs a *-unknown-linux-musl node_target, got '$node_target'" >&2
+                exit 1
+            fi
+            uv sync --inexact --no-install-project --no-install-package nemo-relay --no-default-groups --group dev
+            activate_project_venv
+            prepend_ziglang_to_path "$(project_python_executable)"
+            build_args+=(--cross-compile --target "$node_target")
+            ;;
+        *)
+            echo "Error: unsupported node_build_strategy '$node_build_strategy' (native, napi-cross, zig)" >&2
+            exit 1
+            ;;
+    esac
     npm install --workspace=nemo-relay-node --ignore-scripts
     npm run --workspace=nemo-relay-node "${build_args[@]}"
     if [[ -z "$node_platform" ]]; then
@@ -2113,7 +2148,7 @@ package-node:
         --version "$package_version"
         --output-dir "$package_dir"
     )
-    if [[ "$node_platform" == "linux-amd64" ]]; then
+    if [[ "$node_platform" == "linux-amd64" ]] || is_true "{{ node_metapackage }}"; then
         package_args+=(--metapackage)
     fi
     "$python_executable" scripts/package-node-bin.py "${package_args[@]}"
@@ -2164,7 +2199,7 @@ package-openclaw:
         exit 1
     fi
 
-# --set [output_dir=<path>] [ref_name=<name>]
+# --set [output_dir=<path>] [ref_name=<name>] [package_profile=release|dev]
 package-python:
     #!/usr/bin/env bash
     {{ bash_helpers }}
@@ -2178,6 +2213,9 @@ package-python:
     cd "$NEMO_RELAY_REPO_ROOT"
     package_dir="$(prepare_package_dir wheels)"
     sync_args=(--no-install-project --no-install-package nemo-relay)
+    if [[ "{{ package_profile }}" == dev ]]; then
+        sync_args+=(--frozen --no-default-groups --group dev)
+    fi
     uv sync --inexact "${sync_args[@]}"
     activate_project_venv
     if [[ -z "{{ ref_name }}" ]]; then
@@ -2190,11 +2228,20 @@ package-python:
         set_cargo_workspace_version "{{ ref_name }}"
         set_python_package_version "{{ ref_name }}" true
     fi
-    build_args=()
-    while IFS= read -r -d '' arg; do
-        build_args+=("$arg")
-    done < <(python_wheel_build_args)
-    maturin build --release "${build_args[@]}" --out "$package_dir"
+    case "{{ package_profile }}" in
+        release)
+            build_args=(--release)
+            while IFS= read -r -d '' arg; do
+                build_args+=("$arg")
+            done < <(python_wheel_build_args)
+            ;;
+        dev)
+            # Host execution needs an installable wheel, without release cross-compilation.
+            build_args=(--locked --profile dev --interpreter "$(project_python_executable)")
+            ;;
+        *) echo "Error: package_profile must be release or dev" >&2; exit 1 ;;
+    esac
+    maturin build "${build_args[@]}" --out "$package_dir"
     shopt -s nullglob
     wheels=("$package_dir"/*.whl)
     if ((${#wheels[@]} == 0)); then

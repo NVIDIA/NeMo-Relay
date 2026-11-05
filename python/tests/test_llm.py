@@ -11,6 +11,7 @@ import textwrap
 import threading
 from collections.abc import AsyncIterator, Awaitable, Callable
 from typing import Never, NoReturn, TypeAlias, cast
+from uuid import uuid4
 
 import pytest
 from async_helpers import resolve_async_result
@@ -184,6 +185,72 @@ class TestLLMAsync:
         request = make_request()
         result = await llm.execute("exec_llm", request, func)
         assert result["model"] == "test-model"
+
+    @pytest.mark.parametrize("callback_kind", ["sync", "async", "returned-awaitable"])
+    async def test_execute_isolates_concurrent_callback_contexts(self, callback_kind: str) -> None:
+        caller_context = contextvars.ContextVar("llm_execution_owner", default="outside")
+        originating_loop = asyncio.get_running_loop()
+        callbacks_ready = asyncio.Barrier(2)
+
+        async def execute_caller(owner: str) -> None:
+            context_token = caller_context.set(owner)
+            propagation = PropagationContext(str(uuid4()), str(uuid4()))
+            callback_parents: set[str] = set()
+
+            def observe(expected_context: str) -> None:
+                assert caller_context.get() == expected_context
+                assert asyncio.get_running_loop() is originating_loop
+                observed = capture_propagation_context()
+                assert observed.root_uuid == propagation.root_uuid
+                assert observed.parent_uuid != propagation.parent_uuid
+                callback_parents.add(observed.parent_uuid)
+                assert len(callback_parents) == 1
+                nested = PropagationContext(str(uuid4()), str(uuid4()))
+                with use_scope_stack(create_scope_stack_from_propagation(nested)):
+                    assert capture_propagation_context().parent_uuid == nested.parent_uuid
+                assert capture_propagation_context().parent_uuid == observed.parent_uuid
+                assert capture_propagation_context().root_uuid == observed.root_uuid
+
+            def callback_result(request: LLMRequest) -> dict[str, Json]:
+                assert request.content == {"value": 10}
+                return {"owner": owner, "value": 10}
+
+            def synchronous(request: LLMRequest) -> dict[str, Json]:
+                observe(owner)
+                caller_context.set("callback:" + owner)
+                return callback_result(request)
+
+            async def finish(request: LLMRequest) -> dict[str, Json]:
+                await callbacks_ready.wait()
+                observe("callback:" + owner)
+                return callback_result(request)
+
+            def returning_awaitable(request: LLMRequest) -> Awaitable[dict[str, Json]]:
+                observe(owner)
+                caller_context.set("callback:" + owner)
+                return finish(request)
+
+            async def asynchronous(request: LLMRequest) -> dict[str, Json]:
+                return await returning_awaitable(request)
+
+            callback = {
+                "sync": synchronous,
+                "async": asynchronous,
+                "returned-awaitable": returning_awaitable,
+            }[callback_kind]
+            try:
+                with use_scope_stack(create_scope_stack_from_propagation(propagation)):
+                    result = await llm.execute("concurrent_context_llm", LLMRequest({}, {"value": 10}), callback)
+                    assert result == {"owner": owner, "value": 10}
+                    assert caller_context.get() == owner
+                    restored = capture_propagation_context()
+                    assert restored.parent_uuid == propagation.parent_uuid
+                    assert restored.root_uuid == propagation.root_uuid
+            finally:
+                caller_context.reset(context_token)
+
+        await asyncio.wait_for(asyncio.gather(execute_caller("first"), execute_caller("second")), timeout=3)
+        await subscribers.flush_async()
 
     async def test_execute_with_sync_func(self) -> None:
         def func(request: LLMRequest) -> dict[str, Json]:
@@ -762,16 +829,20 @@ class TestLLMGuardrails:
 
 class TestLLMGuardrailsAsync:
     async def test_conditional_blocks_execution(self) -> None:
-        guardrails.register_llm_conditional_execution("py_llm_blocker", 1, lambda req: "LLM blocked")
+        callback_invocations = 0
 
-        def func(_request: LLMRequest) -> Json:
+        def rejected_callback(_request: LLMRequest) -> Json:
+            nonlocal callback_invocations
+            callback_invocations += 1
             return {"should": "not reach"}
 
-        request = make_request()
-        with pytest.raises(RuntimeError, match="guardrail rejected"):
-            await llm.execute("blocked_llm", request, func)
-
-        guardrails.deregister_llm_conditional_execution("py_llm_blocker")
+        guardrails.register_llm_conditional_execution("py_llm_blocker", 1, lambda request: "LLM blocked")
+        try:
+            with pytest.raises(RuntimeError, match="guardrail rejected"):
+                await llm.execute("blocked_llm", make_request(), rejected_callback)
+            assert callback_invocations == 0
+        finally:
+            guardrails.deregister_llm_conditional_execution("py_llm_blocker")
 
 
 class TestLLMIntercepts:
@@ -797,6 +868,7 @@ class TestLLMIntercepts:
             _name: str, request: LLMRequest, annotated: AnnotatedLLMRequest | None
         ) -> LLMRequestInterceptOutcome:
             content = request.content
+            assert isinstance(content, dict)
             content["direct"] = True
             return LLMRequestInterceptOutcome(
                 LLMRequest(request.headers, content),
@@ -2171,67 +2243,168 @@ class TestLLMStreaming:
         assert isinstance(metadata, dict)
         assert metadata["exception.type"] == "TypeError"
 
-    async def test_stream_execute_finalizer_failure_records_null_output(self) -> None:
-        events = []
-        subscribers.register("py_llm_finalizer_fail_sub", lambda event: events.append(event))
+    @pytest.mark.parametrize("close_early", [False, True])
+    @pytest.mark.parametrize("invalid_output", [False, True])
+    async def test_stream_execute_finalizer_failure_propagates(self, close_early: bool, invalid_output: bool) -> None:
+        events: list[Event] = []
+        subscriber_name = "py_llm_finalizer_failure"
+        name = "finalizer_failure"
+        finalizer_calls = 0
+        cleanup_calls = 0
+        finalizer_exception = RuntimeError("finalizer boom")
+        subscribers.register(subscriber_name, events.append)
 
-        def stream_func(request):
-            async def gen():
+        async def stream_func(_request: LLMRequest) -> AsyncIterator[Json]:
+            nonlocal cleanup_calls
+            try:
                 yield {"token": "hello"}
+                if close_early:
+                    await asyncio.Event().wait()
+            finally:
+                await asyncio.sleep(0)
+                cleanup_calls += 1
 
-            return gen()
+        def finish() -> Json:
+            nonlocal finalizer_calls
+            finalizer_calls += 1
+            if invalid_output:
+                return cast(Json, object())
+            raise finalizer_exception
 
+        stream = None
         try:
-            stream = await llm.stream_execute(
-                "stream_finalizer_fail_llm",
-                make_request(),
-                stream_func,
-                lambda chunk: None,
-                lambda: object(),
-            )
-            chunks = []
-            async for chunk in stream:
-                chunks.append(chunk)
-            assert chunks == [{"token": "hello"}]
+            stream = await llm.stream_execute(name, make_request(), stream_func, lambda chunk: None, finish)
+            assert await asyncio.wait_for(anext(stream), timeout=5) == {"token": "hello"}
+            expected_exception = ValueError if invalid_output else RuntimeError
+            expected_message = "Failed to convert to JSON" if invalid_output else "finalizer boom"
+            with pytest.raises(expected_exception, match=expected_message) as caught:
+                if close_early:
+                    await asyncio.wait_for(stream.aclose(), timeout=5)
+                else:
+                    await asyncio.wait_for(anext(stream), timeout=5)
+            if not invalid_output:
+                assert caught.value is finalizer_exception
+            assert cleanup_calls == 1
+            assert finalizer_calls == 1
+            await asyncio.wait_for(stream.aclose(), timeout=5)
         finally:
             try:
+                if stream is not None:
+                    await asyncio.wait_for(stream.aclose(), timeout=5)
                 await subscribers.flush_async()
             finally:
-                subscribers.deregister("py_llm_finalizer_fail_sub")
+                subscribers.deregister(subscriber_name)
 
-        end = _llm_event(events, "stream_finalizer_fail_llm", "end")
+        endings = [
+            event
+            for event in events
+            if isinstance(event, ScopeEvent) and event.name == name and event.scope_category == "end"
+        ]
+        assert len(endings) == 1
+        end = endings[0]
         assert end.data is None
+        assert isinstance(end.metadata, dict)
+        assert end.metadata["otel.status_code"] == "ERROR"
+        assert end.metadata["exception.type"] == expected_exception.__name__
 
-    async def test_stream_execute_finalizer_callable_error_records_null_output(self) -> None:
-        events = []
-        subscribers.register("py_llm_finalizer_callable_fail_sub", lambda event: events.append(event))
+    @pytest.mark.parametrize("response", [None, {"text": "hello"}])
+    async def test_stream_execute_finalizer_success_preserves_aggregate(self, response: Json) -> None:
+        events: list[Event] = []
+        subscriber_name = "py_llm_finalizer_success"
+        finalizer_calls = 0
+        subscribers.register(subscriber_name, events.append)
 
-        def stream_func(request):
-            async def gen():
-                yield {"token": "hello"}
+        async def stream_func(_request: LLMRequest) -> AsyncIterator[Json]:
+            yield {"token": "hello"}
 
-            return gen()
+        def finish() -> Json:
+            nonlocal finalizer_calls
+            finalizer_calls += 1
+            return response
 
+        stream = None
         try:
             stream = await llm.stream_execute(
-                "stream_finalizer_callable_fail_llm",
-                make_request(),
-                stream_func,
-                lambda chunk: None,
-                lambda: raise_runtime_error("finalizer boom"),
+                "finalizer_success", make_request(), stream_func, lambda chunk: None, finish
             )
-            chunks = []
-            async for chunk in stream:
-                chunks.append(chunk)
-            assert chunks == [{"token": "hello"}]
+            assert [chunk async for chunk in stream] == [{"token": "hello"}]
+            assert finalizer_calls == 1
         finally:
             try:
+                if stream is not None:
+                    await stream.aclose()
                 await subscribers.flush_async()
             finally:
-                subscribers.deregister("py_llm_finalizer_callable_fail_sub")
+                subscribers.deregister(subscriber_name)
 
-        end = _llm_event(events, "stream_finalizer_callable_fail_llm", "end")
-        assert end.data is None
+        end = _llm_event(events, "finalizer_success", "end")
+        assert end.data == response
+        assert isinstance(end.metadata, dict)
+        assert end.metadata["otel.status_code"] == "OK"
+
+    @pytest.mark.parametrize("close_with_unread_error", [False, True])
+    async def test_stream_execute_source_failure_precedes_finalizer_failure(
+        self, close_with_unread_error: bool
+    ) -> None:
+        events: list[Event] = []
+        subscriber_name = "py_llm_finalizer_precedence"
+        name = "finalizer_error_precedence"
+        source_exception = ValueError("source failed")
+        finalizer_calls = 0
+        cleanup_calls = 0
+        source_ended = asyncio.Event()
+        event_loop = asyncio.get_running_loop()
+
+        def observe(event: Event) -> None:
+            events.append(event)
+            if isinstance(event, ScopeEvent) and event.name == name and event.scope_category == "end":
+                event_loop.call_soon_threadsafe(source_ended.set)
+
+        async def stream_func(_request: LLMRequest) -> AsyncIterator[Json]:
+            nonlocal cleanup_calls
+            try:
+                yield {"token": "hello"}
+                raise source_exception
+            finally:
+                await asyncio.sleep(0)
+                cleanup_calls += 1
+
+        def finish() -> Never:
+            nonlocal finalizer_calls
+            finalizer_calls += 1
+            raise RuntimeError("finalizer failed")
+
+        subscribers.register(subscriber_name, observe)
+        stream = None
+        try:
+            stream = await llm.stream_execute(name, make_request(), stream_func, lambda chunk: None, finish)
+            assert await asyncio.wait_for(anext(stream), timeout=5) == {"token": "hello"}
+            if close_with_unread_error:
+                await asyncio.wait_for(source_ended.wait(), timeout=5)
+                await subscribers.flush_async()
+            with pytest.raises(ValueError, match="source failed") as caught:
+                if close_with_unread_error:
+                    await asyncio.wait_for(stream.aclose(), timeout=5)
+                else:
+                    await asyncio.wait_for(anext(stream), timeout=5)
+            assert caught.value is source_exception
+            assert cleanup_calls == 1
+            assert finalizer_calls == 1
+            await asyncio.wait_for(stream.aclose(), timeout=5)
+        finally:
+            try:
+                if stream is not None:
+                    await asyncio.wait_for(stream.aclose(), timeout=5)
+                await subscribers.flush_async()
+            finally:
+                subscribers.deregister(subscriber_name)
+
+        end = _llm_event(events, name, "end")
+        assert isinstance(end.metadata, dict)
+        assert end.metadata["otel.status_code"] == "ERROR"
+        assert end.metadata["exception.type"] == "ValueError"
+        assert "source failed" in str(end.metadata["otel.status_description"])
+        assert "finalizer failed" not in str(end.metadata["otel.status_description"])
 
     async def test_subscriber_exception_does_not_break_streaming(self) -> None:
         seen = []

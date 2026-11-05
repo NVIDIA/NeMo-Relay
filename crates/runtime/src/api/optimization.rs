@@ -16,7 +16,9 @@ use nemo_relay_types::codec::optimization::{
     LlmOptimizationSummaryStatus, LlmOptimizationTokens,
 };
 use nemo_relay_types::codec::pricing::CostEstimator;
-use nemo_relay_types::codec::response::{AnnotatedLlmResponse, CostEstimate, CostSource, Usage};
+use nemo_relay_types::codec::response::{
+    AnnotatedLlmResponse, CacheWriteTokenCounts, CostEstimate, CostSource, Usage,
+};
 
 /// Maximum contributions retained for one LLM call.
 pub const MAX_LLM_OPTIMIZATION_CONTRIBUTIONS: usize = 64;
@@ -656,12 +658,6 @@ fn derive_baseline_usage(
             "missing_effective_cache_read_tokens",
         ),
         (
-            &mut baseline.cache_write_tokens,
-            tokens_saved.cache_write_tokens,
-            token_totals.overflow.cache_write,
-            "missing_effective_cache_write_tokens",
-        ),
-        (
             &mut baseline.total_tokens,
             tokens_saved.total_tokens,
             token_totals.overflow.total,
@@ -677,6 +673,29 @@ fn derive_baseline_usage(
             limitations,
             baseline_derivation_incomplete,
         );
+    }
+    // Saved cache writes carry no duration, so they join the baseline as one
+    // entry priced at the default cache-write rate.
+    let mut cache_write_total = baseline.cache_write_total();
+    *token_count_overflow |= checked_add_observed_tokens(
+        &mut cache_write_total,
+        tokens_saved.cache_write_tokens,
+        token_totals.overflow.cache_write,
+        "missing_effective_cache_write_tokens",
+        limitations,
+        baseline_derivation_incomplete,
+    );
+    match (cache_write_total, tokens_saved.cache_write_tokens) {
+        (None, _) => baseline.cache_write_tokens = None,
+        (Some(_), Some(saved)) if saved > 0 => {
+            if let Some(writes) = baseline.cache_write_tokens.as_mut() {
+                writes.push(CacheWriteTokenCounts {
+                    count: saved,
+                    duration: None,
+                });
+            }
+        }
+        _ => {}
     }
     baseline.uncached_input_tokens =
         match baseline_uncached_input_tokens(usage, api_split, token_totals) {

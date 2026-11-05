@@ -38,14 +38,21 @@ type AdaptiveRuntime struct {
 	ptr *C.FfiAdaptiveRuntime
 }
 
+// CacheWriteTokenCounts is prompt-cache write tokens retained for one cache duration.
+type CacheWriteTokenCounts struct {
+	Count uint64 `json:"count"`
+	// Duration is the cache duration in seconds, nil when the provider does not say.
+	Duration *uint64 `json:"duration,omitempty"`
+}
+
 // CacheUsage is normalized LLM token usage used to build adaptive cache telemetry.
 type CacheUsage struct {
-	PromptTokens     *uint64         `json:"prompt_tokens,omitempty"`
-	CompletionTokens *uint64         `json:"completion_tokens,omitempty"`
-	TotalTokens      *uint64         `json:"total_tokens,omitempty"`
-	CacheReadTokens  *uint64         `json:"cache_read_tokens,omitempty"`
-	CacheWriteTokens *uint64         `json:"cache_write_tokens,omitempty"`
-	Cost             json.RawMessage `json:"cost,omitempty"`
+	PromptTokens     *uint64                 `json:"prompt_tokens,omitempty"`
+	CompletionTokens *uint64                 `json:"completion_tokens,omitempty"`
+	TotalTokens      *uint64                 `json:"total_tokens,omitempty"`
+	CacheReadTokens  *uint64                 `json:"cache_read_tokens,omitempty"`
+	CacheWriteTokens []CacheWriteTokenCounts `json:"cache_write_tokens,omitempty"`
+	Cost             json.RawMessage         `json:"cost,omitempty"`
 }
 
 // AgentIdentity identifies the agent associated with cache telemetry.

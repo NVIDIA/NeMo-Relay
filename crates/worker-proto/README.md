@@ -16,44 +16,49 @@ SPDX-License-Identifier: Apache-2.0
 
 # NeMo Relay Worker Protocol
 
-`nemo-relay-worker-proto` provides the generated Rust bindings for the
-versioned gRPC protocol used by NeMo Relay out-of-process worker plugins. It is
-a protocol dependency for worker SDKs and hosts, not the usual entry point for
-authoring a plugin.
+`nemo-relay-worker-proto` provides Rust messages, clients, and servers for worker
+gRPC calls. Hosts and worker SDKs depend on this crate.
 
 Use `nemo-relay-worker` to author Rust workers. Depend on this crate directly
 only when implementing another worker SDK, a custom host, or protocol-level
 tooling.
 
-Relay 0.8 establishes canonical tool results as the `grpc-v1` baseline. Workers built
-for earlier releases must regenerate their bindings, rebuild, and declare
-`compat.relay` beginning at `0.8.0`. `ToolNext` returns `ToolExecutionResultResponse`,
-and tool execution intercepts use structural `ToolExecutionInterceptOutcome` messages.
-
-Relay 0.10 adds execution codec context to `LlmInvocation`. The protobuf field
-is additive. Workers that register non-streaming or streaming LLM execution
-callbacks must update their callback signatures, rebuild with the 0.10 SDK, and
-set `compat.relay` to begin at `0.10.0`. Custom workers that register either
-surface must regenerate their bindings to read the field. The protocol
-identifier remains `grpc-v1`.
+The new package name and protocol identity are `nvidia.nemo.relay.worker.v1`.
+Its contract version is `1.0.0`. The host, Rust SDK, and Python SDK use this
+contract. Upgrade and rebuild them together. The old `grpc-v1` schema and Rust
+`v1` module have been removed. Rebuild old workers and update their manifests.
 
 ## Protocol Surface
 
+The crate provides these modules and checks:
+
 | Surface | Role |
-|---|---|
-| `WORKER_PROTOCOL_GRPC_V1` | Identifies the stable protocol accepted by Relay worker manifests. |
-| Worker message limits | `WorkerCallbackMessageLimits` resolves host overrides and plugin defaults. `CallbackMessageLimitService` selects finite send/receive caps by exact callback registration name before decoding; custom workers must enforce the same settings and callback metadata contract. |
-| `v1` module | Exposes generated `PluginWorker` and `RelayHostRuntime` Tonic clients, servers, services, and messages without regenerating protobuf in a consumer. |
-| JSON envelope helpers | Serialize Relay DTOs through `json_envelope` and `decode_json_envelope`, keeping protobuf responsible for transport flow rather than runtime data modeling. |
-| JSON value helpers | Serialize application-owned fields inside structural tool-result messages through `json_value` and `decode_json_value`. |
-| Tool results | `ToolNext` returns `ToolExecutionResultResponse`, and `ToolExecutionInterceptResult` returns `ToolExecutionInterceptOutcome`. Both preserve the application result and optional annotation. Intercept outcomes also include ordered pending marks. These fields use lossless protobuf `JsonValue` wrappers rather than `google.protobuf.Value`. |
-| Mark options | `EmitMarkRequest.data_schema` carries a `nemo.relay.DataSchema@1` envelope, `severity` carries the log severity, and `category` carries an optional semantic mark category. Omitting these fields preserves legacy behavior. |
-| Runtime diagnostics | Authenticated `GetRuntimeDiagnostics` returns a bounded active-host `{ code, message, count }` snapshot. Older hosts return gRPC `UNIMPLEMENTED`. |
-| LLM execution codec context | `LlmInvocation.execution_codec_context` carries request identity and request codec access. Non-streaming execution also carries completed-response identity and codec access; streaming execution omits it. |
+| --- | --- |
+| `nvidia_worker_v1` | Generated clients, servers, and messages for the worker, host-runtime, and diagnostic services. |
+| `conversions` | Convert shared domain values to and from protobuf messages. Codec data uses the native SDK's JSON representation. |
+| `validation` | Check schema rules, JSON syntax, timestamps, and durations before calling callbacks. |
+| Message limits | Limit sent and received bytes by callback name before decoding. |
+| Open payloads | `JsonValue` and `JsonObject` preserve application and provider data, including null and large integers. |
+| Closed contracts | Typed events, common LLM annotations, outcomes, pending marks, diagnostics, scopes, and codec capabilities. |
+
+Refer to [the contract](CONTRACT.md) for field presence, lifecycle, authorization,
+generation, and compatibility rules. Crate and wheel versions are independent
+of contract versions. The [Rust conversion guide](CONTRACT.md#rust-domain-conversions)
+explains mapping modes, representation differences, and how to update adapters.
 
 ## Installation
 
-Add the protocol crate when building protocol-level integrations:
+Install the Protocol Buffers compiler (`protoc`) 31.1 or newer on PATH (or select
+it with `PROTOC`). The validation dependency builds its own bindings and needs
+this separate compiler. This crate uses a bundled compiler for its own schema.
+CI uses version 31.1 for both.
+
+Install [Buf](https://buf.build/docs/installation/) 1.75.0 or newer before building
+this crate from source. Set `BUF` to select an executable outside PATH. The build
+downloads the exact Protovalidate version recorded in `buf.lock` into Cargo's
+build directory. The first build needs access to the Buf Schema Registry.
+
+Add the protocol crate to your integration with this command:
 
 ```bash
 cargo add nemo-relay-worker-proto
@@ -61,17 +66,17 @@ cargo add nemo-relay-worker-proto
 
 ## Getting Started
 
-Use the shared protocol identifier and JSON envelope helpers:
+Use the new protocol identity and typed converters as shown in this example:
 
 ```rust
-use nemo_relay_worker_proto::{WORKER_PROTOCOL_GRPC_V1, decode_json_envelope, json_envelope};
+use nemo_relay_worker_proto::{conversions::{encode, decode}, nvidia_worker_v1::{JsonValue, WORKER_PROTOCOL, CONTRACT_VERSION}};
 use serde_json::{Value, json};
 
-fn main() -> Result<(), serde_json::Error> {
-    let envelope = json_envelope("example.Payload@1", &json!({"ok": true}))?;
-    let payload: Value = decode_json_envelope(&envelope)?;
-
-    assert_eq!(WORKER_PROTOCOL_GRPC_V1, "grpc-v1");
+fn main() -> Result<(), Box<dyn std::error::Error>> {
+    let wire: JsonValue = encode(json!({"ok": true}))?;
+    let payload: Value = decode(wire)?;
+    assert_eq!(WORKER_PROTOCOL, "nvidia.nemo.relay.worker.v1");
+    assert_eq!(CONTRACT_VERSION, "1.0.0");
     assert_eq!(payload["ok"], true);
     Ok(())
 }

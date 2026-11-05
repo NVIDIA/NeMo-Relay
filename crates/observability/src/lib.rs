@@ -85,7 +85,7 @@ pub fn input_tokens_including_cache(
     if !uses_separate_anthropic_cache_tokens(provider, response) {
         return Some(prompt_tokens);
     }
-    [usage.cache_read_tokens, usage.cache_write_tokens]
+    [usage.cache_read_tokens, usage.cache_write_total()]
         .into_iter()
         .flatten()
         .try_fold(prompt_tokens, u64::checked_add)
@@ -777,11 +777,19 @@ pub fn attribute_mapping_aliases(
         .iter()
         .map(|attribute| attribute.key.as_str().to_string())
         .collect::<std::collections::HashSet<_>>();
+    resolve_attribute_mapping_aliases(projected_attributes, mappings, &existing)
+}
+
+fn resolve_attribute_mapping_aliases(
+    sources: &[opentelemetry::KeyValue],
+    mappings: &[OtlpAttributeMapping],
+    protected_keys: &std::collections::HashSet<String>,
+) -> Vec<opentelemetry::KeyValue> {
     mappings
         .iter()
-        .filter(|mapping| !existing.contains(mapping.alias.as_str()))
+        .filter(|mapping| !protected_keys.contains(mapping.alias.as_str()))
         .filter_map(|mapping| {
-            projected_attributes
+            sources
                 .iter()
                 .rev()
                 .find(|attribute| attribute.key.as_str() == mapping.key)
@@ -866,6 +874,31 @@ pub fn estimate_cost_for_response_or_model(
     pricing.estimate_cost_for_provider(provider, requested_model, usage)
 }
 
+/// Cache writes from `primary`, unless `secondary` reports the same total with
+/// more of it tagged by duration.
+fn merged_cache_writes(
+    primary: &nemo_relay_types::codec::response::Usage,
+    secondary: &nemo_relay_types::codec::response::Usage,
+) -> Option<Vec<nemo_relay_types::codec::response::CacheWriteTokenCounts>> {
+    let without_duration = |usage: &nemo_relay_types::codec::response::Usage| {
+        usage
+            .cache_write_tokens
+            .iter()
+            .flatten()
+            .filter(|write| write.duration.is_none())
+            .fold(0_u64, |total, write| total.saturating_add(write.count))
+    };
+    if primary.cache_write_total() == secondary.cache_write_total()
+        && without_duration(secondary) < without_duration(primary)
+    {
+        return secondary.cache_write_tokens.clone();
+    }
+    primary
+        .cache_write_tokens
+        .clone()
+        .or_else(|| secondary.cache_write_tokens.clone())
+}
+
 #[doc(hidden)]
 pub fn merge_usage(
     primary: Option<&nemo_relay_types::codec::response::Usage>,
@@ -875,40 +908,32 @@ pub fn merge_usage(
         (None, None) => None,
         (None, Some(usage)) | (Some(usage), None) => Some(usage.clone()),
         (Some(primary), Some(secondary)) => {
-            let (
-                prompt_tokens,
-                cache_read_tokens,
-                cache_write_tokens,
-                cache_write_1h_tokens,
-                uncached_input_tokens,
-            ) = match [primary, secondary]
-                .into_iter()
-                .find(|usage| usage.uncached_input_tokens.is_some())
-            {
-                Some(split) => (
-                    split.prompt_tokens,
-                    split.cache_read_tokens,
-                    split.cache_write_tokens,
-                    split.cache_write_1h_tokens,
-                    split.uncached_input_tokens,
-                ),
-                None => (
-                    primary.prompt_tokens.or(secondary.prompt_tokens),
-                    primary.cache_read_tokens.or(secondary.cache_read_tokens),
-                    primary.cache_write_tokens.or(secondary.cache_write_tokens),
-                    primary
-                        .cache_write_1h_tokens
-                        .or(secondary.cache_write_1h_tokens),
-                    None,
-                ),
-            };
+            // Cache writes move as one list from one source, so a total and
+            // its per-duration split never come from different usages.
+            let (prompt_tokens, cache_read_tokens, cache_write_tokens, uncached_input_tokens) =
+                match [primary, secondary]
+                    .into_iter()
+                    .find(|usage| usage.uncached_input_tokens.is_some())
+                {
+                    Some(split) => (
+                        split.prompt_tokens,
+                        split.cache_read_tokens,
+                        split.cache_write_tokens.clone(),
+                        split.uncached_input_tokens,
+                    ),
+                    None => (
+                        primary.prompt_tokens.or(secondary.prompt_tokens),
+                        primary.cache_read_tokens.or(secondary.cache_read_tokens),
+                        merged_cache_writes(primary, secondary),
+                        None,
+                    ),
+                };
             Some(nemo_relay_types::codec::response::Usage {
                 prompt_tokens,
                 completion_tokens: primary.completion_tokens.or(secondary.completion_tokens),
                 total_tokens: primary.total_tokens.or(secondary.total_tokens),
                 cache_read_tokens,
                 cache_write_tokens,
-                cache_write_1h_tokens,
                 uncached_input_tokens,
                 cost: primary.cost.clone().or_else(|| secondary.cost.clone()),
             })

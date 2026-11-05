@@ -22,6 +22,7 @@ from nemo_relay.integrations.google_adk._serialization import (
     final_response,
     header_text,
     http_headers,
+    request_content,
     request_payload,
     write_back_request,
     write_headers,
@@ -151,7 +152,7 @@ async def _run(
         headers, put request headers on attempt. Otherwise write them into request's HTTP options.
         """
         nonlocal current
-        content = request.content
+        content = request_content(request)
         if in_flight == 0:
             edited = llm_request
             if write_back_request(edited, payload=content, original_payload=current):

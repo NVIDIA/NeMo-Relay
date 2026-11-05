@@ -167,7 +167,7 @@ pub fn input_split(usage: &Usage) -> Option<InputSplit> {
 
 #[doc(hidden)]
 pub fn input_tokens_with_cache(usage: &Usage, uncached: u64) -> Option<u64> {
-    [usage.cache_read_tokens, usage.cache_write_tokens]
+    [usage.cache_read_tokens, usage.cache_write_total()]
         .into_iter()
         .flatten()
         .try_fold(uncached, u64::checked_add)

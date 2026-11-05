@@ -812,7 +812,7 @@ pub(crate) fn extract_metrics(
         .and_then(|usage| usage.cache_read_tokens);
     let cache_write = merged_usage
         .as_ref()
-        .and_then(|usage| usage.cache_write_tokens);
+        .and_then(nemo_relay_types::codec::response::Usage::cache_write_total);
     let cached = sum_options(cache_read, cache_write);
     let normalized_cost_source = normalized_usage.and_then(|usage| usage.cost.as_ref());
     let normalized_cost =

@@ -76,7 +76,10 @@ where
     }
     fn call(&mut self, request: http::Request<TonicBody>) -> Self::Future {
         let permit = self.requests.clone().try_acquire_owned();
-        let read = request.uri().path().ends_with("/ReadDiagnosticPage");
+        let read = matches!(
+            request.uri().path().rsplit('/').next(),
+            Some("ReadDiagnosticPage" | "GetDiagnosticDiscovery" | "InspectDiagnosticMemory")
+        );
         let read_permit = read.then(|| self.reads.clone().try_acquire_owned());
         let service = self.inner.clone();
         Box::pin(async move {

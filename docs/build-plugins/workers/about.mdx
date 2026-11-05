@@ -1,31 +1,26 @@
 ---
 title: "About gRPC Worker Plugins"
-description: "Choose a Python, Rust, or custom grpc-v1 worker implementation."
+description: "Choose a Python, Rust, or custom gRPC worker implementation."
 position: 30
 ---
 {/* SPDX-FileCopyrightText: Copyright (c) 2026, NVIDIA CORPORATION & AFFILIATES. All rights reserved.
 SPDX-License-Identifier: Apache-2.0 */}
 
-A worker plugin runs outside the Relay process and implements the stable `grpc-v1`
-service contract. It can register the same 16 subscriber and middleware surfaces as
-an in-process plugin, call continuations back in the host, use invocation-scoped codecs,
-and emit marks or manage scope stacks through host-runtime RPCs.
+A worker plugin runs outside the Relay process. It implements
+`nvidia.nemo.relay.worker.v1` and supports 17 subscriber and middleware callback
+types. It can call the host's remaining execution chain through continuations,
+use codecs during a callback, emit marks, and manage scope stacks.
 
-Relay 0.8 establishes canonical tool results as the `grpc-v1` baseline. Tool callbacks
-and `ToolNext` continuations preserve an application `result` and optional opaque
-`annotation`; an execution intercept can add Relay-owned pending marks. Rebuild every
-SDK worker, regenerate custom protobuf bindings, and declare `compat.relay` beginning at
-`0.8.0`. The protocol remains named `grpc-v1`; this is a changed tool-result contract,
-not a new protocol family.
+The current contract is `nvidia.nemo.relay.worker.v1`, version `1.0.0`, introduced
+in Relay 1.0. Upgrade the host and worker SDK together, regenerate custom bindings,
+and set `compat.worker_protocol = "nvidia.nemo.relay.worker.v1"` in the manifest.
+Set `compat.relay = ">=1.0.0,<2.0"` for the current SDK. Old `grpc-v1` workers
+cannot use these services. Package versions continue to follow Relay releases.
 
-Relay 0.10 adds `LlmExecutionContext` before the continuation in non-streaming
-and streaming LLM execution callbacks. Workers that register either surface
-must update their callback signatures, rebuild with the 0.10 SDK, and set
-`compat.relay` to begin at `0.10.0`. Custom workers that register either surface
-must regenerate their bindings to read the field. The context can decode and
-encode the request; non-streaming callbacks can also decode the completed
-response. Streaming callbacks do not receive a response codec. The protocol
-remains `grpc-v1`.
+Tool callbacks and `ToolNext` continuations preserve an application `result` and
+optional opaque `annotation`; execution intercepts can add Relay-owned pending
+marks. LLM execution callbacks receive `LlmExecutionContext`, which provides
+request codecs and a response codec for non-streaming callbacks.
 
 Workers can add a data schema, log severity, and semantic category to a mark, emit validated metric
 measurements, and read the current host-level runtime diagnostics. These diagnostics are
@@ -35,19 +30,21 @@ observations through the canonical diagnostics delivery API. Refer to
 [Plugin Diagnostics](/build-plugins/diagnostics) for matching examples and delivery
 limits. Worker recording does not grant canonical read access.
 
-Choose a worker when process or dependency isolation is worth the gRPC dispatch,
-JSON-envelope conversion, and scheduling cost on callback paths. The boundary limits the
-blast radius of a worker crash and keeps dependencies out of the application environment,
-but it is not a security sandbox. Relay authenticates a local endpoint with a per-activation
-token, and a worker is trusted to request host operations within that activation.
+Choose a worker when a separate process or dependency environment is worth the
+extra gRPC calls and data conversion. A worker crash does not crash the Relay
+process, but the worker is still trusted code. It is not a security sandbox.
+Relay uses a separate authentication token for each activation. That token lets
+the worker request host operations for that activation.
 
 ## Choose the Implementation
+
+Choose one of these implementation paths:
 
 | Implementation | Development and Distribution Characteristics |
 |---|---|
 | Python SDK | Best fit for Python-only dependencies and rapid iteration. `plugins add` builds a Relay-managed environment from the package and records an attestation used at activation. Python workers cannot be activated by merely adding a manifest path to `plugins.toml`. |
 | Rust SDK | Best fit for a compiled, self-contained worker and Rust callback code. The executable is packaged directly and can be registered through a manifest reference or the CLI lifecycle. |
-| Custom command | Advanced path for another language or an existing service executable. It must implement every required `grpc-v1` lifecycle, authentication, envelope, cancellation, continuation, codec, and shutdown rule itself. The SDK tutorials do not apply to it. |
+| Custom command | Advanced path for another language or an existing service executable. It must implement every required `nvidia.nemo.relay.worker.v1` lifecycle, authentication, typed message validation, cancellation, continuation, codec, and shutdown rule itself. The SDK tutorials do not apply to it. |
 
 Async Python and Rust callback work is cancelled cooperatively when the host caller times
 out, a stream consumer disconnects, or shutdown begins. Dropping a future or cancelling an
@@ -57,20 +54,19 @@ cleanup in a guaranteed finalizer.
 
 ## Let the SDK Own the Transport
 
-Worker authors implement `WorkerPlugin`; they do not implement the protobuf server in
-application code. `serve_plugin` reads the activation environment created by Relay,
-binds the authenticated local endpoint, performs handshake and health handling, and
-dispatches validation, registration, invocation, cancellation, and shutdown.
+Implement `WorkerPlugin` and let the SDK run the protobuf server. `serve_plugin`
+reads Relay's activation environment and opens the authenticated local endpoint.
+It handles handshake, health, validation, registration, callbacks, cancellation,
+and shutdown.
 
 ## Configure the Snapshot Location
 
-Before starting a worker, Relay copies its runtime closure into an isolated activation
-snapshot. Set `NEMO_RELAY_PLUGIN_SNAPSHOT_DIR` in the environment that starts Relay to
-use a directory of your choice; Relay creates it when it does not exist. Choose a location
-outside every directory copied into a snapshot, including active plugin packages and external
-entrypoint or library directories. This applies to Python, Rust, and custom-command workers; it
-is particularly useful when the system temporary directory is too long or a deployment requires
-snapshots on controlled storage.
+Before starting a worker, Relay copies its package and runtime files into an
+activation snapshot. This is a separate directory for that activation. Set
+`NEMO_RELAY_PLUGIN_SNAPSHOT_DIR` in the environment that starts Relay to choose
+where snapshots are stored. Relay creates the directory if needed. Keep it
+outside plugin packages and all copied entrypoint and library directories. The following examples set the
+snapshot location in PowerShell and Bash:
 
 ```powershell
 $env:NEMO_RELAY_PLUGIN_SNAPSHOT_DIR = "C:\\nrs"
@@ -160,10 +156,12 @@ async fn main() -> Result<()> {
 
 </CodeBlocks>
 
-Both `register` methods are synchronous because they describe and return the component's
-registration set during activation. The callbacks they install can be asynchronous.
-The stable `plugin_id` must match the manifest ID and handshake identity; a mismatch
-causes activation to fail before any callback is routed.
+The examples above use synchronous `register` methods to declare callbacks during
+activation. Python also supports an asynchronous registration method. Rust
+registration stays synchronous. The installed callbacks can be asynchronous.
+
+The `plugin_id` must match the manifest ID and handshake identity. A mismatch
+fails activation before any callback runs.
 
 ## Complete Path
 
@@ -176,12 +174,12 @@ Follow these pages in order to build, activate, exercise, and stop a worker plug
    paying particular attention to repeated downstream calls and lazy streams.
 3. Use [Runtime Events and Scopes](/build-plugins/workers/runtime-events-and-scopes) for
    marks, scope stacks, binding, restoration, and failure cleanup.
-4. Use the [grpc-v1 Protocol Reference](/build-plugins/workers/grpc-v1-protocol) to audit
+4. Use the [gRPC Protocol Reference](/build-plugins/workers/grpc-v1-protocol) to audit
    an SDK or implement a custom command.
 
-The atomic Rust lifecycle test builds the executable in an isolated target directory,
-materializes and integrity-checks its manifest, completes worker activation, executes a
-managed tool call across `grpc-v1`, observes a host-runtime mark, and verifies orderly
-shutdown. The Rust and Python callback-contract tests then isolate the sanitizer,
+The Rust lifecycle test builds the executable in an isolated target directory,
+creates a manifest and checks its digest. It then activates the worker, runs a
+managed tool call through `nvidia.nemo.relay.worker.v1`, checks a host-runtime mark,
+and verifies shutdown. The Rust and Python callback-contract tests then isolate the sanitizer,
 continuation, streaming, codec, cancellation, and scope-cleanup behavior. Merely
 starting a process and registering one intercept is not enough evidence.

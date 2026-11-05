@@ -1,0 +1,372 @@
+// SPDX-FileCopyrightText: Copyright (c) 2026, NVIDIA CORPORATION & AFFILIATES. All rights reserved.
+// SPDX-License-Identifier: Apache-2.0
+
+// Defines typed resource-memory projections without collecting new samples.
+
+syntax = "proto3";
+
+package nvidia.nemo.relay.worker.v1;
+
+import "buf/validate/validate.proto";
+import "google/protobuf/empty.proto";
+import "google/protobuf/timestamp.proto";
+
+// Canonical resource memory availability values from the shared runtime types.
+enum ResourceMemoryAvailability {
+  // No value supplied; invalid where an explicit value is required.
+  RESOURCE_MEMORY_AVAILABILITY_UNSPECIFIED = 0;
+  // Collection or projection is disabled.
+  RESOURCE_MEMORY_AVAILABILITY_DISABLED = 1;
+  // Waiting for a CLI-owned target.
+  RESOURCE_MEMORY_AVAILABILITY_AWAITING_TARGET = 2;
+  // No collection has completed.
+  RESOURCE_MEMORY_AVAILABILITY_NOT_YET_SAMPLED = 3;
+  // A sample is available; inspect its independent staleness flag.
+  RESOURCE_MEMORY_AVAILABILITY_AVAILABLE = 4;
+  // Latest collection failed; a prior valid sample may remain.
+  RESOURCE_MEMORY_AVAILABILITY_FAILED = 5;
+  // Runtime/target or process owner was invalidated.
+  RESOURCE_MEMORY_AVAILABILITY_INVALIDATED = 6;
+  // A sample exceeds the bounded projection vocabulary or capacity.
+  RESOURCE_MEMORY_AVAILABILITY_CAPACITY_UNAVAILABLE = 7;
+  // The collector platform is unsupported.
+  RESOURCE_MEMORY_AVAILABILITY_UNSUPPORTED = 8;
+}
+
+// Canonical resource sample stream values from the shared runtime types.
+enum ResourceSampleStream {
+  // No value supplied; invalid where an explicit value is required.
+  RESOURCE_SAMPLE_STREAM_UNSPECIFIED = 0;
+  // Configured polling.
+  RESOURCE_SAMPLE_STREAM_POLLING = 1;
+  // Explicit existing resource collect API.
+  RESOURCE_SAMPLE_STREAM_ON_DEMAND = 2;
+}
+
+// Canonical resource association values from the shared runtime types.
+enum ResourceAssociation {
+  // No value supplied; invalid where an explicit value is required.
+  RESOURCE_ASSOCIATION_UNSPECIFIED = 0;
+  // Verified host application process.
+  RESOURCE_ASSOCIATION_HOST_PROCESS = 1;
+  // Verified host root plus sampled descendants.
+  RESOURCE_ASSOCIATION_HOST_PROCESS_TREE = 2;
+  // Verified different root and descendants; may exclude Relay.
+  RESOURCE_ASSOCIATION_OTHER_PROCESS_TREE = 3;
+  // System context only.
+  RESOURCE_ASSOCIATION_SYSTEM = 4;
+  // No verified root relationship.
+  RESOURCE_ASSOCIATION_UNVERIFIED = 5;
+}
+
+// Canonical memory field scope values from the shared runtime types.
+enum MemoryFieldScope {
+  // No value supplied; invalid where an explicit value is required.
+  MEMORY_FIELD_SCOPE_UNSPECIFIED = 0;
+  // System-visible measurement.
+  MEMORY_FIELD_SCOPE_SYSTEM = 1;
+  // Selected process or process tree.
+  MEMORY_FIELD_SCOPE_SELECTED_PROCESSES = 2;
+  // Owned environment/container/cgroup measurement.
+  MEMORY_FIELD_SCOPE_ENVIRONMENT = 3;
+}
+
+// Canonical resource measurement scope values from the shared runtime types.
+enum ResourceMeasurementScope {
+  // No value supplied; invalid where an explicit value is required.
+  RESOURCE_MEASUREMENT_SCOPE_UNSPECIFIED = 0;
+  // All system resources visible to the running environment.
+  RESOURCE_MEASUREMENT_SCOPE_GLOBAL = 1;
+  // The process containing the Relay runtime.
+  RESOURCE_MEASUREMENT_SCOPE_APPLICATION_PROCESS = 2;
+  // A root process and every descendant under that process.
+  RESOURCE_MEASUREMENT_SCOPE_PROCESS_TREE = 3;
+}
+
+// Canonical resource operating system values from the shared runtime types.
+enum ResourceOperatingSystem {
+  // No value supplied; invalid where an explicit value is required.
+  RESOURCE_OPERATING_SYSTEM_UNSPECIFIED = 0;
+  // Linux.
+  RESOURCE_OPERATING_SYSTEM_LINUX = 1;
+  // macOS.
+  RESOURCE_OPERATING_SYSTEM_MACOS = 2;
+  // Windows.
+  RESOURCE_OPERATING_SYSTEM_WINDOWS = 3;
+  // A platform without a supported resource metrics collector.
+  RESOURCE_OPERATING_SYSTEM_UNSUPPORTED = 4;
+}
+
+// Canonical capacity unit values from the shared runtime types.
+enum CapacityUnit {
+  // No value supplied; invalid where an explicit value is required.
+  CAPACITY_UNIT_UNSPECIFIED = 0;
+  // Bytes.
+  CAPACITY_UNIT_BYTES = 1;
+  // Kilobytes.
+  CAPACITY_UNIT_KILOBYTES = 2;
+  // Megabytes.
+  CAPACITY_UNIT_MEGABYTES = 3;
+  // Gigabytes.
+  CAPACITY_UNIT_GIGABYTES = 4;
+  // Terabytes.
+  CAPACITY_UNIT_TERABYTES = 5;
+  // Kibibytes.
+  CAPACITY_UNIT_KIBIBYTES = 6;
+  // Mebibytes.
+  CAPACITY_UNIT_MEBIBYTES = 7;
+  // Gibibytes.
+  CAPACITY_UNIT_GIBIBYTES = 8;
+  // Tebibytes.
+  CAPACITY_UNIT_TEBIBYTES = 9;
+}
+
+// Canonical duration unit values from the shared runtime types.
+enum DurationUnit {
+  // No value supplied; invalid where an explicit value is required.
+  DURATION_UNIT_UNSPECIFIED = 0;
+  // Microseconds.
+  DURATION_UNIT_MICROSECONDS = 1;
+  // Milliseconds.
+  DURATION_UNIT_MILLISECONDS = 2;
+  // Seconds.
+  DURATION_UNIT_SECONDS = 3;
+  // Minutes.
+  DURATION_UNIT_MINUTES = 4;
+}
+
+// Canonical count unit values from the shared runtime types.
+enum CountUnit {
+  // No value supplied; invalid where an explicit value is required.
+  COUNT_UNIT_UNSPECIFIED = 0;
+  // Processes.
+  COUNT_UNIT_PROCESSES = 1;
+  // Threads.
+  COUNT_UNIT_THREADS = 2;
+  // File descriptors.
+  COUNT_UNIT_FILE_DESCRIPTORS = 3;
+  // Handles.
+  COUNT_UNIT_HANDLES = 4;
+  // Events.
+  COUNT_UNIT_EVENTS = 5;
+  // Operations.
+  COUNT_UNIT_OPERATIONS = 6;
+  // Packets.
+  COUNT_UNIT_PACKETS = 7;
+  // Errors.
+  COUNT_UNIT_ERRORS = 8;
+}
+
+// Canonical resource limit resource values from the shared runtime types.
+enum ResourceLimitResource {
+  // No value supplied; invalid where an explicit value is required.
+  RESOURCE_LIMIT_RESOURCE_UNSPECIFIED = 0;
+  // CPU capacity.
+  RESOURCE_LIMIT_RESOURCE_CPU = 1;
+  // Memory capacity.
+  RESOURCE_LIMIT_RESOURCE_MEMORY = 2;
+  // Process capacity.
+  RESOURCE_LIMIT_RESOURCE_PROCESSES = 3;
+}
+
+// Canonical resource limit event kind values from the shared runtime types.
+enum ResourceLimitEventKind {
+  // No value supplied; invalid where an explicit value is required.
+  RESOURCE_LIMIT_EVENT_KIND_UNSPECIFIED = 0;
+  // CPU execution was throttled.
+  RESOURCE_LIMIT_EVENT_KIND_THROTTLED = 1;
+  // A high threshold was crossed.
+  RESOURCE_LIMIT_EVENT_KIND_HIGH = 2;
+  // A configured maximum was reached.
+  RESOURCE_LIMIT_EVENT_KIND_MAXIMUM = 3;
+  // An out-of-memory condition occurred.
+  RESOURCE_LIMIT_EVENT_KIND_OUT_OF_MEMORY = 4;
+  // A process was terminated by the resource boundary.
+  RESOURCE_LIMIT_EVENT_KIND_TERMINATED = 5;
+}
+
+// Exact integer, finite decimal, or explicit non-finite collector result.
+message ResourceMemoryNumber {
+  // Exactly one original numeric kind is required.
+  oneof kind {
+    option (buf.validate.oneof).required = true;
+    // Exact unsigned value, without a floating-point conversion.
+    uint64 integer = 1;
+    // Finite fractional value in the original configured unit.
+    double decimal = 2 [(buf.validate.field).double.finite = true];
+    // A collector reported a non-finite value; never substitute zero.
+    google.protobuf.Empty non_finite = 3;
+  }
+}
+
+// Original measurement dimension and canonical unit, without conversion.
+message ResourceMemoryUnit {
+  // Exactly one original unit family is required.
+  oneof dimension {
+    option (buf.validate.oneof).required = true;
+    // Memory capacity unit.
+    CapacityUnit capacity = 1 [(buf.validate.field).enum = {
+      defined_only: true
+      not_in: [0]
+    }];
+    // Elapsed or cumulative duration unit.
+    DurationUnit duration = 2 [(buf.validate.field).enum = {
+      defined_only: true
+      not_in: [0]
+    }];
+    // Cumulative event count unit.
+    CountUnit count = 3 [(buf.validate.field).enum = {
+      defined_only: true
+      not_in: [0]
+    }];
+  }
+}
+
+// One fixed resource limit-event slot, preserving the runtime's null positions.
+message MemoryLimitEventSlot {
+  // Exactly one present or absent slot selection is required.
+  oneof state {
+    option (buf.validate.oneof).required = true;
+    // The slot is unoccupied.
+    google.protobuf.Empty absent = 1;
+    // The slot contains a reported limit event.
+    MemoryLimitEvent value = 2;
+  }
+}
+
+// Typed resource memory measurement preserving the shared runtime fields.
+message ResourceMemoryMeasurement {
+  // Original precision and numeric kind.
+  ResourceMemoryNumber value = 1 [(buf.validate.field).required = true];
+  // Original configured unit; not necessarily bytes.
+  ResourceMemoryUnit unit = 2 [(buf.validate.field).required = true];
+  // Scope of this specific field.
+  MemoryFieldScope measurement_scope = 3 [(buf.validate.field).enum = {
+    defined_only: true
+    not_in: [0]
+  }];
+  // Readable process count for this field, if the collector reports it.
+  optional uint64 sampled_processes = 4;
+}
+
+// Typed memory limit event preserving the shared runtime fields.
+message MemoryLimitEvent {
+  // Resource whose limit generated the event.
+  ResourceLimitResource resource = 1 [(buf.validate.field).enum = {
+    defined_only: true
+    not_in: [0]
+  }];
+  // OS event kind.
+  ResourceLimitEventKind event = 2 [(buf.validate.field).enum = {
+    defined_only: true
+    not_in: [0]
+  }];
+  // Cumulative count or absent coverage.
+  ResourceMemoryMeasurement count = 3;
+}
+
+// Typed resource memory metrics preserving the shared runtime fields.
+message ResourceMemoryMetrics {
+  // Original `system_used` resource measurement; absent means not reported.
+  ResourceMemoryMeasurement system_used = 1;
+  // Original `system_total` resource measurement; absent means not reported.
+  ResourceMemoryMeasurement system_total = 2;
+  // Original `system_available` resource measurement; absent means not reported.
+  ResourceMemoryMeasurement system_available = 3;
+  // Original `resident` resource measurement; absent means not reported.
+  ResourceMemoryMeasurement resident = 4;
+  // Original `private` resource measurement; absent means not reported.
+  ResourceMemoryMeasurement private = 5;
+  // Original `physical_footprint` resource measurement; absent means not reported.
+  ResourceMemoryMeasurement physical_footprint = 6;
+  // Original `virtual_memory` resource measurement; absent means not reported.
+  ResourceMemoryMeasurement virtual_memory = 7;
+  // Original `peak_resident` resource measurement; absent means not reported.
+  ResourceMemoryMeasurement peak_resident = 8;
+  // Original `limit` resource measurement; absent means not reported.
+  ResourceMemoryMeasurement limit = 9;
+  // Original `environment_accounted` resource measurement; absent means not reported.
+  ResourceMemoryMeasurement environment_accounted = 10;
+  // Original `some_pressure_stall_time` resource measurement; absent means not reported.
+  ResourceMemoryMeasurement some_pressure_stall_time = 11;
+  // Original `full_pressure_stall_time` resource measurement; absent means not reported.
+  ResourceMemoryMeasurement full_pressure_stall_time = 12;
+  // Original `out_of_memory_event_count` resource measurement; absent means not reported.
+  ResourceMemoryMeasurement out_of_memory_event_count = 13;
+  // Retained limit events; unused slots are null, overcapacity rejects publication.
+  repeated MemoryLimitEventSlot limit_events = 14 [(buf.validate.field).repeated = {
+    min_items: 8
+    max_items: 8
+  }];
+}
+
+// Typed resource process identity preserving the shared runtime fields.
+message ResourceProcessIdentity {
+  // OS process identifier.
+  uint32 process_id = 1;
+  // Opaque platform start identity; compare only within the same host/collector.
+  uint64 start_identity = 2;
+}
+
+// Typed resource memory sample preserving the shared runtime fields.
+message ResourceMemorySample {
+  // Collector incarnation; multiple diagnostic sources may share this sample.
+  string collector_instance_id = 1 [(buf.validate.field).string.uuid = true];
+  // Active plugin runtime generation.
+  uint64 runtime_generation = 2;
+  // Collection target generation.
+  uint64 target_generation = 3;
+  // Independent sampling baseline stream.
+  ResourceSampleStream stream = 4 [(buf.validate.field).enum = {
+    defined_only: true
+    not_in: [0]
+  }];
+  // Shared collection-start order across both streams.
+  uint64 ordinal = 5;
+  // Collection start on the collector's wall clock.
+  google.protobuf.Timestamp start_time = 6 [(buf.validate.field).required = true];
+  // Collection completion on the collector's wall clock.
+  google.protobuf.Timestamp complete_time = 7 [(buf.validate.field).required = true];
+  // Collection duration measured monotonically.
+  uint64 collection_millis = 8;
+  // Collector operating system.
+  ResourceOperatingSystem operating_system = 9 [(buf.validate.field).enum = {
+    defined_only: true
+    not_in: [0]
+  }];
+  // Selected measurement boundary, independent of individual system fields.
+  ResourceMeasurementScope measurement_scope = 10 [(buf.validate.field).enum = {
+    defined_only: true
+    not_in: [0]
+  }];
+  // Root verified during this collection, or absent for system/unverified context.
+  ResourceProcessIdentity root = 11;
+  // Processes visible at sampling start, when known.
+  optional uint64 visible_processes = 12;
+  // Successfully sampled base process queries, when known.
+  optional uint64 sampled_processes = 13;
+  // Memory-only values; existing resource APIs retain their serialization.
+  ResourceMemoryMetrics memory = 14 [(buf.validate.field).required = true];
+}
+
+// Typed resource memory view preserving the shared runtime fields.
+message ResourceMemoryView {
+  // Latest attempt availability; prior valid samples may remain after failure.
+  ResourceMemoryAvailability availability = 1 [(buf.validate.field).enum = {
+    defined_only: true
+    not_in: [0]
+  }];
+  // Exact sample used for this page; may differ on the next page.
+  ResourceMemorySample sample = 2;
+  // Relation to the diagnostic source, verified without retargeting collection.
+  ResourceAssociation association = 3 [(buf.validate.field).enum = {
+    defined_only: true
+    not_in: [0]
+  }];
+  // Local monotonic age since completion, not a remote wall-clock subtraction.
+  optional uint64 age_millis = 4;
+  // Age exceeds the resource plugin's configured freshness threshold.
+  bool stale = 5;
+  // Compiled latest-cache slot size, outside core reservation and excluding temporary copies.
+  uint64 projection_slot_bytes = 6;
+}

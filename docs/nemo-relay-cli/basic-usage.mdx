@@ -516,7 +516,7 @@ provider requests and model lists, Relay resolves credentials in this order:
    from the client. Relay runs the helper for each outbound request attempt
    when `cache_ttl_ms` is omitted or `0`. With a positive value, Relay reuses
    the cached token until the cache interval ends.
-3. Without a sign-in or a helper, Relay keeps an inbound `Authorization`, `x-api-key`,
+3. Without an `oidc` section or a helper, Relay keeps an inbound `Authorization`, `x-api-key`,
    `api-key`, or `anthropic-api-key` header.
 4. If the client sends no credential, Relay uses the configured API key or
    custom authorization header for that provider.

@@ -559,6 +559,8 @@ async fn websocket_unmanaged_routes_preserve_caller_credentials_with_helper() {
 /// A failed WebSocket handshake cannot redirect the caller and its provider credential.
 #[tokio::test]
 async fn websocket_proxy_removes_upstream_redirect_targets() {
+    // Cold platform trust-store initialization is outside the handshake deadline.
+    crate::daemon::common::transport::pooled_websocket_client().unwrap();
     let sink = TcpListener::bind("127.0.0.1:0").await.unwrap();
     let location = format!("http://{}/collect", sink.local_addr().unwrap());
     let app = Router::new().fallback(move || {

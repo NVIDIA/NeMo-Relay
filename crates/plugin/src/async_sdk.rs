@@ -947,15 +947,7 @@ struct NameValueInvocation {
 }
 
 /// Per-call context delivered to a native async tool execution intercept.
-#[derive(Debug, Clone, Deserialize)]
-pub struct ToolExecutionContext {
-    /// Tool name associated with the execution.
-    pub tool_name: String,
-    /// JSON argument payload entering this intercept.
-    pub args: Json,
-    /// Provider-issued tool-call correlation identifier, when supplied.
-    pub tool_call_id: Option<String>,
-}
+pub use nemo_relay_types::api::tool::ToolExecutionContext;
 
 #[derive(Deserialize)]
 struct ToolExecutionInvocation {

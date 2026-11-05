@@ -9,7 +9,7 @@ use std::sync::Arc;
 
 use pyo3::prelude::*;
 use pyo3::types::PyModule;
-use serde_json::{Value as Json, json};
+use serde_json::json;
 use tokio_stream::StreamExt;
 use uuid::Uuid;
 
@@ -783,8 +783,15 @@ def event_fail(event):
                 .contains("collector")
         );
 
-        let finalizer = wrap_py_finalizer_fn(module.getattr("finalizer_fail").unwrap().unbind());
-        assert_eq!(finalizer(), Json::Null);
+        let (finalizer, finalizer_error) =
+            wrap_py_finalizer_fn(module.getattr("finalizer_fail").unwrap().unbind());
+        let nemo_relay_runtime::api::runtime::LlmFinalizer::Fallible(finalizer) = finalizer else {
+            panic!("expected a fallible Python finalizer");
+        };
+        let error = finalizer().unwrap_err();
+        assert!(error.to_string().contains("finalizer"));
+        assert!(matches!(error, FlowError::CallbackException { .. }));
+        assert!(finalizer_error.lock().unwrap().is_some());
 
         let subscriber = wrap_py_event_subscriber(module.getattr("event_fail").unwrap().unbind());
         let event = Event::Scope(ScopeEvent::new(

@@ -22,7 +22,7 @@ Exceptional flow:
 
 from __future__ import annotations
 
-from collections.abc import AsyncIterator, Awaitable, Callable, Generator, Mapping, Sequence
+from collections.abc import AsyncIterator, Awaitable, Callable, Mapping, Sequence
 from datetime import datetime
 from typing import ClassVar, Generic, Literal, Optional, TypeAlias, TypedDict, TypeVar
 
@@ -515,23 +515,26 @@ class LLMRequest:
 
     Description:
         ``headers`` stores provider or transport metadata. ``content`` stores
-        the JSON request body. Request intercepts and codecs consume this
-        object to normalize, rewrite, and execute LLM calls.
+        a JSON-compatible request body: an object, array, string, number,
+        boolean, or null. Request intercepts and codecs consume this object
+        to normalize, rewrite, and execute LLM calls. Provider codecs validate
+        their own payload shapes and required fields.
     """
 
-    def __init__(self, headers: Mapping[str, _JsonValue], content: _JsonObject) -> None:
+    def __init__(self, headers: Mapping[str, _JsonValue], content: _Json) -> None:
         """Create an LLM request.
 
         Args:
             headers: Header-like metadata mapping.
-            content: JSON object payload sent to the provider.
+            content: Any JSON-compatible request payload. Provider codecs may
+                require an object with specific fields.
 
         Returns:
             ``None``.
 
         Exceptional flow:
-            Raises native conversion errors if ``headers`` or ``content`` are
-            not JSON-compatible mappings.
+            Raises native conversion errors for invalid headers or content
+            that is not JSON-compatible.
         """
         ...
     @property
@@ -539,8 +542,8 @@ class LLMRequest:
         """Return the request headers as a JSON object."""
         ...
     @property
-    def content(self) -> _JsonObject:
-        """Return the request content body as a JSON object."""
+    def content(self) -> _Json:
+        """Return the request content as a JSON-compatible value."""
         ...
 
 class PendingMarkSpec:
@@ -729,6 +732,110 @@ class AnnotatedLLMRequest:
     @tool_choice.setter
     def tool_choice(self, value: Optional[str | Mapping[str, _JsonValue]]) -> None:
         """Set or clear the normalized tool-choice directive."""
+        ...
+    @property
+    def store(self) -> Optional[bool]:
+        """Return the response storage setting, if present."""
+        ...
+    @store.setter
+    def store(self, value: Optional[bool]) -> None:
+        """Set or clear the response storage setting."""
+        ...
+    @property
+    def previous_response_id(self) -> Optional[str]:
+        """Return the previous response identifier, if present."""
+        ...
+    @previous_response_id.setter
+    def previous_response_id(self, value: Optional[str]) -> None:
+        """Set or clear the previous response identifier."""
+        ...
+    @property
+    def truncation(self) -> _JsonValue:
+        """Return the truncation setting, or None."""
+        ...
+    @truncation.setter
+    def truncation(self, value: _JsonValue) -> None:
+        """Set or clear the truncation setting."""
+        ...
+    @property
+    def reasoning(self) -> _JsonValue:
+        """Return reasoning settings, or None."""
+        ...
+    @reasoning.setter
+    def reasoning(self, value: _JsonValue) -> None:
+        """Set or clear reasoning settings."""
+        ...
+    @property
+    def include(self) -> _JsonValue:
+        """Return requested additional response fields, or None."""
+        ...
+    @include.setter
+    def include(self, value: _JsonValue) -> None:
+        """Set or clear requested additional response fields."""
+        ...
+    @property
+    def user(self) -> Optional[str]:
+        """Return the user identifier, if present."""
+        ...
+    @user.setter
+    def user(self, value: Optional[str]) -> None:
+        """Set or clear the user identifier."""
+        ...
+    @property
+    def metadata(self) -> _JsonValue:
+        """Return request metadata, or None."""
+        ...
+    @metadata.setter
+    def metadata(self, value: _JsonValue) -> None:
+        """Set or clear request metadata."""
+        ...
+    @property
+    def service_tier(self) -> Optional[str]:
+        """Return the service tier, if present."""
+        ...
+    @service_tier.setter
+    def service_tier(self, value: Optional[str]) -> None:
+        """Set or clear the service tier."""
+        ...
+    @property
+    def parallel_tool_calls(self) -> Optional[bool]:
+        """Return the parallel tool call setting, if present."""
+        ...
+    @parallel_tool_calls.setter
+    def parallel_tool_calls(self, value: Optional[bool]) -> None:
+        """Set or clear the parallel tool call setting."""
+        ...
+    @property
+    def max_output_tokens(self) -> Optional[int]:
+        """Return the maximum output token count, if present."""
+        ...
+    @max_output_tokens.setter
+    def max_output_tokens(self, value: Optional[int]) -> None:
+        """Set or clear the nonnegative maximum output token count."""
+        ...
+    @property
+    def max_tool_calls(self) -> Optional[int]:
+        """Return the maximum tool call count, if present."""
+        ...
+    @max_tool_calls.setter
+    def max_tool_calls(self, value: Optional[int]) -> None:
+        """Set or clear the nonnegative maximum tool call count."""
+        ...
+    @property
+    def top_logprobs(self) -> Optional[int]:
+        """Return the requested top log probability count, if present."""
+        ...
+    @top_logprobs.setter
+    def top_logprobs(self, value: Optional[int]) -> None:
+        """Set or clear the nonnegative top log probability count."""
+        ...
+    @property
+    def stream(self) -> Optional[bool]:
+        """Return the streaming setting, if present."""
+        ...
+    @stream.setter
+    def stream(self, value: Optional[bool]) -> None:
+        """Set or clear the streaming setting."""
         ...
     @property
     def api_specific(self) -> Optional[_JsonObject]:
@@ -1154,13 +1261,11 @@ class LlmStream:
         Native stream returned by managed streaming LLM execution.
 
     Description:
-        The object can be awaited by compatibility wrappers and iterated with
-        ``async for`` to receive post-intercept JSON chunks.
+        Await managed streaming execution to obtain this object, then use
+        ``async for`` to receive post-intercept JSON chunks. Await ``aclose()``
+        when stopping iteration early to release native stream resources.
     """
 
-    def __await__(self) -> Generator[object, None, LlmStream]:
-        """Return an awaitable that resolves to this stream."""
-        ...
     def __aiter__(self) -> AsyncIterator[_Json]:
         """Return the async iterator for stream chunks."""
         ...
@@ -1168,7 +1273,11 @@ class LlmStream:
         """Return the next JSON chunk or raise ``StopAsyncIteration``."""
         ...
     async def aclose(self) -> None:
-        """Cancel the producer and release native stream resources."""
+        """Cancel the producer and release native stream resources.
+
+        When awaited, this method raises an exception if producer cleanup or
+        finalization fails.
+        """
         ...
 
 class OpenTelemetryTlsConfig:
@@ -1316,8 +1425,8 @@ class OpenTelemetrySubscriber:
         shut it down before process exit when deterministic export is required.
     """
 
-    def __init__(self, config: OpenTelemetryConfig) -> None:
-        """Create a subscriber from an OpenTelemetry config."""
+    def __init__(self, config: OpenTelemetryConfig | OpenTelemetryFileSinkConfig) -> None:
+        """Create a subscriber from an endpoint or file sink configuration."""
         ...
     def register(self, name: str) -> None:
         """Register the subscriber under ``name``."""

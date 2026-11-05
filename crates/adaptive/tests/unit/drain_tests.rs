@@ -870,7 +870,6 @@ fn test_accumulator_extracts_annotated_response() {
             total_tokens: Some(150),
             cache_read_tokens: None,
             cache_write_tokens: None,
-            cache_write_1h_tokens: None,
             uncached_input_tokens: None,
             cost: None,
         }),

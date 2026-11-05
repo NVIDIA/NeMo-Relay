@@ -37,6 +37,56 @@ bitflags! {
     }
 }
 
+/// Transport-independent input supplied to a plugin tool execution interceptor.
+///
+/// Native and worker SDKs share this owned value. Continuation capabilities and
+/// transport credentials remain in their backend adapters.
+#[derive(Clone, Serialize, Deserialize)]
+pub struct ToolExecutionContext {
+    /// Tool name associated with the execution.
+    pub tool_name: String,
+    /// JSON argument payload entering this intercept.
+    pub args: Json,
+    /// Provider-issued tool-call correlation identifier, when supplied.
+    pub tool_call_id: Option<String>,
+}
+
+impl std::fmt::Debug for ToolExecutionContext {
+    fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        formatter
+            .debug_struct("ToolExecutionContext")
+            .field("tool_name", &self.tool_name)
+            .field("tool_call_id", &self.tool_call_id)
+            .finish_non_exhaustive()
+    }
+}
+
+impl ToolExecutionContext {
+    /// Returns the tool name associated with the execution.
+    #[must_use]
+    pub fn tool_name(&self) -> &str {
+        &self.tool_name
+    }
+
+    /// Returns the argument payload entering this intercept.
+    #[must_use]
+    pub fn args(&self) -> &Json {
+        &self.args
+    }
+
+    /// Consumes the context and returns its argument payload.
+    #[must_use]
+    pub fn into_args(self) -> Json {
+        self.args
+    }
+
+    /// Returns the provider-issued tool-call correlation identifier.
+    #[must_use]
+    pub fn tool_call_id(&self) -> Option<&str> {
+        self.tool_call_id.as_deref()
+    }
+}
+
 /// Canonical application-visible result of tool execution.
 ///
 /// Relay keeps `result` and `annotation` separate. It reads display content and

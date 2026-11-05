@@ -11,10 +11,7 @@ const lib = require('../index.js');
 const {
   __testClosedCollectorCallback,
   __testClosedFinalizerCallback,
-  __testClosedLlmResponseCallback,
-  __testClosedLlmSanitizeRequestCallback,
   __testClosedPromiseAwareCall,
-  __testClosedToolCallback,
   clearLastCallbackError,
   deregisterLlmSanitizeRequestGuardrail,
   flushSubscribers,
@@ -68,78 +65,34 @@ describe('callback error helpers', () => {
     }
   });
 
-  it('closed tool sanitize callbacks preserve the original payload and record the queue failure', async () => {
-    const args = {
-      value: 1,
-    };
-    const result = await __testClosedToolCallback(
-      () => ({
-        ok: true,
-      }),
-      'closed_tool',
-      args,
-    );
-    assert.deepEqual(result, args);
-    assert.match(getLastCallbackError() ?? '', /failed to queue JS tool callback/i);
+  it('closed collector callbacks report the environment shutdown without recording it', () => {
     clearLastCallbackError();
-  });
-
-  it('closed llm sanitize-request callbacks omit the payload and record the queue failure', () => {
-    const request = makeNative();
-    const result = __testClosedLlmSanitizeRequestCallback(
-      () => ({
-        broken: true,
-      }),
-      request,
-    );
-    assert.equal(result, null);
-    assert.match(getLastCallbackError() ?? '', /failed to queue JS LLM sanitize request callback/i);
-    clearLastCallbackError();
-  });
-
-  it('closed llm sanitize-response callbacks omit the payload and record the queue failure', () => {
-    const response = {
-      ok: true,
-    };
-    const result = __testClosedLlmResponseCallback(
-      () => ({
-        rewritten: true,
-      }),
-      response,
-    );
-    assert.equal(result, null);
-    assert.match(getLastCallbackError() ?? '', /failed to queue JS LLM sanitize response callback/i);
-    clearLastCallbackError();
-  });
-
-  it('closed collector callbacks surface the queue failure and record it', async () => {
     assert.throws(
       () =>
         __testClosedCollectorCallback(() => undefined, {
           token: 'x',
         }),
-      /failed to queue JS collector callback/i,
+      /JS collector callback skipped: Node environment is shutting down/,
     );
-    assert.match(getLastCallbackError() ?? '', /failed to queue JS collector callback/i);
-    clearLastCallbackError();
+    assert.equal(getLastCallbackError(), null);
   });
 
-  it('closed finalizer callbacks fall back to null and record the queue failure', () => {
+  it('closed finalizer callbacks yield null without recording the shutdown', () => {
+    clearLastCallbackError();
     const result = __testClosedFinalizerCallback(() => ({
       done: true,
     }));
     assert.equal(result, null);
-    assert.match(getLastCallbackError() ?? '', /failed to queue JS finalizer callback/i);
-    clearLastCallbackError();
+    assert.equal(getLastCallbackError(), null);
   });
 
-  it('closed PromiseAwareFn calls reject with the closed threadsafe-function error', async () => {
+  it('closed PromiseAwareFn calls reject with the queue failure', async () => {
     await assert.rejects(
       () =>
         __testClosedPromiseAwareCall(() => ({
           ok: true,
         })),
-      /PromiseAwareFn threadsafe function closed/i,
+      /failed to queue threadsafe function call: Closing/,
     );
   });
 

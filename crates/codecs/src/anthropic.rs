@@ -30,8 +30,8 @@ use super::request::{
 };
 use super::resolve::{ProviderSurface, ProviderSurfaceDescriptor};
 use super::response::{
-    AnnotatedLlmResponse, ApiSpecificResponse, FinishReason, RawProviderUsageCost,
-    ResponseToolCall, Usage, provider_reported_cost,
+    AnnotatedLlmResponse, ApiSpecificResponse, CacheWriteTokenCounts, FinishReason,
+    RawProviderUsageCost, ResponseToolCall, Usage, provider_reported_cost,
 };
 use super::traits::{LlmCodec, LlmResponseCodec};
 
@@ -158,6 +158,9 @@ fn json_f64(v: f64) -> Json {
         .map(Json::Number)
         .unwrap_or(Json::Null)
 }
+
+/// Anthropic's default (five-minute) prompt-cache duration, in seconds.
+const ANTHROPIC_FIVE_MINUTE_CACHE_SECONDS: u64 = 300;
 
 /// Keys that are modeled in [`AnnotatedLlmRequest`] and should NOT go into `extra`.
 const MODELED_REQUEST_KEYS: &[&str] = &[
@@ -978,8 +981,13 @@ fn anthropic_usage(raw_usage: Option<RawAnthropicUsage>) -> Option<Usage> {
                 _ => None,
             },
             cache_read_tokens,
-            cache_write_tokens,
-            cache_write_1h_tokens,
+            // With the `cache_creation` split, Anthropic's remaining writes
+            // are the five-minute ones.
+            cache_write_tokens: CacheWriteTokenCounts::from_total_and_one_hour(
+                cache_write_tokens,
+                cache_write_1h_tokens,
+                cache_write_1h_tokens.map(|_| ANTHROPIC_FIVE_MINUTE_CACHE_SECONDS),
+            ),
             uncached_input_tokens: prompt,
             cost: provider_reported_cost(u.provider_cost, u.cost),
         }

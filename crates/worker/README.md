@@ -16,32 +16,30 @@ SPDX-License-Identifier: Apache-2.0
 
 # NeMo Relay Worker SDK
 
-`nemo-relay-worker` is the Rust authoring SDK for out-of-process NeMo Relay
-dynamic worker plugins. Use it when plugin code needs process isolation and
-communicates with Relay through the versioned `grpc-v1` worker protocol.
+`nemo-relay-worker` is the Rust SDK for NeMo Relay worker plugins. A worker runs
+in a separate process and calls Relay through `nvidia.nemo.relay.worker.v1`.
 
-Relay 0.8 establishes canonical tool results as the `grpc-v1` baseline. Workers built
-for an earlier release must rebuild with this SDK and declare `compat.relay` beginning at
-`0.8.0`. The protocol identifier remains `grpc-v1`, but `ToolNext` now returns
-`ToolExecutionResult`, which keeps an optional opaque annotation beside the application
-result.
+The protocol is `nvidia.nemo.relay.worker.v1`, with contract version `1.0.0`.
+Upgrade the host and worker SDK together. Rebuild workers and set these manifest
+values: `compat.worker_protocol = "nvidia.nemo.relay.worker.v1"` and
+`compat.relay = ">=1.0.0,<2.0"`. Old `grpc-v1` workers cannot connect.
+Crate and wheel releases continue to follow the Relay release version.
 
-Relay 0.10 adds `LlmExecutionContext` to non-streaming and streaming LLM
-execution callbacks. Workers that register either surface must rebuild with the
-0.10 SDK and set `compat.relay` to begin at `0.10.0`. The context provides
-request decode and encode operations when Relay selected a codec. Non-streaming
-callbacks can also decode the completed response; streaming callbacks cannot
-decode incomplete chunks. The wire protocol remains `grpc-v1`.
+Callbacks use shared application types. The SDK converts Relay-owned values to
+protobuf messages for transport. It preserves application and provider JSON,
+tool annotations, pending marks, codec access, cancellation, and scope ownership.
 
 ## Authoring Surface
+
+The SDK provides the following types and helpers:
 
 | Surface | Role |
 |---|---|
 | `WorkerPlugin` | Defines plugin identity, validation, registration, and multiple-component behavior in the worker process. |
-| `PluginContext` | Installs typed handlers for all 16 supported registration surfaces. |
+| `PluginContext` | Installs typed handlers for all 17 supported registration surfaces. |
 | `PluginRuntime` and continuations | Emit marks, manage scopes, and call the remaining tool or LLM execution chain through the authenticated host service. |
 | `LlmExecutionContext` | Reports the selected request and completed-response codecs and provides codec operations while the callback is active. |
-| Canonical tool results | Preserve application results and opaque annotations across tool callbacks and continuations. |
+| Tool results | Preserve application results and opaque annotations across tool callbacks and continuations. |
 | `serve_plugin` | Starts the Tokio gRPC server from the activation identity, local endpoints, and token supplied by Relay. |
 
 This model keeps plugin dependencies and crashes outside the Relay process, while the
@@ -58,10 +56,14 @@ when reporting a distinct plugin failure.
 
 The host uses this identity to exclude forwarded errors from plugin callback
 failure counts. The same contract covers stream-opening errors and error chunks.
-It adds no retained error ledger. Older SDKs may discard the additive provenance;
-missing or mismatched identity retains the existing attribution behavior.
+It adds no retained error ledger. If the identity is missing or does not match, the host uses its normal error
+attribution rules.
 
 ## Installation
+
+Building a Rust worker requires `protoc` 31.1 or later and Buf 1.75.0 or later.
+Install both on `PATH`, or select them with `PROTOC` and `BUF`. The first build
+needs access to the Buf Schema Registry to download the locked validation schema.
 
 Add the SDK and Tokio to the worker project:
 
@@ -72,13 +74,12 @@ cargo add tokio --features macros,rt-multi-thread
 
 ## Configuration
 
-Use `[load.max_message_bytes]` in `relay-plugin.toml` with `default_bytes` and
-`by_name` overrides for exact callback registration names, just like callback
-timeouts. A callback's limit also applies to its continuations; unrelated
-callbacks and control RPCs retain their fallback. Host environment overrides
-take precedence; the fallback defaults to 4 MiB. Restart
-the host and workers after changes and upgrade both sides together. See
-[execution message limits](https://docs.nvidia.com/nemo/relay/build-plugins/workers/grpc-v1-protocol#configure-execution-message-size).
+Set `[load.max_message_bytes]` in `relay-plugin.toml`. Use `default_bytes` for
+the default limit and `by_name` for limits on exact callback registration names.
+A callback's limit also applies to its continuations. Other callbacks and control
+RPCs keep their own defaults. Host environment overrides take priority. The
+default limit is 4 MiB. Restart the host and workers after changing these settings.
+Refer to [execution message limits](https://docs.nvidia.com/nemo/relay/build-plugins/workers/grpc-v1-protocol#configure-execution-message-size).
 
 ## Getting Started
 
@@ -124,13 +125,13 @@ reserved Relay metric schema.
 snapshot with `RuntimeDiagnostic { code, message, count }` entries and
 `get(code)` lookup. Relay aggregates repeated codes, retains the latest
 message, saturates counts, and returns at most 32 entries. It does not provide
-per-plugin attribution. An older host returns `UNIMPLEMENTED`, which the SDK
-reports as an unsupported-runtime-diagnostics error.
+per-plugin attribution. A host that does not implement this RPC returns `UNIMPLEMENTED`, which the SDK
+reports as an unsupported runtime diagnostics error.
 
 ## Concurrency and Cancellation
 
-Unary and streaming callbacks run concurrently. Cancellation is cooperative:
-Relay sends `CancelInvocation` when a managed caller is cancelled, times out,
-or stops consuming a stream, and the SDK aborts the matching async callback
-task. An accepted cancellation confirms the task was found; it cannot prove
-that arbitrary blocking work started by the callback has stopped.
+Unary and streaming callbacks can run concurrently. Relay sends
+`CancelInvocation` when a managed caller cancels, times out, or stops reading a
+stream. The SDK aborts the matching async task and waits for its cleanup.
+Acceptance confirms SDK cleanup for that callback. It does not prove that
+blocking work started by plugin code has stopped.

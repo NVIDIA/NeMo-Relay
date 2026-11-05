@@ -119,8 +119,8 @@ id = "acme.coverage-worker"
 kind = "worker"
 
 [compat]
-relay = ">=0.8.0,<1.0"
-worker_protocol = "grpc-v1"
+relay = ">=1.0.0,<2.0"
+worker_protocol = "nvidia.nemo.relay.worker.v1"
 
 [defaults]
 enabled = false
@@ -863,8 +863,8 @@ id = "{plugin_id}"
 kind = "worker"
 
 [compat]
-relay = ">=0.8.0,<1.0"
-worker_protocol = "grpc-v1"
+relay = ">=1.0.0,<2.0"
+worker_protocol = "nvidia.nemo.relay.worker.v1"
 
 [defaults]
 enabled = false

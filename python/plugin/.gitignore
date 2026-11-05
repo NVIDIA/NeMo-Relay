@@ -10,3 +10,6 @@ dist/
 proto/
 src/nemo_relay_plugin/_proto/plugin_worker_pb2.py
 src/nemo_relay_plugin/_proto/plugin_worker_pb2_grpc.py
+src/nemo_relay_plugin/_proto/buf/
+src/nemo_relay_plugin/_proto/nvidia/
+src/nemo_relay_plugin/_proto/PROTOVALIDATE-LICENSE

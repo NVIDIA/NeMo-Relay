@@ -58,12 +58,12 @@ jobs:
         include:
           - &linux-amd64
             platform: linux-amd64
-            node_build_strategy: zig
+            node_build_strategy: napi-cross
             node_target: x86_64-unknown-linux-gnu
             runner: ubuntu-latest
           - &linux-arm64
             platform: linux-arm64
-            node_build_strategy: zig
+            node_build_strategy: napi-cross
             node_target: aarch64-unknown-linux-gnu
             runner: ubuntu-24.04-arm
           - &macos-arm64
@@ -98,6 +98,19 @@ jobs:
       - name: Load CI tool versions
         id: ci-config
         uses: ./.github/actions/load-ci-tool-versions
+
+      - name: Set up Protoc
+        id: protoc
+        uses: arduino/setup-protoc@c65c819552d16ad3c9b72d9dfd5ba5237b9c906b # v3
+        with:
+          version: ${{ steps.ci-config.outputs.protoc_version }}
+          repo-token: ${{ github.token }}
+
+      - name: Set up Buf
+        uses: bufbuild/buf-setup-action@a47c93e0b1648d5651a065437926377d060baa99 # v1.50.0
+        with:
+          version: ${{ steps.ci-config.outputs.buf_version }}
+          github_token: ${{ github.token }}
 
       - uses: actions-rust-lang/setup-rust-toolchain@166cdcfd11aee3cb47222f9ddb555ce30ddb9659 # v1.17.0
         with:
@@ -195,6 +208,19 @@ jobs:
         id: ci-config
         uses: ./.github/actions/load-ci-tool-versions
 
+      - name: Set up Protoc
+        id: protoc
+        uses: arduino/setup-protoc@c65c819552d16ad3c9b72d9dfd5ba5237b9c906b # v3
+        with:
+          version: ${{ steps.ci-config.outputs.protoc_version }}
+          repo-token: ${{ github.token }}
+
+      - name: Set up Buf
+        uses: bufbuild/buf-setup-action@a47c93e0b1648d5651a065437926377d060baa99 # v1.50.0
+        with:
+          version: ${{ steps.ci-config.outputs.buf_version }}
+          github_token: ${{ github.token }}
+
       - uses: actions-rust-lang/setup-rust-toolchain@166cdcfd11aee3cb47222f9ddb555ce30ddb9659 # v1.17.0
         with:
           cache: false
@@ -230,6 +256,11 @@ jobs:
       - uses: taiki-e/install-action@c070f87102a1c75b3183910f391c1cb887fe13c8 # v2.77.6
         with:
           tool: just@${{ steps.ci-config.outputs.just_version }}
+
+      - uses: taiki-e/install-action@c070f87102a1c75b3183910f391c1cb887fe13c8 # v2.77.6
+        if: ${{ matrix.node_build_strategy == 'zig' }}
+        with:
+          tool: cargo-zigbuild@${{ steps.ci-config.outputs.cargo_zigbuild_version }}
 
       - name: Create packaging output directory
         run: |
@@ -285,6 +316,19 @@ jobs:
       - name: Load CI tool versions
         id: ci-config
         uses: ./.github/actions/load-ci-tool-versions
+
+      - name: Set up Protoc
+        id: protoc
+        uses: arduino/setup-protoc@c65c819552d16ad3c9b72d9dfd5ba5237b9c906b # v3
+        with:
+          version: ${{ steps.ci-config.outputs.protoc_version }}
+          repo-token: ${{ github.token }}
+
+      - name: Set up Buf
+        uses: bufbuild/buf-setup-action@a47c93e0b1648d5651a065437926377d060baa99 # v1.50.0
+        with:
+          version: ${{ steps.ci-config.outputs.buf_version }}
+          github_token: ${{ github.token }}
 
       - uses: actions-rust-lang/setup-rust-toolchain@166cdcfd11aee3cb47222f9ddb555ce30ddb9659 # v1.17.0
         with:
