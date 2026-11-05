@@ -5478,7 +5478,12 @@ async fn gateway_concurrent_next_relays_selected_buffered_failure() {
 
                 release_losing.add_permits(1);
                 assert!(losing.await.is_err());
-                selected_result
+                // Simulate the error context added by a pass-through worker.
+                selected_result.map_err(|error| {
+                    nemo_relay::error::FlowError::Internal(format!(
+                        "worker.sdk_error: host.runtime_error: {error}"
+                    ))
+                })
             })
         }),
     )
@@ -5557,7 +5562,12 @@ async fn gateway_concurrent_next_relays_selected_streaming_failure() {
 
                 release_losing.add_permits(1);
                 assert!(losing.await.is_err());
-                selected_result
+                // Simulate the error context added by a pass-through worker.
+                selected_result.map_err(|error| {
+                    nemo_relay::error::FlowError::Internal(format!(
+                        "worker.error: <AioRpcError details = \"{error}\">"
+                    ))
+                })
             })
         }),
     )
