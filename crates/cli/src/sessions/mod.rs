@@ -3487,13 +3487,7 @@ impl Session {
                 self.ensure_turn_started(event_payload.metadata.clone())?;
             }
         }
-        let metadata = if claude_notification {
-            self.scope_metadata(event_payload.metadata)
-        } else {
-            let mut metadata = event_payload.metadata;
-            self.insert_agent_version(&mut metadata);
-            metadata
-        };
+        let metadata = self.scope_metadata(event_payload.metadata);
         emit_mark_event(
             EmitMarkEventParams::builder()
                 .name(name)

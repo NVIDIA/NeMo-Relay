@@ -5246,6 +5246,142 @@ async fn empty_hook_marks_do_not_create_empty_atif_steps() {
 }
 
 #[tokio::test]
+async fn hook_marks_reach_session_filtered_atof_with_session_metadata() {
+    let _guard = PLUGIN_CONFIG_TEST_LOCK.lock().await;
+    let temp = tempfile::tempdir().unwrap();
+    let exporter = make_atof_test_exporter(temp.path(), "events.jsonl");
+    let subscriber_name = "cli-hook-mark-session-metadata";
+    let cases = [
+        (
+            AgentKind::ClaudeCode,
+            "mark-claude",
+            ["PreCompact", "UserPromptExpansion"],
+        ),
+        (
+            AgentKind::Codex,
+            "mark-codex",
+            ["PostCompact", "PermissionRequest"],
+        ),
+        (
+            AgentKind::Pi,
+            "mark-pi",
+            ["session_compact", "session_before_compact"],
+        ),
+    ];
+    let session_ids = tracked_sessions(&["mark-claude", "mark-codex", "mark-pi"]);
+    let subscriber = exporter.subscriber();
+    register_subscriber(
+        subscriber_name,
+        Arc::new(move |event| {
+            if event
+                .metadata()
+                .and_then(|metadata| metadata.get("session_id"))
+                .and_then(Value::as_str)
+                .is_some_and(|id| session_ids.contains(id))
+            {
+                subscriber(event);
+            }
+        }),
+    )
+    .unwrap();
+    let mut config = session_test_config();
+    config.metadata = Some(json!({
+        "experiment": "mark-metadata",
+        "team": "configured",
+        "agent_version": "untrusted",
+        "session_id": "untrusted",
+        "session_instance_id": "untrusted"
+    }));
+    config.launched_agent = Some(crate::configuration::LaunchedAgent {
+        kind: AgentKind::ClaudeCode,
+        version: "2.1.121".into(),
+    });
+    let manager = SessionManager::new(config);
+    let headers = HeaderMap::new();
+    for (kind, session_id, hook_names) in cases {
+        manager
+            .apply_events(
+                &headers,
+                vec![NormalizedEvent::AgentStarted(SessionEvent {
+                    session_id: session_id.into(),
+                    agent_kind: kind,
+                    event_name: "SessionStart".into(),
+                    payload: json!({}),
+                    metadata: json!({"team": "session", "user_id": session_id}),
+                })],
+            )
+            .await
+            .unwrap();
+        for hook_name in hook_names {
+            let payload = json!({
+                "session_id": session_id,
+                "hook_event_name": hook_name,
+                "type": hook_name
+            });
+            let outcome = match kind {
+                AgentKind::ClaudeCode => {
+                    crate::agents::shared::adapters::claude_code::adapt(payload, &headers)
+                }
+                AgentKind::Codex => {
+                    crate::agents::shared::adapters::codex::adapt(payload, &headers)
+                }
+                AgentKind::Pi => crate::agents::shared::adapters::pi::adapt(payload, &headers),
+                AgentKind::Gateway => unreachable!(),
+            };
+            manager
+                .apply_events(&headers, outcome.events)
+                .await
+                .unwrap();
+        }
+    }
+    manager.close_all("test_shutdown").await.unwrap();
+    exporter.force_flush().unwrap();
+    assert!(deregister_subscriber(subscriber_name).unwrap());
+    let events = read_atof_events(exporter.path().unwrap());
+    for (kind, session_id, hook_names) in cases {
+        let start = events
+            .iter()
+            .find(|event| {
+                event["name"] == "session.start" && event["metadata"]["session_id"] == session_id
+            })
+            .unwrap();
+        for hook_name in hook_names {
+            let mark = events
+                .iter()
+                .find(|event| {
+                    event["data"]["session_id"] == session_id && event["data"]["type"] == hook_name
+                })
+                .unwrap_or_else(|| panic!("session filter dropped {session_id}/{hook_name}"));
+            assert_eq!(
+                mark["data"],
+                json!({
+                    "session_id": session_id,
+                    "hook_event_name": hook_name,
+                    "type": hook_name
+                })
+            );
+            let metadata = &mark["metadata"];
+            assert_eq!(metadata["session_id"], session_id);
+            assert_eq!(
+                metadata["session_instance_id"],
+                start["metadata"]["session_instance_id"]
+            );
+            assert_ne!(metadata["session_instance_id"], "untrusted");
+            assert_eq!(metadata["agent_kind"], kind.as_str());
+            assert_eq!(metadata["experiment"], "mark-metadata");
+            assert_eq!(metadata["team"], "session");
+            assert_eq!(metadata["user_id"], session_id);
+            assert_eq!(metadata["hook_event_name"], hook_name);
+            if kind == AgentKind::ClaudeCode {
+                assert_eq!(metadata["agent_version"], "2.1.121");
+            } else {
+                assert!(metadata.get("agent_version").is_none());
+            }
+        }
+    }
+}
+
+#[tokio::test]
 async fn inferred_skill_load_hook_marks_use_the_stable_event_contract() {
     let _guard = PLUGIN_CONFIG_TEST_LOCK.lock().await;
     let temp = tempfile::tempdir().unwrap();
@@ -5303,6 +5439,7 @@ async fn inferred_skill_load_hook_marks_use_the_stable_event_contract() {
         "expected one inferred skill mark: {events:#?}"
     );
     assert_eq!(marks[0]["data"], json!({"skill_name": "review"}));
+    assert_eq!(marks[0]["metadata"]["session_id"], "inferred-skill-load");
     assert_eq!(marks[0]["metadata"]["agent_kind"], "claude-code");
     assert_eq!(
         marks[0]["metadata"]["skill_load_source"],
@@ -5812,6 +5949,9 @@ async fn claude_direct_gateway_request_seeds_turn_input_before_prompt_hook() {
                 .metadata()
                 .and_then(|metadata| metadata.get("session_id"))
                 .and_then(Value::as_str);
+            if event_session_id != Some("claude-direct-race") {
+                return;
+            }
             if event.name() == "prompt_submitted"
                 && event.data().cloned().unwrap_or(Value::Null)
                     == json!({ "prompt": "inspect direct mode" })
@@ -5821,9 +5961,6 @@ async fn claude_direct_gateway_request_seeds_turn_input_before_prompt_hook() {
                     "data": event.data().cloned().unwrap_or(Value::Null),
                     "metadata": event.metadata().cloned().unwrap_or(Value::Null)
                 }));
-                return;
-            }
-            if event_session_id != Some("claude-direct-race") {
                 return;
             }
             if event.scope_category() == Some(ScopeCategory::Start)
