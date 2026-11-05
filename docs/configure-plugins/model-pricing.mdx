@@ -60,9 +60,14 @@ order, and it uses the first entry that matches the provider and model.
 
 Relay publishes a numeric total only when every nonzero usage category has a
 configured rate. If a response reports nonzero cache-read or cache-write usage
-and the matching catalog entry omits `cache_read_per_million` or
-`cache_write_per_million`, Relay keeps the priced components but omits the
-aggregate total. Set a rate to `0.0` when a category is intentionally free.
+and the matching catalog entry omits the rate for it, Relay keeps the priced
+components but omits the aggregate total. Set a rate to `0.0` when a category is intentionally free.
+
+`cache_write_per_million` prices cache writes that are not one-hour writes.
+`cache_write_1h_per_million` prices cache writes with a duration of 3,600 seconds,
+such as Anthropic one-hour writes. Usage with only one-hour writes needs only
+`cache_write_1h_per_million`. If either kind of write lacks its rate, Relay omits
+the whole cache-write cost and the aggregate total.
 
 Some usage reports `uncached_input_tokens`, a count of input tokens without
 cache reads or cache writes. Relay picks the input count to bill as follows:

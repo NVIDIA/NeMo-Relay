@@ -13,6 +13,7 @@ export interface TokenPricingRates {
   output_per_million: number;
   cache_read_per_million?: number;
   cache_write_per_million?: number;
+  cache_write_1h_per_million?: number;
 }
 
 /** Prompt-cache accounting settings for a catalog entry. */

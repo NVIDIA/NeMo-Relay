@@ -92,6 +92,31 @@ describe('model pricing plugin helpers', () => {
     );
   });
 
+  it('accepts and validates a one-hour cache write rate', () => {
+    const report = (rate) =>
+      pricing.validateConfig(
+        pricing.pricingConfig([
+          pricing.inlineSource(
+            pricing.inlineCatalog([
+              pricedEntry({
+                rates: pricing.tokenRates({
+                  input_per_million: 1,
+                  output_per_million: 2,
+                  cache_write_per_million: 3,
+                  cache_write_1h_per_million: rate,
+                }),
+              }),
+            ]),
+          ),
+        ]),
+      );
+    assert.deepEqual(report(6).diagnostics, []);
+    assert.deepEqual(
+      report(-1).diagnostics.map((diagnostic) => diagnostic.code),
+      ['pricing.invalid_config'],
+    );
+  });
+
   it('validates only the supplied pricing config when ambient config is malformed', () => {
     const configHome = mkdtempSync(path.join(tmpdir(), 'nemo-relay-node-pricing-'));
     const relayConfig = path.join(configHome, 'nemo-relay');

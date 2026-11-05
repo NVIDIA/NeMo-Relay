@@ -258,7 +258,8 @@ class PythonReferenceTests(unittest.TestCase):
 
         constructors = (
             "def TokenPricingRates(input_per_million: float, output_per_million: float, "
-            "cache_read_per_million: float | None = None, cache_write_per_million: float | None = None) -> None",
+            "cache_read_per_million: float | None = None, cache_write_per_million: float | None = None, "
+            "cache_write_1h_per_million: float | None = None) -> None",
             "def PromptCachePricing(read_accounting: Literal['included_in_prompt_tokens', 'separate'] "
             "= 'included_in_prompt_tokens') -> None",
             "def TokenRateTier(rates: TokenPricingRates | JsonObject, min_prompt_tokens: int | None = None, "

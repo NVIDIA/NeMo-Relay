@@ -11,6 +11,7 @@ from nemo_relay import plugin
 from nemo_relay.model_pricing import (
     PRICING_PLUGIN_KIND,
     ComponentSpec,
+    ConfigReport,
     FileSource,
     InlineSource,
     ModelPricing,
@@ -129,6 +130,39 @@ class TestPricingConfigHelpers:
             )
         )
         assert any(diag["code"] == "pricing.invalid_config" for diag in report["diagnostics"])
+
+    def test_one_hour_cache_write_rate(self) -> None:
+        def report_for(one_hour: float) -> ConfigReport:
+            return validate_config(
+                PricingConfig(
+                    sources=[
+                        InlineSource(
+                            PricingCatalog(
+                                entries=[
+                                    ModelPricing(
+                                        provider="test",
+                                        model_id="priced-model",
+                                        pricing_as_of="2026-06-15",
+                                        pricing_source="https://example.com/pricing",
+                                        rates=TokenPricingRates(
+                                            1.0,
+                                            2.0,
+                                            cache_write_per_million=3.0,
+                                            cache_write_1h_per_million=one_hour,
+                                        ),
+                                    )
+                                ]
+                            )
+                        )
+                    ]
+                )
+            )
+
+        rates = TokenPricingRates(1.0, 2.0, cache_write_1h_per_million=6.0)
+        assert rates.to_dict()["cache_write_1h_per_million"] == 6.0
+        assert "cache_write_1h_per_million" not in TokenPricingRates(1.0, 2.0).to_dict()
+        assert report_for(6.0)["diagnostics"] == []
+        assert [d["code"] for d in report_for(-1.0)["diagnostics"]] == ["pricing.invalid_config"]
 
     def test_list_kinds_includes_builtin_pricing(self) -> None:
         assert PRICING_PLUGIN_KIND in plugin.list_kinds()
