@@ -42,6 +42,10 @@ use crate::normalization::EventView;
 use nemo_relay_types::api::event::Event;
 
 use nemo_relay_types::Json;
+use nemo_relay_types::codec::normalization::TelemetryToolCall;
+pub(crate) use nemo_relay_types::codec::normalization::{
+    raw_response_message_field, tool_call_array,
+};
 use nemo_relay_types::codec::request::{AnnotatedLlmRequest, ContentPart, Message, MessageContent};
 use nemo_relay_types::codec::response::AnnotatedLlmResponse;
 use nemo_relay_types::error::Result;
@@ -680,21 +684,6 @@ pub(crate) fn atif_image_source(source: &Json) -> Option<Json> {
 
 pub(crate) fn json_to_string(value: &Json) -> String {
     serde_json::to_string(value).unwrap_or_else(|_| value.to_string())
-}
-
-pub(crate) fn raw_response_message_field<'a>(output: &'a Json, field: &str) -> Option<&'a Json> {
-    let object = output.as_object()?;
-    object
-        .get("raw_response")
-        .or(Some(output))
-        .and_then(|raw_response| raw_response.as_object())
-        .and_then(|raw_response| raw_response.get("choices"))
-        .and_then(Json::as_array)
-        .and_then(|choices| choices.first())
-        .and_then(Json::as_object)
-        .and_then(|choice| choice.get("message"))
-        .and_then(Json::as_object)
-        .and_then(|message| message.get(field))
 }
 
 pub(crate) fn openai_responses_output_message(output: &Json) -> Option<Json> {
@@ -1350,7 +1339,9 @@ pub(crate) fn extract_tool_calls(output: &Json) -> Option<Vec<AtifToolCall>> {
     };
     let mut calls = Vec::with_capacity(arr.len());
     for (index, tc) in arr.iter().enumerate() {
-        let tc_obj = tc.as_object()?;
+        let Some(tc_obj) = tc.as_object() else {
+            continue;
+        };
         let mut id = tool_call_id_for_origin(tc_obj, origin)
             .unwrap_or("")
             .to_string();
@@ -1385,6 +1376,32 @@ pub(crate) fn extract_tool_calls(output: &Json) -> Option<Vec<AtifToolCall>> {
         });
     }
     if calls.is_empty() { None } else { Some(calls) }
+}
+
+// Runtime hosts supply provider-aware views. Detached exporters retain their
+// existing raw/manual fallback instead of importing provider implementations.
+fn event_tool_calls(event: &EventView<'_>) -> Option<Vec<AtifToolCall>> {
+    match event.telemetry_llm_tool_calls() {
+        Some(calls) => portable_tool_calls(calls),
+        None => event.output().and_then(extract_tool_calls),
+    }
+}
+
+fn portable_tool_calls(calls: Vec<TelemetryToolCall>) -> Option<Vec<AtifToolCall>> {
+    if calls.is_empty() {
+        return None;
+    }
+    Some(
+        calls
+            .into_iter()
+            .map(|call| AtifToolCall {
+                tool_call_id: call.id,
+                function_name: call.name,
+                arguments: call.arguments,
+                extra: call.extra,
+            })
+            .collect(),
+    )
 }
 
 /// Provider payload shape governing tool-call identifier semantics.
@@ -1531,22 +1548,6 @@ pub(crate) fn atif_message_from_annotated_response(
         // calls and metrics are still recovered from the raw output downstream.
         None => Some(empty_message()),
     }
-}
-
-pub(crate) fn tool_call_array(output: &Json) -> Option<&Vec<Json>> {
-    output
-        .as_object()
-        .and_then(|object| object.get("tool_calls"))
-        .and_then(Json::as_array)
-        .or_else(|| {
-            output
-                .as_object()
-                .and_then(|object| object.get("assistant_message"))
-                .and_then(Json::as_object)
-                .and_then(|assistant| assistant.get("tool_calls"))
-                .and_then(Json::as_array)
-        })
-        .or_else(|| raw_response_message_field(output, "tool_calls").and_then(Json::as_array))
 }
 
 pub(crate) fn openai_responses_function_call_items(output: &Json) -> Option<Vec<&Json>> {
@@ -1965,7 +1966,7 @@ impl LlmSpanCandidate {
     #[doc(hidden)]
     pub fn from_events(uuid: Uuid, start: &EventView<'_>, end: &EventView<'_>) -> Option<Self> {
         let request_signature = start.data().map(llm_request_signature)?;
-        let response_signature = end.data().map(llm_response_signature)?;
+        let response_signature = event_response_signature(end)?;
         Some(Self {
             uuid,
             parent_uuid: start.parent_uuid().or_else(|| end.parent_uuid()),
@@ -2033,6 +2034,17 @@ pub(crate) fn raw_openai_responses_input_message(input: &Json) -> Option<&Json> 
             None
         }
     })
+}
+
+fn event_response_signature(event: &EventView<'_>) -> Option<String> {
+    let output = event.output()?;
+    match event.telemetry_llm_tool_calls() {
+        None => Some(llm_response_signature(output)),
+        Some(calls) => Some(json_to_string(&serde_json::json!({
+            "message": extract_llm_response_message(output),
+            "tool_calls": portable_tool_calls(calls),
+        }))),
+    }
 }
 
 pub(crate) fn llm_response_signature(output: &Json) -> String {
@@ -2365,7 +2377,7 @@ pub(crate) fn collect_llm_tool_calls(
     event: &EventView<'_>,
     tool_calls: &mut Vec<LlmToolCallRecord>,
 ) {
-    let Some(calls) = event.data().and_then(extract_tool_calls) else {
+    let Some(calls) = event_tool_calls(event) else {
         return;
     };
     tool_calls.extend(calls.into_iter().map(|tool_call| LlmToolCallRecord {
@@ -2897,7 +2909,7 @@ impl StepConversionState {
         self.finalize_agent_extra();
         let llm_request = self.pending_llm_requests.remove(&event.uuid());
         let reasoning_effort = self.pending_reasoning_efforts.remove(&event.uuid());
-        let tool_calls = extract_tool_calls(output);
+        let tool_calls = event_tool_calls(event);
         let tool_call_order = refresh_tool_call_lookup(&mut self.last_tool_call_map, &tool_calls);
         let reasoning_content = extract_reasoning_content(output);
         let start_ts = lookups.start_ts_map.get(&event.uuid()).cloned();

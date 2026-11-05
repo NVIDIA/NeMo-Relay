@@ -1296,19 +1296,25 @@ fn client_sse_body(
 ) -> Body {
     guard.json_stream = Some(response_stream);
     let stream = stream! {
+        let mut next_sequence_number = 0;
         if let Some(event) = first_event {
+            next_sequence_number = event.get("sequence_number").and_then(Value::as_u64)
+                .unwrap_or(next_sequence_number).saturating_add(1);
             yield Ok::<Bytes, CliError>(encode_sse_frame(&event, route));
         }
         while let Some(item) = guard.json_stream.as_mut().expect("gateway stream installed").next().await {
             match item {
                 Ok(event) => {
+                    next_sequence_number = event.get("sequence_number").and_then(Value::as_u64)
+                        .unwrap_or(next_sequence_number).saturating_add(1);
                     yield Ok::<Bytes, CliError>(encode_sse_frame(&event, route));
                 }
                 Err(_) => {
-                    // The managed stream records its error. Missing completion signals failure
-                    // to the client without turning this request failure into a broken worker link.
+                    // Report application failure in-band so SDKs reject partial output while
+                    // valid HTTP framing preserves the healthy daemon-worker connection.
                     operational::upstream_failed(&guard.operational, "runtime");
                     guard.finish().await;
+                    yield Ok::<Bytes, CliError>(encode_sse_error_frame(route, next_sequence_number));
                     return;
                 }
             }
@@ -1445,6 +1451,31 @@ fn encode_sse_frame(event_json: &Value, route: ProviderRoute) -> Bytes {
     }
     frame.extend_from_slice(b"\n\n");
     Bytes::from(frame)
+}
+
+fn encode_sse_error_frame(route: ProviderRoute, sequence_number: u64) -> Bytes {
+    // Source errors may contain private upstream URLs, credentials, or malformed payloads.
+    let message = "NeMo Relay could not complete the response stream.";
+    let error = serde_json::json!({
+        "type": "server_error", "code": "stream_error", "message": message,
+    });
+    let event = match route {
+        ProviderRoute::AnthropicMessages => serde_json::json!({
+            "type": "error",
+            "error": {"type": "api_error", "message": message},
+        }),
+        ProviderRoute::OpenAiResponses => serde_json::json!({
+            "type": "error",
+            "code": "stream_error",
+            "message": message,
+            "param": null,
+            "sequence_number": sequence_number,
+            // OpenAI SDK stream readers also require the nested error to raise an exception.
+            "error": error,
+        }),
+        _ => serde_json::json!({"error": error}),
+    };
+    encode_sse_frame(&event, route)
 }
 
 // Forwards the buffered request to the upstream provider with only the safe request headers. This

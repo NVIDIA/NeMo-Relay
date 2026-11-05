@@ -6,6 +6,11 @@
 use nemo_relay_types::codec::normalization::LlmNormalizer;
 use std::borrow::Cow;
 
+#[cfg(test)]
+mod telemetry;
+#[cfg(test)]
+pub(crate) use telemetry::EventTelemetryExt;
+
 pub use nemo_relay_types::api::event::*;
 use nemo_relay_types::codec::request::AnnotatedLlmRequest;
 use nemo_relay_types::codec::response::AnnotatedLlmResponse;

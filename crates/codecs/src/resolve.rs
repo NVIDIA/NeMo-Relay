@@ -233,4 +233,18 @@ impl nemo_relay_types::codec::normalization::LlmNormalizer for BuiltinLlmNormali
     fn normalize_response(&self, raw: &Json) -> Option<AnnotatedLlmResponse> {
         normalize_response(raw)
     }
+
+    fn telemetry_request<'a>(
+        &self,
+        request: std::borrow::Cow<'a, nemo_relay_types::codec::request::AnnotatedLlmRequest>,
+    ) -> std::borrow::Cow<'a, nemo_relay_types::codec::request::AnnotatedLlmRequest> {
+        crate::telemetry::request_view(request)
+    }
+    fn telemetry_tool_calls(
+        &self,
+        annotation: Option<&nemo_relay_types::codec::response::AnnotatedLlmResponse>,
+        output: Option<&nemo_relay_types::Json>,
+    ) -> Option<Vec<nemo_relay_types::codec::normalization::TelemetryToolCall>> {
+        crate::telemetry::tool_calls(annotation, output)
+    }
 }

@@ -4448,6 +4448,78 @@ async fn streaming_response_delivers_the_first_chunk_once_and_completes() {
 }
 
 #[tokio::test]
+async fn streaming_response_reports_midstream_errors_in_the_provider_protocol() {
+    for route in [
+        ProviderRoute::OpenAiChatCompletions,
+        ProviderRoute::OpenAiResponses,
+        ProviderRoute::AnthropicMessages,
+    ] {
+        let (manager, guard) = stream_error_test_guard("midstream-error").await;
+        let response_stream = LlmJsonStream::new(futures_util::stream::iter([
+            Ok(json!({"sequence_number": 40, "partial": "first"})),
+            Ok(json!({"sequence_number": 41, "partial": "second"})),
+            Err(FlowError::Internal(
+                "connection failed at https://private:secret@example.com".into(),
+            )),
+            Ok(json!({"partial": "must not be delivered"})),
+        ]));
+        let body = prepare_streaming_response_body(response_stream, route, guard)
+            .await
+            .unwrap();
+        let bytes = body
+            .collect()
+            .await
+            .expect("application failure must keep HTTP framing valid")
+            .to_bytes();
+        let text = std::str::from_utf8(&bytes).unwrap();
+        let events: Vec<Value> = text
+            .lines()
+            .filter_map(|line| line.strip_prefix("data: "))
+            .map(|data| serde_json::from_str(data).unwrap())
+            .collect();
+        assert_eq!(events.len(), 3, "{route:?}: {text}");
+        assert_eq!(events[0]["partial"], "first");
+        assert_eq!(events[1]["partial"], "second");
+        let error = &events[2];
+        assert_eq!(
+            error["error"]["message"],
+            "NeMo Relay could not complete the response stream."
+        );
+        if route == ProviderRoute::AnthropicMessages {
+            assert_eq!(error["error"]["type"], "api_error");
+        } else {
+            assert_eq!(error["error"]["type"], "server_error");
+            assert_eq!(error["error"]["code"], "stream_error");
+        }
+        if route == ProviderRoute::OpenAiResponses {
+            assert_eq!(error["message"], error["error"]["message"]);
+            assert_eq!(error["code"], "stream_error");
+            assert_eq!(error.get("param"), Some(&Value::Null));
+            assert_eq!(error["sequence_number"], 42);
+        }
+        if route == ProviderRoute::OpenAiChatCompletions {
+            assert!(!text.contains("event: "));
+        } else {
+            assert_eq!(error["type"], "error");
+            assert!(text.contains("event: error\n"));
+        }
+        assert!(!text.contains("[DONE]"));
+        assert!(!text.contains("private:secret"));
+        assert_eq!(
+            manager
+                .close_idle_sessions_at(
+                    std::time::Instant::now() + Duration::from_secs(1),
+                    Duration::from_millis(1),
+                    "midstream_error",
+                )
+                .await
+                .unwrap(),
+            1,
+        );
+    }
+}
+
+#[tokio::test]
 async fn streaming_response_handles_empty_streams_without_inventing_events() {
     for route in [
         ProviderRoute::OpenAiChatCompletions,

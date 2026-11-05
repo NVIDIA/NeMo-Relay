@@ -5428,6 +5428,14 @@ async fn worker_stream_application_errors_preserve_the_route_and_next_request() 
             let body = String::from_utf8_lossy(&bytes);
             if after_first {
                 assert!(body.contains("broker-stream-denial"));
+                let error: serde_json::Value = serde_json::from_str(
+                    body.lines()
+                        .filter_map(|line| line.strip_prefix("data: "))
+                        .next_back()
+                        .unwrap(),
+                )
+                .unwrap();
+                assert_eq!(error["error"]["code"], "stream_error");
                 assert!(!body.contains("[DONE]"));
             } else {
                 assert!(body.contains("denied by worker middleware"));
