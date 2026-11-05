@@ -527,17 +527,20 @@ const codec = new OpenAIChatCodec();
 const response = await typedLlmExecute(
   'openai-chat',
   { headers: {}, content: { model: 'gpt-4o-mini', messages: [] } },
-  async (request) => ({
-    id: 'chatcmpl-demo',
-    model: request.content.model,
-    choices: [
-      {
-        finish_reason: 'stop',
-        message: { role: 'assistant', content: 'Hello from the provider.' },
-      },
-    ],
-    usage: { prompt_tokens: 8, completion_tokens: 5, total_tokens: 13 },
-  }),
+  async (providerRequest) => {
+    const content = providerRequest.content as { model: string };
+    return {
+      id: 'chatcmpl-demo',
+      model: content.model,
+      choices: [
+        {
+          finish_reason: 'stop',
+          message: { role: 'assistant', content: 'Hello from the provider.' },
+        },
+      ],
+      usage: { prompt_tokens: 8, completion_tokens: 5, total_tokens: 13 },
+    };
+  },
   new JsonPassthrough(),
   {
     modelName: 'gpt-4o-mini',

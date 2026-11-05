@@ -9,9 +9,18 @@
  * boundary.
  */
 
-import type { JsonValue, LlmRequestShape, LlmStream, ScopeHandle } from './index';
+import type { JsonCompatible, JsonValue, LlmRequestCompatible, LlmRequestShape, LlmStream, ScopeHandle } from './index';
 
-export type { Json, JsonArray, JsonObject, JsonPrimitive, JsonValue, LlmRequestShape } from './index';
+export type {
+  Json,
+  JsonArray,
+  JsonCompatible,
+  JsonObject,
+  JsonPrimitive,
+  JsonValue,
+  LlmRequestCompatible,
+  LlmRequestShape,
+} from './index';
 
 /** Canonical application-visible result of tool execution. */
 export interface ToolExecutionResult<TResult> {
@@ -26,7 +35,10 @@ export interface ToolExecutionResult<TResult> {
  * before the raw payload is passed through the NeMo Relay LLM middleware
  * pipeline.
  */
-export interface LlmCodec {
+export interface LlmCodec<
+  TAnnotated extends JsonCompatible<TAnnotated> = JsonValue,
+  TEncoded extends LlmRequestCompatible<TEncoded> = LlmRequestShape,
+> {
   /**
    * Decode a raw LLM request payload into the normalized JSON shape used by
    * the codec.
@@ -34,7 +46,7 @@ export interface LlmCodec {
    * @param request - The raw request payload as a JSON-serializable value.
    * @returns The decoded or normalized JSON request representation.
    */
-  decode(request: LlmRequestShape): JsonValue;
+  decode(request: LlmRequestShape): TAnnotated;
   /**
    * Encode an annotated request payload back into the JSON shape expected by
    * the underlying LLM implementation.
@@ -43,7 +55,7 @@ export interface LlmCodec {
    * @param original - The original JSON request payload before annotation.
    * @returns A JSON payload ready to pass to the underlying LLM implementation.
    */
-  encode(annotated: JsonValue, original: LlmRequestShape): LlmRequestShape;
+  encode(annotated: JsonValue, original: LlmRequestShape): TEncoded;
 }
 
 /**
@@ -52,7 +64,7 @@ export interface LlmCodec {
  * Use when model output requires custom parsing or normalization before the
  * response is consumed as plain JSON by the library.
  */
-export interface LlmResponseCodec {
+export interface LlmResponseCodec<TDecoded extends JsonCompatible<TDecoded> = JsonValue> {
   /**
    * Decode a raw LLM response payload into the normalized JSON shape expected
    * by the library.
@@ -64,7 +76,7 @@ export interface LlmResponseCodec {
    * @param response - The raw response payload as a JSON-serializable value.
    * @returns The decoded or normalized JSON response representation.
    */
-  decodeResponse(response: JsonValue): JsonValue;
+  decodeResponse(response: JsonValue): TDecoded;
 }
 
 /**
@@ -88,23 +100,32 @@ export declare class JsonPassthrough implements Codec<JsonValue> {
 }
 
 /** Options for `typedToolExecute`. */
-export interface TypedToolExecuteOptions {
+export interface TypedToolExecuteOptions<
+  TData extends JsonCompatible<TData> = JsonValue,
+  TMetadata extends JsonCompatible<TMetadata> = JsonValue,
+> {
   handle?: ScopeHandle | null;
   attributes?: number | null;
-  data?: JsonValue;
-  metadata?: JsonValue;
+  data?: TData;
+  metadata?: TMetadata;
   toolCallId?: string | null;
 }
 
 /** Options for `typedLlmExecute`. */
-export interface TypedLlmExecuteOptions {
+export interface TypedLlmExecuteOptions<
+  TData extends JsonCompatible<TData> = JsonValue,
+  TMetadata extends JsonCompatible<TMetadata> = JsonValue,
+  TAnnotated extends JsonCompatible<TAnnotated> = JsonValue,
+  TEncoded extends LlmRequestCompatible<TEncoded> = LlmRequestShape,
+  TDecodedResponse extends JsonCompatible<TDecodedResponse> = JsonValue,
+> {
   handle?: ScopeHandle | null;
   attributes?: number | null;
-  data?: JsonValue;
-  metadata?: JsonValue;
+  data?: TData;
+  metadata?: TMetadata;
   modelName?: string | null;
-  codec?: LlmCodec | null;
-  responseCodec?: LlmResponseCodec | null;
+  codec?: LlmCodec<TAnnotated, TEncoded> | null;
+  responseCodec?: LlmResponseCodec<TDecodedResponse> | null;
 }
 
 /**
@@ -125,13 +146,20 @@ export interface TypedLlmExecuteOptions {
  * implementations; codec failures and native execution errors propagate to the
  * returned promise.
  */
-export declare function typedToolExecute<TArgs, TResult>(
+export declare function typedToolExecute<
+  TArgs,
+  TResult,
+  TArgsJson extends JsonCompatible<TArgsJson> = JsonValue,
+  TResultJson extends JsonCompatible<TResultJson> = JsonValue,
+  TData extends JsonCompatible<TData> = JsonValue,
+  TMetadata extends JsonCompatible<TMetadata> = JsonValue,
+>(
   name: string,
   args: TArgs,
   func: (args: TArgs, signal: AbortSignal) => ToolExecutionResult<TResult> | Promise<ToolExecutionResult<TResult>>,
-  argsCodec: Codec<TArgs>,
-  resultCodec: Codec<TResult>,
-  options?: TypedToolExecuteOptions,
+  argsCodec: Codec<TArgs, TArgsJson>,
+  resultCodec: Codec<TResult, TResultJson>,
+  options?: TypedToolExecuteOptions<TData, TMetadata>,
 ): Promise<ToolExecutionResult<TResult>>;
 
 /**
@@ -150,23 +178,38 @@ export declare function typedToolExecute<TArgs, TResult>(
  * payloads; failures while decoding those event payloads are downgraded to
  * debug logging and do not rewrite the caller-visible response.
  */
-export declare function typedLlmExecute<TRequest extends LlmRequestShape, TResponse>(
+export declare function typedLlmExecute<
+  TRequest extends LlmRequestCompatible<TRequest>,
+  TResponse,
+  TResponseJson extends JsonCompatible<TResponseJson> = JsonValue,
+  TData extends JsonCompatible<TData> = JsonValue,
+  TMetadata extends JsonCompatible<TMetadata> = JsonValue,
+  TAnnotated extends JsonCompatible<TAnnotated> = JsonValue,
+  TEncoded extends LlmRequestCompatible<TEncoded> = LlmRequestShape,
+  TDecodedResponse extends JsonCompatible<TDecodedResponse> = JsonValue,
+>(
   name: string,
   request: TRequest,
-  func: (request: TRequest, signal: AbortSignal) => TResponse | Promise<TResponse>,
-  responseCodec: Codec<TResponse>,
-  options?: TypedLlmExecuteOptions,
+  func: (request: LlmRequestShape, signal: AbortSignal) => TResponse | Promise<TResponse>,
+  responseCodec: Codec<TResponse, TResponseJson>,
+  options?: TypedLlmExecuteOptions<TData, TMetadata, TAnnotated, TEncoded, TDecodedResponse>,
 ): Promise<TResponse>;
 
 /** Options for `typedLlmStreamExecute`. */
-export interface TypedLlmStreamExecuteOptions {
+export interface TypedLlmStreamExecuteOptions<
+  TData extends JsonCompatible<TData> = JsonValue,
+  TMetadata extends JsonCompatible<TMetadata> = JsonValue,
+  TAnnotated extends JsonCompatible<TAnnotated> = JsonValue,
+  TEncoded extends LlmRequestCompatible<TEncoded> = LlmRequestShape,
+  TDecodedResponse extends JsonCompatible<TDecodedResponse> = JsonValue,
+> {
   handle?: ScopeHandle | null;
   attributes?: number | null;
-  data?: JsonValue;
-  metadata?: JsonValue;
+  data?: TData;
+  metadata?: TMetadata;
   modelName?: string | null;
-  codec?: LlmCodec | null;
-  responseCodec?: LlmResponseCodec | null;
+  codec?: LlmCodec<TAnnotated, TEncoded> | null;
+  responseCodec?: LlmResponseCodec<TDecodedResponse> | null;
 }
 
 /**
@@ -191,13 +234,24 @@ export interface TypedLlmStreamExecuteOptions {
  * throws the failure. Consumers that stop reading early must await
  * `stream.close()`, which aborts the signal and waits for producer cleanup.
  */
-export declare function typedLlmStreamExecute<TRequest extends LlmRequestShape, TChunk, TResponse>(
+export declare function typedLlmStreamExecute<
+  TRequest extends LlmRequestCompatible<TRequest>,
+  TChunk,
+  TResponse,
+  TChunkJson extends JsonCompatible<TChunkJson> = JsonValue,
+  TResponseJson extends JsonCompatible<TResponseJson> = JsonValue,
+  TData extends JsonCompatible<TData> = JsonValue,
+  TMetadata extends JsonCompatible<TMetadata> = JsonValue,
+  TAnnotated extends JsonCompatible<TAnnotated> = JsonValue,
+  TEncoded extends LlmRequestCompatible<TEncoded> = LlmRequestShape,
+  TDecodedResponse extends JsonCompatible<TDecodedResponse> = JsonValue,
+>(
   name: string,
   request: TRequest,
-  func: (request: TRequest, signal: AbortSignal) => AsyncIterable<TChunk> | Promise<AsyncIterable<TChunk>>,
+  func: (request: LlmRequestShape, signal: AbortSignal) => AsyncIterable<TChunk> | Promise<AsyncIterable<TChunk>>,
   collector: (chunk: TChunk) => void | Promise<void>,
   finalizer: () => TResponse | Promise<TResponse>,
-  chunkCodec: Codec<TChunk>,
-  responseCodec: Codec<TResponse>,
-  options?: TypedLlmStreamExecuteOptions,
+  chunkCodec: Codec<TChunk, TChunkJson>,
+  responseCodec: Codec<TResponse, TResponseJson>,
+  options?: TypedLlmStreamExecuteOptions<TData, TMetadata, TAnnotated, TEncoded, TDecodedResponse>,
 ): Promise<LlmStream>;

@@ -4,7 +4,7 @@
 /// <reference lib="esnext.disposable" />
 
 import type { AdaptivePluginConfig } from './adaptive';
-import type { ConfigDiagnostic, Json, JsonObject, PluginContext, ResourceMetricsConfig } from './index';
+import type { ConfigDiagnostic, Json, JsonObject, JsonObjectCompatible, PluginContext, ResourceMetricsConfig } from './index';
 import type { PricingConfig } from './model_pricing';
 import type { Config as ObservabilityConfig } from './observability';
 import type { Config as PiiRedactionConfig } from './pii_redaction';
@@ -181,9 +181,9 @@ export declare function defaultConfig(): PluginConfig;
  * @remarks Setting `options.enabled = false` preserves the component for
  * validation while skipping runtime registration during `initialize`.
  */
-export declare function ComponentSpec<K extends string>(
+export declare function ComponentSpec<K extends string, C extends JsonObjectCompatible<C> = JsonObject>(
   kind: K,
-  config?: ComponentConfigFor<K>,
+  config?: K extends ComponentKind ? ComponentConfigs[K] : C,
   options?: {
     enabled?: boolean;
   },

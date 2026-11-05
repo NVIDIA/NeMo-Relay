@@ -143,7 +143,7 @@ function assertDocblock(docblock, filePath, name, params) {
 }
 
 function findDeclarationLine(lines, name) {
-  const suffix = String.raw`(?:<[^>]+>)?\s*\(`;
+  const suffix = String.raw`\s*[<(]`;
   const patterns = [
     new RegExp(String.raw`^export\s+async\s+function\s+${escapeRegExp(name)}${suffix}`),
     new RegExp(String.raw`^export\s+function\s+${escapeRegExp(name)}${suffix}`),

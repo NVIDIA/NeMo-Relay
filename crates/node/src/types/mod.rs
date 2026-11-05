@@ -527,8 +527,15 @@ macro_rules! builtin_codec {
             $name($codec, $surface);
 
             #[doc = " Decode a raw LLM response into structured form."]
-            #[napi(js_name = "decodeResponse", catch_unwind)]
-            pub fn decode_response(&self, response: Json) -> Result<Json> {
+            #[napi(
+                js_name = "decodeResponse",
+                ts_generic_types = "TResponse extends JsonCompatible<TResponse>",
+                catch_unwind
+            )]
+            pub fn decode_response(
+                &self,
+                #[napi(ts_arg_type = "TResponse")] response: Json,
+            ) -> Result<Json> {
                 decode_response(&*self.response_codec, &response)
             }
         }
@@ -551,20 +558,27 @@ macro_rules! builtin_codec {
             }
 
             /// Decode an opaque LLM request into structured form.
-            #[napi(catch_unwind)]
+            #[napi(
+                ts_generic_types = "TRequest extends LlmRequestCompatible<TRequest>",
+                catch_unwind
+            )]
             pub fn decode(
                 &self,
-                #[napi(ts_arg_type = "LlmRequestShape")] request: Json,
+                #[napi(ts_arg_type = "TRequest")] request: Json,
             ) -> Result<Json> {
                 decode_request(&self.codec, request)
             }
 
             /// Encode structured changes back into an opaque LLM request.
-            #[napi(catch_unwind, ts_return_type = "LlmRequestShape")]
+            #[napi(
+                ts_generic_types = "TAnnotated extends JsonCompatible<TAnnotated>, TOriginal extends LlmRequestCompatible<TOriginal>",
+                ts_return_type = "LlmRequestShape",
+                catch_unwind
+            )]
             pub fn encode(
                 &self,
-                annotated: Json,
-                #[napi(ts_arg_type = "LlmRequestShape")] original: Json,
+                #[napi(ts_arg_type = "TAnnotated")] annotated: Json,
+                #[napi(ts_arg_type = "TOriginal")] original: Json,
             ) -> Result<Json> {
                 encode_request(&self.codec, annotated, original)
             }
@@ -608,11 +622,15 @@ builtin_codec! {
 
     #[doc = " Decode a raw LLM response into structured form."]
     #[doc = " Throws a TypeError if the response contains a BigInt value."]
-    #[napi(js_name = "decodeResponse", catch_unwind)]
+    #[napi(
+        js_name = "decodeResponse",
+        ts_generic_types = "TResponse extends JsonCompatible<TResponse>",
+        catch_unwind
+    )]
     pub fn decode_response(
         &self,
         env: Env,
-        #[napi(ts_arg_type = "Json")] response: Unknown,
+        #[napi(ts_arg_type = "TResponse")] response: Unknown,
     ) -> Result<Json> {
         decode_response(&*self.response_codec, &checked_json(&env, response)?)
     }

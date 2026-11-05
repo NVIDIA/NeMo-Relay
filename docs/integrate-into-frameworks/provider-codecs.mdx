@@ -303,13 +303,16 @@ const request = {
 const response = await typedLlmExecute(
   'openai-chat',
   request,
-  async (providerRequest) => ({
-    id: 'chatcmpl-demo',
-    model: providerRequest.content.model,
-    choices: [
-      { message: { role: 'assistant', content: 'Codec-enabled response.' } },
-    ],
-  }),
+  async (providerRequest) => {
+    const content = providerRequest.content as { model: string };
+    return {
+      id: 'chatcmpl-demo',
+      model: content.model,
+      choices: [
+        { message: { role: 'assistant', content: 'Codec-enabled response.' } },
+      ],
+    };
+  },
   new JsonPassthrough(),
   {
     modelName: 'gpt-4o-mini',

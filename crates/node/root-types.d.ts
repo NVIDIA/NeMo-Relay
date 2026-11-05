@@ -11,6 +11,101 @@ export type LlmRequestShape = {
   content: Json;
 };
 
+type NonJsonValue =
+  | ((...args: never[]) => unknown)
+  | (abstract new (...args: never[]) => unknown)
+  | bigint
+  | symbol
+  | undefined;
+type BareObject<V> = V extends unknown ? ([object] extends [V] ? ([V] extends [object] ? V : never) : never) : never;
+type JsonProperty<V> = V extends JsonValue
+  ? V
+  : V extends NonJsonValue
+    ? never
+    : V extends object
+      ? [object] extends [V]
+        ? never
+        : { [K in keyof V]: JsonProperty<V[K]> }
+      : never;
+type JsonObjectProperty<V> = V extends readonly unknown[] ? never : V extends object ? JsonProperty<V> : never;
+type LlmRequestProperty<V> = V extends object
+  ? {
+      [K in keyof V]: K extends 'headers' ? JsonObjectProperty<V[K]> : K extends 'content' ? JsonProperty<V[K]> : never;
+    } & Record<'headers' | 'content', unknown>
+  : never;
+type PendingMarkSpecProperty<V> = V extends object
+  ? {
+      [K in keyof V]: K extends 'data' | 'metadata' | 'categoryProfile'
+        ? JsonProperty<V[K]>
+        : K extends keyof PendingMarkSpec
+          ? PendingMarkSpec[K]
+          : never;
+    } & Record<'name', unknown>
+  : never;
+type PendingMarksProperty<V> = V extends readonly unknown[] ? { [I in keyof V]: PendingMarkSpecProperty<V[I]> } : never;
+type EventMetadataProperty<V> = V extends EventMetadataValue ? V : never;
+type MetricMeasurementProperty<V> = V extends object
+  ? {
+      [K in keyof V]: K extends 'attributes'
+        ? JsonProperty<V[K]>
+        : K extends keyof MetricMeasurement
+          ? MetricMeasurement[K]
+          : never;
+    } & Record<'name' | 'kind' | 'valueType' | 'value', unknown>
+  : never;
+
+export type JsonCompatible<T> = [T] extends [JsonValue]
+  ? JsonValue
+  : [T] extends [{} | null]
+    ? [Extract<T, NonJsonValue> | BareObject<T>] extends [never]
+      ? { [K in keyof T]: JsonProperty<T[K]> }
+      : never
+    : never;
+export type JsonObjectCompatible<T> = [T] extends [readonly unknown[]]
+  ? never
+  : [T] extends [object]
+    ? { [K in keyof T]: JsonProperty<T[K]> }
+    : never;
+export type LlmRequestCompatible<T> = [T] extends [object]
+  ? {
+      [K in keyof T]: K extends 'headers' ? JsonObjectProperty<T[K]> : K extends 'content' ? JsonProperty<T[K]> : never;
+    } & Record<'headers' | 'content', unknown>
+  : never;
+export type ToolExecutionResultCompatible<T> = [T] extends [object]
+  ? { [K in keyof T]: K extends 'result' | 'annotation' ? JsonProperty<T[K]> : never } & Record<'result', unknown>
+  : never;
+export type ToolExecutionInterceptOutcomeCompatible<T> = [T] extends [object]
+  ? {
+      [K in keyof T]: K extends 'result' | 'annotation'
+        ? JsonProperty<T[K]>
+        : K extends 'pendingMarks'
+          ? PendingMarksProperty<T[K]>
+          : never;
+    } & Record<'result', unknown>
+  : never;
+export type LlmRequestInterceptOutcomeCompatible<T> = [T] extends [object]
+  ? {
+      [K in keyof T]: K extends 'request'
+        ? LlmRequestProperty<T[K]>
+        : K extends 'annotated'
+          ? JsonProperty<T[K]>
+          : K extends 'pendingMarks'
+            ? PendingMarksProperty<T[K]>
+            : K extends 'optimizationContributions'
+              ? LlmOptimizationContribution[]
+              : never;
+    } & Record<'request', unknown>
+  : never;
+export type EventSanitizeFieldsCompatible<T> = [T] extends [object]
+  ? { [K in keyof T]: K extends 'data' | 'categoryProfile' | 'metadata' ? JsonProperty<T[K]> : never }
+  : never;
+export type EventMetadataCompatible<T> = [T] extends [object]
+  ? { [K in keyof T]: EventMetadataProperty<T[K]> }
+  : never;
+export type MetricMeasurementsCompatible<T> = [T] extends [readonly unknown[]]
+  ? { [I in keyof T]: MetricMeasurementProperty<T[I]> }
+  : never;
+
 export type RuntimeRegistrationKindName = `${RuntimeRegistrationKind}`;
 
 export type ResourceMetricsMeasurementScope = 'runtime_default' | ResourceMeasurementScope;
@@ -412,100 +507,100 @@ export interface PluginContext {
     guardrail: (kinds: RuntimeRegistrationKind[], registrationName: string) => string | null,
   ): void;
   registerSubscriber(name: string, callback: (event: JsonObject) => void | Promise<void>): void;
-  registerEventMetadataInjector(
+  registerEventMetadataInjector<TMetadata extends EventMetadataCompatible<TMetadata>>(
     name: string,
     priority: number,
-    callback: (event: JsonObject) => EventMetadata | Promise<EventMetadata>,
+    callback: (event: JsonObject) => TMetadata | Promise<TMetadata>,
   ): void;
-  registerMarkSanitizeGuardrail(
+  registerMarkSanitizeGuardrail<TFields extends EventSanitizeFieldsCompatible<TFields>>(
     name: string,
     priority: number,
-    callback: (event: JsonObject, fields: EventSanitizeFields) => EventSanitizeFields | Promise<EventSanitizeFields>,
+    callback: (event: JsonObject, fields: EventSanitizeFields) => TFields | Promise<TFields>,
   ): void;
-  registerScopeSanitizeStartGuardrail(
+  registerScopeSanitizeStartGuardrail<TFields extends EventSanitizeFieldsCompatible<TFields>>(
     name: string,
     priority: number,
-    callback: (event: JsonObject, fields: EventSanitizeFields) => EventSanitizeFields | Promise<EventSanitizeFields>,
+    callback: (event: JsonObject, fields: EventSanitizeFields) => TFields | Promise<TFields>,
   ): void;
-  registerScopeSanitizeEndGuardrail(
+  registerScopeSanitizeEndGuardrail<TFields extends EventSanitizeFieldsCompatible<TFields>>(
     name: string,
     priority: number,
-    callback: (event: JsonObject, fields: EventSanitizeFields) => EventSanitizeFields | Promise<EventSanitizeFields>,
+    callback: (event: JsonObject, fields: EventSanitizeFields) => TFields | Promise<TFields>,
   ): void;
-  registerToolSanitizeRequestGuardrail(
+  registerToolSanitizeRequestGuardrail<TValue extends JsonCompatible<TValue>>(
     name: string,
     priority: number,
-    callback: (name: string, args: Json) => Json | Promise<Json>,
+    callback: (name: string, args: Json) => TValue | Promise<TValue>,
   ): void;
-  registerToolSanitizeResponseGuardrail(
+  registerToolSanitizeResponseGuardrail<TValue extends JsonCompatible<TValue>>(
     name: string,
     priority: number,
-    callback: (name: string, result: Json) => Json | Promise<Json>,
+    callback: (name: string, result: Json) => TValue | Promise<TValue>,
   ): void;
   registerToolConditionalExecutionGuardrail(
     name: string,
     priority: number,
     callback: (name: string, args: Json) => string | null | Promise<string | null>,
   ): void;
-  registerLlmSanitizeRequestGuardrail(
+  registerLlmSanitizeRequestGuardrail<TRequest extends LlmRequestCompatible<TRequest> = LlmRequestShape>(
     name: string,
     priority: number,
     callback: (
       request: LlmRequestShape,
       context: LlmSanitizeRequestContext,
-    ) => LlmRequestShape | null | Promise<LlmRequestShape | null>,
+    ) => TRequest | null | Promise<TRequest | null>,
   ): void;
-  registerLlmSanitizeResponseGuardrail(
+  registerLlmSanitizeResponseGuardrail<TResponse extends JsonCompatible<TResponse> = Json>(
     name: string,
     priority: number,
-    callback: (response: Json, context: LlmSanitizeResponseContext) => Json | null | Promise<Json | null>,
+    callback: (response: Json, context: LlmSanitizeResponseContext) => TResponse | null | Promise<TResponse | null>,
   ): void;
   registerLlmConditionalExecutionGuardrail(
     name: string,
     priority: number,
     callback: (request: LlmRequestShape) => string | null | Promise<string | null>,
   ): void;
-  registerLlmRequestIntercept(
+  registerLlmRequestIntercept<TOutcome extends LlmRequestInterceptOutcomeCompatible<TOutcome>>(
     name: string,
     priority: number,
     breakChain: boolean,
-    callback: (args: {
-      name: string;
-      request: LlmRequestShape;
-      annotated: Json | null;
-    }) => LlmRequestInterceptOutcome | Promise<LlmRequestInterceptOutcome>,
+    callback: (args: { name: string; request: LlmRequestShape; annotated: Json | null }) => TOutcome | Promise<TOutcome>,
   ): void;
-  registerLlmExecutionIntercept(
+  registerLlmExecutionIntercept<TResponse extends JsonCompatible<TResponse>>(
     name: string,
     priority: number,
     callback: (
       request: LlmRequestShape,
       context: LlmExecutionContext,
-      next: (request: LlmRequestShape) => Json | Promise<Json>,
-    ) => Json | Promise<Json>,
+      next: <TNextRequest extends LlmRequestCompatible<TNextRequest>>(request: TNextRequest) => Json | Promise<Json>,
+    ) => TResponse | Promise<TResponse>,
   ): void;
-  registerLlmStreamExecutionIntercept(
+  registerLlmStreamExecutionIntercept<TChunk extends JsonCompatible<TChunk>>(
     name: string,
     priority: number,
     callback: (
       request: LlmRequestShape,
       context: LlmExecutionContext,
-      next: (request: LlmRequestShape) => Promise<AsyncIterable<Json>>,
-    ) => AsyncIterable<Json> | Promise<AsyncIterable<Json>>,
+      next: <TNextRequest extends LlmRequestCompatible<TNextRequest>>(
+        request: TNextRequest,
+      ) => Promise<AsyncIterable<Json>>,
+    ) => AsyncIterable<TChunk> | Promise<AsyncIterable<TChunk>>,
   ): void;
-  registerToolRequestIntercept(
+  registerToolRequestIntercept<TArgs extends JsonCompatible<TArgs>>(
     name: string,
     priority: number,
     breakChain: boolean,
-    callback: (name: string, args: Json) => Json | Promise<Json>,
+    callback: (name: string, args: Json) => TArgs | Promise<TArgs>,
   ): void;
-  registerToolExecutionIntercept(
+  registerToolExecutionIntercept<TOutcome extends ToolExecutionInterceptOutcomeCompatible<TOutcome>>(
     name: string,
     priority: number,
     callback: (
       context: ToolExecutionContext,
-      next: (args: Json) => ToolExecutionResult | Promise<ToolExecutionResult>,
-    ) => ToolExecutionInterceptOutcome | Promise<ToolExecutionInterceptOutcome>,
+      next: <TNextArgs extends JsonCompatible<TNextArgs>>(
+        args: TNextArgs,
+      ) => ToolExecutionResult | Promise<ToolExecutionResult>,
+    ) => TOutcome | Promise<TOutcome>,
   ): void;
 }
 

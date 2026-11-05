@@ -4099,8 +4099,8 @@ describe('LLM intercepts', () => {
     const openKind = "kind: 'input_compression' | 'model_routing' | (string & {})";
 
     assert.equal(declarations.split(openKind).length - 1, 1);
-    assert.match(declarations, /registerLlmRequestIntercept\([^\n]*LlmRequestInterceptOutcome/);
-    assert.match(declarations, /scopeRegisterLlmRequestIntercept\([^\n]*LlmRequestInterceptOutcome/);
+    assert.match(declarations, /registerLlmRequestIntercept<[^\n]*LlmRequestInterceptOutcomeCompatible</);
+    assert.match(declarations, /scopeRegisterLlmRequestIntercept<[^\n]*LlmRequestInterceptOutcomeCompatible</);
   });
 
   it('generated LLM sanitizer declarations expose directional codec contexts', () => {
@@ -4126,10 +4126,10 @@ describe('LLM intercepts', () => {
 
     assert.match(
       declarations,
-      /llmStreamCallExecute\([^\n]*func: \(request: LlmRequestShape, signal: AbortSignal\) => AsyncIterable<Json> \| Promise<AsyncIterable<Json>>/,
+      /llmStreamCallExecute<[^\n]*func: \(request: LlmRequestShape, signal: AbortSignal\) => AsyncIterable<TChunk> \| Promise<AsyncIterable<TChunk>>/,
     );
-    assert.match(declarations, /llmStreamCallExecute\([^\n]*collector\?: \(chunk: Json\) => void \| Promise<void>/);
-    assert.match(declarations, /llmStreamCallExecute\([^\n]*finalizer\?: \(\) => Json \| Promise<Json>/);
+    assert.match(declarations, /llmStreamCallExecute<[^\n]*collector\?: \(chunk: Json\) => void \| Promise<void>/);
+    assert.match(declarations, /llmStreamCallExecute<[^\n]*finalizer\?: \(\) => TAggregate \| Promise<TAggregate>/);
   });
 
   it('generated middleware declarations expose Promise-aware callback types', () => {
@@ -4161,19 +4161,23 @@ describe('LLM intercepts', () => {
 
     for (const registration of registrations) {
       const declaration = declarations.match(
-        new RegExp(String.raw`export declare function ${registration}\([^\n]+`),
+        new RegExp(String.raw`export declare function ${registration}[<(][^\n]+`),
       )?.[0];
       assert.ok(declaration, `missing declaration for ${registration}`);
       assert.doesNotMatch(declaration, /\.\.\.args: any\[\]/, `${registration} must not expose an any callback`);
       assert.match(declaration, /Promise</, `${registration} must expose its Promise callback form`);
     }
     assert.equal(
-      declarations.split('next: (request: LlmRequestShape) => Promise<AsyncIterable<Json>>').length - 1,
+      declarations.match(
+        /next: <TNextRequest extends LlmRequestCompatible<TNextRequest>>\(\s*request: TNextRequest,?\s*\) => Promise<AsyncIterable<Json>>/g,
+      ).length,
       3,
       'global, scope-local, and plugin-context stream intercept declarations must expose the lazy next contract',
     );
     assert.equal(
-      declarations.split('next: (args: Json) => ToolExecutionResult | Promise<ToolExecutionResult>').length - 1,
+      declarations.match(
+        /next: <TNextArgs extends JsonCompatible<TNextArgs>>\(\s*args: TNextArgs,?\s*\) => ToolExecutionResult \| Promise<ToolExecutionResult>/g,
+      ).length,
       3,
       'global, scope-local, and plugin-context tool intercept declarations must expose canonical tool results',
     );
@@ -4207,18 +4211,18 @@ describe('LLM intercepts', () => {
       declarations,
       /registerPlugin\([^\n]*register: \(pluginConfig: JsonObject, context: PluginContext\) => void/,
     );
-    assert.match(context, /registerMarkSanitizeGuardrail\([\s\S]*?Promise<EventSanitizeFields>/);
-    assert.match(context, /registerScopeSanitizeStartGuardrail\([\s\S]*?Promise<EventSanitizeFields>/);
-    assert.match(context, /registerScopeSanitizeEndGuardrail\([\s\S]*?Promise<EventSanitizeFields>/);
-    assert.match(context, /registerToolSanitizeRequestGuardrail\([\s\S]*?Json \| Promise<Json>/);
-    assert.match(context, /registerToolSanitizeResponseGuardrail\([\s\S]*?Json \| Promise<Json>/);
-    assert.match(context, /registerLlmSanitizeRequestGuardrail\([\s\S]*?Promise<LlmRequestShape \| null>/);
-    assert.match(context, /registerLlmSanitizeResponseGuardrail\([\s\S]*?Promise<Json \| null>/);
+    assert.match(context, /registerMarkSanitizeGuardrail<[\s\S]*?Promise<TFields>/);
+    assert.match(context, /registerScopeSanitizeStartGuardrail<[\s\S]*?Promise<TFields>/);
+    assert.match(context, /registerScopeSanitizeEndGuardrail<[\s\S]*?Promise<TFields>/);
+    assert.match(context, /registerToolSanitizeRequestGuardrail<[\s\S]*?TValue \| Promise<TValue>/);
+    assert.match(context, /registerToolSanitizeResponseGuardrail<[\s\S]*?TValue \| Promise<TValue>/);
+    assert.match(context, /registerLlmSanitizeRequestGuardrail<[\s\S]*?Promise<TRequest \| null>/);
+    assert.match(context, /registerLlmSanitizeResponseGuardrail<[\s\S]*?Promise<TResponse \| null>/);
     assert.match(context, /registerLlmConditionalExecutionGuardrail\([\s\S]*?Promise<string \| null>/);
-    assert.match(context, /registerLlmRequestIntercept\([\s\S]*?Promise<LlmRequestInterceptOutcome>/);
+    assert.match(context, /registerLlmRequestIntercept<[\s\S]*?Promise<TOutcome>/);
     assert.match(
       context,
-      /registerLlmStreamExecutionIntercept\([\s\S]*?next: \(request: LlmRequestShape\) => Promise<AsyncIterable<Json>>/,
+      /registerLlmStreamExecutionIntercept<[\s\S]*?next: <TNextRequest extends LlmRequestCompatible<TNextRequest>>\([\s\S]*?\) => Promise<AsyncIterable<Json>>/,
     );
   });
 
