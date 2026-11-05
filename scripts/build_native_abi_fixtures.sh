@@ -6,6 +6,9 @@ set -euo pipefail
 repo_root="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 fixture_root="$repo_root/crates/plugin-abi/tests/fixtures"
 fixture_target="${NEMO_RELAY_NATIVE_ABI_FIXTURE_TARGET_DIR:-$repo_root/target/native-abi-fixtures}"
+if command -v cygpath >/dev/null 2>&1; then
+    fixture_target="$(cygpath -u "$fixture_target")"
+fi
 
 for fixture in baseline future major signature marker reordered missing dependency future-host; do
     manifest="$fixture_root/$fixture/Cargo.toml"

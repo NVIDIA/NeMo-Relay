@@ -571,6 +571,8 @@ checked = 0
 for package in metadata["packages"]:
     if package["id"] not in workspace_members or not package["name"].startswith("nemo-relay"):
         continue
+    if package["name"] == "nemo-relay-plugin-abi":
+        continue  # The native interface has an independent release version.
     checked += 1
     if package["version"] != version:
         mismatched.append(f"{package['name']}={package['version']}")
@@ -1239,18 +1241,22 @@ generate-worker-plugin-lockfile: generate-test-plugin-lockfiles
 
 # Build frozen native ABI generations in independent Cargo workspaces.
 build-native-abi-test-fixtures:
-    bash scripts/build_native_abi_fixtures.sh
+    #!/usr/bin/env bash
+    "$BASH" scripts/build_native_abi_fixtures.sh
 
 # Explicitly refresh lockfiles for the independently built ABI fixtures.
 generate-native-abi-test-lockfiles:
-    bash scripts/build_native_abi_fixtures.sh --update-lockfiles
+    #!/usr/bin/env bash
+    "$BASH" scripts/build_native_abi_fixtures.sh --update-lockfiles
 
 # Check unchanged ABI fixture binaries across the active and comparison compilers.
 test-native-abi-toolchains toolchain:
+    #!/usr/bin/env bash
     uv run --no-sync python scripts/check_native_abi_toolchains.py {{ quote(toolchain) }}
 
 # Compare real native middleware paths with a separate source checkout.
 benchmark-native-plugins baseline:
+    #!/usr/bin/env bash
     uv run --no-sync python scripts/native_plugin_benchmark/run.py {{ quote(baseline) }}
 
 # Build the native and worker dynamic-plugin fixtures once for test processes.

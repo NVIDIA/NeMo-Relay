@@ -26,7 +26,7 @@ def main() -> None:
     environment = dict(os.environ)
     run(["just", "build-native-abi-test-fixtures"], root, environment)
     older = environment | {"NEMO_RELAY_NATIVE_ABI_FIXTURE_TARGET_DIR": str(target)}
-    run(["rustup", "run", args.toolchain, "bash", "scripts/build_native_abi_fixtures.sh"], root, older)
+    run(["rustup", "run", args.toolchain, "just", "build-native-abi-test-fixtures"], root, older)
     # Current host, comparison-toolchain plugins, and comparison-toolchain future host.
     run(
         ["cargo", "test", "--locked", "-p", "nemo-relay-plugin-abi", "--test", "binary_compatibility"],

@@ -3,6 +3,11 @@
 
 """Verify independent interface versions and release gates using temporary manifests."""
 
+import os
+import re
+import shutil
+import subprocess
+import sys
 import tempfile
 import unittest
 from pathlib import Path
@@ -11,6 +16,40 @@ from scripts.native_abi_release import check, set_version
 
 
 class NativeAbiReleaseTests(unittest.TestCase):
+    def test_relay_artifact_versions_preserve_independent_interface(self):
+        source = Path(__file__).resolve().parents[2]
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            shutil.copy2(source / "justfile", root / "justfile")
+            workspace = (source / "Cargo.toml").read_text()
+            for field in ("members", "default-members"):
+                workspace = re.sub(
+                    rf"(?ms)^{field} = \[.*?^\]",
+                    f'{field} = ["crates/types", "crates/plugin-abi"]',
+                    workspace,
+                )
+            (root / "Cargo.toml").write_text(workspace)
+            for name, version in (("types", "version.workspace = true"), ("plugin-abi", 'version = "1.0.0"')):
+                crate = root / "crates" / name
+                (crate / "src").mkdir(parents=True)
+                (crate / "src/lib.rs").write_text("")
+                (crate / "Cargo.toml").write_text(f'[package]\nname = "nemo-relay-{name}"\n{version}\n')
+            interface = root / "crates/plugin-abi/Cargo.toml"
+            original_interface = interface.read_bytes()
+            for version in ("1.0.0+deadbeef", "2.3.4-rc.1"):
+                with self.subTest(version=version):
+                    subprocess.run(
+                        ["just", "set-cargo-version", version],
+                        cwd=root,
+                        env=os.environ | {"UV_PYTHON": sys.executable},
+                        check=True,
+                        capture_output=True,
+                        text=True,
+                    )
+                    self.assertEqual(check(root), "1.0.0")
+                    self.assertEqual(interface.read_bytes(), original_interface)
+                    self.assertIn(f'version = "{version}"', (root / "Cargo.toml").read_text())
+
     def test_interface_update_keeps_relay_and_frozen_fixtures_unchanged(self):
         with tempfile.TemporaryDirectory() as directory:
             root = Path(directory)
