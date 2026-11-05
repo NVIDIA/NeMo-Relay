@@ -219,12 +219,24 @@ async fn cancellation_acknowledgement_matches_acceptance_after_cleanup() {
     struct TestPlugin;
 
     impl WorkerPlugin for TestPlugin {
-        fn plugin_id(&self) -> &str {
+        fn plugin_kind(&self) -> &str {
             "test.cancellation"
         }
 
-        fn register(&self, _ctx: &mut PluginContext, _config: &Json) -> Result<()> {
-            Ok(())
+        fn allows_multiple_components(&self) -> bool {
+            false
+        }
+
+        fn register<'a>(
+            &'a self,
+            _config: &'a serde_json::Map<String, Json>,
+            _ctx: &'a mut PluginContext,
+        ) -> crate::PluginFuture<'a, ()> {
+            Box::pin(async move {
+                let _config = &Json::Object(_config.clone());
+                let result: crate::Result<()> = async move { Ok(()) }.await;
+                result.map_err(|error| crate::PluginError::RegistrationFailed(error.to_string()))
+            })
         }
     }
 
@@ -237,6 +249,7 @@ async fn cancellation_acknowledgement_matches_acceptance_after_cleanup() {
                 shutdown: Arc::new(tokio::sync::Notify::new()),
                 draining: Arc::new(std::sync::atomic::AtomicBool::new(false)),
                 registration: Arc::new(tokio::sync::Mutex::new(None)),
+                registration_cancel: watch::channel(false).0,
                 plugin: Arc::new(TestPlugin),
                 runtime: disconnected_runtime(),
                 handlers: Arc::new(Mutex::new(WorkerHandlers::default())),
@@ -282,11 +295,15 @@ async fn cancellation_acknowledgement_matches_acceptance_after_cleanup() {
 async fn shutdown_rejects_stream_handoff_from_a_completed_opener() {
     struct TestPlugin;
     impl WorkerPlugin for TestPlugin {
-        fn plugin_id(&self) -> &str {
+        fn plugin_kind(&self) -> &str {
             "test.shutdown_handoff"
         }
-        fn register(&self, _ctx: &mut PluginContext, _config: &Json) -> Result<()> {
-            Ok(())
+        fn register<'a>(
+            &'a self,
+            _config: &serde_json::Map<String, Json>,
+            _ctx: &'a mut PluginContext,
+        ) -> PluginFuture<'a, ()> {
+            Box::pin(async { Ok(()) })
         }
     }
     let service = WorkerService {
@@ -294,6 +311,7 @@ async fn shutdown_rejects_stream_handoff_from_a_completed_opener() {
         shutdown: Arc::new(tokio::sync::Notify::new()),
         draining: Arc::new(std::sync::atomic::AtomicBool::new(false)),
         registration: Arc::new(tokio::sync::Mutex::new(None)),
+        registration_cancel: watch::channel(false).0,
         plugin: Arc::new(TestPlugin),
         runtime: disconnected_runtime(),
         handlers: Arc::new(Mutex::new(WorkerHandlers::default())),
@@ -350,11 +368,15 @@ async fn repeated_shutdown_does_not_reopen_health_watches() {
 
     struct TestPlugin;
     impl WorkerPlugin for TestPlugin {
-        fn plugin_id(&self) -> &str {
+        fn plugin_kind(&self) -> &str {
             "test.shutdown"
         }
-        fn register(&self, _ctx: &mut PluginContext, _config: &Json) -> Result<()> {
-            Ok(())
+        fn register<'a>(
+            &'a self,
+            _config: &serde_json::Map<String, Json>,
+            _ctx: &'a mut PluginContext,
+        ) -> PluginFuture<'a, ()> {
+            Box::pin(async { Ok(()) })
         }
     }
 
@@ -365,6 +387,7 @@ async fn repeated_shutdown_does_not_reopen_health_watches() {
         shutdown: Arc::new(tokio::sync::Notify::new()),
         draining: Arc::new(std::sync::atomic::AtomicBool::new(false)),
         registration: Arc::new(tokio::sync::Mutex::new(None)),
+        registration_cancel: watch::channel(false).0,
         plugin: Arc::new(TestPlugin),
         runtime: disconnected_runtime(),
         handlers: Arc::new(Mutex::new(WorkerHandlers::default())),
@@ -453,15 +476,19 @@ async fn repeated_shutdown_does_not_reopen_health_watches() {
 async fn validation_rejects_wrong_plugin_and_shutdown_without_running_callback() {
     struct TestPlugin(Arc<AtomicU64>);
     impl WorkerPlugin for TestPlugin {
-        fn plugin_id(&self) -> &str {
+        fn plugin_kind(&self) -> &str {
             "test.validation_lifecycle"
         }
-        fn validate(&self, _config: &Json) -> Vec<ConfigDiagnostic> {
+        fn validate(&self, _config: &serde_json::Map<String, Json>) -> Vec<ConfigDiagnostic> {
             self.0.fetch_add(1, Ordering::Relaxed);
             Vec::new()
         }
-        fn register(&self, _ctx: &mut PluginContext, _config: &Json) -> Result<()> {
-            Ok(())
+        fn register<'a>(
+            &'a self,
+            _config: &serde_json::Map<String, Json>,
+            _ctx: &'a mut PluginContext,
+        ) -> PluginFuture<'a, ()> {
+            Box::pin(async { Ok(()) })
         }
     }
     let calls = Arc::new(AtomicU64::new(0));
@@ -470,6 +497,7 @@ async fn validation_rejects_wrong_plugin_and_shutdown_without_running_callback()
         shutdown: Arc::new(tokio::sync::Notify::new()),
         draining: Arc::new(std::sync::atomic::AtomicBool::new(false)),
         registration: Arc::new(tokio::sync::Mutex::new(None)),
+        registration_cancel: watch::channel(false).0,
         plugin: Arc::new(TestPlugin(calls.clone())),
         runtime: disconnected_runtime(),
         handlers: Arc::new(Mutex::new(WorkerHandlers::default())),
@@ -483,7 +511,7 @@ async fn validation_rejects_wrong_plugin_and_shutdown_without_running_callback()
                 auth_token: service.runtime.auth_token.clone(),
             }),
             plugin_id: id.into(),
-            config: Some(encode_wire(&Json::Null).unwrap()),
+            config: Some(encode_wire(&serde_json::json!({})).unwrap()),
         })
     };
     let error = service

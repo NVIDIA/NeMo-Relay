@@ -59,7 +59,7 @@ use nemo_relay_types::diagnostics::{
     DiagnosticClassifier, DiagnosticSeverity, FailureClass, FailureCode, NoticeCode,
     PluginFailureCode, PluginObservationContext, PluginPhase,
 };
-pub use nemo_relay_types::plugin::{ConfigDiagnostic, DiagnosticLevel};
+pub use nemo_relay_types::plugin::{ConfigDiagnostic, DiagnosticLevel, PluginFuture};
 
 pub use nemo_relay_plugin::component::PluginRegistrationContext;
 pub use nemo_relay_plugin::component::{
