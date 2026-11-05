@@ -2756,6 +2756,7 @@ fn response_headers_preserve_duplicates() {
     assert_eq!(copied.get_all("set-cookie").iter().count(), 2);
 }
 
+/// Worker error context must preserve the captured response and single-use retrieval.
 #[tokio::test]
 async fn captured_upstream_failures_survive_worker_error_wrapping() {
     for status in [401, 429, 500, 529] {
@@ -2795,6 +2796,7 @@ async fn captured_upstream_failures_survive_worker_error_wrapping() {
     }
 }
 
+/// Malformed, foreign, and unrelated tokens must leave this request's failure available.
 #[test]
 fn captured_upstream_failures_only_resolve_tokens_from_the_current_request() {
     let failures = CapturedUpstreamFailures::default();
@@ -2815,17 +2817,40 @@ fn captured_upstream_failures_only_resolve_tokens_from_the_current_request() {
             )))
             .is_none()
     );
-    assert!(
-        failures
-            .take(&FlowError::Internal(format!("{error}0")))
-            .is_none()
-    );
+    for suffix in ["0", "g", "Z", "_", "é"] {
+        assert!(
+            failures
+                .take(&FlowError::Internal(format!("{error}{suffix}")))
+                .is_none(),
+            "an identifier suffix must not consume the failure: {suffix}"
+        );
+    }
     assert!(
         failures
             .take(&FlowError::GuardrailRejected(error.to_string()))
             .is_none()
     );
     assert!(failures.take(&error).is_some());
+}
+
+/// Ambiguous worker context must neither select nor consume either captured attempt.
+#[test]
+fn captured_upstream_failures_reject_ambiguous_attempts_without_consuming_them() {
+    let failures = CapturedUpstreamFailures::default();
+    let earlier = failures.capture(CapturedUpstreamFailure::Authentication(
+        CliError::InvalidPayload("earlier attempt".into()),
+    ));
+    let selected = failures.capture(CapturedUpstreamFailure::Authentication(
+        CliError::InvalidPayload("selected attempt".into()),
+    ));
+    for message in [
+        format!("earlier: {earlier}; selected: {selected}"),
+        format!("selected: {selected}; earlier: {earlier}"),
+    ] {
+        assert!(failures.take(&FlowError::Internal(message)).is_none());
+    }
+    assert!(failures.take(&earlier).is_some());
+    assert!(failures.take(&selected).is_some());
 }
 
 #[tokio::test]

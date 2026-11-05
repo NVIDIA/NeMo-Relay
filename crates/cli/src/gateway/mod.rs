@@ -432,6 +432,10 @@ impl CapturedUpstreamFailures {
         FlowError::Internal(format!("{CAPTURED_UPSTREAM_FAILURE_PREFIX}{token}"))
     }
 
+    /// Takes the single distinct captured attempt named in a worker-wrapped error.
+    ///
+    /// Repeated mentions of the same token are allowed in gRPC error dumps.
+    /// Ambiguous messages leave every captured failure available for later retrieval.
     fn take(&self, error: &FlowError) -> Option<CapturedUpstreamFailure> {
         let FlowError::Internal(message) = error else {
             return None;
@@ -440,20 +444,22 @@ impl CapturedUpstreamFailures {
             .entries
             .lock()
             .expect("captured upstream failures lock poisoned");
-        // Workers add context and may quote the token inside a gRPC error dump.
-        // Resolve only complete UUIDs captured by this request, preserving the
-        // selected attempt rather than falling back to another upstream failure.
-        message
+        let mut tokens = message
             .split(CAPTURED_UPSTREAM_FAILURE_PREFIX)
             .skip(1)
             .filter_map(|suffix| {
                 suffix
-                    .split(|c: char| !c.is_ascii_hexdigit() && c != '-')
+                    .split(|c: char| !c.is_alphanumeric() && c != '-' && c != '_')
                     .next()?
                     .parse::<uuid::Uuid>()
                     .ok()
             })
-            .find_map(|token| entries.remove(&token))
+            .filter(|token| entries.contains_key(token));
+        let token = tokens.next()?;
+        if tokens.any(|other| other != token) {
+            return None;
+        }
+        entries.remove(&token)
     }
 }
 
