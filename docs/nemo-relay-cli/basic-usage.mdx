@@ -1123,8 +1123,10 @@ Every gateway LLM event includes `llm_correlation_status` metadata. Managed
 requests can use `explicit`, `single_hint`, `matched_hint`,
 `request_affinity`, `sticky_last_owner`, `recent_tool_owner`,
 `subagent_start`, `active_subagent`, `agent_fallback`, or
-`ambiguous_fallback`. Claude Code startup probes use `pre_turn_probe`. Matched
-hints can also add `llm_correlation_source`, `llm_correlation_subagent_id`,
+`ambiguous_fallback`. Known Claude Code internal requests without an explicit
+child use `harness_internal`; their reported class is recorded separately as
+`claude_code_request_class`. Matched hints can also add
+`llm_correlation_source`, `llm_correlation_subagent_id`,
 `llm_correlation_conversation_id`, `llm_correlation_generation_id`,
 `llm_correlation_request_id`, and `llm_correlation_agent_type`.
 

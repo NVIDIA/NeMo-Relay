@@ -29,9 +29,10 @@ use serde_json::{Map, Value, json};
 use tokio::sync::{Mutex, Notify, OwnedMutexGuard};
 
 use crate::agents::shared::adapters::{SKILL_LOAD_SOURCE_KEY, SKILL_LOAD_SOURCE_PROMPT_EXPANSION};
+use crate::agents::shared::alignment::claude_code::RequestClass;
 use crate::agents::shared::alignment::{
-    self, GatewayManagementPolicy, SessionAlias, SessionAlignmentState, insert_optional,
-    json_string_at, json_value_at, merge_metadata,
+    self, SessionAlias, SessionAlignmentState, insert_optional, json_string_at, json_value_at,
+    merge_metadata,
 };
 use crate::configuration::{GatewayConfig, SessionConfig};
 use crate::error::CliError;
@@ -505,6 +506,8 @@ pub(super) struct Session {
     child_turns: HashMap<String, ScopeHandle>,
     turn_scope: Option<ScopeHandle>,
     gateway_request_turn_open: bool,
+    // A prompt hook can arrive after the gateway opened the turn.
+    turn_prompt_observed: bool,
     turn_index: u64,
     last_turn_llm_output: Option<Value>,
     subagents: HashMap<String, ScopeHandle>,
@@ -1192,16 +1195,21 @@ impl SessionManager {
             activity,
             self.gateway_preparing.clone(),
         );
-        let result = in_flight.session_mut().prepare_gateway_call(start).await;
+        let request_class = alignment::claude_code::request_class(headers);
+        let result = in_flight
+            .session_mut()
+            .prepare_gateway_call(start, request_class)
+            .await;
         match result {
             Ok(mut prep) => {
                 in_flight.gateway_call_prepared(prep.owner_subagent_id.clone());
-                prep.session_finish =
-                    if prep.bypass_managed_pipeline && in_flight.session_mut().is_empty() {
-                        GatewaySessionFinish::PruneIfEmpty
-                    } else {
-                        session_finish
-                    };
+                prep.session_finish = if session_finish != GatewaySessionFinish::Close
+                    && in_flight.session_mut().is_empty()
+                {
+                    GatewaySessionFinish::PruneIfEmpty
+                } else {
+                    session_finish
+                };
                 drop(in_flight.restore().await);
                 Ok(prep)
             }
@@ -1699,6 +1707,7 @@ impl Session {
             child_turns: HashMap::new(),
             turn_scope: None,
             gateway_request_turn_open: false,
+            turn_prompt_observed: false,
             turn_index: 0,
             last_turn_llm_output: None,
             subagents: HashMap::new(),
@@ -2001,40 +2010,47 @@ impl Session {
             .await
     }
 
-    // Builds a managed-execution prep without creating an LlmHandle. The agent scope is opened if
-    // needed and ownership/correlation metadata is computed exactly as the manual `start_llm` path
-    // does. The handle and start/end events are emitted later by `llm_call_execute` /
-    // `llm_stream_call_execute`, which the gateway runs outside the session lock.
+    // Prepare ownership without creating an LLM handle. Internal requests retain their structural
+    // parent but cannot open conversation turns or participate in task-response bookkeeping.
+    // Managed execution emits the model lifecycle after releasing the session lock.
     async fn prepare_gateway_call(
         &mut self,
         start: LlmGatewayStart,
+        reported_class: RequestClass,
     ) -> Result<GatewayCallPrep, CliError> {
         self.begin_gateway_call();
         let stack = self.scope_stack.clone();
         let result = TASK_SCOPE_STACK
             .scope(stack.clone(), async {
-                let policy = self.gateway_management_policy(&start);
+                let claude_request = self.agent_kind == AgentKind::ClaudeCode
+                    && start.provider == "anthropic.messages";
+                let request_class = if claude_request {
+                    reported_class
+                } else {
+                    RequestClass::Unknown
+                };
+                let record_task_response = !request_class.is_internal();
                 let mut attributes = LlmAttributes::empty();
                 if start.streaming {
                     attributes |= LlmAttributes::STREAMING;
                 }
-                let mut owner = if policy.bypasses_managed_pipeline() {
-                    self.unmanaged_probe_owner(policy)
+                let mut owner = if request_class.is_internal() {
+                    self.internal_llm_owner(&start)
                 } else {
                     self.resolve_llm_owner(&start)
                 };
-                if !policy.bypasses_managed_pipeline() {
+                if record_task_response {
                     self.close_codex_mcp_results(&start, owner.subagent_id.as_deref())?;
                     self.ensure_turn_started_for_gateway(&start, &mut owner)?;
+                    self.record_llm_request_affinity(
+                        &start.provider,
+                        &start.request,
+                        owner.subagent_id.as_deref(),
+                        owner.status,
+                    );
                 }
                 self.touch_subagent_activity(owner.subagent_id.as_deref());
-                self.record_llm_request_affinity(
-                    &start.provider,
-                    &start.request,
-                    owner.subagent_id.as_deref(),
-                    owner.status,
-                );
-                let metadata = self.merge_llm_identity_metadata(
+                let mut metadata = self.merge_llm_identity_metadata(
                     merge_metadata(
                         llm_correlation_metadata(
                             start.metadata,
@@ -2047,6 +2063,9 @@ impl Session {
                     ),
                     start.conversation_id.as_deref(),
                 );
+                if claude_request {
+                    metadata["claude_code_request_class"] = json!(request_class.as_str());
+                }
                 let mut request = start.request;
                 enrich_routing_identity_headers(
                     &mut request,
@@ -2081,7 +2100,7 @@ impl Session {
                     metadata,
                     model_name: start.model_name,
                     owner_subagent_id: owner.subagent_id,
-                    bypass_managed_pipeline: policy.bypasses_managed_pipeline(),
+                    record_task_response,
                     session_finish: GatewaySessionFinish::Retain,
                 })
             })
@@ -2163,6 +2182,7 @@ impl Session {
         if self.turn_scope.is_some() {
             if self.gateway_request_turn_open {
                 self.gateway_request_turn_open = false;
+                self.turn_prompt_observed = true;
                 self.mark("prompt_submitted", event)?;
                 return Ok(subscriber_delivery);
             }
@@ -2250,18 +2270,6 @@ impl Session {
         Ok(())
     }
 
-    fn gateway_management_policy(&self, start: &LlmGatewayStart) -> GatewayManagementPolicy {
-        if self.turn_scope.is_some() {
-            return GatewayManagementPolicy::Managed;
-        }
-        alignment::gateway_management_policy(
-            self.agent_kind,
-            &start.provider,
-            start.model_name.as_deref(),
-            &start.request,
-        )
-    }
-
     /// Open a parent turn under its exported task or session ancestor.
     fn open_turn(
         &mut self,
@@ -2281,6 +2289,10 @@ impl Session {
                 "turn_source": turn_source,
             }),
         );
+        let prompt_observed = turn_source == "user_prompt";
+        if self.agent_kind == AgentKind::ClaudeCode {
+            metadata["turn_prompt_observed"] = json!(prompt_observed);
+        }
         if let Some(agent_name) = agent_name {
             metadata["gen_ai.agent.name"] = json!(agent_name);
         }
@@ -2295,6 +2307,7 @@ impl Session {
                 .build(),
         )?;
         self.turn_scope = Some(scope);
+        self.turn_prompt_observed = prompt_observed;
         self.task_awaiting_synthesis = false;
         self.gateway_request_turn_open = false;
         self.last_turn_llm_output = None;
@@ -2567,6 +2580,11 @@ impl Session {
                 "gateway_mode": self.config.gateway_mode,
             }),
         );
+        if self.agent_kind == AgentKind::ClaudeCode
+            && let Some(object) = metadata.as_object_mut()
+        {
+            object.remove("turn_prompt_observed");
+        }
         self.insert_agent_version(&mut metadata);
         metadata
     }
@@ -2590,6 +2608,11 @@ impl Session {
     /// scope's opening metadata instead.
     fn trusted_boundary_metadata(&self, metadata: Option<Value>) -> Option<Value> {
         metadata.map(|mut metadata| {
+            if self.agent_kind == AgentKind::ClaudeCode
+                && let Some(object) = metadata.as_object_mut()
+            {
+                object.remove("turn_prompt_observed");
+            }
             self.insert_agent_version(&mut metadata);
             metadata
         })
@@ -2936,7 +2959,13 @@ impl Session {
             return Ok(None);
         };
         self.gateway_request_turn_open = false;
-        let boundary_metadata = self.trusted_boundary_metadata(boundary_metadata);
+        let prompt_observed = std::mem::take(&mut self.turn_prompt_observed);
+        let mut boundary_metadata = self.trusted_boundary_metadata(boundary_metadata);
+        if self.agent_kind == AgentKind::ClaudeCode {
+            let mut metadata = merge_metadata(json!({}), boundary_metadata.unwrap_or(Value::Null));
+            metadata["turn_prompt_observed"] = json!(prompt_observed);
+            boundary_metadata = Some(metadata);
+        }
         let subscriber_delivery = pop_scope_with_subscriber_delivery(
             PopScopeParams::builder()
                 .handle_uuid(&scope.uuid)
@@ -2978,10 +3007,15 @@ impl Session {
         let agent_scope = self.agent_scope.clone();
         let subagent_id = event.subagent_id;
         let subagent_name = format!("subagent:{subagent_id}");
-        let metadata = merge_metadata(
+        let mut metadata = merge_metadata(
             event.metadata,
             json!({ "nemo_relay_scope_role": "subagent" }),
         );
+        if self.agent_kind == AgentKind::ClaudeCode
+            && let Some(object) = metadata.as_object_mut()
+        {
+            object.remove("turn_prompt_observed");
+        }
         let subagent_stack = session_scope_stack(self.launcher_trace_parent.as_ref());
         let scope = TASK_SCOPE_STACK
             .scope(subagent_stack.clone(), async {
@@ -3649,15 +3683,25 @@ impl Session {
         }
     }
 
-    fn unmanaged_probe_owner(&self, policy: GatewayManagementPolicy) -> LlmOwnerResolution {
-        let (status, source) = policy
-            .bypass_correlation()
-            .expect("unmanaged probe owner requires unmanaged gateway policy");
+    // Side requests must not consume conversation hints or change the sticky owner.
+    fn internal_llm_owner(&self, start: &LlmGatewayStart) -> LlmOwnerResolution {
+        if let Some(id) = start.subagent_id.as_deref()
+            && let Some(parent) = self.child_work_scope(id)
+        {
+            return LlmOwnerResolution {
+                parent: Some(parent),
+                subagent_id: Some(id.to_string()),
+                status: "explicit",
+                source: Some("gateway_header".into()),
+                hint: None,
+                metadata: self.subagent_llm_metadata(id),
+            };
+        }
         LlmOwnerResolution {
             parent: self.root_work_scope(),
             subagent_id: None,
-            status,
-            source: Some(source.to_string()),
+            status: "harness_internal",
+            source: Some("claude_code_request_class".into()),
             hint: None,
             metadata: Value::Null,
         }

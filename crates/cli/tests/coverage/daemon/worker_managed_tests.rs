@@ -1478,21 +1478,28 @@ async fn cancelled_request_middleware_releases_its_gateway_session() {
 }
 
 #[tokio::test]
-async fn managed_runtime_bypasses_middleware_for_a_claude_startup_probe() {
+async fn claude_internal_responses_preserve_task_output_in_both_worker_paths() {
+    use nemo_relay_runtime::api::event::{Event, ScopeCategory};
+    use nemo_relay_runtime::api::registry::register_llm_sanitize_request_guardrail;
+    use nemo_relay_runtime::api::subscriber::{flush_subscribers, register_subscriber};
+
     let _guard = PLUGIN_CONFIG_TEST_LOCK.lock().await;
-    const INTERCEPT: &str = "daemon-worker-startup-probe-bypass-coverage";
-    let _ = deregister_llm_request_intercept(INTERCEPT);
-    let _registration = RequestInterceptRegistration(INTERCEPT);
-    register_llm_request_intercept(
-        INTERCEPT,
-        1,
-        false,
-        Arc::new(|_name, request, annotated| {
-            Box::pin(async move { Ok(LlmRequestInterceptOutcome::new(request, annotated)) })
+    const INTERCEPT: &str = "daemon-worker-claude-internal";
+    const SUBSCRIBER: &str = "daemon-worker-claude-internal-events";
+    const REQUEST: &str =
+        r#"{"model":"claude-test","max_tokens":1,"messages":[{"role":"user","content":"test"}]}"#;
+    const MAIN: &str = r#"{"id":"msg_task","type":"message","role":"assistant","model":"claude-test","content":[{"type":"text","text":"task answer"}],"stop_reason":"end_turn","usage":{"input_tokens":17,"output_tokens":1}}"#;
+    const INTERNAL: &str = r#"{"id":"msg_helper","type":"message","role":"assistant","model":"claude-test","content":[{"type":"tool_use","id":"helper-tool","name":"Read","input":{"file_path":"helper.txt"}}],"stop_reason":"tool_use","usage":{"input_tokens":17,"output_tokens":1}}"#;
+    let _subscriber = LlmGuardrailRegistration(SUBSCRIBER);
+    let recorded = Arc::new(std::sync::Mutex::new(Vec::<Event>::new()));
+    register_subscriber(
+        SUBSCRIBER,
+        Arc::new({
+            let recorded = recorded.clone();
+            move |event| recorded.lock().unwrap().push(event.clone())
         }),
     )
     .unwrap();
-
     let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
     let address = listener.local_addr().unwrap();
     let provider = tokio::spawn(async move {
@@ -1500,60 +1507,159 @@ async fn managed_runtime_bypasses_middleware_for_a_claude_startup_probe() {
             listener,
             Router::new().route(
                 "/v1/messages",
-                post(|| async { (StatusCode::ACCEPTED, "startup probe forwarded") }),
+                post(|headers: HeaderMap| async move {
+                    Response::builder()
+                        .header(CONTENT_TYPE, "application/json")
+                        .body(Body::from(if headers["x-fixture-class"] == "auxiliary" {
+                            INTERNAL
+                        } else {
+                            MAIN
+                        }))
+                        .unwrap()
+                }),
             ),
         )
         .await
         .unwrap();
     });
-    let runtime = ManagedRuntime::initialize(
-        GatewayConfig {
-            anthropic_base_url: format!("http://{address}"),
-            ..GatewayConfig::default()
-        },
-        Vec::new(),
-        "machine-owner".into(),
-    )
-    .await
-    .unwrap();
-    let response = runtime
-        .proxy_provider(
-            pooled_client().unwrap(),
-            Request::post("/v1/messages")
-                .header("x-claude-code-session-id", "startup-probe")
-                .body(Body::from(
-                    r#"{"model":"claude-opus-4-8[1m]","max_tokens":1,"messages":[{"role":"user","content":"test"}]}"#,
-                ))
-                .unwrap(),
-            ProviderRoute::Anthropic,
+    for buffered in [false, true] {
+        let _sanitizer = LlmGuardrailRegistration(INTERCEPT);
+        if buffered {
+            register_llm_sanitize_request_guardrail(
+                INTERCEPT,
+                1,
+                Arc::new(|_, _| Box::pin(async { Ok(None) })),
+            )
+            .unwrap();
+        }
+        let runtime = ManagedRuntime::initialize(
+            GatewayConfig {
+                anthropic_base_url: format!("http://{address}"),
+                ..GatewayConfig::default()
+            },
+            Vec::new(),
+            "machine-owner".into(),
         )
         .await
         .unwrap();
-    assert_eq!(response.status(), StatusCode::ACCEPTED);
-    assert_eq!(
-        response.into_body().collect().await.unwrap().to_bytes(),
-        "startup probe forwarded"
-    );
-    drop(_registration);
-    let response = runtime
-        .proxy_provider(
-            pooled_client().unwrap(),
-            Request::post("/v1/messages")
-                .header("x-claude-code-session-id", "unbuffered-startup-probe")
-                .body(Body::from(
-                    r#"{"model":"claude-opus-4-8[1m]","max_tokens":1,"messages":[{"role":"user","content":"test"}]}"#,
-                ))
-                .unwrap(),
-            ProviderRoute::Anthropic,
-        )
-        .await
-        .unwrap();
-    assert_eq!(response.status(), StatusCode::ACCEPTED);
-    assert_eq!(
-        response.into_body().collect().await.unwrap().to_bytes(),
-        "startup probe forwarded"
-    );
-    runtime.close().await.unwrap();
+        let requirements = runtime.provider_middleware_requirements().unwrap();
+        assert_eq!(requirements.request_body_decode_required, buffered);
+        assert!(!requirements.managed_execution_required);
+        recorded.lock().unwrap().clear();
+        let session_id = format!("worker-internal-{buffered}");
+        let prompt = runtime
+            .handle_hook(
+                HookRoute::Claude,
+                Request::post("/hook")
+                    .body(Body::from(
+                        json!({"session_id": session_id, "hook_event_name": "UserPromptSubmit",
+                            "prompt": "inspect the active task"})
+                        .to_string(),
+                    ))
+                    .unwrap(),
+            )
+            .await;
+        assert_eq!(prompt.status(), StatusCode::OK);
+
+        for (index, class) in ["main", "auxiliary"].into_iter().enumerate() {
+            let response = runtime
+                .proxy_provider(
+                    pooled_client().unwrap(),
+                    Request::post("/v1/messages")
+                        .header("x-claude-code-session-id", &session_id)
+                        .header("x-claude-code-request-class", class)
+                        .header("x-fixture-class", class)
+                        .body(Body::from(REQUEST))
+                        .unwrap(),
+                    ProviderRoute::Anthropic,
+                )
+                .await
+                .unwrap();
+            assert_eq!(response.status(), StatusCode::OK);
+            response.into_body().collect().await.unwrap();
+            tokio::time::timeout(Duration::from_secs(5), async {
+                loop {
+                    flush_subscribers().unwrap();
+                    let completed = recorded
+                        .lock()
+                        .unwrap()
+                        .iter()
+                        .filter(|event| {
+                            event.name() == "anthropic.messages"
+                                && event.scope_category() == Some(ScopeCategory::End)
+                        })
+                        .count();
+                    if completed == index + 1 {
+                        break;
+                    }
+                    tokio::task::yield_now().await;
+                }
+            })
+            .await
+            .expect("the model observation must finish before the next request");
+        }
+        for payload in [
+            json!({"session_id": session_id, "hook_event_name": "PreToolUse",
+                "tool_use_id": "helper-tool", "tool_name": "Read",
+                "tool_input": {"file_path": "helper.txt"}}),
+            json!({"session_id": session_id, "hook_event_name": "Stop"}),
+        ] {
+            let response = runtime
+                .handle_hook(
+                    HookRoute::Claude,
+                    Request::post("/hook")
+                        .body(Body::from(payload.to_string()))
+                        .unwrap(),
+                )
+                .await;
+            assert_eq!(response.status(), StatusCode::OK);
+        }
+        flush_subscribers().unwrap();
+        {
+            let events = recorded.lock().unwrap();
+            let llms = events
+                .iter()
+                .filter(|event| {
+                    event.name() == "anthropic.messages"
+                        && event.scope_category() == Some(ScopeCategory::End)
+                })
+                .collect::<Vec<_>>();
+            assert_eq!(llms.len(), 2);
+            for (event, class) in llms.iter().zip(["main", "auxiliary"]) {
+                assert_eq!(
+                    event.metadata().unwrap()["claude_code_request_class"],
+                    class
+                );
+                let usage = serde_json::to_value(
+                    event.annotated_response().unwrap().usage.as_ref().unwrap(),
+                )
+                .unwrap();
+                assert_eq!(usage["total_tokens"], 18);
+            }
+            let tool = events
+                .iter()
+                .find(|event| {
+                    event.name() == "Read" && event.scope_category() == Some(ScopeCategory::Start)
+                })
+                .unwrap();
+            assert_eq!(
+                tool.metadata().unwrap()["tool_correlation_status"],
+                "agent_fallback"
+            );
+            let turn = events
+                .iter()
+                .find(|event| {
+                    event.name() == "claude-code-turn"
+                        && event.scope_category() == Some(ScopeCategory::End)
+                })
+                .unwrap();
+            assert_eq!(
+                turn.output().unwrap(),
+                &serde_json::from_str::<Value>(MAIN).unwrap()
+            );
+        }
+        runtime.close().await.unwrap();
+    }
     provider.abort();
 }
 

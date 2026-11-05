@@ -4576,7 +4576,8 @@ async fn gateway_forwards_anthropic_count_tokens_without_llm_codec() {
 }
 
 #[tokio::test]
-async fn gateway_forwards_claude_startup_probe_without_llm_observability() {
+async fn gateway_records_literal_test_request_as_unknown_with_native_session_header() {
+    let _guard = PLUGIN_CONFIG_TEST_LOCK.lock().await;
     let subscriber_name = "server-claude-startup-probe-no-llm-test";
     let _ = deregister_subscriber(subscriber_name);
     let captured_llm_starts = Arc::new(std::sync::Mutex::new(Vec::<Value>::new()));
@@ -4588,27 +4589,9 @@ async fn gateway_forwards_claude_startup_probe_without_llm_observability() {
                 && event.name() == "anthropic.messages"
                 && event
                     .metadata()
-                    .and_then(|metadata| metadata.get("gateway_path"))
+                    .and_then(|metadata| metadata.get("session_id"))
                     .and_then(Value::as_str)
-                    == Some("/v1/messages")
-                && event
-                    .input()
-                    .and_then(|input| input.get("model"))
-                    .and_then(Value::as_str)
-                    == Some("claude-opus-4-8[1m]")
-                && event
-                    .input()
-                    .and_then(|input| input.get("max_tokens"))
-                    .and_then(Value::as_u64)
-                    == Some(1)
-                && event
-                    .input()
-                    .and_then(|input| input.get("messages"))
-                    .and_then(Value::as_array)
-                    .and_then(|messages| messages.first())
-                    .and_then(|message| message.get("content"))
-                    .and_then(Value::as_str)
-                    == Some("test")
+                    == Some("literal-test-managed-native")
             {
                 captured.lock().unwrap().push(json!({
                     "input": event.input().cloned().unwrap_or(Value::Null),
@@ -4623,7 +4606,9 @@ async fn gateway_forwards_claude_startup_probe_without_llm_observability() {
     let upstream = spawn_anthropic_upstream().await;
     let mut config = test_config();
     config.anthropic_base_url = upstream.url();
-    let app = router(config);
+    let state = AppState::new(config);
+    let sessions = state.sessions.clone();
+    let app = router_with_state(state);
     let response = app
         .oneshot(
             Request::builder()
@@ -4631,7 +4616,7 @@ async fn gateway_forwards_claude_startup_probe_without_llm_observability() {
                 .uri("/v1/messages")
                 .header("content-type", "application/json")
                 .header("x-api-key", "sk-ant-test")
-                .header("x-claude-code-session-id", "claude-probe")
+                .header("x-claude-code-session-id", "literal-test-managed-native")
                 .body(Body::from(
                     json!({
                         "model": "claude-opus-4-8[1m]",
@@ -4657,15 +4642,19 @@ async fn gateway_forwards_claude_startup_probe_without_llm_observability() {
     assert_eq!(body["model"], json!("claude-opus-4-8[1m]"));
     assert_eq!(body["prompt"], json!("test"));
 
+    sessions.close_all("test_shutdown").await.unwrap();
     flush_subscribers().unwrap();
-    assert!(
-        captured_llm_starts.lock().unwrap().is_empty(),
-        "Claude startup probe must not emit a managed LLM span"
+    let starts = captured_llm_starts.lock().unwrap();
+    assert_eq!(starts.len(), 1);
+    assert_eq!(
+        starts[0]["metadata"]["claude_code_request_class"],
+        "unknown"
     );
 }
 
 #[tokio::test]
-async fn gateway_suppresses_claude_startup_probe_without_native_session_header() {
+async fn gateway_records_literal_test_request_as_unknown_without_native_session_header() {
+    let _guard = PLUGIN_CONFIG_TEST_LOCK.lock().await;
     let subscriber_name = "server-claude-startup-probe-no-native-header-test";
     let _ = deregister_subscriber(subscriber_name);
     let captured_events = Arc::new(std::sync::Mutex::new(Vec::<Value>::new()));
@@ -4677,13 +4666,11 @@ async fn gateway_suppresses_claude_startup_probe_without_native_session_header()
                 .metadata()
                 .and_then(|metadata| metadata.get("session_id"))
                 .and_then(Value::as_str);
+            if session_id != Some("claude-probe-no-native-header") {
+                return;
+            }
             let is_probe_llm = event.scope_category() == Some(ScopeCategory::Start)
-                && event.name() == "anthropic.messages"
-                && event
-                    .input()
-                    .and_then(|input| input.get("model"))
-                    .and_then(Value::as_str)
-                    == Some("claude-opus-4-8[1m]");
+                && event.name() == "anthropic.messages";
             let is_probe_turn = event.scope_category() == Some(ScopeCategory::Start)
                 && event.name() == "claude-code-turn"
                 && session_id == Some("claude-probe-no-native-header");
@@ -4702,7 +4689,9 @@ async fn gateway_suppresses_claude_startup_probe_without_native_session_header()
     let upstream = spawn_anthropic_upstream().await;
     let mut config = test_config();
     config.anthropic_base_url = upstream.url();
-    let app = router(config);
+    let state = AppState::new(config);
+    let sessions = state.sessions.clone();
+    let app = router_with_state(state);
     let response = app
         .oneshot(
             Request::builder()
@@ -4730,11 +4719,231 @@ async fn gateway_suppresses_claude_startup_probe_without_native_session_header()
         .unwrap();
 
     assert_eq!(response.status(), StatusCode::OK);
+    response.into_body().collect().await.unwrap();
+    sessions.close_all("test_shutdown").await.unwrap();
     flush_subscribers().unwrap();
-    assert!(
-        captured_events.lock().unwrap().is_empty(),
-        "no-native-header Claude startup probe must not emit managed LLM or null-input turn events"
+    let events = captured_events.lock().unwrap();
+    assert_eq!(
+        events
+            .iter()
+            .filter(|event| event["name"] == "anthropic.messages")
+            .count(),
+        1
     );
+    let turns = events
+        .iter()
+        .filter(|event| event["name"] == "claude-code-turn")
+        .collect::<Vec<_>>();
+    assert_eq!(turns.len(), 1);
+    assert_eq!(turns[0]["metadata"]["turn_source"], "gateway_request");
+}
+
+#[tokio::test]
+async fn gateway_internal_http_completions_preserve_task_output_and_all_usage() {
+    use crate::events::{AgentKind, NormalizedEvent, SessionEvent};
+    use nemo_relay_runtime::api::event::Event;
+
+    let _guard = PLUGIN_CONFIG_TEST_LOCK.lock().await;
+    let subscriber_name = "server-claude-activity-response-isolation";
+    let events = Arc::new(Mutex::new(Vec::<Event>::new()));
+    let recorded = events.clone();
+    register_subscriber(
+        subscriber_name,
+        Arc::new(move |event| {
+            if event
+                .metadata()
+                .and_then(|metadata| metadata.get("session_id"))
+                .and_then(Value::as_str)
+                .is_some_and(|id| id.starts_with("activity-http-"))
+            {
+                recorded.lock().unwrap().push(event.clone());
+            }
+        }),
+    )
+    .unwrap();
+    let _subscriber_cleanup = SubscriberCleanup(subscriber_name);
+
+    let class = "auxiliary";
+    for streaming in [false, true] {
+        let id = format!("activity-http-{streaming}");
+        let entered = Arc::new(Semaphore::new(0));
+        let release_main = Arc::new(Semaphore::new(0));
+        let release_helper = Arc::new(Semaphore::new(0));
+        let provider = Router::new().route(
+                "/v1/messages",
+                post({
+                    let entered = entered.clone();
+                    let release_main = release_main.clone();
+                    let release_helper = release_helper.clone();
+                    move |body: Bytes| {
+                        let entered = entered.clone();
+                        let release_main = release_main.clone();
+                        let release_helper = release_helper.clone();
+                        async move {
+                            let request: Value = serde_json::from_slice(&body).unwrap();
+                            let main = request["messages"][0]["content"] == "main task";
+                            entered.add_permits(1);
+                            if main {
+                                release_main.acquire().await.unwrap().forget();
+                            } else {
+                                release_helper.acquire().await.unwrap().forget();
+                            }
+                            let response = json!({
+                                "id": if main { "msg-task" } else { "msg-helper" },
+                                "type": "message",
+                                "role": "assistant",
+                                "model": "claude-test",
+                                "content": [{"type": "text", "text": if main { "task answer" } else { "helper answer" }}],
+                                "stop_reason": "end_turn",
+                                "usage": {"input_tokens": 2, "output_tokens": 1}
+                            });
+                            if request["stream"] == true {
+                                let events = [
+                                    json!({"type":"message_start","message":{"id":response["id"],"type":"message","role":"assistant","model":"claude-test","content":[],"usage":{"input_tokens":2,"output_tokens":0}}}),
+                                    json!({"type":"content_block_start","index":0,"content_block":{"type":"text","text":""}}),
+                                    json!({"type":"content_block_delta","index":0,"delta":{"type":"text_delta","text":response["content"][0]["text"]}}),
+                                    json!({"type":"content_block_stop","index":0}),
+                                    json!({"type":"message_delta","delta":{"stop_reason":"end_turn","stop_sequence":null},"usage":{"output_tokens":1}}),
+                                    json!({"type":"message_stop"}),
+                                ];
+                                let wire = events.iter().map(|event| format!("data: {event}\n\n")).collect::<String>();
+                                ([(header::CONTENT_TYPE, "text/event-stream")], wire).into_response()
+                            } else {
+                                axum::Json(response).into_response()
+                            }
+                        }
+                    }
+                }),
+            );
+        let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let address = listener.local_addr().unwrap();
+        let upstream = TestServer {
+            url: format!("http://{address}"),
+            handle: tokio::spawn(async move { axum::serve(listener, provider).await.unwrap() }),
+        };
+        let mut config = test_config();
+        config.anthropic_base_url = upstream.url();
+        let state = AppState::new(config);
+        let sessions = state.sessions.clone();
+        let boundary = |name: &str| SessionEvent {
+            session_id: id.clone(),
+            agent_kind: AgentKind::ClaudeCode,
+            event_name: name.into(),
+            payload: json!({"prompt": "main task"}),
+            metadata: json!({}),
+        };
+        sessions
+            .apply_events(
+                &http::HeaderMap::new(),
+                vec![NormalizedEvent::PromptSubmitted(boundary(
+                    "UserPromptSubmit",
+                ))],
+            )
+            .await
+            .unwrap();
+        let app = router_with_state(state);
+        let request = |class: &str, content: &str| {
+            Request::post("/v1/messages")
+                .header("content-type", "application/json")
+                .header("x-api-key", "test-api-key")
+                .header("x-claude-code-session-id", &id)
+                .header("x-claude-code-request-class", class)
+                .body(Body::from(
+                    json!({
+                        "model": "claude-test", "max_tokens": 16, "stream": streaming,
+                        "messages": [{"role": "user", "content": content}]
+                    })
+                    .to_string(),
+                ))
+                .unwrap()
+        };
+        let main = tokio::spawn(app.clone().oneshot(request("main", "main task")));
+        let helper = tokio::spawn(app.oneshot(request(class, "helper work")));
+        tokio::time::timeout(Duration::from_secs(5), entered.acquire_many(2))
+            .await
+            .unwrap()
+            .unwrap()
+            .forget();
+        release_main.add_permits(1);
+        let response = tokio::time::timeout(Duration::from_secs(5), main)
+            .await
+            .unwrap()
+            .unwrap()
+            .unwrap();
+        assert_eq!(response.status(), StatusCode::OK);
+        assert_eq!(
+            response.headers()[header::CONTENT_TYPE],
+            if streaming {
+                "text/event-stream"
+            } else {
+                "application/json"
+            }
+        );
+        response.into_body().collect().await.unwrap();
+        release_helper.add_permits(1);
+        let response = tokio::time::timeout(Duration::from_secs(5), helper)
+            .await
+            .unwrap()
+            .unwrap()
+            .unwrap();
+        assert_eq!(response.status(), StatusCode::OK);
+        assert_eq!(
+            response.headers()[header::CONTENT_TYPE],
+            if streaming {
+                "text/event-stream"
+            } else {
+                "application/json"
+            }
+        );
+        response.into_body().collect().await.unwrap();
+        sessions
+            .apply_events(
+                &http::HeaderMap::new(),
+                vec![NormalizedEvent::TurnEnded(boundary("Stop"))],
+            )
+            .await
+            .unwrap();
+        sessions.close_all("test_shutdown").await.unwrap();
+        flush_subscribers().unwrap();
+
+        let events = events.lock().unwrap();
+        let matching = events
+            .iter()
+            .filter(|event| event.metadata().unwrap()["session_id"] == id)
+            .collect::<Vec<_>>();
+        let turn = matching
+            .iter()
+            .find(|event| {
+                event.name() == "claude-code-turn"
+                    && event.scope_category() == Some(ScopeCategory::End)
+            })
+            .unwrap();
+        assert_eq!(turn.output().unwrap()["content"][0]["text"], "task answer");
+        assert_eq!(turn.metadata().unwrap()["turn_prompt_observed"], true);
+        let llm_ends = matching
+            .iter()
+            .filter(|event| {
+                event.name() == "anthropic.messages"
+                    && event.scope_category() == Some(ScopeCategory::End)
+            })
+            .collect::<Vec<_>>();
+        assert_eq!(llm_ends.len(), 2);
+        let classes = llm_ends
+            .iter()
+            .map(|event| {
+                event.metadata().unwrap()["claude_code_request_class"]
+                    .as_str()
+                    .unwrap()
+            })
+            .collect::<std::collections::HashSet<_>>();
+        assert_eq!(classes, std::collections::HashSet::from(["main", class]));
+        for event in llm_ends {
+            let response = event.annotated_response().unwrap();
+            let usage = serde_json::to_value(response.usage.as_ref().unwrap()).unwrap();
+            assert_eq!(usage["prompt_tokens"], 2);
+            assert_eq!(usage["completion_tokens"], 1);
+        }
+    }
 }
 
 #[tokio::test]
