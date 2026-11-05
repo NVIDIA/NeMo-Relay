@@ -1837,11 +1837,19 @@ test-node:
 
 # run each checked plugin authoring example from its own project directory
 test-plugin-examples:
+    #!/usr/bin/env bash
+    {{ bash_helpers }}
+    export NEMO_RELAY_TEST_SKIP_IMPLICIT_CONFIG=1
     (cd examples/rust-native-plugin && cargo nextest run --config-file "$NEMO_RELAY_REPO_ROOT/.config/nextest.toml" --profile ci)
     (cd examples/rust-grpc-worker-plugin && cargo nextest run --config-file "$NEMO_RELAY_REPO_ROOT/.config/nextest.toml" --profile ci)
     (cd examples/language-binding-plugin/rust && cargo nextest run --config-file "$NEMO_RELAY_REPO_ROOT/.config/nextest.toml" --profile ci)
     (cd examples/python-grpc-worker-plugin && uv run --locked --package nemo-relay-python-grpc-worker-example --group test --reinstall-package nemo-relay-plugin pytest)
-    (cd examples/language-binding-plugin/python && uv run --locked --package nemo-relay-python-language-binding-plugin-example --group test --reinstall-package nemo-relay pytest)
+    uv sync --locked --inexact --all-packages --group test --no-install-project --no-install-package nemo-relay
+    activate_project_venv
+    python_executable="$(project_python_executable)"
+    use_project_python_source "$python_executable"
+    "$python_executable" -m maturin develop --features __skip-implicit-config --skip-install
+    (cd examples/language-binding-plugin/python && uv run --locked --no-sync --package nemo-relay-python-language-binding-plugin-example --group test pytest)
     npm test --workspace=nemo-relay-node-language-binding-plugin-example
 
 # --set [ci=true|false]

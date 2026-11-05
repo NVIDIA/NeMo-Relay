@@ -9,7 +9,6 @@ use nemo_relay_diagnostics::{
     PluginFailureCode, PluginObservationContext, PluginOperationFailureCode as Operation,
     PluginPhase, SuccessCode,
 };
-use nemo_relay_plugin::NemoRelayStatus;
 use std::num::NonZeroU64;
 use uuid::Uuid;
 
@@ -132,16 +131,6 @@ impl PluginDiagnostics {
             });
         }
     }
-    pub(super) fn native_status(
-        &self,
-        operation: Operation,
-        status: NemoRelayStatus,
-        phase: PluginPhase,
-    ) {
-        if let Some(class) = native_failure(status) {
-            self.failure(operation, class, phase);
-        }
-    }
     pub(super) fn rpc_failure(
         &self,
         operation: Operation,
@@ -162,24 +151,6 @@ fn classification(operation: Operation, class: FailureClass) -> Classification {
         class,
     )
     .expect("supported plugin operation class")
-}
-
-/// Pure native status interpretation. Completion and backpressure are not failures.
-pub(super) fn native_failure(status: NemoRelayStatus) -> Option<FailureClass> {
-    Some(match status {
-        NemoRelayStatus::Ok | NemoRelayStatus::StreamEnd | NemoRelayStatus::Backpressured => {
-            return None;
-        }
-        NemoRelayStatus::AlreadyExists => FailureClass::Conflict,
-        NemoRelayStatus::NotFound => FailureClass::NotFound,
-        NemoRelayStatus::ScopeStackEmpty => FailureClass::InvalidState,
-        NemoRelayStatus::GuardrailRejected => FailureClass::PolicyRejected,
-        NemoRelayStatus::Internal => FailureClass::Internal,
-        NemoRelayStatus::NullPointer
-        | NemoRelayStatus::InvalidJson
-        | NemoRelayStatus::InvalidUtf8
-        | NemoRelayStatus::InvalidArg => FailureClass::InvalidInput,
-    })
 }
 
 pub(super) struct TrustFailureClassifier;

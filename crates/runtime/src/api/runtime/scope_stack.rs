@@ -1459,9 +1459,11 @@ pub(crate) fn install_thread_continuation_context(
     scope_stack: &ScopeStackHandle,
     active_event: Option<AnchoredActiveEvent>,
     active_event_trace_context: Option<W3cTraceContext>,
+    explicit: bool,
 ) -> ThreadScopeStackBinding {
     let previous = capture_thread_scope_stack();
     sync_thread_scope_stack(scope_stack.clone());
+    THREAD_SCOPE_STACK_EXPLICIT.with(|flag| flag.set(explicit));
     THREAD_ACTIVE_EVENT.with(|event| {
         *event.borrow_mut() =
             active_event.map(|event| rebind_active_event_to_stack(event, scope_stack));

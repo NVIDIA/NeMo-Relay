@@ -420,6 +420,14 @@ impl DynamicPluginManifest {
 
         validate_capability_shape(self.plugin.kind, &self.capabilities.items)?;
         validate_load_shape(self.plugin.kind, &self.load)?;
+        if self.compat.native_api.as_deref() != Some("1")
+            && let DynamicPluginManifestLoad::RustDynamic(load) = &self.load
+            && load.symbol.is_some()
+        {
+            return Err(PluginError::InvalidConfig(
+                "load.symbol is unsupported; use the checked standard bootstrap header".into(),
+            ));
+        }
         validate_compat_shape(self.plugin.kind, &self.compat)?;
         Ok(())
     }
@@ -714,7 +722,6 @@ fn validate_load_shape(kind: DynamicPluginKind, load: &DynamicPluginManifestLoad
         }
         (DynamicPluginKind::RustDynamic, DynamicPluginManifestLoad::RustDynamic(load)) => {
             required_trimmed_string(load.library.as_deref(), "load.library")?;
-            required_trimmed_string(load.symbol.as_deref(), "load.symbol")?;
         }
         (DynamicPluginKind::Worker, DynamicPluginManifestLoad::Worker(load)) => {
             required_trimmed_string(load.entrypoint.as_deref(), "load.entrypoint")?;
@@ -786,11 +793,7 @@ impl DynamicPluginManifestLoad {
                         .expect("validated rust_dynamic manifest must carry load.library")
                         .trim()
                         .to_owned(),
-                    symbol: load
-                        .symbol
-                        .expect("validated rust_dynamic manifest must carry load.symbol")
-                        .trim()
-                        .to_owned(),
+                    symbol: load.symbol.unwrap_or_default(),
                 })
             }
         }
@@ -805,10 +808,10 @@ fn validate_compat_shape(
         DynamicPluginKind::RustDynamic => {
             let native_api =
                 required_trimmed_string(compat.native_api.as_deref(), "compat.native_api")?;
-            if native_api.trim() != "1" {
-                return Err(PluginError::InvalidConfig(
-                    "rust_dynamic plugins must declare compat.native_api = \"1\"".into(),
-                ));
+            if native_api != "1" {
+                native_api
+                    .parse::<nemo_relay_plugin::abi::NativeApiVersion>()
+                    .map_err(|e| PluginError::InvalidConfig(e.to_string()))?;
             }
             if compat.worker_protocol.is_some() {
                 return Err(PluginError::InvalidConfig(

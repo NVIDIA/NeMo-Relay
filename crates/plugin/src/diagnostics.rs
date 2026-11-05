@@ -6,9 +6,13 @@
 //! Disabled/unsupported facades skip factories. Diagnostic errors must not be
 //! propagated as plugin execution failures unless the application chooses so.
 
-pub mod abi;
-use crate::PluginRuntime;
-use abi::{Bytes, NativeDiagnosticsApiV1};
+/// Bounds used by native diagnostic authoring and host admission.
+pub mod limits;
+use crate::abi::{
+    abi_stable::std_types::{RResult, RSlice, RSliceMut, RStr},
+    diagnostics as abi,
+};
+use limits as bounds;
 pub use nemo_relay_types::diagnostics::{
     BuiltinDiagnosticCode, Classification, ClassificationError, CommonPluginFailureCode,
     DiagnosticAvailability, DiagnosticClassifier, DiagnosticCorrelation, DiagnosticCount,
@@ -209,8 +213,8 @@ pub struct DeliveryStats {
 }
 // SDK admission precedes producer factories, scratch arrays, and read buffers.
 // These limits are independent of the host's process-wide data-call permits.
-const MAX_SDK_CALLS: usize = abi::MAX_CALLS;
-const MAX_NESTED_ACTIVATIONS: usize = abi::MAX_SESSIONS;
+const MAX_SDK_CALLS: usize = bounds::MAX_CALLS;
+const MAX_NESTED_ACTIVATIONS: usize = bounds::MAX_SESSIONS;
 thread_local! {
     static ACTIVE_CALLS: RefCell<[usize; MAX_NESTED_ACTIVATIONS]> =
         const { RefCell::new([0; MAX_NESTED_ACTIVATIONS]) };
@@ -248,40 +252,44 @@ impl Drop for ReadGuard<'_> {
     }
 }
 
+#[derive(Clone)]
+struct DiagnosticRuntime {
+    transport: Arc<abi::DiagnosticsBox>,
+    diagnostic_state: Arc<SdkState>,
+}
+
 /// Cloneable activation-scoped diagnostic facade. It does not start a service.
 /// Clones share four concurrent-call slots and one in-flight read-buffer slot.
 /// Same-thread recursion into the same activation returns [`DiagnosticError::Busy`].
 #[derive(Clone)]
 pub struct Diagnostics {
-    runtime: PluginRuntime,
+    runtime: DiagnosticRuntime,
 }
 impl Diagnostics {
-    pub(crate) fn new(runtime: PluginRuntime) -> Self {
-        Self { runtime }
-    }
-    fn api(&self) -> Result<NativeDiagnosticsApiV1> {
-        let api = self
-            .runtime
-            .diagnostics_api
-            .ok_or(DiagnosticError::Unsupported)?;
-        if self.runtime.capability.is_null() {
-            return Err(DiagnosticError::Closed);
+    pub(crate) fn new(
+        transport: Arc<abi::DiagnosticsBox>,
+        diagnostic_state: Arc<SdkState>,
+    ) -> Self {
+        Self {
+            runtime: DiagnosticRuntime {
+                transport,
+                diagnostic_state,
+            },
         }
-        Ok(api)
     }
     /// Non-sensitive limits and the separately resolved read grant.
-    pub fn capabilities(&self) -> Result<abi::Capabilities> {
-        let api = self.api()?;
-        let mut result = abi::Capabilities::default();
-        let status = unsafe { (api.capabilities)(self.runtime.capability, &mut result) };
-        if status != 0 {
-            return Err(DiagnosticError::from_status(status));
-        }
-        if result.contract_version != abi::CONTRACT_VERSION
+    pub fn capabilities(&self) -> Result<abi::DiagnosticCapabilities> {
+        let result = self
+            .runtime
+            .transport
+            .capabilities()
+            .into_result()
+            .map_err(DiagnosticError::from_status)?;
+        if result.contract_version != bounds::CONTRACT_VERSION
             || result.availability > 2
             || result.can_read_context > 1
-            || result.max_codes as usize > abi::MAX_CODES
-            || result.max_request_bytes as usize > abi::MAX_REQUEST_BYTES
+            || result.max_codes as usize > bounds::MAX_CODES
+            || result.max_request_bytes as usize > bounds::MAX_REQUEST_BYTES
         {
             return Err(DiagnosticError::Unsupported);
         }
@@ -369,62 +377,80 @@ impl Diagnostics {
             increment(&self.runtime.diagnostic_state.dropped);
             return Err(DiagnosticError::Invalid);
         }
-        if declaration.codes.len() > abi::MAX_CODES {
+        if declaration.codes.len() > bounds::MAX_CODES {
             increment(&self.runtime.diagnostic_state.dropped);
             return Err(DiagnosticError::Capacity);
         }
-        let mut codes = [abi::Code::default(); abi::MAX_CODES];
-        let mut classes = [[Bytes::default(); abi::MAX_CLASSES]; abi::MAX_CODES];
+        let mut classes = [[RStr::from_str(""); bounds::MAX_CLASSES]; bounds::MAX_CODES];
         let mut bytes = declaration.name.len();
         for (index, definition) in declaration.codes.iter().enumerate() {
-            let output = &mut codes[index];
             match definition {
                 DiagnosticCode::Builtin(code) => {
-                    output.name = Bytes::text(code.canonical_name());
+                    bytes = bytes.saturating_add(code.canonical_name().len());
                 }
                 DiagnosticCode::Extension {
                     name,
                     description,
-                    outcome,
                     allowed_classes,
+                    ..
                 } => {
-                    if allowed_classes.len() > abi::MAX_CLASSES {
+                    if allowed_classes.len() > bounds::MAX_CLASSES {
                         increment(&self.runtime.diagnostic_state.dropped);
                         return Err(DiagnosticError::Capacity);
                     }
-                    output.kind = 1;
-                    output.outcome = outcome_tag(*outcome);
-                    output.name = Bytes::text(name);
-                    output.description = Bytes::text(description);
+                    bytes = bytes
+                        .saturating_add(name.len())
+                        .saturating_add(description.len());
                     for (slot, class) in classes[index].iter_mut().zip(*allowed_classes) {
-                        *slot = Bytes::text(class.as_str());
-                    }
-                    output.classes = classes[index].as_ptr();
-                    output.class_count = allowed_classes.len();
-                    for class in *allowed_classes {
+                        *slot = RStr::from_str(class.as_str());
                         bytes = bytes.saturating_add(class.as_str().len());
                     }
                 }
             }
-            bytes = bytes
-                .saturating_add(output.name.len)
-                .saturating_add(output.description.len);
         }
-        if bytes > abi::MAX_REQUEST_BYTES {
+        if bytes > bounds::MAX_REQUEST_BYTES {
             increment(&self.runtime.diagnostic_state.dropped);
             return Err(DiagnosticError::Capacity);
         }
-        let raw = abi::Registration {
-            name: Bytes::text(declaration.name),
-            codes: codes.as_ptr(),
-            code_count: declaration.codes.len(),
+        let codes: [abi::DiagnosticCode<'_>; bounds::MAX_CODES] =
+            std::array::from_fn(|index| match declaration.codes.get(index) {
+                Some(DiagnosticCode::Builtin(code)) => abi::DiagnosticCode {
+                    kind: 0,
+                    outcome: 0,
+                    name: RStr::from_str(code.canonical_name()),
+                    description: RStr::from_str(""),
+                    classes: RSlice::from_slice(&[]),
+                },
+                Some(DiagnosticCode::Extension {
+                    name,
+                    description,
+                    outcome,
+                    allowed_classes,
+                }) => abi::DiagnosticCode {
+                    kind: 1,
+                    outcome: outcome_tag(*outcome),
+                    name: RStr::from_str(name),
+                    description: RStr::from_str(description),
+                    classes: RSlice::from_slice(&classes[index][..allowed_classes.len()]),
+                },
+                None => abi::DiagnosticCode {
+                    kind: 0,
+                    outcome: 0,
+                    name: RStr::from_str(""),
+                    description: RStr::from_str(""),
+                    classes: RSlice::from_slice(&[]),
+                },
+            });
+        let registration = abi::DiagnosticRegistration {
+            name: RStr::from_str(declaration.name),
+            codes: RSlice::from_slice(&codes[..declaration.codes.len()]),
         };
-        let mut handle = 0;
-        let status = unsafe { (self.api()?.register)(self.runtime.capability, &raw, &mut handle) };
-        match status {
-            0 if handle != 0 => Ok(DiagnosticComponent::new(self.clone(), handle)),
-            1 => Ok(DiagnosticComponent::new(self.clone(), 0)),
-            _ => Err(self.returned(status)),
+        match self.runtime.transport.register(registration) {
+            RResult::ROk(handle) if handle != 0 => {
+                Ok(DiagnosticComponent::new(self.clone(), handle))
+            }
+            RResult::ROk(_) | RResult::RErr(1) => Ok(DiagnosticComponent::new(self.clone(), 0)),
+            RResult::RErr(status) => Err(self.returned(status)),
         }
     }
     /// Obtain a reader only when the host explicitly grants whole-context access.
@@ -447,12 +473,9 @@ impl ComponentInner {
         if self.handle == 0 || self.closed.swap(true, Ordering::AcqRel) {
             return Ok(());
         }
-        let api = self.diagnostics.api()?;
-        let status = unsafe { (api.close)(self.diagnostics.runtime.capability, self.handle) };
-        if status == 0 || status == 4 {
-            Ok(())
-        } else {
-            Err(DiagnosticError::from_status(status))
+        match self.diagnostics.runtime.transport.close(self.handle) {
+            RResult::ROk(()) | RResult::RErr(4) => Ok(()),
+            RResult::RErr(status) => Err(DiagnosticError::from_status(status)),
         }
     }
 }
@@ -502,12 +525,12 @@ impl DiagnosticComponent {
         ]
         .into_iter()
         .fold(0usize, usize::saturating_add)
-            > abi::MAX_REQUEST_BYTES
+            > bounds::MAX_REQUEST_BYTES
         {
             increment(&d.runtime.diagnostic_state.dropped);
             return Err(DiagnosticError::Capacity);
         }
-        let raw = abi::Observation {
+        let observation = abi::DiagnosticObservation {
             code: value.code,
             outcome: outcome_tag(value.outcome),
             severity: match value.severity {
@@ -518,17 +541,13 @@ impl DiagnosticComponent {
                 DiagnosticSeverity::Error => 4,
             },
             count: value.count.get(),
-            failure_class: Bytes::text(class),
-            detail: Bytes::text(value.detail),
-            request_id: Bytes::text(request),
-            session_id: Bytes::text(session),
+            failure_class: RStr::from_str(class),
+            detail: RStr::from_str(value.detail),
+            request_id: RStr::from_str(request),
+            session_id: RStr::from_str(session),
         };
-        let mut receipt = abi::Receipt::default();
-        let status = unsafe {
-            (d.api()?.record)(d.runtime.capability, self.inner.handle, &raw, &mut receipt)
-        };
-        match status {
-            0 => {
+        match d.runtime.transport.record(self.inner.handle, observation) {
+            RResult::ROk(receipt) => {
                 let evidence = match receipt.evidence {
                     0 => EvidenceDisposition::Retained,
                     1 => EvidenceDisposition::Truncated,
@@ -547,8 +566,8 @@ impl DiagnosticComponent {
                     }),
                 }))
             }
-            1 => Ok(RecordOutcome::Disabled),
-            _ => Err(d.returned(status)),
+            RResult::RErr(1) => Ok(RecordOutcome::Disabled),
+            RResult::RErr(status) => Err(d.returned(status)),
         }
     }
     /// Close explicitly; this never resets source totals or classifies recovery.
@@ -614,23 +633,17 @@ impl DiagnosticReader {
             .try_reserve_exact(caps.max_response_bytes)
             .map_err(|_| DiagnosticError::Read(DiagnosticReadReason::AllocationFailed))?;
         output.resize(caps.max_response_bytes, 0);
-        let mut written = 0;
-        let status = unsafe {
-            (d.api()?.read)(
-                d.runtime.capability,
+        let query = std::str::from_utf8(&encoded.bytes).map_err(|_| DiagnosticError::Internal)?;
+        let written = d
+            .runtime
+            .transport
+            .read(
                 kind,
-                Bytes {
-                    data: encoded.bytes.as_ptr(),
-                    len: encoded.bytes.len(),
-                },
-                output.as_mut_ptr(),
-                output.len(),
-                &mut written,
+                RStr::from_str(query),
+                RSliceMut::from_mut_slice(&mut output),
             )
-        };
-        if status != 0 {
-            return Err(DiagnosticError::from_status(status));
-        }
+            .into_result()
+            .map_err(DiagnosticError::from_status)?;
         if written > output.len() {
             return Err(DiagnosticError::Internal);
         }

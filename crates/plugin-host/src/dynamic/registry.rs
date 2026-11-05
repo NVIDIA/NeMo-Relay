@@ -326,16 +326,20 @@ fn validate_rust_dynamic_record(record: &DynamicPluginRecord) -> Result<()> {
         ));
     };
     validate_relay_compatibility(&compatibility.relay)?;
-    if compatibility.native_api.trim() != "1" {
-        return Err(PluginError::InvalidConfig(
-            "dynamic rust_dynamic record has invalid compatibility shape; expected native_api = \"1\""
-                .into(),
-        ));
+    if compatibility.native_api != "1" {
+        compatibility
+            .native_api
+            .parse::<nemo_relay_plugin::abi::NativeApiVersion>()
+            .map_err(|e| {
+                PluginError::InvalidConfig(format!(
+                    "dynamic rust_dynamic record has invalid compatibility shape: {e}"
+                ))
+            })?;
     }
     let valid_load = matches!(
         &record.load,
         super::DynamicPluginLoadContract::RustDynamic(load)
-            if !load.library.trim().is_empty() && !load.symbol.trim().is_empty()
+            if !load.library.trim().is_empty()
     );
     if valid_load {
         Ok(())

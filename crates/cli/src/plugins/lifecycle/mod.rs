@@ -2554,6 +2554,11 @@ fn validated_record_from_manifest(
     policy: &EvaluatedDynamicPluginHostPolicy,
     trust: &EvaluatedDynamicPluginTrust,
 ) -> Result<DynamicPluginRecord, CliError> {
+    let native_error = manifest
+        .compat
+        .native_api
+        .as_deref()
+        .and_then(|api| nemo_relay_plugin_host::dynamic::native_api_support(api).err());
     let environment = environment_state(&manifest, state_path, environment_ref.as_deref());
     let compatibility_error = manifest.validate().err();
     let mut record = manifest
@@ -2562,7 +2567,7 @@ fn validated_record_from_manifest(
     record.source.environment_ref = environment_ref;
     record.status.validation = DynamicPluginValidationStatus {
         manifest: DynamicPluginCheckState::Valid,
-        compatibility: if compatibility_error.is_some() {
+        compatibility: if compatibility_error.is_some() || native_error.is_some() {
             DynamicPluginCheckState::Invalid
         } else {
             DynamicPluginCheckState::Valid
@@ -2573,21 +2578,33 @@ fn validated_record_from_manifest(
         policy_satisfied: policy.check_state(),
         checked_at: None,
         message: Some(
-            compatibility_error
+            native_error
+                .as_ref()
+                .or(compatibility_error.as_ref())
                 .map_or_else(|| VALIDATION_MESSAGE.into(), |error| error.to_string()),
         ),
     };
     record.status.startup_class = Some(policy.startup_class);
     record.status.attestation_mode = Some(policy.attestation_mode);
-    record.status.last_error = policy
-        .last_error(&record.metadata.id)
-        .or_else(|| trust.last_error(&record.metadata.id))
+    record.status.last_error = native_error
+        .map(
+            |error| nemo_relay_plugin_host::dynamic::DynamicPluginFailure {
+                phase: nemo_relay_plugin_host::dynamic::DynamicPluginFailurePhase::Validation,
+                code: "native_api_unsupported".into(),
+                message: error.to_string(),
+            },
+        )
         .or_else(|| {
-            environment_last_error(
-                &record.metadata.id,
-                environment,
-                record.source.environment_ref.as_deref(),
-            )
+            policy
+                .last_error(&record.metadata.id)
+                .or_else(|| trust.last_error(&record.metadata.id))
+                .or_else(|| {
+                    environment_last_error(
+                        &record.metadata.id,
+                        environment,
+                        record.source.environment_ref.as_deref(),
+                    )
+                })
         });
     Ok(record)
 }

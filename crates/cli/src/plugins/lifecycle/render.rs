@@ -418,7 +418,6 @@ pub(super) fn inspect_load_data(record: &DynamicPluginRecord) -> Value {
         }),
         DynamicPluginLoadContract::RustDynamic(load) => serde_json::json!({
             "library": load.library,
-            "symbol": load.symbol,
         }),
     }
 }
@@ -432,6 +431,10 @@ pub(super) fn inspect_compat_data(record: &DynamicPluginRecord) -> Value {
         DynamicPluginCompatibility::RustDynamic(compatibility) => serde_json::json!({
             "relay": compatibility.relay,
             "native_api": compatibility.native_api,
+            "native_host_support": nemo_relay_plugin_host::dynamic::native_api_support(&compatibility.native_api).is_ok(),
+            "native_binary_compatibility": "not_checked",
+            "native_library_residency": "not_observed",
+            "native_component_state": "not_observed",
         }),
     }
 }

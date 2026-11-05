@@ -1216,7 +1216,7 @@ kind = "rust_dynamic"
 
 [compat]
 relay = ">=1.0.0,<2.0"
-native_api = "1"
+native_api = "v1.0"
 
 [defaults]
 enabled = false
@@ -1232,7 +1232,6 @@ sha256 = "{digest}"
 
 [load]
 library = "libfixture_native.so"
-symbol = "nemo_relay_fixture_native_plugin"
 "#,
             digest = digest,
         ),
@@ -1523,7 +1522,7 @@ kind = "rust_dynamic"
 
 [compat]
 relay = ">=1.0.0,<2.0"
-native_api = "1"
+native_api = "v1.0"
 
 [defaults]
 enabled = false
@@ -1539,7 +1538,6 @@ sha256 = "sha256:{digest}"
 
 [load]
 library = "../native-runtime/libfixture_native.so"
-symbol = "nemo_relay_fixture_native_plugin"
 "#,
         ),
     )

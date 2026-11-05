@@ -1,0 +1,740 @@
+// SPDX-FileCopyrightText: Copyright (c) 2026, NVIDIA CORPORATION & AFFILIATES. All rights reserved.
+// SPDX-License-Identifier: Apache-2.0
+
+//! Exercise foreign stream cleanup without changing managed stream close-result caching.
+use super::*;
+use crate::dynamic::native_library::{CheckedNativeLibrary, NativeLibraryArtifact};
+use std::path::PathBuf;
+use std::sync::atomic::AtomicUsize;
+
+#[tokio::test]
+async fn shutdown_drains_synchronous_runtime_calls_before_collecting_scopes() {
+    let owner = HostRuntime::new("checked-runtime-admission".into()).unwrap();
+    let stack = create_scope_stack();
+    let blocked_stack = stack.clone();
+    let (locked, ready) = tokio::sync::oneshot::channel();
+    let (release, wait) = std::sync::mpsc::channel();
+    let blocker = std::thread::spawn(move || {
+        let _lock = blocked_stack.write().unwrap();
+        locked.send(()).unwrap();
+        wait.recv().unwrap();
+    });
+    ready.await.unwrap();
+    let worker_stack = stack.clone();
+    let runtime = nemo_relay_plugin::PluginRuntime::from_abi(owner.runtime_box());
+    let worker = std::thread::spawn(move || {
+        with_scope_stack(worker_stack, || {
+            runtime
+                .push_scope(
+                    "admitted-runtime-scope",
+                    ScopeType::Custom,
+                    None,
+                    None,
+                    None,
+                )
+                .map(|_| ())
+        })
+    });
+    let admitted = tokio::time::timeout(std::time::Duration::from_secs(2), async {
+        while owner.executor.active_tasks() == 0 {
+            tokio::task::yield_now().await;
+        }
+    })
+    .await;
+    let shutdown = owner.shutdown();
+    tokio::pin!(shutdown);
+    let pending = futures_util::poll!(&mut shutdown).is_pending();
+    let stale = owner
+        .runtime_box()
+        .call_sync("stack.create".into(), abi::Json::Null);
+    release.send(()).unwrap();
+    blocker.join().unwrap();
+    if let Err(error) = worker.join().unwrap() {
+        assert!(error.contains("revoked"), "{error}");
+    }
+    shutdown.await.unwrap();
+
+    assert!(admitted.is_ok(), "foreign runtime calls must be tracked");
+    assert!(pending, "shutdown must wait for admitted runtime calls");
+    assert!(stale.is_err(), "revoked runtime calls must be rejected");
+    assert!(owner.executor.is_closed());
+    assert!(owner.state.lock().unwrap().scopes.is_empty());
+    with_scope_stack(stack, || {
+        assert_eq!(
+            current_scope_stack_snapshot()
+                .unwrap()
+                .unwrap()
+                .scopes
+                .len(),
+            1
+        );
+    });
+}
+
+struct CaptureRuntime {
+    base: a::RuntimeBox,
+    callbacks: Arc<Mutex<Vec<a::Registration>>>,
+    component: Arc<Mutex<Option<a::ComponentBox>>>,
+}
+impl a::Runtime for CaptureRuntime {
+    fn call_sync(&self, op: RString, args: abi::Json) -> a::Result<abi::Json> {
+        self.base.call_sync(op, args)
+    }
+    fn call(&self, op: RString, args: abi::Json) -> FfiFuture<a::Result<abi::Json>> {
+        self.base.call(op, args)
+    }
+    fn diagnostics(&self) -> abi::diagnostics::DiagnosticsBox {
+        self.base.diagnostics()
+    }
+    fn capture_scope(&self) -> a::Result<a::ScopeBox> {
+        self.base.capture_scope()
+    }
+    fn bind_component(&self, component: a::ComponentBox) -> a::Result<()> {
+        *self.component.lock().unwrap() = Some(component);
+        a::Result::ROk(())
+    }
+    fn register_callback(&self, registration: a::Registration) -> a::Result<()> {
+        self.callbacks.lock().unwrap().push(registration);
+        a::Result::ROk(())
+    }
+    fn register_gate(&self, registration: a::Registration) -> a::Result<RString> {
+        self.base.register_gate(registration)
+    }
+}
+struct Source {
+    calls: Arc<AtomicUsize>,
+    dropped: Arc<AtomicBool>,
+    polled: Arc<AtomicBool>,
+    pending: bool,
+    fail_once: bool,
+}
+impl Stream for Source {
+    type Item = Result<Json>;
+    fn poll_next(self: Pin<&mut Self>, _: &mut Context<'_>) -> Poll<Option<Self::Item>> {
+        self.polled.store(true, Ordering::SeqCst);
+        if self.pending {
+            Poll::Pending
+        } else {
+            Poll::Ready(Some(Ok(json!({"token":"checked"}))))
+        }
+    }
+}
+impl LlmStreamInner for Source {
+    fn close(self: Pin<&mut Self>) -> Pin<Box<dyn Future<Output = Result<()>> + Send + '_>> {
+        let calls = self.calls.clone();
+        let fail = self.fail_once;
+        Box::pin(async move {
+            if calls.fetch_add(1, Ordering::SeqCst) == 0 && fail {
+                Err(err("checked downstream close failure"))
+            } else {
+                Ok(())
+            }
+        })
+    }
+}
+impl Drop for Source {
+    fn drop(&mut self) {
+        self.dropped.store(true, Ordering::SeqCst);
+    }
+}
+fn library() -> CheckedNativeLibrary {
+    let path = std::env::var_os("NEMO_RELAY_TEST_NATIVE_PLUGIN")
+        .map(PathBuf::from)
+        .unwrap_or_else(|| {
+            PathBuf::from(env!("CARGO_MANIFEST_DIR"))
+                .join("../../target/test-plugin-fixtures/debug")
+                .join(format!(
+                    "{}nemo_relay_plugin_fixture{}",
+                    std::env::consts::DLL_PREFIX,
+                    std::env::consts::DLL_SUFFIX
+                ))
+        });
+    let file = PathBuf::from(path.file_name().unwrap());
+    let bytes = std::fs::read(path).expect("run just build-test-plugin-fixtures");
+    CheckedNativeLibrary::load(
+        NativeLibraryArtifact::new(file.clone(), [(file, bytes)]).unwrap(),
+        "v1.0",
+        "fixture_native",
+    )
+    .unwrap()
+}
+
+#[tokio::test]
+async fn stream_cleanup_retries_errors_and_cancels_a_live_pull() {
+    // OS image validation is setup, outside the asynchronous cleanup deadline.
+    let library = library();
+    tokio::time::timeout(std::time::Duration::from_secs(15), async {
+        for (pending, raw) in [(false, false), (true, false), (false, true), (true, true)] {
+            let owner = HostRuntime::new("checked-stream-test".into()).unwrap();
+            let callbacks = Arc::new(Mutex::new(Vec::new()));
+            let bound = Arc::new(Mutex::new(None));
+            let runtime = a::Runtime_TO::from_value(
+                CaptureRuntime {
+                    base: owner.runtime_box(),
+                    callbacks: callbacks.clone(),
+                    component: bound.clone(),
+                },
+                TD_Opaque,
+            );
+            let registered = library
+                .create_plugin()
+                .unwrap()
+                .register(
+                    into_abi(json!({"stream_only_fixture":!raw, "raw_stream_only_fixture":raw})),
+                    runtime,
+                )
+                .await
+                .into_result()
+                .unwrap();
+            assert!(registered.error.is_none());
+            let descriptor = callbacks.lock().unwrap().pop().unwrap();
+            let callback = descriptor.callback;
+            let calls = Arc::new(AtomicUsize::new(0));
+            let dropped = Arc::new(AtomicBool::new(false));
+            let polled = Arc::new(AtomicBool::new(false));
+            let source_calls = calls.clone();
+            let source_dropped = dropped.clone();
+            let source_polled = polled.clone();
+            let next: LlmStreamExecutionNextFn = Arc::new(move |_| {
+                let calls = source_calls.clone();
+                let dropped = source_dropped.clone();
+                let polled = source_polled.clone();
+                Box::pin(async move {
+                    Ok(LlmJsonStream::from_closeable(Source {
+                        calls,
+                        dropped,
+                        polled,
+                        pending,
+                        fail_once: !pending,
+                    }))
+                })
+            });
+            if raw {
+                let (lease, _guard) = MiddlewareContinuationLease::capture();
+                let continuation = a::Continuation_TO::from_value(
+                    Continuation {
+                        downstream: Default::default(),
+                        next: Arc::new(Next::Stream(next.clone())),
+                        lease,
+                        owner: owner.clone(),
+                    },
+                    TD_Opaque,
+                );
+                let (i, _life) = invocation(
+                    &owner,
+                    a::Surface::LlmStreamExecutionIntercept,
+                    "raw-stream-panic".into(),
+                    abi::Json::Null,
+                    None,
+                    None,
+                    None,
+                );
+                let error = callback
+                    .open_stream(i, continuation)
+                    .await
+                    .err()
+                    .expect("raw stream panic must become an error");
+                assert!(
+                    error
+                        .message
+                        .contains("synchronous stream callback panicked")
+                );
+            }
+            let (lease, _guard) = MiddlewareContinuationLease::capture();
+            let next = a::Continuation_TO::from_value(
+                Continuation {
+                    downstream: Default::default(),
+                    next: Arc::new(Next::Stream(next)),
+                    lease,
+                    owner: owner.clone(),
+                },
+                TD_Opaque,
+            );
+            let (i, _life) = invocation(
+                &owner,
+                a::Surface::LlmStreamExecutionIntercept,
+                "checked-stream".into(),
+                encode(nemo_relay_types::api::llm::LlmRequest {
+                    headers: Default::default(),
+                    content: json!({}),
+                })
+                .unwrap(),
+                None,
+                None,
+                None,
+            );
+            let mut stream = callback.open_stream(i, next).await.into_result().unwrap();
+            let pulling = stream.pull();
+            if pending {
+                while !polled.load(Ordering::SeqCst) {
+                    tokio::task::yield_now().await;
+                }
+                stream.close().await.into_result().unwrap();
+                assert!(
+                    pulling.await.is_err(),
+                    "close must cancel a pull even when its waiter is retained"
+                );
+                assert_eq!(calls.load(Ordering::SeqCst), 1);
+            } else {
+                assert!(pulling.await.into_result().unwrap().is_some());
+                let error = stream.close().await.into_result().unwrap_err();
+                assert!(error.message.contains("checked downstream close failure"));
+                assert!(!dropped.load(Ordering::SeqCst));
+                stream.close().await.into_result().unwrap();
+                assert_eq!(calls.load(Ordering::SeqCst), 2);
+            }
+            assert!(dropped.load(Ordering::SeqCst));
+            drop(callback);
+            let bound = bound.lock().unwrap().take().unwrap();
+            let (first, second) = tokio::join!(registered.component.shutdown(), bound.shutdown());
+            first.into_result().unwrap();
+            second.into_result().unwrap();
+            stream.close().await.into_result().unwrap();
+            owner.shutdown().await.unwrap();
+        }
+    })
+    .await
+    .expect("stream close must drain its own pending polls");
+}
+
+#[tokio::test]
+async fn callback_observations_exclude_propagated_downstream_errors_and_revocation() {
+    use nemo_relay_diagnostics::{
+        DiagnosticQuery, Diagnostics, DiagnosticsSettings, SourceIdentity,
+    };
+    let context = Diagnostics::from_settings(
+        SourceIdentity {
+            instance_id: Uuid::now_v7(),
+            process_id: None,
+            process_role: "test".into(),
+            relay_version: "test".into(),
+        },
+        DiagnosticsSettings {
+            enabled: true,
+            ..Default::default()
+        },
+    )
+    .unwrap();
+    let owner = HostRuntime::with_diagnostics(
+        "checked-observation".into(),
+        context.clone(),
+        false,
+        "test.plugin".into(),
+    )
+    .unwrap();
+    *owner.observer.lock().unwrap() = super::super::diagnostics::PluginDiagnostics::new(
+        &context,
+        "test.plugin",
+        nemo_relay_diagnostics::PluginExecution::NativeAbi,
+        Uuid::now_v7(),
+    );
+    let downstream = DownstreamErrors::default();
+    let failure: a::Result<()> = downstream_boundary(Err(err("downstream failure")), &downstream);
+    assert!(owner.callback_result(failure, &downstream).is_err());
+    assert!(
+        owner
+            .callback_result::<()>(
+                a::Result::RErr(a::Error::new("plugin", "author callback failed")),
+                &downstream
+            )
+            .is_err()
+    );
+    let scope = owner.scope();
+    let called = Arc::new(AtomicBool::new(false));
+    let seen = called.clone();
+    let (lease, _guard) = MiddlewareContinuationLease::capture();
+    let next = Continuation {
+        next: Arc::new(Next::Tool(Arc::new(move |_| {
+            seen.store(true, Ordering::Release);
+            Box::pin(async {
+                Ok(nemo_relay_types::api::tool::ToolExecutionResult::new(
+                    Json::Null,
+                ))
+            })
+        }))),
+        lease,
+        downstream: Default::default(),
+        owner: owner.clone(),
+    };
+    owner.revoke().unwrap();
+    assert!(scope.enter().is_err());
+    assert!(
+        a::Continuation::call_tool(&next, abi::Json::Null)
+            .await
+            .is_err()
+    );
+    assert!(!called.load(Ordering::Acquire));
+    assert!(
+        owner
+            .callback_result::<()>(
+                a::Result::RErr(a::Error::new("revoked", "stale callback")),
+                &downstream
+            )
+            .is_err()
+    );
+    let snapshot = context
+        .snapshot(&DiagnosticQuery::default())
+        .unwrap()
+        .to_snapshot()
+        .unwrap();
+    assert_eq!(snapshot.lifetime.totals.failures_total.value.get(), 1);
+    owner.shutdown().await.unwrap();
+}
+
+#[test]
+fn checked_errors_preserve_typed_http_status_without_a_json_envelope() {
+    let mut error = a::Error::new("http", "upstream response");
+    error.http_status = ROption::RSome(429);
+    let error = local::<()>(a::Result::RErr(error)).unwrap_err();
+    let FlowError::Upstream(failure) = error else {
+        panic!("expected typed HTTP failure");
+    };
+    assert_eq!(failure.status, Some(429));
+    assert_eq!(failure.body, "upstream response");
+}
+
+#[tokio::test]
+async fn codec_capabilities_are_revoked_when_the_component_shuts_down() {
+    struct Dummy;
+    impl nemo_relay_types::codec::traits::LlmCodec for Dummy {
+        fn decode(
+            &self,
+            _: &nemo_relay_types::api::llm::LlmRequest,
+        ) -> Result<nemo_relay_types::codec::request::AnnotatedLlmRequest> {
+            Ok(Default::default())
+        }
+        fn encode(
+            &self,
+            _: &nemo_relay_types::codec::request::AnnotatedLlmRequest,
+            original: &nemo_relay_types::api::llm::LlmRequest,
+        ) -> Result<nemo_relay_types::api::llm::LlmRequest> {
+            Ok(original.clone())
+        }
+    }
+    let owner = HostRuntime::new("codec-review".into()).unwrap();
+    let (invocation, _lifetime) = invocation(
+        &owner,
+        a::Surface::LlmSanitizeRequest,
+        "review".into(),
+        abi::Json::Null,
+        None,
+        Some(LlmRequestContext::for_request_codec(Some(Arc::new(Dummy)))),
+        None,
+    );
+    let codec = invocation.context.request_codec.into_option().unwrap();
+    owner.shutdown().await.unwrap();
+    let result = codec.decode(
+        encode(nemo_relay_types::api::llm::LlmRequest {
+            headers: Default::default(),
+            content: json!({}),
+        })
+        .unwrap(),
+    );
+    assert!(
+        result.is_err(),
+        "codec still executes after successful component shutdown"
+    );
+}
+
+#[tokio::test]
+async fn revoked_scope_cleanup_retains_ownership_until_the_stack_can_unwind() {
+    let owner = HostRuntime::new("checked-scope-cleanup".into()).unwrap();
+    let runtime = nemo_relay_plugin::PluginRuntime::from_abi(owner.runtime_box());
+    TASK_SCOPE_STACK
+        .scope(create_scope_stack(), async {
+            let outer = runtime
+                .push_scope("native-outer", ScopeType::Custom, None, None, None)
+                .unwrap();
+            let inner = runtime
+                .push_scope("native-inner", ScopeType::Custom, None, None, None)
+                .unwrap();
+            let blocker = push_scope(
+                PushScopeParams::builder()
+                    .name("caller-owned")
+                    .scope_type(ScopeType::Custom)
+                    .build(),
+            )
+            .unwrap();
+            owner.revoke().unwrap();
+            assert!(runtime.pop_scope(&inner, None, None).is_err());
+            assert!(
+                owner.shutdown().await.is_err(),
+                "caller scope blocks cleanup"
+            );
+            assert_eq!(owner.state.lock().unwrap().scopes.len(), 2);
+            assert!(!owner.executor.is_closed());
+            pop_scope(PopScopeParams::builder().handle_uuid(&blocker.uuid).build()).unwrap();
+            owner.shutdown().await.unwrap();
+            assert!(owner.state.lock().unwrap().scopes.is_empty());
+            assert!(owner.executor.is_closed());
+            assert_eq!(
+                current_scope_stack_snapshot()
+                    .unwrap()
+                    .unwrap()
+                    .scopes
+                    .len(),
+                1
+            );
+            assert!(
+                runtime.pop_scope(&outer, None, None).is_err(),
+                "retained handles stay revoked"
+            );
+        })
+        .await;
+}
+
+struct InlineCallback {
+    entered: Mutex<Option<tokio::sync::oneshot::Sender<()>>>,
+    release: Mutex<std::sync::mpsc::Receiver<()>>,
+}
+impl a::Callback for InlineCallback {
+    fn invoke_sync(&self, _: a::Invocation) -> a::Result<abi::Json> {
+        self.entered
+            .lock()
+            .unwrap()
+            .take()
+            .unwrap()
+            .send(())
+            .unwrap();
+        self.release.lock().unwrap().recv().unwrap();
+        a::Result::ROk(abi::Json::Null)
+    }
+    fn invoke(
+        &self,
+        _: a::Invocation,
+        _: ROption<a::ContinuationBox>,
+    ) -> FfiFuture<a::Result<abi::Json>> {
+        async { a::Result::RErr(a::Error::new("test", "callback is synchronous")) }.into_ffi()
+    }
+    fn invoke_tool(
+        &self,
+        _: a::Invocation,
+        _: a::ContinuationBox,
+    ) -> FfiFuture<a::Result<a::ToolExecutionOutcome>> {
+        async { a::Result::RErr(a::Error::new("test", "callback is synchronous")) }.into_ffi()
+    }
+    fn open_stream(
+        &self,
+        _: a::Invocation,
+        _: a::ContinuationBox,
+    ) -> FfiFuture<a::Result<a::StreamBox>> {
+        async { a::Result::RErr(a::Error::new("test", "callback is synchronous")) }.into_ffi()
+    }
+}
+struct ShutdownProbe(Arc<AtomicBool>);
+impl a::Component for ShutdownProbe {
+    fn shutdown(&self) -> FfiFuture<a::Result<()>> {
+        self.0.store(true, Ordering::Release);
+        async { a::Result::ROk(()) }.into_ffi()
+    }
+}
+
+#[tokio::test]
+async fn component_close_retains_ownership_until_a_raw_inline_subscriber_leaves() {
+    let runtime = HostRuntime::new("inline-close".into()).unwrap();
+    let shut_down = Arc::new(AtomicBool::new(false));
+    *runtime.component.lock().unwrap() = Some(a::Component_TO::from_value(
+        ShutdownProbe(shut_down.clone()),
+        TD_Opaque,
+    ));
+    let component = ComponentOwner {
+        component: runtime.component.clone(),
+        runtime: runtime.clone(),
+    };
+    let (entered, ready) = tokio::sync::oneshot::channel();
+    let (release, wait) = std::sync::mpsc::channel();
+    let owned = runtime
+        .own_callback(a::Callback_TO::from_value(
+            InlineCallback {
+                entered: Mutex::new(Some(entered)),
+                release: Mutex::new(wait),
+            },
+            TD_Opaque,
+        ))
+        .unwrap();
+    let callback = subscriber_callback(owned.clone(), runtime.clone());
+    let thread = std::thread::spawn(move || {
+        callback(&nemo_relay_types::api::event::Event::Mark(
+            nemo_relay_types::api::event::MarkEvent::builder().build(),
+        ));
+    });
+    ready.await.unwrap();
+    let first = component.close();
+    let retained = runtime.component.lock().unwrap().is_some();
+    let prematurely_stopped = shut_down.load(Ordering::Acquire);
+    let retained_callback = owned.value.lock().unwrap().is_some();
+    release.send(()).unwrap();
+    thread.join().unwrap();
+    component.close().unwrap();
+    assert!(first.unwrap_err().to_string().contains("close retry"));
+    assert!(retained, "failed close must retain the component");
+    assert!(
+        retained_callback,
+        "failed close must retain admitted callback state"
+    );
+    assert!(owned.value.lock().unwrap().is_none());
+    assert!(
+        !prematurely_stopped,
+        "component resources must outlive admitted callbacks"
+    );
+    assert!(shut_down.load(Ordering::Acquire));
+    assert!(runtime.executor.is_closed());
+}
+
+struct CallbackStateProbe {
+    dropped: Arc<AtomicBool>,
+    invoked: Arc<AtomicBool>,
+    _runtime: Arc<HostRuntime>,
+}
+impl Drop for CallbackStateProbe {
+    fn drop(&mut self) {
+        self.dropped.store(true, Ordering::Release);
+    }
+}
+impl a::Callback for CallbackStateProbe {
+    fn invoke_sync(&self, _: a::Invocation) -> a::Result<abi::Json> {
+        self.invoked.store(true, Ordering::Release);
+        a::Result::ROk(abi::Json::Null)
+    }
+    fn invoke(
+        &self,
+        _: a::Invocation,
+        _: ROption<a::ContinuationBox>,
+    ) -> FfiFuture<a::Result<abi::Json>> {
+        self.invoked.store(true, Ordering::Release);
+        async { a::Result::RErr(a::Error::new("test", "sync callback")) }.into_ffi()
+    }
+    fn invoke_tool(
+        &self,
+        _: a::Invocation,
+        _: a::ContinuationBox,
+    ) -> FfiFuture<a::Result<a::ToolExecutionOutcome>> {
+        self.invoked.store(true, Ordering::Release);
+        async { a::Result::RErr(a::Error::new("test", "sync callback")) }.into_ffi()
+    }
+    fn open_stream(
+        &self,
+        _: a::Invocation,
+        _: a::ContinuationBox,
+    ) -> FfiFuture<a::Result<a::StreamBox>> {
+        self.invoked.store(true, Ordering::Release);
+        async { a::Result::RErr(a::Error::new("test", "sync callback")) }.into_ffi()
+    }
+}
+#[tokio::test]
+async fn close_releases_queued_native_callback_state_without_waiting_for_dispatch() {
+    use nemo_relay_runtime::api::subscriber::{
+        deregister_subscriber, flush_subscribers, register_subscriber,
+    };
+    let (entered, ready) = tokio::sync::oneshot::channel();
+    let entered = Mutex::new(Some(entered));
+    let (release, wait) = std::sync::mpsc::channel();
+    let wait = Mutex::new(wait);
+    register_subscriber(
+        "review-queue-blocker",
+        Arc::new(move |event| {
+            if event.name() == "review-block" {
+                entered.lock().unwrap().take().unwrap().send(()).unwrap();
+                wait.lock().unwrap().recv().unwrap();
+            }
+        }),
+    )
+    .unwrap();
+    event(EmitMarkEventParams::builder().name("review-block").build()).unwrap();
+    tokio::time::timeout(std::time::Duration::from_secs(5), ready)
+        .await
+        .unwrap()
+        .unwrap();
+    let runtime = HostRuntime::new("review-queued".into()).unwrap();
+    let dropped = Arc::new(AtomicBool::new(false));
+    let invoked = Arc::new(AtomicBool::new(false));
+    let mut context = crate::HostPluginRegistrationContext::new();
+    apply_registration(
+        &mut context,
+        a::Registration {
+            name: "review-native-queued".into(),
+            surface: a::Surface::Subscriber,
+            priority: 0,
+            break_chain: false,
+            options: abi::Json::Null,
+            callback: a::Callback_TO::from_value(
+                CallbackStateProbe {
+                    dropped: dropped.clone(),
+                    invoked: invoked.clone(),
+                    _runtime: runtime.clone(),
+                },
+                TD_Opaque,
+            ),
+        },
+        runtime.clone(),
+    )
+    .unwrap();
+    event(
+        EmitMarkEventParams::builder()
+            .name("review-queued-event")
+            .build(),
+    )
+    .unwrap();
+    let mut registrations = context.into_registrations();
+    let rollback = crate::rollback_registrations(&mut registrations);
+    let close = ComponentOwner {
+        component: runtime.component.clone(),
+        runtime: runtime.clone(),
+    }
+    .close();
+    let dropped_at_close = dropped.load(Ordering::Acquire);
+    release.send(()).unwrap();
+    flush_subscribers().unwrap();
+    deregister_subscriber("review-queue-blocker").unwrap();
+    assert!(rollback.callbacks_cleared());
+    close.unwrap();
+    assert!(!invoked.load(Ordering::Acquire));
+    assert!(dropped.load(Ordering::Acquire));
+    assert!(
+        dropped_at_close,
+        "successful component close must release owned native callback state"
+    );
+}
+
+#[tokio::test]
+async fn retained_middleware_and_gate_proxies_release_foreign_state_on_shutdown() {
+    let owner = HostRuntime::new("retained-proxies".into()).unwrap();
+    let dropped = Arc::new(AtomicBool::new(false));
+    let invoked = Arc::new(AtomicBool::new(false));
+    let callback = owner
+        .own_callback(a::Callback_TO::from_value(
+            CallbackStateProbe {
+                dropped: dropped.clone(),
+                invoked: invoked.clone(),
+                _runtime: owner.clone(),
+            },
+            TD_Opaque,
+        ))
+        .unwrap();
+    let gate = gate_callback(callback.clone(), owner.clone());
+    let middleware = unary::<Json>(
+        owner.clone(),
+        callback,
+        Call {
+            surface: a::Surface::ToolRequestIntercept,
+            name: "retained".into(),
+            value: abi::Json::Null,
+            id: None,
+            request: None,
+            response: None,
+            next: None,
+        },
+    );
+    owner.shutdown().await.unwrap();
+    assert!(
+        dropped.load(Ordering::Acquire),
+        "unpolled middleware must not retain foreign state"
+    );
+    assert!(owner.state.lock().unwrap().callbacks.is_empty());
+    assert_eq!(gate(&BTreeSet::new(), "retained"), None);
+    assert!(middleware.await.is_err());
+    assert!(
+        !invoked.load(Ordering::Acquire),
+        "stale proxies cannot call foreign code"
+    );
+}

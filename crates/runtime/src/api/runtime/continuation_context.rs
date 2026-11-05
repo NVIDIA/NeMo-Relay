@@ -15,15 +15,12 @@ use crate::api::runtime::scope_stack::{
     with_anchored_active_event,
 };
 use crate::api::runtime::scope_stack::{
-    install_thread_continuation_context, restore_thread_scope_stack, with_scope_stack,
+    install_thread_continuation_context, restore_thread_scope_stack,
 };
 use crate::api::runtime::subscriber_dispatcher::{
     PublicationBuffer, PublicationContext, capture_nested_publication_buffer,
     capture_publication_context, with_task_nested_publication_buffer,
     with_task_publication_context,
-};
-use crate::api::runtime::subscriber_dispatcher::{
-    with_nested_publication_buffer, with_publication_context,
 };
 use crate::error::{FlowError, Result};
 
@@ -92,29 +89,64 @@ impl MiddlewareContinuationContext {
         self.scope_stack.clone()
     }
 
-    /// Run a synchronous operation with this continuation installed.
-    pub fn run_sync<T>(&self, callback: impl FnOnce() -> T) -> T {
-        struct RestoreThreadContext(Option<crate::api::runtime::ThreadScopeStackBinding>);
+    /// Install this context on a foreign executor thread until the lease drops.
+    /// The lease must be restored on the same thread, before returning Pending.
+    #[doc(hidden)]
+    pub fn enter_thread(&self) -> impl Drop + use<> {
+        self.enter_thread_binding(true)
+    }
 
-        impl Drop for RestoreThreadContext {
+    /// Restore the actual implicit stack without promoting it to an explicit binding.
+    #[doc(hidden)]
+    pub fn enter_thread_binding(&self, explicit: bool) -> impl Drop + use<> {
+        struct Lease {
+            previous: Option<crate::api::runtime::ThreadScopeStackBinding>,
+            previous_override: Option<ScopeStackHandle>,
+            _publication: crate::api::runtime::subscriber_dispatcher::ThreadPublicationContextGuard,
+            _buffer: Box<dyn std::any::Any>,
+            _thread: std::marker::PhantomData<std::rc::Rc<()>>,
+        }
+        impl Drop for Lease {
             fn drop(&mut self) {
-                if let Some(previous) = self.0.take() {
+                if let Some(previous) = self.previous.take() {
                     restore_thread_scope_stack(previous);
                 }
+                crate::api::runtime::scope_stack::restore_scope_stack_override(
+                    self.previous_override.take(),
+                );
             }
         }
+        Lease {
+            previous_override: {
+                let previous = crate::api::runtime::scope_stack::current_scope_stack_override();
+                crate::api::runtime::scope_stack::restore_scope_stack_override(
+                    explicit.then(|| self.scope_stack.clone()),
+                );
+                previous
+            },
+            previous: Some(install_thread_continuation_context(
+                &self.scope_stack,
+                self.active_event.clone(),
+                self.active_event_trace_context.clone(),
+                explicit,
+            )),
+            _publication:
+                crate::api::runtime::subscriber_dispatcher::enter_thread_publication_context(
+                    self.publication_context.clone(),
+                ),
+            _buffer: Box::new(
+                crate::api::runtime::subscriber_dispatcher::enter_thread_publication_buffer(
+                    self.publication_buffer.clone(),
+                ),
+            ),
+            _thread: std::marker::PhantomData,
+        }
+    }
 
-        let previous = install_thread_continuation_context(
-            &self.scope_stack,
-            self.active_event.clone(),
-            self.active_event_trace_context.clone(),
-        );
-        let _restore = RestoreThreadContext(Some(previous));
-        with_publication_context(self.publication_context.clone(), || {
-            with_nested_publication_buffer(self.publication_buffer.clone(), || {
-                with_scope_stack(self.scope_stack.clone(), callback)
-            })
-        })
+    /// Run a synchronous operation with this continuation installed.
+    pub fn run_sync<T>(&self, callback: impl FnOnce() -> T) -> T {
+        let _lease = self.enter_thread();
+        callback()
     }
 
     /// Clone this context with the scope selection visible to a continuation call.
