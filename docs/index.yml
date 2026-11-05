@@ -83,13 +83,45 @@ navigation:
     title: "NVIDIA NeMo Relay CLI"
     slug: nemo-relay-cli
     title-source: frontmatter
-  - folder: ./daemon
-    title: "Daemon"
+  - section: "Daemon"
     slug: daemon
-    title-source: frontmatter
-  - api: "Daemon HTTP API"
-    api-name: daemon
-    slug: daemon-api
+    contents:
+      - page: "About"
+        path: ./daemon/about.mdx
+        slug: about
+      - page: "Architecture and Startup"
+        path: ./daemon/architecture.mdx
+        slug: architecture
+      - page: "Configuration and Managed Clients"
+        path: ./daemon/configuration.mdx
+        slug: configuration
+      - page: "Windows Deployment"
+        path: ./daemon/windows.mdx
+        slug: windows
+      - page: "macOS Deployment"
+        path: ./daemon/macos.mdx
+        slug: macos
+      - page: "Linux Deployment"
+        path: ./daemon/linux.mdx
+        slug: linux
+      - page: "Remote Linux: Deploy the Daemon"
+        path: ./daemon/remote-server.mdx
+        slug: remote-server
+      - page: "Remote Linux: Deploy Clients"
+        path: ./daemon/remote-clients.mdx
+        slug: remote-clients
+      - page: "Operations and Troubleshooting"
+        path: ./daemon/operations.mdx
+        slug: operations
+      - page: "Reference"
+        path: ./daemon/reference.mdx
+        slug: reference
+      - page: "Kubernetes Deployment Guidance"
+        path: ./daemon/kubernetes.mdx
+        slug: kubernetes
+      - api: "HTTP API"
+        api-name: daemon
+        slug: api
   - folder: ./supported-integrations
     title: "Supported Integrations"
     slug: supported-integrations
