@@ -56,14 +56,25 @@ def _normalize_object(value: object) -> JsonObject:
 
 
 @dataclass(slots=True)
+class CacheWriteRate:
+    """Prompt cache write price for a duration in seconds, or the default with none."""
+
+    per_million: float
+    duration: int | None = None
+
+    def to_dict(self) -> JsonObject:
+        """Serialize this rate to the canonical JSON object shape."""
+        return _normalize_object({"duration": self.duration, "per_million": self.per_million})
+
+
+@dataclass(slots=True)
 class TokenPricingRates:
     """Per-token model rates expressed per one million tokens."""
 
     input_per_million: float
     output_per_million: float
     cache_read_per_million: float | None = None
-    cache_write_per_million: float | None = None
-    cache_write_1h_per_million: float | None = None
+    cache_write_rates: list[CacheWriteRate] = field(default_factory=list)
 
     def to_dict(self) -> JsonObject:
         """Serialize these rates to the canonical JSON object shape."""
@@ -72,8 +83,7 @@ class TokenPricingRates:
                 "input_per_million": self.input_per_million,
                 "output_per_million": self.output_per_million,
                 "cache_read_per_million": self.cache_read_per_million,
-                "cache_write_per_million": self.cache_write_per_million,
-                "cache_write_1h_per_million": self.cache_write_1h_per_million,
+                "cache_write_rates": self.cache_write_rates or None,
             }
         )
 
@@ -266,6 +276,7 @@ __all__ = [
     "PromptTokenThresholdRateSchedule",
     "PricingCatalog",
     "PricingConfig",
+    "CacheWriteRate",
     "TokenPricingRates",
     "TokenRateTier",
     "validate_config",

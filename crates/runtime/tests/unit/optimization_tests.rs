@@ -28,8 +28,8 @@ fn resolver_with_rates(baseline_input: f64, effective_input: f64) -> PricingReso
         &json!({
             "version": 1,
             "entries": [
-                {"provider":"test","model_id":"baseline","pricing_as_of":"2026-07-08","pricing_source":"test-snapshot","rates":{"input_per_million":baseline_input,"output_per_million":4.0,"cache_read_per_million":0.5,"cache_write_per_million":3.0},"prompt_cache":{"read_accounting":"included_in_prompt_tokens"}},
-                {"provider":"test","model_id":"effective","pricing_as_of":"2026-07-08","pricing_source":"test-snapshot","rates":{"input_per_million":effective_input,"output_per_million":2.0,"cache_read_per_million":0.25,"cache_write_per_million":2.0},"prompt_cache":{"read_accounting":"included_in_prompt_tokens"}}
+                {"provider":"test","model_id":"baseline","pricing_as_of":"2026-07-08","pricing_source":"test-snapshot","rates":{"input_per_million":baseline_input,"output_per_million":4.0,"cache_read_per_million":0.5,"cache_write_rates":[{"per_million":3.0}]},"prompt_cache":{"read_accounting":"included_in_prompt_tokens"}},
+                {"provider":"test","model_id":"effective","pricing_as_of":"2026-07-08","pricing_source":"test-snapshot","rates":{"input_per_million":effective_input,"output_per_million":2.0,"cache_read_per_million":0.25,"cache_write_rates":[{"per_million":2.0}]},"prompt_cache":{"read_accounting":"included_in_prompt_tokens"}}
             ]
         })
         .to_string(),

@@ -113,7 +113,7 @@ fn threshold_pricing_catalog(read_accounting: &str) -> PricingCatalog {
                             "input_per_million": 1.0,
                             "output_per_million": 2.0,
                             "cache_read_per_million": 0.1,
-                            "cache_write_per_million": 1.25
+                            "cache_write_rates": [{"per_million": 1.25}]
                         }
                     },
                     {
@@ -122,7 +122,7 @@ fn threshold_pricing_catalog(read_accounting: &str) -> PricingCatalog {
                             "input_per_million": 10.0,
                             "output_per_million": 20.0,
                             "cache_read_per_million": 1.0,
-                            "cache_write_per_million": 12.5
+                            "cache_write_rates": [{"per_million": 12.5}]
                         }
                     }
                 ]
@@ -176,7 +176,7 @@ fn test_pricing_public_helpers_and_provider_inference_cover_edge_branches() {
                 "input_per_million": 1.0,
                 "output_per_million": 2.0,
                 "cache_read_per_million": 0.25,
-                "cache_write_per_million": 3.0
+                "cache_write_rates": [{"per_million": 3.0}]
             },
             "prompt_cache": {
                 "read_accounting": "included_in_prompt_tokens"
