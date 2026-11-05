@@ -612,7 +612,7 @@ fn atif_storage_http_non_2xx_retries_on_the_next_trajectory() {
 fn slow_atif_http_upload_does_not_hold_the_dispatcher_but_flush_waits_for_it() {
     let _guard = PLUGIN_TEST_LOCK.lock().unwrap();
     reset_runtime();
-    let delay = Duration::from_millis(1500);
+    let (release_tx, release_rx) = std::sync::mpsc::channel::<()>();
     let listener = std::net::TcpListener::bind("127.0.0.1:0").expect("bind slow receiver");
     let endpoint = format!("http://{}/atif", listener.local_addr().unwrap());
     let received = std::sync::Arc::new(std::sync::atomic::AtomicUsize::new(0));
@@ -620,7 +620,8 @@ fn slow_atif_http_upload_does_not_hold_the_dispatcher_but_flush_waits_for_it() {
     let server = std::thread::spawn(move || {
         let (mut stream, _) = listener.accept().expect("accept upload");
         let _ = read_http_request(&mut stream);
-        std::thread::sleep(delay);
+        // The timeout lets a regression fail its assertions instead of hanging the test.
+        let _ = release_rx.recv_timeout(Duration::from_secs(5));
         server_received.fetch_add(1, std::sync::atomic::Ordering::SeqCst);
         write_http_response(&mut stream, 200);
     });
@@ -673,16 +674,25 @@ fn slow_atif_http_upload_does_not_hold_the_dispatcher_but_flush_waits_for_it() {
     .expect("push later scope");
 
     seen_rx
-        .recv_timeout(delay / 3)
+        .recv_timeout(Duration::from_secs(1))
         .expect("a later event should not wait for the slow upload");
     assert_eq!(received.load(std::sync::atomic::Ordering::SeqCst), 0);
 
-    flush_subscribers().expect("flush should wait for the upload");
-    assert_eq!(
-        received.load(std::sync::atomic::Ordering::SeqCst),
-        1,
+    let (flushed_tx, flushed_rx) = std::sync::mpsc::channel();
+    let flush = std::thread::spawn(move || {
+        flush_subscribers().expect("flush should wait for the upload");
+        let _ = flushed_tx.send(());
+    });
+    assert!(
+        flushed_rx.recv_timeout(Duration::from_millis(300)).is_err(),
         "flush_subscribers must not return before the upload finishes"
     );
+    release_tx.send(()).expect("release the upload response");
+    flushed_rx
+        .recv_timeout(Duration::from_secs(10))
+        .expect("flush should finish once the upload does");
+    flush.join().expect("flush thread should finish");
+    assert_eq!(received.load(std::sync::atomic::Ordering::SeqCst), 1);
 
     pop_scope(PopScopeParams::builder().handle_uuid(&later.uuid).build()).expect("pop later scope");
     server.join().expect("slow receiver should finish");
