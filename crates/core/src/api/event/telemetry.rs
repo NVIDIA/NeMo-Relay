@@ -277,7 +277,7 @@ fn tool_call_extra(tool_call: &Json) -> Option<Json> {
     (!extra.is_empty()).then_some(Json::Object(extra))
 }
 
-fn raw_response_message_field<'a>(output: &'a Json, field: &str) -> Option<&'a Json> {
+pub(crate) fn raw_response_message_field<'a>(output: &'a Json, field: &str) -> Option<&'a Json> {
     let object = output.as_object()?;
     object
         .get("raw_response")

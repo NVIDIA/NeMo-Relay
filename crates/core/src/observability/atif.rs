@@ -36,7 +36,8 @@ use serde::{Deserialize, Serialize};
 use uuid::Uuid;
 
 use crate::api::event::{
-    Event, EventNormalizationExt, EventTelemetryExt, normalize_tool_arguments, tool_call_array,
+    Event, EventNormalizationExt, EventTelemetryExt, normalize_tool_arguments,
+    raw_response_message_field, tool_call_array,
 };
 use crate::api::runtime::EventSubscriberFn;
 use crate::api::subscriber::flush_subscribers;
@@ -663,21 +664,6 @@ fn atif_image_source(source: &Json) -> Option<Json> {
 
 fn json_to_string(value: &Json) -> String {
     serde_json::to_string(value).unwrap_or_else(|_| value.to_string())
-}
-
-fn raw_response_message_field<'a>(output: &'a Json, field: &str) -> Option<&'a Json> {
-    let object = output.as_object()?;
-    object
-        .get("raw_response")
-        .or(Some(output))
-        .and_then(|raw_response| raw_response.as_object())
-        .and_then(|raw_response| raw_response.get("choices"))
-        .and_then(Json::as_array)
-        .and_then(|choices| choices.first())
-        .and_then(Json::as_object)
-        .and_then(|choice| choice.get("message"))
-        .and_then(Json::as_object)
-        .and_then(|message| message.get(field))
 }
 
 fn openai_responses_output_message(output: &Json) -> Option<Json> {

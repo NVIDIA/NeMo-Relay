@@ -13,7 +13,9 @@ use nemo_relay_types::codec::response::AnnotatedLlmResponse;
 use crate::codec::resolve;
 
 mod telemetry;
-pub(crate) use telemetry::{EventTelemetryExt, normalize_tool_arguments, tool_call_array};
+pub(crate) use telemetry::{
+    EventTelemetryExt, normalize_tool_arguments, raw_response_message_field, tool_call_array,
+};
 
 pub(crate) fn is_valid_event_metadata_attribute_key(key: &str) -> bool {
     key.split('.').all(|segment| {
