@@ -1005,7 +1005,8 @@ prepend_go_bin_to_path() {
 }
 
 prepare_test_plugin_fixtures() {
-    local target_dir="$NEMO_RELAY_REPO_ROOT/target/test-plugin-fixtures"
+    # Include instrumented foreign libraries and worker executables in llvm-cov's object scan.
+    local target_dir="${CARGO_LLVM_COV_TARGET_DIR:-$NEMO_RELAY_REPO_ROOT/target/test-plugin-fixtures}"
     local native_library=""
     local worker_executable="nemo-relay-worker-plugin-fixture"
     local host_os=""

@@ -7314,3 +7314,90 @@ async fn component_workers_reuse_configurations_and_reject_registration_after_sh
             .contains("closing")
     );
 }
+
+#[test]
+fn malformed_worker_callback_results_fail_closed() {
+    use wire::invoke_response::Result as R;
+    for result in [None, Some(R::Guardrail(Default::default()))] {
+        assert!(
+            json_from_invoke_response(InvokeResponse {
+                result: result.clone()
+            })
+            .is_err()
+        );
+        assert!(guardrail_from_invoke_response(InvokeResponse { result }).is_err());
+    }
+    let blocked = InvokeResponse {
+        result: Some(R::Guardrail(wire::GuardrailDecision {
+            decision: Some(wire::guardrail_decision::Decision::BlockReason(
+                String::new(),
+            )),
+        })),
+    };
+    assert!(guardrail_from_invoke_response(blocked).is_err());
+    let failure = || WorkerError {
+        code: "worker.failure".into(),
+        message: "provider failed".into(),
+        retryable: false,
+        downstream_continuation_id: None,
+        http_status: Some(503),
+    };
+    for result in [
+        json_from_invoke_response(InvokeResponse {
+            result: Some(R::Error(failure())),
+        })
+        .map(|_| ()),
+        guardrail_from_invoke_response(InvokeResponse {
+            result: Some(R::Error(failure())),
+        })
+        .map(|_| ()),
+    ] {
+        let FlowError::Upstream(error) = result.unwrap_err() else {
+            panic!("HTTP status lost")
+        };
+        assert_eq!(error.status, Some(503));
+        assert_eq!(error.body, "provider failed");
+    }
+    assert!(
+        required_envelope::<JsonEnvelope>(None, "request")
+            .unwrap_err()
+            .to_string()
+            .contains("missing request")
+    );
+    assert!(optional_envelope_to_json(Some(JsonEnvelope::default())).is_err());
+    assert!(
+        optional_worker_timestamp(Some(prost_types::Timestamp {
+            seconds: 0,
+            nanos: -1
+        }))
+        .is_err()
+    );
+    assert_eq!(
+        worker_error_to_plugin(WorkerError::default(), "registration failed").to_string(),
+        PluginError::RegistrationFailed("registration failed".into()).to_string()
+    );
+    assert_eq!(
+        status_from_flow(FlowError::InvalidArgument("invalid payload".into())).code(),
+        tonic::Code::InvalidArgument
+    );
+}
+
+#[test]
+fn scope_snapshot_types_preserve_all_domain_categories() {
+    for kind in [
+        ScopeType::Agent,
+        ScopeType::Function,
+        ScopeType::Tool,
+        ScopeType::Llm,
+        ScopeType::Retriever,
+        ScopeType::Embedder,
+        ScopeType::Reranker,
+        ScopeType::Guardrail,
+        ScopeType::Evaluator,
+        ScopeType::Custom,
+        ScopeType::Unknown,
+    ] {
+        assert_eq!(proto_scope_type(snapshot_scope_type_to_proto(kind)), kind);
+    }
+    assert_eq!(proto_scope_type(i32::MAX), ScopeType::Custom);
+}

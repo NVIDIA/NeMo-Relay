@@ -455,3 +455,7 @@ impl<F: Fn(&BTreeSet<RuntimeRegistrationKind>, &str) -> Option<String> + Send + 
         async { a::Result::RErr(failure("gate is synchronous")) }.into_ffi()
     }
 }
+
+#[cfg(test)]
+#[path = "../../tests/unit/checked_runtime.rs"]
+mod tests;

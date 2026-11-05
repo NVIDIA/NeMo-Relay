@@ -30,7 +30,7 @@ impl a::Scope for Scope {
         a::Result::ROk(ROption::RNone)
     }
 }
-struct Next;
+pub(crate) struct Next;
 impl a::Continuation for Next {
     fn call(&self, _: abi::Json) -> FfiFuture<a::Result<abi::Json>> {
         unreachable!()
@@ -381,4 +381,228 @@ async fn failed_source_cleanup_retains_ownership_for_retry() {
         .await
         .into_result()
         .unwrap();
+}
+
+pub(crate) fn raw_invocation(value: Json) -> a::Invocation {
+    a::Invocation {
+        surface: a::Surface::ToolExecutionIntercept,
+        name: "raw-tool".into(),
+        value: into_abi(value),
+        tool_call_id: ROption::RSome("call-id".into()),
+        context: a::Context {
+            scope: a::Scope_TO::from_value(Scope, TD_Opaque),
+            request_codec: ROption::RNone,
+            response_codec: ROption::RNone,
+        },
+    }
+}
+
+/// Raw synchronous descriptors preserve tool results, marks, panic errors, and admission fencing.
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn raw_callback_contract_rejects_invalid_dispatch_and_preserves_outcomes() {
+    let executor =
+        ComponentExecutor::new(NativeExecutorConfig { worker_threads: 1 }, "raw-contract").unwrap();
+    for mode in ["success", "null-annotation", "failure", "panic"] {
+        let callback = RawCallback {
+            executor: executor.clone(),
+            callback: Arc::new(move |invocation, _| {
+                assert!(BOUND.get(), "the callback must enter its originating scope");
+                assert_eq!(
+                    invocation.tool_call_id.into_option().unwrap().as_str(),
+                    "call-id"
+                );
+                match mode {
+                    "failure" => Err("raw callback failure".into()),
+                    "panic" => panic!("raw callback panic"),
+                    _ => Ok(into_abi(serde_json::json!({
+                        "result":{"value":42},
+                        "annotation":if mode == "success" { serde_json::json!({"source":"raw"}) } else { Json::Null },
+                        "pending_marks":[{"name":"raw-mark"}]
+                    }))),
+                }
+            }),
+        };
+        let outcome = a::Callback::invoke_tool(
+            &callback,
+            raw_invocation(Json::Null),
+            a::Continuation_TO::from_value(Next, TD_Opaque),
+        )
+        .await
+        .into_result();
+        if mode == "failure" || mode == "panic" {
+            assert!(
+                outcome
+                    .err()
+                    .unwrap()
+                    .message
+                    .contains(if mode == "failure" {
+                        "failure"
+                    } else {
+                        "panicked"
+                    })
+            );
+        } else {
+            let outcome = outcome.unwrap();
+            assert_eq!(
+                from_abi(outcome.result.result).unwrap(),
+                serde_json::json!({"value":42})
+            );
+            assert_eq!(outcome.result.annotation.is_some(), mode == "success");
+            let marks: Vec<crate::PendingMarkSpec> = outcome
+                .pending_marks
+                .into_iter()
+                .map(|value| decode(value).unwrap())
+                .collect();
+            assert_eq!(marks[0].name, "raw-mark");
+            a::Callback::invoke(&callback, raw_invocation(Json::Null), ROption::RNone)
+                .await
+                .into_result()
+                .unwrap();
+            a::Callback::invoke_sync(&callback, raw_invocation(Json::Null))
+                .into_result()
+                .unwrap();
+            assert!(!BOUND.get(), "the caller's scope must be restored");
+        }
+        assert!(
+            a::Callback::open_stream(
+                &callback,
+                raw_invocation(Json::Null),
+                a::Continuation_TO::from_value(Next, TD_Opaque)
+            )
+            .await
+            .into_result()
+            .err()
+            .unwrap()
+            .message
+            .contains("synchronous streaming")
+        );
+    }
+    a::Component::shutdown(&executor)
+        .await
+        .into_result()
+        .unwrap();
+    let callback = RawCallback {
+        executor: executor.clone(),
+        callback: Arc::new(|_, _| panic!("revoked callback ran")),
+    };
+    assert!(a::Callback::invoke_sync(&callback, raw_invocation(Json::Null)).is_err());
+    assert_eq!(executor.active_tasks(), 0);
+}
+
+#[test]
+fn native_author_defaults_validate_executor_configuration() {
+    struct Author;
+    impl Plugin for Author {
+        fn plugin_kind(&self) -> &str {
+            "executor.defaults"
+        }
+        fn register<'a>(
+            &'a self,
+            _: &'a Map<String, Json>,
+            _: &'a mut PluginContext<'_>,
+        ) -> PluginFuture<'a, ()> {
+            Box::pin(async { Ok(()) })
+        }
+    }
+    assert!(Author.allows_multiple_components());
+    assert!(Author.validate(&Map::new()).is_empty());
+    let invalid = serde_json::json!({"executor":{"worker_threads":0}})
+        .as_object()
+        .unwrap()
+        .clone();
+    let diagnostics = Author.validate(&invalid);
+    assert_eq!(diagnostics.len(), 1);
+    assert_eq!(
+        diagnostics[0].field.as_deref(),
+        Some("executor.worker_threads")
+    );
+    assert_eq!(diagnostics[0].level, DiagnosticLevel::Error);
+}
+
+#[test]
+fn checked_author_factory_contains_panics_and_rejects_falsified_identity() {
+    struct Author;
+    impl Plugin for Author {
+        fn plugin_kind(&self) -> &str {
+            "author"
+        }
+        fn register<'a>(
+            &'a self,
+            _: &'a Map<String, Json>,
+            _: &'a mut PluginContext<'_>,
+        ) -> PluginFuture<'a, ()> {
+            Box::pin(async { Ok(()) })
+        }
+    }
+    assert!(create_plugin(|| Author, "falsified").is_err());
+    let panic = create_plugin(|| -> Author { panic!("constructor failed") }, "author")
+        .into_result()
+        .err()
+        .unwrap();
+    assert!(panic.message.contains("constructor panicked"));
+    let adapter = Adapter(Arc::new(Author));
+    let diagnostics = a::Plugin::validate(&adapter, into_abi(serde_json::json!([])));
+    assert_eq!(diagnostics.len(), 1);
+    assert!(diagnostics[0].is_error);
+    assert!(a::Plugin::allows_multiple_components(&adapter));
+}
+
+#[test]
+fn invocation_codec_adapters_preserve_typed_values_and_missing_capabilities() {
+    struct Codec(bool);
+    impl a::Codec for Codec {
+        fn identity(&self) -> a::Result<abi::Json> {
+            boundary(encode(
+                serde_json::json!({"identity":LlmCodecIdentity::Opaque,"available":true}),
+            ))
+        }
+        fn decode(&self, _: abi::Json) -> a::Result<abi::Json> {
+            if self.0 {
+                boundary(encode(
+                    nemo_relay_types::codec::response::AnnotatedLlmResponse::default(),
+                ))
+            } else {
+                boundary(encode(AnnotatedLlmRequest::default()))
+            }
+        }
+        fn encode(&self, _: abi::Json, original: abi::Json) -> a::Result<abi::Json> {
+            a::Result::ROk(original)
+        }
+    }
+    let codec = |response| ROption::RSome(a::Codec_TO::from_value(Codec(response), TD_Opaque));
+    let context = LlmExecutionContext::new(codec(false), codec(true)).unwrap();
+    assert_eq!(context.request_codec().codec, LlmCodecIdentity::Opaque);
+    assert_eq!(
+        context.response_codec().unwrap().codec,
+        LlmCodecIdentity::Opaque
+    );
+    let request = LlmRequest {
+        headers: Default::default(),
+        content: serde_json::json!({"provider":"request","unknown":[u64::MAX]}),
+    };
+    let encoder = context.request_codec().resolve_codec().unwrap();
+    let annotated = encoder.decode(&request).unwrap();
+    assert_eq!(annotated, AnnotatedLlmRequest::default());
+    assert_eq!(encoder.encode(&annotated, &request).unwrap(), request);
+    let decoder = context.response_codec().unwrap().resolve_codec().unwrap();
+    assert_eq!(
+        decoder
+            .decode(&serde_json::json!({"provider":"response"}))
+            .unwrap(),
+        nemo_relay_types::codec::response::AnnotatedLlmResponse::default()
+    );
+    let request_context = LlmSanitizeRequestContext::new(codec(false)).unwrap();
+    assert!(request_context.resolve_codec().is_some());
+    let response_context = LlmSanitizeResponseContext::new(codec(true)).unwrap();
+    assert!(response_context.resolve_codec().is_some());
+    let missing = LlmExecutionContext::new(ROption::RNone, ROption::RNone).unwrap();
+    assert_eq!(missing.request_codec().codec, LlmCodecIdentity::None);
+    assert!(missing.request_codec().resolve_codec().is_none());
+    assert!(missing.response_codec().is_none());
+    assert!(
+        LlmSanitizeResponseContext::new(ROption::RNone)
+            .unwrap()
+            .resolve_codec()
+            .is_none()
+    );
 }

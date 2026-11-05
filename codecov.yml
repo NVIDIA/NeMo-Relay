@@ -117,6 +117,7 @@ component_management:
       name: Dynamic Plugin SDKs
       paths:
         - "crates/types/src"
+        - "crates/plugin-abi/src"
         - "crates/plugin/src"
         - "crates/plugin-host/src"
         - "crates/worker-proto/src"

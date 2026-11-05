@@ -148,6 +148,10 @@ fn execution_context_preserves_codec_identities_and_capabilities() {
         let context = payload
             .execution_context(&disconnected_runtime(), "invocation", true)
             .unwrap();
+        let debug = format!("{context:?}");
+        assert!(debug.contains("LlmExecutionContext"));
+        assert!(!debug.contains("capability"));
+        assert!(!debug.contains("token"));
         assert_eq!(context.request_codec().codec, expected);
         assert_eq!(context.request_codec().resolve_codec().is_some(), resolves);
         assert_eq!(context.response_codec().unwrap().codec, expected);
@@ -540,4 +544,87 @@ async fn validation_rejects_wrong_plugin_and_shutdown_without_running_callback()
         .unwrap_err();
     assert_eq!(error.code(), tonic::Code::FailedPrecondition);
     assert_eq!(calls.load(Ordering::Relaxed), 1);
+}
+
+#[test]
+fn registry_filters_preserve_every_supported_surface_and_reject_nonregistrations() {
+    // Gate callbacks receive these identities from the host. No supported kind
+    // may collapse to an unspecified surface or disappear during conversion.
+    let kinds = [
+        RuntimeRegistrationKind::Subscriber,
+        RuntimeRegistrationKind::EventMetadataInjector,
+        RuntimeRegistrationKind::MarkSanitizeGuardrail,
+        RuntimeRegistrationKind::ScopeSanitizeStartGuardrail,
+        RuntimeRegistrationKind::ScopeSanitizeEndGuardrail,
+        RuntimeRegistrationKind::ToolSanitizeRequestGuardrail,
+        RuntimeRegistrationKind::ToolSanitizeResponseGuardrail,
+        RuntimeRegistrationKind::ToolConditionalExecutionGuardrail,
+        RuntimeRegistrationKind::ToolRequestIntercept,
+        RuntimeRegistrationKind::ToolExecutionIntercept,
+        RuntimeRegistrationKind::LlmSanitizeRequestGuardrail,
+        RuntimeRegistrationKind::LlmSanitizeResponseGuardrail,
+        RuntimeRegistrationKind::LlmConditionalExecutionGuardrail,
+        RuntimeRegistrationKind::LlmRequestIntercept,
+        RuntimeRegistrationKind::LlmExecutionIntercept,
+        RuntimeRegistrationKind::LlmStreamExecutionIntercept,
+    ];
+    let mut surfaces = BTreeSet::new();
+    for kind in kinds {
+        let surface = registration_surface(kind);
+        assert!(surfaces.insert(surface as i32));
+        assert_eq!(runtime_registration_kind(surface).unwrap(), kind);
+    }
+    for surface in [
+        RegistrationSurface::Unspecified,
+        RegistrationSurface::ConditionalMiddlewareGuardrail,
+    ] {
+        assert!(runtime_registration_kind(surface).is_err());
+    }
+}
+
+#[test]
+fn worker_tcp_endpoints_accept_numeric_addresses_and_reject_invalid_authorities() {
+    for endpoint in ["tcp://127.0.0.1:4317", "http://127.0.0.1:4317"] {
+        assert_eq!(
+            parse_tcp_endpoint(endpoint).unwrap(),
+            "127.0.0.1:4317".parse::<SocketAddr>().unwrap()
+        );
+    }
+    for endpoint in [
+        "tcp://",
+        "https://127.0.0.1:4317",
+        "unix:///tmp/worker.sock",
+        "http://127.0.0.1:4317/path",
+        "http://127.0.0.1:invalid",
+        "http://",
+    ] {
+        assert!(parse_tcp_endpoint(endpoint).is_err(), "{endpoint}");
+    }
+}
+
+#[test]
+fn shared_author_errors_keep_configuration_serialization_and_registration_categories() {
+    let config: PluginError = WorkerSdkError::InvalidInput("invalid field".into()).into();
+    assert!(matches!(config, PluginError::InvalidConfig(message) if message == "invalid field"));
+    let invalid_json = serde_json::from_str::<Json>("{").unwrap_err();
+    let serialization: PluginError = WorkerSdkError::Serialization(invalid_json).into();
+    assert!(matches!(serialization, PluginError::Serialization(_)));
+    for error in [
+        WorkerSdkError::Callback("author failed".into()),
+        WorkerSdkError::Transport("host unavailable".into()),
+    ] {
+        let message = error.to_string();
+        assert!(
+            matches!(PluginError::from(error), PluginError::RegistrationFailed(returned) if returned == message)
+        );
+    }
+}
+
+#[tokio::test]
+async fn invalid_metric_measurements_are_rejected_before_contacting_the_host() {
+    let error = disconnected_runtime()
+        .emit_metric("invalid", Vec::new(), None)
+        .await
+        .unwrap_err();
+    assert!(matches!(error, WorkerSdkError::InvalidInput(_)));
 }

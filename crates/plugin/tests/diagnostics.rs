@@ -188,3 +188,48 @@ fn checked_peer_cannot_claim_a_read_beyond_caller_owned_storage() {
         );
     }
 }
+
+#[test]
+fn frozen_diagnostic_statuses_preserve_read_and_admission_failures() {
+    use sdk::DiagnosticReadReason as Read;
+    let cases = [
+        (2, DiagnosticError::Unsupported, "unsupported"),
+        (3, DiagnosticError::Unavailable, "unavailable"),
+        (4, DiagnosticError::Closed, "closed"),
+        (5, DiagnosticError::PermissionDenied, "permission_denied"),
+        (6, DiagnosticError::Busy, "busy"),
+        (7, DiagnosticError::Capacity, "capacity"),
+        (8, DiagnosticError::Invalid, "invalid"),
+        (9, DiagnosticError::Conflict, "conflict"),
+        (10, DiagnosticError::BufferTooSmall, "buffer_too_small"),
+        (11, DiagnosticError::Internal, "internal"),
+    ];
+    for (status, error, label) in cases {
+        assert_eq!(DiagnosticError::from_status(status), error);
+        assert_eq!(error.status(), status);
+        assert_eq!(error.to_string(), label);
+    }
+    for (status, reason) in [
+        (100, Read::Disabled),
+        (101, Read::QueryDisabled),
+        (102, Read::UnsupportedSchema),
+        (103, Read::InvalidQuery),
+        (104, Read::InvalidCursor),
+        (105, Read::Busy),
+        (106, Read::SnapshotCapacity),
+        (107, Read::InvalidLimits),
+        (108, Read::AllocationFailed),
+        (109, Read::Internal),
+    ] {
+        let error = DiagnosticError::Read(reason);
+        assert_eq!(DiagnosticError::from_status(status), error);
+        assert_eq!(error.status(), status);
+        assert_eq!(error.to_string(), reason.as_str());
+    }
+    for status in [0, 1, 12, 99, 110, u32::MAX] {
+        assert_eq!(
+            DiagnosticError::from_status(status),
+            DiagnosticError::Internal
+        );
+    }
+}

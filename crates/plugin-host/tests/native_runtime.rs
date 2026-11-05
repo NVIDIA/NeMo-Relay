@@ -311,3 +311,162 @@ async fn sdk_runtime_diagnostics_preserve_empty_and_populated_reports() {
     assert!(populated.get("missing").is_none());
     assert!(cleared.unwrap().entries().is_empty());
 }
+
+#[tokio::test]
+async fn sdk_scope_stack_guards_restore_parentage_after_errors_and_panics() {
+    use nemo_relay_plugin::ScopeType;
+    use nemo_relay_runtime::api::runtime::{create_scope_stack, with_scope_stack};
+    let owner = HostRuntime::new("stack-restoration".into()).unwrap();
+    let runtime = PluginRuntime::from_abi(owner.runtime_box());
+    with_scope_stack(create_scope_stack(), || {
+        let mut parent = runtime
+            .scope("parent", ScopeType::Custom, None, None, None)
+            .unwrap();
+        assert!(parent.handle().is_some());
+        assert!(runtime.scope_stack_active());
+        let snapshot =
+            || serde_json::to_value(runtime.current_scope_stack_snapshot().unwrap()).unwrap();
+        let original = snapshot();
+        let isolated = runtime.create_scope_stack().unwrap();
+        let previous = runtime.capture_scope_stack_thread().unwrap();
+        isolated.set_thread().unwrap();
+        assert_ne!(snapshot(), original);
+        previous.restore().unwrap();
+        assert_eq!(snapshot(), original);
+        drop(runtime.capture_scope_stack_thread().unwrap());
+        assert_eq!(snapshot(), original);
+        let guard = runtime.bind_scope_stack_thread(&isolated).unwrap();
+        assert_ne!(snapshot(), original);
+        guard.restore().unwrap();
+        assert_eq!(snapshot(), original);
+        {
+            let _guard = runtime.bind_scope_stack_thread(&isolated).unwrap();
+            assert_ne!(snapshot(), original);
+        }
+        assert_eq!(snapshot(), original);
+        assert!(
+            isolated
+                .with_current(|| Err::<(), _>("application failure".into()))
+                .is_err()
+        );
+        assert_eq!(snapshot(), original);
+        let panic = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+            let _ = isolated.with_current(|| -> Result<(), String> { panic!("application panic") });
+        }));
+        assert!(panic.is_err());
+        assert_eq!(snapshot(), original);
+        parent.close(None, None).unwrap();
+        parent.close(None, None).unwrap();
+        assert!(parent.handle().is_none());
+    });
+    owner.shutdown().await.unwrap();
+    assert!(!runtime.scope_stack_active());
+    assert!(runtime.create_scope_stack().is_err());
+}
+
+#[tokio::test]
+async fn malformed_runtime_requests_leave_scope_state_unchanged() {
+    use nemo_relay_plugin::abi_value::into_abi;
+    use serde_json::json;
+    let owner = HostRuntime::new("runtime-input-validation".into()).unwrap();
+    let raw = owner.runtime_box();
+    nemo_relay_runtime::api::runtime::with_scope_stack(
+        nemo_relay_runtime::api::runtime::create_scope_stack(),
+        || {
+            let before = raw.call_sync("scope.snapshot".into(), into_abi(json!(null)));
+            for (operation, arguments) in [
+                ("stack.set", json!(null)),
+                ("stack.set", json!("unknown")),
+                ("stack.restore", json!(false)),
+                ("stack.restore", json!("unknown")),
+                ("stack.release", json!([])),
+                ("stack.binding_release", json!({})),
+                ("gate.remove", json!(0)),
+                (
+                    "log",
+                    json!({"target":"bad\u{0000}target","level":2,"message":"x"}),
+                ),
+                (
+                    "log",
+                    json!({"target":"bad\ntarget","level":2,"message":"x"}),
+                ),
+                (
+                    "log",
+                    json!({"target":"x".repeat(257),"level":2,"message":"x"}),
+                ),
+                ("log", json!({"target":"ok","level":5,"message":"x"})),
+                (
+                    "log",
+                    json!({"target":"ok","level":2,"message":"x","fields":[]}),
+                ),
+                ("log", json!({"target":"ok","level":2})),
+                ("scope.pop", json!({"handle":{}})),
+                ("registry.list", json!(["unknown_kind"])),
+                ("unsupported.operation", json!(null)),
+            ] {
+                assert!(
+                    raw.call_sync(operation.into(), into_abi(arguments))
+                        .is_err(),
+                    "{operation}"
+                );
+                assert_eq!(
+                    before,
+                    raw.call_sync("scope.snapshot".into(), into_abi(json!(null)))
+                );
+            }
+            assert_eq!(
+                raw.call_sync("gate.remove".into(), into_abi(json!("unknown")))
+                    .into_result()
+                    .unwrap(),
+                into_abi(json!(false))
+            );
+        },
+    );
+    owner.shutdown().await.unwrap();
+    assert!(raw.capture_scope().is_err());
+}
+
+#[tokio::test]
+async fn captured_scope_handles_preserve_snapshots_and_reject_use_after_shutdown() {
+    use nemo_relay_plugin::{ScopeType, abi::Json};
+    use nemo_relay_runtime::api::runtime::{create_scope_stack, with_scope_stack};
+    let owner = HostRuntime::new("captured-scope".into()).unwrap();
+    let raw = owner.runtime_box();
+    let runtime = PluginRuntime::from_abi(owner.runtime_box());
+    let scope = with_scope_stack(create_scope_stack(), || {
+        let _parent = runtime
+            .scope("captured-parent", ScopeType::Custom, None, None, None)
+            .unwrap();
+        let scope = raw.capture_scope().into_result().unwrap();
+        let snapshot = scope
+            .snapshot()
+            .into_result()
+            .unwrap()
+            .into_option()
+            .unwrap();
+        assert_eq!(
+            snapshot,
+            raw.call_sync("scope.snapshot".into(), Json::Null)
+                .into_result()
+                .unwrap()
+        );
+        let other = create_scope_stack();
+        with_scope_stack(other, || {
+            let before = raw.call_sync("scope.snapshot".into(), Json::Null);
+            let mut lease = scope.enter().into_result().unwrap();
+            assert_eq!(
+                snapshot,
+                raw.call_sync("scope.snapshot".into(), Json::Null)
+                    .into_result()
+                    .unwrap()
+            );
+            assert!(lease.restore().is_ok());
+            assert!(lease.restore().is_ok());
+            assert_eq!(before, raw.call_sync("scope.snapshot".into(), Json::Null));
+        });
+        scope
+    });
+    owner.shutdown().await.unwrap();
+    assert!(scope.snapshot().is_err());
+    assert!(scope.enter().is_err());
+}

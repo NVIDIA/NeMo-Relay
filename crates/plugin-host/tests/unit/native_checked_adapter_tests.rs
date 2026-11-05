@@ -738,3 +738,139 @@ async fn retained_middleware_and_gate_proxies_release_foreign_state_on_shutdown(
         "stale proxies cannot call foreign code"
     );
 }
+
+#[tokio::test]
+async fn response_codec_capabilities_preserve_results_and_reject_invalid_dispatch() {
+    use nemo_relay_types::codec::{response::AnnotatedLlmResponse, traits::LlmResponseCodec};
+    struct ResponseCodec;
+    impl LlmResponseCodec for ResponseCodec {
+        fn decode_response(&self, value: &Json) -> Result<AnnotatedLlmResponse> {
+            if value == "panic" {
+                panic!("codec author panic");
+            }
+            if value != &json!({"provider":"response"}) {
+                return Err(err("unexpected response"));
+            }
+            Ok(Default::default())
+        }
+    }
+    let owner = HostRuntime::new("response-codec-contract".into()).unwrap();
+    let (call, lifetime) = invocation(
+        &owner,
+        a::Surface::LlmSanitizeResponse,
+        "response".into(),
+        abi::Json::Null,
+        None,
+        None,
+        Some(LlmResponseContext::for_response_codec(Some(Arc::new(
+            ResponseCodec,
+        )))),
+    );
+    let codec = call.context.response_codec.into_option().unwrap();
+    let identity = from_abi(codec.identity().into_result().unwrap()).unwrap();
+    assert_eq!(identity["available"], true);
+    let decoded: AnnotatedLlmResponse = decode(
+        codec
+            .decode(into_abi(json!({"provider":"response"})))
+            .into_result()
+            .unwrap(),
+    )
+    .unwrap();
+    assert_eq!(decoded, AnnotatedLlmResponse::default());
+    assert!(codec.encode(abi::Json::Null, abi::Json::Null).is_err());
+    assert!(codec.decode(into_abi(json!({"bad":true}))).is_err());
+    let panic = codec
+        .decode(into_abi(json!("panic")))
+        .into_result()
+        .unwrap_err();
+    assert!(panic.message.contains("codec callback panicked"));
+    drop(lifetime);
+    assert!(codec.identity().is_err());
+    assert!(codec.decode(abi::Json::Null).is_err());
+    for (request, response) in [
+        (Some(LlmRequestContext::for_request_codec(None)), None),
+        (None, Some(LlmResponseContext::for_response_codec(None))),
+    ] {
+        let (call, _lifetime) = invocation(
+            &owner,
+            a::Surface::LlmSanitizeResponse,
+            "absent".into(),
+            abi::Json::Null,
+            None,
+            request,
+            response,
+        );
+        let codec = call
+            .context
+            .request_codec
+            .into_option()
+            .or_else(|| call.context.response_codec.into_option())
+            .unwrap();
+        assert_eq!(
+            from_abi(codec.identity().into_result().unwrap()).unwrap()["available"],
+            false
+        );
+        assert!(codec.decode(abi::Json::Null).is_err());
+        assert!(codec.encode(abi::Json::Null, abi::Json::Null).is_err());
+    }
+    owner.shutdown().await.unwrap();
+}
+
+#[tokio::test]
+async fn registration_transactions_reject_late_binding_full_queues_and_cancelled_replies() {
+    let owner = HostRuntime::new("registration-contract".into()).unwrap();
+    let raw = owner.runtime_box();
+    let component =
+        || a::Component_TO::from_value(ShutdownProbe(Arc::new(AtomicBool::new(false))), TD_Opaque);
+    let descriptor = || a::Registration {
+        name: "callback".into(),
+        surface: a::Surface::Subscriber,
+        priority: 0,
+        break_chain: false,
+        options: abi::Json::Null,
+        callback: a::Callback_TO::from_value(
+            CallbackStateProbe {
+                dropped: Arc::new(AtomicBool::new(false)),
+                invoked: Arc::new(AtomicBool::new(false)),
+                _runtime: owner.clone(),
+            },
+            TD_Opaque,
+        ),
+    };
+    assert!(raw.bind_component(component()).is_err());
+    assert!(raw.register_callback(descriptor()).is_err());
+    assert!(raw.register_gate(descriptor()).is_err());
+    let (sender, mut receiver) = tokio::sync::mpsc::channel(1);
+    *owner.registration.lock().unwrap() = Some(sender.clone());
+    assert!(raw.bind_component(component()).is_ok());
+    assert!(raw.bind_component(component()).is_err());
+    let (reply, _) = std::sync::mpsc::sync_channel(1);
+    sender
+        .try_send(RegistrationRequest {
+            registration: descriptor(),
+            reply,
+        })
+        .unwrap();
+    assert_eq!(
+        raw.register_callback(descriptor())
+            .into_result()
+            .unwrap_err()
+            .code
+            .as_str(),
+        "capacity"
+    );
+    drop(receiver.try_recv().unwrap());
+    let request = descriptor();
+    let caller = owner.runtime_box();
+    let pending = std::thread::spawn(move || caller.register_callback(request));
+    let request = receiver.recv().await.unwrap();
+    drop(request);
+    let error = pending.join().unwrap().into_result().unwrap_err();
+    assert!(error.message.contains("cancelled"));
+    drop(receiver);
+    assert!(raw.register_callback(descriptor()).is_err());
+    owner.registration.lock().unwrap().take();
+    owner.component.lock().unwrap().take();
+    owner.shutdown().await.unwrap();
+    assert!(raw.bind_component(component()).is_err());
+}
