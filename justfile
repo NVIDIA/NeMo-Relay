@@ -1236,6 +1236,18 @@ generate-test-plugin-lockfiles:
 
 generate-worker-plugin-lockfile: generate-test-plugin-lockfiles
 
+# Build frozen native ABI generations in independent Cargo workspaces.
+build-native-abi-test-fixtures:
+    bash scripts/build_native_abi_fixtures.sh
+
+# Explicitly refresh lockfiles for the independently built ABI fixtures.
+generate-native-abi-test-lockfiles:
+    bash scripts/build_native_abi_fixtures.sh --update-lockfiles
+
+# Check unchanged ABI fixture binaries across the active and comparison compilers.
+test-native-abi-toolchains toolchain:
+    uv run --no-sync python scripts/check_native_abi_toolchains.py {{ quote(toolchain) }}
+
 # Build the native and worker dynamic-plugin fixtures once for test processes.
 build-test-plugin-fixtures:
     #!/usr/bin/env bash
@@ -1398,6 +1410,7 @@ test-rust:
     #!/usr/bin/env bash
     {{ bash_helpers }}
     output_dir="{{ output_dir }}"
+    bash "$NEMO_RELAY_REPO_ROOT/scripts/build_native_abi_fixtures.sh"
     junit_out=""
     test_config_root="$(mktemp -d)"
     cleanup_test_config_root() {

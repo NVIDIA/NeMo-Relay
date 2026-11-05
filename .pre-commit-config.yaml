@@ -199,7 +199,7 @@ repos:
       # cargo-deny rejects vulnerability advisories regardless of severity.
       - id: cargo-deny
         name: cargo deny
-        entry: cargo deny --locked --all-features check
+        entry: bash scripts/lint/check_cargo_dependencies.sh
         language: system
         always_run: true
         pass_filenames: false
