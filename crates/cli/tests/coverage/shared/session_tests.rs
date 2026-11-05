@@ -38,6 +38,12 @@ struct ToolGuardrailCleanup(&'static str);
 #[path = "gateway_preparation_tests.rs"]
 mod gateway_preparation;
 
+#[path = "claude_activity_tests.rs"]
+mod claude_activity;
+
+#[path = "claude_activity_export_tests.rs"]
+mod claude_activity_export;
+
 impl SessionManager {
     pub(crate) async fn test_lock_session_gate(
         &self,
@@ -5073,13 +5079,9 @@ async fn execute_prepared_llm(manager: &SessionManager, prep: GatewayCallPrep, r
         metadata,
         model_name,
         owner_subagent_id,
-        bypass_managed_pipeline,
+        record_task_response: _,
         session_finish,
     } = prep;
-    assert!(
-        !bypass_managed_pipeline,
-        "managed execution helper must not emit an LLM span for a bypassed gateway call"
-    );
     let surface = match provider_name.as_str() {
         "anthropic.messages" => ProviderSurface::AnthropicMessages,
         "openai.responses" => ProviderSurface::OpenAIResponses,
@@ -5751,7 +5753,7 @@ async fn llm_lifecycle_starts_implicit_gateway_session() {
 }
 
 #[tokio::test]
-async fn claude_startup_probe_does_not_open_null_input_turn() {
+async fn claude_unclassified_short_request_preserves_distinct_late_prompt_evidence() {
     let subscriber_name = "cli-claude-startup-probe-turn-test";
     let _ = deregister_subscriber(subscriber_name);
     let captured_turn_starts = Arc::new(StdMutex::new(Vec::<Value>::new()));
@@ -5759,8 +5761,16 @@ async fn claude_startup_probe_does_not_open_null_input_turn() {
     register_subscriber(
         subscriber_name,
         Arc::new(move |event| {
-            if event.scope_category() == Some(ScopeCategory::Start)
-                && event.name() == "claude-code-turn"
+            if event.name() == "prompt_submitted"
+                && event.data() == Some(&json!({ "prompt": "list contents of this dir" }))
+            {
+                captured.lock().unwrap().push(json!({
+                    "kind": "prompt_mark",
+                    "data": event.data().cloned(),
+                }));
+                return;
+            }
+            if event.name() == "claude-code-turn"
                 && event
                     .metadata()
                     .and_then(|metadata| metadata.get("session_id"))
@@ -5768,6 +5778,7 @@ async fn claude_startup_probe_does_not_open_null_input_turn() {
                     == Some("claude-probe")
             {
                 captured.lock().unwrap().push(json!({
+                    "kind": if event.scope_category() == Some(ScopeCategory::Start) { "turn_start" } else { "turn_end" },
                     "input": event.input().cloned().unwrap_or(Value::Null),
                     "metadata": event.metadata().cloned().unwrap_or(Value::Null)
                 }));
@@ -5816,15 +5827,9 @@ async fn claude_startup_probe_does_not_open_null_input_turn() {
         )
         .await
         .unwrap();
-    assert!(prep.parent.is_none());
-    assert_eq!(
-        prep.metadata["llm_correlation_status"],
-        json!("pre_turn_probe")
-    );
-    assert_eq!(
-        prep.metadata["llm_correlation_source"],
-        json!("claude_startup_probe")
-    );
+    assert!(prep.parent.is_some());
+    assert!(prep.record_task_response);
+    assert_eq!(prep.metadata["claude_code_request_class"], "unknown");
     manager
         .finish_gateway_call(
             &prep.session_id,
@@ -5852,34 +5857,56 @@ async fn claude_startup_probe_does_not_open_null_input_turn() {
         let session = sessions.get("claude-probe").expect("session retained");
         assert!(
             session.turn_scope.is_some(),
-            "prompt should open a Claude turn after the pre-turn probe"
+            "the late prompt must retain the gateway-created turn"
         );
     }
 
+    manager.close_all("test_shutdown").await.unwrap();
     flush_subscribers().unwrap();
-    let starts = captured_turn_starts.lock().unwrap().clone();
-    assert_eq!(starts.len(), 1, "expected one user-visible Claude turn");
+    let events = captured_turn_starts.lock().unwrap().clone();
+    let starts = events
+        .iter()
+        .filter(|event| event["kind"] == "turn_start")
+        .collect::<Vec<_>>();
+    assert_eq!(
+        starts.len(),
+        1,
+        "late prompt must not duplicate the container"
+    );
     assert_eq!(
         starts[0]["input"],
-        json!({ "prompt": "list contents of this dir" }),
-        "startup probe must not create a null-input Claude turn"
+        json!({ "prompt": "test" }),
+        "opening input remains the request-derived structural evidence"
     );
     assert_eq!(starts[0]["metadata"]["turn_index"], json!(1));
-    assert_eq!(starts[0]["metadata"]["turn_source"], json!("user_prompt"));
+    assert_eq!(starts[0]["metadata"]["turn_source"], "gateway_request");
+    let marks = events
+        .iter()
+        .filter(|event| event["kind"] == "prompt_mark")
+        .collect::<Vec<_>>();
+    assert_eq!(marks.len(), 1);
+    assert_eq!(marks[0]["data"]["prompt"], "list contents of this dir");
+    let ends = events
+        .iter()
+        .filter(|event| event["kind"] == "turn_end")
+        .collect::<Vec<_>>();
+    assert_eq!(ends.len(), 1);
+    assert_eq!(ends[0]["metadata"]["turn_prompt_observed"], true);
 
     deregister_subscriber(subscriber_name).unwrap();
 }
 
 #[tokio::test]
-async fn claude_startup_probe_only_session_is_pruned_after_finish() {
+async fn claude_unclassified_short_request_keeps_ordinary_idle_cleanup() {
     let manager = SessionManager::new(session_test_config());
     let prep = manager
         .prepare_gateway_call(&HeaderMap::new(), claude_startup_probe_start("probe-only"))
         .await
         .unwrap();
 
-    assert!(prep.bypass_managed_pipeline);
-    assert_eq!(prep.session_finish, GatewaySessionFinish::PruneIfEmpty);
+    assert!(prep.record_task_response);
+    assert_eq!(prep.session_finish, GatewaySessionFinish::Retain);
+    assert_eq!(prep.metadata["claude_code_request_class"], "unknown");
     assert!(manager.inner.lock().await.contains_key("probe-only"));
 
     manager
@@ -5889,6 +5916,14 @@ async fn claude_startup_probe_only_session_is_pruned_after_finish() {
             prep.session_finish,
         )
         .await;
+    assert!(manager.inner.lock().await.contains_key("probe-only"));
+    assert_eq!(
+        manager
+            .close_idle_sessions_at(Instant::now(), Duration::ZERO, "idle_timeout")
+            .await
+            .unwrap(),
+        1
+    );
     assert!(!manager.inner.lock().await.contains_key("probe-only"));
 
     let next = manager
@@ -5905,6 +5940,14 @@ async fn claude_startup_probe_only_session_is_pruned_after_finish() {
         next.session_id, "gateway-gateway",
         "probe-only sessions must not become the single-active fallback"
     );
+    manager
+        .finish_gateway_call(
+            &next.session_id,
+            next.owner_subagent_id.as_deref(),
+            next.session_finish,
+        )
+        .await;
+    manager.close_all("test_shutdown").await.unwrap();
 }
 
 #[tokio::test]
@@ -5973,7 +6016,7 @@ async fn claude_direct_gateway_request_seeds_turn_input_before_prompt_hook() {
         )
         .await
         .unwrap();
-    assert!(!prep.bypass_managed_pipeline);
+    assert!(prep.record_task_response);
     manager
         .finish_gateway_call(
             &prep.session_id,

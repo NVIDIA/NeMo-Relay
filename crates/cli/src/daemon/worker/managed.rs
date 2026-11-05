@@ -369,28 +369,6 @@ impl ManagedRuntime {
             .prepare_gateway_call(&prepared.headers, start)
             .await?;
         let operational = operational.with_session(prep.session_id.clone());
-        if prep.bypass_managed_pipeline {
-            let streaming = prepared.streaming;
-            GatewayCallCleanup::new(self.sessions.clone(), &prep)
-                .finish()
-                .await;
-            return dispatch_observed(
-                upstream,
-                prepared,
-                route,
-                None,
-                &self.config,
-                self.observation_capture_bytes,
-                operational,
-            )
-            .await
-            .map(move |(response, observation)| {
-                tokio::spawn(async move {
-                    let _ = observation.finish(surface, streaming).await;
-                });
-                response
-            });
-        }
         self.proxy_managed(upstream, prepared, route, surface, prep, operational)
             .await
     }
@@ -417,13 +395,9 @@ impl ManagedRuntime {
             metadata,
             model_name,
             owner_subagent_id,
-            bypass_managed_pipeline,
+            record_task_response,
             session_finish: _,
         } = prep;
-        if bypass_managed_pipeline {
-            cleanup.finish().await;
-            return dispatch_unmanaged(upstream, request, route, &self.config).await;
-        }
 
         let handle = TASK_SCOPE_STACK
             .scope(scope_stack, async {
@@ -476,7 +450,7 @@ impl ManagedRuntime {
                 json!("head_only"),
             );
             // Finish correlation while borrowing the payload, then move it into LLM publication.
-            if let Some(value) = observed.value.as_ref() {
+            if record_task_response && let Some(value) = observed.value.as_ref() {
                 sessions
                     .record_gateway_response_hints(
                         &session_id,
@@ -527,7 +501,7 @@ impl ManagedRuntime {
             metadata,
             model_name,
             owner_subagent_id,
-            bypass_managed_pipeline: _,
+            record_task_response,
             session_finish: _,
         } = prep;
         let codec = request_codec(surface);
@@ -616,7 +590,7 @@ impl ManagedRuntime {
             let mut observed = observation.finish(surface, streaming).await;
             let end_metadata = merge_object(metadata, observed.metadata());
             // Finish correlation while borrowing the payload, then move it into LLM publication.
-            if let Some(value) = observed.value.as_ref() {
+            if record_task_response && let Some(value) = observed.value.as_ref() {
                 sessions
                     .record_gateway_response_hints(
                         &session_id,

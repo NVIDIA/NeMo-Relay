@@ -37,6 +37,10 @@ Because Claude Code gives its first `--settings` source precedence over the
 process environment, Relay also creates a private settings overlay that
 preserves that source and overrides only `ANTHROPIC_BASE_URL` for the launched
 process. The source settings and installed plugin enablement remain unchanged.
+The wrapper also defaults `CLAUDE_CODE_GATEWAY_HINT_HEADERS` to `1` in the
+launched process when no value is inherited. Supported Claude versions then
+report each model request's class. Claude's settings can override this process
+default.
 If a Relay plugin is already enabled, its MCP process authenticates and borrows
 the dynamic gateway instead of launching the fixed sidecar, then monitors that
 exact gateway while MCP stdio remains open. Its persistent hooks exit without
@@ -67,6 +71,9 @@ The installer creates a local marketplace, installs
 `nemo-relay-plugin@nemo-relay-local` at user scope, and enables Claude Code
 provider routing through the local NeMo Relay sidecar. It uses the existing
 `nemo-relay` binary on `PATH`; it does not install a plugin-local Relay binary.
+The installer also enables gateway hints in Claude's user settings unless that
+setting is already present. See [Model Request Classes](#separate-model-request-classes)
+for the metadata these hints provide.
 
 The plugin starts `nemo-relay mcp`, a lightweight Rust lifecycle client that
 starts or reuses the shared gateway on `127.0.0.1:47632` immediately when the
@@ -226,14 +233,11 @@ Tool hooks preserve canonical fields such as `tool_use_id`, `tool_name`,
 `tool_input`, `error`, `duration_ms`, and `is_interrupt`. Subagent hooks use
 `agent_id` as the subagent identifier and preserve `agent_type` in metadata.
 
-Claude Code traces are turn-oriented. A multi-turn conversation can produce one
-root `claude-code-turn` agent span or trajectory per user turn. That is expected
-when each span has a real `UserPromptSubmit` payload and assistant output. NeMo
-Relay excludes the known Claude Code startup/preflight probe and late
-uncorrelatable lifecycle hooks from exported user traces so they do not appear
-as synthetic `null`, `user: test`, `idle_timeout`, or lifecycle-only turns.
-The gateway records suppressed startup probes as debug-level
-`observability_bypassed` events when debug or trace logging is enabled.
+Claude Code traces are turn-oriented, but a trace root is not a prompt count.
+Gateway traffic or compaction hooks can open a turn without a prompt hook.
+Use request classes to separate internal model operations from conversation
+work, and final prompt-observation metadata to count completed turns with an
+observed prompt.
 
 ## Smoke Test
 
@@ -253,18 +257,18 @@ trajectories for at least one user turn, one LLM call, and one tool call.
 
 ## Verify Export
 
-End the Claude Code session and confirm that session-end closed the NeMo Relay
-agent scope and wrote Agent Trajectory Interchange Format (ATIF):
+End the Claude Code session and check for completed turn trajectories in Agent
+Trajectory Interchange Format (ATIF):
 
 ```bash
 ls .nemo-relay/atif
 ```
 
-The gateway exports the session's ATIF file on `SessionEnd`. Unless you change
-`filename_template`, the file is named
-`nemo-relay-atif-<session-id>.json`. If no file appears, confirm that
-`SessionEnd` hooks fire, `plugins.toml` enables the ATIF exporter, and the
-gateway process can write to the configured directory.
+The gateway writes a trajectory when its enclosing turn closes, including at
+`SessionEnd`. One session can produce multiple files. If none appear, confirm
+that hooks fire, `plugins.toml` enables ATIF, and the gateway process can write
+to the configured directory. An idle internal model call has no enclosing turn
+and does not create an ATIF trajectory.
 
 ## Troubleshoot LLM Lifecycle
 
@@ -317,6 +321,76 @@ to hold the mark.
 ATOF retains these marks, and the `full` and `openinference` projections can
 export them. The `gen_ai` projection omits marks. A notification mark does not
 establish the purpose of a separate model call.
+
+## Separate Model Request Classes
+
+Claude Code 2.1.273 or newer labels model requests with
+[`x-claude-code-request-class`](https://code.claude.com/docs/en/llm-gateway-protocol#gateway-hint-headers)
+when gateway hints are enabled. Wrapped launches set
+`CLAUDE_CODE_GATEWAY_HINT_HEADERS` to `"1"` only when the variable is unset. The
+[persistent installer](#persistent-plugin-install) and
+`nemo-relay integrations refresh` add `"1"` only when the setting is missing
+from Claude's user settings. Claude's saved settings can override a shell
+export. Generated managed settings also enable hints.
+[Replace older managed bundles](/daemon/configuration#distribute-immutable-managed-settings)
+to include the setting.
+
+Relay records the normalized class in LLM event metadata as
+`claude_code_request_class`:
+
+| Class | Operation |
+| --- | --- |
+| `main` | A main-conversation turn. |
+| `subagent` | A subagent conversation turn. |
+| `workflow` | An agent running inside a workflow. |
+| `compaction` | Conversation compaction. |
+| `auxiliary` | A side request, such as a title, classifier, or summary. |
+| `unknown` | No usable supported class was received. |
+
+Calls labeled `auxiliary` or `compaction` remain in traces with their reported
+usage. They still run the configured middleware and cache policy, but do not
+open main turns, replace task output, or provide hints for matching tool calls.
+An internal call between turns has no enclosing ATIF trajectory. Use ATOF or
+OpenTelemetry to include these calls in usage totals.
+
+The integration minimum remains Claude Code 2.1.121. Versions before 2.1.273
+and missing, invalid, or unsupported classes remain `unknown` and keep the
+existing turn handling and parent selection. Classes describe operations, not
+whether a person initiated them. Do not treat `unknown` as confirmed
+conversation work.
+
+## Count Turns with Observed Prompts
+
+Count completed main turns with final `turn_prompt_observed=true`, rather than
+counting trace roots. This flag includes late prompt hooks; `false` means no
+prompt hook was observed, and a missing field is unknown. Subagent prompts do
+not set the parent's flag. Gateway requests and compaction hooks can open turns
+without a prompt hook.
+
+### Export Class and Prompt Evidence to GenAI
+
+Enable OpenTelemetry in the existing observability component, then add this
+file sink or use the same mappings on a `gen_ai` endpoint:
+
+```toml
+[components.config.opentelemetry]
+enabled = true
+
+[[components.config.opentelemetry.file_sinks]]
+type = "gen_ai"
+output_directory = ".nemo-relay/genai"
+filename = "spans.jsonl"
+format = "json_lines"
+attribute_mappings = [
+  { key = "nemo_relay.start.metadata.claude_code_request_class", alias = "client.claude_code.request_class" },
+  { key = "nemo_relay.end.metadata.turn_prompt_observed", alias = "client.turn.prompt_observed" },
+]
+```
+
+These custom aliases expose the class on model spans and the final prompt flag
+on turn spans. They are not standard GenAI attributes. See
+[attribute mappings](/configure-plugins/observability/opentelemetry#attribute-mappings)
+for configuration and sanitization behavior.
 
 ## Hook Limitations
 
