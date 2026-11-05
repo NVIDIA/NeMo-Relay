@@ -5286,9 +5286,14 @@ async fn hook_marks_reach_session_filtered_atof_with_session_metadata() {
     config.metadata = Some(json!({
         "experiment": "mark-metadata",
         "team": "configured",
+        "agent_version": "untrusted",
         "session_id": "untrusted",
         "session_instance_id": "untrusted"
     }));
+    config.launched_agent = Some(crate::configuration::LaunchedAgent {
+        kind: AgentKind::ClaudeCode,
+        version: "2.1.121".into(),
+    });
     let manager = SessionManager::new(config);
     let headers = HeaderMap::new();
     for (kind, session_id, hook_names) in cases {
@@ -5365,6 +5370,11 @@ async fn hook_marks_reach_session_filtered_atof_with_session_metadata() {
             assert_eq!(metadata["team"], "session");
             assert_eq!(metadata["user_id"], session_id);
             assert_eq!(metadata["hook_event_name"], hook_name);
+            if kind == AgentKind::ClaudeCode {
+                assert_eq!(metadata["agent_version"], "2.1.121");
+            } else {
+                assert!(metadata.get("agent_version").is_none());
+            }
         }
     }
 }

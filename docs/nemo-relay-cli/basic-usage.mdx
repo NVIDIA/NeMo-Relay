@@ -44,9 +44,14 @@ payloads, user identity, and subagent metadata in NeMo Relay event metadata.
 
 Compaction, notification, and generic hook marks include `session_id` and
 `session_instance_id` in their metadata, along with configured and session
-metadata. Subscribers can filter marks by session without parsing the
-agent-specific payload. Non-null event metadata overrides configured and
-session values, but cannot replace the canonical session identity.
+metadata. Custom subscribers can filter marks by session without parsing the
+agent-specific payload.
+
+For custom fields, non-null hook metadata takes precedence over configured and
+session metadata. Relay supplies the session identity and harness type. Its
+non-null gateway and plugin settings take precedence. Relay takes `agent_version`
+from the harness executable it launched. It omits the field if no harness was
+launched or the session uses a different harness.
 
 ## Gateway Routes
 
