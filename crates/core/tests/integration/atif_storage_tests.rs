@@ -621,8 +621,8 @@ fn slow_atif_http_upload_does_not_hold_the_dispatcher_but_flush_waits_for_it() {
         let (mut stream, _) = listener.accept().expect("accept upload");
         let _ = read_http_request(&mut stream);
         std::thread::sleep(delay);
-        write_http_response(&mut stream, 200);
         server_received.fetch_add(1, std::sync::atomic::Ordering::SeqCst);
+        write_http_response(&mut stream, 200);
     });
     // SAFETY: this uniquely named env var is only touched by this module under the test lock.
     unsafe {
