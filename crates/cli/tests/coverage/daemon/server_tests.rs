@@ -105,6 +105,23 @@ async fn forwarding_waits_for_cancellation_unless_a_deadline_is_configured() {
     }
 }
 
+/// Asserts one daemon response body against its schema in the published OpenAPI spec.
+fn assert_matches_openapi(path: &str, status: &str, body: &serde_json::Value) {
+    let spec: serde_json::Value =
+        serde_json::from_str(include_str!("../../../../../fern/apis/daemon/openapi.json")).unwrap();
+    let schema = json!({
+        "$ref": spec["paths"][path]["get"]["responses"][status]["content"]["application/json"]
+            ["schema"]["$ref"],
+        "components": spec["components"],
+    });
+    let validator = jsonschema::draft202012::new(&schema).unwrap();
+    let errors = validator
+        .iter_errors(body)
+        .map(|error| error.to_string())
+        .collect::<Vec<_>>();
+    assert!(errors.is_empty(), "{path} {status}: {errors:?}");
+}
+
 #[tokio::test]
 async fn daemon_health_is_a_public_process_probe() {
     let state = test_daemon_state(false, "", GatewayConfig::default());
@@ -119,6 +136,7 @@ async fn daemon_health_is_a_public_process_probe() {
     assert_eq!(health.headers()[CACHE_CONTROL], "no-store");
     let health: serde_json::Value =
         serde_json::from_slice(&health.into_body().collect().await.unwrap().to_bytes()).unwrap();
+    assert_matches_openapi("/healthz", "200", &health);
     assert_eq!(health["status"], "ok");
     assert_eq!(health["service"], "nemo-relay-daemon");
     assert_eq!(health["version"], env!("CARGO_PKG_VERSION"));
@@ -191,6 +209,7 @@ async fn worker_status_endpoints_list_aggregate_and_select_without_authenticatio
     let list: serde_json::Value =
         serde_json::from_slice(&response.into_body().collect().await.unwrap().to_bytes()).unwrap();
     assert_eq!(list["workers"], json!([worker_id]));
+    assert_matches_openapi("/_nemo_relay/v1/workers", "200", &list);
 
     let response = app
         .clone()
@@ -203,6 +222,7 @@ async fn worker_status_endpoints_list_aggregate_and_select_without_authenticatio
         .unwrap();
     let aggregate: serde_json::Value =
         serde_json::from_slice(&response.into_body().collect().await.unwrap().to_bytes()).unwrap();
+    assert_matches_openapi("/_nemo_relay/v1/workers/status", "200", &aggregate);
     assert_eq!(aggregate["workers"][0]["worker_id"], worker_id);
     assert_eq!(aggregate["workers"][0]["state"], "ready");
     assert_eq!(aggregate["workers"][0]["reference_count"], 1);
@@ -221,6 +241,11 @@ async fn worker_status_endpoints_list_aggregate_and_select_without_authenticatio
     assert_eq!(response.status(), StatusCode::OK);
     let individual: serde_json::Value =
         serde_json::from_slice(&response.into_body().collect().await.unwrap().to_bytes()).unwrap();
+    assert_matches_openapi(
+        "/_nemo_relay/v1/workers/{instance_uuid}/status",
+        "200",
+        &individual,
+    );
     assert_eq!(individual["worker"], aggregate["workers"][0]);
 
     let missing = app
@@ -233,6 +258,13 @@ async fn worker_status_endpoints_list_aggregate_and_select_without_authenticatio
         .unwrap();
     assert_eq!(missing.status(), StatusCode::NOT_FOUND);
     assert_eq!(missing.headers()[CACHE_CONTROL], "no-store");
+    let missing: serde_json::Value =
+        serde_json::from_slice(&missing.into_body().collect().await.unwrap().to_bytes()).unwrap();
+    assert_matches_openapi(
+        "/_nemo_relay/v1/workers/{instance_uuid}/status",
+        "404",
+        &missing,
+    );
 
     let encoded = serde_json::to_string(&aggregate).unwrap();
     assert!(!encoded.contains("status-route-token"));

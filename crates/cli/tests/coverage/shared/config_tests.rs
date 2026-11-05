@@ -702,6 +702,8 @@ fn config() -> GatewayConfig {
         max_hook_payload_bytes: crate::configuration::DEFAULT_MAX_HOOK_PAYLOAD_BYTES,
         launched_agent: None,
         max_passthrough_body_bytes: crate::configuration::DEFAULT_MAX_PASSTHROUGH_BODY_BYTES,
+        openai_oidc: None,
+        anthropic_oidc: None,
     }
 }
 
@@ -5881,4 +5883,24 @@ fn logging_failure_policy_layers_by_sink_path_for_cli_and_daemon() {
             );
         }
     }
+}
+
+#[test]
+fn a_higher_layer_oidc_section_replaces_the_lower_one_as_a_whole() {
+    let mut merged: toml::Value = toml::from_str(
+        "[upstream.openai_oidc]\nissuer = \"https://lower.example\"\nclient_id = \"lower\"\nscope = \"openid\"\n",
+    )
+    .unwrap();
+    let higher: toml::Value =
+        toml::from_str("[upstream.openai_oidc]\nclient_id = \"higher\"\n").unwrap();
+
+    merge_gateway_config_toml(&mut merged, higher);
+
+    let section = merged["upstream"]["openai_oidc"].as_table().unwrap();
+    assert_eq!(
+        section.get("client_id").and_then(toml::Value::as_str),
+        Some("higher")
+    );
+    assert!(section.get("issuer").is_none(), "{section:?}");
+    assert!(section.get("scope").is_none(), "{section:?}");
 }

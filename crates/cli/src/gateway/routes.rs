@@ -62,7 +62,7 @@ impl ProviderRoute {
     }
 
     pub(super) fn has_helper(self, config: &crate::configuration::GatewayConfig) -> bool {
-        crate::upstream_auth::helper(config, self.is_anthropic()).is_some()
+        crate::upstream_auth::mints_credential(config, self.is_anthropic())
     }
 
     pub(super) fn has_replacement(self, config: &crate::configuration::GatewayConfig) -> bool {

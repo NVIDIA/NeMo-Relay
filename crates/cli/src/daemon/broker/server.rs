@@ -2039,8 +2039,10 @@ async fn forward_to_provider(
         return error.into_response();
     }
     let helper_auth = allow_environment_provider_auth
-        && crate::upstream_auth::helper(&state.config, matches!(route, ProviderRoute::Anthropic))
-            .is_some();
+        && crate::upstream_auth::mints_credential(
+            &state.config,
+            matches!(route, ProviderRoute::Anthropic),
+        );
     if crate::gateway::websocket::is_websocket(&request) {
         return crate::gateway::websocket::forward_to_provider(
             client_named,

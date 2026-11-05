@@ -671,8 +671,10 @@ async fn dispatch_unmanaged(
     let upstream = crate::daemon::common::transport::provider_client(
         &upstream,
         allow_environment_provider_auth
-            && crate::upstream_auth::helper(config, matches!(route, ProviderRoute::Anthropic))
-                .is_some(),
+            && crate::upstream_auth::mints_credential(
+                config,
+                matches!(route, ProviderRoute::Anthropic),
+            ),
     )
     .map_err(|error| CliError::Launch(error.to_string()))?;
     let strip = [
@@ -745,8 +747,10 @@ async fn dispatch_unbuffered_observed(
     let upstream = crate::daemon::common::transport::provider_client(
         &upstream,
         allow_environment_provider_auth
-            && crate::upstream_auth::helper(config, matches!(route, ProviderRoute::Anthropic))
-                .is_some(),
+            && crate::upstream_auth::mints_credential(
+                config,
+                matches!(route, ProviderRoute::Anthropic),
+            ),
     )
     .map_err(|error| CliError::Launch(error.to_string()))?;
     let strip = [
@@ -876,8 +880,10 @@ async fn dispatch_observed(
         &upstream,
         !explicit_target
             && allow_environment_provider_auth
-            && crate::upstream_auth::helper(config, matches!(route, ProviderRoute::Anthropic))
-                .is_some(),
+            && crate::upstream_auth::mints_credential(
+                config,
+                matches!(route, ProviderRoute::Anthropic),
+            ),
     )
     .map_err(|error| CliError::Launch(error.to_string()))?;
     let strip = [

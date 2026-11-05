@@ -523,15 +523,17 @@ follows:
 The client must have Relay access to use Relay's credentials. For managed
 provider requests and model lists, Relay resolves credentials in this order:
 
-1. If a helper is configured, its token replaces any provider credential
+1. If the provider has an `oidc` section, the access token of the stored
+   sign-in replaces any provider credential from the client.
+2. If a helper is configured, its token replaces any provider credential
    from the client. Relay runs the helper for each outbound request attempt
    when `cache_ttl_ms` is omitted or `0`. With a positive value, Relay reuses
    the cached token until the cache interval ends.
-2. Without a helper, Relay keeps an inbound `Authorization`, `x-api-key`,
+3. Without an `oidc` section or a helper, Relay keeps an inbound `Authorization`, `x-api-key`,
    `api-key`, or `anthropic-api-key` header.
-3. If the client sends no credential, Relay uses the configured API key or
+4. If the client sends no credential, Relay uses the configured API key or
    custom authorization header for that provider.
-4. If no credential is configured, Relay uses `OPENAI_API_KEY` or
+5. If no credential is configured, Relay uses `OPENAI_API_KEY` or
    `ANTHROPIC_API_KEY` with the provider's standard authentication scheme.
 
 With an OpenAI helper, Relay warns about and ignores `OPENAI_API_KEY` and
@@ -788,6 +790,68 @@ Relay keeps the upstream redirect status but removes its `Location` header.
 This stops callers from following the redirect and resending a prompt.
 Successful responses keep their `Location` headers. Managed requests treat the
 redirect as an upstream failure. Configure the final provider URL directly.
+
+### Sign In With OpenID Connect
+
+Some providers authenticate users with OpenID Connect (OIDC) instead of static
+API keys. Relay can own that sign-in. Each user signs in once, and the gateway
+adds a current access token to every upstream request for that provider.
+
+An administrator names the provider once, for example in the system
+`config.toml`. The issuer, client ID, and scopes are not secrets:
+
+```toml
+[upstream]
+openai_base_url = "https://openrouter.ai/api/v1"
+
+[upstream.openai_oidc]
+issuer = "https://clerk.openrouter.ai"
+client_id = "<client id>"
+scope = "openid offline_access email inference"
+```
+
+Use `[upstream.anthropic_oidc]` the same way for the Anthropic upstream. A
+provider's `oidc` section replaces its other credential sources: it cannot be
+combined with `api_key`, `auth_header`, or `api_key_helper`. `scope` defaults to
+`openid offline_access`.
+
+Each user then signs in once:
+
+```bash
+nemo-relay auth login
+```
+
+The command reads the provider from the effective configuration, including a
+file passed with `--config`. When both providers have an `oidc` section with
+different values, add `--provider openai` or `--provider anthropic`. The command
+uses the OAuth 2.0 device authorization grant. It prints a URL and a code. Open
+the URL on any device, enter the code, and approve the sign-in. The command does
+not need a local browser, so it also works over SSH.
+
+Relay stores the sign-in in `<user config dir>/oidc/` with owner-only access,
+one file for each issuer, client ID, and scope. The gateway reads it for each request.
+When the access token expires within five minutes, the gateway refreshes it with
+the stored refresh token first. Refreshes from several processes run one at a
+time, so a rotated refresh token is never used twice. Because the gateway reads
+the stored sign-in for each request, the token's real expiry applies, and
+`nemo-relay auth logout` takes effect on the next request.
+
+Relay adds the token only to requests it authenticates: agents that Relay
+launches, and daemon routes bound by the managed integration. A client that only
+points its base URL at a shared gateway gets no Relay credential, the same as
+with a static API key. Claude Code needs a credential before it starts, so set
+`ANTHROPIC_API_KEY` to any placeholder value. Relay replaces it.
+
+Without a sign-in, or when the provider rejects the refresh token, the gateway
+stops the request with HTTP 401 and an error that names `nemo-relay auth login`. A temporary
+provider error keeps the stored sign-in. `nemo-relay doctor` reports whether
+each configured sign-in exists, is valid, has expired but can refresh, or needs
+a new sign-in. `nemo-relay auth token` prints the current access token for
+scripts.
+
+The issuer must use `https`, or `http` on a loopback address. Its token and
+device endpoints must have the same origin as the issuer. Relay never writes
+tokens to logs or error messages.
 
 ### Operational Logging
 
