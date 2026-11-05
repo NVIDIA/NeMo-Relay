@@ -5,6 +5,7 @@
 //! exporter-specific policy boundaries and shared scalar extraction.
 
 use super::*;
+use nemo_relay_types::codec::response::CacheWriteTokenCounts;
 use serde_json::json;
 
 #[test]
@@ -147,8 +148,19 @@ fn usage_extracts_nested_anthropic_one_hour_cache_writes() {
         }
     });
     let usage = usage_from_manual_llm_output(Some(&output)).expect("has cache usage");
-    assert_eq!(usage.cache_write_tokens, Some(50));
-    assert_eq!(usage.cache_write_1h_tokens, Some(20));
+    assert_eq!(
+        usage.cache_write_tokens,
+        Some(vec![
+            CacheWriteTokenCounts {
+                count: 30,
+                duration: None
+            },
+            CacheWriteTokenCounts {
+                count: 20,
+                duration: Some(3_600)
+            },
+        ])
+    );
 }
 
 #[test]
@@ -163,8 +175,19 @@ fn usage_prefers_nested_one_hour_cache_writes_from_usage_map() {
         }
     });
     let usage = usage_from_manual_llm_output(Some(&output)).expect("has cache usage");
-    assert_eq!(usage.cache_write_tokens, Some(50));
-    assert_eq!(usage.cache_write_1h_tokens, Some(20));
+    assert_eq!(
+        usage.cache_write_tokens,
+        Some(vec![
+            CacheWriteTokenCounts {
+                count: 30,
+                duration: None
+            },
+            CacheWriteTokenCounts {
+                count: 20,
+                duration: Some(3_600)
+            },
+        ])
+    );
 }
 
 #[test]
@@ -175,4 +198,44 @@ fn model_name_extraction() {
     );
     assert_eq!(model_name_from_manual_llm_output(Some(&json!({}))), None);
     assert_eq!(model_name_from_manual_llm_output(None), None);
+}
+
+#[test]
+fn usage_reads_the_per_duration_cache_write_list_back() {
+    let output = json!({
+        "usage": {
+            "cache_write_tokens": [{"count": 30, "duration": 300}, {"count": 20, "duration": 3600}]
+        }
+    });
+    let usage = usage_from_manual_llm_output(Some(&output)).expect("has cache usage");
+    assert_eq!(
+        usage.cache_write_tokens,
+        Some(vec![
+            CacheWriteTokenCounts {
+                count: 30,
+                duration: Some(300)
+            },
+            CacheWriteTokenCounts {
+                count: 20,
+                duration: Some(3_600)
+            },
+        ])
+    );
+}
+
+#[test]
+fn usage_map_cache_writes_win_over_a_token_usage_list() {
+    let output = json!({
+        "usage": {"cacheWriteTokens": 10},
+        "token_usage": {"cache_write_tokens": [{"count": 5}]}
+    });
+    let usage = usage_from_manual_llm_output(Some(&output)).expect("has cache usage");
+    assert_eq!(usage.cache_write_total(), Some(10));
+}
+
+#[test]
+fn usage_with_only_a_one_hour_count_has_no_data_to_report() {
+    // Without a total there are no cache writes, so nothing else makes it usage.
+    let output = json!({"usage": {"cache_creation_1h_input_tokens": 3}});
+    assert_eq!(usage_from_manual_llm_output(Some(&output)), None);
 }

@@ -603,43 +603,44 @@ fn session_identity_is_projected_on_trace_roots_and_marks_only() {
 
 #[test]
 fn mapped_orphan_mark_alias_cannot_replace_intrinsic_mark_fields() {
-    let (provider, exporter) = make_provider();
-    let subscriber = OpenTelemetrySubscriber::from_tracer_provider_with_attribute_mappings(
-        provider,
-        "mapping-scope",
-        [crate::OtlpAttributeMapping::new(
-            "nemo_relay.mark.data.value",
-            "nemo_relay.mark.orphan",
-        )],
-    )
-    .unwrap();
-    let callback = subscriber.subscriber();
-    callback(&make_mark_event(
-        None,
-        "mapped-orphan-mark",
-        Some(json!({"value": "not-an-orphan-flag"})),
-    ));
-    subscriber.force_flush().unwrap();
-
-    let spans = exporter.get_finished_spans().unwrap();
-    let span = spans
-        .iter()
-        .find(|span| span.name.as_ref() == "mark:mapped-orphan-mark")
+    for projection in [OpenTelemetryType::Full, OpenTelemetryType::OpenInference] {
+        let (provider, exporter) = make_provider();
+        let subscriber = OpenTelemetrySubscriber::from_tracer_provider_with_type_and_options(
+            provider,
+            "mapping-scope",
+            projection,
+            OpenTelemetrySubscriberOptions {
+                attribute_mappings: ["nemo_relay.mark.orphan", "tool.description"]
+                    .map(|alias| {
+                        crate::OtlpAttributeMapping::new("nemo_relay.mark.data.value", alias)
+                    })
+                    .to_vec(),
+                ..Default::default()
+            },
+        )
         .unwrap();
-    assert_eq!(
-        span.attributes
+        let callback = subscriber.subscriber();
+        callback(&make_mark_event(
+            None,
+            "mapped-orphan-mark",
+            Some(json!({"value": "description"})),
+        ));
+        subscriber.force_flush().unwrap();
+        let spans = exporter.get_finished_spans().unwrap();
+        let span = spans
             .iter()
-            .filter(|attribute| attribute.key.as_str() == "nemo_relay.mark.orphan")
-            .count(),
-        1
-    );
-    assert_eq!(
-        span.attributes
-            .iter()
-            .find(|attribute| attribute.key.as_str() == "nemo_relay.mark.orphan")
-            .map(|attribute| &attribute.value),
-        Some(&opentelemetry::Value::Bool(true))
-    );
+            .find(|span| span.name.as_ref() == "mark:mapped-orphan-mark")
+            .unwrap();
+        let attrs = attr_map(&span.attributes);
+        assert_eq!(attrs["tool.description"], "description");
+        assert_eq!(
+            span.attributes
+                .iter()
+                .find(|attribute| attribute.key.as_str() == "nemo_relay.mark.orphan")
+                .map(|attribute| &attribute.value),
+            Some(&opentelemetry::Value::Bool(true))
+        );
+    }
 }
 
 #[test]
@@ -734,11 +735,19 @@ fn gen_ai_tool_content_is_exported_with_default_options() {
 fn gen_ai_tool_completion_fills_missing_metadata_without_replacing_start_identity() {
     for initial_id in [None, Some("typed-id")] {
         let (provider, exporter) = make_provider();
-        let subscriber = OpenTelemetrySubscriber::from_tracer_provider_with_type(
+        let subscriber = OpenTelemetrySubscriber::from_tracer_provider_with_type_and_options(
             provider,
             "tool-identity",
             OpenTelemetryType::GenAi,
-        );
+            OpenTelemetrySubscriberOptions {
+                attribute_mappings: vec![
+                    crate::OtlpAttributeMapping::new("missing", "gen_ai.tool.description"),
+                    crate::OtlpAttributeMapping::new("gen_ai.tool.description", "app.description"),
+                ],
+                ..Default::default()
+            },
+        )
+        .unwrap();
         let id = Uuid::now_v7();
         let start = make_scope_event_with_profile(
             ScopeCategory::Start,
@@ -769,6 +778,7 @@ fn gen_ai_tool_completion_fills_missing_metadata_without_replacing_start_identit
             attrs.get("gen_ai.tool.description").map(String::as_str),
             Some("Search docs")
         );
+        assert_eq!(attrs["app.description"], "Search docs");
         assert_eq!(
             attrs.get("gen_ai.tool.name").map(String::as_str),
             Some("search")
@@ -1801,4 +1811,254 @@ struct CapturedHttpRequest {
     content_type: String,
     authorization: Option<String>,
     body: Vec<u8>,
+}
+
+#[test]
+fn attribute_mappings_reserve_aliases_against_promoted_metadata() {
+    for projection in [
+        OpenTelemetryType::Full,
+        OpenTelemetryType::GenAi,
+        OpenTelemetryType::OpenInference,
+    ] {
+        let (provider, exporter) = make_provider();
+        let subscriber = OpenTelemetrySubscriber::from_tracer_provider_with_type_and_options(
+            provider,
+            "mapping-precedence",
+            projection,
+            OpenTelemetrySubscriberOptions {
+                attribute_mappings: vec![
+                    crate::OtlpAttributeMapping::new("nemo_relay.start.input.cwd", "app.cwd"),
+                    crate::OtlpAttributeMapping::new("missing", "app.missing"),
+                ],
+                promote_metadata_prefixes: vec!["app.".into()],
+                ..Default::default()
+            },
+        )
+        .unwrap();
+        let callback = subscriber.subscriber();
+        let uuid = Uuid::now_v7();
+        for category in [ScopeCategory::Start, ScopeCategory::End] {
+            callback(&Event::Scope(ScopeEvent::new(
+            BaseEvent::builder().uuid(uuid).name("mapped")
+                .data(json!({"cwd": "/payload"}))
+                .metadata(json!({"app.cwd": "/metadata", "app.missing": "no fallback", "app.other": "retained"}))
+                .build(),
+            category, Vec::new(), EventCategory::agent(), None,
+        )));
+        }
+        subscriber.force_flush().unwrap();
+        let spans = exporter.get_finished_spans().unwrap();
+        let attrs = attr_map(&spans[0].attributes);
+        assert_eq!(attrs["app.cwd"], "/payload");
+        assert_eq!(attrs["app.other"], "retained");
+        assert!(!attrs.contains_key("app.missing"));
+    }
+}
+
+#[test]
+fn attribute_mappings_preserve_native_attributes_without_reserving_namespaces() {
+    for (projection, native_key, native_value) in [
+        (OpenTelemetryType::Full, "nemo_relay.scope_type", "agent"),
+        (
+            OpenTelemetryType::GenAi,
+            "gen_ai.operation.name",
+            "invoke_agent",
+        ),
+        (
+            OpenTelemetryType::OpenInference,
+            "openinference.span.kind",
+            "AGENT",
+        ),
+    ] {
+        let aliases = [
+            "tool.description",
+            "llm.system",
+            "session.custom",
+            "gen_ai.unsupported",
+        ];
+        let (provider, exporter) = make_provider();
+        let subscriber = OpenTelemetrySubscriber::from_tracer_provider_with_type_and_options(
+            provider,
+            "mapped-namespaces",
+            projection,
+            OpenTelemetrySubscriberOptions {
+                attribute_mappings: aliases
+                    .iter()
+                    .copied()
+                    .chain([native_key])
+                    .map(|alias| {
+                        crate::OtlpAttributeMapping::new("nemo_relay.start.input.cwd", alias)
+                    })
+                    .collect(),
+                ..Default::default()
+            },
+        )
+        .unwrap();
+        let callback = subscriber.subscriber();
+        let uuid = Uuid::now_v7();
+        callback(&make_start_event(
+            uuid,
+            None,
+            "agent",
+            ScopeType::Agent,
+            Some(json!({"cwd": "/workspace"})),
+        ));
+        callback(&make_end_event(uuid, None, "agent", ScopeType::Agent, None));
+        subscriber.force_flush().unwrap();
+        let spans = exporter.get_finished_spans().unwrap();
+        let attrs = attr_map(&spans[0].attributes);
+        assert_eq!(attrs[native_key], native_value);
+        for alias in aliases {
+            assert_eq!(attrs[alias], "/workspace", "{projection:?}: {alias}");
+        }
+    }
+}
+
+#[test]
+fn attribute_mappings_use_the_completed_model_name() {
+    for (projection, native_model_key) in [
+        (OpenTelemetryType::Full, "nemo_relay.model_name"),
+        (OpenTelemetryType::GenAi, "gen_ai.request.model"),
+        (OpenTelemetryType::OpenInference, "llm.model_name"),
+    ] {
+        for (response, expected) in [
+            (Some(json!({"model": "served"})), "served"),
+            (None, "requested"),
+        ] {
+            let has_response = response.is_some();
+            let (provider, exporter) = make_provider();
+            let subscriber = OpenTelemetrySubscriber::from_tracer_provider_with_type_and_options(
+                provider,
+                "mapped-model",
+                projection,
+                OpenTelemetrySubscriberOptions {
+                    attribute_mappings: vec![
+                        crate::OtlpAttributeMapping::new("nemo_relay.model_name", "app.model"),
+                        crate::OtlpAttributeMapping::new(
+                            "nemo_relay.start.input.override",
+                            native_model_key,
+                        ),
+                        crate::OtlpAttributeMapping::new(
+                            "nemo_relay.end.output.model",
+                            "nemo_relay.start.input.model",
+                        ),
+                        crate::OtlpAttributeMapping::new(
+                            "nemo_relay.start.input.model",
+                            "app.requested_model",
+                        ),
+                    ],
+                    ..Default::default()
+                },
+            )
+            .unwrap();
+            let callback = subscriber.subscriber();
+            let uuid = Uuid::now_v7();
+            callback(&make_start_event(
+                uuid,
+                None,
+                "model",
+                ScopeType::Llm,
+                Some(json!({"model": "requested", "override": "must-not-replace-native"})),
+            ));
+            callback(&make_end_event(
+                uuid,
+                None,
+                "model",
+                ScopeType::Llm,
+                response,
+            ));
+            subscriber.force_flush().unwrap();
+            let spans = exporter.get_finished_spans().unwrap();
+            let attrs = attr_map(&spans[0].attributes);
+            assert_eq!(attrs["app.model"], expected);
+            assert_eq!(attrs["app.requested_model"], "requested");
+            assert_eq!(
+                attrs[native_model_key],
+                if projection == OpenTelemetryType::GenAi {
+                    "requested"
+                } else {
+                    expected
+                }
+            );
+            assert_eq!(
+                attrs
+                    .get("nemo_relay.start.input.model")
+                    .map(String::as_str),
+                if projection == OpenTelemetryType::Full {
+                    Some("requested")
+                } else {
+                    has_response.then_some("served")
+                },
+            );
+        }
+    }
+}
+
+#[test]
+fn http_trace_export_reports_collector_partial_success_as_runtime_diagnostic() {
+    use opentelemetry_proto::tonic::collector::trace::v1::{
+        ExportTracePartialSuccess, ExportTraceServiceResponse,
+    };
+
+    let _guard = crate::test_mutex().lock().unwrap();
+    let listener = TcpListener::bind("127.0.0.1:0").unwrap();
+    let endpoint = format!("http://{}", listener.local_addr().unwrap());
+    let body = ExportTraceServiceResponse {
+        partial_success: Some(ExportTracePartialSuccess {
+            rejected_spans: 1,
+            error_message: "span rejected by collector policy".into(),
+        }),
+    }
+    .encode_to_vec();
+    let (request_tx, request_rx) = mpsc::channel();
+    thread::spawn(move || {
+        let (mut stream, _) = listener.accept().unwrap();
+        let request = read_http_request(&mut stream);
+        let head = format!(
+            "HTTP/1.1 200 OK\r\nContent-Type: application/x-protobuf\r\nContent-Length: {}\r\n\r\n",
+            body.len()
+        );
+        stream.write_all(head.as_bytes()).unwrap();
+        stream.write_all(&body).unwrap();
+        request_tx.send(request).unwrap();
+    });
+
+    let subscriber = OpenTelemetrySubscriber::new(
+        OpenTelemetryConfig::http_binary("partial-success-test").with_endpoint(endpoint),
+    )
+    .unwrap();
+    let callback = subscriber.subscriber();
+    let uuid = Uuid::now_v7();
+    callback(&make_start_event_with_metadata(
+        uuid,
+        None,
+        "rejected-span",
+        json!({}),
+    ));
+    callback(&make_end_event(
+        uuid,
+        None,
+        "rejected-span",
+        ScopeType::Agent,
+        None,
+    ));
+    subscriber.force_flush().unwrap();
+    request_rx
+        .recv_timeout(Duration::from_secs(5))
+        .expect("expected an OTLP trace export");
+
+    let diagnostics = subscriber.runtime_diagnostics();
+    let rejected = diagnostics
+        .diagnostics
+        .iter()
+        .find(|diagnostic| diagnostic.code == "otel.partial_success")
+        .unwrap_or_else(|| panic!("no otel.partial_success in {diagnostics:?}"));
+    assert_eq!(rejected.count, 1);
+    assert!(!rejected.message.contains("collector policy"));
+    assert!(
+        rejected.message.contains("rejected 1 spans"),
+        "{}",
+        rejected.message
+    );
+    subscriber.shutdown().unwrap();
 }

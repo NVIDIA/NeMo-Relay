@@ -31,12 +31,13 @@ use nemo_relay_runtime::api::runtime::subscriber_dispatcher::{
 };
 use nemo_relay_runtime::api::runtime::{
     EventMetadataInjectorFn, EventSanitizeFn, EventSubscriberFn, LlmConditionalFn,
-    LlmExecutionContext, LlmExecutionFn, LlmExecutionNextFn, LlmJsonStream, LlmRequestInterceptFn,
-    LlmSanitizeRequestContext, LlmSanitizeRequestFn, LlmSanitizeResponseContext,
-    LlmSanitizeResponseFn, LlmStreamExecutionFn, LlmStreamExecutionNextFn, LlmStreamInner,
-    MiddlewareContinuationContext, PropagationContext, ScopeStackHandle, ToolConditionalFn,
-    ToolExecutionContext, ToolExecutionNextFn, ToolInterceptFn, ToolSanitizeFn,
-    capture_propagation_context, capture_traceparent, current_scope_stack,
+    LlmExecutionContext, LlmExecutionFn, LlmExecutionNextFn, LlmFinalizer, LlmJsonStream,
+    LlmRequestInterceptFn, LlmSanitizeRequestContext, LlmSanitizeRequestFn,
+    LlmSanitizeResponseContext, LlmSanitizeResponseFn, LlmStreamExecutionFn,
+    LlmStreamExecutionNextFn, LlmStreamInner, MiddlewareContinuationContext, PropagationContext,
+    ScopeStackHandle, ToolConditionalFn, ToolExecutionContext, ToolExecutionNextFn,
+    ToolInterceptFn, ToolSanitizeFn, capture_propagation_context, capture_traceparent,
+    current_scope_stack,
 };
 use nemo_relay_types::error::{FlowError, Result as FlowResult};
 use pyo3::exceptions::PyRuntimeError;
@@ -607,6 +608,94 @@ fn loop_affine_callback(
         .map(Bound::unbind)
 }
 
+struct PythonExecutionCallback {
+    python_callback: Arc<Py<PyAny>>,
+    registered_task_locals: Option<TaskLocals>,
+}
+
+impl PythonExecutionCallback {
+    fn new(python_callback: Py<PyAny>) -> Self {
+        Self {
+            python_callback: Arc::new(python_callback),
+            registered_task_locals: capture_python_task_locals(),
+        }
+    }
+
+    fn invoke<
+        Argument,
+        ImmediateResult,
+        ResolvedResult,
+        PrepareArgument,
+        SplitResult,
+        ResolveResult,
+        ResolutionFuture,
+    >(
+        &self,
+        prepare_argument: PrepareArgument,
+        split_result: SplitResult,
+        resolve_result: ResolveResult,
+    ) -> impl Future<Output = FlowResult<ResolvedResult>>
+    + Send
+    + use<
+        Argument,
+        ImmediateResult,
+        ResolvedResult,
+        PrepareArgument,
+        SplitResult,
+        ResolveResult,
+        ResolutionFuture,
+    >
+    where
+        Argument: for<'python> IntoPyObject<'python>,
+        ImmediateResult: Send,
+        PrepareArgument: for<'python> FnOnce(Python<'python>) -> FlowResult<Argument> + Send,
+        SplitResult: for<'python> FnOnce(
+                Python<'python>,
+                Py<PyAny>,
+                Option<&TaskLocals>,
+                Option<&Bound<'python, PyAny>>,
+            ) -> FlowResult<Result<ImmediateResult, PyValueFuture>>
+            + Send,
+        ResolveResult:
+            FnOnce(FlowResult<Result<ImmediateResult, PyValueFuture>>) -> ResolutionFuture + Send,
+        ResolutionFuture: Future<Output = FlowResult<ResolvedResult>> + Send,
+    {
+        let python_callback = Arc::clone(&self.python_callback);
+        // Select the caller's loop before the future moves to Rust's executor.
+        let selected_task_locals =
+            task_locals_with_running_loop(self.registered_task_locals.as_ref());
+        async move {
+            let outcome = Python::attach(|python| {
+                let (invocation_context, task_locals) =
+                    copy_middleware_invocation(python, selected_task_locals)
+                        .map_err(|error| FlowError::Internal(error.to_string()))?;
+                let argument = prepare_argument(python)?;
+                let loop_callback = loop_affine_callback(
+                    python,
+                    python_callback.bind(python),
+                    task_locals.as_ref(),
+                    false,
+                )
+                .map_err(|error| FlowError::Internal(error.to_string()))?;
+                let result = match invocation_context.as_ref() {
+                    Some(context) => {
+                        context.call_method1("run", (loop_callback.bind(python), argument))
+                    }
+                    None => loop_callback.bind(python).call1((argument,)),
+                }
+                .map_err(python_callback_error)?;
+                split_result(
+                    python,
+                    result.unbind(),
+                    task_locals.as_ref(),
+                    invocation_context.as_ref(),
+                )
+            });
+            resolve_result(outcome).await
+        }
+    }
+}
+
 async fn resolve_py_object_or_future(
     outcome: FlowResult<Result<Py<PyAny>, PyValueFuture>>,
 ) -> FlowResult<Py<PyAny>> {
@@ -1107,41 +1196,25 @@ pub fn wrap_py_tool_exec_fn(
         + Send
         + Sync,
 > {
-    let py_fn = std::sync::Arc::new(py_fn);
-    let registered_task_locals = capture_python_task_locals();
-    Box::new(move |args: Json| {
-        let py_fn = py_fn.clone();
-        let task_locals = task_locals_with_running_loop(registered_task_locals.as_ref());
-        Box::pin(async move {
-            let result = resolve_py_object_or_future(Python::attach(|py| {
-                let (invocation_context, task_locals) = copy_middleware_invocation(py, task_locals)
-                    .map_err(|error| FlowError::Internal(error.to_string()))?;
-                let py_args =
-                    json_to_py(py, &args).map_err(|e: PyErr| FlowError::Internal(e.to_string()))?;
-                let callback =
-                    loop_affine_callback(py, py_fn.bind(py), task_locals.as_ref(), false)
-                        .map_err(|error| FlowError::Internal(error.to_string()))?;
-                let result = match invocation_context.as_ref() {
-                    Some(context) => context.call_method1("run", (callback.bind(py), py_args)),
-                    None => callback.bind(py).call1((py_args,)),
-                }
-                .map_err(python_callback_error)?;
-                split_py_object_or_future_with_locals(
-                    py,
-                    result.unbind(),
-                    task_locals.as_ref(),
-                    invocation_context.as_ref(),
-                )
-            }))
-            .await?;
-            Python::attach(|py| {
-                result
-                    .extract::<PyToolExecutionResult>(py)
-                    .map_err(tool_execution_callback_result_error)?
-                    .to_inner(py)
+    let callback = PythonExecutionCallback::new(py_fn);
+    Box::new(move |arguments: Json| {
+        Box::pin(callback.invoke(
+            move |python| {
+                json_to_py(python, &arguments)
                     .map_err(|error| FlowError::Internal(error.to_string()))
-            })
-        })
+            },
+            split_py_object_or_future_with_locals,
+            |outcome| async move {
+                let result = resolve_py_object_or_future(outcome).await?;
+                Python::attach(|python| {
+                    result
+                        .extract::<PyToolExecutionResult>(python)
+                        .map_err(tool_execution_callback_result_error)?
+                        .to_inner(python)
+                        .map_err(|error| FlowError::Internal(error.to_string()))
+                })
+            },
+        ))
     })
 }
 
@@ -1275,6 +1348,7 @@ impl PyLlmStreamNextFn {
                     receiver: Arc::new(tokio::sync::Mutex::new(rx)),
                     cancel,
                     closed: closed_rx,
+                    finalizer_error: None,
                 })
             }),
         )
@@ -1709,28 +1783,15 @@ pub fn wrap_py_llm_exec_fn(
     py_fn: Py<PyAny>,
 ) -> Box<dyn Fn(LlmRequest) -> Pin<Box<dyn Future<Output = FlowResult<Json>> + Send>> + Send + Sync>
 {
-    let py_fn = std::sync::Arc::new(py_fn);
-    let registered_task_locals = capture_python_task_locals();
+    let callback = PythonExecutionCallback::new(py_fn);
     Box::new(move |request: LlmRequest| {
-        let py_fn = py_fn.clone();
-        let task_locals = task_locals_with_running_loop(registered_task_locals.as_ref());
-        Box::pin(async move {
-            resolve_json_or_future(Python::attach(|py| {
-                let (invocation_context, task_locals) = copy_middleware_invocation(py, task_locals)
-                    .map_err(|error| FlowError::Internal(error.to_string()))?;
-                let py_req = PyLLMRequest { inner: request };
-                let callback =
-                    loop_affine_callback(py, py_fn.bind(py), task_locals.as_ref(), false)
-                        .map_err(|error| FlowError::Internal(error.to_string()))?;
-                let result = match invocation_context.as_ref() {
-                    Some(context) => context.call_method1("run", (callback.bind(py), py_req)),
-                    None => callback.bind(py).call1((py_req,)),
-                }
-                .map_err(python_callback_error)?;
-                split_json_or_future_with_locals(py, result.unbind(), task_locals.as_ref())
-            }))
-            .await
-        })
+        Box::pin(callback.invoke(
+            move |_| Ok(PyLLMRequest { inner: request }),
+            |python, result, task_locals, _invocation_context| {
+                split_json_or_future_with_locals(python, result, task_locals)
+            },
+            resolve_json_or_future,
+        ))
     })
 }
 
@@ -1807,22 +1868,26 @@ pub fn wrap_py_collector_fn(
 /// The finalizer is called once when the stream is fully consumed or explicitly
 /// closed. Its return value is converted from a Python object to
 /// `serde_json::Value` (Json) and used as the aggregated response.
-pub fn wrap_py_finalizer_fn(py_fn: Py<PyAny>) -> Box<dyn FnOnce() -> Json + Send> {
-    Box::new(move || {
-        Python::attach(|py| {
-            let result = match py_fn.call0(py) {
-                Ok(v) => v,
-                Err(e) => {
-                    eprintln!("nemo_relay: Python finalizer callable failed: {e}");
-                    return Json::Null;
-                }
-            };
-            py_to_json(result.bind(py)).unwrap_or_else(|e| {
-                eprintln!("nemo_relay: py_to_json failed in finalizer: {e}");
-                Json::Null
-            })
-        })
-    })
+pub fn wrap_py_finalizer_fn(
+    python_callable: Py<PyAny>,
+) -> (LlmFinalizer, Arc<Mutex<Option<FlowError>>>) {
+    let finalizer_error = Arc::new(Mutex::new(None));
+    let retained_finalizer_error = Arc::clone(&finalizer_error);
+    let finalizer = LlmFinalizer::Fallible(Box::new(move || {
+        let finalizer_result = Python::attach(|python| {
+            let response = python_callable
+                .call0(python)
+                .map_err(python_callback_error)?;
+            py_to_json(response.bind(python)).map_err(python_callback_error)
+        });
+        if let Err(error) = &finalizer_result {
+            *retained_finalizer_error
+                .lock()
+                .expect("stream finalizer error") = Some(error.clone());
+        }
+        finalizer_result
+    }));
+    (finalizer, finalizer_error)
 }
 
 /// Wrap a Python callable `(Json, LlmSanitizeResponseContext) -> Optional[Json]`.

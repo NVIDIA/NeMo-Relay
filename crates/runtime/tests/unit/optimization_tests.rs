@@ -299,7 +299,10 @@ fn multiple_contributions_and_cache_savings_aggregate_explicitly() {
             completion_tokens: Some(10),
             total_tokens: Some(110),
             cache_read_tokens: Some(20),
-            cache_write_tokens: Some(3),
+            cache_write_tokens: Some(vec![CacheWriteTokenCounts {
+                count: 3,
+                duration: None,
+            }]),
             uncached_input_tokens: None,
             ..Usage::default()
         }),
@@ -315,7 +318,7 @@ fn multiple_contributions_and_cache_savings_aggregate_explicitly() {
         Some(40)
     );
     assert_eq!(
-        summary.baseline_usage.as_ref().unwrap().cache_write_tokens,
+        summary.baseline_usage.as_ref().unwrap().cache_write_total(),
         Some(20)
     );
     assert_eq!(summary.contributions[0].sequence, Some(0));
@@ -1487,7 +1490,10 @@ fn missing_model_pricing_rate_makes_the_summary_partial() {
             prompt_tokens: Some(800),
             completion_tokens: Some(100),
             total_tokens: Some(900),
-            cache_write_tokens: Some(3),
+            cache_write_tokens: Some(vec![CacheWriteTokenCounts {
+                count: 3,
+                duration: None,
+            }]),
             uncached_input_tokens: None,
             ..Usage::default()
         }),

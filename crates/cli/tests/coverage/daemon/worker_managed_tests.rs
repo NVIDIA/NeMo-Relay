@@ -27,6 +27,8 @@ type ProviderRequests = Arc<std::sync::Mutex<Vec<(HeaderMap, Bytes)>>>;
 
 #[tokio::test]
 async fn managed_provider_wait_has_no_default_deadline_and_honors_configuration() {
+    // Trust-store initialization is synchronous and is not part of the provider wait.
+    let client = pooled_client().unwrap();
     for (streaming, response_timeout_secs) in [(false, 0), (true, 0), (false, 90), (true, 90)] {
         let started = Arc::new(tokio::sync::Notify::new());
         let release = Arc::new(tokio::sync::Notify::new());
@@ -49,9 +51,10 @@ async fn managed_provider_wait_has_no_default_deadline_and_honors_configuration(
         let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
         let destination = format!("http://{}", listener.local_addr().unwrap());
         let server = tokio::spawn(async move { axum::serve(listener, app).await.unwrap() });
+        let client = client.clone();
         let task = tokio::spawn(async move {
             request_worker_upstream(
-                pooled_client().unwrap(),
+                client,
                 false,
                 Request::post(destination)
                     .body(box_body(Body::empty()))
@@ -1362,10 +1365,11 @@ async fn cancelled_provider_dispatch_releases_sessions_in_both_worker_paths() {
             .unwrap(),
         );
         let dispatch_runtime = Arc::clone(&runtime);
+        let client = pooled_client().unwrap();
         let dispatch = tokio::spawn(async move {
             dispatch_runtime
                 .proxy_provider(
-                    pooled_client().unwrap(),
+                    client,
                     Request::post("/v1/responses")
                         .body(Body::from(
                             r#"{"model":"test","input":"test","stream":true}"#,
@@ -3128,7 +3132,7 @@ async fn http_model_hosts_all_managed_dispatch_paths_are_credential_free() {
         openai_base_url: format!("http://{address}/custom/v1"),
         anthropic_base_url: format!("http://{address}/custom/v1"),
         insecure_http_model_hosts: crate::configuration::HttpModelHosts::parse(vec![
-            address.ip().to_string(),
+            address.host().to_string(),
         ])
         .unwrap(),
         response_timeout_secs: 10,

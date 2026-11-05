@@ -9,7 +9,7 @@ kind = "worker"
 
 [compat]
 relay = ">=1.0.0,<2.0"
-worker_protocol = "grpc-v1"
+worker_protocol = "nvidia.nemo.relay.worker.v1"
 
 [defaults]
 enabled = false
@@ -25,7 +25,7 @@ manifest_root = "."
 artifact = "nemo_relay_python_grpc_worker_example/worker.py"
 
 [integrity]
-sha256 = "sha256:2797df6981b698f90342546a2d0bd725c559355f35c07edd92b53cae49e3ed1c"
+sha256 = "sha256:cba514bd1b91d996acc4c7c9fa0e408a13b08350ea2da83d667fbcbbf4f4d589"
 
 [load]
 runtime = "python"

@@ -20,6 +20,7 @@ from nemo_relay import (
     AtofExporterMode,
     ExporterRuntimeDiagnostic,
     ExporterRuntimeDiagnostics,
+    Json,
     JsonObject,
     LLMAttributes,
     LLMRequest,
@@ -245,6 +246,24 @@ class TestLLMAttributes:
 
 
 class TestLLMRequest:
+    @pytest.mark.parametrize(
+        "content",
+        [
+            pytest.param({"nested": ["payload", None]}, id="object"),
+            pytest.param(["payload"], id="list"),
+            pytest.param("payload", id="string"),
+            pytest.param(42, id="integer"),
+            pytest.param(1.5, id="float"),
+            pytest.param(True, id="boolean"),
+            pytest.param(None, id="null"),
+        ],
+    )
+    def test_content_preserves_json_value_and_type(self, content: Json) -> None:
+        request = LLMRequest({}, content)
+        observed = request.content
+        assert observed == content
+        assert type(observed) is type(content)
+
     def test_constructor(self) -> None:
         req = LLMRequest({"Authorization": "Bearer token"}, {"messages": []})
         assert req.headers == {"Authorization": "Bearer token"}
@@ -1046,17 +1065,20 @@ class TestOpenTelemetryTypes:
         resource = record["resourceSpans"][0]["resource"]["attributes"]
         assert any(entry["key"] == "service.name" for entry in resource)
 
-    def test_file_sink_applies_shared_projection_options(self, tmp_path) -> None:
-        config = OpenTelemetryFileSinkConfig("full", str(tmp_path), "projected.jsonl")
+    @pytest.mark.parametrize("projection", ["full", "gen_ai", "openinference"])
+    def test_file_sink_applies_shared_projection_options(self, tmp_path, projection) -> None:
+        config = OpenTelemetryFileSinkConfig(projection, str(tmp_path), "projected.jsonl")
         config.mark_projection = "tool"
         config.mark_exclude_names = ["custom.mark"]
-        config.attribute_mappings = [{"key": "nemo_relay.scope_type", "alias": "scope.kind"}]
+        config.attribute_mappings = [
+            {"key": "nemo_relay.scope_type", "alias": "scope.kind"},
+            {"key": "nemo_relay.scope_type", "alias": "llm.system"},
+        ]
         config.promote_metadata_prefixes = ["nv."]
         config.promote_resource_metadata_prefixes = ["deployment."]
         config.completed_span_context_ttl_millis = 30_000
 
         assert config.mark_projection == "tool"
-        assert config.attribute_mappings == [{"key": "nemo_relay.scope_type", "alias": "scope.kind"}]
 
         subscriber = OpenTelemetrySubscriber(config)
         subscriber_name = f"py_otel_file_sink_projection_{uuid4().hex}"
@@ -1092,9 +1114,12 @@ class TestOpenTelemetryTypes:
 
         # Asserted per option: a setting parsed but never applied must fail here.
         assert "scope.kind" in span_keys
+        agent = next(span for span in spans if span["name"].endswith("py-projection-agent"))
+        agent_attributes = {entry["key"]: entry["value"] for entry in agent["attributes"]}
+        assert agent_attributes["llm.system"] == {"stringValue": "agent"}
         assert "nv.tenant" in span_keys
         assert "deployment.environment" in resource_keys
-        assert "mark:kept.mark" in span_names, span_names
+        assert ("mark:kept.mark" in span_names) == (projection != "gen_ai"), span_names
         assert not any("custom.mark" in name for name in span_names), span_names
 
     @pytest.mark.parametrize(

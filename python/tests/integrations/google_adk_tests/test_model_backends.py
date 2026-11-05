@@ -550,7 +550,7 @@ async def test_anthropic_model_is_read_as_anthropic_messages(subscribed_events: 
         "completion_tokens": 20,
         "total_tokens": 120,
         "cache_read_tokens": 40,
-        "cache_write_tokens": 10,
+        "cache_write_tokens": [{"count": 10}],
     }
     cost = as_object(usage["cost"])
     assert cost["input"] == pytest.approx(100 * 3.0 / 1e6)
@@ -911,7 +911,7 @@ async def test_lite_llm_model_is_read_as_openai_chat(subscribed_events: list[nem
         "completion_tokens": 20,
         "total_tokens": 120,
         "cache_read_tokens": 40,
-        "cache_write_tokens": 10,
+        "cache_write_tokens": [{"count": 10}],
         "uncached_input_tokens": 50,
     }
     assert_balanced(subscribed_events)
@@ -942,7 +942,7 @@ async def test_a_lite_llm_anthropic_route_is_priced_like_the_anthropic_model(
         "completion_tokens": 20,
         "total_tokens": 170,
         "cache_read_tokens": 40,
-        "cache_write_tokens": 10,
+        "cache_write_tokens": [{"count": 10}],
     }
     cost = as_object(recorded["cost"])
     assert cost["input"] == pytest.approx(100 * 3.0 / 1e6)
@@ -978,7 +978,7 @@ async def test_a_lite_llm_cache_write_without_a_cache_read_is_billed_once(
         "uncached_input_tokens": 100,
         "completion_tokens": 20,
         "total_tokens": 130,
-        "cache_write_tokens": 10,
+        "cache_write_tokens": [{"count": 10}],
     }
     cost = as_object(recorded["cost"])
     assert cost["input"] == pytest.approx(100 * 3.0 / 1e6)
@@ -1020,7 +1020,7 @@ async def test_an_intercept_cache_edit_reaches_the_lite_llm_annotation(
         "completion_tokens": 20,
         "total_tokens": 120,
         "cache_read_tokens": 0,
-        "cache_write_tokens": 10,
+        "cache_write_tokens": [{"count": 10}],
         "uncached_input_tokens": 90,
     }
     assert_balanced(subscribed_events)
@@ -1283,7 +1283,7 @@ async def test_a_lite_llm_stream_reads_the_cache_tokens_litellm_reports(
         "completion_tokens": 7,
         "total_tokens": 57,
         "cache_read_tokens": 20,
-        "cache_write_tokens": 10,
+        "cache_write_tokens": [{"count": 10}],
         "uncached_input_tokens": 20,
     }
     assert_balanced(subscribed_events)

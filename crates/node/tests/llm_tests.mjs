@@ -3,7 +3,7 @@
 
 import { describe, it } from 'node:test';
 import assert from 'node:assert/strict';
-import { execFileSync } from 'node:child_process';
+import { execFileSync, spawnSync } from 'node:child_process';
 import { createRequire } from 'node:module';
 import { readFileSync } from 'node:fs';
 import path from 'node:path';
@@ -402,13 +402,14 @@ describe('LLM execute', () => {
         response: 'ok',
       });
 
+      const unprintable = unprintableError();
       await assert.rejects(
         () =>
           llmCallExecute(
             'exec_status_error_llm',
             makeNative(),
             () => {
-              throw unprintableError();
+              throw unprintable;
             },
             null,
             null,
@@ -418,7 +419,7 @@ describe('LLM execute', () => {
             },
             null,
           ),
-        /JavaScript callback failed/,
+        (error) => error === unprintable,
       );
 
       await flushSubscribers();
@@ -546,14 +547,10 @@ describe('LLM codec callback failures', () => {
         llmCallEnd(handle, {});
         await flushSubscribers();
         assert.match(getLastCallbackError() ?? '', pattern);
-        const start = events.find(
-          (event) => event.name === 'manual_codec_failure' && event.scope_category === 'start',
-        );
+        const start = events.find((event) => event.name === 'manual_codec_failure' && event.scope_category === 'start');
         assert.deepEqual(start.data, original);
         assert.equal(start.category_profile.annotated_request, undefined);
-        const end = events.find(
-          (event) => event.name === 'manual_codec_failure' && event.scope_category === 'end',
-        );
+        const end = events.find((event) => event.name === 'manual_codec_failure' && event.scope_category === 'end');
         assert.notEqual(end, undefined);
         assert.deepEqual(request, original);
       } finally {
@@ -563,6 +560,7 @@ describe('LLM codec callback failures', () => {
   }
 
   it('llmCallExecute rejects a throwing codecDecode without terminating Node', async () => {
+    const thrown = new Error('execute decode boom');
     await assert.rejects(
       () =>
         llmCallExecute(
@@ -575,11 +573,11 @@ describe('LLM codec callback failures', () => {
           null,
           null,
           () => {
-            throw new Error('execute decode boom');
+            throw thrown;
           },
           passthroughEncode,
         ),
-      /JS codec decode callback failed: execute decode boom/,
+      (error) => error === thrown,
     );
     const result = await llmCallExecute('exec_codec_after_decode_throw', makeCodecRequest(), () => ({
       ok: true,
@@ -589,6 +587,7 @@ describe('LLM codec callback failures', () => {
 
   it('llmCallExecute rejects a throwing codecEncode without terminating Node', async () => {
     const codec = new lib.OpenAIChatCodec();
+    const thrown = new Error('execute encode boom');
     await assert.rejects(
       () =>
         llmCallExecute(
@@ -602,10 +601,10 @@ describe('LLM codec callback failures', () => {
           null,
           codec.decode.bind(codec),
           () => {
-            throw new Error('execute encode boom');
+            throw thrown;
           },
         ),
-      /JS codec encode callback failed: execute encode boom/,
+      (error) => error === thrown,
     );
   });
 
@@ -631,13 +630,8 @@ describe('LLM codec callback failures', () => {
       );
       assert.deepEqual(result, { ok: true });
       await flushSubscribers();
-      assert.match(
-        getLastCallbackError() ?? '',
-        /JS response codec decode callback failed: response decode boom/,
-      );
-      const end = events.find(
-        (event) => event.name === 'exec_response_codec_throw' && event.scope_category === 'end',
-      );
+      assert.match(getLastCallbackError() ?? '', /JS response codec decode callback failed: response decode boom/);
+      const end = events.find((event) => event.name === 'exec_response_codec_throw' && event.scope_category === 'end');
       assert.equal(end.category_profile.annotated_response, undefined);
     } finally {
       deregisterSubscriber('exec_response_codec_throw_sub');
@@ -848,6 +842,47 @@ describe('LLM guardrails', () => {
     } finally {
       deregisterLlmSanitizeRequestGuardrail('node_resolved_llm_request_codec');
       deregisterLlmSanitizeResponseGuardrail('node_resolved_llm_response_codec');
+    }
+  });
+
+  it('resolved sanitizer codecs reject BigInt responses with a TypeError', async () => {
+    const codec = new lib.OpenAIChatCodec();
+    let rejection;
+    registerLlmSanitizeResponseGuardrail('node_resolved_llm_response_codec_bigint', 10, (response, context) => {
+      const resolved = context.resolveCodec();
+      assert.notEqual(resolved, null);
+      try {
+        resolved.decodeResponse({ ...response, usage: { prompt_tokens: 1n } });
+      } catch (error) {
+        rejection = error;
+      }
+      return response;
+    });
+
+    try {
+      const response = {
+        id: 'chatcmpl-test',
+        model: 'test-model',
+        choices: [{ index: 0, message: { role: 'assistant', content: 'ok' }, finish_reason: 'stop' }],
+      };
+      await llmCallExecute(
+        'resolved_sanitizer_codec_bigint_llm',
+        makeNative(),
+        () => response,
+        null,
+        null,
+        null,
+        null,
+        null,
+        codec.decode.bind(codec),
+        ({ annotated, original }) => codec.encode(annotated, original),
+        codec.decodeResponse.bind(codec),
+      );
+      await flushSubscribers();
+      assert.ok(rejection instanceof TypeError, `expected a TypeError, got ${rejection}`);
+      assert.match(rejection.message, /BigInt cannot be represented as JSON/);
+    } finally {
+      deregisterLlmSanitizeResponseGuardrail('node_resolved_llm_response_codec_bigint');
     }
   });
 
@@ -2207,7 +2242,7 @@ describe('LLM intercepts', () => {
             null,
             null,
           ),
-        /internal error: 42/i,
+        (value) => value === 42,
       );
     } finally {
       deregisterLlmExecutionIntercept('node_llm_exec_unknown_err');
@@ -2227,7 +2262,7 @@ describe('LLM intercepts', () => {
           null,
           null,
         ),
-      /internal error: 42/i,
+      (value) => value === 42,
     );
   });
 
@@ -2578,12 +2613,13 @@ describe('LLM intercepts', () => {
       () => llmStreamCallExecute('provider_non_iterable_stream_llm', makeNative(), () => ({ invalid: true })),
       /must return an AsyncIterable/i,
     );
+    const empty = new Error(); // NOSONAR javascript:S7722: a provider error with no message is rejected as thrown.
     await assert.rejects(
       () =>
         llmStreamCallExecute('provider_empty_message_stream_llm', makeNative(), () => {
-          throw new Error(); // NOSONAR javascript:S7722: verify the fallback for a provider error with no message.
+          throw empty;
         }),
-      /unknown error/,
+      (error) => error === empty,
     );
   });
 
@@ -2756,14 +2792,20 @@ describe('LLM intercepts', () => {
       });
       await assert.rejects(
         () => stream.next(),
-        /unsupported bigint value.*stream cleanup also failed: .*cleanup boom/i,
+        (error) => {
+          assert.ok(error instanceof AggregateError);
+          assert.match(error.message, /unsupported bigint value.*stream cleanup also failed: .*cleanup boom/i);
+          assert.ok(error.errors[0] instanceof TypeError);
+          assert.equal(error.errors[1].message, 'cleanup boom');
+          return true;
+        },
       );
       await stream.close();
       await flushSubscribers();
       const end = events.find(
         (event) => event.name === 'conversion_then_cleanup_error_llm' && event.scope_category === 'end',
       );
-      assert.equal(end.metadata['exception.type'], 'TypeError');
+      assert.equal(end.metadata['exception.type'], 'AggregateError');
     } finally {
       await stream?.close().catch(() => {});
       deregisterSubscriber('node_conversion_then_cleanup_error');
@@ -3076,8 +3118,8 @@ describe('LLM intercepts', () => {
       );
       assert.deepEqual(await stream.next(), { token: 'only' });
       assert.equal(await stream.next(), null);
-      await assert.rejects(() => stream.close(), /JS finalizer callback failed: finalizer boom/);
-      await assert.rejects(() => stream.close(), /JS finalizer callback failed: finalizer boom/);
+      await assert.rejects(() => stream.close(), /^Error: finalizer boom$/);
+      await assert.rejects(() => stream.close(), /^Error: finalizer boom$/);
       await flushSubscribers();
       const end = events.find((event) => event.name === 'finalizer_error_stream_llm' && event.scope_category === 'end');
       assert.equal(end.data, null);
@@ -3184,8 +3226,8 @@ describe('LLM intercepts', () => {
       );
       assert.deepEqual(await stream.next(), { token: 'only' });
       assert.equal(await stream.next(), null);
-      await assert.rejects(() => stream.close(), /JS finalizer callback failed: async finalizer boom/);
-      await assert.rejects(() => stream.close(), /JS finalizer callback failed: async finalizer boom/);
+      await assert.rejects(() => stream.close(), /^Error: async finalizer boom$/);
+      await assert.rejects(() => stream.close(), /^Error: async finalizer boom$/);
       await flushSubscribers();
       const end = events.find(
         (event) => event.name === 'async_finalizer_error_stream_llm' && event.scope_category === 'end',
@@ -4240,5 +4282,55 @@ describe('LLM event fields', () => {
       deregisterSubscriber('node_llm_field_sub');
       popScope(scope);
     }
+  });
+});
+
+describe('process exit with queued codec callbacks', () => {
+  it('refuses a response codec call queued during exit instead of aborting the process', () => {
+    const script = `
+      const {
+        LlmRequest,
+        llmCallExecute,
+        registerLlmSanitizeResponseGuardrail,
+        OpenAIChatCodec,
+      } = require(${JSON.stringify(path.join(nodeDir, 'index.js'))});
+      let release;
+      registerLlmSanitizeResponseGuardrail('exit_window', 10, (response) => new Promise((resolve) => {
+        release = () => resolve(response);
+      }));
+      const codec = new OpenAIChatCodec();
+      process.on('exit', () => {
+        release();
+        Promise.resolve().then(() => {}).then(() => {}).then(() => {}).then(() => {
+          const end = Date.now() + 300;
+          while (Date.now() < end) {}
+        });
+      });
+      (async () => {
+        await llmCallExecute(
+          'openai-chat',
+          new LlmRequest({}, { model: 'gpt-4o-mini', messages: [] }),
+          () => ({ choices: [] }),
+          null,
+          null,
+          null,
+          null,
+          'gpt-4o-mini',
+          (request) => codec.decode(request),
+          (args) => codec.encode(args.annotated, args.original),
+          (response) => codec.decodeResponse(response),
+        );
+        while (release === undefined) {
+          await new Promise((resolve) => setTimeout(resolve, 1));
+        }
+      })();
+    `;
+    const result = spawnSync(process.execPath, ['--eval', script], { encoding: 'utf8', timeout: 30_000 });
+    assert.equal(result.signal, null, result.stderr);
+    assert.equal(result.status, 0, result.stderr);
+    assert.match(
+      result.stderr,
+      /JS response codec decode callback failed: could not queue the callback: Node environment is shutting down/,
+    );
   });
 });

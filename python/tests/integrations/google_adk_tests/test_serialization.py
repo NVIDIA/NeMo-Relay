@@ -796,6 +796,30 @@ def test_decode_rejects_request_fields_of_the_wrong_shape(
 
 
 @pytest.mark.parametrize(
+    "content",
+    [
+        pytest.param(["payload"], id="list"),
+        pytest.param("payload", id="string"),
+        pytest.param(42, id="integer"),
+        pytest.param(1.5, id="float"),
+        pytest.param(True, id="boolean"),
+        pytest.param(None, id="null"),
+    ],
+)
+@pytest.mark.parametrize("operation", ["decode", "encode"])
+def test_codec_rejects_non_object_request_content(content: nemo_relay.Json, operation: str) -> None:
+    control = nemo_relay.LLMRequest({}, request_payload(_request()))
+    annotation = GEMINI_CODEC.decode(control)
+    malformed = nemo_relay.LLMRequest({}, content)
+
+    with pytest.raises(TypeError, match="ADK request content must be an object"):
+        if operation == "decode":
+            GEMINI_CODEC.decode(malformed)
+        else:
+            GEMINI_CODEC.encode(annotation, malformed)
+
+
+@pytest.mark.parametrize(
     ("payload", "error", "message"),
     [
         pytest.param({"finish_reason": 1}, TypeError, "ADK finish_reason must be text", id="finish_reason"),
@@ -1974,7 +1998,7 @@ _USAGE_DUMP: Final[nemo_relay.JsonObject] = {
                 "completion_tokens": 25,
                 "total_tokens": 75,
                 "cache_read_tokens": 40,
-                "cache_write_tokens": 10,
+                "cache_write_tokens": [{"count": 10}],
             },
             {"api": "anthropic_messages"},
             {"thoughts_token_count": 5},

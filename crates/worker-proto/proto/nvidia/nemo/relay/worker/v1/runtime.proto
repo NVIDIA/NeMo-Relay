@@ -1,0 +1,329 @@
+// SPDX-FileCopyrightText: Copyright (c) 2026, NVIDIA CORPORATION & AFFILIATES. All rights reserved.
+// SPDX-License-Identifier: Apache-2.0
+
+// Defines supporting callback, continuation, codec, scope, and registration models.
+
+syntax = "proto3";
+
+package nvidia.nemo.relay.worker.v1;
+
+import "buf/validate/validate.proto";
+import "google/protobuf/empty.proto";
+import "nvidia/nemo/relay/worker/v1/common.proto";
+import "nvidia/nemo/relay/worker/v1/event.proto";
+import "nvidia/nemo/relay/worker/v1/llm.proto";
+
+// Worker, SDK, runtime, and protocol identities reported during activation.
+message WorkerIdentity {
+  // Plugin identity declared by the manifest and checked during activation.
+  string plugin_id = 1 [(buf.validate.field).string = {min_len: 1}];
+  // Registered plugin kind; it must agree with the activated plugin identity.
+  string plugin_kind = 2 [(buf.validate.field).string = {min_len: 1}];
+  // Required protocol name and semantic contract version to confirm during handshake.
+  ProtocolIdentity protocol = 3 [(buf.validate.field).required = true];
+  // Name of the SDK implementation serving this worker.
+  string sdk_name = 4 [(buf.validate.field).string = {min_len: 1}];
+  // SDK package release version, independent of the protocol version.
+  string sdk_version = 5 [(buf.validate.field).string = {min_len: 1}];
+  // Language runtime implementation serving this worker.
+  string runtime_name = 6 [(buf.validate.field).string = {min_len: 1}];
+  // Language runtime version reported for diagnostics.
+  string runtime_version = 7 [(buf.validate.field).string = {min_len: 1}];
+}
+
+// Worker readiness state; unspecified is not a readiness assertion.
+enum WorkerHealthStatus {
+  // No value supplied; invalid where this contract requires an explicit value.
+  WORKER_HEALTH_STATUS_UNSPECIFIED = 0;
+  // The worker is ready to receive lifecycle requests.
+  WORKER_HEALTH_STATUS_READY = 1;
+  // The worker reports that it is not ready.
+  WORKER_HEALTH_STATUS_UNHEALTHY = 2;
+}
+
+// Configuration diagnostic severity; unspecified is invalid for a reported diagnostic.
+enum ConfigDiagnosticLevel {
+  // No value supplied; invalid where this contract requires an explicit value.
+  CONFIG_DIAGNOSTIC_LEVEL_UNSPECIFIED = 0;
+  // Non-fatal configuration issue that does not prevent initialization.
+  CONFIG_DIAGNOSTIC_LEVEL_WARNING = 1;
+  // Fatal configuration issue that prevents initialization of the component.
+  CONFIG_DIAGNOSTIC_LEVEL_ERROR = 2;
+}
+
+// Structured configuration warning or error with optional component and field location.
+message ConfigDiagnostic {
+  // Severity level for the diagnostic.
+  ConfigDiagnosticLevel level = 1 [(buf.validate.field).enum = {
+    defined_only: true
+    not_in: [0]
+  }];
+  // Stable diagnostic code suitable for machine checks.
+  string code = 2 [(buf.validate.field).string = {min_len: 1}];
+  // Optional component identifier associated with the diagnostic.
+  optional string component = 3;
+  // Optional field path associated with the diagnostic.
+  optional string field = 4;
+  // Human-readable diagnostic message.
+  string message = 5;
+}
+
+// Present validation result; an empty list is successful validation without diagnostics.
+message ConfigDiagnostics {
+  // Bounded entries returned by this operation; an empty list is a successful empty result.
+  repeated ConfigDiagnostic entries = 1;
+}
+
+// Declarative callback and initial conditional-guardrail registrations for one component.
+message RegistrationPlan {
+  // Ordered declarations returned by the plugin or visible in the host registry.
+  repeated Registration registrations = 1;
+  // Initial conditional filters to install atomically with the registration plan.
+  repeated ConditionalMiddlewareGuardrailRegistration conditional_middleware_guardrails = 2;
+}
+
+// One callback's local identity, surface, priority, and chain behavior.
+message Registration {
+  // Callback identity within its plugin component, before host qualification.
+  string local_name = 1 [(buf.validate.field).string = {min_len: 1}];
+  // Required recognized registration surface; unspecified and unknown values are invalid.
+  RegistrationSurface surface = 2 [(buf.validate.field).enum = {
+    defined_only: true
+    not_in: [0]
+  }];
+  // Signed callback priority, interpreted according to the runtime's surface ordering.
+  int32 priority = 3;
+  // Whether successful request interception ends the remaining request-interceptor chain.
+  bool break_chain = 4;
+}
+
+// Declares a static or callback-based filter over runtime registrations.
+message ConditionalMiddlewareGuardrailRegistration {
+  // Identity within the enclosing declaration; preserve its exact case and spelling.
+  string name = 1 [(buf.validate.field).string = {min_len: 1}];
+  // Registration surfaces selected by the filter; validate each surface before applying it.
+  repeated RegistrationSurface kinds = 2 [(buf.validate.field).repeated.items.enum = {
+    defined_only: true
+    not_in: [0]
+  }];
+  // Exact callback registration identity; it must match callback metadata and the selected
+  // surface.
+  string registration_name = 3 [(buf.validate.field).string = {min_len: 1}];
+  // Human-readable explanation for the decision; it does not carry additional authority.
+  string reason = 4;
+  // Whether the registration delegates its decision to a worker callback instead of a static
+  // block.
+  bool callback = 5;
+}
+
+// Tool request/response value supplied to a sanitizer, condition, or request interceptor.
+message ToolValueInvocation {
+  // Tool identity associated with the managed tool operation.
+  string tool_name = 1;
+  // Required application-owned tool value; explicit JSON null is a valid payload.
+  JsonValue value = 2 [(buf.validate.field).required = true];
+}
+
+// Managed tool execution input and its invocation-scoped continuation.
+message ToolExecutionInvocation {
+  // Tool identity associated with the managed tool operation.
+  string tool_name = 1;
+  // Required application-owned tool arguments, including explicit JSON null when applicable.
+  JsonValue args = 2 [(buf.validate.field).required = true];
+  // Optional provider-issued correlation ID recorded on the managed tool call.
+  optional string tool_call_id = 3;
+  // Host-issued continuation bound to the active callback; reject expired or foreign identities.
+  string continuation_id = 4 [(buf.validate.field).string = {min_len: 1}];
+}
+
+// Asks a conditional callback whether selected middleware registrations may execute.
+message ConditionalMiddlewareInvocation {
+  // Registration surfaces selected by the filter; validate each surface before applying it.
+  repeated RegistrationSurface kinds = 1 [(buf.validate.field).repeated.items.enum = {
+    defined_only: true
+    not_in: [0]
+  }];
+  // Exact callback registration identity; it must match callback metadata and the selected
+  // surface.
+  string registration_name = 2 [(buf.validate.field).string = {min_len: 1}];
+}
+
+// Uniform codec reference metadata, independent of implementation or provider.
+// The host selects the actual codec through its invocation-scoped capability.
+message LlmCodecReference {
+  // Open identity namespace supplied by the host; no implementation catalogue is enforced.
+  string kind = 1 [(buf.validate.field).string = {min_len: 1}];
+  // Optional stable codec identifier; anonymous implementations may omit it.
+  optional string id = 2 [(buf.validate.field).string = {min_len: 1}];
+}
+
+// Codec reference and optional invocation-scoped host access capability.
+message LlmCodecContext {
+  // Required descriptive reference, including when no codec is active.
+  LlmCodecReference codec = 1 [(buf.validate.field).required = true];
+  // Opaque invocation-scoped host capability, never exposed to plugin callbacks.
+  optional string capability_id = 2 [(buf.validate.field).string = {min_len: 1}];
+}
+
+// Provider request and codec context supplied to an LLM request sanitizer.
+message LlmSanitizeRequestInvocation {
+  // Required provider request supplied to this callback, continuation, or codec operation.
+  LlmRequest request = 1 [(buf.validate.field).required = true];
+  // Required request- or response-direction codec context for this sanitizer.
+  LlmCodecContext context = 2 [(buf.validate.field).required = true];
+}
+
+// Provider response and codec context supplied to an LLM response sanitizer.
+message LlmSanitizeResponseInvocation {
+  // Required opaque provider response to decode or sanitize.
+  JsonValue response = 1 [(buf.validate.field).required = true];
+  // Required request- or response-direction codec context for this sanitizer.
+  LlmCodecContext context = 2 [(buf.validate.field).required = true];
+}
+
+// Provider request supplied to an LLM execution condition.
+message LlmConditionalInvocation {
+  // Required provider request supplied to this callback, continuation, or codec operation.
+  LlmRequest request = 1 [(buf.validate.field).required = true];
+}
+
+// Request-interceptor input with optional normalized annotation.
+message LlmRequestInvocation {
+  // Model identity associated with the managed LLM operation.
+  string model_name = 1;
+  // Required provider request supplied to this callback, continuation, or codec operation.
+  LlmRequest request = 2 [(buf.validate.field).required = true];
+  // Optional normalized request annotation; authoritative for content when a request codec is
+  // active.
+  AnnotatedLlmRequest annotated_request = 3;
+}
+
+// Unary LLM execution input with request and response codec access.
+message LlmExecutionInvocation {
+  // Model identity associated with the managed LLM operation.
+  string model_name = 1;
+  // Required provider request supplied to this callback, continuation, or codec operation.
+  LlmRequest request = 2 [(buf.validate.field).required = true];
+  // Host-issued continuation bound to the active callback; reject expired or foreign identities.
+  string continuation_id = 3 [(buf.validate.field).string = {min_len: 1}];
+  // Required request codec identity and optional invocation-scoped access capability.
+  LlmCodecContext request_codec = 4 [(buf.validate.field).required = true];
+  // Required unary response codec context; streaming execution does not carry this field.
+  LlmCodecContext response_codec = 5 [(buf.validate.field).required = true];
+}
+
+// Explicit allow or nonempty block reason; missing selection is malformed.
+message GuardrailDecision {
+  // Exactly one recognized alternative is required when this message is present.
+  oneof decision {
+    option (buf.validate.oneof).required = true;
+    // Explicit permission to proceed; absence of the decision is not permission.
+    google.protobuf.Empty allow = 1;
+    // Nonempty reason required; absence of the oneof is malformed, not allow.
+    string block_reason = 2 [(buf.validate.field).string = {min_len: 1}];
+  }
+}
+
+// Rewritten request, optional authoritative annotation, pending marks, and evidence.
+message LlmRequestInterceptOutcome {
+  // Rewritten provider request when no request codec is active. With an active request codec,
+  // callbacks can change headers but must leave content unchanged. Change the provider body
+  // through annotated_request instead.
+  LlmRequest request = 1 [(buf.validate.field).required = true];
+  // Normalized request annotation to carry forward. An active request codec requires this
+  // value and uses it as the source of provider content. Without a request codec, the
+  // annotation is optional.
+  AnnotatedLlmRequest annotated_request = 2;
+  // Ordered marks to emit after Relay creates and starts the LLM scope.
+  repeated PendingMarkSpec pending_marks = 3;
+  // Ordered plugin-neutral optimization evidence for this LLM call.
+  repeated LlmOptimizationContribution optimization_contributions = 4;
+}
+
+// Application-visible tool result and optional opaque annotation.
+message ToolExecutionResult {
+  // Required application-owned result; the JSON bytes may encode explicit null.
+  JsonValue result = 1 [(buf.validate.field).required = true];
+  // Optional opaque annotation. Explicit JSON null normalizes to absence.
+  JsonValue annotation = 2;
+}
+
+// Canonical tool result plus ordered marks for host lifecycle materialization.
+message ToolExecutionInterceptOutcome {
+  // Required canonical application result and optional annotation.
+  ToolExecutionResult value = 1 [(buf.validate.field).required = true];
+  // Ordered marks for the managed tool lifecycle owner to emit.
+  repeated PendingMarkSpec pending_marks = 2;
+}
+
+// Opaque host-issued stack/parent bindings, not public scope UUIDs.
+message ScopeContext {
+  // Opaque host-issued scope-stack binding, owned by this activation.
+  string scope_stack_id = 1 [(buf.validate.field).string = {min_len: 1}];
+  // Opaque parent binding within the selected stack; empty selects no explicit parent binding.
+  string parent_scope_id = 2;
+}
+
+// Owned public scope identity, distinct from an opaque host binding.
+message ScopeStackEntry {
+  // Actual scope handle UUID, never a transport binding identifier.
+  string scope_id = 1 [(buf.validate.field).string = {uuid: true}];
+  // Canonical semantic category; future encoded categories become Unknown.
+  ScopeType scope_type = 2 [(buf.validate.field).enum = {
+    defined_only: true
+    not_in: [0]
+  }];
+}
+
+// Owned scope identities ordered from root to the current top.
+message ScopeStackSnapshot {
+  // Ordered scope identities, including the implicit root.
+  repeated ScopeStackEntry scopes = 1;
+}
+
+// One operational diagnostic code, safe description, and occurrence count.
+message RuntimeDiagnostic {
+  // Stable machine-readable classification; text messages must not be used as codes.
+  string code = 1 [(buf.validate.field).string = {min_len: 1}];
+  // Human-readable description; consumers must not infer control flow from this text.
+  string message = 2;
+  // Accumulated occurrences for this operational diagnostic code.
+  uint64 count = 3;
+}
+
+// Selects core, global API, or plugin ownership of a runtime registration.
+message RuntimeRegistrationOwner {
+  // Exactly one recognized alternative is required when this message is present.
+  oneof owner {
+    option (buf.validate.oneof).required = true;
+    // Registration owned by the core runtime rather than a plugin component.
+    google.protobuf.Empty core = 1;
+    // Registration installed through the process-global API.
+    google.protobuf.Empty global_api = 2;
+    // Plugin component owning the registration.
+    PluginRegistrationOwner plugin = 3;
+  }
+}
+
+// Identifies the plugin kind and optional component ordinal owning a registration.
+message PluginRegistrationOwner {
+  // Registered plugin kind; it must agree with the activated plugin identity.
+  string plugin_kind = 1 [(buf.validate.field).string = {min_len: 1}];
+  // Optional zero-based component ordinal within the owning plugin configuration.
+  optional uint32 component_ordinal = 2;
+}
+
+// Describes local/effective callback identity, surface, and ownership.
+message RuntimeRegistrationIdentity {
+  // Registration surface.
+  RegistrationSurface kind = 1 [(buf.validate.field).enum = {
+    defined_only: true
+    not_in: [0]
+  }];
+  // Name authored by the registration owner.
+  string local_name = 2 [(buf.validate.field).string = {min_len: 1}];
+  // Runtime-qualified name used for gate matching.
+  string effective_name = 3 [(buf.validate.field).string = {min_len: 1}];
+  // Registration owner metadata.
+  RuntimeRegistrationOwner owner = 4 [(buf.validate.field).required = true];
+}

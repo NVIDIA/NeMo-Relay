@@ -22,6 +22,13 @@ You need:
 - A JSON-compatible request projection inside `LLMRequest`.
 - A JSON-compatible response projection for subscribers and exporters.
 
+`LLMRequest.content` accepts any JSON-compatible value: an object, array,
+string, number, boolean, or null. Provider codecs validate their required
+payload shapes and fields.
+
+Runtime acceptance is unchanged. Python callers that access dictionary fields
+must first check that `request.content` is a dictionary.
+
 ## Integration Pattern
 
 Follow this sequence to keep framework work attached to the expected runtime context.
@@ -84,13 +91,13 @@ The examples below wrap one provider call and attach it to the active parent sco
 from typing import TypedDict
 
 import nemo_relay
-from nemo_relay import LLMRequest
+from nemo_relay import Json, LLMRequest
 
 class LlmResponse(TypedDict):
     text: str
     request: object
 
-async def framework_llm(provider_name: str, payload: object) -> LlmResponse:
+async def framework_llm(provider_name: str, payload: Json) -> LlmResponse:
     parent = nemo_relay.scope.get_handle()
     request = LLMRequest({}, payload)
 
@@ -109,7 +116,7 @@ async def framework_llm(provider_name: str, payload: object) -> LlmResponse:
 
 <Tab title="Node.js" language="node">
 ```ts
-import { getHandle, LlmRequest, llmCallExecute, type ScopeHandle } from 'nemo-relay-node';
+import { getHandle, LlmRequest, llmCallExecuteAsync, type ScopeHandle } from 'nemo-relay-node';
 
 type LlmResponse = { text: string; request: unknown };
 
@@ -117,7 +124,7 @@ export async function frameworkLlm(providerName: string, payload: unknown): Prom
   const parent: ScopeHandle = getHandle();
   const request = new LlmRequest({}, payload);
 
-  return await llmCallExecute(
+  return (await llmCallExecuteAsync(
     providerName,
     request,
     async (req: LlmRequest): Promise<LlmResponse> => ({ text: 'hi', request: req.content }),
@@ -126,7 +133,7 @@ export async function frameworkLlm(providerName: string, payload: unknown): Prom
     null,
     null,
     'demo-model',
-  ) as Promise<LlmResponse>;
+  )) as LlmResponse;
 }
 ```
 </Tab>

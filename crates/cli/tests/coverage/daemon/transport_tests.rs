@@ -21,6 +21,68 @@ use tokio::task::JoinHandle;
 
 use super::*;
 
+#[tokio::test]
+async fn plaintext_provider_dispatch_does_not_initialize_tls() {
+    const CHILD_ENV: &str = "NEMO_RELAY_TEST_PLAINTEXT_WITHOUT_TLS";
+    if std::env::var_os(CHILD_ENV).is_none() {
+        // Other tests can install the process-wide crypto provider, so use a fresh process.
+        let output = tokio::process::Command::new(std::env::current_exe().unwrap())
+            .args([
+                "--exact",
+                "daemon::common::transport::tests::plaintext_provider_dispatch_does_not_initialize_tls",
+                "--nocapture",
+            ])
+            .env(CHILD_ENV, "1")
+            .kill_on_drop(true)
+            .output()
+            .await
+            .unwrap();
+        assert!(
+            output.status.success(),
+            "plaintext dispatch failed: {}\n{}",
+            String::from_utf8_lossy(&output.stdout),
+            String::from_utf8_lossy(&output.stderr)
+        );
+        return;
+    }
+
+    assert!(rustls::crypto::CryptoProvider::get_default().is_none());
+    let (listener, address) = crate::test_support::http_model_listener().await;
+    let destination = format!("http://{address}/");
+    let server = tokio::spawn(async move {
+        axum::serve(
+            listener,
+            axum::Router::new().route("/", axum::routing::get(|| async { "provider response" })),
+        )
+        .await
+        .unwrap();
+    });
+    let configured = pooled_builder().build(tower::service_fn(|_: Uri| {
+        std::future::ready(Err::<TokioIo<tokio::net::TcpStream>, _>(
+            std::io::Error::other(
+                "configured provider connector must not be used for plaintext dispatch",
+            ),
+        ))
+    }));
+    let response = request_provider(
+        &configured,
+        false,
+        Request::get(destination)
+            .body(box_body(Empty::<Bytes>::new()))
+            .unwrap(),
+    )
+    .unwrap()
+    .await
+    .unwrap();
+    assert_eq!(response.status(), StatusCode::OK);
+    assert_eq!(
+        response.into_body().collect().await.unwrap().to_bytes(),
+        "provider response"
+    );
+    assert!(rustls::crypto::CryptoProvider::get_default().is_none());
+    server.abort();
+}
+
 #[test]
 fn forwarding_distinguishes_insecure_and_malformed_destinations() {
     for destination in [

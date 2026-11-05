@@ -5,6 +5,12 @@ name: Load CI Tool Versions
 description: Load shared CI tool versions from .github/ci-tool-versions.env
 
 outputs:
+  protoc_version:
+    description: Protocol Buffers compiler version
+    value: ${{ steps.load.outputs.protoc_version }}
+  buf_version:
+    description: Buf version
+    value: ${{ steps.load.outputs.buf_version }}
   go_version:
     description: Go version
     value: ${{ steps.load.outputs.go_version }}
@@ -38,6 +44,9 @@ outputs:
   cargo_about_version:
     description: cargo-about version
     value: ${{ steps.load.outputs.cargo_about_version }}
+  cargo_zigbuild_version:
+    description: cargo-zigbuild version
+    value: ${{ steps.load.outputs.cargo_zigbuild_version }}
 
 runs:
   using: composite
@@ -50,6 +59,8 @@ runs:
         source "${GITHUB_ACTION_PATH}/../../ci-tool-versions.env"
 
         required=(
+          NEMO_RELAY_CI_PROTOC_VERSION
+          NEMO_RELAY_CI_BUF_VERSION
           NEMO_RELAY_CI_GO_VERSION
           NEMO_RELAY_CI_DEFAULT_PYTHON_VER
           NEMO_RELAY_CI_RUST_VERSION
@@ -61,6 +72,7 @@ runs:
           NEMO_RELAY_CI_CARGO_NEXTEST_VERSION
           NEMO_RELAY_CI_CARGO_DENY_VERSION
           NEMO_RELAY_CI_CARGO_ABOUT_VERSION
+          NEMO_RELAY_CI_CARGO_ZIGBUILD_VERSION
         )
 
         for name in "${required[@]}"; do
@@ -71,6 +83,8 @@ runs:
         done
 
         {
+          printf 'protoc_version=%s\n' "$NEMO_RELAY_CI_PROTOC_VERSION"
+          printf 'buf_version=%s\n' "$NEMO_RELAY_CI_BUF_VERSION"
           printf 'go_version=%s\n' "$NEMO_RELAY_CI_GO_VERSION"
           printf 'default_python_version=%s\n' "$NEMO_RELAY_CI_DEFAULT_PYTHON_VER"
           printf 'rust_version=%s\n' "$NEMO_RELAY_CI_RUST_VERSION"
@@ -82,4 +96,5 @@ runs:
           printf 'cargo_nextest_version=%s\n' "$NEMO_RELAY_CI_CARGO_NEXTEST_VERSION"
           printf 'cargo_deny_version=%s\n' "$NEMO_RELAY_CI_CARGO_DENY_VERSION"
           printf 'cargo_about_version=%s\n' "$NEMO_RELAY_CI_CARGO_ABOUT_VERSION"
+          printf 'cargo_zigbuild_version=%s\n' "$NEMO_RELAY_CI_CARGO_ZIGBUILD_VERSION"
         } >> "$GITHUB_OUTPUT"

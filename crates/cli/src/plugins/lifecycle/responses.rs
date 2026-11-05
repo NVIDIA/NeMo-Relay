@@ -269,6 +269,7 @@ pub(super) fn inspect_data(
 pub(super) fn validate_success(
     input: ValidateResponseInput<'_>,
 ) -> ResponseEnvelope<ValidateResponse> {
+    let compatibility_error = input.manifest.validate().err();
     let notes = input
         .entry
         .and_then(|entry| entry.record.status.validation.message.clone())
@@ -278,7 +279,11 @@ pub(super) fn validate_success(
         .entry
         .map(|entry| entry.record.status.validation.environment)
         .unwrap_or(DynamicPluginCheckState::Unknown);
-    let valid = input.policy.policy_satisfied
+    let valid = compatibility_error.is_none()
+        && input.entry.is_none_or(|entry| {
+            entry.record.status.validation.compatibility != DynamicPluginCheckState::Invalid
+        })
+        && input.policy.policy_satisfied
         && input.trust.is_satisfied()
         && environment_state != DynamicPluginCheckState::Invalid;
     let errors = input
@@ -302,6 +307,7 @@ pub(super) fn validate_success(
                 .filter(|error| error.code == "environment_failed")
                 .map(|error| error.message.clone()),
         )
+        .chain(compatibility_error.map(|error| error.to_string()))
         .collect::<Vec<_>>();
 
     success(

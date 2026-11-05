@@ -5,16 +5,16 @@ SPDX-License-Identifier: Apache-2.0
 
 # Python gRPC Worker Plugin
 
-This package is the complete Python worker used by the plugin authoring guide.
-It validates the shared documentation configuration, registers every safe
-`grpc-v1` surface, preserves annotations and Relay-owned accounting, uses
-invocation-scoped codec proxies, transforms streams lazily, and cleans up marks,
-scopes, isolated stacks, and cancelled tasks.
+This is the Python worker used by the NeMo Relay plugin guide. It supports all 17
+`nvidia.nemo.relay.worker.v1` callback types. Configuration selects which callbacks
+to register. The example shows annotations, pending marks, codec access, lazy
+streams, and cleanup of scopes and cancelled work.
 
-The worker targets Relay 0.10 while retaining the `grpc-v1` protocol name. Its tool
-continuation returns `ToolExecutionResult`. Its LLM execution callbacks receive codec
-context before the continuation; non-streaming execution can decode a completed response,
-while streaming execution exposes request codec operations only.
+The worker targets Relay 1.x using the `nvidia.nemo.relay.worker.v1` protocol
+(contract `1.0.0`). Its manifest requires `compat.relay = ">=1.0.0,<2.0"`.
+Its tool continuation returns `ToolExecutionResult`. LLM execution callbacks
+receive codec context before the continuation. Non-streaming callbacks can decode
+a completed response. Streaming callbacks have request codec access only.
 
 Run the example's own test project from this directory:
 
@@ -22,16 +22,15 @@ Run the example's own test project from this directory:
 uv run --locked --package nemo-relay-python-grpc-worker-example --group test pytest
 ```
 
-Each test owns one contract and can be selected independently. The suite builds
-this directory as a wheel in a clean temporary project, checks the mandatory
-source digest and JSON Schema, validates configuration, asserts all 17
-registrations, and then exercises each policy, sanitizer, request rewrite,
-continuation, stream, mark, and scope behavior separately.
+Each test checks one behavior and can run on its own. The suite builds a wheel
+in a clean temporary project. It checks the source digest, JSON Schema,
+configuration, and all 17 registration types. Separate tests cover policies,
+sanitizers, request changes, continuations, streams, marks, and scopes.
 
-The seventeenth surface is an optional activation-owned conditional middleware
-guardrail. `registration_control.enabled` defaults to `false`; its remaining defaults
-are `kinds: ["subscriber"]`, target `documentation-controlled-subscriber`, and reason
-`disabled by documentation plugin`. The callback returns that reason for targets
+The seventeenth callback type is an optional conditional middleware guardrail.
+The activation owns this guardrail. `registration_control.enabled` defaults to `false`. Its default kinds
+are `["subscriber"]`, its target is `documentation-controlled-subscriber`, and its
+reason is `disabled by documentation plugin`. The callback returns that reason for targets
 whose names start with `documentation-controlled-` and returns `None` to leave other
 matching targets enabled. The kinds, effective target, and reason must be nonempty. Refer to
 [Conditional Middleware Guardrails](../../docs/about-nemo-relay/concepts/conditional-middleware-guardrails.mdx)

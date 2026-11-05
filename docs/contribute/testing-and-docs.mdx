@@ -82,6 +82,87 @@ A passing check does not establish that packages have been published, that a
 provider accepts the example, or that the guide runs on every supported system.
 Live execution and cross-platform quickstart validation remain separate work.
 
+## Execute Quick Starts
+
+Use `just test-quickstarts` locally or the manually triggered **Execute Quick
+Starts** GitHub Actions workflow. Install the dev dependencies described above,
+plus `just`, `uv`, Node.js, and Rust. Release and build downloads also need `gh`
+with read access. Local Codex and Claude Code cases require those hosts installed;
+CI provisions pinned versions. Windows requires Git for Windows and PowerShell 7.4+.
+
+```bash
+just test-quickstarts --list
+just test-quickstarts --version 0.11.0 --cases local
+
+# Build development assets and use guides from the same immutable commit.
+git fetch upstream main
+just test-quickstarts --source-ref upstream/main --cases all
+
+# Test candidate assets at an explicit location.
+just test-quickstarts --version 0.11.0-rc.2 --asset-location /path/to/r2-assets
+```
+
+`all` selects every discovered guide; `local` selects Python, Node.js, Rust, and
+LangGraph. Use comma-separated IDs for a focused run, such as
+`--cases langchain,deep-agents`. A new Quick Start needs an unattended adapter:
+`all` fails before execution if any discovered guide lacks one. Select supported
+cases explicitly to run a subset.
+
+Choose one asset source:
+
+| Input | Behavior |
+| --- | --- |
+| `--version VERSION` | Resolve that exact GitHub release; use guides from the current checkout. |
+| `--version VERSION --asset-location LOCATION` | Read a local directory, GitHub release URL, or HTTPS directory with `SHA256SUMS`. |
+| `--version VERSION --run-id ID` | Download assets from a completed Actions build. `--repository OWNER/REPO` selects its repository. |
+| `--source-ref REF` | Pin a local Git ref, build host assets through the harness's `just` recipes with a development profile, and use guides from that source commit. |
+
+Source mode excludes uncommitted changes and cannot be combined with external
+assets or overrides. To reuse a source build, pass its `packages` directory as
+`--asset-location`; the current checkout then supplies the guides. Remote assets
+require matching SHA-256 checksums, and package metadata must match the requested
+version. Rust uses crates.io unless crate assets or a source override are supplied.
+See `just test-quickstarts --help` for `--overrides`, `--hermes-ref`, and other options.
+
+In GitHub Actions, select the execution branch and provide either `version` or
+`source_ref` (for example, `origin/main`), plus optional asset and case inputs.
+The workflow must first exist on the default branch for GitHub to expose its
+normal manual trigger. It runs Linux x86-64 and Apple Silicon macOS with Bash,
+and Windows x86-64 with native PowerShell. No self-hosted runner or inference
+credentials are required.
+
+Each case uses a fresh temporary workspace. The runner substitutes the selected
+Relay installation assets, executes the documented programs and verification
+expressions, and checks exit codes, tool effects, and contracted ATOF lifecycle
+events. Agent cases use a loopback provider with deterministic responses; real
+agents execute tools, and Relay produces the events. GitHub credentials remain
+available for downloads and are excluded from build and case subprocesses.
+
+The command exits nonzero if any selected case fails. Evidence is saved under
+`artifacts/quickstarts/` (or a new `--output` directory): `results.json` identifies
+failed cases and blocks, `resolved-assets.json` identifies packages and hashes,
+and `build.json` records source-build provenance. Logs, lockfiles, and event files
+support diagnosis. CI uploads this evidence and publishes a result summary.
+
+Passing validates those execution paths with the selected assets and host
+versions. It does not validate live-provider authentication, model quality, every
+consumer environment, or the versions and explanations displayed in the prose.
+Use a clean host: system-managed Relay and agent configuration still applies.
+Hermes is installed from an immutable commit, then its Relay dependency is
+overridden with the selected wheel; this compatibility override is recorded.
+Windows ARM64 is outside the CI matrix. Execution is manual, not an automatic
+gate on every update.
+
+The manual workflow also runs helper and document-execution regressions. Run the
+same group locally after installing the dev dependencies:
+
+```bash
+uv run --no-sync python -m unittest \
+  scripts.tests.test_quickstart_execution \
+  scripts.tests.test_quickstart_programs \
+  scripts.tests.test_quickstart_reruns
+```
+
 ## Testing Rule
 
 Run tests for every language surface whose observable behavior can change. Start

@@ -5887,6 +5887,149 @@ async fn claude_direct_gateway_request_seeds_turn_input_before_prompt_hook() {
 }
 
 #[tokio::test]
+async fn claude_notifications_preserve_marks_without_opening_turns() {
+    let _guard = PLUGIN_CONFIG_TEST_LOCK.lock().await;
+    let session_id = "claude-notification-boundaries";
+    let subscriber_name = "cli-claude-notification-boundaries-test";
+    let marks = Arc::new(StdMutex::new(Vec::<Event>::new()));
+    let captured = marks.clone();
+    register_subscriber(
+        subscriber_name,
+        Arc::new(move |event| {
+            if event.name() == "notification"
+                && event
+                    .data()
+                    .and_then(|data| data.get("notification_session"))
+                    == Some(&json!("claude-notification-boundaries"))
+            {
+                captured.lock().unwrap().push(event.clone());
+            }
+        }),
+    )
+    .unwrap();
+    let manager = SessionManager::new(session_test_config());
+    let notification = |label: &str, subagent_id: Option<&str>| {
+        NormalizedEvent::Notification(SessionEvent {
+            session_id: session_id.into(),
+            agent_kind: AgentKind::ClaudeCode,
+            event_name: "Notification".into(),
+            payload: json!({ "notification_session": session_id, "message": label }),
+            metadata: json!({ "subagent_id": subagent_id }),
+        })
+    };
+    manager
+        .apply_events(
+            &HeaderMap::new(),
+            vec![notification("before-session", None)],
+        )
+        .await
+        .unwrap();
+    assert!(
+        manager.inner.lock().await.is_empty(),
+        "a notification must not create active session work"
+    );
+
+    manager
+        .apply_events(
+            &HeaderMap::new(),
+            vec![
+                NormalizedEvent::AgentStarted(session_event(session_id, "SessionStart")),
+                notification("before-prompt", None),
+            ],
+        )
+        .await
+        .unwrap();
+    {
+        let sessions = manager.inner.lock().await;
+        let session = &sessions[session_id];
+        assert!(session.turn_scope.is_none());
+        assert_eq!(session.turn_index, 0);
+        assert!(!session.blocks_plugin_idle_shutdown());
+    }
+    manager
+        .apply_events(
+            &HeaderMap::new(),
+            vec![NormalizedEvent::PromptSubmitted(session_event(
+                session_id,
+                "UserPromptSubmit",
+            ))],
+        )
+        .await
+        .unwrap();
+    let turn_uuid = manager.inner.lock().await[session_id]
+        .turn_scope
+        .as_ref()
+        .unwrap()
+        .uuid;
+    manager
+        .apply_events(
+            &HeaderMap::new(),
+            vec![
+                NormalizedEvent::SubagentStarted(SubagentEvent {
+                    session_id: session_id.into(),
+                    agent_kind: AgentKind::ClaudeCode,
+                    event_name: "SubagentStart".into(),
+                    subagent_id: "worker".into(),
+                    payload: json!({ "agent_type": "Explore" }),
+                    metadata: json!({}),
+                }),
+                notification("root-with-child", None),
+                notification("owned-child", Some("worker")),
+            ],
+        )
+        .await
+        .unwrap();
+    let child_uuid = manager.inner.lock().await[session_id].subagents["worker"].uuid;
+    manager
+        .apply_events(
+            &HeaderMap::new(),
+            vec![
+                NormalizedEvent::SubagentEnded(SubagentEvent {
+                    session_id: session_id.into(),
+                    agent_kind: AgentKind::ClaudeCode,
+                    event_name: "SubagentStop".into(),
+                    subagent_id: "worker".into(),
+                    payload: json!({}),
+                    metadata: json!({}),
+                }),
+                NormalizedEvent::TurnEnded(session_event(session_id, "Stop")),
+                notification("after-turn", None),
+            ],
+        )
+        .await
+        .unwrap();
+    assert!(manager.inner.lock().await[session_id].turn_scope.is_none());
+    assert_eq!(manager.inner.lock().await[session_id].turn_index, 1);
+    flush_subscribers().unwrap();
+    {
+        let captured = marks.lock().unwrap();
+        assert_eq!(captured.len(), 5);
+        assert_eq!(captured[2].parent_uuid(), Some(turn_uuid));
+        assert_eq!(captured[3].parent_uuid(), Some(child_uuid));
+        for (event, label) in captured.iter().zip([
+            "before-session",
+            "before-prompt",
+            "root-with-child",
+            "owned-child",
+            "after-turn",
+        ]) {
+            assert_eq!(
+                event.data(),
+                Some(&json!({ "notification_session": session_id, "message": label }))
+            );
+            assert_eq!(event.metadata().unwrap()["session_id"], json!(session_id));
+            assert_eq!(
+                event.metadata().unwrap()["agent_kind"],
+                json!("claude-code")
+            );
+            assert!(event.metadata().unwrap().get("start_observed").is_none());
+        }
+    }
+    manager.close_all("test_shutdown").await.unwrap();
+    deregister_subscriber(subscriber_name).unwrap();
+}
+
+#[tokio::test]
 async fn claude_orphan_subagent_stop_after_closed_turn_does_not_open_null_turn() {
     let _guard = PLUGIN_CONFIG_TEST_LOCK.lock().await;
     let temp = tempfile::tempdir().unwrap();

@@ -390,6 +390,7 @@ class OpenTelemetryLogSectionConfig:
                 "max_queue_size": self.max_queue_size,
                 "max_export_batch_size": self.max_export_batch_size,
                 "scheduled_delay_millis": self.scheduled_delay_millis,
+                "completed_span_context_ttl_millis": self.completed_span_context_ttl_millis,
             }
         )
 

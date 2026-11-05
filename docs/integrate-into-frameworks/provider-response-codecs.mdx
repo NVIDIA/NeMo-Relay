@@ -372,7 +372,7 @@ Relay does not model are dropped.
 | `completion_tokens` | Output/completion tokens, passed through unmodified. For OpenAI Responses this is the provider's `output_tokens` (which per OpenAI already includes any reasoning tokens); the reasoning count is reported separately under `api_specific` and is not added on top. |
 | `total_tokens` | Provider-reported, or computed as `prompt + completion` by some codecs (such as Anthropic) when the provider omits it. |
 | `cache_read_tokens` | Prompt-cache read tokens, when the provider reports prompt caching. |
-| `cache_write_tokens` | Prompt-cache write tokens (Anthropic-style providers). |
+| `cache_write_tokens` | Prompt-cache write tokens as a list of `{count, duration}`, one entry per cache duration in seconds. `duration` is omitted when the provider does not say. |
 | `uncached_input_tokens` | Input tokens without cache reads or cache writes. When present, pricing bills this count at the input rate. |
 | `cost` | Normalized `CostEstimate`, when reported by the provider or estimable from configured pricing. |
 
@@ -384,7 +384,7 @@ Built-in codecs normalize provider field names as follows:
 | `completion_tokens` | `completion_tokens` | `output_tokens` | `output_tokens` | `completionTokens` | `candidatesTokenCount` |
 | `total_tokens` | `total_tokens` | `total_tokens` | computed | `totalTokens` | `totalTokenCount`, or computed as prompt + candidates + tool-use prompt + thinking |
 | `cache_read_tokens` | `prompt_tokens_details.cached_tokens` | `input_tokens_details.cached_tokens` | `cache_read_input_tokens` | `promptTokensDetails.cachedTokens` | `cachedContentTokenCount` |
-| `cache_write_tokens` | — | — | `cache_creation_input_tokens` | — | — |
+| `cache_write_tokens` | — | — | `cache_creation_input_tokens`, split into 300 and 3600 second entries by `cache_creation.ephemeral_1h_input_tokens` when present | — | — |
 | `uncached_input_tokens` | `prompt_tokens - prompt_tokens_details.cached_tokens`, when both are reported | `input_tokens - input_tokens_details.cached_tokens`, when both are reported | `input_tokens` | `promptTokens - promptTokensDetails.cachedTokens`, when both are reported | `promptTokenCount - cachedContentTokenCount`, when both are reported |
 | `cost` | `cost_usd`, structured `cost`, or scalar `cost` (OpenRouter; USD provider-reported total) | `cost_usd`, structured `cost`, or scalar `cost` (USD provider-reported total) | `cost_usd`, structured `cost`, or scalar `cost` (USD provider-reported total) | — | — |
 
@@ -491,9 +491,12 @@ from nemo_relay import LLMRequest
 from nemo_relay.codecs import OpenAIChatCodec
 
 async def invoke_provider(request: LLMRequest) -> dict[str, object]:
+    content = request.content
+    if not isinstance(content, dict):
+        raise TypeError("Provider request content must be an object")
     return {
         "id": "chatcmpl-demo",
-        "model": request.content["model"],
+        "model": content["model"],
         "choices": [
             {
                 "finish_reason": "stop",
@@ -516,7 +519,7 @@ response = await nemo_relay.llm.execute(
 
 <Tab title="Node.js" language="node">
 ```ts
-import { OpenAIChatCodec } from 'nemo-relay-node';
+import { OpenAIChatCodec, flushSubscribers } from 'nemo-relay-node';
 import { JsonPassthrough, typedLlmExecute } from 'nemo-relay-node/typed';
 
 const codec = new OpenAIChatCodec();
@@ -541,6 +544,7 @@ const response = await typedLlmExecute(
     responseCodec: codec,
   },
 );
+await flushSubscribers();
 ```
 </Tab>
 

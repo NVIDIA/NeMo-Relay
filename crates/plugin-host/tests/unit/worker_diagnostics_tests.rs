@@ -5,8 +5,8 @@ use super::*;
 use nemo_relay_diagnostics::{
     DiagnosticLimits, DiagnosticQuery, DiagnosticsSettings, SourceIdentity,
 };
-use wire::diagnostic_submission::Operation;
-use wire::relay_diagnostics_server::RelayDiagnostics;
+use wire::relay_diagnostics_service_server::RelayDiagnosticsService;
+use wire::submit_diagnostic_request::Operation;
 
 fn context(limits: DiagnosticLimits) -> Diagnostics {
     Diagnostics::from_settings(
@@ -27,10 +27,13 @@ fn host() -> WorkerDiagnostics {
     WorkerDiagnostics::new(context(DiagnosticLimits::default()), Uuid::now_v7())
 }
 fn open(host: &WorkerDiagnostics) -> Vec<u8> {
-    host.open(&wire::DiagnosticOpenRequest {
-        protocol_version: 1,
-        snapshot_version: 1,
-        provenance_version: 1,
+    host.open(&wire::OpenDiagnosticSessionRequest {
+        protocol: Some(wire::ProtocolIdentity {
+            name: wire::WORKER_PROTOCOL.into(),
+            version: wire::CONTRACT_VERSION.into(),
+        }),
+        snapshot_contract_version: wire::DIAGNOSTIC_SNAPSHOT_CONTRACT_VERSION.into(),
+        provenance_contract_version: wire::DIAGNOSTIC_PROVENANCE_CONTRACT_VERSION.into(),
         ..Default::default()
     })
     .unwrap()
@@ -46,8 +49,12 @@ fn registration() -> wire::DiagnosticComponentRegistration {
         }],
     }
 }
-fn submission(session: &[u8], sequence: u64, operation: Operation) -> wire::DiagnosticSubmission {
-    wire::DiagnosticSubmission {
+fn submission(
+    session: &[u8],
+    sequence: u64,
+    operation: Operation,
+) -> wire::SubmitDiagnosticRequest {
+    wire::SubmitDiagnosticRequest {
         session_id: session.into(),
         sequence,
         operation: Some(operation),
@@ -64,7 +71,10 @@ fn observation(count: u64) -> wire::DiagnosticObservation {
         failure_class: Some("internal".into()),
         detail: Some("restricted-detail-sentinel".into()),
         request_id: Some("restricted-correlation".into()),
-        observed_unix_micros: Some(0),
+        observe_time: Some(prost_types::Timestamp {
+            seconds: 0,
+            nanos: 0,
+        }),
         ..Default::default()
     }
 }
@@ -88,6 +98,38 @@ fn register(host: &WorkerDiagnostics, session: &[u8]) {
         wire::DiagnosticReceiptStatus::Registered as i32
     );
     assert_eq!(result.component, 1);
+}
+
+#[test]
+fn lifecycle_receipts_satisfy_the_published_contract() {
+    let host = host();
+    let session = open(&host);
+    let mut rejected = observation(1);
+    rejected.component = 99;
+    let operations = [
+        Operation::RegisterComponent(registration()),
+        Operation::Record(observation(1)),
+        Operation::Record(rejected),
+        Operation::CloseComponent(wire::DiagnosticComponentClose { component: 1 }),
+        Operation::CloseSession(()),
+    ];
+    let statuses = [
+        wire::DiagnosticReceiptStatus::Registered,
+        wire::DiagnosticReceiptStatus::Recorded,
+        wire::DiagnosticReceiptStatus::Rejected,
+        wire::DiagnosticReceiptStatus::Closed,
+        wire::DiagnosticReceiptStatus::Closed,
+    ];
+    for (index, (operation, status)) in operations.into_iter().zip(statuses).enumerate() {
+        let receipt = host
+            .submit(submission(&session, index as u64 + 1, operation))
+            .unwrap();
+        assert_eq!(receipt.status, status as i32);
+        nemo_relay_worker_proto::validation::validate(&wire::SubmitDiagnosticResponse {
+            receipt: Some(receipt),
+        })
+        .unwrap();
+    }
 }
 
 #[test]
@@ -220,11 +262,7 @@ fn close_and_revoke_fence_handles_without_closing_the_runtime_context() {
             .status,
         wire::DiagnosticReceiptStatus::Rejected as i32
     );
-    let close = submission(
-        &session,
-        4,
-        Operation::CloseSession(wire::DiagnosticSessionClose {}),
-    );
+    let close = submission(&session, 4, Operation::CloseSession(()));
     let receipt = host.submit(close.clone()).unwrap();
     assert_eq!(host.submit(close).unwrap(), receipt);
     assert!(
@@ -233,12 +271,8 @@ fn close_and_revoke_fence_handles_without_closing_the_runtime_context() {
     );
     host.revoke();
     assert!(
-        host.submit(submission(
-            &session,
-            4,
-            Operation::CloseSession(wire::DiagnosticSessionClose {})
-        ))
-        .is_err()
+        host.submit(submission(&session, 4, Operation::CloseSession(())))
+            .is_err()
     );
     assert!(
         host.context
@@ -352,21 +386,26 @@ async fn authentication_and_read_authority_are_separate() {
     let service = Service {
         state: Arc::new(state),
     };
-    let credentials = wire::DiagnosticCredentials {
+    let credentials = wire::Credentials {
         activation_id: "activation".into(),
         auth_token: "secret".into(),
     };
     assert!(
         service
-            .get_diagnostic_capabilities(Request::new(wire::DiagnosticCredentials::default()))
+            .get_diagnostic_capabilities(Request::new(wire::GetDiagnosticCapabilitiesRequest {
+                credentials: None
+            }))
             .await
             .is_err()
     );
     let capability = service
-        .get_diagnostic_capabilities(Request::new(credentials.clone()))
+        .get_diagnostic_capabilities(Request::new(wire::GetDiagnosticCapabilitiesRequest {
+            credentials: Some(credentials.clone()),
+        }))
         .await
         .unwrap()
         .into_inner();
+    let capability = capability.capabilities.unwrap();
     assert!(capability.enabled);
     let discovery = service
         .state
@@ -376,12 +415,12 @@ async fn authentication_and_read_authority_are_separate() {
         .context
         .reader()
         .discovery();
-    assert_eq!(capability.snapshot_version, discovery.snapshot_version);
+    assert_eq!(capability.snapshot_contract_version, "1.0.0");
     assert_eq!(capability.catalogue_version, discovery.catalogue_version);
     assert!(!capability.can_read_context);
     assert_eq!(
         service
-            .read_diagnostic_page(Request::new(wire::DiagnosticReadRequest {
+            .read_diagnostic_page(Request::new(wire::ReadDiagnosticPageRequest {
                 credentials: Some(credentials),
                 ..Default::default()
             }))
@@ -395,7 +434,18 @@ async fn authentication_and_read_authority_are_separate() {
 #[test]
 fn disabled_host_admits_no_session_or_metadata() {
     let host = WorkerDiagnostics::new(Diagnostics::default(), Uuid::now_v7());
-    assert!(open(&host).is_empty());
+    assert!(
+        host.open(&wire::OpenDiagnosticSessionRequest {
+            protocol: Some(wire::ProtocolIdentity {
+                name: wire::WORKER_PROTOCOL.into(),
+                version: wire::CONTRACT_VERSION.into()
+            }),
+            snapshot_contract_version: wire::DIAGNOSTIC_SNAPSHOT_CONTRACT_VERSION.into(),
+            provenance_contract_version: wire::DIAGNOSTIC_PROVENANCE_CONTRACT_VERSION.into(),
+            ..Default::default()
+        })
+        .is_err()
+    );
     assert!(host.state.lock().unwrap().session.is_none());
     assert!(!host.capabilities().enabled);
 }
@@ -406,7 +456,7 @@ async fn diagnostic_decode_limit_rejects_oversized_frames_before_acceptance() {
     let context = Arc::new(host());
     state.diagnostics = Some(context.clone());
     let service = super::super::diagnostic_limits::BoundedService::with_test_limits(
-        wire::relay_diagnostics_server::RelayDiagnosticsServer::new(Service {
+        wire::relay_diagnostics_service_server::RelayDiagnosticsServiceServer::new(Service {
             state: Arc::new(state),
         })
         .max_decoding_message_size(REQUEST_BYTES)
@@ -428,8 +478,9 @@ async fn diagnostic_decode_limit_rejects_oversized_frames_before_acceptance() {
         .connect()
         .await
         .unwrap();
-    let mut client = wire::relay_diagnostics_client::RelayDiagnosticsClient::new(channel);
-    let credentials = wire::DiagnosticCredentials {
+    let mut client =
+        wire::relay_diagnostics_service_client::RelayDiagnosticsServiceClient::new(channel);
+    let credentials = wire::Credentials {
         activation_id: "activation".into(),
         auth_token: "secret".into(),
     };
@@ -447,6 +498,8 @@ async fn diagnostic_decode_limit_rejects_oversized_frames_before_acceptance() {
             .await
             .unwrap()
             .into_inner()
+            .receipt
+            .unwrap()
             .status,
         wire::DiagnosticReceiptStatus::Registered as i32
     );
@@ -644,10 +697,13 @@ fn revocation_closes_live_components_but_retains_evidence_and_context() {
             .is_ok()
     );
     assert_eq!(
-        host.open(&wire::DiagnosticOpenRequest {
-            protocol_version: 1,
-            snapshot_version: 1,
-            provenance_version: 1,
+        host.open(&wire::OpenDiagnosticSessionRequest {
+            protocol: Some(wire::ProtocolIdentity {
+                name: wire::WORKER_PROTOCOL.into(),
+                version: wire::CONTRACT_VERSION.into()
+            }),
+            snapshot_contract_version: wire::DIAGNOSTIC_SNAPSHOT_CONTRACT_VERSION.into(),
+            provenance_contract_version: wire::DIAGNOSTIC_PROVENANCE_CONTRACT_VERSION.into(),
             ..Default::default()
         })
         .unwrap_err()
@@ -659,18 +715,21 @@ fn revocation_closes_live_components_but_retains_evidence_and_context() {
 #[test]
 fn incompatible_open_and_closed_session_cannot_create_a_new_counting_period() {
     let host = host();
-    let request = wire::DiagnosticOpenRequest {
-        protocol_version: 1,
-        snapshot_version: 1,
-        provenance_version: 1,
+    let request = wire::OpenDiagnosticSessionRequest {
+        protocol: Some(wire::ProtocolIdentity {
+            name: wire::WORKER_PROTOCOL.into(),
+            version: wire::CONTRACT_VERSION.into(),
+        }),
+        snapshot_contract_version: wire::DIAGNOSTIC_SNAPSHOT_CONTRACT_VERSION.into(),
+        provenance_contract_version: wire::DIAGNOSTIC_PROVENANCE_CONTRACT_VERSION.into(),
         ..Default::default()
     };
     for field in 0..3 {
         let mut invalid = request.clone();
         match field {
-            0 => invalid.protocol_version = 2,
-            1 => invalid.snapshot_version = 2,
-            _ => invalid.provenance_version = 2,
+            0 => invalid.protocol.as_mut().unwrap().version = "2.0.0".into(),
+            1 => invalid.snapshot_contract_version = "2.0.0".into(),
+            _ => invalid.provenance_contract_version = "2.0.0".into(),
         }
         assert_eq!(
             host.open(&invalid).unwrap_err().code(),
@@ -679,12 +738,8 @@ fn incompatible_open_and_closed_session_cannot_create_a_new_counting_period() {
         assert!(host.state.lock().unwrap().session.is_none());
     }
     let session = open(&host);
-    host.submit(submission(
-        &session,
-        1,
-        Operation::CloseSession(wire::DiagnosticSessionClose {}),
-    ))
-    .unwrap();
+    host.submit(submission(&session, 1, Operation::CloseSession(())))
+        .unwrap();
     assert_eq!(
         host.open(&request).unwrap_err().code(),
         tonic::Code::FailedPrecondition
