@@ -141,7 +141,7 @@ repos:
         name: Native ABI release version and SDK pin agree
         entry: uv run --no-sync python scripts/native_abi_release.py check
         language: system
-        files: '^(Cargo\.toml|crates/plugin-abi/Cargo\.toml|scripts/native_abi_release\.py|\.github/workflows/release_native_abi\.yml)$'
+        files: '^(Cargo\.toml|crates/plugin-abi/Cargo\.toml|scripts/native_abi_release\.py)$'
         pass_filenames: false
 
       - id: native-abi-fixture-lockfile-check

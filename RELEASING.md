@@ -30,8 +30,7 @@ The release pipeline publishes these package surfaces from a tag push:
 
 | Ecosystem | Published Surface |
 |---|---|
-| crates.io | `nemo-relay-types`, `nemo-relay-worker-proto`, `nemo-relay-codecs`, `nemo-relay-plugin`, `nemo-relay-worker`, `nemo-relay-diagnostics`, `nemo-relay-model-pricing`, `nemo-relay-logging`, `nemo-relay-observability`, `nemo-relay-resource-metrics`, `nemo-relay-runtime`, `nemo-relay-plugin-host`, `nemo-relay-adaptive`, `nemo-relay-pii-redaction`, `nemo-relay-builtins`, `nemo-relay-ffi`, `nemo-relay-cli`, and `nemo-relay` |
-| crates.io (`native-abi/<semver>`) | `nemo-relay-plugin-abi`, with its own release version |
+| crates.io | `nemo-relay-plugin-abi`, `nemo-relay-types`, `nemo-relay-worker-proto`, `nemo-relay-codecs`, `nemo-relay-plugin`, `nemo-relay-worker`, `nemo-relay-diagnostics`, `nemo-relay-model-pricing`, `nemo-relay-logging`, `nemo-relay-observability`, `nemo-relay-resource-metrics`, `nemo-relay-runtime`, `nemo-relay-plugin-host`, `nemo-relay-adaptive`, `nemo-relay-pii-redaction`, `nemo-relay-builtins`, `nemo-relay-ffi`, `nemo-relay-cli`, and `nemo-relay` |
 | PyPI | `nemo-relay` wheels and source distribution, `nemo-relay-plugin` and `nemo-relay-cli-bin` wheels |
 | npm | `nemo-relay-node` and its seven platform packages, and `nemo-relay-openclaw` |
 | GitHub Releases | CLI binaries, `nemo-relay` and `nemo-relay-cli-bin` wheels, Node npm tarballs, and checksums |
@@ -49,31 +48,16 @@ pipeline schedule.
 
 ## Native Interface Releases
 
-`nemo-relay-plugin-abi` has its own SemVer version. It is published through the
-`native-abi/<semver>` tag lane in `release_native_abi.yml`. Relay release tags
-publish the other Rust packages and require the referenced interface version to
-exist on crates.io first.
+`nemo-relay-plugin-abi` has its own SemVer version and publishes with the other
+Rust crates in the normal Relay release workflow. It publishes first so the SDK
+and host can resolve their exact interface dependency. Both crates.io and
+Artifactory skip publication when that interface version already exists.
 
-For the first publication, set `NATIVE_ABI_BOOTSTRAP_TOKEN` in the GitHub
-`crates.io` environment to a crates.io API token that can publish
-`nemo-relay-plugin-abi`. After publication, configure the crate's trusted publisher
-for `NVIDIA/NeMo-Relay`, workflow `release_native_abi.yml`, and environment
-`crates.io`. Then remove the bootstrap secret. Later releases use trusted
-publishing without a stored token.
-
-Use these commands to prepare an interface release:
-
-1. Run `just set-native-abi-version <semver>` to update the interface package,
-   its exact workspace dependency pin, the root lockfile, and Rust attribution.
-   Relay versions and frozen compatibility fixtures keep their own versions.
-2. Run `just check-native-abi-release <semver>` to check the source version and pin.
-3. Run `just build-native-abi-test-fixtures` and the interface compatibility tests.
-4. Use the signed tag `native-abi/<semver>` for publication. The release workflow
-   verifies the interface on supported platforms before publishing it to crates.io.
-5. Run `just check-native-abi-published` before publishing dependent Relay packages.
-
-GitLab mirrors the interface to Artifactory on the same `native-abi/<semver>` tag.
-Its Relay publishing job also requires the referenced interface version in that registry.
+Use `just set-native-abi-version <semver>` when the interface package needs a new
+version. This updates the package version, its exact workspace dependency pin,
+the root lockfile, and Rust attribution. Relay versions and frozen compatibility
+fixtures keep their own versions. Run `just native-abi-version` to check the
+source version and pin, then run the interface compatibility tests.
 
 The `just package-rust` recipe packages the interface first and uses its local
 source when verifying dependent packages. Local packaging does not publish crates.

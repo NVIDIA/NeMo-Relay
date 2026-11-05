@@ -121,8 +121,7 @@ Use `just set-native-abi-version <semver>` to update the package version and exa
 SDK dependency pin together. This workflow updates the root lockfile and Rust
 attribution. It keeps Relay and frozen fixture versions unchanged.
 
-The `native-abi/<semver>` tag runs platform checks and publishes the interface.
-`just check-native-abi-release <semver>` checks the tag version against the source.
-Relay package publication runs `just check-native-abi-published` before publishing
-packages that depend on this interface. Refer to [Releasing NeMo Relay](../../RELEASING.md)
-for the maintainer procedure.
+The normal Relay release workflow publishes the interface before its dependent
+crates. It skips publication when that interface version already exists.
+`just native-abi-version` checks the source version and SDK pin. Refer to
+[Releasing NeMo Relay](../../RELEASING.md) for the maintainer procedure.

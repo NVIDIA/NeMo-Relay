@@ -1421,7 +1421,7 @@ test-rust:
     #!/usr/bin/env bash
     {{ bash_helpers }}
     output_dir="{{ output_dir }}"
-    bash "$NEMO_RELAY_REPO_ROOT/scripts/build_native_abi_fixtures.sh"
+    "$BASH" "$NEMO_RELAY_REPO_ROOT/scripts/build_native_abi_fixtures.sh"
     junit_out=""
     test_config_root="$(mktemp -d)"
     cleanup_test_config_root() {
@@ -1915,24 +1915,16 @@ published-cargo-packages:
 
 # Print and validate the independently versioned native interface.
 native-abi-version:
+    #!/usr/bin/env bash
     uv run --no-sync python scripts/native_abi_release.py version
-
-# Check a native-abi/<semver> tag against the source version and exact SDK pin.
-check-native-abi-release version:
-    uv run --no-sync python scripts/native_abi_release.py check {{ quote(version) }}
 
 # Update the interface release without changing Relay or frozen fixture versions.
 set-native-abi-version version:
+    #!/usr/bin/env bash
+    set -euo pipefail
     uv run --no-sync python scripts/native_abi_release.py set {{ quote(version) }}
     cargo metadata --format-version 1 > /dev/null
     ./scripts/generate_attributions.sh rust
-
-# Require the interface on crates.io before publishing dependent Relay packages.
-check-native-abi-published:
-    #!/usr/bin/env bash
-    set -euo pipefail
-    version="$(just native-abi-version)"
-    cargo info "nemo-relay-plugin-abi@$version" --registry crates-io > /dev/null
 
 # [version] or --set ref_name=<version>
 set-version version="":
