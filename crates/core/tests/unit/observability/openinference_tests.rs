@@ -5324,36 +5324,49 @@ fn openinference_custom_call_history_preserves_call_and_result_ids() {
     use crate::codec::openai_responses::OpenAIResponsesCodec;
     use crate::codec::traits::LlmCodec;
     let input = "await tools.exec_command({cmd: 'pwd'})";
-    let request = OpenAIResponsesCodec.decode(&crate::api::llm::LlmRequest {
+    let raw = crate::api::llm::LlmRequest {
         headers: serde_json::Map::new(),
         content: json!({"input": [
             {"type": "custom_tool_call", "call_id": "call-wrapper", "name": "exec", "input": input},
             {"type": "custom_tool_call_output", "call_id": "call-wrapper", "output": "done"}
         ]}),
-    }).unwrap();
-    let mut attrs = Vec::new();
-    push_annotated_input_messages(&mut attrs, &request.messages, 0);
-    let attrs = attrs
-        .into_iter()
-        .map(|a| (a.key.to_string(), a.value.to_string()))
-        .collect::<std::collections::HashMap<_, _>>();
-    assert_eq!(attrs["llm.input_messages.0.message.role"], "assistant");
-    assert_eq!(
-        attrs["llm.input_messages.0.message.tool_calls.0.tool_call.id"],
-        "call-wrapper"
-    );
-    assert_eq!(
-        attrs["llm.input_messages.0.message.tool_calls.0.tool_call.function.name"],
-        "exec"
-    );
-    assert_eq!(
-        attrs["llm.input_messages.0.message.tool_calls.0.tool_call.function.arguments"],
-        serde_json::to_string(&input).unwrap()
-    );
-    assert_eq!(attrs["llm.input_messages.1.message.role"], "tool");
-    assert_eq!(
-        attrs["llm.input_messages.1.message.tool_call_id"],
-        "call-wrapper"
-    );
-    assert_eq!(attrs["llm.input_messages.1.message.content"], "done");
+    };
+    for annotated in [false, true] {
+        let request = OpenAIResponsesCodec.decode(&raw).unwrap();
+        let event = make_scope_event_with_profile(
+            ScopeCategory::Start,
+            Uuid::now_v7(),
+            None,
+            "openai.responses",
+            ScopeType::Llm,
+            Some(serde_json::to_value(&raw).unwrap()),
+            Some(
+                CategoryProfile::builder()
+                    .annotated_request_opt(annotated.then(|| Arc::new(request)))
+                    .build(),
+            ),
+        );
+        let mut attrs = Vec::new();
+        push_llm_request_attributes(&mut attrs, &event);
+        let attrs = attr_map(&attrs);
+        assert_eq!(attrs["llm.input_messages.0.message.role"], "assistant");
+        assert_eq!(
+            attrs["llm.input_messages.0.message.tool_calls.0.tool_call.id"],
+            "call-wrapper"
+        );
+        assert_eq!(
+            attrs["llm.input_messages.0.message.tool_calls.0.tool_call.function.name"],
+            "exec"
+        );
+        assert_eq!(
+            attrs["llm.input_messages.0.message.tool_calls.0.tool_call.function.arguments"],
+            serde_json::to_string(&input).unwrap()
+        );
+        assert_eq!(attrs["llm.input_messages.1.message.role"], "tool");
+        assert_eq!(
+            attrs["llm.input_messages.1.message.tool_call_id"],
+            "call-wrapper"
+        );
+        assert_eq!(attrs["llm.input_messages.1.message.content"], "done");
+    }
 }

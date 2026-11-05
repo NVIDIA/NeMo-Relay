@@ -344,6 +344,15 @@ impl TestEventBuilder {
     }
 }
 
+fn extract_raw_tool_calls(output: &Json) -> Option<Vec<AtifToolCall>> {
+    let event = event_builder(Uuid::now_v7(), EventType::End)
+        .name("llm")
+        .scope_type(ScopeType::Llm)
+        .output(output.clone())
+        .build();
+    extract_tool_calls(&event)
+}
+
 fn event_builder(uuid: Uuid, event_type: EventType) -> TestEventBuilder {
     TestEventBuilder {
         uuid,
@@ -2953,7 +2962,7 @@ fn test_exporter_openai_responses_function_calls_promoted_and_correlated() {
 
 #[test]
 fn test_openai_responses_tool_call_ids_use_invocation_ids_with_fallbacks() {
-    let calls = extract_tool_calls(&json!({
+    let calls = extract_raw_tool_calls(&json!({
         "output": [
             {
                 "type": "function_call",
@@ -3009,7 +3018,7 @@ fn test_openai_responses_tool_call_ids_use_invocation_ids_with_fallbacks() {
 
 #[test]
 fn test_non_responses_tool_calls_preserve_provider_id_semantics() {
-    let chat_calls = extract_tool_calls(&json!({
+    let chat_calls = extract_raw_tool_calls(&json!({
         "tool_calls": [
             {
                 "type": "function",
@@ -3059,7 +3068,7 @@ fn test_non_responses_tool_calls_preserve_provider_id_semantics() {
     assert_eq!(chat_calls[4].tool_call_id, "legacy_call_5");
     assert_eq!(chat_calls[5].tool_call_id, "chat_tool_6:6");
 
-    let anthropic_calls = extract_tool_calls(&json!({
+    let anthropic_calls = extract_raw_tool_calls(&json!({
         "type": "message",
         "content": [
             {
@@ -3085,7 +3094,7 @@ fn test_non_responses_tool_calls_preserve_provider_id_semantics() {
 
 #[test]
 fn test_generic_tool_calls_keep_precedence_over_responses_output() {
-    let calls = extract_tool_calls(&json!({
+    let calls = extract_raw_tool_calls(&json!({
         "tool_calls": [
             {
                 "type": "function",
@@ -7265,7 +7274,7 @@ fn atif_projection_helpers_cover_absent_and_fallback_values() {
         json!({"value": [1, 2]})
     );
 
-    let calls = extract_tool_calls(&json!({
+    let calls = extract_raw_tool_calls(&json!({
         "tool_calls": [
             {},
             {"name": "lookup", "arguments": null}
@@ -7635,7 +7644,7 @@ fn raw_provider_turn_detection_respects_assistant_and_system_roles() {
 #[test]
 fn atif_custom_calls_keep_invocation_ids_and_do_not_parse_free_form_input() {
     let input = "{\"literal\":\"text\"}";
-    let calls = extract_tool_calls(&json!({"output": [
+    let calls = extract_raw_tool_calls(&json!({"output": [
         {"type": "function_call", "id": "fc-item", "call_id": "call-function", "name": "lookup", "arguments": "{}"},
         {"type": "custom_tool_call", "id": "ctc-item", "call_id": "call-wrapper", "name": "exec", "input": input, "arguments": "unrelated", "function": {"name": "unrelated", "arguments": "unrelated"}},
         {"type": "custom_tool_call", "id": "not-a-call-id", "name": "exec", "input": "text(1)"}
@@ -7646,4 +7655,57 @@ fn atif_custom_calls_keep_invocation_ids_and_do_not_parse_free_form_input() {
     assert_eq!(calls[1].tool_call_id, "call-wrapper");
     assert_eq!(calls[1].function_name, "exec");
     assert_eq!(calls[1].arguments, json!(input));
+}
+
+#[test]
+fn atif_runtime_view_preserves_custom_call_metadata_and_result_correlation() {
+    for annotated in [false, true] {
+        let exporter = AtifExporter::new("session-1".into(), make_agent_info());
+        let llm_uuid = Uuid::now_v7();
+        let input = r#"{"literal":"keep as text"}"#;
+        let output = json!({"status": "completed", "output": [
+            {"type": "custom_tool_call", "id": "item-1", "call_id": "call-1",
+             "name": "exec", "input": input, "provider_data": {"status": "ok"}}
+        ]});
+        let mut end = event_builder(llm_uuid, EventType::End)
+            .name("openai.responses")
+            .scope_type(ScopeType::Llm)
+            .output(output.clone());
+        if annotated {
+            end = end.annotated_response(OpenAIResponsesCodec.decode_response(&output).unwrap());
+        }
+        let tool_end = event_builder(Uuid::now_v7(), EventType::End)
+            .name("exec")
+            .scope_type(ScopeType::Tool)
+            .parent_uuid(llm_uuid)
+            .tool_call_id("call-1")
+            .output(json!({"stdout": "done"}))
+            .build();
+        exporter
+            .state
+            .lock()
+            .unwrap()
+            .events
+            .extend([end.build(), tool_end]);
+        let trajectory = exporter.export().unwrap();
+        let agent = trajectory
+            .steps
+            .iter()
+            .find(|step| step.source == "agent")
+            .unwrap();
+        let calls = agent.tool_calls.as_ref().unwrap();
+        assert_eq!(calls.len(), 1);
+        assert_eq!(calls[0].tool_call_id, "call-1");
+        assert_eq!(calls[0].arguments, json!(input));
+        assert_eq!(
+            calls[0].extra.as_ref().unwrap()["provider_data"]["status"],
+            "ok"
+        );
+        assert_eq!(
+            agent.observation.as_ref().unwrap().results[0]
+                .source_call_id
+                .as_deref(),
+            Some("call-1")
+        );
+    }
 }

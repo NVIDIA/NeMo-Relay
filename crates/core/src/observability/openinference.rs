@@ -11,7 +11,7 @@ use super::{
     push_serialized_top_level_attributes, push_tool_result_annotation_attribute,
     push_top_level_json_attributes, total_tokens_including_cache,
 };
-use crate::api::event::{Event, EventNormalizationExt};
+use crate::api::event::{Event, EventNormalizationExt, EventTelemetryExt};
 use crate::api::scope::ScopeType;
 use crate::codec::request::{
     AnnotatedLlmRequest, ContentPart, Message, MessageContent, ToolDefinition,
@@ -204,8 +204,10 @@ fn push_llm_usage_attributes(
 }
 
 fn push_llm_request_attributes(attributes: &mut Vec<KeyValue>, event: &Event) {
-    if let Some(request) = event.annotated_request() {
-        push_annotated_request_attributes(attributes, request);
+    if event.annotated_request().is_some() {
+        if let Some(request) = event.telemetry_llm_request() {
+            push_annotated_request_attributes(attributes, &request);
+        }
         return;
     }
 
@@ -219,7 +221,7 @@ fn push_llm_request_attributes(attributes: &mut Vec<KeyValue>, event: &Event) {
         return;
     }
 
-    if let Some(request) = event.normalized_llm_request() {
+    if let Some(request) = event.telemetry_llm_request() {
         push_annotated_request_attributes(attributes, &request);
     }
 }
@@ -315,8 +317,6 @@ fn push_annotated_input_messages(
 ) {
     let mut next_index = start_index;
     for message in messages {
-        let portable = crate::codec::openai_responses::custom_tool_message(message);
-        let message = portable.as_ref().unwrap_or(message);
         if let Message::User { content, .. } = message
             && let Some(parts) = exclusive_tool_result_parts(content)
         {
