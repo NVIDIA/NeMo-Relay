@@ -143,27 +143,27 @@ Memory-only values; existing resource APIs retain their serialization.
 
 ### `impl WireValue<Box<ResourceMemorySample>> for ResourceMemorySample`
 
-<pre className="rust-signature"><code dangerouslySetInnerHTML={{"__html": "impl <a href=\"../../nemo-relay-worker-proto/conversions/trait-wirevalue\">WireValue</a>&lt;<a href=\"https://doc.rust-lang.org/1.96.1/alloc/boxed/struct.Box.html\">Box</a>&lt;<a href=\"../../nemo-relay-worker-proto/nvidia_worker_v1/struct-resourcememorysample\">ResourceMemorySample</a>&gt;&gt; for <a href=\"struct-resourcememorysample\">ResourceMemorySample</a>"}} /></pre>
+<pre className="rust-signature"><code dangerouslySetInnerHTML={{"__html": "impl WireValue&lt;<a href=\"https://doc.rust-lang.org/1.96.1/alloc/boxed/struct.Box.html\">Box</a>&lt;ResourceMemorySample&gt;&gt; for <a href=\"struct-resourcememorysample\">ResourceMemorySample</a>"}} /></pre>
 
 #### `to_wire`
 
-<pre className="rust-signature"><code dangerouslySetInnerHTML={{"__html": "fn <a href=\"../../nemo-relay-worker-proto/conversions/trait-wirevalue\">to_wire</a>(self) -&gt; <a href=\"https://doc.rust-lang.org/1.96.1/core/result/enum.Result.html\">Result</a>&lt;<a href=\"https://doc.rust-lang.org/1.96.1/alloc/boxed/struct.Box.html\">Box</a>&lt;<a href=\"../../nemo-relay-worker-proto/nvidia_worker_v1/struct-resourcememorysample\">ResourceMemorySample</a>&gt;, <a href=\"../../nemo-relay-worker-proto/conversions/struct-conversionerror\">ConversionError</a>&gt;"}} /></pre>
+<pre className="rust-signature"><code dangerouslySetInnerHTML={{"__html": "fn to_wire(self) -&gt; <a href=\"https://doc.rust-lang.org/1.96.1/core/result/enum.Result.html\">Result</a>&lt;<a href=\"https://doc.rust-lang.org/1.96.1/alloc/boxed/struct.Box.html\">Box</a>&lt;ResourceMemorySample&gt;, ConversionError&gt;"}} /></pre>
 
 #### `from_wire`
 
-<pre className="rust-signature"><code dangerouslySetInnerHTML={{"__html": "fn <a href=\"../../nemo-relay-worker-proto/conversions/trait-wirevalue\">from_wire</a>(\n    value: <a href=\"https://doc.rust-lang.org/1.96.1/alloc/boxed/struct.Box.html\">Box</a>&lt;<a href=\"../../nemo-relay-worker-proto/nvidia_worker_v1/struct-resourcememorysample\">ResourceMemorySample</a>&gt;,\n) -&gt; <a href=\"https://doc.rust-lang.org/1.96.1/core/result/enum.Result.html\">Result</a>&lt;<a href=\"struct-resourcememorysample\">ResourceMemorySample</a>, <a href=\"../../nemo-relay-worker-proto/conversions/struct-conversionerror\">ConversionError</a>&gt;"}} /></pre>
+<pre className="rust-signature"><code dangerouslySetInnerHTML={{"__html": "fn from_wire(\n    value: <a href=\"https://doc.rust-lang.org/1.96.1/alloc/boxed/struct.Box.html\">Box</a>&lt;ResourceMemorySample&gt;,\n) -&gt; <a href=\"https://doc.rust-lang.org/1.96.1/core/result/enum.Result.html\">Result</a>&lt;<a href=\"struct-resourcememorysample\">ResourceMemorySample</a>, ConversionError&gt;"}} /></pre>
 
 ### `impl WireValue<ResourceMemorySample> for ResourceMemorySample`
 
-<pre className="rust-signature"><code dangerouslySetInnerHTML={{"__html": "impl <a href=\"../../nemo-relay-worker-proto/conversions/trait-wirevalue\">WireValue</a>&lt;<a href=\"../../nemo-relay-worker-proto/nvidia_worker_v1/struct-resourcememorysample\">ResourceMemorySample</a>&gt; for <a href=\"struct-resourcememorysample\">ResourceMemorySample</a>"}} /></pre>
+<pre className="rust-signature"><code dangerouslySetInnerHTML={{"__html": "impl WireValue&lt;ResourceMemorySample&gt; for <a href=\"struct-resourcememorysample\">ResourceMemorySample</a>"}} /></pre>
 
 #### `to_wire`
 
-<pre className="rust-signature"><code dangerouslySetInnerHTML={{"__html": "fn <a href=\"../../nemo-relay-worker-proto/conversions/trait-wirevalue\">to_wire</a>(self) -&gt; <a href=\"https://doc.rust-lang.org/1.96.1/core/result/enum.Result.html\">Result</a>&lt;<a href=\"../../nemo-relay-worker-proto/nvidia_worker_v1/struct-resourcememorysample\">ResourceMemorySample</a>, <a href=\"../../nemo-relay-worker-proto/conversions/struct-conversionerror\">ConversionError</a>&gt;"}} /></pre>
+<pre className="rust-signature"><code dangerouslySetInnerHTML={{"__html": "fn to_wire(self) -&gt; <a href=\"https://doc.rust-lang.org/1.96.1/core/result/enum.Result.html\">Result</a>&lt;ResourceMemorySample, ConversionError&gt;"}} /></pre>
 
 #### `from_wire`
 
-<pre className="rust-signature"><code dangerouslySetInnerHTML={{"__html": "fn <a href=\"../../nemo-relay-worker-proto/conversions/trait-wirevalue\">from_wire</a>(\n    value: <a href=\"../../nemo-relay-worker-proto/nvidia_worker_v1/struct-resourcememorysample\">ResourceMemorySample</a>,\n) -&gt; <a href=\"https://doc.rust-lang.org/1.96.1/core/result/enum.Result.html\">Result</a>&lt;<a href=\"struct-resourcememorysample\">ResourceMemorySample</a>, <a href=\"../../nemo-relay-worker-proto/conversions/struct-conversionerror\">ConversionError</a>&gt;"}} /></pre>
+<pre className="rust-signature"><code dangerouslySetInnerHTML={{"__html": "fn from_wire(\n    value: ResourceMemorySample,\n) -&gt; <a href=\"https://doc.rust-lang.org/1.96.1/core/result/enum.Result.html\">Result</a>&lt;<a href=\"struct-resourcememorysample\">ResourceMemorySample</a>, ConversionError&gt;"}} /></pre>
 
 ### `impl Copy for ResourceMemorySample`
 
