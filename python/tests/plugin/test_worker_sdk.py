@@ -622,7 +622,7 @@ class RecordingHostStub:
         return host_pb.DecodeLlmCodecResponseResponse(
             value=plugin_api._protocol.pack(
                 llm_pb.AnnotatedLlmResponse,
-                {"model": value.get("model"), "message": value.get("message")},
+                {"model": value.get("model"), "message": value.get("message"), "usage": value.get("usage")},
             )
         )
 
@@ -1132,6 +1132,7 @@ def test_plugin_context_registers_llm_sanitizers_under_standard_names() -> None:
 
 async def test_execution_callback_receives_directional_codec_context() -> None:
     seen: list[plugin_api.LlmExecutionContext] = []
+    usage = {"cache_write_tokens": [{"count": 0, "duration": 0}, {"count": 3}, {"count": 2, "duration": 7}]}
 
     class ContextualExecutionPlugin(WorkerPlugin):
         plugin_id = "tests.contextual_execution"
@@ -1152,7 +1153,9 @@ async def test_execution_callback_receives_directional_codec_context() -> None:
                 result = await next_call.call(request)
                 response_codec = context.response_codec.resolve_codec()
                 assert response_codec is not None
-                await response_codec.decode(result)
+                result["usage"] = usage
+                decoded = await response_codec.decode(result)
+                assert decoded["usage"] == usage
                 return result
 
             ctx.register_llm_execution_intercept("execution", execution)
