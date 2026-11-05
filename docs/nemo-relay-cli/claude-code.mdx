@@ -326,10 +326,12 @@ establish the purpose of a separate model call.
 
 Claude Code 2.1.273 or newer labels model requests with
 [`x-claude-code-request-class`](https://code.claude.com/docs/en/llm-gateway-protocol#gateway-hint-headers)
-when gateway hints are enabled. Relay's wrapper,
-[persistent installer](#persistent-plugin-install), and
-`nemo-relay integrations refresh` enable hints by default and preserve explicit
-gateway-hint settings. Generated managed settings also enable hints.
+when gateway hints are enabled. Wrapped launches set
+`CLAUDE_CODE_GATEWAY_HINT_HEADERS` to `"1"` only when the variable is unset. The
+[persistent installer](#persistent-plugin-install) and
+`nemo-relay integrations refresh` add `"1"` only when the setting is missing
+from Claude's user settings. Claude's saved settings can override a shell
+export. Generated managed settings also enable hints.
 [Replace older managed bundles](/daemon/configuration#distribute-immutable-managed-settings)
 to include the setting.
 

@@ -67,10 +67,11 @@ temporary hook source delivers lifecycle data after authenticating that
 gateway.
 
 Relay enables gateway hints by default in wrapped launches and includes the
-setting in generated managed bundles. For persistent installs,
-`nemo-relay install claude-code` and `nemo-relay integrations refresh` configure
-the default in Claude's user settings. Wrapped launches, the installer, and
-refresh preserve explicit gateway-hint settings.
+setting in generated managed bundles. Wrapped launches set
+`CLAUDE_CODE_GATEWAY_HINT_HEADERS` to `"1"` only when the variable is unset.
+`nemo-relay install claude-code` and `nemo-relay integrations refresh` add `"1"`
+only when the setting is missing from Claude's user settings. Claude's saved
+settings can override a shell export.
 
 Inspect the launch without starting Claude Code:
 
