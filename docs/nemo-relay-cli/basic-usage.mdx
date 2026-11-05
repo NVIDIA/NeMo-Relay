@@ -797,21 +797,6 @@ client_id = "<client id>"
 scope = "openid offline_access email inference"
 ```
 
-For OpenRouter, `preset = "openrouter"` replaces the three fields. It sets
-OpenRouter's issuer, its public client ID for command-line tools, and the
-`inference` scope. A section with a preset holds no other field, so a
-section that also sets `issuer`, `client_id`, or `scope` is a configuration
-error:
-
-```toml
-[upstream.openai_oidc]
-preset = "openrouter"
-```
-
-`nemo-relay auth login --preset openrouter` signs in with the same settings
-without any configuration. `--preset` cannot be combined with `--issuer`,
-`--client-id`, or `--scope`.
-
 Use `[upstream.anthropic_oidc]` the same way for the Anthropic upstream. A
 provider's `oidc` section replaces its other credential sources: it cannot be
 combined with `api_key`, `auth_header`, or `api_key_helper`. `scope` defaults to

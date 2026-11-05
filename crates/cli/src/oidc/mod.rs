@@ -38,72 +38,16 @@ fn default_scope() -> String {
     "openid offline_access".into()
 }
 
-/// Built-in settings for a known provider, so an administrator does not copy them.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Deserialize, clap::ValueEnum)]
-#[serde(rename_all = "lowercase")]
-pub(crate) enum OidcPreset {
-    /// OpenRouter: its issuer, its public client for command-line tools, and the inference scope.
-    Openrouter,
-}
-
-impl OidcPreset {
-    pub(crate) fn source(self) -> OidcSource {
-        match self {
-            Self::Openrouter => OidcSource::new(
-                "https://clerk.openrouter.ai",
-                "q3AE4KTq8gq6HlU3",
-                Some("openid offline_access email inference"),
-            ),
-        }
-    }
-}
-
-/// The fields of `[upstream.<provider>_oidc]` as written; a preset stands for the other three.
-#[derive(Deserialize)]
-#[serde(deny_unknown_fields)]
-struct OidcSourceFields {
-    preset: Option<OidcPreset>,
-    issuer: Option<String>,
-    client_id: Option<String>,
-    scope: Option<String>,
-}
-
-impl TryFrom<OidcSourceFields> for OidcSource {
-    type Error = String;
-
-    fn try_from(fields: OidcSourceFields) -> Result<Self, Self::Error> {
-        if let Some(preset) = fields.preset {
-            let written = [
-                ("issuer", fields.issuer.is_some()),
-                ("client_id", fields.client_id.is_some()),
-                ("scope", fields.scope.is_some()),
-            ];
-            if let Some((name, _)) = written.into_iter().find(|(_, set)| *set) {
-                return Err(format!(
-                    "preset cannot be combined with {name}; write either the preset or the fields"
-                ));
-            }
-            return Ok(preset.source());
-        }
-        let issuer = fields
-            .issuer
-            .ok_or("issuer is required unless preset is set")?;
-        let client_id = fields
-            .client_id
-            .ok_or("client_id is required unless preset is set")?;
-        Ok(Self::new(&issuer, &client_id, fields.scope.as_deref()))
-    }
-}
-
 /// `[upstream.<provider>_oidc]`: the issuer and client that Relay signs in to.
 #[derive(Debug, Clone, PartialEq, Eq, Deserialize, Serialize)]
-#[serde(try_from = "OidcSourceFields")]
+#[serde(deny_unknown_fields)]
 pub(crate) struct OidcSource {
     /// OpenID Connect issuer URL.
     pub(crate) issuer: String,
     /// OAuth client identifier registered with the issuer.
     pub(crate) client_id: String,
     /// Space-separated scopes requested at sign-in.
+    #[serde(default = "default_scope")]
     pub(crate) scope: String,
 }
 

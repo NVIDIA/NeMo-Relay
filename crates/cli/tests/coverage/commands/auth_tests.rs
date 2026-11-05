@@ -104,78 +104,13 @@ fn login_reads_the_file_named_by_the_global_config_flag() {
 }
 
 #[test]
-fn the_openrouter_preset_needs_no_configuration() {
-    let selected = select_source(
-        ProviderArgs {
-            preset: Some(OidcPreset::Openrouter),
-            ..Default::default()
-        },
-        || panic!("the configuration must not be read"),
-    )
-    .unwrap();
+fn a_sign_in_section_needs_an_issuer_and_a_client_id() {
+    let parse = |text: &str| toml::from_str::<OidcSource>(text).map_err(|e| e.to_string());
 
-    assert_eq!(selected.issuer, "https://clerk.openrouter.ai");
-    assert_eq!(selected.client_id, "q3AE4KTq8gq6HlU3");
-    assert!(selected.scope.contains("inference"));
-}
-
-#[test]
-fn a_config_section_with_only_a_preset_is_complete() {
-    let dir = tempfile::tempdir().unwrap();
-    let path = dir.path().join("team.toml");
-    std::fs::write(&path, "[upstream.openai_oidc]\npreset = \"openrouter\"\n").unwrap();
-    let server = ServerArgs {
-        config: Some(path),
-        ..Default::default()
-    };
-
-    let selected = select_source(args(None), || configured(&server)).unwrap();
-
-    assert_eq!(selected, OidcPreset::Openrouter.source());
-}
-
-#[test]
-fn a_preset_section_holds_no_other_field_and_missing_ones_fail_without_it() {
-    let parse = |text: &str| toml::from_str::<OidcSource>(text);
-
-    for field in [
-        "issuer = \"https://issuer.example\"",
-        "client_id = \"relay\"",
-        "scope = \"openid\"",
-    ] {
-        let error = parse(&format!("preset = \"openrouter\"\n{field}"))
-            .unwrap_err()
-            .to_string();
-        let name = field.split(' ').next().unwrap();
-        assert!(
-            error.contains(&format!("preset cannot be combined with {name}")),
-            "{error}"
-        );
-    }
-
-    let error = parse("client_id = \"relay\"").unwrap_err().to_string();
-    assert!(
-        error.contains("issuer is required unless preset is set"),
-        "{error}"
-    );
-}
-
-#[test]
-fn the_preset_flag_cannot_be_combined_with_other_sign_in_flags() {
-    #[derive(clap::Parser)]
-    struct Probe {
-        #[command(flatten)]
-        args: ProviderArgs,
-    }
-
-    for flag in [
-        ["--scope", "openid"],
-        ["--issuer", "https://issuer.example"],
-        ["--client-id", "relay"],
-    ] {
-        let parsed = <Probe as clap::Parser>::try_parse_from(
-            ["probe", "--preset", "openrouter"].into_iter().chain(flag),
-        );
-        assert!(parsed.is_err(), "{flag:?}");
-    }
+    let error = parse("client_id = \"relay\"").unwrap_err();
+    assert!(error.contains("issuer"), "{error}");
+    let error = parse("issuer = \"https://issuer.example\"").unwrap_err();
+    assert!(error.contains("client_id"), "{error}");
+    let section = parse("issuer = \"https://issuer.example\"\nclient_id = \"relay\"").unwrap();
+    assert_eq!(section.scope, "openid offline_access");
 }
