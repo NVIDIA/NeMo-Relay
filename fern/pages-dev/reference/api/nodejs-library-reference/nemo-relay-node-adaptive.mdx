@@ -198,6 +198,18 @@ export interface ComponentSpec {
 }
 ```
 
+### `CacheWriteTokenCounts`
+
+Prompt-cache write tokens retained for one cache duration.
+
+```ts
+export interface CacheWriteTokenCounts {
+  count: number;
+  /** Cache duration in seconds, omitted when the provider does not say. */
+  duration?: number;
+}
+```
+
 ### `CacheUsage`
 
 Normalized LLM token usage for cache telemetry.
@@ -208,7 +220,7 @@ export interface CacheUsage {
   completion_tokens?: number;
   total_tokens?: number;
   cache_read_tokens?: number;
-  cache_write_tokens?: number;
+  cache_write_tokens?: CacheWriteTokenCounts[];
   cost?: Json;
 }
 ```

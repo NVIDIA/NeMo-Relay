@@ -479,6 +479,30 @@ In older versions of Rust, dyn compatibility was called "object safety", so this
 
 <pre className="rust-signature"><code dangerouslySetInnerHTML={{"__html": "fn from_wire(value: <a href=\"../nvidia_worker_v1/struct-baseevent\">BaseEvent</a>) -&gt; <a href=\"type-result\">Result</a>&lt;Self&gt;"}} /></pre>
 
+### `impl WireValue<CacheWriteTokenCounts> for CacheWriteTokenCounts`
+
+<pre className="rust-signature"><code dangerouslySetInnerHTML={{"__html": "impl <a href=\"trait-wirevalue\">WireValue</a>&lt;<a href=\"../nvidia_worker_v1/struct-cachewritetokencounts\">CacheWriteTokenCounts</a>&gt; for CacheWriteTokenCounts"}} /></pre>
+
+#### `to_wire`
+
+<pre className="rust-signature"><code dangerouslySetInnerHTML={{"__html": "fn to_wire(self) -&gt; <a href=\"type-result\">Result</a>&lt;<a href=\"../nvidia_worker_v1/struct-cachewritetokencounts\">CacheWriteTokenCounts</a>&gt;"}} /></pre>
+
+#### `from_wire`
+
+<pre className="rust-signature"><code dangerouslySetInnerHTML={{"__html": "fn from_wire(value: <a href=\"../nvidia_worker_v1/struct-cachewritetokencounts\">CacheWriteTokenCounts</a>) -&gt; <a href=\"type-result\">Result</a>&lt;Self&gt;"}} /></pre>
+
+### `impl WireValue<CacheWriteTokenCountsList> for Vec<CacheWriteTokenCounts>`
+
+<pre className="rust-signature"><code dangerouslySetInnerHTML={{"__html": "impl <a href=\"trait-wirevalue\">WireValue</a>&lt;<a href=\"../nvidia_worker_v1/struct-cachewritetokencountslist\">CacheWriteTokenCountsList</a>&gt; for <a href=\"https://doc.rust-lang.org/1.96.1/alloc/vec/struct.Vec.html\">Vec</a>&lt;CacheWriteTokenCounts&gt;"}} /></pre>
+
+#### `to_wire`
+
+<pre className="rust-signature"><code dangerouslySetInnerHTML={{"__html": "fn to_wire(self) -&gt; <a href=\"type-result\">Result</a>&lt;<a href=\"../nvidia_worker_v1/struct-cachewritetokencountslist\">CacheWriteTokenCountsList</a>&gt;"}} /></pre>
+
+#### `from_wire`
+
+<pre className="rust-signature"><code dangerouslySetInnerHTML={{"__html": "fn from_wire(value: <a href=\"../nvidia_worker_v1/struct-cachewritetokencountslist\">CacheWriteTokenCountsList</a>) -&gt; <a href=\"type-result\">Result</a>&lt;Self&gt;"}} /></pre>
+
 ### `impl WireValue<CategoryProfile> for CategoryProfile`
 
 <pre className="rust-signature"><code dangerouslySetInnerHTML={{"__html": "impl <a href=\"trait-wirevalue\">WireValue</a>&lt;<a href=\"../nvidia_worker_v1/struct-categoryprofile\">CategoryProfile</a>&gt; for CategoryProfile"}} /></pre>
@@ -1666,6 +1690,18 @@ In older versions of Rust, dyn compatibility was called "object safety", so this
 #### `from_wire`
 
 <pre className="rust-signature"><code dangerouslySetInnerHTML={{"__html": "fn from_wire(value: <a href=\"https://doc.rust-lang.org/1.96.1/alloc/boxed/struct.Box.html\">Box</a>&lt;<a href=\"../nvidia_worker_v1/struct-baseevent\">BaseEvent</a>&gt;) -&gt; <a href=\"type-result\">Result</a>&lt;Self&gt;"}} /></pre>
+
+### `impl WireValue<Box<CacheWriteTokenCounts>> for CacheWriteTokenCounts`
+
+<pre className="rust-signature"><code dangerouslySetInnerHTML={{"__html": "impl <a href=\"trait-wirevalue\">WireValue</a>&lt;<a href=\"https://doc.rust-lang.org/1.96.1/alloc/boxed/struct.Box.html\">Box</a>&lt;<a href=\"../nvidia_worker_v1/struct-cachewritetokencounts\">CacheWriteTokenCounts</a>&gt;&gt; for CacheWriteTokenCounts"}} /></pre>
+
+#### `to_wire`
+
+<pre className="rust-signature"><code dangerouslySetInnerHTML={{"__html": "fn to_wire(self) -&gt; <a href=\"type-result\">Result</a>&lt;<a href=\"https://doc.rust-lang.org/1.96.1/alloc/boxed/struct.Box.html\">Box</a>&lt;<a href=\"../nvidia_worker_v1/struct-cachewritetokencounts\">CacheWriteTokenCounts</a>&gt;&gt;"}} /></pre>
+
+#### `from_wire`
+
+<pre className="rust-signature"><code dangerouslySetInnerHTML={{"__html": "fn from_wire(value: <a href=\"https://doc.rust-lang.org/1.96.1/alloc/boxed/struct.Box.html\">Box</a>&lt;<a href=\"../nvidia_worker_v1/struct-cachewritetokencounts\">CacheWriteTokenCounts</a>&gt;) -&gt; <a href=\"type-result\">Result</a>&lt;Self&gt;"}} /></pre>
 
 ### `impl WireValue<Box<CategoryProfile>> for CategoryProfile`
 

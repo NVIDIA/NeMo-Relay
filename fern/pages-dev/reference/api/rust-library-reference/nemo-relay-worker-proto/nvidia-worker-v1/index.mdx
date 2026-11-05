@@ -56,6 +56,8 @@ Typed worker contract introduced alongside the legacy API.
 - [AnnotatedLlmResponse](/reference/api/rust-library-reference/nemo-relay-worker-proto/nvidia_worker_v1/struct-annotatedllmresponse): Normalized completed response, usage, pricing, and optimization evidence.
 - [AssistantMessage](/reference/api/rust-library-reference/nemo-relay-worker-proto/nvidia_worker_v1/struct-assistantmessage): Assistant output with independently optional content and tool calls.
 - [BaseEvent](/reference/api/rust-library-reference/nemo-relay-worker-proto/nvidia_worker_v1/struct-baseevent): Common ATOF identity, propagation, timing, and application payload fields.
+- [CacheWriteTokenCounts](/reference/api/rust-library-reference/nemo-relay-worker-proto/nvidia_worker_v1/struct-cachewritetokencounts): Prompt-cache write tokens retained for one cache duration.
+- [CacheWriteTokenCountsList](/reference/api/rust-library-reference/nemo-relay-worker-proto/nvidia_worker_v1/struct-cachewritetokencountslist): Presence-bearing duration-aware prompt-cache write counts.
 - [CancelInvocationRequest](/reference/api/rust-library-reference/nemo-relay-worker-proto/nvidia_worker_v1/struct-cancelinvocationrequest): Requests cancellation of one active invocation without replaying work.
 - [CancelInvocationResponse](/reference/api/rust-library-reference/nemo-relay-worker-proto/nvidia_worker_v1/struct-cancelinvocationresponse): Idempotent: unknown/completed IDs return accepted=false, without resurrecting work.
 - [CategoryProfile](/reference/api/rust-library-reference/nemo-relay-worker-proto/nvidia_worker_v1/struct-categoryprofile): Known category-specific fields and lossless extensions attached to an event.

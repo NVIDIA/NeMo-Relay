@@ -2,14 +2,14 @@
 title: "Struct Usage"
 sidebar-title: "Usage"
 description: "Token usage statistics from an LLM API response."
-position: 4
+position: 5
 ---
 {/* SPDX-FileCopyrightText: Copyright (c) 2026, NVIDIA CORPORATION & AFFILIATES. All rights reserved.
 SPDX-License-Identifier: Apache-2.0 */}
 
 Generated from `cargo doc --no-deps -p nemo-relay-builtins -p nemo-relay-diagnostics -p nemo-relay-logging -p nemo-relay-plugin-host -p nemo-relay-codecs -p nemo-relay -p nemo-relay-runtime -p nemo-relay-model-pricing -p nemo-relay-resource-metrics -p nemo-relay-observability -p nemo-relay-adaptive -p nemo-relay-pii-redaction -p nemo-relay-ffi -p nemo-relay-types -p nemo-relay-plugin -p nemo-relay-worker-proto -p nemo-relay-worker`.
 
-<pre className="rust-signature"><code dangerouslySetInnerHTML={{"__html": "pub struct Usage &#123;\n    pub prompt_tokens: <a href=\"https://doc.rust-lang.org/1.96.1/core/option/enum.Option.html\">Option</a>&lt;<a href=\"https://doc.rust-lang.org/1.96.1/std/primitive.u64.html\">u64</a>&gt;,\n    pub completion_tokens: <a href=\"https://doc.rust-lang.org/1.96.1/core/option/enum.Option.html\">Option</a>&lt;<a href=\"https://doc.rust-lang.org/1.96.1/std/primitive.u64.html\">u64</a>&gt;,\n    pub total_tokens: <a href=\"https://doc.rust-lang.org/1.96.1/core/option/enum.Option.html\">Option</a>&lt;<a href=\"https://doc.rust-lang.org/1.96.1/std/primitive.u64.html\">u64</a>&gt;,\n    pub cache_read_tokens: <a href=\"https://doc.rust-lang.org/1.96.1/core/option/enum.Option.html\">Option</a>&lt;<a href=\"https://doc.rust-lang.org/1.96.1/std/primitive.u64.html\">u64</a>&gt;,\n    pub cache_write_tokens: <a href=\"https://doc.rust-lang.org/1.96.1/core/option/enum.Option.html\">Option</a>&lt;<a href=\"https://doc.rust-lang.org/1.96.1/std/primitive.u64.html\">u64</a>&gt;,\n    pub cache_write_1h_tokens: <a href=\"https://doc.rust-lang.org/1.96.1/core/option/enum.Option.html\">Option</a>&lt;<a href=\"https://doc.rust-lang.org/1.96.1/std/primitive.u64.html\">u64</a>&gt;,\n    pub uncached_input_tokens: <a href=\"https://doc.rust-lang.org/1.96.1/core/option/enum.Option.html\">Option</a>&lt;<a href=\"https://doc.rust-lang.org/1.96.1/std/primitive.u64.html\">u64</a>&gt;,\n    pub cost: <a href=\"https://doc.rust-lang.org/1.96.1/core/option/enum.Option.html\">Option</a>&lt;<a href=\"struct-costestimate\">CostEstimate</a>&gt;,\n&#125;"}} /></pre>
+<pre className="rust-signature"><code dangerouslySetInnerHTML={{"__html": "pub struct Usage &#123;\n    pub prompt_tokens: <a href=\"https://doc.rust-lang.org/1.96.1/core/option/enum.Option.html\">Option</a>&lt;<a href=\"https://doc.rust-lang.org/1.96.1/std/primitive.u64.html\">u64</a>&gt;,\n    pub completion_tokens: <a href=\"https://doc.rust-lang.org/1.96.1/core/option/enum.Option.html\">Option</a>&lt;<a href=\"https://doc.rust-lang.org/1.96.1/std/primitive.u64.html\">u64</a>&gt;,\n    pub total_tokens: <a href=\"https://doc.rust-lang.org/1.96.1/core/option/enum.Option.html\">Option</a>&lt;<a href=\"https://doc.rust-lang.org/1.96.1/std/primitive.u64.html\">u64</a>&gt;,\n    pub cache_read_tokens: <a href=\"https://doc.rust-lang.org/1.96.1/core/option/enum.Option.html\">Option</a>&lt;<a href=\"https://doc.rust-lang.org/1.96.1/std/primitive.u64.html\">u64</a>&gt;,\n    pub cache_write_tokens: <a href=\"https://doc.rust-lang.org/1.96.1/core/option/enum.Option.html\">Option</a>&lt;<a href=\"https://doc.rust-lang.org/1.96.1/alloc/vec/struct.Vec.html\">Vec</a>&lt;<a href=\"struct-cachewritetokencounts\">CacheWriteTokenCounts</a>&gt;&gt;,\n    pub uncached_input_tokens: <a href=\"https://doc.rust-lang.org/1.96.1/core/option/enum.Option.html\">Option</a>&lt;<a href=\"https://doc.rust-lang.org/1.96.1/std/primitive.u64.html\">u64</a>&gt;,\n    pub cost: <a href=\"https://doc.rust-lang.org/1.96.1/core/option/enum.Option.html\">Option</a>&lt;<a href=\"struct-costestimate\">CostEstimate</a>&gt;,\n&#125;"}} /></pre>
 
 Token usage statistics from an LLM API response.
 
@@ -33,13 +33,11 @@ Total tokens (prompt + completion).
 
 Tokens served from prompt cache (read).
 
-### `cache_write_tokens: Option<u64>`
+### `cache_write_tokens: Option<Vec<CacheWriteTokenCounts>>`
 
-Tokens written to prompt cache.
+Tokens written to prompt cache, one entry per cache duration.
 
-### `cache_write_1h_tokens: Option<u64>`
-
-The subset of prompt-cache write tokens retained for one hour.
+Use [`Usage::cache_write_total`](/reference/api/rust-library-reference/nemo-relay-types/codec/response/struct-usage) for the combined count.
 
 ### `uncached_input_tokens: Option<u64>`
 
@@ -50,6 +48,18 @@ This is present only when the provider's usage contract makes the split authorit
 ### `cost: Option<CostEstimate>`
 
 Optional cost reported by provider data or estimated from Relay model pricing.
+
+## Implementations
+
+### `impl Usage`
+
+<pre className="rust-signature"><code dangerouslySetInnerHTML={{"__html": "impl <a href=\"struct-usage\">Usage</a>"}} /></pre>
+
+#### `cache_write_total`
+
+<pre className="rust-signature"><code dangerouslySetInnerHTML={{"__html": "pub fn cache_write_total(&amp;self) -&gt; <a href=\"https://doc.rust-lang.org/1.96.1/core/option/enum.Option.html\">Option</a>&lt;<a href=\"https://doc.rust-lang.org/1.96.1/std/primitive.u64.html\">u64</a>&gt;"}} /></pre>
+
+Total prompt-cache write tokens across every cache duration.
 
 ## Trait Implementations
 
