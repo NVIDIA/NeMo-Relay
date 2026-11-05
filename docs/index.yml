@@ -87,6 +87,9 @@ navigation:
     title: "Daemon"
     slug: daemon
     title-source: frontmatter
+  - api: "Daemon HTTP API"
+    api-name: daemon
+    slug: daemon-api
   - folder: ./supported-integrations
     title: "Supported Integrations"
     slug: supported-integrations

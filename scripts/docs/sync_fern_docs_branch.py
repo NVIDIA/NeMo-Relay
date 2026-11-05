@@ -32,6 +32,7 @@ COPY_EXCLUDES = {
 }
 FERN_SYNC_ITEMS = (
     ".gitignore",
+    "apis",
     "assets",
     "components",
     "fern.config.json",
