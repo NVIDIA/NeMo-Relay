@@ -48,6 +48,7 @@ _TAGS = {
     "ToolDefinition": "type",
 }
 _ARRAY_WRAPPERS = {
+    "CacheWriteTokenCountsList",
     "StringList",
     "ContentPartList",
     "ToolCallList",
@@ -198,6 +199,12 @@ def _shape(cls: Any, value: Any) -> dict[str, Any]:
             {value["kind"]: value.get("value", {})} if name.endswith("Number") else {value["dimension"]: value["name"]}
         )
     body = dict(value)
+    if name == "Usage":
+        for field in ("cache_write_1h_tokens", "cache_write_token_counts"):
+            if field in body:
+                raise ValueError(f"unknown Usage field: {field}")
+        if "cache_write_tokens" in body:
+            body["cache_write_token_counts"] = body.pop("cache_write_tokens")
     if name == "CostEstimate":
         body.setdefault("currency", "USD")
     if name in {"AnnotatedLlmRequest", "AnnotatedLlmResponse"} and body.get("api_specific") is None:
@@ -219,6 +226,39 @@ def _shape(cls: Any, value: Any) -> dict[str, Any]:
             if f.name in body
         }
     return body
+
+
+def _project_usage_cache_writes(value: Any) -> None:
+    if not value.HasField("cache_write_token_counts"):
+        return
+    total = 0
+    one_hour = None
+    for entry in value.cache_write_token_counts.values:
+        if not entry.HasField("count"):
+            raise ValueError("CacheWriteTokenCounts.count is required")
+        total = min(2**64 - 1, total + entry.count)
+        if entry.HasField("duration") and entry.duration == 3600:
+            one_hour = min(2**64 - 1, (one_hour or 0) + entry.count)
+    value.cache_write_tokens = total
+    if one_hour is not None:
+        value.cache_write_1h_tokens = one_hour
+
+
+def _normalize_usage_cache_writes(body: dict[str, Any]) -> None:
+    total = body.pop("cache_write_tokens", None)
+    one_hour = body.pop("cache_write_1h_tokens", None)
+    if "cache_write_token_counts" in body:
+        body["cache_write_tokens"] = body.pop("cache_write_token_counts")
+    elif total is not None:
+        # Match CacheWriteTokenCounts::from_total_and_one_hour for legacy scalars.
+        one_hour = min(one_hour, total) if one_hour is not None else 0
+        writes = []
+        remainder = total - one_hour
+        if remainder > 0 or one_hour == 0:
+            writes.append({"count": remainder})
+        if one_hour > 0:
+            writes.append({"count": one_hour, "duration": 3600})
+        body["cache_write_tokens"] = writes
 
 
 def pack(cls: Any, value: Any, *, _field_names: dict[str, str] | None = None) -> Any:
@@ -324,6 +364,8 @@ def pack(cls: Any, value: Any, *, _field_names: dict[str, str] | None = None) ->
             setattr(result, field.name, item)
     if body:
         raise ValueError(f"unknown {name} fields: {sorted(body)}")
+    if name == "Usage":
+        _project_usage_cache_writes(result)
     return result
 
 
@@ -432,4 +474,6 @@ def unpack(value: Any, *, _field_names: dict[str, str] | None = None) -> Any:
             body.setdefault(field, None)
     if name == "FunctionMessage":
         body.setdefault("content", None)
+    if name == "Usage":
+        _normalize_usage_cache_writes(body)
     return body
