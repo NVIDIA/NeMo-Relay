@@ -393,6 +393,24 @@ fn retain_current_request_turn<T>(
     true
 }
 
+// Responses messages with provider fields (for example an item ID) stay native
+// for lossless encoding. Their explicit role still defines the telemetry turn.
+fn request_message_role(message: &Message) -> Option<&str> {
+    match message {
+        Message::User { .. } => Some("user"),
+        Message::System { .. } => Some("system"),
+        Message::Developer { .. } => Some("developer"),
+        Message::ProviderNative {
+            provider,
+            kind,
+            value,
+        } if provider == "openai_responses" && kind == "message" => {
+            value.get("role").and_then(Json::as_str)
+        }
+        _ => None,
+    }
+}
+
 fn project_llm_request_to_current_user_turn(
     request: &mut LlmRequest,
     annotated_request: &mut Option<Arc<AnnotatedLlmRequest>>,
@@ -403,8 +421,8 @@ fn project_llm_request_to_current_user_turn(
     };
     if !request_turn_projection_needed(
         &annotation.messages,
-        &|message| matches!(message, Message::User { .. }),
-        &|message| matches!(message, Message::System { .. }),
+        &|message| request_message_role(message) == Some("user"),
+        &|message| matches!(request_message_role(message), Some("system" | "developer")),
     ) {
         return;
     }
@@ -434,8 +452,8 @@ fn limit_annotated_request_history_to_current_user_turn(
 ) -> bool {
     retain_current_request_turn(
         &mut annotated_request.messages,
-        |message| matches!(message, Message::User { .. }),
-        |message| matches!(message, Message::System { .. }),
+        |message| request_message_role(message) == Some("user"),
+        |message| matches!(request_message_role(message), Some("system" | "developer")),
     )
 }
 

@@ -572,8 +572,12 @@ execution guardrails, these response changes apply:
 
 If an execution intercept rejects a streaming request before the first chunk,
 Relay returns the corresponding HTTP error and plugin message. Errors after
-streaming begins end the response without a successful completion marker, such
-as `[DONE]` for OpenAI Chat Completions.
+managed streaming begins emit a provider-compatible SSE error before ending the
+response: `event: error` for Anthropic Messages and OpenAI Responses, or a
+`data:` payload with an `error` object for OpenAI Chat Completions. The HTTP
+status remains 200 because Relay has already sent the response headers. Failed
+streams omit successful completion markers, such as `[DONE]` for OpenAI Chat
+Completions.
 
 The response-header timeout also includes time spent in middleware. For calls
 without streaming, it includes the wait for the full response. It does not limit

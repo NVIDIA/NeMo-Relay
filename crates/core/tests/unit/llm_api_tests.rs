@@ -2846,3 +2846,53 @@ fn llm_stream_call_execute_adds_otel_error_metadata_to_failed_end_events() {
             .contains("collector boom")
     );
 }
+
+#[test]
+fn responses_history_projection_recognizes_native_user_and_instruction_roles() {
+    for with_item_ids in [false, true] {
+        let mut system =
+            json!({"type": "message", "role": "system", "content": "Keep instructions"});
+        let mut developer = json!({"type": "message", "role": "developer", "content": "Keep developer instructions"});
+        let mut user = json!({"type": "message", "role": "user", "content": "Current question"});
+        if with_item_ids {
+            system["id"] = json!("msg-system");
+            developer["id"] = json!("msg-developer");
+            user["id"] = json!("msg-user");
+            user["future_field"] = json!({"preserve": true});
+        }
+        let call = json!({"type": "custom_tool_call", "id": "ctc-1", "call_id": "call-1", "name": "exec", "input": "text(42)"});
+        let output =
+            json!({"type": "custom_tool_call_output", "call_id": "call-1", "output": "42"});
+        for prior_history in [false, true] {
+            let mut input = vec![system.clone(), developer.clone()];
+            if prior_history {
+                input.extend([
+                    json!({"role": "user", "content": "Previous question"}),
+                    json!({"role": "assistant", "content": "Previous answer"}),
+                ]);
+            }
+            input.extend([user.clone(), call.clone(), output.clone()]);
+            let original = LlmRequest {
+                headers: serde_json::Map::new(),
+                content: json!({"model": "codex", "input": input}),
+            };
+            let codec = OpenAIResponsesCodec;
+            let mut observable = original.clone();
+            let mut annotation = Some(Arc::new(codec.decode(&original).unwrap()));
+            project_llm_request_to_current_user_turn(
+                &mut observable,
+                &mut annotation,
+                Some(&codec),
+            );
+            assert_eq!(annotation.unwrap().messages.len(), 5);
+            assert_eq!(
+                observable.content["input"],
+                json!([system, developer, user, call, output])
+            );
+            assert_eq!(
+                original.content["input"].as_array().unwrap().len(),
+                if prior_history { 7 } else { 5 }
+            );
+        }
+    }
+}
