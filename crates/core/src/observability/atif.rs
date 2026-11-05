@@ -35,7 +35,10 @@ use chrono::{DateTime, Utc};
 use serde::{Deserialize, Serialize};
 use uuid::Uuid;
 
-use crate::api::event::{Event, EventNormalizationExt};
+use crate::api::event::{
+    Event, EventNormalizationExt, EventTelemetryExt, normalize_tool_arguments,
+    raw_response_message_field, tool_call_array,
+};
 use crate::api::runtime::EventSubscriberFn;
 use crate::api::subscriber::flush_subscribers;
 use crate::codec::request::{AnnotatedLlmRequest, ContentPart, Message, MessageContent};
@@ -663,21 +666,6 @@ fn json_to_string(value: &Json) -> String {
     serde_json::to_string(value).unwrap_or_else(|_| value.to_string())
 }
 
-fn raw_response_message_field<'a>(output: &'a Json, field: &str) -> Option<&'a Json> {
-    let object = output.as_object()?;
-    object
-        .get("raw_response")
-        .or(Some(output))
-        .and_then(|raw_response| raw_response.as_object())
-        .and_then(|raw_response| raw_response.get("choices"))
-        .and_then(Json::as_array)
-        .and_then(|choices| choices.first())
-        .and_then(Json::as_object)
-        .and_then(|choice| choice.get("message"))
-        .and_then(Json::as_object)
-        .and_then(|message| message.get(field))
-}
-
 fn openai_responses_output_message(output: &Json) -> Option<Json> {
     let object = output.as_object()?;
     if let Some(output_text) = object.get("output_text").and_then(Json::as_str) {
@@ -1295,103 +1283,20 @@ fn openai_responses_input_content_message(content: &Json) -> Option<Json> {
     None
 }
 
-/// Try to promote provider tool calls from a raw LLM response into `AtifToolCall` entries.
-///
-/// Supports generic/OpenAI Chat `tool_calls`, OpenAI Responses `function_call`
-/// output items, and Anthropic `tool_use` content blocks. Provider-specific ID
-/// semantics are preserved so later observations can correlate to the call.
-///
-/// String `arguments` are parsed into JSON for consistency with NeMo Relay tool events
-/// which always provide parsed arguments.
-///
-/// Returns `None` if there are no tool calls or the structure is unrecognized.
-fn extract_tool_calls(output: &Json) -> Option<Vec<AtifToolCall>> {
-    let (arr, origin) = if let Some(tool_calls) = tool_call_array(output).filter(|a| !a.is_empty())
-    {
-        (
-            tool_calls.iter().collect::<Vec<_>>(),
-            ToolCallOrigin::Generic,
-        )
-    } else if let Some(function_calls) = openai_responses_function_call_items(output) {
-        (function_calls, ToolCallOrigin::OpenAiResponses)
-    } else {
-        (
-            anthropic_messages_tool_use_items(output)?,
-            ToolCallOrigin::AnthropicMessages,
-        )
-    };
-    let mut calls = Vec::with_capacity(arr.len());
-    for (index, tc) in arr.iter().enumerate() {
-        let tc_obj = tc.as_object()?;
-        let mut id = tool_call_id_for_origin(tc_obj, origin)
-            .unwrap_or("")
-            .to_string();
-        let func = tc_obj.get("function").and_then(Json::as_object);
-        let name = func
-            .and_then(|f| f.get("name"))
-            .or_else(|| tc_obj.get("name"))
-            .or_else(|| tc_obj.get("toolName"))
-            .or_else(|| tc_obj.get("tool_name"))
-            .or_else(|| tc_obj.get("function_name"))
-            .and_then(Json::as_str)
-            .unwrap_or("")
-            .to_string();
-        if id.is_empty() && !name.is_empty() {
-            id = format!("{name}:{}", index + 1);
-        }
-        let raw_arguments = func
-            .and_then(|f| f.get("arguments"))
-            .or_else(|| tc_obj.get("arguments"))
-            .or_else(|| tc_obj.get("args"))
-            .or_else(|| tc_obj.get("input"));
-        let arguments = normalize_tool_arguments(raw_arguments);
-        // Skip entries with no id and no name — they are not meaningful.
-        if id.is_empty() && name.is_empty() {
-            continue;
-        }
-        calls.push(AtifToolCall {
-            tool_call_id: id,
-            function_name: name,
-            arguments,
-            extra: tool_call_extra(tc),
-        });
-    }
-    if calls.is_empty() { None } else { Some(calls) }
-}
-
-/// Provider payload shape governing tool-call identifier semantics.
-#[derive(Clone, Copy)]
-enum ToolCallOrigin {
-    Generic,
-    OpenAiResponses,
-    AnthropicMessages,
-}
-
-/// Select the first usable correlation identifier for the provider payload shape.
-fn tool_call_id_for_origin(
-    tool_call: &serde_json::Map<String, Json>,
-    origin: ToolCallOrigin,
-) -> Option<&str> {
-    match origin {
-        // Responses distinguishes the output item `id` (`fc_*`) from the
-        // invocation `call_id` used by function_call_output and tool events.
-        ToolCallOrigin::OpenAiResponses => {
-            ["call_id", "id", "tool_call_id"].iter().find_map(|field| {
-                tool_call
-                    .get(*field)
-                    .and_then(Json::as_str)
-                    .filter(|value| !value.is_empty())
+/// Project the runtime's portable invocation view into ATIF tool calls.
+fn extract_tool_calls(event: &Event) -> Option<Vec<AtifToolCall>> {
+    Some(
+        event
+            .telemetry_llm_tool_calls()?
+            .into_iter()
+            .map(|call| AtifToolCall {
+                tool_call_id: call.id,
+                function_name: call.name,
+                arguments: call.arguments,
+                extra: call.extra,
             })
-        }
-        ToolCallOrigin::Generic | ToolCallOrigin::AnthropicMessages => {
-            ["id", "tool_call_id", "call_id"].iter().find_map(|field| {
-                tool_call
-                    .get(*field)
-                    .and_then(Json::as_str)
-                    .filter(|value| !value.is_empty())
-            })
-        }
-    }
+            .collect(),
+    )
 }
 
 // Annotation adapters: project user content from normalized parts. Assistant
@@ -1500,100 +1405,6 @@ fn atif_message_from_annotated_response(response: &AnnotatedLlmResponse) -> Opti
         // calls and metrics are still recovered from the raw output downstream.
         None => Some(empty_message()),
     }
-}
-
-fn tool_call_array(output: &Json) -> Option<&Vec<Json>> {
-    output
-        .as_object()
-        .and_then(|object| object.get("tool_calls"))
-        .and_then(Json::as_array)
-        .or_else(|| {
-            output
-                .as_object()
-                .and_then(|object| object.get("assistant_message"))
-                .and_then(Json::as_object)
-                .and_then(|assistant| assistant.get("tool_calls"))
-                .and_then(Json::as_array)
-        })
-        .or_else(|| raw_response_message_field(output, "tool_calls").and_then(Json::as_array))
-}
-
-fn openai_responses_function_call_items(output: &Json) -> Option<Vec<&Json>> {
-    let items = output
-        .as_object()
-        .and_then(|object| object.get("output"))
-        .and_then(Json::as_array)?;
-    let function_call_items = items
-        .iter()
-        .filter(|item| item.get("type").and_then(Json::as_str) == Some("function_call"))
-        .collect::<Vec<_>>();
-    (!function_call_items.is_empty()).then_some(function_call_items)
-}
-
-fn anthropic_messages_tool_use_items(output: &Json) -> Option<Vec<&Json>> {
-    let object = output.as_object()?;
-    if object.get("type").and_then(Json::as_str) != Some("message") {
-        return None;
-    }
-    let content_blocks = object.get("content").and_then(Json::as_array)?;
-    let tool_use_items = content_blocks
-        .iter()
-        .filter(|item| item.get("type").and_then(Json::as_str) == Some("tool_use"))
-        .collect::<Vec<_>>();
-    (!tool_use_items.is_empty()).then_some(tool_use_items)
-}
-
-fn normalize_tool_arguments(raw_arguments: Option<&Json>) -> Json {
-    let Some(raw_arguments) = raw_arguments else {
-        return serde_json::json!({});
-    };
-    match raw_arguments {
-        Json::Object(_) => raw_arguments.clone(),
-        Json::String(arguments) => match serde_json::from_str::<Json>(arguments) {
-            Ok(Json::Object(object)) => Json::Object(object),
-            Ok(value) => serde_json::json!({ "value": value }),
-            Err(_) => serde_json::json!({ "raw": arguments }),
-        },
-        Json::Null => serde_json::json!({}),
-        value => serde_json::json!({ "value": value }),
-    }
-}
-
-fn tool_call_extra(tool_call: &Json) -> Option<Json> {
-    let object = tool_call.as_object()?;
-    let mut extra = serde_json::Map::new();
-
-    for (key, value) in object {
-        if !matches!(
-            key.as_str(),
-            "id" | "tool_call_id"
-                | "call_id"
-                | "type"
-                | "function"
-                | "name"
-                | "tool_name"
-                | "function_name"
-                | "arguments"
-                | "args"
-                | "input"
-        ) {
-            extra.insert(key.clone(), value.clone());
-        }
-    }
-
-    if let Some(function) = object.get("function").and_then(Json::as_object) {
-        let mut function_extra = serde_json::Map::new();
-        for (key, value) in function {
-            if key != "name" && key != "arguments" {
-                function_extra.insert(key.clone(), value.clone());
-            }
-        }
-        if !function_extra.is_empty() {
-            extra.insert("function".to_string(), Json::Object(function_extra));
-        }
-    }
-
-    (!extra.is_empty()).then_some(Json::Object(extra))
 }
 
 fn event_extra(event: &Event) -> Json {
@@ -1918,7 +1729,7 @@ fn collect_llm_span_candidates(events: &[&Event]) -> Vec<LlmSpanCandidate> {
 impl LlmSpanCandidate {
     fn from_events(uuid: Uuid, start: &Event, end: &Event) -> Option<Self> {
         let request_signature = start.data().map(llm_request_signature)?;
-        let response_signature = end.data().map(llm_response_signature)?;
+        let response_signature = llm_response_signature(end)?;
         Some(Self {
             uuid,
             parent_uuid: start.parent_uuid().or_else(|| end.parent_uuid()),
@@ -1987,11 +1798,11 @@ fn raw_openai_responses_input_message(input: &Json) -> Option<&Json> {
     })
 }
 
-fn llm_response_signature(output: &Json) -> String {
-    json_to_string(&serde_json::json!({
-        "message": extract_llm_response_message(output),
-        "tool_calls": extract_tool_calls(output),
-    }))
+fn llm_response_signature(event: &Event) -> Option<String> {
+    Some(json_to_string(&serde_json::json!({
+        "message": extract_llm_response_message(event.output()?),
+        "tool_calls": extract_tool_calls(event),
+    })))
 }
 
 fn llm_request_correlation_keys(start: &Event, end: &Event) -> HashSet<String> {
@@ -2284,7 +2095,7 @@ fn collect_explicit_tool_call_id(event: &Event, explicit: &mut HashMap<Uuid, Str
 }
 
 fn collect_llm_tool_calls(event: &Event, tool_calls: &mut Vec<LlmToolCallRecord>) {
-    let Some(calls) = event.data().and_then(extract_tool_calls) else {
+    let Some(calls) = extract_tool_calls(event) else {
         return;
     };
     tool_calls.extend(calls.into_iter().map(|tool_call| LlmToolCallRecord {
@@ -2790,7 +2601,7 @@ impl StepConversionState {
         self.finalize_agent_extra();
         let llm_request = self.pending_llm_requests.remove(&event.uuid());
         let reasoning_effort = self.pending_reasoning_efforts.remove(&event.uuid());
-        let tool_calls = extract_tool_calls(output);
+        let tool_calls = extract_tool_calls(event);
         let tool_call_order = refresh_tool_call_lookup(&mut self.last_tool_call_map, &tool_calls);
         let reasoning_content = extract_reasoning_content(output);
         let start_ts = lookups.start_ts_map.get(&event.uuid()).cloned();

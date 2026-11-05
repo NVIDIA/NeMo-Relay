@@ -1917,3 +1917,72 @@ fn response_decode_preserves_retained_array_validation_and_unknown_fields() {
     };
     assert_eq!(retained.as_ref(), response["output"].as_array());
 }
+
+#[test]
+fn custom_calls_preserve_provider_ids_and_free_form_input_without_changing_wire_items() {
+    let codec = OpenAIResponsesCodec;
+    for input in [
+        "const r = await tools.exec_command({cmd: 'pwd'}); text(r.output);",
+        "{\"looks_like\":\"json\"}",
+        "42",
+        "",
+    ] {
+        let call = json!({"type": "custom_tool_call", "id": "ctc-item", "call_id": "call-wrapper", "name": "exec", "input": input, "status": "completed", "caller": {"type": "program", "caller_id": "call-program"}, "namespace": "functions", "future": {"keep": true}});
+        let result = json!({"type": "custom_tool_call_output", "id": "ctco-item", "call_id": "call-wrapper", "output": [{"type": "input_text", "text": "done"}], "future": 2});
+        let request =
+            make_request(json!({"model": "codex", "input": [call.clone(), result.clone()]}));
+        let annotation = codec.decode(&request).unwrap();
+        assert_eq!(codec.encode(&annotation, &request).unwrap(), request);
+        assert!(matches!(
+            annotation.messages[0],
+            Message::ProviderNative { .. }
+        ));
+        let portable = custom_tool_message(&annotation.messages[0]).unwrap();
+        assert!(
+            matches!(portable, Message::ToolCallItem { id, call_id, arguments, .. }
+            if id.as_deref() == Some("ctc-item") && call_id == "call-wrapper" && arguments == json!(input))
+        );
+        let portable = custom_tool_message(&annotation.messages[1]).unwrap();
+        assert!(
+            matches!(portable, Message::ToolResultItem { call_id, output, .. }
+            if call_id == "call-wrapper" && output == result["output"])
+        );
+        let response = codec
+            .decode_response(&json!({"output": [call.clone()]}))
+            .unwrap();
+        let tool = &response.tool_calls.as_ref().unwrap()[0];
+        assert_eq!(tool.id, "call-wrapper");
+        assert_eq!(tool.name, "exec");
+        assert_eq!(tool.arguments, json!(input));
+        let Some(ApiSpecificResponse::OpenAIResponses {
+            output_items: Some(items),
+            ..
+        }) = response.api_specific
+        else {
+            panic!("raw output items missing")
+        };
+        assert_eq!(items, vec![call]);
+    }
+}
+
+#[test]
+fn custom_call_projection_does_not_guess_unknown_or_incomplete_provider_shapes() {
+    for value in [
+        json!({"type": "custom_tool_call", "id": "ctc-only", "name": "exec", "input": "text(1)"}),
+        json!({"type": "custom_tool_call", "call_id": "", "name": "exec", "input": "text(1)"}),
+        json!({"type": "custom_tool_call", "call_id": "call", "input": "text(1)"}),
+        json!({"type": "custom_tool_call", "call_id": "call", "name": "exec", "input": {"cmd": "pwd"}}),
+    ] {
+        assert!(custom_tool_call_fields(&value).is_none());
+        let response = OpenAIResponsesCodec
+            .decode_response(&json!({"output": [value]}))
+            .unwrap();
+        assert!(response.tool_calls.is_none());
+    }
+    let message = Message::ProviderNative {
+        provider: "unknown".into(),
+        kind: "custom_tool_call".into(),
+        value: json!({"type": "custom_tool_call", "call_id": "call", "name": "exec", "input": "text(1)"}),
+    };
+    assert!(custom_tool_message(&message).is_none());
+}

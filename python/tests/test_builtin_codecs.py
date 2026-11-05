@@ -288,6 +288,24 @@ class TestBuiltinCodecDecodeResponse:
         assert annotated.response_text() == "Hello!"
         assert annotated.has_tool_calls() is False
 
+    def test_responses_custom_call_keeps_invocation_id_and_literal_input(self) -> None:
+        """Custom input stays a string and uses call_id rather than the item ID."""
+        literal_input = '{"looks_like": "json"}'
+        annotated = OpenAIResponsesCodec().decode_response(
+            {
+                "output": [
+                    {
+                        "type": "custom_tool_call",
+                        "id": "ctc-item",
+                        "call_id": "call-wrapper",
+                        "name": "exec",
+                        "input": literal_input,
+                    }
+                ]
+            }
+        )
+        assert annotated.tool_calls == [{"id": "call-wrapper", "name": "exec", "arguments": literal_input}]
+
     def test_anthropic_messages_decode_response(self) -> None:
         """AnthropicMessagesCodec.decode_response() returns AnnotatedLLMResponse."""
         codec = AnthropicMessagesCodec()

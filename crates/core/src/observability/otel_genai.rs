@@ -5,7 +5,7 @@
 
 #![allow(deprecated)] // Generated GenAI constants are retained for the pinned v1.42-era schema.
 
-use crate::api::event::{Event, EventNormalizationExt};
+use crate::api::event::{Event, EventNormalizationExt, EventTelemetryExt};
 use crate::api::scope::ScopeType;
 use crate::codec::request::{
     ApiSpecificRequest, ContentPart, Message, MessageContent, tool_definition_identities,
@@ -325,7 +325,7 @@ fn push_embedding_request_attributes(attributes: &mut Vec<KeyValue>, event: &Eve
 }
 
 fn push_llm_request_attributes(attributes: &mut Vec<KeyValue>, event: &Event) {
-    let Some(request) = event.normalized_llm_request() else {
+    let Some(request) = event.telemetry_llm_request() else {
         push_model_attribute(attributes, event);
         return;
     };
