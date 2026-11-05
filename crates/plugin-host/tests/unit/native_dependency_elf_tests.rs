@@ -177,6 +177,32 @@ fn elf_origin_imports_capture_sectionless_sidecars_in_both_token_forms() {
     }
 }
 
+#[cfg(windows)]
+#[test]
+fn elf_origin_paths_resolve_files_under_verbatim_windows_roots() {
+    let directory = tempfile::tempdir().unwrap();
+    let root = directory.path().canonicalize().unwrap();
+    assert!(root.to_string_lossy().starts_with(r"\\?\"));
+    std::fs::create_dir(root.join("deps")).unwrap();
+    let expected = root.join("deps").join("libdep.so");
+    let bytes = elf_library(None, None, false);
+    std::fs::write(&expected, &bytes).unwrap();
+    let target = ElfTarget::from_header(&bytes);
+    for token in ["$ORIGIN", "${ORIGIN}"] {
+        let expanded = expand(&format!("{token}/deps/libdep.so"), &root, target, None)
+            .unwrap()
+            .unwrap();
+        assert_eq!(expanded.as_os_str(), expected.as_os_str());
+        assert!(expanded.is_file());
+        let search =
+            runtime_search_paths(&[format!("{token}/deps")], &root, &root, target, None).unwrap();
+        assert_eq!(
+            resolve(&root, &root, "libdep.so", &search, target, None, false).unwrap(),
+            Some(expected.clone())
+        );
+    }
+}
+
 #[test]
 fn elf_dynamic_strings_must_be_within_the_file_backed_load_segment() {
     let mut bytes = elf_library(Some("libdep.so"), None, false);

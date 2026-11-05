@@ -256,6 +256,10 @@ fn expand(
     } else {
         path.to_owned()
     };
+    // Canonical Windows paths use the verbatim prefix, where `/` is not a
+    // separator. Loader tokens still use `/`, so adapt them before filesystem access.
+    #[cfg(windows)]
+    let expanded = expanded.replace('/', "\\");
     Ok(Some(PathBuf::from(expanded)))
 }
 fn runtime_search_paths(
