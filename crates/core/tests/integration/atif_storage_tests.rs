@@ -18,6 +18,7 @@ mod plugin_host_test_support;
 
 use std::time::Duration;
 
+use nemo_relay::api::runtime::subscriber_dispatcher::flush_subscribers_with_started_signal;
 use nemo_relay::api::runtime::{
     NemoRelayContextState, create_scope_stack, global_context, set_thread_scope_stack,
 };
@@ -629,10 +630,11 @@ fn slow_atif_http_upload_does_not_hold_the_dispatcher_but_flush_waits_for_it() {
     unsafe {
         std::env::set_var("NEMO_RELAY_ATIF_HTTP_TEST_TOKEN", "Bearer test-token");
     }
-    futures::executor::block_on(test_initialize_plugin_host_exact(
-        build_http_observability_config(&[endpoint]),
-    ))
-    .expect("observability plugin should initialize with HTTP storage");
+    let mut config = build_http_observability_config(&[endpoint]);
+    // Outlast the receiver's held response so a slow runner can't time out the upload.
+    config.components[0].config["atif"]["storage"][0]["timeout_millis"] = json!(60_000);
+    futures::executor::block_on(test_initialize_plugin_host_exact(config))
+        .expect("observability plugin should initialize with HTTP storage");
 
     let (seen_tx, seen_rx) = std::sync::mpsc::channel();
     let seen_tx = std::sync::Mutex::new(seen_tx);
@@ -678,11 +680,16 @@ fn slow_atif_http_upload_does_not_hold_the_dispatcher_but_flush_waits_for_it() {
         .expect("a later event should not wait for the slow upload");
     assert_eq!(received.load(std::sync::atomic::Ordering::SeqCst), 0);
 
+    let (started_tx, started_rx) = std::sync::mpsc::channel();
     let (flushed_tx, flushed_rx) = std::sync::mpsc::channel();
     let flush = std::thread::spawn(move || {
-        flush_subscribers().expect("flush should wait for the upload");
+        flush_subscribers_with_started_signal(started_tx)
+            .expect("flush should wait for the upload");
         let _ = flushed_tx.send(());
     });
+    started_rx
+        .recv_timeout(Duration::from_secs(10))
+        .expect("flush should be queued");
     assert!(
         flushed_rx.recv_timeout(Duration::from_millis(300)).is_err(),
         "flush_subscribers must not return before the upload finishes"
