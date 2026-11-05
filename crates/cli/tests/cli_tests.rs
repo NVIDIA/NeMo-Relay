@@ -462,45 +462,53 @@ format = "jsonl"
 }
 
 #[test]
-fn cli_claude_startup_probe_bypass_is_debug_only() {
-    let default_stderr = run_claude_startup_probe(None);
-    assert!(
-        !default_stderr.contains(" WARN ") && !default_stderr.contains("observability_bypassed"),
-        "startup probe bypass should not be logged by default: {default_stderr}"
-    );
-
-    let debug_stderr = run_claude_startup_probe(Some("debug"));
-    assert!(
-        debug_stderr.contains(" DEBUG ") && debug_stderr.contains("observability_bypassed"),
-        "startup probe bypass should be logged at debug level: {debug_stderr}"
-    );
-}
-
-fn run_claude_startup_probe(log_level: Option<&str>) -> String {
+fn cli_records_literal_test_request_with_usage() {
     let temp = tempfile::tempdir().unwrap();
     let probe = TcpListener::bind("127.0.0.1:0").unwrap();
     let address = probe.local_addr().unwrap();
     drop(probe);
-    let (upstream_url, received) = spawn_single_request_server(200, r#"{"id":"probe"}"#);
+    let (upstream_url, received) = spawn_single_request_server(
+        200,
+        r#"{"id":"msg-literal-test","type":"message","role":"assistant","model":"claude-sonnet-4-5","content":[{"type":"text","text":"ok"}],"stop_reason":"end_turn","usage":{"input_tokens":2,"output_tokens":1}}"#,
+    );
+    let trace_directory = temp.path().join("atof");
+    let plugin_config = temp.path().join("plugins.toml");
+    std::fs::write(
+        &plugin_config,
+        format!(
+            r#"
+version = 1
+[[components]]
+kind = "observability"
+enabled = true
+[components.config]
+version = 4
+[components.config.atof]
+enabled = true
+[[components.config.atof.sinks]]
+type = "file"
+output_directory = {}
+filename = "events.jsonl"
+mode = "append"
+"#,
+            toml_basic_string(&trace_directory.to_string_lossy())
+        ),
+    )
+    .unwrap();
 
     let mut command = Command::new(gateway_bin());
     command
         .args(["--bind", &address.to_string(), "--anthropic-base-url"])
         .arg(&upstream_url)
+        .arg("--plugin-config-path")
+        .arg(&plugin_config)
         .env("HOME", temp.path())
         .env("XDG_CONFIG_HOME", temp.path().join("xdg"))
+        .env_remove("NEMO_RELAY_LOG")
         .env_remove("NEMO_RELAY_LOG_STDERR_FORMAT")
         .env_remove("NEMO_RELAY_LOG_CONFIG_PATH")
         .stdout(Stdio::null())
         .stderr(Stdio::piped());
-    match log_level {
-        Some(level) => {
-            command.env("NEMO_RELAY_LOG", level);
-        }
-        None => {
-            command.env_remove("NEMO_RELAY_LOG");
-        }
-    }
     let child = ChildGuard::new(command.spawn().unwrap());
 
     let body = r#"{"model":"claude-sonnet-4-5","max_tokens":1,"messages":[{"role":"user","content":"test"}]}"#;
@@ -514,7 +522,7 @@ fn run_claude_startup_probe(log_level: Option<&str>) -> String {
                 stream
                     .write_all(
                         format!(
-                            "POST /v1/messages HTTP/1.1\r\nHost: {address}\r\ncontent-type: application/json\r\nx-api-key: test\r\nx-claude-code-session-id: probe-session\r\ncontent-length: {}\r\nconnection: close\r\n\r\n{body}",
+                            "POST /v1/messages HTTP/1.1\r\nHost: {address}\r\ncontent-type: application/json\r\nx-api-key: test\r\nx-claude-code-session-id: literal-test-session\r\ncontent-length: {}\r\nconnection: close\r\n\r\n{body}",
                             body.len()
                         )
                         .as_bytes(),
@@ -529,7 +537,7 @@ fn run_claude_startup_probe(log_level: Option<&str>) -> String {
             Err(error) => {
                 let output = child.finish();
                 panic!(
-                    "gateway did not accept the startup probe: {error}; stderr: {}",
+                    "gateway did not accept the literal test request: {error}; stderr: {}",
                     String::from_utf8_lossy(&output.stderr)
                 );
             }
@@ -538,7 +546,40 @@ fn run_claude_startup_probe(log_level: Option<&str>) -> String {
 
     let upstream_request = received.recv_timeout(Duration::from_secs(2)).unwrap();
     assert!(upstream_request.starts_with("POST /v1/messages "));
-    String::from_utf8(child.finish().stderr).unwrap()
+    let upstream_body = upstream_request.split_once("\r\n\r\n").unwrap().1;
+    assert_eq!(
+        serde_json::from_str::<serde_json::Value>(upstream_body).unwrap(),
+        serde_json::from_str::<serde_json::Value>(body).unwrap()
+    );
+
+    let trace_path = trace_directory.join("events.jsonl");
+    let deadline = Instant::now() + Duration::from_secs(5);
+    let completed = loop {
+        let contents = std::fs::read_to_string(&trace_path).unwrap_or_default();
+        if let Some(event) = contents
+            .lines()
+            .filter_map(|line| serde_json::from_str::<serde_json::Value>(line).ok())
+            .find(|event| {
+                event["name"] == "anthropic.messages"
+                    && event["scope_category"] == "end"
+                    && event["metadata"]["session_id"] == "literal-test-session"
+            })
+        {
+            break event;
+        }
+        assert!(
+            Instant::now() < deadline,
+            "literal test request must produce an LLM end event: {contents}"
+        );
+        thread::sleep(Duration::from_millis(20));
+    };
+    assert_eq!(
+        completed["metadata"]["claude_code_request_class"],
+        "unknown"
+    );
+    assert_eq!(completed["data"]["usage"]["input_tokens"], 2);
+    assert_eq!(completed["data"]["usage"]["output_tokens"], 1);
+    let _ = child.finish();
 }
 
 #[test]

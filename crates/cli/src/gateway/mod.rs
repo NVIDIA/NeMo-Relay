@@ -459,30 +459,6 @@ async fn run_managed_gateway(
     mut cancellation_guard: Option<GatewayCallGuard>,
 ) -> Result<Response<Body>, CliError> {
     let operational = operational.with_session(prep.session_id.clone());
-    if prep.bypass_managed_pipeline {
-        let session_id = prep.session_id.clone();
-        let session_finish = prep.session_finish;
-        log::debug!(
-            target: "nemo_relay.gateway",
-            event = "observability_bypassed",
-            operation_id = operational.operation_id(),
-            session_id = session_id.as_str(),
-            reason = "startup_probe";
-            "Managed observability was bypassed for a startup probe"
-        );
-        state
-            .sessions
-            .finish_gateway_call(
-                &session_id,
-                prep.owner_subagent_id.as_deref(),
-                session_finish,
-            )
-            .await;
-        if let Some(guard) = cancellation_guard.as_mut() {
-            guard.sessions.take();
-        }
-        return run_unmanaged_gateway(state, prepared, Some(operational)).await;
-    }
     let codecs = codecs_for_route(prepared.provider);
     if prepared.streaming {
         run_managed_streaming(
@@ -681,7 +657,7 @@ async fn run_managed_buffered(
         metadata,
         model_name,
         owner_subagent_id,
-        bypass_managed_pipeline: _,
+        record_task_response,
         session_finish,
     } = prep;
     let provider_for_event = provider_name.clone();
@@ -708,14 +684,16 @@ async fn run_managed_buffered(
                 HeaderValue::from_static("application/json"),
             );
             let response_body = Body::from(response_json.to_string());
-            state
-                .sessions
-                .record_gateway_response_hints(
-                    &session_id,
-                    owner_subagent_id.clone(),
-                    Cow::Owned(response_json),
-                )
-                .await;
+            if record_task_response {
+                state
+                    .sessions
+                    .record_gateway_response_hints(
+                        &session_id,
+                        owner_subagent_id.clone(),
+                        Cow::Owned(response_json),
+                    )
+                    .await;
+            }
             state
                 .sessions
                 .finish_gateway_call(&session_id, owner_subagent_id.as_deref(), session_finish)
@@ -913,13 +891,14 @@ async fn run_managed_streaming(
         metadata,
         model_name,
         owner_subagent_id,
-        bypass_managed_pipeline: _,
+        record_task_response,
         session_finish: _,
     } = prep;
     let (finalizer, response_completion, response_ready) = gateway_response_completion(
         state.sessions.clone(),
         session_id.clone(),
         owner_subagent_id.clone(),
+        record_task_response,
         finalizer,
     );
     let params = LlmStreamCallExecuteParams::builder()
@@ -979,6 +958,7 @@ fn gateway_response_completion(
     sessions: SessionManager,
     session_id: String,
     owner_subagent_id: Option<String>,
+    record_task_response: bool,
     finalizer: LlmFinalizerFn,
 ) -> (LlmFinalizerFn, ResponseCompletionFn, oneshot::Receiver<()>) {
     let (ready, receiver) = oneshot::channel();
@@ -989,14 +969,16 @@ fn gateway_response_completion(
     let finalizer_owner = owner_subagent_id.clone();
     let finalizer: LlmFinalizerFn = Box::new(move || {
         let response = finalizer();
-        if finalizer_sessions.try_record_gateway_response_hints(
-            &finalizer_session_id,
-            finalizer_owner,
-            &response,
-        ) && let Some(ready) = finalizer_ready
-            .lock()
-            .expect("stream completion lock poisoned")
-            .take()
+        if (!record_task_response
+            || finalizer_sessions.try_record_gateway_response_hints(
+                &finalizer_session_id,
+                finalizer_owner,
+                &response,
+            ))
+            && let Some(ready) = finalizer_ready
+                .lock()
+                .expect("stream completion lock poisoned")
+                .take()
         {
             let _ = ready.send(());
         }
@@ -1009,13 +991,15 @@ fn gateway_response_completion(
             .take();
         Box::pin(async move {
             if let Some(ready) = ready {
-                sessions
-                    .record_gateway_response_hints(
-                        &session_id,
-                        owner_subagent_id,
-                        Cow::Borrowed(response),
-                    )
-                    .await;
+                if record_task_response {
+                    sessions
+                        .record_gateway_response_hints(
+                            &session_id,
+                            owner_subagent_id,
+                            Cow::Borrowed(response),
+                        )
+                        .await;
+                }
                 let _ = ready.send(());
             }
             Ok(())

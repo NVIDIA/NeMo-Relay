@@ -2971,6 +2971,7 @@ async fn uncontended_stream_completion_finishes_before_observer_poll_without_cop
         manager.clone(),
         prep.session_id.clone(),
         prep.owner_subagent_id.clone(),
+        true,
         Box::new(move || response),
     );
     let response = finalizer();
@@ -3004,6 +3005,7 @@ async fn stream_completion_observer_finishes_when_the_session_is_already_gone() 
         manager,
         "removed-session".into(),
         None,
+        true,
         Box::new(move || response),
     );
     let response = finalizer();
@@ -3014,6 +3016,102 @@ async fn stream_completion_observer_finishes_when_the_session_is_already_gone() 
     observer(&response).await.unwrap();
     assert_eq!(ready.try_recv(), Ok(()));
     assert_eq!(response["output_text"], "final");
+}
+
+#[tokio::test]
+async fn internal_stream_completion_skips_task_bookkeeping_with_or_without_session_contention() {
+    let subscriber = "internal-stream-response-isolation";
+    let output = Arc::new(Mutex::new(Vec::<Value>::new()));
+    let recorded = output.clone();
+    nemo_relay_runtime::api::subscriber::register_subscriber(
+        subscriber,
+        Arc::new(move |event| {
+            if event.name() == "codex-turn"
+                && event.scope_category()
+                    == Some(nemo_relay_runtime::api::event::ScopeCategory::End)
+                && event
+                    .metadata()
+                    .and_then(|m| m.get("session_id"))
+                    .and_then(Value::as_str)
+                    == Some("internal-stream-completion")
+            {
+                recorded
+                    .lock()
+                    .unwrap()
+                    .push(event.output().cloned().unwrap());
+            }
+        }),
+    )
+    .unwrap();
+    for contended in [false, true] {
+        let manager = SessionManager::new(GatewayConfig::default());
+        let prep = manager
+            .prepare_gateway_call(
+                &HeaderMap::new(),
+                LlmGatewayStart {
+                    session_id: Some("internal-stream-completion".into()),
+                    provider: "openai.responses".into(),
+                    model_name: None,
+                    subagent_id: None,
+                    conversation_id: None,
+                    generation_id: None,
+                    request_id: None,
+                    request: LlmRequest {
+                        headers: Map::new(),
+                        content: json!({"input": "task"}),
+                    },
+                    streaming: true,
+                    metadata: json!({}),
+                },
+            )
+            .await
+            .unwrap();
+        manager
+            .record_gateway_response_hints(
+                &prep.session_id,
+                None,
+                Cow::Owned(json!({"output_text": "task answer"})),
+            )
+            .await;
+        let held = if contended {
+            Some(manager.test_lock_session_gate(&prep.session_id).await)
+        } else {
+            None
+        };
+        let (finalizer, observer, ready) = gateway_response_completion(
+            manager.clone(),
+            prep.session_id.clone(),
+            None,
+            false,
+            Box::new(|| json!({"output_text": "internal answer"})),
+        );
+        if contended {
+            let response = json!({"output_text": "internal answer"});
+            tokio::time::timeout(Duration::from_secs(2), observer(&response))
+                .await
+                .unwrap()
+                .unwrap();
+            assert_eq!(finalizer(), response);
+        } else {
+            let response = finalizer();
+            observer(&response).await.unwrap();
+        }
+        drop(held);
+        tokio::time::timeout(Duration::from_secs(2), ready)
+            .await
+            .unwrap()
+            .unwrap();
+        manager
+            .finish_gateway_call(&prep.session_id, None, prep.session_finish)
+            .await;
+        manager.close_all("test_shutdown").await.unwrap();
+    }
+    nemo_relay_runtime::api::subscriber::flush_subscribers().unwrap();
+    nemo_relay_runtime::api::subscriber::deregister_subscriber(subscriber).unwrap();
+    assert_eq!(
+        *output.lock().unwrap(),
+        vec![json!({"output_text": "task answer"}); 2]
+    );
 }
 
 // Exercise the same borrowed observer and finalization path used by the gateway.
@@ -3027,6 +3125,7 @@ async fn managed_final_response_stream(
         manager.clone(),
         prep.session_id.clone(),
         prep.owner_subagent_id.clone(),
+        true,
         Box::new(move || response),
     );
     let params = LlmStreamCallExecuteParams::builder()

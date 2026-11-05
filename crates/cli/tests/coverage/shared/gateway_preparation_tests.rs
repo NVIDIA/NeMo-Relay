@@ -73,7 +73,7 @@ async fn cancelled_gateway_preparation_restores_session_and_releases_call_reserv
     let mut in_flight = detached_gateway_preparation(&manager, &original.session_id).await;
     let prep = in_flight
         .session_mut()
-        .prepare_gateway_call(llm_start())
+        .prepare_gateway_call(llm_start(), RequestClass::Unknown)
         .await
         .unwrap();
     in_flight.gateway_call_prepared(prep.owner_subagent_id);

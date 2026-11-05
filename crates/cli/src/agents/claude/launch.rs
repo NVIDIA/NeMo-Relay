@@ -16,6 +16,12 @@ pub(crate) fn prepare(
     proxy_credential: &crate::provider_auth::TransparentProxyCredential,
     dry_run: bool,
 ) -> Result<(), CliError> {
+    // A process default lets Claude's settings.env retain precedence, including opt-outs.
+    if std::env::var_os("CLAUDE_CODE_GATEWAY_HINT_HEADERS").is_none() {
+        launch
+            .env
+            .push(("CLAUDE_CODE_GATEWAY_HINT_HEADERS".into(), "1".into()));
+    }
     let proxy_header = format!(
         "{}: {}",
         crate::provider_auth::TRANSPARENT_PROXY_CREDENTIAL_HEADER,

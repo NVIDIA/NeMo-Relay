@@ -2,8 +2,7 @@
 // SPDX-License-Identifier: Apache-2.0
 
 use axum::http::HeaderValue;
-use nemo_relay_runtime::api::llm::LlmRequest;
-use serde_json::{Map, Value, json};
+use serde_json::{Value, json};
 
 use super::*;
 
@@ -46,67 +45,69 @@ fn session_id_from_headers_reads_claude_native_header() {
 }
 
 #[test]
-fn startup_probe_matches_only_claude_code_preflight_shape() {
-    let request = LlmRequest {
-        headers: Map::from_iter([(
-            "x-claude-code-session-id".to_string(),
-            json!("claude-session"),
-        )]),
-        content: json!({
-            "model": "claude-sonnet-4-5",
-            "max_tokens": 1,
-            "messages": [
-                {
-                    "role": "user",
-                    "content": "test"
-                }
-            ]
-        }),
-    };
+fn test_request_class_known_value_preserves_class_and_internal_status() {
+    for (value, expected, internal) in [
+        ("main", RequestClass::Main, false),
+        ("subagent", RequestClass::Subagent, false),
+        ("workflow", RequestClass::Workflow, false),
+        ("compaction", RequestClass::Compaction, true),
+        ("auxiliary", RequestClass::Auxiliary, true),
+    ] {
+        let mut headers = HeaderMap::new();
+        headers.insert(
+            "x-claude-code-request-class",
+            HeaderValue::from_static(value),
+        );
+        let actual = request_class(&headers);
+        assert_eq!(actual, expected);
+        assert_eq!(actual.as_str(), value);
+        assert_eq!(actual.is_internal(), internal);
+    }
+}
 
-    assert!(is_startup_probe(
-        "anthropic.messages",
-        Some("claude-sonnet-4-5"),
-        &request
-    ));
-    assert!(!is_startup_probe(
-        "anthropic.count_tokens",
-        Some("claude-sonnet-4-5"),
-        &request
-    ));
-    assert!(!is_startup_probe(
-        "anthropic.messages",
-        Some("gpt-test"),
-        &request
-    ));
-    let missing_claude_header = LlmRequest {
-        headers: Default::default(),
-        content: request.content.clone(),
-    };
-    assert!(is_startup_probe(
-        "anthropic.messages",
-        Some("claude-sonnet-4-5"),
-        &missing_claude_header
-    ));
+#[test]
+fn test_request_class_missing_or_noncanonical_value_is_unknown() {
+    let mut headers = HeaderMap::new();
+    assert_eq!(request_class(&headers), RequestClass::Unknown);
+    for value in [
+        "",
+        "Auxiliary",
+        " auxiliary",
+        "auxiliary ",
+        "auxiliary,main",
+        "auxiliary, auxiliary",
+        "side_reply",
+        "future_class",
+    ] {
+        headers.insert(
+            "x-claude-code-request-class",
+            HeaderValue::from_static(value),
+        );
+        assert_eq!(request_class(&headers), RequestClass::Unknown, "{value:?}");
+    }
+    headers.insert(
+        "x-claude-code-request-class",
+        HeaderValue::from_bytes(&[0xff]).unwrap(),
+    );
+    assert_eq!(request_class(&headers), RequestClass::Unknown);
+    assert_eq!(RequestClass::Unknown.as_str(), "unknown");
+    assert!(!RequestClass::Unknown.is_internal());
+}
 
-    let real_prompt = LlmRequest {
-        headers: request.headers.clone(),
-        content: json!({
-            "model": "claude-sonnet-4-5",
-            "max_tokens": 1,
-            "messages": [
-                {
-                    "role": "user",
-                    "content": "real user work"
-                }
-            ]
-        }),
-    };
-    assert!(!is_startup_probe(
-        "anthropic.messages",
-        Some("claude-sonnet-4-5"),
-        &real_prompt
-    ));
+#[test]
+fn test_request_class_repeated_value_is_unknown() {
+    for second in ["auxiliary", "main"] {
+        let mut headers = HeaderMap::new();
+        headers.append(
+            "x-claude-code-request-class",
+            HeaderValue::from_static("auxiliary"),
+        );
+        headers.append(
+            "x-claude-code-request-class",
+            HeaderValue::from_static(second),
+        );
+        assert_eq!(request_class(&headers), RequestClass::Unknown);
+    }
 }
 
 #[test]

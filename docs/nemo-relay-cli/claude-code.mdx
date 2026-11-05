@@ -37,6 +37,9 @@ Because Claude Code gives its first `--settings` source precedence over the
 process environment, Relay also creates a private settings overlay that
 preserves that source and overrides only `ANTHROPIC_BASE_URL` for the launched
 process. The source settings and installed plugin enablement remain unchanged.
+The wrapper also defaults `CLAUDE_CODE_GATEWAY_HINT_HEADERS` to `1` in the
+launched process so supported Claude versions report each model request's class.
+Explicit environment or settings values, including `0`, remain unchanged.
 If a Relay plugin is already enabled, its MCP process authenticates and borrows
 the dynamic gateway instead of launching the fixed sidecar, then monitors that
 exact gateway while MCP stdio remains open. Its persistent hooks exit without
@@ -196,6 +199,7 @@ Launch Claude Code from another terminal with the gateway environment:
 
 ```bash
 export ANTHROPIC_BASE_URL=http://127.0.0.1:4040
+export CLAUDE_CODE_GATEWAY_HINT_HEADERS=1
 claude
 ```
 
@@ -226,14 +230,11 @@ Tool hooks preserve canonical fields such as `tool_use_id`, `tool_name`,
 `tool_input`, `error`, `duration_ms`, and `is_interrupt`. Subagent hooks use
 `agent_id` as the subagent identifier and preserve `agent_type` in metadata.
 
-Claude Code traces are turn-oriented. A multi-turn conversation can produce one
-root `claude-code-turn` agent span or trajectory per user turn. That is expected
-when each span has a real `UserPromptSubmit` payload and assistant output. NeMo
-Relay excludes the known Claude Code startup/preflight probe and late
-uncorrelatable lifecycle hooks from exported user traces so they do not appear
-as synthetic `null`, `user: test`, `idle_timeout`, or lifecycle-only turns.
-The gateway records suppressed startup probes as debug-level
-`observability_bypassed` events when debug or trace logging is enabled.
+Claude Code traces are turn-oriented, but a trace root is not a prompt count.
+Gateway traffic or compaction hooks can open a turn without a prompt hook.
+Use request classes to separate internal model operations from conversation
+work, and final prompt-observation metadata to count completed turns with an
+observed prompt.
 
 ## Smoke Test
 
@@ -253,18 +254,18 @@ trajectories for at least one user turn, one LLM call, and one tool call.
 
 ## Verify Export
 
-End the Claude Code session and confirm that session-end closed the NeMo Relay
-agent scope and wrote Agent Trajectory Interchange Format (ATIF):
+End the Claude Code session and check for completed turn trajectories in Agent
+Trajectory Interchange Format (ATIF):
 
 ```bash
 ls .nemo-relay/atif
 ```
 
-The gateway exports the session's ATIF file on `SessionEnd`. Unless you change
-`filename_template`, the file is named
-`nemo-relay-atif-<session-id>.json`. If no file appears, confirm that
-`SessionEnd` hooks fire, `plugins.toml` enables the ATIF exporter, and the
-gateway process can write to the configured directory.
+The gateway writes a trajectory when its enclosing turn closes, including at
+`SessionEnd`. One session can produce multiple files. If none appear, confirm
+that hooks fire, `plugins.toml` enables ATIF, and the gateway process can write
+to the configured directory. An idle internal model call has no enclosing turn
+and does not create an ATIF trajectory.
 
 ## Troubleshoot LLM Lifecycle
 
@@ -317,6 +318,107 @@ to hold the mark.
 ATOF retains these marks, and the `full` and `openinference` projections can
 export them. The `gen_ai` projection omits marks. A notification mark does not
 establish the purpose of a separate model call.
+
+## Separate Model Request Classes
+
+Claude Code 2.1.273 or newer can send
+[`x-claude-code-request-class`](https://code.claude.com/docs/en/llm-gateway-protocol#gateway-hint-headers)
+before a model call runs. Relay records its normalized value in the LLM event
+metadata as `claude_code_request_class`:
+
+| Class | Operation |
+| --- | --- |
+| `main` | A main-conversation turn. |
+| `subagent` | A subagent conversation turn. |
+| `workflow` | An agent running inside a workflow. |
+| `compaction` | Conversation compaction. |
+| `auxiliary` | A side request, such as a title, classifier, or summary. |
+| `unknown` | No usable supported class was received. |
+
+Filter `auxiliary` and `compaction` for internal operations. Keep `unknown`
+separate rather than treating it as conversation work. A class is
+client-reported attribution, not authenticated identity or proof that a person
+initiated the operation. A person can invoke compaction; an automated process
+can submit conversation work. The class does not identify a specific auxiliary
+subtype, such as a quota check or prompt suggestion.
+
+The wrapper enables gateway hints unless explicitly configured otherwise. For
+persistent-plugin or standalone-gateway launches, set
+`CLAUDE_CODE_GATEWAY_HINT_HEADERS=1` in Claude's environment or settings.
+`CLAUDE_CODE_GATEWAY_HINT_HEADERS=0` disables them. The integration still
+supports Claude Code 2.1.121 or newer. Versions before 2.1.273, disabled hints,
+missing headers, invalid or repeated values, and future class values produce `unknown`.
+They retain the existing generic turn and owner resolution.
+Hints follow the existing upstream header-forwarding policy. If a custom upstream
+rejects them, set `CLAUDE_CODE_GATEWAY_HINT_HEADERS=0` before launching Relay.
+
+Internal calls still run configured middleware and response-cache policy and
+retain their LLM events and reported usage. Relay no longer bypasses managed
+execution for a request containing only `test` with `max_tokens: 1`. That
+request shape does not prove its purpose.
+
+Known internal calls do not open main turns or supply task output or tool
+correlation hints. They retain an existing structural parent when present,
+preserving scope-local policy and ATIF context. Between turns, an internal call
+is a root LLM span. Compaction hooks can still open implicit turns; these are
+not prompt observations, so do not expect every internal operation to disappear
+from the root count.
+
+Use ATOF or OpenTelemetry as the ledger of observed managed model invocations,
+including internal calls. An idle root LLM has no automatic ATIF trajectory.
+For calls inside a trajectory, ATIF retains event metadata in
+`extra.observed_events` only when `include_observed_events` is enabled, not in
+ordinary step `extra`. Keep internal and unknown usage in overall totals.
+Missing usage is not zero, and cached usage is not proof of a new provider call.
+Guardrails or request intercepts can reject before an LLM scope exists, so model
+span counts do not count every rejected HTTP request.
+
+## Count Turns with Observed Prompts
+
+The final `turn_prompt_observed` metadata on a completed Claude main turn is
+`true` when Relay observed a prompt hook for that turn, including a late hook.
+It is `false` when no prompt hook was observed; a missing field is unknown.
+Delegated-agent prompts do not set the parent's flag. This is not a human-action
+count or a purpose label for every model call within the turn.
+
+Use the final value because a late prompt can join a gateway-created turn.
+`turn_source` and the opening input remain unchanged. With unknown legacy
+traffic, a prompt hook can join a container whose opening request had different
+content; the flag does not prove that the opening request served that prompt.
+The later `prompt_submitted` mark retains the hook payload in ATOF, separately
+from the opening input. GenAI omits that mark.
+
+### Export Class and Prompt Evidence to GenAI
+
+Enable OpenTelemetry in the existing observability component, then add this
+file sink or use the same mappings on a `gen_ai` endpoint:
+
+```toml
+[components.config.opentelemetry]
+enabled = true
+
+[[components.config.opentelemetry.file_sinks]]
+type = "gen_ai"
+output_directory = ".nemo-relay/genai"
+filename = "spans.jsonl"
+format = "json_lines"
+attribute_mappings = [
+  { key = "nemo_relay.start.metadata.claude_code_request_class", alias = "client.claude_code.request_class" },
+  { key = "nemo_relay.end.metadata.turn_prompt_observed", alias = "client.turn.prompt_observed" },
+]
+```
+
+These are custom aliases, not standard GenAI attributes. The first mapping
+copies one class string on model spans; the second copies the final boolean on
+turn spans. They do not export request headers or require native Claude traces,
+a second receiver, or a cross-export join. Existing sanitizers still apply;
+[attribute mappings](/configure-plugins/observability/opentelemetry#attribute-mappings)
+omit removed values and resolve when the span completes.
+
+Count completed spans with `gen_ai.operation.name=invoke_agent` and
+`client.turn.prompt_observed=true` for prompt-observed main turns. Count model
+invocations separately by Relay span identity; do not count child model spans
+as additional prompts or sum parent and child usage together.
 
 ## Hook Limitations
 

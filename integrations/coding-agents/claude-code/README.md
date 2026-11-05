@@ -36,14 +36,14 @@ and accepts the complete generated hook schema. Installation fails before
 changing host state when the version is too old, and `nemo-relay doctor`
 reports the required upgrade.
 
-Claude Code observability is turn-oriented. A multi-turn session can produce one
-root `claude-code-turn` span or ATIF trajectory per user turn. That is expected
-when each turn has a real prompt input and assistant output. Known startup
-probes, uncorrelatable late stop hooks, and other lifecycle-only noise are
-excluded from exported user traces so they do not appear as synthetic `null`,
-`user: test`, or `idle_timeout` turns.
-The gateway records suppressed startup probes as debug-level
-`observability_bypassed` events when debug or trace logging is enabled.
+Claude Code 2.1.273 or newer can report model request classes through gateway
+hints. Relay records `claude_code_request_class` in LLM event metadata; missing,
+disabled, invalid, repeated, and future values remain `unknown`. Internal calls
+retain managed LLM events and reported usage. For completed main turns, count
+the final `turn_prompt_observed=true` flags rather than trace roots.
+See the [Claude Code guide](https://docs.nvidia.com/nemo/relay/nemo-relay-cli/claude-code)
+for class meanings, GenAI mappings, and accounting limits. The integration
+minimum remains 2.1.121.
 
 ## Transparent Setup
 
@@ -65,6 +65,11 @@ Relay plugin MCP authenticates, borrows, and monitors the wrapper-owned dynamic
 gateway, and its persistent hooks become no-ops for this process; only the
 temporary hook source delivers lifecycle data after authenticating that
 gateway.
+
+The wrapper defaults `CLAUDE_CODE_GATEWAY_HINT_HEADERS` to `1` in the child
+process and preserves explicit environment or settings values, including `0`.
+For persistent-plugin or standalone launches, enable it in Claude's environment
+or settings. No native trace collector or full request-header export is needed.
 
 Inspect the launch without starting Claude Code:
 
@@ -119,6 +124,7 @@ Launch Claude Code from another terminal with the gateway environment:
 
 ```bash
 export ANTHROPIC_BASE_URL=http://127.0.0.1:4040
+export CLAUDE_CODE_GATEWAY_HINT_HEADERS=1
 claude
 ```
 
