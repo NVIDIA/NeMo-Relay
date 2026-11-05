@@ -67,9 +67,8 @@ temporary hook source delivers lifecycle data after authenticating that
 gateway.
 
 The wrapper defaults `CLAUDE_CODE_GATEWAY_HINT_HEADERS` to `1` in the child
-process and preserves explicit environment or settings values, including `0`.
-For persistent-plugin or standalone launches, enable it in Claude's environment
-or settings. No native trace collector or full request-header export is needed.
+process only when no value is inherited. Claude's settings can override that
+default. No native trace collector or full request-header export is needed.
 
 Inspect the launch without starting Claude Code:
 
@@ -205,6 +204,16 @@ routing through NeMo Relay. Its plugin MCP process immediately starts or reuses
 the shared native gateway on `127.0.0.1:47632` and heartbeats it while MCP stdio
 remains open. Codex and Claude Code MCP clients can share
 that gateway.
+
+Installation and refresh also add a gateway-hint default to Claude's user
+settings when neither that file nor the installer's environment defines it.
+Inherited values are not saved to the file. After upgrading, run
+`nemo-relay integrations refresh` and start a new Claude session. For opt-outs
+and settings precedence, see
+[Model Request Classes](https://docs.nvidia.com/nemo/relay/nemo-relay-cli/claude-code#separate-model-request-classes).
+Managed deployments use their existing
+[client bootstrap configuration](https://docs.nvidia.com/nemo/relay/daemon/configuration#claude-code)
+without changing the immutable v1 bundle.
 
 The generated MCP entry sets `alwaysLoad: true`, so Claude Code waits
 for the MCP connection during startup, while `nemo-relay mcp` starts or reuses

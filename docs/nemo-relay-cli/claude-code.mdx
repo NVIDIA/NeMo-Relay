@@ -38,8 +38,9 @@ process environment, Relay also creates a private settings overlay that
 preserves that source and overrides only `ANTHROPIC_BASE_URL` for the launched
 process. The source settings and installed plugin enablement remain unchanged.
 The wrapper also defaults `CLAUDE_CODE_GATEWAY_HINT_HEADERS` to `1` in the
-launched process so supported Claude versions report each model request's class.
-Explicit environment or settings values, including `0`, remain unchanged.
+launched process when no value is inherited. Supported Claude versions then
+report each model request's class. Claude's settings can override this process
+default.
 If a Relay plugin is already enabled, its MCP process authenticates and borrows
 the dynamic gateway instead of launching the fixed sidecar, then monitors that
 exact gateway while MCP stdio remains open. Its persistent hooks exit without
@@ -70,6 +71,10 @@ The installer creates a local marketplace, installs
 `nemo-relay-plugin@nemo-relay-local` at user scope, and enables Claude Code
 provider routing through the local NeMo Relay sidecar. It uses the existing
 `nemo-relay` binary on `PATH`; it does not install a plugin-local Relay binary.
+The installer also adds a gateway-hint default to Claude's user settings when
+neither that file nor the installer's environment defines it. See
+[Model Request Classes](#separate-model-request-classes) for settings precedence
+and opt-outs.
 
 The plugin starts `nemo-relay mcp`, a lightweight Rust lifecycle client that
 starts or reuses the shared gateway on `127.0.0.1:47632` immediately when the
@@ -342,15 +347,34 @@ initiated the operation. A person can invoke compaction; an automated process
 can submit conversation work. The class does not identify a specific auxiliary
 subtype, such as a quota check or prompt suggestion.
 
-The wrapper enables gateway hints unless explicitly configured otherwise. For
-persistent-plugin or standalone-gateway launches, set
+Gateway hints must be enabled in Claude Code, not in the Relay daemon or MCP
+server:
+
+- **Wrapped execution:** Relay supplies `CLAUDE_CODE_GATEWAY_HINT_HEADERS=1`
+  only when Claude inherits no value.
+- **Persistent plugin:** Installation and refresh add
+  `env.CLAUDE_CODE_GATEWAY_HINT_HEADERS` with the value `"1"` to Claude's user
+  settings only when the key is absent and the installer inherits no value.
+  Inherited values are not copied into the settings file. For an existing
+  installation, run `nemo-relay integrations refresh`, then start a new Claude
+  session.
+- **Managed deployment:** Configure the flag in the administrator-owned client
+  environment or Claude policy. Follow the
+  [managed Claude setup](/daemon/configuration#claude-code); the existing v1
+  bundle remains unchanged.
+
+For a manual gateway or source-marketplace installation, set
 `CLAUDE_CODE_GATEWAY_HINT_HEADERS=1` in Claude's environment or settings.
-`CLAUDE_CODE_GATEWAY_HINT_HEADERS=0` disables them. The integration still
-supports Claude Code 2.1.121 or newer. Versions before 2.1.273, disabled hints,
-missing headers, invalid or repeated values, and future class values produce `unknown`.
-They retain the existing generic turn and owner resolution.
-Hints follow the existing upstream header-forwarding policy. If a custom upstream
-rejects them, set `CLAUDE_CODE_GATEWAY_HINT_HEADERS=0` before launching Relay.
+To disable hints, set `env.CLAUDE_CODE_GATEWAY_HINT_HEADERS` to `"0"` in the
+Claude settings source that controls the session. A settings value can override
+a shell export, and managed policy takes precedence over user settings.
+Restart Claude after changing this configuration.
+
+The integration still supports Claude Code 2.1.121 or newer. Versions before
+2.1.273, disabled hints, missing headers, invalid or repeated values, and future
+class values produce `unknown`. They retain the existing generic turn and owner
+resolution. Hints follow the existing upstream header-forwarding policy. If a
+custom upstream rejects them, disable them in Claude's effective configuration.
 
 Internal calls still run configured middleware and response-cache policy and
 retain their LLM events and reported usage. Relay no longer bypasses managed

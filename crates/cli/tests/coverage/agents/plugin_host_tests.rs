@@ -4476,6 +4476,205 @@ fn relay_binary_rejects_missing_override_and_uses_current_exe_fallback() {
 }
 
 #[test]
+fn claude_provider_defaults_gateway_hints_and_restores_owned_values() {
+    const HINT: &str = "CLAUDE_CODE_GATEWAY_HINT_HEADERS";
+    for (settings, legacy_backup) in [
+        (None, None),
+        (
+            Some(json!({"env": {"ANTHROPIC_BASE_URL": "https://original", "OTHER": "kept"}})),
+            None,
+        ),
+        (
+            Some(json!({"env": {"ANTHROPIC_BASE_URL": DEFAULT_URL, "OTHER": "kept"}})),
+            None,
+        ),
+        (
+            Some(json!({"env": {"ANTHROPIC_BASE_URL": DEFAULT_URL, "OTHER": "kept"}})),
+            Some(json!({"env": {"ANTHROPIC_BASE_URL": "https://original", "OTHER": "kept"}})),
+        ),
+    ] {
+        let dir = tempdir().unwrap();
+        let _home = HomeScope::enter(dir.path());
+        let _hints = EnvVarGuard::remove(HINT);
+        let path = claude_settings_path().unwrap();
+        if let Some(settings) = settings.as_ref() {
+            write_json(&path, settings).unwrap();
+        }
+        if let Some(backup) = legacy_backup.as_ref() {
+            write_json(&backup_path(&path), backup).unwrap();
+        }
+
+        enable_claude_provider(DEFAULT_URL).unwrap();
+        assert_eq!(
+            json_env_string(&read_json_object(&path).unwrap(), HINT),
+            Some("1")
+        );
+        let backup = fs::read(backup_path(&path)).unwrap();
+        enable_claude_provider(DEFAULT_URL).unwrap();
+        assert_eq!(fs::read(backup_path(&path)).unwrap(), backup);
+        restore_claude_provider(DEFAULT_URL).unwrap();
+
+        if let Some(expected) = legacy_backup.or(settings) {
+            assert_eq!(read_json_object(&path).unwrap(), expected);
+        } else {
+            assert!(!path.exists());
+        }
+        assert!(!backup_path(&path).exists());
+    }
+}
+
+#[test]
+fn claude_provider_preserves_explicit_gateway_hint_settings_and_environment() {
+    const HINT: &str = "CLAUDE_CODE_GATEWAY_HINT_HEADERS";
+    for value in [json!("0"), json!("1"), json!(""), json!(false)] {
+        let dir = tempdir().unwrap();
+        let _home = HomeScope::enter(dir.path());
+        let _hints = EnvVarGuard::remove(HINT);
+        let path = claude_settings_path().unwrap();
+        let original = json!({"env": {(HINT): value, "OTHER": "kept"}});
+        write_json(&path, &original).unwrap();
+        enable_claude_provider(DEFAULT_URL).unwrap();
+        assert_eq!(
+            read_json_object(&path).unwrap()["env"][HINT],
+            original["env"][HINT]
+        );
+        restore_claude_provider(DEFAULT_URL).unwrap();
+        assert_eq!(read_json_object(&path).unwrap(), original);
+    }
+    for value in ["0", "1", "", "false"] {
+        let dir = tempdir().unwrap();
+        let _home = HomeScope::enter(dir.path());
+        let _hints = EnvVarGuard::set_path(HINT, Path::new(value));
+        let path = claude_settings_path().unwrap();
+        enable_claude_provider(DEFAULT_URL).unwrap();
+        assert!(read_json_object(&path).unwrap()["env"].get(HINT).is_none());
+        restore_claude_provider(DEFAULT_URL).unwrap();
+        assert!(!path.exists());
+    }
+}
+
+#[test]
+fn claude_provider_preserves_hint_ownership_across_routing_changes() {
+    const HINT: &str = "CLAUDE_CODE_GATEWAY_HINT_HEADERS";
+    for reinstall in [false, true] {
+        let dir = tempdir().unwrap();
+        let _home = HomeScope::enter(dir.path());
+        let _hints = EnvVarGuard::remove(HINT);
+        let path = claude_settings_path().unwrap();
+        write_json(
+            &path,
+            &json!({"env": {"ANTHROPIC_BASE_URL": "https://original", "OTHER": "kept"}}),
+        )
+        .unwrap();
+        enable_claude_provider(DEFAULT_URL).unwrap();
+        let mut changed = read_json_object(&path).unwrap();
+        assert_eq!(json_env_string(&changed, HINT), Some("1"));
+        changed["env"]["ANTHROPIC_BASE_URL"] = json!("https://custom");
+        write_json(&path, &changed).unwrap();
+        if reinstall {
+            enable_claude_provider(DEFAULT_URL).unwrap();
+        }
+        restore_claude_provider(DEFAULT_URL).unwrap();
+        let restored = read_json_object(&path).unwrap();
+        assert_eq!(
+            json_env_string(&restored, "ANTHROPIC_BASE_URL"),
+            Some("https://custom")
+        );
+        assert_eq!(json_env_string(&restored, "OTHER"), Some("kept"));
+        assert!(restored["env"].get(HINT).is_none());
+
+        let mut user_owned = restored;
+        user_owned["env"][HINT] = json!("1");
+        write_json(&path, &user_owned).unwrap();
+        restore_claude_provider(DEFAULT_URL).unwrap();
+        assert_eq!(
+            json_env_string(&read_json_object(&path).unwrap(), HINT),
+            Some("1")
+        );
+    }
+}
+
+#[test]
+fn claude_provider_uninstall_preserves_user_gateway_hint_edits() {
+    const HINT: &str = "CLAUDE_CODE_GATEWAY_HINT_HEADERS";
+    for value in [Some("0"), Some(""), None] {
+        let dir = tempdir().unwrap();
+        let _home = HomeScope::enter(dir.path());
+        let _hints = EnvVarGuard::remove(HINT);
+        let path = claude_settings_path().unwrap();
+        enable_claude_provider(DEFAULT_URL).unwrap();
+        let mut changed = read_json_object(&path).unwrap();
+        assert_eq!(json_env_string(&changed, HINT), Some("1"));
+        if let Some(value) = value {
+            changed["env"][HINT] = json!(value);
+        } else {
+            changed["env"].as_object_mut().unwrap().remove(HINT);
+        }
+        write_json(&path, &changed).unwrap();
+        restore_claude_provider(DEFAULT_URL).unwrap();
+        if let Some(value) = value {
+            assert_eq!(
+                json_env_string(&read_json_object(&path).unwrap(), HINT),
+                Some(value)
+            );
+        } else {
+            assert!(!path.exists());
+        }
+    }
+}
+
+#[test]
+fn claude_provider_removes_new_default_without_restoring_historical_hint() {
+    const HINT: &str = "CLAUDE_CODE_GATEWAY_HINT_HEADERS";
+    let dir = tempdir().unwrap();
+    let _home = HomeScope::enter(dir.path());
+    let _hints = EnvVarGuard::remove(HINT);
+    let path = claude_settings_path().unwrap();
+    write_json(&path, &json!({"env": {"ANTHROPIC_BASE_URL": DEFAULT_URL}})).unwrap();
+    write_json(
+        &backup_path(&path),
+        &json!({"env": {"ANTHROPIC_BASE_URL": "https://original", (HINT): "0"}}),
+    )
+    .unwrap();
+
+    enable_claude_provider(DEFAULT_URL).unwrap();
+    assert_eq!(
+        json_env_string(&read_json_object(&path).unwrap(), HINT),
+        Some("1")
+    );
+    restore_claude_provider(DEFAULT_URL).unwrap();
+
+    let restored = read_json_object(&path).unwrap();
+    assert_eq!(
+        json_env_string(&restored, "ANTHROPIC_BASE_URL"),
+        Some("https://original")
+    );
+    assert!(restored["env"].get(HINT).is_none());
+}
+
+#[cfg(unix)]
+#[test]
+fn claude_provider_failed_settings_write_restores_hint_backup() {
+    use std::os::unix::fs::symlink;
+
+    let dir = tempdir().unwrap();
+    let _home = HomeScope::enter(dir.path());
+    let _hints = EnvVarGuard::remove("CLAUDE_CODE_GATEWAY_HINT_HEADERS");
+    let path = claude_settings_path().unwrap();
+    fs::create_dir_all(path.parent().unwrap()).unwrap();
+    let blocker = dir.path().join("not-a-directory");
+    fs::write(&blocker, b"kept").unwrap();
+    let target = blocker.join("settings.json");
+    symlink(&target, &path).unwrap();
+
+    assert!(enable_claude_provider(DEFAULT_URL).is_err());
+
+    assert_eq!(fs::read_link(&path).unwrap(), target);
+    assert_eq!(fs::read(&blocker).unwrap(), b"kept");
+    assert!(!backup_path(&path).exists());
+}
+
+#[test]
 fn claude_provider_enable_status_and_restore_cover_managed_backup_paths() {
     let dir = tempdir().unwrap();
     let _home = HomeScope::enter(dir.path());
@@ -4570,6 +4769,33 @@ fn claude_provider_restore_noops_without_matching_backup_or_managed_value() {
         Some("https://custom.example")
     );
     assert!(backup_path(&settings_path).exists());
+
+    let settings_bytes = fs::read(&settings_path).unwrap();
+    for invalid_backup in [b"not JSON".as_slice(), b"[]".as_slice()] {
+        fs::write(backup_path(&settings_path), invalid_backup).unwrap();
+        restore_claude_provider(DEFAULT_URL).unwrap();
+        assert_eq!(fs::read(&settings_path).unwrap(), settings_bytes);
+        assert_eq!(
+            fs::read(backup_path(&settings_path)).unwrap(),
+            invalid_backup
+        );
+    }
+
+    write_json(
+        &settings_path,
+        &json!({"env": {"ANTHROPIC_BASE_URL": DEFAULT_URL}}),
+    )
+    .unwrap();
+    let managed_settings_bytes = fs::read(&settings_path).unwrap();
+    for invalid_backup in [b"not JSON".as_slice(), b"[]".as_slice()] {
+        fs::write(backup_path(&settings_path), invalid_backup).unwrap();
+        assert!(restore_claude_provider(DEFAULT_URL).is_err());
+        assert_eq!(fs::read(&settings_path).unwrap(), managed_settings_bytes);
+        assert_eq!(
+            fs::read(backup_path(&settings_path)).unwrap(),
+            invalid_backup
+        );
+    }
 }
 
 #[test]
