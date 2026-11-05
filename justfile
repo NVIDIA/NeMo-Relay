@@ -1248,6 +1248,10 @@ generate-native-abi-test-lockfiles:
 test-native-abi-toolchains toolchain:
     uv run --no-sync python scripts/check_native_abi_toolchains.py {{ quote(toolchain) }}
 
+# Compare real native middleware paths with a separate source checkout.
+benchmark-native-plugins baseline:
+    uv run --no-sync python scripts/native_plugin_benchmark/run.py {{ quote(baseline) }}
+
 # Build the native and worker dynamic-plugin fixtures once for test processes.
 build-test-plugin-fixtures:
     #!/usr/bin/env bash
