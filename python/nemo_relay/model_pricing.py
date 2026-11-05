@@ -63,6 +63,7 @@ class TokenPricingRates:
     output_per_million: float
     cache_read_per_million: float | None = None
     cache_write_per_million: float | None = None
+    cache_write_1h_per_million: float | None = None
 
     def to_dict(self) -> JsonObject:
         """Serialize these rates to the canonical JSON object shape."""
@@ -72,6 +73,7 @@ class TokenPricingRates:
                 "output_per_million": self.output_per_million,
                 "cache_read_per_million": self.cache_read_per_million,
                 "cache_write_per_million": self.cache_write_per_million,
+                "cache_write_1h_per_million": self.cache_write_1h_per_million,
             }
         )
 

@@ -96,10 +96,11 @@ type ModelPricing struct {
 
 // TokenPricingRates expresses model rates per one million tokens.
 type TokenPricingRates struct {
-	InputPerMillion      float64  `json:"input_per_million"`
-	OutputPerMillion     float64  `json:"output_per_million"`
-	CacheReadPerMillion  *float64 `json:"cache_read_per_million,omitempty"`
-	CacheWritePerMillion *float64 `json:"cache_write_per_million,omitempty"`
+	InputPerMillion        float64  `json:"input_per_million"`
+	OutputPerMillion       float64  `json:"output_per_million"`
+	CacheReadPerMillion    *float64 `json:"cache_read_per_million,omitempty"`
+	CacheWritePerMillion   *float64 `json:"cache_write_per_million,omitempty"`
+	CacheWrite1hPerMillion *float64 `json:"cache_write_1h_per_million,omitempty"`
 }
 
 // PromptCachePricing configures cache-read token accounting for a model pricing entry.
