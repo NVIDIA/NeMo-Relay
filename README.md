@@ -227,7 +227,8 @@ uv add nemo-relay
 npm install nemo-relay-node@1.0.0
 
 # Rust
-# Building requires protoc 31.1 or newer and Buf 1.75.0 or newer.
+# Building requires protoc 31.1 or newer and Buf 1.75.0 or newer, on PATH or set
+# with PROTOC and BUF. The first build needs access to the Buf Schema Registry.
 cargo add nemo-relay
 ```
 
