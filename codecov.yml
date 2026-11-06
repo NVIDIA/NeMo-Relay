@@ -18,52 +18,6 @@ coverage:
         threshold: 0.5%
         base: auto
         if_ci_failed: error
-      rust_runtime_floor:
-        informational: true
-        target: 95%
-        paths:
-          - "crates/sdk/src"
-          - "crates/runtime/src"
-          - "crates/codecs/src"
-          - "crates/diagnostics/src"
-          - "crates/logging/src"
-          - "crates/builtins/src"
-          - "crates/model-pricing/src"
-          - "crates/resource-metrics/src"
-          - "crates/observability/src"
-          - "crates/adaptive/src"
-      cli_floor:
-        informational: true
-        target: 90%
-        paths:
-          - "crates/cli/src"
-      go_binding_floor:
-        informational: true
-        target: 94%
-        paths:
-          - "go/nemo_relay"
-          - "crates/ffi/src"
-      python_binding_floor:
-        informational: true
-        target: 95%
-        paths:
-          - "python/nemo_relay"
-          - "crates/python/src"
-      node_binding_floor:
-        informational: true
-        target: 95%
-        paths:
-          - "crates/node/*.js"
-      plugin_sdk_floor:
-        informational: true
-        target: 95%
-        paths:
-          - "crates/types/src"
-          - "crates/plugin/src"
-          - "crates/plugin-host/src"
-          - "crates/worker-proto/src"
-          - "crates/worker/src"
-          - "python/plugin/src/nemo_relay_plugin"
     patch:
       default:
         target: 90%
