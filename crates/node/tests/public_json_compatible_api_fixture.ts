@@ -25,7 +25,9 @@ import {
   toolCallEnd,
   toolCallExecuteAsync,
   withScope,
+  type EventMetadata,
   type EventSanitizeFields,
+  type EventSanitizeFieldsCompatible,
   type Json,
   type JsonCompatible,
   type JsonObject,
@@ -36,6 +38,7 @@ import {
   type MetricMeasurement,
   type ToolExecutionInterceptOutcome,
   type ToolExecutionResult,
+  type ToolExecutionResultCompatible,
   type ToolHandle,
 } from '../index.js';
 import * as plugin from '../plugin.js';
@@ -53,7 +56,24 @@ interface SdkParams {
 interface SdkResponse {
   id: string;
   choices: { index: number; message: { role: string; content: string | null } }[];
-  usage?: { total_tokens: number };
+  usage?: { total_tokens?: number };
+}
+interface Options {
+  retries?: number;
+  nested?: { limit?: number };
+}
+interface ToolDefinition {
+  name: string;
+  parameters?: Record<string, unknown>;
+}
+interface InputSchema {
+  type: 'object';
+  properties?: unknown | null;
+  [key: string]: unknown;
+}
+interface SdkParamsWithTools extends SdkParams {
+  tools?: ToolDefinition[];
+  schema?: InputSchema;
 }
 interface SdkChunk {
   id: string;
@@ -119,6 +139,8 @@ declare const tree: Tree;
 declare const tuple: readonly [string, number, { ok: boolean }];
 declare const toolHandle: ToolHandle;
 declare const settings: PluginSettings;
+declare const options: Options;
+declare const paramsWithTools: SdkParamsWithTools;
 declare const unknownValue: unknown;
 declare const date: Date;
 declare const big: bigint;
@@ -151,6 +173,12 @@ toolCall('scalar', 'scalar');
 toolCall('array', [params, params]);
 toolCall('union', sdkOrNull, null, null, mixed);
 toolCall('empty', {});
+toolCall('optional', options, null, null, options);
+llmCall('optional', { headers: options, content: options });
+llmCall('tools', { headers: {}, content: paramsWithTools });
+llmCall('tools-factory', LlmRequest.from({}, paramsWithTools));
+toolCall('unknown-record', unknownRecord);
+llmCallExecuteAsync('unknown-record', shape, async () => unknownRecord);
 toolCall('empty-typed', emptyObject);
 toolCall('any', anyValue);
 llmCallExecuteAsync('any', shape, async () => anyValue);
@@ -159,9 +187,13 @@ toolCallEnd(toolHandle, { result: sdk }, markData);
 toolCallExecuteAsync('typed', params, async () => toolResult);
 toolCallExecuteAsync('interface', params, async () => ({ result: sdk }));
 toolCallExecuteAsync('args', params, async (args) => ({ result: args, annotation: { note: 1 } }));
+toolCallExecuteAsync('extra-json', params, async () => ({ result: 1, extra: 2 }));
 llmCall('object', { headers: {}, content: params });
 llmCall('headers', { headers, content: null });
 llmCall('instance', new LlmRequest({}, { x: 1 }));
+llmCall('factory', LlmRequest.from(headers, params));
+const built: LlmRequestShape = LlmRequest.from({}, params);
+llmCall('extra-json', { headers: {}, content: null, extra: 1 });
 llmCall('shape', shape, null, null, markData, markData);
 llmCallEnd(llmCall('end', shape), sdk, markData);
 const executed: Promise<Json> = llmCallExecuteAsync(
@@ -214,9 +246,11 @@ registerLlmSanitizeResponseGuardrail('null', 1, () => null);
 registerMarkSanitizeGuardrail('interface', 1, () => ({ data: markData }));
 registerMarkSanitizeGuardrail('passthrough', 1, (e, current) => current);
 registerMarkSanitizeGuardrail('typed', 1, () => fields);
+registerMarkSanitizeGuardrail('extra-json', 1, () => ({ data: markData, payload: 1 }));
 registerEventMetadataInjector('interface', 1, () => meta);
 event('data', null, markData, markData);
 metric('typed', measurements);
+metric('extra', [{ name: 'm', kind: MetricKind.Counter, valueType: MetricValueType.U64, value: 1, extra: () => 1 }]);
 metric('interface', [{ name: 'm', kind: MetricKind.Counter, valueType: MetricValueType.U64, value: 1, attributes: markData }], null, markData);
 const scoped: Promise<SdkResponse> = withScope('scope', ScopeType.Agent, async (): Promise<SdkResponse> => sdk);
 const voided: Promise<null> = withScope('void', ScopeType.Agent, async () => {});
@@ -247,6 +281,34 @@ const typedTool: Promise<{ result: SdkResponse }> = typedToolExecute(
   { metadata: markData },
 );
 const open = plugin.ComponentSpec('example.add-tag', settings);
+function forwardJson<T extends Json>(value: T): void {
+  toolCall('forward', value);
+  event('forward', null, value, value);
+}
+function forwardObject<T extends JsonObject>(value: T): void {
+  plugin.ComponentSpec('example.add-tag', value);
+}
+function forwardRequest<T extends LlmRequestShape>(value: T): void {
+  llmCall('forward', value);
+}
+function forwardResult<T extends ToolExecutionResultCompatible<T>>(value: T): void {
+  toolCallEnd(toolHandle, value);
+}
+function forwardOutcome<T extends ToolExecutionInterceptOutcome>(value: T): void {
+  registerToolExecutionIntercept('forward', 1, () => value);
+}
+function forwardRequestOutcome<T extends LlmRequestInterceptOutcome>(value: T): void {
+  registerLlmRequestIntercept('forward', 1, false, () => value);
+}
+function forwardFields<T extends EventSanitizeFieldsCompatible<T>>(value: T): void {
+  registerMarkSanitizeGuardrail('forward', 1, () => value);
+}
+function forwardMetadata<T extends EventMetadata>(value: T): void {
+  registerEventMetadataInjector('forward', 1, () => value);
+}
+function forwardMeasurements<T extends MetricMeasurement[]>(value: T): void {
+  metric('forward', value);
+}
 plugin.ComponentSpec('example.add-tag', {});
 const openKind: AssertEqual<typeof open.kind, string> = true;
 
@@ -270,14 +332,12 @@ toolCall('function-union', fnOrObject);
 toolCall('object', bareObject);
 // @ts-expect-error object carries no JSON guarantee inside a union
 toolCall('object-union', nullableObject);
-// @ts-expect-error unknown property values are not JSON
-toolCall('unknown-record', unknownRecord);
 // @ts-expect-error the LLM implementation must return JSON
 llmCallExecuteAsync('object', shape, async () => bareObject);
 // @ts-expect-error a request needs content
 llmCall('content', { headers: {} });
-// @ts-expect-error a request has no other keys
-llmCall('extra', { headers: {}, content: null, extra: 1 });
+// @ts-expect-error extra request keys must be JSON
+llmCall('extra-function', { headers: {}, content: null, extra: () => 1 });
 // @ts-expect-error headers must be an object
 llmCall('headers-string', { headers: 'x', content: null });
 // @ts-expect-error headers must not be an array
@@ -288,8 +348,10 @@ llmCallExecuteAsync('map', shape, async () => new Map());
 llmCallExecuteAsync('unknown', shape, async () => unknownValue);
 // @ts-expect-error a tool result needs result
 toolCallExecuteAsync('results', params, async () => ({ results: 1 }));
-// @ts-expect-error a tool result has no other keys
-toolCallExecuteAsync('extra', params, async () => ({ result: 1, extra: 2 }));
+// @ts-expect-error extra tool result keys must be JSON
+toolCallExecuteAsync('extra-function', params, async () => ({ result: 1, extra: () => 1 }));
+// @ts-expect-error extra tool result keys must be JSON
+toolCallEnd(toolHandle, { result: sdk, extra: () => 1 });
 // @ts-expect-error explicit undefined is rejected by the runtime
 toolCallEnd(toolHandle, { result: sdk, annotation: undefined });
 // @ts-expect-error event metadata must be flat scalars
@@ -307,8 +369,12 @@ registerToolExecutionIntercept('mark-name', 1, async (context, next) => ({
 registerLlmRequestIntercept('missing', 1, false, () => ({ annotated: null }));
 // @ts-expect-error a request intercept returns JSON only
 registerLlmRequestIntercept('map', 1, false, ({ request }) => ({ request, annotated: new Map() }));
-// @ts-expect-error sanitize fields are the known fields only
-registerMarkSanitizeGuardrail('payload', 1, () => ({ payload: 1 }));
+// @ts-expect-error extra sanitize fields must be JSON
+registerMarkSanitizeGuardrail('payload', 1, () => ({ payload: () => 1 }));
+// @ts-expect-error a function is not sanitize fields
+registerMarkSanitizeGuardrail('function', 1, () => () => 1);
+// @ts-expect-error a function is not event metadata
+registerEventMetadataInjector('function', 1, () => () => 1);
 // @ts-expect-error sanitize fields must be JSON
 registerMarkSanitizeGuardrail('map', 1, () => ({ data: new Map() }));
 // @ts-expect-error a sanitized request must keep the request shape
@@ -337,5 +403,31 @@ plugin.ComponentSpec('pricing', { sources: [], typo: 1 });
 plugin.ComponentSpec('example.add-tag', { run: () => 1 });
 // @ts-expect-error an open kind rejects arrays
 plugin.ComponentSpec('example.add-tag', [1]);
+// @ts-expect-error an open kind rejects functions
+plugin.ComponentSpec('example.add-tag', () => 1);
+// @ts-expect-error headers must be an object
+LlmRequest.from('x', null);
+// @ts-expect-error content must be JSON
+LlmRequest.from({}, new Map());
 
-export const checked = [jsonRoundTrip, shapeRoundTrip, executed, scoped, voided, fromJson, typedResponse, typedTool, openKind];
+export const checked = [
+  jsonRoundTrip,
+  shapeRoundTrip,
+  executed,
+  scoped,
+  voided,
+  fromJson,
+  typedResponse,
+  typedTool,
+  openKind,
+  built,
+  forwardJson,
+  forwardObject,
+  forwardRequest,
+  forwardResult,
+  forwardOutcome,
+  forwardRequestOutcome,
+  forwardFields,
+  forwardMetadata,
+  forwardMeasurements,
+];

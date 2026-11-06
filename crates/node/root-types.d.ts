@@ -17,21 +17,33 @@ type NonJsonValue =
   | bigint
   | symbol
   | undefined;
-type BareObject<V> = V extends unknown ? ([object] extends [V] ? ([V] extends [object] ? V : never) : never) : never;
-type JsonProperty<V> = V extends JsonValue
-  ? V
-  : V extends NonJsonValue
-    ? never
-    : V extends object
-      ? [object] extends [V]
-        ? never
-        : { [K in keyof V]: JsonProperty<V[K]> }
-      : never;
+type BareObject<V> = V extends unknown
+  ? [object] extends [V]
+    ? [V] extends [object]
+      ? [keyof V] extends [never]
+        ? V
+        : never
+      : never
+    : never
+  : never;
+type JsonShaped<T> = [Extract<T, NonJsonValue> | BareObject<T>] extends [never] ? T : never;
+type JsonProperty<V> = [unknown] extends [V]
+  ? unknown
+  : V extends JsonValue
+    ? V
+    : V extends NonJsonValue
+      ? never
+      : V extends object
+        ? [BareObject<V>] extends [never]
+          ? { [K in keyof V]: JsonProperty<V[K]> }
+          : never
+        : never;
 type JsonObjectProperty<V> = V extends readonly unknown[] ? never : V extends object ? JsonProperty<V> : never;
 type LlmRequestProperty<V> = V extends object
-  ? {
-      [K in keyof V]: K extends 'headers' ? JsonObjectProperty<V[K]> : K extends 'content' ? JsonProperty<V[K]> : never;
-    } & Record<'headers' | 'content', unknown>
+  ? { [K in keyof V]: K extends 'headers' ? JsonObjectProperty<V[K]> : JsonProperty<V[K]> } & Record<
+      'headers' | 'content',
+      unknown
+    >
   : never;
 type PendingMarkSpecProperty<V> = V extends object
   ? {
@@ -39,7 +51,7 @@ type PendingMarkSpecProperty<V> = V extends object
         ? JsonProperty<V[K]>
         : K extends keyof PendingMarkSpec
           ? PendingMarkSpec[K]
-          : never;
+          : JsonProperty<V[K]>;
     } & Record<'name', unknown>
   : never;
 type PendingMarksProperty<V> = V extends readonly unknown[] ? { [I in keyof V]: PendingMarkSpecProperty<V[I]> } : never;
@@ -50,61 +62,101 @@ type MetricMeasurementProperty<V> = V extends object
         ? JsonProperty<V[K]>
         : K extends keyof MetricMeasurement
           ? MetricMeasurement[K]
-          : never;
+          : unknown;
     } & Record<'name' | 'kind' | 'valueType' | 'value', unknown>
   : never;
+interface LlmRequestOpen {
+  headers: JsonObject;
+  content: Json;
+  [key: string]: JsonValue;
+}
+interface ToolExecutionResultOpen {
+  result: Json;
+  annotation?: Json;
+  [key: string]: JsonValue | undefined;
+}
+interface EventSanitizeFieldsOpen {
+  data?: Json;
+  categoryProfile?: Json;
+  metadata?: Json;
+  [key: string]: JsonValue | undefined;
+}
 
-export type JsonCompatible<T> = [T] extends [JsonValue]
-  ? JsonValue
-  : [T] extends [{} | null]
-    ? [Extract<T, NonJsonValue> | BareObject<T>] extends [never]
-      ? { [K in keyof T]: JsonProperty<T[K]> }
-      : never
-    : never;
-export type JsonObjectCompatible<T> = [T] extends [readonly unknown[]]
-  ? never
-  : [T] extends [object]
-    ? { [K in keyof T]: JsonProperty<T[K]> }
-    : never;
-export type LlmRequestCompatible<T> = [T] extends [object]
-  ? {
-      [K in keyof T]: K extends 'headers' ? JsonObjectProperty<T[K]> : K extends 'content' ? JsonProperty<T[K]> : never;
-    } & Record<'headers' | 'content', unknown>
-  : never;
-export type ToolExecutionResultCompatible<T> = [T] extends [object]
-  ? { [K in keyof T]: K extends 'result' | 'annotation' ? JsonProperty<T[K]> : never } & Record<'result', unknown>
-  : never;
-export type ToolExecutionInterceptOutcomeCompatible<T> = [T] extends [object]
-  ? {
-      [K in keyof T]: K extends 'result' | 'annotation'
-        ? JsonProperty<T[K]>
-        : K extends 'pendingMarks'
-          ? PendingMarksProperty<T[K]>
-          : never;
-    } & Record<'result', unknown>
-  : never;
-export type LlmRequestInterceptOutcomeCompatible<T> = [T] extends [object]
-  ? {
-      [K in keyof T]: K extends 'request'
-        ? LlmRequestProperty<T[K]>
-        : K extends 'annotated'
-          ? JsonProperty<T[K]>
-          : K extends 'pendingMarks'
-            ? PendingMarksProperty<T[K]>
-            : K extends 'optimizationContributions'
-              ? LlmOptimizationContribution[]
-              : never;
-    } & Record<'request', unknown>
-  : never;
-export type EventSanitizeFieldsCompatible<T> = [T] extends [object]
-  ? { [K in keyof T]: K extends 'data' | 'categoryProfile' | 'metadata' ? JsonProperty<T[K]> : never }
-  : never;
-export type EventMetadataCompatible<T> = [T] extends [object]
-  ? { [K in keyof T]: EventMetadataProperty<T[K]> }
-  : never;
-export type MetricMeasurementsCompatible<T> = [T] extends [readonly unknown[]]
-  ? { [I in keyof T]: MetricMeasurementProperty<T[I]> }
-  : never;
+export type JsonCompatible<T> =
+  | JsonValue
+  | ([T] extends [{} | null]
+      ? [JsonShaped<T>] extends [never]
+        ? never
+        : { [K in keyof T]: JsonProperty<T[K]> }
+      : never);
+export type JsonObjectCompatible<T> =
+  | JsonObject
+  | ([T] extends [readonly unknown[]]
+      ? never
+      : [T] extends [object]
+        ? [JsonShaped<T>] extends [never]
+          ? never
+          : { [K in keyof T]: JsonProperty<T[K]> }
+        : never);
+export type LlmRequestCompatible<T> =
+  | LlmRequestOpen
+  | ([T] extends [object]
+      ? [JsonShaped<T>] extends [never]
+        ? never
+        : { [K in keyof T]: K extends 'headers' ? JsonObjectProperty<T[K]> : JsonProperty<T[K]> } & Record<
+            'headers' | 'content',
+            unknown
+          >
+      : never);
+export type ToolExecutionResultCompatible<T> =
+  | ToolExecutionResultOpen
+  | ([T] extends [object]
+      ? [JsonShaped<T>] extends [never]
+        ? never
+        : { [K in keyof T]: JsonProperty<T[K]> } & Record<'result', unknown>
+      : never);
+export type ToolExecutionInterceptOutcomeCompatible<T> =
+  | ToolExecutionInterceptOutcome
+  | ([T] extends [object]
+      ? [JsonShaped<T>] extends [never]
+        ? never
+        : { [K in keyof T]: K extends 'pendingMarks' ? PendingMarksProperty<T[K]> : JsonProperty<T[K]> } & Record<
+            'result',
+            unknown
+          >
+      : never);
+export type LlmRequestInterceptOutcomeCompatible<T> =
+  | LlmRequestInterceptOutcome
+  | ([T] extends [object]
+      ? [JsonShaped<T>] extends [never]
+        ? never
+        : {
+            [K in keyof T]: K extends 'request'
+              ? LlmRequestProperty<T[K]>
+              : K extends 'pendingMarks'
+                ? PendingMarksProperty<T[K]>
+                : K extends 'optimizationContributions'
+                  ? LlmOptimizationContribution[]
+                  : JsonProperty<T[K]>;
+          } & Record<'request', unknown>
+      : never);
+export type EventSanitizeFieldsCompatible<T> =
+  | EventSanitizeFieldsOpen
+  | ([T] extends [object]
+      ? [JsonShaped<T>] extends [never]
+        ? never
+        : { [K in keyof T]: JsonProperty<T[K]> }
+      : never);
+export type EventMetadataCompatible<T> =
+  | EventMetadata
+  | ([T] extends [object]
+      ? [JsonShaped<T>] extends [never]
+        ? never
+        : { [K in keyof T]: EventMetadataProperty<T[K]> }
+      : never);
+export type MetricMeasurementsCompatible<T> =
+  | readonly MetricMeasurement[]
+  | ([T] extends [readonly unknown[]] ? { [I in keyof T]: MetricMeasurementProperty<T[I]> } : never);
 
 export type RuntimeRegistrationKindName = `${RuntimeRegistrationKind}`;
 
@@ -487,6 +539,7 @@ export interface LlmRequestInterceptOutcome {
   annotated?: Json | null;
   pendingMarks?: PendingMarkSpec[];
   optimizationContributions?: LlmOptimizationContribution[];
+  [key: string]: JsonValue | PendingMarkSpec[] | LlmOptimizationContribution[] | undefined;
 }
 
 export interface ConfigDiagnostic {
@@ -498,6 +551,7 @@ export interface ConfigDiagnostic {
 }
 export interface ToolExecutionInterceptOutcome extends ToolExecutionResult {
   pendingMarks?: PendingMarkSpec[];
+  [key: string]: JsonValue | PendingMarkSpec[] | undefined;
 }
 export interface PluginContext {
   registerConditionalMiddlewareGuardrail(

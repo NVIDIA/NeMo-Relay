@@ -459,6 +459,19 @@ impl LlmRequest {
         })
     }
 
+    #[napi(
+        factory,
+        js_name = "from",
+        ts_generic_types = "THeaders extends JsonObjectCompatible<THeaders>, TContent extends JsonCompatible<TContent>",
+        catch_unwind
+    )]
+    pub fn from_parts(
+        #[napi(ts_arg_type = "THeaders")] headers: serde_json::Value,
+        #[napi(ts_arg_type = "TContent")] content: serde_json::Value,
+    ) -> Result<Self> {
+        Self::new(headers, content)
+    }
+
     /// The metadata headers as a JSON object.
     #[napi(getter, catch_unwind, ts_return_type = "JsonObject")]
     pub fn headers(&self) -> serde_json::Value {
