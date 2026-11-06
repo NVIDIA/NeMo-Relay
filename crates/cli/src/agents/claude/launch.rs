@@ -22,6 +22,12 @@ pub(crate) fn prepare(
     if relay_supplies_credential {
         // Claude Code's /model menu then lists the models the gateway's /v1/models returns.
         set_process_default(launch, "CLAUDE_CODE_ENABLE_GATEWAY_MODEL_DISCOVERY", "1");
+        // Claude Code needs a credential before it starts. Relay replaces this one upstream.
+        if !inherits_anthropic_credential() {
+            launch
+                .env
+                .push(("ANTHROPIC_API_KEY".into(), PLACEHOLDER_API_KEY.into()));
+        }
     }
     let proxy_header = format!(
         "{}: {}",
@@ -109,6 +115,16 @@ pub(crate) fn prepare(
     launch.temp_dirs.push(root);
     record_hook_integrity_risk(launch, hook_integrity_risk);
     Ok(())
+}
+
+/// Not a credential: the gateway replaces it with the one Relay owns.
+const PLACEHOLDER_API_KEY: &str = "nemo-relay-supplies-this-credential";
+
+/// An empty value is no credential, unlike the empty opt-out that `set_process_default` keeps.
+fn inherits_anthropic_credential() -> bool {
+    ["ANTHROPIC_API_KEY", "ANTHROPIC_AUTH_TOKEN"]
+        .into_iter()
+        .any(|name| std::env::var_os(name).is_some_and(|value| !value.is_empty()))
 }
 
 fn set_process_default(launch: &mut PreparedAgentLaunch, name: &str, value: &str) {
