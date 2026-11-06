@@ -49,6 +49,10 @@ inherits neither `ANTHROPIC_API_KEY` nor `ANTHROPIC_AUTH_TOKEN`, the wrapper set
 `ANTHROPIC_API_KEY` to a placeholder, so Claude Code starts without a key of
 its own. The gateway replaces the placeholder with the credential that Relay
 supplies.
+Claude Code keeps prompt-cache entries for five minutes in a session with an
+API key. The settings overlay sets `promptCacheTtl` to `"1h"` unless the
+`--settings` source or a settings file that Claude Code loads (user, project,
+or local, as `--setting-sources` selects) already sets `promptCacheTtl`.
 If a Relay plugin is already enabled, its MCP process authenticates and borrows
 the dynamic gateway instead of launching the fixed sidecar, then monitors that
 exact gateway while MCP stdio remains open. Its persistent hooks exit without
