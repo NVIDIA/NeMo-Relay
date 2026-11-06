@@ -2286,6 +2286,48 @@ package-openclaw:
         exit 1
     fi
 
+# --set [output_dir=<path>] [ref_name=<name>] [ci=true|false]
+package-deepseek-harness:
+    #!/usr/bin/env bash
+    {{ bash_helpers }}
+    # If `ref_name` is empty, append the current short HEAD SHA to the version.
+    # If `ref_name` is set, write it as the exact package version before packing.
+    output_dir="{{ output_dir }}"
+    cd "$NEMO_RELAY_REPO_ROOT"
+    package_dir="$(prepare_package_dir deepseek-harness)"
+    if [[ -z "{{ ref_name }}" ]]; then
+        sha="$(head_git_sha)"
+        version="$(read_npm_package_version integrations/deepseek-harness/package.json)"
+        package_version="${version}+${sha}"
+        echo "Non-release build: appending commit hash to version"
+        set_npm_package_version crates/node/package.json package-lock.json "$package_version" crates/node
+        set_npm_package_version integrations/deepseek-harness/package.json package-lock.json "$package_version" integrations/deepseek-harness
+        set_npm_package_dependency_version integrations/deepseek-harness/package.json package-lock.json integrations/deepseek-harness nemo-relay-node "$package_version"
+        set_npm_package_dependency_version integrations/openclaw/package.json package-lock.json integrations/openclaw nemo-relay-node "$package_version"
+        set_npm_package_dependency_version examples/language-binding-plugin/node/package.json package-lock.json examples/language-binding-plugin/node nemo-relay-node "$package_version"
+    else
+        package_version="{{ ref_name }}"
+        echo "Using explicit version {{ ref_name }}"
+        set_npm_package_version crates/node/package.json package-lock.json "$package_version" crates/node
+        set_npm_package_version integrations/deepseek-harness/package.json package-lock.json "$package_version" integrations/deepseek-harness
+        set_npm_package_dependency_version integrations/deepseek-harness/package.json package-lock.json integrations/deepseek-harness nemo-relay-node "$package_version"
+        set_npm_package_dependency_version integrations/openclaw/package.json package-lock.json integrations/openclaw nemo-relay-node "$package_version"
+        set_npm_package_dependency_version examples/language-binding-plugin/node/package.json package-lock.json examples/language-binding-plugin/node nemo-relay-node "$package_version"
+    fi
+    npm install --workspace=nemo-relay-node --workspace=nemo-relay-deepseek-harness --ignore-scripts
+    if is_true "{{ ci }}"; then
+        npm run build-debug --workspace=nemo-relay-node
+    else
+        npm run build --workspace=nemo-relay-node
+    fi
+    npm pack --workspace=nemo-relay-deepseek-harness --pack-destination "$package_dir"
+    shopt -s nullglob
+    packages=("$package_dir"/*.tgz)
+    if ((${#packages[@]} == 0)); then
+        echo "Error: No DeepSeek Harness npm packages found in $package_dir"
+        exit 1
+    fi
+
 # --set [output_dir=<path>] [ref_name=<name>] [package_profile=release|dev]
 package-python:
     #!/usr/bin/env bash
