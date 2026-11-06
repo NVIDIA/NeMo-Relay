@@ -702,6 +702,14 @@ fn validate_bundle_paths(manifest: &DynamicPluginManifest, bundle: &Path) -> Res
     {
         check(signature, false)?;
     }
+    if let Some(integrity) = &manifest.integrity {
+        for (path, dependency) in &integrity.dependencies {
+            check(path, false)?;
+            if let Some(signature) = &dependency.signature {
+                check(signature, false)?;
+            }
+        }
+    }
     match &manifest.load {
         DynamicPluginManifestLoad::RustDynamic(load) => {
             if let Some(path) = load.library.as_deref() {

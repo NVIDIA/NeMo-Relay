@@ -1855,8 +1855,15 @@ test-plugin-examples:
     (cd examples/rust-native-plugin && cargo nextest run --config-file "$NEMO_RELAY_REPO_ROOT/.config/nextest.toml" --profile ci)
     (cd examples/rust-grpc-worker-plugin && cargo nextest run --config-file "$NEMO_RELAY_REPO_ROOT/.config/nextest.toml" --profile ci)
     (cd examples/language-binding-plugin/rust && cargo nextest run --config-file "$NEMO_RELAY_REPO_ROOT/.config/nextest.toml" --profile ci)
-    (cd examples/python-grpc-worker-plugin && uv run --locked --package nemo-relay-python-grpc-worker-example --group test --reinstall-package nemo-relay-plugin pytest)
-    uv sync --locked --inexact --all-packages --group test --no-install-project --no-install-package nemo-relay
+    python_executable="$(uv_python_executable)"
+    if python_plugin_grpc_dependencies_supported "$python_executable"; then
+        (cd examples/python-grpc-worker-plugin && uv run --locked --package nemo-relay-python-grpc-worker-example --group test --reinstall-package nemo-relay-plugin pytest)
+    fi
+    sync_args=(--locked --inexact --all-packages --group test --no-install-project --no-install-package nemo-relay)
+    while IFS= read -r -d '' arg; do
+        sync_args+=("$arg")
+    done < <(python_plugin_sync_args "$python_executable")
+    uv sync "${sync_args[@]}"
     activate_project_venv
     python_executable="$(project_python_executable)"
     use_project_python_source "$python_executable"

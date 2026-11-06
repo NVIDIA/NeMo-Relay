@@ -49,9 +49,10 @@ entrypoint from the managed environment.
 For application embeddings, core initialization loads a private temporary copy of the
 native library bytes checked by the host trust policy. The copy remains available until
 process exit. Replacing the source manifest, library, or signature after validation
-does not change the library loaded by that activation. Native plugins used in embeddings
-retain adjacent native libraries in the resident dependency closure. The CLI retains its activation snapshot, which includes adjacent native
-dependencies. Native library digest checks use bounded regular-file reads and reject
+does not change the library loaded by that activation. Embedded activation retains
+package-local libraries found through binary imports. It does not retain unimported
+adjacent files. The CLI retains an activation snapshot of the relevant directory,
+which can include those files. Native library digest checks use bounded regular-file reads and reject
 symbolic links and special files.
 
 <CodeBlocks>

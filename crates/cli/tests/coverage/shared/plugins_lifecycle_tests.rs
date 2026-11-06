@@ -1805,6 +1805,43 @@ fn activation_snapshot_copies_declared_signature_into_stable_identity() {
 }
 
 #[test]
+fn activation_snapshot_retains_native_dependency_signature_evidence() {
+    let temp = tempfile::tempdir().unwrap();
+    let directory = temp.path().join("plugin");
+    std::fs::create_dir_all(&directory).unwrap();
+    let manifest = write_native_dynamic_manifest(&directory, "acme.dependency-signature");
+    std::fs::write(directory.join("helper.so"), b"dependency").unwrap();
+    let signature = temp.path().join("helper.sig");
+    std::fs::write(&signature, b"dependency signature").unwrap();
+    let text = std::fs::read_to_string(&manifest).unwrap();
+    let digest = Sha256::digest(b"dependency")
+        .iter()
+        .map(|byte| format!("{byte:02x}"))
+        .collect::<String>();
+    std::fs::write(&manifest, format!("{text}\n[integrity.dependencies.\"helper.so\"]\nsha256 = \"sha256:{digest}\"\nsignature = \"../helper.sig\"\n")).unwrap();
+    let snapshot = DynamicPluginActivationSnapshot::create(
+        manifest.to_str().unwrap(),
+        "acme.dependency-signature",
+        DynamicPluginKind::RustDynamic,
+        None,
+        &crate::plugins::policy::DynamicPluginHostPolicy::default(),
+    )
+    .unwrap();
+    let (captured, _) =
+        DynamicPluginManifest::load_from_path(&snapshot.activation_manifest).unwrap();
+    let copied = captured.integrity.unwrap().dependencies["helper.so"]
+        .signature
+        .clone()
+        .unwrap();
+    std::fs::write(&signature, b"replacement").unwrap();
+    assert_eq!(std::fs::read(copied).unwrap(), b"dependency signature");
+    assert_ne!(
+        snapshot.closure_digest(),
+        dynamic_plugin_runtime_closure_digest(manifest.to_str().unwrap(), None).unwrap()
+    );
+}
+
+#[test]
 fn python_snapshot_contract_requires_environment_and_trusted_source_digest() {
     let temp = tempfile::tempdir().unwrap();
     let plugin_dir = temp.path().join("plugin");

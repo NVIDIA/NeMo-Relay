@@ -7,7 +7,7 @@ extern crate nemo_relay_plugin_abi as abi;
 #[path = "fixtures/behavior_host.rs"]
 mod behavior;
 
-use abi_stable::library::{LibHeader, lib_header_from_path};
+use abi_stable::library::{LibHeader, LibraryError, lib_header_from_path};
 use nemo_relay_plugin_abi::{Bootstrap_Ref, NativeApiVersion as Api, v1_0, validate_descriptor};
 use std::path::PathBuf;
 
@@ -101,10 +101,10 @@ fn reject_changed_function_signature_and_marker_traits() {
 
 #[test]
 fn incompatible_dependency_generation_fails_before_module_discovery() {
-    match lib_header_from_path(&fixture_path("dependency")) {
-        Err(_) => {}
-        Ok(header) => assert!(header.init_root_module::<Bootstrap_Ref>().is_err()),
-    }
+    assert!(matches!(
+        lib_header_from_path(&fixture_path("dependency")),
+        Err(LibraryError::InvalidAbiHeader { .. })
+    ));
 }
 
 #[test]

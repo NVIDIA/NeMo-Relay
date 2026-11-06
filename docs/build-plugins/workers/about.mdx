@@ -79,9 +79,9 @@ export NEMO_RELAY_PLUGIN_SNAPSHOT_DIR=/var/tmp/nrs
 
 ```python title="Python"
 import asyncio
-from nemo_relay_plugin import ConfigDiagnostic, Json, PluginContext, Plugin, serve_plugin
+from nemo_relay_plugin import ConfigDiagnostic, Json, PluginContext, WorkerPlugin, serve_plugin
 
-class ExamplePythonWorker(Plugin):
+class ExamplePythonWorker(WorkerPlugin):
     plugin_id = "examples.python_grpc_worker"
     allows_multiple_components = False
 

@@ -182,6 +182,12 @@ impl NativeLibraryArtifact {
         Ok(artifact)
     }
 
+    pub(super) fn dependency_files(&self) -> impl Iterator<Item = (&Path, &[u8])> {
+        self.entries().filter_map(|(path, (bytes, dependency))| {
+            (dependency && self.files.contains_key(path)).then_some((path, bytes))
+        })
+    }
+
     fn entries(&self) -> impl Iterator<Item = (&Path, (&[u8], bool))> {
         let main = self
             .symlinks

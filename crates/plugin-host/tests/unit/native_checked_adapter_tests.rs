@@ -876,6 +876,117 @@ async fn registration_transactions_reject_late_binding_full_queues_and_cancelled
     assert!(raw.bind_component(component()).is_err());
 }
 
+#[test]
+fn raw_registration_can_submit_callbacks_during_construction_and_polling() {
+    use crate::Plugin as _;
+    struct RawPlugin {
+        pending: Option<(Arc<tokio::sync::Notify>, Arc<AtomicBool>)>,
+    }
+    fn descriptor(name: &str) -> a::Registration {
+        a::Registration {
+            name: name.into(),
+            surface: a::Surface::Subscriber,
+            priority: 0,
+            break_chain: false,
+            options: abi::Json::Null,
+            callback: a::Callback_TO::from_value(
+                CallbackStateProbe {
+                    dropped: Arc::new(AtomicBool::new(false)),
+                    invoked: Arc::new(AtomicBool::new(false)),
+                    _runtime: HostRuntime::new("raw-registration-probe".into()).unwrap(),
+                },
+                TD_Opaque,
+            ),
+        }
+    }
+    impl a::Plugin for RawPlugin {
+        fn allows_multiple_components(&self) -> bool {
+            true
+        }
+        fn validate(&self, _: abi::Json) -> abi::abi_stable::std_types::RVec<a::ConfigDiagnostic> {
+            Default::default()
+        }
+        fn register(
+            &self,
+            _: abi::Json,
+            runtime: a::RuntimeBox,
+        ) -> FfiFuture<a::Result<a::RegisteredComponent>> {
+            runtime
+                .register_callback(descriptor("construction"))
+                .into_result()
+                .unwrap();
+            let pending = self.pending.clone();
+            async move {
+                runtime
+                    .register_callback(descriptor("polling"))
+                    .into_result()
+                    .unwrap();
+                if let Some((started, dropped)) = pending {
+                    struct Probe(Arc<AtomicBool>);
+                    impl Drop for Probe {
+                        fn drop(&mut self) {
+                            self.0.store(true, Ordering::Release);
+                        }
+                    }
+                    let _probe = Probe(dropped);
+                    started.notify_one();
+                    std::future::pending::<()>().await;
+                }
+                a::Result::ROk(a::RegisteredComponent {
+                    error: ROption::RNone,
+                    registrations: Default::default(),
+                    component: a::Component_TO::from_value(
+                        ComponentExecutor::inline("raw-registration"),
+                        TD_Opaque,
+                    ),
+                })
+            }
+            .into_ffi()
+        }
+    }
+    let (send, receive) = std::sync::mpsc::channel();
+    let worker = std::thread::spawn(move || {
+        let runtime = tokio::runtime::Builder::new_current_thread()
+            .enable_all()
+            .build()
+            .unwrap();
+        runtime.block_on(async { for cancel in [false, true] {
+            let started = Arc::new(tokio::sync::Notify::new());
+            let dropped = Arc::new(AtomicBool::new(false));
+            let plugin = CheckedPlugin {
+                kind: "raw-registration".into(),
+                resident_path: Default::default(),
+                plugin: Arc::new(a::Plugin_TO::from_value(RawPlugin {
+                    pending: cancel.then(|| (started.clone(), dropped.clone())),
+                }, TD_Opaque)),
+                diagnostics: nemo_relay_diagnostics::Diagnostics::process_default().clone(),
+                read: false,
+                observer: Default::default(),
+            };
+            let mut context = crate::HostPluginRegistrationContext::new();
+            let mut registration = plugin.register(&Default::default(), &mut context);
+            if cancel {
+                tokio::select! {
+                    result = &mut registration => panic!("pending registration finished early: {result:?}"),
+                    () = started.notified() => {}
+                }
+            } else {
+                (&mut registration).await.unwrap();
+            }
+            drop(registration);
+            let mut registrations = context.into_registrations();
+            assert_eq!(registrations.len(), 3);
+            assert!(crate::rollback_registrations(&mut registrations).callbacks_cleared());
+            if cancel { assert!(dropped.load(Ordering::Acquire)); }
+        }});
+        send.send(()).unwrap();
+    });
+    receive
+        .recv_timeout(std::time::Duration::from_secs(10))
+        .expect("raw registration must not block its transaction driver");
+    worker.join().unwrap();
+}
+
 /// SDK background tasks inherit real Relay scope and remain owned after their join handle is dropped.
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn sdk_background_tasks_preserve_scope_and_are_cancelled_with_their_component() {

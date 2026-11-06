@@ -435,3 +435,38 @@ fn direct_operation_cancellation_is_independent_of_component_shutdown() {
         executor.shutdown().await.into_result().unwrap();
     });
 }
+
+#[test]
+fn cancellation_racing_a_pending_poll_releases_retained_waiters() {
+    let executor = ComponentExecutor::inline("cancel-poll-race");
+    for _ in 0..256 {
+        let dropped = Arc::new(AtomicBool::new(false));
+        let probe = Dropped(dropped.clone());
+        let barrier = Arc::new(std::sync::Barrier::new(2));
+        let polling = barrier.clone();
+        let (mut future, cancellation) = executor.execute_direct_tracked(async move {
+            let _probe = probe;
+            futures::future::poll_fn(move |_| {
+                polling.wait();
+                std::task::Poll::<()>::Pending
+            })
+            .await;
+            AbiResult::ROk(())
+        });
+        let poller = std::thread::spawn(move || {
+            let waker = futures::task::noop_waker();
+            let mut context = std::task::Context::from_waker(&waker);
+            let _ = std::pin::Pin::new(&mut future).poll(&mut context);
+            future
+        });
+        barrier.wait();
+        cancellation.cancel();
+        let retained = poller.join().unwrap();
+        assert!(dropped.load(Ordering::Acquire));
+        assert_eq!(executor.active_tasks(), 0);
+        drop(retained);
+    }
+    futures::executor::block_on(executor.shutdown())
+        .into_result()
+        .unwrap();
+}

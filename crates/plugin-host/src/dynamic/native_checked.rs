@@ -927,6 +927,7 @@ fn gate_callback(
 ) -> ConditionalMiddlewareGuardrailFn {
     Arc::new(move |kinds, name| {
         let result = owner.ensure().and_then(|_| {
+            let _admission = local(owner.executor.enter_sync())?;
             let (i, _life) = invocation(
                 &owner,
                 a::Surface::ConditionalMiddleware,
@@ -2001,9 +2002,27 @@ impl crate::Plugin for CheckedPlugin {
                 .registration
                 .lock()
                 .unwrap_or_else(|e| e.into_inner()) = Some(sender);
-            let foreign = self
-                .plugin
-                .register(into_abi(Json::Object(config)), runtime.runtime_box());
+            let plugin = self.plugin.clone();
+            let registration_runtime = runtime.runtime_box();
+            let binding = ScopeBinding::capture();
+            // Raw plugins can synchronously submit registrations while constructing
+            // or polling this future. Keep that work off the transaction driver.
+            let cancelled = tokio_util::sync::CancellationToken::new();
+            let guard = cancelled.clone().drop_guard();
+            let work = runtime.executor.execute_blocking(move || {
+                let _binding = binding.context.enter_thread_binding(binding.explicit);
+                tokio::runtime::Handle::current().block_on(async move {
+                    tokio::select! {
+                        biased;
+                        () = cancelled.cancelled() => a::Result::RErr(a::Error::new("cancelled", "native registration was cancelled")),
+                        result = plugin.register(into_abi(Json::Object(config)), registration_runtime) => result,
+                    }
+                })
+            });
+            let foreign = async move {
+                let _guard = guard;
+                work.await
+            };
             tokio::pin!(foreign);
             let registered = loop {
                 tokio::select! {

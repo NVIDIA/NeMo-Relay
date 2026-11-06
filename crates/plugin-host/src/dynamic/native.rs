@@ -201,6 +201,7 @@ where
             trust
                 .get(&spec.plugin_id)
                 .is_some_and(|t| t.policy.native_diagnostics_read_context),
+            trust.get(&spec.plugin_id).map(|trust| &trust.policy),
         )
         .inspect_err(|_| {
             observer.failure(
@@ -230,6 +231,7 @@ fn load_one_native_plugin(
     observer: super::diagnostics::PluginDiagnostics,
     diagnostics: nemo_relay_diagnostics::Diagnostics,
     read: bool,
+    policy: Option<&super::EvaluatedDynamicPluginHostPolicy>,
 ) -> crate::Result<Arc<super::native_checked::CheckedPlugin>> {
     let (manifest, manifest_ref, verified) = match artifact {
         Some(a) => (a.manifest, a.manifest_ref, a.artifact_bytes),
@@ -285,11 +287,62 @@ fn load_one_native_plugin(
         .expect("manifest has parent");
     let artifact = super::native_dependencies::capture(&path, manifest_root, bytes)
         .map_err(PluginError::InvalidConfig)?;
+    verify_dependency_closure(&artifact, &manifest, &manifest_ref, policy)?;
     let library = super::native_library::CheckedNativeLibrary::load(artifact, api, &spec.plugin_id)
         .map_err(PluginError::InvalidConfig)?;
     Ok(Arc::new(
         super::native_checked::CheckedPlugin::with_observer(&library, diagnostics, read, observer)?,
     ))
+}
+
+/// Verify the captured bytes, rather than reopening mutable dependency paths.
+fn verify_dependency_closure(
+    artifact: &super::native_library::NativeLibraryArtifact,
+    manifest: &DynamicPluginManifest,
+    manifest_ref: &str,
+    policy: Option<&super::EvaluatedDynamicPluginHostPolicy>,
+) -> crate::Result<()> {
+    let dependency_policy = policy.map(|policy| {
+        let mut policy = policy.clone();
+        // Signing the main library must not leave its executable imports unsigned.
+        if policy.attestation_mode != super::DynamicPluginAttestationMode::IntegrityOnly
+            && manifest
+                .integrity
+                .as_ref()
+                .is_some_and(|integrity| integrity.signature.is_some())
+        {
+            policy.attestation_mode = super::DynamicPluginAttestationMode::SignatureRequired;
+        }
+        policy
+    });
+    for (path, bytes) in artifact.dependency_files() {
+        let name = path.to_string_lossy().replace('\\', "/");
+        let evidence = manifest
+            .integrity
+            .as_ref()
+            .and_then(|integrity| integrity.dependencies.get(&name))
+            .ok_or_else(|| {
+                PluginError::InvalidConfig(format!(
+                    "native dependency '{name}' requires integrity.dependencies evidence"
+                ))
+            })?;
+        verify_sha256_bytes(path, bytes, &evidence.sha256)?;
+        if let Some(policy) = &dependency_policy {
+            super::trust::verify_artifact_signature(
+                manifest_ref,
+                bytes,
+                evidence.signature.as_deref(),
+                policy,
+            )
+            .map_err(|error| {
+                PluginError::InvalidConfig(format!(
+                    "native dependency '{name}' failed authentication: {}",
+                    error.display(&manifest.plugin.id)
+                ))
+            })?;
+        }
+    }
+    Ok(())
 }
 fn resolve_manifest_relative_path(manifest_path: &Path, value: &str) -> PathBuf {
     let path = PathBuf::from(value);
@@ -330,3 +383,7 @@ fn hex_digest(bytes: impl AsRef<[u8]>) -> String {
     }
     out
 }
+
+#[cfg(test)]
+#[path = "../../tests/unit/native_dependency_trust_tests.rs"]
+mod dependency_trust_tests;

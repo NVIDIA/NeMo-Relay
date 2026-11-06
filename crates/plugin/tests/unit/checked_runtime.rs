@@ -7,11 +7,14 @@ use a::Callback as _;
 
 #[tokio::test]
 async fn conditional_gates_reject_async_dispatch_and_contain_author_panics() {
-    let gate = Gate(|kinds: &BTreeSet<RuntimeRegistrationKind>, name: &str| {
-        assert!(kinds.contains(&RuntimeRegistrationKind::ToolExecutionIntercept));
-        assert_eq!(name, "raw-tool");
-        Some("blocked".to_owned())
-    });
+    let gate = Gate(
+        |kinds: &BTreeSet<RuntimeRegistrationKind>, name: &str| {
+            assert!(kinds.contains(&RuntimeRegistrationKind::ToolExecutionIntercept));
+            assert_eq!(name, "raw-tool");
+            Some("blocked".to_owned())
+        },
+        None,
+    );
     let invocation = || raw_invocation(json!(["tool_execution_intercept"]));
     assert_eq!(
         from_abi(gate.invoke_sync(invocation()).into_result().unwrap()).unwrap(),
@@ -41,7 +44,36 @@ async fn conditional_gates_reject_async_dispatch_and_contain_author_panics() {
         |_: &BTreeSet<RuntimeRegistrationKind>, _: &str| -> Option<String> {
             panic!("author callback panic")
         },
+        None,
     );
     let error = gate.invoke_sync(invocation()).into_result().unwrap_err();
     assert!(error.message.contains("native gate callback panicked"));
+}
+
+#[tokio::test]
+async fn component_shutdown_waits_for_an_admitted_dynamic_gate() {
+    use a::Component as _;
+    let executor = ComponentExecutor::inline("dynamic-gate-drain");
+    let (entered, ready) = tokio::sync::oneshot::channel();
+    let entered = Mutex::new(Some(entered));
+    let (release, wait) = std::sync::mpsc::channel();
+    let wait = Mutex::new(wait);
+    let gate = Arc::new(Gate(
+        move |_: &BTreeSet<RuntimeRegistrationKind>, _: &str| {
+            entered.lock().unwrap().take().unwrap().send(()).unwrap();
+            wait.lock().unwrap().recv().unwrap();
+            None
+        },
+        Some(executor.clone()),
+    ));
+    let invoked = gate.clone();
+    let thread = std::thread::spawn(move || invoked.invoke_sync(raw_invocation(json!([]))));
+    ready.await.unwrap();
+    let mut closing = Box::pin(executor.shutdown());
+    assert!(futures::poll!(&mut closing).is_pending());
+    assert!(!executor.is_closed());
+    release.send(()).unwrap();
+    thread.join().unwrap().into_result().unwrap();
+    closing.await.into_result().unwrap();
+    assert!(gate.invoke_sync(raw_invocation(json!([]))).is_err());
 }

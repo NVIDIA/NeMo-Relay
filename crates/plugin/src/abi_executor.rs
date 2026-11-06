@@ -185,6 +185,18 @@ impl<T: Send> Future for DirectFuture<T> {
         if polled.is_ready() {
             slot.finish();
         }
+        // Cancellation can race the last flag check while this poll owns the
+        // slot. Hand the lock back before checking again so either the canceller
+        // or this poll destroys the retained future without needing another poll.
+        drop(slot);
+        if self.0.cancelled.load(Ordering::Acquire) != 0 {
+            self.0
+                .slot
+                .lock()
+                .unwrap_or_else(|e| e.into_inner())
+                .finish();
+            return Poll::Ready(AbiResult::RErr(self.0.error()));
+        }
         polled
     }
 }

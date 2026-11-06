@@ -324,9 +324,17 @@ fn verify_authenticity(
     let signature = manifest
         .integrity
         .as_ref()
-        .and_then(|integrity| integrity.signature.as_deref())
-        .map(str::trim)
-        .filter(|value| !value.is_empty());
+        .and_then(|integrity| integrity.signature.as_deref());
+    verify_artifact_signature(manifest_ref, artifact_bytes, signature, policy)
+}
+
+pub(super) fn verify_artifact_signature(
+    manifest_ref: &str,
+    artifact_bytes: &[u8],
+    signature: Option<&str>,
+    policy: &EvaluatedDynamicPluginHostPolicy,
+) -> Result<DynamicPluginCheckState, DynamicPluginTrustFailure> {
+    let signature = signature.map(str::trim).filter(|value| !value.is_empty());
     match (policy.attestation_mode, signature) {
         (DynamicPluginAttestationMode::IntegrityOnly, _) => Ok(DynamicPluginCheckState::Unknown),
         (DynamicPluginAttestationMode::SignatureIfPresent, None) => {

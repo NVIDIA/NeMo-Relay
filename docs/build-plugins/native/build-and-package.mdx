@@ -96,6 +96,20 @@ package paths and sidecars whose library names conflict with different bytes
 already loaded in the process. Give different sidecar implementations unique
 library names.
 
+List each package-local dependency's SHA-256 digest under `integrity.dependencies`.
+Use its package-relative file path with forward slashes. For symbolic links, use
+the target file's path. Sign each dependency when the host requires signatures or
+when the main library is signed. Signature paths are relative to the manifest.
+Relay verifies the captured dependency bytes before it loads any library.
+
+For a dependency stored at `lib/helper.so`, add the following evidence:
+
+```toml
+[integrity.dependencies."lib/helper.so"]
+sha256 = "sha256:<dependency-sha256>"
+signature = "lib/helper.so.sig"
+```
+
 System libraries use the operating system's search rules. Libraries and their
 captured dependencies stay loaded until Relay exits.
 

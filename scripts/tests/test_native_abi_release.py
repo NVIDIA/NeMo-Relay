@@ -28,6 +28,11 @@ class NativeAbiReleaseTests(unittest.TestCase):
                     f'{field} = ["crates/types", "crates/plugin-abi"]',
                     workspace,
                 )
+            workspace = re.sub(
+                r'(?m)^(nemo-relay-plugin-abi = \{ version = ")[^"]+(".*)$',
+                r"\g<1>=1.0.0\2",
+                workspace,
+            )
             (root / "Cargo.toml").write_text(workspace)
             for name, version in (("types", "version.workspace = true"), ("plugin-abi", 'version = "1.0.0"')):
                 crate = root / "crates" / name

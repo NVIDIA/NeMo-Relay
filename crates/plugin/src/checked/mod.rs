@@ -1410,6 +1410,7 @@ impl<P: Plugin> a::Plugin for Adapter<P> {
                     raw: Arc::new(runtime),
                     diagnostic_transport,
                     diagnostic_state: Arc::new(crate::diagnostics::SdkState::default()),
+                    executor: Some(owner.clone()),
                 },
                 executor: owner.clone(),
                 streams: streams.clone(),

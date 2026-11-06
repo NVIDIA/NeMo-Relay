@@ -42,6 +42,7 @@ pub struct PluginRuntime {
     pub(super) raw: Arc<a::RuntimeBox>,
     pub(super) diagnostic_transport: Arc<abi::diagnostics::DiagnosticsBox>,
     pub(crate) diagnostic_state: Arc<crate::diagnostics::SdkState>,
+    pub(super) executor: Option<ComponentExecutor>,
 }
 impl PluginRuntime {
     /// Adapt an owned, checked runtime capability supplied by a native host.
@@ -51,6 +52,7 @@ impl PluginRuntime {
             diagnostic_transport: Arc::new(runtime.diagnostics()),
             raw: Arc::new(runtime),
             diagnostic_state: Arc::new(crate::diagnostics::SdkState::default()),
+            executor: None,
         }
     }
 
@@ -297,7 +299,7 @@ impl PluginRuntime {
             priority: 0,
             break_chain: false,
             options: encode(json!({"kinds":kinds,"registration_name":registration_name}))?,
-            callback: a::Callback_TO::from_value(Gate(callback), TD_Opaque),
+            callback: a::Callback_TO::from_value(Gate(callback, self.executor.clone()), TD_Opaque),
         };
         Ok(ConditionalMiddlewareGuardrailHandle(
             local(self.raw.register_gate(descriptor))?.to_string(),
@@ -428,7 +430,7 @@ impl Drop for ThreadScopeStackGuard<'_> {
     }
 }
 pub struct ConditionalMiddlewareGuardrailHandle(String);
-struct Gate<F>(F);
+struct Gate<F>(F, Option<ComponentExecutor>);
 impl<F: Fn(&BTreeSet<RuntimeRegistrationKind>, &str) -> Option<String> + Send + Sync + 'static>
     a::Callback for Gate<F>
 {
@@ -442,6 +444,11 @@ impl<F: Fn(&BTreeSet<RuntimeRegistrationKind>, &str) -> Option<String> + Send + 
     fn invoke_sync(&self, i: a::Invocation) -> a::Result<abi::Json> {
         boundary(
             std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+                let _admission = self
+                    .1
+                    .as_ref()
+                    .map(|executor| local(executor.enter_sync()))
+                    .transpose()?;
                 let kinds = decode(i.value)?;
                 encode((self.0)(&kinds, i.name.as_str()))
             }))

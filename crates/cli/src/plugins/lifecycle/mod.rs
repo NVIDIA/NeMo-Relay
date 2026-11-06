@@ -971,19 +971,24 @@ impl DynamicPluginActivationSnapshot {
             identity_files.insert(logical, copied.clone());
             source.artifact = Some(copied.to_string_lossy().into_owned());
         }
-        if let Some(integrity) = manifest.integrity.as_mut()
-            && let Some(signature) = integrity.signature.as_deref()
-        {
-            let (logical, _, copied) = copy_snapshot_file(
-                &root,
-                &original_manifest_path,
-                signature,
-                "signature",
-                &mut copied_files,
-                &mut budget,
-            )?;
-            identity_files.insert(logical, copied.clone());
-            integrity.signature = Some(copied.to_string_lossy().into_owned());
+        if let Some(integrity) = manifest.integrity.as_mut() {
+            for signature in integrity.signature.iter_mut().chain(
+                integrity
+                    .dependencies
+                    .values_mut()
+                    .filter_map(|dependency| dependency.signature.as_mut()),
+            ) {
+                let (logical, _, copied) = copy_snapshot_file(
+                    &root,
+                    &original_manifest_path,
+                    signature,
+                    "signature",
+                    &mut copied_files,
+                    &mut budget,
+                )?;
+                identity_files.insert(logical, copied.clone());
+                *signature = copied.to_string_lossy().into_owned();
+            }
         }
 
         let activation_environment_ref = snapshot_python_environment(
@@ -1776,17 +1781,20 @@ pub(crate) fn dynamic_plugin_runtime_closure_digest(
     {
         collect_declared_runtime_closure_file(&manifest_path, artifact, "artifact", &mut closure)?;
     }
-    if let Some(signature) = manifest
-        .integrity
-        .as_ref()
-        .and_then(|integrity| integrity.signature.as_deref())
-    {
-        collect_declared_runtime_closure_file(
-            &manifest_path,
-            signature,
-            "signature",
-            &mut closure,
-        )?;
+    if let Some(integrity) = &manifest.integrity {
+        for signature in integrity.signature.iter().chain(
+            integrity
+                .dependencies
+                .values()
+                .filter_map(|dependency| dependency.signature.as_ref()),
+        ) {
+            collect_declared_runtime_closure_file(
+                &manifest_path,
+                signature,
+                "signature",
+                &mut closure,
+            )?;
+        }
     }
 
     closure.digest()

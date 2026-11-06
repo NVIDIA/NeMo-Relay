@@ -1563,9 +1563,14 @@ async fn initialize_plugins_exact_inner(
         diagnostics,
         ..ConfigReport::default()
     };
-    report
-        .diagnostics
-        .extend(validate_static_plugin_config(&config).diagnostics);
+    let validation_config = config.clone();
+    let validation =
+        tokio::task::spawn_blocking(move || validate_static_plugin_config(&validation_config))
+            .await
+            .map_err(|error| {
+                PluginError::Internal(format!("plugin validation task failed: {error}"))
+            })?;
+    report.diagnostics.extend(validation.diagnostics);
     if report.has_errors() {
         return Err(PluginError::InvalidConfig(join_error_messages(&report)));
     }

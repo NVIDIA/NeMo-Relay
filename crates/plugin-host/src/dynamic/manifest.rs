@@ -285,6 +285,19 @@ pub struct DynamicPluginManifestIntegrity {
     /// Optional signature reference.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub signature: Option<String>,
+    /// Integrity evidence for each package-local native dependency, keyed by package-relative path.
+    #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
+    pub dependencies: BTreeMap<String, DynamicPluginDependencyIntegrity>,
+}
+
+/// Digest and optional detached signature for one native dependency.
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq, schemars::JsonSchema)]
+pub struct DynamicPluginDependencyIntegrity {
+    /// Expected SHA-256 digest of the dependency bytes.
+    pub sha256: String,
+    /// Detached signature reference, relative to the plugin manifest.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub signature: Option<String>,
 }
 
 impl DynamicPluginManifest {
@@ -403,6 +416,23 @@ impl DynamicPluginManifest {
                 .and_then(|integrity| integrity.signature.as_deref()),
             "integrity.signature",
         )?;
+        if let Some(integrity) = &self.integrity {
+            for (path, evidence) in &integrity.dependencies {
+                if self.plugin.kind != DynamicPluginKind::RustDynamic
+                    || path.contains(['\\', ':'])
+                    || path.split('/').any(|part| matches!(part, "" | "." | ".."))
+                {
+                    return Err(PluginError::InvalidConfig(
+                        "integrity.dependencies requires native package-relative file paths".into(),
+                    ));
+                }
+                ensure_optional_string_non_empty(Some(&evidence.sha256), "dependency.sha256")?;
+                ensure_optional_string_non_empty(
+                    evidence.signature.as_deref(),
+                    "dependency.signature",
+                )?;
+            }
+        }
 
         validate_dynamic_plugin_relay_baseline(self.compat.relay.as_deref(), "dynamic")?;
         if self.capabilities.items.is_empty() {

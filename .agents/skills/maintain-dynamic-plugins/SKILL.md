@@ -75,7 +75,10 @@ Choose checks by the changed layer:
 
 - Manifest or shared types: test the owning Rust crate.
 - Native loader or ABI: prepare plugin fixtures and run the focused native
-  plugin integration test.
+  plugin integration test. For ABI changes, also run
+  `just build-native-abi-test-fixtures` and
+  `cargo nextest run --locked -p nemo-relay-plugin-abi --test binary_compatibility`.
+  Native integration fixtures do not prepare the independent ABI workspaces.
 - Worker protocol or host: test the worker crates and regenerate or test the
   Python worker SDK only when its protocol surface changes.
 - Shared runtime behavior: run the Rust suite and only binding suites whose
