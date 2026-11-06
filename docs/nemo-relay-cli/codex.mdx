@@ -163,11 +163,10 @@ referenced by user observability configuration. Rerun
 `nemo-relay install codex --force` when doctor reports a missing forwarded
 variable.
 
-The installer derives a per-user client proof for managed provider requests and
-embeds it in the installed OpenAI base URL. Relay validates and removes that
-capability before middleware, observability, or upstream forwarding. The
-secret-bearing Codex configuration uses an owner-only mode on Unix and a
-protected owner/System DACL on Windows.
+For Codex's `.env` assignment and `OpenAI-Project` client proof, see
+[Persistent Plugin Install](#persistent-plugin-install). The secret-bearing
+Codex configuration uses an owner-only mode on Unix and a protected
+owner/System DACL on Windows.
 
 Installer-owned hook commands pin `http://127.0.0.1:47632` and the
 install-generation fence. Hooks wait for the MCP-owned gateway and forward each
@@ -175,9 +174,11 @@ canonical payload once. They never launch or recover Relay. An
 ambient `NEMO_RELAY_GATEWAY_URL` cannot split hook traffic from the required
 MCP-managed gateway.
 
-If user configuration, forwarded credentials, or the Relay version changes
-while an old sidecar is still running, the new MCP client explains the
-compatibility conflict instead of silently reusing the wrong process. Running
+After changing Relay configuration or forwarded credentials, close active MCP
+clients, stop the shared gateway, and restart Codex as described in
+[Shared Gateway Lifecycle](/nemo-relay-cli/plugin-installation#shared-gateway-lifecycle).
+A configuration-only change does not reject or replace a healthy gateway.
+Running
 `nemo-relay install codex --force` retires a sidecar owned by the prior install
 through Relay's private shutdown handshake before it refreshes the plugin.
 An ordinary reinstall leaves an existing fenced Codex installation unchanged.
