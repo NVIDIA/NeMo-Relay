@@ -10,7 +10,7 @@ import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 
 const require = createRequire(import.meta.url);
-const lib = require('../index.js');
+const lib = require('../dist/index.js');
 const nodeDir = fileURLToPath(new URL('..', import.meta.url));
 
 const {
@@ -236,7 +236,7 @@ describe('LLM execute', () => {
       stage('JavaScript startup');
       const assert = require('node:assert/strict');
       const { parentPort } = require('node:worker_threads');
-      const lib = require(${JSON.stringify(path.join(nodeDir, 'index.js'))});
+      const lib = require(${JSON.stringify(path.join(nodeDir, 'dist', 'index.js'))});
       stage('addon loaded');
       const request = () => ({ headers: {}, content: { messages: [], model: 'test-model' } });
 
@@ -1031,7 +1031,7 @@ describe('LLM guardrails', () => {
   });
 
   it('releases custom stream codec references safely after early garbage collection', () => {
-    const modulePath = path.join(nodeDir, 'index.js');
+    const modulePath = path.join(nodeDir, 'dist', 'index.js');
     const script = `
       import { createRequire } from 'node:module';
       const require = createRequire(${JSON.stringify(path.join(nodeDir, 'package.json'))});
@@ -3405,7 +3405,7 @@ describe('LLM intercepts', () => {
   });
 
   it('terminating a worker with a pending next() leaves the process running', () => {
-    const modulePath = JSON.stringify(path.join(nodeDir, 'index.js'));
+    const modulePath = JSON.stringify(path.join(nodeDir, 'dist', 'index.js'));
     const script = `
       import { Worker } from 'node:worker_threads';
       const worker = new Worker(
@@ -3444,7 +3444,7 @@ describe('LLM intercepts', () => {
   });
 
   it('ignored next() and close() rejections stay unhandled', () => {
-    const modulePath = JSON.stringify(path.join(nodeDir, 'index.js'));
+    const modulePath = JSON.stringify(path.join(nodeDir, 'dist', 'index.js'));
     const script = `
       import assert from 'node:assert/strict';
       import { createRequire } from 'node:module';
@@ -3521,7 +3521,7 @@ describe('LLM intercepts', () => {
   });
 
   it('a pending next() keeps a collected handle alive until it settles', () => {
-    const modulePath = JSON.stringify(path.join(nodeDir, 'index.js'));
+    const modulePath = JSON.stringify(path.join(nodeDir, 'dist', 'index.js'));
     const script = `
       import { createRequire } from 'node:module';
       const require = createRequire(import.meta.url);
@@ -3601,7 +3601,7 @@ describe('LLM intercepts', () => {
   });
 
   it('a collected stream handle closes its stream before END', () => {
-    const modulePath = JSON.stringify(path.join(nodeDir, 'index.js'));
+    const modulePath = JSON.stringify(path.join(nodeDir, 'dist', 'index.js'));
     const script = `
       import { createRequire } from 'node:module';
       const require = createRequire(import.meta.url);
@@ -3683,7 +3683,7 @@ describe('LLM intercepts', () => {
   });
 
   it('a collected stream handle keeps the outcome of its pending close()', () => {
-    const modulePath = JSON.stringify(path.join(nodeDir, 'index.js'));
+    const modulePath = JSON.stringify(path.join(nodeDir, 'dist', 'index.js'));
     const script = `
       import { createRequire } from 'node:module';
       const require = createRequire(import.meta.url);
@@ -3857,7 +3857,7 @@ describe('LLM intercepts', () => {
   });
 
   it('completed deregistered stream intercepts do not keep Node alive', () => {
-    const modulePath = JSON.stringify(path.join(nodeDir, 'index.js'));
+    const modulePath = JSON.stringify(path.join(nodeDir, 'dist', 'index.js'));
     const script = `
       import { createRequire } from 'node:module';
       const require = createRequire(import.meta.url);
@@ -3895,7 +3895,7 @@ describe('LLM intercepts', () => {
   });
 
   it('awaiting collectors and finalizers do not starve the runtime', () => {
-    const modulePath = JSON.stringify(path.join(nodeDir, 'index.js'));
+    const modulePath = JSON.stringify(path.join(nodeDir, 'dist', 'index.js'));
     const script = `
       import { availableParallelism } from 'node:os';
       import { createRequire } from 'node:module';
@@ -3940,7 +3940,7 @@ describe('LLM intercepts', () => {
   });
 
   it('abandoned streams with a collector and finalizer do not keep Node alive', () => {
-    const modulePath = JSON.stringify(path.join(nodeDir, 'index.js'));
+    const modulePath = JSON.stringify(path.join(nodeDir, 'dist', 'index.js'));
     const script = `
       import { createRequire } from 'node:module';
       const require = createRequire(import.meta.url);
@@ -3973,7 +3973,7 @@ describe('LLM intercepts', () => {
   });
 
   it('a producer parked on a full buffer does not keep Node alive, in both modes', () => {
-    const modulePath = JSON.stringify(path.join(nodeDir, 'index.js'));
+    const modulePath = JSON.stringify(path.join(nodeDir, 'dist', 'index.js'));
     for (const forwarded of [false, true]) {
       const script = `
         import { createRequire } from 'node:module';
@@ -4095,7 +4095,7 @@ describe('LLM intercepts', () => {
   });
 
   it('generated request-intercept declarations reference the canonical open optimization type', () => {
-    const declarations = readFileSync(new URL('../index.d.ts', import.meta.url), 'utf8');
+    const declarations = readFileSync(new URL('../binding.d.ts', import.meta.url), 'utf8');
     const openKind = "kind: 'input_compression' | 'model_routing' | (string & {})";
 
     assert.equal(declarations.split(openKind).length - 1, 1);
@@ -4104,7 +4104,7 @@ describe('LLM intercepts', () => {
   });
 
   it('generated LLM sanitizer declarations expose directional codec contexts', () => {
-    const declarations = readFileSync(new URL('../index.d.ts', import.meta.url), 'utf8');
+    const declarations = readFileSync(new URL('../binding.d.ts', import.meta.url), 'utf8');
 
     assert.equal(
       declarations.split('context: LlmSanitizeRequestContext').length - 1,
@@ -4122,7 +4122,7 @@ describe('LLM intercepts', () => {
   });
 
   it('generated streaming LLM declarations expose the producer, collector, and finalizer contracts', () => {
-    const declarations = readFileSync(new URL('../index.d.ts', import.meta.url), 'utf8');
+    const declarations = readFileSync(new URL('../binding.d.ts', import.meta.url), 'utf8');
 
     assert.match(
       declarations,
@@ -4133,7 +4133,7 @@ describe('LLM intercepts', () => {
   });
 
   it('generated middleware declarations expose Promise-aware callback types', () => {
-    const declarations = readFileSync(new URL('../index.d.ts', import.meta.url), 'utf8');
+    const declarations = readFileSync(new URL('../binding.d.ts', import.meta.url), 'utf8');
     const registrations = [
       'registerToolSanitizeRequestGuardrail',
       'registerToolSanitizeResponseGuardrail',
@@ -4201,12 +4201,12 @@ describe('LLM intercepts', () => {
   });
 
   it('plugin declarations expose Promise middleware and the implemented stream contract', () => {
-    const declarations = readFileSync(new URL('../index.d.ts', import.meta.url), 'utf8');
-    const pluginDeclarations = readFileSync(new URL('../plugin.d.ts', import.meta.url), 'utf8');
+    const declarations = readFileSync(new URL('../binding.d.ts', import.meta.url), 'utf8');
+    const pluginDeclarations = readFileSync(new URL('../dist/plugin.d.ts', import.meta.url), 'utf8');
     const context = declarations.match(/export interface PluginContext \{[\s\S]*?\n\}/)?.[0];
-    assert.ok(context, 'index.d.ts must declare PluginContext');
+    assert.ok(context, 'binding.d.ts must declare PluginContext');
 
-    assert.match(pluginDeclarations, /export type \{[\s\S]*?\bPluginContext,[\s\S]*?\} from '\.\/index'/);
+    assert.match(pluginDeclarations, /export type \{[\s\S]*?\bPluginContext,[\s\S]*?\} from '\.\.\/binding\.js'/);
     assert.match(
       declarations,
       /registerPlugin\([^\n]*register: \(pluginConfig: JsonObject, context: PluginContext\) => void/,
@@ -4313,7 +4313,7 @@ describe('process exit with queued codec callbacks', () => {
         llmCallExecute,
         registerLlmSanitizeResponseGuardrail,
         OpenAIChatCodec,
-      } = require(${JSON.stringify(path.join(nodeDir, 'index.js'))});
+      } = require(${JSON.stringify(path.join(nodeDir, 'dist', 'index.js'))});
       let release;
       registerLlmSanitizeResponseGuardrail('exit_window', 10, (response) => new Promise((resolve) => {
         release = () => resolve(response);

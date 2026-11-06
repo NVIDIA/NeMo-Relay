@@ -14,8 +14,8 @@ process.env.XDG_CONFIG_HOME = configHome;
 process.on('exit', () => rmSync(configHome, { recursive: true, force: true }));
 
 const require = createRequire(import.meta.url);
-const lib = require('../index.js');
-const plugin = require('../plugin.js');
+const lib = require('../dist/index.js');
+const plugin = require('../dist/plugin.js');
 
 function capture(name) {
   const events = [];

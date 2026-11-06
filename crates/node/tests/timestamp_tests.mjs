@@ -18,7 +18,7 @@ const {
   registerSubscriber,
   toolCall,
   toolCallEnd,
-} = require('../index.js');
+} = require('../dist/index.js');
 
 const timestampMicros = (value, micros = 0) => Date.parse(value) * 1000 + micros;
 const parseTimestampMicros = (value) => {

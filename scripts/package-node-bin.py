@@ -64,7 +64,14 @@ def repository_metadata(source: dict[str, object]) -> dict[str, object]:
 
 def metapackage_files(manifest: dict[str, object]) -> list[str]:
     """Return public entry points, declarations, and private runtime dependencies."""
-    files = {str(manifest["main"]), str(manifest["types"]), "README.md", "diagnostics_query_contract.js"}
+    files = {
+        str(manifest["main"]),
+        str(manifest["types"]),
+        "README.md",
+        "binding.js",
+        "binding.d.ts",
+        "dist/diagnostics_query_contract.js",
+    }
     exports = manifest.get("exports")
     if not isinstance(exports, dict):
         raise ValueError("Node package manifest is missing exports")
@@ -72,6 +79,7 @@ def metapackage_files(manifest: dict[str, object]) -> list[str]:
         if not isinstance(entry, dict):
             raise ValueError("Node package export must contain types and default paths")
         files.update(str(path).removeprefix("./") for path in entry.values())
+    files.update(f"{path}.map" for path in list(files) if path.endswith(".js") and path.startswith("dist/"))
     return sorted(files)
 
 

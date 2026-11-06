@@ -22,40 +22,40 @@
     "directory": "crates/node"
   },
   "author": "NVIDIA Corporation & Affiliates",
-  "main": "index.js",
-  "types": "index.d.ts",
+  "main": "dist/index.js",
+  "types": "dist/index.d.ts",
   "exports": {
     ".": {
-      "types": "./index.d.ts",
-      "default": "./index.js"
+      "types": "./dist/index.d.ts",
+      "default": "./dist/index.js"
     },
     "./typed": {
-      "types": "./typed.d.ts",
-      "default": "./typed.js"
+      "types": "./dist/typed.d.ts",
+      "default": "./dist/typed.js"
     },
     "./plugin": {
-      "types": "./plugin.d.ts",
-      "default": "./plugin.js"
+      "types": "./dist/plugin.d.ts",
+      "default": "./dist/plugin.js"
     },
     "./adaptive": {
-      "types": "./adaptive.d.ts",
-      "default": "./adaptive.js"
+      "types": "./dist/adaptive.d.ts",
+      "default": "./dist/adaptive.js"
     },
     "./observability": {
-      "types": "./observability.d.ts",
-      "default": "./observability.js"
+      "types": "./dist/observability.d.ts",
+      "default": "./dist/observability.js"
     },
     "./pii_redaction": {
-      "types": "./pii_redaction.d.ts",
-      "default": "./pii_redaction.js"
+      "types": "./dist/pii_redaction.d.ts",
+      "default": "./dist/pii_redaction.js"
     },
     "./model_pricing": {
-      "types": "./model_pricing.d.ts",
-      "default": "./model_pricing.js"
+      "types": "./dist/model_pricing.d.ts",
+      "default": "./dist/model_pricing.js"
     },
     "./diagnostics": {
-      "types": "./diagnostics.d.ts",
-      "default": "./diagnostics.js"
+      "types": "./dist/diagnostics.d.ts",
+      "default": "./dist/diagnostics.js"
     }
   },
   "engines": {
@@ -65,6 +65,7 @@
     "binaryName": "nemo-relay",
     "constEnum": false,
     "runtimeStringEnum": true,
+    "dtsHeaderFile": "binding-types.d.ts",
     "targets": [
       "x86_64-unknown-linux-gnu",
       "aarch64-unknown-linux-gnu",
@@ -80,8 +81,8 @@
     "build-debug": "node scripts/build.mjs",
     "check:docstrings": "node ../../scripts/lint/check_public_docstrings.mjs node",
     "check:docstrings:all": "node ../../scripts/lint/check_public_docstrings.mjs all",
-    "format": "prettier --write \"*.{js,ts,d.ts}\" \"tests/**/*.{mjs,cjs,js,mts,cts,ts,tsx}\"",
-    "format:check": "prettier --check \"*.{js,ts,d.ts}\" \"tests/**/*.{mjs,cjs,js,mts,cts,ts,tsx}\"",
+    "format": "prettier --write \"binding-types.d.ts\" \"{scripts,ts,tests}/**/*.{mjs,cjs,js,mts,cts,ts,tsx}\"",
+    "format:check": "prettier --check \"binding-types.d.ts\" \"{scripts,ts,tests}/**/*.{mjs,cjs,js,mts,cts,ts,tsx}\"",
     "precommit:format": "node ../../scripts/lint/prettier-precommit.mjs",
     "precoverage": "npm run build-debug -- --features __skip-implicit-config",
     "pretest": "npm run build-debug -- --features __skip-implicit-config",
@@ -90,12 +91,13 @@
   },
   "devDependencies": {
     "@napi-rs/cli": "^3.10.9",
+    "@types/node": "^24.0.0",
     "c8": "^11.0.0",
     "prettier": "^3.8.2",
     "typescript": "^5.9.3"
   },
   "peerDependencies": {
-    "typescript": ">=5.2"
+    "typescript": ">=5.7"
   },
   "peerDependenciesMeta": {
     "typescript": {

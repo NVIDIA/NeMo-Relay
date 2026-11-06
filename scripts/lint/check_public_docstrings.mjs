@@ -8,7 +8,7 @@ import { fileURLToPath, pathToFileURL } from 'node:url';
 const repoRoot = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..', '..');
 const nodeEntries = [
   {
-    file: 'crates/node/plugin.js',
+    file: 'crates/node/ts/plugin.ts',
     functions: [
       { name: 'defaultConfig', params: [] },
       { name: 'ComponentSpec', params: ['kind', 'config', 'options'] },
@@ -21,7 +21,7 @@ const nodeEntries = [
     ],
   },
   {
-    file: 'crates/node/adaptive.js',
+    file: 'crates/node/ts/adaptive.ts',
     functions: [
       { name: 'defaultConfig', params: [] },
       { name: 'inMemoryBackend', params: [] },
@@ -30,47 +30,12 @@ const nodeEntries = [
       { name: 'adaptiveHintsConfig', params: ['config'] },
       { name: 'toolParallelismConfig', params: ['config'] },
       { name: 'acgConfig', params: ['config'] },
+      { name: 'responseCacheConfig', params: ['config'] },
       { name: 'ComponentSpec', params: ['config', 'options'] },
     ],
   },
   {
-    file: 'crates/node/typed.js',
-    functions: [
-      { name: 'typedToolExecute', params: ['name', 'args', 'func', 'argsCodec', 'resultCodec', 'options'] },
-      { name: 'typedLlmExecute', params: ['name', 'request', 'func', 'responseJsonCodec', 'options'] },
-      {
-        name: 'typedLlmStreamExecute',
-        params: ['name', 'request', 'func', 'collector', 'finalizer', 'chunkJsonCodec', 'responseJsonCodec', 'options'],
-      },
-    ],
-  },
-  {
-    file: 'crates/node/plugin.d.ts',
-    functions: [
-      { name: 'defaultConfig', params: [] },
-      { name: 'ComponentSpec', params: ['kind', 'config', 'options'] },
-      { name: 'initialize', params: ['config', 'additionalPluginsToml'] },
-      { name: 'validate', params: ['config', 'additionalPluginsToml'] },
-      { name: 'listKinds', params: [] },
-      { name: 'register', params: ['pluginKind', 'plugin'] },
-      { name: 'deregister', params: ['pluginKind'] },
-    ],
-  },
-  {
-    file: 'crates/node/adaptive.d.ts',
-    functions: [
-      { name: 'defaultConfig', params: [] },
-      { name: 'inMemoryBackend', params: [] },
-      { name: 'redisBackend', params: ['url', 'keyPrefix'] },
-      { name: 'telemetryConfig', params: ['config'] },
-      { name: 'adaptiveHintsConfig', params: ['config'] },
-      { name: 'toolParallelismConfig', params: ['config'] },
-      { name: 'acgConfig', params: ['config'] },
-      { name: 'ComponentSpec', params: ['config', 'options'] },
-    ],
-  },
-  {
-    file: 'crates/node/typed.d.ts',
+    file: 'crates/node/ts/typed.ts',
     functions: [
       { name: 'typedToolExecute', params: ['name', 'args', 'func', 'argsCodec', 'resultCodec', 'options'] },
       { name: 'typedLlmExecute', params: ['name', 'request', 'func', 'responseCodec', 'options'] },

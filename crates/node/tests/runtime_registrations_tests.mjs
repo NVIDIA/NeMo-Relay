@@ -6,7 +6,7 @@ import assert from 'node:assert/strict';
 import { createRequire } from 'node:module';
 
 const require = createRequire(import.meta.url);
-const lib = require('../index.js');
+const lib = require('../dist/index.js');
 
 describe('conditional middleware guardrails', () => {
   it('discovers and dynamically toggles an existing registration', async () => {
