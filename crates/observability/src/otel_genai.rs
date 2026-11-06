@@ -353,7 +353,7 @@ pub(crate) fn push_embedding_request_attributes(
 }
 
 pub(crate) fn push_llm_request_attributes(attributes: &mut Vec<KeyValue>, event: &EventView<'_>) {
-    let Some(request) = event.normalized_llm_request() else {
+    let Some(request) = event.telemetry_llm_request() else {
         push_model_attribute(attributes, event);
         return;
     };

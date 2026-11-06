@@ -10,6 +10,7 @@ from pathlib import Path
 from nemo_relay import plugin
 from nemo_relay.model_pricing import (
     PRICING_PLUGIN_KIND,
+    CacheWriteRate,
     ComponentSpec,
     ConfigReport,
     FileSource,
@@ -131,8 +132,8 @@ class TestPricingConfigHelpers:
         )
         assert any(diag["code"] == "pricing.invalid_config" for diag in report["diagnostics"])
 
-    def test_one_hour_cache_write_rate(self) -> None:
-        def report_for(one_hour: float) -> ConfigReport:
+    def test_cache_write_rates(self) -> None:
+        def report_for(price: float) -> ConfigReport:
             return validate_config(
                 PricingConfig(
                     sources=[
@@ -147,8 +148,10 @@ class TestPricingConfigHelpers:
                                         rates=TokenPricingRates(
                                             1.0,
                                             2.0,
-                                            cache_write_per_million=3.0,
-                                            cache_write_1h_per_million=one_hour,
+                                            cache_write_rates=[
+                                                CacheWriteRate(price, duration=3600),
+                                                CacheWriteRate(3.0),
+                                            ],
                                         ),
                                     )
                                 ]
@@ -158,9 +161,12 @@ class TestPricingConfigHelpers:
                 )
             )
 
-        rates = TokenPricingRates(1.0, 2.0, cache_write_1h_per_million=6.0)
-        assert rates.to_dict()["cache_write_1h_per_million"] == 6.0
-        assert "cache_write_1h_per_million" not in TokenPricingRates(1.0, 2.0).to_dict()
+        rates = TokenPricingRates(1.0, 2.0, cache_write_rates=[CacheWriteRate(6.0, duration=3600), CacheWriteRate(3.0)])
+        assert rates.to_dict()["cache_write_rates"] == [
+            {"duration": 3600, "per_million": 6.0},
+            {"per_million": 3.0},
+        ]
+        assert "cache_write_rates" not in TokenPricingRates(1.0, 2.0).to_dict()
         assert report_for(6.0)["diagnostics"] == []
         assert [d["code"] for d in report_for(-1.0)["diagnostics"]] == ["pricing.invalid_config"]
 

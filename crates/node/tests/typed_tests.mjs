@@ -1063,6 +1063,13 @@ describe('typedLlmStreamExecute', () => {
                 },
               ],
             },
+            {
+              type: 'custom_tool_call',
+              id: 'ctc-item',
+              call_id: 'call-wrapper',
+              name: 'exec',
+              input: '{"looks_like":"json"}',
+            },
           ],
           usage: {
             input_tokens: 4,
@@ -1103,6 +1110,9 @@ describe('typedLlmStreamExecute', () => {
       assert.equal(endEvent.category_profile.annotated_response.model, 'gpt-4.1-mini');
       assert.equal(endEvent.category_profile.annotated_response.message, 'hello world');
       assert.equal(endEvent.category_profile.annotated_response.finish_reason, 'complete');
+      assert.deepEqual(endEvent.category_profile.annotated_response.tool_calls, [
+        { id: 'call-wrapper', name: 'exec', arguments: '{"looks_like":"json"}' },
+      ]);
     } finally {
       deregisterSubscriber('typed_responses_stream_sub');
       deregisterLlmRequestIntercept('typed_responses_stream_req');

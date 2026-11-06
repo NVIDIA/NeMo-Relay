@@ -243,7 +243,7 @@ class PythonReferenceTests(unittest.TestCase):
         self.assertIn("def Options(value: int) -> None", rendered)
         self.assertNotIn("def Options(amount:", rendered)
 
-    def test_pricing_reference_preserves_all_ten_source_constructors(self) -> None:
+    def test_pricing_reference_preserves_all_eleven_source_constructors(self) -> None:
         repository_root = Path(__file__).resolve().parents[2]
         package = REFERENCE.PACKAGES[0]
         package_root = repository_root / package.source_root
@@ -257,9 +257,9 @@ class PythonReferenceTests(unittest.TestCase):
             rendered = (output / "nemo-relay/model-pricing.mdx").read_text(encoding="utf-8")
 
         constructors = (
+            "def CacheWriteRate(per_million: float, duration: int | None = None) -> None",
             "def TokenPricingRates(input_per_million: float, output_per_million: float, "
-            "cache_read_per_million: float | None = None, cache_write_per_million: float | None = None, "
-            "cache_write_1h_per_million: float | None = None) -> None",
+            "cache_read_per_million: float | None = None, cache_write_rates: list[CacheWriteRate] = ...) -> None",
             "def PromptCachePricing(read_accounting: Literal['included_in_prompt_tokens', 'separate'] "
             "= 'included_in_prompt_tokens') -> None",
             "def TokenRateTier(rates: TokenPricingRates | JsonObject, min_prompt_tokens: int | None = None, "

@@ -7,13 +7,18 @@ import type { ComponentSpec as PluginComponentSpec, ConfigReport } from './plugi
 /** Plugin kind used by the model pricing component. */
 export declare const PRICING_PLUGIN_KIND = 'pricing';
 
+/** Prompt cache write price for a duration in seconds, or the default with no duration. */
+export interface CacheWriteRate {
+  duration?: number;
+  per_million: number;
+}
+
 /** Token rates expressed per one million tokens. */
 export interface TokenPricingRates {
   input_per_million: number;
   output_per_million: number;
   cache_read_per_million?: number;
-  cache_write_per_million?: number;
-  cache_write_1h_per_million?: number;
+  cache_write_rates?: CacheWriteRate[];
 }
 
 /** Prompt-cache accounting settings for a catalog entry. */

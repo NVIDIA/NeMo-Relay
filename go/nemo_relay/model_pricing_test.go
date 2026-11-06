@@ -125,35 +125,33 @@ func TestValidatePricingConfig(t *testing.T) {
 	}
 }
 
-func TestPricingOneHourCacheWriteRate(t *testing.T) {
-	cacheWrite, oneHour := 3.0, 6.0
+func TestPricingCacheWriteRates(t *testing.T) {
+	oneHour := uint64(3600)
 	rates := NewTokenPricingRates(1, 2)
-	rates.CacheWritePerMillion = &cacheWrite
-	rates.CacheWrite1hPerMillion = &oneHour
+	rates.CacheWriteRates = []CacheWriteRate{
+		{Duration: &oneHour, PerMillion: 6},
+		{PerMillion: 3},
+	}
 
 	payload, err := json.Marshal(rates)
 	if err != nil {
 		t.Fatalf("marshal rates: %v", err)
 	}
-	var parsed map[string]any
-	if err := json.Unmarshal(payload, &parsed); err != nil {
-		t.Fatalf("unmarshal rates: %v", err)
-	}
-	if parsed["cache_write_1h_per_million"] != 6.0 {
-		t.Fatalf("expected one-hour rate in JSON, got %#v", parsed)
+	if !strings.Contains(string(payload), `"cache_write_rates":[{"duration":3600,"per_million":6},{"per_million":3}]`) {
+		t.Fatalf("expected cache write rates in JSON, got %s", payload)
 	}
 
 	unset, err := json.Marshal(NewTokenPricingRates(1, 2))
 	if err != nil {
 		t.Fatalf("marshal unset rates: %v", err)
 	}
-	if strings.Contains(string(unset), "cache_write_1h_per_million") {
-		t.Fatalf("expected unset one-hour rate to be omitted, got %s", unset)
+	if strings.Contains(string(unset), "cache_write_rates") {
+		t.Fatalf("expected unset cache write rates to be omitted, got %s", unset)
 	}
 
-	validate := func(rate float64) []string {
+	validate := func(price float64) []string {
 		t.Helper()
-		rates.CacheWrite1hPerMillion = &rate
+		rates.CacheWriteRates[0].PerMillion = price
 		entry := NewModelPricing("test", "priced-model")
 		entry.PricingAsOf = "2026-06-15"
 		entry.PricingSource = "https://example.com/pricing"

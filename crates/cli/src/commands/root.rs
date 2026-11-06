@@ -7,7 +7,7 @@ use super::auth::AuthCommand;
 use super::completions::CompletionsCommand;
 use super::configure::ConfigCommand;
 use super::daemon::DaemonCommand;
-use super::diagnostics::{AgentsCommand, DoctorCommand};
+use super::doctor::{AgentsCommand, DoctorCommand};
 use super::gateway::GatewayCommand;
 use super::hook_forward::HookForwardCommand;
 use super::install::{InstallCommand, UninstallCommand};

@@ -233,6 +233,15 @@ fn collect_output_item(
             }
         }
         "function_call" => tool_calls.push(parse_function_call(item)),
+        "custom_tool_call" => {
+            if let Some((id, name, input)) = custom_tool_call_fields(item) {
+                tool_calls.push(ResponseToolCall {
+                    id: id.to_string(),
+                    name: name.to_string(),
+                    arguments: Json::String(input.to_string()),
+                });
+            }
+        }
         _ => {}
     }
 }
@@ -273,6 +282,62 @@ fn parse_function_call(item: &Json) -> ResponseToolCall {
             .and_then(|value| value.as_str())
             .map(parse_arguments)
             .unwrap_or(Json::Object(serde_json::Map::new())),
+    }
+}
+
+/// Recognize a custom call without interpreting its free-form input as JSON.
+pub(crate) fn custom_tool_call_fields(item: &Json) -> Option<(&str, &str, &str)> {
+    if item.get("type").and_then(Json::as_str) != Some("custom_tool_call") {
+        return None;
+    }
+    Some((
+        item.get("call_id")?
+            .as_str()
+            .filter(|id| !id.trim().is_empty())?,
+        item.get("name")?
+            .as_str()
+            .filter(|name| !name.trim().is_empty())?,
+        item.get("input")?.as_str()?,
+    ))
+}
+
+/// A portable telemetry view of recognized custom request items. Keep the
+/// original native annotation for lossless provider encoding and unknown fields.
+pub(crate) fn custom_tool_message(message: &Message) -> Option<Message> {
+    let Message::ProviderNative {
+        provider,
+        kind,
+        value,
+    } = message
+    else {
+        return None;
+    };
+    if provider != "openai_responses" || value.get("type").and_then(Json::as_str) != Some(kind) {
+        return None;
+    }
+    let id = value.get("id").and_then(Json::as_str).map(str::to_string);
+    match kind.as_str() {
+        "custom_tool_call" => {
+            let (call_id, name, input) = custom_tool_call_fields(value)?;
+            Some(Message::ToolCallItem {
+                id,
+                call_id: call_id.to_string(),
+                name: name.to_string(),
+                arguments: Json::String(input.to_string()),
+                extra: serde_json::Map::new(),
+            })
+        }
+        "custom_tool_call_output" => Some(Message::ToolResultItem {
+            id,
+            call_id: value
+                .get("call_id")?
+                .as_str()
+                .filter(|id| !id.trim().is_empty())?
+                .to_string(),
+            output: value.get("output")?.clone(),
+            extra: serde_json::Map::new(),
+        }),
+        _ => None,
     }
 }
 

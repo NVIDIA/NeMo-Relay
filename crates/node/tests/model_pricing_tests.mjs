@@ -92,7 +92,7 @@ describe('model pricing plugin helpers', () => {
     );
   });
 
-  it('accepts and validates a one-hour cache write rate', () => {
+  it('accepts and validates cache write rates', () => {
     const report = (rate) =>
       pricing.validateConfig(
         pricing.pricingConfig([
@@ -102,8 +102,7 @@ describe('model pricing plugin helpers', () => {
                 rates: pricing.tokenRates({
                   input_per_million: 1,
                   output_per_million: 2,
-                  cache_write_per_million: 3,
-                  cache_write_1h_per_million: rate,
+                  cache_write_rates: [{ duration: 3600, per_million: rate }, { per_million: 3 }],
                 }),
               }),
             ]),

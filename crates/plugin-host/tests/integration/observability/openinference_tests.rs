@@ -673,3 +673,53 @@ fn un_annotated_provider_response_decoded_through_codec() {
         "hello there",
     );
 }
+
+#[test]
+fn openinference_custom_call_history_preserves_call_and_result_ids() {
+    use nemo_relay_codecs::openai_responses::OpenAIResponsesCodec;
+    use nemo_relay_types::codec::traits::LlmCodec;
+    let input = "await tools.exec_command({cmd: 'pwd'})";
+    let raw = nemo_relay_types::api::llm::LlmRequest {
+        headers: serde_json::Map::new(),
+        content: json!({"input": [
+            {"type": "custom_tool_call", "call_id": "call-wrapper", "name": "exec", "input": input},
+            {"type": "custom_tool_call_output", "call_id": "call-wrapper", "output": "done"}
+        ]}),
+    };
+    for annotated in [false, true] {
+        let request = OpenAIResponsesCodec.decode(&raw).unwrap();
+        let event = make_scope_event_with_profile(
+            ScopeCategory::Start,
+            Uuid::now_v7(),
+            None,
+            "openai.responses",
+            ScopeType::Llm,
+            Some(serde_json::to_value(&raw).unwrap()),
+            Some(
+                CategoryProfile::builder()
+                    .annotated_request_opt(annotated.then(|| Arc::new(request)))
+                    .build(),
+            ),
+        );
+        let attrs = attr_map(&start_attributes(&event));
+        assert_eq!(attrs["llm.input_messages.0.message.role"], "assistant");
+        assert_eq!(
+            attrs["llm.input_messages.0.message.tool_calls.0.tool_call.id"],
+            "call-wrapper"
+        );
+        assert_eq!(
+            attrs["llm.input_messages.0.message.tool_calls.0.tool_call.function.name"],
+            "exec"
+        );
+        assert_eq!(
+            attrs["llm.input_messages.0.message.tool_calls.0.tool_call.function.arguments"],
+            serde_json::to_string(&input).unwrap()
+        );
+        assert_eq!(attrs["llm.input_messages.1.message.role"], "tool");
+        assert_eq!(
+            attrs["llm.input_messages.1.message.tool_call_id"],
+            "call-wrapper"
+        );
+        assert_eq!(attrs["llm.input_messages.1.message.content"], "done");
+    }
+}
