@@ -427,15 +427,10 @@ jobs:
         run: |
           set -euo pipefail
           version="${{ github.ref_name }}"
-          abi_version="$(just native-abi-version)"
           mapfile -t packages < <(just published-cargo-packages)
           for package in "${packages[@]}"; do
-            package_version="$version"
-            if [[ "$package" == nemo-relay-plugin-abi ]]; then
-              package_version="$abi_version"
-            fi
-            if cargo info "${package}@${package_version}" --registry crates-io >/dev/null 2>&1; then
-              echo "${package} ${package_version} already exists on crates.io; skipping"
+            if cargo info "${package}@${version}" --registry crates-io >/dev/null 2>&1; then
+              echo "${package} ${version} already exists on crates.io; skipping"
               continue
             fi
             cargo publish --package "$package" --no-verify --allow-dirty

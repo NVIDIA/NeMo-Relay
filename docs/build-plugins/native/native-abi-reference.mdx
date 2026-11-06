@@ -8,7 +8,8 @@ SPDX-License-Identifier: Apache-2.0 */}
 
 Use the `Plugin` trait in `nemo-relay-plugin` to write a native plugin. The
 `nemo-relay-plugin-abi` crate defines the application binary interface (ABI)
-between the plugin library and Relay. It has its own package version.
+between the plugin library and Relay. Its package version follows Relay releases.
+The explicit native contract determines binary compatibility.
 
 Native plugins run in the Relay process and require full trust.
 
@@ -29,8 +30,8 @@ Declare `compat.native_api = "v1.0"` and `load.library` in the manifest. Set
 `compat.relay` to the Relay release range that the plugin supports.
 
 The export macro sets the required native minor from the build SDK. For example,
-a plugin built with SDK v1.1 requires a host that supports v1.1 or a later minor
-in major 1. A host that supports v1.1 also supports v1.0 plugins.
+a plugin built with SDK contract v1.1 requires a host that supports v1.1 or a
+later minor in major 1. A host that supports v1.1 also supports v1.0 plugins.
 
 Published layouts, enum variants, signatures, marker traits, ownership rules,
 and behavior stay fixed within each contract. Add interfaces through versioned

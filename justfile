@@ -496,6 +496,7 @@ local_dependencies = (
     "nemo-relay-plugin-host",
     "nemo-relay",
     "nemo-relay-plugin",
+    "nemo-relay-plugin-abi",
     "nemo-relay-adaptive",
     "nemo-relay-pii-redaction",
     "nemo-relay-builtins",
@@ -524,7 +525,7 @@ for line in text.splitlines(keepends=True):
         for dependency in local_dependencies:
             updated, count = re.subn(
                 rf"^({re.escape(dependency)}\s*=\s*\{{[^}}]*\bversion\s*=\s*\")([^\"]+)(\".*)$",
-                rf"\g<1>{version}\g<3>",
+                lambda match: f'{match[1]}{"=" if match[2].startswith("=") else ""}{version}{match[3]}',
                 updated,
             )
             if count == 1:
@@ -571,8 +572,6 @@ checked = 0
 for package in metadata["packages"]:
     if package["id"] not in workspace_members or not package["name"].startswith("nemo-relay"):
         continue
-    if package["name"] == "nemo-relay-plugin-abi":
-        continue  # The native interface has an independent release version.
     checked += 1
     if package["version"] != version:
         mismatched.append(f"{package['name']}={package['version']}")
@@ -1921,18 +1920,10 @@ published-cargo-packages:
     cd "$NEMO_RELAY_REPO_ROOT"
     published_cargo_packages
 
-# Print and validate the independently versioned native interface.
-native-abi-version:
+# Print and validate the native ABI contract and its package release metadata.
+native-abi-contract:
     #!/usr/bin/env bash
-    uv run --no-sync python scripts/native_abi_release.py version
-
-# Update the interface release without changing Relay or frozen fixture versions.
-set-native-abi-version version:
-    #!/usr/bin/env bash
-    set -euo pipefail
-    uv run --no-sync python scripts/native_abi_release.py set {{ quote(version) }}
-    cargo metadata --format-version 1 > /dev/null
-    ./scripts/generate_attributions.sh rust
+    uv run --no-sync python scripts/native_abi_contract.py
 
 # [version] or --set ref_name=<version>
 set-version version="":

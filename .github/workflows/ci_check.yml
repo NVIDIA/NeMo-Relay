@@ -265,7 +265,7 @@ jobs:
           python -m unittest \
             scripts.tests.test_package_cli_bin \
             scripts.tests.test_package_node_bin \
-            scripts.tests.test_native_abi_release \
+            scripts.tests.test_native_abi_contract \
             scripts.tests.test_native_plugin_benchmark
 
       - name: Test docs version retention

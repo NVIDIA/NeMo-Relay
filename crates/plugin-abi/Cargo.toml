@@ -3,12 +3,11 @@
 
 [package]
 name = "nemo-relay-plugin-abi"
-# Independent of the Relay release train. Never use version.workspace here.
-version = "1.0.0"
+version.workspace = true
 edition.workspace = true
 license.workspace = true
 repository.workspace = true
-description = "Independently versioned native plugin ABI for NeMo Relay."
+description = "Versioned native plugin ABI contracts for NeMo Relay."
 readme = "README.md"
 exclude = ["tests/fixtures", "tests/binary_compatibility.rs"]
 

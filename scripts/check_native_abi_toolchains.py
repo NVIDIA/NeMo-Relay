@@ -40,7 +40,21 @@ def main() -> None:
     # Both future hosts must accept each unchanged plugin binary, regardless of compiler.
     for host_directory in (current, comparison):
         for plugin_directory in (current, comparison):
-            for plugin in ("baseline", "future"):
+            for plugin in ("baseline", "future", "package_next"):
+                run(
+                    [
+                        str(host_directory / executable),
+                        str(plugin_directory / f"{prefix}nemo_relay_native_abi_fixture_{plugin}{suffix}"),
+                    ],
+                    root,
+                    environment,
+                )
+
+    # Alternate package releases also accept frozen binaries from both compilers.
+    executable = "nemo-relay-native-abi-fixture-package-next-host" + (".exe" if os.name == "nt" else "")
+    for host_directory in (current, comparison):
+        for plugin_directory in (current, comparison):
+            for plugin in ("baseline", "package_next"):
                 run(
                     [
                         str(host_directory / executable),

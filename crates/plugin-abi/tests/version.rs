@@ -8,6 +8,13 @@ use nemo_relay_plugin_abi::{
     validate_descriptor,
 };
 
+/// The textual and typed SDK identifiers share the explicit contract source.
+#[test]
+fn sdk_identifiers_match_the_explicit_contract() {
+    use nemo_relay_plugin_abi::{NATIVE_API, NATIVE_API_VERSION};
+    assert_eq!(NATIVE_API.parse::<Api>().unwrap(), NATIVE_API_VERSION);
+}
+
 #[test]
 fn canonical_dotted_versions_round_trip() {
     for (text, version) in [

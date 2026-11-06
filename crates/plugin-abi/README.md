@@ -15,24 +15,27 @@ and `serde_json::Value` stay outside this crate.
 
 ## Version Rules
 
-Three versions control compatibility:
+Compatibility uses these version rules:
 
 | Version | Purpose |
 |---|---|
 | Relay release | The plugin's `compat.relay` range selects supported runtime releases. |
 | Native contract, such as `v1.0` | The build SDK sets the minimum host interface required by the plugin. |
-| Interface crate and dependency versions | The loader checks that shared types have compatible binary layouts. |
+| ABI dependency versions | The loader checks shared type layouts, including dependency ABI generations. |
 
 Contract names use dots: `v1.0`, `v1.1`, and `v2.0`. Rust module names use
 underscores, such as `v1_0`, because Rust identifiers cannot contain dots.
 
-A plugin built with SDK v1.1 requires a host that supports v1.1 or a later minor
-in major 1. A host that supports v1.1 also supports v1.0 plugins. Each minor keeps
-its published interfaces and behavior. A breaking layout or dependency ABI change
+A plugin built with SDK contract v1.1 requires a host that supports v1.1 or a
+later minor in major 1. A host that supports v1.1 also supports v1.0 plugins.
+Each minor keeps its published interfaces and behavior. A breaking layout or dependency ABI change
 requires a new native major.
 
-The interface crate has its own package version. Relay version-update recipes
-leave that version and its workspace dependency pin unchanged.
+The interface crate follows Relay's package release version. That version does
+not select the native contract or determine binary compatibility. The explicit
+contract in `src/contract.rs` is the source of truth. The build script derives the
+SDK descriptor constant and `abi_stable` layout metadata from that contract.
+Frozen bootstrap and module headers keep their published contract versions.
 
 ## Bootstrap and Typed Values
 
@@ -70,19 +73,24 @@ Each activation also checks the descriptor against the manifest.
 Libraries and their staged dependencies stay loaded until process exit. Each
 activation creates fresh component state. Closing a component removes its
 registrations, revokes runtime access, cancels work, waits for tasks to finish,
-and stops its executor. A failed close keeps ownership so the caller can retry.
+and releases its executor resources. A failed close keeps ownership so the caller
+can retry.
 
-Each component executor runs user futures on its own Tokio runtime. Dropping a
-foreign future cancels its work, including when the future has not been polled.
-A separate thread shuts down the runtime. Concurrent close calls share that work.
-If the teardown thread cannot start, the component keeps runtime ownership.
+The SDK polls user futures inline by default and creates no Tokio runtime.
+Components can opt into a shared runtime within their plugin library. Closing
+the last component that uses it shuts it down on a separate thread. Concurrent
+close calls share that work. If the teardown thread cannot start, the component
+keeps runtime ownership. Dropping a foreign future cancels its work, including
+when the future has not been polled.
 
 ## Dependency Pins
 
 Most workspace dependencies use Cargo SemVer ranges. The native interface uses
 exact `=version` requirements for `nemo-relay-plugin-abi`, `abi_stable`, and
-`async-ffi`. These pins keep SDKs and hosts on reviewed ABI versions. A dependency
-update must pass the binary compatibility tests.
+`async-ffi`. The interface pin selects the declarations reviewed with that SDK
+release. Binary compatibility follows the native contract and checked layouts.
+The external dependency pins keep shared types on reviewed ABI generations.
+A dependency update must pass the binary compatibility tests.
 
 Fixture workspaces have their own exact dependency pins and lockfiles.
 `[package] version = "1.0.0"` names a package release, so it does not use an `=`
@@ -107,7 +115,9 @@ can detect compatibility regressions.
 
 The tests load a v1.0 plugin with v1.0 and v1.1 hosts. They also check minimum
 minor versions, major versions, changed signatures, changed `Sync` requirements,
-missing modules, descriptor mismatches, and multiple libraries.
+missing modules, descriptor mismatches, and multiple libraries. Hosts and plugins
+also load unchanged v1.0 binaries built with different Cargo package major
+versions and prereleases.
 
 To refresh fixture lockfiles, run the owning workflow:
 
@@ -117,11 +127,10 @@ just generate-native-abi-test-lockfiles
 
 ## Release the Interface
 
-Use `just set-native-abi-version <semver>` to update the package version and exact
-SDK dependency pin together. This workflow updates the root lockfile and Rust
-attribution. It keeps Relay and frozen fixture versions unchanged.
+The interface publishes first in the normal Relay release workflow, using the
+workspace release version. Relay version-update recipes update its package
+version and exact SDK dependency pin together. They leave the native contract
+and frozen compatibility fixtures unchanged.
 
-The normal Relay release workflow publishes the interface before its dependent
-crates. It skips publication when that interface version already exists.
-`just native-abi-version` checks the source version and SDK pin. Refer to
-[Releasing NeMo Relay](../../RELEASING.md) for the maintainer procedure.
+Run `just native-abi-contract` to check the contract and package metadata. Refer
+to [Releasing NeMo Relay](../../RELEASING.md) for the maintainer procedure.

@@ -190,10 +190,12 @@ typed records and caller-owned bounded buffers. The
 
 The loader uses the standard `abi_stable` library header to check the plugin's
 interfaces. The export macro sets the minimum native contract from the build SDK.
-An SDK v1.1 plugin requires a host that supports v1.1 or a later minor in major 1.
-A host that supports v1.1 also supports v1.0 plugins.
-Native ABI majors and the independent `nemo-relay-plugin-abi` crate version are
-separate from Relay releases and the plugin's `compat.relay` range.
+A plugin built with SDK contract v1.1 requires a host that supports v1.1 or a
+later minor in major 1. A host that supports v1.1 also supports v1.0 plugins.
+The explicit native contract determines binary compatibility. The
+`nemo-relay-plugin-abi` package follows Relay's release version; package version
+changes do not change the contract. The plugin's `compat.relay` range separately
+selects supported Relay releases.
 
 Libraries and staged dependencies stay loaded until process exit. Closing a
 component removes registrations, revokes capabilities, cancels work, drains tasks,

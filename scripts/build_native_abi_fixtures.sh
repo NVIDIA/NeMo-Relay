@@ -10,7 +10,7 @@ if command -v cygpath >/dev/null 2>&1; then
     fixture_target="$(cygpath -u "$fixture_target")"
 fi
 
-for fixture in baseline future major signature marker reordered missing dependency future-host; do
+for fixture in baseline future major signature marker reordered missing dependency future-host package-next package-next-host; do
     manifest="$fixture_root/$fixture/Cargo.toml"
     if [[ "${1:-}" == "--update-lockfiles" ]]; then
         cargo generate-lockfile --manifest-path "$manifest"

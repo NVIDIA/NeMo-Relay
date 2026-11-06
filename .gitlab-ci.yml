@@ -372,14 +372,9 @@ publish:artifactory:cargo:
       PY
       )"
 
-      abi_version="$(just native-abi-version)"
       for crate in $crates; do
-        crate_version="$version"
-        if [ "$crate" = nemo-relay-plugin-abi ]; then
-          crate_version="$abi_version"
-        fi
         availability="$(
-          uv run --no-project python - "$crate" "$crate_version" <<'PY'
+          uv run --no-project python - "$crate" "$version" <<'PY'
       import json
       import os
       import sys
@@ -404,7 +399,7 @@ publish:artifactory:cargo:
       PY
         )"
         if [ "$availability" = present ]; then
-          echo "${crate} ${crate_version} already exists in Artifactory; skipping"
+          echo "${crate} ${version} already exists in Artifactory; skipping"
           continue
         fi
         RUSTC="$publish_rustc" "$publish_cargo" publish --package "$crate" --registry artifactory --allow-dirty

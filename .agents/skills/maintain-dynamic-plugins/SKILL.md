@@ -40,6 +40,11 @@ Use this skill for `plugin.kind = "rust_dynamic"`, `plugin.kind = "worker"`,
   require at least the native minor of their build SDK. Breaking layouts or
   dependency ABI generations require a native major change, independently of
   Relay's release version. A breaking worker contract needs a new protocol identity.
+- Keep the native contract source in `crates/plugin-abi/src/contract.rs`.
+  The interface package follows the workspace release version. Its build script
+  derives SDK constants and checked layout metadata from the explicit contract,
+  not the package release. Keep published bootstrap and module version strings
+  fixed. Validate cross-package-version fixtures when changing this mechanism.
 - Do not add tests under `src`; Rust tests belong in crate `tests/` trees and
   Python SDK tests belong under `python/tests`.
 - Native and worker plugins are trusted extensions. Document that native plugins

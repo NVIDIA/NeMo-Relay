@@ -81,7 +81,4 @@ impl FromStr for NativeApiVersion {
     }
 }
 
-/// Contract emitted by the current native SDK. Authors cannot lower this value.
-pub const NATIVE_API_VERSION: NativeApiVersion = NativeApiVersion::new(1, 0);
-/// Canonical manifest identifier emitted by the current native SDK.
-pub const NATIVE_API: &str = "v1.0";
+include!(concat!(env!("OUT_DIR"), "/native_api.rs"));

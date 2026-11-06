@@ -83,8 +83,7 @@ nemo-relay-model-pricing = { version = "1.0.0", path = "crates/model-pricing" }
 nemo-relay-observability = { version = "1.0.0", path = "crates/observability" }
 nemo-relay-pii-redaction = { version = "1.0.0", path = "crates/pii-redaction" }
 nemo-relay-plugin = { version = "1.0.0", path = "crates/plugin" }
-# Independently versioned; excluded from `just set-version`.
-# Pin the SDK and host to the reviewed interface revision.
+# Keep SDK builds on their reviewed declarations; binary compatibility uses the native contract.
 nemo-relay-plugin-abi = { version = "=1.0.0", path = "crates/plugin-abi" }
 nemo-relay-plugin-host = { version = "1.0.0", path = "crates/plugin-host" }
 nemo-relay-resource-metrics = { version = "1.0.0", path = "crates/resource-metrics" }

@@ -48,16 +48,20 @@ pipeline schedule.
 
 ## Native Interface Releases
 
-`nemo-relay-plugin-abi` has its own SemVer version and publishes with the other
-Rust crates in the normal Relay release workflow. It publishes first so the SDK
-and host can resolve their exact interface dependency. Both crates.io and
-Artifactory skip publication when that interface version already exists.
+`nemo-relay-plugin-abi` uses the workspace release version and publishes with the
+other Rust crates. It publishes first so the SDK and host can resolve their exact
+interface dependency.
 
-Use `just set-native-abi-version <semver>` when the interface package needs a new
-version. This updates the package version, its exact workspace dependency pin,
-the root lockfile, and Rust attribution. Relay versions and frozen compatibility
-fixtures keep their own versions. Run `just native-abi-version` to check the
-source version and pin, then run the interface compatibility tests.
+Native binary compatibility follows the explicit contract in
+`crates/plugin-abi/src/contract.rs`, such as `v1.0`. Package version updates leave
+this contract unchanged. The interface build script uses the contract to set
+`abi_stable` layout metadata, so a package release does not change the ABI.
+Published bootstrap and module versions stay fixed for their contracts.
+
+Run `just native-abi-contract` to check the contract and package metadata. Before
+publishing, run the binary compatibility tests, including the fixtures that use
+different package versions. Add a new contract only when the native interface
+changes; preserve each supported contract's layouts and behavior.
 
 The `just package-rust` recipe packages the interface first and uses its local
 source when verifying dependent packages. Local packaging does not publish crates.

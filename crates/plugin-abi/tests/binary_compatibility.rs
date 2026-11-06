@@ -72,6 +72,41 @@ fn newer_sdk_requires_newer_host_and_selects_its_own_module() {
     assert_future_host_accepts("future");
 }
 
+/// Unchanged v1.0 contracts load in both directions across Cargo package major and prerelease versions.
+#[test]
+fn package_release_versions_do_not_define_binary_compatibility() {
+    let bootstrap = fixture("package_next")
+        .init_root_module::<Bootstrap_Ref>()
+        .unwrap();
+    let descriptor = (bootstrap.descriptor())();
+    validate_descriptor(&descriptor, Api::new(1, 0), "fixture", Api::new(1, 0)).unwrap();
+    let module = (bootstrap.query_module())(v1_0::FACTORY_MODULE.into())
+        .into_option()
+        .unwrap();
+    let factory = module
+        .get()
+        .init_root_module::<v1_0::Factory_Ref>()
+        .unwrap();
+    behavior::assert_behavior((factory.create())().into_result().unwrap());
+    assert_future_host_accepts("package_next");
+    let directory = fixture_path("baseline").parent().unwrap().to_owned();
+    let host = directory.join(format!(
+        "nemo-relay-native-abi-fixture-package-next-host{}",
+        std::env::consts::EXE_SUFFIX
+    ));
+    for plugin in ["baseline", "package_next"] {
+        let output = std::process::Command::new(&host)
+            .arg(fixture_path(plugin))
+            .output()
+            .unwrap();
+        assert!(
+            output.status.success(),
+            "package-version host failed: {}",
+            String::from_utf8_lossy(&output.stderr)
+        );
+    }
+}
+
 #[test]
 fn reject_different_major_and_missing_module_before_factory_use() {
     let module = fixture("major")

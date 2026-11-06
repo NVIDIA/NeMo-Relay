@@ -137,11 +137,11 @@ repos:
         files: '(^|/)(Cargo\.toml|Cargo\.lock)$'
         pass_filenames: false
 
-      - id: native-abi-version-check
-        name: Native ABI release version and SDK pin agree
-        entry: uv run --no-sync python scripts/native_abi_release.py check
+      - id: native-abi-contract-check
+        name: Native ABI contract and package metadata are valid
+        entry: uv run --no-sync python scripts/native_abi_contract.py
         language: system
-        files: '^(Cargo\.toml|crates/plugin-abi/Cargo\.toml|scripts/native_abi_release\.py)$'
+        files: '^(Cargo\.toml|crates/plugin-abi/(Cargo\.toml|build\.rs|src/(contract|version)\.rs)|scripts/native_abi_contract\.py)$'
         pass_filenames: false
 
       - id: native-abi-fixture-lockfile-check

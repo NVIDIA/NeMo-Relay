@@ -7,8 +7,8 @@ ci:
   - '.github/actionlint.yaml'
   - '.github/ci-path-filters.yml'
   - '.github/workflows/**'
-  - 'scripts/native_abi_release.py'
-  - 'scripts/tests/test_native_abi_release.py'
+  - 'scripts/native_abi_contract.py'
+  - 'scripts/tests/test_native_abi_contract.py'
   - 'codecov.yml'
 
 installer:

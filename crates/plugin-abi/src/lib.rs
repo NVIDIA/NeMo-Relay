@@ -1,13 +1,14 @@
 // SPDX-FileCopyrightText: Copyright (c) 2026, NVIDIA CORPORATION & AFFILIATES. All rights reserved.
 // SPDX-License-Identifier: Apache-2.0
 
-//! Frozen native plugin contracts, independent of Relay's runtime and release train.
+//! Frozen native plugin contracts with compatibility defined by explicit ABI identifiers.
 //!
 //! Every boundary type must implement `StableAbi`. Tokio objects, ordinary Rust
 //! futures, runtime traits, and serde_json values must remain behind adapters.
 
 #![allow(non_camel_case_types, non_local_definitions)]
 
+mod contract;
 pub mod diagnostics;
 pub mod v1_0;
 mod value;
@@ -15,8 +16,9 @@ mod version;
 
 pub use abi_stable;
 pub use async_ffi;
+pub use contract::NATIVE_API;
 pub use value::{Field, Json};
-pub use version::{NATIVE_API, NATIVE_API_VERSION, NativeApiVersion, ParseNativeApiVersionError};
+pub use version::{NATIVE_API_VERSION, NativeApiVersion, ParseNativeApiVersionError};
 
 use abi_stable::{
     StableAbi,
@@ -51,7 +53,7 @@ impl RootModule for Bootstrap_Ref {
     abi_stable::declare_root_module_statics! { Bootstrap_Ref }
     const BASE_NAME: &'static str = "nemo_relay_plugin";
     const NAME: &'static str = "nemo.relay.native.bootstrap.v1";
-    // The bootstrap version is frozen independently of this package's minor.
+    // Frozen to the bootstrap's v1.0 contract, including when the SDK adds minors.
     const VERSION_STRINGS: VersionStrings = VersionStrings::new("1.0.0");
 }
 
