@@ -41,15 +41,192 @@ export interface ToolExecutionResult {
 }
 ```
 
+### `ResourceMetricsPollingConfig`
+
+```ts
+export interface ResourceMetricsPollingConfig {
+  enabled?: boolean;
+  interval_millis?: number;
+}
+```
+
+### `ResourceMemoryInspectionConfig`
+
+```ts
+export interface ResourceMemoryInspectionConfig {
+  enabled?: boolean;
+  stale_after_millis?: number;
+}
+```
+
+### `ResourceMetricsCpuConfig`
+
+```ts
+export interface ResourceMetricsCpuConfig {
+  enabled?: boolean;
+}
+```
+
+### `ResourceMetricsMemoryConfig`
+
+```ts
+export interface ResourceMetricsMemoryConfig {
+  enabled?: boolean;
+}
+```
+
+### `ResourceMetricsProcessConfig`
+
+```ts
+export interface ResourceMetricsProcessConfig {
+  enabled?: boolean;
+}
+```
+
+### `ResourceMetricsDiskConfig`
+
+```ts
+export interface ResourceMetricsDiskConfig {
+  enabled?: boolean;
+  process_io?: boolean;
+  filesystem_paths?: string[];
+}
+```
+
+### `ResourceMetricsGpuConfig`
+
+```ts
+export interface ResourceMetricsGpuConfig {
+  enabled?: boolean;
+  devices?: string[];
+  device_metrics?: boolean;
+  process_metrics?: boolean;
+}
+```
+
+### `ResourceMetricsNetworkConfig`
+
+```ts
+export interface ResourceMetricsNetworkConfig {
+  enabled?: boolean;
+  interfaces?: string[];
+}
+```
+
+### `ResourceMetricsCpuUnits`
+
+```ts
+export interface ResourceMetricsCpuUnits {
+  user_time?: ResourceUnit<DurationUnit>;
+  system_time?: ResourceUnit<DurationUnit>;
+  total_time?: ResourceUnit<DurationUnit>;
+  throttled_time?: ResourceUnit<DurationUnit>;
+  some_pressure_stall_time?: ResourceUnit<DurationUnit>;
+  full_pressure_stall_time?: ResourceUnit<DurationUnit>;
+  consumption_rate?: ResourceUnit<CpuUnit>;
+  effective_limit?: ResourceUnit<CpuUnit>;
+}
+```
+
+### `ResourceMetricsMemoryUnits`
+
+```ts
+export interface ResourceMetricsMemoryUnits {
+  system_used?: ResourceUnit<CapacityUnit>;
+  system_total?: ResourceUnit<CapacityUnit>;
+  system_available?: ResourceUnit<CapacityUnit>;
+  resident?: ResourceUnit<CapacityUnit>;
+  private?: ResourceUnit<CapacityUnit>;
+  physical_footprint?: ResourceUnit<CapacityUnit>;
+  virtual_memory?: ResourceUnit<CapacityUnit>;
+  peak_resident?: ResourceUnit<CapacityUnit>;
+  limit?: ResourceUnit<CapacityUnit>;
+  environment_accounted?: ResourceUnit<CapacityUnit>;
+  some_pressure_stall_time?: ResourceUnit<DurationUnit>;
+  full_pressure_stall_time?: ResourceUnit<DurationUnit>;
+}
+```
+
+### `ResourceMetricsDiskUnits`
+
+```ts
+export interface ResourceMetricsDiskUnits {
+  read_data?: ResourceUnit<DataUnit>;
+  write_data?: ResourceUnit<DataUnit>;
+  filesystem_total_capacity?: ResourceUnit<CapacityUnit>;
+  filesystem_available_capacity?: ResourceUnit<CapacityUnit>;
+  filesystem_free_capacity?: ResourceUnit<CapacityUnit>;
+  read_throughput?: ResourceUnit<BandwidthUnit>;
+  write_throughput?: ResourceUnit<BandwidthUnit>;
+}
+```
+
+### `ResourceMetricsGpuUnits`
+
+```ts
+export interface ResourceMetricsGpuUnits {
+  device_memory_used?: ResourceUnit<CapacityUnit>;
+  process_memory_used?: ResourceUnit<CapacityUnit>;
+  device_compute_utilization?: ResourceUnit<UtilizationUnit>;
+  process_compute_utilization?: ResourceUnit<UtilizationUnit>;
+}
+```
+
+### `ResourceMetricsNetworkTrafficUnits`
+
+```ts
+export interface ResourceMetricsNetworkTrafficUnits {
+  received_data?: ResourceUnit<DataUnit>;
+  transmitted_data?: ResourceUnit<DataUnit>;
+  receive_throughput?: ResourceUnit<BandwidthUnit>;
+  transmit_throughput?: ResourceUnit<BandwidthUnit>;
+}
+```
+
+### `ResourceMetricsNetworkUnits`
+
+```ts
+export interface ResourceMetricsNetworkUnits {
+  system?: ResourceMetricsNetworkTrafficUnits;
+  interface?: ResourceMetricsNetworkTrafficUnits;
+}
+```
+
+### `ResourceMetricsUnits`
+
+```ts
+export interface ResourceMetricsUnits {
+  cpu?: ResourceMetricsCpuUnits;
+  memory?: ResourceMetricsMemoryUnits;
+  disk?: ResourceMetricsDiskUnits;
+  gpu?: ResourceMetricsGpuUnits;
+  network?: ResourceMetricsNetworkUnits;
+}
+```
+
+### `ResourceMetricsConfig`
+
+```ts
+export interface ResourceMetricsConfig {
+  measurement_scope?: ResourceMetricsMeasurementScope;
+  polling?: ResourceMetricsPollingConfig;
+  memory_inspection?: ResourceMemoryInspectionConfig;
+  cpu?: ResourceMetricsCpuConfig;
+  memory?: ResourceMetricsMemoryConfig;
+  process?: ResourceMetricsProcessConfig;
+  disk?: ResourceMetricsDiskConfig;
+  gpu?: ResourceMetricsGpuConfig;
+  network?: ResourceMetricsNetworkConfig;
+  units?: ResourceMetricsUnits;
+}
+```
+
 ### `ResourceMeasurement`
 
 ```ts
-export interface ResourceMeasurement<
-  T extends number | bigint,
-  U extends DurationUnit | CapacityUnit | DataUnit | BandwidthUnit | CpuUnit | UtilizationUnit | CountUnit,
-> {
-  value: T;
-  unit: U;
+export interface ResourceMeasurement<T extends ResourceNumeric, U extends ResourceUnitKind> {
+  readonly value: T;
+  readonly unit: U;
 }
 ```
 
@@ -57,9 +234,9 @@ export interface ResourceMeasurement<
 
 ```ts
 export interface ResourceLimitEventCount {
-  resource: 'cpu' | 'memory' | 'processes';
-  event: 'throttled' | 'high' | 'maximum' | 'out_of_memory' | 'terminated';
-  count: ResourceMeasurement<ResourceNumeric, CountUnit> | null;
+  readonly resource: 'cpu' | 'memory' | 'processes';
+  readonly event: 'throttled' | 'high' | 'maximum' | 'out_of_memory' | 'terminated';
+  readonly count: ResourceMeasurement<ResourceNumeric, CountUnit> | null;
 }
 ```
 
@@ -67,11 +244,11 @@ export interface ResourceLimitEventCount {
 
 ```ts
 export interface AcceleratorDeviceMetrics {
-  vendor: AcceleratorVendor;
-  deviceIdentifier: string;
-  deviceIndex: number | null;
-  memoryUsed: ResourceMeasurement<ResourceNumeric, CapacityUnit> | null;
-  computeUtilization: ResourceMeasurement<number, UtilizationUnit> | null;
+  readonly vendor: AcceleratorVendor;
+  readonly deviceIdentifier: string;
+  readonly deviceIndex: number | null;
+  readonly memoryUsed: ResourceMeasurement<ResourceNumeric, CapacityUnit> | null;
+  readonly computeUtilization: ResourceMeasurement<number, UtilizationUnit> | null;
 }
 ```
 
@@ -79,12 +256,12 @@ export interface AcceleratorDeviceMetrics {
 
 ```ts
 export interface AcceleratorProcessMetrics {
-  vendor: AcceleratorVendor;
-  deviceIdentifier: string;
-  deviceIndex: number | null;
-  processId: number;
-  memoryUsed: ResourceMeasurement<ResourceNumeric, CapacityUnit> | null;
-  computeUtilization: ResourceMeasurement<number, UtilizationUnit> | null;
+  readonly vendor: AcceleratorVendor;
+  readonly deviceIdentifier: string;
+  readonly deviceIndex: number | null;
+  readonly processId: number;
+  readonly memoryUsed: ResourceMeasurement<ResourceNumeric, CapacityUnit> | null;
+  readonly computeUtilization: ResourceMeasurement<number, UtilizationUnit> | null;
 }
 ```
 
@@ -92,10 +269,10 @@ export interface AcceleratorProcessMetrics {
 
 ```ts
 export interface FilesystemCapacityMetrics {
-  path: string;
-  totalCapacity: ResourceMeasurement<ResourceNumeric, CapacityUnit> | null;
-  availableCapacity: ResourceMeasurement<ResourceNumeric, CapacityUnit> | null;
-  freeCapacity: ResourceMeasurement<ResourceNumeric, CapacityUnit> | null;
+  readonly path: string;
+  readonly totalCapacity: ResourceMeasurement<ResourceNumeric, CapacityUnit> | null;
+  readonly availableCapacity: ResourceMeasurement<ResourceNumeric, CapacityUnit> | null;
+  readonly freeCapacity: ResourceMeasurement<ResourceNumeric, CapacityUnit> | null;
 }
 ```
 
@@ -103,15 +280,15 @@ export interface FilesystemCapacityMetrics {
 
 ```ts
 export interface CpuMetrics {
-  userTime: ResourceMeasurement<ResourceNumeric, DurationUnit> | null;
-  systemTime: ResourceMeasurement<ResourceNumeric, DurationUnit> | null;
-  totalTime: ResourceMeasurement<ResourceNumeric, DurationUnit> | null;
-  consumptionRate: ResourceMeasurement<number, CpuUnit> | null;
-  throttledTime: ResourceMeasurement<ResourceNumeric, DurationUnit> | null;
-  effectiveLimit: ResourceMeasurement<number, CpuUnit> | null;
-  somePressureStallTime: ResourceMeasurement<ResourceNumeric, DurationUnit> | null;
-  fullPressureStallTime: ResourceMeasurement<ResourceNumeric, DurationUnit> | null;
-  limitEvents: ResourceLimitEventCount[];
+  readonly userTime: ResourceMeasurement<ResourceNumeric, DurationUnit> | null;
+  readonly systemTime: ResourceMeasurement<ResourceNumeric, DurationUnit> | null;
+  readonly totalTime: ResourceMeasurement<ResourceNumeric, DurationUnit> | null;
+  readonly consumptionRate: ResourceMeasurement<number, CpuUnit> | null;
+  readonly throttledTime: ResourceMeasurement<ResourceNumeric, DurationUnit> | null;
+  readonly effectiveLimit: ResourceMeasurement<number, CpuUnit> | null;
+  readonly somePressureStallTime: ResourceMeasurement<ResourceNumeric, DurationUnit> | null;
+  readonly fullPressureStallTime: ResourceMeasurement<ResourceNumeric, DurationUnit> | null;
+  readonly limitEvents: readonly ResourceLimitEventCount[];
 }
 ```
 
@@ -119,20 +296,20 @@ export interface CpuMetrics {
 
 ```ts
 export interface MemoryMetrics {
-  systemUsed: ResourceMeasurement<ResourceNumeric, CapacityUnit> | null;
-  systemTotal: ResourceMeasurement<ResourceNumeric, CapacityUnit> | null;
-  systemAvailable: ResourceMeasurement<ResourceNumeric, CapacityUnit> | null;
-  resident: ResourceMeasurement<ResourceNumeric, CapacityUnit> | null;
-  private: ResourceMeasurement<ResourceNumeric, CapacityUnit> | null;
-  physicalFootprint: ResourceMeasurement<ResourceNumeric, CapacityUnit> | null;
-  virtualMemory: ResourceMeasurement<ResourceNumeric, CapacityUnit> | null;
-  peakResident: ResourceMeasurement<ResourceNumeric, CapacityUnit> | null;
-  limit: ResourceMeasurement<ResourceNumeric, CapacityUnit> | null;
-  environmentAccounted: ResourceMeasurement<ResourceNumeric, CapacityUnit> | null;
-  somePressureStallTime: ResourceMeasurement<ResourceNumeric, DurationUnit> | null;
-  fullPressureStallTime: ResourceMeasurement<ResourceNumeric, DurationUnit> | null;
-  outOfMemoryEventCount: ResourceMeasurement<ResourceNumeric, CountUnit> | null;
-  limitEvents: ResourceLimitEventCount[];
+  readonly systemUsed: ResourceMeasurement<ResourceNumeric, CapacityUnit> | null;
+  readonly systemTotal: ResourceMeasurement<ResourceNumeric, CapacityUnit> | null;
+  readonly systemAvailable: ResourceMeasurement<ResourceNumeric, CapacityUnit> | null;
+  readonly resident: ResourceMeasurement<ResourceNumeric, CapacityUnit> | null;
+  readonly private: ResourceMeasurement<ResourceNumeric, CapacityUnit> | null;
+  readonly physicalFootprint: ResourceMeasurement<ResourceNumeric, CapacityUnit> | null;
+  readonly virtualMemory: ResourceMeasurement<ResourceNumeric, CapacityUnit> | null;
+  readonly peakResident: ResourceMeasurement<ResourceNumeric, CapacityUnit> | null;
+  readonly limit: ResourceMeasurement<ResourceNumeric, CapacityUnit> | null;
+  readonly environmentAccounted: ResourceMeasurement<ResourceNumeric, CapacityUnit> | null;
+  readonly somePressureStallTime: ResourceMeasurement<ResourceNumeric, DurationUnit> | null;
+  readonly fullPressureStallTime: ResourceMeasurement<ResourceNumeric, DurationUnit> | null;
+  readonly outOfMemoryEventCount: ResourceMeasurement<ResourceNumeric, CountUnit> | null;
+  readonly limitEvents: readonly ResourceLimitEventCount[];
 }
 ```
 
@@ -140,13 +317,13 @@ export interface MemoryMetrics {
 
 ```ts
 export interface ProcessMetrics {
-  activeCount: ResourceMeasurement<ResourceNumeric, CountUnit> | null;
-  descendantCount: ResourceMeasurement<ResourceNumeric, CountUnit> | null;
-  threadCount: ResourceMeasurement<ResourceNumeric, CountUnit> | null;
-  lifetimeCreationCount: ResourceMeasurement<ResourceNumeric, CountUnit> | null;
-  openFileDescriptorCount: ResourceMeasurement<ResourceNumeric, CountUnit> | null;
-  windowsHandleCount: ResourceMeasurement<ResourceNumeric, CountUnit> | null;
-  limitEvents: ResourceLimitEventCount[];
+  readonly activeCount: ResourceMeasurement<ResourceNumeric, CountUnit> | null;
+  readonly descendantCount: ResourceMeasurement<ResourceNumeric, CountUnit> | null;
+  readonly threadCount: ResourceMeasurement<ResourceNumeric, CountUnit> | null;
+  readonly lifetimeCreationCount: ResourceMeasurement<ResourceNumeric, CountUnit> | null;
+  readonly openFileDescriptorCount: ResourceMeasurement<ResourceNumeric, CountUnit> | null;
+  readonly windowsHandleCount: ResourceMeasurement<ResourceNumeric, CountUnit> | null;
+  readonly limitEvents: readonly ResourceLimitEventCount[];
 }
 ```
 
@@ -154,13 +331,13 @@ export interface ProcessMetrics {
 
 ```ts
 export interface DiskMetrics {
-  readData: ResourceMeasurement<ResourceNumeric, DataUnit> | null;
-  writeData: ResourceMeasurement<ResourceNumeric, DataUnit> | null;
-  readThroughput: ResourceMeasurement<number, BandwidthUnit> | null;
-  writeThroughput: ResourceMeasurement<number, BandwidthUnit> | null;
-  readOperations: ResourceMeasurement<ResourceNumeric, CountUnit> | null;
-  writeOperations: ResourceMeasurement<ResourceNumeric, CountUnit> | null;
-  filesystems: FilesystemCapacityMetrics[];
+  readonly readData: ResourceMeasurement<ResourceNumeric, DataUnit> | null;
+  readonly writeData: ResourceMeasurement<ResourceNumeric, DataUnit> | null;
+  readonly readThroughput: ResourceMeasurement<number, BandwidthUnit> | null;
+  readonly writeThroughput: ResourceMeasurement<number, BandwidthUnit> | null;
+  readonly readOperations: ResourceMeasurement<ResourceNumeric, CountUnit> | null;
+  readonly writeOperations: ResourceMeasurement<ResourceNumeric, CountUnit> | null;
+  readonly filesystems: readonly FilesystemCapacityMetrics[];
 }
 ```
 
@@ -168,8 +345,8 @@ export interface DiskMetrics {
 
 ```ts
 export interface GpuMetrics {
-  deviceMetrics: AcceleratorDeviceMetrics[] | null;
-  processMetrics: AcceleratorProcessMetrics[] | null;
+  readonly deviceMetrics: readonly AcceleratorDeviceMetrics[] | null;
+  readonly processMetrics: readonly AcceleratorProcessMetrics[] | null;
 }
 ```
 
@@ -177,14 +354,14 @@ export interface GpuMetrics {
 
 ```ts
 export interface NetworkTrafficMetrics {
-  receivedData: ResourceMeasurement<ResourceNumeric, DataUnit> | null;
-  transmittedData: ResourceMeasurement<ResourceNumeric, DataUnit> | null;
-  receiveThroughput: ResourceMeasurement<number, BandwidthUnit> | null;
-  transmitThroughput: ResourceMeasurement<number, BandwidthUnit> | null;
-  receivedPackets: ResourceMeasurement<ResourceNumeric, CountUnit> | null;
-  transmittedPackets: ResourceMeasurement<ResourceNumeric, CountUnit> | null;
-  receiveErrors: ResourceMeasurement<ResourceNumeric, CountUnit> | null;
-  transmitErrors: ResourceMeasurement<ResourceNumeric, CountUnit> | null;
+  readonly receivedData: ResourceMeasurement<ResourceNumeric, DataUnit> | null;
+  readonly transmittedData: ResourceMeasurement<ResourceNumeric, DataUnit> | null;
+  readonly receiveThroughput: ResourceMeasurement<number, BandwidthUnit> | null;
+  readonly transmitThroughput: ResourceMeasurement<number, BandwidthUnit> | null;
+  readonly receivedPackets: ResourceMeasurement<ResourceNumeric, CountUnit> | null;
+  readonly transmittedPackets: ResourceMeasurement<ResourceNumeric, CountUnit> | null;
+  readonly receiveErrors: ResourceMeasurement<ResourceNumeric, CountUnit> | null;
+  readonly transmitErrors: ResourceMeasurement<ResourceNumeric, CountUnit> | null;
 }
 ```
 
@@ -192,8 +369,8 @@ export interface NetworkTrafficMetrics {
 
 ```ts
 export interface NetworkInterfaceMetrics {
-  name: string;
-  traffic: NetworkTrafficMetrics;
+  readonly name: string;
+  readonly traffic: NetworkTrafficMetrics;
 }
 ```
 
@@ -201,9 +378,9 @@ export interface NetworkInterfaceMetrics {
 
 ```ts
 export interface NetworkMetrics {
-  measurementScope: 'global';
-  system: NetworkTrafficMetrics;
-  interfaces: NetworkInterfaceMetrics[];
+  readonly measurementScope: 'global';
+  readonly system: NetworkTrafficMetrics;
+  readonly interfaces: readonly NetworkInterfaceMetrics[];
 }
 ```
 
@@ -211,10 +388,10 @@ export interface NetworkMetrics {
 
 ```ts
 export interface ProcessSamplingMetadata {
-  visibleProcesses: ResourceNumeric;
-  sampledProcesses: ResourceNumeric;
+  readonly visibleProcesses: ResourceNumeric;
+  readonly sampledProcesses: ResourceNumeric;
   /** Readable process counts keyed by canonical snake_case measurement paths. */
-  fieldSampledProcesses: Record<string, ResourceNumeric>;
+  readonly fieldSampledProcesses: Readonly<Record<string, ResourceNumeric>>;
 }
 ```
 
@@ -222,16 +399,16 @@ export interface ProcessSamplingMetadata {
 
 ```ts
 export interface ResourceMetricsSnapshot {
-  timestamp: string;
-  operatingSystem: ResourceOperatingSystem;
-  measurementScope: ResourceMeasurementScope;
-  processSampling: ProcessSamplingMetadata | null;
-  cpu: CpuMetrics | null;
-  memory: MemoryMetrics | null;
-  process: ProcessMetrics | null;
-  disk: DiskMetrics | null;
-  gpu: GpuMetrics | null;
-  network: NetworkMetrics | null;
+  readonly timestamp: string;
+  readonly operatingSystem: ResourceOperatingSystem;
+  readonly measurementScope: ResourceMeasurementScope;
+  readonly processSampling: ProcessSamplingMetadata | null;
+  readonly cpu: CpuMetrics | null;
+  readonly memory: MemoryMetrics | null;
+  readonly process: ProcessMetrics | null;
+  readonly disk: DiskMetrics | null;
+  readonly gpu: GpuMetrics | null;
+  readonly network: NetworkMetrics | null;
 }
 ```
 
@@ -356,7 +533,12 @@ export interface LlmOptimizationContribution {
   token_impact?: LlmOptimizationTokenImpact;
   payload_schema?: LlmOptimizationDataSchema;
   payload?: Json;
-  [key: string]: Json | undefined;
+  [key: string]:
+    | Json
+    | LlmOptimizationModelTransition
+    | LlmOptimizationTokenImpact
+    | LlmOptimizationDataSchema
+    | undefined;
 }
 ```
 
@@ -366,10 +548,141 @@ Canonical result returned by an LLM request intercept.
 
 ```ts
 export interface LlmRequestInterceptOutcome {
-  request: Json;
+  request: LlmRequestShape;
   annotated?: Json | null;
   pendingMarks?: PendingMarkSpec[];
   optimizationContributions?: LlmOptimizationContribution[];
+  [key: string]: JsonValue | PendingMarkSpec[] | LlmOptimizationContribution[] | undefined;
+}
+```
+
+### `ConfigDiagnostic`
+
+```ts
+export interface ConfigDiagnostic {
+  level: 'warning' | 'error';
+  code: string;
+  component?: string;
+  field?: string;
+  message: string;
+}
+```
+
+### `ToolExecutionInterceptOutcome`
+
+```ts
+export interface ToolExecutionInterceptOutcome extends ToolExecutionResult {
+  pendingMarks?: PendingMarkSpec[];
+  [key: string]: JsonValue | PendingMarkSpec[] | undefined;
+}
+```
+
+### `PluginContext`
+
+```ts
+export interface PluginContext {
+  registerConditionalMiddlewareGuardrail(
+    name: string,
+    kinds: Array<RuntimeRegistrationKind | RuntimeRegistrationKindName>,
+    registrationName: string,
+    guardrail: (kinds: RuntimeRegistrationKind[], registrationName: string) => string | null,
+  ): void;
+  registerSubscriber(name: string, callback: (event: JsonObject) => void | Promise<void>): void;
+  registerEventMetadataInjector<TMetadata extends EventMetadataCompatible<TMetadata>>(
+    name: string,
+    priority: number,
+    callback: (event: JsonObject) => TMetadata | Promise<TMetadata>,
+  ): void;
+  registerMarkSanitizeGuardrail<TFields extends EventSanitizeFieldsCompatible<TFields>>(
+    name: string,
+    priority: number,
+    callback: (event: JsonObject, fields: EventSanitizeFields) => TFields | Promise<TFields>,
+  ): void;
+  registerScopeSanitizeStartGuardrail<TFields extends EventSanitizeFieldsCompatible<TFields>>(
+    name: string,
+    priority: number,
+    callback: (event: JsonObject, fields: EventSanitizeFields) => TFields | Promise<TFields>,
+  ): void;
+  registerScopeSanitizeEndGuardrail<TFields extends EventSanitizeFieldsCompatible<TFields>>(
+    name: string,
+    priority: number,
+    callback: (event: JsonObject, fields: EventSanitizeFields) => TFields | Promise<TFields>,
+  ): void;
+  registerToolSanitizeRequestGuardrail<TValue extends JsonCompatible<TValue>>(
+    name: string,
+    priority: number,
+    callback: (name: string, args: Json) => TValue | Promise<TValue>,
+  ): void;
+  registerToolSanitizeResponseGuardrail<TValue extends JsonCompatible<TValue>>(
+    name: string,
+    priority: number,
+    callback: (name: string, result: Json) => TValue | Promise<TValue>,
+  ): void;
+  registerToolConditionalExecutionGuardrail(
+    name: string,
+    priority: number,
+    callback: (name: string, args: Json) => string | null | Promise<string | null>,
+  ): void;
+  registerLlmSanitizeRequestGuardrail<TRequest extends LlmRequestCompatible<TRequest> = LlmRequestShape>(
+    name: string,
+    priority: number,
+    callback: (
+      request: LlmRequestShape,
+      context: LlmSanitizeRequestContext,
+    ) => TRequest | null | Promise<TRequest | null>,
+  ): void;
+  registerLlmSanitizeResponseGuardrail<TResponse extends JsonCompatible<TResponse> = Json>(
+    name: string,
+    priority: number,
+    callback: (response: Json, context: LlmSanitizeResponseContext) => TResponse | null | Promise<TResponse | null>,
+  ): void;
+  registerLlmConditionalExecutionGuardrail(
+    name: string,
+    priority: number,
+    callback: (request: LlmRequestShape) => string | null | Promise<string | null>,
+  ): void;
+  registerLlmRequestIntercept<TOutcome extends LlmRequestInterceptOutcomeCompatible<TOutcome>>(
+    name: string,
+    priority: number,
+    breakChain: boolean,
+    callback: (args: { name: string; request: LlmRequestShape; annotated: Json | null }) => TOutcome | Promise<TOutcome>,
+  ): void;
+  registerLlmExecutionIntercept<TResponse extends JsonCompatible<TResponse>>(
+    name: string,
+    priority: number,
+    callback: (
+      request: LlmRequestShape,
+      context: LlmExecutionContext,
+      next: <TNextRequest extends LlmRequestCompatible<TNextRequest>>(request: TNextRequest) => Json | Promise<Json>,
+    ) => TResponse | Promise<TResponse>,
+  ): void;
+  registerLlmStreamExecutionIntercept<TChunk extends JsonCompatible<TChunk>>(
+    name: string,
+    priority: number,
+    callback: (
+      request: LlmRequestShape,
+      context: LlmExecutionContext,
+      next: <TNextRequest extends LlmRequestCompatible<TNextRequest>>(
+        request: TNextRequest,
+      ) => Promise<AsyncIterable<Json>>,
+    ) => AsyncIterable<TChunk> | Promise<AsyncIterable<TChunk>>,
+  ): void;
+  registerToolRequestIntercept<TArgs extends JsonCompatible<TArgs>>(
+    name: string,
+    priority: number,
+    breakChain: boolean,
+    callback: (name: string, args: Json) => TArgs | Promise<TArgs>,
+  ): void;
+  registerToolExecutionIntercept<TOutcome extends ToolExecutionInterceptOutcomeCompatible<TOutcome>>(
+    name: string,
+    priority: number,
+    callback: (
+      context: ToolExecutionContext,
+      next: <TNextArgs extends JsonCompatible<TNextArgs>>(
+        args: TNextArgs,
+      ) => ToolExecutionResult | Promise<ToolExecutionResult>,
+    ) => TOutcome | Promise<TOutcome>,
+  ): void;
 }
 ```
 
@@ -380,7 +693,7 @@ export interface LlmRequestInterceptOutcome {
 Units for utilization measurements.
 
 ```ts
-export declare const enum UtilizationUnit {
+export declare enum UtilizationUnit {
   /** Percentage. */
   Percentage = 'percentage',
   /** Fraction. */
@@ -393,7 +706,7 @@ export declare const enum UtilizationUnit {
 ### `toolCall`
 
 ```ts
-export declare function toolCall(name: string, args: Json, handle?: ScopeHandle | undefined | null, attributes?: number | undefined | null, data?: Json | undefined | null, metadata?: Json | undefined | null, toolCallId?: string | undefined | null, timestamp?: number | undefined | null): ToolHandle
+export declare function toolCall<TArgs extends JsonCompatible<TArgs>, TData extends JsonCompatible<TData> = Json, TMetadata extends JsonCompatible<TMetadata> = Json>(name: string, args: TArgs, handle?: ScopeHandle | undefined | null, attributes?: number | undefined | null, data?: TData | null, metadata?: TMetadata | null, toolCallId?: string | undefined | null, timestamp?: number | undefined | null): ToolHandle
 ```
 
 ### `toolCallEnd`
@@ -403,7 +716,7 @@ End a manual tool call lifecycle span.
 Signals that the tool call identified by `handle` has completed with the given `result`. Sanitize-response guardrails are applied to the emitted end-event payload; response intercepts run only through `toolCallExecute`. Optional `data` is used when the sanitized result is JSON null, and optional `metadata` is recorded on the end event. Optional `timestamp` is a Unix timestamp in microseconds recorded on the end event. It must be a safe integer number; omit it to use the runtime default end timestamp.
 
 ```ts
-export declare function toolCallEnd(handle: ToolHandle, result: ToolExecutionResult, data?: Json | undefined | null, metadata?: Json | undefined | null, timestamp?: number | undefined | null): void
+export declare function toolCallEnd<TResult extends ToolExecutionResultCompatible<TResult>, TData extends JsonCompatible<TData> = Json, TMetadata extends JsonCompatible<TMetadata> = Json>(handle: ToolHandle, result: TResult, data?: TData | null, metadata?: TMetadata | null, timestamp?: number | undefined | null): void
 ```
 
 ### `toolCallExecute`
@@ -413,7 +726,7 @@ Execute a tool call end-to-end with full lifecycle management.
 Runs conditional-execution guardrails (on raw args) -> request intercepts -> sanitize-request guardrails for the emitted `Start` event payload -> execution intercepts -> `func` -> sanitize-response guardrails for the emitted `End` event payload. On rejection, only a standalone Mark event is emitted (no Start/End pair) and `GuardrailRejected` is returned. Returns the final execution result; sanitize guardrails do not rewrite the caller-visible value. An optional trailing `toolCallId` is recorded in both lifecycle events.
 
 ```ts
-export declare function toolCallExecute(name: string, args: Json, func: (arg: Json) => ToolExecutionResult, handle?: ScopeHandle | undefined | null, attributes?: number | undefined | null, data?: Json | undefined | null, metadata?: Json | undefined | null, toolCallId?: string | undefined | null): Promise<ToolExecutionResult>
+export declare function toolCallExecute<TArgs extends JsonCompatible<TArgs>, TResult extends ToolExecutionResultCompatible<TResult>, TData extends JsonCompatible<TData> = Json, TMetadata extends JsonCompatible<TMetadata> = Json>(name: string, args: TArgs, func: (arg: Json) => TResult, handle?: ScopeHandle | undefined | null, attributes?: number | undefined | null, data?: TData | null, metadata?: TMetadata | null, toolCallId?: string | undefined | null): Promise<ToolExecutionResult>
 ```
 
 ### `toolCallExecuteAsync`
@@ -423,7 +736,7 @@ Execute a tool call end-to-end with a callback that returns a value or a Promise
 Runs the same lifecycle as `toolCallExecute`. An optional trailing `toolCallId` is recorded in both lifecycle events.
 
 ```ts
-export declare function toolCallExecuteAsync(name: string, args: Json, func: (arg: Json, signal: AbortSignal) => ToolExecutionResult | Promise<ToolExecutionResult>, handle?: ScopeHandle | undefined | null, attributes?: number | undefined | null, data?: Json | undefined | null, metadata?: Json | undefined | null, toolCallId?: string | undefined | null): Promise<ToolExecutionResult>
+export declare function toolCallExecuteAsync<TArgs extends JsonCompatible<TArgs>, TResult extends ToolExecutionResultCompatible<TResult>, TData extends JsonCompatible<TData> = Json, TMetadata extends JsonCompatible<TMetadata> = Json>(name: string, args: TArgs, func: (arg: Json, signal: AbortSignal) => TResult | Promise<TResult>, handle?: ScopeHandle | undefined | null, attributes?: number | undefined | null, data?: TData | null, metadata?: TMetadata | null, toolCallId?: string | undefined | null): Promise<ToolExecutionResult>
 ```
 
 ### `toolConditionalExecution`
@@ -431,7 +744,7 @@ export declare function toolCallExecuteAsync(name: string, args: Json, func: (ar
 Run the registered tool conditional execution guardrail chain. Throws if any guardrail rejects.
 
 ```ts
-export declare function toolConditionalExecution(name: string, args: Json): Promise<void>
+export declare function toolConditionalExecution<TArgs extends JsonCompatible<TArgs>>(name: string, args: TArgs): Promise<void>
 ```
 
 ### `toolRequestIntercepts`
@@ -439,7 +752,7 @@ export declare function toolConditionalExecution(name: string, args: Json): Prom
 Run the registered tool request intercept chain on the given arguments. Returns the transformed arguments.
 
 ```ts
-export declare function toolRequestIntercepts(name: string, args: Json): Promise<unknown>
+export declare function toolRequestIntercepts<TArgs extends JsonCompatible<TArgs>>(name: string, args: TArgs): Promise<Json>
 ```
 
 ### `trace`
@@ -447,7 +760,7 @@ export declare function toolRequestIntercepts(name: string, args: Json): Promise
 Emit a trace-level operational log record through Relay's configured sinks.
 
 ```ts
-export declare function trace(message: string, target?: string | undefined | null, fields?: Json | undefined | null): void
+export declare function trace<TFields extends JsonCompatible<TFields> = Json>(message: string, target?: string | undefined | null, fields?: TFields | null): void
 ```
 
 ### `validate`
@@ -479,7 +792,7 @@ export declare function validateExact(config: Json): Json
 Emit a warn-level operational log record through Relay's configured sinks.
 
 ```ts
-export declare function warn(message: string, target?: string | undefined | null, fields?: Json | undefined | null): void
+export declare function warn<TFields extends JsonCompatible<TFields> = Json>(message: string, target?: string | undefined | null, fields?: TFields | null): void
 ```
 
 ### `withScope`
@@ -493,7 +806,7 @@ Optional `handle` sets the parent scope; `attributes` is a bitfield of scope att
 Returns a Promise that resolves with the callback's return value.
 
 ```ts
-export declare function withScope(name: string, scopeType: ScopeType, callback: (...args: any[]) => any, handle?: ScopeHandle | undefined | null, attributes?: number | undefined | null, data?: Json | undefined | null, metadata?: Json | undefined | null, input?: Json | undefined | null): Promise<unknown>
+export declare function withScope<T extends JsonCompatible<T> | void = Json, TData extends JsonCompatible<TData> = Json, TMetadata extends JsonCompatible<TMetadata> = Json, TInput extends JsonCompatible<TInput> = Json>(name: string, scopeType: ScopeType, callback: (handle: ScopeHandle) => T | Promise<T>, handle?: ScopeHandle | undefined | null, attributes?: number | undefined | null, data?: TData | null, metadata?: TMetadata | null, input?: TInput | null): Promise<T extends void ? null : T>
 ```
 
 ### `withScopeStack`
@@ -503,10 +816,196 @@ Run a callback with an isolated scope stack installed.
 The caller's stack is restored immediately after callback invocation. When the callback returns a Promise, the requested stack remains active for that Promise until it settles and is then expired for inherited detached work. Use this helper instead of `setThreadScopeStack` to isolate concurrent async branches.
 
 ```ts
-export declare function withScopeStack(stack: ScopeStack, callback: (...args: any[]) => any): unknown
+export declare function withScopeStack<T>(stack: ScopeStack, callback: () => T): T
 ```
 
 ## Type Aliases
+
+### `JsonPrimitive`
+
+```ts
+export type JsonPrimitive = string | number | boolean | null;
+```
+
+### `JsonObject`
+
+```ts
+export type JsonObject = { [Key in string]: JsonValue };
+```
+
+### `JsonArray`
+
+```ts
+export type JsonArray = JsonValue[] | readonly JsonValue[];
+```
+
+### `JsonValue`
+
+```ts
+export type JsonValue = JsonPrimitive | JsonObject | JsonArray;
+```
+
+### `Json`
+
+```ts
+export type Json = JsonValue;
+```
+
+### `LlmRequestShape`
+
+```ts
+export type LlmRequestShape = {
+  headers: JsonObject;
+```
+
+### `JsonCompatible`
+
+```ts
+export type JsonCompatible<T> =
+  | JsonValue
+  | ([T] extends [{} | null]
+      ? [JsonShaped<T>] extends [never]
+        ? never
+        : { [K in keyof T]: JsonProperty<T[K]> }
+      : never);
+```
+
+### `JsonObjectCompatible`
+
+```ts
+export type JsonObjectCompatible<T> =
+  | JsonObject
+  | ([T] extends [readonly unknown[]]
+      ? never
+      : [T] extends [object]
+        ? [JsonShaped<T>] extends [never]
+          ? never
+          : { [K in keyof T]: JsonProperty<T[K]> }
+        : never);
+```
+
+### `LlmRequestCompatible`
+
+```ts
+export type LlmRequestCompatible<T> =
+  | LlmRequestOpen
+  | ([T] extends [object]
+      ? [JsonShaped<T>] extends [never]
+        ? never
+        : { [K in keyof T]: K extends 'headers' ? JsonObjectProperty<T[K]> : JsonProperty<T[K]> } & Record<
+            'headers' | 'content',
+            unknown
+          >
+      : never);
+```
+
+### `ToolExecutionResultCompatible`
+
+```ts
+export type ToolExecutionResultCompatible<T> =
+  | ToolExecutionResultOpen
+  | ([T] extends [object]
+      ? [JsonShaped<T>] extends [never]
+        ? never
+        : { [K in keyof T]: JsonProperty<T[K]> } & Record<'result', unknown>
+      : never);
+```
+
+### `ToolExecutionInterceptOutcomeCompatible`
+
+```ts
+export type ToolExecutionInterceptOutcomeCompatible<T> =
+  | ToolExecutionInterceptOutcome
+  | ([T] extends [object]
+      ? [JsonShaped<T>] extends [never]
+        ? never
+        : { [K in keyof T]: K extends 'pendingMarks' ? PendingMarksProperty<T[K]> : JsonProperty<T[K]> } & Record<
+            'result',
+            unknown
+          >
+      : never);
+```
+
+### `LlmRequestInterceptOutcomeCompatible`
+
+```ts
+export type LlmRequestInterceptOutcomeCompatible<T> =
+  | LlmRequestInterceptOutcome
+  | ([T] extends [object]
+      ? [JsonShaped<T>] extends [never]
+        ? never
+        : {
+            [K in keyof T]: K extends 'request'
+              ? LlmRequestProperty<T[K]>
+              : K extends 'pendingMarks'
+                ? PendingMarksProperty<T[K]>
+                : K extends 'optimizationContributions'
+                  ? LlmOptimizationContribution[]
+                  : JsonProperty<T[K]>;
+```
+
+### `EventSanitizeFieldsCompatible`
+
+```ts
+export type EventSanitizeFieldsCompatible<T> =
+  | EventSanitizeFieldsOpen
+  | ([T] extends [object]
+      ? [JsonShaped<T>] extends [never]
+        ? never
+        : { [K in keyof T]: JsonProperty<T[K]> }
+      : never);
+```
+
+### `EventMetadataCompatible`
+
+```ts
+export type EventMetadataCompatible<T> =
+  | EventMetadata
+  | ([T] extends [object]
+      ? [JsonShaped<T>] extends [never]
+        ? never
+        : { [K in keyof T]: EventMetadataProperty<T[K]> }
+      : never);
+```
+
+### `MetricMeasurementsCompatible`
+
+```ts
+export type MetricMeasurementsCompatible<T> =
+  | readonly MetricMeasurement[]
+  | ([T] extends [readonly unknown[]] ? { [I in keyof T]: MetricMeasurementProperty<T[I]> } : never);
+```
+
+### `RuntimeRegistrationKindName`
+
+```ts
+export type RuntimeRegistrationKindName = `${RuntimeRegistrationKind}`;
+```
+
+### `ResourceMetricsMeasurementScope`
+
+```ts
+export type ResourceMetricsMeasurementScope = 'runtime_default' | ResourceMeasurementScope;
+```
+
+### `ResourceUnitKind`
+
+```ts
+export type ResourceUnitKind =
+  | DurationUnit
+  | CapacityUnit
+  | DataUnit
+  | BandwidthUnit
+  | CpuUnit
+  | UtilizationUnit
+  | CountUnit;
+```
+
+### `ResourceUnit`
+
+```ts
+export type ResourceUnit<U extends ResourceUnitKind> = U | `${U}`;
+```
 
 ### `ResourceOperatingSystem`
 
@@ -574,7 +1073,7 @@ export type EventMetadataScalar = string | number | boolean;
 Flat value accepted in event metadata additions. After JSON conversion, numeric arrays must contain only integer values or only floating-point values.
 
 ```ts
-export type EventMetadataValue = EventMetadataScalar | string[] | number[] | boolean[];
+export type EventMetadataValue = EventMetadataScalar | readonly string[] | readonly number[] | readonly boolean[];
 ```
 
 ### `EventMetadata`

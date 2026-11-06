@@ -82,24 +82,27 @@ import {
   llmCallEnd,
   toolCall,
   toolCallEnd,
+  type Json,
+  type JsonObject,
   type LlmHandle,
   type ToolHandle,
 } from 'nemo-relay-node';
 
-export function frameworkToolStarted(name: string, args: unknown) {
+export function frameworkToolStarted(name: string, args: Json) {
   return toolCall(name, args, null, null, null, null, null);
 }
 
-export function frameworkToolFinished(handle: ToolHandle, result: unknown): void {
+export function frameworkToolFinished(handle: ToolHandle, result: Json): void {
   toolCallEnd(handle, { result }, null, null);
 }
 
-export function frameworkLlmStarted(provider: string, payload: { model?: string }) {
+export function frameworkLlmStarted(provider: string, payload: JsonObject) {
   const request = new LlmRequest({}, payload);
-  return llmCall(provider, request, null, null, null, null, payload.model ?? null);
+  const model = payload.model;
+  return llmCall(provider, request, null, null, null, null, typeof model === 'string' ? model : null);
 }
 
-export function frameworkLlmFinished(handle: LlmHandle, response: unknown): void {
+export function frameworkLlmFinished(handle: LlmHandle, response: Json): void {
   llmCallEnd(handle, response, null, null);
 }
 ```

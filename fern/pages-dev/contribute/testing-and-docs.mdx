@@ -176,7 +176,7 @@ Run the affected targets directly:
 ```bash
 just test-rust
 
-# Run Rust tests with code coverage reporting, requires installing cargo-llvm-cov with `cargo install cargo-llvm-cov`
+# Rust tests with coverage. Needs `cargo install cargo-llvm-cov` and `rustup component add llvm-tools`.
 just ci=true test-rust
 
 just test-python

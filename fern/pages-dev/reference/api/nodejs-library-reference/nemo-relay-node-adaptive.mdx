@@ -118,6 +118,23 @@ export interface ResponseCacheConfig {
 }
 ```
 
+### `ResponseCachePluginConfig`
+
+```ts
+export interface ResponseCachePluginConfig {
+  ttl_seconds?: number;
+  /** Required non-empty cache trust domain. */
+  namespace?: string;
+  priority?: number;
+  bypass_rate?: number;
+  cache_nondeterministic?: boolean;
+  key_strategy?: ResponseCacheKeyStrategy;
+  header_allowlist?: string[];
+  backend?: BackendSpec;
+  tools?: ToolCachePluginConfig;
+}
+```
+
 ### `ToolClass`
 
 Shared policy; omitted TTL and bypass rate inherit response-cache defaults.
@@ -564,6 +581,34 @@ export declare function setLatencySensitivity(value: number): void;
 
 ```ts
 export type ResponseCacheKeyStrategy = (typeof ResponseCacheKeyStrategy)[keyof typeof ResponseCacheKeyStrategy];
+```
+
+### `ToolClassPluginConfig`
+
+```ts
+export type ToolClassPluginConfig = Omit<ToolClass, 'ttlSeconds' | 'bypassRate' | 'toolVersion' | 'argSkip'> & {
+  ttl_seconds?: number;
+```
+
+### `ToolOverridePluginConfig`
+
+```ts
+export type ToolOverridePluginConfig = Omit<ToolOverride, 'ttlSeconds' | 'bypassRate' | 'toolVersion' | 'argSkip'> & {
+  ttl_seconds?: number;
+```
+
+### `ToolCachePluginConfig`
+
+```ts
+export type ToolCachePluginConfig = Omit<ToolCacheConfig, 'cacheErrors' | 'default' | 'classes' | 'overrides'> & {
+  cache_errors?: boolean;
+```
+
+### `AdaptivePluginConfig`
+
+```ts
+export type AdaptivePluginConfig = Omit<Config, 'responseCache'> & {
+  response_cache?: ResponseCachePluginConfig;
 ```
 
 ## Constants

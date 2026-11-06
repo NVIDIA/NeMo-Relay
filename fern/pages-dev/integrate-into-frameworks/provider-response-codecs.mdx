@@ -527,17 +527,20 @@ const codec = new OpenAIChatCodec();
 const response = await typedLlmExecute(
   'openai-chat',
   { headers: {}, content: { model: 'gpt-4o-mini', messages: [] } },
-  async (request) => ({
-    id: 'chatcmpl-demo',
-    model: request.content.model,
-    choices: [
-      {
-        finish_reason: 'stop',
-        message: { role: 'assistant', content: 'Hello from the provider.' },
-      },
-    ],
-    usage: { prompt_tokens: 8, completion_tokens: 5, total_tokens: 13 },
-  }),
+  async (providerRequest) => {
+    const content = providerRequest.content as { model: string };
+    return {
+      id: 'chatcmpl-demo',
+      model: content.model,
+      choices: [
+        {
+          finish_reason: 'stop',
+          message: { role: 'assistant', content: 'Hello from the provider.' },
+        },
+      ],
+      usage: { prompt_tokens: 8, completion_tokens: 5, total_tokens: 13 },
+    };
+  },
   new JsonPassthrough(),
   {
     modelName: 'gpt-4o-mini',
@@ -619,18 +622,26 @@ nemo_relay.subscribers.register("response-debugger", on_event)
 
 <Tab title="Node.js" language="node">
 ```ts
-import { registerSubscriber } from 'nemo-relay-node';
+import { registerSubscriber, type JsonObject, type JsonValue } from 'nemo-relay-node';
+
+const isJsonObject = (value: JsonValue | undefined): value is JsonObject =>
+  typeof value === 'object' && value !== null && !Array.isArray(value);
 
 registerSubscriber('response-debugger', (event) => {
-  const annotated = event.category_profile?.annotated_response;
-  if (!annotated) {
+  const profile = event.category_profile;
+  if (!isJsonObject(profile)) {
+    return;
+  }
+  const annotated = profile.annotated_response;
+  if (!isJsonObject(annotated)) {
     return;
   }
 
   console.log('model', annotated.model);
   console.log('message', annotated.message);
   console.log('usage', annotated.usage);
-  console.log('cost', annotated.usage?.cost);
+  const usage = annotated.usage;
+  console.log('cost', isJsonObject(usage) ? usage.cost : null);
 });
 ```
 </Tab>
