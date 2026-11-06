@@ -15,14 +15,16 @@ stages:
   - publish
 
 variables:
+  NEMO_RELAY_CI_BUF_VERSION: "1.75.0"
   NEMO_RELAY_CI_DEBIAN_VERSION: "trixie"
   # Artifactory 7.133 rejects Cargo 1.96's required octet-stream publish header.
   NEMO_RELAY_CI_CARGO_PUBLISH_VERSION: "1.93.0"
-  NEMO_RELAY_CI_JUST_VERSION: "1.40.0"
+  NEMO_RELAY_CI_JUST_VERSION: "1.47.1"
   NEMO_RELAY_CI_NODE_VERSION: "24"
   NEMO_RELAY_CI_PYTHON_VERSION: "3.11"
+  NEMO_RELAY_CI_PROTOC_VERSION: "31.1"
   NEMO_RELAY_CI_RUST_VERSION: "1.96.1"
-  NEMO_RELAY_CI_UV_VERSION: "0.9.28"
+  NEMO_RELAY_CI_UV_VERSION: "0.13.4"
   NEMO_RELAY_CI_GITHUB_REPOSITORY: "NVIDIA/NeMo-Relay"
   NEMO_RELAY_CI_GITHUB_WORKFLOW_FILE: "ci.yaml"
   NEMO_RELAY_CI_GITHUB_RUN_WAIT_SECONDS: "7200"
@@ -270,7 +272,20 @@ publish:artifactory:cargo:
     - job: collect:github-artifacts
       artifacts: true
   before_script:
-    - apt-get update -qq && apt-get install -y --no-install-recommends ca-certificates curl git nodejs && rm -rf /var/lib/apt/lists/*
+    - apt-get update -qq && apt-get install -y --no-install-recommends ca-certificates curl git nodejs unzip && rm -rf /var/lib/apt/lists/*
+    - |
+      set -eu
+      case "$(uname -m)" in
+        x86_64) protoc_arch=x86_64 ;;
+        aarch64) protoc_arch=aarch_64 ;;
+        *) echo "Error: unsupported protoc architecture: $(uname -m)" >&2; exit 1 ;;
+      esac
+      curl -fsSL "https://github.com/protocolbuffers/protobuf/releases/download/v${NEMO_RELAY_CI_PROTOC_VERSION}/protoc-${NEMO_RELAY_CI_PROTOC_VERSION}-linux-${protoc_arch}.zip" -o /tmp/protoc.zip
+      unzip -qo /tmp/protoc.zip 'bin/protoc' 'include/*' -d /usr/local
+      protoc --version
+    - curl -fsSL "https://github.com/bufbuild/buf/releases/download/v${NEMO_RELAY_CI_BUF_VERSION}/buf-$(uname -s)-$(uname -m)" -o /usr/local/bin/buf
+    - chmod +x /usr/local/bin/buf
+    - buf --version
     - rustup toolchain install --profile minimal "${NEMO_RELAY_CI_CARGO_PUBLISH_VERSION}"
     - cargo install just --version "${NEMO_RELAY_CI_JUST_VERSION}" --locked
     - curl -LsSf https://astral.sh/uv/install.sh -o /tmp/install-uv.sh
@@ -348,6 +363,10 @@ publish:artifactory:cargo:
       )"
 
       for crate in $crates; do
+        if "$publish_cargo" info "${crate}@${version}" --registry artifactory >/dev/null 2>&1; then
+          echo "${crate} ${version} already exists in Artifactory; skipping"
+          continue
+        fi
         RUSTC="$publish_rustc" "$publish_cargo" publish --package "$crate" --registry artifactory --allow-dirty
       done
 
