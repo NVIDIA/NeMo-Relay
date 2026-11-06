@@ -4,14 +4,17 @@
 import { describe, it } from 'node:test';
 import assert from 'node:assert/strict';
 import { createRequire } from 'node:module';
-import { readFileSync as readNodeFileSync } from 'node:fs';
+import { fileURLToPath } from 'node:url';
+import { spawnSync } from 'node:child_process';
+import { copyFileSync, mkdirSync, mkdtempSync, readFileSync as readNodeFileSync, rmSync } from 'node:fs';
+import { tmpdir } from 'node:os';
 import path from 'node:path';
 import vm from 'node:vm';
 
 const require = createRequire(import.meta.url);
-const realLib = require('../index.js');
-const indexFilename = new URL('../index.js', import.meta.url);
-const indexDir = path.dirname(indexFilename.pathname);
+const realLib = require('../binding.js');
+const indexFilename = new URL('../binding.js', import.meta.url);
+const indexDir = path.dirname(fileURLToPath(indexFilename));
 const indexSource = readNodeFileSync(indexFilename, 'utf8');
 
 const PACKAGE = 'nemo-relay-node';
@@ -308,5 +311,41 @@ describe('index.js loader', () => {
       /package missing/,
       new RegExp(`Cannot find module '\\./${BINARY}\\.freebsd-x64\\.node'`),
     );
+  });
+
+  it('propagates loader failures through the public entry point', () => {
+    const packageRoot = mkdtempSync(path.join(tmpdir(), 'nemo-relay-node-'));
+    try {
+      mkdirSync(path.join(packageRoot, 'dist'));
+      for (const file of ['package.json', 'binding.js', 'dist/index.js']) {
+        copyFileSync(path.join(indexDir, file), path.join(packageRoot, file));
+      }
+      const script = `
+        try {
+          require(${JSON.stringify(path.join(packageRoot, 'dist', 'index.js'))});
+        } catch (error) {
+          const messages = [];
+          for (let current = error; current; current = current.cause) {
+            messages.push(String(current.message ?? current));
+          }
+          process.stdout.write(JSON.stringify(messages));
+          process.exitCode = 1;
+        }
+      `;
+      const result = spawnSync(process.execPath, ['--eval', script], { encoding: 'utf8' });
+      assert.equal(result.status, 1, result.stderr);
+      const messages = JSON.parse(result.stdout);
+      assert.match(messages[0], /Cannot find native binding/);
+      assert.ok(
+        messages.some((message) => new RegExp(`Cannot find module '${RegExp.escape(PACKAGE)}-`).test(message)),
+        `expected a platform package cause, got: ${JSON.stringify(messages)}`,
+      );
+      assert.ok(
+        messages.some((message) => new RegExp(`Cannot find module '\\./${RegExp.escape(BINARY)}\\.`).test(message)),
+        `expected a local binary cause, got: ${JSON.stringify(messages)}`,
+      );
+    } finally {
+      rmSync(packageRoot, { recursive: true, force: true });
+    }
   });
 });

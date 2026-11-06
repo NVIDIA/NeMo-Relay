@@ -177,12 +177,13 @@ ensure_docs_dependencies() {
 
 ensure_node_docs_declarations() {
     cd "$NEMO_RELAY_REPO_ROOT"
-    local types_file="crates/node/index.d.ts"
+    local types_file="crates/node/dist/index.d.ts"
     local newest_source=""
 
     if [[ -f "$types_file" ]]; then
         newest_source="$(
-            find crates/node/src crates/node/Cargo.toml crates/node/build.rs crates/node/root-types.d.ts \
+            find crates/node/src crates/node/ts crates/node/Cargo.toml crates/node/build.rs \
+                crates/node/binding-types.d.ts crates/node/tsconfig.json \
                 -type f -newer "$types_file" -print -quit
         )"
     fi
@@ -1310,8 +1311,9 @@ clean:
         crates/**/*.profraw \
         crates/node/*.node \
         crates/node/coverage \
-        crates/node/index.d.ts \
-        crates/node/index.js \
+        crates/node/binding.d.ts \
+        crates/node/binding.js \
+        crates/node/dist \
         crates/node/junit.xml \
         crates/node/node_modules \
         integrations/openclaw/*.profraw \

@@ -6,7 +6,7 @@ import assert from 'node:assert/strict';
 import { createRequire } from 'node:module';
 
 const require = createRequire(import.meta.url);
-const lib = require('../index.js');
+const lib = require('../dist/index.js');
 
 const { AtifExporter, ScopeType, pushScope, popScope, llmCall, llmCallEnd } = lib;
 

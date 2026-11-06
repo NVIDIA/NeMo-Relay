@@ -7,7 +7,7 @@ import { readFileSync } from 'node:fs';
 import { createRequire } from 'node:module';
 
 const require = createRequire(import.meta.url);
-const lib = require('../index.js');
+const lib = require('../dist/index.js');
 
 const {
   pushScope,
@@ -479,14 +479,14 @@ describe('Tool execute', () => {
   });
 
   it('generated execute declarations expose an additive trailing toolCallId', () => {
-    const declarations = readFileSync(new URL('../index.d.ts', import.meta.url), 'utf8');
+    const declarations = readFileSync(new URL('../binding.d.ts', import.meta.url), 'utf8');
 
     assert.match(declarations, /toolCallExecute<[^\n]*metadata\?: TMetadata \| null,[^\n]*toolCallId\?: string/);
     assert.match(declarations, /toolCallExecuteAsync<[^\n]*metadata\?: TMetadata \| null,[^\n]*toolCallId\?: string/);
   });
 
   it('generated execution-intercept declarations use context and next parameters', () => {
-    const declarations = readFileSync(new URL('../index.d.ts', import.meta.url), 'utf8');
+    const declarations = readFileSync(new URL('../binding.d.ts', import.meta.url), 'utf8');
 
     assert.match(
       declarations,
