@@ -9,6 +9,7 @@ ci:
   - '.github/workflows/**'
   - 'scripts/native_abi_contract.py'
   - 'scripts/tests/test_native_abi_contract.py'
+  - 'scripts/tests/test_check_native_abi_toolchains.py'
   - 'codecov.yml'
 
 installer:

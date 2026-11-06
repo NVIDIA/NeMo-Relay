@@ -22,10 +22,16 @@ def main() -> None:
     parser.add_argument("toolchain", help="Installed comparison toolchain, such as 1.94.0")
     args = parser.parse_args()
     root = Path(__file__).resolve().parent.parent
-    current = root / "target/native-abi-fixtures/debug"
-    target = root / "target/native-abi-toolchains" / args.toolchain
-    comparison = target / "debug"
     environment = dict(os.environ)
+    current_target = (
+        root / (environment.get("NEMO_RELAY_NATIVE_ABI_FIXTURE_TARGET_DIR") or "target/native-abi-fixtures")
+    ).resolve()
+    target = (root / "target/native-abi-toolchains" / args.toolchain).resolve()
+    if current_target.is_relative_to(target) or target.is_relative_to(current_target):
+        parser.error("current and comparison fixture target directories must not overlap")
+    current = current_target / "debug"
+    comparison = target / "debug"
+    environment["NEMO_RELAY_NATIVE_ABI_FIXTURE_TARGET_DIR"] = str(current_target)
     run(["just", "build-native-abi-test-fixtures"], root, environment)
     older = environment | {"NEMO_RELAY_NATIVE_ABI_FIXTURE_TARGET_DIR": str(target)}
     run(["rustup", "run", args.toolchain, "just", "build-native-abi-test-fixtures"], root, older)
