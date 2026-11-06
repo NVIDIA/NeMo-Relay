@@ -1671,13 +1671,15 @@ fn atif_shutdown_cleanup(
     manager: Arc<Mutex<AtifDispatcher>>,
     shutdown_storage: AtifStorageList,
 ) -> PluginRegistrationCleanupOutcome {
+    // This marks every known agent written, so none of them can queue an upload after the drain.
+    let flushed = flush_atif_shutdown_work(&manager);
     if let Ok(queue) = manager
         .lock()
         .map(|guard| Arc::clone(&guard.delivery_queue))
     {
         queue.drain();
     }
-    let (work, deregistration_error) = match flush_atif_shutdown_work(&manager) {
+    let (work, deregistration_error) = match flushed {
         Ok(work) => work,
         Err(error) => return PluginRegistrationCleanupOutcome::NotRemoved(error),
     };
