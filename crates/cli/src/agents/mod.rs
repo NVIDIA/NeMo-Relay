@@ -492,9 +492,13 @@ pub(crate) fn prepare_launch(
     );
     match agent {
         CodingAgent::Codex => codex::launch::prepare(launch, gateway_url),
-        CodingAgent::ClaudeCode => {
-            claude::launch::prepare(launch, gateway_url, proxy_credential, dry_run)
-        }
+        CodingAgent::ClaudeCode => claude::launch::prepare(
+            launch,
+            gateway_url,
+            proxy_credential,
+            crate::upstream_auth::mints_credential(&resolved.gateway, true),
+            dry_run,
+        ),
         // pi is the only agent whose launcher needs the gateway's upstream configuration: its
         // extension redirects model traffic only when the selected model already targets that
         // upstream. See `pi::launch::prepare`.

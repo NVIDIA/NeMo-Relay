@@ -14,13 +14,14 @@ pub(crate) fn prepare(
     launch: &mut PreparedAgentLaunch,
     gateway_url: &str,
     proxy_credential: &crate::provider_auth::TransparentProxyCredential,
+    relay_supplies_credential: bool,
     dry_run: bool,
 ) -> Result<(), CliError> {
     // A process default lets Claude's settings.env retain precedence, including opt-outs.
-    if std::env::var_os("CLAUDE_CODE_GATEWAY_HINT_HEADERS").is_none() {
-        launch
-            .env
-            .push(("CLAUDE_CODE_GATEWAY_HINT_HEADERS".into(), "1".into()));
+    set_process_default(launch, "CLAUDE_CODE_GATEWAY_HINT_HEADERS", "1");
+    if relay_supplies_credential {
+        // Claude Code's /model menu then lists the models the gateway's /v1/models returns.
+        set_process_default(launch, "CLAUDE_CODE_ENABLE_GATEWAY_MODEL_DISCOVERY", "1");
     }
     let proxy_header = format!(
         "{}: {}",
@@ -108,6 +109,12 @@ pub(crate) fn prepare(
     launch.temp_dirs.push(root);
     record_hook_integrity_risk(launch, hook_integrity_risk);
     Ok(())
+}
+
+fn set_process_default(launch: &mut PreparedAgentLaunch, name: &str, value: &str) {
+    if std::env::var_os(name).is_none() {
+        launch.env.push((name.into(), value.into()));
+    }
 }
 
 #[derive(Default)]

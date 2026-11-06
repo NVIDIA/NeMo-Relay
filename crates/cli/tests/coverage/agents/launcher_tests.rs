@@ -1369,6 +1369,80 @@ fn test_claude_gateway_hint_headers_explicit_environment_is_not_overridden() {
     }
 }
 
+fn claude_dry_run_with(gateway: GatewayConfig) -> PreparedAgentLaunch {
+    let resolved = ResolvedConfig {
+        gateway,
+        ..ResolvedConfig::default()
+    };
+    PreparedAgentLaunch::new(
+        CodingAgent::ClaudeCode,
+        vec!["claude".into()],
+        "http://127.0.0.1:1234",
+        &resolved,
+        true,
+    )
+    .unwrap()
+}
+
+fn launch_env<'a>(prepared: &'a PreparedAgentLaunch, name: &str) -> Option<&'a str> {
+    prepared
+        .env
+        .iter()
+        .find_map(|(key, value)| (key == name).then_some(value.as_str()))
+}
+
+fn relay_oidc_gateway() -> GatewayConfig {
+    GatewayConfig {
+        anthropic_oidc: Some(crate::oidc::OidcSource::new(
+            "https://issuer.example",
+            "relay-client",
+            None,
+        )),
+        ..GatewayConfig::default()
+    }
+}
+
+fn relay_helper_gateway() -> GatewayConfig {
+    GatewayConfig {
+        anthropic_api_key_helper: Some(crate::upstream_auth::ApiKeyHelper {
+            command: "not-executed".into(),
+            args: vec![],
+            timeout_ms: 10_000,
+            cache_ttl_ms: 0,
+            cache: Default::default(),
+            auth_scheme: None,
+        }),
+        ..GatewayConfig::default()
+    }
+}
+
+#[test]
+fn test_claude_gateway_model_discovery_follows_relay_owned_credential() {
+    const DISCOVERY: &str = "CLAUDE_CODE_ENABLE_GATEWAY_MODEL_DISCOVERY";
+    let _env = EnvScope::set(&[(DISCOVERY, None)]);
+
+    for gateway in [relay_oidc_gateway(), relay_helper_gateway()] {
+        let prepared = claude_dry_run_with(gateway);
+        assert_eq!(launch_env(&prepared, DISCOVERY), Some("1"));
+    }
+    let caller_credential = claude_dry_run_with(GatewayConfig::default());
+    assert_eq!(launch_env(&caller_credential, DISCOVERY), None);
+}
+
+#[test]
+fn test_claude_gateway_model_discovery_explicit_environment_is_not_overridden() {
+    const DISCOVERY: &str = "CLAUDE_CODE_ENABLE_GATEWAY_MODEL_DISCOVERY";
+    for value in ["0", ""] {
+        let _env = EnvScope::set(&[(DISCOVERY, Some(std::ffi::OsStr::new(value)))]);
+        let prepared = claude_dry_run_with(relay_oidc_gateway());
+        assert_eq!(
+            launch_env(&prepared, DISCOVERY),
+            None,
+            "explicit value {value:?} must remain inherited"
+        );
+    }
+}
+
 #[test]
 fn claude_transparent_proxy_header_preserves_existing_custom_headers() {
     let _env = EnvScope::set(&[(
