@@ -7,7 +7,7 @@ mod auth;
 mod completions;
 mod configure;
 mod daemon;
-mod diagnostics;
+mod doctor;
 mod gateway;
 mod hook_forward;
 mod install;
@@ -30,9 +30,7 @@ use self::plugins::PluginsCommand;
 use self::root::{Cli, Command};
 use self::serve::ServerArgs;
 use crate::agents::CodingAgent;
-use crate::{
-    configuration as runtime_configuration, diagnostics as doctor_diagnostics, error, server,
-};
+use crate::{configuration as runtime_configuration, error, server};
 
 // Runs the async CLI entrypoint and converts any surfaced gateway error into a non-zero process
 // exit. Errors are printed once here so subcommands can return structured errors without also
@@ -396,10 +394,8 @@ async fn run_command(
         Command::Config(command) => configure::execute(command, server).await,
         Command::Plugins(command) => plugins::execute(command, server),
         Command::ModelPricing(command) => model_pricing::execute(command),
-        Command::Doctor(command) => {
-            diagnostics::execute(command, server, logging_fallback_error).await
-        }
-        Command::Agents(command) => doctor_diagnostics::run_agents(command.json).await,
+        Command::Doctor(command) => doctor::execute(command, server, logging_fallback_error).await,
+        Command::Agents(command) => crate::doctor::run_agents(command.json).await,
         Command::Completions(command) => completions::execute(command),
     }
 }
@@ -428,10 +424,10 @@ async fn run_default(
     if runtime_args.requested_daemon_mode() {
         serve_gateway(server_args, bootstrap_shutdown_token).await
     } else if runtime_configuration::any_config_file_exists() {
-        doctor_diagnostics::run_doctor(
+        crate::doctor::run_doctor(
             None,
             false,
-            doctor_diagnostics::DoctorProbeMode::Live,
+            crate::doctor::DoctorProbeMode::Live,
             &runtime_args,
             None,
         )

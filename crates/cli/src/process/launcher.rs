@@ -21,7 +21,7 @@ use crate::agents::CodingAgent;
 use crate::configuration::{
     AgentConfigs, GatewayConfig, LaunchedAgent, ResolvedConfig, resolve_run_config,
 };
-use crate::diagnostics::UpstreamAuthInfo;
+use crate::doctor::UpstreamAuthInfo;
 use crate::error::CliError;
 use crate::plugins::lifecycle::ActiveDynamicPluginComponent;
 use crate::server;

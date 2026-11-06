@@ -56,20 +56,16 @@ pub(super) async fn execute(
         let expected_sha256 = command
             .managed_bundle_sha256
             .expect("clap requires a managed bundle SHA-256");
-        return crate::diagnostics::run_managed_bundle_doctor(
-            &bundle,
-            &expected_sha256,
-            command.json,
-        );
+        return crate::doctor::run_managed_bundle_doctor(&bundle, &expected_sha256, command.json);
     }
     if let Some(plugin) = command.plugin {
         return execute_plugin_doctor(plugin, command.install_dir, command.json);
     }
     let gateway_overrides = server.to_runtime();
-    crate::diagnostics::run_doctor(
+    crate::doctor::run_doctor(
         command.agent.map(Into::into),
         command.json,
-        crate::diagnostics::DoctorProbeMode::from_offline_flag(command.offline),
+        crate::doctor::DoctorProbeMode::from_offline_flag(command.offline),
         &gateway_overrides,
         logging_fallback_error,
     )
