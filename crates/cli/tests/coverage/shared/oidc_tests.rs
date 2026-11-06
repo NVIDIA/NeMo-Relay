@@ -684,7 +684,7 @@ fn approving_browser(
 }
 
 fn approval<'a>(
-    open: &'a (dyn Fn(&str) -> bool + Send + Sync),
+    open: &'a super::browser::Opener,
     pasted: tokio::sync::mpsc::Receiver<String>,
 ) -> BrowserApproval<'a> {
     BrowserApproval {
@@ -741,15 +741,15 @@ async fn a_redirect_for_another_attempt_does_not_end_the_sign_in() {
     let browser = approving_browser(issuer.clone(), opened, vec![Some("forged"), None]);
     let client = OidcClient::discover(&source).await.unwrap();
 
-    let session = client
-        .browser_login(
-            "openid",
-            "attempt-state",
-            approval(&browser, no_paste()),
-            |_| {},
-        )
-        .await
-        .unwrap();
+    let session = super::browser::sign_in(
+        &client,
+        "openid",
+        "attempt-state",
+        approval(&browser, no_paste()),
+        |_| {},
+    )
+    .await
+    .unwrap();
 
     assert_eq!(session.access_token, "access-1");
     assert_eq!(issuer.lock().unwrap().grants.len(), 1);
@@ -760,7 +760,7 @@ async fn a_pasted_redirect_completes_a_sign_in_without_a_local_browser() {
     let (source, issuer) = start_issuer().await;
     let client = OidcClient::discover(&source).await.unwrap();
     let captured = issuer.clone();
-    let printed = |url: &str| {
+    let printed = move |url: &str| {
         captured.lock().unwrap().challenge = Some(query(url)["code_challenge"].clone());
         false
     };
@@ -774,15 +774,15 @@ async fn a_pasted_redirect_completes_a_sign_in_without_a_local_browser() {
     }
     let mut shown = Vec::new();
 
-    let session = client
-        .browser_login(
-            "openid",
-            "attempt-state",
-            approval(&printed, pasted),
-            |line| shown.push(line),
-        )
-        .await
-        .unwrap();
+    let session = super::browser::sign_in(
+        &client,
+        "openid",
+        "attempt-state",
+        approval(&printed, pasted),
+        |line| shown.push(line),
+    )
+    .await
+    .unwrap();
 
     assert_eq!(session.refresh_token.as_deref(), Some("refresh-1"));
     let shown = shown.join("\n");
@@ -803,14 +803,14 @@ async fn a_declined_browser_sign_in_reports_it() {
         .unwrap();
 
     let error = error_text(
-        client
-            .browser_login(
-                "openid",
-                "attempt-state",
-                approval(&printed, pasted),
-                |_| {},
-            )
-            .await,
+        super::browser::sign_in(
+            &client,
+            "openid",
+            "attempt-state",
+            approval(&printed, pasted),
+            |_| {},
+        )
+        .await,
     );
 
     assert!(error.contains("declined"), "{error}");
@@ -824,7 +824,7 @@ async fn an_unanswered_browser_sign_in_times_out() {
     let mut waiting = approval(&printed, no_paste());
     waiting.timeout = Duration::from_millis(50);
 
-    let error = error_text(client.browser_login("openid", "s", waiting, |_| {}).await);
+    let error = error_text(super::browser::sign_in(&client, "openid", "s", waiting, |_| {}).await);
 
     assert!(error.contains("timed out"), "{error}");
 }

@@ -112,6 +112,9 @@ pub(crate) enum CliError {
     /// The upstream needs an OpenID Connect sign-in that is missing or no longer valid.
     #[error("sign-in required: {0}")]
     SignInRequired(String),
+    /// A browser sign-in or a logout did not complete.
+    #[error(transparent)]
+    SignIn(#[from] crate::oidc::SignInError),
     /// The daemon definitively rejected the route credential; retrying cannot succeed.
     #[error("route credential rejected: {0}")]
     RouteCredentialRejected(String),
@@ -181,6 +184,7 @@ impl CliError {
             Self::PayloadTooLarge(_) => "payload_too_large",
             Self::Unauthorized(_) => "unauthorized",
             Self::SignInRequired(_) => "sign_in_required",
+            Self::SignIn(_) => "sign_in",
             Self::RouteCredentialRejected(_) => "route_credential_rejected",
             Self::Upstream(_) | Self::UpstreamTransport(_) => "upstream",
             Self::ProviderFailure(_) => "provider_failure",

@@ -14,6 +14,7 @@
 mod browser;
 mod client;
 mod consent;
+mod error;
 mod session;
 
 use std::path::Path;
@@ -21,15 +22,17 @@ use std::time::{Duration, SystemTime, UNIX_EPOCH};
 
 use serde::{Deserialize, Serialize};
 
-use self::browser::BrowserApproval;
-use self::client::{OidcClient, secure_origin};
+use self::client::{ISSUER_UNREACHABLE, OidcClient, secure_origin};
 use self::session::{
-    SessionLock, ensure_sessions_dir, lock_timeout, read_session, session_path, write_session,
+    Session, SessionLock, ensure_sessions_dir, lock_timeout, read_session, session_path,
+    write_session,
 };
 use crate::error::CliError;
 
+pub(crate) use self::browser::BrowserApproval;
 pub(crate) use self::client::Revocation;
 pub(crate) use self::consent::{ConsentField, CreditLimitReset};
+pub(crate) use self::error::SignInError;
 pub(crate) use self::session::sessions_dir;
 
 /// Refresh an access token this many seconds before it expires.
@@ -197,21 +200,12 @@ pub(crate) enum LoginMethod<'a> {
     Device,
 }
 
-/// The browser sign-in as the command runs it: the system browser unless `open_browser` is
-/// false, and redirect addresses pasted into the terminal.
-pub(crate) fn browser_method(open_browser: bool, port: u16) -> LoginMethod<'static> {
-    fn open(url: &str) -> bool {
-        browser::open_browser(url)
-    }
-    fn print_only(_: &str) -> bool {
-        false
-    }
-    LoginMethod::Browser(BrowserApproval {
-        port,
-        open: if open_browser { &open } else { &print_only },
-        pasted: browser::terminal_lines(),
-        timeout: browser::APPROVAL_TIMEOUT,
-    })
+/// The result of `logout`.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub(crate) enum Logout {
+    NotSignedIn,
+    /// The stored sign-in was removed, and its refresh token revoked or not.
+    Removed(Revocation),
 }
 
 /// Signs in and stores the session. A sign-in it replaces is revoked at the issuer.
@@ -222,65 +216,91 @@ pub(crate) async fn login(
     show: impl FnMut(String),
 ) -> Result<(), CliError> {
     let client = OidcClient::discover(source).await?;
-    let session = match method {
-        LoginMethod::Browser(approval) => {
-            let state = source.authorization_state(&browser::random_value()?);
-            client
-                .browser_login(&source.scope, &state, approval, show)
-                .await?
-        }
-        LoginMethod::Device if source.has_consent_restrictions() => {
-            return Err(auth_error(
-                "the device sign-in cannot carry the configured consent restrictions; sign in without --device".into(),
-            ));
-        }
-        LoginMethod::Device => client.device_login(&source.scope, show).await?,
-    };
-    ensure_sessions_dir(dir)?;
-    let path = session_path(dir, source);
-    let _lock = SessionLock::acquire(&path).await?;
-    let replaced = read_session(&path, source).ok().flatten();
-    write_session(&path, &session)?;
-    if let Some(old) = replaced.and_then(|old| old.refresh_token)
-        && session.refresh_token.as_deref() != Some(old.as_str())
+    let session = sign_in(&client, source, method, show).await?;
+    let replaced = save_session(dir, source, &session).await?;
+    if let Some(old_token) = replaced.and_then(|old| old.refresh_token)
+        && session.refresh_token.as_deref() != Some(old_token.as_str())
     {
-        client.revoke(&old).await;
+        client.revoke(&old_token).await;
     }
     Ok(())
 }
 
-/// The result of `logout`.
-#[derive(Debug, Clone, PartialEq, Eq)]
-pub(crate) enum Logout {
-    NotSignedIn,
-    /// The stored sign-in was removed; its refresh token was revoked, or not.
-    Removed(Revocation),
+async fn sign_in(
+    client: &OidcClient,
+    source: &OidcSource,
+    method: LoginMethod<'_>,
+    show: impl FnMut(String),
+) -> Result<Session, CliError> {
+    match method {
+        LoginMethod::Browser(approval) => {
+            let state = source.authorization_state(&browser::random_value()?);
+            browser::sign_in(client, &source.scope, &state, approval, show).await
+        }
+        LoginMethod::Device if source.has_consent_restrictions() => {
+            Err(SignInError::DeviceCannotCarryRestrictions.into())
+        }
+        LoginMethod::Device => client.device_login(&source.scope, show).await,
+    }
 }
 
-/// Removes a stored sign-in and revokes its refresh token at the issuer. The local sign-in is
+/// Writes the session and returns the one it replaced.
+async fn save_session(
+    dir: &Path,
+    source: &OidcSource,
+    session: &Session,
+) -> Result<Option<Session>, CliError> {
+    ensure_sessions_dir(dir)?;
+    let path = session_path(dir, source);
+    let _lock = SessionLock::acquire(&path).await?;
+    let replaced = read_session(&path, source).ok().flatten();
+    write_session(&path, session)?;
+    Ok(replaced)
+}
+
+/// Removes a stored sign-in, then revokes its refresh token at the issuer. The local sign-in is
 /// removed even when the issuer cannot be reached.
 pub(crate) async fn logout(dir: &Path, source: &OidcSource) -> Result<Logout, CliError> {
+    let outcome = match remove_session(dir, source).await? {
+        RemovedSession::Absent => Logout::NotSignedIn,
+        RemovedSession::Removed(Session {
+            refresh_token: Some(refresh_token),
+            ..
+        }) => Logout::Removed(revoke_at_issuer(source, &refresh_token).await),
+        RemovedSession::Removed(_) | RemovedSession::Unreadable => {
+            Logout::Removed(Revocation::NothingToRevoke)
+        }
+    };
+    Ok(outcome)
+}
+
+async fn revoke_at_issuer(source: &OidcSource, refresh_token: &str) -> Revocation {
+    match OidcClient::discover(source).await {
+        Ok(client) => client.revoke(refresh_token).await,
+        Err(_) => Revocation::Failed(ISSUER_UNREACHABLE.into()),
+    }
+}
+
+/// What deleting the stored sign-in file found.
+enum RemovedSession {
+    Absent,
+    /// The file existed but did not hold a sign-in for this source.
+    Unreadable,
+    Removed(Session),
+}
+
+async fn remove_session(dir: &Path, source: &OidcSource) -> Result<RemovedSession, CliError> {
     if !dir.exists() {
-        return Ok(Logout::NotSignedIn);
+        return Ok(RemovedSession::Absent);
     }
     let path = session_path(dir, source);
     let _lock = SessionLock::acquire(&path).await?;
     let stored = read_session(&path, source).ok().flatten();
     match std::fs::remove_file(&path) {
-        Ok(()) => {}
-        Err(error) if error.kind() == std::io::ErrorKind::NotFound => {
-            return Ok(Logout::NotSignedIn);
-        }
-        Err(error) => return Err(CliError::Io(error)),
+        Ok(()) => Ok(stored.map_or(RemovedSession::Unreadable, RemovedSession::Removed)),
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => Ok(RemovedSession::Absent),
+        Err(error) => Err(CliError::Io(error)),
     }
-    let Some(refresh_token) = stored.and_then(|session| session.refresh_token) else {
-        return Ok(Logout::Removed(Revocation::Unsupported));
-    };
-    let revocation = match OidcClient::discover(source).await {
-        Ok(client) => client.revoke(&refresh_token).await,
-        Err(_) => Revocation::Failed("the issuer could not be reached".into()),
-    };
-    Ok(Logout::Removed(revocation))
 }
 
 /// Reads the stored sign-in without contacting the issuer.

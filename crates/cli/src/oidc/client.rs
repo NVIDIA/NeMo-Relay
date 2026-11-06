@@ -1,7 +1,8 @@
 // SPDX-FileCopyrightText: Copyright (c) 2026, NVIDIA CORPORATION & AFFILIATES. All rights reserved.
 // SPDX-License-Identifier: Apache-2.0
 
-//! Requests to the OpenID Connect issuer: discovery, the device sign-in and token refresh.
+//! Requests to the OpenID Connect issuer: discovery, the device sign-in, the authorization code
+//! exchange, token refresh and revocation.
 
 use std::time::Duration;
 
@@ -9,7 +10,7 @@ use http::header::{ACCEPT, CONTENT_TYPE};
 use percent_encoding::{NON_ALPHANUMERIC, utf8_percent_encode};
 use serde::Deserialize;
 
-use super::browser::{self, BrowserApproval};
+use super::error::SignInError;
 use super::session::Session;
 use super::{Clock, HTTP_TIMEOUT, OidcSource, auth_error, login_required, now_secs};
 use crate::error::CliError;
@@ -28,14 +29,24 @@ struct Discovery {
     revocation_endpoint: Option<String>,
 }
 
-/// What the issuer said to a revocation request.
+/// What happened to a refresh token when its sign-in was removed or replaced.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub(crate) enum Revocation {
+    /// The issuer confirmed the revocation.
     Confirmed,
     /// The issuer publishes no revocation endpoint.
-    Unsupported,
+    NotOffered,
+    /// The sign-in held no refresh token.
+    NothingToRevoke,
+    /// The issuer did not confirm; the reason holds no token.
     Failed(String),
 }
+
+/// Why a request did not get an answer; it names no host, token or path.
+pub(crate) const ISSUER_UNREACHABLE: &str = "the issuer could not be reached";
+const AUTHORIZATION_CODE_GRANT: &str = "authorization_code";
+const PKCE_METHOD: &str = "S256";
+const REFRESH_TOKEN_HINT: &str = "refresh_token";
 
 #[derive(Deserialize)]
 pub(crate) struct DeviceStart {
@@ -128,6 +139,10 @@ impl OidcClient {
         })
     }
 
+    pub(crate) fn issuer(&self) -> &str {
+        &self.issuer
+    }
+
     /// The address the user opens to approve the sign-in.
     pub(crate) fn authorization_url(
         &self,
@@ -135,15 +150,15 @@ impl OidcClient {
         redirect_uri: &str,
         state: &str,
         challenge: &str,
-    ) -> Result<String, CliError> {
+    ) -> Result<String, SignInError> {
         let endpoint = self.authorization_endpoint.as_deref().ok_or_else(|| {
-            auth_error(format!(
-                "{} does not offer browser sign-in (no authorization_endpoint); use --device",
-                self.issuer
-            ))
+            SignInError::BrowserSignInNotOffered {
+                issuer: self.issuer.clone(),
+            }
         })?;
-        let mut url = reqwest::Url::parse(endpoint)
-            .map_err(|_| auth_error(format!("{endpoint} is not a valid URL")))?;
+        let mut url = reqwest::Url::parse(endpoint).map_err(|_| SignInError::InvalidEndpoint {
+            endpoint: endpoint.to_owned(),
+        })?;
         url.query_pairs_mut()
             .append_pair("response_type", "code")
             .append_pair("client_id", &self.client_id)
@@ -151,89 +166,52 @@ impl OidcClient {
             .append_pair("scope", scope)
             .append_pair("state", state)
             .append_pair("code_challenge", challenge)
-            .append_pair("code_challenge_method", "S256");
+            .append_pair("code_challenge_method", PKCE_METHOD);
         Ok(url.into())
     }
 
-    /// Signs in through the browser and returns the issued tokens.
-    pub(crate) async fn browser_login(
+    /// Exchanges an approved authorization code and its PKCE verifier for tokens.
+    pub(crate) async fn exchange_code(
         &self,
-        scope: &str,
-        state: &str,
-        approval: BrowserApproval<'_>,
-        mut show: impl FnMut(String),
+        code: &str,
+        redirect_uri: &str,
+        verifier: &str,
     ) -> Result<Session, CliError> {
-        let verifier = browser::random_value()?;
-        let callback = browser::Callback::listen(approval.port, state).await?;
-        let redirect_uri = callback.redirect_uri.clone();
-        let url = self.authorization_url(
-            scope,
-            &redirect_uri,
-            state,
-            &browser::code_challenge(&verifier),
-        )?;
-        let opened = (approval.open)(&url);
-        show(if opened {
-            format!("Opened the browser to sign in. If it did not open, visit:\n{url}")
-        } else {
-            format!("To sign in, open this address in a browser on any device:\n{url}")
-        });
-        show(format!(
-            "If the browser runs on another device, its last page fails to load. Paste that page's address ({redirect_uri}?code=...) here and press Enter."
-        ));
-        let redirect = callback
-            .wait(state, approval.pasted, &mut show, approval.timeout)
-            .await?;
-        if redirect
-            .iss
-            .as_deref()
-            .is_some_and(|iss| iss.trim_end_matches('/') != self.issuer)
-        {
-            return Err(auth_error(
-                "the sign-in redirect names another issuer".into(),
-            ));
-        }
-        if let Some(error) = redirect.error {
-            return Err(device_failure(
-                &error,
-                &describe(&error, redirect.error_description.as_deref()),
-            ));
-        }
-        let code = redirect
-            .code
-            .ok_or_else(|| auth_error("the sign-in redirect carries no code".into()))?;
         let grant = self
             .token_request(&[
-                ("grant_type", "authorization_code"),
-                ("code", &code),
-                ("redirect_uri", &redirect_uri),
+                ("grant_type", AUTHORIZATION_CODE_GRANT),
+                ("code", code),
+                ("redirect_uri", redirect_uri),
                 ("client_id", &self.client_id),
-                ("code_verifier", &verifier),
+                ("code_verifier", verifier),
             ])
             .await;
         match grant {
             Grant::Issued(reply) => self.session(reply, None, now_secs()),
-            Grant::Refused { detail, .. } | Grant::Unavailable(detail) => Err(auth_error(format!(
-                "{} did not issue a token for the approved sign-in: {detail}",
-                self.issuer
-            ))),
+            Grant::Refused { detail, .. } | Grant::Unavailable(detail) => {
+                Err(SignInError::TokenNotIssued {
+                    issuer: self.issuer.clone(),
+                    detail,
+                }
+                .into())
+            }
         }
     }
 
     /// Revokes a refresh token (RFC 7009).
     pub(crate) async fn revoke(&self, refresh_token: &str) -> Revocation {
         let Some(endpoint) = self.revocation_endpoint.as_deref() else {
-            return Revocation::Unsupported;
+            return Revocation::NotOffered;
         };
         let form = [
             ("client_id", self.client_id.as_str()),
             ("token", refresh_token),
-            ("token_type_hint", "refresh_token"),
+            ("token_type_hint", REFRESH_TOKEN_HINT),
         ];
         match self.post(endpoint, &form).await {
             Ok(response) if response.status().is_success() => Revocation::Confirmed,
             Ok(response) => Revocation::Failed(format!("HTTP {}", response.status())),
-            Err(_) => Revocation::Failed("the issuer could not be reached".into()),
+            Err(_) => Revocation::Failed(ISSUER_UNREACHABLE.into()),
         }
     }
 
@@ -347,7 +325,7 @@ impl OidcClient {
     async fn token_request(&self, form: &[(&str, &str)]) -> Grant {
         let response = match self.post(&self.token_endpoint, form).await {
             Ok(response) => response,
-            Err(_) => return Grant::Unavailable("the issuer could not be reached".into()),
+            Err(_) => return Grant::Unavailable(ISSUER_UNREACHABLE.into()),
         };
         let status = response.status();
         let Ok(reply) = response.json::<TokenReply>().await else {

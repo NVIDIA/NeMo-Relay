@@ -3,6 +3,7 @@
 
 //! `nemo-relay auth`: sign in to the provider named by `[upstream.<provider>_oidc]`.
 
+use std::path::Path;
 use std::process::ExitCode;
 
 use clap::{Args, Subcommand, ValueEnum};
@@ -10,7 +11,7 @@ use clap::{Args, Subcommand, ValueEnum};
 use super::serve::ServerArgs;
 use crate::configuration::GatewayConfig;
 use crate::error::CliError;
-use crate::oidc::{Logout, OidcSource, Revocation};
+use crate::oidc::{BrowserApproval, LoginMethod, Logout, OidcSource, Revocation, SignInError};
 
 #[derive(Debug, Clone, Args)]
 pub(crate) struct AuthCommand {
@@ -77,42 +78,53 @@ pub(super) async fn execute(
     let dir = crate::oidc::sessions_dir()?;
     let load = || configured(server);
     match command.command {
-        AuthSubcommand::Login(args) => {
-            let source = select_source(args.provider, load)?;
-            let method = if args.device {
-                crate::oidc::LoginMethod::Device
-            } else {
-                crate::oidc::browser_method(!args.no_browser, args.callback_port)
-            };
-            crate::oidc::login(&dir, &source, method, |prompt| println!("{prompt}")).await?;
-            println!("Signed in to {}.", source.issuer);
-        }
-        AuthSubcommand::Token(args) => {
-            let source = select_source(args, load)?;
-            let token = crate::oidc::current_token(&dir, &source, &crate::oidc::now_secs).await?;
-            println!("{token}");
-        }
-        AuthSubcommand::Logout(args) => {
-            let source = select_source(args, load)?;
-            match crate::oidc::logout(&dir, &source).await? {
-                Logout::NotSignedIn => println!("No sign-in is stored for {}.", source.issuer),
-                Logout::Removed(Revocation::Confirmed) => println!(
-                    "Removed the sign-in for {} and revoked it at the issuer.",
-                    source.issuer
-                ),
-                Logout::Removed(Revocation::Unsupported) => {
-                    println!("Removed the sign-in for {}.", source.issuer);
-                }
-                Logout::Removed(Revocation::Failed(reason)) => {
-                    return Err(CliError::Config(format!(
-                        "removed the sign-in for {}, but the issuer did not confirm revoking it ({reason}); it stays valid until it expires",
-                        source.issuer
-                    )));
-                }
-            }
-        }
+        AuthSubcommand::Login(args) => login(&dir, args, load).await?,
+        AuthSubcommand::Token(args) => print_token(&dir, select_source(args, load)?).await?,
+        AuthSubcommand::Logout(args) => logout(&dir, select_source(args, load)?).await?,
     }
     Ok(ExitCode::SUCCESS)
+}
+
+async fn login(
+    dir: &Path,
+    args: LoginArgs,
+    load: impl FnOnce() -> Result<GatewayConfig, CliError>,
+) -> Result<(), CliError> {
+    let source = select_source(args.provider, load)?;
+    let method = if args.device {
+        LoginMethod::Device
+    } else {
+        LoginMethod::Browser(BrowserApproval::interactive(
+            !args.no_browser,
+            args.callback_port,
+        ))
+    };
+    crate::oidc::login(dir, &source, method, |prompt| println!("{prompt}")).await?;
+    println!("Signed in to {}.", source.issuer);
+    Ok(())
+}
+
+async fn print_token(dir: &Path, source: OidcSource) -> Result<(), CliError> {
+    let token = crate::oidc::current_token(dir, &source, &crate::oidc::now_secs).await?;
+    println!("{token}");
+    Ok(())
+}
+
+async fn logout(dir: &Path, source: OidcSource) -> Result<(), CliError> {
+    let issuer = source.issuer.clone();
+    match crate::oidc::logout(dir, &source).await? {
+        Logout::NotSignedIn => println!("No sign-in is stored for {issuer}."),
+        Logout::Removed(Revocation::Confirmed) => {
+            println!("Removed the sign-in for {issuer} and revoked it at the issuer.");
+        }
+        Logout::Removed(Revocation::NotOffered | Revocation::NothingToRevoke) => {
+            println!("Removed the sign-in for {issuer}.");
+        }
+        Logout::Removed(Revocation::Failed(reason)) => {
+            return Err(SignInError::RevocationUnconfirmed { issuer, reason }.into());
+        }
+    }
+    Ok(())
 }
 
 /// The effective configuration, including the user layer that `--config` replaces.
