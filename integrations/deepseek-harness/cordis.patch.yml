@@ -1,0 +1,17 @@
+# SPDX-FileCopyrightText: Copyright (c) 2026, NVIDIA CORPORATION & AFFILIATES. All rights reserved.
+# SPDX-License-Identifier: Apache-2.0
+
+# DeepSeek Harness Loader row for the NeMo Relay integration. With an empty
+# config, NeMo Relay resolves its components from the same plugins.toml layers
+# as every other Relay host (system, then $XDG_CONFIG_HOME/nemo-relay or
+# ~/.config/nemo-relay) and adds, where no layer decides otherwise, Relay's
+# pii_redaction secret detectors and one ATIF trajectory per turn under
+# <DSH_HOME>/nemo-relay/atif. Tool calls are checked against the NeMo Relay
+# rules (guardrails.rules; edit them in the NeMo Relay view or with /relay),
+# and Arize Phoenix starts only when you ask for it. Nothing leaves this
+# computer unless a plugins.toml layer or this row configures an exporter.
+# See README.md for every field.
+- insert:
+    - id: nemo-relay
+      name: nemo-relay-deepseek-harness
+      config: {}

@@ -24,6 +24,7 @@ security middleware, and optimization features.
 | Deep Agents | Yes | Yes | Yes | Wrapped tool and LLM calling. |
 | Google ADK | Yes | Yes | Yes | Record model and tool calls and apply guardrails with the ADK plugin. |
 | OpenClaw | Yes | Partial | No | Hook-backed telemetry with pre-tool guardrails. Public hooks do not expose managed execution rewrites. |
+| DeepSeek Harness | Yes | Yes | Partial | Managed model-stream and tool execution. Request and argument rewrites block the call because DeepSeek Harness sends what its session log records. |
 
 ## Guides
 
@@ -43,6 +44,9 @@ instructions.
 - [Google ADK Integration Guide](/supported-integrations/google-adk) covers installing the Google
   ADK extra, adding the plugin to your app, and recording workflows. It also
   explains which tools Relay can protect.
+- [DeepSeek Harness Plugin Guide](/supported-integrations/deepseek-harness) covers installing the
+  DeepSeek Harness bundle, configuring the plugin host, and how Relay middleware
+  applies to DeepSeek Harness model and tool calls.
 
 Across LangChain, LangGraph, Deep Agents, and Google ADK, instrumented tool lifecycles also
 inherit Relay's automatic `skill.load` detection when a tool requests a

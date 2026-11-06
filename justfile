@@ -596,6 +596,8 @@ set_node_package_versions() {
     local version="$1"
     set_npm_package_version crates/node/package.json package-lock.json "$version" crates/node
     set_npm_package_version examples/language-binding-plugin/node/package.json package-lock.json "$version" examples/language-binding-plugin/node
+    set_npm_package_version integrations/deepseek-harness/package.json package-lock.json "$version" integrations/deepseek-harness
+    set_npm_package_dependency_version integrations/deepseek-harness/package.json package-lock.json integrations/deepseek-harness nemo-relay-node "$version"
     set_npm_package_version integrations/openclaw/package.json package-lock.json "$version" integrations/openclaw
     set_npm_package_dependency_version integrations/openclaw/package.json package-lock.json integrations/openclaw nemo-relay-node "$version"
     # `nemo-relay-pi` is private and not published, so this bump changes nothing today. It is here
@@ -1341,6 +1343,10 @@ clean:
         crates/node/dist \
         crates/node/junit.xml \
         crates/node/node_modules \
+        integrations/deepseek-harness/*.profraw \
+        integrations/deepseek-harness/.test-dist \
+        integrations/deepseek-harness/dist \
+        integrations/deepseek-harness/node_modules \
         integrations/openclaw/*.profraw \
         integrations/openclaw/.test-dist \
         integrations/openclaw/dist \
@@ -1875,6 +1881,22 @@ test-plugin-examples:
     npm test --workspace=nemo-relay-node-language-binding-plugin-example
 
 # --set [ci=true|false]
+test-deepseek-harness:
+    #!/usr/bin/env bash
+    {{ bash_helpers }}
+    cd "$NEMO_RELAY_REPO_ROOT"
+    if is_true "{{ ci }}"; then
+        npm ci --ignore-scripts
+        npm run build-debug --workspace=nemo-relay-node
+    else
+        npm install --ignore-scripts
+    fi
+    npm run typecheck --workspace=nemo-relay-deepseek-harness
+    npm test --workspace=nemo-relay-deepseek-harness
+    npm run test:live --workspace=nemo-relay-deepseek-harness
+    npm run pack:check --workspace=nemo-relay-deepseek-harness
+
+# --set [ci=true|false]
 test-openclaw:
     #!/usr/bin/env bash
     {{ bash_helpers }}
@@ -1908,7 +1930,7 @@ test-pi:
     node --test crates/cli/tests/managed_pi_extension_tests.mjs
 
 # --set [output_dir=<path>] [ci=true|false]
-test-all: test-rust test-python test-python-langchain test-python-google-adk test-go test-node test-openclaw test-pi
+test-all: test-rust test-python test-python-langchain test-python-google-adk test-go test-node test-deepseek-harness test-openclaw test-pi
 
 # Print a SemVer version in the PEP 440 form used for Python packages.
 semver-to-pep440 version:
@@ -2139,12 +2161,14 @@ package-node:
         package_version="${version}+${sha}"
         echo "Non-release build: appending commit hash to version"
         set_npm_package_version crates/node/package.json package-lock.json "$package_version" crates/node
+        set_npm_package_dependency_version integrations/deepseek-harness/package.json package-lock.json integrations/deepseek-harness nemo-relay-node "$package_version"
         set_npm_package_dependency_version integrations/openclaw/package.json package-lock.json integrations/openclaw nemo-relay-node "$package_version"
         set_npm_package_dependency_version examples/language-binding-plugin/node/package.json package-lock.json examples/language-binding-plugin/node nemo-relay-node "$package_version"
     else
         package_version="{{ ref_name }}"
         echo "Using explicit version {{ ref_name }}"
         set_npm_package_version crates/node/package.json package-lock.json "$package_version" crates/node
+        set_npm_package_dependency_version integrations/deepseek-harness/package.json package-lock.json integrations/deepseek-harness nemo-relay-node "$package_version"
         set_npm_package_dependency_version integrations/openclaw/package.json package-lock.json integrations/openclaw nemo-relay-node "$package_version"
         set_npm_package_dependency_version examples/language-binding-plugin/node/package.json package-lock.json examples/language-binding-plugin/node nemo-relay-node "$package_version"
     fi
@@ -2236,6 +2260,7 @@ package-openclaw:
         echo "Non-release build: appending commit hash to version"
         set_npm_package_version crates/node/package.json package-lock.json "$package_version" crates/node
         set_npm_package_version integrations/openclaw/package.json package-lock.json "$package_version" integrations/openclaw
+        set_npm_package_dependency_version integrations/deepseek-harness/package.json package-lock.json integrations/deepseek-harness nemo-relay-node "$package_version"
         set_npm_package_dependency_version integrations/openclaw/package.json package-lock.json integrations/openclaw nemo-relay-node "$package_version"
         set_npm_package_dependency_version examples/language-binding-plugin/node/package.json package-lock.json examples/language-binding-plugin/node nemo-relay-node "$package_version"
     else
@@ -2243,6 +2268,7 @@ package-openclaw:
         echo "Using explicit version {{ ref_name }}"
         set_npm_package_version crates/node/package.json package-lock.json "$package_version" crates/node
         set_npm_package_version integrations/openclaw/package.json package-lock.json "$package_version" integrations/openclaw
+        set_npm_package_dependency_version integrations/deepseek-harness/package.json package-lock.json integrations/deepseek-harness nemo-relay-node "$package_version"
         set_npm_package_dependency_version integrations/openclaw/package.json package-lock.json integrations/openclaw nemo-relay-node "$package_version"
         set_npm_package_dependency_version examples/language-binding-plugin/node/package.json package-lock.json examples/language-binding-plugin/node nemo-relay-node "$package_version"
     fi

@@ -1,0 +1,6 @@
+{
+  "meta": {
+    "title": "NeMo Relay",
+    "description": "在 DeepSeek Harness 中运行 NVIDIA NeMo Relay：模型和工具调用经由 Relay 的托管中间件执行，支持可编辑的防护规则和密钥脱敏；Relay 的导出器记录 ATIF 轨迹，并可发送 OpenTelemetry 和 OpenInference 轨迹（包括发送到本机的 Arize Phoenix）；NeMo Relay 会话视图展示每个会话的轨迹。"
+  }
+}

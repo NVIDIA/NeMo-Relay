@@ -182,6 +182,7 @@ jobs:
       ref_type: ${{ github.ref_type }}
       ref_name: ${{ github.ref_name }}
       run_package: ${{ needs.ci_changes.outputs.run_node_package == 'true' }}
+      run_deepseek_harness: ${{ needs.ci_changes.outputs.run_deepseek_harness == 'true' }}
       run_openclaw: ${{ needs.ci_changes.outputs.run_openclaw == 'true' }}
       run_pi: ${{ needs.ci_changes.outputs.run_pi == 'true' }}
 

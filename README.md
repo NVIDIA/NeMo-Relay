@@ -21,9 +21,9 @@ tool calls so you can observe, control, and tune them, without rewriting the
 agent stack you already have.
 
 - **See every agent run.** Capture model calls, tool calls, turns, and subagents
-  from Hermes Agent, Claude Code, Codex, OpenClaw, pi, LangChain, Google ADK, or
-  your own code as one event stream, then export it as raw events,
-  trajectories, OpenTelemetry, or OpenInference.
+  from Hermes Agent, Claude Code, Codex, OpenClaw, DeepSeek Harness, pi,
+  LangChain, Google ADK, or your own code as one event stream, then export it
+  as raw events, trajectories, OpenTelemetry, or OpenInference.
 - **Enforce policy at the call.** Middleware and guardrails can block,
   sanitize, redact, or rewrite a tool or model call before it runs, not after
   the fact.
@@ -112,6 +112,7 @@ Pick the row closest to what you are trying to do.
 | Observe Codex, Claude Code, or pi on your machine | Quick start for [Codex](https://docs.nvidia.com/nemo/relay/getting-started/quick-start/codex), [Claude Code](https://docs.nvidia.com/nemo/relay/getting-started/quick-start/claude-code), or [pi](https://docs.nvidia.com/nemo/relay/getting-started/quick-start/pi) | The Relay CLI connects to these supported agents' hooks and provider traffic. No application code changes. |
 | Use Hermes Agent | [Hermes Agent quick start](https://docs.nvidia.com/nemo/relay/getting-started/quick-start/hermes) | Relay is built into Hermes Agent and reads standard Relay plugin configuration. No CLI or separate plugin needed. |
 | Use OpenClaw | [OpenClaw Plugin Guide](https://docs.nvidia.com/nemo/relay/supported-integrations/openclaw-plugin) | The `nemo-relay-openclaw` plugin maps OpenClaw hooks to Relay events and pre-tool guardrails. |
+| Use DeepSeek Harness | [DeepSeek Harness Plugin Guide](https://docs.nvidia.com/nemo/relay/supported-integrations/deepseek-harness) | The `nemo-relay-deepseek-harness` bundle runs DeepSeek Harness model and tool calls through Relay managed execution, with editable guardrails and a trace view. |
 | Instrument LLM or tool calls your application owns | [Python](https://docs.nvidia.com/nemo/relay/getting-started/quick-start/python), [Node.js](https://docs.nvidia.com/nemo/relay/getting-started/quick-start/nodejs), or [Rust](https://docs.nvidia.com/nemo/relay/getting-started/quick-start/rust) quick start | Direct SDK instrumentation runs the full lifecycle and middleware sequence around your callbacks. |
 | Use LangChain, LangGraph, Deep Agents, or Google ADK | [Supported Integrations](https://docs.nvidia.com/nemo/relay/supported-integrations/about) | Maintained integrations use public framework APIs. |
 | Export traces, trajectories, or raw events | [Observability](https://docs.nvidia.com/nemo/relay/configure-plugins/observability/about) | Exporters consume one event stream and write ATOF, ATIF, OpenTelemetry, or OpenInference. |
@@ -215,6 +216,7 @@ runtime behavior. Go and the C FFI are experimental and source-first.
 | Codex | ✅ | ✅ | Partial |
 | Hermes Agent (built in) | ✅ | ✅ | Partial |
 | OpenClaw | ✅ | Partial | – |
+| DeepSeek Harness | ✅ | ✅ | Partial |
 | pi (experimental) | Partial | ✅ | – |
 
 | Framework | Observability | Security | Optimization |

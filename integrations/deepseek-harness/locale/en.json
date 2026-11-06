@@ -1,0 +1,6 @@
+{
+  "meta": {
+    "title": "NeMo Relay",
+    "description": "Runs NVIDIA NeMo Relay inside DeepSeek Harness: model and tool calls execute through Relay's managed middleware with editable guardrail rules and secret redaction, Relay's exporters record ATIF trajectories and can send OpenTelemetry and OpenInference traces (including to a local Arize Phoenix), and a NeMo Relay conversation view shows each session's trace."
+  }
+}

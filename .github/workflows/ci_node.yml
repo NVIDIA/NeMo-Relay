@@ -19,6 +19,11 @@ on:
         required: false
         default: true
         type: boolean
+      run_deepseek_harness:
+        description: 'Whether to run DeepSeek Harness integration checks'
+        required: false
+        default: false
+        type: boolean
       run_openclaw:
         description: 'Whether to run OpenClaw integration checks'
         required: false
@@ -148,6 +153,11 @@ jobs:
       - name: Run Node tests with coverage
         working-directory: ${{ env.NEMO_RELAY_CI_WORKSPACE }}
         run: just --set ci true --set output_dir "${{ github.workspace }}" test-node
+
+      - name: Run DeepSeek Harness integration checks
+        if: ${{ inputs.run_deepseek_harness }}
+        working-directory: ${{ env.NEMO_RELAY_CI_WORKSPACE }}
+        run: just --set ci true test-deepseek-harness
 
       - name: Run OpenClaw integration checks
         if: ${{ inputs.run_openclaw }}
