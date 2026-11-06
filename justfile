@@ -182,7 +182,7 @@ ensure_node_docs_declarations() {
 
     if [[ -f "$types_file" ]]; then
         newest_source="$(
-            find crates/node/src crates/node/Cargo.toml crates/node/build.rs \
+            find crates/node/src crates/node/Cargo.toml crates/node/build.rs crates/node/root-types.d.ts \
                 -type f -newer "$types_file" -print -quit
         )"
     fi

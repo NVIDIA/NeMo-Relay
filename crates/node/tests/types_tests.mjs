@@ -49,7 +49,6 @@ describe('Type constants', () => {
       [
         fileURLToPath(new URL('../../../node_modules/typescript/bin/tsc', import.meta.url)),
         '--noEmit',
-        '--skipLibCheck',
         '--strict',
         '--target',
         'ES2022',
@@ -62,6 +61,10 @@ describe('Type constants', () => {
         'tests/public_resource_metrics_api_fixture.ts',
         'tests/public_diagnostics_api_fixture.ts',
         'tests/public_pii_redaction_api_fixture.ts',
+        'tests/public_model_pricing_api_fixture.ts',
+        'tests/public_json_api_fixture.ts',
+        'tests/public_plugin_api_fixture.ts',
+        'tests/public_json_compatible_api_fixture.ts',
       ],
       {
         cwd: fileURLToPath(new URL('..', import.meta.url)),
@@ -93,14 +96,8 @@ describe('LlmRequest', () => {
     });
   });
 
-  it('coerces non-object headers to an empty object', () => {
-    const req = new LlmRequest(null, {
-      model: 'gpt-4',
-    });
-    assert.deepEqual(req.headers, {});
-    assert.deepEqual(req.content, {
-      model: 'gpt-4',
-    });
+  it('rejects non-object headers', () => {
+    assert.throws(() => new LlmRequest(null, { model: 'gpt-4' }), /headers must be a JSON object/);
   });
 });
 

@@ -22,7 +22,7 @@ import type {
   PluginHookModelCallEndedEvent,
   PluginHookModelCallStartedEvent,
 } from '../openclaw-hook-types.js';
-import type { JsonObject as JsonRecord, JsonValue } from 'nemo-relay-node/typed';
+import type { JsonObject as JsonRecord, JsonValue, LlmRequestShape } from 'nemo-relay-node/typed';
 import { emitMark, toJsonRecord, toJsonValue } from './marks.js';
 import {
   evictExpiredCorrelationRecords,
@@ -427,15 +427,15 @@ export function buildReplayLlmRequest(
   output: PluginHookLlmOutputEvent,
   config: NemoRelayHookBackendConfig,
   source = 'openclaw.hooks',
-): JsonValue {
+): LlmRequestShape {
   const messages =
     config.capture.includePrompts && Array.isArray(input.historyMessages)
       ? input.historyMessages.map((message) => sanitizePromptMessage(message, config))
       : [];
   const replayMessages = config.capture.includePrompts ? appendPromptIfMissing(messages, input.prompt) : [];
-  return toJsonValue({
+  return {
     headers: {},
-    content: {
+    content: toJsonValue({
       provider: output.provider,
       model: output.model,
       prompt: config.capture.includePrompts ? input.prompt : undefined,
@@ -444,8 +444,8 @@ export function buildReplayLlmRequest(
       imagesCount: input.imagesCount,
       placeholderRequest: input.placeholderRequest === true,
       source,
-    },
-  });
+    }),
+  };
 }
 
 /** Build the response payload passed to NeMo Relay for a replayed LLM span. */

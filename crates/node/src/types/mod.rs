@@ -333,13 +333,13 @@ impl ScopeHandle {
     }
 
     /// Optional user-defined data associated with this scope.
-    #[napi(getter, catch_unwind)]
+    #[napi(getter, catch_unwind, ts_return_type = "Json | null")]
     pub fn data(&self) -> Option<serde_json::Value> {
         self.inner.data.clone()
     }
 
     /// Optional metadata associated with this scope.
-    #[napi(getter, catch_unwind)]
+    #[napi(getter, catch_unwind, ts_return_type = "Json | null")]
     pub fn metadata(&self) -> Option<serde_json::Value> {
         self.inner.metadata.clone()
     }
@@ -445,24 +445,41 @@ pub struct LlmRequest {
 impl LlmRequest {
     /// Create a new LLM request from headers and content.
     #[napi(constructor, catch_unwind)]
-    pub fn new(headers: serde_json::Value, content: serde_json::Value) -> Self {
-        let headers = match headers {
-            Json::Object(m) => m,
-            _ => serde_json::Map::new(),
+    pub fn new(
+        #[napi(ts_arg_type = "JsonObject")] headers: serde_json::Value,
+        #[napi(ts_arg_type = "Json")] content: serde_json::Value,
+    ) -> Result<Self> {
+        let Json::Object(headers) = headers else {
+            return Err(Error::invalid_argument(
+                "LlmRequest headers must be a JSON object",
+            ));
         };
-        Self {
+        Ok(Self {
             inner: CoreLlmRequest { headers, content },
-        }
+        })
+    }
+
+    #[napi(
+        factory,
+        js_name = "from",
+        ts_generic_types = "THeaders extends JsonObjectCompatible<THeaders>, TContent extends JsonCompatible<TContent>",
+        catch_unwind
+    )]
+    pub fn from_parts(
+        #[napi(ts_arg_type = "THeaders")] headers: serde_json::Value,
+        #[napi(ts_arg_type = "TContent")] content: serde_json::Value,
+    ) -> Result<Self> {
+        Self::new(headers, content)
     }
 
     /// The metadata headers as a JSON object.
-    #[napi(getter, catch_unwind)]
+    #[napi(getter, catch_unwind, ts_return_type = "JsonObject")]
     pub fn headers(&self) -> serde_json::Value {
         Json::Object(self.inner.headers.clone())
     }
 
     /// The request payload as a JSON value.
-    #[napi(getter, catch_unwind)]
+    #[napi(getter, catch_unwind, ts_return_type = "Json")]
     pub fn content(&self) -> serde_json::Value {
         self.inner.content.clone()
     }
@@ -523,8 +540,15 @@ macro_rules! builtin_codec {
             $name($codec, $surface);
 
             #[doc = " Decode a raw LLM response into structured form."]
-            #[napi(js_name = "decodeResponse", catch_unwind)]
-            pub fn decode_response(&self, response: Json) -> Result<Json> {
+            #[napi(
+                js_name = "decodeResponse",
+                ts_generic_types = "TResponse extends JsonCompatible<TResponse>",
+                catch_unwind
+            )]
+            pub fn decode_response(
+                &self,
+                #[napi(ts_arg_type = "TResponse")] response: Json,
+            ) -> Result<Json> {
                 decode_response(&*self.response_codec, &response)
             }
         }
@@ -547,14 +571,28 @@ macro_rules! builtin_codec {
             }
 
             /// Decode an opaque LLM request into structured form.
-            #[napi(catch_unwind)]
-            pub fn decode(&self, request: Json) -> Result<Json> {
+            #[napi(
+                ts_generic_types = "TRequest extends LlmRequestCompatible<TRequest>",
+                catch_unwind
+            )]
+            pub fn decode(
+                &self,
+                #[napi(ts_arg_type = "TRequest")] request: Json,
+            ) -> Result<Json> {
                 decode_request(&self.codec, request)
             }
 
             /// Encode structured changes back into an opaque LLM request.
-            #[napi(catch_unwind)]
-            pub fn encode(&self, annotated: Json, original: Json) -> Result<Json> {
+            #[napi(
+                ts_generic_types = "TAnnotated extends JsonCompatible<TAnnotated>, TOriginal extends LlmRequestCompatible<TOriginal>",
+                ts_return_type = "LlmRequestShape",
+                catch_unwind
+            )]
+            pub fn encode(
+                &self,
+                #[napi(ts_arg_type = "TAnnotated")] annotated: Json,
+                #[napi(ts_arg_type = "TOriginal")] original: Json,
+            ) -> Result<Json> {
                 encode_request(&self.codec, annotated, original)
             }
 
@@ -597,11 +635,15 @@ builtin_codec! {
 
     #[doc = " Decode a raw LLM response into structured form."]
     #[doc = " Throws a TypeError if the response contains a BigInt value."]
-    #[napi(js_name = "decodeResponse", catch_unwind)]
+    #[napi(
+        js_name = "decodeResponse",
+        ts_generic_types = "TResponse extends JsonCompatible<TResponse>",
+        catch_unwind
+    )]
     pub fn decode_response(
         &self,
         env: Env,
-        #[napi(ts_arg_type = "any")] response: Unknown,
+        #[napi(ts_arg_type = "TResponse")] response: Unknown,
     ) -> Result<Json> {
         decode_response(&*self.response_codec, &checked_json(&env, response)?)
     }
