@@ -68,7 +68,9 @@ Scope flags are mutually exclusive.
 
 `--global` writes `/etc/nemo-relay/plugins.toml` on Unix or
 `%ProgramData%\nemo-relay\plugins.toml` on Windows and usually requires
-elevated filesystem permissions.
+elevated filesystem permissions. Other users can read this file. On Unix,
+the editor saves it with mode `0644`. Keep credentials out of global plugin
+files. The editor rejects values that the plugin schema marks as secret.
 
 The editor menus support these controls:
 
@@ -133,7 +135,7 @@ the exporter you want to verify. The plugin file is the configuration being
 demonstrated here; `--config` only tells the gateway which low plugin layer to
 use for this run. For implicit discovery, place the file in the XDG user
 configuration directory. Refer to
-[CLI Basic Usage](/nemo-relay-cli/basic-usage) for the wrapper command shapes.
+[Command Reference](/nemo-relay-cli/command-reference#run-syntax) for the wrapper command shapes.
 
 ## What Success Looks Like
 

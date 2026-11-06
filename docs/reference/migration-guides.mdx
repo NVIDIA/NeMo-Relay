@@ -166,14 +166,14 @@ credentials, connection errors, timeouts, and HTTP errors. Fail-open delivery
 failures return `0`. Guardrail rejections return `2` under either policy.
 Hook requests now have a 30-second timeout. Leave room for delivery when setting
 guardrail evaluation timeouts. Refer to
-[Hook Forwarding](/nemo-relay-cli/basic-usage#hook-forwarding).
+[Hook Forwarding](/nemo-relay-cli/gateway-reference#hook-forwarding).
 
 Hook sessions now use a valid `TRACEPARENT` from the launching process as their
 OpenTelemetry parent. `TRACESTATE` travels with it. The first hook that creates
 a session sets its parent; later hooks do not change it. Review launch scripts
 that already set these variables. Unset them if each session should start a new
 trace. Refer to
-[Continue the Launcher Trace](/nemo-relay-cli/basic-usage#continue-the-launcher-trace).
+[Continue the Launcher Trace](/nemo-relay-cli/gateway-reference#continue-the-launcher-trace).
 
 Make sure hooks can read `NEMO_RELAY_CLIENT_TOKEN` or the per-user token file.
 If the file is missing, run the following command as the user who runs the
@@ -308,7 +308,7 @@ A passing HTTP check only means the collector answered. It does not prove that
 the collector accepts your credentials or trace data. Doctor does not test
 whether redaction removed sensitive data. It also does not read `header_file`
 values. Refer to
-[Check Configuration and Exporters](/nemo-relay-cli/basic-usage#check-configuration-and-exporters).
+[Check Configuration and Exporters](/nemo-relay-cli/troubleshooting#check-configuration-and-exporters).
 
 ### Providers and Request Handling
 
@@ -327,11 +327,11 @@ and custom headers, ignore environment API key fallbacks, and do not run API
 key helpers. Startup fails if that provider has a configured API key,
 authentication header, or helper. Prefer HTTPS because HTTP sends model content
 without encryption. Refer to
-[Credential-Free HTTP Model Upstreams](/nemo-relay-cli/basic-usage#credential-free-http-model-upstreams).
+[Credential-Free HTTP Model Upstreams](/nemo-relay-cli/provider-upstreams#credential-free-http-model-upstreams).
 
 Relay no longer follows upstream redirects. It also removes the `Location`
 header from redirect responses. Set the final provider URL directly. Refer to
-[Provider Upstreams](/nemo-relay-cli/basic-usage#provider-upstreams).
+[Provider Upstreams](/nemo-relay-cli/provider-upstreams#provider-upstreams).
 
 #### Review Managed Provider Credentials
 
@@ -352,7 +352,7 @@ ChatGPT credentials with an administrator's OpenAI credential on managed
 routes. If Relay has no replacement, OpenAI requests keep the caller's ChatGPT
 credential. Review deployments that use a helper or an administrator credential
 to choose the provider account. For the credential selection order, refer to
-[Provider Upstreams](/nemo-relay-cli/basic-usage#provider-upstreams).
+[Provider Upstreams](/nemo-relay-cli/provider-upstreams#provider-upstreams).
 
 `GET /models` and `GET /v1/models` use Anthropic when the request includes
 `anthropic-version` or `anthropic-beta`. Otherwise, they use OpenAI. The API

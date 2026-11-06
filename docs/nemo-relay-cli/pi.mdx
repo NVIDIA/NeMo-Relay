@@ -1,6 +1,6 @@
 ---
 title: "pi"
-description: ""
+description: "Install the pi extension, launch a session, and verify tool and model observability."
 position: 6
 ---
 {/* SPDX-FileCopyrightText: Copyright (c) 2026, NVIDIA CORPORATION & AFFILIATES. All rights reserved.
@@ -173,6 +173,9 @@ is that Relay appears to do nothing. `nemo-relay doctor pi` warns about it.
 
 ## Transparent Run
 
+For shared run options and argument forwarding, refer to
+[Command Reference](/nemo-relay-cli/command-reference#run-syntax).
+
 Use the wrapper for local observability that leaves your pi configuration
 untouched. It is **not install-free**: the extension has to be present already,
 because a hook can only originate inside it, so run the install above first. On a
@@ -246,6 +249,55 @@ Run headless pi with `< /dev/null`. pi drains piped standard input before the
 session starts and returns early only for a TTY, so under an automated harness
 it can block indefinitely before any hook fires.
 </Warning>
+
+## Smoke Test
+
+With a standalone gateway running, check hook forwarding through the updated
+Relay CLI. Run the command as the same local user as the gateway so it can load
+the bootstrap credentials. Direct hook requests without credentials receive
+HTTP 401.
+
+```bash
+curl -f http://127.0.0.1:4040/healthz
+printf '%s\n' '{"hook_event_name":"tool_call","session_id":"smoke-pi","tool_call_id":"c1","tool_name":"read","input":{"path":"README.md"}}' |
+  nemo-relay hook-forward pi \
+    --gateway-url http://127.0.0.1:4040 \
+    --pi-extension-client smoke-pi \
+    --fail-closed
+```
+
+This pi forwarding mode prints an envelope containing the gateway's HTTP
+`status` and its response `body` as a string. An allow without rewritten
+arguments looks like this:
+
+```json
+{"status":200,"body":"{}"}
+```
+
+Decode `body` as JSON before inspecting its fields:
+
+- `status: 200` means allow. If the decoded body contains `tool_call`, it
+  carries the rewritten arguments.
+- `status: 403` with decoded `error.type: "nemo_relay_guardrail_rejected"`
+  means a policy block. `error.reason` contains the guardrail's explanation.
+- Other statuses, including 401 or 403 without the guardrail marker, indicate
+  a gateway or delivery fault rather than a policy decision.
+
+A successful CLI exit means the forwarder received an HTTP response; it can still
+carry a policy block. Inspect the envelope to determine the verdict. A nonzero
+exit means forwarding failed before a usable envelope was returned.
+
+## Verify Export
+
+Complete a pi turn, then confirm the exporter output. With an Agent Trajectory Observability Format (ATOF) file sink
+configured in `plugins.toml`, a single-tool turn produces a `pi` session scope,
+one `pi-turn` scope with `turn_source: turn_start`, and the tool span nested
+under it.
+
+If turn scopes are missing entirely, the extension is not loading. pi 0.84 prints
+the load failure on standard error and exits before the session starts, so read
+stderr first — the failure is reported, not silent. Running pi with `-e` pointing
+at the entry point directly isolates it.
 
 ## Captured Events
 
@@ -562,56 +614,10 @@ Subagents are not represented. pi has no nested-agent hook of its own, and a
 child pi process running this extension posts under its own session id, so it
 appears as an unrelated session rather than as a subagent.
 
-## Smoke Test
-
-With a standalone gateway running, check hook forwarding through the updated
-Relay CLI. Run the command as the same local user as the gateway so it can load
-the bootstrap credentials. Direct hook requests without credentials receive
-HTTP 401.
-
-```bash
-curl -f http://127.0.0.1:4040/healthz
-printf '%s\n' '{"hook_event_name":"tool_call","session_id":"smoke-pi","tool_call_id":"c1","tool_name":"read","input":{"path":"README.md"}}' |
-  nemo-relay hook-forward pi \
-    --gateway-url http://127.0.0.1:4040 \
-    --pi-extension-client smoke-pi \
-    --fail-closed
-```
-
-This pi forwarding mode prints an envelope containing the gateway's HTTP
-`status` and its response `body` as a string. An allow without rewritten
-arguments looks like this:
-
-```json
-{"status":200,"body":"{}"}
-```
-
-Decode `body` as JSON before inspecting its fields:
-
-- `status: 200` means allow. If the decoded body contains `tool_call`, it
-  carries the rewritten arguments.
-- `status: 403` with decoded `error.type: "nemo_relay_guardrail_rejected"`
-  means a policy block. `error.reason` contains the guardrail's explanation.
-- Other statuses, including 401 or 403 without the guardrail marker, indicate
-  a gateway or delivery fault rather than a policy decision.
-
-A successful CLI exit means the forwarder received an HTTP response; it can still
-carry a policy block. Inspect the envelope to determine the verdict. A nonzero
-exit means forwarding failed before a usable envelope was returned.
-
-## Verify Export
-
-Complete a pi turn, then confirm the exporter output. With an Agent Trajectory Observability Format (ATOF) file sink
-configured in `plugins.toml`, a single-tool turn produces a `pi` session scope,
-one `pi-turn` scope with `turn_source: turn_start`, and the tool span nested
-under it.
-
-If turn scopes are missing entirely, the extension is not loading. pi 0.84 prints
-the load failure on standard error and exits before the session starts, so read
-stderr first — the failure is reported, not silent. Running pi with `-e` pointing
-at the entry point directly isolates it.
-
 ## Troubleshoot LLM Lifecycle
+
+For configuration, integration, and exporter checks, start with
+[Troubleshoot the CLI](/nemo-relay-cli/troubleshooting).
 
 Look for the `model_redirect` mark on the session scope: it names the outcome and
 the reason.
