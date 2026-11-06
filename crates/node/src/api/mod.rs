@@ -117,7 +117,7 @@ fn cleanup_node_environment() {
 
 /// Emit a structured operational log record through Relay's configured sinks.
 #[napi(
-    ts_generic_types = "TFields extends JsonCompatible<TFields> = Json",
+    ts_generic_types = "TFields extends JsonObjectCompatible<TFields> = JsonObject",
     catch_unwind
 )]
 pub fn log(
@@ -144,7 +144,7 @@ macro_rules! log_levels {
     ($($level:ident: $doc:literal,)*) => {$(
         #[doc = $doc]
         #[napi(
-            ts_generic_types = "TFields extends JsonCompatible<TFields> = Json",
+            ts_generic_types = "TFields extends JsonObjectCompatible<TFields> = JsonObject",
             catch_unwind
         )]
         pub fn $level(
