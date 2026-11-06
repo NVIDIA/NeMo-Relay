@@ -3,23 +3,14 @@
 
 /// <reference lib="esnext.disposable" />
 
-import type {
-  EventMetadata,
-  EventSanitizeFields,
-  Json,
-  LlmExecutionContext,
-  LlmRequestInterceptOutcome,
-  LlmRequestContext,
-  LlmResponseContext,
-  LlmSanitizeRequestContext,
-  LlmSanitizeResponseContext,
-  PendingMarkSpec,
-  RuntimeRegistrationKind,
-  ToolExecutionContext,
-  ToolExecutionResult,
-} from './index';
+import type { AdaptivePluginConfig } from './adaptive';
+import type { ConfigDiagnostic, Json, JsonObject, JsonObjectCompatible, PluginContext, ResourceMetricsConfig } from './index';
+import type { PricingConfig } from './model_pricing';
+import type { Config as ObservabilityConfig } from './observability';
+import type { Config as PiiRedactionConfig } from './pii_redaction';
 
 export type {
+  ConfigDiagnostic,
   EventMetadata,
   EventMetadataScalar,
   EventMetadataValue,
@@ -36,6 +27,8 @@ export type {
   LlmResponseContext,
   LlmSanitizeRequestContext,
   LlmSanitizeResponseContext,
+  PluginContext,
+  ToolExecutionInterceptOutcome,
 } from './index';
 
 /** Policy behavior for unsupported configuration. */
@@ -46,15 +39,6 @@ export interface ConfigPolicy {
   unknown_component?: UnsupportedBehavior;
   unknown_field?: UnsupportedBehavior;
   unsupported_value?: UnsupportedBehavior;
-}
-
-/** One validation or compatibility diagnostic produced by the plugin system. */
-export interface ConfigDiagnostic {
-  level: 'warning' | 'error';
-  code: string;
-  component?: string;
-  field?: string;
-  message: string;
 }
 
 /** Validation or activation report for a plugin configuration. */
@@ -73,21 +57,37 @@ export interface RuntimeDiagnostic {
   count: number;
 }
 
+export interface ComponentConfigs {
+  adaptive: AdaptivePluginConfig;
+  observability: ObservabilityConfig;
+  pii_redaction: PiiRedactionConfig;
+  pricing: PricingConfig;
+  resource_metrics: ResourceMetricsConfig;
+}
+
+export type ComponentKind = keyof ComponentConfigs;
+
+export type KnownComponentSpec = {
+  [K in ComponentKind]: { kind: K; enabled?: boolean; config?: ComponentConfigs[K] };
+}[ComponentKind];
+
 /** One top-level plugin component. */
 export interface ComponentSpec {
   kind: string;
   enabled?: boolean;
-  config?: Record<string, Json>;
+  config?: JsonObject;
 }
+
+export type ComponentConfigFor<K extends string> = K extends ComponentKind ? ComponentConfigs[K] : JsonObject;
+
+export type ComponentSpecFor<K extends string> = K extends ComponentKind
+  ? Extract<KnownComponentSpec, { kind: K }>
+  : ComponentSpec;
 
 /** Canonical plugin configuration document. */
 export interface PluginConfig {
   version?: number;
-  components?: Array<{
-    kind: string;
-    enabled?: boolean;
-    config?: Record<string, Json>;
-  }>;
+  components?: Array<KnownComponentSpec | ComponentSpec>;
   policy?: ConfigPolicy;
   /** Startup-only host service profile; omitted settings use file layers. */
   diagnostics?: { enabled?: boolean; limits?: Record<string, number> };
@@ -144,160 +144,16 @@ export interface DynamicPluginValidationReport {
   selected: boolean;
 }
 
-/**
- * Canonical result returned by a tool execution intercept.
- *
- * `result` is passed to the remaining middleware and application. `pendingMarks`
- * are Relay-owned lifecycle metadata emitted after the tool-end event and are
- * not included in the application-visible result.
- */
-export interface ToolExecutionInterceptOutcome {
-  result: Json;
-  annotation?: Json;
-  pendingMarks?: PendingMarkSpec[];
-}
-
-/** Component-scoped registration context passed to plugin handlers. */
-export interface PluginContext {
-  /** Register an activation-owned eligibility gate for a global runtime registration. */
-  registerConditionalMiddlewareGuardrail(
-    name: string,
-    kinds: RuntimeRegistrationKind[],
-    registrationName: string,
-    guardrail: (kinds: RuntimeRegistrationKind[], registrationName: string) => string | null,
-  ): void;
-  /**
-   * Register an event subscriber for this component. Callback failures are isolated and reported
-   * through the Node binding's callback-error channel; flushSubscribers waits for returned promises.
-   */
-  registerSubscriber(name: string, callback: (event: Json) => void | Promise<void>): void;
-  /** Register an event metadata injector for this component. */
-  registerEventMetadataInjector(
-    name: string,
-    priority: number,
-    callback: (event: Json) => EventMetadata | Promise<EventMetadata>,
-  ): void;
-  /** Register a mark event sanitizer for this component. */
-  registerMarkSanitizeGuardrail(
-    name: string,
-    priority: number,
-    callback: (event: Json, fields: EventSanitizeFields) => EventSanitizeFields | Promise<EventSanitizeFields>,
-  ): void;
-  /** Register a scope-start event sanitizer for this component. */
-  registerScopeSanitizeStartGuardrail(
-    name: string,
-    priority: number,
-    callback: (event: Json, fields: EventSanitizeFields) => EventSanitizeFields | Promise<EventSanitizeFields>,
-  ): void;
-  /** Register a scope-end event sanitizer for this component. */
-  registerScopeSanitizeEndGuardrail(
-    name: string,
-    priority: number,
-    callback: (event: Json, fields: EventSanitizeFields) => EventSanitizeFields | Promise<EventSanitizeFields>,
-  ): void;
-  /** Register a tool sanitize-request guardrail for this component. */
-  registerToolSanitizeRequestGuardrail(
-    name: string,
-    priority: number,
-    callback: (name: string, args: Json) => Json | Promise<Json>,
-  ): void;
-  /** Register a tool sanitize-response guardrail for this component. */
-  registerToolSanitizeResponseGuardrail(
-    name: string,
-    priority: number,
-    callback: (name: string, result: Json) => Json | Promise<Json>,
-  ): void;
-  /** Register a tool conditional-execution guardrail for this component. */
-  registerToolConditionalExecutionGuardrail(
-    name: string,
-    priority: number,
-    callback: (name: string, args: Json) => string | null | Promise<string | null>,
-  ): void;
-  /** Register an LLM sanitize-request guardrail. The callback receives `(request, context)`. */
-  registerLlmSanitizeRequestGuardrail(
-    name: string,
-    priority: number,
-    callback: (request: Json, context: LlmSanitizeRequestContext) => Json | null | Promise<Json | null>,
-  ): void;
-  /** Register an LLM sanitize-response guardrail. The callback receives `(response, context)`. */
-  registerLlmSanitizeResponseGuardrail(
-    name: string,
-    priority: number,
-    callback: (response: Json, context: LlmSanitizeResponseContext) => Json | null | Promise<Json | null>,
-  ): void;
-  /** Register an LLM conditional-execution guardrail for this component. */
-  registerLlmConditionalExecutionGuardrail(
-    name: string,
-    priority: number,
-    callback: (request: Json) => string | null | Promise<string | null>,
-  ): void;
-  /** Register an LLM request intercept for this component. */
-  registerLlmRequestIntercept(
-    name: string,
-    priority: number,
-    breakChain: boolean,
-    callback: (args: {
-      name: string;
-      request: Json;
-      annotated: Json | null;
-    }) => LlmRequestInterceptOutcome | Promise<LlmRequestInterceptOutcome>,
-  ): void;
-  /** Register an LLM execution intercept for this component. */
-  registerLlmExecutionIntercept(
-    name: string,
-    priority: number,
-    callback: (
-      request: Json,
-      context: LlmExecutionContext,
-      next: (request: Json) => Json | Promise<Json>,
-    ) => Json | Promise<Json>,
-  ): void;
-  /**
-   * Register an LLM streaming execution intercept for this component.
-   *
-   * The `next` callback resolves to a lazy stream. Return that stream to
-   * preserve incremental downstream delivery.
-   */
-  registerLlmStreamExecutionIntercept(
-    name: string,
-    priority: number,
-    callback: (
-      request: Json,
-      context: LlmExecutionContext,
-      next: (request: Json) => Promise<AsyncIterable<Json>>,
-    ) => AsyncIterable<Json> | Promise<AsyncIterable<Json>>,
-  ): void;
-  /** Register a tool request intercept for this component. */
-  registerToolRequestIntercept(
-    name: string,
-    priority: number,
-    breakChain: boolean,
-    callback: (name: string, args: Json) => Json | Promise<Json>,
-  ): void;
-  /**
-   * Register tool execution middleware that returns a canonical outcome.
-   * The `next` callback resolves to the canonical downstream result.
-   */
-  registerToolExecutionIntercept(
-    name: string,
-    priority: number,
-    callback: (
-      context: ToolExecutionContext,
-      next: (args: Json) => ToolExecutionResult | Promise<ToolExecutionResult>,
-    ) => ToolExecutionInterceptOutcome | Promise<ToolExecutionInterceptOutcome>,
-  ): void;
-}
-
 /** Plugin callback contract. */
 export interface Plugin {
   /** Validate one component-local config object. */
-  validate?(pluginConfig: Record<string, Json>): ConfigDiagnostic[] | null | undefined;
+  validate?(pluginConfig: JsonObject): ConfigDiagnostic[] | null | undefined;
   /**
    * Install middleware and subscribers for one component instance.
    *
    * Throwing aborts the current initialization and triggers rollback.
    */
-  register(pluginConfig: Record<string, Json>, context: PluginContext): void;
+  register(pluginConfig: JsonObject, context: PluginContext): void;
 }
 
 /**
@@ -325,13 +181,13 @@ export declare function defaultConfig(): PluginConfig;
  * @remarks Setting `options.enabled = false` preserves the component for
  * validation while skipping runtime registration during `initialize`.
  */
-export declare function ComponentSpec(
-  kind: string,
-  config?: Record<string, Json>,
+export declare function ComponentSpec<K extends string, C extends JsonObjectCompatible<C> = JsonObject>(
+  kind: K,
+  config?: K extends ComponentKind ? ComponentConfigs[K] : C,
   options?: {
     enabled?: boolean;
   },
-): ComponentSpec;
+): ComponentSpecFor<K>;
 /**
  * Initialize the core-owned static and dynamic plugin host.
  *

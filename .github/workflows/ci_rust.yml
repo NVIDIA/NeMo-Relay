@@ -124,7 +124,7 @@ jobs:
         with:
           cache: false
           toolchain: ${{ steps.ci-config.outputs.rust_version }}
-          components: clippy, rustfmt
+          components: clippy, llvm-tools, rustfmt
 
       - uses: Swatinem/rust-cache@c19371144df3bb44fab255c43d04cbc2ab54d1c4 # v2.9.1
         with:
@@ -183,15 +183,31 @@ jobs:
           fi
 
       - name: Upload Rust coverage to Codecov
+        id: codecov-upload
+        continue-on-error: true
         if: ${{ matrix.platform != 'windows-arm64' }}
-        uses: codecov/codecov-action@e53489f4d376d79066609109e7a95a29eb3740b1 # v7.0.0
+        uses: codecov/codecov-action@fb8b3582c8e4def4969c97caa2f19720cb33a72f # v7.0.0
         with:
           token: ${{ secrets.CODECOV_TOKEN }}
           disable_search: true
-          files: rust-workspace.xml
+          files: rust-workspace.lcov
           flags: rust-${{ matrix.platform }}
           name: rust-${{ matrix.platform }}
           verbose: true
+          fail_ci_if_error: true
+
+      - name: Record the failed Codecov upload
+        if: ${{ steps.codecov-upload.outcome == 'failure' }}
+        env:
+          MARKER: codecov-upload-failed-rust-${{ matrix.platform }}
+        run: printf '%s\n' "$MARKER" > "$MARKER"
+
+      - name: Keep the failed Codecov upload marker
+        if: ${{ steps.codecov-upload.outcome == 'failure' }}
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: codecov-upload-failed-rust-${{ matrix.platform }}
+          path: codecov-upload-failed-rust-${{ matrix.platform }}
 
       - name: Check daemon transport benchmark
         if: ${{ matrix.platform == 'linux-amd64' }}

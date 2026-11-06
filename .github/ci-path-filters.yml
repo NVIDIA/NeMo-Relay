@@ -74,6 +74,7 @@ shared:
   - 'crates/worker/src/**'
   - 'justfile'
   - 'rust-toolchain.toml'
+  - 'scripts/coverage/**'
 
 rust_package:
   - 'Cargo.lock'

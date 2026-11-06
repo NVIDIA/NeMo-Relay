@@ -272,3 +272,7 @@ jobs:
       - name: Test docs version retention
         working-directory: ${{ env.NEMO_RELAY_CI_WORKSPACE }}
         run: uv run --no-sync python -m unittest scripts.tests.test_sync_fern_docs_branch
+
+      - name: Test Rust coverage export
+        working-directory: ${{ env.NEMO_RELAY_CI_WORKSPACE }}
+        run: python -m unittest scripts.tests.test_export_llvm_cov_lcov

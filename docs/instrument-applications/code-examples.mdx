@@ -107,14 +107,14 @@ response = await nemo_relay.llm.execute(
 
 <Tab title="Node.js" language="node">
 ```ts
-import { LlmRequest, llmCallExecuteAsync } from 'nemo-relay-node';
+import { LlmRequest, llmCallExecuteAsync, type LlmRequestShape } from 'nemo-relay-node';
 
 const request = new LlmRequest({}, { messages: [{ role: 'user', content: 'hello' }] });
 
 const response = await llmCallExecuteAsync(
   'demo-provider',
   request,
-  async (req: LlmRequest) => ({ text: 'hi', request: req.content }),
+  async (req: LlmRequestShape) => ({ text: 'hi', request: req.content }),
   null,
   null,
   null,

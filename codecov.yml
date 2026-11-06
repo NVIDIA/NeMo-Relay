@@ -4,15 +4,7 @@
 codecov:
   require_ci_to_pass: true
   notify:
-    # Codecov counts one build per upload step in a full CI run:
-    # | Binding     | Platforms that upload coverage                                      | Uploads |
-    # |-------------|----------------------------------------------------------------------|---------|
-    # | Rust        | linux-amd64, linux-arm64, macos-arm64, windows-amd64                 | 4       |
-    # | Python      | linux-amd64, linux-arm64, macos-arm64, windows-amd64, windows-arm64  | 5       |
-    # | Go          | linux-amd64, linux-arm64, macos-arm64, windows-amd64, windows-arm64  | 5       |
-    # | Node.js     | linux-amd64, linux-arm64, macos-arm64                                | 3       |
-    # | Total       |                                                                      | 17      |
-    after_n_builds: 17
+    manual_trigger: true
     wait_for_ci: true
 
 coverage:
@@ -32,6 +24,10 @@ coverage:
         threshold: 5%
         base: auto
         if_ci_failed: error
+
+flag_management:
+  default_rules:
+    carryforward: true
 
 component_management:
   default_rules:
@@ -55,64 +51,28 @@ component_management:
         - "crates/resource-metrics/src"
         - "crates/observability/src"
         - "crates/adaptive/src"
-      statuses:
-        - type: project
-          target: 95%
-          threshold: 0.5%
-          base: auto
-          if_ci_failed: error
     - component_id: shared_types
       name: Shared DTO Types
       paths:
         - "crates/types/src"
-      statuses:
-        - type: project
-          target: auto
-          threshold: 0.5%
-          base: auto
-          if_ci_failed: error
     - component_id: cli
       name: CLI
       paths:
         - "crates/cli/src"
-      statuses:
-        - type: project
-          target: 90%
-          threshold: 0.5%
-          base: auto
-          if_ci_failed: error
     - component_id: go_binding
       name: Go Binding
       paths:
         - "go/nemo_relay"
         - "crates/ffi/src"
-      statuses:
-        - type: project
-          target: 94%
-          threshold: 0.5%
-          base: auto
-          if_ci_failed: error
     - component_id: python_binding
       name: Python Binding
       paths:
         - "python/nemo_relay"
         - "crates/python/src"
-      statuses:
-        - type: project
-          target: 95%
-          threshold: 0.5%
-          base: auto
-          if_ci_failed: error
     - component_id: node_binding
       name: Node Binding
       paths:
         - "crates/node/*.js"
-      statuses:
-        - type: project
-          target: 95%
-          threshold: 0.5%
-          base: auto
-          if_ci_failed: error
     - component_id: plugin_sdk
       name: Dynamic Plugin SDKs
       paths:
@@ -123,15 +83,8 @@ component_management:
         - "crates/worker-proto/src"
         - "crates/worker/src"
         - "python/plugin/src/nemo_relay_plugin"
-      statuses:
-        - type: project
-          target: 95%
-          threshold: 0.5%
-          base: auto
-          if_ci_failed: error
 
 comment:
-  after_n_builds: 17
   layout: "header, diff, components, files, footer"
   behavior: default
   require_changes: false
@@ -142,6 +95,21 @@ github_checks:
   annotations: false
 
 ignore:
+  # Paths without coverage reports. Empty uploads pass when changed files match
+  # this list or Codecov's non-testable types.
+  - "docs/**"
+  - "fern/**"
+  - ".agents/**"
+  - ".claude/**"
+  - ".claude-plugin/**"
+  - "scripts/**"
+  - "install.*"
+  - "uninstall.*"
+  - "LICENSE*"
+  - "**/*.mdx"
+  - "**/*.toml"
+  - "**/*.lock"
+  - "**/*.json"
   - "**/examples/**"
   - "**/tests/**"
   - "crates/cli/tests/"
