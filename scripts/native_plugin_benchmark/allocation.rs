@@ -10,6 +10,7 @@ static ENABLED: AtomicBool = AtomicBool::new(false);
 static CALLS: AtomicU64 = AtomicU64::new(0);
 static BYTES: AtomicU64 = AtomicU64::new(0);
 
+/// Count allocation events and bytes only while the benchmark measurement window is active.
 fn record(bytes: usize) {
     if ENABLED.load(Ordering::Relaxed) {
         CALLS.fetch_add(1, Ordering::Relaxed);

@@ -23,6 +23,7 @@ use std::{
 };
 static PROVIDER_CALLS: AtomicU64 = AtomicU64::new(0);
 
+/// Run one real middleware path and verify that it preserves the complete payload.
 async fn invoke(path: &str, payload: &Json) {
     let result = if path == "request" {
         tool_request_intercepts("bench", payload.clone())
@@ -50,6 +51,7 @@ async fn invoke(path: &str, payload: &Json) {
         "middleware must preserve the complete payload"
     );
 }
+/// Measure host and plugin allocations across repeated calls and verify the expected provider-call count.
 async fn allocations(path: &str, payload: &Json, iterations: usize) -> [u64; 4] {
     tool_request_intercepts("bench", json!({"__bench_control":"start"}))
         .await
@@ -79,6 +81,7 @@ async fn allocations(path: &str, payload: &Json, iterations: usize) -> [u64; 4] 
         plugin["bytes"].as_u64().unwrap(),
     ]
 }
+/// Load the benchmark plugin and report latency and allocation measurements for its scheduling mode.
 fn main() {
     let arguments = std::env::args().collect::<Vec<_>>();
     let iterations: usize = arguments[2].parse().unwrap();

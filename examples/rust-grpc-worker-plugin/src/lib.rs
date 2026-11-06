@@ -32,6 +32,7 @@ impl Plugin for DocumentationWorker {
         config::validate(config)
     }
 
+    /// Register configured worker middleware and keep its runtime helpers scoped to this component.
     fn register<'a>(
         &'a self,
         config: &'a serde_json::Map<String, Json>,

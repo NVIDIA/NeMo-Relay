@@ -132,6 +132,7 @@ impl NativeDiagnostics {
     }
 }
 impl Activation {
+    /// Allocate bounded diagnostic session storage lazily and retain its process-wide admission permit.
     fn session(&mut self) -> Result<&mut Session> {
         if self.session.is_none() {
             let permit =
@@ -186,6 +187,7 @@ fn guarded<T>(f: impl FnOnce() -> Result<T>) -> RResult<T, u32> {
         .map_err(Error::status)
         .into()
 }
+/// Charge borrowed diagnostic text against the remaining request-byte budget.
 fn text<'a>(value: RStr<'a>, budget: &mut usize) -> Result<&'a str> {
     if value.len() > *budget {
         return Err(Error::Capacity);
@@ -221,6 +223,7 @@ impl NativeDiagnostics {
     fn capabilities(&self) -> Result<abi::DiagnosticCapabilities> {
         self.with(|active| Ok(active.capabilities()))
     }
+    /// Admit a bounded producer declaration and return an activation-owned component token.
     fn register(&self, input: abi::DiagnosticRegistration<'_>) -> Result<u64> {
         let _call = Permit::acquire(&CALLS, bounds::MAX_CALLS)?;
         self.with(|a| {
@@ -299,6 +302,7 @@ impl NativeDiagnostics {
             Ok(token)
         })
     }
+    /// Validate an owned producer observation and return its receipt, or no receipt when collection is disabled.
     fn record(
         &self,
         token: u64,
@@ -391,6 +395,7 @@ impl NativeDiagnostics {
             Ok(())
         })
     }
+    /// Check live read authority and serialize the selected diagnostic report into bounded caller-owned storage.
     fn read(&self, kind: u32, query: RStr<'_>, output: &mut [u8]) -> Result<usize> {
         let _call = Permit::acquire(&CALLS, bounds::MAX_CALLS)?;
         self.with(|a| {
@@ -441,6 +446,7 @@ struct Output<'a> {
     written: usize,
 }
 impl std::io::Write for Output<'_> {
+    /// Copy serialized diagnostic bytes into caller-owned storage without exceeding its capacity.
     fn write(&mut self, bytes: &[u8]) -> std::io::Result<usize> {
         if bytes.len() > self.bytes.len() - self.written {
             return Err(std::io::ErrorKind::OutOfMemory.into());
@@ -530,6 +536,7 @@ struct ParsedDefinitions<'a> {
     count: usize,
 }
 
+/// Validate bounded diagnostic code declarations and reject duplicate or unauthorized codes.
 fn parse_definitions<'a>(
     input: &'a abi::DiagnosticRegistration<'_>,
     budget: &mut usize,
@@ -593,6 +600,7 @@ fn parse_definitions<'a>(
     })
 }
 
+/// Validate an extension code and its allowed failure classes within the request budget.
 fn parse_extension<'a>(
     def: &abi::DiagnosticCode<'_>,
     name: &'a str,
@@ -653,6 +661,7 @@ impl abi::Diagnostics for CheckedDiagnostics {
     fn register(&self, input: abi::DiagnosticRegistration<'_>) -> RResult<u64, u32> {
         guarded(|| self.runtime.register(input))
     }
+    /// Translate diagnostic admission results to ABI receipts, including the reserved disabled status.
     fn record(
         &self,
         token: u64,

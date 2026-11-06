@@ -58,6 +58,7 @@ fn encode(value: impl Serialize) -> Result<abi::Json> {
 fn decode<T: DeserializeOwned>(value: abi::Json) -> Result<T> {
     serde_json::from_value(from_abi(value).map_err(err)?).map_err(err)
 }
+/// Convert a runtime failure to an ABI error while preserving an upstream HTTP status.
 fn abi_error(error: FlowError) -> a::Error {
     let mut out = a::Error::new("runtime", super::http_error::to_message(&error));
     if let FlowError::Upstream(failure) = error {
@@ -68,6 +69,7 @@ fn abi_error(error: FlowError) -> a::Error {
 fn boundary<T>(value: Result<T>) -> a::Result<T> {
     value.map_err(abi_error).into()
 }
+/// Restore a runtime failure from its ABI message and optional upstream HTTP status.
 fn local<T>(value: a::Result<T>) -> Result<T> {
     value.into_result().map_err(|e| {
         let message = e.message.to_string();
@@ -158,6 +160,7 @@ impl HostRuntime {
             state: Mutex::new(RuntimeState::default()),
         }))
     }
+    /// Convert a callback result and record failures that did not originate in a downstream continuation.
     fn callback_result<T>(&self, value: a::Result<T>, downstream: &DownstreamErrors) -> Result<T> {
         if let a::Result::RErr(error) = &value {
             let inherited = downstream
@@ -183,6 +186,7 @@ impl HostRuntime {
     pub fn registered(&self) {
         self.diagnostics.registered();
     }
+    /// Reject operations after this component has revoked its runtime authority.
     fn ensure(&self) -> Result<()> {
         if self.active.load(Ordering::Acquire) {
             Ok(())
@@ -201,6 +205,7 @@ impl HostRuntime {
         state.callbacks.push(Arc::downgrade(&callback));
         Ok(callback)
     }
+    /// Release retained foreign callback state after component cleanup has completed.
     fn release_callbacks(&self) {
         let callbacks = std::mem::take(
             &mut self
@@ -230,6 +235,7 @@ impl HostRuntime {
             TD_Opaque,
         )
     }
+    /// Stop runtime admission and remove owned gates, retaining gates whose removal failed.
     pub fn revoke(&self) -> crate::Result<()> {
         self.active.store(false, Ordering::Release);
         self.executor.stop_admission();
@@ -263,6 +269,8 @@ impl HostRuntime {
             Err(crate::PluginError::RegistrationFailed(failures.join("; ")))
         }
     }
+    /// Drain component work, close streams and scopes, then stop the executor and release callbacks.
+    /// Failed resource cleanup retains ownership so the caller can retry.
     pub async fn shutdown(&self) -> crate::Result<()> {
         self.revoke()?;
         self.executor.drain_user_tasks().await;
@@ -285,6 +293,7 @@ impl HostRuntime {
         self.release_callbacks();
         Ok(())
     }
+    /// Unwind owned scopes on their original stacks and retain any scopes that could not close.
     fn close_scopes(&self) -> crate::Result<()> {
         // Revoked SDK guards cannot call back into the runtime. Retain host
         // ownership until every scope is unwound on its original stack.
@@ -318,6 +327,7 @@ impl HostRuntime {
             Err(crate::PluginError::RegistrationFailed(failures.join("; ")))
         }
     }
+    /// Dispatch an authorized runtime operation and validate its arguments before changing host state.
     fn operation(&self, operation: &str, args: Json) -> Result<Json> {
         self.ensure()?;
         let null = || Ok(Json::Null);
@@ -569,6 +579,7 @@ impl HostRuntime {
 }
 struct LogFields<'a>(&'a serde_json::Map<String, Json>);
 impl log::kv::Source for LogFields<'_> {
+    /// Expose structured plugin log fields to the host logger without flattening their JSON values.
     fn visit<'kvs>(
         &'kvs self,
         visitor: &mut dyn log::kv::VisitSource<'kvs>,
@@ -612,6 +623,7 @@ impl a::Runtime for RuntimeProxy {
     fn capture_scope(&self) -> a::Result<a::ScopeBox> {
         boundary(self.0.ensure().map(|_| self.0.scope()))
     }
+    /// Bind one component owner during an active registration transaction and reject duplicate ownership.
     fn bind_component(&self, component: a::ComponentBox) -> a::Result<()> {
         if let Err(error) = self.0.ensure() {
             return a::Result::RErr(abi_error(error));
@@ -641,6 +653,7 @@ impl a::Runtime for RuntimeProxy {
         *slot = Some(component);
         a::Result::ROk(())
     }
+    /// Send a callback to the active registration transaction and wait for its admission result.
     fn register_callback(&self, registration: a::Registration) -> a::Result<()> {
         let sender = self
             .0
@@ -671,6 +684,7 @@ impl a::Runtime for RuntimeProxy {
             }),
         }
     }
+    /// Register a revocable conditional gate within this component's runtime authority and namespace.
     fn register_gate(&self, registration: a::Registration) -> a::Result<RString> {
         boundary((|| {
             self.0.ensure()?;
@@ -723,6 +737,7 @@ struct HostLease {
     restored: bool,
 }
 impl HostLease {
+    /// Restore the previous thread binding once and save scope changes made during the invocation.
     fn restore_inner(&mut self) {
         if self.restored {
             return;
@@ -744,6 +759,7 @@ impl a::ScopeLease for HostLease {
     }
 }
 impl a::Scope for HostScope {
+    /// Bind the captured Relay scope to this thread until the returned lease restores the previous binding.
     fn enter(&self) -> a::Result<a::ScopeLeaseBox> {
         if !self.active.load(Ordering::Acquire) {
             return a::Result::RErr(a::Error::new("revoked", "component scope is revoked"));
@@ -764,6 +780,7 @@ impl a::Scope for HostScope {
             TD_Opaque,
         ))
     }
+    /// Read the captured scope stack while component authority is active; implicit scopes have no snapshot.
     fn snapshot(&self) -> a::Result<ROption<abi::Json>> {
         if !self.active.load(Ordering::Acquire) {
             return a::Result::RErr(a::Error::new("revoked", "component scope is revoked"));
@@ -797,6 +814,7 @@ struct Codec {
     component_active: Arc<AtomicBool>,
 }
 impl Codec {
+    /// Require both invocation and component authority before a codec operation.
     fn ensure_active(&self) -> Result<()> {
         if self.active.load(Ordering::Acquire) && self.component_active.load(Ordering::Acquire) {
             Ok(())
@@ -806,6 +824,7 @@ impl Codec {
     }
 }
 impl a::Codec for Codec {
+    /// Return codec identity and availability while its invocation and component remain active.
     fn identity(&self) -> a::Result<abi::Json> {
         if self.ensure_active().is_err() {
             return a::Result::RErr(a::Error::new("revoked", "codec capability expired"));
@@ -819,6 +838,7 @@ impl a::Codec for Codec {
             }
         })
     }
+    /// Decode request or response data with the host codec after checking invocation and component authority.
     fn decode(&self, value: abi::Json) -> a::Result<abi::Json> {
         guarded(|| {
             self.ensure_active()?;
@@ -932,6 +952,7 @@ enum Next {
     Stream(LlmStreamExecutionNextFn),
 }
 type DownstreamErrors = Arc<Mutex<BTreeSet<String>>>;
+/// Remember downstream failures before converting them to checked ABI errors.
 fn downstream_boundary<T>(result: Result<T>, errors: &DownstreamErrors) -> a::Result<T> {
     if let Err(error) = &result {
         errors
@@ -948,6 +969,7 @@ struct Continuation {
     owner: Arc<HostRuntime>,
 }
 impl a::Continuation for Continuation {
+    /// Invoke a unary continuation on the host executor and retain the origin of downstream failures.
     fn call(&self, value: abi::Json) -> FfiFuture<a::Result<abi::Json>> {
         let errors = self.downstream.clone();
         let begin = self.owner.ensure().and_then(|_| self.lease.begin());
@@ -975,6 +997,7 @@ impl a::Continuation for Continuation {
             )
         })
     }
+    /// Invoke a tool continuation and preserve its typed result and optional annotation.
     fn call_tool(&self, value: abi::Json) -> FfiFuture<a::Result<a::ToolExecutionResult>> {
         let errors = self.downstream.clone();
         let begin = self.owner.ensure().and_then(|_| self.lease.begin());
@@ -1007,6 +1030,7 @@ impl a::Continuation for Continuation {
             )
         })
     }
+    /// Open a downstream stream under the captured continuation context and track it for component cleanup.
     fn open_stream(&self, value: abi::Json) -> FfiFuture<a::Result<a::StreamBox>> {
         let errors = self.downstream.clone();
         let begin = self.owner.ensure().and_then(|_| self.lease.begin());
@@ -1061,6 +1085,7 @@ struct HostStreamState {
     downstream: DownstreamErrors,
 }
 impl HostStreamState {
+    /// Cancel further pulls and share stream cleanup, allowing a failed cleanup attempt to be retried.
     fn close(self: &Arc<Self>, executor: &ComponentExecutor) -> HostCloseFuture {
         self.cancelled.cancel();
         self.terminal.store(true, Ordering::Release);
@@ -1097,6 +1122,7 @@ struct HostStream {
     owner: Arc<HostRuntime>,
 }
 impl a::Stream for HostStream {
+    /// Read one downstream stream item on the host executor and make EOF or an error terminal.
     fn pull(&mut self) -> FfiFuture<a::Result<ROption<abi::Json>>> {
         if let Err(error) = self.owner.ensure() {
             return async move { a::Result::RErr(abi_error(error)) }.into_ffi();
@@ -1168,6 +1194,7 @@ async fn unary<T: DeserializeOwned>(
     )
 }
 
+/// Adapt a synchronous native subscriber and log callback failures without interrupting event delivery.
 fn subscriber_callback(callback: Arc<CallbackOwner>, owner: Arc<HostRuntime>) -> EventSubscriberFn {
     Arc::new(move |event| {
         let result = owner.ensure().and_then(|_| {
@@ -1679,6 +1706,7 @@ struct ForeignStream {
 impl Unpin for ForeignStream {}
 impl Stream for ForeignStream {
     type Item = Result<Json>;
+    /// Open the foreign stream lazily and poll one item while retaining its invocation capabilities.
     fn poll_next(mut self: Pin<&mut Self>, cx: &mut Context<'_>) -> Poll<Option<Self::Item>> {
         if self.terminal {
             return Poll::Ready(None);
@@ -1742,6 +1770,7 @@ impl LlmStreamInner for ForeignStream {
     fn terminalize(mut self: Pin<&mut Self>) {
         self._lifetime.take();
     }
+    /// Cancel pending foreign reads and release invocation capabilities after stream cleanup succeeds.
     fn close(self: Pin<&mut Self>) -> Pin<Box<dyn Future<Output = Result<()>> + Send + '_>> {
         Box::pin(async move {
             let this = self.get_mut();
@@ -1758,6 +1787,7 @@ impl LlmStreamInner for ForeignStream {
     }
 }
 impl Drop for ForeignStream {
+    /// Schedule foreign stream cleanup and retain the invocation lifetime until that cleanup task finishes.
     fn drop(&mut self) {
         self.pending.take();
         self.opening.take();
@@ -1817,6 +1847,7 @@ struct ComponentOwner {
     runtime: Arc<HostRuntime>,
 }
 impl ComponentOwner {
+    /// Run component teardown on a dedicated thread and retain ownership when cleanup fails or exceeds its deadline.
     fn close(&self) -> crate::Result<()> {
         let revoked = self.runtime.revoke();
         std::thread::scope(|scope| {
@@ -1849,6 +1880,7 @@ impl crate::Plugin for CheckedPlugin {
     fn allows_multiple_components(&self) -> bool {
         self.plugin.allows_multiple_components()
     }
+    /// Convert checked plugin validation results to host diagnostics and record whether validation succeeded.
     fn validate(&self, config: &serde_json::Map<String, Json>) -> Vec<crate::ConfigDiagnostic> {
         let diagnostics: Vec<crate::ConfigDiagnostic> = self
             .plugin
@@ -1883,6 +1915,7 @@ impl crate::Plugin for CheckedPlugin {
         }
         diagnostics
     }
+    /// Create fresh runtime authority and register a component through a bounded host transaction.
     fn register<'a>(
         &'a self,
         config: &serde_json::Map<String, Json>,

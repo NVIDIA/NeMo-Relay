@@ -116,6 +116,7 @@ impl PluginDiagnostics {
             });
         }
     }
+    /// Record successful plugin work with its execution kind and lifecycle phase when collection is available.
     pub(super) fn success(&self, code: SuccessCode, phase: PluginPhase) {
         if let Some(recorder) = &self.recorder {
             let _ = recorder.record_without_projection_lazy(|| {

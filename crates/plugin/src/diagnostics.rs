@@ -469,6 +469,7 @@ struct ComponentInner {
     closed: AtomicBool,
 }
 impl ComponentInner {
+    /// Close the diagnostic component at most once; disabled components need no host call.
     fn close(&self) -> Result<()> {
         if self.handle == 0 || self.closed.swap(true, Ordering::AcqRel) {
             return Ok(());
@@ -616,6 +617,7 @@ impl DiagnosticReader {
     ) -> Result<T> {
         serde_json::from_str(&self.read(kind, query)?).map_err(|_| DiagnosticError::Internal)
     }
+    /// Read an authorized diagnostic report using bounded buffers and a single in-flight SDK read slot.
     fn read(&self, kind: u32, query: &DiagnosticQuery) -> Result<String> {
         let d = &self.diagnostics;
         let _guard = d.enter()?;

@@ -12,6 +12,7 @@ pub(super) struct Target {
     machine: u16,
 }
 impl Target {
+    /// Read ELF class, byte order, and machine identity from a recognized image header.
     pub(super) fn from_header(bytes: &[u8]) -> Option<Self> {
         if bytes.get(..4)? != b"\x7fELF" || !matches!(*bytes.get(4)?, 1 | 2) {
             return None;
@@ -37,6 +38,7 @@ impl Target {
             && (self.encoding != other.encoding || self.machine == other.machine)
     }
 
+    /// Check a regular dependency file for the ELF target identity required by its importing image.
     pub(super) fn accepts_file(self, path: &Path) -> Result<bool, String> {
         use std::io::Read;
         #[cfg(unix)]
@@ -161,6 +163,7 @@ fn parse_tokens(debug: &str) -> Result<Tokens, String> {
 }
 
 #[cfg(target_os = "linux")]
+/// Determine the running ELF loader's `$LIB` and `$PLATFORM` expansions using the host executable interpreter.
 fn host_tokens() -> Result<Tokens, String> {
     use object::read::elf::ProgramHeader as _;
     use std::os::unix::ffi::OsStrExt;

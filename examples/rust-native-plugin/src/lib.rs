@@ -48,6 +48,7 @@ impl Plugin for ExampleNativePlugin {
         NativeExecutorConfig { worker_threads: 2 }
     }
 
+    /// Register the native example callbacks for the selected component configuration.
     fn register<'a>(
         &'a self,
         plugin_config: &'a Map<String, Json>,

@@ -667,6 +667,7 @@ fn validate_declaration(
     .0
 }
 
+/// Validate a plugin declaration and retain the artifact bytes used for its trust check.
 fn validate_declaration_with_artifact(
     manifest: &DynamicPluginManifest,
     manifest_ref: String,

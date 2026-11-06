@@ -363,6 +363,7 @@ impl DynamicPluginManifest {
         Ok(())
     }
 
+    /// Check manifest fields and enforce the loading requirements for the declared plugin kind.
     fn validate_structure(&self) -> Result<()> {
         if self.manifest_version != 1 {
             return Err(PluginError::InvalidConfig(format!(
@@ -800,6 +801,7 @@ impl DynamicPluginManifestLoad {
     }
 }
 
+/// Check that compatibility declarations use the required version syntax for their plugin kind.
 fn validate_compat_shape(
     kind: DynamicPluginKind,
     compat: &DynamicPluginManifestCompat,

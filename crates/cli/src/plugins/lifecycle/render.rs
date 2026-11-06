@@ -410,6 +410,7 @@ pub(super) fn redacted_host_config_json(host_config: &ResolvedDynamicPluginConfi
     )
 }
 
+/// Describe the configured native library or worker launch settings for inspection.
 pub(super) fn inspect_load_data(record: &DynamicPluginRecord) -> Value {
     match &record.load {
         DynamicPluginLoadContract::Worker(load) => serde_json::json!({
@@ -422,6 +423,7 @@ pub(super) fn inspect_load_data(record: &DynamicPluginRecord) -> Value {
     }
 }
 
+/// Report declared compatibility and host API support without claiming binary verification.
 pub(super) fn inspect_compat_data(record: &DynamicPluginRecord) -> Value {
     match &record.compatibility {
         DynamicPluginCompatibility::Worker(compatibility) => serde_json::json!({

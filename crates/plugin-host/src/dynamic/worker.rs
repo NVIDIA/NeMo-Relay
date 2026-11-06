@@ -283,6 +283,7 @@ impl Plugin for WorkerPluginAdapter {
         self.allows_multiple_components
     }
 
+    /// Reuse validation for a matching configuration or validate an independently owned component worker.
     fn validate(&self, plugin_config: &Map<String, Json>) -> Vec<ConfigDiagnostic> {
         if plugin_config != &self.instance.config && !self.allows_multiple_components {
             return vec![worker_error_diagnostic(
@@ -304,6 +305,7 @@ impl Plugin for WorkerPluginAdapter {
         }
     }
 
+    /// Select the configured component worker and reject registration after teardown begins.
     fn register<'a>(
         &'a self,
         plugin_config: &Map<String, Json>,
@@ -1530,6 +1532,7 @@ fn clear_host_python_environment(command: &mut Command) {
 impl WorkerPluginInstance {
     // Register needs the preceding components' live runtime registrations.
     // Cache its plan once per worker so multiple components do not repeat setup.
+    /// Cache a validated worker registration plan while activation admission remains open.
     async fn prepare_registrations(&self) -> crate::Result<()> {
         if self.teardown_started.load(Ordering::Acquire) {
             return Err(PluginError::RegistrationFailed(

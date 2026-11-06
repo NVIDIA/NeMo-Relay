@@ -239,6 +239,7 @@ impl PluginRuntime {
     pub fn runtime_diagnostics(&self) -> Result<RuntimeDiagnostics> {
         self.call("runtime.diagnostics", Json::Null)
     }
+    /// Send a process log record with optional structured fields through the host runtime capability.
     pub fn log(
         &self,
         level: PluginLogLevel,
@@ -312,6 +313,7 @@ impl PluginRuntime {
 macro_rules! logs{($($name:ident=>$level:ident),*)=>{$(impl PluginRuntime{
 pub fn $name(&self,target:&str,message:&str,fields:Option<&Json>)->Result<()>{self.log(PluginLogLevel::$level,target,message,fields)}})*}}
 logs!(trace=>Trace,debug=>Debug,info=>Info,warn=>Warn,error=>Error);
+/// Convert a system timestamp to signed Unix microseconds, flooring fractional values before the epoch.
 fn micros(value: SystemTime) -> Result<i64> {
     let micros = match value.duration_since(UNIX_EPOCH) {
         Ok(duration) => i128::try_from(duration.as_micros()),
@@ -336,6 +338,7 @@ impl<'a> ScopeGuard<'a> {
     pub fn handle(&self) -> Option<&ScopeHandle<'a>> {
         self.handle.as_ref()
     }
+    /// Close this scope and retain its handle when the host reports a cleanup failure.
     pub fn close(&mut self, output: Option<&Json>, metadata: Option<&Json>) -> Result<()> {
         if let Some(handle) = &self.handle {
             self.runtime.pop_scope(handle, output, metadata)?;
@@ -343,6 +346,7 @@ impl<'a> ScopeGuard<'a> {
         }
         Ok(())
     }
+    /// Pop this scope at an explicit timestamp and release its handle only after successful cleanup.
     pub fn close_at(
         &mut self,
         output: Option<&Json>,
@@ -387,6 +391,7 @@ pub struct ScopeStackBinding<'a> {
     id: Option<String>,
 }
 impl ScopeStackBinding<'_> {
+    /// Restore the captured thread scope binding and consume its host-issued token.
     pub fn restore(mut self) -> Result<()> {
         match self.id.take() {
             Some(id) => self.runtime.call("stack.restore", id),
@@ -395,6 +400,7 @@ impl ScopeStackBinding<'_> {
     }
 }
 impl Drop for ScopeStackBinding<'_> {
+    /// Release an unused binding token without changing the current thread scope stack.
     fn drop(&mut self) {
         if let Some(id) = self.id.take() {
             let _ = self.runtime.call::<()>("stack.binding_release", id);
@@ -405,6 +411,7 @@ pub struct ThreadScopeStackGuard<'a> {
     previous: Option<ScopeStackBinding<'a>>,
 }
 impl ThreadScopeStackGuard<'_> {
+    /// Restore the previous scope stack explicitly, leaving guard drop with no remaining work.
     pub fn restore(mut self) -> Result<()> {
         if let Some(previous) = self.previous.take() {
             previous.restore()?;
@@ -413,6 +420,7 @@ impl ThreadScopeStackGuard<'_> {
     }
 }
 impl Drop for ThreadScopeStackGuard<'_> {
+    /// Restore the previous thread scope stack when the guard leaves scope.
     fn drop(&mut self) {
         if let Some(previous) = self.previous.take() {
             let _ = previous.restore();

@@ -63,6 +63,7 @@ fn failure(error: impl ToString) -> a::Error {
 fn boundary<T>(value: Result<T>) -> a::Result<T> {
     value.map_err(failure).into()
 }
+/// Restore SDK errors from ABI results while retaining upstream HTTP status in their messages.
 fn local<T>(value: a::Result<T>) -> Result<T> {
     value.into_result().map_err(|e| {
         let message = e.message.to_string();
@@ -163,6 +164,7 @@ struct ScopedFuture<F> {
 impl<F> Unpin for ScopedFuture<F> {}
 impl<F: Future<Output = a::Result<T>>, T> Future for ScopedFuture<F> {
     type Output = a::Result<T>;
+    /// Enter the invocation scope for each user-future poll and restore the previous thread binding afterward.
     fn poll(self: Pin<&mut Self>, cx: &mut Context<'_>) -> Poll<Self::Output> {
         let this = self.get_mut();
         let lease = match this.scope.enter().into_result() {
@@ -185,6 +187,7 @@ impl<F: Future<Output = a::Result<T>>, T> Future for ScopedFuture<F> {
     }
 }
 impl<F> Drop for ScopedFuture<F> {
+    /// Attempt to bind the captured scope while dropping the user future, then restore the previous thread binding.
     fn drop(&mut self) {
         let lease = self.scope.enter().into_result().ok();
         self.future.take();
@@ -194,6 +197,7 @@ impl<F> Drop for ScopedFuture<F> {
     }
 }
 impl a::Callback for Callback {
+    /// Run a unary callback on its owning executor and reject synchronous, streaming, or typed tool dispatch mismatches.
     fn invoke(
         &self,
         invocation: a::Invocation,
@@ -364,6 +368,7 @@ struct StreamState {
     cancelled: tokio_util::sync::CancellationToken,
 }
 impl StreamState {
+    /// Cancel stream pulls and close retained sources under the invocation scope, preserving failed cleanup for retry.
     fn close(self: &Arc<Self>, executor: &ComponentExecutor) -> CloseFuture {
         self.cancelled.cancel();
         let mut closing = self.closing.lock().unwrap_or_else(|e| e.into_inner());
@@ -412,6 +417,7 @@ struct OutputStream {
     executor: ComponentExecutor,
 }
 impl a::Stream for OutputStream {
+    /// Poll one output item under the invocation scope and make cancellation, EOF, or an error terminal.
     fn pull(&mut self) -> FfiFuture<a::Result<ROption<abi::Json>>> {
         let state = self.state.clone();
         let scope = state.scope.clone();
@@ -444,6 +450,7 @@ struct Owner {
     streams: Arc<Mutex<Vec<Arc<StreamState>>>>,
 }
 impl a::Component for Owner {
+    /// Stop user admission, drain work and stream cleanup, then shut down the component executor.
     fn shutdown(&self) -> FfiFuture<a::Result<()>> {
         self.executor.stop_admission();
         let executor = self.executor.clone();
@@ -1160,6 +1167,7 @@ impl SourceStream {
             .push(source.clone());
         source
     }
+    /// Share source-stream cleanup and release the foreign source only after close succeeds.
     fn close(self: &Arc<Self>) -> SourceClose {
         let mut state = self.state.lock().unwrap_or_else(|e| e.into_inner());
         if let Some(future) = &state.closing
@@ -1209,6 +1217,7 @@ struct InputStream {
 impl Unpin for InputStream {}
 impl Stream for InputStream {
     type Item = Result<Json>;
+    /// Poll one foreign source item and stop reading after the source closes or reaches a terminal result.
     fn poll_next(mut self: Pin<&mut Self>, cx: &mut Context<'_>) -> Poll<Option<Self::Item>> {
         if self.terminal {
             return Poll::Ready(None);
@@ -1295,6 +1304,7 @@ impl<P: Plugin> a::Plugin for Adapter<P> {
             })
             .collect()
     }
+    /// Create the component executor, bind its owner, and run author registration with cleanup on failure.
     fn register(
         &self,
         config: abi::Json,
@@ -1378,6 +1388,7 @@ impl<P: Plugin> a::Plugin for Adapter<P> {
     }
 }
 
+/// Construct a checked plugin, reject an identity mismatch, and contain constructor panics in the SDK.
 pub fn create_plugin<P: Plugin>(
     constructor: impl FnOnce() -> P,
     kind: &str,
@@ -1579,6 +1590,7 @@ fn raw_sync(
     )
 }
 impl a::Callback for RawCallback {
+    /// Run a raw tool callback on the owning executor and decode its canonical result and pending marks.
     fn invoke_tool(
         &self,
         invocation: a::Invocation,
@@ -1618,6 +1630,7 @@ impl a::Callback for RawCallback {
     fn invoke_sync(&self, invocation: a::Invocation) -> a::Result<abi::Json> {
         raw_sync(&self.executor, &*self.callback, invocation, ROption::RNone)
     }
+    /// Run a raw callback on the owning executor with the supplied optional continuation.
     fn invoke(
         &self,
         invocation: a::Invocation,

@@ -42,6 +42,7 @@ pub enum ParseNativeApiVersionError {
 }
 
 impl fmt::Display for ParseNativeApiVersionError {
+    /// Explain why an authored native API identifier cannot be used.
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         f.write_str(match self {
             Self::Legacy => "native API 1 is obsolete; rebuild the plugin for v1.0",
@@ -53,6 +54,7 @@ impl std::error::Error for ParseNativeApiVersionError {}
 
 impl FromStr for NativeApiVersion {
     type Err = ParseNativeApiVersionError;
+    /// Parse canonical `v<major>.<minor>` notation, rejecting invalid numbers and unsupported notation.
     fn from_str(value: &str) -> Result<Self, Self::Err> {
         use ParseNativeApiVersionError::{Invalid, Legacy};
         if value == "1" {

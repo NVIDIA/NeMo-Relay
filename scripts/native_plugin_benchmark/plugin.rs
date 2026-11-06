@@ -12,6 +12,7 @@ use std::{
 static EXECUTIONS: AtomicU64 = AtomicU64::new(0);
 
 struct Benchmark;
+/// Exercise ready, pending, or waker-cloning behavior before the benchmark callback completes.
 async fn scheduling(value: &Json) {
     match value["mode"].as_str().unwrap_or("ready") {
         "pending" => tokio::task::yield_now().await,
@@ -34,6 +35,7 @@ async fn scheduling(value: &Json) {
         _ => {}
     }
 }
+/// Install benchmark middleware that exercises the chosen scheduling mode and preserves payloads.
 fn register(context: &mut PluginContext<'_>) -> nemo_relay_plugin::Result<()> {
     context.register_tool_request_intercept("request", 0, false, |_, value| async move {
         match value["__bench_control"].as_str() {

@@ -42,6 +42,7 @@ impl NativeExecutorConfig {
         self.validate()
     }
 
+    /// Reject a zero executor worker-thread count.
     fn validate(self) -> Result<Self> {
         if self.worker_threads == 0 {
             Err("executor.worker_threads must be greater than zero".into())

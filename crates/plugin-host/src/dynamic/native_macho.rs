@@ -6,6 +6,7 @@
 use object::read::macho::FatArch as _;
 use std::{io::Read, path::Path};
 
+/// Test whether a Mach-O architecture matches the architecture of this host build.
 pub(super) fn host_architecture(architecture: object::Architecture) -> bool {
     match architecture {
         object::Architecture::Aarch64 => cfg!(target_arch = "aarch64"),
@@ -15,6 +16,7 @@ pub(super) fn host_architecture(architecture: object::Architecture) -> bool {
     }
 }
 
+/// Check whether a thin or universal Mach-O image includes an architecture supported by this host.
 pub(super) fn compatible(bytes: &[u8]) -> Result<bool, String> {
     let read = || -> Result<bool, object::Error> {
         use object::FileKind;
@@ -47,6 +49,7 @@ pub(super) fn compatible(bytes: &[u8]) -> Result<bool, String> {
     read().map_err(|error| format!("cannot read native Mach-O target: {error}"))
 }
 
+/// Check the architecture of a regular Mach-O file before selecting it as a dependency.
 pub(super) fn compatible_file(path: &Path) -> Result<bool, String> {
     #[cfg(unix)]
     let mut file = {

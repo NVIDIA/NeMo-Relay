@@ -176,6 +176,7 @@ pub enum WorkerSdkError {
 }
 
 impl From<WorkerSdkError> for PluginError {
+    /// Map worker author errors to shared configuration, serialization, or registration errors.
     fn from(error: WorkerSdkError) -> Self {
         match error {
             WorkerSdkError::InvalidInput(message) => Self::InvalidConfig(message),
@@ -2062,6 +2063,7 @@ impl Drop for AbortTaskOnDrop {
 
 #[tonic::async_trait]
 impl PluginWorker for WorkerService {
+    /// Authenticate the host and check plugin and protocol identity before advertising worker capabilities.
     async fn handshake(
         &self,
         request: Request<HandshakeRequest>,
@@ -2120,6 +2122,7 @@ impl PluginWorker for WorkerService {
         }))
     }
 
+    /// Authenticate configuration validation and reject a mismatched plugin or a draining worker.
     async fn validate(
         &self,
         request: Request<ValidateRequest>,
@@ -2599,6 +2602,7 @@ impl PluginWorker for WorkerService {
         }))
     }
 
+    /// Fence new work, cancel registration and invocations, and drain their captured state before signaling exit.
     async fn shutdown(
         &self,
         request: Request<ShutdownRequest>,
@@ -2682,6 +2686,7 @@ impl PluginWorker for WorkerService {
     }
 }
 
+/// Normalize absent or null configuration to an empty map and reject other non-object values.
 fn configuration_object(
     config: Option<&wire::JsonValue>,
 ) -> std::result::Result<Map<String, Json>, Status> {

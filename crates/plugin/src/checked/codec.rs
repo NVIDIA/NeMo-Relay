@@ -23,6 +23,7 @@ impl ResponseCodec {
         decode(local(self.0.decode(encode(response)?))?)
     }
 }
+/// Resolve request codec identity and expose operations only when the host reports an available capability.
 fn request(value: ROption<a::CodecBox>) -> Result<(LlmCodecIdentity, Option<RequestCodec>)> {
     match value.into_option() {
         None => Ok((LlmCodecIdentity::None, None)),
@@ -35,6 +36,7 @@ fn request(value: ROption<a::CodecBox>) -> Result<(LlmCodecIdentity, Option<Requ
         }
     }
 }
+/// Resolve response codec identity and expose operations only when the host reports an available capability.
 fn response(value: ROption<a::CodecBox>) -> Result<(LlmCodecIdentity, Option<ResponseCodec>)> {
     match value.into_option() {
         None => Ok((LlmCodecIdentity::None, None)),
@@ -106,6 +108,7 @@ pub struct LlmExecutionContext {
     response_codec: Option<LlmResponseContext>,
 }
 impl LlmExecutionContext {
+    /// Build invocation codec context with an optional response capability for unary execution.
     pub(super) fn new(req: ROption<a::CodecBox>, res: ROption<a::CodecBox>) -> Result<Self> {
         let (codec, resolved) = request(req)?;
         let request_codec = LlmRequestContext { codec, resolved };

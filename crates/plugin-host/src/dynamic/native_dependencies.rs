@@ -27,6 +27,7 @@ struct Imports {
     depth_first: bool,
     identity: Option<String>,
 }
+/// Collect both ordinary and delay-loaded DLL imports from a PE image.
 fn pe_imports<Pe: object::read::pe::ImageNtHeaders>(
     file: &object::read::pe::PeFile<'_, Pe>,
 ) -> Result<Imports, Box<dyn std::error::Error>> {
@@ -57,6 +58,7 @@ fn pe_imports<Pe: object::read::pe::ImageNtHeaders>(
     Ok(result)
 }
 
+/// Read the ELF dynamic string table only when its declared range is backed by a loadable segment.
 fn elf_strings<'data, Elf: FileHeader>(
     file: &object::read::elf::ElfFile<'data, Elf>,
     entries: &[object::read::elf::Dynamic],
@@ -81,6 +83,7 @@ fn elf_strings<'data, Elf: FileHeader>(
     Err("ELF dynamic string table is outside loadable segments".into())
 }
 
+/// Read ELF dependencies and loader search paths from program headers, including stripped images.
 fn elf_imports<Elf: FileHeader>(
     file: &object::read::elf::ElfFile<'_, Elf>,
 ) -> Result<Imports, Box<dyn std::error::Error>> {
@@ -146,6 +149,7 @@ fn elf_imports<Elf: FileHeader>(
 }
 
 fn imports(bytes: &[u8]) -> Result<Imports, String> {
+    /// Read dependency names, search paths, and loader identity from the supported native image formats.
     fn read(bytes: &[u8]) -> Result<Imports, Box<dyn std::error::Error>> {
         macro_rules! fat {
             ($file:expr) => {{
@@ -217,6 +221,7 @@ fn imports(bytes: &[u8]) -> Result<Imports, String> {
     read(bytes).map_err(|error| format!("cannot read native imports: {error}"))
 }
 
+/// Remove lexical dot components, returning `None` when a parent component cannot be resolved.
 fn normalized(path: &Path) -> Option<PathBuf> {
     let mut result = PathBuf::new();
     for component in path.components() {
@@ -232,6 +237,7 @@ fn normalized(path: &Path) -> Option<PathBuf> {
     }
     Some(result)
 }
+/// Expand loader-relative tokens and adapt separators before using the path on the host filesystem.
 fn expand(
     path: &str,
     origin: &Path,
@@ -262,6 +268,7 @@ fn expand(
     let expanded = expanded.replace('/', "\\");
     Ok(Some(PathBuf::from(expanded)))
 }
+/// Expand loader search paths and reject working-directory paths or absolute paths within the package.
 fn runtime_search_paths(
     paths: &[String],
     root: &Path,
@@ -411,6 +418,7 @@ fn package_absolute(value: &str, root: &Path) -> bool {
 
 // Compare directory entries without following symlinks. Equal canonical targets
 // alone would also merge distinct symlink aliases that must remain in staging.
+/// Check whether two import paths identify the same entry when selecting staged aliases.
 fn same_import_path(root: &Path, first: &Path, second: &Path) -> Result<bool, String> {
     #[cfg(unix)]
     {
@@ -448,6 +456,7 @@ fn same_import_path(root: &Path, first: &Path, second: &Path) -> Result<bool, St
 
 // Mach-O resolves @loader_path from the physical image, including when a
 // directory or file in its import path is a symbolic link.
+/// Choose the physical Mach-O staging path and retain the aliases or symbolic links needed to reach it.
 fn macho_staged_path(
     root: &Path,
     imported: &Path,
@@ -477,6 +486,7 @@ pub(super) fn capture(
     capture_with_tokens(library, manifest_root, bytes, None)
 }
 
+/// Capture a package-local dependency closure with its loader paths, links, and optional ELF token values.
 fn capture_with_tokens(
     library: &Path,
     manifest_root: &Path,

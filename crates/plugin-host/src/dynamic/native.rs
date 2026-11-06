@@ -151,6 +151,7 @@ where
     )
 }
 
+/// Load trusted native plugins and retain their registrations in an activation owner.
 pub(super) fn load_native_plugins_with_trust<I>(
     specs: I,
     trust: &HashMap<String, DynamicPluginLoadTrust>,
@@ -222,6 +223,7 @@ where
     Ok(activation)
 }
 
+/// Use verified artifact bytes to check and construct one native plugin definition.
 fn load_one_native_plugin(
     spec: &NativePluginLoadSpec,
     artifact: Option<PreparedNativePlugin>,
@@ -317,6 +319,7 @@ fn verify_sha256_bytes(path: &Path, bytes: &[u8], expected: &str) -> crate::Resu
     }
 }
 
+/// Format artifact digest bytes as lowercase hexadecimal for integrity checks.
 fn hex_digest(bytes: impl AsRef<[u8]>) -> String {
     const HEX: &[u8; 16] = b"0123456789abcdef";
     let bytes = bytes.as_ref();

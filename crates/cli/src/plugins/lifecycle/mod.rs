@@ -2546,6 +2546,7 @@ fn hydrate_scoped_registries(
     Ok(touched)
 }
 
+/// Build an inspectable registry record with native API, trust, and policy validation results.
 fn validated_record_from_manifest(
     manifest: DynamicPluginManifest,
     manifest_ref: String,
@@ -2635,6 +2636,7 @@ fn update_registry_policy_status(
         .map_err(|error| CliError::Config(error.to_string()))
 }
 
+/// Refresh stored validation results while retaining unsupported native API failures.
 fn update_registry_validation_status(
     scope: &mut ScopedRegistry,
     plugin_id: &str,

@@ -107,6 +107,7 @@ impl MiddlewareContinuationContext {
             _thread: std::marker::PhantomData<std::rc::Rc<()>>,
         }
         impl Drop for Lease {
+            /// Restore both the prior thread scope stack and its explicit scope override when the lease ends.
             fn drop(&mut self) {
                 if let Some(previous) = self.previous.take() {
                     restore_thread_scope_stack(previous);

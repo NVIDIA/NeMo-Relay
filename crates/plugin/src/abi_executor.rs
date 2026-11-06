@@ -209,6 +209,8 @@ impl ComponentExecutor {
         self.inner.user_tasks.wait().await;
     }
 
+    /// Stop task admission and start runtime teardown on a dedicated thread.
+    /// Retain runtime ownership if that thread cannot start.
     fn begin_shutdown(&self) -> std::result::Result<(), String> {
         let inner = &self.inner;
         let mut state = inner.state.lock().unwrap_or_else(|e| e.into_inner());
@@ -271,6 +273,7 @@ impl ComponentExecutor {
 }
 
 impl Component for ComponentExecutor {
+    /// Start teardown immediately and return a foreign future that reports when executor shutdown completes.
     fn shutdown(&self) -> FfiFuture<AbiResult<()>> {
         // Start teardown even if the caller drops the shutdown future unpolled.
         let started = self.begin_shutdown();
@@ -298,6 +301,7 @@ impl Component for ComponentExecutor {
 }
 
 impl Drop for Inner {
+    /// Drain the last executor owner on a teardown thread so a Tokio worker never destroys its own runtime.
     fn drop(&mut self) {
         // Arc decides which caller is last atomically. Testing strong_count in
         // ComponentExecutor::drop would race when the last two clones drop at

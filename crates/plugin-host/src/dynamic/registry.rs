@@ -318,6 +318,7 @@ fn validate_record_structure(record: &DynamicPluginRecord) -> Result<()> {
     }
 }
 
+/// Require native load fields and reject worker-only settings in a native registry record.
 fn validate_rust_dynamic_record(record: &DynamicPluginRecord) -> Result<()> {
     let super::DynamicPluginCompatibility::RustDynamic(compatibility) = &record.compatibility
     else {

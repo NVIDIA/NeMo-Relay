@@ -57,6 +57,7 @@ impl NativeLibraryArtifact {
         Self::new_with_layout(library, files, aliases, symlinks, [], [])
     }
 
+    /// Validate captured files and links, then compute an identity for the complete staged artifact layout.
     pub(super) fn new_with_layout(
         library: PathBuf,
         files: impl IntoIterator<Item = (PathBuf, Vec<u8>)>,
@@ -208,6 +209,7 @@ impl NativeLibraryArtifact {
         self.identity
     }
 
+    /// Collect loader aliases and content digests to detect conflicting resident image identities.
     fn image_identities(&self) -> Result<LibraryIdentities, String> {
         let mut identities = LibraryIdentities::default();
         for (path, (bytes, dependency)) in self.entries() {
@@ -230,6 +232,7 @@ impl NativeLibraryArtifact {
         Ok(identities)
     }
 
+    /// Write the captured artifact closure into a private staging directory and recreate its link layout.
     fn stage(self) -> Result<(PathBuf, tempfile::TempDir), String> {
         let mut builder = tempfile::Builder::new();
         builder.prefix("nemo-relay-native-checked-");
@@ -342,6 +345,7 @@ impl NativeLibraryArtifact {
 }
 
 #[cfg(unix)]
+/// Build a relative link target between two paths within the staged artifact.
 fn relative_link(alias: &Path, target: &Path) -> PathBuf {
     let parent = alias
         .parent()
@@ -378,6 +382,7 @@ fn hash_field(hash: &mut Sha256, bytes: &[u8]) {
     hash.update(bytes);
 }
 
+/// Require a nonempty relative artifact path made only of normal path components.
 fn validate_relative_file(path: &Path) -> Result<(), String> {
     if path.as_os_str().is_empty()
         || !path
@@ -595,6 +600,7 @@ impl CheckedNativeLibrary {
     }
 }
 
+/// Require ABI layout metadata and check the module type before running its constructor.
 fn checked_module<M: RootModule>(header: &LibHeader) -> Result<M, String> {
     // abi_stable permits libraries to opt out of its layout check. A checked
     // native contract requires metadata before any module constructor runs.
