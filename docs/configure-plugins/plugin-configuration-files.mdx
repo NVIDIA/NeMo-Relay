@@ -70,7 +70,8 @@ Scope flags are mutually exclusive.
 `%ProgramData%\nemo-relay\plugins.toml` on Windows and usually requires
 elevated filesystem permissions. Other users can read this file. On Unix,
 the editor saves it with mode `0644`. Keep credentials out of global plugin
-files. The editor rejects values that the plugin schema marks as secret.
+files. The editor rejects values marked as secret by a dynamic plugin's schema.
+This check does not cover built-in components, such as exporter headers.
 
 The editor menus support these controls:
 

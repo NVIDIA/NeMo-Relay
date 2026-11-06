@@ -322,7 +322,8 @@ the caller.
 OpenAI model requests normally use `openai_base_url`. With the default URL and
 no replacement credential, requests with recognized ChatGPT OAuth use the ChatGPT
 Codex backend instead. Anthropic model requests use `anthropic_base_url`.
-For the credential selection order and access requirement, refer to [Provider Upstreams](/nemo-relay-cli/authentication#credential-selection).
+For the credential selection order and access requirement, refer to
+[Credential Selection](#credential-selection).
 
 If Relay has no replacement, OpenAI model requests keep the caller's credential.
 This also applies to a custom `openai_base_url`.

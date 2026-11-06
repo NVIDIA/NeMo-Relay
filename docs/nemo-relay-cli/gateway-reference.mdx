@@ -196,6 +196,12 @@ longer than two seconds; configure their evaluation timeouts to leave room for
 hook transport within that limit. Delivery timeouts follow the hook's failure
 policy, and timed-out requests are not retried.
 
+The failure-policy and exit-code rules below do not apply to
+`hook-forward pi --pi-extension-client`. That mode exits successfully when it
+receives an HTTP response with a readable body, including a `403` guardrail
+rejection. Inspect the returned `status` and `body` envelope to determine the
+verdict. See the [pi forwarding example](/nemo-relay-cli/pi#smoke-test).
+
 Without a policy flag, gateway and daemon hooks fail closed for events that
 run tools, including `PreToolUse`. Hooks also fail closed if Relay cannot read
 the payload,

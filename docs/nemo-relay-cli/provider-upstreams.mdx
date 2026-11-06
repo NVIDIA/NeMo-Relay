@@ -114,8 +114,8 @@ the timer. Set the value to `0` to disable these limits. Connection establishmen
 and short plugin callbacks retain separate deadlines.
 
 Relay normally chooses the upstream from the request path, regardless of which
-compatible client sends the request. The gateway routes map to settings as
-follows:
+compatible client sends the request. For standard provider paths, gateway routes
+map to settings as follows:
 
 | Gateway Endpoint | Upstream Setting |
 | --- | --- |
@@ -130,8 +130,13 @@ follows:
 | `/images/edits`, `/v1/images/edits` | `openai_base_url` |
 | `/memories/trace_summarize`, `/v1/memories/trace_summarize` | `openai_base_url` |
 | `/alpha/search`, `/v1/alpha/search` | `openai_base_url` |
-| `/models`, `/v1/models` | `openai_base_url` |
+| `/models`, `/v1/models` | `anthropic_base_url` with `anthropic-version` or `anthropic-beta`; otherwise `openai_base_url`. With the default OpenAI base, recognized ChatGPT credentials and no replacement credential select the ChatGPT backend. |
 | `/v1/messages`, `/v1/messages/count_tokens` | `anthropic_base_url` |
+
+For credential-dependent routing of `/backend-api/codex/responses`,
+`/backend-api/codex/responses/compact`, and
+`/backend-api/codex/realtime/calls`, see
+[Codex ChatGPT Credentials](/nemo-relay-cli/authentication#codex-chatgpt-credentials).
 
 After choosing the endpoint, configure its
 [credentials](/nemo-relay-cli/authentication) and inspect the effective

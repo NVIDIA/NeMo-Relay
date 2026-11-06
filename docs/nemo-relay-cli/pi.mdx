@@ -217,7 +217,11 @@ The launcher also passes this invocation's proxy credential through
 `x-nemo-relay-proxy-token` on a redirected provider. A gateway started by `run`
 authenticates its own client before any intercept can rewrite the route, so
 without it a redirect would succeed and every model call would come back `401`. A
-standalone `nemo-relay --bind` daemon sets no credential and requires none.
+standalone `nemo-relay --bind` gateway does not use this proxy credential.
+Hooks still require bootstrap credentials, and model requests need Relay
+authentication before using provider credentials from the gateway's
+configuration or environment. See
+[Provider Authentication](/nemo-relay-cli/authentication#static-keys-and-authorization-headers).
 
 Inspect what would be launched without starting pi:
 
@@ -283,8 +287,8 @@ Decode `body` as JSON before inspecting its fields:
 - Other statuses, including 401 or 403 without the guardrail marker, indicate
   a gateway or delivery fault rather than a policy decision.
 
-A successful CLI exit means the forwarder received an HTTP response; it can still
-carry a policy block. Inspect the envelope to determine the verdict. A nonzero
+In `--pi-extension-client` mode, a successful CLI exit means the forwarder
+received an HTTP response with a readable body; it can still carry a policy block. Inspect the envelope to determine the verdict. A nonzero
 exit means forwarding failed before a usable envelope was returned.
 
 ## Verify Export
@@ -515,7 +519,7 @@ the URL that was named; a redirect names a different one. A `3xx` is returned to
 pi as it is, so a provider that redirects to a canonical host has to be named at
 that host instead.
 
-A **standalone `nemo-relay --bind` daemon issues no credential**, so it ignores
+A **standalone `nemo-relay --bind` gateway issues no transparent proxy credential**, so it ignores
 the header and keeps the static behavior below. Point it at a provider with
 `--openai-base-url` / `--anthropic-base-url`, or launch through the wrapper.
 
