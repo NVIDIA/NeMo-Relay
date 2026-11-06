@@ -9,7 +9,6 @@ use futures_util::{
     future::{BoxFuture, Shared},
 };
 use nemo_relay_plugin::{
-    NativeExecutorConfig,
     abi::{
         self,
         abi_stable::{
@@ -19,7 +18,7 @@ use nemo_relay_plugin::{
         async_ffi::{FfiFuture, FutureExt as _},
         v1_0 as a,
     },
-    abi_executor::ComponentExecutor,
+    abi_executor::{ComponentExecutor, DirectCancellation},
     abi_value::{from_abi, into_abi},
 };
 use nemo_relay_runtime::api::{
@@ -152,8 +151,7 @@ impl HostRuntime {
             component: Arc::new(Mutex::new(None)),
             streams: Mutex::new(Vec::new()),
             active: Arc::new(AtomicBool::new(true)),
-            executor: ComponentExecutor::new(NativeExecutorConfig::default(), "native-host")
-                .map_err(crate::PluginError::Internal)?,
+            executor: ComponentExecutor::for_host(),
             diagnostics: super::native::CheckedDiagnostics::new(diagnostics, read, &namespace),
             namespace,
             plugin_kind,
@@ -612,7 +610,7 @@ impl a::Runtime for RuntimeProxy {
     fn call(&self, operation: RString, args: abi::Json) -> FfiFuture<a::Result<abi::Json>> {
         let owner = self.0.clone();
         let binding = ScopeBinding::capture();
-        self.0.executor.execute(async move {
+        self.0.executor.execute_direct(async move {
             let _lease = binding.context.enter_thread_binding(binding.explicit);
             RuntimeProxy(owner).call_sync(operation, args)
         })
@@ -969,17 +967,19 @@ struct Continuation {
     owner: Arc<HostRuntime>,
 }
 impl a::Continuation for Continuation {
-    /// Invoke a unary continuation on the host executor and retain the origin of downstream failures.
+    /// Poll a unary continuation in host runtime context and retain the origin of downstream failures.
     fn call(&self, value: abi::Json) -> FfiFuture<a::Result<abi::Json>> {
         let errors = self.downstream.clone();
         let begin = self.owner.ensure().and_then(|_| self.lease.begin());
         let next = self.next.clone();
-        self.owner.executor.execute(async move {
+        self.owner.executor.execute_direct(async move {
             downstream_boundary(
                 async {
                     let begin = begin?;
-                    begin
-                        .invoke(|| async move {
+                    let context = begin.context().clone();
+                    host_bound(
+                        context,
+                        begin.invoke(|| async move {
                             match next.as_ref() {
                                 Next::Tool(callback) => {
                                     encode(callback(from_abi(value).map_err(err)?).await?)
@@ -989,8 +989,9 @@ impl a::Continuation for Continuation {
                                     Err(err("stream continuation requires open_stream"))
                                 }
                             }
-                        })
-                        .await
+                        }),
+                    )
+                    .await
                 }
                 .await,
                 &errors,
@@ -1002,12 +1003,14 @@ impl a::Continuation for Continuation {
         let errors = self.downstream.clone();
         let begin = self.owner.ensure().and_then(|_| self.lease.begin());
         let next = self.next.clone();
-        self.owner.executor.execute(async move {
+        self.owner.executor.execute_direct(async move {
             downstream_boundary(
                 async {
                     let begin = begin?;
-                    begin
-                        .invoke(|| async move {
+                    let context = begin.context().clone();
+                    host_bound(
+                        context,
+                        begin.invoke(|| async move {
                             match next.as_ref() {
                                 Next::Tool(callback) => {
                                     let value = callback(from_abi(value).map_err(err)?).await?;
@@ -1022,8 +1025,9 @@ impl a::Continuation for Continuation {
                                 }
                                 _ => Err(err("not a tool continuation")),
                             }
-                        })
-                        .await
+                        }),
+                    )
+                    .await
                 }
                 .await,
                 &errors,
@@ -1036,19 +1040,21 @@ impl a::Continuation for Continuation {
         let begin = self.owner.ensure().and_then(|_| self.lease.begin());
         let next = self.next.clone();
         let owner = self.owner.clone();
-        self.owner.executor.execute(async move {
+        self.owner.executor.execute_direct(async move {
             downstream_boundary(
                 async {
                     let begin = begin?;
                     let context = begin.context().clone();
-                    let stream = begin
-                        .invoke(|| async move {
+                    let stream = host_bound(
+                        context.clone(),
+                        begin.invoke(|| async move {
                             match next.as_ref() {
                                 Next::Stream(callback) => callback(decode(value)?).await,
                                 _ => Err(err("unary continuation cannot open a stream")),
                             }
-                        })
-                        .await?;
+                        }),
+                    )
+                    .await?;
                     let state = Arc::new(HostStreamState {
                         value: tokio::sync::Mutex::new(Some(stream)),
                         context,
@@ -1057,6 +1063,7 @@ impl a::Continuation for Continuation {
                         closed: AtomicBool::new(false),
                         closing: Mutex::new(None),
                         downstream: errors.clone(),
+                        pulls: Mutex::new(Vec::new()),
                     });
                     {
                         let mut streams = owner.streams.lock().unwrap_or_else(|e| e.into_inner());
@@ -1074,6 +1081,33 @@ impl a::Continuation for Continuation {
         })
     }
 }
+// Inline continuations are polled inside the plugin's thread scope binding.
+// Clear that override so the continuation's task context and nested scopes can apply.
+struct HostBound<F> {
+    context: MiddlewareContinuationContext,
+    future: Option<Pin<Box<F>>>,
+}
+impl<F: Future> Future for HostBound<F> {
+    type Output = F::Output;
+    fn poll(self: Pin<&mut Self>, cx: &mut Context<'_>) -> Poll<Self::Output> {
+        let this = self.get_mut();
+        let _binding = this.context.enter_thread_binding(false);
+        this.future.as_mut().unwrap().as_mut().poll(cx)
+    }
+}
+impl<F> Drop for HostBound<F> {
+    fn drop(&mut self) {
+        let _binding = self.context.enter_thread();
+        self.future.take();
+    }
+}
+fn host_bound<F: Future>(context: MiddlewareContinuationContext, future: F) -> HostBound<F> {
+    HostBound {
+        context,
+        future: Some(Box::pin(future)),
+    }
+}
+
 type HostCloseFuture = Shared<BoxFuture<'static, a::Result<()>>>;
 struct HostStreamState {
     value: tokio::sync::Mutex<Option<LlmJsonStream>>,
@@ -1083,11 +1117,16 @@ struct HostStreamState {
     closed: AtomicBool,
     closing: Mutex<Option<HostCloseFuture>>,
     downstream: DownstreamErrors,
+    pulls: Mutex<Vec<DirectCancellation>>,
 }
 impl HostStreamState {
     /// Cancel further pulls and share stream cleanup, allowing a failed cleanup attempt to be retried.
     fn close(self: &Arc<Self>, executor: &ComponentExecutor) -> HostCloseFuture {
         self.cancelled.cancel();
+        let pulls = std::mem::take(&mut *self.pulls.lock().unwrap_or_else(|e| e.into_inner()));
+        for pull in pulls {
+            pull.cancel();
+        }
         self.terminal.store(true, Ordering::Release);
         let mut closing = self.closing.lock().unwrap_or_else(|e| e.into_inner());
         if let Some(future) = closing.as_ref()
@@ -1122,20 +1161,36 @@ struct HostStream {
     owner: Arc<HostRuntime>,
 }
 impl a::Stream for HostStream {
-    /// Read one downstream stream item on the host executor and make EOF or an error terminal.
+    /// Poll one downstream stream item in host runtime context and make EOF or an error terminal.
     fn pull(&mut self) -> FfiFuture<a::Result<ROption<abi::Json>>> {
         if let Err(error) = self.owner.ensure() {
             return async move { a::Result::RErr(abi_error(error)) }.into_ffi();
         }
+        let mut pulls = self.state.pulls.lock().unwrap_or_else(|e| e.into_inner());
+        if self.state.cancelled.is_cancelled() {
+            return async { a::Result::RErr(a::Error::new("closed", "native stream is closing")) }
+                .into_ffi();
+        }
         let state = self.state.clone();
         let context = state.context.clone();
-        self.owner.executor.execute(async move{downstream_boundary(context.run(async{
-   if state.terminal.load(Ordering::Acquire){return Ok(ROption::RNone)}let mut value=state.value.lock().await;let Some(stream)=value.as_mut()else{return Ok(ROption::RNone)};
-   tokio::select!{biased;
-    ()=state.cancelled.cancelled()=>Err(err("native stream is closing")),
-    next=stream.next()=>match next{Some(Ok(v))=>Ok(ROption::RSome(into_abi(v))),Some(Err(e))=>{state.terminal.store(true,Ordering::Release);stream.terminalize();Err(e)},None=>{state.terminal.store(true,Ordering::Release);stream.terminalize();Ok(ROption::RNone)}}
-   }
-  }).await, &state.downstream)})
+        let (future, cancellation) = self.owner.executor.execute_direct_tracked(async move {
+            downstream_boundary(host_bound(context.clone(), context.run(async {
+                if state.terminal.load(Ordering::Acquire) { return Ok(ROption::RNone); }
+                let mut value = state.value.lock().await;
+                let Some(stream) = value.as_mut() else { return Ok(ROption::RNone); };
+                tokio::select! { biased;
+                    () = state.cancelled.cancelled() => Err(err("native stream is closing")),
+                    next = stream.next() => match next {
+                        Some(Ok(value)) => Ok(ROption::RSome(into_abi(value))),
+                        Some(Err(error)) => { state.terminal.store(true, Ordering::Release); stream.terminalize(); Err(error) },
+                        None => { state.terminal.store(true, Ordering::Release); stream.terminalize(); Ok(ROption::RNone) },
+                    }
+                }
+            })).await, &state.downstream)
+        });
+        pulls.retain(DirectCancellation::is_alive);
+        pulls.push(cancellation);
+        future
     }
     fn close(&mut self) -> FfiFuture<a::Result<()>> {
         self.state.close(&self.owner.executor).into_ffi()
@@ -1655,7 +1710,7 @@ pub fn apply_registration(
                     let plugin_kind = owner.plugin_kind.clone();
                     let observer = owner.clone();
                     let errors = downstream.clone();
-                    let first = owner.executor.execute(async move {
+                    let first = owner.executor.execute_direct(async move {
                         let future = match callback
                             .with(&observer, |callback| callback.open_stream(invocation, next))
                         {

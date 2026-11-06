@@ -18,8 +18,12 @@ Use this skill for `plugin.kind = "rust_dynamic"`, `plugin.kind = "worker"`,
   values, and `async-ffi` futures across the native dynamic-library boundary.
   Keep ordinary Rust runtime types, futures, and Tokio objects within their
   originating library.
-- Typed native middleware futures run on the SDK-owned Tokio executor. Keep
-  subscribers synchronous and preserve raw synchronous ABI registrations.
+- Poll typed native middleware directly on the caller, restoring Relay scope
+  and optional SDK Tokio context for every poll and drop. Inline is the SDK
+  default and allocates no plugin runtime. Tokio-enabled components share a
+  library-local runtime and must agree on its worker count. Use `ctx.spawn` or
+  `ctx.task_spawner()` for component-owned background work; keep subscribers
+  synchronous and preserve raw synchronous ABI registrations.
 - Define closed worker transport structures in protobuf when generated clients
   must enforce their fields. Keep open application payloads lossless by using
   `JsonValue` or `JsonObject` rather than `google.protobuf.Value`.
@@ -48,7 +52,8 @@ Use this skill for `plugin.kind = "rust_dynamic"`, `plugin.kind = "worker"`,
       capability mismatch, and disabled-plugin behavior.
 - [ ] Native libraries and staged dependencies remain resident until process exit.
       Component close removes registrations, revokes capabilities, cancels and
-      drains tasks, and shuts down its executor; incomplete cleanup retains
+      drains tasks, and releases its runtime lease; the last lease stops the
+      shared runtime. Incomplete cleanup retains
       ownership for retry.
 - [ ] Worker activation covers process launch, token auth, handshake, validation,
       declarative registration, proxy rollback, cancellation, and shutdown.

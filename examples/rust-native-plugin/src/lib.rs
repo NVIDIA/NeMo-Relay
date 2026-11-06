@@ -44,8 +44,8 @@ impl Plugin for ExampleNativePlugin {
         diagnostics
     }
 
-    fn executor_config(&self) -> NativeExecutorConfig {
-        NativeExecutorConfig { worker_threads: 2 }
+    fn executor_config(&self) -> Option<NativeExecutorConfig> {
+        Some(NativeExecutorConfig { worker_threads: 2 })
     }
 
     /// Register the native example callbacks for the selected component configuration.

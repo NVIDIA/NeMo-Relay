@@ -40,7 +40,7 @@ Use these types and helpers to define a native plugin:
 | `PluginRuntime` | Emits marks and manages Relay-owned scopes and scope stacks through typed host helpers. |
 | `nemo_relay_plugin!` | Exports the standard checked bootstrap header with the SDK-required native contract. |
 | Native API v1.0 | Uses `abi_stable` checked layouts, typed values, and `async-ffi` foreign futures. |
-| Typed async middleware | Drives guardrails, sanitizers, and intercepts on a per-component SDK-owned Tokio executor. Subscribers and raw ABI registrations remain synchronous. |
+| Typed async middleware | Polls guardrails, sanitizers, and intercepts directly on the caller with restored Relay scope. Tokio support is opt-in and shared by the plugin's components. |
 | Async continuations and streams | `ToolNext`, `LlmNext`, and `LlmStreamNext` support repeated or concurrent downstream calls. Streaming LLM continuations use a pull-based host handle. `register_synchronous_stream_callback` accepts synchronous factories that return checked stream descriptors. |
 | Tool results | `ToolNext` returns `ToolExecutionResult`, which keeps an application result and optional annotation together. |
 | Typed telemetry marks | `emit_mark_with_options` adds `DataSchema` and `LogSeverity`; `emit_metric` validates `MetricMeasurement` values before it emits the reserved Relay metric schema. |
@@ -100,21 +100,18 @@ Build the `cdylib`, declare `compat.native_api = "v1.0"`, `compat.relay`, and `l
 complete example for platform-specific artifact and manifest setup.
 
 The checked native plugin example targets the 1.0.0 SDK and declares
-`compat.relay = ">=1.0.0,<2.0"`. Relay creates one
-SDK-owned Tokio executor for each configured plugin component. It defaults to
-two workers: enough for modest concurrent async I/O without broadly
-oversubscribing the host. Increase the count only when measured I/O concurrency
-leaves callbacks queued; lower it when the host runs many components or has a
-tight CPU budget. Do not block these workers; use async I/O or
-`tokio::task::spawn_blocking`.
+`compat.relay = ">=1.0.0,<2.0"`. The SDK defaults to inline middleware execution and
+creates no plugin Tokio runtime. Opt into a shared library-local runtime when a
+component needs Tokio timers, networking, or background tasks. Host operations use
+the current host runtime; detached host cleanup uses a shared fallback when needed.
+Keep inline callbacks nonblocking.
 
 Tool continuations return `ToolExecutionResult`, preserving the application result
 and optional opaque annotation. Execution intercepts also carry Relay pending marks.
 LLM execution contexts preserve request/response codec identity and capabilities;
 streaming execution exposes request codec operations.
 
-Set a plugin-wide default in Rust, then let the component's TOML configuration
-override it:
+Opt into a shared Tokio runtime in Rust or through the component configuration:
 
 ```rust
 use nemo_relay_plugin::{NativeExecutorConfig, Plugin};
@@ -124,8 +121,8 @@ impl Plugin for ExamplePlugin {
         "acme.example"
     }
 
-    fn executor_config(&self) -> NativeExecutorConfig {
-        NativeExecutorConfig { worker_threads: 4 }
+    fn executor_config(&self) -> Option<NativeExecutorConfig> {
+        Some(NativeExecutorConfig { worker_threads: 4 })
     }
 
     // ... register and other trait methods ...
@@ -140,12 +137,20 @@ manifest = "./relay-plugin.toml"
 worker_threads = 4
 ```
 
-The SDK validates that `worker_threads` is a positive integer. The default
-`Plugin::executor_config_for_component` applies this override; plugins
-can override that method when they need different configuration rules.
+The SDK validates that `worker_threads` is a positive integer. An explicit executor
+object enables Tokio support; its default worker count is two. Active Tokio-enabled
+components of the same plugin must agree on the worker count and share the runtime.
+`Plugin::executor_config_for_component` resolves each component's request.
 
-When a component closes, the SDK stops accepting callbacks, cancels work, waits
-for tracked tasks to finish, and stops the component executor.
+Use `ctx.spawn` for component-owned background work, or capture the cloneable
+`ctx.task_spawner()` in a registered callback. These helpers require Tokio support,
+restore the captured Relay scope around each poll, and cancel tasks when the
+component closes. Dropping a task's join handle detaches only the waiter. Direct
+`tokio::spawn` calls bypass component ownership and are unsuitable for this work.
+
+When a component closes, the SDK stops accepting callbacks, cancels its work,
+closes streams, and drains tracked tasks. It releases the component's runtime
+lease after cleanup. The last Tokio-enabled component stops the shared runtime.
 Library code and staged dependencies stay loaded until process exit.
 
 ## Runtime Diagnostics
@@ -158,7 +163,7 @@ not attribute an entry to the plugin that emitted it. This getter is included in
 the checked v1.0 runtime interface.
 
 Relay scope context is restored around every poll of a registered middleware
-future. Child tasks created with `tokio::spawn` do not automatically inherit
+future. Component-owned tasks created with `ctx.spawn` or a task spawner inherit
 that scope context.
 
 `ScopeStack::set_thread()` and `ScopeStackBinding::restore()` return `Result<()>`;

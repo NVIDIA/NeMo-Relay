@@ -188,3 +188,250 @@ async fn cleanup_survives_dropped_waiters_and_remains_admissible_after_revocatio
     close(&executor).await;
     assert!(dropped.load(Ordering::Acquire));
 }
+
+/// Direct polling stays on the caller while timers and spawned work use the SDK runtime.
+#[tokio::test]
+async fn direct_polling_preserves_caller_thread_and_plugin_runtime_context() {
+    let executor = executor();
+    let runtime_id = executor
+        .execute(async { AbiResult::ROk(tokio::runtime::Handle::current().id()) })
+        .await
+        .into_result()
+        .unwrap();
+    let caller = std::thread::current().id();
+    let observed = executor
+        .execute_direct(async move {
+            assert_eq!(std::thread::current().id(), caller);
+            tokio::time::sleep(Duration::from_millis(1)).await;
+            assert_eq!(std::thread::current().id(), caller);
+            AbiResult::ROk(tokio::runtime::Handle::current().id())
+        })
+        .await
+        .into_result()
+        .unwrap();
+    assert_eq!(runtime_id, observed);
+    let error = executor
+        .execute_direct::<()>(async {
+            panic!("direct callback");
+        })
+        .await
+        .into_result()
+        .unwrap_err();
+    assert_eq!(error.code.as_str(), "panic");
+    close(&executor).await;
+}
+
+/// Retained foreign futures must release captured state even if they were never polled.
+#[tokio::test]
+async fn direct_unpolled_drop_and_shutdown_release_future_ownership() {
+    let executor = executor();
+    let first = Arc::new(AtomicBool::new(false));
+    let probe = Dropped(first.clone());
+    let future = executor.execute_direct(async move {
+        let _probe = probe;
+        std::future::pending::<()>().await;
+        AbiResult::ROk(())
+    });
+    assert!(!first.load(Ordering::Acquire));
+    drop(future);
+    assert!(first.load(Ordering::Acquire));
+    assert_eq!(executor.active_tasks(), 0);
+    let second = Arc::new(AtomicBool::new(false));
+    let probe = Dropped(second.clone());
+    let retained = executor.execute_direct(async move {
+        let _probe = probe;
+        std::future::pending::<()>().await;
+        AbiResult::ROk(())
+    });
+    close(&executor).await;
+    assert!(second.load(Ordering::Acquire));
+    assert_eq!(
+        retained.await.into_result().unwrap_err().code.as_str(),
+        "revoked"
+    );
+    // A stale wrapper cannot retain the shared runtime after component close.
+    let fresh =
+        ComponentExecutor::new(NativeExecutorConfig { worker_threads: 2 }, "lifecycle-test")
+            .unwrap();
+    close(&fresh).await;
+}
+
+/// Component cancellation must not destroy a runtime still used by another component.
+#[tokio::test]
+async fn shared_runtime_keeps_component_tasks_and_shutdown_isolated() {
+    let first = executor();
+    let second = executor();
+    let a = first
+        .execute(async { AbiResult::ROk(tokio::runtime::Handle::current().id()) })
+        .await
+        .into_result()
+        .unwrap();
+    let b = second
+        .execute(async { AbiResult::ROk(tokio::runtime::Handle::current().id()) })
+        .await
+        .into_result()
+        .unwrap();
+    assert_eq!(a, b);
+    assert!(
+        ComponentExecutor::new(NativeExecutorConfig { worker_threads: 2 }, "lifecycle-test")
+            .is_err()
+    );
+    let dropped = Arc::new(AtomicBool::new(false));
+    let probe = Dropped(dropped.clone());
+    let (started, ready) = tokio::sync::oneshot::channel();
+    let task = first
+        .spawn(async move {
+            let _probe = probe;
+            started.send(()).unwrap();
+            std::future::pending::<()>().await
+        })
+        .unwrap();
+    ready.await.unwrap();
+    close(&first).await;
+    assert!(task.await.unwrap_err().is_cancelled());
+    assert!(dropped.load(Ordering::Acquire));
+    second
+        .execute_direct(async {
+            tokio::time::sleep(Duration::from_millis(1)).await;
+            AbiResult::ROk(())
+        })
+        .await
+        .into_result()
+        .unwrap();
+    close(&second).await;
+    let fresh =
+        ComponentExecutor::new(NativeExecutorConfig { worker_threads: 2 }, "lifecycle-test")
+            .unwrap();
+    let id = fresh
+        .execute(async { AbiResult::ROk(tokio::runtime::Handle::current().id()) })
+        .await
+        .into_result()
+        .unwrap();
+    assert_ne!(a, id);
+    close(&fresh).await;
+}
+
+/// Self-revocation during a direct poll must not wait on the poll's own mutex.
+#[tokio::test]
+async fn direct_future_can_start_its_own_shutdown() {
+    let executor = executor();
+    let owner = executor.clone();
+    let result = executor.execute_direct(async move {
+        drop(owner.shutdown());
+        std::future::pending::<()>().await;
+        AbiResult::ROk(())
+    });
+    assert!(
+        tokio::time::timeout(Duration::from_secs(5), result)
+            .await
+            .unwrap()
+            .is_err()
+    );
+    close(&executor).await;
+}
+
+/// Host components use the caller's runtime, including when later calls use a fresh runtime.
+#[test]
+fn host_component_does_not_capture_the_activation_runtime() {
+    let executor = ComponentExecutor::for_host();
+    for _ in 0..2 {
+        let host = tokio::runtime::Builder::new_current_thread()
+            .enable_all()
+            .build()
+            .unwrap();
+        let expected = host.handle().id();
+        host.block_on(async {
+            assert_eq!(
+                executor
+                    .execute_direct(async {
+                        AbiResult::ROk(tokio::runtime::Handle::current().id())
+                    })
+                    .await
+                    .into_result()
+                    .unwrap(),
+                expected
+            );
+        });
+    }
+    futures::executor::block_on(executor.shutdown())
+        .into_result()
+        .unwrap();
+    assert!(executor.is_closed());
+}
+
+/// Inline middleware, registration, blocking callbacks, and cleanup need no Tokio runtime.
+#[test]
+fn inline_components_do_not_create_a_tokio_runtime() {
+    let executor = ComponentExecutor::inline("runtime-free-test");
+    assert!(
+        executor
+            .with_context(|| tokio::runtime::Handle::try_current().is_err())
+            .unwrap()
+    );
+    futures::executor::block_on(async {
+        executor
+            .execute_direct(async {
+                assert!(tokio::runtime::Handle::try_current().is_err());
+                AbiResult::ROk(())
+            })
+            .await
+            .into_result()
+            .unwrap();
+        executor
+            .execute(async {
+                assert!(tokio::runtime::Handle::try_current().is_err());
+                AbiResult::ROk(())
+            })
+            .await
+            .into_result()
+            .unwrap();
+        executor
+            .execute_blocking(|| {
+                assert!(tokio::runtime::Handle::try_current().is_err());
+                AbiResult::ROk(())
+            })
+            .await
+            .into_result()
+            .unwrap();
+        executor
+            .execute_cleanup(async {
+                assert!(tokio::runtime::Handle::try_current().is_err());
+                AbiResult::ROk(())
+            })
+            .await
+            .into_result()
+            .unwrap();
+        assert!(executor.spawn(async {}).is_err());
+        executor.shutdown().await.into_result().unwrap();
+    });
+    assert!(executor.is_closed());
+    assert_eq!(executor.active_tasks(), 0);
+}
+
+/// Operation cancellation releases a retained waiter without revoking the rest of its component.
+#[test]
+fn direct_operation_cancellation_is_independent_of_component_shutdown() {
+    let executor = ComponentExecutor::inline("operation-cancel-test");
+    let dropped = Arc::new(AtomicBool::new(false));
+    let probe = Dropped(dropped.clone());
+    let (future, cancellation) = executor.execute_direct_tracked(async move {
+        let _probe = probe;
+        std::future::pending::<()>().await;
+        AbiResult::ROk(())
+    });
+    cancellation.cancel();
+    assert!(dropped.load(Ordering::Acquire));
+    assert_eq!(executor.active_tasks(), 0);
+    futures::executor::block_on(async {
+        assert_eq!(
+            future.await.into_result().unwrap_err().code.as_str(),
+            "cancelled"
+        );
+        executor
+            .execute_direct(async { AbiResult::ROk(()) })
+            .await
+            .into_result()
+            .unwrap();
+        executor.shutdown().await.into_result().unwrap();
+    });
+}

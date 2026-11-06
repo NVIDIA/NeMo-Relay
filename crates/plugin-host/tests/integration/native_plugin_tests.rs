@@ -994,7 +994,7 @@ async fn sdk_cdylib_assert_behavior() {
     events.lock().unwrap().clear();
     let provider_polled = Arc::new(AtomicBool::new(false));
     let polled = Arc::clone(&provider_polled);
-    let cancelled_stream = llm_stream_call_execute(
+    let mut cancelled_stream = llm_stream_call_execute(
         LlmStreamCallExecuteParams::builder()
             .name("native-fixture-cancelled-stream")
             .request(LlmRequest {
@@ -1016,13 +1016,21 @@ async fn sdk_cdylib_assert_behavior() {
     )
     .await
     .expect("pending native stream should open");
+    // Inline streams advance only while the consumer polls a pull.
+    let mut pulling = Box::pin(cancelled_stream.next());
     tokio::time::timeout(std::time::Duration::from_secs(5), async {
-        while !provider_polled.load(Ordering::SeqCst) {
-            tokio::task::yield_now().await;
+        tokio::select! {
+            result = &mut pulling => panic!("pending provider completed early: {result:?}"),
+            () = async {
+                while !provider_polled.load(Ordering::SeqCst) {
+                    tokio::task::yield_now().await;
+                }
+            } => {}
         }
     })
     .await
     .expect("provider stream should be polled before cancellation");
+    drop(pulling);
     drop(cancelled_stream);
     tokio::time::timeout(std::time::Duration::from_secs(5), async {
         loop {

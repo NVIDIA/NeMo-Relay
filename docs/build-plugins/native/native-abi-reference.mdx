@@ -73,22 +73,24 @@ the nearest microsecond.
 ## Futures, Streams, and Shutdown
 
 The `async-ffi` crate carries futures and wakers across the library boundary.
-Each library runs its user futures on its own executor. Dropping a foreign future
-cancels its work, even before the first poll. A continuation can make repeated
-or concurrent downstream calls.
+Typed middleware futures are polled by their caller under the plugin's captured Relay
+scope. Inline execution creates no plugin runtime. A plugin can opt into a shared
+Tokio runtime; the SDK enters that runtime around each user-future poll and drop.
+Dropping a foreign future cancels its work, including an unpolled future. A
+continuation can make repeated or concurrent downstream calls.
 
 Streams use bounded queues, pass errors to the consumer, and support explicit
 close. A full queue slows the producer until the consumer reads more data.
 Subscribers run synchronously. Raw synchronous callbacks use checked callback
 descriptors. Use `register_synchronous_stream_callback` for a synchronous factory
 that returns a checked stream descriptor. The SDK runs its pulls and close work
-on the component executor. A synchronous factory can read downstream items
-before returning; the SDK keeps async workers available while it waits.
+under component ownership, with optional shared Tokio runtime support. A synchronous
+factory runs off the caller thread and can read downstream items before returning.
 
 Closing a component stops new work, removes registrations, revokes runtime
 access, and cancels active work. Stream creation finishes before the final
 stream cleanup pass. The host then waits for tracked tasks to finish,
-releases callbacks, and stops the executor. Synchronous close uses a separate
+releases callbacks and the component's runtime lease. Synchronous close uses a separate
 teardown thread. If cleanup fails, close reports the error and keeps ownership
 so the caller can retry.
 
@@ -96,7 +98,8 @@ Python and Node.js provide awaitable close methods. Rust, C, and Go provide
 synchronous close methods.
 
 Libraries and their staged dependencies stay loaded until process exit. Component
-executors stop when their components close. Each activation creates fresh
+tasks stop when their components close. A shared Tokio runtime stops after its last
+component releases it. Each activation creates fresh
 component state. Each library catches panics from its own callbacks. Foreign
 wakers and destructors must not panic.
 

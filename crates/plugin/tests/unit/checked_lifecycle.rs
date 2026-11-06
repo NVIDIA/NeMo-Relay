@@ -105,6 +105,7 @@ async fn shutdown_drains_stream_opening_before_closing_resources() {
         invocation,
         a::Continuation_TO::from_value(Next, TD_Opaque),
     );
+    let opening = tokio::spawn(opening);
     ready.await.unwrap();
     let closing = a::Component::shutdown(&owner);
     release.send(()).unwrap();
@@ -113,11 +114,10 @@ async fn shutdown_drains_stream_opening_before_closing_resources() {
         .unwrap()
         .into_result()
         .unwrap();
-    let mut stream = opening.await.into_result().unwrap();
+    assert!(opening.await.unwrap().is_err());
     assert!(executor.is_closed());
     assert_eq!(dropped.load(Ordering::SeqCst), 1);
     assert!(registry.lock().unwrap().is_empty());
-    stream.close().await.into_result().unwrap();
 }
 
 struct ClosingStream(Arc<AtomicBool>);
@@ -164,6 +164,7 @@ async fn raw_stream_cleanup_restores_scope_on_each_poll() {
         closing: Mutex::new(None),
         closed: AtomicBool::new(false),
         cancelled: tokio_util::sync::CancellationToken::new(),
+        pulls: Mutex::new(Vec::new()),
     });
     state.close(&executor).await.into_result().unwrap();
     assert!(closed.load(Ordering::Acquire));
@@ -505,6 +506,25 @@ fn native_author_defaults_validate_executor_configuration() {
         }
     }
     assert!(Author.allows_multiple_components());
+    assert!(Author.executor_config().is_none());
+    assert!(
+        Author
+            .executor_config_for_component(&Map::new())
+            .unwrap()
+            .is_none()
+    );
+    let enabled = serde_json::json!({"executor":{"worker_threads":1}})
+        .as_object()
+        .unwrap()
+        .clone();
+    assert_eq!(
+        Author
+            .executor_config_for_component(&enabled)
+            .unwrap()
+            .unwrap()
+            .worker_threads,
+        1
+    );
     assert!(Author.validate(&Map::new()).is_empty());
     let invalid = serde_json::json!({"executor":{"worker_threads":0}})
         .as_object()

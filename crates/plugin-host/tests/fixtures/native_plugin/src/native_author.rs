@@ -54,8 +54,8 @@ impl NativePlugin for FixtureNativePlugin {
         vec![]
     }
 
-    fn executor_config(&self) -> NativeExecutorConfig {
-        NativeExecutorConfig { worker_threads: 3 }
+    fn executor_config(&self) -> Option<NativeExecutorConfig> {
+        Some(NativeExecutorConfig { worker_threads: 3 })
     }
 
     fn register<'a>(

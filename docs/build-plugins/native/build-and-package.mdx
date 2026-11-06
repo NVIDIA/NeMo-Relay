@@ -57,8 +57,8 @@ library path, and integrity evidence:
 The `source.artifact` and `load.library` paths must identify the same library. Replace
 `<artifact-sha256>` with the lowercase digest of those bytes. The exported descriptor's
 plugin kind must exactly match `plugin.id`. The schema includes
-the SDK-owned `executor.worker_threads` property because this example registers typed
-async middleware and allows a component override. `additionalProperties: false` prevents
+the SDK-owned `executor.worker_threads` property because this example opts into shared
+Tokio support and allows a component override. `additionalProperties: false` prevents
 an operator typo from silently becoming inactive configuration.
 
 The native-only schema fragment below gives the SDK executor override a strict positive
@@ -68,7 +68,7 @@ so direct activation and package validation agree.
 ```json
 {
   "executor": {
-    "description": "Overrides the SDK-owned Tokio executor for this component.",
+    "description": "Enables shared SDK Tokio support and configures its worker count.",
     "type": "object",
     "additionalProperties": false,
     "properties": {

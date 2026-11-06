@@ -264,10 +264,11 @@ async fn stream_cleanup_retries_errors_and_cancels_a_live_pull() {
                 None,
             );
             let mut stream = callback.open_stream(i, next).await.into_result().unwrap();
-            let pulling = stream.pull();
+            let mut pulling = Box::pin(stream.pull());
             if pending {
-                while !polled.load(Ordering::SeqCst) {
-                    tokio::task::yield_now().await;
+                tokio::select! {
+                    result = &mut pulling => panic!("pending source completed early: {result:?}"),
+                    _ = async { while !polled.load(Ordering::SeqCst) { tokio::task::yield_now().await; } } => {}
                 }
                 stream.close().await.into_result().unwrap();
                 assert!(
@@ -873,4 +874,108 @@ async fn registration_transactions_reject_late_binding_full_queues_and_cancelled
     owner.component.lock().unwrap().take();
     owner.shutdown().await.unwrap();
     assert!(raw.bind_component(component()).is_err());
+}
+
+/// SDK background tasks inherit real Relay scope and remain owned after their join handle is dropped.
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn sdk_background_tasks_preserve_scope_and_are_cancelled_with_their_component() {
+    use nemo_relay_plugin::{Plugin as NativePlugin, PluginContext, PluginTaskSpawner};
+    struct DroppedTask(Arc<AtomicBool>);
+    impl Drop for DroppedTask {
+        fn drop(&mut self) {
+            self.0.store(true, Ordering::Release);
+        }
+    }
+    struct Author {
+        started: Mutex<Option<tokio::sync::oneshot::Sender<Json>>>,
+        dropped: Arc<AtomicBool>,
+        spawner: Arc<Mutex<Option<PluginTaskSpawner>>>,
+    }
+    impl NativePlugin for Author {
+        fn plugin_kind(&self) -> &str {
+            "background-test"
+        }
+        fn executor_config(&self) -> Option<nemo_relay_plugin::NativeExecutorConfig> {
+            Some(Default::default())
+        }
+        fn register<'a>(
+            &'a self,
+            _: &'a serde_json::Map<String, Json>,
+            ctx: &'a mut PluginContext<'_>,
+        ) -> nemo_relay_plugin::PluginFuture<'a, ()> {
+            Box::pin(async move {
+                *self.spawner.lock().unwrap() = Some(ctx.task_spawner());
+                let started = self.started.lock().unwrap().take().unwrap();
+                let runtime = ctx.runtime();
+                let probe = DroppedTask(self.dropped.clone());
+                let task = ctx.spawn(async move {
+                    let _probe = probe;
+                    tokio::task::yield_now().await;
+                    started
+                        .send(
+                            serde_json::to_value(runtime.current_scope_stack_snapshot()?).unwrap(),
+                        )
+                        .unwrap();
+                    std::future::pending::<()>().await;
+                    Ok(())
+                })?;
+                drop(task);
+                Ok(())
+            })
+        }
+    }
+    let host = HostRuntime::new("background-scope".into()).unwrap();
+    let dropped = Arc::new(AtomicBool::new(false));
+    let spawner = Arc::new(Mutex::new(None));
+    let (started, ready) = tokio::sync::oneshot::channel();
+    let author = nemo_relay_plugin::checked::Adapter(Arc::new(Author {
+        started: Mutex::new(Some(started)),
+        dropped: dropped.clone(),
+        spawner: spawner.clone(),
+    }));
+    let callbacks = Arc::new(Mutex::new(Vec::new()));
+    let bound = Arc::new(Mutex::new(None));
+    let runtime = a::Runtime_TO::from_value(
+        CaptureRuntime {
+            base: host.runtime_box(),
+            callbacks,
+            component: bound.clone(),
+        },
+        TD_Opaque,
+    );
+    TASK_SCOPE_STACK
+        .scope(create_scope_stack(), async {
+            let sdk = nemo_relay_plugin::PluginRuntime::from_abi(host.runtime_box());
+            let mut scope = sdk
+                .scope("background-parent", ScopeType::Custom, None, None, None)
+                .unwrap();
+            let expected =
+                serde_json::to_value(sdk.current_scope_stack_snapshot().unwrap()).unwrap();
+            let registered =
+                a::Plugin::register(&author, abi::Json::Object(Default::default()), runtime)
+                    .await
+                    .into_result()
+                    .unwrap();
+            assert!(registered.error.is_none());
+            let observed = tokio::time::timeout(std::time::Duration::from_secs(5), ready)
+                .await
+                .unwrap()
+                .unwrap();
+            assert_eq!(observed, expected);
+            registered.component.shutdown().await.into_result().unwrap();
+            assert!(dropped.load(Ordering::Acquire));
+            assert!(
+                spawner
+                    .lock()
+                    .unwrap()
+                    .as_ref()
+                    .unwrap()
+                    .spawn(async { Ok(()) })
+                    .is_err()
+            );
+            bound.lock().unwrap().take();
+            scope.close(None, None).unwrap();
+        })
+        .await;
+    host.shutdown().await.unwrap();
 }

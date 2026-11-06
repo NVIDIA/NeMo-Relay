@@ -1,15 +1,15 @@
 // SPDX-FileCopyrightText: Copyright (c) 2026, NVIDIA CORPORATION & AFFILIATES. All rights reserved.
 // SPDX-License-Identifier: Apache-2.0
 
-//! Rust configuration for component-owned native executors.
+//! Optional shared Tokio runtime configuration for native plugins.
 
 use crate::{Json, Result};
 use serde_json::Map;
 
-/// Configuration for the executor owned by one exported native plugin.
+/// Configuration used when a native plugin opts into a shared Tokio runtime.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct NativeExecutorConfig {
-    /// Number of Tokio worker threads dedicated to the plugin.
+    /// Number of Tokio worker threads shared by this plugin's Tokio-enabled components.
     pub worker_threads: usize,
 }
 
@@ -20,7 +20,7 @@ impl Default for NativeExecutorConfig {
 }
 
 impl NativeExecutorConfig {
-    /// Applies an optional component-local executor override.
+    /// Apply an explicit component request for a shared Tokio runtime.
     ///
     /// Relay passes `[plugins.dynamic.config.executor]` as the `executor`
     /// object in `plugin_config`. The only supported setting is the positive

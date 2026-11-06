@@ -20,7 +20,7 @@ use crate::{
         async_ffi::{FfiFuture, FutureExt as _},
         v1_0 as a,
     },
-    abi_executor::ComponentExecutor,
+    abi_executor::{ComponentExecutor, DirectCancellation},
     abi_value::{from_abi, into_abi},
 };
 use futures::{
@@ -81,14 +81,25 @@ pub trait Plugin: Send + Sync + 'static {
     fn allows_multiple_components(&self) -> bool {
         true
     }
-    fn executor_config(&self) -> NativeExecutorConfig {
-        NativeExecutorConfig::default()
+    /// Opt into a shared plugin Tokio runtime; inline execution needs no runtime.
+    fn executor_config(&self) -> Option<NativeExecutorConfig> {
+        None
     }
     fn executor_config_for_component(
         &self,
         config: &Map<String, Json>,
-    ) -> Result<NativeExecutorConfig> {
-        self.executor_config().with_component_config(config)
+    ) -> Result<Option<NativeExecutorConfig>> {
+        let defaults = self.executor_config();
+        if config.contains_key("executor") {
+            defaults
+                .unwrap_or_default()
+                .with_component_config(config)
+                .map(Some)
+        } else {
+            defaults
+                .map(|config| config.with_component_config(&Map::new()))
+                .transpose()
+        }
     }
     fn validate(&self, config: &Map<String, Json>) -> Vec<ConfigDiagnostic> {
         self.executor_config_for_component(config)
@@ -118,6 +129,26 @@ pub struct PluginContext<'a> {
     streams: Arc<Mutex<Vec<Arc<StreamState>>>>,
     _borrow: PhantomData<&'a mut ()>,
 }
+/// Cloneable admission handle for background tasks owned by one native component.
+#[derive(Clone)]
+pub struct PluginTaskSpawner {
+    runtime: PluginRuntime,
+    executor: ComponentExecutor,
+}
+impl PluginTaskSpawner {
+    /// Spawn work with the current Relay scope and cancel it when the component closes.
+    /// Dropping the join handle detaches the waiter; component ownership remains tracked.
+    pub fn spawn<F, T>(&self, future: F) -> Result<tokio::task::JoinHandle<Result<T>>>
+    where
+        F: Future<Output = Result<T>> + Send + 'static,
+        T: Send + 'static,
+    {
+        let scope = local(self.runtime.raw.capture_scope())?;
+        self.executor
+            .spawn(async move { local(scoped(scope, async move { boundary(future.await) }).await) })
+    }
+}
+
 enum UserResult {
     Value(Json),
     Tool(ToolExecutionInterceptOutcome),
@@ -148,7 +179,7 @@ struct Callback {
 }
 
 // The host lease stays on this poll's thread. Only the scope capability and
-// suspended future move between SDK workers.
+// suspended future move between polling threads.
 fn scoped<F: Future>(scope: a::ScopeBox, future: F) -> ScopedFuture<F> {
     ScopedFuture {
         scope,
@@ -197,7 +228,7 @@ impl<F> Drop for ScopedFuture<F> {
     }
 }
 impl a::Callback for Callback {
-    /// Run a unary callback on its owning executor and reject synchronous, streaming, or typed tool dispatch mismatches.
+    /// Poll a unary callback under its captured scope and optional SDK runtime context.
     fn invoke(
         &self,
         invocation: a::Invocation,
@@ -213,7 +244,7 @@ impl a::Callback for Callback {
             },
             ..invocation
         };
-        self.executor.execute(scoped(
+        self.executor.execute_direct(scoped(
             a::Scope_TO::from_value(SharedScope(scope), TD_Opaque),
             async move {
                 boundary(
@@ -246,7 +277,7 @@ impl a::Callback for Callback {
             },
             ..invocation
         };
-        self.executor.execute(scoped(
+        self.executor.execute_direct(scoped(
             a::Scope_TO::from_value(SharedScope(scope), TD_Opaque),
             async move {
                 boundary(
@@ -282,10 +313,12 @@ impl a::Callback for Callback {
     fn invoke_sync(&self, invocation: a::Invocation) -> a::Result<abi::Json> {
         let result = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
             let _call = local(self.executor.enter_sync())?;
-            let mut lease = local(invocation.context.scope.enter())?;
-            let value = self.sync.as_ref().ok_or("callback is not synchronous")?(invocation);
-            local(lease.restore())?;
-            value.map(into_abi)
+            self.executor.with_context(|| {
+                let mut lease = local(invocation.context.scope.enter())?;
+                let value = self.sync.as_ref().ok_or("callback is not synchronous")?(invocation);
+                local(lease.restore())?;
+                value.map(into_abi)
+            })?
         }))
         .unwrap_or_else(|_| Err("native synchronous callback panicked".into()));
         boundary(result)
@@ -308,14 +341,13 @@ impl a::Callback for Callback {
             },
             ..invocation
         };
-        self.executor.execute(async move {
+        self.executor.execute_direct(async move {
             let result = async {
                 let callback = callback.ok_or("callback is not streaming")?;
-                let future = callback(invocation, next);
                 let (stream, sources) = local(
                     scoped(
                         a::Scope_TO::from_value(SharedScope(scope.clone()), TD_Opaque),
-                        async { boundary(future.await) },
+                        async move { boundary(callback(invocation, next).await) },
                     )
                     .await,
                 )?;
@@ -329,6 +361,7 @@ impl a::Callback for Callback {
                     closing: Mutex::new(None),
                     closed: AtomicBool::new(false),
                     cancelled: tokio_util::sync::CancellationToken::new(),
+                    pulls: Mutex::new(Vec::new()),
                 });
                 {
                     let mut registry = registry.lock().unwrap_or_else(|e| e.into_inner());
@@ -366,11 +399,16 @@ struct StreamState {
     closing: Mutex<Option<CloseFuture>>,
     closed: AtomicBool,
     cancelled: tokio_util::sync::CancellationToken,
+    pulls: Mutex<Vec<DirectCancellation>>,
 }
 impl StreamState {
     /// Cancel stream pulls and close retained sources under the invocation scope, preserving failed cleanup for retry.
     fn close(self: &Arc<Self>, executor: &ComponentExecutor) -> CloseFuture {
         self.cancelled.cancel();
+        let pulls = std::mem::take(&mut *self.pulls.lock().unwrap_or_else(|e| e.into_inner()));
+        for pull in pulls {
+            pull.cancel();
+        }
         let mut closing = self.closing.lock().unwrap_or_else(|e| e.into_inner());
         if let Some(future) = closing.as_ref()
             && future.peek().is_none_or(|result| result.is_ok())
@@ -419,9 +457,14 @@ struct OutputStream {
 impl a::Stream for OutputStream {
     /// Poll one output item under the invocation scope and make cancellation, EOF, or an error terminal.
     fn pull(&mut self) -> FfiFuture<a::Result<ROption<abi::Json>>> {
+        let mut pulls = self.state.pulls.lock().unwrap_or_else(|e| e.into_inner());
+        if self.state.cancelled.is_cancelled() {
+            return async { a::Result::RErr(a::Error::new("closed", "native stream is closing")) }
+                .into_ffi();
+        }
         let state = self.state.clone();
         let scope = state.scope.clone();
-        self.executor.execute(scoped(a::Scope_TO::from_value(SharedScope(scope),TD_Opaque),async move{
+        let (future, cancellation) = self.executor.execute_direct_tracked(scoped(a::Scope_TO::from_value(SharedScope(scope),TD_Opaque),async move{
             let mut value=state.value.lock().await;
             if value.terminal{return a::Result::ROk(ROption::RNone)}
             let Some(stream)=value.stream.as_mut()else{return a::Result::ROk(ROption::RNone)};
@@ -433,7 +476,10 @@ impl a::Stream for OutputStream {
                     None=>{value.terminal=true;a::Result::ROk(ROption::RNone)},
                 }
             }
-        }))
+        }));
+        pulls.retain(DirectCancellation::is_alive);
+        pulls.push(cancellation);
+        future
     }
     fn close(&mut self) -> FfiFuture<a::Result<()>> {
         let future = self.state.close(&self.executor);
@@ -531,6 +577,22 @@ impl PluginContext<'_> {
     pub fn runtime(&self) -> PluginRuntime {
         self.runtime.clone()
     }
+    /// Obtain a cloneable task spawner for use inside registered middleware.
+    pub fn task_spawner(&self) -> PluginTaskSpawner {
+        PluginTaskSpawner {
+            runtime: self.runtime.clone(),
+            executor: self.executor.clone(),
+        }
+    }
+    /// Spawn background work whose scope, cancellation, and cleanup belong to this component.
+    pub fn spawn<F, T>(&self, future: F) -> Result<tokio::task::JoinHandle<Result<T>>>
+    where
+        F: Future<Output = Result<T>> + Send + 'static,
+        T: Send + 'static,
+    {
+        self.task_spawner().spawn(future)
+    }
+
     pub fn register_subscriber<F: Fn(&Event) + Send + Sync + 'static>(
         &mut self,
         name: &str,
@@ -1304,7 +1366,7 @@ impl<P: Plugin> a::Plugin for Adapter<P> {
             })
             .collect()
     }
-    /// Create the component executor, bind its owner, and run author registration with cleanup on failure.
+    /// Bind component ownership and run registration off the caller, with optional Tokio support.
     fn register(
         &self,
         config: abi::Json,
@@ -1312,10 +1374,10 @@ impl<P: Plugin> a::Plugin for Adapter<P> {
     ) -> FfiFuture<a::Result<a::RegisteredComponent>> {
         let setup = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
             let config: Map<String, Json> = decode(config)?;
-            let executor = ComponentExecutor::new(
-                self.0.executor_config_for_component(&config)?,
-                self.0.plugin_kind(),
-            )?;
+            let executor = match self.0.executor_config_for_component(&config)? {
+                Some(config) => ComponentExecutor::new(config, self.0.plugin_kind())?,
+                None => ComponentExecutor::inline(self.0.plugin_kind()),
+            };
             let scope = local(runtime.capture_scope())?;
             Ok::<_, String>((config, executor, scope))
         }))
@@ -1466,7 +1528,7 @@ macro_rules! nemo_relay_checked_plugin {
 impl PluginContext<'_> {
     /// Register a synchronous callback using only checked ABI invocation values.
     /// The Rust callback and its captured state remain in the originating SDK.
-    /// Subscribers run inline; synchronous middleware runs on the SDK executor.
+    /// Subscribers run inline; synchronous middleware uses blocking offload.
     pub fn register_synchronous_callback<F>(
         &mut self,
         name: &str,
@@ -1503,7 +1565,7 @@ impl PluginContext<'_> {
 }
 impl PluginContext<'_> {
     /// Register a synchronous stream factory returning a checked stream descriptor.
-    /// Construction, pulls, and close run on this component's SDK executor.
+    /// Offload construction; poll returned stream futures under component scope and runtime context.
     pub fn register_synchronous_stream_callback<F>(
         &mut self,
         name: &str,
@@ -1541,14 +1603,26 @@ impl PluginContext<'_> {
                             },
                             ..invocation
                         };
-                        // Keep this admitted poll and its scope lease on the same
-                        // thread, while allowing downstream work to use the executor.
-                        let stream = tokio::task::block_in_place(|| {
-                            std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
-                                callback(invocation, next)
-                            }))
-                            .unwrap_or_else(|_| Err("synchronous stream callback panicked".into()))
-                        })?;
+                        let bound = scope.clone();
+                        let stream = local(
+                            executor
+                                .execute_blocking(move || {
+                                    boundary(
+                                        std::panic::catch_unwind(std::panic::AssertUnwindSafe(
+                                            || {
+                                                let mut lease = local(bound.enter())?;
+                                                let result = callback(invocation, next);
+                                                local(lease.restore())?;
+                                                result
+                                            },
+                                        ))
+                                        .unwrap_or_else(
+                                            |_| Err("synchronous stream callback panicked".into()),
+                                        ),
+                                    )
+                                })
+                                .await,
+                        )?;
                         let sources = Arc::new(Mutex::new(Vec::new()));
                         let source = SourceStream::new(stream, &executor, scope, &sources);
                         Ok((
@@ -1581,16 +1655,18 @@ fn raw_sync(
     boundary(
         std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
             let _call = local(executor.enter_sync())?;
-            let mut lease = local(invocation.context.scope.enter())?;
-            let result = callback(invocation, next);
-            local(lease.restore())?;
-            result
+            executor.with_context(|| {
+                let mut lease = local(invocation.context.scope.enter())?;
+                let result = callback(invocation, next);
+                local(lease.restore())?;
+                result
+            })?
         }))
         .unwrap_or_else(|_| Err("raw synchronous callback panicked".into())),
     )
 }
 impl a::Callback for RawCallback {
-    /// Run a raw tool callback on the owning executor and decode its canonical result and pending marks.
+    /// Offload a synchronous tool callback and decode its canonical result and pending marks.
     fn invoke_tool(
         &self,
         invocation: a::Invocation,
@@ -1598,15 +1674,11 @@ impl a::Callback for RawCallback {
     ) -> FfiFuture<a::Result<a::ToolExecutionOutcome>> {
         let callback = self.callback.clone();
         let executor = self.executor.clone();
-        self.executor.execute(async move {
-            let value = match tokio::task::spawn_blocking(move || {
-                raw_sync(&executor, &*callback, invocation, ROption::RSome(next))
-            })
-            .await
-            {
-                Ok(v) => local(v),
-                Err(e) => Err(e.to_string()),
-            };
+        let work = self.executor.execute_blocking(move || {
+            raw_sync(&executor, &*callback, invocation, ROption::RSome(next))
+        });
+        async move {
+            let value = local(work.await);
             boundary(value.and_then(|v| {
                 let value: ToolExecutionInterceptOutcome = decode(v)?;
                 Ok(a::ToolExecutionOutcome {
@@ -1625,12 +1697,13 @@ impl a::Callback for RawCallback {
                         .collect::<Result<RVec<_>>>()?,
                 })
             }))
-        })
+        }
+        .into_ffi()
     }
     fn invoke_sync(&self, invocation: a::Invocation) -> a::Result<abi::Json> {
         raw_sync(&self.executor, &*self.callback, invocation, ROption::RNone)
     }
-    /// Run a raw callback on the owning executor with the supplied optional continuation.
+    /// Offload a synchronous callback with its supplied optional continuation.
     fn invoke(
         &self,
         invocation: a::Invocation,
@@ -1638,16 +1711,8 @@ impl a::Callback for RawCallback {
     ) -> FfiFuture<a::Result<abi::Json>> {
         let callback = self.callback.clone();
         let executor = self.executor.clone();
-        self.executor.execute(async move {
-            match tokio::task::spawn_blocking(move || {
-                raw_sync(&executor, &*callback, invocation, next)
-            })
-            .await
-            {
-                Ok(v) => v,
-                Err(e) => a::Result::RErr(failure(e)),
-            }
-        })
+        self.executor
+            .execute_blocking(move || raw_sync(&executor, &*callback, invocation, next))
     }
     fn open_stream(
         &self,

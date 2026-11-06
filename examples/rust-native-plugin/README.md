@@ -42,7 +42,8 @@ the `sha256:` prefix. The same relative artifact path must appear in
 `source.artifact` and `load.library`.
 
 The strict schema documents every feature group and the SDK-owned
-`executor.worker_threads` override.
+`executor.worker_threads` setting. This example opts into a shared Tokio runtime;
+its active components must agree on the worker count.
 
 The optional `registration_control` group demonstrates a callback-based,
 activation-owned gate. It defaults to `enabled: false`, `kinds: ["subscriber"]`,

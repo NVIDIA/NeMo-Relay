@@ -45,16 +45,20 @@ ownership and compatibility rules and
 ## What the SDK Owns
 
 The Rust SDK exports the standard checked bootstrap header, converts ABI-safe values into
-typed records, registers subscribers and middleware, and drives async middleware on one
-SDK-owned multi-thread Tokio runtime per configured component. A plugin can set a
-default executor size and accept a positive `executor.worker_threads` component
-override. The default is two workers; change it only after measuring queued async work
-and account for the number of native components in the host.
+typed records, and registers subscribers and middleware. Typed middleware futures are
+polled directly by the caller. The SDK restores Relay scope around each poll and drop.
+Inline execution is the default and creates no plugin Tokio runtime or worker pool.
 
-Subscribers remain synchronous and run on Relay's subscriber dispatcher. Typed
-middleware returns futures and runs on the SDK executor. A callback has no stable OS
-thread affinity, separate invocations can overlap, and blocking an executor thread can
-delay unrelated calls from the same component.
+Plugins that use Tokio timers, networking, or background tasks opt into a shared
+library-local runtime. Return `Some(NativeExecutorConfig { worker_threads: 2 })` from
+`executor_config`, or configure an `executor` object. Tokio-enabled components of the
+same plugin share that runtime and must request the same worker count. The last
+component using the runtime releases it during shutdown.
+
+Subscribers remain synchronous and run on Relay's subscriber dispatcher. Registration
+and raw synchronous middleware run off the caller thread because their callbacks can
+block. A callback has no stable OS thread affinity, and separate invocations can overlap.
+Keep inline middleware nonblocking so it does not delay the host task.
 
 The checked-in `examples/rust-native-plugin` project is the end-to-end implementation.
 Its configuration, observation, request policy, execution wrappers, and runtime helpers
@@ -103,8 +107,8 @@ impl Plugin for ExampleNativePlugin {
         diagnostics
     }
 
-    fn executor_config(&self) -> NativeExecutorConfig {
-        NativeExecutorConfig { worker_threads: 2 }
+    fn executor_config(&self) -> Option<NativeExecutorConfig> {
+        Some(NativeExecutorConfig { worker_threads: 2 })
     }
 
     fn register<'a>(
