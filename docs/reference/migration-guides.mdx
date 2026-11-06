@@ -554,26 +554,28 @@ Refer to [Borrowing Stream Chunks in Rust](/integrate-into-frameworks/provider-r
 
 #### Check Dynamic Plugin Compatibility and Trust
 
-Native plugins declare `compat.native_api = "v1.0"` and a `compat.relay` range.
-Relay checks binary layouts and selects the plugin's required native contract
-before creating components. The contract includes scope snapshots and diagnostic
-capabilities. Refer to [Native ABI Reference](/build-plugins/native/native-abi-reference).
-Workers use `nvidia.nemo.relay.worker.v1`, contract version `1.0.0`. Refer to
-[Scope Snapshot Extension](/build-plugins/workers/grpc-v1-protocol#scope-snapshot-extension).
+The native host now provides application binary interface (ABI) v8. Its v7
+callback layouts remain compatible. Scope snapshots require v8. Worker
+snapshots require the new `grpc-v1` snapshot extension. Both SDKs report an
+unsupported operation on older hosts. Check the host version before adopting
+snapshot APIs. Refer to
+[Native ABI Reference](https://github.com/NVIDIA/NeMo-Relay/blob/0.11.0/docs/build-plugins/native/native-abi-reference.mdx)
+and [Scope Snapshot Extension](/build-plugins/workers/grpc-v1-protocol#scope-snapshot-extension).
 
-Native diagnostic submission belongs to the component. Reading the whole
-diagnostic context requires an explicit host policy grant. Refer to
-[Native Plugin Diagnostics](/build-plugins/native/diagnostics).
+Native plugin diagnostics uses an optional table after the ABI v8 prefix.
+The execution ABI and `compat.native_api = "1"` stay unchanged. Check diagnostic
+capabilities before using the extension. If your plugin requires it, set a
+Relay compatibility range that includes its availability. Refer to
+[Native Diagnostics Extension](https://github.com/NVIDIA/NeMo-Relay/blob/0.11.0/docs/build-plugins/native/native-abi-reference.mdx#native-diagnostics-extension).
 
-Failed integrity or signature checks prevent plugin activation.
+Failed integrity or signature checks now always prevent plugin activation.
 An optional plugin is skipped. A required plugin stops host startup. Check
 plugin reports and correct artifact digests, signatures, or trusted keys before
 restarting.
 
-Hosts load native plugins and their package-local dependencies from private
-copies. Libraries and their staged dependencies stay loaded until process exit.
-Component close removes registrations, revokes runtime access, and stops the
-component executor. A failed close keeps ownership so the caller can retry. Native
+Embedded hosts load native plugins from private copies of the verified bytes.
+These plugins must not rely on adjacent files at the loaded library's location.
+The CLI keeps its activation snapshot and adjacent native dependencies. Native
 library digest checks reject symbolic links and special files. Refer to
 [Package Discoverable Plugins](/build-plugins/package-discoverable-plugins).
 

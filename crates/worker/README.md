@@ -20,9 +20,10 @@ SPDX-License-Identifier: Apache-2.0
 in a separate process and calls Relay through `nvidia.nemo.relay.worker.v1`.
 
 The protocol is `nvidia.nemo.relay.worker.v1`, with contract version `1.0.0`.
-Set `compat.worker_protocol = "nvidia.nemo.relay.worker.v1"` and
-`compat.relay = ">=1.0.0,<2.0"` in the plugin manifest.
-Crate and wheel versions follow Relay releases.
+Upgrade the host and worker SDK together. Rebuild workers and set these manifest
+values: `compat.worker_protocol = "nvidia.nemo.relay.worker.v1"` and
+`compat.relay = ">=1.0.0,<2.0"`. Old `grpc-v1` workers cannot connect.
+Crate and wheel releases continue to follow the Relay release version.
 
 Callbacks use shared application types. The SDK converts Relay-owned values to
 protobuf messages for transport. It preserves application and provider JSON,
@@ -55,7 +56,8 @@ only one component should use the plugin kind.
 
 Propagate an unchanged `ToolNext`, `LlmNext`, or `LlmStreamNext` error with `?`
 to preserve its downstream origin. `WorkerSdkError::Downstream` carries the
-original SDK error and the continuation identity issued by the host. Construct a new callback error only
+original SDK error and the host-issued continuation identity. Its display and
+existing wire error text remain unchanged. Construct a new callback error only
 when reporting a distinct plugin failure.
 
 The host uses this identity to exclude forwarded errors from plugin callback

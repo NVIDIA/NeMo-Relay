@@ -31,8 +31,6 @@ component closes.
 
 ## Authoring Surface
 
-Use these types and helpers to define a native plugin:
-
 | Surface | Role |
 |---|---|
 | `Plugin` | Defines plugin identity, configuration validation, registration, and multiple-component behavior without requiring an author to construct ABI tables. |
@@ -44,7 +42,7 @@ Use these types and helpers to define a native plugin:
 | Async continuations and streams | `ToolNext`, `LlmNext`, and `LlmStreamNext` support repeated or concurrent downstream calls. Streaming LLM continuations use a pull-based host handle. `register_synchronous_stream_callback` accepts synchronous factories that return checked stream descriptors. |
 | Tool results | `ToolNext` returns `ToolExecutionResult`, which keeps an application result and optional annotation together. |
 | Typed telemetry marks | `emit_mark_with_options` adds `DataSchema` and `LogSeverity`; `emit_metric` validates `MetricMeasurement` values before it emits the reserved Relay metric schema. |
-| Host runtime diagnostics | `PluginRuntime::runtime_diagnostics()` returns the active host-level `RuntimeDiagnostics` report. Entries are ordered and available through `get(code)`. |
+| Legacy runtime diagnostics | `PluginRuntime::runtime_diagnostics()` returns the active host-level `RuntimeDiagnostics` report. Entries are ordered and available through `get(code)`. |
 | Canonical diagnostics | `PluginRuntime::diagnostics()` records internal observations and offers separately authorized snapshot and memory reads. |
 
 ## Installation
@@ -102,9 +100,8 @@ complete example for platform-specific artifact and manifest setup.
 The checked native plugin example targets the 1.0.0 SDK and declares
 `compat.relay = ">=1.0.0,<2.0"`. The SDK defaults to inline middleware execution and
 creates no plugin Tokio runtime. Opt into a shared library-local runtime when a
-component needs Tokio timers, networking, or background tasks. Host operations use
-the current host runtime; detached host cleanup uses a shared fallback when needed.
-Keep inline callbacks nonblocking.
+component needs Tokio timers, networking, or background tasks. Keep inline callbacks
+nonblocking.
 
 Tool continuations return `ToolExecutionResult`, preserving the application result
 and optional opaque annotation. Execution intercepts also carry Relay pending marks.

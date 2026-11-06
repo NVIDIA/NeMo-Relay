@@ -13,8 +13,6 @@ installs those registrations through a component-scoped context.
 
 ## The Shared Contract
 
-Each plugin defines these parts:
-
 | Part | Responsibility |
 |---|---|
 | Stable identity | A language-binding plugin is registered under a kind; native and worker implementations report their plugin identity during loading or handshake. Configuration uses that identity in `components[].kind`. |
@@ -78,10 +76,11 @@ const auditPlugin = {
 ```
 
 ```rust title="Rust"
-use std::sync::Arc;
+use std::{future::Future, pin::Pin, sync::Arc};
 
 use nemo_relay::plugin::{
-    ConfigDiagnostic, DiagnosticLevel, Plugin, PluginFuture, PluginRegistrationContext,
+    ConfigDiagnostic, DiagnosticLevel, Plugin, PluginRegistrationContext,
+    Result as PluginResult,
 };
 use serde_json::{Map, Value as Json};
 
@@ -91,6 +90,7 @@ impl Plugin for AuditPlugin {
     fn plugin_kind(&self) -> &str {
         "audit"
     }
+
     fn validate(&self, config: &Map<String, Json>) -> Vec<ConfigDiagnostic> {
         if config.get("tag").is_none_or(Json::is_string) {
             return Vec::new();
@@ -108,10 +108,12 @@ impl Plugin for AuditPlugin {
         &'a self,
         _config: &Map<String, Json>,
         context: &'a mut dyn PluginRegistrationContext,
-    ) -> PluginFuture<'a, ()> {
+    ) -> Pin<Box<dyn Future<Output = PluginResult<()>> + Send + 'a>> {
         Box::pin(async move {
-            context
-                .register_subscriber("events", Arc::new(|event| println!("{}", event.name())))?;
+            context.register_subscriber(
+                "events",
+                Arc::new(|event| println!("{}", event.name())),
+            )?;
             Ok(())
         })
     }
@@ -176,7 +178,7 @@ Use the following sequence to verify validation, activation, ownership, and tear
 5. Execute a representative managed call and observe the registration's effect rather
    than treating successful initialization as sufficient proof.
 6. Close the activation and verify that the same call no longer observes the plugin.
-7. For a native component, verify that its executor stops. For a worker, verify
+7. For a native component, verify that its tasks stop. For a worker, verify
    that its process stops.
 
 Success means invalid configuration never changes runtime behavior, valid configuration

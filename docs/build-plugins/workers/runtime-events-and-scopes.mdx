@@ -258,7 +258,8 @@ if let Some(diagnostic) = diagnostics.get("otel.metric_mark_invalid") {
 
 </CodeBlocks>
 
-Relay validates the data schema and
+An older host can return `UNIMPLEMENTED` for `runtime_diagnostics`. The SDK reports that
+as an unsupported runtime-diagnostics error. Relay validates the data schema and
 severity at the host boundary. It validates metric measurements after sanitization, so
 it rejects an invalid group as a whole.
 
@@ -322,54 +323,48 @@ async fn emit_runtime_events(
     tag: &str,
     config: &RuntimeConfig,
 ) -> Result<()> {
-    let handle = runtime
-        .push_scope(
-            None,
-            "example.rust_worker.request",
-            ScopeType::Custom,
+    let handle = runtime.push_scope(
+        None,
+        "example.rust_worker.request",
+        ScopeType::Custom,
+        Some(json!({ "tag": tag })),
+        None,
+        None,
+    ).await?;
+    let work = if config.emit_marks {
+        runtime.emit_mark(
+            "example.rust_worker.request.seen",
             Some(json!({ "tag": tag })),
             None,
-            None,
-        )
-        .await?;
-    let work = if config.emit_marks {
-        runtime
-            .emit_mark(
-                "example.rust_worker.request.seen",
-                Some(json!({ "tag": tag })),
-                None,
-            )
-            .await
+        ).await
     } else {
         Ok(())
     };
     match work {
-        Ok(()) => {
-            runtime
-                .pop_scope(&handle, Some(json!({ "done": true })), None)
-                .await?
-        }
+        Ok(()) => runtime.pop_scope(
+            &handle,
+            Some(json!({ "done": true })),
+            None,
+        ).await?,
         Err(error) => {
-            let _ = runtime
-                .pop_scope(&handle, None, Some(json!({ "failed": true })))
-                .await;
+            let _ = runtime.pop_scope(
+                &handle,
+                None,
+                Some(json!({ "failed": true })),
+            ).await;
             return Err(error);
         }
     }
 
     if config.emit_isolated_scope {
         let stack = runtime.create_scope_stack().await?;
-        let emitted = runtime
-            .with_scope_stack(&stack, || async {
-                runtime
-                    .emit_mark(
-                        "example.rust_worker.isolated.mark",
-                        Some(json!({ "tag": tag })),
-                        None,
-                    )
-                    .await
-            })
-            .await;
+        let emitted = runtime.with_scope_stack(&stack, || async {
+            runtime.emit_mark(
+                "example.rust_worker.isolated.mark",
+                Some(json!({ "tag": tag })),
+                None,
+            ).await
+        }).await;
         let dropped = runtime.drop_scope_stack(&stack).await;
         emitted?;
         dropped?;

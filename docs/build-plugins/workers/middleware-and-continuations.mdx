@@ -529,7 +529,8 @@ returning the message.
 
 Recognized errors survive execution continuations and stream callbacks. Errors
 after response headers have been sent remain stream errors and cannot change
-the HTTP response status.
+the HTTP response status. No native ABI or worker protobuf change is required;
+older hosts treat the prefix as an ordinary error string.
 
 The Rust worker SDK exports `http_error_message`. Return its formatted string
 in `WorkerSdkError::Callback`. In the Python SDK, raise `WorkerSdkError` with

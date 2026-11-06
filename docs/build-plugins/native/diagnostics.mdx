@@ -53,7 +53,7 @@ and the differences between host acceptance and queue admission.
 <Code src="_code/internal_diagnostics.rs" language="rust" title="Native lookup diagnostics" lines="4-64" showLineNumbers={false} />
 
 `component_lazy` registers the complete code list together. Disabled or unsupported
-diagnostic helpers skip its factory and return an inactive component. Inactive components
+facades skip its factory and return an inactive component. Inactive components
 skip observation factories too. A code position is one-based within that list.
 Extensions declare their outcome and allowed failure classes. Common plugin
 failure codes can also be selected with `DiagnosticCode::Builtin`.
@@ -84,9 +84,8 @@ Set request or session IDs through `observation.correlation`. The shared
 never becomes a counter key and counts toward the input-text budget.
 
 Native recording is synchronous. There is no delivery queue or flush call.
-`component.close()` prevents further recording through any clone. Dropping the
-last clone also closes the registration. When the activation closes, the host
-revokes its handles and releases the adapter state.
+Explicit `component.close()` fences all clones. Last drop also closes the
+registration. Activation teardown revokes handles and releases adapter backing.
 
 Closing a registration does not reset context totals or imply recovery.
 Closing live components frees their slots, but cumulative extension and declaration

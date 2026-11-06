@@ -347,8 +347,8 @@ A worker can fail before its listener exists. The launcher records observed
 spawn/exit outcomes, and the broker records accepted, replay-fenced startup
 failure reports or activation deadline expiry. These are broker/launcher
 observations, not invented worker-authored detail. Control loss alone does not
-establish process exit. Errors, logging, rate limits, and runtime reports use
-separate reporting paths.
+establish process exit. Existing errors, logging, rate limits, and legacy reports
+retain their behavior.
 
 ### Collection Bounds and Producer Coverage
 

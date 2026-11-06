@@ -6,18 +6,16 @@ position: 20
 {/* SPDX-FileCopyrightText: Copyright (c) 2026, NVIDIA CORPORATION & AFFILIATES. All rights reserved.
 SPDX-License-Identifier: Apache-2.0 */}
 
-A native dynamic plugin is a trusted Rust shared library that runs in the Relay
-process. Implement the SDK's `Plugin` trait to validate configuration and register
-callbacks through `PluginContext`. The SDK sends typed values across a checked
-application binary interface (ABI).
-
-Choose this model when callback performance matters and you can package a library
-for each target operating system and CPU architecture.
+A native dynamic plugin is a trusted Rust shared library that Relay loads into its own
+process. It follows the same validation and `PluginContext` contract as other plugins,
+but typed middleware crosses a checked ABI boundary without a worker process or gRPC JSON
+envelope. This model is appropriate when reusable callback behavior is sensitive to
+latency or throughput and the deployment can carry a platform-specific binary.
 
 <Warning>
-Native plugins share the host's memory and process. Load only trusted libraries.
-A native crash can terminate Relay. Follow the SDK's ownership rules when passing
-values across the library boundary.
+Native plugins are not sandboxed. They share the host address space, allocator boundary,
+and process fate. Load only reviewed artifacts, keep ABI ownership rules intact, and
+assume a native crash can terminate the Relay host.
 </Warning>
 
 ## Version Contracts
@@ -163,13 +161,13 @@ work, waits for tasks to finish, and stops its executor. If cleanup fails, the h
 keeps ownership so you can retry close. Libraries and their dependencies stay
 loaded until the process exits.
 
-## Forward HTTP Error Statuses
+## Forward HTTP error statuses
 
 An execution callback can return an error string beginning with
 `HTTP <status>: <message>` to preserve an upstream HTTP error status through
 Relay. The prefix must appear at the start, use exactly three ASCII digits
-from 400 through 599, and include a space after the colon. Relay handles other
-error strings as plugin execution errors.
+from 400 through 599, and include a space after the colon. Other error strings
+keep their existing handling.
 
 Relay converts a recognized prefix to `FlowError::Upstream` with classification
 `Other`, an empty header map, and the message after the prefix. This convention
@@ -179,7 +177,8 @@ returning the message.
 
 Recognized errors survive execution continuations and stream callbacks. Errors
 after response headers have been sent remain stream errors and cannot change
-the HTTP response status.
+the HTTP response status. No native ABI or worker protobuf change is required;
+older hosts treat the prefix as an ordinary error string.
 
 The Rust native SDK exports `http_error_message`, which validates the status
 and returns the formatted string:
@@ -189,7 +188,7 @@ let message = nemo_relay_plugin::http_error_message(403, "Provider denied access
 return Err(message);
 ```
 
-You can also return a literal such as `HTTP 404: Model not found`.
+Existing plugins can also return a literal such as `HTTP 404: Model not found`.
 Returning a downstream `next.call(...).await` error unchanged preserves the
 prefix. Wrapping it with additional text before `HTTP ` prevents recognition.
 

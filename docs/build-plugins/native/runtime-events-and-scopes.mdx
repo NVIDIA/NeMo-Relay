@@ -172,9 +172,8 @@ The diagnostic snapshot is bounded and ordered by code. It is a host-level view,
 does not identify the plugin that recorded a diagnostic. These operations require the
 checked v1.0 runtime interface.
 
-`runtime_diagnostics()` reads the host-level report. To record plugin observations
-or read canonical diagnostics with host permission, use `runtime.diagnostics()`.
-Refer to
+`runtime_diagnostics()` reads the legacy host report. For canonical recording and
+authorized reads, use `runtime.diagnostics()` as described in
 [Native Plugin Diagnostics](/build-plugins/native/diagnostics).
 
 ## Control Global Runtime Registrations
@@ -222,8 +221,7 @@ if config.registration_control.enabled {
 
 The first callback returns a reason and disables its matching registration. The second
 callback returns `None` and leaves its matching registration enabled. The callback
-registration functions use checked ABI-safe descriptors; the original
-constant-reason v4 slots remain at their existing offsets for binary compatibility.
+registration functions use checked ABI-safe descriptors.
 Refer to
 [Conditional Middleware Guardrails](/about-nemo-relay/concepts/conditional-middleware-guardrails)
 for the complete discovery, ordering, snapshot, and cleanup contract.

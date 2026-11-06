@@ -11,10 +11,11 @@ A worker plugin runs outside the Relay process. It implements
 types. It can call the host's remaining execution chain through continuations,
 use codecs during a callback, emit marks, and manage scope stacks.
 
-The protocol contract is `nvidia.nemo.relay.worker.v1`, version `1.0.0`.
-Set `compat.worker_protocol = "nvidia.nemo.relay.worker.v1"` and
-`compat.relay = ">=1.0.0,<2.0"` in the manifest for this SDK.
-SDK package versions follow Relay releases.
+The current contract is `nvidia.nemo.relay.worker.v1`, version `1.0.0`, introduced
+in Relay 1.0. Upgrade the host and worker SDK together, regenerate custom bindings,
+and set `compat.worker_protocol = "nvidia.nemo.relay.worker.v1"` in the manifest.
+Set `compat.relay = ">=1.0.0,<2.0"` for the current SDK. Old `grpc-v1` workers
+cannot use these services. Package versions continue to follow Relay releases.
 
 Tool callbacks and `ToolNext` continuations preserve an application `result` and
 optional opaque `annotation`; execution intercepts can add Relay-owned pending
@@ -23,8 +24,8 @@ request codecs and a response codec for non-streaming callbacks.
 
 Workers can add a data schema, log severity, and semantic category to a mark, emit validated metric
 measurements, and read the current host-level runtime diagnostics. These diagnostics are
-ordered by code and describe the host as a whole. Use canonical diagnostics for
-plugin-specific observations and snapshots. Rust and Python workers can also record internal
+ordered by code and are not attributed to a particular plugin. They are the legacy
+report, not canonical snapshots. Rust and Python workers can also record internal
 observations through the canonical diagnostics delivery API. Refer to
 [Plugin Diagnostics](/build-plugins/diagnostics) for matching examples and delivery
 limits. Worker recording does not grant canonical read access.

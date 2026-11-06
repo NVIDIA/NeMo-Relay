@@ -46,25 +46,15 @@ The mirrored GitLab pipeline also publishes the same tag's collected package
 artifacts to NVIDIA Artifactory. It is driven by the tag push, not by a GitLab
 pipeline schedule.
 
-## Native Interface Releases
-
-`nemo-relay-plugin-abi` uses the workspace release version and publishes with the
-other Rust crates. It publishes first so the SDK and host can resolve their exact
-interface dependency.
+## Native ABI Contracts
 
 Native binary compatibility follows the explicit contract in
 `crates/plugin-abi/src/contract.rs`, such as `v1.0`. Package version updates leave
-this contract unchanged. The interface build script uses the contract to set
-`abi_stable` layout metadata, so a package release does not change the ABI.
-Published bootstrap and module versions stay fixed for their contracts.
+this contract and its published bootstrap and module layouts unchanged.
 
 Run `just native-abi-contract` to check the contract and package metadata. Before
 publishing, run the binary compatibility tests, including the fixtures that use
-different package versions. Add a new contract only when the native interface
-changes; preserve each supported contract's layouts and behavior.
-
-The `just package-rust` recipe packages the interface first and uses its local
-source when verifying dependent packages. Local packaging does not publish crates.
+different package versions. Publish `nemo-relay-plugin-abi` before its dependents.
 
 ## Version Model
 
@@ -72,9 +62,9 @@ NeMo Relay versions are anchored on the workspace SemVer in the repository root
 `Cargo.toml`.
 
 - The root `Cargo.toml` `workspace.package.version` is the canonical release
-  version for the unified-release Rust packages.
+  version for the Rust workspace.
 - The root `Cargo.toml` `workspace.dependencies` entries for
-  `nemo-relay-types`, `nemo-relay-worker-proto`, `nemo-relay-codecs`, `nemo-relay-plugin`,
+  `nemo-relay-plugin-abi`, `nemo-relay-types`, `nemo-relay-worker-proto`, `nemo-relay-codecs`, `nemo-relay-plugin`,
   `nemo-relay-worker`, `nemo-relay-diagnostics`, `nemo-relay-model-pricing`,
   `nemo-relay-logging`, `nemo-relay-observability`, `nemo-relay-resource-metrics`,
   `nemo-relay-runtime`, `nemo-relay-plugin-host`, `nemo-relay-adaptive`,
@@ -200,7 +190,7 @@ The helper updates:
 
 1. The root [`Cargo.toml`](Cargo.toml) workspace version.
 2. The root [`Cargo.toml`](Cargo.toml) `workspace.dependencies` versions for
-   `nemo-relay-types`, `nemo-relay-worker-proto`, `nemo-relay-codecs`, `nemo-relay-plugin`,
+   `nemo-relay-plugin-abi`, `nemo-relay-types`, `nemo-relay-worker-proto`, `nemo-relay-codecs`, `nemo-relay-plugin`,
    `nemo-relay-worker`, `nemo-relay-diagnostics`, `nemo-relay-model-pricing`,
    `nemo-relay-logging`, `nemo-relay-observability`, `nemo-relay-resource-metrics`,
    `nemo-relay-runtime`, `nemo-relay-plugin-host`, `nemo-relay-adaptive`,

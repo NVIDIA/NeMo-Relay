@@ -224,7 +224,8 @@ struct Settings {
 }
 
 fn parse(config: &Map<String, Json>) -> Result<Settings, String> {
-    serde_json::from_value(Json::Object(config.clone())).map_err(|error| error.to_string())
+    serde_json::from_value(Json::Object(config.clone()))
+        .map_err(|error| error.to_string())
 }
 
 fn validate_with_policy(

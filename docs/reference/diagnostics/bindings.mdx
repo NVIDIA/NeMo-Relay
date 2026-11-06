@@ -9,9 +9,9 @@ SPDX-License-Identifier: Apache-2.0 */}
 ## Embedded Language Runtimes
 
 Rust, Python, and Node.js initialize diagnostics before
-validating or activating plugins. Use the `plugin.initialize` entry
+validating or activating plugins. Use the existing `plugin.initialize` entry
 point and configure diagnostics in `plugins.toml`. You can pass an explicit file
-through the file argument. No separate setup call is needed. Embedded
+through the existing file argument. No separate setup call is needed. Embedded
 diagnostics does not need CLI configuration, a listener, an exporter, or a framework
 adapter.
 
@@ -23,7 +23,7 @@ If your code supplies `diagnostics`, that profile replaces all file settings for
 the service. Omitted fields in that profile use core defaults.
 
 Service settings do not enter plugin component configuration, execution
-fingerprints, or plugin activation reports. Invalid settings fail startup without
+fingerprints, or legacy plugin reports. Invalid settings fail startup without
 falling back to another profile. `validate` checks the profile without starting
 the service.
 
@@ -50,7 +50,7 @@ to use diagnostics in the child.
 A reader grants access to detail that can contain unsanitized data. Query filters
 do not restrict that authority. Snapshots also contain totals for the whole context.
 If your application serves reads to other clients, it must authorize each client.
-Snapshots do not flow into subscribers, exporters, runtime reports, exception
+Snapshots do not flow into subscribers, exporters, legacy reports, exception
 attachments, or operational logs. Automatic OpenTelemetry (OTel) exporter
 construction failures are recorded at plugin activation; broader OTel pipeline
 integration is not yet supported. Among embedded application bindings, only the Rust runtime API creates

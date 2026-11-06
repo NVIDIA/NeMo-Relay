@@ -304,7 +304,7 @@ Authorize readers for the whole context: filters and cursors are not access
 controls. HTTP responses use `Cache-Control: no-store`. Names, paths, detail, and
 caller correlation can contain unsanitized data. Truncation does not sanitize it.
 
-Snapshot reads never automatically feed logs, runtime reports, subscribers, or
+Snapshot reads never automatically feed logs, legacy reports, subscribers, or
 exporters. Logging projections receive only the approved built-in summary.
 State-only recording invokes no projection. An application that exports a reader
 result must apply its own authorization and data-handling policy.
@@ -315,15 +315,15 @@ core allocation and occupancy, not a whole-process RSS ceiling or a guaranteed
 polling rate. Refer to [Runtime Diagnostics](/reference/diagnostics) for the
 deployment-specific budgets.
 
-Canonical snapshots are separate from these interfaces:
+These existing interfaces retain their own contracts:
 
 - Health and status endpoints.
 - Configuration validation.
 - Plugin reports.
 - Native `PluginRuntime::runtime_diagnostics()`.
 - Worker `GetRuntimeDiagnostics`.
-
-Snapshot readers do not fall back to those reports. With runtime diagnostics enabled and
+ Snapshot
+readers do not fall back to those reports. With runtime diagnostics enabled and
 recorder admission successful, skipped automatic OTel exporters are recorded
 directly as activation-phase `plugin.exporter_initialization_failed` observations.
 Select a signal using component key `opentelemetry.automatic.traces`,
