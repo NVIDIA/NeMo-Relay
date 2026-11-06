@@ -369,11 +369,14 @@ child trajectory by ID so consumers can validate the parent and child as one
 single-file ATIF v1.7 artifact.
 
 The plugin writes each trajectory when its top-level Agent scope or supported
-coding-agent turn scope closes. If the plugin is cleared while that root scope
-is still open, teardown first drains queued subscriber callbacks and then
-writes the partial trajectory. Terminating the process before root-scope
-closure or plugin teardown completes can leave the trajectory absent or
-incomplete.
+coding-agent turn scope closes. Local files are written before a hook that closes
+the scope returns. Remote storage uploads start at that point and finish in the
+background, so a recovery copy or `atif.remote_delivery_failed` diagnostic can
+appear after the hook returns. `flush_subscribers` and plugin teardown wait for
+them. If the plugin is cleared while that root scope is still open, teardown first
+drains queued subscriber callbacks and then writes the partial trajectory.
+Terminating the process before root-scope closure, a remote upload, or plugin
+teardown completes can leave the trajectory absent or incomplete.
 
 To correlate ATIF with typed OpenTelemetry traces from the same run,
 join on NeMo Relay UUIDs. The plugin-managed ATIF `session_id` is the
@@ -673,7 +676,8 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
 - The application expects manual trajectory output without calling `export()`
   or `export_json()`.
 - The process terminates before manual `export()`, supported root-scope closure,
-  or plugin teardown establishes the export boundary.
+  or plugin teardown establishes the export boundary, or before a remote upload
+  finishes.
 - `storage[i].type` is unknown or `storage[i].bucket` is empty for some entry.
 - `storage` is non-empty in a build that was compiled without the
   `atif-storage` feature.

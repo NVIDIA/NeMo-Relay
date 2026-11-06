@@ -41,7 +41,7 @@ use super::otel_file::OtlpFileFormat;
 use super::private_file::atomic_private_write;
 use crate::api::event::{Event, LogSeverity, ScopeCategory, ValidatedMetricMeasurement};
 use crate::api::runtime::{
-    EventSubscriberFn, current_scope_stack, global_context, set_thread_scope_stack,
+    EventSubscriberFn, current_scope_stack, global_context, with_scope_stack,
 };
 use crate::api::scope::ScopeType;
 use crate::api::subscriber::{
@@ -3279,7 +3279,20 @@ impl AtifDeliveryQueue {
                 .spawn(move || {
                     for job in receiver {
                         match job {
-                            AtifDeliveryJob::Deliver(work) => work(),
+                            AtifDeliveryJob::Deliver(work) => {
+                                // One bad upload must not end delivery for the process.
+                                if std::panic::catch_unwind(std::panic::AssertUnwindSafe(work))
+                                    .is_err()
+                                {
+                                    log::error!(
+                                        target: "nemo_relay.observability",
+                                        event = "atif_delivery_job_panicked",
+                                        plugin_kind = "observability",
+                                        exporter = "atif";
+                                        "ATIF delivery job panicked"
+                                    );
+                                }
+                            }
                             AtifDeliveryJob::Drain(done) => {
                                 let _ = done.send(());
                             }
@@ -4053,9 +4066,11 @@ fn finish_atif_write(
     let storage = Arc::clone(storage);
     queue.submit(Box::new(move || {
         let _retained = retained;
-        set_thread_scope_stack(scope_stack);
-        let results = write_atif(&write, storage.as_slice(), &targets);
-        complete_atif_write(&manager, write.agent_uuid, results);
+        // Scoped, so the idle worker doesn't keep the closed scope and its captures alive.
+        with_scope_stack(scope_stack, || {
+            let results = write_atif(&write, storage.as_slice(), &targets);
+            complete_atif_write(&manager, write.agent_uuid, results);
+        });
     }));
 }
 
