@@ -148,6 +148,10 @@ fn execution_context_preserves_codec_identities_and_capabilities() {
         let context = payload
             .execution_context(&disconnected_runtime(), "invocation", true)
             .unwrap();
+        let debug = format!("{context:?}");
+        assert!(debug.contains("LlmExecutionContext"));
+        assert!(!debug.contains("capability"));
+        assert!(!debug.contains("token"));
         assert_eq!(context.request_codec().codec, expected);
         assert_eq!(context.request_codec().resolve_codec().is_some(), resolves);
         assert_eq!(context.response_codec().unwrap().codec, expected);
@@ -219,12 +223,24 @@ async fn cancellation_acknowledgement_matches_acceptance_after_cleanup() {
     struct TestPlugin;
 
     impl WorkerPlugin for TestPlugin {
-        fn plugin_id(&self) -> &str {
+        fn plugin_kind(&self) -> &str {
             "test.cancellation"
         }
 
-        fn register(&self, _ctx: &mut PluginContext, _config: &Json) -> Result<()> {
-            Ok(())
+        fn allows_multiple_components(&self) -> bool {
+            false
+        }
+
+        fn register<'a>(
+            &'a self,
+            _config: &'a serde_json::Map<String, Json>,
+            _ctx: &'a mut PluginContext,
+        ) -> crate::PluginFuture<'a, ()> {
+            Box::pin(async move {
+                let _config = &Json::Object(_config.clone());
+                let result: crate::Result<()> = async move { Ok(()) }.await;
+                result.map_err(|error| crate::PluginError::RegistrationFailed(error.to_string()))
+            })
         }
     }
 
@@ -237,6 +253,7 @@ async fn cancellation_acknowledgement_matches_acceptance_after_cleanup() {
                 shutdown: Arc::new(tokio::sync::Notify::new()),
                 draining: Arc::new(std::sync::atomic::AtomicBool::new(false)),
                 registration: Arc::new(tokio::sync::Mutex::new(None)),
+                registration_cancel: watch::channel(false).0,
                 plugin: Arc::new(TestPlugin),
                 runtime: disconnected_runtime(),
                 handlers: Arc::new(Mutex::new(WorkerHandlers::default())),
@@ -282,11 +299,15 @@ async fn cancellation_acknowledgement_matches_acceptance_after_cleanup() {
 async fn shutdown_rejects_stream_handoff_from_a_completed_opener() {
     struct TestPlugin;
     impl WorkerPlugin for TestPlugin {
-        fn plugin_id(&self) -> &str {
+        fn plugin_kind(&self) -> &str {
             "test.shutdown_handoff"
         }
-        fn register(&self, _ctx: &mut PluginContext, _config: &Json) -> Result<()> {
-            Ok(())
+        fn register<'a>(
+            &'a self,
+            _config: &serde_json::Map<String, Json>,
+            _ctx: &'a mut PluginContext,
+        ) -> PluginFuture<'a, ()> {
+            Box::pin(async { Ok(()) })
         }
     }
     let service = WorkerService {
@@ -294,6 +315,7 @@ async fn shutdown_rejects_stream_handoff_from_a_completed_opener() {
         shutdown: Arc::new(tokio::sync::Notify::new()),
         draining: Arc::new(std::sync::atomic::AtomicBool::new(false)),
         registration: Arc::new(tokio::sync::Mutex::new(None)),
+        registration_cancel: watch::channel(false).0,
         plugin: Arc::new(TestPlugin),
         runtime: disconnected_runtime(),
         handlers: Arc::new(Mutex::new(WorkerHandlers::default())),
@@ -350,11 +372,15 @@ async fn repeated_shutdown_does_not_reopen_health_watches() {
 
     struct TestPlugin;
     impl WorkerPlugin for TestPlugin {
-        fn plugin_id(&self) -> &str {
+        fn plugin_kind(&self) -> &str {
             "test.shutdown"
         }
-        fn register(&self, _ctx: &mut PluginContext, _config: &Json) -> Result<()> {
-            Ok(())
+        fn register<'a>(
+            &'a self,
+            _config: &serde_json::Map<String, Json>,
+            _ctx: &'a mut PluginContext,
+        ) -> PluginFuture<'a, ()> {
+            Box::pin(async { Ok(()) })
         }
     }
 
@@ -365,6 +391,7 @@ async fn repeated_shutdown_does_not_reopen_health_watches() {
         shutdown: Arc::new(tokio::sync::Notify::new()),
         draining: Arc::new(std::sync::atomic::AtomicBool::new(false)),
         registration: Arc::new(tokio::sync::Mutex::new(None)),
+        registration_cancel: watch::channel(false).0,
         plugin: Arc::new(TestPlugin),
         runtime: disconnected_runtime(),
         handlers: Arc::new(Mutex::new(WorkerHandlers::default())),
@@ -449,19 +476,24 @@ async fn repeated_shutdown_does_not_reopen_health_watches() {
     assert!(task.await.unwrap_err().is_cancelled());
 }
 
+/// Shutdown rejects new work even when the registration lock is occupied.
 #[tokio::test]
 async fn validation_rejects_wrong_plugin_and_shutdown_without_running_callback() {
     struct TestPlugin(Arc<AtomicU64>);
     impl WorkerPlugin for TestPlugin {
-        fn plugin_id(&self) -> &str {
+        fn plugin_kind(&self) -> &str {
             "test.validation_lifecycle"
         }
-        fn validate(&self, _config: &Json) -> Vec<ConfigDiagnostic> {
+        fn validate(&self, _config: &serde_json::Map<String, Json>) -> Vec<ConfigDiagnostic> {
             self.0.fetch_add(1, Ordering::Relaxed);
             Vec::new()
         }
-        fn register(&self, _ctx: &mut PluginContext, _config: &Json) -> Result<()> {
-            Ok(())
+        fn register<'a>(
+            &'a self,
+            _config: &serde_json::Map<String, Json>,
+            _ctx: &'a mut PluginContext,
+        ) -> PluginFuture<'a, ()> {
+            Box::pin(async { Ok(()) })
         }
     }
     let calls = Arc::new(AtomicU64::new(0));
@@ -470,6 +502,7 @@ async fn validation_rejects_wrong_plugin_and_shutdown_without_running_callback()
         shutdown: Arc::new(tokio::sync::Notify::new()),
         draining: Arc::new(std::sync::atomic::AtomicBool::new(false)),
         registration: Arc::new(tokio::sync::Mutex::new(None)),
+        registration_cancel: watch::channel(false).0,
         plugin: Arc::new(TestPlugin(calls.clone())),
         runtime: disconnected_runtime(),
         handlers: Arc::new(Mutex::new(WorkerHandlers::default())),
@@ -483,7 +516,7 @@ async fn validation_rejects_wrong_plugin_and_shutdown_without_running_callback()
                 auth_token: service.runtime.auth_token.clone(),
             }),
             plugin_id: id.into(),
-            config: Some(encode_wire(&Json::Null).unwrap()),
+            config: Some(encode_wire(&serde_json::json!({})).unwrap()),
         })
     };
     let error = service
@@ -512,4 +545,104 @@ async fn validation_rejects_wrong_plugin_and_shutdown_without_running_callback()
         .unwrap_err();
     assert_eq!(error.code(), tonic::Code::FailedPrecondition);
     assert_eq!(calls.load(Ordering::Relaxed), 1);
+    // New requests observe the lifecycle fence even when the registration lock
+    // is occupied and shutdown's cancellation signal is already set.
+    let _registration = service.registration.lock().await;
+    let error = tokio::time::timeout(
+        std::time::Duration::from_secs(1),
+        service.register(Request::new(RegisterRequest {
+            credentials: request("test.validation_lifecycle")
+                .into_inner()
+                .credentials,
+            plugin_id: "test.validation_lifecycle".into(),
+            config: Some(encode_wire(&serde_json::json!({})).unwrap()),
+        })),
+    )
+    .await
+    .unwrap()
+    .unwrap_err();
+    assert_eq!(error.code(), tonic::Code::FailedPrecondition);
+}
+
+#[test]
+fn registry_filters_preserve_every_supported_surface_and_reject_nonregistrations() {
+    // Gate callbacks receive these identities from the host. No supported kind
+    // may collapse to an unspecified surface or disappear during conversion.
+    let kinds = [
+        RuntimeRegistrationKind::Subscriber,
+        RuntimeRegistrationKind::EventMetadataInjector,
+        RuntimeRegistrationKind::MarkSanitizeGuardrail,
+        RuntimeRegistrationKind::ScopeSanitizeStartGuardrail,
+        RuntimeRegistrationKind::ScopeSanitizeEndGuardrail,
+        RuntimeRegistrationKind::ToolSanitizeRequestGuardrail,
+        RuntimeRegistrationKind::ToolSanitizeResponseGuardrail,
+        RuntimeRegistrationKind::ToolConditionalExecutionGuardrail,
+        RuntimeRegistrationKind::ToolRequestIntercept,
+        RuntimeRegistrationKind::ToolExecutionIntercept,
+        RuntimeRegistrationKind::LlmSanitizeRequestGuardrail,
+        RuntimeRegistrationKind::LlmSanitizeResponseGuardrail,
+        RuntimeRegistrationKind::LlmConditionalExecutionGuardrail,
+        RuntimeRegistrationKind::LlmRequestIntercept,
+        RuntimeRegistrationKind::LlmExecutionIntercept,
+        RuntimeRegistrationKind::LlmStreamExecutionIntercept,
+    ];
+    let mut surfaces = BTreeSet::new();
+    for kind in kinds {
+        let surface = registration_surface(kind);
+        assert!(surfaces.insert(surface as i32));
+        assert_eq!(runtime_registration_kind(surface).unwrap(), kind);
+    }
+    for surface in [
+        RegistrationSurface::Unspecified,
+        RegistrationSurface::ConditionalMiddlewareGuardrail,
+    ] {
+        assert!(runtime_registration_kind(surface).is_err());
+    }
+}
+
+#[test]
+fn worker_tcp_endpoints_accept_numeric_addresses_and_reject_invalid_authorities() {
+    for endpoint in ["tcp://127.0.0.1:4317", "http://127.0.0.1:4317"] {
+        assert_eq!(
+            parse_tcp_endpoint(endpoint).unwrap(),
+            "127.0.0.1:4317".parse::<SocketAddr>().unwrap()
+        );
+    }
+    for endpoint in [
+        "tcp://",
+        "https://127.0.0.1:4317",
+        "unix:///tmp/worker.sock",
+        "http://127.0.0.1:4317/path",
+        "http://127.0.0.1:invalid",
+        "http://",
+    ] {
+        assert!(parse_tcp_endpoint(endpoint).is_err(), "{endpoint}");
+    }
+}
+
+#[test]
+fn shared_author_errors_keep_configuration_serialization_and_registration_categories() {
+    let config: PluginError = WorkerSdkError::InvalidInput("invalid field".into()).into();
+    assert!(matches!(config, PluginError::InvalidConfig(message) if message == "invalid field"));
+    let invalid_json = serde_json::from_str::<Json>("{").unwrap_err();
+    let serialization: PluginError = WorkerSdkError::Serialization(invalid_json).into();
+    assert!(matches!(serialization, PluginError::Serialization(_)));
+    for error in [
+        WorkerSdkError::Callback("author failed".into()),
+        WorkerSdkError::Transport("host unavailable".into()),
+    ] {
+        let message = error.to_string();
+        assert!(
+            matches!(PluginError::from(error), PluginError::RegistrationFailed(returned) if returned == message)
+        );
+    }
+}
+
+#[tokio::test]
+async fn invalid_metric_measurements_are_rejected_before_contacting_the_host() {
+    let error = disconnected_runtime()
+        .emit_metric("invalid", Vec::new(), None)
+        .await
+        .unwrap_err();
+    assert!(matches!(error, WorkerSdkError::InvalidInput(_)));
 }

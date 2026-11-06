@@ -1216,7 +1216,7 @@ kind = "rust_dynamic"
 
 [compat]
 relay = ">=1.0.0,<2.0"
-native_api = "1"
+native_api = "v1.0"
 
 [defaults]
 enabled = false
@@ -1232,7 +1232,6 @@ sha256 = "{digest}"
 
 [load]
 library = "libfixture_native.so"
-symbol = "nemo_relay_fixture_native_plugin"
 "#,
             digest = digest,
         ),
@@ -1523,7 +1522,7 @@ kind = "rust_dynamic"
 
 [compat]
 relay = ">=1.0.0,<2.0"
-native_api = "1"
+native_api = "v1.0"
 
 [defaults]
 enabled = false
@@ -1539,7 +1538,6 @@ sha256 = "sha256:{digest}"
 
 [load]
 library = "../native-runtime/libfixture_native.so"
-symbol = "nemo_relay_fixture_native_plugin"
 "#,
         ),
     )
@@ -1803,6 +1801,110 @@ fn activation_snapshot_copies_declared_signature_into_stable_identity() {
     assert_eq!(
         snapshot.closure_digest(),
         dynamic_plugin_runtime_closure_digest(manifest.to_string_lossy().as_ref(), None).unwrap()
+    );
+}
+
+#[test]
+fn activation_snapshot_retains_native_dependency_signature_evidence() {
+    let temp = tempfile::tempdir().unwrap();
+    let directory = temp.path().join("plugin");
+    std::fs::create_dir_all(&directory).unwrap();
+    let manifest = write_native_dynamic_manifest(&directory, "acme.dependency-signature");
+    std::fs::write(directory.join("helper.so"), b"dependency").unwrap();
+    let signature = temp.path().join("helper.sig");
+    std::fs::write(&signature, b"dependency signature").unwrap();
+    let text = std::fs::read_to_string(&manifest).unwrap();
+    let digest = Sha256::digest(b"dependency")
+        .iter()
+        .map(|byte| format!("{byte:02x}"))
+        .collect::<String>();
+    std::fs::write(&manifest, format!("{text}\n[integrity.dependencies.\"helper.so\"]\nsha256 = \"sha256:{digest}\"\nsignature = \"../helper.sig\"\n")).unwrap();
+    let snapshot = DynamicPluginActivationSnapshot::create(
+        manifest.to_str().unwrap(),
+        "acme.dependency-signature",
+        DynamicPluginKind::RustDynamic,
+        None,
+        &crate::plugins::policy::DynamicPluginHostPolicy::default(),
+    )
+    .unwrap();
+    let (captured, _) =
+        DynamicPluginManifest::load_from_path(&snapshot.activation_manifest).unwrap();
+    let copied = captured.integrity.unwrap().dependencies["helper.so"]
+        .signature
+        .clone()
+        .unwrap();
+    std::fs::write(&signature, b"replacement").unwrap();
+    assert_eq!(std::fs::read(copied).unwrap(), b"dependency signature");
+    assert_ne!(
+        snapshot.closure_digest(),
+        dynamic_plugin_runtime_closure_digest(manifest.to_str().unwrap(), None).unwrap()
+    );
+}
+
+/// External signatures with equal filenames keep separate captured bytes and closure identities.
+#[test]
+fn activation_snapshot_distinguishes_external_signature_sources_with_equal_names() {
+    let temp = tempfile::tempdir().unwrap();
+    let directory = temp.path().join("plugin");
+    let signatures = temp.path().join("signatures");
+    for path in [
+        &directory,
+        &signatures.join("main"),
+        &signatures.join("dependency"),
+    ] {
+        std::fs::create_dir_all(path).unwrap();
+    }
+    let manifest = write_native_dynamic_manifest(&directory, "acme.distinct-signatures");
+    let main_signature = signatures.join("main/plugin.sig");
+    let dependency_signature = signatures.join("dependency/plugin.sig");
+    std::fs::write(&main_signature, b"main signature").unwrap();
+    std::fs::write(&dependency_signature, b"dependency signature").unwrap();
+    std::fs::write(directory.join("helper.so"), b"dependency").unwrap();
+    let text = std::fs::read_to_string(&manifest).unwrap().replace(
+        "[integrity]",
+        "[integrity]\nsignature = \"../signatures/main/plugin.sig\"",
+    );
+    let digest = Sha256::digest(b"dependency")
+        .iter()
+        .map(|byte| format!("{byte:02x}"))
+        .collect::<String>();
+    std::fs::write(&manifest, format!("{text}\n[integrity.dependencies.\"helper.so\"]\nsha256 = \"sha256:{digest}\"\nsignature = \"../signatures/dependency/plugin.sig\"\n")).unwrap();
+    let snapshot = DynamicPluginActivationSnapshot::create(
+        manifest.to_str().unwrap(),
+        "acme.distinct-signatures",
+        DynamicPluginKind::RustDynamic,
+        None,
+        &crate::plugins::policy::DynamicPluginHostPolicy::default(),
+    )
+    .unwrap();
+    let (captured, _) =
+        DynamicPluginManifest::load_from_path(&snapshot.activation_manifest).unwrap();
+    let integrity = captured.integrity.unwrap();
+    let main_copy = integrity.signature.unwrap();
+    let dependency_copy = integrity.dependencies["helper.so"]
+        .signature
+        .as_ref()
+        .unwrap();
+    assert_ne!(&main_copy, dependency_copy);
+    assert_eq!(std::fs::read(&main_copy).unwrap(), b"main signature");
+    assert_eq!(
+        std::fs::read(dependency_copy).unwrap(),
+        b"dependency signature"
+    );
+    assert_eq!(
+        snapshot.closure_digest(),
+        dynamic_plugin_runtime_closure_digest(manifest.to_str().unwrap(), None).unwrap()
+    );
+    std::fs::write(&main_signature, b"changed main signature").unwrap();
+    std::fs::write(&dependency_signature, b"changed dependency signature").unwrap();
+    assert_eq!(std::fs::read(main_copy).unwrap(), b"main signature");
+    assert_eq!(
+        std::fs::read(dependency_copy).unwrap(),
+        b"dependency signature"
+    );
+    assert_ne!(
+        snapshot.closure_digest(),
+        dynamic_plugin_runtime_closure_digest(manifest.to_str().unwrap(), None).unwrap()
     );
 }
 
@@ -5832,5 +5934,47 @@ fn incompatible_workers_cannot_activate_after_validation_refresh() {
         let failure = required_startup_failure(&entry, &resolved.dynamic_plugins).unwrap();
         assert!(failure.contains(id), "{failure}");
         assert!(failure.contains("rebuild and reinstall"), "{failure}");
+    }
+}
+
+#[test]
+fn native_api_rejections_survive_registry_validation_refresh() {
+    let temp = tempfile::tempdir().unwrap();
+    let _env = EnvScope::hermetic(&temp);
+    let _cwd = CurrentDirGuard::enter(temp.path());
+    let id = "acme.unsupported-native";
+    let plugin_dir = temp.path().join("plugin");
+    std::fs::create_dir_all(&plugin_dir).unwrap();
+    let manifest_path = write_native_dynamic_manifest(&plugin_dir, id);
+    let server = GatewayOverrides::default();
+    add(
+        PluginsAddRequest {
+            scope: ConfigurationScope::User,
+            path: plugin_dir,
+        },
+        &server,
+    )
+    .unwrap();
+    let resolved = resolve_plugins_config(None).unwrap();
+    let mut scopes = load_and_hydrate_scopes(None, &resolved).unwrap();
+    let entry = find_record_by_id(&scopes, id).unwrap().unwrap();
+    let scope = &mut scopes[entry.scope_index];
+    for api in ["1", "v1.1", "v2.0"] {
+        let (mut manifest, manifest_ref) =
+            load_manifest_for_action("test", &manifest_path).unwrap();
+        manifest.compat.native_api = Some(api.into());
+        let policy =
+            evaluate_dynamic_plugin_host_policy(&resolved.dynamic_plugin_policy, &manifest);
+        let trust = evaluate_dynamic_plugin_trust(&manifest, &manifest_ref, &policy);
+        update_registry_validation_status(scope, id, &manifest, &policy, &trust).unwrap();
+        let record = scope.registry.get(id).unwrap();
+        assert_eq!(
+            record.status.validation.compatibility,
+            DynamicPluginCheckState::Invalid
+        );
+        assert_eq!(
+            record.status.last_error.as_ref().unwrap().code,
+            "native_api_unsupported"
+        );
     }
 }

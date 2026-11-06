@@ -559,14 +559,14 @@ callback layouts remain compatible. Scope snapshots require v8. Worker
 snapshots require the new `grpc-v1` snapshot extension. Both SDKs report an
 unsupported operation on older hosts. Check the host version before adopting
 snapshot APIs. Refer to
-[Native ABI Reference](/build-plugins/native/native-abi-reference)
+[Native ABI Reference](https://github.com/NVIDIA/NeMo-Relay/blob/0.11.0/docs/build-plugins/native/native-abi-reference.mdx)
 and [Scope Snapshot Extension](/build-plugins/workers/grpc-v1-protocol#scope-snapshot-extension).
 
 Native plugin diagnostics uses an optional table after the ABI v8 prefix.
 The execution ABI and `compat.native_api = "1"` stay unchanged. Check diagnostic
 capabilities before using the extension. If your plugin requires it, set a
 Relay compatibility range that includes its availability. Refer to
-[Native Diagnostics Extension](/build-plugins/native/native-abi-reference#native-diagnostics-extension).
+[Native Diagnostics Extension](https://github.com/NVIDIA/NeMo-Relay/blob/0.11.0/docs/build-plugins/native/native-abi-reference.mdx#native-diagnostics-extension).
 
 Failed integrity or signature checks now always prevent plugin activation.
 An optional plugin is skipped. A required plugin stops host startup. Check

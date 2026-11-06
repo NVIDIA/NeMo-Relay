@@ -1,0 +1,21 @@
+# SPDX-FileCopyrightText: Copyright (c) 2026, NVIDIA CORPORATION & AFFILIATES. All rights reserved.
+# SPDX-License-Identifier: Apache-2.0
+
+[package]
+name = "nemo-relay-native-abi-fixture-baseline"
+version = "1.0.0"
+edition = "2024"
+license = "Apache-2.0"
+publish = false
+
+[workspace]
+
+[lib]
+crate-type = ["cdylib"]
+
+[dependencies]
+# First-party crates (frozen interface snapshots).
+abi = { package = "nemo-relay-plugin-abi", path = "../interface-v1" }
+
+# Third-party dependencies (exact pins freeze the tested ABI generation).
+abi_stable = { version = "=0.11.3", default-features = false }

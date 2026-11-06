@@ -14,6 +14,7 @@ members = [
     "crates/model-pricing",
     "crates/resource-metrics",
     "crates/observability",
+    "crates/plugin-abi",
     "crates/plugin",
     "crates/worker-proto",
     "crates/worker",
@@ -44,6 +45,7 @@ default-members = [
     "crates/model-pricing",
     "crates/resource-metrics",
     "crates/observability",
+    "crates/plugin-abi",
     "crates/plugin",
     "crates/worker-proto",
     "crates/worker",
@@ -66,7 +68,7 @@ repository = "https://github.com/NVIDIA/NeMo-Relay"
 [workspace.dependencies]
 # Centralize versions and default-feature policy here. Select features and optional
 # dependencies in each member to avoid enabling capabilities for unrelated crates.
-# Workspace crate versions are updated by `just set-version`.
+# Unified-release crate versions are updated by `just set-version`.
 
 # First-party crates.
 nemo-relay = { version = "1.0.0", path = "crates/sdk" }
@@ -81,6 +83,8 @@ nemo-relay-model-pricing = { version = "1.0.0", path = "crates/model-pricing" }
 nemo-relay-observability = { version = "1.0.0", path = "crates/observability" }
 nemo-relay-pii-redaction = { version = "1.0.0", path = "crates/pii-redaction" }
 nemo-relay-plugin = { version = "1.0.0", path = "crates/plugin" }
+# Keep SDK builds on their reviewed declarations; binary compatibility uses the native contract.
+nemo-relay-plugin-abi = { version = "=1.0.0", path = "crates/plugin-abi" }
 nemo-relay-plugin-host = { version = "1.0.0", path = "crates/plugin-host" }
 nemo-relay-resource-metrics = { version = "1.0.0", path = "crates/resource-metrics" }
 nemo-relay-runtime = { version = "1.0.0", path = "crates/runtime" }
@@ -177,6 +181,7 @@ dotenvy = "0.15.7"
 flate2 = "1"
 fs2 = "0.4"
 libloading = "0.8"
+object = { version = "0.39", default-features = false }
 sha2 = "0.11"
 shell-words = "1"
 tar = "0.4"
@@ -190,6 +195,11 @@ libc = "0.2"
 rustix = "1.1.4"
 sysinfo = { version = "0.39.6", default-features = false }
 windows-sys = "0.61"
+
+# Native plugin ABI.
+# Exact pins keep SDK/host ABI generations aligned. Review updates with the binary matrix.
+abi_stable = { version = "=0.11.3", default-features = false }
+async-ffi = { version = "=0.5.1", features = ["abi_stable"] }
 
 # Language bindings and binding generation.
 cbindgen = "0.29.2"

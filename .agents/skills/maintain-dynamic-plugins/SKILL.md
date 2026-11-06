@@ -14,27 +14,37 @@ Use this skill for `plugin.kind = "rust_dynamic"`, `plugin.kind = "worker"`,
 
 - Keep the stable boundary explicit: native plugins cross a C ABI; worker
   plugins cross `nvidia.nemo.relay.worker.v1` (contract `1.0.0`).
-- Do not pass Rust runtime types, trait objects, futures, or allocator-owned
-  strings across the native dynamic-library boundary.
-- Typed native middleware futures run on the SDK-owned Tokio executor. Keep
-  subscribers synchronous and preserve raw synchronous ABI registrations.
+- Use `abi_stable` checked records and generated trait objects, ABI-safe owned
+  values, and `async-ffi` futures across the native dynamic-library boundary.
+  Keep ordinary Rust runtime types, futures, and Tokio objects within their
+  originating library.
+- Poll typed native middleware directly on the caller, restoring Relay scope
+  and optional SDK Tokio context for every poll and drop. Inline is the SDK
+  default and allocates no plugin runtime. Tokio-enabled components share a
+  library-local runtime and must agree on its worker count. Use `ctx.spawn` or
+  `ctx.task_spawner()` for component-owned background work; keep subscribers
+  synchronous and preserve raw synchronous ABI registrations.
 - Define closed worker transport structures in protobuf when generated clients
   must enforce their fields. Keep open application payloads lossless by using
   `JsonValue` or `JsonObject` rather than `google.protobuf.Value`.
 - Keep `relay-plugin.toml` dynamic records separate from generic runtime
   components. Enabled records can create internal component specs. Disabled records remain
   available for inspection but do not load.
-- Require migrated worker plugins to regenerate their bindings, rebuild, and
-  declare a `compat.relay` range covering the new contract. Recommend
-  `>=1.0.0,<2.0` for the current worker SDK.
-- Treat `compat.relay` as the plugin author's compatibility assertion, not
-  proof that an artifact was rebuilt. Do not add a legacy raw-result adapter.
+- Require worker manifests to declare the protocol identity and a `compat.relay`
+  range. The worker SDK uses `>=1.0.0,<2.0`.
+- Treat `compat.relay` as the plugin author's supported release range. Verify
+  binary layouts or worker handshake independently.
 - The worker protocol is `nvidia.nemo.relay.worker.v1`, contract version `1.0.0`.
-  The native host uses ABI v8 and accepts v7 callback layouts. Guard append-only
-  extensions with `struct_size`. Keep existing fields at their original offsets.
-  A breaking native JSON contract needs a new `native_api` value. A breaking C
-  layout needs a new ABI version. A breaking worker contract needs a new protocol
-  identity.
+  Native plugins use checked contract `v1.0`. Freeze published module types
+  and bootstrap layouts. Add minor contracts through versioned modules; plugins
+  require at least the native minor of their build SDK. Breaking layouts or
+  dependency ABI generations require a native major change, independently of
+  Relay's release version. A breaking worker contract needs a new protocol identity.
+- Keep the native contract source in `crates/plugin-abi/src/contract.rs`.
+  The interface package follows the workspace release version. Its build script
+  derives SDK constants and checked layout metadata from the explicit contract,
+  not the package release. Keep published bootstrap and module version strings
+  fixed. Validate cross-package-version fixtures when changing this mechanism.
 - Do not add tests under `src`; Rust tests belong in crate `tests/` trees and
   Python SDK tests belong under `python/tests`.
 - Native and worker plugins are trusted extensions. Document that native plugins
@@ -45,8 +55,11 @@ Use this skill for `plugin.kind = "rust_dynamic"`, `plugin.kind = "worker"`,
 
 - [ ] Manifest validation covers kind, compatibility, load contract, integrity,
       capability mismatch, and disabled-plugin behavior.
-- [ ] Native loader keeps libraries alive until registered callbacks are cleared
-      and deregisters plugin kinds before unload.
+- [ ] Native libraries and staged dependencies remain resident until process exit.
+      Component close removes registrations, revokes capabilities, cancels and
+      drains tasks, and releases its runtime lease; the last lease stops the
+      shared runtime. Incomplete cleanup retains
+      ownership for retry.
 - [ ] Worker activation covers process launch, token auth, handshake, validation,
       declarative registration, proxy rollback, cancellation, and shutdown.
 - [ ] Rust and Python SDKs expose every supported registration surface.
@@ -67,7 +80,10 @@ Choose checks by the changed layer:
 
 - Manifest or shared types: test the owning Rust crate.
 - Native loader or ABI: prepare plugin fixtures and run the focused native
-  plugin integration test.
+  plugin integration test. For ABI changes, also run
+  `just build-native-abi-test-fixtures` and
+  `cargo nextest run --locked -p nemo-relay-plugin-abi --test binary_compatibility`.
+  Native integration fixtures do not prepare the independent ABI workspaces.
 - Worker protocol or host: test the worker crates and regenerate or test the
   Python worker SDK only when its protocol surface changes.
 - Shared runtime behavior: run the Rust suite and only binding suites whose

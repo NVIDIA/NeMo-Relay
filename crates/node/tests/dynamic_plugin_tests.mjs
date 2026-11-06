@@ -65,7 +65,7 @@ kind = "rust_dynamic"
 
 [compat]
 relay = ">=1.0.0,<2.0"
-native_api = "1"
+native_api = "v1.0"
 
 [defaults]
 enabled = false
@@ -81,7 +81,6 @@ sha256 = "sha256:${createHash('sha256').update(readFileSync(libraryPath)).digest
 
 [load]
 library = ${tomlString(libraryPath)}
-symbol = "nemo_relay_fixture_native_plugin"
 `,
   );
   return manifestRef;

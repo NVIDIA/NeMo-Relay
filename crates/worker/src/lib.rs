@@ -62,7 +62,7 @@ pub use nemo_relay_types::codec::optimization::{
 pub use nemo_relay_types::codec::request::{ANNOTATED_LLM_REQUEST_SCHEMA, AnnotatedLlmRequest};
 pub use nemo_relay_types::codec::response::AnnotatedLlmResponse;
 pub use nemo_relay_types::plugin::http_error_message;
-pub use nemo_relay_types::plugin::{ConfigDiagnostic, DiagnosticLevel};
+pub use nemo_relay_types::plugin::{ConfigDiagnostic, DiagnosticLevel, PluginError, PluginFuture};
 use nemo_relay_worker_proto::conversions::{self, WireValue};
 use nemo_relay_worker_proto::nvidia_worker_v1 as wire;
 use nemo_relay_worker_proto::nvidia_worker_v1::WORKER_PROTOCOL;
@@ -78,7 +78,7 @@ type JsonEnvelope = wire::JsonValue;
 type StreamChunk = wire::InvokeStreamResponse;
 type LogLevel = wire::LogSeverity;
 type ProtoRuntimeDiagnostic = wire::RuntimeDiagnostic;
-use serde_json::Map;
+pub use serde_json::Map;
 use tokio::net::TcpListener;
 #[cfg(unix)]
 use tokio::net::{UnixListener, UnixStream};
@@ -175,6 +175,17 @@ pub enum WorkerSdkError {
     Serialization(#[from] serde_json::Error),
 }
 
+impl From<WorkerSdkError> for PluginError {
+    /// Map worker author errors to shared configuration, serialization, or registration errors.
+    fn from(error: WorkerSdkError) -> Self {
+        match error {
+            WorkerSdkError::InvalidInput(message) => Self::InvalidConfig(message),
+            WorkerSdkError::Serialization(error) => Self::Serialization(error),
+            other => Self::RegistrationFailed(other.to_string()),
+        }
+    }
+}
+
 /// Optional fields supported by the additive `nvidia.nemo.relay.worker.v1` mark-emission request.
 #[derive(Debug, Clone, Default)]
 pub struct EmitMarkOptions {
@@ -228,23 +239,30 @@ impl PluginLogLevel {
 }
 
 /// Trait implemented by Rust out-of-process worker plugins.
-pub trait WorkerPlugin: Send + Sync + 'static {
-    /// Stable plugin id/kind returned to the Relay host.
-    fn plugin_id(&self) -> &str;
+pub trait Plugin: Send + Sync + 'static {
+    /// Returns the unique plugin kind.
+    fn plugin_kind(&self) -> &str;
 
-    /// Whether multiple configured components of this plugin kind are allowed.
+    /// Whether multiple configured components may use this plugin kind.
     fn allows_multiple_components(&self) -> bool {
-        false
+        true
     }
 
-    /// Validates component config.
-    fn validate(&self, _config: &Json) -> Vec<ConfigDiagnostic> {
+    /// Validate one component before runtime registration.
+    fn validate(&self, _config: &Map<String, Json>) -> Vec<ConfigDiagnostic> {
         Vec::new()
     }
 
     /// Registers callbacks into the worker context.
-    fn register(&self, ctx: &mut PluginContext, config: &Json) -> Result<()>;
+    fn register<'a>(
+        &'a self,
+        config: &'a Map<String, Json>,
+        ctx: &'a mut PluginContext,
+    ) -> PluginFuture<'a, ()>;
 }
+
+/// Alternate export of the worker [`Plugin`] authoring trait.
+pub use Plugin as WorkerPlugin;
 
 type SubscriberFn = Arc<dyn Fn(&Event) + Send + Sync>;
 type EventSanitizeFn =
@@ -1294,8 +1312,8 @@ impl PluginRuntime {
     }
 
     /// Read owned root-to-top scope identities from the exact current binding.
-    /// Returns None without a binding, and an explicit error on older hosts or
-    /// invalid/expired bindings. Never caches an invocation-entry snapshot.
+    /// Returns `None` without a binding and an error if the host cannot read
+    /// the binding or it has expired. Reads the live scope stack on each call.
     pub async fn current_scope_stack_snapshot(&self) -> Result<Option<ScopeStackSnapshot>> {
         let scope = self.current_scope_context();
         let mut client = self.host_client().await?;
@@ -1818,6 +1836,7 @@ async fn serve_plugin_arc_with_endpoint_file(
         shutdown: Arc::new(tokio::sync::Notify::new()),
         draining: Arc::new(std::sync::atomic::AtomicBool::new(false)),
         registration: Arc::new(tokio::sync::Mutex::new(None)),
+        registration_cancel: watch::channel(false).0,
         plugin,
         runtime,
         handlers: Arc::new(Mutex::new(WorkerHandlers::default())),
@@ -1922,12 +1941,15 @@ fn worker_grpc_service(
     })
 }
 
+type InstalledRegistration = (Map<String, Json>, wire::RegistrationPlan);
+
 #[derive(Clone)]
 struct WorkerService {
     health_reporter: tonic_health::server::HealthReporter,
     shutdown: Arc<tokio::sync::Notify>,
     draining: Arc<std::sync::atomic::AtomicBool>,
-    registration: Arc<tokio::sync::Mutex<Option<(Json, wire::RegistrationPlan)>>>,
+    registration: Arc<tokio::sync::Mutex<Option<InstalledRegistration>>>,
+    registration_cancel: watch::Sender<bool>,
     plugin: Arc<dyn WorkerPlugin>,
     runtime: PluginRuntime,
     handlers: Arc<Mutex<WorkerHandlers>>,
@@ -2041,6 +2063,7 @@ impl Drop for AbortTaskOnDrop {
 
 #[tonic::async_trait]
 impl PluginWorker for WorkerService {
+    /// Authenticate the host and check plugin and protocol identity before advertising worker capabilities.
     async fn handshake(
         &self,
         request: Request<HandshakeRequest>,
@@ -2058,11 +2081,11 @@ impl PluginWorker for WorkerService {
             .ok_or_else(|| Status::invalid_argument("missing protocol"))?;
         if protocol.name != WORKER_PROTOCOL
             || protocol.version != wire::CONTRACT_VERSION
-            || request.plugin_id != self.plugin.plugin_id()
+            || request.plugin_id != self.plugin.plugin_kind()
         {
             return Err(Status::failed_precondition(format!(
                 "incompatible worker identity: expected plugin_id '{}', received plugin_id '{}', protocol '{}@{}'",
-                self.plugin.plugin_id(),
+                self.plugin.plugin_kind(),
                 request.plugin_id,
                 protocol.name,
                 protocol.version
@@ -2099,6 +2122,7 @@ impl PluginWorker for WorkerService {
         }))
     }
 
+    /// Authenticate configuration validation and reject a mismatched plugin or a draining worker.
     async fn validate(
         &self,
         request: Request<ValidateRequest>,
@@ -2111,19 +2135,13 @@ impl PluginWorker for WorkerService {
         self.authorize(&credentials.activation_id, &credentials.auth_token)?;
         nemo_relay_worker_proto::validation::validate(&request)
             .map_err(Status::invalid_argument)?;
-        if request.plugin_id != self.plugin.plugin_id() {
+        if request.plugin_id != self.plugin.plugin_kind() {
             return Err(Status::failed_precondition("plugin identity mismatch"));
         }
         if self.draining.load(Ordering::Acquire) {
             return Err(Status::failed_precondition("worker is draining"));
         }
-        let config = request
-            .config
-            .as_ref()
-            .map(decode_wire::<Json>)
-            .transpose()
-            .map_err(|err| Status::invalid_argument(format!("invalid config JSON: {err}")))?
-            .unwrap_or(Json::Null);
+        let config = configuration_object(request.config.as_ref())?;
         let diagnostics = self.plugin.validate(&config);
         Ok(Response::new(ValidateResponse {
             result: Some(wire::validate_response::Result::Diagnostics(
@@ -2138,6 +2156,7 @@ impl PluginWorker for WorkerService {
         }))
     }
 
+    /// Reject new registrations while draining and cancel registrations already in progress.
     async fn register(
         &self,
         request: Request<RegisterRequest>,
@@ -2150,17 +2169,19 @@ impl PluginWorker for WorkerService {
         self.authorize(&credentials.activation_id, &credentials.auth_token)?;
         nemo_relay_worker_proto::validation::validate(&request)
             .map_err(Status::invalid_argument)?;
-        let config = request
-            .config
-            .as_ref()
-            .map(decode_wire::<Json>)
-            .transpose()
-            .map_err(|err| Status::invalid_argument(format!("invalid config JSON: {err}")))?
-            .unwrap_or(Json::Null);
-        if request.plugin_id != self.plugin.plugin_id() {
+        let config = configuration_object(request.config.as_ref())?;
+        if request.plugin_id != self.plugin.plugin_kind() {
             return Err(Status::failed_precondition("plugin identity mismatch"));
         }
-        let mut installed = self.registration.lock().await;
+        if self.draining.load(Ordering::Acquire) {
+            return Err(Status::failed_precondition("worker is draining"));
+        }
+        let mut cancelled = self.registration_cancel.subscribe();
+        let mut installed = tokio::select! {
+            biased;
+            _ = cancelled.wait_for(|cancelled| *cancelled) => return Err(Status::cancelled("worker registration cancelled by shutdown")),
+            installed = self.registration.lock() => installed,
+        };
         if self.draining.load(Ordering::Acquire) {
             return Err(Status::failed_precondition("worker is draining"));
         }
@@ -2175,10 +2196,15 @@ impl PluginWorker for WorkerService {
             }));
         }
         let mut ctx = PluginContext::with_runtime(self.runtime.clone());
-        if let Err(err) = self.plugin.register(&mut ctx, &config) {
+        let registered = tokio::select! {
+            biased;
+            _ = cancelled.wait_for(|cancelled| *cancelled) => return Err(Status::cancelled("worker registration cancelled by shutdown")),
+            result = self.plugin.register(&config, &mut ctx) => result,
+        };
+        if let Err(err) = registered {
             return Ok(Response::new(RegisterResponse {
                 result: Some(wire::register_response::Result::Error(sdk_error_to_worker(
-                    err,
+                    WorkerSdkError::InvalidInput(err.to_string()),
                 ))),
             }));
         }
@@ -2576,6 +2602,7 @@ impl PluginWorker for WorkerService {
         }))
     }
 
+    /// Fence new work, cancel registration and invocations, and drain their captured state before signaling exit.
     async fn shutdown(
         &self,
         request: Request<ShutdownRequest>,
@@ -2608,6 +2635,13 @@ impl PluginWorker for WorkerService {
                 .collect::<Vec<_>>();
             (first_shutdown, active)
         };
+        self.registration_cancel.send_replace(true);
+        for (abort, _, cancel) in &active {
+            if let Some(cancel) = cancel {
+                let _ = cancel.send(true);
+            }
+            abort.abort();
+        }
         if first_shutdown {
             self.health_reporter
                 .set_not_serving::<PluginWorkerServer<WorkerService>>()
@@ -2615,13 +2649,25 @@ impl PluginWorker for WorkerService {
             self.health_reporter
                 .set_service_status("", tonic_health::ServingStatus::NotServing)
                 .await;
+            // Only the first shutdown updates and clears health entries, so repeated
+            // calls cannot recreate watch senders and prevent graceful exit.
+            let mut health_reporter = self.health_reporter.clone();
+            health_reporter
+                .clear_service_status(
+                    <PluginWorkerServer<WorkerService> as tonic::server::NamedService>::NAME,
+                )
+                .await;
+            health_reporter.clear_service_status("").await;
         }
-        for (abort, _, cancel) in &active {
-            if let Some(cancel) = cancel {
-                let _ = cancel.send(true);
-            }
-            abort.abort();
-        }
+        // The lock is released only after the author future and its context
+        // have dropped. Do not close diagnostics while registration owns them.
+        drop(
+            tokio::time::timeout(std::time::Duration::from_secs(2), self.registration.lock())
+                .await
+                .map_err(|_| {
+                    Status::deadline_exceeded("worker registration cleanup is still in progress")
+                })?,
+        );
         let _ = tokio::time::timeout(std::time::Duration::from_secs(2), async {
             for (_, mut completion, _) in active {
                 while !*completion.borrow_and_update() {
@@ -2635,19 +2681,26 @@ impl PluginWorker for WorkerService {
         if let Some(diagnostics) = self.runtime.diagnostics.get() {
             let _ = diagnostics.close(std::time::Duration::from_secs(2)).await;
         }
-        if first_shutdown {
-            // Only the first shutdown updates and clears health entries, so repeated
-            // calls cannot recreate watch senders and prevent graceful exit.
-            let mut health_reporter = self.health_reporter.clone();
-            health_reporter
-                .clear_service_status(
-                    <PluginWorkerServer<WorkerService> as tonic::server::NamedService>::NAME,
-                )
-                .await;
-            health_reporter.clear_service_status("").await;
-        }
         self.shutdown.notify_one();
         Ok(Response::new(ShutdownResponse {}))
+    }
+}
+
+/// Normalize absent or null configuration to an empty map and reject other non-object values.
+fn configuration_object(
+    config: Option<&wire::JsonValue>,
+) -> std::result::Result<Map<String, Json>, Status> {
+    let config = config
+        .map(decode_wire::<Json>)
+        .transpose()
+        .map_err(|error| Status::invalid_argument(format!("invalid config JSON: {error}")))?
+        .unwrap_or(Json::Null);
+    match config {
+        Json::Null => Ok(Map::new()),
+        Json::Object(config) => Ok(config),
+        _ => Err(Status::invalid_argument(
+            "plugin configuration must be an object",
+        )),
     }
 }
 
@@ -4113,8 +4166,8 @@ rpc_result!(
 impl WorkerService {
     fn identity(&self) -> wire::WorkerIdentity {
         wire::WorkerIdentity {
-            plugin_id: self.plugin.plugin_id().into(),
-            plugin_kind: self.plugin.plugin_id().into(),
+            plugin_id: self.plugin.plugin_kind().into(),
+            plugin_kind: self.plugin.plugin_kind().into(),
             protocol: Some(wire::ProtocolIdentity {
                 name: WORKER_PROTOCOL.into(),
                 version: wire::CONTRACT_VERSION.into(),

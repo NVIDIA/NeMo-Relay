@@ -245,7 +245,7 @@ id = "fixture_native"
 kind = "rust_dynamic"
 [compat]
 relay = ">=1.0.0,<2.0"
-native_api = "1"
+native_api = "v1.0"
 [defaults]
 enabled = false
 [capabilities]
@@ -257,7 +257,6 @@ sha256 = "sha256:{digest}"
 signature = "artifact.sig"
 [load]
 library = {library_name:?}
-symbol = "nemo_relay_fixture_native_plugin"
 "#,
             digest = Sha256::digest(&bytes)
                 .iter()
@@ -359,10 +358,7 @@ async fn optional_load_time_trust_failure_skips_component_and_preserves_host() {
     let temp = tempfile::tempdir().unwrap();
     for kind in [DynamicPluginKind::RustDynamic, DynamicPluginKind::Worker] {
         let (compat, load) = if kind == DynamicPluginKind::RustDynamic {
-            (
-                "native_api = \"1\"",
-                "library = \"never-load.so\"\nsymbol = \"never_call\"",
-            )
+            ("native_api = \"v1.0\"", "library = \"never-load.so\"")
         } else {
             (
                 "worker_protocol = \"nvidia.nemo.relay.worker.v1\"",

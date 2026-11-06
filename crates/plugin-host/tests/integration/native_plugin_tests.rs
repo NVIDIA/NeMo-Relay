@@ -50,6 +50,55 @@ use uuid::Uuid;
 static NATIVE_PLUGIN_TEST_LOCK: tokio::sync::Mutex<()> = tokio::sync::Mutex::const_new(());
 const PLUGIN_DISCOVERY_TEST_CHILD: &str = "NEMO_RELAY_PLUGIN_DISCOVERY_TEST_CHILD";
 
+#[tokio::test]
+async fn native_registration_preserves_task_scope_after_await() {
+    let _guard = NATIVE_PLUGIN_TEST_LOCK.lock().await;
+    let fixture = build_fixture_plugin();
+    let manifest_ref = write_manifest(&fixture);
+    let _activation = load_native_plugins([NativePluginLoadSpec {
+        plugin_id: "fixture_native".into(),
+        manifest_ref: manifest_ref.to_string_lossy().into_owned(),
+    }])
+    .expect("native fixture loads");
+    let mut cleanup = NativePluginTestCleanup::new();
+    let events = Arc::new(Mutex::new(Vec::<Event>::new()));
+    let captured = events.clone();
+    register_subscriber(
+        "native-registration-parent",
+        Arc::new(move |event| captured.lock().unwrap().push(event.clone())),
+    )
+    .unwrap();
+    cleanup.mark_subscriber_registered("native-registration-parent");
+    let parent = TASK_SCOPE_STACK
+        .scope(create_scope_stack(), async {
+            let parent = push_scope(
+                PushScopeParams::builder()
+                    .name("registration-parent")
+                    .scope_type(ScopeType::Agent)
+                    .build(),
+            )
+            .unwrap();
+            let plugin = lookup_plugin("fixture_native").unwrap();
+            let mut context = nemo_relay_plugin_host::HostPluginRegistrationContext::new();
+            let config = Map::from_iter([("registration_mark".into(), json!(true))]);
+            let result = plugin.register(&config, &mut context).await;
+            let mut registrations = context.into_registrations();
+            let rollback = nemo_relay_plugin_host::rollback_registrations(&mut registrations);
+            assert!(rollback.callbacks_cleared(), "{:?}", rollback.errors());
+            result.expect("async registration succeeds");
+            pop_scope(PopScopeParams::builder().handle_uuid(&parent.uuid).build()).unwrap();
+            parent.uuid
+        })
+        .await;
+    flush_subscribers().unwrap();
+    let events = events.lock().unwrap();
+    let mark = events
+        .iter()
+        .find(|event| event.name() == "fixture-registration-mark")
+        .expect("registration emitted its mark");
+    assert_eq!(mark.parent_uuid(), Some(parent));
+}
+
 struct ReplacementRegistryPlugin;
 
 const STATIC_BASE_PLUGIN_KIND: &str = "fixture_static_base";
@@ -210,17 +259,29 @@ impl Drop for NativePluginTestCleanup {
 }
 
 #[tokio::test]
-async fn sdk_cdylib_registers_tool_request_intercept() {
+async fn checked_sdk_preserves_all_native_callback_behavior() {
+    sdk_cdylib_assert_behavior().await;
+}
+
+// Keep both transports on the same end-to-end assertions during the cutover.
+#[allow(clippy::cognitive_complexity)]
+async fn sdk_cdylib_assert_behavior() {
     let _guard = NATIVE_PLUGIN_TEST_LOCK.lock().await;
     let fixture = build_fixture_plugin();
     let manifest_ref = write_manifest(&fixture);
 
-    let activation = load_native_plugins([NativePluginLoadSpec {
-        plugin_id: "fixture_native".into(),
-        manifest_ref: manifest_ref.to_string_lossy().into_owned(),
-    }])
-    .expect("native plugin should load");
-    let fixture_library = unsafe { libloading::Library::new(&fixture.library_path) }
+    let activation = Some(
+        load_native_plugins([load_spec("fixture_native", &manifest_ref)])
+            .expect("checked production activation"),
+    );
+    let loaded_path = activation
+        .as_ref()
+        .unwrap()
+        .resident_libraries()
+        .next()
+        .unwrap()
+        .to_owned();
+    let fixture_library = unsafe { libloading::Library::new(&loaded_path) }
         .expect("native fixture should open for synchronization");
     let pending_entered = unsafe {
         *fixture_library
@@ -235,7 +296,7 @@ async fn sdk_cdylib_registers_tool_request_intercept() {
     plugin_config.components.push(PluginComponentSpec {
         kind: "fixture_native".into(),
         enabled: true,
-        config: Map::new(),
+        config: Map::from_iter([("executor".into(), json!({"worker_threads":1}))]),
     });
     test_initialize_plugin_host_exact(plugin_config)
         .await
@@ -760,6 +821,40 @@ async fn sdk_cdylib_registers_tool_request_intercept() {
     assert!(
         matches!(stream_error, nemo_relay_types::error::FlowError::Upstream(failure) if failure.status == Some(403) && failure.body == "Reported by plugin 'fixture_native': provider denied access")
     );
+    for successful_chunks in [0, 1] {
+        let mut stream = llm_stream_call_execute(
+            LlmStreamCallExecuteParams::builder()
+                .name("native-fixture-stream-pull-http-error")
+                .request(LlmRequest {
+                    headers: Map::new(),
+                    content: json!({"native_stream_http_error_after_chunks":successful_chunks}),
+                })
+                .func(Arc::new(|_| {
+                    Box::pin(async { panic!("plugin stream must skip provider") })
+                }))
+                .collector(Box::new(|_| Ok(())))
+                .finalizer(Box::new(|| Json::Null))
+                .build(),
+        )
+        .await
+        .expect("native stream opens before its producer is polled");
+        for index in 0..successful_chunks {
+            let chunk = stream.next().await.unwrap().unwrap();
+            assert_eq!(chunk["before_error"], index);
+        }
+        let error = stream.next().await.unwrap().unwrap_err();
+        assert!(
+            matches!(error, nemo_relay_types::error::FlowError::Upstream(failure) if failure.status == Some(403) && failure.body == "Reported by plugin 'fixture_native': provider denied access"),
+        );
+        assert!(
+            stream.next().await.is_none(),
+            "HTTP stream errors are terminal"
+        );
+        stream
+            .close()
+            .await
+            .expect("failed stream releases its producer");
+    }
     flush_subscribers().expect("HTTP error events should flush");
 
     events.lock().unwrap().clear();
@@ -899,7 +994,7 @@ async fn sdk_cdylib_registers_tool_request_intercept() {
     events.lock().unwrap().clear();
     let provider_polled = Arc::new(AtomicBool::new(false));
     let polled = Arc::clone(&provider_polled);
-    let cancelled_stream = llm_stream_call_execute(
+    let mut cancelled_stream = llm_stream_call_execute(
         LlmStreamCallExecuteParams::builder()
             .name("native-fixture-cancelled-stream")
             .request(LlmRequest {
@@ -921,13 +1016,21 @@ async fn sdk_cdylib_registers_tool_request_intercept() {
     )
     .await
     .expect("pending native stream should open");
+    // Inline streams advance only while the consumer polls a pull.
+    let mut pulling = Box::pin(cancelled_stream.next());
     tokio::time::timeout(std::time::Duration::from_secs(5), async {
-        while !provider_polled.load(Ordering::SeqCst) {
-            tokio::task::yield_now().await;
+        tokio::select! {
+            result = &mut pulling => panic!("pending provider completed early: {result:?}"),
+            () = async {
+                while !provider_polled.load(Ordering::SeqCst) {
+                    tokio::task::yield_now().await;
+                }
+            } => {}
         }
     })
     .await
     .expect("provider stream should be polled before cancellation");
+    drop(pulling);
     drop(cancelled_stream);
     tokio::time::timeout(std::time::Duration::from_secs(5), async {
         loop {
@@ -1004,187 +1107,11 @@ async fn sdk_cdylib_registers_tool_request_intercept() {
     assert!(!serialized.contains("preexisting_annotation"));
 
     drop(cleanup);
-    activation.clear();
-}
-
-#[tokio::test]
-async fn native_v3_async_registration_supports_all_middleware_kinds() {
-    let _guard = NATIVE_PLUGIN_TEST_LOCK.lock().await;
-    let fixture = build_fixture_plugin();
-    let manifest_ref = write_manifest_with_plugin_id_and_symbol(
-        &fixture,
-        "fixture_async",
-        "nemo_relay_fixture_async_entry",
-    );
-
-    let activation = load_native_plugins([NativePluginLoadSpec {
-        plugin_id: "fixture_async".into(),
-        manifest_ref: manifest_ref.to_string_lossy().into_owned(),
-    }])
-    .expect("v3 async native fixture should load");
-    let fixture_library = unsafe { libloading::Library::new(&fixture.library_path) }
-        .expect("loaded v3 async native fixture should open for synchronization");
-    let pending_entered = unsafe {
-        *fixture_library
-            .get::<unsafe extern "C" fn() -> bool>(b"nemo_relay_fixture_async_pending_entered\0")
-            .expect("v3 async native fixture should export its pending-entry signal")
-    };
-    // This pointer remains valid only while `activation` keeps the fixture
-    // library loaded; never call it after clearing the plugin configuration.
-    assert!(!unsafe { pending_entered() });
-    drop(fixture_library);
-    let mut cleanup = NativePluginTestCleanup::new();
-    let mut config = PluginConfig::default();
-    config.components.push(PluginComponentSpec {
-        kind: "fixture_async".into(),
-        enabled: true,
-        config: Map::new(),
-    });
-    test_initialize_plugin_host_exact(config)
-        .await
-        .expect("v3 async native fixture should register");
-    cleanup.mark_plugin_configuration_active();
-
-    let rewritten = tool_request_intercepts("async-tool", json!({"input": true}))
-        .await
-        .expect("v3 async request intercept should settle");
-    assert_eq!(rewritten["input"], true);
-    assert_eq!(rewritten["native_async"], true);
-
-    let duplicate = tool_request_intercepts("async-double", json!({"input": true}))
-        .await
-        .expect("duplicate v3 async settlement keeps the first result");
-    assert_eq!(duplicate["native_async"], true);
-
-    let executed = tool_call_execute(
-        ToolCallExecuteParams::builder()
-            .name("async-execution")
-            .args(json!({"input": true}))
-            .func(Arc::new(|args| {
-                Box::pin(async move { Ok(ToolExecutionResult::new(args)) })
-            }))
-            .build(),
-    )
-    .await
-    .expect("v3 async execution intercept should continue with next");
-    assert_eq!(executed.result["native_async_execution"], true);
-
-    let llm_response = llm_call_execute(
-        LlmCallExecuteParams::builder()
-            .name("async-llm")
-            .request(LlmRequest {
-                headers: Map::new(),
-                content: json!({"prompt": "native async"}),
-            })
-            .func(Arc::new(|_request| {
-                Box::pin(async move { Ok(json!({"content": "native async response"})) })
-            }))
-            .build(),
-    )
-    .await
-    .expect("v3 async LLM middleware should settle");
-    assert_eq!(llm_response["content"], "native async response");
-    flush_subscribers().expect("async native LLM events should flush");
-
-    let stream_chunks = Arc::new(Mutex::new(Vec::<Json>::new()));
-    let collected_chunks = stream_chunks.clone();
-    let finalized_chunks = stream_chunks.clone();
-    let mut stream = llm_stream_call_execute(
-        LlmStreamCallExecuteParams::builder()
-            .name("async-llm-stream")
-            .request(LlmRequest {
-                headers: Map::new(),
-                content: json!({"prompt": "native async stream"}),
-            })
-            .func(Arc::new(|_request| {
-                Box::pin(async move {
-                    Ok(LlmJsonStream::new(tokio_stream::iter(vec![Ok(json!({
-                        "content": "native async stream response"
-                    }))])))
-                })
-            }))
-            .collector(Box::new(move |chunk| {
-                collected_chunks.lock().unwrap().push(chunk);
-                Ok(())
-            }))
-            .finalizer(Box::new(move || {
-                Json::Array(finalized_chunks.lock().unwrap().clone())
-            }))
-            .build(),
-    )
-    .await
-    .expect("v3 async LLM stream middleware should settle");
-    assert_eq!(
-        stream
-            .next()
-            .await
-            .expect("stream should contain a chunk")
-            .expect("stream chunk should succeed")["content"],
-        "native async stream response"
-    );
-    assert!(stream.next().await.is_none());
-    flush_subscribers().expect("async native LLM stream events should flush");
-
-    let pending = tokio::spawn(async {
-        tool_request_intercepts("async-pending", json!({"input": true})).await
-    });
-    tokio::time::timeout(std::time::Duration::from_secs(5), async {
-        while !unsafe { pending_entered() } {
-            tokio::task::yield_now().await;
-        }
-    })
-    .await
-    .expect("native async callback should enter before plugin clear");
-    test_close_plugin_host().expect("v3 async native fixture should clear while pending");
-    cleanup.plugin_configuration_active = false;
-    let pending = pending
-        .await
-        .expect("pending v3 async task should not panic")
-        .expect("pending v3 async request intercept should settle after clear");
-    assert_eq!(pending["native_async"], true);
-
-    let mut config = PluginConfig::default();
-    config.components.push(PluginComponentSpec {
-        kind: "fixture_async".into(),
-        enabled: true,
-        config: Map::new(),
-    });
-    test_initialize_plugin_host_exact(config)
-        .await
-        .expect("v3 async native fixture should reactivate");
-    cleanup.mark_plugin_configuration_active();
-    let pending_next = tokio::spawn(async {
-        tool_call_execute(
-            ToolCallExecuteParams::builder()
-                .name("async-cancel-next")
-                .args(json!({"input": true}))
-                .func(Arc::new(|_args| {
-                    Box::pin(async { std::future::pending().await })
-                }))
-                .build(),
-        )
-        .await
-    });
-    tokio::time::timeout(std::time::Duration::from_secs(5), async {
-        while !unsafe { pending_entered() } {
-            tokio::task::yield_now().await;
-        }
-    })
-    .await
-    .expect("native async next should start before cancellation");
-    test_close_plugin_host().expect("plugin configuration should clear with next pending");
-    cleanup.plugin_configuration_active = false;
-    pending_next.abort();
-    assert!(
-        pending_next
-            .await
-            .expect_err("pending next should be cancelled")
-            .is_cancelled(),
-        "aborting the managed call should cancel its native next continuation"
-    );
-
-    drop(cleanup);
-    drop(activation);
+    if let Some(activation) = activation {
+        activation.clear();
+    } else {
+        assert!(deregister_plugin("fixture_native"));
+    }
 }
 
 #[tokio::test]
@@ -1215,127 +1142,6 @@ async fn native_validation_diagnostics_prevent_initialization() {
     activation.clear();
 }
 
-#[tokio::test]
-async fn native_tool_execution_rejects_null_malformed_and_error_outcomes() {
-    let _guard = NATIVE_PLUGIN_TEST_LOCK.lock().await;
-    let fixture = build_fixture_plugin();
-    let manifest_ref =
-        write_manifest_with_symbol(&fixture, "nemo_relay_fixture_tool_outcome_errors");
-    let activation = load_native_plugins([load_spec("fixture_native", &manifest_ref)])
-        .expect("native outcome fixture should load");
-    let mut cleanup = NativePluginTestCleanup::new();
-
-    let mut plugin_config = PluginConfig::default();
-    plugin_config.components.push(PluginComponentSpec {
-        kind: "fixture_native".into(),
-        enabled: true,
-        config: Map::new(),
-    });
-    test_initialize_plugin_host_exact(plugin_config)
-        .await
-        .expect("native outcome fixture should initialize");
-    cleanup.mark_plugin_configuration_active();
-
-    for (name, expected) in [
-        (
-            "fixture-null-outcome",
-            "native tool execution returned null outcome",
-        ),
-        (
-            "fixture-malformed-outcome",
-            "invalid native tool execution outcome JSON",
-        ),
-        (
-            "fixture-status-error-outcome",
-            "fixture tool execution failed",
-        ),
-    ] {
-        let error = tool_call_execute(
-            ToolCallExecuteParams::builder()
-                .name(name)
-                .args(json!({ "input": true }))
-                .func(Arc::new(|args| {
-                    Box::pin(async move { Ok(ToolExecutionResult::new(args)) })
-                }))
-                .build(),
-        )
-        .await
-        .expect_err("invalid native tool outcome should fail")
-        .to_string();
-        assert!(
-            error.contains(expected),
-            "expected {expected:?} in {error:?}"
-        );
-    }
-
-    drop(cleanup);
-    activation.clear();
-}
-
-#[test]
-fn native_api_one_does_not_admit_a_stale_abi_v2_binary() {
-    let _guard = NATIVE_PLUGIN_TEST_LOCK.blocking_lock();
-    let fixture = build_fixture_plugin();
-    let manifest_ref = write_manifest_with_symbol(&fixture, "nemo_relay_fixture_abi_v2_api1");
-    let error = expect_native_load_error_from_specs(
-        [load_spec("fixture_native", &manifest_ref)],
-        "a native_api=1 manifest must not make an ABI-v2 binary compatible",
-    );
-    assert!(error.contains("rejected native ABI 8"), "{error}");
-    assert!(error.contains("rebuild the plugin"), "{error}");
-}
-
-#[tokio::test]
-async fn native_event_sanitizer_callback_errors_clear_observability_fields() {
-    let _guard = NATIVE_PLUGIN_TEST_LOCK.lock().await;
-    let fixture = build_fixture_plugin();
-    let manifest_ref =
-        write_manifest_with_symbol(&fixture, "nemo_relay_fixture_event_sanitize_errors");
-    let activation = load_native_plugins([load_spec("fixture_native", &manifest_ref)])
-        .expect("raw native event sanitizer fixture should load");
-    let mut cleanup = NativePluginTestCleanup::new();
-
-    let mut plugin_config = PluginConfig::default();
-    plugin_config.components.push(PluginComponentSpec {
-        kind: "fixture_native".into(),
-        enabled: true,
-        config: Map::new(),
-    });
-    test_initialize_plugin_host_exact(plugin_config)
-        .await
-        .expect("raw native event sanitizer fixture should initialize");
-    cleanup.mark_plugin_configuration_active();
-
-    let events = Arc::new(Mutex::new(Vec::<Event>::new()));
-    let captured = events.clone();
-    register_subscriber(
-        "native_event_sanitizer_error_capture",
-        Arc::new(move |event| captured.lock().unwrap().push(event.clone())),
-    )
-    .expect("test subscriber should register");
-    cleanup.mark_subscriber_registered("native_event_sanitizer_error_capture");
-
-    emit_scope_mark(
-        EmitMarkEventParams::builder()
-            .name("native-event-sanitize-error")
-            .data(json!({ "secret": true }))
-            .metadata(json!({ "secret": true }))
-            .build(),
-    )
-    .expect("mark event should emit");
-    flush_subscribers().expect("event should flush");
-
-    let captured_events = events.lock().unwrap().clone();
-    let event = find_event(&captured_events, "native-event-sanitize-error", None);
-    assert_eq!(event.data(), None);
-    assert_eq!(event.metadata(), None);
-
-    deregister_subscriber("native_event_sanitizer_error_capture")
-        .expect("test subscriber should deregister");
-    drop(cleanup);
-    activation.clear();
-}
-
 #[test]
 fn native_loader_rejects_missing_library() {
     let _guard = NATIVE_PLUGIN_TEST_LOCK.blocking_lock();
@@ -1346,7 +1152,7 @@ fn native_loader_rejects_missing_library() {
         plugin_id: "fixture_native",
         relay: ">=1.0.0,<2.0",
         library: &missing_library.to_string_lossy(),
-        symbol: "nemo_relay_fixture_native_plugin",
+
         integrity: None,
     });
 
@@ -1357,7 +1163,7 @@ fn native_loader_rejects_missing_library() {
         },
         "missing library should fail",
     );
-    assert!(error.contains("does not exist"), "{error}");
+    assert!(error.contains("native plugin library"), "{error}");
 }
 
 #[test]
@@ -1383,50 +1189,6 @@ fn native_activation_clear_deregisters_plugin_kind() {
     activation.clear();
 }
 
-#[tokio::test]
-async fn native_loader_rejects_manifest_that_admits_pre_zero_eight_relay() {
-    let _guard = NATIVE_PLUGIN_TEST_LOCK.lock().await;
-    let fixture = build_fixture_plugin();
-    let manifest_ref = write_manifest_text(ManifestOptions {
-        manifest_dir: fixture.manifest_dir.path(),
-        plugin_id: "fixture_native",
-        relay: ">=0.5,<1.0",
-        library: &fixture.library_path.to_string_lossy(),
-        symbol: "nemo_relay_fixture_native_plugin",
-        integrity: None,
-    });
-    let error = expect_native_load_error_from_specs(
-        [load_spec("fixture_native", &manifest_ref)],
-        "the native loader should reject pre-0.8 Relay compatibility",
-    );
-    assert!(
-        error.contains("excludes Relay versions before 0.8"),
-        "{error}"
-    );
-}
-
-#[tokio::test]
-async fn native_abi_v7_rejects_manifest_that_admits_relay_zero_nine() {
-    let _guard = NATIVE_PLUGIN_TEST_LOCK.lock().await;
-    let fixture = build_fixture_plugin();
-    let manifest_ref = write_manifest_text(ManifestOptions {
-        manifest_dir: fixture.manifest_dir.path(),
-        plugin_id: "fixture_native",
-        relay: ">=0.9,<2.0",
-        library: &fixture.library_path.to_string_lossy(),
-        symbol: "nemo_relay_fixture_native_plugin",
-        integrity: None,
-    });
-    let error = expect_native_load_error_from_specs(
-        [load_spec("fixture_native", &manifest_ref)],
-        "an ABI-v7 native plugin must exclude Relay 0.9",
-    );
-    assert!(
-        error.contains("uses native ABI v7") && error.contains("excludes Relay 0.9"),
-        "{error}"
-    );
-}
-
 #[test]
 fn native_loader_resolves_manifest_directory_and_relative_library_paths() {
     let _guard = NATIVE_PLUGIN_TEST_LOCK.blocking_lock();
@@ -1444,7 +1206,7 @@ fn native_loader_resolves_manifest_directory_and_relative_library_paths() {
         plugin_id: "fixture_native",
         relay: ">=1.0.0,<2.0",
         library: &relative_library.to_string_lossy(),
-        symbol: "nemo_relay_fixture_native_plugin",
+
         integrity: None,
     });
 
@@ -1454,84 +1216,6 @@ fn native_loader_resolves_manifest_directory_and_relative_library_paths() {
     }])
     .expect("native plugin should load from manifest directory");
     activation.clear();
-}
-
-#[tokio::test]
-async fn scope_stack_snapshot_host_preserves_native_abi_v7_loading() {
-    let _guard = NATIVE_PLUGIN_TEST_LOCK.lock().await;
-    let fixture = build_fixture_plugin();
-    let manifest_ref = write_manifest_with_plugin_id_and_symbol(
-        &fixture,
-        "fixture_native_v7",
-        "nemo_relay_fixture_native_plugin_v7",
-    );
-    let activation = load_native_plugins([load_spec("fixture_native_v7", &manifest_ref)])
-        .expect("v8 host must negotiate the unchanged v7 table for existing plugins");
-    let mut cleanup = NativePluginTestCleanup::new();
-    let mut plugin_config = PluginConfig::default();
-    plugin_config.components.push(PluginComponentSpec {
-        kind: "fixture_native_v7".into(),
-        enabled: true,
-        config: Map::new(),
-    });
-    test_initialize_plugin_host_exact(plugin_config)
-        .await
-        .expect("negotiated v7 descriptor must remain valid during registration");
-    cleanup.mark_plugin_configuration_active();
-    assert!(lookup_plugin("fixture_native_v7").is_some());
-    drop(cleanup);
-    activation.clear();
-    assert!(lookup_plugin("fixture_native_v7").is_none());
-}
-
-#[test]
-fn native_loader_rejects_abi_v3_plugins() {
-    let _guard = NATIVE_PLUGIN_TEST_LOCK.blocking_lock();
-    let fixture = build_fixture_plugin();
-    let manifest_ref = write_manifest_text(ManifestOptions {
-        manifest_dir: fixture.manifest_dir.path(),
-        plugin_id: "fixture_native_v3",
-        relay: ">=1.0.0,<2.0",
-        library: &fixture.library_path.to_string_lossy(),
-        symbol: "nemo_relay_fixture_native_plugin_v3",
-        integrity: None,
-    });
-
-    let error = expect_native_load_error_from_specs(
-        [load_spec("fixture_native_v3", &manifest_ref)],
-        "ABI-v3 plugins must be rebuilt for ABI v8",
-    );
-    assert!(error.contains("rejected native ABI 8"), "{error}");
-    assert!(error.contains("rebuild the plugin"), "{error}");
-}
-
-#[test]
-fn native_loader_rejects_v2_v4_v5_and_v6_plugins() {
-    let _guard = NATIVE_PLUGIN_TEST_LOCK.blocking_lock();
-    let fixture = build_fixture_plugin();
-
-    for (plugin_id, symbol) in [
-        ("fixture_native_v6", "nemo_relay_fixture_native_plugin_v6"),
-        ("fixture_native_v5", "nemo_relay_fixture_native_plugin_v5"),
-        ("fixture_native_v4", "nemo_relay_fixture_native_plugin_v4"),
-        ("fixture_native_v2", "nemo_relay_fixture_native_plugin_v2"),
-    ] {
-        let manifest_ref = write_manifest_text(ManifestOptions {
-            manifest_dir: fixture.manifest_dir.path(),
-            plugin_id,
-            relay: ">=1.0.0,<2.0",
-            library: &fixture.library_path.to_string_lossy(),
-            symbol,
-            integrity: None,
-        });
-
-        let error = expect_native_load_error_from_specs(
-            [load_spec(plugin_id, &manifest_ref)],
-            "stale native plugins must be rebuilt for ABI v8",
-        );
-        assert!(error.contains("rejected native ABI 8"), "{error}");
-        assert!(error.contains("rebuild the plugin"), "{error}");
-    }
 }
 
 #[test]
@@ -1548,7 +1232,7 @@ fn native_loader_rolls_back_partially_loaded_plugins() {
         plugin_id: "fixture_native_missing",
         relay: ">=1.0.0,<2.0",
         library: &missing_library.to_string_lossy(),
-        symbol: "nemo_relay_fixture_native_plugin",
+
         integrity: None,
     });
 
@@ -1559,7 +1243,7 @@ fn native_loader_rolls_back_partially_loaded_plugins() {
         ],
         "partial load failure should fail",
     );
-    assert!(error.contains("does not exist"), "{error}");
+    assert!(error.contains("native plugin library"), "{error}");
 
     let activation = load_native_plugins([load_spec("fixture_native", &valid_manifest)])
         .expect("first plugin kind should be deregistered after rollback");
@@ -1575,7 +1259,7 @@ fn native_loader_rejects_unsupported_relay_requirement_before_loading() {
         plugin_id: "fixture_native",
         relay: ">=2.0,<3.0",
         library: "libdoes-not-need-to-exist.so",
-        symbol: "nemo_relay_fixture_native_plugin",
+
         integrity: None,
     });
 
@@ -1590,105 +1274,6 @@ fn native_loader_rejects_unsupported_relay_requirement_before_loading() {
 }
 
 #[test]
-fn native_loader_rejects_manifest_contract_errors_before_loading_library() {
-    let _guard = NATIVE_PLUGIN_TEST_LOCK.blocking_lock();
-    let manifest_dir = TempDir::new().expect("manifest dir");
-
-    let mismatched_id = write_raw_manifest(
-        manifest_dir.path(),
-        &native_manifest_text(
-            "fixture_manifest_id",
-            ">=1.0.0,<2.0",
-            "1",
-            "libdoes-not-need-to-exist.so",
-            "nemo_relay_fixture_native_plugin",
-        ),
-    );
-    let error = expect_native_load_error(
-        NativePluginLoadSpec {
-            plugin_id: "fixture_expected_id".into(),
-            manifest_ref: mismatched_id.to_string_lossy().into_owned(),
-        },
-        "manifest id mismatch should fail",
-    );
-    assert!(error.contains("does not match expected id"), "{error}");
-
-    let invalid_relay = write_raw_manifest(
-        manifest_dir.path(),
-        &native_manifest_text(
-            "fixture_native",
-            "not a version requirement",
-            "1",
-            "libdoes-not-need-to-exist.so",
-            "nemo_relay_fixture_native_plugin",
-        ),
-    );
-    let error = expect_native_load_error(
-        NativePluginLoadSpec {
-            plugin_id: "fixture_native".into(),
-            manifest_ref: invalid_relay.to_string_lossy().into_owned(),
-        },
-        "invalid relay requirement should fail",
-    );
-    assert!(
-        error.contains("invalid compat.relay version requirement"),
-        "{error}"
-    );
-
-    let unsupported_native_api = write_raw_manifest(
-        manifest_dir.path(),
-        &native_manifest_text(
-            "fixture_native",
-            ">=1.0.0,<2.0",
-            "3",
-            "libdoes-not-need-to-exist.so",
-            "nemo_relay_fixture_native_plugin",
-        ),
-    );
-    let error = expect_native_load_error(
-        NativePluginLoadSpec {
-            plugin_id: "fixture_native".into(),
-            manifest_ref: unsupported_native_api.to_string_lossy().into_owned(),
-        },
-        "unsupported native API should fail",
-    );
-    assert!(error.contains("compat.native_api = \"1\""), "{error}");
-
-    let worker_manifest = write_raw_manifest(
-        manifest_dir.path(),
-        r#"
-manifest_version = 1
-
-[plugin]
-id = "fixture_worker"
-kind = "worker"
-
-[compat]
-relay = ">=1.0.0,<2.0"
-worker_protocol = "nvidia.nemo.relay.worker.v1"
-
-[defaults]
-enabled = false
-
-[capabilities]
-items = ["plugin_worker"]
-
-[load]
-runtime = "python"
-entrypoint = "fixture.worker:create_plugin"
-"#,
-    );
-    let error = expect_native_load_error(
-        NativePluginLoadSpec {
-            plugin_id: "fixture_worker".into(),
-            manifest_ref: worker_manifest.to_string_lossy().into_owned(),
-        },
-        "worker manifest should fail native loading",
-    );
-    assert!(error.contains("only supports rust_dynamic"), "{error}");
-}
-
-#[test]
 fn native_manifest_writer_escapes_toml_strings() {
     let _guard = NATIVE_PLUGIN_TEST_LOCK.blocking_lock();
     let manifest_dir = TempDir::new().expect("manifest dir");
@@ -1699,7 +1284,7 @@ fn native_manifest_writer_escapes_toml_strings() {
         plugin_id: "fixture_native",
         relay: ">=1.0.0,<2.0",
         library: windows_style_library,
-        symbol: "nemo_relay_fixture_native_plugin",
+
         integrity: Some(r"sha256:abc\def"),
     });
 
@@ -1713,111 +1298,6 @@ fn native_manifest_writer_escapes_toml_strings() {
         parsed["integrity"]["sha256"].as_str(),
         Some(r"sha256:abc\def")
     );
-}
-
-#[test]
-fn native_loader_rejects_missing_symbol_digest_mismatch_and_kind_mismatch() {
-    let _guard = NATIVE_PLUGIN_TEST_LOCK.blocking_lock();
-    let fixture = build_fixture_plugin();
-
-    let missing_symbol = write_manifest_with_symbol(&fixture, "missing_native_symbol");
-    let error = expect_native_load_error(
-        NativePluginLoadSpec {
-            plugin_id: "fixture_native".into(),
-            manifest_ref: missing_symbol.to_string_lossy().into_owned(),
-        },
-        "missing symbol should fail",
-    );
-    assert!(error.contains("symbol"), "{error}");
-
-    let digest_match = write_manifest_with_integrity(&fixture, &sha256(&fixture.library_path));
-    let activation = load_native_plugins([NativePluginLoadSpec {
-        plugin_id: "fixture_native".into(),
-        manifest_ref: digest_match.to_string_lossy().into_owned(),
-    }])
-    .expect("matching digest should load");
-    activation.clear();
-
-    let digest_mismatch = write_manifest_with_integrity(&fixture, "sha256:deadbeef");
-    let error = expect_native_load_error(
-        NativePluginLoadSpec {
-            plugin_id: "fixture_native".into(),
-            manifest_ref: digest_mismatch.to_string_lossy().into_owned(),
-        },
-        "digest mismatch should fail",
-    );
-    assert!(error.contains("sha256 mismatch"), "{error}");
-
-    let wrong_kind = write_manifest_with_plugin_id(&fixture, "fixture_native_mismatch");
-    let error = expect_native_load_error(
-        NativePluginLoadSpec {
-            plugin_id: "fixture_native_mismatch".into(),
-            manifest_ref: wrong_kind.to_string_lossy().into_owned(),
-        },
-        "plugin kind mismatch should fail",
-    );
-    assert!(error.contains("returned kind"), "{error}");
-}
-
-#[test]
-fn native_loader_rejects_entry_and_descriptor_failures() {
-    let _guard = NATIVE_PLUGIN_TEST_LOCK.blocking_lock();
-    let fixture = build_fixture_plugin();
-
-    for (symbol, expected) in [
-        ("nemo_relay_fixture_entry_error", "fixture entry failed"),
-        (
-            "nemo_relay_fixture_small_descriptor",
-            "incompatible plugin descriptor size",
-        ),
-        ("nemo_relay_fixture_null_kind", "null plugin_kind"),
-        ("nemo_relay_fixture_no_register", "no register callback"),
-    ] {
-        let manifest_ref = write_manifest_with_symbol(&fixture, symbol);
-        let error = expect_native_load_error(
-            load_spec("fixture_native", &manifest_ref),
-            "invalid native descriptor should fail",
-        );
-        assert!(
-            error.contains(expected),
-            "expected {expected:?} in error: {error}"
-        );
-    }
-}
-
-#[tokio::test]
-async fn native_validate_and_register_callback_errors_are_reported() {
-    let _guard = NATIVE_PLUGIN_TEST_LOCK.lock().await;
-    let fixture = build_fixture_plugin();
-
-    for (symbol, expected) in [
-        (
-            "nemo_relay_fixture_validate_error",
-            "fixture validate failed",
-        ),
-        (
-            "nemo_relay_fixture_invalid_diagnostics",
-            "invalid diagnostics JSON",
-        ),
-        (
-            "nemo_relay_fixture_register_error",
-            "fixture register failed",
-        ),
-    ] {
-        let manifest_ref = write_manifest_with_symbol(&fixture, symbol);
-        let activation = load_native_plugins([load_spec("fixture_native", &manifest_ref)])
-            .expect("native plugin should load");
-        let error = initialize_fixture_native(Map::new())
-            .await
-            .expect_err("native plugin initialization should fail")
-            .to_string();
-        assert!(
-            error.contains(expected),
-            "expected {expected:?} in error: {error}"
-        );
-        test_close_plugin_host().expect("native plugin config should clear");
-        activation.clear();
-    }
 }
 
 #[tokio::test]
@@ -2187,7 +1667,7 @@ async fn plugin_host_activation_layers_discovered_static_base_with_dynamic_compo
 }
 
 #[tokio::test]
-async fn plugin_host_clear_allows_an_in_flight_native_callback_to_finish() {
+async fn plugin_host_close_retains_uncooperative_work_for_retry() {
     let _guard = NATIVE_PLUGIN_TEST_LOCK.lock().await;
     let fixture = build_fixture_plugin();
     let manifest_ref = write_manifest(&fixture);
@@ -2240,7 +1720,7 @@ async fn plugin_host_clear_allows_an_in_flight_native_callback_to_finish() {
         .expect("native callback should enter its continuation");
     activation
         .close()
-        .expect("host should close while a callback snapshot remains in flight");
+        .expect_err("blocked continuation must retain cleanup ownership");
     let unchanged = tool_request_intercepts("after-clear", json!({ "input": true }))
         .await
         .expect("new calls should observe the cleared registries");
@@ -2251,10 +1731,11 @@ async fn plugin_host_clear_allows_an_in_flight_native_callback_to_finish() {
         .expect("in-flight continuation should still be reachable");
     let result = call_thread
         .join()
-        .expect("in-flight callback thread should not panic")
-        .expect("in-flight callback should finish after host clear");
-    assert_eq!(result.result["tool_callback"], true);
-    assert_eq!(result.result["native_plugin_tool_execution"], true);
+        .expect("in-flight callback thread should not panic");
+    assert!(result.is_err(), "shutdown cancels unfinished callbacks");
+    activation
+        .close()
+        .expect("close retries after blocked work exits");
 }
 
 #[tokio::test]
@@ -2369,11 +1850,7 @@ async fn plugin_host_activation_drop_releases_owner_and_plugin_kind() {
 async fn plugin_host_reserved_id_failure_does_not_poison_future_activation() {
     let _guard = NATIVE_PLUGIN_TEST_LOCK.lock().await;
     let fixture = build_fixture_plugin();
-    let collision_manifest = write_manifest_with_plugin_id_and_symbol(
-        &fixture,
-        "observability",
-        "nemo_relay_fixture_observability_collision",
-    );
+    let collision_manifest = write_manifest_for_kind(&fixture, "observability");
 
     let error = match crate::PluginHostActivation::initialize_with_verified_specs(
         PluginConfig::default(),
@@ -2390,7 +1867,7 @@ async fn plugin_host_reserved_id_failure_does_not_poison_future_activation() {
         Err(error) => error.to_string(),
     };
     assert!(error.contains("observability"), "{error}");
-    assert!(error.contains("already registered"), "{error}");
+    assert!(error.contains("disagrees with binary"), "{error}");
 
     let manifest_ref = write_manifest(&fixture);
     let (mut activation, _) = crate::PluginHostActivation::initialize_with_verified_specs(
@@ -2581,18 +2058,6 @@ async fn plugin_host_rejects_a_second_active_host() {
     existing.close().expect("first host should close");
 }
 
-async fn initialize_fixture_native(config: Map<String, Json>) -> crate::Result<()> {
-    let mut plugin_config = PluginConfig::default();
-    plugin_config.components.push(PluginComponentSpec {
-        kind: "fixture_native".into(),
-        enabled: true,
-        config,
-    });
-    test_initialize_plugin_host_exact(plugin_config)
-        .await
-        .map(|_| ())
-}
-
 fn expect_native_load_error(spec: NativePluginLoadSpec, message: &str) -> String {
     expect_native_load_error_from_specs([spec], message)
 }
@@ -2671,6 +2136,19 @@ struct BuiltFixture {
     library_path: PathBuf,
 }
 
+fn checked_fixture_library(
+    fixture: &BuiltFixture,
+) -> crate::dynamic::native_library::CheckedNativeLibrary {
+    use crate::dynamic::native_library::{CheckedNativeLibrary, NativeLibraryArtifact};
+    let file = PathBuf::from(fixture.library_path.file_name().unwrap());
+    let artifact = NativeLibraryArtifact::new(
+        file.clone(),
+        [(file, std::fs::read(&fixture.library_path).unwrap())],
+    )
+    .unwrap();
+    CheckedNativeLibrary::load(artifact, "v1.0", "fixture_native").unwrap()
+}
+
 fn build_fixture_plugin() -> BuiltFixture {
     log::set_max_level(log::LevelFilter::Info);
     let manifest_dir = TempDir::new().expect("fixture manifest dir");
@@ -2703,44 +2181,18 @@ fn write_manifest(fixture: &BuiltFixture) -> PathBuf {
         plugin_id: "fixture_native",
         relay: ">=1.0.0,<2.0",
         library: &fixture.library_path.to_string_lossy(),
-        symbol: "nemo_relay_fixture_native_plugin",
+
         integrity: None,
     })
 }
 
-fn write_manifest_with_symbol(fixture: &BuiltFixture, symbol: &str) -> PathBuf {
-    write_manifest_text(ManifestOptions {
-        manifest_dir: fixture.manifest_dir.path(),
-        plugin_id: "fixture_native",
-        relay: ">=1.0.0,<2.0",
-        library: &fixture.library_path.to_string_lossy(),
-        symbol,
-        integrity: None,
-    })
-}
-
-fn write_manifest_with_plugin_id_and_symbol(
-    fixture: &BuiltFixture,
-    plugin_id: &str,
-    symbol: &str,
-) -> PathBuf {
+fn write_manifest_for_kind(fixture: &BuiltFixture, plugin_id: &str) -> PathBuf {
     write_manifest_text(ManifestOptions {
         manifest_dir: fixture.manifest_dir.path(),
         plugin_id,
         relay: ">=1.0.0,<2.0",
         library: &fixture.library_path.to_string_lossy(),
-        symbol,
-        integrity: None,
-    })
-}
 
-fn write_manifest_with_plugin_id(fixture: &BuiltFixture, plugin_id: &str) -> PathBuf {
-    write_manifest_text(ManifestOptions {
-        manifest_dir: fixture.manifest_dir.path(),
-        plugin_id,
-        relay: ">=1.0.0,<2.0",
-        library: &fixture.library_path.to_string_lossy(),
-        symbol: "nemo_relay_fixture_native_plugin",
         integrity: None,
     })
 }
@@ -2751,7 +2203,7 @@ fn write_manifest_with_integrity(fixture: &BuiltFixture, integrity: &str) -> Pat
         plugin_id: "fixture_native",
         relay: ">=1.0.0,<2.0",
         library: &fixture.library_path.to_string_lossy(),
-        symbol: "nemo_relay_fixture_native_plugin",
+
         integrity: Some(integrity),
     })
 }
@@ -2761,7 +2213,7 @@ struct ManifestOptions<'a> {
     plugin_id: &'a str,
     relay: &'a str,
     library: &'a str,
-    symbol: &'a str,
+
     integrity: Option<&'a str>,
 }
 
@@ -2774,7 +2226,6 @@ fn write_manifest_text(options: ManifestOptions<'_>) -> PathBuf {
     let plugin_id = toml_string(options.plugin_id);
     let relay = toml_string(options.relay);
     let library = toml_string(options.library);
-    let symbol = toml_string(options.symbol);
     let manifest = format!(
         r#"
 manifest_version = 1
@@ -2785,7 +2236,7 @@ kind = "rust_dynamic"
 
 [compat]
 relay = {relay}
-native_api = "1"
+native_api = "v1.0"
 
 [defaults]
 enabled = false
@@ -2798,60 +2249,15 @@ artifact = {library}
 
 [load]
 library = {library}
-symbol = {symbol}
 {integrity}
 "#,
         plugin_id = plugin_id,
         relay = relay,
         library = library,
-        symbol = symbol,
         integrity = integrity,
     );
     std::fs::write(&manifest_ref, manifest).expect("write relay-plugin.toml");
     manifest_ref
-}
-
-fn write_raw_manifest(manifest_dir: &Path, manifest: &str) -> PathBuf {
-    let manifest_ref = manifest_dir.join("relay-plugin.toml");
-    std::fs::write(&manifest_ref, manifest).expect("write relay-plugin.toml");
-    manifest_ref
-}
-
-fn native_manifest_text(
-    plugin_id: &str,
-    relay: &str,
-    native_api: &str,
-    library: &str,
-    symbol: &str,
-) -> String {
-    format!(
-        r#"
-manifest_version = 1
-
-[plugin]
-id = {plugin_id}
-kind = "rust_dynamic"
-
-[compat]
-relay = {relay}
-native_api = {native_api}
-
-[defaults]
-enabled = false
-
-[capabilities]
-items = ["plugin_native"]
-
-[load]
-library = {library}
-symbol = {symbol}
-"#,
-        plugin_id = toml_string(plugin_id),
-        relay = toml_string(relay),
-        native_api = toml_string(native_api),
-        library = toml_string(library),
-        symbol = toml_string(symbol),
-    )
 }
 
 fn toml_string(value: &str) -> String {
@@ -3031,4 +2437,279 @@ registration_failure = {failure}
             assert_eq!(internal.lifetime.totals.occurrences_total.value.get(), 6);
         }
     }
+}
+
+#[tokio::test]
+async fn checked_raw_sync_callbacks_and_selected_diagnostics_preserve_contracts() {
+    use crate::dynamic::native_checked::CheckedPlugin;
+    use nemo_relay_diagnostics::{
+        DiagnosticQuery, Diagnostics, DiagnosticsSettings, SourceIdentity,
+    };
+    let _guard = NATIVE_PLUGIN_TEST_LOCK.lock().await;
+    let fixture = build_fixture_plugin();
+    let library = checked_fixture_library(&fixture);
+    for read in [false, true] {
+        for fail in [false, true] {
+            let context = Diagnostics::from_settings(
+                SourceIdentity {
+                    instance_id: Uuid::now_v7(),
+                    process_id: None,
+                    process_role: "checked-native-test".into(),
+                    relay_version: "test".into(),
+                },
+                DiagnosticsSettings {
+                    enabled: true,
+                    ..Default::default()
+                },
+            )
+            .unwrap();
+            register_plugin(Arc::new(
+                CheckedPlugin::new(&library, context.clone(), read).unwrap(),
+            ))
+            .unwrap();
+            let config = PluginConfig {
+                components: vec![PluginComponentSpec {
+                    kind: "fixture_native".into(),
+                    enabled: true,
+                    config: Map::from_iter([
+                        ("diagnostics_fixture".into(), json!(true)),
+                        ("expect_read".into(), json!(read)),
+                        ("registration_failure".into(), json!(fail)),
+                    ]),
+                }],
+                ..Default::default()
+            };
+            let result = test_initialize_plugin_host_exact(config).await;
+            if fail {
+                assert!(result.is_err());
+            } else {
+                result.unwrap();
+                let value = tool_request_intercepts("checked-diagnostic", json!({"test":true}))
+                    .await
+                    .unwrap();
+                assert_eq!(value, json!({"test":true}));
+            }
+            let snapshot = context
+                .reader()
+                .snapshot(&DiagnosticQuery::default())
+                .unwrap();
+            assert!(snapshot.events().next().is_some());
+            test_close_plugin_host().unwrap();
+            assert!(deregister_plugin("fixture_native"));
+        }
+    }
+    register_plugin(Arc::new(
+        CheckedPlugin::new(&library, Diagnostics::process_default().clone(), false).unwrap(),
+    ))
+    .unwrap();
+    test_initialize_plugin_host_exact(PluginConfig {
+        components: vec![PluginComponentSpec {
+            kind: "fixture_native".into(),
+            enabled: true,
+            config: Map::from_iter([("raw_sync_fixture".into(), json!(true))]),
+        }],
+        ..Default::default()
+    })
+    .await
+    .unwrap();
+    assert_eq!(
+        tool_request_intercepts("raw", json!({})).await.unwrap()["checked_raw_sync"],
+        true
+    );
+    let events = Arc::new(Mutex::new(Vec::<Event>::new()));
+    let captured = events.clone();
+    register_subscriber(
+        "checked-raw-observer",
+        Arc::new(move |event| captured.lock().unwrap().push(event.clone())),
+    )
+    .unwrap();
+    emit_scope_mark(
+        EmitMarkEventParams::builder()
+            .name("checked-raw-sync-trigger")
+            .build(),
+    )
+    .unwrap();
+    emit_scope_mark(
+        EmitMarkEventParams::builder()
+            .name("checked-raw-panic")
+            .build(),
+    )
+    .unwrap();
+    flush_subscribers().unwrap();
+    assert!(
+        events
+            .lock()
+            .unwrap()
+            .iter()
+            .any(|event| event.name() == "checked-raw-sync-observed")
+    );
+    deregister_subscriber("checked-raw-observer").unwrap();
+    test_close_plugin_host().unwrap();
+    assert!(deregister_plugin("fixture_native"));
+}
+
+#[test]
+fn native_activation_rejects_legacy_and_future_contracts_before_opening() {
+    let _guard = NATIVE_PLUGIN_TEST_LOCK.blocking_lock();
+    let fixture = build_fixture_plugin();
+    for (api, expected) in [
+        ("1", "rebuild"),
+        ("v1.1", "unsupported native API"),
+        ("v2.0", "unsupported native API"),
+    ] {
+        let manifest = write_manifest(&fixture);
+        let text = std::fs::read_to_string(&manifest)
+            .unwrap()
+            .replace("v1.0", api)
+            .replace(
+                &fixture.library_path.to_string_lossy().to_string(),
+                "/missing/native/library",
+            );
+        let text = if api == "1" {
+            text.replace("relay = \">=1.0.0,<2.0\"", "relay = \">=0.8,<1.0\"")
+        } else {
+            text
+        };
+        std::fs::write(&manifest, text).unwrap();
+        let error = expect_native_load_error(
+            load_spec("fixture_native", &manifest),
+            "unsupported API must fail",
+        );
+        assert!(error.contains(expected), "{error}");
+    }
+    let manifest = write_manifest(&fixture);
+    let mut text = std::fs::read_to_string(&manifest).unwrap();
+    text.push_str("\nsymbol = \"ignored_symbol\"\n");
+    std::fs::write(&manifest, text).unwrap();
+    let error =
+        expect_native_load_error(load_spec("fixture_native", &manifest), "symbol must fail");
+    assert!(error.contains("load.symbol"), "{error}");
+}
+
+#[tokio::test]
+async fn raw_stream_factories_can_read_downstream_with_one_executor_worker() {
+    use crate::dynamic::native_checked::CheckedPlugin;
+    let _guard = NATIVE_PLUGIN_TEST_LOCK.lock().await;
+    let fixture = build_fixture_plugin();
+    let library = checked_fixture_library(&fixture);
+    register_plugin(Arc::new(
+        CheckedPlugin::new(
+            &library,
+            nemo_relay_diagnostics::Diagnostics::process_default().clone(),
+            false,
+        )
+        .unwrap(),
+    ))
+    .unwrap();
+    test_initialize_plugin_host_exact(PluginConfig {
+        components: vec![PluginComponentSpec {
+            kind: "fixture_native".into(),
+            enabled: true,
+            config: Map::from_iter([
+                ("raw_stream_only_fixture".into(), json!(true)),
+                ("raw_stream_peek_fixture".into(), json!(true)),
+                ("executor".into(), json!({"worker_threads":1})),
+            ]),
+        }],
+        ..Default::default()
+    })
+    .await
+    .unwrap();
+    let chunks = tokio::time::timeout(std::time::Duration::from_secs(5), async {
+        let mut stream = llm_stream_call_execute(
+            LlmStreamCallExecuteParams::builder()
+                .name("raw-stream-peek")
+                .request(LlmRequest {
+                    headers: Map::new(),
+                    content: json!({}),
+                })
+                .func(Arc::new(|_| {
+                    Box::pin(async {
+                        Ok(LlmJsonStream::new(tokio_stream::iter(vec![
+                            Ok(json!(1)),
+                            Ok(json!(2)),
+                        ])))
+                    })
+                }))
+                .collector(Box::new(|_| Ok(())))
+                .finalizer(Box::new(|| Json::Null))
+                .build(),
+        )
+        .await
+        .unwrap();
+        let mut chunks = Vec::new();
+        while let Some(chunk) = stream.next().await {
+            chunks.push(chunk.unwrap());
+        }
+        stream.close().await.unwrap();
+        chunks
+    })
+    .await
+    .expect("a synchronous factory must allow downstream interceptors to run");
+    assert_eq!(chunks, vec![json!(1), json!(2)]);
+    test_close_plugin_host().unwrap();
+    assert!(deregister_plugin("fixture_native"));
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn native_shutdown_unwinds_pending_plugin_scope() {
+    use crate::dynamic::native_checked::CheckedPlugin;
+    let _guard = NATIVE_PLUGIN_TEST_LOCK.lock().await;
+    let fixture = build_fixture_plugin();
+    let library = checked_fixture_library(&fixture);
+    register_plugin(Arc::new(
+        CheckedPlugin::new(
+            &library,
+            nemo_relay_diagnostics::Diagnostics::process_default().clone(),
+            false,
+        )
+        .unwrap(),
+    ))
+    .unwrap();
+    test_initialize_plugin_host_exact(PluginConfig {
+        components: vec![PluginComponentSpec {
+            kind: "fixture_native".into(),
+            enabled: true,
+            config: Map::new(),
+        }],
+        ..Default::default()
+    })
+    .await
+    .unwrap();
+    let stack = create_scope_stack();
+    let (tx, rx) = tokio::sync::oneshot::channel();
+    let sender = Arc::new(Mutex::new(Some(tx)));
+    let task = tokio::spawn(TASK_SCOPE_STACK.scope(stack.clone(), async move {
+        tool_call_execute(
+            ToolCallExecuteParams::builder()
+                .name("review-pending-tool")
+                .args(json!({"use_scoped_next":true}))
+                .func(Arc::new(move |_args| {
+                    let sender = sender.clone();
+                    Box::pin(async move {
+                        if let Some(tx) = sender.lock().unwrap().take() {
+                            let _ = tx.send(());
+                        }
+                        std::future::pending::<()>().await;
+                        Ok(ToolExecutionResult::new(json!({})))
+                    })
+                }))
+                .build(),
+        )
+        .await
+    }));
+    tokio::time::timeout(std::time::Duration::from_secs(10), rx)
+        .await
+        .unwrap()
+        .unwrap();
+    let close = test_close_plugin_host();
+    let result = tokio::time::timeout(std::time::Duration::from_secs(10), task).await;
+    deregister_plugin("fixture_native");
+    let snapshot = nemo_relay_runtime::api::runtime::scope_stack_snapshot(&stack).unwrap();
+    close.unwrap();
+    assert!(
+        result.unwrap().unwrap().is_err(),
+        "shutdown cancels pending calls"
+    );
+    assert_eq!(snapshot.scopes.len(), 1, "only the caller root remains");
 }

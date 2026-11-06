@@ -26,6 +26,60 @@ use nemo_relay_runtime::api::tool::tool_conditional_execution;
 use nemo_relay_types::error::FlowError;
 
 struct TestPlugin;
+
+#[tokio::test]
+async fn async_initialization_keeps_current_thread_runtime_responsive_during_validation() {
+    struct BlockingValidation {
+        entered: Mutex<Option<tokio::sync::oneshot::Sender<()>>>,
+        release: Mutex<std::sync::mpsc::Receiver<()>>,
+    }
+    impl Plugin for BlockingValidation {
+        fn plugin_kind(&self) -> &str {
+            "test.blocking-validation"
+        }
+        fn validate(&self, _: &serde_json::Map<String, Json>) -> Vec<ConfigDiagnostic> {
+            self.entered
+                .lock()
+                .unwrap()
+                .take()
+                .unwrap()
+                .send(())
+                .unwrap();
+            self.release
+                .lock()
+                .unwrap()
+                .recv_timeout(std::time::Duration::from_secs(5))
+                .expect("async runtime must keep running during validation");
+            Vec::new()
+        }
+        fn register<'a>(
+            &'a self,
+            _: &serde_json::Map<String, Json>,
+            _: &'a mut dyn PluginRegistrationContext,
+        ) -> crate::PluginFuture<'a, ()> {
+            Box::pin(async { Ok(()) })
+        }
+    }
+    let (entered, ready) = tokio::sync::oneshot::channel();
+    let (release, wait) = std::sync::mpsc::channel();
+    register_plugin(Arc::new(BlockingValidation {
+        entered: Mutex::new(Some(entered)),
+        release: Mutex::new(wait),
+    }))
+    .unwrap();
+    let config = PluginConfig {
+        components: vec![PluginComponentSpec::new("test.blocking-validation")],
+        ..Default::default()
+    };
+    let release = async {
+        ready.await.unwrap();
+        release.send(()).unwrap();
+    };
+    let (initialized, ()) = tokio::join!(test_initialize_plugin_host_exact(config), release);
+    initialized.unwrap();
+    test_close_plugin_host().unwrap();
+    assert!(deregister_plugin("test.blocking-validation"));
+}
 struct PolicyAwarePlugin;
 
 struct SingletonPlugin;

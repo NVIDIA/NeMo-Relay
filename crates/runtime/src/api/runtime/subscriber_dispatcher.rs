@@ -30,7 +30,15 @@ tokio::task_local! {
     static TASK_PUBLICATION_CONTEXT: Option<PublicationContext>;
 }
 
-struct ThreadPublicationContextGuard(Option<PublicationContext>);
+pub(crate) struct ThreadPublicationContextGuard(Option<PublicationContext>);
+
+pub(crate) fn enter_thread_publication_context(
+    context: Option<PublicationContext>,
+) -> ThreadPublicationContextGuard {
+    ThreadPublicationContextGuard(
+        THREAD_PUBLICATION_CONTEXT.with(|current| current.replace(context)),
+    )
+}
 
 impl Drop for ThreadPublicationContextGuard {
     fn drop(&mut self) {
@@ -60,8 +68,7 @@ pub fn with_publication_context<T>(
     context: Option<PublicationContext>,
     f: impl FnOnce() -> T,
 ) -> T {
-    let previous = THREAD_PUBLICATION_CONTEXT.with(|current| current.replace(context));
-    let _guard = ThreadPublicationContextGuard(previous);
+    let _guard = enter_thread_publication_context(context);
     f()
 }
 
@@ -876,6 +883,12 @@ mod native {
         f()
     }
 
+    pub(super) fn enter_thread_publication_buffer(buffer: Option<PublicationBuffer>) -> impl Drop {
+        ThreadPublicationBufferGuard(
+            THREAD_PUBLICATION_BUFFER.with(|current| current.replace(buffer)),
+        )
+    }
+
     pub(super) fn sync_thread_publication_buffer(buffer: Option<PublicationBuffer>) {
         THREAD_PUBLICATION_BUFFER.with(|current| {
             current.replace(buffer);
@@ -1610,4 +1623,9 @@ pub fn reset_after_fork_child() {
 #[must_use]
 pub fn in_dispatcher_callback() -> bool {
     native::in_dispatcher_callback()
+}
+
+// Owned only inside the host library; the aggregate continuation lease is thread-bound.
+pub(crate) fn enter_thread_publication_buffer(buffer: Option<PublicationBuffer>) -> impl Drop {
+    native::enter_thread_publication_buffer(buffer)
 }

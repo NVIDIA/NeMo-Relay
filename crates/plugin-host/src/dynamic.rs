@@ -28,6 +28,13 @@ mod host;
 mod http_error;
 mod manifest;
 mod native;
+/// Checked native callback and runtime adapters.
+#[doc(hidden)]
+pub mod native_checked;
+mod native_dependencies;
+/// Checked native library loading used by the ABI migration.
+#[doc(hidden)]
+pub mod native_library;
 mod policy;
 mod registry;
 mod schema;
@@ -112,6 +119,21 @@ pub(super) fn deregister_tracked_registrations_checked(
     outcome
 }
 
+/// Check an authored native API without loading its binary.
+pub fn native_api_support(api: &str) -> crate::Result<()> {
+    let required = api
+        .trim()
+        .parse::<nemo_relay_plugin::abi::NativeApiVersion>()
+        .map_err(|e| PluginError::InvalidConfig(e.to_string()))?;
+    let host = nemo_relay_plugin::abi::NATIVE_API_VERSION;
+    if !host.supports(required) {
+        return Err(PluginError::InvalidConfig(format!(
+            "unsupported native API {required}; host supports {host}"
+        )));
+    }
+    Ok(())
+}
+
 pub(super) fn validate_annotated_request_consumer_compatibility(
     relay: &str,
     plugin_kind: &str,
@@ -146,19 +168,6 @@ pub(super) fn validate_llm_execution_context_compatibility(
     if version_requirement_matches_minor(&requirement, 0, 9) {
         return Err(PluginError::InvalidConfig(format!(
             "dynamic plugin '{plugin_kind}' registers an LLM execution intercept and must declare compat.relay = \">=1.0.0,<2.0\" or another range that excludes Relay 0.9"
-        )));
-    }
-    Ok(())
-}
-
-pub(super) fn validate_native_abi_compatibility(
-    relay: &str,
-    plugin_kind: &str,
-) -> crate::Result<()> {
-    let requirement = parse_relay_requirement(relay)?;
-    if version_requirement_matches_minor(&requirement, 0, 9) {
-        return Err(PluginError::InvalidConfig(format!(
-            "dynamic native plugin '{plugin_kind}' uses native ABI v7 and must declare compat.relay = \">=1.0.0,<2.0\" or another range that excludes Relay 0.9"
         )));
     }
     Ok(())
@@ -569,7 +578,8 @@ pub struct DynamicPluginWorkerLoadContract {
 pub struct DynamicPluginRustLoadContract {
     /// Native dynamic library path.
     pub library: String,
-    /// Native exported registration symbol.
+    /// Legacy symbol retained only when inspecting old stored records.
+    #[serde(default, skip_serializing_if = "String::is_empty")]
     pub symbol: String,
 }
 

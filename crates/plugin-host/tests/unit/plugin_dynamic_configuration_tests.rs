@@ -825,12 +825,12 @@ manifest = "relay-plugin.toml"
 
 fn write_trust_failure_manifest(manifest_path: &Path, digest: &str, kind: &str, failure: &str) {
     let compatibility = if kind == "rust_dynamic" {
-        "native_api = \"1\""
+        "native_api = \"v1.0\""
     } else {
         "worker_protocol = \"nvidia.nemo.relay.worker.v1\""
     };
     let load = if kind == "rust_dynamic" {
-        "library = \"artifact.bin\"\nsymbol = \"never_load\""
+        "library = \"artifact.bin\""
     } else {
         "runtime = \"command\"\nentrypoint = \"artifact.bin\""
     };
