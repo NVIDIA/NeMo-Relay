@@ -1973,6 +1973,52 @@ fn anthropic_streaming_codec_keeps_thinking_block_shape_when_no_delta_arrives() 
 }
 
 #[test]
+fn anthropic_streaming_codec_preserves_signature_without_thinking_text() {
+    // Thinking content can be withheld while the signature still arrives; the block has to keep
+    // the empty `thinking` field and the signature it actually received.
+    let codec = AnthropicMessagesStreamingCodec::new();
+    let mut collector = codec.collector();
+    let finalizer = codec.finalizer();
+
+    for event in [
+        json!({
+            "type": "message_start", "message": {
+                "id": "msg_thinking_redacted", "type": "message", "role": "assistant",
+                "model": "claude-sonnet-4-6", "content": [],
+                "usage": {"input_tokens": 10, "output_tokens": 0}
+            }
+        }),
+        json!({
+            "type": "content_block_start", "index": 0,
+            "content_block": {"type": "thinking", "thinking": "", "signature": ""}
+        }),
+        json!({
+            "type": "content_block_delta", "index": 0,
+            "delta": {"type": "signature_delta", "signature": "EqQBCkYIBRgCKkA"}
+        }),
+        json!({"type": "content_block_stop", "index": 0}),
+        json!({
+            "type": "message_delta",
+            "delta": {"stop_reason": "end_turn", "stop_sequence": null},
+            "usage": {"input_tokens": 10, "output_tokens": 0}
+        }),
+        json!({"type": "message_stop"}),
+    ] {
+        collector(event).unwrap();
+    }
+
+    let aggregate = finalizer();
+    assert_eq!(
+        aggregate["content"][0],
+        json!({
+            "type": "thinking",
+            "thinking": "",
+            "signature": "EqQBCkYIBRgCKkA"
+        })
+    );
+}
+
+#[test]
 fn anthropic_streaming_codec_omits_unreported_message_metadata() {
     let codec = AnthropicMessagesStreamingCodec::new();
     let mut collector = codec.collector();

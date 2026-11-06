@@ -1444,6 +1444,12 @@ impl AnthropicMessagesStreamingState {
         }
     }
 
+    /// Fold one `content_block_delta` into the block it belongs to.
+    ///
+    /// Block types that stream their payload incrementally (text, tool_use input, citations,
+    /// thinking text and its signature) accumulate here; a delta type this codec does not model
+    /// is ignored rather than erroring, so a future Anthropic addition does not break
+    /// observability.
     fn observe_content_block_delta(&mut self, event: &Json) {
         let Some(index) = event.get("index").and_then(Json::as_u64) else {
             return;
@@ -1590,6 +1596,8 @@ impl AnthropicMessagesStreamingState {
 }
 
 impl StreamingBlock {
+    /// Emit the block: each accumulated fragment replaces the skeleton field it belongs to, and a
+    /// field that never received a delta keeps the shape set at `content_block_start`.
     fn finalize(mut self) -> Json {
         if self.has_text {
             self.skeleton
