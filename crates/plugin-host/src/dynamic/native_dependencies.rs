@@ -293,6 +293,7 @@ fn runtime_search_paths(
     Ok(result)
 }
 
+/// Resolve package-local imports while preserving Unix loader traversal through symlinks.
 fn resolve(
     root: &Path,
     origin: &Path,
@@ -331,7 +332,7 @@ fn resolve(
         }
     }
     for candidate in candidates {
-        let candidate = if target.is_none() && !is_macho {
+        let candidate = if !is_macho && (target.is_none() || cfg!(windows)) {
             let Some(candidate) = normalized(&candidate) else {
                 continue;
             };

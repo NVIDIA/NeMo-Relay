@@ -7401,3 +7401,89 @@ fn scope_snapshot_types_preserve_all_domain_categories() {
     }
     assert_eq!(proto_scope_type(i32::MAX), ScopeType::Custom);
 }
+
+/// Shutdown must finish while a component process is still starting, and revoke its late result.
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn component_launch_does_not_block_shutdown_or_publish_after_revocation() {
+    let (owner, _owner_server) = fake_worker_instance(Vec::new()).await;
+    let owner = Arc::new(owner);
+    let (child, _child_server) = fake_worker_instance(Vec::new()).await;
+    let child = Arc::new(child);
+    let directory = child.activation_dir.clone();
+    let launched = child.clone();
+    let (started, ready) = oneshot::channel();
+    let (release, wait) = std::sync::mpsc::channel();
+    let launch_owner = owner.clone();
+    let launch = tokio::task::spawn_blocking(move || {
+        launch_owner.component_worker_with(Map::new(), || {
+            started.send(()).unwrap();
+            wait.recv().unwrap();
+            Ok(launched)
+        })
+    });
+    ready.await.unwrap();
+    let closing = owner.clone();
+    let mut close = tokio::task::spawn_blocking(move || closing.shutdown_checked());
+    let shutdown = tokio::time::timeout(Duration::from_secs(2), &mut close).await;
+    release.send(()).unwrap();
+    let result = launch.await.unwrap();
+    let shutdown = match shutdown {
+        Ok(result) => result.unwrap(),
+        Err(error) => {
+            close.await.unwrap();
+            panic!("component startup blocked shutdown: {error}");
+        }
+    };
+    assert!(shutdown.errors.is_empty(), "{:?}", shutdown.errors);
+    assert!(result.err().unwrap().to_string().contains("closing"));
+    assert!(owner.component_workers.lock().unwrap().is_empty());
+    assert!(child.teardown_started.load(Ordering::Acquire));
+    assert!(!directory.exists());
+}
+
+/// Concurrent launches for one configuration retain one worker and clean up the duplicate.
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn component_launch_reuses_concurrently_cached_worker_and_cleans_duplicate() {
+    let (owner, _owner_server) = fake_worker_instance(Vec::new()).await;
+    let owner = Arc::new(owner);
+    let (duplicate, _duplicate_server) = fake_worker_instance(Vec::new()).await;
+    let duplicate = Arc::new(duplicate);
+    let directory = duplicate.activation_dir.clone();
+    let (selected, _selected_server) = fake_worker_instance(Vec::new()).await;
+    let selected = Arc::new(selected);
+    let launched = duplicate.clone();
+    let (started, ready) = oneshot::channel();
+    let (release, wait) = std::sync::mpsc::channel();
+    let launch_owner = owner.clone();
+    let launch = tokio::task::spawn_blocking(move || {
+        launch_owner.component_worker_with(Map::new(), || {
+            started.send(()).unwrap();
+            wait.recv().unwrap();
+            Ok(launched)
+        })
+    });
+    ready.await.unwrap();
+    let other_owner = owner.clone();
+    let expected = selected.clone();
+    let mut other = tokio::task::spawn_blocking(move || {
+        other_owner.component_worker_with(Map::new(), || Ok(expected))
+    });
+    let result = tokio::time::timeout(Duration::from_secs(2), &mut other).await;
+    release.send(()).unwrap();
+    let first = launch.await.unwrap().unwrap();
+    let second = match result {
+        Ok(result) => result.unwrap().unwrap(),
+        Err(error) => {
+            other.await.unwrap().unwrap();
+            panic!("component startup held the cache lock: {error}");
+        }
+    };
+    assert!(Arc::ptr_eq(&first, &selected));
+    assert!(Arc::ptr_eq(&second, &selected));
+    assert_eq!(owner.component_workers.lock().unwrap().len(), 1);
+    assert!(duplicate.teardown_started.load(Ordering::Acquire));
+    assert!(!directory.exists());
+    assert!(!selected.teardown_started.load(Ordering::Acquire));
+    assert!(owner.shutdown_checked().errors.is_empty());
+    assert!(!selected.activation_dir.exists());
+}

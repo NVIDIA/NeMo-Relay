@@ -476,6 +476,7 @@ async fn repeated_shutdown_does_not_reopen_health_watches() {
     assert!(task.await.unwrap_err().is_cancelled());
 }
 
+/// Shutdown rejects new work even when the registration lock is occupied.
 #[tokio::test]
 async fn validation_rejects_wrong_plugin_and_shutdown_without_running_callback() {
     struct TestPlugin(Arc<AtomicU64>);
@@ -544,6 +545,23 @@ async fn validation_rejects_wrong_plugin_and_shutdown_without_running_callback()
         .unwrap_err();
     assert_eq!(error.code(), tonic::Code::FailedPrecondition);
     assert_eq!(calls.load(Ordering::Relaxed), 1);
+    // New requests observe the lifecycle fence even when the registration lock
+    // is occupied and shutdown's cancellation signal is already set.
+    let _registration = service.registration.lock().await;
+    let error = tokio::time::timeout(
+        std::time::Duration::from_secs(1),
+        service.register(Request::new(RegisterRequest {
+            credentials: request("test.validation_lifecycle")
+                .into_inner()
+                .credentials,
+            plugin_id: "test.validation_lifecycle".into(),
+            config: Some(encode_wire(&serde_json::json!({})).unwrap()),
+        })),
+    )
+    .await
+    .unwrap()
+    .unwrap_err();
+    assert_eq!(error.code(), tonic::Code::FailedPrecondition);
 }
 
 #[test]

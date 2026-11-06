@@ -4828,6 +4828,7 @@ impl WorkerPlugin for PendingRegistration {
     }
 }
 
+/// Shutdown cancels admitted registration and releases captured callback state.
 #[tokio::test]
 async fn worker_shutdown_cancels_active_and_queued_registration_and_drains_context() {
     let plugin = Arc::new(PendingRegistration::new(false));
@@ -4856,7 +4857,12 @@ async fn worker_shutdown_cancels_active_and_queued_registration_and_drains_conte
     );
     let code = queued.await.unwrap().unwrap_err().code();
     assert!(
-        matches!(code, tonic::Code::Cancelled | tonic::Code::Unavailable),
+        // A request admitted before shutdown is cancelled; one arriving after
+        // the admission fence sees draining or a closed transport.
+        matches!(
+            code,
+            tonic::Code::Cancelled | tonic::Code::FailedPrecondition | tonic::Code::Unavailable
+        ),
         "{code}"
     );
     assert_eq!(plugin.calls.load(Ordering::SeqCst), 1);

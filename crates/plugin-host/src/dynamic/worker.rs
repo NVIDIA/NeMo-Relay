@@ -393,49 +393,85 @@ impl Drop for WorkerPluginInstance {
 impl WorkerPluginInstance {
     /// Own one independently authenticated worker for each distinct configuration.
     fn component_worker(&self, config: Map<String, Json>) -> crate::Result<Arc<Self>> {
-        let mut workers = self.component_workers.lock().map_err(|error| {
-            PluginError::RegistrationFailed(format!("worker component lock poisoned: {error}"))
-        })?;
-        if self.teardown_started.load(Ordering::Acquire) {
-            return Err(PluginError::RegistrationFailed(
-                "worker activation is closing".into(),
-            ));
-        }
-        if let Some(worker) = workers.iter().find(|worker| worker.config == config) {
-            return Ok(worker.clone());
-        }
-        let source = self.source.as_ref().ok_or_else(|| {
-            PluginError::RegistrationFailed("worker activation has no launch settings".into())
-        })?;
-        let spec = WorkerPluginLoadSpec {
-            config,
-            ..source.spec.clone()
-        };
-        let worker = load_one_worker_plugin(
-            &spec,
-            true,
-            Some(source.manifest.clone()),
-            &source.diagnostics,
-        )?;
-        workers.push(worker.clone());
-        Ok(worker)
+        self.component_worker_with(config.clone(), || {
+            let source = self.source.as_ref().ok_or_else(|| {
+                PluginError::RegistrationFailed("worker activation has no launch settings".into())
+            })?;
+            let spec = WorkerPluginLoadSpec {
+                config,
+                ..source.spec.clone()
+            };
+            load_one_worker_plugin(
+                &spec,
+                true,
+                Some(source.manifest.clone()),
+                &source.diagnostics,
+            )
+        })
     }
 
+    /// Publish a launched worker only while admission is open, deduplicating concurrent launches.
+    fn component_worker_with(
+        &self,
+        config: Map<String, Json>,
+        launch: impl FnOnce() -> crate::Result<Arc<Self>>,
+    ) -> crate::Result<Arc<Self>> {
+        {
+            let workers = self.component_workers.lock().map_err(|error| {
+                PluginError::RegistrationFailed(format!("worker component lock poisoned: {error}"))
+            })?;
+            if self.teardown_started.load(Ordering::Acquire) {
+                return Err(PluginError::RegistrationFailed(
+                    "worker activation is closing".into(),
+                ));
+            }
+            if let Some(worker) = workers.iter().find(|worker| worker.config == config) {
+                return Ok(worker.clone());
+            }
+        }
+        // Process startup and RPCs must not hold the component cache lock.
+        let worker = launch()?;
+        let selected = {
+            let mut workers = self.component_workers.lock().map_err(|error| {
+                PluginError::RegistrationFailed(format!("worker component lock poisoned: {error}"))
+            })?;
+            if self.teardown_started.load(Ordering::Acquire) {
+                Err(PluginError::RegistrationFailed(
+                    "worker activation is closing".into(),
+                ))
+            } else if let Some(existing) = workers.iter().find(|cached| cached.config == config) {
+                Ok(existing.clone())
+            } else {
+                workers.push(worker.clone());
+                return Ok(worker);
+            }
+        };
+        let cleanup = worker.shutdown_checked();
+        if !cleanup.errors.is_empty() {
+            return Err(PluginError::RegistrationFailed(format!(
+                "unpublished worker cleanup failed: {}",
+                cleanup.errors.join("; ")
+            )));
+        }
+        selected
+    }
+
+    /// Revoke this activation and stop its children without holding the component cache lock.
     fn shutdown_checked(&self) -> DynamicPluginTeardownOutcome {
         let mut outcome = DynamicPluginTeardownOutcome::success();
         if self.teardown_started.swap(true, Ordering::AcqRel) {
             return outcome;
         }
 
-        match self.component_workers.lock() {
-            Ok(workers) => {
-                for worker in workers.iter().rev() {
-                    outcome.merge(worker.shutdown_checked());
-                }
-            }
+        let workers = match self.component_workers.lock() {
+            Ok(workers) => workers.clone(),
             Err(error) => {
-                outcome.record_error(format!("worker component lock poisoned: {error}"), false)
+                outcome.record_error(format!("worker component lock poisoned: {error}"), false);
+                Vec::new()
             }
+        };
+        for worker in workers.iter().rev() {
+            outcome.merge(worker.shutdown_checked());
         }
 
         log::info!(

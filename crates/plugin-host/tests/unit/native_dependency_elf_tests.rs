@@ -425,3 +425,37 @@ fn wholly_empty_elf_search_paths_disable_lookup_without_selecting_cwd() {
         );
     }
 }
+
+/// Capture direct loader-token imports containing parent components, including Windows verbatim paths.
+#[test]
+fn direct_elf_origin_imports_resolve_parent_components() {
+    let directory = tempfile::tempdir().unwrap();
+    let root = directory.path().canonicalize().unwrap();
+    std::fs::create_dir(root.join("plugins")).unwrap();
+    std::fs::create_dir(root.join("deps")).unwrap();
+    let dependency = elf_library(None, None, false);
+    std::fs::write(root.join("deps/libdep.so"), &dependency).unwrap();
+    for token in ["$ORIGIN", "${ORIGIN}"] {
+        let main = elf_image(
+            &[&format!("{token}/../deps/libdep.so")],
+            None,
+            false,
+            "consumer.so",
+        );
+        let expected = NativeLibraryArtifact::new(
+            PathBuf::from("plugins/consumer.so"),
+            [
+                (PathBuf::from("plugins/consumer.so"), main.clone()),
+                (PathBuf::from("deps/libdep.so"), dependency.clone()),
+            ],
+        )
+        .unwrap();
+        assert_eq!(
+            capture(&root.join("plugins/consumer.so"), &root, main)
+                .unwrap()
+                .identity(),
+            expected.identity(),
+            "{token}"
+        );
+    }
+}

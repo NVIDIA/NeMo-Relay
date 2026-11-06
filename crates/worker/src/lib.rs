@@ -2153,6 +2153,7 @@ impl PluginWorker for WorkerService {
         }))
     }
 
+    /// Reject new registrations while draining and cancel registrations already in progress.
     async fn register(
         &self,
         request: Request<RegisterRequest>,
@@ -2168,6 +2169,9 @@ impl PluginWorker for WorkerService {
         let config = configuration_object(request.config.as_ref())?;
         if request.plugin_id != self.plugin.plugin_kind() {
             return Err(Status::failed_precondition("plugin identity mismatch"));
+        }
+        if self.draining.load(Ordering::Acquire) {
+            return Err(Status::failed_precondition("worker is draining"));
         }
         let mut cancelled = self.registration_cancel.subscribe();
         let mut installed = tokio::select! {
