@@ -276,16 +276,26 @@ publish:artifactory:cargo:
     - |
       set -eu
       case "$(uname -m)" in
-        x86_64) protoc_arch=x86_64 ;;
-        aarch64) protoc_arch=aarch_64 ;;
+        x86_64)
+          protoc_arch=x86_64
+          protoc_sha256=96553041f1a91ea0efee963cb16f462f5985b4d65365f3907414c360044d8065
+          buf_sha256=fad1e38d6909bbb583a4da81d8c02a01046e2cd663bde7e337dd24277393764b
+          ;;
+        aarch64)
+          protoc_arch=aarch_64
+          protoc_sha256=6c554de11cea04c56ebf8e45b54434019b1cd85223d4bbd25c282425e306ecc2
+          buf_sha256=00eb190aa82df17f393e05b04889cc60a0b13b3259d336e21a87d5f23ab4fd26
+          ;;
         *) echo "Error: unsupported protoc architecture: $(uname -m)" >&2; exit 1 ;;
       esac
       curl -fsSL "https://github.com/protocolbuffers/protobuf/releases/download/v${NEMO_RELAY_CI_PROTOC_VERSION}/protoc-${NEMO_RELAY_CI_PROTOC_VERSION}-linux-${protoc_arch}.zip" -o /tmp/protoc.zip
+      printf '%s  %s\n' "$protoc_sha256" /tmp/protoc.zip | sha256sum --check --strict
       unzip -qo /tmp/protoc.zip 'bin/protoc' 'include/*' -d /usr/local
       protoc --version
-    - curl -fsSL "https://github.com/bufbuild/buf/releases/download/v${NEMO_RELAY_CI_BUF_VERSION}/buf-$(uname -s)-$(uname -m)" -o /usr/local/bin/buf
-    - chmod +x /usr/local/bin/buf
-    - buf --version
+      curl -fsSL "https://github.com/bufbuild/buf/releases/download/v${NEMO_RELAY_CI_BUF_VERSION}/buf-$(uname -s)-$(uname -m)" -o /tmp/buf
+      printf '%s  %s\n' "$buf_sha256" /tmp/buf | sha256sum --check --strict
+      install -m 0755 /tmp/buf /usr/local/bin/buf
+      buf --version
     - rustup toolchain install --profile minimal "${NEMO_RELAY_CI_CARGO_PUBLISH_VERSION}"
     - cargo install just --version "${NEMO_RELAY_CI_JUST_VERSION}" --locked
     - curl -LsSf https://astral.sh/uv/install.sh -o /tmp/install-uv.sh
@@ -363,7 +373,32 @@ publish:artifactory:cargo:
       )"
 
       for crate in $crates; do
-        if "$publish_cargo" info "${crate}@${version}" --registry artifactory >/dev/null 2>&1; then
+        availability="$(
+          uv run --no-project python - "$crate" "$version" <<'PY'
+      import json
+      import os
+      import sys
+      from urllib.error import HTTPError
+      from urllib.request import Request, urlopen
+
+      crate, version = sys.argv[1:]
+      # Published Relay crate names all use the four-or-more-character index layout.
+      index_path = f"{crate[:2]}/{crate[2:4]}/{crate}"
+      url = f"{os.environ['NEMO_RELAY_CI_ARTIFACTORY_CARGO_URL'].rstrip('/')}/{index_path}"
+      request = Request(url, headers={"Authorization": os.environ["CARGO_REGISTRIES_ARTIFACTORY_TOKEN"]})
+      try:
+          with urlopen(request, timeout=60) as response:
+              entries = [json.loads(line) for line in response.read().decode().splitlines() if line.strip()]
+          if not entries:
+              raise ValueError(f"Empty registry index entry for {crate}")
+          print("present" if any(entry["vers"] == version for entry in entries) else "absent")
+      except HTTPError as error:
+          if error.code != 404:
+              raise
+          print("absent")
+      PY
+        )"
+        if [ "$availability" = present ]; then
           echo "${crate} ${version} already exists in Artifactory; skipping"
           continue
         fi
