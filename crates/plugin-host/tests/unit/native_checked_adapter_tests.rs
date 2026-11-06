@@ -876,6 +876,103 @@ async fn registration_transactions_reject_late_binding_full_queues_and_cancelled
     assert!(raw.bind_component(component()).is_err());
 }
 
+/// Closing registration admission must wake the foreign factory instead of spinning on EOF.
+#[tokio::test]
+async fn closed_registration_queue_cancels_the_foreign_factory_and_preserves_its_error() {
+    let owner = HostRuntime::new("closed-registration".into()).unwrap();
+    let (sender, receive) = tokio::sync::mpsc::channel(1);
+    *owner.registration.lock().unwrap() = Some(sender);
+    owner.revoke().unwrap();
+    let cancelled = tokio_util::sync::CancellationToken::new();
+    let factory_cancelled = cancelled.clone();
+    let foreign = async move {
+        factory_cancelled.cancelled().await;
+        a::Result::RErr(a::Error::new("factory_stopped", "registration was revoked"))
+    };
+    let mut context = crate::HostPluginRegistrationContext::new();
+    let result = tokio::time::timeout(
+        std::time::Duration::from_secs(5),
+        drive_registration(
+            &mut context,
+            owner.clone(),
+            receive,
+            foreign,
+            cancelled.clone(),
+        ),
+    )
+    .await
+    .unwrap();
+    assert_eq!(
+        result.into_result().err().unwrap().code.as_str(),
+        "factory_stopped"
+    );
+    assert!(cancelled.is_cancelled());
+    owner.shutdown().await.unwrap();
+}
+
+/// A request queued in the factory's final poll must be rejected and its synchronous waiter released.
+#[tokio::test]
+async fn completed_registration_factory_releases_late_request_waiters() {
+    let owner = HostRuntime::new("completed-registration".into()).unwrap();
+    let (sender, receive) = tokio::sync::mpsc::channel(1);
+    let (reply, answered) = std::sync::mpsc::sync_channel(1);
+    let registration = a::Registration {
+        name: "late-subscriber".into(),
+        surface: a::Surface::Subscriber,
+        priority: 0,
+        break_chain: false,
+        options: abi::Json::Null,
+        callback: a::Callback_TO::from_value(
+            CallbackStateProbe {
+                dropped: Arc::new(AtomicBool::new(false)),
+                invoked: Arc::new(AtomicBool::new(false)),
+                _runtime: owner.clone(),
+            },
+            TD_Opaque,
+        ),
+    };
+    let foreign = async move {
+        sender
+            .try_send(RegistrationRequest {
+                registration,
+                reply,
+            })
+            .unwrap();
+        a::Result::ROk(a::RegisteredComponent {
+            error: ROption::RNone,
+            registrations: Default::default(),
+            component: a::Component_TO::from_value(
+                ComponentExecutor::inline("completed-registration"),
+                TD_Opaque,
+            ),
+        })
+    };
+    let mut context = crate::HostPluginRegistrationContext::new();
+    let registered = drive_registration(
+        &mut context,
+        owner.clone(),
+        receive,
+        foreign,
+        tokio_util::sync::CancellationToken::new(),
+    )
+    .await
+    .into_result()
+    .unwrap();
+    assert_eq!(
+        answered
+            .recv_timeout(std::time::Duration::from_secs(5))
+            .unwrap()
+            .into_result()
+            .unwrap_err()
+            .code
+            .as_str(),
+        "closed"
+    );
+    assert!(context.into_registrations().is_empty());
+    registered.component.shutdown().await.into_result().unwrap();
+    owner.shutdown().await.unwrap();
+}
+
 #[test]
 fn raw_registration_can_submit_callbacks_during_construction_and_polling() {
     use crate::Plugin as _;

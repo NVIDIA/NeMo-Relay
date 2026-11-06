@@ -148,6 +148,7 @@ fn elf_imports<Elf: FileHeader>(
     Ok(result)
 }
 
+/// Read the current platform's binary imports, identities, and loader search paths.
 fn imports(bytes: &[u8]) -> Result<Imports, String> {
     /// Read dependency names, search paths, and loader identity from the supported native image formats.
     fn read(bytes: &[u8]) -> Result<Imports, Box<dyn std::error::Error>> {

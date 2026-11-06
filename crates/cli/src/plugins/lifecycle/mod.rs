@@ -808,6 +808,7 @@ impl DynamicPluginActivationSnapshot {
         )
     }
 
+    /// Snapshot the runtime closure without placing copies inside source or lifecycle directories.
     fn create_with_snapshot_source_directories(
         manifest_ref: &str,
         expected_plugin_id: &str,
@@ -1173,6 +1174,18 @@ impl Drop for DynamicPluginActivationSnapshot {
     }
 }
 
+/// Assign a distinct external file destination to each canonical source path.
+fn external_snapshot_file_path(source: &Path, label: &str) -> PathBuf {
+    let identity = Sha256::digest(source.as_os_str().as_encoded_bytes())
+        .iter()
+        .map(|byte| format!("{byte:02x}"))
+        .collect::<String>();
+    PathBuf::from(format!("external-{label}"))
+        .join(identity)
+        .join(source.file_name().unwrap_or_default())
+}
+
+/// Copy a declared file while preserving dependency directories and source identity.
 fn copy_snapshot_file(
     root: &Path,
     manifest_path: &Path,
@@ -1224,8 +1237,9 @@ fn copy_snapshot_file(
             &mut Vec::new(),
         )?;
     } else {
-        fs::create_dir_all(&external).map_err(|error| CliError::Config(error.to_string()))?;
-        let destination = external.join(canonical.file_name().unwrap_or_default());
+        let destination = root.join(external_snapshot_file_path(&canonical, label));
+        fs::create_dir_all(destination.parent().expect("external file has parent"))
+            .map_err(|error| CliError::Config(error.to_string()))?;
         copy_snapshot_regular_file(&canonical, &destination, copied_files, budget, label)?;
     }
     let copied = copied_files.get(&canonical).cloned().ok_or_else(|| {
@@ -1673,6 +1687,7 @@ fn snapshot_tree_digest(root: &Path, stable_identity: bool) -> Result<String, Cl
         .collect())
 }
 
+/// Hash a manifest and its runtime closure using the same logical paths as activation snapshots.
 pub(crate) fn dynamic_plugin_runtime_closure_digest(
     manifest_ref: &str,
     environment_ref: Option<&str>,
@@ -1950,6 +1965,7 @@ fn digest_snapshot_file(
     .map_err(CliError::Config)
 }
 
+/// Record a declared file under the logical destination used by snapshot copying.
 fn collect_declared_runtime_closure_file(
     manifest_path: &Path,
     reference: &str,
@@ -1991,16 +2007,7 @@ fn collect_declared_runtime_closure_file(
             closure,
         );
     }
-    let file_name = canonical.file_name().ok_or_else(|| {
-        CliError::Config(format!(
-            "dynamic plugin {label} {} has no file name",
-            canonical.display()
-        ))
-    })?;
-    closure.record_file(
-        Path::new(&format!("external-{label}")).join(file_name),
-        canonical,
-    )
+    closure.record_file(external_snapshot_file_path(&canonical, label), canonical)
 }
 
 fn collect_runtime_closure_directory(

@@ -131,25 +131,31 @@ struct DirectState<T> {
     cancelled: AtomicU8,
     waker: AtomicWaker,
 }
+const POLLING: u8 = 0b100;
+const CANCELLATION: u8 = 0b011;
+
 impl<T: Send> DirectTask for DirectState<T> {
     /// Revoke the future without waiting on a poll that might be revoking itself.
     fn cancel(&self, component: bool) {
-        let _ = self.cancelled.compare_exchange(
-            0,
-            if component { 1 } else { 2 },
-            Ordering::AcqRel,
-            Ordering::Acquire,
-        );
-        // A callback can revoke itself during poll. Never wait on its own poll lock.
-        if let Ok(mut slot) = self.slot.try_lock() {
-            slot.finish();
+        let first = self
+            .cancelled
+            .fetch_update(Ordering::AcqRel, Ordering::Acquire, |state| {
+                (state & CANCELLATION == 0).then_some(state | if component { 1 } else { 2 })
+            });
+        // An active poll owns cleanup until it atomically clears POLLING after
+        // unlocking the slot. Self-cancellation therefore never waits on itself.
+        if let Ok(previous) = first
+            && previous & POLLING == 0
+        {
+            self.slot.lock().unwrap_or_else(|e| e.into_inner()).finish();
         }
         self.waker.wake();
     }
 }
 impl<T> DirectState<T> {
+    /// Translate the first cancellation reason into the checked ABI's cancellation or revocation error.
     fn error(&self) -> Error {
-        if self.cancelled.load(Ordering::Acquire) == 2 {
+        if self.cancelled.load(Ordering::Acquire) & CANCELLATION == 2 {
             Error::new("cancelled", "native operation was cancelled")
         } else {
             Error::new("revoked", "component is shut down")
@@ -162,34 +168,34 @@ impl<T: Send> Future for DirectFuture<T> {
     /// Poll on the caller, bind optional Tokio context, and contain originating-library panics.
     fn poll(self: Pin<&mut Self>, cx: &mut Context<'_>) -> Poll<Self::Output> {
         self.0.waker.register(cx.waker());
-        let mut slot = self.0.slot.lock().unwrap_or_else(|e| e.into_inner());
-        if self.0.cancelled.load(Ordering::Acquire) != 0 || slot.future.is_none() {
-            slot.finish();
-            return Poll::Ready(AbiResult::RErr(self.0.error()));
-        }
-        let handle = slot.runtime.as_ref().map(|runtime| runtime.handle.clone());
-        let _entered = handle.as_ref().map(Handle::enter);
-        let polled = std::panic::catch_unwind(AssertUnwindSafe(|| {
-            slot.future.as_mut().unwrap().as_mut().poll(cx)
-        }))
-        .unwrap_or_else(|_| {
-            Poll::Ready(AbiResult::RErr(Error::new(
-                "panic",
-                "native plugin future panicked",
-            )))
-        });
-        if self.0.cancelled.load(Ordering::Acquire) != 0 {
-            slot.finish();
-            return Poll::Ready(AbiResult::RErr(self.0.error()));
-        }
-        if polled.is_ready() {
-            slot.finish();
-        }
-        // Cancellation can race the last flag check while this poll owns the
-        // slot. Hand the lock back before checking again so either the canceller
-        // or this poll destroys the retained future without needing another poll.
-        drop(slot);
-        if self.0.cancelled.load(Ordering::Acquire) != 0 {
+        let polled = {
+            let mut slot = self.0.slot.lock().unwrap_or_else(|e| e.into_inner());
+            let previous = self.0.cancelled.fetch_or(POLLING, Ordering::AcqRel);
+            if previous & CANCELLATION != 0 || slot.future.is_none() {
+                slot.finish();
+                Poll::Ready(AbiResult::RErr(self.0.error()))
+            } else {
+                let handle = slot.runtime.as_ref().map(|runtime| runtime.handle.clone());
+                let _entered = handle.as_ref().map(Handle::enter);
+                let polled = std::panic::catch_unwind(AssertUnwindSafe(|| {
+                    slot.future.as_mut().unwrap().as_mut().poll(cx)
+                }))
+                .unwrap_or_else(|_| {
+                    Poll::Ready(AbiResult::RErr(Error::new(
+                        "panic",
+                        "native plugin future panicked",
+                    )))
+                });
+                if polled.is_ready() {
+                    slot.finish();
+                }
+                polled
+            }
+        };
+        // This RMW and the first cancellation select the cleanup owner. If
+        // cancellation wins, this poll finishes; otherwise the canceller locks
+        // the now-unlocked slot itself. A retained Pending waiter is irrelevant.
+        if self.0.cancelled.fetch_and(!POLLING, Ordering::AcqRel) & CANCELLATION != 0 {
             self.0
                 .slot
                 .lock()

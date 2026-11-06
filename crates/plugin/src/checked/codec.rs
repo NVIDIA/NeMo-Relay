@@ -5,9 +5,11 @@ use nemo_relay_types::codec::response::AnnotatedLlmResponse;
 #[derive(Clone)]
 pub struct RequestCodec(Arc<a::CodecBox>);
 impl RequestCodec {
+    /// Decode a request through the invocation's live request codec capability.
     pub fn decode(&self, request: &LlmRequest) -> Result<AnnotatedLlmRequest> {
         decode(local(self.0.decode(encode(request)?))?)
     }
+    /// Encode an annotated request while retaining fields from the original provider request.
     pub fn encode(
         &self,
         annotated: &AnnotatedLlmRequest,
@@ -19,6 +21,7 @@ impl RequestCodec {
 #[derive(Clone)]
 pub struct ResponseCodec(Arc<a::CodecBox>);
 impl ResponseCodec {
+    /// Decode a provider response through the invocation's live response codec capability.
     pub fn decode(&self, response: &Json) -> Result<AnnotatedLlmResponse> {
         decode(local(self.0.decode(encode(response)?))?)
     }
@@ -55,6 +58,7 @@ pub struct LlmSanitizeRequestContext<'a> {
     _borrow: PhantomData<&'a ()>,
 }
 impl LlmSanitizeRequestContext<'_> {
+    /// Bind request codec identity and capabilities to one sanitizer invocation.
     pub(super) fn new(value: ROption<a::CodecBox>) -> Result<Self> {
         let (codec, resolved) = request(value)?;
         Ok(Self {
@@ -73,6 +77,7 @@ pub struct LlmSanitizeResponseContext<'a> {
     _borrow: PhantomData<&'a ()>,
 }
 impl LlmSanitizeResponseContext<'_> {
+    /// Bind response codec identity and capabilities to one sanitizer invocation.
     pub(super) fn new(value: ROption<a::CodecBox>) -> Result<Self> {
         let (codec, resolved) = response(value)?;
         Ok(Self {

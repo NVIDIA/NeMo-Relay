@@ -54,6 +54,7 @@ fn err(value: impl ToString) -> FlowError {
 fn encode(value: impl Serialize) -> Result<abi::Json> {
     serde_json::to_value(value).map(into_abi).map_err(err)
 }
+/// Decode a host value from the checked JSON boundary, preserving conversion failures.
 fn decode<T: DeserializeOwned>(value: abi::Json) -> Result<T> {
     serde_json::from_value(from_abi(value).map_err(err)?).map_err(err)
 }
@@ -111,6 +112,7 @@ struct CallbackOwner {
     value: Mutex<Option<Arc<a::CallbackBox>>>,
 }
 impl CallbackOwner {
+    /// Admit a foreign call and retain its callback until the call returns.
     fn with<T>(&self, owner: &HostRuntime, invoke: impl FnOnce(&a::CallbackBox) -> T) -> Result<T> {
         let _call = local(owner.executor.enter_sync())?;
         owner.ensure()?;
@@ -192,6 +194,7 @@ impl HostRuntime {
             Err(err("native runtime capability is revoked"))
         }
     }
+    /// Retain a revocable foreign callback while this component's runtime authority is live.
     fn own_callback(&self, callback: a::CallbackBox) -> Result<Arc<CallbackOwner>> {
         let callback = Arc::new(CallbackOwner {
             value: Mutex::new(Some(Arc::new(callback))),
@@ -592,8 +595,46 @@ struct RegistrationRequest {
     registration: a::Registration,
     reply: std::sync::mpsc::SyncSender<a::Result<()>>,
 }
+
+/// Apply registration requests until the foreign factory settles, canceling it if admission closes.
+async fn drive_registration(
+    ctx: &mut dyn crate::PluginRegistrationContext,
+    runtime: Arc<HostRuntime>,
+    mut receive: tokio::sync::mpsc::Receiver<RegistrationRequest>,
+    foreign: impl Future<Output = a::Result<a::RegisteredComponent>>,
+    cancelled: tokio_util::sync::CancellationToken,
+) -> a::Result<a::RegisteredComponent> {
+    tokio::pin!(foreign);
+    let mut open = true;
+    let registered = loop {
+        tokio::select! {
+            biased;
+            request = receive.recv(), if open => match request {
+                Some(request) => {
+                    let result = apply_registration(ctx, request.registration, runtime.clone())
+                        .map_err(|error| a::Error::new("registration", error.to_string())).into();
+                    let _ = request.reply.send(result);
+                }
+                None => {
+                    open = false;
+                    cancelled.cancel();
+                }
+            },
+            result = &mut foreign => break result,
+        }
+    };
+    receive.close();
+    while let Ok(request) = receive.try_recv() {
+        let _ = request.reply.send(a::Result::RErr(a::Error::new(
+            "closed",
+            "native registration transaction has ended",
+        )));
+    }
+    registered
+}
 struct RuntimeProxy(Arc<HostRuntime>);
 impl a::Runtime for RuntimeProxy {
+    /// Admit a synchronous runtime operation and contain host-side panics at the ABI boundary.
     fn call_sync(&self, operation: RString, args: abi::Json) -> a::Result<abi::Json> {
         boundary(
             std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
@@ -854,6 +895,7 @@ impl a::Codec for Codec {
             }
         })
     }
+    /// Encode an annotated request with its original provider fields through a live codec capability.
     fn encode(&self, annotated: abi::Json, original: abi::Json) -> a::Result<abi::Json> {
         guarded(|| {
             self.ensure_active()?;
@@ -921,6 +963,7 @@ fn invocation(
         InvocationLifetime { active },
     )
 }
+/// Build an admitted synchronous gate proxy that fails open on callback errors.
 fn gate_callback(
     callback: Arc<CallbackOwner>,
     owner: Arc<HostRuntime>,
@@ -1212,6 +1255,7 @@ struct Call {
     response: Option<LlmResponseContext>,
     next: Option<Next>,
 }
+/// Invoke checked middleware with scoped runtime authority and optional downstream continuation.
 async fn unary<T: DeserializeOwned>(
     owner: Arc<HostRuntime>,
     callback: Arc<CallbackOwner>,
@@ -1878,6 +1922,7 @@ impl CheckedPlugin {
     ) -> crate::Result<Self> {
         Self::with_observer(library, diagnostics, read, Default::default())
     }
+    /// Create a fresh plugin object tied to resident code and the activation's diagnostic service.
     pub(super) fn with_observer(
         library: &super::native_library::CheckedNativeLibrary,
         diagnostics: nemo_relay_diagnostics::Diagnostics,
@@ -1997,7 +2042,7 @@ impl crate::Plugin for CheckedPlugin {
                 ctx.qualify_name(""),
                 Box::new(move || cleanup.close()),
             ));
-            let (sender, mut receive) = tokio::sync::mpsc::channel::<RegistrationRequest>(32);
+            let (sender, receive) = tokio::sync::mpsc::channel::<RegistrationRequest>(32);
             *runtime
                 .registration
                 .lock()
@@ -2009,6 +2054,7 @@ impl crate::Plugin for CheckedPlugin {
             // or polling this future. Keep that work off the transaction driver.
             let cancelled = tokio_util::sync::CancellationToken::new();
             let guard = cancelled.clone().drop_guard();
+            let cancellation = cancelled.clone();
             let work = runtime.executor.execute_blocking(move || {
                 let _binding = binding.context.enter_thread_binding(binding.explicit);
                 tokio::runtime::Handle::current().block_on(async move {
@@ -2023,19 +2069,7 @@ impl crate::Plugin for CheckedPlugin {
                 let _guard = guard;
                 work.await
             };
-            tokio::pin!(foreign);
-            let registered = loop {
-                tokio::select! {
-                    biased;
-                    request=receive.recv()=>{
-                        if let Some(request)=request{
-                            let result=apply_registration(ctx,request.registration,runtime.clone()).map_err(|e|a::Error::new("registration",e.to_string())).into();
-                            let _=request.reply.send(result);
-                        }
-                    }
-                    result=&mut foreign=>break local(result),
-                }
-            };
+            let registered = local(drive_registration(ctx, runtime.clone(), receive, foreign, cancellation).await);
             runtime
                 .registration
                 .lock()

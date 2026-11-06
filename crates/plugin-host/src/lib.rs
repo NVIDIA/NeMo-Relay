@@ -1542,6 +1542,7 @@ pub(crate) async fn initialize_plugins_exact_for_host(
     .await
 }
 
+/// Validate off the caller's executor, then replace component registrations with rollback on failure.
 async fn initialize_plugins_exact_inner(
     config: PluginConfig,
     rollback_failures: Option<Arc<Mutex<Vec<String>>>>,

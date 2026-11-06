@@ -11,11 +11,13 @@ from pathlib import Path
 
 
 def run(arguments: list[str], root: Path, environment: dict[str, str]) -> None:
+    """Print and run a fixture check with the selected toolchain environment."""
     print("+ " + " ".join(arguments), flush=True)
     subprocess.run(arguments, cwd=root, env=environment, check=True)
 
 
 def main() -> None:
+    """Build fixtures with two compilers and cross-check unchanged binaries against their hosts."""
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("toolchain", help="Installed comparison toolchain, such as 1.94.0")
     args = parser.parse_args()

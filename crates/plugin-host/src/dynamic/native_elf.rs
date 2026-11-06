@@ -146,6 +146,7 @@ const PLATFORM_MARKER: &str = "/__nemo_relay_loader_platform__/";
 const END_MARKER: &str = "/__nemo_relay_loader_end__";
 
 #[cfg(any(target_os = "linux", test))]
+/// Decode loader token expansions and reject a missing or empty library-directory token.
 fn parse_tokens(debug: &str) -> Result<Tokens, String> {
     let value = |marker: &str| {
         debug

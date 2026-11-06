@@ -49,6 +49,7 @@ fn encode<T: Serialize>(value: T) -> Result<abi::Json> {
         .map(into_abi)
         .map_err(|e| e.to_string())
 }
+/// Decode a typed SDK value from the checked JSON boundary.
 fn decode<T: DeserializeOwned>(value: abi::Json) -> Result<T> {
     serde_json::from_value(from_abi(value)?).map_err(|e| e.to_string())
 }
@@ -85,6 +86,7 @@ pub trait Plugin: Send + Sync + 'static {
     fn executor_config(&self) -> Option<NativeExecutorConfig> {
         None
     }
+    /// Resolve optional shared Tokio support from plugin defaults and component executor settings.
     fn executor_config_for_component(
         &self,
         config: &Map<String, Json>,
@@ -263,6 +265,7 @@ impl a::Callback for Callback {
         ))
     }
 
+    /// Poll a typed tool callback under its invocation scope and preserve canonical results and marks.
     fn invoke_tool(
         &self,
         invocation: a::Invocation,
@@ -310,6 +313,7 @@ impl a::Callback for Callback {
         ))
     }
 
+    /// Admit a synchronous callback and restore its invocation scope and optional Tokio context.
     fn invoke_sync(&self, invocation: a::Invocation) -> a::Result<abi::Json> {
         let result = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
             let _call = local(self.executor.enter_sync())?;
@@ -323,6 +327,7 @@ impl a::Callback for Callback {
         .unwrap_or_else(|_| Err("native synchronous callback panicked".into()));
         boundary(result)
     }
+    /// Open and track a user stream under its captured scope for component-owned cleanup.
     fn open_stream(
         &self,
         invocation: a::Invocation,
@@ -593,6 +598,7 @@ impl PluginContext<'_> {
         self.task_spawner().spawn(future)
     }
 
+    /// Register a synchronous event subscriber owned by this component.
     pub fn register_subscriber<F: Fn(&Event) + Send + Sync + 'static>(
         &mut self,
         name: &str,
@@ -616,6 +622,7 @@ impl PluginContext<'_> {
             },
         )
     }
+    /// Register a synchronous gate that can disable selected middleware registrations.
     pub fn register_conditional_middleware_guardrail<F>(
         &mut self,
         name: &str,
@@ -648,6 +655,7 @@ impl PluginContext<'_> {
 }
 
 impl PluginContext<'_> {
+    /// Register an async callback that adds metadata to emitted events.
     pub fn register_event_metadata_injector<F, Fut>(
         &mut self,
         name: &str,
@@ -675,6 +683,7 @@ impl PluginContext<'_> {
             }),
         )
     }
+    /// Register an async sanitizer for observable fields on mark events.
     pub fn register_mark_sanitize_guardrail<F, Fut>(
         &mut self,
         name: &str,
@@ -713,6 +722,7 @@ impl PluginContext<'_> {
             }),
         )
     }
+    /// Register an async sanitizer for observable fields on scope-start events.
     pub fn register_scope_sanitize_start_guardrail<F, Fut>(
         &mut self,
         name: &str,
@@ -751,6 +761,7 @@ impl PluginContext<'_> {
             }),
         )
     }
+    /// Register an async sanitizer for observable fields on scope-end events.
     pub fn register_scope_sanitize_end_guardrail<F, Fut>(
         &mut self,
         name: &str,
@@ -789,6 +800,7 @@ impl PluginContext<'_> {
             }),
         )
     }
+    /// Register an async sanitizer for tool request data recorded in events.
     pub fn register_tool_sanitize_request_guardrail<F, Fut>(
         &mut self,
         name: &str,
@@ -816,6 +828,7 @@ impl PluginContext<'_> {
             }),
         )
     }
+    /// Register an async sanitizer for tool response data recorded in events.
     pub fn register_tool_sanitize_response_guardrail<F, Fut>(
         &mut self,
         name: &str,
@@ -843,6 +856,7 @@ impl PluginContext<'_> {
             }),
         )
     }
+    /// Register an async guardrail that allows or blocks a tool call.
     pub fn register_tool_conditional_execution_guardrail<F, Fut>(
         &mut self,
         name: &str,
@@ -870,6 +884,7 @@ impl PluginContext<'_> {
             }),
         )
     }
+    /// Register an async intercept that can rewrite a tool's execution arguments.
     pub fn register_tool_request_intercept<F, Fut>(
         &mut self,
         name: &str,
@@ -898,6 +913,7 @@ impl PluginContext<'_> {
             }),
         )
     }
+    /// Register an async tool execution wrapper with repeatable downstream continuations.
     pub fn register_tool_execution_intercept<F, Fut>(
         &mut self,
         name: &str,
@@ -933,6 +949,7 @@ impl PluginContext<'_> {
             }),
         )
     }
+    /// Register an async guardrail that allows or blocks an LLM call.
     pub fn register_llm_conditional_execution_guardrail<F, Fut>(
         &mut self,
         name: &str,
@@ -960,6 +977,7 @@ impl PluginContext<'_> {
             }),
         )
     }
+    /// Register an async intercept that can rewrite or complete an LLM request.
     pub fn register_llm_request_intercept<F, Fut>(
         &mut self,
         name: &str,
@@ -998,6 +1016,7 @@ impl PluginContext<'_> {
             }),
         )
     }
+    /// Register an async sanitizer for observable LLM request data with its request codec context.
     pub fn register_llm_sanitize_request_guardrail<F, Fut>(
         &mut self,
         name: &str,
@@ -1029,6 +1048,7 @@ impl PluginContext<'_> {
             }),
         )
     }
+    /// Register an async sanitizer for observable LLM responses with their response codec context.
     pub fn register_llm_sanitize_response_guardrail<F, Fut>(
         &mut self,
         name: &str,
@@ -1060,6 +1080,7 @@ impl PluginContext<'_> {
             }),
         )
     }
+    /// Register an async LLM execution wrapper with live codec capabilities and downstream continuation.
     pub fn register_llm_execution_intercept<F, Fut>(
         &mut self,
         name: &str,
@@ -1098,6 +1119,7 @@ impl PluginContext<'_> {
             }),
         )
     }
+    /// Register an async LLM stream wrapper whose streams close with the owning component.
     pub fn register_llm_stream_execution_intercept<F, Fut>(
         &mut self,
         name: &str,
@@ -1155,6 +1177,7 @@ impl PluginContext<'_> {
 #[derive(Clone)]
 pub struct ToolNext(Arc<a::ContinuationBox>);
 impl ToolNext {
+    /// Call downstream tool execution and retain both its application result and annotation.
     pub async fn call(&self, args: Json) -> Result<ToolExecutionResult> {
         let value = local(self.0.call_tool(into_abi(args)).await)?;
         Ok(ToolExecutionResult {
@@ -1172,6 +1195,7 @@ impl ToolNext {
 #[derive(Clone)]
 pub struct LlmNext(Arc<a::ContinuationBox>);
 impl LlmNext {
+    /// Invoke downstream LLM execution with the supplied request.
     pub async fn call(&self, request: LlmRequest) -> Result<Json> {
         from_abi(local(self.0.call(encode(request)?).await)?)
     }
@@ -1184,6 +1208,7 @@ pub struct LlmStreamNext {
     scope: Arc<a::ScopeBox>,
 }
 impl LlmStreamNext {
+    /// Open a component-owned downstream LLM stream for the supplied request.
     pub async fn call(&self, request: LlmRequest) -> Result<LlmJsonAsyncStream> {
         let stream = local(self.next.open_stream(encode(request)?).await)?;
         let source = SourceStream::new(stream, &self.executor, self.scope.clone(), &self.sources);
@@ -1340,6 +1365,7 @@ impl<P: Plugin> a::Plugin for Adapter<P> {
         }))
         .unwrap_or(false)
     }
+    /// Convert author validation results to ABI diagnostics and report conversion failures or panics.
     fn validate(&self, config: abi::Json) -> RVec<a::ConfigDiagnostic> {
         let result = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
             let config = decode(config)?;
@@ -1647,6 +1673,7 @@ struct RawCallback {
     callback: Arc<RawSync>,
     executor: ComponentExecutor,
 }
+/// Admit a raw synchronous callback and restore its invocation scope and optional Tokio context.
 fn raw_sync(
     executor: &ComponentExecutor,
     callback: &RawSync,

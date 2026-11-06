@@ -62,6 +62,7 @@ impl PluginRuntime {
             self.diagnostic_state.clone(),
         )
     }
+    /// Serialize a runtime operation and decode the host's checked response.
     pub(super) fn call<T: DeserializeOwned>(
         &self,
         operation: &str,
@@ -81,6 +82,7 @@ impl PluginRuntime {
     pub fn scope_stack_active(&self) -> bool {
         self.call("scope.active", Json::Null).unwrap_or(false)
     }
+    /// Get the current scope handle or fail if the host reports no current scope.
     pub fn current_scope(&self) -> Result<ScopeHandle<'_>> {
         Ok(ScopeHandle {
             value: self.call("scope.current", Json::Null)?,
@@ -132,6 +134,7 @@ impl PluginRuntime {
             json!({"handle":handle.value,"output":output,"metadata":metadata}),
         )
     }
+    /// Push a scope and return a guard that closes it when dropped.
     pub fn scope(
         &self,
         name: &str,
@@ -223,6 +226,7 @@ impl PluginRuntime {
         self.call("mark", json!({"name":name,"data":data,"metadata":metadata,"parent":options.parent.map(|p| &p.value),
             "timestamp":timestamp,"data_schema":options.data_schema,"severity":options.severity}))
     }
+    /// Validate metric measurements and emit them using Relay's reserved metric schema.
     pub fn emit_metric(
         &self,
         name: &str,
@@ -261,18 +265,21 @@ impl PluginRuntime {
             json!({"level":level,"target":target,"message":message,"fields":fields}),
         )
     }
+    /// Create an isolated host-owned scope stack whose handle releases it when dropped.
     pub fn create_scope_stack(&self) -> Result<ScopeStack<'_>> {
         Ok(ScopeStack {
             runtime: self,
             id: self.call("stack.create", Json::Null)?,
         })
     }
+    /// Capture this thread's scope binding so it can be restored later.
     pub fn capture_scope_stack_thread(&self) -> Result<ScopeStackBinding<'_>> {
         Ok(ScopeStackBinding {
             runtime: self,
             id: Some(self.call("stack.capture", Json::Null)?),
         })
     }
+    /// Install an isolated stack until the returned guard restores the previous thread binding.
     pub fn bind_scope_stack_thread<'a>(
         &'a self,
         stack: &'a ScopeStack<'a>,
@@ -283,6 +290,7 @@ impl PluginRuntime {
             previous: Some(previous),
         })
     }
+    /// Register a revocable synchronous gate scoped to this component's lifetime.
     pub fn register_conditional_middleware_guardrail<F>(
         &self,
         name: &str,
@@ -375,6 +383,7 @@ impl ScopeStack<'_> {
     pub fn set_thread(&self) -> Result<()> {
         self.runtime.call("stack.set", &self.id)
     }
+    /// Run a synchronous closure with this stack selected, then restore the previous thread binding.
     pub fn with_current<F, T>(&self, f: F) -> Result<T>
     where
         F: FnOnce() -> Result<T>,
@@ -441,6 +450,7 @@ impl<F: Fn(&BTreeSet<RuntimeRegistrationKind>, &str) -> Option<String> + Send + 
     ) -> FfiFuture<a::Result<a::ToolExecutionOutcome>> {
         async { a::Result::RErr(failure("gate cannot execute tools")) }.into_ffi()
     }
+    /// Hold component admission during a synchronous gate call and contain author panics.
     fn invoke_sync(&self, i: a::Invocation) -> a::Result<abi::Json> {
         boundary(
             std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {

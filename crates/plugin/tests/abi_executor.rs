@@ -470,3 +470,50 @@ fn cancellation_racing_a_pending_poll_releases_retained_waiters() {
         .into_result()
         .unwrap();
 }
+
+/// Cancellation must return during a poll while cleanup retains admission until that poll exits.
+#[test]
+fn cancellation_during_poll_hands_cleanup_back_without_waiting_on_the_poll_lock() {
+    let executor = ComponentExecutor::inline("cancel-active-poll");
+    let dropped = Arc::new(AtomicBool::new(false));
+    let probe = Dropped(dropped.clone());
+    let (entered, ready) = std::sync::mpsc::channel();
+    let (release, resume) = std::sync::mpsc::channel();
+    let (mut future, cancellation) = executor.execute_direct_tracked(async move {
+        let _probe = probe;
+        futures::future::poll_fn(move |_| {
+            entered.send(()).unwrap();
+            resume.recv().unwrap();
+            std::task::Poll::<()>::Pending
+        })
+        .await;
+        AbiResult::ROk(())
+    });
+    let poller = std::thread::spawn(move || {
+        let waker = futures::task::noop_waker();
+        let mut context = std::task::Context::from_waker(&waker);
+        let _ = std::pin::Pin::new(&mut future).poll(&mut context);
+        future
+    });
+    ready.recv_timeout(Duration::from_secs(5)).unwrap();
+    let (cancelled, done) = std::sync::mpsc::channel();
+    let canceller = std::thread::spawn(move || {
+        cancellation.cancel();
+        cancelled.send(()).unwrap();
+    });
+    let returned_during_poll = done.recv_timeout(Duration::from_secs(2)).is_ok();
+    let owned_during_poll = executor.active_tasks();
+    let dropped_during_poll = dropped.load(Ordering::Acquire);
+    release.send(()).unwrap();
+    canceller.join().unwrap();
+    let retained = poller.join().unwrap();
+    assert!(returned_during_poll);
+    assert_eq!(owned_during_poll, 1);
+    assert!(!dropped_during_poll);
+    assert!(dropped.load(Ordering::Acquire));
+    assert_eq!(executor.active_tasks(), 0);
+    drop(retained);
+    futures::executor::block_on(executor.shutdown())
+        .into_result()
+        .unwrap();
+}

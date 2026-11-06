@@ -652,6 +652,7 @@ fn make_global_bundle_readable(_managed: &Path, _final_dir: &Path) -> Result<(),
     Ok(())
 }
 
+/// Require declared artifacts, schemas, and signatures to resolve inside the package bundle.
 fn validate_bundle_paths(manifest: &DynamicPluginManifest, bundle: &Path) -> Result<(), CliError> {
     let check = |value: &str, directory: bool| -> Result<(), CliError> {
         let path = Path::new(value);

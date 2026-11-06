@@ -328,6 +328,7 @@ fn verify_authenticity(
     verify_artifact_signature(manifest_ref, artifact_bytes, signature, policy)
 }
 
+/// Apply host attestation policy to exact artifact bytes and detached signature evidence.
 pub(super) fn verify_artifact_signature(
     manifest_ref: &str,
     artifact_bytes: &[u8],

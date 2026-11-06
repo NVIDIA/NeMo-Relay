@@ -1841,6 +1841,73 @@ fn activation_snapshot_retains_native_dependency_signature_evidence() {
     );
 }
 
+/// External signatures with equal filenames keep separate captured bytes and closure identities.
+#[test]
+fn activation_snapshot_distinguishes_external_signature_sources_with_equal_names() {
+    let temp = tempfile::tempdir().unwrap();
+    let directory = temp.path().join("plugin");
+    let signatures = temp.path().join("signatures");
+    for path in [
+        &directory,
+        &signatures.join("main"),
+        &signatures.join("dependency"),
+    ] {
+        std::fs::create_dir_all(path).unwrap();
+    }
+    let manifest = write_native_dynamic_manifest(&directory, "acme.distinct-signatures");
+    let main_signature = signatures.join("main/plugin.sig");
+    let dependency_signature = signatures.join("dependency/plugin.sig");
+    std::fs::write(&main_signature, b"main signature").unwrap();
+    std::fs::write(&dependency_signature, b"dependency signature").unwrap();
+    std::fs::write(directory.join("helper.so"), b"dependency").unwrap();
+    let text = std::fs::read_to_string(&manifest).unwrap().replace(
+        "[integrity]",
+        "[integrity]\nsignature = \"../signatures/main/plugin.sig\"",
+    );
+    let digest = Sha256::digest(b"dependency")
+        .iter()
+        .map(|byte| format!("{byte:02x}"))
+        .collect::<String>();
+    std::fs::write(&manifest, format!("{text}\n[integrity.dependencies.\"helper.so\"]\nsha256 = \"sha256:{digest}\"\nsignature = \"../signatures/dependency/plugin.sig\"\n")).unwrap();
+    let snapshot = DynamicPluginActivationSnapshot::create(
+        manifest.to_str().unwrap(),
+        "acme.distinct-signatures",
+        DynamicPluginKind::RustDynamic,
+        None,
+        &crate::plugins::policy::DynamicPluginHostPolicy::default(),
+    )
+    .unwrap();
+    let (captured, _) =
+        DynamicPluginManifest::load_from_path(&snapshot.activation_manifest).unwrap();
+    let integrity = captured.integrity.unwrap();
+    let main_copy = integrity.signature.unwrap();
+    let dependency_copy = integrity.dependencies["helper.so"]
+        .signature
+        .as_ref()
+        .unwrap();
+    assert_ne!(&main_copy, dependency_copy);
+    assert_eq!(std::fs::read(&main_copy).unwrap(), b"main signature");
+    assert_eq!(
+        std::fs::read(dependency_copy).unwrap(),
+        b"dependency signature"
+    );
+    assert_eq!(
+        snapshot.closure_digest(),
+        dynamic_plugin_runtime_closure_digest(manifest.to_str().unwrap(), None).unwrap()
+    );
+    std::fs::write(&main_signature, b"changed main signature").unwrap();
+    std::fs::write(&dependency_signature, b"changed dependency signature").unwrap();
+    assert_eq!(std::fs::read(main_copy).unwrap(), b"main signature");
+    assert_eq!(
+        std::fs::read(dependency_copy).unwrap(),
+        b"dependency signature"
+    );
+    assert_ne!(
+        snapshot.closure_digest(),
+        dynamic_plugin_runtime_closure_digest(manifest.to_str().unwrap(), None).unwrap()
+    );
+}
+
 #[test]
 fn python_snapshot_contract_requires_environment_and_trusted_source_digest() {
     let temp = tempfile::tempdir().unwrap();

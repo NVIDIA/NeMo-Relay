@@ -61,6 +61,7 @@ def set_version(root: Path, version: str) -> None:
 
 
 def main() -> None:
+    """Dispatch interface version inspection, validation, or updates from the command line."""
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("action", choices=["version", "check", "set"])
     parser.add_argument("version", nargs="?")

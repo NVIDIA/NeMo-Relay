@@ -383,6 +383,7 @@ impl NativeDiagnostics {
             }
         })
     }
+    /// Release a live component diagnostic registration identified by its session token.
     fn close(&self, token: u64) -> Result<()> {
         self.with(|a| {
             let session = a.session.as_mut().ok_or(Error::Closed)?;

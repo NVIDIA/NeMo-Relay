@@ -15,6 +15,7 @@ from pathlib import Path
 
 
 def command(args, cwd, *, capture=False):
+    """Run a logged benchmark command, optionally returning its captured standard output."""
     print("+ " + " ".join(map(str, args)), flush=True)
     return subprocess.run(
         list(map(str, args)), cwd=cwd, check=True, text=True, stdout=subprocess.PIPE if capture else None
@@ -22,6 +23,7 @@ def command(args, cwd, *, capture=False):
 
 
 def prepare(source, directory):
+    """Build an isolated host and plugin from one checkout and return their run metadata."""
     checked = "nemo-relay-plugin-abi" in (source / "crates/plugin/Cargo.toml").read_text()
     directory.mkdir(parents=True, exist_ok=True)
     (directory / "Cargo.toml").write_text("""[workspace]
@@ -113,6 +115,7 @@ library = {json.dumps(str(library))}
 
 
 def report(data):
+    """Validate matching benchmark scenarios and summarize median timings and allocation counts."""
     rows = {}
     expected = {
         (p, m, s)
@@ -172,6 +175,7 @@ def report(data):
 
 
 def main():
+    """Compare two source checkouts through production native middleware and save the results."""
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("baseline", type=Path, help="Source checkout to compare")
     parser.add_argument("--output", type=Path, default=Path("target/native-plugin-benchmark"))
