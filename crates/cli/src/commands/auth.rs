@@ -10,7 +10,7 @@ use clap::{Args, Subcommand, ValueEnum};
 use super::serve::ServerArgs;
 use crate::configuration::GatewayConfig;
 use crate::error::CliError;
-use crate::oidc::OidcSource;
+use crate::oidc::{Logout, OidcSource, Revocation};
 
 #[derive(Debug, Clone, Args)]
 pub(crate) struct AuthCommand {
@@ -20,8 +20,8 @@ pub(crate) struct AuthCommand {
 
 #[derive(Debug, Clone, Subcommand)]
 pub(crate) enum AuthSubcommand {
-    /// Sign in to the configured OpenID Connect provider with a code shown in the terminal.
-    Login(ProviderArgs),
+    /// Sign in to the configured OpenID Connect provider in a browser.
+    Login(LoginArgs),
     /// Print a current access token, refreshing it near expiry. For scripts; the gateway reads
     /// the sign-in itself.
     Token(ProviderArgs),
@@ -33,6 +33,23 @@ pub(crate) enum AuthSubcommand {
 pub(crate) enum ProviderArg {
     Openai,
     Anthropic,
+}
+
+#[derive(Debug, Clone, Default, Args)]
+pub(crate) struct LoginArgs {
+    #[command(flatten)]
+    pub(crate) provider: ProviderArgs,
+    /// Print the sign-in address instead of opening a browser.
+    #[arg(long, conflicts_with = "device")]
+    pub(crate) no_browser: bool,
+    /// Loopback port for the browser redirect, for example one forwarded over SSH. A free port
+    /// is picked by default.
+    #[arg(long, default_value_t = 0, conflicts_with = "device")]
+    pub(crate) callback_port: u16,
+    /// Sign in with a code entered on the issuer's own page (OAuth device authorization) instead
+    /// of the browser redirect. It cannot carry consent restrictions.
+    #[arg(long)]
+    pub(crate) device: bool,
 }
 
 /// Without flags, the provider comes from `[upstream.openai_oidc]` or
@@ -61,8 +78,13 @@ pub(super) async fn execute(
     let load = || configured(server);
     match command.command {
         AuthSubcommand::Login(args) => {
-            let source = select_source(args, load)?;
-            crate::oidc::login(&dir, &source, |prompt| println!("{prompt}")).await?;
+            let source = select_source(args.provider, load)?;
+            let method = if args.device {
+                crate::oidc::LoginMethod::Device
+            } else {
+                crate::oidc::browser_method(!args.no_browser, args.callback_port)
+            };
+            crate::oidc::login(&dir, &source, method, |prompt| println!("{prompt}")).await?;
             println!("Signed in to {}.", source.issuer);
         }
         AuthSubcommand::Token(args) => {
@@ -72,10 +94,21 @@ pub(super) async fn execute(
         }
         AuthSubcommand::Logout(args) => {
             let source = select_source(args, load)?;
-            if crate::oidc::logout(&dir, &source).await? {
-                println!("Removed the sign-in for {}.", source.issuer);
-            } else {
-                println!("No sign-in is stored for {}.", source.issuer);
+            match crate::oidc::logout(&dir, &source).await? {
+                Logout::NotSignedIn => println!("No sign-in is stored for {}.", source.issuer),
+                Logout::Removed(Revocation::Confirmed) => println!(
+                    "Removed the sign-in for {} and revoked it at the issuer.",
+                    source.issuer
+                ),
+                Logout::Removed(Revocation::Unsupported) => {
+                    println!("Removed the sign-in for {}.", source.issuer);
+                }
+                Logout::Removed(Revocation::Failed(reason)) => {
+                    return Err(CliError::Config(format!(
+                        "removed the sign-in for {}, but the issuer did not confirm revoking it ({reason}); it stays valid until it expires",
+                        source.issuer
+                    )));
+                }
             }
         }
     }

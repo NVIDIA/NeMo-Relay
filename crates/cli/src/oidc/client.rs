@@ -9,6 +9,7 @@ use http::header::{ACCEPT, CONTENT_TYPE};
 use percent_encoding::{NON_ALPHANUMERIC, utf8_percent_encode};
 use serde::Deserialize;
 
+use super::browser::{self, BrowserApproval};
 use super::session::Session;
 use super::{Clock, HTTP_TIMEOUT, OidcSource, auth_error, login_required, now_secs};
 use crate::error::CliError;
@@ -22,7 +23,18 @@ const SLOW_DOWN_SECS: u64 = 5;
 struct Discovery {
     issuer: String,
     token_endpoint: String,
+    authorization_endpoint: Option<String>,
     device_authorization_endpoint: Option<String>,
+    revocation_endpoint: Option<String>,
+}
+
+/// What the issuer said to a revocation request.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub(crate) enum Revocation {
+    Confirmed,
+    /// The issuer publishes no revocation endpoint.
+    Unsupported,
+    Failed(String),
 }
 
 #[derive(Deserialize)]
@@ -67,7 +79,9 @@ pub(crate) struct OidcClient {
     issuer: String,
     client_id: String,
     pub(super) token_endpoint: String,
+    authorization_endpoint: Option<String>,
     device_endpoint: Option<String>,
+    revocation_endpoint: Option<String>,
 }
 
 impl OidcClient {
@@ -93,7 +107,9 @@ impl OidcClient {
         }
         // Endpoints on another origin could send the refresh token to an unintended host.
         let endpoints = std::iter::once(&discovery.token_endpoint)
-            .chain(discovery.device_authorization_endpoint.as_ref());
+            .chain(discovery.authorization_endpoint.as_ref())
+            .chain(discovery.device_authorization_endpoint.as_ref())
+            .chain(discovery.revocation_endpoint.as_ref());
         for endpoint in endpoints {
             if secure_origin(endpoint)? != origin {
                 return Err(auth_error(format!(
@@ -106,8 +122,119 @@ impl OidcClient {
             issuer: issuer.to_owned(),
             client_id: source.client_id.clone(),
             token_endpoint: discovery.token_endpoint,
+            authorization_endpoint: discovery.authorization_endpoint,
             device_endpoint: discovery.device_authorization_endpoint,
+            revocation_endpoint: discovery.revocation_endpoint,
         })
+    }
+
+    /// The address the user opens to approve the sign-in.
+    pub(crate) fn authorization_url(
+        &self,
+        scope: &str,
+        redirect_uri: &str,
+        state: &str,
+        challenge: &str,
+    ) -> Result<String, CliError> {
+        let endpoint = self.authorization_endpoint.as_deref().ok_or_else(|| {
+            auth_error(format!(
+                "{} does not offer browser sign-in (no authorization_endpoint); use --device",
+                self.issuer
+            ))
+        })?;
+        let mut url = reqwest::Url::parse(endpoint)
+            .map_err(|_| auth_error(format!("{endpoint} is not a valid URL")))?;
+        url.query_pairs_mut()
+            .append_pair("response_type", "code")
+            .append_pair("client_id", &self.client_id)
+            .append_pair("redirect_uri", redirect_uri)
+            .append_pair("scope", scope)
+            .append_pair("state", state)
+            .append_pair("code_challenge", challenge)
+            .append_pair("code_challenge_method", "S256");
+        Ok(url.into())
+    }
+
+    /// Signs in through the browser and returns the issued tokens.
+    pub(crate) async fn browser_login(
+        &self,
+        scope: &str,
+        state: &str,
+        approval: BrowserApproval<'_>,
+        mut show: impl FnMut(String),
+    ) -> Result<Session, CliError> {
+        let verifier = browser::random_value()?;
+        let callback = browser::Callback::listen(approval.port, state).await?;
+        let redirect_uri = callback.redirect_uri.clone();
+        let url = self.authorization_url(
+            scope,
+            &redirect_uri,
+            state,
+            &browser::code_challenge(&verifier),
+        )?;
+        let opened = (approval.open)(&url);
+        show(if opened {
+            format!("Opened the browser to sign in. If it did not open, visit:\n{url}")
+        } else {
+            format!("To sign in, open this address in a browser on any device:\n{url}")
+        });
+        show(format!(
+            "If the browser runs on another device, its last page fails to load. Paste that page's address ({redirect_uri}?code=...) here and press Enter."
+        ));
+        let redirect = callback
+            .wait(state, approval.pasted, &mut show, approval.timeout)
+            .await?;
+        if redirect
+            .iss
+            .as_deref()
+            .is_some_and(|iss| iss.trim_end_matches('/') != self.issuer)
+        {
+            return Err(auth_error(
+                "the sign-in redirect names another issuer".into(),
+            ));
+        }
+        if let Some(error) = redirect.error {
+            return Err(device_failure(
+                &error,
+                &describe(&error, redirect.error_description.as_deref()),
+            ));
+        }
+        let code = redirect
+            .code
+            .ok_or_else(|| auth_error("the sign-in redirect carries no code".into()))?;
+        let grant = self
+            .token_request(&[
+                ("grant_type", "authorization_code"),
+                ("code", &code),
+                ("redirect_uri", &redirect_uri),
+                ("client_id", &self.client_id),
+                ("code_verifier", &verifier),
+            ])
+            .await;
+        match grant {
+            Grant::Issued(reply) => self.session(reply, None, now_secs()),
+            Grant::Refused { detail, .. } | Grant::Unavailable(detail) => Err(auth_error(format!(
+                "{} did not issue a token for the approved sign-in: {detail}",
+                self.issuer
+            ))),
+        }
+    }
+
+    /// Revokes a refresh token (RFC 7009).
+    pub(crate) async fn revoke(&self, refresh_token: &str) -> Revocation {
+        let Some(endpoint) = self.revocation_endpoint.as_deref() else {
+            return Revocation::Unsupported;
+        };
+        let form = [
+            ("client_id", self.client_id.as_str()),
+            ("token", refresh_token),
+            ("token_type_hint", "refresh_token"),
+        ];
+        match self.post(endpoint, &form).await {
+            Ok(response) if response.status().is_success() => Revocation::Confirmed,
+            Ok(response) => Revocation::Failed(format!("HTTP {}", response.status())),
+            Err(_) => Revocation::Failed("the issuer could not be reached".into()),
+        }
     }
 
     pub(crate) async fn device_login(
