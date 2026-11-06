@@ -49,6 +49,7 @@ from typing_extensions import override
 
 import nemo_relay
 from nemo_relay.model_pricing import (
+    CacheWriteRate,
     ComponentSpec,
     InlineSource,
     ModelPricing,
@@ -309,7 +310,10 @@ def _anthropic_client(canned: _Canned, *, max_retries: int = 2) -> AsyncAnthropi
 
 def _anthropic_pricing() -> PricingConfig:
     rates = TokenPricingRates(
-        input_per_million=3.0, output_per_million=15.0, cache_read_per_million=0.30, cache_write_per_million=3.75
+        input_per_million=3.0,
+        output_per_million=15.0,
+        cache_read_per_million=0.30,
+        cache_write_rates=[CacheWriteRate(3.75)],
     )
     entry = ModelPricing(
         provider="anthropic",

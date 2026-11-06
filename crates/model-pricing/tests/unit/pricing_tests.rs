@@ -319,8 +319,10 @@ fn test_custom_pricing_catalog_supports_future_models_without_code_changes() {
                 "input_per_million": 1.0,
                 "output_per_million": 2.0,
                 "cache_read_per_million": 0.25,
-                "cache_write_per_million": 1.5,
-                "cache_write_1h_per_million": 2.4
+                "cache_write_rates": [
+                    {"duration": 3600, "per_million": 2.4},
+                    {"per_million": 1.5}
+                ]
             },
             "prompt_cache": {
                 "read_accounting": "separate"
@@ -407,7 +409,7 @@ fn test_model_pricing_omits_total_when_nonzero_cache_read_usage_lacks_a_rate() {
             "rates": {
                 "input_per_million": 1.0,
                 "output_per_million": 2.0,
-                "cache_write_per_million": 1.5
+                "cache_write_rates": [{"per_million": 1.5}]
             },
             "prompt_cache": {
                 "read_accounting": "separate"
@@ -846,11 +848,6 @@ fn test_pricing_catalog_rejects_empty_required_fields_and_invalid_rates() {
         ("input_per_million", "rates.input_per_million"),
         ("output_per_million", "rates.output_per_million"),
         ("cache_read_per_million", "rates.cache_read_per_million"),
-        ("cache_write_per_million", "rates.cache_write_per_million"),
-        (
-            "cache_write_1h_per_million",
-            "rates.cache_write_1h_per_million",
-        ),
     ] {
         let mut entry = flat_pricing_entry("configured", "configured-model", 1.0, 2.0);
         entry["rates"][field] = json!(-0.1);
@@ -1272,7 +1269,7 @@ fn cache_pricing_catalog(read_accounting: &str) -> PricingCatalog {
                 "input_per_million": 3.0,
                 "output_per_million": 15.0,
                 "cache_read_per_million": 0.3,
-                "cache_write_per_million": 3.75
+                "cache_write_rates": [{"per_million": 3.75}]
             },
             "prompt_cache": {
                 "read_accounting": read_accounting
@@ -1328,7 +1325,7 @@ fn threshold_pricing_catalog(read_accounting: &str) -> PricingCatalog {
                             "input_per_million": 1.0,
                             "output_per_million": 2.0,
                             "cache_read_per_million": 0.1,
-                            "cache_write_per_million": 1.25
+                            "cache_write_rates": [{"per_million": 1.25}]
                         }
                     },
                     {
@@ -1337,7 +1334,7 @@ fn threshold_pricing_catalog(read_accounting: &str) -> PricingCatalog {
                             "input_per_million": 10.0,
                             "output_per_million": 20.0,
                             "cache_read_per_million": 1.0,
-                            "cache_write_per_million": 12.5
+                            "cache_write_rates": [{"per_million": 12.5}]
                         }
                     }
                 ]
@@ -1350,7 +1347,7 @@ fn threshold_pricing_catalog(read_accounting: &str) -> PricingCatalog {
 }
 
 #[test]
-fn test_model_pricing_omits_cache_write_component_when_one_hour_rate_is_missing() {
+fn test_model_pricing_omits_cache_write_component_when_no_rate_matches() {
     let catalog = pricing_catalog(json!([{
         "provider": "future-ai",
         "model_id": "future-model",
@@ -1359,7 +1356,7 @@ fn test_model_pricing_omits_cache_write_component_when_one_hour_rate_is_missing(
         "rates": {
             "input_per_million": 1.0,
             "output_per_million": 2.0,
-            "cache_write_per_million": 1.5
+            "cache_write_rates": [{"duration": 300, "per_million": 1.5}]
         },
         "prompt_cache": {"read_accounting": "separate"}
     }]));
@@ -1385,4 +1382,97 @@ fn test_model_pricing_omits_cache_write_component_when_one_hour_rate_is_missing(
     assert_eq!(cost.input, Some(0.001));
     assert_eq!(cost.output, Some(0.004));
     assert_eq!(cost.cache_write, None);
+}
+
+fn cache_write_cost_for(rates: serde_json::Value, writes: Vec<(u64, Option<u64>)>) -> Option<f64> {
+    let catalog = pricing_catalog(json!([{
+        "provider": "future-ai",
+        "model_id": "future-model",
+        "pricing_as_of": "2026-06-04",
+        "pricing_source": "https://example.test/pricing",
+        "rates": {
+            "input_per_million": 1.0,
+            "output_per_million": 2.0,
+            "cache_write_rates": rates
+        },
+        "prompt_cache": {"read_accounting": "separate"}
+    }]));
+    let usage = Usage {
+        prompt_tokens: Some(1_000),
+        completion_tokens: Some(1_000),
+        cache_write_tokens: Some(
+            writes
+                .into_iter()
+                .map(|(count, duration)| CacheWriteTokenCounts { count, duration })
+                .collect(),
+        ),
+        ..Usage::default()
+    };
+    estimate_cost_with_catalog(&catalog, "future-model", &usage)
+        .unwrap()
+        .cache_write
+}
+
+#[test]
+fn test_cache_write_rates_match_exact_duration_then_default() {
+    let rates = json!([
+        {"duration": 300, "per_million": 2.0},
+        {"duration": 3600, "per_million": 4.0},
+        {"per_million": 1.0}
+    ]);
+    // 1M at each exact rate, 1M with a 30 minute duration and 1M with none at the default.
+    let cost = cache_write_cost_for(
+        rates,
+        vec![
+            (1_000_000, Some(300)),
+            (1_000_000, Some(3_600)),
+            (1_000_000, Some(1_800)),
+            (1_000_000, None),
+        ],
+    );
+    assert_eq!(cost, Some(2.0 + 4.0 + 1.0 + 1.0));
+}
+
+#[test]
+fn test_cache_write_rates_do_not_price_undated_writes_from_a_dated_entry() {
+    let cost = cache_write_cost_for(
+        json!([{"duration": 300, "per_million": 2.0}]),
+        vec![(1_000_000, None)],
+    );
+    assert_eq!(cost, None);
+}
+
+#[test]
+fn test_cache_write_rates_ignore_zero_count_writes_with_no_rate() {
+    let cost = cache_write_cost_for(
+        json!([{"duration": 300, "per_million": 2.0}]),
+        vec![(1_000_000, Some(300)), (0, Some(3_600))],
+    );
+    assert_eq!(cost, Some(2.0));
+}
+
+#[test]
+fn test_cache_write_rates_reject_invalid_prices_and_repeated_durations() {
+    for (rates, expected) in [
+        (
+            json!([{"duration": 300, "per_million": -0.1}]),
+            "rates.cache_write_rates[0].per_million",
+        ),
+        (
+            json!([{"duration": 300, "per_million": 1.0}, {"duration": 300, "per_million": 2.0}]),
+            "rates.cache_write_rates[1]",
+        ),
+        (
+            json!([{"per_million": 1.0}, {"per_million": 2.0}]),
+            "rates.cache_write_rates[1]",
+        ),
+    ] {
+        let mut entry = flat_pricing_entry("configured", "configured-model", 1.0, 2.0);
+        entry["rates"]["cache_write_rates"] = rates;
+        let err = pricing_catalog_error(json!([entry]));
+        assert!(
+            err.to_string().contains(expected),
+            "expected {expected}, got {err}"
+        );
+    }
 }

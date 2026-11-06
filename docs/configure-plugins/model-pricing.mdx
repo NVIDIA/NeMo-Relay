@@ -63,11 +63,23 @@ configured rate. If a response reports nonzero cache-read or cache-write usage
 and the matching catalog entry omits the rate for it, Relay keeps the priced
 components but omits the aggregate total. Set a rate to `0.0` when a category is intentionally free.
 
-`cache_write_per_million` prices cache writes that are not one-hour writes.
-`cache_write_1h_per_million` prices cache writes with a duration of 3,600 seconds,
-such as Anthropic one-hour writes. Usage with only one-hour writes needs only
-`cache_write_1h_per_million`. If usage reports nonzero writes of a kind whose rate
-is missing, Relay omits the whole cache-write cost and the aggregate total.
+`cache_write_rates` prices cache writes by duration in seconds. A write uses the
+entry for its duration, or else the entry with no duration. Anthropic reports 300
+and 3,600 when it splits its cache writes:
+
+```toml
+[components.config.sources.catalog.entries.rates]
+input_per_million = 3.0
+output_per_million = 15.0
+cache_write_rates = [
+  { duration = 300, per_million = 3.75 },
+  { duration = 3600, per_million = 6.0 },
+  { per_million = 3.75 },
+]
+```
+
+If usage reports nonzero writes with no matching entry and no default entry, Relay
+omits the whole cache-write cost and the aggregate total.
 
 Some usage reports `uncached_input_tokens`, a count of input tokens without
 cache reads or cache writes. Relay picks the input count to bill as follows:
