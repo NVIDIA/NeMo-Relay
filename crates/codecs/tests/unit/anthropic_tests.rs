@@ -1826,6 +1826,153 @@ fn anthropic_streaming_codec_accumulates_live_compaction_shape() {
 }
 
 #[test]
+fn anthropic_streaming_codec_preserves_extended_thinking_text_and_signature() {
+    let codec = AnthropicMessagesStreamingCodec::new();
+    let mut collector = codec.collector();
+    let finalizer = codec.finalizer();
+
+    for event in [
+        json!({
+            "type": "message_start", "message": {
+                "id": "msg_thinking", "type": "message", "role": "assistant",
+                "model": "claude-sonnet-4-6", "content": [],
+                "usage": {"input_tokens": 10, "output_tokens": 0}
+            }
+        }),
+        json!({
+            "type": "content_block_start", "index": 0,
+            "content_block": {"type": "thinking", "thinking": "", "signature": ""}
+        }),
+        json!({
+            "type": "content_block_delta", "index": 0,
+            "delta": {"type": "thinking_delta", "thinking": "Let me think."}
+        }),
+        json!({
+            "type": "content_block_delta", "index": 0,
+            "delta": {"type": "signature_delta", "signature": "EqQBCkYIBRgCKkA"}
+        }),
+        json!({"type": "content_block_stop", "index": 0}),
+        json!({
+            "type": "message_delta",
+            "delta": {"stop_reason": "end_turn", "stop_sequence": null},
+            "usage": {"input_tokens": 10, "output_tokens": 5}
+        }),
+        json!({"type": "message_stop"}),
+    ] {
+        collector(event).unwrap();
+    }
+
+    let aggregate = finalizer();
+    assert_eq!(
+        aggregate["content"][0],
+        json!({
+            "type": "thinking",
+            "thinking": "Let me think.",
+            "signature": "EqQBCkYIBRgCKkA"
+        })
+    );
+}
+
+#[test]
+fn anthropic_streaming_codec_accumulates_thinking_split_across_deltas() {
+    let codec = AnthropicMessagesStreamingCodec::new();
+    let mut collector = codec.collector();
+    let finalizer = codec.finalizer();
+
+    for event in [
+        json!({
+            "type": "message_start", "message": {
+                "id": "msg_thinking_split", "type": "message", "role": "assistant",
+                "model": "claude-sonnet-4-6", "content": [],
+                "usage": {"input_tokens": 10, "output_tokens": 0}
+            }
+        }),
+        json!({
+            "type": "content_block_start", "index": 0,
+            "content_block": {"type": "thinking", "thinking": "", "signature": ""}
+        }),
+        json!({
+            "type": "content_block_delta", "index": 0,
+            "delta": {"type": "thinking_delta", "thinking": "Let me "}
+        }),
+        json!({
+            "type": "content_block_delta", "index": 0,
+            "delta": {"type": "thinking_delta", "thinking": "think."}
+        }),
+        json!({
+            "type": "content_block_delta", "index": 0,
+            "delta": {"type": "signature_delta", "signature": "first-half-"}
+        }),
+        json!({
+            "type": "content_block_delta", "index": 0,
+            "delta": {"type": "signature_delta", "signature": "second-half"}
+        }),
+        json!({"type": "content_block_stop", "index": 0}),
+        json!({
+            "type": "message_delta",
+            "delta": {"stop_reason": "end_turn", "stop_sequence": null},
+            "usage": {"input_tokens": 10, "output_tokens": 5}
+        }),
+        json!({"type": "message_stop"}),
+    ] {
+        collector(event).unwrap();
+    }
+
+    let aggregate = finalizer();
+    assert_eq!(
+        aggregate["content"][0],
+        json!({
+            "type": "thinking",
+            "thinking": "Let me think.",
+            "signature": "first-half-second-half"
+        })
+    );
+}
+
+#[test]
+fn anthropic_streaming_codec_keeps_thinking_block_shape_when_no_delta_arrives() {
+    // `content_block_start` is the only place a thinking block's shape is declared. A block that
+    // receives neither a `thinking_delta` nor a `signature_delta` must keep that shape with the
+    // fields preserved and empty rather than having them dropped.
+    let codec = AnthropicMessagesStreamingCodec::new();
+    let mut collector = codec.collector();
+    let finalizer = codec.finalizer();
+
+    for event in [
+        json!({
+            "type": "message_start", "message": {
+                "id": "msg_thinking_empty", "type": "message", "role": "assistant",
+                "model": "claude-sonnet-4-6", "content": [],
+                "usage": {"input_tokens": 10, "output_tokens": 0}
+            }
+        }),
+        json!({
+            "type": "content_block_start", "index": 0,
+            "content_block": {"type": "thinking", "thinking": "", "signature": ""}
+        }),
+        json!({"type": "content_block_stop", "index": 0}),
+        json!({
+            "type": "message_delta",
+            "delta": {"stop_reason": "end_turn", "stop_sequence": null},
+            "usage": {"input_tokens": 10, "output_tokens": 0}
+        }),
+        json!({"type": "message_stop"}),
+    ] {
+        collector(event).unwrap();
+    }
+
+    let aggregate = finalizer();
+    assert_eq!(
+        aggregate["content"][0],
+        json!({
+            "type": "thinking",
+            "thinking": "",
+            "signature": ""
+        })
+    );
+}
+
+#[test]
 fn anthropic_streaming_codec_omits_unreported_message_metadata() {
     let codec = AnthropicMessagesStreamingCodec::new();
     let mut collector = codec.collector();
