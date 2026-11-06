@@ -136,6 +136,12 @@ redirects:
   destination: /nemo/relay/dev/build-plugins/workers/grpc-v1-protocol
 
 # CLI guides
+- source: /nemo/relay/nemo-relay-cli/basic-usage
+  destination: /nemo/relay/nemo-relay-cli/about
+- source: /nemo/relay/dev/nemo-relay-cli/basic-usage
+  destination: /nemo/relay/dev/nemo-relay-cli/about
+- source: /nemo/relay/latest/nemo-relay-cli/basic-usage
+  destination: /nemo/relay/latest/nemo-relay-cli/about
 - source: /nemo/relay/nemo-relay-cli/cursor
   destination: /nemo/relay/nemo-relay-cli/about
 

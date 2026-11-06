@@ -1,0 +1,73 @@
+---
+title: "Troubleshoot the CLI"
+description: "Find checks and recovery instructions for launch, integration, provider, and exporter failures."
+position: 12
+---
+{/* SPDX-FileCopyrightText: Copyright (c) 2026, NVIDIA CORPORATION & AFFILIATES. All rights reserved.
+SPDX-License-Identifier: Apache-2.0 */}
+
+Start with the symptom below. Use `nemo-relay doctor --offline` to inspect
+configuration without live network probes, or `nemo-relay doctor <agent>` to
+include checks for a coding agent.
+
+## Find the Relevant Check
+
+| Symptom | What to Check |
+| --- | --- |
+| Agent launch fails | Confirm [agent requirements](/reference/support-matrix), [run syntax](/nemo-relay-cli/command-reference#run-syntax), and [configuration selection](/nemo-relay-cli/configuration#shared-configuration). |
+| Persistent integration is missing or unhealthy | Follow [installation diagnostics](/nemo-relay-cli/plugin-installation#diagnose), then the relevant recovery instructions on that page. |
+| Tool activity appears but LLM events are missing | Follow [Claude Code](/nemo-relay-cli/claude-code#troubleshoot-llm-lifecycle), [Codex](/nemo-relay-cli/codex#troubleshoot-llm-lifecycle), or [pi](/nemo-relay-cli/pi#troubleshoot-llm-lifecycle) troubleshooting. |
+| Requests reach the wrong endpoint | Check [Provider Connections](/nemo-relay-cli/provider-upstreams), including the route-to-upstream table. |
+| Authentication or helper execution fails | Check [Provider Authentication](/nemo-relay-cli/authentication), including credential precedence and helper failure behavior. |
+| Export files are missing or an exporter check fails | Read [Check Configuration and Exporters](#check-configuration-and-exporters), then the exporter configuration named by doctor. |
+| Gateway startup or hook delivery fails | Check [Shared Gateway Lifecycle](/nemo-relay-cli/plugin-installation#shared-gateway-lifecycle) and [Hook Forwarding](/nemo-relay-cli/gateway-reference#hook-forwarding). Inspect [operational logs](/reference/operational-logging); use [runtime diagnostics](/reference/diagnostics/cli) for an existing process. |
+
+## Check Configuration and Exporters
+
+Run `nemo-relay doctor` to check your settings and exporter destinations.
+The following command also checks the Codex integration:
+
+```bash
+nemo-relay doctor codex
+```
+
+Doctor fails when an enabled model pricing source is unreadable or contains an
+invalid catalog, and it reports passing sources as `Model pricing source`.
+
+Doctor lists each OpenTelemetry file sink, its trace type, its destination, and
+whether it's enabled. File checks also run with `--offline`. For folder checks,
+doctor creates and removes a temporary probe file in the folder it checks.
+It does not create or change telemetry files. If an output folder is
+missing, it checks the nearest parent folder that exists. A missing folder
+triggers a warning when that parent is writable. An invalid path or a lack of
+write access causes the check to fail. Output-file symlinks also fail because
+the exporter does not allow them. Doctor also rejects paths that use `..` to
+refer to a parent folder.
+
+The `Plugin component` warning identifies each component with `enabled = false`.
+Doctor also warns when an OpenTelemetry section has trace endpoints or file
+sinks but is disabled. This includes sections that omit `enabled = true`.
+The warning identifies the setting to change. Empty disabled sections do not
+trigger this warning. Doctor skips all probes for disabled destinations.
+
+The `PII redaction` entry lists the enabled policies or profiles and the data
+they cover. It also shows whether the component is missing or disabled. It hides
+policy values and payloads. Doctor does not run redaction or test whether it
+removed sensitive data. Invalid PII settings still fail validation.
+
+For enabled trace endpoints, doctor checks headers and reads the environment
+variables named in `header_env`. Missing, blank, or invalid values fail the
+check. This check also runs with `--offline` and never prints credential values.
+Live HTTP checks send a `GET` request without configured headers or trace data.
+A passing check, including HTTP 405, only shows that the endpoint answered.
+It does not prove that the collector accepts credentials or trace data.
+Doctor does not check `header_file` values. The exporter reads those files when
+it sends data.
+
+For dynamic plugins, doctor also includes the full redacted core plugin-host
+preflight in JSON output under `configuration.plugin_host_validation`. This is
+the same non-activating validation exposed by
+`nemo_relay::plugin::validate` in Rust and `nemo_relay.plugin.validate`
+in Python: it reports per-plugin policy, integrity, authenticity, and
+configuration-schema failures. A dynamic validation failure makes doctor fail;
+live exporter and backend health checks remain separate doctor probes.
