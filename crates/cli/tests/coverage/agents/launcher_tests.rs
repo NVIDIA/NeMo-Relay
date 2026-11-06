@@ -1444,6 +1444,41 @@ fn test_claude_gateway_model_discovery_explicit_environment_is_not_overridden() 
 }
 
 #[test]
+fn test_claude_placeholder_api_key_only_when_relay_owns_the_credential() {
+    let _env = EnvScope::set(&[("ANTHROPIC_API_KEY", None), ("ANTHROPIC_AUTH_TOKEN", None)]);
+
+    for gateway in [relay_oidc_gateway(), relay_helper_gateway()] {
+        let prepared = claude_dry_run_with(gateway);
+        let placeholder = launch_env(&prepared, "ANTHROPIC_API_KEY").unwrap();
+        assert!(!placeholder.is_empty());
+        assert!(
+            !prepared
+                .secret_env_names
+                .contains(&"ANTHROPIC_API_KEY".into())
+        );
+    }
+    let caller_credential = claude_dry_run_with(GatewayConfig::default());
+    assert_eq!(launch_env(&caller_credential, "ANTHROPIC_API_KEY"), None);
+}
+
+#[test]
+fn test_claude_placeholder_api_key_keeps_a_caller_credential() {
+    for name in ["ANTHROPIC_API_KEY", "ANTHROPIC_AUTH_TOKEN"] {
+        let _env = EnvScope::set(&[
+            ("ANTHROPIC_API_KEY", None),
+            ("ANTHROPIC_AUTH_TOKEN", None),
+            (name, Some(std::ffi::OsStr::new("caller-value"))),
+        ]);
+        let prepared = claude_dry_run_with(relay_oidc_gateway());
+        assert_eq!(
+            launch_env(&prepared, "ANTHROPIC_API_KEY"),
+            None,
+            "an inherited {name} must stay the child's credential"
+        );
+    }
+}
+
+#[test]
 fn claude_transparent_proxy_header_preserves_existing_custom_headers() {
     let _env = EnvScope::set(&[(
         "ANTHROPIC_CUSTOM_HEADERS",
