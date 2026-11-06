@@ -57,6 +57,14 @@ Stateless provider normalization, preserving usage and provider-reported costs.
 
 <pre className="rust-signature"><code dangerouslySetInnerHTML={{"__html": "fn normalize_response(&amp;self, raw: &amp;Json) -&gt; <a href=\"https://doc.rust-lang.org/1.96.1/core/option/enum.Option.html\">Option</a>&lt;AnnotatedLlmResponse&gt;"}} /></pre>
 
+#### `telemetry_request`
+
+<pre className="rust-signature"><code dangerouslySetInnerHTML={{"__html": "fn telemetry_request&lt;'a&gt;(\n    &amp;self,\n    request: <a href=\"https://doc.rust-lang.org/1.96.1/alloc/borrow/enum.Cow.html\">Cow</a>&lt;'a, AnnotatedLlmRequest&gt;,\n) -&gt; <a href=\"https://doc.rust-lang.org/1.96.1/alloc/borrow/enum.Cow.html\">Cow</a>&lt;'a, AnnotatedLlmRequest&gt;"}} /></pre>
+
+#### `telemetry_tool_calls`
+
+<pre className="rust-signature"><code dangerouslySetInnerHTML={{"__html": "fn telemetry_tool_calls(\n    &amp;self,\n    annotation: <a href=\"https://doc.rust-lang.org/1.96.1/core/option/enum.Option.html\">Option</a>&lt;&amp;AnnotatedLlmResponse&gt;,\n    output: <a href=\"https://doc.rust-lang.org/1.96.1/core/option/enum.Option.html\">Option</a>&lt;&amp;Json&gt;,\n) -&gt; <a href=\"https://doc.rust-lang.org/1.96.1/core/option/enum.Option.html\">Option</a>&lt;<a href=\"https://doc.rust-lang.org/1.96.1/alloc/vec/struct.Vec.html\">Vec</a>&lt;TelemetryToolCall&gt;&gt;"}} /></pre>
+
 ### `impl Copy for BuiltinLlmNormalizer`
 
 <pre className="rust-signature"><code dangerouslySetInnerHTML={{"__html": "impl <a href=\"https://doc.rust-lang.org/1.96.1/core/marker/trait.Copy.html\">Copy</a> for <a href=\"struct-builtinllmnormalizer\">BuiltinLlmNormalizer</a>"}} /></pre>

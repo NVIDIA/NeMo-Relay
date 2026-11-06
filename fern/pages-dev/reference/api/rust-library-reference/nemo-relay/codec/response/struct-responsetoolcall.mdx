@@ -13,7 +13,7 @@ Generated from `cargo doc --no-deps -p nemo-relay-builtins -p nemo-relay-diagnos
 
 A tool call requested by the model in its response.
 
-Unlike the request-side `ToolCall` (which stores arguments as a JSON string per OpenAI convention), response tool calls store arguments as parsed [`Json`](/reference/api/rust-library-reference/nemo-relay/type-json). Codecs parse OpenAI's string arguments during decode; Anthropic's `input` and Gemini generateContent `args` are already parsed JSON objects.
+Unlike the request-side `ToolCall` (which stores arguments as a JSON string per OpenAI convention), response tool calls store arguments as parsed [`Json`](/reference/api/rust-library-reference/nemo-relay/type-json). Codecs parse OpenAI's string arguments during decode; Anthropic's `input` and Gemini generateContent `args` are already parsed JSON objects. OpenAI Responses custom tool input remains a JSON string without parsing.
 
 ## Fields
 
@@ -27,7 +27,7 @@ The function/tool name.
 
 ### `arguments: Value`
 
-The arguments as parsed JSON (not a string).
+Tool input as JSON. Function arguments are parsed; custom free-form input remains a JSON string.
 
 ## Trait Implementations
 
@@ -81,27 +81,27 @@ The arguments as parsed JSON (not a string).
 
 ### `impl WireValue<Box<ResponseToolCall>> for ResponseToolCall`
 
-<pre className="rust-signature"><code dangerouslySetInnerHTML={{"__html": "impl <a href=\"../../../nemo-relay-worker-proto/conversions/trait-wirevalue\">WireValue</a>&lt;<a href=\"https://doc.rust-lang.org/1.96.1/alloc/boxed/struct.Box.html\">Box</a>&lt;<a href=\"../../../nemo-relay-worker-proto/nvidia_worker_v1/struct-responsetoolcall\">ResponseToolCall</a>&gt;&gt; for <a href=\"struct-responsetoolcall\">ResponseToolCall</a>"}} /></pre>
+<pre className="rust-signature"><code dangerouslySetInnerHTML={{"__html": "impl WireValue&lt;<a href=\"https://doc.rust-lang.org/1.96.1/alloc/boxed/struct.Box.html\">Box</a>&lt;ResponseToolCall&gt;&gt; for <a href=\"struct-responsetoolcall\">ResponseToolCall</a>"}} /></pre>
 
 #### `to_wire`
 
-<pre className="rust-signature"><code dangerouslySetInnerHTML={{"__html": "fn <a href=\"../../../nemo-relay-worker-proto/conversions/trait-wirevalue\">to_wire</a>(self) -&gt; <a href=\"https://doc.rust-lang.org/1.96.1/core/result/enum.Result.html\">Result</a>&lt;<a href=\"https://doc.rust-lang.org/1.96.1/alloc/boxed/struct.Box.html\">Box</a>&lt;<a href=\"../../../nemo-relay-worker-proto/nvidia_worker_v1/struct-responsetoolcall\">ResponseToolCall</a>&gt;, <a href=\"../../../nemo-relay-worker-proto/conversions/struct-conversionerror\">ConversionError</a>&gt;"}} /></pre>
+<pre className="rust-signature"><code dangerouslySetInnerHTML={{"__html": "fn to_wire(self) -&gt; <a href=\"https://doc.rust-lang.org/1.96.1/core/result/enum.Result.html\">Result</a>&lt;<a href=\"https://doc.rust-lang.org/1.96.1/alloc/boxed/struct.Box.html\">Box</a>&lt;ResponseToolCall&gt;, ConversionError&gt;"}} /></pre>
 
 #### `from_wire`
 
-<pre className="rust-signature"><code dangerouslySetInnerHTML={{"__html": "fn <a href=\"../../../nemo-relay-worker-proto/conversions/trait-wirevalue\">from_wire</a>(\n    value: <a href=\"https://doc.rust-lang.org/1.96.1/alloc/boxed/struct.Box.html\">Box</a>&lt;<a href=\"../../../nemo-relay-worker-proto/nvidia_worker_v1/struct-responsetoolcall\">ResponseToolCall</a>&gt;,\n) -&gt; <a href=\"https://doc.rust-lang.org/1.96.1/core/result/enum.Result.html\">Result</a>&lt;<a href=\"struct-responsetoolcall\">ResponseToolCall</a>, <a href=\"../../../nemo-relay-worker-proto/conversions/struct-conversionerror\">ConversionError</a>&gt;"}} /></pre>
+<pre className="rust-signature"><code dangerouslySetInnerHTML={{"__html": "fn from_wire(\n    value: <a href=\"https://doc.rust-lang.org/1.96.1/alloc/boxed/struct.Box.html\">Box</a>&lt;ResponseToolCall&gt;,\n) -&gt; <a href=\"https://doc.rust-lang.org/1.96.1/core/result/enum.Result.html\">Result</a>&lt;<a href=\"struct-responsetoolcall\">ResponseToolCall</a>, ConversionError&gt;"}} /></pre>
 
 ### `impl WireValue<ResponseToolCall> for ResponseToolCall`
 
-<pre className="rust-signature"><code dangerouslySetInnerHTML={{"__html": "impl <a href=\"../../../nemo-relay-worker-proto/conversions/trait-wirevalue\">WireValue</a>&lt;<a href=\"../../../nemo-relay-worker-proto/nvidia_worker_v1/struct-responsetoolcall\">ResponseToolCall</a>&gt; for <a href=\"struct-responsetoolcall\">ResponseToolCall</a>"}} /></pre>
+<pre className="rust-signature"><code dangerouslySetInnerHTML={{"__html": "impl WireValue&lt;ResponseToolCall&gt; for <a href=\"struct-responsetoolcall\">ResponseToolCall</a>"}} /></pre>
 
 #### `to_wire`
 
-<pre className="rust-signature"><code dangerouslySetInnerHTML={{"__html": "fn <a href=\"../../../nemo-relay-worker-proto/conversions/trait-wirevalue\">to_wire</a>(self) -&gt; <a href=\"https://doc.rust-lang.org/1.96.1/core/result/enum.Result.html\">Result</a>&lt;<a href=\"../../../nemo-relay-worker-proto/nvidia_worker_v1/struct-responsetoolcall\">ResponseToolCall</a>, <a href=\"../../../nemo-relay-worker-proto/conversions/struct-conversionerror\">ConversionError</a>&gt;"}} /></pre>
+<pre className="rust-signature"><code dangerouslySetInnerHTML={{"__html": "fn to_wire(self) -&gt; <a href=\"https://doc.rust-lang.org/1.96.1/core/result/enum.Result.html\">Result</a>&lt;ResponseToolCall, ConversionError&gt;"}} /></pre>
 
 #### `from_wire`
 
-<pre className="rust-signature"><code dangerouslySetInnerHTML={{"__html": "fn <a href=\"../../../nemo-relay-worker-proto/conversions/trait-wirevalue\">from_wire</a>(\n    value: <a href=\"../../../nemo-relay-worker-proto/nvidia_worker_v1/struct-responsetoolcall\">ResponseToolCall</a>,\n) -&gt; <a href=\"https://doc.rust-lang.org/1.96.1/core/result/enum.Result.html\">Result</a>&lt;<a href=\"struct-responsetoolcall\">ResponseToolCall</a>, <a href=\"../../../nemo-relay-worker-proto/conversions/struct-conversionerror\">ConversionError</a>&gt;"}} /></pre>
+<pre className="rust-signature"><code dangerouslySetInnerHTML={{"__html": "fn from_wire(\n    value: ResponseToolCall,\n) -&gt; <a href=\"https://doc.rust-lang.org/1.96.1/core/result/enum.Result.html\">Result</a>&lt;<a href=\"struct-responsetoolcall\">ResponseToolCall</a>, ConversionError&gt;"}} /></pre>
 
 ### `impl StructuralPartialEq for ResponseToolCall`
 
