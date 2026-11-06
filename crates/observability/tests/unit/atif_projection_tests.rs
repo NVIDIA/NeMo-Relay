@@ -25,6 +25,24 @@ use std::collections::HashSet;
 use std::sync::Arc;
 
 #[test]
+fn detached_atif_keeps_valid_calls_around_malformed_entries() {
+    let calls = extract_tool_calls(&json!({"tool_calls": [
+        {"id": "call-1", "name": "first", "arguments": {}, "provider_data": {"status": "ok"}},
+        null,
+        {"name": "later", "arguments": {"q": "two"}}
+    ]}))
+    .expect("valid calls survive without a runtime host");
+    assert_eq!(calls.len(), 2);
+    assert_eq!(calls[0].tool_call_id, "call-1");
+    assert_eq!(
+        calls[0].extra.as_ref().unwrap()["provider_data"]["status"],
+        "ok"
+    );
+    assert_eq!(calls[1].tool_call_id, "later:3");
+    assert_eq!(calls[1].arguments, json!({"q": "two"}));
+}
+
+#[test]
 fn test_exporter_empty() {
     let exporter = AtifExporter::new("session-1".to_string(), make_agent_info())
         .with_host(crate::test_support::detached_host());

@@ -524,26 +524,58 @@ def test_create_tool_node_preserves_list_command_results(use_async: bool) -> Non
 
 
 @pytest.mark.parametrize("use_async", [False, True])
-def test_create_tool_node_propagates_graph_interrupts(use_async: bool) -> None:
-    from langchain_core.messages import AIMessage
+@pytest.mark.parametrize("approval_location", ["body", "execution-intercept"])
+@pytest.mark.parametrize(
+    "decisions",
+    [
+        pytest.param((True,), id="approve"),
+        pytest.param((True, True), id="approve-twice"),
+        pytest.param((False,), id="reject-first"),
+        pytest.param((True, False), id="reject-second"),
+    ],
+)
+def test_create_tool_node_propagates_graph_interrupts(
+    use_async: bool,
+    approval_location: str,
+    decisions: tuple[bool, ...],
+    subscribed_events: list[nemo_relay.Event],
+) -> None:
+    from langchain_core.messages import AIMessage, ToolMessage
     from langchain_core.tools import tool
-    from langgraph.checkpoint.memory import MemorySaver
+    from langgraph.checkpoint.memory import InMemorySaver
     from langgraph.graph import END, START, StateGraph
-    from langgraph.types import interrupt
+    from langgraph.types import Command, interrupt
 
-    from nemo_relay.integrations.langgraph import create_tool_node
+    from nemo_relay.integrations.langgraph import configure_graph, create_tool_node
+
+    effects: list[str] = []
+
+    def request_approvals() -> None:
+        for stage in range(1, len(decisions) + 1):
+            response = interrupt({"stage": stage, "tool_call_id": "call-interrupt"})
+            assert response["stage"] == stage
+            if not response["approved"]:
+                raise PermissionError("approval rejected")
 
     @tool
     def await_approval() -> str:
         """Pause the graph until approval is supplied."""
-        interrupt("approval required")
+        if approval_location == "body":
+            request_approvals()
+        effects.append("approved")
         return "approved"
 
+    async def approve_execution(context: nemo_relay.ToolExecutionContext, next_call: Any) -> Any:
+        if context.tool_name == "await_approval":
+            request_approvals()
+        downstream = await next_call(context.args)
+        return nemo_relay.ToolExecutionInterceptOutcome(downstream.result, annotation=downstream.annotation)
+
     builder = StateGraph(ToolNodeState)
-    builder.add_node("tools", create_tool_node([await_approval]))
+    builder.add_node("tools", create_tool_node([await_approval], handle_tool_errors=False))
     builder.add_edge(START, "tools")
     builder.add_edge("tools", END)
-    graph = builder.compile(checkpointer=MemorySaver())
+    graph = configure_graph(builder.compile(checkpointer=InMemorySaver()))
     config = {"configurable": {"thread_id": str(uuid4())}}
     input_state = {
         "offset": 0,
@@ -552,16 +584,89 @@ def test_create_tool_node_propagates_graph_interrupts(use_async: bool) -> None:
         ],
     }
 
-    if use_async:
+    def invoke(payload: Any) -> Any:
+        return asyncio.run(graph.ainvoke(payload, config)) if use_async else graph.invoke(payload, config)
 
-        async def collect_updates() -> list[dict[str, Any]]:
-            return [update async for update in graph.astream(input_state, config, stream_mode="updates")]
+    registration_name = f"langgraph-approval-{uuid4()}"
+    if approval_location == "execution-intercept":
+        nemo_relay.intercepts.register_tool_execution(registration_name, 1, approve_execution)
+    approval_ids: list[str] = []
+    task_ids: list[str] = []
+    try:
+        with nemo_relay.scope.scope("request", nemo_relay.ScopeType.Agent):
+            result = invoke(input_state)
+            for stage, approved in enumerate(decisions, start=1):
+                surfaced_interrupts = result["__interrupt__"]
+                assert len(surfaced_interrupts) == 1
+                approval = surfaced_interrupts[0]
+                assert approval.value == {"stage": stage, "tool_call_id": "call-interrupt"}
+                approval_ids.append(approval.id)
+                checkpoint = graph.get_state(config)
+                assert checkpoint.next == ("tools",)
+                assert len(checkpoint.tasks) == 1
+                task = checkpoint.tasks[0]
+                task_ids.append(task.id)
+                assert len(set(task_ids)) == 1
+                assert task.error is None
+                assert [pending.id for pending in task.interrupts] == [approval.id]
+                assert not effects
+                assert not any(isinstance(message, ToolMessage) for message in result["messages"])
+                response = Command(resume={approval.id: {"stage": stage, "approved": approved}})
+                if approved:
+                    result = invoke(response)
+                else:
+                    with pytest.raises(PermissionError, match="approval rejected"):
+                        invoke(response)
+            if all(decisions):
+                assert effects == ["approved"]
+                assert result["messages"][-1].content == "approved"
+                assert result["messages"][-1].tool_call_id == "call-interrupt"
+                assert not graph.get_state(config).next
+            else:
+                assert not effects
+                assert not any(
+                    isinstance(message, ToolMessage) for message in graph.get_state(config).values["messages"]
+                )
+    finally:
+        if approval_location == "execution-intercept":
+            nemo_relay.intercepts.deregister_tool_execution(registration_name)
 
-        updates = asyncio.run(collect_updates())
-    else:
-        updates = list(graph.stream(input_state, config, stream_mode="updates"))
+    nemo_relay.subscribers.flush()
+    starts = {
+        event.uuid: event
+        for event in subscribed_events
+        if isinstance(event, nemo_relay.ScopeEvent) and event.scope_category == "start"
+    }
+    ends = [
+        event
+        for event in subscribed_events
+        if isinstance(event, nemo_relay.ScopeEvent) and event.scope_category == "end"
+    ]
+    assert len(starts) == len(ends) == len({event.uuid for event in ends})
+    assert starts.keys() == {event.uuid for event in ends}
+    tool_ends = [event for event in ends if event.name == "await_approval"]
+    assert len(tool_ends) == len(decisions) + 1
+    for index, event in enumerate(tool_ends):
+        assert event.category_profile == {"tool_call_id": "call-interrupt"}
+        assert event.parent_uuid == starts[event.uuid].parent_uuid
+        assert event.parent_uuid in starts
+        if index < len(decisions):
+            assert event.metadata["otel.status_code"] == "ERROR"
+            assert event.metadata["exception.type"] == "GraphInterrupt"
+            assert event.data is None
+        elif all(decisions):
+            assert event.metadata["otel.status_code"] == "OK"
+            assert event.data["content"] == "approved"
+        else:
+            assert event.metadata["otel.status_code"] == "ERROR"
+            assert event.metadata["exception.type"] == "PermissionError"
+            assert event.data is None
 
-    assert any("__interrupt__" in update for update in updates)
+    marks = [event for event in subscribed_events if isinstance(event, nemo_relay.MarkEvent)]
+    assert [event.name for event in marks] == ["Graph Interrupt", "Graph Resume"] * len(decisions)
+    assert [event.data["interrupts"][0]["id"] for event in marks if event.name == "Graph Interrupt"] == approval_ids
+    for mark in marks:
+        assert starts[mark.parent_uuid].metadata["langchain_run_id"] == mark.data["run_id"]
 
 
 @pytest.mark.parametrize("wrapper_name", ["wrap_tool_call", "awrap_tool_call"])

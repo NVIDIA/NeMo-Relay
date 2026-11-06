@@ -4298,20 +4298,30 @@ async fn gateway_rejects_responses_streams_without_final_events() {
             );
         } else {
             assert_eq!(response.status(), StatusCode::OK);
-            let mut response_body = response.into_body();
-            let first = response_body
-                .frame()
+            let bytes = response
+                .into_body()
+                .collect()
                 .await
-                .unwrap()
-                .unwrap()
-                .into_data()
-                .unwrap();
-            assert!(
-                std::str::from_utf8(&first)
-                    .unwrap()
-                    .contains("response.created")
-            );
-            assert!(response_body.frame().await.is_none());
+                .expect("stream error must preserve HTTP framing")
+                .to_bytes();
+            let text = std::str::from_utf8(&bytes).unwrap();
+            let events: Vec<_> = text
+                .split("\n\n")
+                .filter(|event| !event.is_empty())
+                .collect();
+            assert_eq!(events.len(), 2);
+            assert!(events[0].starts_with("event: response.created\n"));
+            assert!(events[1].starts_with("event: error\n"));
+            let event: Value = serde_json::from_str(
+                events[1]
+                    .lines()
+                    .find_map(|line| line.strip_prefix("data: "))
+                    .unwrap(),
+            )
+            .unwrap();
+            assert_eq!(event["type"], "error");
+            assert_eq!(event["code"], "stream_error");
+            assert!(event["error"]["message"].is_string());
         }
         handle.abort();
     }

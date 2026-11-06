@@ -310,13 +310,15 @@ impl FinishReason {
 /// string per OpenAI convention), response tool calls store arguments as
 /// parsed [`Json`]. Codecs parse OpenAI's string arguments during decode;
 /// Anthropic's `input` and Gemini generateContent `args` are already parsed JSON objects.
+/// OpenAI Responses custom tool input remains a JSON string without parsing.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct ResponseToolCall {
     /// Unique identifier for this tool call.
     pub id: String,
     /// The function/tool name.
     pub name: String,
-    /// The arguments as parsed JSON (not a string).
+    /// Tool input as JSON. Function arguments are parsed; custom free-form input
+    /// remains a JSON string.
     pub arguments: Json,
 }
 

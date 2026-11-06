@@ -18,6 +18,20 @@ impl nemo_relay_types::codec::normalization::LlmNormalizer for RuntimeObservabil
     ) -> Option<nemo_relay_types::codec::response::AnnotatedLlmResponse> {
         nemo_relay_runtime::codec::RuntimeLlmNormalizer.normalize_response(response)
     }
+
+    fn telemetry_request<'a>(
+        &self,
+        request: std::borrow::Cow<'a, nemo_relay_types::codec::request::AnnotatedLlmRequest>,
+    ) -> std::borrow::Cow<'a, nemo_relay_types::codec::request::AnnotatedLlmRequest> {
+        nemo_relay_runtime::codec::RuntimeLlmNormalizer.telemetry_request(request)
+    }
+    fn telemetry_tool_calls(
+        &self,
+        annotation: Option<&nemo_relay_types::codec::response::AnnotatedLlmResponse>,
+        output: Option<&nemo_relay_types::Json>,
+    ) -> Option<Vec<nemo_relay_types::codec::normalization::TelemetryToolCall>> {
+        nemo_relay_runtime::codec::RuntimeLlmNormalizer.telemetry_tool_calls(annotation, output)
+    }
 }
 impl nemo_relay_observability::host::ObservabilityHost for RuntimeObservabilityHost {
     fn pricing_snapshot(

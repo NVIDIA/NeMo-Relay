@@ -205,8 +205,10 @@ pub(crate) fn push_llm_usage_attributes(
 }
 
 pub(crate) fn push_llm_request_attributes(attributes: &mut Vec<KeyValue>, event: &EventView<'_>) {
-    if let Some(request) = event.annotated_request() {
-        push_annotated_request_attributes(attributes, request);
+    if event.annotated_request().is_some() {
+        if let Some(request) = event.telemetry_llm_request() {
+            push_annotated_request_attributes(attributes, &request);
+        }
         return;
     }
 
@@ -220,7 +222,7 @@ pub(crate) fn push_llm_request_attributes(attributes: &mut Vec<KeyValue>, event:
         return;
     }
 
-    if let Some(request) = event.normalized_llm_request() {
+    if let Some(request) = event.telemetry_llm_request() {
         push_annotated_request_attributes(attributes, &request);
     }
 }
@@ -377,6 +379,26 @@ pub(crate) fn push_annotated_input_messages(
                 None,
             ),
         };
+        if let Message::ToolCallItem {
+            call_id,
+            name,
+            arguments,
+            ..
+        } = message
+        {
+            let prefix = format!("llm.input_messages.{index}.message.tool_calls.0.tool_call");
+            attributes.push(KeyValue::new(format!("{prefix}.id"), call_id.clone()));
+            attributes.push(KeyValue::new(
+                format!("{prefix}.function.name"),
+                name.clone(),
+            ));
+            if let Some(arguments) = to_json_string(arguments) {
+                attributes.push(KeyValue::new(
+                    format!("{prefix}.function.arguments"),
+                    arguments,
+                ));
+            }
+        }
         push_message_role(attributes, "llm.input_messages", index, role);
         if let Some(content) = content {
             push_message_text_value(attributes, "llm.input_messages", index, content);

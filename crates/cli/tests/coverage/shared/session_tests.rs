@@ -12230,3 +12230,209 @@ async fn claude_stop_failure_closes_turn_and_allows_next_prompt() {
     flush_subscribers().unwrap();
     deregister_subscriber(subscriber_name).unwrap();
 }
+
+#[test]
+fn custom_call_hints_preserve_invocation_ids_and_literal_input() {
+    let input = "{\"cmd\":\"pwd\"}";
+    let response = json!({"output": [
+        {"type": "message", "id": "msg-item", "name": "exec", "input": input},
+        {"type": "custom_tool_call", "id": "ctc-item", "call_id": "call-wrapper", "name": "exec", "input": input},
+        {"type": "function_call", "call_id": "call-function", "name": "lookup", "arguments": "{}"},
+        {"type": "custom_tool_call_output", "call_id": "call-wrapper", "output": "done"},
+        {"type": "custom_tool_call", "id": "item-only", "name": "exec", "input": "text(1)"},
+        {"type": "custom_tool_call", "call_id": "invalid", "name": "exec", "input": {"cmd": "pwd"}}
+    ]});
+    let hints = tool_hints_from_llm_response(&response, Some("worker"));
+    assert_eq!(hints.len(), 3);
+    assert_eq!(hints[0].tool_call_id.as_deref(), Some("call-wrapper"));
+    assert_eq!(hints[0].tool_name.as_deref(), Some("exec"));
+    assert_eq!(hints[0].subagent_id.as_deref(), Some("worker"));
+    assert_eq!(hints[0].source, "openai_response_custom_tool_call");
+    assert_eq!(hints[0].arguments, json!(input));
+    assert_eq!(hints[1].arguments, json!({}));
+    assert_eq!(
+        hints[2].tool_call_id, None,
+        "never substitute a custom item ID for a call ID"
+    );
+}
+
+#[test]
+fn custom_call_hint_does_not_claim_inner_execution_or_repeated_wrapper_by_order() {
+    let response = json!({"output": [
+        {"type": "custom_tool_call", "call_id": "call-wrapper-one", "name": "exec", "input": "text(42)"},
+        {"type": "custom_tool_call", "call_id": "call-wrapper-two", "name": "exec", "input": "text(42)"}
+    ]});
+    let hints = tool_hints_from_llm_response(&response, None);
+    let mut event = ToolEvent {
+        session_id: "custom-hints".into(),
+        agent_kind: AgentKind::Codex,
+        event_name: "PreToolUse".into(),
+        tool_call_id: "exec-native-inner".into(),
+        tool_name: "exec_command".into(),
+        subagent_id: None,
+        arguments: json!({"cmd": "pwd"}),
+        result: Value::Null,
+        status: None,
+        payload: json!({}),
+        metadata: json!({}),
+    };
+    assert!(
+        hints
+            .iter()
+            .all(|hint| tool_hint_match_score(hint, &event) == 0)
+    );
+    assert_eq!(event.tool_call_id, "exec-native-inner");
+    event.tool_name = "exec".into();
+    event.arguments = json!("text(42)");
+    assert_eq!(
+        tool_hint_match_score(&hints[0], &event),
+        tool_hint_match_score(&hints[1], &event)
+    );
+    event.tool_call_id = "call-wrapper-two".into();
+    assert!(tool_hint_match_score(&hints[1], &event) > tool_hint_match_score(&hints[0], &event));
+}
+
+#[tokio::test]
+async fn custom_call_hint_claims_only_the_matching_direct_custom_hook() {
+    let manager = SessionManager::new(session_test_config());
+    let mut root = session_event("tool-hints", "SessionStart");
+    root.agent_kind = AgentKind::Codex;
+    manager
+        .apply_events(
+            &HeaderMap::new(),
+            vec![
+                NormalizedEvent::AgentStarted(root),
+                NormalizedEvent::SubagentStarted(SubagentEvent {
+                    session_id: "tool-hints".into(),
+                    agent_kind: AgentKind::Codex,
+                    event_name: "SubagentStart".into(),
+                    subagent_id: "worker".into(),
+                    payload: json!({}),
+                    metadata: json!({}),
+                }),
+            ],
+        )
+        .await
+        .unwrap();
+
+    let subagent_uuid = {
+        let sessions = manager.inner.lock().await;
+        sessions
+            .get("tool-hints")
+            .unwrap()
+            .subagents
+            .get("worker")
+            .unwrap()
+            .uuid
+    };
+    let active = manager
+        .start_llm(
+            &HeaderMap::new(),
+            LlmGatewayStart {
+                session_id: Some("tool-hints".into()),
+                subagent_id: Some("worker".into()),
+                ..llm_start()
+            },
+        )
+        .await
+        .unwrap();
+    manager
+        .end_llm(
+            active,
+            json!({
+                "output": [
+                    {
+                        "type": "custom_tool_call",
+                        "call_id": "call-1",
+                        "name": "exec",
+                        "input": "text(42)"
+                    },
+                    {
+                        "type": "custom_tool_call", "call_id": "call-2",
+                        "name": "exec", "input": "text(42)"
+                    },
+                    {
+                        "type": "custom_tool_call", "id": "ctc-patch-item",
+                        "call_id": "call-patch", "name": "apply_patch",
+                        "input": "*** Begin Patch\n*** Add File: proof.txt\n+ok\n*** End Patch"
+                    }
+                ]
+            }),
+            json!({}),
+        )
+        .await
+        .unwrap();
+
+    // Neither an inner execution nor an ambiguous same-text wrapper can consume
+    // the provider hints. Their native execution IDs remain untouched.
+    for (id, name, arguments) in [
+        ("exec-inner", "exec_command", json!({"cmd": "pwd"})),
+        ("exec-ambiguous", "exec", json!("text(42)")),
+    ] {
+        manager
+            .apply_events(
+                &HeaderMap::new(),
+                vec![NormalizedEvent::ToolStarted(ToolEvent {
+                    session_id: "tool-hints".into(),
+                    agent_kind: AgentKind::Codex,
+                    event_name: "PreToolUse".into(),
+                    tool_call_id: id.into(),
+                    tool_name: name.into(),
+                    subagent_id: None,
+                    arguments,
+                    result: Value::Null,
+                    status: None,
+                    payload: json!({}),
+                    metadata: json!({}),
+                })],
+            )
+            .await
+            .unwrap();
+        let sessions = manager.inner.lock().await;
+        let session = sessions.get("tool-hints").unwrap();
+        let handle = session.tools.get(id).unwrap();
+        assert_ne!(handle.parent_uuid, Some(subagent_uuid));
+        assert_eq!(
+            handle.metadata.as_ref().unwrap()["tool_correlation_status"],
+            json!("ambiguous_fallback")
+        );
+        assert_eq!(session.pending_tool_hints.len(), 3);
+    }
+
+    manager
+        .apply_events(
+            &HeaderMap::new(),
+            vec![NormalizedEvent::ToolStarted(ToolEvent {
+                session_id: "tool-hints".into(),
+                agent_kind: AgentKind::Codex,
+                event_name: "PreToolUse".into(),
+                tool_call_id: "call-patch".into(),
+                tool_name: "apply_patch".into(),
+                subagent_id: None,
+                arguments: Value::Null,
+                result: Value::Null,
+                status: None,
+                payload: json!({}),
+                metadata: json!({}),
+            })],
+        )
+        .await
+        .unwrap();
+
+    let sessions = manager.inner.lock().await;
+    let handle = sessions
+        .get("tool-hints")
+        .unwrap()
+        .tools
+        .get("call-patch")
+        .unwrap();
+    assert_eq!(handle.parent_uuid, Some(subagent_uuid));
+    assert_eq!(
+        handle.metadata.as_ref().unwrap()["tool_correlation_status"],
+        json!("matched_hint")
+    );
+    assert_eq!(
+        handle.metadata.as_ref().unwrap()["tool_correlation_subagent_id"],
+        json!("worker")
+    );
+}

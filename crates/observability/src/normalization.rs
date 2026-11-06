@@ -6,6 +6,7 @@
 use crate::host::ObservabilityHost;
 use nemo_relay_types::api::event::Event;
 use nemo_relay_types::api::llm::LlmRequest;
+use nemo_relay_types::codec::normalization::TelemetryToolCall;
 use nemo_relay_types::codec::request::AnnotatedLlmRequest;
 use nemo_relay_types::codec::response::AnnotatedLlmResponse;
 use std::borrow::Cow;
@@ -38,6 +39,17 @@ impl<'a> EventView<'a> {
         self.host
             .normalize_response(self.event.output()?)
             .map(Cow::Owned)
+    }
+    pub fn telemetry_llm_request(&self) -> Option<Cow<'a, AnnotatedLlmRequest>> {
+        Some(self.host.telemetry_request(self.normalized_llm_request()?))
+    }
+    pub fn telemetry_llm_tool_calls(&self) -> Option<Vec<TelemetryToolCall>> {
+        self.host.telemetry_tool_calls(
+            self.event
+                .annotated_response()
+                .map(|response| response.as_ref()),
+            self.event.output(),
+        )
     }
 }
 impl std::ops::Deref for EventView<'_> {
