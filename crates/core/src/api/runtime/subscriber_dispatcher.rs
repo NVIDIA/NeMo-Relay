@@ -773,6 +773,14 @@ mod native {
         })
     }
 
+    pub(super) fn retain_current_publication() -> Option<PendingPublication> {
+        let lineage = current_publication_lineage()?;
+        Some(PendingPublication {
+            sender: dispatcher_sender().ok()?,
+            permit: Some(PublicationPermit::new(lineage)),
+        })
+    }
+
     pub(super) async fn with_pending_publication<F: Future>(
         pending: Option<PendingPublication>,
         future: F,
@@ -1525,6 +1533,16 @@ pub(crate) use native::{AsyncPublication, PendingPublication};
 /// after previously queued terminal publications have been delivered.
 pub(crate) fn register_pending_publication() -> Option<native::PendingPublication> {
     native::register_pending_publication()
+}
+
+/// Keep the publication being delivered open for later subscriber flushes.
+///
+/// A subscriber callback can hand slow work to its own thread and hold this
+/// handle until the work ends. The dispatcher moves on to other events, the
+/// event's delivery receipt completes normally, and flushes wait for the handle.
+/// Returns `None` outside a dispatcher callback.
+pub(crate) fn retain_current_publication() -> Option<native::PendingPublication> {
+    native::retain_current_publication()
 }
 
 /// Run asynchronous work as part of a registered pending publication and

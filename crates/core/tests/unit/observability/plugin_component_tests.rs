@@ -9384,3 +9384,20 @@ fn assert_http_rejects_tls_settings(signal: &str) {
         }
     }
 }
+
+#[test]
+fn atif_delivery_worker_survives_a_panicking_job() {
+    let queue = AtifDeliveryQueue::default();
+    queue.submit(Box::new(|| panic!("injected upload panic")));
+    let (ran_on, received) = std::sync::mpsc::channel();
+    queue.submit(Box::new(move || {
+        let thread = std::thread::current().name().map(str::to_owned);
+        let _ = ran_on.send(thread);
+    }));
+    queue.drain();
+    // A dead worker would lose this job or run it inline on the test thread.
+    assert_eq!(
+        received.try_recv().ok().flatten().as_deref(),
+        Some("nemo-relay-atif-delivery")
+    );
+}
