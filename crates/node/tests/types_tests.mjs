@@ -8,7 +8,7 @@ import { createRequire } from 'node:module';
 import { fileURLToPath } from 'node:url';
 
 const require = createRequire(import.meta.url);
-const lib = require('../index.js');
+const lib = require('../dist/index.js');
 
 const { ScopeType, LlmRequest, ScopeStack } = lib;
 
@@ -359,7 +359,7 @@ describe('GeminiGenerateContentCodec', () => {
         '-e',
         `
         const assert = require('node:assert/strict');
-        const { GeminiGenerateContentCodec } = require('./index.js');
+        const { GeminiGenerateContentCodec } = require('./dist/index.js');
         const codec = new GeminiGenerateContentCodec();
         const response = {
           candidates: [{ content: { parts: [{ text: 'hi' }] } }],

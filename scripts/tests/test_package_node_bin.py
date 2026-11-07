@@ -55,25 +55,32 @@ class PackageNodeBinTests(unittest.TestCase):
                 "name": "nemo-relay-node",
                 "version": "0.7.0",
                 "description": "Node bindings.",
-                "main": "index.js",
-                "types": "index.d.ts",
+                "main": "dist/index.js",
+                "types": "dist/index.d.ts",
                 "exports": {
-                    ".": {"types": "./index.d.ts", "default": "./index.js"},
-                    "./typed": {"types": "./typed.d.ts", "default": "./typed.js"},
-                    "./diagnostics": {"types": "./diagnostics.d.ts", "default": "./diagnostics.js"},
+                    ".": {"types": "./dist/index.d.ts", "default": "./dist/index.js"},
+                    "./typed": {"types": "./dist/typed.d.ts", "default": "./dist/typed.js"},
+                    "./diagnostics": {"types": "./dist/diagnostics.d.ts", "default": "./dist/diagnostics.js"},
                 },
                 "engines": {"node": ">=24.0.0"},
                 "license": "Apache-2.0",
             }
             (node_dir / "package.json").write_text(json.dumps(source_manifest))
+            (node_dir / "dist").mkdir()
             for filename in (
-                "index.js",
-                "index.d.ts",
-                "typed.js",
-                "typed.d.ts",
-                "diagnostics.js",
-                "diagnostics.d.ts",
-                "diagnostics_query_contract.js",
+                "binding.js",
+                "binding.d.ts",
+                "dist/index.js",
+                "dist/index.js.map",
+                "dist/index.d.ts",
+                "dist/typed.js",
+                "dist/typed.js.map",
+                "dist/typed.d.ts",
+                "dist/diagnostics.js",
+                "dist/diagnostics.js.map",
+                "dist/diagnostics.d.ts",
+                "dist/diagnostics_query_contract.js",
+                "dist/diagnostics_query_contract.js.map",
                 "README.md",
             ):
                 (node_dir / filename).write_text(filename)
@@ -93,7 +100,7 @@ class PackageNodeBinTests(unittest.TestCase):
                 self.assertEqual(manifest["libc"], ["glibc"])
                 self.assertEqual(manifest["main"], binary_name)
                 self.assertEqual(required_member(archive, f"package/{binary_name}").read(), b"native")
-                self.assertNotIn("package/index.js", archive.getnames())
+                self.assertNotIn("package/dist/index.js", archive.getnames())
 
             self.assertEqual(metapackage.name, "nemo-relay-node-npm-0.7.0-rc.1.tgz")
             with tarfile.open(metapackage) as archive:
@@ -102,13 +109,19 @@ class PackageNodeBinTests(unittest.TestCase):
                     manifest["optionalDependencies"]["nemo-relay-node-linux-x64-gnu"],
                     "0.7.0-rc.1",
                 )
-                self.assertIn("package/index.js", archive.getnames())
-                self.assertIn("package/diagnostics.js", archive.getnames())
+                names = archive.getnames()
+                self.assertIn("package/binding.js", names)
+                self.assertIn("package/binding.d.ts", names)
+                self.assertIn("package/dist/index.js", names)
+                self.assertIn("package/dist/index.js.map", names)
+                self.assertIn("package/dist/diagnostics.js", names)
+                self.assertNotIn("package/index.js", names)
                 self.assertEqual(
-                    required_member(archive, "package/diagnostics_query_contract.js").read(),
-                    b"diagnostics_query_contract.js",
+                    required_member(archive, "package/dist/diagnostics_query_contract.js").read(),
+                    b"dist/diagnostics_query_contract.js",
                 )
-                self.assertNotIn("./diagnostics_query_contract.js", manifest["exports"])
+                self.assertIn("dist/diagnostics_query_contract.js.map", manifest["files"])
+                self.assertNotIn("./dist/diagnostics_query_contract.js", manifest["exports"])
                 self.assertFalse(any(name.endswith(".node") for name in archive.getnames()))
 
             development = PACKAGE_NODE_BIN.build_metapackage(node_dir, "0.7.0+deadbeef", output)

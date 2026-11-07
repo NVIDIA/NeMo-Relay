@@ -72,7 +72,8 @@ component_management:
     - component_id: node_binding
       name: Node Binding
       paths:
-        - "crates/node/*.js"
+        - "crates/node/binding.js"
+        - "crates/node/ts/**"
     - component_id: plugin_sdk
       name: Dynamic Plugin SDKs
       paths:

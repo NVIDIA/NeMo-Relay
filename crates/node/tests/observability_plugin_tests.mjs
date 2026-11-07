@@ -10,9 +10,9 @@ import { join } from 'node:path';
 import * as pluginHost from './plugin_host_test_helper.mjs';
 
 const require = createRequire(import.meta.url);
-const plugin = require('../plugin.js');
-const observability = require('../observability.js');
-const { ScopeType, pushScope, popScope, event } = require('../index.js');
+const plugin = require('../dist/plugin.js');
+const observability = require('../dist/observability.js');
+const { ScopeType, pushScope, popScope, event } = require('../dist/index.js');
 
 function tempDir(prefix) {
   return mkdtempSync(join(tmpdir(), `nemo-relay-${prefix}-`));

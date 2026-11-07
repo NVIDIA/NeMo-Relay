@@ -1,26 +1,26 @@
 // SPDX-FileCopyrightText: Copyright (c) 2026, NVIDIA CORPORATION & AFFILIATES. All rights reserved.
 // SPDX-License-Identifier: Apache-2.0
 
-import { ComponentSpec as adaptiveComponentSpec, defaultConfig as adaptiveDefaultConfig } from '../adaptive.js';
-import { ComponentSpec as pricingComponentSpec } from '../model_pricing.js';
-import { ComponentSpec as piiComponentSpec, defaultConfig as piiDefaultConfig } from '../pii_redaction.js';
+import { ComponentSpec as adaptiveComponentSpec, defaultConfig as adaptiveDefaultConfig } from '../dist/adaptive.js';
+import { ComponentSpec as pricingComponentSpec } from '../dist/model_pricing.js';
+import { ComponentSpec as piiComponentSpec, defaultConfig as piiDefaultConfig } from '../dist/pii_redaction.js';
 import {
   listRuntimeRegistrations,
   registerConditionalMiddlewareGuardrail,
   RuntimeRegistrationKind,
   type JsonObject,
   type RuntimeRegistrationKindName,
-} from '../index.js';
-import * as plugin from '../plugin.js';
+} from '../dist/index.js';
+import * as plugin from '../dist/plugin.js';
 import type {
   ComponentKind,
   ComponentSpecFor,
   KnownComponentSpec,
   OpenComponentSpec,
   PluginConfig,
-} from '../plugin.js';
+} from '../dist/plugin.js';
 
-type AssertEqual<T, U> = [T] extends [U] ? ([U] extends [T] ? true : false) : false;
+type AssertEqual<T, U> = (<V>() => V extends T ? 1 : 2) extends <V>() => V extends U ? 1 : 2 ? true : false;
 
 const kinds: AssertEqual<
   ComponentKind,
@@ -89,7 +89,6 @@ export const checked = [
   kinds,
   pricingKind,
   openKind,
-  openTag,
   config,
   subscriberKind,
   everyKind,

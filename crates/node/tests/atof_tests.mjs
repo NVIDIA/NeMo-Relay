@@ -10,7 +10,7 @@ import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 
 const require = createRequire(import.meta.url);
-const { AtofExporter, ScopeType, pushScope, popScope, event } = require('../index.js');
+const { AtofExporter, ScopeType, pushScope, popScope, event } = require('../dist/index.js');
 
 function tempDir(prefix) {
   return mkdtempSync(join(tmpdir(), `nemo-relay-${prefix}-`));
