@@ -92,6 +92,15 @@ describe('model pricing plugin helpers', () => {
     );
   });
 
+  it('parses untyped documents into configs', () => {
+    const document = { sources: [pricing.inlineSource(pricing.inlineCatalog([pricedEntry()]))] };
+    assert.equal(pricing.parseConfig(document), document);
+    assert.throws(
+      () => pricing.parseConfig({ sources: 1 }),
+      (error) => /invalid model pricing config/.test(error.message) && error.cause[0].code === 'pricing.invalid_config',
+    );
+  });
+
   it('accepts and validates cache write rates', () => {
     const report = (rate) =>
       pricing.validateConfig(

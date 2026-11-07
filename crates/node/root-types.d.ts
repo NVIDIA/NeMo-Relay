@@ -26,7 +26,9 @@ type BareObject<V> = V extends unknown
       : never
     : never
   : never;
-type JsonShaped<T> = [Extract<T, NonJsonValue> | BareObject<T>] extends [never] ? T : never;
+type Shaped<T, Mapped, Excluded = NonJsonValue> = [Extract<T, Excluded> | BareObject<T>] extends [never]
+  ? Mapped
+  : never;
 type JsonProperty<V> = [unknown] extends [V]
   ? unknown
   : V extends JsonValue
@@ -84,53 +86,43 @@ interface EventSanitizeFieldsOpen {
 
 export type JsonCompatible<T> =
   | JsonValue
-  | ([T] extends [{} | null]
-      ? [JsonShaped<T>] extends [never]
-        ? never
-        : { [K in keyof T]: JsonProperty<T[K]> }
-      : never);
+  | ([T] extends [{} | null] ? Shaped<T, { [K in keyof T]: JsonProperty<T[K]> }> : never);
 export type JsonObjectCompatible<T> =
   | JsonObject
-  | ([T] extends [readonly unknown[]]
-      ? never
-      : [T] extends [object]
-        ? [JsonShaped<T>] extends [never]
-          ? never
-          : { [K in keyof T]: JsonProperty<T[K]> }
-        : never);
+  | ([T] extends [object]
+      ? Shaped<T, { [K in keyof T]: JsonProperty<T[K]> }, NonJsonValue | readonly unknown[]>
+      : never);
 export type LlmRequestCompatible<T> =
   | LlmRequestOpen
   | ([T] extends [object]
-      ? [JsonShaped<T>] extends [never]
-        ? never
-        : { [K in keyof T]: K extends 'headers' ? JsonObjectProperty<T[K]> : JsonProperty<T[K]> } & Record<
+      ? Shaped<
+          T,
+          { [K in keyof T]: K extends 'headers' ? JsonObjectProperty<T[K]> : JsonProperty<T[K]> } & Record<
             'headers' | 'content',
             unknown
           >
+        >
       : never);
 export type ToolExecutionResultCompatible<T> =
   | ToolExecutionResultOpen
-  | ([T] extends [object]
-      ? [JsonShaped<T>] extends [never]
-        ? never
-        : { [K in keyof T]: JsonProperty<T[K]> } & Record<'result', unknown>
-      : never);
+  | ([T] extends [object] ? Shaped<T, { [K in keyof T]: JsonProperty<T[K]> } & Record<'result', unknown>> : never);
 export type ToolExecutionInterceptOutcomeCompatible<T> =
   | ToolExecutionInterceptOutcome
   | ([T] extends [object]
-      ? [JsonShaped<T>] extends [never]
-        ? never
-        : { [K in keyof T]: K extends 'pendingMarks' ? PendingMarksProperty<T[K]> : JsonProperty<T[K]> } & Record<
+      ? Shaped<
+          T,
+          { [K in keyof T]: K extends 'pendingMarks' ? PendingMarksProperty<T[K]> : JsonProperty<T[K]> } & Record<
             'result',
             unknown
           >
+        >
       : never);
 export type LlmRequestInterceptOutcomeCompatible<T> =
   | LlmRequestInterceptOutcome
   | ([T] extends [object]
-      ? [JsonShaped<T>] extends [never]
-        ? never
-        : {
+      ? Shaped<
+          T,
+          {
             [K in keyof T]: K extends 'request'
               ? LlmRequestProperty<T[K]>
               : K extends 'pendingMarks'
@@ -139,21 +131,14 @@ export type LlmRequestInterceptOutcomeCompatible<T> =
                   ? LlmOptimizationContribution[]
                   : JsonProperty<T[K]>;
           } & Record<'request', unknown>
+        >
       : never);
 export type EventSanitizeFieldsCompatible<T> =
   | EventSanitizeFieldsOpen
-  | ([T] extends [object]
-      ? [JsonShaped<T>] extends [never]
-        ? never
-        : { [K in keyof T]: JsonProperty<T[K]> }
-      : never);
+  | ([T] extends [object] ? Shaped<T, { [K in keyof T]: JsonProperty<T[K]> }> : never);
 export type EventMetadataCompatible<T> =
   | EventMetadata
-  | ([T] extends [object]
-      ? [JsonShaped<T>] extends [never]
-        ? never
-        : { [K in keyof T]: EventMetadataProperty<T[K]> }
-      : never);
+  | ([T] extends [object] ? Shaped<T, { [K in keyof T]: EventMetadataProperty<T[K]> }> : never);
 export type MetricMeasurementsCompatible<T> =
   | readonly MetricMeasurement[]
   | ([T] extends [readonly unknown[]] ? { [I in keyof T]: MetricMeasurementProperty<T[I]> } : never);
@@ -618,7 +603,11 @@ export interface PluginContext {
     name: string,
     priority: number,
     breakChain: boolean,
-    callback: (args: { name: string; request: LlmRequestShape; annotated: Json | null }) => TOutcome | Promise<TOutcome>,
+    callback: (args: {
+      name: string;
+      request: LlmRequestShape;
+      annotated: Json | null;
+    }) => TOutcome | Promise<TOutcome>,
   ): void;
   registerLlmExecutionIntercept<TResponse extends JsonCompatible<TResponse>>(
     name: string,

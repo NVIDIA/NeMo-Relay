@@ -10,11 +10,13 @@ import {
   pricingConfig,
   promptCache,
   tokenRates,
+  parseConfig,
   validateConfig,
   type ModelPricing,
   type PricingCatalog,
   type PricingConfig,
 } from '../model_pricing.js';
+import type { JsonObject } from '../index.js';
 
 const entry: ModelPricing = catalogEntry({
   provider: 'openai',
@@ -35,6 +37,8 @@ const config: PricingConfig = pricingConfig([fileSource('./pricing.json'), inlin
 ComponentSpec(config);
 ComponentSpec({ sources: [] });
 validateConfig(config).diagnostics.map((diagnostic) => diagnostic.level);
+declare const document: JsonObject;
+ComponentSpec(parseConfig(document));
 
 catalogEntry({
   provider: 'openai',

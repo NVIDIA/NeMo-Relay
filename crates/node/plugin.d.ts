@@ -4,7 +4,14 @@
 /// <reference lib="esnext.disposable" />
 
 import type { AdaptivePluginConfig } from './adaptive';
-import type { ConfigDiagnostic, Json, JsonObject, JsonObjectCompatible, PluginContext, ResourceMetricsConfig } from './index';
+import type {
+  ConfigDiagnostic,
+  Json,
+  JsonObject,
+  JsonObjectCompatible,
+  PluginContext,
+  ResourceMetricsConfig,
+} from './index';
 import type { PricingConfig } from './model_pricing';
 import type { Config as ObservabilityConfig } from './observability';
 import type { Config as PiiRedactionConfig } from './pii_redaction';
@@ -71,23 +78,33 @@ export type KnownComponentSpec = {
   [K in ComponentKind]: { kind: K; enabled?: boolean; config?: ComponentConfigs[K] };
 }[ComponentKind];
 
-/** One top-level plugin component. */
-export interface ComponentSpec {
+declare const openComponent: unique symbol;
+
+/** Config of a component created with `ComponentSpec` for a kind registered through `registerPlugin`. */
+export type OpenComponentConfig = {
+  readonly [openComponent]: true;
+};
+
+/** Component for a kind registered through `registerPlugin`; create one with `ComponentSpec`. */
+export interface OpenComponentSpec<C extends object = JsonObject> {
   kind: string;
   enabled?: boolean;
-  config?: JsonObject;
+  config?: C & OpenComponentConfig;
 }
 
 export type ComponentConfigFor<K extends string> = K extends ComponentKind ? ComponentConfigs[K] : JsonObject;
 
 export type ComponentSpecFor<K extends string> = K extends ComponentKind
   ? Extract<KnownComponentSpec, { kind: K }>
-  : ComponentSpec;
+  : OpenComponentSpec;
+
+/** One top-level plugin component. */
+export type ComponentSpec = KnownComponentSpec | OpenComponentSpec<object>;
 
 /** Canonical plugin configuration document. */
 export interface PluginConfig {
   version?: number;
-  components?: Array<KnownComponentSpec | ComponentSpec>;
+  components?: ComponentSpec[];
   policy?: ConfigPolicy;
   /** Startup-only host service profile; omitted settings use file layers. */
   diagnostics?: { enabled?: boolean; limits?: Record<string, number> };
@@ -181,13 +198,20 @@ export declare function defaultConfig(): PluginConfig;
  * @remarks Setting `options.enabled = false` preserves the component for
  * validation while skipping runtime registration during `initialize`.
  */
-export declare function ComponentSpec<K extends string, C extends JsonObjectCompatible<C> = JsonObject>(
+export declare function ComponentSpec<K extends ComponentKind>(
   kind: K,
-  config?: K extends ComponentKind ? ComponentConfigs[K] : C,
+  config?: ComponentConfigs[K],
   options?: {
     enabled?: boolean;
   },
 ): ComponentSpecFor<K>;
+export declare function ComponentSpec<K extends string, C extends JsonObjectCompatible<C> = JsonObject>(
+  kind: K extends ComponentKind ? never : K,
+  config?: C,
+  options?: {
+    enabled?: boolean;
+  },
+): OpenComponentSpec<C>;
 /**
  * Initialize the core-owned static and dynamic plugin host.
  *

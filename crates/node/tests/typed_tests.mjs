@@ -8,12 +8,7 @@ import * as pluginHost from './plugin_host_test_helper.mjs';
 
 const require = createRequire(import.meta.url);
 const lib = require('../index.js');
-const {
-  typedToolExecute,
-  typedLlmExecute,
-  typedLlmStreamExecute,
-  JsonPassthrough,
-} = require('../typed.js');
+const { typedToolExecute, typedLlmExecute, typedLlmStreamExecute, JsonPassthrough } = require('../typed.js');
 const adaptive = require('../adaptive.js');
 const plugin = require('../plugin.js');
 
