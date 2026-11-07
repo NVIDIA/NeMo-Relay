@@ -839,8 +839,10 @@ the stored sign-in for each request, the token's real expiry applies, and
 Relay adds the token only to requests it authenticates: agents that Relay
 launches, and daemon routes bound by the managed integration. A client that only
 points its base URL at a shared gateway gets no Relay credential, the same as
-with a static API key. Claude Code needs a credential before it starts, so set
-`ANTHROPIC_API_KEY` to any placeholder value. Relay replaces it.
+with a static API key. Claude Code needs a credential before it starts. For
+Claude Code that Relay launches, Relay sets a placeholder `ANTHROPIC_API_KEY`
+and replaces it. For a client that you start yourself, set `ANTHROPIC_API_KEY`
+to any placeholder value.
 
 Without a sign-in, or when the provider rejects the refresh token, the gateway
 stops the request with HTTP 401 and an error that names `nemo-relay auth login`. A temporary
