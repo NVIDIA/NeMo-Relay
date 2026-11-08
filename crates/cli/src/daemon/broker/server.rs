@@ -270,7 +270,15 @@ pub(crate) async fn serve(options: ServerOptions) -> Result<(), CliError> {
             let tls = load_tls_config(certificate, key)?;
             serve_tls(listener, app, tls).await
         }
-        (None, None) => serve_plain(listener, app, shutdown_signal()).await,
+        (None, None) => {
+            serve_plain(
+                listener,
+                app,
+                shutdown_signal(),
+                Duration::from_millis(DRAIN_LIFETIME_MS),
+            )
+            .await
+        }
         _ => Err(CliError::Config(
             "--tls-cert and --tls-key must be supplied together".into(),
         )),
@@ -3216,6 +3224,7 @@ async fn serve_plain(
     listener: TcpListener,
     app: Router,
     shutdown: impl std::future::Future<Output = ()>,
+    _drain_limit: Duration,
 ) -> Result<(), CliError> {
     let (shutdown_sender, shutdown_receiver) = tokio::sync::watch::channel(());
     let mut connections = tokio::task::JoinSet::new();
