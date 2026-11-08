@@ -3224,7 +3224,7 @@ async fn serve_plain(
     listener: TcpListener,
     app: Router,
     shutdown: impl std::future::Future<Output = ()>,
-    _drain_limit: Duration,
+    drain_limit: Duration,
 ) -> Result<(), CliError> {
     let (shutdown_sender, shutdown_receiver) = tokio::sync::watch::channel(());
     let mut connections = tokio::task::JoinSet::new();
@@ -3275,9 +3275,13 @@ async fn serve_plain(
             }
         }
     }
+    // Close the socket before draining: an open listener keeps completing TCP handshakes
+    // that nobody accepts, so new clients hang instead of failing fast.
+    drop(listener);
     drop(shutdown_receiver);
-    // Preserve axum::serve's graceful shutdown: admitted responses finish before return.
-    while connections.join_next().await.is_some() {}
+    // Admitted responses get until the drain limit to finish, like the TLS listener.
+    let drain = async { while connections.join_next().await.is_some() {} };
+    let _ = tokio::time::timeout(drain_limit, drain).await;
     Ok(())
 }
 
@@ -3344,6 +3348,7 @@ async fn serve_tls(
             }
         }
     }
+    drop(listener);
     let _ = shutdown_tx.send(true);
     let drain = async { while connections.join_next().await.is_some() {} };
     let _ = tokio::time::timeout(Duration::from_millis(DRAIN_LIFETIME_MS), drain).await;
