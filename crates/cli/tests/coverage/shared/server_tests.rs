@@ -7197,6 +7197,103 @@ async fn unmanaged_routes_preserve_streaming_and_error_responses_without_session
 }
 
 #[tokio::test]
+async fn managed_success_responses_keep_provider_headers() {
+    use crate::gateway::websocket::tests::serve;
+    let provider = Router::new().fallback(|request: Request<Body>| async move {
+        let body = axum::body::to_bytes(request.into_body(), usize::MAX)
+            .await
+            .unwrap();
+        let body: Value = serde_json::from_slice(&body).unwrap();
+        let streaming = body["stream"] == json!(true);
+        let builder = Response::builder()
+            .status(StatusCode::OK)
+            .header("request-id", "req_mock_1")
+            .header("anthropic-ratelimit-unified-status", "allowed_warning")
+            .header("set-cookie", "a=1")
+            .header("set-cookie", "b=2")
+            .header("x-nemo-relay-worker-route-failure", "1");
+        if streaming {
+            builder
+                .header("content-type", "text/event-stream; charset=utf-8")
+                .body(Body::from(
+                    "data: {\"type\":\"message_start\",\"message\":{\"id\":\"msg_1\",\"type\":\"message\",\"role\":\"assistant\",\"model\":\"claude-test\",\"content\":[],\"usage\":{\"input_tokens\":1,\"output_tokens\":0}}}\n\n\
+                     data: {\"type\":\"message_delta\",\"delta\":{\"stop_reason\":\"end_turn\"},\"usage\":{\"input_tokens\":1,\"output_tokens\":1}}\n\n\
+                     data: {\"type\":\"message_stop\"}\n\n",
+                ))
+                .unwrap()
+        } else {
+            builder
+                .header("content-type", "application/json; charset=utf-8")
+                .body(Body::from(
+                    json!({
+                        "id": "msg_1",
+                        "type": "message",
+                        "role": "assistant",
+                        "model": "claude-test",
+                        "content": [{"type": "text", "text": "ok"}],
+                        "stop_reason": "end_turn",
+                        "usage": {"input_tokens": 1, "output_tokens": 1}
+                    })
+                    .to_string(),
+                ))
+                .unwrap()
+        }
+    });
+    let (upstream, provider_task) = serve(provider).await;
+    let mut config = test_config();
+    config.anthropic_base_url = upstream;
+    let state = AppState::new(config);
+    let app = router_with_state(state.clone());
+    for streaming in [false, true] {
+        let response = app
+            .clone()
+            .oneshot(
+                Request::post("/v1/messages")
+                    .header("content-type", "application/json")
+                    .header("x-api-key", "sk-ant-test")
+                    .body(Body::from(
+                        json!({
+                            "model": "claude-test",
+                            "max_tokens": 1,
+                            "stream": streaming,
+                            "messages": [{"role": "user", "content": "hi"}]
+                        })
+                        .to_string(),
+                    ))
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+        assert_eq!(response.status(), StatusCode::OK, "streaming={streaming}");
+        let headers = response.headers();
+        assert_eq!(headers["request-id"], "req_mock_1", "streaming={streaming}");
+        assert_eq!(
+            headers["anthropic-ratelimit-unified-status"], "allowed_warning",
+            "streaming={streaming}"
+        );
+        assert_eq!(headers.get_all("set-cookie").iter().count(), 2);
+        // A provider must not be able to raise Relay's own worker route failure signal.
+        assert!(
+            headers.get("x-nemo-relay-worker-route-failure").is_none(),
+            "streaming={streaming}"
+        );
+        // The gateway re-encodes the body, so the content type stays its own.
+        assert_eq!(
+            headers.get_all("content-type").iter().collect::<Vec<_>>(),
+            [if streaming {
+                "text/event-stream"
+            } else {
+                "application/json"
+            }],
+            "streaming={streaming}"
+        );
+        response.into_body().collect().await.unwrap();
+    }
+    state.sessions.close_all("test_shutdown").await.unwrap();
+    provider_task.abort();
+}
+
+#[tokio::test]
 async fn websocket_tunnel_blocks_idle_shutdown_until_disconnect() {
     use crate::gateway::websocket::tests::{provider, serve};
     use futures_util::StreamExt;
