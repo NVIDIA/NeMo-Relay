@@ -47,7 +47,8 @@ Choose the process that observes your workload. Configure its exporter there.
 <CardGroup cols={2}>
 <Card title="Managed coding agents" href="/daemon/about" icon="fa-solid fa-laptop-code">
 A daemon brokers supported harness connections. Per-user workers capture routed
-model calls and supported hooks; install the exporter policy in the workers.
+model calls and supported hooks in processes running as those users; install
+the exporter policy in the workers.
 </Card>
 <Card title="Framework integration" href="/supported-integrations/about" icon="fa-solid fa-diagram-project">
 LangChain, LangGraph, and Deep Agents integrations observe supported model and
@@ -72,7 +73,8 @@ An exporter sends existing events; it does not add instrumentation. The
 
 Place the following `plugins.toml` in the configuration loaded by that worker
 or application. This minimal example sends OpenInference traces to local Phoenix
-and omits full prompt and tool payloads:
+and records Agent Trajectory Observability Format (ATOF) events locally for
+capture verification. It omits full prompt and tool payloads from exported traces:
 
 ```toml
 version = 1
@@ -84,6 +86,15 @@ enabled = true
 [components.config]
 version = 4
 enable_full_payloads = false
+
+[components.config.atof]
+enabled = true
+
+[[components.config.atof.sinks]]
+type = "file"
+output_directory = "./logs"
+filename = "events.jsonl"
+mode = "append"
 
 [components.config.opentelemetry]
 enabled = true
@@ -98,9 +109,19 @@ service_name = "relay-support-triage"
 "openinference.project.name" = "relay-support-triage"
 ```
 
-Workers load administrator-owned system configuration. Framework integrations
-load it when they initialize Relay. For a directly instrumented Python application,
-import the observability component and activate the host around application work:
+Choose a writable log directory private to the exporting user or application.
+Local ATOF records can contain sensitive data even when full payload export is
+disabled; apply your retention and access policy to `logs/events.jsonl`.
+
+| Capture path | Where to configure plugins |
+| --- | --- |
+| Managed workers | Administrator-owned `/etc/nemo-relay/plugins.toml` on Linux and macOS, or `%ProgramData%\nemo-relay\plugins.toml` on Windows. |
+| Framework integration | The plugin file selected when the integration initializes its Relay host. |
+| Instrumented application | Pass the file path to the SDK's plugin activation API, as below. |
+| Hermes | Set `HERMES_NEMO_RELAY_PLUGINS_TOML` to the plugin file before starting Hermes. |
+
+For a directly instrumented Python application, import the observability
+component and activate the host around application work:
 
 ```python
 from nemo_relay import plugin
@@ -115,7 +136,8 @@ Check activation diagnostics before testing delivery.
 [Plugin initialization](/configure-plugins/initialize-plugins) explains the lifecycle.
 
 Choose the destination recipe for the endpoint, projection, and authentication
-changes. Credentials belong in the exporting process's environment;
+changes. A projection maps Relay events to the destination's telemetry format.
+Credentials belong in the exporting process's environment;
 `header_env` maps header names to environment-variable names.
 
 <CardGroup cols={2}>
@@ -136,7 +158,9 @@ Export OTLP through your Agent or Collector to the appropriate Datadog site.
 ## 3. Exercise a representative workload
 
 Run work with a clear expected outcome. Keep the service name, run time, and
-local event log so you can find the same activity in the destination.
+local event-log path so you can find the same activity in the destination. Include
+an agent or turn scope (the parent work unit), a model call, and a tool call.
+For a concrete workload, use the [Brev example below](#run-the-brev-example).
 Approve payload fields and redaction policy before enabling payload capture.
 
 ## 4. Verify capture and destination delivery
@@ -262,8 +286,6 @@ The runner should report successful workload and trace verification. In the trac
 tree, confirm the agent, model, and tool spans have their expected parents.
 Inspect `logs/events.jsonl` and `delivery.json` under the chosen output directory
 if verification fails. Use a new output directory for every run.
-
-<span id="reference-trace" />
 
 #### Expected trace
 

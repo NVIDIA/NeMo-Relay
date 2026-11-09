@@ -100,6 +100,9 @@ The runner rejects conflicting or incomplete addressing before starting the work
 
 ## Check the LangSmith run
 
+Verification is manual in LangSmith; the companion's `--verify` option supports
+Phoenix only. An accepted export request does not establish destination visibility.
+
 Open the selected project or agent environment and find the run by time and service. Verify that the
 agent run and observed model and tool calls share the intended parentage.
 Inspect one span for model identity, token usage where the source provides it,

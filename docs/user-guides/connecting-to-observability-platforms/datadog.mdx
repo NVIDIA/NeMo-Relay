@@ -70,6 +70,9 @@ for the chosen collector or tracing backend.
 
 ## Check Datadog APM
 
+Verification is manual in Datadog; the companion's `--verify` option supports
+Phoenix only. Confirm intake in Datadog as well as successful forwarding by your collector.
+
 Find a recent trace under the service `relay-support-triage`. Confirm that
 its agent span has the observed model and tool work beneath it, then inspect
 model identity and sanitized payload fields.
