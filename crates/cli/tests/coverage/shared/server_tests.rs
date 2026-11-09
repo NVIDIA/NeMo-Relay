@@ -5400,6 +5400,25 @@ async fn spawn_concurrent_attempt_upstream(release_losing: Arc<Semaphore>) -> Te
         if attempt == "losing" {
             release_losing.acquire().await.unwrap().forget();
         }
+        if attempt == "losing" && request["losing_succeeds"].as_bool() == Some(true) {
+            let body = if streaming {
+                CONCURRENT_LOSING_CHAT_SSE.to_string()
+            } else if request["same_body"].as_bool() == Some(true) {
+                // An upstream cache can answer both attempts with the same body.
+                concurrent_selected_chat_response().to_string()
+            } else {
+                let mut response = concurrent_selected_chat_response();
+                response["id"] = json!("chatcmpl-losing");
+                response.to_string()
+            };
+            return Response::builder()
+                .status(StatusCode::OK)
+                .header(header::CONTENT_TYPE, "application/x-losing-success")
+                .header("x-upstream-attempt", attempt)
+                .header("x-upstream-shared", "same")
+                .body(Body::from(body))
+                .unwrap();
+        }
 
         let (status, content_type, body) = match (attempt, streaming, both_fail) {
             ("selected", false, true) => (
@@ -5449,6 +5468,7 @@ async fn spawn_concurrent_attempt_upstream(release_losing: Arc<Semaphore>) -> Te
             .status(status)
             .header(header::CONTENT_TYPE, content_type)
             .header("x-upstream-attempt", attempt)
+            .header("x-upstream-shared", "same")
             .body(Body::from(body))
             .unwrap()
     }
@@ -5543,9 +5563,14 @@ async fn gateway_concurrent_next_uses_canonical_selected_buffered_response() {
             .and_then(|value| value.to_str().ok()),
         Some("application/json")
     );
-    assert!(
-        response.headers().get("x-upstream-attempt").is_none(),
-        "managed success must not inherit metadata from an arbitrary upstream attempt"
+    assert_eq!(
+        response
+            .headers()
+            .get_all("x-upstream-attempt")
+            .iter()
+            .collect::<Vec<_>>(),
+        ["selected"],
+        "managed success must carry the selected attempt's headers, never the losing attempt's"
     );
     let body = response.into_body().collect().await.unwrap().to_bytes();
     assert_eq!(
@@ -5628,14 +5653,267 @@ async fn gateway_concurrent_next_uses_canonical_selected_streaming_response() {
             .and_then(|value| value.to_str().ok()),
         Some("text/event-stream")
     );
-    assert!(
-        response.headers().get("x-upstream-attempt").is_none(),
-        "managed stream success must not inherit metadata from an arbitrary upstream attempt"
+    assert_eq!(
+        response
+            .headers()
+            .get_all("x-upstream-attempt")
+            .iter()
+            .collect::<Vec<_>>(),
+        ["selected"],
+        "managed stream success must carry the selected attempt's headers, never the losing attempt's"
     );
     let body = response.into_body().collect().await.unwrap().to_bytes();
     let body = std::str::from_utf8(&body).unwrap();
     assert!(body.contains("selected attempt"), "{body}");
     assert!(!body.contains("losing attempt"), "{body}");
+}
+
+/// Both concurrent attempts succeed and the later one finishes last; the returned attempt's
+/// headers must still win over the latest success.
+#[tokio::test]
+async fn gateway_concurrent_successes_keep_the_selected_attempt_headers() {
+    let _guard = PLUGIN_CONFIG_TEST_LOCK.lock().await;
+    let _ = crate::test_support::plugin_host::test_close_plugin_host();
+
+    const BUFFERED_NAME: &str = "cli-test-concurrent-buffered-successes";
+    const STREAMING_NAME: &str = "cli-test-concurrent-streaming-successes";
+    const MARKER: &str = "select one of two successful concurrent attempts";
+    let _ = deregister_llm_execution_intercept(BUFFERED_NAME);
+    let _buffered_cleanup = LlmExecutionInterceptCleanup(BUFFERED_NAME);
+    let _ = deregister_llm_stream_execution_intercept(STREAMING_NAME);
+    let _streaming_cleanup = LlmStreamExecutionInterceptCleanup(STREAMING_NAME);
+    let release_losing = Arc::new(Semaphore::new(0));
+    let buffered_release = release_losing.clone();
+    register_llm_execution_intercept(
+        BUFFERED_NAME,
+        1,
+        Arc::new(move |_name, request, _context, next| {
+            let release_losing = buffered_release.clone();
+            Box::pin(async move {
+                if request.content["messages"][0]["content"].as_str() != Some(MARKER) {
+                    return next(request).await;
+                }
+                let mut selected_request = request.clone();
+                selected_request.content["attempt"] = json!("selected");
+                let mut losing_request = request;
+                losing_request.content["attempt"] = json!("losing");
+                losing_request.content["losing_succeeds"] = json!(true);
+                let selected = next(selected_request).await;
+                release_losing.add_permits(1);
+                assert!(next(losing_request).await.is_ok());
+                selected
+            })
+        }),
+    )
+    .unwrap();
+    let streaming_release = release_losing.clone();
+    register_llm_stream_execution_intercept(
+        STREAMING_NAME,
+        1,
+        Arc::new(move |_name, request, _context, next| {
+            let release_losing = streaming_release.clone();
+            Box::pin(async move {
+                if request.content["messages"][0]["content"].as_str() != Some(MARKER) {
+                    return next(request).await;
+                }
+                let mut selected_request = request.clone();
+                selected_request.content["attempt"] = json!("selected");
+                let mut losing_request = request;
+                losing_request.content["attempt"] = json!("losing");
+                losing_request.content["losing_succeeds"] = json!(true);
+                let selected = next(selected_request).await;
+                release_losing.add_permits(1);
+                assert!(next(losing_request).await.is_ok());
+                selected
+            })
+        }),
+    )
+    .unwrap();
+
+    let upstream = spawn_concurrent_attempt_upstream(release_losing).await;
+    let mut config = test_config();
+    config.openai_base_url = upstream.url();
+    for streaming in [false, true] {
+        let response = router(config.clone())
+            .oneshot(
+                Request::builder()
+                    .method("POST")
+                    .uri("/v1/chat/completions")
+                    .header(header::CONTENT_TYPE, "application/json")
+                    .body(Body::from(
+                        json!({
+                            "model": "gpt-4o",
+                            "messages": [{"role": "user", "content": MARKER}],
+                            "stream": streaming
+                        })
+                        .to_string(),
+                    ))
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+        assert_eq!(response.status(), StatusCode::OK, "streaming={streaming}");
+        assert_eq!(
+            response
+                .headers()
+                .get_all("x-upstream-attempt")
+                .iter()
+                .collect::<Vec<_>>(),
+            ["selected"],
+            "streaming={streaming}"
+        );
+        let body = response.into_body().collect().await.unwrap().to_bytes();
+        let body = std::str::from_utf8(&body).unwrap();
+        assert!(!body.contains("losing"), "streaming={streaming}: {body}");
+    }
+}
+
+/// Middleware reads the first event of both streams, then returns the selected stream with its
+/// first event replayed. The headers must follow the returned content, not the last stream read.
+#[tokio::test]
+async fn gateway_streaming_headers_follow_the_returned_stream_after_both_are_read() {
+    use futures_util::StreamExt;
+    let _guard = PLUGIN_CONFIG_TEST_LOCK.lock().await;
+    let _ = crate::test_support::plugin_host::test_close_plugin_host();
+
+    const INTERCEPT_NAME: &str = "cli-test-concurrent-streaming-pre-read";
+    const MARKER: &str = "read both streams before returning one";
+    let _ = deregister_llm_stream_execution_intercept(INTERCEPT_NAME);
+    let _cleanup = LlmStreamExecutionInterceptCleanup(INTERCEPT_NAME);
+    let release_losing = Arc::new(Semaphore::new(0));
+    let release_from_intercept = release_losing.clone();
+    register_llm_stream_execution_intercept(
+        INTERCEPT_NAME,
+        1,
+        Arc::new(move |_name, request, _context, next| {
+            let release_losing = release_from_intercept.clone();
+            Box::pin(async move {
+                if request.content["messages"][0]["content"].as_str() != Some(MARKER) {
+                    return next(request).await;
+                }
+                let mut selected_request = request.clone();
+                selected_request.content["attempt"] = json!("selected");
+                let mut losing_request = request;
+                losing_request.content["attempt"] = json!("losing");
+                losing_request.content["losing_succeeds"] = json!(true);
+                let mut selected = next(selected_request).await?;
+                release_losing.add_permits(1);
+                let mut losing = next(losing_request).await?;
+                let selected_first = selected.next().await.expect("selected first event")?;
+                let losing_first = losing.next().await.expect("losing first event")?;
+                assert!(losing_first.get("losing").is_some());
+                drop(losing);
+                let replayed =
+                    futures_util::stream::once(async move { Ok(selected_first) }).chain(selected);
+                Ok(nemo_relay_runtime::api::runtime::LlmJsonStream::new(
+                    replayed,
+                ))
+            })
+        }),
+    )
+    .unwrap();
+
+    let upstream = spawn_concurrent_attempt_upstream(release_losing).await;
+    let mut config = test_config();
+    config.openai_base_url = upstream.url();
+    let response = router(config)
+        .oneshot(
+            Request::builder()
+                .method("POST")
+                .uri("/v1/chat/completions")
+                .header(header::CONTENT_TYPE, "application/json")
+                .body(Body::from(
+                    json!({
+                        "model": "gpt-4o",
+                        "messages": [{"role": "user", "content": MARKER}],
+                        "stream": true
+                    })
+                    .to_string(),
+                ))
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(response.status(), StatusCode::OK);
+    assert_eq!(
+        response
+            .headers()
+            .get_all("x-upstream-attempt")
+            .iter()
+            .collect::<Vec<_>>(),
+        ["selected"]
+    );
+    assert_eq!(response.headers()["x-upstream-shared"], "same");
+    assert_eq!(
+        response.headers()[header::CONTENT_TYPE],
+        "text/event-stream"
+    );
+    let body = response.into_body().collect().await.unwrap().to_bytes();
+    let body = std::str::from_utf8(&body).unwrap();
+    assert!(body.contains("selected attempt"), "{body}");
+    assert!(!body.contains("losing"), "{body}");
+}
+
+/// Two attempts return the same body with different headers, as an upstream cache can. No
+/// attempt-specific header may be guessed; headers both attempts agree on are kept.
+#[tokio::test]
+async fn gateway_identical_buffered_successes_keep_only_shared_headers() {
+    let _guard = PLUGIN_CONFIG_TEST_LOCK.lock().await;
+    let _ = crate::test_support::plugin_host::test_close_plugin_host();
+
+    const INTERCEPT_NAME: &str = "cli-test-concurrent-buffered-identical";
+    const MARKER: &str = "two attempts with the same body";
+    let _ = deregister_llm_execution_intercept(INTERCEPT_NAME);
+    let _cleanup = LlmExecutionInterceptCleanup(INTERCEPT_NAME);
+    let release_losing = Arc::new(Semaphore::new(0));
+    let release_from_intercept = release_losing.clone();
+    register_llm_execution_intercept(
+        INTERCEPT_NAME,
+        1,
+        Arc::new(move |_name, request, _context, next| {
+            let release_losing = release_from_intercept.clone();
+            Box::pin(async move {
+                if request.content["messages"][0]["content"].as_str() != Some(MARKER) {
+                    return next(request).await;
+                }
+                let mut selected_request = request.clone();
+                selected_request.content["attempt"] = json!("selected");
+                let mut losing_request = request;
+                losing_request.content["attempt"] = json!("losing");
+                losing_request.content["losing_succeeds"] = json!(true);
+                losing_request.content["same_body"] = json!(true);
+                let selected = next(selected_request).await;
+                release_losing.add_permits(1);
+                assert!(next(losing_request).await.is_ok());
+                selected
+            })
+        }),
+    )
+    .unwrap();
+
+    let upstream = spawn_concurrent_attempt_upstream(release_losing).await;
+    let mut config = test_config();
+    config.openai_base_url = upstream.url();
+    let response = router(config)
+        .oneshot(
+            Request::builder()
+                .method("POST")
+                .uri("/v1/chat/completions")
+                .header(header::CONTENT_TYPE, "application/json")
+                .body(Body::from(
+                    json!({
+                        "model": "gpt-4o",
+                        "messages": [{"role": "user", "content": MARKER}]
+                    })
+                    .to_string(),
+                ))
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(response.status(), StatusCode::OK);
+    assert!(response.headers().get("x-upstream-attempt").is_none());
+    assert_eq!(response.headers()["x-upstream-shared"], "same");
 }
 
 #[tokio::test]
@@ -7193,6 +7471,118 @@ async fn unmanaged_routes_preserve_streaming_and_error_responses_without_session
         }
     }
     assert!(!state.sessions.has_open_sessions().await);
+    provider_task.abort();
+}
+
+#[tokio::test]
+async fn managed_success_responses_keep_provider_headers() {
+    use crate::gateway::websocket::tests::serve;
+    let provider = Router::new().fallback(|request: Request<Body>| async move {
+        let body = axum::body::to_bytes(request.into_body(), usize::MAX)
+            .await
+            .unwrap();
+        let body: Value = serde_json::from_slice(&body).unwrap();
+        let streaming = body["stream"] == json!(true);
+        let builder = Response::builder()
+            .status(StatusCode::OK)
+            .header("request-id", "req_mock_1")
+            .header("anthropic-ratelimit-unified-status", "allowed_warning")
+            .header("set-cookie", "a=1")
+            .header("set-cookie", "b=2")
+            .header("content-encoding", "identity")
+            .header("repr-digest", "sha-256=:AAAA:")
+            .header("x-nemo-relay-worker-route-failure", "1");
+        if streaming {
+            builder
+                .header("content-type", "text/event-stream; charset=utf-8")
+                .body(Body::from(
+                    "data: {\"type\":\"message_start\",\"message\":{\"id\":\"msg_1\",\"type\":\"message\",\"role\":\"assistant\",\"model\":\"claude-test\",\"content\":[],\"usage\":{\"input_tokens\":1,\"output_tokens\":0}}}\n\n\
+                     data: {\"type\":\"message_delta\",\"delta\":{\"stop_reason\":\"end_turn\"},\"usage\":{\"input_tokens\":1,\"output_tokens\":1}}\n\n\
+                     data: {\"type\":\"message_stop\"}\n\n",
+                ))
+                .unwrap()
+        } else {
+            builder
+                .header("content-type", "application/json; charset=utf-8")
+                .body(Body::from(
+                    json!({
+                        "id": "msg_1",
+                        "type": "message",
+                        "role": "assistant",
+                        "model": "claude-test",
+                        "content": [{"type": "text", "text": "ok"}],
+                        "stop_reason": "end_turn",
+                        "usage": {"input_tokens": 1, "output_tokens": 1}
+                    })
+                    .to_string(),
+                ))
+                .unwrap()
+        }
+    });
+    let (upstream, provider_task) = serve(provider).await;
+    let mut config = test_config();
+    config.anthropic_base_url = upstream;
+    let state = AppState::new(config);
+    let app = router_with_state(state.clone());
+    for streaming in [false, true] {
+        let response = app
+            .clone()
+            .oneshot(
+                Request::post("/v1/messages")
+                    .header("content-type", "application/json")
+                    .header("x-api-key", "sk-ant-test")
+                    .body(Body::from(
+                        json!({
+                            "model": "claude-test",
+                            "max_tokens": 1,
+                            "stream": streaming,
+                            "messages": [{"role": "user", "content": "hi"}]
+                        })
+                        .to_string(),
+                    ))
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+        assert_eq!(response.status(), StatusCode::OK, "streaming={streaming}");
+        let headers = response.headers();
+        assert_eq!(headers["request-id"], "req_mock_1", "streaming={streaming}");
+        assert_eq!(
+            headers["anthropic-ratelimit-unified-status"], "allowed_warning",
+            "streaming={streaming}"
+        );
+        assert_eq!(
+            headers.get_all("set-cookie").iter().collect::<Vec<_>>(),
+            ["a=1", "b=2"],
+            "streaming={streaming}"
+        );
+        // The body is re-encoded, so the provider's encoding and digest no longer describe it.
+        assert!(
+            headers.get("content-encoding").is_none(),
+            "streaming={streaming}"
+        );
+        assert!(
+            headers.get("repr-digest").is_none(),
+            "streaming={streaming}"
+        );
+        // A provider must not be able to raise Relay's own worker route failure signal.
+        assert!(
+            headers.get("x-nemo-relay-worker-route-failure").is_none(),
+            "streaming={streaming}"
+        );
+        // The gateway re-encodes the body, so the content type stays its own.
+        assert_eq!(
+            headers.get_all("content-type").iter().collect::<Vec<_>>(),
+            [if streaming {
+                "text/event-stream"
+            } else {
+                "application/json"
+            }],
+            "streaming={streaming}"
+        );
+        response.into_body().collect().await.unwrap();
+    }
+    state.sessions.close_all("test_shutdown").await.unwrap();
     provider_task.abort();
 }
 
