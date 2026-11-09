@@ -301,7 +301,7 @@ Return the provider-specific tool-call correlation identifier.
 
 #### `annotated_request`
 
-<pre className="rust-signature"><code dangerouslySetInnerHTML={{"__html": "pub fn annotated_request(&amp;self) -&gt; <a href=\"https://doc.rust-lang.org/1.96.1/core/option/enum.Option.html\">Option</a>&lt;&amp;<a href=\"https://doc.rust-lang.org/1.96.1/alloc/sync/struct.Arc.html\">Arc</a>&lt;AnnotatedLlmRequest&gt;&gt;"}} /></pre>
+<pre className="rust-signature"><code dangerouslySetInnerHTML={{"__html": "pub fn annotated_request(&amp;self) -&gt; <a href=\"https://doc.rust-lang.org/1.96.1/core/option/enum.Option.html\">Option</a>&lt;&amp;<a href=\"https://doc.rust-lang.org/1.96.1/alloc/sync/struct.Arc.html\">Arc</a>&lt;<a href=\"../../../nemo-relay-types/codec/request/struct-annotatedllmrequest\">AnnotatedLlmRequest</a>&gt;&gt;"}} /></pre>
 
 Return the runtime-only annotated LLM request.
 
@@ -311,7 +311,7 @@ Return the runtime-only annotated LLM request.
 
 #### `annotated_response`
 
-<pre className="rust-signature"><code dangerouslySetInnerHTML={{"__html": "pub fn annotated_response(&amp;self) -&gt; <a href=\"https://doc.rust-lang.org/1.96.1/core/option/enum.Option.html\">Option</a>&lt;&amp;<a href=\"https://doc.rust-lang.org/1.96.1/alloc/sync/struct.Arc.html\">Arc</a>&lt;AnnotatedLlmResponse&gt;&gt;"}} /></pre>
+<pre className="rust-signature"><code dangerouslySetInnerHTML={{"__html": "pub fn annotated_response(&amp;self) -&gt; <a href=\"https://doc.rust-lang.org/1.96.1/core/option/enum.Option.html\">Option</a>&lt;&amp;<a href=\"https://doc.rust-lang.org/1.96.1/alloc/sync/struct.Arc.html\">Arc</a>&lt;<a href=\"../../../nemo-relay-types/codec/response/struct-annotatedllmresponse\">AnnotatedLlmResponse</a>&gt;&gt;"}} /></pre>
 
 Return the runtime-only annotated LLM response.
 
@@ -385,11 +385,11 @@ Return true for scope-end events.
 
 #### `normalized_llm_request`
 
-<pre className="rust-signature"><code dangerouslySetInnerHTML={{"__html": "fn <a href=\"trait-eventnormalizationext\">normalized_llm_request</a>(&amp;self) -&gt; <a href=\"https://doc.rust-lang.org/1.96.1/core/option/enum.Option.html\">Option</a>&lt;<a href=\"https://doc.rust-lang.org/1.96.1/alloc/borrow/enum.Cow.html\">Cow</a>&lt;'_, AnnotatedLlmRequest&gt;&gt;"}} /></pre>
+<pre className="rust-signature"><code dangerouslySetInnerHTML={{"__html": "fn <a href=\"trait-eventnormalizationext\">normalized_llm_request</a>(&amp;self) -&gt; <a href=\"https://doc.rust-lang.org/1.96.1/core/option/enum.Option.html\">Option</a>&lt;<a href=\"https://doc.rust-lang.org/1.96.1/alloc/borrow/enum.Cow.html\">Cow</a>&lt;'_, <a href=\"../../../nemo-relay-types/codec/request/struct-annotatedllmrequest\">AnnotatedLlmRequest</a>&gt;&gt;"}} /></pre>
 
 #### `normalized_llm_response`
 
-<pre className="rust-signature"><code dangerouslySetInnerHTML={{"__html": "fn <a href=\"trait-eventnormalizationext\">normalized_llm_response</a>(&amp;self) -&gt; <a href=\"https://doc.rust-lang.org/1.96.1/core/option/enum.Option.html\">Option</a>&lt;<a href=\"https://doc.rust-lang.org/1.96.1/alloc/borrow/enum.Cow.html\">Cow</a>&lt;'_, AnnotatedLlmResponse&gt;&gt;"}} /></pre>
+<pre className="rust-signature"><code dangerouslySetInnerHTML={{"__html": "fn <a href=\"trait-eventnormalizationext\">normalized_llm_response</a>(&amp;self) -&gt; <a href=\"https://doc.rust-lang.org/1.96.1/core/option/enum.Option.html\">Option</a>&lt;<a href=\"https://doc.rust-lang.org/1.96.1/alloc/borrow/enum.Cow.html\">Cow</a>&lt;'_, <a href=\"../../../nemo-relay-types/codec/response/struct-annotatedllmresponse\">AnnotatedLlmResponse</a>&gt;&gt;"}} /></pre>
 
 ### `impl PartialEq for Event`
 

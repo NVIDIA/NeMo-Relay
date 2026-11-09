@@ -9,7 +9,7 @@ SPDX-License-Identifier: Apache-2.0 */}
 
 Generated from `cargo doc --no-deps -p nemo-relay-builtins -p nemo-relay-diagnostics -p nemo-relay-logging -p nemo-relay-plugin-host -p nemo-relay-codecs -p nemo-relay -p nemo-relay-runtime -p nemo-relay-model-pricing -p nemo-relay-resource-metrics -p nemo-relay-observability -p nemo-relay-adaptive -p nemo-relay-pii-redaction -p nemo-relay-ffi -p nemo-relay-types -p nemo-relay-plugin -p nemo-relay-worker-proto -p nemo-relay-worker`.
 
-<pre className="rust-signature"><code dangerouslySetInnerHTML={{"__html": "pub struct LlmRequestInterceptOutcome &#123;\n    pub request: <a href=\"struct-llmrequest\">LlmRequest</a>,\n    pub annotated_request: <a href=\"https://doc.rust-lang.org/1.96.1/core/option/enum.Option.html\">Option</a>&lt;AnnotatedLlmRequest&gt;,\n    pub pending_marks: <a href=\"https://doc.rust-lang.org/1.96.1/alloc/vec/struct.Vec.html\">Vec</a>&lt;<a href=\"../event/struct-pendingmarkspec\">PendingMarkSpec</a>&gt;,\n    pub optimization_contributions: <a href=\"https://doc.rust-lang.org/1.96.1/alloc/vec/struct.Vec.html\">Vec</a>&lt;LlmOptimizationContribution&gt;,\n&#125;"}} /></pre>
+<pre className="rust-signature"><code dangerouslySetInnerHTML={{"__html": "pub struct LlmRequestInterceptOutcome &#123;\n    pub request: <a href=\"struct-llmrequest\">LlmRequest</a>,\n    pub annotated_request: <a href=\"https://doc.rust-lang.org/1.96.1/core/option/enum.Option.html\">Option</a>&lt;<a href=\"../../../nemo-relay-types/codec/request/struct-annotatedllmrequest\">AnnotatedLlmRequest</a>&gt;,\n    pub pending_marks: <a href=\"https://doc.rust-lang.org/1.96.1/alloc/vec/struct.Vec.html\">Vec</a>&lt;<a href=\"../event/struct-pendingmarkspec\">PendingMarkSpec</a>&gt;,\n    pub optimization_contributions: <a href=\"https://doc.rust-lang.org/1.96.1/alloc/vec/struct.Vec.html\">Vec</a>&lt;<a href=\"../../../nemo-relay-types/codec/optimization/struct-llmoptimizationcontribution\">LlmOptimizationContribution</a>&gt;,\n&#125;"}} /></pre>
 
 Result of an LLM request intercept that can schedule lifecycle marks.
 
@@ -43,7 +43,7 @@ Ordered plugin-neutral optimization evidence for this LLM call.
 
 #### `new`
 
-<pre className="rust-signature"><code dangerouslySetInnerHTML={{"__html": "pub fn new(\n    request: <a href=\"struct-llmrequest\">LlmRequest</a>,\n    annotated_request: <a href=\"https://doc.rust-lang.org/1.96.1/core/option/enum.Option.html\">Option</a>&lt;AnnotatedLlmRequest&gt;,\n) -&gt; <a href=\"struct-llmrequestinterceptoutcome\">LlmRequestInterceptOutcome</a>"}} /></pre>
+<pre className="rust-signature"><code dangerouslySetInnerHTML={{"__html": "pub fn new(\n    request: <a href=\"struct-llmrequest\">LlmRequest</a>,\n    annotated_request: <a href=\"https://doc.rust-lang.org/1.96.1/core/option/enum.Option.html\">Option</a>&lt;<a href=\"../../../nemo-relay-types/codec/request/struct-annotatedllmrequest\">AnnotatedLlmRequest</a>&gt;,\n) -&gt; <a href=\"struct-llmrequestinterceptoutcome\">LlmRequestInterceptOutcome</a>"}} /></pre>
 
 Create an outcome without pending marks.
 
@@ -55,7 +55,7 @@ Append one pending mark while preserving interceptor order.
 
 #### `with_optimization_contribution`
 
-<pre className="rust-signature"><code dangerouslySetInnerHTML={{"__html": "pub fn with_optimization_contribution(\n    self,\n    contribution: LlmOptimizationContribution,\n) -&gt; <a href=\"struct-llmrequestinterceptoutcome\">LlmRequestInterceptOutcome</a>"}} /></pre>
+<pre className="rust-signature"><code dangerouslySetInnerHTML={{"__html": "pub fn with_optimization_contribution(\n    self,\n    contribution: <a href=\"../../../nemo-relay-types/codec/optimization/struct-llmoptimizationcontribution\">LlmOptimizationContribution</a>,\n) -&gt; <a href=\"struct-llmrequestinterceptoutcome\">LlmRequestInterceptOutcome</a>"}} /></pre>
 
 Append one optimization contribution while preserving interceptor order.
 
@@ -91,19 +91,19 @@ Append one optimization contribution while preserving interceptor order.
 
 ### `impl From<(LlmRequest, AnnotatedLlmRequest)> for LlmRequestInterceptOutcome`
 
-<pre className="rust-signature"><code dangerouslySetInnerHTML={{"__html": "impl <a href=\"https://doc.rust-lang.org/1.96.1/core/convert/trait.From.html\">From</a>&lt;(<a href=\"struct-llmrequest\">LlmRequest</a>, AnnotatedLlmRequest)&gt; for <a href=\"struct-llmrequestinterceptoutcome\">LlmRequestInterceptOutcome</a>"}} /></pre>
+<pre className="rust-signature"><code dangerouslySetInnerHTML={{"__html": "impl <a href=\"https://doc.rust-lang.org/1.96.1/core/convert/trait.From.html\">From</a>&lt;(<a href=\"struct-llmrequest\">LlmRequest</a>, <a href=\"../../../nemo-relay-types/codec/request/struct-annotatedllmrequest\">AnnotatedLlmRequest</a>)&gt; for <a href=\"struct-llmrequestinterceptoutcome\">LlmRequestInterceptOutcome</a>"}} /></pre>
 
 #### `from`
 
-<pre className="rust-signature"><code dangerouslySetInnerHTML={{"__html": "fn <a href=\"https://doc.rust-lang.org/1.96.1/core/convert/trait.From.html#tymethod.from\">from</a>(_: (<a href=\"struct-llmrequest\">LlmRequest</a>, AnnotatedLlmRequest)) -&gt; <a href=\"struct-llmrequestinterceptoutcome\">LlmRequestInterceptOutcome</a>"}} /></pre>
+<pre className="rust-signature"><code dangerouslySetInnerHTML={{"__html": "fn <a href=\"https://doc.rust-lang.org/1.96.1/core/convert/trait.From.html#tymethod.from\">from</a>(_: (<a href=\"struct-llmrequest\">LlmRequest</a>, <a href=\"../../../nemo-relay-types/codec/request/struct-annotatedllmrequest\">AnnotatedLlmRequest</a>)) -&gt; <a href=\"struct-llmrequestinterceptoutcome\">LlmRequestInterceptOutcome</a>"}} /></pre>
 
 ### `impl From<(LlmRequest, Option<AnnotatedLlmRequest>)> for LlmRequestInterceptOutcome`
 
-<pre className="rust-signature"><code dangerouslySetInnerHTML={{"__html": "impl <a href=\"https://doc.rust-lang.org/1.96.1/core/convert/trait.From.html\">From</a>&lt;(<a href=\"struct-llmrequest\">LlmRequest</a>, <a href=\"https://doc.rust-lang.org/1.96.1/core/option/enum.Option.html\">Option</a>&lt;AnnotatedLlmRequest&gt;)&gt; for <a href=\"struct-llmrequestinterceptoutcome\">LlmRequestInterceptOutcome</a>"}} /></pre>
+<pre className="rust-signature"><code dangerouslySetInnerHTML={{"__html": "impl <a href=\"https://doc.rust-lang.org/1.96.1/core/convert/trait.From.html\">From</a>&lt;(<a href=\"struct-llmrequest\">LlmRequest</a>, <a href=\"https://doc.rust-lang.org/1.96.1/core/option/enum.Option.html\">Option</a>&lt;<a href=\"../../../nemo-relay-types/codec/request/struct-annotatedllmrequest\">AnnotatedLlmRequest</a>&gt;)&gt; for <a href=\"struct-llmrequestinterceptoutcome\">LlmRequestInterceptOutcome</a>"}} /></pre>
 
 #### `from`
 
-<pre className="rust-signature"><code dangerouslySetInnerHTML={{"__html": "fn <a href=\"https://doc.rust-lang.org/1.96.1/core/convert/trait.From.html#tymethod.from\">from</a>(\n    _: (<a href=\"struct-llmrequest\">LlmRequest</a>, <a href=\"https://doc.rust-lang.org/1.96.1/core/option/enum.Option.html\">Option</a>&lt;AnnotatedLlmRequest&gt;),\n) -&gt; <a href=\"struct-llmrequestinterceptoutcome\">LlmRequestInterceptOutcome</a>"}} /></pre>
+<pre className="rust-signature"><code dangerouslySetInnerHTML={{"__html": "fn <a href=\"https://doc.rust-lang.org/1.96.1/core/convert/trait.From.html#tymethod.from\">from</a>(\n    _: (<a href=\"struct-llmrequest\">LlmRequest</a>, <a href=\"https://doc.rust-lang.org/1.96.1/core/option/enum.Option.html\">Option</a>&lt;<a href=\"../../../nemo-relay-types/codec/request/struct-annotatedllmrequest\">AnnotatedLlmRequest</a>&gt;),\n) -&gt; <a href=\"struct-llmrequestinterceptoutcome\">LlmRequestInterceptOutcome</a>"}} /></pre>
 
 ### `impl From<LlmRequest> for LlmRequestInterceptOutcome`
 

@@ -25,7 +25,7 @@ When created by [`LoggingRuntime::configure`](/reference/api/rust-library-refere
 
 #### `configure`
 
-<pre className="rust-signature"><code dangerouslySetInnerHTML={{"__html": "pub fn configure(config: <a href=\"struct-loggingconfig\">LoggingConfig</a>) -&gt; Result&lt;Self&gt;"}} /></pre>
+<pre className="rust-signature"><code dangerouslySetInnerHTML={{"__html": "pub fn configure(config: <a href=\"struct-loggingconfig\">LoggingConfig</a>) -&gt; <a href=\"../nemo-relay-types/error/type-result\">Result</a>&lt;Self&gt;"}} /></pre>
 
 Installs process-wide operational logging from resolved configuration.
 
@@ -33,7 +33,7 @@ Stderr is enabled by default and can be disabled with [`LoggingConfig::stderr_en
 
 #### `configure_with_diagnostics`
 
-<pre className="rust-signature"><code dangerouslySetInnerHTML={{"__html": "pub fn configure_with_diagnostics(\n    config: <a href=\"struct-loggingconfig\">LoggingConfig</a>,\n    context: &amp;Diagnostics,\n) -&gt; Result&lt;Self&gt;"}} /></pre>
+<pre className="rust-signature"><code dangerouslySetInnerHTML={{"__html": "pub fn configure_with_diagnostics(\n    config: <a href=\"struct-loggingconfig\">LoggingConfig</a>,\n    context: &amp;Diagnostics,\n) -&gt; <a href=\"../nemo-relay-types/error/type-result\">Result</a>&lt;Self&gt;"}} /></pre>
 
 Installs operational logging with diagnostics owned by an independent diagnostic context.
 
@@ -41,13 +41,13 @@ Sink initialization and delivery failures remain queryable when logging is unava
 
 #### `configure_from_file_path`
 
-<pre className="rust-signature"><code dangerouslySetInnerHTML={{"__html": "pub fn configure_from_file_path(path: impl <a href=\"https://doc.rust-lang.org/1.96.1/core/convert/trait.AsRef.html\">AsRef</a>&lt;<a href=\"https://doc.rust-lang.org/1.96.1/std/path/struct.Path.html\">Path</a>&gt;) -&gt; Result&lt;Self&gt;"}} /></pre>
+<pre className="rust-signature"><code dangerouslySetInnerHTML={{"__html": "pub fn configure_from_file_path(path: impl <a href=\"https://doc.rust-lang.org/1.96.1/core/convert/trait.AsRef.html\">AsRef</a>&lt;<a href=\"https://doc.rust-lang.org/1.96.1/std/path/struct.Path.html\">Path</a>&gt;) -&gt; <a href=\"../nemo-relay-types/error/type-result\">Result</a>&lt;Self&gt;"}} /></pre>
 
 Loads logging configuration from an absolute TOML path and installs it process-wide.
 
 #### `configure_from_environment`
 
-<pre className="rust-signature"><code dangerouslySetInnerHTML={{"__html": "pub fn configure_from_environment() -&gt; Result&lt;Self&gt;"}} /></pre>
+<pre className="rust-signature"><code dangerouslySetInnerHTML={{"__html": "pub fn configure_from_environment() -&gt; <a href=\"../nemo-relay-types/error/type-result\">Result</a>&lt;Self&gt;"}} /></pre>
 
 Resolves supported logging environment variables and installs the resulting configuration.
 

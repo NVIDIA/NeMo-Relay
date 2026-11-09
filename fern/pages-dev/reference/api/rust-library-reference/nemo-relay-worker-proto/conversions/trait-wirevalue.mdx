@@ -59,9 +59,33 @@ In older versions of Rust, dyn compatibility was called "object safety", so this
 
 <pre className="rust-signature"><code dangerouslySetInnerHTML={{"__html": "fn from_wire(value: <a href=\"https://doc.rust-lang.org/1.96.1/std/primitive.f64.html\">f64</a>) -&gt; <a href=\"type-result\">Result</a>&lt;Self&gt;"}} /></pre>
 
-### `impl WireValue<i32> for i32`
+### `impl WireValue<i32> for LogSeverity`
 
-<pre className="rust-signature"><code dangerouslySetInnerHTML={{"__html": "impl <a href=\"trait-wirevalue\">WireValue</a>&lt;<a href=\"https://doc.rust-lang.org/1.96.1/std/primitive.i32.html\">i32</a>&gt; for <a href=\"https://doc.rust-lang.org/1.96.1/std/primitive.i32.html\">i32</a>"}} /></pre>
+<pre className="rust-signature"><code dangerouslySetInnerHTML={{"__html": "impl <a href=\"trait-wirevalue\">WireValue</a>&lt;<a href=\"https://doc.rust-lang.org/1.96.1/std/primitive.i32.html\">i32</a>&gt; for <a href=\"../../nemo-relay-types/api/event/enum-logseverity\">LogSeverity</a>"}} /></pre>
+
+#### `to_wire`
+
+<pre className="rust-signature"><code dangerouslySetInnerHTML={{"__html": "fn to_wire(self) -&gt; <a href=\"type-result\">Result</a>&lt;<a href=\"https://doc.rust-lang.org/1.96.1/std/primitive.i32.html\">i32</a>&gt;"}} /></pre>
+
+#### `from_wire`
+
+<pre className="rust-signature"><code dangerouslySetInnerHTML={{"__html": "fn from_wire(value: <a href=\"https://doc.rust-lang.org/1.96.1/std/primitive.i32.html\">i32</a>) -&gt; <a href=\"type-result\">Result</a>&lt;Self&gt;"}} /></pre>
+
+### `impl WireValue<i32> for ScopeCategory`
+
+<pre className="rust-signature"><code dangerouslySetInnerHTML={{"__html": "impl <a href=\"trait-wirevalue\">WireValue</a>&lt;<a href=\"https://doc.rust-lang.org/1.96.1/std/primitive.i32.html\">i32</a>&gt; for <a href=\"../../nemo-relay-types/api/event/enum-scopecategory\">ScopeCategory</a>"}} /></pre>
+
+#### `to_wire`
+
+<pre className="rust-signature"><code dangerouslySetInnerHTML={{"__html": "fn to_wire(self) -&gt; <a href=\"type-result\">Result</a>&lt;<a href=\"https://doc.rust-lang.org/1.96.1/std/primitive.i32.html\">i32</a>&gt;"}} /></pre>
+
+#### `from_wire`
+
+<pre className="rust-signature"><code dangerouslySetInnerHTML={{"__html": "fn from_wire(value: <a href=\"https://doc.rust-lang.org/1.96.1/std/primitive.i32.html\">i32</a>) -&gt; <a href=\"type-result\">Result</a>&lt;Self&gt;"}} /></pre>
+
+### `impl WireValue<i32> for RuntimeRegistrationKind`
+
+<pre className="rust-signature"><code dangerouslySetInnerHTML={{"__html": "impl <a href=\"trait-wirevalue\">WireValue</a>&lt;<a href=\"https://doc.rust-lang.org/1.96.1/std/primitive.i32.html\">i32</a>&gt; for <a href=\"../../nemo-relay-types/api/registry/enum-runtimeregistrationkind\">RuntimeRegistrationKind</a>"}} /></pre>
 
 #### `to_wire`
 
@@ -73,19 +97,7 @@ In older versions of Rust, dyn compatibility was called "object safety", so this
 
 ### `impl WireValue<i32> for CapacityUnit`
 
-<pre className="rust-signature"><code dangerouslySetInnerHTML={{"__html": "impl <a href=\"trait-wirevalue\">WireValue</a>&lt;<a href=\"https://doc.rust-lang.org/1.96.1/std/primitive.i32.html\">i32</a>&gt; for CapacityUnit"}} /></pre>
-
-#### `to_wire`
-
-<pre className="rust-signature"><code dangerouslySetInnerHTML={{"__html": "fn to_wire(self) -&gt; <a href=\"type-result\">Result</a>&lt;<a href=\"https://doc.rust-lang.org/1.96.1/std/primitive.i32.html\">i32</a>&gt;"}} /></pre>
-
-#### `from_wire`
-
-<pre className="rust-signature"><code dangerouslySetInnerHTML={{"__html": "fn from_wire(value: <a href=\"https://doc.rust-lang.org/1.96.1/std/primitive.i32.html\">i32</a>) -&gt; <a href=\"type-result\">Result</a>&lt;Self&gt;"}} /></pre>
-
-### `impl WireValue<i32> for CostSource`
-
-<pre className="rust-signature"><code dangerouslySetInnerHTML={{"__html": "impl <a href=\"trait-wirevalue\">WireValue</a>&lt;<a href=\"https://doc.rust-lang.org/1.96.1/std/primitive.i32.html\">i32</a>&gt; for CostSource"}} /></pre>
+<pre className="rust-signature"><code dangerouslySetInnerHTML={{"__html": "impl <a href=\"trait-wirevalue\">WireValue</a>&lt;<a href=\"https://doc.rust-lang.org/1.96.1/std/primitive.i32.html\">i32</a>&gt; for <a href=\"../../nemo-relay-types/api/resource_metrics/enum-capacityunit\">CapacityUnit</a>"}} /></pre>
 
 #### `to_wire`
 
@@ -97,7 +109,7 @@ In older versions of Rust, dyn compatibility was called "object safety", so this
 
 ### `impl WireValue<i32> for CountUnit`
 
-<pre className="rust-signature"><code dangerouslySetInnerHTML={{"__html": "impl <a href=\"trait-wirevalue\">WireValue</a>&lt;<a href=\"https://doc.rust-lang.org/1.96.1/std/primitive.i32.html\">i32</a>&gt; for CountUnit"}} /></pre>
+<pre className="rust-signature"><code dangerouslySetInnerHTML={{"__html": "impl <a href=\"trait-wirevalue\">WireValue</a>&lt;<a href=\"https://doc.rust-lang.org/1.96.1/std/primitive.i32.html\">i32</a>&gt; for <a href=\"../../nemo-relay-types/api/resource_metrics/enum-countunit\">CountUnit</a>"}} /></pre>
 
 #### `to_wire`
 
@@ -107,9 +119,105 @@ In older versions of Rust, dyn compatibility was called "object safety", so this
 
 <pre className="rust-signature"><code dangerouslySetInnerHTML={{"__html": "fn from_wire(value: <a href=\"https://doc.rust-lang.org/1.96.1/std/primitive.i32.html\">i32</a>) -&gt; <a href=\"type-result\">Result</a>&lt;Self&gt;"}} /></pre>
 
-### `impl WireValue<i32> for DiagnosticAvailability`
+### `impl WireValue<i32> for DurationUnit`
 
-<pre className="rust-signature"><code dangerouslySetInnerHTML={{"__html": "impl <a href=\"trait-wirevalue\">WireValue</a>&lt;<a href=\"https://doc.rust-lang.org/1.96.1/std/primitive.i32.html\">i32</a>&gt; for DiagnosticAvailability"}} /></pre>
+<pre className="rust-signature"><code dangerouslySetInnerHTML={{"__html": "impl <a href=\"trait-wirevalue\">WireValue</a>&lt;<a href=\"https://doc.rust-lang.org/1.96.1/std/primitive.i32.html\">i32</a>&gt; for <a href=\"../../nemo-relay-types/api/resource_metrics/enum-durationunit\">DurationUnit</a>"}} /></pre>
+
+#### `to_wire`
+
+<pre className="rust-signature"><code dangerouslySetInnerHTML={{"__html": "fn to_wire(self) -&gt; <a href=\"type-result\">Result</a>&lt;<a href=\"https://doc.rust-lang.org/1.96.1/std/primitive.i32.html\">i32</a>&gt;"}} /></pre>
+
+#### `from_wire`
+
+<pre className="rust-signature"><code dangerouslySetInnerHTML={{"__html": "fn from_wire(value: <a href=\"https://doc.rust-lang.org/1.96.1/std/primitive.i32.html\">i32</a>) -&gt; <a href=\"type-result\">Result</a>&lt;Self&gt;"}} /></pre>
+
+### `impl WireValue<i32> for ResourceLimitEventKind`
+
+<pre className="rust-signature"><code dangerouslySetInnerHTML={{"__html": "impl <a href=\"trait-wirevalue\">WireValue</a>&lt;<a href=\"https://doc.rust-lang.org/1.96.1/std/primitive.i32.html\">i32</a>&gt; for <a href=\"../../nemo-relay-types/api/resource_metrics/enum-resourcelimiteventkind\">ResourceLimitEventKind</a>"}} /></pre>
+
+#### `to_wire`
+
+<pre className="rust-signature"><code dangerouslySetInnerHTML={{"__html": "fn to_wire(self) -&gt; <a href=\"type-result\">Result</a>&lt;<a href=\"https://doc.rust-lang.org/1.96.1/std/primitive.i32.html\">i32</a>&gt;"}} /></pre>
+
+#### `from_wire`
+
+<pre className="rust-signature"><code dangerouslySetInnerHTML={{"__html": "fn from_wire(value: <a href=\"https://doc.rust-lang.org/1.96.1/std/primitive.i32.html\">i32</a>) -&gt; <a href=\"type-result\">Result</a>&lt;Self&gt;"}} /></pre>
+
+### `impl WireValue<i32> for ResourceLimitResource`
+
+<pre className="rust-signature"><code dangerouslySetInnerHTML={{"__html": "impl <a href=\"trait-wirevalue\">WireValue</a>&lt;<a href=\"https://doc.rust-lang.org/1.96.1/std/primitive.i32.html\">i32</a>&gt; for <a href=\"../../nemo-relay-types/api/resource_metrics/enum-resourcelimitresource\">ResourceLimitResource</a>"}} /></pre>
+
+#### `to_wire`
+
+<pre className="rust-signature"><code dangerouslySetInnerHTML={{"__html": "fn to_wire(self) -&gt; <a href=\"type-result\">Result</a>&lt;<a href=\"https://doc.rust-lang.org/1.96.1/std/primitive.i32.html\">i32</a>&gt;"}} /></pre>
+
+#### `from_wire`
+
+<pre className="rust-signature"><code dangerouslySetInnerHTML={{"__html": "fn from_wire(value: <a href=\"https://doc.rust-lang.org/1.96.1/std/primitive.i32.html\">i32</a>) -&gt; <a href=\"type-result\">Result</a>&lt;Self&gt;"}} /></pre>
+
+### `impl WireValue<i32> for ResourceMeasurementScope`
+
+<pre className="rust-signature"><code dangerouslySetInnerHTML={{"__html": "impl <a href=\"trait-wirevalue\">WireValue</a>&lt;<a href=\"https://doc.rust-lang.org/1.96.1/std/primitive.i32.html\">i32</a>&gt; for <a href=\"../../nemo-relay-types/api/resource_metrics/enum-resourcemeasurementscope\">ResourceMeasurementScope</a>"}} /></pre>
+
+#### `to_wire`
+
+<pre className="rust-signature"><code dangerouslySetInnerHTML={{"__html": "fn to_wire(self) -&gt; <a href=\"type-result\">Result</a>&lt;<a href=\"https://doc.rust-lang.org/1.96.1/std/primitive.i32.html\">i32</a>&gt;"}} /></pre>
+
+#### `from_wire`
+
+<pre className="rust-signature"><code dangerouslySetInnerHTML={{"__html": "fn from_wire(value: <a href=\"https://doc.rust-lang.org/1.96.1/std/primitive.i32.html\">i32</a>) -&gt; <a href=\"type-result\">Result</a>&lt;Self&gt;"}} /></pre>
+
+### `impl WireValue<i32> for ResourceOperatingSystem`
+
+<pre className="rust-signature"><code dangerouslySetInnerHTML={{"__html": "impl <a href=\"trait-wirevalue\">WireValue</a>&lt;<a href=\"https://doc.rust-lang.org/1.96.1/std/primitive.i32.html\">i32</a>&gt; for <a href=\"../../nemo-relay-types/api/resource_metrics/enum-resourceoperatingsystem\">ResourceOperatingSystem</a>"}} /></pre>
+
+#### `to_wire`
+
+<pre className="rust-signature"><code dangerouslySetInnerHTML={{"__html": "fn to_wire(self) -&gt; <a href=\"type-result\">Result</a>&lt;<a href=\"https://doc.rust-lang.org/1.96.1/std/primitive.i32.html\">i32</a>&gt;"}} /></pre>
+
+#### `from_wire`
+
+<pre className="rust-signature"><code dangerouslySetInnerHTML={{"__html": "fn from_wire(value: <a href=\"https://doc.rust-lang.org/1.96.1/std/primitive.i32.html\">i32</a>) -&gt; <a href=\"type-result\">Result</a>&lt;Self&gt;"}} /></pre>
+
+### `impl WireValue<i32> for ScopeType`
+
+<pre className="rust-signature"><code dangerouslySetInnerHTML={{"__html": "impl <a href=\"trait-wirevalue\">WireValue</a>&lt;<a href=\"https://doc.rust-lang.org/1.96.1/std/primitive.i32.html\">i32</a>&gt; for <a href=\"../../nemo-relay-types/api/scope/enum-scopetype\">ScopeType</a>"}} /></pre>
+
+#### `to_wire`
+
+<pre className="rust-signature"><code dangerouslySetInnerHTML={{"__html": "fn to_wire(self) -&gt; <a href=\"type-result\">Result</a>&lt;<a href=\"https://doc.rust-lang.org/1.96.1/std/primitive.i32.html\">i32</a>&gt;"}} /></pre>
+
+#### `from_wire`
+
+<pre className="rust-signature"><code dangerouslySetInnerHTML={{"__html": "fn from_wire(value: <a href=\"https://doc.rust-lang.org/1.96.1/std/primitive.i32.html\">i32</a>) -&gt; <a href=\"type-result\">Result</a>&lt;Self&gt;"}} /></pre>
+
+### `impl WireValue<i32> for LlmOptimizationEvidenceQuality`
+
+<pre className="rust-signature"><code dangerouslySetInnerHTML={{"__html": "impl <a href=\"trait-wirevalue\">WireValue</a>&lt;<a href=\"https://doc.rust-lang.org/1.96.1/std/primitive.i32.html\">i32</a>&gt; for <a href=\"../../nemo-relay-types/codec/optimization/enum-llmoptimizationevidencequality\">LlmOptimizationEvidenceQuality</a>"}} /></pre>
+
+#### `to_wire`
+
+<pre className="rust-signature"><code dangerouslySetInnerHTML={{"__html": "fn to_wire(self) -&gt; <a href=\"type-result\">Result</a>&lt;<a href=\"https://doc.rust-lang.org/1.96.1/std/primitive.i32.html\">i32</a>&gt;"}} /></pre>
+
+#### `from_wire`
+
+<pre className="rust-signature"><code dangerouslySetInnerHTML={{"__html": "fn from_wire(value: <a href=\"https://doc.rust-lang.org/1.96.1/std/primitive.i32.html\">i32</a>) -&gt; <a href=\"type-result\">Result</a>&lt;Self&gt;"}} /></pre>
+
+### `impl WireValue<i32> for LlmOptimizationSummaryStatus`
+
+<pre className="rust-signature"><code dangerouslySetInnerHTML={{"__html": "impl <a href=\"trait-wirevalue\">WireValue</a>&lt;<a href=\"https://doc.rust-lang.org/1.96.1/std/primitive.i32.html\">i32</a>&gt; for <a href=\"../../nemo-relay-types/codec/optimization/enum-llmoptimizationsummarystatus\">LlmOptimizationSummaryStatus</a>"}} /></pre>
+
+#### `to_wire`
+
+<pre className="rust-signature"><code dangerouslySetInnerHTML={{"__html": "fn to_wire(self) -&gt; <a href=\"type-result\">Result</a>&lt;<a href=\"https://doc.rust-lang.org/1.96.1/std/primitive.i32.html\">i32</a>&gt;"}} /></pre>
+
+#### `from_wire`
+
+<pre className="rust-signature"><code dangerouslySetInnerHTML={{"__html": "fn from_wire(value: <a href=\"https://doc.rust-lang.org/1.96.1/std/primitive.i32.html\">i32</a>) -&gt; <a href=\"type-result\">Result</a>&lt;Self&gt;"}} /></pre>
+
+### `impl WireValue<i32> for CostSource`
+
+<pre className="rust-signature"><code dangerouslySetInnerHTML={{"__html": "impl <a href=\"trait-wirevalue\">WireValue</a>&lt;<a href=\"https://doc.rust-lang.org/1.96.1/std/primitive.i32.html\">i32</a>&gt; for <a href=\"../../nemo-relay-types/codec/response/enum-costsource\">CostSource</a>"}} /></pre>
 
 #### `to_wire`
 
@@ -131,21 +239,9 @@ In older versions of Rust, dyn compatibility was called "object safety", so this
 
 <pre className="rust-signature"><code dangerouslySetInnerHTML={{"__html": "fn from_wire(value: <a href=\"https://doc.rust-lang.org/1.96.1/std/primitive.i32.html\">i32</a>) -&gt; <a href=\"type-result\">Result</a>&lt;Self&gt;"}} /></pre>
 
-### `impl WireValue<i32> for DiagnosticLevel`
+### `impl WireValue<i32> for PluginDiagnosticFamily`
 
-<pre className="rust-signature"><code dangerouslySetInnerHTML={{"__html": "impl <a href=\"trait-wirevalue\">WireValue</a>&lt;<a href=\"https://doc.rust-lang.org/1.96.1/std/primitive.i32.html\">i32</a>&gt; for DiagnosticLevel"}} /></pre>
-
-#### `to_wire`
-
-<pre className="rust-signature"><code dangerouslySetInnerHTML={{"__html": "fn to_wire(self) -&gt; <a href=\"type-result\">Result</a>&lt;<a href=\"https://doc.rust-lang.org/1.96.1/std/primitive.i32.html\">i32</a>&gt;"}} /></pre>
-
-#### `from_wire`
-
-<pre className="rust-signature"><code dangerouslySetInnerHTML={{"__html": "fn from_wire(value: <a href=\"https://doc.rust-lang.org/1.96.1/std/primitive.i32.html\">i32</a>) -&gt; <a href=\"type-result\">Result</a>&lt;Self&gt;"}} /></pre>
-
-### `impl WireValue<i32> for DiagnosticOutcome`
-
-<pre className="rust-signature"><code dangerouslySetInnerHTML={{"__html": "impl <a href=\"trait-wirevalue\">WireValue</a>&lt;<a href=\"https://doc.rust-lang.org/1.96.1/std/primitive.i32.html\">i32</a>&gt; for DiagnosticOutcome"}} /></pre>
+<pre className="rust-signature"><code dangerouslySetInnerHTML={{"__html": "impl <a href=\"trait-wirevalue\">WireValue</a>&lt;<a href=\"https://doc.rust-lang.org/1.96.1/std/primitive.i32.html\">i32</a>&gt; for PluginDiagnosticFamily"}} /></pre>
 
 #### `to_wire`
 
@@ -155,21 +251,9 @@ In older versions of Rust, dyn compatibility was called "object safety", so this
 
 <pre className="rust-signature"><code dangerouslySetInnerHTML={{"__html": "fn from_wire(value: <a href=\"https://doc.rust-lang.org/1.96.1/std/primitive.i32.html\">i32</a>) -&gt; <a href=\"type-result\">Result</a>&lt;Self&gt;"}} /></pre>
 
-### `impl WireValue<i32> for DiagnosticReadReason`
+### `impl WireValue<i32> for DiagnosticAvailability`
 
-<pre className="rust-signature"><code dangerouslySetInnerHTML={{"__html": "impl <a href=\"trait-wirevalue\">WireValue</a>&lt;<a href=\"https://doc.rust-lang.org/1.96.1/std/primitive.i32.html\">i32</a>&gt; for DiagnosticReadReason"}} /></pre>
-
-#### `to_wire`
-
-<pre className="rust-signature"><code dangerouslySetInnerHTML={{"__html": "fn to_wire(self) -&gt; <a href=\"type-result\">Result</a>&lt;<a href=\"https://doc.rust-lang.org/1.96.1/std/primitive.i32.html\">i32</a>&gt;"}} /></pre>
-
-#### `from_wire`
-
-<pre className="rust-signature"><code dangerouslySetInnerHTML={{"__html": "fn from_wire(value: <a href=\"https://doc.rust-lang.org/1.96.1/std/primitive.i32.html\">i32</a>) -&gt; <a href=\"type-result\">Result</a>&lt;Self&gt;"}} /></pre>
-
-### `impl WireValue<i32> for DiagnosticSeverity`
-
-<pre className="rust-signature"><code dangerouslySetInnerHTML={{"__html": "impl <a href=\"trait-wirevalue\">WireValue</a>&lt;<a href=\"https://doc.rust-lang.org/1.96.1/std/primitive.i32.html\">i32</a>&gt; for DiagnosticSeverity"}} /></pre>
+<pre className="rust-signature"><code dangerouslySetInnerHTML={{"__html": "impl <a href=\"trait-wirevalue\">WireValue</a>&lt;<a href=\"https://doc.rust-lang.org/1.96.1/std/primitive.i32.html\">i32</a>&gt; for DiagnosticAvailability"}} /></pre>
 
 #### `to_wire`
 
@@ -191,21 +275,9 @@ In older versions of Rust, dyn compatibility was called "object safety", so this
 
 <pre className="rust-signature"><code dangerouslySetInnerHTML={{"__html": "fn from_wire(value: <a href=\"https://doc.rust-lang.org/1.96.1/std/primitive.i32.html\">i32</a>) -&gt; <a href=\"type-result\">Result</a>&lt;Self&gt;"}} /></pre>
 
-### `impl WireValue<i32> for DurationUnit`
+### `impl WireValue<i32> for DiagnosticOutcome`
 
-<pre className="rust-signature"><code dangerouslySetInnerHTML={{"__html": "impl <a href=\"trait-wirevalue\">WireValue</a>&lt;<a href=\"https://doc.rust-lang.org/1.96.1/std/primitive.i32.html\">i32</a>&gt; for DurationUnit"}} /></pre>
-
-#### `to_wire`
-
-<pre className="rust-signature"><code dangerouslySetInnerHTML={{"__html": "fn to_wire(self) -&gt; <a href=\"type-result\">Result</a>&lt;<a href=\"https://doc.rust-lang.org/1.96.1/std/primitive.i32.html\">i32</a>&gt;"}} /></pre>
-
-#### `from_wire`
-
-<pre className="rust-signature"><code dangerouslySetInnerHTML={{"__html": "fn from_wire(value: <a href=\"https://doc.rust-lang.org/1.96.1/std/primitive.i32.html\">i32</a>) -&gt; <a href=\"type-result\">Result</a>&lt;Self&gt;"}} /></pre>
-
-### `impl WireValue<i32> for LlmOptimizationEvidenceQuality`
-
-<pre className="rust-signature"><code dangerouslySetInnerHTML={{"__html": "impl <a href=\"trait-wirevalue\">WireValue</a>&lt;<a href=\"https://doc.rust-lang.org/1.96.1/std/primitive.i32.html\">i32</a>&gt; for LlmOptimizationEvidenceQuality"}} /></pre>
+<pre className="rust-signature"><code dangerouslySetInnerHTML={{"__html": "impl <a href=\"trait-wirevalue\">WireValue</a>&lt;<a href=\"https://doc.rust-lang.org/1.96.1/std/primitive.i32.html\">i32</a>&gt; for DiagnosticOutcome"}} /></pre>
 
 #### `to_wire`
 
@@ -215,9 +287,9 @@ In older versions of Rust, dyn compatibility was called "object safety", so this
 
 <pre className="rust-signature"><code dangerouslySetInnerHTML={{"__html": "fn from_wire(value: <a href=\"https://doc.rust-lang.org/1.96.1/std/primitive.i32.html\">i32</a>) -&gt; <a href=\"type-result\">Result</a>&lt;Self&gt;"}} /></pre>
 
-### `impl WireValue<i32> for LlmOptimizationSummaryStatus`
+### `impl WireValue<i32> for DiagnosticSeverity`
 
-<pre className="rust-signature"><code dangerouslySetInnerHTML={{"__html": "impl <a href=\"trait-wirevalue\">WireValue</a>&lt;<a href=\"https://doc.rust-lang.org/1.96.1/std/primitive.i32.html\">i32</a>&gt; for LlmOptimizationSummaryStatus"}} /></pre>
+<pre className="rust-signature"><code dangerouslySetInnerHTML={{"__html": "impl <a href=\"trait-wirevalue\">WireValue</a>&lt;<a href=\"https://doc.rust-lang.org/1.96.1/std/primitive.i32.html\">i32</a>&gt; for DiagnosticSeverity"}} /></pre>
 
 #### `to_wire`
 
@@ -227,9 +299,9 @@ In older versions of Rust, dyn compatibility was called "object safety", so this
 
 <pre className="rust-signature"><code dangerouslySetInnerHTML={{"__html": "fn from_wire(value: <a href=\"https://doc.rust-lang.org/1.96.1/std/primitive.i32.html\">i32</a>) -&gt; <a href=\"type-result\">Result</a>&lt;Self&gt;"}} /></pre>
 
-### `impl WireValue<i32> for LogSeverity`
+### `impl WireValue<i32> for DiagnosticReadReason`
 
-<pre className="rust-signature"><code dangerouslySetInnerHTML={{"__html": "impl <a href=\"trait-wirevalue\">WireValue</a>&lt;<a href=\"https://doc.rust-lang.org/1.96.1/std/primitive.i32.html\">i32</a>&gt; for LogSeverity"}} /></pre>
+<pre className="rust-signature"><code dangerouslySetInnerHTML={{"__html": "impl <a href=\"trait-wirevalue\">WireValue</a>&lt;<a href=\"https://doc.rust-lang.org/1.96.1/std/primitive.i32.html\">i32</a>&gt; for DiagnosticReadReason"}} /></pre>
 
 #### `to_wire`
 
@@ -251,57 +323,9 @@ In older versions of Rust, dyn compatibility was called "object safety", so this
 
 <pre className="rust-signature"><code dangerouslySetInnerHTML={{"__html": "fn from_wire(value: <a href=\"https://doc.rust-lang.org/1.96.1/std/primitive.i32.html\">i32</a>) -&gt; <a href=\"type-result\">Result</a>&lt;Self&gt;"}} /></pre>
 
-### `impl WireValue<i32> for PluginDiagnosticFamily`
-
-<pre className="rust-signature"><code dangerouslySetInnerHTML={{"__html": "impl <a href=\"trait-wirevalue\">WireValue</a>&lt;<a href=\"https://doc.rust-lang.org/1.96.1/std/primitive.i32.html\">i32</a>&gt; for PluginDiagnosticFamily"}} /></pre>
-
-#### `to_wire`
-
-<pre className="rust-signature"><code dangerouslySetInnerHTML={{"__html": "fn to_wire(self) -&gt; <a href=\"type-result\">Result</a>&lt;<a href=\"https://doc.rust-lang.org/1.96.1/std/primitive.i32.html\">i32</a>&gt;"}} /></pre>
-
-#### `from_wire`
-
-<pre className="rust-signature"><code dangerouslySetInnerHTML={{"__html": "fn from_wire(value: <a href=\"https://doc.rust-lang.org/1.96.1/std/primitive.i32.html\">i32</a>) -&gt; <a href=\"type-result\">Result</a>&lt;Self&gt;"}} /></pre>
-
 ### `impl WireValue<i32> for ResourceAssociation`
 
 <pre className="rust-signature"><code dangerouslySetInnerHTML={{"__html": "impl <a href=\"trait-wirevalue\">WireValue</a>&lt;<a href=\"https://doc.rust-lang.org/1.96.1/std/primitive.i32.html\">i32</a>&gt; for ResourceAssociation"}} /></pre>
-
-#### `to_wire`
-
-<pre className="rust-signature"><code dangerouslySetInnerHTML={{"__html": "fn to_wire(self) -&gt; <a href=\"type-result\">Result</a>&lt;<a href=\"https://doc.rust-lang.org/1.96.1/std/primitive.i32.html\">i32</a>&gt;"}} /></pre>
-
-#### `from_wire`
-
-<pre className="rust-signature"><code dangerouslySetInnerHTML={{"__html": "fn from_wire(value: <a href=\"https://doc.rust-lang.org/1.96.1/std/primitive.i32.html\">i32</a>) -&gt; <a href=\"type-result\">Result</a>&lt;Self&gt;"}} /></pre>
-
-### `impl WireValue<i32> for ResourceLimitEventKind`
-
-<pre className="rust-signature"><code dangerouslySetInnerHTML={{"__html": "impl <a href=\"trait-wirevalue\">WireValue</a>&lt;<a href=\"https://doc.rust-lang.org/1.96.1/std/primitive.i32.html\">i32</a>&gt; for ResourceLimitEventKind"}} /></pre>
-
-#### `to_wire`
-
-<pre className="rust-signature"><code dangerouslySetInnerHTML={{"__html": "fn to_wire(self) -&gt; <a href=\"type-result\">Result</a>&lt;<a href=\"https://doc.rust-lang.org/1.96.1/std/primitive.i32.html\">i32</a>&gt;"}} /></pre>
-
-#### `from_wire`
-
-<pre className="rust-signature"><code dangerouslySetInnerHTML={{"__html": "fn from_wire(value: <a href=\"https://doc.rust-lang.org/1.96.1/std/primitive.i32.html\">i32</a>) -&gt; <a href=\"type-result\">Result</a>&lt;Self&gt;"}} /></pre>
-
-### `impl WireValue<i32> for ResourceLimitResource`
-
-<pre className="rust-signature"><code dangerouslySetInnerHTML={{"__html": "impl <a href=\"trait-wirevalue\">WireValue</a>&lt;<a href=\"https://doc.rust-lang.org/1.96.1/std/primitive.i32.html\">i32</a>&gt; for ResourceLimitResource"}} /></pre>
-
-#### `to_wire`
-
-<pre className="rust-signature"><code dangerouslySetInnerHTML={{"__html": "fn to_wire(self) -&gt; <a href=\"type-result\">Result</a>&lt;<a href=\"https://doc.rust-lang.org/1.96.1/std/primitive.i32.html\">i32</a>&gt;"}} /></pre>
-
-#### `from_wire`
-
-<pre className="rust-signature"><code dangerouslySetInnerHTML={{"__html": "fn from_wire(value: <a href=\"https://doc.rust-lang.org/1.96.1/std/primitive.i32.html\">i32</a>) -&gt; <a href=\"type-result\">Result</a>&lt;Self&gt;"}} /></pre>
-
-### `impl WireValue<i32> for ResourceMeasurementScope`
-
-<pre className="rust-signature"><code dangerouslySetInnerHTML={{"__html": "impl <a href=\"trait-wirevalue\">WireValue</a>&lt;<a href=\"https://doc.rust-lang.org/1.96.1/std/primitive.i32.html\">i32</a>&gt; for ResourceMeasurementScope"}} /></pre>
 
 #### `to_wire`
 
@@ -323,18 +347,6 @@ In older versions of Rust, dyn compatibility was called "object safety", so this
 
 <pre className="rust-signature"><code dangerouslySetInnerHTML={{"__html": "fn from_wire(value: <a href=\"https://doc.rust-lang.org/1.96.1/std/primitive.i32.html\">i32</a>) -&gt; <a href=\"type-result\">Result</a>&lt;Self&gt;"}} /></pre>
 
-### `impl WireValue<i32> for ResourceOperatingSystem`
-
-<pre className="rust-signature"><code dangerouslySetInnerHTML={{"__html": "impl <a href=\"trait-wirevalue\">WireValue</a>&lt;<a href=\"https://doc.rust-lang.org/1.96.1/std/primitive.i32.html\">i32</a>&gt; for ResourceOperatingSystem"}} /></pre>
-
-#### `to_wire`
-
-<pre className="rust-signature"><code dangerouslySetInnerHTML={{"__html": "fn to_wire(self) -&gt; <a href=\"type-result\">Result</a>&lt;<a href=\"https://doc.rust-lang.org/1.96.1/std/primitive.i32.html\">i32</a>&gt;"}} /></pre>
-
-#### `from_wire`
-
-<pre className="rust-signature"><code dangerouslySetInnerHTML={{"__html": "fn from_wire(value: <a href=\"https://doc.rust-lang.org/1.96.1/std/primitive.i32.html\">i32</a>) -&gt; <a href=\"type-result\">Result</a>&lt;Self&gt;"}} /></pre>
-
 ### `impl WireValue<i32> for ResourceSampleStream`
 
 <pre className="rust-signature"><code dangerouslySetInnerHTML={{"__html": "impl <a href=\"trait-wirevalue\">WireValue</a>&lt;<a href=\"https://doc.rust-lang.org/1.96.1/std/primitive.i32.html\">i32</a>&gt; for ResourceSampleStream"}} /></pre>
@@ -347,21 +359,9 @@ In older versions of Rust, dyn compatibility was called "object safety", so this
 
 <pre className="rust-signature"><code dangerouslySetInnerHTML={{"__html": "fn from_wire(value: <a href=\"https://doc.rust-lang.org/1.96.1/std/primitive.i32.html\">i32</a>) -&gt; <a href=\"type-result\">Result</a>&lt;Self&gt;"}} /></pre>
 
-### `impl WireValue<i32> for RuntimeRegistrationKind`
+### `impl WireValue<i32> for DiagnosticLevel`
 
-<pre className="rust-signature"><code dangerouslySetInnerHTML={{"__html": "impl <a href=\"trait-wirevalue\">WireValue</a>&lt;<a href=\"https://doc.rust-lang.org/1.96.1/std/primitive.i32.html\">i32</a>&gt; for RuntimeRegistrationKind"}} /></pre>
-
-#### `to_wire`
-
-<pre className="rust-signature"><code dangerouslySetInnerHTML={{"__html": "fn to_wire(self) -&gt; <a href=\"type-result\">Result</a>&lt;<a href=\"https://doc.rust-lang.org/1.96.1/std/primitive.i32.html\">i32</a>&gt;"}} /></pre>
-
-#### `from_wire`
-
-<pre className="rust-signature"><code dangerouslySetInnerHTML={{"__html": "fn from_wire(value: <a href=\"https://doc.rust-lang.org/1.96.1/std/primitive.i32.html\">i32</a>) -&gt; <a href=\"type-result\">Result</a>&lt;Self&gt;"}} /></pre>
-
-### `impl WireValue<i32> for ScopeCategory`
-
-<pre className="rust-signature"><code dangerouslySetInnerHTML={{"__html": "impl <a href=\"trait-wirevalue\">WireValue</a>&lt;<a href=\"https://doc.rust-lang.org/1.96.1/std/primitive.i32.html\">i32</a>&gt; for ScopeCategory"}} /></pre>
+<pre className="rust-signature"><code dangerouslySetInnerHTML={{"__html": "impl <a href=\"trait-wirevalue\">WireValue</a>&lt;<a href=\"https://doc.rust-lang.org/1.96.1/std/primitive.i32.html\">i32</a>&gt; for <a href=\"../../nemo-relay-types/plugin/enum-diagnosticlevel\">DiagnosticLevel</a>"}} /></pre>
 
 #### `to_wire`
 
@@ -371,9 +371,9 @@ In older versions of Rust, dyn compatibility was called "object safety", so this
 
 <pre className="rust-signature"><code dangerouslySetInnerHTML={{"__html": "fn from_wire(value: <a href=\"https://doc.rust-lang.org/1.96.1/std/primitive.i32.html\">i32</a>) -&gt; <a href=\"type-result\">Result</a>&lt;Self&gt;"}} /></pre>
 
-### `impl WireValue<i32> for ScopeType`
+### `impl WireValue<i32> for i32`
 
-<pre className="rust-signature"><code dangerouslySetInnerHTML={{"__html": "impl <a href=\"trait-wirevalue\">WireValue</a>&lt;<a href=\"https://doc.rust-lang.org/1.96.1/std/primitive.i32.html\">i32</a>&gt; for ScopeType"}} /></pre>
+<pre className="rust-signature"><code dangerouslySetInnerHTML={{"__html": "impl <a href=\"trait-wirevalue\">WireValue</a>&lt;<a href=\"https://doc.rust-lang.org/1.96.1/std/primitive.i32.html\">i32</a>&gt; for <a href=\"https://doc.rust-lang.org/1.96.1/std/primitive.i32.html\">i32</a>"}} /></pre>
 
 #### `to_wire`
 
@@ -445,7 +445,7 @@ In older versions of Rust, dyn compatibility was called "object safety", so this
 
 ### `impl WireValue<AnnotatedLlmRequest> for AnnotatedLlmRequest`
 
-<pre className="rust-signature"><code dangerouslySetInnerHTML={{"__html": "impl <a href=\"trait-wirevalue\">WireValue</a>&lt;<a href=\"../nvidia_worker_v1/struct-annotatedllmrequest\">AnnotatedLlmRequest</a>&gt; for AnnotatedLlmRequest"}} /></pre>
+<pre className="rust-signature"><code dangerouslySetInnerHTML={{"__html": "impl <a href=\"trait-wirevalue\">WireValue</a>&lt;<a href=\"../nvidia_worker_v1/struct-annotatedllmrequest\">AnnotatedLlmRequest</a>&gt; for <a href=\"../../nemo-relay-types/codec/request/struct-annotatedllmrequest\">AnnotatedLlmRequest</a>"}} /></pre>
 
 #### `to_wire`
 
@@ -457,7 +457,7 @@ In older versions of Rust, dyn compatibility was called "object safety", so this
 
 ### `impl WireValue<AnnotatedLlmResponse> for AnnotatedLlmResponse`
 
-<pre className="rust-signature"><code dangerouslySetInnerHTML={{"__html": "impl <a href=\"trait-wirevalue\">WireValue</a>&lt;<a href=\"../nvidia_worker_v1/struct-annotatedllmresponse\">AnnotatedLlmResponse</a>&gt; for AnnotatedLlmResponse"}} /></pre>
+<pre className="rust-signature"><code dangerouslySetInnerHTML={{"__html": "impl <a href=\"trait-wirevalue\">WireValue</a>&lt;<a href=\"../nvidia_worker_v1/struct-annotatedllmresponse\">AnnotatedLlmResponse</a>&gt; for <a href=\"../../nemo-relay-types/codec/response/struct-annotatedllmresponse\">AnnotatedLlmResponse</a>"}} /></pre>
 
 #### `to_wire`
 
@@ -469,7 +469,7 @@ In older versions of Rust, dyn compatibility was called "object safety", so this
 
 ### `impl WireValue<BaseEvent> for BaseEvent`
 
-<pre className="rust-signature"><code dangerouslySetInnerHTML={{"__html": "impl <a href=\"trait-wirevalue\">WireValue</a>&lt;<a href=\"../nvidia_worker_v1/struct-baseevent\">BaseEvent</a>&gt; for BaseEvent"}} /></pre>
+<pre className="rust-signature"><code dangerouslySetInnerHTML={{"__html": "impl <a href=\"trait-wirevalue\">WireValue</a>&lt;<a href=\"../nvidia_worker_v1/struct-baseevent\">BaseEvent</a>&gt; for <a href=\"../../nemo-relay-types/api/event/struct-baseevent\">BaseEvent</a>"}} /></pre>
 
 #### `to_wire`
 
@@ -481,7 +481,7 @@ In older versions of Rust, dyn compatibility was called "object safety", so this
 
 ### `impl WireValue<CacheWriteTokenCounts> for CacheWriteTokenCounts`
 
-<pre className="rust-signature"><code dangerouslySetInnerHTML={{"__html": "impl <a href=\"trait-wirevalue\">WireValue</a>&lt;<a href=\"../nvidia_worker_v1/struct-cachewritetokencounts\">CacheWriteTokenCounts</a>&gt; for CacheWriteTokenCounts"}} /></pre>
+<pre className="rust-signature"><code dangerouslySetInnerHTML={{"__html": "impl <a href=\"trait-wirevalue\">WireValue</a>&lt;<a href=\"../nvidia_worker_v1/struct-cachewritetokencounts\">CacheWriteTokenCounts</a>&gt; for <a href=\"../../nemo-relay-types/codec/response/struct-cachewritetokencounts\">CacheWriteTokenCounts</a>"}} /></pre>
 
 #### `to_wire`
 
@@ -493,7 +493,7 @@ In older versions of Rust, dyn compatibility was called "object safety", so this
 
 ### `impl WireValue<CacheWriteTokenCountsList> for Vec<CacheWriteTokenCounts>`
 
-<pre className="rust-signature"><code dangerouslySetInnerHTML={{"__html": "impl <a href=\"trait-wirevalue\">WireValue</a>&lt;<a href=\"../nvidia_worker_v1/struct-cachewritetokencountslist\">CacheWriteTokenCountsList</a>&gt; for <a href=\"https://doc.rust-lang.org/1.96.1/alloc/vec/struct.Vec.html\">Vec</a>&lt;CacheWriteTokenCounts&gt;"}} /></pre>
+<pre className="rust-signature"><code dangerouslySetInnerHTML={{"__html": "impl <a href=\"trait-wirevalue\">WireValue</a>&lt;<a href=\"../nvidia_worker_v1/struct-cachewritetokencountslist\">CacheWriteTokenCountsList</a>&gt; for <a href=\"https://doc.rust-lang.org/1.96.1/alloc/vec/struct.Vec.html\">Vec</a>&lt;<a href=\"../../nemo-relay-types/codec/response/struct-cachewritetokencounts\">CacheWriteTokenCounts</a>&gt;"}} /></pre>
 
 #### `to_wire`
 
@@ -505,7 +505,7 @@ In older versions of Rust, dyn compatibility was called "object safety", so this
 
 ### `impl WireValue<CategoryProfile> for CategoryProfile`
 
-<pre className="rust-signature"><code dangerouslySetInnerHTML={{"__html": "impl <a href=\"trait-wirevalue\">WireValue</a>&lt;<a href=\"../nvidia_worker_v1/struct-categoryprofile\">CategoryProfile</a>&gt; for CategoryProfile"}} /></pre>
+<pre className="rust-signature"><code dangerouslySetInnerHTML={{"__html": "impl <a href=\"trait-wirevalue\">WireValue</a>&lt;<a href=\"../nvidia_worker_v1/struct-categoryprofile\">CategoryProfile</a>&gt; for <a href=\"../../nemo-relay-types/api/event/struct-categoryprofile\">CategoryProfile</a>"}} /></pre>
 
 #### `to_wire`
 
@@ -541,7 +541,7 @@ In older versions of Rust, dyn compatibility was called "object safety", so this
 
 ### `impl WireValue<ConfigDiagnostic> for ConfigDiagnostic`
 
-<pre className="rust-signature"><code dangerouslySetInnerHTML={{"__html": "impl <a href=\"trait-wirevalue\">WireValue</a>&lt;<a href=\"../nvidia_worker_v1/struct-configdiagnostic\">ConfigDiagnostic</a>&gt; for ConfigDiagnostic"}} /></pre>
+<pre className="rust-signature"><code dangerouslySetInnerHTML={{"__html": "impl <a href=\"trait-wirevalue\">WireValue</a>&lt;<a href=\"../nvidia_worker_v1/struct-configdiagnostic\">ConfigDiagnostic</a>&gt; for <a href=\"../../nemo-relay-types/plugin/struct-configdiagnostic\">ConfigDiagnostic</a>"}} /></pre>
 
 #### `to_wire`
 
@@ -553,7 +553,7 @@ In older versions of Rust, dyn compatibility was called "object safety", so this
 
 ### `impl WireValue<ContentPart> for ContentPart`
 
-<pre className="rust-signature"><code dangerouslySetInnerHTML={{"__html": "impl <a href=\"trait-wirevalue\">WireValue</a>&lt;<a href=\"../nvidia_worker_v1/struct-contentpart\">ContentPart</a>&gt; for ContentPart"}} /></pre>
+<pre className="rust-signature"><code dangerouslySetInnerHTML={{"__html": "impl <a href=\"trait-wirevalue\">WireValue</a>&lt;<a href=\"../nvidia_worker_v1/struct-contentpart\">ContentPart</a>&gt; for <a href=\"../../nemo-relay-types/codec/request/enum-contentpart\">ContentPart</a>"}} /></pre>
 
 #### `to_wire`
 
@@ -565,7 +565,7 @@ In older versions of Rust, dyn compatibility was called "object safety", so this
 
 ### `impl WireValue<ContentPartList> for Vec<ContentPart>`
 
-<pre className="rust-signature"><code dangerouslySetInnerHTML={{"__html": "impl <a href=\"trait-wirevalue\">WireValue</a>&lt;<a href=\"../nvidia_worker_v1/struct-contentpartlist\">ContentPartList</a>&gt; for <a href=\"https://doc.rust-lang.org/1.96.1/alloc/vec/struct.Vec.html\">Vec</a>&lt;ContentPart&gt;"}} /></pre>
+<pre className="rust-signature"><code dangerouslySetInnerHTML={{"__html": "impl <a href=\"trait-wirevalue\">WireValue</a>&lt;<a href=\"../nvidia_worker_v1/struct-contentpartlist\">ContentPartList</a>&gt; for <a href=\"https://doc.rust-lang.org/1.96.1/alloc/vec/struct.Vec.html\">Vec</a>&lt;<a href=\"../../nemo-relay-types/codec/request/enum-contentpart\">ContentPart</a>&gt;"}} /></pre>
 
 #### `to_wire`
 
@@ -577,7 +577,7 @@ In older versions of Rust, dyn compatibility was called "object safety", so this
 
 ### `impl WireValue<CostEstimate> for CostEstimate`
 
-<pre className="rust-signature"><code dangerouslySetInnerHTML={{"__html": "impl <a href=\"trait-wirevalue\">WireValue</a>&lt;<a href=\"../nvidia_worker_v1/struct-costestimate\">CostEstimate</a>&gt; for CostEstimate"}} /></pre>
+<pre className="rust-signature"><code dangerouslySetInnerHTML={{"__html": "impl <a href=\"trait-wirevalue\">WireValue</a>&lt;<a href=\"../nvidia_worker_v1/struct-costestimate\">CostEstimate</a>&gt; for <a href=\"../../nemo-relay-types/codec/response/struct-costestimate\">CostEstimate</a>"}} /></pre>
 
 #### `to_wire`
 
@@ -589,7 +589,7 @@ In older versions of Rust, dyn compatibility was called "object safety", so this
 
 ### `impl WireValue<DataSchema> for DataSchema`
 
-<pre className="rust-signature"><code dangerouslySetInnerHTML={{"__html": "impl <a href=\"trait-wirevalue\">WireValue</a>&lt;<a href=\"../nvidia_worker_v1/struct-dataschema\">DataSchema</a>&gt; for DataSchema"}} /></pre>
+<pre className="rust-signature"><code dangerouslySetInnerHTML={{"__html": "impl <a href=\"trait-wirevalue\">WireValue</a>&lt;<a href=\"../nvidia_worker_v1/struct-dataschema\">DataSchema</a>&gt; for <a href=\"../../nemo-relay-types/api/event/struct-dataschema\">DataSchema</a>"}} /></pre>
 
 #### `to_wire`
 
@@ -721,7 +721,7 @@ In older versions of Rust, dyn compatibility was called "object safety", so this
 
 ### `impl WireValue<DiagnosticDiscovery> for DiagnosticDiscovery`
 
-<pre className="rust-signature"><code dangerouslySetInnerHTML={{"__html": "impl <a href=\"trait-wirevalue\">WireValue</a>&lt;<a href=\"../nvidia_worker_v1/struct-diagnosticdiscovery\">DiagnosticDiscovery</a>&gt; for DiagnosticDiscovery"}} /></pre>
+<pre className="rust-signature"><code dangerouslySetInnerHTML={{"__html": "impl <a href=\"trait-wirevalue\">WireValue</a>&lt;<a href=\"../nvidia_worker_v1/struct-diagnosticdiscovery\">DiagnosticDiscovery</a>&gt; for <a href=\"../../nemo-relay-types/diagnostics/struct-diagnosticdiscovery\">DiagnosticDiscovery</a>"}} /></pre>
 
 #### `to_wire`
 
@@ -817,7 +817,7 @@ In older versions of Rust, dyn compatibility was called "object safety", so this
 
 ### `impl WireValue<DiagnosticProducerSupport> for DiagnosticProducerSupport`
 
-<pre className="rust-signature"><code dangerouslySetInnerHTML={{"__html": "impl <a href=\"trait-wirevalue\">WireValue</a>&lt;<a href=\"../nvidia_worker_v1/struct-diagnosticproducersupport\">DiagnosticProducerSupport</a>&gt; for DiagnosticProducerSupport"}} /></pre>
+<pre className="rust-signature"><code dangerouslySetInnerHTML={{"__html": "impl <a href=\"trait-wirevalue\">WireValue</a>&lt;<a href=\"../nvidia_worker_v1/struct-diagnosticproducersupport\">DiagnosticProducerSupport</a>&gt; for <a href=\"../../nemo-relay-types/diagnostics/struct-diagnosticproducersupport\">DiagnosticProducerSupport</a>"}} /></pre>
 
 #### `to_wire`
 
@@ -961,7 +961,7 @@ In older versions of Rust, dyn compatibility was called "object safety", so this
 
 ### `impl WireValue<Event> for Event`
 
-<pre className="rust-signature"><code dangerouslySetInnerHTML={{"__html": "impl <a href=\"trait-wirevalue\">WireValue</a>&lt;<a href=\"../nvidia_worker_v1/struct-event\">Event</a>&gt; for Event"}} /></pre>
+<pre className="rust-signature"><code dangerouslySetInnerHTML={{"__html": "impl <a href=\"trait-wirevalue\">WireValue</a>&lt;<a href=\"../nvidia_worker_v1/struct-event\">Event</a>&gt; for <a href=\"../../nemo-relay-types/api/event/enum-event\">Event</a>"}} /></pre>
 
 #### `to_wire`
 
@@ -973,7 +973,7 @@ In older versions of Rust, dyn compatibility was called "object safety", so this
 
 ### `impl WireValue<EventSanitizeFields> for EventSanitizeFields`
 
-<pre className="rust-signature"><code dangerouslySetInnerHTML={{"__html": "impl <a href=\"trait-wirevalue\">WireValue</a>&lt;<a href=\"../nvidia_worker_v1/struct-eventsanitizefields\">EventSanitizeFields</a>&gt; for EventSanitizeFields"}} /></pre>
+<pre className="rust-signature"><code dangerouslySetInnerHTML={{"__html": "impl <a href=\"trait-wirevalue\">WireValue</a>&lt;<a href=\"../nvidia_worker_v1/struct-eventsanitizefields\">EventSanitizeFields</a>&gt; for <a href=\"../../nemo-relay-types/api/event/struct-eventsanitizefields\">EventSanitizeFields</a>"}} /></pre>
 
 #### `to_wire`
 
@@ -985,7 +985,7 @@ In older versions of Rust, dyn compatibility was called "object safety", so this
 
 ### `impl WireValue<FinishReason> for FinishReason`
 
-<pre className="rust-signature"><code dangerouslySetInnerHTML={{"__html": "impl <a href=\"trait-wirevalue\">WireValue</a>&lt;<a href=\"../nvidia_worker_v1/struct-finishreason\">FinishReason</a>&gt; for FinishReason"}} /></pre>
+<pre className="rust-signature"><code dangerouslySetInnerHTML={{"__html": "impl <a href=\"trait-wirevalue\">WireValue</a>&lt;<a href=\"../nvidia_worker_v1/struct-finishreason\">FinishReason</a>&gt; for <a href=\"../../nemo-relay-types/codec/response/enum-finishreason\">FinishReason</a>"}} /></pre>
 
 #### `to_wire`
 
@@ -997,7 +997,7 @@ In older versions of Rust, dyn compatibility was called "object safety", so this
 
 ### `impl WireValue<FunctionCall> for FunctionCall`
 
-<pre className="rust-signature"><code dangerouslySetInnerHTML={{"__html": "impl <a href=\"trait-wirevalue\">WireValue</a>&lt;<a href=\"../nvidia_worker_v1/struct-functioncall\">FunctionCall</a>&gt; for FunctionCall"}} /></pre>
+<pre className="rust-signature"><code dangerouslySetInnerHTML={{"__html": "impl <a href=\"trait-wirevalue\">WireValue</a>&lt;<a href=\"../nvidia_worker_v1/struct-functioncall\">FunctionCall</a>&gt; for <a href=\"../../nemo-relay-types/codec/request/struct-functioncall\">FunctionCall</a>"}} /></pre>
 
 #### `to_wire`
 
@@ -1009,7 +1009,7 @@ In older versions of Rust, dyn compatibility was called "object safety", so this
 
 ### `impl WireValue<FunctionDefinition> for FunctionDefinition`
 
-<pre className="rust-signature"><code dangerouslySetInnerHTML={{"__html": "impl <a href=\"trait-wirevalue\">WireValue</a>&lt;<a href=\"../nvidia_worker_v1/struct-functiondefinition\">FunctionDefinition</a>&gt; for FunctionDefinition"}} /></pre>
+<pre className="rust-signature"><code dangerouslySetInnerHTML={{"__html": "impl <a href=\"trait-wirevalue\">WireValue</a>&lt;<a href=\"../nvidia_worker_v1/struct-functiondefinition\">FunctionDefinition</a>&gt; for <a href=\"../../nemo-relay-types/codec/request/struct-functiondefinition\">FunctionDefinition</a>"}} /></pre>
 
 #### `to_wire`
 
@@ -1021,7 +1021,7 @@ In older versions of Rust, dyn compatibility was called "object safety", so this
 
 ### `impl WireValue<GenerationParams> for GenerationParams`
 
-<pre className="rust-signature"><code dangerouslySetInnerHTML={{"__html": "impl <a href=\"trait-wirevalue\">WireValue</a>&lt;<a href=\"../nvidia_worker_v1/struct-generationparams\">GenerationParams</a>&gt; for GenerationParams"}} /></pre>
+<pre className="rust-signature"><code dangerouslySetInnerHTML={{"__html": "impl <a href=\"trait-wirevalue\">WireValue</a>&lt;<a href=\"../nvidia_worker_v1/struct-generationparams\">GenerationParams</a>&gt; for <a href=\"../../nemo-relay-types/codec/request/struct-generationparams\">GenerationParams</a>"}} /></pre>
 
 #### `to_wire`
 
@@ -1033,7 +1033,7 @@ In older versions of Rust, dyn compatibility was called "object safety", so this
 
 ### `impl WireValue<ImageUrl> for OpenAiImageUrl`
 
-<pre className="rust-signature"><code dangerouslySetInnerHTML={{"__html": "impl <a href=\"trait-wirevalue\">WireValue</a>&lt;<a href=\"../nvidia_worker_v1/struct-imageurl\">ImageUrl</a>&gt; for OpenAiImageUrl"}} /></pre>
+<pre className="rust-signature"><code dangerouslySetInnerHTML={{"__html": "impl <a href=\"trait-wirevalue\">WireValue</a>&lt;<a href=\"../nvidia_worker_v1/struct-imageurl\">ImageUrl</a>&gt; for <a href=\"../../nemo-relay-types/codec/request/struct-openaiimageurl\">OpenAiImageUrl</a>"}} /></pre>
 
 #### `to_wire`
 
@@ -1045,7 +1045,7 @@ In older versions of Rust, dyn compatibility was called "object safety", so this
 
 ### `impl WireValue<JsonArray> for Vec<Json>`
 
-<pre className="rust-signature"><code dangerouslySetInnerHTML={{"__html": "impl <a href=\"trait-wirevalue\">WireValue</a>&lt;<a href=\"../nvidia_worker_v1/struct-jsonarray\">JsonArray</a>&gt; for <a href=\"https://doc.rust-lang.org/1.96.1/alloc/vec/struct.Vec.html\">Vec</a>&lt;Json&gt;"}} /></pre>
+<pre className="rust-signature"><code dangerouslySetInnerHTML={{"__html": "impl <a href=\"trait-wirevalue\">WireValue</a>&lt;<a href=\"../nvidia_worker_v1/struct-jsonarray\">JsonArray</a>&gt; for <a href=\"https://doc.rust-lang.org/1.96.1/alloc/vec/struct.Vec.html\">Vec</a>&lt;<a href=\"../../nemo-relay-types/type-json\">Json</a>&gt;"}} /></pre>
 
 #### `to_wire`
 
@@ -1057,7 +1057,7 @@ In older versions of Rust, dyn compatibility was called "object safety", so this
 
 ### `impl WireValue<JsonArray> for Json`
 
-<pre className="rust-signature"><code dangerouslySetInnerHTML={{"__html": "impl <a href=\"trait-wirevalue\">WireValue</a>&lt;<a href=\"../nvidia_worker_v1/struct-jsonarray\">JsonArray</a>&gt; for Json"}} /></pre>
+<pre className="rust-signature"><code dangerouslySetInnerHTML={{"__html": "impl <a href=\"trait-wirevalue\">WireValue</a>&lt;<a href=\"../nvidia_worker_v1/struct-jsonarray\">JsonArray</a>&gt; for <a href=\"../../nemo-relay-types/type-json\">Json</a>"}} /></pre>
 
 #### `to_wire`
 
@@ -1069,7 +1069,7 @@ In older versions of Rust, dyn compatibility was called "object safety", so this
 
 ### `impl WireValue<JsonObject> for BTreeMap<String, Json>`
 
-<pre className="rust-signature"><code dangerouslySetInnerHTML={{"__html": "impl <a href=\"trait-wirevalue\">WireValue</a>&lt;<a href=\"../nvidia_worker_v1/struct-jsonobject\">JsonObject</a>&gt; for <a href=\"https://doc.rust-lang.org/1.96.1/alloc/collections/btree/map/struct.BTreeMap.html\">BTreeMap</a>&lt;<a href=\"https://doc.rust-lang.org/1.96.1/alloc/string/struct.String.html\">String</a>, Json&gt;"}} /></pre>
+<pre className="rust-signature"><code dangerouslySetInnerHTML={{"__html": "impl <a href=\"trait-wirevalue\">WireValue</a>&lt;<a href=\"../nvidia_worker_v1/struct-jsonobject\">JsonObject</a>&gt; for <a href=\"https://doc.rust-lang.org/1.96.1/alloc/collections/btree/map/struct.BTreeMap.html\">BTreeMap</a>&lt;<a href=\"https://doc.rust-lang.org/1.96.1/alloc/string/struct.String.html\">String</a>, <a href=\"../../nemo-relay-types/type-json\">Json</a>&gt;"}} /></pre>
 
 #### `to_wire`
 
@@ -1081,7 +1081,7 @@ In older versions of Rust, dyn compatibility was called "object safety", so this
 
 ### `impl WireValue<JsonObject> for Map<String, Json>`
 
-<pre className="rust-signature"><code dangerouslySetInnerHTML={{"__html": "impl <a href=\"trait-wirevalue\">WireValue</a>&lt;<a href=\"../nvidia_worker_v1/struct-jsonobject\">JsonObject</a>&gt; for <a href=\"https://docs.rs/serde_json/1.0.149/serde_json/map/struct.Map.html\">Map</a>&lt;<a href=\"https://doc.rust-lang.org/1.96.1/alloc/string/struct.String.html\">String</a>, Json&gt;"}} /></pre>
+<pre className="rust-signature"><code dangerouslySetInnerHTML={{"__html": "impl <a href=\"trait-wirevalue\">WireValue</a>&lt;<a href=\"../nvidia_worker_v1/struct-jsonobject\">JsonObject</a>&gt; for <a href=\"https://docs.rs/serde_json/1.0.149/serde_json/map/struct.Map.html\">Map</a>&lt;<a href=\"https://doc.rust-lang.org/1.96.1/alloc/string/struct.String.html\">String</a>, <a href=\"../../nemo-relay-types/type-json\">Json</a>&gt;"}} /></pre>
 
 #### `to_wire`
 
@@ -1093,7 +1093,7 @@ In older versions of Rust, dyn compatibility was called "object safety", so this
 
 ### `impl WireValue<JsonObject> for Json`
 
-<pre className="rust-signature"><code dangerouslySetInnerHTML={{"__html": "impl <a href=\"trait-wirevalue\">WireValue</a>&lt;<a href=\"../nvidia_worker_v1/struct-jsonobject\">JsonObject</a>&gt; for Json"}} /></pre>
+<pre className="rust-signature"><code dangerouslySetInnerHTML={{"__html": "impl <a href=\"trait-wirevalue\">WireValue</a>&lt;<a href=\"../nvidia_worker_v1/struct-jsonobject\">JsonObject</a>&gt; for <a href=\"../../nemo-relay-types/type-json\">Json</a>"}} /></pre>
 
 #### `to_wire`
 
@@ -1105,7 +1105,7 @@ In older versions of Rust, dyn compatibility was called "object safety", so this
 
 ### `impl WireValue<JsonValue> for ApiSpecificRequest`
 
-<pre className="rust-signature"><code dangerouslySetInnerHTML={{"__html": "impl <a href=\"trait-wirevalue\">WireValue</a>&lt;<a href=\"../nvidia_worker_v1/struct-jsonvalue\">JsonValue</a>&gt; for ApiSpecificRequest"}} /></pre>
+<pre className="rust-signature"><code dangerouslySetInnerHTML={{"__html": "impl <a href=\"trait-wirevalue\">WireValue</a>&lt;<a href=\"../nvidia_worker_v1/struct-jsonvalue\">JsonValue</a>&gt; for <a href=\"../../nemo-relay-types/codec/request/enum-apispecificrequest\">ApiSpecificRequest</a>"}} /></pre>
 
 #### `to_wire`
 
@@ -1117,7 +1117,7 @@ In older versions of Rust, dyn compatibility was called "object safety", so this
 
 ### `impl WireValue<JsonValue> for ApiSpecificResponse`
 
-<pre className="rust-signature"><code dangerouslySetInnerHTML={{"__html": "impl <a href=\"trait-wirevalue\">WireValue</a>&lt;<a href=\"../nvidia_worker_v1/struct-jsonvalue\">JsonValue</a>&gt; for ApiSpecificResponse"}} /></pre>
+<pre className="rust-signature"><code dangerouslySetInnerHTML={{"__html": "impl <a href=\"trait-wirevalue\">WireValue</a>&lt;<a href=\"../nvidia_worker_v1/struct-jsonvalue\">JsonValue</a>&gt; for <a href=\"../../nemo-relay-types/codec/response/enum-apispecificresponse\">ApiSpecificResponse</a>"}} /></pre>
 
 #### `to_wire`
 
@@ -1129,7 +1129,7 @@ In older versions of Rust, dyn compatibility was called "object safety", so this
 
 ### `impl WireValue<JsonValue> for Json`
 
-<pre className="rust-signature"><code dangerouslySetInnerHTML={{"__html": "impl <a href=\"trait-wirevalue\">WireValue</a>&lt;<a href=\"../nvidia_worker_v1/struct-jsonvalue\">JsonValue</a>&gt; for Json"}} /></pre>
+<pre className="rust-signature"><code dangerouslySetInnerHTML={{"__html": "impl <a href=\"trait-wirevalue\">WireValue</a>&lt;<a href=\"../nvidia_worker_v1/struct-jsonvalue\">JsonValue</a>&gt; for <a href=\"../../nemo-relay-types/type-json\">Json</a>"}} /></pre>
 
 #### `to_wire`
 
@@ -1141,7 +1141,7 @@ In older versions of Rust, dyn compatibility was called "object safety", so this
 
 ### `impl WireValue<LlmCodecReference> for LlmCodecIdentity`
 
-<pre className="rust-signature"><code dangerouslySetInnerHTML={{"__html": "impl <a href=\"trait-wirevalue\">WireValue</a>&lt;<a href=\"../nvidia_worker_v1/struct-llmcodecreference\">LlmCodecReference</a>&gt; for LlmCodecIdentity"}} /></pre>
+<pre className="rust-signature"><code dangerouslySetInnerHTML={{"__html": "impl <a href=\"trait-wirevalue\">WireValue</a>&lt;<a href=\"../nvidia_worker_v1/struct-llmcodecreference\">LlmCodecReference</a>&gt; for <a href=\"../../nemo-relay-types/codec/identity/enum-llmcodecidentity\">LlmCodecIdentity</a>"}} /></pre>
 
 #### `to_wire`
 
@@ -1153,7 +1153,7 @@ In older versions of Rust, dyn compatibility was called "object safety", so this
 
 ### `impl WireValue<LlmMessage> for Message`
 
-<pre className="rust-signature"><code dangerouslySetInnerHTML={{"__html": "impl <a href=\"trait-wirevalue\">WireValue</a>&lt;<a href=\"../nvidia_worker_v1/struct-llmmessage\">LlmMessage</a>&gt; for Message"}} /></pre>
+<pre className="rust-signature"><code dangerouslySetInnerHTML={{"__html": "impl <a href=\"trait-wirevalue\">WireValue</a>&lt;<a href=\"../nvidia_worker_v1/struct-llmmessage\">LlmMessage</a>&gt; for <a href=\"../../nemo-relay-types/codec/request/enum-message\">Message</a>"}} /></pre>
 
 #### `to_wire`
 
@@ -1165,7 +1165,7 @@ In older versions of Rust, dyn compatibility was called "object safety", so this
 
 ### `impl WireValue<LlmOptimizationContribution> for LlmOptimizationContribution`
 
-<pre className="rust-signature"><code dangerouslySetInnerHTML={{"__html": "impl <a href=\"trait-wirevalue\">WireValue</a>&lt;<a href=\"../nvidia_worker_v1/struct-llmoptimizationcontribution\">LlmOptimizationContribution</a>&gt; for LlmOptimizationContribution"}} /></pre>
+<pre className="rust-signature"><code dangerouslySetInnerHTML={{"__html": "impl <a href=\"trait-wirevalue\">WireValue</a>&lt;<a href=\"../nvidia_worker_v1/struct-llmoptimizationcontribution\">LlmOptimizationContribution</a>&gt; for <a href=\"../../nemo-relay-types/codec/optimization/struct-llmoptimizationcontribution\">LlmOptimizationContribution</a>"}} /></pre>
 
 #### `to_wire`
 
@@ -1177,7 +1177,7 @@ In older versions of Rust, dyn compatibility was called "object safety", so this
 
 ### `impl WireValue<LlmOptimizationModel> for LlmOptimizationModel`
 
-<pre className="rust-signature"><code dangerouslySetInnerHTML={{"__html": "impl <a href=\"trait-wirevalue\">WireValue</a>&lt;<a href=\"../nvidia_worker_v1/struct-llmoptimizationmodel\">LlmOptimizationModel</a>&gt; for LlmOptimizationModel"}} /></pre>
+<pre className="rust-signature"><code dangerouslySetInnerHTML={{"__html": "impl <a href=\"trait-wirevalue\">WireValue</a>&lt;<a href=\"../nvidia_worker_v1/struct-llmoptimizationmodel\">LlmOptimizationModel</a>&gt; for <a href=\"../../nemo-relay-types/codec/optimization/struct-llmoptimizationmodel\">LlmOptimizationModel</a>"}} /></pre>
 
 #### `to_wire`
 
@@ -1189,7 +1189,7 @@ In older versions of Rust, dyn compatibility was called "object safety", so this
 
 ### `impl WireValue<LlmOptimizationModelTransition> for LlmOptimizationModelTransition`
 
-<pre className="rust-signature"><code dangerouslySetInnerHTML={{"__html": "impl <a href=\"trait-wirevalue\">WireValue</a>&lt;<a href=\"../nvidia_worker_v1/struct-llmoptimizationmodeltransition\">LlmOptimizationModelTransition</a>&gt; for LlmOptimizationModelTransition"}} /></pre>
+<pre className="rust-signature"><code dangerouslySetInnerHTML={{"__html": "impl <a href=\"trait-wirevalue\">WireValue</a>&lt;<a href=\"../nvidia_worker_v1/struct-llmoptimizationmodeltransition\">LlmOptimizationModelTransition</a>&gt; for <a href=\"../../nemo-relay-types/codec/optimization/struct-llmoptimizationmodeltransition\">LlmOptimizationModelTransition</a>"}} /></pre>
 
 #### `to_wire`
 
@@ -1201,7 +1201,7 @@ In older versions of Rust, dyn compatibility was called "object safety", so this
 
 ### `impl WireValue<LlmOptimizationSummary> for LlmOptimizationSummary`
 
-<pre className="rust-signature"><code dangerouslySetInnerHTML={{"__html": "impl <a href=\"trait-wirevalue\">WireValue</a>&lt;<a href=\"../nvidia_worker_v1/struct-llmoptimizationsummary\">LlmOptimizationSummary</a>&gt; for LlmOptimizationSummary"}} /></pre>
+<pre className="rust-signature"><code dangerouslySetInnerHTML={{"__html": "impl <a href=\"trait-wirevalue\">WireValue</a>&lt;<a href=\"../nvidia_worker_v1/struct-llmoptimizationsummary\">LlmOptimizationSummary</a>&gt; for <a href=\"../../nemo-relay-types/codec/optimization/struct-llmoptimizationsummary\">LlmOptimizationSummary</a>"}} /></pre>
 
 #### `to_wire`
 
@@ -1213,7 +1213,7 @@ In older versions of Rust, dyn compatibility was called "object safety", so this
 
 ### `impl WireValue<LlmOptimizationTokenImpact> for LlmOptimizationTokenImpact`
 
-<pre className="rust-signature"><code dangerouslySetInnerHTML={{"__html": "impl <a href=\"trait-wirevalue\">WireValue</a>&lt;<a href=\"../nvidia_worker_v1/struct-llmoptimizationtokenimpact\">LlmOptimizationTokenImpact</a>&gt; for LlmOptimizationTokenImpact"}} /></pre>
+<pre className="rust-signature"><code dangerouslySetInnerHTML={{"__html": "impl <a href=\"trait-wirevalue\">WireValue</a>&lt;<a href=\"../nvidia_worker_v1/struct-llmoptimizationtokenimpact\">LlmOptimizationTokenImpact</a>&gt; for <a href=\"../../nemo-relay-types/codec/optimization/struct-llmoptimizationtokenimpact\">LlmOptimizationTokenImpact</a>"}} /></pre>
 
 #### `to_wire`
 
@@ -1225,7 +1225,7 @@ In older versions of Rust, dyn compatibility was called "object safety", so this
 
 ### `impl WireValue<LlmOptimizationTokens> for LlmOptimizationTokens`
 
-<pre className="rust-signature"><code dangerouslySetInnerHTML={{"__html": "impl <a href=\"trait-wirevalue\">WireValue</a>&lt;<a href=\"../nvidia_worker_v1/struct-llmoptimizationtokens\">LlmOptimizationTokens</a>&gt; for LlmOptimizationTokens"}} /></pre>
+<pre className="rust-signature"><code dangerouslySetInnerHTML={{"__html": "impl <a href=\"trait-wirevalue\">WireValue</a>&lt;<a href=\"../nvidia_worker_v1/struct-llmoptimizationtokens\">LlmOptimizationTokens</a>&gt; for <a href=\"../../nemo-relay-types/codec/optimization/struct-llmoptimizationtokens\">LlmOptimizationTokens</a>"}} /></pre>
 
 #### `to_wire`
 
@@ -1237,7 +1237,7 @@ In older versions of Rust, dyn compatibility was called "object safety", so this
 
 ### `impl WireValue<LlmRequest> for LlmRequest`
 
-<pre className="rust-signature"><code dangerouslySetInnerHTML={{"__html": "impl <a href=\"trait-wirevalue\">WireValue</a>&lt;<a href=\"../nvidia_worker_v1/struct-llmrequest\">LlmRequest</a>&gt; for LlmRequest"}} /></pre>
+<pre className="rust-signature"><code dangerouslySetInnerHTML={{"__html": "impl <a href=\"trait-wirevalue\">WireValue</a>&lt;<a href=\"../nvidia_worker_v1/struct-llmrequest\">LlmRequest</a>&gt; for <a href=\"../../nemo-relay-types/api/llm/struct-llmrequest\">LlmRequest</a>"}} /></pre>
 
 #### `to_wire`
 
@@ -1249,7 +1249,7 @@ In older versions of Rust, dyn compatibility was called "object safety", so this
 
 ### `impl WireValue<LlmRequestInterceptOutcome> for LlmRequestInterceptOutcome`
 
-<pre className="rust-signature"><code dangerouslySetInnerHTML={{"__html": "impl <a href=\"trait-wirevalue\">WireValue</a>&lt;<a href=\"../nvidia_worker_v1/struct-llmrequestinterceptoutcome\">LlmRequestInterceptOutcome</a>&gt; for LlmRequestInterceptOutcome"}} /></pre>
+<pre className="rust-signature"><code dangerouslySetInnerHTML={{"__html": "impl <a href=\"trait-wirevalue\">WireValue</a>&lt;<a href=\"../nvidia_worker_v1/struct-llmrequestinterceptoutcome\">LlmRequestInterceptOutcome</a>&gt; for <a href=\"../../nemo-relay-types/api/llm/struct-llmrequestinterceptoutcome\">LlmRequestInterceptOutcome</a>"}} /></pre>
 
 #### `to_wire`
 
@@ -1261,7 +1261,7 @@ In older versions of Rust, dyn compatibility was called "object safety", so this
 
 ### `impl WireValue<MarkEvent> for MarkEvent`
 
-<pre className="rust-signature"><code dangerouslySetInnerHTML={{"__html": "impl <a href=\"trait-wirevalue\">WireValue</a>&lt;<a href=\"../nvidia_worker_v1/struct-markevent\">MarkEvent</a>&gt; for MarkEvent"}} /></pre>
+<pre className="rust-signature"><code dangerouslySetInnerHTML={{"__html": "impl <a href=\"trait-wirevalue\">WireValue</a>&lt;<a href=\"../nvidia_worker_v1/struct-markevent\">MarkEvent</a>&gt; for <a href=\"../../nemo-relay-types/api/event/struct-markevent\">MarkEvent</a>"}} /></pre>
 
 #### `to_wire`
 
@@ -1309,7 +1309,7 @@ In older versions of Rust, dyn compatibility was called "object safety", so this
 
 ### `impl WireValue<MessageContent> for MessageContent`
 
-<pre className="rust-signature"><code dangerouslySetInnerHTML={{"__html": "impl <a href=\"trait-wirevalue\">WireValue</a>&lt;<a href=\"../nvidia_worker_v1/struct-messagecontent\">MessageContent</a>&gt; for MessageContent"}} /></pre>
+<pre className="rust-signature"><code dangerouslySetInnerHTML={{"__html": "impl <a href=\"trait-wirevalue\">WireValue</a>&lt;<a href=\"../nvidia_worker_v1/struct-messagecontent\">MessageContent</a>&gt; for <a href=\"../../nemo-relay-types/codec/request/enum-messagecontent\">MessageContent</a>"}} /></pre>
 
 #### `to_wire`
 
@@ -1321,7 +1321,7 @@ In older versions of Rust, dyn compatibility was called "object safety", so this
 
 ### `impl WireValue<PendingMarkSpec> for PendingMarkSpec`
 
-<pre className="rust-signature"><code dangerouslySetInnerHTML={{"__html": "impl <a href=\"trait-wirevalue\">WireValue</a>&lt;<a href=\"../nvidia_worker_v1/struct-pendingmarkspec\">PendingMarkSpec</a>&gt; for PendingMarkSpec"}} /></pre>
+<pre className="rust-signature"><code dangerouslySetInnerHTML={{"__html": "impl <a href=\"trait-wirevalue\">WireValue</a>&lt;<a href=\"../nvidia_worker_v1/struct-pendingmarkspec\">PendingMarkSpec</a>&gt; for <a href=\"../../nemo-relay-types/api/event/struct-pendingmarkspec\">PendingMarkSpec</a>"}} /></pre>
 
 #### `to_wire`
 
@@ -1333,7 +1333,7 @@ In older versions of Rust, dyn compatibility was called "object safety", so this
 
 ### `impl WireValue<ProviderNativeComponent> for ProviderNativeComponent`
 
-<pre className="rust-signature"><code dangerouslySetInnerHTML={{"__html": "impl <a href=\"trait-wirevalue\">WireValue</a>&lt;<a href=\"../nvidia_worker_v1/struct-providernativecomponent\">ProviderNativeComponent</a>&gt; for ProviderNativeComponent"}} /></pre>
+<pre className="rust-signature"><code dangerouslySetInnerHTML={{"__html": "impl <a href=\"trait-wirevalue\">WireValue</a>&lt;<a href=\"../nvidia_worker_v1/struct-providernativecomponent\">ProviderNativeComponent</a>&gt; for <a href=\"../../nemo-relay-types/codec/request/struct-providernativecomponent\">ProviderNativeComponent</a>"}} /></pre>
 
 #### `to_wire`
 
@@ -1441,7 +1441,7 @@ In older versions of Rust, dyn compatibility was called "object safety", so this
 
 ### `impl WireValue<ResponseToolCall> for ResponseToolCall`
 
-<pre className="rust-signature"><code dangerouslySetInnerHTML={{"__html": "impl <a href=\"trait-wirevalue\">WireValue</a>&lt;<a href=\"../nvidia_worker_v1/struct-responsetoolcall\">ResponseToolCall</a>&gt; for ResponseToolCall"}} /></pre>
+<pre className="rust-signature"><code dangerouslySetInnerHTML={{"__html": "impl <a href=\"trait-wirevalue\">WireValue</a>&lt;<a href=\"../nvidia_worker_v1/struct-responsetoolcall\">ResponseToolCall</a>&gt; for <a href=\"../../nemo-relay-types/codec/response/struct-responsetoolcall\">ResponseToolCall</a>"}} /></pre>
 
 #### `to_wire`
 
@@ -1453,7 +1453,7 @@ In older versions of Rust, dyn compatibility was called "object safety", so this
 
 ### `impl WireValue<ResponseToolCallList> for Vec<ResponseToolCall>`
 
-<pre className="rust-signature"><code dangerouslySetInnerHTML={{"__html": "impl <a href=\"trait-wirevalue\">WireValue</a>&lt;<a href=\"../nvidia_worker_v1/struct-responsetoolcalllist\">ResponseToolCallList</a>&gt; for <a href=\"https://doc.rust-lang.org/1.96.1/alloc/vec/struct.Vec.html\">Vec</a>&lt;ResponseToolCall&gt;"}} /></pre>
+<pre className="rust-signature"><code dangerouslySetInnerHTML={{"__html": "impl <a href=\"trait-wirevalue\">WireValue</a>&lt;<a href=\"../nvidia_worker_v1/struct-responsetoolcalllist\">ResponseToolCallList</a>&gt; for <a href=\"https://doc.rust-lang.org/1.96.1/alloc/vec/struct.Vec.html\">Vec</a>&lt;<a href=\"../../nemo-relay-types/codec/response/struct-responsetoolcall\">ResponseToolCall</a>&gt;"}} /></pre>
 
 #### `to_wire`
 
@@ -1465,7 +1465,7 @@ In older versions of Rust, dyn compatibility was called "object safety", so this
 
 ### `impl WireValue<RuntimeRegistrationIdentity> for RuntimeRegistrationIdentity`
 
-<pre className="rust-signature"><code dangerouslySetInnerHTML={{"__html": "impl <a href=\"trait-wirevalue\">WireValue</a>&lt;<a href=\"../nvidia_worker_v1/struct-runtimeregistrationidentity\">RuntimeRegistrationIdentity</a>&gt; for RuntimeRegistrationIdentity"}} /></pre>
+<pre className="rust-signature"><code dangerouslySetInnerHTML={{"__html": "impl <a href=\"trait-wirevalue\">WireValue</a>&lt;<a href=\"../nvidia_worker_v1/struct-runtimeregistrationidentity\">RuntimeRegistrationIdentity</a>&gt; for <a href=\"../../nemo-relay-types/api/registry/struct-runtimeregistrationidentity\">RuntimeRegistrationIdentity</a>"}} /></pre>
 
 #### `to_wire`
 
@@ -1477,7 +1477,7 @@ In older versions of Rust, dyn compatibility was called "object safety", so this
 
 ### `impl WireValue<RuntimeRegistrationOwner> for RuntimeRegistrationOwner`
 
-<pre className="rust-signature"><code dangerouslySetInnerHTML={{"__html": "impl <a href=\"trait-wirevalue\">WireValue</a>&lt;<a href=\"../nvidia_worker_v1/struct-runtimeregistrationowner\">RuntimeRegistrationOwner</a>&gt; for RuntimeRegistrationOwner"}} /></pre>
+<pre className="rust-signature"><code dangerouslySetInnerHTML={{"__html": "impl <a href=\"trait-wirevalue\">WireValue</a>&lt;<a href=\"../nvidia_worker_v1/struct-runtimeregistrationowner\">RuntimeRegistrationOwner</a>&gt; for <a href=\"../../nemo-relay-types/api/registry/struct-runtimeregistrationowner\">RuntimeRegistrationOwner</a>"}} /></pre>
 
 #### `to_wire`
 
@@ -1489,7 +1489,7 @@ In older versions of Rust, dyn compatibility was called "object safety", so this
 
 ### `impl WireValue<ScopeEvent> for ScopeEvent`
 
-<pre className="rust-signature"><code dangerouslySetInnerHTML={{"__html": "impl <a href=\"trait-wirevalue\">WireValue</a>&lt;<a href=\"../nvidia_worker_v1/struct-scopeevent\">ScopeEvent</a>&gt; for ScopeEvent"}} /></pre>
+<pre className="rust-signature"><code dangerouslySetInnerHTML={{"__html": "impl <a href=\"trait-wirevalue\">WireValue</a>&lt;<a href=\"../nvidia_worker_v1/struct-scopeevent\">ScopeEvent</a>&gt; for <a href=\"../../nemo-relay-types/api/event/struct-scopeevent\">ScopeEvent</a>"}} /></pre>
 
 #### `to_wire`
 
@@ -1501,7 +1501,7 @@ In older versions of Rust, dyn compatibility was called "object safety", so this
 
 ### `impl WireValue<ScopeStackEntry> for ScopeStackEntry`
 
-<pre className="rust-signature"><code dangerouslySetInnerHTML={{"__html": "impl <a href=\"trait-wirevalue\">WireValue</a>&lt;<a href=\"../nvidia_worker_v1/struct-scopestackentry\">ScopeStackEntry</a>&gt; for ScopeStackEntry"}} /></pre>
+<pre className="rust-signature"><code dangerouslySetInnerHTML={{"__html": "impl <a href=\"trait-wirevalue\">WireValue</a>&lt;<a href=\"../nvidia_worker_v1/struct-scopestackentry\">ScopeStackEntry</a>&gt; for <a href=\"../../nemo-relay-types/api/scope/struct-scopestackentry\">ScopeStackEntry</a>"}} /></pre>
 
 #### `to_wire`
 
@@ -1513,7 +1513,7 @@ In older versions of Rust, dyn compatibility was called "object safety", so this
 
 ### `impl WireValue<ScopeStackSnapshot> for ScopeStackSnapshot`
 
-<pre className="rust-signature"><code dangerouslySetInnerHTML={{"__html": "impl <a href=\"trait-wirevalue\">WireValue</a>&lt;<a href=\"../nvidia_worker_v1/struct-scopestacksnapshot\">ScopeStackSnapshot</a>&gt; for ScopeStackSnapshot"}} /></pre>
+<pre className="rust-signature"><code dangerouslySetInnerHTML={{"__html": "impl <a href=\"trait-wirevalue\">WireValue</a>&lt;<a href=\"../nvidia_worker_v1/struct-scopestacksnapshot\">ScopeStackSnapshot</a>&gt; for <a href=\"../../nemo-relay-types/api/scope/struct-scopestacksnapshot\">ScopeStackSnapshot</a>"}} /></pre>
 
 #### `to_wire`
 
@@ -1537,7 +1537,7 @@ In older versions of Rust, dyn compatibility was called "object safety", so this
 
 ### `impl WireValue<ToolCall> for ToolCall`
 
-<pre className="rust-signature"><code dangerouslySetInnerHTML={{"__html": "impl <a href=\"trait-wirevalue\">WireValue</a>&lt;<a href=\"../nvidia_worker_v1/struct-toolcall\">ToolCall</a>&gt; for ToolCall"}} /></pre>
+<pre className="rust-signature"><code dangerouslySetInnerHTML={{"__html": "impl <a href=\"trait-wirevalue\">WireValue</a>&lt;<a href=\"../nvidia_worker_v1/struct-toolcall\">ToolCall</a>&gt; for <a href=\"../../nemo-relay-types/codec/request/struct-toolcall\">ToolCall</a>"}} /></pre>
 
 #### `to_wire`
 
@@ -1549,7 +1549,7 @@ In older versions of Rust, dyn compatibility was called "object safety", so this
 
 ### `impl WireValue<ToolCallList> for Vec<ToolCall>`
 
-<pre className="rust-signature"><code dangerouslySetInnerHTML={{"__html": "impl <a href=\"trait-wirevalue\">WireValue</a>&lt;<a href=\"../nvidia_worker_v1/struct-toolcalllist\">ToolCallList</a>&gt; for <a href=\"https://doc.rust-lang.org/1.96.1/alloc/vec/struct.Vec.html\">Vec</a>&lt;ToolCall&gt;"}} /></pre>
+<pre className="rust-signature"><code dangerouslySetInnerHTML={{"__html": "impl <a href=\"trait-wirevalue\">WireValue</a>&lt;<a href=\"../nvidia_worker_v1/struct-toolcalllist\">ToolCallList</a>&gt; for <a href=\"https://doc.rust-lang.org/1.96.1/alloc/vec/struct.Vec.html\">Vec</a>&lt;<a href=\"../../nemo-relay-types/codec/request/struct-toolcall\">ToolCall</a>&gt;"}} /></pre>
 
 #### `to_wire`
 
@@ -1561,7 +1561,7 @@ In older versions of Rust, dyn compatibility was called "object safety", so this
 
 ### `impl WireValue<ToolChoice> for ToolChoice`
 
-<pre className="rust-signature"><code dangerouslySetInnerHTML={{"__html": "impl <a href=\"trait-wirevalue\">WireValue</a>&lt;<a href=\"../nvidia_worker_v1/struct-toolchoice\">ToolChoice</a>&gt; for ToolChoice"}} /></pre>
+<pre className="rust-signature"><code dangerouslySetInnerHTML={{"__html": "impl <a href=\"trait-wirevalue\">WireValue</a>&lt;<a href=\"../nvidia_worker_v1/struct-toolchoice\">ToolChoice</a>&gt; for <a href=\"../../nemo-relay-types/codec/request/enum-toolchoice\">ToolChoice</a>"}} /></pre>
 
 #### `to_wire`
 
@@ -1573,7 +1573,7 @@ In older versions of Rust, dyn compatibility was called "object safety", so this
 
 ### `impl WireValue<ToolChoiceFunction> for ToolChoiceFunction`
 
-<pre className="rust-signature"><code dangerouslySetInnerHTML={{"__html": "impl <a href=\"trait-wirevalue\">WireValue</a>&lt;<a href=\"../nvidia_worker_v1/struct-toolchoicefunction\">ToolChoiceFunction</a>&gt; for ToolChoiceFunction"}} /></pre>
+<pre className="rust-signature"><code dangerouslySetInnerHTML={{"__html": "impl <a href=\"trait-wirevalue\">WireValue</a>&lt;<a href=\"../nvidia_worker_v1/struct-toolchoicefunction\">ToolChoiceFunction</a>&gt; for <a href=\"../../nemo-relay-types/codec/request/struct-toolchoicefunction\">ToolChoiceFunction</a>"}} /></pre>
 
 #### `to_wire`
 
@@ -1585,7 +1585,7 @@ In older versions of Rust, dyn compatibility was called "object safety", so this
 
 ### `impl WireValue<ToolChoiceFunctionName> for ToolChoiceFunctionName`
 
-<pre className="rust-signature"><code dangerouslySetInnerHTML={{"__html": "impl <a href=\"trait-wirevalue\">WireValue</a>&lt;<a href=\"../nvidia_worker_v1/struct-toolchoicefunctionname\">ToolChoiceFunctionName</a>&gt; for ToolChoiceFunctionName"}} /></pre>
+<pre className="rust-signature"><code dangerouslySetInnerHTML={{"__html": "impl <a href=\"trait-wirevalue\">WireValue</a>&lt;<a href=\"../nvidia_worker_v1/struct-toolchoicefunctionname\">ToolChoiceFunctionName</a>&gt; for <a href=\"../../nemo-relay-types/codec/request/struct-toolchoicefunctionname\">ToolChoiceFunctionName</a>"}} /></pre>
 
 #### `to_wire`
 
@@ -1597,7 +1597,7 @@ In older versions of Rust, dyn compatibility was called "object safety", so this
 
 ### `impl WireValue<ToolDefinition> for ToolDefinition`
 
-<pre className="rust-signature"><code dangerouslySetInnerHTML={{"__html": "impl <a href=\"trait-wirevalue\">WireValue</a>&lt;<a href=\"../nvidia_worker_v1/struct-tooldefinition\">ToolDefinition</a>&gt; for ToolDefinition"}} /></pre>
+<pre className="rust-signature"><code dangerouslySetInnerHTML={{"__html": "impl <a href=\"trait-wirevalue\">WireValue</a>&lt;<a href=\"../nvidia_worker_v1/struct-tooldefinition\">ToolDefinition</a>&gt; for <a href=\"../../nemo-relay-types/codec/request/enum-tooldefinition\">ToolDefinition</a>"}} /></pre>
 
 #### `to_wire`
 
@@ -1609,7 +1609,7 @@ In older versions of Rust, dyn compatibility was called "object safety", so this
 
 ### `impl WireValue<ToolDefinitionList> for Vec<ToolDefinition>`
 
-<pre className="rust-signature"><code dangerouslySetInnerHTML={{"__html": "impl <a href=\"trait-wirevalue\">WireValue</a>&lt;<a href=\"../nvidia_worker_v1/struct-tooldefinitionlist\">ToolDefinitionList</a>&gt; for <a href=\"https://doc.rust-lang.org/1.96.1/alloc/vec/struct.Vec.html\">Vec</a>&lt;ToolDefinition&gt;"}} /></pre>
+<pre className="rust-signature"><code dangerouslySetInnerHTML={{"__html": "impl <a href=\"trait-wirevalue\">WireValue</a>&lt;<a href=\"../nvidia_worker_v1/struct-tooldefinitionlist\">ToolDefinitionList</a>&gt; for <a href=\"https://doc.rust-lang.org/1.96.1/alloc/vec/struct.Vec.html\">Vec</a>&lt;<a href=\"../../nemo-relay-types/codec/request/enum-tooldefinition\">ToolDefinition</a>&gt;"}} /></pre>
 
 #### `to_wire`
 
@@ -1621,7 +1621,7 @@ In older versions of Rust, dyn compatibility was called "object safety", so this
 
 ### `impl WireValue<ToolExecutionInterceptOutcome> for ToolExecutionInterceptOutcome`
 
-<pre className="rust-signature"><code dangerouslySetInnerHTML={{"__html": "impl <a href=\"trait-wirevalue\">WireValue</a>&lt;<a href=\"../nvidia_worker_v1/struct-toolexecutioninterceptoutcome\">ToolExecutionInterceptOutcome</a>&gt; for ToolExecutionInterceptOutcome"}} /></pre>
+<pre className="rust-signature"><code dangerouslySetInnerHTML={{"__html": "impl <a href=\"trait-wirevalue\">WireValue</a>&lt;<a href=\"../nvidia_worker_v1/struct-toolexecutioninterceptoutcome\">ToolExecutionInterceptOutcome</a>&gt; for <a href=\"../../nemo-relay-types/api/tool/struct-toolexecutioninterceptoutcome\">ToolExecutionInterceptOutcome</a>"}} /></pre>
 
 #### `to_wire`
 
@@ -1633,7 +1633,7 @@ In older versions of Rust, dyn compatibility was called "object safety", so this
 
 ### `impl WireValue<ToolExecutionResult> for ToolExecutionResult`
 
-<pre className="rust-signature"><code dangerouslySetInnerHTML={{"__html": "impl <a href=\"trait-wirevalue\">WireValue</a>&lt;<a href=\"../nvidia_worker_v1/struct-toolexecutionresult\">ToolExecutionResult</a>&gt; for ToolExecutionResult"}} /></pre>
+<pre className="rust-signature"><code dangerouslySetInnerHTML={{"__html": "impl <a href=\"trait-wirevalue\">WireValue</a>&lt;<a href=\"../nvidia_worker_v1/struct-toolexecutionresult\">ToolExecutionResult</a>&gt; for <a href=\"../../nemo-relay-types/api/tool/struct-toolexecutionresult\">ToolExecutionResult</a>"}} /></pre>
 
 #### `to_wire`
 
@@ -1645,7 +1645,7 @@ In older versions of Rust, dyn compatibility was called "object safety", so this
 
 ### `impl WireValue<Usage> for Usage`
 
-<pre className="rust-signature"><code dangerouslySetInnerHTML={{"__html": "impl <a href=\"trait-wirevalue\">WireValue</a>&lt;<a href=\"../nvidia_worker_v1/struct-usage\">Usage</a>&gt; for Usage"}} /></pre>
+<pre className="rust-signature"><code dangerouslySetInnerHTML={{"__html": "impl <a href=\"trait-wirevalue\">WireValue</a>&lt;<a href=\"../nvidia_worker_v1/struct-usage\">Usage</a>&gt; for <a href=\"../../nemo-relay-types/codec/response/struct-usage\">Usage</a>"}} /></pre>
 
 #### `to_wire`
 
@@ -1657,7 +1657,7 @@ In older versions of Rust, dyn compatibility was called "object safety", so this
 
 ### `impl WireValue<Box<AnnotatedLlmRequest>> for AnnotatedLlmRequest`
 
-<pre className="rust-signature"><code dangerouslySetInnerHTML={{"__html": "impl <a href=\"trait-wirevalue\">WireValue</a>&lt;<a href=\"https://doc.rust-lang.org/1.96.1/alloc/boxed/struct.Box.html\">Box</a>&lt;<a href=\"../nvidia_worker_v1/struct-annotatedllmrequest\">AnnotatedLlmRequest</a>&gt;&gt; for AnnotatedLlmRequest"}} /></pre>
+<pre className="rust-signature"><code dangerouslySetInnerHTML={{"__html": "impl <a href=\"trait-wirevalue\">WireValue</a>&lt;<a href=\"https://doc.rust-lang.org/1.96.1/alloc/boxed/struct.Box.html\">Box</a>&lt;<a href=\"../nvidia_worker_v1/struct-annotatedllmrequest\">AnnotatedLlmRequest</a>&gt;&gt; for <a href=\"../../nemo-relay-types/codec/request/struct-annotatedllmrequest\">AnnotatedLlmRequest</a>"}} /></pre>
 
 #### `to_wire`
 
@@ -1669,7 +1669,7 @@ In older versions of Rust, dyn compatibility was called "object safety", so this
 
 ### `impl WireValue<Box<AnnotatedLlmResponse>> for AnnotatedLlmResponse`
 
-<pre className="rust-signature"><code dangerouslySetInnerHTML={{"__html": "impl <a href=\"trait-wirevalue\">WireValue</a>&lt;<a href=\"https://doc.rust-lang.org/1.96.1/alloc/boxed/struct.Box.html\">Box</a>&lt;<a href=\"../nvidia_worker_v1/struct-annotatedllmresponse\">AnnotatedLlmResponse</a>&gt;&gt; for AnnotatedLlmResponse"}} /></pre>
+<pre className="rust-signature"><code dangerouslySetInnerHTML={{"__html": "impl <a href=\"trait-wirevalue\">WireValue</a>&lt;<a href=\"https://doc.rust-lang.org/1.96.1/alloc/boxed/struct.Box.html\">Box</a>&lt;<a href=\"../nvidia_worker_v1/struct-annotatedllmresponse\">AnnotatedLlmResponse</a>&gt;&gt; for <a href=\"../../nemo-relay-types/codec/response/struct-annotatedllmresponse\">AnnotatedLlmResponse</a>"}} /></pre>
 
 #### `to_wire`
 
@@ -1681,7 +1681,7 @@ In older versions of Rust, dyn compatibility was called "object safety", so this
 
 ### `impl WireValue<Box<BaseEvent>> for BaseEvent`
 
-<pre className="rust-signature"><code dangerouslySetInnerHTML={{"__html": "impl <a href=\"trait-wirevalue\">WireValue</a>&lt;<a href=\"https://doc.rust-lang.org/1.96.1/alloc/boxed/struct.Box.html\">Box</a>&lt;<a href=\"../nvidia_worker_v1/struct-baseevent\">BaseEvent</a>&gt;&gt; for BaseEvent"}} /></pre>
+<pre className="rust-signature"><code dangerouslySetInnerHTML={{"__html": "impl <a href=\"trait-wirevalue\">WireValue</a>&lt;<a href=\"https://doc.rust-lang.org/1.96.1/alloc/boxed/struct.Box.html\">Box</a>&lt;<a href=\"../nvidia_worker_v1/struct-baseevent\">BaseEvent</a>&gt;&gt; for <a href=\"../../nemo-relay-types/api/event/struct-baseevent\">BaseEvent</a>"}} /></pre>
 
 #### `to_wire`
 
@@ -1693,7 +1693,7 @@ In older versions of Rust, dyn compatibility was called "object safety", so this
 
 ### `impl WireValue<Box<CacheWriteTokenCounts>> for CacheWriteTokenCounts`
 
-<pre className="rust-signature"><code dangerouslySetInnerHTML={{"__html": "impl <a href=\"trait-wirevalue\">WireValue</a>&lt;<a href=\"https://doc.rust-lang.org/1.96.1/alloc/boxed/struct.Box.html\">Box</a>&lt;<a href=\"../nvidia_worker_v1/struct-cachewritetokencounts\">CacheWriteTokenCounts</a>&gt;&gt; for CacheWriteTokenCounts"}} /></pre>
+<pre className="rust-signature"><code dangerouslySetInnerHTML={{"__html": "impl <a href=\"trait-wirevalue\">WireValue</a>&lt;<a href=\"https://doc.rust-lang.org/1.96.1/alloc/boxed/struct.Box.html\">Box</a>&lt;<a href=\"../nvidia_worker_v1/struct-cachewritetokencounts\">CacheWriteTokenCounts</a>&gt;&gt; for <a href=\"../../nemo-relay-types/codec/response/struct-cachewritetokencounts\">CacheWriteTokenCounts</a>"}} /></pre>
 
 #### `to_wire`
 
@@ -1705,7 +1705,7 @@ In older versions of Rust, dyn compatibility was called "object safety", so this
 
 ### `impl WireValue<Box<CategoryProfile>> for CategoryProfile`
 
-<pre className="rust-signature"><code dangerouslySetInnerHTML={{"__html": "impl <a href=\"trait-wirevalue\">WireValue</a>&lt;<a href=\"https://doc.rust-lang.org/1.96.1/alloc/boxed/struct.Box.html\">Box</a>&lt;<a href=\"../nvidia_worker_v1/struct-categoryprofile\">CategoryProfile</a>&gt;&gt; for CategoryProfile"}} /></pre>
+<pre className="rust-signature"><code dangerouslySetInnerHTML={{"__html": "impl <a href=\"trait-wirevalue\">WireValue</a>&lt;<a href=\"https://doc.rust-lang.org/1.96.1/alloc/boxed/struct.Box.html\">Box</a>&lt;<a href=\"../nvidia_worker_v1/struct-categoryprofile\">CategoryProfile</a>&gt;&gt; for <a href=\"../../nemo-relay-types/api/event/struct-categoryprofile\">CategoryProfile</a>"}} /></pre>
 
 #### `to_wire`
 
@@ -1741,7 +1741,7 @@ In older versions of Rust, dyn compatibility was called "object safety", so this
 
 ### `impl WireValue<Box<ConfigDiagnostic>> for ConfigDiagnostic`
 
-<pre className="rust-signature"><code dangerouslySetInnerHTML={{"__html": "impl <a href=\"trait-wirevalue\">WireValue</a>&lt;<a href=\"https://doc.rust-lang.org/1.96.1/alloc/boxed/struct.Box.html\">Box</a>&lt;<a href=\"../nvidia_worker_v1/struct-configdiagnostic\">ConfigDiagnostic</a>&gt;&gt; for ConfigDiagnostic"}} /></pre>
+<pre className="rust-signature"><code dangerouslySetInnerHTML={{"__html": "impl <a href=\"trait-wirevalue\">WireValue</a>&lt;<a href=\"https://doc.rust-lang.org/1.96.1/alloc/boxed/struct.Box.html\">Box</a>&lt;<a href=\"../nvidia_worker_v1/struct-configdiagnostic\">ConfigDiagnostic</a>&gt;&gt; for <a href=\"../../nemo-relay-types/plugin/struct-configdiagnostic\">ConfigDiagnostic</a>"}} /></pre>
 
 #### `to_wire`
 
@@ -1753,7 +1753,7 @@ In older versions of Rust, dyn compatibility was called "object safety", so this
 
 ### `impl WireValue<Box<CostEstimate>> for CostEstimate`
 
-<pre className="rust-signature"><code dangerouslySetInnerHTML={{"__html": "impl <a href=\"trait-wirevalue\">WireValue</a>&lt;<a href=\"https://doc.rust-lang.org/1.96.1/alloc/boxed/struct.Box.html\">Box</a>&lt;<a href=\"../nvidia_worker_v1/struct-costestimate\">CostEstimate</a>&gt;&gt; for CostEstimate"}} /></pre>
+<pre className="rust-signature"><code dangerouslySetInnerHTML={{"__html": "impl <a href=\"trait-wirevalue\">WireValue</a>&lt;<a href=\"https://doc.rust-lang.org/1.96.1/alloc/boxed/struct.Box.html\">Box</a>&lt;<a href=\"../nvidia_worker_v1/struct-costestimate\">CostEstimate</a>&gt;&gt; for <a href=\"../../nemo-relay-types/codec/response/struct-costestimate\">CostEstimate</a>"}} /></pre>
 
 #### `to_wire`
 
@@ -1765,7 +1765,7 @@ In older versions of Rust, dyn compatibility was called "object safety", so this
 
 ### `impl WireValue<Box<DataSchema>> for DataSchema`
 
-<pre className="rust-signature"><code dangerouslySetInnerHTML={{"__html": "impl <a href=\"trait-wirevalue\">WireValue</a>&lt;<a href=\"https://doc.rust-lang.org/1.96.1/alloc/boxed/struct.Box.html\">Box</a>&lt;<a href=\"../nvidia_worker_v1/struct-dataschema\">DataSchema</a>&gt;&gt; for DataSchema"}} /></pre>
+<pre className="rust-signature"><code dangerouslySetInnerHTML={{"__html": "impl <a href=\"trait-wirevalue\">WireValue</a>&lt;<a href=\"https://doc.rust-lang.org/1.96.1/alloc/boxed/struct.Box.html\">Box</a>&lt;<a href=\"../nvidia_worker_v1/struct-dataschema\">DataSchema</a>&gt;&gt; for <a href=\"../../nemo-relay-types/api/event/struct-dataschema\">DataSchema</a>"}} /></pre>
 
 #### `to_wire`
 
@@ -1885,7 +1885,7 @@ In older versions of Rust, dyn compatibility was called "object safety", so this
 
 ### `impl WireValue<Box<DiagnosticDiscovery>> for DiagnosticDiscovery`
 
-<pre className="rust-signature"><code dangerouslySetInnerHTML={{"__html": "impl <a href=\"trait-wirevalue\">WireValue</a>&lt;<a href=\"https://doc.rust-lang.org/1.96.1/alloc/boxed/struct.Box.html\">Box</a>&lt;<a href=\"../nvidia_worker_v1/struct-diagnosticdiscovery\">DiagnosticDiscovery</a>&gt;&gt; for DiagnosticDiscovery"}} /></pre>
+<pre className="rust-signature"><code dangerouslySetInnerHTML={{"__html": "impl <a href=\"trait-wirevalue\">WireValue</a>&lt;<a href=\"https://doc.rust-lang.org/1.96.1/alloc/boxed/struct.Box.html\">Box</a>&lt;<a href=\"../nvidia_worker_v1/struct-diagnosticdiscovery\">DiagnosticDiscovery</a>&gt;&gt; for <a href=\"../../nemo-relay-types/diagnostics/struct-diagnosticdiscovery\">DiagnosticDiscovery</a>"}} /></pre>
 
 #### `to_wire`
 
@@ -1981,7 +1981,7 @@ In older versions of Rust, dyn compatibility was called "object safety", so this
 
 ### `impl WireValue<Box<DiagnosticProducerSupport>> for DiagnosticProducerSupport`
 
-<pre className="rust-signature"><code dangerouslySetInnerHTML={{"__html": "impl <a href=\"trait-wirevalue\">WireValue</a>&lt;<a href=\"https://doc.rust-lang.org/1.96.1/alloc/boxed/struct.Box.html\">Box</a>&lt;<a href=\"../nvidia_worker_v1/struct-diagnosticproducersupport\">DiagnosticProducerSupport</a>&gt;&gt; for DiagnosticProducerSupport"}} /></pre>
+<pre className="rust-signature"><code dangerouslySetInnerHTML={{"__html": "impl <a href=\"trait-wirevalue\">WireValue</a>&lt;<a href=\"https://doc.rust-lang.org/1.96.1/alloc/boxed/struct.Box.html\">Box</a>&lt;<a href=\"../nvidia_worker_v1/struct-diagnosticproducersupport\">DiagnosticProducerSupport</a>&gt;&gt; for <a href=\"../../nemo-relay-types/diagnostics/struct-diagnosticproducersupport\">DiagnosticProducerSupport</a>"}} /></pre>
 
 #### `to_wire`
 
@@ -2125,7 +2125,7 @@ In older versions of Rust, dyn compatibility was called "object safety", so this
 
 ### `impl WireValue<Box<EventSanitizeFields>> for EventSanitizeFields`
 
-<pre className="rust-signature"><code dangerouslySetInnerHTML={{"__html": "impl <a href=\"trait-wirevalue\">WireValue</a>&lt;<a href=\"https://doc.rust-lang.org/1.96.1/alloc/boxed/struct.Box.html\">Box</a>&lt;<a href=\"../nvidia_worker_v1/struct-eventsanitizefields\">EventSanitizeFields</a>&gt;&gt; for EventSanitizeFields"}} /></pre>
+<pre className="rust-signature"><code dangerouslySetInnerHTML={{"__html": "impl <a href=\"trait-wirevalue\">WireValue</a>&lt;<a href=\"https://doc.rust-lang.org/1.96.1/alloc/boxed/struct.Box.html\">Box</a>&lt;<a href=\"../nvidia_worker_v1/struct-eventsanitizefields\">EventSanitizeFields</a>&gt;&gt; for <a href=\"../../nemo-relay-types/api/event/struct-eventsanitizefields\">EventSanitizeFields</a>"}} /></pre>
 
 #### `to_wire`
 
@@ -2137,7 +2137,7 @@ In older versions of Rust, dyn compatibility was called "object safety", so this
 
 ### `impl WireValue<Box<FunctionCall>> for FunctionCall`
 
-<pre className="rust-signature"><code dangerouslySetInnerHTML={{"__html": "impl <a href=\"trait-wirevalue\">WireValue</a>&lt;<a href=\"https://doc.rust-lang.org/1.96.1/alloc/boxed/struct.Box.html\">Box</a>&lt;<a href=\"../nvidia_worker_v1/struct-functioncall\">FunctionCall</a>&gt;&gt; for FunctionCall"}} /></pre>
+<pre className="rust-signature"><code dangerouslySetInnerHTML={{"__html": "impl <a href=\"trait-wirevalue\">WireValue</a>&lt;<a href=\"https://doc.rust-lang.org/1.96.1/alloc/boxed/struct.Box.html\">Box</a>&lt;<a href=\"../nvidia_worker_v1/struct-functioncall\">FunctionCall</a>&gt;&gt; for <a href=\"../../nemo-relay-types/codec/request/struct-functioncall\">FunctionCall</a>"}} /></pre>
 
 #### `to_wire`
 
@@ -2149,7 +2149,7 @@ In older versions of Rust, dyn compatibility was called "object safety", so this
 
 ### `impl WireValue<Box<FunctionDefinition>> for FunctionDefinition`
 
-<pre className="rust-signature"><code dangerouslySetInnerHTML={{"__html": "impl <a href=\"trait-wirevalue\">WireValue</a>&lt;<a href=\"https://doc.rust-lang.org/1.96.1/alloc/boxed/struct.Box.html\">Box</a>&lt;<a href=\"../nvidia_worker_v1/struct-functiondefinition\">FunctionDefinition</a>&gt;&gt; for FunctionDefinition"}} /></pre>
+<pre className="rust-signature"><code dangerouslySetInnerHTML={{"__html": "impl <a href=\"trait-wirevalue\">WireValue</a>&lt;<a href=\"https://doc.rust-lang.org/1.96.1/alloc/boxed/struct.Box.html\">Box</a>&lt;<a href=\"../nvidia_worker_v1/struct-functiondefinition\">FunctionDefinition</a>&gt;&gt; for <a href=\"../../nemo-relay-types/codec/request/struct-functiondefinition\">FunctionDefinition</a>"}} /></pre>
 
 #### `to_wire`
 
@@ -2161,7 +2161,7 @@ In older versions of Rust, dyn compatibility was called "object safety", so this
 
 ### `impl WireValue<Box<GenerationParams>> for GenerationParams`
 
-<pre className="rust-signature"><code dangerouslySetInnerHTML={{"__html": "impl <a href=\"trait-wirevalue\">WireValue</a>&lt;<a href=\"https://doc.rust-lang.org/1.96.1/alloc/boxed/struct.Box.html\">Box</a>&lt;<a href=\"../nvidia_worker_v1/struct-generationparams\">GenerationParams</a>&gt;&gt; for GenerationParams"}} /></pre>
+<pre className="rust-signature"><code dangerouslySetInnerHTML={{"__html": "impl <a href=\"trait-wirevalue\">WireValue</a>&lt;<a href=\"https://doc.rust-lang.org/1.96.1/alloc/boxed/struct.Box.html\">Box</a>&lt;<a href=\"../nvidia_worker_v1/struct-generationparams\">GenerationParams</a>&gt;&gt; for <a href=\"../../nemo-relay-types/codec/request/struct-generationparams\">GenerationParams</a>"}} /></pre>
 
 #### `to_wire`
 
@@ -2173,7 +2173,7 @@ In older versions of Rust, dyn compatibility was called "object safety", so this
 
 ### `impl WireValue<Box<ImageUrl>> for OpenAiImageUrl`
 
-<pre className="rust-signature"><code dangerouslySetInnerHTML={{"__html": "impl <a href=\"trait-wirevalue\">WireValue</a>&lt;<a href=\"https://doc.rust-lang.org/1.96.1/alloc/boxed/struct.Box.html\">Box</a>&lt;<a href=\"../nvidia_worker_v1/struct-imageurl\">ImageUrl</a>&gt;&gt; for OpenAiImageUrl"}} /></pre>
+<pre className="rust-signature"><code dangerouslySetInnerHTML={{"__html": "impl <a href=\"trait-wirevalue\">WireValue</a>&lt;<a href=\"https://doc.rust-lang.org/1.96.1/alloc/boxed/struct.Box.html\">Box</a>&lt;<a href=\"../nvidia_worker_v1/struct-imageurl\">ImageUrl</a>&gt;&gt; for <a href=\"../../nemo-relay-types/codec/request/struct-openaiimageurl\">OpenAiImageUrl</a>"}} /></pre>
 
 #### `to_wire`
 
@@ -2185,7 +2185,7 @@ In older versions of Rust, dyn compatibility was called "object safety", so this
 
 ### `impl WireValue<Box<LlmOptimizationContribution>> for LlmOptimizationContribution`
 
-<pre className="rust-signature"><code dangerouslySetInnerHTML={{"__html": "impl <a href=\"trait-wirevalue\">WireValue</a>&lt;<a href=\"https://doc.rust-lang.org/1.96.1/alloc/boxed/struct.Box.html\">Box</a>&lt;<a href=\"../nvidia_worker_v1/struct-llmoptimizationcontribution\">LlmOptimizationContribution</a>&gt;&gt; for LlmOptimizationContribution"}} /></pre>
+<pre className="rust-signature"><code dangerouslySetInnerHTML={{"__html": "impl <a href=\"trait-wirevalue\">WireValue</a>&lt;<a href=\"https://doc.rust-lang.org/1.96.1/alloc/boxed/struct.Box.html\">Box</a>&lt;<a href=\"../nvidia_worker_v1/struct-llmoptimizationcontribution\">LlmOptimizationContribution</a>&gt;&gt; for <a href=\"../../nemo-relay-types/codec/optimization/struct-llmoptimizationcontribution\">LlmOptimizationContribution</a>"}} /></pre>
 
 #### `to_wire`
 
@@ -2197,7 +2197,7 @@ In older versions of Rust, dyn compatibility was called "object safety", so this
 
 ### `impl WireValue<Box<LlmOptimizationModel>> for LlmOptimizationModel`
 
-<pre className="rust-signature"><code dangerouslySetInnerHTML={{"__html": "impl <a href=\"trait-wirevalue\">WireValue</a>&lt;<a href=\"https://doc.rust-lang.org/1.96.1/alloc/boxed/struct.Box.html\">Box</a>&lt;<a href=\"../nvidia_worker_v1/struct-llmoptimizationmodel\">LlmOptimizationModel</a>&gt;&gt; for LlmOptimizationModel"}} /></pre>
+<pre className="rust-signature"><code dangerouslySetInnerHTML={{"__html": "impl <a href=\"trait-wirevalue\">WireValue</a>&lt;<a href=\"https://doc.rust-lang.org/1.96.1/alloc/boxed/struct.Box.html\">Box</a>&lt;<a href=\"../nvidia_worker_v1/struct-llmoptimizationmodel\">LlmOptimizationModel</a>&gt;&gt; for <a href=\"../../nemo-relay-types/codec/optimization/struct-llmoptimizationmodel\">LlmOptimizationModel</a>"}} /></pre>
 
 #### `to_wire`
 
@@ -2209,7 +2209,7 @@ In older versions of Rust, dyn compatibility was called "object safety", so this
 
 ### `impl WireValue<Box<LlmOptimizationModelTransition>> for LlmOptimizationModelTransition`
 
-<pre className="rust-signature"><code dangerouslySetInnerHTML={{"__html": "impl <a href=\"trait-wirevalue\">WireValue</a>&lt;<a href=\"https://doc.rust-lang.org/1.96.1/alloc/boxed/struct.Box.html\">Box</a>&lt;<a href=\"../nvidia_worker_v1/struct-llmoptimizationmodeltransition\">LlmOptimizationModelTransition</a>&gt;&gt; for LlmOptimizationModelTransition"}} /></pre>
+<pre className="rust-signature"><code dangerouslySetInnerHTML={{"__html": "impl <a href=\"trait-wirevalue\">WireValue</a>&lt;<a href=\"https://doc.rust-lang.org/1.96.1/alloc/boxed/struct.Box.html\">Box</a>&lt;<a href=\"../nvidia_worker_v1/struct-llmoptimizationmodeltransition\">LlmOptimizationModelTransition</a>&gt;&gt; for <a href=\"../../nemo-relay-types/codec/optimization/struct-llmoptimizationmodeltransition\">LlmOptimizationModelTransition</a>"}} /></pre>
 
 #### `to_wire`
 
@@ -2221,7 +2221,7 @@ In older versions of Rust, dyn compatibility was called "object safety", so this
 
 ### `impl WireValue<Box<LlmOptimizationSummary>> for LlmOptimizationSummary`
 
-<pre className="rust-signature"><code dangerouslySetInnerHTML={{"__html": "impl <a href=\"trait-wirevalue\">WireValue</a>&lt;<a href=\"https://doc.rust-lang.org/1.96.1/alloc/boxed/struct.Box.html\">Box</a>&lt;<a href=\"../nvidia_worker_v1/struct-llmoptimizationsummary\">LlmOptimizationSummary</a>&gt;&gt; for LlmOptimizationSummary"}} /></pre>
+<pre className="rust-signature"><code dangerouslySetInnerHTML={{"__html": "impl <a href=\"trait-wirevalue\">WireValue</a>&lt;<a href=\"https://doc.rust-lang.org/1.96.1/alloc/boxed/struct.Box.html\">Box</a>&lt;<a href=\"../nvidia_worker_v1/struct-llmoptimizationsummary\">LlmOptimizationSummary</a>&gt;&gt; for <a href=\"../../nemo-relay-types/codec/optimization/struct-llmoptimizationsummary\">LlmOptimizationSummary</a>"}} /></pre>
 
 #### `to_wire`
 
@@ -2233,7 +2233,7 @@ In older versions of Rust, dyn compatibility was called "object safety", so this
 
 ### `impl WireValue<Box<LlmOptimizationTokenImpact>> for LlmOptimizationTokenImpact`
 
-<pre className="rust-signature"><code dangerouslySetInnerHTML={{"__html": "impl <a href=\"trait-wirevalue\">WireValue</a>&lt;<a href=\"https://doc.rust-lang.org/1.96.1/alloc/boxed/struct.Box.html\">Box</a>&lt;<a href=\"../nvidia_worker_v1/struct-llmoptimizationtokenimpact\">LlmOptimizationTokenImpact</a>&gt;&gt; for LlmOptimizationTokenImpact"}} /></pre>
+<pre className="rust-signature"><code dangerouslySetInnerHTML={{"__html": "impl <a href=\"trait-wirevalue\">WireValue</a>&lt;<a href=\"https://doc.rust-lang.org/1.96.1/alloc/boxed/struct.Box.html\">Box</a>&lt;<a href=\"../nvidia_worker_v1/struct-llmoptimizationtokenimpact\">LlmOptimizationTokenImpact</a>&gt;&gt; for <a href=\"../../nemo-relay-types/codec/optimization/struct-llmoptimizationtokenimpact\">LlmOptimizationTokenImpact</a>"}} /></pre>
 
 #### `to_wire`
 
@@ -2245,7 +2245,7 @@ In older versions of Rust, dyn compatibility was called "object safety", so this
 
 ### `impl WireValue<Box<LlmOptimizationTokens>> for LlmOptimizationTokens`
 
-<pre className="rust-signature"><code dangerouslySetInnerHTML={{"__html": "impl <a href=\"trait-wirevalue\">WireValue</a>&lt;<a href=\"https://doc.rust-lang.org/1.96.1/alloc/boxed/struct.Box.html\">Box</a>&lt;<a href=\"../nvidia_worker_v1/struct-llmoptimizationtokens\">LlmOptimizationTokens</a>&gt;&gt; for LlmOptimizationTokens"}} /></pre>
+<pre className="rust-signature"><code dangerouslySetInnerHTML={{"__html": "impl <a href=\"trait-wirevalue\">WireValue</a>&lt;<a href=\"https://doc.rust-lang.org/1.96.1/alloc/boxed/struct.Box.html\">Box</a>&lt;<a href=\"../nvidia_worker_v1/struct-llmoptimizationtokens\">LlmOptimizationTokens</a>&gt;&gt; for <a href=\"../../nemo-relay-types/codec/optimization/struct-llmoptimizationtokens\">LlmOptimizationTokens</a>"}} /></pre>
 
 #### `to_wire`
 
@@ -2257,7 +2257,7 @@ In older versions of Rust, dyn compatibility was called "object safety", so this
 
 ### `impl WireValue<Box<LlmRequest>> for LlmRequest`
 
-<pre className="rust-signature"><code dangerouslySetInnerHTML={{"__html": "impl <a href=\"trait-wirevalue\">WireValue</a>&lt;<a href=\"https://doc.rust-lang.org/1.96.1/alloc/boxed/struct.Box.html\">Box</a>&lt;<a href=\"../nvidia_worker_v1/struct-llmrequest\">LlmRequest</a>&gt;&gt; for LlmRequest"}} /></pre>
+<pre className="rust-signature"><code dangerouslySetInnerHTML={{"__html": "impl <a href=\"trait-wirevalue\">WireValue</a>&lt;<a href=\"https://doc.rust-lang.org/1.96.1/alloc/boxed/struct.Box.html\">Box</a>&lt;<a href=\"../nvidia_worker_v1/struct-llmrequest\">LlmRequest</a>&gt;&gt; for <a href=\"../../nemo-relay-types/api/llm/struct-llmrequest\">LlmRequest</a>"}} /></pre>
 
 #### `to_wire`
 
@@ -2269,7 +2269,7 @@ In older versions of Rust, dyn compatibility was called "object safety", so this
 
 ### `impl WireValue<Box<LlmRequestInterceptOutcome>> for LlmRequestInterceptOutcome`
 
-<pre className="rust-signature"><code dangerouslySetInnerHTML={{"__html": "impl <a href=\"trait-wirevalue\">WireValue</a>&lt;<a href=\"https://doc.rust-lang.org/1.96.1/alloc/boxed/struct.Box.html\">Box</a>&lt;<a href=\"../nvidia_worker_v1/struct-llmrequestinterceptoutcome\">LlmRequestInterceptOutcome</a>&gt;&gt; for LlmRequestInterceptOutcome"}} /></pre>
+<pre className="rust-signature"><code dangerouslySetInnerHTML={{"__html": "impl <a href=\"trait-wirevalue\">WireValue</a>&lt;<a href=\"https://doc.rust-lang.org/1.96.1/alloc/boxed/struct.Box.html\">Box</a>&lt;<a href=\"../nvidia_worker_v1/struct-llmrequestinterceptoutcome\">LlmRequestInterceptOutcome</a>&gt;&gt; for <a href=\"../../nemo-relay-types/api/llm/struct-llmrequestinterceptoutcome\">LlmRequestInterceptOutcome</a>"}} /></pre>
 
 #### `to_wire`
 
@@ -2281,7 +2281,7 @@ In older versions of Rust, dyn compatibility was called "object safety", so this
 
 ### `impl WireValue<Box<MarkEvent>> for MarkEvent`
 
-<pre className="rust-signature"><code dangerouslySetInnerHTML={{"__html": "impl <a href=\"trait-wirevalue\">WireValue</a>&lt;<a href=\"https://doc.rust-lang.org/1.96.1/alloc/boxed/struct.Box.html\">Box</a>&lt;<a href=\"../nvidia_worker_v1/struct-markevent\">MarkEvent</a>&gt;&gt; for MarkEvent"}} /></pre>
+<pre className="rust-signature"><code dangerouslySetInnerHTML={{"__html": "impl <a href=\"trait-wirevalue\">WireValue</a>&lt;<a href=\"https://doc.rust-lang.org/1.96.1/alloc/boxed/struct.Box.html\">Box</a>&lt;<a href=\"../nvidia_worker_v1/struct-markevent\">MarkEvent</a>&gt;&gt; for <a href=\"../../nemo-relay-types/api/event/struct-markevent\">MarkEvent</a>"}} /></pre>
 
 #### `to_wire`
 
@@ -2317,7 +2317,7 @@ In older versions of Rust, dyn compatibility was called "object safety", so this
 
 ### `impl WireValue<Box<PendingMarkSpec>> for PendingMarkSpec`
 
-<pre className="rust-signature"><code dangerouslySetInnerHTML={{"__html": "impl <a href=\"trait-wirevalue\">WireValue</a>&lt;<a href=\"https://doc.rust-lang.org/1.96.1/alloc/boxed/struct.Box.html\">Box</a>&lt;<a href=\"../nvidia_worker_v1/struct-pendingmarkspec\">PendingMarkSpec</a>&gt;&gt; for PendingMarkSpec"}} /></pre>
+<pre className="rust-signature"><code dangerouslySetInnerHTML={{"__html": "impl <a href=\"trait-wirevalue\">WireValue</a>&lt;<a href=\"https://doc.rust-lang.org/1.96.1/alloc/boxed/struct.Box.html\">Box</a>&lt;<a href=\"../nvidia_worker_v1/struct-pendingmarkspec\">PendingMarkSpec</a>&gt;&gt; for <a href=\"../../nemo-relay-types/api/event/struct-pendingmarkspec\">PendingMarkSpec</a>"}} /></pre>
 
 #### `to_wire`
 
@@ -2329,7 +2329,7 @@ In older versions of Rust, dyn compatibility was called "object safety", so this
 
 ### `impl WireValue<Box<ProviderNativeComponent>> for ProviderNativeComponent`
 
-<pre className="rust-signature"><code dangerouslySetInnerHTML={{"__html": "impl <a href=\"trait-wirevalue\">WireValue</a>&lt;<a href=\"https://doc.rust-lang.org/1.96.1/alloc/boxed/struct.Box.html\">Box</a>&lt;<a href=\"../nvidia_worker_v1/struct-providernativecomponent\">ProviderNativeComponent</a>&gt;&gt; for ProviderNativeComponent"}} /></pre>
+<pre className="rust-signature"><code dangerouslySetInnerHTML={{"__html": "impl <a href=\"trait-wirevalue\">WireValue</a>&lt;<a href=\"https://doc.rust-lang.org/1.96.1/alloc/boxed/struct.Box.html\">Box</a>&lt;<a href=\"../nvidia_worker_v1/struct-providernativecomponent\">ProviderNativeComponent</a>&gt;&gt; for <a href=\"../../nemo-relay-types/codec/request/struct-providernativecomponent\">ProviderNativeComponent</a>"}} /></pre>
 
 #### `to_wire`
 
@@ -2413,7 +2413,7 @@ In older versions of Rust, dyn compatibility was called "object safety", so this
 
 ### `impl WireValue<Box<ResponseToolCall>> for ResponseToolCall`
 
-<pre className="rust-signature"><code dangerouslySetInnerHTML={{"__html": "impl <a href=\"trait-wirevalue\">WireValue</a>&lt;<a href=\"https://doc.rust-lang.org/1.96.1/alloc/boxed/struct.Box.html\">Box</a>&lt;<a href=\"../nvidia_worker_v1/struct-responsetoolcall\">ResponseToolCall</a>&gt;&gt; for ResponseToolCall"}} /></pre>
+<pre className="rust-signature"><code dangerouslySetInnerHTML={{"__html": "impl <a href=\"trait-wirevalue\">WireValue</a>&lt;<a href=\"https://doc.rust-lang.org/1.96.1/alloc/boxed/struct.Box.html\">Box</a>&lt;<a href=\"../nvidia_worker_v1/struct-responsetoolcall\">ResponseToolCall</a>&gt;&gt; for <a href=\"../../nemo-relay-types/codec/response/struct-responsetoolcall\">ResponseToolCall</a>"}} /></pre>
 
 #### `to_wire`
 
@@ -2425,7 +2425,7 @@ In older versions of Rust, dyn compatibility was called "object safety", so this
 
 ### `impl WireValue<Box<RuntimeRegistrationIdentity>> for RuntimeRegistrationIdentity`
 
-<pre className="rust-signature"><code dangerouslySetInnerHTML={{"__html": "impl <a href=\"trait-wirevalue\">WireValue</a>&lt;<a href=\"https://doc.rust-lang.org/1.96.1/alloc/boxed/struct.Box.html\">Box</a>&lt;<a href=\"../nvidia_worker_v1/struct-runtimeregistrationidentity\">RuntimeRegistrationIdentity</a>&gt;&gt; for RuntimeRegistrationIdentity"}} /></pre>
+<pre className="rust-signature"><code dangerouslySetInnerHTML={{"__html": "impl <a href=\"trait-wirevalue\">WireValue</a>&lt;<a href=\"https://doc.rust-lang.org/1.96.1/alloc/boxed/struct.Box.html\">Box</a>&lt;<a href=\"../nvidia_worker_v1/struct-runtimeregistrationidentity\">RuntimeRegistrationIdentity</a>&gt;&gt; for <a href=\"../../nemo-relay-types/api/registry/struct-runtimeregistrationidentity\">RuntimeRegistrationIdentity</a>"}} /></pre>
 
 #### `to_wire`
 
@@ -2437,7 +2437,7 @@ In older versions of Rust, dyn compatibility was called "object safety", so this
 
 ### `impl WireValue<Box<ScopeEvent>> for ScopeEvent`
 
-<pre className="rust-signature"><code dangerouslySetInnerHTML={{"__html": "impl <a href=\"trait-wirevalue\">WireValue</a>&lt;<a href=\"https://doc.rust-lang.org/1.96.1/alloc/boxed/struct.Box.html\">Box</a>&lt;<a href=\"../nvidia_worker_v1/struct-scopeevent\">ScopeEvent</a>&gt;&gt; for ScopeEvent"}} /></pre>
+<pre className="rust-signature"><code dangerouslySetInnerHTML={{"__html": "impl <a href=\"trait-wirevalue\">WireValue</a>&lt;<a href=\"https://doc.rust-lang.org/1.96.1/alloc/boxed/struct.Box.html\">Box</a>&lt;<a href=\"../nvidia_worker_v1/struct-scopeevent\">ScopeEvent</a>&gt;&gt; for <a href=\"../../nemo-relay-types/api/event/struct-scopeevent\">ScopeEvent</a>"}} /></pre>
 
 #### `to_wire`
 
@@ -2449,7 +2449,7 @@ In older versions of Rust, dyn compatibility was called "object safety", so this
 
 ### `impl WireValue<Box<ScopeStackEntry>> for ScopeStackEntry`
 
-<pre className="rust-signature"><code dangerouslySetInnerHTML={{"__html": "impl <a href=\"trait-wirevalue\">WireValue</a>&lt;<a href=\"https://doc.rust-lang.org/1.96.1/alloc/boxed/struct.Box.html\">Box</a>&lt;<a href=\"../nvidia_worker_v1/struct-scopestackentry\">ScopeStackEntry</a>&gt;&gt; for ScopeStackEntry"}} /></pre>
+<pre className="rust-signature"><code dangerouslySetInnerHTML={{"__html": "impl <a href=\"trait-wirevalue\">WireValue</a>&lt;<a href=\"https://doc.rust-lang.org/1.96.1/alloc/boxed/struct.Box.html\">Box</a>&lt;<a href=\"../nvidia_worker_v1/struct-scopestackentry\">ScopeStackEntry</a>&gt;&gt; for <a href=\"../../nemo-relay-types/api/scope/struct-scopestackentry\">ScopeStackEntry</a>"}} /></pre>
 
 #### `to_wire`
 
@@ -2461,7 +2461,7 @@ In older versions of Rust, dyn compatibility was called "object safety", so this
 
 ### `impl WireValue<Box<ScopeStackSnapshot>> for ScopeStackSnapshot`
 
-<pre className="rust-signature"><code dangerouslySetInnerHTML={{"__html": "impl <a href=\"trait-wirevalue\">WireValue</a>&lt;<a href=\"https://doc.rust-lang.org/1.96.1/alloc/boxed/struct.Box.html\">Box</a>&lt;<a href=\"../nvidia_worker_v1/struct-scopestacksnapshot\">ScopeStackSnapshot</a>&gt;&gt; for ScopeStackSnapshot"}} /></pre>
+<pre className="rust-signature"><code dangerouslySetInnerHTML={{"__html": "impl <a href=\"trait-wirevalue\">WireValue</a>&lt;<a href=\"https://doc.rust-lang.org/1.96.1/alloc/boxed/struct.Box.html\">Box</a>&lt;<a href=\"../nvidia_worker_v1/struct-scopestacksnapshot\">ScopeStackSnapshot</a>&gt;&gt; for <a href=\"../../nemo-relay-types/api/scope/struct-scopestacksnapshot\">ScopeStackSnapshot</a>"}} /></pre>
 
 #### `to_wire`
 
@@ -2473,7 +2473,7 @@ In older versions of Rust, dyn compatibility was called "object safety", so this
 
 ### `impl WireValue<Box<ToolCall>> for ToolCall`
 
-<pre className="rust-signature"><code dangerouslySetInnerHTML={{"__html": "impl <a href=\"trait-wirevalue\">WireValue</a>&lt;<a href=\"https://doc.rust-lang.org/1.96.1/alloc/boxed/struct.Box.html\">Box</a>&lt;<a href=\"../nvidia_worker_v1/struct-toolcall\">ToolCall</a>&gt;&gt; for ToolCall"}} /></pre>
+<pre className="rust-signature"><code dangerouslySetInnerHTML={{"__html": "impl <a href=\"trait-wirevalue\">WireValue</a>&lt;<a href=\"https://doc.rust-lang.org/1.96.1/alloc/boxed/struct.Box.html\">Box</a>&lt;<a href=\"../nvidia_worker_v1/struct-toolcall\">ToolCall</a>&gt;&gt; for <a href=\"../../nemo-relay-types/codec/request/struct-toolcall\">ToolCall</a>"}} /></pre>
 
 #### `to_wire`
 
@@ -2485,7 +2485,7 @@ In older versions of Rust, dyn compatibility was called "object safety", so this
 
 ### `impl WireValue<Box<ToolChoiceFunction>> for ToolChoiceFunction`
 
-<pre className="rust-signature"><code dangerouslySetInnerHTML={{"__html": "impl <a href=\"trait-wirevalue\">WireValue</a>&lt;<a href=\"https://doc.rust-lang.org/1.96.1/alloc/boxed/struct.Box.html\">Box</a>&lt;<a href=\"../nvidia_worker_v1/struct-toolchoicefunction\">ToolChoiceFunction</a>&gt;&gt; for ToolChoiceFunction"}} /></pre>
+<pre className="rust-signature"><code dangerouslySetInnerHTML={{"__html": "impl <a href=\"trait-wirevalue\">WireValue</a>&lt;<a href=\"https://doc.rust-lang.org/1.96.1/alloc/boxed/struct.Box.html\">Box</a>&lt;<a href=\"../nvidia_worker_v1/struct-toolchoicefunction\">ToolChoiceFunction</a>&gt;&gt; for <a href=\"../../nemo-relay-types/codec/request/struct-toolchoicefunction\">ToolChoiceFunction</a>"}} /></pre>
 
 #### `to_wire`
 
@@ -2497,7 +2497,7 @@ In older versions of Rust, dyn compatibility was called "object safety", so this
 
 ### `impl WireValue<Box<ToolChoiceFunctionName>> for ToolChoiceFunctionName`
 
-<pre className="rust-signature"><code dangerouslySetInnerHTML={{"__html": "impl <a href=\"trait-wirevalue\">WireValue</a>&lt;<a href=\"https://doc.rust-lang.org/1.96.1/alloc/boxed/struct.Box.html\">Box</a>&lt;<a href=\"../nvidia_worker_v1/struct-toolchoicefunctionname\">ToolChoiceFunctionName</a>&gt;&gt; for ToolChoiceFunctionName"}} /></pre>
+<pre className="rust-signature"><code dangerouslySetInnerHTML={{"__html": "impl <a href=\"trait-wirevalue\">WireValue</a>&lt;<a href=\"https://doc.rust-lang.org/1.96.1/alloc/boxed/struct.Box.html\">Box</a>&lt;<a href=\"../nvidia_worker_v1/struct-toolchoicefunctionname\">ToolChoiceFunctionName</a>&gt;&gt; for <a href=\"../../nemo-relay-types/codec/request/struct-toolchoicefunctionname\">ToolChoiceFunctionName</a>"}} /></pre>
 
 #### `to_wire`
 
@@ -2509,7 +2509,7 @@ In older versions of Rust, dyn compatibility was called "object safety", so this
 
 ### `impl WireValue<Box<ToolExecutionResult>> for ToolExecutionResult`
 
-<pre className="rust-signature"><code dangerouslySetInnerHTML={{"__html": "impl <a href=\"trait-wirevalue\">WireValue</a>&lt;<a href=\"https://doc.rust-lang.org/1.96.1/alloc/boxed/struct.Box.html\">Box</a>&lt;<a href=\"../nvidia_worker_v1/struct-toolexecutionresult\">ToolExecutionResult</a>&gt;&gt; for ToolExecutionResult"}} /></pre>
+<pre className="rust-signature"><code dangerouslySetInnerHTML={{"__html": "impl <a href=\"trait-wirevalue\">WireValue</a>&lt;<a href=\"https://doc.rust-lang.org/1.96.1/alloc/boxed/struct.Box.html\">Box</a>&lt;<a href=\"../nvidia_worker_v1/struct-toolexecutionresult\">ToolExecutionResult</a>&gt;&gt; for <a href=\"../../nemo-relay-types/api/tool/struct-toolexecutionresult\">ToolExecutionResult</a>"}} /></pre>
 
 #### `to_wire`
 
@@ -2521,7 +2521,7 @@ In older versions of Rust, dyn compatibility was called "object safety", so this
 
 ### `impl WireValue<Box<Usage>> for Usage`
 
-<pre className="rust-signature"><code dangerouslySetInnerHTML={{"__html": "impl <a href=\"trait-wirevalue\">WireValue</a>&lt;<a href=\"https://doc.rust-lang.org/1.96.1/alloc/boxed/struct.Box.html\">Box</a>&lt;<a href=\"../nvidia_worker_v1/struct-usage\">Usage</a>&gt;&gt; for Usage"}} /></pre>
+<pre className="rust-signature"><code dangerouslySetInnerHTML={{"__html": "impl <a href=\"trait-wirevalue\">WireValue</a>&lt;<a href=\"https://doc.rust-lang.org/1.96.1/alloc/boxed/struct.Box.html\">Box</a>&lt;<a href=\"../nvidia_worker_v1/struct-usage\">Usage</a>&gt;&gt; for <a href=\"../../nemo-relay-types/codec/response/struct-usage\">Usage</a>"}} /></pre>
 
 #### `to_wire`
 
@@ -2531,33 +2531,9 @@ In older versions of Rust, dyn compatibility was called "object safety", so this
 
 <pre className="rust-signature"><code dangerouslySetInnerHTML={{"__html": "fn from_wire(value: <a href=\"https://doc.rust-lang.org/1.96.1/alloc/boxed/struct.Box.html\">Box</a>&lt;<a href=\"../nvidia_worker_v1/struct-usage\">Usage</a>&gt;) -&gt; <a href=\"type-result\">Result</a>&lt;Self&gt;"}} /></pre>
 
-### `impl WireValue<String> for String`
-
-<pre className="rust-signature"><code dangerouslySetInnerHTML={{"__html": "impl <a href=\"trait-wirevalue\">WireValue</a>&lt;<a href=\"https://doc.rust-lang.org/1.96.1/alloc/string/struct.String.html\">String</a>&gt; for <a href=\"https://doc.rust-lang.org/1.96.1/alloc/string/struct.String.html\">String</a>"}} /></pre>
-
-#### `to_wire`
-
-<pre className="rust-signature"><code dangerouslySetInnerHTML={{"__html": "fn to_wire(self) -&gt; <a href=\"type-result\">Result</a>&lt;<a href=\"https://doc.rust-lang.org/1.96.1/alloc/string/struct.String.html\">String</a>&gt;"}} /></pre>
-
-#### `from_wire`
-
-<pre className="rust-signature"><code dangerouslySetInnerHTML={{"__html": "fn from_wire(value: <a href=\"https://doc.rust-lang.org/1.96.1/alloc/string/struct.String.html\">String</a>) -&gt; <a href=\"type-result\">Result</a>&lt;Self&gt;"}} /></pre>
-
-### `impl WireValue<String> for Uuid`
-
-<pre className="rust-signature"><code dangerouslySetInnerHTML={{"__html": "impl <a href=\"trait-wirevalue\">WireValue</a>&lt;<a href=\"https://doc.rust-lang.org/1.96.1/alloc/string/struct.String.html\">String</a>&gt; for <a href=\"https://docs.rs/uuid/1.18.1/uuid/struct.Uuid.html\">Uuid</a>"}} /></pre>
-
-#### `to_wire`
-
-<pre className="rust-signature"><code dangerouslySetInnerHTML={{"__html": "fn to_wire(self) -&gt; <a href=\"type-result\">Result</a>&lt;<a href=\"https://doc.rust-lang.org/1.96.1/alloc/string/struct.String.html\">String</a>&gt;"}} /></pre>
-
-#### `from_wire`
-
-<pre className="rust-signature"><code dangerouslySetInnerHTML={{"__html": "fn from_wire(value: <a href=\"https://doc.rust-lang.org/1.96.1/alloc/string/struct.String.html\">String</a>) -&gt; <a href=\"type-result\">Result</a>&lt;Self&gt;"}} /></pre>
-
 ### `impl WireValue<String> for EventCategory`
 
-<pre className="rust-signature"><code dangerouslySetInnerHTML={{"__html": "impl <a href=\"trait-wirevalue\">WireValue</a>&lt;<a href=\"https://doc.rust-lang.org/1.96.1/alloc/string/struct.String.html\">String</a>&gt; for EventCategory"}} /></pre>
+<pre className="rust-signature"><code dangerouslySetInnerHTML={{"__html": "impl <a href=\"trait-wirevalue\">WireValue</a>&lt;<a href=\"https://doc.rust-lang.org/1.96.1/alloc/string/struct.String.html\">String</a>&gt; for <a href=\"../../nemo-relay-types/api/event/struct-eventcategory\">EventCategory</a>"}} /></pre>
 
 #### `to_wire`
 
@@ -2569,7 +2545,7 @@ In older versions of Rust, dyn compatibility was called "object safety", so this
 
 ### `impl WireValue<String> for LlmOptimizationKind`
 
-<pre className="rust-signature"><code dangerouslySetInnerHTML={{"__html": "impl <a href=\"trait-wirevalue\">WireValue</a>&lt;<a href=\"https://doc.rust-lang.org/1.96.1/alloc/string/struct.String.html\">String</a>&gt; for LlmOptimizationKind"}} /></pre>
+<pre className="rust-signature"><code dangerouslySetInnerHTML={{"__html": "impl <a href=\"trait-wirevalue\">WireValue</a>&lt;<a href=\"https://doc.rust-lang.org/1.96.1/alloc/string/struct.String.html\">String</a>&gt; for <a href=\"../../nemo-relay-types/codec/optimization/struct-llmoptimizationkind\">LlmOptimizationKind</a>"}} /></pre>
 
 #### `to_wire`
 
@@ -2594,6 +2570,30 @@ In older versions of Rust, dyn compatibility was called "object safety", so this
 ### `impl WireValue<String> for PluginPhaseName`
 
 <pre className="rust-signature"><code dangerouslySetInnerHTML={{"__html": "impl <a href=\"trait-wirevalue\">WireValue</a>&lt;<a href=\"https://doc.rust-lang.org/1.96.1/alloc/string/struct.String.html\">String</a>&gt; for PluginPhaseName"}} /></pre>
+
+#### `to_wire`
+
+<pre className="rust-signature"><code dangerouslySetInnerHTML={{"__html": "fn to_wire(self) -&gt; <a href=\"type-result\">Result</a>&lt;<a href=\"https://doc.rust-lang.org/1.96.1/alloc/string/struct.String.html\">String</a>&gt;"}} /></pre>
+
+#### `from_wire`
+
+<pre className="rust-signature"><code dangerouslySetInnerHTML={{"__html": "fn from_wire(value: <a href=\"https://doc.rust-lang.org/1.96.1/alloc/string/struct.String.html\">String</a>) -&gt; <a href=\"type-result\">Result</a>&lt;Self&gt;"}} /></pre>
+
+### `impl WireValue<String> for String`
+
+<pre className="rust-signature"><code dangerouslySetInnerHTML={{"__html": "impl <a href=\"trait-wirevalue\">WireValue</a>&lt;<a href=\"https://doc.rust-lang.org/1.96.1/alloc/string/struct.String.html\">String</a>&gt; for <a href=\"https://doc.rust-lang.org/1.96.1/alloc/string/struct.String.html\">String</a>"}} /></pre>
+
+#### `to_wire`
+
+<pre className="rust-signature"><code dangerouslySetInnerHTML={{"__html": "fn to_wire(self) -&gt; <a href=\"type-result\">Result</a>&lt;<a href=\"https://doc.rust-lang.org/1.96.1/alloc/string/struct.String.html\">String</a>&gt;"}} /></pre>
+
+#### `from_wire`
+
+<pre className="rust-signature"><code dangerouslySetInnerHTML={{"__html": "fn from_wire(value: <a href=\"https://doc.rust-lang.org/1.96.1/alloc/string/struct.String.html\">String</a>) -&gt; <a href=\"type-result\">Result</a>&lt;Self&gt;"}} /></pre>
+
+### `impl WireValue<String> for Uuid`
+
+<pre className="rust-signature"><code dangerouslySetInnerHTML={{"__html": "impl <a href=\"trait-wirevalue\">WireValue</a>&lt;<a href=\"https://doc.rust-lang.org/1.96.1/alloc/string/struct.String.html\">String</a>&gt; for <a href=\"https://docs.rs/uuid/1.18.1/uuid/struct.Uuid.html\">Uuid</a>"}} /></pre>
 
 #### `to_wire`
 

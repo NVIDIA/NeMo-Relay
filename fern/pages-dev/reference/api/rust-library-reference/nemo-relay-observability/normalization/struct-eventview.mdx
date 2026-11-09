@@ -9,7 +9,7 @@ SPDX-License-Identifier: Apache-2.0 */}
 
 Generated from `cargo doc --no-deps -p nemo-relay-builtins -p nemo-relay-diagnostics -p nemo-relay-logging -p nemo-relay-plugin-host -p nemo-relay-codecs -p nemo-relay -p nemo-relay-runtime -p nemo-relay-model-pricing -p nemo-relay-resource-metrics -p nemo-relay-observability -p nemo-relay-adaptive -p nemo-relay-pii-redaction -p nemo-relay-ffi -p nemo-relay-types -p nemo-relay-plugin -p nemo-relay-worker-proto -p nemo-relay-worker`.
 
-<pre className="rust-signature"><code dangerouslySetInnerHTML={{"__html": "pub struct EventView&lt;'a&gt; &#123;\n    pub event: &amp;'a Event,\n    pub host: &amp;'a dyn <a href=\"../host/trait-observabilityhost\">ObservabilityHost</a>,\n&#125;"}} /></pre>
+<pre className="rust-signature"><code dangerouslySetInnerHTML={{"__html": "pub struct EventView&lt;'a&gt; &#123;\n    pub event: &amp;'a <a href=\"../../nemo-relay-types/api/event/enum-event\">Event</a>,\n    pub host: &amp;'a dyn <a href=\"../host/trait-observabilityhost\">ObservabilityHost</a>,\n&#125;"}} /></pre>
 
 ## Fields
 
@@ -25,29 +25,29 @@ Generated from `cargo doc --no-deps -p nemo-relay-builtins -p nemo-relay-diagnos
 
 #### `new`
 
-<pre className="rust-signature"><code dangerouslySetInnerHTML={{"__html": "pub fn new(event: &amp;'a Event, host: &amp;'a dyn <a href=\"../host/trait-observabilityhost\">ObservabilityHost</a>) -&gt; Self"}} /></pre>
+<pre className="rust-signature"><code dangerouslySetInnerHTML={{"__html": "pub fn new(event: &amp;'a <a href=\"../../nemo-relay-types/api/event/enum-event\">Event</a>, host: &amp;'a dyn <a href=\"../host/trait-observabilityhost\">ObservabilityHost</a>) -&gt; Self"}} /></pre>
 
 #### `as_event`
 
-<pre className="rust-signature"><code dangerouslySetInnerHTML={{"__html": "pub fn as_event(&amp;self) -&gt; &amp;'a Event"}} /></pre>
+<pre className="rust-signature"><code dangerouslySetInnerHTML={{"__html": "pub fn as_event(&amp;self) -&gt; &amp;'a <a href=\"../../nemo-relay-types/api/event/enum-event\">Event</a>"}} /></pre>
 
 #### `normalized_llm_request`
 
-<pre className="rust-signature"><code dangerouslySetInnerHTML={{"__html": "pub fn normalized_llm_request(&amp;self) -&gt; <a href=\"https://doc.rust-lang.org/1.96.1/core/option/enum.Option.html\">Option</a>&lt;<a href=\"https://doc.rust-lang.org/1.96.1/alloc/borrow/enum.Cow.html\">Cow</a>&lt;'a, AnnotatedLlmRequest&gt;&gt;"}} /></pre>
+<pre className="rust-signature"><code dangerouslySetInnerHTML={{"__html": "pub fn normalized_llm_request(&amp;self) -&gt; <a href=\"https://doc.rust-lang.org/1.96.1/core/option/enum.Option.html\">Option</a>&lt;<a href=\"https://doc.rust-lang.org/1.96.1/alloc/borrow/enum.Cow.html\">Cow</a>&lt;'a, <a href=\"../../nemo-relay-types/codec/request/struct-annotatedllmrequest\">AnnotatedLlmRequest</a>&gt;&gt;"}} /></pre>
 
 #### `normalized_llm_response`
 
-<pre className="rust-signature"><code dangerouslySetInnerHTML={{"__html": "pub fn normalized_llm_response(&amp;self) -&gt; <a href=\"https://doc.rust-lang.org/1.96.1/core/option/enum.Option.html\">Option</a>&lt;<a href=\"https://doc.rust-lang.org/1.96.1/alloc/borrow/enum.Cow.html\">Cow</a>&lt;'a, AnnotatedLlmResponse&gt;&gt;"}} /></pre>
+<pre className="rust-signature"><code dangerouslySetInnerHTML={{"__html": "pub fn normalized_llm_response(&amp;self) -&gt; <a href=\"https://doc.rust-lang.org/1.96.1/core/option/enum.Option.html\">Option</a>&lt;<a href=\"https://doc.rust-lang.org/1.96.1/alloc/borrow/enum.Cow.html\">Cow</a>&lt;'a, <a href=\"../../nemo-relay-types/codec/response/struct-annotatedllmresponse\">AnnotatedLlmResponse</a>&gt;&gt;"}} /></pre>
 
 #### `telemetry_llm_request`
 
-<pre className="rust-signature"><code dangerouslySetInnerHTML={{"__html": "pub fn telemetry_llm_request(&amp;self) -&gt; <a href=\"https://doc.rust-lang.org/1.96.1/core/option/enum.Option.html\">Option</a>&lt;<a href=\"https://doc.rust-lang.org/1.96.1/alloc/borrow/enum.Cow.html\">Cow</a>&lt;'a, AnnotatedLlmRequest&gt;&gt;"}} /></pre>
+<pre className="rust-signature"><code dangerouslySetInnerHTML={{"__html": "pub fn telemetry_llm_request(&amp;self) -&gt; <a href=\"https://doc.rust-lang.org/1.96.1/core/option/enum.Option.html\">Option</a>&lt;<a href=\"https://doc.rust-lang.org/1.96.1/alloc/borrow/enum.Cow.html\">Cow</a>&lt;'a, <a href=\"../../nemo-relay-types/codec/request/struct-annotatedllmrequest\">AnnotatedLlmRequest</a>&gt;&gt;"}} /></pre>
 
 #### `telemetry_llm_tool_calls`
 
-<pre className="rust-signature"><code dangerouslySetInnerHTML={{"__html": "pub fn telemetry_llm_tool_calls(&amp;self) -&gt; <a href=\"https://doc.rust-lang.org/1.96.1/core/option/enum.Option.html\">Option</a>&lt;<a href=\"https://doc.rust-lang.org/1.96.1/alloc/vec/struct.Vec.html\">Vec</a>&lt;TelemetryToolCall&gt;&gt;"}} /></pre>
+<pre className="rust-signature"><code dangerouslySetInnerHTML={{"__html": "pub fn telemetry_llm_tool_calls(&amp;self) -&gt; <a href=\"https://doc.rust-lang.org/1.96.1/core/option/enum.Option.html\">Option</a>&lt;<a href=\"https://doc.rust-lang.org/1.96.1/alloc/vec/struct.Vec.html\">Vec</a>&lt;<a href=\"../../nemo-relay-types/codec/normalization/struct-telemetrytoolcall\">TelemetryToolCall</a>&gt;&gt;"}} /></pre>
 
-## Methods from Deref &lt;Target = Event&gt;
+## Methods from Deref &lt;Target = Event &gt;
 
 #### `kind`
 
@@ -57,7 +57,7 @@ Return the ATOF event kind.
 
 ##### Returns
 
-`"scope"` for [`Event::Scope`] and `"mark"` for [`Event::Mark`].
+`"scope"` for [`Event::Scope`](/reference/api/rust-library-reference/nemo-relay-types/api/event/enum-event) and `"mark"` for [`Event::Mark`](/reference/api/rust-library-reference/nemo-relay-types/api/event/enum-event).
 
 #### `try_to_json_value`
 
@@ -79,7 +79,7 @@ Return this event as canonical JSON.
 
 #### `scope_category`
 
-<pre className="rust-signature"><code dangerouslySetInnerHTML={{"__html": "pub fn scope_category(&amp;self) -&gt; <a href=\"https://doc.rust-lang.org/1.96.1/core/option/enum.Option.html\">Option</a>&lt;ScopeCategory&gt;"}} /></pre>
+<pre className="rust-signature"><code dangerouslySetInnerHTML={{"__html": "pub fn scope_category(&amp;self) -&gt; <a href=\"https://doc.rust-lang.org/1.96.1/core/option/enum.Option.html\">Option</a>&lt;<a href=\"../../nemo-relay-types/api/event/enum-scopecategory\">ScopeCategory</a>&gt;"}} /></pre>
 
 Return the lifecycle phase for scope events.
 
@@ -89,7 +89,7 @@ Return the lifecycle phase for scope events.
 
 #### `category`
 
-<pre className="rust-signature"><code dangerouslySetInnerHTML={{"__html": "pub fn category(&amp;self) -&gt; <a href=\"https://doc.rust-lang.org/1.96.1/core/option/enum.Option.html\">Option</a>&lt;&amp;EventCategory&gt;"}} /></pre>
+<pre className="rust-signature"><code dangerouslySetInnerHTML={{"__html": "pub fn category(&amp;self) -&gt; <a href=\"https://doc.rust-lang.org/1.96.1/core/option/enum.Option.html\">Option</a>&lt;&amp;<a href=\"../../nemo-relay-types/api/event/struct-eventcategory\">EventCategory</a>&gt;"}} /></pre>
 
 Return the semantic category if present.
 
@@ -99,7 +99,7 @@ Return the semantic category if present.
 
 #### `category_profile`
 
-<pre className="rust-signature"><code dangerouslySetInnerHTML={{"__html": "pub fn category_profile(&amp;self) -&gt; <a href=\"https://doc.rust-lang.org/1.96.1/core/option/enum.Option.html\">Option</a>&lt;&amp;CategoryProfile&gt;"}} /></pre>
+<pre className="rust-signature"><code dangerouslySetInnerHTML={{"__html": "pub fn category_profile(&amp;self) -&gt; <a href=\"https://doc.rust-lang.org/1.96.1/core/option/enum.Option.html\">Option</a>&lt;&amp;<a href=\"../../nemo-relay-types/api/event/struct-categoryprofile\">CategoryProfile</a>&gt;"}} /></pre>
 
 Return the category-specific profile if present.
 
@@ -191,13 +191,13 @@ Return the optional application payload attached to the event.
 
 #### `sanitize_fields`
 
-<pre className="rust-signature"><code dangerouslySetInnerHTML={{"__html": "pub fn sanitize_fields(&amp;self) -&gt; EventSanitizeFields"}} /></pre>
+<pre className="rust-signature"><code dangerouslySetInnerHTML={{"__html": "pub fn sanitize_fields(&amp;self) -&gt; <a href=\"../../nemo-relay-types/api/event/struct-eventsanitizefields\">EventSanitizeFields</a>"}} /></pre>
 
 Snapshot the observability fields that sanitizers may rewrite.
 
 #### `data_schema`
 
-<pre className="rust-signature"><code dangerouslySetInnerHTML={{"__html": "pub fn data_schema(&amp;self) -&gt; <a href=\"https://doc.rust-lang.org/1.96.1/core/option/enum.Option.html\">Option</a>&lt;&amp;DataSchema&gt;"}} /></pre>
+<pre className="rust-signature"><code dangerouslySetInnerHTML={{"__html": "pub fn data_schema(&amp;self) -&gt; <a href=\"https://doc.rust-lang.org/1.96.1/core/option/enum.Option.html\">Option</a>&lt;&amp;<a href=\"../../nemo-relay-types/api/event/struct-dataschema\">DataSchema</a>&gt;"}} /></pre>
 
 Return the optional data schema.
 
@@ -227,13 +227,13 @@ Return attributes for scope events.
 
 #### `scope_type`
 
-<pre className="rust-signature"><code dangerouslySetInnerHTML={{"__html": "pub fn scope_type(&amp;self) -&gt; <a href=\"https://doc.rust-lang.org/1.96.1/core/option/enum.Option.html\">Option</a>&lt;ScopeType&gt;"}} /></pre>
+<pre className="rust-signature"><code dangerouslySetInnerHTML={{"__html": "pub fn scope_type(&amp;self) -&gt; <a href=\"https://doc.rust-lang.org/1.96.1/core/option/enum.Option.html\">Option</a>&lt;<a href=\"../../nemo-relay-types/api/scope/enum-scopetype\">ScopeType</a>&gt;"}} /></pre>
 
 Return the semantic scope category for scope events.
 
 ##### Returns
 
-`Some` legacy [`ScopeType`] when the event has a category.
+`Some` legacy [`ScopeType`](/reference/api/rust-library-reference/nemo-relay-types/api/scope/enum-scopetype) when the event has a category.
 
 #### `input`
 
@@ -277,7 +277,7 @@ Return the provider-specific tool-call correlation identifier.
 
 #### `annotated_request`
 
-<pre className="rust-signature"><code dangerouslySetInnerHTML={{"__html": "pub fn annotated_request(&amp;self) -&gt; <a href=\"https://doc.rust-lang.org/1.96.1/core/option/enum.Option.html\">Option</a>&lt;&amp;<a href=\"https://doc.rust-lang.org/1.96.1/alloc/sync/struct.Arc.html\">Arc</a>&lt;AnnotatedLlmRequest&gt;&gt;"}} /></pre>
+<pre className="rust-signature"><code dangerouslySetInnerHTML={{"__html": "pub fn annotated_request(&amp;self) -&gt; <a href=\"https://doc.rust-lang.org/1.96.1/core/option/enum.Option.html\">Option</a>&lt;&amp;<a href=\"https://doc.rust-lang.org/1.96.1/alloc/sync/struct.Arc.html\">Arc</a>&lt;<a href=\"../../nemo-relay-types/codec/request/struct-annotatedllmrequest\">AnnotatedLlmRequest</a>&gt;&gt;"}} /></pre>
 
 Return the runtime-only annotated LLM request.
 
@@ -287,7 +287,7 @@ Return the runtime-only annotated LLM request.
 
 #### `annotated_response`
 
-<pre className="rust-signature"><code dangerouslySetInnerHTML={{"__html": "pub fn annotated_response(&amp;self) -&gt; <a href=\"https://doc.rust-lang.org/1.96.1/core/option/enum.Option.html\">Option</a>&lt;&amp;<a href=\"https://doc.rust-lang.org/1.96.1/alloc/sync/struct.Arc.html\">Arc</a>&lt;AnnotatedLlmResponse&gt;&gt;"}} /></pre>
+<pre className="rust-signature"><code dangerouslySetInnerHTML={{"__html": "pub fn annotated_response(&amp;self) -&gt; <a href=\"https://doc.rust-lang.org/1.96.1/core/option/enum.Option.html\">Option</a>&lt;&amp;<a href=\"https://doc.rust-lang.org/1.96.1/alloc/sync/struct.Arc.html\">Arc</a>&lt;<a href=\"../../nemo-relay-types/codec/response/struct-annotatedllmresponse\">AnnotatedLlmResponse</a>&gt;&gt;"}} /></pre>
 
 Return the runtime-only annotated LLM response.
 
@@ -345,11 +345,11 @@ Return true for scope-end events.
 
 #### `Target`
 
-<pre className="rust-signature"><code dangerouslySetInnerHTML={{"__html": "type <a href=\"https://doc.rust-lang.org/1.96.1/core/ops/deref/trait.Deref.html#associatedtype.Target\">Target</a> = Event"}} /></pre>
+<pre className="rust-signature"><code dangerouslySetInnerHTML={{"__html": "type <a href=\"https://doc.rust-lang.org/1.96.1/core/ops/deref/trait.Deref.html#associatedtype.Target\">Target</a> = <a href=\"../../nemo-relay-types/api/event/enum-event\">Event</a>"}} /></pre>
 
 #### `deref`
 
-<pre className="rust-signature"><code dangerouslySetInnerHTML={{"__html": "fn <a href=\"https://doc.rust-lang.org/1.96.1/core/ops/deref/trait.Deref.html#tymethod.deref\">deref</a>(&amp;self) -&gt; &amp;Event"}} /></pre>
+<pre className="rust-signature"><code dangerouslySetInnerHTML={{"__html": "fn <a href=\"https://doc.rust-lang.org/1.96.1/core/ops/deref/trait.Deref.html#tymethod.deref\">deref</a>(&amp;self) -&gt; &amp;<a href=\"../../nemo-relay-types/api/event/enum-event\">Event</a>"}} /></pre>
 
 ### `impl<'a> Copy for EventView<'a>`
 

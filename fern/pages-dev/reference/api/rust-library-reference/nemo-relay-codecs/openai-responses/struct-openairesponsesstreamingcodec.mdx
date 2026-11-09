@@ -16,7 +16,7 @@ pub struct OpenAIResponsesStreamingCodec { /* private fields */ }
 
 Streaming counterpart to [`OpenAIResponsesCodec`](/reference/api/rust-library-reference/nemo-relay-codecs/openai_responses/struct-openairesponsescodec).
 
-Replays the OpenAI Responses SSE event sequence into the same JSON shape the API returns for a non-streaming request (`{id, model, status, output, usage, incomplete_details, ...}`). Once finalized, the assembled JSON can be fed back through [`OpenAIResponsesCodec::decode_response`](/reference/api/rust-library-reference/nemo-relay-codecs/openai_responses/struct-openairesponsescodec) to produce the canonical `AnnotatedLlmResponse`.
+Replays the OpenAI Responses SSE event sequence into the same JSON shape the API returns for a non-streaming request (`{id, model, status, output, usage, incomplete_details, ...}`). Once finalized, the assembled JSON can be fed back through [`OpenAIResponsesCodec::decode_response`](/reference/api/rust-library-reference/nemo-relay-codecs/openai_responses/struct-openairesponsescodec) to produce the canonical [`AnnotatedLlmResponse`](/reference/api/rust-library-reference/nemo-relay-types/codec/response/struct-annotatedllmresponse).
 
 ## Strategy
 
@@ -26,9 +26,9 @@ The Responses API is a relatively forgiving streaming target because every event
 2. Track output items by `output_index` - `output_item.done` events deliver the final per-item state, used as a fallback when the terminal `response.output` is missing or empty.
 3. Per-token `output_text.delta` and `function_call_arguments.delta` events are ignored because their content is redelivered in the matching `output_item.done` event. Skipping deltas keeps the codec resilient to schema additions and avoids double-accumulation.
 
-Use `StreamingCodec::validate_stream` with this instance's collector and finalizer to report streams that end before a final event.
+Use [`StreamingCodec::validate_stream`](/reference/api/rust-library-reference/nemo-relay-types/codec/streaming/trait-streamingcodec) with this instance's collector and finalizer to report streams that end before a final event.
 
-Internal state lives behind `Arc<Mutex<...>>` so the `&self`-produced collector and finalizer closures share access. Each instance is single-use because `LlmFinalizerFn` consumes the finalize step.
+Internal state lives behind `Arc<Mutex<...>>` so the `&self`-produced collector and finalizer closures share access. Each instance is single-use because [`LlmFinalizerFn`](/reference/api/rust-library-reference/nemo-relay-types/api/runtime/callbacks/type-llmfinalizerfn) consumes the finalize step.
 
 ## Implementations
 
@@ -54,26 +54,26 @@ Creates a fresh streaming codec with empty accumulator state.
 
 ### `impl StreamingCodec for OpenAIResponsesStreamingCodec`
 
-<pre className="rust-signature"><code dangerouslySetInnerHTML={{"__html": "impl StreamingCodec for <a href=\"struct-openairesponsesstreamingcodec\">OpenAIResponsesStreamingCodec</a>"}} /></pre>
+<pre className="rust-signature"><code dangerouslySetInnerHTML={{"__html": "impl <a href=\"../../nemo-relay-types/codec/streaming/trait-streamingcodec\">StreamingCodec</a> for <a href=\"struct-openairesponsesstreamingcodec\">OpenAIResponsesStreamingCodec</a>"}} /></pre>
 
 #### `validate_stream`
 
-<pre className="rust-signature"><code dangerouslySetInnerHTML={{"__html": "fn validate_stream(&amp;self, stream: LlmJsonStream) -&gt; LlmJsonStream"}} /></pre>
+<pre className="rust-signature"><code dangerouslySetInnerHTML={{"__html": "fn <a href=\"../../nemo-relay-types/codec/streaming/trait-streamingcodec\">validate_stream</a>(&amp;self, stream: <a href=\"../../nemo-relay-types/api/runtime/callbacks/struct-llmjsonstream\">LlmJsonStream</a>) -&gt; <a href=\"../../nemo-relay-types/api/runtime/callbacks/struct-llmjsonstream\">LlmJsonStream</a>"}} /></pre>
 
 Reports an error at EOF if this codec's collector did not receive a final response.
 
 #### `collector`
 
-<pre className="rust-signature"><code dangerouslySetInnerHTML={{"__html": "fn collector(&amp;self) -&gt; LlmCollectorFn"}} /></pre>
+<pre className="rust-signature"><code dangerouslySetInnerHTML={{"__html": "fn <a href=\"../../nemo-relay-types/codec/streaming/trait-streamingcodec\">collector</a>(&amp;self) -&gt; <a href=\"../../nemo-relay-types/api/runtime/callbacks/type-llmcollectorfn\">LlmCollectorFn</a>"}} /></pre>
 
 Collects response snapshots and output items into this codec's shared state.
 
 #### `finalizer`
 
-<pre className="rust-signature"><code dangerouslySetInnerHTML={{"__html": "fn finalizer(&amp;self) -&gt; LlmFinalizerFn"}} /></pre>
+<pre className="rust-signature"><code dangerouslySetInnerHTML={{"__html": "fn <a href=\"../../nemo-relay-types/codec/streaming/trait-streamingcodec\">finalizer</a>(&amp;self) -&gt; <a href=\"../../nemo-relay-types/api/runtime/callbacks/type-llmfinalizerfn\">LlmFinalizerFn</a>"}} /></pre>
 
 Takes the collected state and returns the final provider response.
 
 #### `borrowed_collector`
 
-<pre className="rust-signature"><code dangerouslySetInnerHTML={{"__html": "fn borrowed_collector(&amp;self) -&gt; <a href=\"https://doc.rust-lang.org/1.96.1/core/option/enum.Option.html\">Option</a>&lt;LlmBorrowedCollectorFn&gt;"}} /></pre>
+<pre className="rust-signature"><code dangerouslySetInnerHTML={{"__html": "fn <a href=\"../../nemo-relay-types/codec/streaming/trait-streamingcodec\">borrowed_collector</a>(&amp;self) -&gt; <a href=\"https://doc.rust-lang.org/1.96.1/core/option/enum.Option.html\">Option</a>&lt;<a href=\"../../nemo-relay-types/api/runtime/callbacks/type-llmborrowedcollectorfn\">LlmBorrowedCollectorFn</a>&gt;"}} /></pre>

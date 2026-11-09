@@ -64,15 +64,15 @@ export interface ComponentConfigs {
 }
 ```
 
-### `ComponentSpec` interface
+### `OpenComponentSpec`
 
-One top-level plugin component.
+Component for a kind registered through `registerPlugin`; create one with `ComponentSpec`.
 
 ```ts
-export interface ComponentSpec {
+export interface OpenComponentSpec<C extends object = JsonObject> {
   kind: string;
   enabled?: boolean;
-  config?: JsonObject;
+  config?: C & OpenComponentConfig;
 }
 ```
 
@@ -83,7 +83,7 @@ Canonical plugin configuration document.
 ```ts
 export interface PluginConfig {
   version?: number;
-  components?: Array<KnownComponentSpec | ComponentSpec>;
+  components?: ComponentSpec[];
   policy?: ConfigPolicy;
   /** Startup-only host service profile; omitted settings use file layers. */
   diagnostics?: { enabled?: boolean; limits?: Record<string, number> };
@@ -214,9 +214,19 @@ A `ComponentSpec` ready to insert into a plugin config.
 Setting `options.enabled = false` preserves the component for validation while skipping runtime registration during `initialize`.
 
 ```ts
-export declare function ComponentSpec<K extends string, C extends JsonObjectCompatible<C> = JsonObject>(
+export declare function ComponentSpec<K extends ComponentKind>(
   kind: K,
-  config?: K extends ComponentKind ? ComponentConfigs[K] : C,
+  config?: ComponentConfigs[K],
+  options?: {
+    enabled?: boolean;
+```
+
+### `ComponentSpec` function
+
+```ts
+export declare function ComponentSpec<K extends string, C extends JsonObjectCompatible<C> = JsonObject>(
+  kind: K extends ComponentKind ? never : K,
+  config?: C,
   options?: {
     enabled?: boolean;
 ```
@@ -371,6 +381,15 @@ export type KnownComponentSpec = {
   [K in ComponentKind]: { kind: K; enabled?: boolean; config?: ComponentConfigs[K] };
 ```
 
+### `OpenComponentConfig`
+
+Config of a component created with `ComponentSpec` for a kind registered through `registerPlugin`.
+
+```ts
+export type OpenComponentConfig = {
+  readonly [openComponent]: true;
+```
+
 ### `ComponentConfigFor`
 
 ```ts
@@ -382,7 +401,15 @@ export type ComponentConfigFor<K extends string> = K extends ComponentKind ? Com
 ```ts
 export type ComponentSpecFor<K extends string> = K extends ComponentKind
   ? Extract<KnownComponentSpec, { kind: K }>
-  : ComponentSpec;
+  : OpenComponentSpec;
+```
+
+### `ComponentSpec` type alias
+
+One top-level plugin component.
+
+```ts
+export type ComponentSpec = KnownComponentSpec | OpenComponentSpec<object>;
 ```
 
 ### `DynamicPluginKind`

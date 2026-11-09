@@ -43,15 +43,15 @@ Fatal dispatcher errors (subscriber registration, payload serialization) that ca
 
 #### `observe_global`
 
-<pre className="rust-signature"><code dangerouslySetInnerHTML={{"__html": "pub fn observe_global(\n    &amp;mut self,\n    event: &amp;Event,\n    subscriber_prefix: &amp;<a href=\"https://doc.rust-lang.org/1.96.1/std/primitive.str.html\">str</a>,\n    state: <a href=\"https://doc.rust-lang.org/1.96.1/alloc/sync/struct.Arc.html\">Arc</a>&lt;<a href=\"https://doc.rust-lang.org/1.96.1/std/sync/poison/mutex/struct.Mutex.html\">Mutex</a>&lt;Self&gt;&gt;,\n    storage: <a href=\"type-atifstoragelist\">AtifStorageList</a>,\n) -&gt; <a href=\"https://doc.rust-lang.org/1.96.1/core/option/enum.Option.html\">Option</a>&lt;(<a href=\"struct-pendingatifwrite\">PendingAtifWrite</a>, <a href=\"https://doc.rust-lang.org/1.96.1/alloc/vec/struct.Vec.html\">Vec</a>&lt;<a href=\"enum-sinklabel\">SinkLabel</a>&gt;)&gt;"}} /></pre>
+<pre className="rust-signature"><code dangerouslySetInnerHTML={{"__html": "pub fn observe_global(\n    &amp;mut self,\n    event: &amp;<a href=\"../../nemo-relay-types/api/event/enum-event\">Event</a>,\n    subscriber_prefix: &amp;<a href=\"https://doc.rust-lang.org/1.96.1/std/primitive.str.html\">str</a>,\n    state: <a href=\"https://doc.rust-lang.org/1.96.1/alloc/sync/struct.Arc.html\">Arc</a>&lt;<a href=\"https://doc.rust-lang.org/1.96.1/std/sync/poison/mutex/struct.Mutex.html\">Mutex</a>&lt;Self&gt;&gt;,\n    storage: <a href=\"type-atifstoragelist\">AtifStorageList</a>,\n) -&gt; <a href=\"https://doc.rust-lang.org/1.96.1/core/option/enum.Option.html\">Option</a>&lt;(<a href=\"struct-pendingatifwrite\">PendingAtifWrite</a>, <a href=\"https://doc.rust-lang.org/1.96.1/alloc/vec/struct.Vec.html\">Vec</a>&lt;<a href=\"enum-sinklabel\">SinkLabel</a>&gt;)&gt;"}} /></pre>
 
 #### `observe_descendant_from_global`
 
-<pre className="rust-signature"><code dangerouslySetInnerHTML={{"__html": "pub fn observe_descendant_from_global(\n    &amp;mut self,\n    event: &amp;Event,\n) -&gt; <a href=\"https://doc.rust-lang.org/1.96.1/core/option/enum.Option.html\">Option</a>&lt;(<a href=\"struct-pendingatifwrite\">PendingAtifWrite</a>, <a href=\"https://doc.rust-lang.org/1.96.1/alloc/vec/struct.Vec.html\">Vec</a>&lt;<a href=\"enum-sinklabel\">SinkLabel</a>&gt;)&gt;"}} /></pre>
+<pre className="rust-signature"><code dangerouslySetInnerHTML={{"__html": "pub fn observe_descendant_from_global(\n    &amp;mut self,\n    event: &amp;<a href=\"../../nemo-relay-types/api/event/enum-event\">Event</a>,\n) -&gt; <a href=\"https://doc.rust-lang.org/1.96.1/core/option/enum.Option.html\">Option</a>&lt;(<a href=\"struct-pendingatifwrite\">PendingAtifWrite</a>, <a href=\"https://doc.rust-lang.org/1.96.1/alloc/vec/struct.Vec.html\">Vec</a>&lt;<a href=\"enum-sinklabel\">SinkLabel</a>&gt;)&gt;"}} /></pre>
 
 #### `observe_scope`
 
-<pre className="rust-signature"><code dangerouslySetInnerHTML={{"__html": "pub fn observe_scope(\n    &amp;mut self,\n    event: &amp;Event,\n    agent_uuid: <a href=\"https://docs.rs/uuid/1.18.1/uuid/struct.Uuid.html\">Uuid</a>,\n) -&gt; <a href=\"https://doc.rust-lang.org/1.96.1/core/option/enum.Option.html\">Option</a>&lt;(<a href=\"struct-pendingatifwrite\">PendingAtifWrite</a>, <a href=\"https://doc.rust-lang.org/1.96.1/alloc/vec/struct.Vec.html\">Vec</a>&lt;<a href=\"enum-sinklabel\">SinkLabel</a>&gt;)&gt;"}} /></pre>
+<pre className="rust-signature"><code dangerouslySetInnerHTML={{"__html": "pub fn observe_scope(\n    &amp;mut self,\n    event: &amp;<a href=\"../../nemo-relay-types/api/event/enum-event\">Event</a>,\n    agent_uuid: <a href=\"https://docs.rs/uuid/1.18.1/uuid/struct.Uuid.html\">Uuid</a>,\n) -&gt; <a href=\"https://doc.rust-lang.org/1.96.1/core/option/enum.Option.html\">Option</a>&lt;(<a href=\"struct-pendingatifwrite\">PendingAtifWrite</a>, <a href=\"https://doc.rust-lang.org/1.96.1/alloc/vec/struct.Vec.html\">Vec</a>&lt;<a href=\"enum-sinklabel\">SinkLabel</a>&gt;)&gt;"}} /></pre>
 
 #### `complete_scope_write`
 
@@ -63,7 +63,7 @@ Fatal dispatcher errors (subscriber registration, payload serialization) that ca
 
 #### `observed_events`
 
-<pre className="rust-signature"><code dangerouslySetInnerHTML={{"__html": "pub fn observed_events(&amp;self, agent_uuid: <a href=\"https://docs.rs/uuid/1.18.1/uuid/struct.Uuid.html\">Uuid</a>) -&gt; <a href=\"https://doc.rust-lang.org/1.96.1/alloc/vec/struct.Vec.html\">Vec</a>&lt;Event&gt;"}} /></pre>
+<pre className="rust-signature"><code dangerouslySetInnerHTML={{"__html": "pub fn observed_events(&amp;self, agent_uuid: <a href=\"https://docs.rs/uuid/1.18.1/uuid/struct.Uuid.html\">Uuid</a>) -&gt; <a href=\"https://doc.rust-lang.org/1.96.1/alloc/vec/struct.Vec.html\">Vec</a>&lt;<a href=\"../../nemo-relay-types/api/event/enum-event\">Event</a>&gt;"}} /></pre>
 
 #### `last_error_result`
 

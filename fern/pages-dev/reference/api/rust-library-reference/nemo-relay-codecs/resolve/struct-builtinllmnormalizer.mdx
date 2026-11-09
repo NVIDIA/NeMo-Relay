@@ -47,23 +47,23 @@ Stateless provider normalization, preserving usage and provider-reported costs.
 
 ### `impl LlmNormalizer for BuiltinLlmNormalizer`
 
-<pre className="rust-signature"><code dangerouslySetInnerHTML={{"__html": "impl LlmNormalizer for <a href=\"struct-builtinllmnormalizer\">BuiltinLlmNormalizer</a>"}} /></pre>
+<pre className="rust-signature"><code dangerouslySetInnerHTML={{"__html": "impl <a href=\"../../nemo-relay-types/codec/normalization/trait-llmnormalizer\">LlmNormalizer</a> for <a href=\"struct-builtinllmnormalizer\">BuiltinLlmNormalizer</a>"}} /></pre>
 
 #### `normalize_request`
 
-<pre className="rust-signature"><code dangerouslySetInnerHTML={{"__html": "fn normalize_request(\n    &amp;self,\n    request: &amp;LlmRequest,\n    provider_hint: <a href=\"https://doc.rust-lang.org/1.96.1/core/option/enum.Option.html\">Option</a>&lt;&amp;<a href=\"https://doc.rust-lang.org/1.96.1/std/primitive.str.html\">str</a>&gt;,\n) -&gt; <a href=\"https://doc.rust-lang.org/1.96.1/core/option/enum.Option.html\">Option</a>&lt;AnnotatedLlmRequest&gt;"}} /></pre>
+<pre className="rust-signature"><code dangerouslySetInnerHTML={{"__html": "fn <a href=\"../../nemo-relay-types/codec/normalization/trait-llmnormalizer\">normalize_request</a>(\n    &amp;self,\n    request: &amp;<a href=\"../../nemo-relay-types/api/llm/struct-llmrequest\">LlmRequest</a>,\n    provider_hint: <a href=\"https://doc.rust-lang.org/1.96.1/core/option/enum.Option.html\">Option</a>&lt;&amp;<a href=\"https://doc.rust-lang.org/1.96.1/std/primitive.str.html\">str</a>&gt;,\n) -&gt; <a href=\"https://doc.rust-lang.org/1.96.1/core/option/enum.Option.html\">Option</a>&lt;<a href=\"../../nemo-relay-types/codec/request/struct-annotatedllmrequest\">AnnotatedLlmRequest</a>&gt;"}} /></pre>
 
 #### `normalize_response`
 
-<pre className="rust-signature"><code dangerouslySetInnerHTML={{"__html": "fn normalize_response(&amp;self, raw: &amp;Json) -&gt; <a href=\"https://doc.rust-lang.org/1.96.1/core/option/enum.Option.html\">Option</a>&lt;AnnotatedLlmResponse&gt;"}} /></pre>
+<pre className="rust-signature"><code dangerouslySetInnerHTML={{"__html": "fn <a href=\"../../nemo-relay-types/codec/normalization/trait-llmnormalizer\">normalize_response</a>(&amp;self, raw: &amp;<a href=\"../../nemo-relay-types/type-json\">Json</a>) -&gt; <a href=\"https://doc.rust-lang.org/1.96.1/core/option/enum.Option.html\">Option</a>&lt;<a href=\"../../nemo-relay-types/codec/response/struct-annotatedllmresponse\">AnnotatedLlmResponse</a>&gt;"}} /></pre>
 
 #### `telemetry_request`
 
-<pre className="rust-signature"><code dangerouslySetInnerHTML={{"__html": "fn telemetry_request&lt;'a&gt;(\n    &amp;self,\n    request: <a href=\"https://doc.rust-lang.org/1.96.1/alloc/borrow/enum.Cow.html\">Cow</a>&lt;'a, AnnotatedLlmRequest&gt;,\n) -&gt; <a href=\"https://doc.rust-lang.org/1.96.1/alloc/borrow/enum.Cow.html\">Cow</a>&lt;'a, AnnotatedLlmRequest&gt;"}} /></pre>
+<pre className="rust-signature"><code dangerouslySetInnerHTML={{"__html": "fn <a href=\"../../nemo-relay-types/codec/normalization/trait-llmnormalizer\">telemetry_request</a>&lt;'a&gt;(\n    &amp;self,\n    request: <a href=\"https://doc.rust-lang.org/1.96.1/alloc/borrow/enum.Cow.html\">Cow</a>&lt;'a, <a href=\"../../nemo-relay-types/codec/request/struct-annotatedllmrequest\">AnnotatedLlmRequest</a>&gt;,\n) -&gt; <a href=\"https://doc.rust-lang.org/1.96.1/alloc/borrow/enum.Cow.html\">Cow</a>&lt;'a, <a href=\"../../nemo-relay-types/codec/request/struct-annotatedllmrequest\">AnnotatedLlmRequest</a>&gt;"}} /></pre>
 
 #### `telemetry_tool_calls`
 
-<pre className="rust-signature"><code dangerouslySetInnerHTML={{"__html": "fn telemetry_tool_calls(\n    &amp;self,\n    annotation: <a href=\"https://doc.rust-lang.org/1.96.1/core/option/enum.Option.html\">Option</a>&lt;&amp;AnnotatedLlmResponse&gt;,\n    output: <a href=\"https://doc.rust-lang.org/1.96.1/core/option/enum.Option.html\">Option</a>&lt;&amp;Json&gt;,\n) -&gt; <a href=\"https://doc.rust-lang.org/1.96.1/core/option/enum.Option.html\">Option</a>&lt;<a href=\"https://doc.rust-lang.org/1.96.1/alloc/vec/struct.Vec.html\">Vec</a>&lt;TelemetryToolCall&gt;&gt;"}} /></pre>
+<pre className="rust-signature"><code dangerouslySetInnerHTML={{"__html": "fn <a href=\"../../nemo-relay-types/codec/normalization/trait-llmnormalizer\">telemetry_tool_calls</a>(\n    &amp;self,\n    annotation: <a href=\"https://doc.rust-lang.org/1.96.1/core/option/enum.Option.html\">Option</a>&lt;&amp;<a href=\"../../nemo-relay-types/codec/response/struct-annotatedllmresponse\">AnnotatedLlmResponse</a>&gt;,\n    output: <a href=\"https://doc.rust-lang.org/1.96.1/core/option/enum.Option.html\">Option</a>&lt;&amp;<a href=\"../../nemo-relay-types/type-json\">Json</a>&gt;,\n) -&gt; <a href=\"https://doc.rust-lang.org/1.96.1/core/option/enum.Option.html\">Option</a>&lt;<a href=\"https://doc.rust-lang.org/1.96.1/alloc/vec/struct.Vec.html\">Vec</a>&lt;<a href=\"../../nemo-relay-types/codec/normalization/struct-telemetrytoolcall\">TelemetryToolCall</a>&gt;&gt;"}} /></pre>
 
 ### `impl Copy for BuiltinLlmNormalizer`
 

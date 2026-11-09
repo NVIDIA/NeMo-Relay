@@ -645,7 +645,11 @@ export interface PluginContext {
     name: string,
     priority: number,
     breakChain: boolean,
-    callback: (args: { name: string; request: LlmRequestShape; annotated: Json | null }) => TOutcome | Promise<TOutcome>,
+    callback: (args: {
+      name: string;
+      request: LlmRequestShape;
+      annotated: Json | null;
+    }) => TOutcome | Promise<TOutcome>,
   ): void;
   registerLlmExecutionIntercept<TResponse extends JsonCompatible<TResponse>>(
     name: string,
@@ -760,7 +764,7 @@ export declare function toolRequestIntercepts<TArgs extends JsonCompatible<TArgs
 Emit a trace-level operational log record through Relay's configured sinks.
 
 ```ts
-export declare function trace<TFields extends JsonCompatible<TFields> = Json>(message: string, target?: string | undefined | null, fields?: TFields | null): void
+export declare function trace<TFields extends JsonObjectCompatible<TFields> = JsonObject>(message: string, target?: string | undefined | null, fields?: TFields | null): void
 ```
 
 ### `validate`
@@ -792,7 +796,7 @@ export declare function validateExact(config: Json): Json
 Emit a warn-level operational log record through Relay's configured sinks.
 
 ```ts
-export declare function warn<TFields extends JsonCompatible<TFields> = Json>(message: string, target?: string | undefined | null, fields?: TFields | null): void
+export declare function warn<TFields extends JsonObjectCompatible<TFields> = JsonObject>(message: string, target?: string | undefined | null, fields?: TFields | null): void
 ```
 
 ### `withScope`
@@ -863,11 +867,7 @@ export type LlmRequestShape = {
 ```ts
 export type JsonCompatible<T> =
   | JsonValue
-  | ([T] extends [{} | null]
-      ? [JsonShaped<T>] extends [never]
-        ? never
-        : { [K in keyof T]: JsonProperty<T[K]> }
-      : never);
+  | ([T] extends [{} | null] ? Shaped<T, { [K in keyof T]: JsonProperty<T[K]> }> : never);
 ```
 
 ### `JsonObjectCompatible`
@@ -875,13 +875,9 @@ export type JsonCompatible<T> =
 ```ts
 export type JsonObjectCompatible<T> =
   | JsonObject
-  | ([T] extends [readonly unknown[]]
-      ? never
-      : [T] extends [object]
-        ? [JsonShaped<T>] extends [never]
-          ? never
-          : { [K in keyof T]: JsonProperty<T[K]> }
-        : never);
+  | ([T] extends [object]
+      ? Shaped<T, { [K in keyof T]: JsonProperty<T[K]> }, NonJsonValue | readonly unknown[]>
+      : never);
 ```
 
 ### `LlmRequestCompatible`
@@ -890,12 +886,13 @@ export type JsonObjectCompatible<T> =
 export type LlmRequestCompatible<T> =
   | LlmRequestOpen
   | ([T] extends [object]
-      ? [JsonShaped<T>] extends [never]
-        ? never
-        : { [K in keyof T]: K extends 'headers' ? JsonObjectProperty<T[K]> : JsonProperty<T[K]> } & Record<
+      ? Shaped<
+          T,
+          { [K in keyof T]: K extends 'headers' ? JsonObjectProperty<T[K]> : JsonProperty<T[K]> } & Record<
             'headers' | 'content',
             unknown
           >
+        >
       : never);
 ```
 
@@ -904,11 +901,7 @@ export type LlmRequestCompatible<T> =
 ```ts
 export type ToolExecutionResultCompatible<T> =
   | ToolExecutionResultOpen
-  | ([T] extends [object]
-      ? [JsonShaped<T>] extends [never]
-        ? never
-        : { [K in keyof T]: JsonProperty<T[K]> } & Record<'result', unknown>
-      : never);
+  | ([T] extends [object] ? Shaped<T, { [K in keyof T]: JsonProperty<T[K]> } & Record<'result', unknown>> : never);
 ```
 
 ### `ToolExecutionInterceptOutcomeCompatible`
@@ -917,12 +910,13 @@ export type ToolExecutionResultCompatible<T> =
 export type ToolExecutionInterceptOutcomeCompatible<T> =
   | ToolExecutionInterceptOutcome
   | ([T] extends [object]
-      ? [JsonShaped<T>] extends [never]
-        ? never
-        : { [K in keyof T]: K extends 'pendingMarks' ? PendingMarksProperty<T[K]> : JsonProperty<T[K]> } & Record<
+      ? Shaped<
+          T,
+          { [K in keyof T]: K extends 'pendingMarks' ? PendingMarksProperty<T[K]> : JsonProperty<T[K]> } & Record<
             'result',
             unknown
           >
+        >
       : never);
 ```
 
@@ -932,9 +926,9 @@ export type ToolExecutionInterceptOutcomeCompatible<T> =
 export type LlmRequestInterceptOutcomeCompatible<T> =
   | LlmRequestInterceptOutcome
   | ([T] extends [object]
-      ? [JsonShaped<T>] extends [never]
-        ? never
-        : {
+      ? Shaped<
+          T,
+          {
             [K in keyof T]: K extends 'request'
               ? LlmRequestProperty<T[K]>
               : K extends 'pendingMarks'
@@ -949,11 +943,7 @@ export type LlmRequestInterceptOutcomeCompatible<T> =
 ```ts
 export type EventSanitizeFieldsCompatible<T> =
   | EventSanitizeFieldsOpen
-  | ([T] extends [object]
-      ? [JsonShaped<T>] extends [never]
-        ? never
-        : { [K in keyof T]: JsonProperty<T[K]> }
-      : never);
+  | ([T] extends [object] ? Shaped<T, { [K in keyof T]: JsonProperty<T[K]> }> : never);
 ```
 
 ### `EventMetadataCompatible`
@@ -961,11 +951,7 @@ export type EventSanitizeFieldsCompatible<T> =
 ```ts
 export type EventMetadataCompatible<T> =
   | EventMetadata
-  | ([T] extends [object]
-      ? [JsonShaped<T>] extends [never]
-        ? never
-        : { [K in keyof T]: EventMetadataProperty<T[K]> }
-      : never);
+  | ([T] extends [object] ? Shaped<T, { [K in keyof T]: EventMetadataProperty<T[K]> }> : never);
 ```
 
 ### `MetricMeasurementsCompatible`

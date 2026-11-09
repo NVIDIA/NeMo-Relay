@@ -231,7 +231,7 @@ Wrap model pricing config as a top-level plugin component.
 
 ```ts
 export declare function ComponentSpec(
-  config: PricingConfig | JsonObject,
+  config: PricingConfig,
   options?: {
     enabled?: boolean;
 ```
@@ -242,6 +242,14 @@ Validate a model pricing config document without activating it.
 
 ```ts
 export declare function validateConfig(config: PricingConfig | JsonObject): ConfigReport;
+```
+
+### `parseConfig`
+
+Validate an untyped model pricing document and return it as a config; throws on error diagnostics.
+
+```ts
+export declare function parseConfig(document: JsonObject): PricingConfig;
 ```
 
 ## Type Aliases
