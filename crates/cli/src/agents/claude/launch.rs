@@ -14,6 +14,7 @@ pub(crate) fn prepare(
     launch: &mut PreparedAgentLaunch,
     gateway_url: &str,
     proxy_credential: &crate::provider_auth::TransparentProxyCredential,
+    relay_supplies_credential: bool,
     dry_run: bool,
 ) -> Result<(), CliError> {
     // A process default lets Claude's settings.env retain precedence, including opt-outs.
@@ -21,6 +22,12 @@ pub(crate) fn prepare(
         launch
             .env
             .push(("CLAUDE_CODE_GATEWAY_HINT_HEADERS".into(), "1".into()));
+    }
+    // Claude Code needs a credential before it starts. Relay replaces this one upstream.
+    if relay_supplies_credential && !inherits_anthropic_credential() {
+        launch
+            .env
+            .push(("ANTHROPIC_API_KEY".into(), PLACEHOLDER_API_KEY.into()));
     }
     let proxy_header = format!(
         "{}: {}",
@@ -108,6 +115,16 @@ pub(crate) fn prepare(
     launch.temp_dirs.push(root);
     record_hook_integrity_risk(launch, hook_integrity_risk);
     Ok(())
+}
+
+/// Not a credential: the gateway replaces it with the one Relay owns.
+const PLACEHOLDER_API_KEY: &str = "nemo-relay-supplies-this-credential";
+
+/// An inherited value, an empty one included, stays the child's to keep.
+fn inherits_anthropic_credential() -> bool {
+    ["ANTHROPIC_API_KEY", "ANTHROPIC_AUTH_TOKEN"]
+        .into_iter()
+        .any(|name| std::env::var_os(name).is_some())
 }
 
 #[derive(Default)]
