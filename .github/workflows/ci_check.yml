@@ -156,6 +156,7 @@ jobs:
         with:
           version: ${{ steps.ci-config.outputs.uv_version }}
           enable-cache: true
+          save-cache: ${{ github.ref == 'refs/heads/main' }}
           cache-dependency-glob: ${{ env.NEMO_RELAY_CI_WORKSPACE }}/uv.lock
 
       - uses: actions/setup-go@4a3601121dd01d1626a1e23e37211e3254c1c06c # v6
@@ -193,7 +194,7 @@ jobs:
 
       - uses: Swatinem/rust-cache@c19371144df3bb44fab255c43d04cbc2ab54d1c4 # v2.9.1
         with:
-          shared-key: nemo-relay-rust-linux-amd64-${{ steps.ci-config.outputs.rust_version }}-debug
+          shared-key: nemo-relay-rust-linux-amd64-${{ steps.ci-config.outputs.rust_version }}-core-debug
           workspaces: . -> target
           cache-all-crates: true
           cache-bin: false
