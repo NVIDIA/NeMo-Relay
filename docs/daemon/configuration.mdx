@@ -94,7 +94,7 @@ Managed workers validate base URLs when loading configuration and check the fina
 destination when forwarding requests. Base URLs must not include user information,
 query strings, or fragments.
 
-Confirm provider URL fields against [Provider Routing](/nemo-relay-cli/basic-usage).
+Confirm provider URL fields against [Provider Routing](/nemo-relay-cli/provider-upstreams#overrides-timeouts-and-routing).
 Use your approved provider URLs when they differ from these defaults. Set the same
 routing on the daemon and clients for consistent pass-through behavior. The
 primary `nemo-relay daemon` process reads only `[daemon.logging]`; `[logging]`
@@ -856,7 +856,7 @@ no replacement credential, requests with recognized ChatGPT OAuth use the ChatGP
 Codex backend instead. Anthropic model requests use `anthropic_base_url`.
 The caller must have Relay access to use Relay's credentials. For the credential
 selection order, refer to
-[Provider Upstreams](/nemo-relay-cli/basic-usage#provider-upstreams).
+[Credential Selection](/nemo-relay-cli/authentication#credential-selection).
 
 If Relay has no replacement, OpenAI model requests keep the caller's credential.
 This also applies to a custom `openai_base_url`.
@@ -918,7 +918,7 @@ credential. Each daemon or worker process keeps its own cache.
 
 Choose one credential source for each provider. You cannot combine a helper
 with a static API key or a custom authorization header. Refer to
-[Generate API Keys Per Request](/nemo-relay-cli/basic-usage#generate-api-keys-per-request)
+[Generate API Keys Per Request](/nemo-relay-cli/authentication#generate-api-keys-per-request)
 for examples, supported authentication methods, limits, and error handling.
 
 With an OpenAI helper, Relay warns about and ignores `OPENAI_API_KEY` and

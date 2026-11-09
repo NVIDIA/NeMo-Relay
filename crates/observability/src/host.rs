@@ -24,6 +24,10 @@ pub trait ObservabilityHost: LlmNormalizer {
     fn deregister_subscriber(&self, name: &str) -> Result<bool>;
     /// Establish the runtime's subscriber-delivery barrier.
     fn flush_subscribers(&self) -> Result<()>;
+    /// Retain subscriber flush accounting and scope context for deferred delivery.
+    fn prepare_delivery(&self, work: Box<dyn FnOnce() + Send>) -> Box<dyn FnOnce() + Send> {
+        work
+    }
     /// Parse remote W3C propagation context using the runtime's policy.
     fn w3c_span_context(
         &self,

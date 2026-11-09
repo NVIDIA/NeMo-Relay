@@ -18,11 +18,13 @@ use std::time::Duration;
 
 use nemo_relay_observability::plugin::OBSERVABILITY_PLUGIN_KIND;
 use nemo_relay_plugin_host::{PluginComponentSpec, PluginConfig};
+use nemo_relay_runtime::api::runtime::subscriber_dispatcher::flush_subscribers_with_started_signal;
 use nemo_relay_runtime::api::runtime::{
     NemoRelayContextState, create_scope_stack, global_context, set_thread_scope_stack,
 };
 use nemo_relay_runtime::api::scope::{
-    PopScopeParams, PushScopeParams, ScopeType, pop_scope, push_scope,
+    PopScopeParams, PushScopeParams, ScopeType, pop_scope, pop_scope_with_subscriber_delivery,
+    push_scope,
 };
 use nemo_relay_runtime::api::subscriber::flush_subscribers;
 use object_store::{ObjectStore, ObjectStoreExt as _};
@@ -603,6 +605,290 @@ fn atif_storage_http_non_2xx_retries_on_the_next_trajectory() {
     }
 
     reset_runtime();
+}
+
+#[test]
+fn slow_atif_http_upload_does_not_hold_the_dispatcher_but_flush_waits_for_it() {
+    let _guard = PLUGIN_TEST_LOCK.lock().unwrap();
+    reset_runtime();
+    let (release_tx, release_rx) = std::sync::mpsc::channel::<()>();
+    let listener = std::net::TcpListener::bind("127.0.0.1:0").expect("bind slow receiver");
+    let endpoint = format!("http://{}/atif", listener.local_addr().unwrap());
+    let received = std::sync::Arc::new(std::sync::atomic::AtomicUsize::new(0));
+    let server_received = std::sync::Arc::clone(&received);
+    let server = std::thread::spawn(move || {
+        let (mut stream, _) = listener.accept().expect("accept upload");
+        let _ = read_http_request(&mut stream);
+        // The timeout lets a regression fail its assertions instead of hanging the test.
+        let _ = release_rx.recv_timeout(Duration::from_secs(30));
+        server_received.fetch_add(1, std::sync::atomic::Ordering::SeqCst);
+        write_http_response(&mut stream, 200);
+    });
+    // SAFETY: this uniquely named env var is only touched by this module under the test lock.
+    unsafe {
+        std::env::set_var("NEMO_RELAY_ATIF_HTTP_TEST_TOKEN", "Bearer test-token");
+    }
+    let mut config = build_http_observability_config(&[endpoint]);
+    // Outlast the receiver's held response so a slow runner can't time out the upload.
+    config.components[0].config["atif"]["storage"][0]["timeout_millis"] = json!(60_000);
+    futures::executor::block_on(test_initialize_plugin_host_exact(config))
+        .expect("observability plugin should initialize with HTTP storage");
+
+    let (seen_tx, seen_rx) = std::sync::mpsc::channel();
+    let seen_tx = std::sync::Mutex::new(seen_tx);
+    nemo_relay_runtime::api::subscriber::register_subscriber(
+        "after-slow-upload",
+        std::sync::Arc::new(move |event: &nemo_relay_types::api::event::Event| {
+            if event.name() == "after-slow-upload" {
+                let _ = seen_tx.lock().unwrap().send(());
+            }
+        }),
+    )
+    .expect("register probe subscriber");
+
+    let trajectory = push_scope(
+        PushScopeParams::builder()
+            .name("slow-upload")
+            .scope_type(ScopeType::Agent)
+            .build(),
+    )
+    .expect("push agent scope");
+    let delivery = pop_scope_with_subscriber_delivery(
+        PopScopeParams::builder()
+            .handle_uuid(&trajectory.uuid)
+            .build(),
+    )
+    .expect("pop agent scope");
+    futures::executor::block_on(delivery.wait()).expect("delivery receipt should complete");
+    assert_eq!(
+        received.load(std::sync::atomic::Ordering::SeqCst),
+        0,
+        "a hook's delivery receipt must not wait for the upload"
+    );
+    let later = push_scope(
+        PushScopeParams::builder()
+            .name("after-slow-upload")
+            .scope_type(ScopeType::Custom)
+            .build(),
+    )
+    .expect("push later scope");
+
+    seen_rx
+        .recv_timeout(Duration::from_secs(10))
+        .expect("a later event should not wait for the slow upload");
+    assert_eq!(received.load(std::sync::atomic::Ordering::SeqCst), 0);
+
+    let (started_tx, started_rx) = std::sync::mpsc::channel();
+    let (flushed_tx, flushed_rx) = std::sync::mpsc::channel();
+    let flush = std::thread::spawn(move || {
+        flush_subscribers_with_started_signal(started_tx)
+            .expect("flush should wait for the upload");
+        let _ = flushed_tx.send(());
+    });
+    started_rx
+        .recv_timeout(Duration::from_secs(10))
+        .expect("flush should be queued");
+    assert!(
+        flushed_rx.recv_timeout(Duration::from_millis(300)).is_err(),
+        "flush_subscribers must not return before the upload finishes"
+    );
+    release_tx.send(()).expect("release the upload response");
+    flushed_rx
+        .recv_timeout(Duration::from_secs(10))
+        .expect("flush should finish once the upload does");
+    flush.join().expect("flush thread should finish");
+    assert_eq!(received.load(std::sync::atomic::Ordering::SeqCst), 1);
+
+    pop_scope(PopScopeParams::builder().handle_uuid(&later.uuid).build()).expect("pop later scope");
+    server.join().expect("slow receiver should finish");
+    nemo_relay_runtime::api::subscriber::deregister_subscriber("after-slow-upload")
+        .expect("deregister probe subscriber");
+    test_close_plugin_host().expect("plugin teardown should succeed");
+    // SAFETY: cleanup of test-only env var.
+    unsafe {
+        std::env::remove_var("NEMO_RELAY_ATIF_HTTP_TEST_TOKEN");
+    }
+    reset_runtime();
+}
+
+#[test]
+fn plugin_teardown_waits_for_a_held_atif_http_upload() {
+    let _guard = PLUGIN_TEST_LOCK.lock().unwrap();
+    reset_runtime();
+    let (release_tx, release_rx) = std::sync::mpsc::channel::<()>();
+    let (accepted_tx, accepted_rx) = std::sync::mpsc::channel::<()>();
+    let listener = std::net::TcpListener::bind("127.0.0.1:0").expect("bind slow receiver");
+    let endpoint = format!("http://{}/atif", listener.local_addr().unwrap());
+    let server = std::thread::spawn(move || {
+        let (mut stream, _) = listener.accept().expect("accept upload");
+        let _ = read_http_request(&mut stream);
+        let _ = accepted_tx.send(());
+        let _ = release_rx.recv_timeout(Duration::from_secs(30));
+        write_http_response(&mut stream, 200);
+    });
+    // SAFETY: this uniquely named env var is only touched by this module under the test lock.
+    unsafe {
+        std::env::set_var("NEMO_RELAY_ATIF_HTTP_TEST_TOKEN", "Bearer test-token");
+    }
+    let mut config = build_http_observability_config(&[endpoint]);
+    config.components[0].config["atif"]["storage"][0]["timeout_millis"] = json!(60_000);
+    futures::executor::block_on(test_initialize_plugin_host_exact(config))
+        .expect("observability plugin should initialize with HTTP storage");
+
+    let trajectory = push_scope(
+        PushScopeParams::builder()
+            .name("held-upload")
+            .scope_type(ScopeType::Agent)
+            .build(),
+    )
+    .expect("push agent scope");
+    pop_scope(
+        PopScopeParams::builder()
+            .handle_uuid(&trajectory.uuid)
+            .build(),
+    )
+    .expect("pop agent scope");
+    accepted_rx
+        .recv_timeout(Duration::from_secs(10))
+        .expect("the upload should start without a flush");
+
+    let (closed_tx, closed_rx) = std::sync::mpsc::channel();
+    let close = std::thread::spawn(move || {
+        test_close_plugin_host().expect("plugin teardown should succeed");
+        let _ = closed_tx.send(());
+    });
+    assert!(
+        closed_rx.recv_timeout(Duration::from_millis(300)).is_err(),
+        "plugin teardown must not finish before the upload does"
+    );
+    release_tx.send(()).expect("release the upload response");
+    closed_rx
+        .recv_timeout(Duration::from_secs(10))
+        .expect("plugin teardown should finish once the upload does");
+    close.join().expect("teardown thread should finish");
+    server.join().expect("slow receiver should finish");
+    // SAFETY: cleanup of test-only env var.
+    unsafe {
+        std::env::remove_var("NEMO_RELAY_ATIF_HTTP_TEST_TOKEN");
+    }
+    reset_runtime();
+}
+
+#[test]
+fn failed_atif_http_upload_writes_its_recovery_copy_from_the_queue() {
+    let _guard = PLUGIN_TEST_LOCK.lock().unwrap();
+    reset_runtime();
+    let recovery_directory = tempfile::tempdir().expect("create recovery directory");
+    let mut server = start_http_server(1, vec![("/fail", 500)]);
+    // SAFETY: this uniquely named env var is only touched by this module under the test lock.
+    unsafe {
+        std::env::set_var("NEMO_RELAY_ATIF_HTTP_TEST_TOKEN", "Bearer test-token");
+    }
+    let mut config = build_http_observability_config(&[format!("{}/fail", server.base_url)]);
+    config.components[0].config["atif"]
+        .as_object_mut()
+        .expect("ATIF config should be an object")
+        .insert("output_directory".into(), json!(recovery_directory.path()));
+    futures::executor::block_on(test_initialize_plugin_host_exact(config))
+        .expect("observability plugin should initialize with HTTP storage");
+
+    let trajectory = push_scope(
+        PushScopeParams::builder()
+            .name("failed-upload")
+            .scope_type(ScopeType::Agent)
+            .build(),
+    )
+    .expect("push agent scope");
+    pop_scope(
+        PopScopeParams::builder()
+            .handle_uuid(&trajectory.uuid)
+            .build(),
+    )
+    .expect("pop agent scope");
+    flush_subscribers().expect("flush should wait for the failed upload");
+
+    let files = std::fs::read_dir(recovery_directory.path())
+        .expect("read recovery directory")
+        .count();
+    assert_eq!(files, 1, "a failed upload should leave one recovery copy");
+    server.stop();
+    let _ = test_close_plugin_host();
+    let _ = test_close_plugin_host();
+    // SAFETY: cleanup of test-only env var.
+    unsafe {
+        std::env::remove_var("NEMO_RELAY_ATIF_HTTP_TEST_TOKEN");
+    }
+    reset_runtime();
+}
+
+#[test]
+fn idle_atif_delivery_worker_releases_the_closed_scope() {
+    let _guard = PLUGIN_TEST_LOCK.lock().unwrap();
+    reset_runtime();
+    let mut server = start_http_server(1, vec![("/atif", 200)]);
+    // SAFETY: this uniquely named env var is only touched by this module under the test lock.
+    unsafe {
+        std::env::set_var("NEMO_RELAY_ATIF_HTTP_TEST_TOKEN", "Bearer test-token");
+    }
+    let config = build_http_observability_config(&[format!("{}/atif", server.base_url)]);
+    futures::executor::block_on(test_initialize_plugin_host_exact(config))
+        .expect("observability plugin should initialize with HTTP storage");
+
+    // Publications carry a snapshot of the scope stack, which clones scope-local
+    // subscribers, so this marker lives for as long as anything holds that snapshot.
+    let marker = std::sync::Arc::new(());
+    let released = std::sync::Arc::downgrade(&marker);
+    // The session thread owns the live stack and ends before the check.
+    std::thread::spawn(move || {
+        set_thread_scope_stack(create_scope_stack());
+        let trajectory = push_scope(
+            PushScopeParams::builder()
+                .name("closed-session")
+                .scope_type(ScopeType::Agent)
+                .build(),
+        )
+        .expect("push agent scope");
+        nemo_relay_runtime::api::subscriber::scope_register_subscriber(
+            &trajectory.uuid,
+            "retention-marker",
+            std::sync::Arc::new(move |_event: &_| {
+                let _ = &marker;
+            }),
+        )
+        .expect("register scope subscriber");
+        pop_scope(
+            PopScopeParams::builder()
+                .handle_uuid(&trajectory.uuid)
+                .build(),
+        )
+        .expect("pop agent scope");
+        flush_subscribers().expect("flush should wait for the upload");
+    })
+    .join()
+    .expect("session thread should finish");
+
+    let deadline = std::time::Instant::now() + Duration::from_secs(5);
+    while released.strong_count() > 0 && std::time::Instant::now() < deadline {
+        std::thread::sleep(Duration::from_millis(10));
+    }
+    let retained = released.strong_count();
+    server.stop();
+    let uploads = server.received.lock().unwrap().len();
+    let _ = test_close_plugin_host();
+    let _ = test_close_plugin_host();
+    // SAFETY: cleanup of test-only env var.
+    unsafe {
+        std::env::remove_var("NEMO_RELAY_ATIF_HTTP_TEST_TOKEN");
+    }
+    reset_runtime();
+    assert_eq!(
+        uploads, 1,
+        "the upload should have run on the delivery worker"
+    );
+    assert_eq!(
+        retained, 0,
+        "the idle delivery worker must not retain a closed session's scope"
+    );
 }
 
 #[test]
