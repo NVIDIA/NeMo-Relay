@@ -71,6 +71,7 @@ enum Grant {
 pub(crate) struct OidcClient {
     http: reqwest::Client,
     issuer: String,
+    metadata_issuer: String,
     client_id: String,
     pub(super) token_endpoint: String,
     authorization_endpoint: Option<String>,
@@ -115,6 +116,7 @@ impl OidcClient {
         Ok(Self {
             http,
             issuer: issuer.to_owned(),
+            metadata_issuer: discovery.issuer,
             client_id: source.client_id.clone(),
             token_endpoint: discovery.token_endpoint,
             authorization_endpoint: discovery.authorization_endpoint,
@@ -122,8 +124,9 @@ impl OidcClient {
         })
     }
 
-    pub(crate) fn issuer(&self) -> &str {
-        &self.issuer
+    /// The issuer exactly as discovery published it, which RFC 9207 compares `iss` with.
+    pub(crate) fn metadata_issuer(&self) -> &str {
+        &self.metadata_issuer
     }
 
     /// The address the user opens to approve the sign-in.

@@ -884,3 +884,20 @@ async fn a_refused_code_exchange_reports_that_no_token_was_issued() {
     assert!(error.contains("invalid_grant"), "{error}");
     assert_eq!(issuer.lock().unwrap().grants.len(), 1);
 }
+#[tokio::test]
+async fn a_redirect_iss_must_match_the_metadata_issuer_exactly() {
+    let (source, issuer) = start_issuer().await;
+    let client = OidcClient::discover(&source).await.unwrap();
+    let slashed = reqwest::Url::parse_with_params(
+        "http://127.0.0.1:1/callback",
+        &[
+            ("code", "code-1"),
+            ("state", "attempt-state"),
+            ("iss", &format!("{}/", source.issuer)),
+        ],
+    )
+    .unwrap();
+    let error = pasted_sign_in_error(&client, slashed.as_str()).await;
+    assert!(error.contains("names another issuer"), "{error}");
+    assert!(issuer.lock().unwrap().grants.is_empty());
+}

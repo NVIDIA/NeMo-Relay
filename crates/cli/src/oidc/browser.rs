@@ -28,7 +28,7 @@ const RANDOM_BYTES: usize = 32;
 const CALLBACK_HOST: &str = "127.0.0.1";
 const CALLBACK_PATH: &str = "/callback";
 
-const PAGE_SIGNED_IN: &str = "<!doctype html><title>NeMo Relay</title><p>Signed in. You can close this tab and return to the terminal.</p>";
+const PAGE_RECEIVED: &str = "<!doctype html><title>NeMo Relay</title><p>The sign-in response was received. Return to the terminal to see the result.</p>";
 const PAGE_NOT_COMPLETED: &str = "<!doctype html><title>NeMo Relay</title><p>The sign-in was not completed. Return to the terminal.</p>";
 const PAGE_FOREIGN_ATTEMPT: &str = "<!doctype html><title>NeMo Relay</title><p>This page belongs to another sign-in attempt. Use the link the terminal printed.</p>";
 
@@ -81,7 +81,7 @@ pub(crate) async fn sign_in(
     let redirect = callback
         .wait(approval.pasted, &mut show, approval.timeout)
         .await?;
-    let code = redirect.into_code(client.issuer())?;
+    let code = redirect.into_code(client.metadata_issuer())?;
     client.exchange_code(&code, &redirect_uri, &verifier).await
 }
 
@@ -122,11 +122,9 @@ pub(crate) struct Redirect {
 
 impl Redirect {
     /// The authorization code, once the redirect is known to come from `issuer` and approve.
+    /// RFC 9207 compares `iss` with the metadata issuer as an exact string.
     fn into_code(self, issuer: &str) -> Result<String, SignInError> {
-        if self
-            .iss
-            .is_some_and(|iss| iss.trim_end_matches('/') != issuer)
-        {
+        if self.iss.is_some_and(|iss| iss != issuer) {
             return Err(SignInError::ForeignIssuer);
         }
         if let Some(error) = &self.error {
@@ -268,7 +266,7 @@ async fn receive(
         return Html(PAGE_FOREIGN_ATTEMPT);
     }
     let page = if redirect.code.is_some() {
-        PAGE_SIGNED_IN
+        PAGE_RECEIVED
     } else {
         PAGE_NOT_COMPLETED
     };
