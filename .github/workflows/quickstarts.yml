@@ -97,6 +97,7 @@ jobs:
         with:
           version: ${{ steps.ci-config.outputs.uv_version }}
           enable-cache: true
+          save-cache: ${{ github.ref == 'refs/heads/main' }}
           cache-dependency-glob: ${{ github.workspace }}/uv.lock
 
       - name: Set up Node.js

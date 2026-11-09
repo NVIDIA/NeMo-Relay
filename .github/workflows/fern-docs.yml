@@ -86,6 +86,7 @@ jobs:
         with:
           version: ${{ steps.ci-config.outputs.uv_version }}
           enable-cache: true
+          save-cache: ${{ github.ref == 'refs/heads/main' }}
           cache-dependency-glob: ${{ github.workspace }}/source-checkout/uv.lock
 
       - name: Setup Node.js
@@ -117,7 +118,7 @@ jobs:
         uses: Swatinem/rust-cache@c19371144df3bb44fab255c43d04cbc2ab54d1c4 # v2.9.1
         with:
           shared-key: nemo-relay-rust-docs-${{ runner.os }}-${{ runner.arch }}-${{ steps.ci-config.outputs.rust_version }}
-          workspaces: source-checkout -> source-checkout/target
+          workspaces: source-checkout -> target
           cache-all-crates: true
           cache-bin: false
           save-if: false
@@ -293,6 +294,7 @@ jobs:
         with:
           version: ${{ steps.ci-config.outputs.uv_version }}
           enable-cache: true
+          save-cache: ${{ github.ref == 'refs/heads/main' }}
           cache-dependency-glob: ${{ github.workspace }}/source-checkout/uv.lock
 
       - name: Setup Node.js
@@ -324,10 +326,10 @@ jobs:
         uses: Swatinem/rust-cache@c19371144df3bb44fab255c43d04cbc2ab54d1c4 # v2.9.1
         with:
           shared-key: nemo-relay-rust-docs-${{ runner.os }}-${{ runner.arch }}-${{ steps.ci-config.outputs.rust_version }}
-          workspaces: source-checkout -> source-checkout/target
+          workspaces: source-checkout -> target
           cache-all-crates: true
           cache-bin: false
-          save-if: false
+          save-if: ${{ github.ref == 'refs/heads/main' }}
 
       - name: Set up Python
         uses: actions/setup-python@5fda3b95a4ea91299a34e894583c3862153e4b97 # v7.0.0
@@ -489,6 +491,7 @@ jobs:
         with:
           version: ${{ steps.ci-config.outputs.uv_version }}
           enable-cache: true
+          save-cache: ${{ github.ref == 'refs/heads/main' }}
           cache-dependency-glob: ${{ github.workspace }}/source-checkout/uv.lock
 
       - name: Setup Node.js
@@ -522,7 +525,7 @@ jobs:
         uses: Swatinem/rust-cache@c19371144df3bb44fab255c43d04cbc2ab54d1c4 # v2.9.1
         with:
           shared-key: nemo-relay-rust-docs-${{ runner.os }}-${{ runner.arch }}-${{ steps.ci-config.outputs.rust_version }}
-          workspaces: source-checkout -> source-checkout/target
+          workspaces: source-checkout -> target
           cache-all-crates: true
           cache-bin: false
           save-if: false
