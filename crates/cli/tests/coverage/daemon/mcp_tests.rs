@@ -103,6 +103,52 @@ fn launch_directive_is_the_only_directive_with_a_worker_bootstrap() {
     );
 }
 
+#[tokio::test]
+async fn normal_shutdown_retains_only_negotiated_bootstrapped_children() {
+    for (capable, transferred, reason, retain) in [
+        (true, true, Shutdown::Normal, true),
+        (false, true, Shutdown::Normal, false),
+        (true, false, Shutdown::Normal, false),
+        (true, true, Shutdown::Failed, false),
+    ] {
+        let (mut child, address) = pending_worker_fixture().await;
+        let stdin = child.child.take_stdin().unwrap();
+        child.publication_uncertain = transferred;
+        let mut pending = Some(("retained".into(), child, tokio::time::Instant::now()));
+        let mut lease = test_lease("http://127.0.0.1:1".into());
+        lease.idle_retention = capable;
+        retain_pending_launch(&mut lease, &mut pending, reason);
+        assert_eq!(
+            lease.retained_activation_id.as_deref(),
+            retain.then_some("retained")
+        );
+        assert_eq!(pending.is_none(), retain);
+        if retain {
+            assert!(
+                TcpListener::bind(address).await.is_err(),
+                "retained child still owns its listener"
+            );
+            drop(stdin);
+            tokio::time::timeout(Duration::from_secs(5), async {
+                loop {
+                    if TcpListener::bind(address).await.is_ok() {
+                        break;
+                    }
+                    tokio::task::yield_now().await;
+                }
+            })
+            .await
+            .expect("fixture exits after its input closes");
+        } else {
+            stop_pending_launch(&mut pending).await.unwrap();
+            drop(stdin);
+            TcpListener::bind(address)
+                .await
+                .expect("cancelled child released its listener");
+        }
+    }
+}
+
 #[test]
 fn activation_timeout_uses_the_mcp_monotonic_clock() {
     let started = tokio::time::Instant::now();
@@ -333,6 +379,8 @@ fn test_lease(daemon_origin: String) -> McpSession {
         session_token: SensitiveString::new("session-secret").expect("session token"),
         sequence: 0,
         publication_cleanup: false,
+        idle_retention: false,
+        retained_activation_id: None,
     }
 }
 
@@ -342,13 +390,13 @@ async fn legacy_startup_is_not_replayed_after_mcp_initialization() {
 
     let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
     let origin = format!("http://{}", listener.local_addr().unwrap());
-    let (shutdown, stop) = tokio::sync::watch::channel(false);
+    let (shutdown, stop) = tokio::sync::watch::channel(Shutdown::Running);
     let (finished, finish) = tokio::sync::oneshot::channel();
     let server = tokio::spawn(async move {
         let (stream, _) = listener.accept().await.unwrap();
         let mut socket = tokio_tungstenite::accept_async(stream).await.unwrap();
         let unsolicited = tokio::time::timeout(Duration::from_millis(300), socket.next()).await;
-        shutdown.send(true).unwrap();
+        shutdown.send(Shutdown::Normal).unwrap();
         assert!(
             unsolicited.is_err(),
             "legacy MCP replayed its completed startup instead of waiting for a new directive"

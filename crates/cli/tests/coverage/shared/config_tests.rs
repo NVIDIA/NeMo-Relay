@@ -31,6 +31,71 @@ use crate::plugins::policy::{
 };
 
 #[test]
+fn daemon_idle_timeout_rejects_negative_and_unrepresentable_seconds() {
+    for value in ["-1", "\"30\"", "1.5", "9223372036854775807"] {
+        let document =
+            toml::from_str(&format!("[daemon]\nworker_idle_timeout_secs = {value}\n")).unwrap();
+        assert!(
+            validate_config_document(document).is_err(),
+            "value: {value}"
+        );
+    }
+}
+
+#[test]
+fn daemon_idle_timeout_layers_preserve_omission_and_explicit_zero() {
+    let mut resolved = ResolvedConfig::default();
+    assert_eq!(resolved.daemon_worker_idle_timeout_secs, 0);
+    for (document, expected) in [
+        ("[daemon]\nworker_idle_timeout_secs = 30\n", 30),
+        ("[daemon.logging]\nlevel = 'info'\n", 30),
+        ("[daemon]\nworker_idle_timeout_secs = 0\n", 0),
+    ] {
+        apply_file_config(&mut resolved, toml::from_str(document).unwrap()).unwrap();
+        assert_eq!(resolved.daemon_worker_idle_timeout_secs, expected);
+    }
+    let unknown = validate_shared_config_shape(
+        toml::from_str("[daemon]\nworker_idle_timeout_sec = 30\n[daemon.logging]\nlevel = 'info'\n[daemon.diagnostics]\nenabled = true\n")
+            .unwrap(),
+    )
+    .unwrap();
+    assert_eq!(unknown, ["daemon.worker_idle_timeout_sec"]);
+}
+
+#[test]
+fn daemon_idle_timeout_resolves_from_explicit_and_prepared_configuration() {
+    let temp = tempfile::tempdir().unwrap();
+    let xdg = temp.path().join("xdg");
+    std::fs::create_dir_all(&xdg).unwrap();
+    let _scope = PluginConfigDiscoveryScope::enter(temp.path(), &xdg);
+    let config = temp.path().join("config.toml");
+    std::fs::write(&config, "[daemon]\nworker_idle_timeout_secs = 30\n").unwrap();
+    let args = GatewayOverrides {
+        config: Some(config),
+        ..Default::default()
+    };
+    assert_eq!(
+        resolve_daemon_config(&args)
+            .unwrap()
+            .worker_idle_timeout_secs,
+        30
+    );
+    assert!(resolve_server_config(&args).is_ok());
+    let prepared =
+        std::sync::Arc::new(PreparedConfig::load_daemon(args.config.as_deref()).unwrap());
+    let prepared_args = GatewayOverrides {
+        prepared: Some(prepared),
+        ..args
+    };
+    assert_eq!(
+        resolve_daemon_config(&prepared_args)
+            .unwrap()
+            .worker_idle_timeout_secs,
+        30
+    );
+}
+
+#[test]
 fn response_deadlines_default_to_disabled_and_can_be_reset_to_zero() {
     let mut gateway = GatewayConfig::default();
     assert_eq!(gateway.response_timeout(), None);
@@ -5594,7 +5659,7 @@ max_hook_payload_bytes = 4096
         "[[plugins.dynamic]]\nmanifest = 'missing/relay-plugin.toml'\n",
     ] {
         std::fs::write(&plugins, contents).unwrap();
-        let resolved = resolve_daemon_config(&args).unwrap();
+        let resolved = resolve_daemon_config(&args).unwrap().gateway;
         assert_eq!(resolved.openai_base_url, "https://cli.example/v1");
         assert_eq!(resolved.anthropic_base_url, "https://env.example/anthropic");
         assert_eq!(

@@ -19,7 +19,17 @@ pub(super) struct Hub {
     // Fence callbacks and reconnects for one logical session without blocking other peers.
     gates: Mutex<HashMap<String, std::sync::Weak<tokio::sync::Mutex<()>>>>,
     route_gates: Mutex<HashMap<Fingerprint, std::sync::Weak<Mutex<()>>>>,
+    #[cfg(test)]
+    admission_gate: Mutex<Option<WorkerAdmissionGate>>,
 }
+
+#[cfg(test)]
+struct WorkerAdmissionGate {
+    worker_id: String,
+    entered: Arc<Notify>,
+    release: Arc<Notify>,
+}
+
 struct Peer {
     generation: String,
     sender: Option<mpsc::Sender<Message>>,
@@ -399,6 +409,10 @@ async fn run(state: Arc<DaemonState>, role: ComponentRole, local: bool, socket: 
                     &request.command,
                     Command::Acknowledge { .. } | Command::Challenge(_)
                 );
+                let worker_registration = role == ComponentRole::Worker && matches!(
+                    &request.command,
+                    Command::RegisterWorker(_) | Command::RecoverWorker(_)
+                );
                 let readiness = if let Command::Ready(payload) = &request.command {
                     Some(socket_ready(&state, role, id.as_deref(), &generation, payload).await)
                 } else {
@@ -412,56 +426,90 @@ async fn run(state: Arc<DaemonState>, role: ComponentRole, local: bool, socket: 
                 };
                 let _transaction = state.sockets.transaction(role, session_id).await;
                 if let Some(id) = &id && lock(&state.sockets.peers).get(&key(role, id)).is_none_or(|p| p.generation != generation) { break "connection_replaced"; }
-                let response = match readiness {
+                let mut response = match readiness {
                     Some(response) => response,
                     None => dispatch(&state, role, &mut id, &mut challenge, request.command).await,
                 };
                 let success = response.status().is_success();
+                #[cfg(test)]
+                if success && worker_registration {
+                    let gate = {
+                        let gate = lock(&state.sockets.admission_gate);
+                        gate.as_ref().filter(|gate| id.as_deref() == Some(gate.worker_id.as_str()))
+                            .map(|gate| (Arc::clone(&gate.entered), Arc::clone(&gate.release)))
+                    };
+                    if let Some((entered, release)) = gate {
+                        entered.notify_one();
+                        release.notified().await;
+                    }
+                }
+                let admission = if success && worker_registration {
+                    let Some(admission) = response.extensions().get::<WorkerAdmission>().cloned() else { break "worker_admission_missing" };
+                    Some(admission)
+                } else { None };
                 if success && !local_control_command && let Some(id) = &id {
-                    let mut peers = lock(&state.sockets.peers);
-                    let entry = peers.entry(key(role, id));
-                    use std::collections::hash_map::Entry;
-                    let mut connected = false;
-                    let mut reconnected = false;
-                    match entry {
-                        Entry::Vacant(entry) => {
-                            connected = true;
-                            entry.insert(Peer { generation: generation.clone(), sender: Some(send.clone()), cancel: cancel.clone(), disconnected: None, ready: false, acknowledgments: HashMap::new(), last_acknowledged: None, drain: None });
-                        }
-                        Entry::Occupied(mut entry) if entry.get().generation != generation => {
-                            reconnected = true;
-                            let peer = entry.get_mut();
-                            peer.cancel.cancel("connection_replaced");
-                            peer.generation = generation.clone(); peer.sender = Some(send.clone());
-                            peer.cancel = cancel.clone(); peer.disconnected = None; peer.ready = false;
-                            peer.acknowledgments.clear(); peer.last_acknowledged = None;
-                            if let Some((request_id, mut request, deadline)) = peer.drain.clone() {
-                                request.timeout_ms = Some(deadline.saturating_duration_since(tokio::time::Instant::now()).as_millis() as u64);
-                                Hub::emit(peer, Event::Drain { request_id, request });
+                    let state = Arc::clone(&state);
+                    let id = id.clone();
+                    let generation = generation.clone();
+                    let send = send.clone();
+                    let cancel = Arc::clone(&cancel);
+                    response = blocking_control(move || {
+                        let _publication = admission.as_ref().map(|_| lock(&state.worker_generation_publication));
+                        if let Some(admission) = &admission {
+                            let current = lock(&state.worker_sessions).get(&id).is_some_and(|session| {
+                                session.secret_digest.matches(&admission.secret_digest)
+                                    && session.generation_grant.generation_id == admission.generation_id
+                            });
+                            if !current {
+                                return control_message(StatusCode::UNAUTHORIZED, "worker admission was revoked before connection publication");
                             }
                         }
-                        _ => {}
-                    }
-                    drop(peers);
-                    if connected || reconnected {
-                        log_control_connected(role, id, reconnected);
-                    }
-                    if role == ComponentRole::Mcp {
-                        let fingerprint = {
-                            let mut sessions = lock(&state.mcp_sessions);
-                            sessions.get_mut(id).map(|session| {
-                                session.lease_expires_at_unix_ms = u64::MAX;
-                                session.fingerprint
-                            })
-                        };
-                        if let Some(fingerprint) = fingerprint {
-                            let gate = state.sockets.route_gate(fingerprint);
-                            let _route = lock(&gate);
-                            let session_id = McpSessionId::new(id.clone()).expect("validated session");
-                            if connected || reconnected { state.registry.mcp_connected(fingerprint, &session_id); }
-                            let _ = state.registry.renew_mcp(fingerprint, &session_id, u64::MAX);
+                        let mut peers = lock(&state.sockets.peers);
+                        let entry = peers.entry(key(role, &id));
+                        use std::collections::hash_map::Entry;
+                        let mut connected = false;
+                        let mut reconnected = false;
+                        match entry {
+                            Entry::Vacant(entry) => {
+                                connected = true;
+                                entry.insert(Peer { generation: generation.clone(), sender: Some(send.clone()), cancel: cancel.clone(), disconnected: None, ready: false, acknowledgments: HashMap::new(), last_acknowledged: None, drain: None });
+                            }
+                            Entry::Occupied(mut entry) if entry.get().generation != generation => {
+                                reconnected = true;
+                                let peer = entry.get_mut();
+                                peer.cancel.cancel("connection_replaced");
+                                peer.generation = generation.clone(); peer.sender = Some(send.clone());
+                                peer.cancel = cancel.clone(); peer.disconnected = None; peer.ready = false;
+                                peer.acknowledgments.clear(); peer.last_acknowledged = None;
+                                if let Some((request_id, mut request, deadline)) = peer.drain.clone() {
+                                    request.timeout_ms = Some(deadline.saturating_duration_since(tokio::time::Instant::now()).as_millis() as u64);
+                                    Hub::emit(peer, Event::Drain { request_id, request });
+                                }
+                            }
+                            _ => {}
                         }
-                    } else if let Some(session) = lock(&state.worker_sessions).get_mut(id) { session.lease_expires_at_unix_ms = u64::MAX; }
+                        drop(peers);
+                        if connected || reconnected {
+                            log_control_connected(role, &id, reconnected);
+                        }
+                        if role == ComponentRole::Mcp {
+                            let fingerprint = {
+                                let mut sessions = lock(&state.mcp_sessions);
+                                sessions.get_mut(&id).map(|session| {
+                                    session.lease_expires_at_unix_ms = u64::MAX;
+                                    session.fingerprint
+                                })
+                            };
+                            if let Some(fingerprint) = fingerprint {
+                                let gate = state.sockets.route_gate(fingerprint);
+                                let _route = lock(&gate);
+                                let session_id = McpSessionId::new(id.clone()).expect("validated session");
+                                if connected || reconnected { state.registry.mcp_connected(fingerprint, &session_id); }
+                                let _ = state.registry.renew_mcp(fingerprint, &session_id, u64::MAX);
+                            }
+                        } else if let Some(session) = lock(&state.worker_sessions).get_mut(&id) { session.lease_expires_at_unix_ms = u64::MAX; }
+                        response
+                    }).await;
                 }
                 let status = response.status().as_u16();
                 let Ok(bytes) = axum::body::to_bytes(response.into_body(), MAX_CONTROL_BODY_BYTES).await else { break "reply_body_failed" };
@@ -787,7 +835,33 @@ async fn disconnected(
                 let _publication = lock(&work.worker_generation_publication);
                 let gate = work.sockets.route_gate(fingerprint);
                 let _route = lock(&gate);
-                if let Some(activation_id) =
+                let retain_pending = lock(&work.mcp_sessions)
+                    .get(&disconnected_id)
+                    .is_some_and(|session| !session.released && session.idle_retention);
+                let retained = if retain_pending {
+                    work.registry.retain_disconnected_activation(
+                        fingerprint,
+                        &session_id,
+                        now_unix_ms().saturating_add(DRAIN_LIFETIME_MS),
+                    )
+                } else {
+                    None
+                };
+                if let Some((activation_id, action)) = retained {
+                    // Socket loss removes the route reference, not the recoverable
+                    // control session used by a reconnecting MCP.
+                    lock(&work.pending_directives).remove(&disconnected_id);
+                    handle_release_action(Arc::clone(&work), fingerprint, action);
+                    let fingerprint_text = fingerprint.to_string();
+                    log::info!(
+                        target: "nemo_relay.daemon",
+                        event = "worker_startup_retained",
+                        fingerprint = fingerprint_text.as_str(),
+                        mcp_session_id = disconnected_id.as_str(),
+                        activation_id = activation_id.as_str();
+                        "Worker startup retained after its launching MCP disconnected"
+                    );
+                } else if let Some(activation_id) =
                     work.registry.mcp_disconnected(fingerprint, &session_id)
                 {
                     revoke_activation(&work, &activation_id);
@@ -879,8 +953,15 @@ pub(super) async fn cleanup_worker_session(
     let work = state.clone();
     let fingerprint = session.fingerprint;
     let generation_id = session.generation_grant.generation_id;
+    let failed_activation = (!session.published).then(|| session.publication.clone());
     if let Err(error) = tokio::task::spawn_blocking(move || {
-        revoke_active_worker_generation(&work, fingerprint, &generation_id)
+        revoke_active_worker_generation(&work, fingerprint, &generation_id);
+        if let Some(publication @ WorkerPublication::Activation { .. }) = failed_activation {
+            // Once the launcher exits, a staged worker's control connection owns failure
+            // detection. Fence its exact activation before another client can reuse it.
+            let _publication = lock(&work.worker_generation_publication);
+            fail_worker_publication(&work, fingerprint, &publication);
+        }
     })
     .await
     {
