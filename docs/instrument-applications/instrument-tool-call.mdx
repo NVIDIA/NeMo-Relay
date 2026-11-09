@@ -35,6 +35,11 @@ your framework passes clients, sockets, streams, callbacks, or other opaque
 objects, use [Handle Non-Serializable Data](/integrate-into-frameworks/non-serializable-data)
 before you instrument the callback.
 
+JSON numbers must be finite. In Python, non-finite floats in tool arguments
+become `None` before middleware and the tool callback receive them. Validate
+the original arguments before calling Relay if you need to reject these values.
+Refer to [Non-Finite Numbers](/integrate-into-frameworks/non-serializable-data#non-finite-numbers).
+
 ## Integration Pattern
 
 Follow this sequence to keep framework work attached to the expected runtime context.
