@@ -3,6 +3,7 @@
 
 import {
   event,
+  info,
   llmCall,
   llmCallEnd,
   llmCallExecuteAsync,
@@ -155,13 +156,16 @@ declare const badMeta: BadMeta;
 declare const undefinedMeta: UndefinedMeta;
 declare const withMethod: WithMethod;
 declare const withUndefined: WithUndefined;
+declare const paramsOrList: SdkParams | string[];
 async function* chunks(): AsyncIterable<SdkChunk> {
   yield { id: '1', delta: { content: 'x' } };
 }
 
 const jsonRoundTrip: AssertEqual<JsonCompatible<JsonValue>, JsonValue> = true;
-const shapeRoundTrip: AssertEqual<LlmRequestShape extends LlmRequestCompatible<LlmRequestShape> ? true : false, true> =
-  true;
+const shapeRoundTrip: AssertEqual<
+  LlmRequestShape extends LlmRequestCompatible<LlmRequestShape> ? true : false,
+  true
+> = true;
 
 toolCall('interface', params);
 toolCall('json', json, null, null, record, json);
@@ -193,6 +197,8 @@ llmCall('headers', { headers, content: null });
 llmCall('instance', new LlmRequest({}, { x: 1 }));
 llmCall('factory', LlmRequest.from(headers, params));
 const built: LlmRequestShape = LlmRequest.from({}, params);
+info('fields', null, settings);
+info('json-fields', null, record);
 llmCall('extra-json', { headers: {}, content: null, extra: 1 });
 llmCall('shape', shape, null, null, markData, markData);
 llmCallEnd(llmCall('end', shape), sdk, markData);
@@ -219,8 +225,20 @@ llmCallExecuteAsync(
   ({ original }) => ({ headers: original.headers, content: params }),
   (response) => response,
 );
-llmStreamCallExecute('stream', { headers: {}, content: params }, () => chunks(), undefined, (): SdkResponse => sdk);
-llmStreamCallExecute('stream-json', shape, async () => chunks(), (chunk) => void chunk, async () => json);
+llmStreamCallExecute(
+  'stream',
+  { headers: {}, content: params },
+  () => chunks(),
+  undefined,
+  (): SdkResponse => sdk,
+);
+llmStreamCallExecute(
+  'stream-json',
+  shape,
+  async () => chunks(),
+  (chunk) => void chunk,
+  async () => json,
+);
 registerToolExecutionIntercept('outcome', 1, async (context, next) => ({
   result: await next(params),
   pendingMarks: [{ name: 'm', data: markData }],
@@ -235,7 +253,9 @@ registerLlmRequestIntercept('interface', 1, false, ({ request }) => ({
   pendingMarks: [{ name: 'm' }],
 }));
 registerLlmRequestIntercept('typed', 1, false, async () => requestOutcome);
-registerLlmExecutionIntercept('next', 1, (request, context, next) => next({ headers: request.headers, content: params }));
+registerLlmExecutionIntercept('next', 1, (request, context, next) =>
+  next({ headers: request.headers, content: params }),
+);
 registerLlmExecutionIntercept('interface', 1, async () => sdk);
 registerLlmSanitizeRequestGuardrail('shape', 1, () => shape);
 registerLlmSanitizeRequestGuardrail('nullable', 1, async () => nullableShape);
@@ -251,7 +271,12 @@ registerEventMetadataInjector('interface', 1, () => meta);
 event('data', null, markData, markData);
 metric('typed', measurements);
 metric('extra', [{ name: 'm', kind: MetricKind.Counter, valueType: MetricValueType.U64, value: 1, extra: () => 1 }]);
-metric('interface', [{ name: 'm', kind: MetricKind.Counter, valueType: MetricValueType.U64, value: 1, attributes: markData }], null, markData);
+metric(
+  'interface',
+  [{ name: 'm', kind: MetricKind.Counter, valueType: MetricValueType.U64, value: 1, attributes: markData }],
+  null,
+  markData,
+);
 const scoped: Promise<SdkResponse> = withScope('scope', ScopeType.Agent, async (): Promise<SdkResponse> => sdk);
 const voided: Promise<null> = withScope('void', ScopeType.Agent, async () => {});
 const fromJson: Promise<Json> = withScope('json', ScopeType.Agent, () => json, null, null, markData, markData, params);
@@ -310,6 +335,7 @@ function forwardMeasurements<T extends MetricMeasurement[]>(value: T): void {
   metric('forward', value);
 }
 plugin.ComponentSpec('example.add-tag', {});
+plugin.ComponentSpec('example.add-tag', sdkOrNull === null ? settings : sdk);
 const openKind: AssertEqual<typeof open.kind, string> = true;
 
 // @ts-expect-error methods are not JSON
@@ -385,16 +411,24 @@ registerLlmSanitizeRequestGuardrail('map', 1, () => ({ headers: {}, content: new
 registerLlmSanitizeResponseGuardrail('map', 1, () => new Map());
 // @ts-expect-error measurements must be measurement records
 metric('records', [{ name: 'm' }]);
-// @ts-expect-error measurement attributes must be JSON
-metric('attributes', [{ name: 'm', kind: MetricKind.Counter, valueType: MetricValueType.U64, value: 1, attributes: new Map() }]);
+metric('attributes', [
+  // @ts-expect-error measurement attributes must be JSON
+  { name: 'm', kind: MetricKind.Counter, valueType: MetricValueType.U64, value: 1, attributes: new Map() },
+]);
 // @ts-expect-error a scope callback must return JSON
 withScope('map', ScopeType.Agent, () => new Map());
 // @ts-expect-error stream chunks must be JSON
 llmStreamCallExecute('map', shape, async function* () {
   yield new Map();
 });
-// @ts-expect-error the stream aggregate must be JSON
-llmStreamCallExecute('aggregate', shape, () => chunks(), undefined, () => new Map());
+llmStreamCallExecute(
+  'aggregate',
+  shape,
+  () => chunks(),
+  undefined,
+  // @ts-expect-error the stream aggregate must be JSON
+  () => new Map(),
+);
 // @ts-expect-error codec outputs must be JSON
 new OpenAIChatCodec().decodeResponse(new Map());
 // @ts-expect-error a known kind rejects unknown fields
@@ -409,6 +443,14 @@ plugin.ComponentSpec('example.add-tag', () => 1);
 LlmRequest.from('x', null);
 // @ts-expect-error content must be JSON
 LlmRequest.from({}, new Map());
+// @ts-expect-error a union with an array member is not a JSON object
+LlmRequest.from(paramsOrList, null);
+// @ts-expect-error a union with an array member is not a JSON object
+plugin.ComponentSpec('example.add-tag', paramsOrList);
+// @ts-expect-error log fields must be a JSON object
+info('array-fields', null, [1]);
+// @ts-expect-error log fields must be a JSON object
+info('string-fields', null, 'x');
 
 export const checked = [
   jsonRoundTrip,
