@@ -496,7 +496,7 @@ jobs:
         working-directory: package-smoke
         run: |
           set -euo pipefail
-          typescript_version="$(node -p "require('../package.json').devDependencies.typescript")"
+          typescript_version="$(node -p "require('../package-lock.json').packages['node_modules/typescript'].version")"
           npm install --ignore-scripts --no-save "typescript@${typescript_version}"
           cp ../crates/node/tests/public_entry_points_fixture.ts .
           for resolution in "CommonJS Node10" "NodeNext NodeNext" "ESNext Bundler"; do
