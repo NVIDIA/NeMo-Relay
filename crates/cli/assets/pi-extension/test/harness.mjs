@@ -120,6 +120,7 @@ export function load(extension, options = {}) {
     mode: 'interactive',
     hasUI: true,
     sessionManager: { getSessionId: () => 'sess-under-test' },
+    modelRegistry: { getAll: () => [], getRegisteredNativeProvider: () => undefined },
     ...options.ctx,
   };
   return async (name, event = {}) => {

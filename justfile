@@ -601,11 +601,7 @@ set_node_package_versions() {
     # `nemo-relay-pi` is private and not published, so this bump changes nothing today. It is here
     # so the version cannot already be stale on the day that changes: a workspace member absent
     # from this list drifts silently, with no lockfile mismatch and no CI failure to catch it.
-    #
-    # The manifest is written at its real path rather than through `integrations/pi`'s symlink to
-    # it. A checkout without symlink support leaves a text stub there, and writing through that
-    # would overwrite the link target's path with a manifest instead of bumping anything.
-    set_npm_package_version crates/cli/assets/pi-extension/package.json package-lock.json "$version" integrations/pi
+    set_npm_package_version crates/cli/assets/pi-extension/package.json package-lock.json "$version" crates/cli/assets/pi-extension
 }
 
 set_example_package_versions() {
@@ -1389,7 +1385,7 @@ clean:
         integrations/openclaw/.test-dist \
         integrations/openclaw/dist \
         integrations/openclaw/node_modules \
-        integrations/pi/node_modules \
+        crates/cli/assets/pi-extension/node_modules \
         node_modules \
         docs/_build/ \
         docs/reference/api/**/_generated/ \
@@ -1984,8 +1980,6 @@ test-pi:
     # client and loads no native addon, so nothing here depends on it.
     npm run typecheck --workspace=nemo-relay-pi
     npm test --workspace=nemo-relay-pi
-    node_modules/.bin/tsc -p crates/cli/src/daemon/managed/pi_extension/tsconfig.json --noEmit
-    node --test crates/cli/tests/managed_pi_extension_tests.mjs
 
 # --set [output_dir=<path>] [ci=true|false]
 test-all: test-rust test-python test-python-langchain test-python-google-adk test-go test-node test-openclaw test-pi

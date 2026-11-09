@@ -9,12 +9,5 @@
     "extensions": [
       "./index.ts"
     ]
-  },
-  "scripts": {
-    "typecheck": "tsc -p tsconfig.json"
-  },
-  "devDependencies": {
-    "@types/node": "24.12.4",
-    "typescript": "5.9.3"
   }
 }

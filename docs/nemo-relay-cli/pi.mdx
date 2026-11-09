@@ -38,15 +38,15 @@ Delivery failures continue to use the configured fail-open or fail-closed policy
 
 <Warning>
 pi ships breaking changes through *minor* releases and has no major-release
-channel. The integration is verified against pi `v0.84.0`. Re-verify hook
+channel. The integration is verified against pi `v1.5.0`. Re-verify hook
 signatures after a pi upgrade; a silent shape change appears as missing spans,
 not as an error.
 </Warning>
 
 ## Requirements
 
-Install pi 0.84.x, and confirm the NeMo Relay extension is reachable. Anything
-below 0.84.0 is rejected; anything above 0.84.x is accepted but reported as
+Install pi 1.5.x, and confirm the NeMo Relay extension is reachable. Anything
+below 1.5.0 is rejected; anything above 1.5.x is accepted but reported as
 **unverified**, because pi can change a hook shape in a minor release and the
 symptom is missing spans rather than an error. `doctor` reports it in its output;
 the launcher records it as a warning-level log line, so `nemo-relay pi` shows it
@@ -130,10 +130,9 @@ cp -r crates/cli/assets/pi-extension ~/.pi/agent/extensions/nemo-relay
 pi install /path/to/NeMo-Relay/crates/cli/assets/pi-extension
 ```
 
-Both copy from `crates/cli/assets/pi-extension`, which is where the extension's
-source lives and the only self-contained copy of it. `integrations/pi` holds the
-extension's README, TypeScript configuration and test suite, and reaches the
-source through symlinks that a copy may or may not follow.
+The file drop copies `crates/cli/assets/pi-extension`. `pi install <path>`
+records the path in pi's settings and loads the extension from the checkout, so
+the checkout must stay in place.
 
 Relay resolves either route too — or `NEMO_RELAY_PI_EXTENSION`, if you set it —
 and passes what it finds to `-e`, which loads first and is never trust-gated. It
@@ -255,7 +254,7 @@ Run a long-lived gateway and point pi at it by hand:
 ```bash
 nemo-relay --bind 127.0.0.1:4040 &
 NEMO_RELAY_PI_GATEWAY_URL=http://127.0.0.1:4040 \
-  pi -e integrations/pi/index.ts
+  pi -e crates/cli/assets/pi-extension/index.ts
 ```
 
 | Variable | Default | Meaning |
@@ -317,7 +316,7 @@ configured in `plugins.toml`, a single-tool turn produces a `pi` session scope,
 one `pi-turn` scope with `turn_source: turn_start`, and the tool span nested
 under it.
 
-If turn scopes are missing entirely, the extension is not loading. pi 0.84 prints
+If turn scopes are missing entirely, the extension is not loading. pi prints
 the load failure on standard error and exits before the session starts, so read
 stderr first — the failure is reported, not silent. Running pi with `-e` pointing
 at the entry point directly isolates it.

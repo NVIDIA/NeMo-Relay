@@ -773,7 +773,15 @@ async fn daemon_execute_creates_an_immutable_managed_bundle() {
         "pi/extension-v1/index.ts",
         "pi/extension-v1/managed-config.json",
         "pi/extension-v1/package.json",
-        "pi/extension-v1/tsconfig.json",
+        "pi/extension-v1/src/argument-transform.ts",
+        "pi/extension-v1/src/extension.ts",
+        "pi/extension-v1/src/gateway.ts",
+        "pi/extension-v1/src/provider-redirect.ts",
+        "pi/extension-v1/src/tool-result.ts",
+        "pi/extension-v1/src/user-bash.ts",
+        "pi/extension-v1/src/managed/deployment.ts",
+        "pi/extension-v1/src/managed/mcp-lease.ts",
+        "pi/extension-v1/src/managed/transport.ts",
     ] {
         let metadata = std::fs::metadata(output.join(relative)).unwrap();
         assert!(metadata.is_file(), "missing {relative}");

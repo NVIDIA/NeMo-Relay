@@ -291,8 +291,8 @@ repos:
         name: node prettier check
         entry: node scripts/lint/prettier-precommit.mjs
         language: system
-        files: '^crates/node/.*\.(?:[cm]?js|[mc]?ts|tsx)$'
-        pass_filenames: false
+        files: '^(?:crates/node|crates/cli/assets/pi-extension)/.*\.(?:[cm]?js|[mc]?ts|tsx)$'
+        pass_filenames: true
 
       - id: node-docstrings-check
         name: node docstrings check

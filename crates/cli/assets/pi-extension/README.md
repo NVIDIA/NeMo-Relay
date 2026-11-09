@@ -24,11 +24,11 @@ The existing fail-open or fail-closed policy still handles delivery faults.
 
 ## Status
 
-Proof of concept. Verified against pi `v0.84.0`. pi ships breaking changes
-through *minor* releases and has no major-release channel, so re-verify hook
-signatures before relying on them — `nemo-relay doctor pi` and the launcher both
-report a minor above 0.84.x as unverified rather than supported, and accept it
-anyway, because untested is not the same as broken.
+Verified against pi `v1.5.0`. pi ships breaking changes through *minor*
+releases and has no major-release channel, so re-verify hook signatures before
+relying on them — `nemo-relay doctor pi` and the launcher both report a minor
+above 1.5.x as unverified rather than supported, and accept it anyway, because
+untested is not the same as broken.
 
 **Model traffic is redirected conditionally.** pi has no base-URL flag and no
 generic environment override — it resolves `baseUrl` per model from a generated
@@ -46,7 +46,7 @@ Start the gateway, then load the extension:
 ```bash
 nemo-relay --bind 127.0.0.1:4040 &
 NEMO_RELAY_PI_GATEWAY_URL=http://127.0.0.1:4040 \
-  pi -e integrations/pi/index.ts
+  pi -e crates/cli/assets/pi-extension/index.ts
 ```
 
 `pi -e` is trust-ungated, loads before discovery, and survives
@@ -75,10 +75,9 @@ cp -r crates/cli/assets/pi-extension ~/.pi/agent/extensions/nemo-relay
 pi install /path/to/NeMo-Relay/crates/cli/assets/pi-extension
 ```
 
-Both copy from `crates/cli/assets/pi-extension` rather than from this directory.
-That is where the extension's source actually lives -- see [Layout](#layout) --
-and it is the only self-contained copy: this directory reaches the source through
-symlinks, which a copy may or may not follow depending on the platform's `cp`.
+The file drop copies this directory. `pi install <path>` records the path in
+pi's settings and loads the extension from the checkout, so the checkout must
+stay in place.
 
 Install **one** copy. pi de-duplicates its extension set by path rather than by
 package, so two copies are two packages: both register hooks and every event is
@@ -104,7 +103,7 @@ doing so would load code pi itself declined to trust.
 ⚠️ **A git URL does not work, and fails silently.** pi has no
 subdirectory syntax for a git source: it clones the repository *root*, then looks
 there for a `pi` key in `package.json` or a top-level `extensions/` directory.
-This extension lives at `integrations/pi`, and the repository root has neither —
+This extension lives at `crates/cli/assets/pi-extension`, and the repository root has neither —
 so `pi install https://github.com/NVIDIA/NeMo-Relay` reports success, prints an
 install path, and loads no extension. Worse than nothing: the clone's root
 `skills/` *is* picked up, so you get NeMo Relay's Codex and Claude skills in pi
@@ -264,10 +263,10 @@ which pi records exactly as if the command had run:
 `NEMO_RELAY_PI_FAIL` governs this path too: a gateway that cannot be reached
 allows the command by default, and refuses it under `closed` with a reason that
 says explicitly that it is an infrastructure fault rather than a judgment — and
-which of four it was: no answer, no answer *in time*, an answer that was not a
-decision, or the gate failing before the gateway was asked. A timeout is not an
-unreachable gateway, and neither is a 413, so the reader is not sent to debug a
-socket that is working.
+which of five it was: no answer, no answer *in time*, an answer that was not a
+decision, configuration that could not be loaded, or the gate failing before the
+gateway was asked. A timeout is not an unreachable gateway, and neither is a
+413, so the reader is not sent to debug a socket that is working.
 
 **A rewritten command is refused, not run.** pi's `user_bash` result can replace
 the *result* or the execution backend, but never the command — both call sites
@@ -358,6 +357,10 @@ header carries a single endpoint.
 The decision is re-evaluated on every `model_select`, so switching to a model the
 gateway does not front stops redirecting rather than silently misrouting.
 
+The override is provider-wide, and pi's extension API lists only chat models. A
+classifier or image model under a redirected provider moves with it, and the
+gateway has no route for it. Keep such models under a provider of their own.
+
 32 of pi's 39 built-in providers speak an API the gateway serves; the seven
 above do not. Count from `builtinProviders()` rather than from the 38 files in
 `providers/data/`: Radius is a purely dynamic provider with no static catalog
@@ -397,7 +400,9 @@ pi re-runs the factory on `/reload` with `moduleCache: false`, while the session
 id stays the same. `turn_seq` therefore restarts at 0 and can repeat within one
 session — it orders turns within a runtime, not strictly within a session.
 Rebuilding it would mean replaying the session or moving the counter into the
-gateway; neither is worth it here.
+gateway; neither is worth it here. A provider already pointed at the gateway is
+left as registered after `/reload`, so its session header is refreshed only when
+pi restarts.
 
 **Concurrent tools.** pi preflights sibling calls sequentially then executes them
 concurrently, so `tool_execution_end` arrives out of submission order. All
@@ -416,7 +421,7 @@ per-call state is keyed by `toolCallId`, the only correlator pi provides.
 | `session_compact` | compaction | The completed compaction, which the runtime treats as proof the context was rebuilt |
 | `tool_call` | tool start, and the gate | The only blocking hook. Carries `attempt_index`, `turn_seq` |
 | `tool_execution_end` | tool end | For **every** outcome, including blocked. Carries `attempt_index`, `turn_seq` |
-| `tool_execution_start` | *not forwarded* | Registered, but only to remember a tool name for the matching end: it fires before validation and for calls that never execute |
+| `tool_execution_start` | *not registered* | Fires before validation and for calls that never execute, so it carries nothing the gate or the span needs |
 | `user_bash` | tool start, and the second gate | The bang prefix, which never reaches the tool registry. Gated under the tool name `user_bash` — see [Inline Shell](#inline-shell) |
 | *(synthesized)* `user_bash_end` | tool end | pi reports no completion for inline shell, so the extension closes the span itself |
 
@@ -436,7 +441,7 @@ omits image and other non-text parts. **Tool-result text is truncated at 2000
 characters** before it is forwarded. The overflow is replaced by a
 `... [truncated N chars]` suffix. The gateway therefore records a bounded text
 projection, not the complete result — a large file read or a long command output
-is cut. Raise `MAX_CONTENT_CHARS` in `index.ts` if a policy needs to see more.
+is cut. Raise `MAX_CONTENT_CHARS` in `src/tool-result.ts` if a policy needs to see more.
 
 **Tool arguments are not truncated, and must not be.** The `tool_call` post is
 the gated one: a guardrail decides on exactly those arguments, and a request
@@ -514,26 +519,24 @@ prefix, so the gate records the decision, not the command. See
 ## Development
 
 ```bash
-npm run typecheck --prefix integrations/pi
-node --test integrations/pi/test/*.test.mjs
+npm run typecheck --workspace=nemo-relay-pi
+npm test --workspace=nemo-relay-pi
 ```
 
 ### Layout
 
-The extension's source lives in `crates/cli/assets/pi-extension`, and
-`package.json`, `index.ts` and `src/` here are symlinks to it. There is one copy
-of every file, edited from either path.
+The package sits under the CLI crate so the published `nemo-relay-cli` crate can
+embed it.
 
-It lives under the CLI crate for a packaging reason rather than a design one:
-`nemo-relay install pi` embeds the extension with `include_str!` so installing
-needs no checkout, `nemo-relay-cli` is published to crates.io, and Cargo packages
-only files below the crate root. A copy kept in step by a sync step was the
-alternative, and it duplicated all seven files.
+- `index.ts`: standalone entry point, written by `nemo-relay install pi`.
+- `managed.ts`: managed entry point, shipped by the daemon bundle as
+  `pi/extension-v1/index.ts`.
+- `src/`: hook handlers and decisions shared by both entry points.
+- `src/standalone/`: forwards hooks through `nemo-relay hook-forward pi`.
+- `src/managed/`: posts hooks to the daemon and runs the MCP lease.
+- `managed/`: README, manifest and configuration template for the bundle.
 
-What is real here is what has no runtime role: this README, `tsconfig.json` and
-`test/`. One consequence is worth knowing before you copy this directory
-anywhere -- it is not self-contained, so an install copies from
-`crates/cli/assets/pi-extension` instead.
+Types come from `@earendil-works/pi-coding-agent`, a development dependency.
 
 The gateway half of the contract is covered in Rust by
 `pi_tool_call_hook_rejects_when_conditional_guardrail_blocks`,

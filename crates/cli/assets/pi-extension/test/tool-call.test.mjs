@@ -5,14 +5,14 @@
  * Drives the `tool_call` gate end to end.
  *
  * Every component this handler composes was already pinned -- the 403 shape in
- * `gateway-client.test.mjs`, the transform decision matrix in
+ * `hook-forward.test.mjs`, the transform decision matrix in
  * `argument-transform.test.mjs`, the gateway's half in Rust -- and the handler
  * that wires them together had no test at all. That is an easy gap to miss in
  * review precisely because the coverage either side of it looks complete, and
  * it is the primary governance seam: for a model-invoked tool, this is the only
  * pre-execution decision point that sees arguments.
  *
- * Run: node --test integrations/pi/test/*.test.mjs
+ * Run: npm test --workspace=nemo-relay-pi
  */
 import assert from 'node:assert/strict';
 import { after, before, beforeEach, describe, it } from 'node:test';

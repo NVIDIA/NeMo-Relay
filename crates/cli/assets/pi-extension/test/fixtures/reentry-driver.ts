@@ -17,20 +17,15 @@
  * Load it alongside the Relay extension:
  *   pi -e <relay-extension> -e <this file>
  */
-import type { ExtensionAPI } from '../../src/pi-hook-types.ts';
+import type { ExtensionAPI } from '@earendil-works/pi-coding-agent';
 
-/** pi's `sendUserMessage`, which the mirrored type subset does not declare. */
-type ReentryCapableApi = ExtensionAPI & {
-  sendUserMessage(text: string, options?: { deliverAs?: 'steer' | 'followUp' }): void;
-};
-
-export default function reentryDriver(pi: ReentryCapableApi): void {
+export default function reentryDriver(pi: ExtensionAPI): void {
   let fired = false;
 
   pi.on('agent_end', async () => {
     // Fire once only: queueing on every agent_end would re-enter forever.
     if (fired) return;
     fired = true;
-    pi.sendUserMessage('Now reply with exactly the word: done', { deliverAs: 'followUp' });
+    await pi.sendUserMessage('Now reply with exactly the word: done', { deliverAs: 'followUp' });
   });
 }

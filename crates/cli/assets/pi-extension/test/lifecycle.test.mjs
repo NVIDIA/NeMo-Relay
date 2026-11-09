@@ -4,16 +4,17 @@
 /**
  * Drives the extension's lifecycle handlers and asserts what reaches the gateway.
  *
- * `gateway-client.test.mjs` covers the wire contract in isolation; nothing
+ * `hook-forward.test.mjs` covers the wire contract in isolation; nothing
  * exercised the handlers themselves, so the identity fields the gateway cannot
  * infer -- `attempt_index` and `turn_seq` -- were implemented and demonstrated
  * once in a live trace but never pinned. These tests pin them, plus the
  * shutdown-reason behavior.
  *
- * Run: node --test integrations/pi/test/*.test.mjs
+ * Run: npm test --workspace=nemo-relay-pi
  */
 import assert from 'node:assert/strict';
-import { after, before, beforeEach, describe, it } from 'node:test';
+import { createServer } from 'node:http';
+import { after, before, beforeEach, describe, it, mock } from 'node:test';
 
 import { listen, load as loadExtension, named, stubGateway } from './harness.mjs';
 
@@ -111,15 +112,7 @@ describe('lifecycle identity the gateway cannot infer', () => {
 
     assert.deepEqual(
       ctx.posts.map((p) => p.hook_event_name),
-      [
-        'session_start',
-        'agent_start',
-        'turn_start',
-        'turn_end',
-        'agent_end',
-        'agent_settled',
-        'session_shutdown',
-      ],
+      ['session_start', 'agent_start', 'turn_start', 'turn_end', 'agent_end', 'agent_settled', 'session_shutdown'],
     );
   });
 
@@ -321,11 +314,20 @@ describe('compaction', () => {
     const fire = load();
     await fire('session_start', { reason: 'startup' });
     assert.equal(
-      await fire('session_before_compact', { reason: 'manual', willRetry: false }),
+      await fire('session_before_compact', {
+        reason: 'manual',
+        willRetry: false,
+        preparation: { tokensBefore: 10, isSplitTurn: false },
+      }),
       undefined,
     );
     assert.equal(
-      await fire('session_compact', { reason: 'manual', willRetry: false, fromExtension: false }),
+      await fire('session_compact', {
+        reason: 'manual',
+        willRetry: false,
+        fromExtension: false,
+        compactionEntry: { tokensBefore: 10 },
+      }),
       undefined,
     );
     await fire('session_shutdown', { reason: 'quit' });
@@ -336,7 +338,11 @@ describe('compaction', () => {
   it('carries the retry marker that agent_end lacks', async () => {
     const fire = load();
     await fire('session_start', { reason: 'startup' });
-    await fire('session_before_compact', { reason: 'overflow', willRetry: true });
+    await fire('session_before_compact', {
+      reason: 'overflow',
+      willRetry: true,
+      preparation: { tokensBefore: 10, isSplitTurn: false },
+    });
     await fire('session_shutdown', { reason: 'quit' });
     assert.equal(named(ctx.posts, 'session_before_compact')[0].will_retry, true);
   });
@@ -370,23 +376,29 @@ describe('concurrent tools in one turn', () => {
     await fire('agent_start');
     await fire('turn_start', { turnIndex: 0, timestamp: 1 });
 
-    await fire('tool_execution_start', { toolCallId: 'a', toolName: 'read', args: {} });
-    await fire('tool_execution_start', { toolCallId: 'b', toolName: 'bash', args: {} });
     // Both gates in flight at once, which is what the serial queue has to survive.
     await Promise.all([
       fire('tool_call', { toolCallId: 'a', toolName: 'read', input: { path: 'a.txt' } }),
       fire('tool_call', { toolCallId: 'b', toolName: 'bash', input: { command: 'ls' } }),
     ]);
     // Closing in the reverse order, which is the case that motivates the id keying.
-    await fire('tool_execution_end', { toolCallId: 'b', toolName: '', result: 'ok', isError: false });
-    await fire('tool_execution_end', { toolCallId: 'a', toolName: '', result: 'ok', isError: false });
+    await fire('tool_execution_end', {
+      toolCallId: 'b',
+      toolName: 'bash',
+      result: 'ok',
+      isError: false,
+    });
+    await fire('tool_execution_end', {
+      toolCallId: 'a',
+      toolName: 'read',
+      result: 'ok',
+      isError: false,
+    });
     await fire('turn_end', { turnIndex: 0 });
     await fire('session_shutdown', { reason: 'quit' });
 
     const ends = named(ctx.posts, 'tool_execution_end');
     assert.equal(ends.length, 2);
-    // `toolName` was empty on both ends, so each had to be recovered from the start that
-    // named it -- and recovered from the *right* one.
     const byId = Object.fromEntries(ends.map((post) => [post.tool_call_id, post.tool_name]));
     assert.deepEqual(byId, { a: 'read', b: 'bash' });
     assert.ok(
@@ -452,10 +464,9 @@ describe('unpaired tool boundaries', () => {
   it('closes a blocked call, which never reaches tool_result', async () => {
     const fire = load();
     await fire('session_start', { reason: 'startup' });
-    await fire('tool_execution_start', { toolCallId: 'blocked', toolName: 'read', args: {} });
     await fire('tool_execution_end', {
       toolCallId: 'blocked',
-      toolName: '',
+      toolName: 'read',
       result: 'Tool failed.',
       isError: true,
     });
@@ -464,19 +475,7 @@ describe('unpaired tool boundaries', () => {
     const [end] = named(ctx.posts, 'tool_execution_end');
     assert.ok(end, 'a blocked call must still close');
     assert.equal(end.status, 'error');
-    assert.equal(end.tool_name, 'read', 'the name comes from the start, which did fire');
-  });
-
-  it('falls back to a placeholder when no start ever named the tool', async () => {
-    const fire = load();
-    await fire('session_start', { reason: 'startup' });
-    await fire('tool_execution_end', { toolCallId: 'orphan', toolName: '', result: null, isError: false });
-    await fire('session_shutdown', { reason: 'quit' });
-
-    // Dropping the post would lose the span entirely; the gateway synthesizes the missing
-    // start, and a named-but-unknown tool is more useful than nothing.
-    const [end] = named(ctx.posts, 'tool_execution_end');
-    assert.equal(end.tool_name, 'unknown');
+    assert.equal(end.tool_name, 'read');
   });
 });
 
@@ -512,7 +511,12 @@ describe('compaction-driven re-entry', () => {
       preparation: { tokensBefore: 120_000, isSplitTurn: false },
     });
     await fire('agent_end', { messages: [] });
-    await fire('session_compact', { reason: 'overflow', willRetry: true, fromExtension: false });
+    await fire('session_compact', {
+      reason: 'overflow',
+      willRetry: true,
+      fromExtension: false,
+      compactionEntry: { tokensBefore: 120_000 },
+    });
     await fire('agent_start');
     await fire('turn_start', { turnIndex: 0, timestamp: 2 });
     await fire('turn_end', { turnIndex: 0 });
@@ -522,9 +526,18 @@ describe('compaction-driven re-entry', () => {
 
     const starts = named(ctx.posts, 'turn_start');
     // pi says turn 0 both times; only turn_seq can tell them apart.
-    assert.deepEqual(starts.map((post) => post.turn_index), [0, 0]);
-    assert.deepEqual(starts.map((post) => post.turn_seq), [0, 1]);
-    assert.deepEqual(starts.map((post) => post.attempt_index), [0, 1]);
+    assert.deepEqual(
+      starts.map((post) => post.turn_index),
+      [0, 0],
+    );
+    assert.deepEqual(
+      starts.map((post) => post.turn_seq),
+      [0, 1],
+    );
+    assert.deepEqual(
+      starts.map((post) => post.attempt_index),
+      [0, 1],
+    );
 
     const [announced] = named(ctx.posts, 'session_before_compact');
     assert.equal(announced.will_retry, true);
@@ -590,10 +603,7 @@ describe('what an interrupted session loses', () => {
     assert.ok(atInterrupt.includes('turn_start'));
     assert.ok(atInterrupt.includes('tool_call'));
     assert.ok(atInterrupt.includes('turn_end'));
-    assert.ok(
-      !atInterrupt.includes('session_shutdown'),
-      'the whole point: an interrupted session never closes',
-    );
+    assert.ok(!atInterrupt.includes('session_shutdown'), 'the whole point: an interrupted session never closes');
   });
 });
 
@@ -642,7 +652,7 @@ describe('the session join key on redirected providers', () => {
       hasUI: true,
       sessionManager: { getSessionId: () => current },
       model,
-      modelRegistry: { getAll: () => [model] },
+      modelRegistry: { getAll: () => [model], getRegisteredNativeProvider: () => undefined },
     };
     const fire = async (name, event = {}) => {
       for (const handler of handlers.get(name) ?? []) {
@@ -764,5 +774,190 @@ describe('the session join key on redirected providers', () => {
     await fire('session_start', { reason: 'startup' });
     await fire('model_select', { model });
     assert.equal(registrations.length, 1, 'the redirect must stay idempotent');
+  });
+});
+
+describe('redirect bookkeeping', () => {
+  let ctx;
+  let gateway;
+
+  before(async () => {
+    ctx = stubGateway();
+    gateway = await listen(ctx.server);
+    process.env.NEMO_RELAY_PI_GATEWAY_URL = gateway;
+    process.env.NEMO_RELAY_PROXY_CREDENTIAL = 'nrp_testtoken';
+  });
+
+  after(() => {
+    ctx.server.close();
+    delete process.env.NEMO_RELAY_PI_GATEWAY_URL;
+    delete process.env.NEMO_RELAY_PROXY_CREDENTIAL;
+  });
+
+  beforeEach(() => {
+    ctx.posts.length = 0;
+  });
+
+  function loadWithCatalog() {
+    const registrations = [];
+    const handlers = new Map();
+    let catalog = [];
+    let selected;
+    const nativeProviders = new Set();
+    extension({
+      on(name, handler) {
+        if (!handlers.has(name)) handlers.set(name, []);
+        handlers.get(name).push(handler);
+      },
+      registerProvider: (name, config) => registrations.push({ name, config }),
+    });
+    const context = {
+      cwd: '/work',
+      mode: 'interactive',
+      hasUI: true,
+      sessionManager: { getSessionId: () => 'sess-under-test' },
+      get model() {
+        return selected;
+      },
+      modelRegistry: {
+        getAll: () => catalog,
+        getRegisteredNativeProvider: (name) => (nativeProviders.has(name) ? { id: name } : undefined),
+      },
+    };
+    const fire = async (name, event = {}) => {
+      for (const handler of handlers.get(name) ?? []) {
+        await handler({ type: name, ...event }, context);
+      }
+    };
+    return {
+      fire,
+      registrations,
+      select: (models, model) => {
+        catalog = models;
+        selected = model;
+      },
+      markNative: (name) => nativeProviders.add(name),
+    };
+  }
+
+  const unserviceable = { id: 'g', api: 'google-generative-ai', provider: 'custom', baseUrl: 'https://one.example' };
+  const serviceable = { id: 'c', api: 'openai-completions', provider: 'custom', baseUrl: 'https://one.example/v1' };
+
+  it('reads the live catalog until a redirect is applied', async () => {
+    const { fire, registrations, select } = loadWithCatalog();
+    select([unserviceable], unserviceable);
+    await fire('session_start', { reason: 'startup' });
+    assert.equal(registrations.length, 0, 'an unserviceable API is skipped');
+
+    select([serviceable], serviceable);
+    await fire('model_select', { model: serviceable });
+    assert.equal(registrations.length, 1, 'the refreshed catalog decides, not the first one seen');
+    assert.equal(registrations[0].config.headers['x-nemo-relay-upstream-base-url'], 'https://one.example/v1');
+    await fire('session_shutdown', { reason: 'quit' });
+  });
+
+  it('never overlays a natively registered provider', async () => {
+    const { fire, registrations, select, markNative } = loadWithCatalog();
+    markNative('custom');
+    select([serviceable], serviceable);
+    await fire('session_start', { reason: 'startup' });
+    await fire('session_shutdown', { reason: 'quit' });
+    assert.equal(registrations.length, 0);
+    const [mark] = named(ctx.posts, 'model_redirect');
+    assert.equal(mark.outcome, 'skip');
+    assert.equal(mark.code, 'native-provider');
+  });
+
+  it('leaves a model that already points at the gateway alone after a reload', async () => {
+    const { fire, registrations, select } = loadWithCatalog();
+    const redirected = { ...serviceable, baseUrl: gateway };
+    select([redirected], redirected);
+    await fire('session_start', { reason: 'startup' });
+    assert.equal(registrations.length, 0, 'naming the gateway as its own upstream would loop');
+    await fire('session_shutdown', { reason: 'quit' });
+    const [mark] = named(ctx.posts, 'model_redirect');
+    assert.equal(mark, undefined, 'not notable: the provider is already redirected');
+  });
+});
+
+describe('failed observation posts', () => {
+  let ctx;
+
+  before(async () => {
+    ctx = stubGateway('turn_start');
+    process.env.NEMO_RELAY_PI_GATEWAY_URL = await listen(ctx.server);
+  });
+
+  after(() => {
+    ctx.server.close();
+    delete process.env.NEMO_RELAY_PI_GATEWAY_URL;
+  });
+
+  beforeEach(() => {
+    ctx.reset();
+  });
+
+  it('are reported on stderr without changing the queue or any verdict', async () => {
+    ctx.replyWith({ status: 503, payload: { error: { message: 'daemon draining' } } });
+    const errors = [];
+    const spy = mock.method(console, 'error', (line) => errors.push(String(line)));
+    try {
+      const fire = load();
+      await fire('session_start', { reason: 'startup' });
+      await fire('turn_start', { turnIndex: 0, timestamp: 1 });
+      const verdict = await fire('tool_call', { toolCallId: 'c1', toolName: 'read', input: { path: 'a.txt' } });
+      await fire('session_shutdown', { reason: 'quit' });
+      assert.equal(verdict, undefined, 'the gate still decides on its own reply');
+      assert.equal(errors.length, 1);
+      assert.match(errors[0], /turn_start hook was not accepted: gateway returned HTTP 503/);
+      assert.deepEqual(
+        ctx.posts.map((post) => post.hook_event_name),
+        ['session_start', 'turn_start', 'tool_call', 'session_shutdown'],
+      );
+    } finally {
+      spy.mock.restore();
+    }
+  });
+});
+
+describe('standalone startup', () => {
+  it('returns from session_start without waiting for the gateway to answer', async () => {
+    const held = [];
+    let arrived;
+    const firstArrival = new Promise((resolve) => {
+      arrived = resolve;
+    });
+    const server = createServer((req, res) => {
+      let body = '';
+      req.on('data', (chunk) => {
+        body += chunk;
+      });
+      req.on('end', () => {
+        if (JSON.parse(body).hook_event_name !== 'session_start') {
+          res.end('{}');
+          return;
+        }
+        held.push(res);
+        arrived();
+      });
+    });
+    await new Promise((resolve) => server.listen(0, '127.0.0.1', resolve));
+    process.env.NEMO_RELAY_PI_GATEWAY_URL = `http://127.0.0.1:${server.address().port}`;
+    process.env.NEMO_RELAY_PI_TIMEOUT_MS = '60000';
+    try {
+      const fire = load();
+      await fire('session_start', { reason: 'startup' });
+      const returnedBeforeAnswer = held.length === 0;
+      await firstArrival;
+      assert.ok(returnedBeforeAnswer, 'session_start returned while its post was still unanswered');
+      assert.equal(held.length, 1);
+      for (const res of held.splice(0)) res.end('{}');
+      await fire('session_shutdown', { reason: 'quit' });
+    } finally {
+      for (const res of held) res.end('{}');
+      await new Promise((resolve) => server.close(resolve));
+      delete process.env.NEMO_RELAY_PI_GATEWAY_URL;
+      delete process.env.NEMO_RELAY_PI_TIMEOUT_MS;
+    }
   });
 });

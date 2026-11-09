@@ -8,6 +8,12 @@ edition.workspace = true
 license.workspace = true
 repository.workspace = true
 description = "Coding-agent gateway CLI for NeMo Relay observability."
+exclude = [
+    "assets/pi-extension/README.md",
+    "assets/pi-extension/node_modules",
+    "assets/pi-extension/test",
+    "assets/pi-extension/tsconfig.json",
+]
 
 [[bin]]
 name = "nemo-relay"

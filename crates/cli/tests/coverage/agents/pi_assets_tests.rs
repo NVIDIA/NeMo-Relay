@@ -3,97 +3,61 @@
 
 use std::path::{Path, PathBuf};
 
+use super::super::DESCRIPTOR;
+use super::super::alignment::UPSTREAM_BASE_URL_HEADER;
+use super::super::launch::{PI_ANTHROPIC_UPSTREAM_ENV, PI_GATEWAY_URL_ENV, PI_OPENAI_UPSTREAM_ENV};
 use super::*;
+use crate::provider_auth::{TRANSPARENT_PROXY_CREDENTIAL_ENV, TRANSPARENT_PROXY_CREDENTIAL_HEADER};
 
-/// The extension directory inside this crate: the one real copy of every file pi loads.
-///
-/// Resolvable from the published tarball as well as from a workspace checkout, because it
-/// lives under the crate root -- which is the whole reason the files are here.
 fn assets_root() -> PathBuf {
     Path::new(env!("CARGO_MANIFEST_DIR"))
         .join("assets")
         .join("pi-extension")
 }
 
-/// `integrations/pi`, or `None` when there is no workspace to look at.
-///
-/// Absent is not a failure. The published crate is built from a tarball containing the
-/// crate root and nothing above it, so there is no `integrations/pi` to resolve. It is
-/// still a sound discriminator: no registry checkout has one two levels above the manifest.
-fn workspace_view() -> Option<PathBuf> {
-    let root = Path::new(env!("CARGO_MANIFEST_DIR"))
-        .parent()?
-        .parent()?
-        .join("integrations")
-        .join("pi");
-    root.is_dir().then_some(root)
-}
-
-/// The files pi loads, discovered rather than listed, so a new one shows up here.
-fn extension_files_on_disk(root: &Path) -> Vec<String> {
-    let mut found = vec!["package.json".to_string(), "index.ts".to_string()];
-    let mut sources: Vec<String> = std::fs::read_dir(root.join("src"))
-        .unwrap_or_else(|error| panic!("{}/src should be readable: {error}", root.display()))
+fn typescript_files(root: &Path, directory: &str) -> Vec<String> {
+    let mut files: Vec<String> = std::fs::read_dir(root.join(directory))
+        .unwrap_or_else(|error| {
+            panic!("{}/{directory} should be readable: {error}", root.display())
+        })
         .flatten()
+        .filter(|entry| entry.file_type().is_ok_and(|kind| kind.is_file()))
         .map(|entry| entry.file_name().to_string_lossy().into_owned())
         .filter(|name| name.ends_with(".ts"))
-        .map(|name| format!("src/{name}"))
+        .map(|name| format!("{directory}/{name}"))
         .collect();
-    sources.sort();
-    found.extend(sources);
-    found
+    files.sort();
+    files
 }
 
-/// A source file nobody added to `EXTENSION_FILES` is a file `install pi` silently omits.
-///
-/// Runs without the workspace too, since it reads the crate's own assets -- so it holds for
-/// the published crate, where an omission would be undiagnosable.
+fn embedded_text() -> String {
+    EXTENSION_FILES
+        .iter()
+        .map(|file| file.contents)
+        .collect::<String>()
+}
+
 #[test]
 fn every_file_pi_loads_is_embedded() {
-    let embedded: Vec<&str> = EXTENSION_FILES.iter().map(|file| file.path).collect();
+    let root = assets_root();
+    let mut expected = vec!["index.ts".to_string(), "package.json".to_string()];
+    expected.extend(typescript_files(&root, "src"));
+    expected.extend(typescript_files(&root, "src/standalone"));
+    expected.sort();
+
+    let mut embedded: Vec<String> = EXTENSION_FILES
+        .iter()
+        .map(|file| file.path.to_string())
+        .collect();
+    embedded.sort();
 
     assert_eq!(
-        embedded,
-        extension_files_on_disk(&assets_root()),
+        embedded, expected,
         "crates/cli/assets/pi-extension no longer matches EXTENSION_FILES in \
          crates/cli/src/agents/pi/assets.rs; add or remove the matching entries"
     );
 }
 
-/// `integrations/pi` is a symlinked view of this crate's assets, and this catches a
-/// checkout where that did not survive.
-///
-/// The failure mode is specific and worth naming: git on Windows without `core.symlinks`
-/// writes a symlink as a *text file containing the target path*. The crate is unaffected --
-/// `include_str!` reads the real file either way -- so nothing in the Rust build notices,
-/// and the damage surfaces much later as `just test-pi` importing a path string. Failing
-/// here says what actually went wrong.
-#[test]
-fn the_workspace_view_resolves_to_the_embedded_files() {
-    let Some(root) = workspace_view() else {
-        return;
-    };
-
-    for file in EXTENSION_FILES {
-        let view = root.join(file.path);
-        let actual = std::fs::read_to_string(&view)
-            .unwrap_or_else(|error| panic!("{} should be readable: {error}", view.display()));
-        assert_eq!(
-            file.contents, actual,
-            "integrations/pi/{} does not resolve to crates/cli/assets/pi-extension/{}. It \
-             should be a symlink to it; a checkout that does not support symlinks writes \
-             the target path as file contents instead",
-            file.path, file.path
-        );
-    }
-}
-
-/// The version an install records has to be the version it installs.
-///
-/// Not theoretical: a merge on this branch once left `integrations/pi` a release behind
-/// every other package, with no conflict to show for it, because the version recipe could
-/// not touch a file that did not exist on the other side. This runs without the repository
-/// too -- it reads the vendored manifest, so it holds for the published crate as well.
 #[test]
 fn vendored_manifest_declares_the_version_an_install_records() {
     let manifest = EXTENSION_FILES
@@ -111,7 +75,6 @@ fn vendored_manifest_declares_the_version_an_install_records() {
     );
 }
 
-/// pi finds the extension by its manifest name, so the vendored copy has to keep it.
 #[test]
 fn vendored_manifest_keeps_the_name_discovery_matches_on() {
     let manifest = EXTENSION_FILES
@@ -133,4 +96,49 @@ fn vendored_manifest_keeps_the_name_discovery_matches_on() {
         Some(["./index.ts".into()].as_slice()),
         "pi resolves the entry point through this manifest key"
     );
+}
+
+#[test]
+fn vendored_manifest_pins_the_pi_release_the_descriptor_verifies() {
+    let manifest = EXTENSION_FILES
+        .iter()
+        .find(|file| file.path == "package.json")
+        .expect("the vendored extension must carry its manifest");
+    let parsed: serde_json::Value = serde_json::from_str(manifest.contents).unwrap();
+    let pinned = parsed["devDependencies"]["@earendil-works/pi-coding-agent"]
+        .as_str()
+        .expect("the extension types come from a pinned pi release");
+    let (major, minor) = DESCRIPTOR
+        .verified_through
+        .expect("pi declares the release it was verified against");
+
+    assert!(
+        pinned.starts_with(&format!("{major}.{minor}.")),
+        "the extension compiles against pi {pinned} but the descriptor verifies through \
+         {major}.{minor}; move both together"
+    );
+}
+
+#[test]
+fn embedded_sources_speak_the_launcher_and_gateway_contract() {
+    let text = embedded_text();
+    for name in [
+        PI_GATEWAY_URL_ENV,
+        PI_OPENAI_UPSTREAM_ENV,
+        PI_ANTHROPIC_UPSTREAM_ENV,
+        TRANSPARENT_PROXY_CREDENTIAL_ENV,
+        TRANSPARENT_PROXY_CREDENTIAL_HEADER,
+        UPSTREAM_BASE_URL_HEADER,
+    ] {
+        assert!(
+            text.contains(name),
+            "the embedded extension never names {name}"
+        );
+    }
+    for event in DESCRIPTOR.hook_events {
+        assert!(
+            text.contains(&format!("'{event}'")),
+            "the embedded extension never posts {event}, but the descriptor lists it"
+        );
+    }
 }
