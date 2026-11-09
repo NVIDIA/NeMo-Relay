@@ -58,6 +58,31 @@
       "default": "./dist/diagnostics.js"
     }
   },
+  "typesVersions": {
+    "*": {
+      "typed": [
+        "dist/typed.d.ts"
+      ],
+      "plugin": [
+        "dist/plugin.d.ts"
+      ],
+      "adaptive": [
+        "dist/adaptive.d.ts"
+      ],
+      "observability": [
+        "dist/observability.d.ts"
+      ],
+      "pii_redaction": [
+        "dist/pii_redaction.d.ts"
+      ],
+      "model_pricing": [
+        "dist/model_pricing.d.ts"
+      ],
+      "diagnostics": [
+        "dist/diagnostics.d.ts"
+      ]
+    }
+  },
   "engines": {
     "node": ">=24.13.1"
   },

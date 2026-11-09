@@ -43,34 +43,34 @@ describe('Type constants', () => {
     assert.equal(ScopeType.Unknown, 10);
   });
 
+  const tsc = fileURLToPath(new URL('../../../node_modules/typescript/bin/tsc', import.meta.url));
+  const typecheck = (args) =>
+    execFileSync(process.execPath, [tsc, '--noEmit', '--strict', '--target', 'ES2022', ...args], {
+      cwd: fileURLToPath(new URL('..', import.meta.url)),
+      stdio: 'pipe',
+    });
+
   it('type-checks the public API fixtures', () => {
-    execFileSync(
-      process.execPath,
-      [
-        fileURLToPath(new URL('../../../node_modules/typescript/bin/tsc', import.meta.url)),
-        '--noEmit',
-        '--strict',
-        '--target',
-        'ES2022',
-        '--module',
-        'NodeNext',
-        '--moduleResolution',
-        'NodeNext',
-        'tests/public_observability_api_fixture.ts',
-        'tests/public_event_metadata_api_fixture.ts',
-        'tests/public_resource_metrics_api_fixture.ts',
-        'tests/public_diagnostics_api_fixture.ts',
-        'tests/public_pii_redaction_api_fixture.ts',
-        'tests/public_model_pricing_api_fixture.ts',
-        'tests/public_json_api_fixture.ts',
-        'tests/public_plugin_api_fixture.ts',
-        'tests/public_json_compatible_api_fixture.ts',
-      ],
-      {
-        cwd: fileURLToPath(new URL('..', import.meta.url)),
-        stdio: 'pipe',
-      },
-    );
+    typecheck([
+      '--module',
+      'NodeNext',
+      '--moduleResolution',
+      'NodeNext',
+      'tests/public_observability_api_fixture.ts',
+      'tests/public_event_metadata_api_fixture.ts',
+      'tests/public_resource_metrics_api_fixture.ts',
+      'tests/public_diagnostics_api_fixture.ts',
+      'tests/public_pii_redaction_api_fixture.ts',
+      'tests/public_model_pricing_api_fixture.ts',
+      'tests/public_json_api_fixture.ts',
+      'tests/public_plugin_api_fixture.ts',
+      'tests/public_json_compatible_api_fixture.ts',
+      'tests/public_entry_points_fixture.ts',
+    ]);
+  });
+
+  it('resolves every entry point under node10 module resolution', () => {
+    typecheck(['--module', 'CommonJS', '--moduleResolution', 'Node10', 'tests/public_entry_points_fixture.ts']);
   });
 });
 
