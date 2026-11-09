@@ -259,8 +259,8 @@ with a static API key. Claude Code needs a credential before it starts. When
 Relay launches Claude Code with a sign-in or an API key helper as the Anthropic
 credential, and the process inherits neither `ANTHROPIC_API_KEY` nor
 `ANTHROPIC_AUTH_TOKEN`, Relay sets a placeholder `ANTHROPIC_API_KEY` and
-replaces it. In every other case, for example a client that you start yourself,
-set `ANTHROPIC_API_KEY` to any placeholder value.
+replaces it. When you start Claude Code yourself on a route where Relay
+supplies this credential, set `ANTHROPIC_API_KEY` to any placeholder value.
 
 Without a sign-in, or when the provider rejects the refresh token, the gateway
 stops the request with HTTP 401 and an error that names `nemo-relay auth login`. A temporary
