@@ -98,7 +98,6 @@ struct PendingChallenge {
 
 struct Activation {
     fingerprint: Fingerprint,
-    launch_owner: String,
     secret_digest: TokenDigest,
     deadline_unix_ms: u64,
     consumed: bool,
@@ -118,8 +117,6 @@ struct McpControlSession {
     worker_network: WorkerNetworkHint,
     released: bool,
     idle_retention: bool,
-    startup_cleanup: bool,
-    cleanup_activation: Option<String>,
 }
 
 struct WorkerControlSession {
@@ -785,14 +782,6 @@ fn register_mcp_blocking(
                         .descriptor
                         .capabilities
                         .contains(crate::daemon::common::control::WORKER_IDLE_RETENTION_CAPABILITY),
-                startup_cleanup: transcript
-                    .initiator
-                    .capabilities
-                    .contains(crate::daemon::common::control::WORKER_STARTUP_CLEANUP_CAPABILITY)
-                    && state.descriptor.capabilities.contains(
-                        crate::daemon::common::control::WORKER_STARTUP_CLEANUP_CAPABILITY,
-                    ),
-                cleanup_activation: None,
             },
         );
     }
@@ -800,12 +789,7 @@ fn register_mcp_blocking(
     if !reuse_session {
         lock(&state.pending_directives).remove(session_id.as_str());
     }
-    remember_activation(
-        &state,
-        transcript.initiator_fingerprint,
-        session_id.as_str(),
-        &directive,
-    );
+    remember_activation(&state, transcript.initiator_fingerprint, &directive);
     let directive = state
         .sockets
         .directive(transcript.initiator_fingerprint, directive);
@@ -943,7 +927,7 @@ fn cancel_activation_blocking(
         &authenticated.session_id,
         &request.payload.activation_id,
     ) {
-        Ok(mut outcome) => {
+        Ok(outcome) => {
             if outcome == crate::daemon::common::control::ActivationCancellation::Cancelled {
                 revoke_activation(&state, &request.payload.activation_id);
                 cancel_staged_activation(
@@ -951,17 +935,6 @@ fn cancel_activation_blocking(
                     &request.payload.activation_id,
                     "activation_cancelled",
                 );
-            }
-            if outcome != crate::daemon::common::control::ActivationCancellation::Published
-                && lock(&state.mcp_sessions)
-                    .get(authenticated.session_id.as_str())
-                    .is_some_and(|session| {
-                        session.startup_cleanup
-                            && session.cleanup_activation.as_deref()
-                                == Some(&request.payload.activation_id)
-                    })
-            {
-                outcome = crate::daemon::common::control::ActivationCancellation::CleanupPending;
             }
             state.sockets.changed.notify_waiters();
             Json(outcome).into_response()
@@ -1138,30 +1111,6 @@ fn register_worker_blocking(
         lock(&state.worker_sessions).remove(&worker_id);
         fail_worker_publication(&state, activation_fingerprint, &publication);
         return registry_error(error);
-    }
-    if response.status().is_success() {
-        let startup_cleanup = request
-            .proof
-            .transcript
-            .initiator
-            .capabilities
-            .contains(crate::daemon::common::control::WORKER_STARTUP_CLEANUP_CAPABILITY)
-            && state
-                .descriptor
-                .capabilities
-                .contains(crate::daemon::common::control::WORKER_STARTUP_CLEANUP_CAPABILITY);
-        let launch_owner = lock(&state.activations)
-            .get(&request.activation_id)
-            .map(|activation| activation.launch_owner.clone());
-        if startup_cleanup
-            && let Some(launch_owner) = launch_owner
-            && let Some(owner) = lock(&state.mcp_sessions).get_mut(&launch_owner)
-            && owner.startup_cleanup
-        {
-            // Admission transfers this exact launch's cleanup custody. Retain the
-            // receipt after worker admission or control state has been retired.
-            owner.cleanup_activation = Some(request.activation_id.clone());
-        }
     }
     if !response.status().is_success() {
         let fingerprint = activation_fingerprint.to_string();
@@ -2731,12 +2680,7 @@ fn fresh_launch(worker_network: WorkerNetworkHint) -> Result<WorkerLaunch, CliEr
     })
 }
 
-fn remember_activation(
-    state: &DaemonState,
-    fingerprint: Fingerprint,
-    launch_owner: &str,
-    directive: &BrokerDirective,
-) {
+fn remember_activation(state: &DaemonState, fingerprint: Fingerprint, directive: &BrokerDirective) {
     if let BrokerDirective::LaunchWorker {
         activation_id,
         activation_token,
@@ -2751,7 +2695,6 @@ fn remember_activation(
             .entry(activation_id.clone())
             .or_insert_with(|| Activation {
                 fingerprint,
-                launch_owner: launch_owner.to_owned(),
                 secret_digest: TokenDigest::from_token(activation_token.expose().as_bytes()),
                 deadline_unix_ms: *deadline_unix_ms,
                 consumed: false,
@@ -3047,7 +2990,7 @@ fn nominate_relaunch(state: &Arc<DaemonState>, fingerprint: Fingerprint, session
             return;
         }
     };
-    remember_activation(state, fingerprint, session_id.as_str(), &directive);
+    remember_activation(state, fingerprint, &directive);
     lock(&state.pending_directives).insert(session_id.as_str().to_owned(), directive);
     state.sockets.changed.notify_waiters();
     log::info!(

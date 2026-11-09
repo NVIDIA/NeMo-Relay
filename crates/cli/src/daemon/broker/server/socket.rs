@@ -848,8 +848,8 @@ async fn disconnected(
                     None
                 };
                 if let Some((activation_id, action)) = retained {
-                    // Socket loss removes this route reference, not the recoverable
-                    // control session or its exact worker-cleanup receipt.
+                    // Socket loss removes the route reference, not the recoverable
+                    // control session used by a reconnecting MCP.
                     lock(&work.pending_directives).remove(&disconnected_id);
                     handle_release_action(Arc::clone(&work), fingerprint, action);
                     let fingerprint_text = fingerprint.to_string();

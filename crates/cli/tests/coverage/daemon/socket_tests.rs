@@ -154,7 +154,7 @@ async fn wait_disconnected(state: &DaemonState, role: ComponentRole, id: &str) {
 }
 
 #[tokio::test]
-async fn pending_owner_disconnect_and_reconnect_preserve_worker_cleanup_custody() {
+async fn pending_owner_disconnect_and_reconnect_preserve_session_identity() {
     use crate::daemon::common::control::{
         ActivationCancellation, CancelActivationPayload, WorkerBootstrap,
     };
@@ -215,10 +215,6 @@ async fn pending_owner_disconnect_and_reconnect_preserve_worker_cleanup_custody(
             let sessions = lock(&state.mcp_sessions);
             let session = &sessions["retained-owner"];
             assert!(!session.released);
-            assert_eq!(
-                session.cleanup_activation.as_deref(),
-                Some(bootstrap.activation_id.as_str())
-            );
         }
         assert!(lock(&state.activations).contains_key(&bootstrap.activation_id));
         assert!(lock(&state.worker_sessions).contains_key("retained-worker"));
@@ -259,7 +255,7 @@ async fn pending_owner_disconnect_and_reconnect_preserve_worker_cleanup_custody(
             ))
             .await
             .unwrap();
-        assert_eq!(cancellation, ActivationCancellation::CleanupPending);
+        assert_eq!(cancellation, ActivationCancellation::Cancelled);
         assert!(!lock(&state.activations).contains_key(&bootstrap.activation_id));
         assert!(!lock(&state.worker_sessions).contains_key("retained-worker"));
         task.abort();
@@ -785,7 +781,7 @@ async fn activation_cancellation_before_socket_publication_rejects_admission() {
         .await
         .expect("revoked admission must terminate")
         .unwrap();
-    assert_eq!(cancellation, ActivationCancellation::CleanupPending);
+    assert_eq!(cancellation, ActivationCancellation::Cancelled);
     let error = result.expect_err("revoked admission must not return a grant");
     // With no admitted peer, the next socket-loop iteration aborts its writer.
     // That can close the connection before its queued rejection is flushed.
@@ -969,15 +965,6 @@ async fn activation_cancellation_fences_an_in_progress_readiness_probe() {
     tokio::time::timeout(Duration::from_secs(2), probe_started.notified())
         .await
         .unwrap();
-    {
-        let sessions = lock(&state.mcp_sessions);
-        let session = sessions.get("cancelling-owner").unwrap();
-        assert!(session.startup_cleanup);
-        assert_eq!(
-            session.cleanup_activation.as_deref(),
-            Some(bootstrap.activation_id.as_str())
-        );
-    }
     let payload = CancelActivationPayload {
         activation_id: bootstrap.activation_id.clone(),
     };
@@ -1008,7 +995,7 @@ async fn activation_cancellation_fences_an_in_progress_readiness_probe() {
         ))
         .await
         .unwrap();
-    assert_eq!(cancellation, ActivationCancellation::CleanupPending);
+    assert_eq!(cancellation, ActivationCancellation::Cancelled);
     assert!(!lock(&state.activations).contains_key(&bootstrap.activation_id));
     assert!(lock(&state.worker_sessions).is_empty());
     probe_release.notify_one();

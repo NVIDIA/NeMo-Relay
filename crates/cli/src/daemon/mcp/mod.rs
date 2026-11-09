@@ -46,7 +46,6 @@ struct McpSession {
     sequence: u64,
     publication_cleanup: bool,
     idle_retention: bool,
-    startup_cleanup: bool,
     retained_activation_id: Option<String>,
 }
 
@@ -55,7 +54,6 @@ struct Registration {
     session_token: SensitiveString,
     publication_cleanup: bool,
     idle_retention: bool,
-    startup_cleanup: bool,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -106,7 +104,6 @@ pub(crate) async fn run(options: Options) -> Result<(), CliError> {
         sequence: 0,
         publication_cleanup: registration.publication_cleanup,
         idle_retention: registration.idle_retention,
-        startup_cleanup: registration.startup_cleanup,
         retained_activation_id: None,
     };
     let initial = registration.directive;
@@ -278,12 +275,6 @@ async fn register_once(
             .responder
             .capabilities
             .contains(super::common::control::WORKER_IDLE_RETENTION_CAPABILITY),
-        startup_cleanup: handshake
-            .proof
-            .transcript
-            .responder
-            .capabilities
-            .contains(super::common::control::WORKER_STARTUP_CLEANUP_CAPABILITY),
     })
 }
 
@@ -510,13 +501,6 @@ async fn cleanup_pending_launch(
             Ok(Ok(super::common::control::ActivationCancellation::Published)) => {
                 child.published = true
             }
-            Ok(Ok(super::common::control::ActivationCancellation::CleanupPending))
-                if lease.startup_cleanup =>
-            {
-                // The authenticated broker delegated cleanup to the registered worker.
-                // Killing that process here would interrupt its plugin rollback.
-                child.publication_uncertain = true;
-            }
             Ok(Ok(_)) => child.child.kill().await.map_err(CliError::Io)?,
             _ => {
                 // The broker may already own this child. Its grant/control deadline owns cleanup.
@@ -736,7 +720,6 @@ fn apply_registration(lease: &mut McpSession, registration: &Registration) {
     lease.sequence = 0;
     lease.publication_cleanup = registration.publication_cleanup;
     lease.idle_retention = registration.idle_retention;
-    lease.startup_cleanup = registration.startup_cleanup;
 }
 
 async fn launch_worker(

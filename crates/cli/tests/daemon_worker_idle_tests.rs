@@ -5,7 +5,6 @@
 
 #![cfg(all(feature = "__skip-implicit-config", any(unix, windows)))]
 
-use std::collections::BTreeSet;
 use std::io::{BufRead, BufReader, Read, Write};
 use std::path::{Path, PathBuf};
 use std::process::{Child, Command, ExitStatus, Stdio};
@@ -19,15 +18,8 @@ use sha2::{Digest, Sha256};
 use sysinfo::{Pid, ProcessRefreshKind, ProcessStatus, ProcessesToUpdate, System};
 
 const WAIT: Duration = Duration::from_secs(15);
-// Observe the worker beyond its 120-second cleanup grace, before either fixture
-// gate's 300-second safety bound. This is not a production timeout override.
-const CLEANUP_WAIT: Duration = Duration::from_secs(180);
-
-#[derive(Clone, Copy)]
-enum StartupGate {
-    Worker,
-    Native,
-}
+// Allow the existing request-drain interval plus test observation slack.
+const EXIT_WAIT: Duration = Duration::from_secs(150);
 
 #[derive(Clone, Default)]
 struct Capture(Arc<Mutex<CapturedOutput>>);
@@ -180,11 +172,10 @@ struct IdleDaemon {
     requests: Arc<Mutex<Vec<Value>>>,
     descendants: Vec<ProcessIdentity>,
     mcp_logs: Mutex<Vec<Capture>>,
-    startup_gate: StartupGate,
 }
 
 impl IdleDaemon {
-    async fn start(idle_seconds: u64, startup_gate: StartupGate) -> Self {
+    async fn start(idle_seconds: u64) -> Self {
         use axum::{Json, Router, routing::post};
 
         let root = tempfile::tempdir().unwrap();
@@ -246,67 +237,12 @@ impl IdleDaemon {
             DynamicPluginManifest::load_from_path(&manifest).unwrap();
         let mut record = plugin_manifest.into_record(Some(manifest_ref)).unwrap();
         record.spec.enabled = true;
-        let mut records = vec![record];
-        let mut dynamic = vec![json!({"manifest": manifest, "config": {
-            "event_metadata_injector_only": true
+        let records = vec![record];
+        let dynamic = vec![json!({"manifest": manifest, "config": {
+            "event_metadata_injector_only": true,
+            "register_gate_directory": root.path().join("gate")
         }})];
-        let mut policies = json!({"fixture_worker": {"attestation": "integrity_only"}});
-        match startup_gate {
-            StartupGate::Worker => {
-                dynamic[0]["config"]["register_gate_directory"] = json!(root.path().join("gate"));
-            }
-            StartupGate::Native => {
-                let native_fixture = std::env::var_os("NEMO_RELAY_TEST_NATIVE_PLUGIN")
-                    .map(PathBuf::from)
-                    .unwrap_or_else(|| {
-                        Path::new(env!("CARGO_MANIFEST_DIR"))
-                            .join("../../target/test-plugin-fixtures/debug")
-                            .join(format!(
-                                "{}nemo_relay_plugin_fixture{}",
-                                std::env::consts::DLL_PREFIX,
-                                std::env::consts::DLL_SUFFIX
-                            ))
-                    });
-                assert!(
-                    native_fixture.is_file(),
-                    "build the native fixture with just build-test-plugin-fixtures: {}",
-                    native_fixture.display()
-                );
-                let directory = root.path().join("native-plugin");
-                std::fs::create_dir_all(&directory).unwrap();
-                let library = directory.join(native_fixture.file_name().unwrap());
-                std::fs::copy(native_fixture, &library).unwrap();
-                let native_manifest = directory.join("relay-plugin.toml");
-                write_toml(
-                    &native_manifest,
-                    json!({
-                        "manifest_version": 1,
-                        "plugin": {"id": "fixture_native", "kind": "rust_dynamic"},
-                        "compat": {"relay": format!("={}", env!("CARGO_PKG_VERSION")), "native_api": "1"},
-                        "defaults": {"enabled": false},
-                        "capabilities": {"items": ["plugin_native"]},
-                        "source": {"artifact": library},
-                        "integrity": {"sha256": fixture_digest(&library)},
-                        "load": {"library": library, "symbol": "nemo_relay_fixture_native_plugin"}
-                    }),
-                );
-                let (manifest, manifest_ref) =
-                    DynamicPluginManifest::load_from_path(&native_manifest).unwrap();
-                let mut record = manifest.into_record(Some(manifest_ref)).unwrap();
-                record.spec.enabled = true;
-                records.insert(0, record);
-                policies["fixture_native"] = json!({"attestation": "integrity_only"});
-                // Worker children are prepared before components activate. Put
-                // native registration first, so its gate holds a live child
-                // without entering the worker's cancellable Register RPC.
-                dynamic.insert(
-                    0,
-                    json!({"manifest": native_manifest, "config": {
-                        "register_gate_directory": root.path().join("gate")
-                    }}),
-                );
-            }
-        }
+        let policies = json!({"fixture_worker": {"attestation": "integrity_only"}});
         std::fs::write(
             root.path()
                 .join("user/.config/nemo-relay/.dynamic-plugins.json"),
@@ -380,7 +316,6 @@ impl IdleDaemon {
             requests,
             descendants: Vec::new(),
             mcp_logs: Mutex::new(Vec::new()),
-            startup_gate,
         };
         let deadline = Instant::now() + WAIT;
         loop {
@@ -460,37 +395,12 @@ impl IdleDaemon {
                 .and_then(|bytes| serde_json::from_slice::<Value>(&bytes).ok())
         })
         .await;
-        let gate_pid = Pid::from_u32(marker["pid"].as_u64().unwrap().try_into().unwrap());
-        let plugin_pid = match self.startup_gate {
-            StartupGate::Worker => gate_pid,
-            StartupGate::Native => {
-                wait_until("prepared worker plugin PID", || {
-                    self.mcp_logs
-                        .lock()
-                        .unwrap()
-                        .iter()
-                        .flat_map(|capture| capture.events("worker_started"))
-                        .find(|event| event["fields"]["plugin_id"] == "fixture_worker")
-                        .map(|event| {
-                            Pid::from_u32(
-                                event["fields"]["pid"].as_u64().unwrap().try_into().unwrap(),
-                            )
-                        })
-                })
-                .await
-            }
-        };
+        let plugin_pid = Pid::from_u32(marker["pid"].as_u64().unwrap().try_into().unwrap());
         let system = processes(&[plugin_pid]);
         let plugin = system
             .process(plugin_pid)
             .expect("entered plugin must still exist");
         let worker_pid = plugin.parent().expect("worker plugin parent");
-        if matches!(self.startup_gate, StartupGate::Native) {
-            assert_eq!(
-                worker_pid, gate_pid,
-                "prepared plugin belongs to the gated worker"
-            );
-        }
         let worker_system = processes(&[worker_pid]);
         let worker = worker_system
             .process(worker_pid)
@@ -509,22 +419,6 @@ impl IdleDaemon {
 
     fn release_gate(&self) {
         std::fs::write(self.root.path().join("gate/release"), []).unwrap();
-    }
-
-    async fn sessions_closed(&self, expected: usize) {
-        wait_until("all normal MCP releases", || {
-            let ids = |name| {
-                self.logs
-                    .events(name)
-                    .into_iter()
-                    .map(|row| row["fields"]["mcp_session_id"].as_str().unwrap().to_owned())
-                    .collect::<BTreeSet<_>>()
-            };
-            let added = ids("mcp_added");
-            let removed = ids("mcp_removed");
-            (added.len() == expected && added == removed).then_some(())
-        })
-        .await;
     }
 
     async fn statuses(&self) -> Vec<Value> {
@@ -566,7 +460,7 @@ impl IdleDaemon {
     async fn descendants_exited(&self) {
         wait_until_deadline(
             "task-owned worker and plugin exit",
-            Instant::now() + CLEANUP_WAIT,
+            Instant::now() + EXIT_WAIT,
             || {
                 self.descendants
                     .iter()
@@ -575,34 +469,6 @@ impl IdleDaemon {
             },
         )
         .await;
-    }
-
-    async fn assert_cancelled_startup_exits(&self) {
-        let [plugin, worker] = self.descendants.as_slice() else {
-            panic!("expected the task-owned plugin and its managed worker");
-        };
-        // Keep Register blocked: cancellation must stop the plugin without
-        // requiring its callback to finish. Drop releases the gate on failure.
-        let release = self.root.path().join("gate/release");
-        assert!(!release.exists(), "registration gate must remain held");
-        let deadline = Instant::now() + CLEANUP_WAIT;
-        let worker_exit = format!("cancelled managed worker {} exit", worker.pid);
-        wait_until_deadline(&worker_exit, deadline, || (!worker.present()).then_some(())).await;
-        assert!(self.statuses().await.is_empty());
-        assert!(self.logs.events("worker_added").is_empty());
-
-        // Keep descendant cleanup as a separate acceptance check, after the
-        // cancellation assertions, so its failure does not hide their result.
-        let plugin_exit = format!(
-            "plugin {} exit (worker {} exited; worker status empty)",
-            plugin.pid, worker.pid
-        );
-        wait_until_deadline(&plugin_exit, deadline, || {
-            assert!(self.logs.events("worker_added").is_empty());
-            (!plugin.present()).then_some(())
-        })
-        .await;
-        assert!(!release.exists(), "registration gate must remain held");
     }
 }
 
@@ -711,7 +577,7 @@ async fn wait_until_deadline<T>(
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn short_sessions_reuse_initializing_worker_and_capture_later_call() {
-    let mut daemon = IdleDaemon::start(10, StartupGate::Worker).await;
+    let mut daemon = IdleDaemon::start(10).await;
     let first = daemon.mcp().await;
     daemon.entered().await;
     #[cfg(unix)]
@@ -787,48 +653,4 @@ async fn short_sessions_reuse_initializing_worker_and_capture_later_call() {
     replacement.finish().await;
     assert_eq!(daemon.ready().await["reference_count"], 0);
     daemon.descendants_exited().await;
-}
-
-#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
-async fn zero_idle_timeout_cancels_worker_still_initializing() {
-    let mut daemon = IdleDaemon::start(0, StartupGate::Worker).await;
-    let session = daemon.mcp().await;
-    daemon.entered().await;
-    session.finish().await;
-    daemon.sessions_closed(1).await;
-    daemon.assert_cancelled_startup_exits().await;
-    wait_until("worker failure rendered before process termination", || {
-        daemon
-            .mcp_logs
-            .lock()
-            .unwrap()
-            .iter()
-            .any(|capture| {
-                capture.text().lines().any(|line| {
-                    line.strip_prefix("configuration error:")
-                        .is_some_and(|message| !message.trim().is_empty())
-                })
-            })
-            .then_some(())
-    })
-    .await;
-}
-
-#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
-async fn expired_idle_startup_stops_worker_and_prepared_plugin_while_native_registration_is_blocked()
- {
-    let mut daemon = IdleDaemon::start(1, StartupGate::Native).await;
-    let session = daemon.mcp().await;
-    daemon.entered().await;
-    session.finish().await;
-    daemon.sessions_closed(1).await;
-    wait_until("idle startup cancellation", || {
-        daemon
-            .logs
-            .events("worker_activation_cancelled")
-            .first()
-            .cloned()
-    })
-    .await;
-    daemon.assert_cancelled_startup_exits().await;
 }

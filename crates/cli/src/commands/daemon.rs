@@ -234,7 +234,6 @@ pub(crate) async fn execute(
                     advertise_address: command.advertise_address,
                 },
                 server.prepared.as_deref(),
-                super::render_error,
             )
             .await?;
         }

@@ -61,7 +61,6 @@ pub(super) struct RuntimeOptions {
     pub(super) config: GatewayConfig,
     pub(super) dynamic_plugins: Vec<ActiveDynamicPluginComponent>,
     pub(super) registration: Registration,
-    pub(super) cleanup: Option<super::cleanup::CleanupTrigger>,
 }
 
 struct AuthTokens {
@@ -331,26 +330,10 @@ async fn initialize_managed_runtime(
     dynamic_plugins: Vec<ActiveDynamicPluginComponent>,
     fingerprint: String,
     registration: &mut Registration,
-    cleanup: Option<super::cleanup::CleanupTrigger>,
 ) -> Result<Arc<ManagedRuntime>, CliError> {
-    let initialization = ManagedRuntime::initialize_with_cleanup(
-        config,
-        dynamic_plugins,
-        fingerprint,
-        cleanup.clone(),
-    );
-    tokio::pin!(initialization);
     tokio::select! {
-        result = &mut initialization => {
-            if result.is_err() && let Some(cleanup) = &cleanup {
-                cleanup.arm();
-            }
-            return result.map(Arc::new);
-        },
+        result = ManagedRuntime::initialize(config, dynamic_plugins, fingerprint) => result.map(Arc::new),
         event = registration.next() => {
-            if let Some(cleanup) = &cleanup {
-                cleanup.arm();
-            }
             match event {
                 Ok(super::super::common::socket::Event::Drain { request_id, .. }) => {
                     let _ = registration.acknowledge(request_id).await;
@@ -361,16 +344,9 @@ async fn initialize_managed_runtime(
                 }
                 _ => {}
             }
+            Err(CliError::Launch("worker activation was interrupted during initialization".into()))
         }
     }
-    // Do not drop initialization while plugin code may still be running.
-    // Finish initialization and close the runtime; the worker watchdog bounds
-    // this wait without aborting native callbacks.
-    let managed = initialization.await?;
-    managed.close().await?;
-    Err(CliError::Launch(
-        "worker activation was interrupted during initialization".into(),
-    ))
 }
 
 pub(super) async fn serve(listener: TcpListener, options: RuntimeOptions) -> Result<(), CliError> {
@@ -384,25 +360,22 @@ pub(super) async fn serve(listener: TcpListener, options: RuntimeOptions) -> Res
         config,
         dynamic_plugins,
         mut registration,
-        cleanup,
     } = options;
     let initialized = initialize_managed_runtime(
         config.clone(),
         dynamic_plugins,
         identity.fingerprint().to_string(),
         &mut registration,
-        cleanup,
     )
     .await;
     diag::result(DaemonFailureCode::WorkerInitialize, &initialized);
     let managed = initialized?;
-    let state = WorkerState::new(
+    let state = Arc::new(WorkerState::new(
         worker_id.clone(),
         config,
-        Some(Arc::clone(&managed)),
+        Some(managed),
         &registration,
-    );
-    let state = Arc::new(close_runtime_on_initialization_error(&managed, state).await?);
+    )?);
     let app = router(Arc::clone(&state));
     let server = async move {
         match tls_config {
@@ -411,15 +384,17 @@ pub(super) async fn serve(listener: TcpListener, options: RuntimeOptions) -> Res
         }
     };
     tokio::pin!(server);
-    let readiness = wait_for_worker_readiness(
-        server.as_mut(),
-        &mut registration,
-        &daemon_origin,
-        &worker_id,
-    )
-    .await;
-    close_runtime_on_initialization_error(&managed, readiness).await?;
-    state.control_restored(&registration);
+    let readiness = registration.ready(&daemon_origin, &worker_id);
+    let readiness = tokio::select! {
+        result = &mut server => {
+            return result.and_then(|()| Err(CliError::Launch("worker listener stopped before readiness".into())));
+        }
+        result = readiness => result,
+    };
+    match readiness {
+        Ok(()) => state.control_restored(&registration),
+        Err(error) => return Err(error),
+    }
     log::info!(
         target: "nemo_relay.daemon.worker",
         event = "worker_ready",
@@ -494,35 +469,6 @@ pub(super) async fn serve(listener: TcpListener, options: RuntimeOptions) -> Res
         ),
     }
     result
-}
-
-async fn wait_for_worker_readiness(
-    server: std::pin::Pin<&mut impl std::future::Future<Output = Result<(), CliError>>>,
-    registration: &mut Registration,
-    daemon_origin: &str,
-    worker_id: &str,
-) -> Result<(), CliError> {
-    tokio::select! {
-        result = server => {
-            result.and_then(|()| Err(CliError::Launch("worker listener stopped before readiness".into())))
-        }
-        result = registration.ready(daemon_origin, worker_id) => result,
-    }
-}
-
-async fn close_runtime_on_initialization_error<T>(
-    managed: &ManagedRuntime,
-    result: Result<T, CliError>,
-) -> Result<T, CliError> {
-    match result {
-        Ok(value) => Ok(value),
-        Err(error) => match managed.close().await {
-            Ok(()) => Err(error),
-            Err(cleanup) => Err(CliError::Launch(format!(
-                "{error}; managed worker cleanup failed: {cleanup}"
-            ))),
-        },
-    }
 }
 
 // Keep HTTP/2 settings identical for loopback and TLS workers. The connection window

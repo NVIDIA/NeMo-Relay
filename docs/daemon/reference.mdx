@@ -256,17 +256,9 @@ activation grant and releases its session through an authenticated request.
 If MCP disconnects first, the daemon retains the pending activation under that
 policy. Without this support, MCP asks the broker whether it should stop its child.
 If the broker replies `cancelled` or `superseded`, MCP terminates the child and
-waits for it to exit. A `cleanup_pending` reply lets MCP exit while the compatible
-registered worker waits for initialization to finish, then stops its plugins.
-Cancellation cleanup has a 120-second grace period. If cleanup fails or takes
-longer, the worker force-stops itself and the plugin processes in its process
-group or private Windows job. Forced termination can lose trace data that has
-not been written yet.
-This does not add a startup timeout while MCP sessions remain connected.
-
-With a `published` reply, the broker keeps control of the worker. If MCP cannot
-confirm the outcome, it leaves cleanup to the broker and the worker's control
-recovery policy.
+waits for it to exit. With a `published` reply, the broker keeps control of the
+worker. If MCP cannot confirm the outcome, it leaves cleanup to the broker and
+the worker's control recovery policy.
 
 ## Forward Managed Hooks
 

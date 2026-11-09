@@ -2020,8 +2020,6 @@ fn lifecycle_daemon_router_with_activation(
                 },
                 released: false,
                 idle_retention: false,
-                startup_cleanup: false,
-                cleanup_activation: None,
             },
         )])),
         worker_sessions: Mutex::new(HashMap::from([(

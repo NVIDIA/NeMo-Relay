@@ -878,7 +878,6 @@ async fn runtime_serve_reaches_readiness_and_exposes_the_authenticated_listener(
             config: GatewayConfig::default(),
             dynamic_plugins: Vec::new(),
             registration,
-            cleanup: None,
         },
     ));
 

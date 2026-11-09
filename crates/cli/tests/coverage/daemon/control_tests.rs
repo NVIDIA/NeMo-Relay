@@ -251,11 +251,6 @@ fn idle_retention_advertising_follows_the_descriptor_flag() {
             enabled
         );
         assert!(daemon.capabilities.contains(ACTIVATION_CANCEL_CAPABILITY));
-        assert!(
-            daemon
-                .capabilities
-                .contains(WORKER_STARTUP_CLEANUP_CAPABILITY)
-        );
     }
     assert!(
         descriptor(ComponentRole::Mcp)
@@ -265,6 +260,11 @@ fn idle_retention_advertising_follows_the_descriptor_flag() {
     assert!(
         descriptor(ComponentRole::Worker)
             .capabilities
-            .contains(WORKER_STARTUP_CLEANUP_CAPABILITY)
+            .contains(WORKER_IDLE_RETENTION_CAPABILITY)
+    );
+    assert!(
+        !descriptor(ComponentRole::Daemon)
+            .capabilities
+            .contains(WORKER_IDLE_RETENTION_CAPABILITY)
     );
 }

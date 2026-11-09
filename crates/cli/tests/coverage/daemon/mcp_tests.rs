@@ -68,78 +68,6 @@ async fn failed_activation_cleanup_reaps_child_and_frees_its_listener() {
 }
 
 #[tokio::test]
-async fn activation_cleanup_leaves_only_broker_owned_children_alive() {
-    use crate::daemon::common::control::ActivationCancellation;
-    use crate::daemon::common::socket::{Event, Request};
-    use futures_util::{SinkExt, StreamExt};
-
-    for (outcome, negotiated, broker_owned) in [
-        (ActivationCancellation::Cancelled, true, false),
-        (ActivationCancellation::Superseded, true, false),
-        (ActivationCancellation::Published, true, true),
-        (ActivationCancellation::CleanupPending, true, true),
-        (ActivationCancellation::CleanupPending, false, false),
-    ] {
-        let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
-        let origin = format!("http://{}", listener.local_addr().unwrap());
-        let broker = tokio::spawn(async move {
-            let (stream, _) = listener.accept().await.unwrap();
-            let mut socket = tokio_tungstenite::accept_async(stream).await.unwrap();
-            let message = socket.next().await.unwrap().unwrap();
-            let request: Request = serde_json::from_str(message.to_text().unwrap()).unwrap();
-            let ControlCommand::CancelActivation(cancel) = request.command else {
-                panic!("expected activation cancellation");
-            };
-            assert_eq!(cancel.payload.activation_id, "pending-activation");
-            socket
-                .send(tokio_tungstenite::tungstenite::Message::Text(
-                    serde_json::to_string(&Event::Reply {
-                        request_id: request.request_id,
-                        status: 200,
-                        payload: serde_json::to_value(outcome).unwrap(),
-                    })
-                    .unwrap()
-                    .into(),
-                ))
-                .await
-                .unwrap();
-        });
-        let mut lease = test_lease(origin);
-        lease.publication_cleanup = true;
-        lease.startup_cleanup = negotiated;
-        lease
-            .client
-            .connect(&lease.daemon_origin, ComponentRole::Mcp)
-            .await
-            .unwrap();
-        let (mut child, address) = pending_worker_fixture().await;
-        let stdin = child.child.take_stdin().unwrap();
-        let mut pending = Some((
-            "pending-activation".into(),
-            child,
-            tokio::time::Instant::now(),
-        ));
-        cleanup_pending_launch(&mut lease, &mut pending)
-            .await
-            .unwrap();
-        broker.await.unwrap();
-        assert!(pending.is_none());
-        assert_eq!(TcpListener::bind(address).await.is_err(), broker_owned);
-        drop(stdin);
-        tokio::time::timeout(Duration::from_secs(5), async {
-            loop {
-                if TcpListener::bind(address).await.is_ok() {
-                    break;
-                }
-                tokio::task::yield_now().await;
-            }
-        })
-        .await
-        .expect("fixture must exit after broker cleanup or closed input");
-    }
-}
-
-#[tokio::test]
 async fn published_worker_survives_guard_drop_but_pending_worker_is_killed() {
     for published in [false, true] {
         let (mut child, address) = pending_worker_fixture().await;
@@ -451,7 +379,6 @@ fn test_lease(daemon_origin: String) -> McpSession {
         session_token: SensitiveString::new("session-secret").expect("session token"),
         sequence: 0,
         publication_cleanup: false,
-        startup_cleanup: false,
         idle_retention: false,
         retained_activation_id: None,
     }

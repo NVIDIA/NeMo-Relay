@@ -80,8 +80,8 @@ the worker, then close both sessions. If an MCP process exited without
 unregistering, first allow the 30-second reconnect grace period. If
 [worker idle retention](/daemon/configuration#worker-idle-timeout) is enabled,
 also wait for the configured idle period to expire. Then allow up to two minutes
-for accepted requests to drain. Plugin cleanup has a separate 120-second grace
-period. Confirm that the worker and its plugin processes exit.
+for accepted requests to drain. Confirm that the worker exits after plugin
+cleanup.
 
 </Step>
 
