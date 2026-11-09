@@ -84,25 +84,37 @@ jobs:
 
       - uses: Swatinem/rust-cache@c19371144df3bb44fab255c43d04cbc2ab54d1c4 # v2.9.1
         with:
-          shared-key: nemo-relay-rust-${{ matrix.platform }}-${{ steps.ci-config.outputs.rust_version }}-debug
+          shared-key: nemo-relay-rust-${{ matrix.platform }}-${{ steps.ci-config.outputs.rust_version }}-go-debug
           workspaces: . -> target
           cache-all-crates: true
           cache-bin: false
-          save-if: false
+          save-if: ${{ github.ref == 'refs/heads/main' }}
 
       - uses: actions/setup-go@4a3601121dd01d1626a1e23e37211e3254c1c06c # v6
         with:
           go-version: ${{ steps.ci-config.outputs.go_version }}
-          cache: false
+          cache: true
+          # Go does not track changes in the Rust library linked through cgo.
+          cache-dependency-path: |
+            go/nemo_relay/go.mod
+            Cargo.toml
+            Cargo.lock
+            .cargo/config.toml
+            .github/ci-tool-versions.env
+            crates/**
 
       - name: Run Go tests with coverage
         working-directory: ${{ env.NEMO_RELAY_CI_WORKSPACE }}
         run: |
           set -e
+          # Test the freshly built Rust library even when Go build artifacts are restored.
+          go clean -testcache
           just --set ci true --set output_dir "${{ github.workspace }}" test-go
 
       - name: Upload Go coverage to Codecov
-        uses: codecov/codecov-action@e53489f4d376d79066609109e7a95a29eb3740b1 # v7.0.0
+        id: codecov-upload
+        continue-on-error: true
+        uses: codecov/codecov-action@fb8b3582c8e4def4969c97caa2f19720cb33a72f # v7.0.0
         with:
           token: ${{ secrets.CODECOV_TOKEN }}
           disable_search: true
@@ -110,3 +122,17 @@ jobs:
           flags: go-${{ matrix.platform }}
           name: go-${{ matrix.platform }}
           verbose: true
+          fail_ci_if_error: true
+
+      - name: Record the failed Codecov upload
+        if: ${{ steps.codecov-upload.outcome == 'failure' }}
+        env:
+          MARKER: codecov-upload-failed-go-${{ matrix.platform }}
+        run: printf '%s\n' "$MARKER" > "$MARKER"
+
+      - name: Keep the failed Codecov upload marker
+        if: ${{ steps.codecov-upload.outcome == 'failure' }}
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: codecov-upload-failed-go-${{ matrix.platform }}
+          path: codecov-upload-failed-go-${{ matrix.platform }}

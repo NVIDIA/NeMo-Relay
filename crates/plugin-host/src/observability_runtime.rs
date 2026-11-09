@@ -53,6 +53,9 @@ impl nemo_relay_observability::host::ObservabilityHost for RuntimeObservabilityH
     fn flush_subscribers(&self) -> nemo_relay_types::error::Result<()> {
         nemo_relay_runtime::api::subscriber::flush_subscribers()
     }
+    fn prepare_delivery(&self, work: Box<dyn FnOnce() + Send>) -> Box<dyn FnOnce() + Send> {
+        nemo_relay_runtime::api::runtime::subscriber_dispatcher::prepare_subscriber_delivery(work)
+    }
     fn w3c_span_context(
         &self,
         traceparent: Option<&str>,

@@ -231,7 +231,10 @@ the rest of the documentation can use them consistently.
 **JSON-Compatible Payload**
 : A JSON-compatible payload is data that can be represented in NeMo Relay's
   JSON model. Event data, middleware payloads, and codec output should be
-  JSON-compatible.
+  JSON-compatible. JSON numbers must be finite; `NaN` and positive or negative
+  infinity are not valid JSON numbers. Refer to
+  [Non-Finite Numbers](/integrate-into-frameworks/non-serializable-data#non-finite-numbers)
+  for binding-specific conversion behavior and validation guidance.
 
 ## L
 

@@ -481,8 +481,8 @@ describe('Tool execute', () => {
   it('generated execute declarations expose an additive trailing toolCallId', () => {
     const declarations = readFileSync(new URL('../index.d.ts', import.meta.url), 'utf8');
 
-    assert.match(declarations, /toolCallExecute\([\s\S]*?metadata\?: Json[^,\n]*,[\s\S]*?toolCallId\?: string/);
-    assert.match(declarations, /toolCallExecuteAsync\([\s\S]*?metadata\?: Json[^,\n]*,[\s\S]*?toolCallId\?: string/);
+    assert.match(declarations, /toolCallExecute<[^\n]*metadata\?: TMetadata \| null,[^\n]*toolCallId\?: string/);
+    assert.match(declarations, /toolCallExecuteAsync<[^\n]*metadata\?: TMetadata \| null,[^\n]*toolCallId\?: string/);
   });
 
   it('generated execution-intercept declarations use context and next parameters', () => {
@@ -498,7 +498,11 @@ describe('Tool execute', () => {
     );
     assert.match(
       declarations,
-      /registerToolExecutionIntercept\([\s\S]*?context: ToolExecutionContext, next: \(args: Json\) => ToolExecutionResult \| Promise<ToolExecutionResult>[\s\S]*?pendingMarks\?: Array<PendingMarkSpec>/,
+      /registerToolExecutionIntercept<TOutcome extends ToolExecutionInterceptOutcomeCompatible<TOutcome>>[\s\S]*?context: ToolExecutionContext, next: <TNextArgs extends JsonCompatible<TNextArgs>>\(args: TNextArgs\) => ToolExecutionResult \| Promise<ToolExecutionResult>[\s\S]*?TOutcome \| Promise<TOutcome>/,
+    );
+    assert.match(
+      declarations,
+      /export type ToolExecutionInterceptOutcomeCompatible<T>[\s\S]*?K extends 'pendingMarks'[\s\S]*?PendingMarksProperty<T\[K\]>/,
     );
     assert.doesNotMatch(declarations, /import\('\.\/plugin'\)\.PendingMarkSpec/);
     assert.match(

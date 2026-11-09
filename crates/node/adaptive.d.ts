@@ -77,7 +77,7 @@ export interface ResponseCacheConfig {
   tools?: ToolCacheConfig;
 }
 
-interface ResponseCachePluginConfig {
+export interface ResponseCachePluginConfig {
   ttl_seconds?: number;
   /** Required non-empty cache trust domain. */
   namespace?: string;
@@ -125,21 +125,21 @@ export interface ToolCacheConfig {
   overrides?: Record<string, ToolOverride>;
 }
 
-type ToolClassPluginConfig = Omit<ToolClass, 'ttlSeconds' | 'bypassRate' | 'toolVersion' | 'argSkip'> & {
+export type ToolClassPluginConfig = Omit<ToolClass, 'ttlSeconds' | 'bypassRate' | 'toolVersion' | 'argSkip'> & {
   ttl_seconds?: number;
   bypass_rate?: number;
   tool_version?: string;
   arg_skip?: string[];
 };
 
-type ToolOverridePluginConfig = Omit<ToolOverride, 'ttlSeconds' | 'bypassRate' | 'toolVersion' | 'argSkip'> & {
+export type ToolOverridePluginConfig = Omit<ToolOverride, 'ttlSeconds' | 'bypassRate' | 'toolVersion' | 'argSkip'> & {
   ttl_seconds?: number;
   bypass_rate?: number;
   tool_version?: string;
   arg_skip?: string[];
 };
 
-type ToolCachePluginConfig = Omit<ToolCacheConfig, 'cacheErrors' | 'default' | 'classes' | 'overrides'> & {
+export type ToolCachePluginConfig = Omit<ToolCacheConfig, 'cacheErrors' | 'default' | 'classes' | 'overrides'> & {
   cache_errors?: boolean;
   default?: ToolClassPluginConfig;
   classes?: Record<string, ToolClassPluginConfig>;
@@ -159,7 +159,7 @@ export interface Config {
   policy?: ConfigPolicy;
 }
 
-type AdaptivePluginConfig = Omit<Config, 'responseCache'> & {
+export type AdaptivePluginConfig = Omit<Config, 'responseCache'> & {
   response_cache?: ResponseCachePluginConfig;
 };
 

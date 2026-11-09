@@ -182,7 +182,7 @@ ensure_node_docs_declarations() {
 
     if [[ -f "$types_file" ]]; then
         newest_source="$(
-            find crates/node/src crates/node/Cargo.toml crates/node/build.rs \
+            find crates/node/src crates/node/Cargo.toml crates/node/build.rs crates/node/root-types.d.ts \
                 -type f -newer "$types_file" -print -quit
         )"
     fi
@@ -1052,6 +1052,30 @@ prepare_llvm_cov_workspace() {
     cargo llvm-cov clean --workspace
 }
 
+# usage: export_llvm_cov_lcov OUTPUT [--package NAME]... -- NEXTEST_LIST_COMMAND...
+export_llvm_cov_lcov() {
+    local output="$1"
+    shift
+    local -a export_args=()
+    while [[ "$1" != "--" ]]; do
+        export_args+=("$1")
+        shift
+    done
+    shift
+    local nextest_list
+    nextest_list="$(mktemp)"
+    "$@" --message-format json > "$nextest_list"
+    local nextest_list_native="$nextest_list"
+    if command -v cygpath >/dev/null 2>&1; then
+        nextest_list_native="$(cygpath -w "$nextest_list")"
+    fi
+    "$(uv_python_executable)" "$NEMO_RELAY_REPO_ROOT/scripts/coverage/export_llvm_cov_lcov.py" \
+        --nextest-list "$nextest_list_native" \
+        --output "$output" \
+        ${export_args[@]+"${export_args[@]}"}
+    rm -f "$nextest_list"
+}
+
 rust_source_coverage_supported() {
     local host
     host="$(rustc -vV | sed -n 's/^host: //p')"
@@ -1412,11 +1436,11 @@ test-rust:
             is_windows=true
             ;;
     esac
-    nextest_command=(cargo nextest run)
+    nextest_command=(cargo nextest)
     if [[ "$is_windows" == true ]]; then
         # Cargo's Windows job forbids breakaway. Run nextest directly so the lifecycle
         # tests can detach workers from their own jobs while testing cleanup normally.
-        nextest_command=(cargo-nextest nextest run)
+        nextest_command=(cargo-nextest nextest)
         # Keep temporary child builds on the same toolchain as the workspace.
         if [[ -z "${RUSTUP_TOOLCHAIN:-}" ]]; then
             active_toolchain="$(rustup show active-toolchain)"
@@ -1448,40 +1472,22 @@ test-rust:
 
     export_uv_python_runtime
     cd "$NEMO_RELAY_REPO_ROOT"
+    nextest_args=(--locked --workspace --exclude nemo-relay-python --exclude nemo-relay-node --features nemo-relay/__skip-implicit-config,nemo-relay-cli/__test-cli-port-override,nemo-relay-cli/__skip-implicit-config --profile ci)
     if is_true "{{ ci }}"; then
-        coverage_out="$(prepare_artifact rust-workspace.xml)"
+        coverage_out="$(prepare_artifact rust-workspace.lcov)"
         junit_out="$(prepare_artifact rust_junit_report.xml)"
         if rust_source_coverage_supported; then
             prepare_llvm_cov_workspace
         fi
         prepare_test_plugin_fixtures
-        "${nextest_command[@]}" --locked --workspace --exclude nemo-relay-python --exclude nemo-relay-node --features nemo-relay/__skip-implicit-config,nemo-relay-cli/__test-cli-port-override,nemo-relay-cli/__skip-implicit-config --profile ci --no-fail-fast
+        "${nextest_command[@]}" run "${nextest_args[@]}" --no-fail-fast
         cp "$NEMO_RELAY_REPO_ROOT/target/nextest/ci/rust_junit_report.xml" "$junit_out"
         if rust_source_coverage_supported; then
-            # LLVM deduplicates unmangled FFI symbols using the first object's
-            # coverage mapping. Prefer the tested binary over the shared library.
-            ffi_test_binary=""
-            for binary in target/debug/deps/nemo_relay_ffi-*; do
-                if [[ -f "$binary" && "$binary" =~ -[[:xdigit:]]{16}(\.exe)?$ ]]; then
-                    if [[ -n "$ffi_test_binary" ]]; then
-                        echo "ERROR: multiple FFI test binaries found after the clean coverage build" >&2
-                        exit 1
-                    fi
-                    ffi_test_binary="$binary"
-                fi
-            done
-            if [[ -z "$ffi_test_binary" ]]; then
-                echo "ERROR: FFI test binary missing from the coverage build" >&2
-                exit 1
-            fi
-            LLVM_COV_FLAGS="$ffi_test_binary${LLVM_COV_FLAGS:+ $LLVM_COV_FLAGS}" cargo llvm-cov report \
-                --ignore-filename-regex '.*/tests/.*\.rs$' \
-                --cobertura \
-                --output-path "$coverage_out"
+            export_llvm_cov_lcov "$coverage_out" -- "${nextest_command[@]}" list "${nextest_args[@]}"
         fi
     else
         prepare_test_plugin_fixtures
-        "${nextest_command[@]}" --locked --workspace --exclude nemo-relay-python --exclude nemo-relay-node --features nemo-relay/__skip-implicit-config,nemo-relay-cli/__test-cli-port-override,nemo-relay-cli/__skip-implicit-config --profile ci --no-fail-fast
+        "${nextest_command[@]}" run "${nextest_args[@]}" --no-fail-fast
     fi
 
 # --set [output_dir=<path>] [ci=true|false]
@@ -1507,11 +1513,12 @@ test-python:
         pytest_cmd+=(--cov=nemo_relay --cov=nemo_relay_plugin --cov-report term-missing --cov-report "xml:$coverage_out")
         pytest_cmd+=(--junit-xml "$junit_out")
         if rust_source_coverage_supported; then
-            rust_coverage_out="$(prepare_artifact python-rust.xml)"
+            rust_coverage_out="$(prepare_artifact python-rust.lcov)"
             prepare_llvm_cov_workspace
         fi
     fi
-    cargo nextest run --locked -p nemo-relay-python --features __skip-implicit-config --lib --profile ci
+    nextest_args=(--locked -p nemo-relay-python --features __skip-implicit-config --lib --profile ci)
+    cargo nextest run "${nextest_args[@]}"
     python_executable="$(uv_python_executable)"
     sync_args=(--inexact --all-packages --no-install-project --no-install-package nemo-relay)
     if python_plugin_grpc_dependencies_supported "$python_executable"; then
@@ -1535,11 +1542,7 @@ test-python:
     "$python_executable" -m "${pytest_cmd[@]}" --ignore=python/tests/integrations
     (cd examples/language-binding-plugin/python && uv run --locked --no-sync --package nemo-relay-python-language-binding-plugin-example --group test pytest)
     if is_true "{{ ci }}" && [[ -n "$rust_coverage_out" ]]; then
-        cargo llvm-cov report \
-            -p nemo-relay-python \
-            --ignore-filename-regex '.*/tests/.*\.rs$' \
-            --cobertura \
-            --output-path "$rust_coverage_out"
+        export_llvm_cov_lcov "$rust_coverage_out" --package nemo-relay-python -- cargo nextest list "${nextest_args[@]}"
     fi
 
 test-python-plugin:
@@ -1799,11 +1802,12 @@ test-node:
         coverage_out="$(prepare_artifact node-coverage.xml)"
         junit_out="$(prepare_artifact node-junit.xml)"
         if rust_source_coverage_supported; then
-            rust_coverage_out="$(prepare_artifact node-rust.xml)"
+            rust_coverage_out="$(prepare_artifact node-rust.lcov)"
             prepare_llvm_cov_workspace
         fi
     fi
-    cargo nextest run --locked -p nemo-relay-node --features __skip-implicit-config --lib --profile ci
+    nextest_args=(--locked -p nemo-relay-node --features __skip-implicit-config --lib --profile ci)
+    cargo nextest run "${nextest_args[@]}"
     npm install --workspace=nemo-relay-node --ignore-scripts
     if is_true "{{ ci }}"; then
         npm run coverage --workspace=nemo-relay-node
@@ -1811,11 +1815,7 @@ test-node:
         cp crates/node/junit.xml "$junit_out"
         cd "$NEMO_RELAY_REPO_ROOT"
         if [[ -n "$rust_coverage_out" ]]; then
-            cargo llvm-cov report \
-                -p nemo-relay-node \
-                --ignore-filename-regex '.*/tests/.*\.rs$' \
-                --cobertura \
-                --output-path "$rust_coverage_out"
+            export_llvm_cov_lcov "$rust_coverage_out" --package nemo-relay-node -- cargo nextest list "${nextest_args[@]}"
         fi
     else
         npm test --workspace=nemo-relay-node

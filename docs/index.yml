@@ -79,10 +79,45 @@ navigation:
                 icon: fa-brands fa-rust
                 path: ./getting-started/quick-start/rust.mdx
                 slug: rust
-  - folder: ./nemo-relay-cli
-    title: "NVIDIA NeMo Relay CLI"
+  - section: "NVIDIA NeMo Relay CLI"
     slug: nemo-relay-cli
-    title-source: frontmatter
+    contents:
+      - page: "Overview"
+        path: ./nemo-relay-cli/about.mdx
+        slug: about
+      - page: "Manage Persistent Integrations"
+        path: ./nemo-relay-cli/plugin-installation.mdx
+        slug: plugin-installation
+      - section: "Coding Agent Guides"
+        skip-slug: true
+        contents:
+          - page: "Claude Code"
+            path: ./nemo-relay-cli/claude-code.mdx
+            slug: claude-code
+          - page: "Codex"
+            path: ./nemo-relay-cli/codex.mdx
+            slug: codex
+          - page: "pi"
+            path: ./nemo-relay-cli/pi.mdx
+            slug: pi
+      - page: "Configuration"
+        path: ./nemo-relay-cli/configuration.mdx
+        slug: configuration
+      - page: "Provider Connections"
+        path: ./nemo-relay-cli/provider-upstreams.mdx
+        slug: provider-upstreams
+      - page: "Provider Authentication"
+        path: ./nemo-relay-cli/authentication.mdx
+        slug: authentication
+      - page: "Command Reference"
+        path: ./nemo-relay-cli/command-reference.mdx
+        slug: command-reference
+      - page: "Gateway and Hook Reference"
+        path: ./nemo-relay-cli/gateway-reference.mdx
+        slug: gateway-reference
+      - page: "Troubleshoot the CLI"
+        path: ./nemo-relay-cli/troubleshooting.mdx
+        slug: troubleshooting
   - section: "Daemon"
     slug: daemon
     contents:

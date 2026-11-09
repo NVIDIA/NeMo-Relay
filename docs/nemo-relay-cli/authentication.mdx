@@ -1,0 +1,390 @@
+---
+title: "Provider Authentication"
+description: "Configure provider credentials, API key helpers, caching, and OpenID Connect sign-in."
+position: 9
+---
+{/* SPDX-FileCopyrightText: Copyright (c) 2026, NVIDIA CORPORATION & AFFILIATES. All rights reserved.
+SPDX-License-Identifier: Apache-2.0 */}
+
+Configure credentials for the provider endpoints selected in
+[Provider Connections](/nemo-relay-cli/provider-upstreams). Choose a static
+API key, authorization header, API key helper, or OpenID Connect sign-in for
+each provider.
+
+Relay authentication and provider authentication serve different purposes. A
+client must have Relay access before managed requests can use Relay's
+configured provider credentials. Passthrough requests retain the separate
+credential behavior described below.
+
+## Credential Selection
+
+The client must have Relay access to use Relay's credentials. For managed
+provider requests and model lists, Relay resolves credentials in this order:
+
+1. If the provider has an `oidc` section, the access token of the stored
+   sign-in replaces any provider credential from the client.
+2. If a helper is configured, its token replaces any provider credential
+   from the client. Relay runs the helper for each outbound request attempt
+   when `cache_ttl_ms` is omitted or `0`. With a positive value, Relay reuses
+   the cached token until the cache interval ends.
+3. Without an `oidc` section or a helper, Relay keeps an inbound `Authorization`, `x-api-key`,
+   `api-key`, or `anthropic-api-key` header.
+4. If the client sends no credential, Relay uses the configured API key or
+   custom authorization header for that provider.
+5. If no credential is configured, Relay uses `OPENAI_API_KEY` or
+   `ANTHROPIC_API_KEY` with the provider's standard authentication scheme.
+
+With an OpenAI helper, Relay warns about and ignores `OPENAI_API_KEY` and
+`NEMO_RELAY_OPENAI_AUTH_HEADER`. With an Anthropic helper, it warns about and
+ignores `ANTHROPIC_AUTH_TOKEN`, `ANTHROPIC_API_KEY`, and
+`NEMO_RELAY_ANTHROPIC_AUTH_HEADER`. Without a helper, Relay can still use environment API keys.
+
+## Static Keys and Authorization Headers
+
+For a static API key, set `openai_api_key` or `anthropic_api_key` under
+`[upstream]`. The key must be one token with no whitespace inside it.
+Relay rejects invalid keys when it loads configuration. Keep static keys in
+private user configuration. Without a helper, an environment authorization
+header replaces a static key from a configuration file.
+
+Set `openai_auth_header` or `anthropic_auth_header` under `[upstream]` only when
+an enterprise gateway, proxy, or compatible endpoint requires a complete
+`Authorization` value such as `Bearer ...` or `Basic ...`. Prefer the
+corresponding environment variables so you don't store credentials in
+`config.toml`:
+
+```bash
+export NEMO_RELAY_OPENAI_AUTH_HEADER="Bearer <openai-credential>"
+export NEMO_RELAY_ANTHROPIC_AUTH_HEADER="Basic <anthropic-credential>"
+```
+
+Configure a custom base URL and its authorization header in the same layer. For
+environment configuration, set `NEMO_RELAY_OPENAI_BASE_URL` with
+`NEMO_RELAY_OPENAI_AUTH_HEADER`, or set the corresponding Anthropic variables
+together. A CLI `--openai-base-url` or `--anthropic-base-url` override can
+inherit an environment header only when the environment selected the same URL.
+If the CLI flag changes the URL, Relay clears the environment header; use the
+paired environment variables instead when the new endpoint requires custom
+authentication.
+
+The exact configured base URL is the upstream identity during file,
+environment, and command-line layering. A higher layer that keeps the same URL
+can inherit or replace the lower authorization header. A higher layer that
+changes the URL clears the lower header unless that same layer supplies a
+replacement, preventing credentials for one endpoint from being sent to
+another.
+
+Foreground gateways and MCP-managed gateways require Relay authentication
+before they use provider credentials from their configuration or environment.
+Clients can authenticate with a Relay client token, a provider capability URL,
+or a credential from a managed invocation. A missing or invalid client token
+does not grant access to the gateway's provider credentials.
+This requirement also applies when Relay replaces a Codex ChatGPT credential.
+
+Without Relay authentication, requests use only provider credentials sent by
+the client. If the client sends no credentials, the upstream provider receives
+the request without credentials.
+
+For direct gateway use without Relay authentication, set the provider API key
+in the client. To use `OPENAI_API_KEY`, `ANTHROPIC_API_KEY`, or a custom auth
+header from the gateway, the client must authenticate to Relay.
+Use `nemo-relay run` to let Relay set up client authentication.
+
+## Generate API Keys Per Request
+
+An API key helper is a command that returns a credential for a provider request.
+The following example configures separate helpers for OpenAI and Anthropic:
+
+```toml
+[upstream]
+openai_base_url = "https://gateway.example.com/v1"
+anthropic_base_url = "https://gateway.example.com"
+
+[upstream.openai_api_key_helper]
+command = "/path/to/api-key-helper"
+args = ["--provider", "openai"]
+timeout_ms = 10000
+auth_scheme = "bearer"
+
+[upstream.anthropic_api_key_helper]
+command = "/path/to/api-key-helper"
+args = ["--provider", "anthropic"]
+timeout_ms = 10000
+auth_scheme = "bearer"
+```
+
+Replace the example URLs, helper path, and arguments with values for your setup.
+The helper must accept the arguments you provide.
+
+Relay runs `command` with `args`. Use a shell such as `/bin/sh` if the command
+needs pipes or shell expansion. The helper must exit successfully and write one
+token to stdout. Do not include a `Bearer` prefix or whitespace within the token.
+Relay removes whitespace before and after the token. It rejects empty output
+and limits the output to 16 KiB. Relay discards helper stderr to keep credentials
+out of logs.
+
+Set `timeout_ms` to a value greater than `0`. The value is in milliseconds.
+The default is `10000`, or 10 seconds. If the helper fails, Relay stops the
+request before sending it upstream. Relay does not use another credential.
+
+## Helper Caching and Failures
+
+By default, Relay runs a separate helper process for each outbound request
+attempt. This also applies to requests sent at the same time. Omit
+`cache_ttl_ms` or set it to `0` to keep this behavior.
+
+To reuse tokens, set `cache_ttl_ms` to a value greater than `0`. The value is in
+milliseconds. The following example reuses tokens for up to five minutes:
+
+```toml
+[upstream.openai_api_key_helper]
+command = "/path/to/api-key-helper"
+args = ["--provider", "openai"]
+cache_ttl_ms = 300000
+```
+
+Relay starts this interval after it checks the helper's output. It reuses the
+token until the interval ends. Choose a value shorter than the token's remaining
+lifetime. Relay does not read an expiry time from the token or helper output.
+
+After the interval ends, the next request runs the helper again to refresh the
+token. Requests that arrive during a refresh wait for the same result. Relay
+does not refresh tokens on a timer. If a refresh fails, Relay stops the requests
+waiting for it. It does not use the old token or another credential. A later
+request can try the helper again.
+
+Relay keeps cached tokens in memory. Requests that use the same provider and
+loaded configuration share the cache. Separate processes do not share cached
+tokens. Relay does not reuse a token after the loaded helper settings or
+upstream base URL change. Configuration file edits do not change settings in a
+running Relay process. Restart that process to load the new settings and clear
+its cache. Relay does not save cached tokens to disk or include them in
+diagnostics.
+
+For a streaming request, Relay gets the token when it sends the request.
+Response chunks do not run the helper again. The stream can continue after the
+cache interval ends. WebSocket handshakes use the same rules.
+
+The HTTP client does not follow redirects or retry requests that use a helper.
+A middleware retry checks the cache before Relay sends the request again. It
+reuses the cached token if the cache interval has not ended. Otherwise, it runs
+the helper again. Requests without a helper keep their existing redirect and
+retry behavior.
+
+OpenAI helpers use `Authorization: Bearer <token>`. Anthropic helpers use
+`auth_scheme = "api_key"` by default. This sends `x-api-key: <token>`.
+Set `auth_scheme = "bearer"` for an Anthropic-compatible endpoint that requires
+bearer authentication, as shown above.
+
+Choose one credential source for each provider. You cannot combine a helper
+with a static API key or a custom authorization header. This rule also applies
+to settings inherited from other configuration layers. OpenAI and Anthropic can
+use different credential sources.
+
+A higher-priority configuration layer that changes a provider's base URL clears
+its inherited API key and helper. Add the replacement credential in that same
+layer. Restating the same URL, including the default URL, keeps inherited
+credentials.
+
+A helper table in a higher-priority file replaces the entire inherited helper.
+Include `command` in the new table. Omitted settings use their defaults.
+For example, omitting `cache_ttl_ms` disables caching for the replacement helper.
+
+Relay uses helpers only for the configured upstream. It does not send helper
+tokens to endpoints named by a client or an interceptor. ChatGPT voice calls
+keep their separate ChatGPT backend credentials.
+
+Run `nemo-relay doctor --offline` to inspect the configured credential sources.
+Doctor reports each helper's timeout and authentication method. It warns about
+environment credentials that a helper ignores. It also reports configuration
+errors, such as combining a helper with a static API key.
+
+Doctor does not run helpers or check their tokens, even without `--offline`.
+The credential checks do not display API keys, helper commands, or helper
+arguments. Add `--json` to read these checks under
+`configuration.upstream_auth.checks`.
+
+## Sign In With OpenID Connect
+
+Some providers authenticate users with OpenID Connect (OIDC) instead of static
+API keys. Relay can own that sign-in. Each user signs in once, and the gateway
+adds a current access token to authenticated managed requests for that provider.
+
+An administrator names the provider once, for example in the system
+`config.toml`. The issuer, client ID, and scopes are not secrets:
+
+```toml
+[upstream]
+openai_base_url = "https://openrouter.ai/api/v1"
+
+[upstream.openai_oidc]
+issuer = "https://clerk.openrouter.ai"
+client_id = "<client id>"
+scope = "openid offline_access email inference"
+```
+
+Use `[upstream.anthropic_oidc]` the same way for the Anthropic upstream. A
+provider's `oidc` section replaces its other credential sources: it cannot be
+combined with `api_key`, `auth_header`, or `api_key_helper`. `scope` defaults to
+`openid offline_access`.
+
+Each user then signs in once:
+
+```bash
+nemo-relay auth login
+```
+
+The command reads the provider from the effective configuration, including a
+file passed with `--config`. When both providers have an `oidc` section with
+different values, add `--provider openai` or `--provider anthropic`.
+
+The command signs in through the browser with an OAuth 2.0 authorization code
+and PKCE. It listens on `http://127.0.0.1:<port>/callback`, opens the issuer's
+sign-in page in the default browser, and waits up to five minutes for the
+issuer to redirect back. The OAuth client must allow that loopback redirect on
+any port. The `state` of each attempt is random, and the command accepts only a
+redirect that carries it.
+
+Without a local browser, for example over SSH, the command prints the address.
+Open it in a browser on any device and approve the sign-in. The browser's last
+page, `http://127.0.0.1:<port>/callback?code=...`, then fails to load, because
+the redirect points at the device the browser runs on. Copy that page's address,
+paste it into the terminal, and press Enter. Add `--no-browser` to print the
+address without opening a browser, and `--callback-port <port>` to listen on a
+fixed port, for example one you forward over SSH.
+
+`--device` uses the OAuth 2.0 device authorization grant instead: the command
+prints a URL and a code to enter on the issuer's own page. It needs no redirect.
+The issuer must offer the device grant to the client.
+
+`nemo-relay auth login` stores the sign-in with owner-only access in
+`$XDG_CONFIG_HOME/nemo-relay/oidc/` when `XDG_CONFIG_HOME` is an absolute path,
+or `~/.config/nemo-relay/oidc/` otherwise. On Windows, Relay falls back to
+`USERPROFILE` when `HOME` is unavailable. There is one file for each issuer,
+client ID, and scope. The gateway reads it for each authenticated managed request.
+When the access token expires within five minutes, the gateway refreshes it with
+the stored refresh token first. Refreshes from several processes run one at a
+time, so a rotated refresh token is never used twice. Because the gateway reads
+the stored sign-in for each request, the token's real expiry applies, and
+`nemo-relay auth logout` takes effect on the next request.
+
+Relay adds the token only to requests it authenticates: agents that Relay
+launches, and daemon routes bound by the managed integration. A client that only
+points its base URL at a shared gateway gets no Relay credential, the same as
+with a static API key. Claude Code needs a credential before it starts, so set
+`ANTHROPIC_API_KEY` to any placeholder value. Relay replaces it.
+
+Without a sign-in, or when the provider rejects the refresh token, the gateway
+stops the request with HTTP 401 and an error that names `nemo-relay auth login`. A temporary
+provider error keeps the stored sign-in. `nemo-relay doctor` reports whether
+each configured sign-in exists, is valid, has expired but can refresh, or needs
+a new sign-in. `nemo-relay auth token` prints the current access token for
+scripts.
+
+The issuer must use `https`, or `http` on a loopback address. Its token and
+device endpoints must have the same origin as the issuer. Only the browser opens
+the authorization endpoint, so it may use another origin, but it must also use
+`https`, or `http` on a loopback address. Relay never writes tokens to logs or
+error messages.
+
+<Warning>
+`nemo-relay auth token` prints an access token. Treat its output as a credential
+and keep it out of shared logs.
+</Warning>
+
+## Codex ChatGPT Credentials
+
+Relay handles Codex ChatGPT credentials differently from other provider credentials.
+On ordinary OpenAI paths, Relay treats either of these as a ChatGPT credential:
+
+- A JSON Web Token (JWT) with an `iss` claim set to `https://auth.openai.com`.
+- A `Bearer at-...` access token with a `chatgpt-account-id` header that is not empty.
+
+On these paths, a token's prefix alone does not tell Relay to use the ChatGPT
+backend or replace the token.
+
+Explicit Codex paths such as `/backend-api/codex/responses` also support token
+prefixes for routing.
+They accept `Bearer at-...` without an account header and `Bearer eyJ...` without
+an issuer check. With the default OpenAI base and no replacement key, these
+prefixes select the ChatGPT backend. A custom `openai_base_url` still applies.
+Voice calls use the exception described below.
+
+On managed OpenAI routes, Relay can replace a ChatGPT credential with a provider
+credential. The replacement can come from `openai_auth_header`,
+`NEMO_RELAY_OPENAI_AUTH_HEADER`, `openai_api_key`,
+`[upstream.openai_api_key_helper]`, or `OPENAI_API_KEY`. The value must not be
+empty. Relay then sends the request to `openai_base_url`.
+
+Without a replacement, managed routes keep the ChatGPT credential. Relay uses
+the ChatGPT backend only with the default `openai_base_url`,
+`https://api.openai.com/v1`.
+If you set a different `openai_base_url`, Relay uses that URL. ChatGPT voice calls
+use a separate rule, described below.
+
+The default ChatGPT backend is `https://chatgpt.com/backend-api/codex`. To use a
+different backend, set `chatgpt_codex_base_url` under `[upstream]`. Relay sends the
+caller's ChatGPT credential to this URL. Use a backend you trust with that
+credential.
+
+`GET /models` and `GET /v1/models` return a model list. To request Anthropic
+models, include an `anthropic-version` header. An `anthropic-beta` header also
+selects Anthropic. Relay uses OpenAI when neither header is present. The API
+key's format does not select a provider.
+
+Model lists use the same auth rules as the provider's managed routes. These
+requests do not create LLM events. A configured helper replaces the caller's
+provider credential. Without a helper, Relay keeps provider API keys sent by
+the caller.
+
+OpenAI model requests normally use `openai_base_url`. With the default URL and
+no replacement credential, requests with recognized ChatGPT OAuth use the ChatGPT
+Codex backend instead. Anthropic model requests use `anthropic_base_url`.
+For the credential selection order and access requirement, refer to
+[Credential Selection](#credential-selection).
+
+If Relay has no replacement, OpenAI model requests keep the caller's credential.
+This also applies to a custom `openai_base_url`.
+
+Other unmanaged OpenAI routes include compaction and voice calls. Relay never
+adds its own provider credentials to these requests. With a custom
+`openai_base_url`, Relay removes `Authorization` and `chatgpt-account-id` if it
+recognizes a ChatGPT token. Relay keeps other caller credentials.
+
+ChatGPT voice calls to `POST /backend-api/codex/realtime/calls` are an exception.
+They keep the caller's ChatGPT credential and use the ChatGPT backend
+(`chatgpt_codex_base_url` when set) even when a replacement credential is
+configured. With the default `openai_base_url` and a recognized ChatGPT
+credential, `POST /realtime/calls` and `POST /v1/realtime/calls` also use the
+ChatGPT backend. These voice calls never receive Relay's provider credentials,
+even when configured.
+
+Sideband attachment routes use `openai_base_url`. Relay never adds
+its own provider credentials to these requests. It keeps the caller's provider
+credential by default. With a custom `openai_base_url`, Relay removes recognized
+ChatGPT tokens and `chatgpt-account-id`. Refer to
+[Known Issues in 0.11.0](/about-nemo-relay/release-notes#known-issues-in-0110)
+before routing a ChatGPT voice sideband through a custom OpenAI upstream.
+
+## Passthrough Requests and Redirects
+
+Unmanaged routes forward only the provider credentials that the client sends.
+These routes include compaction, images, realtime, live sessions, search,
+and memory summarization. Relay never adds its configured
+provider credentials or API keys from environment variables to these requests.
+This rule also covers WebSocket upgrades, authenticated clients, and daemon
+requests.
+
+Relay still forwards requests that have no provider credentials. The upstream
+provider decides whether to accept them. Unmanaged routes do not run managed
+guardrails or use the managed cache. They also do not emit LLM lifecycle events.
+
+Relay does not follow HTTP redirects from upstream servers. This stops Relay
+from sending provider credentials and request bodies to another destination.
+Relay keeps the upstream redirect status but removes its `Location` header.
+This stops callers from following the redirect and resending a prompt.
+Successful responses keep their `Location` headers. Managed requests treat the
+redirect as an upstream failure. Configure the final provider URL directly.
+
+For configuration errors or failed provider requests, start with
+[Troubleshoot the CLI](/nemo-relay-cli/troubleshooting).
