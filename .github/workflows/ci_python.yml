@@ -110,7 +110,7 @@ jobs:
 
       - uses: Swatinem/rust-cache@c19371144df3bb44fab255c43d04cbc2ab54d1c4 # v2.9.1
         with:
-          shared-key: nemo-relay-rust-${{ matrix.platform }}-${{ steps.ci-config.outputs.rust_version }}-debug
+          shared-key: nemo-relay-rust-${{ matrix.platform }}-${{ steps.ci-config.outputs.rust_version }}-python-debug
           workspaces: . -> target
           cache-all-crates: true
           cache-bin: false
@@ -124,6 +124,7 @@ jobs:
         with:
           version: ${{ steps.ci-config.outputs.uv_version }}
           enable-cache: true
+          save-cache: ${{ github.ref == 'refs/heads/main' }}
           cache-dependency-glob: ${{ env.NEMO_RELAY_CI_WORKSPACE }}/uv.lock
 
       - name: Set up Python
@@ -180,10 +181,6 @@ jobs:
         with:
           name: codecov-upload-failed-python-${{ matrix.platform }}
           path: codecov-upload-failed-python-${{ matrix.platform }}
-
-      - name: Prune uv cache
-        working-directory: ${{ env.NEMO_RELAY_CI_WORKSPACE }}
-        run: uv cache prune --ci
 
   Package:
     name: Package (${{ matrix.platform }})
@@ -253,7 +250,7 @@ jobs:
       - uses: Swatinem/rust-cache@c19371144df3bb44fab255c43d04cbc2ab54d1c4 # v2.9.1
         if: ${{ !contains(matrix.platform, 'musl') }}
         with:
-          shared-key: nemo-relay-rust-${{ matrix.platform }}-${{ steps.ci-config.outputs.rust_version }}-release
+          shared-key: nemo-relay-rust-${{ matrix.platform }}-${{ steps.ci-config.outputs.rust_version }}-python-release
           workspaces: . -> target
           cache-all-crates: true
           cache-bin: false
@@ -264,6 +261,7 @@ jobs:
         with:
           version: ${{ steps.ci-config.outputs.uv_version }}
           enable-cache: true
+          save-cache: ${{ github.ref == 'refs/heads/main' }}
           cache-dependency-glob: ${{ env.NEMO_RELAY_CI_WORKSPACE }}/uv.lock
 
       - name: Set up Python
@@ -353,11 +351,6 @@ jobs:
           name: plugin-wheel
           path: ${{ env.NEMO_RELAY_CI_WORKSPACE_TMP }}/plugin-wheels/*.whl
           if-no-files-found: error
-
-      - name: Prune uv cache
-        if: ${{ !contains(matrix.platform, 'musl') }}
-        working-directory: ${{ env.NEMO_RELAY_CI_WORKSPACE }}
-        run: uv cache prune --ci
 
       - name: Derive Maturin version
         if: ${{ contains(matrix.platform, 'musl') }}
@@ -502,7 +495,7 @@ jobs:
       - uses: Swatinem/rust-cache@c19371144df3bb44fab255c43d04cbc2ab54d1c4 # v2.9.1
         if: ${{ matrix.platform == 'source-and-plugin' }}
         with:
-          shared-key: nemo-relay-rust-linux-amd64-${{ steps.ci-config.outputs.rust_version }}-release
+          shared-key: nemo-relay-rust-linux-amd64-${{ steps.ci-config.outputs.rust_version }}-python-release
           workspaces: . -> target
           cache-all-crates: true
           cache-bin: false
@@ -512,6 +505,7 @@ jobs:
         if: ${{ !contains(matrix.platform, 'musl') }}
         with:
           version: ${{ steps.ci-config.outputs.uv_version }}
+          enable-cache: false
 
       - name: Set up Python
         if: ${{ !contains(matrix.platform, 'musl') }}

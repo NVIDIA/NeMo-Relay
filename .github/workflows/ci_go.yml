@@ -84,7 +84,7 @@ jobs:
 
       - uses: Swatinem/rust-cache@c19371144df3bb44fab255c43d04cbc2ab54d1c4 # v2.9.1
         with:
-          shared-key: nemo-relay-rust-${{ matrix.platform }}-${{ steps.ci-config.outputs.rust_version }}-debug
+          shared-key: nemo-relay-rust-${{ matrix.platform }}-${{ steps.ci-config.outputs.rust_version }}-core-debug
           workspaces: . -> target
           cache-all-crates: true
           cache-bin: false
@@ -93,12 +93,22 @@ jobs:
       - uses: actions/setup-go@4a3601121dd01d1626a1e23e37211e3254c1c06c # v6
         with:
           go-version: ${{ steps.ci-config.outputs.go_version }}
-          cache: false
+          cache: true
+          # Go does not track changes in the Rust library linked through cgo.
+          cache-dependency-path: |
+            go/nemo_relay/go.mod
+            Cargo.toml
+            Cargo.lock
+            .cargo/config.toml
+            .github/ci-tool-versions.env
+            crates/**
 
       - name: Run Go tests with coverage
         working-directory: ${{ env.NEMO_RELAY_CI_WORKSPACE }}
         run: |
           set -e
+          # Test the freshly built Rust library even when Go build artifacts are restored.
+          go clean -testcache
           just --set ci true --set output_dir "${{ github.workspace }}" test-go
 
       - name: Upload Go coverage to Codecov
