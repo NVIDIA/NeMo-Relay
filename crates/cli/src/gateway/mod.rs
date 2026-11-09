@@ -534,6 +534,8 @@ impl CapturedUpstreamSuccesses {
         // The gateway re-encodes the body, so the provider's body headers no longer apply.
         headers.remove(http::header::CONTENT_TYPE);
         headers.remove(http::header::CONTENT_ENCODING);
+        headers.remove("content-digest");
+        headers.remove("repr-digest");
         headers.insert(
             http::header::CONTENT_TYPE,
             HeaderValue::from_static(content_type),

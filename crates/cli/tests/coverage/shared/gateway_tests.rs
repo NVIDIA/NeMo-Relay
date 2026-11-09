@@ -2877,6 +2877,11 @@ fn captured_upstream_successes_select_the_returned_attempt() {
             HeaderValue::from_static("application/x-provider"),
         );
         headers.insert("content-encoding", HeaderValue::from_static("gzip"));
+        headers.insert("content-digest", HeaderValue::from_static("sha-256=:AAAA:"));
+        headers.insert(
+            "x-nemo-relay-worker-route-failure",
+            HeaderValue::from_static("pass-through"),
+        );
         headers
     };
 
@@ -2892,6 +2897,18 @@ fn captured_upstream_successes_select_the_returned_attempt() {
     assert_eq!(headers["content-type"], "text/event-stream");
     assert_eq!(headers.get_all("content-type").iter().count(), 1);
     assert!(headers.get("content-encoding").is_none());
+    assert!(headers.get("content-digest").is_none());
+    assert!(headers.get("x-nemo-relay-worker-route-failure").is_none());
+
+    // Streams: the attempt whose stream yielded the first event wins over capture order.
+    for (marked, expected) in [(0, "req_1"), (1, "req_2")] {
+        let streams = CapturedUpstreamSuccesses::default();
+        streams.capture(None, attempt("req_1"));
+        streams.capture(None, attempt("req_2"));
+        streams.mark_first_event(marked);
+        let headers = streams.response_headers(None, "text/event-stream");
+        assert_eq!(headers["request-id"], expected);
+    }
 
     // Fan-out: the returned JSON picks its own attempt, even when it finished first.
     let first = json!({"id": "first"});

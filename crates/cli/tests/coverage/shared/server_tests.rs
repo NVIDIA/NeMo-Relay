@@ -7336,6 +7336,8 @@ async fn managed_success_responses_keep_provider_headers() {
             .header("anthropic-ratelimit-unified-status", "allowed_warning")
             .header("set-cookie", "a=1")
             .header("set-cookie", "b=2")
+            .header("content-encoding", "identity")
+            .header("repr-digest", "sha-256=:AAAA:")
             .header("x-nemo-relay-worker-route-failure", "1");
         if streaming {
             builder
@@ -7396,7 +7398,20 @@ async fn managed_success_responses_keep_provider_headers() {
             headers["anthropic-ratelimit-unified-status"], "allowed_warning",
             "streaming={streaming}"
         );
-        assert_eq!(headers.get_all("set-cookie").iter().count(), 2);
+        assert_eq!(
+            headers.get_all("set-cookie").iter().collect::<Vec<_>>(),
+            ["a=1", "b=2"],
+            "streaming={streaming}"
+        );
+        // The body is re-encoded, so the provider's encoding and digest no longer describe it.
+        assert!(
+            headers.get("content-encoding").is_none(),
+            "streaming={streaming}"
+        );
+        assert!(
+            headers.get("repr-digest").is_none(),
+            "streaming={streaming}"
+        );
         // A provider must not be able to raise Relay's own worker route failure signal.
         assert!(
             headers.get("x-nemo-relay-worker-route-failure").is_none(),
