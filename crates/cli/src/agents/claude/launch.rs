@@ -18,16 +18,16 @@ pub(crate) fn prepare(
     dry_run: bool,
 ) -> Result<(), CliError> {
     // A process default lets Claude's settings.env retain precedence, including opt-outs.
-    set_process_default(launch, "CLAUDE_CODE_GATEWAY_HINT_HEADERS", "1");
-    if relay_supplies_credential {
-        // Claude Code's /model menu then lists the models the gateway's /v1/models returns.
-        set_process_default(launch, "CLAUDE_CODE_ENABLE_GATEWAY_MODEL_DISCOVERY", "1");
-        // Claude Code needs a credential before it starts. Relay replaces this one upstream.
-        if !inherits_anthropic_credential() {
-            launch
-                .env
-                .push(("ANTHROPIC_API_KEY".into(), PLACEHOLDER_API_KEY.into()));
-        }
+    if std::env::var_os("CLAUDE_CODE_GATEWAY_HINT_HEADERS").is_none() {
+        launch
+            .env
+            .push(("CLAUDE_CODE_GATEWAY_HINT_HEADERS".into(), "1".into()));
+    }
+    // Claude Code needs a credential before it starts. Relay replaces this one upstream.
+    if relay_supplies_credential && !inherits_anthropic_credential() {
+        launch
+            .env
+            .push(("ANTHROPIC_API_KEY".into(), PLACEHOLDER_API_KEY.into()));
     }
     let proxy_header = format!(
         "{}: {}",
@@ -94,13 +94,7 @@ pub(crate) fn prepare(
         generated_policy_hooks(CodingAgent::ClaudeCode, &hook_commands),
     )?;
     let settings_path = root.join("settings.json");
-    let mut settings = settings_overlay(&launch.argv, launch.host_index, gateway_url)?;
-    apply_prompt_cache_default(
-        &mut settings,
-        claude_arguments(&launch.argv, launch.host_index),
-        &std::env::current_dir()?,
-        claude_user_settings_dir().as_deref(),
-    );
+    let settings = settings_overlay(&launch.argv, launch.host_index, gateway_url)?;
     let settings_bytes = serde_json::to_vec_pretty(&settings)
         .map_err(|error| CliError::Launch(error.to_string()))?;
     crate::filesystem::atomic_write_private(&settings_path, &settings_bytes)
@@ -126,17 +120,11 @@ pub(crate) fn prepare(
 /// Not a credential: the gateway replaces it with the one Relay owns.
 const PLACEHOLDER_API_KEY: &str = "nemo-relay-supplies-this-credential";
 
-/// An empty value is no credential, unlike the empty opt-out that `set_process_default` keeps.
+/// An empty value is no credential.
 fn inherits_anthropic_credential() -> bool {
     ["ANTHROPIC_API_KEY", "ANTHROPIC_AUTH_TOKEN"]
         .into_iter()
         .any(|name| std::env::var_os(name).is_some_and(|value| !value.is_empty()))
-}
-
-fn set_process_default(launch: &mut PreparedAgentLaunch, name: &str, value: &str) {
-    if std::env::var_os(name).is_none() {
-        launch.env.push((name.into(), value.into()));
-    }
 }
 
 #[derive(Default)]
@@ -228,7 +216,7 @@ fn record_hook_integrity_risk(launch: &mut PreparedAgentLaunch, risk: HookIntegr
     launch.non_tty_warnings.push(note);
 }
 
-pub(crate) fn claude_arguments(argv: &[String], host_index: usize) -> &[String] {
+fn claude_arguments(argv: &[String], host_index: usize) -> &[String] {
     let arguments = argv.get(host_index + 1..).unwrap_or_default();
     let boundary = arguments
         .iter()
@@ -287,74 +275,6 @@ pub(crate) fn settings_overlay(
         Value::String(gateway_url.into()),
     );
     Ok(settings)
-}
-
-const PROMPT_CACHE_TTL: &str = "promptCacheTtl";
-
-/// Claude Code treats a session with an API key as API-key billing and writes 5-minute
-/// prompt-cache entries, where a subscription session gets one hour on the main thread. Relay
-/// restores the hour, except when the caller or a loaded settings scope chose a value: the
-/// `--settings` document outranks every scope, so a value here would replace the user's own.
-pub(crate) fn apply_prompt_cache_default(
-    settings: &mut Value,
-    claude_arguments: &[String],
-    project_dir: &Path,
-    user_dir: Option<&Path>,
-) {
-    if settings.get(PROMPT_CACHE_TTL).is_some() {
-        return;
-    }
-    let sources = loaded_setting_sources(claude_arguments);
-    let project = project_dir.join(".claude");
-    let scopes = [
-        ("user", user_dir.map(|dir| dir.join("settings.json"))),
-        ("project", Some(project.join("settings.json"))),
-        ("local", Some(project.join("settings.local.json"))),
-    ];
-    let chosen_elsewhere = scopes.iter().any(|(scope, path)| {
-        sources.contains(scope)
-            && path
-                .as_deref()
-                .is_some_and(settings_file_sets_prompt_cache_ttl)
-    });
-    if !chosen_elsewhere {
-        settings[PROMPT_CACHE_TTL] = json!("1h");
-    }
-}
-
-/// The scopes Claude Code loads: all of them, or the last `--setting-sources` list.
-fn loaded_setting_sources(claude_arguments: &[String]) -> Vec<&str> {
-    let mut selected = None;
-    let mut arguments = claude_arguments.iter();
-    while let Some(argument) = arguments.next() {
-        if argument == "--setting-sources" {
-            selected = arguments.next().map(String::as_str);
-        } else if let Some(value) = argument.strip_prefix("--setting-sources=") {
-            selected = Some(value);
-        }
-    }
-    selected.map_or_else(
-        || vec!["user", "project", "local"],
-        |value| value.split(',').map(str::trim).collect(),
-    )
-}
-
-fn settings_file_sets_prompt_cache_ttl(path: &Path) -> bool {
-    std::fs::read(path)
-        .ok()
-        .and_then(|bytes| serde_json::from_slice::<Value>(&bytes).ok())
-        .is_some_and(|settings| settings.get(PROMPT_CACHE_TTL).is_some())
-}
-
-fn claude_user_settings_dir() -> Option<PathBuf> {
-    std::env::var_os("CLAUDE_CONFIG_DIR")
-        .filter(|value| !value.is_empty())
-        .map(PathBuf::from)
-        .or_else(|| {
-            crate::agents::shared::host::home_dir()
-                .ok()
-                .map(|home| home.join(".claude"))
-        })
 }
 
 fn first_settings(argv: &[String], host_index: usize) -> Result<Option<&str>, CliError> {
