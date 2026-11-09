@@ -127,21 +127,37 @@ pub(super) struct ManagedRuntime {
     observation_capture_bytes: usize,
     activation: Mutex<Option<ServerPluginActivation>>,
     gateway: crate::server::AppState,
+    cleanup: Option<super::cleanup::CleanupTrigger>,
 }
 
 impl ManagedRuntime {
+    #[cfg(test)]
     pub(super) async fn initialize(
         config: GatewayConfig,
         dynamic_plugins: Vec<ActiveDynamicPluginComponent>,
         owner: String,
+    ) -> Result<Self, CliError> {
+        Self::initialize_with_cleanup(config, dynamic_plugins, owner, None).await
+    }
+
+    pub(super) async fn initialize_with_cleanup(
+        config: GatewayConfig,
+        dynamic_plugins: Vec<ActiveDynamicPluginComponent>,
+        owner: String,
+        cleanup: Option<super::cleanup::CleanupTrigger>,
     ) -> Result<Self, CliError> {
         let observation_capture_bytes = observation_capture_limit_from_environment()?;
         let activation =
             crate::server::initialize_plugin_host(config.plugin_config.clone(), dynamic_plugins)
                 .await?;
         if let Err(error) = provider_middleware_requirements() {
+            if let Some(cleanup) = &cleanup {
+                cleanup.arm();
+            }
             if let Some(activation) = activation {
-                let _ = activation.clear();
+                activation.clear().map_err(|cleanup| {
+                    CliError::Launch(format!("{error}; managed worker cleanup failed: {cleanup}"))
+                })?;
             }
             return Err(error);
         }
@@ -155,6 +171,7 @@ impl ManagedRuntime {
             observation_capture_bytes,
             activation: Mutex::new(activation),
             gateway,
+            cleanup,
         })
     }
 
@@ -167,6 +184,9 @@ impl ManagedRuntime {
     }
 
     pub(super) async fn close(&self) -> Result<(), CliError> {
+        if let Some(cleanup) = &self.cleanup {
+            cleanup.arm();
+        }
         let sessions = self.sessions.close_all("daemon_worker_shutdown").await;
         let subscribers =
             nemo_relay_runtime::api::runtime::flush_subscribers().map_err(CliError::from);
@@ -782,6 +802,9 @@ async fn dispatch_unbuffered_observed(
 
 impl Drop for ManagedRuntime {
     fn drop(&mut self) {
+        if let Some(cleanup) = &self.cleanup {
+            cleanup.arm();
+        }
         if let Some(activation) = self
             .activation
             .get_mut()

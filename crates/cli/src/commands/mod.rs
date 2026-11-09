@@ -46,10 +46,14 @@ pub(crate) async fn run(cli: Cli, bootstrap_shutdown_token: Option<String>) -> E
             } else {
                 ExitCode::FAILURE
             };
-            eprintln!("{error}");
+            render_error(&error);
             exit_code
         }
     }
+}
+
+fn render_error(error: &error::CliError) {
+    eprintln!("{error}");
 }
 
 pub(crate) fn runtime_builder(cli: &Cli) -> tokio::runtime::Builder {

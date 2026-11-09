@@ -3,6 +3,7 @@
 
 //! Daemon-attached per-user worker runtime.
 
+mod cleanup;
 mod control;
 mod managed;
 mod runtime;
@@ -34,6 +35,7 @@ pub(crate) struct Options {
 pub(crate) async fn run(
     options: Options,
     prepared: Option<&crate::configuration::PreparedConfig>,
+    render_error: fn(&CliError),
 ) -> Result<(), CliError> {
     let daemon_origin = explicit_daemon_origin(&options.daemon_address)?;
     let bootstrap = read_bootstrap().await?;
@@ -70,37 +72,61 @@ pub(crate) async fn run(
     let tls_config = worker_tls.as_ref().map(WorkerTlsIdentity::server_config);
     let worker_id = uuid::Uuid::now_v7().to_string();
 
-    let registration = control::register(
-        &daemon_origin,
-        &identity,
-        &worker_id,
-        &endpoint,
-        bootstrap,
-        worker_tls_root.clone(),
-    )
-    .await?;
+    let cleanup = cleanup::CleanupGuard::new().map_err(|error| {
+        CliError::Launch(format!("failed to prepare daemon worker cleanup: {error}"))
+    })?;
 
-    let managed = crate::configuration::resolve_managed_worker_config(prepared)?;
-    let dynamic_plugins = crate::plugins::lifecycle::active_dynamic_plugin_components(
-        Some(&managed.plugin_config_path),
-        &managed.resolved,
-    )?;
+    let result = async {
+        let registration = control::register(
+            &daemon_origin,
+            &identity,
+            &worker_id,
+            &endpoint,
+            bootstrap,
+            worker_tls_root.clone(),
+        )
+        .await?;
 
-    runtime::serve(
-        listener,
-        runtime::RuntimeOptions {
-            daemon_origin,
-            identity,
-            worker_id,
-            endpoint,
-            worker_tls_root,
-            tls_config,
-            config: managed.resolved.gateway,
-            dynamic_plugins,
-            registration,
-        },
-    )
-    .await
+        let managed = crate::configuration::resolve_managed_worker_config(prepared)?;
+        let dynamic_plugins = crate::plugins::lifecycle::active_dynamic_plugin_components(
+            Some(&managed.plugin_config_path),
+            &managed.resolved,
+        )?;
+
+        runtime::serve(
+            listener,
+            runtime::RuntimeOptions {
+                daemon_origin,
+                identity,
+                worker_id,
+                endpoint,
+                worker_tls_root,
+                tls_config,
+                config: managed.resolved.gateway,
+                dynamic_plugins,
+                registration,
+                cleanup: Some(cleanup.trigger()),
+            },
+        )
+        .await
+    }
+    .await;
+    match &result {
+        Ok(()) => cleanup.complete(),
+        Err(error) => {
+            cleanup.trigger().arm();
+            log::error!(
+                target: "nemo_relay.daemon.worker",
+                event = "worker_failed",
+                error_kind = error.log_kind();
+                "Daemon worker failed"
+            );
+            // Fatal cleanup ends the process before its caller can report the
+            // error. Keep rendering in the command layer through this callback.
+            render_error(error);
+        }
+    }
+    result
 }
 
 async fn read_bootstrap() -> Result<WorkerBootstrap, CliError> {

@@ -48,9 +48,11 @@ use super::registry::{
 use crate::configuration::GatewayConfig;
 use crate::daemon::ServerOptions;
 use crate::daemon::common::address::{daemon_url, validate_bind_ip};
+#[cfg(test)]
+use crate::daemon::common::control::EmptyPayload;
 use crate::daemon::common::control::{
     ACTIVATION_LIFETIME_MS, ActivationFailedPayload, CHALLENGE_LIFETIME_MS, CLIENT_TOKEN_HEADER,
-    ChallengeRequest, ChallengeResponse, DRAIN_LIFETIME_MS, EmptyPayload, MAX_CONTROL_BODY_BYTES,
+    ChallengeRequest, ChallengeResponse, DRAIN_LIFETIME_MS, MAX_CONTROL_BODY_BYTES,
     McpRegisterRequest, McpRegisterResponse, RECOVERY_LIFETIME_MS, ROUTE_CREDENTIAL_REJECTED_CODE,
     SessionRequest, WORKER_PROBE_PATH, WORKER_ROUTE_FAILURE_HEADER, WORKER_TOKEN_HEADER,
     WorkerDrainRequest, WorkerGenerationGrant, WorkerNetworkHint, WorkerReadyPayload,
@@ -96,6 +98,7 @@ struct PendingChallenge {
 
 struct Activation {
     fingerprint: Fingerprint,
+    launch_owner: String,
     secret_digest: TokenDigest,
     deadline_unix_ms: u64,
     consumed: bool,
@@ -114,6 +117,9 @@ struct McpControlSession {
     last_request_id: String,
     worker_network: WorkerNetworkHint,
     released: bool,
+    idle_retention: bool,
+    startup_cleanup: bool,
+    cleanup_activation: Option<String>,
 }
 
 struct WorkerControlSession {
@@ -133,6 +139,12 @@ struct WorkerControlSession {
     publication: WorkerPublication,
     published: bool,
     generation_grant: WorkerGenerationGrant,
+}
+
+#[derive(Clone)]
+struct WorkerAdmission {
+    secret_digest: TokenDigest,
+    generation_id: String,
 }
 
 #[derive(Clone)]
@@ -195,14 +207,18 @@ pub(crate) async fn serve(options: ServerOptions) -> Result<(), CliError> {
         sockets,
         registry: Registry::new(options.pass_through)
             .with_require_worker(options.require_worker)
-            .with_max_tokens_per_identity(options.max_tokens_per_identity),
+            .with_max_tokens_per_identity(options.max_tokens_per_identity)
+            .with_worker_idle_timeout(Duration::from_secs(config.worker_idle_timeout_secs)),
         identity: load_or_create_daemon_identity()?,
-        descriptor: crate::daemon::common::control::descriptor(ComponentRole::Daemon),
+        descriptor: crate::daemon::common::control::descriptor_with_idle_retention(
+            ComponentRole::Daemon,
+            config.worker_idle_timeout_secs != 0,
+        ),
         instance_id: uuid::Uuid::now_v7().to_string(),
         pass_through: options.pass_through,
         loopback_listener: local.ip().is_loopback(),
         public_origin,
-        config,
+        config: config.gateway,
         upstream: pooled_client().map_err(|error| CliError::Launch(error.to_string()))?,
         worker_clients: WorkerClientPool::new()?,
         challenges: Mutex::new(HashMap::new()),
@@ -683,6 +699,8 @@ fn register_mcp_blocking(
     };
     let now = now_unix_ms();
     expire_activation_routes(&state, now);
+    let _publication = lock(&state.worker_generation_publication);
+    expire_idle_routes_locked(&state);
     let mut launch = match fresh_launch(request.worker_network.hint.clone()) {
         Ok(launch) => launch,
         Err(error) => return control_error(StatusCode::INTERNAL_SERVER_ERROR, error),
@@ -759,6 +777,22 @@ fn register_mcp_blocking(
                 last_request_id: String::new(),
                 worker_network: request.worker_network.hint,
                 released: false,
+                idle_retention: transcript
+                    .initiator
+                    .capabilities
+                    .contains(crate::daemon::common::control::WORKER_IDLE_RETENTION_CAPABILITY)
+                    && state
+                        .descriptor
+                        .capabilities
+                        .contains(crate::daemon::common::control::WORKER_IDLE_RETENTION_CAPABILITY),
+                startup_cleanup: transcript
+                    .initiator
+                    .capabilities
+                    .contains(crate::daemon::common::control::WORKER_STARTUP_CLEANUP_CAPABILITY)
+                    && state.descriptor.capabilities.contains(
+                        crate::daemon::common::control::WORKER_STARTUP_CLEANUP_CAPABILITY,
+                    ),
+                cleanup_activation: None,
             },
         );
     }
@@ -766,7 +800,12 @@ fn register_mcp_blocking(
     if !reuse_session {
         lock(&state.pending_directives).remove(session_id.as_str());
     }
-    remember_activation(&state, transcript.initiator_fingerprint, &directive);
+    remember_activation(
+        &state,
+        transcript.initiator_fingerprint,
+        session_id.as_str(),
+        &directive,
+    );
     let directive = state
         .sockets
         .directive(transcript.initiator_fingerprint, directive);
@@ -817,14 +856,14 @@ fn select_mcp_session_token(
 
 async fn release_mcp(
     State(state): State<Arc<DaemonState>>,
-    Json(request): Json<SessionRequest<EmptyPayload>>,
+    Json(request): Json<SessionRequest<crate::daemon::common::control::ReleasePayload>>,
 ) -> Response<Body> {
     blocking_control(move || release_mcp_blocking(State(state), Json(request))).await
 }
 
 fn release_mcp_blocking(
     State(state): State<Arc<DaemonState>>,
-    Json(request): Json<SessionRequest<EmptyPayload>>,
+    Json(request): Json<SessionRequest<crate::daemon::common::control::ReleasePayload>>,
 ) -> Response<Body> {
     let authenticated = match authenticate_mcp(&state, &request, None) {
         Ok(authenticated) => authenticated,
@@ -840,18 +879,24 @@ fn release_mcp_blocking(
     if authenticated.duplicate {
         return StatusCode::NO_CONTENT.into_response();
     }
+    if let Some(activation_id) = &request.payload.retained_activation_id {
+        let supported = lock(&state.mcp_sessions)
+            .get(authenticated.session_id.as_str())
+            .is_some_and(|session| session.idle_retention);
+        if !supported || activation_id.is_empty() || activation_id.len() > 128 {
+            return control_message(StatusCode::BAD_REQUEST, "invalid activation retention");
+        }
+    }
     // Wait for durable publication before taking a route gate used by async handlers.
     let _publication = lock(&state.worker_generation_publication);
     let gate = state.sockets.route_gate(authenticated.fingerprint);
     let _route = lock(&gate);
-    if let Some(session) = lock(&state.mcp_sessions).get_mut(authenticated.session_id.as_str()) {
-        session.released = true;
-    }
-    lock(&state.pending_directives).remove(authenticated.session_id.as_str());
-    let action = match state.registry.release_mcp(
+    expire_idle_routes_locked(&state);
+    let action = match state.registry.release_mcp_with_retention(
         authenticated.fingerprint,
         &authenticated.session_id,
         now_unix_ms().saturating_add(DRAIN_LIFETIME_MS),
+        request.payload.retained_activation_id.as_deref(),
     ) {
         Ok(action) => action,
         Err(RegistryError::UnknownRoute | RegistryError::UnknownMcpSession) => {
@@ -859,6 +904,10 @@ fn release_mcp_blocking(
         }
         Err(error) => return registry_error(error),
     };
+    if let Some(session) = lock(&state.mcp_sessions).get_mut(authenticated.session_id.as_str()) {
+        session.released = true;
+    }
+    lock(&state.pending_directives).remove(authenticated.session_id.as_str());
     log_mcp_removed(
         authenticated.fingerprint,
         &authenticated.session_id,
@@ -894,7 +943,7 @@ fn cancel_activation_blocking(
         &authenticated.session_id,
         &request.payload.activation_id,
     ) {
-        Ok(outcome) => {
+        Ok(mut outcome) => {
             if outcome == crate::daemon::common::control::ActivationCancellation::Cancelled {
                 revoke_activation(&state, &request.payload.activation_id);
                 cancel_staged_activation(
@@ -902,6 +951,17 @@ fn cancel_activation_blocking(
                     &request.payload.activation_id,
                     "activation_cancelled",
                 );
+            }
+            if outcome != crate::daemon::common::control::ActivationCancellation::Published
+                && lock(&state.mcp_sessions)
+                    .get(authenticated.session_id.as_str())
+                    .is_some_and(|session| {
+                        session.startup_cleanup
+                            && session.cleanup_activation.as_deref()
+                                == Some(&request.payload.activation_id)
+                    })
+            {
+                outcome = crate::daemon::common::control::ActivationCancellation::CleanupPending;
             }
             state.sockets.changed.notify_waiters();
             Json(outcome).into_response()
@@ -1000,6 +1060,7 @@ fn register_worker_blocking(
     };
     let _publication = lock(&state.worker_generation_publication);
     let now = now_unix_ms();
+    expire_idle_routes_locked(&state);
     let (activation_fingerprint, replay) = {
         let mut activations = lock(&state.activations);
         let Some(activation) = activations.get_mut(&request.activation_id) else {
@@ -1069,6 +1130,39 @@ fn register_worker_blocking(
         request.diagnostics,
         daemon_proof,
     );
+    if response.status().is_success()
+        && let Err(error) = state
+            .registry
+            .mark_activation_registered(activation_fingerprint, &request.activation_id)
+    {
+        lock(&state.worker_sessions).remove(&worker_id);
+        fail_worker_publication(&state, activation_fingerprint, &publication);
+        return registry_error(error);
+    }
+    if response.status().is_success() {
+        let startup_cleanup = request
+            .proof
+            .transcript
+            .initiator
+            .capabilities
+            .contains(crate::daemon::common::control::WORKER_STARTUP_CLEANUP_CAPABILITY)
+            && state
+                .descriptor
+                .capabilities
+                .contains(crate::daemon::common::control::WORKER_STARTUP_CLEANUP_CAPABILITY);
+        let launch_owner = lock(&state.activations)
+            .get(&request.activation_id)
+            .map(|activation| activation.launch_owner.clone());
+        if startup_cleanup
+            && let Some(launch_owner) = launch_owner
+            && let Some(owner) = lock(&state.mcp_sessions).get_mut(&launch_owner)
+            && owner.startup_cleanup
+        {
+            // Admission transfers this exact launch's cleanup custody. Retain the
+            // receipt after worker admission or control state has been retired.
+            owner.cleanup_activation = Some(request.activation_id.clone());
+        }
+    }
     if !response.status().is_success() {
         let fingerprint = activation_fingerprint.to_string();
         log::error!(
@@ -1276,16 +1370,13 @@ fn replay_worker_registration(
     }
     let data_token =
         SensitiveString::new(session.pending_target.session_token().to_owned()).ok()?;
-    Some(
-        Json(WorkerRegisterResponse {
-            diagnostics: session.diagnostic_grant.clone(),
-            daemon_proof,
-            session_token: session.secret.clone(),
-            data_token,
-            generation_grant: session.generation_grant.clone(),
-        })
-        .into_response(),
-    )
+    Some(worker_registration_response(WorkerRegisterResponse {
+        diagnostics: session.diagnostic_grant.clone(),
+        daemon_proof,
+        session_token: session.secret.clone(),
+        data_token,
+        generation_grant: session.generation_grant.clone(),
+    }))
 }
 
 #[allow(clippy::too_many_arguments)]
@@ -1403,14 +1494,25 @@ fn stage_worker(
         publication = publication_name(&publication);
         "Worker registered and is awaiting readiness"
     );
-    Json(WorkerRegisterResponse {
+    worker_registration_response(WorkerRegisterResponse {
         diagnostics: diagnostic_grant,
         daemon_proof,
         session_token: control_secret,
         data_token: data_secret,
         generation_grant,
     })
-    .into_response()
+}
+
+fn worker_registration_response(reply: WorkerRegisterResponse) -> Response<Body> {
+    // Carry the exact returned identity through to socket publication without
+    // recovering it from serialized JSON or a potentially replaced session.
+    let admission = WorkerAdmission {
+        secret_digest: TokenDigest::from_token(reply.session_token.expose().as_bytes()),
+        generation_id: reply.generation_grant.generation_id.clone(),
+    };
+    let mut response = Json(reply).into_response();
+    response.extensions_mut().insert(admission);
+    response
 }
 
 struct ReadyWorker {
@@ -1573,6 +1675,7 @@ fn publish_ready_worker(
     // cannot race a replacement readiness probe. The complete file-backed transaction runs on a
     // blocking thread and this section performs no network I/O.
     let _generation_publication = lock(&state.worker_generation_publication);
+    expire_idle_routes_locked(&state);
     let previous_generation = match &publication {
         WorkerPublication::Activation { activation_id } => {
             let current = lock(&state.activations)
@@ -2628,7 +2731,12 @@ fn fresh_launch(worker_network: WorkerNetworkHint) -> Result<WorkerLaunch, CliEr
     })
 }
 
-fn remember_activation(state: &DaemonState, fingerprint: Fingerprint, directive: &BrokerDirective) {
+fn remember_activation(
+    state: &DaemonState,
+    fingerprint: Fingerprint,
+    launch_owner: &str,
+    directive: &BrokerDirective,
+) {
     if let BrokerDirective::LaunchWorker {
         activation_id,
         activation_token,
@@ -2643,6 +2751,7 @@ fn remember_activation(state: &DaemonState, fingerprint: Fingerprint, directive:
             .entry(activation_id.clone())
             .or_insert_with(|| Activation {
                 fingerprint,
+                launch_owner: launch_owner.to_owned(),
                 secret_digest: TokenDigest::from_token(activation_token.expose().as_bytes()),
                 deadline_unix_ms: *deadline_unix_ms,
                 consumed: false,
@@ -2692,8 +2801,21 @@ fn cancel_staged_activation(state: &Arc<DaemonState>, activation_id: &str, reaso
     }
 }
 
+// Callers serialize this with publication and admission. Registry expiry fences the
+// generation before cancellation or asynchronous draining can touch its processes.
+fn expire_idle_routes_locked(state: &Arc<DaemonState>) {
+    let actions = state.registry.expire_idle_workers(
+        tokio::time::Instant::now(),
+        now_unix_ms().saturating_add(DRAIN_LIFETIME_MS),
+    );
+    for (fingerprint, action) in actions {
+        handle_release_action(Arc::clone(state), fingerprint, action);
+    }
+}
+
 fn expire_activation_routes(state: &Arc<DaemonState>, now_unix_ms: u64) {
     let _publication = lock(&state.worker_generation_publication);
+    expire_idle_routes_locked(state);
     for ExpiredActivation {
         fingerprint,
         activation_id,
@@ -2729,7 +2851,7 @@ fn handle_release_action(state: Arc<DaemonState>, fingerprint: Fingerprint, acti
                 target: "nemo_relay.daemon",
                 event = "worker_activation_cancelled",
                 fingerprint = fingerprint.as_str();
-                "Worker activation cancelled because its last MCP session left"
+                "Worker activation cancelled"
             );
         }
         ReleaseAction::BeginDrain {
@@ -2925,7 +3047,7 @@ fn nominate_relaunch(state: &Arc<DaemonState>, fingerprint: Fingerprint, session
             return;
         }
     };
-    remember_activation(state, fingerprint, &directive);
+    remember_activation(state, fingerprint, session_id.as_str(), &directive);
     lock(&state.pending_directives).insert(session_id.as_str().to_owned(), directive);
     state.sockets.changed.notify_waiters();
     log::info!(

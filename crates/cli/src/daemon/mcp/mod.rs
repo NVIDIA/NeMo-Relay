@@ -16,8 +16,9 @@ use super::common::address::{daemon_url, explicit_daemon_origin};
 use super::common::client::{begin_handshake, control_client};
 use super::common::client_token::resolve_route_credential;
 use super::common::control::{
-    ActivationFailedPayload, EmptyPayload, McpRegisterRequest, McpRegisterResponse, SessionRequest,
-    WorkerActivationFailureReason, WorkerBootstrap, WorkerNetworkHint, WorkerNetworkHintProof,
+    ActivationFailedPayload, McpRegisterRequest, McpRegisterResponse, ReleasePayload,
+    SessionRequest, WorkerActivationFailureReason, WorkerBootstrap, WorkerNetworkHint,
+    WorkerNetworkHintProof,
 };
 use super::common::identity::MachineIdentity;
 use super::common::protocol::{BrokerDirective, ComponentRole, SensitiveString};
@@ -44,12 +45,24 @@ struct McpSession {
     session_token: SensitiveString,
     sequence: u64,
     publication_cleanup: bool,
+    idle_retention: bool,
+    startup_cleanup: bool,
+    retained_activation_id: Option<String>,
 }
 
 struct Registration {
     directive: BrokerDirective,
     session_token: SensitiveString,
     publication_cleanup: bool,
+    idle_retention: bool,
+    startup_cleanup: bool,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum Shutdown {
+    Running,
+    Normal,
+    Failed,
 }
 
 pub(crate) async fn run(options: Options) -> Result<(), CliError> {
@@ -92,6 +105,9 @@ pub(crate) async fn run(options: Options) -> Result<(), CliError> {
         session_token: registration.session_token,
         sequence: 0,
         publication_cleanup: registration.publication_cleanup,
+        idle_retention: registration.idle_retention,
+        startup_cleanup: registration.startup_cleanup,
+        retained_activation_id: None,
     };
     let initial = registration.directive;
     if !lease.publication_cleanup {
@@ -104,7 +120,7 @@ pub(crate) async fn run(options: Options) -> Result<(), CliError> {
         event = "daemon_mcp_ready";
         "Broker reference acquired; MCP protocol is ready"
     );
-    let (shutdown, stop) = tokio::sync::watch::channel(false);
+    let (shutdown, stop) = tokio::sync::watch::channel(Shutdown::Running);
     let mut control = tokio::spawn(async move {
         let result = maintain_session(&mut lease, initial, stop).await;
         release(&mut lease).await;
@@ -114,7 +130,7 @@ pub(crate) async fn run(options: Options) -> Result<(), CliError> {
     tokio::pin!(protocol);
     tokio::select! {
         result = &mut protocol => {
-            let _ = shutdown.send(true);
+            let _ = shutdown.send(if result.is_ok() { Shutdown::Normal } else { Shutdown::Failed });
             // Cooperative shutdown lets the broker arbitrate publication before child cleanup.
             control.await.map_err(|error| CliError::Launch(format!("MCP control task failed: {error}")))??;
             result
@@ -256,6 +272,18 @@ async fn register_once(
             .responder
             .capabilities
             .contains(super::common::control::ACTIVATION_CANCEL_CAPABILITY),
+        idle_retention: handshake
+            .proof
+            .transcript
+            .responder
+            .capabilities
+            .contains(super::common::control::WORKER_IDLE_RETENTION_CAPABILITY),
+        startup_cleanup: handshake
+            .proof
+            .transcript
+            .responder
+            .capabilities
+            .contains(super::common::control::WORKER_STARTUP_CLEANUP_CAPABILITY),
     })
 }
 
@@ -482,6 +510,13 @@ async fn cleanup_pending_launch(
             Ok(Ok(super::common::control::ActivationCancellation::Published)) => {
                 child.published = true
             }
+            Ok(Ok(super::common::control::ActivationCancellation::CleanupPending))
+                if lease.startup_cleanup =>
+            {
+                // The authenticated broker delegated cleanup to the registered worker.
+                // Killing that process here would interrupt its plugin rollback.
+                child.publication_uncertain = true;
+            }
             Ok(Ok(_)) => child.child.kill().await.map_err(CliError::Io)?,
             _ => {
                 // The broker may already own this child. Its grant/control deadline owns cleanup.
@@ -504,7 +539,7 @@ async fn make_route_ready(
 async fn supervise_route(
     lease: &mut McpSession,
     mut directive: BrokerDirective,
-    mut shutdown: Option<&mut tokio::sync::watch::Receiver<bool>>,
+    mut shutdown: Option<&mut tokio::sync::watch::Receiver<Shutdown>>,
 ) -> Result<(), CliError> {
     let started = tokio::time::Instant::now();
     let mut launched: PendingLaunch = None;
@@ -536,7 +571,7 @@ async fn supervise_route(
                 }
                 BrokerDirective::WaitForWorker { .. } => {}
             }
-            if shutdown.as_ref().is_some_and(|stop| *stop.borrow()) { return Ok(()); }
+            if shutdown.as_ref().is_some_and(|stop| *stop.borrow() != Shutdown::Running) { return Ok(()); }
             // The local timer supervises the child; it sends no network traffic.
             let event = tokio::select! {
                 _ = async { match shutdown.as_mut() { Some(stop) => { let _ = stop.changed().await; }, None => std::future::pending().await } } => return Ok(()),
@@ -549,8 +584,29 @@ async fn supervise_route(
         }
     }
     .await;
+    if result.is_ok() {
+        let reason = shutdown
+            .as_ref()
+            .map(|stop| *stop.borrow())
+            .unwrap_or(Shutdown::Running);
+        retain_pending_launch(lease, &mut launched, reason);
+    }
     let cleanup = cleanup_pending_launch(lease, &mut launched).await;
     result.and(cleanup)
+}
+
+fn retain_pending_launch(lease: &mut McpSession, launched: &mut PendingLaunch, reason: Shutdown) {
+    if reason != Shutdown::Normal || !lease.idle_retention {
+        return;
+    }
+    if let Some((activation_id, child, _)) = launched.as_ref()
+        && child.publication_uncertain
+    {
+        // Only a transferred bootstrap may outlive the launcher. Release authenticates
+        // the handoff; launch failures and older peers continue through cancellation.
+        lease.retained_activation_id = Some(activation_id.clone());
+        launched.take();
+    }
 }
 
 async fn supervise_worker_launch(
@@ -679,6 +735,8 @@ fn apply_registration(lease: &mut McpSession, registration: &Registration) {
     lease.session_token = registration.session_token.clone();
     lease.sequence = 0;
     lease.publication_cleanup = registration.publication_cleanup;
+    lease.idle_retention = registration.idle_retention;
+    lease.startup_cleanup = registration.startup_cleanup;
 }
 
 async fn launch_worker(
@@ -867,7 +925,7 @@ async fn report_activation_failed(
 async fn maintain_session(
     lease: &mut McpSession,
     mut directive: BrokerDirective,
-    mut shutdown: tokio::sync::watch::Receiver<bool>,
+    mut shutdown: tokio::sync::watch::Receiver<Shutdown>,
 ) -> Result<(), CliError> {
     if !lease.publication_cleanup {
         // Legacy startup completed before stdio began. Only a new directive can launch again.
@@ -878,7 +936,7 @@ async fn maintain_session(
     }
     loop {
         supervise_route(lease, directive, Some(&mut shutdown)).await?;
-        if *shutdown.borrow() {
+        if *shutdown.borrow() != Shutdown::Running {
             return Ok(());
         }
         directive = tokio::select! {
@@ -894,7 +952,9 @@ async fn release(lease: &mut McpSession) {
         lease.session_id.clone(),
         lease.session_token.clone(),
         lease.sequence,
-        EmptyPayload::default(),
+        ReleasePayload {
+            retained_activation_id: lease.retained_activation_id.take(),
+        },
     ) {
         let _ = lease
             .client

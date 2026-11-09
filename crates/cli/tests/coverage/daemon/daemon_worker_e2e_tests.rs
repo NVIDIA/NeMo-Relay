@@ -2019,6 +2019,9 @@ fn lifecycle_daemon_router_with_activation(
                     port: None,
                 },
                 released: false,
+                idle_retention: false,
+                startup_cleanup: false,
+                cleanup_activation: None,
             },
         )])),
         worker_sessions: Mutex::new(HashMap::from([(
@@ -2228,7 +2231,7 @@ async fn broker_release_enters_draining_while_admitted_stream_finishes() {
         harness.mcp_session_id.clone(),
         harness.mcp_secret.clone(),
         1,
-        EmptyPayload::default(),
+        crate::daemon::common::control::ReleasePayload::default(),
     )
     .expect("MCP release request");
     let release_response = release_mcp(State(harness.state.clone()), Json(release)).await;

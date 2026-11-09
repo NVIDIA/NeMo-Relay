@@ -3,6 +3,7 @@
 
 use std::collections::{BTreeMap, BTreeSet, HashMap, VecDeque};
 use std::sync::{Arc, RwLock, RwLockReadGuard, RwLockWriteGuard};
+use std::time::Duration;
 
 use thiserror::Error;
 
@@ -48,6 +49,7 @@ pub(crate) struct Registry {
     retry_after_ms: u64,
     route_capacity: usize,
     max_tokens_per_identity: usize,
+    worker_idle_timeout: Duration,
     inner: RwLock<RegistryInner>,
 }
 
@@ -145,6 +147,7 @@ impl Registry {
             retry_after_ms: DEFAULT_RETRY_AFTER_MS,
             route_capacity: MAX_ROUTE_BINDINGS,
             max_tokens_per_identity: DEFAULT_MAX_TOKENS_PER_IDENTITY,
+            worker_idle_timeout: Duration::ZERO,
             inner: RwLock::new(RegistryInner::default()),
         }
     }
@@ -159,6 +162,12 @@ impl Registry {
 
     pub(crate) fn with_require_worker(mut self, require_worker: bool) -> Self {
         self.require_worker = require_worker;
+        self
+    }
+
+    /// Retains eligible workers for this period after their last MCP reference leaves.
+    pub(crate) fn with_worker_idle_timeout(mut self, timeout: Duration) -> Self {
+        self.worker_idle_timeout = timeout;
         self
     }
 
@@ -230,7 +239,9 @@ impl Registry {
         let mut inner = self.write();
         let route = inner.routes.get_mut(&fingerprint)?;
         route.connected.remove(session_id);
-        if matches!(&route.state, RouteState::Activating { owner, .. } if owner == session_id) {
+        if matches!(&route.state, RouteState::Activating { owner, .. } if owner == session_id)
+            && !route.activation_retained()
+        {
             let RouteState::Activating { launch, .. } = std::mem::replace(
                 &mut route.state,
                 RouteState::PassThrough { permanent: false },
@@ -242,6 +253,39 @@ impl Registry {
             return Some(launch.activation_id);
         }
         None
+    }
+
+    /// Transfers a pending launch from its disconnected owner without retiring its control session.
+    /// The caller must verify negotiated retention support on the authenticated connection.
+    pub(crate) fn retain_disconnected_activation(
+        &self,
+        fingerprint: Fingerprint,
+        session_id: &McpSessionId,
+        drain_deadline_unix_ms: u64,
+    ) -> Option<(String, ReleaseAction)> {
+        if self.worker_idle_timeout.is_zero() {
+            return None;
+        }
+        let mut inner = self.write();
+        let route = inner.routes.get_mut(&fingerprint)?;
+        let activation_id = match &route.state {
+            RouteState::Activating { owner, launch }
+                if owner == session_id && route.refs.contains_key(session_id) =>
+            {
+                launch.activation_id.clone()
+            }
+            _ => return None,
+        };
+        route.retain_activation(&activation_id, self.worker_idle_timeout);
+        route.connected.remove(session_id);
+        route.ref_tokens.remove(session_id);
+        route.refs.remove(session_id);
+        let action = route.after_reference_removed(
+            session_id,
+            drain_deadline_unix_ms,
+            self.worker_idle_timeout,
+        );
+        Some((activation_id, action))
     }
 
     pub(crate) fn activation_candidates(&self, now: u64) -> Vec<(Fingerprint, McpSessionId)> {
@@ -387,6 +431,7 @@ impl Registry {
         route
             .ref_tokens
             .insert(registration.session_id.clone(), registration.token_digest);
+        route.idle_deadline = None;
         Ok(route.directive_for(&registration.session_id, launch, self.retry_after_ms))
     }
 
@@ -464,17 +509,119 @@ impl Registry {
         session_id: &McpSessionId,
         drain_deadline_unix_ms: u64,
     ) -> Result<ReleaseAction, RegistryError> {
+        self.release_mcp_with_retention(fingerprint, session_id, drain_deadline_unix_ms, None)
+    }
+
+    /// Releases a reference, optionally transferring its successfully bootstrapped activation.
+    pub(crate) fn release_mcp_with_retention(
+        &self,
+        fingerprint: Fingerprint,
+        session_id: &McpSessionId,
+        drain_deadline_unix_ms: u64,
+        retained_activation_id: Option<&str>,
+    ) -> Result<ReleaseAction, RegistryError> {
         let mut inner = self.write();
         let route = inner
             .routes
             .get_mut(&fingerprint)
             .ok_or(RegistryError::UnknownRoute)?;
+        if !route.refs.contains_key(session_id) {
+            return Ok(ReleaseAction::NoChange);
+        }
+        if !self.worker_idle_timeout.is_zero()
+            && let Some(activation_id) = retained_activation_id
+        {
+            match &route.state {
+                RouteState::Activating { owner, launch }
+                    if launch.activation_id == activation_id =>
+                {
+                    if owner != session_id {
+                        return Err(RegistryError::NotLaunchOwner);
+                    }
+                    route.retain_activation(activation_id, self.worker_idle_timeout);
+                }
+                // A completed or superseded launch hint must not prevent releasing
+                // this session's own reference or retain a different activation.
+                _ => {}
+            }
+        }
         route.connected.remove(session_id);
         route.ref_tokens.remove(session_id);
         if route.refs.remove(session_id).is_none() {
             return Ok(ReleaseAction::NoChange);
         }
-        Ok(route.after_reference_removed(session_id, drain_deadline_unix_ms))
+        Ok(route.after_reference_removed(
+            session_id,
+            drain_deadline_unix_ms,
+            self.worker_idle_timeout,
+        ))
+    }
+
+    /// Expires idle generations and retained activations that missed registration.
+    pub(crate) fn expire_idle_workers(
+        &self,
+        now: tokio::time::Instant,
+        drain_deadline_unix_ms: u64,
+    ) -> Vec<(Fingerprint, ReleaseAction)> {
+        let mut inner = self.write();
+        inner
+            .routes
+            .iter_mut()
+            .filter_map(|(fingerprint, route)| {
+                if route.activation_retained()
+                    && route
+                        .retained_registration_deadline
+                        .is_some_and(|deadline| now >= deadline)
+                {
+                    let RouteState::Activating { launch, .. } = &route.state else {
+                        unreachable!()
+                    };
+                    let activation_id = launch.activation_id.clone();
+                    route.retry_at_unix_ms = crate::daemon::common::control::now_unix_ms()
+                        .saturating_add(activation_retry_delay(route.attempts));
+                    route.state = if route.refs.is_empty() {
+                        RouteState::Empty
+                    } else {
+                        RouteState::PassThrough { permanent: false }
+                    };
+                    route.clear_retention();
+                    return Some((
+                        *fingerprint,
+                        ReleaseAction::CancelActivation { activation_id },
+                    ));
+                }
+                if !route.refs.is_empty()
+                    || route.idle_deadline.is_none_or(|deadline| now < deadline)
+                {
+                    return None;
+                }
+                let action = route.stop_unreferenced(drain_deadline_unix_ms);
+                (!matches!(action, ReleaseAction::NoChange)).then_some((*fingerprint, action))
+            })
+            .collect()
+    }
+
+    /// Records authenticated worker admission, ending only the retained registration lease.
+    pub(crate) fn mark_activation_registered(
+        &self,
+        fingerprint: Fingerprint,
+        activation_id: &str,
+    ) -> Result<(), RegistryError> {
+        let mut inner = self.write();
+        let route = inner
+            .routes
+            .get_mut(&fingerprint)
+            .ok_or(RegistryError::UnknownRoute)?;
+        if !matches!(&route.state, RouteState::Activating { launch, .. } if launch.activation_id == activation_id)
+            || route
+                .retained_registration_deadline
+                .is_some_and(|deadline| tokio::time::Instant::now() >= deadline)
+        {
+            return Err(RegistryError::ActivationMismatch);
+        }
+        route.registered_activation = Some(activation_id.to_owned());
+        route.retained_registration_deadline = None;
+        Ok(())
     }
 
     /// Expires dead MCP leases and returns any resulting teardown or ownership actions.
@@ -511,7 +658,11 @@ impl Registry {
                 route.ref_tokens.remove(&session);
                 route.connected.remove(&session);
             }
-            let action = route.after_reference_removed(&removed_session, drain_deadline_unix_ms);
+            let action = route.after_reference_removed(
+                &removed_session,
+                drain_deadline_unix_ms,
+                self.worker_idle_timeout,
+            );
             if !matches!(action, ReleaseAction::NoChange) {
                 actions.push((*fingerprint, action));
             }
@@ -531,12 +682,20 @@ impl Registry {
             .routes
             .get_mut(&fingerprint)
             .ok_or(RegistryError::UnknownRoute)?;
-        if route.refs.is_empty() {
+        if route.refs.is_empty() && !route.retains_idle_activation(activation_id) {
             return Err(RegistryError::NoLiveMcpReferences);
+        }
+        if route
+            .retained_registration_deadline
+            .is_some_and(|deadline| tokio::time::Instant::now() >= deadline)
+        {
+            return Err(RegistryError::ActivationMismatch);
         }
         match &route.state {
             RouteState::Activating { launch, .. } if launch.activation_id == activation_id => {
                 route.record_published_activation(activation_id);
+                route.registered_activation = Some(activation_id.to_owned());
+                route.retained_registration_deadline = None;
                 route.state = RouteState::Ready { target };
                 Ok(())
             }
@@ -561,6 +720,7 @@ impl Registry {
             .ok_or(RegistryError::UnknownRoute)?;
         match &route.state {
             RouteState::Activating { launch, .. } if launch.activation_id == activation_id => {
+                route.clear_retention();
                 route.retry_at_unix_ms = crate::daemon::common::control::now_unix_ms()
                     .saturating_add(activation_retry_delay(route.attempts));
                 route.state = if route.refs.is_empty() {
@@ -795,6 +955,7 @@ impl Registry {
             return Err(RegistryError::NotLaunchOwner);
         }
         route.attempts = route.attempts.saturating_add(1);
+        route.clear_retention();
         route.activation_started = Some(tokio::time::Instant::now());
         route.last_startup_progress = None;
         route.state = RouteState::Activating {
@@ -987,7 +1148,9 @@ impl Registry {
             .get(fingerprint)
             .ok_or(ResolveError::UnknownToken)?;
         match &route.state {
-            RouteState::Ready { target } if target.control_available() => {
+            RouteState::Ready { target }
+                if !route.refs.is_empty() && target.control_available() =>
+            {
                 Ok(ResolvedTarget::Worker(target.acquire(*fingerprint)))
             }
             _ if !route.refs.is_empty() && !self.require_worker => Ok(ResolvedTarget::PassThrough),
@@ -1176,10 +1339,42 @@ struct RouteEntry {
     published_activations: VecDeque<(String, u64)>,
     published_activation: Option<String>,
     removed_worker: Option<String>,
+    /// The activation retained after its launching MCP released or disconnected.
+    retained_activation: Option<String>,
+    registered_activation: Option<String>,
+    retained_registration_deadline: Option<tokio::time::Instant>,
+    idle_deadline: Option<tokio::time::Instant>,
     state: RouteState,
 }
 
 impl RouteEntry {
+    fn retain_activation(&mut self, activation_id: &str, worker_idle_timeout: Duration) {
+        self.retained_activation = Some(activation_id.to_owned());
+        if self.registered_activation.as_deref() != Some(activation_id) {
+            self.retained_registration_deadline
+                .get_or_insert_with(|| tokio::time::Instant::now() + worker_idle_timeout);
+        }
+    }
+
+    fn clear_retention(&mut self) {
+        self.retained_activation = None;
+        self.registered_activation = None;
+        self.retained_registration_deadline = None;
+        self.idle_deadline = None;
+    }
+
+    fn activation_retained(&self) -> bool {
+        matches!(&self.state, RouteState::Activating { launch, .. }
+            if self.retained_activation.as_deref() == Some(launch.activation_id.as_str()))
+    }
+
+    fn retains_idle_activation(&self, activation_id: &str) -> bool {
+        self.retained_activation.as_deref() == Some(activation_id)
+            && self
+                .idle_deadline
+                .is_some_and(|deadline| tokio::time::Instant::now() < deadline)
+    }
+
     fn record_published_activation(&mut self, activation_id: &str) {
         let now_unix_ms = crate::daemon::common::control::now_unix_ms();
         self.published_activations
@@ -1209,6 +1404,10 @@ impl RouteEntry {
             published_activations: VecDeque::new(),
             published_activation: None,
             removed_worker: None,
+            retained_activation: None,
+            registered_activation: None,
+            retained_registration_deadline: None,
+            idle_deadline: None,
             state: if global_pass_through {
                 RouteState::PassThrough { permanent: true }
             } else {
@@ -1225,6 +1424,7 @@ impl RouteEntry {
     ) -> BrokerDirective {
         match &self.state {
             RouteState::Empty => {
+                self.clear_retention();
                 self.attempts = self.attempts.saturating_add(1);
                 self.activation_started = Some(tokio::time::Instant::now());
                 self.last_startup_progress = None;
@@ -1237,7 +1437,9 @@ impl RouteEntry {
             RouteState::Activating {
                 owner,
                 launch: active_launch,
-            } if owner == session_id => active_launch.clone().into_directive(),
+            } if owner == session_id && !self.activation_retained() => {
+                active_launch.clone().into_directive()
+            }
             RouteState::Activating { .. }
             | RouteState::Draining { .. }
             | RouteState::Recovering { target: None, .. } => {
@@ -1273,7 +1475,9 @@ impl RouteEntry {
             RouteState::Activating {
                 owner,
                 launch: active_launch,
-            } if owner == session_id => active_launch.clone().into_directive(),
+            } if owner == session_id && !self.activation_retained() => {
+                active_launch.clone().into_directive()
+            }
             RouteState::Activating { .. }
             | RouteState::Draining { .. }
             | RouteState::Recovering { target: None, .. } => {
@@ -1312,7 +1516,9 @@ impl RouteEntry {
             RouteState::Activating {
                 owner,
                 launch: active_launch,
-            } if owner == session_id => active_launch.clone().into_directive(),
+            } if owner == session_id && !self.activation_retained() => {
+                active_launch.clone().into_directive()
+            }
             RouteState::Activating { .. }
             | RouteState::Draining { .. }
             | RouteState::Recovering { target: None, .. } => {
@@ -1335,10 +1541,31 @@ impl RouteEntry {
         &mut self,
         removed_session: &McpSessionId,
         drain_deadline_unix_ms: u64,
+        worker_idle_timeout: Duration,
     ) -> ReleaseAction {
         if !self.refs.is_empty() {
             return self.transfer_owner_if_needed(removed_session);
         }
+        if !worker_idle_timeout.is_zero()
+            && (self.activation_retained()
+                || matches!(
+                    self.state,
+                    RouteState::Ready { .. }
+                        | RouteState::Recovering {
+                            target: Some(_),
+                            ..
+                        }
+                ))
+        {
+            self.idle_deadline
+                .get_or_insert_with(|| tokio::time::Instant::now() + worker_idle_timeout);
+            return ReleaseAction::NoChange;
+        }
+        self.stop_unreferenced(drain_deadline_unix_ms)
+    }
+
+    fn stop_unreferenced(&mut self, drain_deadline_unix_ms: u64) -> ReleaseAction {
+        self.clear_retention();
         let state = std::mem::replace(&mut self.state, RouteState::Empty);
         match state {
             RouteState::Activating { launch, .. } => ReleaseAction::CancelActivation {
@@ -1388,7 +1615,9 @@ impl RouteEntry {
     }
 
     fn transfer_owner_if_needed(&mut self, removed_session: &McpSessionId) -> ReleaseAction {
-        if matches!(&self.state, RouteState::Activating { owner, .. } if owner == removed_session) {
+        if matches!(&self.state, RouteState::Activating { owner, .. } if owner == removed_session)
+            && !self.activation_retained()
+        {
             let RouteState::Activating { launch, .. } = std::mem::replace(
                 &mut self.state,
                 RouteState::PassThrough { permanent: false },

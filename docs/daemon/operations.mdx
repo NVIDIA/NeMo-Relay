@@ -76,9 +76,12 @@ outcome of a test policy. Confirm both model and hook activity where supported.
 <Step title="Verify Sharing and Shutdown">
 
 Open a second harness for the same user-machine identity. Confirm it reuses
-the worker. Close both sessions, allow up to two minutes for accepted requests
-to drain, and confirm the worker exits. If a process disappeared without
-unregistering, allow the 30-second reconnect grace period first.
+the worker, then close both sessions. If an MCP process exited without
+unregistering, first allow the 30-second reconnect grace period. If
+[worker idle retention](/daemon/configuration#worker-idle-timeout) is enabled,
+also wait for the configured idle period to expire. Then allow up to two minutes
+for accepted requests to drain. Plugin cleanup has a separate 120-second grace
+period. Confirm that the worker and its plugin processes exit.
 
 </Step>
 
@@ -228,8 +231,11 @@ original installer's bootstrap key to verify their attestations. If that key
 is missing or unreadable, reprovision the environment from the trusted plugin
 source. Newly provisioned environments store the key with the environment.
 
-Worker startup has no deadline or retry limit. A slow worker keeps its current
-launch grant. Check the worker's configured logs to find out why startup is slow.
+Plugin initialization has no overall timeout while MCP sessions remain connected.
+Retries have no attempt limit. Refer to
+[Worker Idle Timeout](/daemon/configuration#worker-idle-timeout) for registration
+deadlines and limits on time between sessions.
+Check the worker's configured logs to find out why startup is slow.
 
 Use these daemon events to track startup and retries:
 

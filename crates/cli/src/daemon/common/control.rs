@@ -482,8 +482,16 @@ impl<T: Serialize> SessionRequest<T> {
     }
 }
 
+#[cfg(test)]
 #[derive(Debug, Clone, Default, Serialize, Deserialize)]
 pub(crate) struct EmptyPayload {}
+
+/// Release an MCP reference, optionally handing off a transferred activation.
+#[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
+pub(crate) struct ReleasePayload {
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub(crate) retained_activation_id: Option<String>,
+}
 
 /// An allowlisted reason for a broker-assigned worker activation failure.
 ///
@@ -534,11 +542,15 @@ pub(crate) struct CancelActivationPayload {
 #[serde(rename_all = "snake_case")]
 pub(crate) enum ActivationCancellation {
     Cancelled,
+    /// A registered worker owns cooperative initialization cleanup.
+    CleanupPending,
     Published,
     Superseded,
 }
 
 pub(crate) const ACTIVATION_CANCEL_CAPABILITY: &str = "activation_cancel_v1";
+pub(crate) const WORKER_STARTUP_CLEANUP_CAPABILITY: &str = "worker_startup_cleanup_v1";
+pub(crate) const WORKER_IDLE_RETENTION_CAPABILITY: &str = "worker_idle_retention_v1";
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub(crate) struct ActivationFailedPayload {
@@ -588,12 +600,24 @@ pub(crate) fn now_unix_ms() -> u64 {
 }
 
 pub(crate) fn descriptor(role: ComponentRole) -> ComponentDescriptor {
+    descriptor_with_idle_retention(role, true)
+}
+
+pub(crate) fn descriptor_with_idle_retention(
+    role: ComponentRole,
+    idle_retention: bool,
+) -> ComponentDescriptor {
+    let mut capabilities = super::protocol::Capabilities::streaming_transport()
+        .with_capability(ACTIVATION_CANCEL_CAPABILITY)
+        .with_capability(WORKER_STARTUP_CLEANUP_CAPABILITY)
+        .with_capability(crate::daemon::diagnostics::CAPABILITY);
+    if idle_retention {
+        capabilities = capabilities.with_capability(WORKER_IDLE_RETENTION_CAPABILITY);
+    }
     ComponentDescriptor::nemo_relay(
         role,
         super::protocol::ProtocolRange::default(),
-        super::protocol::Capabilities::streaming_transport()
-            .with_capability(ACTIVATION_CANCEL_CAPABILITY)
-            .with_capability(crate::daemon::diagnostics::CAPABILITY),
+        capabilities,
         env!("CARGO_PKG_VERSION"),
     )
 }

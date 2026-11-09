@@ -96,6 +96,7 @@ impl NativePlugin for FixtureNativePlugin {
         plugin_config: &Map<String, Json>,
         ctx: &mut PluginContext<'_>,
     ) -> nemo_relay_plugin::Result<()> {
+        wait_for_registration_gate(plugin_config)?;
         if plugin_config
             .get("diagnostics_fixture")
             .and_then(Json::as_bool)
@@ -339,6 +340,43 @@ impl NativePlugin for FixtureNativePlugin {
         )?;
 
         Ok(())
+    }
+}
+
+fn wait_for_registration_gate(config: &Map<String, Json>) -> nemo_relay_plugin::Result<()> {
+    let Some(directory) = config.get("register_gate_directory") else {
+        return Ok(());
+    };
+    let directory = directory
+        .as_str()
+        .filter(|path| !path.is_empty())
+        .ok_or("register_gate_directory must be a nonempty directory path")?;
+    let directory = std::path::Path::new(directory);
+    if !directory.is_dir() {
+        return Err(format!(
+            "registration gate directory does not exist: {}",
+            directory.display()
+        ));
+    }
+    let entered = directory.join("entered.json");
+    let pending = directory.join("entered.json.tmp");
+    std::fs::write(&pending, json!({"pid": std::process::id()}).to_string())
+        .and_then(|()| std::fs::rename(&pending, &entered))
+        .map_err(|error| format!("cannot signal native registration gate entry: {error}"))?;
+    let release = directory.join("release");
+    // Keep the callback blocked beyond the process test's cleanup observation.
+    let deadline = std::time::Instant::now() + std::time::Duration::from_secs(300);
+    loop {
+        match std::fs::metadata(&release) {
+            Ok(metadata) if metadata.is_file() => return Ok(()),
+            Ok(_) => return Err("registration gate release must be a file".into()),
+            Err(error) if error.kind() == std::io::ErrorKind::NotFound => {}
+            Err(error) => return Err(format!("cannot inspect registration gate release: {error}")),
+        }
+        if std::time::Instant::now() >= deadline {
+            return Err("native registration gate timed out after 300 seconds".into());
+        }
+        std::thread::sleep(std::time::Duration::from_millis(10));
     }
 }
 
