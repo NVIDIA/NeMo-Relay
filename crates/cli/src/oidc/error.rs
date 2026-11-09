@@ -1,7 +1,7 @@
 // SPDX-FileCopyrightText: Copyright (c) 2026, NVIDIA CORPORATION & AFFILIATES. All rights reserved.
 // SPDX-License-Identifier: Apache-2.0
 
-//! Why a browser sign-in or a logout did not complete. No variant holds a token.
+//! Why a browser sign-in did not complete. No variant holds a token.
 
 use super::browser::APPROVAL_TIMEOUT;
 
@@ -30,14 +30,6 @@ pub(crate) enum SignInError {
     NotCompleted { detail: String },
     #[error("{issuer} did not issue a token for the approved sign-in: {detail}")]
     TokenNotIssued { issuer: String, detail: String },
-    #[error(
-        "the device sign-in cannot carry the configured consent restrictions; sign in without --device"
-    )]
-    DeviceCannotCarryRestrictions,
-    #[error(
-        "removed the sign-in for {issuer}, but the issuer did not confirm revoking it ({reason}); it stays valid until it expires"
-    )]
-    RevocationUnconfirmed { issuer: String, reason: String },
 }
 
 impl SignInError {

@@ -841,39 +841,8 @@ address without opening a browser, and `--callback-port <port>` to listen on a
 fixed port, for example one you forward over SSH.
 
 `--device` uses the OAuth 2.0 device authorization grant instead: the command
-prints a URL and a code to enter on the issuer's own page. It needs no redirect,
-but it cannot carry the consent restrictions below. The issuer must offer the
-device grant to the client.
-
-#### Consent Restrictions
-
-OpenRouter's consent page can pin what a sign-in may approve. An administrator
-adds the restrictions to the provider's `oidc` section:
-
-```toml
-[upstream.openai_oidc]
-issuer = "https://clerk.openrouter.ai"
-client_id = "<client id>"
-scope = "openid offline_access email inference"
-organization_id = "<organization id>"
-workspace_id = "<workspace id>"
-credit_limit = 25
-credit_limit_reset = "monthly"
-hidden_fields = ["keyLabel", "existingKey"]
-```
-
-- `organization_id`: the consent page offers only this organization.
-- `workspace_id`: the consent page offers only this workspace.
-- `credit_limit`: the key the sign-in yields carries this credit limit, in USD.
-- `credit_limit_reset`: `daily`, `weekly`, or `monthly`. It needs `credit_limit`.
-- `hidden_fields`: consent page controls to hide: `keyLabel`, `expiration`,
-  `creditLimit`, and `existingKey`. It needs one of the three settings above.
-
-Every setting is optional. Relay sends them in the OAuth `state` as the Ori CLI
-does: the random value, a `.`, and the restrictions as unpadded base64url JSON,
-at most 1,024 characters. OpenRouter's consent service enforces them. The
-configuration fails to load when a restriction is one the consent service would
-refuse.
+prints a URL and a code to enter on the issuer's own page. It needs no redirect.
+The issuer must offer the device grant to the client.
 
 Relay stores the sign-in in `<user config dir>/oidc/` with owner-only access,
 one file for each issuer, client ID, and scope. The gateway reads it for each request.
@@ -881,10 +850,7 @@ When the access token expires within five minutes, the gateway refreshes it with
 the stored refresh token first. Refreshes from several processes run one at a
 time, so a rotated refresh token is never used twice. Because the gateway reads
 the stored sign-in for each request, the token's real expiry applies, and
-`nemo-relay auth logout` takes effect on the next request. Logout also revokes
-the stored refresh token at the issuer's revocation endpoint, and a new sign-in
-revokes the one it replaces. When the issuer does not confirm the revocation,
-logout still removes the local sign-in and exits with an error that says so.
+`nemo-relay auth logout` takes effect on the next request.
 
 Relay adds the token only to requests it authenticates: agents that Relay
 launches, and daemon routes bound by the managed integration. A client that only
@@ -900,8 +866,8 @@ a new sign-in. `nemo-relay auth token` prints the current access token for
 scripts.
 
 The issuer must use `https`, or `http` on a loopback address. Its
-authorization, token, device, and revocation endpoints must have the same origin
-as the issuer. Relay never writes
+authorization, token, and device endpoints must have the same origin as the
+issuer. Relay never writes
 tokens to logs or error messages.
 
 ### Operational Logging

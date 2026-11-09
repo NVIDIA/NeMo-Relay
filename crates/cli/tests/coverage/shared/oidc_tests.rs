@@ -28,6 +28,7 @@ struct Issuer {
     base: String,
     advertised_issuer: Option<String>,
     token_endpoint: Option<String>,
+    authorization_endpoint: Option<String>,
     /// Replies to device-code polls, in order; the last one repeats.
     device_replies: VecDeque<&'static str>,
     refresh_status: Option<StatusCode>,
@@ -38,8 +39,6 @@ struct Issuer {
     grants: Vec<HashMap<String, String>>,
     /// The `code_challenge` of the last authorization address the browser opened.
     challenge: Option<String>,
-    revocation_status: Option<StatusCode>,
-    revoked: Vec<HashMap<String, String>>,
 }
 
 type Shared = Arc<Mutex<Issuer>>;
@@ -64,19 +63,9 @@ async fn discovery(State(issuer): State<Shared>) -> Json<serde_json::Value> {
     Json(json!({
         "issuer": state.advertised_issuer.clone().unwrap_or_else(|| base.clone()),
         "token_endpoint": state.token_endpoint.clone().unwrap_or_else(|| format!("{base}/token")),
-        "authorization_endpoint": format!("{base}/authorize"),
+        "authorization_endpoint": state.authorization_endpoint.clone().unwrap_or_else(|| format!("{base}/authorize")),
         "device_authorization_endpoint": format!("{base}/device"),
-        "revocation_endpoint": format!("{base}/revoke"),
     }))
-}
-
-async fn revoke(State(issuer): State<Shared>, body: String) -> Response {
-    let mut state = issuer.lock().unwrap();
-    state.revoked.push(parse_form(&body));
-    state
-        .revocation_status
-        .unwrap_or(StatusCode::OK)
-        .into_response()
 }
 
 async fn device(body: String) -> Response {
@@ -172,7 +161,6 @@ async fn start_issuer() -> (OidcSource, Shared) {
         .route("/.well-known/openid-configuration", get(discovery))
         .route("/device", post(device))
         .route("/token", post(token))
-        .route("/revoke", post(revoke))
         .with_state(shared.clone());
     tokio::spawn(async move { axum::serve(listener, app).await.unwrap() });
     (OidcSource::new(&base, CLIENT_ID, None), shared)
@@ -350,17 +338,11 @@ async fn logout_applies_to_the_next_gateway_request() {
         "access-1"
     );
 
-    assert_eq!(
-        logout(dir.path(), &source).await.unwrap(),
-        Logout::Removed(Revocation::Confirmed)
-    );
+    assert!(logout(dir.path(), &source).await.unwrap());
     let error = error_text(upstream_token_in(dir.path(), &source, &|| 1_000).await);
 
     assert!(error.contains("run `nemo-relay auth login`"), "{error}");
-    assert_eq!(
-        logout(dir.path(), &source).await.unwrap(),
-        Logout::NotSignedIn
-    );
+    assert!(!logout(dir.path(), &source).await.unwrap());
 }
 
 #[tokio::test]
@@ -488,6 +470,18 @@ async fn discovery_rejects_a_token_endpoint_on_another_origin() {
     let error = error_text(OidcClient::discover(&source).await);
 
     assert!(error.contains("another origin"), "{error}");
+}
+
+#[tokio::test]
+async fn discovery_accepts_an_authorization_endpoint_on_another_https_origin() {
+    let (source, issuer) = start_issuer().await;
+    issuer.lock().unwrap().authorization_endpoint =
+        Some("https://login.elsewhere.example/authorize".into());
+    assert!(OidcClient::discover(&source).await.is_ok());
+    issuer.lock().unwrap().authorization_endpoint =
+        Some("http://login.elsewhere.example/authorize".into());
+    let error = error_text(OidcClient::discover(&source).await);
+    assert!(error.contains("must use https"), "{error}");
 }
 
 #[test]
@@ -827,94 +821,4 @@ async fn an_unanswered_browser_sign_in_times_out() {
     let error = error_text(super::browser::sign_in(&client, "openid", "s", waiting, |_| {}).await);
 
     assert!(error.contains("timed out"), "{error}");
-}
-
-#[tokio::test]
-async fn the_browser_sign_in_carries_the_configured_consent_restriction_in_its_state() {
-    let (mut source, issuer) = start_issuer().await;
-    source.organization_id = Some("org_required".into());
-    source.credit_limit = Some(serde_json::Number::from(25));
-    let dir = tempfile::tempdir().unwrap();
-    let opened = Arc::default();
-    let browser = approving_browser(issuer.clone(), Arc::clone(&opened), vec![None]);
-
-    login(
-        dir.path(),
-        &source,
-        LoginMethod::Browser(approval(&browser, no_paste())),
-        |_| {},
-    )
-    .await
-    .unwrap();
-
-    let state = query(&opened.lock().unwrap()[0])["state"].clone();
-    let (random, segment) = state.split_once('.').unwrap();
-    assert_eq!(random.len(), 43);
-    assert_eq!(Some(segment.to_owned()), source.restriction_segment());
-}
-
-#[tokio::test]
-async fn the_device_sign_in_refuses_consent_restrictions_it_cannot_carry() {
-    let (mut source, issuer) = start_issuer().await;
-    source.workspace_id = Some("workspace".into());
-    let dir = tempfile::tempdir().unwrap();
-
-    let error = error_text(login(dir.path(), &source, LoginMethod::Device, |_| {}).await);
-
-    assert!(error.contains("without --device"), "{error}");
-    assert!(issuer.lock().unwrap().grants.is_empty());
-}
-
-#[tokio::test]
-async fn logout_revokes_the_refresh_token_at_the_issuer() {
-    let (source, issuer) = start_issuer().await;
-    let dir = tempfile::tempdir().unwrap();
-    store(dir.path(), &source, Some("refresh-1"), 10_000);
-
-    let outcome = logout(dir.path(), &source).await.unwrap();
-
-    assert_eq!(outcome, Logout::Removed(Revocation::Confirmed));
-    let revoked = issuer.lock().unwrap().revoked.clone();
-    assert_eq!(revoked.len(), 1);
-    assert_eq!(revoked[0]["token"], "refresh-1");
-    assert_eq!(revoked[0]["token_type_hint"], "refresh_token");
-    assert_eq!(revoked[0]["client_id"], CLIENT_ID);
-}
-
-#[tokio::test]
-async fn logout_signs_out_locally_when_the_issuer_refuses_the_revocation() {
-    let (source, issuer) = start_issuer().await;
-    issuer.lock().unwrap().revocation_status = Some(StatusCode::SERVICE_UNAVAILABLE);
-    let dir = tempfile::tempdir().unwrap();
-    store(dir.path(), &source, Some("refresh-1"), 10_000);
-
-    let outcome = logout(dir.path(), &source).await.unwrap();
-
-    assert!(
-        matches!(outcome, Logout::Removed(Revocation::Failed(_))),
-        "{outcome:?}"
-    );
-    let error = error_text(upstream_token_in(dir.path(), &source, &|| 1_000).await);
-    assert!(error.contains("nemo-relay auth login"), "{error}");
-}
-
-#[tokio::test]
-async fn a_new_sign_in_revokes_the_one_it_replaces() {
-    let (source, issuer) = start_issuer().await;
-    let dir = tempfile::tempdir().unwrap();
-    store(dir.path(), &source, Some("refresh-old"), 10_000);
-    let browser = approving_browser(issuer.clone(), Arc::default(), vec![None]);
-
-    login(
-        dir.path(),
-        &source,
-        LoginMethod::Browser(approval(&browser, no_paste())),
-        |_| {},
-    )
-    .await
-    .unwrap();
-
-    let revoked = issuer.lock().unwrap().revoked.clone();
-    assert_eq!(revoked.len(), 1);
-    assert_eq!(revoked[0]["token"], "refresh-old");
 }

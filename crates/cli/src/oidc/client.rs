@@ -2,7 +2,7 @@
 // SPDX-License-Identifier: Apache-2.0
 
 //! Requests to the OpenID Connect issuer: discovery, the device sign-in, the authorization code
-//! exchange, token refresh and revocation.
+//! exchange and token refresh.
 
 use std::time::Duration;
 
@@ -26,27 +26,10 @@ struct Discovery {
     token_endpoint: String,
     authorization_endpoint: Option<String>,
     device_authorization_endpoint: Option<String>,
-    revocation_endpoint: Option<String>,
 }
 
-/// What happened to a refresh token when its sign-in was removed or replaced.
-#[derive(Debug, Clone, PartialEq, Eq)]
-pub(crate) enum Revocation {
-    /// The issuer confirmed the revocation.
-    Confirmed,
-    /// The issuer publishes no revocation endpoint.
-    NotOffered,
-    /// The sign-in held no refresh token.
-    NothingToRevoke,
-    /// The issuer did not confirm; the reason holds no token.
-    Failed(String),
-}
-
-/// Why a request did not get an answer; it names no host, token or path.
-pub(crate) const ISSUER_UNREACHABLE: &str = "the issuer could not be reached";
 const AUTHORIZATION_CODE_GRANT: &str = "authorization_code";
 const PKCE_METHOD: &str = "S256";
-const REFRESH_TOKEN_HINT: &str = "refresh_token";
 
 #[derive(Deserialize)]
 pub(crate) struct DeviceStart {
@@ -92,7 +75,6 @@ pub(crate) struct OidcClient {
     pub(super) token_endpoint: String,
     authorization_endpoint: Option<String>,
     device_endpoint: Option<String>,
-    revocation_endpoint: Option<String>,
 }
 
 impl OidcClient {
@@ -118,15 +100,17 @@ impl OidcClient {
         }
         // Endpoints on another origin could send the refresh token to an unintended host.
         let endpoints = std::iter::once(&discovery.token_endpoint)
-            .chain(discovery.authorization_endpoint.as_ref())
-            .chain(discovery.device_authorization_endpoint.as_ref())
-            .chain(discovery.revocation_endpoint.as_ref());
+            .chain(discovery.device_authorization_endpoint.as_ref());
         for endpoint in endpoints {
             if secure_origin(endpoint)? != origin {
                 return Err(auth_error(format!(
                     "{issuer} published an endpoint on another origin: {endpoint}"
                 )));
             }
+        }
+        // The browser alone opens the authorization endpoint, so it may sit on another origin.
+        if let Some(endpoint) = &discovery.authorization_endpoint {
+            secure_origin(endpoint)?;
         }
         Ok(Self {
             http,
@@ -135,7 +119,6 @@ impl OidcClient {
             token_endpoint: discovery.token_endpoint,
             authorization_endpoint: discovery.authorization_endpoint,
             device_endpoint: discovery.device_authorization_endpoint,
-            revocation_endpoint: discovery.revocation_endpoint,
         })
     }
 
@@ -195,23 +178,6 @@ impl OidcClient {
                 }
                 .into())
             }
-        }
-    }
-
-    /// Revokes a refresh token (RFC 7009).
-    pub(crate) async fn revoke(&self, refresh_token: &str) -> Revocation {
-        let Some(endpoint) = self.revocation_endpoint.as_deref() else {
-            return Revocation::NotOffered;
-        };
-        let form = [
-            ("client_id", self.client_id.as_str()),
-            ("token", refresh_token),
-            ("token_type_hint", REFRESH_TOKEN_HINT),
-        ];
-        match self.post(endpoint, &form).await {
-            Ok(response) if response.status().is_success() => Revocation::Confirmed,
-            Ok(response) => Revocation::Failed(format!("HTTP {}", response.status())),
-            Err(_) => Revocation::Failed(ISSUER_UNREACHABLE.into()),
         }
     }
 
@@ -325,7 +291,7 @@ impl OidcClient {
     async fn token_request(&self, form: &[(&str, &str)]) -> Grant {
         let response = match self.post(&self.token_endpoint, form).await {
             Ok(response) => response,
-            Err(_) => return Grant::Unavailable(ISSUER_UNREACHABLE.into()),
+            Err(_) => return Grant::Unavailable("the issuer could not be reached".into()),
         };
         let status = response.status();
         let Ok(reply) = response.json::<TokenReply>().await else {

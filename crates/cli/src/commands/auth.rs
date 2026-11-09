@@ -11,7 +11,7 @@ use clap::{Args, Subcommand, ValueEnum};
 use super::serve::ServerArgs;
 use crate::configuration::GatewayConfig;
 use crate::error::CliError;
-use crate::oidc::{BrowserApproval, LoginMethod, Logout, OidcSource, Revocation, SignInError};
+use crate::oidc::{BrowserApproval, LoginMethod, OidcSource};
 
 #[derive(Debug, Clone, Args)]
 pub(crate) struct AuthCommand {
@@ -48,7 +48,7 @@ pub(crate) struct LoginArgs {
     #[arg(long, default_value_t = 0, conflicts_with = "device")]
     pub(crate) callback_port: u16,
     /// Sign in with a code entered on the issuer's own page (OAuth device authorization) instead
-    /// of the browser redirect. It cannot carry consent restrictions.
+    /// of the browser redirect.
     #[arg(long)]
     pub(crate) device: bool,
 }
@@ -111,18 +111,10 @@ async fn print_token(dir: &Path, source: OidcSource) -> Result<(), CliError> {
 }
 
 async fn logout(dir: &Path, source: OidcSource) -> Result<(), CliError> {
-    let issuer = source.issuer.clone();
-    match crate::oidc::logout(dir, &source).await? {
-        Logout::NotSignedIn => println!("No sign-in is stored for {issuer}."),
-        Logout::Removed(Revocation::Confirmed) => {
-            println!("Removed the sign-in for {issuer} and revoked it at the issuer.");
-        }
-        Logout::Removed(Revocation::NotOffered | Revocation::NothingToRevoke) => {
-            println!("Removed the sign-in for {issuer}.");
-        }
-        Logout::Removed(Revocation::Failed(reason)) => {
-            return Err(SignInError::RevocationUnconfirmed { issuer, reason }.into());
-        }
+    if crate::oidc::logout(dir, &source).await? {
+        println!("Removed the sign-in for {}.", source.issuer);
+    } else {
+        println!("No sign-in is stored for {}.", source.issuer);
     }
     Ok(())
 }
