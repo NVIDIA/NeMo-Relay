@@ -5843,9 +5843,15 @@ async fn gateway_streaming_headers_follow_the_returned_stream_after_both_are_rea
             .collect::<Vec<_>>(),
         ["selected"]
     );
+    assert_eq!(response.headers()["x-upstream-shared"], "same");
+    assert_eq!(
+        response.headers()[header::CONTENT_TYPE],
+        "text/event-stream"
+    );
     let body = response.into_body().collect().await.unwrap().to_bytes();
     let body = std::str::from_utf8(&body).unwrap();
     assert!(body.contains("selected attempt"), "{body}");
+    assert!(!body.contains("losing"), "{body}");
 }
 
 /// Two attempts return the same body with different headers, as an upstream cache can. No

@@ -2976,6 +2976,75 @@ fn captured_upstream_successes_keep_only_agreed_headers_when_ambiguous() {
     assert_only_shared_headers(&empty_stream.response_headers(None, "text/event-stream"));
 }
 
+/// Inner stream that records explicit lifecycle calls.
+struct RecordingStream {
+    items: std::collections::VecDeque<Result<serde_json::Value, FlowError>>,
+    closed: Arc<std::sync::atomic::AtomicUsize>,
+    terminalized: Arc<std::sync::atomic::AtomicUsize>,
+}
+
+impl futures_util::Stream for RecordingStream {
+    type Item = Result<serde_json::Value, FlowError>;
+
+    fn poll_next(
+        self: std::pin::Pin<&mut Self>,
+        _cx: &mut std::task::Context<'_>,
+    ) -> std::task::Poll<Option<Self::Item>> {
+        std::task::Poll::Ready(self.get_mut().items.pop_front())
+    }
+}
+
+impl LlmStreamInner for RecordingStream {
+    fn terminalize(self: std::pin::Pin<&mut Self>) {
+        self.terminalized
+            .fetch_add(1, std::sync::atomic::Ordering::SeqCst);
+    }
+
+    fn close(
+        self: std::pin::Pin<&mut Self>,
+    ) -> std::pin::Pin<Box<dyn std::future::Future<Output = Result<(), FlowError>> + Send + '_>>
+    {
+        self.closed
+            .fetch_add(1, std::sync::atomic::Ordering::SeqCst);
+        Box::pin(async { Ok(()) })
+    }
+}
+
+/// The tap sees only the first successful event, and leaves the stream's lifecycle untouched.
+#[tokio::test]
+async fn first_event_tap_observes_the_first_ok_event_and_delegates_lifecycle() {
+    use futures_util::StreamExt;
+    let closed = Arc::new(std::sync::atomic::AtomicUsize::new(0));
+    let terminalized = Arc::new(std::sync::atomic::AtomicUsize::new(0));
+    let inner = LlmJsonStream::from_closeable(RecordingStream {
+        items: [
+            Err(FlowError::Internal("decode".into())),
+            Ok(json!({"event": 1})),
+            Ok(json!({"event": 2})),
+        ]
+        .into(),
+        closed: Arc::clone(&closed),
+        terminalized: Arc::clone(&terminalized),
+    });
+    let observed = Arc::new(Mutex::new(Vec::new()));
+    let record = Arc::clone(&observed);
+    let mut tapped = FirstEventTap::wrap(
+        inner,
+        Box::new(move |event| record.lock().unwrap().push(event.clone())),
+    );
+
+    assert!(tapped.next().await.unwrap().is_err());
+    assert!(observed.lock().unwrap().is_empty());
+    assert_eq!(tapped.next().await.unwrap().unwrap(), json!({"event": 1}));
+    assert_eq!(tapped.next().await.unwrap().unwrap(), json!({"event": 2}));
+    assert_eq!(*observed.lock().unwrap(), [json!({"event": 1})]);
+
+    tapped.terminalize();
+    tapped.close().await.unwrap();
+    assert_eq!(terminalized.load(std::sync::atomic::Ordering::SeqCst), 1);
+    assert_eq!(closed.load(std::sync::atomic::Ordering::SeqCst), 1);
+}
+
 #[tokio::test]
 async fn streaming_gateway_call_guard_finishes_when_body_is_dropped() {
     let manager = SessionManager::new(GatewayConfig::default());
