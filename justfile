@@ -178,9 +178,10 @@ ensure_docs_dependencies() {
 ensure_node_docs_declarations() {
     cd "$NEMO_RELAY_REPO_ROOT"
     local types_file="crates/node/dist/index.d.ts"
+    local binding_file="crates/node/binding.d.ts"
     local newest_source=""
 
-    if [[ -f "$types_file" ]]; then
+    if [[ -f "$types_file" && -f "$binding_file" ]]; then
         newest_source="$(
             find crates/node/src crates/node/ts crates/node/Cargo.toml crates/node/build.rs \
                 crates/node/binding-types.d.ts crates/node/tsconfig.json \
@@ -188,7 +189,7 @@ ensure_node_docs_declarations() {
         )"
     fi
 
-    if [[ ! -f "$types_file" || -n "$newest_source" ]]; then
+    if [[ ! -f "$types_file" || ! -f "$binding_file" || -n "$newest_source" ]]; then
         npm run build-debug --workspace=nemo-relay-node
     fi
 }
