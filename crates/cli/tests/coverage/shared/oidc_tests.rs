@@ -29,6 +29,7 @@ struct Issuer {
     advertised_issuer: Option<String>,
     token_endpoint: Option<String>,
     authorization_endpoint: Option<String>,
+    omit_authorization_endpoint: bool,
     /// Replies to device-code polls, in order; the last one repeats.
     device_replies: VecDeque<&'static str>,
     refresh_status: Option<StatusCode>,
@@ -60,12 +61,19 @@ fn parse_form(body: &str) -> HashMap<String, String> {
 async fn discovery(State(issuer): State<Shared>) -> Json<serde_json::Value> {
     let state = issuer.lock().unwrap();
     let base = state.base.clone();
-    Json(json!({
+    let mut document = json!({
         "issuer": state.advertised_issuer.clone().unwrap_or_else(|| base.clone()),
         "token_endpoint": state.token_endpoint.clone().unwrap_or_else(|| format!("{base}/token")),
         "authorization_endpoint": state.authorization_endpoint.clone().unwrap_or_else(|| format!("{base}/authorize")),
         "device_authorization_endpoint": format!("{base}/device"),
-    }))
+    });
+    if state.omit_authorization_endpoint {
+        document
+            .as_object_mut()
+            .unwrap()
+            .remove("authorization_endpoint");
+    }
+    Json(document)
 }
 
 async fn device(body: String) -> Response {
@@ -821,4 +829,58 @@ async fn an_unanswered_browser_sign_in_times_out() {
     let error = error_text(super::browser::sign_in(&client, "openid", "s", waiting, |_| {}).await);
 
     assert!(error.contains("timed out"), "{error}");
+}
+async fn pasted_sign_in_error(client: &OidcClient, redirect: &str) -> String {
+    let printed = |_: &str| false;
+    let (paste, pasted) = tokio::sync::mpsc::channel(1);
+    paste.send(redirect.to_owned()).await.unwrap();
+    error_text(
+        super::browser::sign_in(
+            client,
+            "openid",
+            "attempt-state",
+            approval(&printed, pasted),
+            |_| {},
+        )
+        .await,
+    )
+}
+#[tokio::test]
+async fn a_redirect_that_names_another_issuer_is_refused() {
+    let (source, issuer) = start_issuer().await;
+    let client = OidcClient::discover(&source).await.unwrap();
+    let error = pasted_sign_in_error(
+        &client,
+        "http://127.0.0.1:1/callback?code=code-1&state=attempt-state&iss=https%3A%2F%2Fother.example",
+    )
+    .await;
+    assert!(error.contains("names another issuer"), "{error}");
+    assert!(issuer.lock().unwrap().grants.is_empty());
+}
+#[tokio::test]
+async fn browser_sign_in_without_an_authorization_endpoint_points_to_device() {
+    let (source, issuer) = start_issuer().await;
+    issuer.lock().unwrap().omit_authorization_endpoint = true;
+    let client = OidcClient::discover(&source).await.unwrap();
+    let error = pasted_sign_in_error(
+        &client,
+        "http://127.0.0.1:1/callback?code=code-1&state=attempt-state",
+    )
+    .await;
+    assert!(error.contains("does not offer browser sign-in"), "{error}");
+    assert!(error.contains("--device"), "{error}");
+    assert!(issuer.lock().unwrap().grants.is_empty());
+}
+#[tokio::test]
+async fn a_refused_code_exchange_reports_that_no_token_was_issued() {
+    let (source, issuer) = start_issuer().await;
+    let client = OidcClient::discover(&source).await.unwrap();
+    let error = pasted_sign_in_error(
+        &client,
+        "http://127.0.0.1:1/callback?code=unknown-code&state=attempt-state",
+    )
+    .await;
+    assert!(error.contains("did not issue a token"), "{error}");
+    assert!(error.contains("invalid_grant"), "{error}");
+    assert_eq!(issuer.lock().unwrap().grants.len(), 1);
 }
