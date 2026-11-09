@@ -13,6 +13,12 @@ end events must supply a response codec or normalized response annotation with
 model and token usage. Relay leaves cost absent when no configured source
 matches the provider, model, and token usage.
 
+The configured sources apply to transparent agent runs, standalone gateway
+runs, and evals or custom agents that initialize the same gateway plugin
+configuration. Framework integrations, harnesses, and custom hosts can use the
+same pricing sources when they emit managed LLM calls or manual lifecycle
+events with normalized response annotations.
+
 ## Configuration
 
 Add the `pricing` component to `plugins.toml`. The following configuration
@@ -102,6 +108,35 @@ effective order is system, then explicit-or-user. This lets an
 enterprise catalog override narrower catalogs while preserving those catalogs
 as fallbacks.
 
+## Create a Catalog
+
+Create a Relay model pricing catalog JSON file:
+
+```json
+{
+  "version": 1,
+  "entries": [
+    {
+      "provider": "openai",
+      "model_id": "gpt-4o-mini",
+      "aliases": ["openai/openai/gpt-4o-mini"],
+      "currency": "USD",
+      "unit": "per_token",
+      "rates": {
+        "input_per_million": 0.15,
+        "output_per_million": 0.6,
+        "cache_read_per_million": 0.075
+      },
+      "prompt_cache": {
+        "read_accounting": "included_in_prompt_tokens"
+      },
+      "pricing_as_of": "2026-06-06",
+      "pricing_source": "internal-pricing-snapshot"
+    }
+  ]
+}
+```
+
 ## Manage Catalog Sources with the CLI
 
 Run the following commands to validate a catalog and add it to user
@@ -131,7 +166,16 @@ nemo-relay model-pricing resolve gpt-4o-mini \
   --completion-tokens 500
 ```
 
+`model-pricing resolve` prints the source that won, the matched provider/model,
+and an estimated total when token counts are supplied. Use it to debug
+overlapping system, explicit, and user sources.
+
 Use `nemo-relay doctor` to validate configured model pricing sources with the
-rest of the gateway configuration. Refer to [Add Model Pricing for Cost
-Estimates](/nemo-relay-cli/basic-usage#add-model-pricing-for-cost-estimates)
-for the catalog schema, source precedence, and complete CLI workflow.
+rest of the gateway configuration. For check interpretation, refer to
+[Troubleshoot the CLI](/nemo-relay-cli/troubleshooting#check-configuration-and-exporters).
+
+Relay does not ship a canonical price catalog. Unknown models and missing token
+fields leave cost absent instead of defaulting to zero. For the catalog schema,
+provider-aware lookup behavior, threshold-based model pricing, and custom
+`PricingSource` integrations, refer to
+[Provider Response Codecs and Model Pricing](/integrate-into-frameworks/provider-response-codecs#cost-estimation).

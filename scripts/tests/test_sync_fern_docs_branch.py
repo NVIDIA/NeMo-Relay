@@ -94,6 +94,7 @@ class DocsRetentionTests(unittest.TestCase):
         # Define targets independently of redirects so destination typos fail.
         routes = [
             "guide",
+            "nemo-relay-cli/about",
             "reference/migration-guides",
             "build-plugins/about",
             "build-plugins/native/about",

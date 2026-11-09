@@ -104,7 +104,7 @@ These changes improve framework support and coding-agent traces:
   [Middleware Ordering](/supported-integrations/deepagents#middleware-ordering).
 - Codex and Claude Code hook sessions can continue the launcher's trace through
   `TRACEPARENT` and `TRACESTATE`. Refer to
-  [Continue the Launcher Trace](/nemo-relay-cli/basic-usage#continue-the-launcher-trace).
+  [Continue the Launcher Trace](/nemo-relay-cli/gateway-reference#continue-the-launcher-trace).
 - LangChain tool schema edits now reach the model call.
 - Framework tool results retain content and handled error status. Manual LLM
   completion preserves an explicit error status. Cache replay keeps framework
@@ -129,7 +129,7 @@ These changes help you inspect runtime behavior and manage telemetry:
   settings. A passing HTTP check only means the collector answered.
   It does not prove that the collector accepts your credentials or trace data.
   Doctor does not test whether redaction removed sensitive data. Refer to
-  [Check Configuration and Exporters](/nemo-relay-cli/basic-usage#check-configuration-and-exporters).
+  [Check Configuration and Exporters](/nemo-relay-cli/troubleshooting#check-configuration-and-exporters).
 - OTLP endpoints support custom certificate authorities and mutual TLS. Refer to
   [TLS and Mutual TLS](/configure-plugins/observability/opentelemetry#tls-and-mutual-tls).
 - Python applications can configure local OTLP trace files with
@@ -160,11 +160,11 @@ These changes improve provider access and request handling:
   [LLM Middleware](/daemon/reference#llm-middleware).
 - Provider API key helpers can supply a fresh credential for each request
   attempt. Refer to
-  [Generate API Keys Per Request](/nemo-relay-cli/basic-usage#generate-api-keys-per-request).
+  [Generate API Keys Per Request](/nemo-relay-cli/authentication#generate-api-keys-per-request).
 - OpenAI- and Anthropic-compatible model upstreams can use remote HTTP when
   their hosts are explicitly trusted. These requests send no credential headers.
   Prefer HTTPS. Refer to
-  [Credential-Free HTTP Model Upstreams](/nemo-relay-cli/basic-usage#credential-free-http-model-upstreams).
+  [Credential-Free HTTP Model Upstreams](/nemo-relay-cli/provider-upstreams#credential-free-http-model-upstreams).
 - Provider routing checks access before using Relay-held credentials.
 - Request codecs preserve provider fields across multiple edits. Gemini request
   edits preserve text placement. Relay also merges streamed function-call
@@ -181,7 +181,7 @@ These changes improve setup, logging, and deployment guidance:
 - Logging overrides preserve configured file sinks.
 - The configuration editor exposes more gateway, provider, logging, and plugin
   settings. Daemon guidance now covers Kubernetes deployment planning. Refer to
-  [Interactive Setup](/nemo-relay-cli/basic-usage#interactive-setup) and
+  [Interactive Setup](/nemo-relay-cli/configuration#interactive-setup) and
   [Kubernetes Deployment Guidance](/daemon/kubernetes).
 - New quick starts cover application bindings and supported frameworks and
   coding agents. Plugin setup guidance includes Switchyard. Refer to
