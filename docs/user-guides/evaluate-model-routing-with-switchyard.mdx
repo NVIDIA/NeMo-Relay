@@ -33,7 +33,7 @@ setup is included; the linked quickstarts and reference pages are supplemental.
 | --- | --- | --- |
 | Capture path | Relay handles requests supported by Switchyard's routing contract | pi extension and an OpenAI Chat Completions provider |
 | Host | Supported native-plugin platform | Linux x86_64 glibc CPU VM, Python 3.12, Node.js 24.13.1+ |
-| Access | Two tool-capable model targets and a JSON-capable judge | NVIDIA API key with access to the selected models |
+| Access | Two tool-capable model targets and a JSON-capable judge | NVIDIA API key with access to the selected models; GitHub CLI authentication for plugin installation |
 | Versions | Compatible Relay and Switchyard releases | Relay 0.10.4, pi 0.84.0, Switchyard plugin 0.3.2 |
 | Changes and cleanup | Plugin and route policy in the model-handling process | Isolated output, pi configuration, and plugin bundle; remove only those directories |
 
@@ -281,12 +281,10 @@ Run the remaining setup in **Bash on the VM host**.
 
 ```bash
 sudo apt-get update
-sudo apt-get install -y ca-certificates curl git python3.12 python3.12-venv xz-utils
-curl -LsSf https://astral.sh/uv/install.sh | sh
-export PATH="$HOME/.local/bin:$PATH"
+sudo apt-get install -y ca-certificates curl gh git python3.12 xz-utils
 python3.12 --version
-uv --version
 git --version
+gh --version
 ```
 
 Install Node.js 24.13.1 system-wide so login shells can find the same runtime:
@@ -324,14 +322,31 @@ export PATH="$HOME/.local/bin:$PATH"
 nemo-relay install pi
 git clone --depth 1 https://github.com/NVIDIA/NeMo-Relay.git relay-routing
 cd relay-routing/docs/user-guides/_examples/model-routing
-SWITCHYARD_MANIFEST=$(bash install-plugin.sh /tmp/relay-switchyard-bundle)
+```
+
+Authenticate the [GitHub CLI](https://cli.github.com/) with `gh auth login`, or
+supply its supported `GH_TOKEN` environment variable. Use Relay's plugin installer
+with a separate configuration directory so this example does not alter your
+normal user policy:
+
+```bash
+SWITCHYARD_INSTALL_ROOT=$(mktemp -d /tmp/relay-switchyard-install.XXXXXX)
+GH_CONFIG_DIR="${GH_CONFIG_DIR:-${XDG_CONFIG_HOME:-$HOME/.config}/gh}" \
+XDG_CONFIG_HOME="$SWITCHYARD_INSTALL_ROOT" nemo-relay plugins install --user \
+  github:NVIDIA/NeMo-Relay-Plugins@switchyard-plugin-0.3.2 --no-enable
+SWITCHYARD_MANIFEST=$(python3.12 -c '
+import sys, tomllib
+with open(sys.argv[1], "rb") as source:
+    print(tomllib.load(source)["plugins"]["dynamic"][0]["manifest"])
+' "$SWITCHYARD_INSTALL_ROOT/nemo-relay/plugins.toml")
 export SWITCHYARD_MANIFEST
 ```
 
-The helper downloads the Linux x86_64 bundle and SHA-256 sidecar from
-[plugin release 0.3.2](https://github.com/NVIDIA/NeMo-Relay-Plugins/releases/tag/switchyard-plugin-0.3.2),
-then verifies before extraction. Other supported architectures can use the
-[Relay plugin installer](/configure-plugins/plugin-configuration-files).
+The [Relay plugin installer](/configure-plugins/discoverable-plugins#install-a-github-release-bundle)
+selects and verifies the platform bundle from
+[plugin release 0.3.2](https://github.com/NVIDIA/NeMo-Relay-Plugins/releases/tag/switchyard-plugin-0.3.2).
+Keep it disabled in the installation directory; the runner enables it only in
+each comparison's configuration.
 
 <Note title="The runner manages the example configuration">
 Do not manually copy the earlier `plugins.toml` or `routes.toml` into system
@@ -342,17 +357,39 @@ You supply the plugin manifest, model IDs, and provider credentials.
 
 ### 4. Configure inference and run one comparison
 
-Choose model IDs that your NVIDIA key can access. Use tool-capable answer
-models and a judge that supports JSON verdicts. Enter credentials in the same
-shell you use to run the comparison:
+The following public NVIDIA API catalog selections provide an efficient and
+capable target. The judge reuses the efficient model; it does not require a third
+model. Confirm tool calling and JSON verdict support with your key before a
+comparison; catalog availability alone does not establish account access.
+
+| Role | Example model |
+| --- | --- |
+| Efficient target and judge | [NVIDIA Nemotron 3 Nano 30B A3B](https://build.nvidia.com/nvidia/nemotron-3-nano-30b-a3b) |
+| Capable target | [NVIDIA Nemotron 3 Super 120B A12B](https://build.nvidia.com/nvidia/nemotron-3-super-120b-a12b) |
+
+Replace these choices with accessible models when needed. Enter credentials in
+the same shell you use to run the comparison:
 
 ```bash
 export NVIDIA_BASE_URL=https://integrate.api.nvidia.com/v1
-export EFFICIENT_MODEL=YOUR_EFFICIENT_MODEL
-export CAPABLE_MODEL=YOUR_CAPABLE_MODEL
-export JUDGE_MODEL=YOUR_JSON_CAPABLE_JUDGE
+export EFFICIENT_MODEL=nvidia/nemotron-3-nano-30b-a3b
+export CAPABLE_MODEL=nvidia/nemotron-3-super-120b-a12b
+export JUDGE_MODEL="$EFFICIENT_MODEL"
 IFS= read -r -s -p 'NVIDIA API key: ' NVIDIA_API_KEY; printf '\n'
 export NVIDIA_API_KEY
+```
+
+Prepare configuration and task scaffolds without making model calls:
+
+```bash
+python3.12 run.py --output /tmp/relay-routing-prepared --prepare-only
+```
+
+This checks configuration generation and TOML syntax. It does not load the
+plugin, validate provider access, or test model behavior. Inspect the generated
+files, then use a **different output directory** for execution:
+
+```bash
 python3.12 run.py --output /tmp/relay-routing --repeat 1
 python3.12 summarize.py /tmp/relay-routing
 ```
@@ -395,5 +432,7 @@ selected runtime versions before repeating in a new output directory.
 ### 6. Clean up
 
 The runner stops each task gateway. Retain the scorecard and logs, then remove
-only your chosen output and plugin-bundle directories. Leave other users' pi
-settings and plugin installations in place. Stop or delete the Brev VM when done.
+only your chosen output directories and the directory recorded in
+`SWITCHYARD_INSTALL_ROOT`, which contains this example's plugin installation.
+Leave other users' pi settings and plugin installations in place. Stop or
+delete the Brev VM when done.
