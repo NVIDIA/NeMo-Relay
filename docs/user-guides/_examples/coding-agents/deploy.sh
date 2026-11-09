@@ -83,4 +83,5 @@ chmod 644 /etc/nemo-relay/hook-tls-certificate.pem
 install -m 0644 "$source_dir/nemo-relay.service" /etc/systemd/system/nemo-relay.service
 systemctl daemon-reload
 systemctl enable --now nemo-relay.service
-echo "Shared daemon installed for two $agent users. Complete each user's authentication and setup in README.md."
+echo "Shared daemon installed for two $agent users. Complete each user's authentication and setup:"
+echo "https://docs.nvidia.com/nemo/relay/user-guides/govern-coding-agents#4-authenticate-and-start-both-users"

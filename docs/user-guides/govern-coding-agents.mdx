@@ -93,8 +93,32 @@ Code and Codex users. The example chooses one harness for both users to simplify
 
 Distribute an administrator-owned bundle and worker `plugins.toml`. Keep provider
 credentials in each user's authentication store; do not place them in shared
-configuration. This policy redacts selected emitted fields and exports metadata
-to Phoenix, with full payload capture disabled:
+configuration. On Linux, install runtime settings in `/etc/nemo-relay/config.toml`
+and worker plugin policy in `/etc/nemo-relay/plugins.toml`.
+
+Generate an immutable harness bundle using the deployment's daemon address and
+installed Relay executable. This example selects Codex; choose `claude` for Claude Code:
+
+```bash
+sudo /opt/nvidia/bin/nemo-relay daemon managed-bundle \
+  --output /opt/nvidia/share/nemo-relay-managed-v1 \
+  --daemon-address http://127.0.0.1:47632 \
+  --dispatcher-command /opt/nvidia/bin/nemo-relay \
+  --platform linux --agent codex
+```
+
+Keep the bundle administrator-owned and distribute its printed SHA-256 digest
+through your deployment channel. Before launching a harness, check it with
+`nemo-relay doctor --managed-bundle PATH --managed-bundle-sha256 DIGEST`.
+The bundle supplies harness routing and hooks; `config.toml` selects upstream
+provider URLs. For hook transport, provision the daemon's public certificate
+with `nemo-relay daemon tls-certificate` under the service identity and distribute
+the trust pin to clients. Keep its private identity state on the daemon host.
+Refer to [managed client configuration](/daemon/configuration) for other platforms
+and certificate provisioning.
+
+This policy redacts selected emitted fields and exports metadata to Phoenix,
+with full payload capture disabled:
 
 ```toml
 version = 1
@@ -212,6 +236,18 @@ pipeline also needs cost attribution.
 Complete this section in order on a fresh host. It installs the shared service,
 managed policy, and user credentials described above. Supporting deployment
 references are optional.
+
+### Expected result
+
+This illustrative table shows the evidence to collect, rather than captured
+output. Correlate worker status with process ownership and task times; the
+status response itself does not contain usernames or task outcomes.
+
+| Session | Expected worker state | Task and trace evidence |
+| --- | --- | --- |
+| Alice running | Worker A is `ready` under Alice's OS account. | Alice's task passes independent checks and has correlated model/tool spans. |
+| Bob running concurrently | A distinct worker B is `ready` under Bob's OS account. | Bob's task passes independently and has its own captured turn. |
+| Alice's final session closed | Worker A stops; worker B remains ready. | Bob's follow-up test passes and produces a new captured turn. |
 
 ### 1. Provision and connect to a VM
 
@@ -338,6 +374,11 @@ Use `codex` in the deployment command if you installed Codex. The provisioning s
 - Installs policy under `/etc/nemo-relay` and a systemd service on loopback port 47632.
 - Prepares managed Codex settings and a local plugin marketplace when Codex is selected.
 
+The script implements guide steps 2 and 3: it writes the upstream settings and
+plugin policy, generates the managed bundle and digest, provisions the hook
+certificate under the service identity, and creates each user's token.
+`session.sh` checks the bundle digest before launching the selected harness.
+
 <Note title="Provisioning handles the manual deployment steps">
 Do not copy the policy or run `nemo-relay daemon token ensure --json` from the
 earlier guide steps. `deploy.sh` installs the example policy and creates a private
@@ -348,7 +389,9 @@ happen inside each user's account below.
 Check the service with `sudo systemctl is-active nemo-relay.service`; expect `active`.
 
 Start Phoenix in another terminal with `uvx --from arize-phoenix phoenix serve`.
-For the synthetic redaction check only, opt into payloads before starting sessions:
+The default walkthrough verifies metadata and worker isolation without enabling
+payloads. **Optionally**, to inspect synthetic redaction, enable the payload
+policy before starting sessions:
 
 ```bash
 sudo install -m 0644 plugins.synthetic.toml /etc/nemo-relay/plugins.toml
@@ -442,9 +485,13 @@ sudo -iu bob bash -lc 'python3 /opt/nvidia/share/relay-user-guide/verify_task.py
 ```
 
 Status reports `worker_id`, `state`, `reference_count`, `control_available`, and
-`in_flight`; it does not test provider capture. In Phoenix project `default`,
-find service `relay-managed-coding-agents` at each task's time. Inspect the
-`task.txt` tool result for redaction and the model/tool parentage.
+`in_flight`; it does not test provider capture. Compare it with process ownership
+and the [expected result](#expected-result).
+
+In Phoenix project `default`, find service `relay-managed-coding-agents` at each
+task's time and inspect model/tool parentage. If you enabled the optional synthetic
+policy, also inspect the `task.txt` tool result for redaction. With the default
+metadata-only policy, full tool results are absent by design.
 
 A successful process exit is insufficient: noninteractive harnesses can return
 zero while policy prevents the task's commands. Check the files and run the tests.
@@ -452,9 +499,20 @@ Validate ASCII prefixes as well as ASCII digits; Unicode lookalikes must be reje
 
 Expect two ready workers and successful independent task checks for both users.
 Record each account's worker/session and task time, then inspect its model/tool
-trace and synthetic redaction in Phoenix. Close Alice's session, wait for its
-worker to shut down, and ask Bob to run his tests again. Confirm Bob's worker
-remains available and the follow-up produces a new captured turn.
+trace and, if enabled, synthetic redaction in Phoenix. Close Alice's session,
+wait for its worker to shut down, and ask Bob to run his tests again. Confirm
+Bob's worker remains available and the follow-up produces a new captured turn.
+
+After the optional redaction check, restore the metadata-only policy from the
+example directory in an administrator shell:
+
+```bash
+sudo install -m 0644 plugins.toml /etc/nemo-relay/plugins.toml
+sudo systemctl restart nemo-relay.service
+```
+
+Close all affected harness sessions and reopen them so fresh workers load the
+restored policy before using real data.
 
 ### 6. Clean up
 
