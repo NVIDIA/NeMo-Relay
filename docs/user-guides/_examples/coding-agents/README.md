@@ -1,7 +1,7 @@
 <!-- SPDX-FileCopyrightText: Copyright (c) 2026, NVIDIA CORPORATION & AFFILIATES. All rights reserved. -->
 <!-- SPDX-License-Identifier: Apache-2.0 -->
 
-# Deploy Relay Across Organization Coding Agents
+# Deploying Across Organization Coding Agents
 
 The example provisions two independent Linux users, a shared Relay daemon, managed telemetry policy, and either Claude Code or Codex for both users.
 
