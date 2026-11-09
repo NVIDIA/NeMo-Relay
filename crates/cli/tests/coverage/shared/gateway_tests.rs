@@ -1556,6 +1556,7 @@ async fn streaming_provider_error_does_not_poison_the_next_request() {
         &prepared,
         SourceRequestBody::default(),
         Arc::new(CapturedUpstreamFailures::default()),
+        Arc::new(CapturedUpstreamSuccesses::default()),
         crate::operational::OperationalContext::new(),
     );
     let mut request_headers = Map::new();
@@ -1628,6 +1629,7 @@ async fn buffered_body_read_failure_stays_structured() {
         &prepared,
         SourceRequestBody::default(),
         Arc::new(CapturedUpstreamFailures::default()),
+        Arc::new(CapturedUpstreamSuccesses::default()),
         crate::operational::OperationalContext::new(),
     );
     let mut request_headers = Map::new();
@@ -1683,6 +1685,7 @@ async fn buffered_invalid_json_becomes_safe_upstream_failure() {
         &prepared,
         SourceRequestBody::default(),
         Arc::new(CapturedUpstreamFailures::default()),
+        Arc::new(CapturedUpstreamSuccesses::default()),
         crate::operational::OperationalContext::new(),
     );
     let mut request_headers = Map::new();
@@ -2861,6 +2864,50 @@ fn captured_upstream_failures_reject_ambiguous_attempts_without_consuming_them()
     }
     assert!(failures.take(&earlier).is_some());
     assert!(failures.take(&selected).is_some());
+}
+
+/// A success always carries one attempt's headers: the one whose JSON was returned, else the latest.
+#[test]
+fn captured_upstream_successes_select_the_returned_attempt() {
+    let attempt = |id: &'static str| {
+        let mut headers = HeaderMap::new();
+        headers.insert("request-id", HeaderValue::from_static(id));
+        headers.insert(
+            "content-type",
+            HeaderValue::from_static("application/x-provider"),
+        );
+        headers.insert("content-encoding", HeaderValue::from_static("gzip"));
+        headers
+    };
+
+    let none = CapturedUpstreamSuccesses::default();
+    let headers = none.response_headers(None, "application/json");
+    assert_eq!(headers.len(), 1);
+    assert_eq!(headers["content-type"], "application/json");
+
+    let one = CapturedUpstreamSuccesses::default();
+    one.capture(None, attempt("req_1"));
+    let headers = one.response_headers(None, "text/event-stream");
+    assert_eq!(headers["request-id"], "req_1");
+    assert_eq!(headers["content-type"], "text/event-stream");
+    assert_eq!(headers.get_all("content-type").iter().count(), 1);
+    assert!(headers.get("content-encoding").is_none());
+
+    // Fan-out: the returned JSON picks its own attempt, even when it finished first.
+    let first = json!({"id": "first"});
+    let second = json!({"id": "second"});
+    let fan_out = CapturedUpstreamSuccesses::default();
+    fan_out.capture(Some(first.clone()), attempt("req_1"));
+    fan_out.capture(Some(second), attempt("req_2"));
+    let headers = fan_out.response_headers(Some(&first), "application/json");
+    assert_eq!(headers["request-id"], "req_1");
+
+    // A rewritten response matches no attempt, so the latest success is used.
+    let rewritten = CapturedUpstreamSuccesses::default();
+    rewritten.capture(Some(first), attempt("req_1"));
+    rewritten.capture(Some(json!({"id": "second"})), attempt("req_2"));
+    let headers = rewritten.response_headers(Some(&json!({"id": "rewritten"})), "application/json");
+    assert_eq!(headers["request-id"], "req_2");
 }
 
 #[tokio::test]

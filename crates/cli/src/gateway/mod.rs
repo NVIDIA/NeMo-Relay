@@ -36,7 +36,7 @@ use nemo_relay_runtime::api::llm::{
 };
 use nemo_relay_runtime::api::runtime::{
     LlmCodecIdentity, LlmExecutionNextFn, LlmFinalizerFn, LlmJsonStream, LlmStreamExecutionNextFn,
-    TASK_SCOPE_STACK,
+    LlmStreamInner, TASK_SCOPE_STACK,
 };
 use nemo_relay_runtime::codec::response_codec as build_response_codec;
 use nemo_relay_types::codec::request::AnnotatedLlmRequest;
@@ -465,6 +465,122 @@ impl CapturedUpstreamFailures {
 
 type CapturedUpstreamFailuresRef = Arc<CapturedUpstreamFailures>;
 
+/// Provider headers from the successful attempts of one gateway call.
+///
+/// A successful response always carries one attempt's provider headers, matching failures.
+/// A buffered success uses the attempt whose JSON the runtime returned. A streaming success
+/// uses the attempt whose stream most recently yielded its first event, which is the stream the
+/// gateway reads right before it sends headers. Middleware that rewrites a buffered response
+/// leaves no exact match, so the latest successful attempt is used.
+#[derive(Default)]
+struct CapturedUpstreamSuccesses {
+    entries: Mutex<Vec<CapturedUpstreamSuccess>>,
+    first_event: Mutex<Option<usize>>,
+}
+
+struct CapturedUpstreamSuccess {
+    response: Option<Value>,
+    headers: HeaderMap,
+}
+
+impl CapturedUpstreamSuccesses {
+    fn capture(&self, response: Option<Value>, headers: HeaderMap) -> usize {
+        let mut entries = self
+            .entries
+            .lock()
+            .expect("captured upstream successes lock poisoned");
+        entries.push(CapturedUpstreamSuccess { response, headers });
+        entries.len() - 1
+    }
+
+    fn mark_first_event(&self, index: usize) {
+        *self
+            .first_event
+            .lock()
+            .expect("captured upstream successes lock poisoned") = Some(index);
+    }
+
+    /// Returns the client headers for the response, with the gateway's own content type.
+    fn response_headers(&self, selected: Option<&Value>, content_type: &'static str) -> HeaderMap {
+        let mut entries = self
+            .entries
+            .lock()
+            .expect("captured upstream successes lock poisoned");
+        let first_event = *self
+            .first_event
+            .lock()
+            .expect("captured upstream successes lock poisoned");
+        let index = selected
+            .and_then(|selected| {
+                entries
+                    .iter()
+                    .rposition(|entry| entry.response.as_ref() == Some(selected))
+            })
+            .or(first_event)
+            .or_else(|| entries.len().checked_sub(1));
+        let mut headers = index.map_or_else(HeaderMap::new, |index| {
+            std::mem::take(&mut entries[index].headers)
+        });
+        // Relay's own control headers (for example the worker route failure signal) must
+        // never be taken from a provider, as every worker forwarding path already ensures.
+        let private: Vec<_> = headers
+            .keys()
+            .filter(|name| name.as_str().starts_with("x-nemo-relay-"))
+            .cloned()
+            .collect();
+        for name in private {
+            headers.remove(name);
+        }
+        // The gateway re-encodes the body, so the provider's body headers no longer apply.
+        headers.remove(http::header::CONTENT_TYPE);
+        headers.remove(http::header::CONTENT_ENCODING);
+        headers.insert(
+            http::header::CONTENT_TYPE,
+            HeaderValue::from_static(content_type),
+        );
+        headers
+    }
+}
+
+type CapturedUpstreamSuccessesRef = Arc<CapturedUpstreamSuccesses>;
+
+/// Records which attempt's stream yielded its first event, without changing close semantics.
+struct FirstEventMarked {
+    inner: LlmJsonStream,
+    mark: Option<(CapturedUpstreamSuccessesRef, usize)>,
+}
+
+impl futures_util::Stream for FirstEventMarked {
+    type Item = Result<Value, FlowError>;
+
+    fn poll_next(
+        self: std::pin::Pin<&mut Self>,
+        cx: &mut std::task::Context<'_>,
+    ) -> std::task::Poll<Option<Self::Item>> {
+        let this = self.get_mut();
+        let polled = std::pin::Pin::new(&mut this.inner).poll_next(cx);
+        if let std::task::Poll::Ready(Some(Ok(_))) = &polled
+            && let Some((successes, index)) = this.mark.take()
+        {
+            successes.mark_first_event(index);
+        }
+        polled
+    }
+}
+
+impl LlmStreamInner for FirstEventMarked {
+    fn terminalize(self: std::pin::Pin<&mut Self>) {
+        self.get_mut().inner.terminalize();
+    }
+
+    fn close(
+        self: std::pin::Pin<&mut Self>,
+    ) -> std::pin::Pin<Box<dyn std::future::Future<Output = Result<(), FlowError>> + Send + '_>>
+    {
+        Box::pin(self.get_mut().inner.close())
+    }
+}
+
 // Runs the managed pipeline for a prepared gateway request. Streaming and non-streaming branches
 // share the same prep + codec dispatch but diverge in how the runtime drives the upstream call.
 async fn run_managed_gateway(
@@ -656,11 +772,13 @@ async fn run_managed_buffered(
     operational: OperationalContext,
 ) -> Result<Response<Body>, CliError> {
     let upstream_failures = Arc::new(CapturedUpstreamFailures::default());
+    let upstream_successes = Arc::new(CapturedUpstreamSuccesses::default());
     let func = build_buffered_func(
         state.clone(),
         &prepared,
         codecs.source_body,
         upstream_failures.clone(),
+        upstream_successes.clone(),
         operational.clone(),
     );
     let GatewayCallPrep {
@@ -694,11 +812,8 @@ async fn run_managed_buffered(
     match result {
         Ok(response_json) => {
             operational::upstream_completed(&operational, false);
-            let mut headers = HeaderMap::new();
-            headers.insert(
-                http::header::CONTENT_TYPE,
-                HeaderValue::from_static("application/json"),
-            );
+            let headers =
+                upstream_successes.response_headers(Some(&response_json), "application/json");
             let response_body = Body::from(response_json.to_string());
             if record_task_response {
                 state
@@ -738,6 +853,7 @@ fn build_buffered_func(
     prepared: &PreparedGatewayRequest,
     source_body: SourceRequestBody,
     upstream_failures: CapturedUpstreamFailuresRef,
+    upstream_successes: CapturedUpstreamSuccessesRef,
     operational: OperationalContext,
 ) -> LlmExecutionNextFn {
     let http = upstream_client(&state, prepared.client_named_upstream).clone();
@@ -759,6 +875,7 @@ fn build_buffered_func(
         let body_bytes = body_bytes.clone();
         let headers = headers.clone();
         let upstream_failures = upstream_failures.clone();
+        let upstream_successes = upstream_successes.clone();
         let operational = operational.clone();
         let source_body = source_body.clone();
         Box::pin(async move {
@@ -831,7 +948,10 @@ fn build_buffered_func(
                 );
             }
             match serde_json::from_slice::<Value>(&bytes) {
-                Ok(response) => Ok(response),
+                Ok(response) => {
+                    upstream_successes.capture(Some(response.clone()), response_headers);
+                    Ok(response)
+                }
                 Err(_) if retry_aware => {
                     Err(FlowError::Upstream(invalid_json_failure(&response_headers)))
                 }
@@ -870,11 +990,13 @@ async fn run_managed_streaming(
         )
     });
     let upstream_failures = Arc::new(CapturedUpstreamFailures::default());
+    let upstream_successes = Arc::new(CapturedUpstreamSuccesses::default());
     let func = build_streaming_func(
         state.clone(),
         &prepared,
         codecs.source_body,
         upstream_failures.clone(),
+        upstream_successes.clone(),
         operational.clone(),
     );
     let provider_route = prepared.provider;
@@ -947,11 +1069,6 @@ async fn run_managed_streaming(
             return Err(translate_runtime_error(error));
         }
     };
-    let mut headers = HeaderMap::new();
-    headers.insert(
-        http::header::CONTENT_TYPE,
-        HeaderValue::from_static("text/event-stream"),
-    );
     guard.operational = operational;
     guard.response_ready = Some(response_ready);
     let body = match prepare_streaming_response_body(json_stream, provider_route, guard).await {
@@ -963,6 +1080,9 @@ async fn run_managed_streaming(
             return Err(translate_runtime_error(error));
         }
     };
+    // Read after the first event, so the headers belong to the stream the client receives.
+    // Retries later in the stream can't change headers the client already has.
+    let headers = upstream_successes.response_headers(None, "text/event-stream");
 
     build_response(StatusCode::OK, headers, body)
 }
@@ -1031,6 +1151,7 @@ fn build_streaming_func(
     prepared: &PreparedGatewayRequest,
     source_body: SourceRequestBody,
     upstream_failures: CapturedUpstreamFailuresRef,
+    upstream_successes: CapturedUpstreamSuccessesRef,
     operational: OperationalContext,
 ) -> LlmStreamExecutionNextFn {
     let http = upstream_client(&state, prepared.client_named_upstream).clone();
@@ -1052,6 +1173,7 @@ fn build_streaming_func(
         let body_bytes = body_bytes.clone();
         let headers = headers.clone();
         let upstream_failures = upstream_failures.clone();
+        let upstream_successes = upstream_successes.clone();
         let operational = operational.clone();
         let source_body = source_body.clone();
         Box::pin(async move {
@@ -1123,8 +1245,12 @@ fn build_streaming_func(
                     }),
                 );
             }
+            let index = upstream_successes.capture(None, response_headers);
             let json_stream = sse_json_stream(response, operational);
-            Ok(json_stream)
+            Ok(LlmJsonStream::from_closeable(FirstEventMarked {
+                inner: json_stream,
+                mark: Some((upstream_successes, index)),
+            }))
         })
     })
 }

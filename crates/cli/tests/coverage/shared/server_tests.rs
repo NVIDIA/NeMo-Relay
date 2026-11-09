@@ -5400,6 +5400,21 @@ async fn spawn_concurrent_attempt_upstream(release_losing: Arc<Semaphore>) -> Te
         if attempt == "losing" {
             release_losing.acquire().await.unwrap().forget();
         }
+        if attempt == "losing" && request["losing_succeeds"].as_bool() == Some(true) {
+            let body = if streaming {
+                CONCURRENT_LOSING_CHAT_SSE.to_string()
+            } else {
+                let mut response = concurrent_selected_chat_response();
+                response["id"] = json!("chatcmpl-losing");
+                response.to_string()
+            };
+            return Response::builder()
+                .status(StatusCode::OK)
+                .header(header::CONTENT_TYPE, "application/x-losing-success")
+                .header("x-upstream-attempt", attempt)
+                .body(Body::from(body))
+                .unwrap();
+        }
 
         let (status, content_type, body) = match (attempt, streaming, both_fail) {
             ("selected", false, true) => (
@@ -5543,9 +5558,14 @@ async fn gateway_concurrent_next_uses_canonical_selected_buffered_response() {
             .and_then(|value| value.to_str().ok()),
         Some("application/json")
     );
-    assert!(
-        response.headers().get("x-upstream-attempt").is_none(),
-        "managed success must not inherit metadata from an arbitrary upstream attempt"
+    assert_eq!(
+        response
+            .headers()
+            .get_all("x-upstream-attempt")
+            .iter()
+            .collect::<Vec<_>>(),
+        ["selected"],
+        "managed success must carry the selected attempt's headers, never the losing attempt's"
     );
     let body = response.into_body().collect().await.unwrap().to_bytes();
     assert_eq!(
@@ -5628,14 +5648,119 @@ async fn gateway_concurrent_next_uses_canonical_selected_streaming_response() {
             .and_then(|value| value.to_str().ok()),
         Some("text/event-stream")
     );
-    assert!(
-        response.headers().get("x-upstream-attempt").is_none(),
-        "managed stream success must not inherit metadata from an arbitrary upstream attempt"
+    assert_eq!(
+        response
+            .headers()
+            .get_all("x-upstream-attempt")
+            .iter()
+            .collect::<Vec<_>>(),
+        ["selected"],
+        "managed stream success must carry the selected attempt's headers, never the losing attempt's"
     );
     let body = response.into_body().collect().await.unwrap().to_bytes();
     let body = std::str::from_utf8(&body).unwrap();
     assert!(body.contains("selected attempt"), "{body}");
     assert!(!body.contains("losing attempt"), "{body}");
+}
+
+/// Both concurrent attempts succeed and the later one finishes last; the returned attempt's
+/// headers must still win over the latest success.
+#[tokio::test]
+async fn gateway_concurrent_successes_keep_the_selected_attempt_headers() {
+    let _guard = PLUGIN_CONFIG_TEST_LOCK.lock().await;
+    let _ = crate::test_support::plugin_host::test_close_plugin_host();
+
+    const BUFFERED_NAME: &str = "cli-test-concurrent-buffered-successes";
+    const STREAMING_NAME: &str = "cli-test-concurrent-streaming-successes";
+    const MARKER: &str = "select one of two successful concurrent attempts";
+    let _ = deregister_llm_execution_intercept(BUFFERED_NAME);
+    let _buffered_cleanup = LlmExecutionInterceptCleanup(BUFFERED_NAME);
+    let _ = deregister_llm_stream_execution_intercept(STREAMING_NAME);
+    let _streaming_cleanup = LlmStreamExecutionInterceptCleanup(STREAMING_NAME);
+    let release_losing = Arc::new(Semaphore::new(0));
+    let buffered_release = release_losing.clone();
+    register_llm_execution_intercept(
+        BUFFERED_NAME,
+        1,
+        Arc::new(move |_name, request, _context, next| {
+            let release_losing = buffered_release.clone();
+            Box::pin(async move {
+                if request.content["messages"][0]["content"].as_str() != Some(MARKER) {
+                    return next(request).await;
+                }
+                let mut selected_request = request.clone();
+                selected_request.content["attempt"] = json!("selected");
+                let mut losing_request = request;
+                losing_request.content["attempt"] = json!("losing");
+                losing_request.content["losing_succeeds"] = json!(true);
+                let selected = next(selected_request).await;
+                release_losing.add_permits(1);
+                assert!(next(losing_request).await.is_ok());
+                selected
+            })
+        }),
+    )
+    .unwrap();
+    let streaming_release = release_losing.clone();
+    register_llm_stream_execution_intercept(
+        STREAMING_NAME,
+        1,
+        Arc::new(move |_name, request, _context, next| {
+            let release_losing = streaming_release.clone();
+            Box::pin(async move {
+                if request.content["messages"][0]["content"].as_str() != Some(MARKER) {
+                    return next(request).await;
+                }
+                let mut selected_request = request.clone();
+                selected_request.content["attempt"] = json!("selected");
+                let mut losing_request = request;
+                losing_request.content["attempt"] = json!("losing");
+                losing_request.content["losing_succeeds"] = json!(true);
+                let selected = next(selected_request).await;
+                release_losing.add_permits(1);
+                assert!(next(losing_request).await.is_ok());
+                selected
+            })
+        }),
+    )
+    .unwrap();
+
+    let upstream = spawn_concurrent_attempt_upstream(release_losing).await;
+    let mut config = test_config();
+    config.openai_base_url = upstream.url();
+    for streaming in [false, true] {
+        let response = router(config.clone())
+            .oneshot(
+                Request::builder()
+                    .method("POST")
+                    .uri("/v1/chat/completions")
+                    .header(header::CONTENT_TYPE, "application/json")
+                    .body(Body::from(
+                        json!({
+                            "model": "gpt-4o",
+                            "messages": [{"role": "user", "content": MARKER}],
+                            "stream": streaming
+                        })
+                        .to_string(),
+                    ))
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+        assert_eq!(response.status(), StatusCode::OK, "streaming={streaming}");
+        assert_eq!(
+            response
+                .headers()
+                .get_all("x-upstream-attempt")
+                .iter()
+                .collect::<Vec<_>>(),
+            ["selected"],
+            "streaming={streaming}"
+        );
+        let body = response.into_body().collect().await.unwrap().to_bytes();
+        let body = std::str::from_utf8(&body).unwrap();
+        assert!(!body.contains("losing"), "streaming={streaming}: {body}");
+    }
 }
 
 #[tokio::test]
