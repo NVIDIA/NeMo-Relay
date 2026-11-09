@@ -4,8 +4,10 @@
 """Check the same native binaries with hosts built by two Rust toolchains."""
 
 import argparse
+import hashlib
 import os
 import platform
+import re
 import subprocess
 from pathlib import Path
 
@@ -26,7 +28,10 @@ def main() -> None:
     current_target = (
         root / (environment.get("NEMO_RELAY_NATIVE_ABI_FIXTURE_TARGET_DIR") or "target/native-abi-fixtures")
     ).resolve()
-    target = (root / "target/native-abi-toolchains" / args.toolchain).resolve()
+    target_name = args.toolchain
+    if re.fullmatch(r"[A-Za-z0-9][A-Za-z0-9._-]*", target_name) is None:
+        target_name = "toolchain-" + hashlib.sha256(os.fsencode(args.toolchain)).hexdigest()
+    target = (root / "target/native-abi-toolchains" / target_name).resolve()
     if current_target.is_relative_to(target) or target.is_relative_to(current_target):
         parser.error("current and comparison fixture target directories must not overlap")
     current = current_target / "debug"

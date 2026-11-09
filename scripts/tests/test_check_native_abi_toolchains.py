@@ -49,6 +49,35 @@ class NativeAbiToolchainPathTests(unittest.TestCase):
                     self.assertIn(plugin.parent, {current / "debug", self.comparison / "debug"})
                 self.assertEqual(host_directories, {current / "debug", self.comparison / "debug"})
 
+    def test_toolchain_paths_cannot_become_build_targets(self):
+        """Keep path-based toolchains inside the fixture root while passing their paths to rustup."""
+        targets = set()
+        for toolchain in (
+            str(self.root / "toolchains/first/custom"),
+            str(self.root / "toolchains/second/custom"),
+            "../outside",
+            ".",
+            r"C:\Toolchains\custom",
+        ):
+            with (
+                self.subTest(toolchain=toolchain),
+                patch("sys.argv", ["check_native_abi_toolchains.py", toolchain]),
+                patch.dict(os.environ, {}, clear=True),
+            ):
+                self.run_command.reset_mock()
+                matrix.main()
+                calls = self.run_command.call_args_list
+                comparison_build = calls[1].args
+                self.assertEqual(comparison_build[0][2], toolchain)
+                target = Path(comparison_build[2]["NEMO_RELAY_NATIVE_ABI_FIXTURE_TARGET_DIR"])
+                self.assertEqual(target.parent, self.comparison.parent)
+                targets.add(target)
+                for call in calls[3:]:
+                    for executable in call.args[0]:
+                        directory = Path(executable).parent
+                        self.assertIn(directory, {self.root / "target/native-abi-fixtures/debug", target / "debug"})
+        self.assertEqual(len(targets), 5)
+
     def test_overlapping_targets_fail_before_any_build(self):
         """Equal, ancestor, and descendant targets cannot mix compiler outputs."""
         for target in (self.comparison, self.comparison.parent, self.comparison / "nested/../nested"):
