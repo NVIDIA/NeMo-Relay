@@ -46,6 +46,15 @@ class PackageNodeBinTests(unittest.TestCase):
             [f"{platform.key}\t{platform.package_name}" for platform in PACKAGE_NODE_BIN.PLATFORMS.values()],
         )
 
+    def test_metapackage_files_require_types_versions(self) -> None:
+        manifest = {
+            "main": "dist/index.js",
+            "types": "dist/index.d.ts",
+            "exports": {".": {"types": "./dist/index.d.ts", "default": "./dist/index.js"}},
+        }
+        with self.assertRaisesRegex(ValueError, "typesVersions"):
+            PACKAGE_NODE_BIN.metapackage_files(manifest)
+
     def test_builds_metapackage_and_linux_native_package(self) -> None:
         with tempfile.TemporaryDirectory() as temporary:
             output = Path(temporary)
@@ -61,6 +70,9 @@ class PackageNodeBinTests(unittest.TestCase):
                     ".": {"types": "./dist/index.d.ts", "default": "./dist/index.js"},
                     "./typed": {"types": "./dist/typed.d.ts", "default": "./dist/typed.js"},
                     "./diagnostics": {"types": "./dist/diagnostics.d.ts", "default": "./dist/diagnostics.js"},
+                },
+                "typesVersions": {
+                    "*": {"typed": ["dist/typed.d.ts"], "diagnostics": ["dist/diagnostics.d.ts"]},
                 },
                 "engines": {"node": ">=24.0.0"},
                 "license": "Apache-2.0",
@@ -109,8 +121,10 @@ class PackageNodeBinTests(unittest.TestCase):
                     manifest["optionalDependencies"]["nemo-relay-node-linux-x64-gnu"],
                     "0.7.0-rc.1",
                 )
+                self.assertEqual(manifest["typesVersions"], source_manifest["typesVersions"])
                 names = archive.getnames()
                 self.assertIn("package/binding.js", names)
+                self.assertIn("package/dist/typed.d.ts", names)
                 self.assertIn("package/binding.d.ts", names)
                 self.assertIn("package/dist/index.js", names)
                 self.assertIn("package/dist/index.js.map", names)

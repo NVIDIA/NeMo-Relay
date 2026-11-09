@@ -491,6 +491,19 @@ jobs:
           }
           NODE
 
+      - name: Type-check split Node package entry points
+        if: ${{ !contains(matrix.platform, 'musl') }}
+        working-directory: package-smoke
+        run: |
+          set -euo pipefail
+          typescript_version="$(node -p "require('../package.json').devDependencies.typescript")"
+          npm install --ignore-scripts --no-save "typescript@${typescript_version}"
+          cp ../crates/node/tests/public_entry_points_fixture.ts .
+          for resolution in "CommonJS Node10" "NodeNext NodeNext" "ESNext Bundler"; do
+            read -r module module_resolution <<<"$resolution"
+            npx tsc --noEmit --strict --target ES2022 --module "$module" --moduleResolution "$module_resolution" public_entry_points_fixture.ts
+          done
+
       - name: Install and load musllinux split Node package
         if: ${{ contains(matrix.platform, 'musl') }}
         run: |

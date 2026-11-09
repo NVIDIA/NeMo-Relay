@@ -20,7 +20,8 @@ EXPORT_RE = re.compile(
     r"(?P<kind>enum|interface|class|function|type|const)\s+"
     r"(?P<name>[A-Za-z_$][A-Za-z0-9_$]*)"
 )
-REEXPORT_RE = re.compile(r"^export\s+\{(?P<names>.*?)\};?$")
+REEXPORT_RE = re.compile(r"^export\s+(?:type\s+)?\{(?P<names>.*?)\}(?:\s+from\s+['\"](?P<specifier>[^'\"]+)['\"])?;?$")
+STAR_REEXPORT_RE = re.compile(r"^export\s+\*\s+from\s+['\"](?P<specifier>[^'\"]+)['\"];?$")
 INTERNAL_NAME_PREFIXES = ("__test",)
 SECTION_ORDER = ("interface", "class", "enum", "function", "type", "const")
 SECTION_TITLES = {
@@ -94,6 +95,7 @@ class ModuleDoc:
     description: str
     items: list[ApiItem] = field(default_factory=list)
     reexports: list[str] = field(default_factory=list)
+    star_sources: list[Path] = field(default_factory=list)
 
 
 def _escape_text(value: str) -> str:
@@ -231,7 +233,7 @@ def _collect_braced_declaration(lines: list[str], start: int) -> tuple[str, int]
     return "\n".join(collected).rstrip(), index
 
 
-def _collect_statement_declaration(lines: list[str], start: int, kind: str) -> tuple[str, int]:
+def _collect_statement_declaration(lines: list[str], start: int) -> tuple[str, int]:
     collected: list[str] = []
     paren_depth = 0
     brace_depth = 0
@@ -246,9 +248,9 @@ def _collect_statement_declaration(lines: list[str], start: int, kind: str) -> t
         stripped = line.strip()
         index += 1
 
-        if stripped.endswith(";"):
-            break
-        if kind == "function" and paren_depth <= 0 and brace_depth <= 0 and bracket_depth <= 0:
+        if paren_depth > 0 or brace_depth > 0 or bracket_depth > 0:
+            continue
+        if stripped.endswith(";") or index >= len(lines) or not lines[index].startswith((" ", "\t")):
             break
 
     return "\n".join(collected).rstrip(), index
@@ -257,17 +259,37 @@ def _collect_statement_declaration(lines: list[str], start: int, kind: str) -> t
 def _collect_declaration(lines: list[str], start: int, kind: str) -> tuple[str, int]:
     if kind in {"interface", "class", "enum"}:
         return _collect_braced_declaration(lines, start)
-    return _collect_statement_declaration(lines, start, kind)
+    return _collect_statement_declaration(lines, start)
 
 
 def _is_public_name(name: str) -> bool:
     return not name.startswith("_") and not any(name.startswith(prefix) for prefix in INTERNAL_NAME_PREFIXES)
 
 
+def _resolve_declaration_source(source: Path, specifier: str) -> Path:
+    if not specifier.startswith("."):
+        raise SystemExit(f"{source}: re-export from a package specifier is not supported: {specifier}")
+    target = source.parent / specifier
+    if target.suffix == ".js":
+        target = target.with_suffix(".d.ts")
+    elif target.suffix != ".ts":
+        target = target.with_name(f"{target.name}.d.ts")
+    if not target.is_file():
+        raise SystemExit(f"{source}: re-exported declaration file not found: {target}")
+    return target.resolve()
+
+
+def _parse_star_reexport(source: Path, declaration: str) -> Path:
+    match = STAR_REEXPORT_RE.match(" ".join(declaration.split()))
+    if match is None:
+        raise SystemExit(f"{source}: unsupported export statement: {declaration}")
+    return _resolve_declaration_source(source, match.group("specifier"))
+
+
 def _parse_reexport_names(declaration: str) -> list[str]:
     match = REEXPORT_RE.match(" ".join(declaration.split()))
     if match is None:
-        return []
+        raise SystemExit(f"unsupported export statement: {declaration}")
 
     names: list[str] = []
     for item in match.group("names").split(","):
@@ -313,8 +335,12 @@ def _parse_declaration_line(
         if pending_doc.summary and module_doc is None and not module.items:
             module_doc = pending_doc
         return JsDoc(), module_doc, index + 1
-    if stripped.startswith("export {"):
-        declaration, next_index = _collect_statement_declaration(lines, index, "reexport")
+    if stripped.startswith("export *"):
+        declaration, next_index = _collect_statement_declaration(lines, index)
+        module.star_sources.append(_parse_star_reexport(module.source, declaration))
+        return JsDoc(), module_doc, next_index
+    if stripped.startswith(("export {", "export type {")):
+        declaration, next_index = _collect_statement_declaration(lines, index)
         module.reexports.extend(_parse_reexport_names(declaration))
         return JsDoc(), module_doc, next_index
     match = EXPORT_RE.match(stripped)
@@ -326,6 +352,27 @@ def _parse_declaration_line(
     if _is_public_name(name):
         module.items.append(ApiItem(name=name, kind=kind, declaration=declaration, doc=pending_doc))
     return JsDoc(), module_doc, next_index
+
+
+def _resolve_star_exports(module: ModuleDoc, parsed: dict[Path, ModuleDoc], visiting: tuple[Path, ...] = ()) -> None:
+    source = module.source.resolve()
+    if source in visiting:
+        cycle = " -> ".join(str(path) for path in (*visiting, source))
+        raise SystemExit(f"re-export cycle: {cycle}")
+    names = {item.name for item in module.items}
+    for target_path in module.star_sources:
+        target = parsed.get(target_path)
+        if target is None:
+            target = _parse_declaration_file(target_path, str(target_path))
+            parsed[target_path] = target
+        _resolve_star_exports(target, parsed, (*visiting, source))
+        for item in target.items:
+            if item.name not in names:
+                module.items.append(item)
+                names.add(item.name)
+        module.reexports.extend(name for name in target.reexports if name not in names)
+    module.star_sources = []
+    module.reexports = sorted(set(module.reexports))
 
 
 def _package_exports(package_json: Path) -> list[tuple[str, Path]]:
@@ -429,6 +476,9 @@ def generate(package_root: Path, output_dir: Path) -> int:
     modules = [
         _parse_declaration_file(types_path, import_path) for import_path, types_path in _package_exports(package_json)
     ]
+    parsed = {module.source.resolve(): module for module in modules}
+    for module in modules:
+        _resolve_star_exports(module, parsed)
 
     reset_output_dir(output_dir)
     _write_index(output_dir, modules)

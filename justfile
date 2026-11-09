@@ -197,6 +197,7 @@ generate_docs_api_references() {
     cd "$NEMO_RELAY_REPO_ROOT"
     uv run --no-sync python scripts/docs/generate_python_library_reference.py
     ensure_node_docs_declarations
+    uv run --no-sync python -m unittest scripts.tests.test_node_library_reference
     uv run --no-sync python scripts/docs/generate_node_library_reference.py
     uv run --no-sync python -m unittest scripts.tests.test_rust_library_reference
     uv run --no-sync python scripts/docs/generate_rust_library_reference.py

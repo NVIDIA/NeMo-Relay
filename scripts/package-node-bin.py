@@ -79,6 +79,16 @@ def metapackage_files(manifest: dict[str, object]) -> list[str]:
         if not isinstance(entry, dict):
             raise ValueError("Node package export must contain types and default paths")
         files.update(str(path).removeprefix("./") for path in entry.values())
+    types_versions = manifest.get("typesVersions")
+    if not isinstance(types_versions, dict):
+        raise ValueError("Node package manifest is missing typesVersions")
+    for selector in types_versions.values():
+        if not isinstance(selector, dict):
+            raise ValueError("Node package typesVersions selector must map subpaths to declaration paths")
+        for paths in selector.values():
+            if not isinstance(paths, list):
+                raise ValueError("Node package typesVersions subpath must list declaration paths")
+            files.update(str(path) for path in paths)
     files.update(f"{path}.map" for path in list(files) if path.endswith(".js") and path.startswith("dist/"))
     return sorted(files)
 
@@ -121,6 +131,7 @@ def build_metapackage(node_dir: Path, version: str, output: Path) -> Path:
         "main": source_manifest["main"],
         "types": source_manifest["types"],
         "exports": source_manifest["exports"],
+        "typesVersions": source_manifest["typesVersions"],
         "files": metapackage_files(source_manifest),
         "optionalDependencies": {platform.package_name: version for platform in PLATFORMS.values()},
     }
