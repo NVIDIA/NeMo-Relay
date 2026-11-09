@@ -101,17 +101,14 @@ impl OidcClient {
         }
         // Endpoints on another origin could send the refresh token to an unintended host.
         let endpoints = std::iter::once(&discovery.token_endpoint)
-            .chain(discovery.device_authorization_endpoint.as_ref());
+            .chain(discovery.device_authorization_endpoint.as_ref())
+            .chain(discovery.authorization_endpoint.as_ref());
         for endpoint in endpoints {
             if secure_origin(endpoint)? != origin {
                 return Err(auth_error(format!(
                     "{issuer} published an endpoint on another origin: {endpoint}"
                 )));
             }
-        }
-        // The browser alone opens the authorization endpoint, so it may sit on another origin.
-        if let Some(endpoint) = &discovery.authorization_endpoint {
-            secure_origin(endpoint)?;
         }
         Ok(Self {
             http,

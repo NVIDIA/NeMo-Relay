@@ -281,11 +281,9 @@ each configured sign-in exists, is valid, has expired but can refresh, or needs
 a new sign-in. `nemo-relay auth token` prints the current access token for
 scripts.
 
-The issuer must use `https`, or `http` on a loopback address. Its token and
-device endpoints must have the same origin as the issuer. Only the browser opens
-the authorization endpoint, so it may use another origin, but it must also use
-`https`, or `http` on a loopback address. Relay never writes tokens to logs or
-error messages.
+The issuer must use `https`, or `http` on a loopback address. Its
+authorization, token and device endpoints must have the same origin as the
+issuer. Relay never writes tokens to logs or error messages.
 
 <Warning>
 `nemo-relay auth token` prints an access token. Treat its output as a credential

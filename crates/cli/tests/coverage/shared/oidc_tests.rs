@@ -481,15 +481,12 @@ async fn discovery_rejects_a_token_endpoint_on_another_origin() {
 }
 
 #[tokio::test]
-async fn discovery_accepts_an_authorization_endpoint_on_another_https_origin() {
+async fn discovery_rejects_an_authorization_endpoint_on_another_origin() {
     let (source, issuer) = start_issuer().await;
     issuer.lock().unwrap().authorization_endpoint =
         Some("https://login.elsewhere.example/authorize".into());
-    assert!(OidcClient::discover(&source).await.is_ok());
-    issuer.lock().unwrap().authorization_endpoint =
-        Some("http://login.elsewhere.example/authorize".into());
     let error = error_text(OidcClient::discover(&source).await);
-    assert!(error.contains("must use https"), "{error}");
+    assert!(error.contains("another origin"), "{error}");
 }
 
 #[test]
