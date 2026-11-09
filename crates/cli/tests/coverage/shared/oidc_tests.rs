@@ -28,6 +28,8 @@ struct Issuer {
     base: String,
     advertised_issuer: Option<String>,
     token_endpoint: Option<String>,
+    authorization_endpoint: Option<String>,
+    omit_authorization_endpoint: bool,
     /// Replies to device-code polls, in order; the last one repeats.
     device_replies: VecDeque<&'static str>,
     refresh_status: Option<StatusCode>,
@@ -36,6 +38,8 @@ struct Issuer {
     /// A refresh moves this clock forward by the given seconds, like a slow issuer.
     refresh_takes: Option<(Arc<AtomicU64>, u64)>,
     grants: Vec<HashMap<String, String>>,
+    /// The `code_challenge` of the last authorization address the browser opened.
+    challenge: Option<String>,
 }
 
 type Shared = Arc<Mutex<Issuer>>;
@@ -57,11 +61,19 @@ fn parse_form(body: &str) -> HashMap<String, String> {
 async fn discovery(State(issuer): State<Shared>) -> Json<serde_json::Value> {
     let state = issuer.lock().unwrap();
     let base = state.base.clone();
-    Json(json!({
+    let mut document = json!({
         "issuer": state.advertised_issuer.clone().unwrap_or_else(|| base.clone()),
         "token_endpoint": state.token_endpoint.clone().unwrap_or_else(|| format!("{base}/token")),
+        "authorization_endpoint": state.authorization_endpoint.clone().unwrap_or_else(|| format!("{base}/authorize")),
         "device_authorization_endpoint": format!("{base}/device"),
-    }))
+    });
+    if state.omit_authorization_endpoint {
+        document
+            .as_object_mut()
+            .unwrap()
+            .remove("authorization_endpoint");
+    }
+    Json(document)
 }
 
 async fn device(body: String) -> Response {
@@ -116,6 +128,14 @@ async fn token(State(issuer): State<Shared>, body: String) -> Response {
                     (StatusCode::BAD_GATEWAY, "<html>bad gateway</html>").into_response()
                 }
                 error => refused(error),
+            }
+        }
+        "authorization_code" => {
+            let challenge = super::browser::code_challenge(&form["code_verifier"]);
+            if form["code"] == "code-1" && state.challenge.as_deref() == Some(challenge.as_str()) {
+                issued("access-1", "refresh-1")
+            } else {
+                refused("invalid_grant")
             }
         }
         "refresh_token" => {
@@ -460,6 +480,15 @@ async fn discovery_rejects_a_token_endpoint_on_another_origin() {
     assert!(error.contains("another origin"), "{error}");
 }
 
+#[tokio::test]
+async fn discovery_rejects_an_authorization_endpoint_on_another_origin() {
+    let (source, issuer) = start_issuer().await;
+    issuer.lock().unwrap().authorization_endpoint =
+        Some("https://login.elsewhere.example/authorize".into());
+    let error = error_text(OidcClient::discover(&source).await);
+    assert!(error.contains("another origin"), "{error}");
+}
+
 #[test]
 fn issuer_urls_must_use_https_unless_they_are_loopback() {
     assert!(secure_origin("https://clerk.openrouter.ai").is_ok());
@@ -615,4 +644,281 @@ async fn a_sign_in_for_one_scope_is_never_used_for_another() {
 
     assert!(error.contains("nemo-relay auth login"), "{error}");
     assert_eq!(saved(dir.path(), &source).access_token, "access-1");
+}
+
+/// The query of the authorization address, by name.
+fn query(url: &str) -> HashMap<String, String> {
+    reqwest::Url::parse(url)
+        .unwrap()
+        .query_pairs()
+        .map(|(key, value)| (key.into_owned(), value.into_owned()))
+        .collect()
+}
+
+/// A browser that approves: it records the challenge, then follows the redirect with `code`
+/// and the given state (`None` keeps the attempt's own).
+fn approving_browser(
+    issuer: Shared,
+    opened: Arc<Mutex<Vec<String>>>,
+    states: Vec<Option<&'static str>>,
+) -> impl Fn(&str) -> bool + Send + Sync {
+    move |url: &str| {
+        let params = query(url);
+        issuer.lock().unwrap().challenge = Some(params["code_challenge"].clone());
+        opened.lock().unwrap().push(url.to_owned());
+        let states = states.clone();
+        tokio::spawn(async move {
+            for state in states {
+                let state = state.map_or_else(|| params["state"].clone(), str::to_owned);
+                let mut redirect = reqwest::Url::parse(&params["redirect_uri"]).unwrap();
+                redirect
+                    .query_pairs_mut()
+                    .append_pair("code", "code-1")
+                    .append_pair("state", &state);
+                reqwest::get(redirect).await.unwrap();
+            }
+        });
+        true
+    }
+}
+
+fn approval<'a>(
+    open: &'a super::browser::Opener,
+    pasted: tokio::sync::mpsc::Receiver<String>,
+) -> BrowserApproval<'a> {
+    BrowserApproval {
+        port: 0,
+        open,
+        pasted,
+        timeout: Duration::from_secs(10),
+    }
+}
+
+fn no_paste() -> tokio::sync::mpsc::Receiver<String> {
+    tokio::sync::mpsc::channel(1).1
+}
+
+#[tokio::test]
+async fn browser_login_exchanges_the_loopback_code_with_the_pkce_verifier() {
+    let (source, issuer) = start_issuer().await;
+    let dir = tempfile::tempdir().unwrap();
+    let opened = Arc::default();
+    let browser = approving_browser(issuer.clone(), Arc::clone(&opened), vec![None]);
+
+    login(
+        dir.path(),
+        &source,
+        LoginMethod::Browser(approval(&browser, no_paste())),
+        |_| {},
+    )
+    .await
+    .unwrap();
+
+    assert_eq!(saved(dir.path(), &source).access_token, "access-1");
+    let url = opened.lock().unwrap()[0].clone();
+    let params = query(&url);
+    assert!(
+        url.starts_with(&format!("{}/authorize?", source.issuer)),
+        "{url}"
+    );
+    assert_eq!(params["response_type"], "code");
+    assert_eq!(params["client_id"], CLIENT_ID);
+    assert_eq!(params["scope"], "openid offline_access");
+    assert_eq!(params["code_challenge_method"], "S256");
+    assert!(params["redirect_uri"].starts_with("http://127.0.0.1:"));
+    assert!(params["redirect_uri"].ends_with("/callback"));
+    assert_eq!(params["state"].len(), 43);
+    let grant = issuer.lock().unwrap().grants[0].clone();
+    assert_eq!(grant["grant_type"], "authorization_code");
+    assert_eq!(grant["redirect_uri"], params["redirect_uri"]);
+}
+
+#[tokio::test]
+async fn a_redirect_for_another_attempt_does_not_end_the_sign_in() {
+    let (source, issuer) = start_issuer().await;
+    let opened = Arc::default();
+    let browser = approving_browser(issuer.clone(), opened, vec![Some("forged"), None]);
+    let client = OidcClient::discover(&source).await.unwrap();
+
+    let session = super::browser::sign_in(
+        &client,
+        "openid",
+        "attempt-state",
+        approval(&browser, no_paste()),
+        |_| {},
+    )
+    .await
+    .unwrap();
+
+    assert_eq!(session.access_token, "access-1");
+    assert_eq!(issuer.lock().unwrap().grants.len(), 1);
+}
+
+#[tokio::test]
+async fn a_pasted_redirect_completes_a_sign_in_without_a_local_browser() {
+    let (source, issuer) = start_issuer().await;
+    let client = OidcClient::discover(&source).await.unwrap();
+    let captured = issuer.clone();
+    let printed = move |url: &str| {
+        captured.lock().unwrap().challenge = Some(query(url)["code_challenge"].clone());
+        false
+    };
+    let (paste, pasted) = tokio::sync::mpsc::channel(8);
+    for line in [
+        "not a url\n".to_owned(),
+        "http://127.0.0.1:1/callback?code=code-1&state=other-attempt\n".to_owned(),
+        "<http://127.0.0.1:1/callback?code=code-1&state=attempt-state>\n".to_owned(),
+    ] {
+        paste.send(line).await.unwrap();
+    }
+    let mut shown = Vec::new();
+
+    let session = super::browser::sign_in(
+        &client,
+        "openid",
+        "attempt-state",
+        approval(&printed, pasted),
+        |line| shown.push(line),
+    )
+    .await
+    .unwrap();
+
+    assert_eq!(session.refresh_token.as_deref(), Some("refresh-1"));
+    let shown = shown.join("\n");
+    assert!(shown.contains("open this address in a browser"), "{shown}");
+    assert!(shown.contains("not a sign-in redirect"), "{shown}");
+    assert!(shown.contains("another sign-in attempt"), "{shown}");
+}
+
+#[tokio::test]
+async fn a_declined_browser_sign_in_reports_it() {
+    let (source, _issuer) = start_issuer().await;
+    let client = OidcClient::discover(&source).await.unwrap();
+    let printed = |_: &str| false;
+    let (paste, pasted) = tokio::sync::mpsc::channel(1);
+    paste
+        .send("http://127.0.0.1:1/callback?error=access_denied&state=attempt-state".into())
+        .await
+        .unwrap();
+
+    let error = error_text(
+        super::browser::sign_in(
+            &client,
+            "openid",
+            "attempt-state",
+            approval(&printed, pasted),
+            |_| {},
+        )
+        .await,
+    );
+
+    assert!(error.contains("declined"), "{error}");
+}
+
+#[tokio::test]
+async fn an_unanswered_browser_sign_in_times_out() {
+    let (source, _issuer) = start_issuer().await;
+    let client = OidcClient::discover(&source).await.unwrap();
+    let printed = |_: &str| false;
+    let mut waiting = approval(&printed, no_paste());
+    waiting.timeout = Duration::from_millis(50);
+
+    let error = error_text(super::browser::sign_in(&client, "openid", "s", waiting, |_| {}).await);
+
+    assert!(error.contains("timed out"), "{error}");
+}
+async fn pasted_sign_in_error(client: &OidcClient, redirect: &str) -> String {
+    let printed = |_: &str| false;
+    let (paste, pasted) = tokio::sync::mpsc::channel(1);
+    paste.send(redirect.to_owned()).await.unwrap();
+    error_text(
+        super::browser::sign_in(
+            client,
+            "openid",
+            "attempt-state",
+            approval(&printed, pasted),
+            |_| {},
+        )
+        .await,
+    )
+}
+#[tokio::test]
+async fn a_redirect_that_names_another_issuer_is_refused() {
+    let (source, issuer) = start_issuer().await;
+    let client = OidcClient::discover(&source).await.unwrap();
+    let error = pasted_sign_in_error(
+        &client,
+        "http://127.0.0.1:1/callback?code=code-1&state=attempt-state&iss=https%3A%2F%2Fother.example",
+    )
+    .await;
+    assert!(error.contains("names another issuer"), "{error}");
+    assert!(issuer.lock().unwrap().grants.is_empty());
+}
+#[tokio::test]
+async fn browser_sign_in_without_an_authorization_endpoint_points_to_device() {
+    let (source, issuer) = start_issuer().await;
+    issuer.lock().unwrap().omit_authorization_endpoint = true;
+    let client = OidcClient::discover(&source).await.unwrap();
+    let error = pasted_sign_in_error(
+        &client,
+        "http://127.0.0.1:1/callback?code=code-1&state=attempt-state",
+    )
+    .await;
+    assert!(error.contains("does not offer browser sign-in"), "{error}");
+    assert!(error.contains("--device"), "{error}");
+    assert!(issuer.lock().unwrap().grants.is_empty());
+}
+#[tokio::test]
+async fn a_refused_code_exchange_reports_that_no_token_was_issued() {
+    let (source, issuer) = start_issuer().await;
+    let client = OidcClient::discover(&source).await.unwrap();
+    let error = pasted_sign_in_error(
+        &client,
+        "http://127.0.0.1:1/callback?code=unknown-code&state=attempt-state",
+    )
+    .await;
+    assert!(error.contains("did not issue a token"), "{error}");
+    assert!(error.contains("invalid_grant"), "{error}");
+    assert_eq!(issuer.lock().unwrap().grants.len(), 1);
+}
+#[tokio::test]
+async fn a_redirect_iss_must_match_the_metadata_issuer_exactly() {
+    let (source, issuer) = start_issuer().await;
+    let client = OidcClient::discover(&source).await.unwrap();
+    let slashed = reqwest::Url::parse_with_params(
+        "http://127.0.0.1:1/callback",
+        &[
+            ("code", "code-1"),
+            ("state", "attempt-state"),
+            ("iss", &format!("{}/", source.issuer)),
+        ],
+    )
+    .unwrap();
+    let error = pasted_sign_in_error(&client, slashed.as_str()).await;
+    assert!(error.contains("names another issuer"), "{error}");
+    assert!(issuer.lock().unwrap().grants.is_empty());
+}
+#[tokio::test]
+async fn a_redirect_iss_is_compared_with_the_published_issuer() {
+    let (source, issuer) = start_issuer().await;
+    let published = format!("{}/", source.issuer);
+    issuer.lock().unwrap().advertised_issuer = Some(published.clone());
+    let client = OidcClient::discover(&source).await.unwrap();
+    let redirect_naming = |iss: &str| {
+        reqwest::Url::parse_with_params(
+            "http://127.0.0.1:1/callback",
+            &[
+                ("code", "unknown-code"),
+                ("state", "attempt-state"),
+                ("iss", iss),
+            ],
+        )
+        .unwrap()
+    };
+    let error = pasted_sign_in_error(&client, redirect_naming(&published).as_str()).await;
+    assert!(error.contains("did not issue a token"), "{error}");
+    assert_eq!(issuer.lock().unwrap().grants.len(), 1);
+    let error = pasted_sign_in_error(&client, redirect_naming(&source.issuer).as_str()).await;
+    assert!(error.contains("names another issuer"), "{error}");
+    assert_eq!(issuer.lock().unwrap().grants.len(), 1);
 }

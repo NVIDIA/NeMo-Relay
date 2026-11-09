@@ -3,6 +3,7 @@
 
 //! `nemo-relay auth`: sign in to the provider named by `[upstream.<provider>_oidc]`.
 
+use std::path::Path;
 use std::process::ExitCode;
 
 use clap::{Args, Subcommand, ValueEnum};
@@ -10,7 +11,7 @@ use clap::{Args, Subcommand, ValueEnum};
 use super::serve::ServerArgs;
 use crate::configuration::GatewayConfig;
 use crate::error::CliError;
-use crate::oidc::OidcSource;
+use crate::oidc::{BrowserApproval, LoginMethod, OidcSource};
 
 #[derive(Debug, Clone, Args)]
 pub(crate) struct AuthCommand {
@@ -20,8 +21,8 @@ pub(crate) struct AuthCommand {
 
 #[derive(Debug, Clone, Subcommand)]
 pub(crate) enum AuthSubcommand {
-    /// Sign in to the configured OpenID Connect provider with a code shown in the terminal.
-    Login(ProviderArgs),
+    /// Sign in to the configured OpenID Connect provider in a browser.
+    Login(LoginArgs),
     /// Print a current access token, refreshing it near expiry. For scripts; the gateway reads
     /// the sign-in itself.
     Token(ProviderArgs),
@@ -33,6 +34,23 @@ pub(crate) enum AuthSubcommand {
 pub(crate) enum ProviderArg {
     Openai,
     Anthropic,
+}
+
+#[derive(Debug, Clone, Default, Args)]
+pub(crate) struct LoginArgs {
+    #[command(flatten)]
+    pub(crate) provider: ProviderArgs,
+    /// Print the sign-in address instead of opening a browser.
+    #[arg(long, conflicts_with = "device")]
+    pub(crate) no_browser: bool,
+    /// Loopback port for the browser redirect, for example one forwarded over SSH. A free port
+    /// is picked by default.
+    #[arg(long, default_value_t = 0, conflicts_with = "device")]
+    pub(crate) callback_port: u16,
+    /// Sign in with a code entered on the issuer's own page (OAuth device authorization) instead
+    /// of the browser redirect.
+    #[arg(long)]
+    pub(crate) device: bool,
 }
 
 /// Without flags, the provider comes from `[upstream.openai_oidc]` or
@@ -60,26 +78,45 @@ pub(super) async fn execute(
     let dir = crate::oidc::sessions_dir()?;
     let load = || configured(server);
     match command.command {
-        AuthSubcommand::Login(args) => {
-            let source = select_source(args, load)?;
-            crate::oidc::login(&dir, &source, |prompt| println!("{prompt}")).await?;
-            println!("Signed in to {}.", source.issuer);
-        }
-        AuthSubcommand::Token(args) => {
-            let source = select_source(args, load)?;
-            let token = crate::oidc::current_token(&dir, &source, &crate::oidc::now_secs).await?;
-            println!("{token}");
-        }
-        AuthSubcommand::Logout(args) => {
-            let source = select_source(args, load)?;
-            if crate::oidc::logout(&dir, &source).await? {
-                println!("Removed the sign-in for {}.", source.issuer);
-            } else {
-                println!("No sign-in is stored for {}.", source.issuer);
-            }
-        }
+        AuthSubcommand::Login(args) => login(&dir, args, load).await?,
+        AuthSubcommand::Token(args) => print_token(&dir, select_source(args, load)?).await?,
+        AuthSubcommand::Logout(args) => logout(&dir, select_source(args, load)?).await?,
     }
     Ok(ExitCode::SUCCESS)
+}
+
+async fn login(
+    dir: &Path,
+    args: LoginArgs,
+    load: impl FnOnce() -> Result<GatewayConfig, CliError>,
+) -> Result<(), CliError> {
+    let source = select_source(args.provider, load)?;
+    let method = if args.device {
+        LoginMethod::Device
+    } else {
+        LoginMethod::Browser(BrowserApproval::interactive(
+            !args.no_browser,
+            args.callback_port,
+        ))
+    };
+    crate::oidc::login(dir, &source, method, |prompt| println!("{prompt}")).await?;
+    println!("Signed in to {}.", source.issuer);
+    Ok(())
+}
+
+async fn print_token(dir: &Path, source: OidcSource) -> Result<(), CliError> {
+    let token = crate::oidc::current_token(dir, &source, &crate::oidc::now_secs).await?;
+    println!("{token}");
+    Ok(())
+}
+
+async fn logout(dir: &Path, source: OidcSource) -> Result<(), CliError> {
+    if crate::oidc::logout(dir, &source).await? {
+        println!("Removed the sign-in for {}.", source.issuer);
+    } else {
+        println!("No sign-in is stored for {}.", source.issuer);
+    }
+    Ok(())
 }
 
 /// The effective configuration, including the user layer that `--config` replaces.
