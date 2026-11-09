@@ -120,11 +120,11 @@ pub(crate) fn prepare(
 /// Not a credential: the gateway replaces it with the one Relay owns.
 const PLACEHOLDER_API_KEY: &str = "nemo-relay-supplies-this-credential";
 
-/// An empty value is no credential.
+/// An inherited value, an empty one included, stays the child's to keep.
 fn inherits_anthropic_credential() -> bool {
     ["ANTHROPIC_API_KEY", "ANTHROPIC_AUTH_TOKEN"]
         .into_iter()
-        .any(|name| std::env::var_os(name).is_some_and(|value| !value.is_empty()))
+        .any(|name| std::env::var_os(name).is_some())
 }
 
 #[derive(Default)]

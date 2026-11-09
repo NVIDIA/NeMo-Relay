@@ -1437,17 +1437,21 @@ fn test_claude_placeholder_api_key_only_when_relay_owns_the_credential() {
 #[test]
 fn test_claude_placeholder_api_key_keeps_a_caller_credential() {
     for name in ["ANTHROPIC_API_KEY", "ANTHROPIC_AUTH_TOKEN"] {
-        let _env = EnvScope::set(&[
-            ("ANTHROPIC_API_KEY", None),
-            ("ANTHROPIC_AUTH_TOKEN", None),
-            (name, Some(std::ffi::OsStr::new("caller-value"))),
-        ]);
-        let prepared = claude_dry_run_with(relay_oidc_gateway());
-        assert_eq!(
-            launch_env(&prepared, "ANTHROPIC_API_KEY"),
-            None,
-            "an inherited {name} must stay the child's credential"
-        );
+        for value in ["caller-value", ""] {
+            let _env = EnvScope::set(&[
+                ("ANTHROPIC_API_KEY", None),
+                ("ANTHROPIC_AUTH_TOKEN", None),
+                (name, Some(std::ffi::OsStr::new(value))),
+            ]);
+            for gateway in [relay_oidc_gateway(), relay_helper_gateway()] {
+                let prepared = claude_dry_run_with(gateway);
+                assert_eq!(
+                    launch_env(&prepared, "ANTHROPIC_API_KEY"),
+                    None,
+                    "an inherited {name}={value:?} must stay the child's credential"
+                );
+            }
+        }
     }
 }
 
