@@ -2866,32 +2866,46 @@ fn captured_upstream_failures_reject_ambiguous_attempts_without_consuming_them()
     assert!(failures.take(&selected).is_some());
 }
 
-/// A success always carries one attempt's headers: the one whose JSON was returned, else the latest.
-#[test]
-fn captured_upstream_successes_select_the_returned_attempt() {
-    let attempt = |id: &'static str| {
-        let mut headers = HeaderMap::new();
-        headers.insert("request-id", HeaderValue::from_static(id));
-        headers.insert(
-            "content-type",
-            HeaderValue::from_static("application/x-provider"),
-        );
-        headers.insert("content-encoding", HeaderValue::from_static("gzip"));
-        headers.insert("content-digest", HeaderValue::from_static("sha-256=:AAAA:"));
-        headers.insert(
-            "x-nemo-relay-worker-route-failure",
-            HeaderValue::from_static("pass-through"),
-        );
-        headers
-    };
+fn success_headers(id: &'static str) -> HeaderMap {
+    let mut headers = HeaderMap::new();
+    headers.insert("request-id", HeaderValue::from_static(id));
+    headers.insert(
+        "content-type",
+        HeaderValue::from_static("application/x-provider"),
+    );
+    headers.insert("content-encoding", HeaderValue::from_static("gzip"));
+    headers.insert("content-digest", HeaderValue::from_static("sha-256=:AAAA:"));
+    headers.insert(
+        "x-nemo-relay-worker-route-failure",
+        HeaderValue::from_static("pass-through"),
+    );
+    headers
+}
 
+fn shared_success_headers(id: &'static str) -> HeaderMap {
+    let mut headers = success_headers(id);
+    headers.insert(
+        "anthropic-ratelimit-unified-status",
+        HeaderValue::from_static("allowed"),
+    );
+    headers
+}
+
+fn assert_only_shared_headers(headers: &HeaderMap) {
+    assert!(headers.get("request-id").is_none());
+    assert_eq!(headers["anthropic-ratelimit-unified-status"], "allowed");
+}
+
+/// Provider body and control headers never reach the client, and the gateway owns content-type.
+#[test]
+fn captured_upstream_successes_filter_provider_headers() {
     let none = CapturedUpstreamSuccesses::default();
     let headers = none.response_headers(None, "application/json");
     assert_eq!(headers.len(), 1);
     assert_eq!(headers["content-type"], "application/json");
 
     let one = CapturedUpstreamSuccesses::default();
-    one.capture(None, attempt("req_1"));
+    one.capture(None, success_headers("req_1"));
     let headers = one.response_headers(None, "text/event-stream");
     assert_eq!(headers["request-id"], "req_1");
     assert_eq!(headers["content-type"], "text/event-stream");
@@ -2899,32 +2913,67 @@ fn captured_upstream_successes_select_the_returned_attempt() {
     assert!(headers.get("content-encoding").is_none());
     assert!(headers.get("content-digest").is_none());
     assert!(headers.get("x-nemo-relay-worker-route-failure").is_none());
+}
 
-    // Streams: the attempt whose stream yielded the first event wins over capture order.
-    for (marked, expected) in [(0, "req_1"), (1, "req_2")] {
-        let streams = CapturedUpstreamSuccesses::default();
-        streams.capture(None, attempt("req_1"));
-        streams.capture(None, attempt("req_2"));
-        streams.mark_first_event(marked);
-        let headers = streams.response_headers(None, "text/event-stream");
+/// A success carries the headers of the attempt that produced what was returned.
+#[test]
+fn captured_upstream_successes_select_the_returned_attempt() {
+    // The returned body picks its own attempt in either capture order, buffered or streamed.
+    let first = json!({"id": "first"});
+    let second = json!({"id": "second"});
+    for (returned, expected) in [(&first, "req_1"), (&second, "req_2")] {
+        let fan_out = CapturedUpstreamSuccesses::default();
+        fan_out.capture(Some(first.clone()), success_headers("req_1"));
+        let index = fan_out.capture(None, success_headers("req_2"));
+        fan_out.set_key(index, second.clone());
+        let headers = fan_out.response_headers(Some(returned), "application/json");
         assert_eq!(headers["request-id"], expected);
     }
 
-    // Fan-out: the returned JSON picks its own attempt, even when it finished first.
+    // A rewritten response matches no attempt; one success still lends its headers.
+    let rewritten_one = CapturedUpstreamSuccesses::default();
+    rewritten_one.capture(Some(first), success_headers("req_1"));
+    let headers =
+        rewritten_one.response_headers(Some(&json!({"id": "rewritten"})), "application/json");
+    assert_eq!(headers["request-id"], "req_1");
+}
+
+/// Ambiguous matches relay only the headers every candidate agrees on.
+#[test]
+fn captured_upstream_successes_keep_only_agreed_headers_when_ambiguous() {
     let first = json!({"id": "first"});
     let second = json!({"id": "second"});
-    let fan_out = CapturedUpstreamSuccesses::default();
-    fan_out.capture(Some(first.clone()), attempt("req_1"));
-    fan_out.capture(Some(second), attempt("req_2"));
-    let headers = fan_out.response_headers(Some(&first), "application/json");
-    assert_eq!(headers["request-id"], "req_1");
 
-    // A rewritten response matches no attempt, so the latest success is used.
-    let rewritten = CapturedUpstreamSuccesses::default();
-    rewritten.capture(Some(first), attempt("req_1"));
-    rewritten.capture(Some(json!({"id": "second"})), attempt("req_2"));
-    let headers = rewritten.response_headers(Some(&json!({"id": "rewritten"})), "application/json");
-    assert_eq!(headers["request-id"], "req_2");
+    // Identical bodies with different headers.
+    let identical = CapturedUpstreamSuccesses::default();
+    identical.capture(Some(first.clone()), shared_success_headers("req_1"));
+    identical.capture(Some(first.clone()), shared_success_headers("req_2"));
+    assert_only_shared_headers(&identical.response_headers(Some(&first), "application/json"));
+
+    // A rewritten response with several successes.
+    let rewritten_many = CapturedUpstreamSuccesses::default();
+    rewritten_many.capture(Some(first), shared_success_headers("req_1"));
+    rewritten_many.capture(Some(second), shared_success_headers("req_2"));
+    assert_only_shared_headers(
+        &rewritten_many.response_headers(Some(&json!({"id": "rewritten"})), "application/json"),
+    );
+
+    // Streams whose first events are identical.
+    let same_first_event = CapturedUpstreamSuccesses::default();
+    for id in ["req_1", "req_2"] {
+        let index = same_first_event.capture(None, shared_success_headers(id));
+        same_first_event.set_key(index, json!({"type": "message_start"}));
+    }
+    assert_only_shared_headers(
+        &same_first_event
+            .response_headers(Some(&json!({"type": "message_start"})), "text/event-stream"),
+    );
+
+    // An empty stream returns no first event.
+    let empty_stream = CapturedUpstreamSuccesses::default();
+    empty_stream.capture(None, shared_success_headers("req_1"));
+    empty_stream.capture(None, shared_success_headers("req_2"));
+    assert_only_shared_headers(&empty_stream.response_headers(None, "text/event-stream"));
 }
 
 #[tokio::test]

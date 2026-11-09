@@ -467,60 +467,82 @@ type CapturedUpstreamFailuresRef = Arc<CapturedUpstreamFailures>;
 
 /// Provider headers from the successful attempts of one gateway call.
 ///
-/// A successful response always carries one attempt's provider headers, matching failures.
-/// A buffered success uses the attempt whose JSON the runtime returned. A streaming success
-/// uses the attempt whose stream most recently yielded its first event, which is the stream the
-/// gateway reads right before it sends headers. Middleware that rewrites a buffered response
-/// leaves no exact match, so the latest successful attempt is used.
+/// Each attempt is keyed by what it produced: its JSON for a buffered call, its first event for
+/// a stream. The client response uses the attempts whose key equals what the gateway actually
+/// returns. When several attempts match, or a rewritten response matches none, only headers
+/// that every candidate sent with the same values are relayed, so a header never comes from
+/// the wrong attempt.
 #[derive(Default)]
 struct CapturedUpstreamSuccesses {
     entries: Mutex<Vec<CapturedUpstreamSuccess>>,
-    first_event: Mutex<Option<usize>>,
 }
 
 struct CapturedUpstreamSuccess {
-    response: Option<Value>,
+    key: Option<Value>,
     headers: HeaderMap,
 }
 
 impl CapturedUpstreamSuccesses {
-    fn capture(&self, response: Option<Value>, headers: HeaderMap) -> usize {
+    fn capture(&self, key: Option<Value>, headers: HeaderMap) -> usize {
         let mut entries = self
             .entries
             .lock()
             .expect("captured upstream successes lock poisoned");
-        entries.push(CapturedUpstreamSuccess { response, headers });
+        entries.push(CapturedUpstreamSuccess { key, headers });
         entries.len() - 1
     }
 
-    fn mark_first_event(&self, index: usize) {
-        *self
-            .first_event
+    fn set_key(&self, index: usize, key: Value) {
+        if let Some(entry) = self
+            .entries
             .lock()
-            .expect("captured upstream successes lock poisoned") = Some(index);
+            .expect("captured upstream successes lock poisoned")
+            .get_mut(index)
+        {
+            entry.key = Some(key);
+        }
     }
 
-    /// Returns the client headers for the response, with the gateway's own content type.
-    fn response_headers(&self, selected: Option<&Value>, content_type: &'static str) -> HeaderMap {
+    /// Returns the client headers for `returned`, with the gateway's own content type.
+    fn response_headers(&self, returned: Option<&Value>, content_type: &'static str) -> HeaderMap {
         let mut entries = self
             .entries
             .lock()
             .expect("captured upstream successes lock poisoned");
-        let first_event = *self
-            .first_event
-            .lock()
-            .expect("captured upstream successes lock poisoned");
-        let index = selected
-            .and_then(|selected| {
-                entries
-                    .iter()
-                    .rposition(|entry| entry.response.as_ref() == Some(selected))
+        let mut candidates: Vec<usize> = returned
+            .map(|returned| {
+                (0..entries.len())
+                    .filter(|&index| entries[index].key.as_ref() == Some(returned))
+                    .collect()
             })
-            .or(first_event)
-            .or_else(|| entries.len().checked_sub(1));
-        let mut headers = index.map_or_else(HeaderMap::new, |index| {
-            std::mem::take(&mut entries[index].headers)
-        });
+            .unwrap_or_default();
+        if candidates.is_empty() {
+            candidates = (0..entries.len()).collect();
+        }
+        let mut headers = match candidates.as_slice() {
+            [] => HeaderMap::new(),
+            [only] => std::mem::take(&mut entries[*only].headers),
+            [first, rest @ ..] => {
+                let mut shared = HeaderMap::new();
+                for name in entries[*first].headers.keys() {
+                    let values: Vec<_> = entries[*first].headers.get_all(name).iter().collect();
+                    let agreed = rest.iter().all(|&other| {
+                        entries[other]
+                            .headers
+                            .get_all(name)
+                            .iter()
+                            .collect::<Vec<_>>()
+                            == values
+                    });
+                    if agreed {
+                        for value in values {
+                            shared.append(name.clone(), value.clone());
+                        }
+                    }
+                }
+                shared
+            }
+        };
         // Relay's own control headers (for example the worker route failure signal) must
         // never be taken from a provider, as every worker forwarding path already ensures.
         let private: Vec<_> = headers
@@ -546,13 +568,25 @@ impl CapturedUpstreamSuccesses {
 
 type CapturedUpstreamSuccessesRef = Arc<CapturedUpstreamSuccesses>;
 
-/// Records which attempt's stream yielded its first event, without changing close semantics.
-struct FirstEventMarked {
+type FirstEventObserver = Box<dyn FnOnce(&Value) + Send>;
+
+/// Hands the first successful event of a stream to an observer, without changing close
+/// semantics.
+struct FirstEventTap {
     inner: LlmJsonStream,
-    mark: Option<(CapturedUpstreamSuccessesRef, usize)>,
+    observer: Option<FirstEventObserver>,
 }
 
-impl futures_util::Stream for FirstEventMarked {
+impl FirstEventTap {
+    fn wrap(inner: LlmJsonStream, observer: FirstEventObserver) -> LlmJsonStream {
+        LlmJsonStream::from_closeable(Self {
+            inner,
+            observer: Some(observer),
+        })
+    }
+}
+
+impl futures_util::Stream for FirstEventTap {
     type Item = Result<Value, FlowError>;
 
     fn poll_next(
@@ -561,16 +595,16 @@ impl futures_util::Stream for FirstEventMarked {
     ) -> std::task::Poll<Option<Self::Item>> {
         let this = self.get_mut();
         let polled = std::pin::Pin::new(&mut this.inner).poll_next(cx);
-        if let std::task::Poll::Ready(Some(Ok(_))) = &polled
-            && let Some((successes, index)) = this.mark.take()
+        if let std::task::Poll::Ready(Some(Ok(event))) = &polled
+            && let Some(observer) = this.observer.take()
         {
-            successes.mark_first_event(index);
+            observer(event);
         }
         polled
     }
 }
 
-impl LlmStreamInner for FirstEventMarked {
+impl LlmStreamInner for FirstEventTap {
     fn terminalize(self: std::pin::Pin<&mut Self>) {
         self.get_mut().inner.terminalize();
     }
@@ -1073,6 +1107,16 @@ async fn run_managed_streaming(
     };
     guard.operational = operational;
     guard.response_ready = Some(response_ready);
+    let returned_first_event = Arc::new(Mutex::new(None::<Value>));
+    let record_returned = Arc::clone(&returned_first_event);
+    let json_stream = FirstEventTap::wrap(
+        json_stream,
+        Box::new(move |event| {
+            *record_returned
+                .lock()
+                .expect("returned first event lock poisoned") = Some(event.clone());
+        }),
+    );
     let body = match prepare_streaming_response_body(json_stream, provider_route, guard).await {
         Ok(body) => body,
         Err(error) => {
@@ -1082,9 +1126,14 @@ async fn run_managed_streaming(
             return Err(translate_runtime_error(error));
         }
     };
-    // Read after the first event, so the headers belong to the stream the client receives.
-    // Retries later in the stream can't change headers the client already has.
-    let headers = upstream_successes.response_headers(None, "text/event-stream");
+    // Match the first event the client receives, so replayed or pre-read streams still pick
+    // the attempt that produced it. Later retries can't change headers already sent.
+    let returned_first_event = returned_first_event
+        .lock()
+        .expect("returned first event lock poisoned")
+        .take();
+    let headers =
+        upstream_successes.response_headers(returned_first_event.as_ref(), "text/event-stream");
 
     build_response(StatusCode::OK, headers, body)
 }
@@ -1249,10 +1298,10 @@ fn build_streaming_func(
             }
             let index = upstream_successes.capture(None, response_headers);
             let json_stream = sse_json_stream(response, operational);
-            Ok(LlmJsonStream::from_closeable(FirstEventMarked {
-                inner: json_stream,
-                mark: Some((upstream_successes, index)),
-            }))
+            Ok(FirstEventTap::wrap(
+                json_stream,
+                Box::new(move |event| upstream_successes.set_key(index, event.clone())),
+            ))
         })
     })
 }

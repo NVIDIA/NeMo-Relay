@@ -5403,6 +5403,9 @@ async fn spawn_concurrent_attempt_upstream(release_losing: Arc<Semaphore>) -> Te
         if attempt == "losing" && request["losing_succeeds"].as_bool() == Some(true) {
             let body = if streaming {
                 CONCURRENT_LOSING_CHAT_SSE.to_string()
+            } else if request["same_body"].as_bool() == Some(true) {
+                // An upstream cache can answer both attempts with the same body.
+                concurrent_selected_chat_response().to_string()
             } else {
                 let mut response = concurrent_selected_chat_response();
                 response["id"] = json!("chatcmpl-losing");
@@ -5412,6 +5415,7 @@ async fn spawn_concurrent_attempt_upstream(release_losing: Arc<Semaphore>) -> Te
                 .status(StatusCode::OK)
                 .header(header::CONTENT_TYPE, "application/x-losing-success")
                 .header("x-upstream-attempt", attempt)
+                .header("x-upstream-shared", "same")
                 .body(Body::from(body))
                 .unwrap();
         }
@@ -5464,6 +5468,7 @@ async fn spawn_concurrent_attempt_upstream(release_losing: Arc<Semaphore>) -> Te
             .status(status)
             .header(header::CONTENT_TYPE, content_type)
             .header("x-upstream-attempt", attempt)
+            .header("x-upstream-shared", "same")
             .body(Body::from(body))
             .unwrap()
     }
@@ -5761,6 +5766,148 @@ async fn gateway_concurrent_successes_keep_the_selected_attempt_headers() {
         let body = std::str::from_utf8(&body).unwrap();
         assert!(!body.contains("losing"), "streaming={streaming}: {body}");
     }
+}
+
+/// Middleware reads the first event of both streams, then returns the selected stream with its
+/// first event replayed. The headers must follow the returned content, not the last stream read.
+#[tokio::test]
+async fn gateway_streaming_headers_follow_the_returned_stream_after_both_are_read() {
+    use futures_util::StreamExt;
+    let _guard = PLUGIN_CONFIG_TEST_LOCK.lock().await;
+    let _ = crate::test_support::plugin_host::test_close_plugin_host();
+
+    const INTERCEPT_NAME: &str = "cli-test-concurrent-streaming-pre-read";
+    const MARKER: &str = "read both streams before returning one";
+    let _ = deregister_llm_stream_execution_intercept(INTERCEPT_NAME);
+    let _cleanup = LlmStreamExecutionInterceptCleanup(INTERCEPT_NAME);
+    let release_losing = Arc::new(Semaphore::new(0));
+    let release_from_intercept = release_losing.clone();
+    register_llm_stream_execution_intercept(
+        INTERCEPT_NAME,
+        1,
+        Arc::new(move |_name, request, _context, next| {
+            let release_losing = release_from_intercept.clone();
+            Box::pin(async move {
+                if request.content["messages"][0]["content"].as_str() != Some(MARKER) {
+                    return next(request).await;
+                }
+                let mut selected_request = request.clone();
+                selected_request.content["attempt"] = json!("selected");
+                let mut losing_request = request;
+                losing_request.content["attempt"] = json!("losing");
+                losing_request.content["losing_succeeds"] = json!(true);
+                let mut selected = next(selected_request).await?;
+                release_losing.add_permits(1);
+                let mut losing = next(losing_request).await?;
+                let selected_first = selected.next().await.expect("selected first event")?;
+                let losing_first = losing.next().await.expect("losing first event")?;
+                assert!(losing_first.get("losing").is_some());
+                drop(losing);
+                let replayed =
+                    futures_util::stream::once(async move { Ok(selected_first) }).chain(selected);
+                Ok(nemo_relay_runtime::api::runtime::LlmJsonStream::new(
+                    replayed,
+                ))
+            })
+        }),
+    )
+    .unwrap();
+
+    let upstream = spawn_concurrent_attempt_upstream(release_losing).await;
+    let mut config = test_config();
+    config.openai_base_url = upstream.url();
+    let response = router(config)
+        .oneshot(
+            Request::builder()
+                .method("POST")
+                .uri("/v1/chat/completions")
+                .header(header::CONTENT_TYPE, "application/json")
+                .body(Body::from(
+                    json!({
+                        "model": "gpt-4o",
+                        "messages": [{"role": "user", "content": MARKER}],
+                        "stream": true
+                    })
+                    .to_string(),
+                ))
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(response.status(), StatusCode::OK);
+    assert_eq!(
+        response
+            .headers()
+            .get_all("x-upstream-attempt")
+            .iter()
+            .collect::<Vec<_>>(),
+        ["selected"]
+    );
+    let body = response.into_body().collect().await.unwrap().to_bytes();
+    let body = std::str::from_utf8(&body).unwrap();
+    assert!(body.contains("selected attempt"), "{body}");
+}
+
+/// Two attempts return the same body with different headers, as an upstream cache can. No
+/// attempt-specific header may be guessed; headers both attempts agree on are kept.
+#[tokio::test]
+async fn gateway_identical_buffered_successes_keep_only_shared_headers() {
+    let _guard = PLUGIN_CONFIG_TEST_LOCK.lock().await;
+    let _ = crate::test_support::plugin_host::test_close_plugin_host();
+
+    const INTERCEPT_NAME: &str = "cli-test-concurrent-buffered-identical";
+    const MARKER: &str = "two attempts with the same body";
+    let _ = deregister_llm_execution_intercept(INTERCEPT_NAME);
+    let _cleanup = LlmExecutionInterceptCleanup(INTERCEPT_NAME);
+    let release_losing = Arc::new(Semaphore::new(0));
+    let release_from_intercept = release_losing.clone();
+    register_llm_execution_intercept(
+        INTERCEPT_NAME,
+        1,
+        Arc::new(move |_name, request, _context, next| {
+            let release_losing = release_from_intercept.clone();
+            Box::pin(async move {
+                if request.content["messages"][0]["content"].as_str() != Some(MARKER) {
+                    return next(request).await;
+                }
+                let mut selected_request = request.clone();
+                selected_request.content["attempt"] = json!("selected");
+                let mut losing_request = request;
+                losing_request.content["attempt"] = json!("losing");
+                losing_request.content["losing_succeeds"] = json!(true);
+                losing_request.content["same_body"] = json!(true);
+                let selected = next(selected_request).await;
+                release_losing.add_permits(1);
+                assert!(next(losing_request).await.is_ok());
+                selected
+            })
+        }),
+    )
+    .unwrap();
+
+    let upstream = spawn_concurrent_attempt_upstream(release_losing).await;
+    let mut config = test_config();
+    config.openai_base_url = upstream.url();
+    let response = router(config)
+        .oneshot(
+            Request::builder()
+                .method("POST")
+                .uri("/v1/chat/completions")
+                .header(header::CONTENT_TYPE, "application/json")
+                .body(Body::from(
+                    json!({
+                        "model": "gpt-4o",
+                        "messages": [{"role": "user", "content": MARKER}]
+                    })
+                    .to_string(),
+                ))
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(response.status(), StatusCode::OK);
+    assert!(response.headers().get("x-upstream-attempt").is_none());
+    assert_eq!(response.headers()["x-upstream-shared"], "same");
 }
 
 #[tokio::test]
