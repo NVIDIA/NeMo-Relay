@@ -898,3 +898,27 @@ async fn a_redirect_iss_must_match_the_metadata_issuer_exactly() {
     assert!(error.contains("names another issuer"), "{error}");
     assert!(issuer.lock().unwrap().grants.is_empty());
 }
+#[tokio::test]
+async fn a_redirect_iss_is_compared_with_the_published_issuer() {
+    let (source, issuer) = start_issuer().await;
+    let published = format!("{}/", source.issuer);
+    issuer.lock().unwrap().advertised_issuer = Some(published.clone());
+    let client = OidcClient::discover(&source).await.unwrap();
+    let redirect_naming = |iss: &str| {
+        reqwest::Url::parse_with_params(
+            "http://127.0.0.1:1/callback",
+            &[
+                ("code", "unknown-code"),
+                ("state", "attempt-state"),
+                ("iss", iss),
+            ],
+        )
+        .unwrap()
+    };
+    let error = pasted_sign_in_error(&client, redirect_naming(&published).as_str()).await;
+    assert!(error.contains("did not issue a token"), "{error}");
+    assert_eq!(issuer.lock().unwrap().grants.len(), 1);
+    let error = pasted_sign_in_error(&client, redirect_naming(&source.issuer).as_str()).await;
+    assert!(error.contains("names another issuer"), "{error}");
+    assert_eq!(issuer.lock().unwrap().grants.len(), 1);
+}
