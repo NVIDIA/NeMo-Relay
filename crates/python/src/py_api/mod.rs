@@ -57,11 +57,11 @@ use crate::convert::{
 };
 use crate::py_callable;
 use crate::py_types::{
-    PyAnnotatedLLMResponse, PyAnthropicMessagesCodec, PyGeminiGenerateContentCodec,
-    PyLLMAttributes, PyLLMHandle, PyLLMRequest, PyLlmStream, PyLogSeverity, PyMetricMeasurement,
-    PyOCIGenAIChatCodec, PyOpenAIChatCodec, PyOpenAIResponsesCodec, PyPropagationContext,
-    PyScopeAttributes, PyScopeHandle, PyScopeStack, PyScopeType, PyThreadScopeStackBinding,
-    PyToolAttributes, PyToolExecutionResult, PyToolHandle,
+    PyAnnotatedLLMResponse, PyAnthropicMessagesCodec, PyExecutionOptions,
+    PyGeminiGenerateContentCodec, PyLLMAttributes, PyLLMHandle, PyLLMRequest, PyLlmStream,
+    PyLogSeverity, PyMetricMeasurement, PyOCIGenAIChatCodec, PyOpenAIChatCodec,
+    PyOpenAIResponsesCodec, PyPropagationContext, PyScopeAttributes, PyScopeHandle, PyScopeStack,
+    PyScopeType, PyThreadScopeStackBinding, PyToolAttributes, PyToolExecutionResult, PyToolHandle,
 };
 
 pub(crate) type RustJsonStream = LlmJsonStream;
@@ -1008,6 +1008,10 @@ fn tool_call_end(
 ///         End events receive ``otel.status_code = "OK"`` on success, or
 ///         ``otel.status_code = "ERROR"`` and ``otel.status_description`` on error.
 ///     tool_call_id: Optional provider-specific tool-call correlation ID.
+///     execution_options: Choose which middleware stages run for this call.
+///         Omit this option to run all stages. Relay still sanitizes event data,
+///         uses codecs, and handles call completion.
+///
 /// Returns:
 ///     An awaitable that resolves to the tool result after execution
 ///     intercepts. Sanitize guardrails do not rewrite the value returned to
@@ -1022,8 +1026,9 @@ fn tool_call_end(
     attributes: "ToolAttributes | None"=None,
     data: "object | None"=None,
     metadata: "object | None"=None,
-    tool_call_id: "str | None"=None
-) -> "object", text_signature = "(name: str, args: object, func: object, *, handle: ScopeHandle | None = None, attributes: ToolAttributes | None = None, data: object | None = None, metadata: object | None = None, tool_call_id: str | None = None) -> object")]
+    tool_call_id: "str | None"=None,
+    execution_options: "ExecutionOptions | None"=None
+) -> "object", text_signature = "(name: str, args: object, func: object, *, handle: ScopeHandle | None = None, attributes: ToolAttributes | None = None, data: object | None = None, metadata: object | None = None, tool_call_id: str | None = None, execution_options: ExecutionOptions | None = None) -> object")]
 #[allow(clippy::too_many_arguments)]
 fn tool_call_execute<'py>(
     py: Python<'py>,
@@ -1035,8 +1040,10 @@ fn tool_call_execute<'py>(
     data: Option<&Bound<'py, PyAny>>,
     metadata: Option<&Bound<'py, PyAny>>,
     tool_call_id: Option<String>,
+    execution_options: Option<PyExecutionOptions>,
 ) -> PyResult<Bound<'py, PyAny>> {
     let args_json = py_to_json(args)?;
+    let execution_options = execution_options.map(Into::into).unwrap_or_default();
     let attrs = attributes
         .map(|a| a.inner)
         .unwrap_or(ToolAttributes::empty());
@@ -1060,6 +1067,7 @@ fn tool_call_execute<'py>(
                             .name(name)
                             .args(args_json)
                             .func(default_fn)
+                            .execution_options(execution_options)
                             .parent(parent_handle)
                             .attributes(attrs)
                             .data_opt(data_json)
@@ -1248,6 +1256,9 @@ fn llm_call_end(
 ///     codec: Optional request codec used for annotated-aware request intercepts.
 ///     response_codec: Optional response codec used to attach annotated response data
 ///         to emitted end events.
+///     execution_options: Choose which middleware stages run for this call.
+///         Omit this option to run all stages. Relay still sanitizes event data,
+///         uses codecs, and handles call completion.
 ///
 /// Returns:
 ///     An awaitable that resolves to the LLM response after execution
@@ -1265,8 +1276,9 @@ fn llm_call_end(
     metadata: "object | None"=None,
     model_name: "str | None"=None,
     codec: "object | None"=None,
-    response_codec: "object | None"=None
-) -> "object", text_signature = "(name: str, request: LlmRequest, func: object, *, handle: ScopeHandle | None = None, attributes: LlmAttributes | None = None, data: object | None = None, metadata: object | None = None, model_name: str | None = None, codec: object | None = None, response_codec: object | None = None) -> object")]
+    response_codec: "object | None"=None,
+    execution_options: "ExecutionOptions | None"=None
+) -> "object", text_signature = "(name: str, request: LlmRequest, func: object, *, handle: ScopeHandle | None = None, attributes: LlmAttributes | None = None, data: object | None = None, metadata: object | None = None, model_name: str | None = None, codec: object | None = None, response_codec: object | None = None, execution_options: ExecutionOptions | None = None) -> object")]
 #[allow(clippy::too_many_arguments)]
 fn llm_call_execute<'py>(
     py: Python<'py>,
@@ -1280,7 +1292,9 @@ fn llm_call_execute<'py>(
     model_name: Option<String>,
     codec: Option<&Bound<'py, PyAny>>,
     response_codec: Option<&Bound<'py, PyAny>>,
+    execution_options: Option<PyExecutionOptions>,
 ) -> PyResult<Bound<'py, PyAny>> {
+    let execution_options = execution_options.map(Into::into).unwrap_or_default();
     let attrs = attributes
         .map(|a| a.inner)
         .unwrap_or(LlmAttributes::empty());
@@ -1305,6 +1319,7 @@ fn llm_call_execute<'py>(
                         .name(name)
                         .request(request.inner)
                         .func(default_fn)
+                        .execution_options(execution_options)
                         .parent(parent_handle)
                         .attributes(attrs)
                         .data_opt(data_json)
@@ -1354,6 +1369,9 @@ fn llm_call_execute<'py>(
 ///
 /// Consumers that stop reading early must call ``await stream.aclose()`` to
 /// wait for producer cleanup and surface cleanup errors.
+///     execution_options: Choose which middleware stages run for this call.
+///         Omit this option to run all stages. Relay still sanitizes event data,
+///         uses codecs, and handles call completion.
 ///
 /// Returns:
 ///     An awaitable that resolves to an ``LlmStream`` async iterator of JSON chunks.
@@ -1371,8 +1389,9 @@ fn llm_call_execute<'py>(
     metadata: "object | None"=None,
     model_name: "str | None"=None,
     codec: "object | None"=None,
-    response_codec: "object | None"=None
-) -> "object", text_signature = "(name: str, request: LlmRequest, func: object, collector: object, finalizer: object, *, handle: ScopeHandle | None = None, attributes: LlmAttributes | None = None, data: object | None = None, metadata: object | None = None, model_name: str | None = None, codec: object | None = None, response_codec: object | None = None) -> object")]
+    response_codec: "object | None"=None,
+    execution_options: "ExecutionOptions | None"=None
+) -> "object", text_signature = "(name: str, request: LlmRequest, func: object, collector: object, finalizer: object, *, handle: ScopeHandle | None = None, attributes: LlmAttributes | None = None, data: object | None = None, metadata: object | None = None, model_name: str | None = None, codec: object | None = None, response_codec: object | None = None, execution_options: ExecutionOptions | None = None) -> object")]
 #[allow(clippy::too_many_arguments)]
 fn llm_stream_call_execute<'py>(
     py: Python<'py>,
@@ -1388,7 +1407,9 @@ fn llm_stream_call_execute<'py>(
     model_name: Option<String>,
     codec: Option<&Bound<'py, PyAny>>,
     response_codec: Option<&Bound<'py, PyAny>>,
+    execution_options: Option<PyExecutionOptions>,
 ) -> PyResult<Bound<'py, PyAny>> {
+    let execution_options = execution_options.map(Into::into).unwrap_or_default();
     let attrs = attributes
         .map(|a| a.inner)
         .unwrap_or(LlmAttributes::empty());
@@ -1419,6 +1440,7 @@ fn llm_stream_call_execute<'py>(
                             .name(name)
                             .request(request.inner)
                             .func(default_fn)
+                            .execution_options(execution_options)
                             .collector(collector_fn)
                             .finalizer(finalizer_fn)
                             .parent(parent_handle)

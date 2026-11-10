@@ -82,6 +82,12 @@ extern int32_t nemo_relay_tool_call_execute_v2(
 	const FfiScopeHandle* parent, uint32_t attributes,
 	const char* data_json, const char* metadata_json,
 	const char* tool_call_id, char** out);
+extern int32_t nemo_relay_tool_call_execute_with_options(
+	const char* name, const char* args_json,
+	NemoRelayToolExecFn func_cb, void* func_user_data, NemoRelayFreeFn func_free,
+	const FfiScopeHandle* parent, uint32_t attributes,
+	const char* data_json, const char* metadata_json,
+	const char* tool_call_id, uint32_t skip_stages, char** out);
 
 // LLM lifecycle
 typedef int32_t (*NemoRelayCollectorCb)(void* user_data, const char* chunk_json);
@@ -115,6 +121,16 @@ extern int32_t nemo_relay_llm_call_execute(
 	void* codec_user_data, NemoRelayFreeFn codec_free_fn,
 	const FfiCodecHandle* response_codec,
 	char** out);
+extern int32_t nemo_relay_llm_call_execute_with_options(
+	const char* name, const char* native_json,
+	NemoRelayLlmExecFn func_cb, void* func_user_data, NemoRelayFreeFn func_free,
+	const FfiScopeHandle* parent, uint32_t attributes,
+	const char* data_json, const char* metadata_json,
+	const char* model_name,
+	NemoRelayCodecDecodeFn codec_decode, NemoRelayCodecEncodeFn codec_encode,
+	void* codec_user_data, NemoRelayFreeFn codec_free_fn,
+	const FfiCodecHandle* response_codec, uint32_t skip_stages,
+	char** out);
 
 // LLM stream execute
 extern int32_t nemo_relay_llm_stream_call_execute(
@@ -128,6 +144,18 @@ extern int32_t nemo_relay_llm_stream_call_execute(
 	NemoRelayCodecDecodeFn codec_decode, NemoRelayCodecEncodeFn codec_encode,
 	void* codec_user_data, NemoRelayFreeFn codec_free_fn,
 	const FfiCodecHandle* response_codec,
+	FfiStream** out);
+extern int32_t nemo_relay_llm_stream_call_execute_with_options(
+	const char* name, const char* native_json,
+	NemoRelayLlmExecFn func_cb, void* func_user_data, NemoRelayFreeFn func_free,
+	Option_NemoRelayCollectorCb collector, Option_NemoRelayFinalizerCb finalizer,
+	void* callback_user_data, NemoRelayFreeFn callback_free,
+	const FfiScopeHandle* parent, uint32_t attributes,
+	const char* data_json, const char* metadata_json,
+	const char* model_name,
+	NemoRelayCodecDecodeFn codec_decode, NemoRelayCodecEncodeFn codec_encode,
+	void* codec_user_data, NemoRelayFreeFn codec_free_fn,
+	const FfiCodecHandle* response_codec, uint32_t skip_stages,
 	FfiStream** out);
 
 // Built-in codec constructors
@@ -1127,13 +1155,51 @@ func EmitMetric(name string, measurements []MetricMeasurement, opts ...MetricOpt
 // ---------------------------------------------------------------------------
 
 type toolCallOptions struct {
-	parentHandle *ScopeHandle // retains the borrowed native handle through the FFI call
-	parent       *C.FfiScopeHandle
-	attributes   uint32
-	data         *C.char
-	metadata     *C.char
-	toolCallID   *C.char
-	timestamp    *C.int64_t
+	executionOptions    ExecutionOptions
+	hasExecutionOptions bool
+	parentHandle        *ScopeHandle // retains the borrowed native handle through the FFI call
+	parent              *C.FfiScopeHandle
+	attributes          uint32
+	data                *C.char
+	metadata            *C.char
+	toolCallID          *C.char
+	timestamp           *C.int64_t
+}
+
+// ExecutionOptions chooses which middleware stages run for one managed call.
+// Its zero value runs all stages. Relay still sanitizes event data, uses codecs,
+// passes trace context, and handles call completion. Nested calls use their own options.
+type ExecutionOptions struct {
+	SkipConditionalExecution bool
+	SkipRequestIntercepts    bool
+	SkipExecutionIntercepts  bool
+}
+
+func (o ExecutionOptions) skipStages() C.uint32_t {
+	var stages C.uint32_t
+	if o.SkipConditionalExecution {
+		stages |= 1
+	}
+	if o.SkipRequestIntercepts {
+		stages |= 2
+	}
+	if o.SkipExecutionIntercepts {
+		stages |= 4
+	}
+	return stages
+}
+
+// WithToolExecutionOptions selects stages for ToolCallExecute. It is invalid
+// on manual ToolCall and ToolCallEnd. If you pass this option more than once, Relay uses the last value.
+func WithToolExecutionOptions(options ExecutionOptions) ToolCallOption {
+	return func(o *toolCallOptions) { o.executionOptions = options; o.hasExecutionOptions = true }
+}
+
+// WithLLMExecutionOptions selects stages for LlmCallExecute and
+// LlmStreamCallExecute. It is invalid on manual LlmCall and LlmCallEnd.
+// If you pass this option more than once, Relay uses the last value.
+func WithLLMExecutionOptions(options ExecutionOptions) LLMCallOption {
+	return func(o *llmCallOptions) { o.executionOptions = options; o.hasExecutionOptions = true }
 }
 
 // ToolCallOption is a functional option that configures optional parameters for
@@ -1235,6 +1301,9 @@ func ToolCall(name string, args json.RawMessage, opts ...ToolCallOption) (*ToolH
 	}
 	defer runtime.KeepAlive(o.parentHandle)
 	defer freeToolOpts(o)
+	if o.hasExecutionOptions {
+		return nil, fmt.Errorf("execution options require ToolCallExecute")
+	}
 
 	cName := C.CString(name)
 	cArgs := C.CString(string(args))
@@ -1264,6 +1333,9 @@ func ToolCallEnd(handle *ToolHandle, result ToolExecutionResult, opts ...ToolCal
 		opt(o)
 	}
 	defer freeToolOpts(o)
+	if o.hasExecutionOptions {
+		return fmt.Errorf("execution options require ToolCallExecute")
+	}
 
 	result = normalizeToolExecutionResult(result)
 	resultJSON, err := jsonMarshal(result)
@@ -1305,14 +1377,14 @@ func ToolCallExecute(name string, args json.RawMessage, fn ToolExecutionFunc, op
 
 	var out *C.char
 	if err := callStatus(func() C.int32_t {
-		return C.nemo_relay_tool_call_execute_v2(
+		return C.nemo_relay_tool_call_execute_with_options(
 			cName, cArgs,
 			C.NemoRelayToolExecFn(C.goToolExecTrampoline),
 			id,
 			C.NemoRelayFreeFn(C.goFreeTrampoline),
 			o.parent, C.uint32_t(o.attributes),
 			o.data, o.metadata,
-			o.toolCallID, &out,
+			o.toolCallID, o.executionOptions.skipStages(), &out,
 		)
 	}); err != nil {
 		return ToolExecutionResult{}, err
@@ -1331,6 +1403,8 @@ func ToolCallExecute(name string, args json.RawMessage, fn ToolExecutionFunc, op
 // ---------------------------------------------------------------------------
 
 type llmCallOptions struct {
+	executionOptions    ExecutionOptions
+	hasExecutionOptions bool
 	parentHandle        *ScopeHandle // retains the borrowed native handle through the FFI call
 	parent              *C.FfiScopeHandle
 	attributes          uint32
@@ -1547,6 +1621,12 @@ func LlmCall(name string, request interface{}, opts ...LLMCallOption) (*LLMHandl
 	}
 	defer runtime.KeepAlive(o.parentHandle)
 	defer freeLLMOpts(o)
+	if o.hasExecutionOptions {
+		if o.codecUserData != nil {
+			unregisterClosure(o.codecUserData)
+		}
+		return nil, fmt.Errorf("execution options require a managed LLM execute call")
+	}
 
 	requestJSON, err := jsonMarshal(request)
 	if err != nil {
@@ -1580,6 +1660,12 @@ func LlmCallEnd(handle *LLMHandle, response json.RawMessage, opts ...LLMCallOpti
 		opt(o)
 	}
 	defer freeLLMOpts(o)
+	if o.hasExecutionOptions {
+		if o.codecUserData != nil {
+			unregisterClosure(o.codecUserData)
+		}
+		return fmt.Errorf("execution options require a managed LLM execute call")
+	}
 
 	cResponse := C.CString(string(response))
 	defer C.free(unsafe.Pointer(cResponse))
@@ -1620,7 +1706,7 @@ func LlmCallExecute(name string, request interface{}, fn LLMExecutionFunc, opts 
 
 	var out *C.char
 	err = callStatus(func() C.int32_t {
-		return C.nemo_relay_llm_call_execute(
+		return C.nemo_relay_llm_call_execute_with_options(
 			cName, cRequest,
 			C.NemoRelayLlmExecFn(C.goLlmExecTrampoline),
 			id,
@@ -1631,7 +1717,7 @@ func LlmCallExecute(name string, request interface{}, fn LLMExecutionFunc, opts 
 			o.codecDecode, o.codecEncode,
 			o.codecUserData, o.codecFreeFn,
 			o.responseCodec,
-			&out,
+			o.executionOptions.skipStages(), &out,
 		)
 	})
 	runtime.KeepAlive(o.responseCodecHandle)
@@ -1692,7 +1778,7 @@ func LlmStreamCallExecute(name string, request interface{}, fn LLMExecutionFunc,
 
 	var out *C.FfiStream
 	err = callStatus(func() C.int32_t {
-		return C.nemo_relay_llm_stream_call_execute(
+		return C.nemo_relay_llm_stream_call_execute_with_options(
 			cName, cRequest,
 			C.NemoRelayLlmExecFn(C.goLlmExecTrampoline),
 			id,
@@ -1707,7 +1793,7 @@ func LlmStreamCallExecute(name string, request interface{}, fn LLMExecutionFunc,
 			o.codecDecode, o.codecEncode,
 			o.codecUserData, o.codecFreeFn,
 			o.responseCodec,
-			&out,
+			o.executionOptions.skipStages(), &out,
 		)
 	})
 	runtime.KeepAlive(o.responseCodecHandle)

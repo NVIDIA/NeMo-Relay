@@ -134,3 +134,127 @@ fn tool_call_execute_adds_otel_status_metadata_to_end_events() {
             .contains("tool boom")
     );
 }
+
+#[test]
+fn execution_options_select_stages_and_preserve_results_and_lifecycle() {
+    use crate::api::execution::ExecutionOptions;
+    use crate::api::registry::{
+        register_tool_conditional_execution_guardrail, register_tool_execution_intercept,
+        register_tool_request_intercept,
+    };
+    use crate::api::tool::ToolExecutionResult;
+
+    let _guard = lock_global_runtime();
+    reset_global();
+    let stages = Arc::new(Mutex::new(Vec::new()));
+    let seen = stages.clone();
+    register_tool_conditional_execution_guardrail(
+        "options-check",
+        0,
+        Arc::new(move |_, args| {
+            let seen = seen.clone();
+            Box::pin(async move {
+                assert_eq!(args, json!({"original": true}));
+                seen.lock().unwrap().push("conditional");
+                Ok(None)
+            })
+        }),
+    )
+    .unwrap();
+    let seen = stages.clone();
+    register_tool_request_intercept(
+        "options-request",
+        0,
+        false,
+        Arc::new(move |_, _| {
+            let seen = seen.clone();
+            Box::pin(async move {
+                seen.lock().unwrap().push("request");
+                Ok(json!({"rewritten": true}))
+            })
+        }),
+    )
+    .unwrap();
+    let seen = stages.clone();
+    register_tool_execution_intercept(
+        "options-execution",
+        0,
+        Arc::new(move |context, next| {
+            let seen = seen.clone();
+            Box::pin(async move {
+                seen.lock().unwrap().push("execution");
+                Ok(next(context.args().clone()).await?.into())
+            })
+        }),
+    )
+    .unwrap();
+    let events = Arc::new(Mutex::new(Vec::new()));
+    let captured = events.clone();
+    register_subscriber(
+        "options-events",
+        Arc::new(move |event| {
+            if event.name() == "options-tool" {
+                captured.lock().unwrap().push(event.scope_category());
+            }
+        }),
+    )
+    .unwrap();
+    let runtime = tokio::runtime::Runtime::new().unwrap();
+    runtime.block_on(async {
+        for mask in 0..8 {
+            let options = ExecutionOptions {
+                conditional_execution: mask & 1 == 0,
+                request_intercepts: mask & 2 == 0,
+                execution_intercepts: mask & 4 == 0,
+            };
+            stages.lock().unwrap().clear();
+            events.lock().unwrap().clear();
+            let seen = stages.clone();
+            let result = tool_call_execute(
+                ToolCallExecuteParams::builder()
+                    .name("options-tool")
+                    .args(json!({"original": true}))
+                    .execution_options(options)
+                    .func(Arc::new(move |args| {
+                        let seen = seen.clone();
+                        Box::pin(async move {
+                            tokio::task::yield_now().await;
+                            seen.lock().unwrap().push("callback");
+                            Ok(ToolExecutionResult::new(args)
+                                .with_annotation(json!({"opaque": true})))
+                        })
+                    }))
+                    .build(),
+            )
+            .await
+            .unwrap();
+            assert_eq!(
+                result.result,
+                if options.request_intercepts {
+                    json!({"rewritten": true})
+                } else {
+                    json!({"original": true})
+                }
+            );
+            assert_eq!(result.annotation, Some(json!({"opaque": true})));
+            let mut expected = vec![];
+            if options.conditional_execution {
+                expected.push("conditional");
+            }
+            if options.request_intercepts {
+                expected.push("request");
+            }
+            if options.execution_intercepts {
+                expected.push("execution");
+            }
+            expected.push("callback");
+            assert_eq!(*stages.lock().unwrap(), expected);
+            flush_subscribers().unwrap();
+            assert_eq!(
+                *events.lock().unwrap(),
+                vec![Some(ScopeCategory::Start), Some(ScopeCategory::End)]
+            );
+        }
+    });
+    reset_global();
+}

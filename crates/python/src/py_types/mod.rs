@@ -136,6 +136,7 @@ pub fn register(m: &Bound<'_, PyModule>) -> PyResult<()> {
 }
 
 fn register_runtime_types(m: &Bound<'_, PyModule>) -> PyResult<()> {
+    m.add_class::<PyExecutionOptions>()?;
     m.add_class::<PyScopeStack>()?;
     m.add_class::<PyThreadScopeStackBinding>()?;
     m.add_class::<PyPropagationContext>()?;
@@ -215,3 +216,47 @@ fn register_codec_types(m: &Bound<'_, PyModule>) -> PyResult<()> {
 #[cfg(test)]
 #[path = "../../tests/coverage/py_types_coverage_tests.rs"]
 mod coverage_tests;
+
+/// Choose which middleware stages run for one call. All stages run by default.
+/// You cannot change these options after you create them. Relay still sanitizes
+/// event data, uses codecs, and handles call completion.
+#[pyclass(
+    name = "ExecutionOptions",
+    from_py_object,
+    module = "nemo_relay._native",
+    frozen,
+    get_all
+)]
+#[derive(Clone, Copy)]
+pub struct PyExecutionOptions {
+    pub conditional_execution: bool,
+    pub request_intercepts: bool,
+    pub execution_intercepts: bool,
+}
+
+#[pymethods]
+impl PyExecutionOptions {
+    #[new]
+    #[pyo3(signature = (*, conditional_execution=true, request_intercepts=true, execution_intercepts=true))]
+    fn new(
+        conditional_execution: bool,
+        request_intercepts: bool,
+        execution_intercepts: bool,
+    ) -> Self {
+        Self {
+            conditional_execution,
+            request_intercepts,
+            execution_intercepts,
+        }
+    }
+}
+
+impl From<PyExecutionOptions> for nemo_relay_runtime::api::execution::ExecutionOptions {
+    fn from(options: PyExecutionOptions) -> Self {
+        Self {
+            conditional_execution: options.conditional_execution,
+            request_intercepts: options.request_intercepts,
+            execution_intercepts: options.execution_intercepts,
+        }
+    }
+}

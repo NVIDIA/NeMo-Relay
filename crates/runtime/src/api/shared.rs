@@ -329,7 +329,7 @@ pub(crate) async fn run_request_intercepts_with_codec(
     request: LlmRequest,
     codec: Option<Arc<dyn LlmCodec>>,
 ) -> Result<InterceptedLlmRequest> {
-    run_request_intercepts_with_codec_inner(name, request, codec, None).await
+    run_request_intercepts_with_codec_inner(name, request, codec, None, true).await
 }
 
 /// Run request intercepts and record optimization contributions directly into
@@ -339,8 +339,16 @@ pub(crate) async fn run_request_intercepts_with_codec_and_recorder(
     request: LlmRequest,
     codec: Option<Arc<dyn LlmCodec>>,
     recorder: &crate::api::optimization::LlmOptimizationRecorder,
+    request_intercepts: bool,
 ) -> Result<InterceptedLlmRequest> {
-    run_request_intercepts_with_codec_inner(name, request, codec, Some(recorder)).await
+    run_request_intercepts_with_codec_inner(
+        name,
+        request,
+        codec,
+        Some(recorder),
+        request_intercepts,
+    )
+    .await
 }
 
 async fn run_request_intercepts_with_codec_inner(
@@ -348,13 +356,14 @@ async fn run_request_intercepts_with_codec_inner(
     request: LlmRequest,
     codec: Option<Arc<dyn LlmCodec>>,
     recorder: Option<&crate::api::optimization::LlmOptimizationRecorder>,
+    request_intercepts: bool,
 ) -> Result<InterceptedLlmRequest> {
     let annotated = match &codec {
         Some(codec) => Some(codec.decode(&request)?),
         None => None,
     };
 
-    let entries = {
+    let entries = if request_intercepts {
         let scope_stack = current_scope_stack();
         let scope_locals = scope_stack
             .read()
@@ -368,6 +377,8 @@ async fn run_request_intercepts_with_codec_inner(
             .map_err(|error| FlowError::Internal(error.to_string()))?
             .registry_snapshot(&[RuntimeRegistrationKind::LlmRequestIntercept]);
         state.llm_request_intercept_entries(&scope_local_refs)
+    } else {
+        Vec::new()
     };
 
     // Callbacks own their annotations, so preserve a baseline only when they can replace it.

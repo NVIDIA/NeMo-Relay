@@ -1291,3 +1291,40 @@ func TestToolEventInputOutput(t *testing.T) {
 		t.Fatalf("expected answer=result in output, got %v", output)
 	}
 }
+
+func TestToolExecutionOptions(t *testing.T) {
+	if err := RegisterToolRequestIntercept("options-request", 0, false,
+		func(string, json.RawMessage) json.RawMessage { panic("skipped request intercept ran") }); err != nil {
+		t.Fatal(err)
+	}
+	defer DeregisterToolRequestIntercept("options-request")
+	if err := RegisterToolExecutionIntercept("options-execution", 0,
+		func(ToolExecutionContext, func(json.RawMessage) (ToolExecutionResult, error)) (ToolExecutionInterceptOutcome, error) {
+			panic("skipped execution intercept ran")
+		}); err != nil {
+		t.Fatal(err)
+	}
+	defer DeregisterToolExecutionIntercept("options-execution")
+
+	reason := "blocked"
+	if err := RegisterToolConditionalExecutionGuardrail("options-block", 0,
+		func(string, json.RawMessage) *string { return &reason }); err != nil {
+		t.Fatal(err)
+	}
+	defer DeregisterToolConditionalExecutionGuardrail("options-block")
+	fn := func(args json.RawMessage) (ToolExecutionResult, error) { return toolExecutionResult(args), nil }
+	if _, err := ToolCallExecute("options-default", json.RawMessage(`{}`), fn); err == nil {
+		t.Fatal("default should reject")
+	}
+	opts := ExecutionOptions{SkipConditionalExecution: true, SkipRequestIntercepts: true, SkipExecutionIntercepts: true}
+	result, err := ToolCallExecute("options-skip", json.RawMessage(`{"kept":true}`), fn, WithToolExecutionOptions(opts))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if string(result.Result) != `{"kept":true}` {
+		t.Fatalf("result: %s", result.Result)
+	}
+	if _, err := ToolCall("options-manual", json.RawMessage(`{}`), WithToolExecutionOptions(opts)); err == nil {
+		t.Fatal("manual API should reject execution options")
+	}
+}

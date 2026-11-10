@@ -901,3 +901,61 @@ fn test_ffi_registration_and_exporter_error_paths() {
         nemo_relay_scope_stack_free(stack);
     }
 }
+
+#[test]
+fn execution_options_validate_bits_and_release_callback_on_failure() {
+    let _lock = TEST_MUTEX.lock().unwrap_or_else(|e| e.into_inner());
+    reset_globals();
+    unsafe {
+        let stack = fresh_scope_stack();
+        let name = cstring("ffi-options");
+        let args = cstring(r#"{"value":2}"#);
+        let mut out = ptr::null_mut();
+        assert_status!(
+            nemo_relay_tool_call_execute_with_options(
+                name.as_ptr(),
+                args.as_ptr(),
+                tool_exec_cb,
+                ptr::null_mut(),
+                None,
+                ptr::null(),
+                0,
+                ptr::null(),
+                ptr::null(),
+                ptr::null(),
+                NEMO_RELAY_SKIP_CONDITIONAL_EXECUTION
+                    | NEMO_RELAY_SKIP_REQUEST_INTERCEPTS
+                    | NEMO_RELAY_SKIP_EXECUTION_INTERCEPTS,
+                &mut out,
+            ),
+            NemoRelayStatus::Ok
+        );
+        assert_eq!(returned_json(out)["annotation"]["source"], json!("ffi"));
+        let frees_before = *lock_unpoisoned(plugin_frees());
+        assert_status!(
+            nemo_relay_tool_call_execute_with_options(
+                name.as_ptr(),
+                args.as_ptr(),
+                tool_exec_cb,
+                ptr::null_mut(),
+                Some(plugin_free),
+                ptr::null(),
+                0,
+                ptr::null(),
+                ptr::null(),
+                ptr::null(),
+                8,
+                &mut out,
+            ),
+            NemoRelayStatus::InvalidArg
+        );
+        assert_eq!(*lock_unpoisoned(plugin_frees()), frees_before + 1);
+        assert!(
+            CStr::from_ptr(nemo_relay_last_error())
+                .to_str()
+                .unwrap()
+                .contains("skip-stage")
+        );
+        nemo_relay_scope_stack_free(stack);
+    }
+}
