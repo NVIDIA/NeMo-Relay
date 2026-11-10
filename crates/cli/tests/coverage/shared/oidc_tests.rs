@@ -956,3 +956,20 @@ async fn a_redirect_iss_is_compared_with_the_published_issuer() {
     assert!(error.contains("names another issuer"), "{error}");
     assert_eq!(issuer.lock().unwrap().grants.len(), 1);
 }
+
+#[test]
+fn doctor_shows_the_exact_expiry_time_and_the_time_left() {
+    let now = 1_794_330_000;
+    assert_eq!(
+        describe_expiry(now + 3 * 3_600 + 120, now),
+        "2026-11-10 20:02:00 UTC (about 3 hours)"
+    );
+    assert_eq!(
+        describe_expiry(u64::MAX, now),
+        format!(
+            "{} (Unix time, about {} days)",
+            u64::MAX,
+            (u64::MAX - now) / 86_400
+        )
+    );
+}

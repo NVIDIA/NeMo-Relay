@@ -228,7 +228,19 @@ pub(crate) fn sign_in_state(
     })
 }
 
-/// How long an access token stays valid, in words, for `nemo-relay doctor`.
+/// When an access token expires, as an exact UTC time and the time left, for `nemo-relay doctor`.
+pub(crate) fn describe_expiry(expires_at: u64, now: u64) -> String {
+    let left = describe_time_left(expires_at.saturating_sub(now));
+    i64::try_from(expires_at)
+        .ok()
+        .and_then(|secs| chrono::DateTime::from_timestamp(secs, 0))
+        .map_or_else(
+            || format!("{expires_at} (Unix time, {left})"),
+            |at| format!("{} ({left})", at.format("%Y-%m-%d %H:%M:%S UTC")),
+        )
+}
+
+/// How long an access token stays valid, in words.
 pub(crate) fn describe_time_left(seconds: u64) -> String {
     const MINUTE: u64 = 60;
     const HOUR: u64 = 60 * MINUTE;

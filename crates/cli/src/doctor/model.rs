@@ -240,8 +240,8 @@ fn sign_in_check(name: &'static str, source: &crate::oidc::OidcSource) -> Check 
         Ok(crate::oidc::SignInState::Valid(expires_at)) => (
             Status::Pass,
             format!(
-                "Signed in to {issuer}. The access token is valid for {}.",
-                crate::oidc::describe_time_left(expires_at.saturating_sub(now))
+                "Signed in to {issuer}. The access token is valid until {}.",
+                crate::oidc::describe_expiry(expires_at, now)
             ),
         ),
         Ok(crate::oidc::SignInState::ExpiredCanRefresh) => (
