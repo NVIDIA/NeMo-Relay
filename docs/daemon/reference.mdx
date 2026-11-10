@@ -478,6 +478,11 @@ and the daemon revokes its generation. MCP clients also exit when their recovery
 window expires. After a daemon restart, persisted worker generations have a
 30-second recovery window before replacement workers can launch.
 
+A worker that stops on its own, for example after a signal, tells the daemon
+before it shuts down. The daemon stops sending it requests at once and launches
+a replacement as soon as the worker closes its control connection, without the
+30-second recovery window.
+
 When the last MCP reference leaves, a ready worker starts draining immediately
 by default, or after the configured idle period expires. A session arriving
 before expiry can reuse the idle worker. Once draining starts, the worker cannot

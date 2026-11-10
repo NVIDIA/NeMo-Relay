@@ -47,6 +47,8 @@ use super::managed::ManagedRuntime;
 const MAX_CONCURRENT_TLS_HANDSHAKES: usize = 256;
 const TLS_HANDSHAKE_TIMEOUT: Duration = Duration::from_secs(10);
 const UPSTREAM_FAILURE_LOG_INTERVAL: Duration = Duration::from_secs(10);
+// Bounds how long an exiting worker waits for its control task to close after teardown.
+const EXIT_ANNOUNCEMENT_TIMEOUT: Duration = Duration::from_secs(1);
 
 use crate::daemon::diagnostics as diag;
 use nemo_relay::diagnostics::{DaemonFailureCode, FailureClass};
@@ -286,6 +288,16 @@ impl WorkerState {
         self.lifecycle.notify_waiters();
     }
 
+    async fn wait_until_exiting(&self) {
+        loop {
+            let notified = self.lifecycle.notified();
+            if self.exiting.load(Ordering::Acquire) {
+                return;
+            }
+            notified.await;
+        }
+    }
+
     async fn wait_until_stopped(&self) {
         loop {
             let notified = self.lifecycle.notified();
@@ -402,7 +414,8 @@ pub(super) async fn serve(listener: TcpListener, options: RuntimeOptions) -> Res
         endpoint = endpoint.as_str();
         "Daemon worker is ready"
     );
-    let control_task = tokio::spawn(monitor_control(
+    let (close_control, control_closed) = tokio::sync::oneshot::channel();
+    let mut control_task = tokio::spawn(monitor_control(
         Arc::clone(&state),
         daemon_origin,
         identity,
@@ -410,6 +423,7 @@ pub(super) async fn serve(listener: TcpListener, options: RuntimeOptions) -> Res
         endpoint,
         worker_tls_root,
         registration,
+        control_closed,
     ));
     let signal_state = Arc::clone(&state);
     let signal = tokio::spawn(async move {
@@ -439,7 +453,6 @@ pub(super) async fn serve(listener: TcpListener, options: RuntimeOptions) -> Res
     }
     state.request_exit(stop_reason);
     let stop_reason = read_lock(&state.exit_reason).unwrap_or(stop_reason);
-    control_task.abort();
     signal.abort();
     let result = match state.managed.as_ref() {
         Some(managed) => {
@@ -449,6 +462,10 @@ pub(super) async fn serve(listener: TcpListener, options: RuntimeOptions) -> Res
         }
         None => result,
     };
+    // Close control only after teardown, so the daemon relaunches once this worker is done.
+    let _ = close_control.send(());
+    let _ = tokio::time::timeout(EXIT_ANNOUNCEMENT_TIMEOUT, &mut control_task).await;
+    control_task.abort();
     match &result {
         Ok(()) => log::info!(
             target: "nemo_relay.daemon.worker",
@@ -1008,6 +1025,7 @@ fn revoke_diagnostic_authority(state: &WorkerState, registration: &mut Registrat
     registration.diagnostics = None;
 }
 
+#[allow(clippy::too_many_arguments)]
 async fn monitor_control(
     state: Arc<WorkerState>,
     daemon_origin: String,
@@ -1016,9 +1034,26 @@ async fn monitor_control(
     endpoint: String,
     worker_tls_root: Option<String>,
     mut registration: Registration,
+    mut close_control: tokio::sync::oneshot::Receiver<()>,
 ) {
     loop {
-        match registration.next().await {
+        let event = tokio::select! {
+            biased;
+            () = state.wait_until_exiting() => {
+                // Without this the daemon cannot tell an exit from a dropped socket and
+                // holds the route for the full reconnect window. Keep the socket open
+                // through teardown, bounded by that same window.
+                let _ = registration.release(&worker_id).await;
+                let _ = tokio::time::timeout(
+                    crate::daemon::common::socket::GRACE,
+                    &mut close_control,
+                )
+                .await;
+                return;
+            }
+            event = registration.next() => event,
+        };
+        match event {
             Ok(crate::daemon::common::socket::Event::Drain {
                 request_id,
                 request,
