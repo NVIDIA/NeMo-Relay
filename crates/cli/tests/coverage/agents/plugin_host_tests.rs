@@ -807,8 +807,10 @@ fn codex_auto_trust_reverifies_every_generated_hook_after_writing() {
         "subagent_start",
         "subagent_stop",
         "stop",
+        "interrupt",
         "pre_compact",
         "post_compact",
+        "session_end",
     ] {
         for condition in ["missing", "duplicate", "disabled", "modified"] {
             let dir = tempdir().unwrap();

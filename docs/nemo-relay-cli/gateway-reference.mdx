@@ -304,7 +304,8 @@ calling NeMo Relay APIs.
   scope at that signal instead of lazily. pi does; Claude Code and Codex report
   turn completion through `Stop`, so their turns stay lazily opened by the
   first event of the turn. Claude Code also reports failed turns through
-  `StopFailure`, which closes the turn with an error while retaining the session.
+  `StopFailure`, and Codex reports interrupted turns through `Interrupt`. Both
+  close the turn with an error while retaining the session.
   For a harness with an explicit turn start, a mark that arrives between turns
   is recorded on the session scope rather than opening a turn to hold it.
 - Gateway requests emit NeMo Relay LLM start and end events under the active
