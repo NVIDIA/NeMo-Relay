@@ -567,9 +567,10 @@ fn python_environment_resolution_requires_lifecycle_managed_path() {
         std::fs::create_dir_all(managed.parent().unwrap()).unwrap();
         symlink(&target, &managed).unwrap();
 
-        let error = resolve_python_executable(plugin_id, managed.to_str())
-            .expect_err("a symlinked environment should be rejected");
-        assert!(error.to_string().contains("must not be a symbolic link"));
+        assert_eq!(
+            resolve_python_executable(plugin_id, managed.to_str()).unwrap(),
+            python
+        );
     }
 }
 

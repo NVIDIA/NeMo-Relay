@@ -38,7 +38,7 @@ pub(crate) fn open_bounded_regular_file<'a>(
     path: &'a Path,
     description: &'a str,
 ) -> Result<BoundedFile<'a>, String> {
-    let metadata = std::fs::symlink_metadata(path).map_err(|error| {
+    let metadata = std::fs::metadata(path).map_err(|error| {
         format!(
             "failed to inspect {description} {}: {error}",
             path.display()
@@ -61,7 +61,7 @@ pub(crate) fn open_bounded_regular_file<'a>(
     #[cfg(unix)]
     {
         use std::os::unix::fs::OpenOptionsExt;
-        options.custom_flags(libc::O_NOFOLLOW | libc::O_NONBLOCK);
+        options.custom_flags(libc::O_NONBLOCK);
     }
     let file = options
         .open(path)

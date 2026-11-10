@@ -607,7 +607,7 @@ fn doctor_rejects_missing_oversized_and_non_file_artifacts() {
 
 #[cfg(unix)]
 #[test]
-fn doctor_rejects_symlinked_manifest_and_nested_artifact() {
+fn doctor_accepts_symlinked_manifest_and_nested_artifact_and_checks_target_bytes() {
     let directory = tempdir().unwrap();
     let token = credential();
     let _environment = EnvScope::set(&[(ROUTE_TOKEN_ENV, Some(OsStr::new(&token)))]);
@@ -621,8 +621,10 @@ fn doctor_rejects_symlinked_manifest_and_nested_artifact() {
             .join(format!("{}.original", relative.replace('/', "-")));
         std::fs::rename(&target, &original).unwrap();
         std::os::unix::fs::symlink(&original, &target).unwrap();
-        let error = refresh_bundle(&root, &digest).unwrap_err().to_string();
-        assert!(error.contains("symlink"), "{relative}: {error}");
+        refresh_bundle(&root, &digest).unwrap();
+        std::fs::remove_file(&original).unwrap();
+        std::fs::write(&original, b"tampered").unwrap();
+        assert!(refresh_bundle(&root, &digest).is_err(), "{relative}");
     }
 }
 
@@ -643,18 +645,19 @@ fn pi_placeholder_replacement_requires_exactly_one_json_string() {
 
 #[cfg(unix)]
 #[test]
-fn doctor_rejects_a_symlinked_bundle_root() {
+fn doctor_accepts_a_symlinked_bundle_root_and_nested_directory() {
     let directory = tempdir().unwrap();
     let root = directory.path().join("bundle");
     let alias = directory.path().join("bundle-alias");
     let digest = write_new_bundle(&root, &spec([ManagedAgent::Pi])).unwrap();
+    let token = credential();
+    let _environment = EnvScope::set(&[(ROUTE_TOKEN_ENV, Some(OsStr::new(&token)))]);
+    let original = directory.path().join("pi-original");
+    std::fs::rename(root.join("pi"), &original).unwrap();
+    std::os::unix::fs::symlink(&original, root.join("pi")).unwrap();
     std::os::unix::fs::symlink(&root, &alias).unwrap();
 
-    let error = refresh_bundle(&alias, &digest).unwrap_err().to_string();
-    assert!(
-        error.contains("must be a directory, not a symlink"),
-        "{error}"
-    );
+    refresh_bundle(&alias, &digest).unwrap();
 }
 
 #[test]

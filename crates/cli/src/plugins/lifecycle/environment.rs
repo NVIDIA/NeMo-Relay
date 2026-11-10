@@ -718,7 +718,7 @@ pub(super) fn environment_state(
         return DynamicPluginCheckState::Invalid;
     };
     if configured != expected
-        || std::fs::symlink_metadata(&configured)
+        || std::fs::metadata(&configured)
             .map(|metadata| !metadata.file_type().is_dir())
             .unwrap_or(true)
         || !environment_python_path(&configured).is_file()

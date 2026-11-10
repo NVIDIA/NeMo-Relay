@@ -293,9 +293,9 @@ fn validate_bundle_files(
     validate_environment: bool,
     expected_sha256: Option<&ManagedBundleDigest>,
 ) -> Result<ManagedBundleValidation, CliError> {
-    reject_non_directory_or_symlink(root)?;
+    require_directory(root)?;
     let manifest_path = root.join(MANIFEST_FILE);
-    reject_symlink(&manifest_path)?;
+    require_regular_file(&manifest_path)?;
     let manifest_bytes = read_bounded(&manifest_path, MAX_MANIFEST_BYTES)?;
     let manifest: ManagedManifest = serde_json::from_slice(&manifest_bytes).map_err(|error| {
         CliError::Config(format!(
@@ -351,7 +351,7 @@ fn validate_bundle_files(
     }
     for artifact in &expected.artifacts {
         let path = root.join(artifact.path);
-        reject_symlink(&path)?;
+        require_regular_file(&path)?;
         let actual = read_bounded(&path, artifact.bytes.len() as u64)?;
         if actual != artifact.bytes {
             return Err(CliError::Config(format!(
@@ -864,32 +864,32 @@ fn read_bounded(path: &Path, maximum: u64) -> Result<Vec<u8>, CliError> {
     Ok(bytes)
 }
 
-fn reject_symlink(path: &Path) -> Result<(), CliError> {
-    let metadata = fs::symlink_metadata(path).map_err(|error| {
+fn require_regular_file(path: &Path) -> Result<(), CliError> {
+    let metadata = fs::metadata(path).map_err(|error| {
         CliError::Config(format!(
             "failed to inspect managed artifact {}: {error}",
             path.display()
         ))
     })?;
-    if metadata.file_type().is_symlink() || !metadata.is_file() {
+    if !metadata.is_file() {
         return Err(CliError::Config(format!(
-            "managed artifact {} must be a regular file, not a symlink",
+            "managed artifact {} must be a regular file",
             path.display()
         )));
     }
     Ok(())
 }
 
-fn reject_non_directory_or_symlink(path: &Path) -> Result<(), CliError> {
-    let metadata = fs::symlink_metadata(path).map_err(|error| {
+fn require_directory(path: &Path) -> Result<(), CliError> {
+    let metadata = fs::metadata(path).map_err(|error| {
         CliError::Config(format!(
             "failed to inspect managed bundle {}: {error}",
             path.display()
         ))
     })?;
-    if metadata.file_type().is_symlink() || !metadata.is_dir() {
+    if !metadata.is_dir() {
         return Err(CliError::Config(format!(
-            "managed bundle {} must be a directory, not a symlink",
+            "managed bundle {} must be a directory",
             path.display()
         )));
     }
@@ -911,13 +911,7 @@ fn bundle_files(root: &Path) -> Result<BTreeSet<&'static str>, CliError> {
                 ));
             }
             let entry = entry?;
-            let metadata = entry.file_type()?;
-            if metadata.is_symlink() {
-                return Err(CliError::Config(format!(
-                    "managed bundle entry {} must not be a symlink",
-                    entry.path().display()
-                )));
-            }
+            let metadata = fs::metadata(entry.path())?;
             if metadata.is_dir() {
                 pending.push(entry.path());
                 continue;

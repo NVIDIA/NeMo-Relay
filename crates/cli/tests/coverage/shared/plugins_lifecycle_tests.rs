@@ -2595,6 +2595,13 @@ fn add_provisions_persists_and_removes_managed_python_environment() {
     );
     let (manifest, manifest_ref) =
         DynamicPluginManifest::load_from_path(plugin_dir.join("relay-plugin.toml")).unwrap();
+    #[cfg(unix)]
+    let environment_target = {
+        let target = temp.path().join("python-environment-target");
+        std::fs::rename(&environment_path, &target).unwrap();
+        std::os::unix::fs::symlink(&target, &environment_path).unwrap();
+        target
+    };
     let inspect = serde_json::to_value(responses::inspect_success(
         "plugins inspect",
         "acme.python",
@@ -2628,6 +2635,11 @@ fn add_provisions_persists_and_removes_managed_python_environment() {
     assert_eq!(active.len(), 1);
     assert_eq!(active[0].environment_ref.as_deref(), Some(environment_ref));
 
+    #[cfg(unix)]
+    {
+        std::fs::remove_file(&environment_path).unwrap();
+        std::fs::rename(&environment_target, &environment_path).unwrap();
+    }
     let stale_marker = environment_path.join("stale-marker");
     std::fs::write(&stale_marker, b"stale").unwrap();
     remove(

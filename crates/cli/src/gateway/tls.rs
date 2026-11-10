@@ -147,8 +147,22 @@ fn load_published_daemon_certificate(path: &Path) -> Result<Option<Vec<u8>>, Str
             ));
         }
     };
-    // Check the type first: on Linux a symlink's own mode is 0777, which would otherwise be
-    // reported as a permission problem instead of the real one.
+    let resolved = std::fs::canonicalize(path).map_err(|error| {
+        format!(
+            "failed to resolve {description} {}: {error}",
+            path.display()
+        )
+    })?;
+    let metadata = if metadata.file_type().is_symlink() {
+        std::fs::metadata(&resolved).map_err(|error| {
+            format!(
+                "failed to inspect {description} {}: {error}",
+                path.display()
+            )
+        })?
+    } else {
+        metadata
+    };
     if !metadata.file_type().is_file() {
         return Err(format!(
             "{description} {} must be a regular file",
@@ -157,7 +171,7 @@ fn load_published_daemon_certificate(path: &Path) -> Result<Option<Vec<u8>>, Str
     }
     // A user who can replace this file could make hooks trust a listener that squats the port.
     ensure_administrator_controlled(path, &metadata, description)?;
-    if let Some(directory) = path.parent() {
+    for directory in [path.parent(), resolved.parent()].into_iter().flatten() {
         let metadata = std::fs::metadata(directory).map_err(|error| {
             format!(
                 "failed to inspect the directory of the {description} {}: {error}",

@@ -442,11 +442,24 @@ fn published_daemon_certificate_must_be_one_administrator_controlled_block() {
     let error = daemon_client_config().unwrap_err();
     assert!(error.contains("invalid CERTIFICATE base64"), "{error}");
 
-    // A symlink could point at a file that a user controls.
+    // Symlinks are accepted when the target and both directories remain administrator-controlled.
     let elsewhere = temp.path().join("elsewhere.pem");
     std::fs::write(&elsewhere, daemon.certificate_pem()).unwrap();
     let _ = std::fs::remove_file(&path);
     std::os::unix::fs::symlink(&elsewhere, &path).unwrap();
+    daemon_client_config().unwrap();
+    std::fs::set_permissions(&elsewhere, std::fs::Permissions::from_mode(0o664)).unwrap();
     let error = daemon_client_config().unwrap_err();
-    assert!(error.contains("must be a regular file"), "{error}");
+    assert!(
+        error.contains("must not be writable by group or other users"),
+        "{error}"
+    );
+    std::fs::set_permissions(&elsewhere, std::fs::Permissions::from_mode(0o644)).unwrap();
+    std::fs::set_permissions(temp.path(), std::fs::Permissions::from_mode(0o777)).unwrap();
+    let error = daemon_client_config().unwrap_err();
+    assert!(
+        error.contains("directory of the published daemon TLS certificate"),
+        "{error}"
+    );
+    std::fs::set_permissions(temp.path(), std::fs::Permissions::from_mode(0o700)).unwrap();
 }

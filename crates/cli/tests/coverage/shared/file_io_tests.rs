@@ -83,6 +83,27 @@ fn backups_and_snapshots_restore_original_or_missing_files() {
 
 #[cfg(unix)]
 #[test]
+fn bounded_file_reads_follow_symlinks_and_validate_targets() {
+    let directory = tempdir().unwrap();
+    let target = directory.path().join("target");
+    let link = directory.path().join("link");
+    std::fs::write(&target, b"payload").unwrap();
+    std::os::unix::fs::symlink(&target, &link).unwrap();
+    assert_eq!(
+        crate::filesystem::bounded::read_bounded_regular_file(&link, "payload").unwrap(),
+        b"payload"
+    );
+
+    std::fs::remove_file(&target).unwrap();
+    assert!(crate::filesystem::bounded::read_bounded_regular_file(&link, "payload").is_err());
+    std::fs::create_dir(&target).unwrap();
+    let error =
+        crate::filesystem::bounded::read_bounded_regular_file(&link, "payload").unwrap_err();
+    assert!(error.contains("must be a regular file"), "{error}");
+}
+
+#[cfg(unix)]
+#[test]
 fn snapshot_restore_preserves_symlink_identity_and_target_bytes() {
     use std::os::unix::fs::symlink;
 

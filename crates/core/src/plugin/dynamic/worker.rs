@@ -1342,14 +1342,6 @@ fn resolve_python_executable(
             environment.display()
         )));
     }
-    if std::fs::symlink_metadata(environment)
-        .is_ok_and(|metadata| metadata.file_type().is_symlink())
-    {
-        return Err(PluginError::InvalidConfig(format!(
-            "Python worker environment_ref '{}' must not be a symbolic link",
-            environment.display()
-        )));
-    }
     Ok(if cfg!(windows) {
         environment.join("Scripts").join("python.exe")
     } else {

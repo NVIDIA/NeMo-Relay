@@ -275,6 +275,13 @@ fn valid_signature_is_accepted_and_wrong_or_malformed_keys_are_rejected() {
         ),
     )
     .unwrap();
+    #[cfg(unix)]
+    for name in ["artifact.bin", "artifact.sig"] {
+        let path = temp.path().join(name);
+        let target = temp.path().join(format!("{name}.target"));
+        std::fs::rename(&path, &target).unwrap();
+        std::os::unix::fs::symlink(&target, &path).unwrap();
+    }
     let manifest = manifest(
         Some("artifact.bin"),
         Some(&digest(bytes)),
