@@ -237,6 +237,40 @@ async fn start_issuer() -> (OidcSource, Shared) {
     (OidcSource::new(&base, CLIENT_ID, None), shared)
 }
 
+#[cfg(unix)]
+#[tokio::test]
+async fn the_sign_in_lock_file_is_private() {
+    use std::os::unix::fs::PermissionsExt;
+    let (source, _issuer) = start_issuer().await;
+    let dir = tempfile::tempdir().unwrap();
+    ensure_sessions_dir(dir.path()).unwrap();
+    let session = session_path(dir.path(), &source);
+    let _lock = super::session::SessionLock::acquire(&session)
+        .await
+        .unwrap();
+    let mode = std::fs::metadata(session.with_extension("lock"))
+        .unwrap()
+        .permissions()
+        .mode();
+    assert_eq!(mode & 0o777, 0o600);
+}
+
+#[test]
+fn doctor_describes_the_time_left_on_an_access_token_in_words() {
+    for (seconds, words) in [
+        (0, "less than a minute"),
+        (59, "less than a minute"),
+        (60, "about 1 minute"),
+        (54 * 60 + 30, "about 54 minutes"),
+        (3_600, "about 1 hour"),
+        (23 * 3_600 + 59 * 60, "about 23 hours"),
+        (86_400, "about 1 day"),
+        (7 * 86_400, "about 7 days"),
+    ] {
+        assert_eq!(describe_time_left(seconds), words, "{seconds} seconds");
+    }
+}
+
 fn store(dir: &Path, source: &OidcSource, refresh: Option<&str>, expires_at: u64) {
     ensure_sessions_dir(dir).unwrap();
     write_session(
@@ -1192,4 +1226,21 @@ async fn a_redirect_iss_is_compared_with_the_published_issuer() {
     let error = pasted_sign_in_error(&client, redirect_naming(&source.issuer).as_str()).await;
     assert!(error.contains("names another issuer"), "{error}");
     assert_eq!(issuer.lock().unwrap().grants.len(), 1);
+}
+
+#[test]
+fn doctor_shows_the_exact_expiry_time_and_the_time_left() {
+    let now = 1_794_330_000;
+    assert_eq!(
+        describe_expiry(now + 3 * 3_600 + 120, now),
+        "2026-11-10 20:02:00 UTC (about 3 hours)"
+    );
+    assert_eq!(
+        describe_expiry(u64::MAX, now),
+        format!(
+            "{} (Unix time, about {} days)",
+            u64::MAX,
+            (u64::MAX - now) / 86_400
+        )
+    );
 }
