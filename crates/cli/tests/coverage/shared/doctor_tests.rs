@@ -1213,6 +1213,7 @@ async fn doctor_warns_when_an_explicit_plugin_config_is_missing() {
 
 #[cfg(unix)]
 #[tokio::test]
+/// Validates plugin configuration reached through a file symlink.
 async fn doctor_accepts_symlinked_plugin_configuration() {
     let _guard = PLUGIN_CONFIG_TEST_LOCK.lock().await;
     let directory = tempfile::tempdir().unwrap();
@@ -1237,6 +1238,7 @@ async fn doctor_accepts_symlinked_plugin_configuration() {
 
 #[cfg(unix)]
 #[tokio::test]
+/// Loads both TOML files through file and parent-directory aliases.
 async fn doctor_accepts_symlinked_gateway_and_plugin_configuration_under_a_directory_alias() {
     use std::os::unix::fs::symlink;
 

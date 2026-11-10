@@ -135,6 +135,7 @@ pub(crate) fn daemon_certificate_path() -> PathBuf {
     crate::configuration::system_config_dir().join(DAEMON_CERTIFICATE_FILE)
 }
 
+/// Loads one published certificate after validating the opened target and its containing directories.
 fn load_published_daemon_certificate(path: &Path) -> Result<Option<Vec<u8>>, String> {
     let description = "published daemon TLS certificate";
     match std::fs::symlink_metadata(path) {
@@ -195,6 +196,7 @@ fn load_published_daemon_certificate(path: &Path) -> Result<Option<Vec<u8>>, Str
 }
 
 #[cfg(unix)]
+/// Validates the opened object's Unix owner and group/other write permissions.
 fn ensure_administrator_controlled(
     path: &Path,
     file: &std::fs::File,
@@ -226,6 +228,7 @@ fn ensure_administrator_controlled(
 }
 
 #[cfg(windows)]
+/// Validates the opened Windows object's owner and ACL before trusting it.
 fn ensure_administrator_controlled(
     path: &Path,
     file: &std::fs::File,
@@ -245,6 +248,7 @@ fn ensure_administrator_controlled(
 }
 
 #[cfg(not(any(unix, windows)))]
+/// Provides the fallback for platforms without Unix permissions or Windows ACLs.
 fn ensure_administrator_controlled(
     _path: &Path,
     _file: &std::fs::File,

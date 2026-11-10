@@ -47,6 +47,7 @@ fn bounded_reader_rejects_missing_nonregular_and_oversized_files() {
 
 #[cfg(unix)]
 #[test]
+/// Applies regular-file and byte-budget checks to symlink targets.
 fn bounded_reader_follows_symlinks_and_checks_the_target() {
     use std::os::unix::fs::symlink;
 

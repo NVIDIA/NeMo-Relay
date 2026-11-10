@@ -83,6 +83,7 @@ fn backups_and_snapshots_restore_original_or_missing_files() {
 
 #[cfg(unix)]
 #[test]
+/// Reads linked regular files and rejects missing or nonregular targets.
 fn bounded_file_reads_follow_symlinks_and_validate_targets() {
     let directory = tempdir().unwrap();
     let target = directory.path().join("target");
@@ -367,6 +368,7 @@ fn set_windows_dacl(path: &std::path::Path, sddl: &str) {
 
 #[cfg(windows)]
 #[test]
+/// Checks the opened target ACL even when accessed through a different file name.
 fn windows_administrator_control_checks_the_opened_target_acl() {
     let directory = tempdir().unwrap();
     let target = directory.path().join("certificate");

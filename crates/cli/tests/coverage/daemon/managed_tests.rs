@@ -607,6 +607,7 @@ fn doctor_rejects_missing_oversized_and_non_file_artifacts() {
 
 #[cfg(unix)]
 #[test]
+/// Accepts linked bundle files while rejecting changes to their target bytes.
 fn doctor_accepts_symlinked_manifest_and_nested_artifact_and_checks_target_bytes() {
     let directory = tempdir().unwrap();
     let token = credential();
@@ -645,6 +646,7 @@ fn pi_placeholder_replacement_requires_exactly_one_json_string() {
 
 #[cfg(unix)]
 #[test]
+/// Validates a managed bundle through linked root and nested directories.
 fn doctor_accepts_a_symlinked_bundle_root_and_nested_directory() {
     let directory = tempdir().unwrap();
     let root = directory.path().join("bundle");
@@ -808,6 +810,7 @@ fn managed_bundle_rejects_invalid_manifest_family_and_artifact_capacity() {
 }
 
 #[test]
+/// Preserves create-only writes, bounded reads, and the bundle entry budget.
 fn managed_file_helpers_reject_overwrite_oversize_and_excessive_entries() {
     let directory = tempdir().unwrap();
     let file = directory.path().join("artifact");
@@ -829,6 +832,7 @@ fn managed_file_helpers_reject_overwrite_oversize_and_excessive_entries() {
 
 #[cfg(unix)]
 #[test]
+/// Distinguishes ancestor cycles from harmless aliases to sibling directories.
 fn managed_bundle_reports_directory_symlink_cycles_but_accepts_sibling_aliases() {
     use std::os::unix::fs::symlink;
 
@@ -849,6 +853,7 @@ fn managed_bundle_reports_directory_symlink_cycles_but_accepts_sibling_aliases()
 
 #[cfg(unix)]
 #[test]
+/// Rejects a FIFO before attempting a blocking managed-artifact read.
 fn managed_file_reader_rejects_a_fifo_without_waiting_for_a_writer() {
     use std::os::unix::ffi::OsStrExt;
 

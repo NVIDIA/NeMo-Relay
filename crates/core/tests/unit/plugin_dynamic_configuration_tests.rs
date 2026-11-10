@@ -670,6 +670,7 @@ fn plugin_file_loading_skips_only_missing_paths() {
 
 #[cfg(unix)]
 #[test]
+/// Follows configuration aliases without changing relative manifest resolution or diagnostics.
 fn plugin_file_loading_follows_symlinks_and_preserves_source_paths() {
     use std::os::unix::fs::symlink;
 
@@ -704,6 +705,7 @@ fn plugin_file_loading_follows_symlinks_and_preserves_source_paths() {
 
 #[cfg(unix)]
 #[test]
+/// Rejects configuration aliases whose targets are missing or are not regular files.
 fn plugin_file_loading_rejects_broken_and_nonregular_symlink_targets() {
     use std::os::unix::fs::symlink;
 

@@ -34,6 +34,7 @@ pub(crate) struct BoundedFile<'a> {
     description: &'a str,
 }
 
+/// Opens a symlink-aware regular file and checks the opened handle and its size before reading.
 pub(crate) fn open_bounded_regular_file<'a>(
     path: &'a Path,
     description: &'a str,
@@ -95,6 +96,7 @@ pub(crate) fn open_bounded_regular_file<'a>(
 }
 
 impl BoundedFile<'_> {
+    /// Borrows the handle used for streaming so callers can validate its ownership or ACL.
     pub(crate) fn file(&self) -> &std::fs::File {
         &self.file
     }

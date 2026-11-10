@@ -700,6 +700,7 @@ pub(super) fn remove_managed_environment_for_plugin(
     remove_directory_if_present(&expected, "delete")
 }
 
+/// Checks the managed location, interpreter, and attestation of an installed Python environment.
 pub(super) fn environment_state(
     manifest: &DynamicPluginManifest,
     state_path: &Path,
@@ -785,6 +786,7 @@ fn absolute_path(path: &Path) -> Result<PathBuf, String> {
     }
 }
 
+/// Removes an owned environment directory or unlinks its alias without traversing the target.
 fn remove_directory_if_present(path: &Path, operation: &str) -> Result<(), String> {
     let metadata = match std::fs::symlink_metadata(path) {
         Ok(metadata) => metadata,

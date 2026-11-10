@@ -1313,6 +1313,7 @@ fn minimize_worker_environment(command: &mut Command, forward_env: &[String]) {
     }
 }
 
+/// Resolves the interpreter beneath the lifecycle-managed path for the requested plugin ID.
 fn resolve_python_executable(
     plugin_id: &str,
     environment_ref: Option<&str>,

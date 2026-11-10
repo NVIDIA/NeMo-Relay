@@ -382,6 +382,7 @@ async fn daemon_trust_without_a_published_certificate_matches_the_same_account_d
 
 #[cfg(unix)]
 #[test]
+/// Requires one valid certificate and administrator-controlled targets and directories.
 fn published_daemon_certificate_must_be_one_administrator_controlled_block() {
     use std::os::unix::fs::PermissionsExt;
 
@@ -466,6 +467,7 @@ fn published_daemon_certificate_must_be_one_administrator_controlled_block() {
 
 #[cfg(unix)]
 #[test]
+/// Keeps ownership validation and bytes bound to one handle after a link is replaced.
 fn certificate_ownership_checks_the_opened_file_after_symlink_substitution() {
     use std::os::unix::fs::{PermissionsExt, symlink};
 

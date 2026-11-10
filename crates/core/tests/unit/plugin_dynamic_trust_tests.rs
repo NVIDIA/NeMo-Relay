@@ -261,6 +261,7 @@ fn authenticity_modes_cover_optional_required_and_malformed_evidence() {
 }
 
 #[test]
+/// Verifies target bytes through linked artifacts and signatures and rejects invalid signing keys.
 fn valid_signature_is_accepted_and_wrong_or_malformed_keys_are_rejected() {
     let temp = tempfile::tempdir().unwrap();
     let bytes = b"signed plugin artifact";

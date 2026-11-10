@@ -537,6 +537,7 @@ async fn continuation_context_preserves_optimization_recorder_across_tasks() {
 }
 
 #[test]
+/// Allows aliases at the managed environment path while rejecting arbitrary locations.
 fn python_environment_resolution_requires_lifecycle_managed_path() {
     enable_operational_logs();
     let plugin_id = "acme.python";

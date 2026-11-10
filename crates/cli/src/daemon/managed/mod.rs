@@ -288,6 +288,7 @@ pub(crate) fn validate_bundle(
     validate_bundle_files(root, true, Some(expected_sha256))
 }
 
+/// Validates the managed manifest, exact artifact bytes, digest, and optional environment.
 fn validate_bundle_files(
     root: &Path,
     validate_environment: bool,
@@ -843,6 +844,7 @@ fn update_bundle_digest(hasher: &mut Sha256, name: &[u8], bytes: &[u8]) {
     hasher.update(bytes);
 }
 
+/// Reads a regular managed artifact through a checked handle without exceeding its byte limit.
 fn read_bounded(path: &Path, maximum: u64) -> Result<Vec<u8>, CliError> {
     let mut options = OpenOptions::new();
     options.read(true);
@@ -883,6 +885,7 @@ fn read_bounded(path: &Path, maximum: u64) -> Result<Vec<u8>, CliError> {
     Ok(bytes)
 }
 
+/// Requires the configured bundle path to resolve to an accessible directory.
 fn require_directory(path: &Path) -> Result<(), CliError> {
     let metadata = fs::metadata(path).map_err(|error| {
         CliError::Config(format!(
@@ -899,6 +902,7 @@ fn require_directory(path: &Path) -> Result<(), CliError> {
     Ok(())
 }
 
+/// Inventories bundle entries, following aliases while rejecting ancestor cycles and excess entries.
 fn bundle_files(root: &Path) -> Result<BTreeSet<&'static str>, CliError> {
     let expected = all_artifact_paths();
     let expected_lookup = expected.iter().copied().collect::<BTreeSet<_>>();

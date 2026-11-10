@@ -1407,6 +1407,39 @@ test-rust:
 
     export_uv_python_runtime
     cd "$NEMO_RELAY_REPO_ROOT"
+    run_windows_symlink_cleanup_test() {
+        if [[ "$is_windows" != true ]]; then
+            return
+        fi
+        local probe_status=0
+        local python_executable
+        python_executable="$(uv_python_executable)"
+        "$python_executable" - <<'PY' || probe_status=$?
+    import os
+    import pathlib
+    import tempfile
+
+    try:
+        with tempfile.TemporaryDirectory() as directory:
+            root = pathlib.Path(directory)
+            (root / "directory").mkdir()
+            (root / "file").write_bytes(b"probe")
+            for name, is_directory in (("directory", True), ("file", False)):
+                os.symlink(root / name, root / f"{name}-link", target_is_directory=is_directory)
+    except OSError as error:
+        if getattr(error, "winerror", None) == 1314:  # ERROR_PRIVILEGE_NOT_HELD
+            print(f"Windows symlink cleanup test remains ignored: {error}")
+            raise SystemExit(77)
+        raise
+    PY
+        case "$probe_status" in
+            0)
+                "${nextest_command[@]}" --locked -p nemo-relay-cli --lib --features __test-cli-port-override,__skip-implicit-config --run-ignored only --profile default -E 'test(windows_managed_environment_cleanup_unlinks_directory_and_file_symlinks)'
+                ;;
+            77) ;; # The main run already reports this test as ignored.
+            *) return "$probe_status" ;;
+        esac
+    }
     if is_true "{{ ci }}"; then
         coverage_out="$(prepare_artifact rust-workspace.xml)"
         junit_out="$(prepare_artifact rust_junit_report.xml)"
@@ -1415,6 +1448,7 @@ test-rust:
         fi
         prepare_test_plugin_fixtures
         "${nextest_command[@]}" --locked --workspace --exclude nemo-relay-python --exclude nemo-relay-node --features nemo-relay-cli/__test-cli-port-override,nemo-relay-cli/__skip-implicit-config --profile ci --no-fail-fast
+        run_windows_symlink_cleanup_test
         cp "$NEMO_RELAY_REPO_ROOT/target/nextest/ci/rust_junit_report.xml" "$junit_out"
         if rust_source_coverage_supported; then
             # LLVM deduplicates unmangled FFI symbols using the first object's
@@ -1441,6 +1475,7 @@ test-rust:
     else
         prepare_test_plugin_fixtures
         "${nextest_command[@]}" --locked --workspace --exclude nemo-relay-python --exclude nemo-relay-node --features nemo-relay-cli/__test-cli-port-override,nemo-relay-cli/__skip-implicit-config --profile ci --no-fail-fast
+        run_windows_symlink_cleanup_test
     fi
 
 # --set [output_dir=<path>] [ci=true|false]

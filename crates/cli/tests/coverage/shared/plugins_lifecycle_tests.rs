@@ -2557,6 +2557,7 @@ port = "not-an-integer"
 }
 
 #[test]
+/// Exercises provisioning, linked-environment inspection and activation, removal, and re-addition.
 fn add_provisions_persists_and_removes_managed_python_environment() {
     let temp = tempfile::tempdir().unwrap();
     let _env = EnvScope::hermetic(&temp);
@@ -3050,6 +3051,7 @@ fn managed_environment_cleanup_refuses_paths_outside_lifecycle_directory() {
 
 #[cfg(unix)]
 #[test]
+/// Removes live and dangling environment aliases while preserving target contents.
 fn managed_environment_cleanup_unlinks_environment_without_removing_target() {
     use std::os::unix::fs::symlink;
 
@@ -3086,6 +3088,7 @@ fn managed_environment_cleanup_unlinks_environment_without_removing_target() {
 
 #[cfg(unix)]
 #[test]
+/// Resets a managed alias to a fresh environment without changing its original target.
 fn provisioning_resets_a_linked_managed_environment_without_removing_target() {
     let temp = tempfile::tempdir().unwrap();
     let _env = EnvScope::hermetic(&temp);
@@ -3116,6 +3119,8 @@ fn provisioning_resets_a_linked_managed_environment_without_removing_target() {
 
 #[cfg(windows)]
 #[test]
+#[ignore = "requires Windows symlink privilege; just test-rust runs this automatically when available"]
+/// Unlinks live file and directory aliases, and dangling directory aliases, without deleting targets.
 fn windows_managed_environment_cleanup_unlinks_directory_and_file_symlinks() {
     use std::os::windows::fs::{symlink_dir, symlink_file};
 
@@ -3142,22 +3147,12 @@ fn windows_managed_environment_cleanup_unlinks_directory_and_file_symlinks() {
             target.clone()
         };
         std::fs::write(&contents, b"keep").unwrap();
-        let result = if is_directory {
+        if is_directory {
             symlink_dir(&target, &managed)
         } else {
             symlink_file(&target, &managed)
-        };
-        if let Err(error) = result {
-            if error.raw_os_error()
-                == Some(windows_sys::Win32::Foundation::ERROR_PRIVILEGE_NOT_HELD as i32)
-            {
-                eprintln!(
-                    "Windows symlink test requires Developer Mode or symlink privilege: {error}"
-                );
-                return;
-            }
-            panic!("failed to create managed environment symlink: {error}");
         }
+        .unwrap();
 
         environment::remove_managed_environment(
             &state_path,
@@ -3170,6 +3165,22 @@ fn windows_managed_environment_cleanup_unlinks_directory_and_file_symlinks() {
             std::io::ErrorKind::NotFound
         );
         assert_eq!(std::fs::read(&contents).unwrap(), b"keep");
+        if is_directory {
+            symlink_dir(&target, &managed).unwrap();
+            let relocated = temp.path().join("relocated-directory");
+            std::fs::rename(&target, &relocated).unwrap();
+            environment::remove_managed_environment(
+                &state_path,
+                "acme.python",
+                managed.to_str().unwrap(),
+            )
+            .unwrap();
+            assert_eq!(
+                std::fs::symlink_metadata(&managed).unwrap_err().kind(),
+                std::io::ErrorKind::NotFound
+            );
+            assert_eq!(std::fs::read(relocated.join("keep")).unwrap(), b"keep");
+        }
     }
 }
 
