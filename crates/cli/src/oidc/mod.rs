@@ -201,6 +201,7 @@ pub(crate) async fn login(
 
 /// What `logout` did.
 pub(crate) enum Logout {
+    /// No sign-in is stored for the issuer, so nothing is removed or revoked.
     NotSignedIn,
     /// The stored sign-in is removed. The issuer's answer to the revocation follows.
     Removed(Revocation),
@@ -208,9 +209,12 @@ pub(crate) enum Logout {
 
 /// The issuer's answer when `logout` revokes the stored tokens (RFC 7009).
 pub(crate) enum Revocation {
+    /// The issuer revoked every stored token.
     Revoked,
     /// The refresh token is revoked. The issuer refused the access token for this reason.
     RefreshTokenOnly(String),
+    /// The access token is revoked. The issuer refused the refresh token for this reason.
+    AccessTokenOnly(String),
     /// The issuer publishes no `revocation_endpoint`.
     NotOffered,
     /// The reason, without the tokens.
@@ -244,6 +248,7 @@ pub(crate) async fn logout(dir: &Path, source: &OidcSource) -> Result<Logout, Cl
     Ok(Logout::Removed(revocation))
 }
 
+/// Discovers the issuer and revokes the session's tokens, within `REVOCATION_DEADLINE` in total.
 async fn revoke(source: &OidcSource, session: &session::Session) -> Revocation {
     let attempt = async {
         let client = match OidcClient::discover(source).await {

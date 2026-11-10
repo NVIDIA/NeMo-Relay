@@ -110,37 +110,34 @@ async fn print_token(dir: &Path, source: OidcSource) -> Result<(), CliError> {
     Ok(())
 }
 
+/// Removes the stored sign-in, revokes its tokens at the issuer and prints the result.
 async fn logout(dir: &Path, source: OidcSource) -> Result<(), CliError> {
-    match crate::oidc::logout(dir, &source).await? {
-        crate::oidc::Logout::NotSignedIn => {
-            println!("No sign-in is stored for {}.", source.issuer);
-        }
-        crate::oidc::Logout::Removed(crate::oidc::Revocation::Revoked) => {
-            println!(
-                "Removed the sign-in for {}. The issuer revoked its tokens.",
-                source.issuer
-            );
-        }
-        crate::oidc::Logout::Removed(crate::oidc::Revocation::RefreshTokenOnly(detail)) => {
-            println!(
-                "Removed the sign-in for {0}. {0} revoked the refresh token but not the access token ({detail}), so the access token stays valid until it expires.",
-                source.issuer
-            );
-        }
-        crate::oidc::Logout::Removed(crate::oidc::Revocation::NotOffered) => {
-            println!(
-                "Removed the sign-in for {0}. {0} offers no token revocation, so its tokens stay valid until they expire.",
-                source.issuer
-            );
-        }
-        crate::oidc::Logout::Removed(crate::oidc::Revocation::Failed(detail)) => {
-            println!(
-                "Removed the sign-in for {0}. {0} did not revoke its tokens ({detail}), so they stay valid until they expire.",
-                source.issuer
-            );
-        }
-    }
+    let outcome = crate::oidc::logout(dir, &source).await?;
+    println!("{}", logout_message(&source.issuer, &outcome));
     Ok(())
+}
+
+/// The line `auth logout` prints: what Relay removed, and which tokens stay valid at the issuer.
+fn logout_message(issuer: &str, outcome: &crate::oidc::Logout) -> String {
+    use crate::oidc::{Logout, Revocation};
+    match outcome {
+        Logout::NotSignedIn => format!("No sign-in is stored for {issuer}."),
+        Logout::Removed(Revocation::Revoked) => {
+            format!("Removed the sign-in for {issuer}. The issuer revoked its tokens.")
+        }
+        Logout::Removed(Revocation::RefreshTokenOnly(detail)) => format!(
+            "Removed the sign-in for {issuer}. {issuer} revoked the refresh token but not the access token ({detail}), so the access token stays valid until it expires."
+        ),
+        Logout::Removed(Revocation::AccessTokenOnly(detail)) => format!(
+            "Removed the sign-in for {issuer}. {issuer} revoked the access token but not the refresh token ({detail}), so the refresh token stays valid until it expires."
+        ),
+        Logout::Removed(Revocation::NotOffered) => format!(
+            "Removed the sign-in for {issuer}. {issuer} offers no token revocation, so its tokens stay valid until they expire."
+        ),
+        Logout::Removed(Revocation::Failed(detail)) => format!(
+            "Removed the sign-in for {issuer}. {issuer} did not revoke its tokens ({detail}), so they stay valid until they expire."
+        ),
+    }
 }
 
 /// The effective configuration, including the user layer that `--config` replaces.

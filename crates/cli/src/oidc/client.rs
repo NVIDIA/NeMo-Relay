@@ -310,6 +310,7 @@ impl OidcClient {
         Some(match (refresh, access) {
             (None | Some(Ok(())), Ok(())) => Revocation::Revoked,
             (Some(Ok(())), Err(detail)) => Revocation::RefreshTokenOnly(detail),
+            (Some(Err(detail)), Ok(())) => Revocation::AccessTokenOnly(detail),
             (refresh, access) => Revocation::Failed(
                 [("refresh_token", refresh), ("access_token", Some(access))]
                     .into_iter()
@@ -320,6 +321,8 @@ impl OidcClient {
         })
     }
 
+    /// Sends one RFC 7009 revocation request. The error is an RFC 6749 or RFC 7009 error code,
+    /// or the HTTP status, so that it never holds text the issuer chose.
     async fn revoke_token(&self, endpoint: &str, token: &str, hint: &str) -> Result<(), String> {
         let form = [
             ("token", token),
@@ -334,10 +337,11 @@ impl OidcClient {
         if status.is_success() {
             return Ok(());
         }
-        Err(response.json::<OAuthError>().await.map_or_else(
-            |_| format!("HTTP {status}"),
-            |error| describe(&error.error, error.error_description.as_deref()),
-        ))
+        // The submitted token may still be valid here, so print no text the issuer chose.
+        Err(match response.json::<OAuthError>().await {
+            Ok(error) if REVOCATION_ERRORS.contains(&error.error.as_str()) => error.error,
+            _ => format!("HTTP {status}"),
+        })
     }
 
     /// Never fails: a request that does not reach the issuer is `Unavailable`.
@@ -435,6 +439,17 @@ fn device_failure(code: &str, detail: &str) -> CliError {
         _ => format!("the sign-in was not completed: {detail}"),
     })
 }
+
+/// The error codes that RFC 6749 and RFC 7009 define for a revocation request.
+const REVOCATION_ERRORS: [&str; 7] = [
+    "invalid_request",
+    "invalid_client",
+    "invalid_grant",
+    "unauthorized_client",
+    "unsupported_token_type",
+    "server_error",
+    "temporarily_unavailable",
+];
 
 /// The OAuth error code, with the issuer's description when it sent one.
 fn describe(code: &str, description: Option<&str>) -> String {

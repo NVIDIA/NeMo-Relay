@@ -47,8 +47,9 @@ struct Issuer {
     access_revocation_error: Option<&'static str>,
     /// Refuses to revoke refresh tokens with this error.
     refresh_revocation_error: Option<&'static str>,
-    /// Never answers a revocation request.
+    /// Never answers a revocation request, and pauses the clock when the first one arrives.
     revocation_hangs: bool,
+    clock_paused: bool,
     revocations: Vec<HashMap<String, String>>,
 }
 
@@ -175,16 +176,30 @@ async fn revoke(State(issuer): State<Shared>, body: String) -> Response {
             "refresh_token" => state.refresh_revocation_error,
             _ => None,
         };
+        let token = form["token"].clone();
         state.revocations.push(form);
         match (state.revocation_hangs, refused) {
-            (true, _) => None,
+            (true, _) => {
+                // Paused only now, so that discovery runs on the real clock and cannot time out.
+                if !std::mem::replace(&mut state.clock_paused, true) {
+                    tokio::time::pause();
+                }
+                None
+            }
             (false, Some(error)) => {
                 Some((StatusCode::BAD_REQUEST, Json(json!({ "error": error }))).into_response())
             }
             (false, None) => Some(
                 match state.revocation_status.unwrap_or(StatusCode::NOT_FOUND) {
                     StatusCode::OK => StatusCode::OK.into_response(),
-                    status => (status, Json(json!({ "error": "invalid_client" }))).into_response(),
+                    status => (
+                        status,
+                        Json(json!({
+                            "error": "invalid_client",
+                            "error_description": format!("cannot revoke {token}"),
+                        })),
+                    )
+                        .into_response(),
                 },
             ),
         }
@@ -478,7 +493,7 @@ async fn a_refused_access_token_without_a_refresh_token_fails() {
 }
 
 #[tokio::test]
-async fn a_refused_refresh_token_fails_even_when_the_access_token_is_revoked() {
+async fn a_refused_refresh_token_with_a_revoked_access_token_is_reported_as_such() {
     let (source, issuer) = start_issuer().await;
     {
         let mut state = issuer.lock().unwrap();
@@ -487,15 +502,16 @@ async fn a_refused_refresh_token_fails_even_when_the_access_token_is_revoked() {
     }
     let dir = tempfile::tempdir().unwrap();
     store(dir.path(), &source, Some("refresh-1"), 10_000);
-    let Logout::Removed(Revocation::Failed(detail)) = logout(dir.path(), &source).await.unwrap()
+    let Logout::Removed(Revocation::AccessTokenOnly(detail)) =
+        logout(dir.path(), &source).await.unwrap()
     else {
-        panic!("a refresh token that is still valid must be reported as a failure");
+        panic!("a revoked access token must be reported even when the refresh token is refused");
     };
-    assert_eq!(detail, "refresh_token: invalid_request");
+    assert_eq!(detail, "invalid_request");
     assert_eq!(revoked(&issuer).len(), 2);
 }
 
-#[tokio::test(start_paused = true)]
+#[tokio::test]
 async fn logout_stops_waiting_for_the_issuer_after_the_revocation_deadline() {
     let (source, issuer) = start_issuer().await;
     {
@@ -557,6 +573,24 @@ async fn a_refused_revocation_still_removes_the_sign_in_and_reports_the_error() 
         "{detail}"
     );
     assert!(sign_in_state(dir.path(), &source, 1_000).unwrap() == SignInState::NotSignedIn);
+}
+
+#[tokio::test]
+async fn an_unknown_revocation_error_code_is_reported_as_the_http_status() {
+    let (source, issuer) = start_issuer().await;
+    {
+        let mut state = issuer.lock().unwrap();
+        state.revocation_status = Some(StatusCode::OK);
+        state.refresh_revocation_error = Some("refresh-1 was rejected");
+    }
+    let dir = tempfile::tempdir().unwrap();
+    store(dir.path(), &source, Some("refresh-1"), 10_000);
+    let Logout::Removed(Revocation::AccessTokenOnly(detail)) =
+        logout(dir.path(), &source).await.unwrap()
+    else {
+        panic!("a refused refresh token must be reported");
+    };
+    assert_eq!(detail, "HTTP 400 Bad Request");
 }
 
 #[tokio::test]
