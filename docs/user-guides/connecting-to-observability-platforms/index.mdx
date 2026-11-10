@@ -29,7 +29,7 @@ includes all setup; you do not need to complete the linked capture-path guides f
 
 | Requirement | Your deployment | Brev example |
 | --- | --- | --- |
-| Relay | A capture path that sees the required model and tool activity | Relay Python SDK 0.10.4; no separate coding agent |
+| Relay | A capture path that sees the required model and tool activity | Relay Python SDK 0.11.1; no separate coding agent |
 | Host | A platform supported by your chosen integration | CPU Linux VM, Python 3.12, Git, uv |
 | Access | Trace-ingestion permission and any provider credentials | NVIDIA API key and an accessible model; local Phoenix needs no API key |
 | Changes | Exporter configuration in the process that owns capture | Virtual environment and new output directory; no system service |
@@ -120,6 +120,11 @@ disabled; apply your retention and access policy to `logs/events.jsonl`.
 | Instrumented application | Pass the file path to the SDK's plugin activation API, as below. |
 | Hermes | Set `HERMES_NEMO_RELAY_PLUGINS_TOML` to the plugin file before starting Hermes. |
 
+An explicit SDK plugin file adds a configuration layer; system plugin policy still
+applies. Before upgrading an existing deployment to Relay 1.0, migrate worker
+plugins to the current protocol and check native-plugin compatibility. See the
+[migration guide](/reference/migration-guides#migrate-worker-plugins-to-nemo-relay-100).
+
 For a directly instrumented Python application, import the observability
 component and activate the host around application work:
 
@@ -206,7 +211,7 @@ for instance selection; available CPU types depend on your organization and prov
 
 | Setting | Recommendation |
 | --- | --- |
-| Operating system | Ubuntu 24.04 LTS, x86_64 |
+| Operating system | Ubuntu 22.04 or 24.04 LTS, x86_64 |
 | CPU and memory | 4 vCPUs and 16 GB RAM |
 | Storage | At least 40 GB |
 | GPU | None; inference runs on the model provider |
@@ -238,9 +243,10 @@ Run the remaining setup in **Bash on the VM host**.
 
 ```bash
 sudo apt-get update
-sudo apt-get install -y ca-certificates curl git python3.12 python3.12-venv xz-utils
+sudo apt-get install -y ca-certificates curl git xz-utils
 curl -LsSf https://astral.sh/uv/install.sh | sh
 export PATH="$HOME/.local/bin:$PATH"
+uv python install 3.12
 python3.12 --version
 uv --version
 git --version
@@ -250,13 +256,13 @@ git --version
 git clone --depth 1 https://github.com/NVIDIA/NeMo-Relay.git relay-observability
 cd relay-observability/docs/user-guides/_examples/observability
 uv venv --python 3.12 .venv
-uv pip install --python .venv/bin/python nemo-relay==0.10.4
+uv pip install --python .venv/bin/python nemo-relay==0.11.1
 ```
 
 In a second terminal on the same host, start disposable Phoenix:
 
 ```bash
-uvx --from arize-phoenix phoenix serve
+uvx --from arize-phoenix==21.0.0 phoenix serve
 ```
 
 Back in the example directory, select a tool-capable model from the

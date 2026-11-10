@@ -47,7 +47,9 @@ async def run(directory, environment, timeout):
                             "role": "user",
                             "content": (
                                 "Read this synthetic incident queue and return a concise Markdown handoff. "
-                                "Include every incident ID, prioritize customer impact, and give an action for each. "
+                                "Copy each incident ID exactly as written, including its ASCII hyphen (-). "
+                                "Include INC-1042, INC-1043, and INC-1044 without changing their spelling. "
+                                "List the checkout outage before the report delay and give an action for each. "
                                 "Mention the synthetic contact once. Use no external services.\n"
                                 + read.result["content"]
                             ),
