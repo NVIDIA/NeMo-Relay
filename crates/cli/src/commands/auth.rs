@@ -121,6 +121,12 @@ async fn logout(dir: &Path, source: OidcSource) -> Result<(), CliError> {
                 source.issuer
             );
         }
+        crate::oidc::Logout::Removed(crate::oidc::Revocation::RefreshTokenOnly(detail)) => {
+            println!(
+                "Removed the sign-in for {0}. {0} revoked the refresh token but not the access token ({detail}), so the access token stays valid until it expires.",
+                source.issuer
+            );
+        }
         crate::oidc::Logout::Removed(crate::oidc::Revocation::NotOffered) => {
             println!(
                 "Removed the sign-in for {0}. {0} offers no token revocation, so its tokens stay valid until they expire.",

@@ -43,6 +43,8 @@ struct Issuer {
     /// Publishes `revocation_endpoint` and answers it with this status.
     revocation_status: Option<StatusCode>,
     revocation_endpoint: Option<String>,
+    /// Refuses to revoke access tokens with this error, like Clerk with its JWT access tokens.
+    access_revocation_error: Option<&'static str>,
     revocations: Vec<HashMap<String, String>>,
 }
 
@@ -162,7 +164,12 @@ async fn token(State(issuer): State<Shared>, body: String) -> Response {
 
 async fn revoke(State(issuer): State<Shared>, body: String) -> Response {
     let mut state = issuer.lock().unwrap();
-    state.revocations.push(parse_form(&body));
+    let form = parse_form(&body);
+    let refused_access = form["token_type_hint"] == "access_token";
+    state.revocations.push(form);
+    if let (true, Some(error)) = (refused_access, state.access_revocation_error) {
+        return (StatusCode::BAD_REQUEST, Json(json!({ "error": error }))).into_response();
+    }
     match state.revocation_status.unwrap_or(StatusCode::NOT_FOUND) {
         StatusCode::OK => StatusCode::OK.into_response(),
         status => (status, Json(json!({ "error": "invalid_client" }))).into_response(),
@@ -414,6 +421,41 @@ async fn logout_revokes_the_refresh_token_and_the_access_token_at_the_issuer() {
         ]
     );
     assert!(sign_in_state(dir.path(), &source, 1_000).unwrap() == SignInState::NotSignedIn);
+}
+
+#[tokio::test]
+async fn an_issuer_that_revokes_only_the_refresh_token_is_reported_as_such() {
+    let (source, issuer) = start_issuer().await;
+    {
+        let mut state = issuer.lock().unwrap();
+        state.revocation_status = Some(StatusCode::OK);
+        state.access_revocation_error = Some("unsupported_token_type");
+    }
+    let dir = tempfile::tempdir().unwrap();
+    store(dir.path(), &source, Some("refresh-1"), 10_000);
+    let Logout::Removed(Revocation::RefreshTokenOnly(detail)) =
+        logout(dir.path(), &source).await.unwrap()
+    else {
+        panic!("a revoked refresh token must be reported even when the access token is refused");
+    };
+    assert!(detail.contains("unsupported_token_type"), "{detail}");
+    assert_eq!(revoked(&issuer).len(), 2);
+}
+
+#[tokio::test]
+async fn a_refused_access_token_without_a_refresh_token_fails() {
+    let (source, issuer) = start_issuer().await;
+    {
+        let mut state = issuer.lock().unwrap();
+        state.revocation_status = Some(StatusCode::OK);
+        state.access_revocation_error = Some("unsupported_token_type");
+    }
+    let dir = tempfile::tempdir().unwrap();
+    store(dir.path(), &source, None, 10_000);
+    assert!(matches!(
+        logout(dir.path(), &source).await.unwrap(),
+        Logout::Removed(Revocation::Failed(_))
+    ));
 }
 
 #[tokio::test]

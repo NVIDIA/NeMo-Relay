@@ -274,7 +274,9 @@ the stored sign-in for each request, the token's real expiry applies, and
 the issuer's origin. Relay removes the sign-in file first, so the local sign-in
 is gone even when revocation fails. When the issuer offers no revocation,
 refuses it, or cannot be reached, the command says so and exits 0. The tokens
-then stay valid at the issuer until they expire.
+then stay valid at the issuer until they expire. Some issuers revoke only the
+refresh token. Clerk, for example, cannot revoke its JWT access tokens. The
+command then says that the access token stays valid until it expires.
 
 Relay adds the token only to requests it authenticates: agents that Relay
 launches, and daemon routes bound by the managed integration. A client that only

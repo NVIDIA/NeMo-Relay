@@ -209,6 +209,8 @@ pub(crate) enum Logout {
 /// The issuer's answer when `logout` revokes the stored tokens (RFC 7009).
 pub(crate) enum Revocation {
     Revoked,
+    /// The refresh token is revoked. The issuer refused the access token for this reason.
+    RefreshTokenOnly(String),
     /// The issuer publishes no `revocation_endpoint`.
     NotOffered,
     /// The reason, without the tokens.
@@ -248,11 +250,10 @@ async fn revoke(source: &OidcSource, session: &session::Session) -> Revocation {
             Ok(client) => client,
             Err(error) => return Revocation::Failed(error.to_string()),
         };
-        match client.revoke(session).await {
-            None => Revocation::NotOffered,
-            Some(Ok(())) => Revocation::Revoked,
-            Some(Err(detail)) => Revocation::Failed(detail),
-        }
+        client
+            .revoke(session)
+            .await
+            .unwrap_or(Revocation::NotOffered)
     };
     tokio::time::timeout(REVOCATION_DEADLINE, attempt)
         .await

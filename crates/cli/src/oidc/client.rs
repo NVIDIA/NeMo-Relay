@@ -12,7 +12,7 @@ use serde::Deserialize;
 
 use super::error::SignInError;
 use super::session::Session;
-use super::{Clock, HTTP_TIMEOUT, OidcSource, auth_error, login_required, now_secs};
+use super::{Clock, HTTP_TIMEOUT, OidcSource, Revocation, auth_error, login_required, now_secs};
 use crate::error::CliError;
 
 pub(crate) const DEVICE_CODE_GRANT: &str = "urn:ietf:params:oauth:grant-type:device_code";
@@ -291,34 +291,32 @@ impl OidcClient {
     }
 
     /// Revokes the refresh token, then the access token (RFC 7009). `None` when the issuer
-    /// publishes no revocation endpoint. An error names the reason, never a token.
-    pub(super) async fn revoke(&self, session: &Session) -> Option<Result<(), String>> {
+    /// publishes no revocation endpoint. A failure names the reason, never a token.
+    pub(super) async fn revoke(&self, session: &Session) -> Option<Revocation> {
         let endpoint = self.revocation_endpoint.as_deref()?;
         // Checked here, not in discovery, so that a foreign revocation origin breaks only logout.
         if secure_origin(endpoint).ok() != secure_origin(&self.issuer).ok() {
-            return Some(Err(
+            return Some(Revocation::Failed(
                 "the issuer published its revocation endpoint on another origin".into(),
             ));
         }
-        let tokens = session
-            .refresh_token
-            .as_deref()
-            .map(|token| (token, "refresh_token"))
-            .into_iter()
-            .chain(std::iter::once((
-                session.access_token.as_str(),
-                "access_token",
-            )));
-        let mut failures = Vec::new();
-        for (token, hint) in tokens {
-            if let Err(detail) = self.revoke_token(endpoint, token, hint).await {
-                failures.push(format!("{hint}: {detail}"));
-            }
-        }
-        Some(if failures.is_empty() {
-            Ok(())
-        } else {
-            Err(failures.join(", "))
+        let refresh = match session.refresh_token.as_deref() {
+            Some(token) => Some(self.revoke_token(endpoint, token, "refresh_token").await),
+            None => None,
+        };
+        let access = self
+            .revoke_token(endpoint, &session.access_token, "access_token")
+            .await;
+        Some(match (refresh, access) {
+            (None | Some(Ok(())), Ok(())) => Revocation::Revoked,
+            (Some(Ok(())), Err(detail)) => Revocation::RefreshTokenOnly(detail),
+            (refresh, access) => Revocation::Failed(
+                [("refresh_token", refresh), ("access_token", Some(access))]
+                    .into_iter()
+                    .filter_map(|(hint, result)| Some(format!("{hint}: {}", result?.err()?)))
+                    .collect::<Vec<_>>()
+                    .join(", "),
+            ),
         })
     }
 
