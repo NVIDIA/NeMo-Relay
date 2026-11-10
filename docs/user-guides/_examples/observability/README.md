@@ -3,7 +3,7 @@
 
 # Send Relay telemetry to an observability platform
 
-The workload captures synthetic incident triage with the Relay Python SDK and verifies correlated activity in Phoenix. Hermes and other tracing destinations are optional choices.
+The workload uses Hermes Agent’s native NeMo Relay integration to capture synthetic incident triage and verify correlated activity in Phoenix. Other tracing destinations use the same workload and exporter configuration.
 
 Follow [Run the Brev example](https://docs.nvidia.com/nemo/relay/user-guides/connecting-to-observability-platforms#run-the-brev-example)
 for VM recommendations, prerequisites, installation, authentication, execution,

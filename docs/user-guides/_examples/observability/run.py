@@ -1,10 +1,9 @@
 # SPDX-FileCopyrightText: Copyright (c) 2026, NVIDIA CORPORATION & AFFILIATES. All rights reserved.
 # SPDX-License-Identifier: Apache-2.0
 
-"""Run a real SDK or Hermes support-triage scenario against one OTLP destination."""
+"""Run a real Hermes support-triage scenario against one OTLP destination."""
 
 import argparse
-import asyncio
 import json
 import os
 import re
@@ -146,7 +145,8 @@ def verify_phoenix(events, directory):
 def main():
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--destination", choices=["phoenix", "langsmith", "weave", "datadog"], required=True)
-    parser.add_argument("--harness", choices=["sdk", "hermes"], default="sdk")
+    parser.add_argument("--provider", help="Override the configured Hermes model provider")
+    parser.add_argument("--model", help="Override the configured Hermes model")
     parser.add_argument("--verify", action="store_true", help="Query Phoenix for this run's trace")
     parser.add_argument("--redaction-demo", action="store_true", help="Enable synthetic payloads and email redaction")
     parser.add_argument("--output", type=Path, required=True, help="New directory for this run")
@@ -203,13 +203,8 @@ def main():
         missing = [name for name in required if not os.environ.get(name)]
         if missing:
             parser.error("Set " + ", ".join(missing))
-        if args.harness == "hermes" and not shutil.which("hermes"):
+        if not shutil.which("hermes"):
             parser.error("Install and authenticate Hermes with native Relay support first")
-        if args.harness == "sdk":
-            missing = [key for key in ("NVIDIA_API_KEY", "NVIDIA_MODEL") if not os.environ.get(key)]
-            if missing:
-                parser.error("Set " + ", ".join(missing))
-            validate_endpoint(os.environ.get("NVIDIA_BASE_URL", "https://integrate.api.nvidia.com/v1"))
     if args.redaction_demo:
         config = config.replace("enable_full_payloads = false", "enable_full_payloads = true")
         config += """
@@ -237,27 +232,22 @@ detector = "email"
         return
     environment = os.environ.copy()
     environment["HERMES_NEMO_RELAY_PLUGINS_TOML"] = str(directory / "plugins.toml")
-    if args.harness == "sdk":
-        from sdk_workload import run
-
-        asyncio.run(run(directory, environment, args.timeout))
-    else:
-        run_hermes(
-            [
-                "hermes",
-                "chat",
-                "--oneshot",
-                "-q",
-                (
-                    "Read requests.csv using a tool. Prioritize the incidents by customer impact and create "
-                    "handoff.md with a short action for each request ID. "
-                    "Use only the supplied synthetic data and local file tools; do not contact outside services."
-                ),
-            ],
-            directory,
-            environment,
-            args.timeout,
-        )
+    command = ["hermes", "chat", "--oneshot"]
+    if args.provider:
+        command += ["--provider", args.provider]
+    if args.model:
+        command += ["--model", args.model]
+    command += [
+        "-q",
+        (
+            "Read requests.csv using a file tool. Prioritize the incidents by customer impact and create "
+            "handoff.md with a short action for each request ID. Copy the IDs INC-1042, INC-1043, and "
+            "INC-1044 exactly, including their ASCII hyphens. List the checkout outage before the report "
+            "delay, and include the synthetic contact once. Use only the supplied synthetic data and "
+            "local file tools; do not contact outside services."
+        ),
+    ]
+    run_hermes(command, directory, environment, args.timeout)
     handoff = (directory / "handoff.md").read_text()
     ids = ["INC-1042", "INC-1043", "INC-1044"]
     if any(item not in handoff for item in ids) or handoff.index(ids[0]) > handoff.index(ids[1]):

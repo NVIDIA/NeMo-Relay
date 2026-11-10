@@ -10,10 +10,42 @@ import unittest
 from pathlib import Path
 from unittest.mock import patch
 
-from run import check_events, langsmith_headers, validate_endpoint, verify_phoenix
+from run import check_events, langsmith_headers, main, validate_endpoint, verify_phoenix
 
 
 class CaptureChecks(unittest.TestCase):
+    def test_default_workload_runs_hermes_with_selected_provider_and_model(self):
+        def run_agent(command, directory, environment, timeout):
+            (directory / "handoff.md").write_text("INC-1042: checkout\nINC-1044: identity\nINC-1043: reporting\n")
+
+        with tempfile.TemporaryDirectory() as directory:
+            output = Path(directory) / "triage"
+            with (
+                patch(
+                    "sys.argv",
+                    [
+                        "run.py",
+                        "--destination",
+                        "phoenix",
+                        "--output",
+                        str(output),
+                        "--provider",
+                        "nvidia",
+                        "--model",
+                        "selected-model",
+                    ],
+                ),
+                patch.dict("os.environ", {}, clear=True),
+                patch("run.shutil.which", return_value="/example/bin/hermes"),
+                patch("run.run_hermes", side_effect=run_agent) as agent,
+                patch("run.check_events", return_value=[]),
+            ):
+                main()
+            command, _, environment, _ = agent.call_args.args
+            self.assertEqual(command[:3], ["hermes", "chat", "--oneshot"])
+            self.assertEqual(command[3:7], ["--provider", "nvidia", "--model", "selected-model"])
+            self.assertEqual(environment["HERMES_NEMO_RELAY_PLUGINS_TOML"], str((output / "plugins.toml").resolve()))
+
     def test_delivery_waits_for_all_local_scopes_and_exported_parents(self):
         events = [
             {"kind": "scope", "scope_category": "end", "category": category, "uuid": category}

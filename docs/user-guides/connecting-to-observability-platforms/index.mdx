@@ -13,31 +13,32 @@ they already operate. This guide connects a
 and verifies that agent or turn activity, model calls, and tools arrive together.
 It applies to managed coding agents, framework integrations, and instrumented applications.
 
-The optional [NVIDIA Brev](https://brev.nvidia.com/) example uses a small Python
-application and [Arize Phoenix](https://arize.com/phoenix/).
-It reads synthetic incident requests, asks a model to prioritize them, and writes
-a handoff. [Nous Research Hermes Agent](https://github.com/NousResearch/hermes-agent)
-is an alternative harness; neither example choice is required for your deployment.
+The optional [NVIDIA Brev](https://brev.nvidia.com/) example uses
+[Nous Research Hermes Agent](https://github.com/NousResearch/hermes-agent) with its
+native Relay integration and [Arize Phoenix](https://arize.com/phoenix/).
+Hermes reads synthetic incident requests, uses model and file tools to prioritize
+them, and writes a handoff. These products are example choices; the export process
+applies to any Relay capture path.
 
 <Tip title="Try the complete example on Brev">
-[Run the Brev example](#run-the-brev-example) to provision a CPU VM, capture an
-instrumented Python workload, and verify its traces in Phoenix. The example
-includes all setup; you do not need to complete the linked capture-path guides first.
+[Run the Brev example](#run-the-brev-example) to provision a CPU VM, run a Hermes
+agent task, and verify its traces in Phoenix. The example includes all setup;
+you do not need to complete the linked capture-path guides first.
 </Tip>
 
 ## Before you start
 
 | Requirement | Your deployment | Brev example |
 | --- | --- | --- |
-| Relay | A capture path that sees the required model and tool activity | Relay Python SDK 0.11.1; no separate coding agent |
-| Host | A platform supported by your chosen integration | CPU Linux VM, Python 3.12, Git, uv |
+| Relay | A capture path that sees the required model and tool activity | Hermes native integration with Relay 0.11.0, managed by Hermes |
+| Host | A platform supported by your chosen integration | CPU Linux VM, Python 3.14, Git, uv |
 | Access | Trace-ingestion permission and any provider credentials | NVIDIA API key and an accessible model; local Phoenix needs no API key |
-| Changes | Exporter configuration in the process that owns capture | Virtual environment and new output directory; no system service |
+| Changes | Exporter configuration in the process that owns capture | Dedicated Hermes installation and home, exporter policy, and output directories |
 | Cleanup | Retain required audit evidence before removal | Stop Phoenix and remove only the example directories you created |
 
 <Warning title="Keep examples isolated">
-Use a host without the coding-agent example's system-wide Relay policy.
-That policy also applies to SDK and framework processes, including explicit plugin files.
+Use a fresh host without existing system-wide Relay policy. That policy also
+applies to Hermes, SDK, and framework processes, including explicit plugin files.
 </Warning>
 
 ## 1. Choose the Relay capture path
@@ -56,11 +57,12 @@ tool boundaries inside the application. Configure that application's Relay host.
 </Card>
 <Card title="Instrumented application" href="/instrument-applications/about" icon="fa-solid fa-code">
 Python, Node.js, or Rust code creates agent scopes and wraps the model and tool
-calls it owns. The Brev example uses this path.
+calls it owns.
 </Card>
 <Card title="Hermes native integration" href="/getting-started/quick-start/hermes" icon="fa-solid fa-robot">
 Hermes initializes Relay in process. Select its plugin configuration through
-HERMES_NEMO_RELAY_PLUGINS_TOML; a separate CLI gateway is unnecessary.
+HERMES_NEMO_RELAY_PLUGINS_TOML; a separate Relay CLI gateway is unnecessary.
+The Brev example uses this path.
 </Card>
 </CardGroup>
 
@@ -195,12 +197,12 @@ capture gaps, authentication failures, and delivery problems.
 
 <div style={{ display: "flex", flexWrap: "wrap", gap: "0.5rem" }}>
   <Badge intent="success" minimal>Example</Badge>
-  <Badge intent="note" minimal>Python SDK</Badge>
+  <Badge intent="note" minimal>Hermes Agent</Badge>
   <Badge intent="note" minimal>Arize Phoenix</Badge>
 </div>
 
-Follow this section from start to finish. It supplies the instrumentation and
-exporter configuration used by the workload; the earlier manual configuration
+Follow this section from start to finish. It installs Hermes’s native integration
+and supplies the exporter configuration; the earlier manual configuration
 steps explain how to adapt your own deployment. Supporting links are optional.
 
 ### 1. Provision and connect to a VM
@@ -246,18 +248,51 @@ sudo apt-get update
 sudo apt-get install -y ca-certificates curl git xz-utils
 curl -LsSf https://astral.sh/uv/install.sh | sh
 export PATH="$HOME/.local/bin:$PATH"
-uv python install 3.12
-python3.12 --version
+uv python install 3.14
+python3.14 --version
 uv --version
 git --version
 ```
 
+Install the pinned Hermes revision with its own installer, using a dedicated
+home for the example:
+
+```bash
+HERMES_COMMIT=95fc3e668fc1e13ad05d22a4f02fccc6a6d6ce02
+export HERMES_HOME="$HOME/.hermes-relay-observability"
+curl -fsSL "https://raw.githubusercontent.com/NousResearch/hermes-agent/$HERMES_COMMIT/scripts/install.sh" -o /tmp/install-hermes-relay.sh
+bash /tmp/install-hermes-relay.sh --commit "$HERMES_COMMIT" \
+  --hermes-home "$HERMES_HOME" --skip-setup --skip-browser --skip-computer-use
+export PATH="$HOME/.local/bin:$PATH"
+hermes --version
+hermes config set terminal.backend local
+hermes config set terminal.cwd .
+```
+
+This [Hermes revision](https://github.com/NousResearch/hermes-agent/tree/95fc3e668fc1e13ad05d22a4f02fccc6a6d6ce02)
+uses Python 3.14 and declares Relay `>=0.11,<0.12`. Keep its supported dependency;
+do not install a different Relay SDK over it. The browser and computer-use
+components are optional and are omitted from this local file task. The terminal
+configuration keeps the task on the VM host.
+
+Get the companion files:
+
 ```bash
 git clone --depth 1 https://github.com/NVIDIA/NeMo-Relay.git relay-observability
 cd relay-observability/docs/user-guides/_examples/observability
-uv venv --python 3.12 .venv
-uv pip install --python .venv/bin/python nemo-relay==0.11.1
 ```
+
+Inspect the exporter configuration before the first run:
+
+```bash
+python3.14 run.py --destination phoenix --output /tmp/relay-triage-config --prepare-only
+HERMES_NEMO_RELAY_PLUGINS_TOML=/tmp/relay-triage-config/plugins.toml hermes doctor
+```
+
+In **NeMo Relay Plugins**, confirm that the selected file is listed, plugins are
+enabled, and no Relay configuration errors appear. Other optional-service warnings
+do not require enabling those services. The runner selects a new exporter file
+for each actual run.
 
 In a second terminal on the same host, start disposable Phoenix:
 
@@ -273,13 +308,21 @@ export NVIDIA_BASE_URL=https://integrate.api.nvidia.com/v1
 export NVIDIA_MODEL=YOUR_ACCESSIBLE_MODEL_ID
 IFS= read -r -s -p 'NVIDIA API key: ' NVIDIA_API_KEY; printf '\n'
 export NVIDIA_API_KEY
-.venv/bin/python run.py --destination phoenix --output /tmp/relay-triage --verify
+python3.14 run.py --provider nvidia --model "$NVIDIA_MODEL" \
+  --destination phoenix --output /tmp/relay-triage --verify
 ```
 
-The runner uses real SDK scopes and a real model request. It validates the handoff,
-local event parentage, and Phoenix delivery. It preserves failed runs for inspection.
+Hermes uses its native Relay integration to capture its model and tool calls.
+The runner selects the exporter file, validates the handoff and local parentage,
+and checks Phoenix delivery. Failed runs are preserved for inspection.
+
+To use another working Hermes provider, omit `--provider` and `--model` and keep
+your existing provider configuration. Configure one with `hermes model` if needed.
+The [Hermes Quick Start](/getting-started/quick-start/hermes) explains provider
+setup and the NeMo Relay Plugins diagnostics in `hermes doctor`.
 For a hosted destination, use that recipe's environment variables and
 `--destination langsmith`, `weave`, or `datadog`; `--verify` is Phoenix-specific.
+Use a fresh Hermes home for each destination or changed plugin policy.
 
 In another terminal on your **local computer**, forward the Phoenix UI:
 
@@ -295,45 +338,46 @@ if verification fails. Use a new output directory for every run.
 
 #### Expected trace
 
-For the default Python workload, look for this correlated activity in Phoenix:
+Find the Hermes agent or session scope and follow its model and tool activity.
+Tool names and call counts depend on the agent's choices:
 
-```text
-support-triage                       AGENT
-├─ read_file                         TOOL
-├─ openai.chat_completions            LLM
-└─ write_file                        TOOL
-```
-
-Confirm each tool and model span is a child of `support-triage`. Other capture
-paths and workloads can produce different names and span counts.
+| Activity | Expected evidence |
+| --- | --- |
+| Agent | A closed Hermes agent scope anchors the run. |
+| Read the queue | A tool reads `requests.csv`. |
+| Model work | One or more model calls interpret the incidents and choose actions. |
+| Write the handoff | A tool creates `handoff.md` with every incident ID. |
+| Correlation | Captured model and tool scopes connect to the agent in the same trace. |
 
 ### 3. Check synthetic redaction
 
 Use only the supplied synthetic fixture. This second run explicitly enables
-payloads and an email redaction profile:
+payloads and an email redaction profile. Use a separate Hermes home for this
+policy so it starts an independent gateway and plugin lifecycle. Keep Phoenix
+running while gateways finish exporting:
 
 ```bash
-.venv/bin/python run.py --destination phoenix --output /tmp/relay-triage-redacted --redaction-demo --verify
+hermes gateway stop
+export HERMES_HOME="$HOME/.hermes-relay-redacted"
+hermes config set terminal.backend local
+hermes config set terminal.cwd .
+python3.14 run.py --provider nvidia --model "$NVIDIA_MODEL" \
+  --destination phoenix --output /tmp/relay-triage-redacted --redaction-demo --verify
 ```
 
 The runner checks that the synthetic contact is absent from emitted payloads.
 The source file and provider conversation retain it; redaction affects telemetry.
 
-<Accordion title="Optional: use Hermes instead of the Python workload">
-Install and authenticate a Hermes build with native Relay support using the
-[Hermes quickstart](/getting-started/quick-start/hermes). In the same example directory:
-
-```bash
-hermes doctor
-python3.12 run.py --harness hermes --destination phoenix --output /tmp/relay-hermes --verify
-```
-
-Hermes manages its own Relay dependency. Check the NeMo Relay Plugins section
-of `hermes doctor` before running.
-</Accordion>
 
 ### 4. Clean up
 
-Retain the run evidence, stop the Phoenix process you started, and remove the
-example virtual environment and output directories. Stop or delete the Brev
-instance when you finish.
+Retain the run evidence. Stop each example home’s gateway before stopping
+Phoenix:
+
+```bash
+HERMES_HOME="$HOME/.hermes-relay-observability" hermes gateway stop
+HERMES_HOME="$HOME/.hermes-relay-redacted" hermes gateway stop
+```
+
+Remove only the dedicated Hermes installation, example homes, and output
+directories, or delete the disposable Brev instance.
