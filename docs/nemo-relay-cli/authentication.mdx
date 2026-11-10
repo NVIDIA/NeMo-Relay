@@ -235,8 +235,10 @@ nemo-relay auth login
 ```
 
 The command reads the provider from the effective configuration, including a
-file passed with `--config`. When both providers have an `oidc` section with
-different values, add `--provider openai` or `--provider anthropic`.
+file passed with `--config`. `--config` is a global option, so put it before
+`auth`, for example `nemo-relay --config path/to/config.toml auth login`. When
+both providers have an `oidc` section with different values, add
+`--provider openai` or `--provider anthropic`.
 
 The command signs in through the browser with an OAuth 2.0 authorization code
 and PKCE. It listens on `http://127.0.0.1:<port>/callback`, opens the issuer's

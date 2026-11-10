@@ -228,6 +228,21 @@ pub(crate) fn sign_in_state(
     })
 }
 
+/// How long an access token stays valid, in words, for `nemo-relay doctor`.
+pub(crate) fn describe_time_left(seconds: u64) -> String {
+    const MINUTE: u64 = 60;
+    const HOUR: u64 = 60 * MINUTE;
+    const DAY: u64 = 24 * HOUR;
+    let (count, unit) = match seconds {
+        0..MINUTE => return "less than a minute".into(),
+        MINUTE..HOUR => (seconds / MINUTE, "minute"),
+        HOUR..DAY => (seconds / HOUR, "hour"),
+        _ => (seconds / DAY, "day"),
+    };
+    let plural = if count == 1 { "" } else { "s" };
+    format!("about {count} {unit}{plural}")
+}
+
 pub(crate) fn now_secs() -> u64 {
     SystemTime::now()
         .duration_since(UNIX_EPOCH)

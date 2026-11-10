@@ -103,11 +103,11 @@ impl SessionLock {
 
     /// Returns `None` when another update holds the lock for the whole wait.
     pub(super) async fn try_acquire(session: &Path) -> Result<Option<Self>, CliError> {
-        let file = std::fs::OpenOptions::new()
-            .create(true)
-            .truncate(false)
-            .write(true)
-            .open(session.with_extension("lock"))?;
+        let mut options = std::fs::OpenOptions::new();
+        options.create(true).truncate(false).write(true);
+        #[cfg(unix)]
+        std::os::unix::fs::OpenOptionsExt::mode(&mut options, 0o600);
+        let file = options.open(session.with_extension("lock"))?;
         let deadline = tokio::time::Instant::now() + LOCK_WAIT;
         while crate::filesystem::try_lock_exclusive(&file)?
             == crate::filesystem::LockAttempt::Contended
