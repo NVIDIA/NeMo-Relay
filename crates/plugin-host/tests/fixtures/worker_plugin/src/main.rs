@@ -302,6 +302,7 @@ impl WorkerPlugin for FixtureWorkerPlugin {
     }
 }
 
+/// Hold registration until the process test releases its gate, or report a fixture error.
 fn wait_for_registration_gate(config: &Json) -> Result<(), String> {
     let Some(directory) = config.get("register_gate_directory") else {
         return Ok(());
@@ -331,7 +332,9 @@ fn wait_for_registration_gate(config: &Json) -> Result<(), String> {
         )
     })?;
     let release = directory.join("release");
-    // Safety bound beyond the process test's MCP and cleanup observation windows.
+    // Process-test exception: see WAIT in
+    // crates/cli/tests/daemon_worker_idle_tests.rs. Test teardown releases this
+    // gate before reaping processes, including when an assertion fails.
     let deadline = std::time::Instant::now() + std::time::Duration::from_secs(300);
     loop {
         match std::fs::metadata(&release) {

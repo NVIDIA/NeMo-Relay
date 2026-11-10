@@ -3296,14 +3296,23 @@ async fn worker_multiple_component_configurations_are_isolated_and_cleaned_up() 
     const MODE: &str = "NEMO_RELAY_TEST_WORKER_MULTIPLE_COMPONENTS";
     if std::env::var_os(MODE).is_none() {
         // Isolate the forwarded fixture setting from other tests in this process.
-        let status = std::process::Command::new(std::env::current_exe().unwrap())
+        let output = std::process::Command::new(std::env::current_exe().unwrap())
             .args(["--exact", "worker_plugin_integration_tests::worker_multiple_component_configurations_are_isolated_and_cleaned_up", "--nocapture"])
             .env(MODE, "1")
-            .status()
+            .output()
             .unwrap();
         assert!(
-            status.success(),
-            "component worker subprocess failed: {status}"
+            output.status.success(),
+            "component worker subprocess failed: {}\n{}\n{}",
+            output.status,
+            String::from_utf8_lossy(&output.stdout),
+            String::from_utf8_lossy(&output.stderr),
+        );
+        assert!(
+            String::from_utf8_lossy(&output.stdout)
+                .contains("test result: ok. 1 passed; 0 failed;"),
+            "component worker subprocess did not run exactly one test: {}",
+            String::from_utf8_lossy(&output.stdout),
         );
         return;
     }

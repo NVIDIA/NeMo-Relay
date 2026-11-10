@@ -80,6 +80,7 @@ impl nemo_relay_plugin_abi::diagnostics::Diagnostics for Diagnostics {
     }
 }
 
+/// Diagnostic calls must preserve values without allocating transport storage.
 #[test]
 fn synchronous_diagnostics_use_borrowed_inputs_and_caller_owned_replies() {
     let payload = Value(DiagnosticsBox::new(Diagnostics)).into_payload();

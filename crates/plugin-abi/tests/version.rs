@@ -15,6 +15,7 @@ fn sdk_identifiers_match_the_explicit_contract() {
     assert_eq!(NATIVE_API.parse::<Api>().unwrap(), NATIVE_API_VERSION);
 }
 
+/// Canonical contract strings must parse and format without changing their identity.
 #[test]
 fn canonical_dotted_versions_round_trip() {
     for (text, version) in [
@@ -28,6 +29,7 @@ fn canonical_dotted_versions_round_trip() {
     }
 }
 
+/// Reject spellings that could select an unintended native contract.
 #[test]
 fn reject_legacy_and_ambiguous_versions() {
     assert_eq!("1".parse::<Api>(), Err(Error::Legacy));
@@ -49,6 +51,7 @@ fn reject_legacy_and_ambiguous_versions() {
     }
 }
 
+/// A newer host can accept an older SDK contract, but an older host cannot accept a newer SDK.
 #[test]
 fn sdk_minor_is_the_minimum_host_version() {
     let cases = [

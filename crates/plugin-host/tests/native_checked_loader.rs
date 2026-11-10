@@ -82,6 +82,7 @@ fn descriptor_disagreement_does_not_poison_resident_artifact() {
     assert!(error.contains("disagrees with binary"), "{error}");
 }
 
+/// Reject unsafe or unsupported contracts before constructing plugin-owned state.
 #[test]
 fn incompatible_layouts_and_unsupported_versions_fail_before_factory() {
     for name in ["signature", "marker", "reordered"] {
@@ -111,6 +112,7 @@ fn incompatible_layouts_and_unsupported_versions_fail_before_factory() {
     }
 }
 
+/// A compatible descriptor cannot bypass missing-module or dependency-generation checks.
 #[test]
 fn missing_modules_and_incompatible_dependency_generations_are_rejected() {
     for (name, diagnostic) in [
@@ -128,6 +130,7 @@ fn missing_modules_and_incompatible_dependency_generations_are_rejected() {
     }
 }
 
+/// Validate staged paths and include every dependency artifact in cache identity.
 #[test]
 fn artifact_paths_cannot_escape_staging_and_identity_includes_complete_closure() {
     for path in ["../escape", "/absolute", "a/../escape", ""] {
@@ -247,6 +250,7 @@ fn sdk_artifact() -> NativeLibraryArtifact {
     .unwrap()
 }
 
+/// Closing one component must leave another component in the same library usable.
 #[tokio::test]
 async fn sdk_components_shutdown_independently_across_the_library_boundary() {
     // OS image validation is setup, outside the asynchronous lifecycle deadline.
@@ -299,6 +303,7 @@ async fn sdk_components_shutdown_independently_across_the_library_boundary() {
     .expect("component teardown must not block its own executor");
 }
 
+/// Dropping registration before its first poll must release captured foreign owners.
 #[tokio::test]
 async fn dropping_unpolled_registration_releases_foreign_component_and_runtime() {
     // OS image validation is setup, outside the asynchronous lifecycle deadline.

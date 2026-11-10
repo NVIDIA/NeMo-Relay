@@ -313,6 +313,7 @@ fn native_revocation_and_component_close_fence_clones_and_foreign_tokens() {
     assert_eq!(page.lifetime.totals.occurrences_total.value.get(), 3);
     assert!(page.components.iter().all(|c| c.closed_at.is_some()));
 }
+/// Exhausting registration limits must not revoke a producer that was already admitted.
 #[test]
 fn native_bounds_reject_new_registration_and_keep_existing_producer_writable() {
     let _lock = SERIAL.lock().unwrap();
@@ -394,6 +395,7 @@ fn native_read_checks_permission_before_queries_and_never_publishes_partial_outp
     assert_eq!(context.memory_usage().query_workspaces, 0);
 }
 
+/// Diagnostic sessions must respect admission limits and release slots when revoked.
 #[test]
 fn native_session_admission_is_bounded_and_released_on_revocation() {
     let _lock = SERIAL.lock().unwrap();
@@ -431,6 +433,7 @@ fn native_session_admission_is_bounded_and_released_on_revocation() {
     assert_eq!(SESSIONS.load(Ordering::Relaxed), baseline);
 }
 
+/// Rejected declarations must roll back, and retained text must report UTF-8-safe truncation.
 #[test]
 fn native_rejected_declarations_roll_back_and_retention_reports_utf8_truncation() {
     let _lock = SERIAL.lock().unwrap();
@@ -496,6 +499,7 @@ fn native_rejected_declarations_roll_back_and_retention_reports_utf8_truncation(
     assert_eq!(d.delivery_stats().dropped, 1);
 }
 
+/// Concurrent recording and close must not permit reuse of revoked diagnostic authority.
 #[test]
 fn native_close_serializes_with_recording_without_reusing_authority() {
     let _lock = SERIAL.lock().unwrap();
@@ -543,6 +547,7 @@ fn native_close_serializes_with_recording_without_reusing_authority() {
     assert!(page.components[0].closed_at.is_some());
 }
 
+/// Cloned diagnostic handles may record concurrently while factory admission remains bounded.
 #[test]
 fn native_sdk_admits_concurrent_clones_and_bounds_factories() {
     let _lock = SERIAL.lock().unwrap();
@@ -605,6 +610,7 @@ fn native_sdk_admits_concurrent_clones_and_bounds_factories() {
     );
 }
 
+/// Reentrant diagnostic calls must remain activation-local and release their guards on failure.
 #[test]
 fn native_sdk_reentrancy_is_scoped_to_activation_and_unwinds_cleanly() {
     let _lock = SERIAL.lock().unwrap();

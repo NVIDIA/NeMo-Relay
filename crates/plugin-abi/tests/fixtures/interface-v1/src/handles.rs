@@ -12,6 +12,7 @@ use crate::{
 };
 use std::sync::{Arc, Mutex};
 use xabi::XabiType;
+/// Preserve exported error details and classify transport failures as ABI errors.
 fn error(value: xabi::XabiCallError<Value<Error>>) -> Error {
     match value {
         xabi::XabiCallError::Export(Value(value)) => value,
@@ -200,6 +201,7 @@ impl WireContinuation for ContinuationAdapter {
     }
 }
 impl Continuation for ContinuationRemote {
+    /// Retain the foreign owner while the downstream call is pending and map transport errors.
     fn call(&self, value: Json) -> FfiFuture<Result<Json>> {
         let owner = self.0.clone();
         match owner
@@ -212,6 +214,7 @@ impl Continuation for ContinuationRemote {
             Err(error) => async move { Err(error) }.into_ffi(),
         }
     }
+    /// Retain the foreign continuation while decoding a canonical tool result.
     fn call_tool(&self, value: Json) -> FfiFuture<Result<ToolExecutionResult>> {
         let owner = self.0.clone();
         match owner
@@ -224,6 +227,7 @@ impl Continuation for ContinuationRemote {
             Err(error) => async move { Err(error) }.into_ffi(),
         }
     }
+    /// Keep the foreign owner alive until stream construction completes or is cancelled.
     fn open_stream(&self, value: Json) -> FfiFuture<Result<StreamBox>> {
         let owner = self.0.clone();
         match owner
@@ -284,6 +288,7 @@ impl WireStream for StreamAdapter {
     }
 }
 impl Stream for StreamRemote {
+    /// Keep the foreign stream owner alive while one pull is pending.
     fn pull(&mut self) -> FfiFuture<Result<Option<Json>>> {
         let owner = self.0.clone();
         match owner
@@ -296,6 +301,7 @@ impl Stream for StreamRemote {
             Err(error) => async move { Err(error) }.into_ffi(),
         }
     }
+    /// Retain the foreign stream while asynchronous cleanup completes or fails.
     fn close(&mut self) -> FfiFuture<Result<()>> {
         let owner = self.0.clone();
         match owner
@@ -391,6 +397,7 @@ impl WireCallback for CallbackAdapter {
     }
 }
 impl Callback for CallbackRemote {
+    /// Keep the callback owner alive until the foreign middleware future finishes.
     fn invoke(
         &self,
         invocation: Invocation,
@@ -407,6 +414,7 @@ impl Callback for CallbackRemote {
             Err(error) => async move { Err(error) }.into_ffi(),
         }
     }
+    /// Keep the callback owner alive while awaiting a canonical tool outcome.
     fn invoke_tool(
         &self,
         invocation: Invocation,
@@ -431,6 +439,7 @@ impl Callback for CallbackRemote {
             .map(|value| value.0)
             .map_err(error)
     }
+    /// Keep the foreign owner alive until stream construction completes or is cancelled.
     fn open_stream(
         &self,
         invocation: Invocation,
@@ -484,6 +493,7 @@ impl WireComponent for ComponentAdapter {
     }
 }
 impl Component for ComponentRemote {
+    /// Keep the component owner alive while its foreign shutdown future is pending.
     fn shutdown(&self) -> FfiFuture<Result<()>> {
         let owner = self.0.clone();
         match owner
@@ -610,6 +620,7 @@ impl Runtime for RuntimeRemote {
             .map(|value| value.0)
             .map_err(error)
     }
+    /// Retain the foreign owner while the downstream call is pending and map transport errors.
     fn call(&self, operation: String, arguments: Json) -> FfiFuture<Result<Json>> {
         let owner = self.0.clone();
         match owner
@@ -741,6 +752,7 @@ impl Plugin for PluginRemote {
             .map_err(error)
             .unwrap_or_else(|e| panic!("native interface call failed: {:?}", e))
     }
+    /// Retain the plugin definition until foreign registration completes or is cancelled.
     fn register(
         &self,
         config: Json,
@@ -994,6 +1006,7 @@ unsafe extern "C" fn restore_lease(instance: *mut std::ffi::c_void) -> xabi::Xab
     )
     .into_payload()
 }
+/// Release scope-lease storage in the library that allocated it.
 unsafe extern "C" fn release_lease(instance: *mut std::ffi::c_void) {
     if !instance.is_null() {
         drop(unsafe { Box::from_raw(instance.cast::<ScopeLeaseBox>()) });
@@ -1001,6 +1014,7 @@ unsafe extern "C" fn release_lease(instance: *mut std::ffi::c_void) {
 }
 struct ForeignLease(LeaseWire, std::marker::PhantomData<std::rc::Rc<()>>);
 impl ScopeLease for ForeignLease {
+    /// Restore the foreign scope on its entering thread and decode any restoration error.
     fn restore(&mut self) -> Result<()> {
         let payload = unsafe { (self.0.restore)(self.0.instance) };
         let error = unsafe { Value::<Option<Error>>::from_payload(payload) }
@@ -1026,6 +1040,7 @@ unsafe impl Transfer for ScopeLeaseBox {
             release: release_lease,
         }
     }
+    /// Claim a non-null scope lease and clear rollback ownership in the source record.
     unsafe fn take(wire: &mut LeaseWire) -> xabi::Result<Self> {
         if wire.instance.is_null() {
             return Err(xabi::Error::NullPointer("scope lease"));
@@ -1034,6 +1049,7 @@ unsafe impl Transfer for ScopeLeaseBox {
         wire.instance = std::ptr::null_mut();
         Ok(Self::new(ForeignLease(value, std::marker::PhantomData)))
     }
+    /// Release a scope lease only if its ownership has not already transferred.
     unsafe fn release(wire: &mut LeaseWire) {
         if !wire.instance.is_null() {
             unsafe { (wire.release)(std::mem::replace(&mut wire.instance, std::ptr::null_mut())) };

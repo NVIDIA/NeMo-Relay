@@ -52,6 +52,7 @@ impl<T: Transfer> Guard<T> {
     }
 }
 impl<T: Transfer> Drop for Guard<T> {
+    /// Roll back a partially built record unless ownership moved to its parent.
     fn drop(&mut self) {
         if let Some(wire) = &mut self.wire {
             unsafe { T::release(wire) }
@@ -84,12 +85,14 @@ impl Drop for Owner {
         unsafe { (self.0.release)(self.0.data) }
     }
 }
+/// Release unclaimed nested fields before freeing their source-owned record.
 unsafe extern "C" fn release_record<T: Transfer>(data: *mut c_void) {
     if !data.is_null() {
         let mut wire = unsafe { Box::from_raw(data.cast::<T::Wire>()) };
         unsafe { T::release(&mut wire) };
     }
 }
+/// Release a typed payload and its remaining nested owners in the source library.
 unsafe extern "C" fn release_payload(data: *mut u8, _: usize) {
     if !data.is_null() {
         drop(Owner(*unsafe { Box::from_raw(data.cast::<OwnedWire>()) }));
@@ -129,6 +132,7 @@ impl<T: Transfer> XabiType for Value<T> {
         let owned = std::mem::replace(wire, OwnedWire::empty());
         unsafe { Self::from_wire(&owned) }
     }
+    /// Clear the wire owner before releasing its storage to prevent a second release.
     unsafe fn xabi_drop_wire(wire: *mut OwnedWire) {
         if let Some(wire) = unsafe { wire.as_mut() } {
             drop(Owner(std::mem::replace(wire, OwnedWire::empty())));
@@ -142,6 +146,7 @@ impl<T: Transfer> XabiType for Value<T> {
             free: release_payload,
         }
     }
+    /// Validate payload storage and release it on both successful and failed decoding.
     unsafe fn from_payload(payload: XabiOwnedBytes) -> xabi::Result<Self> {
         struct Payload(XabiOwnedBytes);
         impl Drop for Payload {
@@ -174,6 +179,7 @@ unsafe impl Transfer for bool {
     fn lower(self) -> u8 {
         u8::from(self)
     }
+    /// Accept only canonical zero and one bytes as Boolean values.
     unsafe fn take(wire: &mut u8) -> xabi::Result<Self> {
         match *wire {
             0 => Ok(false),
@@ -184,8 +190,8 @@ unsafe impl Transfer for bool {
     unsafe fn release(_: &mut u8) {}
 }
 
-#[repr(C)]
 /// Tagged optional wire value with explicit initialization state.
+#[repr(C)]
 pub struct OptionalWire<W: Copy> {
     /// Zero for absent; one when the value field is initialized.
     pub present: u8,
@@ -200,6 +206,7 @@ impl<W: Copy> Clone for OptionalWire<W> {
 }
 unsafe impl<T: Transfer> Transfer for Option<T> {
     type Wire = OptionalWire<T::Wire>;
+    /// Initialize optional storage only when a value is present.
     fn lower(self) -> Self::Wire {
         match self {
             Some(value) => OptionalWire {
@@ -212,6 +219,7 @@ unsafe impl<T: Transfer> Transfer for Option<T> {
             },
         }
     }
+    /// Decode the presence tag before reading optional storage.
     unsafe fn take(wire: &mut Self::Wire) -> xabi::Result<Self> {
         match wire.present {
             0 => Ok(None),
@@ -219,6 +227,7 @@ unsafe impl<T: Transfer> Transfer for Option<T> {
             _ => Err(xabi::Error::AbiMismatch("invalid optional value".into())),
         }
     }
+    /// Release initialized optional storage and mark it absent.
     unsafe fn release(wire: &mut Self::Wire) {
         if wire.present == 1 {
             unsafe { T::release(wire.value.assume_init_mut()) };
@@ -227,8 +236,8 @@ unsafe impl<T: Transfer> Transfer for Option<T> {
     }
 }
 
-#[repr(C)]
 /// Source-owned contiguous wire elements with a source release callback.
+#[repr(C)]
 pub struct VectorWire<W> {
     /// Source-owned allocation; a null pointer means no retained allocation.
     pub data: *mut W,
@@ -243,6 +252,7 @@ impl<W> Clone for VectorWire<W> {
         *self
     }
 }
+/// Release each remaining element before freeing the source-owned vector.
 unsafe extern "C" fn release_vector<T: Transfer>(data: *mut T::Wire, len: usize) {
     if !data.is_null() {
         let mut values = unsafe { Box::from_raw(std::ptr::slice_from_raw_parts_mut(data, len)) };
@@ -263,9 +273,11 @@ impl<W> VectorWire<W> {
 }
 unsafe impl<T: Transfer> Transfer for Vec<T> {
     type Wire = VectorWire<T::Wire>;
+    /// Build a wire vector with rollback if lowering any element fails.
     fn lower(self) -> Self::Wire {
         struct Builder<T: Transfer>(Vec<T::Wire>);
         impl<T: Transfer> Drop for Builder<T> {
+            /// Release elements already lowered when vector construction stops early.
             fn drop(&mut self) {
                 for wire in &mut self.0 {
                     unsafe { T::release(wire) };
@@ -284,6 +296,7 @@ unsafe impl<T: Transfer> Transfer for Vec<T> {
             release: release_vector::<T>,
         }
     }
+    /// Decode each vector element while leaving rollback ownership with the source.
     unsafe fn take(wire: &mut Self::Wire) -> xabi::Result<Self> {
         if wire.data.is_null() {
             return if wire.len == 0 {
@@ -315,6 +328,7 @@ unsafe impl Transfer for String {
             release: release_vector::<u8>,
         }
     }
+    /// Copy valid UTF-8 into local storage while the source retains its byte allocation.
     unsafe fn take(wire: &mut Self::Wire) -> xabi::Result<Self> {
         if wire.data.is_null() {
             return if wire.len == 0 {

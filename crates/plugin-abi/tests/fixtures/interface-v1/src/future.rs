@@ -47,6 +47,7 @@ unsafe extern "C" fn take_future(
 ) -> async_ffi::FfiFuture<xabi::XabiResult> {
     *unsafe { Box::from_raw(instance.cast::<async_ffi::FfiFuture<xabi::XabiResult>>()) }
 }
+/// Drop an unclaimed foreign future with its originating allocator.
 unsafe extern "C" fn release_future(instance: *mut std::ffi::c_void) {
     if !instance.is_null() {
         drop(unsafe { Box::from_raw(instance.cast::<async_ffi::FfiFuture<xabi::XabiResult>>()) });
@@ -54,6 +55,7 @@ unsafe extern "C" fn release_future(instance: *mut std::ffi::c_void) {
 }
 unsafe impl<T: Transfer + Send + 'static> Transfer for FfiFuture<crate::v1_0::Result<T>> {
     type Wire = FutureWire;
+    /// Wrap a local future and transfer its eventual result through source-owned payloads.
     fn lower(self) -> FutureWire {
         let future = async_ffi::FfiFuture::new(async move {
             match self.await {
@@ -71,6 +73,7 @@ unsafe impl<T: Transfer + Send + 'static> Transfer for FfiFuture<crate::v1_0::Re
             release: release_future,
         }
     }
+    /// Validate the future generation and turn foreign poll failures into native errors.
     unsafe fn take(wire: &mut FutureWire) -> xabi::Result<Self> {
         if wire.abi_version != async_ffi::ABI_VERSION || wire.instance.is_null() {
             return Err(xabi::Error::AbiMismatch(
@@ -124,6 +127,7 @@ unsafe impl<T: Transfer + Send + 'static> Transfer for FfiFuture<crate::v1_0::Re
         })
         .into_ffi())
     }
+    /// Release any future that the receiver has not claimed.
     unsafe fn release(wire: &mut FutureWire) {
         if !wire.instance.is_null() {
             unsafe { (wire.release)(std::mem::replace(&mut wire.instance, std::ptr::null_mut())) }

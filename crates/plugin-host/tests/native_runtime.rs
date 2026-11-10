@@ -69,6 +69,7 @@ async fn asynchronous_runtime_calls_preserve_explicit_and_implicit_scopes() {
     owner.shutdown().await.unwrap();
 }
 
+/// Native timestamps must retain signed microseconds rather than lose precision or wrap.
 #[tokio::test]
 async fn native_scope_timestamps_preserve_signed_microseconds() {
     use nemo_relay_runtime::api::{
@@ -119,6 +120,7 @@ async fn native_scope_timestamps_preserve_signed_microseconds() {
     }
 }
 
+/// Scope and mark adapters must preserve explicit parentage, timestamps, and visibility options.
 #[tokio::test]
 async fn native_scope_and_mark_options_preserve_flags_parents_and_times() {
     use nemo_relay_plugin::{
@@ -242,6 +244,7 @@ async fn native_scope_and_mark_options_preserve_flags_parents_and_times() {
     assert_eq!(closed.timestamp().timestamp_micros(), -1);
 }
 
+/// Reject invalid scope options before mutating the active scope stack.
 #[tokio::test]
 async fn malformed_native_scope_options_do_not_push_scopes() {
     use nemo_relay_plugin::{abi::Json, abi_value::into_abi};
@@ -266,6 +269,7 @@ async fn malformed_native_scope_options_do_not_push_scopes() {
     owner.shutdown().await.unwrap();
 }
 
+/// Diagnostic adapters must preserve both empty and populated runtime reports.
 #[tokio::test]
 async fn sdk_runtime_diagnostics_preserve_empty_and_populated_reports() {
     use nemo_relay_plugin_host::{
@@ -364,6 +368,7 @@ async fn sdk_scope_stack_guards_restore_parentage_after_errors_and_panics() {
     assert!(runtime.create_scope_stack().is_err());
 }
 
+/// Invalid runtime requests must fail without leaving partial scope changes.
 #[tokio::test]
 async fn malformed_runtime_requests_leave_scope_state_unchanged() {
     use nemo_relay_plugin::abi_value::into_abi;

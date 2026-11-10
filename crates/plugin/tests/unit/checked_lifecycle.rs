@@ -164,6 +164,7 @@ async fn raw_stream_cleanup_restores_scope_on_each_poll() {
     a::Component::shutdown(&executor).await.unwrap();
 }
 
+/// Shutdown must wait for both admitted inline work and cancelled blocking callbacks to finish.
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn shutdown_drains_inline_and_cancelled_blocking_callbacks() {
     for mode in ["subscriber", "raw-subscriber", "raw-async"] {
@@ -287,6 +288,7 @@ impl a::Continuation for RepeatedSource {
         async move { a::Result::Ok(stream) }.into_ffi()
     }
 }
+/// Repeated downstream streams must release completed sources before the outer stream closes.
 #[tokio::test]
 async fn repeated_stream_sources_release_successful_cleanup_before_outer_close() {
     let executor =
@@ -523,6 +525,7 @@ fn checked_author_factory_contains_panics_and_rejects_falsified_identity() {
     assert!(a::Plugin::allows_multiple_components(&adapter));
 }
 
+/// Codec adapters must preserve typed payloads and report unavailable capabilities explicitly.
 #[test]
 fn invocation_codec_adapters_preserve_typed_values_and_missing_capabilities() {
     struct Codec(bool);

@@ -26,9 +26,9 @@ macro_rules! call_only_payload {
 }
 pub(crate) use call_only_payload;
 
+/// UTF-8 text borrowed for one synchronous call.
 #[repr(C)]
 #[derive(Clone, Copy)]
-/// UTF-8 text borrowed for one synchronous call.
 pub struct Str<'a> {
     data: *const u8,
     len: usize,
@@ -70,8 +70,8 @@ impl std::fmt::Display for Str<'_> {
     }
 }
 
-#[repr(C)]
 /// Read-only elements borrowed for one synchronous call.
+#[repr(C)]
 pub struct Slice<'a, T> {
     data: *const T,
     len: usize,
@@ -109,8 +109,8 @@ impl<T> Deref for Slice<'_, T> {
     }
 }
 
-#[repr(C)]
 /// Exclusive elements borrowed for one synchronous call.
+#[repr(C)]
 pub struct SliceMut<'a, T> {
     data: *mut T,
     len: usize,
@@ -258,8 +258,8 @@ impl<T> Output<'_, Reply<T>> {
         }
     }
 }
-#[repr(C)]
 /// Opaque pointer to caller-owned synchronous reply storage.
+#[repr(C)]
 pub struct ReplyWire<T> {
     data: *mut T,
 }
@@ -276,6 +276,7 @@ impl<T: 'static> xabi::XabiType for Output<'_, T> {
     fn into_wire(self) -> Self::Wire {
         ReplyWire { data: self.data }
     }
+    /// Validate caller-owned reply storage without taking ownership of it.
     unsafe fn from_wire(wire: *const Self::Wire) -> xabi::Result<Self> {
         let wire = unsafe { wire.as_ref() }.ok_or(xabi::Error::NullPointer("diagnostic reply"))?;
         if wire.data.is_null() {

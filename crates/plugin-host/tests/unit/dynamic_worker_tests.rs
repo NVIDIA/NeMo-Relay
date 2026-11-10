@@ -641,9 +641,9 @@ fn python_worker_launch_clears_host_python_environment() {
     }
 }
 
+/// Preserves interpreter selection and forwards endpoint and transport settings.
 #[cfg(unix)]
 #[test]
-/// Preserves interpreter selection and forwards endpoint and transport settings.
 fn python_worker_process_launch_uses_the_managed_interpreter_and_endpoint_file() {
     const CHILD: &str = "RELAY_FORWARD_LAUNCH_TEST_CHILD";
     if std::env::var_os(CHILD).is_none() {
@@ -2032,8 +2032,8 @@ async fn callback_stream_stops_when_host_receiver_is_dropped() {
         .expect("worker stream drop signal should be delivered");
 }
 
-#[tokio::test(flavor = "multi_thread")]
 /// Checks that a timeout reports the callback's identity and sends cancellation.
+#[tokio::test(flavor = "multi_thread")]
 async fn callback_timeout_sends_explicit_worker_cancellation() {
     enable_operational_logs();
     let (started_tx, started_rx) = oneshot::channel();
@@ -7315,6 +7315,7 @@ async fn component_workers_reuse_configurations_and_reject_registration_after_sh
     );
 }
 
+/// Invalid worker result payloads must fail instead of being accepted as middleware outcomes.
 #[test]
 fn malformed_worker_callback_results_fail_closed() {
     use wire::invoke_response::Result as R;
@@ -7382,6 +7383,7 @@ fn malformed_worker_callback_results_fail_closed() {
     );
 }
 
+/// Snapshot transport must preserve every supported domain category.
 #[test]
 fn scope_snapshot_types_preserve_all_domain_categories() {
     for kind in [

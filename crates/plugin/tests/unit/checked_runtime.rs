@@ -5,6 +5,7 @@ use super::*;
 use crate::checked::lifecycle_tests::{Next, raw_invocation};
 use a::Callback as _;
 
+/// Conditional gates must enforce synchronous dispatch and contain callback panics.
 #[tokio::test]
 async fn conditional_gates_reject_async_dispatch_and_contain_author_panics() {
     let gate = Gate(

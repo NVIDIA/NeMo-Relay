@@ -55,6 +55,7 @@ fn assert_host_accepts(host: &str, name: &str) {
         String::from_utf8_lossy(&output.stderr)
     );
 }
+/// Exercise an unchanged baseline binary against both supported host contracts.
 #[test]
 fn v1_0_plugin_loads_on_current_and_future_hosts() {
     let (descriptor, manifest) = fixture("baseline").unwrap();
@@ -74,6 +75,7 @@ fn newer_sdk_requires_newer_host_and_selects_its_own_module() {
     assert!(error.contains("requires native API v1.1"), "{error}");
     assert_host_accepts("future-host", "future");
 }
+/// Different package releases must load the same native contract without rebuilding its binary.
 #[test]
 fn package_release_versions_do_not_define_binary_compatibility() {
     let (descriptor, manifest) = fixture("package_next").unwrap();
@@ -92,6 +94,7 @@ fn reject_different_major_and_missing_module_before_factory_use() {
     let (_, manifest) = fixture("missing").unwrap();
     assert!(unsafe { bootstrap::factory(manifest) }.is_err());
 }
+/// Reject changes to method signatures or thread-safety requirements before factory construction.
 #[test]
 fn reject_changed_function_signature_and_marker_traits() {
     for name in ["signature", "marker"] {
@@ -104,8 +107,20 @@ fn reject_changed_function_signature_and_marker_traits() {
         );
     }
 }
+/// A dependency generation difference alone must reject an otherwise identical contract.
 #[test]
 fn incompatible_dependency_generation_fails_before_module_discovery() {
+    let raw = unsafe { &*raw_fixture("dependency") };
+    let schema = unsafe { raw.schema.as_str() }.unwrap();
+    assert_ne!(schema, bootstrap::schema());
+    assert_eq!(
+        schema.replacen(
+            &format!("xabi-generation:{};", xabi::ABI_VERSION + 1),
+            &format!("xabi-generation:{};", xabi::ABI_VERSION),
+            1,
+        ),
+        bootstrap::schema(),
+    );
     let error = fixture("dependency").err().unwrap();
     assert!(error.contains("dependency ABI"), "{error}");
 }

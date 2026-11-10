@@ -34,6 +34,7 @@ pub struct JsonWire {
 }
 unsafe impl Transfer for Json {
     type Wire = JsonWire;
+    /// Encode each JSON variant without changing integer ranges or floating-point bits.
     fn lower(self) -> JsonWire {
         let (tag, payload) = match self {
             Self::Null => (0, JsonPayload { scalar: 0 }),
@@ -77,6 +78,7 @@ unsafe impl Transfer for Json {
         };
         JsonWire { tag, payload }
     }
+    /// Reject invalid tags, non-finite numbers, and duplicate object keys during decoding.
     unsafe fn take(wire: &mut JsonWire) -> xabi::Result<Self> {
         Ok(match wire.tag {
             0 => Self::Null,
@@ -105,6 +107,7 @@ unsafe impl Transfer for Json {
             _ => return Err(xabi::Error::AbiMismatch("invalid JSON tag".into())),
         })
     }
+    /// Release only the active JSON payload and reset the tag to null.
     unsafe fn release(wire: &mut JsonWire) {
         match wire.tag {
             5 => unsafe { String::release(&mut wire.payload.text) },
@@ -177,6 +180,7 @@ unsafe impl Transfer for Surface {
     fn lower(self) -> u8 {
         self as u8
     }
+    /// Reject unknown middleware surface tags before constructing the Rust enum.
     unsafe fn take(wire: &mut u8) -> xabi::Result<Self> {
         Ok(match *wire {
             0 => Self::Subscriber,

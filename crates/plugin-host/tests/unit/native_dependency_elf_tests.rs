@@ -93,6 +93,7 @@ fn elf_image(
     bytes
 }
 
+/// Shared ELF dependencies must use the loader search paths inherited by breadth-first discovery.
 #[test]
 fn shared_elf_dependencies_follow_breadth_first_search_inheritance() {
     for deep in [false, true] {
@@ -144,6 +145,7 @@ fn shared_elf_dependencies_follow_breadth_first_search_inheritance() {
     }
 }
 
+/// Dependency capture must use program headers even when section metadata is absent.
 #[test]
 fn elf_program_headers_preserve_imports_search_paths_and_identity_without_sections() {
     for sections in [true, false] {
@@ -156,6 +158,7 @@ fn elf_program_headers_preserve_imports_search_paths_and_identity_without_sectio
     }
 }
 
+/// Both ORIGIN spellings must resolve imported sidecars without section metadata.
 #[test]
 fn elf_origin_imports_capture_sectionless_sidecars_in_both_token_forms() {
     let directory = tempfile::tempdir().unwrap();
@@ -177,6 +180,7 @@ fn elf_origin_imports_capture_sectionless_sidecars_in_both_token_forms() {
     }
 }
 
+/// Loader-token expansion must normalize Windows verbatim paths before file lookup.
 #[cfg(windows)]
 #[test]
 fn elf_origin_paths_resolve_files_under_verbatim_windows_roots() {
@@ -212,6 +216,7 @@ fn elf_dynamic_strings_must_be_within_the_file_backed_load_segment() {
     assert!(error.contains("outside loadable segments"), "{error}");
 }
 
+/// An intermediate RUNPATH must not discard an ancestor RPATH needed by deeper imports.
 #[test]
 fn elf_runpath_preserves_ancestor_rpath_for_deeper_dependencies() {
     for direct_dependency_in_runpath in [false, true] {
@@ -257,6 +262,7 @@ fn elf_runpath_preserves_ancestor_rpath_for_deeper_dependencies() {
     }
 }
 
+/// Skip incompatible ELF candidates while preserving errors for malformed candidate images.
 #[test]
 fn elf_search_skips_incompatible_class_and_machine_but_rejects_malformed_files() {
     for mode in ["class", "machine", "malformed"] {
@@ -309,6 +315,7 @@ fn elf_search_skips_incompatible_class_and_machine_but_rejects_malformed_files()
     }
 }
 
+/// Inherited loader paths must expand tokens once, including origins containing dollar signs.
 #[test]
 fn elf_loader_tokens_capture_inherited_paths_without_reexpanding_origin() {
     let tokens = ElfTokens {
@@ -348,6 +355,7 @@ fn elf_loader_tokens_capture_inherited_paths_without_reexpanding_origin() {
     }
 }
 
+/// Capturing one physical library through multiple aliases must preserve every imported alias.
 #[cfg(unix)]
 #[test]
 fn distinct_symlink_imports_keep_both_loader_paths() {
@@ -381,6 +389,7 @@ fn distinct_symlink_imports_keep_both_loader_paths() {
     );
 }
 
+/// Reject ELF paths whose meaning depends on the host working directory.
 #[test]
 fn elf_working_directory_imports_and_search_paths_are_rejected() {
     let directory = tempfile::tempdir().unwrap();
@@ -402,6 +411,7 @@ fn elf_working_directory_imports_and_search_paths_are_rejected() {
     }
 }
 
+/// An empty search-path value must not implicitly allow working-directory dependency lookup.
 #[test]
 fn wholly_empty_elf_search_paths_disable_lookup_without_selecting_cwd() {
     let directory = tempfile::tempdir().unwrap();

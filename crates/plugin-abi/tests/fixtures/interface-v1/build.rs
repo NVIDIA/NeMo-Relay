@@ -6,6 +6,7 @@ use quote::ToTokens;
 #[path = "src/contract.rs"]
 mod contract;
 
+/// Generate the SDK contract constants and checked schema from the interface sources.
 fn main() {
     let root = std::path::PathBuf::from(std::env::var_os("CARGO_MANIFEST_DIR").unwrap());
     let root = if root.join("src/lib.rs").is_file() {
@@ -27,6 +28,7 @@ fn main() {
     generate_schema(&root, &output);
 }
 
+/// Describe wire declarations and compiler-derived layouts without tying them to package versions.
 fn generate_schema(root: &std::path::Path, output: &std::path::Path) {
     let mut schema = String::from("relay.native.v1.0; xabi/0.1.2; async-ffi/0.5.1/abi2; transfer/1;\n");
     let mut layouts = String::from("|result:&mut String| {\n");
@@ -156,6 +158,7 @@ fn generate_schema(root: &std::path::Path, output: &std::path::Path) {
     std::fs::write(output.join("native_layout.rs"), layouts).unwrap();
 }
 
+/// Remove documentation and derive attributes while preserving the enum contract.
 fn clean_enum(mut item: syn::ItemEnum) -> syn::ItemEnum {
     item.attrs.retain(|a| {
         !a.path().is_ident("doc") && !a.path().is_ident("derive") && !a.path().is_ident("allow")
@@ -175,6 +178,7 @@ fn clean_enum(mut item: syn::ItemEnum) -> syn::ItemEnum {
     item
 }
 
+/// Remove documentation and derive attributes while preserving the record contract.
 fn clean_struct(mut item: syn::ItemStruct) -> syn::ItemStruct {
     item.attrs.retain(|a| {
         !a.path().is_ident("doc") && !a.path().is_ident("derive") && !a.path().is_ident("allow")

@@ -25,6 +25,7 @@ fn application_values_round_trip_without_a_text_codec() {
     );
 }
 
+/// JSON conversion must reject non-finite numbers and duplicate object keys.
 #[test]
 fn reject_invalid_numbers_and_duplicate_object_keys() {
     for value in [f64::NAN, f64::INFINITY, f64::NEG_INFINITY] {

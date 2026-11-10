@@ -6,6 +6,7 @@
 use nemo_relay_plugin::NativeExecutorConfig;
 use serde_json::Map;
 
+/// Explicit executor sizes must reject zero, fractional, or otherwise invalid values.
 #[test]
 fn native_executor_config_accepts_only_positive_integer_overrides() {
     assert_eq!(NativeExecutorConfig::default().worker_threads, 2);

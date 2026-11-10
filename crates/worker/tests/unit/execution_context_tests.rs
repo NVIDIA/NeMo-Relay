@@ -121,6 +121,7 @@ async fn callback_context_follows_stream_polling_without_widening_sibling_tasks(
     assert!(THREAD_CALLBACK_NAME.with(|name| name.borrow().is_none()));
 }
 
+/// Worker execution context must retain codec identity and supported operations.
 #[test]
 fn execution_context_preserves_codec_identities_and_capabilities() {
     for (kind, id, expected, resolves) in [
@@ -218,6 +219,7 @@ fn worker_sdk_cancellation_keeps_its_code_even_with_http_prefix() {
     );
 }
 
+/// Cancellation acknowledgements must reflect whether cleanup accepted the request.
 #[tokio::test]
 async fn cancellation_acknowledgement_matches_acceptance_after_cleanup() {
     struct TestPlugin;
@@ -365,6 +367,7 @@ async fn shutdown_rejects_stream_handoff_from_a_completed_opener() {
     assert!(!replaced, "shutdown must fence the stream producer handoff");
 }
 
+/// Repeated shutdown must leave worker health streams closed.
 #[tokio::test]
 async fn repeated_shutdown_does_not_reopen_health_watches() {
     use tonic_health::pb::health_server::Health;
@@ -564,6 +567,7 @@ async fn validation_rejects_wrong_plugin_and_shutdown_without_running_callback()
     assert_eq!(error.code(), tonic::Code::FailedPrecondition);
 }
 
+/// Registry filtering must cover every middleware surface and reject unrelated kinds.
 #[test]
 fn registry_filters_preserve_every_supported_surface_and_reject_nonregistrations() {
     // Gate callbacks receive these identities from the host. No supported kind
@@ -600,6 +604,7 @@ fn registry_filters_preserve_every_supported_surface_and_reject_nonregistrations
     }
 }
 
+/// Worker endpoint validation must accept numeric hosts and reject invalid authorities.
 #[test]
 fn worker_tcp_endpoints_accept_numeric_addresses_and_reject_invalid_authorities() {
     for endpoint in ["tcp://127.0.0.1:4317", "http://127.0.0.1:4317"] {
@@ -620,6 +625,7 @@ fn worker_tcp_endpoints_accept_numeric_addresses_and_reject_invalid_authorities(
     }
 }
 
+/// Shared author errors must retain their category when converted by the worker SDK.
 #[test]
 fn shared_author_errors_keep_configuration_serialization_and_registration_categories() {
     let config: PluginError = WorkerSdkError::InvalidInput("invalid field".into()).into();

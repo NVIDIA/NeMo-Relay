@@ -51,6 +51,7 @@ async fn user_future_runs_on_its_own_executor_and_panics_become_errors() {
     close(&executor).await;
 }
 
+/// An unpolled foreign waiter must still own cancellation of already-started user work.
 #[tokio::test]
 async fn dropping_unpolled_foreign_future_cancels_already_running_user_future() {
     let executor = executor();
@@ -398,6 +399,7 @@ fn direct_operation_cancellation_is_independent_of_component_shutdown() {
     });
 }
 
+/// A cancel-versus-poll race must release admission without requiring another waiter poll.
 #[test]
 fn cancellation_racing_a_pending_poll_releases_retained_waiters() {
     let executor = ComponentExecutor::inline("cancel-poll-race");

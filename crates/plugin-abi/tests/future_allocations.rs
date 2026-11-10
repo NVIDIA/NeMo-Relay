@@ -59,6 +59,7 @@ impl Wake for WakeCount {
     }
 }
 
+/// Repeated pending polls must deliver borrowed wake-ups without allocating transport storage.
 #[test]
 fn pending_foreign_polls_and_borrowed_wakes_do_not_allocate() {
     let source = std::future::poll_fn(|cx| {

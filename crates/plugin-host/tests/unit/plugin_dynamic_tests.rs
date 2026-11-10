@@ -158,6 +158,7 @@ fn registry_rejects_duplicate_live_plugin_ids() {
     }
 }
 
+/// Reject malformed persisted records before exposing them as usable registry entries.
 #[test]
 fn registry_rejects_invalid_raw_record_shapes() {
     let mut registry = DynamicPluginRegistry::new();
@@ -228,6 +229,7 @@ fn registry_replacement_rejects_invalid_record_shapes() {
     }
 }
 
+/// Persisted compatibility metadata must have the expected shape before registry use.
 #[test]
 fn registry_rejects_invalid_raw_record_compatibility_shapes() {
     let mut registry = DynamicPluginRegistry::new();
@@ -249,6 +251,7 @@ fn registry_rejects_invalid_raw_record_compatibility_shapes() {
     }
 }
 
+/// Each transport must declare a nonempty compatibility value for its own lane.
 #[test]
 fn registry_rejects_empty_required_lane_specific_compatibility_strings() {
     let mut registry = DynamicPluginRegistry::new();
@@ -1120,6 +1123,7 @@ fn manifest_parse_and_conversion_supports_rust_dynamic_lane() {
     );
 }
 
+/// Unknown native contract declarations must fail static manifest validation.
 #[test]
 fn manifest_rejects_native_api_two_and_unknown_native_api() {
     for unsupported in ["2", "3"] {
@@ -1169,6 +1173,7 @@ runtime = "python"
     }
 }
 
+/// A manifest must not advertise capabilities belonging to another plugin transport.
 #[test]
 fn manifest_rejects_capability_kind_mismatch() {
     let err = DynamicPluginManifest::parse_toml(
@@ -1271,6 +1276,7 @@ library = "target/release/libmissing.dylib"
     }
 }
 
+/// Native manifests must reject worker-only launch fields.
 #[test]
 fn manifest_rejects_worker_fields_for_rust_dynamic_plugins() {
     let err = DynamicPluginManifest::parse_toml(

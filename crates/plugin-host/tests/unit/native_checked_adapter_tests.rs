@@ -7,6 +7,7 @@ use crate::dynamic::native_library::{CheckedNativeLibrary, NativeLibraryArtifact
 use std::path::PathBuf;
 use std::sync::atomic::AtomicUsize;
 
+/// Shutdown must wait for admitted synchronous calls before releasing their scopes.
 #[tokio::test]
 async fn shutdown_drains_synchronous_runtime_calls_before_collecting_scopes() {
     let owner = HostRuntime::new("checked-runtime-admission".into()).unwrap();
@@ -159,6 +160,7 @@ fn library() -> CheckedNativeLibrary {
     .unwrap()
 }
 
+/// A failed stream close must retain ownership for retry and cancel a pending pull.
 #[tokio::test]
 async fn stream_cleanup_retries_errors_and_cancels_a_live_pull() {
     // OS image validation is setup, outside the asynchronous cleanup deadline.
@@ -610,6 +612,7 @@ impl a::Callback for CallbackStateProbe {
         async { a::Result::Err(a::Error::new("test", "sync callback")) }.into_ffi()
     }
 }
+/// Closing a component must release queued callback captures even before dispatch runs.
 #[tokio::test]
 async fn close_releases_queued_native_callback_state_without_waiting_for_dispatch() {
     use nemo_relay_runtime::api::subscriber::{
@@ -722,6 +725,7 @@ async fn retained_middleware_and_gate_proxies_release_foreign_state_on_shutdown(
     );
 }
 
+/// Response codec capabilities must preserve typed results and reject unsupported operations.
 #[tokio::test]
 async fn response_codec_capabilities_preserve_results_and_reject_invalid_dispatch() {
     use nemo_relay_types::codec::{response::AnnotatedLlmResponse, traits::LlmResponseCodec};
@@ -934,6 +938,7 @@ async fn completed_registration_factory_releases_late_request_waiters() {
     owner.shutdown().await.unwrap();
 }
 
+/// Registration must handle callbacks submitted both before and during foreign future polling.
 #[test]
 fn raw_registration_can_submit_callbacks_during_construction_and_polling() {
     use crate::Plugin as _;

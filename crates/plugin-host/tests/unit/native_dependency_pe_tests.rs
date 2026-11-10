@@ -59,6 +59,7 @@ fn pe_library(is_64: bool, imported_ordinals: Option<bool>) -> Vec<u8> {
     bytes
 }
 
+/// Capture imported DLLs whether their symbols are selected by ordinal or name.
 #[test]
 fn pe_import_descriptors_capture_ordinal_only_and_named_dlls() {
     for is_64 in [false, true] {
@@ -86,6 +87,7 @@ fn pe_import_descriptors_capture_ordinal_only_and_named_dlls() {
     }
 }
 
+/// Delayed PE imports must be included in the verified package dependency closure.
 #[test]
 fn pe_delay_imports_capture_package_sidecars() {
     for is_64 in [false, true] {

@@ -77,6 +77,7 @@ fn payload_transfer_preserves_nested_json_and_integer_ranges() {
     assert_eq!(result, value);
 }
 
+/// Non-finite numbers and duplicate keys must fail instead of crossing as valid JSON.
 #[test]
 fn malformed_json_is_rejected_during_transfer() {
     for value in [
@@ -219,6 +220,7 @@ impl std::task::Wake for WakeCount {
     }
 }
 
+/// Dropping a capability must not invalidate its pending future or cloned waker.
 #[test]
 fn foreign_future_and_cloned_waker_outlive_their_capability() {
     use std::{future::Future, pin::Pin, task::Context};

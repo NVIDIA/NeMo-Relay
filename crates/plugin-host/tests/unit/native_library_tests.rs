@@ -16,6 +16,7 @@ fn native_dependency_capture_preserves_package_local_runtime_search_paths() {
     assert_dependency_capture(true);
 }
 
+/// Dependency capture must preserve the importing chain used to resolve shared sidecars.
 #[cfg(any(target_os = "macos", target_os = "linux"))]
 #[test]
 fn shared_dependencies_preserve_loader_search_inheritance() {
@@ -229,6 +230,7 @@ fn resident_dependencies_reject_conflicting_bytes_before_loading() {
     );
 }
 
+/// Reject package-local absolute loader paths before any native image initializes.
 #[cfg(not(windows))]
 #[test]
 fn package_absolute_imports_and_search_paths_fail_before_loading() {
@@ -346,6 +348,7 @@ fn missing_contract_metadata_is_rejected_before_construction() {
     assert!(error.contains("incompatible native contract"), "{error}");
 }
 
+/// Staged ELF sidecars must remain loadable without section headers or original source files.
 #[cfg(target_os = "linux")]
 #[test]
 fn sectionless_shared_objects_load_sidecars_with_search_paths_and_braced_origins() {
@@ -431,6 +434,7 @@ fn native_aliases_preserve_identity_and_stage_all_import_spellings() {
     assert!(NativeLibraryArtifact::new_with_aliases(main, files, [(original, alias)]).is_err());
 }
 
+/// Preserve case-equivalent Mach-O import aliases in the retained artifact closure.
 #[cfg(target_os = "macos")]
 #[test]
 fn case_equivalent_macho_imports_load_after_source_removal() {
@@ -506,6 +510,7 @@ fn assert_macho_loader_value(path: &Path) {
     assert_eq!(value, 42);
 }
 
+/// Skip Mach-O candidates that lack the host architecture in either image format.
 #[cfg(target_os = "macos")]
 #[test]
 fn macho_search_skips_thin_and_universal_candidates_without_host_architecture() {
@@ -543,6 +548,7 @@ fn macho_search_skips_thin_and_universal_candidates_without_host_architecture() 
     }
 }
 
+/// Resolve Mach-O loader origins through file, directory, and main-library symlinks.
 #[cfg(target_os = "macos")]
 #[test]
 fn macho_file_directory_and_main_symlinks_keep_physical_loader_origins() {
@@ -589,6 +595,7 @@ fn macho_file_directory_and_main_symlinks_keep_physical_loader_origins() {
     }
 }
 
+/// Reject Mach-O imports that would resolve through the process working directory.
 #[cfg(target_os = "macos")]
 #[test]
 fn macho_working_directory_imports_fail_before_staging() {
@@ -611,6 +618,7 @@ fn macho_working_directory_imports_fail_before_staging() {
     }
 }
 
+/// Retained symlinks must be validated relative paths and contribute to artifact identity.
 #[cfg(unix)]
 #[test]
 fn symbolic_artifact_links_are_relative_validated_and_part_of_identity() {
@@ -663,6 +671,7 @@ fn symbolic_artifact_links_are_relative_validated_and_part_of_identity() {
     assert!(NativeLibraryArtifact::new_with_links(main, files, links.clone(), links).is_err());
 }
 
+/// Resolve parent components using physical filesystem semantics before capturing Mach-O imports.
 #[cfg(target_os = "macos")]
 #[test]
 fn macho_parent_components_follow_directories_and_symlinks_before_staging() {
@@ -732,6 +741,7 @@ fn macho_parent_component_cannot_hide_a_directory_escape() {
     assert!(error.contains("escapes its package"), "{error}");
 }
 
+/// Validate staged directory structure and include it in library cache identity.
 #[cfg(unix)]
 #[test]
 fn directory_layout_is_validated_and_part_of_artifact_identity() {
@@ -790,6 +800,7 @@ fn directory_layout_is_validated_and_part_of_artifact_identity() {
     }
 }
 
+/// Distinct path-qualified sidecars must not collide merely because their basenames match.
 #[cfg(target_os = "macos")]
 #[test]
 fn path_qualified_sidecars_with_equal_basenames_load_together() {

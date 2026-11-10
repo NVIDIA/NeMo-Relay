@@ -4684,6 +4684,7 @@ async fn close_registration_worker(
         .unwrap();
 }
 
+/// Absent worker configuration must replay consistently as an empty object.
 #[tokio::test]
 async fn worker_no_config_normalizes_null_and_empty_object_for_replay() {
     #[derive(Default)]
@@ -4873,6 +4874,7 @@ async fn worker_shutdown_cancels_active_and_queued_registration_and_drains_conte
         .unwrap();
 }
 
+/// Cancelling a registration RPC must release its context so registration can be retried.
 #[tokio::test]
 async fn worker_registration_rpc_cancellation_releases_context_for_retry() {
     let plugin = Arc::new(PendingRegistration::new(true));

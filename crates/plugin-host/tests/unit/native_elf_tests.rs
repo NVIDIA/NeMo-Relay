@@ -3,6 +3,45 @@
 
 use super::*;
 
+/// Candidate file checks reject unsafe paths and preserve ELF target matching.
+#[cfg(unix)]
+#[test]
+fn elf_candidate_files_require_regular_files_without_following_links() {
+    let directory = tempfile::tempdir().unwrap();
+    let file = directory.path().join("library.so");
+    let mut header = [0; 20];
+    header[..4].copy_from_slice(b"\x7fELF");
+    header[4] = 2;
+    header[5] = 1;
+    header[18..20].copy_from_slice(&62_u16.to_le_bytes());
+    let target = Target::from_header(&header).unwrap();
+    std::fs::write(&file, header).unwrap();
+    assert!(target.accepts_file(&file).unwrap());
+    header[18..20].copy_from_slice(&183_u16.to_le_bytes());
+    std::fs::write(&file, header).unwrap();
+    assert!(!target.accepts_file(&file).unwrap());
+
+    let link = directory.path().join("link.so");
+    std::os::unix::fs::symlink(&file, &link).unwrap();
+    let fifo = directory.path().join("fifo.so");
+    assert!(
+        std::process::Command::new("mkfifo")
+            .arg(&fifo)
+            .status()
+            .unwrap()
+            .success()
+    );
+    for path in [
+        link,
+        fifo,
+        directory.path().join("missing.so"),
+        directory.path().to_owned(),
+    ] {
+        assert!(target.accepts_file(&path).is_err(), "{}", path.display());
+    }
+}
+
+/// Token expansion must leave unrelated identifiers and dollar signs in resolved origins unchanged.
 #[test]
 fn loader_tokens_expand_once_and_respect_token_boundaries() {
     let tokens = Tokens {

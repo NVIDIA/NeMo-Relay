@@ -12,6 +12,7 @@ use crate::{
 };
 use std::sync::Mutex;
 use xabi::XabiType;
+/// Preserve exported error details and classify transport failures as ABI errors.
 fn error(value: xabi::XabiCallError<Value<Error>>) -> Error {
     match value {
         xabi::XabiCallError::Export(Value(value)) => value,
@@ -552,13 +553,21 @@ impl WirePlugin for PluginBox {
     }
 }
 impl Plugin for PluginRemote {
+    /// Deny multiple components when the foreign capability reply cannot be decoded.
     fn allows_multiple_components(&self) -> bool {
-        reply(self.0.xabi_borrow().allows_multiple_components())
-            .unwrap_or_else(|e| panic!("native interface call failed: {:?}", e))
+        reply(self.0.xabi_borrow().allows_multiple_components()).unwrap_or(false)
     }
+    /// Report a foreign validation failure as a diagnostic that prevents activation.
     fn validate(&self, config: Json) -> Vec<ConfigDiagnostic> {
-        reply(self.0.xabi_borrow().validate(Value(config)))
-            .unwrap_or_else(|e| panic!("native interface call failed: {:?}", e))
+        reply(self.0.xabi_borrow().validate(Value(config))).unwrap_or_else(|error| {
+            vec![ConfigDiagnostic {
+                is_error: true,
+                code: error.code,
+                component: None,
+                field: None,
+                message: error.message,
+            }]
+        })
     }
     fn register(
         &self,
@@ -779,6 +788,7 @@ unsafe extern "C" fn restore_lease(instance: *mut std::ffi::c_void) -> xabi::Xab
     )
     .into_payload()
 }
+/// Release scope-lease storage in the library that allocated it.
 unsafe extern "C" fn release_lease(instance: *mut std::ffi::c_void) {
     if !instance.is_null() {
         drop(unsafe { Box::from_raw(instance.cast::<ScopeLeaseBox>()) });
@@ -786,6 +796,7 @@ unsafe extern "C" fn release_lease(instance: *mut std::ffi::c_void) {
 }
 struct ForeignLease(LeaseWire, std::marker::PhantomData<std::rc::Rc<()>>);
 impl ScopeLease for ForeignLease {
+    /// Restore the foreign scope on its entering thread and decode any restoration error.
     fn restore(&mut self) -> Result<()> {
         let payload = unsafe { (self.0.restore)(self.0.instance) };
         let error = unsafe { Value::<Option<Error>>::from_payload(payload) }
@@ -811,6 +822,7 @@ unsafe impl Transfer for ScopeLeaseBox {
             release: release_lease,
         }
     }
+    /// Claim a non-null scope lease and clear rollback ownership in the source record.
     unsafe fn take(wire: &mut LeaseWire) -> xabi::Result<Self> {
         if wire.instance.is_null() {
             return Err(xabi::Error::NullPointer("scope lease"));
@@ -819,6 +831,7 @@ unsafe impl Transfer for ScopeLeaseBox {
         wire.instance = std::ptr::null_mut();
         Ok(Self::new(ForeignLease(value, std::marker::PhantomData)))
     }
+    /// Release a scope lease only if its ownership has not already transferred.
     unsafe fn release(wire: &mut LeaseWire) {
         if !wire.instance.is_null() {
             unsafe { (wire.release)(std::mem::replace(&mut wire.instance, std::ptr::null_mut())) };

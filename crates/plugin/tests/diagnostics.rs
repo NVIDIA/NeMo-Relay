@@ -126,6 +126,7 @@ fn facade(behavior: Behavior) -> (Arc<Peer>, sdk::Diagnostics) {
 const FAILURE: BuiltinDiagnosticCode = BuiltinDiagnosticCode::Failure(FailureCode::Plugin(
     PluginFailureCode::Common(CommonPluginFailureCode::Internal),
 ));
+/// Revoked or incompatible diagnostic peers must not invoke author-supplied factories.
 #[test]
 fn inert_and_incompatible_peers_skip_author_factories() {
     for (behavior, expected) in [
@@ -150,6 +151,7 @@ fn inert_and_incompatible_peers_skip_author_factories() {
         assert_eq!(peer.registrations.load(Ordering::Relaxed), 0);
     }
 }
+/// Malformed diagnostic replies must release admission and return a conservative failure.
 #[test]
 fn invalid_receipts_and_unknown_errors_fail_closed_without_leaking_admission() {
     for behavior in [Behavior::UnknownStatus, Behavior::InvalidReceipt] {
@@ -177,6 +179,7 @@ fn invalid_receipts_and_unknown_errors_fail_closed_without_leaking_admission() {
         assert_eq!(diagnostics.delivery_stats().uncertain, 2);
     }
 }
+/// Reject diagnostic read lengths that exceed the buffer supplied by the caller.
 #[test]
 fn checked_peer_cannot_claim_a_read_beyond_caller_owned_storage() {
     let (_, diagnostics) = facade(Behavior::OversizedRead);
@@ -191,6 +194,7 @@ fn checked_peer_cannot_claim_a_read_beyond_caller_owned_storage() {
     }
 }
 
+/// Status decoding must preserve distinct read failures and admission failures.
 #[test]
 fn frozen_diagnostic_statuses_preserve_read_and_admission_failures() {
     use sdk::DiagnosticReadReason as Read;

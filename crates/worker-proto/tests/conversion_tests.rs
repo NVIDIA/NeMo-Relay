@@ -541,6 +541,7 @@ fn multimodal_and_tool_variants_preserve_payloads_and_extensions() {
     assert_eq!(decoded.total_tokens, Some(3));
 }
 
+/// Collection envelopes must preserve their JSON container type and reject mismatches.
 #[test]
 fn json_collection_envelopes_preserve_shape_and_reject_wrong_container_types() {
     for value in [
@@ -572,6 +573,7 @@ fn json_collection_envelopes_preserve_shape_and_reject_wrong_container_types() {
     );
 }
 
+/// Diagnostic transport must retain opaque execution and phase identifiers unchanged.
 #[test]
 fn diagnostic_transport_preserves_opaque_execution_and_phase_names() {
     use nemo_relay_types::diagnostics::{PluginExecutionName, PluginPhaseName};

@@ -200,6 +200,7 @@ fn embedding_activation_loads_verified_bytes_after_source_symlink_swap() {
     verified_native_activation_survives_source_swap(true);
 }
 
+/// Activation must use verified captured bytes even if the original library path changes.
 fn verified_native_activation_survives_source_swap(symlink_swap: bool) {
     use base64::Engine;
     use ring::signature::{Ed25519KeyPair, KeyPair};
@@ -346,6 +347,7 @@ manifest = {manifest_ref:?}
 
 #[tokio::test]
 #[allow(clippy::await_holding_lock)] // Serializes process-wide host ownership for this test.
+/// An optional component trust failure must leave the rest of the host usable.
 async fn optional_load_time_trust_failure_skips_component_and_preserves_host() {
     use crate::dynamic::{
         DynamicPluginAttestationMode, DynamicPluginHostPolicy, DynamicPluginManifest,

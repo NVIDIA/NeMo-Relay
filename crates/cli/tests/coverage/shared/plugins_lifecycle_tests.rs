@@ -5937,6 +5937,7 @@ fn incompatible_workers_cannot_activate_after_validation_refresh() {
     }
 }
 
+/// Refreshing registry validation must retain an unsupported native API failure.
 #[test]
 fn native_api_rejections_survive_registry_validation_refresh() {
     let temp = tempfile::tempdir().unwrap();

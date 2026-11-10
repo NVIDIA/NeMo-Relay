@@ -1846,6 +1846,7 @@ async fn plugin_host_activation_drop_releases_owner_and_plugin_kind() {
     activation.close().expect("second plugin host should close");
 }
 
+/// Failed registration must release its reserved identity so a later activation can succeed.
 #[tokio::test]
 async fn plugin_host_reserved_id_failure_does_not_poison_future_activation() {
     let _guard = NATIVE_PLUGIN_TEST_LOCK.lock().await;
@@ -2439,6 +2440,7 @@ registration_failure = {failure}
     }
 }
 
+/// Exercise synchronous middleware and diagnostic reads through a loaded native fixture.
 #[tokio::test]
 async fn checked_raw_sync_callbacks_and_selected_diagnostics_preserve_contracts() {
     use crate::dynamic::native_checked::CheckedPlugin;
@@ -2548,6 +2550,7 @@ async fn checked_raw_sync_callbacks_and_selected_diagnostics_preserve_contracts(
     assert!(deregister_plugin("fixture_native"));
 }
 
+/// Unsupported manifest contracts must fail before the native library can initialize.
 #[test]
 fn native_activation_rejects_legacy_and_future_contracts_before_opening() {
     let _guard = NATIVE_PLUGIN_TEST_LOCK.blocking_lock();
@@ -2586,6 +2589,7 @@ fn native_activation_rejects_legacy_and_future_contracts_before_opening() {
     assert!(error.contains("load.symbol"), "{error}");
 }
 
+/// A synchronous stream factory must not deadlock when its downstream work shares one worker.
 #[tokio::test]
 async fn raw_stream_factories_can_read_downstream_with_one_executor_worker() {
     use crate::dynamic::native_checked::CheckedPlugin;
@@ -2651,6 +2655,7 @@ async fn raw_stream_factories_can_read_downstream_with_one_executor_worker() {
     assert!(deregister_plugin("fixture_native"));
 }
 
+/// Cancellation must unwind a pending plugin scope before shutdown completes.
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn native_shutdown_unwinds_pending_plugin_scope() {
     use crate::dynamic::native_checked::CheckedPlugin;
