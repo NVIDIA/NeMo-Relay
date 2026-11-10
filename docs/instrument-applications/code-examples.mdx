@@ -325,15 +325,38 @@ Python accepts timezone-aware `datetime` values, Node.js accepts Unix microsecon
 Every manual tool end helper accepts the canonical `ToolExecutionResult`; wrap
 the business payload and add an optional opaque annotation when needed.
 
+Change `query` to an empty string to exercise the failure path below. Each
+example attempts the matching end call before propagating the operation's
+original error. The `error` field is an application-defined failure payload.
+If the end call also fails, Python attaches that failure to the original
+exception; Node.js and Rust report it separately.
+
 <Tabs>
 <Tab title="Python" language="python">
 ```python
 import nemo_relay
 
-handle = nemo_relay.tools.call("search", {"query": "weather"}, data={"attempt": 1})
+
+def search(query: str) -> dict[str, int]:
+    if not query:
+        raise ValueError("query is required")
+    return {"hits": 2}
+
+
+query = "weather"
+handle = nemo_relay.tools.call("search", {"query": query}, data={"attempt": 1})
 try:
-    result = {"hits": 2}
-finally:
+    result = search(query)
+except Exception as execution_error:
+    try:
+        nemo_relay.tools.call_end(
+            handle,
+            nemo_relay.ToolExecutionResult({"error": str(execution_error)}),
+        )
+    except Exception as completion_error:
+        execution_error.add_note(f"Relay could not record tool completion: {completion_error}")
+    raise
+else:
     nemo_relay.tools.call_end(handle, nemo_relay.ToolExecutionResult(result))
 ```
 </Tab>
@@ -342,8 +365,25 @@ finally:
 ```ts
 import { toolCall, toolCallEnd } from 'nemo-relay-node';
 
-const handle = toolCall('search', { query: 'weather' }, null, null, { attempt: 1 }, null, null);
-const result = { hits: 2 };
+function search(query: string): { hits: number } {
+  if (!query) throw new Error('query is required');
+  return { hits: 2 };
+}
+
+const query = 'weather';
+const handle = toolCall('search', { query }, null, null, { attempt: 1 }, null, null);
+let result: { hits: number };
+try {
+  result = search(query);
+} catch (executionError) {
+  const message = executionError instanceof Error ? executionError.message : String(executionError);
+  try {
+    toolCallEnd(handle, { result: { error: message } }, null, null);
+  } catch (completionError) {
+    console.error('Relay could not record tool completion:', completionError);
+  }
+  throw executionError;
+}
 toolCallEnd(handle, { result }, null, null);
 ```
 </Tab>
@@ -353,22 +393,44 @@ toolCallEnd(handle, { result }, null, null);
 use nemo_relay::tool::{
     tool_call, tool_call_end, ToolCallEndParams, ToolCallParams, ToolExecutionResult,
 };
-use serde_json::json;
+use serde_json::{Value, json};
 
-let handle = tool_call(
-    ToolCallParams::builder()
-        .name("search")
-        .args(json!({"query": "weather"}))
-        .data(json!({"attempt": 1}))
-        .build(),
-)?;
+fn search(query: &str) -> nemo_relay::Result<Value> {
+    if query.is_empty() {
+        return Err(nemo_relay::FlowError::InvalidArgument("query is required".into()));
+    }
+    Ok(json!({"hits": 2}))
+}
 
-tool_call_end(
-    ToolCallEndParams::builder()
-        .handle(&handle)
-        .execution_result(ToolExecutionResult::new(json!({"hits": 2})))
-        .build(),
-)?;
+fn main() -> nemo_relay::Result<()> {
+    let query = "weather";
+    let handle = tool_call(
+        ToolCallParams::builder()
+            .name("search")
+            .args(json!({"query": query}))
+            .data(json!({"attempt": 1}))
+            .build(),
+    )?;
+
+    let (result, execution_error) = match search(query) {
+        Ok(result) => (result, None),
+        Err(error) => (json!({"error": error.to_string()}), Some(error)),
+    };
+    let completion_result = tool_call_end(
+        ToolCallEndParams::builder()
+            .handle(&handle)
+            .execution_result(ToolExecutionResult::new(result))
+            .build(),
+    );
+
+    if let Some(execution_error) = execution_error {
+        if let Err(completion_error) = completion_result {
+            eprintln!("Relay could not record tool completion: {completion_error}");
+        }
+        return Err(execution_error);
+    }
+    completion_result
+}
 ```
 </Tab>
 

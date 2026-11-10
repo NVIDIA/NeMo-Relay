@@ -8,7 +8,7 @@ import { afterEach, it } from 'node:test';
 import { fileURLToPath } from 'node:url';
 
 const require = createRequire(import.meta.url);
-const relay = require('../index.js');
+const relay = require('nemo-relay-node');
 const examples = fileURLToPath(new URL('../../../docs/instrument-applications/_code/nodejs/', import.meta.url));
 const toolExample = require(`${examples}/tool-call.js`);
 const modelExample = require(`${examples}/llm-call.js`);

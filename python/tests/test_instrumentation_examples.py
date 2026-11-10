@@ -88,7 +88,12 @@ async def test_minimal_examples_return_results_and_paired_events(name, category,
 @pytest.mark.parametrize("name", ["tool_call", "llm_call"])
 def test_documented_program_entrypoints(name):
     environment = os.environ.copy()
-    environment["PYTHONPATH"] = str(REPOSITORY_ROOT / "python")
+    assert nemo_relay.__file__ is not None
+    package_directory = str(Path(nemo_relay.__file__).resolve().parent.parent)
+    existing_python_path = environment.get("PYTHONPATH")
+    environment["PYTHONPATH"] = (
+        os.pathsep.join([package_directory, existing_python_path]) if existing_python_path else package_directory
+    )
     result = subprocess.run(
         [sys.executable, str(EXAMPLES / f"{name}.py")],
         cwd=REPOSITORY_ROOT,
@@ -131,6 +136,15 @@ async def test_documented_policies_allow_or_reject_before_execution(policy, quer
         assert output.count("search completed in") == 1
     elif not query:
         assert "search completed in" not in output
+        records = [event.to_dict() for event in subscribed_events]
+        assert any(
+            record["kind"] == "mark"
+            and record["name"] == "search"
+            and record["data"]["rejected"] is True
+            and record["data"]["rejection_reason"] == "search.query is required"
+            for record in records
+        )
+        assert not any(record.get("category") == "tool" and record["name"] == "search" for record in records)
 
 
 async def test_subscriber_source_serializes_real_events(capsys):
@@ -146,15 +160,16 @@ async def test_subscriber_source_serializes_real_events(capsys):
     )
 
 
-async def test_combined_policy_preserves_present_annotation():
+@pytest.mark.parametrize("annotation", [None, {"verification": "preserved"}])
+async def test_combined_policy_preserves_annotation(annotation):
     example("tool_policy").register_tool_policy()
 
     async def search(_tool_arguments):
-        return nemo_relay.ToolExecutionResult({"ok": True}, annotation={"verification": "preserved"})
+        return nemo_relay.ToolExecutionResult({"ok": True}, annotation=annotation)
 
     result = await nemo_relay.tools.execute("search", {"query": "weather"}, search)
     assert result.result == {"ok": True}
-    assert result.annotation == {"verification": "preserved"}
+    assert result.annotation == annotation
 
 
 @pytest.mark.parametrize("name,category", [("tool_call", "tool"), ("llm_call", "llm")])

@@ -3,6 +3,8 @@
 
 //! Compile and exercise the exact Rust source displayed by the concept guides.
 
+static DOCUMENTATION_REGISTRATION_LOCK: tokio::sync::Mutex<()> = tokio::sync::Mutex::const_new(());
+
 mod fork_task {
     include!("../../../docs/about-nemo-relay/concepts/_code/fork_task.rs");
 
@@ -21,6 +23,7 @@ mod run_agent {
 
     #[tokio::test]
     async fn agent_closes_its_scope_after_success_and_provider_failure() {
+        let _registration_guard = super::DOCUMENTATION_REGISTRATION_LOCK.lock().await;
         nemo_relay::context::with_task_scope_stack(
             nemo_relay::context::create_scope_stack(),
             async {
@@ -165,6 +168,7 @@ mod instrument_applications {
     // One test keeps the examples' process-wide registration names sequential.
     #[test]
     fn documented_programs_policies_and_cleanup() {
+        let _registration_guard = super::DOCUMENTATION_REGISTRATION_LOCK.blocking_lock();
         set_thread_scope_stack(create_scope_stack());
         let records = Arc::new(Mutex::new(Vec::new()));
         let captured = Arc::clone(&records);
@@ -290,6 +294,16 @@ mod instrument_applications {
                     if query.is_empty() {
                         assert!(result.unwrap_err().to_string().contains("search.query is required"));
                         assert_eq!(calls.load(Ordering::SeqCst), 0);
+                        let events = records.lock().unwrap();
+                        assert!(events.iter().any(|event| {
+                            event["kind"] == "mark"
+                                && event["name"] == "search"
+                                && event["data"]["rejected"] == true
+                                && event["data"]["rejection_reason"] == "search.query is required"
+                        }));
+                        assert!(!events.iter().any(|event| {
+                            event["category"] == "tool" && event["name"] == "search"
+                        }));
                     } else {
                         assert_eq!(result.unwrap().result, json!({"query": query}));
                         assert_eq!(calls.load(Ordering::SeqCst), 1);
@@ -297,17 +311,23 @@ mod instrument_applications {
                     }
                 }
                 if combined {
-                    let execution = tool_call_execute(ToolCallExecuteParams::builder()
-                        .name("search")
-                        .args(json!({"query": "weather"}))
-                        .func(Arc::new(|_arguments| Box::pin(async {
-                            Ok(ToolExecutionResult {
-                                result: json!({"ok": true}),
-                                annotation: Some(json!({"verification": "preserved"})),
-                            })
-                        })))
-                        .build()).await.unwrap();
-                    assert_eq!(execution.annotation, Some(json!({"verification": "preserved"})));
+                    for annotation in [None, Some(json!({"verification": "preserved"}))] {
+                        let expected_annotation = annotation.clone();
+                        let execution = tool_call_execute(ToolCallExecuteParams::builder()
+                            .name("search")
+                            .args(json!({"query": "weather"}))
+                            .func(Arc::new(move |_arguments| {
+                                let annotation = annotation.clone();
+                                Box::pin(async move {
+                                    Ok(ToolExecutionResult {
+                                        result: json!({"ok": true}),
+                                        annotation,
+                                    })
+                                })
+                            }))
+                            .build()).await.unwrap();
+                        assert_eq!(execution.annotation, expected_annotation);
+                    }
                 }
                 deregister_tool_conditional_execution_guardrail("search.require_query").unwrap();
                 if combined {
