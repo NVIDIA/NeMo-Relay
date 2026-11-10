@@ -1559,6 +1559,7 @@ async fn diagnostic_recovery_rotates_authority_without_reopening_draining_worker
 /// daemon stops routing to it, instead of staying routable through teardown.
 #[tokio::test]
 async fn monitor_control_closes_at_once_when_the_release_is_rejected() {
+    let (rejected, mut rejections) = tokio::sync::mpsc::unbounded_channel::<()>();
     let daemon_listener = TcpListener::bind("127.0.0.1:0")
         .await
         .expect("bind daemon fixture");
@@ -1568,26 +1569,36 @@ async fn monitor_control_closes_at_once_when_the_release_is_rejected() {
             daemon_listener,
             Router::new().route(
                 crate::daemon::common::socket::WORKER_SOCKET_PATH,
-                get(|ws: axum::extract::ws::WebSocketUpgrade| async {
-                    ws.on_upgrade(|mut socket| async move {
-                        while let Some(Ok(axum::extract::ws::Message::Text(text))) =
-                            socket.recv().await
-                        {
-                            let request: crate::daemon::common::socket::Request =
-                                serde_json::from_str(&text).unwrap();
-                            let reply = crate::daemon::common::socket::Event::Reply {
-                                request_id: request.request_id,
-                                status: 409,
-                                payload: serde_json::json!({"error": {"message": "rejected"}}),
-                            };
-                            socket
-                                .send(axum::extract::ws::Message::Text(
-                                    serde_json::to_string(&reply).unwrap().into(),
-                                ))
-                                .await
-                                .unwrap();
-                        }
-                    })
+                get(move |ws: axum::extract::ws::WebSocketUpgrade| {
+                    let rejected = rejected.clone();
+                    async move {
+                        ws.on_upgrade(move |mut socket| async move {
+                            while let Some(Ok(axum::extract::ws::Message::Text(text))) =
+                                socket.recv().await
+                            {
+                                let request: crate::daemon::common::socket::Request =
+                                    serde_json::from_str(&text).unwrap();
+                                let is_release = matches!(
+                                    &request.command,
+                                    crate::daemon::common::socket::Command::Release(_)
+                                );
+                                let reply = crate::daemon::common::socket::Event::Reply {
+                                    request_id: request.request_id,
+                                    status: 409,
+                                    payload: serde_json::json!({"error": {"message": "rejected"}}),
+                                };
+                                socket
+                                    .send(axum::extract::ws::Message::Text(
+                                        serde_json::to_string(&reply).unwrap().into(),
+                                    ))
+                                    .await
+                                    .unwrap();
+                                if is_release {
+                                    let _ = rejected.send(());
+                                }
+                            }
+                        })
+                    }
                 }),
             ),
         )
@@ -1616,5 +1627,10 @@ async fn monitor_control_closes_at_once_when_the_release_is_rejected() {
         .await
         .expect("monitor returns without waiting for teardown")
         .unwrap();
+    // The return must come from a rejected Release, not from a transport failure.
+    tokio::time::timeout(Duration::from_secs(5), rejections.recv())
+        .await
+        .expect("release rejection before timeout")
+        .expect("the fixture rejected a Release");
     daemon.abort();
 }
