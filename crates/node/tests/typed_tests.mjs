@@ -283,10 +283,10 @@ describe('typedToolExecute', () => {
   it('rejects legacy raw typed-tool results from sync and async producers', async () => {
     const passthrough = new JsonPassthrough();
     for (const producer of [() => 7, async () => 7]) {
-      await assert.rejects(
-        () => typedToolExecute('typed_legacy_result', {}, producer, passthrough, passthrough),
-        /must return ToolExecutionResult/i,
-      );
+      await assert.rejects(() => typedToolExecute('typed_legacy_result', {}, producer, passthrough, passthrough), {
+        name: 'TypeError',
+        message: 'typed tool callback must return ToolExecutionResult',
+      });
     }
   });
 

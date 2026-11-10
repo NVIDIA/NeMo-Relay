@@ -370,9 +370,9 @@ def _resolve_star_exports(module: ModuleDoc, parsed: dict[Path, ModuleDoc], visi
             if item.name not in names:
                 module.items.append(item)
                 names.add(item.name)
-        module.reexports.extend(name for name in target.reexports if name not in names)
+        module.reexports.extend(target.reexports)
     module.star_sources = []
-    module.reexports = sorted(set(module.reexports))
+    module.reexports = sorted(set(module.reexports) - names)
 
 
 def _package_exports(package_json: Path) -> list[tuple[str, Path]]:

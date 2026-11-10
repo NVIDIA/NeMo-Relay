@@ -56,12 +56,20 @@ class NodeReferenceTests(unittest.TestCase):
                   | 'private'
                 /** Emits one event. */
                 export declare function event(name: string, handle?: ScopeStack | null): void
+                export declare function configure(
+                  name: string,
+                  options: { retries: number },
+                ): void
+                export declare const limits: {
+                  depth: number
+                }
                 export interface Inner {
                   value: number
                 }
                 """,
                 "dist/index.d.ts": """
                 export * from '../binding.js';
+                export type { Inner } from '../binding.js';
                 export declare class ScopeStack {
                     wrapped: true;
                 }
@@ -81,6 +89,12 @@ class NodeReferenceTests(unittest.TestCase):
         self.assertIn("### `Visibility`", runtime)
         self.assertIn("### `event`", runtime)
         self.assertIn("### `Inner`", runtime)
+        self.assertNotIn("## Re-exports", runtime)
+        self.assertIn(
+            "export declare function configure(\n  name: string,\n  options: { retries: number },\n): void", runtime
+        )
+        self.assertIn("### `limits`", runtime)
+        self.assertIn("export declare const limits: {\n  depth: number\n}", runtime)
         self.assertIn("export type Visibility =\n  | 'public'\n  | 'private'", runtime)
         self.assertEqual(runtime.count("### `ScopeStack`"), 1)
         self.assertIn("wrapped: true;", runtime)
