@@ -19,6 +19,8 @@ pub(super) struct Hub {
     // Fence callbacks and reconnects for one logical session without blocking other peers.
     gates: Mutex<HashMap<String, std::sync::Weak<tokio::sync::Mutex<()>>>>,
     route_gates: Mutex<HashMap<Fingerprint, std::sync::Weak<Mutex<()>>>>,
+    // Workers that announced their exit; their disconnect skips the reconnect grace.
+    exiting_workers: Mutex<std::collections::HashSet<String>>,
     #[cfg(test)]
     admission_gate: Mutex<Option<WorkerAdmissionGate>>,
 }
@@ -591,6 +593,13 @@ fn validate_ready_connection(
     if peer.drain.is_some() {
         return Err(control_message(StatusCode::CONFLICT, "worker is draining"));
     }
+    // A Ready after the exit notice must not reopen routing to a worker in teardown.
+    if lock(&state.sockets.exiting_workers).contains(id) {
+        return Err(control_message(
+            StatusCode::CONFLICT,
+            "worker announced its exit",
+        ));
+    }
     Ok(())
 }
 
@@ -655,6 +664,11 @@ async fn dispatch(
         {
             release_mcp(State(state.clone()), Json(request)).await
         }
+        Command::Release(request)
+            if role == ComponentRole::Worker && id.as_ref() == Some(&request.session_id) =>
+        {
+            release_worker(state, &request)
+        }
         Command::CancelActivation(request)
             if role == ComponentRole::Mcp && id.as_ref() == Some(&request.session_id) =>
         {
@@ -715,6 +729,10 @@ async fn register_worker_command(
     if expired(state, role, &worker_id) {
         return control_message(StatusCode::UNAUTHORIZED, "session recovery grace expired");
     }
+    // A replayed registration must not take over a worker that is tearing down either.
+    if lock(&state.sockets.exiting_workers).contains(&worker_id) {
+        return control_message(StatusCode::CONFLICT, "worker announced its exit");
+    }
     let response = register_worker(State(state.clone()), Json(request)).await;
     if !response.status().is_success() {
         diag::record(
@@ -739,6 +757,10 @@ async fn recover_worker_command(
     let worker_id = request.worker_id.clone();
     if expired(state, role, &worker_id) {
         return control_message(StatusCode::UNAUTHORIZED, "session recovery grace expired");
+    }
+    // A worker that announced its exit is tearing down; a late recovery must not revive it.
+    if lock(&state.sockets.exiting_workers).contains(&worker_id) {
+        return control_message(StatusCode::CONFLICT, "worker announced its exit");
     }
     let response = recover_worker(State(state.clone()), Json(request)).await;
     if response.status().is_success() {
@@ -793,6 +815,38 @@ fn reset_worker(state: &DaemonState, id: &str) {
         // A previously published worker still needs a fresh HTTP readiness probe.
     }
 }
+/// Records an authenticated worker's announced exit before it closes its control socket.
+fn release_worker(
+    state: &DaemonState,
+    request: &SessionRequest<crate::daemon::common::control::ReleasePayload>,
+) -> Response<Body> {
+    {
+        let mut sessions = lock(&state.worker_sessions);
+        let Some(session) = sessions.get_mut(&request.session_id) else {
+            return control_message(StatusCode::UNAUTHORIZED, "unknown worker session");
+        };
+        if let Err(response) = authenticate_sequence(
+            session.secret_digest,
+            &mut session.last_sequence,
+            &mut session.last_request_id,
+            request,
+        ) {
+            return response;
+        }
+        // Stop routing now; the replacement launches when the socket closes after teardown.
+        session.pending_target.set_control_available(false);
+        // Mark under the session lock so a concurrent cleanup cannot leave a stale marker.
+        lock(&state.sockets.exiting_workers).insert(request.session_id.clone());
+    }
+    log::info!(
+        target: "nemo_relay.daemon",
+        event = "worker_exit_announced",
+        worker_id = request.session_id.as_str();
+        "Worker announced its exit; its disconnect skips the reconnect grace"
+    );
+    StatusCode::NO_CONTENT.into_response()
+}
+
 async fn disconnected(
     state: Arc<DaemonState>,
     role: ComponentRole,
@@ -801,7 +855,7 @@ async fn disconnected(
     reason: &'static str,
 ) {
     let _transaction = state.sockets.transaction(role, &id).await;
-    let deadline = {
+    let (deadline, exited) = {
         let mut peers = lock(&state.sockets.peers);
         let Some(peer) = peers
             .get_mut(&key(role, &id))
@@ -812,7 +866,15 @@ async fn disconnected(
         peer.sender = None;
         peer.ready = false;
         let now = tokio::time::Instant::now();
-        *peer.disconnected.get_or_insert(now) + GRACE
+        let exited =
+            role == ComponentRole::Worker && lock(&state.sockets.exiting_workers).contains(&id);
+        // A worker that announced its exit cannot reconnect, so it gets no recovery window.
+        if exited {
+            peer.disconnected = Some(now);
+            (now, true)
+        } else {
+            (*peer.disconnected.get_or_insert(now) + GRACE, false)
+        }
     };
     if role == ComponentRole::Worker
         && let Some(session) = lock(&state.worker_sessions).get_mut(&id)
@@ -883,14 +945,14 @@ async fn disconnected(
             }
         }
     }
-    if role == ComponentRole::Worker {
+    if role == ComponentRole::Worker && !exited {
         diag::record(
             DaemonFailureCode::ControlLost,
             FailureClass::Unavailable,
             "Broker observed worker control disconnect; process exit is unknown",
         );
     }
-    log_control_disconnected(role, &id, reason);
+    log_control_disconnected(role, &id, reason, exited);
     state.sockets.changed.notify_waiters();
     drop(_transaction);
     tokio::spawn(expire_disconnected_peer(
@@ -954,6 +1016,7 @@ pub(super) async fn cleanup_worker_session(
     let fingerprint = session.fingerprint;
     let generation_id = session.generation_grant.generation_id;
     let failed_activation = (!session.published).then(|| session.publication.clone());
+    lock(&state.sockets.exiting_workers).remove(&id);
     if let Err(error) = tokio::task::spawn_blocking(move || {
         revoke_active_worker_generation(&work, fingerprint, &generation_id);
         if let Some(publication @ WorkerPublication::Activation { .. }) = failed_activation {
@@ -990,7 +1053,7 @@ pub(super) async fn cleanup_worker_session(
                 fingerprint = fingerprint_text.as_str(),
                 worker_id = id.as_str(),
                 route_action = worker_failure_action_name(&action);
-                "Worker failed after its control disconnect grace period elapsed"
+                "Worker removed from its route after its control connection ended"
             );
             if let WorkerFailureAction::NominateMcp { session_id } = action {
                 nominate_relaunch(&state, fingerprint, session_id);
@@ -1036,8 +1099,16 @@ fn log_control_connected(role: ComponentRole, id: &str, reconnected: bool) {
     }
 }
 
-fn log_control_disconnected(role: ComponentRole, id: &str, reason: &'static str) {
+fn log_control_disconnected(role: ComponentRole, id: &str, reason: &'static str, exited: bool) {
     match role {
+        ComponentRole::Worker if exited => log::info!(
+            target: "nemo_relay.daemon",
+            event = "worker_control_disconnected",
+            worker_id = id,
+            reason = reason,
+            grace_period_ms = 0_u64;
+            "Worker control closed after an announced exit; replacing it now"
+        ),
         ComponentRole::Mcp => log::info!(
             target: "nemo_relay.daemon",
             event = "mcp_control_disconnected",
