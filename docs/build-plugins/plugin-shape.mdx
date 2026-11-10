@@ -17,9 +17,16 @@ installs those registrations through a component-scoped context.
 |---|---|
 | Stable identity | A language-binding plugin is registered under a kind; native and worker implementations report their plugin identity during loading or handshake. Configuration uses that identity in `components[].kind`. |
 | `validate` | Examines component-local JSON and returns [structured diagnostics](/build-plugins/fundamentals/configuration-and-validation) without installing behavior or performing lasting side effects. |
-| `register` | Receives the validated component configuration and a [`PluginContext`](/build-plugins/fundamentals/plugin-context), then installs the component's subscribers and middleware. The Rust language-binding hook returns a future. Python, Node.js, native, and worker hooks register synchronously, although many callbacks they install are asynchronous. |
-| `allows_multiple_components` | Declares whether one plugin implementation can back more than one configured component. The default differs by SDK, so an implementation should set or test the intended behavior instead of relying on assumption. |
+| `register` | Receives the validated component configuration and a [`PluginContext`](/build-plugins/fundamentals/plugin-context), then installs the component's subscribers and middleware. |
+| `allows_multiple_components` | Declares whether one plugin implementation can back more than one configured component. Rust traits default to `true`. Return `false` for a plugin that allows only one component. Set or test this behavior in other SDKs. |
 | Component ownership | Every registration made through the context belongs to the component being activated. Relay qualifies registration names and tracks cleanup on that component's behalf. |
+
+Rust plugin implementations must be `Send + Sync`. Their registration methods
+take `&self`, the configuration first, and a mutable registration context. Each
+returns a `PluginFuture`. This applies to built-in, native, and worker plugins.
+The host waits for registration to finish before activating the component.
+Python and Node.js registration hooks run synchronously. Installed middleware
+callbacks can be asynchronous.
 
 The lifecycle hooks use the same logical shape in every binding. These implementations
 all validate `tag` and install one component-owned subscriber. The callback spelling is
@@ -136,9 +143,8 @@ diagnostics cannot activate.
 For each valid, enabled component, Relay creates a registration context and calls the
 plugin's registration hook. A successful hook commits the registrations as active
 component state. If the hook fails after installing some behavior, Relay rolls back the
-partial registrations rather than leaving a half-active plugin. Dynamic loading adds a
-loader instance around the same component lifecycle; unloading does not begin until the
-component registrations have been cleared.
+partial registrations. Native and worker components follow the same ownership
+rules. Each component owns the callbacks and resources created during registration.
 
 The runtime report is the observable record of that process. It identifies loaded
 components and diagnostics, and it lets an application or deployment test distinguish
@@ -154,9 +160,10 @@ when activation fails or the owning activation closes.
 
 Language-binding applications close the owning activation to remove active plugin
 configuration. They can deregister a plugin kind when the implementation itself
-is no longer available. Dynamic hosts remove component registrations before unloading a native library or stopping a
-worker. Worker shutdown also ends in-flight callback service,
-closes the authenticated endpoint, and terminates the managed process.
+is no longer available. Dynamic hosts remove component registrations before
+stopping executors or workers. Native libraries stay loaded until process exit.
+Worker shutdown ends active callbacks, closes the authenticated endpoint, and
+terminates the managed process.
 
 ## Verify the Lifecycle
 
@@ -171,9 +178,9 @@ Use the following sequence to verify validation, activation, ownership, and tear
 5. Execute a representative managed call and observe the registration's effect rather
    than treating successful initialization as sufficient proof.
 6. Close the activation and verify that the same call no longer observes the plugin.
-7. For a dynamic plugin, unload or stop the implementation only after registrations are
-   gone.
+7. For a native component, verify that its tasks stop. For a worker, verify
+   that its process stops.
 
 Success means invalid configuration never changes runtime behavior, valid configuration
 produces an active report and an observable call-path effect, and teardown removes that
-effect without leaving a loaded dynamic instance or worker process behind.
+effect without leaving active component tasks, executors, or worker processes.

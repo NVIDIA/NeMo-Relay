@@ -106,10 +106,8 @@ requires provenance contract 1.
 All dynamic-plugin observations use state-only recording. Restricted detail and
 correlation stay in diagnostic storage. Logging and event export paths never
 receive them. Legacy reports also exclude them.
-Existing emitters and legacy reports retain their contracts. The optional native
-diagnostics table follows the frozen execution ABI-8 prefix. Execution ABI 8 and
-manifest native API 1 remain unchanged. Fixed layouts and borrowed byte spans
-cross that boundary. Core recorders and Rust-owned objects remain inside the host.
+Native diagnostics use the checked `v1.0` interface. Typed records and borrowed
+buffers cross the library boundary. Core recorders stay inside the host.
 
 The native SDK can record internal observations and return synchronous acceptance
 receipts. An explicit host-policy grant also permits whole-context snapshot and

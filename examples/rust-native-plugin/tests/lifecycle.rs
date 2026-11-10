@@ -31,7 +31,7 @@ const CONTROLLED_SUBSCRIBER: &str = "documentation-controlled-subscriber";
 const ALLOWED_SUBSCRIBER: &str = "documentation-observed-subscriber";
 
 #[tokio::test]
-async fn built_cdylib_validates_activates_runs_and_unloads() {
+async fn built_cdylib_validates_activates_runs_and_closes() {
     let _guard = TEST_LOCK.lock().await;
     let (_build_dir, build) = build_cdylib();
     let manifest_dir = TempDir::new().expect("manifest directory should be created");
@@ -133,7 +133,7 @@ async fn built_cdylib_validates_activates_runs_and_unloads() {
 
     activation
         .close()
-        .expect("callbacks should clear before the library unloads");
+        .expect("callbacks and executors should close while library code remains resident");
     tool_call_execute(
         ToolCallExecuteParams::builder()
             .name("restored_tool")
@@ -220,7 +220,7 @@ kind = "rust_dynamic"
 
 [compat]
 relay = ">=1.0.0,<2.0"
-native_api = "1"
+native_api = "v1.0"
 
 [defaults]
 enabled = false
@@ -236,7 +236,6 @@ sha256 = "{digest}"
 
 [load]
 library = {library}
-symbol = "nemo_relay_register_plugin"
 "#,
         ),
     )

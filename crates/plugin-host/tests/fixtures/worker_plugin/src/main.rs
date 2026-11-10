@@ -53,11 +53,12 @@ impl tokio_stream::Stream for CleanupStream {
 }
 
 impl WorkerPlugin for FixtureWorkerPlugin {
-    fn plugin_id(&self) -> &str {
+    fn plugin_kind(&self) -> &str {
         "fixture_worker"
     }
 
-    fn validate(&self, config: &Json) -> Vec<ConfigDiagnostic> {
+    fn validate(&self, config: &serde_json::Map<String, Json>) -> Vec<ConfigDiagnostic> {
+        let config = &Json::Object(config.clone());
         if config
             .get("exit_in_validate")
             .and_then(Json::as_bool)
@@ -81,202 +82,227 @@ impl WorkerPlugin for FixtureWorkerPlugin {
         Vec::new()
     }
 
-    fn register(&self, ctx: &mut PluginContext, config: &Json) -> nemo_relay_worker::Result<()> {
-        wait_for_registration_gate(config).map_err(WorkerSdkError::Callback)?;
-        if fixture_flag(config, "emit_internal_diagnostics") {
-            let runtime = ctx.runtime().expect("host runtime");
-            tokio::task::block_in_place(|| {
-                tokio::runtime::Handle::current().block_on(async move {
-                    use nemo_relay_worker::diagnostics::{
-                        DiagnosticExtensionDefinition, DiagnosticObservation,
-                        DiagnosticObservationOutcome, DiagnosticObservationSeverity,
-                        extension_code,
-                    };
-                    let diagnostics = runtime.diagnostics().await;
-                    let component = diagnostics
-                        .component(
-                            "fixture.internal",
-                            vec![extension_code(DiagnosticExtensionDefinition {
-                                name: "internal_attempt_failed".into(),
-                                description: "Internal fixture operation".into(),
-                                outcome: DiagnosticObservationOutcome::Failure as i32,
-                                allowed_failure_classes: vec!["unknown".into()],
-                            })],
-                        )
-                        .await
-                        .map_err(|error| WorkerSdkError::Callback(error.to_string()))?;
-                    for count in [2, 3] {
-                        component
-                            .try_record_lazy(|| DiagnosticObservation {
-                                code: 1,
-                                count,
-                                outcome: DiagnosticObservationOutcome::Failure as i32,
-                                severity: DiagnosticObservationSeverity::Error as i32,
-                                failure_class: Some("unknown".into()),
-                                detail: Some("restricted-worker-fixture-evidence".into()),
-                                ..Default::default()
-                            })
-                            .map_err(|error| WorkerSdkError::Callback(error.to_string()))?;
-                    }
-                    diagnostics
-                        .flush(std::time::Duration::from_secs(2))
-                        .await
-                        .map_err(|error| WorkerSdkError::Callback(error.to_string()))
-                })
-            })?;
-        }
-        if fixture_flag(config, "discover_observability") {
-            let runtime = ctx.runtime().expect("host runtime should be available");
-            let registrations = tokio::task::block_in_place(|| {
-                tokio::runtime::Handle::current().block_on(async move {
-                    runtime
-                        .list_runtime_registrations(Some(BTreeSet::from([
-                            RuntimeRegistrationKind::Subscriber,
-                        ])))
-                        .await
-                })
-            })?;
-            let targets = registrations
-                .into_iter()
-                .filter(|registration| {
-                    registration.local_name == "opentelemetry"
-                        && registration.owner.plugin_kind.as_deref() == Some("observability")
-                })
-                .collect::<Vec<_>>();
-            if targets.len() != 1 {
-                return Err(WorkerSdkError::Callback(format!(
-                    "expected one observability subscriber during registration; found {}",
-                    targets.len()
-                )));
-            }
-            ctx.register_conditional_middleware_guardrail(
-                "discovered_observability_gate",
-                BTreeSet::from([RuntimeRegistrationKind::Subscriber]),
-                &targets[0].effective_name,
-                |_, _| async { Ok(Some("fixture export policy".into())) },
-            );
-        }
-        if fixture_flag(config, "exit_in_register") {
-            std::process::exit(43);
-        }
-        if fixture_flag(config, "register_error") {
-            return Err(WorkerSdkError::Callback(
-                "fixture registration error requested".into(),
-            ));
-        }
-        if fixture_flag(config, "empty_registration_name") {
-            ctx.register_subscriber("", |_| {});
-            return Ok(());
-        }
+    fn allows_multiple_components(&self) -> bool {
+        std::env::var_os("NEMO_RELAY_TEST_WORKER_MULTIPLE_COMPONENTS").is_some()
+    }
 
-        let event_metadata_injector_error = fixture_flag(config, "event_metadata_injector_error");
-        let exit_in_event_metadata_injector =
-            fixture_flag(config, "exit_in_event_metadata_injector");
-        ctx.register_event_metadata_injector(
-            "fixture_event_metadata_injector",
-            0,
-            move |event| async move {
-                if exit_in_event_metadata_injector {
-                    std::process::exit(44);
+    fn register<'a>(
+        &'a self,
+        config: &'a serde_json::Map<String, Json>,
+        ctx: &'a mut PluginContext,
+    ) -> nemo_relay_worker::PluginFuture<'a, ()> {
+        Box::pin(async move {
+            let config = &Json::Object(config.clone());
+            let result: nemo_relay_worker::Result<()> = async move {
+                tokio::task::block_in_place(|| wait_for_registration_gate(config))
+                    .map_err(WorkerSdkError::Callback)?;
+                if fixture_flag(config, "emit_internal_diagnostics") {
+                    let runtime = ctx.runtime().expect("host runtime");
+                    tokio::task::block_in_place(|| {
+                        tokio::runtime::Handle::current().block_on(async move {
+                            use nemo_relay_worker::diagnostics::{
+                                DiagnosticExtensionDefinition, DiagnosticObservation,
+                                DiagnosticObservationOutcome, DiagnosticObservationSeverity,
+                                extension_code,
+                            };
+                            let diagnostics = runtime.diagnostics().await;
+                            let component = diagnostics
+                                .component(
+                                    "fixture.internal",
+                                    vec![extension_code(DiagnosticExtensionDefinition {
+                                        name: "internal_attempt_failed".into(),
+                                        description: "Internal fixture operation".into(),
+                                        outcome: DiagnosticObservationOutcome::Failure as i32,
+                                        allowed_failure_classes: vec!["unknown".into()],
+                                    })],
+                                )
+                                .await
+                                .map_err(|error| WorkerSdkError::Callback(error.to_string()))?;
+                            for count in [2, 3] {
+                                component
+                                    .try_record_lazy(|| DiagnosticObservation {
+                                        code: 1,
+                                        count,
+                                        outcome: DiagnosticObservationOutcome::Failure as i32,
+                                        severity: DiagnosticObservationSeverity::Error as i32,
+                                        failure_class: Some("unknown".into()),
+                                        detail: Some("restricted-worker-fixture-evidence".into()),
+                                        ..Default::default()
+                                    })
+                                    .map_err(|error| WorkerSdkError::Callback(error.to_string()))?;
+                            }
+                            diagnostics
+                                .flush(std::time::Duration::from_secs(2))
+                                .await
+                                .map_err(|error| WorkerSdkError::Callback(error.to_string()))
+                        })
+                    })?;
                 }
-                if event_metadata_injector_error {
-                    return Err(WorkerSdkError::Callback(
-                        "fixture Event metadata injector error requested".into(),
-                    ));
-                }
-                let mut additions = BTreeMap::new();
-                if event
-                    .name()
-                    .starts_with("external-plugin-event-metadata-injection")
-                {
-                    additions.insert(
-                        "external.injector.transport".into(),
-                        json!("rust_grpc_worker"),
+                if fixture_flag(config, "discover_observability") {
+                    let runtime = ctx.runtime().expect("host runtime should be available");
+                    let registrations = tokio::task::block_in_place(|| {
+                        tokio::runtime::Handle::current().block_on(async move {
+                            runtime
+                                .list_runtime_registrations(Some(BTreeSet::from([
+                                    RuntimeRegistrationKind::Subscriber,
+                                ])))
+                                .await
+                        })
+                    })?;
+                    let targets = registrations
+                        .into_iter()
+                        .filter(|registration| {
+                            registration.local_name == "opentelemetry"
+                                && registration.owner.plugin_kind.as_deref()
+                                    == Some("observability")
+                        })
+                        .collect::<Vec<_>>();
+                    if targets.len() != 1 {
+                        return Err(WorkerSdkError::Callback(format!(
+                            "expected one observability subscriber during registration; found {}",
+                            targets.len()
+                        )));
+                    }
+                    ctx.register_conditional_middleware_guardrail(
+                        "discovered_observability_gate",
+                        BTreeSet::from([RuntimeRegistrationKind::Subscriber]),
+                        &targets[0].effective_name,
+                        |_, _| async { Ok(Some("fixture export policy".into())) },
                     );
                 }
-                Ok(additions)
-            },
-        );
-        if fixture_flag(config, "event_metadata_injector_only") {
-            return Ok(());
-        }
-        let runtime = ctx
-            .runtime()
-            .ok_or_else(|| WorkerSdkError::Callback("runtime handle missing".into()))?;
-        ctx.register_mark_sanitize_guardrail("fixture_mark_sanitize", 0, |_, fields| async move {
-            Ok(mark_event_fields(fields, "worker_plugin_mark"))
-        });
-        ctx.register_mark_sanitize_guardrail(
-            "fixture_mark_sanitize_data",
-            1,
-            |event, mut fields| {
-                let is_metric = event
-                    .data_schema()
-                    .is_some_and(|schema| schema.name == METRIC_DATA_SCHEMA_NAME);
-                async move {
-                    if !is_metric {
-                        fields.data = Some(json!({"worker_plugin_mark_data": true}));
-                    }
-                    Ok(fields)
+                if fixture_flag(config, "exit_in_register") {
+                    std::process::exit(43);
                 }
-            },
-        );
-        let nested_publication_runtime = runtime.clone();
-        ctx.register_mark_sanitize_guardrail(
-            "fixture_nested_publication_order",
-            2,
-            move |event, fields| {
-                let runtime = nested_publication_runtime.clone();
-                let emit_nested = event.name() == "worker-nested-order-outer";
-                async move {
-                    if emit_nested {
-                        tokio::time::sleep(std::time::Duration::from_millis(100)).await;
-                        runtime
-                            .emit_mark("worker-nested-order-inner", None, None)
-                            .await?;
-                    }
-                    Ok(fields)
+                if fixture_flag(config, "register_error") {
+                    return Err(WorkerSdkError::Callback(
+                        "fixture registration error requested".into(),
+                    ));
                 }
-            },
-        );
-        ctx.register_scope_sanitize_start_guardrail(
-            "fixture_scope_start_sanitize",
-            0,
-            |_, fields| async move { Ok(mark_event_fields(fields, "worker_plugin_scope_start")) },
-        );
-        ctx.register_scope_sanitize_end_guardrail(
+                if fixture_flag(config, "empty_registration_name") {
+                    ctx.register_subscriber("", |_| {});
+                    return Ok(());
+                }
+
+                let event_metadata_injector_error =
+                    fixture_flag(config, "event_metadata_injector_error");
+                let exit_in_event_metadata_injector =
+                    fixture_flag(config, "exit_in_event_metadata_injector");
+                ctx.register_event_metadata_injector(
+                    "fixture_event_metadata_injector",
+                    0,
+                    move |event| async move {
+                        if exit_in_event_metadata_injector {
+                            std::process::exit(44);
+                        }
+                        if event_metadata_injector_error {
+                            return Err(WorkerSdkError::Callback(
+                                "fixture Event metadata injector error requested".into(),
+                            ));
+                        }
+                        let mut additions = BTreeMap::new();
+                        if event
+                            .name()
+                            .starts_with("external-plugin-event-metadata-injection")
+                        {
+                            additions.insert(
+                                "external.injector.transport".into(),
+                                json!("rust_grpc_worker"),
+                            );
+                        }
+                        Ok(additions)
+                    },
+                );
+                if fixture_flag(config, "event_metadata_injector_only") {
+                    return Ok(());
+                }
+                let runtime = ctx
+                    .runtime()
+                    .ok_or_else(|| WorkerSdkError::Callback("runtime handle missing".into()))?;
+                ctx.register_mark_sanitize_guardrail(
+                    "fixture_mark_sanitize",
+                    0,
+                    |_, fields| async move { Ok(mark_event_fields(fields, "worker_plugin_mark")) },
+                );
+                ctx.register_mark_sanitize_guardrail(
+                    "fixture_mark_sanitize_data",
+                    1,
+                    |event, mut fields| {
+                        let is_metric = event
+                            .data_schema()
+                            .is_some_and(|schema| schema.name == METRIC_DATA_SCHEMA_NAME);
+                        async move {
+                            if !is_metric {
+                                fields.data = Some(json!({"worker_plugin_mark_data": true}));
+                            }
+                            Ok(fields)
+                        }
+                    },
+                );
+                let nested_publication_runtime = runtime.clone();
+                ctx.register_mark_sanitize_guardrail(
+                    "fixture_nested_publication_order",
+                    2,
+                    move |event, fields| {
+                        let runtime = nested_publication_runtime.clone();
+                        let emit_nested = event.name() == "worker-nested-order-outer";
+                        async move {
+                            if emit_nested {
+                                tokio::time::sleep(std::time::Duration::from_millis(100)).await;
+                                runtime
+                                    .emit_mark("worker-nested-order-inner", None, None)
+                                    .await?;
+                            }
+                            Ok(fields)
+                        }
+                    },
+                );
+                ctx.register_scope_sanitize_start_guardrail(
+                    "fixture_scope_start_sanitize",
+                    0,
+                    |_, fields| async move {
+                        Ok(mark_event_fields(fields, "worker_plugin_scope_start"))
+                    },
+                );
+                ctx.register_scope_sanitize_end_guardrail(
             "fixture_scope_end_sanitize",
             0,
             |_, fields| async move { Ok(mark_event_fields(fields, "worker_plugin_scope_end")) },
         );
-        register_fixture_subscriber(ctx, runtime.clone());
-        ctx.register_conditional_middleware_guardrail(
-            "fixture_initial_gate",
-            BTreeSet::from([RuntimeRegistrationKind::Subscriber]),
-            "fixture_worker_gate_target",
-            |_, _| async { Ok(Some("fixture initial gate".into())) },
-        );
-        if fixture_flag(config, "inspect_execution_snapshots") {
-            register_snapshot_hooks(ctx, runtime.clone());
-        }
-        register_fixture_tool_hooks(
-            ctx,
-            runtime.clone(),
-            fixture_flag(config, "block_tool"),
-            fixture_flag(config, "tool_request_error"),
-            fixture_flag(config, "exit_in_tool_request"),
-            fixture_flag(config, "emit_tokenomics_metric"),
-        );
-        register_fixture_llm_hooks(
-            ctx,
-            runtime,
-            fixture_flag(config, "llm_request_error"),
-            fixture_flag(config, "llm_stream_open_error"),
-        );
-        Ok(())
+                register_fixture_subscriber(ctx, runtime.clone());
+                ctx.register_conditional_middleware_guardrail(
+                    "fixture_initial_gate",
+                    BTreeSet::from([RuntimeRegistrationKind::Subscriber]),
+                    "fixture_worker_gate_target",
+                    |_, _| async { Ok(Some("fixture initial gate".into())) },
+                );
+                if fixture_flag(config, "inspect_execution_snapshots") {
+                    register_snapshot_hooks(ctx, runtime.clone());
+                }
+                register_fixture_tool_hooks(
+                    ctx,
+                    runtime.clone(),
+                    fixture_flag(config, "block_tool"),
+                    fixture_flag(config, "tool_request_error"),
+                    fixture_flag(config, "exit_in_tool_request"),
+                    fixture_flag(config, "emit_tokenomics_metric"),
+                );
+                register_fixture_llm_hooks(
+                    ctx,
+                    runtime,
+                    fixture_flag(config, "llm_request_error"),
+                    fixture_flag(config, "llm_stream_open_error"),
+                );
+                Ok(())
+            }
+            .await;
+            result.map_err(|error| {
+                nemo_relay_worker::PluginError::RegistrationFailed(error.to_string())
+            })
+        })
     }
 }
 
+/// Hold registration until the process test releases its gate, or report a fixture error.
 fn wait_for_registration_gate(config: &Json) -> Result<(), String> {
     let Some(directory) = config.get("register_gate_directory") else {
         return Ok(());
@@ -306,7 +332,9 @@ fn wait_for_registration_gate(config: &Json) -> Result<(), String> {
         )
     })?;
     let release = directory.join("release");
-    // Safety bound beyond the process test's MCP and cleanup observation windows.
+    // Process-test exception: see WAIT in
+    // crates/cli/tests/daemon_worker_idle_tests.rs. Test teardown releases this
+    // gate before reaping processes, including when an assertion fails.
     let deadline = std::time::Instant::now() + std::time::Duration::from_secs(300);
     loop {
         match std::fs::metadata(&release) {

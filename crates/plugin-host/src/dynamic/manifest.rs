@@ -285,6 +285,19 @@ pub struct DynamicPluginManifestIntegrity {
     /// Optional signature reference.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub signature: Option<String>,
+    /// Integrity evidence for each package-local native dependency, keyed by package-relative path.
+    #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
+    pub dependencies: BTreeMap<String, DynamicPluginDependencyIntegrity>,
+}
+
+/// Digest and optional detached signature for one native dependency.
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq, schemars::JsonSchema)]
+pub struct DynamicPluginDependencyIntegrity {
+    /// Expected SHA-256 digest of the dependency bytes.
+    pub sha256: String,
+    /// Detached signature reference, relative to the plugin manifest.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub signature: Option<String>,
 }
 
 impl DynamicPluginManifest {
@@ -363,6 +376,7 @@ impl DynamicPluginManifest {
         Ok(())
     }
 
+    /// Check manifest fields and enforce the loading requirements for the declared plugin kind.
     fn validate_structure(&self) -> Result<()> {
         if self.manifest_version != 1 {
             return Err(PluginError::InvalidConfig(format!(
@@ -402,6 +416,23 @@ impl DynamicPluginManifest {
                 .and_then(|integrity| integrity.signature.as_deref()),
             "integrity.signature",
         )?;
+        if let Some(integrity) = &self.integrity {
+            for (path, evidence) in &integrity.dependencies {
+                if self.plugin.kind != DynamicPluginKind::RustDynamic
+                    || path.contains(['\\', ':'])
+                    || path.split('/').any(|part| matches!(part, "" | "." | ".."))
+                {
+                    return Err(PluginError::InvalidConfig(
+                        "integrity.dependencies requires native package-relative file paths".into(),
+                    ));
+                }
+                ensure_optional_string_non_empty(Some(&evidence.sha256), "dependency.sha256")?;
+                ensure_optional_string_non_empty(
+                    evidence.signature.as_deref(),
+                    "dependency.signature",
+                )?;
+            }
+        }
 
         validate_dynamic_plugin_relay_baseline(self.compat.relay.as_deref(), "dynamic")?;
         if self.capabilities.items.is_empty() {
@@ -420,6 +451,14 @@ impl DynamicPluginManifest {
 
         validate_capability_shape(self.plugin.kind, &self.capabilities.items)?;
         validate_load_shape(self.plugin.kind, &self.load)?;
+        if self.compat.native_api.as_deref() != Some("1")
+            && let DynamicPluginManifestLoad::RustDynamic(load) = &self.load
+            && load.symbol.is_some()
+        {
+            return Err(PluginError::InvalidConfig(
+                "load.symbol is unsupported; use the checked standard bootstrap header".into(),
+            ));
+        }
         validate_compat_shape(self.plugin.kind, &self.compat)?;
         Ok(())
     }
@@ -714,7 +753,6 @@ fn validate_load_shape(kind: DynamicPluginKind, load: &DynamicPluginManifestLoad
         }
         (DynamicPluginKind::RustDynamic, DynamicPluginManifestLoad::RustDynamic(load)) => {
             required_trimmed_string(load.library.as_deref(), "load.library")?;
-            required_trimmed_string(load.symbol.as_deref(), "load.symbol")?;
         }
         (DynamicPluginKind::Worker, DynamicPluginManifestLoad::Worker(load)) => {
             required_trimmed_string(load.entrypoint.as_deref(), "load.entrypoint")?;
@@ -786,17 +824,14 @@ impl DynamicPluginManifestLoad {
                         .expect("validated rust_dynamic manifest must carry load.library")
                         .trim()
                         .to_owned(),
-                    symbol: load
-                        .symbol
-                        .expect("validated rust_dynamic manifest must carry load.symbol")
-                        .trim()
-                        .to_owned(),
+                    symbol: load.symbol.unwrap_or_default(),
                 })
             }
         }
     }
 }
 
+/// Check that compatibility declarations use the required version syntax for their plugin kind.
 fn validate_compat_shape(
     kind: DynamicPluginKind,
     compat: &DynamicPluginManifestCompat,
@@ -805,10 +840,10 @@ fn validate_compat_shape(
         DynamicPluginKind::RustDynamic => {
             let native_api =
                 required_trimmed_string(compat.native_api.as_deref(), "compat.native_api")?;
-            if native_api.trim() != "1" {
-                return Err(PluginError::InvalidConfig(
-                    "rust_dynamic plugins must declare compat.native_api = \"1\"".into(),
-                ));
+            if native_api != "1" {
+                native_api
+                    .parse::<nemo_relay_plugin::abi::NativeApiVersion>()
+                    .map_err(|e| PluginError::InvalidConfig(e.to_string()))?;
             }
             if compat.worker_protocol.is_some() {
                 return Err(PluginError::InvalidConfig(

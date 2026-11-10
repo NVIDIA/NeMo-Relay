@@ -80,7 +80,7 @@ def native_dynamic_plugin(tmp_path_factory: pytest.TempPathFactory) -> _BuiltPlu
 
             [compat]
             relay = ">=1.0.0,<2.0"
-            native_api = "1"
+            native_api = "v1.0"
 
             [defaults]
             enabled = false
@@ -96,7 +96,6 @@ def native_dynamic_plugin(tmp_path_factory: pytest.TempPathFactory) -> _BuiltPlu
 
             [load]
             library = {json.dumps(str(library))}
-            symbol = "nemo_relay_fixture_native_plugin"
             """
         )
     )

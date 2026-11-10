@@ -17,6 +17,13 @@ use serde_json::{Value, json};
 use sha2::{Digest, Sha256};
 use sysinfo::{Pid, ProcessRefreshKind, ProcessStatus, ProcessesToUpdate, System};
 
+// Process-test exception to the five-second synchronization guard: fresh MCP
+// processes must start and disconnect while plugin registration stays blocked.
+// Initialization, process exit, stdout EOF, and disconnect checks each get WAIT,
+// and two MCP sessions run before release_gate. The fixture's 300-second bound
+// outlasts those sequential checks; each failed observation still fails at WAIT.
+// IdleDaemon::drop releases the gate and reaps owned processes on test failure,
+// so test teardown does not wait for the fixture's last-resort deadline.
 const WAIT: Duration = Duration::from_secs(15);
 // Allow the existing request-drain interval plus test observation slack.
 const EXIT_WAIT: Duration = Duration::from_secs(150);
