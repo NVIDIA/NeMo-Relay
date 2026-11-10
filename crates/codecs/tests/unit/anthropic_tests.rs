@@ -4,6 +4,7 @@
 //! Unit tests for anthropic in the NeMo Relay core crate.
 
 use super::*;
+use crate::response::CacheWriteTokenCounts;
 use serde_json::json;
 
 use super::super::request::{
@@ -91,8 +92,19 @@ fn test_decode_full_response() {
     assert_eq!(usage.completion_tokens, Some(256));
     assert_eq!(usage.total_tokens, Some(1280));
     assert_eq!(usage.cache_read_tokens, Some(0));
-    assert_eq!(usage.cache_write_tokens, Some(512));
-    assert_eq!(usage.cache_write_1h_tokens, Some(200));
+    assert_eq!(
+        usage.cache_write_tokens,
+        Some(vec![
+            CacheWriteTokenCounts {
+                count: 312,
+                duration: Some(300)
+            },
+            CacheWriteTokenCounts {
+                count: 200,
+                duration: Some(3_600)
+            }
+        ])
+    );
 }
 
 #[test]
@@ -142,8 +154,19 @@ fn test_decode_response_usage_prefers_iteration_totals() {
     assert_eq!(usage.completion_tokens, Some(283));
     assert_eq!(usage.total_tokens, Some(438));
     assert_eq!(usage.cache_read_tokens, Some(23));
-    assert_eq!(usage.cache_write_tokens, Some(35));
-    assert_eq!(usage.cache_write_1h_tokens, Some(22));
+    assert_eq!(
+        usage.cache_write_tokens,
+        Some(vec![
+            CacheWriteTokenCounts {
+                count: 13,
+                duration: Some(300)
+            },
+            CacheWriteTokenCounts {
+                count: 22,
+                duration: Some(3_600)
+            }
+        ])
+    );
 }
 
 #[test]
@@ -173,8 +196,19 @@ fn test_decode_response_uses_matching_top_level_one_hour_split_when_iterations_o
         .usage
         .unwrap();
 
-    assert_eq!(usage.cache_write_tokens, Some(50));
-    assert_eq!(usage.cache_write_1h_tokens, Some(20));
+    assert_eq!(
+        usage.cache_write_tokens,
+        Some(vec![
+            CacheWriteTokenCounts {
+                count: 30,
+                duration: Some(300)
+            },
+            CacheWriteTokenCounts {
+                count: 20,
+                duration: Some(3_600)
+            }
+        ])
+    );
 }
 
 #[test]
@@ -204,8 +238,13 @@ fn test_decode_response_does_not_apply_top_level_split_to_larger_iteration_total
         .usage
         .unwrap();
 
-    assert_eq!(usage.cache_write_tokens, Some(70));
-    assert_eq!(usage.cache_write_1h_tokens, None);
+    assert_eq!(
+        usage.cache_write_tokens,
+        Some(vec![CacheWriteTokenCounts {
+            count: 70,
+            duration: None
+        }])
+    );
 }
 
 #[test]
@@ -349,7 +388,7 @@ fn test_decode_response_usage_mapping() {
     assert_eq!(usage.completion_tokens, Some(50));
     assert_eq!(usage.total_tokens, Some(150));
     assert_eq!(usage.cache_read_tokens, Some(25));
-    assert_eq!(usage.cache_write_tokens, Some(10));
+    assert_eq!(usage.cache_write_total(), Some(10));
     assert_eq!(usage.uncached_input_tokens, Some(100));
 }
 
@@ -1711,7 +1750,7 @@ fn anthropic_streaming_codec_preserves_usage_across_partial_updates() {
     assert_eq!(usage.completion_tokens, Some(5));
     assert_eq!(usage.total_tokens, Some(105));
     assert_eq!(usage.cache_read_tokens, Some(25));
-    assert_eq!(usage.cache_write_tokens, Some(10));
+    assert_eq!(usage.cache_write_total(), Some(10));
 }
 
 #[test]
@@ -1784,6 +1823,199 @@ fn anthropic_streaming_codec_accumulates_live_compaction_shape() {
             json!({"applied_edits": []})
         );
     }
+}
+
+#[test]
+fn anthropic_streaming_codec_preserves_extended_thinking_text_and_signature() {
+    let codec = AnthropicMessagesStreamingCodec::new();
+    let mut collector = codec.collector();
+    let finalizer = codec.finalizer();
+
+    for event in [
+        json!({
+            "type": "message_start", "message": {
+                "id": "msg_thinking", "type": "message", "role": "assistant",
+                "model": "claude-sonnet-4-6", "content": [],
+                "usage": {"input_tokens": 10, "output_tokens": 0}
+            }
+        }),
+        json!({
+            "type": "content_block_start", "index": 0,
+            "content_block": {"type": "thinking", "thinking": "", "signature": ""}
+        }),
+        json!({
+            "type": "content_block_delta", "index": 0,
+            "delta": {"type": "thinking_delta", "thinking": "Let me think."}
+        }),
+        json!({
+            "type": "content_block_delta", "index": 0,
+            "delta": {"type": "signature_delta", "signature": "EqQBCkYIBRgCKkA"}
+        }),
+        json!({"type": "content_block_stop", "index": 0}),
+        json!({
+            "type": "message_delta",
+            "delta": {"stop_reason": "end_turn", "stop_sequence": null},
+            "usage": {"input_tokens": 10, "output_tokens": 5}
+        }),
+        json!({"type": "message_stop"}),
+    ] {
+        collector(event).unwrap();
+    }
+
+    let aggregate = finalizer();
+    assert_eq!(
+        aggregate["content"][0],
+        json!({
+            "type": "thinking",
+            "thinking": "Let me think.",
+            "signature": "EqQBCkYIBRgCKkA"
+        })
+    );
+}
+
+#[test]
+fn anthropic_streaming_codec_accumulates_thinking_split_across_deltas() {
+    let codec = AnthropicMessagesStreamingCodec::new();
+    let mut collector = codec.collector();
+    let finalizer = codec.finalizer();
+
+    for event in [
+        json!({
+            "type": "message_start", "message": {
+                "id": "msg_thinking_split", "type": "message", "role": "assistant",
+                "model": "claude-sonnet-4-6", "content": [],
+                "usage": {"input_tokens": 10, "output_tokens": 0}
+            }
+        }),
+        json!({
+            "type": "content_block_start", "index": 0,
+            "content_block": {"type": "thinking", "thinking": "", "signature": ""}
+        }),
+        json!({
+            "type": "content_block_delta", "index": 0,
+            "delta": {"type": "thinking_delta", "thinking": "Let me "}
+        }),
+        json!({
+            "type": "content_block_delta", "index": 0,
+            "delta": {"type": "thinking_delta", "thinking": "think."}
+        }),
+        json!({
+            "type": "content_block_delta", "index": 0,
+            "delta": {"type": "signature_delta", "signature": "first-half-"}
+        }),
+        json!({
+            "type": "content_block_delta", "index": 0,
+            "delta": {"type": "signature_delta", "signature": "second-half"}
+        }),
+        json!({"type": "content_block_stop", "index": 0}),
+        json!({
+            "type": "message_delta",
+            "delta": {"stop_reason": "end_turn", "stop_sequence": null},
+            "usage": {"input_tokens": 10, "output_tokens": 5}
+        }),
+        json!({"type": "message_stop"}),
+    ] {
+        collector(event).unwrap();
+    }
+
+    let aggregate = finalizer();
+    assert_eq!(
+        aggregate["content"][0],
+        json!({
+            "type": "thinking",
+            "thinking": "Let me think.",
+            "signature": "first-half-second-half"
+        })
+    );
+}
+
+#[test]
+fn anthropic_streaming_codec_keeps_thinking_block_shape_when_no_delta_arrives() {
+    // `content_block_start` is the only place a thinking block's shape is declared. A block that
+    // receives neither a `thinking_delta` nor a `signature_delta` must keep that shape with the
+    // fields preserved and empty rather than having them dropped.
+    let codec = AnthropicMessagesStreamingCodec::new();
+    let mut collector = codec.collector();
+    let finalizer = codec.finalizer();
+
+    for event in [
+        json!({
+            "type": "message_start", "message": {
+                "id": "msg_thinking_empty", "type": "message", "role": "assistant",
+                "model": "claude-sonnet-4-6", "content": [],
+                "usage": {"input_tokens": 10, "output_tokens": 0}
+            }
+        }),
+        json!({
+            "type": "content_block_start", "index": 0,
+            "content_block": {"type": "thinking", "thinking": "", "signature": ""}
+        }),
+        json!({"type": "content_block_stop", "index": 0}),
+        json!({
+            "type": "message_delta",
+            "delta": {"stop_reason": "end_turn", "stop_sequence": null},
+            "usage": {"input_tokens": 10, "output_tokens": 0}
+        }),
+        json!({"type": "message_stop"}),
+    ] {
+        collector(event).unwrap();
+    }
+
+    let aggregate = finalizer();
+    assert_eq!(
+        aggregate["content"][0],
+        json!({
+            "type": "thinking",
+            "thinking": "",
+            "signature": ""
+        })
+    );
+}
+
+#[test]
+fn anthropic_streaming_codec_preserves_signature_without_thinking_text() {
+    // Thinking content can be withheld while the signature still arrives; the block has to keep
+    // the empty `thinking` field and the signature it actually received.
+    let codec = AnthropicMessagesStreamingCodec::new();
+    let mut collector = codec.collector();
+    let finalizer = codec.finalizer();
+
+    for event in [
+        json!({
+            "type": "message_start", "message": {
+                "id": "msg_thinking_redacted", "type": "message", "role": "assistant",
+                "model": "claude-sonnet-4-6", "content": [],
+                "usage": {"input_tokens": 10, "output_tokens": 0}
+            }
+        }),
+        json!({
+            "type": "content_block_start", "index": 0,
+            "content_block": {"type": "thinking", "thinking": "", "signature": ""}
+        }),
+        json!({
+            "type": "content_block_delta", "index": 0,
+            "delta": {"type": "signature_delta", "signature": "EqQBCkYIBRgCKkA"}
+        }),
+        json!({"type": "content_block_stop", "index": 0}),
+        json!({
+            "type": "message_delta",
+            "delta": {"stop_reason": "end_turn", "stop_sequence": null},
+            "usage": {"input_tokens": 10, "output_tokens": 0}
+        }),
+        json!({"type": "message_stop"}),
+    ] {
+        collector(event).unwrap();
+    }
+
+    let aggregate = finalizer();
+    assert_eq!(
+        aggregate["content"][0],
+        json!({
+            "type": "thinking",
+            "thinking": "",
+            "signature": "EqQBCkYIBRgCKkA"
+        })
+    );
 }
 
 #[test]

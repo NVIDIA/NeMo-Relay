@@ -712,7 +712,7 @@ async def shutdown_runtime(runtime):
                     &json!({
                         "completion_tokens": 2,
                         "cache_read_tokens": 0,
-                        "cache_write_tokens": 0
+                        "cache_write_tokens": [{"count": 0}]
                     }),
                 )
                 .unwrap()

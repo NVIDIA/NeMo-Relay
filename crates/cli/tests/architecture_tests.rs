@@ -681,7 +681,7 @@ fn shared_runtime_subsystems_do_not_dispatch_host_variants() {
         "installation",
         "process",
         "configuration",
-        "diagnostics",
+        "doctor",
         "gateway",
         "sessions",
         "hooks",

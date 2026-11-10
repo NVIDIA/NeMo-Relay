@@ -9,6 +9,7 @@
 //! less than the others, the divergence is asserted explicitly so drift from
 //! the documented behavior fails loudly instead of silently.
 
+use nemo_relay_types::codec::response::CacheWriteTokenCounts;
 use std::collections::HashMap;
 use std::sync::Arc;
 
@@ -436,8 +437,10 @@ fn test_exporters_omit_partial_model_pricing_totals_consistently() {
                             completion_tokens: Some(500),
                             total_tokens: Some(1_500),
                             cache_read_tokens: Some(200),
-                            cache_write_tokens: Some(10),
-                            cache_write_1h_tokens: None,
+                            cache_write_tokens: Some(vec![CacheWriteTokenCounts {
+                                count: 10,
+                                duration: None,
+                            }]),
                             uncached_input_tokens: None,
                             cost: Some(CostEstimate {
                                 total: None,

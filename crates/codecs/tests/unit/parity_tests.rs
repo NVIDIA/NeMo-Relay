@@ -439,7 +439,6 @@ fn test_response_usage_parity() {
         total_tokens: Some(1500),
         cache_read_tokens: Some(200),
         cache_write_tokens: None,
-        cache_write_1h_tokens: None,
         uncached_input_tokens: Some(800),
         cost: None,
     };
@@ -457,7 +456,6 @@ fn test_response_usage_parity() {
             total_tokens: Some(1500),
             cache_read_tokens: Some(200),
             cache_write_tokens: None,
-            cache_write_1h_tokens: None,
             uncached_input_tokens: Some(1000),
             cost: None,
         })
@@ -479,7 +477,7 @@ fn test_response_usage_schema_specific_extras() {
     // Only Anthropic reports prompt-cache writes, so cache_write_tokens is
     // populated for Anthropic alone.
     assert_eq!(
-        anthropic.usage.as_ref().unwrap().cache_write_tokens,
+        anthropic.usage.as_ref().unwrap().cache_write_total(),
         Some(64)
     );
     assert_eq!(chat.usage.as_ref().unwrap().cache_write_tokens, None);

@@ -18,6 +18,20 @@ impl nemo_relay_types::codec::normalization::LlmNormalizer for RuntimeObservabil
     ) -> Option<nemo_relay_types::codec::response::AnnotatedLlmResponse> {
         nemo_relay_runtime::codec::RuntimeLlmNormalizer.normalize_response(response)
     }
+
+    fn telemetry_request<'a>(
+        &self,
+        request: std::borrow::Cow<'a, nemo_relay_types::codec::request::AnnotatedLlmRequest>,
+    ) -> std::borrow::Cow<'a, nemo_relay_types::codec::request::AnnotatedLlmRequest> {
+        nemo_relay_runtime::codec::RuntimeLlmNormalizer.telemetry_request(request)
+    }
+    fn telemetry_tool_calls(
+        &self,
+        annotation: Option<&nemo_relay_types::codec::response::AnnotatedLlmResponse>,
+        output: Option<&nemo_relay_types::Json>,
+    ) -> Option<Vec<nemo_relay_types::codec::normalization::TelemetryToolCall>> {
+        nemo_relay_runtime::codec::RuntimeLlmNormalizer.telemetry_tool_calls(annotation, output)
+    }
 }
 impl nemo_relay_observability::host::ObservabilityHost for RuntimeObservabilityHost {
     fn pricing_snapshot(
@@ -38,6 +52,9 @@ impl nemo_relay_observability::host::ObservabilityHost for RuntimeObservabilityH
     }
     fn flush_subscribers(&self) -> nemo_relay_types::error::Result<()> {
         nemo_relay_runtime::api::subscriber::flush_subscribers()
+    }
+    fn prepare_delivery(&self, work: Box<dyn FnOnce() + Send>) -> Box<dyn FnOnce() + Send> {
+        nemo_relay_runtime::api::runtime::subscriber_dispatcher::prepare_subscriber_delivery(work)
     }
     fn w3c_span_context(
         &self,

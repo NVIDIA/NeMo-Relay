@@ -1,8 +1,6 @@
 // SPDX-FileCopyrightText: Copyright (c) 2026, NVIDIA CORPORATION & AFFILIATES. All rights reserved.
 // SPDX-License-Identifier: Apache-2.0
 
-//! Semantic resource metric unit enums exposed to JavaScript and TypeScript.
-
 use napi_derive::napi;
 
 /// Units for duration measurements.
@@ -66,7 +64,10 @@ pub enum DataUnit {
 
 /// Units for bandwidth measurements.
 #[napi(string_enum = "snake_case")]
-#[allow(clippy::enum_variant_names)] // Preserve canonical unit names, including per-second denominators.
+#[expect(
+    clippy::enum_variant_names,
+    reason = "canonical unit names keep their per-second denominators"
+)]
 pub enum BandwidthUnit {
     /// Bytes per second.
     BytesPerSecond,

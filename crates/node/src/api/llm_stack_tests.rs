@@ -14,12 +14,8 @@ use nemo_relay_runtime::api::runtime::LlmJsonStream;
 use serde_json::json;
 use tokio_stream::StreamExt;
 
-/// Poll the Node binding's core LLM futures on a bounded native worker stack.
 #[test]
 fn llm_futures_complete_on_a_constrained_native_polling_stack() {
-    // JavaScript Worker limits cannot constrain napi-rs's Tokio threads.
-    // Bound the actual polling worker to 1 MiB. Spawning the task keeps core
-    // future construction and polling off this test's caller thread.
     let runtime = tokio::runtime::Builder::new_multi_thread()
         .worker_threads(1)
         .thread_stack_size(1024 * 1024)

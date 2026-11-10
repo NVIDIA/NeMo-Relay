@@ -771,6 +771,8 @@ fn provider_routes_preserve_path_query_and_choose_upstream() {
         max_hook_payload_bytes: crate::configuration::DEFAULT_MAX_HOOK_PAYLOAD_BYTES,
         launched_agent: None,
         max_passthrough_body_bytes: crate::configuration::DEFAULT_MAX_PASSTHROUGH_BODY_BYTES,
+        openai_oidc: None,
+        anthropic_oidc: None,
     };
 
     assert_eq!(
@@ -828,6 +830,8 @@ fn openai_upstream_url_accepts_origin_or_v1_base() {
         max_hook_payload_bytes: crate::configuration::DEFAULT_MAX_HOOK_PAYLOAD_BYTES,
         launched_agent: None,
         max_passthrough_body_bytes: crate::configuration::DEFAULT_MAX_PASSTHROUGH_BODY_BYTES,
+        openai_oidc: None,
+        anthropic_oidc: None,
     };
 
     assert_eq!(
@@ -870,6 +874,8 @@ fn anthropic_upstream_url_accepts_origin_or_v1_base() {
         max_hook_payload_bytes: crate::configuration::DEFAULT_MAX_HOOK_PAYLOAD_BYTES,
         launched_agent: None,
         max_passthrough_body_bytes: crate::configuration::DEFAULT_MAX_PASSTHROUGH_BODY_BYTES,
+        openai_oidc: None,
+        anthropic_oidc: None,
     };
 
     assert_eq!(
@@ -1550,6 +1556,7 @@ async fn streaming_provider_error_does_not_poison_the_next_request() {
         &prepared,
         SourceRequestBody::default(),
         Arc::new(CapturedUpstreamFailures::default()),
+        Arc::new(CapturedUpstreamSuccesses::default()),
         crate::operational::OperationalContext::new(),
     );
     let mut request_headers = Map::new();
@@ -1622,6 +1629,7 @@ async fn buffered_body_read_failure_stays_structured() {
         &prepared,
         SourceRequestBody::default(),
         Arc::new(CapturedUpstreamFailures::default()),
+        Arc::new(CapturedUpstreamSuccesses::default()),
         crate::operational::OperationalContext::new(),
     );
     let mut request_headers = Map::new();
@@ -1677,6 +1685,7 @@ async fn buffered_invalid_json_becomes_safe_upstream_failure() {
         &prepared,
         SourceRequestBody::default(),
         Arc::new(CapturedUpstreamFailures::default()),
+        Arc::new(CapturedUpstreamSuccesses::default()),
         crate::operational::OperationalContext::new(),
     );
     let mut request_headers = Map::new();
@@ -2648,6 +2657,8 @@ async fn passthrough_rejects_unsupported_provider_path_directly() {
         max_hook_payload_bytes: crate::configuration::DEFAULT_MAX_HOOK_PAYLOAD_BYTES,
         launched_agent: None,
         max_passthrough_body_bytes: crate::configuration::DEFAULT_MAX_PASSTHROUGH_BODY_BYTES,
+        openai_oidc: None,
+        anthropic_oidc: None,
     };
     let state = AppState {
         diagnostics_http: None,
@@ -2702,6 +2713,8 @@ async fn models_rejects_non_get_requests_directly() {
         max_hook_payload_bytes: crate::configuration::DEFAULT_MAX_HOOK_PAYLOAD_BYTES,
         launched_agent: None,
         max_passthrough_body_bytes: crate::configuration::DEFAULT_MAX_PASSTHROUGH_BODY_BYTES,
+        openai_oidc: None,
+        anthropic_oidc: None,
     };
     let state = AppState {
         diagnostics_http: None,
@@ -2754,6 +2767,282 @@ fn response_headers_preserve_duplicates() {
     let copied = response_headers(&headers);
 
     assert_eq!(copied.get_all("set-cookie").iter().count(), 2);
+}
+
+/// Worker error context must preserve the captured response and single-use retrieval.
+#[tokio::test]
+async fn captured_upstream_failures_survive_worker_error_wrapping() {
+    for status in [401, 429, 500, 529] {
+        for wrapper in ["direct", "buffered", "streaming"] {
+            let failures = CapturedUpstreamFailures::default();
+            let bytes = Bytes::from_static(b"{\"error\":\"upstream failure\"}\n");
+            let mut headers = HeaderMap::new();
+            headers.insert("retry-after", HeaderValue::from_static("7"));
+            headers.append("set-cookie", HeaderValue::from_static("a=1"));
+            headers.append("set-cookie", HeaderValue::from_static("b=2"));
+            let error = failures.capture(CapturedUpstreamFailure::Response {
+                status: StatusCode::from_u16(status).unwrap(),
+                headers: headers.clone(),
+                bytes: bytes.clone(),
+            });
+            let error = match wrapper {
+                "buffered" => {
+                    FlowError::Internal(format!("worker.sdk_error: host.runtime_error: {error}"))
+                }
+                "streaming" => FlowError::Internal(format!(
+                    "worker.error: <AioRpcError of RPC that terminated with:\n\tstatus = StatusCode.INTERNAL\n\tdetails = \"{error}\"\n\tdebug_error_string = \"UNKNOWN:Error received from peer {{grpc_message:\"{error}\"}}\"\n>"
+                )),
+                _ => error,
+            };
+            let failure = failures.take(&error).unwrap_or_else(|| {
+                panic!("lost upstream {status} response through {wrapper}: {error}")
+            });
+            let response = selected_upstream_failure(failure).unwrap();
+            assert_eq!(response.status().as_u16(), status);
+            assert_eq!(response.headers(), &headers);
+            assert_eq!(
+                response.into_body().collect().await.unwrap().to_bytes(),
+                bytes
+            );
+            assert!(failures.take(&error).is_none(), "failure consumed twice");
+        }
+    }
+}
+
+/// Malformed, foreign, and unrelated tokens must leave this request's failure available.
+#[test]
+fn captured_upstream_failures_only_resolve_tokens_from_the_current_request() {
+    let failures = CapturedUpstreamFailures::default();
+    let other_request = CapturedUpstreamFailures::default();
+    let error = failures.capture(CapturedUpstreamFailure::Authentication(
+        CliError::InvalidPayload("selected attempt".into()),
+    ));
+    assert!(other_request.take(&error).is_none());
+    assert!(
+        failures
+            .take(&FlowError::Internal("worker.sdk_error: unrelated".into()))
+            .is_none()
+    );
+    assert!(
+        failures
+            .take(&FlowError::Internal(format!(
+                "{CAPTURED_UPSTREAM_FAILURE_PREFIX}invalid"
+            )))
+            .is_none()
+    );
+    for suffix in ["0", "g", "Z", "_", "é"] {
+        assert!(
+            failures
+                .take(&FlowError::Internal(format!("{error}{suffix}")))
+                .is_none(),
+            "an identifier suffix must not consume the failure: {suffix}"
+        );
+    }
+    assert!(
+        failures
+            .take(&FlowError::GuardrailRejected(error.to_string()))
+            .is_none()
+    );
+    assert!(failures.take(&error).is_some());
+}
+
+/// Ambiguous worker context must neither select nor consume either captured attempt.
+#[test]
+fn captured_upstream_failures_reject_ambiguous_attempts_without_consuming_them() {
+    let failures = CapturedUpstreamFailures::default();
+    let earlier = failures.capture(CapturedUpstreamFailure::Authentication(
+        CliError::InvalidPayload("earlier attempt".into()),
+    ));
+    let selected = failures.capture(CapturedUpstreamFailure::Authentication(
+        CliError::InvalidPayload("selected attempt".into()),
+    ));
+    for message in [
+        format!("earlier: {earlier}; selected: {selected}"),
+        format!("selected: {selected}; earlier: {earlier}"),
+    ] {
+        assert!(failures.take(&FlowError::Internal(message)).is_none());
+    }
+    assert!(failures.take(&earlier).is_some());
+    assert!(failures.take(&selected).is_some());
+}
+
+fn success_headers(id: &'static str) -> HeaderMap {
+    let mut headers = HeaderMap::new();
+    headers.insert("request-id", HeaderValue::from_static(id));
+    headers.insert(
+        "content-type",
+        HeaderValue::from_static("application/x-provider"),
+    );
+    headers.insert("content-encoding", HeaderValue::from_static("gzip"));
+    headers.insert("content-digest", HeaderValue::from_static("sha-256=:AAAA:"));
+    headers.insert(
+        "x-nemo-relay-worker-route-failure",
+        HeaderValue::from_static("pass-through"),
+    );
+    headers
+}
+
+fn shared_success_headers(id: &'static str) -> HeaderMap {
+    let mut headers = success_headers(id);
+    headers.insert(
+        "anthropic-ratelimit-unified-status",
+        HeaderValue::from_static("allowed"),
+    );
+    headers
+}
+
+fn assert_only_shared_headers(headers: &HeaderMap) {
+    assert!(headers.get("request-id").is_none());
+    assert_eq!(headers["anthropic-ratelimit-unified-status"], "allowed");
+}
+
+/// Provider body and control headers never reach the client, and the gateway owns content-type.
+#[test]
+fn captured_upstream_successes_filter_provider_headers() {
+    let none = CapturedUpstreamSuccesses::default();
+    let headers = none.response_headers(None, "application/json");
+    assert_eq!(headers.len(), 1);
+    assert_eq!(headers["content-type"], "application/json");
+
+    let one = CapturedUpstreamSuccesses::default();
+    one.capture(None, success_headers("req_1"));
+    let headers = one.response_headers(None, "text/event-stream");
+    assert_eq!(headers["request-id"], "req_1");
+    assert_eq!(headers["content-type"], "text/event-stream");
+    assert_eq!(headers.get_all("content-type").iter().count(), 1);
+    assert!(headers.get("content-encoding").is_none());
+    assert!(headers.get("content-digest").is_none());
+    assert!(headers.get("x-nemo-relay-worker-route-failure").is_none());
+}
+
+/// A success carries the headers of the attempt that produced what was returned.
+#[test]
+fn captured_upstream_successes_select_the_returned_attempt() {
+    // The returned body picks its own attempt in either capture order, buffered or streamed.
+    let first = json!({"id": "first"});
+    let second = json!({"id": "second"});
+    for (returned, expected) in [(&first, "req_1"), (&second, "req_2")] {
+        let fan_out = CapturedUpstreamSuccesses::default();
+        fan_out.capture(Some(first.clone()), success_headers("req_1"));
+        let index = fan_out.capture(None, success_headers("req_2"));
+        fan_out.set_key(index, second.clone());
+        let headers = fan_out.response_headers(Some(returned), "application/json");
+        assert_eq!(headers["request-id"], expected);
+    }
+
+    // A rewritten response matches no attempt; one success still lends its headers.
+    let rewritten_one = CapturedUpstreamSuccesses::default();
+    rewritten_one.capture(Some(first), success_headers("req_1"));
+    let headers =
+        rewritten_one.response_headers(Some(&json!({"id": "rewritten"})), "application/json");
+    assert_eq!(headers["request-id"], "req_1");
+}
+
+/// Ambiguous matches relay only the headers every candidate agrees on.
+#[test]
+fn captured_upstream_successes_keep_only_agreed_headers_when_ambiguous() {
+    let first = json!({"id": "first"});
+    let second = json!({"id": "second"});
+
+    // Identical bodies with different headers.
+    let identical = CapturedUpstreamSuccesses::default();
+    identical.capture(Some(first.clone()), shared_success_headers("req_1"));
+    identical.capture(Some(first.clone()), shared_success_headers("req_2"));
+    assert_only_shared_headers(&identical.response_headers(Some(&first), "application/json"));
+
+    // A rewritten response with several successes.
+    let rewritten_many = CapturedUpstreamSuccesses::default();
+    rewritten_many.capture(Some(first), shared_success_headers("req_1"));
+    rewritten_many.capture(Some(second), shared_success_headers("req_2"));
+    assert_only_shared_headers(
+        &rewritten_many.response_headers(Some(&json!({"id": "rewritten"})), "application/json"),
+    );
+
+    // Streams whose first events are identical.
+    let same_first_event = CapturedUpstreamSuccesses::default();
+    for id in ["req_1", "req_2"] {
+        let index = same_first_event.capture(None, shared_success_headers(id));
+        same_first_event.set_key(index, json!({"type": "message_start"}));
+    }
+    assert_only_shared_headers(
+        &same_first_event
+            .response_headers(Some(&json!({"type": "message_start"})), "text/event-stream"),
+    );
+
+    // An empty stream returns no first event.
+    let empty_stream = CapturedUpstreamSuccesses::default();
+    empty_stream.capture(None, shared_success_headers("req_1"));
+    empty_stream.capture(None, shared_success_headers("req_2"));
+    assert_only_shared_headers(&empty_stream.response_headers(None, "text/event-stream"));
+}
+
+/// Inner stream that records explicit lifecycle calls.
+struct RecordingStream {
+    items: std::collections::VecDeque<Result<serde_json::Value, FlowError>>,
+    closed: Arc<std::sync::atomic::AtomicUsize>,
+    terminalized: Arc<std::sync::atomic::AtomicUsize>,
+}
+
+impl futures_util::Stream for RecordingStream {
+    type Item = Result<serde_json::Value, FlowError>;
+
+    fn poll_next(
+        self: std::pin::Pin<&mut Self>,
+        _cx: &mut std::task::Context<'_>,
+    ) -> std::task::Poll<Option<Self::Item>> {
+        std::task::Poll::Ready(self.get_mut().items.pop_front())
+    }
+}
+
+impl LlmStreamInner for RecordingStream {
+    fn terminalize(self: std::pin::Pin<&mut Self>) {
+        self.terminalized
+            .fetch_add(1, std::sync::atomic::Ordering::SeqCst);
+    }
+
+    fn close(
+        self: std::pin::Pin<&mut Self>,
+    ) -> std::pin::Pin<Box<dyn std::future::Future<Output = Result<(), FlowError>> + Send + '_>>
+    {
+        self.closed
+            .fetch_add(1, std::sync::atomic::Ordering::SeqCst);
+        Box::pin(async { Ok(()) })
+    }
+}
+
+/// The tap sees only the first successful event, and leaves the stream's lifecycle untouched.
+#[tokio::test]
+async fn first_event_tap_observes_the_first_ok_event_and_delegates_lifecycle() {
+    use futures_util::StreamExt;
+    let closed = Arc::new(std::sync::atomic::AtomicUsize::new(0));
+    let terminalized = Arc::new(std::sync::atomic::AtomicUsize::new(0));
+    let inner = LlmJsonStream::from_closeable(RecordingStream {
+        items: [
+            Err(FlowError::Internal("decode".into())),
+            Ok(json!({"event": 1})),
+            Ok(json!({"event": 2})),
+        ]
+        .into(),
+        closed: Arc::clone(&closed),
+        terminalized: Arc::clone(&terminalized),
+    });
+    let observed = Arc::new(Mutex::new(Vec::new()));
+    let record = Arc::clone(&observed);
+    let mut tapped = FirstEventTap::wrap(
+        inner,
+        Box::new(move |event| record.lock().unwrap().push(event.clone())),
+    );
+
+    assert!(tapped.next().await.unwrap().is_err());
+    assert!(observed.lock().unwrap().is_empty());
+    assert_eq!(tapped.next().await.unwrap().unwrap(), json!({"event": 1}));
+    assert_eq!(tapped.next().await.unwrap().unwrap(), json!({"event": 2}));
+    assert_eq!(*observed.lock().unwrap(), [json!({"event": 1})]);
+
+    tapped.terminalize();
+    tapped.close().await.unwrap();
+    assert_eq!(terminalized.load(std::sync::atomic::Ordering::SeqCst), 1);
+    assert_eq!(closed.load(std::sync::atomic::Ordering::SeqCst), 1);
 }
 
 #[tokio::test]
@@ -2971,6 +3260,7 @@ async fn uncontended_stream_completion_finishes_before_observer_poll_without_cop
         manager.clone(),
         prep.session_id.clone(),
         prep.owner_subagent_id.clone(),
+        true,
         Box::new(move || response),
     );
     let response = finalizer();
@@ -3004,6 +3294,7 @@ async fn stream_completion_observer_finishes_when_the_session_is_already_gone() 
         manager,
         "removed-session".into(),
         None,
+        true,
         Box::new(move || response),
     );
     let response = finalizer();
@@ -3014,6 +3305,102 @@ async fn stream_completion_observer_finishes_when_the_session_is_already_gone() 
     observer(&response).await.unwrap();
     assert_eq!(ready.try_recv(), Ok(()));
     assert_eq!(response["output_text"], "final");
+}
+
+#[tokio::test]
+async fn internal_stream_completion_skips_task_bookkeeping_with_or_without_session_contention() {
+    let subscriber = "internal-stream-response-isolation";
+    let output = Arc::new(Mutex::new(Vec::<Value>::new()));
+    let recorded = output.clone();
+    nemo_relay_runtime::api::subscriber::register_subscriber(
+        subscriber,
+        Arc::new(move |event| {
+            if event.name() == "codex-turn"
+                && event.scope_category()
+                    == Some(nemo_relay_runtime::api::event::ScopeCategory::End)
+                && event
+                    .metadata()
+                    .and_then(|m| m.get("session_id"))
+                    .and_then(Value::as_str)
+                    == Some("internal-stream-completion")
+            {
+                recorded
+                    .lock()
+                    .unwrap()
+                    .push(event.output().cloned().unwrap());
+            }
+        }),
+    )
+    .unwrap();
+    for contended in [false, true] {
+        let manager = SessionManager::new(GatewayConfig::default());
+        let prep = manager
+            .prepare_gateway_call(
+                &HeaderMap::new(),
+                LlmGatewayStart {
+                    session_id: Some("internal-stream-completion".into()),
+                    provider: "openai.responses".into(),
+                    model_name: None,
+                    subagent_id: None,
+                    conversation_id: None,
+                    generation_id: None,
+                    request_id: None,
+                    request: LlmRequest {
+                        headers: Map::new(),
+                        content: json!({"input": "task"}),
+                    },
+                    streaming: true,
+                    metadata: json!({}),
+                },
+            )
+            .await
+            .unwrap();
+        manager
+            .record_gateway_response_hints(
+                &prep.session_id,
+                None,
+                Cow::Owned(json!({"output_text": "task answer"})),
+            )
+            .await;
+        let held = if contended {
+            Some(manager.test_lock_session_gate(&prep.session_id).await)
+        } else {
+            None
+        };
+        let (finalizer, observer, ready) = gateway_response_completion(
+            manager.clone(),
+            prep.session_id.clone(),
+            None,
+            false,
+            Box::new(|| json!({"output_text": "internal answer"})),
+        );
+        if contended {
+            let response = json!({"output_text": "internal answer"});
+            tokio::time::timeout(Duration::from_secs(2), observer(&response))
+                .await
+                .unwrap()
+                .unwrap();
+            assert_eq!(finalizer(), response);
+        } else {
+            let response = finalizer();
+            observer(&response).await.unwrap();
+        }
+        drop(held);
+        tokio::time::timeout(Duration::from_secs(2), ready)
+            .await
+            .unwrap()
+            .unwrap();
+        manager
+            .finish_gateway_call(&prep.session_id, None, prep.session_finish)
+            .await;
+        manager.close_all("test_shutdown").await.unwrap();
+    }
+    nemo_relay_runtime::api::subscriber::flush_subscribers().unwrap();
+    nemo_relay_runtime::api::subscriber::deregister_subscriber(subscriber).unwrap();
+    assert_eq!(
+        *output.lock().unwrap(),
+        vec![json!({"output_text": "task answer"}); 2]
+    );
 }
 
 // Exercise the same borrowed observer and finalization path used by the gateway.
@@ -3027,6 +3414,7 @@ async fn managed_final_response_stream(
         manager.clone(),
         prep.session_id.clone(),
         prep.owner_subagent_id.clone(),
+        true,
         Box::new(move || response),
     );
     let params = LlmStreamCallExecuteParams::builder()
@@ -3369,6 +3757,8 @@ async fn models_refuses_an_unusable_named_upstream() {
         max_hook_payload_bytes: crate::configuration::DEFAULT_MAX_HOOK_PAYLOAD_BYTES,
         launched_agent: None,
         max_passthrough_body_bytes: crate::configuration::DEFAULT_MAX_PASSTHROUGH_BODY_BYTES,
+        openai_oidc: None,
+        anthropic_oidc: None,
     };
     let state = AppState {
         diagnostics_http: None,
@@ -4237,6 +4627,78 @@ async fn streaming_response_delivers_the_first_chunk_once_and_completes() {
         bytes,
         "data: {\"sequence\":1}\n\ndata: {\"sequence\":2}\n\ndata: [DONE]\n\n"
     );
+}
+
+#[tokio::test]
+async fn streaming_response_reports_midstream_errors_in_the_provider_protocol() {
+    for route in [
+        ProviderRoute::OpenAiChatCompletions,
+        ProviderRoute::OpenAiResponses,
+        ProviderRoute::AnthropicMessages,
+    ] {
+        let (manager, guard) = stream_error_test_guard("midstream-error").await;
+        let response_stream = LlmJsonStream::new(futures_util::stream::iter([
+            Ok(json!({"sequence_number": 40, "partial": "first"})),
+            Ok(json!({"sequence_number": 41, "partial": "second"})),
+            Err(FlowError::Internal(
+                "connection failed at https://private:secret@example.com".into(),
+            )),
+            Ok(json!({"partial": "must not be delivered"})),
+        ]));
+        let body = prepare_streaming_response_body(response_stream, route, guard)
+            .await
+            .unwrap();
+        let bytes = body
+            .collect()
+            .await
+            .expect("application failure must keep HTTP framing valid")
+            .to_bytes();
+        let text = std::str::from_utf8(&bytes).unwrap();
+        let events: Vec<Value> = text
+            .lines()
+            .filter_map(|line| line.strip_prefix("data: "))
+            .map(|data| serde_json::from_str(data).unwrap())
+            .collect();
+        assert_eq!(events.len(), 3, "{route:?}: {text}");
+        assert_eq!(events[0]["partial"], "first");
+        assert_eq!(events[1]["partial"], "second");
+        let error = &events[2];
+        assert_eq!(
+            error["error"]["message"],
+            "NeMo Relay could not complete the response stream."
+        );
+        if route == ProviderRoute::AnthropicMessages {
+            assert_eq!(error["error"]["type"], "api_error");
+        } else {
+            assert_eq!(error["error"]["type"], "server_error");
+            assert_eq!(error["error"]["code"], "stream_error");
+        }
+        if route == ProviderRoute::OpenAiResponses {
+            assert_eq!(error["message"], error["error"]["message"]);
+            assert_eq!(error["code"], "stream_error");
+            assert_eq!(error.get("param"), Some(&Value::Null));
+            assert_eq!(error["sequence_number"], 42);
+        }
+        if route == ProviderRoute::OpenAiChatCompletions {
+            assert!(!text.contains("event: "));
+        } else {
+            assert_eq!(error["type"], "error");
+            assert!(text.contains("event: error\n"));
+        }
+        assert!(!text.contains("[DONE]"));
+        assert!(!text.contains("private:secret"));
+        assert_eq!(
+            manager
+                .close_idle_sessions_at(
+                    std::time::Instant::now() + Duration::from_secs(1),
+                    Duration::from_millis(1),
+                    "midstream_error",
+                )
+                .await
+                .unwrap(),
+            1,
+        );
+    }
 }
 
 #[tokio::test]

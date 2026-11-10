@@ -402,13 +402,14 @@ describe('LLM execute', () => {
         response: 'ok',
       });
 
+      const unprintable = unprintableError();
       await assert.rejects(
         () =>
           llmCallExecute(
             'exec_status_error_llm',
             makeNative(),
             () => {
-              throw unprintableError();
+              throw unprintable;
             },
             null,
             null,
@@ -418,7 +419,7 @@ describe('LLM execute', () => {
             },
             null,
           ),
-        /JavaScript callback failed/,
+        (error) => error === unprintable,
       );
 
       await flushSubscribers();
@@ -546,14 +547,10 @@ describe('LLM codec callback failures', () => {
         llmCallEnd(handle, {});
         await flushSubscribers();
         assert.match(getLastCallbackError() ?? '', pattern);
-        const start = events.find(
-          (event) => event.name === 'manual_codec_failure' && event.scope_category === 'start',
-        );
+        const start = events.find((event) => event.name === 'manual_codec_failure' && event.scope_category === 'start');
         assert.deepEqual(start.data, original);
         assert.equal(start.category_profile.annotated_request, undefined);
-        const end = events.find(
-          (event) => event.name === 'manual_codec_failure' && event.scope_category === 'end',
-        );
+        const end = events.find((event) => event.name === 'manual_codec_failure' && event.scope_category === 'end');
         assert.notEqual(end, undefined);
         assert.deepEqual(request, original);
       } finally {
@@ -563,6 +560,7 @@ describe('LLM codec callback failures', () => {
   }
 
   it('llmCallExecute rejects a throwing codecDecode without terminating Node', async () => {
+    const thrown = new Error('execute decode boom');
     await assert.rejects(
       () =>
         llmCallExecute(
@@ -575,11 +573,11 @@ describe('LLM codec callback failures', () => {
           null,
           null,
           () => {
-            throw new Error('execute decode boom');
+            throw thrown;
           },
           passthroughEncode,
         ),
-      /JS codec decode callback failed: execute decode boom/,
+      (error) => error === thrown,
     );
     const result = await llmCallExecute('exec_codec_after_decode_throw', makeCodecRequest(), () => ({
       ok: true,
@@ -589,6 +587,7 @@ describe('LLM codec callback failures', () => {
 
   it('llmCallExecute rejects a throwing codecEncode without terminating Node', async () => {
     const codec = new lib.OpenAIChatCodec();
+    const thrown = new Error('execute encode boom');
     await assert.rejects(
       () =>
         llmCallExecute(
@@ -602,10 +601,10 @@ describe('LLM codec callback failures', () => {
           null,
           codec.decode.bind(codec),
           () => {
-            throw new Error('execute encode boom');
+            throw thrown;
           },
         ),
-      /JS codec encode callback failed: execute encode boom/,
+      (error) => error === thrown,
     );
   });
 
@@ -631,13 +630,8 @@ describe('LLM codec callback failures', () => {
       );
       assert.deepEqual(result, { ok: true });
       await flushSubscribers();
-      assert.match(
-        getLastCallbackError() ?? '',
-        /JS response codec decode callback failed: response decode boom/,
-      );
-      const end = events.find(
-        (event) => event.name === 'exec_response_codec_throw' && event.scope_category === 'end',
-      );
+      assert.match(getLastCallbackError() ?? '', /JS response codec decode callback failed: response decode boom/);
+      const end = events.find((event) => event.name === 'exec_response_codec_throw' && event.scope_category === 'end');
       assert.equal(end.category_profile.annotated_response, undefined);
     } finally {
       deregisterSubscriber('exec_response_codec_throw_sub');
@@ -848,6 +842,47 @@ describe('LLM guardrails', () => {
     } finally {
       deregisterLlmSanitizeRequestGuardrail('node_resolved_llm_request_codec');
       deregisterLlmSanitizeResponseGuardrail('node_resolved_llm_response_codec');
+    }
+  });
+
+  it('resolved sanitizer codecs reject BigInt responses with a TypeError', async () => {
+    const codec = new lib.OpenAIChatCodec();
+    let rejection;
+    registerLlmSanitizeResponseGuardrail('node_resolved_llm_response_codec_bigint', 10, (response, context) => {
+      const resolved = context.resolveCodec();
+      assert.notEqual(resolved, null);
+      try {
+        resolved.decodeResponse({ ...response, usage: { prompt_tokens: 1n } });
+      } catch (error) {
+        rejection = error;
+      }
+      return response;
+    });
+
+    try {
+      const response = {
+        id: 'chatcmpl-test',
+        model: 'test-model',
+        choices: [{ index: 0, message: { role: 'assistant', content: 'ok' }, finish_reason: 'stop' }],
+      };
+      await llmCallExecute(
+        'resolved_sanitizer_codec_bigint_llm',
+        makeNative(),
+        () => response,
+        null,
+        null,
+        null,
+        null,
+        null,
+        codec.decode.bind(codec),
+        ({ annotated, original }) => codec.encode(annotated, original),
+        codec.decodeResponse.bind(codec),
+      );
+      await flushSubscribers();
+      assert.ok(rejection instanceof TypeError, `expected a TypeError, got ${rejection}`);
+      assert.match(rejection.message, /BigInt cannot be represented as JSON/);
+    } finally {
+      deregisterLlmSanitizeResponseGuardrail('node_resolved_llm_response_codec_bigint');
     }
   });
 
@@ -2207,7 +2242,7 @@ describe('LLM intercepts', () => {
             null,
             null,
           ),
-        /internal error: 42/i,
+        (value) => value === 42,
       );
     } finally {
       deregisterLlmExecutionIntercept('node_llm_exec_unknown_err');
@@ -2227,7 +2262,7 @@ describe('LLM intercepts', () => {
           null,
           null,
         ),
-      /internal error: 42/i,
+      (value) => value === 42,
     );
   });
 
@@ -2578,12 +2613,13 @@ describe('LLM intercepts', () => {
       () => llmStreamCallExecute('provider_non_iterable_stream_llm', makeNative(), () => ({ invalid: true })),
       /must return an AsyncIterable/i,
     );
+    const empty = new Error(); // NOSONAR javascript:S7722: a provider error with no message is rejected as thrown.
     await assert.rejects(
       () =>
         llmStreamCallExecute('provider_empty_message_stream_llm', makeNative(), () => {
-          throw new Error(); // NOSONAR javascript:S7722: verify the fallback for a provider error with no message.
+          throw empty;
         }),
-      /unknown error/,
+      (error) => error === empty,
     );
   });
 
@@ -2756,14 +2792,20 @@ describe('LLM intercepts', () => {
       });
       await assert.rejects(
         () => stream.next(),
-        /unsupported bigint value.*stream cleanup also failed: .*cleanup boom/i,
+        (error) => {
+          assert.ok(error instanceof AggregateError);
+          assert.match(error.message, /unsupported bigint value.*stream cleanup also failed: .*cleanup boom/i);
+          assert.ok(error.errors[0] instanceof TypeError);
+          assert.equal(error.errors[1].message, 'cleanup boom');
+          return true;
+        },
       );
       await stream.close();
       await flushSubscribers();
       const end = events.find(
         (event) => event.name === 'conversion_then_cleanup_error_llm' && event.scope_category === 'end',
       );
-      assert.equal(end.metadata['exception.type'], 'TypeError');
+      assert.equal(end.metadata['exception.type'], 'AggregateError');
     } finally {
       await stream?.close().catch(() => {});
       deregisterSubscriber('node_conversion_then_cleanup_error');
@@ -3076,8 +3118,8 @@ describe('LLM intercepts', () => {
       );
       assert.deepEqual(await stream.next(), { token: 'only' });
       assert.equal(await stream.next(), null);
-      await assert.rejects(() => stream.close(), /JS finalizer callback failed: finalizer boom/);
-      await assert.rejects(() => stream.close(), /JS finalizer callback failed: finalizer boom/);
+      await assert.rejects(() => stream.close(), /^Error: finalizer boom$/);
+      await assert.rejects(() => stream.close(), /^Error: finalizer boom$/);
       await flushSubscribers();
       const end = events.find((event) => event.name === 'finalizer_error_stream_llm' && event.scope_category === 'end');
       assert.equal(end.data, null);
@@ -3184,8 +3226,8 @@ describe('LLM intercepts', () => {
       );
       assert.deepEqual(await stream.next(), { token: 'only' });
       assert.equal(await stream.next(), null);
-      await assert.rejects(() => stream.close(), /JS finalizer callback failed: async finalizer boom/);
-      await assert.rejects(() => stream.close(), /JS finalizer callback failed: async finalizer boom/);
+      await assert.rejects(() => stream.close(), /^Error: async finalizer boom$/);
+      await assert.rejects(() => stream.close(), /^Error: async finalizer boom$/);
       await flushSubscribers();
       const end = events.find(
         (event) => event.name === 'async_finalizer_error_stream_llm' && event.scope_category === 'end',
@@ -4057,15 +4099,23 @@ describe('LLM intercepts', () => {
     const openKind = "kind: 'input_compression' | 'model_routing' | (string & {})";
 
     assert.equal(declarations.split(openKind).length - 1, 1);
-    assert.match(declarations, /registerLlmRequestIntercept\([^\n]*LlmRequestInterceptOutcome/);
-    assert.match(declarations, /scopeRegisterLlmRequestIntercept\([^\n]*LlmRequestInterceptOutcome/);
+    assert.match(declarations, /registerLlmRequestIntercept<[^\n]*LlmRequestInterceptOutcomeCompatible</);
+    assert.match(declarations, /scopeRegisterLlmRequestIntercept<[^\n]*LlmRequestInterceptOutcomeCompatible</);
   });
 
   it('generated LLM sanitizer declarations expose directional codec contexts', () => {
     const declarations = readFileSync(new URL('../index.d.ts', import.meta.url), 'utf8');
 
-    assert.equal(declarations.split('context: LlmSanitizeRequestContext').length - 1, 2);
-    assert.equal(declarations.split('context: LlmSanitizeResponseContext').length - 1, 2);
+    assert.equal(
+      declarations.split('context: LlmSanitizeRequestContext').length - 1,
+      3,
+      'global, scope-local, and plugin-context sanitizer declarations must expose the request codec context',
+    );
+    assert.equal(
+      declarations.split('context: LlmSanitizeResponseContext').length - 1,
+      3,
+      'global, scope-local, and plugin-context sanitizer declarations must expose the response codec context',
+    );
     assert.match(declarations, /export type EventMetadata = Record<string, EventMetadataValue>/);
     assert.doesNotMatch(declarations, /import\('\.\/plugin'\)\./);
     assert.doesNotMatch(declarations, /registerLlmSanitizeRequestGuardrail\([^\n]*\.\.\.args: any\[\]/);
@@ -4076,10 +4126,10 @@ describe('LLM intercepts', () => {
 
     assert.match(
       declarations,
-      /llmStreamCallExecute\([^\n]*func: \(request: Json, signal: AbortSignal\) => AsyncIterable<Json> \| Promise<AsyncIterable<Json>>/,
+      /llmStreamCallExecute<[^\n]*func: \(request: LlmRequestShape, signal: AbortSignal\) => AsyncIterable<TChunk> \| Promise<AsyncIterable<TChunk>>/,
     );
-    assert.match(declarations, /llmStreamCallExecute\([^\n]*collector\?: \(chunk: Json\) => void \| Promise<void>/);
-    assert.match(declarations, /llmStreamCallExecute\([^\n]*finalizer\?: \(\) => Json \| Promise<Json>/);
+    assert.match(declarations, /llmStreamCallExecute<[^\n]*collector\?: \(chunk: Json\) => void \| Promise<void>/);
+    assert.match(declarations, /llmStreamCallExecute<[^\n]*finalizer\?: \(\) => TAggregate \| Promise<TAggregate>/);
   });
 
   it('generated middleware declarations expose Promise-aware callback types', () => {
@@ -4111,31 +4161,35 @@ describe('LLM intercepts', () => {
 
     for (const registration of registrations) {
       const declaration = declarations.match(
-        new RegExp(String.raw`export declare function ${registration}\([^\n]+`),
+        new RegExp(String.raw`export declare function ${registration}[<(][^\n]+`),
       )?.[0];
       assert.ok(declaration, `missing declaration for ${registration}`);
       assert.doesNotMatch(declaration, /\.\.\.args: any\[\]/, `${registration} must not expose an any callback`);
       assert.match(declaration, /Promise</, `${registration} must expose its Promise callback form`);
     }
     assert.equal(
-      declarations.split('next: (request: Json) => Promise<AsyncIterable<Json>>').length - 1,
-      2,
-      'global and scope-local stream intercept declarations must expose the lazy next contract',
+      declarations.match(
+        /next: <TNextRequest extends LlmRequestCompatible<TNextRequest>>\(\s*request: TNextRequest,?\s*\) => Promise<AsyncIterable<Json>>/g,
+      ).length,
+      3,
+      'global, scope-local, and plugin-context stream intercept declarations must expose the lazy next contract',
     );
     assert.equal(
-      declarations.split('next: (args: Json) => ToolExecutionResult | Promise<ToolExecutionResult>').length - 1,
-      2,
-      'global and scope-local tool intercept declarations must expose canonical tool results',
+      declarations.match(
+        /next: <TNextArgs extends JsonCompatible<TNextArgs>>\(\s*args: TNextArgs,?\s*\) => ToolExecutionResult \| Promise<ToolExecutionResult>/g,
+      ).length,
+      3,
+      'global, scope-local, and plugin-context tool intercept declarations must expose canonical tool results',
     );
     assert.equal(
       declarations.split('context: ToolExecutionContext').length - 1,
-      2,
-      'global and scope-local context intercept declarations must expose the tool execution context',
+      3,
+      'global, scope-local, and plugin-context intercept declarations must expose the tool execution context',
     );
     assert.equal(
       declarations.split('context: LlmExecutionContext').length - 1,
-      4,
-      'global and scope-local unary and streaming LLM intercept declarations must expose the execution codec context',
+      6,
+      'global, scope-local, and plugin-context unary and streaming LLM intercept declarations must expose the execution codec context',
     );
     assert.match(declarations, /export type LlmRequestContext = LlmSanitizeRequestContext/);
     assert.match(declarations, /export type LlmResponseContext = LlmSanitizeResponseContext/);
@@ -4147,20 +4201,28 @@ describe('LLM intercepts', () => {
   });
 
   it('plugin declarations expose Promise middleware and the implemented stream contract', () => {
-    const declarations = readFileSync(new URL('../plugin.d.ts', import.meta.url), 'utf8');
+    const declarations = readFileSync(new URL('../index.d.ts', import.meta.url), 'utf8');
+    const pluginDeclarations = readFileSync(new URL('../plugin.d.ts', import.meta.url), 'utf8');
+    const context = declarations.match(/export interface PluginContext \{[\s\S]*?\n\}/)?.[0];
+    assert.ok(context, 'index.d.ts must declare PluginContext');
 
-    assert.match(declarations, /registerMarkSanitizeGuardrail\([\s\S]*?Promise<EventSanitizeFields>/);
-    assert.match(declarations, /registerScopeSanitizeStartGuardrail\([\s\S]*?Promise<EventSanitizeFields>/);
-    assert.match(declarations, /registerScopeSanitizeEndGuardrail\([\s\S]*?Promise<EventSanitizeFields>/);
-    assert.match(declarations, /registerToolSanitizeRequestGuardrail\([\s\S]*?Json \| Promise<Json>/);
-    assert.match(declarations, /registerToolSanitizeResponseGuardrail\([\s\S]*?Json \| Promise<Json>/);
-    assert.match(declarations, /registerLlmSanitizeRequestGuardrail\([\s\S]*?Promise<Json \| null>/);
-    assert.match(declarations, /registerLlmSanitizeResponseGuardrail\([\s\S]*?Promise<Json \| null>/);
-    assert.match(declarations, /registerLlmConditionalExecutionGuardrail\([\s\S]*?Promise<string \| null>/);
-    assert.match(declarations, /registerLlmRequestIntercept\([\s\S]*?Promise<LlmRequestInterceptOutcome>/);
+    assert.match(pluginDeclarations, /export type \{[\s\S]*?\bPluginContext,[\s\S]*?\} from '\.\/index'/);
     assert.match(
       declarations,
-      /registerLlmStreamExecutionIntercept\([\s\S]*?next: \(request: Json\) => Promise<AsyncIterable<Json>>/,
+      /registerPlugin\([^\n]*register: \(pluginConfig: JsonObject, context: PluginContext\) => void/,
+    );
+    assert.match(context, /registerMarkSanitizeGuardrail<[\s\S]*?Promise<TFields>/);
+    assert.match(context, /registerScopeSanitizeStartGuardrail<[\s\S]*?Promise<TFields>/);
+    assert.match(context, /registerScopeSanitizeEndGuardrail<[\s\S]*?Promise<TFields>/);
+    assert.match(context, /registerToolSanitizeRequestGuardrail<[\s\S]*?TValue \| Promise<TValue>/);
+    assert.match(context, /registerToolSanitizeResponseGuardrail<[\s\S]*?TValue \| Promise<TValue>/);
+    assert.match(context, /registerLlmSanitizeRequestGuardrail<[\s\S]*?Promise<TRequest \| null>/);
+    assert.match(context, /registerLlmSanitizeResponseGuardrail<[\s\S]*?Promise<TResponse \| null>/);
+    assert.match(context, /registerLlmConditionalExecutionGuardrail\([\s\S]*?Promise<string \| null>/);
+    assert.match(context, /registerLlmRequestIntercept<[\s\S]*?Promise<TOutcome>/);
+    assert.match(
+      context,
+      /registerLlmStreamExecutionIntercept<[\s\S]*?next: <TNextRequest extends LlmRequestCompatible<TNextRequest>>\([\s\S]*?\) => Promise<AsyncIterable<Json>>/,
     );
   });
 

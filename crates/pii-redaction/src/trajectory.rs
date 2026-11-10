@@ -735,7 +735,6 @@ fn sanitize_usage(usage: Usage, replacement: &str) -> Usage {
         total_tokens,
         cache_read_tokens,
         cache_write_tokens,
-        cache_write_1h_tokens,
         uncached_input_tokens,
         cost,
     } = usage;
@@ -745,7 +744,6 @@ fn sanitize_usage(usage: Usage, replacement: &str) -> Usage {
         total_tokens,
         cache_read_tokens,
         cache_write_tokens,
-        cache_write_1h_tokens,
         uncached_input_tokens,
         cost: cost.map(|cost| sanitize_cost(cost, replacement)),
     }

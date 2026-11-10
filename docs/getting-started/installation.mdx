@@ -258,7 +258,11 @@ cargo uninstall nemo-relay-cli
 
 The PyPI and installer methods install the same CLI release with a binary
 compatible with the host platform. Use Cargo on unsupported platforms or when
-you prefer to build from source:
+you prefer to build from source.
+
+Building the CLI from source requires `protoc` 31.1 or later and Buf 1.75.0 or later.
+Install both on `PATH`, or select them with `PROTOC` and `BUF`. The first build
+needs access to the Buf Schema Registry to download the locked validation schema.
 
 ```bash
 cargo install nemo-relay-cli
@@ -318,6 +322,10 @@ Add the Rust crates when your application uses NeMo Relay directly from Rust.
 cargo add nemo-relay@1.0.0
 cargo add nemo-relay-adaptive@1.0.0
 ```
+
+Building these crates requires `protoc` 31.1 or later and Buf 1.75.0 or later.
+Install both on `PATH`, or select them with `PROTOC` and `BUF`. The first build
+needs access to the Buf Schema Registry to download the locked validation schema.
 
 The crates provide these capabilities:
 

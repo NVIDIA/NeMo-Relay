@@ -12,7 +12,6 @@ const {
   __testClosedCollectorCallback,
   __testClosedFinalizerCallback,
   __testClosedPromiseAwareCall,
-  __testClosedReplyCallback,
   clearLastCallbackError,
   deregisterLlmSanitizeRequestGuardrail,
   flushSubscribers,
@@ -66,39 +65,34 @@ describe('callback error helpers', () => {
     }
   });
 
-  it('closed reply callbacks refuse the call with the closing status', () => {
-    const refusal = __testClosedReplyCallback(() => ({ ok: true }), { value: 1 });
-    assert.match(refusal, /Closing/);
-  });
-
-  it('closed collector callbacks surface the queue failure and record it', async () => {
+  it('closed collector callbacks report the environment shutdown without recording it', () => {
+    clearLastCallbackError();
     assert.throws(
       () =>
         __testClosedCollectorCallback(() => undefined, {
           token: 'x',
         }),
-      /failed to queue JS collector callback/i,
+      /JS collector callback skipped: Node environment is shutting down/,
     );
-    assert.match(getLastCallbackError() ?? '', /failed to queue JS collector callback/i);
-    clearLastCallbackError();
+    assert.equal(getLastCallbackError(), null);
   });
 
-  it('closed finalizer callbacks fall back to null and record the queue failure', () => {
+  it('closed finalizer callbacks yield null without recording the shutdown', () => {
+    clearLastCallbackError();
     const result = __testClosedFinalizerCallback(() => ({
       done: true,
     }));
     assert.equal(result, null);
-    assert.match(getLastCallbackError() ?? '', /failed to queue JS finalizer callback/i);
-    clearLastCallbackError();
+    assert.equal(getLastCallbackError(), null);
   });
 
-  it('closed PromiseAwareFn calls reject with the closed threadsafe-function error', async () => {
+  it('closed PromiseAwareFn calls reject with the queue failure', async () => {
     await assert.rejects(
       () =>
         __testClosedPromiseAwareCall(() => ({
           ok: true,
         })),
-      /PromiseAwareFn threadsafe function closed/i,
+      /failed to queue threadsafe function call: Closing/,
     );
   });
 

@@ -515,23 +515,26 @@ class LLMRequest:
 
     Description:
         ``headers`` stores provider or transport metadata. ``content`` stores
-        the JSON request body. Request intercepts and codecs consume this
-        object to normalize, rewrite, and execute LLM calls.
+        a JSON-compatible request body: an object, array, string, number,
+        boolean, or null. Request intercepts and codecs consume this object
+        to normalize, rewrite, and execute LLM calls. Provider codecs validate
+        their own payload shapes and required fields.
     """
 
-    def __init__(self, headers: Mapping[str, _JsonValue], content: _JsonObject) -> None:
+    def __init__(self, headers: Mapping[str, _JsonValue], content: _Json) -> None:
         """Create an LLM request.
 
         Args:
             headers: Header-like metadata mapping.
-            content: JSON object payload sent to the provider.
+            content: Any JSON-compatible request payload. Provider codecs may
+                require an object with specific fields.
 
         Returns:
             ``None``.
 
         Exceptional flow:
-            Raises native conversion errors if ``headers`` or ``content`` are
-            not JSON-compatible mappings.
+            Raises native conversion errors for invalid headers or content
+            that is not JSON-compatible.
         """
         ...
     @property
@@ -539,8 +542,8 @@ class LLMRequest:
         """Return the request headers as a JSON object."""
         ...
     @property
-    def content(self) -> _JsonObject:
-        """Return the request content body as a JSON object."""
+    def content(self) -> _Json:
+        """Return the request content as a JSON-compatible value."""
         ...
 
 class PendingMarkSpec:

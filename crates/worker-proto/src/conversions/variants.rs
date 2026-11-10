@@ -8,6 +8,86 @@
 
 use super::*;
 
+// Retain the deprecated v1 fields for legacy readers and legacy-only payloads.
+#[allow(deprecated)]
+impl WireValue<pb::Usage> for nemo_relay_types::codec::response::Usage {
+    fn to_wire(self) -> Result<pb::Usage> {
+        use nemo_relay_types::codec::response::CACHE_WRITE_ONE_HOUR_SECONDS;
+
+        let legacy_total = self.cache_write_total();
+        let legacy_one_hour = self.cache_write_tokens.as_ref().and_then(|writes| {
+            writes
+                .iter()
+                .filter(|write| write.duration == Some(CACHE_WRITE_ONE_HOUR_SECONDS))
+                .map(|write| write.count)
+                .reduce(u64::saturating_add)
+        });
+        let Self {
+            prompt_tokens,
+            completion_tokens,
+            total_tokens,
+            cache_read_tokens,
+            cache_write_tokens,
+            uncached_input_tokens,
+            cost,
+        } = self;
+        Ok(pb::Usage {
+            prompt_tokens: field_encode!(prompt_tokens, optional),
+            completion_tokens: field_encode!(completion_tokens, optional),
+            total_tokens: field_encode!(total_tokens, optional),
+            cache_read_tokens: field_encode!(cache_read_tokens, optional),
+            cache_write_tokens: legacy_total,
+            cache_write_1h_tokens: legacy_one_hour,
+            uncached_input_tokens: field_encode!(uncached_input_tokens, optional),
+            cost: field_encode!(cost, optional),
+            cache_write_token_counts: field_encode!(cache_write_tokens, optional),
+        })
+    }
+
+    fn from_wire(value: pb::Usage) -> Result<Self> {
+        use nemo_relay_types::codec::response::CacheWriteTokenCounts;
+
+        let pb::Usage {
+            prompt_tokens,
+            completion_tokens,
+            total_tokens,
+            cache_read_tokens,
+            cache_write_tokens,
+            cache_write_1h_tokens,
+            uncached_input_tokens,
+            cost,
+            cache_write_token_counts,
+        } = value;
+        let cache_write_tokens = match cache_write_token_counts {
+            Some(writes) => Some(decode(writes)?),
+            None => CacheWriteTokenCounts::from_total_and_one_hour(
+                cache_write_tokens,
+                cache_write_1h_tokens,
+                None,
+            ),
+        };
+        Ok(Self {
+            prompt_tokens: field_decode!(prompt_tokens, optional),
+            completion_tokens: field_decode!(completion_tokens, optional),
+            total_tokens: field_decode!(total_tokens, optional),
+            cache_read_tokens: field_decode!(cache_read_tokens, optional),
+            cache_write_tokens,
+            uncached_input_tokens: field_decode!(uncached_input_tokens, optional),
+            cost: field_decode!(cost, optional),
+        })
+    }
+}
+
+impl WireValue<Box<pb::Usage>> for nemo_relay_types::codec::response::Usage {
+    fn to_wire(self) -> Result<Box<pb::Usage>> {
+        Ok(Box::new(<Self as WireValue<pb::Usage>>::to_wire(self)?))
+    }
+
+    fn from_wire(value: Box<pb::Usage>) -> Result<Self> {
+        <Self as WireValue<pb::Usage>>::from_wire(*value)
+    }
+}
+
 impl WireValue<pb::LlmMessage> for nemo_relay_types::codec::request::Message {
     fn to_wire(self) -> Result<pb::LlmMessage> {
         Ok(pb::LlmMessage {

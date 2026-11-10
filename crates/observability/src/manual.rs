@@ -10,7 +10,7 @@
 use serde_json::Map;
 
 use nemo_relay_types::Json;
-use nemo_relay_types::codec::response::Usage;
+use nemo_relay_types::codec::response::{CacheWriteTokenCounts, Usage};
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 #[doc(hidden)]
@@ -86,21 +86,16 @@ pub(crate) fn usage_from_manual_llm_output(output: Option<&Json>) -> Option<Usag
                     ],
                 )
             });
-    let cache_write_tokens = first_u64_from_manual_usage(
-        usage,
-        token_usage,
-        &[
-            "cache_write_tokens",
-            "cache_creation_input_tokens",
-            "cacheWriteTokens",
-            "cacheCreationInputTokens",
-            "cacheWrite",
-        ],
-    );
+    let cache_write_aliases = [
+        "cache_write_tokens",
+        "cache_creation_input_tokens",
+        "cacheWriteTokens",
+        "cacheCreationInputTokens",
+        "cacheWrite",
+    ];
+    let cache_write_tokens = first_u64_from_manual_usage(usage, token_usage, &cache_write_aliases);
     let cache_write_1h_aliases = [
-        "cache_write_1h_tokens",
         "cache_creation_1h_input_tokens",
-        "cacheWrite1hTokens",
         "cacheCreation1hInputTokens",
     ];
     // Preserve map precedence: inspect all supported shapes in `usage`
@@ -120,13 +115,36 @@ pub(crate) fn usage_from_manual_llm_output(output: Option<&Json>) -> Option<Usag
         token_usage,
         &["uncached_input_tokens", "uncachedInputTokens"],
     );
+    // Usage output carries a per-duration list; read it back as-is,
+    // keeping `usage` ahead of `token_usage` like the scalar fields.
+    let cache_write_list = |map: Option<&Map<String, Json>>| {
+        map?.get("cache_write_tokens")
+            .filter(|value| value.is_array())
+            .and_then(|value| {
+                serde_json::from_value::<Vec<CacheWriteTokenCounts>>(value.clone()).ok()
+            })
+    };
+    let scalar_writes = || {
+        CacheWriteTokenCounts::from_total_and_one_hour(
+            cache_write_tokens,
+            cache_write_1h_tokens,
+            None,
+        )
+    };
+    let cache_writes = cache_write_list(usage)
+        .or_else(|| {
+            usage
+                .and_then(|value| first_u64(value, &cache_write_aliases))
+                .and_then(|_| scalar_writes())
+        })
+        .or_else(|| cache_write_list(token_usage))
+        .or_else(scalar_writes);
 
     if prompt_tokens.is_none()
         && completion_tokens.is_none()
         && reported_total_tokens.is_none()
         && cache_read_tokens.is_none()
-        && cache_write_tokens.is_none()
-        && cache_write_1h_tokens.is_none()
+        && cache_writes.is_none()
         && uncached_input_tokens.is_none()
     {
         return None;
@@ -139,8 +157,7 @@ pub(crate) fn usage_from_manual_llm_output(output: Option<&Json>) -> Option<Usag
         completion_tokens,
         total_tokens,
         cache_read_tokens,
-        cache_write_tokens,
-        cache_write_1h_tokens,
+        cache_write_tokens: cache_writes,
         uncached_input_tokens,
         cost: None,
     })

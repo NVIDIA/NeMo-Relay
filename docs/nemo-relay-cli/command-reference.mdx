@@ -1,0 +1,162 @@
+---
+title: "Command Reference"
+description: "Look up CLI commands, run syntax, argument forwarding, and launch-plan inspection."
+position: 10
+---
+{/* SPDX-FileCopyrightText: Copyright (c) 2026, NVIDIA CORPORATION & AFFILIATES. All rights reserved.
+SPDX-License-Identifier: Apache-2.0 */}
+
+Find a CLI command here, then follow its linked guide for prerequisites,
+setup, and expected results. Run `nemo-relay <command> --help` for the complete
+options accepted by your installed version.
+
+## Command Index
+
+| Command | Purpose | Guide |
+| --- | --- | --- |
+| `claude`, `codex`, `pi` | Launch the selected coding agent through Relay. | [Claude Code](/nemo-relay-cli/claude-code), [Codex](/nemo-relay-cli/codex), [pi](/nemo-relay-cli/pi) |
+| `run` | Launch an explicitly selected agent or command. | [Run Syntax](#run-syntax) |
+| `config` | Run setup or edit CLI configuration. | [Configuration](/nemo-relay-cli/configuration) |
+| `plugins` | Edit configuration and manage discoverable plugins. | [Configure](/configure-plugins/plugin-configuration-files), [Manage](/configure-plugins/discoverable-plugins) |
+| `install`, `uninstall` | Manage persistent coding-agent integrations. | [Manage Persistent Integrations](/nemo-relay-cli/plugin-installation) |
+| `integrations refresh` | Refresh Relay-managed integrations after upgrading. | [Refresh Installed Integrations](/nemo-relay-cli/plugin-installation#refresh-installed-integrations) |
+| `auth` | Sign in, obtain a token, or remove an OIDC sign-in. | [Provider Authentication](/nemo-relay-cli/authentication#sign-in-with-openid-connect) |
+| `doctor` | Check configuration, integrations, and configured destinations. | [Troubleshoot the CLI](/nemo-relay-cli/troubleshooting) |
+| `agents` | List supported and detected coding agents. | [Support Matrix](/reference/support-matrix) |
+| `gateway` | Start or stop a standalone gateway. | [Gateway Lifecycle](#gateway-lifecycle) |
+| `mcp` | Keep the shared gateway available for an MCP connection. | [Shared Gateway Lifecycle](/nemo-relay-cli/plugin-installation#shared-gateway-lifecycle) |
+| `diagnostics` | Inspect diagnostics from an existing gateway or daemon. | [CLI and Daemon Diagnostics](/reference/diagnostics/cli) |
+| `daemon` | Run or connect to the managed daemon. | [Daemon Reference](/daemon/reference) |
+| `model-pricing` | Validate catalogs, manage sources, and resolve prices. | [Model Pricing](/configure-plugins/model-pricing) |
+| `completions` | Generate or install shell completions. | [Shell Completions](#shell-completions) |
+
+With no subcommand or server-specific options, `nemo-relay` opens first-time
+setup when no configuration exists. Once configured, it runs a health check.
+Use `nemo-relay config` to reopen setup.
+
+## Run Syntax
+
+Use an explicit executable after `--`:
+
+```bash
+nemo-relay run -- codex
+```
+
+When `--agent` or a shortcut selects the agent, provide only that agent's
+arguments after `--`:
+
+```bash
+nemo-relay run --agent claude -- -p "Review this change"
+```
+
+Relay forwards those arguments unchanged. Use the
+[Claude Code](/nemo-relay-cli/claude-code#transparent-run),
+[Codex](/nemo-relay-cli/codex#transparent-run), or
+[pi](/nemo-relay-cli/pi#transparent-run) guide for launch instructions and
+prerequisites. pi requires an installed Relay extension even for a transparent
+run.
+
+### Run Options
+
+| Option | Behavior |
+| --- | --- |
+| `--agent claude\|codex\|pi` | Select the agent when a custom executable or configured command hides its identity. `claude-code` is also accepted. |
+| `--config PATH` | Select an explicit base configuration and its sibling `plugins.toml`; system configuration still applies. |
+| `--openai-base-url URL` | Override the OpenAI-compatible upstream. |
+| `--anthropic-base-url URL` | Override the Anthropic-compatible upstream. |
+| `--chatgpt-codex-base-url URL` | Override the ChatGPT Codex backend. This backend receives the caller's ChatGPT credential. |
+| `--session-metadata JSON` | Attach structured metadata to the session. |
+| `--dry-run` | Validate and print the launch plan without setup, gateway startup, or agent execution. |
+| `--print` | Include generated launch configuration in the printed plan. Combine with `--dry-run` to inspect it without launching. |
+
+For provider defaults, timeout settings, and endpoint-change credential rules,
+refer to [Provider Connections](/nemo-relay-cli/provider-upstreams). For file
+precedence, custom commands, and session metadata, refer to
+[Configuration](/nemo-relay-cli/configuration).
+
+### Inspect a Launch Plan
+
+Add `--dry-run` before `--` to validate and inspect the resolved launch plan
+without running setup, starting the gateway, or launching the agent. During
+dry-run validation, Relay logs a warning when the selected executable is
+repeated after `--`:
+
+```bash
+nemo-relay run --agent claude --dry-run -- claude
+nemo-relay claude --dry-run -- claude
+```
+
+Live launches do not perform this diagnostic or rewrite forwarded arguments.
+The selected agent receives the arguments exactly as provided.
+
+Dry-run output includes forwarded arguments. Do not share it when those
+arguments contain prompts, credentials, or other sensitive values.
+
+Use `run --dry-run --print` to inspect the generated hook configuration,
+gateway environment, gateway URL, and final command:
+
+```bash
+nemo-relay run --dry-run --print -- codex
+```
+
+The `claude`, `codex`, and `pi` shortcuts accept `--dry-run`. Use `run` for
+`--print`.
+
+### Launch Lifecycle
+
+Use the agent shortcuts for local observability. The wrapper starts a gateway on
+a dynamic `127.0.0.1` port, injects the resolved hook and gateway configuration
+into the launched coding agent, and stops the gateway when the
+agent exits. Relay owns the launched wrapper and its descendants as one process
+tree, so a gateway failure cannot leave an agent running without its private
+gateway and hook configuration. Interactive Unix launches transfer foreground
+terminal ownership and preserve Ctrl-C and Ctrl-Z job control. Non-interactive
+Unix launches forward termination signals to the complete agent process tree
+before Relay removes the injected configuration.
+
+For Claude Code and Codex, transparent mode leaves the caller's source settings,
+selected profile, and installed plugin state unchanged. A process marker makes
+any installed Relay MCP borrow the wrapper-owned dynamic gateway. Claude's
+persistent hooks exit without forwarding; Codex disables the known Relay plugin
+hook identities in its process-local CLI state. Only the injected wrapper hooks
+deliver events.
+
+## Gateway Lifecycle
+
+Start a standalone gateway at the default `127.0.0.1:4040` endpoint:
+
+```bash
+nemo-relay gateway start
+```
+
+Stop that gateway with:
+
+```bash
+nemo-relay gateway stop
+```
+
+Pass the same top-level `--bind` value to both commands for a custom endpoint.
+On Unix, `gateway stop --force` terminates the process immediately instead of
+requesting graceful shutdown. Windows always terminates the gateway process
+tree. The command stops only a verified Relay process at a local loopback
+endpoint.
+
+The persistent shared gateway uses `127.0.0.1:47632` by default. See
+[Shared Gateway Lifecycle](/nemo-relay-cli/plugin-installation#shared-gateway-lifecycle)
+to stop it, or
+[Refresh Installed Integrations](/nemo-relay-cli/plugin-installation#refresh-installed-integrations)
+to update its installation. For a multi-user deployment, use the
+separate [Daemon](/daemon/about) commands.
+
+## Shell Completions
+
+Print a completion script for a shell, for example Zsh:
+
+```bash
+nemo-relay completions zsh
+```
+
+Use `nemo-relay completions --install` to install completions for the shell
+identified by `SHELL`, or specify the shell explicitly with
+`nemo-relay completions zsh --install`. The command prints the installed file
+path.

@@ -8,13 +8,7 @@ import * as pluginHost from './plugin_host_test_helper.mjs';
 
 const require = createRequire(import.meta.url);
 const lib = require('../index.js');
-const {
-  __testEncodeWithCodec,
-  typedToolExecute,
-  typedLlmExecute,
-  typedLlmStreamExecute,
-  JsonPassthrough,
-} = require('../typed.js');
+const { typedToolExecute, typedLlmExecute, typedLlmStreamExecute, JsonPassthrough } = require('../typed.js');
 const adaptive = require('../adaptive.js');
 const plugin = require('../plugin.js');
 
@@ -180,42 +174,6 @@ describe('JsonPassthrough', () => {
       b: 2,
     };
     assert.equal(p.fromJson(obj), obj);
-  });
-
-  it('dispatches non-annotated codec payloads through the plain encode path', () => {
-    const seen = [];
-    const result = __testEncodeWithCodec(
-      {
-        encode(annotated, original) {
-          seen.push({
-            annotated,
-            original,
-          });
-          return {
-            annotated,
-            original,
-          };
-        },
-      },
-      {
-        model: 'plain-request',
-      },
-    );
-
-    assert.deepEqual(result, {
-      annotated: {
-        model: 'plain-request',
-      },
-      original: null,
-    });
-    assert.deepEqual(seen, [
-      {
-        annotated: {
-          model: 'plain-request',
-        },
-        original: null,
-      },
-    ]);
   });
 });
 
@@ -1063,6 +1021,13 @@ describe('typedLlmStreamExecute', () => {
                 },
               ],
             },
+            {
+              type: 'custom_tool_call',
+              id: 'ctc-item',
+              call_id: 'call-wrapper',
+              name: 'exec',
+              input: '{"looks_like":"json"}',
+            },
           ],
           usage: {
             input_tokens: 4,
@@ -1103,6 +1068,9 @@ describe('typedLlmStreamExecute', () => {
       assert.equal(endEvent.category_profile.annotated_response.model, 'gpt-4.1-mini');
       assert.equal(endEvent.category_profile.annotated_response.message, 'hello world');
       assert.equal(endEvent.category_profile.annotated_response.finish_reason, 'complete');
+      assert.deepEqual(endEvent.category_profile.annotated_response.tool_calls, [
+        { id: 'call-wrapper', name: 'exec', arguments: '{"looks_like":"json"}' },
+      ]);
     } finally {
       deregisterSubscriber('typed_responses_stream_sub');
       deregisterLlmRequestIntercept('typed_responses_stream_req');
