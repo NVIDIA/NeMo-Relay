@@ -101,10 +101,15 @@ export interface TypedLlmStreamExecuteOptions<
   responseCodec?: LlmResponseCodec<TDecodedResponse> | null;
 }
 
-function encodeToolExecutionResult<TResult, TResultJson extends JsonValue>(
+interface EncodedToolExecutionResult<TResultJson> {
+  result: TResultJson;
+  annotation?: JsonValue;
+}
+
+function encodeToolExecutionResult<TResult, TResultJson extends JsonCompatible<TResultJson>>(
   executionResult: ToolExecutionResult<TResult>,
   resultCodec: Codec<TResult, TResultJson>,
-): JsonToolExecutionResult {
+): EncodedToolExecutionResult<TResultJson> {
   if (executionResult === null || typeof executionResult !== 'object' || !('result' in executionResult)) {
     throw new TypeError('typed tool callback must return ToolExecutionResult');
   }
@@ -135,7 +140,7 @@ export async function typedToolExecute<
   TArgs,
   TResult,
   TArgsJson extends JsonCompatible<TArgsJson> = JsonValue,
-  TResultJson extends JsonValue = JsonValue,
+  TResultJson extends JsonCompatible<TResultJson> = JsonValue,
   TData extends JsonCompatible<TData> = JsonValue,
   TMetadata extends JsonCompatible<TMetadata> = JsonValue,
 >(
@@ -149,7 +154,7 @@ export async function typedToolExecute<
   const jsonResult: JsonToolExecutionResult = await lib.toolCallExecuteAsync(
     name,
     argsCodec.toJson(args),
-    async (jsonArgs: Json, signal: AbortSignal) =>
+    async (jsonArgs: Json, signal: AbortSignal): Promise<EncodedToolExecutionResult<unknown>> =>
       encodeToolExecutionResult(await func(argsCodec.fromJson(jsonArgs), signal), resultCodec),
     options.handle,
     options.attributes,

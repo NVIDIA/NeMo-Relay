@@ -157,7 +157,6 @@ declare const undefinedMeta: UndefinedMeta;
 declare const withMethod: WithMethod;
 declare const withUndefined: WithUndefined;
 declare const paramsOrList: SdkParams | string[];
-declare function toJsonValue(value: SdkResponse): JsonValue;
 declare function parseSdkParams(data: Json): SdkParams;
 declare function parseSdkResponse(data: Json): SdkResponse;
 async function* chunks(): AsyncIterable<SdkChunk> {
@@ -306,8 +305,16 @@ const typedTool: Promise<{ result: SdkResponse }> = typedToolExecute(
   params,
   async () => ({ result: sdk }),
   { toJson: (value) => value, fromJson: parseSdkParams },
-  { toJson: toJsonValue, fromJson: parseSdkResponse },
+  { toJson: (value) => value, fromJson: parseSdkResponse },
   { metadata: markData },
+);
+const typedToolResult = typedToolExecute(
+  'typed',
+  params,
+  async () => ({ result: sdk }),
+  { toJson: (value) => value, fromJson: parseSdkParams },
+  // @ts-expect-error a result codec may only produce JSON
+  { toJson: (value): Map<string, string> => new Map([['id', value.id]]), fromJson: parseSdkResponse },
 );
 const open = plugin.ComponentSpec('example.add-tag', settings);
 function forwardJson<T extends Json>(value: T): void {
@@ -465,6 +472,7 @@ export const checked = [
   fromJson,
   typedResponse,
   typedTool,
+  typedToolResult,
   openKind,
   built,
   forwardJson,
