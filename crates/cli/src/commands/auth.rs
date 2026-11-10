@@ -128,9 +128,8 @@ async fn logout(dir: &Path, source: OidcSource) -> Result<(), CliError> {
             );
         }
         crate::oidc::Logout::Removed(crate::oidc::Revocation::Failed(detail)) => {
-            println!("Removed the sign-in for {}.", source.issuer);
-            eprintln!(
-                "warning: {} did not revoke the tokens ({detail}). They stay valid until they expire.",
+            println!(
+                "Removed the sign-in for {0}. {0} did not revoke its tokens ({detail}), so they stay valid until they expire.",
                 source.issuer
             );
         }
