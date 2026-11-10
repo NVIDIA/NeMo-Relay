@@ -403,36 +403,19 @@ You supply the plugin manifest, model IDs, and provider credentials.
 
 ### 4. Configure inference and run one comparison
 
-<CardGroup cols={2}>
-<Card title="Free hosted inference" icon="fa-solid fa-gift" href="https://docs.api.nvidia.com/nim/docs/api-quickstart">
-Join the free NVIDIA Developer Program through a model page on build.nvidia.com
-and select **Generate API Key**. Use the free endpoints listed below for this
-prototyping example; account access and service limits apply.
-</Card>
-<Card title="Use existing NVIDIA access" icon="fa-solid fa-building">
-Use your organization's approved NVIDIA endpoint and accessible models. Supply its
-model IDs, base URL, and inference credential in the environment below.
-The endpoint must support the OpenAI Chat Completions contract used here.
-</Card>
-</CardGroup>
-
-The [NVIDIA Developer Program](https://docs.api.nvidia.com/nim/docs/product#how-do-i-access-nvidia-nim-via-the-nvidia-developer-program)
-provides free hosted inference for prototyping. Brev compute is billed separately;
-you can also run the same files on a suitable Linux host you already have.
-
-The following public NVIDIA API catalog selections provide an efficient and
-capable target. The judge reuses the efficient model; it does not require a third
-model. Both model pages list a free endpoint. Confirm access with your key,
-tool calling, and JSON verdict support before a comparison; the catalog can
-change independently of this guide.
+Choose models from [build.nvidia.com](https://build.nvidia.com/) and use the
+[NVIDIA inference API](https://docs.api.nvidia.com/nim/reference).
+**The models below are suggestions; use any compatible models you prefer.**
+The efficient and capable models need tool calling, and the judge needs JSON
+verdict support. This example reuses the efficient model as the judge.
 
 | Role | Example model |
 | --- | --- |
 | Efficient target and judge | [NVIDIA Nemotron 3.5 Lightning 30B A3B](https://build.nvidia.com/nvidia/nemotron-3.5-lightning-30b-a3b) |
 | Capable target | [NVIDIA Nemotron 3 Ultra 550B A55B](https://build.nvidia.com/nvidia/nemotron-3-ultra-550b-a55b) |
 
-Replace these choices with accessible models when needed. Enter credentials in
-the same shell you use to run the comparison:
+Set your chosen model IDs and API credentials in the same shell you use to run
+the comparison:
 
 ```bash
 export NVIDIA_BASE_URL=https://integrate.api.nvidia.com/v1
@@ -477,10 +460,6 @@ tools and prompts differ, so their results are separate experiments.
 The Codex path uses its workspace-write sandbox. The Claude Code path allows
 file tools and `python3` test commands for the supplied synthetic tasks. Review
 any Relay hook trust prompts; keep the run confined to the disposable example.
-
-Choose available models from [build.nvidia.com](https://build.nvidia.com/explore/discover).
-The upstream API base URL is `https://integrate.api.nvidia.com/v1`; Switchyard
-calls `/chat/completions` for either harness. Confirm model access before starting.
 
 ### 5. Inspect the evidence
 
