@@ -1878,3 +1878,186 @@ async fn worker_setup_failure_releases_staged_sessions_before_disconnect_grace()
     assert_eq!(snapshot.reference_count, 1);
     daemon_task.abort();
 }
+
+struct ReadyWorker {
+    state: Arc<DaemonState>,
+    identity: MachineIdentity,
+    owner: Client,
+    worker: Client,
+    session_token: SensitiveString,
+    tasks: Vec<tokio::task::JoinHandle<()>>,
+}
+
+/// A registered worker that passed its readiness probe, with its launching MCP connected.
+async fn ready_worker() -> ReadyWorker {
+    let (state, origin, task) = daemon(false).await;
+    let identity = MachineIdentity::generate().unwrap().identity;
+    let owner = Client::default();
+    let mcp_registration = mcp(&owner, &origin, &identity, "owner").await;
+    let crate::daemon::common::control::WorkerBootstrap {
+        activation_id,
+        activation_token,
+        ..
+    } = crate::daemon::common::control::WorkerBootstrap::from_directive(mcp_registration.directive)
+        .unwrap();
+    let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
+    let endpoint = format!("http://{}", listener.local_addr().unwrap());
+    let worker = Client::default();
+    let handshake = begin_handshake(
+        &worker,
+        &origin,
+        ComponentRole::Worker,
+        &identity,
+        "worker",
+        None,
+    )
+    .await
+    .unwrap();
+    let registration: WorkerRegisterResponse = worker
+        .request(Command::RegisterWorker(WorkerRegisterRequest {
+            diagnostics: None,
+            proof: handshake.proof,
+            worker_id: "worker".into(),
+            endpoint,
+            activation_id,
+            activation_token,
+            tls_root_certificate: None,
+        }))
+        .await
+        .unwrap();
+    let data = registration.data_token.clone();
+    let server = tokio::spawn(async move {
+        axum::serve(
+            listener,
+            Router::new().route(
+                WORKER_PROBE_PATH,
+                axum::routing::get(move |headers: HeaderMap| {
+                    let data = data.clone();
+                    async move {
+                        assert_eq!(headers[WORKER_TOKEN_HEADER], data.expose());
+                        StatusCode::NO_CONTENT
+                    }
+                }),
+            ),
+        )
+        .await
+        .unwrap();
+    });
+    let ready = SessionRequest::new(
+        "worker".into(),
+        registration.session_token.clone(),
+        1,
+        WorkerReadyPayload {
+            worker_id: "worker".into(),
+        },
+    )
+    .unwrap();
+    worker.request::<()>(Command::Ready(ready)).await.unwrap();
+    acknowledge_until_ready(&owner).await;
+    let mcp_task = tokio::spawn(acknowledge_directives(owner.clone()));
+    ReadyWorker {
+        state,
+        identity,
+        owner,
+        worker,
+        session_token: registration.session_token,
+        tasks: vec![task, server, mcp_task],
+    }
+}
+
+fn worker_release(token: SensitiveString) -> Command {
+    Command::Release(
+        SessionRequest::new(
+            "worker".into(),
+            token,
+            2,
+            crate::daemon::common::control::ReleasePayload::default(),
+        )
+        .unwrap(),
+    )
+}
+
+/// A worker that announces its exit is removed at once, so the route can launch a replacement
+/// instead of waiting out the reconnect grace meant for a live worker.
+#[tokio::test]
+async fn worker_release_before_exit_skips_the_reconnect_grace() {
+    let fixture = ready_worker().await;
+    fixture
+        .worker
+        .request::<()>(worker_release(fixture.session_token.clone()))
+        .await
+        .unwrap();
+    // Released but still tearing down: no more traffic, and no replacement yet.
+    let target = lock(&fixture.state.worker_sessions)["worker"]
+        .pending_target
+        .clone();
+    assert!(!target.control_available());
+    assert!(lock(&fixture.state.worker_sessions).contains_key("worker"));
+    assert!(!matches!(
+        owner_directive_now(&fixture.state, &fixture.identity),
+        BrokerDirective::LaunchWorker { .. }
+    ));
+    drop(fixture.worker);
+    tokio::time::timeout(Duration::from_secs(2), async {
+        loop {
+            let removed = !lock(&fixture.state.worker_sessions).contains_key("worker");
+            if removed
+                && matches!(
+                    owner_directive_now(&fixture.state, &fixture.identity),
+                    BrokerDirective::LaunchWorker { .. }
+                )
+            {
+                return;
+            }
+            tokio::task::yield_now().await;
+        }
+    })
+    .await
+    .expect("released worker is removed and a replacement is nominated without the grace");
+    drop(fixture.owner);
+    for task in fixture.tasks {
+        task.abort();
+    }
+}
+
+fn owner_directive_now(state: &DaemonState, identity: &MachineIdentity) -> BrokerDirective {
+    state
+        .registry
+        .current_directive(identity.fingerprint(), &McpSessionId::new("owner").unwrap())
+        .unwrap()
+}
+
+/// A release must carry the worker's own session token; otherwise the disconnect keeps the
+/// reconnect grace a live worker may still use.
+#[tokio::test]
+async fn worker_release_requires_the_worker_session() {
+    let fixture = ready_worker().await;
+    let forged = SensitiveString::new("not-the-session-token").unwrap();
+    assert!(
+        fixture
+            .worker
+            .request::<()>(worker_release(forged))
+            .await
+            .is_err()
+    );
+    let ReadyWorker {
+        state,
+        identity,
+        owner,
+        worker,
+        tasks,
+        ..
+    } = fixture;
+    drop(worker);
+    wait_disconnected(&state, ComponentRole::Worker, "worker").await;
+    tokio::time::sleep(Duration::from_millis(200)).await;
+    assert!(lock(&state.worker_sessions).contains_key("worker"));
+    assert!(matches!(
+        owner_directive_now(&state, &identity),
+        BrokerDirective::WaitForWorker { .. }
+    ));
+    drop(owner);
+    for task in tasks {
+        task.abort();
+    }
+}
