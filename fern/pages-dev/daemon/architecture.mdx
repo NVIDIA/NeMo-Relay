@@ -208,7 +208,7 @@ MCP can receive a new grant.
 
 When startup fails or the daemon cancels a launch, it releases the worker's
 staged registration right away. Published workers keep their reconnect grace
-period. Slow writes to daemon state do not block request streams or health checks.
+period unless they announce their own exit. Slow writes to daemon state do not block request streams or health checks.
 
 Each request keeps the destination selected when it starts. Streams already
 sent through passthrough finish on that path. Later requests use the ready
