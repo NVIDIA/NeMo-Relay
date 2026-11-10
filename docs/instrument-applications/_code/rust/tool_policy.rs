@@ -29,8 +29,11 @@ pub fn register_tool_policy() -> nemo_relay::Result<()> {
     register_tool_conditional_execution_guardrail(
         "search.require_query",
         20,
-        Arc::new(|_tool_name, tool_arguments| {
+        Arc::new(|tool_name, tool_arguments| {
             Box::pin(async move {
+                if tool_name != "search" {
+                    return Ok(None);
+                }
                 Ok(
                     match tool_arguments.get("query").and_then(|value| value.as_str()) {
                         Some(query) if !query.is_empty() => None,

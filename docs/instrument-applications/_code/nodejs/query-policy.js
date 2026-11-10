@@ -4,9 +4,12 @@
 const { registerToolConditionalExecutionGuardrail } = require('nemo-relay-node');
 
 function registerQueryPolicy() {
-  registerToolConditionalExecutionGuardrail('search.require_query', 20, (_toolName, toolArguments) =>
-    toolArguments.query ? null : 'search.query is required',
-  );
+  registerToolConditionalExecutionGuardrail('search.require_query', 20, (toolName, toolArguments) => {
+    if (toolName !== 'search') {
+      return null;
+    }
+    return toolArguments.query ? null : 'search.query is required';
+  });
 }
 
 module.exports = { registerQueryPolicy };

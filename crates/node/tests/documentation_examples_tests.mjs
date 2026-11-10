@@ -97,6 +97,20 @@ for (const [name, register] of [
   ['first', queryPolicy.registerQueryPolicy],
   ['combined', toolPolicy.registerToolPolicy],
 ]) {
+  it(`${name} policy allows another tool without a query`, async () => {
+    register();
+    const received = [];
+    const { result, events } = await captureEvents(() =>
+      relay.toolCallExecute('get_time', { timezone: 'UTC' }, (toolArguments) => {
+        received.push(toolArguments);
+        return { result: { timezone: toolArguments.timezone, time: '12:00:00' } };
+      }),
+    );
+    assert.deepEqual(received, [{ timezone: 'UTC' }]);
+    assert.deepEqual(result.result, { timezone: 'UTC', time: '12:00:00' });
+    assertPair(events, 'tool', 'get_time');
+  });
+
   for (const query of ['weather', '']) {
     it(`${name} policy ${query ? 'allows the request' : 'rejects before the callback'}`, async () => {
       register();

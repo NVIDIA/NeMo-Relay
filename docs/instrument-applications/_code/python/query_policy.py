@@ -4,7 +4,9 @@
 import nemo_relay
 
 
-def require_query(_tool_name: str, tool_arguments: nemo_relay.Json) -> str | None:
+def require_query(tool_name: str, tool_arguments: nemo_relay.Json) -> str | None:
+    if tool_name != "search":
+        return None
     if not tool_arguments.get("query"):
         return "search.query is required"
     return None

@@ -209,6 +209,25 @@ def test_documented_program_entrypoints(name):
 
 
 @pytest.mark.parametrize("policy", ["query_policy", "tool_policy"])
+async def test_documented_policies_allow_other_tools(policy, subscribed_events):
+    module = example(policy)
+    getattr(module, "register_query_policy" if policy == "query_policy" else "register_tool_policy")()
+    received = []
+
+    async def get_time(tool_arguments):
+        received.append(tool_arguments)
+        return nemo_relay.ToolExecutionResult({"timezone": tool_arguments["timezone"], "time": "12:00:00"})
+
+    with nemo_relay.scope.scope("agent-run", nemo_relay.ScopeType.Agent) as handle:
+        result = await nemo_relay.tools.execute("get_time", {"timezone": "UTC"}, get_time, handle=handle)
+    await nemo_relay.subscribers.flush_async()
+    assert received == [{"timezone": "UTC"}]
+    assert result.result == {"timezone": "UTC", "time": "12:00:00"}
+    agent = assert_pair(subscribed_events, "agent", "agent-run")
+    assert assert_pair(subscribed_events, "tool", "get_time")["parent_uuid"] == agent["uuid"]
+
+
+@pytest.mark.parametrize("policy", ["query_policy", "tool_policy"])
 @pytest.mark.parametrize("query", ["runtime instrumentation", ""])
 async def test_documented_policies_allow_or_reject_before_execution(policy, query, subscribed_events, capsys):
     module = example(policy)
@@ -296,5 +315,28 @@ async def test_example_failure_closes_scope_and_removes_subscriber(name, categor
         deregister("documentation.reject")
     await nemo_relay.subscribers.flush_async()
     assert_pair(subscribed_events, "agent", "agent-run")
+    subscriber_name = "instrumentation-check" if name == "tool_call" else "llm-check"
+    assert subscriber_name not in {registration.local_name for registration in list_runtime_registrations()}
+
+
+@pytest.mark.parametrize("name,category", [("tool_call", "tool"), ("llm_call", "llm")])
+async def test_example_callback_failure_closes_call_and_agent(name, category, subscribed_events, monkeypatch):
+    module = example(name)
+    original_error = ValueError("documentation callback failure")
+    received = []
+
+    async def failing_callback(arguments):
+        received.append(arguments)
+        raise original_error
+
+    monkeypatch.setattr(module, "search" if name == "tool_call" else "call_provider", failing_callback)
+    with pytest.raises(ValueError, match="^documentation callback failure$") as raised:
+        await module.main()
+    assert raised.value is original_error
+    assert len(received) == 1
+    await nemo_relay.subscribers.flush_async()
+    agent = assert_pair(subscribed_events, "agent", "agent-run")
+    call_name = "search" if name == "tool_call" else "demo-provider"
+    assert assert_pair(subscribed_events, category, call_name)["parent_uuid"] == agent["uuid"]
     subscriber_name = "instrumentation-check" if name == "tool_call" else "llm-check"
     assert subscriber_name not in {registration.local_name for registration in list_runtime_registrations()}

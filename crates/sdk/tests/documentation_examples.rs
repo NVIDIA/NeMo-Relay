@@ -433,6 +433,28 @@ mod instrument_applications {
                         if combined { assert_eq!(paired_call(&records.lock().unwrap(), "tool", "search")["data"]["api_key"], "<redacted>"); }
                     }
                 }
+                records.lock().unwrap().clear();
+                let unrelated_tool_calls = Arc::new(AtomicUsize::new(0));
+                let unrelated_callback_calls = Arc::clone(&unrelated_tool_calls);
+                let execution = tool_call_execute(ToolCallExecuteParams::builder()
+                    .name("get_time")
+                    .args(json!({"timezone": "UTC"}))
+                    .func(Arc::new(move |arguments| {
+                        let unrelated_callback_calls = Arc::clone(&unrelated_callback_calls);
+                        Box::pin(async move {
+                            unrelated_callback_calls.fetch_add(1, Ordering::SeqCst);
+                            assert_eq!(arguments, json!({"timezone": "UTC"}));
+                            Ok(ToolExecutionResult::new(json!({
+                                "timezone": arguments["timezone"],
+                                "time": "12:00:00",
+                            })))
+                        })
+                    }))
+                    .build()).await.unwrap();
+                assert_eq!(unrelated_tool_calls.load(Ordering::SeqCst), 1);
+                assert_eq!(execution.result, json!({"timezone": "UTC", "time": "12:00:00"}));
+                flush_subscribers().unwrap();
+                paired_call(&records.lock().unwrap(), "tool", "get_time");
                 if combined {
                     for annotation in [None, Some(json!({"verification": "preserved"}))] {
                         let expected_annotation = annotation.clone();
