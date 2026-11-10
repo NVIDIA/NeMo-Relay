@@ -3,7 +3,7 @@
 # SPDX-License-Identifier: Apache-2.0
 
 if [ "${1:-}" = "--version" ]; then
-    printf 'codex-cli 0.143.0\n'
+    printf 'codex-cli 0.150.0\n'
     exit 0
 fi
 gateway_file_tmp="${BENCHMARK_GATEWAY_FILE}.tmp.$$"
