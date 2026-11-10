@@ -4,13 +4,16 @@
 //! OpenID Connect sign-in for upstream providers.
 //!
 //! `[upstream.openai_oidc]` and `[upstream.anthropic_oidc]` name an issuer and a client. A user
-//! signs in once with the OAuth 2.0 device authorization grant (RFC 8628); the sign-in is kept in
+//! signs in once in the browser with an authorization code and PKCE (RFC 7636, RFC 8252), or with
+//! the device authorization grant (RFC 8628) on request; the sign-in is kept in
 //! the per-user NeMo Relay config directory with owner-only access. The gateway reads it for each
 //! upstream request and refreshes the access token near expiry, so the token's real expiry and a
 //! `logout` apply to the next request. Tokens are written only to that file and to the standard
 //! output of `nemo-relay auth token`; they are never logged or included in an error.
 
+mod browser;
 mod client;
+mod error;
 mod session;
 
 use std::path::Path;
@@ -24,6 +27,8 @@ use self::session::{
 };
 use crate::error::CliError;
 
+pub(crate) use self::browser::BrowserApproval;
+pub(crate) use self::error::SignInError;
 pub(crate) use self::session::sessions_dir;
 
 /// Refresh an access token this many seconds before it expires.
@@ -162,14 +167,29 @@ pub(crate) async fn current_token(
     }
 }
 
+/// How `login` asks the user to approve the sign-in.
+pub(crate) enum LoginMethod<'a> {
+    /// Authorization code with PKCE, returned to a loopback redirect or pasted back.
+    Browser(BrowserApproval<'a>),
+    /// The device authorization grant: a code entered on the issuer's own page.
+    Device,
+}
+
 /// Signs in and stores the session.
 pub(crate) async fn login(
     dir: &Path,
     source: &OidcSource,
+    method: LoginMethod<'_>,
     show: impl FnMut(String),
 ) -> Result<(), CliError> {
     let client = OidcClient::discover(source).await?;
-    let session = client.device_login(&source.scope, show).await?;
+    let session = match method {
+        LoginMethod::Browser(approval) => {
+            let state = browser::random_value()?;
+            browser::sign_in(&client, &source.scope, &state, approval, show).await?
+        }
+        LoginMethod::Device => client.device_login(&source.scope, show).await?,
+    };
     ensure_sessions_dir(dir)?;
     let path = session_path(dir, source);
     let _lock = SessionLock::acquire(&path).await?;

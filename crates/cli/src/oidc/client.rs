@@ -1,7 +1,8 @@
 // SPDX-FileCopyrightText: Copyright (c) 2026, NVIDIA CORPORATION & AFFILIATES. All rights reserved.
 // SPDX-License-Identifier: Apache-2.0
 
-//! Requests to the OpenID Connect issuer: discovery, the device sign-in and token refresh.
+//! Requests to the OpenID Connect issuer: discovery, the device sign-in, the authorization code
+//! exchange and token refresh.
 
 use std::time::Duration;
 
@@ -9,6 +10,7 @@ use http::header::{ACCEPT, CONTENT_TYPE};
 use percent_encoding::{NON_ALPHANUMERIC, utf8_percent_encode};
 use serde::Deserialize;
 
+use super::error::SignInError;
 use super::session::Session;
 use super::{Clock, HTTP_TIMEOUT, OidcSource, auth_error, login_required, now_secs};
 use crate::error::CliError;
@@ -22,8 +24,12 @@ const SLOW_DOWN_SECS: u64 = 5;
 struct Discovery {
     issuer: String,
     token_endpoint: String,
+    authorization_endpoint: Option<String>,
     device_authorization_endpoint: Option<String>,
 }
+
+const AUTHORIZATION_CODE_GRANT: &str = "authorization_code";
+const PKCE_METHOD: &str = "S256";
 
 #[derive(Deserialize)]
 pub(crate) struct DeviceStart {
@@ -65,8 +71,10 @@ enum Grant {
 pub(crate) struct OidcClient {
     http: reqwest::Client,
     issuer: String,
+    metadata_issuer: String,
     client_id: String,
     pub(super) token_endpoint: String,
+    authorization_endpoint: Option<String>,
     device_endpoint: Option<String>,
 }
 
@@ -93,7 +101,8 @@ impl OidcClient {
         }
         // Endpoints on another origin could send the refresh token to an unintended host.
         let endpoints = std::iter::once(&discovery.token_endpoint)
-            .chain(discovery.device_authorization_endpoint.as_ref());
+            .chain(discovery.device_authorization_endpoint.as_ref())
+            .chain(discovery.authorization_endpoint.as_ref());
         for endpoint in endpoints {
             if secure_origin(endpoint)? != origin {
                 return Err(auth_error(format!(
@@ -104,10 +113,72 @@ impl OidcClient {
         Ok(Self {
             http,
             issuer: issuer.to_owned(),
+            metadata_issuer: discovery.issuer,
             client_id: source.client_id.clone(),
             token_endpoint: discovery.token_endpoint,
+            authorization_endpoint: discovery.authorization_endpoint,
             device_endpoint: discovery.device_authorization_endpoint,
         })
+    }
+
+    /// The issuer exactly as discovery published it, which RFC 9207 compares `iss` with.
+    pub(crate) fn metadata_issuer(&self) -> &str {
+        &self.metadata_issuer
+    }
+
+    /// The address the user opens to approve the sign-in.
+    pub(crate) fn authorization_url(
+        &self,
+        scope: &str,
+        redirect_uri: &str,
+        state: &str,
+        challenge: &str,
+    ) -> Result<String, SignInError> {
+        let endpoint = self.authorization_endpoint.as_deref().ok_or_else(|| {
+            SignInError::BrowserSignInNotOffered {
+                issuer: self.issuer.clone(),
+            }
+        })?;
+        let mut url = reqwest::Url::parse(endpoint).map_err(|_| SignInError::InvalidEndpoint {
+            endpoint: endpoint.to_owned(),
+        })?;
+        url.query_pairs_mut()
+            .append_pair("response_type", "code")
+            .append_pair("client_id", &self.client_id)
+            .append_pair("redirect_uri", redirect_uri)
+            .append_pair("scope", scope)
+            .append_pair("state", state)
+            .append_pair("code_challenge", challenge)
+            .append_pair("code_challenge_method", PKCE_METHOD);
+        Ok(url.into())
+    }
+
+    /// Exchanges an approved authorization code and its PKCE verifier for tokens.
+    pub(crate) async fn exchange_code(
+        &self,
+        code: &str,
+        redirect_uri: &str,
+        verifier: &str,
+    ) -> Result<Session, CliError> {
+        let grant = self
+            .token_request(&[
+                ("grant_type", AUTHORIZATION_CODE_GRANT),
+                ("code", code),
+                ("redirect_uri", redirect_uri),
+                ("client_id", &self.client_id),
+                ("code_verifier", verifier),
+            ])
+            .await;
+        match grant {
+            Grant::Issued(reply) => self.session(reply, None, now_secs()),
+            Grant::Refused { detail, .. } | Grant::Unavailable(detail) => {
+                Err(SignInError::TokenNotIssued {
+                    issuer: self.issuer.clone(),
+                    detail,
+                }
+                .into())
+            }
+        }
     }
 
     pub(crate) async fn device_login(

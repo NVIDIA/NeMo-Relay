@@ -171,6 +171,22 @@ function validateConfig(config) {
   }).config;
 }
 
+/**
+ * Validate an untyped model pricing document and return it as a config.
+ *
+ * @param {object} document - Model pricing component configuration document.
+ * @returns {object} The same document once validation reports no errors.
+ */
+function parseConfig(document) {
+  const errors = validateConfig(document).diagnostics.filter((diagnostic) => diagnostic.level === 'error');
+  if (errors.length > 0) {
+    throw new Error(`invalid model pricing config: ${errors.map((diagnostic) => diagnostic.message).join('; ')}`, {
+      cause: errors,
+    });
+  }
+  return document;
+}
+
 module.exports = {
   PRICING_PLUGIN_KIND,
   defaultConfig,
@@ -185,4 +201,5 @@ module.exports = {
   pricingConfig,
   ComponentSpec,
   validateConfig,
+  parseConfig,
 };

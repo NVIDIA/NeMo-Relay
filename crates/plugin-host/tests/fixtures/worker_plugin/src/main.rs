@@ -94,6 +94,8 @@ impl WorkerPlugin for FixtureWorkerPlugin {
         Box::pin(async move {
             let config = &Json::Object(config.clone());
             let result: nemo_relay_worker::Result<()> = async move {
+                tokio::task::block_in_place(|| wait_for_registration_gate(config))
+                    .map_err(WorkerSdkError::Callback)?;
                 if fixture_flag(config, "emit_internal_diagnostics") {
                     let runtime = ctx.runtime().expect("host runtime");
                     tokio::task::block_in_place(|| {
@@ -297,6 +299,64 @@ impl WorkerPlugin for FixtureWorkerPlugin {
                 nemo_relay_worker::PluginError::RegistrationFailed(error.to_string())
             })
         })
+    }
+}
+
+fn wait_for_registration_gate(config: &Json) -> Result<(), String> {
+    let Some(directory) = config.get("register_gate_directory") else {
+        return Ok(());
+    };
+    let directory = directory
+        .as_str()
+        .filter(|path| !path.is_empty())
+        .ok_or("register_gate_directory must be a nonempty directory path")?;
+    let directory = std::path::Path::new(directory);
+    if !directory.is_dir() {
+        return Err(format!(
+            "registration gate directory does not exist: {}",
+            directory.display()
+        ));
+    }
+    let pending_marker = directory.join("entered.json.tmp");
+    let entered_marker = directory.join("entered.json");
+    std::fs::write(
+        &pending_marker,
+        json!({"pid": std::process::id()}).to_string(),
+    )
+    .and_then(|()| std::fs::rename(&pending_marker, &entered_marker))
+    .map_err(|error| {
+        format!(
+            "cannot signal registration gate entry at {}: {error}",
+            entered_marker.display()
+        )
+    })?;
+    let release = directory.join("release");
+    // Safety bound beyond the process test's MCP and cleanup observation windows.
+    let deadline = std::time::Instant::now() + std::time::Duration::from_secs(300);
+    loop {
+        match std::fs::metadata(&release) {
+            Ok(metadata) if metadata.is_file() => return Ok(()),
+            Ok(_) => {
+                return Err(format!(
+                    "registration gate release must be a file: {}",
+                    release.display()
+                ));
+            }
+            Err(error) if error.kind() == std::io::ErrorKind::NotFound => {}
+            Err(error) => {
+                return Err(format!(
+                    "cannot inspect registration gate release {}: {error}",
+                    release.display()
+                ));
+            }
+        }
+        if std::time::Instant::now() >= deadline {
+            return Err(format!(
+                "registration gate timed out after 300 seconds: {}",
+                directory.display()
+            ));
+        }
+        std::thread::sleep(std::time::Duration::from_millis(10));
     }
 }
 

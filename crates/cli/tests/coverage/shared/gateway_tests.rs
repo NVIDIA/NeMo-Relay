@@ -1556,6 +1556,7 @@ async fn streaming_provider_error_does_not_poison_the_next_request() {
         &prepared,
         SourceRequestBody::default(),
         Arc::new(CapturedUpstreamFailures::default()),
+        Arc::new(CapturedUpstreamSuccesses::default()),
         crate::operational::OperationalContext::new(),
     );
     let mut request_headers = Map::new();
@@ -1628,6 +1629,7 @@ async fn buffered_body_read_failure_stays_structured() {
         &prepared,
         SourceRequestBody::default(),
         Arc::new(CapturedUpstreamFailures::default()),
+        Arc::new(CapturedUpstreamSuccesses::default()),
         crate::operational::OperationalContext::new(),
     );
     let mut request_headers = Map::new();
@@ -1683,6 +1685,7 @@ async fn buffered_invalid_json_becomes_safe_upstream_failure() {
         &prepared,
         SourceRequestBody::default(),
         Arc::new(CapturedUpstreamFailures::default()),
+        Arc::new(CapturedUpstreamSuccesses::default()),
         crate::operational::OperationalContext::new(),
     );
     let mut request_headers = Map::new();
@@ -2861,6 +2864,185 @@ fn captured_upstream_failures_reject_ambiguous_attempts_without_consuming_them()
     }
     assert!(failures.take(&earlier).is_some());
     assert!(failures.take(&selected).is_some());
+}
+
+fn success_headers(id: &'static str) -> HeaderMap {
+    let mut headers = HeaderMap::new();
+    headers.insert("request-id", HeaderValue::from_static(id));
+    headers.insert(
+        "content-type",
+        HeaderValue::from_static("application/x-provider"),
+    );
+    headers.insert("content-encoding", HeaderValue::from_static("gzip"));
+    headers.insert("content-digest", HeaderValue::from_static("sha-256=:AAAA:"));
+    headers.insert(
+        "x-nemo-relay-worker-route-failure",
+        HeaderValue::from_static("pass-through"),
+    );
+    headers
+}
+
+fn shared_success_headers(id: &'static str) -> HeaderMap {
+    let mut headers = success_headers(id);
+    headers.insert(
+        "anthropic-ratelimit-unified-status",
+        HeaderValue::from_static("allowed"),
+    );
+    headers
+}
+
+fn assert_only_shared_headers(headers: &HeaderMap) {
+    assert!(headers.get("request-id").is_none());
+    assert_eq!(headers["anthropic-ratelimit-unified-status"], "allowed");
+}
+
+/// Provider body and control headers never reach the client, and the gateway owns content-type.
+#[test]
+fn captured_upstream_successes_filter_provider_headers() {
+    let none = CapturedUpstreamSuccesses::default();
+    let headers = none.response_headers(None, "application/json");
+    assert_eq!(headers.len(), 1);
+    assert_eq!(headers["content-type"], "application/json");
+
+    let one = CapturedUpstreamSuccesses::default();
+    one.capture(None, success_headers("req_1"));
+    let headers = one.response_headers(None, "text/event-stream");
+    assert_eq!(headers["request-id"], "req_1");
+    assert_eq!(headers["content-type"], "text/event-stream");
+    assert_eq!(headers.get_all("content-type").iter().count(), 1);
+    assert!(headers.get("content-encoding").is_none());
+    assert!(headers.get("content-digest").is_none());
+    assert!(headers.get("x-nemo-relay-worker-route-failure").is_none());
+}
+
+/// A success carries the headers of the attempt that produced what was returned.
+#[test]
+fn captured_upstream_successes_select_the_returned_attempt() {
+    // The returned body picks its own attempt in either capture order, buffered or streamed.
+    let first = json!({"id": "first"});
+    let second = json!({"id": "second"});
+    for (returned, expected) in [(&first, "req_1"), (&second, "req_2")] {
+        let fan_out = CapturedUpstreamSuccesses::default();
+        fan_out.capture(Some(first.clone()), success_headers("req_1"));
+        let index = fan_out.capture(None, success_headers("req_2"));
+        fan_out.set_key(index, second.clone());
+        let headers = fan_out.response_headers(Some(returned), "application/json");
+        assert_eq!(headers["request-id"], expected);
+    }
+
+    // A rewritten response matches no attempt; one success still lends its headers.
+    let rewritten_one = CapturedUpstreamSuccesses::default();
+    rewritten_one.capture(Some(first), success_headers("req_1"));
+    let headers =
+        rewritten_one.response_headers(Some(&json!({"id": "rewritten"})), "application/json");
+    assert_eq!(headers["request-id"], "req_1");
+}
+
+/// Ambiguous matches relay only the headers every candidate agrees on.
+#[test]
+fn captured_upstream_successes_keep_only_agreed_headers_when_ambiguous() {
+    let first = json!({"id": "first"});
+    let second = json!({"id": "second"});
+
+    // Identical bodies with different headers.
+    let identical = CapturedUpstreamSuccesses::default();
+    identical.capture(Some(first.clone()), shared_success_headers("req_1"));
+    identical.capture(Some(first.clone()), shared_success_headers("req_2"));
+    assert_only_shared_headers(&identical.response_headers(Some(&first), "application/json"));
+
+    // A rewritten response with several successes.
+    let rewritten_many = CapturedUpstreamSuccesses::default();
+    rewritten_many.capture(Some(first), shared_success_headers("req_1"));
+    rewritten_many.capture(Some(second), shared_success_headers("req_2"));
+    assert_only_shared_headers(
+        &rewritten_many.response_headers(Some(&json!({"id": "rewritten"})), "application/json"),
+    );
+
+    // Streams whose first events are identical.
+    let same_first_event = CapturedUpstreamSuccesses::default();
+    for id in ["req_1", "req_2"] {
+        let index = same_first_event.capture(None, shared_success_headers(id));
+        same_first_event.set_key(index, json!({"type": "message_start"}));
+    }
+    assert_only_shared_headers(
+        &same_first_event
+            .response_headers(Some(&json!({"type": "message_start"})), "text/event-stream"),
+    );
+
+    // An empty stream returns no first event.
+    let empty_stream = CapturedUpstreamSuccesses::default();
+    empty_stream.capture(None, shared_success_headers("req_1"));
+    empty_stream.capture(None, shared_success_headers("req_2"));
+    assert_only_shared_headers(&empty_stream.response_headers(None, "text/event-stream"));
+}
+
+/// Inner stream that records explicit lifecycle calls.
+struct RecordingStream {
+    items: std::collections::VecDeque<Result<serde_json::Value, FlowError>>,
+    closed: Arc<std::sync::atomic::AtomicUsize>,
+    terminalized: Arc<std::sync::atomic::AtomicUsize>,
+}
+
+impl futures_util::Stream for RecordingStream {
+    type Item = Result<serde_json::Value, FlowError>;
+
+    fn poll_next(
+        self: std::pin::Pin<&mut Self>,
+        _cx: &mut std::task::Context<'_>,
+    ) -> std::task::Poll<Option<Self::Item>> {
+        std::task::Poll::Ready(self.get_mut().items.pop_front())
+    }
+}
+
+impl LlmStreamInner for RecordingStream {
+    fn terminalize(self: std::pin::Pin<&mut Self>) {
+        self.terminalized
+            .fetch_add(1, std::sync::atomic::Ordering::SeqCst);
+    }
+
+    fn close(
+        self: std::pin::Pin<&mut Self>,
+    ) -> std::pin::Pin<Box<dyn std::future::Future<Output = Result<(), FlowError>> + Send + '_>>
+    {
+        self.closed
+            .fetch_add(1, std::sync::atomic::Ordering::SeqCst);
+        Box::pin(async { Ok(()) })
+    }
+}
+
+/// The tap sees only the first successful event, and leaves the stream's lifecycle untouched.
+#[tokio::test]
+async fn first_event_tap_observes_the_first_ok_event_and_delegates_lifecycle() {
+    use futures_util::StreamExt;
+    let closed = Arc::new(std::sync::atomic::AtomicUsize::new(0));
+    let terminalized = Arc::new(std::sync::atomic::AtomicUsize::new(0));
+    let inner = LlmJsonStream::from_closeable(RecordingStream {
+        items: [
+            Err(FlowError::Internal("decode".into())),
+            Ok(json!({"event": 1})),
+            Ok(json!({"event": 2})),
+        ]
+        .into(),
+        closed: Arc::clone(&closed),
+        terminalized: Arc::clone(&terminalized),
+    });
+    let observed = Arc::new(Mutex::new(Vec::new()));
+    let record = Arc::clone(&observed);
+    let mut tapped = FirstEventTap::wrap(
+        inner,
+        Box::new(move |event| record.lock().unwrap().push(event.clone())),
+    );
+
+    assert!(tapped.next().await.unwrap().is_err());
+    assert!(observed.lock().unwrap().is_empty());
+    assert_eq!(tapped.next().await.unwrap().unwrap(), json!({"event": 1}));
+    assert_eq!(tapped.next().await.unwrap().unwrap(), json!({"event": 2}));
+    assert_eq!(*observed.lock().unwrap(), [json!({"event": 1})]);
+
+    tapped.terminalize();
+    tapped.close().await.unwrap();
+    assert_eq!(terminalized.load(std::sync::atomic::Ordering::SeqCst), 1);
+    assert_eq!(closed.load(std::sync::atomic::Ordering::SeqCst), 1);
 }
 
 #[tokio::test]

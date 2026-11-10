@@ -236,10 +236,26 @@ nemo-relay auth login
 
 The command reads the provider from the effective configuration, including a
 file passed with `--config`. When both providers have an `oidc` section with
-different values, add `--provider openai` or `--provider anthropic`. The command
-uses the OAuth 2.0 device authorization grant. It prints a URL and a code. Open
-the URL on any device, enter the code, and approve the sign-in. The command does
-not need a local browser, so it also works over SSH.
+different values, add `--provider openai` or `--provider anthropic`.
+
+The command signs in through the browser with an OAuth 2.0 authorization code
+and PKCE. It listens on `http://127.0.0.1:<port>/callback`, opens the issuer's
+sign-in page in the default browser, and waits up to five minutes for the
+issuer to redirect back. The OAuth client must allow that loopback redirect on
+any port. The `state` of each attempt is random, and the command accepts only a
+redirect that carries it.
+
+Without a local browser, for example over SSH, the command prints the address.
+Open it in a browser on any device and approve the sign-in. The browser's last
+page, `http://127.0.0.1:<port>/callback?code=...`, then fails to load, because
+the redirect points at the device the browser runs on. Copy that page's address,
+paste it into the terminal, and press Enter. Add `--no-browser` to print the
+address without opening a browser, and `--callback-port <port>` to listen on a
+fixed port, for example one you forward over SSH.
+
+`--device` uses the OAuth 2.0 device authorization grant instead: the command
+prints a URL and a code to enter on the issuer's own page. It needs no redirect.
+The issuer must offer the device grant to the client.
 
 `nemo-relay auth login` stores the sign-in with owner-only access in
 `$XDG_CONFIG_HOME/nemo-relay/oidc/` when `XDG_CONFIG_HOME` is an absolute path,
@@ -255,8 +271,12 @@ the stored sign-in for each request, the token's real expiry applies, and
 Relay adds the token only to requests it authenticates: agents that Relay
 launches, and daemon routes bound by the managed integration. A client that only
 points its base URL at a shared gateway gets no Relay credential, the same as
-with a static API key. Claude Code needs a credential before it starts, so set
-`ANTHROPIC_API_KEY` to any placeholder value. Relay replaces it.
+with a static API key. Claude Code needs a credential before it starts. When
+Relay launches Claude Code with a sign-in or an API key helper as the Anthropic
+credential, and the process inherits neither `ANTHROPIC_API_KEY` nor
+`ANTHROPIC_AUTH_TOKEN`, Relay sets a placeholder `ANTHROPIC_API_KEY` and
+replaces it. When you start Claude Code yourself on a route where Relay
+supplies this credential, set `ANTHROPIC_API_KEY` to any placeholder value.
 
 Without a sign-in, or when the provider rejects the refresh token, the gateway
 stops the request with HTTP 401 and an error that names `nemo-relay auth login`. A temporary
@@ -265,9 +285,9 @@ each configured sign-in exists, is valid, has expired but can refresh, or needs
 a new sign-in. `nemo-relay auth token` prints the current access token for
 scripts.
 
-The issuer must use `https`, or `http` on a loopback address. Its token and
-device endpoints must have the same origin as the issuer. Relay never writes
-tokens to logs or error messages.
+The issuer must use `https`, or `http` on a loopback address. Its
+authorization, token and device endpoints must have the same origin as the
+issuer. Relay never writes tokens to logs or error messages.
 
 <Warning>
 `nemo-relay auth token` prints an access token. Treat its output as a credential

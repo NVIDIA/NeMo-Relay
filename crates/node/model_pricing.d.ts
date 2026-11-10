@@ -2,7 +2,7 @@
 // SPDX-License-Identifier: Apache-2.0
 
 import type { Json, JsonObject } from './index';
-import type { ComponentSpec as PluginComponentSpec, ConfigReport } from './plugin';
+import type { ComponentSpecFor, ConfigReport } from './plugin';
 
 /** Plugin kind used by the model pricing component. */
 export declare const PRICING_PLUGIN_KIND = 'pricing';
@@ -111,12 +111,14 @@ export declare function fileSource(path: string): FileSource;
 export declare function pricingConfig(sources?: PricingSource[]): PricingConfig;
 /** Wrap model pricing config as a top-level plugin component. */
 export declare function ComponentSpec(
-  config: PricingConfig | JsonObject,
+  config: PricingConfig,
   options?: {
     enabled?: boolean;
   },
-): PluginComponentSpec;
+): ComponentSpecFor<'pricing'>;
 /** Validate a model pricing config document without activating it. */
 export declare function validateConfig(config: PricingConfig | JsonObject): ConfigReport;
+/** Validate an untyped model pricing document and return it as a config; throws on error diagnostics. */
+export declare function parseConfig(document: JsonObject): PricingConfig;
 
 export type { Json };

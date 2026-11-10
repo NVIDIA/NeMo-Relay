@@ -6,13 +6,27 @@ use crate::daemon::common::control::WorkerNetworkHintProof;
 use crate::daemon::common::{client::begin_handshake, socket::Client, state::RouteCredential};
 
 async fn daemon(pass: bool) -> (Arc<DaemonState>, String, tokio::task::JoinHandle<()>) {
+    daemon_with_idle_retention(pass, Duration::ZERO, false).await
+}
+
+async fn daemon_with_idle_retention(
+    pass: bool,
+    idle_timeout: Duration,
+    advertise_retention: bool,
+) -> (Arc<DaemonState>, String, tokio::task::JoinHandle<()>) {
     let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
     let origin = format!("http://{}", listener.local_addr().unwrap());
-    let state = super::super::tests::test_daemon_state_at(
+    let mut state = super::super::tests::test_daemon_state_at(
         pass,
         "",
         GatewayConfig::default(),
         origin.clone(),
+    );
+    let configured = Arc::get_mut(&mut state).unwrap();
+    configured.registry = Registry::new(pass).with_worker_idle_timeout(idle_timeout);
+    configured.descriptor = crate::daemon::common::control::descriptor_with_idle_retention(
+        ComponentRole::Daemon,
+        advertise_retention,
     );
     let app = super::router(state.clone())
         .layer(axum::middleware::from_fn(connection_info))
@@ -138,6 +152,142 @@ async fn wait_disconnected(state: &DaemonState, role: ComponentRole, id: &str) {
     .await
     .unwrap();
 }
+
+#[tokio::test]
+async fn pending_owner_disconnect_and_reconnect_preserve_session_identity() {
+    use crate::daemon::common::control::{
+        ActivationCancellation, CancelActivationPayload, WorkerBootstrap,
+    };
+
+    for registered_before_disconnect in [true, false] {
+        let (state, origin, task) =
+            daemon_with_idle_retention(false, Duration::from_secs(30), true).await;
+        let identity = MachineIdentity::generate().unwrap().identity;
+        let owner = Client::default();
+        let registration = mcp(&owner, &origin, &identity, "retained-owner").await;
+        let bootstrap = WorkerBootstrap::from_directive(registration.directive).unwrap();
+        let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let worker = Client::default();
+        let handshake = begin_handshake(
+            &worker,
+            &origin,
+            ComponentRole::Worker,
+            &identity,
+            "retained-worker",
+            None,
+        )
+        .await
+        .unwrap();
+        let admission = worker.request(Command::RegisterWorker(WorkerRegisterRequest {
+            diagnostics: None,
+            proof: handshake.proof,
+            worker_id: "retained-worker".into(),
+            endpoint: format!("http://{}", listener.local_addr().unwrap()),
+            activation_id: bootstrap.activation_id.clone(),
+            activation_token: bootstrap.activation_token,
+            tls_root_certificate: None,
+        }));
+        tokio::pin!(admission);
+        if registered_before_disconnect {
+            let _: WorkerRegisterResponse = admission.as_mut().await.unwrap();
+        }
+        let old_generation = lock(&state.sockets.peers)[&key(ComponentRole::Mcp, "retained-owner")]
+            .generation
+            .clone();
+        drop(owner);
+        tokio::time::timeout(Duration::from_secs(2), async {
+            while state
+                .registry
+                .snapshot(identity.fingerprint())
+                .unwrap()
+                .reference_count
+                != 0
+            {
+                tokio::task::yield_now().await;
+            }
+        })
+        .await
+        .expect("pending owner disconnect releases its route reference");
+        if !registered_before_disconnect {
+            let _: WorkerRegisterResponse = admission.as_mut().await.unwrap();
+        }
+        {
+            let sessions = lock(&state.mcp_sessions);
+            let session = &sessions["retained-owner"];
+            assert!(!session.released);
+        }
+        assert!(lock(&state.activations).contains_key(&bootstrap.activation_id));
+        assert!(lock(&state.worker_sessions).contains_key("retained-worker"));
+        let reconnected = Client::default();
+        let resumed = mcp(&reconnected, &origin, &identity, "retained-owner").await;
+        assert_eq!(resumed.session_token, registration.session_token);
+        assert!(matches!(
+            resumed.directive,
+            BrokerDirective::WaitForWorker { .. }
+        ));
+        disconnected(
+            state.clone(),
+            ComponentRole::Mcp,
+            "retained-owner".into(),
+            old_generation,
+            "stale_disconnect",
+        )
+        .await;
+        assert_eq!(
+            state
+                .registry
+                .snapshot(identity.fingerprint())
+                .unwrap()
+                .reference_count,
+            1
+        );
+        let cancellation: ActivationCancellation = reconnected
+            .request(Command::CancelActivation(
+                SessionRequest::new(
+                    "retained-owner".into(),
+                    resumed.session_token,
+                    1,
+                    CancelActivationPayload {
+                        activation_id: bootstrap.activation_id.clone(),
+                    },
+                )
+                .unwrap(),
+            ))
+            .await
+            .unwrap();
+        assert_eq!(cancellation, ActivationCancellation::Cancelled);
+        assert!(!lock(&state.activations).contains_key(&bootstrap.activation_id));
+        assert!(!lock(&state.worker_sessions).contains_key("retained-worker"));
+        task.abort();
+    }
+}
+
+#[tokio::test]
+async fn owner_disconnect_without_negotiated_retention_still_cancels_startup() {
+    use crate::daemon::common::control::WorkerBootstrap;
+
+    for timeout in [Duration::ZERO, Duration::from_secs(30)] {
+        let (state, origin, task) = daemon_with_idle_retention(false, timeout, false).await;
+        let identity = MachineIdentity::generate().unwrap().identity;
+        let owner = Client::default();
+        let registration = mcp(&owner, &origin, &identity, "legacy-owner").await;
+        let bootstrap = WorkerBootstrap::from_directive(registration.directive).unwrap();
+        assert!(!lock(&state.mcp_sessions)["legacy-owner"].idle_retention);
+        drop(owner);
+        tokio::time::timeout(Duration::from_secs(2), async {
+            while lock(&state.activations).contains_key(&bootstrap.activation_id) {
+                tokio::task::yield_now().await;
+            }
+        })
+        .await
+        .expect("unsupported owner disconnect cancels startup");
+        let snapshot = state.registry.snapshot(identity.fingerprint()).unwrap();
+        assert_eq!(snapshot.reference_count, 1);
+        assert_eq!(snapshot.state, RouteStateKind::PassThrough);
+        task.abort();
+    }
+}
+
 #[tokio::test]
 async fn loopback_idle_session_survives_old_lease_deadlines_and_releases_explicitly() {
     let (state, origin, task) = daemon(true).await;
@@ -171,7 +321,7 @@ async fn loopback_idle_session_survives_old_lease_deadlines_and_releases_explici
                 "idle".into(),
                 registration.session_token,
                 1,
-                EmptyPayload::default(),
+                crate::daemon::common::control::ReleasePayload::default(),
             )
             .unwrap(),
         ))
@@ -468,7 +618,7 @@ async fn worker_ready_is_pushed_recovery_reprobes_and_drain_survives_disconnect(
                 "owner".into(),
                 mcp_registration.session_token,
                 2,
-                EmptyPayload::default(),
+                crate::daemon::common::control::ReleasePayload::default(),
             )
             .unwrap(),
         ))
@@ -552,6 +702,187 @@ async fn unauthenticated_and_legacy_control_requests_are_rejected() {
         .unwrap();
     assert_eq!(response.status(), StatusCode::NOT_FOUND);
     task.abort();
+}
+
+#[tokio::test]
+async fn activation_cancellation_before_socket_publication_rejects_admission() {
+    use crate::daemon::common::control::{
+        ActivationCancellation, CancelActivationPayload, WorkerBootstrap,
+    };
+
+    struct AdmissionRelease(Arc<Notify>);
+    impl Drop for AdmissionRelease {
+        fn drop(&mut self) {
+            self.0.notify_one();
+        }
+    }
+
+    let (state, origin, daemon_task) = daemon(false).await;
+    let identity = MachineIdentity::generate().unwrap().identity;
+    let owner = Client::default();
+    let registration = mcp(&owner, &origin, &identity, "admission-owner").await;
+    let bootstrap = WorkerBootstrap::from_directive(registration.directive).unwrap();
+    let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
+    let endpoint = format!("http://{}", listener.local_addr().unwrap());
+    let worker = Client::default();
+    let handshake = begin_handshake(
+        &worker,
+        &origin,
+        ComponentRole::Worker,
+        &identity,
+        "admitting-worker",
+        None,
+    )
+    .await
+    .unwrap();
+    let entered = Arc::new(Notify::new());
+    let release = Arc::new(Notify::new());
+    let _release_on_failure = AdmissionRelease(Arc::clone(&release));
+    *lock(&state.sockets.admission_gate) = Some(WorkerAdmissionGate {
+        worker_id: "admitting-worker".into(),
+        entered: Arc::clone(&entered),
+        release: Arc::clone(&release),
+    });
+    let activation_id = bootstrap.activation_id.clone();
+    let pending = tokio::spawn(async move {
+        worker
+            .request::<WorkerRegisterResponse>(Command::RegisterWorker(WorkerRegisterRequest {
+                diagnostics: None,
+                proof: handshake.proof,
+                worker_id: "admitting-worker".into(),
+                endpoint,
+                activation_id: bootstrap.activation_id,
+                activation_token: bootstrap.activation_token,
+                tls_root_certificate: None,
+            }))
+            .await
+    });
+    tokio::time::timeout(Duration::from_secs(2), entered.notified())
+        .await
+        .expect("worker admission must reach the publication gate");
+    assert!(lock(&state.worker_sessions).contains_key("admitting-worker"));
+    assert!(
+        !lock(&state.sockets.peers).contains_key(&key(ComponentRole::Worker, "admitting-worker"))
+    );
+    let cancellation: ActivationCancellation = owner
+        .request(Command::CancelActivation(
+            SessionRequest::new(
+                "admission-owner".into(),
+                registration.session_token,
+                1,
+                CancelActivationPayload { activation_id },
+            )
+            .unwrap(),
+        ))
+        .await
+        .unwrap();
+    release.notify_one();
+    let result = tokio::time::timeout(Duration::from_secs(2), pending)
+        .await
+        .expect("revoked admission must terminate")
+        .unwrap();
+    assert_eq!(cancellation, ActivationCancellation::Cancelled);
+    let error = result.expect_err("revoked admission must not return a grant");
+    // With no admitted peer, the next socket-loop iteration aborts its writer.
+    // That can close the connection before its queued rejection is flushed.
+    match error {
+        CliError::Unauthorized(message) => assert_eq!(
+            message,
+            "worker admission was revoked before connection publication"
+        ),
+        CliError::Launch(message) => assert_eq!(message, "control connection lost"),
+        unexpected => panic!("unexpected admission failure: {unexpected}"),
+    }
+    assert!(lock(&state.worker_sessions).is_empty());
+    assert!(
+        !lock(&state.sockets.peers).contains_key(&key(ComponentRole::Worker, "admitting-worker"))
+    );
+    assert_eq!(
+        state
+            .registry
+            .snapshot(identity.fingerprint())
+            .unwrap()
+            .state,
+        RouteStateKind::PassThrough
+    );
+    daemon_task.abort();
+}
+
+#[tokio::test(flavor = "current_thread")]
+async fn blocked_worker_admission_publication_does_not_stall_health() {
+    use crate::daemon::common::control::WorkerBootstrap;
+
+    let (state, origin, daemon_task) = daemon(false).await;
+    let identity = MachineIdentity::generate().unwrap().identity;
+    let owner = Client::default();
+    let registration = mcp(&owner, &origin, &identity, "publication-owner").await;
+    let bootstrap = WorkerBootstrap::from_directive(registration.directive).unwrap();
+    let worker = Client::default();
+    let handshake = begin_handshake(
+        &worker,
+        &origin,
+        ComponentRole::Worker,
+        &identity,
+        "publication-worker",
+        None,
+    )
+    .await
+    .unwrap();
+    let entered = Arc::new(Notify::new());
+    let release = Arc::new(Notify::new());
+    *lock(&state.sockets.admission_gate) = Some(WorkerAdmissionGate {
+        worker_id: "publication-worker".into(),
+        entered: Arc::clone(&entered),
+        release: Arc::clone(&release),
+    });
+    let registration = tokio::spawn(async move {
+        worker
+            .request::<WorkerRegisterResponse>(Command::RegisterWorker(WorkerRegisterRequest {
+                diagnostics: None,
+                proof: handshake.proof,
+                worker_id: "publication-worker".into(),
+                endpoint: "http://127.0.0.1:1".into(),
+                activation_id: bootstrap.activation_id,
+                activation_token: bootstrap.activation_token,
+                tls_root_certificate: None,
+            }))
+            .await
+    });
+    tokio::time::timeout(Duration::from_secs(2), entered.notified())
+        .await
+        .expect("worker admission must reach the publication gate");
+
+    let (locked, acquired) = tokio::sync::oneshot::channel();
+    let (unlock, unlocked) = std::sync::mpsc::channel();
+    let holder = std::thread::spawn(move || {
+        let _publication = lock(&state.worker_generation_publication);
+        locked.send(()).unwrap();
+        let _ = unlocked.recv_timeout(Duration::from_secs(5));
+    });
+    acquired.await.unwrap();
+    let start = std::time::Instant::now();
+    release.notify_one();
+    tokio::task::yield_now().await;
+    let response = tokio::time::timeout(
+        Duration::from_secs(1),
+        reqwest::Client::new()
+            .get(format!("{origin}/healthz"))
+            .send(),
+    )
+    .await;
+    let elapsed = start.elapsed();
+    let still_waiting = !registration.is_finished();
+    unlock.send(()).ok();
+    holder.join().unwrap();
+    let result = registration.await.unwrap();
+    daemon_task.abort();
+    assert!(
+        elapsed < Duration::from_secs(2),
+        "admission publication parked the runtime for {elapsed:?}"
+    );
+    assert_eq!(response.unwrap().unwrap().status(), StatusCode::OK);
+    assert!(still_waiting, "worker admission must wait for publication");
+    result.unwrap();
 }
 
 #[tokio::test]
@@ -656,9 +987,9 @@ async fn activation_cancellation_fences_an_in_progress_readiness_probe() {
         .request(Command::CancelActivation(
             SessionRequest::new(
                 "cancelling-owner".into(),
-                registration.session_token,
+                registration.session_token.clone(),
                 1,
-                payload,
+                payload.clone(),
             )
             .unwrap(),
         ))
@@ -666,10 +997,7 @@ async fn activation_cancellation_fences_an_in_progress_readiness_probe() {
         .unwrap();
     assert_eq!(cancellation, ActivationCancellation::Cancelled);
     assert!(!lock(&state.activations).contains_key(&bootstrap.activation_id));
-    assert!(
-        lock(&state.worker_sessions).is_empty(),
-        "cancellation releases staged admission immediately"
-    );
+    assert!(lock(&state.worker_sessions).is_empty());
     probe_release.notify_one();
     assert!(
         tokio::time::timeout(Duration::from_secs(2), ready)
@@ -689,6 +1017,7 @@ async fn activation_cancellation_fences_an_in_progress_readiness_probe() {
     daemon_task.abort();
     server.abort();
 }
+
 #[tokio::test]
 async fn slow_consumer_queue_is_bounded_and_cancels_connection() {
     let (sender, _receiver) = mpsc::channel(QUEUE_CAPACITY);

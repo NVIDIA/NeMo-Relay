@@ -25,6 +25,44 @@ You need:
 
 NeMo Relay middleware surfaces operate on JSON-compatible data. Frameworks do not always expose tool or model requests in that form.
 
+### Non-Finite Numbers
+
+NeMo Relay's runtime payload contract is JSON. JSON numbers must be finite;
+`NaN`, positive infinity, and negative infinity are not valid JSON numbers.
+Refer to the [JSON Schema numeric reference](https://json-schema.org/understanding-json-schema/reference/numeric).
+
+This restriction applies to every language binding. The conversion behavior
+depends on how the application constructs and passes the payload:
+
+| Binding | Non-Finite Number Handling |
+| --- | --- |
+| Python | Conversion to the runtime JSON model maps non-finite floats to `null`. |
+| Node.js | Passing `NaN`, `Infinity`, or `-Infinity` directly as a JSON payload value fails conversion. JavaScript's `JSON.stringify` converts them to `null` if the application serializes them first. |
+| Rust | The runtime accepts `serde_json::Value`, which cannot contain non-finite numbers. `serde_json::json!` and `serde_json::to_value` convert non-finite float values to `Value::Null`; `serde_json::Number::from_f64` returns `None`. |
+| Go and C FFI (experimental) | Tool arguments are supplied as JSON text. Nonstandard `NaN` and infinity tokens fail JSON parsing. Go's `encoding/json.Marshal` rejects non-finite floats before producing JSON. |
+
+Validate numeric fields before constructing the JSON payload if you need to
+reject non-finite values rather than lose the distinction through conversion.
+
+In the Python binding, conversion to the runtime JSON model maps non-finite
+floats to JSON `null`, including values nested in dictionaries and lists.
+For example, `{"top_k": float("nan")}` becomes `{"top_k": None}` when read
+back in Python. The same conversion applies to `float("inf")` and
+`float("-inf")`.
+
+For `nemo_relay.tools.execute`, this conversion happens before conditional
+guardrails, request intercepts, and the tool callback run. These callbacks see
+`None` and cannot distinguish an original non-finite float from an explicit
+`None`. The conversion does not raise an error or emit a separate lifecycle
+event recording the change.
+
+If your application must reject non-finite numbers, validate the original
+arguments before passing them to NeMo Relay. Use `math.isfinite` for numeric
+fields and check nested values when your schema allows them. Do not rely on a
+Relay guardrail to detect the original non-finite Python value. If the value
+must be represented, encode it explicitly in your application schema, such as
+`{"kind": "non_finite", "value": "nan"}`, before calling Relay.
+
 ## Recommended Strategies
 
 These strategies keep provider and framework data JSON-compatible before it reaches NeMo
