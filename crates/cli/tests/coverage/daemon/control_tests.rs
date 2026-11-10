@@ -2,6 +2,7 @@
 // SPDX-License-Identifier: Apache-2.0
 
 use super::*;
+use crate::daemon::common::protocol::Capabilities;
 
 #[test]
 fn worker_activation_failure_reasons_are_static_and_keep_the_wire_field_stable() {
@@ -74,6 +75,9 @@ fn daemon_challenge_signature_binds_the_request_before_token_disclosure() {
         .verify_attestation(&request)
         .expect("signed challenge");
 
+    let mut substituted = request.clone();
+    substituted.initiator.capabilities = Capabilities::streaming_transport();
+    assert!(response.verify_attestation(&substituted).is_err());
     let mut substituted = request;
     substituted.initiator_instance_id = "mcp-two".into();
     assert!(response.verify_attestation(&substituted).is_err());
@@ -214,5 +218,53 @@ fn worker_generation_grant_binds_endpoint_and_tls_root() {
                 &daemon.public_identity(),
             )
             .is_err()
+    );
+}
+#[test]
+fn idle_retention_release_preserves_legacy_payload_and_binds_activation() {
+    let legacy = ReleasePayload::default();
+    assert_eq!(
+        serde_json::to_value(&legacy).unwrap(),
+        serde_json::json!({})
+    );
+    assert_eq!(
+        serde_json::from_value::<ReleasePayload>(serde_json::json!({})).unwrap(),
+        legacy
+    );
+    let retained = ReleasePayload {
+        retained_activation_id: Some("activation-one".into()),
+    };
+    let secret = SensitiveString::new("session-secret").unwrap();
+    let mut request = SessionRequest::new("session".into(), secret.clone(), 1, retained).unwrap();
+    request.payload.retained_activation_id = Some("activation-two".into());
+    assert!(!request.validate_payload_hash());
+}
+
+#[test]
+fn idle_retention_advertising_follows_the_descriptor_flag() {
+    for enabled in [false, true] {
+        let daemon = descriptor_with_idle_retention(ComponentRole::Daemon, enabled);
+        assert_eq!(
+            daemon
+                .capabilities
+                .contains(WORKER_IDLE_RETENTION_CAPABILITY),
+            enabled
+        );
+        assert!(daemon.capabilities.contains(ACTIVATION_CANCEL_CAPABILITY));
+    }
+    assert!(
+        descriptor(ComponentRole::Mcp)
+            .capabilities
+            .contains(WORKER_IDLE_RETENTION_CAPABILITY)
+    );
+    assert!(
+        descriptor(ComponentRole::Worker)
+            .capabilities
+            .contains(WORKER_IDLE_RETENTION_CAPABILITY)
+    );
+    assert!(
+        !descriptor(ComponentRole::Daemon)
+            .capabilities
+            .contains(WORKER_IDLE_RETENTION_CAPABILITY)
     );
 }
