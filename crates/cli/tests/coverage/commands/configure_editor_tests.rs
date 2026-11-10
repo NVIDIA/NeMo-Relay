@@ -50,6 +50,117 @@ fn document_preserves_toml_and_redacts_standard_inline_and_dotted_auth_headers()
 }
 
 #[test]
+fn preview_redacts_preset_credentials_and_helpers_without_changing_the_document() {
+    for key in [
+        "openai_auth_header",
+        "anthropic_auth_header",
+        "openai_api_key",
+        "anthropic_api_key",
+        "openai_api_key_helper",
+        "anthropic_api_key_helper",
+    ] {
+        let entry = if key.ends_with("_api_key_helper") {
+            format!("{key} = {{ command = 'secret-command', args = ['secret-argument'] }}")
+        } else {
+            format!("{key} = 'secret-token'")
+        };
+        for contents in [
+            format!("[presets.team.upstream]\n{entry}\n"),
+            format!("[upstream.presets.team]\n{entry}\n"),
+            format!("presets = {{ team = {{ upstream = {{ {entry} }} }} }}\n"),
+            format!("upstream = {{ presets = {{ team = {{ {entry} }} }} }}\n"),
+            format!("presets.team.upstream.{entry}\n"),
+            format!("upstream.presets.team.{entry}\n"),
+            format!("preset = 'team'\n[presets.team.upstream]\n{entry}\n"),
+            format!("[upstream]\npreset = 'team'\n[upstream.presets.team]\n{entry}\n"),
+            format!("[presets.\"team.alpha\".upstream]\n{entry}\n"),
+        ] {
+            let document = document(&format!(
+                "{contents}\n# keep\n[agents.codex]\ncommand = 'codex'\n"
+            ));
+            let original = document.document.to_string();
+            let preview = document.preview();
+            assert!(!preview.contains("secret-"), "{key}");
+            assert!(preview.contains("<redacted>"));
+            assert!(preview.contains("# keep"));
+            assert!(preview.contains("command = 'codex'"));
+            assert!(preview.parse::<toml::Table>().is_ok());
+            assert_eq!(document.document.to_string(), original);
+        }
+    }
+    for section in [
+        "presets.team.upstream.openai_api_key_helper",
+        "upstream.presets.team.anthropic_api_key_helper",
+    ] {
+        let document = document(&format!(
+            "[{section}]\ncommand = 'secret-command'\nargs = ['secret-argument']\n"
+        ));
+        assert!(!document.preview().contains("secret-"));
+        assert!(document.document.to_string().contains("secret-command"));
+    }
+}
+
+#[test]
+fn global_guard_and_preview_ignore_tables_that_cannot_supply_runtime_upstream() {
+    let directory = tempfile::tempdir().unwrap();
+    for section in [
+        "metadata.upstream",
+        "upstream.upstream",
+        "presets.team.metadata.upstream",
+        "presets.team.agents.codex.upstream",
+        "upstream.presets.team.upstream",
+    ] {
+        let contents = format!("[{section}]\nopenai_api_key = 'example-metadata'\n");
+        let mut document = document(&contents);
+        document.path = directory.path().join("config.toml");
+        assert!(document.preview().contains("example-metadata"));
+        document.write(TargetScope::Global).unwrap();
+        assert_eq!(std::fs::read_to_string(&document.path).unwrap(), contents);
+    }
+}
+
+#[test]
+fn global_credential_errors_name_the_original_preset_path_without_the_value() {
+    let directory = tempfile::tempdir().unwrap();
+    for (section, expected) in [
+        (
+            "presets.team.upstream",
+            "presets.team.upstream.openai_api_key",
+        ),
+        (
+            "upstream.presets.team",
+            "upstream.presets.team.openai_api_key",
+        ),
+        (
+            "presets.\"team.alpha\".upstream",
+            "presets.\"team.alpha\".upstream.openai_api_key",
+        ),
+    ] {
+        let mut document = document(&format!("[{section}]\nopenai_api_key = 'secret-token'\n"));
+        document.path = directory.path().join("config.toml");
+        let error = document.write(TargetScope::Global).unwrap_err().to_string();
+        assert!(error.contains(expected), "{error}");
+        assert!(!error.contains("secret-token"));
+        assert!(!document.path.exists());
+    }
+}
+
+#[test]
+fn global_document_permits_helpers_in_both_preset_forms() {
+    let directory = tempfile::tempdir().unwrap();
+    for section in [
+        "presets.team.upstream.openai_api_key_helper",
+        "upstream.presets.team.anthropic_api_key_helper",
+    ] {
+        let contents = format!("[{section}]\ncommand = 'never-execute-this-command'\n");
+        let mut document = document(&contents);
+        document.path = directory.path().join("config.toml");
+        document.write(TargetScope::Global).unwrap();
+        assert_eq!(std::fs::read_to_string(&document.path).unwrap(), contents);
+    }
+}
+
+#[test]
 fn edits_and_clears_supported_scalars() {
     let mut document = document(
         "[gateway]\nmax_hook_payload_bytes = \"not-a-number\"\n\n[upstream]\nopenai_base_url = \"https://example.test/v1\"\n\n[logging]\nlevel = \"info\"\nstderr_format = \"human\"\n",

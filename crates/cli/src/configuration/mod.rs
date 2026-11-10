@@ -9,6 +9,7 @@ pub(crate) use runtime_diagnostics::{PreparedConfig, RuntimeDiagnosticsConfig};
 mod types;
 
 pub(crate) use http_model_hosts::{HttpModelHosts, remote_http};
+pub(crate) use presets::upstream_table_paths;
 pub(crate) use types::*;
 
 use crate::runtime_diagnostics::{self as diag, Operation};

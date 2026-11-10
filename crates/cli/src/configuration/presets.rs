@@ -12,6 +12,46 @@ struct Scope {
     definitions: toml::Table,
 }
 
+/// Source tables that can supply the runtime's root `[upstream]`, including inactive presets.
+/// Keep source paths intact for editor redaction and diagnostics. Ordinary child tables retain
+/// their hierarchy; only `presets.<name>` expands at its containing table's path.
+pub(crate) fn upstream_table_paths(document: &dyn toml_edit::TableLike) -> Vec<Vec<String>> {
+    fn collect(
+        table: &dyn toml_edit::TableLike,
+        upstream: bool,
+        path: &mut Vec<String>,
+        paths: &mut Vec<Vec<String>>,
+    ) {
+        if upstream {
+            paths.push(path.clone());
+        } else if let Some(child) = table
+            .get("upstream")
+            .and_then(toml_edit::Item::as_table_like)
+        {
+            path.push("upstream".into());
+            collect(child, true, path, paths);
+            path.pop();
+        }
+        if let Some(presets) = table
+            .get("presets")
+            .and_then(toml_edit::Item::as_table_like)
+        {
+            path.push("presets".into());
+            for (name, definition) in presets.iter() {
+                if let Some(definition) = definition.as_table_like() {
+                    path.push(name.into());
+                    collect(definition, upstream, path, paths);
+                    path.pop();
+                }
+            }
+            path.pop();
+        }
+    }
+    let mut paths = Vec::new();
+    collect(document, false, &mut Vec::new(), &mut paths);
+    paths
+}
+
 /// Collect metadata across file layers, expand selected defaults, then replay explicit layers.
 /// Named definitions replace whole definitions; explicit settings retain the normal merge rules.
 pub(super) fn resolve(layers: Vec<toml::Value>) -> Result<toml::Value, CliError> {
