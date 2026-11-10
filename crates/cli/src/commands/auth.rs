@@ -121,7 +121,7 @@ async fn logout(dir: &Path, source: OidcSource) -> Result<(), CliError> {
 
 /// The effective configuration, including the user layer that `--config` replaces.
 fn configured(server: &ServerArgs) -> Result<GatewayConfig, CliError> {
-    crate::configuration::resolve_daemon_config(&server.to_runtime())
+    crate::configuration::resolve_daemon_config(&server.to_runtime()).map(|config| config.gateway)
 }
 
 /// Explicit `--issuer` and `--client-id` win; otherwise the configuration names the provider.
