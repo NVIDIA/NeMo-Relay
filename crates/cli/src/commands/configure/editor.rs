@@ -118,14 +118,37 @@ impl ConfigDocument {
     }
 
     fn has_auth_headers(&self) -> bool {
-        [
-            "openai_auth_header",
-            "anthropic_auth_header",
-            "openai_api_key",
-            "anthropic_api_key",
-        ]
-        .into_iter()
-        .any(|key| self.has_key("upstream", key))
+        // Inspect the original document: inactive or overridden presets are still saved.
+        fn contains_credentials(table: &dyn TableLike, upstream: bool) -> bool {
+            if upstream
+                && [
+                    "openai_auth_header",
+                    "anthropic_auth_header",
+                    "openai_api_key",
+                    "anthropic_api_key",
+                ]
+                .iter()
+                .any(|key| table.contains_key(key))
+            {
+                return true;
+            }
+            table.iter().any(|(key, item)| {
+                let Some(child) = item.as_table_like() else {
+                    return false;
+                };
+                if key == "presets" {
+                    // Each definition expands at its containing table's path.
+                    child.iter().any(|(_, definition)| {
+                        definition
+                            .as_table_like()
+                            .is_some_and(|definition| contains_credentials(definition, upstream))
+                    })
+                } else {
+                    contains_credentials(child, key == "upstream")
+                }
+            })
+        }
+        contains_credentials(self.document.as_table(), false)
     }
 
     fn preview(&self) -> String {

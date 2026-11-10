@@ -292,6 +292,60 @@ fn global_document_rejects_authorization_headers() {
 }
 
 #[test]
+fn global_document_rejects_credentials_in_selected_and_unselected_presets() {
+    let directory = tempfile::tempdir().unwrap();
+    for key in [
+        "openai_auth_header",
+        "anthropic_auth_header",
+        "openai_api_key",
+        "anthropic_api_key",
+    ] {
+        for contents in [
+            format!("[presets.team.upstream]\n{key} = 'secret-token'\n"),
+            format!("[upstream.presets.team]\n{key} = 'secret-token'\n"),
+            format!("presets = {{ team = {{ upstream = {{ {key} = 'secret-token' }} }} }}\n"),
+            format!("upstream = {{ presets = {{ team = {{ {key} = 'secret-token' }} }} }}\n"),
+            format!("presets.team.upstream.{key} = 'secret-token'\n"),
+            format!("upstream.presets.team.{key} = 'secret-token'\n"),
+            format!("preset = 'team'\n[presets.team.upstream]\n{key} = 'secret-token'\n"),
+            format!(
+                "[upstream]\npreset = 'team'\n[upstream.presets.team]\n{key} = 'secret-token'\n"
+            ),
+            format!(
+                "preset = 'team'\n[upstream]\nopenai_base_url = 'https://other.example'\n[presets.team.upstream]\nopenai_base_url = 'https://team.example'\n{key} = 'secret-token'\n"
+            ),
+        ] {
+            let path = directory.path().join("config.toml");
+            std::fs::write(&path, "# original\n").unwrap();
+            let mut document = document(&contents);
+            document.path = path.clone();
+            let error = document.write(TargetScope::Global).unwrap_err().to_string();
+            assert!(error.contains("global config cannot include upstream authorization headers"));
+            assert!(!error.contains("secret-token"));
+            assert_eq!(std::fs::read_to_string(&path).unwrap(), "# original\n");
+
+            document.path = directory.path().join("missing/config.toml");
+            assert!(document.write(TargetScope::Global).is_err());
+            assert!(!document.path.parent().unwrap().exists());
+        }
+    }
+}
+
+#[test]
+fn global_document_allows_public_oidc_preset_definitions() {
+    let directory = tempfile::tempdir().unwrap();
+    for contents in [
+        "[presets.team.upstream.openai_oidc]\nissuer = 'https://issuer.example'\nclient_id = 'team'\n",
+        "[upstream.presets.team.anthropic_oidc]\nissuer = 'https://issuer.example'\nclient_id = 'team'\n",
+    ] {
+        let mut document = document(contents);
+        document.path = directory.path().join("config.toml");
+        document.write(TargetScope::Global).unwrap();
+        assert_eq!(std::fs::read_to_string(&document.path).unwrap(), contents);
+    }
+}
+
+#[test]
 fn credentials_switch_sources_and_round_trip_without_running_helpers() {
     use crate::upstream_auth::{ApiKeyHelper, AuthScheme};
 
