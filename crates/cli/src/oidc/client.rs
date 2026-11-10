@@ -2,7 +2,7 @@
 // SPDX-License-Identifier: Apache-2.0
 
 //! Requests to the OpenID Connect issuer: discovery, the device sign-in, the authorization code
-//! exchange and token refresh.
+//! exchange, token refresh and token revocation.
 
 use std::time::Duration;
 
@@ -12,7 +12,7 @@ use serde::Deserialize;
 
 use super::error::SignInError;
 use super::session::Session;
-use super::{Clock, HTTP_TIMEOUT, OidcSource, auth_error, login_required, now_secs};
+use super::{Clock, HTTP_TIMEOUT, OidcSource, Revocation, auth_error, login_required, now_secs};
 use crate::error::CliError;
 
 pub(crate) const DEVICE_CODE_GRANT: &str = "urn:ietf:params:oauth:grant-type:device_code";
@@ -26,6 +26,7 @@ struct Discovery {
     token_endpoint: String,
     authorization_endpoint: Option<String>,
     device_authorization_endpoint: Option<String>,
+    revocation_endpoint: Option<String>,
 }
 
 const AUTHORIZATION_CODE_GRANT: &str = "authorization_code";
@@ -76,6 +77,7 @@ pub(crate) struct OidcClient {
     pub(super) token_endpoint: String,
     authorization_endpoint: Option<String>,
     device_endpoint: Option<String>,
+    revocation_endpoint: Option<String>,
 }
 
 impl OidcClient {
@@ -118,6 +120,7 @@ impl OidcClient {
             token_endpoint: discovery.token_endpoint,
             authorization_endpoint: discovery.authorization_endpoint,
             device_endpoint: discovery.device_authorization_endpoint,
+            revocation_endpoint: discovery.revocation_endpoint,
         })
     }
 
@@ -287,6 +290,60 @@ impl OidcClient {
         }
     }
 
+    /// Revokes the refresh token, then the access token (RFC 7009). `None` when the issuer
+    /// publishes no revocation endpoint. A failure names the reason, never a token.
+    pub(super) async fn revoke(&self, session: &Session) -> Option<Revocation> {
+        let endpoint = self.revocation_endpoint.as_deref()?;
+        // Checked here, not in discovery, so that a foreign revocation origin breaks only logout.
+        if secure_origin(endpoint).ok() != secure_origin(&self.issuer).ok() {
+            return Some(Revocation::Failed(
+                "the issuer published its revocation endpoint on another origin".into(),
+            ));
+        }
+        let refresh = match session.refresh_token.as_deref() {
+            Some(token) => Some(self.revoke_token(endpoint, token, "refresh_token").await),
+            None => None,
+        };
+        let access = self
+            .revoke_token(endpoint, &session.access_token, "access_token")
+            .await;
+        Some(match (refresh, access) {
+            (None | Some(Ok(())), Ok(())) => Revocation::Revoked,
+            (Some(Ok(())), Err(detail)) => Revocation::RefreshTokenOnly(detail),
+            (Some(Err(detail)), Ok(())) => Revocation::AccessTokenOnly(detail),
+            (refresh, access) => Revocation::Failed(
+                [("refresh_token", refresh), ("access_token", Some(access))]
+                    .into_iter()
+                    .filter_map(|(hint, result)| Some(format!("{hint}: {}", result?.err()?)))
+                    .collect::<Vec<_>>()
+                    .join(", "),
+            ),
+        })
+    }
+
+    /// Sends one RFC 7009 revocation request. The error is an RFC 6749 or RFC 7009 error code,
+    /// or the HTTP status, so that it never holds text the issuer chose.
+    async fn revoke_token(&self, endpoint: &str, token: &str, hint: &str) -> Result<(), String> {
+        let form = [
+            ("token", token),
+            ("token_type_hint", hint),
+            ("client_id", self.client_id.as_str()),
+        ];
+        let response = self
+            .post(endpoint, &form)
+            .await
+            .map_err(|_| "the issuer could not be reached".to_owned())?;
+        let status = response.status();
+        if status.is_success() {
+            return Ok(());
+        }
+        // The submitted token may still be valid here, so print no text the issuer chose.
+        Err(match response.json::<OAuthError>().await {
+            Ok(error) if REVOCATION_ERRORS.contains(&error.error.as_str()) => error.error,
+            _ => format!("HTTP {status}"),
+        })
+    }
+
     /// Never fails: a request that does not reach the issuer is `Unavailable`.
     async fn token_request(&self, form: &[(&str, &str)]) -> Grant {
         let response = match self.post(&self.token_endpoint, form).await {
@@ -382,6 +439,17 @@ fn device_failure(code: &str, detail: &str) -> CliError {
         _ => format!("the sign-in was not completed: {detail}"),
     })
 }
+
+/// The error codes that RFC 6749 and RFC 7009 define for a revocation request.
+const REVOCATION_ERRORS: [&str; 7] = [
+    "invalid_request",
+    "invalid_client",
+    "invalid_grant",
+    "unauthorized_client",
+    "unsupported_token_type",
+    "server_error",
+    "temporarily_unavailable",
+];
 
 /// The OAuth error code, with the issuer's description when it sent one.
 fn describe(code: &str, description: Option<&str>) -> String {

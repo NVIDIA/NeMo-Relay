@@ -114,3 +114,27 @@ fn a_sign_in_section_needs_an_issuer_and_a_client_id() {
     let section = parse("issuer = \"https://issuer.example\"\nclient_id = \"relay\"").unwrap();
     assert_eq!(section.scope, "openid offline_access");
 }
+
+#[test]
+fn logout_names_the_token_that_stays_valid_when_the_issuer_revokes_only_one() {
+    use crate::oidc::{Logout, Revocation};
+    let issuer = "https://issuer.example";
+    let access_only = logout_message(
+        issuer,
+        &Logout::Removed(Revocation::AccessTokenOnly("invalid_request".into())),
+    );
+    assert_eq!(
+        access_only,
+        "Removed the sign-in for https://issuer.example. https://issuer.example revoked the access token but not the refresh token (invalid_request), so the refresh token stays valid until it expires."
+    );
+    let refresh_only = logout_message(
+        issuer,
+        &Logout::Removed(Revocation::RefreshTokenOnly(
+            "unsupported_token_type".into(),
+        )),
+    );
+    assert!(
+        refresh_only.contains("so the access token stays valid until it expires"),
+        "{refresh_only}"
+    );
+}

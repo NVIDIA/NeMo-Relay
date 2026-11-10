@@ -8,7 +8,8 @@
 //! the device authorization grant (RFC 8628) on request; the sign-in is kept in
 //! the per-user NeMo Relay config directory with owner-only access. The gateway reads it for each
 //! upstream request and refreshes the access token near expiry, so the token's real expiry and a
-//! `logout` apply to the next request. Tokens are written only to that file and to the standard
+//! `logout` apply to the next request. `logout` also revokes the tokens at the issuer (RFC 7009)
+//! when it publishes a revocation endpoint. Tokens are written only to that file and to the standard
 //! output of `nemo-relay auth token`; they are never logged or included in an error.
 
 mod browser;
@@ -38,6 +39,8 @@ pub(crate) type Clock<'a> = dyn Fn() -> u64 + Send + Sync + 'a;
 
 /// Bound for one issuer request.
 pub(crate) const HTTP_TIMEOUT: Duration = Duration::from_secs(15);
+/// The limit for all of `logout`'s issuer requests together.
+const REVOCATION_DEADLINE: Duration = Duration::from_secs(20);
 
 fn default_scope() -> String {
     "openid offline_access".into()
@@ -196,18 +199,75 @@ pub(crate) async fn login(
     write_session(&path, &session)
 }
 
-/// Removes a stored sign-in; returns whether one existed.
-pub(crate) async fn logout(dir: &Path, source: &OidcSource) -> Result<bool, CliError> {
+/// What `logout` did.
+pub(crate) enum Logout {
+    /// No sign-in is stored for the issuer, so nothing is removed or revoked.
+    NotSignedIn,
+    /// The stored sign-in is removed. The issuer's answer to the revocation follows.
+    Removed(Revocation),
+}
+
+/// The issuer's answer when `logout` revokes the stored tokens (RFC 7009).
+pub(crate) enum Revocation {
+    /// The issuer revoked every stored token.
+    Revoked,
+    /// The refresh token is revoked. The issuer refused the access token for this reason.
+    RefreshTokenOnly(String),
+    /// The access token is revoked. The issuer refused the refresh token for this reason.
+    AccessTokenOnly(String),
+    /// The issuer publishes no `revocation_endpoint`.
+    NotOffered,
+    /// The reason, without the tokens.
+    Failed(String),
+}
+
+/// Removes a stored sign-in, then asks the issuer to revoke its tokens.
+pub(crate) async fn logout(dir: &Path, source: &OidcSource) -> Result<Logout, CliError> {
     if !dir.exists() {
-        return Ok(false);
+        return Ok(Logout::NotSignedIn);
     }
     let path = session_path(dir, source);
-    let _lock = SessionLock::acquire(&path).await?;
-    match std::fs::remove_file(&path) {
-        Ok(()) => Ok(true),
-        Err(error) if error.kind() == std::io::ErrorKind::NotFound => Ok(false),
-        Err(error) => Err(CliError::Io(error)),
-    }
+    let stored = {
+        let _lock = SessionLock::acquire(&path).await?;
+        let stored = read_session(&path, source);
+        match std::fs::remove_file(&path) {
+            Ok(()) => stored,
+            Err(error) if error.kind() == std::io::ErrorKind::NotFound => {
+                return Ok(Logout::NotSignedIn);
+            }
+            Err(error) => return Err(CliError::Io(error)),
+        }
+    };
+    // Revocation runs after the lock is released: it takes up to three issuer requests, longer
+    // than a refresh waits for the lock.
+    let revocation = match stored {
+        Ok(Some(session)) => revoke(source, &session).await,
+        Ok(None) => Revocation::Failed("the sign-in file named another issuer or client".into()),
+        Err(_) => Revocation::Failed("the sign-in file was unreadable".into()),
+    };
+    Ok(Logout::Removed(revocation))
+}
+
+/// Discovers the issuer and revokes the session's tokens, within `REVOCATION_DEADLINE` in total.
+async fn revoke(source: &OidcSource, session: &session::Session) -> Revocation {
+    let attempt = async {
+        let client = match OidcClient::discover(source).await {
+            Ok(client) => client,
+            Err(error) => return Revocation::Failed(error.to_string()),
+        };
+        client
+            .revoke(session)
+            .await
+            .unwrap_or(Revocation::NotOffered)
+    };
+    tokio::time::timeout(REVOCATION_DEADLINE, attempt)
+        .await
+        .unwrap_or_else(|_| {
+            Revocation::Failed(format!(
+                "the issuer did not answer within {} seconds",
+                REVOCATION_DEADLINE.as_secs()
+            ))
+        })
 }
 
 /// Reads the stored sign-in without contacting the issuer.
