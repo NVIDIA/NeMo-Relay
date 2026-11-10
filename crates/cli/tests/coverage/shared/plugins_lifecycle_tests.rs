@@ -3114,6 +3114,65 @@ fn provisioning_resets_a_linked_managed_environment_without_removing_target() {
     assert_eq!(std::fs::read(target.join("keep")).unwrap(), b"keep");
 }
 
+#[cfg(windows)]
+#[test]
+fn windows_managed_environment_cleanup_unlinks_directory_and_file_symlinks() {
+    use std::os::windows::fs::{symlink_dir, symlink_file};
+
+    let temp = tempfile::tempdir().unwrap();
+    let state_path = temp.path().join(".dynamic-plugins.json");
+    let environment_name = Sha256::digest(b"acme.python")
+        .iter()
+        .map(|byte| format!("{byte:02x}"))
+        .collect::<String>();
+    let managed = temp
+        .path()
+        .join(".dynamic-plugin-environments")
+        .join(environment_name);
+    std::fs::create_dir_all(managed.parent().unwrap()).unwrap();
+
+    for is_directory in [true, false] {
+        let target = temp
+            .path()
+            .join(if is_directory { "directory" } else { "file" });
+        let contents = if is_directory {
+            std::fs::create_dir(&target).unwrap();
+            target.join("keep")
+        } else {
+            target.clone()
+        };
+        std::fs::write(&contents, b"keep").unwrap();
+        let result = if is_directory {
+            symlink_dir(&target, &managed)
+        } else {
+            symlink_file(&target, &managed)
+        };
+        if let Err(error) = result {
+            if error.raw_os_error()
+                == Some(windows_sys::Win32::Foundation::ERROR_PRIVILEGE_NOT_HELD as i32)
+            {
+                eprintln!(
+                    "Windows symlink test requires Developer Mode or symlink privilege: {error}"
+                );
+                return;
+            }
+            panic!("failed to create managed environment symlink: {error}");
+        }
+
+        environment::remove_managed_environment(
+            &state_path,
+            "acme.python",
+            managed.to_str().unwrap(),
+        )
+        .unwrap();
+        assert_eq!(
+            std::fs::symlink_metadata(&managed).unwrap_err().kind(),
+            std::io::ErrorKind::NotFound
+        );
+        assert_eq!(std::fs::read(&contents).unwrap(), b"keep");
+    }
+}
+
 #[test]
 fn remove_can_retry_after_guarded_environment_cleanup_failure() {
     let temp = tempfile::tempdir().unwrap();

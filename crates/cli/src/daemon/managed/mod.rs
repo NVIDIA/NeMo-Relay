@@ -295,7 +295,6 @@ fn validate_bundle_files(
 ) -> Result<ManagedBundleValidation, CliError> {
     require_directory(root)?;
     let manifest_path = root.join(MANIFEST_FILE);
-    require_regular_file(&manifest_path)?;
     let manifest_bytes = read_bounded(&manifest_path, MAX_MANIFEST_BYTES)?;
     let manifest: ManagedManifest = serde_json::from_slice(&manifest_bytes).map_err(|error| {
         CliError::Config(format!(
@@ -351,7 +350,6 @@ fn validate_bundle_files(
     }
     for artifact in &expected.artifacts {
         let path = root.join(artifact.path);
-        require_regular_file(&path)?;
         let actual = read_bounded(&path, artifact.bytes.len() as u64)?;
         if actual != artifact.bytes {
             return Err(CliError::Config(format!(
@@ -885,22 +883,6 @@ fn read_bounded(path: &Path, maximum: u64) -> Result<Vec<u8>, CliError> {
     Ok(bytes)
 }
 
-fn require_regular_file(path: &Path) -> Result<(), CliError> {
-    let metadata = fs::metadata(path).map_err(|error| {
-        CliError::Config(format!(
-            "failed to inspect managed artifact {}: {error}",
-            path.display()
-        ))
-    })?;
-    if !metadata.is_file() {
-        return Err(CliError::Config(format!(
-            "managed artifact {} must be a regular file",
-            path.display()
-        )));
-    }
-    Ok(())
-}
-
 fn require_directory(path: &Path) -> Result<(), CliError> {
     let metadata = fs::metadata(path).map_err(|error| {
         CliError::Config(format!(
@@ -921,9 +903,17 @@ fn bundle_files(root: &Path) -> Result<BTreeSet<&'static str>, CliError> {
     let expected = all_artifact_paths();
     let expected_lookup = expected.iter().copied().collect::<BTreeSet<_>>();
     let mut actual = BTreeSet::new();
-    let mut pending = vec![root.to_path_buf()];
+    let mut pending = vec![(root.to_path_buf(), Vec::new())];
     let mut visited = 0_usize;
-    while let Some(directory) = pending.pop() {
+    while let Some((directory, mut ancestors)) = pending.pop() {
+        let resolved = fs::canonicalize(&directory)?;
+        if ancestors.contains(&resolved) {
+            return Err(CliError::Config(format!(
+                "managed bundle contains a directory symlink cycle at {}",
+                directory.display()
+            )));
+        }
+        ancestors.push(resolved);
         for entry in fs::read_dir(&directory)? {
             visited += 1;
             if visited > MAX_ARTIFACTS * 4 {
@@ -934,7 +924,7 @@ fn bundle_files(root: &Path) -> Result<BTreeSet<&'static str>, CliError> {
             let entry = entry?;
             let metadata = fs::metadata(entry.path())?;
             if metadata.is_dir() {
-                pending.push(entry.path());
+                pending.push((entry.path(), ancestors.clone()));
                 continue;
             }
             if !metadata.is_file() {

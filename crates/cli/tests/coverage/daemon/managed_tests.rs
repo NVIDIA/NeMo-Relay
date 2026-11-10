@@ -823,7 +823,28 @@ fn managed_file_helpers_reject_overwrite_oversize_and_excessive_entries() {
     for index in 0..=(MAX_ARTIFACTS * 4) {
         std::fs::create_dir(root.join(format!("empty-{index}"))).unwrap();
     }
-    assert!(bundle_files(&root).is_err());
+    let error = bundle_files(&root).unwrap_err().to_string();
+    assert!(error.contains("too many filesystem entries"), "{error}");
+}
+
+#[cfg(unix)]
+#[test]
+fn managed_bundle_reports_directory_symlink_cycles_but_accepts_sibling_aliases() {
+    use std::os::unix::fs::symlink;
+
+    let directory = tempdir().unwrap();
+    let root = directory.path().join("bundle");
+    let nested = root.join("nested");
+    std::fs::create_dir_all(&nested).unwrap();
+    let link = nested.join("back-to-root");
+    symlink(&root, &link).unwrap();
+    let error = bundle_files(&root).unwrap_err().to_string();
+    assert!(error.contains("directory symlink cycle"), "{error}");
+    assert!(error.contains(&link.display().to_string()), "{error}");
+
+    std::fs::remove_file(link).unwrap();
+    symlink(&nested, root.join("sibling-alias")).unwrap();
+    assert!(bundle_files(&root).unwrap().is_empty());
 }
 
 #[cfg(unix)]
