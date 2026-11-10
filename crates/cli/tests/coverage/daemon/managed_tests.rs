@@ -816,6 +816,7 @@ fn managed_file_helpers_reject_overwrite_oversize_and_excessive_entries() {
     assert_eq!(read_bounded(&file, 5).unwrap(), b"first");
     assert!(read_bounded(&file, 4).is_err());
     assert!(read_bounded(&directory.path().join("missing"), 4).is_err());
+    assert!(read_bounded(directory.path(), 4).is_err());
 
     let root = directory.path().join("bundle");
     std::fs::create_dir(&root).unwrap();
@@ -823,4 +824,18 @@ fn managed_file_helpers_reject_overwrite_oversize_and_excessive_entries() {
         std::fs::create_dir(root.join(format!("empty-{index}"))).unwrap();
     }
     assert!(bundle_files(&root).is_err());
+}
+
+#[cfg(unix)]
+#[test]
+fn managed_file_reader_rejects_a_fifo_without_waiting_for_a_writer() {
+    use std::os::unix::ffi::OsStrExt;
+
+    let directory = tempdir().unwrap();
+    let fifo = directory.path().join("artifact");
+    let name = std::ffi::CString::new(fifo.as_os_str().as_bytes()).unwrap();
+    // SAFETY: name is a valid NUL-terminated path; mode contains only permission bits.
+    assert_eq!(unsafe { libc::mkfifo(name.as_ptr(), 0o600) }, 0);
+    let error = read_bounded(&fifo, 1024).unwrap_err().to_string();
+    assert!(error.contains("must be a regular file"), "{error}");
 }

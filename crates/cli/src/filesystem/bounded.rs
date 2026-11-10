@@ -95,6 +95,10 @@ pub(crate) fn open_bounded_regular_file<'a>(
 }
 
 impl BoundedFile<'_> {
+    pub(crate) fn file(&self) -> &std::fs::File {
+        &self.file
+    }
+
     pub(crate) fn len(&self) -> usize {
         self.length
     }

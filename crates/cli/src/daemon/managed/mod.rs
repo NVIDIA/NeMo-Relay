@@ -846,13 +846,27 @@ fn update_bundle_digest(hasher: &mut Sha256, name: &[u8], bytes: &[u8]) {
 }
 
 fn read_bounded(path: &Path, maximum: u64) -> Result<Vec<u8>, CliError> {
-    let mut file = OpenOptions::new().read(true).open(path).map_err(|error| {
+    let mut options = OpenOptions::new();
+    options.read(true);
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::OpenOptionsExt;
+        options.custom_flags(libc::O_NONBLOCK);
+    }
+    let file = options.open(path).map_err(|error| {
         CliError::Config(format!(
             "failed to read managed artifact {}: {error}",
             path.display()
         ))
     })?;
-    let length = file.metadata()?.len();
+    let metadata = file.metadata()?;
+    if !metadata.is_file() {
+        return Err(CliError::Config(format!(
+            "managed artifact {} must be a regular file",
+            path.display()
+        )));
+    }
+    let length = metadata.len();
     if length > maximum {
         return Err(CliError::Config(format!(
             "managed artifact {} exceeds its expected size limit",
@@ -860,7 +874,14 @@ fn read_bounded(path: &Path, maximum: u64) -> Result<Vec<u8>, CliError> {
         )));
     }
     let mut bytes = Vec::with_capacity(length as usize);
-    file.read_to_end(&mut bytes)?;
+    file.take(maximum.saturating_add(1))
+        .read_to_end(&mut bytes)?;
+    if bytes.len() as u64 > maximum {
+        return Err(CliError::Config(format!(
+            "managed artifact {} exceeds its expected size limit",
+            path.display()
+        )));
+    }
     Ok(bytes)
 }
 

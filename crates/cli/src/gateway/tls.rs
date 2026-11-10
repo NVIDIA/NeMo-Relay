@@ -137,8 +137,8 @@ pub(crate) fn daemon_certificate_path() -> PathBuf {
 
 fn load_published_daemon_certificate(path: &Path) -> Result<Option<Vec<u8>>, String> {
     let description = "published daemon TLS certificate";
-    let metadata = match std::fs::symlink_metadata(path) {
-        Ok(metadata) => metadata,
+    match std::fs::symlink_metadata(path) {
+        Ok(_) => {}
         Err(error) if error.kind() == std::io::ErrorKind::NotFound => return Ok(None),
         Err(error) => {
             return Err(format!(
@@ -146,33 +146,27 @@ fn load_published_daemon_certificate(path: &Path) -> Result<Option<Vec<u8>>, Str
                 path.display()
             ));
         }
-    };
+    }
     let resolved = std::fs::canonicalize(path).map_err(|error| {
         format!(
             "failed to resolve {description} {}: {error}",
             path.display()
         )
     })?;
-    let metadata = if metadata.file_type().is_symlink() {
-        std::fs::metadata(&resolved).map_err(|error| {
-            format!(
-                "failed to inspect {description} {}: {error}",
-                path.display()
-            )
-        })?
-    } else {
-        metadata
-    };
-    if !metadata.file_type().is_file() {
-        return Err(format!(
-            "{description} {} must be a regular file",
-            path.display()
-        ));
-    }
+    let certificate =
+        crate::filesystem::bounded::open_bounded_regular_file(&resolved, description)?;
     // A user who can replace this file could make hooks trust a listener that squats the port.
-    ensure_administrator_controlled(path, &metadata, description)?;
+    ensure_administrator_controlled(&resolved, certificate.file(), description)?;
     for directory in [path.parent(), resolved.parent()].into_iter().flatten() {
-        let metadata = std::fs::metadata(directory).map_err(|error| {
+        let mut options = std::fs::OpenOptions::new();
+        options.read(true);
+        #[cfg(windows)]
+        {
+            use std::os::windows::fs::OpenOptionsExt;
+            options
+                .custom_flags(windows_sys::Win32::Storage::FileSystem::FILE_FLAG_BACKUP_SEMANTICS);
+        }
+        let file = options.open(directory).map_err(|error| {
             format!(
                 "failed to inspect the directory of the {description} {}: {error}",
                 directory.display()
@@ -180,11 +174,15 @@ fn load_published_daemon_certificate(path: &Path) -> Result<Option<Vec<u8>>, Str
         })?;
         ensure_administrator_controlled(
             directory,
-            &metadata,
+            &file,
             "directory of the published daemon TLS certificate",
         )?;
     }
-    let bytes = crate::filesystem::bounded::read_bounded_regular_file(path, description)?;
+    let mut bytes = Vec::new();
+    certificate.stream(|chunk| {
+        bytes.extend_from_slice(chunk);
+        Ok(())
+    })?;
     let mut certificates = decode_pem_blocks(&bytes, CERTIFICATE_LABEL)
         .map_err(|error| format!("invalid {description} {}: {error}", path.display()))?;
     if certificates.len() != 1 {
@@ -199,11 +197,17 @@ fn load_published_daemon_certificate(path: &Path) -> Result<Option<Vec<u8>>, Str
 #[cfg(unix)]
 fn ensure_administrator_controlled(
     path: &Path,
-    metadata: &std::fs::Metadata,
+    file: &std::fs::File,
     description: &str,
 ) -> Result<(), String> {
     use std::os::unix::fs::MetadataExt;
 
+    let metadata = file.metadata().map_err(|error| {
+        format!(
+            "failed to inspect {description} {}: {error}",
+            path.display()
+        )
+    })?;
     // SAFETY: geteuid has no preconditions and cannot fail.
     let current_user = unsafe { libc::geteuid() };
     if metadata.uid() != 0 && metadata.uid() != current_user {
@@ -221,14 +225,31 @@ fn ensure_administrator_controlled(
     Ok(())
 }
 
-#[cfg(not(unix))]
+#[cfg(windows)]
+fn ensure_administrator_controlled(
+    path: &Path,
+    file: &std::fs::File,
+    description: &str,
+) -> Result<(), String> {
+    match crate::filesystem::windows_file_is_administrator_controlled(file) {
+        Ok(true) => Ok(()),
+        Ok(false) => Err(format!(
+            "{description} {} must be owned by an administrator or the current user and must not be writable by other users",
+            path.display()
+        )),
+        Err(error) => Err(format!(
+            "failed to inspect the ACL of {description} {}: {error}",
+            path.display()
+        )),
+    }
+}
+
+#[cfg(not(any(unix, windows)))]
 fn ensure_administrator_controlled(
     _path: &Path,
-    _metadata: &std::fs::Metadata,
+    _file: &std::fs::File,
     _description: &str,
 ) -> Result<(), String> {
-    // As for the other system-layer files, the documented ACL on the Windows system config
-    // directory gives users read access only (docs/daemon/configuration.mdx).
     Ok(())
 }
 

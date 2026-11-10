@@ -49,7 +49,8 @@ pub(crate) use atomic::{atomic_write, atomic_write_private, atomic_write_system_
 #[cfg(windows)]
 pub(crate) use atomic::{
     atomic_write_with_windows_dacl, open_private_windows_file, open_private_windows_file_for_read,
-    protect_private_windows_path, read_windows_dacl, windows_path_is_private,
+    protect_private_windows_path, read_windows_dacl, windows_file_is_administrator_controlled,
+    windows_path_is_private,
 };
 #[cfg(all(test, windows))]
 pub(crate) use locks::normalize_lock_attempt;

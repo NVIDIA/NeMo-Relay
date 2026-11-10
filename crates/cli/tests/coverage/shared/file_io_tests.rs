@@ -366,6 +366,25 @@ fn set_windows_dacl(path: &std::path::Path, sddl: &str) {
 }
 
 #[cfg(windows)]
+#[test]
+fn windows_administrator_control_checks_the_opened_target_acl() {
+    let directory = tempdir().unwrap();
+    let target = directory.path().join("certificate");
+    let alias = directory.path().join("certificate-alias");
+    atomic_write_private(&target, b"certificate").unwrap();
+    std::fs::hard_link(&target, &alias).unwrap();
+    let opened = std::fs::File::open(&alias).unwrap();
+
+    // Everyone can read this published certificate; only administrators and SYSTEM can write.
+    set_windows_dacl(&target, "D:P(A;;FA;;;SY)(A;;FA;;;BA)(A;;FR;;;WD)");
+    assert!(windows_file_is_administrator_controlled(&opened).unwrap());
+    set_windows_dacl(&target, "D:P(A;;FA;;;SY)(A;;FA;;;BA)(A;;FRFW;;;WD)");
+    assert!(!windows_file_is_administrator_controlled(&opened).unwrap());
+    set_windows_dacl(&target, "D:P(A;;FA;;;SY)(A;;FA;;;BA)(A;;FR;;;WD)");
+    assert!(windows_file_is_administrator_controlled(&opened).unwrap());
+}
+
+#[cfg(windows)]
 fn windows_sddl(path: &std::path::Path) -> String {
     use windows_sys::Win32::Foundation::LocalFree;
     use windows_sys::Win32::Security::Authorization::{
