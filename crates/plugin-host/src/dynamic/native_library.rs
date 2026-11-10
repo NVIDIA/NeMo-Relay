@@ -28,6 +28,8 @@ pub struct NativeLibraryArtifact {
     directories: BTreeSet<PathBuf>,
     directory_links: BTreeMap<PathBuf, PathBuf>,
     identity: [u8; 32],
+    // Path-qualified, unnamed Unix images have no process-wide basename alias.
+    pub(super) path_qualified_imports: BTreeSet<PathBuf>,
 }
 
 impl NativeLibraryArtifact {
@@ -150,6 +152,7 @@ impl NativeLibraryArtifact {
             directories,
             directory_links: captured_directory_links,
             identity: [0; 32],
+            path_qualified_imports: BTreeSet::new(),
         };
         let mut hash = Sha256::new();
         hash.update(b"nemo.relay.native.artifact.v1\0");
@@ -220,7 +223,11 @@ impl NativeLibraryArtifact {
         let mut identities = LibraryIdentities::default();
         for (path, (bytes, dependency)) in self.entries() {
             let digest: [u8; 32] = Sha256::digest(bytes).into();
-            for alias in super::native_dependencies::library_aliases(path, bytes)? {
+            for alias in super::native_dependencies::library_aliases(
+                path,
+                bytes,
+                self.path_qualified_imports.contains(path),
+            )? {
                 if identities
                     .images
                     .insert(alias.clone(), digest)

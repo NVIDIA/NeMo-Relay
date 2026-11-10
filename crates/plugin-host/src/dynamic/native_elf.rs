@@ -35,7 +35,8 @@ impl Target {
             return true;
         };
         self.class == other.class
-            && (self.encoding != other.encoding || self.machine == other.machine)
+            && self.encoding == other.encoding
+            && self.machine == other.machine
     }
 
     /// Check a regular dependency file for the ELF target identity required by its importing image.

@@ -295,8 +295,8 @@ impl Plugin for WorkerPluginAdapter {
         if plugin_config == &self.instance.config {
             return self.instance.validation_diagnostics.clone();
         }
-        match self.instance.component_worker(plugin_config.clone()) {
-            Ok(worker) => worker.validation_diagnostics.clone(),
+        match self.instance.validate_component(plugin_config.clone()) {
+            Ok(diagnostics) => diagnostics,
             Err(error) => vec![worker_error_diagnostic(
                 &self.plugin_kind,
                 "plugin.worker_validation_failed",
@@ -393,23 +393,53 @@ impl Drop for WorkerPluginInstance {
 }
 
 impl WorkerPluginInstance {
-    /// Own one independently authenticated worker for each distinct configuration.
+    /// Validate an uncached component worker and finish its cleanup before returning diagnostics.
+    fn validate_component(
+        &self,
+        config: Map<String, Json>,
+    ) -> crate::Result<Vec<ConfigDiagnostic>> {
+        let worker = self.launch_component_worker(config)?;
+        let diagnostics = worker.validation_diagnostics.clone();
+        let cleanup = worker.shutdown_checked();
+        if !cleanup.errors.is_empty() {
+            return Err(PluginError::RegistrationFailed(format!(
+                "validation worker cleanup failed: {}",
+                cleanup.errors.join("; ")
+            )));
+        }
+        if self.teardown_started.load(Ordering::Acquire) {
+            return Err(PluginError::RegistrationFailed(
+                "worker activation is closing".into(),
+            ));
+        }
+        Ok(diagnostics)
+    }
+
+    /// Launch a worker without publishing it into the active component cache.
+    fn launch_component_worker(&self, config: Map<String, Json>) -> crate::Result<Arc<Self>> {
+        if self.teardown_started.load(Ordering::Acquire) {
+            return Err(PluginError::RegistrationFailed(
+                "worker activation is closing".into(),
+            ));
+        }
+        let source = self.source.as_ref().ok_or_else(|| {
+            PluginError::RegistrationFailed("worker activation has no launch settings".into())
+        })?;
+        let spec = WorkerPluginLoadSpec {
+            config,
+            ..source.spec.clone()
+        };
+        load_one_worker_plugin(
+            &spec,
+            true,
+            Some(source.manifest.clone()),
+            &source.diagnostics,
+        )
+    }
+
+    /// Own one independently authenticated worker for each distinct active configuration.
     fn component_worker(&self, config: Map<String, Json>) -> crate::Result<Arc<Self>> {
-        self.component_worker_with(config.clone(), || {
-            let source = self.source.as_ref().ok_or_else(|| {
-                PluginError::RegistrationFailed("worker activation has no launch settings".into())
-            })?;
-            let spec = WorkerPluginLoadSpec {
-                config,
-                ..source.spec.clone()
-            };
-            load_one_worker_plugin(
-                &spec,
-                true,
-                Some(source.manifest.clone()),
-                &source.diagnostics,
-            )
-        })
+        self.component_worker_with(config.clone(), || self.launch_component_worker(config))
     }
 
     /// Publish a launched worker only while admission is open, deduplicating concurrent launches.

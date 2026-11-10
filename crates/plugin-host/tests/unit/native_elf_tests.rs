@@ -50,3 +50,30 @@ fn running_glibc_loader_supplies_token_values() {
     assert!(!tokens.lib.is_empty());
     assert!(!tokens.lib.contains('$'));
 }
+
+/// Candidate selection requires the importing image's class, byte order, and machine.
+#[test]
+fn elf_candidates_require_matching_class_encoding_and_machine() {
+    let header = |class, encoding, machine: u16| {
+        let mut bytes = [0; 20];
+        bytes[..4].copy_from_slice(b"\x7fELF");
+        bytes[4] = class;
+        bytes[5] = encoding;
+        bytes[18..20].copy_from_slice(&match encoding {
+            1 => machine.to_le_bytes(),
+            2 => machine.to_be_bytes(),
+            _ => unreachable!(),
+        });
+        bytes
+    };
+    for class in [1, 2] {
+        for encoding in [1, 2] {
+            let target = Target::from_header(&header(class, encoding, 62)).unwrap();
+            assert!(target.accepts(&header(class, encoding, 62)));
+            assert!(!target.accepts(&header(3 - class, encoding, 62)));
+            assert!(!target.accepts(&header(class, 3 - encoding, 62)));
+            assert!(!target.accepts(&header(class, encoding, 183)));
+            assert!(!target.accepts(&header(class, 3 - encoding, 183)));
+        }
+    }
+}

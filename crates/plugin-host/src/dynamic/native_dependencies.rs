@@ -15,7 +15,7 @@ use object::read::elf::{Dyn as _, FileHeader, ProgramHeader as _};
 use object::read::macho::FatArch as _;
 use paths::DirectoryLayout;
 use std::{
-    collections::{BTreeMap, VecDeque},
+    collections::{BTreeMap, BTreeSet, VecDeque},
     path::{Component, Path, PathBuf},
 };
 
@@ -381,16 +381,20 @@ fn resolve(
 }
 
 /// Names by which an OS loader can reuse a captured shared library.
-pub(super) fn library_aliases(path: &Path, bytes: &[u8]) -> Result<Vec<String>, String> {
+pub(super) fn library_aliases(
+    path: &Path,
+    bytes: &[u8],
+    path_qualified: bool,
+) -> Result<Vec<String>, String> {
     // Artifacts may also carry non-binary files owned by the staging closure.
     if object::FileKind::parse(bytes).is_err() {
         return Ok(Vec::new());
     }
     let identity = imports(bytes)?.identity;
-    // Unix loaders identify named images by SONAME/install name. A basename
-    // alone must not conflate distinct path-qualified identities. PE lookup is
-    // by DLL basename, even when the files occupy different directories.
-    let mut aliases = if cfg!(windows) || identity.is_none() {
+    // Unix images with SONAME/install names have shared identities. Without a
+    // name, path-qualified imports are distinct in each private staging tree.
+    // Bare imports still need a basename alias; PE always uses DLL basenames.
+    let mut aliases = if cfg!(windows) || (identity.is_none() && !path_qualified) {
         vec![
             path.file_name()
                 .ok_or("native dependency has no filename")?
@@ -536,6 +540,8 @@ fn capture_with_tokens(
     let mut physical_files = BTreeMap::from([(physical, vec![main.clone()])]);
     let mut budget = bytes.len();
     let mut files = BTreeMap::from([(main.clone(), bytes)]);
+    let mut path_qualified = BTreeSet::from([main.clone()]);
+    let mut unqualified = BTreeSet::new();
     let mut pending = VecDeque::from([(main, Vec::<String>::new())]);
     while let Some((path, inherited)) = pending.pop_front() {
         let parsed = imports(&files[&path])?;
@@ -583,6 +589,11 @@ fn capture_with_tokens(
             } else {
                 imported
             };
+            if name.contains('/') {
+                path_qualified.insert(relative.clone());
+            } else {
+                unqualified.insert(relative.clone());
+            }
             if files.len()
                 + aliases.len()
                 + symlinks.len()
@@ -651,14 +662,16 @@ fn capture_with_tokens(
             pending.extend(discovered);
         }
     }
-    NativeLibraryArtifact::new_with_layout(
+    let mut artifact = NativeLibraryArtifact::new_with_layout(
         relative,
         files,
         aliases,
         symlinks,
         layout.directories,
         layout.links,
-    )
+    )?;
+    artifact.path_qualified_imports = path_qualified.difference(&unqualified).cloned().collect();
+    Ok(artifact)
 }
 
 #[cfg(test)]

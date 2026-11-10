@@ -868,3 +868,48 @@ fn path_qualified_sidecars_with_equal_basenames_load_together() {
     source.close().unwrap();
     assert_macho_loader_value(&resident_library_path(identity).unwrap());
 }
+
+/// Unnamed Unix path imports coexist, while bare imports still reject conflicting bytes.
+#[cfg(unix)]
+#[test]
+fn unnamed_unix_images_use_staged_paths_without_claiming_shared_basenames() {
+    // A minimal ELF image without program headers has no DT_SONAME.
+    let mut first = vec![0; 128];
+    first[..7].copy_from_slice(b"\x7fELF\x02\x01\x01");
+    for (at, word) in [(16, 3_u16), (18, 62), (52, 64), (54, 56), (58, 64)] {
+        first[at..at + 2].copy_from_slice(&word.to_le_bytes());
+    }
+    first[20..24].copy_from_slice(&1_u32.to_le_bytes());
+    let mut second = first.clone();
+    first[127] = 11;
+    second[127] = 22;
+    let mut artifact = NativeLibraryArtifact::new(
+        PathBuf::from("main"),
+        [
+            (PathBuf::from("main"), vec![]),
+            (PathBuf::from("a/libsame.so"), first),
+            (PathBuf::from("b/libsame.so"), second),
+        ],
+    )
+    .unwrap();
+    artifact
+        .path_qualified_imports
+        .extend([PathBuf::from("a/libsame.so"), PathBuf::from("b/libsame.so")]);
+    assert!(artifact.image_identities().unwrap().images.is_empty());
+    artifact
+        .path_qualified_imports
+        .remove(Path::new("b/libsame.so"));
+    assert!(
+        artifact
+            .image_identities()
+            .unwrap()
+            .images
+            .contains_key("libsame.so")
+    );
+    artifact.path_qualified_imports.clear();
+    let error = artifact.image_identities().err().unwrap();
+    assert!(
+        error.contains("conflicting native image 'libsame.so'"),
+        "{error}"
+    );
+}

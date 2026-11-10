@@ -3290,7 +3290,7 @@ async fn scope_stack_snapshot_worker_correlates_parallel_agent_llm_and_tool_call
     loaded.clear();
 }
 
-/// Distinct configurations use independent workers and both processes close with the owner.
+/// Validation workers close immediately; only enabled configurations retain active workers.
 #[tokio::test]
 async fn worker_multiple_component_configurations_are_isolated_and_cleaned_up() {
     const MODE: &str = "NEMO_RELAY_TEST_WORKER_MULTIPLE_COMPONENTS";
@@ -3316,7 +3316,11 @@ async fn worker_multiple_component_configurations_are_isolated_and_cleaned_up() 
         format!("{manifest}\nforward_env = [\"{MODE}\"]\n"),
     )
     .unwrap();
-    for flag in ["tool_request_error", "reject"] {
+    for (flag, enabled) in [
+        ("tool_request_error", true),
+        ("reject", true),
+        ("tool_request_error", false),
+    ] {
         let diagnostics = enabled_worker_diagnostics();
         let activation = load_worker_plugins_with_diagnostics(
             [WorkerPluginLoadSpec {
@@ -3329,10 +3333,13 @@ async fn worker_multiple_component_configurations_are_isolated_and_cleaned_up() 
         )
         .unwrap();
         let mut config = PluginConfig::default();
-        for component_config in [Map::new(), Map::from_iter([(flag.into(), json!(true))])] {
+        for (index, component_config) in [Map::new(), Map::from_iter([(flag.into(), json!(true))])]
+            .into_iter()
+            .enumerate()
+        {
             config.components.push(PluginComponentSpec {
                 kind: "fixture_worker".into(),
-                enabled: true,
+                enabled: index == 0 || enabled,
                 config: component_config,
             });
         }
@@ -3346,16 +3353,36 @@ async fn worker_multiple_component_configurations_are_isolated_and_cleaned_up() 
             );
         } else {
             initialized.unwrap();
-            let error = tool_request_intercepts("demo_tool", json!({"input": "value"}))
-                .await
-                .expect_err("the second worker must apply its own configuration");
-            assert!(
-                error
-                    .to_string()
-                    .contains("fixture tool request error requested"),
-                "{error}"
-            );
+            let result = tool_request_intercepts("demo_tool", json!({"input": "value"})).await;
+            if enabled {
+                let error = result.expect_err("the second worker must apply its own configuration");
+                assert!(
+                    error
+                        .to_string()
+                        .contains("fixture tool request error requested"),
+                    "{error}"
+                );
+            } else {
+                result.expect("disabled configuration must not install its failing callback");
+            }
         }
+        let snapshot = worker_diagnostic_snapshot(&diagnostics);
+        let started = snapshot
+            .events
+            .iter()
+            .filter(|event| event.code() == "plugin.worker.started")
+            .count();
+        let cleaned = snapshot
+            .events
+            .iter()
+            .filter(|event| event.code() == "plugin.worker.process_cleaned")
+            .count();
+        assert!(cleaned > 0, "validation must clean up its temporary worker");
+        assert_eq!(
+            started - cleaned,
+            if enabled && flag != "reject" { 2 } else { 1 },
+            "only enabled component workers may remain alive after validation"
+        );
         test_close_plugin_host().unwrap();
         activation.clear();
         let snapshot = worker_diagnostic_snapshot(&diagnostics);
@@ -3365,7 +3392,7 @@ async fn worker_multiple_component_configurations_are_isolated_and_cleaned_up() 
                 .iter()
                 .filter(|event| event.code() == "plugin.worker.process_cleaned")
                 .count(),
-            2
+            started
         );
     }
 }

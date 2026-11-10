@@ -459,3 +459,52 @@ fn direct_elf_origin_imports_resolve_parent_components() {
         );
     }
 }
+
+/// Unnamed path imports retain independent bytes; bare imports retain their shared loader alias.
+#[cfg(unix)]
+#[test]
+fn unnamed_elf_images_distinguish_path_imports_from_bare_imports() {
+    let directory = tempfile::tempdir().unwrap();
+    let root = directory.path().canonicalize().unwrap();
+    let mut first = elf_library(None, None, false);
+    // Replace DT_SONAME with DT_DEBUG so the image has no shared loader name.
+    qword(&mut first, 512, object::elf::DT_DEBUG as u64);
+    let mut second = first.clone();
+    first[1023] = 11;
+    second[1023] = 22;
+    for (path, bytes) in [("a/libsame.so", &first), ("b/libsame.so", &second)] {
+        std::fs::create_dir_all(root.join(path).parent().unwrap()).unwrap();
+        std::fs::write(root.join(path), bytes).unwrap();
+    }
+    for bare_second in [false, true] {
+        let mut needed = vec!["$ORIGIN/a/libsame.so", "$ORIGIN/b/libsame.so"];
+        if bare_second {
+            needed.push("libsame.so");
+        }
+        let main = elf_image(&needed, Some((29, "$ORIGIN/b")), false, "main.so");
+        let artifact = capture(&root.join("main.so"), &root, main.clone()).unwrap();
+        let expected = NativeLibraryArtifact::new(
+            PathBuf::from("main.so"),
+            [
+                (PathBuf::from("main.so"), main),
+                (PathBuf::from("a/libsame.so"), first.clone()),
+                (PathBuf::from("b/libsame.so"), second.clone()),
+            ],
+        )
+        .unwrap();
+        assert_eq!(artifact.identity(), expected.identity());
+        for (path, bytes, qualified) in [
+            ("a/libsame.so", &first, true),
+            ("b/libsame.so", &second, !bare_second),
+        ] {
+            let path = Path::new(path);
+            assert_eq!(artifact.path_qualified_imports.contains(path), qualified);
+            let aliases = library_aliases(path, bytes, qualified).unwrap();
+            if qualified {
+                assert!(aliases.is_empty(), "path imports must not claim a basename");
+            } else {
+                assert_eq!(aliases, ["libsame.so"]);
+            }
+        }
+    }
+}
