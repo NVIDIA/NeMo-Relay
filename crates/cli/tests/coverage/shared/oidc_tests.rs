@@ -45,6 +45,10 @@ struct Issuer {
     revocation_endpoint: Option<String>,
     /// Refuses to revoke access tokens with this error, like Clerk with its JWT access tokens.
     access_revocation_error: Option<&'static str>,
+    /// Refuses to revoke refresh tokens with this error.
+    refresh_revocation_error: Option<&'static str>,
+    /// Never answers a revocation request.
+    revocation_hangs: bool,
     revocations: Vec<HashMap<String, String>>,
 }
 
@@ -163,16 +167,31 @@ async fn token(State(issuer): State<Shared>, body: String) -> Response {
 }
 
 async fn revoke(State(issuer): State<Shared>, body: String) -> Response {
-    let mut state = issuer.lock().unwrap();
-    let form = parse_form(&body);
-    let refused_access = form["token_type_hint"] == "access_token";
-    state.revocations.push(form);
-    if let (true, Some(error)) = (refused_access, state.access_revocation_error) {
-        return (StatusCode::BAD_REQUEST, Json(json!({ "error": error }))).into_response();
-    }
-    match state.revocation_status.unwrap_or(StatusCode::NOT_FOUND) {
-        StatusCode::OK => StatusCode::OK.into_response(),
-        status => (status, Json(json!({ "error": "invalid_client" }))).into_response(),
+    let reply = {
+        let mut state = issuer.lock().unwrap();
+        let form = parse_form(&body);
+        let refused = match form["token_type_hint"].as_str() {
+            "access_token" => state.access_revocation_error,
+            "refresh_token" => state.refresh_revocation_error,
+            _ => None,
+        };
+        state.revocations.push(form);
+        match (state.revocation_hangs, refused) {
+            (true, _) => None,
+            (false, Some(error)) => {
+                Some((StatusCode::BAD_REQUEST, Json(json!({ "error": error }))).into_response())
+            }
+            (false, None) => Some(
+                match state.revocation_status.unwrap_or(StatusCode::NOT_FOUND) {
+                    StatusCode::OK => StatusCode::OK.into_response(),
+                    status => (status, Json(json!({ "error": "invalid_client" }))).into_response(),
+                },
+            ),
+        }
+    };
+    match reply {
+        Some(reply) => reply,
+        None => std::future::pending().await,
     }
 }
 
@@ -456,6 +475,44 @@ async fn a_refused_access_token_without_a_refresh_token_fails() {
         logout(dir.path(), &source).await.unwrap(),
         Logout::Removed(Revocation::Failed(_))
     ));
+}
+
+#[tokio::test]
+async fn a_refused_refresh_token_fails_even_when_the_access_token_is_revoked() {
+    let (source, issuer) = start_issuer().await;
+    {
+        let mut state = issuer.lock().unwrap();
+        state.revocation_status = Some(StatusCode::OK);
+        state.refresh_revocation_error = Some("invalid_request");
+    }
+    let dir = tempfile::tempdir().unwrap();
+    store(dir.path(), &source, Some("refresh-1"), 10_000);
+    let Logout::Removed(Revocation::Failed(detail)) = logout(dir.path(), &source).await.unwrap()
+    else {
+        panic!("a refresh token that is still valid must be reported as a failure");
+    };
+    assert_eq!(detail, "refresh_token: invalid_request");
+    assert_eq!(revoked(&issuer).len(), 2);
+}
+
+#[tokio::test(start_paused = true)]
+async fn logout_stops_waiting_for_the_issuer_after_the_revocation_deadline() {
+    let (source, issuer) = start_issuer().await;
+    {
+        let mut state = issuer.lock().unwrap();
+        state.revocation_status = Some(StatusCode::OK);
+        state.revocation_hangs = true;
+    }
+    let dir = tempfile::tempdir().unwrap();
+    store(dir.path(), &source, Some("refresh-1"), 10_000);
+    let started = tokio::time::Instant::now();
+    let Logout::Removed(Revocation::Failed(detail)) = logout(dir.path(), &source).await.unwrap()
+    else {
+        panic!("an issuer that never answers must be reported");
+    };
+    assert!(detail.contains("within 20 seconds"), "{detail}");
+    assert_eq!(started.elapsed().as_secs(), 20);
+    assert!(sign_in_state(dir.path(), &source, 1_000).unwrap() == SignInState::NotSignedIn);
 }
 
 #[tokio::test]
