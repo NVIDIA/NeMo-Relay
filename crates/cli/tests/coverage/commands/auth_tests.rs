@@ -104,6 +104,28 @@ fn login_reads_the_file_named_by_the_global_config_flag() {
 }
 
 #[test]
+fn login_reads_a_nested_preset_from_the_global_config_file() {
+    let _scope = crate::test_support::CwdTestScope::locked();
+    let dir = tempfile::tempdir().unwrap();
+    let previous_system =
+        crate::configuration::set_test_system_config_dir(Some(dir.path().join("system")));
+    let path = dir.path().join("team.toml");
+    std::fs::write(
+        &path,
+        "[upstream]\npreset = 'team'\n[presets.team.upstream.anthropic_oidc]\nissuer = 'https://team-issuer.example'\nclient_id = 'team'\n",
+    )
+    .unwrap();
+    let server = ServerArgs {
+        config: Some(path),
+        ..Default::default()
+    };
+    let selected = select_source(args(None), || configured(&server)).unwrap();
+    assert_eq!(selected.issuer, "https://team-issuer.example");
+    assert_eq!(selected.client_id, "team");
+    crate::configuration::set_test_system_config_dir(previous_system);
+}
+
+#[test]
 fn a_sign_in_section_needs_an_issuer_and_a_client_id() {
     let parse = |text: &str| toml::from_str::<OidcSource>(text).map_err(|e| e.to_string());
 
