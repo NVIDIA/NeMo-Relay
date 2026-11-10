@@ -39,6 +39,8 @@ pub(crate) type Clock<'a> = dyn Fn() -> u64 + Send + Sync + 'a;
 
 /// Bound for one issuer request.
 pub(crate) const HTTP_TIMEOUT: Duration = Duration::from_secs(15);
+/// The limit for all of `logout`'s issuer requests together.
+const REVOCATION_DEADLINE: Duration = Duration::from_secs(20);
 
 fn default_scope() -> String {
     "openid offline_access".into()
@@ -241,15 +243,25 @@ pub(crate) async fn logout(dir: &Path, source: &OidcSource) -> Result<Logout, Cl
 }
 
 async fn revoke(source: &OidcSource, session: &session::Session) -> Revocation {
-    let client = match OidcClient::discover(source).await {
-        Ok(client) => client,
-        Err(error) => return Revocation::Failed(error.to_string()),
+    let attempt = async {
+        let client = match OidcClient::discover(source).await {
+            Ok(client) => client,
+            Err(error) => return Revocation::Failed(error.to_string()),
+        };
+        match client.revoke(session).await {
+            None => Revocation::NotOffered,
+            Some(Ok(())) => Revocation::Revoked,
+            Some(Err(detail)) => Revocation::Failed(detail),
+        }
     };
-    match client.revoke(session).await {
-        None => Revocation::NotOffered,
-        Some(Ok(())) => Revocation::Revoked,
-        Some(Err(detail)) => Revocation::Failed(detail),
-    }
+    tokio::time::timeout(REVOCATION_DEADLINE, attempt)
+        .await
+        .unwrap_or_else(|_| {
+            Revocation::Failed(format!(
+                "the issuer did not answer within {} seconds",
+                REVOCATION_DEADLINE.as_secs()
+            ))
+        })
 }
 
 /// Reads the stored sign-in without contacting the issuer.

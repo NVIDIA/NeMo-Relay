@@ -104,8 +104,7 @@ impl OidcClient {
         // Endpoints on another origin could send the refresh token to an unintended host.
         let endpoints = std::iter::once(&discovery.token_endpoint)
             .chain(discovery.device_authorization_endpoint.as_ref())
-            .chain(discovery.authorization_endpoint.as_ref())
-            .chain(discovery.revocation_endpoint.as_ref());
+            .chain(discovery.authorization_endpoint.as_ref());
         for endpoint in endpoints {
             if secure_origin(endpoint)? != origin {
                 return Err(auth_error(format!(
@@ -295,6 +294,12 @@ impl OidcClient {
     /// publishes no revocation endpoint. An error names the reason, never a token.
     pub(super) async fn revoke(&self, session: &Session) -> Option<Result<(), String>> {
         let endpoint = self.revocation_endpoint.as_deref()?;
+        // Checked here, not in discovery, so that a foreign revocation origin breaks only logout.
+        if secure_origin(endpoint).ok() != secure_origin(&self.issuer).ok() {
+            return Some(Err(
+                "the issuer published its revocation endpoint on another origin".into(),
+            ));
+        }
         let tokens = session
             .refresh_token
             .as_deref()

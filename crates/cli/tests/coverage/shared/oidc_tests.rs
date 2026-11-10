@@ -473,15 +473,22 @@ async fn an_unreachable_issuer_still_removes_the_sign_in() {
 }
 
 #[tokio::test]
-async fn discovery_rejects_a_revocation_endpoint_on_another_origin() {
+async fn a_revocation_endpoint_on_another_origin_fails_only_logout() {
     let (source, issuer) = start_issuer().await;
     {
         let mut state = issuer.lock().unwrap();
         state.revocation_status = Some(StatusCode::OK);
         state.revocation_endpoint = Some("https://elsewhere.example/revoke".into());
     }
-    let error = error_text(OidcClient::discover(&source).await.map(|_| ()));
-    assert!(error.contains("another origin"), "{error}");
+    assert!(OidcClient::discover(&source).await.is_ok());
+    let dir = tempfile::tempdir().unwrap();
+    store(dir.path(), &source, Some("refresh-1"), 10_000);
+    let Logout::Removed(Revocation::Failed(detail)) = logout(dir.path(), &source).await.unwrap()
+    else {
+        panic!("a foreign revocation endpoint must be reported");
+    };
+    assert!(detail.contains("another origin"), "{detail}");
+    assert!(sign_in_state(dir.path(), &source, 1_000).unwrap() == SignInState::NotSignedIn);
 }
 
 #[tokio::test]
