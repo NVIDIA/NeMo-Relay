@@ -5,7 +5,7 @@ import assert from 'node:assert/strict';
 import { execFileSync } from 'node:child_process';
 import { createRequire } from 'node:module';
 import { afterEach, it } from 'node:test';
-import { fileURLToPath } from 'node:url';
+import { fileURLToPath, pathToFileURL } from 'node:url';
 
 const require = createRequire(import.meta.url);
 const relay = require('nemo-relay-node');
@@ -162,8 +162,8 @@ it('JSON subscriber source handles a real delivered mark', async () => {
 });
 
 it('reference provider and stream examples return their documented results', async () => {
-  const managed = await import(`${examples}/managed-llm.ts`);
-  const streaming = await import(`${examples}/streaming-llm.ts`);
+  const managed = await import(pathToFileURL(`${examples}/managed-llm.ts`).href);
+  const streaming = await import(pathToFileURL(`${examples}/streaming-llm.ts`).href);
   const execution = await captureEvents(() => managed.runExample());
   assert.deepEqual(execution.result, { text: 'hi', request: { messages: [{ role: 'user', content: 'hello' }] } });
   assertPair(execution.events, 'llm', 'demo-provider');
@@ -174,7 +174,7 @@ it('reference provider and stream examples return their documented results', asy
 
 for (const query of ['weather', '']) {
   it(`reference manual lifecycle completes for ${query ? 'success' : 'failure'}`, async () => {
-    const program = await import(`${examples}/manual-tool-lifecycle.ts`);
+    const program = await import(pathToFileURL(`${examples}/manual-tool-lifecycle.ts`).href);
     const { events } = await captureEvents(async () => {
       if (query) assert.deepEqual(program.runExample(query), { hits: 2 });
       else assert.throws(() => program.runExample(query), /^Error: query is required$/);
@@ -184,7 +184,7 @@ for (const query of ['weather', '']) {
 }
 
 it('partial middleware returns transformed values without executing a callback', async () => {
-  const program = await import(`${examples}/partial-middleware.ts`);
+  const program = await import(pathToFileURL(`${examples}/partial-middleware.ts`).href);
   const { result, events } = await captureEvents(() => program.runExample());
   assert.deepEqual(result.toolArguments, { query: 'weather' });
   assert.deepEqual(result.request.content, { messages: [{ role: 'user', content: 'hello' }] });
@@ -195,7 +195,7 @@ it('partial middleware returns transformed values without executing a callback',
 });
 
 it('scope-context example emits its mark within the request', async () => {
-  const program = await import(`${examples}/scope-context.ts`);
+  const program = await import(pathToFileURL(`${examples}/scope-context.ts`).href);
   const previousStack = relay.currentScopeStack();
   try {
     const { events } = await captureEvents(() => program.runExample());
@@ -207,7 +207,7 @@ it('scope-context example emits its mark within the request', async () => {
 });
 
 it('global gate example reports a missing required OpenTelemetry subscriber', async () => {
-  const program = await import(`${examples}/global-registration-gate.ts`);
+  const program = await import(pathToFileURL(`${examples}/global-registration-gate.ts`).href);
   await assert.rejects(
     () => program.runExample(async () => assert.fail('application must not run')),
     /OpenTelemetry subscriber was not found/,

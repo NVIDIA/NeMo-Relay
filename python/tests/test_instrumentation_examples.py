@@ -43,7 +43,7 @@ def example(name: str) -> ModuleType:
 
 
 def documented_output(page_name: str, title: str, language: str = "text") -> str:
-    content = (GUIDES / f"{page_name}.mdx").read_text()
+    content = (GUIDES / f"{page_name}.mdx").read_text(encoding="utf-8")
     match = re.search(rf'^```{language} title="{re.escape(title)}"\n(.*?)^```', content, re.MULTILINE | re.DOTALL)
     assert match is not None, (page_name, title)
     return match.group(1).strip()
@@ -81,7 +81,7 @@ def test_displayed_sources_match_registered_examples():
     expected.add((EXAMPLES / "tool_result_message.py").resolve())
     displayed = set()
     for page in GUIDES.glob("*.mdx"):
-        content = page.read_text()
+        content = page.read_text(encoding="utf-8")
         assert not re.search(r"^```(?:python|js|javascript|ts|typescript|rust)\b", content, re.MULTILINE), page
         for source in re.findall(r'<Code\s+src="(_code/[^\"]+)"', content):
             displayed.add((GUIDES / source).resolve())
