@@ -33,7 +33,7 @@ pub(crate) enum Command {
     RegisterWorker(WorkerRegisterRequest),
     RecoverWorker(WorkerRecoverRequest),
     Ready(SessionRequest<WorkerReadyPayload>),
-    Release(SessionRequest<EmptyPayload>),
+    Release(SessionRequest<ReleasePayload>),
     ActivationFailed(SessionRequest<ActivationFailedPayload>),
     CancelActivation(SessionRequest<super::control::CancelActivationPayload>),
     Acknowledge {

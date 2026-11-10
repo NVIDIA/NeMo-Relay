@@ -63,6 +63,7 @@ const TEST_SKIP_IMPLICIT_CONFIG_ENV: &str = "NEMO_RELAY_TEST_SKIP_IMPLICIT_CONFI
 // `GatewayConfig` / `AgentConfigs`; plugin configuration lives in `plugins.toml`.
 #[derive(Debug, Clone, Default, Deserialize)]
 struct FileConfig {
+    daemon: Option<FileDaemonConfig>,
     gateway: Option<FileGatewayConfig>,
     upstream: Option<FileUpstreamConfig>,
     agents: Option<FileAgentsConfig>,
@@ -71,7 +72,7 @@ struct FileConfig {
 }
 
 impl FileConfig {
-    /// Dotted names of keys in `[gateway]`, `[upstream]` and `[agents]` that Relay does not know.
+    /// Dotted names of keys in the daemon, gateway, upstream, and agent sections that Relay does not know.
     fn unknown_keys(&self) -> Vec<String> {
         let mut keys = Vec::new();
         let mut collect = |section: &str, unknown: &BTreeMap<String, toml::Value>| {
@@ -79,6 +80,9 @@ impl FileConfig {
         };
         if let Some(gateway) = &self.gateway {
             collect("gateway", &gateway.unknown);
+        }
+        if let Some(daemon) = &self.daemon {
+            collect("daemon", &daemon.unknown);
         }
         if let Some(upstream) = &self.upstream {
             collect("upstream", &upstream.unknown);
@@ -101,6 +105,19 @@ impl FileConfig {
 
 // Configuration is fail-open: unknown keys in these sections are collected in `unknown` and
 // reported as warnings instead of rejecting the file.
+#[derive(Debug, Clone, Default, Deserialize)]
+struct FileDaemonConfig {
+    worker_idle_timeout_secs: Option<u64>,
+    // Daemon logging is resolved and validated through its existing independent path.
+    #[serde(rename = "logging")]
+    _logging: Option<toml::Value>,
+    // The daemon diagnostics collector has its own startup configuration path.
+    #[serde(rename = "diagnostics")]
+    _diagnostics: Option<toml::Value>,
+    #[serde(flatten)]
+    unknown: BTreeMap<String, toml::Value>,
+}
+
 #[derive(Debug, Clone, Default, Deserialize)]
 struct FileGatewayConfig {
     max_hook_payload_bytes: Option<usize>,
@@ -183,7 +200,7 @@ fn resolve_server_config_inner(args: &GatewayOverrides) -> Result<ResolvedConfig
 
 /// Loads routing settings for the daemon without reading plugin files.
 /// Gateways and daemon workers check the plugins they run.
-pub(crate) fn resolve_daemon_config(args: &GatewayOverrides) -> Result<GatewayConfig, CliError> {
+pub(crate) fn resolve_daemon_config(args: &GatewayOverrides) -> Result<DaemonConfig, CliError> {
     let explicit = args.config.as_ref();
     let paths = config_paths(explicit)
         .into_iter()
@@ -207,7 +224,10 @@ pub(crate) fn resolve_daemon_config(args: &GatewayOverrides) -> Result<GatewayCo
         mode = "daemon";
         "Daemon configuration resolved"
     );
-    Ok(resolved.gateway)
+    Ok(DaemonConfig {
+        gateway: resolved.gateway,
+        worker_idle_timeout_secs: resolved.daemon_worker_idle_timeout_secs,
+    })
 }
 
 /// Layered configuration for a daemon-managed, machine-user worker.
@@ -1921,6 +1941,24 @@ fn apply_file_config(resolved: &mut ResolvedConfig, value: toml::Value) -> Resul
         resolved.diagnostics = diagnostics;
     }
     apply_file_gateway_config(&mut resolved.gateway, config.gateway)?;
+    if let Some(seconds) = config
+        .daemon
+        .and_then(|daemon| daemon.worker_idle_timeout_secs)
+    {
+        seconds.checked_mul(1_000).ok_or_else(|| {
+            CliError::Config(
+                "daemon.worker_idle_timeout_secs exceeds the supported duration".into(),
+            )
+        })?;
+        std::time::Instant::now()
+            .checked_add(std::time::Duration::from_secs(seconds))
+            .ok_or_else(|| {
+                CliError::Config(
+                    "daemon.worker_idle_timeout_secs exceeds the supported duration".into(),
+                )
+            })?;
+        resolved.daemon_worker_idle_timeout_secs = seconds;
+    }
     apply_file_upstream_config(&mut resolved.gateway, config.upstream)?;
     apply_file_agents_config(&mut resolved.agents, config.agents);
     logging::apply_file_logging_config(&mut resolved.logging, config.logging)?;
@@ -1952,7 +1990,7 @@ pub(crate) fn validate_config_document(value: toml::Value) -> Result<(), CliErro
     // their payload, then use the runtime's semantic checks for actionable validation errors.
     validate_shared_config_shape(value.clone()).map_err(|_| {
         CliError::Config(
-            "invalid configuration shape; check field names and types in gateway, upstream, agents, and logging".into(),
+            "invalid configuration shape; check field names and types in daemon, gateway, upstream, agents, and logging".into(),
         )
     })?;
     apply_file_config(&mut ResolvedConfig::default(), value)

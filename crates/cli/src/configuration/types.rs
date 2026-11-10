@@ -53,6 +53,13 @@ pub(crate) struct GatewayConfig {
 }
 
 #[derive(Debug, Clone, Default)]
+pub(crate) struct DaemonConfig {
+    pub(crate) gateway: GatewayConfig,
+    /// Route retention after its last MCP session leaves; zero disables retention.
+    pub(crate) worker_idle_timeout_secs: u64,
+}
+
+#[derive(Debug, Clone, Default)]
 pub(crate) struct SessionConfig {
     pub(crate) metadata: Option<Value>,
     pub(crate) launched_agent: Option<LaunchedAgent>,
@@ -123,6 +130,7 @@ impl GatewayConfig {
 
 #[derive(Debug, Clone, Default)]
 pub(crate) struct ResolvedConfig {
+    pub(crate) daemon_worker_idle_timeout_secs: u64,
     pub(crate) diagnostics: super::RuntimeDiagnosticsConfig,
     pub(crate) gateway: GatewayConfig,
     pub(crate) agents: AgentConfigs,
