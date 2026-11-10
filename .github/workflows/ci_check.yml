@@ -219,6 +219,14 @@ jobs:
           restore-keys: |
             nemo-relay-pre-commit-${{ runner.os }}-${{ runner.arch }}-py${{ steps.ci-config.outputs.default_python_version }}-node${{ steps.ci-config.outputs.node_version }}-rust${{ steps.ci-config.outputs.rust_version }}-pc${{ steps.ci-config.outputs.pre_commit_version }}-
 
+      - name: Cache Python attribution artifacts
+        uses: actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
+        with:
+          path: target/attributions-cache
+          key: nemo-relay-attributions-python-${{ hashFiles('uv.lock') }}
+          restore-keys: |
+            nemo-relay-attributions-python-
+
       - name: Validate quickstart contracts
         working-directory: ${{ env.NEMO_RELAY_CI_WORKSPACE }}
         run: just check-quickstarts
@@ -272,7 +280,10 @@ jobs:
 
       - name: Test docs version retention
         working-directory: ${{ env.NEMO_RELAY_CI_WORKSPACE }}
-        run: uv run --no-sync python -m unittest scripts.tests.test_sync_fern_docs_branch
+        run: |
+          uv run --no-sync python -m unittest \
+            scripts.tests.test_sync_fern_docs_branch \
+            scripts.tests.test_attributions_lockfile_md
 
       - name: Test Rust coverage export
         working-directory: ${{ env.NEMO_RELAY_CI_WORKSPACE }}
