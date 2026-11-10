@@ -310,8 +310,9 @@ Keep example source in `docs/instrument-applications/_code/` and display that
 file with a Fern `Code` component. Add the corresponding native example test
 when adding or changing a shared example. The source-reference check reports
 shared files or documentation references missing from the registered coverage.
-The focused CI job runs for instrumentation documentation changes, and SDK jobs
-also run their binding's example tests when the SDK changes.
+The Check job runs these focused tests when instrumentation documentation
+changes. The language SDK jobs also include their corresponding example tests
+when SDK code changes.
 
 These tests cover local application callbacks, returned results, lifecycle
 events, middleware, and cleanup. External provider behavior and independent

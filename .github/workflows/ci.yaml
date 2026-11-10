@@ -125,6 +125,7 @@ jobs:
       full_ci: ${{ needs.prepare.outputs.full_ci == 'true' }}
       base: ${{ needs.ci_changes.outputs.base }}
       run_installer: ${{ needs.ci_changes.outputs.run_installer == 'true' }}
+      run_documentation_examples: ${{ needs.ci_changes.outputs.run_documentation_examples == 'true' }}
       run_python_integration_langchain: ${{ needs.ci_changes.outputs.run_python_integration_langchain == 'true' }}
       run_python_integration_google_adk: ${{ needs.ci_changes.outputs.run_python_integration_google_adk == 'true' }}
 
@@ -209,14 +210,6 @@ jobs:
       run_integration_langchain: ${{ needs.ci_changes.outputs.run_python_integration_langchain == 'true' }}
       run_integration_google_adk: ${{ needs.ci_changes.outputs.run_python_integration_google_adk == 'true' }}
 
-  ci_documentation_examples:
-    name: Instrumentation Examples
-    needs: [prepare, ci_changes]
-    if: ${{ github.repository == 'NVIDIA/NeMo-Relay' && needs.ci_changes.outputs.run_documentation_examples == 'true' }}
-    permissions:
-      contents: read
-    uses: ./.github/workflows/ci_documentation_examples.yml
-
   ci_required:
     name: CI Pipeline
     needs:
@@ -227,7 +220,6 @@ jobs:
       - ci_go
       - ci_node
       - ci_python
-      - ci_documentation_examples
     if: ${{ github.repository == 'NVIDIA/NeMo-Relay' && (always() && !cancelled() && needs.prepare.result == 'success' && ! fromJSON(needs.prepare.outputs.has_skip_ci_label)) }}
     runs-on: ubuntu-latest
     permissions:
@@ -241,8 +233,6 @@ jobs:
           GO_RESULT: ${{ needs.ci_go.result }}
           NODE_RESULT: ${{ needs.ci_node.result }}
           PYTHON_RESULT: ${{ needs.ci_python.result }}
-          DOCUMENTATION_EXAMPLES_RESULT: ${{ needs.ci_documentation_examples.result }}
-          RUN_DOCUMENTATION_EXAMPLES: ${{ needs.ci_changes.outputs.run_documentation_examples }}
           publish_packages: ${{ needs.prepare.outputs.publish_packages }}
         run: |
           set -euo pipefail
@@ -268,12 +258,6 @@ jobs:
 
           require_success "Changes" "$CHANGES_RESULT"
           require_success "Check" "$CHECK_RESULT"
-
-          if [[ "$RUN_DOCUMENTATION_EXAMPLES" == "true" ]]; then
-            require_success "Instrumentation Examples" "$DOCUMENTATION_EXAMPLES_RESULT"
-          else
-            allow_success_or_skipped "Instrumentation Examples" "$DOCUMENTATION_EXAMPLES_RESULT"
-          fi
 
           if [[ "$publish_packages" == "true" ]]; then
             require_success "Rust" "$RUST_RESULT"
