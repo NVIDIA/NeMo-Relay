@@ -1,8 +1,8 @@
 ---
 title: "Struct Native Executor Config"
 sidebar-title: "NativeExecutorConfig"
-description: "Configuration for the executor owned by one exported native plugin."
-position: 41
+description: "Configuration used when a native plugin opts into a shared Tokio runtime."
+position: 40
 ---
 {/* SPDX-FileCopyrightText: Copyright (c) 2026, NVIDIA CORPORATION & AFFILIATES. All rights reserved.
 SPDX-License-Identifier: Apache-2.0 */}
@@ -11,13 +11,13 @@ Generated from `cargo doc --no-deps -p nemo-relay-builtins -p nemo-relay-diagnos
 
 <pre className="rust-signature"><code dangerouslySetInnerHTML={{"__html": "pub struct NativeExecutorConfig &#123;\n    pub worker_threads: <a href=\"https://doc.rust-lang.org/1.96.1/std/primitive.usize.html\">usize</a>,\n&#125;"}} /></pre>
 
-Configuration for the executor owned by one exported native plugin.
+Configuration used when a native plugin opts into a shared Tokio runtime.
 
 ## Fields
 
 ### `worker_threads: usize`
 
-Number of Tokio worker threads dedicated to the plugin.
+Number of Tokio worker threads shared by this plugin's Tokio-enabled components.
 
 ## Implementations
 
@@ -27,9 +27,9 @@ Number of Tokio worker threads dedicated to the plugin.
 
 #### `with_component_config`
 
-<pre className="rust-signature"><code dangerouslySetInnerHTML={{"__html": "pub fn with_component_config(\n    self,\n    plugin_config: &amp;<a href=\"https://docs.rs/serde_json/1.0.149/serde_json/map/struct.Map.html\">Map</a>&lt;<a href=\"https://doc.rust-lang.org/1.96.1/alloc/string/struct.String.html\">String</a>, <a href=\"https://docs.rs/serde_json/1.0.149/serde_json/value/enum.Value.html\">Json</a>&gt;,\n) -&gt; <a href=\"type-result\">Result</a>&lt;Self&gt;"}} /></pre>
+<pre className="rust-signature"><code dangerouslySetInnerHTML={{"__html": "pub fn with_component_config(\n    self,\n    plugin_config: &amp;<a href=\"struct-map\">Map</a>&lt;<a href=\"https://doc.rust-lang.org/1.96.1/alloc/string/struct.String.html\">String</a>, <a href=\"type-json\">Json</a>&gt;,\n) -&gt; <a href=\"type-result\">Result</a>&lt;Self&gt;"}} /></pre>
 
-Applies an optional component-local executor override.
+Apply an explicit component request for a shared Tokio runtime.
 
 Relay passes `[plugins.dynamic.config.executor]` as the `executor` object in `plugin_config`. The only supported setting is the positive integer `worker_threads`.
 

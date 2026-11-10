@@ -1,0 +1,46 @@
+---
+title: "Trait Plugin"
+sidebar-title: "Plugin"
+description: "API documentation for the Rust `Plugin` trait in crate `nemo_relay_plugin`."
+position: 85
+---
+{/* SPDX-FileCopyrightText: Copyright (c) 2026, NVIDIA CORPORATION & AFFILIATES. All rights reserved.
+SPDX-License-Identifier: Apache-2.0 */}
+
+Generated from `cargo doc --no-deps -p nemo-relay-builtins -p nemo-relay-diagnostics -p nemo-relay-logging -p nemo-relay-plugin-host -p nemo-relay-codecs -p nemo-relay -p nemo-relay-runtime -p nemo-relay-model-pricing -p nemo-relay-resource-metrics -p nemo-relay-observability -p nemo-relay-adaptive -p nemo-relay-pii-redaction -p nemo-relay-ffi -p nemo-relay-types -p nemo-relay-plugin -p nemo-relay-worker-proto -p nemo-relay-worker`.
+
+<pre className="rust-signature"><code dangerouslySetInnerHTML={{"__html": "pub trait Plugin:\n    <a href=\"https://doc.rust-lang.org/1.96.1/core/marker/trait.Send.html\">Send</a>\n    + <a href=\"https://doc.rust-lang.org/1.96.1/core/marker/trait.Sync.html\">Sync</a>\n    + 'static &#123;\n    // Required methods\n    fn plugin_kind(&amp;self) -&gt; &amp;<a href=\"https://doc.rust-lang.org/1.96.1/std/primitive.str.html\">str</a>;\n    fn register&lt;'a&gt;(\n        &amp;'a self,\n        config: &amp;'a <a href=\"struct-map\">Map</a>&lt;<a href=\"https://doc.rust-lang.org/1.96.1/alloc/string/struct.String.html\">String</a>, <a href=\"type-json\">Json</a>&gt;,\n        ctx: &amp;'a mut <a href=\"struct-plugincontext\">PluginContext</a>&lt;'_&gt;,\n    ) -&gt; <a href=\"type-pluginfuture\">PluginFuture</a>&lt;'a, <a href=\"https://doc.rust-lang.org/1.96.1/std/primitive.unit.html\">()</a>&gt;;\n&#8203;\n    // Provided methods\n    fn allows_multiple_components(&amp;self) -&gt; <a href=\"https://doc.rust-lang.org/1.96.1/std/primitive.bool.html\">bool</a> &#123; ... &#125;\n    fn executor_config(&amp;self) -&gt; <a href=\"https://doc.rust-lang.org/1.96.1/core/option/enum.Option.html\">Option</a>&lt;<a href=\"struct-nativeexecutorconfig\">NativeExecutorConfig</a>&gt; &#123; ... &#125;\n    fn executor_config_for_component(\n        &amp;self,\n        config: &amp;<a href=\"struct-map\">Map</a>&lt;<a href=\"https://doc.rust-lang.org/1.96.1/alloc/string/struct.String.html\">String</a>, <a href=\"type-json\">Json</a>&gt;,\n    ) -&gt; Result&lt;<a href=\"https://doc.rust-lang.org/1.96.1/core/option/enum.Option.html\">Option</a>&lt;<a href=\"struct-nativeexecutorconfig\">NativeExecutorConfig</a>&gt;&gt; &#123; ... &#125;\n    fn validate(&amp;self, config: &amp;<a href=\"struct-map\">Map</a>&lt;<a href=\"https://doc.rust-lang.org/1.96.1/alloc/string/struct.String.html\">String</a>, <a href=\"type-json\">Json</a>&gt;) -&gt; <a href=\"https://doc.rust-lang.org/1.96.1/alloc/vec/struct.Vec.html\">Vec</a>&lt;<a href=\"struct-configdiagnostic\">ConfigDiagnostic</a>&gt; &#123; ... &#125;\n&#125;"}} /></pre>
+
+## Required Methods
+
+#### `plugin_kind`
+
+<pre className="rust-signature"><code dangerouslySetInnerHTML={{"__html": "fn plugin_kind(&amp;self) -&gt; &amp;<a href=\"https://doc.rust-lang.org/1.96.1/std/primitive.str.html\">str</a>"}} /></pre>
+
+#### `register`
+
+<pre className="rust-signature"><code dangerouslySetInnerHTML={{"__html": "fn register&lt;'a&gt;(\n    &amp;'a self,\n    config: &amp;'a <a href=\"struct-map\">Map</a>&lt;<a href=\"https://doc.rust-lang.org/1.96.1/alloc/string/struct.String.html\">String</a>, <a href=\"type-json\">Json</a>&gt;,\n    ctx: &amp;'a mut <a href=\"struct-plugincontext\">PluginContext</a>&lt;'_&gt;,\n) -&gt; <a href=\"type-pluginfuture\">PluginFuture</a>&lt;'a, <a href=\"https://doc.rust-lang.org/1.96.1/std/primitive.unit.html\">()</a>&gt;"}} /></pre>
+
+## Provided Methods
+
+#### `allows_multiple_components`
+
+<pre className="rust-signature"><code dangerouslySetInnerHTML={{"__html": "fn allows_multiple_components(&amp;self) -&gt; <a href=\"https://doc.rust-lang.org/1.96.1/std/primitive.bool.html\">bool</a>"}} /></pre>
+
+#### `executor_config`
+
+<pre className="rust-signature"><code dangerouslySetInnerHTML={{"__html": "fn executor_config(&amp;self) -&gt; <a href=\"https://doc.rust-lang.org/1.96.1/core/option/enum.Option.html\">Option</a>&lt;<a href=\"struct-nativeexecutorconfig\">NativeExecutorConfig</a>&gt;"}} /></pre>
+
+Opt into a shared plugin Tokio runtime; inline execution needs no runtime.
+
+#### `executor_config_for_component`
+
+<pre className="rust-signature"><code dangerouslySetInnerHTML={{"__html": "fn executor_config_for_component(\n    &amp;self,\n    config: &amp;<a href=\"struct-map\">Map</a>&lt;<a href=\"https://doc.rust-lang.org/1.96.1/alloc/string/struct.String.html\">String</a>, <a href=\"type-json\">Json</a>&gt;,\n) -&gt; Result&lt;<a href=\"https://doc.rust-lang.org/1.96.1/core/option/enum.Option.html\">Option</a>&lt;<a href=\"struct-nativeexecutorconfig\">NativeExecutorConfig</a>&gt;&gt;"}} /></pre>
+
+Resolve optional shared Tokio support from plugin defaults and component executor settings.
+
+#### `validate`
+
+<pre className="rust-signature"><code dangerouslySetInnerHTML={{"__html": "fn validate(&amp;self, config: &amp;<a href=\"struct-map\">Map</a>&lt;<a href=\"https://doc.rust-lang.org/1.96.1/alloc/string/struct.String.html\">String</a>, <a href=\"type-json\">Json</a>&gt;) -&gt; <a href=\"https://doc.rust-lang.org/1.96.1/alloc/vec/struct.Vec.html\">Vec</a>&lt;<a href=\"struct-configdiagnostic\">ConfigDiagnostic</a>&gt;"}} /></pre>
+
+## Implementors

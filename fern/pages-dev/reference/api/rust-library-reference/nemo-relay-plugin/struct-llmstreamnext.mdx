@@ -1,8 +1,8 @@
 ---
 title: "Struct LlmStream Next"
 sidebar-title: "LlmStreamNext"
-description: "Cloneable asynchronous LLM stream continuation."
-position: 38
+description: "API documentation for the Rust `LlmStreamNext` struct in crate `nemo_relay_plugin`."
+position: 36
 ---
 {/* SPDX-FileCopyrightText: Copyright (c) 2026, NVIDIA CORPORATION & AFFILIATES. All rights reserved.
 SPDX-License-Identifier: Apache-2.0 */}
@@ -10,10 +10,8 @@ SPDX-License-Identifier: Apache-2.0 */}
 Generated from `cargo doc --no-deps -p nemo-relay-builtins -p nemo-relay-diagnostics -p nemo-relay-logging -p nemo-relay-plugin-host -p nemo-relay-codecs -p nemo-relay -p nemo-relay-runtime -p nemo-relay-model-pricing -p nemo-relay-resource-metrics -p nemo-relay-observability -p nemo-relay-adaptive -p nemo-relay-pii-redaction -p nemo-relay-ffi -p nemo-relay-types -p nemo-relay-plugin -p nemo-relay-worker-proto -p nemo-relay-worker`.
 
 ```rust
-pub struct LlmStreamNext(/* private fields */);
+pub struct LlmStreamNext { /* private fields */ }
 ```
-
-Cloneable asynchronous LLM stream continuation.
 
 ## Implementations
 
@@ -23,9 +21,9 @@ Cloneable asynchronous LLM stream continuation.
 
 #### `call`
 
-<pre className="rust-signature"><code dangerouslySetInnerHTML={{"__html": "pub async fn call(&amp;self, request: <a href=\"struct-llmrequest\">LlmRequest</a>) -&gt; <a href=\"type-result\">Result</a>&lt;<a href=\"type-llmjsonasyncstream\">LlmJsonAsyncStream</a>&gt;"}} /></pre>
+<pre className="rust-signature"><code dangerouslySetInnerHTML={{"__html": "pub async fn call(&amp;self, request: <a href=\"struct-llmrequest\">LlmRequest</a>) -&gt; Result&lt;<a href=\"type-llmjsonasyncstream\">LlmJsonAsyncStream</a>&gt;"}} /></pre>
 
-Opens an independent pull-based downstream stream.
+Open a component-owned downstream LLM stream for the supplied request.
 
 ## Trait Implementations
 

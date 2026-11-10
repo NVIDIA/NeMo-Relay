@@ -1,0 +1,713 @@
+---
+title: "Struct Map"
+sidebar-title: "Map"
+description: "Represents a JSON key/value type."
+position: 37
+---
+{/* SPDX-FileCopyrightText: Copyright (c) 2026, NVIDIA CORPORATION & AFFILIATES. All rights reserved.
+SPDX-License-Identifier: Apache-2.0 */}
+
+Generated from `cargo doc --no-deps -p nemo-relay-builtins -p nemo-relay-diagnostics -p nemo-relay-logging -p nemo-relay-plugin-host -p nemo-relay-codecs -p nemo-relay -p nemo-relay-runtime -p nemo-relay-model-pricing -p nemo-relay-resource-metrics -p nemo-relay-observability -p nemo-relay-adaptive -p nemo-relay-pii-redaction -p nemo-relay-ffi -p nemo-relay-types -p nemo-relay-plugin -p nemo-relay-worker-proto -p nemo-relay-worker`.
+
+```rust
+pub struct Map<K, V> { /* private fields */ }
+```
+
+Represents a JSON key/value type.
+
+## Implementations
+
+### `impl Map<String, Value>`
+
+<pre className="rust-signature"><code dangerouslySetInnerHTML={{"__html": "impl <a href=\"struct-map\">Map</a>&lt;<a href=\"https://doc.rust-lang.org/1.96.1/alloc/string/struct.String.html\">String</a>, <a href=\"https://docs.rs/serde_json/1.0.149/serde_json/value/enum.Value.html\">Value</a>&gt;"}} /></pre>
+
+#### `new`
+
+<pre className="rust-signature"><code dangerouslySetInnerHTML={{"__html": "pub fn new() -&gt; <a href=\"struct-map\">Map</a>&lt;<a href=\"https://doc.rust-lang.org/1.96.1/alloc/string/struct.String.html\">String</a>, <a href=\"https://docs.rs/serde_json/1.0.149/serde_json/value/enum.Value.html\">Value</a>&gt;"}} /></pre>
+
+Makes a new empty Map.
+
+#### `with_capacity`
+
+<pre className="rust-signature"><code dangerouslySetInnerHTML={{"__html": "pub fn with_capacity(capacity: <a href=\"https://doc.rust-lang.org/1.96.1/std/primitive.usize.html\">usize</a>) -&gt; <a href=\"struct-map\">Map</a>&lt;<a href=\"https://doc.rust-lang.org/1.96.1/alloc/string/struct.String.html\">String</a>, <a href=\"https://docs.rs/serde_json/1.0.149/serde_json/value/enum.Value.html\">Value</a>&gt;"}} /></pre>
+
+Makes a new empty Map with the given initial capacity.
+
+#### `clear`
+
+<pre className="rust-signature"><code dangerouslySetInnerHTML={{"__html": "pub fn clear(&amp;mut self)"}} /></pre>
+
+Clears the map, removing all values.
+
+#### `get`
+
+<pre className="rust-signature"><code dangerouslySetInnerHTML={{"__html": "pub fn get&lt;Q&gt;(&amp;self, key: <a href=\"https://doc.rust-lang.org/1.96.1/std/primitive.reference.html\">&amp;Q</a>) -&gt; <a href=\"https://doc.rust-lang.org/1.96.1/core/option/enum.Option.html\">Option</a>&lt;&amp;<a href=\"https://docs.rs/serde_json/1.0.149/serde_json/value/enum.Value.html\">Value</a>&gt;where\n    <a href=\"https://doc.rust-lang.org/1.96.1/alloc/string/struct.String.html\">String</a>: <a href=\"https://doc.rust-lang.org/1.96.1/core/borrow/trait.Borrow.html\">Borrow</a>&lt;Q&gt;,\n    Q: <a href=\"https://doc.rust-lang.org/1.96.1/core/cmp/trait.Ord.html\">Ord</a> + <a href=\"https://doc.rust-lang.org/1.96.1/core/cmp/trait.Eq.html\">Eq</a> + <a href=\"https://doc.rust-lang.org/1.96.1/core/hash/trait.Hash.html\">Hash</a> + ?<a href=\"https://doc.rust-lang.org/1.96.1/core/marker/trait.Sized.html\">Sized</a>,"}} /></pre>
+
+Returns a reference to the value corresponding to the key.
+
+The key may be any borrowed form of the map's key type, but the ordering on the borrowed form *must* match the ordering on the key type.
+
+#### `contains_key`
+
+<pre className="rust-signature"><code dangerouslySetInnerHTML={{"__html": "pub fn contains_key&lt;Q&gt;(&amp;self, key: <a href=\"https://doc.rust-lang.org/1.96.1/std/primitive.reference.html\">&amp;Q</a>) -&gt; <a href=\"https://doc.rust-lang.org/1.96.1/std/primitive.bool.html\">bool</a>where\n    <a href=\"https://doc.rust-lang.org/1.96.1/alloc/string/struct.String.html\">String</a>: <a href=\"https://doc.rust-lang.org/1.96.1/core/borrow/trait.Borrow.html\">Borrow</a>&lt;Q&gt;,\n    Q: <a href=\"https://doc.rust-lang.org/1.96.1/core/cmp/trait.Ord.html\">Ord</a> + <a href=\"https://doc.rust-lang.org/1.96.1/core/cmp/trait.Eq.html\">Eq</a> + <a href=\"https://doc.rust-lang.org/1.96.1/core/hash/trait.Hash.html\">Hash</a> + ?<a href=\"https://doc.rust-lang.org/1.96.1/core/marker/trait.Sized.html\">Sized</a>,"}} /></pre>
+
+Returns true if the map contains a value for the specified key.
+
+The key may be any borrowed form of the map's key type, but the ordering on the borrowed form *must* match the ordering on the key type.
+
+#### `get_mut`
+
+<pre className="rust-signature"><code dangerouslySetInnerHTML={{"__html": "pub fn get_mut&lt;Q&gt;(&amp;mut self, key: <a href=\"https://doc.rust-lang.org/1.96.1/std/primitive.reference.html\">&amp;Q</a>) -&gt; <a href=\"https://doc.rust-lang.org/1.96.1/core/option/enum.Option.html\">Option</a>&lt;&amp;mut <a href=\"https://docs.rs/serde_json/1.0.149/serde_json/value/enum.Value.html\">Value</a>&gt;where\n    <a href=\"https://doc.rust-lang.org/1.96.1/alloc/string/struct.String.html\">String</a>: <a href=\"https://doc.rust-lang.org/1.96.1/core/borrow/trait.Borrow.html\">Borrow</a>&lt;Q&gt;,\n    Q: <a href=\"https://doc.rust-lang.org/1.96.1/core/cmp/trait.Ord.html\">Ord</a> + <a href=\"https://doc.rust-lang.org/1.96.1/core/cmp/trait.Eq.html\">Eq</a> + <a href=\"https://doc.rust-lang.org/1.96.1/core/hash/trait.Hash.html\">Hash</a> + ?<a href=\"https://doc.rust-lang.org/1.96.1/core/marker/trait.Sized.html\">Sized</a>,"}} /></pre>
+
+Returns a mutable reference to the value corresponding to the key.
+
+The key may be any borrowed form of the map's key type, but the ordering on the borrowed form *must* match the ordering on the key type.
+
+#### `get_key_value`
+
+<pre className="rust-signature"><code dangerouslySetInnerHTML={{"__html": "pub fn get_key_value&lt;Q&gt;(&amp;self, key: <a href=\"https://doc.rust-lang.org/1.96.1/std/primitive.reference.html\">&amp;Q</a>) -&gt; <a href=\"https://doc.rust-lang.org/1.96.1/core/option/enum.Option.html\">Option</a>&lt;(&amp;<a href=\"https://doc.rust-lang.org/1.96.1/alloc/string/struct.String.html\">String</a>, &amp;<a href=\"https://docs.rs/serde_json/1.0.149/serde_json/value/enum.Value.html\">Value</a>)&gt;where\n    <a href=\"https://doc.rust-lang.org/1.96.1/alloc/string/struct.String.html\">String</a>: <a href=\"https://doc.rust-lang.org/1.96.1/core/borrow/trait.Borrow.html\">Borrow</a>&lt;Q&gt;,\n    Q: <a href=\"https://doc.rust-lang.org/1.96.1/core/cmp/trait.Ord.html\">Ord</a> + <a href=\"https://doc.rust-lang.org/1.96.1/core/cmp/trait.Eq.html\">Eq</a> + <a href=\"https://doc.rust-lang.org/1.96.1/core/hash/trait.Hash.html\">Hash</a> + ?<a href=\"https://doc.rust-lang.org/1.96.1/core/marker/trait.Sized.html\">Sized</a>,"}} /></pre>
+
+Returns the key-value pair matching the given key.
+
+The key may be any borrowed form of the map's key type, but the ordering on the borrowed form *must* match the ordering on the key type.
+
+#### `insert`
+
+<pre className="rust-signature"><code dangerouslySetInnerHTML={{"__html": "pub fn insert(&amp;mut self, k: <a href=\"https://doc.rust-lang.org/1.96.1/alloc/string/struct.String.html\">String</a>, v: <a href=\"https://docs.rs/serde_json/1.0.149/serde_json/value/enum.Value.html\">Value</a>) -&gt; <a href=\"https://doc.rust-lang.org/1.96.1/core/option/enum.Option.html\">Option</a>&lt;<a href=\"https://docs.rs/serde_json/1.0.149/serde_json/value/enum.Value.html\">Value</a>&gt;"}} /></pre>
+
+Inserts a key-value pair into the map.
+
+If the map did not have this key present, `None` is returned.
+
+If the map did have this key present, the value is updated, and the old value is returned.
+
+#### `remove`
+
+<pre className="rust-signature"><code dangerouslySetInnerHTML={{"__html": "pub fn remove&lt;Q&gt;(&amp;mut self, key: <a href=\"https://doc.rust-lang.org/1.96.1/std/primitive.reference.html\">&amp;Q</a>) -&gt; <a href=\"https://doc.rust-lang.org/1.96.1/core/option/enum.Option.html\">Option</a>&lt;<a href=\"https://docs.rs/serde_json/1.0.149/serde_json/value/enum.Value.html\">Value</a>&gt;where\n    <a href=\"https://doc.rust-lang.org/1.96.1/alloc/string/struct.String.html\">String</a>: <a href=\"https://doc.rust-lang.org/1.96.1/core/borrow/trait.Borrow.html\">Borrow</a>&lt;Q&gt;,\n    Q: <a href=\"https://doc.rust-lang.org/1.96.1/core/cmp/trait.Ord.html\">Ord</a> + <a href=\"https://doc.rust-lang.org/1.96.1/core/cmp/trait.Eq.html\">Eq</a> + <a href=\"https://doc.rust-lang.org/1.96.1/core/hash/trait.Hash.html\">Hash</a> + ?<a href=\"https://doc.rust-lang.org/1.96.1/core/marker/trait.Sized.html\">Sized</a>,"}} /></pre>
+
+Removes a key from the map, returning the value at the key if the key was previously in the map.
+
+The key may be any borrowed form of the map's key type, but the ordering on the borrowed form *must* match the ordering on the key type.
+
+If serde_json's "preserve_order" is enabled, `.remove(key)` is equivalent to [`.swap_remove(key)`][Self::swap_remove], replacing this entry's position with the last element. If you need to preserve the relative order of the keys in the map, use [`.shift_remove(key)`][Self::shift_remove] instead.
+
+#### `remove_entry`
+
+<pre className="rust-signature"><code dangerouslySetInnerHTML={{"__html": "pub fn remove_entry&lt;Q&gt;(&amp;mut self, key: <a href=\"https://doc.rust-lang.org/1.96.1/std/primitive.reference.html\">&amp;Q</a>) -&gt; <a href=\"https://doc.rust-lang.org/1.96.1/core/option/enum.Option.html\">Option</a>&lt;(<a href=\"https://doc.rust-lang.org/1.96.1/alloc/string/struct.String.html\">String</a>, <a href=\"https://docs.rs/serde_json/1.0.149/serde_json/value/enum.Value.html\">Value</a>)&gt;where\n    <a href=\"https://doc.rust-lang.org/1.96.1/alloc/string/struct.String.html\">String</a>: <a href=\"https://doc.rust-lang.org/1.96.1/core/borrow/trait.Borrow.html\">Borrow</a>&lt;Q&gt;,\n    Q: <a href=\"https://doc.rust-lang.org/1.96.1/core/cmp/trait.Ord.html\">Ord</a> + <a href=\"https://doc.rust-lang.org/1.96.1/core/cmp/trait.Eq.html\">Eq</a> + <a href=\"https://doc.rust-lang.org/1.96.1/core/hash/trait.Hash.html\">Hash</a> + ?<a href=\"https://doc.rust-lang.org/1.96.1/core/marker/trait.Sized.html\">Sized</a>,"}} /></pre>
+
+Removes a key from the map, returning the stored key and value if the key was previously in the map.
+
+The key may be any borrowed form of the map's key type, but the ordering on the borrowed form *must* match the ordering on the key type.
+
+If serde_json's "preserve_order" is enabled, `.remove_entry(key)` is equivalent to [`.swap_remove_entry(key)`][Self::swap_remove_entry], replacing this entry's position with the last element. If you need to preserve the relative order of the keys in the map, use [`.shift_remove_entry(key)`][Self::shift_remove_entry] instead.
+
+#### `append`
+
+<pre className="rust-signature"><code dangerouslySetInnerHTML={{"__html": "pub fn append(&amp;mut self, other: &amp;mut <a href=\"struct-map\">Map</a>&lt;<a href=\"https://doc.rust-lang.org/1.96.1/alloc/string/struct.String.html\">String</a>, <a href=\"https://docs.rs/serde_json/1.0.149/serde_json/value/enum.Value.html\">Value</a>&gt;)"}} /></pre>
+
+Moves all elements from other into self, leaving other empty.
+
+#### `entry`
+
+<pre className="rust-signature"><code dangerouslySetInnerHTML={{"__html": "pub fn entry&lt;S&gt;(&amp;mut self, key: S) -&gt; <a href=\"https://docs.rs/serde_json/1.0.149/serde_json/map/enum.Entry.html\">Entry</a>&lt;'_&gt;where\n    S: <a href=\"https://doc.rust-lang.org/1.96.1/core/convert/trait.Into.html\">Into</a>&lt;<a href=\"https://doc.rust-lang.org/1.96.1/alloc/string/struct.String.html\">String</a>&gt;,"}} /></pre>
+
+Gets the given key's corresponding entry in the map for in-place manipulation.
+
+#### `len`
+
+<pre className="rust-signature"><code dangerouslySetInnerHTML={{"__html": "pub fn len(&amp;self) -&gt; <a href=\"https://doc.rust-lang.org/1.96.1/std/primitive.usize.html\">usize</a>"}} /></pre>
+
+Returns the number of elements in the map.
+
+#### `is_empty`
+
+<pre className="rust-signature"><code dangerouslySetInnerHTML={{"__html": "pub fn is_empty(&amp;self) -&gt; <a href=\"https://doc.rust-lang.org/1.96.1/std/primitive.bool.html\">bool</a>"}} /></pre>
+
+Returns true if the map contains no elements.
+
+#### `iter`
+
+<pre className="rust-signature"><code dangerouslySetInnerHTML={{"__html": "pub fn iter(&amp;self) -&gt; <a href=\"https://docs.rs/serde_json/1.0.149/serde_json/map/struct.Iter.html\">Iter</a>&lt;'_&gt;"}} /></pre>
+
+Gets an iterator over the entries of the map.
+
+#### `iter_mut`
+
+<pre className="rust-signature"><code dangerouslySetInnerHTML={{"__html": "pub fn iter_mut(&amp;mut self) -&gt; <a href=\"https://docs.rs/serde_json/1.0.149/serde_json/map/struct.IterMut.html\">IterMut</a>&lt;'_&gt;"}} /></pre>
+
+Gets a mutable iterator over the entries of the map.
+
+#### `keys`
+
+<pre className="rust-signature"><code dangerouslySetInnerHTML={{"__html": "pub fn keys(&amp;self) -&gt; <a href=\"https://docs.rs/serde_json/1.0.149/serde_json/map/struct.Keys.html\">Keys</a>&lt;'_&gt;"}} /></pre>
+
+Gets an iterator over the keys of the map.
+
+#### `values`
+
+<pre className="rust-signature"><code dangerouslySetInnerHTML={{"__html": "pub fn values(&amp;self) -&gt; <a href=\"https://docs.rs/serde_json/1.0.149/serde_json/map/struct.Values.html\">Values</a>&lt;'_&gt;"}} /></pre>
+
+Gets an iterator over the values of the map.
+
+#### `values_mut`
+
+<pre className="rust-signature"><code dangerouslySetInnerHTML={{"__html": "pub fn values_mut(&amp;mut self) -&gt; <a href=\"https://docs.rs/serde_json/1.0.149/serde_json/map/struct.ValuesMut.html\">ValuesMut</a>&lt;'_&gt;"}} /></pre>
+
+Gets an iterator over mutable values of the map.
+
+#### `into_values`
+
+<pre className="rust-signature"><code dangerouslySetInnerHTML={{"__html": "pub fn into_values(self) -&gt; <a href=\"https://docs.rs/serde_json/1.0.149/serde_json/map/struct.IntoValues.html\">IntoValues</a>"}} /></pre>
+
+Gets an iterator over the values of the map.
+
+#### `retain`
+
+<pre className="rust-signature"><code dangerouslySetInnerHTML={{"__html": "pub fn retain&lt;F&gt;(&amp;mut self, f: F)where\n    F: <a href=\"https://doc.rust-lang.org/1.96.1/core/ops/function/trait.FnMut.html\">FnMut</a>(&amp;<a href=\"https://doc.rust-lang.org/1.96.1/alloc/string/struct.String.html\">String</a>, &amp;mut <a href=\"https://docs.rs/serde_json/1.0.149/serde_json/value/enum.Value.html\">Value</a>) -&gt; <a href=\"https://doc.rust-lang.org/1.96.1/std/primitive.bool.html\">bool</a>,"}} /></pre>
+
+Retains only the elements specified by the predicate.
+
+In other words, remove all pairs `(k, v)` such that `f(&k, &mut v)` returns `false`.
+
+#### `sort_keys`
+
+<pre className="rust-signature"><code dangerouslySetInnerHTML={{"__html": "pub fn sort_keys(&amp;mut self)"}} /></pre>
+
+Sorts this map's entries in-place using `str`'s usual ordering.
+
+If serde_json's "preserve_order" feature is not enabled, this method does no work because all JSON maps are always kept in a sorted state.
+
+If serde_json's "preserve_order" feature is enabled, this method destroys the original source order or insertion order of this map in favor of an alphanumerical order that matches how a BTreeMap with the same contents would be ordered. This takes **O(n log n + c)** time where *n* is the length of the map and *c* is the capacity.
+
+Other maps nested within the values of this map are not sorted. If you need the entire data structure to be sorted at all levels, you must also call `map.values_mut().for_each(Value::sort_all_objects)`.
+
+## Trait Implementations
+
+### `impl Clone for Map<String, Value>`
+
+<pre className="rust-signature"><code dangerouslySetInnerHTML={{"__html": "impl <a href=\"https://doc.rust-lang.org/1.96.1/core/clone/trait.Clone.html\">Clone</a> for <a href=\"struct-map\">Map</a>&lt;<a href=\"https://doc.rust-lang.org/1.96.1/alloc/string/struct.String.html\">String</a>, <a href=\"https://docs.rs/serde_json/1.0.149/serde_json/value/enum.Value.html\">Value</a>&gt;"}} /></pre>
+
+#### `clone`
+
+<pre className="rust-signature"><code dangerouslySetInnerHTML={{"__html": "fn <a href=\"https://doc.rust-lang.org/1.96.1/core/clone/trait.Clone.html#tymethod.clone\">clone</a>(&amp;self) -&gt; <a href=\"struct-map\">Map</a>&lt;<a href=\"https://doc.rust-lang.org/1.96.1/alloc/string/struct.String.html\">String</a>, <a href=\"https://docs.rs/serde_json/1.0.149/serde_json/value/enum.Value.html\">Value</a>&gt;"}} /></pre>
+
+#### `clone_from`
+
+<pre className="rust-signature"><code dangerouslySetInnerHTML={{"__html": "fn <a href=\"https://doc.rust-lang.org/1.96.1/core/clone/trait.Clone.html#method.clone_from\">clone_from</a>(&amp;mut self, source: &amp;<a href=\"struct-map\">Map</a>&lt;<a href=\"https://doc.rust-lang.org/1.96.1/alloc/string/struct.String.html\">String</a>, <a href=\"https://docs.rs/serde_json/1.0.149/serde_json/value/enum.Value.html\">Value</a>&gt;)"}} /></pre>
+
+### `impl Debug for Map<String, Value>`
+
+<pre className="rust-signature"><code dangerouslySetInnerHTML={{"__html": "impl <a href=\"https://doc.rust-lang.org/1.96.1/core/fmt/trait.Debug.html\">Debug</a> for <a href=\"struct-map\">Map</a>&lt;<a href=\"https://doc.rust-lang.org/1.96.1/alloc/string/struct.String.html\">String</a>, <a href=\"https://docs.rs/serde_json/1.0.149/serde_json/value/enum.Value.html\">Value</a>&gt;"}} /></pre>
+
+#### `fmt`
+
+<pre className="rust-signature"><code dangerouslySetInnerHTML={{"__html": "fn <a href=\"https://doc.rust-lang.org/1.96.1/core/fmt/trait.Debug.html#tymethod.fmt\">fmt</a>(&amp;self, formatter: &amp;mut <a href=\"https://doc.rust-lang.org/1.96.1/core/fmt/struct.Formatter.html\">Formatter</a>&lt;'_&gt;) -&gt; <a href=\"https://doc.rust-lang.org/1.96.1/core/result/enum.Result.html\">Result</a>&lt;<a href=\"https://doc.rust-lang.org/1.96.1/std/primitive.unit.html\">()</a>, <a href=\"https://doc.rust-lang.org/1.96.1/core/fmt/struct.Error.html\">Error</a>&gt;"}} /></pre>
+
+### `impl Default for Map<String, Value>`
+
+<pre className="rust-signature"><code dangerouslySetInnerHTML={{"__html": "impl <a href=\"https://doc.rust-lang.org/1.96.1/core/default/trait.Default.html\">Default</a> for <a href=\"struct-map\">Map</a>&lt;<a href=\"https://doc.rust-lang.org/1.96.1/alloc/string/struct.String.html\">String</a>, <a href=\"https://docs.rs/serde_json/1.0.149/serde_json/value/enum.Value.html\">Value</a>&gt;"}} /></pre>
+
+#### `default`
+
+<pre className="rust-signature"><code dangerouslySetInnerHTML={{"__html": "fn <a href=\"https://doc.rust-lang.org/1.96.1/core/default/trait.Default.html#tymethod.default\">default</a>() -&gt; <a href=\"struct-map\">Map</a>&lt;<a href=\"https://doc.rust-lang.org/1.96.1/alloc/string/struct.String.html\">String</a>, <a href=\"https://docs.rs/serde_json/1.0.149/serde_json/value/enum.Value.html\">Value</a>&gt;"}} /></pre>
+
+### `impl<'de> Deserialize<'de> for Map<String, Value>`
+
+<pre className="rust-signature"><code dangerouslySetInnerHTML={{"__html": "impl&lt;'de&gt; <a href=\"https://docs.rs/serde_core/1.0.228/serde_core/de/trait.Deserialize.html\">Deserialize</a>&lt;'de&gt; for <a href=\"struct-map\">Map</a>&lt;<a href=\"https://doc.rust-lang.org/1.96.1/alloc/string/struct.String.html\">String</a>, <a href=\"https://docs.rs/serde_json/1.0.149/serde_json/value/enum.Value.html\">Value</a>&gt;"}} /></pre>
+
+#### `deserialize`
+
+<pre className="rust-signature"><code dangerouslySetInnerHTML={{"__html": "fn <a href=\"https://docs.rs/serde_core/1.0.228/serde_core/de/trait.Deserialize.html#tymethod.deserialize\">deserialize</a>&lt;D&gt;(\n    deserializer: D,\n) -&gt; <a href=\"https://doc.rust-lang.org/1.96.1/core/result/enum.Result.html\">Result</a>&lt;<a href=\"struct-map\">Map</a>&lt;<a href=\"https://doc.rust-lang.org/1.96.1/alloc/string/struct.String.html\">String</a>, <a href=\"https://docs.rs/serde_json/1.0.149/serde_json/value/enum.Value.html\">Value</a>&gt;, &lt;D as <a href=\"https://docs.rs/serde_core/1.0.228/serde_core/de/trait.Deserializer.html\">Deserializer</a>&lt;'de&gt;&gt;::<a href=\"https://docs.rs/serde_core/1.0.228/serde_core/de/trait.Deserializer.html#associatedtype.Error\">Error</a>&gt;where\n    D: <a href=\"https://docs.rs/serde_core/1.0.228/serde_core/de/trait.Deserializer.html\">Deserializer</a>&lt;'de&gt;,"}} /></pre>
+
+### `impl<'de> Deserializer<'de> for &'de Map<String, Value>`
+
+<pre className="rust-signature"><code dangerouslySetInnerHTML={{"__html": "impl&lt;'de&gt; <a href=\"https://docs.rs/serde_core/1.0.228/serde_core/de/trait.Deserializer.html\">Deserializer</a>&lt;'de&gt; for &amp;'de <a href=\"struct-map\">Map</a>&lt;<a href=\"https://doc.rust-lang.org/1.96.1/alloc/string/struct.String.html\">String</a>, <a href=\"https://docs.rs/serde_json/1.0.149/serde_json/value/enum.Value.html\">Value</a>&gt;"}} /></pre>
+
+#### `Error`
+
+<pre className="rust-signature"><code dangerouslySetInnerHTML={{"__html": "type <a href=\"https://docs.rs/serde_core/1.0.228/serde_core/de/trait.Deserializer.html#associatedtype.Error\">Error</a> = <a href=\"https://docs.rs/serde_json/1.0.149/serde_json/error/struct.Error.html\">Error</a>"}} /></pre>
+
+#### `deserialize_any`
+
+<pre className="rust-signature"><code dangerouslySetInnerHTML={{"__html": "fn <a href=\"https://docs.rs/serde_core/1.0.228/serde_core/de/trait.Deserializer.html#tymethod.deserialize_any\">deserialize_any</a>&lt;V&gt;(\n    self,\n    visitor: V,\n) -&gt; <a href=\"https://doc.rust-lang.org/1.96.1/core/result/enum.Result.html\">Result</a>&lt;&lt;V as <a href=\"https://docs.rs/serde_core/1.0.228/serde_core/de/trait.Visitor.html\">Visitor</a>&lt;'de&gt;&gt;::<a href=\"https://docs.rs/serde_core/1.0.228/serde_core/de/trait.Visitor.html#associatedtype.Value\">Value</a>, &lt;&amp;'de <a href=\"struct-map\">Map</a>&lt;<a href=\"https://doc.rust-lang.org/1.96.1/alloc/string/struct.String.html\">String</a>, <a href=\"https://docs.rs/serde_json/1.0.149/serde_json/value/enum.Value.html\">Value</a>&gt; as <a href=\"https://docs.rs/serde_core/1.0.228/serde_core/de/trait.Deserializer.html\">Deserializer</a>&lt;'de&gt;&gt;::<a href=\"https://docs.rs/serde_core/1.0.228/serde_core/de/trait.Deserializer.html#associatedtype.Error\">Error</a>&gt;where\n    V: <a href=\"https://docs.rs/serde_core/1.0.228/serde_core/de/trait.Visitor.html\">Visitor</a>&lt;'de&gt;,"}} /></pre>
+
+#### `deserialize_enum`
+
+<pre className="rust-signature"><code dangerouslySetInnerHTML={{"__html": "fn <a href=\"https://docs.rs/serde_core/1.0.228/serde_core/de/trait.Deserializer.html#tymethod.deserialize_enum\">deserialize_enum</a>&lt;V&gt;(\n    self,\n    _name: &amp;'static <a href=\"https://doc.rust-lang.org/1.96.1/std/primitive.str.html\">str</a>,\n    _variants: &amp;'static [&amp;'static <a href=\"https://doc.rust-lang.org/1.96.1/std/primitive.str.html\">str</a>],\n    visitor: V,\n) -&gt; <a href=\"https://doc.rust-lang.org/1.96.1/core/result/enum.Result.html\">Result</a>&lt;&lt;V as <a href=\"https://docs.rs/serde_core/1.0.228/serde_core/de/trait.Visitor.html\">Visitor</a>&lt;'de&gt;&gt;::<a href=\"https://docs.rs/serde_core/1.0.228/serde_core/de/trait.Visitor.html#associatedtype.Value\">Value</a>, &lt;&amp;'de <a href=\"struct-map\">Map</a>&lt;<a href=\"https://doc.rust-lang.org/1.96.1/alloc/string/struct.String.html\">String</a>, <a href=\"https://docs.rs/serde_json/1.0.149/serde_json/value/enum.Value.html\">Value</a>&gt; as <a href=\"https://docs.rs/serde_core/1.0.228/serde_core/de/trait.Deserializer.html\">Deserializer</a>&lt;'de&gt;&gt;::<a href=\"https://docs.rs/serde_core/1.0.228/serde_core/de/trait.Deserializer.html#associatedtype.Error\">Error</a>&gt;where\n    V: <a href=\"https://docs.rs/serde_core/1.0.228/serde_core/de/trait.Visitor.html\">Visitor</a>&lt;'de&gt;,"}} /></pre>
+
+#### `deserialize_ignored_any`
+
+<pre className="rust-signature"><code dangerouslySetInnerHTML={{"__html": "fn <a href=\"https://docs.rs/serde_core/1.0.228/serde_core/de/trait.Deserializer.html#tymethod.deserialize_ignored_any\">deserialize_ignored_any</a>&lt;V&gt;(\n    self,\n    visitor: V,\n) -&gt; <a href=\"https://doc.rust-lang.org/1.96.1/core/result/enum.Result.html\">Result</a>&lt;&lt;V as <a href=\"https://docs.rs/serde_core/1.0.228/serde_core/de/trait.Visitor.html\">Visitor</a>&lt;'de&gt;&gt;::<a href=\"https://docs.rs/serde_core/1.0.228/serde_core/de/trait.Visitor.html#associatedtype.Value\">Value</a>, <a href=\"https://docs.rs/serde_json/1.0.149/serde_json/error/struct.Error.html\">Error</a>&gt;where\n    V: <a href=\"https://docs.rs/serde_core/1.0.228/serde_core/de/trait.Visitor.html\">Visitor</a>&lt;'de&gt;,"}} /></pre>
+
+#### `deserialize_bool`
+
+<pre className="rust-signature"><code dangerouslySetInnerHTML={{"__html": "fn <a href=\"https://docs.rs/serde_core/1.0.228/serde_core/de/trait.Deserializer.html#tymethod.deserialize_bool\">deserialize_bool</a>&lt;V&gt;(\n    self,\n    visitor: V,\n) -&gt; <a href=\"https://doc.rust-lang.org/1.96.1/core/result/enum.Result.html\">Result</a>&lt;&lt;V as <a href=\"https://docs.rs/serde_core/1.0.228/serde_core/de/trait.Visitor.html\">Visitor</a>&lt;'de&gt;&gt;::<a href=\"https://docs.rs/serde_core/1.0.228/serde_core/de/trait.Visitor.html#associatedtype.Value\">Value</a>, &lt;&amp;'de <a href=\"struct-map\">Map</a>&lt;<a href=\"https://doc.rust-lang.org/1.96.1/alloc/string/struct.String.html\">String</a>, <a href=\"https://docs.rs/serde_json/1.0.149/serde_json/value/enum.Value.html\">Value</a>&gt; as <a href=\"https://docs.rs/serde_core/1.0.228/serde_core/de/trait.Deserializer.html\">Deserializer</a>&lt;'de&gt;&gt;::<a href=\"https://docs.rs/serde_core/1.0.228/serde_core/de/trait.Deserializer.html#associatedtype.Error\">Error</a>&gt;where\n    V: <a href=\"https://docs.rs/serde_core/1.0.228/serde_core/de/trait.Visitor.html\">Visitor</a>&lt;'de&gt;,"}} /></pre>
+
+#### `deserialize_i8`
+
+<pre className="rust-signature"><code dangerouslySetInnerHTML={{"__html": "fn <a href=\"https://docs.rs/serde_core/1.0.228/serde_core/de/trait.Deserializer.html#tymethod.deserialize_i8\">deserialize_i8</a>&lt;V&gt;(\n    self,\n    visitor: V,\n) -&gt; <a href=\"https://doc.rust-lang.org/1.96.1/core/result/enum.Result.html\">Result</a>&lt;&lt;V as <a href=\"https://docs.rs/serde_core/1.0.228/serde_core/de/trait.Visitor.html\">Visitor</a>&lt;'de&gt;&gt;::<a href=\"https://docs.rs/serde_core/1.0.228/serde_core/de/trait.Visitor.html#associatedtype.Value\">Value</a>, &lt;&amp;'de <a href=\"struct-map\">Map</a>&lt;<a href=\"https://doc.rust-lang.org/1.96.1/alloc/string/struct.String.html\">String</a>, <a href=\"https://docs.rs/serde_json/1.0.149/serde_json/value/enum.Value.html\">Value</a>&gt; as <a href=\"https://docs.rs/serde_core/1.0.228/serde_core/de/trait.Deserializer.html\">Deserializer</a>&lt;'de&gt;&gt;::<a href=\"https://docs.rs/serde_core/1.0.228/serde_core/de/trait.Deserializer.html#associatedtype.Error\">Error</a>&gt;where\n    V: <a href=\"https://docs.rs/serde_core/1.0.228/serde_core/de/trait.Visitor.html\">Visitor</a>&lt;'de&gt;,"}} /></pre>
+
+#### `deserialize_i16`
+
+<pre className="rust-signature"><code dangerouslySetInnerHTML={{"__html": "fn <a href=\"https://docs.rs/serde_core/1.0.228/serde_core/de/trait.Deserializer.html#tymethod.deserialize_i16\">deserialize_i16</a>&lt;V&gt;(\n    self,\n    visitor: V,\n) -&gt; <a href=\"https://doc.rust-lang.org/1.96.1/core/result/enum.Result.html\">Result</a>&lt;&lt;V as <a href=\"https://docs.rs/serde_core/1.0.228/serde_core/de/trait.Visitor.html\">Visitor</a>&lt;'de&gt;&gt;::<a href=\"https://docs.rs/serde_core/1.0.228/serde_core/de/trait.Visitor.html#associatedtype.Value\">Value</a>, &lt;&amp;'de <a href=\"struct-map\">Map</a>&lt;<a href=\"https://doc.rust-lang.org/1.96.1/alloc/string/struct.String.html\">String</a>, <a href=\"https://docs.rs/serde_json/1.0.149/serde_json/value/enum.Value.html\">Value</a>&gt; as <a href=\"https://docs.rs/serde_core/1.0.228/serde_core/de/trait.Deserializer.html\">Deserializer</a>&lt;'de&gt;&gt;::<a href=\"https://docs.rs/serde_core/1.0.228/serde_core/de/trait.Deserializer.html#associatedtype.Error\">Error</a>&gt;where\n    V: <a href=\"https://docs.rs/serde_core/1.0.228/serde_core/de/trait.Visitor.html\">Visitor</a>&lt;'de&gt;,"}} /></pre>
+
+#### `deserialize_i32`
+
+<pre className="rust-signature"><code dangerouslySetInnerHTML={{"__html": "fn <a href=\"https://docs.rs/serde_core/1.0.228/serde_core/de/trait.Deserializer.html#tymethod.deserialize_i32\">deserialize_i32</a>&lt;V&gt;(\n    self,\n    visitor: V,\n) -&gt; <a href=\"https://doc.rust-lang.org/1.96.1/core/result/enum.Result.html\">Result</a>&lt;&lt;V as <a href=\"https://docs.rs/serde_core/1.0.228/serde_core/de/trait.Visitor.html\">Visitor</a>&lt;'de&gt;&gt;::<a href=\"https://docs.rs/serde_core/1.0.228/serde_core/de/trait.Visitor.html#associatedtype.Value\">Value</a>, &lt;&amp;'de <a href=\"struct-map\">Map</a>&lt;<a href=\"https://doc.rust-lang.org/1.96.1/alloc/string/struct.String.html\">String</a>, <a href=\"https://docs.rs/serde_json/1.0.149/serde_json/value/enum.Value.html\">Value</a>&gt; as <a href=\"https://docs.rs/serde_core/1.0.228/serde_core/de/trait.Deserializer.html\">Deserializer</a>&lt;'de&gt;&gt;::<a href=\"https://docs.rs/serde_core/1.0.228/serde_core/de/trait.Deserializer.html#associatedtype.Error\">Error</a>&gt;where\n    V: <a href=\"https://docs.rs/serde_core/1.0.228/serde_core/de/trait.Visitor.html\">Visitor</a>&lt;'de&gt;,"}} /></pre>
+
+#### `deserialize_i64`
+
+<pre className="rust-signature"><code dangerouslySetInnerHTML={{"__html": "fn <a href=\"https://docs.rs/serde_core/1.0.228/serde_core/de/trait.Deserializer.html#tymethod.deserialize_i64\">deserialize_i64</a>&lt;V&gt;(\n    self,\n    visitor: V,\n) -&gt; <a href=\"https://doc.rust-lang.org/1.96.1/core/result/enum.Result.html\">Result</a>&lt;&lt;V as <a href=\"https://docs.rs/serde_core/1.0.228/serde_core/de/trait.Visitor.html\">Visitor</a>&lt;'de&gt;&gt;::<a href=\"https://docs.rs/serde_core/1.0.228/serde_core/de/trait.Visitor.html#associatedtype.Value\">Value</a>, &lt;&amp;'de <a href=\"struct-map\">Map</a>&lt;<a href=\"https://doc.rust-lang.org/1.96.1/alloc/string/struct.String.html\">String</a>, <a href=\"https://docs.rs/serde_json/1.0.149/serde_json/value/enum.Value.html\">Value</a>&gt; as <a href=\"https://docs.rs/serde_core/1.0.228/serde_core/de/trait.Deserializer.html\">Deserializer</a>&lt;'de&gt;&gt;::<a href=\"https://docs.rs/serde_core/1.0.228/serde_core/de/trait.Deserializer.html#associatedtype.Error\">Error</a>&gt;where\n    V: <a href=\"https://docs.rs/serde_core/1.0.228/serde_core/de/trait.Visitor.html\">Visitor</a>&lt;'de&gt;,"}} /></pre>
+
+#### `deserialize_i128`
+
+<pre className="rust-signature"><code dangerouslySetInnerHTML={{"__html": "fn <a href=\"https://docs.rs/serde_core/1.0.228/serde_core/de/trait.Deserializer.html#method.deserialize_i128\">deserialize_i128</a>&lt;V&gt;(\n    self,\n    visitor: V,\n) -&gt; <a href=\"https://doc.rust-lang.org/1.96.1/core/result/enum.Result.html\">Result</a>&lt;&lt;V as <a href=\"https://docs.rs/serde_core/1.0.228/serde_core/de/trait.Visitor.html\">Visitor</a>&lt;'de&gt;&gt;::<a href=\"https://docs.rs/serde_core/1.0.228/serde_core/de/trait.Visitor.html#associatedtype.Value\">Value</a>, &lt;&amp;'de <a href=\"struct-map\">Map</a>&lt;<a href=\"https://doc.rust-lang.org/1.96.1/alloc/string/struct.String.html\">String</a>, <a href=\"https://docs.rs/serde_json/1.0.149/serde_json/value/enum.Value.html\">Value</a>&gt; as <a href=\"https://docs.rs/serde_core/1.0.228/serde_core/de/trait.Deserializer.html\">Deserializer</a>&lt;'de&gt;&gt;::<a href=\"https://docs.rs/serde_core/1.0.228/serde_core/de/trait.Deserializer.html#associatedtype.Error\">Error</a>&gt;where\n    V: <a href=\"https://docs.rs/serde_core/1.0.228/serde_core/de/trait.Visitor.html\">Visitor</a>&lt;'de&gt;,"}} /></pre>
+
+#### `deserialize_u8`
+
+<pre className="rust-signature"><code dangerouslySetInnerHTML={{"__html": "fn <a href=\"https://docs.rs/serde_core/1.0.228/serde_core/de/trait.Deserializer.html#tymethod.deserialize_u8\">deserialize_u8</a>&lt;V&gt;(\n    self,\n    visitor: V,\n) -&gt; <a href=\"https://doc.rust-lang.org/1.96.1/core/result/enum.Result.html\">Result</a>&lt;&lt;V as <a href=\"https://docs.rs/serde_core/1.0.228/serde_core/de/trait.Visitor.html\">Visitor</a>&lt;'de&gt;&gt;::<a href=\"https://docs.rs/serde_core/1.0.228/serde_core/de/trait.Visitor.html#associatedtype.Value\">Value</a>, &lt;&amp;'de <a href=\"struct-map\">Map</a>&lt;<a href=\"https://doc.rust-lang.org/1.96.1/alloc/string/struct.String.html\">String</a>, <a href=\"https://docs.rs/serde_json/1.0.149/serde_json/value/enum.Value.html\">Value</a>&gt; as <a href=\"https://docs.rs/serde_core/1.0.228/serde_core/de/trait.Deserializer.html\">Deserializer</a>&lt;'de&gt;&gt;::<a href=\"https://docs.rs/serde_core/1.0.228/serde_core/de/trait.Deserializer.html#associatedtype.Error\">Error</a>&gt;where\n    V: <a href=\"https://docs.rs/serde_core/1.0.228/serde_core/de/trait.Visitor.html\">Visitor</a>&lt;'de&gt;,"}} /></pre>
+
+#### `deserialize_u16`
+
+<pre className="rust-signature"><code dangerouslySetInnerHTML={{"__html": "fn <a href=\"https://docs.rs/serde_core/1.0.228/serde_core/de/trait.Deserializer.html#tymethod.deserialize_u16\">deserialize_u16</a>&lt;V&gt;(\n    self,\n    visitor: V,\n) -&gt; <a href=\"https://doc.rust-lang.org/1.96.1/core/result/enum.Result.html\">Result</a>&lt;&lt;V as <a href=\"https://docs.rs/serde_core/1.0.228/serde_core/de/trait.Visitor.html\">Visitor</a>&lt;'de&gt;&gt;::<a href=\"https://docs.rs/serde_core/1.0.228/serde_core/de/trait.Visitor.html#associatedtype.Value\">Value</a>, &lt;&amp;'de <a href=\"struct-map\">Map</a>&lt;<a href=\"https://doc.rust-lang.org/1.96.1/alloc/string/struct.String.html\">String</a>, <a href=\"https://docs.rs/serde_json/1.0.149/serde_json/value/enum.Value.html\">Value</a>&gt; as <a href=\"https://docs.rs/serde_core/1.0.228/serde_core/de/trait.Deserializer.html\">Deserializer</a>&lt;'de&gt;&gt;::<a href=\"https://docs.rs/serde_core/1.0.228/serde_core/de/trait.Deserializer.html#associatedtype.Error\">Error</a>&gt;where\n    V: <a href=\"https://docs.rs/serde_core/1.0.228/serde_core/de/trait.Visitor.html\">Visitor</a>&lt;'de&gt;,"}} /></pre>
+
+#### `deserialize_u32`
+
+<pre className="rust-signature"><code dangerouslySetInnerHTML={{"__html": "fn <a href=\"https://docs.rs/serde_core/1.0.228/serde_core/de/trait.Deserializer.html#tymethod.deserialize_u32\">deserialize_u32</a>&lt;V&gt;(\n    self,\n    visitor: V,\n) -&gt; <a href=\"https://doc.rust-lang.org/1.96.1/core/result/enum.Result.html\">Result</a>&lt;&lt;V as <a href=\"https://docs.rs/serde_core/1.0.228/serde_core/de/trait.Visitor.html\">Visitor</a>&lt;'de&gt;&gt;::<a href=\"https://docs.rs/serde_core/1.0.228/serde_core/de/trait.Visitor.html#associatedtype.Value\">Value</a>, &lt;&amp;'de <a href=\"struct-map\">Map</a>&lt;<a href=\"https://doc.rust-lang.org/1.96.1/alloc/string/struct.String.html\">String</a>, <a href=\"https://docs.rs/serde_json/1.0.149/serde_json/value/enum.Value.html\">Value</a>&gt; as <a href=\"https://docs.rs/serde_core/1.0.228/serde_core/de/trait.Deserializer.html\">Deserializer</a>&lt;'de&gt;&gt;::<a href=\"https://docs.rs/serde_core/1.0.228/serde_core/de/trait.Deserializer.html#associatedtype.Error\">Error</a>&gt;where\n    V: <a href=\"https://docs.rs/serde_core/1.0.228/serde_core/de/trait.Visitor.html\">Visitor</a>&lt;'de&gt;,"}} /></pre>
+
+#### `deserialize_u64`
+
+<pre className="rust-signature"><code dangerouslySetInnerHTML={{"__html": "fn <a href=\"https://docs.rs/serde_core/1.0.228/serde_core/de/trait.Deserializer.html#tymethod.deserialize_u64\">deserialize_u64</a>&lt;V&gt;(\n    self,\n    visitor: V,\n) -&gt; <a href=\"https://doc.rust-lang.org/1.96.1/core/result/enum.Result.html\">Result</a>&lt;&lt;V as <a href=\"https://docs.rs/serde_core/1.0.228/serde_core/de/trait.Visitor.html\">Visitor</a>&lt;'de&gt;&gt;::<a href=\"https://docs.rs/serde_core/1.0.228/serde_core/de/trait.Visitor.html#associatedtype.Value\">Value</a>, &lt;&amp;'de <a href=\"struct-map\">Map</a>&lt;<a href=\"https://doc.rust-lang.org/1.96.1/alloc/string/struct.String.html\">String</a>, <a href=\"https://docs.rs/serde_json/1.0.149/serde_json/value/enum.Value.html\">Value</a>&gt; as <a href=\"https://docs.rs/serde_core/1.0.228/serde_core/de/trait.Deserializer.html\">Deserializer</a>&lt;'de&gt;&gt;::<a href=\"https://docs.rs/serde_core/1.0.228/serde_core/de/trait.Deserializer.html#associatedtype.Error\">Error</a>&gt;where\n    V: <a href=\"https://docs.rs/serde_core/1.0.228/serde_core/de/trait.Visitor.html\">Visitor</a>&lt;'de&gt;,"}} /></pre>
+
+#### `deserialize_u128`
+
+<pre className="rust-signature"><code dangerouslySetInnerHTML={{"__html": "fn <a href=\"https://docs.rs/serde_core/1.0.228/serde_core/de/trait.Deserializer.html#method.deserialize_u128\">deserialize_u128</a>&lt;V&gt;(\n    self,\n    visitor: V,\n) -&gt; <a href=\"https://doc.rust-lang.org/1.96.1/core/result/enum.Result.html\">Result</a>&lt;&lt;V as <a href=\"https://docs.rs/serde_core/1.0.228/serde_core/de/trait.Visitor.html\">Visitor</a>&lt;'de&gt;&gt;::<a href=\"https://docs.rs/serde_core/1.0.228/serde_core/de/trait.Visitor.html#associatedtype.Value\">Value</a>, &lt;&amp;'de <a href=\"struct-map\">Map</a>&lt;<a href=\"https://doc.rust-lang.org/1.96.1/alloc/string/struct.String.html\">String</a>, <a href=\"https://docs.rs/serde_json/1.0.149/serde_json/value/enum.Value.html\">Value</a>&gt; as <a href=\"https://docs.rs/serde_core/1.0.228/serde_core/de/trait.Deserializer.html\">Deserializer</a>&lt;'de&gt;&gt;::<a href=\"https://docs.rs/serde_core/1.0.228/serde_core/de/trait.Deserializer.html#associatedtype.Error\">Error</a>&gt;where\n    V: <a href=\"https://docs.rs/serde_core/1.0.228/serde_core/de/trait.Visitor.html\">Visitor</a>&lt;'de&gt;,"}} /></pre>
+
+#### `deserialize_f32`
+
+<pre className="rust-signature"><code dangerouslySetInnerHTML={{"__html": "fn <a href=\"https://docs.rs/serde_core/1.0.228/serde_core/de/trait.Deserializer.html#tymethod.deserialize_f32\">deserialize_f32</a>&lt;V&gt;(\n    self,\n    visitor: V,\n) -&gt; <a href=\"https://doc.rust-lang.org/1.96.1/core/result/enum.Result.html\">Result</a>&lt;&lt;V as <a href=\"https://docs.rs/serde_core/1.0.228/serde_core/de/trait.Visitor.html\">Visitor</a>&lt;'de&gt;&gt;::<a href=\"https://docs.rs/serde_core/1.0.228/serde_core/de/trait.Visitor.html#associatedtype.Value\">Value</a>, &lt;&amp;'de <a href=\"struct-map\">Map</a>&lt;<a href=\"https://doc.rust-lang.org/1.96.1/alloc/string/struct.String.html\">String</a>, <a href=\"https://docs.rs/serde_json/1.0.149/serde_json/value/enum.Value.html\">Value</a>&gt; as <a href=\"https://docs.rs/serde_core/1.0.228/serde_core/de/trait.Deserializer.html\">Deserializer</a>&lt;'de&gt;&gt;::<a href=\"https://docs.rs/serde_core/1.0.228/serde_core/de/trait.Deserializer.html#associatedtype.Error\">Error</a>&gt;where\n    V: <a href=\"https://docs.rs/serde_core/1.0.228/serde_core/de/trait.Visitor.html\">Visitor</a>&lt;'de&gt;,"}} /></pre>
+
+#### `deserialize_f64`
+
+<pre className="rust-signature"><code dangerouslySetInnerHTML={{"__html": "fn <a href=\"https://docs.rs/serde_core/1.0.228/serde_core/de/trait.Deserializer.html#tymethod.deserialize_f64\">deserialize_f64</a>&lt;V&gt;(\n    self,\n    visitor: V,\n) -&gt; <a href=\"https://doc.rust-lang.org/1.96.1/core/result/enum.Result.html\">Result</a>&lt;&lt;V as <a href=\"https://docs.rs/serde_core/1.0.228/serde_core/de/trait.Visitor.html\">Visitor</a>&lt;'de&gt;&gt;::<a href=\"https://docs.rs/serde_core/1.0.228/serde_core/de/trait.Visitor.html#associatedtype.Value\">Value</a>, &lt;&amp;'de <a href=\"struct-map\">Map</a>&lt;<a href=\"https://doc.rust-lang.org/1.96.1/alloc/string/struct.String.html\">String</a>, <a href=\"https://docs.rs/serde_json/1.0.149/serde_json/value/enum.Value.html\">Value</a>&gt; as <a href=\"https://docs.rs/serde_core/1.0.228/serde_core/de/trait.Deserializer.html\">Deserializer</a>&lt;'de&gt;&gt;::<a href=\"https://docs.rs/serde_core/1.0.228/serde_core/de/trait.Deserializer.html#associatedtype.Error\">Error</a>&gt;where\n    V: <a href=\"https://docs.rs/serde_core/1.0.228/serde_core/de/trait.Visitor.html\">Visitor</a>&lt;'de&gt;,"}} /></pre>
+
+#### `deserialize_char`
+
+<pre className="rust-signature"><code dangerouslySetInnerHTML={{"__html": "fn <a href=\"https://docs.rs/serde_core/1.0.228/serde_core/de/trait.Deserializer.html#tymethod.deserialize_char\">deserialize_char</a>&lt;V&gt;(\n    self,\n    visitor: V,\n) -&gt; <a href=\"https://doc.rust-lang.org/1.96.1/core/result/enum.Result.html\">Result</a>&lt;&lt;V as <a href=\"https://docs.rs/serde_core/1.0.228/serde_core/de/trait.Visitor.html\">Visitor</a>&lt;'de&gt;&gt;::<a href=\"https://docs.rs/serde_core/1.0.228/serde_core/de/trait.Visitor.html#associatedtype.Value\">Value</a>, &lt;&amp;'de <a href=\"struct-map\">Map</a>&lt;<a href=\"https://doc.rust-lang.org/1.96.1/alloc/string/struct.String.html\">String</a>, <a href=\"https://docs.rs/serde_json/1.0.149/serde_json/value/enum.Value.html\">Value</a>&gt; as <a href=\"https://docs.rs/serde_core/1.0.228/serde_core/de/trait.Deserializer.html\">Deserializer</a>&lt;'de&gt;&gt;::<a href=\"https://docs.rs/serde_core/1.0.228/serde_core/de/trait.Deserializer.html#associatedtype.Error\">Error</a>&gt;where\n    V: <a href=\"https://docs.rs/serde_core/1.0.228/serde_core/de/trait.Visitor.html\">Visitor</a>&lt;'de&gt;,"}} /></pre>
+
+#### `deserialize_str`
+
+<pre className="rust-signature"><code dangerouslySetInnerHTML={{"__html": "fn <a href=\"https://docs.rs/serde_core/1.0.228/serde_core/de/trait.Deserializer.html#tymethod.deserialize_str\">deserialize_str</a>&lt;V&gt;(\n    self,\n    visitor: V,\n) -&gt; <a href=\"https://doc.rust-lang.org/1.96.1/core/result/enum.Result.html\">Result</a>&lt;&lt;V as <a href=\"https://docs.rs/serde_core/1.0.228/serde_core/de/trait.Visitor.html\">Visitor</a>&lt;'de&gt;&gt;::<a href=\"https://docs.rs/serde_core/1.0.228/serde_core/de/trait.Visitor.html#associatedtype.Value\">Value</a>, &lt;&amp;'de <a href=\"struct-map\">Map</a>&lt;<a href=\"https://doc.rust-lang.org/1.96.1/alloc/string/struct.String.html\">String</a>, <a href=\"https://docs.rs/serde_json/1.0.149/serde_json/value/enum.Value.html\">Value</a>&gt; as <a href=\"https://docs.rs/serde_core/1.0.228/serde_core/de/trait.Deserializer.html\">Deserializer</a>&lt;'de&gt;&gt;::<a href=\"https://docs.rs/serde_core/1.0.228/serde_core/de/trait.Deserializer.html#associatedtype.Error\">Error</a>&gt;where\n    V: <a href=\"https://docs.rs/serde_core/1.0.228/serde_core/de/trait.Visitor.html\">Visitor</a>&lt;'de&gt;,"}} /></pre>
+
+#### `deserialize_string`
+
+<pre className="rust-signature"><code dangerouslySetInnerHTML={{"__html": "fn <a href=\"https://docs.rs/serde_core/1.0.228/serde_core/de/trait.Deserializer.html#tymethod.deserialize_string\">deserialize_string</a>&lt;V&gt;(\n    self,\n    visitor: V,\n) -&gt; <a href=\"https://doc.rust-lang.org/1.96.1/core/result/enum.Result.html\">Result</a>&lt;&lt;V as <a href=\"https://docs.rs/serde_core/1.0.228/serde_core/de/trait.Visitor.html\">Visitor</a>&lt;'de&gt;&gt;::<a href=\"https://docs.rs/serde_core/1.0.228/serde_core/de/trait.Visitor.html#associatedtype.Value\">Value</a>, &lt;&amp;'de <a href=\"struct-map\">Map</a>&lt;<a href=\"https://doc.rust-lang.org/1.96.1/alloc/string/struct.String.html\">String</a>, <a href=\"https://docs.rs/serde_json/1.0.149/serde_json/value/enum.Value.html\">Value</a>&gt; as <a href=\"https://docs.rs/serde_core/1.0.228/serde_core/de/trait.Deserializer.html\">Deserializer</a>&lt;'de&gt;&gt;::<a href=\"https://docs.rs/serde_core/1.0.228/serde_core/de/trait.Deserializer.html#associatedtype.Error\">Error</a>&gt;where\n    V: <a href=\"https://docs.rs/serde_core/1.0.228/serde_core/de/trait.Visitor.html\">Visitor</a>&lt;'de&gt;,"}} /></pre>
+
+#### `deserialize_bytes`
+
+<pre className="rust-signature"><code dangerouslySetInnerHTML={{"__html": "fn <a href=\"https://docs.rs/serde_core/1.0.228/serde_core/de/trait.Deserializer.html#tymethod.deserialize_bytes\">deserialize_bytes</a>&lt;V&gt;(\n    self,\n    visitor: V,\n) -&gt; <a href=\"https://doc.rust-lang.org/1.96.1/core/result/enum.Result.html\">Result</a>&lt;&lt;V as <a href=\"https://docs.rs/serde_core/1.0.228/serde_core/de/trait.Visitor.html\">Visitor</a>&lt;'de&gt;&gt;::<a href=\"https://docs.rs/serde_core/1.0.228/serde_core/de/trait.Visitor.html#associatedtype.Value\">Value</a>, &lt;&amp;'de <a href=\"struct-map\">Map</a>&lt;<a href=\"https://doc.rust-lang.org/1.96.1/alloc/string/struct.String.html\">String</a>, <a href=\"https://docs.rs/serde_json/1.0.149/serde_json/value/enum.Value.html\">Value</a>&gt; as <a href=\"https://docs.rs/serde_core/1.0.228/serde_core/de/trait.Deserializer.html\">Deserializer</a>&lt;'de&gt;&gt;::<a href=\"https://docs.rs/serde_core/1.0.228/serde_core/de/trait.Deserializer.html#associatedtype.Error\">Error</a>&gt;where\n    V: <a href=\"https://docs.rs/serde_core/1.0.228/serde_core/de/trait.Visitor.html\">Visitor</a>&lt;'de&gt;,"}} /></pre>
+
+#### `deserialize_byte_buf`
+
+<pre className="rust-signature"><code dangerouslySetInnerHTML={{"__html": "fn <a href=\"https://docs.rs/serde_core/1.0.228/serde_core/de/trait.Deserializer.html#tymethod.deserialize_byte_buf\">deserialize_byte_buf</a>&lt;V&gt;(\n    self,\n    visitor: V,\n) -&gt; <a href=\"https://doc.rust-lang.org/1.96.1/core/result/enum.Result.html\">Result</a>&lt;&lt;V as <a href=\"https://docs.rs/serde_core/1.0.228/serde_core/de/trait.Visitor.html\">Visitor</a>&lt;'de&gt;&gt;::<a href=\"https://docs.rs/serde_core/1.0.228/serde_core/de/trait.Visitor.html#associatedtype.Value\">Value</a>, &lt;&amp;'de <a href=\"struct-map\">Map</a>&lt;<a href=\"https://doc.rust-lang.org/1.96.1/alloc/string/struct.String.html\">String</a>, <a href=\"https://docs.rs/serde_json/1.0.149/serde_json/value/enum.Value.html\">Value</a>&gt; as <a href=\"https://docs.rs/serde_core/1.0.228/serde_core/de/trait.Deserializer.html\">Deserializer</a>&lt;'de&gt;&gt;::<a href=\"https://docs.rs/serde_core/1.0.228/serde_core/de/trait.Deserializer.html#associatedtype.Error\">Error</a>&gt;where\n    V: <a href=\"https://docs.rs/serde_core/1.0.228/serde_core/de/trait.Visitor.html\">Visitor</a>&lt;'de&gt;,"}} /></pre>
+
+#### `deserialize_option`
+
+<pre className="rust-signature"><code dangerouslySetInnerHTML={{"__html": "fn <a href=\"https://docs.rs/serde_core/1.0.228/serde_core/de/trait.Deserializer.html#tymethod.deserialize_option\">deserialize_option</a>&lt;V&gt;(\n    self,\n    visitor: V,\n) -&gt; <a href=\"https://doc.rust-lang.org/1.96.1/core/result/enum.Result.html\">Result</a>&lt;&lt;V as <a href=\"https://docs.rs/serde_core/1.0.228/serde_core/de/trait.Visitor.html\">Visitor</a>&lt;'de&gt;&gt;::<a href=\"https://docs.rs/serde_core/1.0.228/serde_core/de/trait.Visitor.html#associatedtype.Value\">Value</a>, &lt;&amp;'de <a href=\"struct-map\">Map</a>&lt;<a href=\"https://doc.rust-lang.org/1.96.1/alloc/string/struct.String.html\">String</a>, <a href=\"https://docs.rs/serde_json/1.0.149/serde_json/value/enum.Value.html\">Value</a>&gt; as <a href=\"https://docs.rs/serde_core/1.0.228/serde_core/de/trait.Deserializer.html\">Deserializer</a>&lt;'de&gt;&gt;::<a href=\"https://docs.rs/serde_core/1.0.228/serde_core/de/trait.Deserializer.html#associatedtype.Error\">Error</a>&gt;where\n    V: <a href=\"https://docs.rs/serde_core/1.0.228/serde_core/de/trait.Visitor.html\">Visitor</a>&lt;'de&gt;,"}} /></pre>
+
+#### `deserialize_unit`
+
+<pre className="rust-signature"><code dangerouslySetInnerHTML={{"__html": "fn <a href=\"https://docs.rs/serde_core/1.0.228/serde_core/de/trait.Deserializer.html#tymethod.deserialize_unit\">deserialize_unit</a>&lt;V&gt;(\n    self,\n    visitor: V,\n) -&gt; <a href=\"https://doc.rust-lang.org/1.96.1/core/result/enum.Result.html\">Result</a>&lt;&lt;V as <a href=\"https://docs.rs/serde_core/1.0.228/serde_core/de/trait.Visitor.html\">Visitor</a>&lt;'de&gt;&gt;::<a href=\"https://docs.rs/serde_core/1.0.228/serde_core/de/trait.Visitor.html#associatedtype.Value\">Value</a>, &lt;&amp;'de <a href=\"struct-map\">Map</a>&lt;<a href=\"https://doc.rust-lang.org/1.96.1/alloc/string/struct.String.html\">String</a>, <a href=\"https://docs.rs/serde_json/1.0.149/serde_json/value/enum.Value.html\">Value</a>&gt; as <a href=\"https://docs.rs/serde_core/1.0.228/serde_core/de/trait.Deserializer.html\">Deserializer</a>&lt;'de&gt;&gt;::<a href=\"https://docs.rs/serde_core/1.0.228/serde_core/de/trait.Deserializer.html#associatedtype.Error\">Error</a>&gt;where\n    V: <a href=\"https://docs.rs/serde_core/1.0.228/serde_core/de/trait.Visitor.html\">Visitor</a>&lt;'de&gt;,"}} /></pre>
+
+#### `deserialize_unit_struct`
+
+<pre className="rust-signature"><code dangerouslySetInnerHTML={{"__html": "fn <a href=\"https://docs.rs/serde_core/1.0.228/serde_core/de/trait.Deserializer.html#tymethod.deserialize_unit_struct\">deserialize_unit_struct</a>&lt;V&gt;(\n    self,\n    name: &amp;'static <a href=\"https://doc.rust-lang.org/1.96.1/std/primitive.str.html\">str</a>,\n    visitor: V,\n) -&gt; <a href=\"https://doc.rust-lang.org/1.96.1/core/result/enum.Result.html\">Result</a>&lt;&lt;V as <a href=\"https://docs.rs/serde_core/1.0.228/serde_core/de/trait.Visitor.html\">Visitor</a>&lt;'de&gt;&gt;::<a href=\"https://docs.rs/serde_core/1.0.228/serde_core/de/trait.Visitor.html#associatedtype.Value\">Value</a>, &lt;&amp;'de <a href=\"struct-map\">Map</a>&lt;<a href=\"https://doc.rust-lang.org/1.96.1/alloc/string/struct.String.html\">String</a>, <a href=\"https://docs.rs/serde_json/1.0.149/serde_json/value/enum.Value.html\">Value</a>&gt; as <a href=\"https://docs.rs/serde_core/1.0.228/serde_core/de/trait.Deserializer.html\">Deserializer</a>&lt;'de&gt;&gt;::<a href=\"https://docs.rs/serde_core/1.0.228/serde_core/de/trait.Deserializer.html#associatedtype.Error\">Error</a>&gt;where\n    V: <a href=\"https://docs.rs/serde_core/1.0.228/serde_core/de/trait.Visitor.html\">Visitor</a>&lt;'de&gt;,"}} /></pre>
+
+#### `deserialize_newtype_struct`
+
+<pre className="rust-signature"><code dangerouslySetInnerHTML={{"__html": "fn <a href=\"https://docs.rs/serde_core/1.0.228/serde_core/de/trait.Deserializer.html#tymethod.deserialize_newtype_struct\">deserialize_newtype_struct</a>&lt;V&gt;(\n    self,\n    name: &amp;'static <a href=\"https://doc.rust-lang.org/1.96.1/std/primitive.str.html\">str</a>,\n    visitor: V,\n) -&gt; <a href=\"https://doc.rust-lang.org/1.96.1/core/result/enum.Result.html\">Result</a>&lt;&lt;V as <a href=\"https://docs.rs/serde_core/1.0.228/serde_core/de/trait.Visitor.html\">Visitor</a>&lt;'de&gt;&gt;::<a href=\"https://docs.rs/serde_core/1.0.228/serde_core/de/trait.Visitor.html#associatedtype.Value\">Value</a>, &lt;&amp;'de <a href=\"struct-map\">Map</a>&lt;<a href=\"https://doc.rust-lang.org/1.96.1/alloc/string/struct.String.html\">String</a>, <a href=\"https://docs.rs/serde_json/1.0.149/serde_json/value/enum.Value.html\">Value</a>&gt; as <a href=\"https://docs.rs/serde_core/1.0.228/serde_core/de/trait.Deserializer.html\">Deserializer</a>&lt;'de&gt;&gt;::<a href=\"https://docs.rs/serde_core/1.0.228/serde_core/de/trait.Deserializer.html#associatedtype.Error\">Error</a>&gt;where\n    V: <a href=\"https://docs.rs/serde_core/1.0.228/serde_core/de/trait.Visitor.html\">Visitor</a>&lt;'de&gt;,"}} /></pre>
+
+#### `deserialize_seq`
+
+<pre className="rust-signature"><code dangerouslySetInnerHTML={{"__html": "fn <a href=\"https://docs.rs/serde_core/1.0.228/serde_core/de/trait.Deserializer.html#tymethod.deserialize_seq\">deserialize_seq</a>&lt;V&gt;(\n    self,\n    visitor: V,\n) -&gt; <a href=\"https://doc.rust-lang.org/1.96.1/core/result/enum.Result.html\">Result</a>&lt;&lt;V as <a href=\"https://docs.rs/serde_core/1.0.228/serde_core/de/trait.Visitor.html\">Visitor</a>&lt;'de&gt;&gt;::<a href=\"https://docs.rs/serde_core/1.0.228/serde_core/de/trait.Visitor.html#associatedtype.Value\">Value</a>, &lt;&amp;'de <a href=\"struct-map\">Map</a>&lt;<a href=\"https://doc.rust-lang.org/1.96.1/alloc/string/struct.String.html\">String</a>, <a href=\"https://docs.rs/serde_json/1.0.149/serde_json/value/enum.Value.html\">Value</a>&gt; as <a href=\"https://docs.rs/serde_core/1.0.228/serde_core/de/trait.Deserializer.html\">Deserializer</a>&lt;'de&gt;&gt;::<a href=\"https://docs.rs/serde_core/1.0.228/serde_core/de/trait.Deserializer.html#associatedtype.Error\">Error</a>&gt;where\n    V: <a href=\"https://docs.rs/serde_core/1.0.228/serde_core/de/trait.Visitor.html\">Visitor</a>&lt;'de&gt;,"}} /></pre>
+
+#### `deserialize_tuple`
+
+<pre className="rust-signature"><code dangerouslySetInnerHTML={{"__html": "fn <a href=\"https://docs.rs/serde_core/1.0.228/serde_core/de/trait.Deserializer.html#tymethod.deserialize_tuple\">deserialize_tuple</a>&lt;V&gt;(\n    self,\n    len: <a href=\"https://doc.rust-lang.org/1.96.1/std/primitive.usize.html\">usize</a>,\n    visitor: V,\n) -&gt; <a href=\"https://doc.rust-lang.org/1.96.1/core/result/enum.Result.html\">Result</a>&lt;&lt;V as <a href=\"https://docs.rs/serde_core/1.0.228/serde_core/de/trait.Visitor.html\">Visitor</a>&lt;'de&gt;&gt;::<a href=\"https://docs.rs/serde_core/1.0.228/serde_core/de/trait.Visitor.html#associatedtype.Value\">Value</a>, &lt;&amp;'de <a href=\"struct-map\">Map</a>&lt;<a href=\"https://doc.rust-lang.org/1.96.1/alloc/string/struct.String.html\">String</a>, <a href=\"https://docs.rs/serde_json/1.0.149/serde_json/value/enum.Value.html\">Value</a>&gt; as <a href=\"https://docs.rs/serde_core/1.0.228/serde_core/de/trait.Deserializer.html\">Deserializer</a>&lt;'de&gt;&gt;::<a href=\"https://docs.rs/serde_core/1.0.228/serde_core/de/trait.Deserializer.html#associatedtype.Error\">Error</a>&gt;where\n    V: <a href=\"https://docs.rs/serde_core/1.0.228/serde_core/de/trait.Visitor.html\">Visitor</a>&lt;'de&gt;,"}} /></pre>
+
+#### `deserialize_tuple_struct`
+
+<pre className="rust-signature"><code dangerouslySetInnerHTML={{"__html": "fn <a href=\"https://docs.rs/serde_core/1.0.228/serde_core/de/trait.Deserializer.html#tymethod.deserialize_tuple_struct\">deserialize_tuple_struct</a>&lt;V&gt;(\n    self,\n    name: &amp;'static <a href=\"https://doc.rust-lang.org/1.96.1/std/primitive.str.html\">str</a>,\n    len: <a href=\"https://doc.rust-lang.org/1.96.1/std/primitive.usize.html\">usize</a>,\n    visitor: V,\n) -&gt; <a href=\"https://doc.rust-lang.org/1.96.1/core/result/enum.Result.html\">Result</a>&lt;&lt;V as <a href=\"https://docs.rs/serde_core/1.0.228/serde_core/de/trait.Visitor.html\">Visitor</a>&lt;'de&gt;&gt;::<a href=\"https://docs.rs/serde_core/1.0.228/serde_core/de/trait.Visitor.html#associatedtype.Value\">Value</a>, &lt;&amp;'de <a href=\"struct-map\">Map</a>&lt;<a href=\"https://doc.rust-lang.org/1.96.1/alloc/string/struct.String.html\">String</a>, <a href=\"https://docs.rs/serde_json/1.0.149/serde_json/value/enum.Value.html\">Value</a>&gt; as <a href=\"https://docs.rs/serde_core/1.0.228/serde_core/de/trait.Deserializer.html\">Deserializer</a>&lt;'de&gt;&gt;::<a href=\"https://docs.rs/serde_core/1.0.228/serde_core/de/trait.Deserializer.html#associatedtype.Error\">Error</a>&gt;where\n    V: <a href=\"https://docs.rs/serde_core/1.0.228/serde_core/de/trait.Visitor.html\">Visitor</a>&lt;'de&gt;,"}} /></pre>
+
+#### `deserialize_map`
+
+<pre className="rust-signature"><code dangerouslySetInnerHTML={{"__html": "fn <a href=\"https://docs.rs/serde_core/1.0.228/serde_core/de/trait.Deserializer.html#tymethod.deserialize_map\">deserialize_map</a>&lt;V&gt;(\n    self,\n    visitor: V,\n) -&gt; <a href=\"https://doc.rust-lang.org/1.96.1/core/result/enum.Result.html\">Result</a>&lt;&lt;V as <a href=\"https://docs.rs/serde_core/1.0.228/serde_core/de/trait.Visitor.html\">Visitor</a>&lt;'de&gt;&gt;::<a href=\"https://docs.rs/serde_core/1.0.228/serde_core/de/trait.Visitor.html#associatedtype.Value\">Value</a>, &lt;&amp;'de <a href=\"struct-map\">Map</a>&lt;<a href=\"https://doc.rust-lang.org/1.96.1/alloc/string/struct.String.html\">String</a>, <a href=\"https://docs.rs/serde_json/1.0.149/serde_json/value/enum.Value.html\">Value</a>&gt; as <a href=\"https://docs.rs/serde_core/1.0.228/serde_core/de/trait.Deserializer.html\">Deserializer</a>&lt;'de&gt;&gt;::<a href=\"https://docs.rs/serde_core/1.0.228/serde_core/de/trait.Deserializer.html#associatedtype.Error\">Error</a>&gt;where\n    V: <a href=\"https://docs.rs/serde_core/1.0.228/serde_core/de/trait.Visitor.html\">Visitor</a>&lt;'de&gt;,"}} /></pre>
+
+#### `deserialize_struct`
+
+<pre className="rust-signature"><code dangerouslySetInnerHTML={{"__html": "fn <a href=\"https://docs.rs/serde_core/1.0.228/serde_core/de/trait.Deserializer.html#tymethod.deserialize_struct\">deserialize_struct</a>&lt;V&gt;(\n    self,\n    name: &amp;'static <a href=\"https://doc.rust-lang.org/1.96.1/std/primitive.str.html\">str</a>,\n    fields: &amp;'static [&amp;'static <a href=\"https://doc.rust-lang.org/1.96.1/std/primitive.str.html\">str</a>],\n    visitor: V,\n) -&gt; <a href=\"https://doc.rust-lang.org/1.96.1/core/result/enum.Result.html\">Result</a>&lt;&lt;V as <a href=\"https://docs.rs/serde_core/1.0.228/serde_core/de/trait.Visitor.html\">Visitor</a>&lt;'de&gt;&gt;::<a href=\"https://docs.rs/serde_core/1.0.228/serde_core/de/trait.Visitor.html#associatedtype.Value\">Value</a>, &lt;&amp;'de <a href=\"struct-map\">Map</a>&lt;<a href=\"https://doc.rust-lang.org/1.96.1/alloc/string/struct.String.html\">String</a>, <a href=\"https://docs.rs/serde_json/1.0.149/serde_json/value/enum.Value.html\">Value</a>&gt; as <a href=\"https://docs.rs/serde_core/1.0.228/serde_core/de/trait.Deserializer.html\">Deserializer</a>&lt;'de&gt;&gt;::<a href=\"https://docs.rs/serde_core/1.0.228/serde_core/de/trait.Deserializer.html#associatedtype.Error\">Error</a>&gt;where\n    V: <a href=\"https://docs.rs/serde_core/1.0.228/serde_core/de/trait.Visitor.html\">Visitor</a>&lt;'de&gt;,"}} /></pre>
+
+#### `deserialize_identifier`
+
+<pre className="rust-signature"><code dangerouslySetInnerHTML={{"__html": "fn <a href=\"https://docs.rs/serde_core/1.0.228/serde_core/de/trait.Deserializer.html#tymethod.deserialize_identifier\">deserialize_identifier</a>&lt;V&gt;(\n    self,\n    visitor: V,\n) -&gt; <a href=\"https://doc.rust-lang.org/1.96.1/core/result/enum.Result.html\">Result</a>&lt;&lt;V as <a href=\"https://docs.rs/serde_core/1.0.228/serde_core/de/trait.Visitor.html\">Visitor</a>&lt;'de&gt;&gt;::<a href=\"https://docs.rs/serde_core/1.0.228/serde_core/de/trait.Visitor.html#associatedtype.Value\">Value</a>, &lt;&amp;'de <a href=\"struct-map\">Map</a>&lt;<a href=\"https://doc.rust-lang.org/1.96.1/alloc/string/struct.String.html\">String</a>, <a href=\"https://docs.rs/serde_json/1.0.149/serde_json/value/enum.Value.html\">Value</a>&gt; as <a href=\"https://docs.rs/serde_core/1.0.228/serde_core/de/trait.Deserializer.html\">Deserializer</a>&lt;'de&gt;&gt;::<a href=\"https://docs.rs/serde_core/1.0.228/serde_core/de/trait.Deserializer.html#associatedtype.Error\">Error</a>&gt;where\n    V: <a href=\"https://docs.rs/serde_core/1.0.228/serde_core/de/trait.Visitor.html\">Visitor</a>&lt;'de&gt;,"}} /></pre>
+
+#### `is_human_readable`
+
+<pre className="rust-signature"><code dangerouslySetInnerHTML={{"__html": "fn <a href=\"https://docs.rs/serde_core/1.0.228/serde_core/de/trait.Deserializer.html#method.is_human_readable\">is_human_readable</a>(&amp;self) -&gt; <a href=\"https://doc.rust-lang.org/1.96.1/std/primitive.bool.html\">bool</a>"}} /></pre>
+
+### `impl<'de> Deserializer<'de> for Map<String, Value>`
+
+<pre className="rust-signature"><code dangerouslySetInnerHTML={{"__html": "impl&lt;'de&gt; <a href=\"https://docs.rs/serde_core/1.0.228/serde_core/de/trait.Deserializer.html\">Deserializer</a>&lt;'de&gt; for <a href=\"struct-map\">Map</a>&lt;<a href=\"https://doc.rust-lang.org/1.96.1/alloc/string/struct.String.html\">String</a>, <a href=\"https://docs.rs/serde_json/1.0.149/serde_json/value/enum.Value.html\">Value</a>&gt;"}} /></pre>
+
+#### `Error`
+
+<pre className="rust-signature"><code dangerouslySetInnerHTML={{"__html": "type <a href=\"https://docs.rs/serde_core/1.0.228/serde_core/de/trait.Deserializer.html#associatedtype.Error\">Error</a> = <a href=\"https://docs.rs/serde_json/1.0.149/serde_json/error/struct.Error.html\">Error</a>"}} /></pre>
+
+#### `deserialize_any`
+
+<pre className="rust-signature"><code dangerouslySetInnerHTML={{"__html": "fn <a href=\"https://docs.rs/serde_core/1.0.228/serde_core/de/trait.Deserializer.html#tymethod.deserialize_any\">deserialize_any</a>&lt;V&gt;(\n    self,\n    visitor: V,\n) -&gt; <a href=\"https://doc.rust-lang.org/1.96.1/core/result/enum.Result.html\">Result</a>&lt;&lt;V as <a href=\"https://docs.rs/serde_core/1.0.228/serde_core/de/trait.Visitor.html\">Visitor</a>&lt;'de&gt;&gt;::<a href=\"https://docs.rs/serde_core/1.0.228/serde_core/de/trait.Visitor.html#associatedtype.Value\">Value</a>, &lt;<a href=\"struct-map\">Map</a>&lt;<a href=\"https://doc.rust-lang.org/1.96.1/alloc/string/struct.String.html\">String</a>, <a href=\"https://docs.rs/serde_json/1.0.149/serde_json/value/enum.Value.html\">Value</a>&gt; as <a href=\"https://docs.rs/serde_core/1.0.228/serde_core/de/trait.Deserializer.html\">Deserializer</a>&lt;'de&gt;&gt;::<a href=\"https://docs.rs/serde_core/1.0.228/serde_core/de/trait.Deserializer.html#associatedtype.Error\">Error</a>&gt;where\n    V: <a href=\"https://docs.rs/serde_core/1.0.228/serde_core/de/trait.Visitor.html\">Visitor</a>&lt;'de&gt;,"}} /></pre>
+
+#### `deserialize_enum`
+
+<pre className="rust-signature"><code dangerouslySetInnerHTML={{"__html": "fn <a href=\"https://docs.rs/serde_core/1.0.228/serde_core/de/trait.Deserializer.html#tymethod.deserialize_enum\">deserialize_enum</a>&lt;V&gt;(\n    self,\n    _name: &amp;'static <a href=\"https://doc.rust-lang.org/1.96.1/std/primitive.str.html\">str</a>,\n    _variants: &amp;'static [&amp;'static <a href=\"https://doc.rust-lang.org/1.96.1/std/primitive.str.html\">str</a>],\n    visitor: V,\n) -&gt; <a href=\"https://doc.rust-lang.org/1.96.1/core/result/enum.Result.html\">Result</a>&lt;&lt;V as <a href=\"https://docs.rs/serde_core/1.0.228/serde_core/de/trait.Visitor.html\">Visitor</a>&lt;'de&gt;&gt;::<a href=\"https://docs.rs/serde_core/1.0.228/serde_core/de/trait.Visitor.html#associatedtype.Value\">Value</a>, &lt;<a href=\"struct-map\">Map</a>&lt;<a href=\"https://doc.rust-lang.org/1.96.1/alloc/string/struct.String.html\">String</a>, <a href=\"https://docs.rs/serde_json/1.0.149/serde_json/value/enum.Value.html\">Value</a>&gt; as <a href=\"https://docs.rs/serde_core/1.0.228/serde_core/de/trait.Deserializer.html\">Deserializer</a>&lt;'de&gt;&gt;::<a href=\"https://docs.rs/serde_core/1.0.228/serde_core/de/trait.Deserializer.html#associatedtype.Error\">Error</a>&gt;where\n    V: <a href=\"https://docs.rs/serde_core/1.0.228/serde_core/de/trait.Visitor.html\">Visitor</a>&lt;'de&gt;,"}} /></pre>
+
+#### `deserialize_ignored_any`
+
+<pre className="rust-signature"><code dangerouslySetInnerHTML={{"__html": "fn <a href=\"https://docs.rs/serde_core/1.0.228/serde_core/de/trait.Deserializer.html#tymethod.deserialize_ignored_any\">deserialize_ignored_any</a>&lt;V&gt;(\n    self,\n    visitor: V,\n) -&gt; <a href=\"https://doc.rust-lang.org/1.96.1/core/result/enum.Result.html\">Result</a>&lt;&lt;V as <a href=\"https://docs.rs/serde_core/1.0.228/serde_core/de/trait.Visitor.html\">Visitor</a>&lt;'de&gt;&gt;::<a href=\"https://docs.rs/serde_core/1.0.228/serde_core/de/trait.Visitor.html#associatedtype.Value\">Value</a>, &lt;<a href=\"struct-map\">Map</a>&lt;<a href=\"https://doc.rust-lang.org/1.96.1/alloc/string/struct.String.html\">String</a>, <a href=\"https://docs.rs/serde_json/1.0.149/serde_json/value/enum.Value.html\">Value</a>&gt; as <a href=\"https://docs.rs/serde_core/1.0.228/serde_core/de/trait.Deserializer.html\">Deserializer</a>&lt;'de&gt;&gt;::<a href=\"https://docs.rs/serde_core/1.0.228/serde_core/de/trait.Deserializer.html#associatedtype.Error\">Error</a>&gt;where\n    V: <a href=\"https://docs.rs/serde_core/1.0.228/serde_core/de/trait.Visitor.html\">Visitor</a>&lt;'de&gt;,"}} /></pre>
+
+#### `deserialize_bool`
+
+<pre className="rust-signature"><code dangerouslySetInnerHTML={{"__html": "fn <a href=\"https://docs.rs/serde_core/1.0.228/serde_core/de/trait.Deserializer.html#tymethod.deserialize_bool\">deserialize_bool</a>&lt;V&gt;(\n    self,\n    visitor: V,\n) -&gt; <a href=\"https://doc.rust-lang.org/1.96.1/core/result/enum.Result.html\">Result</a>&lt;&lt;V as <a href=\"https://docs.rs/serde_core/1.0.228/serde_core/de/trait.Visitor.html\">Visitor</a>&lt;'de&gt;&gt;::<a href=\"https://docs.rs/serde_core/1.0.228/serde_core/de/trait.Visitor.html#associatedtype.Value\">Value</a>, &lt;<a href=\"struct-map\">Map</a>&lt;<a href=\"https://doc.rust-lang.org/1.96.1/alloc/string/struct.String.html\">String</a>, <a href=\"https://docs.rs/serde_json/1.0.149/serde_json/value/enum.Value.html\">Value</a>&gt; as <a href=\"https://docs.rs/serde_core/1.0.228/serde_core/de/trait.Deserializer.html\">Deserializer</a>&lt;'de&gt;&gt;::<a href=\"https://docs.rs/serde_core/1.0.228/serde_core/de/trait.Deserializer.html#associatedtype.Error\">Error</a>&gt;where\n    V: <a href=\"https://docs.rs/serde_core/1.0.228/serde_core/de/trait.Visitor.html\">Visitor</a>&lt;'de&gt;,"}} /></pre>
+
+#### `deserialize_i8`
+
+<pre className="rust-signature"><code dangerouslySetInnerHTML={{"__html": "fn <a href=\"https://docs.rs/serde_core/1.0.228/serde_core/de/trait.Deserializer.html#tymethod.deserialize_i8\">deserialize_i8</a>&lt;V&gt;(\n    self,\n    visitor: V,\n) -&gt; <a href=\"https://doc.rust-lang.org/1.96.1/core/result/enum.Result.html\">Result</a>&lt;&lt;V as <a href=\"https://docs.rs/serde_core/1.0.228/serde_core/de/trait.Visitor.html\">Visitor</a>&lt;'de&gt;&gt;::<a href=\"https://docs.rs/serde_core/1.0.228/serde_core/de/trait.Visitor.html#associatedtype.Value\">Value</a>, &lt;<a href=\"struct-map\">Map</a>&lt;<a href=\"https://doc.rust-lang.org/1.96.1/alloc/string/struct.String.html\">String</a>, <a href=\"https://docs.rs/serde_json/1.0.149/serde_json/value/enum.Value.html\">Value</a>&gt; as <a href=\"https://docs.rs/serde_core/1.0.228/serde_core/de/trait.Deserializer.html\">Deserializer</a>&lt;'de&gt;&gt;::<a href=\"https://docs.rs/serde_core/1.0.228/serde_core/de/trait.Deserializer.html#associatedtype.Error\">Error</a>&gt;where\n    V: <a href=\"https://docs.rs/serde_core/1.0.228/serde_core/de/trait.Visitor.html\">Visitor</a>&lt;'de&gt;,"}} /></pre>
+
+#### `deserialize_i16`
+
+<pre className="rust-signature"><code dangerouslySetInnerHTML={{"__html": "fn <a href=\"https://docs.rs/serde_core/1.0.228/serde_core/de/trait.Deserializer.html#tymethod.deserialize_i16\">deserialize_i16</a>&lt;V&gt;(\n    self,\n    visitor: V,\n) -&gt; <a href=\"https://doc.rust-lang.org/1.96.1/core/result/enum.Result.html\">Result</a>&lt;&lt;V as <a href=\"https://docs.rs/serde_core/1.0.228/serde_core/de/trait.Visitor.html\">Visitor</a>&lt;'de&gt;&gt;::<a href=\"https://docs.rs/serde_core/1.0.228/serde_core/de/trait.Visitor.html#associatedtype.Value\">Value</a>, &lt;<a href=\"struct-map\">Map</a>&lt;<a href=\"https://doc.rust-lang.org/1.96.1/alloc/string/struct.String.html\">String</a>, <a href=\"https://docs.rs/serde_json/1.0.149/serde_json/value/enum.Value.html\">Value</a>&gt; as <a href=\"https://docs.rs/serde_core/1.0.228/serde_core/de/trait.Deserializer.html\">Deserializer</a>&lt;'de&gt;&gt;::<a href=\"https://docs.rs/serde_core/1.0.228/serde_core/de/trait.Deserializer.html#associatedtype.Error\">Error</a>&gt;where\n    V: <a href=\"https://docs.rs/serde_core/1.0.228/serde_core/de/trait.Visitor.html\">Visitor</a>&lt;'de&gt;,"}} /></pre>
+
+#### `deserialize_i32`
+
+<pre className="rust-signature"><code dangerouslySetInnerHTML={{"__html": "fn <a href=\"https://docs.rs/serde_core/1.0.228/serde_core/de/trait.Deserializer.html#tymethod.deserialize_i32\">deserialize_i32</a>&lt;V&gt;(\n    self,\n    visitor: V,\n) -&gt; <a href=\"https://doc.rust-lang.org/1.96.1/core/result/enum.Result.html\">Result</a>&lt;&lt;V as <a href=\"https://docs.rs/serde_core/1.0.228/serde_core/de/trait.Visitor.html\">Visitor</a>&lt;'de&gt;&gt;::<a href=\"https://docs.rs/serde_core/1.0.228/serde_core/de/trait.Visitor.html#associatedtype.Value\">Value</a>, &lt;<a href=\"struct-map\">Map</a>&lt;<a href=\"https://doc.rust-lang.org/1.96.1/alloc/string/struct.String.html\">String</a>, <a href=\"https://docs.rs/serde_json/1.0.149/serde_json/value/enum.Value.html\">Value</a>&gt; as <a href=\"https://docs.rs/serde_core/1.0.228/serde_core/de/trait.Deserializer.html\">Deserializer</a>&lt;'de&gt;&gt;::<a href=\"https://docs.rs/serde_core/1.0.228/serde_core/de/trait.Deserializer.html#associatedtype.Error\">Error</a>&gt;where\n    V: <a href=\"https://docs.rs/serde_core/1.0.228/serde_core/de/trait.Visitor.html\">Visitor</a>&lt;'de&gt;,"}} /></pre>
+
+#### `deserialize_i64`
+
+<pre className="rust-signature"><code dangerouslySetInnerHTML={{"__html": "fn <a href=\"https://docs.rs/serde_core/1.0.228/serde_core/de/trait.Deserializer.html#tymethod.deserialize_i64\">deserialize_i64</a>&lt;V&gt;(\n    self,\n    visitor: V,\n) -&gt; <a href=\"https://doc.rust-lang.org/1.96.1/core/result/enum.Result.html\">Result</a>&lt;&lt;V as <a href=\"https://docs.rs/serde_core/1.0.228/serde_core/de/trait.Visitor.html\">Visitor</a>&lt;'de&gt;&gt;::<a href=\"https://docs.rs/serde_core/1.0.228/serde_core/de/trait.Visitor.html#associatedtype.Value\">Value</a>, &lt;<a href=\"struct-map\">Map</a>&lt;<a href=\"https://doc.rust-lang.org/1.96.1/alloc/string/struct.String.html\">String</a>, <a href=\"https://docs.rs/serde_json/1.0.149/serde_json/value/enum.Value.html\">Value</a>&gt; as <a href=\"https://docs.rs/serde_core/1.0.228/serde_core/de/trait.Deserializer.html\">Deserializer</a>&lt;'de&gt;&gt;::<a href=\"https://docs.rs/serde_core/1.0.228/serde_core/de/trait.Deserializer.html#associatedtype.Error\">Error</a>&gt;where\n    V: <a href=\"https://docs.rs/serde_core/1.0.228/serde_core/de/trait.Visitor.html\">Visitor</a>&lt;'de&gt;,"}} /></pre>
+
+#### `deserialize_i128`
+
+<pre className="rust-signature"><code dangerouslySetInnerHTML={{"__html": "fn <a href=\"https://docs.rs/serde_core/1.0.228/serde_core/de/trait.Deserializer.html#method.deserialize_i128\">deserialize_i128</a>&lt;V&gt;(\n    self,\n    visitor: V,\n) -&gt; <a href=\"https://doc.rust-lang.org/1.96.1/core/result/enum.Result.html\">Result</a>&lt;&lt;V as <a href=\"https://docs.rs/serde_core/1.0.228/serde_core/de/trait.Visitor.html\">Visitor</a>&lt;'de&gt;&gt;::<a href=\"https://docs.rs/serde_core/1.0.228/serde_core/de/trait.Visitor.html#associatedtype.Value\">Value</a>, &lt;<a href=\"struct-map\">Map</a>&lt;<a href=\"https://doc.rust-lang.org/1.96.1/alloc/string/struct.String.html\">String</a>, <a href=\"https://docs.rs/serde_json/1.0.149/serde_json/value/enum.Value.html\">Value</a>&gt; as <a href=\"https://docs.rs/serde_core/1.0.228/serde_core/de/trait.Deserializer.html\">Deserializer</a>&lt;'de&gt;&gt;::<a href=\"https://docs.rs/serde_core/1.0.228/serde_core/de/trait.Deserializer.html#associatedtype.Error\">Error</a>&gt;where\n    V: <a href=\"https://docs.rs/serde_core/1.0.228/serde_core/de/trait.Visitor.html\">Visitor</a>&lt;'de&gt;,"}} /></pre>
+
+#### `deserialize_u8`
+
+<pre className="rust-signature"><code dangerouslySetInnerHTML={{"__html": "fn <a href=\"https://docs.rs/serde_core/1.0.228/serde_core/de/trait.Deserializer.html#tymethod.deserialize_u8\">deserialize_u8</a>&lt;V&gt;(\n    self,\n    visitor: V,\n) -&gt; <a href=\"https://doc.rust-lang.org/1.96.1/core/result/enum.Result.html\">Result</a>&lt;&lt;V as <a href=\"https://docs.rs/serde_core/1.0.228/serde_core/de/trait.Visitor.html\">Visitor</a>&lt;'de&gt;&gt;::<a href=\"https://docs.rs/serde_core/1.0.228/serde_core/de/trait.Visitor.html#associatedtype.Value\">Value</a>, &lt;<a href=\"struct-map\">Map</a>&lt;<a href=\"https://doc.rust-lang.org/1.96.1/alloc/string/struct.String.html\">String</a>, <a href=\"https://docs.rs/serde_json/1.0.149/serde_json/value/enum.Value.html\">Value</a>&gt; as <a href=\"https://docs.rs/serde_core/1.0.228/serde_core/de/trait.Deserializer.html\">Deserializer</a>&lt;'de&gt;&gt;::<a href=\"https://docs.rs/serde_core/1.0.228/serde_core/de/trait.Deserializer.html#associatedtype.Error\">Error</a>&gt;where\n    V: <a href=\"https://docs.rs/serde_core/1.0.228/serde_core/de/trait.Visitor.html\">Visitor</a>&lt;'de&gt;,"}} /></pre>
+
+#### `deserialize_u16`
+
+<pre className="rust-signature"><code dangerouslySetInnerHTML={{"__html": "fn <a href=\"https://docs.rs/serde_core/1.0.228/serde_core/de/trait.Deserializer.html#tymethod.deserialize_u16\">deserialize_u16</a>&lt;V&gt;(\n    self,\n    visitor: V,\n) -&gt; <a href=\"https://doc.rust-lang.org/1.96.1/core/result/enum.Result.html\">Result</a>&lt;&lt;V as <a href=\"https://docs.rs/serde_core/1.0.228/serde_core/de/trait.Visitor.html\">Visitor</a>&lt;'de&gt;&gt;::<a href=\"https://docs.rs/serde_core/1.0.228/serde_core/de/trait.Visitor.html#associatedtype.Value\">Value</a>, &lt;<a href=\"struct-map\">Map</a>&lt;<a href=\"https://doc.rust-lang.org/1.96.1/alloc/string/struct.String.html\">String</a>, <a href=\"https://docs.rs/serde_json/1.0.149/serde_json/value/enum.Value.html\">Value</a>&gt; as <a href=\"https://docs.rs/serde_core/1.0.228/serde_core/de/trait.Deserializer.html\">Deserializer</a>&lt;'de&gt;&gt;::<a href=\"https://docs.rs/serde_core/1.0.228/serde_core/de/trait.Deserializer.html#associatedtype.Error\">Error</a>&gt;where\n    V: <a href=\"https://docs.rs/serde_core/1.0.228/serde_core/de/trait.Visitor.html\">Visitor</a>&lt;'de&gt;,"}} /></pre>
+
+#### `deserialize_u32`
+
+<pre className="rust-signature"><code dangerouslySetInnerHTML={{"__html": "fn <a href=\"https://docs.rs/serde_core/1.0.228/serde_core/de/trait.Deserializer.html#tymethod.deserialize_u32\">deserialize_u32</a>&lt;V&gt;(\n    self,\n    visitor: V,\n) -&gt; <a href=\"https://doc.rust-lang.org/1.96.1/core/result/enum.Result.html\">Result</a>&lt;&lt;V as <a href=\"https://docs.rs/serde_core/1.0.228/serde_core/de/trait.Visitor.html\">Visitor</a>&lt;'de&gt;&gt;::<a href=\"https://docs.rs/serde_core/1.0.228/serde_core/de/trait.Visitor.html#associatedtype.Value\">Value</a>, &lt;<a href=\"struct-map\">Map</a>&lt;<a href=\"https://doc.rust-lang.org/1.96.1/alloc/string/struct.String.html\">String</a>, <a href=\"https://docs.rs/serde_json/1.0.149/serde_json/value/enum.Value.html\">Value</a>&gt; as <a href=\"https://docs.rs/serde_core/1.0.228/serde_core/de/trait.Deserializer.html\">Deserializer</a>&lt;'de&gt;&gt;::<a href=\"https://docs.rs/serde_core/1.0.228/serde_core/de/trait.Deserializer.html#associatedtype.Error\">Error</a>&gt;where\n    V: <a href=\"https://docs.rs/serde_core/1.0.228/serde_core/de/trait.Visitor.html\">Visitor</a>&lt;'de&gt;,"}} /></pre>
+
+#### `deserialize_u64`
+
+<pre className="rust-signature"><code dangerouslySetInnerHTML={{"__html": "fn <a href=\"https://docs.rs/serde_core/1.0.228/serde_core/de/trait.Deserializer.html#tymethod.deserialize_u64\">deserialize_u64</a>&lt;V&gt;(\n    self,\n    visitor: V,\n) -&gt; <a href=\"https://doc.rust-lang.org/1.96.1/core/result/enum.Result.html\">Result</a>&lt;&lt;V as <a href=\"https://docs.rs/serde_core/1.0.228/serde_core/de/trait.Visitor.html\">Visitor</a>&lt;'de&gt;&gt;::<a href=\"https://docs.rs/serde_core/1.0.228/serde_core/de/trait.Visitor.html#associatedtype.Value\">Value</a>, &lt;<a href=\"struct-map\">Map</a>&lt;<a href=\"https://doc.rust-lang.org/1.96.1/alloc/string/struct.String.html\">String</a>, <a href=\"https://docs.rs/serde_json/1.0.149/serde_json/value/enum.Value.html\">Value</a>&gt; as <a href=\"https://docs.rs/serde_core/1.0.228/serde_core/de/trait.Deserializer.html\">Deserializer</a>&lt;'de&gt;&gt;::<a href=\"https://docs.rs/serde_core/1.0.228/serde_core/de/trait.Deserializer.html#associatedtype.Error\">Error</a>&gt;where\n    V: <a href=\"https://docs.rs/serde_core/1.0.228/serde_core/de/trait.Visitor.html\">Visitor</a>&lt;'de&gt;,"}} /></pre>
+
+#### `deserialize_u128`
+
+<pre className="rust-signature"><code dangerouslySetInnerHTML={{"__html": "fn <a href=\"https://docs.rs/serde_core/1.0.228/serde_core/de/trait.Deserializer.html#method.deserialize_u128\">deserialize_u128</a>&lt;V&gt;(\n    self,\n    visitor: V,\n) -&gt; <a href=\"https://doc.rust-lang.org/1.96.1/core/result/enum.Result.html\">Result</a>&lt;&lt;V as <a href=\"https://docs.rs/serde_core/1.0.228/serde_core/de/trait.Visitor.html\">Visitor</a>&lt;'de&gt;&gt;::<a href=\"https://docs.rs/serde_core/1.0.228/serde_core/de/trait.Visitor.html#associatedtype.Value\">Value</a>, &lt;<a href=\"struct-map\">Map</a>&lt;<a href=\"https://doc.rust-lang.org/1.96.1/alloc/string/struct.String.html\">String</a>, <a href=\"https://docs.rs/serde_json/1.0.149/serde_json/value/enum.Value.html\">Value</a>&gt; as <a href=\"https://docs.rs/serde_core/1.0.228/serde_core/de/trait.Deserializer.html\">Deserializer</a>&lt;'de&gt;&gt;::<a href=\"https://docs.rs/serde_core/1.0.228/serde_core/de/trait.Deserializer.html#associatedtype.Error\">Error</a>&gt;where\n    V: <a href=\"https://docs.rs/serde_core/1.0.228/serde_core/de/trait.Visitor.html\">Visitor</a>&lt;'de&gt;,"}} /></pre>
+
+#### `deserialize_f32`
+
+<pre className="rust-signature"><code dangerouslySetInnerHTML={{"__html": "fn <a href=\"https://docs.rs/serde_core/1.0.228/serde_core/de/trait.Deserializer.html#tymethod.deserialize_f32\">deserialize_f32</a>&lt;V&gt;(\n    self,\n    visitor: V,\n) -&gt; <a href=\"https://doc.rust-lang.org/1.96.1/core/result/enum.Result.html\">Result</a>&lt;&lt;V as <a href=\"https://docs.rs/serde_core/1.0.228/serde_core/de/trait.Visitor.html\">Visitor</a>&lt;'de&gt;&gt;::<a href=\"https://docs.rs/serde_core/1.0.228/serde_core/de/trait.Visitor.html#associatedtype.Value\">Value</a>, &lt;<a href=\"struct-map\">Map</a>&lt;<a href=\"https://doc.rust-lang.org/1.96.1/alloc/string/struct.String.html\">String</a>, <a href=\"https://docs.rs/serde_json/1.0.149/serde_json/value/enum.Value.html\">Value</a>&gt; as <a href=\"https://docs.rs/serde_core/1.0.228/serde_core/de/trait.Deserializer.html\">Deserializer</a>&lt;'de&gt;&gt;::<a href=\"https://docs.rs/serde_core/1.0.228/serde_core/de/trait.Deserializer.html#associatedtype.Error\">Error</a>&gt;where\n    V: <a href=\"https://docs.rs/serde_core/1.0.228/serde_core/de/trait.Visitor.html\">Visitor</a>&lt;'de&gt;,"}} /></pre>
+
+#### `deserialize_f64`
+
+<pre className="rust-signature"><code dangerouslySetInnerHTML={{"__html": "fn <a href=\"https://docs.rs/serde_core/1.0.228/serde_core/de/trait.Deserializer.html#tymethod.deserialize_f64\">deserialize_f64</a>&lt;V&gt;(\n    self,\n    visitor: V,\n) -&gt; <a href=\"https://doc.rust-lang.org/1.96.1/core/result/enum.Result.html\">Result</a>&lt;&lt;V as <a href=\"https://docs.rs/serde_core/1.0.228/serde_core/de/trait.Visitor.html\">Visitor</a>&lt;'de&gt;&gt;::<a href=\"https://docs.rs/serde_core/1.0.228/serde_core/de/trait.Visitor.html#associatedtype.Value\">Value</a>, &lt;<a href=\"struct-map\">Map</a>&lt;<a href=\"https://doc.rust-lang.org/1.96.1/alloc/string/struct.String.html\">String</a>, <a href=\"https://docs.rs/serde_json/1.0.149/serde_json/value/enum.Value.html\">Value</a>&gt; as <a href=\"https://docs.rs/serde_core/1.0.228/serde_core/de/trait.Deserializer.html\">Deserializer</a>&lt;'de&gt;&gt;::<a href=\"https://docs.rs/serde_core/1.0.228/serde_core/de/trait.Deserializer.html#associatedtype.Error\">Error</a>&gt;where\n    V: <a href=\"https://docs.rs/serde_core/1.0.228/serde_core/de/trait.Visitor.html\">Visitor</a>&lt;'de&gt;,"}} /></pre>
+
+#### `deserialize_char`
+
+<pre className="rust-signature"><code dangerouslySetInnerHTML={{"__html": "fn <a href=\"https://docs.rs/serde_core/1.0.228/serde_core/de/trait.Deserializer.html#tymethod.deserialize_char\">deserialize_char</a>&lt;V&gt;(\n    self,\n    visitor: V,\n) -&gt; <a href=\"https://doc.rust-lang.org/1.96.1/core/result/enum.Result.html\">Result</a>&lt;&lt;V as <a href=\"https://docs.rs/serde_core/1.0.228/serde_core/de/trait.Visitor.html\">Visitor</a>&lt;'de&gt;&gt;::<a href=\"https://docs.rs/serde_core/1.0.228/serde_core/de/trait.Visitor.html#associatedtype.Value\">Value</a>, &lt;<a href=\"struct-map\">Map</a>&lt;<a href=\"https://doc.rust-lang.org/1.96.1/alloc/string/struct.String.html\">String</a>, <a href=\"https://docs.rs/serde_json/1.0.149/serde_json/value/enum.Value.html\">Value</a>&gt; as <a href=\"https://docs.rs/serde_core/1.0.228/serde_core/de/trait.Deserializer.html\">Deserializer</a>&lt;'de&gt;&gt;::<a href=\"https://docs.rs/serde_core/1.0.228/serde_core/de/trait.Deserializer.html#associatedtype.Error\">Error</a>&gt;where\n    V: <a href=\"https://docs.rs/serde_core/1.0.228/serde_core/de/trait.Visitor.html\">Visitor</a>&lt;'de&gt;,"}} /></pre>
+
+#### `deserialize_str`
+
+<pre className="rust-signature"><code dangerouslySetInnerHTML={{"__html": "fn <a href=\"https://docs.rs/serde_core/1.0.228/serde_core/de/trait.Deserializer.html#tymethod.deserialize_str\">deserialize_str</a>&lt;V&gt;(\n    self,\n    visitor: V,\n) -&gt; <a href=\"https://doc.rust-lang.org/1.96.1/core/result/enum.Result.html\">Result</a>&lt;&lt;V as <a href=\"https://docs.rs/serde_core/1.0.228/serde_core/de/trait.Visitor.html\">Visitor</a>&lt;'de&gt;&gt;::<a href=\"https://docs.rs/serde_core/1.0.228/serde_core/de/trait.Visitor.html#associatedtype.Value\">Value</a>, &lt;<a href=\"struct-map\">Map</a>&lt;<a href=\"https://doc.rust-lang.org/1.96.1/alloc/string/struct.String.html\">String</a>, <a href=\"https://docs.rs/serde_json/1.0.149/serde_json/value/enum.Value.html\">Value</a>&gt; as <a href=\"https://docs.rs/serde_core/1.0.228/serde_core/de/trait.Deserializer.html\">Deserializer</a>&lt;'de&gt;&gt;::<a href=\"https://docs.rs/serde_core/1.0.228/serde_core/de/trait.Deserializer.html#associatedtype.Error\">Error</a>&gt;where\n    V: <a href=\"https://docs.rs/serde_core/1.0.228/serde_core/de/trait.Visitor.html\">Visitor</a>&lt;'de&gt;,"}} /></pre>
+
+#### `deserialize_string`
+
+<pre className="rust-signature"><code dangerouslySetInnerHTML={{"__html": "fn <a href=\"https://docs.rs/serde_core/1.0.228/serde_core/de/trait.Deserializer.html#tymethod.deserialize_string\">deserialize_string</a>&lt;V&gt;(\n    self,\n    visitor: V,\n) -&gt; <a href=\"https://doc.rust-lang.org/1.96.1/core/result/enum.Result.html\">Result</a>&lt;&lt;V as <a href=\"https://docs.rs/serde_core/1.0.228/serde_core/de/trait.Visitor.html\">Visitor</a>&lt;'de&gt;&gt;::<a href=\"https://docs.rs/serde_core/1.0.228/serde_core/de/trait.Visitor.html#associatedtype.Value\">Value</a>, &lt;<a href=\"struct-map\">Map</a>&lt;<a href=\"https://doc.rust-lang.org/1.96.1/alloc/string/struct.String.html\">String</a>, <a href=\"https://docs.rs/serde_json/1.0.149/serde_json/value/enum.Value.html\">Value</a>&gt; as <a href=\"https://docs.rs/serde_core/1.0.228/serde_core/de/trait.Deserializer.html\">Deserializer</a>&lt;'de&gt;&gt;::<a href=\"https://docs.rs/serde_core/1.0.228/serde_core/de/trait.Deserializer.html#associatedtype.Error\">Error</a>&gt;where\n    V: <a href=\"https://docs.rs/serde_core/1.0.228/serde_core/de/trait.Visitor.html\">Visitor</a>&lt;'de&gt;,"}} /></pre>
+
+#### `deserialize_bytes`
+
+<pre className="rust-signature"><code dangerouslySetInnerHTML={{"__html": "fn <a href=\"https://docs.rs/serde_core/1.0.228/serde_core/de/trait.Deserializer.html#tymethod.deserialize_bytes\">deserialize_bytes</a>&lt;V&gt;(\n    self,\n    visitor: V,\n) -&gt; <a href=\"https://doc.rust-lang.org/1.96.1/core/result/enum.Result.html\">Result</a>&lt;&lt;V as <a href=\"https://docs.rs/serde_core/1.0.228/serde_core/de/trait.Visitor.html\">Visitor</a>&lt;'de&gt;&gt;::<a href=\"https://docs.rs/serde_core/1.0.228/serde_core/de/trait.Visitor.html#associatedtype.Value\">Value</a>, &lt;<a href=\"struct-map\">Map</a>&lt;<a href=\"https://doc.rust-lang.org/1.96.1/alloc/string/struct.String.html\">String</a>, <a href=\"https://docs.rs/serde_json/1.0.149/serde_json/value/enum.Value.html\">Value</a>&gt; as <a href=\"https://docs.rs/serde_core/1.0.228/serde_core/de/trait.Deserializer.html\">Deserializer</a>&lt;'de&gt;&gt;::<a href=\"https://docs.rs/serde_core/1.0.228/serde_core/de/trait.Deserializer.html#associatedtype.Error\">Error</a>&gt;where\n    V: <a href=\"https://docs.rs/serde_core/1.0.228/serde_core/de/trait.Visitor.html\">Visitor</a>&lt;'de&gt;,"}} /></pre>
+
+#### `deserialize_byte_buf`
+
+<pre className="rust-signature"><code dangerouslySetInnerHTML={{"__html": "fn <a href=\"https://docs.rs/serde_core/1.0.228/serde_core/de/trait.Deserializer.html#tymethod.deserialize_byte_buf\">deserialize_byte_buf</a>&lt;V&gt;(\n    self,\n    visitor: V,\n) -&gt; <a href=\"https://doc.rust-lang.org/1.96.1/core/result/enum.Result.html\">Result</a>&lt;&lt;V as <a href=\"https://docs.rs/serde_core/1.0.228/serde_core/de/trait.Visitor.html\">Visitor</a>&lt;'de&gt;&gt;::<a href=\"https://docs.rs/serde_core/1.0.228/serde_core/de/trait.Visitor.html#associatedtype.Value\">Value</a>, &lt;<a href=\"struct-map\">Map</a>&lt;<a href=\"https://doc.rust-lang.org/1.96.1/alloc/string/struct.String.html\">String</a>, <a href=\"https://docs.rs/serde_json/1.0.149/serde_json/value/enum.Value.html\">Value</a>&gt; as <a href=\"https://docs.rs/serde_core/1.0.228/serde_core/de/trait.Deserializer.html\">Deserializer</a>&lt;'de&gt;&gt;::<a href=\"https://docs.rs/serde_core/1.0.228/serde_core/de/trait.Deserializer.html#associatedtype.Error\">Error</a>&gt;where\n    V: <a href=\"https://docs.rs/serde_core/1.0.228/serde_core/de/trait.Visitor.html\">Visitor</a>&lt;'de&gt;,"}} /></pre>
+
+#### `deserialize_option`
+
+<pre className="rust-signature"><code dangerouslySetInnerHTML={{"__html": "fn <a href=\"https://docs.rs/serde_core/1.0.228/serde_core/de/trait.Deserializer.html#tymethod.deserialize_option\">deserialize_option</a>&lt;V&gt;(\n    self,\n    visitor: V,\n) -&gt; <a href=\"https://doc.rust-lang.org/1.96.1/core/result/enum.Result.html\">Result</a>&lt;&lt;V as <a href=\"https://docs.rs/serde_core/1.0.228/serde_core/de/trait.Visitor.html\">Visitor</a>&lt;'de&gt;&gt;::<a href=\"https://docs.rs/serde_core/1.0.228/serde_core/de/trait.Visitor.html#associatedtype.Value\">Value</a>, &lt;<a href=\"struct-map\">Map</a>&lt;<a href=\"https://doc.rust-lang.org/1.96.1/alloc/string/struct.String.html\">String</a>, <a href=\"https://docs.rs/serde_json/1.0.149/serde_json/value/enum.Value.html\">Value</a>&gt; as <a href=\"https://docs.rs/serde_core/1.0.228/serde_core/de/trait.Deserializer.html\">Deserializer</a>&lt;'de&gt;&gt;::<a href=\"https://docs.rs/serde_core/1.0.228/serde_core/de/trait.Deserializer.html#associatedtype.Error\">Error</a>&gt;where\n    V: <a href=\"https://docs.rs/serde_core/1.0.228/serde_core/de/trait.Visitor.html\">Visitor</a>&lt;'de&gt;,"}} /></pre>
+
+#### `deserialize_unit`
+
+<pre className="rust-signature"><code dangerouslySetInnerHTML={{"__html": "fn <a href=\"https://docs.rs/serde_core/1.0.228/serde_core/de/trait.Deserializer.html#tymethod.deserialize_unit\">deserialize_unit</a>&lt;V&gt;(\n    self,\n    visitor: V,\n) -&gt; <a href=\"https://doc.rust-lang.org/1.96.1/core/result/enum.Result.html\">Result</a>&lt;&lt;V as <a href=\"https://docs.rs/serde_core/1.0.228/serde_core/de/trait.Visitor.html\">Visitor</a>&lt;'de&gt;&gt;::<a href=\"https://docs.rs/serde_core/1.0.228/serde_core/de/trait.Visitor.html#associatedtype.Value\">Value</a>, &lt;<a href=\"struct-map\">Map</a>&lt;<a href=\"https://doc.rust-lang.org/1.96.1/alloc/string/struct.String.html\">String</a>, <a href=\"https://docs.rs/serde_json/1.0.149/serde_json/value/enum.Value.html\">Value</a>&gt; as <a href=\"https://docs.rs/serde_core/1.0.228/serde_core/de/trait.Deserializer.html\">Deserializer</a>&lt;'de&gt;&gt;::<a href=\"https://docs.rs/serde_core/1.0.228/serde_core/de/trait.Deserializer.html#associatedtype.Error\">Error</a>&gt;where\n    V: <a href=\"https://docs.rs/serde_core/1.0.228/serde_core/de/trait.Visitor.html\">Visitor</a>&lt;'de&gt;,"}} /></pre>
+
+#### `deserialize_unit_struct`
+
+<pre className="rust-signature"><code dangerouslySetInnerHTML={{"__html": "fn <a href=\"https://docs.rs/serde_core/1.0.228/serde_core/de/trait.Deserializer.html#tymethod.deserialize_unit_struct\">deserialize_unit_struct</a>&lt;V&gt;(\n    self,\n    name: &amp;'static <a href=\"https://doc.rust-lang.org/1.96.1/std/primitive.str.html\">str</a>,\n    visitor: V,\n) -&gt; <a href=\"https://doc.rust-lang.org/1.96.1/core/result/enum.Result.html\">Result</a>&lt;&lt;V as <a href=\"https://docs.rs/serde_core/1.0.228/serde_core/de/trait.Visitor.html\">Visitor</a>&lt;'de&gt;&gt;::<a href=\"https://docs.rs/serde_core/1.0.228/serde_core/de/trait.Visitor.html#associatedtype.Value\">Value</a>, &lt;<a href=\"struct-map\">Map</a>&lt;<a href=\"https://doc.rust-lang.org/1.96.1/alloc/string/struct.String.html\">String</a>, <a href=\"https://docs.rs/serde_json/1.0.149/serde_json/value/enum.Value.html\">Value</a>&gt; as <a href=\"https://docs.rs/serde_core/1.0.228/serde_core/de/trait.Deserializer.html\">Deserializer</a>&lt;'de&gt;&gt;::<a href=\"https://docs.rs/serde_core/1.0.228/serde_core/de/trait.Deserializer.html#associatedtype.Error\">Error</a>&gt;where\n    V: <a href=\"https://docs.rs/serde_core/1.0.228/serde_core/de/trait.Visitor.html\">Visitor</a>&lt;'de&gt;,"}} /></pre>
+
+#### `deserialize_newtype_struct`
+
+<pre className="rust-signature"><code dangerouslySetInnerHTML={{"__html": "fn <a href=\"https://docs.rs/serde_core/1.0.228/serde_core/de/trait.Deserializer.html#tymethod.deserialize_newtype_struct\">deserialize_newtype_struct</a>&lt;V&gt;(\n    self,\n    name: &amp;'static <a href=\"https://doc.rust-lang.org/1.96.1/std/primitive.str.html\">str</a>,\n    visitor: V,\n) -&gt; <a href=\"https://doc.rust-lang.org/1.96.1/core/result/enum.Result.html\">Result</a>&lt;&lt;V as <a href=\"https://docs.rs/serde_core/1.0.228/serde_core/de/trait.Visitor.html\">Visitor</a>&lt;'de&gt;&gt;::<a href=\"https://docs.rs/serde_core/1.0.228/serde_core/de/trait.Visitor.html#associatedtype.Value\">Value</a>, &lt;<a href=\"struct-map\">Map</a>&lt;<a href=\"https://doc.rust-lang.org/1.96.1/alloc/string/struct.String.html\">String</a>, <a href=\"https://docs.rs/serde_json/1.0.149/serde_json/value/enum.Value.html\">Value</a>&gt; as <a href=\"https://docs.rs/serde_core/1.0.228/serde_core/de/trait.Deserializer.html\">Deserializer</a>&lt;'de&gt;&gt;::<a href=\"https://docs.rs/serde_core/1.0.228/serde_core/de/trait.Deserializer.html#associatedtype.Error\">Error</a>&gt;where\n    V: <a href=\"https://docs.rs/serde_core/1.0.228/serde_core/de/trait.Visitor.html\">Visitor</a>&lt;'de&gt;,"}} /></pre>
+
+#### `deserialize_seq`
+
+<pre className="rust-signature"><code dangerouslySetInnerHTML={{"__html": "fn <a href=\"https://docs.rs/serde_core/1.0.228/serde_core/de/trait.Deserializer.html#tymethod.deserialize_seq\">deserialize_seq</a>&lt;V&gt;(\n    self,\n    visitor: V,\n) -&gt; <a href=\"https://doc.rust-lang.org/1.96.1/core/result/enum.Result.html\">Result</a>&lt;&lt;V as <a href=\"https://docs.rs/serde_core/1.0.228/serde_core/de/trait.Visitor.html\">Visitor</a>&lt;'de&gt;&gt;::<a href=\"https://docs.rs/serde_core/1.0.228/serde_core/de/trait.Visitor.html#associatedtype.Value\">Value</a>, &lt;<a href=\"struct-map\">Map</a>&lt;<a href=\"https://doc.rust-lang.org/1.96.1/alloc/string/struct.String.html\">String</a>, <a href=\"https://docs.rs/serde_json/1.0.149/serde_json/value/enum.Value.html\">Value</a>&gt; as <a href=\"https://docs.rs/serde_core/1.0.228/serde_core/de/trait.Deserializer.html\">Deserializer</a>&lt;'de&gt;&gt;::<a href=\"https://docs.rs/serde_core/1.0.228/serde_core/de/trait.Deserializer.html#associatedtype.Error\">Error</a>&gt;where\n    V: <a href=\"https://docs.rs/serde_core/1.0.228/serde_core/de/trait.Visitor.html\">Visitor</a>&lt;'de&gt;,"}} /></pre>
+
+#### `deserialize_tuple`
+
+<pre className="rust-signature"><code dangerouslySetInnerHTML={{"__html": "fn <a href=\"https://docs.rs/serde_core/1.0.228/serde_core/de/trait.Deserializer.html#tymethod.deserialize_tuple\">deserialize_tuple</a>&lt;V&gt;(\n    self,\n    len: <a href=\"https://doc.rust-lang.org/1.96.1/std/primitive.usize.html\">usize</a>,\n    visitor: V,\n) -&gt; <a href=\"https://doc.rust-lang.org/1.96.1/core/result/enum.Result.html\">Result</a>&lt;&lt;V as <a href=\"https://docs.rs/serde_core/1.0.228/serde_core/de/trait.Visitor.html\">Visitor</a>&lt;'de&gt;&gt;::<a href=\"https://docs.rs/serde_core/1.0.228/serde_core/de/trait.Visitor.html#associatedtype.Value\">Value</a>, &lt;<a href=\"struct-map\">Map</a>&lt;<a href=\"https://doc.rust-lang.org/1.96.1/alloc/string/struct.String.html\">String</a>, <a href=\"https://docs.rs/serde_json/1.0.149/serde_json/value/enum.Value.html\">Value</a>&gt; as <a href=\"https://docs.rs/serde_core/1.0.228/serde_core/de/trait.Deserializer.html\">Deserializer</a>&lt;'de&gt;&gt;::<a href=\"https://docs.rs/serde_core/1.0.228/serde_core/de/trait.Deserializer.html#associatedtype.Error\">Error</a>&gt;where\n    V: <a href=\"https://docs.rs/serde_core/1.0.228/serde_core/de/trait.Visitor.html\">Visitor</a>&lt;'de&gt;,"}} /></pre>
+
+#### `deserialize_tuple_struct`
+
+<pre className="rust-signature"><code dangerouslySetInnerHTML={{"__html": "fn <a href=\"https://docs.rs/serde_core/1.0.228/serde_core/de/trait.Deserializer.html#tymethod.deserialize_tuple_struct\">deserialize_tuple_struct</a>&lt;V&gt;(\n    self,\n    name: &amp;'static <a href=\"https://doc.rust-lang.org/1.96.1/std/primitive.str.html\">str</a>,\n    len: <a href=\"https://doc.rust-lang.org/1.96.1/std/primitive.usize.html\">usize</a>,\n    visitor: V,\n) -&gt; <a href=\"https://doc.rust-lang.org/1.96.1/core/result/enum.Result.html\">Result</a>&lt;&lt;V as <a href=\"https://docs.rs/serde_core/1.0.228/serde_core/de/trait.Visitor.html\">Visitor</a>&lt;'de&gt;&gt;::<a href=\"https://docs.rs/serde_core/1.0.228/serde_core/de/trait.Visitor.html#associatedtype.Value\">Value</a>, &lt;<a href=\"struct-map\">Map</a>&lt;<a href=\"https://doc.rust-lang.org/1.96.1/alloc/string/struct.String.html\">String</a>, <a href=\"https://docs.rs/serde_json/1.0.149/serde_json/value/enum.Value.html\">Value</a>&gt; as <a href=\"https://docs.rs/serde_core/1.0.228/serde_core/de/trait.Deserializer.html\">Deserializer</a>&lt;'de&gt;&gt;::<a href=\"https://docs.rs/serde_core/1.0.228/serde_core/de/trait.Deserializer.html#associatedtype.Error\">Error</a>&gt;where\n    V: <a href=\"https://docs.rs/serde_core/1.0.228/serde_core/de/trait.Visitor.html\">Visitor</a>&lt;'de&gt;,"}} /></pre>
+
+#### `deserialize_map`
+
+<pre className="rust-signature"><code dangerouslySetInnerHTML={{"__html": "fn <a href=\"https://docs.rs/serde_core/1.0.228/serde_core/de/trait.Deserializer.html#tymethod.deserialize_map\">deserialize_map</a>&lt;V&gt;(\n    self,\n    visitor: V,\n) -&gt; <a href=\"https://doc.rust-lang.org/1.96.1/core/result/enum.Result.html\">Result</a>&lt;&lt;V as <a href=\"https://docs.rs/serde_core/1.0.228/serde_core/de/trait.Visitor.html\">Visitor</a>&lt;'de&gt;&gt;::<a href=\"https://docs.rs/serde_core/1.0.228/serde_core/de/trait.Visitor.html#associatedtype.Value\">Value</a>, &lt;<a href=\"struct-map\">Map</a>&lt;<a href=\"https://doc.rust-lang.org/1.96.1/alloc/string/struct.String.html\">String</a>, <a href=\"https://docs.rs/serde_json/1.0.149/serde_json/value/enum.Value.html\">Value</a>&gt; as <a href=\"https://docs.rs/serde_core/1.0.228/serde_core/de/trait.Deserializer.html\">Deserializer</a>&lt;'de&gt;&gt;::<a href=\"https://docs.rs/serde_core/1.0.228/serde_core/de/trait.Deserializer.html#associatedtype.Error\">Error</a>&gt;where\n    V: <a href=\"https://docs.rs/serde_core/1.0.228/serde_core/de/trait.Visitor.html\">Visitor</a>&lt;'de&gt;,"}} /></pre>
+
+#### `deserialize_struct`
+
+<pre className="rust-signature"><code dangerouslySetInnerHTML={{"__html": "fn <a href=\"https://docs.rs/serde_core/1.0.228/serde_core/de/trait.Deserializer.html#tymethod.deserialize_struct\">deserialize_struct</a>&lt;V&gt;(\n    self,\n    name: &amp;'static <a href=\"https://doc.rust-lang.org/1.96.1/std/primitive.str.html\">str</a>,\n    fields: &amp;'static [&amp;'static <a href=\"https://doc.rust-lang.org/1.96.1/std/primitive.str.html\">str</a>],\n    visitor: V,\n) -&gt; <a href=\"https://doc.rust-lang.org/1.96.1/core/result/enum.Result.html\">Result</a>&lt;&lt;V as <a href=\"https://docs.rs/serde_core/1.0.228/serde_core/de/trait.Visitor.html\">Visitor</a>&lt;'de&gt;&gt;::<a href=\"https://docs.rs/serde_core/1.0.228/serde_core/de/trait.Visitor.html#associatedtype.Value\">Value</a>, &lt;<a href=\"struct-map\">Map</a>&lt;<a href=\"https://doc.rust-lang.org/1.96.1/alloc/string/struct.String.html\">String</a>, <a href=\"https://docs.rs/serde_json/1.0.149/serde_json/value/enum.Value.html\">Value</a>&gt; as <a href=\"https://docs.rs/serde_core/1.0.228/serde_core/de/trait.Deserializer.html\">Deserializer</a>&lt;'de&gt;&gt;::<a href=\"https://docs.rs/serde_core/1.0.228/serde_core/de/trait.Deserializer.html#associatedtype.Error\">Error</a>&gt;where\n    V: <a href=\"https://docs.rs/serde_core/1.0.228/serde_core/de/trait.Visitor.html\">Visitor</a>&lt;'de&gt;,"}} /></pre>
+
+#### `deserialize_identifier`
+
+<pre className="rust-signature"><code dangerouslySetInnerHTML={{"__html": "fn <a href=\"https://docs.rs/serde_core/1.0.228/serde_core/de/trait.Deserializer.html#tymethod.deserialize_identifier\">deserialize_identifier</a>&lt;V&gt;(\n    self,\n    visitor: V,\n) -&gt; <a href=\"https://doc.rust-lang.org/1.96.1/core/result/enum.Result.html\">Result</a>&lt;&lt;V as <a href=\"https://docs.rs/serde_core/1.0.228/serde_core/de/trait.Visitor.html\">Visitor</a>&lt;'de&gt;&gt;::<a href=\"https://docs.rs/serde_core/1.0.228/serde_core/de/trait.Visitor.html#associatedtype.Value\">Value</a>, &lt;<a href=\"struct-map\">Map</a>&lt;<a href=\"https://doc.rust-lang.org/1.96.1/alloc/string/struct.String.html\">String</a>, <a href=\"https://docs.rs/serde_json/1.0.149/serde_json/value/enum.Value.html\">Value</a>&gt; as <a href=\"https://docs.rs/serde_core/1.0.228/serde_core/de/trait.Deserializer.html\">Deserializer</a>&lt;'de&gt;&gt;::<a href=\"https://docs.rs/serde_core/1.0.228/serde_core/de/trait.Deserializer.html#associatedtype.Error\">Error</a>&gt;where\n    V: <a href=\"https://docs.rs/serde_core/1.0.228/serde_core/de/trait.Visitor.html\">Visitor</a>&lt;'de&gt;,"}} /></pre>
+
+#### `is_human_readable`
+
+<pre className="rust-signature"><code dangerouslySetInnerHTML={{"__html": "fn <a href=\"https://docs.rs/serde_core/1.0.228/serde_core/de/trait.Deserializer.html#method.is_human_readable\">is_human_readable</a>(&amp;self) -&gt; <a href=\"https://doc.rust-lang.org/1.96.1/std/primitive.bool.html\">bool</a>"}} /></pre>
+
+### `impl Extend<(String, Value)> for Map<String, Value>`
+
+<pre className="rust-signature"><code dangerouslySetInnerHTML={{"__html": "impl <a href=\"https://doc.rust-lang.org/1.96.1/core/iter/traits/collect/trait.Extend.html\">Extend</a>&lt;(<a href=\"https://doc.rust-lang.org/1.96.1/alloc/string/struct.String.html\">String</a>, <a href=\"https://docs.rs/serde_json/1.0.149/serde_json/value/enum.Value.html\">Value</a>)&gt; for <a href=\"struct-map\">Map</a>&lt;<a href=\"https://doc.rust-lang.org/1.96.1/alloc/string/struct.String.html\">String</a>, <a href=\"https://docs.rs/serde_json/1.0.149/serde_json/value/enum.Value.html\">Value</a>&gt;"}} /></pre>
+
+#### `extend`
+
+<pre className="rust-signature"><code dangerouslySetInnerHTML={{"__html": "fn <a href=\"https://doc.rust-lang.org/1.96.1/core/iter/traits/collect/trait.Extend.html#tymethod.extend\">extend</a>&lt;T&gt;(&amp;mut self, iter: T)where\n    T: <a href=\"https://doc.rust-lang.org/1.96.1/core/iter/traits/collect/trait.IntoIterator.html\">IntoIterator</a>&lt;Item = (<a href=\"https://doc.rust-lang.org/1.96.1/alloc/string/struct.String.html\">String</a>, <a href=\"https://docs.rs/serde_json/1.0.149/serde_json/value/enum.Value.html\">Value</a>)&gt;,"}} /></pre>
+
+#### `extend_one`
+
+<pre className="rust-signature"><code dangerouslySetInnerHTML={{"__html": "fn <a href=\"https://doc.rust-lang.org/1.96.1/core/iter/traits/collect/trait.Extend.html#method.extend_one\">extend_one</a>(&amp;mut self, item: A)"}} /></pre>
+
+#### `extend_reserve`
+
+<pre className="rust-signature"><code dangerouslySetInnerHTML={{"__html": "fn <a href=\"https://doc.rust-lang.org/1.96.1/core/iter/traits/collect/trait.Extend.html#method.extend_reserve\">extend_reserve</a>(&amp;mut self, additional: <a href=\"https://doc.rust-lang.org/1.96.1/std/primitive.usize.html\">usize</a>)"}} /></pre>
+
+### `impl From<Map<String, Value>> for Value`
+
+<pre className="rust-signature"><code dangerouslySetInnerHTML={{"__html": "impl <a href=\"https://doc.rust-lang.org/1.96.1/core/convert/trait.From.html\">From</a>&lt;<a href=\"struct-map\">Map</a>&lt;<a href=\"https://doc.rust-lang.org/1.96.1/alloc/string/struct.String.html\">String</a>, <a href=\"https://docs.rs/serde_json/1.0.149/serde_json/value/enum.Value.html\">Value</a>&gt;&gt; for <a href=\"https://docs.rs/serde_json/1.0.149/serde_json/value/enum.Value.html\">Value</a>"}} /></pre>
+
+#### `from`
+
+<pre className="rust-signature"><code dangerouslySetInnerHTML={{"__html": "fn <a href=\"https://doc.rust-lang.org/1.96.1/core/convert/trait.From.html#tymethod.from\">from</a>(f: <a href=\"struct-map\">Map</a>&lt;<a href=\"https://doc.rust-lang.org/1.96.1/alloc/string/struct.String.html\">String</a>, <a href=\"https://docs.rs/serde_json/1.0.149/serde_json/value/enum.Value.html\">Value</a>&gt;) -&gt; <a href=\"https://docs.rs/serde_json/1.0.149/serde_json/value/enum.Value.html\">Value</a>"}} /></pre>
+
+Convert map (with string keys) to `Value::Object`.
+
+##### Examples
+
+```rust
+use serde_json::{Map, Value};
+
+let mut m = Map::new();
+m.insert("Lorem".to_owned(), "ipsum".into());
+let x: Value = m.into();
+```
+
+### `impl FromIterator<(String, Value)> for Map<String, Value>`
+
+<pre className="rust-signature"><code dangerouslySetInnerHTML={{"__html": "impl <a href=\"https://doc.rust-lang.org/1.96.1/core/iter/traits/collect/trait.FromIterator.html\">FromIterator</a>&lt;(<a href=\"https://doc.rust-lang.org/1.96.1/alloc/string/struct.String.html\">String</a>, <a href=\"https://docs.rs/serde_json/1.0.149/serde_json/value/enum.Value.html\">Value</a>)&gt; for <a href=\"struct-map\">Map</a>&lt;<a href=\"https://doc.rust-lang.org/1.96.1/alloc/string/struct.String.html\">String</a>, <a href=\"https://docs.rs/serde_json/1.0.149/serde_json/value/enum.Value.html\">Value</a>&gt;"}} /></pre>
+
+#### `from_iter`
+
+<pre className="rust-signature"><code dangerouslySetInnerHTML={{"__html": "fn <a href=\"https://doc.rust-lang.org/1.96.1/core/iter/traits/collect/trait.FromIterator.html#tymethod.from_iter\">from_iter</a>&lt;T&gt;(iter: T) -&gt; <a href=\"struct-map\">Map</a>&lt;<a href=\"https://doc.rust-lang.org/1.96.1/alloc/string/struct.String.html\">String</a>, <a href=\"https://docs.rs/serde_json/1.0.149/serde_json/value/enum.Value.html\">Value</a>&gt;where\n    T: <a href=\"https://doc.rust-lang.org/1.96.1/core/iter/traits/collect/trait.IntoIterator.html\">IntoIterator</a>&lt;Item = (<a href=\"https://doc.rust-lang.org/1.96.1/alloc/string/struct.String.html\">String</a>, <a href=\"https://docs.rs/serde_json/1.0.149/serde_json/value/enum.Value.html\">Value</a>)&gt;,"}} /></pre>
+
+### `impl FromStr for Map<String, Value>`
+
+<pre className="rust-signature"><code dangerouslySetInnerHTML={{"__html": "impl <a href=\"https://doc.rust-lang.org/1.96.1/core/str/traits/trait.FromStr.html\">FromStr</a> for <a href=\"struct-map\">Map</a>&lt;<a href=\"https://doc.rust-lang.org/1.96.1/alloc/string/struct.String.html\">String</a>, <a href=\"https://docs.rs/serde_json/1.0.149/serde_json/value/enum.Value.html\">Value</a>&gt;"}} /></pre>
+
+#### `Err`
+
+<pre className="rust-signature"><code dangerouslySetInnerHTML={{"__html": "type <a href=\"https://doc.rust-lang.org/1.96.1/core/str/traits/trait.FromStr.html#associatedtype.Err\">Err</a> = <a href=\"https://docs.rs/serde_json/1.0.149/serde_json/error/struct.Error.html\">Error</a>"}} /></pre>
+
+#### `from_str`
+
+<pre className="rust-signature"><code dangerouslySetInnerHTML={{"__html": "fn <a href=\"https://doc.rust-lang.org/1.96.1/core/str/traits/trait.FromStr.html#tymethod.from_str\">from_str</a>(s: &amp;<a href=\"https://doc.rust-lang.org/1.96.1/std/primitive.str.html\">str</a>) -&gt; <a href=\"https://doc.rust-lang.org/1.96.1/core/result/enum.Result.html\">Result</a>&lt;<a href=\"struct-map\">Map</a>&lt;<a href=\"https://doc.rust-lang.org/1.96.1/alloc/string/struct.String.html\">String</a>, <a href=\"https://docs.rs/serde_json/1.0.149/serde_json/value/enum.Value.html\">Value</a>&gt;, <a href=\"https://docs.rs/serde_json/1.0.149/serde_json/error/struct.Error.html\">Error</a>&gt;"}} /></pre>
+
+### `impl Hash for Map<String, Value>`
+
+<pre className="rust-signature"><code dangerouslySetInnerHTML={{"__html": "impl <a href=\"https://doc.rust-lang.org/1.96.1/core/hash/trait.Hash.html\">Hash</a> for <a href=\"struct-map\">Map</a>&lt;<a href=\"https://doc.rust-lang.org/1.96.1/alloc/string/struct.String.html\">String</a>, <a href=\"https://docs.rs/serde_json/1.0.149/serde_json/value/enum.Value.html\">Value</a>&gt;"}} /></pre>
+
+#### `hash`
+
+<pre className="rust-signature"><code dangerouslySetInnerHTML={{"__html": "fn <a href=\"https://doc.rust-lang.org/1.96.1/core/hash/trait.Hash.html#tymethod.hash\">hash</a>&lt;H&gt;(&amp;self, state: <a href=\"https://doc.rust-lang.org/1.96.1/std/primitive.reference.html\">&amp;mut H</a>)where\n    H: <a href=\"https://doc.rust-lang.org/1.96.1/core/hash/trait.Hasher.html\">Hasher</a>,"}} /></pre>
+
+#### `hash_slice`
+
+<pre className="rust-signature"><code dangerouslySetInnerHTML={{"__html": "fn <a href=\"https://doc.rust-lang.org/1.96.1/core/hash/trait.Hash.html#method.hash_slice\">hash_slice</a>&lt;H&gt;(data: &amp;[Self], state: <a href=\"https://doc.rust-lang.org/1.96.1/std/primitive.reference.html\">&amp;mut H</a>)where\n    H: <a href=\"https://doc.rust-lang.org/1.96.1/core/hash/trait.Hasher.html\">Hasher</a>,\n    Self: <a href=\"https://doc.rust-lang.org/1.96.1/core/marker/trait.Sized.html\">Sized</a>,"}} /></pre>
+
+### `impl<Q> Index<&Q> for Map<String, Value>where String: Borrow<Q>, Q: Ord + Eq + Hash + ?Sized,`
+
+<pre className="rust-signature"><code dangerouslySetInnerHTML={{"__html": "impl&lt;Q&gt; <a href=\"https://doc.rust-lang.org/1.96.1/core/ops/index/trait.Index.html\">Index</a>&lt;<a href=\"https://doc.rust-lang.org/1.96.1/std/primitive.reference.html\">&amp;Q</a>&gt; for <a href=\"struct-map\">Map</a>&lt;<a href=\"https://doc.rust-lang.org/1.96.1/alloc/string/struct.String.html\">String</a>, <a href=\"https://docs.rs/serde_json/1.0.149/serde_json/value/enum.Value.html\">Value</a>&gt;where\n    <a href=\"https://doc.rust-lang.org/1.96.1/alloc/string/struct.String.html\">String</a>: <a href=\"https://doc.rust-lang.org/1.96.1/core/borrow/trait.Borrow.html\">Borrow</a>&lt;Q&gt;,\n    Q: <a href=\"https://doc.rust-lang.org/1.96.1/core/cmp/trait.Ord.html\">Ord</a> + <a href=\"https://doc.rust-lang.org/1.96.1/core/cmp/trait.Eq.html\">Eq</a> + <a href=\"https://doc.rust-lang.org/1.96.1/core/hash/trait.Hash.html\">Hash</a> + ?<a href=\"https://doc.rust-lang.org/1.96.1/core/marker/trait.Sized.html\">Sized</a>,"}} /></pre>
+
+Access an element of this map. Panics if the given key is not present in the map.
+
+```rust
+match val {
+    Value::String(s) => Some(s.as_str()),
+    Value::Array(arr) => arr[0].as_str(),
+    Value::Object(map) => map["type"].as_str(),
+    _ => None,
+}
+```
+
+#### `Output`
+
+<pre className="rust-signature"><code dangerouslySetInnerHTML={{"__html": "type <a href=\"https://doc.rust-lang.org/1.96.1/core/ops/index/trait.Index.html#associatedtype.Output\">Output</a> = <a href=\"https://docs.rs/serde_json/1.0.149/serde_json/value/enum.Value.html\">Value</a>"}} /></pre>
+
+#### `index`
+
+<pre className="rust-signature"><code dangerouslySetInnerHTML={{"__html": "fn <a href=\"https://doc.rust-lang.org/1.96.1/core/ops/index/trait.Index.html#tymethod.index\">index</a>(&amp;self, index: <a href=\"https://doc.rust-lang.org/1.96.1/std/primitive.reference.html\">&amp;Q</a>) -&gt; &amp;<a href=\"https://docs.rs/serde_json/1.0.149/serde_json/value/enum.Value.html\">Value</a>"}} /></pre>
+
+### `impl<Q> IndexMut<&Q> for Map<String, Value>where String: Borrow<Q>, Q: Ord + Eq + Hash + ?Sized,`
+
+<pre className="rust-signature"><code dangerouslySetInnerHTML={{"__html": "impl&lt;Q&gt; <a href=\"https://doc.rust-lang.org/1.96.1/core/ops/index/trait.IndexMut.html\">IndexMut</a>&lt;<a href=\"https://doc.rust-lang.org/1.96.1/std/primitive.reference.html\">&amp;Q</a>&gt; for <a href=\"struct-map\">Map</a>&lt;<a href=\"https://doc.rust-lang.org/1.96.1/alloc/string/struct.String.html\">String</a>, <a href=\"https://docs.rs/serde_json/1.0.149/serde_json/value/enum.Value.html\">Value</a>&gt;where\n    <a href=\"https://doc.rust-lang.org/1.96.1/alloc/string/struct.String.html\">String</a>: <a href=\"https://doc.rust-lang.org/1.96.1/core/borrow/trait.Borrow.html\">Borrow</a>&lt;Q&gt;,\n    Q: <a href=\"https://doc.rust-lang.org/1.96.1/core/cmp/trait.Ord.html\">Ord</a> + <a href=\"https://doc.rust-lang.org/1.96.1/core/cmp/trait.Eq.html\">Eq</a> + <a href=\"https://doc.rust-lang.org/1.96.1/core/hash/trait.Hash.html\">Hash</a> + ?<a href=\"https://doc.rust-lang.org/1.96.1/core/marker/trait.Sized.html\">Sized</a>,"}} /></pre>
+
+Mutably access an element of this map. Panics if the given key is not present in the map.
+
+```rust
+map["key"] = json!("value");
+```
+
+#### `index_mut`
+
+<pre className="rust-signature"><code dangerouslySetInnerHTML={{"__html": "fn <a href=\"https://doc.rust-lang.org/1.96.1/core/ops/index/trait.IndexMut.html#tymethod.index_mut\">index_mut</a>(&amp;mut self, index: <a href=\"https://doc.rust-lang.org/1.96.1/std/primitive.reference.html\">&amp;Q</a>) -&gt; &amp;mut <a href=\"https://docs.rs/serde_json/1.0.149/serde_json/value/enum.Value.html\">Value</a>"}} /></pre>
+
+### `impl<'de> IntoDeserializer<'de, Error> for &'de Map<String, Value>`
+
+<pre className="rust-signature"><code dangerouslySetInnerHTML={{"__html": "impl&lt;'de&gt; <a href=\"https://docs.rs/serde_core/1.0.228/serde_core/de/trait.IntoDeserializer.html\">IntoDeserializer</a>&lt;'de, <a href=\"https://docs.rs/serde_json/1.0.149/serde_json/error/struct.Error.html\">Error</a>&gt; for &amp;'de <a href=\"struct-map\">Map</a>&lt;<a href=\"https://doc.rust-lang.org/1.96.1/alloc/string/struct.String.html\">String</a>, <a href=\"https://docs.rs/serde_json/1.0.149/serde_json/value/enum.Value.html\">Value</a>&gt;"}} /></pre>
+
+#### `Deserializer`
+
+<pre className="rust-signature"><code dangerouslySetInnerHTML={{"__html": "type <a href=\"https://docs.rs/serde_core/1.0.228/serde_core/de/trait.IntoDeserializer.html#associatedtype.Deserializer\">Deserializer</a> = &amp;'de <a href=\"struct-map\">Map</a>&lt;<a href=\"https://doc.rust-lang.org/1.96.1/alloc/string/struct.String.html\">String</a>, <a href=\"https://docs.rs/serde_json/1.0.149/serde_json/value/enum.Value.html\">Value</a>&gt;"}} /></pre>
+
+#### `into_deserializer`
+
+<pre className="rust-signature"><code dangerouslySetInnerHTML={{"__html": "fn <a href=\"https://docs.rs/serde_core/1.0.228/serde_core/de/trait.IntoDeserializer.html#tymethod.into_deserializer\">into_deserializer</a>(\n    self,\n) -&gt; &lt;&amp;'de <a href=\"struct-map\">Map</a>&lt;<a href=\"https://doc.rust-lang.org/1.96.1/alloc/string/struct.String.html\">String</a>, <a href=\"https://docs.rs/serde_json/1.0.149/serde_json/value/enum.Value.html\">Value</a>&gt; as <a href=\"https://docs.rs/serde_core/1.0.228/serde_core/de/trait.IntoDeserializer.html\">IntoDeserializer</a>&lt;'de, <a href=\"https://docs.rs/serde_json/1.0.149/serde_json/error/struct.Error.html\">Error</a>&gt;&gt;::<a href=\"https://docs.rs/serde_core/1.0.228/serde_core/de/trait.IntoDeserializer.html#associatedtype.Deserializer\">Deserializer</a>"}} /></pre>
+
+### `impl<'de> IntoDeserializer<'de, Error> for Map<String, Value>`
+
+<pre className="rust-signature"><code dangerouslySetInnerHTML={{"__html": "impl&lt;'de&gt; <a href=\"https://docs.rs/serde_core/1.0.228/serde_core/de/trait.IntoDeserializer.html\">IntoDeserializer</a>&lt;'de, <a href=\"https://docs.rs/serde_json/1.0.149/serde_json/error/struct.Error.html\">Error</a>&gt; for <a href=\"struct-map\">Map</a>&lt;<a href=\"https://doc.rust-lang.org/1.96.1/alloc/string/struct.String.html\">String</a>, <a href=\"https://docs.rs/serde_json/1.0.149/serde_json/value/enum.Value.html\">Value</a>&gt;"}} /></pre>
+
+#### `Deserializer`
+
+<pre className="rust-signature"><code dangerouslySetInnerHTML={{"__html": "type <a href=\"https://docs.rs/serde_core/1.0.228/serde_core/de/trait.IntoDeserializer.html#associatedtype.Deserializer\">Deserializer</a> = <a href=\"struct-map\">Map</a>&lt;<a href=\"https://doc.rust-lang.org/1.96.1/alloc/string/struct.String.html\">String</a>, <a href=\"https://docs.rs/serde_json/1.0.149/serde_json/value/enum.Value.html\">Value</a>&gt;"}} /></pre>
+
+#### `into_deserializer`
+
+<pre className="rust-signature"><code dangerouslySetInnerHTML={{"__html": "fn <a href=\"https://docs.rs/serde_core/1.0.228/serde_core/de/trait.IntoDeserializer.html#tymethod.into_deserializer\">into_deserializer</a>(\n    self,\n) -&gt; &lt;<a href=\"struct-map\">Map</a>&lt;<a href=\"https://doc.rust-lang.org/1.96.1/alloc/string/struct.String.html\">String</a>, <a href=\"https://docs.rs/serde_json/1.0.149/serde_json/value/enum.Value.html\">Value</a>&gt; as <a href=\"https://docs.rs/serde_core/1.0.228/serde_core/de/trait.IntoDeserializer.html\">IntoDeserializer</a>&lt;'de, <a href=\"https://docs.rs/serde_json/1.0.149/serde_json/error/struct.Error.html\">Error</a>&gt;&gt;::<a href=\"https://docs.rs/serde_core/1.0.228/serde_core/de/trait.IntoDeserializer.html#associatedtype.Deserializer\">Deserializer</a>"}} /></pre>
+
+### `impl<'a> IntoIterator for &'a Map<String, Value>`
+
+<pre className="rust-signature"><code dangerouslySetInnerHTML={{"__html": "impl&lt;'a&gt; <a href=\"https://doc.rust-lang.org/1.96.1/core/iter/traits/collect/trait.IntoIterator.html\">IntoIterator</a> for &amp;'a <a href=\"struct-map\">Map</a>&lt;<a href=\"https://doc.rust-lang.org/1.96.1/alloc/string/struct.String.html\">String</a>, <a href=\"https://docs.rs/serde_json/1.0.149/serde_json/value/enum.Value.html\">Value</a>&gt;"}} /></pre>
+
+#### `Item`
+
+<pre className="rust-signature"><code dangerouslySetInnerHTML={{"__html": "type <a href=\"https://doc.rust-lang.org/1.96.1/core/iter/traits/collect/trait.IntoIterator.html#associatedtype.Item\">Item</a> = (&amp;'a <a href=\"https://doc.rust-lang.org/1.96.1/alloc/string/struct.String.html\">String</a>, &amp;'a <a href=\"https://docs.rs/serde_json/1.0.149/serde_json/value/enum.Value.html\">Value</a>)"}} /></pre>
+
+#### `IntoIter`
+
+<pre className="rust-signature"><code dangerouslySetInnerHTML={{"__html": "type <a href=\"https://doc.rust-lang.org/1.96.1/core/iter/traits/collect/trait.IntoIterator.html#associatedtype.IntoIter\">IntoIter</a> = <a href=\"https://docs.rs/serde_json/1.0.149/serde_json/map/struct.Iter.html\">Iter</a>&lt;'a&gt;"}} /></pre>
+
+#### `into_iter`
+
+<pre className="rust-signature"><code dangerouslySetInnerHTML={{"__html": "fn <a href=\"https://doc.rust-lang.org/1.96.1/core/iter/traits/collect/trait.IntoIterator.html#tymethod.into_iter\">into_iter</a>(self) -&gt; &lt;&amp;'a <a href=\"struct-map\">Map</a>&lt;<a href=\"https://doc.rust-lang.org/1.96.1/alloc/string/struct.String.html\">String</a>, <a href=\"https://docs.rs/serde_json/1.0.149/serde_json/value/enum.Value.html\">Value</a>&gt; as <a href=\"https://doc.rust-lang.org/1.96.1/core/iter/traits/collect/trait.IntoIterator.html\">IntoIterator</a>&gt;::<a href=\"https://doc.rust-lang.org/1.96.1/core/iter/traits/collect/trait.IntoIterator.html#associatedtype.IntoIter\">IntoIter</a>"}} /></pre>
+
+### `impl<'a> IntoIterator for &'a mut Map<String, Value>`
+
+<pre className="rust-signature"><code dangerouslySetInnerHTML={{"__html": "impl&lt;'a&gt; <a href=\"https://doc.rust-lang.org/1.96.1/core/iter/traits/collect/trait.IntoIterator.html\">IntoIterator</a> for &amp;'a mut <a href=\"struct-map\">Map</a>&lt;<a href=\"https://doc.rust-lang.org/1.96.1/alloc/string/struct.String.html\">String</a>, <a href=\"https://docs.rs/serde_json/1.0.149/serde_json/value/enum.Value.html\">Value</a>&gt;"}} /></pre>
+
+#### `Item`
+
+<pre className="rust-signature"><code dangerouslySetInnerHTML={{"__html": "type <a href=\"https://doc.rust-lang.org/1.96.1/core/iter/traits/collect/trait.IntoIterator.html#associatedtype.Item\">Item</a> = (&amp;'a <a href=\"https://doc.rust-lang.org/1.96.1/alloc/string/struct.String.html\">String</a>, &amp;'a mut <a href=\"https://docs.rs/serde_json/1.0.149/serde_json/value/enum.Value.html\">Value</a>)"}} /></pre>
+
+#### `IntoIter`
+
+<pre className="rust-signature"><code dangerouslySetInnerHTML={{"__html": "type <a href=\"https://doc.rust-lang.org/1.96.1/core/iter/traits/collect/trait.IntoIterator.html#associatedtype.IntoIter\">IntoIter</a> = <a href=\"https://docs.rs/serde_json/1.0.149/serde_json/map/struct.IterMut.html\">IterMut</a>&lt;'a&gt;"}} /></pre>
+
+#### `into_iter`
+
+<pre className="rust-signature"><code dangerouslySetInnerHTML={{"__html": "fn <a href=\"https://doc.rust-lang.org/1.96.1/core/iter/traits/collect/trait.IntoIterator.html#tymethod.into_iter\">into_iter</a>(self) -&gt; &lt;&amp;'a mut <a href=\"struct-map\">Map</a>&lt;<a href=\"https://doc.rust-lang.org/1.96.1/alloc/string/struct.String.html\">String</a>, <a href=\"https://docs.rs/serde_json/1.0.149/serde_json/value/enum.Value.html\">Value</a>&gt; as <a href=\"https://doc.rust-lang.org/1.96.1/core/iter/traits/collect/trait.IntoIterator.html\">IntoIterator</a>&gt;::<a href=\"https://doc.rust-lang.org/1.96.1/core/iter/traits/collect/trait.IntoIterator.html#associatedtype.IntoIter\">IntoIter</a>"}} /></pre>
+
+### `impl IntoIterator for Map<String, Value>`
+
+<pre className="rust-signature"><code dangerouslySetInnerHTML={{"__html": "impl <a href=\"https://doc.rust-lang.org/1.96.1/core/iter/traits/collect/trait.IntoIterator.html\">IntoIterator</a> for <a href=\"struct-map\">Map</a>&lt;<a href=\"https://doc.rust-lang.org/1.96.1/alloc/string/struct.String.html\">String</a>, <a href=\"https://docs.rs/serde_json/1.0.149/serde_json/value/enum.Value.html\">Value</a>&gt;"}} /></pre>
+
+#### `Item`
+
+<pre className="rust-signature"><code dangerouslySetInnerHTML={{"__html": "type <a href=\"https://doc.rust-lang.org/1.96.1/core/iter/traits/collect/trait.IntoIterator.html#associatedtype.Item\">Item</a> = (<a href=\"https://doc.rust-lang.org/1.96.1/alloc/string/struct.String.html\">String</a>, <a href=\"https://docs.rs/serde_json/1.0.149/serde_json/value/enum.Value.html\">Value</a>)"}} /></pre>
+
+#### `IntoIter`
+
+<pre className="rust-signature"><code dangerouslySetInnerHTML={{"__html": "type <a href=\"https://doc.rust-lang.org/1.96.1/core/iter/traits/collect/trait.IntoIterator.html#associatedtype.IntoIter\">IntoIter</a> = <a href=\"https://docs.rs/serde_json/1.0.149/serde_json/map/struct.IntoIter.html\">IntoIter</a>"}} /></pre>
+
+#### `into_iter`
+
+<pre className="rust-signature"><code dangerouslySetInnerHTML={{"__html": "fn <a href=\"https://doc.rust-lang.org/1.96.1/core/iter/traits/collect/trait.IntoIterator.html#tymethod.into_iter\">into_iter</a>(self) -&gt; &lt;<a href=\"struct-map\">Map</a>&lt;<a href=\"https://doc.rust-lang.org/1.96.1/alloc/string/struct.String.html\">String</a>, <a href=\"https://docs.rs/serde_json/1.0.149/serde_json/value/enum.Value.html\">Value</a>&gt; as <a href=\"https://doc.rust-lang.org/1.96.1/core/iter/traits/collect/trait.IntoIterator.html\">IntoIterator</a>&gt;::<a href=\"https://doc.rust-lang.org/1.96.1/core/iter/traits/collect/trait.IntoIterator.html#associatedtype.IntoIter\">IntoIter</a>"}} /></pre>
+
+### `impl JsonSchema for Map<String, Value>`
+
+<pre className="rust-signature"><code dangerouslySetInnerHTML={{"__html": "impl JsonSchema for <a href=\"struct-map\">Map</a>&lt;<a href=\"https://doc.rust-lang.org/1.96.1/alloc/string/struct.String.html\">String</a>, <a href=\"https://docs.rs/serde_json/1.0.149/serde_json/value/enum.Value.html\">Value</a>&gt;"}} /></pre>
+
+#### `is_referenceable`
+
+<pre className="rust-signature"><code dangerouslySetInnerHTML={{"__html": "fn is_referenceable() -&gt; <a href=\"https://doc.rust-lang.org/1.96.1/std/primitive.bool.html\">bool</a>"}} /></pre>
+
+#### `schema_name`
+
+<pre className="rust-signature"><code dangerouslySetInnerHTML={{"__html": "fn schema_name() -&gt; <a href=\"https://doc.rust-lang.org/1.96.1/alloc/string/struct.String.html\">String</a>"}} /></pre>
+
+#### `schema_id`
+
+<pre className="rust-signature"><code dangerouslySetInnerHTML={{"__html": "fn schema_id() -&gt; <a href=\"https://doc.rust-lang.org/1.96.1/alloc/borrow/enum.Cow.html\">Cow</a>&lt;'static, <a href=\"https://doc.rust-lang.org/1.96.1/std/primitive.str.html\">str</a>&gt;"}} /></pre>
+
+#### `json_schema`
+
+<pre className="rust-signature"><code dangerouslySetInnerHTML={{"__html": "fn json_schema(generator: &amp;mut SchemaGenerator) -&gt; Schema"}} /></pre>
+
+### `impl PartialEq for Map<String, Value>`
+
+<pre className="rust-signature"><code dangerouslySetInnerHTML={{"__html": "impl <a href=\"https://doc.rust-lang.org/1.96.1/core/cmp/trait.PartialEq.html\">PartialEq</a> for <a href=\"struct-map\">Map</a>&lt;<a href=\"https://doc.rust-lang.org/1.96.1/alloc/string/struct.String.html\">String</a>, <a href=\"https://docs.rs/serde_json/1.0.149/serde_json/value/enum.Value.html\">Value</a>&gt;"}} /></pre>
+
+#### `eq`
+
+<pre className="rust-signature"><code dangerouslySetInnerHTML={{"__html": "fn <a href=\"https://doc.rust-lang.org/1.96.1/core/cmp/trait.PartialEq.html#tymethod.eq\">eq</a>(&amp;self, other: &amp;<a href=\"struct-map\">Map</a>&lt;<a href=\"https://doc.rust-lang.org/1.96.1/alloc/string/struct.String.html\">String</a>, <a href=\"https://docs.rs/serde_json/1.0.149/serde_json/value/enum.Value.html\">Value</a>&gt;) -&gt; <a href=\"https://doc.rust-lang.org/1.96.1/std/primitive.bool.html\">bool</a>"}} /></pre>
+
+#### `ne`
+
+<pre className="rust-signature"><code dangerouslySetInnerHTML={{"__html": "fn <a href=\"https://doc.rust-lang.org/1.96.1/core/cmp/trait.PartialEq.html#method.ne\">ne</a>(&amp;self, other: <a href=\"https://doc.rust-lang.org/1.96.1/std/primitive.reference.html\">&amp;Rhs</a>) -&gt; <a href=\"https://doc.rust-lang.org/1.96.1/std/primitive.bool.html\">bool</a>"}} /></pre>
+
+### `impl Serialize for Map<String, Value>`
+
+<pre className="rust-signature"><code dangerouslySetInnerHTML={{"__html": "impl <a href=\"https://docs.rs/serde_core/1.0.228/serde_core/ser/trait.Serialize.html\">Serialize</a> for <a href=\"struct-map\">Map</a>&lt;<a href=\"https://doc.rust-lang.org/1.96.1/alloc/string/struct.String.html\">String</a>, <a href=\"https://docs.rs/serde_json/1.0.149/serde_json/value/enum.Value.html\">Value</a>&gt;"}} /></pre>
+
+#### `serialize`
+
+<pre className="rust-signature"><code dangerouslySetInnerHTML={{"__html": "fn <a href=\"https://docs.rs/serde_core/1.0.228/serde_core/ser/trait.Serialize.html#tymethod.serialize\">serialize</a>&lt;S&gt;(\n    &amp;self,\n    serializer: S,\n) -&gt; <a href=\"https://doc.rust-lang.org/1.96.1/core/result/enum.Result.html\">Result</a>&lt;&lt;S as <a href=\"https://docs.rs/serde_core/1.0.228/serde_core/ser/trait.Serializer.html\">Serializer</a>&gt;::<a href=\"https://docs.rs/serde_core/1.0.228/serde_core/ser/trait.Serializer.html#associatedtype.Ok\">Ok</a>, &lt;S as <a href=\"https://docs.rs/serde_core/1.0.228/serde_core/ser/trait.Serializer.html\">Serializer</a>&gt;::<a href=\"https://docs.rs/serde_core/1.0.228/serde_core/ser/trait.Serializer.html#associatedtype.Error\">Error</a>&gt;where\n    S: <a href=\"https://docs.rs/serde_core/1.0.228/serde_core/ser/trait.Serializer.html\">Serializer</a>,"}} /></pre>
+
+### `impl Eq for Map<String, Value>`
+
+<pre className="rust-signature"><code dangerouslySetInnerHTML={{"__html": "impl <a href=\"https://doc.rust-lang.org/1.96.1/core/cmp/trait.Eq.html\">Eq</a> for <a href=\"struct-map\">Map</a>&lt;<a href=\"https://doc.rust-lang.org/1.96.1/alloc/string/struct.String.html\">String</a>, <a href=\"https://docs.rs/serde_json/1.0.149/serde_json/value/enum.Value.html\">Value</a>&gt;"}} /></pre>

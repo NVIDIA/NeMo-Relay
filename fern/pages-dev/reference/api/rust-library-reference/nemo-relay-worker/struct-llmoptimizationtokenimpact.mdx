@@ -2,7 +2,7 @@
 title: "Struct LlmOptimization Token Impact"
 sidebar-title: "LlmOptimizationTokenImpact"
 description: "Shared token evidence that Relay can aggregate without understanding a plugin payload."
-position: 22
+position: 23
 ---
 {/* SPDX-FileCopyrightText: Copyright (c) 2026, NVIDIA CORPORATION & AFFILIATES. All rights reserved.
 SPDX-License-Identifier: Apache-2.0 */}
@@ -95,27 +95,27 @@ Tokenizer, counter, or estimation method.
 
 ### `impl WireValue<Box<LlmOptimizationTokenImpact>> for LlmOptimizationTokenImpact`
 
-<pre className="rust-signature"><code dangerouslySetInnerHTML={{"__html": "impl WireValue&lt;<a href=\"https://doc.rust-lang.org/1.96.1/alloc/boxed/struct.Box.html\">Box</a>&lt;LlmOptimizationTokenImpact&gt;&gt; for <a href=\"struct-llmoptimizationtokenimpact\">LlmOptimizationTokenImpact</a>"}} /></pre>
+<pre className="rust-signature"><code dangerouslySetInnerHTML={{"__html": "impl <a href=\"../nemo-relay-worker-proto/conversions/trait-wirevalue\">WireValue</a>&lt;<a href=\"https://doc.rust-lang.org/1.96.1/alloc/boxed/struct.Box.html\">Box</a>&lt;<a href=\"../nemo-relay-worker-proto/nvidia_worker_v1/struct-llmoptimizationtokenimpact\">LlmOptimizationTokenImpact</a>&gt;&gt; for <a href=\"struct-llmoptimizationtokenimpact\">LlmOptimizationTokenImpact</a>"}} /></pre>
 
 #### `to_wire`
 
-<pre className="rust-signature"><code dangerouslySetInnerHTML={{"__html": "fn to_wire(self) -&gt; <a href=\"https://doc.rust-lang.org/1.96.1/core/result/enum.Result.html\">Result</a>&lt;<a href=\"https://doc.rust-lang.org/1.96.1/alloc/boxed/struct.Box.html\">Box</a>&lt;LlmOptimizationTokenImpact&gt;, ConversionError&gt;"}} /></pre>
+<pre className="rust-signature"><code dangerouslySetInnerHTML={{"__html": "fn <a href=\"../nemo-relay-worker-proto/conversions/trait-wirevalue\">to_wire</a>(self) -&gt; <a href=\"https://doc.rust-lang.org/1.96.1/core/result/enum.Result.html\">Result</a>&lt;<a href=\"https://doc.rust-lang.org/1.96.1/alloc/boxed/struct.Box.html\">Box</a>&lt;<a href=\"../nemo-relay-worker-proto/nvidia_worker_v1/struct-llmoptimizationtokenimpact\">LlmOptimizationTokenImpact</a>&gt;, <a href=\"../nemo-relay-worker-proto/conversions/struct-conversionerror\">ConversionError</a>&gt;"}} /></pre>
 
 #### `from_wire`
 
-<pre className="rust-signature"><code dangerouslySetInnerHTML={{"__html": "fn from_wire(\n    value: <a href=\"https://doc.rust-lang.org/1.96.1/alloc/boxed/struct.Box.html\">Box</a>&lt;LlmOptimizationTokenImpact&gt;,\n) -&gt; <a href=\"https://doc.rust-lang.org/1.96.1/core/result/enum.Result.html\">Result</a>&lt;<a href=\"struct-llmoptimizationtokenimpact\">LlmOptimizationTokenImpact</a>, ConversionError&gt;"}} /></pre>
+<pre className="rust-signature"><code dangerouslySetInnerHTML={{"__html": "fn <a href=\"../nemo-relay-worker-proto/conversions/trait-wirevalue\">from_wire</a>(\n    value: <a href=\"https://doc.rust-lang.org/1.96.1/alloc/boxed/struct.Box.html\">Box</a>&lt;<a href=\"../nemo-relay-worker-proto/nvidia_worker_v1/struct-llmoptimizationtokenimpact\">LlmOptimizationTokenImpact</a>&gt;,\n) -&gt; <a href=\"https://doc.rust-lang.org/1.96.1/core/result/enum.Result.html\">Result</a>&lt;<a href=\"struct-llmoptimizationtokenimpact\">LlmOptimizationTokenImpact</a>, <a href=\"../nemo-relay-worker-proto/conversions/struct-conversionerror\">ConversionError</a>&gt;"}} /></pre>
 
 ### `impl WireValue<LlmOptimizationTokenImpact> for LlmOptimizationTokenImpact`
 
-<pre className="rust-signature"><code dangerouslySetInnerHTML={{"__html": "impl WireValue&lt;LlmOptimizationTokenImpact&gt; for <a href=\"struct-llmoptimizationtokenimpact\">LlmOptimizationTokenImpact</a>"}} /></pre>
+<pre className="rust-signature"><code dangerouslySetInnerHTML={{"__html": "impl <a href=\"../nemo-relay-worker-proto/conversions/trait-wirevalue\">WireValue</a>&lt;<a href=\"../nemo-relay-worker-proto/nvidia_worker_v1/struct-llmoptimizationtokenimpact\">LlmOptimizationTokenImpact</a>&gt; for <a href=\"struct-llmoptimizationtokenimpact\">LlmOptimizationTokenImpact</a>"}} /></pre>
 
 #### `to_wire`
 
-<pre className="rust-signature"><code dangerouslySetInnerHTML={{"__html": "fn to_wire(self) -&gt; <a href=\"https://doc.rust-lang.org/1.96.1/core/result/enum.Result.html\">Result</a>&lt;LlmOptimizationTokenImpact, ConversionError&gt;"}} /></pre>
+<pre className="rust-signature"><code dangerouslySetInnerHTML={{"__html": "fn <a href=\"../nemo-relay-worker-proto/conversions/trait-wirevalue\">to_wire</a>(self) -&gt; <a href=\"https://doc.rust-lang.org/1.96.1/core/result/enum.Result.html\">Result</a>&lt;<a href=\"../nemo-relay-worker-proto/nvidia_worker_v1/struct-llmoptimizationtokenimpact\">LlmOptimizationTokenImpact</a>, <a href=\"../nemo-relay-worker-proto/conversions/struct-conversionerror\">ConversionError</a>&gt;"}} /></pre>
 
 #### `from_wire`
 
-<pre className="rust-signature"><code dangerouslySetInnerHTML={{"__html": "fn from_wire(\n    value: LlmOptimizationTokenImpact,\n) -&gt; <a href=\"https://doc.rust-lang.org/1.96.1/core/result/enum.Result.html\">Result</a>&lt;<a href=\"struct-llmoptimizationtokenimpact\">LlmOptimizationTokenImpact</a>, ConversionError&gt;"}} /></pre>
+<pre className="rust-signature"><code dangerouslySetInnerHTML={{"__html": "fn <a href=\"../nemo-relay-worker-proto/conversions/trait-wirevalue\">from_wire</a>(\n    value: <a href=\"../nemo-relay-worker-proto/nvidia_worker_v1/struct-llmoptimizationtokenimpact\">LlmOptimizationTokenImpact</a>,\n) -&gt; <a href=\"https://doc.rust-lang.org/1.96.1/core/result/enum.Result.html\">Result</a>&lt;<a href=\"struct-llmoptimizationtokenimpact\">LlmOptimizationTokenImpact</a>, <a href=\"../nemo-relay-worker-proto/conversions/struct-conversionerror\">ConversionError</a>&gt;"}} /></pre>
 
 ### `impl Eq for LlmOptimizationTokenImpact`
 

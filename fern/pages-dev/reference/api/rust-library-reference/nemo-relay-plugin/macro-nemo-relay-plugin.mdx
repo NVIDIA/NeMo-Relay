@@ -1,8 +1,8 @@
 ---
 title: "Macro nemo_relay_plugin"
 sidebar-title: "nemo_relay_plugin"
-description: "Exports a concrete plugin constructor as a native plugin entry symbol body."
-position: 3
+description: "Export a checked native plugin with its SDK-required contract version."
+position: 5
 ---
 {/* SPDX-FileCopyrightText: Copyright (c) 2026, NVIDIA CORPORATION & AFFILIATES. All rights reserved.
 SPDX-License-Identifier: Apache-2.0 */}
@@ -11,8 +11,8 @@ Generated from `cargo doc --no-deps -p nemo-relay-builtins -p nemo-relay-diagnos
 
 ```rust
 macro_rules! nemo_relay_plugin {
-    ($symbol:ident, $constructor:expr) => { ... };
+    (kind = $kind:literal, $constructor:expr) => { ... };
 }
 ```
 
-Exports a concrete plugin constructor as a native plugin entry symbol body.
+Export a checked native plugin with its SDK-required contract version.

@@ -1,8 +1,8 @@
 ---
 title: "Struct Thread Scope Stack Guard"
 sidebar-title: "ThreadScopeStackGuard"
-description: "RAII guard that restores the previous thread-local scope stack on drop."
-position: 82
+description: "API documentation for the Rust `ThreadScopeStackGuard` struct in crate `nemo_relay_plugin`."
+position: 57
 ---
 {/* SPDX-FileCopyrightText: Copyright (c) 2026, NVIDIA CORPORATION & AFFILIATES. All rights reserved.
 SPDX-License-Identifier: Apache-2.0 */}
@@ -13,8 +13,6 @@ Generated from `cargo doc --no-deps -p nemo-relay-builtins -p nemo-relay-diagnos
 pub struct ThreadScopeStackGuard<'a> { /* private fields */ }
 ```
 
-RAII guard that restores the previous thread-local scope stack on drop.
-
 ## Implementations
 
 ### `impl ThreadScopeStackGuard<'_>`
@@ -23,9 +21,9 @@ RAII guard that restores the previous thread-local scope stack on drop.
 
 #### `restore`
 
-<pre className="rust-signature"><code dangerouslySetInnerHTML={{"__html": "pub fn restore(self) -&gt; <a href=\"type-result\">Result</a>&lt;<a href=\"https://doc.rust-lang.org/1.96.1/std/primitive.unit.html\">()</a>&gt;"}} /></pre>
+<pre className="rust-signature"><code dangerouslySetInnerHTML={{"__html": "pub fn restore(self) -&gt; Result&lt;<a href=\"https://doc.rust-lang.org/1.96.1/std/primitive.unit.html\">()</a>&gt;"}} /></pre>
 
-Restores the previous thread-local scope stack immediately.
+Restore the previous scope stack explicitly, leaving guard drop with no remaining work.
 
 ## Trait Implementations
 
@@ -36,3 +34,5 @@ Restores the previous thread-local scope stack immediately.
 #### `drop`
 
 <pre className="rust-signature"><code dangerouslySetInnerHTML={{"__html": "fn <a href=\"https://doc.rust-lang.org/1.96.1/core/ops/drop/trait.Drop.html#tymethod.drop\">drop</a>(&amp;mut self)"}} /></pre>
+
+Restore the previous thread scope stack when the guard leaves scope.
