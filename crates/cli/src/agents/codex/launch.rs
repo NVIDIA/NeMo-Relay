@@ -377,10 +377,12 @@ pub(crate) fn hook_groups_toml(value: &Value) -> String {
             .map(|matcher| format!("matcher={},", toml_string(matcher)))
             .unwrap_or_default();
         let command = group["hooks"][0]["command"].as_str().unwrap_or_default();
+        let timeout = group["hooks"][0]["timeout"]
+            .as_u64()
+            .unwrap_or(crate::hooks::HOOK_FORWARD_TIMEOUT.as_secs());
         groups.push(format!(
-            "{{{matcher}hooks=[{{type=\"command\",command={},timeout={}}}]}}",
+            "{{{matcher}hooks=[{{type=\"command\",command={},timeout={timeout}}}]}}",
             toml_string(command),
-            crate::hooks::HOOK_FORWARD_TIMEOUT.as_secs()
         ));
     }
     format!("[{}]", groups.join(","))

@@ -2973,6 +2973,35 @@ fn transparent_codex_launch_injects_voice_url_without_overriding_cli_or_profiles
     }
 }
 
+/// Codex warns "clamping ... hook timeout to 3s" when a `SessionEnd` or `Interrupt` hook asks for
+/// more than 3 seconds, so every Relay hook source writes 3 for those two and keeps 30 elsewhere.
+/// Claude Code has no such cap, so its `SessionEnd` keeps 30.
+#[test]
+fn codex_teardown_hooks_are_generated_within_the_codex_timeout_cap() {
+    let timeout =
+        |hooks: &serde_json::Value, event: &str| hooks[event][0]["hooks"][0]["timeout"].as_u64();
+    let codex = generated_hooks(CodingAgent::Codex, "relay hook-forward")["hooks"].clone();
+    assert_eq!(timeout(&codex, "SessionEnd"), Some(3));
+    assert_eq!(timeout(&codex, "Interrupt"), Some(3));
+    assert_eq!(timeout(&codex, "Stop"), Some(30));
+    let claude = generated_hooks(CodingAgent::ClaudeCode, "relay hook-forward")["hooks"].clone();
+    assert_eq!(timeout(&claude, "SessionEnd"), Some(30));
+
+    assert!(
+        crate::agents::codex::launch::hook_groups_toml(&codex["Interrupt"]).contains("timeout=3}")
+    );
+    assert!(crate::agents::codex::launch::hook_groups_toml(&codex["Stop"]).contains("timeout=30}"));
+
+    let checked_in: serde_json::Value = serde_json::from_str(include_str!(
+        "../../../../../integrations/coding-agents/codex/hooks/hooks.json"
+    ))
+    .unwrap();
+    for event in ["SessionEnd", "Interrupt"] {
+        assert_eq!(timeout(&checked_in["hooks"], event), Some(3), "{event}");
+    }
+    assert_eq!(timeout(&checked_in["hooks"], "Stop"), Some(30));
+}
+
 /// Codex caps `SessionEnd` and `Interrupt` hook timeouts at 3 seconds before hashing, so a
 /// hash built from the raw timeout leaves those hooks `modified` and they never run. The
 /// expected values are the `currentHash` Codex 0.154 `hooks/list` reports for this exact hook.

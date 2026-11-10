@@ -139,7 +139,12 @@ fn assert_codex_end_hooks(bundle: &RenderedBundle) {
         .unwrap();
     let codex_hooks: serde_json::Value = serde_json::from_slice(&codex_hooks.bytes).unwrap();
     for event in ["SessionEnd", "Interrupt"] {
-        assert!(codex_hooks["hooks"].get(event).is_some(), "missing {event}");
+        // Codex caps these two at 3 seconds and warns about anything longer.
+        assert_eq!(
+            codex_hooks["hooks"][event][0]["hooks"][0]["timeout"].as_u64(),
+            Some(3),
+            "missing or uncapped {event}"
+        );
     }
 }
 
@@ -319,7 +324,7 @@ fn v1_artifact_bytes_do_not_depend_on_binary_or_platform_versioning() {
 fn canonical_v1_bundle_matches_the_golden_digest() {
     // This digest pins the v1 manifest and every artifact byte for a canonical deployment,
     // including the supported hook set. Update it only for intentional bundle changes.
-    const GOLDEN_SHA256: &str = "059ca1c63334bdaaf497de8e89cfcee410cccaf382cb340257f3da35722b89bc";
+    const GOLDEN_SHA256: &str = "efad197e507325c5cb825a5ce62828cb910f716ea3399de02f0956095ca9787c";
     let rendered = render_bundle(&spec([
         ManagedAgent::Codex,
         ManagedAgent::ClaudeCode,

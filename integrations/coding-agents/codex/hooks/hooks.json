@@ -108,7 +108,7 @@
           {
             "type": "command",
             "command": "nemo-relay hook-forward codex --gateway-url http://127.0.0.1:47632 --forward-only --fail-open",
-            "timeout": 30
+            "timeout": 3
           }
         ]
       }
@@ -119,7 +119,7 @@
           {
             "type": "command",
             "command": "nemo-relay hook-forward codex --gateway-url http://127.0.0.1:47632 --forward-only --fail-open",
-            "timeout": 30
+            "timeout": 3
           }
         ]
       }

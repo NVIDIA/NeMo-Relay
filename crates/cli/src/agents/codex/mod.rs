@@ -35,6 +35,8 @@ pub(super) const DESCRIPTOR: AgentDescriptor = AgentDescriptor {
         "SessionEnd",
         "Interrupt",
     ],
+    // Codex 0.150.0 caps teardown hooks at 3 seconds and warns about a longer timeout.
+    capped_hook_events: (&["SessionEnd", "Interrupt"], 3),
 };
 
 pub(super) fn parse_version(raw: &str) -> Option<Version> {

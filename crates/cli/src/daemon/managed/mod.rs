@@ -649,6 +649,13 @@ fn plugin_manifest(agent: &str) -> Value {
     })
 }
 
+fn hook_timeout_secs(agent: ManagedAgent, event: &str) -> u64 {
+    match agent {
+        ManagedAgent::Codex => crate::agents::CodingAgent::Codex.hook_timeout_secs(event),
+        _ => crate::hooks::HOOK_FORWARD_TIMEOUT.as_secs(),
+    }
+}
+
 fn hook_bytes(
     agent: ManagedAgent,
     events: &[&str],
@@ -673,7 +680,7 @@ fn hook_bytes(
             };
             group.insert(
                 "hooks".into(),
-                json!([{ "type": "command", "command": command, "timeout": crate::hooks::HOOK_FORWARD_TIMEOUT.as_secs() }]),
+                json!([{ "type": "command", "command": command, "timeout": hook_timeout_secs(agent, event) }]),
             );
             (
                 (*event).to_string(),
