@@ -722,6 +722,10 @@ async fn register_worker_command(
     if expired(state, role, &worker_id) {
         return control_message(StatusCode::UNAUTHORIZED, "session recovery grace expired");
     }
+    // A replayed registration must not take over a worker that is tearing down either.
+    if lock(&state.sockets.exiting_workers).contains(&worker_id) {
+        return control_message(StatusCode::CONFLICT, "worker announced its exit");
+    }
     let response = register_worker(State(state.clone()), Json(request)).await;
     if !response.status().is_success() {
         diag::record(

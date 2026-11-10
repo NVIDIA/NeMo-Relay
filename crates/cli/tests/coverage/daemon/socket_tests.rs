@@ -2099,7 +2099,10 @@ async fn worker_recovery_is_rejected_after_an_announced_exit() {
             generation_grant: fixture.generation_grant.clone(),
         }))
         .await;
-    assert!(recovered.is_err());
+    assert!(
+        matches!(&recovered, Err(CliError::Launch(message)) if message == "worker announced its exit"),
+        "{recovered:?}"
+    );
     // The announcing connection still owns the session until it closes.
     assert!(lock(&fixture.state.worker_sessions).contains_key("worker"));
     drop(late);
