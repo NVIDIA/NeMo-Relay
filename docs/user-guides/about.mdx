@@ -1,7 +1,7 @@
 ---
 title: "User Guides"
 sidebar-title: "About"
-description: "Apply Relay to enterprise observability, coding-agent governance, and model-routing decisions."
+description: "Apply Relay to enterprise observability and model-routing decisions."
 position: 1
 hide-nav-links: true
 ---
@@ -18,12 +18,9 @@ New to Relay? Start with the [Quick Starts](/getting-started/quick-start) for
 your integration or the [Agent Runtime Primer](/about-nemo-relay/agent-runtime-primer)
 for the scope, event, and plugin model.
 
-<CardGroup cols={3}>
+<CardGroup cols={2}>
 <Card title="Connecting to Observability Platforms" icon="fa-solid fa-chart-line" href="/user-guides/connecting-to-observability-platforms">
 Bring agent, model, and tool activity into your team's tracing platform.
-</Card>
-<Card title="Deploying Across Organization Coding Agents" icon="fa-solid fa-shield" href="/user-guides/govern-coding-agents">
-Apply a shared policy while keeping developers' supported coding harnesses.
 </Card>
 <Card title="Routing Models with NeMo Switchyard" icon="fa-solid fa-code-branch" href="/user-guides/evaluate-model-routing-with-switchyard">
 Compare fixed-model and routed tasks before changing a model policy.
@@ -33,12 +30,10 @@ Compare fixed-model and routed tasks before changing a model policy.
 | Goal | What you need | Brev example |
 | --- | --- | --- |
 | Connect observability | A Relay capture path and a tracing destination | Instrumented Python application and [Arize Phoenix](https://arize.com/phoenix/); no separate agent harness |
-| Govern coding agents | Administrator access and a managed deployment | Two Linux users running either [Anthropic Claude Code](https://claude.com/product/claude-code) or [OpenAI Codex](https://github.com/openai/codex) |
-| Evaluate routing | Supported model traffic and two accessible model targets | Claude Code or Codex and NVIDIA inference, with fixed and routed policies |
+| Evaluate routing | Supported model traffic and two accessible model targets | [Anthropic Claude Code](https://claude.com/product/claude-code) or [OpenAI Codex](https://github.com/openai/codex) and NVIDIA inference, with fixed and routed policies |
 
 Start with **Connecting to Observability Platforms** if you want the smallest
-deployment to inspect. The other guides introduce managed operating-system
-accounts or native model-routing plugins.
+deployment to inspect. The routing guide adds a native model-routing plugin.
 
 ## Try the same workflow on Brev
 
@@ -46,12 +41,11 @@ Use the examples to try a representative enterprise workflow with Relay.
 The selected harnesses and integrations are example choices. You can use the
 same files on a comparable Linux host; no premade Brev Launchable is required.
 
-<Warning title="Use a separate host for each example">
-The coding-agent example installs system-wide configuration that can affect
-other Relay processes on the host. Use a fresh VM for it, or remove that
-deployment before trying another example. A separate virtual environment does
-not isolate system plugin policy.
-</Warning>
+<Note title="Use a clean example host">
+Existing system-wide Relay configuration can affect either example. Use a fresh
+VM without managed Relay policy; a virtual environment does not isolate system
+plugin configuration.
+</Note>
 
 Each guide explains the enterprise deployment process first. A self-contained
 **Run the Brev example** section at the end provides provisioning, setup, and
