@@ -13,11 +13,7 @@ use crate::{
     ToolExecutionInterceptOutcome, ToolExecutionResult,
     abi::{
         self,
-        abi_stable::{
-            sabi_trait::prelude::TD_Opaque,
-            std_types::{ROption, RVec},
-        },
-        async_ffi::{FfiFuture, FutureExt as _},
+        future::{FfiFuture, FutureExt as _},
         v1_0 as a,
     },
     abi_executor::{ComponentExecutor, DirectCancellation},
@@ -58,17 +54,17 @@ fn failure(error: impl ToString) -> a::Error {
     let status =
         nemo_relay_types::plugin::parse_http_error_message(&message).map(|(status, _)| status);
     let mut error = a::Error::new("plugin", message);
-    error.http_status = status.into();
+    error.http_status = status;
     error
 }
 fn boundary<T>(value: Result<T>) -> a::Result<T> {
-    value.map_err(failure).into()
+    value.map_err(failure)
 }
 /// Restore SDK errors from ABI results while retaining upstream HTTP status in their messages.
 fn local<T>(value: a::Result<T>) -> Result<T> {
-    value.into_result().map_err(|e| {
+    value.map_err(|e| {
         let message = e.message.to_string();
-        if let Some(status) = e.http_status.into_option()
+        if let Some(status) = e.http_status
             && nemo_relay_types::plugin::parse_http_error_message(&message).is_none()
         {
             return crate::http_error_message(status, &message).unwrap_or(message);
@@ -157,7 +153,7 @@ enum UserResult {
 }
 type Unary = dyn Fn(
         a::Invocation,
-        ROption<a::ContinuationBox>,
+        Option<a::ContinuationBox>,
     ) -> Pin<Box<dyn Future<Output = Result<UserResult>> + Send>>
     + Send
     + Sync;
@@ -200,10 +196,10 @@ impl<F: Future<Output = a::Result<T>>, T> Future for ScopedFuture<F> {
     /// Enter the invocation scope for each user-future poll and restore the previous thread binding afterward.
     fn poll(self: Pin<&mut Self>, cx: &mut Context<'_>) -> Poll<Self::Output> {
         let this = self.get_mut();
-        let lease = match this.scope.enter().into_result() {
+        let lease = match this.scope.enter() {
             Ok(v) => Some(v),
             Err(_) if this.cleanup => None,
-            Err(e) => return Poll::Ready(a::Result::RErr(e)),
+            Err(e) => return Poll::Ready(a::Result::Err(e)),
         };
         let result = this
             .future
@@ -212,9 +208,9 @@ impl<F: Future<Output = a::Result<T>>, T> Future for ScopedFuture<F> {
             .as_mut()
             .poll(cx);
         if let Some(mut lease) = lease
-            && let Err(e) = lease.restore().into_result()
+            && let Err(e) = lease.restore()
         {
-            return Poll::Ready(a::Result::RErr(e));
+            return Poll::Ready(a::Result::Err(e));
         }
         result
     }
@@ -222,7 +218,7 @@ impl<F: Future<Output = a::Result<T>>, T> Future for ScopedFuture<F> {
 impl<F> Drop for ScopedFuture<F> {
     /// Attempt to bind the captured scope while dropping the user future, then restore the previous thread binding.
     fn drop(&mut self) {
-        let lease = self.scope.enter().into_result().ok();
+        let lease = self.scope.enter().ok();
         self.future.take();
         if let Some(mut lease) = lease {
             let _ = lease.restore();
@@ -234,21 +230,20 @@ impl a::Callback for Callback {
     fn invoke(
         &self,
         invocation: a::Invocation,
-        next: ROption<a::ContinuationBox>,
+        next: Option<a::ContinuationBox>,
     ) -> FfiFuture<a::Result<abi::Json>> {
         let callback = self.unary.clone();
         // Move scope out without replacing it with a fake identifier.
         let scope = Arc::new(invocation.context.scope);
         let invocation = a::Invocation {
             context: a::Context {
-                scope: a::Scope_TO::from_value(SharedScope(scope.clone()), TD_Opaque),
+                scope: a::ScopeBox::new(SharedScope(scope.clone())),
                 ..invocation.context
             },
             ..invocation
         };
-        self.executor.execute_direct(scoped(
-            a::Scope_TO::from_value(SharedScope(scope), TD_Opaque),
-            async move {
+        self.executor
+            .execute_direct(scoped(a::ScopeBox::new(SharedScope(scope)), async move {
                 boundary(
                     async {
                         let callback = callback.ok_or("callback is synchronous or streaming")?;
@@ -261,8 +256,7 @@ impl a::Callback for Callback {
                     }
                     .await,
                 )
-            },
-        ))
+            }))
     }
 
     /// Poll a typed tool callback under its invocation scope and preserve canonical results and marks.
@@ -275,42 +269,36 @@ impl a::Callback for Callback {
         let scope = Arc::new(invocation.context.scope);
         let invocation = a::Invocation {
             context: a::Context {
-                scope: a::Scope_TO::from_value(SharedScope(scope.clone()), TD_Opaque),
+                scope: a::ScopeBox::new(SharedScope(scope.clone())),
                 ..invocation.context
             },
             ..invocation
         };
-        self.executor.execute_direct(scoped(
-            a::Scope_TO::from_value(SharedScope(scope), TD_Opaque),
-            async move {
+        self.executor
+            .execute_direct(scoped(a::ScopeBox::new(SharedScope(scope)), async move {
                 boundary(
                     async {
                         let callback = callback.ok_or("callback is not a tool interceptor")?;
                         let UserResult::Tool(value) =
-                            callback(invocation, ROption::RSome(next)).await?
+                            callback(invocation, Option::Some(next)).await?
                         else {
                             return Err("tool callback returned an invalid outcome".into());
                         };
                         Ok(a::ToolExecutionOutcome {
                             result: a::ToolExecutionResult {
                                 result: into_abi(value.result),
-                                annotation: value
-                                    .annotation
-                                    .filter(|v| !v.is_null())
-                                    .map(into_abi)
-                                    .into(),
+                                annotation: value.annotation.filter(|v| !v.is_null()).map(into_abi),
                             },
                             pending_marks: value
                                 .pending_marks
                                 .into_iter()
                                 .map(encode)
-                                .collect::<Result<RVec<_>>>()?,
+                                .collect::<Result<Vec<_>>>()?,
                         })
                     }
                     .await,
                 )
-            },
-        ))
+            }))
     }
 
     /// Admit a synchronous callback and restore its invocation scope and optional Tokio context.
@@ -341,7 +329,7 @@ impl a::Callback for Callback {
         let bound = scope.clone();
         let invocation = a::Invocation {
             context: a::Context {
-                scope: a::Scope_TO::from_value(SharedScope(bound), TD_Opaque),
+                scope: a::ScopeBox::new(SharedScope(bound)),
                 ..invocation.context
             },
             ..invocation
@@ -350,10 +338,9 @@ impl a::Callback for Callback {
             let result = async {
                 let callback = callback.ok_or("callback is not streaming")?;
                 let (stream, sources) = local(
-                    scoped(
-                        a::Scope_TO::from_value(SharedScope(scope.clone()), TD_Opaque),
-                        async move { boundary(callback(invocation, next).await) },
-                    )
+                    scoped(a::ScopeBox::new(SharedScope(scope.clone())), async move {
+                        boundary(callback(invocation, next).await)
+                    })
                     .await,
                 )?;
                 let state = Arc::new(StreamState {
@@ -373,10 +360,7 @@ impl a::Callback for Callback {
                     registry.retain(|v| !v.closed.load(Ordering::Acquire));
                     registry.push(state.clone());
                 }
-                Ok(a::Stream_TO::from_value(
-                    OutputStream { state, executor },
-                    TD_Opaque,
-                ))
+                Ok(a::StreamBox::new(OutputStream { state, executor }))
             }
             .await;
             boundary(result)
@@ -388,7 +372,7 @@ impl a::Scope for SharedScope {
     fn enter(&self) -> a::Result<a::ScopeLeaseBox> {
         self.0.enter()
     }
-    fn snapshot(&self) -> a::Result<ROption<abi::Json>> {
+    fn snapshot(&self) -> a::Result<Option<abi::Json>> {
         self.0.snapshot()
     }
 }
@@ -423,7 +407,7 @@ impl StreamState {
         let state = self.clone();
         // Cleanup still runs after revocation. Bind scope on each poll while
         // authority is available, including polls of a raw stream's close future.
-        let scope = a::Scope_TO::from_value(SharedScope(state.scope.clone()), TD_Opaque);
+        let scope = a::ScopeBox::new(SharedScope(state.scope.clone()));
         let mut cleanup = scoped(scope, async move {
             {
                 let mut value = state.value.lock().await;
@@ -437,7 +421,7 @@ impl StreamState {
                 .clone();
             for source in sources {
                 if let Err(error) = source.close().await {
-                    return a::Result::RErr(failure(error));
+                    return a::Result::Err(failure(error));
                 }
             }
             state
@@ -446,7 +430,7 @@ impl StreamState {
                 .unwrap_or_else(|e| e.into_inner())
                 .clear();
             state.closed.store(true, Ordering::Release);
-            a::Result::ROk(())
+            a::Result::Ok(())
         });
         cleanup.cleanup = true;
         let foreign = executor.execute_cleanup(cleanup);
@@ -461,24 +445,24 @@ struct OutputStream {
 }
 impl a::Stream for OutputStream {
     /// Poll one output item under the invocation scope and make cancellation, EOF, or an error terminal.
-    fn pull(&mut self) -> FfiFuture<a::Result<ROption<abi::Json>>> {
+    fn pull(&mut self) -> FfiFuture<a::Result<Option<abi::Json>>> {
         let mut pulls = self.state.pulls.lock().unwrap_or_else(|e| e.into_inner());
         if self.state.cancelled.is_cancelled() {
-            return async { a::Result::RErr(a::Error::new("closed", "native stream is closing")) }
+            return async { a::Result::Err(a::Error::new("closed", "native stream is closing")) }
                 .into_ffi();
         }
         let state = self.state.clone();
         let scope = state.scope.clone();
-        let (future, cancellation) = self.executor.execute_direct_tracked(scoped(a::Scope_TO::from_value(SharedScope(scope),TD_Opaque),async move{
+        let (future, cancellation) = self.executor.execute_direct_tracked(scoped(a::ScopeBox::new(SharedScope(scope)),async move{
             let mut value=state.value.lock().await;
-            if value.terminal{return a::Result::ROk(ROption::RNone)}
-            let Some(stream)=value.stream.as_mut()else{return a::Result::ROk(ROption::RNone)};
+            if value.terminal{return a::Result::Ok(Option::None)}
+            let Some(stream)=value.stream.as_mut()else{return a::Result::Ok(Option::None)};
             tokio::select!{biased;
-                ()=state.cancelled.cancelled()=>a::Result::RErr(a::Error::new("closed","native stream is closing")),
+                ()=state.cancelled.cancelled()=>a::Result::Err(a::Error::new("closed","native stream is closing")),
                 next=stream.next()=>match next{
-                    Some(Ok(v))=>a::Result::ROk(ROption::RSome(into_abi(v))),
-                    Some(Err(e))=>{value.terminal=true;a::Result::RErr(failure(e))},
-                    None=>{value.terminal=true;a::Result::ROk(ROption::RNone)},
+                    Some(Ok(v))=>a::Result::Ok(Option::Some(into_abi(v))),
+                    Some(Err(e))=>{value.terminal=true;a::Result::Err(failure(e))},
+                    None=>{value.terminal=true;a::Result::Ok(Option::None)},
                 }
             }
         }));
@@ -515,21 +499,21 @@ impl a::Component for Owner {
                 .map(|state| state.close(&executor))
                 .collect::<Vec<_>>();
             for future in closing {
-                if let Err(error) = future.await.into_result() {
-                    return a::Result::RErr(error);
+                if let Err(error) = future.await {
+                    return a::Result::Err(error);
                 }
             }
             registry
                 .lock()
                 .unwrap_or_else(|e| e.into_inner())
                 .retain(|v| !v.closed.load(Ordering::Acquire));
-            a::Result::ROk(a::Component::shutdown(&executor))
+            a::Result::Ok(a::Component::shutdown(&executor))
         });
         async move {
-            match driver.await.into_result() {
+            match driver.await {
                 Ok(future) => future.await,
                 Err(_) if retry.is_shutting_down() => a::Component::shutdown(&retry).await,
-                Err(error) => a::Result::RErr(error),
+                Err(error) => a::Result::Err(error),
             }
         }
         .into_ffi()
@@ -552,7 +536,7 @@ impl PluginContext<'_> {
             priority,
             break_chain,
             options: into_abi(options),
-            callback: a::Callback_TO::from_value(callback, TD_Opaque),
+            callback: a::CallbackBox::new(callback),
         }))
     }
 
@@ -937,11 +921,9 @@ impl PluginContext<'_> {
                         ToolExecutionContext {
                             tool_name: i.name.to_string(),
                             args: from_abi(i.value)?,
-                            tool_call_id: i.tool_call_id.into_option().map(|v| v.to_string()),
+                            tool_call_id: i.tool_call_id.map(|v| v.to_string()),
                         },
-                        ToolNext(Arc::new(
-                            _next.into_option().ok_or("missing tool continuation")?,
-                        )),
+                        ToolNext(Arc::new(_next.ok_or("missing tool continuation")?)),
                     )
                     .await?;
                     Ok(UserResult::Tool(value))
@@ -1107,9 +1089,7 @@ impl PluginContext<'_> {
                             i.context.request_codec,
                             i.context.response_codec,
                         )?,
-                        LlmNext(Arc::new(
-                            _next.into_option().ok_or("missing LLM continuation")?,
-                        )),
+                        LlmNext(Arc::new(_next.ok_or("missing LLM continuation")?)),
                     )
                     .await?;
                     serde_json::to_value(value)
@@ -1184,7 +1164,6 @@ impl ToolNext {
             result: from_abi(value.result)?,
             annotation: value
                 .annotation
-                .into_option()
                 .map(from_abi)
                 .transpose()?
                 .filter(|v| !v.is_null()),
@@ -1267,10 +1246,10 @@ impl SourceStream {
         };
         let foreign = stream.close();
         let source = self.clone();
-        let scope = a::Scope_TO::from_value(SharedScope(self.scope.clone()), TD_Opaque);
+        let scope = a::ScopeBox::new(SharedScope(self.scope.clone()));
         let mut cleanup = scoped(scope, async move {
-            if let Err(error) = foreign.await.into_result() {
-                return a::Result::RErr(error);
+            if let Err(error) = foreign.await {
+                return a::Result::Err(error);
             }
             source
                 .state
@@ -1285,7 +1264,7 @@ impl SourceStream {
                     .unwrap_or_else(|e| e.into_inner())
                     .retain(|v| !v.closed.load(Ordering::Acquire));
             }
-            a::Result::ROk(())
+            a::Result::Ok(())
         });
         cleanup.cleanup = true;
         // Drive cleanup even when an exhausted/dropped stream has no waiter.
@@ -1298,7 +1277,7 @@ impl SourceStream {
 }
 struct InputStream {
     source: Arc<SourceStream>,
-    pending: Option<FfiFuture<a::Result<ROption<abi::Json>>>>,
+    pending: Option<FfiFuture<a::Result<Option<abi::Json>>>>,
     terminal: bool,
 }
 impl Unpin for InputStream {}
@@ -1330,8 +1309,8 @@ impl Stream for InputStream {
         };
         self.pending.take();
         match local(result) {
-            Ok(ROption::RSome(v)) => Poll::Ready(Some(from_abi(v))),
-            Ok(ROption::RNone) => {
+            Ok(Option::Some(v)) => Poll::Ready(Some(from_abi(v))),
+            Ok(Option::None) => {
                 self.terminal = true;
                 drop(self.source.close());
                 Poll::Ready(None)
@@ -1366,7 +1345,7 @@ impl<P: Plugin> a::Plugin for Adapter<P> {
         .unwrap_or(false)
     }
     /// Convert author validation results to ABI diagnostics and report conversion failures or panics.
-    fn validate(&self, config: abi::Json) -> RVec<a::ConfigDiagnostic> {
+    fn validate(&self, config: abi::Json) -> Vec<a::ConfigDiagnostic> {
         let result = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
             let config = decode(config)?;
             Ok::<_, String>(self.0.validate(&config))
@@ -1385,10 +1364,10 @@ impl<P: Plugin> a::Plugin for Adapter<P> {
             .into_iter()
             .map(|d| a::ConfigDiagnostic {
                 is_error: d.level == DiagnosticLevel::Error,
-                code: d.code.into(),
-                component: d.component.map(Into::into).into(),
-                field: d.field.map(Into::into).into(),
-                message: d.message.into(),
+                code: d.code,
+                component: d.component,
+                field: d.field,
+                message: d.message,
             })
             .collect()
     }
@@ -1410,22 +1389,16 @@ impl<P: Plugin> a::Plugin for Adapter<P> {
         .unwrap_or_else(|_| Err("native registration setup panicked".into()));
         let (config, executor, scope) = match setup {
             Ok(v) => v,
-            Err(e) => return async move { a::Result::RErr(failure(e)) }.into_ffi(),
+            Err(e) => return async move { a::Result::Err(failure(e)) }.into_ffi(),
         };
         let plugin = self.0.clone();
         let owner = executor.clone();
         let streams = Arc::new(Mutex::new(Vec::new()));
-        if let Err(error) = runtime
-            .bind_component(a::Component_TO::from_value(
-                Owner {
-                    executor: executor.clone(),
-                    streams: streams.clone(),
-                },
-                TD_Opaque,
-            ))
-            .into_result()
-        {
-            return async move { a::Result::RErr(error) }.into_ffi();
+        if let Err(error) = runtime.bind_component(a::ComponentBox::new(Owner {
+            executor: executor.clone(),
+            streams: streams.clone(),
+        })) {
+            return async move { a::Result::Err(error) }.into_ffi();
         }
         let cleanup = executor.clone();
         let execution = executor.execute(scoped(scope, async move {
@@ -1451,16 +1424,13 @@ impl<P: Plugin> a::Plugin for Adapter<P> {
                 Ok(Err(error)) => Some(failure(error)),
                 Err(_) => Some(failure("native registration callback panicked")),
             };
-            a::Result::ROk(a::RegisteredComponent {
-                error: error.into(),
-                registrations: ctx.registrations.into(),
-                component: a::Component_TO::from_value(
-                    Owner {
-                        executor: owner,
-                        streams,
-                    },
-                    TD_Opaque,
-                ),
+            a::Result::Ok(a::RegisteredComponent {
+                error,
+                registrations: ctx.registrations,
+                component: a::ComponentBox::new(Owner {
+                    executor: owner,
+                    streams,
+                }),
             })
         }));
         async move {
@@ -1486,69 +1456,23 @@ pub fn create_plugin<P: Plugin>(
         let plugin = constructor();
         let _ = plugin.allows_multiple_components();
         if plugin.plugin_kind() != kind {
-            return a::Result::RErr(failure(
+            return a::Result::Err(failure(
                 "exported plugin kind disagrees with implementation",
             ));
         }
-        a::Result::ROk(a::Plugin_TO::from_value(
-            Adapter(Arc::new(plugin)),
-            TD_Opaque,
-        ))
+        a::Result::Ok(a::PluginBox::new(Adapter(Arc::new(plugin))))
     }))
-    .unwrap_or_else(|_| a::Result::RErr(failure("native plugin constructor panicked")))
+    .unwrap_or_else(|_| a::Result::Err(failure("native plugin constructor panicked")))
 }
 
-/// Export the checked standard header with SDK-derived contract version.
+/// Export a native plugin with SDK-derived checked contract metadata.
 #[macro_export]
 macro_rules! nemo_relay_checked_plugin {
     (kind = $kind:literal, $constructor:expr) => {
-        mod __nemo_relay_checked_export {
-            use super::*;
-            use $crate::abi::{
-                self,
-                abi_stable::{
-                    library::{CheckTypeLayout, LibHeader, RootModuleResult},
-                    prefix_type::PrefixTypeTrait,
-                    sabi_types::RRef,
-                    std_types::{ROption, RStr},
-                },
-                v1_0,
-            };
-            extern "C" fn descriptor() -> abi::PluginDescriptor {
-                abi::PluginDescriptor {
-                    native_api: abi::NATIVE_API_VERSION,
-                    plugin_kind: $kind.into(),
-                }
-            }
-            extern "C" fn create() -> v1_0::Result<v1_0::PluginBox> {
-                $crate::checked::create_plugin($constructor, $kind)
-            }
-            extern "C" fn query(name: RStr<'_>) -> ROption<RRef<'static, LibHeader>> {
-                if name.as_str() != v1_0::FACTORY_MODULE {
-                    return ROption::RNone;
-                }
-                static HEADER: std::sync::OnceLock<LibHeader> = std::sync::OnceLock::new();
-                ROption::RSome(RRef::new(HEADER.get_or_init(|| {
-                    LibHeader::from_module(v1_0::Factory { create }.leak_into_prefix())
-                })))
-            }
-            fn bootstrap() -> abi::Bootstrap_Ref {
-                abi::Bootstrap {
-                    descriptor,
-                    query_module: query,
-                }
-                .leak_into_prefix()
-            }
-            extern "C" fn erased() -> RootModuleResult {
-                abi::abi_stable::library::__call_root_module_loader(bootstrap)
-            }
-            // This is abi_stable's standard exported header symbol. The dependency ABI
-            // generation is pinned by the interface crate. Layout checking is mandatory.
-            #[unsafe(no_mangle)]
-            pub(super) static _1as_0lib_1header_0root_bmodule_bloader: LibHeader = unsafe {
-                LibHeader::from_constructor::<abi::Bootstrap_Ref>(erased, CheckTypeLayout::Yes)
-            };
-        }
+        $crate::abi::export_factory!(
+            kind = $kind,
+            create = || $crate::checked::create_plugin($constructor, $kind)
+        );
     };
 }
 
@@ -1565,7 +1489,7 @@ impl PluginContext<'_> {
         callback: F,
     ) -> Result<()>
     where
-        F: Fn(a::Invocation, ROption<a::ContinuationBox>) -> Result<abi::Json>
+        F: Fn(a::Invocation, Option<a::ContinuationBox>) -> Result<abi::Json>
             + Send
             + Sync
             + 'static,
@@ -1580,13 +1504,10 @@ impl PluginContext<'_> {
             priority,
             break_chain,
             options: abi::Json::Null,
-            callback: a::Callback_TO::from_value(
-                RawCallback {
-                    callback,
-                    executor: self.executor.clone(),
-                },
-                TD_Opaque,
-            ),
+            callback: a::CallbackBox::new(RawCallback {
+                callback,
+                executor: self.executor.clone(),
+            }),
         }))
     }
 }
@@ -1622,10 +1543,7 @@ impl PluginContext<'_> {
                         let scope = Arc::new(invocation.context.scope);
                         let invocation = a::Invocation {
                             context: a::Context {
-                                scope: a::Scope_TO::from_value(
-                                    SharedScope(scope.clone()),
-                                    TD_Opaque,
-                                ),
+                                scope: a::ScopeBox::new(SharedScope(scope.clone())),
                                 ..invocation.context
                             },
                             ..invocation
@@ -1667,8 +1585,7 @@ impl PluginContext<'_> {
     }
 }
 
-type RawSync =
-    dyn Fn(a::Invocation, ROption<a::ContinuationBox>) -> Result<abi::Json> + Send + Sync;
+type RawSync = dyn Fn(a::Invocation, Option<a::ContinuationBox>) -> Result<abi::Json> + Send + Sync;
 struct RawCallback {
     callback: Arc<RawSync>,
     executor: ComponentExecutor,
@@ -1678,7 +1595,7 @@ fn raw_sync(
     executor: &ComponentExecutor,
     callback: &RawSync,
     invocation: a::Invocation,
-    next: ROption<a::ContinuationBox>,
+    next: Option<a::ContinuationBox>,
 ) -> a::Result<abi::Json> {
     boundary(
         std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
@@ -1703,7 +1620,7 @@ impl a::Callback for RawCallback {
         let callback = self.callback.clone();
         let executor = self.executor.clone();
         let work = self.executor.execute_blocking(move || {
-            raw_sync(&executor, &*callback, invocation, ROption::RSome(next))
+            raw_sync(&executor, &*callback, invocation, Option::Some(next))
         });
         async move {
             let value = local(work.await);
@@ -1712,30 +1629,26 @@ impl a::Callback for RawCallback {
                 Ok(a::ToolExecutionOutcome {
                     result: a::ToolExecutionResult {
                         result: into_abi(value.result),
-                        annotation: value
-                            .annotation
-                            .filter(|v| !v.is_null())
-                            .map(into_abi)
-                            .into(),
+                        annotation: value.annotation.filter(|v| !v.is_null()).map(into_abi),
                     },
                     pending_marks: value
                         .pending_marks
                         .into_iter()
                         .map(encode)
-                        .collect::<Result<RVec<_>>>()?,
+                        .collect::<Result<Vec<_>>>()?,
                 })
             }))
         }
         .into_ffi()
     }
     fn invoke_sync(&self, invocation: a::Invocation) -> a::Result<abi::Json> {
-        raw_sync(&self.executor, &*self.callback, invocation, ROption::RNone)
+        raw_sync(&self.executor, &*self.callback, invocation, Option::None)
     }
     /// Offload a synchronous callback with its supplied optional continuation.
     fn invoke(
         &self,
         invocation: a::Invocation,
-        next: ROption<a::ContinuationBox>,
+        next: Option<a::ContinuationBox>,
     ) -> FfiFuture<a::Result<abi::Json>> {
         let callback = self.callback.clone();
         let executor = self.executor.clone();
@@ -1748,7 +1661,7 @@ impl a::Callback for RawCallback {
         _: a::ContinuationBox,
     ) -> FfiFuture<a::Result<a::StreamBox>> {
         async {
-            a::Result::RErr(failure(
+            a::Result::Err(failure(
                 "synchronous streaming callbacks must return a checked Stream descriptor",
             ))
         }

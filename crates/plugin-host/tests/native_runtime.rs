@@ -416,7 +416,6 @@ async fn malformed_runtime_requests_leave_scope_state_unchanged() {
             }
             assert_eq!(
                 raw.call_sync("gate.remove".into(), into_abi(json!("unknown")))
-                    .into_result()
                     .unwrap(),
                 into_abi(json!(false))
             );
@@ -437,28 +436,19 @@ async fn captured_scope_handles_preserve_snapshots_and_reject_use_after_shutdown
         let _parent = runtime
             .scope("captured-parent", ScopeType::Custom, None, None, None)
             .unwrap();
-        let scope = raw.capture_scope().into_result().unwrap();
-        let snapshot = scope
-            .snapshot()
-            .into_result()
-            .unwrap()
-            .into_option()
-            .unwrap();
+        let scope = raw.capture_scope().unwrap();
+        let snapshot = scope.snapshot().unwrap().unwrap();
         assert_eq!(
             snapshot,
-            raw.call_sync("scope.snapshot".into(), Json::Null)
-                .into_result()
-                .unwrap()
+            raw.call_sync("scope.snapshot".into(), Json::Null).unwrap()
         );
         let other = create_scope_stack();
         with_scope_stack(other, || {
             let before = raw.call_sync("scope.snapshot".into(), Json::Null);
-            let mut lease = scope.enter().into_result().unwrap();
+            let mut lease = scope.enter().unwrap();
             assert_eq!(
                 snapshot,
-                raw.call_sync("scope.snapshot".into(), Json::Null)
-                    .into_result()
-                    .unwrap()
+                raw.call_sync("scope.snapshot".into(), Json::Null).unwrap()
             );
             assert!(lease.restore().is_ok());
             assert!(lease.restore().is_ok());

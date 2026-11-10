@@ -4,11 +4,7 @@
 //! Behavior compiled independently against each frozen interface generation.
 use abi::{
     Json,
-    abi_stable::{
-        sabi_trait::prelude::TD_Opaque,
-        std_types::{ROption, RVec},
-    },
-    async_ffi::{FfiFuture, FutureExt},
+    future::{FfiFuture, FutureExt},
     v1_0::*,
 };
 use std::sync::{
@@ -42,14 +38,11 @@ impl Component for Owner {
         async move {
             pending_poll().await;
             if active.swap(false, Ordering::AcqRel) {
-                if let Err(error) = runtime
-                    .call_sync("fixture.shutdown".into(), Json::Null)
-                    .into_result()
-                {
-                    return Result::RErr(error);
+                if let Err(error) = runtime.call_sync("fixture.shutdown".into(), Json::Null) {
+                    return Result::Err(error);
                 }
             }
-            Result::ROk(())
+            Result::Ok(())
         }
         .into_ffi()
     }
@@ -60,7 +53,6 @@ impl Drop for Cancel {
         if let Some(runtime) = &self.0 {
             runtime
                 .call_sync("fixture.cancelled".into(), Json::Null)
-                .into_result()
                 .unwrap();
         }
     }
@@ -73,7 +65,7 @@ impl Callback for Echo {
     fn invoke(
         &self,
         invocation: Invocation,
-        next: ROption<ContinuationBox>,
+        next: Option<ContinuationBox>,
     ) -> FfiFuture<Result<Json>> {
         // Capture before constructing the future to cover an unpolled drop.
         let mut cancel = Cancel(Some(self.runtime.clone()));
@@ -81,20 +73,20 @@ impl Callback for Echo {
         async move {
             pending_poll().await;
             if !active.load(Ordering::Acquire) {
-                return Result::RErr(Error::new("revoked", "closed"));
+                return Result::Err(Error::new("revoked", "closed"));
             }
             assert_eq!(
-                invocation.context.scope.snapshot().into_result().unwrap(),
-                ROption::RSome(Json::String("scope".into()))
+                invocation.context.scope.snapshot().unwrap(),
+                Option::Some(Json::String("scope".into()))
             );
             {
-                let mut lease = invocation.context.scope.enter().into_result().unwrap();
-                lease.restore().into_result().unwrap();
+                let mut lease = invocation.context.scope.enter().unwrap();
+                lease.restore().unwrap();
             }
-            let result = if let Some(next) = next.into_option() {
+            let result = if let Some(next) = next {
                 next.call(invocation.value).await
             } else {
-                Result::ROk(invocation.value)
+                Result::Ok(invocation.value)
             };
             cancel.0.take();
             result
@@ -106,23 +98,20 @@ impl Callback for Echo {
         invocation: Invocation,
         next: ContinuationBox,
     ) -> FfiFuture<Result<ToolExecutionOutcome>> {
-        assert_eq!(
-            invocation.tool_call_id.into_option().unwrap().as_str(),
-            "call-id"
-        );
+        assert_eq!(invocation.tool_call_id.unwrap().as_str(), "call-id");
         async move {
             pending_poll().await;
             next.call_tool(invocation.value)
                 .await
                 .map(|result| ToolExecutionOutcome {
                     result,
-                    pending_marks: RVec::new(),
+                    pending_marks: Vec::new(),
                 })
         }
         .into_ffi()
     }
     fn invoke_sync(&self, invocation: Invocation) -> Result<Json> {
-        Result::ROk(invocation.value)
+        Result::Ok(invocation.value)
     }
     fn open_stream(
         &self,
@@ -131,17 +120,14 @@ impl Callback for Echo {
     ) -> FfiFuture<Result<StreamBox>> {
         async move {
             pending_poll().await;
-            let stream = match next.open_stream(invocation.value).await.into_result() {
+            let stream = match next.open_stream(invocation.value).await {
                 Ok(stream) => stream,
-                Err(error) => return Result::RErr(error),
+                Err(error) => return Result::Err(error),
             };
-            Result::ROk(Stream_TO::from_value(
-                Forward {
-                    stream,
-                    closed: false,
-                },
-                TD_Opaque,
-            ))
+            Result::Ok(StreamBox::new(Forward {
+                stream,
+                closed: false,
+            }))
         }
         .into_ffi()
     }
@@ -151,7 +137,7 @@ struct Forward {
     closed: bool,
 }
 impl Stream for Forward {
-    fn pull(&mut self) -> FfiFuture<Result<ROption<Json>>> {
+    fn pull(&mut self) -> FfiFuture<Result<Option<Json>>> {
         let future = self.stream.pull();
         async move {
             pending_poll().await;
@@ -161,7 +147,7 @@ impl Stream for Forward {
     }
     fn close(&mut self) -> FfiFuture<Result<()>> {
         if self.closed {
-            return async { Result::ROk(()) }.into_ffi();
+            return async { Result::Ok(()) }.into_ffi();
         }
         self.closed = true;
         let future = self.stream.close();
@@ -177,8 +163,8 @@ impl Plugin for Example {
     fn allows_multiple_components(&self) -> bool {
         true
     }
-    fn validate(&self, _: Json) -> RVec<ConfigDiagnostic> {
-        RVec::new()
+    fn validate(&self, _: Json) -> Vec<ConfigDiagnostic> {
+        Vec::new()
     }
     fn register(
         &self,
@@ -190,21 +176,16 @@ impl Plugin for Example {
             assert_eq!(
                 runtime
                     .call_sync("fixture.register".into(), config.clone())
-                    .into_result()
                     .unwrap(),
                 config
             );
             let runtime = Arc::new(runtime);
             let active = Arc::new(AtomicBool::new(true));
             runtime
-                .bind_component(Component_TO::from_value(
-                    Owner {
-                        active: active.clone(),
-                        runtime: runtime.clone(),
-                    },
-                    TD_Opaque,
-                ))
-                .into_result()
+                .bind_component(ComponentBox::new(Owner {
+                    active: active.clone(),
+                    runtime: runtime.clone(),
+                }))
                 .unwrap();
             let registrations = [
                 Surface::Subscriber,
@@ -219,19 +200,16 @@ impl Plugin for Example {
                 priority: 3,
                 break_chain: false,
                 options: Json::Null,
-                callback: Callback_TO::from_value(
-                    Echo {
-                        active: active.clone(),
-                        runtime: runtime.clone(),
-                    },
-                    TD_Opaque,
-                ),
+                callback: CallbackBox::new(Echo {
+                    active: active.clone(),
+                    runtime: runtime.clone(),
+                }),
             })
             .collect();
-            Result::ROk(RegisteredComponent {
-                error: ROption::RNone,
+            Result::Ok(RegisteredComponent {
+                error: Option::None,
                 registrations,
-                component: Component_TO::from_value(Owner { active, runtime }, TD_Opaque),
+                component: ComponentBox::new(Owner { active, runtime }),
             })
         }
         .into_ffi()

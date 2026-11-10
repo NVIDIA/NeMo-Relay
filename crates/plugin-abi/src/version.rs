@@ -1,12 +1,11 @@
 // SPDX-FileCopyrightText: Copyright (c) 2026, NVIDIA CORPORATION & AFFILIATES. All rights reserved.
 // SPDX-License-Identifier: Apache-2.0
 
-use abi_stable::StableAbi;
 use std::{fmt, str::FromStr};
 
 /// A native interface generation, independent of the Relay package version.
 #[repr(C)]
-#[derive(StableAbi, Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash)]
 pub struct NativeApiVersion {
     /// Breaking interface generation.
     pub major: u32,

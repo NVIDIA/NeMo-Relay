@@ -45,7 +45,7 @@ fn reject_invalid_numbers_and_duplicate_object_keys() {
         },
     ];
     assert!(
-        from_abi(AbiJson::Object(fields.into()))
+        from_abi(AbiJson::Object(fields))
             .unwrap_err()
             .contains("duplicate")
     );

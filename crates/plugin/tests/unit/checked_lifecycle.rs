@@ -11,7 +11,7 @@ impl a::ScopeLease for Lease {
         if let Some(previous) = self.0.take() {
             BOUND.set(previous);
         }
-        a::Result::ROk(())
+        a::Result::Ok(())
     }
 }
 impl Drop for Lease {
@@ -21,13 +21,10 @@ impl Drop for Lease {
 }
 impl a::Scope for Scope {
     fn enter(&self) -> a::Result<a::ScopeLeaseBox> {
-        a::Result::ROk(a::ScopeLease_TO::from_value(
-            Lease(Some(BOUND.replace(true))),
-            TD_Opaque,
-        ))
+        a::Result::Ok(a::ScopeLeaseBox::new(Lease(Some(BOUND.replace(true)))))
     }
-    fn snapshot(&self) -> a::Result<ROption<abi::Json>> {
-        a::Result::ROk(ROption::RNone)
+    fn snapshot(&self) -> a::Result<Option<abi::Json>> {
+        a::Result::Ok(Option::None)
     }
 }
 pub(crate) struct Next;
@@ -93,18 +90,14 @@ async fn shutdown_drains_stream_opening_before_closing_resources() {
         surface: a::Surface::LlmStreamExecutionIntercept,
         name: "race".into(),
         value: abi::Json::Null,
-        tool_call_id: ROption::RNone,
+        tool_call_id: Option::None,
         context: a::Context {
-            scope: a::Scope_TO::from_value(Scope, TD_Opaque),
-            request_codec: ROption::RNone,
-            response_codec: ROption::RNone,
+            scope: a::ScopeBox::new(Scope),
+            request_codec: Option::None,
+            response_codec: Option::None,
         },
     };
-    let opening = a::Callback::open_stream(
-        &callback,
-        invocation,
-        a::Continuation_TO::from_value(Next, TD_Opaque),
-    );
+    let opening = a::Callback::open_stream(&callback, invocation, a::ContinuationBox::new(Next));
     let opening = tokio::spawn(opening);
     ready.await.unwrap();
     let closing = a::Component::shutdown(&owner);
@@ -112,7 +105,6 @@ async fn shutdown_drains_stream_opening_before_closing_resources() {
     tokio::time::timeout(std::time::Duration::from_secs(5), closing)
         .await
         .unwrap()
-        .into_result()
         .unwrap();
     assert!(opening.await.unwrap().is_err());
     assert!(executor.is_closed());
@@ -122,21 +114,21 @@ async fn shutdown_drains_stream_opening_before_closing_resources() {
 
 struct ClosingStream(Arc<AtomicBool>);
 impl a::Stream for ClosingStream {
-    fn pull(&mut self) -> FfiFuture<a::Result<ROption<abi::Json>>> {
-        async { a::Result::ROk(ROption::RNone) }.into_ffi()
+    fn pull(&mut self) -> FfiFuture<a::Result<Option<abi::Json>>> {
+        async { a::Result::Ok(Option::None) }.into_ffi()
     }
     fn close(&mut self) -> FfiFuture<a::Result<()>> {
         let closed = self.0.clone();
         async move {
             if !BOUND.get() {
-                return a::Result::RErr(failure("raw close must enter the invocation scope"));
+                return a::Result::Err(failure("raw close must enter the invocation scope"));
             }
             tokio::task::yield_now().await;
             if !BOUND.get() {
-                return a::Result::RErr(failure("raw close must restore scope after Pending"));
+                return a::Result::Err(failure("raw close must restore scope after Pending"));
             }
             closed.store(true, Ordering::Release);
-            a::Result::ROk(())
+            a::Result::Ok(())
         }
         .into_ffi()
     }
@@ -149,9 +141,9 @@ async fn raw_stream_cleanup_restores_scope_on_each_poll() {
     let closed = Arc::new(AtomicBool::new(false));
     let sources = Arc::new(Mutex::new(Vec::new()));
     SourceStream::new(
-        a::Stream_TO::from_value(ClosingStream(closed.clone()), TD_Opaque),
+        a::StreamBox::new(ClosingStream(closed.clone())),
         &executor,
-        Arc::new(a::Scope_TO::from_value(Scope, TD_Opaque)),
+        Arc::new(a::ScopeBox::new(Scope)),
         &sources,
     );
     let state = Arc::new(StreamState {
@@ -159,20 +151,17 @@ async fn raw_stream_cleanup_restores_scope_on_each_poll() {
             stream: None,
             terminal: false,
         }),
-        scope: Arc::new(a::Scope_TO::from_value(Scope, TD_Opaque)),
+        scope: Arc::new(a::ScopeBox::new(Scope)),
         sources,
         closing: Mutex::new(None),
         closed: AtomicBool::new(false),
         cancelled: tokio_util::sync::CancellationToken::new(),
         pulls: Mutex::new(Vec::new()),
     });
-    state.close(&executor).await.into_result().unwrap();
+    state.close(&executor).await.unwrap();
     assert!(closed.load(Ordering::Acquire));
     assert!(state.closed.load(Ordering::Acquire));
-    a::Component::shutdown(&executor)
-        .await
-        .into_result()
-        .unwrap();
+    a::Component::shutdown(&executor).await.unwrap();
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
@@ -195,38 +184,32 @@ async fn shutdown_drains_inline_and_cancelled_blocking_callbacks() {
             Ok(Json::Null)
         });
         let callback = if mode == "subscriber" {
-            a::Callback_TO::from_value(
-                Callback {
-                    executor: executor.clone(),
-                    streams: registry,
-                    unary: None,
-                    stream: None,
-                    sync: Some(Arc::new(move |_| work())),
-                },
-                TD_Opaque,
-            )
+            a::CallbackBox::new(Callback {
+                executor: executor.clone(),
+                streams: registry,
+                unary: None,
+                stream: None,
+                sync: Some(Arc::new(move |_| work())),
+            })
         } else {
-            a::Callback_TO::from_value(
-                RawCallback {
-                    executor: executor.clone(),
-                    callback: Arc::new(move |_, _| work().map(into_abi)),
-                },
-                TD_Opaque,
-            )
+            a::CallbackBox::new(RawCallback {
+                executor: executor.clone(),
+                callback: Arc::new(move |_, _| work().map(into_abi)),
+            })
         };
         let invocation = a::Invocation {
             surface: a::Surface::Subscriber,
             name: "inline".into(),
             value: abi::Json::Null,
-            tool_call_id: ROption::RNone,
+            tool_call_id: Option::None,
             context: a::Context {
-                scope: a::Scope_TO::from_value(Scope, TD_Opaque),
-                request_codec: ROption::RNone,
-                response_codec: ROption::RNone,
+                scope: a::ScopeBox::new(Scope),
+                request_codec: Option::None,
+                response_codec: Option::None,
             },
         };
         let (thread, foreign) = if mode == "raw-async" {
-            (None, Some(callback.invoke(invocation, ROption::RNone)))
+            (None, Some(callback.invoke(invocation, Option::None)))
         } else {
             (
                 Some(std::thread::spawn(move || callback.invoke_sync(invocation))),
@@ -243,9 +226,9 @@ async fn shutdown_drains_inline_and_cancelled_blocking_callbacks() {
         let closed_while_running = matches!(&result, Ok(v) if v.is_ok());
         release.send(()).unwrap();
         if let Some(thread) = thread {
-            thread.join().unwrap().into_result().unwrap();
+            thread.join().unwrap().unwrap();
         }
-        a::Component::shutdown(&owner).await.into_result().unwrap();
+        a::Component::shutdown(&owner).await.unwrap();
         assert!(
             executor.enter_sync().is_err(),
             "revoked callbacks cannot enter"
@@ -266,8 +249,8 @@ impl Drop for SourceProbe {
     }
 }
 impl a::Stream for SourceProbe {
-    fn pull(&mut self) -> FfiFuture<a::Result<ROption<abi::Json>>> {
-        async { a::Result::ROk(ROption::RNone) }.into_ffi()
+    fn pull(&mut self) -> FfiFuture<a::Result<Option<abi::Json>>> {
+        async { a::Result::Ok(Option::None) }.into_ffi()
     }
     fn close(&mut self) -> FfiFuture<a::Result<()>> {
         let attempts = self.attempts.clone();
@@ -279,9 +262,9 @@ impl a::Stream for SourceProbe {
                 "source cleanup must restore scope after Pending"
             );
             if attempts.fetch_add(1, Ordering::SeqCst) == 0 && fail_first {
-                a::Result::RErr(failure("retry close"))
+                a::Result::Err(failure("retry close"))
             } else {
-                a::Result::ROk(())
+                a::Result::Ok(())
             }
         }
         .into_ffi()
@@ -296,15 +279,12 @@ impl a::Continuation for RepeatedSource {
         unreachable!()
     }
     fn open_stream(&self, _: abi::Json) -> FfiFuture<a::Result<a::StreamBox>> {
-        let stream = a::Stream_TO::from_value(
-            SourceProbe {
-                dropped: self.0.clone(),
-                attempts: Arc::new(AtomicUsize::new(0)),
-                fail_first: false,
-            },
-            TD_Opaque,
-        );
-        async move { a::Result::ROk(stream) }.into_ffi()
+        let stream = a::StreamBox::new(SourceProbe {
+            dropped: self.0.clone(),
+            attempts: Arc::new(AtomicUsize::new(0)),
+            fail_first: false,
+        });
+        async move { a::Result::Ok(stream) }.into_ffi()
     }
 }
 #[tokio::test]
@@ -314,13 +294,10 @@ async fn repeated_stream_sources_release_successful_cleanup_before_outer_close()
     let sources = Arc::new(Mutex::new(Vec::new()));
     let dropped = Arc::new(AtomicUsize::new(0));
     let next = LlmStreamNext {
-        next: Arc::new(a::Continuation_TO::from_value(
-            RepeatedSource(dropped.clone()),
-            TD_Opaque,
-        )),
+        next: Arc::new(a::ContinuationBox::new(RepeatedSource(dropped.clone()))),
         sources: sources.clone(),
         executor: executor.clone(),
-        scope: Arc::new(a::Scope_TO::from_value(Scope, TD_Opaque)),
+        scope: Arc::new(a::ScopeBox::new(Scope)),
     };
     for count in 1..=100 {
         let mut stream = next
@@ -346,10 +323,7 @@ async fn repeated_stream_sources_release_successful_cleanup_before_outer_close()
         .unwrap();
         drop(stream);
     }
-    a::Component::shutdown(&executor)
-        .await
-        .into_result()
-        .unwrap();
+    a::Component::shutdown(&executor).await.unwrap();
 }
 #[tokio::test]
 async fn failed_source_cleanup_retains_ownership_for_retry() {
@@ -359,16 +333,13 @@ async fn failed_source_cleanup_retains_ownership_for_retry() {
     let dropped = Arc::new(AtomicUsize::new(0));
     let attempts = Arc::new(AtomicUsize::new(0));
     let source = SourceStream::new(
-        a::Stream_TO::from_value(
-            SourceProbe {
-                dropped: dropped.clone(),
-                attempts: attempts.clone(),
-                fail_first: true,
-            },
-            TD_Opaque,
-        ),
+        a::StreamBox::new(SourceProbe {
+            dropped: dropped.clone(),
+            attempts: attempts.clone(),
+            fail_first: true,
+        }),
         &executor,
-        Arc::new(a::Scope_TO::from_value(Scope, TD_Opaque)),
+        Arc::new(a::ScopeBox::new(Scope)),
         &sources,
     );
     assert!(source.close().await.is_err());
@@ -378,10 +349,7 @@ async fn failed_source_cleanup_retains_ownership_for_retry() {
     assert!(sources.lock().unwrap().is_empty());
     assert_eq!(dropped.load(Ordering::SeqCst), 1);
     assert_eq!(attempts.load(Ordering::SeqCst), 2);
-    a::Component::shutdown(&executor)
-        .await
-        .into_result()
-        .unwrap();
+    a::Component::shutdown(&executor).await.unwrap();
 }
 
 pub(crate) fn raw_invocation(value: Json) -> a::Invocation {
@@ -389,11 +357,11 @@ pub(crate) fn raw_invocation(value: Json) -> a::Invocation {
         surface: a::Surface::ToolExecutionIntercept,
         name: "raw-tool".into(),
         value: into_abi(value),
-        tool_call_id: ROption::RSome("call-id".into()),
+        tool_call_id: Option::Some("call-id".into()),
         context: a::Context {
-            scope: a::Scope_TO::from_value(Scope, TD_Opaque),
-            request_codec: ROption::RNone,
-            response_codec: ROption::RNone,
+            scope: a::ScopeBox::new(Scope),
+            request_codec: Option::None,
+            response_codec: Option::None,
         },
     }
 }
@@ -408,10 +376,7 @@ async fn raw_callback_contract_rejects_invalid_dispatch_and_preserves_outcomes()
             executor: executor.clone(),
             callback: Arc::new(move |invocation, _| {
                 assert!(BOUND.get(), "the callback must enter its originating scope");
-                assert_eq!(
-                    invocation.tool_call_id.into_option().unwrap().as_str(),
-                    "call-id"
-                );
+                assert_eq!(invocation.tool_call_id.unwrap().as_str(), "call-id");
                 match mode {
                     "failure" => Err("raw callback failure".into()),
                     "panic" => panic!("raw callback panic"),
@@ -426,10 +391,9 @@ async fn raw_callback_contract_rejects_invalid_dispatch_and_preserves_outcomes()
         let outcome = a::Callback::invoke_tool(
             &callback,
             raw_invocation(Json::Null),
-            a::Continuation_TO::from_value(Next, TD_Opaque),
+            a::ContinuationBox::new(Next),
         )
-        .await
-        .into_result();
+        .await;
         if mode == "failure" || mode == "panic" {
             assert!(
                 outcome
@@ -455,33 +419,26 @@ async fn raw_callback_contract_rejects_invalid_dispatch_and_preserves_outcomes()
                 .map(|value| decode(value).unwrap())
                 .collect();
             assert_eq!(marks[0].name, "raw-mark");
-            a::Callback::invoke(&callback, raw_invocation(Json::Null), ROption::RNone)
+            a::Callback::invoke(&callback, raw_invocation(Json::Null), Option::None)
                 .await
-                .into_result()
                 .unwrap();
-            a::Callback::invoke_sync(&callback, raw_invocation(Json::Null))
-                .into_result()
-                .unwrap();
+            a::Callback::invoke_sync(&callback, raw_invocation(Json::Null)).unwrap();
             assert!(!BOUND.get(), "the caller's scope must be restored");
         }
         assert!(
             a::Callback::open_stream(
                 &callback,
                 raw_invocation(Json::Null),
-                a::Continuation_TO::from_value(Next, TD_Opaque)
+                a::ContinuationBox::new(Next)
             )
             .await
-            .into_result()
             .err()
             .unwrap()
             .message
             .contains("synchronous streaming")
         );
     }
-    a::Component::shutdown(&executor)
-        .await
-        .into_result()
-        .unwrap();
+    a::Component::shutdown(&executor).await.unwrap();
     let callback = RawCallback {
         executor: executor.clone(),
         callback: Arc::new(|_, _| panic!("revoked callback ran")),
@@ -556,7 +513,6 @@ fn checked_author_factory_contains_panics_and_rejects_falsified_identity() {
     }
     assert!(create_plugin(|| Author, "falsified").is_err());
     let panic = create_plugin(|| -> Author { panic!("constructor failed") }, "author")
-        .into_result()
         .err()
         .unwrap();
     assert!(panic.message.contains("constructor panicked"));
@@ -586,10 +542,10 @@ fn invocation_codec_adapters_preserve_typed_values_and_missing_capabilities() {
             }
         }
         fn encode(&self, _: abi::Json, original: abi::Json) -> a::Result<abi::Json> {
-            a::Result::ROk(original)
+            a::Result::Ok(original)
         }
     }
-    let codec = |response| ROption::RSome(a::Codec_TO::from_value(Codec(response), TD_Opaque));
+    let codec = |response| Option::Some(a::CodecBox::new(Codec(response)));
     let context = LlmExecutionContext::new(codec(false), codec(true)).unwrap();
     assert_eq!(context.request_codec().codec, LlmCodecIdentity::Opaque);
     assert_eq!(
@@ -615,12 +571,12 @@ fn invocation_codec_adapters_preserve_typed_values_and_missing_capabilities() {
     assert!(request_context.resolve_codec().is_some());
     let response_context = LlmSanitizeResponseContext::new(codec(true)).unwrap();
     assert!(response_context.resolve_codec().is_some());
-    let missing = LlmExecutionContext::new(ROption::RNone, ROption::RNone).unwrap();
+    let missing = LlmExecutionContext::new(Option::None, Option::None).unwrap();
     assert_eq!(missing.request_codec().codec, LlmCodecIdentity::None);
     assert!(missing.request_codec().resolve_codec().is_none());
     assert!(missing.response_codec().is_none());
     assert!(
-        LlmSanitizeResponseContext::new(ROption::RNone)
+        LlmSanitizeResponseContext::new(Option::None)
             .unwrap()
             .resolve_codec()
             .is_none()

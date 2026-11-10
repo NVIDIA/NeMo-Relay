@@ -14,5 +14,4 @@ publish = false
 crate-type = ["cdylib"]
 
 [dependencies]
-# An intentionally incompatible dependency ABI generation.
-abi_stable = { version = "=0.10.5", default-features = false }
+abi = { package = "nemo-relay-plugin-abi", path = "../interface-v1" }

@@ -9,9 +9,11 @@ SPDX-License-Identifier: Apache-2.0
 native plugin and its Relay host. Use `nemo-relay-plugin` to write plugins. Use
 this crate when implementing or testing the library boundary.
 
-The interface uses `abi_stable` 0.11.3 to check type layouts and `async-ffi` 0.5.1
-to pass futures and wakers across libraries. Relay runtime types, Tokio objects,
-and `serde_json::Value` stay outside this crate.
+The interface uses `xabi` 0.1.2 for calls, futures, and wakers across libraries.
+Relay checks a complete contract schema before constructing a plugin. That schema
+covers layouts, argument and result types, thread-safety requirements, and the
+ownership protocol. Relay runtime types, Tokio objects, and `serde_json::Value`
+stay outside this crate.
 
 ## Version Rules
 
@@ -34,7 +36,8 @@ requires a new native major.
 The interface crate follows Relay's package release version. That version does
 not select the native contract or determine binary compatibility. The explicit
 contract in `src/contract.rs` is the source of truth. The build script derives the
-SDK descriptor constant and `abi_stable` layout metadata from that contract.
+SDK descriptor constant from that contract and checked metadata from its frozen
+declarations.
 Frozen bootstrap and module headers keep their published contract versions.
 
 ## Bootstrap and Typed Values
@@ -44,9 +47,10 @@ a native major. It provides the plugin descriptor, module discovery, and factory
 access. Descriptor lookup and module discovery do not create components, register
 callbacks, or start executors.
 
-Use `LibHeader`'s checked initialization before calling a factory. Select the
-plugin's exact contract. Add interfaces through versioned modules. Published
-records, enum variants, signatures, marker traits, and ownership rules stay fixed
+Check the bootstrap schema and xabi export descriptors before calling a factory.
+Select the plugin's exact contract. Add interfaces through versioned modules.
+Published records, enum variants, signatures, marker traits, and ownership rules
+stay fixed
 within each contract.
 
 The recursive `Json` type carries application values without converting them to
@@ -86,8 +90,8 @@ when the future has not been polled.
 ## Dependency Pins
 
 Most workspace dependencies use Cargo SemVer ranges. The native interface uses
-exact `=version` requirements for `nemo-relay-plugin-abi`, `abi_stable`, and
-`async-ffi`. The interface pin selects the declarations reviewed with that SDK
+exact `=version` requirements for `nemo-relay-plugin-abi` and `xabi`. The interface
+pin selects the declarations reviewed with that SDK
 release. Binary compatibility follows the native contract and checked layouts.
 The external dependency pins keep shared types on reviewed ABI generations.
 A dependency update must pass the binary compatibility tests.
@@ -103,15 +107,17 @@ Run these commands from the repository root:
 ```bash
 just build-native-abi-test-fixtures
 cargo test -p nemo-relay-plugin-abi
-cargo test -p nemo-relay-plugin --test abi_value --test abi_executor
+cargo nextest run -p nemo-relay-plugin --test abi_value --test abi_executor
 just build-test-plugin-fixtures
 cargo test -p nemo-relay-plugin-host --test native_checked_loader
 ```
 
 `just test-rust` also prepares the fixtures. Each fixture builds in a separate
-Cargo workspace and target directory. This prevents workspace features from
-changing the binary being tested. Keep the frozen interface copies fixed so they
-can detect compatibility regressions.
+Cargo workspace with its own lockfile. This prevents workspace features from
+changing the binary being tested. The variants share unchanged files through
+explicit paths to the frozen `interface-v1` snapshot and keep changed contracts
+locally. Schema checks read the same files as the compiler. Keep the snapshot
+fixed so the fixtures can detect compatibility regressions.
 
 The tests load a v1.0 plugin with v1.0 and v1.1 hosts. They also check minimum
 minor versions, major versions, changed signatures, changed `Sync` requirements,

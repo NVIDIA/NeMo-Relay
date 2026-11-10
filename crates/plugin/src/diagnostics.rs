@@ -9,7 +9,7 @@
 /// Bounds used by native diagnostic authoring and host admission.
 pub mod limits;
 use crate::abi::{
-    abi_stable::std_types::{RResult, RSlice, RSliceMut, RStr},
+    borrow::{Slice, SliceMut, Str},
     diagnostics as abi,
 };
 use limits as bounds;
@@ -283,7 +283,6 @@ impl Diagnostics {
             .runtime
             .transport
             .capabilities()
-            .into_result()
             .map_err(DiagnosticError::from_status)?;
         if result.contract_version != bounds::CONTRACT_VERSION
             || result.availability > 2
@@ -381,7 +380,7 @@ impl Diagnostics {
             increment(&self.runtime.diagnostic_state.dropped);
             return Err(DiagnosticError::Capacity);
         }
-        let mut classes = [[RStr::from_str(""); bounds::MAX_CLASSES]; bounds::MAX_CODES];
+        let mut classes = [[Str::from_str(""); bounds::MAX_CLASSES]; bounds::MAX_CODES];
         let mut bytes = declaration.name.len();
         for (index, definition) in declaration.codes.iter().enumerate() {
             match definition {
@@ -402,7 +401,7 @@ impl Diagnostics {
                         .saturating_add(name.len())
                         .saturating_add(description.len());
                     for (slot, class) in classes[index].iter_mut().zip(*allowed_classes) {
-                        *slot = RStr::from_str(class.as_str());
+                        *slot = Str::from_str(class.as_str());
                         bytes = bytes.saturating_add(class.as_str().len());
                     }
                 }
@@ -417,9 +416,9 @@ impl Diagnostics {
                 Some(DiagnosticCode::Builtin(code)) => abi::DiagnosticCode {
                     kind: 0,
                     outcome: 0,
-                    name: RStr::from_str(code.canonical_name()),
-                    description: RStr::from_str(""),
-                    classes: RSlice::from_slice(&[]),
+                    name: Str::from_str(code.canonical_name()),
+                    description: Str::from_str(""),
+                    classes: Slice::from_slice(&[]),
                 },
                 Some(DiagnosticCode::Extension {
                     name,
@@ -429,28 +428,30 @@ impl Diagnostics {
                 }) => abi::DiagnosticCode {
                     kind: 1,
                     outcome: outcome_tag(*outcome),
-                    name: RStr::from_str(name),
-                    description: RStr::from_str(description),
-                    classes: RSlice::from_slice(&classes[index][..allowed_classes.len()]),
+                    name: Str::from_str(name),
+                    description: Str::from_str(description),
+                    classes: Slice::from_slice(&classes[index][..allowed_classes.len()]),
                 },
                 None => abi::DiagnosticCode {
                     kind: 0,
                     outcome: 0,
-                    name: RStr::from_str(""),
-                    description: RStr::from_str(""),
-                    classes: RSlice::from_slice(&[]),
+                    name: Str::from_str(""),
+                    description: Str::from_str(""),
+                    classes: Slice::from_slice(&[]),
                 },
             });
         let registration = abi::DiagnosticRegistration {
-            name: RStr::from_str(declaration.name),
-            codes: RSlice::from_slice(&codes[..declaration.codes.len()]),
+            name: Str::from_str(declaration.name),
+            codes: Slice::from_slice(&codes[..declaration.codes.len()]),
         };
         match self.runtime.transport.register(registration) {
-            RResult::ROk(handle) if handle != 0 => {
+            std::result::Result::Ok(handle) if handle != 0 => {
                 Ok(DiagnosticComponent::new(self.clone(), handle))
             }
-            RResult::ROk(_) | RResult::RErr(1) => Ok(DiagnosticComponent::new(self.clone(), 0)),
-            RResult::RErr(status) => Err(self.returned(status)),
+            std::result::Result::Ok(_) | std::result::Result::Err(1) => {
+                Ok(DiagnosticComponent::new(self.clone(), 0))
+            }
+            std::result::Result::Err(status) => Err(self.returned(status)),
         }
     }
     /// Obtain a reader only when the host explicitly grants whole-context access.
@@ -475,8 +476,8 @@ impl ComponentInner {
             return Ok(());
         }
         match self.diagnostics.runtime.transport.close(self.handle) {
-            RResult::ROk(()) | RResult::RErr(4) => Ok(()),
-            RResult::RErr(status) => Err(DiagnosticError::from_status(status)),
+            std::result::Result::Ok(()) | std::result::Result::Err(4) => Ok(()),
+            std::result::Result::Err(status) => Err(DiagnosticError::from_status(status)),
         }
     }
 }
@@ -542,13 +543,13 @@ impl DiagnosticComponent {
                 DiagnosticSeverity::Error => 4,
             },
             count: value.count.get(),
-            failure_class: RStr::from_str(class),
-            detail: RStr::from_str(value.detail),
-            request_id: RStr::from_str(request),
-            session_id: RStr::from_str(session),
+            failure_class: Str::from_str(class),
+            detail: Str::from_str(value.detail),
+            request_id: Str::from_str(request),
+            session_id: Str::from_str(session),
         };
         match d.runtime.transport.record(self.inner.handle, observation) {
-            RResult::ROk(receipt) => {
+            std::result::Result::Ok(receipt) => {
                 let evidence = match receipt.evidence {
                     0 => EvidenceDisposition::Retained,
                     1 => EvidenceDisposition::Truncated,
@@ -567,8 +568,8 @@ impl DiagnosticComponent {
                     }),
                 }))
             }
-            RResult::RErr(1) => Ok(RecordOutcome::Disabled),
-            RResult::RErr(status) => Err(d.returned(status)),
+            std::result::Result::Err(1) => Ok(RecordOutcome::Disabled),
+            std::result::Result::Err(status) => Err(d.returned(status)),
         }
     }
     /// Close explicitly; this never resets source totals or classifies recovery.
@@ -641,10 +642,9 @@ impl DiagnosticReader {
             .transport
             .read(
                 kind,
-                RStr::from_str(query),
-                RSliceMut::from_mut_slice(&mut output),
+                Str::from_str(query),
+                SliceMut::from_mut_slice(&mut output),
             )
-            .into_result()
             .map_err(DiagnosticError::from_status)?;
         if written > output.len() {
             return Err(DiagnosticError::Internal);

@@ -15,10 +15,11 @@ Native plugins run in the Relay process and require full trust.
 
 ## Bootstrap and Version Discovery
 
-The SDK exports a standard `abi_stable` library header. Relay uses it to load the
-bootstrap, which is the entry interface for one native major version. The
-bootstrap provides the plugin descriptor, versioned module headers, and factory
-access. Its layout stays fixed throughout that major.
+The SDK exports a frozen Relay bootstrap and a standard `xabi` manifest. The
+bootstrap provides the plugin descriptor, its contract schema, and versioned
+factory exports. Its layout stays fixed throughout one native major version.
+The schema covers complete method signatures, including future results, and
+checks the layouts and ownership rules used by the typed values.
 
 Relay checks the bootstrap and the plugin's required modules before calling a
 factory. Missing modules, incompatible layouts, and a descriptor that disagrees
@@ -40,9 +41,10 @@ Dependency updates must pass the binary compatibility tests.
 
 ## Values and Capabilities
 
-The interface uses ABI-safe strings, vectors, options, results, and generated
-trait objects. Tool outcomes, callback contexts, registrations, and diagnostics
-use typed records. Application payloads use recursive typed JSON. This format
+The adapters convert Rust strings, vectors, options, and results to frozen C
+records. Capabilities use generated xabi handles. Each allocation is released
+by the library that created it, including after a failed conversion. Tool outcomes,
+callback contexts, registrations, and diagnostics use typed records. Application payloads use recursive typed JSON. This format
 preserves signed and unsigned integers, finite floating-point values, Unicode,
 embedded NULs, and nested values. Conversion rejects non-finite numbers and
 duplicate object keys.
@@ -73,7 +75,7 @@ the nearest microsecond.
 
 ## Futures, Streams, and Shutdown
 
-The `async-ffi` crate carries futures and wakers across the library boundary.
+The `xabi` crate carries futures and wakers across the library boundary.
 Typed middleware futures are polled by their caller under the plugin's captured Relay
 scope. Inline execution creates no plugin runtime. A plugin can opt into a shared
 Tokio runtime; the SDK enters that runtime around each user-future poll and drop.

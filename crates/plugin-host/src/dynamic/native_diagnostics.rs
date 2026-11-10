@@ -6,7 +6,7 @@
 use nemo_relay_diagnostics::*;
 use nemo_relay_plugin::{
     abi::{
-        abi_stable::std_types::{RResult, RSliceMut, RStr},
+        borrow::{SliceMut, Str},
         diagnostics as abi,
     },
     diagnostics::{DiagnosticError as Error, limits as bounds},
@@ -181,14 +181,13 @@ impl Activation {
     }
 }
 
-fn guarded<T>(f: impl FnOnce() -> Result<T>) -> RResult<T, u32> {
+fn guarded<T>(f: impl FnOnce() -> Result<T>) -> std::result::Result<T, u32> {
     std::panic::catch_unwind(std::panic::AssertUnwindSafe(f))
         .unwrap_or(Err(Error::Internal))
         .map_err(Error::status)
-        .into()
 }
 /// Charge borrowed diagnostic text against the remaining request-byte budget.
-fn text<'a>(value: RStr<'a>, budget: &mut usize) -> Result<&'a str> {
+fn text<'a>(value: Str<'a>, budget: &mut usize) -> Result<&'a str> {
     if value.len() > *budget {
         return Err(Error::Capacity);
     }
@@ -397,7 +396,7 @@ impl NativeDiagnostics {
         })
     }
     /// Check live read authority and serialize the selected diagnostic report into bounded caller-owned storage.
-    fn read(&self, kind: u32, query: RStr<'_>, output: &mut [u8]) -> Result<usize> {
+    fn read(&self, kind: u32, query: Str<'_>, output: &mut [u8]) -> Result<usize> {
         let _call = Permit::acquire(&CALLS, bounds::MAX_CALLS)?;
         self.with(|a| {
             if !a.read {
@@ -656,10 +655,10 @@ impl CheckedDiagnostics {
     }
 }
 impl abi::Diagnostics for CheckedDiagnostics {
-    fn capabilities(&self) -> RResult<abi::DiagnosticCapabilities, u32> {
+    fn capabilities(&self) -> std::result::Result<abi::DiagnosticCapabilities, u32> {
         guarded(|| self.runtime.capabilities())
     }
-    fn register(&self, input: abi::DiagnosticRegistration<'_>) -> RResult<u64, u32> {
+    fn register(&self, input: abi::DiagnosticRegistration<'_>) -> std::result::Result<u64, u32> {
         guarded(|| self.runtime.register(input))
     }
     /// Translate diagnostic admission results to ABI receipts, including the reserved disabled status.
@@ -667,22 +666,22 @@ impl abi::Diagnostics for CheckedDiagnostics {
         &self,
         token: u64,
         input: abi::DiagnosticObservation<'_>,
-    ) -> RResult<abi::DiagnosticReceipt, u32> {
+    ) -> std::result::Result<abi::DiagnosticReceipt, u32> {
         match guarded(|| self.runtime.record(token, input)) {
-            RResult::ROk(Some(receipt)) => RResult::ROk(receipt),
-            RResult::ROk(None) => RResult::RErr(1),
-            RResult::RErr(error) => RResult::RErr(error),
+            std::result::Result::Ok(Some(receipt)) => std::result::Result::Ok(receipt),
+            std::result::Result::Ok(None) => std::result::Result::Err(1),
+            std::result::Result::Err(error) => std::result::Result::Err(error),
         }
     }
-    fn close(&self, token: u64) -> RResult<(), u32> {
+    fn close(&self, token: u64) -> std::result::Result<(), u32> {
         guarded(|| self.runtime.close(token))
     }
     fn read(
         &self,
         kind: u32,
-        query: RStr<'_>,
-        mut output: RSliceMut<'_, u8>,
-    ) -> RResult<usize, u32> {
+        query: Str<'_>,
+        mut output: SliceMut<'_, u8>,
+    ) -> std::result::Result<usize, u32> {
         guarded(|| self.runtime.read(kind, query, output.as_mut_slice()))
     }
 }

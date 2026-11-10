@@ -3,20 +3,10 @@
 
 //! Checked ABI lifecycle and authoring conformance fixture.
 
-use abi_stable::{
-    export_root_module,
-    library::LibHeader,
-    prefix_type::PrefixTypeTrait,
-    sabi_trait::prelude::TD_Opaque,
-    sabi_types::RRef,
-    std_types::{ROption, RStr, RVec},
-};
-use nemo_relay_plugin::abi::async_ffi::FfiFuture;
-use nemo_relay_plugin::abi::{
-    Bootstrap, Bootstrap_Ref, Json, NATIVE_API_VERSION, PluginDescriptor, v1_0::*,
-};
+use nemo_relay_plugin::abi::future::FfiFuture;
+use nemo_relay_plugin::abi::{Json, v1_0::*};
 use nemo_relay_plugin::{NativeExecutorConfig, abi_executor::ComponentExecutor};
-use std::sync::{Arc, Mutex, OnceLock};
+use std::sync::{Arc, Mutex};
 
 mod author {
     use super::super::*;
@@ -30,9 +20,9 @@ impl Plugin for Router {
     fn allows_multiple_components(&self) -> bool {
         true
     }
-    fn validate(&self, config: Json) -> RVec<ConfigDiagnostic> {
+    fn validate(&self, config: Json) -> Vec<ConfigDiagnostic> {
         if matches!(config, Json::Null) {
-            return RVec::new();
+            return Vec::new();
         }
         nemo_relay_plugin::checked::Adapter(Arc::new(author::FixtureNativePlugin)).validate(config)
     }
@@ -85,8 +75,8 @@ impl Plugin for Fixture {
     fn allows_multiple_components(&self) -> bool {
         true
     }
-    fn validate(&self, _: Json) -> RVec<ConfigDiagnostic> {
-        RVec::new()
+    fn validate(&self, _: Json) -> Vec<ConfigDiagnostic> {
+        Vec::new()
     }
     fn register(&self, _: Json, runtime: RuntimeBox) -> FfiFuture<Result<RegisteredComponent>> {
         let executor = ComponentExecutor::new(
@@ -101,10 +91,9 @@ impl Plugin for Fixture {
             let _state = task_state;
             task_runtime
                 .call_sync("fixture.task_started".into(), Json::Null)
-                .into_result()
                 .unwrap();
             std::future::pending::<()>().await;
-            Result::ROk(())
+            Result::Ok(())
         });
         let component = Owner {
             executor: executor.clone(),
@@ -113,40 +102,18 @@ impl Plugin for Fixture {
         executor.execute(async move {
             // This timer must run on the fixture library's Tokio executor.
             tokio::time::sleep(std::time::Duration::from_millis(1)).await;
-            Result::ROk(RegisteredComponent {
-                error: ROption::RNone,
-                registrations: RVec::new(),
-                component: Component_TO::from_value(component, TD_Opaque),
+            Result::Ok(RegisteredComponent {
+                error: Option::None,
+                registrations: Vec::new(),
+                component: ComponentBox::new(component),
             })
         })
     }
 }
-extern "C" fn create() -> Result<PluginBox> {
-    Result::ROk(Plugin_TO::from_value(Router, TD_Opaque))
-}
-extern "C" fn descriptor() -> PluginDescriptor {
-    PluginDescriptor {
-        native_api: NATIVE_API_VERSION,
-        plugin_kind: "fixture_native".into(),
-    }
-}
-extern "C" fn query(name: RStr<'_>) -> ROption<RRef<'static, LibHeader>> {
-    if name.as_str() != FACTORY_MODULE {
-        return ROption::RNone;
-    }
-    static HEADER: OnceLock<LibHeader> = OnceLock::new();
-    ROption::RSome(RRef::new(HEADER.get_or_init(|| {
-        LibHeader::from_module(Factory { create }.leak_into_prefix())
-    })))
-}
-#[export_root_module]
-pub fn bootstrap() -> Bootstrap_Ref {
-    Bootstrap {
-        descriptor,
-        query_module: query,
-    }
-    .leak_into_prefix()
-}
+nemo_relay_plugin::abi::export_factory!(
+    kind = "fixture_native",
+    create = || Ok(PluginBox::new(Router))
+);
 
 struct RawAuthor;
 impl nemo_relay_plugin::checked::Plugin for RawAuthor {
@@ -223,18 +190,13 @@ impl nemo_relay_plugin::checked::Plugin for StreamOnlyAuthor {
                         }
                         let mut stream =
                             futures::executor::block_on(next.open_stream(invocation.value))
-                                .into_result()
                                 .map_err(|e| e.message.to_string())?;
                         if !peek {
                             return Ok(stream);
                         }
                         let first = futures::executor::block_on(stream.pull())
-                            .into_result()
                             .map_err(|e| e.message.to_string())?;
-                        Ok(Stream_TO::from_value(
-                            PeekedStream { first, stream },
-                            TD_Opaque,
-                        ))
+                        Ok(StreamBox::new(PeekedStream { first, stream }))
                     },
                 )?;
                 if peek {
@@ -243,7 +205,6 @@ impl nemo_relay_plugin::checked::Plugin for StreamOnlyAuthor {
                         10,
                         |invocation, next| {
                             futures::executor::block_on(next.open_stream(invocation.value))
-                                .into_result()
                                 .map_err(|e| e.message.to_string())
                         },
                     )?;
@@ -261,19 +222,19 @@ impl nemo_relay_plugin::checked::Plugin for StreamOnlyAuthor {
 }
 
 struct PeekedStream {
-    first: ROption<Json>,
+    first: Option<Json>,
     stream: StreamBox,
 }
 impl Stream for PeekedStream {
-    fn pull(&mut self) -> FfiFuture<Result<ROption<Json>>> {
-        use nemo_relay_plugin::abi::async_ffi::FutureExt as _;
-        match std::mem::replace(&mut self.first, ROption::RNone) {
-            ROption::RSome(value) => async move { Result::ROk(ROption::RSome(value)) }.into_ffi(),
-            ROption::RNone => self.stream.pull(),
+    fn pull(&mut self) -> FfiFuture<Result<Option<Json>>> {
+        use nemo_relay_plugin::abi::future::FutureExt as _;
+        match self.first.take() {
+            Option::Some(value) => async move { Result::Ok(Option::Some(value)) }.into_ffi(),
+            Option::None => self.stream.pull(),
         }
     }
     fn close(&mut self) -> FfiFuture<Result<()>> {
-        self.first = ROption::RNone;
+        self.first = Option::None;
         self.stream.close()
     }
 }

@@ -1,20 +1,51 @@
 // SPDX-FileCopyrightText: Copyright (c) 2026, NVIDIA CORPORATION & AFFILIATES. All rights reserved.
 // SPDX-License-Identifier: Apache-2.0
 
-//! Synthetic future interface. Never add these fields to v1.0.
-use abi_stable::{StableAbi,library::RootModule,sabi_types::VersionStrings};
-use crate::v1_0;
-#[repr(C)]
-#[derive(StableAbi)]
-#[sabi(kind(Prefix(prefix_ref = Factory_Ref)))]
-pub struct Factory {
- pub v1_0: v1_0::Factory_Ref,
- #[sabi(last_prefix_field)]
- pub revision: extern "C" fn()->u32,
+//! A separately retained later module; v1.0 definitions remain frozen.
+use crate::{
+    transfer::Value,
+    v1_0::{Error, PluginBox, Result},
+};
+use xabi::XabiType;
+#[xabi::xabi(id = "nemo.relay.native.v1.1.Factory", version = 1)]
+pub trait FutureFactory {
+    fn create(&self) -> std::result::Result<Value<PluginBox>, Value<Error>>;
+    fn revision(&self) -> u32;
 }
-impl RootModule for Factory_Ref {
- abi_stable::declare_root_module_statics!{Factory_Ref}
- const BASE_NAME: &'static str="nemo_relay_plugin";
- const NAME: &'static str="nemo.relay.native.factory.v1.1";
- const VERSION_STRINGS:VersionStrings=VersionStrings::new("1.0.0");
+struct Adapter(fn() -> Result<PluginBox>);
+impl FutureFactory for Adapter {
+    fn create(&self) -> std::result::Result<Value<PluginBox>, Value<Error>> {
+        (self.0)().map(Value).map_err(Value)
+    }
+    fn revision(&self) -> u32 {
+        1
+    }
+}
+pub fn export(create: fn() -> Result<PluginBox>) -> *mut std::ffi::c_void {
+    <Adapter as FutureFactory>::__xabi_export(Adapter(create))
+}
+pub fn schema() -> &'static str {
+    static SCHEMA: std::sync::OnceLock<String> = std::sync::OnceLock::new();
+    SCHEMA.get_or_init(|| {
+        let mut result = crate::bootstrap::schema().to_owned();
+        result.push_str(include_str!("v1_1.rs"));
+        let mut layouts = Vec::new();
+        (XabiV1AbiTraitFutureFactory::XABI_LAYOUT.collect)(&mut layouts);
+        result.push_str(&format!("{layouts:?}"));
+        result
+    })
+}
+pub unsafe fn load(manifest: &xabi::XabiManifest) -> XabiV1OwnedTraitFutureFactory {
+    let exports = unsafe { manifest.exports.as_slice() }.unwrap();
+    let export = exports
+        .iter()
+        .find(|e| unsafe { e.abi_id.as_str() }.unwrap() == XabiV1AbiTraitFutureFactory::ID)
+        .unwrap();
+    assert_eq!(export.contract_version, 1);
+    let wire = XabiV1OwnedRefTraitFutureFactory {
+        size: std::mem::size_of::<XabiV1OwnedRefTraitFutureFactory>(),
+        abi_version: 1,
+        vtable: unsafe { (export.make)() }.cast(),
+    };
+    unsafe { XabiV1OwnedTraitFutureFactory::from_wire(&wire) }.unwrap()
 }

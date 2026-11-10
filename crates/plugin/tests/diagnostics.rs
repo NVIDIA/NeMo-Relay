@@ -6,12 +6,10 @@ use nemo_relay_plugin::{
     PluginRuntime,
     abi::{
         self,
-        abi_stable::{
-            sabi_trait::prelude::TD_Opaque,
-            std_types::{RResult, RSliceMut, RStr, RString},
-        },
-        async_ffi::{FfiFuture, FutureExt as _},
-        diagnostics as d, v1_0 as a,
+        borrow::{SliceMut, Str},
+        diagnostics as d,
+        future::{FfiFuture, FutureExt as _},
+        v1_0 as a,
     },
     diagnostics::{
         self as sdk, BuiltinDiagnosticCode, CommonPluginFailureCode, ComponentDeclaration,
@@ -42,17 +40,17 @@ struct Peer {
 struct Runtime(Arc<Peer>);
 struct DiagnosticPeer(Arc<Peer>);
 fn unavailable<T>() -> a::Result<T> {
-    a::Result::RErr(a::Error::new("test", "unavailable"))
+    a::Result::Err(a::Error::new("test", "unavailable"))
 }
 impl a::Runtime for Runtime {
-    fn call_sync(&self, _: RString, _: abi::Json) -> a::Result<abi::Json> {
+    fn call_sync(&self, _: String, _: abi::Json) -> a::Result<abi::Json> {
         unavailable()
     }
-    fn call(&self, _: RString, _: abi::Json) -> FfiFuture<a::Result<abi::Json>> {
+    fn call(&self, _: String, _: abi::Json) -> FfiFuture<a::Result<abi::Json>> {
         async { unavailable() }.into_ffi()
     }
     fn diagnostics(&self) -> d::DiagnosticsBox {
-        d::Diagnostics_TO::from_value(DiagnosticPeer(self.0.clone()), TD_Opaque)
+        d::DiagnosticsBox::new(DiagnosticPeer(self.0.clone()))
     }
     fn capture_scope(&self) -> a::Result<a::ScopeBox> {
         unavailable()
@@ -63,16 +61,16 @@ impl a::Runtime for Runtime {
     fn register_callback(&self, _: a::Registration) -> a::Result<()> {
         unavailable()
     }
-    fn register_gate(&self, _: a::Registration) -> a::Result<RString> {
+    fn register_gate(&self, _: a::Registration) -> a::Result<String> {
         unavailable()
     }
 }
 impl d::Diagnostics for DiagnosticPeer {
-    fn capabilities(&self) -> RResult<d::DiagnosticCapabilities, u32> {
+    fn capabilities(&self) -> std::result::Result<d::DiagnosticCapabilities, u32> {
         if matches!(self.0.behavior, Behavior::Unsupported) {
-            return RResult::RErr(2);
+            return std::result::Result::Err(2);
         }
-        RResult::ROk(d::DiagnosticCapabilities {
+        std::result::Result::Ok(d::DiagnosticCapabilities {
             contract_version: 1,
             availability: u32::from(!matches!(self.0.behavior, Behavior::Disabled)),
             can_read_context: 1,
@@ -87,29 +85,34 @@ impl d::Diagnostics for DiagnosticPeer {
             ..Default::default()
         })
     }
-    fn register(&self, _: d::DiagnosticRegistration<'_>) -> RResult<u64, u32> {
+    fn register(&self, _: d::DiagnosticRegistration<'_>) -> std::result::Result<u64, u32> {
         self.0.registrations.fetch_add(1, Ordering::Relaxed);
-        RResult::ROk(42)
+        std::result::Result::Ok(42)
     }
     fn record(
         &self,
         _: u64,
         _: d::DiagnosticObservation<'_>,
-    ) -> RResult<d::DiagnosticReceipt, u32> {
+    ) -> std::result::Result<d::DiagnosticReceipt, u32> {
         if matches!(self.0.behavior, Behavior::UnknownStatus) {
-            return RResult::RErr(u32::MAX);
+            return std::result::Result::Err(u32::MAX);
         }
-        RResult::ROk(d::DiagnosticReceipt {
+        std::result::Result::Ok(d::DiagnosticReceipt {
             sequence: 1,
             total_present: 2,
             ..Default::default()
         })
     }
-    fn close(&self, _: u64) -> RResult<(), u32> {
-        RResult::ROk(())
+    fn close(&self, _: u64) -> std::result::Result<(), u32> {
+        std::result::Result::Ok(())
     }
-    fn read(&self, _: u32, _: RStr<'_>, output: RSliceMut<'_, u8>) -> RResult<usize, u32> {
-        RResult::ROk(output.len() + 1)
+    fn read(
+        &self,
+        _: u32,
+        _: Str<'_>,
+        output: SliceMut<'_, u8>,
+    ) -> std::result::Result<usize, u32> {
+        std::result::Result::Ok(output.len() + 1)
     }
 }
 fn facade(behavior: Behavior) -> (Arc<Peer>, sdk::Diagnostics) {
@@ -117,8 +120,7 @@ fn facade(behavior: Behavior) -> (Arc<Peer>, sdk::Diagnostics) {
         behavior,
         registrations: AtomicUsize::new(0),
     });
-    let runtime =
-        PluginRuntime::from_abi(a::Runtime_TO::from_value(Runtime(peer.clone()), TD_Opaque));
+    let runtime = PluginRuntime::from_abi(a::RuntimeBox::new(Runtime(peer.clone())));
     (peer, runtime.diagnostics())
 }
 const FAILURE: BuiltinDiagnosticCode = BuiltinDiagnosticCode::Failure(FailureCode::Plugin(

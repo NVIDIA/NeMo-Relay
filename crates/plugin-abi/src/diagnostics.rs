@@ -2,13 +2,9 @@
 // SPDX-License-Identifier: Apache-2.0
 
 //! Typed, bounded synchronous diagnostics for native v1.0.
-use abi_stable::{
-    StableAbi, sabi_trait,
-    std_types::{RBox, RResult, RSlice, RSliceMut, RStr},
-};
 /// Allocation-free receipt written only after acceptance.
 #[repr(C)]
-#[derive(Clone, Copy, Default, StableAbi)]
+#[derive(Clone, Copy, Default)]
 pub struct DiagnosticReceipt {
     /// Source-local recording sequence.
     pub sequence: u64,
@@ -23,7 +19,7 @@ pub struct DiagnosticReceipt {
 }
 /// Non-sensitive recording capabilities; no source-wide diagnostic content.
 #[repr(C)]
-#[derive(Clone, Copy, Default, Debug, StableAbi)]
+#[derive(Clone, Copy, Default, Debug)]
 pub struct DiagnosticCapabilities {
     /// Diagnostic transport version.
     pub contract_version: u32,
@@ -62,31 +58,31 @@ pub struct DiagnosticCapabilities {
 
 /// Borrowed code declaration; spans are valid only for this synchronous call.
 #[repr(C)]
-#[derive(StableAbi, Clone, Copy)]
+#[derive(Clone, Copy)]
 pub struct DiagnosticCode<'a> {
     /// Frozen built-in/extension classification.
     pub kind: u32,
     /// Frozen outcome tag.
     pub outcome: u32,
     /// Canonical built-in or local extension name.
-    pub name: RStr<'a>,
+    pub name: crate::borrow::Str<'a>,
     /// Declaration-only safe description.
-    pub description: RStr<'a>,
+    pub description: crate::borrow::Str<'a>,
     /// Canonical failure class names.
-    pub classes: RSlice<'a, RStr<'a>>,
+    pub classes: crate::borrow::Slice<'a, crate::borrow::Str<'a>>,
 }
 /// One complete component declaration.
 #[repr(C)]
-#[derive(StableAbi, Clone, Copy)]
+#[derive(Clone, Copy)]
 pub struct DiagnosticRegistration<'a> {
     /// Component-local key.
-    pub name: RStr<'a>,
+    pub name: crate::borrow::Str<'a>,
     /// Complete bounded vocabulary.
-    pub codes: RSlice<'a, DiagnosticCode<'a>>,
+    pub codes: crate::borrow::Slice<'a, DiagnosticCode<'a>>,
 }
 /// Borrowed observation; the receiver retains only bounded copies.
 #[repr(C)]
-#[derive(StableAbi, Clone, Copy)]
+#[derive(Clone, Copy)]
 pub struct DiagnosticObservation<'a> {
     /// One-based declared code handle.
     pub code: u32,
@@ -97,32 +93,38 @@ pub struct DiagnosticObservation<'a> {
     /// Positive occurrence delta.
     pub count: u64,
     /// Canonical failure class or empty.
-    pub failure_class: RStr<'a>,
+    pub failure_class: crate::borrow::Str<'a>,
     /// Restricted evidence, never an aggregation key.
-    pub detail: RStr<'a>,
+    pub detail: crate::borrow::Str<'a>,
     /// Optional correlation; empty means absent.
-    pub request_id: RStr<'a>,
+    pub request_id: crate::borrow::Str<'a>,
     /// Optional correlation; empty means absent.
-    pub session_id: RStr<'a>,
+    pub session_id: crate::borrow::Str<'a>,
 }
 /// Component-owned authority. Status codes preserve the diagnostic error vocabulary.
-#[sabi_trait]
 pub trait Diagnostics: Send + Sync {
     /// Non-sensitive limits and the host-selected whole-context read grant.
-    fn capabilities(&self) -> RResult<DiagnosticCapabilities, u32>;
+    fn capabilities(&self) -> std::result::Result<DiagnosticCapabilities, u32>;
     /// Admit one bounded component and all code metadata together.
-    fn register(&self, registration: DiagnosticRegistration<'_>) -> RResult<u64, u32>;
+    fn register(&self, registration: DiagnosticRegistration<'_>) -> std::result::Result<u64, u32>;
     /// Submit once; an uncertain error must not be automatically retried.
     fn record(
         &self,
         token: u64,
         observation: DiagnosticObservation<'_>,
-    ) -> RResult<DiagnosticReceipt, u32>;
+    ) -> std::result::Result<DiagnosticReceipt, u32>;
     /// Close a declaration without changing source-wide totals.
-    fn close(&self, token: u64) -> RResult<(), u32>;
+    fn close(&self, token: u64) -> std::result::Result<(), u32>;
     /// Copy a canonical read into caller-owned storage; no partial output is published.
-    #[sabi(last_prefix_field)]
-    fn read(&self, kind: u32, query: RStr<'_>, output: RSliceMut<'_, u8>) -> RResult<usize, u32>;
+    fn read(
+        &self,
+        kind: u32,
+        query: crate::borrow::Str<'_>,
+        output: crate::borrow::SliceMut<'_, u8>,
+    ) -> std::result::Result<usize, u32>;
 }
 /// Owned revocable diagnostic capability.
-pub type DiagnosticsBox = Diagnostics_TO<'static, RBox<()>>;
+pub use crate::handles::DiagnosticsBox;
+crate::borrow::borrowed!(DiagnosticCode);
+crate::borrow::borrowed!(DiagnosticRegistration);
+crate::borrow::borrowed!(DiagnosticObservation);

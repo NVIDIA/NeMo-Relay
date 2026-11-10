@@ -92,7 +92,7 @@ fn incompatible_layouts_and_unsupported_versions_fail_before_factory() {
             .unwrap();
         assert!(resident_library_path(identity).unwrap().is_file());
         assert!(
-            error.contains("incompatible native module"),
+            error.contains("incompatible native contract"),
             "{name}: {error}"
         );
     }
@@ -114,8 +114,8 @@ fn incompatible_layouts_and_unsupported_versions_fail_before_factory() {
 #[test]
 fn missing_modules_and_incompatible_dependency_generations_are_rejected() {
     for (name, diagnostic) in [
-        ("missing", "missing required module"),
-        ("dependency", "bootstrap"),
+        ("missing", "missing required factory module"),
+        ("dependency", "dependency ABI differ"),
     ] {
         let error = CheckedNativeLibrary::load(
             artifact(name, b"negative-compatibility"),
@@ -168,9 +168,8 @@ fn artifact_paths_cannot_escape_staging_and_identity_includes_complete_closure()
 
 use nemo_relay_plugin::abi::{
     Json,
-    abi_stable::{sabi_trait::prelude::TD_Opaque, std_types::RString},
-    async_ffi::{FfiFuture, FutureExt},
-    v1_0::{Error, Result as AbiResult, Runtime, Runtime_TO, RuntimeBox},
+    future::{FfiFuture, FutureExt},
+    v1_0::{Error, Result as AbiResult, Runtime, RuntimeBox},
 };
 use std::sync::{
     Arc,
@@ -191,22 +190,22 @@ impl Drop for ProbeRuntime {
 }
 impl Runtime for ProbeRuntime {
     fn diagnostics(&self) -> nemo_relay_plugin::abi::diagnostics::DiagnosticsBox {
-        nemo_relay_plugin::abi::diagnostics::Diagnostics_TO::from_value(EmptyDiagnostics, TD_Opaque)
+        nemo_relay_plugin::abi::diagnostics::DiagnosticsBox::new(EmptyDiagnostics)
     }
     fn bind_component(&self, _: nemo_relay_plugin::abi::v1_0::ComponentBox) -> AbiResult<()> {
-        AbiResult::RErr(Error::new("fixture", "no component binding"))
+        AbiResult::Err(Error::new("fixture", "no component binding"))
     }
     fn register_callback(&self, _: nemo_relay_plugin::abi::v1_0::Registration) -> AbiResult<()> {
-        AbiResult::RErr(Error::new("fixture", "no registration"))
+        AbiResult::Err(Error::new("fixture", "no registration"))
     }
     fn capture_scope(&self) -> AbiResult<nemo_relay_plugin::abi::v1_0::ScopeBox> {
-        AbiResult::RErr(Error::new("fixture", "no scope"))
+        AbiResult::Err(Error::new("fixture", "no scope"))
     }
-    fn register_gate(&self, _: nemo_relay_plugin::abi::v1_0::Registration) -> AbiResult<RString> {
-        AbiResult::RErr(Error::new("fixture", "no gate"))
+    fn register_gate(&self, _: nemo_relay_plugin::abi::v1_0::Registration) -> AbiResult<String> {
+        AbiResult::Err(Error::new("fixture", "no gate"))
     }
 
-    fn call_sync(&self, operation: RString, _: Json) -> AbiResult<Json> {
+    fn call_sync(&self, operation: String, _: Json) -> AbiResult<Json> {
         match operation.as_str() {
             "fixture.task_started" => {
                 self.0.started.fetch_add(1, Ordering::AcqRel);
@@ -214,16 +213,16 @@ impl Runtime for ProbeRuntime {
             "fixture.task_dropped" => {
                 self.0.dropped.fetch_add(1, Ordering::AcqRel);
             }
-            _ => return AbiResult::RErr(Error::new("unknown", "unknown fixture operation")),
+            _ => return AbiResult::Err(Error::new("unknown", "unknown fixture operation")),
         }
-        AbiResult::ROk(Json::Null)
+        AbiResult::Ok(Json::Null)
     }
-    fn call(&self, _: RString, _: Json) -> FfiFuture<AbiResult<Json>> {
-        async { AbiResult::RErr(Error::new("unknown", "unknown fixture operation")) }.into_ffi()
+    fn call(&self, _: String, _: Json) -> FfiFuture<AbiResult<Json>> {
+        async { AbiResult::Err(Error::new("unknown", "unknown fixture operation")) }.into_ffi()
     }
 }
 fn runtime(probe: &Arc<Probe>) -> RuntimeBox {
-    Runtime_TO::from_value(ProbeRuntime(probe.clone()), TD_Opaque)
+    RuntimeBox::new(ProbeRuntime(probe.clone()))
 }
 fn sdk_artifact() -> NativeLibraryArtifact {
     let path = std::env::var_os("NEMO_RELAY_TEST_NATIVE_PLUGIN")
@@ -261,8 +260,8 @@ async fn sdk_components_shutdown_independently_across_the_library_boundary() {
             plugin.register(Json::Null, runtime(&first)),
             plugin.register(Json::Null, runtime(&second))
         );
-        let one = one.into_result().unwrap();
-        let two = two.into_result().unwrap();
+        let one = one.unwrap();
+        let two = two.unwrap();
         assert!(one.registrations.is_empty());
         while first.started.load(Ordering::Acquire) != 1
             || second.started.load(Ordering::Acquire) != 1
@@ -273,12 +272,12 @@ async fn sdk_components_shutdown_independently_across_the_library_boundary() {
         drop(library);
         assert!(path.is_file());
         let (a, b) = tokio::join!(one.component.shutdown(), one.component.shutdown());
-        a.into_result().unwrap();
-        b.into_result().unwrap();
+        a.unwrap();
+        b.unwrap();
         assert_eq!(first.dropped.load(Ordering::Acquire), 1);
         assert_eq!(first.runtime_dropped.load(Ordering::Acquire), 1);
         assert_eq!(second.dropped.load(Ordering::Acquire), 0);
-        two.component.shutdown().await.into_result().unwrap();
+        two.component.shutdown().await.unwrap();
         assert_eq!(second.dropped.load(Ordering::Acquire), 1);
         assert_eq!(second.runtime_dropped.load(Ordering::Acquire), 1);
         drop(one);
@@ -291,9 +290,8 @@ async fn sdk_components_shutdown_independently_across_the_library_boundary() {
             .unwrap()
             .register(Json::Null, runtime(&fresh))
             .await
-            .into_result()
             .unwrap();
-        component.component.shutdown().await.into_result().unwrap();
+        component.component.shutdown().await.unwrap();
         assert_eq!(fresh.dropped.load(Ordering::Acquire), 1);
         assert_eq!(fresh.runtime_dropped.load(Ordering::Acquire), 1);
     })
@@ -327,38 +325,32 @@ struct EmptyDiagnostics;
 impl nemo_relay_plugin::abi::diagnostics::Diagnostics for EmptyDiagnostics {
     fn capabilities(
         &self,
-    ) -> nemo_relay_plugin::abi::abi_stable::std_types::RResult<
-        nemo_relay_plugin::abi::diagnostics::DiagnosticCapabilities,
-        u32,
-    > {
-        Err(2).into()
+    ) -> std::result::Result<nemo_relay_plugin::abi::diagnostics::DiagnosticCapabilities, u32> {
+        Err(2)
     }
     fn register(
         &self,
         _: nemo_relay_plugin::abi::diagnostics::DiagnosticRegistration<'_>,
-    ) -> nemo_relay_plugin::abi::abi_stable::std_types::RResult<u64, u32> {
-        Err(2).into()
+    ) -> std::result::Result<u64, u32> {
+        Err(2)
     }
     fn record(
         &self,
         _: u64,
         _: nemo_relay_plugin::abi::diagnostics::DiagnosticObservation<'_>,
-    ) -> nemo_relay_plugin::abi::abi_stable::std_types::RResult<
-        nemo_relay_plugin::abi::diagnostics::DiagnosticReceipt,
-        u32,
-    > {
-        Err(2).into()
+    ) -> std::result::Result<nemo_relay_plugin::abi::diagnostics::DiagnosticReceipt, u32> {
+        Err(2)
     }
-    fn close(&self, _: u64) -> nemo_relay_plugin::abi::abi_stable::std_types::RResult<(), u32> {
-        Err(2).into()
+    fn close(&self, _: u64) -> std::result::Result<(), u32> {
+        Err(2)
     }
     fn read(
         &self,
         _: u32,
-        _: nemo_relay_plugin::abi::abi_stable::std_types::RStr<'_>,
-        _: nemo_relay_plugin::abi::abi_stable::std_types::RSliceMut<'_, u8>,
-    ) -> nemo_relay_plugin::abi::abi_stable::std_types::RResult<usize, u32> {
-        Err(2).into()
+        _: nemo_relay_plugin::abi::borrow::Str<'_>,
+        _: nemo_relay_plugin::abi::borrow::SliceMut<'_, u8>,
+    ) -> std::result::Result<usize, u32> {
+        Err(2)
     }
 }
 

@@ -14,12 +14,12 @@ pub fn into_abi(value: Json) -> AbiJson {
         Json::Number(v) if v.is_i64() => AbiJson::Signed(v.as_i64().expect("signed integer")),
         Json::Number(v) if v.is_u64() => AbiJson::Unsigned(v.as_u64().expect("unsigned integer")),
         Json::Number(v) => AbiJson::Float(v.as_f64().expect("finite JSON number")),
-        Json::String(v) => AbiJson::String(v.into()),
+        Json::String(v) => AbiJson::String(v),
         Json::Array(v) => AbiJson::Array(v.into_iter().map(into_abi).collect()),
         Json::Object(v) => AbiJson::Object(
             v.into_iter()
                 .map(|(key, value)| Field {
-                    key: key.into(),
+                    key,
                     value: into_abi(value),
                 })
                 .collect(),
@@ -58,17 +58,14 @@ pub fn from_abi(value: AbiJson) -> crate::Result<Json> {
         AbiJson::Float(v) => Json::Number(
             serde_json::Number::from_f64(v).ok_or_else(|| "non-finite JSON number".to_owned())?,
         ),
-        AbiJson::String(v) => Json::String(v.into_string()),
+        AbiJson::String(v) => Json::String(v),
         AbiJson::Array(v) => {
             Json::Array(v.into_iter().map(from_abi).collect::<crate::Result<_>>()?)
         }
         AbiJson::Object(v) => {
             let mut fields = serde_json::Map::new();
             for field in v {
-                if fields
-                    .insert(field.key.into_string(), from_abi(field.value)?)
-                    .is_some()
-                {
+                if fields.insert(field.key, from_abi(field.value)?).is_some() {
                     return Err("duplicate JSON object key".into());
                 }
             }

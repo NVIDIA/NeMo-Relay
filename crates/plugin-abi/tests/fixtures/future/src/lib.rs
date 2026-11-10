@@ -1,66 +1,38 @@
 // SPDX-FileCopyrightText: Copyright (c) 2026, NVIDIA CORPORATION & AFFILIATES. All rights reserved.
 // SPDX-License-Identifier: Apache-2.0
 
-//! Independently compiled native compatibility fixture.
-#![allow(non_camel_case_types, non_local_definitions)]
-use abi::abi_stable::{
-    export_root_module,
-    library::LibHeader,
-    prefix_type::PrefixTypeTrait,
-    sabi_trait::prelude::TD_Opaque,
-    sabi_types::RRef,
-    std_types::{ROption, RStr},
-};
-use abi::v1_0::*;
-use abi::{Bootstrap, Bootstrap_Ref, NativeApiVersion, PluginDescriptor};
-use std::sync::OnceLock;
+//! Later minor fixture with an additional checked factory module.
 #[path = "../../behavior_plugin.rs"]
 mod behavior;
-use behavior::Example;
-extern "C" fn create() -> Result<PluginBox> {
-    Result::ROk(Plugin_TO::from_value(Example, TD_Opaque))
+fn create() -> abi::v1_0::Result<abi::v1_0::PluginBox> {
+    Ok(abi::v1_0::PluginBox::new(behavior::Example))
 }
-extern "C" fn descriptor() -> PluginDescriptor {
-    PluginDescriptor {
-        native_api: NativeApiVersion::new(1, 1),
-        plugin_kind: "fixture".into(),
-    }
+unsafe extern "C" fn make() -> *mut std::ffi::c_void {
+    abi::v1_1::export(create)
 }
-fn factory_header() -> &'static LibHeader {
-    static HEADER: OnceLock<LibHeader> = OnceLock::new();
-    HEADER.get_or_init(|| LibHeader::from_module(Factory { create }.leak_into_prefix()))
+static EXPORTS: [abi::xabi::XabiExport; 1] = [abi::xabi::XabiExport::new(
+    abi::xabi::XabiStr::from_static(abi::v1_1::XabiV1AbiTraitFutureFactory::ID),
+    abi::xabi::XabiStr::from_static("nemo.relay.native.factory.v1.1"),
+    1,
+    1,
+    0,
+    make,
+)];
+static MANIFEST: abi::xabi::XabiManifest = abi::xabi::XabiManifest::new(&EXPORTS);
+#[unsafe(no_mangle)]
+pub extern "C" fn xabi_manifest() -> *const abi::xabi::XabiManifest {
+    &MANIFEST
 }
-extern "C" fn revision() -> u32 {
-    1
-}
-fn future_header() -> &'static LibHeader {
-    static HEADER: OnceLock<LibHeader> = OnceLock::new();
-    HEADER.get_or_init(|| {
-        LibHeader::from_module(
-            abi::v1_1::Factory {
-                v1_0: Factory { create }.leak_into_prefix(),
-                revision,
-            }
-            .leak_into_prefix(),
-        )
+#[unsafe(no_mangle)]
+pub extern "C" fn nemo_relay_native_bootstrap() -> *const abi::bootstrap::Bootstrap {
+    static HEADER: std::sync::OnceLock<abi::bootstrap::Bootstrap> = std::sync::OnceLock::new();
+    HEADER.get_or_init(|| abi::bootstrap::Bootstrap {
+        size: std::mem::size_of::<abi::bootstrap::Bootstrap>(),
+        generation: 1,
+        major: 1,
+        minor: 1,
+        kind: abi::xabi::XabiStr::from_static("fixture"),
+        schema: abi::xabi::XabiStr::from_static(abi::v1_1::schema()),
+        manifest: &MANIFEST,
     })
-}
-
-extern "C" fn query(name: RStr<'_>) -> ROption<RRef<'static, LibHeader>> {
-    if name.as_str() == "nemo.relay.native.factory.v1.1" {
-        return ROption::RSome(RRef::new(future_header()));
-    }
-    if name.as_str() == FACTORY_MODULE {
-        ROption::RSome(RRef::new(factory_header()))
-    } else {
-        ROption::RNone
-    }
-}
-#[export_root_module]
-pub fn module() -> Bootstrap_Ref {
-    Bootstrap {
-        descriptor,
-        query_module: query,
-    }
-    .leak_into_prefix()
 }

@@ -8,8 +8,7 @@ use std::path::{Component, Path, PathBuf};
 use std::sync::{Mutex, OnceLock};
 
 use nemo_relay_plugin::abi::{
-    Bootstrap_Ref, NATIVE_API_VERSION, NativeApiVersion, PluginDescriptor,
-    abi_stable::library::{AbiHeaderRef, LibHeader, ROOT_MODULE_LOADER_NAME_WITH_NUL, RootModule},
+    NATIVE_API_VERSION, NativeApiVersion, PluginDescriptor, bootstrap,
     v1_0::{self, PluginBox},
     validate_descriptor,
 };
@@ -421,8 +420,8 @@ struct ResidentLibrary {
     path: PathBuf,
     // The library and its complete staging closure are deliberately process-owned.
     _directory: tempfile::TempDir,
-    bootstrap: OnceLock<Result<Bootstrap_Ref, String>>,
-    factory: OnceLock<Result<v1_0::Factory_Ref, String>>,
+    bootstrap: OnceLock<Result<(PluginDescriptor, &'static bootstrap::Bootstrap), String>>,
+    factory: OnceLock<Result<std::sync::Arc<v1_0::FactoryBox>, String>>,
     identities: LibraryIdentities,
     #[cfg(windows)]
     sidecars: Vec<PathBuf>,
@@ -452,7 +451,7 @@ pub fn resident_library_path(identity: [u8; 32]) -> Option<PathBuf> {
 /// handle leaves only resident code and staging, never an active component.
 pub struct CheckedNativeLibrary {
     resident: &'static ResidentLibrary,
-    factory: v1_0::Factory_Ref,
+    factory: std::sync::Arc<v1_0::FactoryBox>,
     descriptor: PluginDescriptor,
     identity: [u8; 32],
 }
@@ -543,46 +542,25 @@ impl CheckedNativeLibrary {
                 Ok(())
             })
             .clone()?;
-        let bootstrap = resident
+        let (descriptor, header) = resident
             .bootstrap
             .get_or_init(|| {
-                // SAFETY: the library is resident for the process lifetime. This
-                // checks abi_stable's header before interpreting its root layout.
-                // Never use RootModule::load_from_file: its per-root-type cache
-                // would return the first plugin library for every artifact.
-                let reference = unsafe {
+                let symbol = unsafe {
                     resident
                         .raw
-                        .get::<AbiHeaderRef>(ROOT_MODULE_LOADER_NAME_WITH_NUL.as_bytes())
+                        .get::<unsafe extern "C" fn() -> *const bootstrap::Bootstrap>(
+                            bootstrap::SYMBOL,
+                        )
                 }
-                .map(|symbol| *symbol)
                 .map_err(|e| format!("invalid native bootstrap header: {e}"))?;
-                let header = reference
-                    .upgrade()
-                    .map_err(|e| format!("invalid native bootstrap header: {e}"))?;
-                checked_module::<Bootstrap_Ref>(header)
-                    .map_err(|e| format!("incompatible native bootstrap: {e}"))
+                unsafe { bootstrap::inspect(symbol()) }
             })
             .clone()?;
-        let descriptor = (bootstrap.descriptor())();
         validate_descriptor(&descriptor, api, plugin_kind, NATIVE_API_VERSION)?;
-        // v1.0 is the only implemented contract. A future host must add a
-        // separate branch/module, retaining these exact types and semantics.
+        let manifest = unsafe { bootstrap::check_contract(header) }?;
         let factory = resident
             .factory
-            .get_or_init(|| {
-                let header = (bootstrap.query_module())(v1_0::FACTORY_MODULE.into())
-                    .into_option()
-                    .ok_or_else(|| {
-                        format!(
-                            "native plugin is missing required module '{}'",
-                            v1_0::FACTORY_MODULE
-                        )
-                    })?;
-                checked_module::<v1_0::Factory_Ref>(header.get()).map_err(|e| {
-                    format!("incompatible native module '{}': {e}", v1_0::FACTORY_MODULE)
-                })
-            })
+            .get_or_init(|| unsafe { bootstrap::factory(manifest) }.map(std::sync::Arc::new))
             .clone()?;
         Ok(Self {
             resident,
@@ -594,8 +572,8 @@ impl CheckedNativeLibrary {
 
     /// Construct fresh plugin adapter state after all binary checks have passed.
     pub fn create_plugin(&self) -> Result<PluginBox, String> {
-        (self.factory.create())()
-            .into_result()
+        self.factory
+            .create()
             .map_err(|e| format!("{}: {}", e.code, e.message))
     }
 
@@ -611,16 +589,6 @@ impl CheckedNativeLibrary {
     pub fn resident_path(&self) -> &Path {
         &self.resident.path
     }
-}
-
-/// Require ABI layout metadata and check the module type before running its constructor.
-fn checked_module<M: RootModule>(header: &LibHeader) -> Result<M, String> {
-    // abi_stable permits libraries to opt out of its layout check. A checked
-    // native contract requires metadata before any module constructor runs.
-    if header.layout().is_none() {
-        return Err("native module omits required type-layout metadata".into());
-    }
-    header.init_root_module::<M>().map_err(|e| e.to_string())
 }
 
 fn load_platform_library(path: &Path) -> Result<libloading::Library, libloading::Error> {

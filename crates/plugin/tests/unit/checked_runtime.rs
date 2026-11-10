@@ -17,28 +17,22 @@ async fn conditional_gates_reject_async_dispatch_and_contain_author_panics() {
     );
     let invocation = || raw_invocation(json!(["tool_execution_intercept"]));
     assert_eq!(
-        from_abi(gate.invoke_sync(invocation()).into_result().unwrap()).unwrap(),
+        from_abi(gate.invoke_sync(invocation()).unwrap()).unwrap(),
         json!("blocked")
     );
     for value in [Json::Null, json!(["unknown_kind"]), json!({})] {
         assert!(gate.invoke_sync(raw_invocation(value)).is_err());
     }
-    assert!(gate.invoke(invocation(), ROption::RNone).await.is_err());
+    assert!(gate.invoke(invocation(), Option::None).await.is_err());
     assert!(
-        gate.invoke_tool(
-            invocation(),
-            a::Continuation_TO::from_value(Next, TD_Opaque)
-        )
-        .await
-        .is_err()
+        gate.invoke_tool(invocation(), a::ContinuationBox::new(Next))
+            .await
+            .is_err()
     );
     assert!(
-        gate.open_stream(
-            invocation(),
-            a::Continuation_TO::from_value(Next, TD_Opaque)
-        )
-        .await
-        .is_err()
+        gate.open_stream(invocation(), a::ContinuationBox::new(Next))
+            .await
+            .is_err()
     );
     let gate = Gate(
         |_: &BTreeSet<RuntimeRegistrationKind>, _: &str| -> Option<String> {
@@ -46,7 +40,7 @@ async fn conditional_gates_reject_async_dispatch_and_contain_author_panics() {
         },
         None,
     );
-    let error = gate.invoke_sync(invocation()).into_result().unwrap_err();
+    let error = gate.invoke_sync(invocation()).unwrap_err();
     assert!(error.message.contains("native gate callback panicked"));
 }
 
@@ -73,7 +67,7 @@ async fn component_shutdown_waits_for_an_admitted_dynamic_gate() {
     assert!(futures::poll!(&mut closing).is_pending());
     assert!(!executor.is_closed());
     release.send(()).unwrap();
-    thread.join().unwrap().into_result().unwrap();
-    closing.await.into_result().unwrap();
+    thread.join().unwrap().unwrap();
+    closing.await.unwrap();
     assert!(gate.invoke_sync(raw_invocation(json!([]))).is_err());
 }

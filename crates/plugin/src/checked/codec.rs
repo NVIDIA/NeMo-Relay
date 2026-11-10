@@ -27,8 +27,8 @@ impl ResponseCodec {
     }
 }
 /// Resolve request codec identity and expose operations only when the host reports an available capability.
-fn request(value: ROption<a::CodecBox>) -> Result<(LlmCodecIdentity, Option<RequestCodec>)> {
-    match value.into_option() {
+fn request(value: Option<a::CodecBox>) -> Result<(LlmCodecIdentity, Option<RequestCodec>)> {
+    match value {
         None => Ok((LlmCodecIdentity::None, None)),
         Some(v) => {
             let record: Json = decode(local(v.identity())?)?;
@@ -40,8 +40,8 @@ fn request(value: ROption<a::CodecBox>) -> Result<(LlmCodecIdentity, Option<Requ
     }
 }
 /// Resolve response codec identity and expose operations only when the host reports an available capability.
-fn response(value: ROption<a::CodecBox>) -> Result<(LlmCodecIdentity, Option<ResponseCodec>)> {
-    match value.into_option() {
+fn response(value: Option<a::CodecBox>) -> Result<(LlmCodecIdentity, Option<ResponseCodec>)> {
+    match value {
         None => Ok((LlmCodecIdentity::None, None)),
         Some(v) => {
             let record: Json = decode(local(v.identity())?)?;
@@ -59,7 +59,7 @@ pub struct LlmSanitizeRequestContext<'a> {
 }
 impl LlmSanitizeRequestContext<'_> {
     /// Bind request codec identity and capabilities to one sanitizer invocation.
-    pub(super) fn new(value: ROption<a::CodecBox>) -> Result<Self> {
+    pub(super) fn new(value: Option<a::CodecBox>) -> Result<Self> {
         let (codec, resolved) = request(value)?;
         Ok(Self {
             codec,
@@ -78,7 +78,7 @@ pub struct LlmSanitizeResponseContext<'a> {
 }
 impl LlmSanitizeResponseContext<'_> {
     /// Bind response codec identity and capabilities to one sanitizer invocation.
-    pub(super) fn new(value: ROption<a::CodecBox>) -> Result<Self> {
+    pub(super) fn new(value: Option<a::CodecBox>) -> Result<Self> {
         let (codec, resolved) = response(value)?;
         Ok(Self {
             codec,
@@ -114,7 +114,7 @@ pub struct LlmExecutionContext {
 }
 impl LlmExecutionContext {
     /// Build invocation codec context with an optional response capability for unary execution.
-    pub(super) fn new(req: ROption<a::CodecBox>, res: ROption<a::CodecBox>) -> Result<Self> {
+    pub(super) fn new(req: Option<a::CodecBox>, res: Option<a::CodecBox>) -> Result<Self> {
         let (codec, resolved) = request(req)?;
         let request_codec = LlmRequestContext { codec, resolved };
         let response_codec = if res.is_some() {

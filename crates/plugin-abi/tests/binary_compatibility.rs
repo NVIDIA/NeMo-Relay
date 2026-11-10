@@ -2,13 +2,10 @@
 // SPDX-License-Identifier: Apache-2.0
 
 //! Binary checks against separately compiled, frozen interface generations.
-
 extern crate nemo_relay_plugin_abi as abi;
 #[path = "fixtures/behavior_host.rs"]
 mod behavior;
-
-use abi_stable::library::{LibHeader, LibraryError, lib_header_from_path};
-use nemo_relay_plugin_abi::{Bootstrap_Ref, NativeApiVersion as Api, v1_0, validate_descriptor};
+use abi::{NativeApiVersion as Api, PluginDescriptor, bootstrap, validate_descriptor, xabi};
 use std::path::PathBuf;
 
 fn fixture_path(name: &str) -> PathBuf {
@@ -24,168 +21,129 @@ fn fixture_path(name: &str) -> PathBuf {
     ));
     assert!(
         path.is_file(),
-        "{} is missing; run just build-native-abi-test-fixtures before these tests",
+        "{} is missing; run just build-native-abi-test-fixtures",
         path.display()
     );
     path
 }
-
-fn fixture(name: &str) -> &'static LibHeader {
-    lib_header_from_path(&fixture_path(name))
-        .expect("fixture must export a compatible abi_stable header")
-}
-
-#[test]
-fn v1_0_plugin_loads_on_current_and_future_hosts() {
-    let header = fixture("baseline");
-    let module = header.init_root_module::<Bootstrap_Ref>().unwrap();
-    let descriptor = (module.descriptor())();
-    for host in [Api::new(1, 0), Api::new(1, 1)] {
-        validate_descriptor(&descriptor, Api::new(1, 0), "fixture", host).unwrap();
-        let factory = (module.query_module())(v1_0::FACTORY_MODULE.into())
-            .into_option()
-            .unwrap();
-        let factory = factory
-            .get()
-            .init_root_module::<v1_0::Factory_Ref>()
-            .unwrap();
-        let plugin = (factory.create())().into_result().unwrap();
-        assert!(plugin.allows_multiple_components());
-        assert!(
-            plugin
-                .validate(nemo_relay_plugin_abi::Json::Null)
-                .is_empty()
-        );
-        behavior::assert_behavior(plugin);
+fn raw_fixture(name: &str) -> *const bootstrap::Bootstrap {
+    let library = unsafe { xabi::ModuleHandle::load(fixture_path(name)) }.unwrap();
+    let symbol = unsafe {
+        library.get::<unsafe extern "C" fn() -> *const bootstrap::Bootstrap>(bootstrap::SYMBOL)
     }
-    assert_future_host_accepts("baseline");
+    .unwrap();
+    let raw = unsafe { symbol() };
+    std::mem::forget(library);
+    raw
 }
-
-#[test]
-fn newer_sdk_requires_newer_host_and_selects_its_own_module() {
-    let module = fixture("future")
-        .init_root_module::<Bootstrap_Ref>()
-        .unwrap();
-    let descriptor = (module.descriptor())();
-    assert!(validate_descriptor(&descriptor, Api::new(1, 1), "fixture", Api::new(1, 0)).is_err());
-    validate_descriptor(&descriptor, Api::new(1, 1), "fixture", Api::new(1, 1)).unwrap();
-    assert_future_host_accepts("future");
+fn fixture(name: &str) -> Result<(PluginDescriptor, &'static xabi::XabiManifest), String> {
+    unsafe { bootstrap::check(raw_fixture(name)) }
 }
-
-/// Unchanged v1.0 contracts load in both directions across Cargo package major and prerelease versions.
-#[test]
-fn package_release_versions_do_not_define_binary_compatibility() {
-    let bootstrap = fixture("package_next")
-        .init_root_module::<Bootstrap_Ref>()
-        .unwrap();
-    let descriptor = (bootstrap.descriptor())();
-    validate_descriptor(&descriptor, Api::new(1, 0), "fixture", Api::new(1, 0)).unwrap();
-    let module = (bootstrap.query_module())(v1_0::FACTORY_MODULE.into())
-        .into_option()
-        .unwrap();
-    let factory = module
-        .get()
-        .init_root_module::<v1_0::Factory_Ref>()
-        .unwrap();
-    behavior::assert_behavior((factory.create())().into_result().unwrap());
-    assert_future_host_accepts("package_next");
-    let directory = fixture_path("baseline").parent().unwrap().to_owned();
+fn assert_host_accepts(host: &str, name: &str) {
+    let directory = fixture_path(name).parent().unwrap().to_owned();
     let host = directory.join(format!(
-        "nemo-relay-native-abi-fixture-package-next-host{}",
+        "nemo-relay-native-abi-fixture-{host}{}",
         std::env::consts::EXE_SUFFIX
-    ));
-    for plugin in ["baseline", "package_next"] {
-        let output = std::process::Command::new(&host)
-            .arg(fixture_path(plugin))
-            .output()
-            .unwrap();
-        assert!(
-            output.status.success(),
-            "package-version host failed: {}",
-            String::from_utf8_lossy(&output.stderr)
-        );
-    }
-}
-
-#[test]
-fn reject_different_major_and_missing_module_before_factory_use() {
-    let module = fixture("major")
-        .init_root_module::<Bootstrap_Ref>()
-        .unwrap();
-    let descriptor = (module.descriptor())();
-    assert!(validate_descriptor(&descriptor, Api::new(2, 0), "fixture", Api::new(1, 0)).is_err());
-    assert!((module.query_module())("not.a.published.module".into()).is_none());
-}
-
-#[test]
-fn reject_changed_function_signature_and_marker_traits() {
-    for name in ["signature", "marker", "reordered"] {
-        let module = fixture(name).init_root_module::<Bootstrap_Ref>().unwrap();
-        let factory = (module.query_module())(v1_0::FACTORY_MODULE.into())
-            .into_option()
-            .unwrap();
-        assert!(
-            factory
-                .get()
-                .init_root_module::<v1_0::Factory_Ref>()
-                .is_err(),
-            "{name} must be rejected by layout checking"
-        );
-    }
-}
-
-#[test]
-fn incompatible_dependency_generation_fails_before_module_discovery() {
-    assert!(matches!(
-        lib_header_from_path(&fixture_path("dependency")),
-        Err(LibraryError::InvalidAbiHeader { .. })
-    ));
-}
-
-#[test]
-fn declared_contract_requires_its_factory_module() {
-    let module = fixture("missing")
-        .init_root_module::<Bootstrap_Ref>()
-        .unwrap();
-    let descriptor = (module.descriptor())();
-    validate_descriptor(&descriptor, Api::new(1, 0), "fixture", Api::new(1, 0)).unwrap();
-    assert!((module.query_module())(v1_0::FACTORY_MODULE.into()).is_none());
-}
-
-#[test]
-fn independent_loading_does_not_return_the_first_library_for_every_path() {
-    let old = fixture("baseline")
-        .init_root_module::<Bootstrap_Ref>()
-        .unwrap();
-    let new = fixture("future")
-        .init_root_module::<Bootstrap_Ref>()
-        .unwrap();
-    assert_eq!((old.descriptor())().native_api, Api::new(1, 0));
-    assert_eq!((new.descriptor())().native_api, Api::new(1, 1));
-}
-
-fn assert_future_host_accepts(name: &str) {
-    let directory = std::env::var_os("NEMO_RELAY_TEST_NATIVE_ABI_FIXTURES")
-        .map(PathBuf::from)
-        .unwrap_or_else(|| {
-            PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../../target/native-abi-fixtures/debug")
-        });
-    let host = directory.join(format!(
-        "nemo-relay-native-abi-fixture-future-host{}",
-        std::env::consts::EXE_SUFFIX
-    ));
-    let plugin = directory.join(format!(
-        "{}nemo_relay_native_abi_fixture_{name}{}",
-        std::env::consts::DLL_PREFIX,
-        std::env::consts::DLL_SUFFIX
     ));
     let output = std::process::Command::new(host)
-        .arg(plugin)
+        .arg(fixture_path(name))
         .output()
-        .expect("build the future host fixture before running tests");
+        .expect("build the host fixture first");
     assert!(
         output.status.success(),
-        "future host failed: {}",
+        "host failed: {}",
         String::from_utf8_lossy(&output.stderr)
     );
+}
+#[test]
+fn v1_0_plugin_loads_on_current_and_future_hosts() {
+    let (descriptor, manifest) = fixture("baseline").unwrap();
+    for host in [Api::new(1, 0), Api::new(1, 1)] {
+        validate_descriptor(&descriptor, Api::new(1, 0), "fixture", host).unwrap();
+        let factory = unsafe { bootstrap::factory(manifest) }.unwrap();
+        let plugin = factory.create().unwrap();
+        assert!(plugin.allows_multiple_components());
+        assert!(plugin.validate(abi::Json::Null).is_empty());
+        behavior::assert_behavior(plugin);
+    }
+    assert_host_accepts("future-host", "baseline");
+}
+#[test]
+fn newer_sdk_requires_newer_host_and_selects_its_own_module() {
+    let error = fixture("future").err().unwrap();
+    assert!(error.contains("requires native API v1.1"), "{error}");
+    assert_host_accepts("future-host", "future");
+}
+#[test]
+fn package_release_versions_do_not_define_binary_compatibility() {
+    let (descriptor, manifest) = fixture("package_next").unwrap();
+    validate_descriptor(&descriptor, Api::new(1, 0), "fixture", Api::new(1, 0)).unwrap();
+    let factory = unsafe { bootstrap::factory(manifest) }.unwrap();
+    behavior::assert_behavior(factory.create().unwrap());
+    assert_host_accepts("future-host", "package_next");
+    for plugin in ["baseline", "package_next"] {
+        assert_host_accepts("package-next-host", plugin);
+    }
+}
+#[test]
+fn reject_different_major_and_missing_module_before_factory_use() {
+    let error = fixture("major").err().unwrap();
+    assert!(error.contains("requires native API v2.0"), "{error}");
+    let (_, manifest) = fixture("missing").unwrap();
+    assert!(unsafe { bootstrap::factory(manifest) }.is_err());
+}
+#[test]
+fn reject_changed_function_signature_and_marker_traits() {
+    for name in ["signature", "marker"] {
+        let error = fixture(name)
+            .err()
+            .expect("incompatible binary must fail before construction");
+        assert!(
+            error.contains("incompatible native contract"),
+            "{name}: {error}"
+        );
+    }
+}
+#[test]
+fn incompatible_dependency_generation_fails_before_module_discovery() {
+    let error = fixture("dependency").err().unwrap();
+    assert!(error.contains("dependency ABI"), "{error}");
+}
+#[test]
+fn declared_contract_requires_its_factory_module() {
+    let (descriptor, manifest) = fixture("missing").unwrap();
+    validate_descriptor(&descriptor, Api::new(1, 0), "fixture", Api::new(1, 0)).unwrap();
+    let error = unsafe { bootstrap::factory(manifest) }.err().unwrap();
+    assert!(error.contains("missing required factory module"), "{error}");
+}
+#[test]
+fn independent_loading_does_not_return_the_first_library_for_every_path() {
+    let old = unsafe { &*raw_fixture("baseline") };
+    let new = unsafe { &*raw_fixture("future") };
+    assert_eq!((old.major, old.minor), (1, 0));
+    assert_eq!((new.major, new.minor), (1, 1));
+}
+
+#[test]
+fn changed_generated_field_offsets_fail_even_when_source_size_and_alignment_match() {
+    let baseline = unsafe { &*raw_fixture("baseline") };
+    let reordered = unsafe { &*raw_fixture("reordered") };
+    let baseline_schema = unsafe { baseline.schema.as_str() }.unwrap();
+    let reordered_schema = unsafe { reordered.schema.as_str() }.unwrap();
+    // The macro invocations and Rust authoring declarations remain identical.
+    assert_eq!(
+        baseline_schema.split_once("\npointer:").unwrap().0,
+        reordered_schema.split_once("\npointer:").unwrap().0,
+    );
+    let record = |schema: &str| {
+        schema
+            .split(';')
+            .find(|entry| entry.starts_with("FieldWire:"))
+            .unwrap()
+            .to_owned()
+    };
+    assert_eq!(record(baseline_schema), record(reordered_schema));
+    assert_ne!(baseline_schema, reordered_schema);
+    let error = unsafe { bootstrap::check(reordered) }.err().unwrap();
+    assert!(error.contains("incompatible native contract"), "{error}");
 }

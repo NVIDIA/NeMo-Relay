@@ -1,47 +1,34 @@
 // SPDX-FileCopyrightText: Copyright (c) 2026, NVIDIA CORPORATION & AFFILIATES. All rights reserved.
 // SPDX-License-Identifier: Apache-2.0
 
-//! Host compiled against a synthetic later interface release.
-use abi::{
-    Bootstrap_Ref, NativeApiVersion as Api, abi_stable::library::lib_header_from_path,
-    validate_descriptor,
-};
+//! Independently compiled host for frozen binary compatibility.
 #[path = "../../behavior_host.rs"]
 mod behavior;
 fn main() {
     let path = std::env::args_os().nth(1).expect("plugin path");
-    let bootstrap = lib_header_from_path(std::path::Path::new(&path))
-        .unwrap()
-        .init_root_module::<Bootstrap_Ref>()
-        .unwrap();
-    let descriptor = (bootstrap.descriptor())();
-    validate_descriptor(
+    let library = unsafe { abi::xabi::ModuleHandle::load(path) }.unwrap();
+    let raw = unsafe {
+        library.get::<unsafe extern "C" fn() -> *const abi::bootstrap::Bootstrap>(
+            abi::bootstrap::SYMBOL,
+        )
+    }
+    .unwrap();
+    let (descriptor, manifest) = unsafe { abi::bootstrap::check(raw()) }.unwrap();
+    std::mem::forget(library);
+    abi::validate_descriptor(
         &descriptor,
         descriptor.native_api,
         "fixture",
-        Api::new(1, 1),
+        abi::NATIVE_API_VERSION,
     )
     .unwrap();
-    let module = if descriptor.native_api.minor == 0 {
-        "nemo.relay.native.factory.v1.0"
-    } else {
-        "nemo.relay.native.factory.v1.1"
-    };
-    let module = (bootstrap.query_module())(module.into())
-        .into_option()
-        .unwrap();
     if descriptor.native_api.minor == 0 {
-        let factory = module
-            .get()
-            .init_root_module::<abi::v1_0::Factory_Ref>()
-            .unwrap();
-        behavior::assert_behavior((factory.create())().into_result().unwrap());
+        let factory = unsafe { abi::bootstrap::factory(manifest) }.unwrap();
+        behavior::assert_behavior(factory.create().unwrap());
     } else {
-        let factory = module
-            .get()
-            .init_root_module::<abi::v1_1::Factory_Ref>()
-            .unwrap();
-        assert_eq!((factory.revision())(), 1);
-        behavior::assert_behavior((factory.v1_0().create())().into_result().unwrap());
+        let factory = unsafe { abi::v1_1::load(manifest) };
+        assert_eq!(factory.xabi_borrow().revision().unwrap(), 1);
+        let plugin = factory.xabi_borrow().create().unwrap().0;
+        behavior::assert_behavior(plugin);
     }
 }

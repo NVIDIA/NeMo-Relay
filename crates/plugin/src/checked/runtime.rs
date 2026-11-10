@@ -307,7 +307,7 @@ impl PluginRuntime {
             priority: 0,
             break_chain: false,
             options: encode(json!({"kinds":kinds,"registration_name":registration_name}))?,
-            callback: a::Callback_TO::from_value(Gate(callback, self.executor.clone()), TD_Opaque),
+            callback: a::CallbackBox::new(Gate(callback, self.executor.clone())),
         };
         Ok(ConditionalMiddlewareGuardrailHandle(
             local(self.raw.register_gate(descriptor))?.to_string(),
@@ -448,7 +448,7 @@ impl<F: Fn(&BTreeSet<RuntimeRegistrationKind>, &str) -> Option<String> + Send + 
         _: a::Invocation,
         _: a::ContinuationBox,
     ) -> FfiFuture<a::Result<a::ToolExecutionOutcome>> {
-        async { a::Result::RErr(failure("gate cannot execute tools")) }.into_ffi()
+        async { a::Result::Err(failure("gate cannot execute tools")) }.into_ffi()
     }
     /// Hold component admission during a synchronous gate call and contain author panics.
     fn invoke_sync(&self, i: a::Invocation) -> a::Result<abi::Json> {
@@ -468,16 +468,16 @@ impl<F: Fn(&BTreeSet<RuntimeRegistrationKind>, &str) -> Option<String> + Send + 
     fn invoke(
         &self,
         _: a::Invocation,
-        _: ROption<a::ContinuationBox>,
+        _: Option<a::ContinuationBox>,
     ) -> FfiFuture<a::Result<abi::Json>> {
-        async { a::Result::RErr(failure("gate is synchronous")) }.into_ffi()
+        async { a::Result::Err(failure("gate is synchronous")) }.into_ffi()
     }
     fn open_stream(
         &self,
         _: a::Invocation,
         _: a::ContinuationBox,
     ) -> FfiFuture<a::Result<a::StreamBox>> {
-        async { a::Result::RErr(failure("gate is synchronous")) }.into_ffi()
+        async { a::Result::Err(failure("gate is synchronous")) }.into_ffi()
     }
 }
 

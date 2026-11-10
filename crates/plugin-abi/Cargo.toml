@@ -16,5 +16,8 @@ workspace = true
 
 [dependencies]
 # Third-party dependencies (exact ABI pins inherited from the workspace).
-abi_stable.workspace = true
-async-ffi.workspace = true
+xabi.workspace = true
+
+[build-dependencies]
+quote.workspace = true
+syn = { workspace = true, features = ["full"] }

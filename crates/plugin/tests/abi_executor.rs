@@ -25,7 +25,6 @@ async fn close(executor: &ComponentExecutor) {
     tokio::time::timeout(Duration::from_secs(5), executor.shutdown())
         .await
         .unwrap()
-        .into_result()
         .unwrap();
     assert!(executor.is_closed());
     assert_eq!(executor.active_tasks(), 0);
@@ -37,10 +36,9 @@ async fn user_future_runs_on_its_own_executor_and_panics_become_errors() {
     let name = executor
         .execute(async {
             tokio::time::sleep(Duration::from_millis(1)).await;
-            AbiResult::ROk(std::thread::current().name().unwrap().to_owned())
+            AbiResult::Ok(std::thread::current().name().unwrap().to_owned())
         })
         .await
-        .into_result()
         .unwrap();
     assert!(name.starts_with("nemo-relay-plugin-lifecycle-test"));
     let panic = executor
@@ -48,7 +46,6 @@ async fn user_future_runs_on_its_own_executor_and_panics_become_errors() {
             panic!("user callback");
         })
         .await
-        .into_result()
         .unwrap_err();
     assert_eq!(panic.code.as_str(), "panic");
     close(&executor).await;
@@ -64,7 +61,7 @@ async fn dropping_unpolled_foreign_future_cancels_already_running_user_future() 
         let _probe = probe;
         started.send(()).unwrap();
         std::future::pending::<()>().await;
-        AbiResult::ROk(())
+        AbiResult::Ok(())
     });
     ready.await.unwrap();
     drop(future); // The foreign future has never been polled.
@@ -86,36 +83,26 @@ async fn concurrent_shutdown_drains_tasks_and_stale_executor_is_inert() {
     let pending = executor.execute(async move {
         let _probe = probe;
         std::future::pending::<()>().await;
-        AbiResult::ROk(())
+        AbiResult::Ok(())
     });
     let (first, second) = tokio::join!(executor.shutdown(), executor.shutdown());
-    first.into_result().unwrap();
-    second.into_result().unwrap();
+    first.unwrap();
+    second.unwrap();
     assert!(dropped.load(Ordering::Acquire));
     assert_eq!(executor.active_tasks(), 0);
     assert!(executor.is_closed());
-    assert_eq!(
-        pending.await.into_result().unwrap_err().code.as_str(),
-        "revoked"
-    );
+    assert_eq!(pending.await.unwrap_err().code.as_str(), "revoked");
     let called = Arc::new(AtomicBool::new(false));
     let marker = called.clone();
     let denied = executor.execute(async move {
         marker.store(true, Ordering::Release);
-        AbiResult::ROk(())
+        AbiResult::Ok(())
     });
-    assert_eq!(
-        denied.await.into_result().unwrap_err().code.as_str(),
-        "revoked"
-    );
+    assert_eq!(denied.await.unwrap_err().code.as_str(), "revoked");
     assert!(!called.load(Ordering::Acquire));
     close(&executor).await;
     let fresh = self::executor();
-    fresh
-        .execute(async { AbiResult::ROk(()) })
-        .await
-        .into_result()
-        .unwrap();
+    fresh.execute(async { AbiResult::Ok(()) }).await.unwrap();
     close(&fresh).await;
 }
 
@@ -130,7 +117,7 @@ async fn shutdown_started_from_own_executor_does_not_wait_on_itself() {
         drop(owner.shutdown());
         send.send(()).unwrap();
         std::future::pending::<()>().await;
-        AbiResult::ROk(())
+        AbiResult::Ok(())
     });
     receive.await.unwrap();
     close(&executor).await;
@@ -145,7 +132,7 @@ async fn concurrent_last_handle_drops_teardown_off_host_workers() {
     let first_barrier = barrier.clone();
     let pending = executor.execute(async {
         std::future::pending::<()>().await;
-        AbiResult::ROk(())
+        AbiResult::Ok(())
     });
     let one = tokio::spawn(async move {
         first_barrier.wait().await;
@@ -160,7 +147,6 @@ async fn concurrent_last_handle_drops_teardown_off_host_workers() {
     let error = tokio::time::timeout(Duration::from_secs(5), pending)
         .await
         .unwrap()
-        .into_result()
         .unwrap_err();
     assert_eq!(error.code.as_str(), "revoked");
 }
@@ -175,13 +161,12 @@ async fn cleanup_survives_dropped_waiters_and_remains_admissible_after_revocatio
     let cleanup = executor.execute_cleanup(async move {
         let _probe = probe;
         receive.await.unwrap();
-        AbiResult::ROk(())
+        AbiResult::Ok(())
     });
     drop(cleanup);
     let denied = executor
-        .execute(async { AbiResult::ROk(()) })
+        .execute(async { AbiResult::Ok(()) })
         .await
-        .into_result()
         .unwrap_err();
     assert_eq!(denied.code.as_str(), "revoked");
     send.send(()).unwrap();
@@ -194,9 +179,8 @@ async fn cleanup_survives_dropped_waiters_and_remains_admissible_after_revocatio
 async fn direct_polling_preserves_caller_thread_and_plugin_runtime_context() {
     let executor = executor();
     let runtime_id = executor
-        .execute(async { AbiResult::ROk(tokio::runtime::Handle::current().id()) })
+        .execute(async { AbiResult::Ok(tokio::runtime::Handle::current().id()) })
         .await
-        .into_result()
         .unwrap();
     let caller = std::thread::current().id();
     let observed = executor
@@ -204,10 +188,9 @@ async fn direct_polling_preserves_caller_thread_and_plugin_runtime_context() {
             assert_eq!(std::thread::current().id(), caller);
             tokio::time::sleep(Duration::from_millis(1)).await;
             assert_eq!(std::thread::current().id(), caller);
-            AbiResult::ROk(tokio::runtime::Handle::current().id())
+            AbiResult::Ok(tokio::runtime::Handle::current().id())
         })
         .await
-        .into_result()
         .unwrap();
     assert_eq!(runtime_id, observed);
     let error = executor
@@ -215,7 +198,6 @@ async fn direct_polling_preserves_caller_thread_and_plugin_runtime_context() {
             panic!("direct callback");
         })
         .await
-        .into_result()
         .unwrap_err();
     assert_eq!(error.code.as_str(), "panic");
     close(&executor).await;
@@ -230,7 +212,7 @@ async fn direct_unpolled_drop_and_shutdown_release_future_ownership() {
     let future = executor.execute_direct(async move {
         let _probe = probe;
         std::future::pending::<()>().await;
-        AbiResult::ROk(())
+        AbiResult::Ok(())
     });
     assert!(!first.load(Ordering::Acquire));
     drop(future);
@@ -241,14 +223,11 @@ async fn direct_unpolled_drop_and_shutdown_release_future_ownership() {
     let retained = executor.execute_direct(async move {
         let _probe = probe;
         std::future::pending::<()>().await;
-        AbiResult::ROk(())
+        AbiResult::Ok(())
     });
     close(&executor).await;
     assert!(second.load(Ordering::Acquire));
-    assert_eq!(
-        retained.await.into_result().unwrap_err().code.as_str(),
-        "revoked"
-    );
+    assert_eq!(retained.await.unwrap_err().code.as_str(), "revoked");
     // A stale wrapper cannot retain the shared runtime after component close.
     let fresh =
         ComponentExecutor::new(NativeExecutorConfig { worker_threads: 2 }, "lifecycle-test")
@@ -262,14 +241,12 @@ async fn shared_runtime_keeps_component_tasks_and_shutdown_isolated() {
     let first = executor();
     let second = executor();
     let a = first
-        .execute(async { AbiResult::ROk(tokio::runtime::Handle::current().id()) })
+        .execute(async { AbiResult::Ok(tokio::runtime::Handle::current().id()) })
         .await
-        .into_result()
         .unwrap();
     let b = second
-        .execute(async { AbiResult::ROk(tokio::runtime::Handle::current().id()) })
+        .execute(async { AbiResult::Ok(tokio::runtime::Handle::current().id()) })
         .await
-        .into_result()
         .unwrap();
     assert_eq!(a, b);
     assert!(
@@ -293,19 +270,17 @@ async fn shared_runtime_keeps_component_tasks_and_shutdown_isolated() {
     second
         .execute_direct(async {
             tokio::time::sleep(Duration::from_millis(1)).await;
-            AbiResult::ROk(())
+            AbiResult::Ok(())
         })
         .await
-        .into_result()
         .unwrap();
     close(&second).await;
     let fresh =
         ComponentExecutor::new(NativeExecutorConfig { worker_threads: 2 }, "lifecycle-test")
             .unwrap();
     let id = fresh
-        .execute(async { AbiResult::ROk(tokio::runtime::Handle::current().id()) })
+        .execute(async { AbiResult::Ok(tokio::runtime::Handle::current().id()) })
         .await
-        .into_result()
         .unwrap();
     assert_ne!(a, id);
     close(&fresh).await;
@@ -319,7 +294,7 @@ async fn direct_future_can_start_its_own_shutdown() {
     let result = executor.execute_direct(async move {
         drop(owner.shutdown());
         std::future::pending::<()>().await;
-        AbiResult::ROk(())
+        AbiResult::Ok(())
     });
     assert!(
         tokio::time::timeout(Duration::from_secs(5), result)
@@ -343,19 +318,14 @@ fn host_component_does_not_capture_the_activation_runtime() {
         host.block_on(async {
             assert_eq!(
                 executor
-                    .execute_direct(async {
-                        AbiResult::ROk(tokio::runtime::Handle::current().id())
-                    })
+                    .execute_direct(async { AbiResult::Ok(tokio::runtime::Handle::current().id()) })
                     .await
-                    .into_result()
                     .unwrap(),
                 expected
             );
         });
     }
-    futures::executor::block_on(executor.shutdown())
-        .into_result()
-        .unwrap();
+    futures::executor::block_on(executor.shutdown()).unwrap();
     assert!(executor.is_closed());
 }
 
@@ -372,37 +342,33 @@ fn inline_components_do_not_create_a_tokio_runtime() {
         executor
             .execute_direct(async {
                 assert!(tokio::runtime::Handle::try_current().is_err());
-                AbiResult::ROk(())
+                AbiResult::Ok(())
             })
             .await
-            .into_result()
             .unwrap();
         executor
             .execute(async {
                 assert!(tokio::runtime::Handle::try_current().is_err());
-                AbiResult::ROk(())
+                AbiResult::Ok(())
             })
             .await
-            .into_result()
             .unwrap();
         executor
             .execute_blocking(|| {
                 assert!(tokio::runtime::Handle::try_current().is_err());
-                AbiResult::ROk(())
+                AbiResult::Ok(())
             })
             .await
-            .into_result()
             .unwrap();
         executor
             .execute_cleanup(async {
                 assert!(tokio::runtime::Handle::try_current().is_err());
-                AbiResult::ROk(())
+                AbiResult::Ok(())
             })
             .await
-            .into_result()
             .unwrap();
         assert!(executor.spawn(async {}).is_err());
-        executor.shutdown().await.into_result().unwrap();
+        executor.shutdown().await.unwrap();
     });
     assert!(executor.is_closed());
     assert_eq!(executor.active_tasks(), 0);
@@ -417,22 +383,18 @@ fn direct_operation_cancellation_is_independent_of_component_shutdown() {
     let (future, cancellation) = executor.execute_direct_tracked(async move {
         let _probe = probe;
         std::future::pending::<()>().await;
-        AbiResult::ROk(())
+        AbiResult::Ok(())
     });
     cancellation.cancel();
     assert!(dropped.load(Ordering::Acquire));
     assert_eq!(executor.active_tasks(), 0);
     futures::executor::block_on(async {
-        assert_eq!(
-            future.await.into_result().unwrap_err().code.as_str(),
-            "cancelled"
-        );
+        assert_eq!(future.await.unwrap_err().code.as_str(), "cancelled");
         executor
-            .execute_direct(async { AbiResult::ROk(()) })
+            .execute_direct(async { AbiResult::Ok(()) })
             .await
-            .into_result()
             .unwrap();
-        executor.shutdown().await.into_result().unwrap();
+        executor.shutdown().await.unwrap();
     });
 }
 
@@ -451,7 +413,7 @@ fn cancellation_racing_a_pending_poll_releases_retained_waiters() {
                 std::task::Poll::<()>::Pending
             })
             .await;
-            AbiResult::ROk(())
+            AbiResult::Ok(())
         });
         let poller = std::thread::spawn(move || {
             let waker = futures::task::noop_waker();
@@ -466,9 +428,7 @@ fn cancellation_racing_a_pending_poll_releases_retained_waiters() {
         assert_eq!(executor.active_tasks(), 0);
         drop(retained);
     }
-    futures::executor::block_on(executor.shutdown())
-        .into_result()
-        .unwrap();
+    futures::executor::block_on(executor.shutdown()).unwrap();
 }
 
 /// Cancellation must return during a poll while cleanup retains admission until that poll exits.
@@ -487,7 +447,7 @@ fn cancellation_during_poll_hands_cleanup_back_without_waiting_on_the_poll_lock(
             std::task::Poll::<()>::Pending
         })
         .await;
-        AbiResult::ROk(())
+        AbiResult::Ok(())
     });
     let poller = std::thread::spawn(move || {
         let waker = futures::task::noop_waker();
@@ -513,7 +473,5 @@ fn cancellation_during_poll_hands_cleanup_back_without_waiting_on_the_poll_lock(
     assert!(dropped.load(Ordering::Acquire));
     assert_eq!(executor.active_tasks(), 0);
     drop(retained);
-    futures::executor::block_on(executor.shutdown())
-        .into_result()
-        .unwrap();
+    futures::executor::block_on(executor.shutdown()).unwrap();
 }

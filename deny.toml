@@ -5,8 +5,6 @@
 # Remove these exceptions when opentelemetry-otlp and tonic support zstd >=0.14.3.
 # The CLI uses the patched release; telemetry still requires zstd 0.13.
 ignore = [
-    { id = "RUSTSEC-2024-0014", reason = "The pinned abi_stable 0.11.3 interface requires generational-arena 0.2.9. This advisory reports maintenance status; ABI dependency updates require binary compatibility validation." },
-    { id = "RUSTSEC-2024-0436", reason = "The pinned abi_stable 0.11.3 interface requires paste 1.0.15 at build time. This advisory reports maintenance status; ABI dependency updates require binary compatibility validation." },
     { id = "RUSTSEC-2026-0391", reason = "Telemetry does not reuse borrowed streaming contexts: tonic creates fresh read encoders/decoders per message and opentelemetry-otlp uses bulk compression." },
     { id = "RUSTSEC-2026-0398", reason = "The zstd-safe 7.2.4 seekable feature is not enabled, including in all-features workspace builds." },
     { id = "RUSTSEC-2026-0403", reason = "Telemetry uses read-based streaming and bulk compression, not the affected write-based streaming decoder; CLI decompression uses patched zstd-safe 8.2.0." },
@@ -73,12 +71,6 @@ allow = ["MIT-0"]
 name = "borrow-or-share"
 version = "*"
 allow = ["MIT-0"]
-
-# abi_stable's pinned arena implementation. Keep this exception version-specific.
-[[licenses.exceptions]]
-name = "generational-arena"
-version = "=0.2.9"
-allow = ["MPL-2.0"]
 
 [[licenses.exceptions]]
 name = "cbindgen"

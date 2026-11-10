@@ -6,7 +6,7 @@
 //! Middleware futures are polled directly with optional library-local Tokio context.
 //! Foreign future destruction releases unpolled work. Poll panics are
 //! converted here, in the originating library; panicking destructors and foreign
-//! wakers retain async-ffi's abort limitations.
+//! wakers retain xabi's abort limitations.
 
 use std::collections::HashMap;
 use std::future::Future;
@@ -18,7 +18,7 @@ use std::task::{Context, Poll};
 
 use futures::{FutureExt as _, task::AtomicWaker};
 use nemo_relay_plugin_abi::{
-    async_ffi::{FfiFuture, FutureExt as _},
+    future::{FfiFuture, FutureExt as _},
     v1_0::{Component, Error, Result as AbiResult},
 };
 use tokio::runtime::{Handle, Runtime};
@@ -173,7 +173,7 @@ impl<T: Send> Future for DirectFuture<T> {
             let previous = self.0.cancelled.fetch_or(POLLING, Ordering::AcqRel);
             if previous & CANCELLATION != 0 || slot.future.is_none() {
                 slot.finish();
-                Poll::Ready(AbiResult::RErr(self.0.error()))
+                Poll::Ready(AbiResult::Err(self.0.error()))
             } else {
                 let handle = slot.runtime.as_ref().map(|runtime| runtime.handle.clone());
                 let _entered = handle.as_ref().map(Handle::enter);
@@ -181,7 +181,7 @@ impl<T: Send> Future for DirectFuture<T> {
                     slot.future.as_mut().unwrap().as_mut().poll(cx)
                 }))
                 .unwrap_or_else(|_| {
-                    Poll::Ready(AbiResult::RErr(Error::new(
+                    Poll::Ready(AbiResult::Err(Error::new(
                         "panic",
                         "native plugin future panicked",
                     )))
@@ -201,7 +201,7 @@ impl<T: Send> Future for DirectFuture<T> {
                 .lock()
                 .unwrap_or_else(|e| e.into_inner())
                 .finish();
-            return Poll::Ready(AbiResult::RErr(self.0.error()));
+            return Poll::Ready(AbiResult::Err(self.0.error()));
         }
         polled
     }
@@ -327,7 +327,7 @@ impl ComponentExecutor {
             Ok(runtime) => runtime,
             Err(message) => {
                 return (
-                    async move { AbiResult::RErr(Error::new("revoked", message)) }.into_ffi(),
+                    async move { AbiResult::Err(Error::new("revoked", message)) }.into_ffi(),
                     DirectCancellation::default(),
                 );
             }
@@ -383,13 +383,13 @@ impl ComponentExecutor {
     ) -> FfiFuture<AbiResult<T>> {
         let mut state = self.inner.state.lock().unwrap_or_else(|e| e.into_inner());
         if !state.accepting {
-            return async { AbiResult::RErr(Error::new("revoked", "component is shut down")) }
+            return async { AbiResult::Err(Error::new("revoked", "component is shut down")) }
                 .into_ffi();
         }
         let runtime = match Self::runtime(&mut state, false) {
             Ok(runtime) => runtime,
             Err(message) => {
-                return async move { AbiResult::RErr(Error::new("runtime", message)) }.into_ffi();
+                return async move { AbiResult::Err(Error::new("runtime", message)) }.into_ffi();
             }
         };
         let admission = SynchronousCall {
@@ -400,7 +400,7 @@ impl ComponentExecutor {
         let work = move || {
             let _admission = admission;
             let value = std::panic::catch_unwind(AssertUnwindSafe(callback)).unwrap_or_else(|_| {
-                AbiResult::RErr(Error::new("panic", "native blocking callback panicked"))
+                AbiResult::Err(Error::new("panic", "native blocking callback panicked"))
             });
             let _ = send.send(value);
         };
@@ -410,13 +410,13 @@ impl ComponentExecutor {
             .name(format!("{}-blocking", self.inner.thread_name))
             .spawn(work)
         {
-            return async move { AbiResult::RErr(Error::new("runtime", error.to_string())) }
+            return async move { AbiResult::Err(Error::new("runtime", error.to_string())) }
                 .into_ffi();
         }
         drop(state);
         async move {
             receive.await.unwrap_or_else(|_| {
-                AbiResult::RErr(Error::new("cancelled", "blocking callback stopped"))
+                AbiResult::Err(Error::new("cancelled", "blocking callback stopped"))
             })
         }
         .into_ffi()
@@ -438,9 +438,9 @@ impl ComponentExecutor {
     pub fn enter_sync(&self) -> AbiResult<SynchronousCall> {
         let state = self.inner.state.lock().unwrap_or_else(|e| e.into_inner());
         if !state.accepting {
-            return AbiResult::RErr(Error::new("revoked", "component is shut down"));
+            return AbiResult::Err(Error::new("revoked", "component is shut down"));
         }
-        AbiResult::ROk(SynchronousCall {
+        AbiResult::Ok(SynchronousCall {
             _user: self.inner.user_tasks.token(),
             _task: self.inner.tasks.token(),
         })
@@ -463,24 +463,24 @@ impl ComponentExecutor {
             let runtime = match Self::runtime(&mut state, false) {
                 Ok(runtime) => runtime,
                 Err(message) => {
-                    return async move { AbiResult::RErr(Error::new("runtime", message)) }
+                    return async move { AbiResult::Err(Error::new("runtime", message)) }
                         .into_ffi();
                 }
             };
             let future = self.inner.user_tasks.track_future(async move {
                 let result = tokio::select! {
                     biased;
-                    () = component.cancelled() => AbiResult::RErr(Error::new("revoked", "component is shutting down")),
+                    () = component.cancelled() => AbiResult::Err(Error::new("revoked", "component is shutting down")),
                     () = invocation.cancelled() => return,
-                    result = AssertUnwindSafe(future).catch_unwind() => result.unwrap_or_else(|_| AbiResult::RErr(Error::new("panic", "native plugin future panicked"))),
+                    result = AssertUnwindSafe(future).catch_unwind() => result.unwrap_or_else(|_| AbiResult::Err(Error::new("panic", "native plugin future panicked"))),
                 };
                 let _ = send.send(result);
             });
             if let Err(message) = self.dispatch(runtime, future) {
-                return async move { AbiResult::RErr(Error::new("runtime", message)) }.into_ffi();
+                return async move { AbiResult::Err(Error::new("runtime", message)) }.into_ffi();
             }
         } else {
-            let _ = send.send(AbiResult::RErr(Error::new(
+            let _ = send.send(AbiResult::Err(Error::new(
                 "revoked",
                 "component is shut down",
             )));
@@ -489,7 +489,7 @@ impl ComponentExecutor {
         async move {
             let _guard = guard;
             receive.await.unwrap_or_else(|_| {
-                AbiResult::RErr(Error::new("cancelled", "native plugin task stopped"))
+                AbiResult::Err(Error::new("cancelled", "native plugin task stopped"))
             })
         }
         .into_ffi()
@@ -525,7 +525,7 @@ impl ComponentExecutor {
             let runtime = match Self::runtime(&mut state, true) {
                 Ok(runtime) => runtime,
                 Err(message) => {
-                    return async move { AbiResult::RErr(Error::new("runtime", message)) }
+                    return async move { AbiResult::Err(Error::new("runtime", message)) }
                         .into_ffi();
                 }
             };
@@ -534,15 +534,15 @@ impl ComponentExecutor {
                     .catch_unwind()
                     .await
                     .unwrap_or_else(|_| {
-                        AbiResult::RErr(Error::new("panic", "native cleanup future panicked"))
+                        AbiResult::Err(Error::new("panic", "native cleanup future panicked"))
                     });
                 let _ = send.send(result);
             };
             if let Err(message) = self.dispatch(runtime, future) {
-                return async move { AbiResult::RErr(Error::new("runtime", message)) }.into_ffi();
+                return async move { AbiResult::Err(Error::new("runtime", message)) }.into_ffi();
             }
         } else {
-            let _ = send.send(AbiResult::RErr(Error::new(
+            let _ = send.send(AbiResult::Err(Error::new(
                 "revoked",
                 "cleanup admission is stopped",
             )));
@@ -551,7 +551,7 @@ impl ComponentExecutor {
         async move {
             receive
                 .await
-                .unwrap_or_else(|_| AbiResult::RErr(Error::new("shutdown", "cleanup task stopped")))
+                .unwrap_or_else(|_| AbiResult::Err(Error::new("shutdown", "cleanup task stopped")))
         }
         .into_ffi()
     }
@@ -653,19 +653,19 @@ impl Component for ComponentExecutor {
         let mut status = self.inner.shutdown.subscribe();
         async move {
             if let Err(message) = started {
-                return AbiResult::RErr(Error::new("shutdown", message));
+                return AbiResult::Err(Error::new("shutdown", message));
             }
             loop {
                 let current = status.borrow_and_update().clone();
                 match current {
-                    Shutdown::Closed => return AbiResult::ROk(()),
+                    Shutdown::Closed => return AbiResult::Ok(()),
                     Shutdown::Failed(message) => {
-                        return AbiResult::RErr(Error::new("shutdown", message));
+                        return AbiResult::Err(Error::new("shutdown", message));
                     }
                     Shutdown::Running | Shutdown::Closing => {}
                 }
                 if status.changed().await.is_err() {
-                    return AbiResult::RErr(Error::new("shutdown", "component owner disappeared"));
+                    return AbiResult::Err(Error::new("shutdown", "component owner disappeared"));
                 }
             }
         }

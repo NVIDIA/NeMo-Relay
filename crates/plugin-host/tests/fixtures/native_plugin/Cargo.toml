@@ -16,7 +16,6 @@ crate-type = ["cdylib"]
 nemo-relay-plugin.workspace = true
 
 # Third-party dependencies.
-abi_stable.workspace = true
 futures.workspace = true
 serde_json.workspace = true
 tokio = { workspace = true, default-features = true, features = ["io-util", "time"] }

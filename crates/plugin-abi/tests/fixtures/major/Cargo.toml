@@ -18,4 +18,3 @@ crate-type = ["cdylib"]
 abi = { package = "nemo-relay-plugin-abi", path = "../interface-v1" }
 
 # Third-party dependencies (exact pins freeze the tested ABI generation).
-abi_stable = { version = "=0.11.3", default-features = false }

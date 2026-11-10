@@ -2,9 +2,7 @@
 // SPDX-License-Identifier: Apache-2.0
 
 use super::*;
-use nemo_relay_plugin::abi::{
-    self as checked, abi_stable::sabi_trait::prelude::TD_Opaque, v1_0 as a,
-};
+use nemo_relay_plugin::abi::{self as checked, v1_0 as a};
 use nemo_relay_plugin::diagnostics::{self as sdk, ComponentDeclaration, DiagnosticCode};
 use std::sync::Arc;
 
@@ -32,43 +30,33 @@ fn new_context(enabled: bool, events: usize) -> Diagnostics {
 }
 struct DiagnosticRuntime(Arc<NativeDiagnostics>);
 impl a::Runtime for DiagnosticRuntime {
-    fn call_sync(
-        &self,
-        _: checked::abi_stable::std_types::RString,
-        _: checked::Json,
-    ) -> a::Result<checked::Json> {
-        a::Result::RErr(a::Error::new("test", "unavailable"))
+    fn call_sync(&self, _: String, _: checked::Json) -> a::Result<checked::Json> {
+        a::Result::Err(a::Error::new("test", "unavailable"))
     }
     fn call(
         &self,
-        _: checked::abi_stable::std_types::RString,
+        _: String,
         _: checked::Json,
-    ) -> checked::async_ffi::FfiFuture<a::Result<checked::Json>> {
-        use checked::async_ffi::FutureExt as _;
-        async { a::Result::RErr(a::Error::new("test", "unavailable")) }.into_ffi()
+    ) -> checked::future::FfiFuture<a::Result<checked::Json>> {
+        use checked::future::FutureExt as _;
+        async { a::Result::Err(a::Error::new("test", "unavailable")) }.into_ffi()
     }
     fn diagnostics(&self) -> checked::diagnostics::DiagnosticsBox {
-        checked::diagnostics::Diagnostics_TO::from_value(
-            CheckedDiagnostics {
-                runtime: self.0.clone(),
-            },
-            TD_Opaque,
-        )
+        checked::diagnostics::DiagnosticsBox::new(CheckedDiagnostics {
+            runtime: self.0.clone(),
+        })
     }
     fn capture_scope(&self) -> a::Result<a::ScopeBox> {
-        a::Result::RErr(a::Error::new("test", "unavailable"))
+        a::Result::Err(a::Error::new("test", "unavailable"))
     }
     fn bind_component(&self, _: a::ComponentBox) -> a::Result<()> {
-        a::Result::ROk(())
+        a::Result::Ok(())
     }
     fn register_callback(&self, _: a::Registration) -> a::Result<()> {
-        a::Result::ROk(())
+        a::Result::Ok(())
     }
-    fn register_gate(
-        &self,
-        _: a::Registration,
-    ) -> a::Result<checked::abi_stable::std_types::RString> {
-        a::Result::RErr(a::Error::new("test", "unavailable"))
+    fn register_gate(&self, _: a::Registration) -> a::Result<String> {
+        a::Result::Err(a::Error::new("test", "unavailable"))
     }
 }
 fn new_runtime(
@@ -76,10 +64,9 @@ fn new_runtime(
     read: bool,
 ) -> (Arc<NativeDiagnostics>, nemo_relay_plugin::PluginRuntime) {
     let runtime = Arc::new(NativeDiagnostics::new(context.clone(), read, "fixture"));
-    let sdk = nemo_relay_plugin::PluginRuntime::from_abi(a::Runtime_TO::from_value(
-        DiagnosticRuntime(runtime.clone()),
-        TD_Opaque,
-    ));
+    let sdk = nemo_relay_plugin::PluginRuntime::from_abi(a::RuntimeBox::new(DiagnosticRuntime(
+        runtime.clone(),
+    )));
     (runtime, sdk)
 }
 fn component(d: &sdk::Diagnostics, name: &str) -> sdk::DiagnosticComponent {
@@ -357,7 +344,7 @@ fn native_bounds_reject_new_registration_and_keep_existing_producer_writable() {
     let oversized = "x".repeat(bounds::MAX_REQUEST_BYTES + 1);
     assert_eq!(
         owner.register(abi::DiagnosticRegistration {
-            name: RStr::from_str(&oversized),
+            name: Str::from_str(&oversized),
             codes: [].as_slice().into(),
         }),
         Err(Error::Capacity)
@@ -389,19 +376,19 @@ fn native_read_checks_permission_before_queries_and_never_publishes_partial_outp
     let (allowed, _runtime2) = new_runtime(&context, true);
     let mut output = [0u8; 4];
     assert_eq!(
-        denied.read(1, RStr::from_str("invalid"), &mut output),
+        denied.read(1, Str::from_str("invalid"), &mut output),
         Err(Error::PermissionDenied)
     );
     assert_eq!(
-        allowed.read(0, RStr::from_str("{}"), &mut output),
+        allowed.read(0, Str::from_str("{}"), &mut output),
         Err(Error::BufferTooSmall)
     );
     assert_eq!(
-        allowed.read(1, RStr::from_str("{}"), &mut output),
+        allowed.read(1, Str::from_str("{}"), &mut output),
         Err(Error::BufferTooSmall)
     );
     assert_eq!(
-        allowed.read(1, RStr::from_str("{\"unknown\":true}"), &mut output),
+        allowed.read(1, Str::from_str("{\"unknown\":true}"), &mut output),
         Err(Error::Read(DiagnosticReadReason::InvalidQuery))
     );
     assert_eq!(context.memory_usage().query_workspaces, 0);

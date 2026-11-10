@@ -77,10 +77,10 @@ struct CaptureRuntime {
     component: Arc<Mutex<Option<a::ComponentBox>>>,
 }
 impl a::Runtime for CaptureRuntime {
-    fn call_sync(&self, op: RString, args: abi::Json) -> a::Result<abi::Json> {
+    fn call_sync(&self, op: String, args: abi::Json) -> a::Result<abi::Json> {
         self.base.call_sync(op, args)
     }
-    fn call(&self, op: RString, args: abi::Json) -> FfiFuture<a::Result<abi::Json>> {
+    fn call(&self, op: String, args: abi::Json) -> FfiFuture<a::Result<abi::Json>> {
         self.base.call(op, args)
     }
     fn diagnostics(&self) -> abi::diagnostics::DiagnosticsBox {
@@ -91,13 +91,13 @@ impl a::Runtime for CaptureRuntime {
     }
     fn bind_component(&self, component: a::ComponentBox) -> a::Result<()> {
         *self.component.lock().unwrap() = Some(component);
-        a::Result::ROk(())
+        a::Result::Ok(())
     }
     fn register_callback(&self, registration: a::Registration) -> a::Result<()> {
         self.callbacks.lock().unwrap().push(registration);
-        a::Result::ROk(())
+        a::Result::Ok(())
     }
-    fn register_gate(&self, registration: a::Registration) -> a::Result<RString> {
+    fn register_gate(&self, registration: a::Registration) -> a::Result<String> {
         self.base.register_gate(registration)
     }
 }
@@ -168,14 +168,12 @@ async fn stream_cleanup_retries_errors_and_cancels_a_live_pull() {
             let owner = HostRuntime::new("checked-stream-test".into()).unwrap();
             let callbacks = Arc::new(Mutex::new(Vec::new()));
             let bound = Arc::new(Mutex::new(None));
-            let runtime = a::Runtime_TO::from_value(
+            let runtime = a::RuntimeBox::new(
                 CaptureRuntime {
                     base: owner.runtime_box(),
                     callbacks: callbacks.clone(),
                     component: bound.clone(),
-                },
-                TD_Opaque,
-            );
+                });
             let registered = library
                 .create_plugin()
                 .unwrap()
@@ -184,7 +182,6 @@ async fn stream_cleanup_retries_errors_and_cancels_a_live_pull() {
                     runtime,
                 )
                 .await
-                .into_result()
                 .unwrap();
             assert!(registered.error.is_none());
             let descriptor = callbacks.lock().unwrap().pop().unwrap();
@@ -211,15 +208,13 @@ async fn stream_cleanup_retries_errors_and_cancels_a_live_pull() {
             });
             if raw {
                 let (lease, _guard) = MiddlewareContinuationLease::capture();
-                let continuation = a::Continuation_TO::from_value(
+                let continuation = a::ContinuationBox::new(
                     Continuation {
                         downstream: Default::default(),
                         next: Arc::new(Next::Stream(next.clone())),
                         lease,
                         owner: owner.clone(),
-                    },
-                    TD_Opaque,
-                );
+                    });
                 let (i, _life) = invocation(
                     &owner,
                     a::Surface::LlmStreamExecutionIntercept,
@@ -241,15 +236,13 @@ async fn stream_cleanup_retries_errors_and_cancels_a_live_pull() {
                 );
             }
             let (lease, _guard) = MiddlewareContinuationLease::capture();
-            let next = a::Continuation_TO::from_value(
+            let next = a::ContinuationBox::new(
                 Continuation {
                     downstream: Default::default(),
                     next: Arc::new(Next::Stream(next)),
                     lease,
                     owner: owner.clone(),
-                },
-                TD_Opaque,
-            );
+                });
             let (i, _life) = invocation(
                 &owner,
                 a::Surface::LlmStreamExecutionIntercept,
@@ -263,34 +256,34 @@ async fn stream_cleanup_retries_errors_and_cancels_a_live_pull() {
                 None,
                 None,
             );
-            let mut stream = callback.open_stream(i, next).await.into_result().unwrap();
+            let mut stream = callback.open_stream(i, next).await.unwrap();
             let mut pulling = Box::pin(stream.pull());
             if pending {
                 tokio::select! {
                     result = &mut pulling => panic!("pending source completed early: {result:?}"),
                     _ = async { while !polled.load(Ordering::SeqCst) { tokio::task::yield_now().await; } } => {}
                 }
-                stream.close().await.into_result().unwrap();
+                stream.close().await.unwrap();
                 assert!(
                     pulling.await.is_err(),
                     "close must cancel a pull even when its waiter is retained"
                 );
                 assert_eq!(calls.load(Ordering::SeqCst), 1);
             } else {
-                assert!(pulling.await.into_result().unwrap().is_some());
-                let error = stream.close().await.into_result().unwrap_err();
+                assert!(pulling.await.unwrap().is_some());
+                let error = stream.close().await.unwrap_err();
                 assert!(error.message.contains("checked downstream close failure"));
                 assert!(!dropped.load(Ordering::SeqCst));
-                stream.close().await.into_result().unwrap();
+                stream.close().await.unwrap();
                 assert_eq!(calls.load(Ordering::SeqCst), 2);
             }
             assert!(dropped.load(Ordering::SeqCst));
             drop(callback);
             let bound = bound.lock().unwrap().take().unwrap();
             let (first, second) = tokio::join!(registered.component.shutdown(), bound.shutdown());
-            first.into_result().unwrap();
-            second.into_result().unwrap();
-            stream.close().await.into_result().unwrap();
+            first.unwrap();
+            second.unwrap();
+            stream.close().await.unwrap();
             owner.shutdown().await.unwrap();
         }
     })
@@ -335,7 +328,7 @@ async fn callback_observations_exclude_propagated_downstream_errors_and_revocati
     assert!(
         owner
             .callback_result::<()>(
-                a::Result::RErr(a::Error::new("plugin", "author callback failed")),
+                a::Result::Err(a::Error::new("plugin", "author callback failed")),
                 &downstream
             )
             .is_err()
@@ -368,7 +361,7 @@ async fn callback_observations_exclude_propagated_downstream_errors_and_revocati
     assert!(
         owner
             .callback_result::<()>(
-                a::Result::RErr(a::Error::new("revoked", "stale callback")),
+                a::Result::Err(a::Error::new("revoked", "stale callback")),
                 &downstream
             )
             .is_err()
@@ -385,8 +378,8 @@ async fn callback_observations_exclude_propagated_downstream_errors_and_revocati
 #[test]
 fn checked_errors_preserve_typed_http_status_without_a_json_envelope() {
     let mut error = a::Error::new("http", "upstream response");
-    error.http_status = ROption::RSome(429);
-    let error = local::<()>(a::Result::RErr(error)).unwrap_err();
+    error.http_status = Option::Some(429);
+    let error = local::<()>(a::Result::Err(error)).unwrap_err();
     let FlowError::Upstream(failure) = error else {
         panic!("expected typed HTTP failure");
     };
@@ -422,7 +415,7 @@ async fn codec_capabilities_are_revoked_when_the_component_shuts_down() {
         Some(LlmRequestContext::for_request_codec(Some(Arc::new(Dummy)))),
         None,
     );
-    let codec = invocation.context.request_codec.into_option().unwrap();
+    let codec = invocation.context.request_codec.unwrap();
     owner.shutdown().await.unwrap();
     let result = codec.decode(
         encode(nemo_relay_types::api::llm::LlmRequest {
@@ -498,35 +491,35 @@ impl a::Callback for InlineCallback {
             .send(())
             .unwrap();
         self.release.lock().unwrap().recv().unwrap();
-        a::Result::ROk(abi::Json::Null)
+        a::Result::Ok(abi::Json::Null)
     }
     fn invoke(
         &self,
         _: a::Invocation,
-        _: ROption<a::ContinuationBox>,
+        _: Option<a::ContinuationBox>,
     ) -> FfiFuture<a::Result<abi::Json>> {
-        async { a::Result::RErr(a::Error::new("test", "callback is synchronous")) }.into_ffi()
+        async { a::Result::Err(a::Error::new("test", "callback is synchronous")) }.into_ffi()
     }
     fn invoke_tool(
         &self,
         _: a::Invocation,
         _: a::ContinuationBox,
     ) -> FfiFuture<a::Result<a::ToolExecutionOutcome>> {
-        async { a::Result::RErr(a::Error::new("test", "callback is synchronous")) }.into_ffi()
+        async { a::Result::Err(a::Error::new("test", "callback is synchronous")) }.into_ffi()
     }
     fn open_stream(
         &self,
         _: a::Invocation,
         _: a::ContinuationBox,
     ) -> FfiFuture<a::Result<a::StreamBox>> {
-        async { a::Result::RErr(a::Error::new("test", "callback is synchronous")) }.into_ffi()
+        async { a::Result::Err(a::Error::new("test", "callback is synchronous")) }.into_ffi()
     }
 }
 struct ShutdownProbe(Arc<AtomicBool>);
 impl a::Component for ShutdownProbe {
     fn shutdown(&self) -> FfiFuture<a::Result<()>> {
         self.0.store(true, Ordering::Release);
-        async { a::Result::ROk(()) }.into_ffi()
+        async { a::Result::Ok(()) }.into_ffi()
     }
 }
 
@@ -534,10 +527,8 @@ impl a::Component for ShutdownProbe {
 async fn component_close_retains_ownership_until_a_raw_inline_subscriber_leaves() {
     let runtime = HostRuntime::new("inline-close".into()).unwrap();
     let shut_down = Arc::new(AtomicBool::new(false));
-    *runtime.component.lock().unwrap() = Some(a::Component_TO::from_value(
-        ShutdownProbe(shut_down.clone()),
-        TD_Opaque,
-    ));
+    *runtime.component.lock().unwrap() =
+        Some(a::ComponentBox::new(ShutdownProbe(shut_down.clone())));
     let component = ComponentOwner {
         component: runtime.component.clone(),
         runtime: runtime.clone(),
@@ -545,13 +536,10 @@ async fn component_close_retains_ownership_until_a_raw_inline_subscriber_leaves(
     let (entered, ready) = tokio::sync::oneshot::channel();
     let (release, wait) = std::sync::mpsc::channel();
     let owned = runtime
-        .own_callback(a::Callback_TO::from_value(
-            InlineCallback {
-                entered: Mutex::new(Some(entered)),
-                release: Mutex::new(wait),
-            },
-            TD_Opaque,
-        ))
+        .own_callback(a::CallbackBox::new(InlineCallback {
+            entered: Mutex::new(Some(entered)),
+            release: Mutex::new(wait),
+        }))
         .unwrap();
     let callback = subscriber_callback(owned.clone(), runtime.clone());
     let thread = std::thread::spawn(move || {
@@ -595,15 +583,15 @@ impl Drop for CallbackStateProbe {
 impl a::Callback for CallbackStateProbe {
     fn invoke_sync(&self, _: a::Invocation) -> a::Result<abi::Json> {
         self.invoked.store(true, Ordering::Release);
-        a::Result::ROk(abi::Json::Null)
+        a::Result::Ok(abi::Json::Null)
     }
     fn invoke(
         &self,
         _: a::Invocation,
-        _: ROption<a::ContinuationBox>,
+        _: Option<a::ContinuationBox>,
     ) -> FfiFuture<a::Result<abi::Json>> {
         self.invoked.store(true, Ordering::Release);
-        async { a::Result::RErr(a::Error::new("test", "sync callback")) }.into_ffi()
+        async { a::Result::Err(a::Error::new("test", "sync callback")) }.into_ffi()
     }
     fn invoke_tool(
         &self,
@@ -611,7 +599,7 @@ impl a::Callback for CallbackStateProbe {
         _: a::ContinuationBox,
     ) -> FfiFuture<a::Result<a::ToolExecutionOutcome>> {
         self.invoked.store(true, Ordering::Release);
-        async { a::Result::RErr(a::Error::new("test", "sync callback")) }.into_ffi()
+        async { a::Result::Err(a::Error::new("test", "sync callback")) }.into_ffi()
     }
     fn open_stream(
         &self,
@@ -619,7 +607,7 @@ impl a::Callback for CallbackStateProbe {
         _: a::ContinuationBox,
     ) -> FfiFuture<a::Result<a::StreamBox>> {
         self.invoked.store(true, Ordering::Release);
-        async { a::Result::RErr(a::Error::new("test", "sync callback")) }.into_ffi()
+        async { a::Result::Err(a::Error::new("test", "sync callback")) }.into_ffi()
     }
 }
 #[tokio::test]
@@ -658,14 +646,11 @@ async fn close_releases_queued_native_callback_state_without_waiting_for_dispatc
             priority: 0,
             break_chain: false,
             options: abi::Json::Null,
-            callback: a::Callback_TO::from_value(
-                CallbackStateProbe {
-                    dropped: dropped.clone(),
-                    invoked: invoked.clone(),
-                    _runtime: runtime.clone(),
-                },
-                TD_Opaque,
-            ),
+            callback: a::CallbackBox::new(CallbackStateProbe {
+                dropped: dropped.clone(),
+                invoked: invoked.clone(),
+                _runtime: runtime.clone(),
+            }),
         },
         runtime.clone(),
     )
@@ -703,14 +688,11 @@ async fn retained_middleware_and_gate_proxies_release_foreign_state_on_shutdown(
     let dropped = Arc::new(AtomicBool::new(false));
     let invoked = Arc::new(AtomicBool::new(false));
     let callback = owner
-        .own_callback(a::Callback_TO::from_value(
-            CallbackStateProbe {
-                dropped: dropped.clone(),
-                invoked: invoked.clone(),
-                _runtime: owner.clone(),
-            },
-            TD_Opaque,
-        ))
+        .own_callback(a::CallbackBox::new(CallbackStateProbe {
+            dropped: dropped.clone(),
+            invoked: invoked.clone(),
+            _runtime: owner.clone(),
+        }))
         .unwrap();
     let gate = gate_callback(callback.clone(), owner.clone());
     let middleware = unary::<Json>(
@@ -767,23 +749,19 @@ async fn response_codec_capabilities_preserve_results_and_reject_invalid_dispatc
             ResponseCodec,
         )))),
     );
-    let codec = call.context.response_codec.into_option().unwrap();
-    let identity = from_abi(codec.identity().into_result().unwrap()).unwrap();
+    let codec = call.context.response_codec.unwrap();
+    let identity = from_abi(codec.identity().unwrap()).unwrap();
     assert_eq!(identity["available"], true);
     let decoded: AnnotatedLlmResponse = decode(
         codec
             .decode(into_abi(json!({"provider":"response"})))
-            .into_result()
             .unwrap(),
     )
     .unwrap();
     assert_eq!(decoded, AnnotatedLlmResponse::default());
     assert!(codec.encode(abi::Json::Null, abi::Json::Null).is_err());
     assert!(codec.decode(into_abi(json!({"bad":true}))).is_err());
-    let panic = codec
-        .decode(into_abi(json!("panic")))
-        .into_result()
-        .unwrap_err();
+    let panic = codec.decode(into_abi(json!("panic"))).unwrap_err();
     assert!(panic.message.contains("codec callback panicked"));
     drop(lifetime);
     assert!(codec.identity().is_err());
@@ -804,11 +782,10 @@ async fn response_codec_capabilities_preserve_results_and_reject_invalid_dispatc
         let codec = call
             .context
             .request_codec
-            .into_option()
-            .or_else(|| call.context.response_codec.into_option())
+            .or(call.context.response_codec)
             .unwrap();
         assert_eq!(
-            from_abi(codec.identity().into_result().unwrap()).unwrap()["available"],
+            from_abi(codec.identity().unwrap()).unwrap()["available"],
             false
         );
         assert!(codec.decode(abi::Json::Null).is_err());
@@ -821,22 +798,18 @@ async fn response_codec_capabilities_preserve_results_and_reject_invalid_dispatc
 async fn registration_transactions_reject_late_binding_full_queues_and_cancelled_replies() {
     let owner = HostRuntime::new("registration-contract".into()).unwrap();
     let raw = owner.runtime_box();
-    let component =
-        || a::Component_TO::from_value(ShutdownProbe(Arc::new(AtomicBool::new(false))), TD_Opaque);
+    let component = || a::ComponentBox::new(ShutdownProbe(Arc::new(AtomicBool::new(false))));
     let descriptor = || a::Registration {
         name: "callback".into(),
         surface: a::Surface::Subscriber,
         priority: 0,
         break_chain: false,
         options: abi::Json::Null,
-        callback: a::Callback_TO::from_value(
-            CallbackStateProbe {
-                dropped: Arc::new(AtomicBool::new(false)),
-                invoked: Arc::new(AtomicBool::new(false)),
-                _runtime: owner.clone(),
-            },
-            TD_Opaque,
-        ),
+        callback: a::CallbackBox::new(CallbackStateProbe {
+            dropped: Arc::new(AtomicBool::new(false)),
+            invoked: Arc::new(AtomicBool::new(false)),
+            _runtime: owner.clone(),
+        }),
     };
     assert!(raw.bind_component(component()).is_err());
     assert!(raw.register_callback(descriptor()).is_err());
@@ -854,7 +827,6 @@ async fn registration_transactions_reject_late_binding_full_queues_and_cancelled
         .unwrap();
     assert_eq!(
         raw.register_callback(descriptor())
-            .into_result()
             .unwrap_err()
             .code
             .as_str(),
@@ -866,7 +838,7 @@ async fn registration_transactions_reject_late_binding_full_queues_and_cancelled
     let pending = std::thread::spawn(move || caller.register_callback(request));
     let request = receiver.recv().await.unwrap();
     drop(request);
-    let error = pending.join().unwrap().into_result().unwrap_err();
+    let error = pending.join().unwrap().unwrap_err();
     assert!(error.message.contains("cancelled"));
     drop(receiver);
     assert!(raw.register_callback(descriptor()).is_err());
@@ -887,7 +859,7 @@ async fn closed_registration_queue_cancels_the_foreign_factory_and_preserves_its
     let factory_cancelled = cancelled.clone();
     let foreign = async move {
         factory_cancelled.cancelled().await;
-        a::Result::RErr(a::Error::new("factory_stopped", "registration was revoked"))
+        a::Result::Err(a::Error::new("factory_stopped", "registration was revoked"))
     };
     let mut context = crate::HostPluginRegistrationContext::new();
     let result = tokio::time::timeout(
@@ -902,10 +874,7 @@ async fn closed_registration_queue_cancels_the_foreign_factory_and_preserves_its
     )
     .await
     .unwrap();
-    assert_eq!(
-        result.into_result().err().unwrap().code.as_str(),
-        "factory_stopped"
-    );
+    assert_eq!(result.err().unwrap().code.as_str(), "factory_stopped");
     assert!(cancelled.is_cancelled());
     owner.shutdown().await.unwrap();
 }
@@ -922,14 +891,11 @@ async fn completed_registration_factory_releases_late_request_waiters() {
         priority: 0,
         break_chain: false,
         options: abi::Json::Null,
-        callback: a::Callback_TO::from_value(
-            CallbackStateProbe {
-                dropped: Arc::new(AtomicBool::new(false)),
-                invoked: Arc::new(AtomicBool::new(false)),
-                _runtime: owner.clone(),
-            },
-            TD_Opaque,
-        ),
+        callback: a::CallbackBox::new(CallbackStateProbe {
+            dropped: Arc::new(AtomicBool::new(false)),
+            invoked: Arc::new(AtomicBool::new(false)),
+            _runtime: owner.clone(),
+        }),
     };
     let foreign = async move {
         sender
@@ -938,13 +904,10 @@ async fn completed_registration_factory_releases_late_request_waiters() {
                 reply,
             })
             .unwrap();
-        a::Result::ROk(a::RegisteredComponent {
-            error: ROption::RNone,
+        a::Result::Ok(a::RegisteredComponent {
+            error: Option::None,
             registrations: Default::default(),
-            component: a::Component_TO::from_value(
-                ComponentExecutor::inline("completed-registration"),
-                TD_Opaque,
-            ),
+            component: a::ComponentBox::new(ComponentExecutor::inline("completed-registration")),
         })
     };
     let mut context = crate::HostPluginRegistrationContext::new();
@@ -956,20 +919,18 @@ async fn completed_registration_factory_releases_late_request_waiters() {
         tokio_util::sync::CancellationToken::new(),
     )
     .await
-    .into_result()
     .unwrap();
     assert_eq!(
         answered
             .recv_timeout(std::time::Duration::from_secs(5))
             .unwrap()
-            .into_result()
             .unwrap_err()
             .code
             .as_str(),
         "closed"
     );
     assert!(context.into_registrations().is_empty());
-    registered.component.shutdown().await.into_result().unwrap();
+    registered.component.shutdown().await.unwrap();
     owner.shutdown().await.unwrap();
 }
 
@@ -986,21 +947,18 @@ fn raw_registration_can_submit_callbacks_during_construction_and_polling() {
             priority: 0,
             break_chain: false,
             options: abi::Json::Null,
-            callback: a::Callback_TO::from_value(
-                CallbackStateProbe {
-                    dropped: Arc::new(AtomicBool::new(false)),
-                    invoked: Arc::new(AtomicBool::new(false)),
-                    _runtime: HostRuntime::new("raw-registration-probe".into()).unwrap(),
-                },
-                TD_Opaque,
-            ),
+            callback: a::CallbackBox::new(CallbackStateProbe {
+                dropped: Arc::new(AtomicBool::new(false)),
+                invoked: Arc::new(AtomicBool::new(false)),
+                _runtime: HostRuntime::new("raw-registration-probe".into()).unwrap(),
+            }),
         }
     }
     impl a::Plugin for RawPlugin {
         fn allows_multiple_components(&self) -> bool {
             true
         }
-        fn validate(&self, _: abi::Json) -> abi::abi_stable::std_types::RVec<a::ConfigDiagnostic> {
+        fn validate(&self, _: abi::Json) -> Vec<a::ConfigDiagnostic> {
             Default::default()
         }
         fn register(
@@ -1010,14 +968,10 @@ fn raw_registration_can_submit_callbacks_during_construction_and_polling() {
         ) -> FfiFuture<a::Result<a::RegisteredComponent>> {
             runtime
                 .register_callback(descriptor("construction"))
-                .into_result()
                 .unwrap();
             let pending = self.pending.clone();
             async move {
-                runtime
-                    .register_callback(descriptor("polling"))
-                    .into_result()
-                    .unwrap();
+                runtime.register_callback(descriptor("polling")).unwrap();
                 if let Some((started, dropped)) = pending {
                     struct Probe(Arc<AtomicBool>);
                     impl Drop for Probe {
@@ -1029,13 +983,10 @@ fn raw_registration_can_submit_callbacks_during_construction_and_polling() {
                     started.notify_one();
                     std::future::pending::<()>().await;
                 }
-                a::Result::ROk(a::RegisteredComponent {
-                    error: ROption::RNone,
+                a::Result::Ok(a::RegisteredComponent {
+                    error: Option::None,
                     registrations: Default::default(),
-                    component: a::Component_TO::from_value(
-                        ComponentExecutor::inline("raw-registration"),
-                        TD_Opaque,
-                    ),
+                    component: a::ComponentBox::new(ComponentExecutor::inline("raw-registration")),
                 })
             }
             .into_ffi()
@@ -1053,9 +1004,9 @@ fn raw_registration_can_submit_callbacks_during_construction_and_polling() {
             let plugin = CheckedPlugin {
                 kind: "raw-registration".into(),
                 resident_path: Default::default(),
-                plugin: Arc::new(a::Plugin_TO::from_value(RawPlugin {
+                plugin: Arc::new(a::PluginBox::new(RawPlugin {
                     pending: cancel.then(|| (started.clone(), dropped.clone())),
-                }, TD_Opaque)),
+                })),
                 diagnostics: nemo_relay_diagnostics::Diagnostics::process_default().clone(),
                 read: false,
                 observer: Default::default(),
@@ -1143,14 +1094,11 @@ async fn sdk_background_tasks_preserve_scope_and_are_cancelled_with_their_compon
     }));
     let callbacks = Arc::new(Mutex::new(Vec::new()));
     let bound = Arc::new(Mutex::new(None));
-    let runtime = a::Runtime_TO::from_value(
-        CaptureRuntime {
-            base: host.runtime_box(),
-            callbacks,
-            component: bound.clone(),
-        },
-        TD_Opaque,
-    );
+    let runtime = a::RuntimeBox::new(CaptureRuntime {
+        base: host.runtime_box(),
+        callbacks,
+        component: bound.clone(),
+    });
     TASK_SCOPE_STACK
         .scope(create_scope_stack(), async {
             let sdk = nemo_relay_plugin::PluginRuntime::from_abi(host.runtime_box());
@@ -1162,7 +1110,6 @@ async fn sdk_background_tasks_preserve_scope_and_are_cancelled_with_their_compon
             let registered =
                 a::Plugin::register(&author, abi::Json::Object(Default::default()), runtime)
                     .await
-                    .into_result()
                     .unwrap();
             assert!(registered.error.is_none());
             let observed = tokio::time::timeout(std::time::Duration::from_secs(5), ready)
@@ -1170,7 +1117,7 @@ async fn sdk_background_tasks_preserve_scope_and_are_cancelled_with_their_compon
                 .unwrap()
                 .unwrap();
             assert_eq!(observed, expected);
-            registered.component.shutdown().await.into_result().unwrap();
+            registered.component.shutdown().await.unwrap();
             assert!(dropped.load(Ordering::Acquire));
             assert!(
                 spawner

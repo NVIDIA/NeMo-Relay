@@ -14,10 +14,12 @@ Use this skill for `plugin.kind = "rust_dynamic"`, `plugin.kind = "worker"`,
 
 - Keep the stable boundary explicit: native plugins cross a C ABI; worker
   plugins cross `nvidia.nemo.relay.worker.v1` (contract `1.0.0`).
-- Use `abi_stable` checked records and generated trait objects, ABI-safe owned
-  values, and `async-ffi` futures across the native dynamic-library boundary.
-  Keep ordinary Rust runtime types, futures, and Tokio objects within their
-  originating library.
+- Use the frozen bootstrap and complete contract schema before constructing
+  xabi interface objects. Transfer typed values through the ownership adapters,
+  including nested owners and rollback on decode failure. Use xabi futures and
+  wakers across libraries; ordinary Rust values and Tokio objects stay local.
+  Create foreign futures at invocation time so unpolled drops release captured
+  guards. Keep scope restoration leases on their entering thread.
 - Poll typed native middleware directly on the caller, restoring Relay scope
   and optional SDK Tokio context for every poll and drop. Inline is the SDK
   default and allocates no plugin runtime. Tokio-enabled components share a

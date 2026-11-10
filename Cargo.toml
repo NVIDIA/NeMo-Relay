@@ -198,8 +198,7 @@ windows-sys = "0.61"
 
 # Native plugin ABI.
 # Exact pins keep SDK/host ABI generations aligned. Review updates with the binary matrix.
-abi_stable = { version = "=0.11.3", default-features = false }
-async-ffi = { version = "=0.5.1", features = ["abi_stable"] }
+xabi = { version = "=0.1.2" }
 
 # Language bindings and binding generation.
 cbindgen = "0.29.2"
@@ -210,9 +209,12 @@ pyo3 = "0.29.0"
 pyo3-async-runtimes = "0.29.0"
 pythonize = "0.29.0"
 
+# Rust code generation.
+quote = "1"
+syn = "2"
+
 # Benchmarking and test tooling.
 hdrhistogram = "7"
-syn = "2"
 
 [workspace.lints.rust]
 missing_docs = "deny"

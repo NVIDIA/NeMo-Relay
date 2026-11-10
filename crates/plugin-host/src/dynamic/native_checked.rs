@@ -11,11 +11,7 @@ use futures_util::{
 use nemo_relay_plugin::{
     abi::{
         self,
-        abi_stable::{
-            sabi_trait::prelude::TD_Opaque,
-            std_types::{ROption, RString},
-        },
-        async_ffi::{FfiFuture, FutureExt as _},
+        future::{FfiFuture, FutureExt as _},
         v1_0 as a,
     },
     abi_executor::{ComponentExecutor, DirectCancellation},
@@ -62,18 +58,18 @@ fn decode<T: DeserializeOwned>(value: abi::Json) -> Result<T> {
 fn abi_error(error: FlowError) -> a::Error {
     let mut out = a::Error::new("runtime", super::http_error::to_message(&error));
     if let FlowError::Upstream(failure) = error {
-        out.http_status = failure.status.into();
+        out.http_status = failure.status;
     }
     out
 }
 fn boundary<T>(value: Result<T>) -> a::Result<T> {
-    value.map_err(abi_error).into()
+    value.map_err(abi_error)
 }
 /// Restore a runtime failure from its ABI message and optional upstream HTTP status.
 fn local<T>(value: a::Result<T>) -> Result<T> {
-    value.into_result().map_err(|e| {
+    value.map_err(|e| {
         let message = e.message.to_string();
-        if let Some(status) = e.http_status.into_option()
+        if let Some(status) = e.http_status
             && super::http_error::upstream_from_message(&message).is_none()
         {
             return FlowError::Upstream(nemo_relay_types::error::UpstreamFailure {
@@ -162,7 +158,7 @@ impl HostRuntime {
     }
     /// Convert a callback result and record failures that did not originate in a downstream continuation.
     fn callback_result<T>(&self, value: a::Result<T>, downstream: &DownstreamErrors) -> Result<T> {
-        if let a::Result::RErr(error) = &value {
+        if let a::Result::Err(error) = &value {
             let inherited = downstream
                 .lock()
                 .unwrap_or_else(|e| e.into_inner())
@@ -225,16 +221,13 @@ impl HostRuntime {
         }
     }
     pub fn runtime_box(self: &Arc<Self>) -> a::RuntimeBox {
-        a::Runtime_TO::from_value(RuntimeProxy(self.clone()), TD_Opaque)
+        a::RuntimeBox::new(RuntimeProxy(self.clone()))
     }
     fn scope(&self) -> a::ScopeBox {
-        a::Scope_TO::from_value(
-            HostScope {
-                active: self.active.clone(),
-                context: Arc::new(Mutex::new(ScopeBinding::capture())),
-            },
-            TD_Opaque,
-        )
+        a::ScopeBox::new(HostScope {
+            active: self.active.clone(),
+            context: Arc::new(Mutex::new(ScopeBinding::capture())),
+        })
     }
     /// Stop runtime admission and remove owned gates, retaining gates whose removal failed.
     pub fn revoke(&self) -> crate::Result<()> {
@@ -612,7 +605,7 @@ async fn drive_registration(
             request = receive.recv(), if open => match request {
                 Some(request) => {
                     let result = apply_registration(ctx, request.registration, runtime.clone())
-                        .map_err(|error| a::Error::new("registration", error.to_string())).into();
+                        .map_err(|error| a::Error::new("registration", error.to_string()));
                     let _ = request.reply.send(result);
                 }
                 None => {
@@ -625,7 +618,7 @@ async fn drive_registration(
     };
     receive.close();
     while let Ok(request) = receive.try_recv() {
-        let _ = request.reply.send(a::Result::RErr(a::Error::new(
+        let _ = request.reply.send(a::Result::Err(a::Error::new(
             "closed",
             "native registration transaction has ended",
         )));
@@ -635,7 +628,7 @@ async fn drive_registration(
 struct RuntimeProxy(Arc<HostRuntime>);
 impl a::Runtime for RuntimeProxy {
     /// Admit a synchronous runtime operation and contain host-side panics at the ABI boundary.
-    fn call_sync(&self, operation: RString, args: abi::Json) -> a::Result<abi::Json> {
+    fn call_sync(&self, operation: String, args: abi::Json) -> a::Result<abi::Json> {
         boundary(
             std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
                 // Runtime capabilities can be called from foreign threads, outside
@@ -648,7 +641,7 @@ impl a::Runtime for RuntimeProxy {
             .unwrap_or_else(|_| Err(err("native host runtime operation panicked"))),
         )
     }
-    fn call(&self, operation: RString, args: abi::Json) -> FfiFuture<a::Result<abi::Json>> {
+    fn call(&self, operation: String, args: abi::Json) -> FfiFuture<a::Result<abi::Json>> {
         let owner = self.0.clone();
         let binding = ScopeBinding::capture();
         self.0.executor.execute_direct(async move {
@@ -657,7 +650,7 @@ impl a::Runtime for RuntimeProxy {
         })
     }
     fn diagnostics(&self) -> abi::diagnostics::DiagnosticsBox {
-        abi::diagnostics::Diagnostics_TO::from_value(self.0.diagnostics.clone(), TD_Opaque)
+        abi::diagnostics::DiagnosticsBox::new(self.0.diagnostics.clone())
     }
     fn capture_scope(&self) -> a::Result<a::ScopeBox> {
         boundary(self.0.ensure().map(|_| self.0.scope()))
@@ -665,7 +658,7 @@ impl a::Runtime for RuntimeProxy {
     /// Bind one component owner during an active registration transaction and reject duplicate ownership.
     fn bind_component(&self, component: a::ComponentBox) -> a::Result<()> {
         if let Err(error) = self.0.ensure() {
-            return a::Result::RErr(abi_error(error));
+            return a::Result::Err(abi_error(error));
         }
         if self
             .0
@@ -674,23 +667,23 @@ impl a::Runtime for RuntimeProxy {
             .unwrap_or_else(|e| e.into_inner())
             .is_none()
         {
-            return a::Result::RErr(a::Error::new(
+            return a::Result::Err(a::Error::new(
                 "closed",
                 "native component binding requires an active registration transaction",
             ));
         }
         let mut slot = self.0.component.lock().unwrap_or_else(|e| e.into_inner());
         if let Err(error) = self.0.ensure() {
-            return a::Result::RErr(abi_error(error));
+            return a::Result::Err(abi_error(error));
         }
         if slot.is_some() {
-            return a::Result::RErr(a::Error::new(
+            return a::Result::Err(a::Error::new(
                 "conflict",
                 "native component owner is already bound",
             ));
         }
         *slot = Some(component);
-        a::Result::ROk(())
+        a::Result::Ok(())
     }
     /// Send a callback to the active registration transaction and wait for its admission result.
     fn register_callback(&self, registration: a::Registration) -> a::Result<()> {
@@ -701,7 +694,7 @@ impl a::Runtime for RuntimeProxy {
             .unwrap_or_else(|e| e.into_inner())
             .clone();
         let Some(sender) = sender else {
-            return a::Result::RErr(a::Error::new(
+            return a::Result::Err(a::Error::new(
                 "closed",
                 "native registration transaction has ended",
             ));
@@ -711,12 +704,12 @@ impl a::Runtime for RuntimeProxy {
             registration,
             reply: send,
         }) {
-            Err(_) => a::Result::RErr(a::Error::new(
+            Err(_) => a::Result::Err(a::Error::new(
                 "capacity",
                 "native registration queue is closed or full",
             )),
             Ok(()) => receive.recv().unwrap_or_else(|_| {
-                a::Result::RErr(a::Error::new(
+                a::Result::Err(a::Error::new(
                     "closed",
                     "native registration transaction was cancelled",
                 ))
@@ -724,7 +717,7 @@ impl a::Runtime for RuntimeProxy {
         }
     }
     /// Register a revocable conditional gate within this component's runtime authority and namespace.
-    fn register_gate(&self, registration: a::Registration) -> a::Result<RString> {
+    fn register_gate(&self, registration: a::Registration) -> a::Result<String> {
         boundary((|| {
             self.0.ensure()?;
             if registration.surface != a::Surface::ConditionalMiddleware {
@@ -749,7 +742,7 @@ impl a::Runtime for RuntimeProxy {
             self.0.ensure()?;
             register_conditional_middleware_guardrail(&name, kinds, target, callback)?;
             state.gates.insert(id.clone(), name);
-            Ok(id.into())
+            Ok(id)
         })())
     }
 }
@@ -794,14 +787,14 @@ impl Drop for HostLease {
 impl a::ScopeLease for HostLease {
     fn restore(&mut self) -> a::Result<()> {
         self.restore_inner();
-        a::Result::ROk(())
+        a::Result::Ok(())
     }
 }
 impl a::Scope for HostScope {
     /// Bind the captured Relay scope to this thread until the returned lease restores the previous binding.
     fn enter(&self) -> a::Result<a::ScopeLeaseBox> {
         if !self.active.load(Ordering::Acquire) {
-            return a::Result::RErr(a::Error::new("revoked", "component scope is revoked"));
+            return a::Result::Err(a::Error::new("revoked", "component scope is revoked"));
         }
         let context = self
             .context
@@ -810,19 +803,16 @@ impl a::Scope for HostScope {
             .clone();
         let guard =
             Some(Box::new(context.context.enter_thread_binding(context.explicit)) as Box<dyn Any>);
-        a::Result::ROk(a::ScopeLease_TO::from_value(
-            HostLease {
-                guard,
-                context: self.context.clone(),
-                restored: false,
-            },
-            TD_Opaque,
-        ))
+        a::Result::Ok(a::ScopeLeaseBox::new(HostLease {
+            guard,
+            context: self.context.clone(),
+            restored: false,
+        }))
     }
     /// Read the captured scope stack while component authority is active; implicit scopes have no snapshot.
-    fn snapshot(&self) -> a::Result<ROption<abi::Json>> {
+    fn snapshot(&self) -> a::Result<Option<abi::Json>> {
         if !self.active.load(Ordering::Acquire) {
-            return a::Result::RErr(a::Error::new("revoked", "component scope is revoked"));
+            return a::Result::Err(a::Error::new("revoked", "component scope is revoked"));
         }
         let binding = self
             .context
@@ -830,13 +820,11 @@ impl a::Scope for HostScope {
             .unwrap_or_else(|e| e.into_inner())
             .clone();
         boundary(if binding.explicit {
-            binding.context.run_sync(|| {
-                current_scope_stack_snapshot()
-                    .and_then(|v| v.map(encode).transpose())
-                    .map(Into::into)
-            })
+            binding
+                .context
+                .run_sync(|| current_scope_stack_snapshot().and_then(|v| v.map(encode).transpose()))
         } else {
-            Ok(ROption::RNone)
+            Ok(Option::None)
         })
     }
 }
@@ -866,7 +854,7 @@ impl a::Codec for Codec {
     /// Return codec identity and availability while its invocation and component remain active.
     fn identity(&self) -> a::Result<abi::Json> {
         if self.ensure_active().is_err() {
-            return a::Result::RErr(a::Error::new("revoked", "codec capability expired"));
+            return a::Result::Err(a::Error::new("revoked", "codec capability expired"));
         }
         guarded(|| {
             if let Some(v) = &self.request {
@@ -927,37 +915,31 @@ fn invocation(
 ) -> (a::Invocation, InvocationLifetime) {
     let active = Arc::new(AtomicBool::new(true));
     let request_codec = request.map(|request| {
-        a::Codec_TO::from_value(
-            Codec {
-                request: Some(request),
-                response: None,
-                active: active.clone(),
-                component_active: owner.active.clone(),
-            },
-            TD_Opaque,
-        )
+        a::CodecBox::new(Codec {
+            request: Some(request),
+            response: None,
+            active: active.clone(),
+            component_active: owner.active.clone(),
+        })
     });
     let response_codec = response.map(|response| {
-        a::Codec_TO::from_value(
-            Codec {
-                request: None,
-                response: Some(response),
-                active: active.clone(),
-                component_active: owner.active.clone(),
-            },
-            TD_Opaque,
-        )
+        a::CodecBox::new(Codec {
+            request: None,
+            response: Some(response),
+            active: active.clone(),
+            component_active: owner.active.clone(),
+        })
     });
     (
         a::Invocation {
             surface,
-            name: name.into(),
+            name,
             value,
-            tool_call_id: id.map(Into::into).into(),
+            tool_call_id: id,
             context: a::Context {
                 scope: owner.scope(),
-                request_codec: request_codec.into(),
-                response_codec: response_codec.into(),
+                request_codec,
+                response_codec,
             },
         },
         InvocationLifetime { active },
@@ -1063,8 +1045,7 @@ impl a::Continuation for Continuation {
                                         annotation: value
                                             .annotation
                                             .filter(|v| !v.is_null())
-                                            .map(into_abi)
-                                            .into(),
+                                            .map(into_abi),
                                     })
                                 }
                                 _ => Err(err("not a tool continuation")),
@@ -1114,10 +1095,7 @@ impl a::Continuation for Continuation {
                         streams.retain(|v| !v.closed.load(Ordering::Acquire));
                         streams.push(state.clone());
                     }
-                    Ok(a::Stream_TO::from_value(
-                        HostStream { state, owner },
-                        TD_Opaque,
-                    ))
+                    Ok(a::StreamBox::new(HostStream { state, owner }))
                 }
                 .await,
                 &errors,
@@ -1206,28 +1184,28 @@ struct HostStream {
 }
 impl a::Stream for HostStream {
     /// Poll one downstream stream item in host runtime context and make EOF or an error terminal.
-    fn pull(&mut self) -> FfiFuture<a::Result<ROption<abi::Json>>> {
+    fn pull(&mut self) -> FfiFuture<a::Result<Option<abi::Json>>> {
         if let Err(error) = self.owner.ensure() {
-            return async move { a::Result::RErr(abi_error(error)) }.into_ffi();
+            return async move { a::Result::Err(abi_error(error)) }.into_ffi();
         }
         let mut pulls = self.state.pulls.lock().unwrap_or_else(|e| e.into_inner());
         if self.state.cancelled.is_cancelled() {
-            return async { a::Result::RErr(a::Error::new("closed", "native stream is closing")) }
+            return async { a::Result::Err(a::Error::new("closed", "native stream is closing")) }
                 .into_ffi();
         }
         let state = self.state.clone();
         let context = state.context.clone();
         let (future, cancellation) = self.owner.executor.execute_direct_tracked(async move {
             downstream_boundary(host_bound(context.clone(), context.run(async {
-                if state.terminal.load(Ordering::Acquire) { return Ok(ROption::RNone); }
+                if state.terminal.load(Ordering::Acquire) { return Ok(Option::None); }
                 let mut value = state.value.lock().await;
-                let Some(stream) = value.as_mut() else { return Ok(ROption::RNone); };
+                let Some(stream) = value.as_mut() else { return Ok(Option::None); };
                 tokio::select! { biased;
                     () = state.cancelled.cancelled() => Err(err("native stream is closing")),
                     next = stream.next() => match next {
-                        Some(Ok(value)) => Ok(ROption::RSome(into_abi(value))),
+                        Some(Ok(value)) => Ok(Option::Some(into_abi(value))),
                         Some(Err(error)) => { state.terminal.store(true, Ordering::Release); stream.terminalize(); Err(error) },
-                        None => { state.terminal.store(true, Ordering::Release); stream.terminalize(); Ok(ROption::RNone) },
+                        None => { state.terminal.store(true, Ordering::Release); stream.terminalize(); Ok(Option::None) },
                     }
                 }
             })).await, &state.downstream)
@@ -1276,17 +1254,14 @@ async fn unary<T: DeserializeOwned>(
     let plugin_kind = owner.plugin_kind.clone();
     let downstream = DownstreamErrors::default();
     let next = next.map(|next| {
-        a::Continuation_TO::from_value(
-            Continuation {
-                next: Arc::new(next),
-                lease: _lease,
-                downstream: downstream.clone(),
-                owner: owner.clone(),
-            },
-            TD_Opaque,
-        )
+        a::ContinuationBox::new(Continuation {
+            next: Arc::new(next),
+            lease: _lease,
+            downstream: downstream.clone(),
+            owner: owner.clone(),
+        })
     });
-    let future = callback.with(&owner, |callback| callback.invoke(invocation, next.into()))?;
+    let future = callback.with(&owner, |callback| callback.invoke(invocation, next))?;
     decode(
         owner
             .callback_result(future.await, &downstream)
@@ -1566,15 +1541,12 @@ pub fn apply_registration(
                     );
                     let (lease, _guard) = MiddlewareContinuationLease::capture();
                     let downstream = DownstreamErrors::default();
-                    let next = a::Continuation_TO::from_value(
-                        Continuation {
-                            next: Arc::new(Next::Tool(next)),
-                            lease,
-                            downstream: downstream.clone(),
-                            owner: owner.clone(),
-                        },
-                        TD_Opaque,
-                    );
+                    let next = a::ContinuationBox::new(Continuation {
+                        next: Arc::new(Next::Tool(next)),
+                        lease,
+                        downstream: downstream.clone(),
+                        owner: owner.clone(),
+                    });
                     let future = callback.with(&owner, |callback| callback.invoke_tool(i, next))?;
                     let value = owner
                         .callback_result(future.await, &downstream)
@@ -1586,7 +1558,6 @@ pub fn apply_registration(
                         annotation: value
                             .result
                             .annotation
-                            .into_option()
                             .map(from_abi)
                             .transpose()
                             .map_err(err)?
@@ -1743,15 +1714,12 @@ pub fn apply_registration(
                     );
                     let (lease, guard) = MiddlewareContinuationLease::capture();
                     let downstream = DownstreamErrors::default();
-                    let next = a::Continuation_TO::from_value(
-                        Continuation {
-                            next: Arc::new(Next::Stream(next)),
-                            lease,
-                            downstream: downstream.clone(),
-                            owner: owner.clone(),
-                        },
-                        TD_Opaque,
-                    );
+                    let next = a::ContinuationBox::new(Continuation {
+                        next: Arc::new(Next::Stream(next)),
+                        lease,
+                        downstream: downstream.clone(),
+                        owner: owner.clone(),
+                    });
                     let plugin_kind = owner.plugin_kind.clone();
                     let observer = owner.clone();
                     let errors = downstream.clone();
@@ -1760,18 +1728,18 @@ pub fn apply_registration(
                             .with(&observer, |callback| callback.open_stream(invocation, next))
                         {
                             Ok(future) => future,
-                            Err(error) => return a::Result::RErr(abi_error(error)),
+                            Err(error) => return a::Result::Err(abi_error(error)),
                         };
                         let stream = match observer
                             .callback_result(future.await, &errors)
                             .map_err(|e| super::http_error::reported_by(e, &plugin_kind, "native"))
                         {
                             Ok(v) => Arc::new(Mutex::new(v)),
-                            Err(e) => return a::Result::RErr(abi_error(e)),
+                            Err(e) => return a::Result::Err(abi_error(e)),
                         };
                         let pull = stream.lock().unwrap_or_else(|e| e.into_inner()).pull();
                         let first = pull.await;
-                        a::Result::ROk(OpenedStream { stream, first })
+                        a::Result::Ok(OpenedStream { stream, first })
                     });
                     let opening = Box::pin(async move { local(first.await) });
                     Ok(LlmJsonStream::from_closeable(ForeignStream {
@@ -1792,12 +1760,12 @@ pub fn apply_registration(
 
 struct OpenedStream {
     stream: Arc<Mutex<a::StreamBox>>,
-    first: a::Result<ROption<abi::Json>>,
+    first: a::Result<Option<abi::Json>>,
 }
 struct ForeignStream {
     stream: Option<Arc<Mutex<a::StreamBox>>>,
     opening: Option<Pin<Box<dyn Future<Output = Result<OpenedStream>> + Send>>>,
-    pending: Option<FfiFuture<a::Result<ROption<abi::Json>>>>,
+    pending: Option<FfiFuture<a::Result<Option<abi::Json>>>>,
     terminal: bool,
     _lifetime: Option<Box<dyn Any + Send>>,
     owner: Arc<HostRuntime>,
@@ -1848,8 +1816,8 @@ impl Stream for ForeignStream {
         };
         self.pending.take();
         match self.owner.callback_result(result, &self.downstream) {
-            Ok(ROption::RSome(v)) => Poll::Ready(Some(from_abi(v).map_err(err))),
-            Ok(ROption::RNone) => {
+            Ok(Option::Some(v)) => Poll::Ready(Some(from_abi(v).map_err(err))),
+            Ok(Option::None) => {
                 self.terminal = true;
                 self._lifetime.take();
                 Poll::Ready(None)
@@ -1994,8 +1962,8 @@ impl crate::Plugin for CheckedPlugin {
                     crate::DiagnosticLevel::Warning
                 },
                 code: d.code.to_string(),
-                component: d.component.into_option().map(|s| s.to_string()),
-                field: d.field.into_option().map(|s| s.to_string()),
+                component: d.component.map(|s| s.to_string()),
+                field: d.field.map(|s| s.to_string()),
                 message: d.message.to_string(),
             })
             .collect();
@@ -2060,7 +2028,7 @@ impl crate::Plugin for CheckedPlugin {
                 tokio::runtime::Handle::current().block_on(async move {
                     tokio::select! {
                         biased;
-                        () = cancelled.cancelled() => a::Result::RErr(a::Error::new("cancelled", "native registration was cancelled")),
+                        () = cancelled.cancelled() => a::Result::Err(a::Error::new("cancelled", "native registration was cancelled")),
                         result = plugin.register(into_abi(Json::Object(config)), registration_runtime) => result,
                     }
                 })
@@ -2083,7 +2051,7 @@ impl crate::Plugin for CheckedPlugin {
                     *slot = Some(registered.component);
                 }
             }
-            if let Some(error) = registered.error.into_option() {
+            if let Some(error) = registered.error {
                 return Err(crate::PluginError::RegistrationFailed(
                     error.message.to_string(),
                 ));

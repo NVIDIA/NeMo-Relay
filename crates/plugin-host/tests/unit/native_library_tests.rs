@@ -3,6 +3,7 @@
 
 //! Verify relocated binary dependencies, including PE sidecars and versioned ELF imports.
 use super::*;
+use nemo_relay_plugin::abi::xabi;
 
 #[test]
 fn native_dependency_capture_ignores_unrelated_files_and_retains_linked_sidecars() {
@@ -329,55 +330,20 @@ fn delay_loaded_sidecar_resolves_from_resident_verified_staging() {
 }
 
 #[test]
-fn unchecked_bootstrap_and_factory_headers_fail_before_construction() {
-    use nemo_relay_plugin::abi::abi_stable::{
-        library::{CheckTypeLayout, RootModuleResult},
-        prefix_type::PrefixTypeTrait,
-        sabi_types::RRef,
-        std_types::{ROption, RStr},
-    };
-    use std::sync::atomic::{AtomicUsize, Ordering};
-    static CONSTRUCTIONS: AtomicUsize = AtomicUsize::new(0);
-    extern "C" fn descriptor() -> PluginDescriptor {
-        PluginDescriptor {
-            native_api: NATIVE_API_VERSION,
-            plugin_kind: "unchecked".into(),
-        }
-    }
-    extern "C" fn query(_: RStr<'_>) -> ROption<RRef<'static, LibHeader>> {
-        ROption::RNone
-    }
-    extern "C" fn create() -> v1_0::Result<PluginBox> {
-        v1_0::Result::RErr(v1_0::Error::new("test", "factory must not run"))
-    }
-    extern "C" fn bootstrap() -> RootModuleResult {
-        CONSTRUCTIONS.fetch_add(1, Ordering::SeqCst);
-        nemo_relay_plugin::abi::abi_stable::library::__call_root_module_loader(|| {
-            nemo_relay_plugin::abi::Bootstrap {
-                descriptor,
-                query_module: query,
-            }
-            .leak_into_prefix()
-        })
-    }
-    extern "C" fn factory() -> RootModuleResult {
-        CONSTRUCTIONS.fetch_add(1, Ordering::SeqCst);
-        nemo_relay_plugin::abi::abi_stable::library::__call_root_module_loader(|| {
-            v1_0::Factory { create }.leak_into_prefix()
-        })
-    }
-    // SAFETY: both constructors return exactly their declared module type.
-    let bootstrap =
-        unsafe { LibHeader::from_constructor::<Bootstrap_Ref>(bootstrap, CheckTypeLayout::No) };
-    // SAFETY: as above; the missing layout metadata is the rejected condition.
-    let factory =
-        unsafe { LibHeader::from_constructor::<v1_0::Factory_Ref>(factory, CheckTypeLayout::No) };
-    let bootstrap_error = checked_module::<Bootstrap_Ref>(&bootstrap).err().unwrap();
-    let factory_error = checked_module::<v1_0::Factory_Ref>(&factory).err().unwrap();
-    for error in [bootstrap_error, factory_error] {
-        assert!(error.contains("type-layout metadata"), "{error}");
-    }
-    assert_eq!(CONSTRUCTIONS.load(Ordering::SeqCst), 0);
+fn missing_contract_metadata_is_rejected_before_construction() {
+    static EXPORTS: [xabi::XabiExport; 0] = [];
+    static MANIFEST: xabi::XabiManifest = xabi::XabiManifest::new(&EXPORTS);
+    let raw = Box::leak(Box::new(bootstrap::Bootstrap {
+        size: std::mem::size_of::<bootstrap::Bootstrap>(),
+        generation: 1,
+        major: 1,
+        minor: 0,
+        kind: xabi::XabiStr::from_static("unchecked"),
+        schema: xabi::XabiStr::from_static(""),
+        manifest: &MANIFEST,
+    }));
+    let error = unsafe { bootstrap::check(raw) }.err().unwrap();
+    assert!(error.contains("incompatible native contract"), "{error}");
 }
 
 #[cfg(target_os = "linux")]

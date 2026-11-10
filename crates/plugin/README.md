@@ -37,7 +37,7 @@ component closes.
 | `PluginContext` | Installs component-owned subscribers, guardrails, intercepts, continuations, and streams. |
 | `PluginRuntime` | Emits marks and manages Relay-owned scopes and scope stacks through typed host helpers. |
 | `nemo_relay_plugin!` | Exports the standard checked bootstrap header with the SDK-required native contract. |
-| Native API v1.0 | Uses `abi_stable` checked layouts, typed values, and `async-ffi` foreign futures. |
+| Native API v1.0 | Uses checked contract schemas, typed values, and `xabi` interfaces and foreign futures. |
 | Typed async middleware | Polls guardrails, sanitizers, and intercepts directly on the caller with restored Relay scope. Tokio support is opt-in and shared by the plugin's components. |
 | Async continuations and streams | `ToolNext`, `LlmNext`, and `LlmStreamNext` support repeated or concurrent downstream calls. Streaming LLM continuations use a pull-based host handle. `register_synchronous_stream_callback` accepts synchronous factories that return checked stream descriptors. |
 | Tool results | `ToolNext` returns `ToolExecutionResult`, which keeps an application result and optional annotation together. |
@@ -185,8 +185,8 @@ typed records and caller-owned bounded buffers. The
 
 ## Binary Compatibility and Cleanup
 
-The loader uses the standard `abi_stable` library header to check the plugin's
-interfaces. The export macro sets the minimum native contract from the build SDK.
+The loader checks the frozen bootstrap schema and xabi exports before constructing
+the plugin. The export macro sets the minimum native contract from the build SDK.
 A plugin built with SDK contract v1.1 requires a host that supports v1.1 or a
 later minor in major 1. A host that supports v1.1 also supports v1.0 plugins.
 The explicit native contract determines binary compatibility. The
