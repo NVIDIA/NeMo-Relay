@@ -53,8 +53,31 @@ generated Claude bundles no longer match canonical validation. Generate a
 replacement in a new directory, redeploy it, and provision its new trusted
 digest separately. Refresh does not rewrite existing bundles. Follow
 [Distribute Immutable Managed Settings](/daemon/configuration#distribute-immutable-managed-settings)
-for the generation and validation commands. Codex-only and Pi-only bundles are
-unaffected.
+for the generation and validation commands. Pi-only bundles are unaffected.
+Codex bundles change too; see the next section.
+
+## Update Codex and Managed Codex Bundles for NeMo Relay 1.0.0
+
+NeMo Relay now requires `codex-cli` 0.150.0 or newer and registers the Codex
+`SessionEnd` and `Interrupt` hooks. Upgrade Codex before upgrading Relay; Relay
+rejects older Codex versions at launch.
+
+Refresh personal Relay-managed Codex integrations so they register both hooks:
+
+```bash
+nemo-relay integrations refresh
+```
+
+To refresh only Codex, run `nemo-relay install codex --force`. Do not
+regenerate managed daemon bundles with personal install commands.
+
+Generated Codex bundles now include both hooks, so previously generated bundles
+containing Codex no longer match canonical validation. Generate a replacement in
+a new directory, redeploy it, and provision its new trusted digest separately.
+Refresh does not rewrite existing bundles. Follow
+[Distribute Immutable Managed Settings](/daemon/configuration#distribute-immutable-managed-settings)
+for the generation and validation commands. Claude-only and Pi-only bundles are
+unaffected by this change.
 
 ## Upgrade to NeMo Relay 0.11.0
 
