@@ -1,0 +1,241 @@
+// SPDX-FileCopyrightText: Copyright (c) 2026, NVIDIA CORPORATION & AFFILIATES. All rights reserved.
+// SPDX-License-Identifier: Apache-2.0
+
+//! Validate diagnostic authoring against checked peers with invalid behavior.
+use nemo_relay_plugin::{
+    PluginRuntime,
+    abi::{
+        self,
+        borrow::{SliceMut, Str},
+        diagnostics as d,
+        future::{FfiFuture, FutureExt as _},
+        v1_0 as a,
+    },
+    diagnostics::{
+        self as sdk, BuiltinDiagnosticCode, CommonPluginFailureCode, ComponentDeclaration,
+        DiagnosticAvailability, DiagnosticCode, DiagnosticError, DiagnosticQuery, FailureClass,
+        FailureCode, PluginFailureCode,
+    },
+};
+use std::{
+    num::NonZeroU64,
+    sync::{
+        Arc,
+        atomic::{AtomicUsize, Ordering},
+    },
+};
+#[derive(Clone, Copy)]
+enum Behavior {
+    Disabled,
+    Unsupported,
+    InvalidCapabilities,
+    UnknownStatus,
+    InvalidReceipt,
+    OversizedRead,
+}
+struct Peer {
+    behavior: Behavior,
+    registrations: AtomicUsize,
+}
+struct Runtime(Arc<Peer>);
+struct DiagnosticPeer(Arc<Peer>);
+fn unavailable<T>() -> a::Result<T> {
+    a::Result::Err(a::Error::new("test", "unavailable"))
+}
+impl a::Runtime for Runtime {
+    fn call_sync(&self, _: String, _: abi::Json) -> a::Result<abi::Json> {
+        unavailable()
+    }
+    fn call(&self, _: String, _: abi::Json) -> FfiFuture<a::Result<abi::Json>> {
+        async { unavailable() }.into_ffi()
+    }
+    fn diagnostics(&self) -> d::DiagnosticsBox {
+        d::DiagnosticsBox::new(DiagnosticPeer(self.0.clone()))
+    }
+    fn capture_scope(&self) -> a::Result<a::ScopeBox> {
+        unavailable()
+    }
+    fn bind_component(&self, _: a::ComponentBox) -> a::Result<()> {
+        unavailable()
+    }
+    fn register_callback(&self, _: a::Registration) -> a::Result<()> {
+        unavailable()
+    }
+    fn register_gate(&self, _: a::Registration) -> a::Result<String> {
+        unavailable()
+    }
+}
+impl d::Diagnostics for DiagnosticPeer {
+    fn capabilities(&self) -> std::result::Result<d::DiagnosticCapabilities, u32> {
+        if matches!(self.0.behavior, Behavior::Unsupported) {
+            return std::result::Result::Err(2);
+        }
+        std::result::Result::Ok(d::DiagnosticCapabilities {
+            contract_version: 1,
+            availability: u32::from(!matches!(self.0.behavior, Behavior::Disabled)),
+            can_read_context: 1,
+            max_codes: if matches!(self.0.behavior, Behavior::InvalidCapabilities) {
+                33
+            } else {
+                32
+            },
+            max_request_bytes: 16384,
+            max_query_bytes: 1024,
+            max_response_bytes: 16,
+            ..Default::default()
+        })
+    }
+    fn register(&self, _: d::DiagnosticRegistration<'_>) -> std::result::Result<u64, u32> {
+        self.0.registrations.fetch_add(1, Ordering::Relaxed);
+        std::result::Result::Ok(42)
+    }
+    fn record(
+        &self,
+        _: u64,
+        _: d::DiagnosticObservation<'_>,
+    ) -> std::result::Result<d::DiagnosticReceipt, u32> {
+        if matches!(self.0.behavior, Behavior::UnknownStatus) {
+            return std::result::Result::Err(u32::MAX);
+        }
+        std::result::Result::Ok(d::DiagnosticReceipt {
+            sequence: 1,
+            total_present: 2,
+            ..Default::default()
+        })
+    }
+    fn close(&self, _: u64) -> std::result::Result<(), u32> {
+        std::result::Result::Ok(())
+    }
+    fn read(
+        &self,
+        _: u32,
+        _: Str<'_>,
+        output: SliceMut<'_, u8>,
+    ) -> std::result::Result<usize, u32> {
+        std::result::Result::Ok(output.len() + 1)
+    }
+}
+fn facade(behavior: Behavior) -> (Arc<Peer>, sdk::Diagnostics) {
+    let peer = Arc::new(Peer {
+        behavior,
+        registrations: AtomicUsize::new(0),
+    });
+    let runtime = PluginRuntime::from_abi(a::RuntimeBox::new(Runtime(peer.clone())));
+    (peer, runtime.diagnostics())
+}
+const FAILURE: BuiltinDiagnosticCode = BuiltinDiagnosticCode::Failure(FailureCode::Plugin(
+    PluginFailureCode::Common(CommonPluginFailureCode::Internal),
+));
+/// Revoked or incompatible diagnostic peers must not invoke author-supplied factories.
+#[test]
+fn inert_and_incompatible_peers_skip_author_factories() {
+    for (behavior, expected) in [
+        (Behavior::Disabled, DiagnosticAvailability::Disabled),
+        (Behavior::Unsupported, DiagnosticAvailability::Unsupported),
+        (
+            Behavior::InvalidCapabilities,
+            DiagnosticAvailability::Unsupported,
+        ),
+    ] {
+        let (peer, diagnostics) = facade(behavior);
+        assert_eq!(diagnostics.availability(), expected);
+        let component = diagnostics
+            .component_lazy(|| panic!("inert declaration factory"))
+            .unwrap();
+        assert!(matches!(
+            component
+                .try_record_lazy(|| panic!("inert observation factory"))
+                .unwrap(),
+            sdk::RecordOutcome::Disabled
+        ));
+        assert_eq!(peer.registrations.load(Ordering::Relaxed), 0);
+    }
+}
+/// Malformed diagnostic replies must release admission and return a conservative failure.
+#[test]
+fn invalid_receipts_and_unknown_errors_fail_closed_without_leaking_admission() {
+    for behavior in [Behavior::UnknownStatus, Behavior::InvalidReceipt] {
+        let (_, diagnostics) = facade(behavior);
+        let codes = [DiagnosticCode::Builtin(FAILURE)];
+        let component = diagnostics
+            .component_lazy(|| ComponentDeclaration {
+                name: "operation",
+                codes: &codes,
+            })
+            .unwrap();
+        for _ in 0..2 {
+            assert_eq!(
+                component
+                    .try_record_lazy(|| sdk::Observation::failure(
+                        1,
+                        FailureClass::Internal,
+                        "restricted",
+                        NonZeroU64::MIN
+                    ))
+                    .unwrap_err(),
+                DiagnosticError::Internal
+            );
+        }
+        assert_eq!(diagnostics.delivery_stats().uncertain, 2);
+    }
+}
+/// Reject diagnostic read lengths that exceed the buffer supplied by the caller.
+#[test]
+fn checked_peer_cannot_claim_a_read_beyond_caller_owned_storage() {
+    let (_, diagnostics) = facade(Behavior::OversizedRead);
+    let reader = diagnostics.reader().unwrap();
+    for _ in 0..2 {
+        assert_eq!(
+            reader
+                .snapshot_json(&DiagnosticQuery::default())
+                .unwrap_err(),
+            DiagnosticError::Internal
+        );
+    }
+}
+
+/// Status decoding must preserve distinct read failures and admission failures.
+#[test]
+fn frozen_diagnostic_statuses_preserve_read_and_admission_failures() {
+    use sdk::DiagnosticReadReason as Read;
+    let cases = [
+        (2, DiagnosticError::Unsupported, "unsupported"),
+        (3, DiagnosticError::Unavailable, "unavailable"),
+        (4, DiagnosticError::Closed, "closed"),
+        (5, DiagnosticError::PermissionDenied, "permission_denied"),
+        (6, DiagnosticError::Busy, "busy"),
+        (7, DiagnosticError::Capacity, "capacity"),
+        (8, DiagnosticError::Invalid, "invalid"),
+        (9, DiagnosticError::Conflict, "conflict"),
+        (10, DiagnosticError::BufferTooSmall, "buffer_too_small"),
+        (11, DiagnosticError::Internal, "internal"),
+    ];
+    for (status, error, label) in cases {
+        assert_eq!(DiagnosticError::from_status(status), error);
+        assert_eq!(error.status(), status);
+        assert_eq!(error.to_string(), label);
+    }
+    for (status, reason) in [
+        (100, Read::Disabled),
+        (101, Read::QueryDisabled),
+        (102, Read::UnsupportedSchema),
+        (103, Read::InvalidQuery),
+        (104, Read::InvalidCursor),
+        (105, Read::Busy),
+        (106, Read::SnapshotCapacity),
+        (107, Read::InvalidLimits),
+        (108, Read::AllocationFailed),
+        (109, Read::Internal),
+    ] {
+        let error = DiagnosticError::Read(reason);
+        assert_eq!(DiagnosticError::from_status(status), error);
+        assert_eq!(error.status(), status);
+        assert_eq!(error.to_string(), reason.as_str());
+    }
+    for status in [0, 1, 12, 99, 110, u32::MAX] {
+        assert_eq!(
+            DiagnosticError::from_status(status),
+            DiagnosticError::Internal
+        );
+    }
+}

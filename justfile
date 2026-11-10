@@ -499,6 +499,7 @@ local_dependencies = (
     "nemo-relay-plugin-host",
     "nemo-relay",
     "nemo-relay-plugin",
+    "nemo-relay-plugin-abi",
     "nemo-relay-adaptive",
     "nemo-relay-pii-redaction",
     "nemo-relay-builtins",
@@ -527,7 +528,7 @@ for line in text.splitlines(keepends=True):
         for dependency in local_dependencies:
             updated, count = re.subn(
                 rf"^({re.escape(dependency)}\s*=\s*\{{[^}}]*\bversion\s*=\s*\")([^\"]+)(\".*)$",
-                rf"\g<1>{version}\g<3>",
+                lambda match: f'{match[1]}{"=" if match[2].startswith("=") else ""}{version}{match[3]}',
                 updated,
             )
             if count == 1:
@@ -859,6 +860,7 @@ PY
 # Publish dependencies first, including dev dependencies used in package validation.
 published_cargo_packages() {
     printf '%s\n' \
+        nemo-relay-plugin-abi \
         nemo-relay-types \
         nemo-relay-worker-proto \
         nemo-relay-codecs \
@@ -1005,7 +1007,8 @@ prepend_go_bin_to_path() {
 }
 
 prepare_test_plugin_fixtures() {
-    local target_dir="$NEMO_RELAY_REPO_ROOT/target/test-plugin-fixtures"
+    # Include instrumented foreign libraries and worker executables in llvm-cov's object scan.
+    local target_dir="${CARGO_LLVM_COV_TARGET_DIR:-$NEMO_RELAY_REPO_ROOT/target/test-plugin-fixtures}"
     local native_library=""
     local worker_executable="nemo-relay-worker-plugin-fixture"
     local host_os=""
@@ -1263,6 +1266,26 @@ generate-test-plugin-lockfiles:
 
 generate-worker-plugin-lockfile: generate-test-plugin-lockfiles
 
+# Build frozen native ABI generations in independent Cargo workspaces.
+build-native-abi-test-fixtures:
+    #!/usr/bin/env bash
+    "$BASH" scripts/build_native_abi_fixtures.sh
+
+# Explicitly refresh lockfiles for the independently built ABI fixtures.
+generate-native-abi-test-lockfiles:
+    #!/usr/bin/env bash
+    "$BASH" scripts/build_native_abi_fixtures.sh --update-lockfiles
+
+# Check unchanged ABI fixture binaries across the active and comparison compilers.
+test-native-abi-toolchains toolchain:
+    #!/usr/bin/env bash
+    uv run --no-sync python scripts/check_native_abi_toolchains.py {{ quote(toolchain) }}
+
+# Compare real native middleware paths with a separate source checkout.
+benchmark-native-plugins baseline:
+    #!/usr/bin/env bash
+    uv run --no-sync python scripts/native_plugin_benchmark/run.py {{ quote(baseline) }}
+
 # Build the native and worker dynamic-plugin fixtures once for test processes.
 build-test-plugin-fixtures:
     #!/usr/bin/env bash
@@ -1426,6 +1449,7 @@ test-rust:
     #!/usr/bin/env bash
     {{ bash_helpers }}
     output_dir="{{ output_dir }}"
+    "$BASH" "$NEMO_RELAY_REPO_ROOT/scripts/build_native_abi_fixtures.sh"
     junit_out=""
     test_config_root="$(mktemp -d)"
     cleanup_test_config_root() {
@@ -1828,11 +1852,26 @@ test-node:
 
 # run each checked plugin authoring example from its own project directory
 test-plugin-examples:
+    #!/usr/bin/env bash
+    {{ bash_helpers }}
+    export NEMO_RELAY_TEST_SKIP_IMPLICIT_CONFIG=1
     (cd examples/rust-native-plugin && cargo nextest run --config-file "$NEMO_RELAY_REPO_ROOT/.config/nextest.toml" --profile ci)
     (cd examples/rust-grpc-worker-plugin && cargo nextest run --config-file "$NEMO_RELAY_REPO_ROOT/.config/nextest.toml" --profile ci)
     (cd examples/language-binding-plugin/rust && cargo nextest run --config-file "$NEMO_RELAY_REPO_ROOT/.config/nextest.toml" --profile ci)
-    (cd examples/python-grpc-worker-plugin && uv run --locked --package nemo-relay-python-grpc-worker-example --group test --reinstall-package nemo-relay-plugin pytest)
-    (cd examples/language-binding-plugin/python && uv run --locked --package nemo-relay-python-language-binding-plugin-example --group test --reinstall-package nemo-relay pytest)
+    python_executable="$(uv_python_executable)"
+    if python_plugin_grpc_dependencies_supported "$python_executable"; then
+        (cd examples/python-grpc-worker-plugin && uv run --locked --package nemo-relay-python-grpc-worker-example --group test --reinstall-package nemo-relay-plugin pytest)
+    fi
+    sync_args=(--locked --inexact --all-packages --group test --no-install-project --no-install-package nemo-relay)
+    while IFS= read -r -d '' arg; do
+        sync_args+=("$arg")
+    done < <(python_plugin_sync_args "$python_executable")
+    uv sync "${sync_args[@]}"
+    activate_project_venv
+    python_executable="$(project_python_executable)"
+    use_project_python_source "$python_executable"
+    "$python_executable" -m maturin develop --features __skip-implicit-config --skip-install
+    (cd examples/language-binding-plugin/python && uv run --locked --no-sync --package nemo-relay-python-language-binding-plugin-example --group test pytest)
     npm test --workspace=nemo-relay-node-language-binding-plugin-example
 
 # --set [ci=true|false]
@@ -1884,6 +1923,11 @@ published-cargo-packages:
     {{ bash_helpers }}
     cd "$NEMO_RELAY_REPO_ROOT"
     published_cargo_packages
+
+# Print and validate the native ABI contract and its package release metadata.
+native-abi-contract:
+    #!/usr/bin/env bash
+    uv run --no-sync python scripts/native_abi_contract.py
 
 # [version] or --set ref_name=<version>
 set-version version="":
@@ -1943,6 +1987,7 @@ package-rust:
             nemo-relay-plugin-host)
                 cargo_package_config+=(--config 'patch.crates-io.nemo-relay-types.path="crates/types"')
                 cargo_package_config+=(--config 'patch.crates-io.nemo-relay-plugin.path="crates/plugin"')
+                cargo_package_config+=(--config 'patch.crates-io.nemo-relay-plugin-abi.path="crates/plugin-abi"')
                 cargo_package_config+=(--config 'patch.crates-io.nemo-relay-codecs.path="crates/codecs"')
                 cargo_package_config+=(--config 'patch.crates-io.nemo-relay-diagnostics.path="crates/diagnostics"')
                 cargo_package_config+=(--config 'patch.crates-io.nemo-relay-logging.path="crates/logging"')
@@ -1955,15 +2000,18 @@ package-rust:
             nemo-relay-logging)
                 cargo_package_config+=(--config 'patch.crates-io.nemo-relay-types.path="crates/types"')
                 cargo_package_config+=(--config 'patch.crates-io.nemo-relay-plugin.path="crates/plugin"')
+                cargo_package_config+=(--config 'patch.crates-io.nemo-relay-plugin-abi.path="crates/plugin-abi"')
                 cargo_package_config+=(--config 'patch.crates-io.nemo-relay-diagnostics.path="crates/diagnostics"')
                 ;;
             nemo-relay-diagnostics)
                 cargo_package_config+=(--config 'patch.crates-io.nemo-relay-types.path="crates/types"')
                 cargo_package_config+=(--config 'patch.crates-io.nemo-relay-plugin.path="crates/plugin"')
+                cargo_package_config+=(--config 'patch.crates-io.nemo-relay-plugin-abi.path="crates/plugin-abi"')
                 ;;
             nemo-relay-observability)
                 cargo_package_config+=(--config 'patch.crates-io.nemo-relay-codecs.path="crates/codecs"')
                 cargo_package_config+=(--config 'patch.crates-io.nemo-relay-plugin.path="crates/plugin"')
+                cargo_package_config+=(--config 'patch.crates-io.nemo-relay-plugin-abi.path="crates/plugin-abi"')
                 cargo_package_config+=(--config 'patch.crates-io.nemo-relay-types.path="crates/types"')
                 cargo_package_config+=(--config 'patch.crates-io.nemo-relay-model-pricing.path="crates/model-pricing"')
                 cargo_package_config+=(--config 'patch.crates-io.nemo-relay-logging.path="crates/logging"')
@@ -1987,6 +2035,7 @@ package-rust:
                 cargo_package_config+=(--config 'patch.crates-io.nemo-relay-resource-metrics.path="crates/resource-metrics"')
                 cargo_package_config+=(--config 'patch.crates-io.nemo-relay-model-pricing.path="crates/model-pricing"')
                 cargo_package_config+=(--config 'patch.crates-io.nemo-relay-plugin.path="crates/plugin"')
+                cargo_package_config+=(--config 'patch.crates-io.nemo-relay-plugin-abi.path="crates/plugin-abi"')
                 ;;
             nemo-relay-adaptive)
                 cargo_package_config+=(--config 'patch.crates-io.nemo-relay-codecs.path="crates/codecs"')
@@ -2000,19 +2049,25 @@ package-rust:
                 cargo_package_config+=(--config 'patch.crates-io.nemo-relay-resource-metrics.path="crates/resource-metrics"')
                 cargo_package_config+=(--config 'patch.crates-io.nemo-relay-model-pricing.path="crates/model-pricing"')
                 cargo_package_config+=(--config 'patch.crates-io.nemo-relay-plugin.path="crates/plugin"')
+                cargo_package_config+=(--config 'patch.crates-io.nemo-relay-plugin-abi.path="crates/plugin-abi"')
                 ;;
             nemo-relay-worker)
                 cargo_package_config+=(--config 'patch.crates-io.nemo-relay-types.path="crates/types"')
                 cargo_package_config+=(--config 'patch.crates-io.nemo-relay-plugin.path="crates/plugin"')
+                cargo_package_config+=(--config 'patch.crates-io.nemo-relay-plugin-abi.path="crates/plugin-abi"')
                 cargo_package_config+=(--config 'patch.crates-io.nemo-relay-worker-proto.path="crates/worker-proto"')
                 ;;
             nemo-relay-resource-metrics|nemo-relay-model-pricing)
                 cargo_package_config+=(--config 'patch.crates-io.nemo-relay-diagnostics.path="crates/diagnostics"')
                 cargo_package_config+=(--config 'patch.crates-io.nemo-relay-types.path="crates/types"')
                 cargo_package_config+=(--config 'patch.crates-io.nemo-relay-plugin.path="crates/plugin"')
+                cargo_package_config+=(--config 'patch.crates-io.nemo-relay-plugin-abi.path="crates/plugin-abi"')
                 ;;
             nemo-relay-plugin|nemo-relay-codecs|nemo-relay-worker-proto)
                 cargo_package_config+=(--config 'patch.crates-io.nemo-relay-types.path="crates/types"')
+                if [[ "$package" == nemo-relay-plugin ]]; then
+                    cargo_package_config+=(--config 'patch.crates-io.nemo-relay-plugin-abi.path="crates/plugin-abi"')
+                fi
                 ;;
             nemo-relay-pii-redaction)
                 cargo_package_config+=(--config 'patch.crates-io.nemo-relay-codecs.path="crates/codecs"')
@@ -2026,6 +2081,7 @@ package-rust:
                 cargo_package_config+=(--config 'patch.crates-io.nemo-relay-resource-metrics.path="crates/resource-metrics"')
                 cargo_package_config+=(--config 'patch.crates-io.nemo-relay-model-pricing.path="crates/model-pricing"')
                 cargo_package_config+=(--config 'patch.crates-io.nemo-relay-plugin.path="crates/plugin"')
+                cargo_package_config+=(--config 'patch.crates-io.nemo-relay-plugin-abi.path="crates/plugin-abi"')
                 ;;
             nemo-relay-builtins|nemo-relay-ffi|nemo-relay-cli)
                 if [[ "$package" != nemo-relay-builtins ]]; then
@@ -2042,6 +2098,7 @@ package-rust:
                 cargo_package_config+=(--config 'patch.crates-io.nemo-relay-resource-metrics.path="crates/resource-metrics"')
                 cargo_package_config+=(--config 'patch.crates-io.nemo-relay-model-pricing.path="crates/model-pricing"')
                 cargo_package_config+=(--config 'patch.crates-io.nemo-relay-plugin.path="crates/plugin"')
+                cargo_package_config+=(--config 'patch.crates-io.nemo-relay-plugin-abi.path="crates/plugin-abi"')
                 cargo_package_config+=(--config 'patch.crates-io.nemo-relay-adaptive.path="crates/adaptive"')
                 cargo_package_config+=(--config 'patch.crates-io.nemo-relay-pii-redaction.path="crates/pii-redaction"')
                 ;;

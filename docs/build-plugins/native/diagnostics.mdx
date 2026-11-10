@@ -29,7 +29,8 @@ The host records outcomes at the operation that owns them:
 
 Native observations use `PluginExecution::NativeAbi`. Their phase identifies
 policy, validation, activation, or runtime work. Failure classes come from
-structured status values. `Ok`, `StreamEnd`, and `Backpressured` are not failures.
+structured operation outcomes. Successful completion, stream termination, and
+backpressure are not failures. Propagated downstream errors retain their provenance.
 A later success does not erase an earlier failure.
 
 Common component activation also records its own summary. Do not add that summary
@@ -211,35 +212,14 @@ or allocator overhead. Caller-owned read results have their own memory cost.
 
 ## SDK and ABI Boundaries
 
-The optional `NativeDiagnosticsApiV1` table follows the frozen execution ABI-8
-prefix. The SDK checks the table's size and independent contract version before
-using it. Execution ABI 8, ABI-7 negotiation, and manifest native API 1 remain
-unchanged. This adds an optional tail to the native host table.
+Diagnostics are part of the checked `v1.0` interface. Submission and bounded reads
+use typed records and borrowed ABI-safe spans; no core recorder or Tokio object
+crosses the library boundary. The host retains no plugin input pointers.
+Whole-context reads still require a separate host policy grant, and component
+revocation closes retained diagnostic capabilities.
 
-| Contract | Current Version |
-| --- | --- |
-| Execution ABI | 8 |
-| Manifest `compat.native_api` | `"1"` |
-| Diagnostics extension contract | 1 |
-
-Incompatible diagnostics callback or payload layout changes require versioning
-that extension contract. Changes to private SDK synchronization do not change
-these ABI layouts or callback signatures.
-
-Core recorders and Rust-owned objects stay inside the host. Registration and
-recording cross the ABI as fixed layouts with borrowed UTF-8 spans. The host
-retains no plugin input pointers. A compatible host without the extension exposes
-an unsupported facade and keeps existing execution behavior.
-
-`PluginRuntime::runtime_diagnostics()` remains the older host-level report from
-ABI v4. It is ordered by code and does not identify the plugin that recorded an
-entry. It does not return canonical snapshots or fall back to them.
+`PluginRuntime::runtime_diagnostics()` returns an ordered host-level report.
+It does not identify the plugin that recorded an entry or return canonical snapshots.
 Refer to [Runtime Events and Scopes](/build-plugins/native/runtime-events-and-scopes#emit-typed-telemetry-and-read-diagnostics)
-for that older API, and the
-[native ABI reference](/build-plugins/native/native-abi-reference#native-diagnostics-extension)
-for table ownership and compatibility details.
-
-A plugin that requires canonical diagnostics must declare a Relay compatibility
-range that includes this extension. Do not treat `compat.native_api = "1"` as proof
-that every compatible host exposes it. Native code remains trusted and shares
-the host process.
+for that API and [the checked ABI reference](/build-plugins/native/native-abi-reference)
+for ownership and compatibility details.

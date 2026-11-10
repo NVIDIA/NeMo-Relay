@@ -135,3 +135,48 @@ fn hex_value(byte: u8) -> Option<u8> {
         _ => None,
     }
 }
+
+/// Error type for generic plugin operations.
+#[derive(Debug, thiserror::Error)]
+pub enum PluginError {
+    /// Configuration validation failed.
+    #[error("invalid config: {0}")]
+    InvalidConfig(String),
+
+    /// The requested mutation conflicts with current plugin state.
+    #[error("conflict: {0}")]
+    Conflict(String),
+
+    /// The requested plugin resource was not found.
+    #[error("not found: {0}")]
+    NotFound(String),
+
+    /// A serialization or deserialization operation failed.
+    #[error("serialization error: {0}")]
+    Serialization(#[from] serde_json::Error),
+
+    /// An internal plugin-system error occurred.
+    #[error("internal error: {0}")]
+    Internal(String),
+
+    /// A runtime middleware/subscriber registration failed.
+    #[error("registration failed: {0}")]
+    RegistrationFailed(String),
+}
+
+impl From<String> for PluginError {
+    fn from(message: String) -> Self {
+        Self::RegistrationFailed(message)
+    }
+}
+
+impl From<&str> for PluginError {
+    fn from(message: &str) -> Self {
+        Self::RegistrationFailed(message.to_owned())
+    }
+}
+
+/// Shared future returned by Rust plugin activation methods.
+pub type PluginFuture<'a, T> = std::pin::Pin<
+    Box<dyn std::future::Future<Output = std::result::Result<T, PluginError>> + Send + 'a>,
+>;

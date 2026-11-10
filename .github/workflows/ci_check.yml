@@ -265,7 +265,10 @@ jobs:
         run: |
           python -m unittest \
             scripts.tests.test_package_cli_bin \
-            scripts.tests.test_package_node_bin
+            scripts.tests.test_package_node_bin \
+            scripts.tests.test_native_abi_contract \
+            scripts.tests.test_check_native_abi_toolchains \
+            scripts.tests.test_native_plugin_benchmark
 
       - name: Test docs version retention
         working-directory: ${{ env.NEMO_RELAY_CI_WORKSPACE }}

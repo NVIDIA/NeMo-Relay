@@ -8,7 +8,7 @@ SPDX-License-Identifier: Apache-2.0 */}
 
 A native dynamic plugin is a trusted Rust shared library that Relay loads into its own
 process. It follows the same validation and `PluginContext` contract as other plugins,
-but typed middleware crosses a stable C boundary without a worker process or gRPC JSON
+but typed middleware crosses a checked ABI boundary without a worker process or gRPC JSON
 envelope. This model is appropriate when reusable callback behavior is sensitive to
 latency or throughput and the deployment can carry a platform-specific binary.
 
@@ -20,53 +20,46 @@ assume a native crash can terminate the Relay host.
 
 ## Version Contracts
 
-Three version values answer different questions:
+The native contract is independent of the Relay package release:
 
-| Contract | Current Value | Meaning |
-|---|---|---|
-| Package manifest | `manifest_version = 1` | Shape of the authored `relay-plugin.toml` file. |
-| Manifest native API | `compat.native_api = "1"` | Native plugin package contract accepted by discovery and trust validation. |
-| C host-table ABI | v8, compatible with v7 | Scope inspection uses v8. An optional, independently versioned diagnostics table follows the frozen v8 prefix. Existing v7 plugins remain compatible. |
+| Version | Purpose |
+|---|---|
+| `compat.relay` | Runtime release range asserted by the plugin author. |
+| `compat.native_api = "v1.0"` | Minimum host contract required by the build SDK. |
+| ABI dependency versions | Checked type-layout compatibility. |
 
-The checked example targets the 1.0.0 SDK and declares
-`compat.relay = ">=1.0.0,<2.0"`. Rebuild the plugin with this SDK when moving
-to Relay 1.0.0.
+The interface crate follows Relay's package release version. Package version
+changes leave the native contract unchanged.
 
-Relay 0.10 adds ABI v7 with request and response codec context on every LLM
-execution callback. Rebuild all native plugins for this release; the authored
-`native_api = "1"` label does not change.
+Export the plugin with
+`nemo_relay_plugin!(kind = "your.plugin", || YourPlugin)`. The macro sets the
+required native contract from the SDK used to build the plugin.
 
-Relay 0.8 changed the native API 1 tool-result JSON contract without changing the v4
-host-table layout. A tool callback and `ToolNext` continuation return
-`ToolExecutionResult`, which carries `result` and optional opaque `annotation`; an
-execution intercept returns that pair plus pending marks. Rebuild native plugins for
-that contract even though its negotiated host-table ABI remained v4. Relay 0.9
-adds the context-carrying tool execution callback as the v5 host-table extension.
+A plugin built with SDK contract v1.1 requires a host that supports v1.1 or a
+later minor in major 1. A host that supports v1.1 also supports v1.0 plugins.
+Changes that break binary compatibility require a new native major.
 
-In Relay 0.8, the v4 SDK also let a plugin add a data schema and log severity to a
-mark, or emit validated metric measurements. `PluginRuntime::runtime_diagnostics()`
-returns the legacy host-level report. Entries are ordered by code and are not
-attributed to a particular plugin. The separate `PluginRuntime::diagnostics()`
-API records internal observations in the selected canonical store. It can also
-read that store when host policy grants whole-context access.
-
-For host-recorded load, validation, registration, and callback outcomes, refer to
-[Native Plugin Diagnostics](/build-plugins/native/diagnostics). That guide explains
-how the canonical diagnostic service differs from the ABI v4 report.
+Refer to [Native ABI Reference](/build-plugins/native/native-abi-reference) for
+ownership and compatibility rules and
+[Native Plugin Diagnostics](/build-plugins/native/diagnostics) for observations.
 
 ## What the SDK Owns
 
-The Rust SDK exports the stable entry symbol, converts host-owned JSON handles into
-typed DTOs, registers all 16 plugin surfaces, and drives async middleware on one
-SDK-owned multi-thread Tokio runtime per configured component. A plugin can set a
-default executor size and accept a positive `executor.worker_threads` component
-override. The default is two workers; change it only after measuring queued async work
-and account for the number of native components in the host.
+The Rust SDK exports the standard checked bootstrap header, converts ABI-safe values into
+typed records, and registers subscribers and middleware. Typed middleware futures are
+polled directly by the caller. The SDK restores Relay scope around each poll and drop.
+Inline execution is the default and creates no plugin Tokio runtime or worker pool.
 
-Subscribers remain synchronous and run on Relay's subscriber dispatcher. Typed
-middleware returns futures and runs on the SDK executor. A callback has no stable OS
-thread affinity, separate invocations can overlap, and blocking an executor thread can
-delay unrelated calls from the same component.
+Plugins that use Tokio timers, networking, or background tasks opt into a shared
+library-local runtime. Return `Some(NativeExecutorConfig { worker_threads: 2 })` from
+`executor_config`, or configure an `executor` object. Tokio-enabled components of the
+same plugin share that runtime and must request the same worker count. The last
+component using the runtime releases it during shutdown.
+
+Subscribers remain synchronous and run on Relay's subscriber dispatcher. Registration
+and raw synchronous middleware run off the caller thread because their callbacks can
+block. A callback has no stable OS thread affinity, and separate invocations can overlap.
+Keep inline middleware nonblocking so it does not delay the host task.
 
 The checked-in `examples/rust-native-plugin` project is the end-to-end implementation.
 Its configuration, observation, request policy, execution wrappers, and runtime helpers
@@ -78,7 +71,7 @@ without presenting a monolithic sample.
 The root module is intentionally small. `validate` checks both the example settings and
 the SDK-owned executor override. `register` parses the same settings once, obtains the
 component runtime handle, and delegates each feature group. The export macro produces
-the `nemo_relay_register_plugin` symbol named in the manifest.
+the standard checked bootstrap header; the manifest names only `load.library`.
 
 ```rust
 mod config;
@@ -88,26 +81,19 @@ mod requests;
 mod runtime;
 
 use nemo_relay_plugin::{
-    ConfigDiagnostic, DiagnosticLevel, Json, NativeExecutorConfig,
-    NativePlugin, PluginContext,
+    ConfigDiagnostic, DiagnosticLevel, Json, NativeExecutorConfig, Plugin, PluginContext,
 };
 use serde_json::Map;
 
 struct ExampleNativePlugin;
 
-impl NativePlugin for ExampleNativePlugin {
+impl Plugin for ExampleNativePlugin {
     fn plugin_kind(&self) -> &str {
         "examples.rust_native_policy"
     }
-
-    fn executor_config(&self) -> NativeExecutorConfig {
-        NativeExecutorConfig { worker_threads: 2 }
-    }
-
     fn allows_multiple_components(&self) -> bool {
         false
     }
-
     fn validate(&self, plugin_config: &Map<String, Json>) -> Vec<ConfigDiagnostic> {
         let mut diagnostics = config::validate(plugin_config);
         if let Err(message) = self.executor_config_for_component(plugin_config) {
@@ -122,31 +108,33 @@ impl NativePlugin for ExampleNativePlugin {
         diagnostics
     }
 
-    fn register(
-        &mut self,
-        plugin_config: &Map<String, Json>,
-        context: &mut PluginContext<'_>,
-    ) -> nemo_relay_plugin::Result<()> {
-        let config = config::ExampleConfig::parse(plugin_config)?;
-        let runtime = context.runtime();
-        observe::register(context, &config, &runtime)?;
-        requests::register(context, &config)?;
-        execution::register(context, &config, &runtime)?;
-        Ok(())
+    fn executor_config(&self) -> Option<NativeExecutorConfig> {
+        Some(NativeExecutorConfig { worker_threads: 2 })
+    }
+
+    fn register<'a>(
+        &'a self,
+        plugin_config: &'a Map<String, Json>,
+        context: &'a mut PluginContext<'_>,
+    ) -> nemo_relay_plugin::PluginFuture<'a, ()> {
+        Box::pin(async move {
+            let config = config::ExampleConfig::parse(plugin_config)?;
+            let runtime = context.runtime();
+            observe::register(context, &config, &runtime)?;
+            requests::register(context, &config)?;
+            execution::register(context, &config, &runtime)?;
+            Ok(())
+        })
     }
 }
 
-nemo_relay_plugin::nemo_relay_plugin!(
-    nemo_relay_register_plugin,
-    || ExampleNativePlugin
-);
+nemo_relay_plugin::nemo_relay_plugin!(kind = "examples.rust_native_policy", || ExampleNativePlugin);
 ```
 
 The kind in `plugin_kind()` must match `[plugin].id` in `relay-plugin.toml`. Returning
 `false` from `allows_multiple_components` tells Relay to reject a document that tries to
 activate two configurations of this native implementation. The SDK owns registrations
-created through `context`; the plugin does not keep raw registry handles or unload them
-itself.
+created through `context` and removes them when the component closes.
 
 ## Complete Path
 
@@ -164,11 +152,14 @@ Follow these pages in order to build, activate, exercise, and remove the native 
 6. Consult [Native ABI Reference](/build-plugins/native/native-abi-reference) only when
    implementing or auditing the raw boundary.
 
-Success is not merely a library that loads. The atomic lifecycle test builds the `cdylib`
-in an isolated target directory, materializes and integrity-checks its manifest, activates
-a valid component, executes a managed tool call, observes the runtime mark, and clears
-registrations before the library unloads. The focused configuration tests cover rejected
-input and schema shape; the scenario pages show the remaining callback contracts.
+The lifecycle test builds the library in a separate target directory and checks
+its manifest and integrity digest. It then activates a component, runs a managed
+tool call, checks the emitted mark, and closes the component.
+
+Closing a component removes its registrations, revokes runtime access, cancels
+work, waits for tasks to finish, and stops its executor. If cleanup fails, the host
+keeps ownership so you can retry close. Libraries and their dependencies stay
+loaded until the process exits.
 
 ## Forward HTTP error statuses
 

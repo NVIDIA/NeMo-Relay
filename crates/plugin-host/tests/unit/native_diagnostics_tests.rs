@@ -2,10 +2,9 @@
 // SPDX-License-Identifier: Apache-2.0
 
 use super::*;
+use nemo_relay_plugin::abi::{self as checked, v1_0 as a};
 use nemo_relay_plugin::diagnostics::{self as sdk, ComponentDeclaration, DiagnosticCode};
-use nemo_relay_plugin::{NemoRelayNativePluginContext, NemoRelayStatus, PluginContext};
-use std::collections::HashMap;
-use std::sync::{Arc, Weak, atomic::AtomicBool};
+use std::sync::Arc;
 
 static SERIAL: Mutex<()> = Mutex::new(());
 const FAILURE: BuiltinDiagnosticCode = BuiltinDiagnosticCode::Failure(FailureCode::Plugin(
@@ -29,42 +28,45 @@ fn new_context(enabled: bool, events: usize) -> Diagnostics {
     )
     .unwrap()
 }
-unsafe extern "C" fn capture_runtime(
-    ctx: *mut NemoRelayNativePluginContext,
-    out: *mut *const NemoRelayNativePluginRuntime,
-) -> NemoRelayStatus {
-    let runtime = ctx.cast::<NativeHostPluginRuntime>();
-    unsafe {
-        Arc::increment_strong_count(runtime);
-        out.write(runtime.cast());
+struct DiagnosticRuntime(Arc<NativeDiagnostics>);
+impl a::Runtime for DiagnosticRuntime {
+    fn call_sync(&self, _: String, _: checked::Json) -> a::Result<checked::Json> {
+        a::Result::Err(a::Error::new("test", "unavailable"))
     }
-    NemoRelayStatus::Ok
+    fn call(
+        &self,
+        _: String,
+        _: checked::Json,
+    ) -> checked::future::FfiFuture<a::Result<checked::Json>> {
+        use checked::future::FutureExt as _;
+        async { a::Result::Err(a::Error::new("test", "unavailable")) }.into_ffi()
+    }
+    fn diagnostics(&self) -> checked::diagnostics::DiagnosticsBox {
+        checked::diagnostics::DiagnosticsBox::new(CheckedDiagnostics {
+            runtime: self.0.clone(),
+        })
+    }
+    fn capture_scope(&self) -> a::Result<a::ScopeBox> {
+        a::Result::Err(a::Error::new("test", "unavailable"))
+    }
+    fn bind_component(&self, _: a::ComponentBox) -> a::Result<()> {
+        a::Result::Ok(())
+    }
+    fn register_callback(&self, _: a::Registration) -> a::Result<()> {
+        a::Result::Ok(())
+    }
+    fn register_gate(&self, _: a::Registration) -> a::Result<String> {
+        a::Result::Err(a::Error::new("test", "unavailable"))
+    }
 }
 fn new_runtime(
     context: &Diagnostics,
     read: bool,
-) -> (
-    Arc<NativeHostPluginRuntime>,
-    nemo_relay_plugin::PluginRuntime,
-) {
-    let runtime = Arc::new(NativeHostPluginRuntime {
-        diagnostics: Arc::new(NativeDiagnostics::new(context.clone(), read, "fixture")),
-        namespace: "fixture".into(),
-        encode_local_names: false,
-        instance: Weak::new(),
-        active: AtomicBool::new(true),
-        gates: Mutex::new(HashMap::new()),
-    });
-    let mut host =
-        unsafe { *(super::super::native_host_api().cast::<abi::NativeHostApiV8WithDiagnostics>()) };
-    host.v8.v7.v6.v5.v4.plugin_context_runtime = capture_runtime;
-    let ctx = unsafe {
-        PluginContext::from_raw(
-            &host.v8.v7.v6.v5.v4.v3.v1,
-            Arc::as_ptr(&runtime).cast_mut().cast(),
-        )
-    };
-    let sdk = ctx.runtime();
+) -> (Arc<NativeDiagnostics>, nemo_relay_plugin::PluginRuntime) {
+    let runtime = Arc::new(NativeDiagnostics::new(context.clone(), read, "fixture"));
+    let sdk = nemo_relay_plugin::PluginRuntime::from_abi(a::RuntimeBox::new(DiagnosticRuntime(
+        runtime.clone(),
+    )));
     (runtime, sdk)
 }
 fn component(d: &sdk::Diagnostics, name: &str) -> sdk::DiagnosticComponent {
@@ -107,7 +109,7 @@ fn native_authoring_uses_selected_context_and_preserves_counts_after_eviction() 
     let d = runtime.diagnostics();
     let c = component(&d, "lookup");
     assert_eq!(record(&c, 2).code_total.unwrap().value.get(), 2);
-    owner.diagnostics.registered();
+    owner.registered();
     assert_eq!(record(&c, 3).code_total.unwrap().value.get(), 5);
     let snapshot = context
         .snapshot(&DiagnosticQuery::default())
@@ -270,7 +272,6 @@ fn native_revocation_and_component_close_fence_clones_and_foreign_tokens() {
     let clone = c.clone();
     record(&c, 1);
     let token = owner
-        .diagnostics
         .with(|a| {
             Ok(a.session.as_ref().unwrap()[0].components[0]
                 .as_ref()
@@ -278,8 +279,8 @@ fn native_revocation_and_component_close_fence_clones_and_foreign_tokens() {
                 .token)
         })
         .unwrap();
-    let foreign = unsafe { close(Arc::as_ptr(&_other_owner).cast(), token) };
-    assert_eq!(foreign, Error::Closed.status());
+    let foreign = _other_owner.close(token).unwrap_err();
+    assert_eq!(foreign, Error::Closed);
     drop(other_runtime);
     c.close().unwrap();
     assert_eq!(
@@ -290,12 +291,9 @@ fn native_revocation_and_component_close_fence_clones_and_foreign_tokens() {
     );
     let next = component(&d, "two");
     record(&next, 2);
-    assert_eq!(
-        unsafe { close(Arc::as_ptr(&owner).cast(), token) },
-        Error::Closed.status()
-    );
-    owner.cleanup().unwrap();
-    assert!(owner.diagnostics.state.lock().unwrap().is_none());
+    assert_eq!(owner.close(token), Err(Error::Closed));
+    owner.revoke();
+    assert!(owner.state.lock().unwrap().is_none());
     assert_eq!(
         next.try_record_lazy(|| sdk::Observation::failure(
             1,
@@ -315,6 +313,7 @@ fn native_revocation_and_component_close_fence_clones_and_foreign_tokens() {
     assert_eq!(page.lifetime.totals.occurrences_total.value.get(), 3);
     assert!(page.components.iter().all(|c| c.closed_at.is_some()));
 }
+/// Exhausting registration limits must not revoke a producer that was already admitted.
 #[test]
 fn native_bounds_reject_new_registration_and_keep_existing_producer_writable() {
     let _lock = SERIAL.lock().unwrap();
@@ -322,7 +321,7 @@ fn native_bounds_reject_new_registration_and_keep_existing_producer_writable() {
     let (owner, runtime) = new_runtime(&context, false);
     let d = runtime.diagnostics();
     let mut components = Vec::new();
-    for i in 0..abi::MAX_COMPONENTS {
+    for i in 0..bounds::MAX_COMPONENTS {
         components.push(component(&d, &format!("component{i}")));
     }
     let codes = [DiagnosticCode::Builtin(FAILURE)];
@@ -343,23 +342,17 @@ fn native_bounds_reject_new_registration_and_keep_existing_producer_writable() {
     let receipt = record(&components[0], u64::MAX);
     assert_eq!(receipt.evidence, EvidenceDisposition::Dropped);
     assert!(record(&components[0], 1).code_total.unwrap().saturated);
-    let oversized = abi::Registration {
-        name: abi::Bytes {
-            data: std::ptr::dangling(),
-            len: usize::MAX,
-        },
-        codes: std::ptr::null(),
-        code_count: 0,
-    };
-    let mut token = 99;
+    let oversized = "x".repeat(bounds::MAX_REQUEST_BYTES + 1);
     assert_eq!(
-        unsafe { register(Arc::as_ptr(&owner).cast(), &oversized, &mut token) },
-        Error::Capacity.status()
+        owner.register(abi::DiagnosticRegistration {
+            name: Str::from_str(&oversized),
+            codes: [].as_slice().into(),
+        }),
+        Err(Error::Capacity)
     );
-    assert_eq!(token, 0);
-    let guard = Permit::acquire(&CALLS, abi::MAX_CALLS).unwrap();
-    let guards = (1..abi::MAX_CALLS)
-        .map(|_| Permit::acquire(&CALLS, abi::MAX_CALLS).unwrap())
+    let guard = Permit::acquire(&CALLS, bounds::MAX_CALLS).unwrap();
+    let guards = (1..bounds::MAX_CALLS)
+        .map(|_| Permit::acquire(&CALLS, bounds::MAX_CALLS).unwrap())
         .collect::<Vec<_>>();
     assert_eq!(
         components[0]
@@ -383,73 +376,33 @@ fn native_read_checks_permission_before_queries_and_never_publishes_partial_outp
     let (denied, _runtime) = new_runtime(&context, false);
     let (allowed, _runtime2) = new_runtime(&context, true);
     let mut output = [0u8; 4];
-    let mut written = 99;
     assert_eq!(
-        unsafe {
-            read(
-                Arc::as_ptr(&denied).cast(),
-                1,
-                abi::Bytes::text("invalid"),
-                output.as_mut_ptr(),
-                output.len(),
-                &mut written,
-            )
-        },
-        Error::PermissionDenied.status()
+        denied.read(1, Str::from_str("invalid"), &mut output),
+        Err(Error::PermissionDenied)
     );
-    assert_eq!(written, 0);
-    written = 99;
     assert_eq!(
-        unsafe {
-            read(
-                Arc::as_ptr(&allowed).cast(),
-                0,
-                abi::Bytes::text("{}"),
-                output.as_mut_ptr(),
-                output.len(),
-                &mut written,
-            )
-        },
-        Error::BufferTooSmall.status()
+        allowed.read(0, Str::from_str("{}"), &mut output),
+        Err(Error::BufferTooSmall)
     );
-    assert_eq!(written, 0);
     assert_eq!(
-        unsafe {
-            read(
-                Arc::as_ptr(&allowed).cast(),
-                1,
-                abi::Bytes::text("{}"),
-                output.as_mut_ptr(),
-                output.len(),
-                &mut written,
-            )
-        },
-        Error::BufferTooSmall.status()
+        allowed.read(1, Str::from_str("{}"), &mut output),
+        Err(Error::BufferTooSmall)
     );
-    assert_eq!(written, 0);
     assert_eq!(
-        unsafe {
-            read(
-                Arc::as_ptr(&allowed).cast(),
-                1,
-                abi::Bytes::text("{\"unknown\":true}"),
-                output.as_mut_ptr(),
-                output.len(),
-                &mut written,
-            )
-        },
-        Error::Read(DiagnosticReadReason::InvalidQuery).status()
+        allowed.read(1, Str::from_str("{\"unknown\":true}"), &mut output),
+        Err(Error::Read(DiagnosticReadReason::InvalidQuery))
     );
     assert_eq!(context.memory_usage().query_workspaces, 0);
 }
 
+/// Diagnostic sessions must respect admission limits and release slots when revoked.
 #[test]
 fn native_session_admission_is_bounded_and_released_on_revocation() {
     let _lock = SERIAL.lock().unwrap();
     let context = new_context(true, 0);
     let baseline = SESSIONS.load(Ordering::Relaxed);
     let mut active = Vec::new();
-    for _ in baseline..abi::MAX_SESSIONS {
+    for _ in baseline..bounds::MAX_SESSIONS {
         let (owner, runtime) = new_runtime(&context, false);
         let d = runtime.diagnostics();
         assert_eq!(d.capabilities().unwrap().adapter_session_bytes, 0);
@@ -470,16 +423,17 @@ fn native_session_admission_is_bounded_and_released_on_revocation() {
         }),
         Err(Error::Unavailable)
     ));
-    active.pop().unwrap().0.cleanup().unwrap();
+    active.pop().unwrap().0.revoke();
     let c = component(&d, "internal");
     record(&c, 1);
-    owner.cleanup().unwrap();
+    owner.revoke();
     for (owner, _, _) in active {
-        owner.cleanup().unwrap();
+        owner.revoke();
     }
     assert_eq!(SESSIONS.load(Ordering::Relaxed), baseline);
 }
 
+/// Rejected declarations must roll back, and retained text must report UTF-8-safe truncation.
 #[test]
 fn native_rejected_declarations_roll_back_and_retention_reports_utf8_truncation() {
     let _lock = SERIAL.lock().unwrap();
@@ -532,7 +486,7 @@ fn native_rejected_declarations_roll_back_and_retention_reports_utf8_truncation(
     assert_eq!(page.components.len(), 1);
     assert_eq!(page.lifetime.totals.occurrences_total.value.get(), 1);
     assert!(page.events[0].message().unwrap().len() <= context.limits().max_detail_bytes);
-    let oversized = "x".repeat(abi::MAX_REQUEST_BYTES + 1);
+    let oversized = "x".repeat(bounds::MAX_REQUEST_BYTES + 1);
     assert_eq!(
         c.try_record_lazy(|| sdk::Observation::failure(
             1,
@@ -545,6 +499,7 @@ fn native_rejected_declarations_roll_back_and_retention_reports_utf8_truncation(
     assert_eq!(d.delivery_stats().dropped, 1);
 }
 
+/// Concurrent recording and close must not permit reuse of revoked diagnostic authority.
 #[test]
 fn native_close_serializes_with_recording_without_reusing_authority() {
     let _lock = SERIAL.lock().unwrap();
@@ -569,7 +524,7 @@ fn native_close_serializes_with_recording_without_reusing_authority() {
         accepted
     });
     start.wait();
-    owner.cleanup().unwrap();
+    owner.revoke();
     let accepted = thread.join().unwrap();
     assert!(matches!(
         c.try_record_lazy(|| sdk::Observation::failure(
@@ -592,6 +547,7 @@ fn native_close_serializes_with_recording_without_reusing_authority() {
     assert!(page.components[0].closed_at.is_some());
 }
 
+/// Cloned diagnostic handles may record concurrently while factory admission remains bounded.
 #[test]
 fn native_sdk_admits_concurrent_clones_and_bounds_factories() {
     let _lock = SERIAL.lock().unwrap();
@@ -604,7 +560,7 @@ fn native_sdk_admits_concurrent_clones_and_bounds_factories() {
         let (ready_tx, ready_rx) = std::sync::mpsc::channel();
         let mut releases = Vec::new();
         let mut writers = Vec::new();
-        for _ in 0..abi::MAX_CALLS {
+        for _ in 0..bounds::MAX_CALLS {
             let c = c.clone();
             let ready = ready_tx.clone();
             let (release_tx, release_rx) = std::sync::mpsc::channel();
@@ -623,7 +579,7 @@ fn native_sdk_admits_concurrent_clones_and_bounds_factories() {
             }));
         }
         drop(ready_tx);
-        let all_entered = (0..abi::MAX_CALLS).all(|_| {
+        let all_entered = (0..bounds::MAX_CALLS).all(|_| {
             ready_rx
                 .recv_timeout(std::time::Duration::from_secs(5))
                 .is_ok()
@@ -650,10 +606,11 @@ fn native_sdk_admits_concurrent_clones_and_bounds_factories() {
     assert_eq!(d.delivery_stats().dropped, 2);
     assert_eq!(
         record(&c, 1).code_total.unwrap().value.get(),
-        abi::MAX_CALLS as u64 + 1
+        bounds::MAX_CALLS as u64 + 1
     );
 }
 
+/// Reentrant diagnostic calls must remain activation-local and release their guards on failure.
 #[test]
 fn native_sdk_reentrancy_is_scoped_to_activation_and_unwinds_cleanly() {
     let _lock = SERIAL.lock().unwrap();
@@ -680,7 +637,7 @@ fn native_sdk_reentrancy_is_scoped_to_activation_and_unwinds_cleanly() {
         sdk::Observation::failure(1, FailureClass::Internal, "outer", NonZeroU64::MIN)
     })
     .unwrap();
-    for _ in 0..=abi::MAX_CALLS {
+    for _ in 0..=bounds::MAX_CALLS {
         let panic = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
             a.try_record_lazy(|| panic!("producer panic"))
         }));

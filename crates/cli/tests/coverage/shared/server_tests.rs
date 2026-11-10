@@ -625,7 +625,7 @@ kind = "rust_dynamic"
 
 [compat]
 relay = ">=1.0.0,<2.0"
-native_api = "1"
+native_api = "v1.0"
 
 [defaults]
 enabled = false
@@ -635,7 +635,6 @@ items = ["plugin_native"]
 
 [load]
 library = {library}
-symbol = "nemo_relay_missing_native_plugin"
 "#
         ),
     )

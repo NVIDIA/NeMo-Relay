@@ -10,7 +10,7 @@ use std::path::Path;
 #[cfg(unix)]
 use std::path::PathBuf;
 use std::pin::Pin;
-use std::sync::atomic::{AtomicBool, Ordering};
+use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
 use std::sync::{Arc, Mutex};
 use std::task::{Context, Poll};
 use std::time::{Duration, SystemTime, UNIX_EPOCH};
@@ -1543,12 +1543,45 @@ async fn worker_service_reports_structured_callback_and_payload_errors() {
 #[test]
 fn worker_plugin_defaults_and_context_construction_are_covered() {
     let plugin = MinimalPlugin;
-    assert_eq!(plugin.plugin_id(), "minimal");
+    assert_eq!(plugin.plugin_kind(), "minimal");
     assert!(!plugin.allows_multiple_components());
-    assert!(plugin.validate(&Json::Null).is_empty());
+    assert!(plugin.validate(&serde_json::Map::new()).is_empty());
 
     assert!(PluginContext::new().runtime().is_none());
     assert!(PluginContext::default().runtime().is_none());
+}
+
+#[tokio::test]
+async fn worker_registration_awaits_the_author_future() {
+    struct AsyncPlugin;
+
+    impl WorkerPlugin for AsyncPlugin {
+        fn plugin_kind(&self) -> &str {
+            PLUGIN_ID
+        }
+
+        fn register<'a>(
+            &'a self,
+            _config: &'a serde_json::Map<String, Json>,
+            ctx: &'a mut PluginContext,
+        ) -> nemo_relay_worker::PluginFuture<'a, ()> {
+            Box::pin(async move {
+                tokio::time::sleep(Duration::from_millis(1)).await;
+                ctx.register_subscriber("after-await", |_| {});
+                Ok(())
+            })
+        }
+    }
+    assert!(AsyncPlugin.allows_multiple_components());
+    let (handle, mut client) =
+        spawn_worker(Arc::new(AsyncPlugin), "http://127.0.0.1:9".into()).await;
+    let registrations = register_plugin(&mut client).await;
+    assert!(
+        registrations
+            .iter()
+            .any(|registration| registration.local_name == "after-await")
+    );
+    handle.abort();
 }
 
 #[tokio::test(flavor = "current_thread")]
@@ -2116,26 +2149,61 @@ async fn worker_service_propagates_host_runtime_errors() {
 struct MinimalPlugin;
 
 impl WorkerPlugin for MinimalPlugin {
-    fn plugin_id(&self) -> &str {
+    fn plugin_kind(&self) -> &str {
         "minimal"
     }
 
-    fn register(&self, _ctx: &mut PluginContext, _config: &Json) -> Result<()> {
-        Ok(())
+    fn allows_multiple_components(&self) -> bool {
+        false
+    }
+
+    fn register<'a>(
+        &'a self,
+        _config: &'a serde_json::Map<String, Json>,
+        _ctx: &'a mut PluginContext,
+    ) -> nemo_relay_worker::PluginFuture<'a, ()> {
+        Box::pin(async move {
+            let _config = &Json::Object(_config.clone());
+            let result: nemo_relay_worker::Result<()> = async move { Ok(()) }.await;
+            result.map_err(|error| {
+                nemo_relay_worker::PluginError::RegistrationFailed(error.to_string())
+            })
+        })
     }
 }
 
 struct DuplicateEventSanitizerPlugin;
 
 impl WorkerPlugin for DuplicateEventSanitizerPlugin {
-    fn plugin_id(&self) -> &str {
+    fn plugin_kind(&self) -> &str {
         PLUGIN_ID
     }
 
-    fn register(&self, ctx: &mut PluginContext, _config: &Json) -> Result<()> {
-        ctx.register_mark_sanitize_guardrail("duplicate", 0, |_, fields| async move { Ok(fields) });
-        ctx.register_mark_sanitize_guardrail("duplicate", 1, |_, fields| async move { Ok(fields) });
-        Ok(())
+    fn allows_multiple_components(&self) -> bool {
+        false
+    }
+
+    fn register<'a>(
+        &'a self,
+        _config: &'a serde_json::Map<String, Json>,
+        ctx: &'a mut PluginContext,
+    ) -> nemo_relay_worker::PluginFuture<'a, ()> {
+        Box::pin(async move {
+            let _config = &Json::Object(_config.clone());
+            let result: nemo_relay_worker::Result<()> = async move {
+                ctx.register_mark_sanitize_guardrail("duplicate", 0, |_, fields| async move {
+                    Ok(fields)
+                });
+                ctx.register_mark_sanitize_guardrail("duplicate", 1, |_, fields| async move {
+                    Ok(fields)
+                });
+                Ok(())
+            }
+            .await;
+            result.map_err(|error| {
+                nemo_relay_worker::PluginError::RegistrationFailed(error.to_string())
+            })
+        })
     }
 }
 
@@ -2149,37 +2217,54 @@ enum InvalidInitialGate {
 struct InvalidInitialGatePlugin(InvalidInitialGate);
 
 impl WorkerPlugin for InvalidInitialGatePlugin {
-    fn plugin_id(&self) -> &str {
+    fn plugin_kind(&self) -> &str {
         PLUGIN_ID
     }
 
-    fn register(&self, ctx: &mut PluginContext, _config: &Json) -> Result<()> {
-        let kinds = match self.0 {
-            InvalidInitialGate::EmptyKinds => BTreeSet::new(),
-            InvalidInitialGate::EmptyTarget | InvalidInitialGate::Duplicate => {
-                BTreeSet::from([RuntimeRegistrationKind::Subscriber])
+    fn allows_multiple_components(&self) -> bool {
+        false
+    }
+
+    fn register<'a>(
+        &'a self,
+        _config: &'a serde_json::Map<String, Json>,
+        ctx: &'a mut PluginContext,
+    ) -> nemo_relay_worker::PluginFuture<'a, ()> {
+        Box::pin(async move {
+            let _config = &Json::Object(_config.clone());
+            let result: nemo_relay_worker::Result<()> = async move {
+                let kinds = match self.0 {
+                    InvalidInitialGate::EmptyKinds => BTreeSet::new(),
+                    InvalidInitialGate::EmptyTarget | InvalidInitialGate::Duplicate => {
+                        BTreeSet::from([RuntimeRegistrationKind::Subscriber])
+                    }
+                };
+                let target = if matches!(self.0, InvalidInitialGate::EmptyTarget) {
+                    ""
+                } else {
+                    "target-subscriber"
+                };
+                ctx.register_conditional_middleware_guardrail(
+                    "initial-gate",
+                    kinds.clone(),
+                    target,
+                    |_, _| async { Ok(Some("disabled".into())) },
+                );
+                if matches!(self.0, InvalidInitialGate::Duplicate) {
+                    ctx.register_conditional_middleware_guardrail(
+                        "initial-gate",
+                        kinds,
+                        target,
+                        |_, _| async { Ok(Some("also disabled".into())) },
+                    );
+                }
+                Ok(())
             }
-        };
-        let target = if matches!(self.0, InvalidInitialGate::EmptyTarget) {
-            ""
-        } else {
-            "target-subscriber"
-        };
-        ctx.register_conditional_middleware_guardrail(
-            "initial-gate",
-            kinds.clone(),
-            target,
-            |_, _| async { Ok(Some("disabled".into())) },
-        );
-        if matches!(self.0, InvalidInitialGate::Duplicate) {
-            ctx.register_conditional_middleware_guardrail(
-                "initial-gate",
-                kinds,
-                target,
-                |_, _| async { Ok(Some("also disabled".into())) },
-            );
-        }
-        Ok(())
+            .await;
+            result.map_err(|error| {
+                nemo_relay_worker::PluginError::RegistrationFailed(error.to_string())
+            })
+        })
     }
 }
 
@@ -2203,52 +2288,77 @@ impl Drop for CancelledOnDrop {
 }
 
 impl WorkerPlugin for CancellationPlugin {
-    fn plugin_id(&self) -> &str {
+    fn plugin_kind(&self) -> &str {
         "cancellation"
     }
 
-    fn register(&self, ctx: &mut PluginContext, _config: &Json) -> Result<()> {
-        let unary_started = self.unary_started.clone();
-        let unary_cancelled = self.unary_cancelled.clone();
-        ctx.register_tool_execution_intercept("cancel-unary", 0, move |_context, _next| {
-            let unary_started = unary_started.clone();
-            let unary_cancelled = unary_cancelled.clone();
-            async move {
-                let _cancelled = CancelledOnDrop(unary_cancelled);
-                unary_started.notify_one();
-                std::future::pending::<Result<ToolExecutionInterceptOutcome>>().await
-            }
-        });
+    fn allows_multiple_components(&self) -> bool {
+        false
+    }
 
-        let stream_started = self.stream_started.clone();
-        let stream_cancelled = self.stream_cancelled.clone();
-        let stream_cancelled_notified = self.stream_cancelled_notified.clone();
-        ctx.register_llm_stream_execution_intercept("cancel-stream", 0, move |_, _, _, _| {
-            let stream_started = stream_started.clone();
-            let stream_cancelled = stream_cancelled.clone();
-            let stream_cancelled_notified = stream_cancelled_notified.clone();
-            async move {
-                Ok(Box::pin(FillThenPendingStream {
-                    started: stream_started,
-                    cancelled: stream_cancelled,
-                    cancelled_notified: stream_cancelled_notified,
-                    yielded: 0,
-                }) as JsonStream)
-            }
-        });
+    fn register<'a>(
+        &'a self,
+        _config: &'a serde_json::Map<String, Json>,
+        ctx: &'a mut PluginContext,
+    ) -> nemo_relay_worker::PluginFuture<'a, ()> {
+        Box::pin(async move {
+            let _config = &Json::Object(_config.clone());
+            let result: nemo_relay_worker::Result<()> = async move {
+                let unary_started = self.unary_started.clone();
+                let unary_cancelled = self.unary_cancelled.clone();
+                ctx.register_tool_execution_intercept("cancel-unary", 0, move |_context, _next| {
+                    let unary_started = unary_started.clone();
+                    let unary_cancelled = unary_cancelled.clone();
+                    async move {
+                        let _cancelled = CancelledOnDrop(unary_cancelled);
+                        unary_started.notify_one();
+                        std::future::pending::<Result<ToolExecutionInterceptOutcome>>().await
+                    }
+                });
 
-        let stream_setup_started = self.stream_setup_started.clone();
-        let stream_setup_cancelled = self.stream_setup_cancelled.clone();
-        ctx.register_llm_stream_execution_intercept("cancel-stream-setup", 0, move |_, _, _, _| {
-            let stream_setup_started = stream_setup_started.clone();
-            let stream_setup_cancelled = stream_setup_cancelled.clone();
-            async move {
-                let _cancelled = CancelledOnDrop(stream_setup_cancelled);
-                stream_setup_started.notify_one();
-                std::future::pending::<Result<JsonStream>>().await
+                let stream_started = self.stream_started.clone();
+                let stream_cancelled = self.stream_cancelled.clone();
+                let stream_cancelled_notified = self.stream_cancelled_notified.clone();
+                ctx.register_llm_stream_execution_intercept(
+                    "cancel-stream",
+                    0,
+                    move |_, _, _, _| {
+                        let stream_started = stream_started.clone();
+                        let stream_cancelled = stream_cancelled.clone();
+                        let stream_cancelled_notified = stream_cancelled_notified.clone();
+                        async move {
+                            Ok(Box::pin(FillThenPendingStream {
+                                started: stream_started,
+                                cancelled: stream_cancelled,
+                                cancelled_notified: stream_cancelled_notified,
+                                yielded: 0,
+                            }) as JsonStream)
+                        }
+                    },
+                );
+
+                let stream_setup_started = self.stream_setup_started.clone();
+                let stream_setup_cancelled = self.stream_setup_cancelled.clone();
+                ctx.register_llm_stream_execution_intercept(
+                    "cancel-stream-setup",
+                    0,
+                    move |_, _, _, _| {
+                        let stream_setup_started = stream_setup_started.clone();
+                        let stream_setup_cancelled = stream_setup_cancelled.clone();
+                        async move {
+                            let _cancelled = CancelledOnDrop(stream_setup_cancelled);
+                            stream_setup_started.notify_one();
+                            std::future::pending::<Result<JsonStream>>().await
+                        }
+                    },
+                );
+                Ok(())
             }
-        });
-        Ok(())
+            .await;
+            result.map_err(|error| {
+                nemo_relay_worker::PluginError::RegistrationFailed(error.to_string())
+            })
+        })
     }
 }
 
@@ -2361,21 +2471,38 @@ struct SurfacePlugin {
 struct DiscoveryPlugin;
 
 impl WorkerPlugin for DiscoveryPlugin {
-    fn plugin_id(&self) -> &str {
+    fn plugin_kind(&self) -> &str {
         PLUGIN_ID
     }
 
-    fn register(&self, ctx: &mut PluginContext, _config: &Json) -> Result<()> {
-        let runtime = ctx.runtime().unwrap();
-        ctx.register_tool_request_intercept("discover", 1, false, move |_, _| {
-            let runtime = runtime.clone();
-            async move {
-                Ok(serde_json::to_value(
-                    runtime.list_runtime_registrations(None).await?,
-                )?)
+    fn allows_multiple_components(&self) -> bool {
+        false
+    }
+
+    fn register<'a>(
+        &'a self,
+        _config: &'a serde_json::Map<String, Json>,
+        ctx: &'a mut PluginContext,
+    ) -> nemo_relay_worker::PluginFuture<'a, ()> {
+        Box::pin(async move {
+            let _config = &Json::Object(_config.clone());
+            let result: nemo_relay_worker::Result<()> = async move {
+                let runtime = ctx.runtime().unwrap();
+                ctx.register_tool_request_intercept("discover", 1, false, move |_, _| {
+                    let runtime = runtime.clone();
+                    async move {
+                        Ok(serde_json::to_value(
+                            runtime.list_runtime_registrations(None).await?,
+                        )?)
+                    }
+                });
+                Ok(())
             }
-        });
-        Ok(())
+            .await;
+            result.map_err(|error| {
+                nemo_relay_worker::PluginError::RegistrationFailed(error.to_string())
+            })
+        })
     }
 }
 
@@ -2507,11 +2634,15 @@ async fn worker_runtime_discovery_validates_host_identities_and_preserves_owner_
 }
 
 impl WorkerPlugin for SurfacePlugin {
-    fn plugin_id(&self) -> &str {
+    fn plugin_kind(&self) -> &str {
         PLUGIN_ID
     }
 
-    fn validate(&self, config: &Json) -> Vec<nemo_relay_worker::ConfigDiagnostic> {
+    fn validate(
+        &self,
+        config: &serde_json::Map<String, Json>,
+    ) -> Vec<nemo_relay_worker::ConfigDiagnostic> {
+        let config = &Json::Object(config.clone());
         if config
             .get("diagnostic")
             .and_then(serde_json::Value::as_bool)
@@ -2529,7 +2660,18 @@ impl WorkerPlugin for SurfacePlugin {
         }
     }
 
-    fn register(&self, ctx: &mut PluginContext, _config: &Json) -> Result<()> {
+    fn allows_multiple_components(&self) -> bool {
+        false
+    }
+
+    fn register<'a>(
+        &'a self,
+        _config: &'a serde_json::Map<String, Json>,
+        ctx: &'a mut PluginContext,
+    ) -> nemo_relay_worker::PluginFuture<'a, ()> {
+        Box::pin(async move {
+            let _config = &Json::Object(_config.clone());
+            let result: nemo_relay_worker::Result<()> = async move {
         let runtime = ctx.runtime().expect("worker service provides runtime");
         ctx.register_conditional_middleware_guardrail(
             "initial-gate",
@@ -2874,6 +3016,12 @@ impl WorkerPlugin for SurfacePlugin {
             |_, _, _, _| async { Err(WorkerSdkError::Callback("stream open boom".into())) },
         );
         Ok(())
+
+}.await;
+            result.map_err(|error| {
+                nemo_relay_worker::PluginError::RegistrationFailed(error.to_string())
+            })
+        })
     }
 }
 
@@ -4107,21 +4255,39 @@ fn authorize_host(activation_id: &str, auth_token: &str) -> std::result::Result<
 }
 
 struct SnapshotPlugin;
+
 impl WorkerPlugin for SnapshotPlugin {
-    fn plugin_id(&self) -> &str {
+    fn plugin_kind(&self) -> &str {
         PLUGIN_ID
     }
-    fn register(&self, context: &mut PluginContext, _: &Json) -> Result<()> {
-        let runtime = context.runtime().unwrap();
-        context.register_tool_request_intercept("snapshot", 1, false, move |_, _| {
-            let runtime = runtime.clone();
-            async move {
-                Ok(serde_json::to_value(
-                    runtime.current_scope_stack_snapshot().await?,
-                )?)
+
+    fn allows_multiple_components(&self) -> bool {
+        false
+    }
+
+    fn register<'a>(
+        &'a self,
+        _: &'a serde_json::Map<String, Json>,
+        context: &'a mut PluginContext,
+    ) -> nemo_relay_worker::PluginFuture<'a, ()> {
+        Box::pin(async move {
+            let result: nemo_relay_worker::Result<()> = async move {
+                let runtime = context.runtime().unwrap();
+                context.register_tool_request_intercept("snapshot", 1, false, move |_, _| {
+                    let runtime = runtime.clone();
+                    async move {
+                        Ok(serde_json::to_value(
+                            runtime.current_scope_stack_snapshot().await?,
+                        )?)
+                    }
+                });
+                Ok(())
             }
-        });
-        Ok(())
+            .await;
+            result.map_err(|error| {
+                nemo_relay_worker::PluginError::RegistrationFailed(error.to_string())
+            })
+        })
     }
 }
 
@@ -4397,12 +4563,18 @@ impl ValidationResult for pb::ValidateResponse {
 async fn runtime_rejects_malformed_host_handles_and_allows_registration_retry() {
     struct CaptureRuntime(Arc<Mutex<Option<PluginRuntime>>>);
     impl WorkerPlugin for CaptureRuntime {
-        fn plugin_id(&self) -> &str {
+        fn plugin_kind(&self) -> &str {
             "test.host-handles"
         }
-        fn register(&self, context: &mut PluginContext, _: &Json) -> Result<()> {
-            *self.0.lock().unwrap() = context.runtime();
-            Ok(())
+        fn register<'a>(
+            &'a self,
+            _: &serde_json::Map<String, Json>,
+            context: &'a mut PluginContext,
+        ) -> nemo_relay_worker::PluginFuture<'a, ()> {
+            Box::pin(async move {
+                *self.0.lock().unwrap() = context.runtime();
+                Ok(())
+            })
         }
     }
     let captured = Arc::new(Mutex::new(None));
@@ -4479,4 +4651,254 @@ async fn runtime_rejects_malformed_host_handles_and_allows_registration_retry() 
     assert_eq!(host.runtime_registration_requests().register.len(), 2);
     worker.abort();
     host_task.abort();
+}
+
+fn registration_credentials() -> Option<pb::Credentials> {
+    Some(pb::Credentials {
+        activation_id: ACTIVATION_ID.into(),
+        auth_token: AUTH_TOKEN.into(),
+    })
+}
+fn registration_request(config: Json) -> RegisterRequest {
+    RegisterRequest {
+        credentials: registration_credentials(),
+        plugin_id: PLUGIN_ID.into(),
+        config: Some(json_env(config)),
+    }
+}
+async fn close_registration_worker(
+    handle: JoinHandle<Result<()>>,
+    client: &mut PluginWorkerClient<Channel>,
+) {
+    client
+        .shutdown(ShutdownRequest {
+            credentials: registration_credentials(),
+            reason: "registration test".into(),
+        })
+        .await
+        .unwrap();
+    tokio::time::timeout(WORKER_TEST_TIMEOUT, handle)
+        .await
+        .unwrap()
+        .unwrap()
+        .unwrap();
+}
+
+/// Absent worker configuration must replay consistently as an empty object.
+#[tokio::test]
+async fn worker_no_config_normalizes_null_and_empty_object_for_replay() {
+    #[derive(Default)]
+    struct ConfigPlugin {
+        validations: AtomicUsize,
+        registrations: AtomicUsize,
+    }
+    impl WorkerPlugin for ConfigPlugin {
+        fn plugin_kind(&self) -> &str {
+            PLUGIN_ID
+        }
+        fn validate(
+            &self,
+            config: &serde_json::Map<String, Json>,
+        ) -> Vec<nemo_relay_worker::ConfigDiagnostic> {
+            assert!(config.is_empty());
+            self.validations.fetch_add(1, Ordering::SeqCst);
+            vec![]
+        }
+        fn register<'a>(
+            &'a self,
+            config: &'a serde_json::Map<String, Json>,
+            ctx: &'a mut PluginContext,
+        ) -> nemo_relay_worker::PluginFuture<'a, ()> {
+            Box::pin(async move {
+                assert!(config.is_empty());
+                self.registrations.fetch_add(1, Ordering::SeqCst);
+                ctx.register_subscriber("empty-config", |_| {});
+                Ok(())
+            })
+        }
+    }
+    for values in [[Json::Null, json!({})], [json!({}), Json::Null]] {
+        let plugin = Arc::new(ConfigPlugin::default());
+        let (handle, mut client) = spawn_worker(plugin.clone(), "http://127.0.0.1:9".into()).await;
+        for invalid in [json!(1), json!("config"), json!([])] {
+            assert_eq!(
+                client
+                    .validate(ValidateRequest {
+                        credentials: registration_credentials(),
+                        plugin_id: PLUGIN_ID.into(),
+                        config: Some(json_env(invalid.clone()))
+                    })
+                    .await
+                    .unwrap_err()
+                    .code(),
+                tonic::Code::InvalidArgument
+            );
+            assert_eq!(
+                client
+                    .register(registration_request(invalid))
+                    .await
+                    .unwrap_err()
+                    .code(),
+                tonic::Code::InvalidArgument
+            );
+        }
+        for value in values {
+            client
+                .validate(ValidateRequest {
+                    credentials: registration_credentials(),
+                    plugin_id: PLUGIN_ID.into(),
+                    config: Some(json_env(value.clone())),
+                })
+                .await
+                .unwrap();
+            assert_eq!(
+                client
+                    .register(registration_request(value))
+                    .await
+                    .unwrap()
+                    .into_inner()
+                    .plan()
+                    .registrations
+                    .len(),
+                1
+            );
+        }
+        assert_eq!(plugin.validations.load(Ordering::SeqCst), 2);
+        assert_eq!(plugin.registrations.load(Ordering::SeqCst), 1);
+        close_registration_worker(handle, &mut client).await;
+    }
+}
+
+struct RegistrationDrop {
+    flag: Arc<AtomicBool>,
+    changed: Arc<tokio::sync::Notify>,
+}
+impl Drop for RegistrationDrop {
+    fn drop(&mut self) {
+        self.flag.store(true, Ordering::SeqCst);
+        self.changed.notify_one();
+    }
+}
+struct PendingRegistration {
+    started: tokio::sync::Notify,
+    future_dropped: Arc<AtomicBool>,
+    context_dropped: Arc<AtomicBool>,
+    dropped: Arc<tokio::sync::Notify>,
+    calls: AtomicUsize,
+    retry: bool,
+}
+impl PendingRegistration {
+    fn new(retry: bool) -> Self {
+        Self {
+            started: tokio::sync::Notify::new(),
+            future_dropped: Arc::new(AtomicBool::new(false)),
+            context_dropped: Arc::new(AtomicBool::new(false)),
+            dropped: Arc::new(tokio::sync::Notify::new()),
+            calls: AtomicUsize::new(0),
+            retry,
+        }
+    }
+}
+impl WorkerPlugin for PendingRegistration {
+    fn plugin_kind(&self) -> &str {
+        PLUGIN_ID
+    }
+    fn register<'a>(
+        &'a self,
+        _: &'a serde_json::Map<String, Json>,
+        ctx: &'a mut PluginContext,
+    ) -> nemo_relay_worker::PluginFuture<'a, ()> {
+        Box::pin(async move {
+            if self.calls.fetch_add(1, Ordering::SeqCst) > 0 && self.retry {
+                return Ok(());
+            }
+            let _future = RegistrationDrop {
+                flag: self.future_dropped.clone(),
+                changed: self.dropped.clone(),
+            };
+            let captured = RegistrationDrop {
+                flag: self.context_dropped.clone(),
+                changed: self.dropped.clone(),
+            };
+            ctx.register_subscriber("pending-registration", move |_| {
+                let _ = &captured;
+            });
+            self.started.notify_one();
+            std::future::pending().await
+        })
+    }
+}
+
+/// Shutdown cancels admitted registration and releases captured callback state.
+#[tokio::test]
+async fn worker_shutdown_cancels_active_and_queued_registration_and_drains_context() {
+    let plugin = Arc::new(PendingRegistration::new(false));
+    let (handle, mut client) = spawn_worker(plugin.clone(), "http://127.0.0.1:9".into()).await;
+    let mut first = client.clone();
+    let registration =
+        tokio::spawn(async move { first.register(registration_request(json!({}))).await });
+    tokio::time::timeout(WORKER_TEST_TIMEOUT, plugin.started.notified())
+        .await
+        .unwrap();
+    let mut second = client.clone();
+    let queued =
+        tokio::spawn(async move { second.register(registration_request(json!({}))).await });
+    client
+        .shutdown(ShutdownRequest {
+            credentials: registration_credentials(),
+            reason: "pending registration".into(),
+        })
+        .await
+        .unwrap();
+    assert!(plugin.future_dropped.load(Ordering::SeqCst));
+    assert!(plugin.context_dropped.load(Ordering::SeqCst));
+    assert_eq!(
+        registration.await.unwrap().unwrap_err().code(),
+        tonic::Code::Cancelled
+    );
+    let code = queued.await.unwrap().unwrap_err().code();
+    assert!(
+        // A request admitted before shutdown is cancelled; one arriving after
+        // the admission fence sees draining or a closed transport.
+        matches!(
+            code,
+            tonic::Code::Cancelled | tonic::Code::FailedPrecondition | tonic::Code::Unavailable
+        ),
+        "{code}"
+    );
+    assert_eq!(plugin.calls.load(Ordering::SeqCst), 1);
+    tokio::time::timeout(WORKER_TEST_TIMEOUT, handle)
+        .await
+        .unwrap()
+        .unwrap()
+        .unwrap();
+}
+
+/// Cancelling a registration RPC must release its context so registration can be retried.
+#[tokio::test]
+async fn worker_registration_rpc_cancellation_releases_context_for_retry() {
+    let plugin = Arc::new(PendingRegistration::new(true));
+    let (handle, mut client) = spawn_worker(plugin.clone(), "http://127.0.0.1:9".into()).await;
+    let mut registering = client.clone();
+    let first =
+        tokio::spawn(async move { registering.register(registration_request(json!({}))).await });
+    tokio::time::timeout(WORKER_TEST_TIMEOUT, plugin.started.notified())
+        .await
+        .unwrap();
+    first.abort();
+    tokio::time::timeout(WORKER_TEST_TIMEOUT, async {
+        while !plugin.future_dropped.load(Ordering::SeqCst)
+            || !plugin.context_dropped.load(Ordering::SeqCst)
+        {
+            plugin.dropped.notified().await;
+        }
+    })
+    .await
+    .unwrap();
+    client
+        .register(registration_request(json!({})))
+        .await
+        .unwrap();
+    assert_eq!(plugin.calls.load(Ordering::SeqCst), 2);
+    close_registration_worker(handle, &mut client).await;
 }

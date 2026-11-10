@@ -5,25 +5,6 @@ use super::*;
 use nemo_relay_diagnostics::{DiagnosticQuery, DiagnosticsSettings, SourceIdentity};
 
 #[test]
-fn native_control_statuses_are_not_diagnostic_failures() {
-    for status in [
-        NemoRelayStatus::Ok,
-        NemoRelayStatus::StreamEnd,
-        NemoRelayStatus::Backpressured,
-    ] {
-        assert_eq!(native_failure(status), None);
-    }
-    assert_eq!(
-        native_failure(NemoRelayStatus::InvalidJson),
-        Some(FailureClass::InvalidInput)
-    );
-    assert_eq!(
-        native_failure(NemoRelayStatus::Internal),
-        Some(FailureClass::Internal)
-    );
-}
-
-#[test]
 fn plugin_lifetime_does_not_own_context_or_project_restricted_detail() {
     use std::sync::{
         Arc,
@@ -55,14 +36,9 @@ fn plugin_lifetime_does_not_own_context_or_project_restricted_detail() {
         PluginExecution::NativeAbi,
         Uuid::now_v7(),
     );
-    observer.native_status(
+    observer.failure(
         Operation::NativeCallback,
-        NemoRelayStatus::Backpressured,
-        PluginPhase::Runtime,
-    );
-    observer.native_status(
-        Operation::NativeCallback,
-        NemoRelayStatus::InvalidArg,
+        FailureClass::InvalidInput,
         PluginPhase::Runtime,
     );
     observer.success(SuccessCode::PluginNativeLoaded, PluginPhase::Activation);
@@ -97,24 +73,6 @@ fn worker_transport_classifier_uses_structured_status() {
     ] {
         let value = WorkerStatusClassifier(Operation::WorkerTransport).classify(&status);
         assert_eq!(value.failure_class(), Some(class.as_str()));
-    }
-}
-
-#[test]
-fn native_statuses_classify_failure_semantics_without_error_text() {
-    for (status, expected) in [
-        (NemoRelayStatus::AlreadyExists, FailureClass::Conflict),
-        (NemoRelayStatus::NotFound, FailureClass::NotFound),
-        (NemoRelayStatus::ScopeStackEmpty, FailureClass::InvalidState),
-        (
-            NemoRelayStatus::GuardrailRejected,
-            FailureClass::PolicyRejected,
-        ),
-        (NemoRelayStatus::NullPointer, FailureClass::InvalidInput),
-        (NemoRelayStatus::InvalidUtf8, FailureClass::InvalidInput),
-        (NemoRelayStatus::InvalidArg, FailureClass::InvalidInput),
-    ] {
-        assert_eq!(native_failure(status), Some(expected));
     }
 }
 

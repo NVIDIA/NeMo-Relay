@@ -16,32 +16,30 @@ SPDX-License-Identifier: Apache-2.0
 
 # NeMo Relay Native Plugin SDK
 
-`nemo-relay-plugin` is the Rust authoring SDK and stable ABI for trusted,
-in-process NeMo Relay dynamic plugins. Use it to build a Rust `cdylib` that
-Relay loads through the versioned native plugin interface.
+`nemo-relay-plugin` is the Rust SDK for trusted plugins that run in the NeMo Relay
+process. Use it to build a Rust `cdylib`. The SDK adapts your callbacks to the
+checked interface defined by `nemo-relay-plugin-abi`.
 
 Native plugins run in the Relay process and are not sandboxed. They should
 depend on this crate rather than `nemo-relay-plugin-host`, keeping
-the dynamic-library boundary on the stable C-compatible ABI.
+the dynamic-library boundary on the checked ABI-safe interface.
 
-The `component` module owns the `Plugin` contract, the object-safe
-`PluginRegistrationContext` interface, configuration policy, errors, and registration
-cleanup. Middleware callback and codec contracts live in `nemo-relay-types`.
-`nemo-relay-plugin-host` implements the registration context and owns registry
-mutation, activation diagnostics, and rollback.
-
+Implement the root `Plugin` trait to define identity, configuration validation,
+and registration. Use `PluginContext` to install callbacks owned by the component.
+Relay tracks those callbacks and removes them when activation fails or the
+component closes.
 
 ## Authoring Surface
 
 | Surface | Role |
 |---|---|
-| `NativePlugin` | Defines plugin identity, configuration validation, registration, and multiple-component behavior without requiring an author to construct ABI tables. |
+| `Plugin` | Defines plugin identity, configuration validation, registration, and multiple-component behavior without requiring an author to construct ABI tables. |
 | `PluginContext` | Installs component-owned subscribers, guardrails, intercepts, continuations, and streams. |
 | `PluginRuntime` | Emits marks and manages Relay-owned scopes and scope stacks through typed host helpers. |
-| `nemo_relay_plugin!` | Exports the one versioned native entry point used by the loader. |
-| Native ABI v8 | Keeps C-compatible host and plugin tables behind the safe Rust interface. Preserves v7 callbacks; adds scope inspection and an optional, independently versioned diagnostics extension. |
-| Typed async middleware | Drives guardrails, sanitizers, and intercepts on a per-component SDK-owned Tokio executor. Subscribers and raw ABI registrations remain synchronous. |
-| Async continuations and streams | `ToolNext`, `LlmNext`, and `LlmStreamNext` support repeated or concurrent downstream calls. Streaming LLM continuations use a pull-based host handle. |
+| `nemo_relay_plugin!` | Exports the standard checked bootstrap header with the SDK-required native contract. |
+| Native API v1.0 | Uses checked contract schemas, typed values, `xabi` interfaces, and `async-ffi` futures and wakers. |
+| Typed async middleware | Polls guardrails, sanitizers, and intercepts directly on the caller with restored Relay scope. Tokio support is opt-in and shared by the plugin's components. |
+| Async continuations and streams | `ToolNext`, `LlmNext`, and `LlmStreamNext` support repeated or concurrent downstream calls. Streaming LLM continuations use a pull-based host handle. `register_synchronous_stream_callback` accepts synchronous factories that return checked stream descriptors. |
 | Tool results | `ToolNext` returns `ToolExecutionResult`, which keeps an application result and optional annotation together. |
 | Typed telemetry marks | `emit_mark_with_options` adds `DataSchema` and `LogSeverity`; `emit_metric` validates `MetricMeasurement` values before it emits the reserved Relay metric schema. |
 | Legacy runtime diagnostics | `PluginRuntime::runtime_diagnostics()` returns the active host-level `RuntimeDiagnostics` report. Entries are ordered and available through `get(code)`. |
@@ -65,73 +63,63 @@ crate-type = ["cdylib"]
 
 ## Getting Started
 
-Implement `NativePlugin` and export a constructor symbol:
+Implement `Plugin` and export its checked bootstrap:
 
 ```rust
-use nemo_relay_plugin::{Json, NativePlugin, PluginContext, Result};
+use nemo_relay_plugin::{Json, Plugin, PluginContext};
 use serde_json::Map;
 
 struct ExamplePlugin;
 
-impl NativePlugin for ExamplePlugin {
+impl Plugin for ExamplePlugin {
     fn plugin_kind(&self) -> &str {
         "example.native"
     }
 
-    fn register(&mut self, _config: &Map<String, Json>, ctx: &mut PluginContext<'_>) -> Result<()> {
-        ctx.register_subscriber("log-events", |event| {
-            eprintln!("{}", event.name());
+    fn register<'a>(
+        &'a self,
+        _config: &'a Map<String, Json>,
+        ctx: &'a mut PluginContext<'_>,
+    ) -> nemo_relay_plugin::PluginFuture<'a, ()> {
+        Box::pin(async move {
+            ctx.register_subscriber("log-events", |event| {
+                eprintln!("{}", event.name());
+            })?;
+            Ok(())
         })
     }
 }
 
-nemo_relay_plugin::nemo_relay_plugin!(nemo_relay_register_plugin, || ExamplePlugin);
+nemo_relay_plugin::nemo_relay_plugin!(kind = "example.native", || ExamplePlugin);
 ```
 
-Build the `cdylib`, describe its entry symbol and compatibility in a
+Build the `cdylib`, declare `compat.native_api = "v1.0"`, `compat.relay`, and `load.library` in a
 `relay-plugin.toml` manifest, then register it through the Relay CLI. Refer to the
 complete example for platform-specific artifact and manifest setup.
 
 The checked native plugin example targets the 1.0.0 SDK and declares
-`compat.relay = ">=1.0.0,<2.0"`. Relay creates one
-SDK-owned Tokio executor for each configured plugin component. It defaults to
-two workers: enough for modest concurrent async I/O without broadly
-oversubscribing the host. Increase the count only when measured I/O concurrency
-leaves callbacks queued; lower it when the host runs many components or has a
-tight CPU budget. Do not block these workers; use async I/O or
-`tokio::task::spawn_blocking`.
+`compat.relay = ">=1.0.0,<2.0"`. The SDK defaults to inline middleware execution and
+creates no plugin Tokio runtime. Opt into a shared library-local runtime when a
+component needs Tokio timers, networking, or background tasks. Keep inline callbacks
+nonblocking.
 
-Relay 0.8 establishes canonical tool results as the native API 1 baseline. Tool
-callbacks and `ToolNext` return `ToolExecutionResult`, preserving an application result
-and optional opaque annotation. Tool execution intercepts return the same pair plus
-Relay-owned pending marks. The manifest contract remains `compat.native_api = "1"`.
-Relay 0.9 advances the C host-table ABI to v5 for `ToolExecutionContext`; the host keeps
-the frozen v4 table for previously compiled plugins. Plugins that register a
-context-aware tool execution intercept must rebuild and set
-`compat.relay = ">=0.9.0,<1.0"`; the required registration is unavailable in the v4 host
-table. Under Relay 0.9, typed async plugins that did not use this registration
-could retain `compat.relay = ">=0.8.0,<1.0"`.
+Tool continuations return `ToolExecutionResult`, preserving the application result
+and optional opaque annotation. Execution intercepts also carry Relay pending marks.
+LLM execution contexts preserve request/response codec identity and capabilities;
+streaming execution exposes request codec operations.
 
-Relay 0.10 advances the internal table to ABI v7 and makes
-`LlmExecutionContext` part of every non-streaming and streaming LLM execution callback.
-Because this changes callback layouts, the 0.10 host rejects v2-v6 tables.
-Rebuild every plugin with the 0.10 v7 SDK and set
-`compat.relay = ">=0.10.0,<1.0"`. The authored manifest contract remains
-`compat.native_api = "1"`.
-
-Set a plugin-wide default in Rust, then let the component's TOML configuration
-override it:
+Opt into a shared Tokio runtime in Rust or through the component configuration:
 
 ```rust
-use nemo_relay_plugin::{NativeExecutorConfig, NativePlugin};
+use nemo_relay_plugin::{NativeExecutorConfig, Plugin};
 
-impl NativePlugin for ExamplePlugin {
+impl Plugin for ExamplePlugin {
     fn plugin_kind(&self) -> &str {
         "acme.example"
     }
 
-    fn executor_config(&self) -> NativeExecutorConfig {
-        NativeExecutorConfig { worker_threads: 4 }
+    fn executor_config(&self) -> Option<NativeExecutorConfig> {
+        Some(NativeExecutorConfig { worker_threads: 4 })
     }
 
     // ... register and other trait methods ...
@@ -146,12 +134,21 @@ manifest = "./relay-plugin.toml"
 worker_threads = 4
 ```
 
-The SDK validates that `worker_threads` is a positive integer. The default
-`NativePlugin::executor_config_for_component` applies this override; plugins
-can override that method when they need different configuration rules.
+The SDK validates that `worker_threads` is a positive integer. An explicit executor
+object enables Tokio support; its default worker count is two. Active Tokio-enabled
+components of the same plugin must agree on the worker count and share the runtime.
+`Plugin::executor_config_for_component` resolves each component's request.
 
-During plugin teardown, the SDK stops accepting new callbacks and drains
-already accepted typed middleware before the plugin library unloads.
+Use `ctx.spawn` for component-owned background work, or capture the cloneable
+`ctx.task_spawner()` in a registered callback. These helpers require Tokio support,
+restore the captured Relay scope around each poll, and cancel tasks when the
+component closes. Dropping a task's join handle detaches only the waiter. Direct
+`tokio::spawn` calls bypass component ownership and are unsuitable for this work.
+
+When a component closes, the SDK stops accepting callbacks, cancels its work,
+closes streams, and drains tracked tasks. It releases the component's runtime
+lease after cleanup. The last Tokio-enabled component stops the shared runtime.
+Library code and staged dependencies stay loaded until process exit.
 
 ## Runtime Diagnostics
 
@@ -159,13 +156,17 @@ already accepted typed middleware before the plugin library unloads.
 message, count }` entries for the active host configuration. Relay aggregates
 repeated codes, retains the latest message, saturates counts, orders entries by
 code, and caps the snapshot at 32 entries. The result is host-level and does
-not attribute an entry to the plugin that emitted it. ABI v4 requires the
-complete finalized host table. Plugins loaded through the frozen ABI-v3 or
-ABI-v2 compatibility tables cannot use runtime diagnostics.
+not attribute an entry to the plugin that emitted it. This getter is included in
+the checked v1.0 runtime interface.
 
 Relay scope context is restored around every poll of a registered middleware
-future. Child tasks created with `tokio::spawn` do not automatically inherit
+future. Component-owned tasks created with `ctx.spawn` or a task spawner inherit
 that scope context.
+
+`ScopeStack::set_thread()` and `ScopeStackBinding::restore()` return `Result<()>`;
+propagate failures when explicitly changing or restoring a thread's scope stack.
+For operational logs, use `PluginRuntime::log` with `PluginLogLevel`, or the
+`relay_error!`, `relay_warn!`, `relay_info!`, `relay_debug!`, and `relay_trace!` macros.
 
 ## Canonical Native Diagnostics
 
@@ -177,6 +178,24 @@ skip lazy factories; diagnostic failures must preserve the execution result.
 
 Refer to [Native Plugin Diagnostics](../../docs/build-plugins/native/diagnostics.mdx)
 for authoring, acceptance receipts, concurrency, buffer ownership, and permissions.
-The [native ABI reference](../../docs/build-plugins/native/native-abi-reference.mdx#native-diagnostics-extension)
-describes execution ABI 8 and diagnostics extension contract 1. The existing
-`runtime_diagnostics()` legacy report remains separate.
+The [native ABI reference](../../docs/build-plugins/native/native-abi-reference.mdx)
+describes the checked v1.0 interface. Diagnostics cross that boundary through
+typed records and caller-owned bounded buffers. The
+`runtime_diagnostics()` method provides a separate host-level report.
+
+## Binary Compatibility and Cleanup
+
+The loader checks the frozen bootstrap schema and xabi exports before constructing
+the plugin. The export macro sets the minimum native contract from the build SDK.
+A plugin built with SDK contract v1.1 requires a host that supports v1.1 or a
+later minor in major 1. A host that supports v1.1 also supports v1.0 plugins.
+The explicit native contract determines binary compatibility. The
+`nemo-relay-plugin-abi` package follows Relay's release version; package version
+changes do not change the contract. The plugin's `compat.relay` range separately
+selects supported Relay releases.
+
+Libraries and staged dependencies stay loaded until process exit. Closing a
+component removes registrations, revokes capabilities, cancels work, drains tasks,
+and shuts down executors. A failed close retains ownership for retry. Retained
+runtime handles become inert. Callback panics are caught in their originating
+library; destructors and foreign wakers must not panic.

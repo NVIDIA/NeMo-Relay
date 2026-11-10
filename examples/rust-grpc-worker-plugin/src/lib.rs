@@ -8,8 +8,8 @@ use std::collections::BTreeMap;
 use futures_util::StreamExt;
 use nemo_relay_worker::{
     ConfigDiagnostic, DiagnosticLevel, EventSanitizeFields, Json, JsonStream,
-    LlmOptimizationContribution, LlmRequestInterceptOutcome, PendingMarkSpec, PluginContext,
-    PluginRuntime, Result, ScopeType, ToolExecutionInterceptOutcome, WorkerPlugin, WorkerSdkError,
+    LlmOptimizationContribution, LlmRequestInterceptOutcome, PendingMarkSpec, Plugin,
+    PluginContext, PluginRuntime, Result, ScopeType, ToolExecutionInterceptOutcome, WorkerSdkError,
 };
 use serde_json::json;
 
@@ -18,8 +18,8 @@ use config::ExampleConfig;
 /// Complete worker implementation used by the plugin authoring documentation.
 pub struct DocumentationWorker;
 
-impl WorkerPlugin for DocumentationWorker {
-    fn plugin_id(&self) -> &str {
+impl Plugin for DocumentationWorker {
+    fn plugin_kind(&self) -> &str {
         "examples.rust_grpc_worker"
     }
 
@@ -27,44 +27,55 @@ impl WorkerPlugin for DocumentationWorker {
         false
     }
 
-    fn validate(&self, config: &Json) -> Vec<ConfigDiagnostic> {
+    fn validate(&self, config: &serde_json::Map<String, Json>) -> Vec<ConfigDiagnostic> {
+        let config = &Json::Object(config.clone());
         config::validate(config)
     }
 
-    fn register(&self, context: &mut PluginContext, config: &Json) -> Result<()> {
-        if let Some(diagnostic) = config::validate(config)
-            .into_iter()
-            .find(|diagnostic| diagnostic.level == DiagnosticLevel::Error)
-        {
-            let location = diagnostic.field.unwrap_or(diagnostic.code);
-            return Err(WorkerSdkError::InvalidInput(format!(
-                "{location}: {}",
-                diagnostic.message
-            )));
-        }
-        let config = ExampleConfig::parse(config).map_err(WorkerSdkError::InvalidInput)?;
-        if config.registration_control.enabled {
-            let reason = config.registration_control.reason.clone();
-            context.register_conditional_middleware_guardrail(
-                "documentation_registration_control",
-                config.registration_control.kinds.iter().copied().collect(),
-                &config.registration_control.registration_name,
-                move |_, registration_name| {
-                    let decision = registration_name
-                        .starts_with("documentation-controlled-")
-                        .then(|| reason.clone());
-                    async move { Ok(decision) }
-                },
-            );
-        }
-        if config.observe.enabled {
-            register_observation(context, &config);
-        }
-        if config.requests.enabled {
-            register_requests(context, &config);
-        }
-        register_execution(context, &config);
-        Ok(())
+    /// Register configured worker middleware and keep its runtime helpers scoped to this component.
+    fn register<'a>(
+        &'a self,
+        config: &'a serde_json::Map<String, Json>,
+        context: &'a mut PluginContext,
+    ) -> nemo_relay_worker::PluginFuture<'a, ()> {
+        Box::pin(async move {
+            let config = &Json::Object(config.clone());
+
+            if let Some(diagnostic) = config::validate(config)
+                .into_iter()
+                .find(|diagnostic| diagnostic.level == DiagnosticLevel::Error)
+            {
+                let location = diagnostic.field.unwrap_or(diagnostic.code);
+                return Err(WorkerSdkError::InvalidInput(format!(
+                    "{location}: {}",
+                    diagnostic.message
+                ))
+                .into());
+            }
+            let config = ExampleConfig::parse(config).map_err(WorkerSdkError::InvalidInput)?;
+            if config.registration_control.enabled {
+                let reason = config.registration_control.reason.clone();
+                context.register_conditional_middleware_guardrail(
+                    "documentation_registration_control",
+                    config.registration_control.kinds.iter().copied().collect(),
+                    &config.registration_control.registration_name,
+                    move |_, registration_name| {
+                        let decision = registration_name
+                            .starts_with("documentation-controlled-")
+                            .then(|| reason.clone());
+                        async move { Ok(decision) }
+                    },
+                );
+            }
+            if config.observe.enabled {
+                register_observation(context, &config);
+            }
+            if config.requests.enabled {
+                register_requests(context, &config);
+            }
+            register_execution(context, &config);
+            Ok(())
+        })
     }
 }
 
