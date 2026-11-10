@@ -1888,6 +1888,8 @@ struct ReadyWorker {
     origin: String,
     endpoint: String,
     generation_grant: crate::daemon::common::control::WorkerGenerationGrant,
+    activation_id: String,
+    activation_token: SensitiveString,
     tasks: Vec<tokio::task::JoinHandle<()>>,
 }
 
@@ -1922,8 +1924,8 @@ async fn ready_worker() -> ReadyWorker {
             proof: handshake.proof,
             worker_id: "worker".into(),
             endpoint: endpoint.clone(),
-            activation_id,
-            activation_token,
+            activation_id: activation_id.clone(),
+            activation_token: activation_token.clone(),
             tls_root_certificate: None,
         }))
         .await
@@ -1967,6 +1969,8 @@ async fn ready_worker() -> ReadyWorker {
         origin,
         endpoint,
         generation_grant: registration.generation_grant,
+        activation_id,
+        activation_token,
         tasks: vec![task, server, mcp_task],
     }
 }
@@ -2020,6 +2024,87 @@ async fn worker_release_before_exit_skips_the_reconnect_grace() {
     })
     .await
     .expect("released worker is removed and a replacement is nominated without the grace");
+    drop(fixture.owner);
+    for task in fixture.tasks {
+        task.abort();
+    }
+}
+
+/// A worker that announced its exit must not be made routable again by a later Ready on the
+/// same connection; traffic would reach a worker that is tearing down.
+#[tokio::test]
+async fn worker_ready_is_rejected_after_an_announced_exit() {
+    let fixture = ready_worker().await;
+    fixture
+        .worker
+        .request::<()>(worker_release(fixture.session_token.clone()))
+        .await
+        .unwrap();
+    let ready = fixture
+        .worker
+        .request::<()>(Command::Ready(
+            SessionRequest::new(
+                "worker".into(),
+                fixture.session_token.clone(),
+                3,
+                WorkerReadyPayload {
+                    worker_id: "worker".into(),
+                },
+            )
+            .unwrap(),
+        ))
+        .await;
+    assert!(
+        matches!(&ready, Err(CliError::Launch(message)) if message == "worker announced its exit"),
+        "{ready:?}"
+    );
+    let target = lock(&fixture.state.worker_sessions)["worker"]
+        .pending_target
+        .clone();
+    assert!(!target.control_available());
+    assert!(lock(&fixture.state.sockets.exiting_workers).contains("worker"));
+    drop(fixture.owner);
+    for task in fixture.tasks {
+        task.abort();
+    }
+}
+
+/// A registration replayed after the exit notice is refused for the same reason as recovery.
+#[tokio::test]
+async fn worker_registration_is_rejected_after_an_announced_exit() {
+    let fixture = ready_worker().await;
+    fixture
+        .worker
+        .request::<()>(worker_release(fixture.session_token.clone()))
+        .await
+        .unwrap();
+    let late = Client::default();
+    let handshake = begin_handshake(
+        &late,
+        &fixture.origin,
+        ComponentRole::Worker,
+        &fixture.identity,
+        "worker",
+        None,
+    )
+    .await
+    .unwrap();
+    let registered = late
+        .request::<WorkerRegisterResponse>(Command::RegisterWorker(WorkerRegisterRequest {
+            diagnostics: None,
+            proof: handshake.proof,
+            worker_id: "worker".into(),
+            endpoint: fixture.endpoint.clone(),
+            activation_id: fixture.activation_id.clone(),
+            activation_token: fixture.activation_token.clone(),
+            tls_root_certificate: None,
+        }))
+        .await;
+    assert!(
+        matches!(&registered, Err(CliError::Launch(message)) if message == "worker announced its exit"),
+        "{registered:?}"
+    );
+    drop(late);
     drop(fixture.owner);
     for task in fixture.tasks {
         task.abort();

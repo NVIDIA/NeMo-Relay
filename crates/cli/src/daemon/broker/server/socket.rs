@@ -593,6 +593,13 @@ fn validate_ready_connection(
     if peer.drain.is_some() {
         return Err(control_message(StatusCode::CONFLICT, "worker is draining"));
     }
+    // A Ready after the exit notice must not reopen routing to a worker in teardown.
+    if lock(&state.sockets.exiting_workers).contains(id) {
+        return Err(control_message(
+            StatusCode::CONFLICT,
+            "worker announced its exit",
+        ));
+    }
     Ok(())
 }
 
