@@ -479,12 +479,13 @@ window expires. After a daemon restart, persisted worker generations have a
 30-second recovery window before replacement workers can launch.
 
 A worker that shuts down cleanly, for example after `SIGTERM` or `SIGINT`,
-tells the daemon before it starts teardown. The daemon stops sending it requests
-at once. The worker keeps its control connection open until teardown finishes,
-for up to 30 seconds. The daemon launches a replacement when that connection
-closes, without the 30-second recovery window. A worker that ends without
-notice, for example after `SIGKILL` or a crash, still gets the 30-second
-recovery window.
+tells the daemon as it starts teardown, and the daemon stops sending it new
+requests. The worker keeps its control connection open until teardown finishes,
+for up to 30 seconds. When that connection closes, the daemon skips the
+30-second recovery window and asks a connected MCP client to launch a
+replacement; if none is connected, the replacement waits for one. A worker that
+ends without notice, for example after `SIGKILL` or a crash, still gets the
+30-second recovery window.
 
 When the last MCP reference leaves, a ready worker starts draining immediately
 by default, or after the configured idle period expires. A session arriving
