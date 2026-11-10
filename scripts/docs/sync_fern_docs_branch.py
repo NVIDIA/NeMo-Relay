@@ -32,6 +32,7 @@ COPY_EXCLUDES = {
 }
 FERN_SYNC_ITEMS = (
     ".gitignore",
+    "apis",
     "assets",
     "components",
     "fern.config.json",
@@ -144,8 +145,8 @@ def prune_release_versions(target_fern: Path) -> None:
     """Keep the highest patch per major/minor and the five newest snapshots.
 
     Beta and RC tags already share a snapshot path with their base version.
-    The dev entry is independent of the release limit; latest aliases the
-    highest retained stable snapshot.
+    The dev entry and newest stable snapshot are independent of the release
+    limit so a prerelease cannot displace the target of latest.
     """
     docs_path = target_fern / "docs.yml"
     docs_yml = read_yaml(docs_path)
@@ -160,11 +161,17 @@ def prune_release_versions(target_fern: Path) -> None:
 
     retained = []
     seen_minor_versions = set()
-    for slug in sorted(releases, key=lambda slug: releases[slug][0], reverse=True):
+    sorted_slugs = sorted(releases, key=lambda slug: releases[slug][0], reverse=True)
+    for slug in sorted_slugs:
         minor_version = releases[slug][0][:2]
         if minor_version not in seen_minor_versions and len(retained) < MAX_RELEASE_VERSIONS:
             retained.append(slug)
             seen_minor_versions.add(minor_version)
+
+    stable_slug = next((slug for slug in sorted_slugs if releases[slug][1].get("availability") == "stable"), None)
+    if stable_slug and stable_slug not in retained:
+        retained.append(stable_slug)
+        retained.sort(key=lambda slug: releases[slug][0], reverse=True)
 
     # Include on-disk snapshots so old, unlisted content is removed as well.
     snapshots = set(releases)
@@ -179,7 +186,6 @@ def prune_release_versions(target_fern: Path) -> None:
         (target_fern / "versions" / f"{slug}.yml").unlink(missing_ok=True)
 
     # Rebuild aliases too: pruning must never leave a dangling default or latest.
-    stable_slug = next((slug for slug in retained if releases[slug][1].get("availability") == "stable"), None)
     latest_entries = []
     if stable_slug:
         latest_entries.append(

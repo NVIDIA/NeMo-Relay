@@ -484,7 +484,7 @@ fn insert_usage(object: &mut Map<String, Json>, key: &str, usage: Option<&Usage>
             insert_u64(
                 &mut rendered,
                 "cache_creation_input_tokens",
-                usage.cache_write_tokens,
+                usage.cache_write_total(),
             );
         }
         UsageWire::Oci => {

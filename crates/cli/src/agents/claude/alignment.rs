@@ -7,13 +7,58 @@
 //! the `Agent` tool result. These helpers keep those vendor-specific hints outside the generic
 //! session state machine.
 
-use axum::http::HeaderMap;
-use nemo_relay_runtime::api::llm::LlmRequest;
-use serde_json::Value;
-
 use crate::agents::shared::alignment::json_string_at;
 use crate::configuration::header_string;
 use crate::events::{AgentKind, ToolEvent};
+use axum::http::HeaderMap;
+
+/// Client-reported operation class, not evidence of human initiation or authorization.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) enum RequestClass {
+    Main,
+    Subagent,
+    Workflow,
+    Compaction,
+    Auxiliary,
+    Unknown,
+}
+
+impl RequestClass {
+    pub(crate) fn is_internal(self) -> bool {
+        matches!(self, Self::Compaction | Self::Auxiliary)
+    }
+
+    pub(crate) fn as_str(self) -> &'static str {
+        match self {
+            Self::Main => "main",
+            Self::Subagent => "subagent",
+            Self::Workflow => "workflow",
+            Self::Compaction => "compaction",
+            Self::Auxiliary => "auxiliary",
+            Self::Unknown => "unknown",
+        }
+    }
+}
+
+/// Accept one exact documented value before header normalization loses duplicates.
+/// Padded, combined, repeated, invalid, and future values remain unknown.
+pub(crate) fn request_class(headers: &HeaderMap) -> RequestClass {
+    let mut values = headers.get_all("x-claude-code-request-class").iter();
+    let Some(value) = values.next() else {
+        return RequestClass::Unknown;
+    };
+    if values.next().is_some() {
+        return RequestClass::Unknown;
+    }
+    match value.to_str().ok() {
+        Some("main") => RequestClass::Main,
+        Some("subagent") => RequestClass::Subagent,
+        Some("workflow") => RequestClass::Workflow,
+        Some("compaction") => RequestClass::Compaction,
+        Some("auxiliary") => RequestClass::Auxiliary,
+        _ => RequestClass::Unknown,
+    }
+}
 
 // Identifies gateway providers that should be labeled as Claude-owned when an Anthropic request
 // arrives before a SessionStart hook. Other providers are left generic so mixed gateway traffic
@@ -26,36 +71,6 @@ pub(crate) fn owns_gateway_provider(provider: &str) -> bool {
 // header so existing Claude environments correlate without extra gateway-specific configuration.
 pub(crate) fn session_id_from_headers(headers: &HeaderMap) -> Option<String> {
     header_string(headers, "x-claude-code-session-id")
-}
-
-// Claude Code can issue a tiny pre-user startup probe through the Anthropic gateway before the
-// first UserPromptSubmit hook. Treating it as normal LLM work pollutes traces with an unparented
-// `user: test` span, so alignment classifies only this exact-body harness probe for suppression.
-pub(crate) fn is_startup_probe(
-    provider: &str,
-    model_name: Option<&str>,
-    request: &LlmRequest,
-) -> bool {
-    if provider != "anthropic.messages" {
-        return false;
-    }
-    let model = model_name
-        .or_else(|| request.content.get("model").and_then(Value::as_str))
-        .unwrap_or_default();
-    if !model.starts_with("claude-") {
-        return false;
-    }
-    if request.content.get("max_tokens").and_then(Value::as_u64) != Some(1) {
-        return false;
-    }
-    let Some(messages) = request.content.get("messages").and_then(Value::as_array) else {
-        return false;
-    };
-    let [message] = messages.as_slice() else {
-        return false;
-    };
-    message.get("role").and_then(Value::as_str) == Some("user")
-        && message.get("content").and_then(Value::as_str) == Some("test")
 }
 
 // Claude's `Agent` tool can report either an asynchronous launch acknowledgement or a terminal

@@ -41,8 +41,10 @@ fn test_usage_all_populated_round_trip() {
         completion_tokens: Some(50),
         total_tokens: Some(150),
         cache_read_tokens: Some(20),
-        cache_write_tokens: Some(10),
-        cache_write_1h_tokens: None,
+        cache_write_tokens: Some(vec![CacheWriteTokenCounts {
+            count: 10,
+            duration: None,
+        }]),
         uncached_input_tokens: None,
         cost: None,
     };
@@ -351,8 +353,10 @@ fn full_response() -> AnnotatedLlmResponse {
             completion_tokens: Some(20),
             total_tokens: Some(30),
             cache_read_tokens: Some(5),
-            cache_write_tokens: Some(3),
-            cache_write_1h_tokens: None,
+            cache_write_tokens: Some(vec![CacheWriteTokenCounts {
+                count: 3,
+                duration: None,
+            }]),
             uncached_input_tokens: None,
             cost: None,
         }),
@@ -388,7 +392,6 @@ fn test_usage_cost_round_trip_preserves_provider_reported_codec_compatibility() 
         total_tokens: Some(1_500),
         cache_read_tokens: Some(200),
         cache_write_tokens: None,
-        cache_write_1h_tokens: None,
         uncached_input_tokens: None,
         cost: Some(CostEstimate {
             total: Some(0.42),
@@ -411,4 +414,80 @@ fn test_usage_cost_round_trip_preserves_provider_reported_codec_compatibility() 
     assert_eq!(json_val["cost"]["source"], json!("provider_reported"));
     let deserialized: Usage = serde_json::from_value(json_val).unwrap();
     assert_eq!(usage, deserialized);
+}
+
+fn writes(entries: &[(u64, Option<u64>)]) -> Option<Vec<CacheWriteTokenCounts>> {
+    Some(
+        entries
+            .iter()
+            .map(|&(count, duration)| CacheWriteTokenCounts { count, duration })
+            .collect(),
+    )
+}
+
+#[test]
+fn cache_writes_serialize_as_a_list_with_durations_in_seconds() {
+    let usage = Usage {
+        cache_write_tokens: writes(&[(5, Some(300)), (2, Some(3_600)), (4, None)]),
+        ..Usage::default()
+    };
+    assert_eq!(
+        serde_json::to_value(&usage).unwrap(),
+        json!({"cache_write_tokens": [
+            {"count": 5, "duration": 300},
+            {"count": 2, "duration": 3600},
+            {"count": 4}
+        ]})
+    );
+    let round_trip: Usage = serde_json::from_value(serde_json::to_value(&usage).unwrap()).unwrap();
+    assert_eq!(round_trip, usage);
+    assert_eq!(usage.cache_write_total(), Some(11));
+}
+
+#[test]
+fn cache_writes_build_from_a_total_and_its_one_hour_subset() {
+    let build = CacheWriteTokenCounts::from_total_and_one_hour;
+    assert_eq!(build(None, Some(3), None), None);
+    assert_eq!(build(Some(10), None, None), writes(&[(10, None)]));
+    assert_eq!(
+        build(Some(10), Some(4), Some(300)),
+        writes(&[(6, Some(300)), (4, Some(3_600))])
+    );
+    // Everything written was one-hour.
+    assert_eq!(build(Some(4), Some(4), None), writes(&[(4, Some(3_600))]));
+    // The total is authoritative: a larger one-hour subset is capped to it.
+    assert_eq!(
+        build(Some(10), Some(12), None),
+        writes(&[(10, Some(3_600))])
+    );
+}
+
+#[test]
+fn malformed_cache_write_tokens_are_rejected() {
+    for value in [
+        json!({"cache_write_tokens": 10}),
+        json!({"cache_write_tokens": "10"}),
+        json!({"cache_write_tokens": -1}),
+        json!({"cache_write_tokens": [{"duration": 300}]}),
+        json!({"cache_write_tokens": [{"count": 1, "duration": -5}]}),
+    ] {
+        assert!(
+            serde_json::from_value::<Usage>(value.clone()).is_err(),
+            "{value}"
+        );
+    }
+}
+
+#[test]
+fn cache_write_total_saturates_instead_of_overflowing() {
+    let usage = Usage {
+        cache_write_tokens: writes(&[(u64::MAX, None), (1, Some(300))]),
+        ..Usage::default()
+    };
+    assert_eq!(usage.cache_write_total(), Some(u64::MAX));
+    let empty = Usage {
+        cache_write_tokens: Some(Vec::new()),
+        ..Usage::default()
+    };
+    assert_eq!(empty.cache_write_total(), Some(0));
 }

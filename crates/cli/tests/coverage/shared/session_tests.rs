@@ -38,6 +38,12 @@ struct ToolGuardrailCleanup(&'static str);
 #[path = "gateway_preparation_tests.rs"]
 mod gateway_preparation;
 
+#[path = "claude_activity_tests.rs"]
+mod claude_activity;
+
+#[path = "claude_activity_export_tests.rs"]
+mod claude_activity_export;
+
 impl SessionManager {
     pub(crate) async fn test_lock_session_gate(
         &self,
@@ -1831,6 +1837,8 @@ async fn nests_agent_subagent_and_tool_lifecycle() {
         max_hook_payload_bytes: crate::configuration::DEFAULT_MAX_HOOK_PAYLOAD_BYTES,
         launched_agent: None,
         max_passthrough_body_bytes: crate::configuration::DEFAULT_MAX_PASSTHROUGH_BODY_BYTES,
+        openai_oidc: None,
+        anthropic_oidc: None,
     };
     let manager = SessionManager::new(config);
     let headers = HeaderMap::new();
@@ -3928,6 +3936,8 @@ async fn writes_atif_on_session_end_from_plugin_config() {
         max_hook_payload_bytes: crate::configuration::DEFAULT_MAX_HOOK_PAYLOAD_BYTES,
         launched_agent: None,
         max_passthrough_body_bytes: crate::configuration::DEFAULT_MAX_PASSTHROUGH_BODY_BYTES,
+        openai_oidc: None,
+        anthropic_oidc: None,
     };
     let manager = SessionManager::new(config);
     let mut headers = HeaderMap::new();
@@ -5069,13 +5079,9 @@ async fn execute_prepared_llm(manager: &SessionManager, prep: GatewayCallPrep, r
         metadata,
         model_name,
         owner_subagent_id,
-        bypass_managed_pipeline,
+        record_task_response: _,
         session_finish,
     } = prep;
-    assert!(
-        !bypass_managed_pipeline,
-        "managed execution helper must not emit an LLM span for a bypassed gateway call"
-    );
     let surface = match provider_name.as_str() {
         "anthropic.messages" => ProviderSurface::AnthropicMessages,
         "openai.responses" => ProviderSurface::OpenAIResponses,
@@ -5133,6 +5139,8 @@ async fn duplicate_agent_end_does_not_overwrite_atif_with_empty_session() {
         max_hook_payload_bytes: crate::configuration::DEFAULT_MAX_HOOK_PAYLOAD_BYTES,
         launched_agent: None,
         max_passthrough_body_bytes: crate::configuration::DEFAULT_MAX_PASSTHROUGH_BODY_BYTES,
+        openai_oidc: None,
+        anthropic_oidc: None,
     };
     let manager = SessionManager::new(config);
     let headers = HeaderMap::new();
@@ -5244,6 +5252,142 @@ async fn empty_hook_marks_do_not_create_empty_atif_steps() {
 }
 
 #[tokio::test]
+async fn hook_marks_reach_session_filtered_atof_with_session_metadata() {
+    let _guard = PLUGIN_CONFIG_TEST_LOCK.lock().await;
+    let temp = tempfile::tempdir().unwrap();
+    let exporter = make_atof_test_exporter(temp.path(), "events.jsonl");
+    let subscriber_name = "cli-hook-mark-session-metadata";
+    let cases = [
+        (
+            AgentKind::ClaudeCode,
+            "mark-claude",
+            ["PreCompact", "UserPromptExpansion"],
+        ),
+        (
+            AgentKind::Codex,
+            "mark-codex",
+            ["PostCompact", "PermissionRequest"],
+        ),
+        (
+            AgentKind::Pi,
+            "mark-pi",
+            ["session_compact", "session_before_compact"],
+        ),
+    ];
+    let session_ids = tracked_sessions(&["mark-claude", "mark-codex", "mark-pi"]);
+    let subscriber = exporter.subscriber();
+    register_subscriber(
+        subscriber_name,
+        Arc::new(move |event| {
+            if event
+                .metadata()
+                .and_then(|metadata| metadata.get("session_id"))
+                .and_then(Value::as_str)
+                .is_some_and(|id| session_ids.contains(id))
+            {
+                subscriber(event);
+            }
+        }),
+    )
+    .unwrap();
+    let mut config = session_test_config();
+    config.metadata = Some(json!({
+        "experiment": "mark-metadata",
+        "team": "configured",
+        "agent_version": "untrusted",
+        "session_id": "untrusted",
+        "session_instance_id": "untrusted"
+    }));
+    config.launched_agent = Some(crate::configuration::LaunchedAgent {
+        kind: AgentKind::ClaudeCode,
+        version: "2.1.121".into(),
+    });
+    let manager = SessionManager::new(config);
+    let headers = HeaderMap::new();
+    for (kind, session_id, hook_names) in cases {
+        manager
+            .apply_events(
+                &headers,
+                vec![NormalizedEvent::AgentStarted(SessionEvent {
+                    session_id: session_id.into(),
+                    agent_kind: kind,
+                    event_name: "SessionStart".into(),
+                    payload: json!({}),
+                    metadata: json!({"team": "session", "user_id": session_id}),
+                })],
+            )
+            .await
+            .unwrap();
+        for hook_name in hook_names {
+            let payload = json!({
+                "session_id": session_id,
+                "hook_event_name": hook_name,
+                "type": hook_name
+            });
+            let outcome = match kind {
+                AgentKind::ClaudeCode => {
+                    crate::agents::shared::adapters::claude_code::adapt(payload, &headers)
+                }
+                AgentKind::Codex => {
+                    crate::agents::shared::adapters::codex::adapt(payload, &headers)
+                }
+                AgentKind::Pi => crate::agents::shared::adapters::pi::adapt(payload, &headers),
+                AgentKind::Gateway => unreachable!(),
+            };
+            manager
+                .apply_events(&headers, outcome.events)
+                .await
+                .unwrap();
+        }
+    }
+    manager.close_all("test_shutdown").await.unwrap();
+    exporter.force_flush().unwrap();
+    assert!(deregister_subscriber(subscriber_name).unwrap());
+    let events = read_atof_events(exporter.path().unwrap());
+    for (kind, session_id, hook_names) in cases {
+        let start = events
+            .iter()
+            .find(|event| {
+                event["name"] == "session.start" && event["metadata"]["session_id"] == session_id
+            })
+            .unwrap();
+        for hook_name in hook_names {
+            let mark = events
+                .iter()
+                .find(|event| {
+                    event["data"]["session_id"] == session_id && event["data"]["type"] == hook_name
+                })
+                .unwrap_or_else(|| panic!("session filter dropped {session_id}/{hook_name}"));
+            assert_eq!(
+                mark["data"],
+                json!({
+                    "session_id": session_id,
+                    "hook_event_name": hook_name,
+                    "type": hook_name
+                })
+            );
+            let metadata = &mark["metadata"];
+            assert_eq!(metadata["session_id"], session_id);
+            assert_eq!(
+                metadata["session_instance_id"],
+                start["metadata"]["session_instance_id"]
+            );
+            assert_ne!(metadata["session_instance_id"], "untrusted");
+            assert_eq!(metadata["agent_kind"], kind.as_str());
+            assert_eq!(metadata["experiment"], "mark-metadata");
+            assert_eq!(metadata["team"], "session");
+            assert_eq!(metadata["user_id"], session_id);
+            assert_eq!(metadata["hook_event_name"], hook_name);
+            if kind == AgentKind::ClaudeCode {
+                assert_eq!(metadata["agent_version"], "2.1.121");
+            } else {
+                assert!(metadata.get("agent_version").is_none());
+            }
+        }
+    }
+}
+
+#[tokio::test]
 async fn inferred_skill_load_hook_marks_use_the_stable_event_contract() {
     let _guard = PLUGIN_CONFIG_TEST_LOCK.lock().await;
     let temp = tempfile::tempdir().unwrap();
@@ -5301,6 +5445,7 @@ async fn inferred_skill_load_hook_marks_use_the_stable_event_contract() {
         "expected one inferred skill mark: {events:#?}"
     );
     assert_eq!(marks[0]["data"], json!({"skill_name": "review"}));
+    assert_eq!(marks[0]["metadata"]["session_id"], "inferred-skill-load");
     assert_eq!(marks[0]["metadata"]["agent_kind"], "claude-code");
     assert_eq!(
         marks[0]["metadata"]["skill_load_source"],
@@ -5329,6 +5474,8 @@ async fn handles_out_of_order_subagent_and_tool_end_events() {
         max_hook_payload_bytes: crate::configuration::DEFAULT_MAX_HOOK_PAYLOAD_BYTES,
         launched_agent: None,
         max_passthrough_body_bytes: crate::configuration::DEFAULT_MAX_PASSTHROUGH_BODY_BYTES,
+        openai_oidc: None,
+        anthropic_oidc: None,
     };
     let manager = SessionManager::new(config);
     let headers = HeaderMap::new();
@@ -5415,6 +5562,8 @@ async fn out_of_order_started_subagent_end_does_not_leak_scope() {
         max_hook_payload_bytes: crate::configuration::DEFAULT_MAX_HOOK_PAYLOAD_BYTES,
         launched_agent: None,
         max_passthrough_body_bytes: crate::configuration::DEFAULT_MAX_PASSTHROUGH_BODY_BYTES,
+        openai_oidc: None,
+        anthropic_oidc: None,
     };
     let manager = SessionManager::new(config);
     let headers = HeaderMap::new();
@@ -5497,6 +5646,8 @@ async fn agent_end_closes_nested_active_subagents_lifo() {
         max_hook_payload_bytes: crate::configuration::DEFAULT_MAX_HOOK_PAYLOAD_BYTES,
         launched_agent: None,
         max_passthrough_body_bytes: crate::configuration::DEFAULT_MAX_PASSTHROUGH_BODY_BYTES,
+        openai_oidc: None,
+        anthropic_oidc: None,
     };
     let manager = SessionManager::new(config);
     let headers = HeaderMap::new();
@@ -5563,6 +5714,8 @@ async fn llm_lifecycle_starts_implicit_gateway_session() {
         max_hook_payload_bytes: crate::configuration::DEFAULT_MAX_HOOK_PAYLOAD_BYTES,
         launched_agent: None,
         max_passthrough_body_bytes: crate::configuration::DEFAULT_MAX_PASSTHROUGH_BODY_BYTES,
+        openai_oidc: None,
+        anthropic_oidc: None,
     };
     let manager = SessionManager::new(config);
     let active = manager
@@ -5600,7 +5753,7 @@ async fn llm_lifecycle_starts_implicit_gateway_session() {
 }
 
 #[tokio::test]
-async fn claude_startup_probe_does_not_open_null_input_turn() {
+async fn claude_unclassified_short_request_preserves_distinct_late_prompt_evidence() {
     let subscriber_name = "cli-claude-startup-probe-turn-test";
     let _ = deregister_subscriber(subscriber_name);
     let captured_turn_starts = Arc::new(StdMutex::new(Vec::<Value>::new()));
@@ -5608,8 +5761,16 @@ async fn claude_startup_probe_does_not_open_null_input_turn() {
     register_subscriber(
         subscriber_name,
         Arc::new(move |event| {
-            if event.scope_category() == Some(ScopeCategory::Start)
-                && event.name() == "claude-code-turn"
+            if event.name() == "prompt_submitted"
+                && event.data() == Some(&json!({ "prompt": "list contents of this dir" }))
+            {
+                captured.lock().unwrap().push(json!({
+                    "kind": "prompt_mark",
+                    "data": event.data().cloned(),
+                }));
+                return;
+            }
+            if event.name() == "claude-code-turn"
                 && event
                     .metadata()
                     .and_then(|metadata| metadata.get("session_id"))
@@ -5617,6 +5778,7 @@ async fn claude_startup_probe_does_not_open_null_input_turn() {
                     == Some("claude-probe")
             {
                 captured.lock().unwrap().push(json!({
+                    "kind": if event.scope_category() == Some(ScopeCategory::Start) { "turn_start" } else { "turn_end" },
                     "input": event.input().cloned().unwrap_or(Value::Null),
                     "metadata": event.metadata().cloned().unwrap_or(Value::Null)
                 }));
@@ -5665,15 +5827,9 @@ async fn claude_startup_probe_does_not_open_null_input_turn() {
         )
         .await
         .unwrap();
-    assert!(prep.parent.is_none());
-    assert_eq!(
-        prep.metadata["llm_correlation_status"],
-        json!("pre_turn_probe")
-    );
-    assert_eq!(
-        prep.metadata["llm_correlation_source"],
-        json!("claude_startup_probe")
-    );
+    assert!(prep.parent.is_some());
+    assert!(prep.record_task_response);
+    assert_eq!(prep.metadata["claude_code_request_class"], "unknown");
     manager
         .finish_gateway_call(
             &prep.session_id,
@@ -5701,34 +5857,56 @@ async fn claude_startup_probe_does_not_open_null_input_turn() {
         let session = sessions.get("claude-probe").expect("session retained");
         assert!(
             session.turn_scope.is_some(),
-            "prompt should open a Claude turn after the pre-turn probe"
+            "the late prompt must retain the gateway-created turn"
         );
     }
 
+    manager.close_all("test_shutdown").await.unwrap();
     flush_subscribers().unwrap();
-    let starts = captured_turn_starts.lock().unwrap().clone();
-    assert_eq!(starts.len(), 1, "expected one user-visible Claude turn");
+    let events = captured_turn_starts.lock().unwrap().clone();
+    let starts = events
+        .iter()
+        .filter(|event| event["kind"] == "turn_start")
+        .collect::<Vec<_>>();
+    assert_eq!(
+        starts.len(),
+        1,
+        "late prompt must not duplicate the container"
+    );
     assert_eq!(
         starts[0]["input"],
-        json!({ "prompt": "list contents of this dir" }),
-        "startup probe must not create a null-input Claude turn"
+        json!({ "prompt": "test" }),
+        "opening input remains the request-derived structural evidence"
     );
     assert_eq!(starts[0]["metadata"]["turn_index"], json!(1));
-    assert_eq!(starts[0]["metadata"]["turn_source"], json!("user_prompt"));
+    assert_eq!(starts[0]["metadata"]["turn_source"], "gateway_request");
+    let marks = events
+        .iter()
+        .filter(|event| event["kind"] == "prompt_mark")
+        .collect::<Vec<_>>();
+    assert_eq!(marks.len(), 1);
+    assert_eq!(marks[0]["data"]["prompt"], "list contents of this dir");
+    let ends = events
+        .iter()
+        .filter(|event| event["kind"] == "turn_end")
+        .collect::<Vec<_>>();
+    assert_eq!(ends.len(), 1);
+    assert_eq!(ends[0]["metadata"]["turn_prompt_observed"], true);
 
     deregister_subscriber(subscriber_name).unwrap();
 }
 
 #[tokio::test]
-async fn claude_startup_probe_only_session_is_pruned_after_finish() {
+async fn claude_unclassified_short_request_keeps_ordinary_idle_cleanup() {
     let manager = SessionManager::new(session_test_config());
     let prep = manager
         .prepare_gateway_call(&HeaderMap::new(), claude_startup_probe_start("probe-only"))
         .await
         .unwrap();
 
-    assert!(prep.bypass_managed_pipeline);
-    assert_eq!(prep.session_finish, GatewaySessionFinish::PruneIfEmpty);
+    assert!(prep.record_task_response);
+    assert_eq!(prep.session_finish, GatewaySessionFinish::Retain);
+    assert_eq!(prep.metadata["claude_code_request_class"], "unknown");
     assert!(manager.inner.lock().await.contains_key("probe-only"));
 
     manager
@@ -5738,6 +5916,14 @@ async fn claude_startup_probe_only_session_is_pruned_after_finish() {
             prep.session_finish,
         )
         .await;
+    assert!(manager.inner.lock().await.contains_key("probe-only"));
+    assert_eq!(
+        manager
+            .close_idle_sessions_at(Instant::now(), Duration::ZERO, "idle_timeout")
+            .await
+            .unwrap(),
+        1
+    );
     assert!(!manager.inner.lock().await.contains_key("probe-only"));
 
     let next = manager
@@ -5754,6 +5940,14 @@ async fn claude_startup_probe_only_session_is_pruned_after_finish() {
         next.session_id, "gateway-gateway",
         "probe-only sessions must not become the single-active fallback"
     );
+    manager
+        .finish_gateway_call(
+            &next.session_id,
+            next.owner_subagent_id.as_deref(),
+            next.session_finish,
+        )
+        .await;
+    manager.close_all("test_shutdown").await.unwrap();
 }
 
 #[tokio::test]
@@ -5769,6 +5963,9 @@ async fn claude_direct_gateway_request_seeds_turn_input_before_prompt_hook() {
                 .metadata()
                 .and_then(|metadata| metadata.get("session_id"))
                 .and_then(Value::as_str);
+            if event_session_id != Some("claude-direct-race") {
+                return;
+            }
             if event.name() == "prompt_submitted"
                 && event.data().cloned().unwrap_or(Value::Null)
                     == json!({ "prompt": "inspect direct mode" })
@@ -5778,9 +5975,6 @@ async fn claude_direct_gateway_request_seeds_turn_input_before_prompt_hook() {
                     "data": event.data().cloned().unwrap_or(Value::Null),
                     "metadata": event.metadata().cloned().unwrap_or(Value::Null)
                 }));
-                return;
-            }
-            if event_session_id != Some("claude-direct-race") {
                 return;
             }
             if event.scope_category() == Some(ScopeCategory::Start)
@@ -5822,7 +6016,7 @@ async fn claude_direct_gateway_request_seeds_turn_input_before_prompt_hook() {
         )
         .await
         .unwrap();
-    assert!(!prep.bypass_managed_pipeline);
+    assert!(prep.record_task_response);
     manager
         .finish_gateway_call(
             &prep.session_id,
@@ -5869,6 +6063,149 @@ async fn claude_direct_gateway_request_seeds_turn_input_before_prompt_hook() {
             && event["data"] == json!({ "prompt": "inspect direct mode" })
     }));
 
+    deregister_subscriber(subscriber_name).unwrap();
+}
+
+#[tokio::test]
+async fn claude_notifications_preserve_marks_without_opening_turns() {
+    let _guard = PLUGIN_CONFIG_TEST_LOCK.lock().await;
+    let session_id = "claude-notification-boundaries";
+    let subscriber_name = "cli-claude-notification-boundaries-test";
+    let marks = Arc::new(StdMutex::new(Vec::<Event>::new()));
+    let captured = marks.clone();
+    register_subscriber(
+        subscriber_name,
+        Arc::new(move |event| {
+            if event.name() == "notification"
+                && event
+                    .data()
+                    .and_then(|data| data.get("notification_session"))
+                    == Some(&json!("claude-notification-boundaries"))
+            {
+                captured.lock().unwrap().push(event.clone());
+            }
+        }),
+    )
+    .unwrap();
+    let manager = SessionManager::new(session_test_config());
+    let notification = |label: &str, subagent_id: Option<&str>| {
+        NormalizedEvent::Notification(SessionEvent {
+            session_id: session_id.into(),
+            agent_kind: AgentKind::ClaudeCode,
+            event_name: "Notification".into(),
+            payload: json!({ "notification_session": session_id, "message": label }),
+            metadata: json!({ "subagent_id": subagent_id }),
+        })
+    };
+    manager
+        .apply_events(
+            &HeaderMap::new(),
+            vec![notification("before-session", None)],
+        )
+        .await
+        .unwrap();
+    assert!(
+        manager.inner.lock().await.is_empty(),
+        "a notification must not create active session work"
+    );
+
+    manager
+        .apply_events(
+            &HeaderMap::new(),
+            vec![
+                NormalizedEvent::AgentStarted(session_event(session_id, "SessionStart")),
+                notification("before-prompt", None),
+            ],
+        )
+        .await
+        .unwrap();
+    {
+        let sessions = manager.inner.lock().await;
+        let session = &sessions[session_id];
+        assert!(session.turn_scope.is_none());
+        assert_eq!(session.turn_index, 0);
+        assert!(!session.blocks_plugin_idle_shutdown());
+    }
+    manager
+        .apply_events(
+            &HeaderMap::new(),
+            vec![NormalizedEvent::PromptSubmitted(session_event(
+                session_id,
+                "UserPromptSubmit",
+            ))],
+        )
+        .await
+        .unwrap();
+    let turn_uuid = manager.inner.lock().await[session_id]
+        .turn_scope
+        .as_ref()
+        .unwrap()
+        .uuid;
+    manager
+        .apply_events(
+            &HeaderMap::new(),
+            vec![
+                NormalizedEvent::SubagentStarted(SubagentEvent {
+                    session_id: session_id.into(),
+                    agent_kind: AgentKind::ClaudeCode,
+                    event_name: "SubagentStart".into(),
+                    subagent_id: "worker".into(),
+                    payload: json!({ "agent_type": "Explore" }),
+                    metadata: json!({}),
+                }),
+                notification("root-with-child", None),
+                notification("owned-child", Some("worker")),
+            ],
+        )
+        .await
+        .unwrap();
+    let child_uuid = manager.inner.lock().await[session_id].subagents["worker"].uuid;
+    manager
+        .apply_events(
+            &HeaderMap::new(),
+            vec![
+                NormalizedEvent::SubagentEnded(SubagentEvent {
+                    session_id: session_id.into(),
+                    agent_kind: AgentKind::ClaudeCode,
+                    event_name: "SubagentStop".into(),
+                    subagent_id: "worker".into(),
+                    payload: json!({}),
+                    metadata: json!({}),
+                }),
+                NormalizedEvent::TurnEnded(session_event(session_id, "Stop")),
+                notification("after-turn", None),
+            ],
+        )
+        .await
+        .unwrap();
+    assert!(manager.inner.lock().await[session_id].turn_scope.is_none());
+    assert_eq!(manager.inner.lock().await[session_id].turn_index, 1);
+    flush_subscribers().unwrap();
+    {
+        let captured = marks.lock().unwrap();
+        assert_eq!(captured.len(), 5);
+        assert_eq!(captured[2].parent_uuid(), Some(turn_uuid));
+        assert_eq!(captured[3].parent_uuid(), Some(child_uuid));
+        for (event, label) in captured.iter().zip([
+            "before-session",
+            "before-prompt",
+            "root-with-child",
+            "owned-child",
+            "after-turn",
+        ]) {
+            assert_eq!(
+                event.data(),
+                Some(&json!({ "notification_session": session_id, "message": label }))
+            );
+            assert_eq!(event.metadata().unwrap()["session_id"], json!(session_id));
+            assert_eq!(
+                event.metadata().unwrap()["agent_kind"],
+                json!("claude-code")
+            );
+            assert!(event.metadata().unwrap().get("start_observed").is_none());
+        }
+    }
+    manager.close_all("test_shutdown").await.unwrap();
     deregister_subscriber(subscriber_name).unwrap();
 }
 
@@ -6226,6 +6563,8 @@ async fn llm_lifecycle_uses_single_active_hook_session_when_header_is_missing() 
         max_hook_payload_bytes: crate::configuration::DEFAULT_MAX_HOOK_PAYLOAD_BYTES,
         launched_agent: None,
         max_passthrough_body_bytes: crate::configuration::DEFAULT_MAX_PASSTHROUGH_BODY_BYTES,
+        openai_oidc: None,
+        anthropic_oidc: None,
     };
     let manager = SessionManager::new(config);
     manager
@@ -6371,6 +6710,8 @@ async fn single_pending_llm_hint_claims_next_gateway_llm() {
         max_hook_payload_bytes: crate::configuration::DEFAULT_MAX_HOOK_PAYLOAD_BYTES,
         launched_agent: None,
         max_passthrough_body_bytes: crate::configuration::DEFAULT_MAX_PASSTHROUGH_BODY_BYTES,
+        openai_oidc: None,
+        anthropic_oidc: None,
     };
     let manager = SessionManager::new(config);
     manager
@@ -6478,6 +6819,8 @@ async fn multiple_llm_hints_resolve_by_generation_id() {
         max_hook_payload_bytes: crate::configuration::DEFAULT_MAX_HOOK_PAYLOAD_BYTES,
         launched_agent: None,
         max_passthrough_body_bytes: crate::configuration::DEFAULT_MAX_PASSTHROUGH_BODY_BYTES,
+        openai_oidc: None,
+        anthropic_oidc: None,
     };
     let manager = SessionManager::new(config);
     manager
@@ -6603,6 +6946,8 @@ async fn ambiguous_llm_hints_fall_back_to_agent_scope() {
         max_hook_payload_bytes: crate::configuration::DEFAULT_MAX_HOOK_PAYLOAD_BYTES,
         launched_agent: None,
         max_passthrough_body_bytes: crate::configuration::DEFAULT_MAX_PASSTHROUGH_BODY_BYTES,
+        openai_oidc: None,
+        anthropic_oidc: None,
     };
     let manager = SessionManager::new(config);
     manager
@@ -6706,6 +7051,8 @@ async fn no_active_hint_reuses_last_llm_owner() {
         max_hook_payload_bytes: crate::configuration::DEFAULT_MAX_HOOK_PAYLOAD_BYTES,
         launched_agent: None,
         max_passthrough_body_bytes: crate::configuration::DEFAULT_MAX_PASSTHROUGH_BODY_BYTES,
+        openai_oidc: None,
+        anthropic_oidc: None,
     };
     let manager = SessionManager::new(config);
     manager
@@ -8551,6 +8898,8 @@ fn session_test_config() -> GatewayConfig {
         max_hook_payload_bytes: crate::configuration::DEFAULT_MAX_HOOK_PAYLOAD_BYTES,
         launched_agent: None,
         max_passthrough_body_bytes: crate::configuration::DEFAULT_MAX_PASSTHROUGH_BODY_BYTES,
+        openai_oidc: None,
+        anthropic_oidc: None,
     }
 }
 
@@ -8575,6 +8924,8 @@ async fn turn_ended_is_noop_without_active_turn_scope() {
         max_hook_payload_bytes: crate::configuration::DEFAULT_MAX_HOOK_PAYLOAD_BYTES,
         launched_agent: None,
         max_passthrough_body_bytes: crate::configuration::DEFAULT_MAX_PASSTHROUGH_BODY_BYTES,
+        openai_oidc: None,
+        anthropic_oidc: None,
     };
     let manager = SessionManager::new(config);
     manager
@@ -11878,4 +12229,210 @@ async fn claude_stop_failure_closes_turn_and_allows_next_prompt() {
     manager.close_all("test_done").await.unwrap();
     flush_subscribers().unwrap();
     deregister_subscriber(subscriber_name).unwrap();
+}
+
+#[test]
+fn custom_call_hints_preserve_invocation_ids_and_literal_input() {
+    let input = "{\"cmd\":\"pwd\"}";
+    let response = json!({"output": [
+        {"type": "message", "id": "msg-item", "name": "exec", "input": input},
+        {"type": "custom_tool_call", "id": "ctc-item", "call_id": "call-wrapper", "name": "exec", "input": input},
+        {"type": "function_call", "call_id": "call-function", "name": "lookup", "arguments": "{}"},
+        {"type": "custom_tool_call_output", "call_id": "call-wrapper", "output": "done"},
+        {"type": "custom_tool_call", "id": "item-only", "name": "exec", "input": "text(1)"},
+        {"type": "custom_tool_call", "call_id": "invalid", "name": "exec", "input": {"cmd": "pwd"}}
+    ]});
+    let hints = tool_hints_from_llm_response(&response, Some("worker"));
+    assert_eq!(hints.len(), 3);
+    assert_eq!(hints[0].tool_call_id.as_deref(), Some("call-wrapper"));
+    assert_eq!(hints[0].tool_name.as_deref(), Some("exec"));
+    assert_eq!(hints[0].subagent_id.as_deref(), Some("worker"));
+    assert_eq!(hints[0].source, "openai_response_custom_tool_call");
+    assert_eq!(hints[0].arguments, json!(input));
+    assert_eq!(hints[1].arguments, json!({}));
+    assert_eq!(
+        hints[2].tool_call_id, None,
+        "never substitute a custom item ID for a call ID"
+    );
+}
+
+#[test]
+fn custom_call_hint_does_not_claim_inner_execution_or_repeated_wrapper_by_order() {
+    let response = json!({"output": [
+        {"type": "custom_tool_call", "call_id": "call-wrapper-one", "name": "exec", "input": "text(42)"},
+        {"type": "custom_tool_call", "call_id": "call-wrapper-two", "name": "exec", "input": "text(42)"}
+    ]});
+    let hints = tool_hints_from_llm_response(&response, None);
+    let mut event = ToolEvent {
+        session_id: "custom-hints".into(),
+        agent_kind: AgentKind::Codex,
+        event_name: "PreToolUse".into(),
+        tool_call_id: "exec-native-inner".into(),
+        tool_name: "exec_command".into(),
+        subagent_id: None,
+        arguments: json!({"cmd": "pwd"}),
+        result: Value::Null,
+        status: None,
+        payload: json!({}),
+        metadata: json!({}),
+    };
+    assert!(
+        hints
+            .iter()
+            .all(|hint| tool_hint_match_score(hint, &event) == 0)
+    );
+    assert_eq!(event.tool_call_id, "exec-native-inner");
+    event.tool_name = "exec".into();
+    event.arguments = json!("text(42)");
+    assert_eq!(
+        tool_hint_match_score(&hints[0], &event),
+        tool_hint_match_score(&hints[1], &event)
+    );
+    event.tool_call_id = "call-wrapper-two".into();
+    assert!(tool_hint_match_score(&hints[1], &event) > tool_hint_match_score(&hints[0], &event));
+}
+
+#[tokio::test]
+async fn custom_call_hint_claims_only_the_matching_direct_custom_hook() {
+    let manager = SessionManager::new(session_test_config());
+    let mut root = session_event("tool-hints", "SessionStart");
+    root.agent_kind = AgentKind::Codex;
+    manager
+        .apply_events(
+            &HeaderMap::new(),
+            vec![
+                NormalizedEvent::AgentStarted(root),
+                NormalizedEvent::SubagentStarted(SubagentEvent {
+                    session_id: "tool-hints".into(),
+                    agent_kind: AgentKind::Codex,
+                    event_name: "SubagentStart".into(),
+                    subagent_id: "worker".into(),
+                    payload: json!({}),
+                    metadata: json!({}),
+                }),
+            ],
+        )
+        .await
+        .unwrap();
+
+    let subagent_uuid = {
+        let sessions = manager.inner.lock().await;
+        sessions
+            .get("tool-hints")
+            .unwrap()
+            .subagents
+            .get("worker")
+            .unwrap()
+            .uuid
+    };
+    let active = manager
+        .start_llm(
+            &HeaderMap::new(),
+            LlmGatewayStart {
+                session_id: Some("tool-hints".into()),
+                subagent_id: Some("worker".into()),
+                ..llm_start()
+            },
+        )
+        .await
+        .unwrap();
+    manager
+        .end_llm(
+            active,
+            json!({
+                "output": [
+                    {
+                        "type": "custom_tool_call",
+                        "call_id": "call-1",
+                        "name": "exec",
+                        "input": "text(42)"
+                    },
+                    {
+                        "type": "custom_tool_call", "call_id": "call-2",
+                        "name": "exec", "input": "text(42)"
+                    },
+                    {
+                        "type": "custom_tool_call", "id": "ctc-patch-item",
+                        "call_id": "call-patch", "name": "apply_patch",
+                        "input": "*** Begin Patch\n*** Add File: proof.txt\n+ok\n*** End Patch"
+                    }
+                ]
+            }),
+            json!({}),
+        )
+        .await
+        .unwrap();
+
+    // Neither an inner execution nor an ambiguous same-text wrapper can consume
+    // the provider hints. Their native execution IDs remain untouched.
+    for (id, name, arguments) in [
+        ("exec-inner", "exec_command", json!({"cmd": "pwd"})),
+        ("exec-ambiguous", "exec", json!("text(42)")),
+    ] {
+        manager
+            .apply_events(
+                &HeaderMap::new(),
+                vec![NormalizedEvent::ToolStarted(ToolEvent {
+                    session_id: "tool-hints".into(),
+                    agent_kind: AgentKind::Codex,
+                    event_name: "PreToolUse".into(),
+                    tool_call_id: id.into(),
+                    tool_name: name.into(),
+                    subagent_id: None,
+                    arguments,
+                    result: Value::Null,
+                    status: None,
+                    payload: json!({}),
+                    metadata: json!({}),
+                })],
+            )
+            .await
+            .unwrap();
+        let sessions = manager.inner.lock().await;
+        let session = sessions.get("tool-hints").unwrap();
+        let handle = session.tools.get(id).unwrap();
+        assert_ne!(handle.parent_uuid, Some(subagent_uuid));
+        assert_eq!(
+            handle.metadata.as_ref().unwrap()["tool_correlation_status"],
+            json!("ambiguous_fallback")
+        );
+        assert_eq!(session.pending_tool_hints.len(), 3);
+    }
+
+    manager
+        .apply_events(
+            &HeaderMap::new(),
+            vec![NormalizedEvent::ToolStarted(ToolEvent {
+                session_id: "tool-hints".into(),
+                agent_kind: AgentKind::Codex,
+                event_name: "PreToolUse".into(),
+                tool_call_id: "call-patch".into(),
+                tool_name: "apply_patch".into(),
+                subagent_id: None,
+                arguments: Value::Null,
+                result: Value::Null,
+                status: None,
+                payload: json!({}),
+                metadata: json!({}),
+            })],
+        )
+        .await
+        .unwrap();
+
+    let sessions = manager.inner.lock().await;
+    let handle = sessions
+        .get("tool-hints")
+        .unwrap()
+        .tools
+        .get("call-patch")
+        .unwrap();
+    assert_eq!(handle.parent_uuid, Some(subagent_uuid));
+    assert_eq!(
+        handle.metadata.as_ref().unwrap()["tool_correlation_status"],
+        json!("matched_hint")
+    );
+    assert_eq!(
+        handle.metadata.as_ref().unwrap()["tool_correlation_subagent_id"],
+        json!("worker")
+    );
 }

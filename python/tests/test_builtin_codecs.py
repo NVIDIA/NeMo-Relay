@@ -19,6 +19,7 @@ import nemo_relay
 from nemo_relay import (
     AnnotatedLLMRequest,
     AnnotatedLLMResponse,
+    Json,
     JsonObject,
     LLMRequest,
     guardrails,
@@ -106,6 +107,22 @@ class TestBuiltinCodecConstruction:
 
 
 class TestBuiltinCodecDecodeEncode:
+    @pytest.mark.parametrize(
+        "content",
+        [
+            pytest.param(["payload"], id="list"),
+            pytest.param("payload", id="string"),
+            pytest.param(42, id="integer"),
+            pytest.param(1.5, id="float"),
+            pytest.param(True, id="boolean"),
+            pytest.param(None, id="null"),
+        ],
+    )
+    def test_openai_chat_rejects_non_object_content(self, content: Json) -> None:
+        request = LLMRequest({}, content)
+        with pytest.raises(RuntimeError, match="request content is not an object"):
+            OpenAIChatCodec().decode(request)
+
     def test_openai_chat_decode(self) -> None:
         """OpenAIChatCodec.decode() returns AnnotatedLLMRequest."""
         codec = OpenAIChatCodec()
@@ -202,7 +219,9 @@ class TestBuiltinCodecDecodeEncode:
         instructions[0]["text"] = "Edited safely."
         annotated.instructions = instructions
         encoded = codec.encode(annotated, original)
-        expected = dict(original.content)
+        original_content = original.content
+        assert isinstance(original_content, dict)
+        expected = dict(original_content)
         expected["system"] = [
             {
                 "type": "text",
@@ -287,6 +306,24 @@ class TestBuiltinCodecDecodeResponse:
         assert annotated.model == "gpt-4"
         assert annotated.response_text() == "Hello!"
         assert annotated.has_tool_calls() is False
+
+    def test_responses_custom_call_keeps_invocation_id_and_literal_input(self) -> None:
+        """Custom input stays a string and uses call_id rather than the item ID."""
+        literal_input = '{"looks_like": "json"}'
+        annotated = OpenAIResponsesCodec().decode_response(
+            {
+                "output": [
+                    {
+                        "type": "custom_tool_call",
+                        "id": "ctc-item",
+                        "call_id": "call-wrapper",
+                        "name": "exec",
+                        "input": literal_input,
+                    }
+                ]
+            }
+        )
+        assert annotated.tool_calls == [{"id": "call-wrapper", "name": "exec", "arguments": literal_input}]
 
     def test_anthropic_messages_decode_response(self) -> None:
         """AnthropicMessagesCodec.decode_response() returns AnnotatedLLMResponse."""

@@ -15,7 +15,8 @@ use serde::{Deserialize, Serialize};
 use thiserror::Error;
 
 use nemo_relay_types::codec::response::{
-    AnnotatedLlmResponse, ApiSpecificResponse, CostEstimate, CostSource, Usage,
+    AnnotatedLlmResponse, ApiSpecificResponse, CacheWriteTokenCounts, CostEstimate, CostSource,
+    Usage,
 };
 
 const PRICING_CATALOG_VERSION: u32 = 1;
@@ -26,6 +27,18 @@ static ACTIVE_PRICING_RESOLVER: LazyLock<RwLock<Arc<PricingResolver>>> =
 /// Errors produced while parsing or validating a model pricing catalog.
 #[derive(Debug, Error)]
 pub enum PricingCatalogError {
+    /// Two cache write rates in one rate set name the same duration.
+    #[error(
+        "model pricing entry {entry_index} repeats cache write duration {duration:?} at {field}"
+    )]
+    DuplicateCacheWriteDuration {
+        /// Zero-based entry index.
+        entry_index: usize,
+        /// Field holding the repeated duration.
+        field: String,
+        /// Repeated duration in seconds; `None` is the default entry.
+        duration: Option<u64>,
+    },
     /// The catalog was not valid JSON for the catalog schema.
     #[error("invalid model pricing catalog JSON: {0}")]
     Json(#[from] serde_json::Error),
@@ -308,8 +321,8 @@ impl ModelPricing {
             return input_tokens_with_cache(usage, uncached);
         }
         let cache_outside_prompt = match self.prompt_cache.read_accounting {
-            CacheReadAccounting::IncludedInPromptTokens => [None, usage.cache_write_tokens],
-            CacheReadAccounting::Separate => [usage.cache_read_tokens, usage.cache_write_tokens],
+            CacheReadAccounting::IncludedInPromptTokens => [None, usage.cache_write_total()],
+            CacheReadAccounting::Separate => [usage.cache_read_tokens, usage.cache_write_total()],
         };
         cache_outside_prompt
             .into_iter()
@@ -327,9 +340,7 @@ impl ModelPricing {
         }
         let completion_tokens = usage.completion_tokens.unwrap_or(0);
         let cache_read_tokens = usage.cache_read_tokens.unwrap_or(0);
-        let cache_write_tokens = usage.cache_write_tokens.unwrap_or(0);
-        let cache_write_1h_tokens = usage.cache_write_1h_tokens.unwrap_or(0);
-        let cache_write_5m_tokens = cache_write_tokens.checked_sub(cache_write_1h_tokens)?;
+        let cache_write_tokens = usage.cache_write_total().unwrap_or(0);
         let rates = self.rates_for(rate_tier_usage)?;
         let billable_prompt_tokens = self.billable_prompt_tokens(usage)?;
 
@@ -346,28 +357,11 @@ impl ModelPricing {
         let cache_read_cost = rates
             .cache_read_per_million
             .and_then(|price| cost_component_if_nonzero(cache_read_tokens, price));
-        let cache_write_5m_cost = rates
-            .cache_write_per_million
-            .and_then(|price| cost_component_if_nonzero(cache_write_5m_tokens, price));
-        let cache_write_1h_cost = rates
-            .cache_write_1h_per_million
-            .and_then(|price| cost_component_if_nonzero(cache_write_1h_tokens, price));
+        let cache_write = cache_write_cost(rates, usage.cache_write_tokens.as_deref());
         let has_unpriced_nonzero_usage = (cache_read_tokens > 0
             && rates.cache_read_per_million.is_none())
-            || (cache_write_5m_tokens > 0 && rates.cache_write_per_million.is_none())
-            || (cache_write_1h_tokens > 0 && rates.cache_write_1h_per_million.is_none());
-        let has_unpriced_cache_write = (cache_write_5m_tokens > 0
-            && rates.cache_write_per_million.is_none())
-            || (cache_write_1h_tokens > 0 && rates.cache_write_1h_per_million.is_none());
-        let cache_write_cost = if has_unpriced_cache_write {
-            None
-        } else {
-            match (cache_write_5m_cost, cache_write_1h_cost) {
-                (Some(short), Some(long)) => Some(short + long),
-                (Some(cost), None) | (None, Some(cost)) => Some(cost),
-                (None, None) => None,
-            }
-        };
+            || cache_write.is_err();
+        let cache_write_cost = cache_write.ok().flatten();
         let component_sum: f64 = [input_cost, output_cost, cache_read_cost, cache_write_cost]
             .into_iter()
             .flatten()
@@ -401,12 +395,12 @@ impl ModelPricing {
         }
     }
 
-    fn rates_for(&self, rate_tier_usage: &Usage) -> Option<TokenPricingRates> {
+    fn rates_for(&self, rate_tier_usage: &Usage) -> Option<&TokenPricingRates> {
         match &self.rate_schedule {
             Some(schedule) => {
                 schedule.rates_for_prompt_tokens(self.rate_tier_input_tokens(rate_tier_usage))
             }
-            None => self.rates,
+            None => self.rates.as_ref(),
         }
     }
 
@@ -476,7 +470,7 @@ pub enum PricingUnit {
 }
 
 /// Token rates expressed as USD per one million tokens.
-#[derive(Debug, Clone, Copy, PartialEq, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct TokenPricingRates {
     /// Uncached prompt/input token price.
@@ -486,15 +480,22 @@ pub struct TokenPricingRates {
     /// Cached prompt/input token read price.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub cache_read_per_million: Option<f64>,
-    /// Prompt cache write price.
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub cache_write_per_million: Option<f64>,
-    /// One-hour prompt cache write price.
-    ///
-    /// Rust callers using exhaustive struct literals must set this to `None`
-    /// when no distinct one-hour rate is available.
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub cache_write_1h_per_million: Option<f64>,
+    /// Prompt cache write prices by duration. A write uses the entry for its
+    /// duration, or else the entry with no duration.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub cache_write_rates: Vec<CacheWriteRate>,
+}
+
+/// Prompt cache write price for one cache duration.
+#[derive(Debug, Clone, Copy, PartialEq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct CacheWriteRate {
+    /// Cache duration in seconds, as reported in `CacheWriteTokenCounts::duration`.
+    /// An entry with no duration is the default for writes with no matching entry.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub duration: Option<u64>,
+    /// Price per one million tokens.
+    pub per_million: f64,
 }
 
 impl TokenPricingRates {
@@ -516,19 +517,21 @@ impl TokenPricingRates {
                 value,
             )?;
         }
-        if let Some(value) = self.cache_write_per_million {
+        let mut durations = HashSet::new();
+        for (rate_index, rate) in self.cache_write_rates.iter().enumerate() {
+            let field = format!("{field_prefix}.cache_write_rates[{rate_index}]");
             validate_rate(
                 entry_index,
-                format!("{field_prefix}.cache_write_per_million"),
-                value,
+                format!("{field}.per_million"),
+                rate.per_million,
             )?;
-        }
-        if let Some(value) = self.cache_write_1h_per_million {
-            validate_rate(
-                entry_index,
-                format!("{field_prefix}.cache_write_1h_per_million"),
-                value,
-            )?;
+            if !durations.insert(rate.duration) {
+                return Err(PricingCatalogError::DuplicateCacheWriteDuration {
+                    entry_index,
+                    field,
+                    duration: rate.duration,
+                });
+            }
         }
         Ok(())
     }
@@ -549,7 +552,7 @@ pub enum TokenRateSchedule {
 }
 
 impl TokenRateSchedule {
-    fn rates_for_prompt_tokens(&self, prompt_tokens: Option<u64>) -> Option<TokenPricingRates> {
+    fn rates_for_prompt_tokens(&self, prompt_tokens: Option<u64>) -> Option<&TokenPricingRates> {
         match self {
             Self::PromptTokenThreshold { applies_to, tiers } => {
                 if *applies_to != RateScheduleApplication::FullRequest {
@@ -559,7 +562,7 @@ impl TokenRateSchedule {
                 tiers
                     .iter()
                     .find(|tier| tier.matches_prompt_tokens(prompt_tokens))
-                    .map(|tier| tier.rates)
+                    .map(|tier| &tier.rates)
             }
         }
     }
@@ -592,7 +595,7 @@ pub enum RateScheduleApplication {
 }
 
 /// A model pricing tier for a range of input tokens, including cache tokens.
-#[derive(Debug, Clone, Copy, PartialEq, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct TokenRateTier {
     /// Inclusive lower bound for input tokens.
@@ -915,6 +918,36 @@ pub fn infer_model_provider(default_provider: &str, model: Option<&str>) -> Opti
 
 fn cost_component(tokens: u64, price_per_million: f64) -> f64 {
     tokens as f64 * price_per_million / 1_000_000.0
+}
+
+/// Prices each cache write at the rate for its duration, or else the default rate.
+///
+/// `Err` means a nonzero write has no rate, which leaves the cost unknown.
+fn cache_write_cost(
+    rates: &TokenPricingRates,
+    writes: Option<&[CacheWriteTokenCounts]>,
+) -> Result<Option<f64>, ()> {
+    let mut total = None;
+    for write in writes
+        .unwrap_or_default()
+        .iter()
+        .filter(|write| write.count > 0)
+    {
+        let rate_for = |duration| {
+            rates
+                .cache_write_rates
+                .iter()
+                .find(|rate| rate.duration == duration)
+        };
+        let price = rate_for(write.duration)
+            .or_else(|| rate_for(None))
+            .ok_or(())?
+            .per_million;
+        if let Some(cost) = cost_component_if_nonzero(write.count, price) {
+            total = Some(total.unwrap_or(0.0) + cost);
+        }
+    }
+    Ok(total)
 }
 
 fn cost_component_if_nonzero(tokens: u64, price_per_million: f64) -> Option<f64> {

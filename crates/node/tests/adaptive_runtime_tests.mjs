@@ -72,6 +72,30 @@ describe('adaptive runtime bridge', () => {
     assert.equal(event.agent_identity.agent_id, 'node-agent');
   });
 
+  it('sums cache writes across durations in cache telemetry', () => {
+    const event = adaptive.buildCacheTelemetryEvent({
+      provider: 'anthropic',
+      requestId: '00000000-0000-0000-0000-000000000204',
+      usage: {
+        prompt_tokens: 100,
+        completion_tokens: 10,
+        cache_read_tokens: 25,
+        cache_write_tokens: [
+          { count: 30, duration: 300 },
+          { count: 20, duration: 3600 },
+        ],
+      },
+      agentId: 'node-agent',
+      templateVersion: 'v1',
+      toolsetHash: 'tools',
+      modelFamily: 'claude',
+      tenantScope: 'tenant',
+      timestamp: '2026-06-15T00:00:00Z',
+    });
+
+    assert.equal(event.total_prompt_tokens, 175);
+  });
+
   it('returns null when cache telemetry lacks prompt tokens', () => {
     assert.equal(
       adaptive.buildCacheTelemetryEvent({
@@ -120,6 +144,21 @@ describe('adaptive runtime bridge', () => {
     } finally {
       await runtime.shutdown().catch(() => {});
     }
+  });
+
+  it('runs overlapping lifecycle calls in call order', async () => {
+    const registerFirst = new adaptive.AdaptiveRuntime(acgRuntimeConfig('anthropic'));
+    const registered = registerFirst.register();
+    const shutDown = registerFirst.shutdown();
+    await registered;
+    await shutDown;
+    assert.throws(() => registerFirst.deregister(), { message: 'adaptive runtime already shut down' });
+
+    const shutdownFirst = new adaptive.AdaptiveRuntime(acgRuntimeConfig('anthropic'));
+    const shutDownEarly = shutdownFirst.shutdown();
+    const registeredLate = assert.rejects(shutdownFirst.register(), { message: 'adaptive runtime already shut down' });
+    await shutDownEarly;
+    await registeredLate;
   });
 
   it('rejects invalid latency sensitivity values', () => {

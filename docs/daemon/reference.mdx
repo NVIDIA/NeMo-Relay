@@ -71,9 +71,9 @@ LLM streaming response headers are unchanged.
 
 The daemon exposes an unauthenticated process-health probe:
 
-```bash
-curl -f http://127.0.0.1:47632/healthz
-```
+<EndpointRequestSnippet endpoint="GET /healthz" />
+
+<EndpointResponseSnippet endpoint="GET /healthz" />
 
 `/healthz` returns `200` while the daemon HTTP process is serving requests.
 Its JSON response identifies the service, Relay version, process instance,
@@ -112,21 +112,9 @@ Use these endpoints to inspect current worker assignments:
 
 The following example shows a managed daemon with one ready worker:
 
-```json
-{
-  "instance_id": "01a0caf5-7b26-7e82-a808-8f29eaf15db1",
-  "status": "ok",
-  "workers": [
-    {
-      "control_available": true,
-      "in_flight": 0,
-      "reference_count": 1,
-      "state": "ready",
-      "worker_id": "01a0caf5-b33f-7280-a916-7e15bbd574fa"
-    }
-  ]
-}
-```
+<EndpointRequestSnippet endpoint="GET /_nemo_relay/v1/workers/status" />
+
+<EndpointResponseSnippet endpoint="GET /_nemo_relay/v1/workers/status" />
 
 `state` is the broker's lifecycle state for the worker assignment. It can be
 `ready`, `draining`, or `recovering`. `control_available` is the broker's
@@ -297,7 +285,7 @@ The hook process performs the following actions:
    When the agent inherited `TRACEPARENT` and optional `TRACESTATE` from the
    process that launched it, the hook also sends them as W3C `traceparent`
    and `tracestate` headers. Refer to
-   [Continue the Launcher Trace](/nemo-relay-cli/basic-usage#continue-the-launcher-trace).
+   [Continue the Launcher Trace](/nemo-relay-cli/gateway-reference#continue-the-launcher-trace).
 5. Writes a successful, nonempty hook response to standard output without
    changing its bytes.
 
@@ -572,8 +560,12 @@ execution guardrails, these response changes apply:
 
 If an execution intercept rejects a streaming request before the first chunk,
 Relay returns the corresponding HTTP error and plugin message. Errors after
-streaming begins end the response without a successful completion marker, such
-as `[DONE]` for OpenAI Chat Completions.
+managed streaming begins emit a provider-compatible SSE error before ending the
+response: `event: error` for Anthropic Messages and OpenAI Responses, or a
+`data:` payload with an `error` object for OpenAI Chat Completions. The HTTP
+status remains 200 because Relay has already sent the response headers. Failed
+streams omit successful completion markers, such as `[DONE]` for OpenAI Chat
+Completions.
 
 The response-header timeout also includes time spent in middleware. For calls
 without streaming, it includes the wait for the full response. It does not limit

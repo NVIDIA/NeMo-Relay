@@ -77,7 +77,7 @@ export interface ResponseCacheConfig {
   tools?: ToolCacheConfig;
 }
 
-interface ResponseCachePluginConfig {
+export interface ResponseCachePluginConfig {
   ttl_seconds?: number;
   /** Required non-empty cache trust domain. */
   namespace?: string;
@@ -125,21 +125,21 @@ export interface ToolCacheConfig {
   overrides?: Record<string, ToolOverride>;
 }
 
-type ToolClassPluginConfig = Omit<ToolClass, 'ttlSeconds' | 'bypassRate' | 'toolVersion' | 'argSkip'> & {
+export type ToolClassPluginConfig = Omit<ToolClass, 'ttlSeconds' | 'bypassRate' | 'toolVersion' | 'argSkip'> & {
   ttl_seconds?: number;
   bypass_rate?: number;
   tool_version?: string;
   arg_skip?: string[];
 };
 
-type ToolOverridePluginConfig = Omit<ToolOverride, 'ttlSeconds' | 'bypassRate' | 'toolVersion' | 'argSkip'> & {
+export type ToolOverridePluginConfig = Omit<ToolOverride, 'ttlSeconds' | 'bypassRate' | 'toolVersion' | 'argSkip'> & {
   ttl_seconds?: number;
   bypass_rate?: number;
   tool_version?: string;
   arg_skip?: string[];
 };
 
-type ToolCachePluginConfig = Omit<ToolCacheConfig, 'cacheErrors' | 'default' | 'classes' | 'overrides'> & {
+export type ToolCachePluginConfig = Omit<ToolCacheConfig, 'cacheErrors' | 'default' | 'classes' | 'overrides'> & {
   cache_errors?: boolean;
   default?: ToolClassPluginConfig;
   classes?: Record<string, ToolClassPluginConfig>;
@@ -159,7 +159,7 @@ export interface Config {
   policy?: ConfigPolicy;
 }
 
-type AdaptivePluginConfig = Omit<Config, 'responseCache'> & {
+export type AdaptivePluginConfig = Omit<Config, 'responseCache'> & {
   response_cache?: ResponseCachePluginConfig;
 };
 
@@ -170,13 +170,20 @@ export interface ComponentSpec {
   config: AdaptivePluginConfig;
 }
 
+/** Prompt-cache write tokens retained for one cache duration. */
+export interface CacheWriteTokenCounts {
+  count: number;
+  /** Cache duration in seconds, omitted when the provider does not say. */
+  duration?: number;
+}
+
 /** Normalized LLM token usage for cache telemetry. */
 export interface CacheUsage {
   prompt_tokens?: number;
   completion_tokens?: number;
   total_tokens?: number;
   cache_read_tokens?: number;
-  cache_write_tokens?: number;
+  cache_write_tokens?: CacheWriteTokenCounts[];
   cost?: Json;
 }
 

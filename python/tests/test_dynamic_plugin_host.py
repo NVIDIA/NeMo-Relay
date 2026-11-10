@@ -347,6 +347,9 @@ async def test_discovered_configuration_layers_last(
     monkeypatch.chdir(tmp_path)
     monkeypatch.delenv("NEMO_RELAY_TEST_SKIP_IMPLICIT_CONFIG", raising=False)
     monkeypatch.setenv("XDG_CONFIG_HOME", str(tmp_path / "xdg"))
+    system_config = tmp_path / "system"
+    system_config.mkdir()
+    monkeypatch.setenv("NEMO_RELAY_TEST_SYSTEM_CONFIG_DIR", str(system_config))
 
     plugin.register(static_kind, cast(plugin.Plugin, FileStaticPlugin()))
     activation = None

@@ -36,14 +36,14 @@ and accepts the complete generated hook schema. Installation fails before
 changing host state when the version is too old, and `nemo-relay doctor`
 reports the required upgrade.
 
-Claude Code observability is turn-oriented. A multi-turn session can produce one
-root `claude-code-turn` span or ATIF trajectory per user turn. That is expected
-when each turn has a real prompt input and assistant output. Known startup
-probes, uncorrelatable late stop hooks, and other lifecycle-only noise are
-excluded from exported user traces so they do not appear as synthetic `null`,
-`user: test`, or `idle_timeout` turns.
-The gateway records suppressed startup probes as debug-level
-`observability_bypassed` events when debug or trace logging is enabled.
+Claude Code 2.1.273 or newer can report model request classes through gateway
+hints. Relay records `claude_code_request_class` in LLM event metadata; missing,
+disabled, invalid, repeated, and future values remain `unknown`. Internal calls
+retain managed LLM events and reported usage. For completed main turns, count
+the final `turn_prompt_observed=true` flags rather than trace roots.
+See the [Claude Code guide](https://docs.nvidia.com/nemo/relay/nemo-relay-cli/claude-code)
+for class meanings and GenAI mappings. The integration
+minimum remains 2.1.121.
 
 ## Transparent Setup
 
@@ -65,6 +65,13 @@ Relay plugin MCP authenticates, borrows, and monitors the wrapper-owned dynamic
 gateway, and its persistent hooks become no-ops for this process; only the
 temporary hook source delivers lifecycle data after authenticating that
 gateway.
+
+Relay enables gateway hints by default in wrapped launches and includes the
+setting in generated managed bundles. Wrapped launches set
+`CLAUDE_CODE_GATEWAY_HINT_HEADERS` to `"1"` only when the variable is unset.
+`nemo-relay install claude-code` and `nemo-relay integrations refresh` add `"1"`
+only when the setting is missing from Claude's user settings. Claude's saved
+settings can override a shell export.
 
 Inspect the launch without starting Claude Code:
 

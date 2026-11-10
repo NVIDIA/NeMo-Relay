@@ -49,6 +49,7 @@ from nemo_relay.integrations.google_adk._serialization import (
     object_field,
     reported_cost,
     token_counts,
+    with_cache_write_list,
     without_cache,
 )
 from nemo_relay.integrations.google_adk._swap import Methods, swap_class
@@ -162,7 +163,7 @@ def _read(response: JsonObject, recorded: JsonObject, usage_metadata: JsonObject
     if (prompt := usage.get("prompt_tokens")) is not None and (read is not None or write is not None):
         usage["uncached_input_tokens"] = without_cache(prompt, read, write, folded="the cache tokens LiteLLM reports")
     return Normalized(
-        usage=usage,
+        usage=with_cache_write_list(usage),
         cost=reported_cost(recorded, codec=_NATIVE_CODEC),
         api_specific={"api": _API},
         usage_keys=_USAGE_KEYS,

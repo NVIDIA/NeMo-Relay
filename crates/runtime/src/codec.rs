@@ -66,4 +66,18 @@ impl LlmNormalizer for RuntimeLlmNormalizer {
             .decode_response(raw)
             .ok()
     }
+
+    fn telemetry_request<'a>(
+        &self,
+        request: std::borrow::Cow<'a, nemo_relay_types::codec::request::AnnotatedLlmRequest>,
+    ) -> std::borrow::Cow<'a, nemo_relay_types::codec::request::AnnotatedLlmRequest> {
+        nemo_relay_codecs::resolve::BuiltinLlmNormalizer.telemetry_request(request)
+    }
+    fn telemetry_tool_calls(
+        &self,
+        annotation: Option<&nemo_relay_types::codec::response::AnnotatedLlmResponse>,
+        output: Option<&nemo_relay_types::Json>,
+    ) -> Option<Vec<nemo_relay_types::codec::normalization::TelemetryToolCall>> {
+        nemo_relay_codecs::resolve::BuiltinLlmNormalizer.telemetry_tool_calls(annotation, output)
+    }
 }

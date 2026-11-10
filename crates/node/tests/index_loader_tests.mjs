@@ -14,60 +14,56 @@ const indexFilename = new URL('../index.js', import.meta.url);
 const indexDir = path.dirname(indexFilename.pathname);
 const indexSource = readNodeFileSync(indexFilename, 'utf8');
 
+const PACKAGE = 'nemo-relay-node';
+const BINARY = 'nemo-relay';
+const PACKAGE_VERSION = JSON.parse(readNodeFileSync(new URL('../package.json', import.meta.url), 'utf8')).version;
+
 function loadIndexForTest({
   platform,
   arch,
-  existingFiles = [],
+  env = {},
+  config = undefined,
   providedModules = {},
-  childProcessThrows = false,
-  lddPath = '/usr/bin/ldd',
-  lddContent = 'glibc',
-  processReport = {
-    header: {
-      glibcVersionRuntime: '2.31',
-    },
-  },
+  lddFile = undefined,
+  lddCommand = undefined,
+  processReport = undefined,
+  packageVersion = PACKAGE_VERSION,
 }) {
-  const module = {
-    exports: {},
-  };
-  const existing = new Set(existingFiles);
+  const module = { exports: {} };
   const calls = [];
 
   function fakeRequire(specifier) {
     calls.push(specifier);
-
     if (specifier === 'fs') {
       return {
-        existsSync(target) {
-          return existing.has(path.basename(target));
-        },
         readFileSync(target) {
-          if (target === lddPath) {
-            return lddContent;
+          if (target === '/usr/bin/ldd' && lddFile !== undefined) {
+            return lddFile;
           }
-          throw new Error(`unexpected readFileSync target: ${target}`);
+          throw Object.assign(new Error(`ENOENT: ${target}`), { code: 'ENOENT' });
         },
       };
     }
-
-    if (specifier === 'path') {
-      return {
-        join: path.join,
-      };
-    }
-
     if (specifier === 'child_process') {
       return {
         execSync() {
-          if (childProcessThrows) {
-            throw new Error('which ldd failed');
+          if (lddCommand instanceof Error) {
+            throw lddCommand;
           }
-          return Buffer.from(lddPath);
+          if (lddCommand === undefined) {
+            throw new Error('ldd unavailable');
+          }
+          return lddCommand;
         },
       };
     }
-
+    if (specifier.endsWith('/package.json')) {
+      const owner = specifier.slice(0, -'/package.json'.length);
+      if (Object.hasOwn(providedModules, owner) && !(providedModules[owner] instanceof Error)) {
+        return { version: packageVersion };
+      }
+      throw new Error(`Cannot find module '${specifier}'`);
+    }
     if (Object.hasOwn(providedModules, specifier)) {
       const value = providedModules[specifier];
       if (value instanceof Error) {
@@ -75,20 +71,24 @@ function loadIndexForTest({
       }
       return value;
     }
-
-    throw new Error(`missing test module: ${specifier}`);
+    throw Object.assign(new Error(`Cannot find module '${specifier}'`), {
+      code: 'MODULE_NOT_FOUND',
+    });
   }
 
   const fakeProcess = {
     platform,
     arch,
-    report: processReport
-      ? {
-          getReport() {
-            return processReport;
+    env,
+    config,
+    report:
+      processReport === undefined
+        ? undefined
+        : {
+            getReport() {
+              return processReport;
+            },
           },
-        }
-      : null,
   };
 
   vm.runInNewContext(
@@ -100,504 +100,213 @@ function loadIndexForTest({
       __dirname: indexDir,
       process: fakeProcess,
     },
-    {
-      filename: indexFilename.pathname,
-    },
+    { filename: indexFilename.pathname },
   );
 
-  return {
-    exports: module.exports,
-    calls,
-  };
+  return { exports: module.exports, calls };
 }
+
+function causeMessages(error) {
+  const messages = [];
+  for (let current = error; current; current = current.cause) {
+    messages.push(String(current.message ?? current));
+  }
+  return messages;
+}
+
+function assertLoadFailure(run, ...patterns) {
+  let error;
+  try {
+    run();
+  } catch (thrown) {
+    error = thrown;
+  }
+  assert.ok(error, 'expected the loader to throw');
+  assert.match(error.message, /Cannot find native binding/);
+  const messages = causeMessages(error);
+  for (const pattern of patterns) {
+    assert.ok(
+      messages.some((message) => pattern.test(message)),
+      `expected a cause matching ${pattern}, got: ${JSON.stringify(messages)}`,
+    );
+  }
+}
+
+const TUPLES = [
+  ['android', 'arm64', 'android-arm64'],
+  ['android', 'arm', 'android-arm-eabi'],
+  ['win32', 'x64', 'win32-x64-msvc'],
+  ['win32', 'x64', 'win32-x64-gnu', { config: { variables: { shlib_suffix: 'dll.a' } } }],
+  ['win32', 'ia32', 'win32-ia32-msvc'],
+  ['win32', 'arm64', 'win32-arm64-msvc'],
+  ['darwin', 'x64', 'darwin-x64'],
+  ['darwin', 'arm64', 'darwin-arm64'],
+  ['freebsd', 'x64', 'freebsd-x64'],
+  ['freebsd', 'arm64', 'freebsd-arm64'],
+  ['freebsd', 'ppc64', 'freebsd-ppc64'],
+  ['linux', 'x64', 'linux-x64-gnu', { lddFile: 'glibc' }],
+  ['linux', 'x64', 'linux-x64-musl', { lddFile: 'musl libc' }],
+  ['linux', 'arm64', 'linux-arm64-gnu', { lddFile: 'glibc' }],
+  ['linux', 'arm64', 'linux-arm64-musl', { lddFile: 'musl libc' }],
+  ['linux', 'arm', 'linux-arm-gnueabihf', { lddFile: 'glibc' }],
+  ['linux', 'arm', 'linux-arm-musleabihf', { lddFile: 'musl libc' }],
+  ['linux', 'loong64', 'linux-loong64-gnu', { lddFile: 'glibc' }],
+  ['linux', 'loong64', 'linux-loong64-musl', { lddFile: 'musl libc' }],
+  ['linux', 'riscv64', 'linux-riscv64-gnu', { lddFile: 'glibc' }],
+  ['linux', 'riscv64', 'linux-riscv64-musl', { lddFile: 'musl libc' }],
+  ['linux', 'ppc64', 'linux-ppc64-gnu', { lddFile: 'glibc' }],
+  ['linux', 's390x', 'linux-s390x-gnu', { lddFile: 'glibc' }],
+  ['openharmony', 'arm64', 'openharmony-arm64'],
+  ['openharmony', 'x64', 'openharmony-x64'],
+  ['openharmony', 'arm', 'openharmony-arm'],
+];
 
 describe('index.js loader', () => {
   const binding = realLib;
 
-  const localCases = [
-    ['android', 'arm64', 'nemo-relay.android-arm64.node', './nemo-relay.android-arm64.node'],
-    ['android', 'arm', 'nemo-relay.android-arm-eabi.node', './nemo-relay.android-arm-eabi.node'],
-    ['win32', 'x64', 'nemo-relay.win32-x64-msvc.node', './nemo-relay.win32-x64-msvc.node'],
-    ['win32', 'ia32', 'nemo-relay.win32-ia32-msvc.node', './nemo-relay.win32-ia32-msvc.node'],
-    ['win32', 'arm64', 'nemo-relay.win32-arm64-msvc.node', './nemo-relay.win32-arm64-msvc.node'],
-    ['freebsd', 'x64', 'nemo-relay.freebsd-x64.node', './nemo-relay.freebsd-x64.node'],
-    ['linux', 'x64', 'nemo-relay.linux-x64-gnu.node', './nemo-relay.linux-x64-gnu.node'],
-    ['linux', 'arm64', 'nemo-relay.linux-arm64-gnu.node', './nemo-relay.linux-arm64-gnu.node'],
-    ['linux', 'arm', 'nemo-relay.linux-arm-gnueabihf.node', './nemo-relay.linux-arm-gnueabihf.node'],
-    ['linux', 'riscv64', 'nemo-relay.linux-riscv64-gnu.node', './nemo-relay.linux-riscv64-gnu.node'],
-    ['linux', 's390x', 'nemo-relay.linux-s390x-gnu.node', './nemo-relay.linux-s390x-gnu.node'],
-  ];
-
-  it('loads local binary branches for supported platforms', () => {
-    for (const [platformName, archName, fileName, specifier] of localCases) {
+  it('loads the local binary for every supported platform', () => {
+    for (const [platform, arch, tuple, extra = {}] of TUPLES) {
+      const specifier = `./${BINARY}.${tuple}.node`;
       const { exports, calls } = loadIndexForTest({
-        platform: platformName,
-        arch: archName,
-        existingFiles: [fileName],
-        providedModules: {
-          [specifier]: binding,
-        },
+        platform,
+        arch,
+        ...extra,
+        providedModules: { [specifier]: binding },
       });
-
-      assert.equal(exports.toolCall, binding.toolCall);
-      assert.ok(calls.includes(specifier), `${platformName}/${archName} should require ${specifier}`);
+      assert.equal(exports.toolCall, binding.toolCall, `${tuple} local binary`);
+      assert.equal(exports.__napiBindingTarget, 'native');
+      assert.ok(calls.includes(specifier), `${tuple} should require ${specifier}`);
     }
   });
 
-  it('loads package branches for supported platforms', () => {
-    const packageCases = [
-      ['android', 'arm64', 'nemo-relay-node-android-arm64'],
-      ['android', 'arm', 'nemo-relay-node-android-arm-eabi'],
-      ['win32', 'x64', 'nemo-relay-node-win32-x64-msvc'],
-      ['win32', 'ia32', 'nemo-relay-node-win32-ia32-msvc'],
-      ['win32', 'arm64', 'nemo-relay-node-win32-arm64-msvc'],
-      ['darwin', 'x64', 'nemo-relay-node-darwin-universal'],
-      ['freebsd', 'x64', 'nemo-relay-node-freebsd-x64'],
-      ['linux', 'x64', 'nemo-relay-node-linux-x64-gnu'],
-      ['linux', 'arm64', 'nemo-relay-node-linux-arm64-gnu'],
-      ['linux', 'arm', 'nemo-relay-node-linux-arm-gnueabihf'],
-      ['linux', 'riscv64', 'nemo-relay-node-linux-riscv64-gnu'],
-      ['linux', 's390x', 'nemo-relay-node-linux-s390x-gnu'],
-    ];
-
-    for (const [platformName, archName, specifier] of packageCases) {
+  it('falls back to the platform package for every supported platform', () => {
+    for (const [platform, arch, tuple, extra = {}] of TUPLES) {
+      const specifier = `${PACKAGE}-${tuple}`;
       const { exports, calls } = loadIndexForTest({
-        platform: platformName,
-        arch: archName,
-        providedModules: {
-          [specifier]: binding,
-        },
+        platform,
+        arch,
+        ...extra,
+        providedModules: { [specifier]: binding },
       });
-
-      assert.equal(exports.toolCall, binding.toolCall);
-      assert.ok(calls.includes(specifier), `${platformName}/${archName} should require ${specifier}`);
+      assert.equal(exports.toolCall, binding.toolCall, `${tuple} platform package`);
+      assert.ok(calls.includes(`./${BINARY}.${tuple}.node`), `${tuple} tries the local binary first`);
+      assert.ok(calls.includes(specifier), `${tuple} should require ${specifier}`);
     }
   });
 
-  it('covers linux musl branches using both process.report and ldd fallback', () => {
+  it('prefers the darwin universal binary and package over arch-specific ones', () => {
+    const local = loadIndexForTest({
+      platform: 'darwin',
+      arch: 'arm64',
+      providedModules: {
+        [`./${BINARY}.darwin-universal.node`]: binding,
+        [`./${BINARY}.darwin-arm64.node`]: new Error('arch-specific binary must not load'),
+      },
+    });
+    assert.equal(local.exports.toolCall, binding.toolCall);
+
+    const pkg = loadIndexForTest({
+      platform: 'darwin',
+      arch: 'x64',
+      providedModules: {
+        [`${PACKAGE}-darwin-universal`]: binding,
+        [`${PACKAGE}-darwin-x64`]: new Error('arch-specific package must not load'),
+      },
+    });
+    assert.equal(pkg.exports.toolCall, binding.toolCall);
+    assert.ok(pkg.calls.includes(`./${BINARY}.darwin-universal.node`));
+  });
+
+  it('detects musl through the ldd file, then process.report, then ldd --version', () => {
     const viaReport = loadIndexForTest({
       platform: 'linux',
       arch: 'x64',
       processReport: {
-        header: {
-          glibcVersionRuntime: null,
-        },
+        header: {},
+        sharedObjects: ['/lib/ld-musl-x86_64.so.1'],
       },
-      providedModules: {
-        'nemo-relay-node-linux-x64-musl': binding,
-      },
+      providedModules: { [`${PACKAGE}-linux-x64-musl`]: binding },
     });
     assert.equal(viaReport.exports.toolCall, binding.toolCall);
-    assert.ok(viaReport.calls.includes('nemo-relay-node-linux-x64-musl'));
 
-    const viaLdd = loadIndexForTest({
+    const glibcReport = loadIndexForTest({
+      platform: 'linux',
+      arch: 'x64',
+      processReport: { header: { glibcVersionRuntime: '2.31' } },
+      providedModules: { [`${PACKAGE}-linux-x64-gnu`]: binding },
+    });
+    assert.equal(glibcReport.exports.toolCall, binding.toolCall);
+
+    const viaCommand = loadIndexForTest({
       platform: 'linux',
       arch: 'arm64',
-      processReport: null,
-      lddContent: 'musl libc',
-      providedModules: {
-        'nemo-relay-node-linux-arm64-musl': binding,
-      },
+      lddCommand: 'musl libc (aarch64)',
+      providedModules: { [`${PACKAGE}-linux-arm64-musl`]: binding },
     });
-    assert.equal(viaLdd.exports.toolCall, binding.toolCall);
-    assert.ok(viaLdd.calls.includes('child_process'));
-    assert.ok(viaLdd.calls.includes('nemo-relay-node-linux-arm64-musl'));
+    assert.equal(viaCommand.exports.toolCall, binding.toolCall);
+    assert.ok(viaCommand.calls.includes('child_process'));
 
-    const viaLddFailure = loadIndexForTest({
+    const commandFailure = loadIndexForTest({
       platform: 'linux',
       arch: 'arm',
-      processReport: null,
-      childProcessThrows: true,
-      providedModules: {
-        'nemo-relay-node-linux-arm-musleabihf': binding,
-      },
+      lddCommand: new Error('which ldd failed'),
+      providedModules: { [`${PACKAGE}-linux-arm-gnueabihf`]: binding },
     });
-    assert.equal(viaLddFailure.exports.toolCall, binding.toolCall);
-    assert.ok(viaLddFailure.calls.includes('nemo-relay-node-linux-arm-musleabihf'));
+    assert.equal(commandFailure.exports.toolCall, binding.toolCall);
   });
 
-  it('falls back from darwin universal to arch-specific binaries', () => {
-    const universalLocal = loadIndexForTest({
-      platform: 'darwin',
-      arch: 'arm64',
-      existingFiles: ['nemo-relay.darwin-universal.node'],
-      providedModules: {
-        './nemo-relay.darwin-universal.node': binding,
-      },
-    });
-    assert.equal(universalLocal.exports.toolCall, binding.toolCall);
-    assert.ok(universalLocal.calls.includes('./nemo-relay.darwin-universal.node'));
-
-    const x64 = loadIndexForTest({
-      platform: 'darwin',
+  it('honors NAPI_RS_NATIVE_LIBRARY_PATH', () => {
+    const { exports, calls } = loadIndexForTest({
+      platform: 'linux',
       arch: 'x64',
-      existingFiles: ['nemo-relay.darwin-x64.node'],
-      providedModules: {
-        'nemo-relay-node-darwin-universal': new Error('universal missing'),
-        './nemo-relay.darwin-x64.node': binding,
-      },
+      env: { NAPI_RS_NATIVE_LIBRARY_PATH: '/opt/override.node' },
+      providedModules: { '/opt/override.node': binding },
     });
-    assert.equal(x64.exports.toolCall, binding.toolCall);
-    assert.ok(x64.calls.includes('nemo-relay-node-darwin-universal'));
-    assert.ok(x64.calls.includes('./nemo-relay.darwin-x64.node'));
-
-    const x64PackageFallback = loadIndexForTest({
-      platform: 'darwin',
-      arch: 'x64',
-      providedModules: {
-        'nemo-relay-node-darwin-universal': new Error('universal missing'),
-        'nemo-relay-node-darwin-x64': binding,
-      },
-    });
-    assert.equal(x64PackageFallback.exports.toolCall, binding.toolCall);
-    assert.ok(x64PackageFallback.calls.includes('nemo-relay-node-darwin-x64'));
-
-    const arm64 = loadIndexForTest({
-      platform: 'darwin',
-      arch: 'arm64',
-      providedModules: {
-        'nemo-relay-node-darwin-universal': new Error('universal missing'),
-        'nemo-relay-node-darwin-arm64': binding,
-      },
-    });
-    assert.equal(arm64.exports.toolCall, binding.toolCall);
-    assert.ok(arm64.calls.includes('nemo-relay-node-darwin-arm64'));
+    assert.equal(exports.toolCall, binding.toolCall);
+    assert.ok(calls.includes('/opt/override.node'));
+    assert.ok(!calls.includes(`./${BINARY}.linux-x64-gnu.node`));
   });
 
-  it('throws unsupported platform and architecture errors', () => {
-    assert.throws(
-      () =>
-        loadIndexForTest({
-          platform: 'android',
-          arch: 'x64',
-        }),
-      /Unsupported architecture on Android/,
-    );
-    assert.throws(
-      () =>
-        loadIndexForTest({
-          platform: 'win32',
-          arch: 'arm',
-        }),
-      /Unsupported architecture on Windows/,
-    );
-    assert.throws(
-      () =>
-        loadIndexForTest({
-          platform: 'darwin',
-          arch: 'ia32',
-        }),
-      /Unsupported architecture on macOS/,
-    );
-    assert.throws(
-      () =>
-        loadIndexForTest({
-          platform: 'freebsd',
-          arch: 'arm64',
-        }),
-      /Unsupported architecture on FreeBSD/,
-    );
-    assert.throws(
+  it('enforces the platform package version when asked', () => {
+    assertLoadFailure(
       () =>
         loadIndexForTest({
           platform: 'linux',
-          arch: 'ppc64',
-        }),
-      /Unsupported architecture on Linux/,
-    );
-    assert.throws(
-      () =>
-        loadIndexForTest({
-          platform: 'aix',
           arch: 'x64',
+          lddFile: 'glibc',
+          env: { NAPI_RS_ENFORCE_VERSION_CHECK: '1' },
+          packageVersion: '0.0.1',
+          providedModules: { [`${PACKAGE}-linux-x64-gnu`]: binding },
         }),
-      /Unsupported OS/,
+      new RegExp(`version mismatch, expected ${RegExp.escape(PACKAGE_VERSION)} but got 0\\.0\\.1`),
     );
   });
 
-  it('throws the captured load error when binding resolution fails', () => {
-    const failure = new Error('package missing');
-    assert.throws(
+  it('reports unsupported platforms and architectures', () => {
+    const cases = [
+      ['android', 'x64', /Unsupported architecture on Android/],
+      ['win32', 'arm', /Unsupported architecture on Windows/],
+      ['darwin', 'ia32', /Unsupported architecture on macOS/],
+      ['freebsd', 'arm', /Unsupported architecture on FreeBSD/],
+      ['linux', 'mips', /Unsupported architecture on Linux/],
+      ['openharmony', 'ia32', /Unsupported architecture on OpenHarmony/],
+      ['aix', 'x64', /Unsupported OS/],
+    ];
+    for (const [platform, arch, pattern] of cases) {
+      assertLoadFailure(() => loadIndexForTest({ platform, arch, lddFile: 'glibc' }), pattern);
+    }
+  });
+
+  it('chains every load error into the thrown error', () => {
+    assertLoadFailure(
       () =>
         loadIndexForTest({
           platform: 'freebsd',
           arch: 'x64',
-          providedModules: {
-            'nemo-relay-node-freebsd-x64': failure,
-          },
+          providedModules: { [`${PACKAGE}-freebsd-x64`]: new Error('package missing') },
         }),
       /package missing/,
-    );
-  });
-
-  it('covers remaining linux loader error branches', () => {
-    const androidArm64Failure = new Error('android arm64 package missing');
-    assert.throws(
-      () =>
-        loadIndexForTest({
-          platform: 'android',
-          arch: 'arm64',
-          providedModules: {
-            'nemo-relay-node-android-arm64': androidArm64Failure,
-          },
-        }),
-      /android arm64 package missing/,
-    );
-
-    const androidArmFailure = new Error('android arm package missing');
-    assert.throws(
-      () =>
-        loadIndexForTest({
-          platform: 'android',
-          arch: 'arm',
-          providedModules: {
-            'nemo-relay-node-android-arm-eabi': androidArmFailure,
-          },
-        }),
-      /android arm package missing/,
-    );
-
-    const win32X64Failure = new Error('win32 x64 package missing');
-    assert.throws(
-      () =>
-        loadIndexForTest({
-          platform: 'win32',
-          arch: 'x64',
-          providedModules: {
-            'nemo-relay-node-win32-x64-msvc': win32X64Failure,
-          },
-        }),
-      /win32 x64 package missing/,
-    );
-
-    const win32Ia32Failure = new Error('win32 ia32 package missing');
-    assert.throws(
-      () =>
-        loadIndexForTest({
-          platform: 'win32',
-          arch: 'ia32',
-          providedModules: {
-            'nemo-relay-node-win32-ia32-msvc': win32Ia32Failure,
-          },
-        }),
-      /win32 ia32 package missing/,
-    );
-
-    const win32Arm64Failure = new Error('win32 arm64 package missing');
-    assert.throws(
-      () =>
-        loadIndexForTest({
-          platform: 'win32',
-          arch: 'arm64',
-          providedModules: {
-            'nemo-relay-node-win32-arm64-msvc': win32Arm64Failure,
-          },
-        }),
-      /win32 arm64 package missing/,
-    );
-
-    const darwinX64LocalFailure = new Error('darwin x64 local missing');
-    assert.throws(
-      () =>
-        loadIndexForTest({
-          platform: 'darwin',
-          arch: 'x64',
-          existingFiles: ['nemo-relay.darwin-x64.node'],
-          providedModules: {
-            'nemo-relay-node-darwin-universal': new Error('universal missing'),
-            './nemo-relay.darwin-x64.node': darwinX64LocalFailure,
-          },
-        }),
-      /darwin x64 local missing/,
-    );
-
-    const darwinArm64LocalFailure = new Error('darwin arm64 local missing');
-    assert.throws(
-      () =>
-        loadIndexForTest({
-          platform: 'darwin',
-          arch: 'arm64',
-          existingFiles: ['nemo-relay.darwin-arm64.node'],
-          providedModules: {
-            'nemo-relay-node-darwin-universal': new Error('universal missing'),
-            './nemo-relay.darwin-arm64.node': darwinArm64LocalFailure,
-          },
-        }),
-      /darwin arm64 local missing/,
-    );
-
-    const x64MuslLocalFailure = new Error('x64 musl local missing');
-    assert.throws(
-      () =>
-        loadIndexForTest({
-          platform: 'linux',
-          arch: 'x64',
-          processReport: {
-            header: {
-              glibcVersionRuntime: null,
-            },
-          },
-          existingFiles: ['nemo-relay.linux-x64-musl.node'],
-          providedModules: {
-            './nemo-relay.linux-x64-musl.node': x64MuslLocalFailure,
-          },
-        }),
-      /x64 musl local missing/,
-    );
-
-    const x64GnuLocalFailure = new Error('x64 gnu local missing');
-    assert.throws(
-      () =>
-        loadIndexForTest({
-          platform: 'linux',
-          arch: 'x64',
-          existingFiles: ['nemo-relay.linux-x64-gnu.node'],
-          providedModules: {
-            './nemo-relay.linux-x64-gnu.node': x64GnuLocalFailure,
-          },
-        }),
-      /x64 gnu local missing/,
-    );
-
-    const arm64MuslLocalFailure = new Error('arm64 musl local missing');
-    assert.throws(
-      () =>
-        loadIndexForTest({
-          platform: 'linux',
-          arch: 'arm64',
-          processReport: {
-            header: {
-              glibcVersionRuntime: null,
-            },
-          },
-          existingFiles: ['nemo-relay.linux-arm64-musl.node'],
-          providedModules: {
-            './nemo-relay.linux-arm64-musl.node': arm64MuslLocalFailure,
-          },
-        }),
-      /arm64 musl local missing/,
-    );
-
-    const arm64GnuFailure = new Error('arm64 gnu package missing');
-    assert.throws(
-      () =>
-        loadIndexForTest({
-          platform: 'linux',
-          arch: 'arm64',
-          providedModules: {
-            'nemo-relay-node-linux-arm64-gnu': arm64GnuFailure,
-          },
-        }),
-      /arm64 gnu package missing/,
-    );
-
-    const armMuslLocalFailure = new Error('arm musl local missing');
-    assert.throws(
-      () =>
-        loadIndexForTest({
-          platform: 'linux',
-          arch: 'arm',
-          processReport: {
-            header: {
-              glibcVersionRuntime: null,
-            },
-          },
-          existingFiles: ['nemo-relay.linux-arm-musleabihf.node'],
-          providedModules: {
-            './nemo-relay.linux-arm-musleabihf.node': armMuslLocalFailure,
-          },
-        }),
-      /arm musl local missing/,
-    );
-
-    const armGnuFailure = new Error('arm gnu package missing');
-    assert.throws(
-      () =>
-        loadIndexForTest({
-          platform: 'linux',
-          arch: 'arm',
-          providedModules: {
-            'nemo-relay-node-linux-arm-gnueabihf': armGnuFailure,
-          },
-        }),
-      /arm gnu package missing/,
-    );
-
-    const riscvMuslLocalFailure = new Error('riscv musl local missing');
-    assert.throws(
-      () =>
-        loadIndexForTest({
-          platform: 'linux',
-          arch: 'riscv64',
-          processReport: {
-            header: {
-              glibcVersionRuntime: null,
-            },
-          },
-          existingFiles: ['nemo-relay.linux-riscv64-musl.node'],
-          providedModules: {
-            './nemo-relay.linux-riscv64-musl.node': riscvMuslLocalFailure,
-          },
-        }),
-      /riscv musl local missing/,
-    );
-
-    const riscvMuslFailure = new Error('riscv musl package missing');
-    assert.throws(
-      () =>
-        loadIndexForTest({
-          platform: 'linux',
-          arch: 'riscv64',
-          processReport: {
-            header: {
-              glibcVersionRuntime: null,
-            },
-          },
-          providedModules: {
-            'nemo-relay-node-linux-riscv64-musl': riscvMuslFailure,
-          },
-        }),
-      /riscv musl package missing/,
-    );
-
-    const riscvGnuFailure = new Error('riscv gnu package missing');
-    assert.throws(
-      () =>
-        loadIndexForTest({
-          platform: 'linux',
-          arch: 'riscv64',
-          providedModules: {
-            'nemo-relay-node-linux-riscv64-gnu': riscvGnuFailure,
-          },
-        }),
-      /riscv gnu package missing/,
-    );
-
-    const s390xFailure = new Error('s390x package missing');
-    assert.throws(
-      () =>
-        loadIndexForTest({
-          platform: 'linux',
-          arch: 's390x',
-          providedModules: {
-            'nemo-relay-node-linux-s390x-gnu': s390xFailure,
-          },
-        }),
-      /s390x package missing/,
-    );
-  });
-
-  it('throws a generic error when resolution returns no binding and no load error', () => {
-    assert.throws(
-      () =>
-        loadIndexForTest({
-          platform: 'freebsd',
-          arch: 'x64',
-          providedModules: {
-            'nemo-relay-node-freebsd-x64': null,
-          },
-        }),
-      /Failed to load native binding/,
+      new RegExp(`Cannot find module '\\./${BINARY}\\.freebsd-x64\\.node'`),
     );
   });
 });

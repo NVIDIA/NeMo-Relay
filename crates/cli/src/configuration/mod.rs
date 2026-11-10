@@ -120,10 +120,12 @@ struct FileUpstreamConfig {
     openai_auth_header: Option<String>,
     openai_api_key: Option<String>,
     openai_api_key_helper: Option<crate::upstream_auth::ApiKeyHelper>,
+    openai_oidc: Option<crate::oidc::OidcSource>,
     anthropic_base_url: Option<String>,
     anthropic_auth_header: Option<String>,
     anthropic_api_key: Option<String>,
     anthropic_api_key_helper: Option<crate::upstream_auth::ApiKeyHelper>,
+    anthropic_oidc: Option<crate::oidc::OidcSource>,
     chatgpt_codex_base_url: Option<String>,
     #[serde(flatten)]
     unknown: BTreeMap<String, toml::Value>,
@@ -461,10 +463,12 @@ fn persistent_bootstrap_fingerprint(
         "openai_auth_header": gateway.openai_auth_header,
         "openai_api_key": gateway.openai_api_key,
         "openai_api_key_helper": gateway.openai_api_key_helper,
+        "openai_oidc": gateway.openai_oidc,
         "anthropic_base_url": gateway.anthropic_base_url,
         "anthropic_auth_header": gateway.anthropic_auth_header,
         "anthropic_api_key": gateway.anthropic_api_key,
         "anthropic_api_key_helper": gateway.anthropic_api_key_helper,
+        "anthropic_oidc": gateway.anthropic_oidc,
         "chatgpt_codex_base_url": gateway.chatgpt_codex_base_url,
         "response_timeout_secs": gateway.response_timeout_secs,
         "metadata": gateway.metadata,
@@ -1531,6 +1535,7 @@ fn apply_run_url_overrides(
         if config.openai_base_url != *value {
             config.openai_api_key = None;
             config.openai_api_key_helper = None;
+            config.openai_oidc = None;
         }
         replace_upstream_base_url(
             &mut config.openai_base_url,
@@ -1546,6 +1551,7 @@ fn apply_run_url_overrides(
         if config.anthropic_base_url != *value {
             config.anthropic_api_key = None;
             config.anthropic_api_key_helper = None;
+            config.anthropic_oidc = None;
         }
         replace_upstream_base_url(
             &mut config.anthropic_base_url,
@@ -1592,6 +1598,7 @@ fn apply_server_overrides(
         if config.openai_base_url != *value {
             config.openai_api_key = None;
             config.openai_api_key_helper = None;
+            config.openai_oidc = None;
         }
         replace_upstream_base_url(
             &mut config.openai_base_url,
@@ -1607,6 +1614,7 @@ fn apply_server_overrides(
         if config.anthropic_base_url != *value {
             config.anthropic_api_key = None;
             config.anthropic_api_key_helper = None;
+            config.anthropic_oidc = None;
         }
         replace_upstream_base_url(
             &mut config.anthropic_base_url,
@@ -2019,10 +2027,12 @@ fn apply_file_upstream_config(
         openai_auth_header,
         openai_api_key,
         openai_api_key_helper,
+        openai_oidc,
         anthropic_base_url,
         anthropic_auth_header,
         anthropic_api_key,
         anthropic_api_key_helper,
+        anthropic_oidc,
         chatgpt_codex_base_url,
         unknown: _,
     } = upstream;
@@ -2036,6 +2046,7 @@ fn apply_file_upstream_config(
         if gateway.openai_base_url != value {
             gateway.openai_api_key = None;
             gateway.openai_api_key_helper = None;
+            gateway.openai_oidc = None;
         }
         gateway.openai_base_url = validate_upstream_base_url_with_hosts(
             "upstream.openai_base_url",
@@ -2054,6 +2065,7 @@ fn apply_file_upstream_config(
         if gateway.anthropic_base_url != value {
             gateway.anthropic_api_key = None;
             gateway.anthropic_api_key_helper = None;
+            gateway.anthropic_oidc = None;
         }
         gateway.anthropic_base_url = validate_upstream_base_url_with_hosts(
             "upstream.anthropic_base_url",
@@ -2079,6 +2091,9 @@ fn apply_file_upstream_config(
     if let Some(value) = openai_api_key_helper {
         gateway.openai_api_key_helper = Some(value);
     }
+    if let Some(value) = openai_oidc {
+        gateway.openai_oidc = Some(value);
+    }
     if let Some(value) = anthropic_api_key {
         gateway.anthropic_api_key = Some(crate::upstream_auth::validate_api_key(
             "upstream.anthropic_api_key",
@@ -2087,6 +2102,9 @@ fn apply_file_upstream_config(
     }
     if let Some(value) = anthropic_api_key_helper {
         gateway.anthropic_api_key_helper = Some(value);
+    }
+    if let Some(value) = anthropic_oidc {
+        gateway.anthropic_oidc = Some(value);
     }
     if let Some(value) = chatgpt_codex_base_url {
         gateway.chatgpt_codex_base_url = Some(validate_chatgpt_codex_base_url(
@@ -2377,6 +2395,7 @@ fn apply_env_config(config: &mut GatewayConfig) -> Result<(), CliError> {
         if config.openai_base_url != value {
             config.openai_api_key = None;
             config.openai_api_key_helper = None;
+            config.openai_oidc = None;
         }
         replace_upstream_base_url(
             &mut config.openai_base_url,
@@ -2392,12 +2411,13 @@ fn apply_env_config(config: &mut GatewayConfig) -> Result<(), CliError> {
         "NEMO_RELAY_OPENAI_AUTH_HEADER",
         &mut config.openai_auth_header,
         &mut config.openai_api_key,
-        config.openai_api_key_helper.is_some(),
+        config.openai_api_key_helper.is_some() || config.openai_oidc.is_some(),
     )?;
     if let Ok(value) = std::env::var("NEMO_RELAY_ANTHROPIC_BASE_URL") {
         if config.anthropic_base_url != value {
             config.anthropic_api_key = None;
             config.anthropic_api_key_helper = None;
+            config.anthropic_oidc = None;
         }
         replace_upstream_base_url(
             &mut config.anthropic_base_url,
@@ -2413,7 +2433,7 @@ fn apply_env_config(config: &mut GatewayConfig) -> Result<(), CliError> {
         "NEMO_RELAY_ANTHROPIC_AUTH_HEADER",
         &mut config.anthropic_auth_header,
         &mut config.anthropic_api_key,
-        config.anthropic_api_key_helper.is_some(),
+        config.anthropic_api_key_helper.is_some() || config.anthropic_oidc.is_some(),
     )?;
     if let Ok(value) = std::env::var("NEMO_RELAY_CHATGPT_CODEX_BASE_URL") {
         config.chatgpt_codex_base_url = Some(validate_chatgpt_codex_base_url(
@@ -2441,13 +2461,13 @@ fn apply_managed_worker_env_config(config: &mut GatewayConfig) -> Result<(), Cli
         "NEMO_RELAY_OPENAI_AUTH_HEADER",
         &mut config.openai_auth_header,
         &mut config.openai_api_key,
-        config.openai_api_key_helper.is_some(),
+        config.openai_api_key_helper.is_some() || config.openai_oidc.is_some(),
     )?;
     apply_environment_auth_header(
         "NEMO_RELAY_ANTHROPIC_AUTH_HEADER",
         &mut config.anthropic_auth_header,
         &mut config.anthropic_api_key,
-        config.anthropic_api_key_helper.is_some(),
+        config.anthropic_api_key_helper.is_some() || config.anthropic_oidc.is_some(),
     )?;
     crate::upstream_auth::validate_config(config)?;
     Ok(())
@@ -2606,6 +2626,7 @@ fn clear_credentials_for_replaced_upstreams(left: &mut toml::Value, right: &toml
                     "openai_auth_header",
                     "openai_api_key",
                     "openai_api_key_helper",
+                    "openai_oidc",
                 ],
             ),
             (
@@ -2615,6 +2636,7 @@ fn clear_credentials_for_replaced_upstreams(left: &mut toml::Value, right: &toml
                     "anthropic_auth_header",
                     "anthropic_api_key",
                     "anthropic_api_key_helper",
+                    "anthropic_oidc",
                 ],
             ),
         ] {
@@ -2628,9 +2650,11 @@ fn clear_credentials_for_replaced_upstreams(left: &mut toml::Value, right: &toml
                     )
             });
             for credential in credentials {
-                // Replace a helper as a whole command contract, even when the endpoint is unchanged.
-                let helper = credential.ends_with("_api_key_helper");
-                let clear = if helper {
+                // Replace a helper or a sign-in as a whole, even when the endpoint is unchanged:
+                // mixing one layer's issuer with another layer's client ID names no real client.
+                let whole_section =
+                    credential.ends_with("_api_key_helper") || credential.ends_with("_oidc");
+                let clear = if whole_section {
                     endpoint_changed || override_upstream.contains_key(credential)
                 } else {
                     endpoint_changed && !override_upstream.contains_key(credential)

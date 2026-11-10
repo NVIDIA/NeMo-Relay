@@ -30,8 +30,8 @@ use super::request::{
 };
 use super::resolve::{ProviderSurface, ProviderSurfaceDescriptor};
 use super::response::{
-    AnnotatedLlmResponse, ApiSpecificResponse, FinishReason, RawProviderUsageCost,
-    ResponseToolCall, Usage, provider_reported_cost,
+    AnnotatedLlmResponse, ApiSpecificResponse, CacheWriteTokenCounts, FinishReason,
+    RawProviderUsageCost, ResponseToolCall, Usage, provider_reported_cost,
 };
 use super::traits::{LlmCodec, LlmResponseCodec};
 
@@ -158,6 +158,9 @@ fn json_f64(v: f64) -> Json {
         .map(Json::Number)
         .unwrap_or(Json::Null)
 }
+
+/// Anthropic's default (five-minute) prompt-cache duration, in seconds.
+const ANTHROPIC_FIVE_MINUTE_CACHE_SECONDS: u64 = 300;
 
 /// Keys that are modeled in [`AnnotatedLlmRequest`] and should NOT go into `extra`.
 const MODELED_REQUEST_KEYS: &[&str] = &[
@@ -978,8 +981,13 @@ fn anthropic_usage(raw_usage: Option<RawAnthropicUsage>) -> Option<Usage> {
                 _ => None,
             },
             cache_read_tokens,
-            cache_write_tokens,
-            cache_write_1h_tokens,
+            // With the `cache_creation` split, Anthropic's remaining writes
+            // are the five-minute ones.
+            cache_write_tokens: CacheWriteTokenCounts::from_total_and_one_hour(
+                cache_write_tokens,
+                cache_write_1h_tokens,
+                cache_write_1h_tokens.map(|_| ANTHROPIC_FIVE_MINUTE_CACHE_SECONDS),
+            ),
             uncached_input_tokens: prompt,
             cost: provider_reported_cost(u.provider_cost, u.cost),
         }
@@ -1359,6 +1367,10 @@ struct StreamingBlock {
     has_partial_json: bool,
     citations: Vec<Json>,
     has_citations: bool,
+    thinking: String,
+    has_thinking: bool,
+    signature: String,
+    has_signature: bool,
 }
 
 impl AnthropicMessagesStreamingState {
@@ -1432,6 +1444,12 @@ impl AnthropicMessagesStreamingState {
         }
     }
 
+    /// Fold one `content_block_delta` into the block it belongs to.
+    ///
+    /// Block types that stream their payload incrementally (text, tool_use input, citations,
+    /// thinking text and its signature) accumulate here; a delta type this codec does not model
+    /// is ignored rather than erroring, so a future Anthropic addition does not break
+    /// observability.
     fn observe_content_block_delta(&mut self, event: &Json) {
         let Some(index) = event.get("index").and_then(Json::as_u64) else {
             return;
@@ -1478,8 +1496,22 @@ impl AnthropicMessagesStreamingState {
                     }
                 }
             }
-            // thinking_delta, signature_delta, and any future delta types fall through; the block
-            // skeleton retains whatever shape was set at content_block_start.
+            "thinking_delta" => {
+                if let Some(thinking) = delta.get("thinking").and_then(Json::as_str) {
+                    block.thinking.push_str(thinking);
+                    block.has_thinking = true;
+                }
+            }
+            // The signature arrives after the thinking text has streamed out and is what a
+            // later turn replays to the API, so it has to survive the same way.
+            "signature_delta" => {
+                if let Some(signature) = delta.get("signature").and_then(Json::as_str) {
+                    block.signature.push_str(signature);
+                    block.has_signature = true;
+                }
+            }
+            // Any future delta type falls through; the block skeleton retains whatever
+            // shape was set at content_block_start.
             _ => {}
         }
     }
@@ -1564,6 +1596,8 @@ impl AnthropicMessagesStreamingState {
 }
 
 impl StreamingBlock {
+    /// Emit the block: each accumulated fragment replaces the skeleton field it belongs to, and a
+    /// field that never received a delta keeps the shape set at `content_block_start`.
     fn finalize(mut self) -> Json {
         if self.has_text {
             self.skeleton
@@ -1585,6 +1619,16 @@ impl StreamingBlock {
         if self.has_citations {
             self.skeleton
                 .insert("citations".to_string(), Json::Array(self.citations));
+        }
+        // Extended thinking: the text and the signature are accumulated from deltas because
+        // content_block_start only carries an empty skeleton for these blocks.
+        if self.has_thinking {
+            self.skeleton
+                .insert("thinking".to_string(), Json::String(self.thinking));
+        }
+        if self.has_signature {
+            self.skeleton
+                .insert("signature".to_string(), Json::String(self.signature));
         }
         Json::Object(self.skeleton)
     }

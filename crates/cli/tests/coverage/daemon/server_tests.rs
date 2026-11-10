@@ -105,6 +105,23 @@ async fn forwarding_waits_for_cancellation_unless_a_deadline_is_configured() {
     }
 }
 
+/// Asserts one daemon response body against its schema in the published OpenAPI spec.
+fn assert_matches_openapi(path: &str, status: &str, body: &serde_json::Value) {
+    let spec: serde_json::Value =
+        serde_json::from_str(include_str!("../../../../../fern/apis/daemon/openapi.json")).unwrap();
+    let schema = json!({
+        "$ref": spec["paths"][path]["get"]["responses"][status]["content"]["application/json"]
+            ["schema"]["$ref"],
+        "components": spec["components"],
+    });
+    let validator = jsonschema::draft202012::new(&schema).unwrap();
+    let errors = validator
+        .iter_errors(body)
+        .map(|error| error.to_string())
+        .collect::<Vec<_>>();
+    assert!(errors.is_empty(), "{path} {status}: {errors:?}");
+}
+
 #[tokio::test]
 async fn daemon_health_is_a_public_process_probe() {
     let state = test_daemon_state(false, "", GatewayConfig::default());
@@ -119,6 +136,7 @@ async fn daemon_health_is_a_public_process_probe() {
     assert_eq!(health.headers()[CACHE_CONTROL], "no-store");
     let health: serde_json::Value =
         serde_json::from_slice(&health.into_body().collect().await.unwrap().to_bytes()).unwrap();
+    assert_matches_openapi("/healthz", "200", &health);
     assert_eq!(health["status"], "ok");
     assert_eq!(health["service"], "nemo-relay-daemon");
     assert_eq!(health["version"], env!("CARGO_PKG_VERSION"));
@@ -191,6 +209,7 @@ async fn worker_status_endpoints_list_aggregate_and_select_without_authenticatio
     let list: serde_json::Value =
         serde_json::from_slice(&response.into_body().collect().await.unwrap().to_bytes()).unwrap();
     assert_eq!(list["workers"], json!([worker_id]));
+    assert_matches_openapi("/_nemo_relay/v1/workers", "200", &list);
 
     let response = app
         .clone()
@@ -203,6 +222,7 @@ async fn worker_status_endpoints_list_aggregate_and_select_without_authenticatio
         .unwrap();
     let aggregate: serde_json::Value =
         serde_json::from_slice(&response.into_body().collect().await.unwrap().to_bytes()).unwrap();
+    assert_matches_openapi("/_nemo_relay/v1/workers/status", "200", &aggregate);
     assert_eq!(aggregate["workers"][0]["worker_id"], worker_id);
     assert_eq!(aggregate["workers"][0]["state"], "ready");
     assert_eq!(aggregate["workers"][0]["reference_count"], 1);
@@ -221,6 +241,11 @@ async fn worker_status_endpoints_list_aggregate_and_select_without_authenticatio
     assert_eq!(response.status(), StatusCode::OK);
     let individual: serde_json::Value =
         serde_json::from_slice(&response.into_body().collect().await.unwrap().to_bytes()).unwrap();
+    assert_matches_openapi(
+        "/_nemo_relay/v1/workers/{instance_uuid}/status",
+        "200",
+        &individual,
+    );
     assert_eq!(individual["worker"], aggregate["workers"][0]);
 
     let missing = app
@@ -233,6 +258,13 @@ async fn worker_status_endpoints_list_aggregate_and_select_without_authenticatio
         .unwrap();
     assert_eq!(missing.status(), StatusCode::NOT_FOUND);
     assert_eq!(missing.headers()[CACHE_CONTROL], "no-store");
+    let missing: serde_json::Value =
+        serde_json::from_slice(&missing.into_body().collect().await.unwrap().to_bytes()).unwrap();
+    assert_matches_openapi(
+        "/_nemo_relay/v1/workers/{instance_uuid}/status",
+        "404",
+        &missing,
+    );
 
     let encoded = serde_json::to_string(&aggregate).unwrap();
     assert!(!encoded.contains("status-route-token"));
@@ -4787,9 +4819,14 @@ async fn daemon_plain_listener_preserves_peer_identity_and_drains_http2_connecti
         }),
     );
     let (stop, stopped) = tokio::sync::oneshot::channel();
-    let server = tokio::spawn(serve_plain(listener, app, async {
-        let _ = stopped.await;
-    }));
+    let server = tokio::spawn(serve_plain(
+        listener,
+        app,
+        async {
+            let _ = stopped.await;
+        },
+        Duration::from_millis(DRAIN_LIFETIME_MS),
+    ));
     let client = reqwest::Client::builder()
         .http2_prior_knowledge()
         .build()
@@ -4811,6 +4848,92 @@ async fn daemon_plain_listener_preserves_peer_identity_and_drains_http2_connecti
         .expect("listener should drain admitted response")
         .unwrap()
         .unwrap();
+}
+
+/// Serves a route whose response never completes, so a connection stays in the drain.
+async fn plain_listener_with_held_request(
+    drain_limit: Duration,
+) -> (
+    SocketAddr,
+    tokio::sync::oneshot::Sender<()>,
+    tokio::task::JoinHandle<Result<(), CliError>>,
+    tokio::task::JoinHandle<()>,
+) {
+    let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+    let address = listener.local_addr().unwrap();
+    let (entered_tx, entered_rx) = tokio::sync::oneshot::channel::<()>();
+    let entered_tx = Arc::new(std::sync::Mutex::new(Some(entered_tx)));
+    let app = Router::new().route(
+        "/hold",
+        axum::routing::get(move || {
+            let entered_tx = Arc::clone(&entered_tx);
+            async move {
+                if let Some(entered) = entered_tx.lock().unwrap().take() {
+                    let _ = entered.send(());
+                }
+                std::future::pending::<()>().await;
+            }
+        }),
+    );
+    let (stop, stopped) = tokio::sync::oneshot::channel();
+    let server = tokio::spawn(serve_plain(
+        listener,
+        app,
+        async {
+            let _ = stopped.await;
+        },
+        drain_limit,
+    ));
+    let held = tokio::spawn(async move {
+        let _ = reqwest::get(format!("http://{address}/hold")).await;
+    });
+    tokio::time::timeout(Duration::from_secs(3), entered_rx)
+        .await
+        .expect("held request should reach the handler")
+        .unwrap();
+    (address, stop, server, held)
+}
+
+#[tokio::test]
+async fn serve_plain_refuses_new_connections_while_draining() {
+    let (address, stop, server, held) =
+        plain_listener_with_held_request(Duration::from_millis(DRAIN_LIFETIME_MS)).await;
+    stop.send(()).unwrap();
+    // A listener left open during the drain completes TCP handshakes it never accepts,
+    // so clients hang until their own timeout instead of failing fast.
+    // Few attempts: a flood would overflow the backlog, which refuses connections by itself.
+    let mut refused = false;
+    for _ in 0..10 {
+        tokio::time::sleep(Duration::from_millis(50)).await;
+        if tokio::net::TcpStream::connect(address).await.is_err() {
+            refused = true;
+            break;
+        }
+    }
+    assert!(
+        refused,
+        "new connections should be refused once shutdown starts"
+    );
+    server.abort();
+    held.abort();
+}
+
+#[tokio::test]
+async fn serve_plain_drain_stops_at_limit() {
+    let (_address, stop, server, held) =
+        plain_listener_with_held_request(Duration::from_millis(200)).await;
+    let started = std::time::Instant::now();
+    stop.send(()).unwrap();
+    tokio::time::timeout(Duration::from_secs(3), server)
+        .await
+        .expect("drain should stop at its limit while a response is still open")
+        .unwrap()
+        .unwrap();
+    assert!(
+        started.elapsed() >= Duration::from_millis(150),
+        "drain should wait for the open response until the limit"
+    );
+    held.abort();
 }
 
 #[tokio::test]
@@ -5396,6 +5519,14 @@ async fn worker_stream_application_errors_preserve_the_route_and_next_request() 
             let body = String::from_utf8_lossy(&bytes);
             if after_first {
                 assert!(body.contains("broker-stream-denial"));
+                let error: serde_json::Value = serde_json::from_str(
+                    body.lines()
+                        .filter_map(|line| line.strip_prefix("data: "))
+                        .next_back()
+                        .unwrap(),
+                )
+                .unwrap();
+                assert_eq!(error["error"]["code"], "stream_error");
                 assert!(!body.contains("[DONE]"));
             } else {
                 assert!(body.contains("denied by worker middleware"));

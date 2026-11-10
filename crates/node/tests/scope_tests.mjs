@@ -353,7 +353,7 @@ describe('withScope', () => {
         withScope('primitive_reject_test', ScopeType.Tool, async () => {
           return rejectWithPrimitive(123);
         }),
-      /internal error: 123/i,
+      (value) => value === 123,
     );
     const after = getHandle();
     assert.equal(after.uuid, before.uuid, 'scope should be popped after primitive rejection');

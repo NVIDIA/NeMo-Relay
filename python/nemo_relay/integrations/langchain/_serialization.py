@@ -63,6 +63,13 @@ def get_model_name(model: Any) -> str | None:
     return None
 
 
+def _request_content(request: LLMRequest) -> JsonObject:
+    content = request.content
+    if not isinstance(content, dict):
+        raise TypeError("LangChain request content must be an object")
+    return content
+
+
 class LangChainCodec(LlmCodec):
     """Translate LangChain ``ModelRequest`` payloads for request intercepts."""
 
@@ -249,7 +256,7 @@ class LangChainCodec(LlmCodec):
     @classmethod
     def _original_messages(cls, original: LLMRequest) -> list[tuple[dict[str, Any], BaseMessage]]:
         """Return original LangChain messages with their annotated representations."""
-        raw_messages = original.content.get("messages")
+        raw_messages = _request_content(original).get("messages")
         if not isinstance(raw_messages, list):
             return []
 
@@ -307,7 +314,7 @@ class LangChainCodec(LlmCodec):
     @classmethod
     def _original_provider_tool_calls(cls, original: LLMRequest) -> list[tuple[dict[str, Any], list[dict[str, Any]]]]:
         """Return assistant messages associated with their provider tool calls."""
-        raw_messages = original.content.get("messages")
+        raw_messages = _request_content(original).get("messages")
         if not isinstance(raw_messages, list):
             return []
 
@@ -349,7 +356,7 @@ class LangChainCodec(LlmCodec):
 
     def decode(self, request: LLMRequest) -> AnnotatedLLMRequest:
         """Decode a LangChain-shaped request payload into an annotated request."""
-        payload = request.content
+        payload = _request_content(request)
         raw_messages = payload.get("messages", [])
         messages: list[dict[str, Any]] = []
         if isinstance(raw_messages, list):
@@ -373,7 +380,7 @@ class LangChainCodec(LlmCodec):
 
     def encode(self, annotated: AnnotatedLLMRequest, original: LLMRequest) -> LLMRequest:
         """Encode annotated request edits back into a LangChain-shaped payload."""
-        payload = dict(original.content)
+        payload = dict(_request_content(original))
         payload.update(annotated.extra)
         messages = annotated.messages
         original_messages = self._original_messages(original)
@@ -628,8 +635,9 @@ def payload_to_model_request(
 ) -> ModelRequest[Any]:
     """Apply supported NeMo Relay request-intercept edits back to ``ModelRequest``."""
     overrides: dict[str, Any] = {}
+    payload = _request_content(llm_request)
 
-    raw_messages = llm_request.content.get("messages")
+    raw_messages = payload.get("messages")
     if isinstance(raw_messages, list) and len(raw_messages) > 0:
         try:
             system_message, messages = split_system_message(_langchain_messages(raw_messages))
@@ -638,7 +646,7 @@ def payload_to_model_request(
         except Exception:
             pass
 
-    model_settings = llm_request.content.get("model_settings")
+    model_settings = payload.get("model_settings")
     if isinstance(model_settings, dict):
         # Using dict() to ensure we have a copy
         model_settings_copy = dict(model_settings)
@@ -659,11 +667,11 @@ def payload_to_model_request(
         # Other providers get no Relay headers: their SDKs reject unknown request fields,
         # and failing the model call is worse than dropping observability headers.
 
-    if "tool_choice" in llm_request.content:
-        overrides["tool_choice"] = llm_request.content["tool_choice"]
+    if "tool_choice" in payload:
+        overrides["tool_choice"] = payload["tool_choice"]
 
-    if "tools" in llm_request.content:
-        tool_schemas = llm_request.content["tools"]
+    if "tools" in payload:
+        tool_schemas = payload["tools"]
         if not isinstance(tool_schemas, list) or not _are_objects(tool_schemas):
             raise ValueError("LangChain model request tools must be a list of tool schema objects")
         if tool_schemas != _model_tool_schemas(original.tools):

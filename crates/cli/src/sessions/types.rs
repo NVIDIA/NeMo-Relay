@@ -45,7 +45,8 @@ pub(crate) struct GatewayCallPrep {
     pub(crate) metadata: Value,
     pub(crate) model_name: Option<String>,
     pub(crate) owner_subagent_id: Option<String>,
-    pub(crate) bypass_managed_pipeline: bool,
+    /// False for internal calls whose responses must not alter conversation output or hints.
+    pub(crate) record_task_response: bool,
     pub(crate) session_finish: GatewaySessionFinish,
 }
 

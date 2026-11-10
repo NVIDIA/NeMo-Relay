@@ -28,8 +28,8 @@ fn resolver_with_rates(baseline_input: f64, effective_input: f64) -> PricingReso
         &json!({
             "version": 1,
             "entries": [
-                {"provider":"test","model_id":"baseline","pricing_as_of":"2026-07-08","pricing_source":"test-snapshot","rates":{"input_per_million":baseline_input,"output_per_million":4.0,"cache_read_per_million":0.5,"cache_write_per_million":3.0},"prompt_cache":{"read_accounting":"included_in_prompt_tokens"}},
-                {"provider":"test","model_id":"effective","pricing_as_of":"2026-07-08","pricing_source":"test-snapshot","rates":{"input_per_million":effective_input,"output_per_million":2.0,"cache_read_per_million":0.25,"cache_write_per_million":2.0},"prompt_cache":{"read_accounting":"included_in_prompt_tokens"}}
+                {"provider":"test","model_id":"baseline","pricing_as_of":"2026-07-08","pricing_source":"test-snapshot","rates":{"input_per_million":baseline_input,"output_per_million":4.0,"cache_read_per_million":0.5,"cache_write_rates":[{"per_million":3.0}]},"prompt_cache":{"read_accounting":"included_in_prompt_tokens"}},
+                {"provider":"test","model_id":"effective","pricing_as_of":"2026-07-08","pricing_source":"test-snapshot","rates":{"input_per_million":effective_input,"output_per_million":2.0,"cache_read_per_million":0.25,"cache_write_rates":[{"per_million":2.0}]},"prompt_cache":{"read_accounting":"included_in_prompt_tokens"}}
             ]
         })
         .to_string(),
@@ -299,7 +299,10 @@ fn multiple_contributions_and_cache_savings_aggregate_explicitly() {
             completion_tokens: Some(10),
             total_tokens: Some(110),
             cache_read_tokens: Some(20),
-            cache_write_tokens: Some(3),
+            cache_write_tokens: Some(vec![CacheWriteTokenCounts {
+                count: 3,
+                duration: None,
+            }]),
             uncached_input_tokens: None,
             ..Usage::default()
         }),
@@ -315,7 +318,7 @@ fn multiple_contributions_and_cache_savings_aggregate_explicitly() {
         Some(40)
     );
     assert_eq!(
-        summary.baseline_usage.as_ref().unwrap().cache_write_tokens,
+        summary.baseline_usage.as_ref().unwrap().cache_write_total(),
         Some(20)
     );
     assert_eq!(summary.contributions[0].sequence, Some(0));
@@ -1487,7 +1490,10 @@ fn missing_model_pricing_rate_makes_the_summary_partial() {
             prompt_tokens: Some(800),
             completion_tokens: Some(100),
             total_tokens: Some(900),
-            cache_write_tokens: Some(3),
+            cache_write_tokens: Some(vec![CacheWriteTokenCounts {
+                count: 3,
+                duration: None,
+            }]),
             uncached_input_tokens: None,
             ..Usage::default()
         }),

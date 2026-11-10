@@ -353,7 +353,7 @@ pub(crate) fn push_embedding_request_attributes(
 }
 
 pub(crate) fn push_llm_request_attributes(attributes: &mut Vec<KeyValue>, event: &EventView<'_>) {
-    let Some(request) = event.normalized_llm_request() else {
+    let Some(request) = event.telemetry_llm_request() else {
         push_model_attribute(attributes, event);
         return;
     };
@@ -507,7 +507,7 @@ pub(crate) fn push_llm_response_attributes(attributes: &mut Vec<KeyValue>, event
                 value,
             ));
         }
-        if let Some(value) = usage.cache_write_tokens.and_then(to_i64) {
+        if let Some(value) = usage.cache_write_total().and_then(to_i64) {
             attributes.push(KeyValue::new(GEN_AI_USAGE_CACHE_WRITE_INPUT_TOKENS, value));
         }
     }

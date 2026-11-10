@@ -13,7 +13,6 @@ impl Stream for CancelDuringPoll {
     type Item = FlowResult<Json>;
 
     fn poll_next(mut self: Pin<&mut Self>, _cx: &mut Context<'_>) -> Poll<Option<Self::Item>> {
-        // The select has already polled cancellation when it calls into the stream.
         if let Some(cancel) = self.cancel.take() {
             cancel.send_replace(true);
         }
@@ -75,7 +74,7 @@ fn forwarding_preserves_errors_when_cancel_arrives_during_a_poll() {
                 } else {
                     "cleanup boom"
                 };
-                assert_eq!(outcome, format!("internal error: {expected}"));
+                assert_eq!(outcome.to_string(), format!("internal error: {expected}"));
             }
         }
     });

@@ -121,7 +121,7 @@ Each catalog entry declares:
 - `aliases` for dated or provider-specific model IDs.
 - `currency`, defaulting to `USD`.
 - `unit`, defaulting to `per_token`. Relay estimates only `per_token` entries in this version. `per_request`, `per_second`, and `gpu_hour` are representable for future source integrations but are not estimated.
-- `rates` per one million input, output, cache-read, and cache-write tokens for flat `per_token` entries.
+- `rates` per one million input, output, cache-read, and cache-write tokens, with cache-write rates per cache duration, for flat `per_token` entries.
 - `rate_schedule` for data-driven threshold-based model pricing, such as models whose full-request input/output rates change after a prompt-token threshold.
 - `prompt_cache.read_accounting` to tell Relay whether prompt tokens include cache-read tokens. Relay ignores it for usage with `uncached_input_tokens`.
 - `pricing_as_of` and `pricing_source` for auditability.
@@ -372,7 +372,7 @@ Relay does not model are dropped.
 | `completion_tokens` | Output/completion tokens, passed through unmodified. For OpenAI Responses this is the provider's `output_tokens` (which per OpenAI already includes any reasoning tokens); the reasoning count is reported separately under `api_specific` and is not added on top. |
 | `total_tokens` | Provider-reported, or computed as `prompt + completion` by some codecs (such as Anthropic) when the provider omits it. |
 | `cache_read_tokens` | Prompt-cache read tokens, when the provider reports prompt caching. |
-| `cache_write_tokens` | Prompt-cache write tokens (Anthropic-style providers). |
+| `cache_write_tokens` | Prompt-cache write tokens as a list of `{count, duration}`, one entry per cache duration in seconds. `duration` is omitted when the provider does not say. |
 | `uncached_input_tokens` | Input tokens without cache reads or cache writes. When present, pricing bills this count at the input rate. |
 | `cost` | Normalized `CostEstimate`, when reported by the provider or estimable from configured pricing. |
 
@@ -384,7 +384,7 @@ Built-in codecs normalize provider field names as follows:
 | `completion_tokens` | `completion_tokens` | `output_tokens` | `output_tokens` | `completionTokens` | `candidatesTokenCount` |
 | `total_tokens` | `total_tokens` | `total_tokens` | computed | `totalTokens` | `totalTokenCount`, or computed as prompt + candidates + tool-use prompt + thinking |
 | `cache_read_tokens` | `prompt_tokens_details.cached_tokens` | `input_tokens_details.cached_tokens` | `cache_read_input_tokens` | `promptTokensDetails.cachedTokens` | `cachedContentTokenCount` |
-| `cache_write_tokens` | — | — | `cache_creation_input_tokens` | — | — |
+| `cache_write_tokens` | — | — | `cache_creation_input_tokens`, split into 300 and 3600 second entries by `cache_creation.ephemeral_1h_input_tokens` when present | — | — |
 | `uncached_input_tokens` | `prompt_tokens - prompt_tokens_details.cached_tokens`, when both are reported | `input_tokens - input_tokens_details.cached_tokens`, when both are reported | `input_tokens` | `promptTokens - promptTokensDetails.cachedTokens`, when both are reported | `promptTokenCount - cachedContentTokenCount`, when both are reported |
 | `cost` | `cost_usd`, structured `cost`, or scalar `cost` (OpenRouter; USD provider-reported total) | `cost_usd`, structured `cost`, or scalar `cost` (USD provider-reported total) | `cost_usd`, structured `cost`, or scalar `cost` (USD provider-reported total) | — | — |
 
@@ -491,9 +491,12 @@ from nemo_relay import LLMRequest
 from nemo_relay.codecs import OpenAIChatCodec
 
 async def invoke_provider(request: LLMRequest) -> dict[str, object]:
+    content = request.content
+    if not isinstance(content, dict):
+        raise TypeError("Provider request content must be an object")
     return {
         "id": "chatcmpl-demo",
-        "model": request.content["model"],
+        "model": content["model"],
         "choices": [
             {
                 "finish_reason": "stop",
@@ -524,17 +527,20 @@ const codec = new OpenAIChatCodec();
 const response = await typedLlmExecute(
   'openai-chat',
   { headers: {}, content: { model: 'gpt-4o-mini', messages: [] } },
-  async (request) => ({
-    id: 'chatcmpl-demo',
-    model: request.content.model,
-    choices: [
-      {
-        finish_reason: 'stop',
-        message: { role: 'assistant', content: 'Hello from the provider.' },
-      },
-    ],
-    usage: { prompt_tokens: 8, completion_tokens: 5, total_tokens: 13 },
-  }),
+  async (providerRequest) => {
+    const content = providerRequest.content as { model: string };
+    return {
+      id: 'chatcmpl-demo',
+      model: content.model,
+      choices: [
+        {
+          finish_reason: 'stop',
+          message: { role: 'assistant', content: 'Hello from the provider.' },
+        },
+      ],
+      usage: { prompt_tokens: 8, completion_tokens: 5, total_tokens: 13 },
+    };
+  },
   new JsonPassthrough(),
   {
     modelName: 'gpt-4o-mini',
@@ -616,18 +622,26 @@ nemo_relay.subscribers.register("response-debugger", on_event)
 
 <Tab title="Node.js" language="node">
 ```ts
-import { registerSubscriber } from 'nemo-relay-node';
+import { registerSubscriber, type JsonObject, type JsonValue } from 'nemo-relay-node';
+
+const isJsonObject = (value: JsonValue | undefined): value is JsonObject =>
+  typeof value === 'object' && value !== null && !Array.isArray(value);
 
 registerSubscriber('response-debugger', (event) => {
-  const annotated = event.category_profile?.annotated_response;
-  if (!annotated) {
+  const profile = event.category_profile;
+  if (!isJsonObject(profile)) {
+    return;
+  }
+  const annotated = profile.annotated_response;
+  if (!isJsonObject(annotated)) {
     return;
   }
 
   console.log('model', annotated.model);
   console.log('message', annotated.message);
   console.log('usage', annotated.usage);
-  console.log('cost', annotated.usage?.cost);
+  const usage = annotated.usage;
+  console.log('cost', isJsonObject(usage) ? usage.cost : null);
 });
 ```
 </Tab>

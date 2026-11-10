@@ -106,10 +106,11 @@ jobs:
         with:
           cache: false
           toolchain: ${{ steps.ci-config.outputs.rust_version }}
+          components: llvm-tools
 
       - uses: Swatinem/rust-cache@c19371144df3bb44fab255c43d04cbc2ab54d1c4 # v2.9.1
         with:
-          shared-key: nemo-relay-rust-${{ matrix.platform }}-${{ steps.ci-config.outputs.rust_version }}-debug
+          shared-key: nemo-relay-rust-${{ matrix.platform }}-${{ steps.ci-config.outputs.rust_version }}-python-debug
           workspaces: . -> target
           cache-all-crates: true
           cache-bin: false
@@ -123,6 +124,7 @@ jobs:
         with:
           version: ${{ steps.ci-config.outputs.uv_version }}
           enable-cache: true
+          save-cache: ${{ github.ref == 'refs/heads/main' }}
           cache-dependency-glob: ${{ env.NEMO_RELAY_CI_WORKSPACE }}/uv.lock
 
       - name: Set up Python
@@ -152,21 +154,33 @@ jobs:
         run: just --set ci true --set output_dir "${{ github.workspace }}" test-python-google-adk
 
       - name: Upload Python coverage to Codecov
-        uses: codecov/codecov-action@e53489f4d376d79066609109e7a95a29eb3740b1 # v7.0.0
+        id: codecov-upload
+        continue-on-error: true
+        uses: codecov/codecov-action@fb8b3582c8e4def4969c97caa2f19720cb33a72f # v7.0.0
         with:
           token: ${{ secrets.CODECOV_TOKEN }}
           disable_search: true
           files: >-
             ${{ matrix.platform == 'windows-arm64' && 'python-coverage.xml'
-                || inputs.run_integration_google_adk && 'python-coverage.xml,python-rust.xml,python-google-adk-coverage.xml'
-                || 'python-coverage.xml,python-rust.xml' }}
+                || inputs.run_integration_google_adk && 'python-coverage.xml,python-rust.lcov,python-google-adk-coverage.xml'
+                || 'python-coverage.xml,python-rust.lcov' }}
           flags: python-${{ matrix.platform }}
           name: python-${{ matrix.platform }}
           verbose: true
+          fail_ci_if_error: true
 
-      - name: Prune uv cache
-        working-directory: ${{ env.NEMO_RELAY_CI_WORKSPACE }}
-        run: uv cache prune --ci
+      - name: Record the failed Codecov upload
+        if: ${{ steps.codecov-upload.outcome == 'failure' }}
+        env:
+          MARKER: codecov-upload-failed-python-${{ matrix.platform }}
+        run: printf '%s\n' "$MARKER" > "$MARKER"
+
+      - name: Keep the failed Codecov upload marker
+        if: ${{ steps.codecov-upload.outcome == 'failure' }}
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: codecov-upload-failed-python-${{ matrix.platform }}
+          path: codecov-upload-failed-python-${{ matrix.platform }}
 
   Package:
     name: Package (${{ matrix.platform }})
@@ -236,7 +250,7 @@ jobs:
       - uses: Swatinem/rust-cache@c19371144df3bb44fab255c43d04cbc2ab54d1c4 # v2.9.1
         if: ${{ !contains(matrix.platform, 'musl') }}
         with:
-          shared-key: nemo-relay-rust-${{ matrix.platform }}-${{ steps.ci-config.outputs.rust_version }}-release
+          shared-key: nemo-relay-rust-${{ matrix.platform }}-${{ steps.ci-config.outputs.rust_version }}-python-release
           workspaces: . -> target
           cache-all-crates: true
           cache-bin: false
@@ -247,6 +261,7 @@ jobs:
         with:
           version: ${{ steps.ci-config.outputs.uv_version }}
           enable-cache: true
+          save-cache: ${{ github.ref == 'refs/heads/main' }}
           cache-dependency-glob: ${{ env.NEMO_RELAY_CI_WORKSPACE }}/uv.lock
 
       - name: Set up Python
@@ -336,11 +351,6 @@ jobs:
           name: plugin-wheel
           path: ${{ env.NEMO_RELAY_CI_WORKSPACE_TMP }}/plugin-wheels/*.whl
           if-no-files-found: error
-
-      - name: Prune uv cache
-        if: ${{ !contains(matrix.platform, 'musl') }}
-        working-directory: ${{ env.NEMO_RELAY_CI_WORKSPACE }}
-        run: uv cache prune --ci
 
       - name: Derive Maturin version
         if: ${{ contains(matrix.platform, 'musl') }}
@@ -485,7 +495,7 @@ jobs:
       - uses: Swatinem/rust-cache@c19371144df3bb44fab255c43d04cbc2ab54d1c4 # v2.9.1
         if: ${{ matrix.platform == 'source-and-plugin' }}
         with:
-          shared-key: nemo-relay-rust-linux-amd64-${{ steps.ci-config.outputs.rust_version }}-release
+          shared-key: nemo-relay-rust-linux-amd64-${{ steps.ci-config.outputs.rust_version }}-python-release
           workspaces: . -> target
           cache-all-crates: true
           cache-bin: false
@@ -495,6 +505,7 @@ jobs:
         if: ${{ !contains(matrix.platform, 'musl') }}
         with:
           version: ${{ steps.ci-config.outputs.uv_version }}
+          enable-cache: false
 
       - name: Set up Python
         if: ${{ !contains(matrix.platform, 'musl') }}

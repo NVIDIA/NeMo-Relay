@@ -25,6 +25,24 @@ use std::collections::HashSet;
 use std::sync::Arc;
 
 #[test]
+fn detached_atif_keeps_valid_calls_around_malformed_entries() {
+    let calls = extract_tool_calls(&json!({"tool_calls": [
+        {"id": "call-1", "name": "first", "arguments": {}, "provider_data": {"status": "ok"}},
+        null,
+        {"name": "later", "arguments": {"q": "two"}}
+    ]}))
+    .expect("valid calls survive without a runtime host");
+    assert_eq!(calls.len(), 2);
+    assert_eq!(calls[0].tool_call_id, "call-1");
+    assert_eq!(
+        calls[0].extra.as_ref().unwrap()["provider_data"]["status"],
+        "ok"
+    );
+    assert_eq!(calls[1].tool_call_id, "later:3");
+    assert_eq!(calls[1].arguments, json!({"q": "two"}));
+}
+
+#[test]
 fn test_exporter_empty() {
     let exporter = AtifExporter::new("session-1".to_string(), make_agent_info())
         .with_host(crate::test_support::detached_host());
@@ -554,7 +572,6 @@ fn test_exporter_prefers_effective_response_model_over_requested_profile_model()
                 total_tokens: Some(10),
                 cache_read_tokens: None,
                 cache_write_tokens: None,
-                cache_write_1h_tokens: None,
                 uncached_input_tokens: None,
                 cost: None,
             },
@@ -1105,7 +1122,6 @@ fn test_exporter_prefers_annotated_usage_over_raw_usage_conflicts() {
                 total_tokens: Some(46),
                 cache_read_tokens: Some(5),
                 cache_write_tokens: None,
-                cache_write_1h_tokens: None,
                 uncached_input_tokens: None,
                 cost: Some(provider_reported_cost(0.42, "USD", "annotated-model")),
             },
@@ -1135,7 +1151,6 @@ fn test_extract_metrics_does_not_mix_raw_cost_when_annotated_cost_is_non_usd() {
             total_tokens: Some(46),
             cache_read_tokens: None,
             cache_write_tokens: None,
-            cache_write_1h_tokens: None,
             uncached_input_tokens: None,
             cost: Some(provider_reported_cost(0.42, "EUR", "annotated-model")),
         },

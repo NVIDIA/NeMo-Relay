@@ -1,0 +1,354 @@
+{
+  "openapi": "3.1.0",
+  "info": {
+    "title": "NeMo Relay Daemon",
+    "description": "Relay-owned HTTP routes served by `nemo-relay daemon`.",
+    "version": "1.0.0"
+  },
+  "servers": [
+    {
+      "url": "http://127.0.0.1:47632",
+      "description": "Local daemon on the default port"
+    }
+  ],
+  "paths": {
+    "/healthz": {
+      "get": {
+        "operationId": "getDaemonHealth",
+        "summary": "Check daemon health",
+        "responses": {
+          "200": {
+            "description": "The daemon is accepting requests.",
+            "headers": {
+              "Cache-Control": {
+                "$ref": "#/components/headers/NoStore"
+              }
+            },
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/DaemonHealth"
+                },
+                "example": {
+                  "status": "ok",
+                  "service": "nemo-relay-daemon",
+                  "version": "1.0.0",
+                  "instance_id": "01a0caf5-7b26-7e82-a808-8f29eaf15db1",
+                  "deployment_mode": "managed"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/_nemo_relay/v1/workers": {
+      "get": {
+        "operationId": "listWorkerIds",
+        "summary": "List assigned worker IDs",
+        "responses": {
+          "200": {
+            "description": "Sorted worker UUIDs. Empty when no route has an assigned worker.",
+            "headers": {
+              "Cache-Control": {
+                "$ref": "#/components/headers/NoStore"
+              }
+            },
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/WorkerIdList"
+                },
+                "example": {
+                  "status": "ok",
+                  "instance_id": "01a0caf5-7b26-7e82-a808-8f29eaf15db1",
+                  "workers": [
+                    "01a0caf5-b33f-7280-a916-7e15bbd574fa"
+                  ]
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/_nemo_relay/v1/workers/status": {
+      "get": {
+        "operationId": "listWorkerStatuses",
+        "summary": "List assigned worker statuses",
+        "responses": {
+          "200": {
+            "description": "Sorted status objects. Empty when no route has an assigned worker.",
+            "headers": {
+              "Cache-Control": {
+                "$ref": "#/components/headers/NoStore"
+              }
+            },
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/WorkerStatusList"
+                },
+                "example": {
+                  "status": "ok",
+                  "instance_id": "01a0caf5-7b26-7e82-a808-8f29eaf15db1",
+                  "workers": [
+                    {
+                      "worker_id": "01a0caf5-b33f-7280-a916-7e15bbd574fa",
+                      "state": "ready",
+                      "reference_count": 1,
+                      "control_available": true,
+                      "in_flight": 0
+                    }
+                  ]
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/_nemo_relay/v1/workers/{instance_uuid}/status": {
+      "get": {
+        "operationId": "getWorkerStatus",
+        "summary": "Get one assigned worker's status",
+        "parameters": [
+          {
+            "name": "instance_uuid",
+            "in": "path",
+            "required": true,
+            "description": "Worker UUID from the worker list.",
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "The assigned worker's status.",
+            "headers": {
+              "Cache-Control": {
+                "$ref": "#/components/headers/NoStore"
+              }
+            },
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/WorkerStatusResponse"
+                },
+                "example": {
+                  "status": "ok",
+                  "instance_id": "01a0caf5-7b26-7e82-a808-8f29eaf15db1",
+                  "worker": {
+                    "worker_id": "01a0caf5-b33f-7280-a916-7e15bbd574fa",
+                    "state": "ready",
+                    "reference_count": 1,
+                    "control_available": true,
+                    "in_flight": 0
+                  }
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "No assigned worker has this UUID.",
+            "headers": {
+              "Cache-Control": {
+                "$ref": "#/components/headers/NoStore"
+              }
+            },
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                },
+                "example": {
+                  "error": {
+                    "message": "worker not found"
+                  }
+                }
+              }
+            }
+          }
+        }
+      }
+    }
+  },
+  "components": {
+    "headers": {
+      "NoStore": {
+        "description": "Always `no-store`.",
+        "schema": {
+          "type": "string",
+          "const": "no-store"
+        }
+      }
+    },
+    "schemas": {
+      "DaemonHealth": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": [
+          "status",
+          "service",
+          "version",
+          "instance_id",
+          "deployment_mode"
+        ],
+        "properties": {
+          "status": {
+            "type": "string",
+            "const": "ok"
+          },
+          "service": {
+            "type": "string",
+            "const": "nemo-relay-daemon"
+          },
+          "version": {
+            "type": "string"
+          },
+          "instance_id": {
+            "type": "string"
+          },
+          "deployment_mode": {
+            "type": "string",
+            "enum": [
+              "managed",
+              "pass_through"
+            ],
+            "description": "The daemon's global startup mode."
+          }
+        }
+      },
+      "WorkerIdList": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": [
+          "status",
+          "instance_id",
+          "workers"
+        ],
+        "properties": {
+          "status": {
+            "type": "string",
+            "const": "ok"
+          },
+          "instance_id": {
+            "type": "string"
+          },
+          "workers": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            }
+          }
+        }
+      },
+      "WorkerStatus": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": [
+          "worker_id",
+          "state",
+          "reference_count",
+          "control_available",
+          "in_flight"
+        ],
+        "properties": {
+          "worker_id": {
+            "type": "string"
+          },
+          "state": {
+            "type": "string",
+            "enum": [
+              "ready",
+              "draining",
+              "recovering"
+            ],
+            "description": "The broker's lifecycle state for the worker assignment."
+          },
+          "reference_count": {
+            "type": "integer",
+            "minimum": 0,
+            "description": "MCP sessions retaining the route."
+          },
+          "control_available": {
+            "type": "boolean",
+            "description": "The broker's last-known control-channel state. Not an active probe."
+          },
+          "in_flight": {
+            "type": "integer",
+            "minimum": 0,
+            "description": "Requests accepted by the broker and not yet released."
+          }
+        }
+      },
+      "WorkerStatusList": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": [
+          "status",
+          "instance_id",
+          "workers"
+        ],
+        "properties": {
+          "status": {
+            "type": "string",
+            "const": "ok"
+          },
+          "instance_id": {
+            "type": "string"
+          },
+          "workers": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/WorkerStatus"
+            }
+          }
+        }
+      },
+      "WorkerStatusResponse": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": [
+          "status",
+          "instance_id",
+          "worker"
+        ],
+        "properties": {
+          "status": {
+            "type": "string",
+            "const": "ok"
+          },
+          "instance_id": {
+            "type": "string"
+          },
+          "worker": {
+            "$ref": "#/components/schemas/WorkerStatus"
+          }
+        }
+      },
+      "ErrorResponse": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": [
+          "error"
+        ],
+        "properties": {
+          "error": {
+            "type": "object",
+            "additionalProperties": false,
+            "required": [
+              "message"
+            ],
+            "properties": {
+              "message": {
+                "type": "string"
+              }
+            }
+          }
+        }
+      }
+    }
+  }
+}

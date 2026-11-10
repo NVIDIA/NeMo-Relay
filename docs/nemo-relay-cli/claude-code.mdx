@@ -1,6 +1,6 @@
 ---
 title: "Claude Code"
-description: ""
+description: "Launch Claude Code, configure routing and exporters, and verify captured sessions."
 position: 4
 ---
 {/* SPDX-FileCopyrightText: Copyright (c) 2026, NVIDIA CORPORATION & AFFILIATES. All rights reserved.
@@ -17,6 +17,9 @@ using forward-slash executable and configuration paths. After upgrading Relay,
 run `nemo-relay integrations refresh` to regenerate persistently installed hooks.
 
 ## Transparent Run
+
+For shared run options and argument forwarding, refer to
+[Command Reference](/nemo-relay-cli/command-reference#run-syntax).
 
 Use the wrapper for no-install local observability:
 
@@ -37,6 +40,16 @@ Because Claude Code gives its first `--settings` source precedence over the
 process environment, Relay also creates a private settings overlay that
 preserves that source and overrides only `ANTHROPIC_BASE_URL` for the launched
 process. The source settings and installed plugin enablement remain unchanged.
+The wrapper also defaults `CLAUDE_CODE_GATEWAY_HINT_HEADERS` to `1` in the
+launched process when no value is inherited. Supported Claude versions then
+report each model request's class. Claude's settings can override this process
+default.
+When Relay supplies the Anthropic credential, through `[upstream.anthropic_oidc]`
+or `[upstream.anthropic_api_key_helper]`, and the launched process inherits
+neither `ANTHROPIC_API_KEY` nor `ANTHROPIC_AUTH_TOKEN`, the wrapper sets
+`ANTHROPIC_API_KEY` to a placeholder, so Claude Code starts without a key of
+its own. The gateway replaces the placeholder with the credential that Relay
+supplies.
 If a Relay plugin is already enabled, its MCP process authenticates and borrows
 the dynamic gateway instead of launching the fixed sidecar, then monitors that
 exact gateway while MCP stdio remains open. Its persistent hooks exit without
@@ -67,21 +80,14 @@ The installer creates a local marketplace, installs
 `nemo-relay-plugin@nemo-relay-local` at user scope, and enables Claude Code
 provider routing through the local NeMo Relay sidecar. It uses the existing
 `nemo-relay` binary on `PATH`; it does not install a plugin-local Relay binary.
+The installer also enables gateway hints in Claude's user settings unless that
+setting is already present. See [Model Request Classes](#separate-model-request-classes)
+for the metadata these hints provide.
 
-The plugin starts `nemo-relay mcp`, a lightweight Rust lifecycle client that
-starts or reuses the shared gateway on `127.0.0.1:47632` immediately when the
-MCP process launches. The client authenticates the gateway with the per-user
-bootstrap proof, then heartbeats it while MCP stdio remains open and performs
-one coordinated restart if the gateway becomes unhealthy. A different effective
-persistent configuration fingerprint does not by itself prevent reuse: clients
-that share the same user bootstrap state can reuse the healthy local gateway.
-The fingerprint is bound into the proof without exposing configuration secrets;
-it is not the gateway ownership boundary. The heartbeat defaults to 3 seconds
-and is shortened automatically when necessary to remain below the gateway idle timeout. Set
-`NEMO_RELAY_PLUGIN_HEARTBEAT_INTERVAL_SECS` to a positive integer shorter than
-the idle timeout to override it. Claude Code and Codex MCP clients
-share a compatible gateway, and the gateway
-exits after the final client's idle timeout. The MCP server advertises no tools.
+The plugin starts `nemo-relay mcp`, which starts or reuses the shared gateway.
+For authentication, heartbeats, recovery, and idle shutdown, refer to
+[Shared Gateway Lifecycle](/nemo-relay-cli/plugin-installation#shared-gateway-lifecycle).
+
 
 The generated entry sets `alwaysLoad: true`, so Claude Code 2.1.121 or newer
 waits for the MCP connection before session startup. The installed command hook
@@ -89,9 +95,10 @@ carries the same install-generation fence, waits for the MCP-owned gateway, and
 forwards the canonical payload once. MCP owns the session-long gateway
 lifecycle.
 
-Persistent plugin mode loads system and user Relay configuration only and uses
-the user configuration directory as its working directory. Use the transparent
-wrapper for project-specific `.nemo-relay` configuration. Run
+Persistent plugin mode loads system and user Relay configuration only.
+For project-specific configuration, use
+`nemo-relay --config .nemo-relay/config.toml run -- claude`. Relay selects the
+sibling `plugins.toml`; system configuration still applies. Run
 `nemo-relay install claude-code --force` to replace an existing
 generation-fenced installation safely.
 
@@ -102,30 +109,14 @@ before starting a new Claude Code session:
 nemo-relay integrations refresh
 ```
 
-The command retires old MCP generations, replaces the authenticated sidecar,
-and requires affected hosts to reconnect. For one Claude Code
-install, `nemo-relay install claude-code --force` remains the focused repair
+Restart Claude Code afterward. See
+[Refresh Installed Integrations](/nemo-relay-cli/plugin-installation#refresh-installed-integrations)
+for updates and
+[Shared Gateway Lifecycle](/nemo-relay-cli/plugin-installation#shared-gateway-lifecycle)
+for gateway shutdown instructions.
+For one installation, `nemo-relay install claude-code --force` remains the focused repair
 command. Manual MCP configurations are not changed.
 
-To explicitly stop the managed shared gateway, first close active MCP clients,
-then run:
-
-```bash
-nemo-relay --bind 127.0.0.1:47632 gateway stop
-```
-
-The command resolves the process listening at that exact loopback address,
-verifies that its executable is named `nemo-relay`, and stops it. It can only
-stop a gateway running on the local machine; remote gateway processes are not
-supported. An open MCP client can restart the managed gateway as part of its
-one allowed recovery.
-
-`nemo-relay gateway start` starts the gateway with the same server
-configuration as a bare daemon invocation. `nemo-relay gateway stop` stops that
-gateway at the default daemon endpoint, `127.0.0.1:4040`. Pass the same `--bind`
-value to both commands for a custom endpoint. On Unix, add `--force` to terminate
-the process immediately instead of requesting a graceful shutdown. Windows
-always terminates the gateway process tree.
 
 Check or remove the installed plugin with:
 
@@ -134,7 +125,7 @@ nemo-relay doctor --plugin claude-code
 nemo-relay uninstall claude-code
 ```
 
-Refer to [Coding Agent Installation](/nemo-relay-cli/plugin-installation) for
+Refer to [Manage Persistent Integrations](/nemo-relay-cli/plugin-installation) for
 install directories, rollback behavior, and source marketplace notes.
 
 ## Shared Config
@@ -152,7 +143,7 @@ command = "claude"
 
 To forward Claude Code requests to a custom provider host, configure Relay's
 endpoint and authentication as described in
-[Provider Upstreams](/nemo-relay-cli/basic-usage#provider-upstreams).
+[Provider Upstreams](/nemo-relay-cli/provider-upstreams#provider-upstreams).
 
 Then configure observability with `nemo-relay plugins edit` or the XDG user
 `plugins.toml`:
@@ -169,7 +160,7 @@ version = 4
 
 [components.config.atif]
 enabled = true
-output_directory = ".nemo-relay/atif"
+output_directory = "/absolute/path/to/atif"
 
 [components.config.opentelemetry]
 enabled = true
@@ -178,6 +169,11 @@ enabled = true
 type = "openinference"
 endpoint = "http://127.0.0.1:4318/v1/traces"
 ```
+
+Replace `/absolute/path/to/atif` with an absolute, writable path on your
+machine. On Windows, use a path such as `C:/relay/atif`. An absolute path keeps
+the export destination consistent when a persistent gateway serves sessions
+from different projects.
 
 Run `nemo-relay run --agent claude` to use the configured command and plugin
 config. Files layer from explicit-or-user to system, so system
@@ -205,6 +201,39 @@ persistent NeMo Relay plugin or a transparent `nemo-relay claude` or
 `nemo-relay run --agent claude` invocation, which injects ephemeral hooks into
 the launched process.
 
+## Smoke Test
+
+Run a small Claude Code prompt that starts a session and uses one tool.
+Then check that hook forwarding reaches the gateway:
+
+```bash
+curl -f http://127.0.0.1:4040/healthz
+printf '{"session_id":"smoke-claude","hook_event_name":"SessionStart"}' \
+  | NEMO_RELAY_GATEWAY_URL=http://127.0.0.1:4040 nemo-relay hook-forward claude --fail-closed
+```
+
+The response should be valid Claude Code hook JSON. For most lifecycle events it
+is an allow/continue response. A full observability smoke fixture should produce
+expected `openinference` OpenTelemetry spans, raw ATOF events, and ATIF
+trajectories for at least one user turn, one LLM call, and one tool call.
+
+## Verify Export
+
+End the Claude Code session and check for completed turn trajectories in Agent
+Trajectory Interchange Format (ATIF):
+
+```bash
+ls "/absolute/path/to/atif"
+```
+
+Use the same absolute path you configured above.
+
+The gateway writes a trajectory when its enclosing turn closes, including at
+`SessionEnd`. One session can produce multiple files. If none appear, confirm
+that hooks fire, `plugins.toml` enables ATIF, and the gateway process can write
+to the configured directory. An idle internal model call has no enclosing turn
+and does not create an ATIF trajectory.
+
 ## Captured Events
 
 Generated Claude Code hooks include `SessionStart`, `SessionEnd`,
@@ -226,47 +255,16 @@ Tool hooks preserve canonical fields such as `tool_use_id`, `tool_name`,
 `tool_input`, `error`, `duration_ms`, and `is_interrupt`. Subagent hooks use
 `agent_id` as the subagent identifier and preserve `agent_type` in metadata.
 
-Claude Code traces are turn-oriented. A multi-turn conversation can produce one
-root `claude-code-turn` agent span or trajectory per user turn. That is expected
-when each span has a real `UserPromptSubmit` payload and assistant output. NeMo
-Relay excludes the known Claude Code startup/preflight probe and late
-uncorrelatable lifecycle hooks from exported user traces so they do not appear
-as synthetic `null`, `user: test`, `idle_timeout`, or lifecycle-only turns.
-The gateway records suppressed startup probes as debug-level
-`observability_bypassed` events when debug or trace logging is enabled.
-
-## Smoke Test
-
-Run a small Claude Code prompt that starts a session and uses one tool.
-Then check that hook forwarding reaches the gateway:
-
-```bash
-curl -f http://127.0.0.1:4040/healthz
-printf '{"session_id":"smoke-claude","hook_event_name":"SessionStart"}' \
-  | NEMO_RELAY_GATEWAY_URL=http://127.0.0.1:4040 nemo-relay hook-forward claude --fail-closed
-```
-
-The response should be valid Claude Code hook JSON. For most lifecycle events it
-is an allow/continue response. A full observability smoke fixture should produce
-expected `openinference` OpenTelemetry spans, raw ATOF events, and ATIF
-trajectories for at least one user turn, one LLM call, and one tool call.
-
-## Verify Export
-
-End the Claude Code session and confirm that session-end closed the NeMo Relay
-agent scope and wrote Agent Trajectory Interchange Format (ATIF):
-
-```bash
-ls .nemo-relay/atif
-```
-
-The gateway exports the session's ATIF file on `SessionEnd`. Unless you change
-`filename_template`, the file is named
-`nemo-relay-atif-<session-id>.json`. If no file appears, confirm that
-`SessionEnd` hooks fire, `plugins.toml` enables the ATIF exporter, and the
-gateway process can write to the configured directory.
+Claude Code traces are turn-oriented, but a trace root is not a prompt count.
+Gateway traffic or compaction hooks can open a turn without a prompt hook.
+Use request classes to separate internal model operations from conversation
+work, and final prompt-observation metadata to count completed turns with an
+observed prompt.
 
 ## Troubleshoot LLM Lifecycle
+
+For configuration, integration, and exporter checks, start with
+[Troubleshoot the CLI](/nemo-relay-cli/troubleshooting).
 
 Missing hooks usually means Claude Code did not load the local hook config or
 the `nemo-relay` binary is not on `PATH`.
@@ -306,6 +304,87 @@ rule out a real subagent whose start was missed. Other unmatched stops retain
 the `subagent_end_without_start` mark. Neither mark opens a new turn, including
 when the stop arrives after the turn has closed. To find all unmatched Claude
 stops in OpenTelemetry logs, include both mark names in `nemo_relay.mark.name`.
+
+## Notifications
+
+Claude Code `Notification` hooks produce `notification` marks without opening a
+turn. Notifications within an active turn or an explicitly correlated subagent
+keep that parent. Between turns, a notification does not create a new turn just
+to hold the mark.
+
+ATOF retains these marks, and the `full` and `openinference` projections can
+export them. The `gen_ai` projection omits marks. A notification mark does not
+establish the purpose of a separate model call.
+
+## Separate Model Request Classes
+
+Claude Code 2.1.273 or newer labels model requests with
+[`x-claude-code-request-class`](https://code.claude.com/docs/en/llm-gateway-protocol#gateway-hint-headers)
+when gateway hints are enabled. Wrapped launches set
+`CLAUDE_CODE_GATEWAY_HINT_HEADERS` to `"1"` only when the variable is unset. The
+[persistent installer](#persistent-plugin-install) and
+`nemo-relay integrations refresh` add `"1"` only when the setting is missing
+from Claude's user settings. Claude's saved settings can override a shell
+export. Generated managed settings also enable hints.
+[Replace older managed bundles](/daemon/configuration#distribute-immutable-managed-settings)
+to include the setting.
+
+Relay records the normalized class in LLM event metadata as
+`claude_code_request_class`:
+
+| Class | Operation |
+| --- | --- |
+| `main` | A main-conversation turn. |
+| `subagent` | A subagent conversation turn. |
+| `workflow` | An agent running inside a workflow. |
+| `compaction` | Conversation compaction. |
+| `auxiliary` | A side request, such as a title, classifier, or summary. |
+| `unknown` | No usable supported class was received. |
+
+Calls labeled `auxiliary` or `compaction` remain in traces with their reported
+usage. They still run the configured middleware and cache policy, but do not
+open main turns, replace task output, or provide hints for matching tool calls.
+An internal call between turns has no enclosing ATIF trajectory. Use ATOF or
+OpenTelemetry to include these calls in usage totals.
+
+The integration minimum remains Claude Code 2.1.121. Versions before 2.1.273
+and missing, invalid, or unsupported classes remain `unknown` and keep the
+existing turn handling and parent selection. Classes describe operations, not
+whether a person initiated them. Do not treat `unknown` as confirmed
+conversation work.
+
+## Count Turns with Observed Prompts
+
+Count completed main turns with final `turn_prompt_observed=true`, rather than
+counting trace roots. This flag includes late prompt hooks; `false` means no
+prompt hook was observed, and a missing field is unknown. Subagent prompts do
+not set the parent's flag. Gateway requests and compaction hooks can open turns
+without a prompt hook.
+
+### Export Class and Prompt Evidence to GenAI
+
+Enable OpenTelemetry in the existing observability component, then add this
+file sink or use the same mappings on a `gen_ai` endpoint:
+
+```toml
+[components.config.opentelemetry]
+enabled = true
+
+[[components.config.opentelemetry.file_sinks]]
+type = "gen_ai"
+output_directory = ".nemo-relay/genai"
+filename = "spans.jsonl"
+format = "json_lines"
+attribute_mappings = [
+  { key = "nemo_relay.start.metadata.claude_code_request_class", alias = "client.claude_code.request_class" },
+  { key = "nemo_relay.end.metadata.turn_prompt_observed", alias = "client.turn.prompt_observed" },
+]
+```
+
+These custom aliases expose the class on model spans and the final prompt flag
+on turn spans. They are not standard GenAI attributes. See
+[attribute mappings](/configure-plugins/observability/opentelemetry#attribute-mappings)
+for configuration and sanitization behavior.
 
 ## Hook Limitations
 

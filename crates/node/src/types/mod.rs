@@ -1,25 +1,26 @@
 // SPDX-FileCopyrightText: Copyright (c) 2026, NVIDIA CORPORATION & AFFILIATES. All rights reserved.
 // SPDX-License-Identifier: Apache-2.0
 
-//! Type definitions for the NeMo Relay Node.js NAPI bindings.
-//!
-//! Contains enums, handle wrappers, request/response structures, event types,
-//! and attribute constants that are exposed to JavaScript/TypeScript consumers.
-//! Doc comments on `#[napi]` items are emitted into the generated `index.d.ts`.
-
 mod resource_metrics;
 
+use std::sync::Arc;
+
 use napi::Env;
+use napi::bindgen_prelude::Unknown;
 use napi_derive::napi;
+
+use crate::convert::{checked_json, parse_json};
+use crate::error::{Error, Result};
 use nemo_relay_runtime::api::runtime::subscriber_dispatcher::PublicationBuffer;
 use nemo_relay_runtime::api::runtime::{ScopeStackHandle, create_scope_stack};
 use serde::{Deserialize, Serialize};
 use serde_json::Value as Json;
 
+use nemo_relay_codecs::resolve::ProviderSurface;
+use nemo_relay_observability::otel_metrics::MetricTemporality as CoreMetricTemporality;
 use nemo_relay_runtime::api::event::{
-    DataSchema as CoreDataSchema, Event, LogSeverity as CoreLogSeverity,
-    MetricKind as CoreMetricKind, MetricMeasurement as CoreMetricMeasurement,
-    MetricValueType as CoreMetricValueType,
+    DataSchema as CoreDataSchema, LogSeverity as CoreLogSeverity, MetricKind as CoreMetricKind,
+    MetricMeasurement as CoreMetricMeasurement, MetricValueType as CoreMetricValueType,
 };
 use nemo_relay_runtime::api::llm::{LlmHandle as CoreLlmHandle, LlmRequest as CoreLlmRequest};
 use nemo_relay_runtime::api::scope::{ScopeHandle as CoreScopeHandle, ScopeType as CoreScopeType};
@@ -28,6 +29,56 @@ use nemo_relay_runtime::api::tool::{
 };
 use nemo_relay_types::codec::request::AnnotatedLlmRequest;
 use nemo_relay_types::codec::traits::{LlmCodec, LlmResponseCodec};
+
+macro_rules! mirror_variants {
+    ($local:ident <=> $core:ident { $($variant:ident),+ $(,)? }) => {
+        mirror_variants!($local => $core { $($variant),+ });
+
+        impl From<$core> for $local {
+            fn from(value: $core) -> Self {
+                match value {
+                    $($core::$variant => Self::$variant,)+
+                }
+            }
+        }
+    };
+    ($local:ident => $core:ident { $($variant:ident),+ $(,)? }) => {
+        impl From<$local> for $core {
+            fn from(value: $local) -> Self {
+                match value {
+                    $($local::$variant => Self::$variant,)+
+                }
+            }
+        }
+    };
+}
+
+macro_rules! mirror_fields {
+    ($local:ident <=> $core:ty { $($field:ident),+ $(,)? }) => {
+        mirror_fields!($local => $core { $($field),+ });
+        mirror_fields!($local <= $core { $($field),+ });
+    };
+    ($local:ident => $core:ty { $($field:ident),+ $(,)? }) => {
+        impl From<$local> for $core {
+            fn from(value: $local) -> Self {
+                Self {
+                    $($field: value.$field.into(),)+
+                }
+            }
+        }
+    };
+    ($local:ident <= $core:ty { $($field:ident),+ $(,)? }) => {
+        impl From<$core> for $local {
+            fn from(value: $core) -> Self {
+                Self {
+                    $($field: value.$field.into(),)+
+                }
+            }
+        }
+    };
+}
+
+pub(crate) use {mirror_fields, mirror_variants};
 
 /// Identity of one visible Relay scope.
 #[napi(object)]
@@ -45,24 +96,21 @@ pub struct ScopeStackSnapshot {
     pub scopes: Vec<ScopeStackEntry>,
 }
 
+mirror_fields!(
+    ScopeStackEntry
+        <= nemo_relay_runtime::api::runtime::ScopeStackEntry {
+            scope_id,
+            scope_type,
+        }
+);
+
 impl From<nemo_relay_runtime::api::runtime::ScopeStackSnapshot> for ScopeStackSnapshot {
     fn from(snapshot: nemo_relay_runtime::api::runtime::ScopeStackSnapshot) -> Self {
         Self {
-            scopes: snapshot
-                .scopes
-                .into_iter()
-                .map(|scope| ScopeStackEntry {
-                    scope_id: scope.scope_id.to_string(),
-                    scope_type: scope.scope_type.into(),
-                })
-                .collect(),
+            scopes: snapshot.scopes.into_iter().map(Into::into).collect(),
         }
     }
 }
-
-// ---------------------------------------------------------------------------
-// Enums
-// ---------------------------------------------------------------------------
 
 /// The type of an execution scope in the agent runtime hierarchy.
 #[napi]
@@ -91,41 +139,10 @@ pub enum ScopeType {
     Unknown,
 }
 
-impl From<ScopeType> for CoreScopeType {
-    fn from(v: ScopeType) -> Self {
-        match v {
-            ScopeType::Agent => CoreScopeType::Agent,
-            ScopeType::Function => CoreScopeType::Function,
-            ScopeType::Tool => CoreScopeType::Tool,
-            ScopeType::Llm => CoreScopeType::Llm,
-            ScopeType::Retriever => CoreScopeType::Retriever,
-            ScopeType::Embedder => CoreScopeType::Embedder,
-            ScopeType::Reranker => CoreScopeType::Reranker,
-            ScopeType::Guardrail => CoreScopeType::Guardrail,
-            ScopeType::Evaluator => CoreScopeType::Evaluator,
-            ScopeType::Custom => CoreScopeType::Custom,
-            ScopeType::Unknown => CoreScopeType::Unknown,
-        }
-    }
-}
-
-impl From<CoreScopeType> for ScopeType {
-    fn from(v: CoreScopeType) -> Self {
-        match v {
-            CoreScopeType::Agent => ScopeType::Agent,
-            CoreScopeType::Function => ScopeType::Function,
-            CoreScopeType::Tool => ScopeType::Tool,
-            CoreScopeType::Llm => ScopeType::Llm,
-            CoreScopeType::Retriever => ScopeType::Retriever,
-            CoreScopeType::Embedder => ScopeType::Embedder,
-            CoreScopeType::Reranker => ScopeType::Reranker,
-            CoreScopeType::Guardrail => ScopeType::Guardrail,
-            CoreScopeType::Evaluator => ScopeType::Evaluator,
-            CoreScopeType::Custom => ScopeType::Custom,
-            CoreScopeType::Unknown => ScopeType::Unknown,
-        }
-    }
-}
+mirror_variants!(ScopeType <=> CoreScopeType {
+    Agent, Function, Tool, Llm, Retriever, Embedder, Reranker, Guardrail, Evaluator, Custom,
+    Unknown,
+});
 
 /// Severity attached to a mark projected as an OpenTelemetry log.
 #[napi]
@@ -137,17 +154,7 @@ pub enum LogSeverity {
     Error,
 }
 
-impl From<LogSeverity> for CoreLogSeverity {
-    fn from(value: LogSeverity) -> Self {
-        match value {
-            LogSeverity::Trace => Self::Trace,
-            LogSeverity::Debug => Self::Debug,
-            LogSeverity::Info => Self::Info,
-            LogSeverity::Warn => Self::Warn,
-            LogSeverity::Error => Self::Error,
-        }
-    }
-}
+mirror_variants!(LogSeverity => CoreLogSeverity { Trace, Debug, Info, Warn, Error });
 
 /// OpenTelemetry instrument kind recorded by a metric measurement.
 #[napi]
@@ -158,16 +165,7 @@ pub enum MetricKind {
     Histogram,
 }
 
-impl From<MetricKind> for CoreMetricKind {
-    fn from(value: MetricKind) -> Self {
-        match value {
-            MetricKind::Counter => Self::Counter,
-            MetricKind::UpDownCounter => Self::UpDownCounter,
-            MetricKind::Gauge => Self::Gauge,
-            MetricKind::Histogram => Self::Histogram,
-        }
-    }
-}
+mirror_variants!(MetricKind => CoreMetricKind { Counter, UpDownCounter, Gauge, Histogram });
 
 /// Explicit numeric representation used by a metric measurement.
 #[napi]
@@ -177,6 +175,8 @@ pub enum MetricValueType {
     F64,
 }
 
+mirror_variants!(MetricValueType => CoreMetricValueType { U64, I64, F64 });
+
 /// Preferred aggregation temporality for OTLP metric export.
 #[napi]
 pub enum MetricTemporality {
@@ -185,25 +185,7 @@ pub enum MetricTemporality {
     LowMemory,
 }
 
-impl From<MetricTemporality> for nemo_relay_observability::otel_metrics::MetricTemporality {
-    fn from(value: MetricTemporality) -> Self {
-        match value {
-            MetricTemporality::Cumulative => Self::Cumulative,
-            MetricTemporality::Delta => Self::Delta,
-            MetricTemporality::LowMemory => Self::LowMemory,
-        }
-    }
-}
-
-impl From<MetricValueType> for CoreMetricValueType {
-    fn from(value: MetricValueType) -> Self {
-        match value {
-            MetricValueType::U64 => Self::U64,
-            MetricValueType::I64 => Self::I64,
-            MetricValueType::F64 => Self::F64,
-        }
-    }
-}
+mirror_variants!(MetricTemporality => CoreMetricTemporality { Cumulative, Delta, LowMemory });
 
 /// Schema identifier attached to an event's opaque data payload.
 #[napi(object)]
@@ -212,14 +194,7 @@ pub struct DataSchema {
     pub version: String,
 }
 
-impl From<DataSchema> for CoreDataSchema {
-    fn from(value: DataSchema) -> Self {
-        Self {
-            name: value.name,
-            version: value.version,
-        }
-    }
-}
+mirror_fields!(DataSchema => CoreDataSchema { name, version });
 
 /// One typed recording operation emitted by `metric`.
 #[napi(object)]
@@ -235,24 +210,9 @@ pub struct MetricMeasurement {
     pub boundaries: Option<Vec<f64>>,
 }
 
-impl From<MetricMeasurement> for CoreMetricMeasurement {
-    fn from(value: MetricMeasurement) -> Self {
-        Self {
-            name: value.name,
-            kind: value.kind.into(),
-            value_type: value.value_type.into(),
-            value: value.value,
-            unit: value.unit,
-            description: value.description,
-            attributes: value.attributes,
-            boundaries: value.boundaries,
-        }
-    }
-}
-
-// ---------------------------------------------------------------------------
-// Handle wrappers
-// ---------------------------------------------------------------------------
+mirror_fields!(MetricMeasurement => CoreMetricMeasurement {
+    name, kind, value_type, value, unit, description, attributes, boundaries,
+});
 
 /// Canonical application-visible result of tool execution.
 ///
@@ -273,14 +233,7 @@ impl From<ToolExecutionResult> for CoreToolExecutionResult {
     }
 }
 
-impl From<CoreToolExecutionResult> for ToolExecutionResult {
-    fn from(value: CoreToolExecutionResult) -> Self {
-        Self {
-            result: value.result,
-            annotation: value.annotation,
-        }
-    }
-}
+mirror_fields!(ToolExecutionResult <= CoreToolExecutionResult { result, annotation });
 
 /// Per-call context delivered to a tool execution intercept.
 ///
@@ -288,6 +241,7 @@ impl From<CoreToolExecutionResult> for ToolExecutionResult {
 /// the managed tool call, or `null` when the call did not record one. It lets
 /// an intercept that completes execution without invoking the remaining chain
 /// associate its result with the originating tool call.
+#[allow(dead_code, reason = "declared for generated TypeScript only")]
 #[napi(object, use_nullable = true)]
 pub struct ToolExecutionContext {
     pub tool_name: String,
@@ -296,6 +250,7 @@ pub struct ToolExecutionContext {
 }
 
 /// A mark Relay materializes under a managed lifecycle.
+#[allow(dead_code, reason = "declared for generated TypeScript only")]
 #[napi(object)]
 pub struct PendingMarkSpec {
     pub name: String,
@@ -320,12 +275,9 @@ pub struct ScopeStack {
 #[napi]
 impl ScopeStack {
     /// Creates a new isolated scope stack with its own root scope.
-    #[napi(constructor)]
+    #[napi(constructor, catch_unwind)]
     pub fn new() -> Self {
-        Self {
-            inner: create_scope_stack(),
-            publication_buffer: None,
-        }
+        create_scope_stack().into()
     }
 }
 
@@ -351,43 +303,43 @@ pub struct ScopeHandle {
 #[napi]
 impl ScopeHandle {
     /// The unique identifier for this scope.
-    #[napi(getter)]
+    #[napi(getter, catch_unwind)]
     pub fn uuid(&self) -> String {
         self.inner.uuid.to_string()
     }
 
     /// The human-readable name of this scope.
-    #[napi(getter)]
+    #[napi(getter, catch_unwind)]
     pub fn name(&self) -> String {
         self.inner.name.clone()
     }
 
     /// The type of this scope (Agent, Tool, Llm, etc.).
-    #[napi(getter)]
+    #[napi(getter, catch_unwind)]
     pub fn scope_type(&self) -> ScopeType {
         self.inner.scope_type.into()
     }
 
     /// Bitfield of scope attributes (e.g., PARALLEL, RELOCATABLE).
-    #[napi(getter)]
+    #[napi(getter, catch_unwind)]
     pub fn attributes(&self) -> u32 {
         self.inner.attributes.bits()
     }
 
     /// The UUID of this scope's parent, or `null` if this is the root scope.
-    #[napi(getter)]
+    #[napi(getter, catch_unwind)]
     pub fn parent_uuid(&self) -> Option<String> {
         self.inner.parent_uuid.map(|u| u.to_string())
     }
 
     /// Optional user-defined data associated with this scope.
-    #[napi(getter)]
+    #[napi(getter, catch_unwind, ts_return_type = "Json | null")]
     pub fn data(&self) -> Option<serde_json::Value> {
         self.inner.data.clone()
     }
 
     /// Optional metadata associated with this scope.
-    #[napi(getter)]
+    #[napi(getter, catch_unwind, ts_return_type = "Json | null")]
     pub fn metadata(&self) -> Option<serde_json::Value> {
         self.inner.metadata.clone()
     }
@@ -410,25 +362,25 @@ pub struct ToolHandle {
 #[napi]
 impl ToolHandle {
     /// The unique identifier for this tool call.
-    #[napi(getter)]
+    #[napi(getter, catch_unwind)]
     pub fn uuid(&self) -> String {
         self.inner.uuid.to_string()
     }
 
     /// The name of the tool being called.
-    #[napi(getter)]
+    #[napi(getter, catch_unwind)]
     pub fn name(&self) -> String {
         self.inner.name.clone()
     }
 
     /// Bitfield of tool attributes (e.g., LOCAL).
-    #[napi(getter)]
+    #[napi(getter, catch_unwind)]
     pub fn attributes(&self) -> u32 {
         self.inner.attributes.bits()
     }
 
     /// The UUID of the parent scope that initiated this tool call, or `null`.
-    #[napi(getter)]
+    #[napi(getter, catch_unwind)]
     pub fn parent_uuid(&self) -> Option<String> {
         self.inner.parent_uuid.map(|u| u.to_string())
     }
@@ -451,25 +403,25 @@ pub struct LlmHandle {
 #[napi]
 impl LlmHandle {
     /// The unique identifier for this LLM call.
-    #[napi(getter)]
+    #[napi(getter, catch_unwind)]
     pub fn uuid(&self) -> String {
         self.inner.uuid.to_string()
     }
 
     /// The name of the LLM provider being called.
-    #[napi(getter)]
+    #[napi(getter, catch_unwind)]
     pub fn name(&self) -> String {
         self.inner.name.clone()
     }
 
     /// Bitfield of LLM attributes (e.g., STATELESS, STREAMING).
-    #[napi(getter)]
+    #[napi(getter, catch_unwind)]
     pub fn attributes(&self) -> u32 {
         self.inner.attributes.bits()
     }
 
     /// The UUID of the parent scope that initiated this LLM call, or `null`.
-    #[napi(getter)]
+    #[napi(getter, catch_unwind)]
     pub fn parent_uuid(&self) -> Option<String> {
         self.inner.parent_uuid.map(|u| u.to_string())
     }
@@ -480,10 +432,6 @@ impl From<CoreLlmHandle> for LlmHandle {
         Self { inner: h }
     }
 }
-
-// ---------------------------------------------------------------------------
-// LlmRequest
-// ---------------------------------------------------------------------------
 
 /// An LLM request, encapsulating headers and content.
 ///
@@ -496,37 +444,50 @@ pub struct LlmRequest {
 #[napi]
 impl LlmRequest {
     /// Create a new LLM request from headers and content.
-    #[napi(constructor)]
-    pub fn new(headers: serde_json::Value, content: serde_json::Value) -> Self {
-        let headers = match headers {
-            Json::Object(m) => m,
-            _ => serde_json::Map::new(),
+    #[napi(constructor, catch_unwind)]
+    pub fn new(
+        #[napi(ts_arg_type = "JsonObject")] headers: serde_json::Value,
+        #[napi(ts_arg_type = "Json")] content: serde_json::Value,
+    ) -> Result<Self> {
+        let Json::Object(headers) = headers else {
+            return Err(Error::invalid_argument(
+                "LlmRequest headers must be a JSON object",
+            ));
         };
-        Self {
+        Ok(Self {
             inner: CoreLlmRequest { headers, content },
-        }
+        })
+    }
+
+    #[napi(
+        factory,
+        js_name = "from",
+        ts_generic_types = "THeaders extends JsonObjectCompatible<THeaders>, TContent extends JsonCompatible<TContent>",
+        catch_unwind
+    )]
+    pub fn from_parts(
+        #[napi(ts_arg_type = "THeaders")] headers: serde_json::Value,
+        #[napi(ts_arg_type = "TContent")] content: serde_json::Value,
+    ) -> Result<Self> {
+        Self::new(headers, content)
     }
 
     /// The metadata headers as a JSON object.
-    #[napi(getter)]
+    #[napi(getter, catch_unwind, ts_return_type = "JsonObject")]
     pub fn headers(&self) -> serde_json::Value {
         Json::Object(self.inner.headers.clone())
     }
 
     /// The request payload as a JSON value.
-    #[napi(getter)]
+    #[napi(getter, catch_unwind, ts_return_type = "Json")]
     pub fn content(&self) -> serde_json::Value {
         self.inner.content.clone()
     }
 }
 
-// ---------------------------------------------------------------------------
-// Event (read-only, for subscribers)
-// ---------------------------------------------------------------------------
-
 /// Observability fields returned by mark and scope event sanitizers.
 #[napi(object)]
-#[derive(Clone, Debug, Deserialize, Serialize)]
+#[derive(Deserialize, Serialize)]
 #[serde(rename_all = "camelCase")]
 pub struct EventSanitizeFields {
     pub data: Option<Json>,
@@ -538,348 +499,173 @@ pub(crate) fn event_sanitize_fields_from_json(
     value: Json,
 ) -> serde_json::Result<EventSanitizeFields> {
     let Some(object) = value.as_object() else {
-        return Err(serde_json::Error::io(std::io::Error::other(
+        return Err(serde::de::Error::custom(
             "event sanitizer must return an object",
-        )));
+        ));
     };
     if !["data", "categoryProfile", "metadata"]
         .iter()
         .any(|field| object.contains_key(*field))
     {
-        return Err(serde_json::Error::io(std::io::Error::other(
+        return Err(serde::de::Error::custom(
             "event sanitizer must return at least one sanitizer field",
-        )));
+        ));
     }
     serde_json::from_value(value)
 }
 
-// ---------------------------------------------------------------------------
-
-/// A read-only ATOF lifecycle event delivered to subscribers.
-#[derive(Serialize)]
-#[serde(transparent)]
-pub struct JsEvent(serde_json::Value);
-
-impl JsEvent {
-    pub(crate) fn try_from_event(e: &Event) -> serde_json::Result<Self> {
-        Ok(Self(e.try_to_json_value()?))
-    }
-
-    pub(crate) fn into_json(self) -> serde_json::Value {
-        self.0
-    }
+pub(crate) fn decode_request(codec: &dyn LlmCodec, request: Json) -> Result<Json> {
+    let request: CoreLlmRequest = parse_json(request, "LlmRequest")?;
+    serde_json::to_value(codec.decode(&request)?).map_err(Error::from)
 }
 
-impl From<&Event> for JsEvent {
-    fn from(e: &Event) -> Self {
-        Self::try_from_event(e).expect("serializing an ATOF event to JSON should not fail")
-    }
-}
-// ---------------------------------------------------------------------------
-// Built-in codec classes
-// ---------------------------------------------------------------------------
-
-/// Built-in codec for the OpenAI Chat Completions API.
-///
-/// Implements both request codec (decode/encode) and response codec
-/// (decodeResponse). Construct with `new OpenAIChatCodec()`.
-#[napi(js_name = "OpenAIChatCodec")]
-pub struct OpenAIChatCodec {
-    pub(crate) inner_codec: std::sync::Arc<dyn LlmCodec>,
-    pub(crate) inner_response_codec: std::sync::Arc<dyn LlmResponseCodec>,
+pub(crate) fn encode_request(
+    codec: &dyn LlmCodec,
+    annotated: Json,
+    original: Json,
+) -> Result<Json> {
+    let annotated: AnnotatedLlmRequest = parse_json(annotated, "AnnotatedLlmRequest")?;
+    let original: CoreLlmRequest = parse_json(original, "LlmRequest")?;
+    serde_json::to_value(codec.encode(&annotated, &original)?).map_err(Error::from)
 }
 
-#[napi]
-impl OpenAIChatCodec {
-    #[napi(constructor)]
-    pub fn new() -> Self {
-        Self {
-            inner_codec: std::sync::Arc::new(nemo_relay_codecs::openai_chat::OpenAIChatCodec),
-            inner_response_codec: nemo_relay_runtime::codec::response_codec(
-                nemo_relay_codecs::resolve::ProviderSurface::OpenAIChat,
-            ),
+pub(crate) fn decode_response(codec: &dyn LlmResponseCodec, response: &Json) -> Result<Json> {
+    serde_json::to_value(codec.decode_response(response)?).map_err(Error::from)
+}
+
+macro_rules! builtin_codec {
+    ($(#[$meta:meta])* $name:ident($codec:path, $surface:expr);) => {
+        builtin_codec! {
+            $(#[$meta])*
+            $name($codec, $surface);
+
+            #[doc = " Decode a raw LLM response into structured form."]
+            #[napi(
+                js_name = "decodeResponse",
+                ts_generic_types = "TResponse extends JsonCompatible<TResponse>",
+                catch_unwind
+            )]
+            pub fn decode_response(
+                &self,
+                #[napi(ts_arg_type = "TResponse")] response: Json,
+            ) -> Result<Json> {
+                decode_response(&*self.response_codec, &response)
+            }
         }
-    }
-
-    /// Decode an opaque LLM request into structured form.
-    #[napi]
-    pub fn decode(&self, request: Json) -> napi::Result<Json> {
-        let llm_req: CoreLlmRequest = serde_json::from_value(request)
-            .map_err(|e| napi::Error::from_reason(format!("invalid LlmRequest: {e}")))?;
-        let annotated = self
-            .inner_codec
-            .decode(&llm_req)
-            .map_err(|e| napi::Error::from_reason(e.to_string()))?;
-        serde_json::to_value(&annotated).map_err(|e| napi::Error::from_reason(e.to_string()))
-    }
-
-    /// Encode structured changes back into an opaque LLM request.
-    #[napi]
-    pub fn encode(&self, annotated: Json, original: Json) -> napi::Result<Json> {
-        let ann: AnnotatedLlmRequest = serde_json::from_value(annotated)
-            .map_err(|e| napi::Error::from_reason(format!("invalid AnnotatedLlmRequest: {e}")))?;
-        let orig: CoreLlmRequest = serde_json::from_value(original)
-            .map_err(|e| napi::Error::from_reason(format!("invalid LlmRequest: {e}")))?;
-        let result = self
-            .inner_codec
-            .encode(&ann, &orig)
-            .map_err(|e| napi::Error::from_reason(e.to_string()))?;
-        serde_json::to_value(&result).map_err(|e| napi::Error::from_reason(e.to_string()))
-    }
-
-    /// Decode a raw LLM response into structured form.
-    #[napi(js_name = "decodeResponse")]
-    pub fn decode_response(&self, response: Json) -> napi::Result<Json> {
-        let annotated = self
-            .inner_response_codec
-            .decode_response(&response)
-            .map_err(|e| napi::Error::from_reason(e.to_string()))?;
-        serde_json::to_value(&annotated).map_err(|e| napi::Error::from_reason(e.to_string()))
-    }
-}
-
-/// Built-in codec for the OpenAI Responses API.
-///
-/// Implements both request codec (decode/encode) and response codec
-/// (decodeResponse). Construct with `new OpenAIResponsesCodec()`.
-#[napi(js_name = "OpenAIResponsesCodec")]
-pub struct OpenAIResponsesCodec {
-    pub(crate) inner_codec: std::sync::Arc<dyn LlmCodec>,
-    pub(crate) inner_response_codec: std::sync::Arc<dyn LlmResponseCodec>,
-}
-
-#[napi]
-impl OpenAIResponsesCodec {
-    #[napi(constructor)]
-    pub fn new() -> Self {
-        Self {
-            inner_codec: std::sync::Arc::new(
-                nemo_relay_codecs::openai_responses::OpenAIResponsesCodec,
-            ),
-            inner_response_codec: nemo_relay_runtime::codec::response_codec(
-                nemo_relay_codecs::resolve::ProviderSurface::OpenAIResponses,
-            ),
+    };
+    ($(#[$meta:meta])* $name:ident($codec:path, $surface:expr); $($decode_response:tt)+) => {
+        $(#[$meta])*
+        pub struct $name {
+            codec: $codec,
+            response_codec: Arc<dyn LlmResponseCodec>,
         }
-    }
 
-    /// Decode an opaque LLM request into structured form.
-    #[napi]
-    pub fn decode(&self, request: Json) -> napi::Result<Json> {
-        let llm_req: CoreLlmRequest = serde_json::from_value(request)
-            .map_err(|e| napi::Error::from_reason(format!("invalid LlmRequest: {e}")))?;
-        let annotated = self
-            .inner_codec
-            .decode(&llm_req)
-            .map_err(|e| napi::Error::from_reason(e.to_string()))?;
-        serde_json::to_value(&annotated).map_err(|e| napi::Error::from_reason(e.to_string()))
-    }
+        #[napi]
+        impl $name {
+            #[napi(constructor, catch_unwind)]
+            pub fn new() -> Self {
+                Self {
+                    codec: $codec,
+                    response_codec: nemo_relay_runtime::codec::response_codec($surface),
+                }
+            }
 
-    /// Encode structured changes back into an opaque LLM request.
-    #[napi]
-    pub fn encode(&self, annotated: Json, original: Json) -> napi::Result<Json> {
-        let ann: AnnotatedLlmRequest = serde_json::from_value(annotated)
-            .map_err(|e| napi::Error::from_reason(format!("invalid AnnotatedLlmRequest: {e}")))?;
-        let orig: CoreLlmRequest = serde_json::from_value(original)
-            .map_err(|e| napi::Error::from_reason(format!("invalid LlmRequest: {e}")))?;
-        let result = self
-            .inner_codec
-            .encode(&ann, &orig)
-            .map_err(|e| napi::Error::from_reason(e.to_string()))?;
-        serde_json::to_value(&result).map_err(|e| napi::Error::from_reason(e.to_string()))
-    }
+            /// Decode an opaque LLM request into structured form.
+            #[napi(
+                ts_generic_types = "TRequest extends LlmRequestCompatible<TRequest>",
+                catch_unwind
+            )]
+            pub fn decode(
+                &self,
+                #[napi(ts_arg_type = "TRequest")] request: Json,
+            ) -> Result<Json> {
+                decode_request(&self.codec, request)
+            }
 
-    /// Decode a raw LLM response into structured form.
-    #[napi(js_name = "decodeResponse")]
-    pub fn decode_response(&self, response: Json) -> napi::Result<Json> {
-        let annotated = self
-            .inner_response_codec
-            .decode_response(&response)
-            .map_err(|e| napi::Error::from_reason(e.to_string()))?;
-        serde_json::to_value(&annotated).map_err(|e| napi::Error::from_reason(e.to_string()))
-    }
-}
+            /// Encode structured changes back into an opaque LLM request.
+            #[napi(
+                ts_generic_types = "TAnnotated extends JsonCompatible<TAnnotated>, TOriginal extends LlmRequestCompatible<TOriginal>",
+                ts_return_type = "LlmRequestShape",
+                catch_unwind
+            )]
+            pub fn encode(
+                &self,
+                #[napi(ts_arg_type = "TAnnotated")] annotated: Json,
+                #[napi(ts_arg_type = "TOriginal")] original: Json,
+            ) -> Result<Json> {
+                encode_request(&self.codec, annotated, original)
+            }
 
-/// Built-in codec for the Gemini generateContent API.
-///
-/// Implements both request codec (decode/encode) and response codec
-/// (decodeResponse). Construct with `new GeminiGenerateContentCodec()`.
-#[napi(js_name = "GeminiGenerateContentCodec")]
-pub struct GeminiGenerateContentCodec {
-    pub(crate) inner_codec: std::sync::Arc<dyn LlmCodec>,
-    pub(crate) inner_response_codec: std::sync::Arc<dyn LlmResponseCodec>,
-}
-
-#[napi]
-impl GeminiGenerateContentCodec {
-    #[napi(constructor)]
-    pub fn new() -> Self {
-        Self {
-            inner_codec: std::sync::Arc::new(
-                nemo_relay_codecs::gemini_generate_content::GeminiGenerateContentCodec,
-            ),
-            inner_response_codec: nemo_relay_runtime::codec::response_codec(
-                nemo_relay_codecs::resolve::ProviderSurface::GeminiGenerateContent,
-            ),
+            $($decode_response)+
         }
-    }
+    };
+}
 
-    /// Decode an opaque LLM request into structured form.
-    #[napi]
-    pub fn decode(&self, request: Json) -> napi::Result<Json> {
-        let llm_req: CoreLlmRequest = serde_json::from_value(request)
-            .map_err(|e| napi::Error::from_reason(format!("invalid LlmRequest: {e}")))?;
-        let annotated = self
-            .inner_codec
-            .decode(&llm_req)
-            .map_err(|e| napi::Error::from_reason(e.to_string()))?;
-        serde_json::to_value(&annotated).map_err(|e| napi::Error::from_reason(e.to_string()))
-    }
+builtin_codec! {
+    #[doc = " Built-in codec for the OpenAI Chat Completions API."]
+    #[doc = ""]
+    #[doc = " Implements both request codec (decode/encode) and response codec"]
+    #[doc = " (decodeResponse). Construct with `new OpenAIChatCodec()`."]
+    #[napi(js_name = "OpenAIChatCodec")]
+    OpenAIChatCodec(nemo_relay_codecs::openai_chat::OpenAIChatCodec, ProviderSurface::OpenAIChat);
+}
 
-    /// Encode structured changes back into an opaque LLM request.
-    #[napi]
-    pub fn encode(&self, annotated: Json, original: Json) -> napi::Result<Json> {
-        let ann: AnnotatedLlmRequest = serde_json::from_value(annotated)
-            .map_err(|e| napi::Error::from_reason(format!("invalid AnnotatedLlmRequest: {e}")))?;
-        let orig: CoreLlmRequest = serde_json::from_value(original)
-            .map_err(|e| napi::Error::from_reason(format!("invalid LlmRequest: {e}")))?;
-        let result = self
-            .inner_codec
-            .encode(&ann, &orig)
-            .map_err(|e| napi::Error::from_reason(e.to_string()))?;
-        serde_json::to_value(&result).map_err(|e| napi::Error::from_reason(e.to_string()))
-    }
+builtin_codec! {
+    #[doc = " Built-in codec for the OpenAI Responses API."]
+    #[doc = ""]
+    #[doc = " Implements both request codec (decode/encode) and response codec"]
+    #[doc = " (decodeResponse). Construct with `new OpenAIResponsesCodec()`."]
+    #[napi(js_name = "OpenAIResponsesCodec")]
+    OpenAIResponsesCodec(
+        nemo_relay_codecs::openai_responses::OpenAIResponsesCodec,
+        ProviderSurface::OpenAIResponses
+    );
+}
 
-    /// Decode a raw LLM response into structured form.
-    /// Throws a TypeError if the response contains a BigInt value.
-    #[napi(js_name = "decodeResponse")]
+builtin_codec! {
+    #[doc = " Built-in codec for the Gemini generateContent API."]
+    #[doc = ""]
+    #[doc = " Implements both request codec (decode/encode) and response codec"]
+    #[doc = " (decodeResponse). Construct with `new GeminiGenerateContentCodec()`."]
+    #[napi(js_name = "GeminiGenerateContentCodec")]
+    GeminiGenerateContentCodec(
+        nemo_relay_codecs::gemini_generate_content::GeminiGenerateContentCodec,
+        ProviderSurface::GeminiGenerateContent
+    );
+
+    #[doc = " Decode a raw LLM response into structured form."]
+    #[doc = " Throws a TypeError if the response contains a BigInt value."]
+    #[napi(
+        js_name = "decodeResponse",
+        ts_generic_types = "TResponse extends JsonCompatible<TResponse>",
+        catch_unwind
+    )]
     pub fn decode_response(
         &self,
         env: Env,
-        #[napi(ts_arg_type = "any")] response: napi::JsUnknown,
-    ) -> napi::Result<Json> {
-        let response = crate::convert::checked_json(&env, response)?;
-        let annotated = self
-            .inner_response_codec
-            .decode_response(&response)
-            .map_err(|e| napi::Error::from_reason(e.to_string()))?;
-        serde_json::to_value(&annotated).map_err(|e| napi::Error::from_reason(e.to_string()))
+        #[napi(ts_arg_type = "TResponse")] response: Unknown,
+    ) -> Result<Json> {
+        decode_response(&*self.response_codec, &checked_json(&env, response)?)
     }
 }
 
-/// Built-in codec for the Anthropic Messages API.
-///
-/// Implements both request codec (decode/encode) and response codec
-/// (decodeResponse). Construct with `new AnthropicMessagesCodec()`.
-#[napi]
-pub struct AnthropicMessagesCodec {
-    pub(crate) inner_codec: std::sync::Arc<dyn LlmCodec>,
-    pub(crate) inner_response_codec: std::sync::Arc<dyn LlmResponseCodec>,
+builtin_codec! {
+    #[doc = " Built-in codec for the Anthropic Messages API."]
+    #[doc = ""]
+    #[doc = " Implements both request codec (decode/encode) and response codec"]
+    #[doc = " (decodeResponse). Construct with `new AnthropicMessagesCodec()`."]
+    #[napi]
+    AnthropicMessagesCodec(
+        nemo_relay_codecs::anthropic::AnthropicMessagesCodec,
+        ProviderSurface::AnthropicMessages
+    );
 }
 
-#[napi]
-impl AnthropicMessagesCodec {
-    #[napi(constructor)]
-    pub fn new() -> Self {
-        Self {
-            inner_codec: std::sync::Arc::new(nemo_relay_codecs::anthropic::AnthropicMessagesCodec),
-            inner_response_codec: nemo_relay_runtime::codec::response_codec(
-                nemo_relay_codecs::resolve::ProviderSurface::AnthropicMessages,
-            ),
-        }
-    }
-
-    /// Decode an opaque LLM request into structured form.
-    #[napi]
-    pub fn decode(&self, request: Json) -> napi::Result<Json> {
-        let llm_req: CoreLlmRequest = serde_json::from_value(request)
-            .map_err(|e| napi::Error::from_reason(format!("invalid LlmRequest: {e}")))?;
-        let annotated = self
-            .inner_codec
-            .decode(&llm_req)
-            .map_err(|e| napi::Error::from_reason(e.to_string()))?;
-        serde_json::to_value(&annotated).map_err(|e| napi::Error::from_reason(e.to_string()))
-    }
-
-    /// Encode structured changes back into an opaque LLM request.
-    #[napi]
-    pub fn encode(&self, annotated: Json, original: Json) -> napi::Result<Json> {
-        let ann: AnnotatedLlmRequest = serde_json::from_value(annotated)
-            .map_err(|e| napi::Error::from_reason(format!("invalid AnnotatedLlmRequest: {e}")))?;
-        let orig: CoreLlmRequest = serde_json::from_value(original)
-            .map_err(|e| napi::Error::from_reason(format!("invalid LlmRequest: {e}")))?;
-        let result = self
-            .inner_codec
-            .encode(&ann, &orig)
-            .map_err(|e| napi::Error::from_reason(e.to_string()))?;
-        serde_json::to_value(&result).map_err(|e| napi::Error::from_reason(e.to_string()))
-    }
-
-    /// Decode a raw LLM response into structured form.
-    #[napi(js_name = "decodeResponse")]
-    pub fn decode_response(&self, response: Json) -> napi::Result<Json> {
-        let annotated = self
-            .inner_response_codec
-            .decode_response(&response)
-            .map_err(|e| napi::Error::from_reason(e.to_string()))?;
-        serde_json::to_value(&annotated).map_err(|e| napi::Error::from_reason(e.to_string()))
-    }
-}
-
-/// Built-in codec for the OCI Generative AI chat API.
-///
-/// Implements both request codec (decode/encode) and response codec
-/// (decodeResponse). Construct with `new OCIGenAIChatCodec()`.
-#[napi(js_name = "OCIGenAIChatCodec")]
-pub struct OCIGenAIChatCodec {
-    pub(crate) inner_codec: std::sync::Arc<dyn LlmCodec>,
-    pub(crate) inner_response_codec: std::sync::Arc<dyn LlmResponseCodec>,
-}
-
-#[napi]
-impl OCIGenAIChatCodec {
-    #[napi(constructor)]
-    pub fn new() -> Self {
-        Self {
-            inner_codec: std::sync::Arc::new(nemo_relay_codecs::oci_genai::OCIGenAIChatCodec),
-            inner_response_codec: nemo_relay_runtime::codec::response_codec(
-                nemo_relay_codecs::resolve::ProviderSurface::OCIGenAI,
-            ),
-        }
-    }
-
-    /// Decode an opaque LLM request into structured form.
-    #[napi]
-    pub fn decode(&self, request: Json) -> napi::Result<Json> {
-        let llm_req: CoreLlmRequest = serde_json::from_value(request)
-            .map_err(|e| napi::Error::from_reason(format!("invalid LlmRequest: {e}")))?;
-        let annotated = self
-            .inner_codec
-            .decode(&llm_req)
-            .map_err(|e| napi::Error::from_reason(e.to_string()))?;
-        serde_json::to_value(&annotated).map_err(|e| napi::Error::from_reason(e.to_string()))
-    }
-
-    /// Encode structured changes back into an opaque LLM request.
-    #[napi]
-    pub fn encode(&self, annotated: Json, original: Json) -> napi::Result<Json> {
-        let ann: AnnotatedLlmRequest = serde_json::from_value(annotated)
-            .map_err(|e| napi::Error::from_reason(format!("invalid AnnotatedLlmRequest: {e}")))?;
-        let orig: CoreLlmRequest = serde_json::from_value(original)
-            .map_err(|e| napi::Error::from_reason(format!("invalid LlmRequest: {e}")))?;
-        let result = self
-            .inner_codec
-            .encode(&ann, &orig)
-            .map_err(|e| napi::Error::from_reason(e.to_string()))?;
-        serde_json::to_value(&result).map_err(|e| napi::Error::from_reason(e.to_string()))
-    }
-
-    /// Decode a raw LLM response into structured form.
-    #[napi(js_name = "decodeResponse")]
-    pub fn decode_response(&self, response: Json) -> napi::Result<Json> {
-        let annotated = self
-            .inner_response_codec
-            .decode_response(&response)
-            .map_err(|e| napi::Error::from_reason(e.to_string()))?;
-        serde_json::to_value(&annotated).map_err(|e| napi::Error::from_reason(e.to_string()))
-    }
+builtin_codec! {
+    #[doc = " Built-in codec for the OCI Generative AI chat API."]
+    #[doc = ""]
+    #[doc = " Implements both request codec (decode/encode) and response codec"]
+    #[doc = " (decodeResponse). Construct with `new OCIGenAIChatCodec()`."]
+    #[napi(js_name = "OCIGenAIChatCodec")]
+    OCIGenAIChatCodec(nemo_relay_codecs::oci_genai::OCIGenAIChatCodec, ProviderSurface::OCIGenAI);
 }

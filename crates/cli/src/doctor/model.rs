@@ -119,6 +119,7 @@ impl UpstreamAuthInfo {
                 gateway.openai_auth_header.as_deref(),
                 gateway.openai_api_key.is_some()
                     || gateway.openai_api_key_helper.is_some()
+                    || gateway.openai_oidc.is_some()
                     || std::env::var("OPENAI_API_KEY")
                         .ok()
                         .is_some_and(|key| !key.trim().is_empty()),
@@ -127,6 +128,7 @@ impl UpstreamAuthInfo {
                 gateway.anthropic_auth_header.as_deref(),
                 gateway.anthropic_api_key.is_some()
                     || gateway.anthropic_api_key_helper.is_some()
+                    || gateway.anthropic_oidc.is_some()
                     || std::env::var("ANTHROPIC_API_KEY")
                         .ok()
                         .is_some_and(|key| !key.trim().is_empty()),
@@ -156,7 +158,10 @@ impl UpstreamAuthInfo {
             ),
         ] {
             let mut status = Status::Info;
-            let details = if let Some(helper) = helper {
+            let oidc = crate::upstream_auth::oidc(gateway, name.starts_with("Anthropic"));
+            let details = if oidc.is_some() {
+                "OpenID Connect sign-in configured; the sign-in check reports its state.".into()
+            } else if let Some(helper) = helper {
                 let scheme = helper.auth_scheme.unwrap_or(default_scheme);
                 let scheme = match scheme {
                     AuthScheme::Bearer => "bearer",
@@ -197,6 +202,14 @@ impl UpstreamAuthInfo {
                 details,
             });
         }
+        for (name, source) in [
+            ("OpenAI sign-in", gateway.openai_oidc.as_ref()),
+            ("Anthropic sign-in", gateway.anthropic_oidc.as_ref()),
+        ] {
+            if let Some(source) = source {
+                info.checks.push(sign_in_check(name, source));
+            }
+        }
         info
     }
 
@@ -215,6 +228,46 @@ pub(crate) enum SecretPresence {
     Configured,
     Unset,
     Unknown,
+}
+
+/// Reports the stored sign-in without contacting the issuer or reading its tokens.
+fn sign_in_check(name: &'static str, source: &crate::oidc::OidcSource) -> Check {
+    let state = crate::oidc::sessions_dir()
+        .and_then(|dir| crate::oidc::sign_in_state(&dir, source, crate::oidc::now_secs()));
+    let issuer = &source.issuer;
+    let (status, details) = match state {
+        Ok(crate::oidc::SignInState::Valid(expires_at)) => (
+            Status::Pass,
+            format!(
+                "Signed in to {issuer}. The access token is valid until {expires_at} (Unix time)."
+            ),
+        ),
+        Ok(crate::oidc::SignInState::ExpiredCanRefresh) => (
+            Status::Pass,
+            format!(
+                "Signed in to {issuer}. The access token has expired; the next request refreshes it."
+            ),
+        ),
+        Ok(crate::oidc::SignInState::ExpiredSignInAgain) => (
+            Status::Warn,
+            format!(
+                "The sign-in to {issuer} has expired and cannot refresh. Run `nemo-relay auth login`."
+            ),
+        ),
+        Ok(crate::oidc::SignInState::NotSignedIn) => (
+            Status::Warn,
+            format!("Not signed in to {issuer}. Run `nemo-relay auth login`."),
+        ),
+        Err(error) => (
+            Status::Fail,
+            format!("Cannot read the sign-in for {issuer}: {error}"),
+        ),
+    };
+    Check {
+        name,
+        status,
+        details,
+    }
 }
 
 impl SecretPresence {
