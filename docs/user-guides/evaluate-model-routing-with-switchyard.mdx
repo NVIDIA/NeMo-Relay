@@ -34,7 +34,7 @@ setup is included; the linked quickstarts and reference pages are supplemental.
 | Capture path | Relay handles requests supported by Switchyard's routing contract | Relay-wrapped Claude Code or Codex, translated to NVIDIA Chat Completions targets |
 | Host | Supported native-plugin platform | Linux x86_64 glibc CPU VM, Python 3.12, Node.js 24.13.1+ |
 | Access | Two tool-capable model targets and a JSON-capable judge | NVIDIA API key with access to the selected models; GitHub CLI authentication for plugin installation |
-| Versions | Compatible Relay and Switchyard releases | Relay 0.10.4, Switchyard plugin 0.3.2, and Claude Code 2.1.309 or Codex 0.164.0 |
+| Versions | Compatible Relay and Switchyard releases | Relay 0.11.1, Switchyard plugin 0.3.2, and Claude Code 2.1.309 or Codex 0.164.0 |
 | Changes and cleanup | Plugin and route policy in the model-handling process | Isolated output, harness configuration, and plugin bundle; remove only those directories |
 
 <Warning title="Match the plugin to the Relay host">
@@ -353,19 +353,18 @@ export RELAY_EXAMPLE_HARNESS=codex
 </Tab>
 </Tabs>
 
-<Note title="Harness choice and inference access">
-Both options use NVIDIA inference. The runner prepares isolated harness settings
-and a placeholder credential for the local Relay gateway; Switchyard authenticates
-its upstream calls with `NVIDIA_API_KEY`. This example does not require a ChatGPT
-or Claude subscription login. The native plugin does not forward those subscription
-credentials to model targets.
+<Note title="One key for the models">
+Switchyard uses `NVIDIA_API_KEY` to call the efficient model, capable model,
+and routing judge on NVIDIA’s inference endpoint. Claude Code or Codex supplies
+the agent interface; the runner connects it to Relay automatically. This example
+requires no ChatGPT or Claude subscription and no OpenAI or Anthropic API key.
 </Note>
 
 Install the pinned Relay version and obtain the example files:
 
 ```bash
-curl -fsSL https://raw.githubusercontent.com/NVIDIA/NeMo-Relay/0.10.4/install.sh -o /tmp/install-relay.sh
-NEMO_RELAY_VERSION=0.10.4 sh /tmp/install-relay.sh
+curl -fsSL https://raw.githubusercontent.com/NVIDIA/NeMo-Relay/0.11.1/install.sh -o /tmp/install-relay.sh
+NEMO_RELAY_VERSION=0.11.1 sh /tmp/install-relay.sh
 export PATH="$HOME/.local/bin:$PATH"
 git clone --depth 1 https://github.com/NVIDIA/NeMo-Relay.git relay-routing
 cd relay-routing/docs/user-guides/_examples/model-routing
@@ -404,14 +403,32 @@ You supply the plugin manifest, model IDs, and provider credentials.
 
 ### 4. Configure inference and run one comparison
 
+<CardGroup cols={2}>
+<Card title="Free hosted inference" icon="fa-solid fa-gift" href="https://docs.api.nvidia.com/nim/docs/api-quickstart">
+Join the free NVIDIA Developer Program through a model page on build.nvidia.com
+and select **Generate API Key**. Use the free endpoints listed below for this
+prototyping example; account access and service limits apply.
+</Card>
+<Card title="Use existing NVIDIA access" icon="fa-solid fa-building">
+Use your organization's approved NVIDIA endpoint and accessible models. Supply its
+model IDs, base URL, and inference credential in the environment below.
+The endpoint must support the OpenAI Chat Completions contract used here.
+</Card>
+</CardGroup>
+
+The [NVIDIA Developer Program](https://docs.api.nvidia.com/nim/docs/product#how-do-i-access-nvidia-nim-via-the-nvidia-developer-program)
+provides free hosted inference for prototyping. Brev compute is billed separately;
+you can also run the same files on a suitable Linux host you already have.
+
 The following public NVIDIA API catalog selections provide an efficient and
 capable target. The judge reuses the efficient model; it does not require a third
-model. Confirm tool calling and JSON verdict support with your key before a
-comparison; catalog availability alone does not establish account access.
+model. Both model pages list a free endpoint. Confirm access with your key,
+tool calling, and JSON verdict support before a comparison; the catalog can
+change independently of this guide.
 
 | Role | Example model |
 | --- | --- |
-| Efficient target and judge | [NVIDIA Nemotron 3 Nano 30B A3B](https://build.nvidia.com/nvidia/nemotron-3-nano-30b-a3b) |
+| Efficient target and judge | [NVIDIA Nemotron 3.5 Lightning 30B A3B](https://build.nvidia.com/nvidia/nemotron-3.5-lightning-30b-a3b) |
 | Capable target | [NVIDIA Nemotron 3 Ultra 550B A55B](https://build.nvidia.com/nvidia/nemotron-3-ultra-550b-a55b) |
 
 Replace these choices with accessible models when needed. Enter credentials in
@@ -419,7 +436,7 @@ the same shell you use to run the comparison:
 
 ```bash
 export NVIDIA_BASE_URL=https://integrate.api.nvidia.com/v1
-export EFFICIENT_MODEL=nvidia/nemotron-3-nano-30b-a3b
+export EFFICIENT_MODEL=nvidia/nemotron-3.5-lightning-30b-a3b
 export CAPABLE_MODEL=nvidia/nemotron-3-ultra-550b-a55b
 export JUDGE_MODEL="$EFFICIENT_MODEL"
 IFS= read -r -s -p 'NVIDIA API key: ' NVIDIA_API_KEY; printf '\n'
@@ -434,28 +451,27 @@ python3.12 run.py --harness "$RELAY_EXAMPLE_HARNESS" --output /tmp/relay-routing
 
 This checks configuration generation and TOML syntax. It does not load the
 plugin, validate provider access, or test model behavior. Inspect the generated
-files, then use a **different output directory** for execution:
+files, then start with one task across three policies in a **different output directory**:
 
 ```bash
-python3.12 run.py --harness "$RELAY_EXAMPLE_HARNESS" --output /tmp/relay-routing --repeat 1
+python3.12 run.py --harness "$RELAY_EXAMPLE_HARNESS" --output /tmp/relay-routing --task ticket-id --repeat 1
 python3.12 summarize.py /tmp/relay-routing
 ```
 
-The runner uses fresh scaffolds for incident-ID validation, retry delays, and
-dependency planning. The latter includes cycles, transitive blocking, lexical
+The first check runs incident-ID validation across all three policies. Omit
+`--task ticket-id` to include retry delays and dependency planning. The latter includes cycles, transitive blocking, lexical
 topological order, and a 10,000-node chain. It tests a broader capability boundary;
 observe the judge's actual selection rather than assuming it chooses the capable model.
 
-The first check runs three tasks across three policies, for nine attempts.
-For a repeated evaluation, choose a new output directory and use `--repeat 3`
-(27 attempts); policy order rotates between trials.
+The full workload runs three tasks across three policies, for nine attempts.
+For a repeated full evaluation, choose a new output directory and use `--repeat 3`
+without a task filter (27 attempts); policy order rotates between trials.
 External acceptance runs outside the agent's working directory. Every arm has
 the selected harness's tools and the same 16,384-token provider completion limit,
 including reasoning. That limit also applies to the judge. Failures remain in `results.json`;
 the overall command returns nonzero if any arm fails.
 
-For a smaller check, add `--task ticket-id` to run that task across all three
-policies. Compare Claude Code and Codex in separate output directories; their
+Compare Claude Code and Codex in separate output directories; their
 tools and prompts differ, so their results are separate experiments.
 
 The Codex path uses its workspace-write sandbox. The Claude Code path allows
