@@ -1,7 +1,7 @@
 # SPDX-FileCopyrightText: Copyright (c) 2026, NVIDIA CORPORATION & AFFILIATES. All rights reserved.
 # SPDX-License-Identifier: Apache-2.0
 
-"""Compare fixed and routed pi coding tasks through Relay's Switchyard plugin."""
+"""Compare fixed and routed Claude Code or Codex tasks through Relay's Switchyard plugin."""
 
 import argparse
 import json
@@ -60,7 +60,7 @@ def stop_task(process):
             if expanded == owned:
                 break
             owned = expanded
-        # Relay starts pi in another process group. Kill those groups too, but
+        # Relay can start a harness in another process group. Kill those groups too, but
         # never signal a group whose snapshot includes an unrelated process.
         groups = {group for pid, _, group in rows if pid in owned}
         for group in groups:
@@ -102,16 +102,22 @@ def run_task(command, *, cwd, env, log, timeout):
 
 def main():
     parser = argparse.ArgumentParser(description=__doc__)
-    parser.add_argument("--output", type=Path, required=True, help="New directory; never modifies your pi setup")
+    parser.add_argument("--harness", choices=["claude", "codex"], required=True)
+    parser.add_argument(
+        "--output", type=Path, required=True, help="New directory; preserves your existing harness setup"
+    )
     parser.add_argument("--prepare-only", action="store_true")
+    parser.add_argument(
+        "--task", choices=TASKS, action="append", help="Select a task; repeat to select more (default: all)"
+    )
     parser.add_argument("--timeout", type=int, default=600, help="Seconds allowed for each task")
     parser.add_argument("--repeat", type=int, default=1, help="Fresh trials of each task in each arm")
     parser.add_argument(
-        "--max-output-tokens", type=int, default=16384, help="Shared per-call output budget, including model reasoning"
+        "--max-output-tokens", type=int, default=16384, help="Provider completion limit, including model reasoning"
     )
     args = parser.parse_args()
     if not 1 <= args.max_output_tokens <= 16384:
-        parser.error("--max-output-tokens must be between 1 and 16384 for this 32768-token example")
+        parser.error("--max-output-tokens must be between 1 and 16384")
     if args.repeat <= 0:
         parser.error("--repeat must be positive")
     names = ["NVIDIA_BASE_URL", "EFFICIENT_MODEL", "CAPABLE_MODEL", "SWITCHYARD_MANIFEST"]
@@ -122,8 +128,18 @@ def main():
         parser.error("Set NVIDIA_API_KEY in the launching environment")
     if args.timeout <= 0:
         parser.error("--timeout must be positive")
-    if not args.prepare_only and any(not shutil.which(name) for name in ["nemo-relay", "pi"]):
-        parser.error("Install the Relay CLI and pi versions used by the pi quickstart first")
+    if not args.prepare_only and any(not shutil.which(name) for name in ["nemo-relay", args.harness]):
+        parser.error("Install the Relay CLI and the selected harness version before running")
+    if not args.prepare_only:
+        managed_paths = [Path("/etc/nemo-relay/config.toml"), Path("/etc/nemo-relay/plugins.toml")]
+        if args.harness == "codex":
+            managed_paths.append(Path("/etc/codex/managed_config.toml"))
+        else:
+            managed_paths.append(Path("/etc/claude-code/managed-settings.json"))
+        if any(path.exists() for path in managed_paths):
+            parser.error(
+                "Managed system configuration is present. Run this example on a fresh host; do not remove policy."
+            )
     endpoint = urlsplit(os.environ["NVIDIA_BASE_URL"])
     if (
         endpoint.scheme != "https"
@@ -142,43 +158,54 @@ def main():
     for name in ["NVIDIA_BASE_URL", "EFFICIENT_MODEL", "CAPABLE_MODEL", "JUDGE_MODEL"]:
         value = os.environ.get(name) or os.environ["EFFICIENT_MODEL"]
         routes = routes.replace(json.dumps(f"__{name}__"), json.dumps(value))
+    routes = routes.replace(json.dumps("__MAX_OUTPUT_TOKENS__"), str(args.max_output_tokens))
     tomllib.loads(routes)
     try:
         output.mkdir(parents=True, exist_ok=False, mode=0o700)
     except FileExistsError:
         parser.error("Output directory exists: choose a new --output; previous results are preserved")
     (output / "routes.toml").write_text(routes)
-    environment = os.environ.copy()
-    environment["PI_CODING_AGENT_DIR"] = str(output / "pi")
-    environment["XDG_CONFIG_HOME"] = str(output / "config")
-    (output / "pi").mkdir()
-    # A custom provider keeps the virtual route IDs out of pi's NVIDIA model catalog.
-    provider = {
-        "baseUrl": os.environ["NVIDIA_BASE_URL"],
-        "api": "openai-completions",
-        "apiKey": "relay-route-placeholder",
-        "compat": {"supportsDeveloperRole": False},
-        "models": [
-            {
-                "id": f"switchyard/{arm}",
-                "name": arm,
-                "reasoning": False,
-                "input": ["text"],
-                "contextWindow": 32768,
-                "maxTokens": args.max_output_tokens,
-            }
-            for arm in ["baseline", "efficient", "routed"]
-        ],
+    # Match the Quick Start runner's isolated provider setup. Personal logins,
+    # plugins, and provider overrides must not change one comparison arm.
+    environment = {
+        key: value
+        for key, value in os.environ.items()
+        if not key.startswith(("CODEX_", "CLAUDE_", "ANTHROPIC_", "OPENAI_", "NEMO_RELAY_", "GH_", "GITHUB_"))
     }
-    (output / "pi/models.json").write_text(json.dumps({"providers": {"relay-nvidia": provider}}, indent=2) + "\n")
+    environment["XDG_CONFIG_HOME"] = str(output / "config")
+    harness_dir = output / args.harness
+    harness_dir.mkdir()
+    if args.harness == "codex":
+        environment["CODEX_HOME"] = str(harness_dir)
+        environment["OPENAI_API_KEY"] = "relay-local-example"
+        (harness_dir / "config.toml").write_text('approval_policy = "never"\nsandbox_mode = "workspace-write"\n')
+    else:
+        environment.update(
+            CLAUDE_CONFIG_DIR=str(harness_dir),
+            CLAUDE_CODE_DISABLE_NONESSENTIAL_TRAFFIC="1",
+            DISABLE_AUTOUPDATER="1",
+            ANTHROPIC_AUTH_TOKEN="relay-local-example",
+            CLAUDE_CODE_MAX_OUTPUT_TOKENS=str(args.max_output_tokens),
+        )
+        (harness_dir / ".claude.json").write_text(json.dumps({"hasCompletedOnboarding": True, "theme": "dark"}))
+        (harness_dir / "settings.json").write_text(json.dumps({"permissions": {"defaultMode": "default"}}))
+    # The placeholder authenticates only the harness's local gateway request.
+    # Switchyard reads NVIDIA_API_KEY for its own upstream calls; no provider
+    # subscription credential is copied into the generated configuration.
+    tasks = list(dict.fromkeys(args.task or TASKS))
+    (output / "comparison.json").write_text(
+        json.dumps({"harness": args.harness, "tasks": tasks, "repeat": args.repeat}, indent=2) + "\n"
+    )
     results = []
     for arm in ["baseline", "efficient", "routed"]:
         arm_dir = output / arm
         arm_dir.mkdir()
         # --config discovers plugins.toml beside this file; keep the pair together.
         (arm_dir / "config.toml").write_text(
-            '[agents.pi]\ncommand = "pi"\n\n[upstream]\nopenai_base_url = '
+            f'[agents.{args.harness}]\ncommand = "{args.harness}"\n\n[upstream]\nopenai_base_url = '
             + json.dumps(os.environ["NVIDIA_BASE_URL"])
+            + "\nanthropic_base_url = "
+            + json.dumps(os.environ["NVIDIA_BASE_URL"].rstrip("/").removesuffix("/v1"))
             + "\n"
         )
         plugins = f"""version = 1
@@ -210,14 +237,13 @@ attestation = "integrity_only"
         tomllib.loads(plugins)
         (arm_dir / "plugins.toml").write_text(plugins)
         for trial in range(1, args.repeat + 1):
-            for task in TASKS:
+            for task in tasks:
                 task_dir = arm_dir / f"{task}-{trial}"
                 task_dir.mkdir()
                 shutil.copyfile(source / "service.py", task_dir / "service.py")
     print(f"Prepared example: {output}")
     if args.prepare_only:
         return
-    subprocess.run(["nemo-relay", "install", "pi"], env=environment, check=True)
     arms = ["baseline", "efficient", "routed"]
     for arm in arms:
         command = ["nemo-relay", "--config", str(output / arm / "config.toml")]
@@ -230,7 +256,7 @@ attestation = "integrity_only"
     with (output / "startup.log").open("w") as log:
         try:
             startup = subprocess.run(
-                ["nemo-relay", "--config", str(output / "baseline/config.toml"), "pi", "--", "--version"],
+                ["nemo-relay", "--config", str(output / "baseline/config.toml"), args.harness, "--", "--version"],
                 env=environment,
                 stdout=log,
                 stderr=subprocess.STDOUT,
@@ -242,32 +268,51 @@ attestation = "integrity_only"
         raise ValueError("Routing startup failed; inspect startup.log before running task comparisons")
     for trial in range(1, args.repeat + 1):
         order = arms[(trial - 1) % 3 :] + arms[: (trial - 1) % 3]
-        for task, prompt in TASKS.items():
+        for task in tasks:
+            prompt = TASKS[task]
             for arm in order:
                 arm_dir = output / arm
                 task_dir = arm_dir / f"{task}-{trial}"
                 command = ["nemo-relay", "--config", str(arm_dir / "config.toml")]
                 started = time.monotonic()
                 with (task_dir / "agent.log").open("w") as log:
-                    status = run_task(
-                        command
-                        + [
-                            "pi",
+                    instructions = (
+                        prompt + " Read service.py, implement the change with the available file tools, "
+                        "and run your tests with python3. Use only local files and tools in this directory. "
+                        "Finish with a concise status."
+                    )
+                    if args.harness == "codex":
+                        arguments = [
+                            "codex",
                             "--",
-                            "--provider",
-                            "relay-nvidia",
+                            "exec",
                             "--model",
                             f"switchyard/{arm}",
-                            "--no-session",
-                            "--mode",
-                            "json",
+                            "--sandbox",
+                            "workspace-write",
+                            "--skip-git-repo-check",
+                            "--ephemeral",
+                            "--json",
+                            instructions,
+                        ]
+                    else:
+                        arguments = [
+                            "claude",
+                            "--",
+                            "--model",
+                            f"switchyard/{arm}",
                             "--tools",
-                            "read,write,bash",
+                            "Read,Edit,Write,Bash",
+                            "--allowedTools",
+                            "Read",
+                            "Edit",
+                            "Write",
+                            "Bash(python3:*)",
                             "-p",
-                            prompt + " Read service.py, implement the change with the available file tools, "
-                            "and run your tests. Use only local files and tools in this directory. "
-                            "Finish with a concise status.",
-                        ],
+                            instructions,
+                        ]
+                    status = run_task(
+                        command + arguments,
                         cwd=task_dir,
                         env=environment,
                         log=log,
@@ -289,6 +334,7 @@ attestation = "integrity_only"
                 results.append(
                     {
                         "arm": arm,
+                        "harness": args.harness,
                         "task": task,
                         "trial": trial,
                         "agent_status": status,

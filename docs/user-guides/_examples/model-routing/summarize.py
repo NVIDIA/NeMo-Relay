@@ -47,7 +47,10 @@ def summarize(output):
             event.get("kind") == "scope"
             and event.get("category") == "llm"
             and event.get("scope_category") == "end"
-            and ((event.get("category_profile") or {}).get("annotated_response") or {}).get("finish_reason")
+            and (
+                ((event.get("category_profile") or {}).get("annotated_response") or {}).get("finish_reason")
+                or ((event.get("category_profile") or {}).get("annotated_response") or {}).get("stop_reason")
+            )
             in {"length", "max_tokens"}
             for event in events
         )

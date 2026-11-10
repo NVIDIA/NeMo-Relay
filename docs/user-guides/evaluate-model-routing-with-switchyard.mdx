@@ -14,15 +14,15 @@ with [NeMo Switchyard](https://nvidia-nemo.github.io/Switchyard/) running as a f
 party native plugin to compare a routing policy against fixed-model baselines
 using the same tasks and acceptance checks.
 
-The optional [NVIDIA Brev](https://brev.nvidia.com/) example uses the
-[pi coding agent](https://github.com/earendil-works/pi/tree/main/packages/coding-agent),
-two NVIDIA model targets, and a judge. Switchyard runs inside the Relay process
-handling model calls.
+The optional [NVIDIA Brev](https://brev.nvidia.com/) example uses either
+[Anthropic Claude Code](https://claude.com/product/claude-code) or
+[OpenAI Codex](https://github.com/openai/codex), two NVIDIA model targets, and a
+judge. Switchyard runs inside the Relay process handling model calls.
 The outcome is a scorecard for your policy decision; monetary savings require
 validated prices as well as measured usage.
 
 <Tip title="Try the complete example on Brev">
-[Run the Brev example](#run-the-brev-example) to install pi, Relay, and the
+[Run the Brev example](#run-the-brev-example) to install your chosen harness, Relay, and the
 Switchyard plugin, then compare fixed and routed coding tasks. All example
 setup is included; the linked quickstarts and reference pages are supplemental.
 </Tip>
@@ -31,11 +31,11 @@ setup is included; the linked quickstarts and reference pages are supplemental.
 
 | Requirement | Your deployment | Brev example |
 | --- | --- | --- |
-| Capture path | Relay handles requests supported by Switchyard's routing contract | pi extension and an OpenAI Chat Completions provider |
+| Capture path | Relay handles requests supported by Switchyard's routing contract | Relay-wrapped Claude Code or Codex, translated to NVIDIA Chat Completions targets |
 | Host | Supported native-plugin platform | Linux x86_64 glibc CPU VM, Python 3.12, Node.js 24.13.1+ |
 | Access | Two tool-capable model targets and a JSON-capable judge | NVIDIA API key with access to the selected models; GitHub CLI authentication for plugin installation |
-| Versions | Compatible Relay and Switchyard releases | Relay 0.10.4, pi 0.84.0, Switchyard plugin 0.3.2 |
-| Changes and cleanup | Plugin and route policy in the model-handling process | Isolated output, pi configuration, and plugin bundle; remove only those directories |
+| Versions | Compatible Relay and Switchyard releases | Relay 0.10.4, Switchyard plugin 0.3.2, and Claude Code 2.1.309 or Codex 0.164.0 |
+| Changes and cleanup | Plugin and route policy in the model-handling process | Isolated output, harness configuration, and plugin bundle; remove only those directories |
 
 <Warning title="Keep system policy separate">
 Use a host without the coding-agent example's system-wide Relay policy.
@@ -220,8 +220,9 @@ Explore published comparisons, routing configurations, and reproduction instruct
 
 For other usage examples, see the
 [Relay integration](https://nvidia-nemo.github.io/Switchyard/integrations/nemo_relay/)
-and [standalone pi recipe](https://nvidia-nemo.github.io/Switchyard/integrations/pi/).
-The pi recipe uses Switchyard's local reference server; this guide uses the Relay plugin.
+and [coding-agent recipes](https://nvidia-nemo.github.io/Switchyard/recipes/single_provider_coding_agents/).
+Those saved-login recipes use Switchyard's standalone server. This guide uses
+the Relay plugin with a deployment-owned NVIDIA API key.
 
 
 
@@ -231,15 +232,19 @@ The pi recipe uses Switchyard's local reference server; this guide uses the Rela
 
 <div style={{ display: "flex", flexWrap: "wrap", gap: "0.5rem" }}>
   <Badge intent="success" minimal>Example</Badge>
-  <Badge intent="note" minimal>pi</Badge>
+  <Badge intent="note" minimal>Claude Code</Badge>
+  <Badge intent="note" minimal>OpenAI Codex</Badge>
   <Badge intent="note" minimal>NeMo Switchyard</Badge>
 </div>
 
 Follow this section from a fresh VM through the evidence checks. The workload
-uses pi with NVIDIA-hosted inference and the Switchyard native plugin; other
-supported model-handling processes remain deployment choices.
-The example uses OpenAI Chat Completions. pi's Relay integration is a proof of
-concept with version-sensitive hooks; repeat acceptance when changing versions.
+uses your choice of Claude Code or Codex with NVIDIA-hosted inference and the
+Switchyard native plugin. Use the same harness for all three policies in a
+comparison. Other supported model-handling processes remain deployment choices.
+
+Codex sends OpenAI Responses requests; Claude Code sends Anthropic Messages.
+Switchyard translates either format to the configured NVIDIA Chat Completions
+targets. Repeat acceptance when changing a harness, model, or plugin version.
 
 ### 1. Provision and connect to a VM
 
@@ -309,17 +314,46 @@ node --version
 
 Expect `x86_64`, a glibc version, Python 3.12+, and Node.js 24.13.1.
 
-### 3. Install Relay, pi, and the plugin
+### 3. Choose a harness and install Relay and the plugin
 
-Install the pinned pi and Relay versions, register the extension, and acquire
-the native plugin bundle:
+Choose **one** harness, using the same options as the
+[organization deployment guide](/user-guides/govern-coding-agents#choose-the-coding-harness):
+
+<Tabs>
+<Tab title="Claude Code">
 
 ```bash
-sudo npm install --global --prefix /usr/local @earendil-works/pi-coding-agent@0.84.0
+sudo npm install --global --prefix /usr/local @anthropic-ai/claude-code@2.1.309
+claude --version
+export RELAY_EXAMPLE_HARNESS=claude
+```
+
+</Tab>
+<Tab title="Codex">
+
+```bash
+sudo npm install --global --prefix /usr/local @openai/codex@0.164.0
+codex --version
+export RELAY_EXAMPLE_HARNESS=codex
+```
+
+</Tab>
+</Tabs>
+
+<Note title="Harness choice and inference access">
+Both options use NVIDIA inference. The runner prepares isolated harness settings
+and a placeholder credential for the local Relay gateway; Switchyard authenticates
+its upstream calls with `NVIDIA_API_KEY`. This example does not require a ChatGPT
+or Claude subscription login. The native plugin does not forward those subscription
+credentials to model targets.
+</Note>
+
+Install the pinned Relay version and obtain the example files:
+
+```bash
 curl -fsSL https://raw.githubusercontent.com/NVIDIA/NeMo-Relay/0.10.4/install.sh -o /tmp/install-relay.sh
 NEMO_RELAY_VERSION=0.10.4 sh /tmp/install-relay.sh
 export PATH="$HOME/.local/bin:$PATH"
-nemo-relay install pi
 git clone --depth 1 https://github.com/NVIDIA/NeMo-Relay.git relay-routing
 cd relay-routing/docs/user-guides/_examples/model-routing
 ```
@@ -350,7 +384,7 @@ each comparison's configuration.
 
 <Note title="The runner manages the example configuration">
 Do not manually copy the earlier `plugins.toml` or `routes.toml` into system
-configuration. The runner writes isolated route, plugin, and pi configuration,
+configuration. The runner writes isolated route, plugin, and harness configuration,
 enables and probes the native plugin, and starts/stops its task gateways.
 You supply the plugin manifest, model IDs, and provider credentials.
 </Note>
@@ -382,7 +416,7 @@ export NVIDIA_API_KEY
 Prepare configuration and task scaffolds without making model calls:
 
 ```bash
-python3.12 run.py --output /tmp/relay-routing-prepared --prepare-only
+python3.12 run.py --harness "$RELAY_EXAMPLE_HARNESS" --output /tmp/relay-routing-prepared --prepare-only
 ```
 
 This checks configuration generation and TOML syntax. It does not load the
@@ -390,7 +424,7 @@ plugin, validate provider access, or test model behavior. Inspect the generated
 files, then use a **different output directory** for execution:
 
 ```bash
-python3.12 run.py --output /tmp/relay-routing --repeat 1
+python3.12 run.py --harness "$RELAY_EXAMPLE_HARNESS" --output /tmp/relay-routing --repeat 1
 python3.12 summarize.py /tmp/relay-routing
 ```
 
@@ -403,17 +437,27 @@ The first check runs three tasks across three policies, for nine attempts.
 For a repeated evaluation, choose a new output directory and use `--repeat 3`
 (27 attempts); policy order rotates between trials.
 External acceptance runs outside the agent's working directory. Every arm has
-the same tools and 16,384-token answer budget. Failures remain in `results.json`;
+the selected harness's tools and the same 16,384-token provider completion limit,
+including reasoning. That limit also applies to the judge. Failures remain in `results.json`;
 the overall command returns nonzero if any arm fails.
 
+For a smaller check, add `--task ticket-id` to run that task across all three
+policies. Compare Claude Code and Codex in separate output directories; their
+tools and prompts differ, so their results are separate experiments.
+
+The Codex path uses its workspace-write sandbox. The Claude Code path allows
+file tools and `python3` test commands for the supplied synthetic tasks. Review
+any Relay hook trust prompts; keep the run confined to the disposable example.
+
 Choose available models from [build.nvidia.com](https://build.nvidia.com/explore/discover).
-The API base URL is `https://integrate.api.nvidia.com/v1`; requests use
-`/chat/completions`. Confirm that your key can access each target before starting.
+The upstream API base URL is `https://integrate.api.nvidia.com/v1`; Switchyard
+calls `/chat/completions` for either harness. Confirm model access before starting.
 
 ### 5. Inspect the evidence
 
 | Evidence | Inspect |
 | --- | --- |
+| Harness and task selection | `comparison.json` |
 | Task acceptance | `results.json`, generated files, and `acceptance.log` |
 | Selection and delivery | `switchyard.routing.decision`: `selected_model`, `served_model`, `fallback_used` |
 | Judge recovery | Decision `evidence.source` and `reason_code` |
@@ -434,5 +478,5 @@ selected runtime versions before repeating in a new output directory.
 The runner stops each task gateway. Retain the scorecard and logs, then remove
 only your chosen output directories and the directory recorded in
 `SWITCHYARD_INSTALL_ROOT`, which contains this example's plugin installation.
-Leave other users' pi settings and plugin installations in place. Stop or
+Leave other users' harness settings and plugin installations in place. Stop or
 delete the Brev VM when done.

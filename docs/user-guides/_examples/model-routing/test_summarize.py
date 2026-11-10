@@ -1,7 +1,7 @@
 # SPDX-FileCopyrightText: Copyright (c) 2026, NVIDIA CORPORATION & AFFILIATES. All rights reserved.
 # SPDX-License-Identifier: Apache-2.0
 
-"""Regression checks for duplicated events and missing token telemetry."""
+"""Regression checks for preparation, process cleanup, and routing summaries."""
 
 import contextlib
 import io
@@ -13,8 +13,9 @@ import tempfile
 import time
 import unittest
 from pathlib import Path
+from unittest import mock
 
-from run import run_task
+from run import main, run_task
 from summarize import summarize
 
 
@@ -23,6 +24,65 @@ def mark(name, data, identity):
 
 
 class SummaryChecks(unittest.TestCase):
+    def test_managed_host_is_rejected_before_running_tasks(self):
+        with tempfile.TemporaryDirectory() as directory:
+            output = Path(directory) / "unused"
+            environment = {
+                "NVIDIA_API_KEY": "test-only",
+                "NVIDIA_BASE_URL": "https://integrate.api.nvidia.com/v1",
+                "EFFICIENT_MODEL": "example/efficient",
+                "CAPABLE_MODEL": "example/capable",
+                "SWITCHYARD_MANIFEST": "not-loaded.toml",
+            }
+            with (
+                mock.patch.dict(os.environ, environment, clear=True),
+                mock.patch.object(sys, "argv", ["run.py", "--harness", "codex", "--output", str(output)]),
+                mock.patch("run.shutil.which", return_value="installed"),
+                mock.patch("run.Path.exists", return_value=True),
+                contextlib.redirect_stderr(io.StringIO()) as diagnostic,
+                self.assertRaises(SystemExit) as error,
+            ):
+                main()
+            self.assertEqual(error.exception.code, 2)
+            self.assertIn("fresh host", diagnostic.getvalue())
+            self.assertFalse(output.exists())
+
+    def test_preparation_needs_no_harness_binary_or_credentials(self):
+        # Both choices must be inspectable before installing a harness or
+        # spending inference tokens. An empty PATH catches accidental launches.
+        for harness in ("claude", "codex"):
+            with self.subTest(harness=harness), tempfile.TemporaryDirectory() as directory:
+                output = Path(directory) / "prepared"
+                environment = {
+                    "PATH": "",
+                    "NVIDIA_BASE_URL": "https://integrate.api.nvidia.com/v1",
+                    "EFFICIENT_MODEL": "example/efficient",
+                    "CAPABLE_MODEL": "example/capable",
+                    "SWITCHYARD_MANIFEST": str(Path(directory) / "not-installed.toml"),
+                }
+                result = subprocess.run(
+                    [
+                        sys.executable,
+                        str(Path(__file__).with_name("run.py")),
+                        "--harness",
+                        harness,
+                        "--output",
+                        str(output),
+                        "--prepare-only",
+                        "--task",
+                        "ticket-id",
+                    ],
+                    env=environment,
+                    capture_output=True,
+                    text=True,
+                    timeout=10,
+                )
+                self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
+                self.assertEqual(json.loads((output / "comparison.json").read_text())["harness"], harness)
+                self.assertTrue((output / "routed/ticket-id-1/service.py").exists())
+                self.assertFalse((output / "routed/dependency-plan-1").exists())
+                self.assertFalse((output / "results.json").exists())
+
     def test_acceptance_rejects_unicode_digit_and_prefix_regressions(self):
         # Both defects appeared in real model outputs. Keep the external check
         # capable of rejecting them even when the agent's own tests pass.
@@ -135,6 +195,23 @@ class SummaryChecks(unittest.TestCase):
             self.assertEqual(rows[0]["recovery_reasons"], {"invalid_verdict": 1})
             self.assertEqual(rows[1]["accepted"], 0)
             self.assertIsNone(rows[1]["tokens"]["answer"])
+            # Claude's Messages response names the same limit stop_reason.
+            with (logs / "events.jsonl").open("a") as stream:
+                stream.write(
+                    "\n"
+                    + json.dumps(
+                        {
+                            "uuid": "claude-truncated",
+                            "kind": "scope",
+                            "category": "llm",
+                            "scope_category": "end",
+                            "category_profile": {"annotated_response": {"stop_reason": "max_tokens"}},
+                        }
+                    )
+                )
+            with contextlib.redirect_stdout(io.StringIO()):
+                rows = summarize(output)
+            self.assertEqual(rows[0]["truncated_calls"], 2)
             # One extra observed call without usage makes the aggregate incomplete.
             with (logs / "events.jsonl").open("a") as stream:
                 stream.write("\n" + json.dumps({**call, "uuid": "second-call"}))
