@@ -2,7 +2,7 @@
 // SPDX-License-Identifier: Apache-2.0
 
 //! Requests to the OpenID Connect issuer: discovery, the device sign-in, the authorization code
-//! exchange and token refresh.
+//! exchange, token refresh and token revocation.
 
 use std::time::Duration;
 
@@ -26,6 +26,7 @@ struct Discovery {
     token_endpoint: String,
     authorization_endpoint: Option<String>,
     device_authorization_endpoint: Option<String>,
+    revocation_endpoint: Option<String>,
 }
 
 const AUTHORIZATION_CODE_GRANT: &str = "authorization_code";
@@ -76,6 +77,7 @@ pub(crate) struct OidcClient {
     pub(super) token_endpoint: String,
     authorization_endpoint: Option<String>,
     device_endpoint: Option<String>,
+    revocation_endpoint: Option<String>,
 }
 
 impl OidcClient {
@@ -102,7 +104,8 @@ impl OidcClient {
         // Endpoints on another origin could send the refresh token to an unintended host.
         let endpoints = std::iter::once(&discovery.token_endpoint)
             .chain(discovery.device_authorization_endpoint.as_ref())
-            .chain(discovery.authorization_endpoint.as_ref());
+            .chain(discovery.authorization_endpoint.as_ref())
+            .chain(discovery.revocation_endpoint.as_ref());
         for endpoint in endpoints {
             if secure_origin(endpoint)? != origin {
                 return Err(auth_error(format!(
@@ -118,6 +121,7 @@ impl OidcClient {
             token_endpoint: discovery.token_endpoint,
             authorization_endpoint: discovery.authorization_endpoint,
             device_endpoint: discovery.device_authorization_endpoint,
+            revocation_endpoint: discovery.revocation_endpoint,
         })
     }
 
@@ -285,6 +289,52 @@ impl OidcClient {
                 )))
             }
         }
+    }
+
+    /// Revokes the refresh token, then the access token (RFC 7009). `None` when the issuer
+    /// publishes no revocation endpoint. An error names the reason, never a token.
+    pub(super) async fn revoke(&self, session: &Session) -> Option<Result<(), String>> {
+        let endpoint = self.revocation_endpoint.as_deref()?;
+        let tokens = session
+            .refresh_token
+            .as_deref()
+            .map(|token| (token, "refresh_token"))
+            .into_iter()
+            .chain(std::iter::once((
+                session.access_token.as_str(),
+                "access_token",
+            )));
+        let mut failures = Vec::new();
+        for (token, hint) in tokens {
+            if let Err(detail) = self.revoke_token(endpoint, token, hint).await {
+                failures.push(format!("{hint}: {detail}"));
+            }
+        }
+        Some(if failures.is_empty() {
+            Ok(())
+        } else {
+            Err(failures.join(", "))
+        })
+    }
+
+    async fn revoke_token(&self, endpoint: &str, token: &str, hint: &str) -> Result<(), String> {
+        let form = [
+            ("token", token),
+            ("token_type_hint", hint),
+            ("client_id", self.client_id.as_str()),
+        ];
+        let response = self
+            .post(endpoint, &form)
+            .await
+            .map_err(|_| "the issuer could not be reached".to_owned())?;
+        let status = response.status();
+        if status.is_success() {
+            return Ok(());
+        }
+        Err(response.json::<OAuthError>().await.map_or_else(
+            |_| format!("HTTP {status}"),
+            |error| describe(&error.error, error.error_description.as_deref()),
+        ))
     }
 
     /// Never fails: a request that does not reach the issuer is `Unavailable`.

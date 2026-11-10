@@ -111,10 +111,29 @@ async fn print_token(dir: &Path, source: OidcSource) -> Result<(), CliError> {
 }
 
 async fn logout(dir: &Path, source: OidcSource) -> Result<(), CliError> {
-    if crate::oidc::logout(dir, &source).await? {
-        println!("Removed the sign-in for {}.", source.issuer);
-    } else {
-        println!("No sign-in is stored for {}.", source.issuer);
+    match crate::oidc::logout(dir, &source).await? {
+        crate::oidc::Logout::NotSignedIn => {
+            println!("No sign-in is stored for {}.", source.issuer);
+        }
+        crate::oidc::Logout::Removed(crate::oidc::Revocation::Revoked) => {
+            println!(
+                "Removed the sign-in for {}. The issuer revoked its tokens.",
+                source.issuer
+            );
+        }
+        crate::oidc::Logout::Removed(crate::oidc::Revocation::NotOffered) => {
+            println!(
+                "Removed the sign-in for {0}. {0} offers no token revocation, so its tokens stay valid until they expire.",
+                source.issuer
+            );
+        }
+        crate::oidc::Logout::Removed(crate::oidc::Revocation::Failed(detail)) => {
+            println!("Removed the sign-in for {}.", source.issuer);
+            eprintln!(
+                "warning: {} did not revoke the tokens ({detail}). They stay valid until they expire.",
+                source.issuer
+            );
+        }
     }
     Ok(())
 }

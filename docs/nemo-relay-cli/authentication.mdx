@@ -268,6 +268,14 @@ time, so a rotated refresh token is never used twice. Because the gateway reads
 the stored sign-in for each request, the token's real expiry applies, and
 `nemo-relay auth logout` takes effect on the next request.
 
+`nemo-relay auth logout` also asks the issuer to revoke the stored tokens
+(RFC 7009), the refresh token first and then the access token. Relay uses the
+`revocation_endpoint` from the issuer's discovery document, which must be on
+the issuer's origin. Relay removes the sign-in file first, so the local sign-in
+is gone even when revocation fails. When the issuer offers no revocation,
+refuses it, or cannot be reached, the command says so and exits 0. The tokens
+then stay valid at the issuer until they expire.
+
 Relay adds the token only to requests it authenticates: agents that Relay
 launches, and daemon routes bound by the managed integration. A client that only
 points its base URL at a shared gateway gets no Relay credential, the same as
