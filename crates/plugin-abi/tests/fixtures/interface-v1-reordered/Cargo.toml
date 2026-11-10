@@ -12,6 +12,7 @@ publish = false
 
 [dependencies]
 # Exact pins freeze this independent binary contract.
+async-ffi = { version = "=0.5.1", default-features = false }
 xabi = "=0.1.2"
 
 [build-dependencies]

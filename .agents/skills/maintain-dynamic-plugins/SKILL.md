@@ -16,7 +16,7 @@ Use this skill for `plugin.kind = "rust_dynamic"`, `plugin.kind = "worker"`,
   plugins cross `nvidia.nemo.relay.worker.v1` (contract `1.0.0`).
 - Use the frozen bootstrap and complete contract schema before constructing
   xabi interface objects. Transfer typed values through the ownership adapters,
-  including nested owners and rollback on decode failure. Use xabi futures and
+  including nested owners and rollback on decode failure. Use async-ffi futures and
   wakers across libraries; ordinary Rust values and Tokio objects stay local.
   Create foreign futures at invocation time so unpolled drops release captured
   guards. Keep scope restoration leases on their entering thread.

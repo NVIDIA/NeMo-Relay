@@ -6,7 +6,7 @@
 //! Middleware futures are polled directly with optional library-local Tokio context.
 //! Foreign future destruction releases unpolled work. Poll panics are
 //! converted here, in the originating library; panicking destructors and foreign
-//! wakers retain xabi's abort limitations.
+//! wakers retain async-ffi's abort limitations.
 
 use std::collections::HashMap;
 use std::future::Future;

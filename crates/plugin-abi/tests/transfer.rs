@@ -127,7 +127,7 @@ fn earlier_argument_failure_releases_later_nested_callback_owner() {
 }
 
 #[test]
-fn dropping_unpolled_xabi_future_releases_captured_admission() {
+fn dropping_unpolled_foreign_future_releases_captured_admission() {
     let drops = Arc::new(AtomicUsize::new(0));
     let owner = Owner(drops.clone());
     let future = async move {
@@ -279,6 +279,25 @@ fn foreign_poll_panic_is_an_error_and_releases_captured_work() {
         Pin::new(&mut future).poll(&mut context),
         std::task::Poll::Ready(Err(_))
     ));
+    assert_eq!(drops.load(Ordering::SeqCst), 1);
     drop(future);
+    assert_eq!(drops.load(Ordering::SeqCst), 1);
+}
+
+#[test]
+fn incompatible_future_generation_retains_rollback_ownership() {
+    use nemo_relay_plugin_abi::transfer::Transfer;
+    let drops = Arc::new(AtomicUsize::new(0));
+    let owner = Owner(drops.clone());
+    let future = async move {
+        let _owner = owner;
+        std::future::pending::<a::Result<Json>>().await
+    }
+    .into_ffi();
+    let mut wire = future.lower();
+    wire.abi_version += 1;
+    assert!(unsafe { FfiFuture::<a::Result<Json>>::take(&mut wire) }.is_err());
+    assert_eq!(drops.load(Ordering::SeqCst), 0);
+    unsafe { FfiFuture::<a::Result<Json>>::release(&mut wire) };
     assert_eq!(drops.load(Ordering::SeqCst), 1);
 }

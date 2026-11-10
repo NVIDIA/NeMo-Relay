@@ -9,7 +9,8 @@ SPDX-License-Identifier: Apache-2.0
 native plugin and its Relay host. Use `nemo-relay-plugin` to write plugins. Use
 this crate when implementing or testing the library boundary.
 
-The interface uses `xabi` 0.1.2 for calls, futures, and wakers across libraries.
+The interface uses `xabi` 0.1.2 for calls and typed values, and `async-ffi` 0.5.1
+for futures and wakers across libraries.
 Relay checks a complete contract schema before constructing a plugin. That schema
 covers layouts, argument and result types, thread-safety requirements, and the
 ownership protocol. Relay runtime types, Tokio objects, and `serde_json::Value`
@@ -90,11 +91,11 @@ when the future has not been polled.
 ## Dependency Pins
 
 Most workspace dependencies use Cargo SemVer ranges. The native interface uses
-exact `=version` requirements for `nemo-relay-plugin-abi` and `xabi`. The interface
-pin selects the declarations reviewed with that SDK
-release. Binary compatibility follows the native contract and checked layouts.
+exact `=version` requirements for `nemo-relay-plugin-abi`, `xabi`, and `async-ffi`.
+The interface pin selects the declarations reviewed with that SDK release. Binary compatibility follows the native contract and checked layouts.
 The external dependency pins keep shared types on reviewed ABI generations.
-A dependency update must pass the binary compatibility tests.
+A dependency update must pass the binary compatibility tests. `async-ffi` uses
+no optional features; its `abi_stable` integration is disabled.
 
 Fixture workspaces have their own exact dependency pins and lockfiles.
 `[package] version = "1.0.0"` names a package release, so it does not use an `=`

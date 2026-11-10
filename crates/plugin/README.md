@@ -37,7 +37,7 @@ component closes.
 | `PluginContext` | Installs component-owned subscribers, guardrails, intercepts, continuations, and streams. |
 | `PluginRuntime` | Emits marks and manages Relay-owned scopes and scope stacks through typed host helpers. |
 | `nemo_relay_plugin!` | Exports the standard checked bootstrap header with the SDK-required native contract. |
-| Native API v1.0 | Uses checked contract schemas, typed values, and `xabi` interfaces and foreign futures. |
+| Native API v1.0 | Uses checked contract schemas, typed values, `xabi` interfaces, and `async-ffi` futures and wakers. |
 | Typed async middleware | Polls guardrails, sanitizers, and intercepts directly on the caller with restored Relay scope. Tokio support is opt-in and shared by the plugin's components. |
 | Async continuations and streams | `ToolNext`, `LlmNext`, and `LlmStreamNext` support repeated or concurrent downstream calls. Streaming LLM continuations use a pull-based host handle. `register_synchronous_stream_callback` accepts synchronous factories that return checked stream descriptors. |
 | Tool results | `ToolNext` returns `ToolExecutionResult`, which keeps an application result and optional annotation together. |

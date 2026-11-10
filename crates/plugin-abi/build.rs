@@ -28,7 +28,8 @@ fn main() {
 }
 
 fn generate_schema(root: &std::path::Path, output: &std::path::Path) {
-    let mut schema = String::from("relay.native.v1.0; xabi/0.1.2; transfer/1;\n");
+    let mut schema =
+        String::from("relay.native.v1.0; xabi/0.1.2; async-ffi/0.5.1/abi2; transfer/1;\n");
     let mut layouts = String::from("|result:&mut String| {\n");
     for file in [
         "value",

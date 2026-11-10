@@ -3,6 +3,12 @@
 version = 4
 
 [[package]]
+name = "async-ffi"
+version = "0.5.1"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "39cd9de47399986d5b216c6bef9434dfff1689ab61ba8d1e2720dc5fe5c84083"
+
+[[package]]
 name = "cfg-if"
 version = "1.0.5"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -29,6 +35,7 @@ dependencies = [
 name = "nemo-relay-plugin-abi"
 version = "1.1.0"
 dependencies = [
+ "async-ffi",
  "quote",
  "syn",
  "xabi",

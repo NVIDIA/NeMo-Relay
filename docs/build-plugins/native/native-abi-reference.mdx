@@ -75,7 +75,8 @@ the nearest microsecond.
 
 ## Futures, Streams, and Shutdown
 
-The `xabi` crate carries futures and wakers across the library boundary.
+The `async-ffi` crate carries futures and wakers across the library boundary.
+Pending polls and borrowed wake-ups do not allocate in the transport.
 Typed middleware futures are polled by their caller under the plugin's captured Relay
 scope. Inline execution creates no plugin runtime. A plugin can opt into a shared
 Tokio runtime; the SDK enters that runtime around each user-future poll and drop.

@@ -198,6 +198,7 @@ windows-sys = "0.61"
 
 # Native plugin ABI.
 # Exact pins keep SDK/host ABI generations aligned. Review updates with the binary matrix.
+async-ffi = { version = "=0.5.1", default-features = false }
 xabi = { version = "=0.1.2" }
 
 # Language bindings and binding generation.

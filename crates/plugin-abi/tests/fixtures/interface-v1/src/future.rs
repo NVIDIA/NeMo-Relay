@@ -1,7 +1,7 @@
 // SPDX-FileCopyrightText: Copyright (c) 2026, NVIDIA CORPORATION & AFFILIATES. All rights reserved.
 // SPDX-License-Identifier: Apache-2.0
 
-//! Library-local futures. Only xabi's generated foreign futures cross the boundary.
+//! Library-local futures with async-ffi futures and wakers at the native boundary.
 use std::{
     future::Future,
     pin::Pin,
@@ -25,60 +25,103 @@ pub trait FutureExt: Future + Send + Sized + 'static {
 }
 impl<F: Future + Send + 'static> FutureExt for F {}
 
-/// Frozen xabi future descriptor with explicit single-owner transfer.
+/// Frozen async-ffi owner with checked generation and source-owned storage.
 #[repr(C)]
 #[derive(Clone, Copy)]
 pub struct FutureWire {
-    /// Size of the xabi future descriptor in bytes.
-    pub size: usize,
-    /// xabi future descriptor generation.
+    /// Required async-ffi ABI generation.
     pub abi_version: u32,
-    /// Exclusively owned future state in its originating library.
+    /// Source-allocated future storage.
     pub instance: *mut std::ffi::c_void,
-    /// Poll the source future using an xabi waker and result slot.
-    pub poll: unsafe extern "C" fn(
-        *mut std::ffi::c_void,
-        *const xabi::XabiWaker,
-        *mut xabi::XabiResult,
-    ) -> i32,
-    /// Release the future in its originating library, including unpolled work.
+    /// Move the foreign future out and release storage with the source allocator.
+    pub take: unsafe extern "C" fn(*mut std::ffi::c_void) -> async_ffi::FfiFuture<xabi::XabiResult>,
+    /// Release an unclaimed future with the source allocator.
     pub release: unsafe extern "C" fn(*mut std::ffi::c_void),
 }
 use crate::transfer::{Transfer, Value};
+use xabi::XabiType;
+// Keep the dependency generation named in the checked schema explicit.
+const _: () = assert!(async_ffi::ABI_VERSION == 2);
+unsafe extern "C" fn take_future(
+    instance: *mut std::ffi::c_void,
+) -> async_ffi::FfiFuture<xabi::XabiResult> {
+    *unsafe { Box::from_raw(instance.cast::<async_ffi::FfiFuture<xabi::XabiResult>>()) }
+}
+unsafe extern "C" fn release_future(instance: *mut std::ffi::c_void) {
+    if !instance.is_null() {
+        drop(unsafe { Box::from_raw(instance.cast::<async_ffi::FfiFuture<xabi::XabiResult>>()) });
+    }
+}
 unsafe impl<T: Transfer + Send + 'static> Transfer for FfiFuture<crate::v1_0::Result<T>> {
     type Wire = FutureWire;
     fn lower(self) -> FutureWire {
-        let future =
-            xabi::XabiFuture::from_result_value(
-                async move { self.await.map(Value).map_err(Value) },
-            );
+        let future = async_ffi::FfiFuture::new(async move {
+            match self.await {
+                Ok(value) => xabi::XabiResult::ok(Value(value).into_payload()),
+                Err(error) => xabi::XabiResult {
+                    code: xabi::ERR_EXPORT,
+                    payload: Value(error).into_payload(),
+                },
+            }
+        });
         FutureWire {
-            size: future.size,
-            abi_version: future.abi_version,
-            instance: future.instance,
-            poll: future.poll,
-            release: future.release,
+            abi_version: async_ffi::ABI_VERSION,
+            instance: Box::into_raw(Box::new(future)).cast(),
+            take: take_future,
+            release: release_future,
         }
     }
     unsafe fn take(wire: &mut FutureWire) -> xabi::Result<Self> {
-        let foreign = xabi::XabiFuture {
-            size: wire.size,
-            abi_version: wire.abi_version,
-            instance: wire.instance,
-            poll: wire.poll,
-            release: wire.release,
-        };
-        // Validate while the containing record still owns rollback. Construction
-        // cannot fail after the same descriptor has passed this check.
-        foreign.validate()?;
-        let future = xabi::XabiTypedFuture::<Value<crate::v1_0::Error>, Value<T>>::new(foreign)?;
-        wire.instance = std::ptr::null_mut();
-        Ok(async move {
-            future.await.map(|v| v.0).map_err(|e| match e {
-                xabi::XabiCallError::Export(Value(e)) => e,
-                xabi::XabiCallError::Runtime(e) => crate::v1_0::Error::new("abi", e.to_string()),
-            })
+        if wire.abi_version != async_ffi::ABI_VERSION || wire.instance.is_null() {
+            return Err(xabi::Error::AbiMismatch(
+                "async-ffi future generation".into(),
+            ));
         }
+        let mut future = Some(unsafe {
+            (wire.take)(std::mem::replace(&mut wire.instance, std::ptr::null_mut()))
+        });
+        Ok(std::future::poll_fn(move |cx| {
+            // async-ffi catches panics in the source library and rethrows locally.
+            // Preserve Relay's fallible future behavior at this receiving boundary.
+            let polled = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+                Pin::new(
+                    future
+                        .as_mut()
+                        .expect("foreign future polled after completion"),
+                )
+                .poll(cx)
+            }));
+            if !matches!(polled, Ok(Poll::Pending)) {
+                // Release completed or panicked source work even if the caller retains us.
+                future.take();
+            }
+            match polled {
+                Err(_) => Poll::Ready(Err(crate::v1_0::Error::new(
+                    "abi",
+                    "foreign future poll panicked",
+                ))),
+                Ok(Poll::Pending) => Poll::Pending,
+                Ok(Poll::Ready(result)) => Poll::Ready(if result.code == xabi::OK {
+                    unsafe { Value::<T>::from_payload(result.payload) }
+                        .map(|value| value.0)
+                        .map_err(|error| crate::v1_0::Error::new("abi", error.to_string()))
+                } else if result.code == xabi::ERR_EXPORT {
+                    Err(
+                        unsafe { Value::<crate::v1_0::Error>::from_payload(result.payload) }
+                            .map(|value| value.0)
+                            .unwrap_or_else(|error| {
+                                crate::v1_0::Error::new("abi", error.to_string())
+                            }),
+                    )
+                } else {
+                    unsafe { (result.payload.free)(result.payload.ptr, result.payload.len) };
+                    Err(crate::v1_0::Error::new(
+                        "abi",
+                        format!("foreign future returned unknown status {}", result.code),
+                    ))
+                }),
+            }
+        })
         .into_ffi())
     }
     unsafe fn release(wire: &mut FutureWire) {
