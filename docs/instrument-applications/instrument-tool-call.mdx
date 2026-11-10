@@ -20,7 +20,9 @@ You will wrap one existing tool callback with the managed tool execution API. Th
 - Returns a canonical `ToolExecutionResult` containing the application-owned
   result and an optional opaque annotation.
 
-## Before You Start
+<Steps toc={true} tocDepth={2}>
+
+<Step title="Prepare" id="before-you-start">
 
 Complete one binding Quick Start guide first:
 
@@ -42,39 +44,100 @@ become `None` before middleware and the tool callback receive them. Validate
 the original arguments before calling Relay if you need to reject these values.
 Refer to [Non-Finite Numbers](/integrate-into-frameworks/non-serializable-data#non-finite-numbers).
 
-## Integration Pattern
+</Step>
+
+<Step title="Instrument" id="integration-pattern">
 
 Use the Execute helper for the tool function your application owns.
 
-1. Identify the stable tool boundary in your application.
-2. Create or inherit a scope for the current agent run, request, or workflow.
-3. Register a temporary subscriber while validating the integration.
-4. Replace the direct callback invocation with the managed tool execute helper.
-5. Pass the active scope handle when the binding supports it.
-6. Check that the application result is unchanged and lifecycle events are emitted.
+Choose a stable tool name and create or inherit a scope for the current agent
+run, request, or workflow. Register a temporary subscriber, then replace the
+direct callback invocation with Execute and pass the active scope handle.
+The highlighted calls below show that replacement in each binding.
 
-## Minimal Example
+</Step>
 
-The examples below wrap a `search` callback and print emitted events. The callback
+<Step title="Run" id="minimal-example">
+
+Run the complete example for your binding in the project from its Quick Start.
+Each example wraps a `search` callback and prints emitted events. The callback
 returns `ToolExecutionResult`; its `result` field contains the business payload.
 The scope groups the call, and the subscriber prints events before being removed.
 
 <Tabs>
 <Tab title="Python" language="python">
-<Code src="_code/python/tool_call.py" language="python" />
+Save the following code as `tool_call.py` in your Quick Start project:
+
+<Code src="_code/python/tool_call.py" language="python" title="tool_call.py" maxLines={0} highlight={[32, 33, 34, 35, 36, 37]} />
+
+API reference: [`nemo_relay.tools.execute`](/reference/api/python-library-reference/nemo-relay/tools#execute).
+
+Run it from the project directory:
+
+```bash
+uv run python tool_call.py
+```
 </Tab>
 
 <Tab title="Node.js" language="node">
-<Code src="_code/nodejs/tool-call.js" language="js" />
+Save the following code as `tool-call.cjs` in your Quick Start project:
+
+<Code src="_code/nodejs/tool-call.js" language="js" title="tool-call.cjs" maxLines={0} highlight={[29, 30, 31, 32, 33, 34, 35, 36, 37]} />
+
+API reference: [`toolCallExecute`](/reference/api/nodejs-library-reference/nemo-relay-node#toolcallexecute).
+
+Run it from the project directory:
+
+```bash
+node tool-call.cjs
+```
 </Tab>
 
 <Tab title="Rust" language="rust">
-<Code src="_code/rust/tool_call.rs" language="rust" />
+Use the following code as `src/main.rs` in your Quick Start project:
+
+<Code src="_code/rust/tool_call.rs" language="rust" title="src/main.rs" maxLines={0} highlight={[28, 29, 30, 31, 32, 33, 34, 35, 36, 37, 38, 39, 40, 41, 42, 43]} />
+
+API reference: [`tool_call_execute`](/reference/api/rust-library-reference/nemo-relay/tool/fn-tool-call-execute).
+
+Run it from the project directory containing `Cargo.toml`:
+
+```bash
+cargo run
+```
 </Tab>
 
 </Tabs>
 
-## Validate the Integration
+</Step>
+
+<Step title="Verify" id="validate-the-integration">
+
+The subscriber prints these event lines for the example:
+
+```text title="Expected event lines"
+scope agent-run
+scope search
+scope search
+scope agent-run
+```
+
+The result contains the following business payload. Python and Node.js can
+format it differently when printing it:
+
+```json title="Expected result"
+{
+  "query": "runtime instrumentation",
+  "hits": [
+    {
+      "title": "NeMo Relay"
+    }
+  ]
+}
+```
+
+The result can appear between event lines because subscriber delivery is
+asynchronous. Check the event sequence separately from the result's position.
 
 Check both behavior and instrumentation:
 
@@ -84,14 +147,20 @@ Check both behavior and instrumentation:
 - The subscriber prints `agent-run` twice, for scope start and end.
 - The subscriber prints `search` twice, for tool start and end.
 
+<Note title="Flush Subscriber Delivery">
 Native subscriber delivery is asynchronous. From an `asyncio` task, await
 `nemo_relay.subscribers.flush_async()`. In Node.js, await `flushSubscribers()`
 before validating printed output. If a subscriber callback emits a native event,
 await `flushSubscribers()` again to observe that event.
+</Note>
 
 If the result appears without tool events, check that the subscriber is registered,
 subscriber delivery has been flushed, and the call uses `tools.execute`,
 `toolCallExecute`, or `tool_call_execute`.
+
+</Step>
+
+</Steps>
 
 ## Inspect Tool Event Payloads
 
@@ -110,18 +179,14 @@ for annotation and sanitizer semantics.
 In a Python manual chat loop, send only the managed tool result's business
 payload to the model:
 
-```python
-import json
+<Code src="_code/python/tool_result_message.py" language="python" title="tool_result_message.py" />
 
-tool_result = await nemo_relay.tools.execute(name, args, tool_callback)
-messages.append(
-    {
-        "role": "tool",
-        "content": json.dumps(tool_result.result),
-        "tool_call_id": tool_call["id"],
-    }
-)
-```
+Call `append_tool_result(...)` from the existing chat loop, passing its tool
+name, arguments, callback, tool-call record, and messages list. For a callback
+that returns `{"hits": 2}`, the appended message's `content` is the JSON string
+`{"hits": 2}`. The tool result's annotation stays in the application.
+The helper returns the complete `ToolExecutionResult` so the application can
+retain its annotation separately.
 
 Keep `tool_result.annotation` in the Python application for its own metadata
 and observability use. Do not use `str(tool_result)` for the tool message: it
@@ -144,17 +209,25 @@ Use this checklist before running the pattern in production traffic.
 
 Check these symptoms first when the workflow does not behave as expected.
 
-- **No events appear**: Confirm the call uses an Execute helper, the subscriber
-  is registered before the call, and subscriber delivery is flushed before you
-  inspect the output.
-- **The tool appears outside the agent scope**: Pass the current scope handle into the managed execute helper.
-- **The call fails before execution**: Read the reported error. A
-  conditional-execution guardrail can reject the request, or a request intercept
-  can fail before the tool runs.
-- **Subscribers see different data than the tool receives**: Sanitize guardrails change event payloads, while request intercepts change the real arguments.
-- **Python: The model receives the result wrapper or annotation metadata**:
-  Send `json.dumps(tool_result.result)` in the tool message, not
-  `str(tool_result)`.
+### No Events Appear
+
+Confirm the call uses an Execute helper, the subscriber is registered before the call, and subscriber delivery is flushed before you inspect the output.
+
+### The Tool Appears Outside the Agent Scope
+
+Pass the current scope handle into the managed execute helper.
+
+### The Call Fails Before Execution
+
+Read the reported error. A conditional-execution guardrail can reject the request, or a request intercept can fail before the tool runs.
+
+### Subscribers See Different Data Than the Tool Receives
+
+Sanitize guardrails change event payloads, while request intercepts change the real arguments.
+
+### Python: The Model Receives the Result Wrapper or Annotation Metadata
+
+Send `json.dumps(tool_result.result)` in the tool message, not `str(tool_result)`.
 
 ## Next Steps
 

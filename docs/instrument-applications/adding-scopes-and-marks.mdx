@@ -61,118 +61,15 @@ The examples below create one `agent-run` scope and emit two marks.
 
 <Tabs>
 <Tab title="Python" language="python">
-```python
-import nemo_relay
-
-def log_event(event) -> None:
-    print(f"{event.kind} {event.name}")
-
-nemo_relay.subscribers.register("scope-check", log_event)
-
-try:
-    with nemo_relay.scope.scope(
-        "agent-run",
-        nemo_relay.ScopeType.Agent,
-        input={"request_id": "req-123"},
-    ) as handle:
-        nemo_relay.scope.event("planning-started", handle=handle, data={"step": 1})
-        nemo_relay.scope.event("planning-finished", handle=handle, data={"step": 2})
-finally:
-    nemo_relay.subscribers.flush()
-    nemo_relay.subscribers.deregister("scope-check")
-```
+<Code src="_code/python/scopes_and_marks.py" language="python" title="scopes_and_marks.py" />
 </Tab>
 
 <Tab title="Node.js" language="node">
-```js
-const {
-  ScopeType,
-  deregisterSubscriber,
-  event,
-  registerSubscriber,
-  flushSubscribers,
-  withScope,
-} = require("nemo-relay-node");
-
-async function main() {
-  registerSubscriber("scope-check", (runtimeEvent) => {
-    console.log(`${runtimeEvent.kind} ${runtimeEvent.name}`);
-  });
-
-  try {
-    await withScope(
-      "agent-run",
-      ScopeType.Agent,
-      async (handle) => {
-        event("planning-started", handle, { step: 1 }, null);
-        event("planning-finished", handle, { step: 2 }, null);
-      },
-      null,
-      null,
-      null,
-      null,
-      { request_id: "req-123" },
-    );
-  } finally {
-    await flushSubscribers();
-    deregisterSubscriber("scope-check");
-  }
-}
-
-main().catch((error) => {
-  console.error(error);
-  process.exitCode = 1;
-});
-```
+<Code src="_code/nodejs/scopes-and-marks.js" language="js" title="scopes-and-marks.js" />
 </Tab>
 
 <Tab title="Rust" language="rust">
-```rust
-use nemo_relay::scope::{
-    self, EmitMarkEventParams, PopScopeParams, PushScopeParams, ScopeAttributes, ScopeType,
-};
-use nemo_relay::subscriber::{deregister_subscriber, flush_subscribers, register_subscriber};
-use serde_json::json;
-use std::sync::Arc;
-
-fn main() -> Result<(), Box<dyn std::error::Error>> {
-    register_subscriber(
-        "scope-check",
-        Arc::new(|event| {
-            println!("{} {}", event.kind(), event.name());
-        }),
-    )?;
-
-    let handle = scope::push_scope(
-        PushScopeParams::builder()
-            .name("agent-run")
-            .scope_type(ScopeType::Agent)
-            .attributes(ScopeAttributes::empty())
-            .input(json!({"request_id": "req-123"}))
-            .build(),
-    )?;
-
-    scope::event(
-        EmitMarkEventParams::builder()
-            .name("planning-started")
-            .parent(&handle)
-            .data(json!({"step": 1}))
-            .build(),
-    )?;
-    scope::event(
-        EmitMarkEventParams::builder()
-            .name("planning-finished")
-            .parent(&handle)
-            .data(json!({"step": 2}))
-            .build(),
-    )?;
-
-    scope::pop_scope(PopScopeParams::builder().handle_uuid(&handle.uuid).build())?;
-    flush_subscribers()?;
-    let _ = deregister_subscriber("scope-check")?;
-    Ok(())
-}
-```
+<Code src="_code/rust/scopes_and_marks.rs" language="rust" title="scopes_and_marks.rs" />
 </Tab>
 
 </Tabs>
@@ -205,6 +102,18 @@ in Rust, `scope.metric()` in Python, or `metric()` in Node.js. See
 for the metric measurement shape and routing rules.
 
 ## Validate the Integration
+
+Running the example prints:
+
+```text title="Expected output"
+scope agent-run
+mark planning-started
+mark planning-finished
+scope agent-run
+```
+
+The two `scope agent-run` lines are the start and end of the same scope.
+The named marks are checkpoints within it.
 
 Check that the subscriber prints:
 

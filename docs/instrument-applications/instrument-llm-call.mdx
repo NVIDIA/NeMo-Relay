@@ -57,23 +57,74 @@ with your provider SDK invocation when connecting a model provider.
 
 <Tabs>
 <Tab title="Python" language="python">
-<Code src="_code/python/llm_call.py" language="python" />
+Save the following code as `llm_call.py` in your Quick Start project:
+
+<Code src="_code/python/llm_call.py" language="python" title="llm_call.py" />
+
+Run it from the project directory:
+
+```bash
+uv run python llm_call.py
+```
 
 </Tab>
 
 <Tab title="Node.js" language="node">
-<Code src="_code/nodejs/llm-call.js" language="js" />
+Save the following code as `llm-call.cjs` in your Quick Start project:
+
+<Code src="_code/nodejs/llm-call.js" language="js" title="llm-call.cjs" />
+
+Run it from the project directory:
+
+```bash
+node llm-call.cjs
+```
 
 </Tab>
 
 <Tab title="Rust" language="rust">
-<Code src="_code/rust/llm_call.rs" language="rust" />
+Use the following code as `src/main.rs` in your Quick Start project:
+
+<Code src="_code/rust/llm_call.rs" language="rust" title="src/main.rs" />
+
+Run it from the project directory containing `Cargo.toml`:
+
+```bash
+cargo run
+```
 
 </Tab>
 
 </Tabs>
 
 ## Validate the Integration
+
+The subscriber prints these event lines for the local callback:
+
+```text title="Expected event lines"
+scope agent-run
+scope demo-provider
+scope demo-provider
+scope agent-run
+```
+
+The returned payload contains:
+
+```json title="Expected result"
+{
+  "text": "hello",
+  "messages": [
+    {
+      "role": "user",
+      "content": "hello"
+    }
+  ]
+}
+```
+
+Printed object formatting differs across bindings. Subscriber delivery is
+asynchronous, so check the event sequence separately from where the result is
+printed.
 
 Check both behavior and instrumentation:
 
@@ -158,12 +209,21 @@ Before deploying to production, ensure the following checklist is completed:
 
 Check these symptoms first when the workflow does not behave as expected.
 
-- **No LLM events appear**: Confirm the call uses an Execute helper, the
-  subscriber is registered before the call, and subscriber delivery is flushed
-  before you inspect the output.
-- **The LLM appears outside the agent scope**: Pass the current scope handle into the managed execute helper.
-- **Middleware sees provider-specific shapes**: Add a codec so request intercepts can work with normalized annotated data.
-- **Sensitive prompt data appears in traces**: Add LLM sanitize-request and sanitize-response guardrails before registering production exporters.
+### No LLM Events Appear
+
+Confirm the call uses an Execute helper, the subscriber is registered before the call, and subscriber delivery is flushed before you inspect the output.
+
+### The LLM Appears Outside the Agent Scope
+
+Pass the current scope handle into the managed execute helper.
+
+### Middleware Sees Provider-Specific Shapes
+
+Add a codec so request intercepts can work with normalized annotated data.
+
+### Sensitive Prompt Data Appears in Traces
+
+Add LLM sanitize-request and sanitize-response guardrails before registering production exporters.
 
 ## Next Steps
 

@@ -11,6 +11,12 @@ Use these examples after [Instrument a Tool Call](/instrument-applications/instr
 or [Instrument an LLM Call](/instrument-applications/instrument-llm-call), or when
 you need to select a specific execution API.
 
+Each reference file defines `run_example` in Python and Rust or `runExample` in
+Node.js. Call the function from the working application in the tool or LLM guide;
+await asynchronous functions. Keep that application's scope, subscriber, and
+cleanup. These functions are integration fragments rather than standalone
+programs.
+
 ## Invocation API Selection
 
 Prefer Execute APIs whenever you can pass the actual tool or provider function
@@ -46,71 +52,41 @@ for the complete example, scope setup, and event verification.
 ## Managed LLM Execution
 
 Use managed execution when NeMo Relay should run the full middleware pipeline around the provider call.
+This example uses a local callback and makes no external model request.
 
 <Tabs>
 <Tab title="Python" language="python">
-```python
-import nemo_relay
-from nemo_relay import LLMRequest
-
-request = LLMRequest({}, {"messages": [{"role": "user", "content": "hello"}]})
-
-async def invoke(req: LLMRequest) -> dict[str, object]:
-    return {"text": "hi", "request": req.content}
-
-response = await nemo_relay.llm.execute(
-    "demo-provider",
-    request,
-    invoke,
-    model_name="demo-model",
-)
-```
+<Code src="_code/python/managed_llm.py" language="python" title="managed_llm.py" />
 </Tab>
 
 <Tab title="Node.js" language="node">
-```ts
-import { LlmRequest, llmCallExecuteAsync, type LlmRequestShape } from 'nemo-relay-node';
-
-const request = new LlmRequest({}, { messages: [{ role: 'user', content: 'hello' }] });
-
-const response = await llmCallExecuteAsync(
-  'demo-provider',
-  request,
-  async (req: LlmRequestShape) => ({ text: 'hi', request: req.content }),
-  null,
-  null,
-  null,
-  null,
-  'demo-model',
-);
-```
+<Code src="_code/nodejs/managed-llm.ts" language="ts" title="managed-llm.ts" />
 </Tab>
 
 <Tab title="Rust" language="rust">
-```rust
-use nemo_relay::llm::{llm_call_execute, LlmCallExecuteParams, LlmRequest};
-use serde_json::json;
-use std::sync::Arc;
-
-let request = LlmRequest {
-    headers: Default::default(),
-    content: json!({"messages": [{"role": "user", "content": "hello"}]}),
-};
-
-let response = llm_call_execute(
-    LlmCallExecuteParams::builder()
-        .name("demo-provider")
-        .request(request)
-        .func(Arc::new(|req| Box::pin(async move {
-            Ok(json!({"text": "hi", "request": req.content}))
-        })))
-        .model_name("demo-model")
-        .build(),
-).await?;
-```
+<Code src="_code/rust/managed_llm.rs" language="rust" title="managed_llm.rs" />
 </Tab>
 
 </Tabs>
+
+Calling the example function returns the following value:
+
+```json title="Expected managed LLM result"
+{
+  "text": "hi",
+  "request": {
+    "messages": [
+      {
+        "role": "user",
+        "content": "hello"
+      }
+    ]
+  }
+}
+```
+
+With the guide's subscriber registered, expect one LLM start/end pair named
+`demo-provider`.
 
 ## Streaming LLM Execution
 
@@ -122,127 +98,36 @@ When the stream ends normally, Relay runs the finalizer automatically. If you
 stop reading early, close the stream to stop the producer and finalize the
 partial response. Relay records that early close as an interruption.
 
-The following examples read one chunk and then close the stream:
+The following examples read one chunk and then close the stream. Closing runs
+the finalizer and completes the LLM lifecycle with the collected response. These
+examples use local generators, so they require no provider credentials.
+In Python, the collector receives typed dataclass instances, while iterating the
+returned stream yields JSON chunks.
+The Rust example also needs `tokio-stream` in the application's dependencies,
+alongside the dependencies from the [Rust Quick Start](/getting-started/quick-start/rust).
 
 <Tabs>
 <Tab title="Python" language="python">
-```python
-from dataclasses import dataclass
-from collections.abc import AsyncIterator
-
-from nemo_relay import LLMRequest
-from nemo_relay.typed import DataclassCodec, llm_stream_execute
-
-@dataclass
-class Chunk:
-    delta: str
-
-@dataclass
-class FinalResponse:
-    text: str
-
-request = LLMRequest({}, {"messages": [{"role": "user", "content": "hello"}]})
-collected: list[Chunk] = []
-
-async def stream_impl(_request: LLMRequest) -> AsyncIterator[Chunk]:
-    yield Chunk(delta="hi")
-
-stream = await llm_stream_execute(
-    "demo-provider",
-    request,
-    stream_impl,
-    collector=collected.append,
-    finalizer=lambda: FinalResponse(text="".join(chunk.delta for chunk in collected)),
-    chunk_json_codec=DataclassCodec(Chunk),
-    response_json_codec=DataclassCodec(FinalResponse),
-)
-
-try:
-    first_chunk = await anext(stream)
-    # Stop early after deciding no more output is needed.
-finally:
-    await stream.aclose()
-```
+<Code src="_code/python/streaming_llm.py" language="python" title="streaming_llm.py" />
 </Tab>
 
 <Tab title="Node.js" language="node">
-```ts
-import { LlmRequest } from 'nemo-relay-node';
-import { typedLlmStreamExecute, type Codec } from 'nemo-relay-node/typed';
-
-type Chunk = { delta: string };
-type FinalResponse = { text: string };
-
-const chunkCodec: Codec<Chunk> = {
-  toJson: (value) => value,
-  fromJson: (json) => json as Chunk,
-};
-const responseCodec: Codec<FinalResponse> = {
-  toJson: (value) => value,
-  fromJson: (json) => json as FinalResponse,
-};
-
-const request = new LlmRequest({}, { messages: [{ role: 'user', content: 'hello' }] });
-const collected: Chunk[] = [];
-
-const stream = await typedLlmStreamExecute(
-  'demo-provider',
-  request,
-  async function* () {
-    yield { delta: 'hi' };
-  },
-  (chunk) => {
-    collected.push(chunk);
-  },
-  () => ({ text: collected.map((chunk) => chunk.delta).join('') }),
-  chunkCodec,
-  responseCodec,
-);
-
-try {
-  const firstChunk = await stream.next();
-  // Stop early after deciding no more output is needed.
-} finally {
-  await stream.close();
-}
-```
+<Code src="_code/nodejs/streaming-llm.ts" language="ts" title="streaming-llm.ts" />
 </Tab>
 
 <Tab title="Rust" language="rust">
-```rust
-use nemo_relay::llm::{
-    llm_stream_call_execute, LlmAttributes, LlmRequest, LlmStreamCallExecuteParams,
-};
-use nemo_relay::middleware::LlmJsonStream;
-use serde_json::json;
-use tokio_stream::StreamExt;
-
-let request = LlmRequest {
-    headers: Default::default(),
-    content: json!({"messages": [{"role": "user", "content": "hello"}]}),
-};
-
-let mut stream = llm_stream_call_execute(
-    LlmStreamCallExecuteParams::builder()
-        .name("demo-provider")
-        .request(request)
-        .func(std::sync::Arc::new(|_req| Box::pin(async move {
-            Ok(LlmJsonStream::new(tokio_stream::iter(vec![Ok(json!({"delta": "hi"}))])))
-        })))
-        .collector(Box::new(|_chunk| Ok(())))
-        .finalizer(Box::new(|| json!({"text": "hi"})))
-        .attributes(LlmAttributes::STREAMING)
-        .model_name("demo-model")
-        .build(),
-).await?;
-
-let first_chunk = stream.next().await;
-// Stop early after deciding no more output is needed.
-stream.close().await?;
-```
+<Code src="_code/rust/streaming_llm.rs" language="rust" title="streaming_llm.rs" />
 </Tab>
 
 </Tabs>
+
+After closing the stream, the example function returns the first chunk:
+
+```json title="Expected first stream chunk"
+{
+  "delta": "hi"
+}
+```
 
 ### Handle Stream Failures
 
@@ -331,110 +216,35 @@ original error. The `error` field is an application-defined failure payload.
 If the end call also fails, Python attaches that failure to the original
 exception; Node.js and Rust report it separately.
 
+Pass `"weather"` to the function for the successful path or an empty string for
+the failure path.
+
 <Tabs>
 <Tab title="Python" language="python">
-```python
-import nemo_relay
-
-
-def search(query: str) -> dict[str, int]:
-    if not query:
-        raise ValueError("query is required")
-    return {"hits": 2}
-
-
-query = "weather"
-handle = nemo_relay.tools.call("search", {"query": query}, data={"attempt": 1})
-try:
-    result = search(query)
-except Exception as execution_error:
-    try:
-        nemo_relay.tools.call_end(
-            handle,
-            nemo_relay.ToolExecutionResult({"error": str(execution_error)}),
-        )
-    except Exception as completion_error:
-        execution_error.add_note(f"Relay could not record tool completion: {completion_error}")
-    raise
-else:
-    nemo_relay.tools.call_end(handle, nemo_relay.ToolExecutionResult(result))
-```
+<Code src="_code/python/manual_tool_lifecycle.py" language="python" title="manual_tool_lifecycle.py" />
 </Tab>
 
 <Tab title="Node.js" language="node">
-```ts
-import { toolCall, toolCallEnd } from 'nemo-relay-node';
-
-function search(query: string): { hits: number } {
-  if (!query) throw new Error('query is required');
-  return { hits: 2 };
-}
-
-const query = 'weather';
-const handle = toolCall('search', { query }, null, null, { attempt: 1 }, null, null);
-let result: { hits: number };
-try {
-  result = search(query);
-} catch (executionError) {
-  const message = executionError instanceof Error ? executionError.message : String(executionError);
-  try {
-    toolCallEnd(handle, { result: { error: message } }, null, null);
-  } catch (completionError) {
-    console.error('Relay could not record tool completion:', completionError);
-  }
-  throw executionError;
-}
-toolCallEnd(handle, { result }, null, null);
-```
+<Code src="_code/nodejs/manual-tool-lifecycle.ts" language="ts" title="manual-tool-lifecycle.ts" />
 </Tab>
 
 <Tab title="Rust" language="rust">
-```rust
-use nemo_relay::tool::{
-    tool_call, tool_call_end, ToolCallEndParams, ToolCallParams, ToolExecutionResult,
-};
-use serde_json::{Value, json};
-
-fn search(query: &str) -> nemo_relay::Result<Value> {
-    if query.is_empty() {
-        return Err(nemo_relay::FlowError::InvalidArgument("query is required".into()));
-    }
-    Ok(json!({"hits": 2}))
-}
-
-fn main() -> nemo_relay::Result<()> {
-    let query = "weather";
-    let handle = tool_call(
-        ToolCallParams::builder()
-            .name("search")
-            .args(json!({"query": query}))
-            .data(json!({"attempt": 1}))
-            .build(),
-    )?;
-
-    let (result, execution_error) = match search(query) {
-        Ok(result) => (result, None),
-        Err(error) => (json!({"error": error.to_string()}), Some(error)),
-    };
-    let completion_result = tool_call_end(
-        ToolCallEndParams::builder()
-            .handle(&handle)
-            .execution_result(ToolExecutionResult::new(result))
-            .build(),
-    );
-
-    if let Some(execution_error) = execution_error {
-        if let Err(completion_error) = completion_result {
-            eprintln!("Relay could not record tool completion: {completion_error}");
-        }
-        return Err(execution_error);
-    }
-    completion_result
-}
-```
+<Code src="_code/rust/manual_tool_lifecycle.rs" language="rust" title="manual_tool_lifecycle.rs" />
 </Tab>
 
 </Tabs>
+
+With the guide's subscriber registered, both paths print these tool lifecycle
+lines. Enclosing application scopes can print additional lines:
+
+```text title="Expected manual tool lifecycle events"
+scope search
+scope search
+```
+
+The two lines are the start and end of the same tool call. An empty query still
+propagates an error containing `query is required` after the end call is
+attempted. Error formatting differs across bindings.
 
 ## Partial Middleware Calls
 
@@ -442,56 +252,22 @@ These helpers are useful when framework code cannot use managed execution but st
 They apply selected middleware stages; they do not invoke the tool or provider,
 manage the complete lifecycle, or replace an Execute call.
 
+Without registered transforms, the returned tool arguments still contain
+`query: "weather"`, and the model request still contains the `hello` message.
+No tool or LLM lifecycle pair is emitted because these helpers do not execute a
+callback.
+
 <Tabs>
 <Tab title="Python" language="python">
-```python
-import nemo_relay
-from nemo_relay import LLMRequest
-
-tool_args = nemo_relay.tools.request_intercepts("search", {"query": "weather"})
-nemo_relay.tools.conditional_execution("search", tool_args)
-
-llm_request = LLMRequest({}, {"messages": [{"role": "user", "content": "hello"}]})
-outcome = nemo_relay.llm.request_intercepts("demo-provider", llm_request)
-nemo_relay.llm.conditional_execution(outcome.request)
-```
+<Code src="_code/python/partial_middleware.py" language="python" title="partial_middleware.py" />
 </Tab>
 
 <Tab title="Node.js" language="node">
-```ts
-import {
-  LlmRequest,
-  llmConditionalExecution,
-  llmRequestIntercepts,
-  toolConditionalExecution,
-  toolRequestIntercepts,
-} from 'nemo-relay-node';
-
-const toolArgs = await toolRequestIntercepts('search', { query: 'weather' });
-await toolConditionalExecution('search', toolArgs);
-
-const request = new LlmRequest({}, { messages: [{ role: 'user', content: 'hello' }] });
-const outcome = await llmRequestIntercepts('demo-provider', request);
-await llmConditionalExecution(outcome.request);
-```
+<Code src="_code/nodejs/partial-middleware.ts" language="ts" title="partial-middleware.ts" />
 </Tab>
 
 <Tab title="Rust" language="rust">
-```rust
-use nemo_relay::llm::{llm_conditional_execution, llm_request_intercepts, LlmRequest};
-use nemo_relay::tool::{tool_conditional_execution, tool_request_intercepts};
-use serde_json::json;
-
-let tool_args = tool_request_intercepts("search", json!({"query": "weather"}))?;
-tool_conditional_execution("search", &tool_args)?;
-
-let request = LlmRequest {
-    headers: Default::default(),
-    content: json!({"messages": [{"role": "user", "content": "hello"}]}),
-};
-let outcome = llm_request_intercepts("demo-provider", request)?;
-llm_conditional_execution(&outcome.request)?;
-```
+<Code src="_code/rust/partial_middleware.rs" language="rust" title="partial_middleware.rs" />
 </Tab>
 
 </Tabs>
@@ -500,178 +276,68 @@ llm_conditional_execution(&outcome.request)?;
 
 Use normal scope helpers first. Reach for explicit stack helpers only when work crosses thread, task, worker, or request boundaries.
 
+The Python example emits `started` and `worker-ran` within the same `request`
+scope. The Node.js example initializes a stack for the current worker and emits
+`started` within `request`; it does not create another worker. The Rust example
+emits `started` in a task-bound stack and installs that stack on another thread.
+
 <Tabs>
 <Tab title="Python" language="python">
-```python
-from concurrent.futures import ThreadPoolExecutor
-
-import nemo_relay
-
-with nemo_relay.scope.scope("request", nemo_relay.ScopeType.Agent):
-    nemo_relay.scope.event("started", data={"ok": True})
-    shared = nemo_relay.propagate_scope_to_thread()
-
-    def worker() -> None:
-        nemo_relay.set_thread_scope_stack(shared)
-        nemo_relay.scope.event("worker-ran")
-
-    with ThreadPoolExecutor() as pool:
-        pool.submit(worker).result()
-```
+<Code src="_code/python/scope_context.py" language="python" title="scope_context.py" />
 </Tab>
 
 <Tab title="Node.js" language="node">
-```ts
-import { ScopeType, createScopeStack, event, setThreadScopeStack, withScope } from 'nemo-relay-node';
-
-const workerStack = createScopeStack();
-setThreadScopeStack(workerStack);
-
-await withScope('request', ScopeType.Agent, async (handle) => {
-  event('started', handle, { ok: true }, null);
-});
-```
+<Code src="_code/nodejs/scope-context.ts" language="ts" title="scope-context.ts" />
 </Tab>
 
 <Tab title="Rust" language="rust">
-```rust
-use nemo_relay::context::{create_scope_stack, set_thread_scope_stack, with_task_scope_stack};
-use nemo_relay::scope::{event, EmitMarkEventParams};
-use serde_json::json;
-
-let stack = create_scope_stack();
-with_task_scope_stack(stack.clone(), async {
-    event(EmitMarkEventParams::builder().name("started").data(json!({"ok": true})).build())
-})
-.await?;
-
-std::thread::spawn(move || {
-    set_thread_scope_stack(stack);
-    // NeMo Relay calls in this thread attach to the same explicit stack.
-})
-.join()
-.unwrap();
-```
+<Code src="_code/rust/scope_context.rs" language="rust" title="scope_context.rs" />
 </Tab>
 
 </Tabs>
 
 ## Temporarily Exclude a Global Registration
 
-The following examples discover a global subscriber, register a state-driven gate, and
-remove the gate in a guaranteed cleanup path. Use the same registration kind during
-discovery and gate registration.
+The following examples discover a global subscriber, register a state-driven gate,
+and remove the gate after application work finishes. Use the same registration
+kind during discovery and gate registration.
+
+<Note>
+Activate an observability component that registers an OpenTelemetry subscriber
+before calling this function. Pass the application work as its callback. If the
+subscriber is absent, the example reports `OpenTelemetry subscriber was not found`
+and does not run the callback. This is a configured-application example, not a
+standalone program.
+</Note>
 
 <Tabs>
 <Tab title="Python" language="python">
-```python
-from nemo_relay.runtime_registrations import (
-    RuntimeRegistrationKind,
-    deregister_conditional_middleware_guardrail,
-    list_runtime_registrations,
-    register_conditional_middleware_guardrail,
-)
-
-target = next(
-    (
-        registration
-        for registration in list_runtime_registrations(
-            {RuntimeRegistrationKind.SUBSCRIBER}
-        )
-        if registration.local_name == "opentelemetry"
-        and registration.owner.plugin_kind == "observability"
-    ),
-    None,
-)
-if target is None:
-    raise RuntimeError("OpenTelemetry subscriber was not found")
-
-paused = True
-register_conditional_middleware_guardrail(
-    "pause-opentelemetry",
-    {RuntimeRegistrationKind.SUBSCRIBER},
-    target.effective_name,
-    lambda _kinds, _name: "export paused" if paused else None,
-)
-try:
-    await run_application()
-finally:
-    deregister_conditional_middleware_guardrail("pause-opentelemetry")
-```
+<Code src="_code/python/global_registration_gate.py" language="python" title="global_registration_gate.py" />
 </Tab>
 
 <Tab title="Node.js" language="node">
-```js
-import {
-  deregisterConditionalMiddlewareGuardrail,
-  listRuntimeRegistrations,
-  registerConditionalMiddlewareGuardrail,
-} from 'nemo-relay-node';
-
-const target = listRuntimeRegistrations(['subscriber']).find(
-  (registration) => registration.localName === 'opentelemetry'
-    && registration.owner.pluginKind === 'observability',
-);
-if (!target) throw new Error('OpenTelemetry subscriber was not found');
-
-let paused = true;
-registerConditionalMiddlewareGuardrail(
-  'pause-opentelemetry',
-  ['subscriber'],
-  target.effectiveName,
-  () => paused ? 'export paused' : null,
-);
-try {
-  await runApplication();
-} finally {
-  deregisterConditionalMiddlewareGuardrail('pause-opentelemetry');
-}
-```
+<Code src="_code/nodejs/global-registration-gate.ts" language="ts" title="global-registration-gate.ts" />
 </Tab>
 
 <Tab title="Rust" language="rust">
-```rust
-use std::collections::BTreeSet;
-use std::sync::{Arc, atomic::{AtomicBool, Ordering}};
-use nemo_relay::registry::{
-    RuntimeRegistrationKind,
-    deregister_conditional_middleware_guardrail,
-    list_runtime_registrations,
-    register_conditional_middleware_guardrail,
-};
-
-let kinds = BTreeSet::from([RuntimeRegistrationKind::Subscriber]);
-let target = list_runtime_registrations(Some(&kinds))?
-    .into_iter()
-    .find(|registration| {
-        registration.local_name == "opentelemetry"
-            && registration.owner.plugin_kind.as_deref() == Some("observability")
-    })
-    .ok_or("OpenTelemetry subscriber was not found")?;
-
-let paused = Arc::new(AtomicBool::new(true));
-let callback_state = Arc::clone(&paused);
-register_conditional_middleware_guardrail(
-    "pause-opentelemetry",
-    kinds,
-    &target.effective_name,
-    Arc::new(move |_kinds, _name| {
-        callback_state
-            .load(Ordering::Acquire)
-            .then(|| "export paused".to_string())
-    }),
-)?;
-
-let application_result = run_application().await;
-deregister_conditional_middleware_guardrail("pause-opentelemetry")?;
-application_result?;
-```
+<Code src="_code/rust/global_registration_gate.rs" language="rust" title="global_registration_gate.rs" />
 </Tab>
 </Tabs>
 
-Python and Node.js use `try` and `finally` for cleanup. Rust must preserve both the
-application result and deregistration result, as shown, or use an owning guard in the
-host application. A callback failure keeps the target eligible and adds a runtime
+Python and Node.js use `try` and `finally` for cleanup. Rust attempts
+deregistration after the application future completes, then returns the
+application result if deregistration succeeds.
+
+<Warning title="Rust Cleanup Limitations">
+Dropping this example's future while application work is pending skips
+deregistration and can leave the subscriber gate registered and the subscriber
+excluded. If application work and deregistration both fail, the example returns
+the deregistration error; the application error is lost. Use an owning cleanup
+guard when cancellation must remove the gate, and handle both errors explicitly
+when both must be retained.
+</Warning>
+
+If a gate callback fails, Relay keeps the target eligible and adds a runtime
 diagnostic.
 
 ## Middleware Registration Families

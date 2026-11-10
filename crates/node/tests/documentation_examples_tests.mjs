@@ -146,3 +146,75 @@ it('JSON subscriber source handles a real delivered mark', async () => {
     relay.deregisterSubscriber('documentation-json');
   }
 });
+
+it('reference provider and stream examples return their documented results', async () => {
+  const managed = await import(`${examples}/managed-llm.ts`);
+  const streaming = await import(`${examples}/streaming-llm.ts`);
+  const execution = await captureEvents(() => managed.runExample());
+  assert.deepEqual(execution.result, { text: 'hi', request: { messages: [{ role: 'user', content: 'hello' }] } });
+  assertPair(execution.events, 'llm', 'demo-provider');
+  const stream = await captureEvents(() => streaming.runExample());
+  assert.deepEqual(stream.result, { delta: 'hi' });
+  assertPair(stream.events, 'llm', 'demo-provider');
+});
+
+for (const query of ['weather', '']) {
+  it(`reference manual lifecycle completes for ${query ? 'success' : 'failure'}`, async () => {
+    const program = await import(`${examples}/manual-tool-lifecycle.ts`);
+    const { events } = await captureEvents(async () => {
+      if (query) assert.deepEqual(program.runExample(query), { hits: 2 });
+      else assert.throws(() => program.runExample(query), /^Error: query is required$/);
+    });
+    assertPair(events, 'tool', 'search');
+  });
+}
+
+it('partial middleware returns transformed values without executing a callback', async () => {
+  const program = await import(`${examples}/partial-middleware.ts`);
+  const { result, events } = await captureEvents(() => program.runExample());
+  assert.deepEqual(result.toolArguments, { query: 'weather' });
+  assert.deepEqual(result.request.content, { messages: [{ role: 'user', content: 'hello' }] });
+  assert.equal(
+    events.some((event) => event.category === 'tool' || event.category === 'llm'),
+    false,
+  );
+});
+
+it('scope-context example emits its mark within the request', async () => {
+  const program = await import(`${examples}/scope-context.ts`);
+  const previousStack = relay.currentScopeStack();
+  try {
+    const { events } = await captureEvents(() => program.runExample());
+    const parent = assertPair(events, 'agent', 'request');
+    assert.equal(events.find((event) => event.name === 'started').parent_uuid, parent.uuid);
+  } finally {
+    relay.setThreadScopeStack(previousStack);
+  }
+});
+
+it('global gate example reports a missing required OpenTelemetry subscriber', async () => {
+  const program = await import(`${examples}/global-registration-gate.ts`);
+  await assert.rejects(
+    () => program.runExample(async () => assert.fail('application must not run')),
+    /OpenTelemetry subscriber was not found/,
+  );
+});
+
+it('scope program emits two marks within the agent and removes its subscriber', async () => {
+  const program = require(`${examples}/scopes-and-marks.js`);
+  const { events } = await captureEvents(() => program.main());
+  const parent = assertPair(events, 'agent', 'agent-run');
+  const marks = events.filter((event) => event.kind === 'mark');
+  assert.deepEqual(
+    marks.map((event) => event.name),
+    ['planning-started', 'planning-finished'],
+  );
+  assert.equal(
+    marks.every((event) => event.parent_uuid === parent.uuid),
+    true,
+  );
+  assert.equal(
+    relay.listRuntimeRegistrations(['subscriber']).some((registration) => registration.localName === 'scope-check'),
+    false,
+  );
+});

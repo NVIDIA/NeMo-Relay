@@ -14,10 +14,14 @@ result and lifecycle events before adding more instrumentation.
 
 Choose the call you own:
 
-- [Instrument a Tool Call](/instrument-applications/instrument-tool-call) wraps a
-  function such as search or retrieval.
-- [Instrument an LLM Call](/instrument-applications/instrument-llm-call) wraps a
-  model-provider invocation.
+<CardGroup cols={2}>
+<Card title="Instrument a Tool Call" href="/instrument-applications/instrument-tool-call">
+Wrap a function such as search or retrieval and verify its result and events.
+</Card>
+<Card title="Instrument an LLM Call" href="/instrument-applications/instrument-llm-call">
+Wrap a model-provider invocation and verify its response and events.
+</Card>
+</CardGroup>
 
 Each guide includes the basic scope setup, a complete example for Python,
 Node.js, and Rust, and instructions to verify the result and emitted events.
