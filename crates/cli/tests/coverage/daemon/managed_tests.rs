@@ -86,6 +86,8 @@ fn v1_render_is_deterministic_and_contains_only_deployment_constants() {
     assert!(codex_settings.contains(ROUTE_TOKEN_ENV));
     assert!(!codex_settings.contains(&credential()));
 
+    assert_codex_end_hooks(&first);
+
     for artifact in first
         .artifacts
         .iter()
@@ -126,6 +128,19 @@ fn managed_claude_bundle_enables_hints_and_preserves_turn_end_hooks() {
         claude_settings["env"]["CLAUDE_CODE_GATEWAY_HINT_HEADERS"],
         "1"
     );
+}
+
+// Managed Codex installs must close interrupted turns and ended sessions like CLI installs.
+fn assert_codex_end_hooks(bundle: &RenderedBundle) {
+    let codex_hooks = bundle
+        .artifacts
+        .iter()
+        .find(|artifact| artifact.path == "codex/plugin-v1/hooks/hooks.json")
+        .unwrap();
+    let codex_hooks: serde_json::Value = serde_json::from_slice(&codex_hooks.bytes).unwrap();
+    for event in ["SessionEnd", "Interrupt"] {
+        assert!(codex_hooks["hooks"].get(event).is_some(), "missing {event}");
+    }
 }
 
 fn assert_pi_bundle_artifacts(bundle: &RenderedBundle) {
@@ -304,7 +319,7 @@ fn v1_artifact_bytes_do_not_depend_on_binary_or_platform_versioning() {
 fn canonical_v1_bundle_matches_the_golden_digest() {
     // This digest pins the v1 manifest and every artifact byte for a canonical deployment,
     // including the supported hook set. Update it only for intentional bundle changes.
-    const GOLDEN_SHA256: &str = "1d335e66375019e013de30002886bea219a97bde3eb20a20a758b6c5a1de200f";
+    const GOLDEN_SHA256: &str = "059ca1c63334bdaaf497de8e89cfcee410cccaf382cb340257f3da35722b89bc";
     let rendered = render_bundle(&spec([
         ManagedAgent::Codex,
         ManagedAgent::ClaudeCode,

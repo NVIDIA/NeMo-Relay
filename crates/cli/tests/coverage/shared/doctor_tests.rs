@@ -1628,7 +1628,7 @@ async fn collect_agents_filters_target_and_records_version() {
     let temp = tempfile::tempdir().unwrap();
     let _cwd = crate::test_support::CwdTestScope::locked();
     let codex = temp.path().join("codex");
-    std::fs::write(&codex, "#!/bin/sh\nprintf 'codex-cli 0.143.0\\n'\n").unwrap();
+    std::fs::write(&codex, "#!/bin/sh\nprintf 'codex-cli 0.150.0\\n'\n").unwrap();
     make_executable(&codex);
 
     let mut resolved = ResolvedConfig::default();
@@ -1644,7 +1644,7 @@ async fn collect_agents_filters_target_and_records_version() {
     assert_eq!(agents[0].name, "codex");
     assert_eq!(agents[0].status, Status::Pass);
     assert_eq!(agents[0].path.as_deref(), Some(codex.as_path()));
-    assert_eq!(agents[0].version.as_deref(), Some("codex-cli 0.143.0"));
+    assert_eq!(agents[0].version.as_deref(), Some("codex-cli 0.150.0"));
 }
 
 #[cfg(unix)]
@@ -1656,7 +1656,7 @@ async fn collect_agents_preserves_wrapper_argv_for_version_validation() {
     let wrapper = temp.path().join("npx");
     std::fs::write(
         &wrapper,
-        "#!/bin/sh\n[ \"$1\" = codex ] && [ \"$2\" = --version ] || exit 9\nprintf 'codex-cli 0.143.0\\n'\n",
+        "#!/bin/sh\n[ \"$1\" = codex ] && [ \"$2\" = --version ] || exit 9\nprintf 'codex-cli 0.150.0\\n'\n",
     )
     .unwrap();
     make_executable(&wrapper);
@@ -1672,7 +1672,7 @@ async fn collect_agents_preserves_wrapper_argv_for_version_validation() {
 
     assert_eq!(agents[0].status, Status::Pass);
     assert_eq!(agents[0].path.as_deref(), Some(wrapper.as_path()));
-    assert_eq!(agents[0].version.as_deref(), Some("codex-cli 0.143.0"));
+    assert_eq!(agents[0].version.as_deref(), Some("codex-cli 0.150.0"));
 }
 
 #[cfg(unix)]

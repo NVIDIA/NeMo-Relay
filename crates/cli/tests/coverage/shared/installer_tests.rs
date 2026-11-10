@@ -705,10 +705,12 @@ fn codex_generation_uses_exactly_the_supported_hook_schema() {
     assert_eq!(
         events,
         std::collections::BTreeSet::from([
+            "Interrupt",
             "PostCompact",
             "PostToolUse",
             "PreCompact",
             "PreToolUse",
+            "SessionEnd",
             "SessionStart",
             "Stop",
             "SubagentStart",
@@ -716,7 +718,7 @@ fn codex_generation_uses_exactly_the_supported_hook_schema() {
             "UserPromptSubmit",
         ])
     );
-    for unsupported in ["PostToolUseFailure", "Notification", "SessionEnd"] {
+    for unsupported in ["PostToolUseFailure", "Notification"] {
         assert!(generated["hooks"].get(unsupported).is_none());
     }
 }
