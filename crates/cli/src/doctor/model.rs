@@ -232,14 +232,16 @@ pub(crate) enum SecretPresence {
 
 /// Reports the stored sign-in without contacting the issuer or reading its tokens.
 fn sign_in_check(name: &'static str, source: &crate::oidc::OidcSource) -> Check {
-    let state = crate::oidc::sessions_dir()
-        .and_then(|dir| crate::oidc::sign_in_state(&dir, source, crate::oidc::now_secs()));
+    let now = crate::oidc::now_secs();
+    let state =
+        crate::oidc::sessions_dir().and_then(|dir| crate::oidc::sign_in_state(&dir, source, now));
     let issuer = &source.issuer;
     let (status, details) = match state {
         Ok(crate::oidc::SignInState::Valid(expires_at)) => (
             Status::Pass,
             format!(
-                "Signed in to {issuer}. The access token is valid until {expires_at} (Unix time)."
+                "Signed in to {issuer}. The access token is valid until {}.",
+                crate::oidc::describe_expiry(expires_at, now)
             ),
         ),
         Ok(crate::oidc::SignInState::ExpiredCanRefresh) => (
