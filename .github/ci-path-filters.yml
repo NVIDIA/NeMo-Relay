@@ -262,6 +262,13 @@ dependencies:
   - 'scripts/licensing/**'
   - 'uv.lock'
 
+documentation_examples:
+  - 'docs/instrument-applications/**'
+  - 'python/tests/test_instrumentation_examples.py'
+  - 'crates/node/tests/documentation_examples_tests.mjs'
+  - 'crates/sdk/tests/documentation_examples.rs'
+  - 'justfile'
+
 docs:
   - '.agents/plugins/marketplace.json'
   - '.claude-plugin/marketplace.json'

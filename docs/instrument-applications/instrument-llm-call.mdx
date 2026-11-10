@@ -1,7 +1,7 @@
 ---
 title: "Instrument an LLM Call"
 description: "Instrument managed LLM calls with NeMo Relay scopes, middleware, events, and subscribers."
-position: 4
+position: 3
 ---
 {/* SPDX-FileCopyrightText: Copyright (c) 2026, NVIDIA CORPORATION & AFFILIATES. All rights reserved.
 SPDX-License-Identifier: Apache-2.0 */}
@@ -28,31 +28,11 @@ Complete one binding Quick Start guide first:
 - [Node.js Quick Start](/getting-started/quick-start/nodejs)
 - [Rust Quick Start](/getting-started/quick-start/rust)
 
-Create a scope for the active request or agent run before adding LLM instrumentation. If you have not done that yet, start with [Adding Scopes and Marks](/instrument-applications/adding-scopes-and-marks).
+The example creates one `agent-run` scope to group the LLM call. You can use it
+without first completing the scopes guide. For additional grouping and optional
+checkpoints, refer to [Adding Scopes and Marks](/instrument-applications/adding-scopes-and-marks).
 
 The request and response payloads must be JSON-compatible. If your provider SDK uses clients, streams, callbacks, or other opaque objects, keep those objects in the provider callback and pass only a serializable request projection into NeMo Relay.
-
-For every managed LLM request, Relay automatically propagates agent lineage to
-Dynamo using `x-dynamo-session-id` and, when a parent agent scope is active,
-`x-dynamo-parent-session-id`. The current and parent IDs come from the most
-recent explicit `Agent` scopes in the active scope stack and ignores the implicit root
-scope. When present, Relay uses the harness session metadata, otherwise, it uses application
-scope names. No plugin or configuration is required.
-
-Relay also adds a W3C `traceparent` header to every managed buffered or
-streaming LLM provider request. The value is derived from the same Relay IDs
-used by OpenTelemetry export, so downstream HTTP spans can remain aligned with
-the Relay LLM span. Any existing `traceparent` values are replaced by the
-runtime-owned value. Use `capture_traceparent()` when an application needs to
-inject the current context into an arbitrary HTTP payload.
-
-If you want Relay to add cost estimates, initialize the built-in `pricing`
-plugin before the LLM call and attach a response codec that decodes `model` and
-token `usage` from the provider response. Provider- or framework-reported cost
-is preserved when present. Otherwise Relay estimates cost only when a configured
-model pricing source matches the response model and usage fields. For catalog
-setup and embedded plugin examples, refer to
-[Provider Response Codecs and Model Pricing](/integrate-into-frameworks/provider-response-codecs#cost-estimation).
 
 ## Integration Pattern
 
@@ -64,166 +44,30 @@ Follow these steps to route the provider invocation through NeMo Relay:
 4. Build an LLM request object with provider headers and content.
 5. Replace the direct provider invocation with the managed LLM execute helper.
 6. Pass the active scope handle and a stable `model_name`.
-7. Attach a response codec when subscribers or exporters need normalized
-   response usage, tool calls, or cost annotations.
-8. Check that the provider result is unchanged and lifecycle events are emitted.
+7. Check that the provider result is unchanged and lifecycle events are emitted.
+
+Add a response codec afterward when subscribers or exporters need normalized
+response usage, tool calls, or cost annotations.
 
 ## Minimal Example
 
-The examples below wrap a demo provider callback and print emitted events.
+The examples below wrap a local callback and print emitted events. The callback
+returns a response containing `hello` and the input messages. Replace its body
+with your provider SDK invocation when connecting a model provider.
 
 <Tabs>
 <Tab title="Python" language="python">
-```python
-import asyncio
-
-import nemo_relay
-
-def log_event(event: nemo_relay.Event) -> None:
-    print(f"{event.kind} {event.name}")
-
-async def call_provider(request: nemo_relay.LLMRequest) -> dict[str, object]:
-    return {
-        "text": "hello",
-        "messages": request.content["messages"],
-    }
-
-async def main() -> None:
-    nemo_relay.subscribers.register("llm-check", log_event)
-
-    try:
-        with nemo_relay.scope.scope("agent-run", nemo_relay.ScopeType.Agent) as handle:
-            request = nemo_relay.LLMRequest(
-                {},
-                {"messages": [{"role": "user", "content": "hello"}]},
-            )
-            result = await nemo_relay.llm.execute(
-                "demo-provider",
-                request,
-                call_provider,
-                handle=handle,
-                model_name="demo-model",
-            )
-            print(result)
-    finally:
-        await nemo_relay.subscribers.flush_async()
-        nemo_relay.subscribers.deregister("llm-check")
-
-asyncio.run(main())
-```
+<Code src="_code/python/llm_call.py" language="python" />
 
 </Tab>
 
 <Tab title="Node.js" language="node">
-```js
-const {
-  LlmRequest,
-  ScopeType,
-  deregisterSubscriber,
-  flushSubscribers,
-  llmCallExecute,
-  registerSubscriber,
-  withScope,
-} = require("nemo-relay-node");
-
-async function main() {
-  registerSubscriber("llm-check", (event) => {
-    console.log(`${event.kind} ${event.name}`);
-  });
-
-  try {
-    await withScope("agent-run", ScopeType.Agent, async (handle) => {
-      const request = new LlmRequest(
-        {},
-        { messages: [{ role: "user", content: "hello" }] },
-      );
-      const result = await llmCallExecute(
-        "demo-provider",
-        request,
-        (req) => ({
-          text: "hello",
-          messages: req.content.messages,
-        }),
-        handle,
-        null,
-        null,
-        null,
-        "demo-model",
-      );
-
-      console.log(result);
-    });
-  } finally {
-    await flushSubscribers();
-    deregisterSubscriber("llm-check");
-  }
-}
-
-main().catch((error) => {
-  console.error(error);
-  process.exitCode = 1;
-});
-```
+<Code src="_code/nodejs/llm-call.js" language="js" />
 
 </Tab>
 
 <Tab title="Rust" language="rust">
-```rust
-use nemo_relay::llm::{llm_call_execute, LlmCallExecuteParams, LlmRequest};
-use nemo_relay::scope::{
-    self, PopScopeParams, PushScopeParams, ScopeAttributes, ScopeType,
-};
-use nemo_relay::subscriber::{deregister_subscriber, flush_subscribers, register_subscriber};
-use serde_json::json;
-use std::sync::Arc;
-
-#[tokio::main]
-async fn main() -> Result<(), Box<dyn std::error::Error>> {
-    register_subscriber(
-        "llm-check",
-        Arc::new(|event| {
-            println!("{} {}", event.kind(), event.name());
-        }),
-    )?;
-
-    let handle = scope::push_scope(
-        PushScopeParams::builder()
-            .name("agent-run")
-            .scope_type(ScopeType::Agent)
-            .attributes(ScopeAttributes::empty())
-            .build(),
-    )?;
-
-    let request = LlmRequest {
-        headers: Default::default(),
-        content: json!({"messages": [{"role": "user", "content": "hello"}]}),
-    };
-    let result = llm_call_execute(
-        LlmCallExecuteParams::builder()
-            .name("demo-provider")
-            .request(request)
-            .func(Arc::new(|req| {
-                Box::pin(async move {
-                    Ok(json!({
-                        "text": "hello",
-                        "messages": req.content["messages"]
-                    }))
-                })
-            }))
-            .parent(handle.clone())
-            .model_name("demo-model")
-            .build(),
-    )
-    .await?;
-
-    println!("{result}");
-
-    scope::pop_scope(PopScopeParams::builder().handle_uuid(&handle.uuid).build())?;
-    flush_subscribers()?;
-    let _ = deregister_subscriber("llm-check")?;
-    Ok(())
-}
-```
+<Code src="_code/rust/llm_call.rs" language="rust" />
 
 </Tab>
 
@@ -233,17 +77,24 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
 
 Check both behavior and instrumentation:
 
-- The provider result matches what the application returned before the wrapper was added.
-- The subscriber prints an agent or request scope event.
-- The subscriber prints LLM start and LLM end events for `demo-provider`.
-- If model pricing is configured, LLM end events include
-  `annotated_response.usage.cost` only when a response codec decoded model and
-  usage fields and a source matched the model.
+- The result matches the local callback's response: `text: "hello"` and the input
+  messages.
+- The subscriber prints `agent-run` twice, for scope start and end.
+- The subscriber prints `demo-provider` twice, for LLM start and end.
 
 Native subscriber delivery is asynchronous. From an `asyncio` task, await
 `nemo_relay.subscribers.flush_async()`. In Node.js, await `flushSubscribers()`
 before validating printed output. If a subscriber callback emits a native event,
 await `flushSubscribers()` again to observe that event.
+
+This example verifies Relay execution around a local function. It does not make
+an external model request.
+
+If the result appears without LLM events, check that the subscriber is registered,
+subscriber delivery has been flushed, and the call uses `llm.execute`,
+`llmCallExecute`, or `llm_call_execute`.
+
+## Inspect LLM Event Payloads
 
 - LLM start input contains the request after request intercepts and
   sanitize-request guardrails. Each owning agent scope starts fresh, and a
@@ -260,7 +111,32 @@ await `flushSubscribers()` again to observe that event.
 - LLM end output contains the provider response after response guardrails.
 - The LLM event includes the normalized `model_name` when you provide one.
 
-If only the business result appears, the callback ran but instrumentation did not run. Confirm that the call goes through `llm.execute`, `llmCallExecute`, or `llm_call_execute`.
+## Provider Metadata and Pricing
+
+For every managed LLM request, Relay automatically propagates agent lineage to
+Dynamo using `x-dynamo-session-id` and, when a parent agent scope is active,
+`x-dynamo-parent-session-id`. Relay takes these IDs from the most recent explicit
+`Agent` scopes in the active scope stack and ignores the implicit root scope.
+It uses harness session metadata when available and application scope names
+otherwise. No plugin or configuration is required.
+
+Relay also adds a W3C `traceparent` header to every managed buffered or
+streaming LLM provider request. The value is derived from the same Relay IDs
+used by OpenTelemetry export, so downstream HTTP spans can remain aligned with
+the Relay LLM span. Any existing `traceparent` values are replaced by the
+runtime-owned value. Use `capture_traceparent()` when an application needs to
+inject the current context into an arbitrary HTTP payload.
+
+If you want Relay to add cost estimates, initialize the built-in `pricing`
+plugin before the LLM call and attach a response codec that decodes `model` and
+token `usage` from the provider response. Provider- or framework-reported cost
+is preserved when present. Otherwise Relay estimates cost only when a configured
+model pricing source matches the response model and usage fields. For catalog
+setup and embedded plugin examples, refer to
+[Provider Response Codecs and Model Pricing](/integrate-into-frameworks/provider-response-codecs#cost-estimation).
+
+When those conditions match, LLM end events include
+`annotated_response.usage.cost`.
 
 ## Production Checklist
 
@@ -282,7 +158,9 @@ Before deploying to production, ensure the following checklist is completed:
 
 Check these symptoms first when the workflow does not behave as expected.
 
-- **No LLM events appear**: The application is still calling the provider directly.
+- **No LLM events appear**: Confirm the call uses an Execute helper, the
+  subscriber is registered before the call, and subscriber delivery is flushed
+  before you inspect the output.
 - **The LLM appears outside the agent scope**: Pass the current scope handle into the managed execute helper.
 - **Middleware sees provider-specific shapes**: Add a codec so request intercepts can work with normalized annotated data.
 - **Sensitive prompt data appears in traces**: Add LLM sanitize-request and sanitize-response guardrails before registering production exporters.

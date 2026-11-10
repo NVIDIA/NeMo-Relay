@@ -1,19 +1,32 @@
 ---
 title: "Adding Scopes and Marks"
-description: ""
-position: 2
+description: "Group instrumented calls under a request or agent run and add optional checkpoint events."
+position: 4
 ---
 {/* SPDX-FileCopyrightText: Copyright (c) 2026, NVIDIA CORPORATION & AFFILIATES. All rights reserved.
 SPDX-License-Identifier: Apache-2.0 */}
 
 
-Use this guide when you want NeMo Relay to identify one agent run, request, workflow, or operation before you instrument individual tool and LLM calls.
+Use this guide to group related tool and LLM calls under one agent run, request,
+workflow, or operation, and to add optional checkpoint events.
+
+The basic scope setup is included in [Instrument a Tool Call](/instrument-applications/instrument-tool-call)
+and [Instrument an LLM Call](/instrument-applications/instrument-llm-call).
+Start with one of those Execute examples, then return here when you need more
+control over grouping or checkpoints.
 
 ## What You Build
 
-You will create an active scope, emit named mark events inside that scope, and validate that subscribers can observe the lifecycle. The result is a small trace boundary that later tool calls, LLM calls, middleware, and exporters can attach to.
+You will group one agent run in a scope, emit two checkpoint marks, and verify
+the events received by a subscriber.
 
-Scopes give emitted work ownership. Marks record point-in-time checkpoints inside that ownership boundary.
+A **scope** groups related work, such as an agent run, request, or workflow step.
+Tool calls, LLM calls, and marks attach to scopes so Relay can show which work
+belongs together.
+
+A **mark** records a named checkpoint within that work, such as “plan created” or
+“retry scheduled.” It represents a single moment and can include data describing
+what happened.
 
 ## Before You Start
 
@@ -23,7 +36,7 @@ Complete one binding Quick Start guide first:
 - [Node.js Quick Start](/getting-started/quick-start/nodejs)
 - [Rust Quick Start](/getting-started/quick-start/rust)
 
-You should know which application boundary should own the trace. Common scope boundaries include:
+Choose the work you want to group. Common examples include:
 
 - One HTTP request
 - One agent run
@@ -33,9 +46,9 @@ You should know which application boundary should own the trace. Common scope bo
 
 ## Integration Pattern
 
-Follow this sequence to keep framework work attached to the expected runtime context.
+Follow these steps to group related calls and marks in one scope.
 
-1. Choose the scope boundary that owns the work.
+1. Choose the agent run, request, or workflow step to group.
 2. Register a temporary subscriber while validating instrumentation.
 3. Push or enter the scope before tool and LLM work begins.
 4. Emit marks for important checkpoints that are not full nested calls.
@@ -200,9 +213,9 @@ Check that the subscriber prints:
 - One mark event for `planning-finished`
 - One scope end event for `agent-run`
 
-Native subscribers are delivered asynchronously. Await `flushSubscribers()`
-before validating printed or captured output. If a subscriber callback emits a
-native event, await `flushSubscribers()` again to observe that event.
+The examples flush subscriber delivery before removing the temporary subscriber.
+Keep this cleanup so queued events are delivered before the program exits. If a
+subscriber callback emits another event, flush again before checking the output.
 
 If marks appear outside the intended trace, pass the active scope handle explicitly or make sure the mark is emitted while the scope is active.
 

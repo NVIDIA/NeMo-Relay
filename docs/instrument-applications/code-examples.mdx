@@ -1,15 +1,22 @@
 ---
 title: "Code Examples"
-description: ""
+description: "Choose Execute APIs first, then explore streaming, manual lifecycle fallbacks, and advanced helpers."
 position: 6
 ---
 {/* SPDX-FileCopyrightText: Copyright (c) 2026, NVIDIA CORPORATION & AFFILIATES. All rights reserved.
 SPDX-License-Identifier: Apache-2.0 */}
 
 
-Use these examples when you need the direct runtime surfaces behind the application instrumentation guides.
+Use these examples after [Instrument a Tool Call](/instrument-applications/instrument-tool-call)
+or [Instrument an LLM Call](/instrument-applications/instrument-llm-call), or when
+you need to select a specific execution API.
 
 ## Invocation API Selection
+
+Prefer Execute APIs whenever you can pass the actual tool or provider function
+to Relay. Use manual start/end APIs only when another library owns the invocation
+and exposes only lifecycle notifications. Do not retry a failed Execute call
+through a manual API.
 
 The following table shows which API to use based on your integration need:
 
@@ -24,62 +31,17 @@ The following table shows which API to use based on your integration need:
 | Record an OTLP metric | `metric` | One validated measurement group should be routed to the metric pipeline. |
 | Attach work to one request | Scope-local registration helpers | Middleware or subscribers should disappear when that scope closes. |
 
-## Manual Tool Lifecycle
+## Managed Tool Execution
 
-Use manual lifecycle calls only when the surrounding code owns the real tool invocation and only exposes reliable start and finish hooks.
-If you are replaying events or bridging a framework clock, pass an explicit timestamp to the manual start, end, or mark helpers.
-Python accepts timezone-aware `datetime` values, Node.js accepts Unix microseconds since epoch, and Rust accepts `DateTime<Utc>`.
-Every manual tool end helper accepts the canonical `ToolExecutionResult`; wrap
-the business payload and add an optional opaque annotation when needed.
+Pass the tool name, JSON-compatible arguments, and the tool function to the
+Execute helper. The function returns a canonical `ToolExecutionResult`.
 
-<Tabs>
-<Tab title="Python" language="python">
-```python
-import nemo_relay
+| Python | Node.js | Rust |
+|---|---|---|
+| `nemo_relay.tools.execute` | `toolCallExecute` | `tool_call_execute` |
 
-handle = nemo_relay.tools.call("search", {"query": "weather"}, data={"attempt": 1})
-try:
-    result = {"hits": 2}
-finally:
-    nemo_relay.tools.call_end(handle, nemo_relay.ToolExecutionResult(result))
-```
-</Tab>
-
-<Tab title="Node.js" language="node">
-```ts
-import { toolCall, toolCallEnd } from 'nemo-relay-node';
-
-const handle = toolCall('search', { query: 'weather' }, null, null, { attempt: 1 }, null, null);
-const result = { hits: 2 };
-toolCallEnd(handle, { result }, null, null);
-```
-</Tab>
-
-<Tab title="Rust" language="rust">
-```rust
-use nemo_relay::tool::{
-    tool_call, tool_call_end, ToolCallEndParams, ToolCallParams, ToolExecutionResult,
-};
-use serde_json::json;
-
-let handle = tool_call(
-    ToolCallParams::builder()
-        .name("search")
-        .args(json!({"query": "weather"}))
-        .data(json!({"attempt": 1}))
-        .build(),
-)?;
-
-tool_call_end(
-    ToolCallEndParams::builder()
-        .handle(&handle)
-        .execution_result(ToolExecutionResult::new(json!({"hits": 2})))
-        .build(),
-)?;
-```
-</Tab>
-
-</Tabs>
+Refer to [Instrument a Tool Call](/instrument-applications/instrument-tool-call#minimal-example)
+for the complete example, scope setup, and event verification.
 
 ## Managed LLM Execution
 
@@ -338,6 +300,200 @@ also complete the exporter's flush, export, or shutdown operation.
 Refer to [Waiting for Delivery](/about-nemo-relay/concepts/subscribers#waiting-for-delivery)
 for the flush API and exporter requirements for each binding.
 
+## Manual Tool Lifecycle
+
+<Warning>
+Prefer execution wrappers for tool and LLM calls whenever you can pass the actual
+function to Relay. Explicit tool and LLM start/end calls emit scope events, but
+they do not execute the tool or provider function or automatically run the full execution
+middleware pipeline. Use them only when another library owns the invocation and
+exposes reliable start and finish notifications. Refer to
+[Instrument a Tool Call](/instrument-applications/instrument-tool-call#minimal-example)
+and [Instrument an LLM Call](/instrument-applications/instrument-llm-call#minimal-example)
+for the execution wrappers.
+</Warning>
+
+The following examples start and finish the lifecycle for a `search` operation.
+Relay records the lifecycle; the surrounding code performs the operation.
+Preserve the start handle and arrange for the matching end event on success and
+failure. Request and execution intercepts do not run automatically on this path;
+event-payload sanitizers still apply.
+Refer to [Explicit API Calls](/integrate-into-frameworks/code-examples#fallback-explicit-api-calls)
+for the fallback's execution coverage and error-handling responsibilities.
+If you are replaying events or bridging a framework clock, pass an explicit timestamp to the manual start, end, or mark helpers.
+Python accepts timezone-aware `datetime` values, Node.js accepts Unix microseconds since epoch, and Rust accepts `DateTime<Utc>`.
+Every manual tool end helper accepts the canonical `ToolExecutionResult`; wrap
+the business payload and add an optional opaque annotation when needed.
+
+<Tabs>
+<Tab title="Python" language="python">
+```python
+import nemo_relay
+
+handle = nemo_relay.tools.call("search", {"query": "weather"}, data={"attempt": 1})
+try:
+    result = {"hits": 2}
+finally:
+    nemo_relay.tools.call_end(handle, nemo_relay.ToolExecutionResult(result))
+```
+</Tab>
+
+<Tab title="Node.js" language="node">
+```ts
+import { toolCall, toolCallEnd } from 'nemo-relay-node';
+
+const handle = toolCall('search', { query: 'weather' }, null, null, { attempt: 1 }, null, null);
+const result = { hits: 2 };
+toolCallEnd(handle, { result }, null, null);
+```
+</Tab>
+
+<Tab title="Rust" language="rust">
+```rust
+use nemo_relay::tool::{
+    tool_call, tool_call_end, ToolCallEndParams, ToolCallParams, ToolExecutionResult,
+};
+use serde_json::json;
+
+let handle = tool_call(
+    ToolCallParams::builder()
+        .name("search")
+        .args(json!({"query": "weather"}))
+        .data(json!({"attempt": 1}))
+        .build(),
+)?;
+
+tool_call_end(
+    ToolCallEndParams::builder()
+        .handle(&handle)
+        .execution_result(ToolExecutionResult::new(json!({"hits": 2})))
+        .build(),
+)?;
+```
+</Tab>
+
+</Tabs>
+
+## Partial Middleware Calls
+
+These helpers are useful when framework code cannot use managed execution but still wants a request rewrite or block decision.
+They apply selected middleware stages; they do not invoke the tool or provider,
+manage the complete lifecycle, or replace an Execute call.
+
+<Tabs>
+<Tab title="Python" language="python">
+```python
+import nemo_relay
+from nemo_relay import LLMRequest
+
+tool_args = nemo_relay.tools.request_intercepts("search", {"query": "weather"})
+nemo_relay.tools.conditional_execution("search", tool_args)
+
+llm_request = LLMRequest({}, {"messages": [{"role": "user", "content": "hello"}]})
+outcome = nemo_relay.llm.request_intercepts("demo-provider", llm_request)
+nemo_relay.llm.conditional_execution(outcome.request)
+```
+</Tab>
+
+<Tab title="Node.js" language="node">
+```ts
+import {
+  LlmRequest,
+  llmConditionalExecution,
+  llmRequestIntercepts,
+  toolConditionalExecution,
+  toolRequestIntercepts,
+} from 'nemo-relay-node';
+
+const toolArgs = await toolRequestIntercepts('search', { query: 'weather' });
+await toolConditionalExecution('search', toolArgs);
+
+const request = new LlmRequest({}, { messages: [{ role: 'user', content: 'hello' }] });
+const outcome = await llmRequestIntercepts('demo-provider', request);
+await llmConditionalExecution(outcome.request);
+```
+</Tab>
+
+<Tab title="Rust" language="rust">
+```rust
+use nemo_relay::llm::{llm_conditional_execution, llm_request_intercepts, LlmRequest};
+use nemo_relay::tool::{tool_conditional_execution, tool_request_intercepts};
+use serde_json::json;
+
+let tool_args = tool_request_intercepts("search", json!({"query": "weather"}))?;
+tool_conditional_execution("search", &tool_args)?;
+
+let request = LlmRequest {
+    headers: Default::default(),
+    content: json!({"messages": [{"role": "user", "content": "hello"}]}),
+};
+let outcome = llm_request_intercepts("demo-provider", request)?;
+llm_conditional_execution(&outcome.request)?;
+```
+</Tab>
+
+</Tabs>
+
+## Scope and Context Helpers
+
+Use normal scope helpers first. Reach for explicit stack helpers only when work crosses thread, task, worker, or request boundaries.
+
+<Tabs>
+<Tab title="Python" language="python">
+```python
+from concurrent.futures import ThreadPoolExecutor
+
+import nemo_relay
+
+with nemo_relay.scope.scope("request", nemo_relay.ScopeType.Agent):
+    nemo_relay.scope.event("started", data={"ok": True})
+    shared = nemo_relay.propagate_scope_to_thread()
+
+    def worker() -> None:
+        nemo_relay.set_thread_scope_stack(shared)
+        nemo_relay.scope.event("worker-ran")
+
+    with ThreadPoolExecutor() as pool:
+        pool.submit(worker).result()
+```
+</Tab>
+
+<Tab title="Node.js" language="node">
+```ts
+import { ScopeType, createScopeStack, event, setThreadScopeStack, withScope } from 'nemo-relay-node';
+
+const workerStack = createScopeStack();
+setThreadScopeStack(workerStack);
+
+await withScope('request', ScopeType.Agent, async (handle) => {
+  event('started', handle, { ok: true }, null);
+});
+```
+</Tab>
+
+<Tab title="Rust" language="rust">
+```rust
+use nemo_relay::context::{create_scope_stack, set_thread_scope_stack, with_task_scope_stack};
+use nemo_relay::scope::{event, EmitMarkEventParams};
+use serde_json::json;
+
+let stack = create_scope_stack();
+with_task_scope_stack(stack.clone(), async {
+    event(EmitMarkEventParams::builder().name("started").data(json!({"ok": true})).build())
+})
+.await?;
+
+std::thread::spawn(move || {
+    set_thread_scope_stack(stack);
+    // NeMo Relay calls in this thread attach to the same explicit stack.
+})
+.join()
+.unwrap();
+```
+</Tab>
+
+</Tabs>
+
 ## Temporarily Exclude a Global Registration
 
 The following examples discover a global subscriber, register a state-driven gate, and
@@ -455,124 +611,6 @@ Python and Node.js use `try` and `finally` for cleanup. Rust must preserve both 
 application result and deregistration result, as shown, or use an owning guard in the
 host application. A callback failure keeps the target eligible and adds a runtime
 diagnostic.
-
-## Partial Middleware Calls
-
-These helpers are useful when framework code cannot use managed execution but still wants a request rewrite or block decision.
-
-<Tabs>
-<Tab title="Python" language="python">
-```python
-import nemo_relay
-from nemo_relay import LLMRequest
-
-tool_args = nemo_relay.tools.request_intercepts("search", {"query": "weather"})
-nemo_relay.tools.conditional_execution("search", tool_args)
-
-llm_request = LLMRequest({}, {"messages": [{"role": "user", "content": "hello"}]})
-outcome = nemo_relay.llm.request_intercepts("demo-provider", llm_request)
-nemo_relay.llm.conditional_execution(outcome.request)
-```
-</Tab>
-
-<Tab title="Node.js" language="node">
-```ts
-import {
-  LlmRequest,
-  llmConditionalExecution,
-  llmRequestIntercepts,
-  toolConditionalExecution,
-  toolRequestIntercepts,
-} from 'nemo-relay-node';
-
-const toolArgs = await toolRequestIntercepts('search', { query: 'weather' });
-await toolConditionalExecution('search', toolArgs);
-
-const request = new LlmRequest({}, { messages: [{ role: 'user', content: 'hello' }] });
-const outcome = await llmRequestIntercepts('demo-provider', request);
-await llmConditionalExecution(outcome.request);
-```
-</Tab>
-
-<Tab title="Rust" language="rust">
-```rust
-use nemo_relay::llm::{llm_conditional_execution, llm_request_intercepts, LlmRequest};
-use nemo_relay::tool::{tool_conditional_execution, tool_request_intercepts};
-use serde_json::json;
-
-let tool_args = tool_request_intercepts("search", json!({"query": "weather"}))?;
-tool_conditional_execution("search", &tool_args)?;
-
-let request = LlmRequest {
-    headers: Default::default(),
-    content: json!({"messages": [{"role": "user", "content": "hello"}]}),
-};
-let outcome = llm_request_intercepts("demo-provider", request)?;
-llm_conditional_execution(&outcome.request)?;
-```
-</Tab>
-
-</Tabs>
-
-## Scope and Context Helpers
-
-Use normal scope helpers first. Reach for explicit stack helpers only when work crosses thread, task, worker, or request boundaries.
-
-<Tabs>
-<Tab title="Python" language="python">
-```python
-from concurrent.futures import ThreadPoolExecutor
-
-import nemo_relay
-
-with nemo_relay.scope.scope("request", nemo_relay.ScopeType.Agent):
-    nemo_relay.scope.event("started", data={"ok": True})
-    shared = nemo_relay.propagate_scope_to_thread()
-
-    def worker() -> None:
-        nemo_relay.set_thread_scope_stack(shared)
-        nemo_relay.scope.event("worker-ran")
-
-    with ThreadPoolExecutor() as pool:
-        pool.submit(worker).result()
-```
-</Tab>
-
-<Tab title="Node.js" language="node">
-```ts
-import { ScopeType, createScopeStack, event, setThreadScopeStack, withScope } from 'nemo-relay-node';
-
-const workerStack = createScopeStack();
-setThreadScopeStack(workerStack);
-
-await withScope('request', ScopeType.Agent, async (handle) => {
-  event('started', handle, { ok: true }, null);
-});
-```
-</Tab>
-
-<Tab title="Rust" language="rust">
-```rust
-use nemo_relay::context::{create_scope_stack, set_thread_scope_stack, with_task_scope_stack};
-use nemo_relay::scope::{event, EmitMarkEventParams};
-use serde_json::json;
-
-let stack = create_scope_stack();
-with_task_scope_stack(stack.clone(), async {
-    event(EmitMarkEventParams::builder().name("started").data(json!({"ok": true})).build())
-})
-.await?;
-
-std::thread::spawn(move || {
-    set_thread_scope_stack(stack);
-    // NeMo Relay calls in this thread attach to the same explicit stack.
-})
-.join()
-.unwrap();
-```
-</Tab>
-
-</Tabs>
 
 ## Middleware Registration Families
 
