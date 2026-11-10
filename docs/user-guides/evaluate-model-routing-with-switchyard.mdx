@@ -399,7 +399,7 @@ comparison; catalog availability alone does not establish account access.
 | Role | Example model |
 | --- | --- |
 | Efficient target and judge | [NVIDIA Nemotron 3 Nano 30B A3B](https://build.nvidia.com/nvidia/nemotron-3-nano-30b-a3b) |
-| Capable target | [NVIDIA Nemotron 3 Super 120B A12B](https://build.nvidia.com/nvidia/nemotron-3-super-120b-a12b) |
+| Capable target | [NVIDIA Nemotron 3 Ultra 550B A55B](https://build.nvidia.com/nvidia/nemotron-3-ultra-550b-a55b) |
 
 Replace these choices with accessible models when needed. Enter credentials in
 the same shell you use to run the comparison:
@@ -407,7 +407,7 @@ the same shell you use to run the comparison:
 ```bash
 export NVIDIA_BASE_URL=https://integrate.api.nvidia.com/v1
 export EFFICIENT_MODEL=nvidia/nemotron-3-nano-30b-a3b
-export CAPABLE_MODEL=nvidia/nemotron-3-super-120b-a12b
+export CAPABLE_MODEL=nvidia/nemotron-3-ultra-550b-a55b
 export JUDGE_MODEL="$EFFICIENT_MODEL"
 IFS= read -r -s -p 'NVIDIA API key: ' NVIDIA_API_KEY; printf '\n'
 export NVIDIA_API_KEY
