@@ -828,8 +828,9 @@ fn release_worker(
         }
         // Stop routing now; the replacement launches when the socket closes after teardown.
         session.pending_target.set_control_available(false);
+        // Mark under the session lock so a concurrent cleanup cannot leave a stale marker.
+        lock(&state.sockets.exiting_workers).insert(request.session_id.clone());
     }
-    lock(&state.sockets.exiting_workers).insert(request.session_id.clone());
     log::info!(
         target: "nemo_relay.daemon",
         event = "worker_exit_announced",
