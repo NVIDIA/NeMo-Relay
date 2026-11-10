@@ -254,7 +254,7 @@ for instance selection; available CPU types depend on your organization and prov
 
 | Setting | Recommendation |
 | --- | --- |
-| Operating system | Ubuntu 24.04 LTS, x86_64 |
+| Operating system | Ubuntu 22.04 or 24.04 LTS, x86_64 |
 | CPU and memory | 4 vCPUs and 16 GB RAM |
 | Storage | At least 40 GB |
 | GPU | None; inference runs on the model provider |
@@ -284,9 +284,14 @@ Run the remaining setup in **Bash on the VM host**.
 
 ### 2. Install the runtimes
 
+Use uv to install Python 3.12 on either Ubuntu image:
+
 ```bash
 sudo apt-get update
-sudo apt-get install -y ca-certificates curl gh git python3.12 xz-utils
+sudo apt-get install -y ca-certificates curl gh git python3 xz-utils
+curl -LsSf https://astral.sh/uv/install.sh | sh
+export PATH="$HOME/.local/bin:$PATH"
+uv python install 3.12
 python3.12 --version
 git --version
 gh --version
