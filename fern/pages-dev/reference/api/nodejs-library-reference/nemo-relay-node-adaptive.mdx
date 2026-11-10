@@ -6,7 +6,7 @@ position: 5
 {/* SPDX-FileCopyrightText: Copyright (c) 2026, NVIDIA CORPORATION & AFFILIATES. All rights reserved.
 SPDX-License-Identifier: Apache-2.0 */}
 
-Generated from `crates/node/adaptive.d.ts`.
+Generated from `crates/node/dist/adaptive.d.ts`.
 
 Import from `nemo-relay-node/adaptive`.
 
@@ -16,12 +16,12 @@ Adaptive plugin configuration helpers.
 
 ### `BackendSpec`
 
-Adaptive state backend selection.
+Adaptive state backend.
 
 ```ts
 export interface BackendSpec {
-  kind: string;
-  config?: Record<string, Json>;
+    kind: string;
+    config?: Record<string, Json>;
 }
 ```
 
@@ -31,90 +31,87 @@ Adaptive state configuration.
 
 ```ts
 export interface StateConfig {
-  backend: BackendSpec;
+    backend: BackendSpec;
 }
 ```
 
 ### `TelemetryConfig`
 
-Built-in adaptive telemetry settings.
+Adaptive telemetry settings.
 
 ```ts
 export interface TelemetryConfig {
-  subscriber_name?: string;
-  learners?: string[];
+    subscriber_name?: string;
+    learners?: string[];
 }
 ```
 
 ### `AdaptiveHintsConfig`
 
-Built-in adaptive hints injection settings.
+Adaptive hints injection settings.
 
 ```ts
 export interface AdaptiveHintsConfig {
-  priority?: number;
-  break_chain?: boolean;
-  inject_header?: boolean;
-  inject_body_path?: string;
+    priority?: number;
+    break_chain?: boolean;
+    inject_header?: boolean;
+    inject_body_path?: string;
 }
 ```
 
 ### `ToolParallelismConfig`
 
-Built-in adaptive tool scheduling settings.
+Adaptive tool scheduling settings.
 
 ```ts
 export interface ToolParallelismConfig {
-  priority?: number;
-  mode?: 'observe_only' | 'inject_hints' | 'schedule' | string;
+    priority?: number;
+    mode?: 'observe_only' | 'inject_hints' | 'schedule' | (string & {});
 }
 ```
 
 ### `AcgStabilityThresholds`
 
-ACG prompt-stability classification thresholds.
+Prompt-stability thresholds for the cache governor.
 
 ```ts
 export interface AcgStabilityThresholds {
-  stable_threshold?: number;
-  semi_stable_threshold?: number;
-  min_observations_for_full_confidence?: number;
+    stable_threshold?: number;
+    semi_stable_threshold?: number;
+    min_observations_for_full_confidence?: number;
 }
 ```
 
 ### `AcgConfig`
 
-Adaptive cache-governor settings.
+Cache governor settings.
 
 ```ts
 export interface AcgConfig {
-  provider?: 'anthropic' | 'openai' | 'passthrough' | string;
-  observation_window?: number;
-  priority?: number;
-  stability_thresholds?: AcgStabilityThresholds;
+    provider?: 'anthropic' | 'openai' | 'passthrough' | (string & {});
+    observation_window?: number;
+    priority?: number;
+    stability_thresholds?: AcgStabilityThresholds;
 }
 ```
 
 ### `ResponseCacheConfig`
 
-Opt-in LLM response and tool-result cache settings.
+LLM response and tool-result cache settings.
 
 ```ts
 export interface ResponseCacheConfig {
-  ttlSeconds?: number;
-  /**
-   * Required non-empty cache trust domain. One configured cache must not span
-   * mutually untrusted tenants or upstreams.
-   */
-  namespace?: string;
-  priority?: number;
-  bypassRate?: number;
-  cacheNondeterministic?: boolean;
-  keyStrategy?: ResponseCacheKeyStrategy;
-  headerAllowlist?: string[];
-  backend?: BackendSpec;
-  /** Opt-in tool-result cache; omit to leave the tool surface off. */
-  tools?: ToolCacheConfig;
+    ttlSeconds?: number;
+    /** Required cache trust domain; one cache must not span untrusted tenants or upstreams. */
+    namespace?: string;
+    priority?: number;
+    bypassRate?: number;
+    cacheNondeterministic?: boolean;
+    keyStrategy?: ResponseCacheKeyStrategy;
+    headerAllowlist?: string[];
+    backend?: BackendSpec;
+    /** Tool-result cache. */
+    tools?: ToolCacheConfig;
 }
 ```
 
@@ -122,209 +119,94 @@ export interface ResponseCacheConfig {
 
 ```ts
 export interface ResponseCachePluginConfig {
-  ttl_seconds?: number;
-  /** Required non-empty cache trust domain. */
-  namespace?: string;
-  priority?: number;
-  bypass_rate?: number;
-  cache_nondeterministic?: boolean;
-  key_strategy?: ResponseCacheKeyStrategy;
-  header_allowlist?: string[];
-  backend?: BackendSpec;
-  tools?: ToolCachePluginConfig;
+    ttl_seconds?: number;
+    /** Required cache trust domain. */
+    namespace?: string;
+    priority?: number;
+    bypass_rate?: number;
+    cache_nondeterministic?: boolean;
+    key_strategy?: ResponseCacheKeyStrategy;
+    header_allowlist?: string[];
+    backend?: BackendSpec;
+    tools?: ToolCachePluginConfig;
 }
 ```
 
 ### `ToolClass`
 
-Shared policy; omitted TTL and bypass rate inherit response-cache defaults.
+Shared tool policy; omitted TTL and bypass rate use response-cache values.
 
 ```ts
 export interface ToolClass {
-  cacheable?: boolean;
-  ttlSeconds?: number;
-  bypassRate?: number;
-  toolVersion?: string;
-  argSkip?: string[];
-  /** Exact tool names or `prefix*`, `*suffix`, or `*contains*` patterns. */
-  members?: string[];
+    cacheable?: boolean;
+    ttlSeconds?: number;
+    bypassRate?: number;
+    toolVersion?: string;
+    argSkip?: string[];
+    /** Tool names, or `prefix*`, `*suffix`, or `*contains*` patterns. */
+    members?: string[];
 }
 ```
 
 ### `ToolOverride`
 
-Per-tool refinement; an explicit `argSkip: []` clears the class list.
+Per-tool override; `argSkip: []` clears the class list.
 
 ```ts
 export interface ToolOverride {
-  cacheable?: boolean;
-  ttlSeconds?: number;
-  bypassRate?: number;
-  toolVersion?: string;
-  argSkip?: string[];
+    cacheable?: boolean;
+    ttlSeconds?: number;
+    bypassRate?: number;
+    toolVersion?: string;
+    argSkip?: string[];
 }
 ```
 
 ### `ToolCacheConfig`
 
-Opt-in caching for tools that are read-only and stable for their TTL.
+Caching for tools that are read-only and stable for their TTL.
 
 ```ts
 export interface ToolCacheConfig {
-  enabled?: boolean;
-  /**
-   * Tool execution-intercept priority. Omit to use Rust's default of 150.
-   */
-  priority?: number;
-  /** Whether error-shaped tool results may be cached; defaults to false. */
-  cacheErrors?: boolean;
-  default?: ToolClass;
-  classes?: Record<string, ToolClass>;
-  /** Exact tool names or `prefix*`, `*suffix`, or `*contains*` patterns. */
-  overrides?: Record<string, ToolOverride>;
+    enabled?: boolean;
+    /** Tool execution-intercept priority, default 150. */
+    priority?: number;
+    /** Whether error results may be cached, default false. */
+    cacheErrors?: boolean;
+    default?: ToolClass;
+    classes?: Record<string, ToolClass>;
+    /** Tool names, or `prefix*`, `*suffix`, or `*contains*` patterns. */
+    overrides?: Record<string, ToolOverride>;
 }
 ```
 
 ### `Config`
 
-Canonical config object for the top-level adaptive component.
+Adaptive component config.
 
 ```ts
 export interface Config {
-  version?: number;
-  agent_id?: string;
-  state?: StateConfig;
-  telemetry?: TelemetryConfig;
-  adaptive_hints?: AdaptiveHintsConfig;
-  tool_parallelism?: ToolParallelismConfig;
-  acg?: AcgConfig;
-  responseCache?: ResponseCacheConfig;
-  policy?: ConfigPolicy;
+    version?: number;
+    agent_id?: string;
+    state?: StateConfig;
+    telemetry?: TelemetryConfig;
+    adaptive_hints?: AdaptiveHintsConfig;
+    tool_parallelism?: ToolParallelismConfig;
+    acg?: AcgConfig;
+    responseCache?: ResponseCacheConfig;
+    policy?: ConfigPolicy;
 }
 ```
 
 ### `ComponentSpec` interface
 
-Top-level adaptive component wrapper with fixed kind `adaptive`.
+Adaptive component with kind `adaptive`.
 
 ```ts
 export interface ComponentSpec {
-  kind: 'adaptive';
-  enabled?: boolean;
-  config: AdaptivePluginConfig;
-}
-```
-
-### `CacheWriteTokenCounts`
-
-Prompt-cache write tokens retained for one cache duration.
-
-```ts
-export interface CacheWriteTokenCounts {
-  count: number;
-  /** Cache duration in seconds, omitted when the provider does not say. */
-  duration?: number;
-}
-```
-
-### `CacheUsage`
-
-Normalized LLM token usage for cache telemetry.
-
-```ts
-export interface CacheUsage {
-  prompt_tokens?: number;
-  completion_tokens?: number;
-  total_tokens?: number;
-  cache_read_tokens?: number;
-  cache_write_tokens?: CacheWriteTokenCounts[];
-  cost?: Json;
-}
-```
-
-### `AgentIdentity`
-
-Identity of the agent associated with cache telemetry.
-
-```ts
-export interface AgentIdentity {
-  agent_id: string;
-  template_version: string;
-  toolset_hash: string;
-  model_family: string;
-  tenant_scope: string;
-}
-```
-
-### `CacheRequestFactsOptions`
-
-Input for building cache request facts.
-
-```ts
-export interface CacheRequestFactsOptions {
-  provider: string;
-  requestId: string;
-  annotatedRequest: Json;
-  agentId: string;
-  timestamp?: string;
-}
-```
-
-### `CacheRequestFacts`
-
-Request-time facts used to classify cache misses.
-
-```ts
-export interface CacheRequestFacts {
-  provider: string;
-  stable_prefix_length: number;
-  stable_prefix_tokens?: number;
-  required_min_tokens?: number;
-  first_mismatch_span_id?: string;
-  first_mismatch_sequence_index?: number;
-  expected_hash_prefix?: string;
-  actual_hash_prefix?: string;
-  retention_window_secs?: number;
-  observed_gap_secs?: number;
-  missing_facts?: string[];
-}
-```
-
-### `CacheTelemetryEventOptions`
-
-Input for building cache telemetry events.
-
-```ts
-export interface CacheTelemetryEventOptions {
-  provider: 'anthropic' | 'openai' | string;
-  requestId: string;
-  usage?: CacheUsage | null;
-  requestFacts?: CacheRequestFacts | null;
-  agentId: string;
-  templateVersion: string;
-  toolsetHash: string;
-  modelFamily: string;
-  tenantScope: string;
-  timestamp?: string;
-}
-```
-
-### `CacheTelemetryEvent`
-
-Normalized adaptive cache telemetry event.
-
-```ts
-export interface CacheTelemetryEvent {
-  request_id: string;
-  agent_identity: AgentIdentity;
-  cache_read_tokens: number;
-  cache_creation_tokens: number;
-  total_prompt_tokens: number;
-  hit_rate: number;
-  miss_reason?: Record<string, Json>;
-  miss_diagnosis?: Record<string, Json>;
-  provider: string;
-  timestamp: string;
+    kind: 'adaptive';
+    enabled?: boolean;
+    config: AdaptivePluginConfig;
 }
 ```
 
@@ -332,25 +214,26 @@ export interface CacheTelemetryEvent {
 
 ### `AdaptiveRuntime`
 
-Owned adaptive runtime outside the generic plugin system.
+Adaptive runtime owned by the caller.
 
 ```ts
 export declare class AdaptiveRuntime {
-  constructor(config: Config);
-  /** Register all configured adaptive runtime features. */
-  register(): Promise<void>;
-  /** Deregister all previously registered adaptive runtime features. */
-  deregister(): void;
-  /** Shut down the adaptive runtime and consume its Rust runtime state. */
-  shutdown(): Promise<void>;
-  /** Block until adaptive telemetry has processed pending events. */
-  waitForIdle(): void;
-  /** Return the validation report captured during construction. */
-  report(): ConfigReport;
-  /** Bind the runtime's ACG request rewrite to a scope. */
-  bindScope(scopeHandle: ScopeHandle): void;
-  /** Build cache request facts for an annotated LLM request. */
-  buildCacheRequestFacts(options: CacheRequestFactsOptions): CacheRequestFacts | null;
+    #private;
+    constructor(config: Config);
+    /** Registers configured runtime features. */
+    register(): Promise<void>;
+    /** Removes registered runtime features. */
+    deregister(): void;
+    /** Shuts the runtime down for good. */
+    shutdown(): Promise<void>;
+    /** Blocks until telemetry has processed pending events. */
+    waitForIdle(): void;
+    /** Validation report from construction. */
+    report(): ConfigReport;
+    /** Binds cache governor request rewrites to a scope. */
+    bindScope(scopeHandle: ScopeHandle): void;
+    /** Builds cache request facts for an annotated LLM request. */
+    buildCacheRequestFacts(options: CacheRequestFactsOptions): CacheRequestFacts | null;
 }
 ```
 
@@ -358,17 +241,17 @@ export declare class AdaptiveRuntime {
 
 ### `defaultConfig`
 
-Create a default adaptive component config.
+Creates a default adaptive config.
 
-Returns the minimal top-level adaptive config shape with `version = 1` so callers can add state, telemetry, and scheduler settings incrementally.
+The config has `version` 1 and no sections. Add state, telemetry, and scheduler sections to it.
 
 **Returns**
 
-A new adaptive config object.
+An adaptive config with no sections.
 
 **Remarks**
 
-The returned object is detached from runtime state until it is wrapped with `ComponentSpec` and activated through the plugin system.
+The config does nothing until it is wrapped with `ComponentSpec` and activated.
 
 ```ts
 export declare function defaultConfig(): Config;
@@ -376,17 +259,17 @@ export declare function defaultConfig(): Config;
 
 ### `inMemoryBackend`
 
-Create an in-memory adaptive state backend spec.
+Creates a backend spec that keeps adaptive state in process memory.
 
-Produces the backend descriptor for ephemeral adaptive state stored inside the current process rather than an external datastore.
+The state is private to the process and is lost when it exits.
 
 **Returns**
 
-An adaptive backend spec using in-memory storage.
+A backend spec with kind `in_memory`.
 
 **Remarks**
 
-This backend does not persist state across process restarts.
+Use `redisBackend` when several processes must share state.
 
 ```ts
 export declare function inMemoryBackend(): BackendSpec;
@@ -394,22 +277,22 @@ export declare function inMemoryBackend(): BackendSpec;
 
 ### `redisBackend`
 
-Create a Redis-backed adaptive state backend spec.
+Creates a backend spec that keeps adaptive state in Redis.
 
-Produces the backend descriptor expected by the adaptive plugin when state should be shared or persisted through Redis.
+Processes that use the same Redis instance and key prefix share the state.
 
 **Parameters**
 
-- `url`: Redis connection URL for the backend.
-- `keyPrefix`: Prefix applied to Redis keys.
+- `url`: Redis connection URL.
+- `keyPrefix`: Prefix for every key the backend writes.
 
 **Returns**
 
-An adaptive backend spec using Redis storage.
+A backend spec with kind `redis`.
 
 **Remarks**
 
-The default key prefix namespaces runtime records under `nemo_relay:` unless a different prefix is supplied.
+`keyPrefix` defaults to `nemo_relay:`.
 
 ```ts
 export declare function redisBackend(url: string, keyPrefix?: string): BackendSpec;
@@ -417,21 +300,21 @@ export declare function redisBackend(url: string, keyPrefix?: string): BackendSp
 
 ### `telemetryConfig`
 
-Create adaptive telemetry settings with runtime defaults applied.
+Creates adaptive telemetry settings.
 
-Merges caller-supplied overrides onto the built-in telemetry config shape used by the adaptive plugin.
+Fields in `config` replace the defaults; fields left out keep them.
 
 **Parameters**
 
-- `config`: Partial telemetry settings to override.
+- `config`: Telemetry settings to set.
 
 **Returns**
 
-A normalized adaptive telemetry config object.
+Complete telemetry settings.
 
 **Remarks**
 
-An empty `learners` array is supplied by default so callers can append learner names without checking for initialization first.
+`learners` defaults to an empty list.
 
 ```ts
 export declare function telemetryConfig(config?: TelemetryConfig): TelemetryConfig;
@@ -439,21 +322,21 @@ export declare function telemetryConfig(config?: TelemetryConfig): TelemetryConf
 
 ### `adaptiveHintsConfig`
 
-Create adaptive hint-injection settings with defaults applied.
+Creates adaptive hint-injection settings.
 
-Merges caller-supplied overrides onto the default config used by the adaptive hints injector.
+Fields in `config` replace the defaults; fields left out keep them.
 
 **Parameters**
 
-- `config`: Partial adaptive hints settings to override.
+- `config`: Hint-injection settings to set.
 
 **Returns**
 
-A normalized adaptive hints config object.
+Complete hint-injection settings.
 
 **Remarks**
 
-By default the injector runs at priority `100`, preserves the rest of the chain, and writes hints to `nvext.agent_hints`.
+By default the injector runs at priority 100, lets the chain continue, and writes hints to `nvext.agent_hints`.
 
 ```ts
 export declare function adaptiveHintsConfig(config?: AdaptiveHintsConfig): AdaptiveHintsConfig;
@@ -461,21 +344,21 @@ export declare function adaptiveHintsConfig(config?: AdaptiveHintsConfig): Adapt
 
 ### `toolParallelismConfig`
 
-Create adaptive tool-parallelism settings with defaults applied.
+Creates adaptive tool-scheduling settings.
 
-Merges caller-supplied overrides onto the scheduler config shape used by the adaptive plugin's tool parallelism component.
+Fields in `config` replace the defaults; fields left out keep them.
 
 **Parameters**
 
-- `config`: Partial tool scheduling settings to override.
+- `config`: Tool-scheduling settings to set.
 
 **Returns**
 
-A normalized tool-parallelism config object.
+Complete tool-scheduling settings.
 
 **Remarks**
 
-The default mode is `observe_only`, so recommendations are produced without changing execution behavior unless the caller opts in.
+The default mode `observe_only` records recommendations and leaves execution unchanged.
 
 ```ts
 export declare function toolParallelismConfig(config?: ToolParallelismConfig): ToolParallelismConfig;
@@ -483,21 +366,21 @@ export declare function toolParallelismConfig(config?: ToolParallelismConfig): T
 
 ### `acgConfig`
 
-Create adaptive cache-governor settings with defaults applied.
+Creates adaptive cache governor settings.
 
-Merges caller-supplied overrides onto the Adaptive Cache Governor (ACG) config shape used by the adaptive plugin's LLM execution intercept.
+Fields in `config` replace the defaults; fields left out keep them.
 
 **Parameters**
 
-- `config`: Partial Adaptive Cache Governor (ACG) settings to override.
+- `config`: Cache governor settings to set.
 
 **Returns**
 
-A normalized adaptive cache-governor config object.
+Complete cache governor settings.
 
 **Remarks**
 
-Nested `stability_thresholds` values are defaulted individually so callers can override only the thresholds they need.
+Thresholds in `stability_thresholds` default one by one, so one threshold can be set without the others.
 
 ```ts
 export declare function acgConfig(config?: AcgConfig): AcgConfig;
@@ -505,21 +388,21 @@ export declare function acgConfig(config?: AcgConfig): AcgConfig;
 
 ### `responseCacheConfig`
 
-Create response-cache settings with defaults applied.
+Creates response-cache settings.
 
-Merges caller-supplied overrides onto the opt-in LLM response and tool-result cache config shape used by the adaptive plugin. This is a section of the adaptive component, not a standalone plugin kind.
+Fields in `config` replace the defaults; fields left out keep them. The result is one section of an adaptive config, not a plugin kind.
 
 **Parameters**
 
-- `config`: Partial response-cache settings to override.
+- `config`: Response-cache settings to set.
 
 **Returns**
 
-A normalized response-cache config object.
+Complete response-cache settings.
 
 **Remarks**
 
-The default backend is in-memory; pass a `backend` (e.g. `redisBackend(url)`) for a shared cache. `bypassRate` defaults to `0.0`, while caching nondeterministic requests is opt-in.
+The defaults are an in-memory backend, a `bypassRate` of 0, no caching of nondeterministic requests, and an empty `namespace`. Validation rejects the empty `namespace`, so set it before validating.
 
 ```ts
 export declare function responseCacheConfig(config?: ResponseCacheConfig): ResponseCacheConfig;
@@ -527,33 +410,32 @@ export declare function responseCacheConfig(config?: ResponseCacheConfig): Respo
 
 ### `ComponentSpec` function
 
-Wrap adaptive config as a top-level component.
+Wraps an adaptive config as a plugin component.
 
-Produces the plugin component entry that can be inserted directly into `plugin.defaultConfig().components`.
+The result is an entry for `PluginConfig.components`.
 
 **Parameters**
 
-- `config`: Adaptive component configuration document.
-- `options`: Optional component-level flags.
+- `config`: Adaptive config.
+- `options`: `enabled` controls whether the component activates.
 
 **Returns**
 
-A plugin component spec for the adaptive plugin.
+A component entry with kind `adaptive`.
 
 **Remarks**
 
-Setting `options.enabled = false` keeps the config in the plugin document for validation while skipping runtime activation.
+With `enabled` false, `initialize` validates the component but does not activate it.
 
 ```ts
-export declare function ComponentSpec(
-  config: Config,
-  options?: {
+export declare function ComponentSpec(config: Config, { enabled }?: {
     enabled?: boolean;
+}): ComponentSpec;
 ```
 
 ### `validateConfig`
 
-Validate an adaptive config document without constructing a runtime.
+Validates adaptive config without creating a runtime.
 
 ```ts
 export declare function validateConfig(config: Config): ConfigReport;
@@ -561,7 +443,7 @@ export declare function validateConfig(config: Config): ConfigReport;
 
 ### `buildCacheTelemetryEvent`
 
-Build one adaptive cache telemetry event from normalized usage.
+Builds one cache telemetry event from token usage.
 
 ```ts
 export declare function buildCacheTelemetryEvent(options: CacheTelemetryEventOptions): CacheTelemetryEvent | null;
@@ -569,7 +451,7 @@ export declare function buildCacheTelemetryEvent(options: CacheTelemetryEventOpt
 
 ### `setLatencySensitivity`
 
-Set manual latency sensitivity on the current scope.
+Sets latency sensitivity on the current scope.
 
 ```ts
 export declare function setLatencySensitivity(value: number): void;
@@ -587,49 +469,71 @@ export type ResponseCacheKeyStrategy = (typeof ResponseCacheKeyStrategy)[keyof t
 
 ```ts
 export type ToolClassPluginConfig = Omit<ToolClass, 'ttlSeconds' | 'bypassRate' | 'toolVersion' | 'argSkip'> & {
-  ttl_seconds?: number;
+    ttl_seconds?: number;
+    bypass_rate?: number;
+    tool_version?: string;
+    arg_skip?: string[];
+};
 ```
 
 ### `ToolOverridePluginConfig`
 
 ```ts
 export type ToolOverridePluginConfig = Omit<ToolOverride, 'ttlSeconds' | 'bypassRate' | 'toolVersion' | 'argSkip'> & {
-  ttl_seconds?: number;
+    ttl_seconds?: number;
+    bypass_rate?: number;
+    tool_version?: string;
+    arg_skip?: string[];
+};
 ```
 
 ### `ToolCachePluginConfig`
 
 ```ts
 export type ToolCachePluginConfig = Omit<ToolCacheConfig, 'cacheErrors' | 'default' | 'classes' | 'overrides'> & {
-  cache_errors?: boolean;
+    cache_errors?: boolean;
+    default?: ToolClassPluginConfig;
+    classes?: Record<string, ToolClassPluginConfig>;
+    overrides?: Record<string, ToolOverridePluginConfig>;
+};
 ```
 
 ### `AdaptivePluginConfig`
 
 ```ts
 export type AdaptivePluginConfig = Omit<Config, 'responseCache'> & {
-  response_cache?: ResponseCachePluginConfig;
+    response_cache?: ResponseCachePluginConfig;
+};
 ```
 
 ## Constants
 
 ### `ResponseCacheKeyStrategy` constant
 
-Supported LLM response-cache key derivation strategies.
+Response-cache key strategies.
 
 ```ts
-export const ResponseCacheKeyStrategy: {
-  readonly ExactRequest: 'exact_request';
+export declare const ResponseCacheKeyStrategy: {
+    readonly ExactRequest: 'exact_request';
+    readonly Logical: 'logical';
+};
 ```
 
 ### `ADAPTIVE_PLUGIN_KIND`
 
 ```ts
-export declare const ADAPTIVE_PLUGIN_KIND: 'adaptive';
+export declare const ADAPTIVE_PLUGIN_KIND = "adaptive";
 ```
 
 ## Re-exports
 
+- `AgentIdentity`
+- `CacheRequestFacts`
+- `CacheRequestFactsOptions`
+- `CacheTelemetryEvent`
+- `CacheTelemetryEventOptions`
+- `CacheUsage`
+- `CacheWriteTokenCounts`
 - `ConfigDiagnostic`
 - `ConfigPolicy`
 - `ConfigReport`

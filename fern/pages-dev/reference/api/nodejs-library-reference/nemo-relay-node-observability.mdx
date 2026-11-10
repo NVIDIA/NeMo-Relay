@@ -6,7 +6,7 @@ position: 6
 {/* SPDX-FileCopyrightText: Copyright (c) 2026, NVIDIA CORPORATION & AFFILIATES. All rights reserved.
 SPDX-License-Identifier: Apache-2.0 */}
 
-Generated from `crates/node/observability.d.ts`.
+Generated from `crates/node/dist/observability.d.ts`.
 
 Import from `nemo-relay-node/observability`.
 
@@ -18,8 +18,8 @@ Observability plugin configuration helpers.
 
 ```ts
 export interface AtofConfig {
-  enabled?: boolean;
-  sinks?: AtofSinkConfig[];
+    enabled?: boolean;
+    sinks?: AtofSinkConfig[];
 }
 ```
 
@@ -27,10 +27,10 @@ export interface AtofConfig {
 
 ```ts
 export interface AtofFileSinkConfig {
-  type: 'file';
-  output_directory?: string;
-  filename?: string;
-  mode?: 'append' | 'overwrite' | string;
+    type: 'file';
+    output_directory?: string;
+    filename?: string;
+    mode?: 'append' | 'overwrite' | (string & {});
 }
 ```
 
@@ -38,15 +38,15 @@ export interface AtofFileSinkConfig {
 
 ```ts
 export interface AtofStreamSinkConfig {
-  type: 'stream';
-  url: string;
-  transport?: 'http_post' | 'websocket' | 'ndjson' | string;
-  headers?: Record<string, string>;
-  header_env?: Record<string, string>;
-  header_file?: Record<string, string>;
-  timeout_millis?: number;
-  field_name_policy?: 'preserve' | 'replace_dots' | string;
-  name?: string;
+    type: 'stream';
+    url: string;
+    transport?: 'http_post' | 'websocket' | 'ndjson' | (string & {});
+    headers?: Record<string, string>;
+    header_env?: Record<string, string>;
+    header_file?: Record<string, string>;
+    timeout_millis?: number;
+    field_name_policy?: 'preserve' | 'replace_dots' | (string & {});
+    name?: string;
 }
 ```
 
@@ -54,15 +54,15 @@ export interface AtofStreamSinkConfig {
 
 ```ts
 export interface S3StorageConfig {
-  type: 's3';
-  bucket: string;
-  key_prefix?: string;
-  access_key_id?: string;
-  secret_access_key_var?: string;
-  session_token_var?: string;
-  region?: string;
-  endpoint_url?: string;
-  allow_http?: boolean;
+    type: 's3';
+    bucket: string;
+    key_prefix?: string;
+    access_key_id?: string;
+    secret_access_key_var?: string;
+    session_token_var?: string;
+    region?: string;
+    endpoint_url?: string;
+    allow_http?: boolean;
 }
 ```
 
@@ -70,12 +70,12 @@ export interface S3StorageConfig {
 
 ```ts
 export interface HttpStorageConfig {
-  type: 'http';
-  endpoint: string;
-  headers?: Record<string, string>;
-  header_env?: Record<string, string>;
-  header_file?: Record<string, string>;
-  timeout_millis?: number;
+    type: 'http';
+    endpoint: string;
+    headers?: Record<string, string>;
+    header_env?: Record<string, string>;
+    header_file?: Record<string, string>;
+    timeout_millis?: number;
 }
 ```
 
@@ -83,19 +83,19 @@ export interface HttpStorageConfig {
 
 ```ts
 export interface AtifConfig {
-  enabled?: boolean;
-  agent_name?: string;
-  agent_version?: string;
-  model_name?: string;
-  tool_definitions?: Record<string, Json>[];
-  extra?: Record<string, Json>;
-  output_directory?: string;
-  filename_template?: string;
-  storage?: S3StorageConfig | HttpStorageConfig | Array<S3StorageConfig | HttpStorageConfig>;
-  /** Keep raw events in `extra.observed_events`. Defaults to `true`. */
-  include_observed_events?: boolean;
-  /** Keep full provider requests in trajectory steps. Defaults to `true`. */
-  include_llm_requests?: boolean;
+    enabled?: boolean;
+    agent_name?: string;
+    agent_version?: string;
+    model_name?: string;
+    tool_definitions?: Record<string, Json>[];
+    extra?: Record<string, Json>;
+    output_directory?: string;
+    filename_template?: string;
+    storage?: S3StorageConfig | HttpStorageConfig | Array<S3StorageConfig | HttpStorageConfig>;
+    /** Keeps raw events in `extra.observed_events`, default `true`. */
+    include_observed_events?: boolean;
+    /** Keeps full provider requests in trajectory steps, default `true`. */
+    include_llm_requests?: boolean;
 }
 ```
 
@@ -103,12 +103,12 @@ export interface AtifConfig {
 
 ```ts
 export interface OpenTelemetryTlsConfig {
-  /** PEM CA bundle that replaces the system's trusted CAs. */
-  certificate?: string;
-  /** PEM client certificate chain. Also set `private_key`. */
-  client_certificate?: string;
-  /** PEM private key. Also set `client_certificate`. */
-  private_key?: string;
+    /** PEM CA bundle replacing system CAs. */
+    certificate?: string;
+    /** PEM client certificate chain, used with `private_key`. */
+    client_certificate?: string;
+    /** PEM private key, used with `client_certificate`. */
+    private_key?: string;
 }
 ```
 
@@ -116,28 +116,31 @@ export interface OpenTelemetryTlsConfig {
 
 ```ts
 export interface OpenTelemetryEndpointConfig {
-  type: 'full' | 'gen_ai' | 'openinference';
-  endpoint: string;
-  tls?: OpenTelemetryTlsConfig;
-  mark_projection?: 'inherit' | 'event' | 'tool';
-  mark_exclude_names?: string[];
-  attribute_mappings?: Array<{ key: string; alias: string }>;
-  promote_metadata_prefixes?: string[];
-  promote_resource_metadata_prefixes?: string[];
-  transport?: 'http_binary' | 'grpc';
-  headers?: Record<string, string>;
-  header_env?: Record<string, string>;
-  header_file?: Record<string, string>;
-  resource_attributes?: Record<string, string>;
-  service_name?: string;
-  service_namespace?: string;
-  service_version?: string;
-  instrumentation_scope?: string;
-  timeout_millis?: number;
-  max_queue_size?: number;
-  max_export_batch_size?: number;
-  scheduled_delay_millis?: number;
-  completed_span_context_ttl_millis?: number;
+    type: 'full' | 'gen_ai' | 'openinference';
+    endpoint: string;
+    tls?: OpenTelemetryTlsConfig;
+    mark_projection?: 'inherit' | 'event' | 'tool';
+    mark_exclude_names?: string[];
+    attribute_mappings?: Array<{
+        key: string;
+        alias: string;
+    }>;
+    promote_metadata_prefixes?: string[];
+    promote_resource_metadata_prefixes?: string[];
+    transport?: 'http_binary' | 'grpc';
+    headers?: Record<string, string>;
+    header_env?: Record<string, string>;
+    header_file?: Record<string, string>;
+    resource_attributes?: Record<string, string>;
+    service_name?: string;
+    service_namespace?: string;
+    service_version?: string;
+    instrumentation_scope?: string;
+    timeout_millis?: number;
+    max_queue_size?: number;
+    max_export_batch_size?: number;
+    scheduled_delay_millis?: number;
+    completed_span_context_ttl_millis?: number;
 }
 ```
 
@@ -145,20 +148,20 @@ export interface OpenTelemetryEndpointConfig {
 
 ```ts
 export interface OpenTelemetrySignalEndpointConfig {
-  endpoint: string;
-  tls?: OpenTelemetryTlsConfig;
-  transport?: 'http_binary' | 'grpc';
-  headers?: Record<string, string>;
-  header_env?: Record<string, string>;
-  header_file?: Record<string, string>;
-  resource_attributes?: Record<string, string>;
-  service_name?: string;
-  service_namespace?: string;
-  service_version?: string;
-  instrumentation_scope?: string;
-  timeout_millis?: number;
-  /** Literal root-scope metadata prefixes promoted to resource attributes. */
-  promote_resource_metadata_prefixes?: string[];
+    endpoint: string;
+    tls?: OpenTelemetryTlsConfig;
+    transport?: 'http_binary' | 'grpc';
+    headers?: Record<string, string>;
+    header_env?: Record<string, string>;
+    header_file?: Record<string, string>;
+    resource_attributes?: Record<string, string>;
+    service_name?: string;
+    service_namespace?: string;
+    service_version?: string;
+    instrumentation_scope?: string;
+    timeout_millis?: number;
+    /** Root-scope metadata prefixes copied to resource attributes. */
+    promote_resource_metadata_prefixes?: string[];
 }
 ```
 
@@ -166,12 +169,13 @@ export interface OpenTelemetrySignalEndpointConfig {
 
 ```ts
 export interface OpenTelemetryLogSectionConfig {
-  enabled?: boolean;
-  endpoints?: OpenTelemetrySignalEndpointConfig[];
-  minimum_severity?: 'trace' | 'debug' | 'info' | 'warn' | 'warning' | 'error';
-  max_queue_size?: number;
-  max_export_batch_size?: number;
-  scheduled_delay_millis?: number;
+    enabled?: boolean;
+    endpoints?: OpenTelemetrySignalEndpointConfig[];
+    minimum_severity?: 'trace' | 'debug' | 'info' | 'warn' | 'warning' | 'error';
+    max_queue_size?: number;
+    max_export_batch_size?: number;
+    scheduled_delay_millis?: number;
+    completed_span_context_ttl_millis?: number;
 }
 ```
 
@@ -179,12 +183,12 @@ export interface OpenTelemetryLogSectionConfig {
 
 ```ts
 export interface OpenTelemetryMetricSectionConfig {
-  enabled?: boolean;
-  endpoints?: OpenTelemetrySignalEndpointConfig[];
-  export_interval_millis?: number;
-  temporality?: 'cumulative' | 'delta' | 'low_memory';
-  max_instruments?: number;
-  cardinality_limit?: number;
+    enabled?: boolean;
+    endpoints?: OpenTelemetrySignalEndpointConfig[];
+    export_interval_millis?: number;
+    temporality?: 'cumulative' | 'delta' | 'low_memory';
+    max_instruments?: number;
+    cardinality_limit?: number;
 }
 ```
 
@@ -192,30 +196,29 @@ export interface OpenTelemetryMetricSectionConfig {
 
 ```ts
 export interface OpenTelemetryFileSinkConfig {
-  type?: 'full' | 'gen_ai' | 'openinference';
-  output_directory: string;
-  filename?: string;
-  /**
-   * `json_lines` follows the OpenTelemetry Protocol File Exporter
-   * specification: one OTLP/JSON record per line. `proto` writes each record
-   * length-delimited.
-   */
-  format?: 'json_lines' | 'proto';
-  mode?: 'append' | 'overwrite';
-  mark_projection?: 'inherit' | 'event' | 'tool';
-  mark_exclude_names?: string[];
-  attribute_mappings?: Array<{ key: string; alias: string }>;
-  promote_metadata_prefixes?: string[];
-  promote_resource_metadata_prefixes?: string[];
-  resource_attributes?: Record<string, string>;
-  service_name?: string;
-  service_namespace?: string;
-  service_version?: string;
-  instrumentation_scope?: string;
-  max_queue_size?: number;
-  max_export_batch_size?: number;
-  scheduled_delay_millis?: number;
-  completed_span_context_ttl_millis?: number;
+    type?: 'full' | 'gen_ai' | 'openinference';
+    output_directory: string;
+    filename?: string;
+    /** `json_lines` for one OTLP/JSON record per line, `proto` for length-delimited records. */
+    format?: 'json_lines' | 'proto';
+    mode?: 'append' | 'overwrite';
+    mark_projection?: 'inherit' | 'event' | 'tool';
+    mark_exclude_names?: string[];
+    attribute_mappings?: Array<{
+        key: string;
+        alias: string;
+    }>;
+    promote_metadata_prefixes?: string[];
+    promote_resource_metadata_prefixes?: string[];
+    resource_attributes?: Record<string, string>;
+    service_name?: string;
+    service_namespace?: string;
+    service_version?: string;
+    instrumentation_scope?: string;
+    max_queue_size?: number;
+    max_export_batch_size?: number;
+    scheduled_delay_millis?: number;
+    completed_span_context_ttl_millis?: number;
 }
 ```
 
@@ -223,11 +226,11 @@ export interface OpenTelemetryFileSinkConfig {
 
 ```ts
 export interface OpenTelemetrySectionConfig {
-  enabled?: boolean;
-  endpoints?: OpenTelemetryEndpointConfig[];
-  file_sinks?: OpenTelemetryFileSinkConfig[];
-  logs?: OpenTelemetryLogSectionConfig;
-  metrics?: OpenTelemetryMetricSectionConfig;
+    enabled?: boolean;
+    endpoints?: OpenTelemetryEndpointConfig[];
+    file_sinks?: OpenTelemetryFileSinkConfig[];
+    logs?: OpenTelemetryLogSectionConfig;
+    metrics?: OpenTelemetryMetricSectionConfig;
 }
 ```
 
@@ -235,15 +238,15 @@ export interface OpenTelemetrySectionConfig {
 
 ```ts
 export interface Config {
-  version?: number;
-  atof?: AtofConfig;
-  atif?: AtifConfig;
-  opentelemetry?: OpenTelemetrySectionConfig;
-  policy?: ConfigPolicy;
-  /** Retain complete sanitized request data on every LLM start event. */
-  enable_full_payloads?: boolean;
-  /** Non-loopback hosts allowed unencrypted HTTP or WebSocket exports, including headers. */
-  insecure_http_hosts?: string[];
+    version?: number;
+    atof?: AtofConfig;
+    atif?: AtifConfig;
+    opentelemetry?: OpenTelemetrySectionConfig;
+    policy?: ConfigPolicy;
+    /** Keeps full sanitized request data on LLM start events. */
+    enable_full_payloads?: boolean;
+    /** Non-loopback hosts allowed to receive unencrypted HTTP or WebSocket exports, headers included. */
+    insecure_http_hosts?: string[];
 }
 ```
 
@@ -251,9 +254,9 @@ export interface Config {
 
 ```ts
 export interface ComponentSpec {
-  kind: 'observability';
-  enabled?: boolean;
-  config: Config;
+    kind: 'observability';
+    enabled?: boolean;
+    config: Config;
 }
 ```
 
@@ -261,7 +264,7 @@ export interface ComponentSpec {
 
 ### `defaultConfig`
 
-Create a default observability component config.
+Creates a default observability config.
 
 ```ts
 export declare function defaultConfig(): Config;
@@ -269,7 +272,7 @@ export declare function defaultConfig(): Config;
 
 ### `atofConfig`
 
-Create filesystem-backed Agent Trajectory Observability Format (ATOF) JSONL settings with defaults applied.
+Creates Agent Trajectory Observability Format (ATOF) settings with defaults applied.
 
 ```ts
 export declare function atofConfig(config?: AtofConfig): AtofConfig;
@@ -277,7 +280,7 @@ export declare function atofConfig(config?: AtofConfig): AtofConfig;
 
 ### `atifConfig`
 
-Create per-agent Agent Trajectory Interchange Format (ATIF) trajectory settings with defaults applied.
+Creates Agent Trajectory Interchange Format (ATIF) settings with defaults applied.
 
 ```ts
 export declare function atifConfig(config?: AtifConfig): AtifConfig;
@@ -285,7 +288,7 @@ export declare function atifConfig(config?: AtifConfig): AtifConfig;
 
 ### `openTelemetryEndpoint`
 
-Create one typed OpenTelemetry endpoint.
+Creates one OpenTelemetry trace endpoint with defaults applied.
 
 ```ts
 export declare function openTelemetryEndpoint(config: OpenTelemetryEndpointConfig): OpenTelemetryEndpointConfig;
@@ -293,23 +296,23 @@ export declare function openTelemetryEndpoint(config: OpenTelemetryEndpointConfi
 
 ### `openTelemetryFileSink`
 
+Creates one file sink for OTLP spans with defaults applied.
+
 ```ts
 export declare function openTelemetryFileSink(config: OpenTelemetryFileSinkConfig): OpenTelemetryFileSinkConfig;
 ```
 
 ### `openTelemetrySignalEndpoint`
 
-Create one signal-specific OpenTelemetry endpoint for logs or metrics.
+Creates one OpenTelemetry log or metric endpoint with defaults applied.
 
 ```ts
-export declare function openTelemetrySignalEndpoint(
-  config: OpenTelemetrySignalEndpointConfig,
-): OpenTelemetrySignalEndpointConfig;
+export declare function openTelemetrySignalEndpoint(config: OpenTelemetrySignalEndpointConfig): OpenTelemetrySignalEndpointConfig;
 ```
 
 ### `openTelemetryLogConfig`
 
-Create OTLP log pipeline settings with defaults applied.
+Creates OTLP log settings with defaults applied.
 
 ```ts
 export declare function openTelemetryLogConfig(config?: OpenTelemetryLogSectionConfig): OpenTelemetryLogSectionConfig;
@@ -317,17 +320,15 @@ export declare function openTelemetryLogConfig(config?: OpenTelemetryLogSectionC
 
 ### `openTelemetryMetricConfig`
 
-Create OTLP metric pipeline settings with defaults applied.
+Creates OTLP metric settings with defaults applied.
 
 ```ts
-export declare function openTelemetryMetricConfig(
-  config?: OpenTelemetryMetricSectionConfig,
-): OpenTelemetryMetricSectionConfig;
+export declare function openTelemetryMetricConfig(config?: OpenTelemetryMetricSectionConfig): OpenTelemetryMetricSectionConfig;
 ```
 
 ### `openTelemetryConfig`
 
-Create multi-endpoint OpenTelemetry settings.
+Creates OpenTelemetry settings with defaults applied.
 
 ```ts
 export declare function openTelemetryConfig(config?: OpenTelemetrySectionConfig): OpenTelemetrySectionConfig;
@@ -335,13 +336,12 @@ export declare function openTelemetryConfig(config?: OpenTelemetrySectionConfig)
 
 ### `ComponentSpec` function
 
-Wrap observability config as a top-level plugin component.
+Wraps observability config as a plugin component.
 
 ```ts
-export declare function ComponentSpec(
-  config: Config,
-  options?: {
+export declare function ComponentSpec(config: Config, { enabled }?: {
     enabled?: boolean;
+}): ComponentSpec;
 ```
 
 ## Type Aliases
@@ -364,10 +364,10 @@ export type AtofEndpointConfig = AtofStreamSinkConfig;
 
 ### `OBSERVABILITY_PLUGIN_KIND`
 
-Top-level plugin kind used by the built-in observability component.
+Plugin kind of the observability component.
 
 ```ts
-export declare const OBSERVABILITY_PLUGIN_KIND: 'observability';
+export declare const OBSERVABILITY_PLUGIN_KIND = "observability";
 ```
 
 ## Re-exports

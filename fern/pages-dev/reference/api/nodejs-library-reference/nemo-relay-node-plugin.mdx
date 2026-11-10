@@ -6,7 +6,7 @@ position: 4
 {/* SPDX-FileCopyrightText: Copyright (c) 2026, NVIDIA CORPORATION & AFFILIATES. All rights reserved.
 SPDX-License-Identifier: Apache-2.0 */}
 
-Generated from `crates/node/plugin.d.ts`.
+Generated from `crates/node/dist/plugin.d.ts`.
 
 Import from `nemo-relay-node/plugin`.
 
@@ -16,39 +16,13 @@ Plugin configuration, validation, activation, and registration helpers.
 
 ### `ConfigPolicy`
 
-Plugin-level policy for unknown or unsupported plugin configuration.
+Handling for unknown or unsupported plugin configuration.
 
 ```ts
 export interface ConfigPolicy {
-  unknown_component?: UnsupportedBehavior;
-  unknown_field?: UnsupportedBehavior;
-  unsupported_value?: UnsupportedBehavior;
-}
-```
-
-### `ConfigReport`
-
-Validation or activation report for a plugin configuration.
-
-```ts
-export interface ConfigReport {
-  diagnostics: ConfigDiagnostic[];
-  runtime_diagnostics?: RuntimeDiagnostic[];
-}
-```
-
-### `RuntimeDiagnostic`
-
-One bounded aggregate of a runtime plugin failure.
-
-```ts
-export interface RuntimeDiagnostic {
-  code: string;
-  component: string;
-  field?: string;
-  message: string;
-  session_id?: string;
-  count: number;
+    unknown_component?: UnsupportedBehavior;
+    unknown_field?: UnsupportedBehavior;
+    unsupported_value?: UnsupportedBehavior;
 }
 ```
 
@@ -56,120 +30,53 @@ export interface RuntimeDiagnostic {
 
 ```ts
 export interface ComponentConfigs {
-  adaptive: AdaptivePluginConfig;
-  observability: ObservabilityConfig;
-  pii_redaction: PiiRedactionConfig;
-  pricing: PricingConfig;
-  resource_metrics: ResourceMetricsConfig;
+    adaptive: AdaptivePluginConfig;
+    observability: ObservabilityConfig;
+    pii_redaction: PiiRedactionConfig;
+    pricing: PricingConfig;
+    resource_metrics: ResourceMetricsConfig;
 }
 ```
 
 ### `OpenComponentSpec`
 
-Component for a kind registered through `registerPlugin`; create one with `ComponentSpec`.
+Component created by `ComponentSpec` for a kind registered with `registerPlugin`.
 
 ```ts
 export interface OpenComponentSpec<C extends object = JsonObject> {
-  kind: string;
-  enabled?: boolean;
-  config?: C & OpenComponentConfig;
+    kind: string;
+    enabled?: boolean;
+    config?: C & OpenComponentConfig;
 }
 ```
 
 ### `PluginConfig`
 
-Canonical plugin configuration document.
+Plugin configuration document.
 
 ```ts
 export interface PluginConfig {
-  version?: number;
-  components?: ComponentSpec[];
-  policy?: ConfigPolicy;
-  /** Startup-only host service profile; omitted settings use file layers. */
-  diagnostics?: { enabled?: boolean; limits?: Record<string, number> };
-}
-```
-
-### `PluginHostActivation`
-
-```ts
-export interface PluginHostActivation extends AsyncDisposable {
-  /** Validation report produced by the successful activation. */
-  readonly report: PluginHostReport;
-  /** Whether this activation remains open. Failed teardown can be retried. */
-  readonly isActive: boolean;
-  /** Clear callbacks before unloading libraries and workers. Idempotent. */
-  close(): Promise<void>;
-  /** Delegate structured `await using` cleanup to `close()`. */
-  [Symbol.asyncDispose](): Promise<void>;
-}
-```
-
-### `PluginHostReport`
-
-```ts
-export interface PluginHostReport {
-  config: ConfigReport;
-  dynamic_plugins: DynamicPluginValidationReport[];
-  /** Existing plugins.toml files that contributed to the resolved configuration. */
-  config_paths: string[];
-  /** Fully merged plugin configuration with sensitive values redacted. */
-  resolved_config: Json;
-}
-```
-
-### `DynamicPluginValidationStatus`
-
-```ts
-export interface DynamicPluginValidationStatus {
-  manifest: DynamicPluginCheckState;
-  compatibility: DynamicPluginCheckState;
-  integrity: DynamicPluginCheckState;
-  environment: DynamicPluginCheckState;
-  authenticity: DynamicPluginCheckState;
-  policy_satisfied: DynamicPluginCheckState;
-  checked_at?: string | null;
-  message?: string | null;
-}
-```
-
-### `DynamicPluginFailure`
-
-```ts
-export interface DynamicPluginFailure {
-  phase: string;
-  code: string;
-  message: string;
-}
-```
-
-### `DynamicPluginValidationReport`
-
-```ts
-export interface DynamicPluginValidationReport {
-  plugin_id: string;
-  manifest_ref: string;
-  kind: DynamicPluginKind;
-  status: DynamicPluginValidationStatus;
-  failure?: DynamicPluginFailure | null;
-  selected: boolean;
+    version?: number;
+    components?: ComponentSpec[];
+    policy?: ConfigPolicy;
+    /** Host service profile read at startup; omitted settings come from config files. */
+    diagnostics?: {
+        enabled?: boolean;
+        limits?: Record<string, number>;
+    };
 }
 ```
 
 ### `Plugin`
 
-Plugin callback contract.
+Callbacks a plugin kind provides.
 
 ```ts
 export interface Plugin {
-  /** Validate one component-local config object. */
-  validate?(pluginConfig: JsonObject): ConfigDiagnostic[] | null | undefined;
-  /**
-   * Install middleware and subscribers for one component instance.
-   *
-   * Throwing aborts the current initialization and triggers rollback.
-   */
-  register(pluginConfig: JsonObject, context: PluginContext): void;
+    /** Validates one component config. */
+    validate?: (pluginConfig: JsonObject) => ConfigDiagnostic[] | null | undefined;
+    /** Installs middleware and subscribers for one component; throwing aborts initialization. */
+    register: (pluginConfig: JsonObject, context: PluginContext) => void;
 }
 ```
 
@@ -177,17 +84,17 @@ export interface Plugin {
 
 ### `defaultConfig`
 
-Create an empty plugin configuration.
+Creates an empty plugin configuration.
 
-Returns the canonical top-level config shape with `version = 1` and no configured components so callers can build a document incrementally before validating or activating it.
+The document has `version` 1 and no components. Add components to it, then pass it to `validate` or `initialize`.
 
 **Returns**
 
-A new `PluginConfig` object ready for mutation or validation.
+A plugin configuration with no components.
 
 **Remarks**
 
-Mutating the returned object does not affect runtime state until it is passed to `initialize`.
+Editing the returned object changes nothing until it is passed to `initialize`.
 
 ```ts
 export declare function defaultConfig(): PluginConfig;
@@ -195,60 +102,56 @@ export declare function defaultConfig(): PluginConfig;
 
 ### `ComponentSpec` function
 
-Create a plugin component entry for a plugin config document.
+Creates one component entry for `PluginConfig.components`.
 
-Packages a plugin kind, component-local config, and enablement flag into the object shape expected by `PluginConfig.components`.
+For a built-in kind, `config` is checked against that kind's config type. For a kind registered with `register`, `config` is any JSON object.
 
 **Parameters**
 
-- `kind`: Registered plugin kind to reference.
-- `config`: Component-local config passed to plugin hooks.
-- `options`: Optional component-level flags.
+- `kind`: Plugin kind name.
+- `config`: Config handed to the plugin's hooks.
+- `options`: `enabled` controls whether the component activates.
 
 **Returns**
 
-A `ComponentSpec` ready to insert into a plugin config.
+A component entry for a plugin configuration.
 
 **Remarks**
 
-Setting `options.enabled = false` preserves the component for validation while skipping runtime registration during `initialize`.
+With `enabled` false, `initialize` validates the component but does not activate it.
 
 ```ts
-export declare function ComponentSpec<K extends ComponentKind>(
-  kind: K,
-  config?: ComponentConfigs[K],
-  options?: {
+export declare function ComponentSpec<K extends ComponentKind>(kind: K, config?: ComponentConfigs[K], options?: {
     enabled?: boolean;
+}): ComponentSpecFor<K>;
 ```
 
 ### `ComponentSpec` function
 
 ```ts
-export declare function ComponentSpec<K extends string, C extends JsonObjectCompatible<C> = JsonObject>(
-  kind: K extends ComponentKind ? never : K,
-  config?: C,
-  options?: {
+export declare function ComponentSpec<K extends string, C extends JsonObjectCompatible<C> = JsonObject>(kind: K extends ComponentKind ? never : K, config?: C, options?: {
     enabled?: boolean;
+}): OpenComponentSpec<C>;
 ```
 
 ### `initialize`
 
-Initialize the core-owned static and dynamic plugin host.
+Initializes the plugin host and activates the configured plugins.
 
-Resolves an explicit or discovered user file with the system configuration, then applies programmatic config and activates one owned lifetime.
+The system and user `plugins.toml` files are merged first and `config` is applied on top of them.
 
 **Parameters**
 
-- `config`: Programmatic configuration. It overrides file values.
-- `additionalPluginsToml`: Optional explicit `plugins.toml` layer. A missing explicit file is reported as a `plugin.configuration_file_missing` warning in the host report.
+- `config`: Programmatic configuration. Its values override the files.
+- `additionalPluginsToml`: Path of one more `plugins.toml` to merge. If the file is missing, the report carries a `plugin.configuration_file_missing` warning.
 
 **Returns**
 
-An owned activation with the unified host report.
+The activation, which holds the host report.
 
 **Remarks**
 
-Keep the returned activation alive while callbacks may run and call `close()` or use `await using` for deterministic teardown.
+Plugin callbacks run only while the activation is alive. End it with `close()` or `await using`.
 
 ```ts
 export declare function initialize(config: PluginConfig, additionalPluginsToml?: string): Promise<PluginHostActivation>;
@@ -256,22 +159,22 @@ export declare function initialize(config: PluginConfig, additionalPluginsToml?:
 
 ### `validate`
 
-Validate the plugin host without loading plugin code.
+Validates the plugin host configuration without loading plugin code.
 
-Resolves the same layered configuration and trust policy used by activation while leaving the process-wide host lease untouched.
+The files and `config` are merged exactly as `initialize` merges them, and the merged result is checked.
 
 **Parameters**
 
-- `config`: Programmatic configuration. It overrides file values.
-- `additionalPluginsToml`: Optional explicit `plugins.toml` layer. A missing explicit file is reported as a `plugin.configuration_file_missing` warning in the host report.
+- `config`: Programmatic configuration. Its values override the files.
+- `additionalPluginsToml`: Path of one more `plugins.toml` to merge. If the file is missing, the report carries a `plugin.configuration_file_missing` warning.
 
 **Returns**
 
-Structured static and dynamic validation report.
+The report for static components and dynamic plugins.
 
 **Remarks**
 
-Validation performs no activation and does not acquire the host lease.
+Nothing is activated and no host lease is taken.
 
 ```ts
 export declare function validate(config: PluginConfig, additionalPluginsToml?: string): PluginHostReport;
@@ -279,17 +182,21 @@ export declare function validate(config: PluginConfig, additionalPluginsToml?: s
 
 ### `validateExact`
 
-Validate only the supplied static plugin configuration.
+Validates one plugin configuration document by itself.
 
-Unlike `validate`, this does not discover or merge `plugins.toml` files. Use it for component-specific validation when `config` is the complete document to check. Host-only `diagnostics` settings are rejected; use `validate` to validate those settings.
+No `plugins.toml` file is read or merged, so `config` must be the whole document.
 
 **Parameters**
 
-- `config`: Complete static plugin configuration.
+- `config`: Complete plugin configuration.
 
 **Returns**
 
-Static validation results with no dynamic plugins.
+The report for the static components in `config`.
+
+**Remarks**
+
+Host-only `diagnostics` settings are rejected here. Use `validate` to check them.
 
 ```ts
 export declare function validateExact(config: PluginConfig): PluginHostReport;
@@ -297,9 +204,9 @@ export declare function validateExact(config: PluginConfig): PluginHostReport;
 
 ### `listKinds`
 
-List registered plugin kinds.
+Lists the plugin kinds in the registry.
 
-Returns the plugin kind identifiers currently known to the global registry so callers can inspect what can be referenced from plugin configs.
+A plugin configuration can reference any of these kinds.
 
 **Returns**
 
@@ -307,7 +214,7 @@ The registered plugin kind names.
 
 **Remarks**
 
-The list reflects registry state only; it does not indicate whether a plugin kind is currently active in the runtime configuration.
+A registered kind is not necessarily active in the current configuration.
 
 ```ts
 export declare function listKinds(): string[];
@@ -315,14 +222,14 @@ export declare function listKinds(): string[];
 
 ### `register`
 
-Register a plugin kind with JavaScript validation and registration hooks.
+Registers a plugin kind implemented in JavaScript.
 
-Adapts the higher-level `Plugin` object contract to the native callback shape expected by the Node binding.
+`plugin.validate` runs when a configuration is validated. `plugin.register` runs when `initialize` activates a component of this kind.
 
 **Parameters**
 
-- `pluginKind`: Unique plugin kind identifier to register.
-- `plugin`: Plugin implementation with `validate` and `register` hooks.
+- `pluginKind`: Unique plugin kind name.
+- `plugin`: The `validate` and `register` hooks.
 
 **Returns**
 
@@ -330,7 +237,7 @@ Nothing.
 
 **Remarks**
 
-Omitting `plugin.validate` makes the plugin permissive during validation; `plugin.register` still runs later during `initialize`.
+Without `plugin.validate`, any config for this kind passes validation.
 
 ```ts
 export declare function register(pluginKind: string, plugin: Plugin): void;
@@ -338,21 +245,21 @@ export declare function register(pluginKind: string, plugin: Plugin): void;
 
 ### `deregister`
 
-Remove a previously registered plugin kind.
+Removes a plugin kind from the registry.
 
-Deletes the plugin kind from the registry so future config validation and initialization calls can no longer reference it.
+Configurations validated or initialized after this call cannot reference the kind.
 
 **Parameters**
 
-- `pluginKind`: Registered plugin kind identifier to remove.
+- `pluginKind`: Name the kind was registered under.
 
 **Returns**
 
-`true` when a plugin kind was removed, otherwise `false`.
+`true` if the kind was registered, `false` if it was not.
 
 **Remarks**
 
-Active runtime registrations remain until the owning plugin-host activation closes.
+Components of this kind that are already active keep running until their activation closes.
 
 ```ts
 export declare function deregister(pluginKind: string): boolean;
@@ -362,7 +269,7 @@ export declare function deregister(pluginKind: string): boolean;
 
 ### `UnsupportedBehavior`
 
-Policy behavior for unsupported configuration.
+How unsupported configuration is handled.
 
 ```ts
 export type UnsupportedBehavior = 'ignore' | 'warn' | 'error';
@@ -378,51 +285,68 @@ export type ComponentKind = keyof ComponentConfigs;
 
 ```ts
 export type KnownComponentSpec = {
-  [K in ComponentKind]: { kind: K; enabled?: boolean; config?: ComponentConfigs[K] };
+    [K in ComponentKind]: {
+        kind: K;
+        enabled?: boolean;
+        config?: ComponentConfigs[K];
+    };
+}[ComponentKind];
 ```
 
 ### `OpenComponentConfig`
 
-Config of a component created with `ComponentSpec` for a kind registered through `registerPlugin`.
+Config returned by `ComponentSpec` for a kind registered with `registerPlugin`.
 
 ```ts
 export type OpenComponentConfig = {
-  readonly [openComponent]: true;
-```
-
-### `ComponentConfigFor`
-
-```ts
-export type ComponentConfigFor<K extends string> = K extends ComponentKind ? ComponentConfigs[K] : JsonObject;
+    readonly [openComponent]: true;
+};
 ```
 
 ### `ComponentSpecFor`
 
 ```ts
-export type ComponentSpecFor<K extends string> = K extends ComponentKind
-  ? Extract<KnownComponentSpec, { kind: K }>
-  : OpenComponentSpec;
+export type ComponentSpecFor<K extends string> = K extends ComponentKind ? Extract<KnownComponentSpec, {
+    kind: K;
+}> : OpenComponentSpec;
 ```
 
 ### `ComponentSpec` type alias
 
-One top-level plugin component.
+One plugin component.
 
 ```ts
 export type ComponentSpec = KnownComponentSpec | OpenComponentSpec<object>;
 ```
 
-### `DynamicPluginKind`
+## Re-exports
 
-Execution lane for a dynamically loaded Relay plugin.
-
-```ts
-export type DynamicPluginKind = 'rust_dynamic' | 'worker';
-```
-
-### `DynamicPluginCheckState`
-
-```ts
-export type DynamicPluginCheckState = 'unknown' | 'valid' | 'invalid';
-```
+- `ConfigDiagnostic`
+- `ConfigReport`
+- `DynamicPluginCheckState`
+- `DynamicPluginFailure`
+- `DynamicPluginKind`
+- `DynamicPluginValidationReport`
+- `DynamicPluginValidationStatus`
+- `EventMetadata`
+- `EventMetadataScalar`
+- `EventMetadataValue`
+- `LlmCodecIdentity`
+- `LlmExecutionContext`
+- `LlmOptimizationContribution`
+- `LlmOptimizationDataSchema`
+- `LlmOptimizationModel`
+- `LlmOptimizationModelTransition`
+- `LlmOptimizationTokenImpact`
+- `LlmOptimizationTokens`
+- `LlmRequestContext`
+- `LlmRequestInterceptOutcome`
+- `LlmResponseContext`
+- `LlmSanitizeRequestContext`
+- `LlmSanitizeResponseContext`
+- `PluginContext`
+- `PluginHostActivation`
+- `PluginHostReport`
+- `RuntimeDiagnostic`
+- `ToolExecutionInterceptOutcome`
 

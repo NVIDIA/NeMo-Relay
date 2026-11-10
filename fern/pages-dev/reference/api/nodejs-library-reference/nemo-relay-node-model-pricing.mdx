@@ -6,7 +6,7 @@ position: 8
 {/* SPDX-FileCopyrightText: Copyright (c) 2026, NVIDIA CORPORATION & AFFILIATES. All rights reserved.
 SPDX-License-Identifier: Apache-2.0 */}
 
-Generated from `crates/node/model_pricing.d.ts`.
+Generated from `crates/node/dist/model_pricing.d.ts`.
 
 Import from `nemo-relay-node/model_pricing`.
 
@@ -16,35 +16,35 @@ Model pricing plugin configuration helpers.
 
 ### `CacheWriteRate`
 
-Prompt cache write price for a duration in seconds, or the default with no duration.
+Prompt-cache write price for a duration in seconds, or the default price without `duration`.
 
 ```ts
 export interface CacheWriteRate {
-  duration?: number;
-  per_million: number;
+    duration?: number;
+    per_million: number;
 }
 ```
 
 ### `TokenPricingRates`
 
-Token rates expressed per one million tokens.
+Token rates per million tokens.
 
 ```ts
 export interface TokenPricingRates {
-  input_per_million: number;
-  output_per_million: number;
-  cache_read_per_million?: number;
-  cache_write_rates?: CacheWriteRate[];
+    input_per_million: number;
+    output_per_million: number;
+    cache_read_per_million?: number;
+    cache_write_rates?: CacheWriteRate[];
 }
 ```
 
 ### `PromptCachePricing`
 
-Prompt-cache accounting settings for a catalog entry.
+Prompt-cache accounting for a catalog entry.
 
 ```ts
 export interface PromptCachePricing {
-  read_accounting?: 'included_in_prompt_tokens' | 'separate';
+    read_accounting?: 'included_in_prompt_tokens' | 'separate';
 }
 ```
 
@@ -54,21 +54,21 @@ One prompt-token threshold tier.
 
 ```ts
 export interface TokenRateTier {
-  min_prompt_tokens?: number;
-  max_prompt_tokens?: number;
-  rates: TokenPricingRates;
+    min_prompt_tokens?: number;
+    max_prompt_tokens?: number;
+    rates: TokenPricingRates;
 }
 ```
 
 ### `PromptTokenThresholdRateSchedule`
 
-Threshold-based token rate schedule.
+Token rate schedule selected by prompt-token thresholds.
 
 ```ts
 export interface PromptTokenThresholdRateSchedule {
-  type: 'prompt_token_threshold';
-  applies_to?: 'full_request';
-  tiers: TokenRateTier[];
+    type: 'prompt_token_threshold';
+    applies_to?: 'full_request';
+    tiers: TokenRateTier[];
 }
 ```
 
@@ -78,59 +78,59 @@ One model pricing catalog entry.
 
 ```ts
 export interface ModelPricing {
-  provider: string;
-  model_id: string;
-  aliases?: string[];
-  currency?: string;
-  unit?: 'per_token' | 'per_request' | 'per_second' | 'gpu_hour';
-  rates?: TokenPricingRates;
-  rate_schedule?: PromptTokenThresholdRateSchedule | JsonObject;
-  prompt_cache: PromptCachePricing;
-  pricing_as_of: string;
-  pricing_source: string;
+    provider: string;
+    model_id: string;
+    aliases?: string[];
+    currency?: string;
+    unit?: 'per_token' | 'per_request' | 'per_second' | 'gpu_hour';
+    rates?: TokenPricingRates;
+    rate_schedule?: PromptTokenThresholdRateSchedule | JsonObject;
+    prompt_cache: PromptCachePricing;
+    pricing_as_of: string;
+    pricing_source: string;
 }
 ```
 
 ### `PricingCatalog`
 
-Inline model pricing catalog payload.
+Inline pricing catalog.
 
 ```ts
 export interface PricingCatalog {
-  version?: number;
-  entries: Array<ModelPricing | JsonObject>;
+    version?: number;
+    entries: Array<ModelPricing | JsonObject>;
 }
 ```
 
 ### `InlineSource`
 
-Inline model pricing source config.
+Pricing source holding an inline catalog.
 
 ```ts
 export interface InlineSource {
-  type: 'inline';
-  catalog: PricingCatalog | JsonObject;
+    type: 'inline';
+    catalog: PricingCatalog | JsonObject;
 }
 ```
 
 ### `FileSource`
 
-File-backed model pricing source config.
+Pricing source read from a JSON file.
 
 ```ts
 export interface FileSource {
-  type: 'file';
-  path: string;
+    type: 'file';
+    path: string;
 }
 ```
 
 ### `PricingConfig`
 
-Canonical model pricing plugin config.
+Model pricing config.
 
 ```ts
 export interface PricingConfig {
-  sources?: PricingSource[];
+    sources?: PricingSource[];
 }
 ```
 
@@ -138,7 +138,7 @@ export interface PricingConfig {
 
 ### `defaultConfig`
 
-Create a default model pricing component config.
+Creates a default model pricing config with no sources.
 
 ```ts
 export declare function defaultConfig(): PricingConfig;
@@ -146,7 +146,7 @@ export declare function defaultConfig(): PricingConfig;
 
 ### `tokenRates`
 
-Create per-token model pricing rates with defaults applied.
+Creates token rates with defaults applied.
 
 ```ts
 export declare function tokenRates(config?: Partial<TokenPricingRates>): TokenPricingRates;
@@ -154,7 +154,7 @@ export declare function tokenRates(config?: Partial<TokenPricingRates>): TokenPr
 
 ### `promptCache`
 
-Create prompt-cache accounting settings with defaults applied.
+Creates prompt-cache accounting with defaults applied.
 
 ```ts
 export declare function promptCache(config?: Partial<PromptCachePricing>): PromptCachePricing;
@@ -162,29 +162,23 @@ export declare function promptCache(config?: Partial<PromptCachePricing>): Promp
 
 ### `tokenRateTier`
 
-Create one prompt-token threshold rate tier.
+Creates one rate tier.
 
 ```ts
-export declare function tokenRateTier(
-  rates: TokenPricingRates,
-  config?: Omit<Partial<TokenRateTier>, 'rates'>,
-): TokenRateTier;
+export declare function tokenRateTier(rates: TokenPricingRates, config?: Omit<Partial<TokenRateTier>, 'rates'>): TokenRateTier;
 ```
 
 ### `promptTokenThresholdRateSchedule`
 
-Create a prompt-token threshold rate schedule.
+Creates a rate schedule from tiers.
 
 ```ts
-export declare function promptTokenThresholdRateSchedule(
-  tiers?: TokenRateTier[],
-  config?: Omit<Partial<PromptTokenThresholdRateSchedule>, 'type' | 'tiers'>,
-): PromptTokenThresholdRateSchedule;
+export declare function promptTokenThresholdRateSchedule(tiers?: TokenRateTier[], config?: Omit<Partial<PromptTokenThresholdRateSchedule>, 'type' | 'tiers'>): PromptTokenThresholdRateSchedule;
 ```
 
 ### `catalogEntry`
 
-Create one model pricing catalog entry with defaults applied.
+Creates one catalog entry with defaults applied.
 
 ```ts
 export declare function catalogEntry(config: Omit<ModelPricing, 'prompt_cache'> & Partial<ModelPricing>): ModelPricing;
@@ -192,18 +186,15 @@ export declare function catalogEntry(config: Omit<ModelPricing, 'prompt_cache'> 
 
 ### `inlineCatalog`
 
-Create an inline model pricing catalog payload.
+Creates an inline catalog from entries.
 
 ```ts
-export declare function inlineCatalog(
-  entries?: Array<ModelPricing | JsonObject>,
-  config?: Omit<Partial<PricingCatalog>, 'entries'>,
-): PricingCatalog;
+export declare function inlineCatalog(entries?: Array<ModelPricing | JsonObject>, config?: Omit<Partial<PricingCatalog>, 'entries'>): PricingCatalog;
 ```
 
 ### `inlineSource`
 
-Create an inline model pricing source.
+Creates a pricing source from an inline catalog.
 
 ```ts
 export declare function inlineSource(catalog: PricingCatalog | JsonObject): InlineSource;
@@ -211,7 +202,7 @@ export declare function inlineSource(catalog: PricingCatalog | JsonObject): Inli
 
 ### `fileSource`
 
-Create a file-backed model pricing source.
+Creates a pricing source from a JSON file path.
 
 ```ts
 export declare function fileSource(path: string): FileSource;
@@ -219,7 +210,7 @@ export declare function fileSource(path: string): FileSource;
 
 ### `pricingConfig`
 
-Create a model pricing config from ordered sources.
+Creates a model pricing config from sources in precedence order.
 
 ```ts
 export declare function pricingConfig(sources?: PricingSource[]): PricingConfig;
@@ -227,18 +218,17 @@ export declare function pricingConfig(sources?: PricingSource[]): PricingConfig;
 
 ### `ComponentSpec`
 
-Wrap model pricing config as a top-level plugin component.
+Wraps model pricing config as a plugin component.
 
 ```ts
-export declare function ComponentSpec(
-  config: PricingConfig,
-  options?: {
+export declare function ComponentSpec(config: PricingConfig, { enabled }?: {
     enabled?: boolean;
+}): ComponentSpecFor<'pricing'>;
 ```
 
 ### `validateConfig`
 
-Validate a model pricing config document without activating it.
+Validates model pricing config without activating it.
 
 ```ts
 export declare function validateConfig(config: PricingConfig | JsonObject): ConfigReport;
@@ -246,7 +236,7 @@ export declare function validateConfig(config: PricingConfig | JsonObject): Conf
 
 ### `parseConfig`
 
-Validate an untyped model pricing document and return it as a config; throws on error diagnostics.
+Validates an untyped model pricing document and returns it as a config; throws on error diagnostics.
 
 ```ts
 export declare function parseConfig(document: JsonObject): PricingConfig;
@@ -256,7 +246,7 @@ export declare function parseConfig(document: JsonObject): PricingConfig;
 
 ### `PricingSource`
 
-Pricing source config.
+Pricing source.
 
 ```ts
 export type PricingSource = InlineSource | FileSource | JsonObject;
@@ -266,9 +256,13 @@ export type PricingSource = InlineSource | FileSource | JsonObject;
 
 ### `PRICING_PLUGIN_KIND`
 
-Plugin kind used by the model pricing component.
+Plugin kind of the model pricing component.
 
 ```ts
-export declare const PRICING_PLUGIN_KIND = 'pricing';
+export declare const PRICING_PLUGIN_KIND = "pricing";
 ```
+
+## Re-exports
+
+- `Json`
 
