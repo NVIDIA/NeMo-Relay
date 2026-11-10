@@ -37,6 +37,14 @@ setup is included; the linked quickstarts and reference pages are supplemental.
 | Versions | Compatible Relay and Switchyard releases | Relay 0.10.4, Switchyard plugin 0.3.2, and Claude Code 2.1.309 or Codex 0.164.0 |
 | Changes and cleanup | Plugin and route policy in the model-handling process | Isolated output, harness configuration, and plugin bundle; remove only those directories |
 
+<Warning title="Match the plugin to the Relay host">
+The published Switchyard plugin 0.3.2 declares Relay `>=0.10.1,<1.0.0`.
+It cannot load in Relay 1.0. Use the pinned host for this example; before
+upgrading, select a plugin bundle whose packaged `relay-plugin.toml` explicitly
+supports your Relay version. Follow the
+[Switchyard integration contract](https://nvidia-nemo.github.io/Switchyard/integrations/nemo_relay/).
+</Warning>
+
 <Warning title="Keep system policy separate">
 Use a host without the coding-agent example's system-wide Relay policy.
 An explicit plugin path still merges system configuration.
@@ -321,8 +329,8 @@ Expect `x86_64`, a glibc version, Python 3.12+, and Node.js 24.13.1.
 
 ### 3. Choose a harness and install Relay and the plugin
 
-Choose **one** harness, using the same options as the
-[organization deployment guide](/user-guides/govern-coding-agents#choose-the-coding-harness):
+Choose **one** harness. For its Relay integration details, see
+[Claude Code](/nemo-relay-cli/claude-code) or [Codex](/nemo-relay-cli/codex).
 
 <Tabs>
 <Tab title="Claude Code">
