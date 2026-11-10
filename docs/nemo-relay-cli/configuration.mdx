@@ -32,6 +32,114 @@ System config has the highest file-level priority. CLI flags and environment
 variables override file config. Repository-local `.nemo-relay/config.toml`
 files are ignored unless selected explicitly.
 
+### Named Presets
+
+A preset is a named group of default settings in `config.toml`. An administrator
+can define presets in the system file. Users can then choose a preset in their
+own files. Users don't need to copy the preset settings.
+
+#### Define a Preset
+
+Add the following definition to the system `config.toml`. It configures
+OpenRouter for both OpenAI-compatible and Anthropic-compatible requests:
+
+```toml
+[presets.openrouter.upstream]
+openai_base_url = "https://openrouter.ai/api/v1"
+anthropic_base_url = "https://openrouter.ai/api/"
+
+[presets.openrouter.upstream.openai_oidc]
+issuer = "https://clerk.openrouter.ai"
+client_id = "<client id>"
+scope = "openid offline_access email inference"
+
+[presets.openrouter.upstream.anthropic_oidc]
+issuer = "https://clerk.openrouter.ai"
+client_id = "<client id>"
+scope = "openid offline_access email inference"
+```
+
+Replace `<client id>` with the OAuth client ID for your deployment. The system
+and user file paths are listed under [Shared Configuration](#shared-configuration).
+
+#### Select a Preset
+
+Add the following setting to your user `config.toml`, before any table headers:
+
+```toml
+preset = "openrouter"
+```
+
+Relay reads the definition from the system file. In this example, it supplies
+defaults for these sections:
+
+- `[upstream]` contains both provider URLs.
+- `[upstream.openai_oidc]` contains the OpenAI sign-in settings.
+- `[upstream.anthropic_oidc]` contains the Anthropic sign-in settings.
+
+Run `nemo-relay auth login` to sign in with OpenID Connect (OIDC). For details,
+refer to
+[Sign In With OpenID Connect](./authentication#sign-in-with-openid-connect).
+
+You can also keep the definition and the selection in the same file. Use
+`--config <path>` to select a file in place of your usual user file. Relay
+still reads the system file.
+
+#### Select Settings for One Table
+
+To apply only the upstream settings, replace the root `preset` setting in your
+user file with the following table:
+
+```toml
+[upstream]
+preset = "openrouter"
+```
+
+Keep the system definition unchanged. Relay copies
+`[presets.openrouter.upstream]` into `[upstream]`, including both OIDC sections.
+This selection doesn't apply any other sections from the preset.
+
+The same rule works for deeper tables. For example, `preset = "team"` under
+`[agents.codex]` selects `[presets.team.agents.codex]`.
+
+You can also define presets inside a table. Relay looks for the name in the
+current table first, then in each parent table up to the root. It uses the
+first definition it finds. For example, `[upstream.presets.team]` supplies
+fields directly to `[upstream]`. A definition in a parent table must contain
+the matching child table.
+
+#### Override Preset Defaults
+
+Relay applies these rules when settings overlap:
+
+- Settings written directly in any file override preset defaults.
+- Normal file priority still applies to direct settings. The system file has
+  the highest file priority.
+- If several files select a preset for the same table, the highest-priority
+  file chooses the name.
+- If several files define the same preset at the same table, the
+  highest-priority file replaces that entire definition. Other names remain
+  available.
+- A preset selected for a child table overrides preset defaults from a parent
+  table.
+- Environment variables and CLI flags override file settings as usual.
+
+Changing an upstream URL clears credentials for the old URL. An OIDC section
+written directly in a file replaces the preset's entire OIDC section. Include
+both `issuer` and `client_id` when you replace that section.
+
+#### Preset Limits
+
+Keep these rules in mind when defining and selecting presets:
+
+- Each `preset` setting accepts one name.
+- Unselected presets don't change your settings.
+- An unknown name or a missing table causes a configuration error.
+- A preset definition can't contain another preset definition or selection.
+- `preset` and `presets` are reserved keys in configuration tables. Relay
+  removes them after it resolves the presets.
+- Presets apply to `config.toml`. Configure plugins in `plugins.toml`.
+
 ### Interactive Setup
 
 Run `nemo-relay config` to set up Relay interactively:

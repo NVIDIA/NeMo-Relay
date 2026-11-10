@@ -3,11 +3,13 @@
 
 mod http_model_hosts;
 mod logging;
+mod presets;
 mod runtime_diagnostics;
 pub(crate) use runtime_diagnostics::{PreparedConfig, RuntimeDiagnosticsConfig};
 mod types;
 
 pub(crate) use http_model_hosts::{HttpModelHosts, remote_http};
+pub(crate) use presets::upstream_table_paths;
 pub(crate) use types::*;
 
 use crate::runtime_diagnostics::{self as diag, Operation};
@@ -320,20 +322,14 @@ fn resolve_logging_config_section(
     section: &[&str],
 ) -> Result<LoggingConfig, CliError> {
     let explicit = explicit.map(Path::to_path_buf);
-    let mut merged = toml::Value::Table(toml::map::Map::new());
-    for path in config_paths(explicit.as_ref()) {
-        let required = explicit.as_ref() == Some(&path);
-        let Some(raw) = read_config_file(&path, required, "configuration")? else {
-            continue;
-        };
-        let parsed = raw
-            .parse::<toml::Table>()
-            .map(toml::Value::Table)
-            .map_err(|error| {
-                CliError::Config(format!("invalid TOML in {}: {error}", path.display()))
-            })?;
-        merge_gateway_config_toml(&mut merged, parsed);
-    }
+    let paths = config_paths(explicit.as_ref())
+        .into_iter()
+        .map(|path| {
+            let required = explicit.as_ref() == Some(&path);
+            (path, required)
+        })
+        .collect();
+    let merged = read_shared_documents_for_startup(paths, false)?.merged;
 
     resolve_logging_from_document(&merged, section)
 }
@@ -1732,7 +1728,7 @@ fn read_shared_documents_for_startup(
     config_paths: Vec<(PathBuf, bool)>,
     validate_runtime: bool,
 ) -> Result<PreparedSharedDocument, CliError> {
-    let mut merged = toml::Value::Table(toml::map::Map::new());
+    let mut layers = Vec::new();
     let mut legacy_sources = Vec::new();
     for (path, required) in config_paths {
         let Some(raw) = read_config_file(&path, required, "configuration")? else {
@@ -1768,7 +1764,16 @@ fn read_shared_documents_for_startup(
                 legacy_sources.push(LegacyConfigSource { path, sections });
             }
         }
-        merge_gateway_config_toml(&mut merged, parsed);
+        layers.push(parsed);
+    }
+    let merged = presets::resolve(layers)?;
+    if validate_runtime
+        && (merged.get("plugins").is_some() || !legacy_observability_sections(&merged).is_empty())
+    {
+        return Err(CliError::Config(
+            "configure plugins and observability in plugins.toml with `nemo-relay plugins edit`"
+                .into(),
+        ));
     }
     Ok(PreparedSharedDocument {
         merged,
@@ -1996,11 +2001,12 @@ fn apply_file_config(resolved: &mut ResolvedConfig, value: toml::Value) -> Resul
 
 /// Checks the shared config shape and returns the unknown keys it would ignore.
 pub(crate) fn validate_shared_config_shape(value: toml::Value) -> Result<Vec<String>, CliError> {
-    Ok(parse_file_config(value)?.unknown_keys())
+    Ok(parse_file_config(presets::validate_layer(value)?)?.unknown_keys())
 }
 
 /// Validate one editor target with runtime rules, without loading other files or credentials.
 pub(crate) fn validate_config_document(value: toml::Value) -> Result<(), CliError> {
+    let value = presets::validate_layer(value)?;
     if value.get("plugins").is_some() || !legacy_observability_sections(&value).is_empty() {
         return Err(CliError::Config(
             "configure plugins and observability in plugins.toml with `nemo-relay plugins edit`"
