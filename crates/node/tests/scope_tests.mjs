@@ -9,7 +9,7 @@ import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 
 const require = createRequire(import.meta.url);
-const lib = require('../index.js');
+const lib = require('../dist/index.js');
 const nodeDir = fileURLToPath(new URL('..', import.meta.url));
 
 const {
@@ -43,7 +43,7 @@ function runSubscriberFailureChild({ callback, registration = 'global' }) {
     plugin: [
       "process.chdir(require('node:os').tmpdir());",
       "process.env.XDG_CONFIG_HOME = require('node:fs').mkdtempSync(require('node:path').join(require('node:os').tmpdir(), 'nemo-relay-node-test-'));",
-      'globalThis.plugin = require(' + JSON.stringify(path.join(nodeDir, 'plugin.js')) + ');',
+      'globalThis.plugin = require(' + JSON.stringify(path.join(nodeDir, 'dist', 'plugin.js')) + ');',
       "globalThis.pluginKind = 'node.test.subscriber-failure';",
       'plugin.register(pluginKind, {',
       '  register(_config, context) {',
@@ -60,7 +60,7 @@ function runSubscriberFailureChild({ callback, registration = 'global' }) {
     plugin: 'await pluginHost.close(); plugin.deregister(pluginKind);',
   }[registration];
   const script = `
-    const lib = require(${JSON.stringify(path.join(nodeDir, 'index.js'))});
+    const lib = require(${JSON.stringify(path.join(nodeDir, 'dist', 'index.js'))});
     const {
       ScopeType, clearLastCallbackError, deregisterSubscriber, event, flushSubscribers,
       getLastCallbackError, pushScope, popScope, registerSubscriber,

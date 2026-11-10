@@ -23,7 +23,7 @@ const {
   popScope,
   event,
   metric,
-} = require('../index.js');
+} = require('../dist/index.js');
 
 function uniqueId(prefix) {
   return `${prefix}_${Date.now()}_${Math.random().toString(16).slice(2)}`;

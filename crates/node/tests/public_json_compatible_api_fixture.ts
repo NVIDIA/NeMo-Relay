@@ -41,11 +41,11 @@ import {
   type ToolExecutionResult,
   type ToolExecutionResultCompatible,
   type ToolHandle,
-} from '../index.js';
-import * as plugin from '../plugin.js';
-import { typedLlmExecute, typedToolExecute, type LlmCodec, type LlmResponseCodec } from '../typed.js';
+} from '../dist/index.js';
+import * as plugin from '../dist/plugin.js';
+import { typedLlmExecute, typedToolExecute, type LlmCodec, type LlmResponseCodec } from '../dist/typed.js';
 
-type AssertEqual<T, U> = [T] extends [U] ? ([U] extends [T] ? true : false) : false;
+type AssertEqual<T, U> = (<V>() => V extends T ? 1 : 2) extends <V>() => V extends U ? 1 : 2 ? true : false;
 
 interface SdkParams {
   model: string;
@@ -157,6 +157,8 @@ declare const undefinedMeta: UndefinedMeta;
 declare const withMethod: WithMethod;
 declare const withUndefined: WithUndefined;
 declare const paramsOrList: SdkParams | string[];
+declare function parseSdkParams(data: Json): SdkParams;
+declare function parseSdkResponse(data: Json): SdkResponse;
 async function* chunks(): AsyncIterable<SdkChunk> {
   yield { id: '1', delta: { content: 'x' } };
 }
@@ -180,7 +182,7 @@ toolCall('empty', {});
 toolCall('optional', options, null, null, options);
 llmCall('optional', { headers: options, content: options });
 llmCall('tools', { headers: {}, content: paramsWithTools });
-llmCall('tools-factory', LlmRequest.from({}, paramsWithTools));
+llmCall('tools-instance', new LlmRequest({}, paramsWithTools));
 toolCall('unknown-record', unknownRecord);
 llmCallExecuteAsync('unknown-record', shape, async () => unknownRecord);
 toolCall('empty-typed', emptyObject);
@@ -195,8 +197,9 @@ toolCallExecuteAsync('extra-json', params, async () => ({ result: 1, extra: 2 })
 llmCall('object', { headers: {}, content: params });
 llmCall('headers', { headers, content: null });
 llmCall('instance', new LlmRequest({}, { x: 1 }));
-llmCall('factory', LlmRequest.from(headers, params));
-const built: LlmRequestShape = LlmRequest.from({}, params);
+llmCall('instance-typed', new LlmRequest(headers, params));
+const built = new LlmRequest({}, params);
+llmCall('built', built);
 info('fields', null, settings);
 info('json-fields', null, record);
 llmCall('extra-json', { headers: {}, content: null, extra: 1 });
@@ -294,16 +297,24 @@ const typedResponse: Promise<SdkResponse> = typedLlmExecute(
   'typed',
   { headers, content: params },
   async (request): Promise<SdkResponse> => ({ id: JSON.stringify(request.content), choices: [] }),
-  { toJson: (value) => value, fromJson: (value) => value },
+  { toJson: (value) => value, fromJson: parseSdkResponse },
   { codec, responseCodec, data: markData },
 );
 const typedTool: Promise<{ result: SdkResponse }> = typedToolExecute(
   'typed',
   params,
   async () => ({ result: sdk }),
-  { toJson: (value) => value, fromJson: (value) => value },
-  { toJson: (value) => value, fromJson: (value) => value },
+  { toJson: (value) => value, fromJson: parseSdkParams },
+  { toJson: (value) => value, fromJson: parseSdkResponse },
   { metadata: markData },
+);
+const typedToolResult = typedToolExecute(
+  'typed',
+  params,
+  async () => ({ result: sdk }),
+  { toJson: (value) => value, fromJson: parseSdkParams },
+  // @ts-expect-error a result codec may only produce JSON
+  { toJson: (value): Map<string, string> => new Map([['id', value.id]]), fromJson: parseSdkResponse },
 );
 const open = plugin.ComponentSpec('example.add-tag', settings);
 function forwardJson<T extends Json>(value: T): void {
@@ -440,11 +451,11 @@ plugin.ComponentSpec('example.add-tag', [1]);
 // @ts-expect-error an open kind rejects functions
 plugin.ComponentSpec('example.add-tag', () => 1);
 // @ts-expect-error headers must be an object
-LlmRequest.from('x', null);
+new LlmRequest('x', null);
 // @ts-expect-error content must be JSON
-LlmRequest.from({}, new Map());
+new LlmRequest({}, new Map());
 // @ts-expect-error a union with an array member is not a JSON object
-LlmRequest.from(paramsOrList, null);
+new LlmRequest(paramsOrList, null);
 // @ts-expect-error a union with an array member is not a JSON object
 plugin.ComponentSpec('example.add-tag', paramsOrList);
 // @ts-expect-error log fields must be a JSON object
@@ -461,6 +472,7 @@ export const checked = [
   fromJson,
   typedResponse,
   typedTool,
+  typedToolResult,
   openKind,
   built,
   forwardJson,

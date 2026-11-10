@@ -177,17 +177,19 @@ ensure_docs_dependencies() {
 
 ensure_node_docs_declarations() {
     cd "$NEMO_RELAY_REPO_ROOT"
-    local types_file="crates/node/index.d.ts"
+    local types_file="crates/node/dist/index.d.ts"
+    local binding_file="crates/node/binding.d.ts"
     local newest_source=""
 
-    if [[ -f "$types_file" ]]; then
+    if [[ -f "$types_file" && -f "$binding_file" ]]; then
         newest_source="$(
-            find crates/node/src crates/node/Cargo.toml crates/node/build.rs crates/node/root-types.d.ts \
+            find crates/node/src crates/node/ts crates/node/Cargo.toml crates/node/build.rs \
+                crates/node/binding-types.d.ts crates/node/tsconfig.json \
                 -type f -newer "$types_file" -print -quit
         )"
     fi
 
-    if [[ ! -f "$types_file" || -n "$newest_source" ]]; then
+    if [[ ! -f "$types_file" || ! -f "$binding_file" || -n "$newest_source" ]]; then
         npm run build-debug --workspace=nemo-relay-node
     fi
 }
@@ -196,6 +198,7 @@ generate_docs_api_references() {
     cd "$NEMO_RELAY_REPO_ROOT"
     uv run --no-sync python scripts/docs/generate_python_library_reference.py
     ensure_node_docs_declarations
+    uv run --no-sync python -m unittest scripts.tests.test_node_library_reference
     uv run --no-sync python scripts/docs/generate_node_library_reference.py
     uv run --no-sync python -m unittest scripts.tests.test_rust_library_reference
     uv run --no-sync python scripts/docs/generate_rust_library_reference.py
@@ -1310,8 +1313,9 @@ clean:
         crates/**/*.profraw \
         crates/node/*.node \
         crates/node/coverage \
-        crates/node/index.d.ts \
-        crates/node/index.js \
+        crates/node/binding.d.ts \
+        crates/node/binding.js \
+        crates/node/dist \
         crates/node/junit.xml \
         crates/node/node_modules \
         integrations/openclaw/*.profraw \

@@ -19,7 +19,7 @@ import {
   UtilizationUnit,
   CountUnit,
   type ResourceOperatingSystem,
-} from '../index.js';
+} from '../dist/index.js';
 
 export const snapshotPromise: Promise<ResourceMetricsSnapshot> = collectResourceMetrics();
 declare const snapshot: ResourceMetricsSnapshot;

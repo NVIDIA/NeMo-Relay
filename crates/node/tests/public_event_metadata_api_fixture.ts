@@ -1,8 +1,8 @@
 // SPDX-FileCopyrightText: Copyright (c) 2026, NVIDIA CORPORATION & AFFILIATES. All rights reserved.
 // SPDX-License-Identifier: Apache-2.0
 
-import { registerEventMetadataInjector, scopeRegisterEventMetadataInjector } from '../index.js';
-import type { EventMetadata, PluginContext } from '../plugin.js';
+import { registerEventMetadataInjector, scopeRegisterEventMetadataInjector } from '../dist/index.js';
+import type { EventMetadata, PluginContext } from '../dist/plugin.js';
 
 const acceptedMetadata: EventMetadata = {
   'fixture.string': 'value',

@@ -1,0 +1,21 @@
+{
+  "compilerOptions": {
+    "target": "ES2023",
+    "lib": ["ESNext"],
+    "module": "NodeNext",
+    "moduleResolution": "NodeNext",
+    "rootDir": "ts",
+    "outDir": "dist",
+    "declaration": true,
+    "sourceMap": true,
+    "strict": true,
+    "isolatedModules": true,
+    "isolatedDeclarations": true,
+    "erasableSyntaxOnly": true,
+    "esModuleInterop": true,
+    "noUncheckedIndexedAccess": true,
+    "exactOptionalPropertyTypes": true,
+    "types": ["node"]
+  },
+  "include": ["ts/**/*.ts"]
+}

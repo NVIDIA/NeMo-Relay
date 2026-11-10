@@ -8,29 +8,17 @@ import path from 'node:path';
 const require = createRequire(import.meta.url);
 const cliPackagePath = require.resolve('@napi-rs/cli/package.json');
 const napiCli = path.join(path.dirname(cliPackagePath), require(cliPackagePath).bin.napi);
+const tsc = require.resolve('typescript/bin/tsc');
 
-const build = spawnSync(
-  process.execPath,
-  [napiCli, 'build', '--platform', '--dts', 'index.d.ts', ...process.argv.slice(2)],
-  { stdio: 'inherit' },
-);
-
-if (build.error) {
-  throw build.error;
+function run(args) {
+  const result = spawnSync(process.execPath, args, { stdio: 'inherit' });
+  if (result.error) {
+    throw result.error;
+  }
+  if (result.status !== 0) {
+    process.exit(result.status ?? 1);
+  }
 }
 
-if (build.status !== 0) {
-  process.exit(build.status ?? 1);
-}
-
-const appendTypes = spawnSync(
-  process.execPath,
-  ['scripts/append_root_types.mjs', 'index.d.ts', 'root-types.d.ts'],
-  { stdio: 'inherit' },
-);
-
-if (appendTypes.error) {
-  throw appendTypes.error;
-}
-
-process.exit(appendTypes.status ?? 1);
+run([napiCli, 'build', '--platform', '--js', 'binding.js', '--dts', 'binding.d.ts', ...process.argv.slice(2)]);
+run([tsc, '-p', 'tsconfig.json']);
