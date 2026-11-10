@@ -14,7 +14,7 @@ use nemo_relay_model_pricing::plugin::{
 };
 use nemo_relay_model_pricing::{PricingCatalog, PricingSourceConfig};
 use nemo_relay_plugin_host::PluginConfig;
-use nemo_relay_types::codec::response::Usage;
+use nemo_relay_types::codec::response::{CacheWriteTokenCounts, Usage};
 
 use crate::configuration::resolve_server_config;
 use crate::server::GatewayOverrides;
@@ -130,8 +130,12 @@ pub(crate) fn resolve(command: PricingResolveCommand) -> Result<(), CliError> {
         completion_tokens: command.completion_tokens,
         total_tokens: None,
         cache_read_tokens: command.cache_read_tokens,
-        cache_write_tokens: command.cache_write_tokens,
-        cache_write_1h_tokens: None,
+        cache_write_tokens: command.cache_write_tokens.map(|count| {
+            vec![CacheWriteTokenCounts {
+                count,
+                duration: None,
+            }]
+        }),
         uncached_input_tokens: None,
         cost: None,
     };

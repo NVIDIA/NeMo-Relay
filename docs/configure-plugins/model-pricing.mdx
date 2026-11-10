@@ -13,6 +13,12 @@ end events must supply a response codec or normalized response annotation with
 model and token usage. Relay leaves cost absent when no configured source
 matches the provider, model, and token usage.
 
+The configured sources apply to transparent agent runs, standalone gateway
+runs, and evals or custom agents that initialize the same gateway plugin
+configuration. Framework integrations, harnesses, and custom hosts can use the
+same pricing sources when they emit managed LLM calls or manual lifecycle
+events with normalized response annotations.
+
 ## Configuration
 
 Add the `pricing` component to `plugins.toml`. The following configuration
@@ -60,9 +66,26 @@ order, and it uses the first entry that matches the provider and model.
 
 Relay publishes a numeric total only when every nonzero usage category has a
 configured rate. If a response reports nonzero cache-read or cache-write usage
-and the matching catalog entry omits `cache_read_per_million` or
-`cache_write_per_million`, Relay keeps the priced components but omits the
-aggregate total. Set a rate to `0.0` when a category is intentionally free.
+and the matching catalog entry omits the rate for it, Relay keeps the priced
+components but omits the aggregate total. Set a rate to `0.0` when a category is intentionally free.
+
+`cache_write_rates` prices cache writes by duration in seconds. A write uses the
+entry for its duration, or else the entry with no duration. Anthropic reports 300
+and 3,600 when it splits its cache writes:
+
+```toml
+[components.config.sources.catalog.entries.rates]
+input_per_million = 3.0
+output_per_million = 15.0
+cache_write_rates = [
+  { duration = 300, per_million = 3.75 },
+  { duration = 3600, per_million = 6.0 },
+  { per_million = 3.75 },
+]
+```
+
+If usage reports nonzero writes with no matching entry and no default entry, Relay
+omits the whole cache-write cost and the aggregate total.
 
 Some usage reports `uncached_input_tokens`, a count of input tokens without
 cache reads or cache writes. Relay picks the input count to bill as follows:
@@ -84,6 +107,35 @@ higher-priority `sources` instead of replacing lower-priority sources. The
 effective order is system, then explicit-or-user. This lets an
 enterprise catalog override narrower catalogs while preserving those catalogs
 as fallbacks.
+
+## Create a Catalog
+
+Create a Relay model pricing catalog JSON file:
+
+```json
+{
+  "version": 1,
+  "entries": [
+    {
+      "provider": "openai",
+      "model_id": "gpt-4o-mini",
+      "aliases": ["openai/openai/gpt-4o-mini"],
+      "currency": "USD",
+      "unit": "per_token",
+      "rates": {
+        "input_per_million": 0.15,
+        "output_per_million": 0.6,
+        "cache_read_per_million": 0.075
+      },
+      "prompt_cache": {
+        "read_accounting": "included_in_prompt_tokens"
+      },
+      "pricing_as_of": "2026-06-06",
+      "pricing_source": "internal-pricing-snapshot"
+    }
+  ]
+}
+```
 
 ## Manage Catalog Sources with the CLI
 
@@ -114,7 +166,16 @@ nemo-relay model-pricing resolve gpt-4o-mini \
   --completion-tokens 500
 ```
 
+`model-pricing resolve` prints the source that won, the matched provider/model,
+and an estimated total when token counts are supplied. Use it to debug
+overlapping system, explicit, and user sources.
+
 Use `nemo-relay doctor` to validate configured model pricing sources with the
-rest of the gateway configuration. Refer to [Add Model Pricing for Cost
-Estimates](/nemo-relay-cli/basic-usage#add-model-pricing-for-cost-estimates)
-for the catalog schema, source precedence, and complete CLI workflow.
+rest of the gateway configuration. For check interpretation, refer to
+[Troubleshoot the CLI](/nemo-relay-cli/troubleshooting#check-configuration-and-exporters).
+
+Relay does not ship a canonical price catalog. Unknown models and missing token
+fields leave cost absent instead of defaulting to zero. For the catalog schema,
+provider-aware lookup behavior, threshold-based model pricing, and custom
+`PricingSource` integrations, refer to
+[Provider Response Codecs and Model Pricing](/integrate-into-frameworks/provider-response-codecs#cost-estimation).

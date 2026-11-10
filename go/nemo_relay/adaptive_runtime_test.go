@@ -116,6 +116,37 @@ func TestBuildCacheTelemetryEvent(t *testing.T) {
 	}
 }
 
+func TestBuildCacheTelemetryEventSumsCacheWriteDurations(t *testing.T) {
+	event, err := BuildCacheTelemetryEvent(CacheTelemetryEventInput{
+		Provider:  "anthropic",
+		RequestID: "00000000-0000-0000-0000-000000000403",
+		Usage: &CacheUsage{
+			PromptTokens:     uint64Ptr(100),
+			CompletionTokens: uint64Ptr(10),
+			CacheReadTokens:  uint64Ptr(25),
+			CacheWriteTokens: []CacheWriteTokenCounts{
+				{Count: 30, Duration: uint64Ptr(300)},
+				{Count: 20, Duration: uint64Ptr(3600)},
+			},
+		},
+		AgentID:         testAgentID,
+		TemplateVersion: "v1",
+		ToolsetHash:     "tools",
+		ModelFamily:     "claude",
+		TenantScope:     "tenant",
+		Timestamp:       "2026-06-15T00:00:00Z",
+	})
+	if err != nil {
+		t.Fatalf("BuildCacheTelemetryEvent failed: %v", err)
+	}
+	if event == nil {
+		t.Fatal("expected cache telemetry event")
+	}
+	if event.CacheCreationTokens != 50 || event.TotalPromptTokens != 175 {
+		t.Fatalf("unexpected event: %#v", event)
+	}
+}
+
 func TestAdaptiveRuntimeBuildCacheRequestFacts(t *testing.T) {
 	runtime, err := NewAdaptiveRuntime(testAdaptiveRuntimeConfig("openai"))
 	if err != nil {

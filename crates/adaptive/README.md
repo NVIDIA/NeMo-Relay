@@ -59,6 +59,10 @@ Install the published crate alongside the Rust SDK:
 cargo add nemo-relay nemo-relay-adaptive
 ```
 
+Building these crates requires `protoc` 31.1 or later and Buf 1.75.0 or later.
+Install both on `PATH`, or select them with `PROTOC` and `BUF`. The first build
+needs access to the Buf Schema Registry to download the locked validation schema.
+
 Select Redis-backed storage through runtime configuration when adaptive state
 or the response cache needs shared persistence.
 

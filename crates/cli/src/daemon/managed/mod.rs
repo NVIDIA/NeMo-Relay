@@ -5,8 +5,8 @@
 //!
 //! Personal `nemo-relay install` deliberately remains separate. A managed bundle is rendered
 //! once for one deployment and then distributed by the administrator. Refresh and doctor only
-//! validate it: changing a deployed artifact in place is an error. The 0.11 StopFailure addition
-//! intentionally revises the v1 Claude plugin bytes; earlier Claude bundles must be regenerated
+//! validate it: changing a deployed artifact in place is an error. Claude hook and gateway-hint
+//! updates intentionally revise the v1 artifact bytes; earlier Claude bundles must be regenerated
 //! into a new deployment directory and provisioned with their new trusted digest.
 
 use std::collections::BTreeSet;
@@ -529,7 +529,10 @@ fn render_claude(spec: &ManagedBundleSpec) -> Result<Vec<RenderedArtifact>, CliE
     });
     let settings = json!({
         "$schema": "https://json.schemastore.org/claude-code-settings.json",
-        "env": { "ANTHROPIC_BASE_URL": spec.daemon_address }
+        "env": {
+            "ANTHROPIC_BASE_URL": spec.daemon_address,
+            "CLAUDE_CODE_GATEWAY_HINT_HEADERS": "1"
+        }
     });
     Ok(vec![
         artifact(

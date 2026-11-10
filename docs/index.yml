@@ -83,14 +83,84 @@ navigation:
     title: "User Guides"
     slug: user-guides
     title-source: frontmatter
-  - folder: ./nemo-relay-cli
-    title: "NVIDIA NeMo Relay CLI"
+  - section: "NVIDIA NeMo Relay CLI"
     slug: nemo-relay-cli
-    title-source: frontmatter
-  - folder: ./daemon
-    title: "Daemon"
+    contents:
+      - page: "Overview"
+        path: ./nemo-relay-cli/about.mdx
+        slug: about
+      - page: "Manage Persistent Integrations"
+        path: ./nemo-relay-cli/plugin-installation.mdx
+        slug: plugin-installation
+      - section: "Coding Agent Guides"
+        skip-slug: true
+        contents:
+          - page: "Claude Code"
+            path: ./nemo-relay-cli/claude-code.mdx
+            slug: claude-code
+          - page: "Codex"
+            path: ./nemo-relay-cli/codex.mdx
+            slug: codex
+          - page: "pi"
+            path: ./nemo-relay-cli/pi.mdx
+            slug: pi
+      - page: "Configuration"
+        path: ./nemo-relay-cli/configuration.mdx
+        slug: configuration
+      - page: "Provider Connections"
+        path: ./nemo-relay-cli/provider-upstreams.mdx
+        slug: provider-upstreams
+      - page: "Provider Authentication"
+        path: ./nemo-relay-cli/authentication.mdx
+        slug: authentication
+      - page: "Command Reference"
+        path: ./nemo-relay-cli/command-reference.mdx
+        slug: command-reference
+      - page: "Gateway and Hook Reference"
+        path: ./nemo-relay-cli/gateway-reference.mdx
+        slug: gateway-reference
+      - page: "Troubleshoot the CLI"
+        path: ./nemo-relay-cli/troubleshooting.mdx
+        slug: troubleshooting
+  - section: "Daemon"
     slug: daemon
-    title-source: frontmatter
+    contents:
+      - page: "About"
+        path: ./daemon/about.mdx
+        slug: about
+      - page: "Architecture and Startup"
+        path: ./daemon/architecture.mdx
+        slug: architecture
+      - page: "Configuration and Managed Clients"
+        path: ./daemon/configuration.mdx
+        slug: configuration
+      - page: "Windows Deployment"
+        path: ./daemon/windows.mdx
+        slug: windows
+      - page: "macOS Deployment"
+        path: ./daemon/macos.mdx
+        slug: macos
+      - page: "Linux Deployment"
+        path: ./daemon/linux.mdx
+        slug: linux
+      - page: "Remote Linux: Deploy the Daemon"
+        path: ./daemon/remote-server.mdx
+        slug: remote-server
+      - page: "Remote Linux: Deploy Clients"
+        path: ./daemon/remote-clients.mdx
+        slug: remote-clients
+      - page: "Operations and Troubleshooting"
+        path: ./daemon/operations.mdx
+        slug: operations
+      - page: "Reference"
+        path: ./daemon/reference.mdx
+        slug: reference
+      - page: "Kubernetes Deployment Guidance"
+        path: ./daemon/kubernetes.mdx
+        slug: kubernetes
+      - api: "HTTP API"
+        api-name: daemon
+        slug: api
   - folder: ./supported-integrations
     title: "Supported Integrations"
     slug: supported-integrations

@@ -6,7 +6,7 @@
 from __future__ import annotations
 
 from collections.abc import Awaitable, Callable, Sequence
-from typing import Any, Final, cast
+from typing import Any, cast
 
 from langchain_core.messages import ToolMessage
 from langchain_core.tools import BaseTool
@@ -16,31 +16,12 @@ from langgraph.prebuilt.tool_node import ToolCallRequest, ToolInvocationError
 from langgraph.types import Command
 
 import nemo_relay
-from nemo_relay.integrations.langchain._tool_codec import LangChainToolResultCodec, ToolResultValue
+from nemo_relay.integrations.langchain._tool_codec import LangChainToolResultCodec
 from nemo_relay.typed import Codec
 from nemo_relay.utils import run_sync
 
-
-class _ToolNodeResultCodec(Codec[object]):
-    """Use the shared framework codec and keep graph interrupts separate."""
-
-    def __init__(self, tool_call_id: str | None) -> None:
-        self._codec = LangChainToolResultCodec(tool_call_id)
-
-    def to_json(self, value: object) -> nemo_relay.Json:
-        if value == _GRAPH_BUBBLE_RESULT:
-            return _GRAPH_BUBBLE_RESULT
-        return self._codec.to_json(cast(ToolResultValue, value))
-
-    def from_json(self, data: nemo_relay.Json) -> object:
-        if data == _GRAPH_BUBBLE_RESULT:
-            return _GRAPH_BUBBLE_RESULT
-        return self._codec.from_json(data)
-
-
 _DEFAULT_HANDLE_TOOL_ERRORS = object()
 _TOOL_CALL_ERROR_TEMPLATE = "Error: {error}\n Please fix your mistakes."
-_GRAPH_BUBBLE_RESULT: Final[nemo_relay.JsonObject] = {"__nemo_relay_langgraph_graph_bubble_up__": True}
 
 
 def _handle_tool_error(error: Exception, policy: object) -> str:
@@ -93,33 +74,34 @@ def wrap_tool_call(
     """
     parent, tool_name, tool_args, tool_call_id = _tool_details(request)
     args_codec = cast(Codec[dict[str, Any]], nemo_relay.typed.JsonPassthrough())
-    result_codec = cast(Codec[ToolMessage | Command[Any] | nemo_relay.JsonObject], _ToolNodeResultCodec(tool_call_id))
+    result_codec = cast(Codec[ToolMessage | Command[Any]], LangChainToolResultCodec(tool_call_id))
     graph_bubble: GraphBubbleUp | None = None
 
-    def _call(
-        args: dict[str, Any],
-    ) -> nemo_relay.ToolExecutionResult[ToolMessage | Command[Any] | nemo_relay.JsonObject]:
+    def _call(args: dict[str, Any]) -> nemo_relay.ToolExecutionResult[ToolMessage | Command[Any]]:
         nonlocal graph_bubble
         try:
             result = execute(request.override(tool_call={**request.tool_call, "args": args}))
         except GraphBubbleUp as error:
-            # Preserve the original graph bubble locally and re-raise
-            # it after managed execution returns.
             graph_bubble = error
-            result = _GRAPH_BUBBLE_RESULT
+            raise
         return nemo_relay.ToolExecutionResult(result)
 
-    outcome = run_sync(
-        nemo_relay.typed.tool_execute(
-            name=tool_name,
-            args=tool_args,
-            func=_call,
-            args_codec=args_codec,
-            result_codec=result_codec,
-            handle=parent,
-            tool_call_id=tool_call_id,
+    try:
+        outcome = run_sync(
+            nemo_relay.typed.tool_execute(
+                name=tool_name,
+                args=tool_args,
+                func=_call,
+                args_codec=args_codec,
+                result_codec=result_codec,
+                handle=parent,
+                tool_call_id=tool_call_id,
+            )
         )
-    )
+    except Exception:
+        if graph_bubble is not None:
+            raise graph_bubble from None
+        raise
     if graph_bubble is not None:
         raise graph_bubble
     return cast(ToolMessage | Command[Any], outcome.result)
@@ -140,34 +122,35 @@ async def awrap_tool_call(
     """
     parent, tool_name, tool_args, tool_call_id = _tool_details(request)
     args_codec = cast(Codec[dict[str, Any]], nemo_relay.typed.JsonPassthrough())
-    result_codec = cast(Codec[ToolMessage | Command[Any] | nemo_relay.JsonObject], _ToolNodeResultCodec(tool_call_id))
+    result_codec = cast(Codec[ToolMessage | Command[Any]], LangChainToolResultCodec(tool_call_id))
     graph_bubble: GraphBubbleUp | None = None
 
-    async def _call(
-        args: dict[str, Any],
-    ) -> nemo_relay.ToolExecutionResult[ToolMessage | Command[Any] | nemo_relay.JsonObject]:
+    async def _call(args: dict[str, Any]) -> nemo_relay.ToolExecutionResult[ToolMessage | Command[Any]]:
         nonlocal graph_bubble
         try:
             result = await execute(request.override(tool_call={**request.tool_call, "args": args}))
         except GraphBubbleUp as error:
-            # See the synchronous wrapper: keep graph bubble out of
-            # managed call so the tool records result instead of an error.
             graph_bubble = error
-            result = _GRAPH_BUBBLE_RESULT
+            raise
         return nemo_relay.ToolExecutionResult(result)
 
-    outcome = await nemo_relay.typed.tool_execute(
-        name=tool_name,
-        args=tool_args,
-        func=_call,
-        args_codec=args_codec,
-        result_codec=result_codec,
-        handle=parent,
-        tool_call_id=tool_call_id,
-    )
+    try:
+        outcome = await nemo_relay.typed.tool_execute(
+            name=tool_name,
+            args=tool_args,
+            func=_call,
+            args_codec=args_codec,
+            result_codec=result_codec,
+            handle=parent,
+            tool_call_id=tool_call_id,
+        )
+    except Exception:
+        if graph_bubble is not None:
+            raise graph_bubble from None
+        raise
     if graph_bubble is not None:
         raise graph_bubble
-    return cast(ToolMessage | Command[Any], outcome.result)
+    return outcome.result
 
 
 def create_tool_node(

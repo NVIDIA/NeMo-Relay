@@ -42,7 +42,6 @@ impl LlmResponseCodec for FrameworkResponseCodec {
                 total_tokens,
                 cache_read_tokens: None,
                 cache_write_tokens: None,
-                cache_write_1h_tokens: None,
                 uncached_input_tokens: None,
                 cost: None,
             }),

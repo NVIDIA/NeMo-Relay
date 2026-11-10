@@ -1295,7 +1295,10 @@ async fn transparent_launch_retains_agent_version_for_claude_and_codex() {
 
 #[test]
 fn prepares_claude_dry_run_without_writing_plugin() {
-    let _env = EnvScope::set(&[("ANTHROPIC_CUSTOM_HEADERS", None)]);
+    let _env = EnvScope::set(&[
+        ("ANTHROPIC_CUSTOM_HEADERS", None),
+        ("CLAUDE_CODE_GATEWAY_HINT_HEADERS", None),
+    ]);
     let resolved = ResolvedConfig {
         gateway: GatewayConfig::default(),
         agents: AgentConfigs::default(),
@@ -1318,6 +1321,12 @@ fn prepares_claude_dry_run_without_writing_plugin() {
             .contains(&("ANTHROPIC_BASE_URL".into(), "http://127.0.0.1:1234".into()))
     );
     assert!(prepared.notes[0].contains("would generate"));
+    assert!(
+        prepared
+            .env
+            .contains(&("CLAUDE_CODE_GATEWAY_HINT_HEADERS".into(), "1".into()))
+    );
+    assert!(std::env::var_os("CLAUDE_CODE_GATEWAY_HINT_HEADERS").is_none());
     let custom_headers = prepared
         .env
         .iter()
@@ -1333,6 +1342,117 @@ fn prepares_claude_dry_run_without_writing_plugin() {
             .secret_env_names
             .contains(&"ANTHROPIC_CUSTOM_HEADERS".into())
     );
+}
+
+#[test]
+fn test_claude_gateway_hint_headers_explicit_environment_is_not_overridden() {
+    for value in ["0", "false", "", "1"] {
+        let _env = EnvScope::set(&[(
+            "CLAUDE_CODE_GATEWAY_HINT_HEADERS",
+            Some(std::ffi::OsStr::new(value)),
+        )]);
+        let prepared = PreparedAgentLaunch::new(
+            CodingAgent::ClaudeCode,
+            vec!["claude".into()],
+            "http://127.0.0.1:1234",
+            &ResolvedConfig::default(),
+            true,
+        )
+        .unwrap();
+        assert!(
+            !prepared
+                .env
+                .iter()
+                .any(|(name, _)| name == "CLAUDE_CODE_GATEWAY_HINT_HEADERS"),
+            "explicit value {value:?} must remain inherited"
+        );
+    }
+}
+
+fn claude_dry_run_with(gateway: GatewayConfig) -> PreparedAgentLaunch {
+    let resolved = ResolvedConfig {
+        gateway,
+        ..ResolvedConfig::default()
+    };
+    PreparedAgentLaunch::new(
+        CodingAgent::ClaudeCode,
+        vec!["claude".into()],
+        "http://127.0.0.1:1234",
+        &resolved,
+        true,
+    )
+    .unwrap()
+}
+
+fn launch_env<'a>(prepared: &'a PreparedAgentLaunch, name: &str) -> Option<&'a str> {
+    prepared
+        .env
+        .iter()
+        .find_map(|(key, value)| (key == name).then_some(value.as_str()))
+}
+
+fn relay_oidc_gateway() -> GatewayConfig {
+    GatewayConfig {
+        anthropic_oidc: Some(crate::oidc::OidcSource::new(
+            "https://issuer.example",
+            "relay-client",
+            None,
+        )),
+        ..GatewayConfig::default()
+    }
+}
+
+fn relay_helper_gateway() -> GatewayConfig {
+    GatewayConfig {
+        anthropic_api_key_helper: Some(crate::upstream_auth::ApiKeyHelper {
+            command: "not-executed".into(),
+            args: vec![],
+            timeout_ms: 10_000,
+            cache_ttl_ms: 0,
+            cache: Default::default(),
+            auth_scheme: None,
+        }),
+        ..GatewayConfig::default()
+    }
+}
+
+#[test]
+fn test_claude_placeholder_api_key_only_when_relay_owns_the_credential() {
+    let _env = EnvScope::set(&[("ANTHROPIC_API_KEY", None), ("ANTHROPIC_AUTH_TOKEN", None)]);
+
+    for gateway in [relay_oidc_gateway(), relay_helper_gateway()] {
+        let prepared = claude_dry_run_with(gateway);
+        let placeholder = launch_env(&prepared, "ANTHROPIC_API_KEY").unwrap();
+        assert!(!placeholder.is_empty());
+        assert!(
+            !prepared
+                .secret_env_names
+                .contains(&"ANTHROPIC_API_KEY".into())
+        );
+    }
+    let caller_credential = claude_dry_run_with(GatewayConfig::default());
+    assert_eq!(launch_env(&caller_credential, "ANTHROPIC_API_KEY"), None);
+}
+
+#[test]
+fn test_claude_placeholder_api_key_keeps_a_caller_credential() {
+    for name in ["ANTHROPIC_API_KEY", "ANTHROPIC_AUTH_TOKEN"] {
+        for value in ["caller-value", ""] {
+            let _env = EnvScope::set(&[
+                ("ANTHROPIC_API_KEY", None),
+                ("ANTHROPIC_AUTH_TOKEN", None),
+                (name, Some(std::ffi::OsStr::new(value))),
+            ]);
+            for gateway in [relay_oidc_gateway(), relay_helper_gateway()] {
+                let prepared = claude_dry_run_with(gateway);
+                assert_eq!(
+                    launch_env(&prepared, "ANTHROPIC_API_KEY"),
+                    None,
+                    "an inherited {name}={value:?} must stay the child's credential"
+                );
+            }
+        }
+    }
 }
 
 #[test]
@@ -1471,6 +1591,7 @@ fn prepares_claude_dry_inserts_plugin_dir_after_authoritative_agent_executable()
 
 #[test]
 fn prepares_claude_temp_plugin() {
+    let _env = EnvScope::set(&[("CLAUDE_CODE_GATEWAY_HINT_HEADERS", None)]);
     let resolved = ResolvedConfig {
         gateway: GatewayConfig::default(),
         agents: AgentConfigs::default(),
@@ -1499,6 +1620,16 @@ fn prepares_claude_temp_plugin() {
     assert_eq!(
         settings["env"]["ANTHROPIC_BASE_URL"],
         "http://127.0.0.1:1234"
+    );
+    assert!(
+        settings["env"]
+            .get("CLAUDE_CODE_GATEWAY_HINT_HEADERS")
+            .is_none()
+    );
+    assert!(
+        prepared
+            .env
+            .contains(&("CLAUDE_CODE_GATEWAY_HINT_HEADERS".into(), "1".into()))
     );
     let hooks: serde_json::Value =
         serde_json::from_slice(&std::fs::read(plugin_dir.join("hooks/hooks.json")).unwrap())
@@ -1595,13 +1726,14 @@ fn claude_transparent_run_preserves_user_settings_and_prompt_boundary() {
 fn claude_settings_overlay_handles_inline_json_and_rejects_malformed_sources() {
     let inline = vec![
         "claude".into(),
-        "--settings={\"model\":\"kept\",\"env\":{\"PRIVATE\":\"yes\"}}".into(),
+        "--settings={\"model\":\"kept\",\"env\":{\"PRIVATE\":\"yes\",\"CLAUDE_CODE_GATEWAY_HINT_HEADERS\":\"0\"}}".into(),
     ];
     let overlay =
         crate::agents::claude::launch::settings_overlay(&inline, 0, "http://127.0.0.1:4321")
             .unwrap();
     assert_eq!(overlay["model"], "kept");
     assert_eq!(overlay["env"]["PRIVATE"], "yes");
+    assert_eq!(overlay["env"]["CLAUDE_CODE_GATEWAY_HINT_HEADERS"], "0");
     assert_eq!(
         overlay["env"]["ANTHROPIC_BASE_URL"],
         "http://127.0.0.1:4321"

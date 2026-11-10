@@ -86,7 +86,7 @@ export async function frameworkTool(toolName: string, rawArgs: SearchArgs): Prom
   const executionResult = await toolCallExecuteAsync(
     toolName,
     rawArgs,
-    async (args: SearchArgs) => ({ result: { hits: 2, echo: args } }),
+    async (args) => ({ result: { hits: 2, echo: args } }),
     parent,
     null,
     null,

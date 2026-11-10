@@ -190,3 +190,12 @@ async fn upstream_transport_errors_return_bad_gateway_without_hook_payload_prefi
         "upstream forwarding error: plain HTTP upstreams are allowed only for loopback hosts; use https"
     );
 }
+
+#[test]
+fn a_missing_sign_in_is_an_unauthorized_response_that_names_the_fix() {
+    let error = CliError::SignInRequired("run `nemo-relay auth login`".into());
+
+    assert_eq!(response_status(&error), StatusCode::UNAUTHORIZED);
+    assert_eq!(error.log_kind(), "sign_in_required");
+    assert!(error.to_string().contains("nemo-relay auth login"));
+}

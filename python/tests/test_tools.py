@@ -12,6 +12,7 @@ from collections import UserDict, UserList
 from collections.abc import Awaitable
 from dataclasses import dataclass
 from typing import Never, cast
+from uuid import uuid4
 
 import pytest
 from async_helpers import resolve_async_result
@@ -21,13 +22,16 @@ from nemo_relay import (
     Json,
     MarkEvent,
     PendingMarkSpec,
+    PropagationContext,
     ScopeEvent,
     ScopeType,
     ToolAttributes,
     ToolExecutionInterceptOutcome,
     ToolExecutionResult,
     ToolHandle,
+    capture_propagation_context,
     create_scope_stack,
+    create_scope_stack_from_propagation,
     guardrails,
     intercepts,
     scope,
@@ -120,6 +124,73 @@ class TestToolsAsync:
 
         result = await tools.execute("double", {"x": 5}, my_func)
         assert result.result == {"result": 10}
+
+    @pytest.mark.parametrize("callback_kind", ["sync", "async", "returned-awaitable"])
+    async def test_execute_isolates_concurrent_callback_contexts(self, callback_kind: str) -> None:
+        caller_context = contextvars.ContextVar("tool_execution_owner", default="outside")
+        originating_loop = asyncio.get_running_loop()
+        callbacks_ready = asyncio.Barrier(2)
+
+        async def execute_caller(owner: str) -> None:
+            context_token = caller_context.set(owner)
+            propagation = PropagationContext(str(uuid4()), str(uuid4()))
+            callback_parents: set[str] = set()
+
+            def observe(expected_context: str) -> None:
+                assert caller_context.get() == expected_context
+                assert asyncio.get_running_loop() is originating_loop
+                observed = capture_propagation_context()
+                assert observed.root_uuid == propagation.root_uuid
+                assert observed.parent_uuid != propagation.parent_uuid
+                callback_parents.add(observed.parent_uuid)
+                assert len(callback_parents) == 1
+                nested = PropagationContext(str(uuid4()), str(uuid4()))
+                with use_scope_stack(create_scope_stack_from_propagation(nested)):
+                    assert capture_propagation_context().parent_uuid == nested.parent_uuid
+                assert capture_propagation_context().parent_uuid == observed.parent_uuid
+                assert capture_propagation_context().root_uuid == observed.root_uuid
+
+            def callback_result(arguments: Json) -> ToolExecutionResult[Json]:
+                assert arguments == {"value": 10}
+                return ToolExecutionResult({"owner": owner, "value": 10}, annotation={"owner": owner})
+
+            def synchronous(arguments: Json) -> ToolExecutionResult[Json]:
+                observe(owner)
+                caller_context.set("callback:" + owner)
+                return callback_result(arguments)
+
+            async def finish(arguments: Json) -> ToolExecutionResult[Json]:
+                await callbacks_ready.wait()
+                observe("callback:" + owner)
+                return callback_result(arguments)
+
+            def returning_awaitable(arguments: Json) -> Awaitable[ToolExecutionResult[Json]]:
+                observe(owner)
+                caller_context.set("callback:" + owner)
+                return finish(arguments)
+
+            async def asynchronous(arguments: Json) -> ToolExecutionResult[Json]:
+                return await returning_awaitable(arguments)
+
+            callback = {
+                "sync": synchronous,
+                "async": asynchronous,
+                "returned-awaitable": returning_awaitable,
+            }[callback_kind]
+            try:
+                with use_scope_stack(create_scope_stack_from_propagation(propagation)):
+                    result = await tools.execute("concurrent_context_tool", {"value": 10}, callback)
+                    assert result.result == {"owner": owner, "value": 10}
+                    assert result.annotation == {"owner": owner}
+                    assert caller_context.get() == owner
+                    restored = capture_propagation_context()
+                    assert restored.parent_uuid == propagation.parent_uuid
+                    assert restored.root_uuid == propagation.root_uuid
+            finally:
+                caller_context.reset(context_token)
+
+        await asyncio.wait_for(asyncio.gather(execute_caller("first"), execute_caller("second")), timeout=3)
+        await subscribers.flush_async()
 
     async def test_execute_rejects_legacy_raw_result(self) -> None:
         with pytest.raises(RuntimeError, match="must return ToolExecutionResult") as error:
@@ -483,15 +554,22 @@ class TestToolGuardrailsAsync:
         }
 
     async def test_conditional_blocks_execution(self) -> None:
-        guardrails.register_tool_conditional_execution("py_async_blocker", 1, lambda name, args: "blocked by policy")
+        callback_invocations = 0
 
-        def func(args):
-            return {"should": "not reach"}
+        def rejected_callback(_arguments: Json) -> ToolExecutionResult[Json]:
+            nonlocal callback_invocations
+            callback_invocations += 1
+            return ToolExecutionResult({"should": "not reach"})
 
-        with pytest.raises(RuntimeError, match="guardrail rejected"):
-            await tools.execute("blocked_tool", {}, func)
-
-        guardrails.deregister_tool_conditional_execution("py_async_blocker")
+        guardrails.register_tool_conditional_execution(
+            "py_async_blocker", 1, lambda name, arguments: "blocked by policy"
+        )
+        try:
+            with pytest.raises(RuntimeError, match="guardrail rejected"):
+                await tools.execute("blocked_tool", {}, rejected_callback)
+            assert callback_invocations == 0
+        finally:
+            guardrails.deregister_tool_conditional_execution("py_async_blocker")
 
 
 class TestToolIntercepts:

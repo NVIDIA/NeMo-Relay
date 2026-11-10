@@ -153,7 +153,13 @@ def test_runtime_struct_fields_are_all_modeled(contract):
     # field later without extending the transport. Variants are tested separately.
     groups = {
         "codec/request.rs": ["AnnotatedLlmRequest", "GenerationParams", "FunctionDefinition", "ToolCall"],
-        "codec/response.rs": ["AnnotatedLlmResponse", "Usage", "CostEstimate", "ResponseToolCall"],
+        "codec/response.rs": [
+            "AnnotatedLlmResponse",
+            "Usage",
+            "CacheWriteTokenCounts",
+            "CostEstimate",
+            "ResponseToolCall",
+        ],
         "codec/optimization.rs": [
             "LlmOptimizationModel",
             "LlmOptimizationModelTransition",
@@ -234,7 +240,14 @@ def test_runtime_struct_fields_are_all_modeled(contract):
             }
             fields = {transport_names.get(field, field) for field in fields}
             proto = contract.FindMessageTypeByName(f"{PACKAGE}.{name}")
-            assert fields == set(proto.fields_by_name), name
+            transport_fields = set(proto.fields_by_name)
+            if name == "Usage":
+                fields.remove("cache_write_tokens")
+                fields.add("cache_write_token_counts")
+                for legacy in ("cache_write_tokens", "cache_write_1h_tokens"):
+                    assert proto.fields_by_name[legacy].GetOptions().deprecated
+                    transport_fields.remove(legacy)
+            assert fields == transport_fields, name
 
 
 # Open application data is intentional; new entries require contract review.

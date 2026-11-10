@@ -3,10 +3,11 @@
 
 use clap::{Parser, Subcommand, ValueEnum};
 
+use super::auth::AuthCommand;
 use super::completions::CompletionsCommand;
 use super::configure::ConfigCommand;
 use super::daemon::DaemonCommand;
-use super::diagnostics::{AgentsCommand, DoctorCommand};
+use super::doctor::{AgentsCommand, DoctorCommand};
 use super::gateway::GatewayCommand;
 use super::hook_forward::HookForwardCommand;
 use super::install::{InstallCommand, UninstallCommand};
@@ -62,6 +63,18 @@ pub(crate) struct Cli {
 
 #[derive(Debug, Clone, Subcommand)]
 pub(crate) enum Command {
+    /// Sign in to the upstream OpenID Connect provider configured in `[upstream.*_oidc]`.
+    #[command(
+        long_about = "Sign in to the OpenID Connect provider named by `[upstream.openai_oidc]` or \
+                      `[upstream.anthropic_oidc]` with the device authorization flow. The sign-in \
+                      is kept in the per-user NeMo Relay config directory, and the gateway reads \
+                      it for each upstream request, refreshing the access token near expiry.",
+        after_help = "Examples:\n  \
+                      nemo-relay auth login\n  \
+                      nemo-relay --config team.toml auth login --provider anthropic\n  \
+                      nemo-relay auth logout"
+    )]
+    Auth(AuthCommand),
     /// Inspect diagnostics on an existing local gateway; never launches or recovers it.
     Diagnostics(super::runtime_diagnostics::InspectCommand),
     /// Run or connect to the multi-user NeMo Relay daemon.
@@ -161,6 +174,7 @@ pub(crate) enum Command {
 impl Command {
     pub(crate) fn log_name(&self) -> &'static str {
         match self {
+            Self::Auth(_) => "auth",
             Self::Diagnostics(_) => "diagnostics",
             Self::Daemon(_) => "daemon",
             Self::Claude(_) => "claude",
@@ -185,7 +199,7 @@ impl Command {
     /// Administrative and configuration-editing commands must not depend on ambient personal
     /// logging state. This keeps repair and managed deployment workflows deterministic.
     pub(crate) fn skips_logging(&self) -> bool {
-        matches!(self, Self::Config(_) | Self::Diagnostics(_))
+        matches!(self, Self::Auth(_) | Self::Config(_) | Self::Diagnostics(_))
             || matches!(self, Self::Gateway(command) if command.is_stop())
             || matches!(self, Self::Plugins(command) if command.is_edit())
             || matches!(self, Self::Doctor(command) if command.managed_bundle.is_some())

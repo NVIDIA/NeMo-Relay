@@ -2689,6 +2689,7 @@ async fn python_worker_execution_codec_context_round_trips_host_codecs() {
         identity_kind: &'static str,
         identity_id: &'static str,
         answer: &'static str,
+        expected_usage: Json,
         request_codec: Arc<dyn LlmCodec>,
         response_codec: Arc<dyn LlmResponseCodec>,
     }
@@ -2699,6 +2700,7 @@ async fn python_worker_execution_codec_context_round_trips_host_codecs() {
             identity_kind: "builtin",
             identity_id: "openai_chat",
             answer: "provider answer",
+            expected_usage: Json::Null,
             request_codec: Arc::new(OpenAIChatCodec),
             response_codec: Arc::new(OpenAIChatCodec),
         },
@@ -2707,6 +2709,7 @@ async fn python_worker_execution_codec_context_round_trips_host_codecs() {
             identity_kind: "runtime",
             identity_id: "tests.openai_chat.v1",
             answer: "runtime answer",
+            expected_usage: serde_json::to_value(codec_context_cache_usage()).unwrap(),
             request_codec: Arc::new(RuntimeOpenAiChatCodec),
             response_codec: Arc::new(RuntimeOpenAiChatCodec),
         },
@@ -2774,6 +2777,7 @@ async fn python_worker_execution_codec_context_round_trips_host_codecs() {
                         "response_id": case.identity_id,
                         "decoded_model": "provider-model",
                         "decoded_message": case.answer,
+                        "decoded_usage": case.expected_usage,
                     })
                 );
                 assert_eq!(response["_scope_stack_snapshot_probe"], expected_snapshot);
@@ -2820,7 +2824,39 @@ impl LlmResponseCodec for RuntimeOpenAiChatCodec {
     }
 
     fn decode_response(&self, response: &Json) -> FlowResult<AnnotatedLlmResponse> {
-        OpenAIChatCodec.decode_response(response)
+        let mut annotated = OpenAIChatCodec.decode_response(response)?;
+        annotated.usage = Some(codec_context_cache_usage());
+        Ok(annotated)
+    }
+}
+
+fn codec_context_cache_usage() -> nemo_relay_types::codec::response::Usage {
+    use nemo_relay_types::codec::response::{CacheWriteTokenCounts, Usage};
+
+    Usage {
+        cache_write_tokens: Some(vec![
+            CacheWriteTokenCounts {
+                count: u64::MAX,
+                duration: None,
+            },
+            CacheWriteTokenCounts {
+                count: 0,
+                duration: Some(0),
+            },
+            CacheWriteTokenCounts {
+                count: 7,
+                duration: Some(3600),
+            },
+            CacheWriteTokenCounts {
+                count: 5,
+                duration: Some(999),
+            },
+            CacheWriteTokenCounts {
+                count: 1,
+                duration: Some(999),
+            },
+        ]),
+        ..Default::default()
     }
 }
 
@@ -3090,6 +3126,7 @@ class CodecContextProbe(WorkerPlugin):
                 "response_id": context.response_codec.codec.id,
                 "decoded_model": decoded.get("model"),
                 "decoded_message": decoded.get("message"),
+                "decoded_usage": decoded.get("usage"),
             }
             return result
 

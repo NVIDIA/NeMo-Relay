@@ -9,8 +9,8 @@ mod bootstrap;
 mod commands;
 mod configuration;
 mod daemon;
-mod diagnostics;
 mod diagnostics_http;
+mod doctor;
 mod error;
 mod events;
 mod filesystem;
@@ -19,6 +19,7 @@ mod hooks;
 mod installation;
 mod mcp;
 mod mcp_environment;
+mod oidc;
 mod operational;
 mod runtime_diagnostics;
 

@@ -78,7 +78,7 @@ pub(super) fn collect_openai_chat_tool_hints(
     }
 }
 
-// Collects OpenAI Responses output items where function-call data is usually direct on each item.
+// Collects OpenAI Responses function and custom calls directly from output items.
 // Items without an id or name are ignored because they are too weak for ownership correlation.
 pub(super) fn collect_openai_response_tool_hints(
     response: &Value,
@@ -89,18 +89,35 @@ pub(super) fn collect_openai_response_tool_hints(
         return;
     };
     for item in output {
-        if item.get("type").and_then(Value::as_str) != Some("function_call") {
-            continue;
+        match item.get("type").and_then(Value::as_str) {
+            Some("function_call") => push_tool_hint(
+                hints,
+                item,
+                owner_subagent_id,
+                "openai_response_tool_call",
+                &[&["call_id"][..], &["id"][..]],
+                &[&["name"][..], &["tool_name"][..]],
+                &[&["arguments"][..], &["input"][..]],
+            ),
+            Some("custom_tool_call") => {
+                let (Some(name), Some(input)) = (
+                    json_string_at(item, &[&["name"][..]]),
+                    item.get("input").and_then(Value::as_str),
+                ) else {
+                    continue;
+                };
+                // The item ID is not the invocation ID. Custom input is free-form
+                // text even when it happens to be syntactically valid JSON.
+                hints.push(ToolHint {
+                    tool_call_id: json_string_at(item, &[&["call_id"][..]]),
+                    tool_name: Some(name),
+                    subagent_id: owner_subagent_id.map(ToOwned::to_owned),
+                    arguments: Value::String(input.to_string()),
+                    source: "openai_response_custom_tool_call".into(),
+                });
+            }
+            _ => {}
         }
-        push_tool_hint(
-            hints,
-            item,
-            owner_subagent_id,
-            "openai_response_tool_call",
-            &[&["call_id"][..], &["id"][..]],
-            &[&["name"][..], &["tool_name"][..]],
-            &[&["arguments"][..], &["input"][..]],
-        );
     }
 }
 

@@ -254,7 +254,7 @@ impl CacheTelemetryEvent {
 
         let (cache_creation_tokens, total_prompt_tokens) = match provider {
             CacheTelemetryProvider::Anthropic => {
-                let cache_creation_tokens = usage.cache_write_tokens.unwrap_or(0);
+                let cache_creation_tokens = usage.cache_write_total().unwrap_or(0);
                 let total_prompt_tokens = prompt_tokens + cache_read_tokens + cache_creation_tokens;
                 (cache_creation_tokens, total_prompt_tokens)
             }

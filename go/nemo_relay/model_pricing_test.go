@@ -5,6 +5,7 @@ package nemo_relay
 
 import (
 	"encoding/json"
+	"strings"
 	"testing"
 )
 
@@ -121,6 +122,57 @@ func TestValidatePricingConfig(t *testing.T) {
 	}
 	if !foundInvalidConfig {
 		t.Fatalf("expected pricing invalid diagnostic, got %#v", invalid.Diagnostics)
+	}
+}
+
+func TestPricingCacheWriteRates(t *testing.T) {
+	oneHour := uint64(3600)
+	rates := NewTokenPricingRates(1, 2)
+	rates.CacheWriteRates = []CacheWriteRate{
+		{Duration: &oneHour, PerMillion: 6},
+		{PerMillion: 3},
+	}
+
+	payload, err := json.Marshal(rates)
+	if err != nil {
+		t.Fatalf("marshal rates: %v", err)
+	}
+	if !strings.Contains(string(payload), `"cache_write_rates":[{"duration":3600,"per_million":6},{"per_million":3}]`) {
+		t.Fatalf("expected cache write rates in JSON, got %s", payload)
+	}
+
+	unset, err := json.Marshal(NewTokenPricingRates(1, 2))
+	if err != nil {
+		t.Fatalf("marshal unset rates: %v", err)
+	}
+	if strings.Contains(string(unset), "cache_write_rates") {
+		t.Fatalf("expected unset cache write rates to be omitted, got %s", unset)
+	}
+
+	validate := func(price float64) []string {
+		t.Helper()
+		rates.CacheWriteRates[0].PerMillion = price
+		entry := NewModelPricing("test", "priced-model")
+		entry.PricingAsOf = "2026-06-15"
+		entry.PricingSource = "https://example.com/pricing"
+		entry.Rates = &rates
+		report, err := ValidatePricingConfig(PricingConfig{
+			Sources: []PricingSourceConfigurer{NewPricingInlineSource(NewPricingCatalog(entry))},
+		})
+		if err != nil {
+			t.Fatalf("ValidatePricingConfig failed: %v", err)
+		}
+		codes := []string{}
+		for _, diagnostic := range report.Diagnostics {
+			codes = append(codes, diagnostic.Code)
+		}
+		return codes
+	}
+	if codes := validate(6); len(codes) != 0 {
+		t.Fatalf("expected clean report, got %v", codes)
+	}
+	if codes := validate(-1); len(codes) != 1 || codes[0] != "pricing.invalid_config" {
+		t.Fatalf("expected pricing invalid diagnostic, got %v", codes)
 	}
 }
 

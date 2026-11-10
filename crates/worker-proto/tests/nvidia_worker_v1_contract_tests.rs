@@ -7,6 +7,7 @@
 use nemo_relay_worker_proto::{FILE_DESCRIPTOR_SET, nvidia_worker_v1 as pb};
 use prost::Message;
 use prost_types::FileDescriptorSet;
+use prost_types::field_descriptor_proto::{Label, Type};
 use serde_json::json;
 
 fn round_trip<T: Message + Default + PartialEq + std::fmt::Debug>(value: T) {
@@ -125,6 +126,90 @@ fn diagnostic_values_preserve_numeric_kinds_and_slot_positions() {
             .collect(),
         ..Default::default()
     });
+}
+
+#[test]
+fn cache_write_descriptors_preserve_legacy_tags_and_scalar_presence() {
+    let descriptors = FileDescriptorSet::decode(FILE_DESCRIPTOR_SET).unwrap();
+    let messages: Vec<_> = descriptors
+        .file
+        .iter()
+        .filter(|file| file.package() == "nvidia.nemo.relay.worker.v1")
+        .flat_map(|file| &file.message_type)
+        .collect();
+    let usage = messages
+        .iter()
+        .find(|message| message.name() == "Usage")
+        .unwrap();
+    for (name, number) in [("cache_write_tokens", 5), ("cache_write_1h_tokens", 6)] {
+        let field = usage
+            .field
+            .iter()
+            .find(|field| field.name() == name)
+            .unwrap();
+        assert_eq!(field.number(), number);
+        assert_eq!(field.r#type(), Type::Uint64);
+        assert_eq!(field.label(), Label::Optional);
+        assert!(field.proto3_optional());
+        assert!(field.options.as_ref().unwrap().deprecated());
+    }
+}
+
+#[test]
+fn cache_write_descriptors_preserve_canonical_list_presence() {
+    let descriptors = FileDescriptorSet::decode(FILE_DESCRIPTOR_SET).unwrap();
+    let messages: Vec<_> = descriptors
+        .file
+        .iter()
+        .filter(|file| file.package() == "nvidia.nemo.relay.worker.v1")
+        .flat_map(|file| &file.message_type)
+        .collect();
+    let usage = messages
+        .iter()
+        .find(|message| message.name() == "Usage")
+        .unwrap();
+    let canonical = usage
+        .field
+        .iter()
+        .find(|field| field.name() == "cache_write_token_counts")
+        .unwrap();
+    assert_eq!(canonical.number(), 9);
+    assert_eq!(canonical.r#type(), Type::Message);
+    assert_eq!(canonical.label(), Label::Optional);
+    assert_eq!(
+        canonical.type_name(),
+        ".nvidia.nemo.relay.worker.v1.CacheWriteTokenCountsList"
+    );
+    let list = messages
+        .iter()
+        .find(|message| message.name() == "CacheWriteTokenCountsList")
+        .unwrap();
+    assert_eq!(list.field.len(), 1);
+    let values = &list.field[0];
+    assert_eq!(values.name(), "values");
+    assert_eq!(values.number(), 1);
+    assert_eq!(values.label(), Label::Repeated);
+    assert_eq!(values.r#type(), Type::Message);
+    assert_eq!(
+        values.type_name(),
+        ".nvidia.nemo.relay.worker.v1.CacheWriteTokenCounts"
+    );
+    let entry = messages
+        .iter()
+        .find(|message| message.name() == "CacheWriteTokenCounts")
+        .unwrap();
+    assert_eq!(entry.field.len(), 2);
+    for (name, number) in [("count", 1), ("duration", 2)] {
+        let field = entry
+            .field
+            .iter()
+            .find(|field| field.name() == name)
+            .unwrap();
+        assert_eq!(field.number(), number);
+        assert_eq!(field.r#type(), Type::Uint64);
+        assert_eq!(field.label(), Label::Optional);
+        assert!(field.proto3_optional());
+    }
 }
 
 #[test]

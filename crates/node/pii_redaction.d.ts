@@ -69,4 +69,4 @@ export declare function ComponentSpec(
   options?: {
     enabled?: boolean;
   },
-): import('./plugin.js').ComponentSpec;
+): ComponentSpec;

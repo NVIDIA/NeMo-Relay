@@ -40,8 +40,10 @@ fn full_response() -> AnnotatedLlmResponse {
             completion_tokens: Some(20),
             total_tokens: Some(30),
             cache_read_tokens: Some(5),
-            cache_write_tokens: Some(3),
-            cache_write_1h_tokens: None,
+            cache_write_tokens: Some(vec![CacheWriteTokenCounts {
+                count: 3,
+                duration: None,
+            }]),
             uncached_input_tokens: None,
             cost: None,
         }),
@@ -111,7 +113,7 @@ fn threshold_pricing_catalog(read_accounting: &str) -> PricingCatalog {
                             "input_per_million": 1.0,
                             "output_per_million": 2.0,
                             "cache_read_per_million": 0.1,
-                            "cache_write_per_million": 1.25
+                            "cache_write_rates": [{"per_million": 1.25}]
                         }
                     },
                     {
@@ -120,7 +122,7 @@ fn threshold_pricing_catalog(read_accounting: &str) -> PricingCatalog {
                             "input_per_million": 10.0,
                             "output_per_million": 20.0,
                             "cache_read_per_million": 1.0,
-                            "cache_write_per_million": 12.5
+                            "cache_write_rates": [{"per_million": 12.5}]
                         }
                     }
                 ]
@@ -174,7 +176,7 @@ fn test_pricing_public_helpers_and_provider_inference_cover_edge_branches() {
                 "input_per_million": 1.0,
                 "output_per_million": 2.0,
                 "cache_read_per_million": 0.25,
-                "cache_write_per_million": 3.0
+                "cache_write_rates": [{"per_million": 3.0}]
             },
             "prompt_cache": {
                 "read_accounting": "included_in_prompt_tokens"
@@ -186,7 +188,10 @@ fn test_pricing_public_helpers_and_provider_inference_cover_edge_branches() {
         prompt_tokens: Some(1_000),
         completion_tokens: Some(500),
         cache_read_tokens: Some(100),
-        cache_write_tokens: Some(10),
+        cache_write_tokens: Some(vec![CacheWriteTokenCounts {
+            count: 10,
+            duration: None,
+        }]),
         uncached_input_tokens: None,
         ..Usage::default()
     };
