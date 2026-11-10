@@ -297,5 +297,5 @@ repos:
         name: node docstrings check
         entry: node scripts/lint/check_public_docstrings.mjs all
         language: system
-        files: '^crates/node/(?:plugin|adaptive|typed)\.(?:js|d\.ts)$'
+        files: '^crates/node/ts/(?:plugin|adaptive|typed)\.ts$'
         pass_filenames: false

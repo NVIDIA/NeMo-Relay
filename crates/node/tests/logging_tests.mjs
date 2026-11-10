@@ -17,7 +17,7 @@ const loggingEnvironmentNames = [
   'NEMO_RELAY_LOG_CONFIG_PATH',
 ];
 
-function requireBinding(loggingEnvironment, source = "require('./index.js')") {
+function requireBinding(loggingEnvironment, source = "require('./dist/index.js')") {
   const environment = { ...process.env };
   for (const name of loggingEnvironmentNames) {
     delete environment[name];
@@ -106,10 +106,10 @@ format = "jsonl"
 queue_capacity = 16
 `,
       );
-      const workerSource = `require(${JSON.stringify(join(packageDirectory, 'index.js'))})`;
+      const workerSource = `require(${JSON.stringify(join(packageDirectory, 'dist', 'index.js'))})`;
       const source = `
 const { Worker } = require('node:worker_threads');
-const relay = require('./index.js');
+const relay = require('./dist/index.js');
 const worker = new Worker(${JSON.stringify(workerSource)}, {
   eval: true,
 });
@@ -154,7 +154,7 @@ queue_capacity = 16
 `,
       );
       const source = `
-const relay = require('./index.js');
+const relay = require('./dist/index.js');
 relay.trace('trace message', 'binding', { ordinal: 0 });
 relay.debug('debug message', 'binding', { ordinal: 1 });
 relay.info('info message', 'binding', { ordinal: 2, nested: { ok: true } });
@@ -183,7 +183,7 @@ relay.info('default target');
   it('rejects non-object structured fields', () => {
     const result = requireBinding(
       { NEMO_RELAY_LOG: 'trace' },
-      "require('./index.js').info('invalid fields', 'binding', ['not-an-object'])",
+      "require('./dist/index.js').info('invalid fields', 'binding', ['not-an-object'])",
     );
 
     assert.notEqual(result.status, 0);

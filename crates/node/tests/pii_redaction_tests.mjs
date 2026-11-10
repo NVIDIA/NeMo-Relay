@@ -6,8 +6,8 @@ import assert from 'node:assert/strict';
 import { createRequire } from 'node:module';
 
 const require = createRequire(import.meta.url);
-const plugin = require('../plugin.js');
-const piiRedaction = require('../pii_redaction.js');
+const plugin = require('../dist/plugin.js');
+const piiRedaction = require('../dist/pii_redaction.js');
 
 describe('pii_redaction plugin helpers', () => {
   it('builds defaults and plugin component shape', () => {

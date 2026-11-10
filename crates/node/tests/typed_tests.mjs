@@ -7,10 +7,10 @@ import { createRequire } from 'node:module';
 import * as pluginHost from './plugin_host_test_helper.mjs';
 
 const require = createRequire(import.meta.url);
-const lib = require('../index.js');
-const { typedToolExecute, typedLlmExecute, typedLlmStreamExecute, JsonPassthrough } = require('../typed.js');
-const adaptive = require('../adaptive.js');
-const plugin = require('../plugin.js');
+const lib = require('../dist/index.js');
+const { typedToolExecute, typedLlmExecute, typedLlmStreamExecute, JsonPassthrough } = require('../dist/typed.js');
+const adaptive = require('../dist/adaptive.js');
+const plugin = require('../dist/plugin.js');
 
 const TOOL_ATTR_LOCAL = 0b01;
 
@@ -179,7 +179,7 @@ describe('JsonPassthrough', () => {
 
 describe('adaptive typed helpers', () => {
   it('keeps adaptive helpers out of typed.js', () => {
-    assert.equal('defaultAdaptiveConfig' in require('../typed.js'), false);
+    assert.equal('defaultAdaptiveConfig' in require('../dist/typed.js'), false);
     assert.equal(typeof adaptive.defaultConfig, 'function');
   });
 
@@ -283,10 +283,10 @@ describe('typedToolExecute', () => {
   it('rejects legacy raw typed-tool results from sync and async producers', async () => {
     const passthrough = new JsonPassthrough();
     for (const producer of [() => 7, async () => 7]) {
-      await assert.rejects(
-        () => typedToolExecute('typed_legacy_result', {}, producer, passthrough, passthrough),
-        /must return ToolExecutionResult/i,
-      );
+      await assert.rejects(() => typedToolExecute('typed_legacy_result', {}, producer, passthrough, passthrough), {
+        name: 'TypeError',
+        message: 'typed tool callback must return ToolExecutionResult',
+      });
     }
   });
 
