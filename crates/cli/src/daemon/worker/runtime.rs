@@ -1025,6 +1025,21 @@ fn revoke_diagnostic_authority(state: &WorkerState, registration: &mut Registrat
     registration.diagnostics = None;
 }
 
+/// Tells the daemon this worker is exiting, then keeps control open through teardown.
+///
+/// Without the notice the daemon cannot tell an exit from a dropped socket and holds the route
+/// for the full reconnect window. If the daemon does not accept it, return at once so control
+/// closes and the daemon stops routing here, as it did before the notice existed.
+async fn announce_exit(
+    registration: &mut Registration,
+    worker_id: &str,
+    close_control: &mut tokio::sync::oneshot::Receiver<()>,
+) {
+    if registration.release(worker_id).await.is_ok() {
+        let _ = tokio::time::timeout(crate::daemon::common::socket::GRACE, close_control).await;
+    }
+}
+
 #[allow(clippy::too_many_arguments)]
 async fn monitor_control(
     state: Arc<WorkerState>,
@@ -1040,15 +1055,7 @@ async fn monitor_control(
         let event = tokio::select! {
             biased;
             () = state.wait_until_exiting() => {
-                // Without this the daemon cannot tell an exit from a dropped socket and
-                // holds the route for the full reconnect window. Keep the socket open
-                // through teardown, bounded by that same window.
-                let _ = registration.release(&worker_id).await;
-                let _ = tokio::time::timeout(
-                    crate::daemon::common::socket::GRACE,
-                    &mut close_control,
-                )
-                .await;
+                announce_exit(&mut registration, &worker_id, &mut close_control).await;
                 return;
             }
             event = registration.next() => event,

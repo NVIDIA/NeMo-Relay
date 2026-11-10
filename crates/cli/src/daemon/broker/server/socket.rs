@@ -747,6 +747,10 @@ async fn recover_worker_command(
     if expired(state, role, &worker_id) {
         return control_message(StatusCode::UNAUTHORIZED, "session recovery grace expired");
     }
+    // A worker that announced its exit is tearing down; a late recovery must not revive it.
+    if lock(&state.sockets.exiting_workers).contains(&worker_id) {
+        return control_message(StatusCode::CONFLICT, "worker announced its exit");
+    }
     let response = recover_worker(State(state.clone()), Json(request)).await;
     if response.status().is_success() {
         *id = Some(worker_id.clone());
@@ -851,7 +855,7 @@ async fn disconnected(
         peer.ready = false;
         let now = tokio::time::Instant::now();
         let exited =
-            role == ComponentRole::Worker && lock(&state.sockets.exiting_workers).remove(&id);
+            role == ComponentRole::Worker && lock(&state.sockets.exiting_workers).contains(&id);
         // A worker that announced its exit cannot reconnect, so it gets no recovery window.
         if exited {
             peer.disconnected = Some(now);

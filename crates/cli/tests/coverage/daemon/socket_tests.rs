@@ -1885,6 +1885,9 @@ struct ReadyWorker {
     owner: Client,
     worker: Client,
     session_token: SensitiveString,
+    origin: String,
+    endpoint: String,
+    generation_grant: crate::daemon::common::control::WorkerGenerationGrant,
     tasks: Vec<tokio::task::JoinHandle<()>>,
 }
 
@@ -1918,7 +1921,7 @@ async fn ready_worker() -> ReadyWorker {
             diagnostics: None,
             proof: handshake.proof,
             worker_id: "worker".into(),
-            endpoint,
+            endpoint: endpoint.clone(),
             activation_id,
             activation_token,
             tls_root_certificate: None,
@@ -1961,6 +1964,9 @@ async fn ready_worker() -> ReadyWorker {
         owner,
         worker,
         session_token: registration.session_token,
+        origin,
+        endpoint,
+        generation_grant: registration.generation_grant,
         tasks: vec![task, server, mcp_task],
     }
 }
@@ -2058,6 +2064,55 @@ async fn worker_release_requires_the_worker_session() {
     ));
     drop(owner);
     for task in tasks {
+        task.abort();
+    }
+}
+
+/// A late recovery from a worker that announced its exit must not take over its control
+/// session, or its disconnect could launch a replacement while teardown is still running.
+#[tokio::test]
+async fn worker_recovery_is_rejected_after_an_announced_exit() {
+    let fixture = ready_worker().await;
+    fixture
+        .worker
+        .request::<()>(worker_release(fixture.session_token.clone()))
+        .await
+        .unwrap();
+    let late = Client::default();
+    let handshake = begin_handshake(
+        &late,
+        &fixture.origin,
+        ComponentRole::Worker,
+        &fixture.identity,
+        "worker",
+        None,
+    )
+    .await
+    .unwrap();
+    let recovered = late
+        .request::<WorkerRegisterResponse>(Command::RecoverWorker(WorkerRecoverRequest {
+            diagnostics: None,
+            proof: handshake.proof,
+            worker_id: "worker".into(),
+            endpoint: fixture.endpoint.clone(),
+            tls_root_certificate: None,
+            generation_grant: fixture.generation_grant.clone(),
+        }))
+        .await;
+    assert!(recovered.is_err());
+    // The announcing connection still owns the session until it closes.
+    assert!(lock(&fixture.state.worker_sessions).contains_key("worker"));
+    drop(late);
+    drop(fixture.worker);
+    tokio::time::timeout(Duration::from_secs(2), async {
+        while lock(&fixture.state.worker_sessions).contains_key("worker") {
+            tokio::task::yield_now().await;
+        }
+    })
+    .await
+    .expect("the announced exit still removes the worker without the grace");
+    drop(fixture.owner);
+    for task in fixture.tasks {
         task.abort();
     }
 }
