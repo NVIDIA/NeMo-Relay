@@ -2242,7 +2242,9 @@ pub fn llm_call_execute_async<'env>(
     env: &'env Env,
     name: String,
     #[napi(ts_arg_type = "TRequest")] request: Json,
-    #[napi(ts_arg_type = "(request: LlmRequestShape) => TResponse | Promise<TResponse>")]
+    #[napi(
+        ts_arg_type = "(request: LlmRequestShape, signal: AbortSignal) => TResponse | Promise<TResponse>"
+    )]
     func: Callback,
     handle: Option<&ScopeHandle>,
     attributes: Option<u32>,
@@ -2512,7 +2514,7 @@ pub fn deregister_conditional_middleware_guardrail(name: String) -> Result<bool>
 /// List global gateable runtime registrations.
 #[napi(
     ts_generic_types = "K extends RuntimeRegistrationKind | RuntimeRegistrationKindName = RuntimeRegistrationKind",
-    ts_return_type = "Array<RuntimeRegistrationIdentity & { kind: Extract<RuntimeRegistrationKind, `${K}`> }>",
+    ts_return_type = "Array<RuntimeRegistrationIdentity & { kind: K extends RuntimeRegistrationKind ? K : Extract<RuntimeRegistrationKind, K> }>",
     catch_unwind
 )]
 pub fn list_runtime_registrations(
@@ -3840,8 +3842,13 @@ impl AdaptiveRuntime {
     /// Create an adaptive runtime wrapper from config.
     ///
     /// The runtime is constructed lazily when `register()` is awaited.
-    #[napi(constructor, catch_unwind)]
-    pub fn new(config: Json) -> Result<Self> {
+    #[napi(
+        factory,
+        js_name = "create",
+        ts_generic_types = "TConfig extends JsonCompatible<TConfig>",
+        catch_unwind
+    )]
+    pub fn create(#[napi(ts_arg_type = "TConfig")] config: Json) -> Result<Self> {
         let config: AdaptiveConfig = serde_json::from_value(config)
             .map_err(|error| Error::invalid_argument(error.to_string()))?;
         let report = validate_adaptive_config_or_err(&config)?;
@@ -3891,7 +3898,7 @@ impl AdaptiveRuntime {
     }
 
     /// Return the validation report captured during runtime construction.
-    #[napi(catch_unwind)]
+    #[napi(ts_return_type = "ConfigReport", catch_unwind)]
     pub fn report(&self) -> Result<Json> {
         let state = self.state()?;
         let report = match &*state {
@@ -3910,8 +3917,16 @@ impl AdaptiveRuntime {
     }
 
     /// Build cache request facts for an annotated LLM request.
-    #[napi(js_name = "buildCacheRequestFacts", catch_unwind)]
-    pub fn build_cache_request_facts(&self, options: Json) -> Result<Option<Json>> {
+    #[napi(
+        js_name = "buildCacheRequestFacts",
+        ts_generic_types = "TOptions extends JsonCompatible<TOptions>",
+        ts_return_type = "CacheRequestFacts | null",
+        catch_unwind
+    )]
+    pub fn build_cache_request_facts(
+        &self,
+        #[napi(ts_arg_type = "TOptions")] options: Json,
+    ) -> Result<Option<Json>> {
         let options: CacheRequestFactsOptions = serde_json::from_value(options)
             .map_err(|error| Error::invalid_argument(error.to_string()))?;
         let _request_id = parse_uuid(&options.request_id, "requestId UUID")?;
@@ -3969,16 +3984,28 @@ fn parse_cache_request_facts(value: Option<Json>) -> Result<Option<CacheRequestF
 }
 
 /// Validate an adaptive config document without constructing a runtime.
-#[napi(js_name = "validateAdaptiveConfig", catch_unwind)]
-pub fn validate_adaptive_config(config: Json) -> Result<Json> {
+#[napi(
+    js_name = "validateAdaptiveConfig",
+    ts_generic_types = "TConfig extends JsonCompatible<TConfig>",
+    ts_return_type = "ConfigReport",
+    catch_unwind
+)]
+pub fn validate_adaptive_config(#[napi(ts_arg_type = "TConfig")] config: Json) -> Result<Json> {
     let config: AdaptiveConfig = serde_json::from_value(config)
         .map_err(|error| Error::invalid_argument(error.to_string()))?;
     serde_json::to_value(CoreAdaptiveRuntime::validate_config(&config)).map_err(Error::from)
 }
 
 /// Build one adaptive cache telemetry event from normalized usage.
-#[napi(js_name = "buildCacheTelemetryEvent", catch_unwind)]
-pub fn build_cache_telemetry_event(options: Json) -> Result<Option<Json>> {
+#[napi(
+    js_name = "buildCacheTelemetryEvent",
+    ts_generic_types = "TOptions extends JsonCompatible<TOptions>",
+    ts_return_type = "CacheTelemetryEvent | null",
+    catch_unwind
+)]
+pub fn build_cache_telemetry_event(
+    #[napi(ts_arg_type = "TOptions")] options: Json,
+) -> Result<Option<Json>> {
     let options: CacheTelemetryOptions = serde_json::from_value(options)
         .map_err(|error| Error::invalid_argument(error.to_string()))?;
     let provider = parse_cache_telemetry_provider(&options.provider)?;
@@ -4225,7 +4252,7 @@ mod dynamic_plugin_close_state_tests;
 #[napi]
 impl PluginHostActivation {
     /// Return the validation report produced by activation.
-    #[napi(getter, catch_unwind)]
+    #[napi(getter, ts_return_type = "PluginHostReport", catch_unwind)]
     pub fn report(&self) -> Result<Json> {
         serde_json::to_value(self.close_state.report()).map_err(Error::from)
     }
@@ -4270,10 +4297,13 @@ impl PluginHostActivation {
 }
 
 /// Initialize the core-owned static and dynamic plugin host from layered files.
-#[napi(catch_unwind)]
+#[napi(
+    ts_generic_types = "TConfig extends JsonCompatible<TConfig>",
+    catch_unwind
+)]
 pub fn initialize<'env>(
     env: &'env Env,
-    config: Json,
+    #[napi(ts_arg_type = "TConfig")] config: Json,
     additional_plugins_toml: Option<String>,
 ) -> Result<PromiseRaw<'env, PluginHostActivation>> {
     spawn_promise(
@@ -4304,8 +4334,15 @@ pub fn initialize<'env>(
     )
 }
 /// Validate dynamic plugins without loading any plugin code.
-#[napi(catch_unwind)]
-pub fn validate(config: Json, additional_plugins_toml: Option<String>) -> Result<Json> {
+#[napi(
+    ts_generic_types = "TConfig extends JsonCompatible<TConfig>",
+    ts_return_type = "PluginHostReport",
+    catch_unwind
+)]
+pub fn validate(
+    #[napi(ts_arg_type = "TConfig")] config: Json,
+    additional_plugins_toml: Option<String>,
+) -> Result<Json> {
     let config: nemo_relay_plugin_host::dynamic::PluginHostConfig =
         parse_json(config, "plugin config")?;
     let report =
@@ -4314,8 +4351,12 @@ pub fn validate(config: Json, additional_plugins_toml: Option<String>) -> Result
 }
 
 /// Validate only the supplied static plugin configuration.
-#[napi(catch_unwind)]
-pub fn validate_exact(config: Json) -> Result<Json> {
+#[napi(
+    ts_generic_types = "TConfig extends JsonCompatible<TConfig>",
+    ts_return_type = "PluginHostReport",
+    catch_unwind
+)]
+pub fn validate_exact(#[napi(ts_arg_type = "TConfig")] config: Json) -> Result<Json> {
     if config.get("diagnostics").is_some() {
         return Err(Error::invalid_argument(
             "diagnostics is a host-only setting; use layered validation",

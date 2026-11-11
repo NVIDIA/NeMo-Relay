@@ -808,6 +808,7 @@ impl DynamicPluginActivationSnapshot {
         )
     }
 
+    /// Snapshot the runtime closure without placing copies inside source or lifecycle directories.
     fn create_with_snapshot_source_directories(
         manifest_ref: &str,
         expected_plugin_id: &str,
@@ -971,19 +972,24 @@ impl DynamicPluginActivationSnapshot {
             identity_files.insert(logical, copied.clone());
             source.artifact = Some(copied.to_string_lossy().into_owned());
         }
-        if let Some(integrity) = manifest.integrity.as_mut()
-            && let Some(signature) = integrity.signature.as_deref()
-        {
-            let (logical, _, copied) = copy_snapshot_file(
-                &root,
-                &original_manifest_path,
-                signature,
-                "signature",
-                &mut copied_files,
-                &mut budget,
-            )?;
-            identity_files.insert(logical, copied.clone());
-            integrity.signature = Some(copied.to_string_lossy().into_owned());
+        if let Some(integrity) = manifest.integrity.as_mut() {
+            for signature in integrity.signature.iter_mut().chain(
+                integrity
+                    .dependencies
+                    .values_mut()
+                    .filter_map(|dependency| dependency.signature.as_mut()),
+            ) {
+                let (logical, _, copied) = copy_snapshot_file(
+                    &root,
+                    &original_manifest_path,
+                    signature,
+                    "signature",
+                    &mut copied_files,
+                    &mut budget,
+                )?;
+                identity_files.insert(logical, copied.clone());
+                *signature = copied.to_string_lossy().into_owned();
+            }
         }
 
         let activation_environment_ref = snapshot_python_environment(
@@ -1168,6 +1174,18 @@ impl Drop for DynamicPluginActivationSnapshot {
     }
 }
 
+/// Assign a distinct external file destination to each canonical source path.
+fn external_snapshot_file_path(source: &Path, label: &str) -> PathBuf {
+    let identity = Sha256::digest(source.as_os_str().as_encoded_bytes())
+        .iter()
+        .map(|byte| format!("{byte:02x}"))
+        .collect::<String>();
+    PathBuf::from(format!("external-{label}"))
+        .join(identity)
+        .join(source.file_name().unwrap_or_default())
+}
+
+/// Copy a declared file while preserving dependency directories and source identity.
 fn copy_snapshot_file(
     root: &Path,
     manifest_path: &Path,
@@ -1219,8 +1237,9 @@ fn copy_snapshot_file(
             &mut Vec::new(),
         )?;
     } else {
-        fs::create_dir_all(&external).map_err(|error| CliError::Config(error.to_string()))?;
-        let destination = external.join(canonical.file_name().unwrap_or_default());
+        let destination = root.join(external_snapshot_file_path(&canonical, label));
+        fs::create_dir_all(destination.parent().expect("external file has parent"))
+            .map_err(|error| CliError::Config(error.to_string()))?;
         copy_snapshot_regular_file(&canonical, &destination, copied_files, budget, label)?;
     }
     let copied = copied_files.get(&canonical).cloned().ok_or_else(|| {
@@ -1668,6 +1687,7 @@ fn snapshot_tree_digest(root: &Path, stable_identity: bool) -> Result<String, Cl
         .collect())
 }
 
+/// Hash a manifest and its runtime closure using the same logical paths as activation snapshots.
 pub(crate) fn dynamic_plugin_runtime_closure_digest(
     manifest_ref: &str,
     environment_ref: Option<&str>,
@@ -1776,17 +1796,20 @@ pub(crate) fn dynamic_plugin_runtime_closure_digest(
     {
         collect_declared_runtime_closure_file(&manifest_path, artifact, "artifact", &mut closure)?;
     }
-    if let Some(signature) = manifest
-        .integrity
-        .as_ref()
-        .and_then(|integrity| integrity.signature.as_deref())
-    {
-        collect_declared_runtime_closure_file(
-            &manifest_path,
-            signature,
-            "signature",
-            &mut closure,
-        )?;
+    if let Some(integrity) = &manifest.integrity {
+        for signature in integrity.signature.iter().chain(
+            integrity
+                .dependencies
+                .values()
+                .filter_map(|dependency| dependency.signature.as_ref()),
+        ) {
+            collect_declared_runtime_closure_file(
+                &manifest_path,
+                signature,
+                "signature",
+                &mut closure,
+            )?;
+        }
     }
 
     closure.digest()
@@ -1942,6 +1965,7 @@ fn digest_snapshot_file(
     .map_err(CliError::Config)
 }
 
+/// Record a declared file under the logical destination used by snapshot copying.
 fn collect_declared_runtime_closure_file(
     manifest_path: &Path,
     reference: &str,
@@ -1983,16 +2007,7 @@ fn collect_declared_runtime_closure_file(
             closure,
         );
     }
-    let file_name = canonical.file_name().ok_or_else(|| {
-        CliError::Config(format!(
-            "dynamic plugin {label} {} has no file name",
-            canonical.display()
-        ))
-    })?;
-    closure.record_file(
-        Path::new(&format!("external-{label}")).join(file_name),
-        canonical,
-    )
+    closure.record_file(external_snapshot_file_path(&canonical, label), canonical)
 }
 
 fn collect_runtime_closure_directory(
@@ -2546,6 +2561,7 @@ fn hydrate_scoped_registries(
     Ok(touched)
 }
 
+/// Build an inspectable registry record with native API, trust, and policy validation results.
 fn validated_record_from_manifest(
     manifest: DynamicPluginManifest,
     manifest_ref: String,
@@ -2554,6 +2570,11 @@ fn validated_record_from_manifest(
     policy: &EvaluatedDynamicPluginHostPolicy,
     trust: &EvaluatedDynamicPluginTrust,
 ) -> Result<DynamicPluginRecord, CliError> {
+    let native_error = manifest
+        .compat
+        .native_api
+        .as_deref()
+        .and_then(|api| nemo_relay_plugin_host::dynamic::native_api_support(api).err());
     let environment = environment_state(&manifest, state_path, environment_ref.as_deref());
     let compatibility_error = manifest.validate().err();
     let mut record = manifest
@@ -2562,7 +2583,7 @@ fn validated_record_from_manifest(
     record.source.environment_ref = environment_ref;
     record.status.validation = DynamicPluginValidationStatus {
         manifest: DynamicPluginCheckState::Valid,
-        compatibility: if compatibility_error.is_some() {
+        compatibility: if compatibility_error.is_some() || native_error.is_some() {
             DynamicPluginCheckState::Invalid
         } else {
             DynamicPluginCheckState::Valid
@@ -2573,21 +2594,33 @@ fn validated_record_from_manifest(
         policy_satisfied: policy.check_state(),
         checked_at: None,
         message: Some(
-            compatibility_error
+            native_error
+                .as_ref()
+                .or(compatibility_error.as_ref())
                 .map_or_else(|| VALIDATION_MESSAGE.into(), |error| error.to_string()),
         ),
     };
     record.status.startup_class = Some(policy.startup_class);
     record.status.attestation_mode = Some(policy.attestation_mode);
-    record.status.last_error = policy
-        .last_error(&record.metadata.id)
-        .or_else(|| trust.last_error(&record.metadata.id))
+    record.status.last_error = native_error
+        .map(
+            |error| nemo_relay_plugin_host::dynamic::DynamicPluginFailure {
+                phase: nemo_relay_plugin_host::dynamic::DynamicPluginFailurePhase::Validation,
+                code: "native_api_unsupported".into(),
+                message: error.to_string(),
+            },
+        )
         .or_else(|| {
-            environment_last_error(
-                &record.metadata.id,
-                environment,
-                record.source.environment_ref.as_deref(),
-            )
+            policy
+                .last_error(&record.metadata.id)
+                .or_else(|| trust.last_error(&record.metadata.id))
+                .or_else(|| {
+                    environment_last_error(
+                        &record.metadata.id,
+                        environment,
+                        record.source.environment_ref.as_deref(),
+                    )
+                })
         });
     Ok(record)
 }
@@ -2618,6 +2651,7 @@ fn update_registry_policy_status(
         .map_err(|error| CliError::Config(error.to_string()))
 }
 
+/// Refresh stored validation results while retaining unsupported native API failures.
 fn update_registry_validation_status(
     scope: &mut ScopedRegistry,
     plugin_id: &str,
@@ -2631,6 +2665,11 @@ fn update_registry_validation_status(
         .and_then(|record| record.source.environment_ref.as_deref());
     let environment = environment_state(manifest, &scope.state_path, environment_ref);
     let environment_error = environment_last_error(plugin_id, environment, environment_ref);
+    let native_error = manifest
+        .compat
+        .native_api
+        .as_deref()
+        .and_then(|api| nemo_relay_plugin_host::dynamic::native_api_support(api).err());
     let compatibility_error = manifest.validate().err();
     scope
         .registry
@@ -2638,7 +2677,7 @@ fn update_registry_validation_status(
             plugin_id,
             DynamicPluginValidationStatus {
                 manifest: DynamicPluginCheckState::Valid,
-                compatibility: if compatibility_error.is_some() {
+                compatibility: if compatibility_error.is_some() || native_error.is_some() {
                     DynamicPluginCheckState::Invalid
                 } else {
                     DynamicPluginCheckState::Valid
@@ -2649,9 +2688,10 @@ fn update_registry_validation_status(
                 policy_satisfied: policy.check_state(),
                 checked_at: None,
                 message: Some(
-                    compatibility_error
+                    native_error
                         .as_ref()
-                        .map_or_else(|| VALIDATION_MESSAGE.into(), ToString::to_string),
+                        .or(compatibility_error.as_ref())
+                        .map_or_else(|| VALIDATION_MESSAGE.into(), |error| error.to_string()),
                 ),
             },
         )
@@ -2661,8 +2701,13 @@ fn update_registry_validation_status(
         .registry
         .update_last_error(
             plugin_id,
-            policy
-                .last_error(plugin_id)
+            native_error
+                .map(|error| DynamicPluginFailure {
+                    phase: DynamicPluginFailurePhase::Validation,
+                    code: "native_api_unsupported".into(),
+                    message: error.to_string(),
+                })
+                .or_else(|| policy.last_error(plugin_id))
                 .or_else(|| trust.last_error(plugin_id))
                 .or(environment_error),
         )

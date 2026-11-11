@@ -100,8 +100,9 @@ or object shape:
 | Python | `LLMRequestInterceptOutcome` |
 | Rust | `LlmRequestInterceptOutcome` |
 | Node.js | `{ request, annotated?, pendingMarks? }`; JavaScript pending-mark DTOs use `categoryProfile`, while canonical JSON retains `pending_marks` and `category_profile` |
-| Public C and native ABI v2 | One owned or host-owned canonical outcome JSON string, respectively |
-| Rust and Python `grpc-v1` workers | A `JsonEnvelope` with schema `nemo.relay.LlmRequestInterceptOutcome@2` |
+| Public C | An owned canonical outcome JSON string |
+| Native contract `v1.0` | ABI-safe typed JSON containing the canonical outcome fields |
+| Rust and Python workers | The `nvidia.nemo.relay.worker.v1.LlmRequestInterceptOutcome` protobuf message |
 
 The standalone request-intercept helper returns the complete outcome but does
 not emit its pending marks because it does not own an LLM lifecycle.
@@ -121,40 +122,3 @@ subscriber snapshot. It emits the LLM start at `T`, every pending mark at
 earlier than `T + 1µs`. Streaming and non-streaming calls use the same rules.
 Pending marks are never added to the provider request, annotated request,
 codec input, sanitizer input, or start payload.
-
-## Historical 0.6 Migration
-
-This section describes the NeMo Relay 0.6 migration. Relay 0.8 retains the
-`grpc-v1` identifier but replaces the tool-result envelope fields with
-structured protobuf messages. Rebuild workers, regenerate custom protobuf
-bindings, and exclude pre-0.8 Relay versions in `compat.relay`.
-
-This finalizes unpublished native ABI v2 and `grpc-v1` contracts. Rebuild all
-development native plugins and workers against the same NeMo Relay release that
-hosts them. Replace tuple results, split outputs, metadata envelopes, and
-parallel mark-aware registrations with the
-canonical outcome and the existing `register_llm_request_intercept`
-registration name.
-
-The 0.6 annotation expansion changes the request and outcome envelope schemas
-to `nemo.relay.AnnotatedLlmRequest@2` and
-`nemo.relay.LlmRequestInterceptOutcome@2`. Rebuild Rust native plugins and Rust
-`grpc-v1` workers against NeMo Relay 0.6, and update Python workers to the 0.6
-worker SDK. That release required a compatibility range that excluded Relay
-0.5. Relay 0.8 supersedes that historical floor for every dynamic plugin:
-every compatibility range must exclude Relay versions before 0.8. For plugins
-rebuilt with the 1.0.0 SDK, use `compat.relay = ">=1.0.0,<2.0"`. The host
-enforces the current compatibility floor during manifest and registry validation,
-before loading the plugin.
-
-For gateway generation requests, replace code such as
-`request.content["messages"] = ...` with an edit to
-`annotated_request.messages`, then return both the unchanged raw request and the
-edited annotation. Header edits continue to use `request.headers`. An attempt
-to change the raw body while its request codec is active returns an explicit
-error before the provider callback.
-
-Tool execution intercepts have a smaller result-and-marks contract, documented
-in [Tool Execution Intercept Outcomes](/reference/tool-execution-intercept-outcomes).
-Worker authors can trace both envelopes through the [grpc-v1 protocol
-reference](/build-plugins/workers/grpc-v1-protocol).

@@ -200,6 +200,7 @@ fn embedding_activation_loads_verified_bytes_after_source_symlink_swap() {
     verified_native_activation_survives_source_swap(true);
 }
 
+/// Activation must use verified captured bytes even if the original library path changes.
 fn verified_native_activation_survives_source_swap(symlink_swap: bool) {
     use base64::Engine;
     use ring::signature::{Ed25519KeyPair, KeyPair};
@@ -245,7 +246,7 @@ id = "fixture_native"
 kind = "rust_dynamic"
 [compat]
 relay = ">=1.0.0,<2.0"
-native_api = "1"
+native_api = "v1.0"
 [defaults]
 enabled = false
 [capabilities]
@@ -257,7 +258,6 @@ sha256 = "sha256:{digest}"
 signature = "artifact.sig"
 [load]
 library = {library_name:?}
-symbol = "nemo_relay_fixture_native_plugin"
 "#,
             digest = Sha256::digest(&bytes)
                 .iter()
@@ -347,6 +347,7 @@ manifest = {manifest_ref:?}
 
 #[tokio::test]
 #[allow(clippy::await_holding_lock)] // Serializes process-wide host ownership for this test.
+/// An optional component trust failure must leave the rest of the host usable.
 async fn optional_load_time_trust_failure_skips_component_and_preserves_host() {
     use crate::dynamic::{
         DynamicPluginAttestationMode, DynamicPluginHostPolicy, DynamicPluginManifest,
@@ -359,10 +360,7 @@ async fn optional_load_time_trust_failure_skips_component_and_preserves_host() {
     let temp = tempfile::tempdir().unwrap();
     for kind in [DynamicPluginKind::RustDynamic, DynamicPluginKind::Worker] {
         let (compat, load) = if kind == DynamicPluginKind::RustDynamic {
-            (
-                "native_api = \"1\"",
-                "library = \"never-load.so\"\nsymbol = \"never_call\"",
-            )
+            ("native_api = \"v1.0\"", "library = \"never-load.so\"")
         } else {
             (
                 "worker_protocol = \"nvidia.nemo.relay.worker.v1\"",

@@ -388,7 +388,7 @@ kind = "rust_dynamic"
 
 [compat]
 relay = ">=1.0.0,<2.0"
-native_api = "1"
+native_api = "v1.0"
 
 [defaults]
 enabled = false
@@ -404,7 +404,6 @@ sha256 = "sha256:%s"
 
 [load]
 library = %q
-symbol = "nemo_relay_fixture_native_plugin"
 `, library, artifactDigest(t, library), library)
 	if err := os.WriteFile(manifest, []byte(contents), 0o600); err != nil {
 		t.Fatalf("write native plugin manifest: %v", err)

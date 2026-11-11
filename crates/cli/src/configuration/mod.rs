@@ -3,11 +3,13 @@
 
 mod http_model_hosts;
 mod logging;
+mod presets;
 mod runtime_diagnostics;
 pub(crate) use runtime_diagnostics::{PreparedConfig, RuntimeDiagnosticsConfig};
 mod types;
 
 pub(crate) use http_model_hosts::{HttpModelHosts, remote_http};
+pub(crate) use presets::upstream_table_paths;
 pub(crate) use types::*;
 
 use crate::runtime_diagnostics::{self as diag, Operation};
@@ -66,6 +68,7 @@ const TEST_SKIP_IMPLICIT_CONFIG_ENV: &str = "NEMO_RELAY_TEST_SKIP_IMPLICIT_CONFI
 // `GatewayConfig` / `AgentConfigs`; plugin configuration lives in `plugins.toml`.
 #[derive(Debug, Clone, Default, Deserialize)]
 struct FileConfig {
+    daemon: Option<FileDaemonConfig>,
     gateway: Option<FileGatewayConfig>,
     upstream: Option<FileUpstreamConfig>,
     agents: Option<FileAgentsConfig>,
@@ -74,7 +77,7 @@ struct FileConfig {
 }
 
 impl FileConfig {
-    /// Dotted names of keys in `[gateway]`, `[upstream]` and `[agents]` that Relay does not know.
+    /// Dotted names of keys in the daemon, gateway, upstream, and agent sections that Relay does not know.
     fn unknown_keys(&self) -> Vec<String> {
         let mut keys = Vec::new();
         let mut collect = |section: &str, unknown: &BTreeMap<String, toml::Value>| {
@@ -82,6 +85,9 @@ impl FileConfig {
         };
         if let Some(gateway) = &self.gateway {
             collect("gateway", &gateway.unknown);
+        }
+        if let Some(daemon) = &self.daemon {
+            collect("daemon", &daemon.unknown);
         }
         if let Some(upstream) = &self.upstream {
             collect("upstream", &upstream.unknown);
@@ -104,6 +110,19 @@ impl FileConfig {
 
 // Configuration is fail-open: unknown keys in these sections are collected in `unknown` and
 // reported as warnings instead of rejecting the file.
+#[derive(Debug, Clone, Default, Deserialize)]
+struct FileDaemonConfig {
+    worker_idle_timeout_secs: Option<u64>,
+    // Daemon logging is resolved and validated through its existing independent path.
+    #[serde(rename = "logging")]
+    _logging: Option<toml::Value>,
+    // The daemon diagnostics collector has its own startup configuration path.
+    #[serde(rename = "diagnostics")]
+    _diagnostics: Option<toml::Value>,
+    #[serde(flatten)]
+    unknown: BTreeMap<String, toml::Value>,
+}
+
 #[derive(Debug, Clone, Default, Deserialize)]
 struct FileGatewayConfig {
     max_hook_payload_bytes: Option<usize>,
@@ -188,7 +207,7 @@ fn resolve_server_config_inner(args: &GatewayOverrides) -> Result<ResolvedConfig
 
 /// Loads routing settings for the daemon without reading plugin files.
 /// Gateways and daemon workers check the plugins they run.
-pub(crate) fn resolve_daemon_config(args: &GatewayOverrides) -> Result<GatewayConfig, CliError> {
+pub(crate) fn resolve_daemon_config(args: &GatewayOverrides) -> Result<DaemonConfig, CliError> {
     let explicit = args.config.as_ref();
     let paths = config_paths(explicit)
         .into_iter()
@@ -212,7 +231,10 @@ pub(crate) fn resolve_daemon_config(args: &GatewayOverrides) -> Result<GatewayCo
         mode = "daemon";
         "Daemon configuration resolved"
     );
-    Ok(resolved.gateway)
+    Ok(DaemonConfig {
+        gateway: resolved.gateway,
+        worker_idle_timeout_secs: resolved.daemon_worker_idle_timeout_secs,
+    })
 }
 
 /// Layered configuration for a daemon-managed, machine-user worker.
@@ -300,20 +322,14 @@ fn resolve_logging_config_section(
     section: &[&str],
 ) -> Result<LoggingConfig, CliError> {
     let explicit = explicit.map(Path::to_path_buf);
-    let mut merged = toml::Value::Table(toml::map::Map::new());
-    for path in config_paths(explicit.as_ref()) {
-        let required = explicit.as_ref() == Some(&path);
-        let Some(raw) = read_config_file(&path, required, "configuration")? else {
-            continue;
-        };
-        let parsed = raw
-            .parse::<toml::Table>()
-            .map(toml::Value::Table)
-            .map_err(|error| {
-                CliError::Config(format!("invalid TOML in {}: {error}", path.display()))
-            })?;
-        merge_gateway_config_toml(&mut merged, parsed);
-    }
+    let paths = config_paths(explicit.as_ref())
+        .into_iter()
+        .map(|path| {
+            let required = explicit.as_ref() == Some(&path);
+            (path, required)
+        })
+        .collect();
+    let merged = read_shared_documents_for_startup(paths, false)?.merged;
 
     resolve_logging_from_document(&merged, section)
 }
@@ -1712,7 +1728,7 @@ fn read_shared_documents_for_startup(
     config_paths: Vec<(PathBuf, bool)>,
     validate_runtime: bool,
 ) -> Result<PreparedSharedDocument, CliError> {
-    let mut merged = toml::Value::Table(toml::map::Map::new());
+    let mut layers = Vec::new();
     let mut legacy_sources = Vec::new();
     for (path, required) in config_paths {
         let Some(raw) = read_config_file(&path, required, "configuration")? else {
@@ -1748,7 +1764,16 @@ fn read_shared_documents_for_startup(
                 legacy_sources.push(LegacyConfigSource { path, sections });
             }
         }
-        merge_gateway_config_toml(&mut merged, parsed);
+        layers.push(parsed);
+    }
+    let merged = presets::resolve(layers)?;
+    if validate_runtime
+        && (merged.get("plugins").is_some() || !legacy_observability_sections(&merged).is_empty())
+    {
+        return Err(CliError::Config(
+            "configure plugins and observability in plugins.toml with `nemo-relay plugins edit`"
+                .into(),
+        ));
     }
     Ok(PreparedSharedDocument {
         merged,
@@ -1950,6 +1975,24 @@ fn apply_file_config(resolved: &mut ResolvedConfig, value: toml::Value) -> Resul
         resolved.diagnostics = diagnostics;
     }
     apply_file_gateway_config(&mut resolved.gateway, config.gateway)?;
+    if let Some(seconds) = config
+        .daemon
+        .and_then(|daemon| daemon.worker_idle_timeout_secs)
+    {
+        seconds.checked_mul(1_000).ok_or_else(|| {
+            CliError::Config(
+                "daemon.worker_idle_timeout_secs exceeds the supported duration".into(),
+            )
+        })?;
+        std::time::Instant::now()
+            .checked_add(std::time::Duration::from_secs(seconds))
+            .ok_or_else(|| {
+                CliError::Config(
+                    "daemon.worker_idle_timeout_secs exceeds the supported duration".into(),
+                )
+            })?;
+        resolved.daemon_worker_idle_timeout_secs = seconds;
+    }
     apply_file_upstream_config(&mut resolved.gateway, config.upstream)?;
     apply_file_agents_config(&mut resolved.agents, config.agents);
     logging::apply_file_logging_config(&mut resolved.logging, config.logging)?;
@@ -1958,11 +2001,12 @@ fn apply_file_config(resolved: &mut ResolvedConfig, value: toml::Value) -> Resul
 
 /// Checks the shared config shape and returns the unknown keys it would ignore.
 pub(crate) fn validate_shared_config_shape(value: toml::Value) -> Result<Vec<String>, CliError> {
-    Ok(parse_file_config(value)?.unknown_keys())
+    Ok(parse_file_config(presets::validate_layer(value)?)?.unknown_keys())
 }
 
 /// Validate one editor target with runtime rules, without loading other files or credentials.
 pub(crate) fn validate_config_document(value: toml::Value) -> Result<(), CliError> {
+    let value = presets::validate_layer(value)?;
     if value.get("plugins").is_some() || !legacy_observability_sections(&value).is_empty() {
         return Err(CliError::Config(
             "configure plugins and observability in plugins.toml with `nemo-relay plugins edit`"
@@ -1981,7 +2025,7 @@ pub(crate) fn validate_config_document(value: toml::Value) -> Result<(), CliErro
     // their payload, then use the runtime's semantic checks for actionable validation errors.
     validate_shared_config_shape(value.clone()).map_err(|_| {
         CliError::Config(
-            "invalid configuration shape; check field names and types in gateway, upstream, agents, and logging".into(),
+            "invalid configuration shape; check field names and types in daemon, gateway, upstream, agents, and logging".into(),
         )
     })?;
     apply_file_config(&mut ResolvedConfig::default(), value)

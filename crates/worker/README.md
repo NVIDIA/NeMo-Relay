@@ -35,7 +35,7 @@ The SDK provides the following types and helpers:
 
 | Surface | Role |
 |---|---|
-| `WorkerPlugin` | Defines plugin identity, validation, registration, and multiple-component behavior in the worker process. |
+| `Plugin` | Defines plugin identity, validation, registration, and multiple-component behavior in the worker process. |
 | `PluginContext` | Installs typed handlers for all 17 supported registration surfaces. |
 | `PluginRuntime` and continuations | Emit marks, manage scopes, and call the remaining tool or LLM execution chain through the authenticated host service. |
 | `LlmExecutionContext` | Reports the selected request and completed-response codecs and provides codec operations while the callback is active. |
@@ -45,6 +45,12 @@ The SDK provides the following types and helpers:
 This model keeps plugin dependencies and crashes outside the Relay process, while the
 SDK retains the shared runtime contract and manages authentication, cancellation, and
 shutdown.
+
+Workers allow multiple components by default. Each distinct component configuration
+uses its own worker process, runtime capabilities, and callback state. Components
+with the same configuration share an activation. Closing the plugin host stops all
+of these workers. Override `allows_multiple_components()` to return `false` when
+only one component should use the plugin kind.
 
 ## Propagating Continuation Errors
 
@@ -86,23 +92,37 @@ Refer to [execution message limits](https://docs.nvidia.com/nemo/relay/build-plu
 Implement a worker and serve it from an async entrypoint:
 
 ```rust
-use nemo_relay_worker::{Json, PluginContext, Result, WorkerPlugin, serve_plugin};
+use nemo_relay_worker::{Json, Map, Plugin, PluginContext, Result, serve_plugin};
 
 struct ExampleWorker;
 
-impl WorkerPlugin for ExampleWorker {
-    fn plugin_id(&self) -> &str {
+impl Plugin for ExampleWorker {
+    fn plugin_kind(&self) -> &str {
         "example.worker"
     }
+    fn allows_multiple_components(&self) -> bool {
+        false
+    }
 
-    fn register(&self, ctx: &mut PluginContext, _config: &Json) -> Result<()> {
-        ctx.register_tool_request_intercept("tag-request", 0, false, |_name, mut args| async move {
-            if let Some(object) = args.as_object_mut() {
-                object.insert("checked".into(), true.into());
-            }
-            Ok(args)
-        });
-        Ok(())
+    fn register<'a>(
+        &'a self,
+        _config: &'a Map<String, Json>,
+        ctx: &'a mut PluginContext,
+    ) -> nemo_relay_worker::PluginFuture<'a, ()> {
+        Box::pin(async move {
+            ctx.register_tool_request_intercept(
+                "tag-request",
+                0,
+                false,
+                |_name, mut args| async move {
+                    if let Some(object) = args.as_object_mut() {
+                        object.insert("checked".into(), true.into());
+                    }
+                    Ok(args)
+                },
+            );
+            Ok(())
+        })
     }
 }
 
