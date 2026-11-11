@@ -74,8 +74,8 @@ pub(crate) enum NormalizedEvent {
     TurnStarted(SessionEvent),
     /// Conversation-turn boundary that the gateway uses to snapshot ATIF without closing the
     /// agent scope. Emitted alongside `LlmHint` for `Stop` hooks (Claude/Codex).
-    /// Required for Codex transparent runs because Codex has no reliable `SessionEnd`-equivalent
-    /// event — the last `Stop` of the session leaves an up-to-date ATIF on disk. Multi-turn
+    /// Codex also sends `Interrupt` instead of `Stop` for an interrupted turn, which closes as an
+    /// error; each turn end leaves an up-to-date ATIF on disk. Multi-turn
     /// sessions write progressively complete trajectories; the underlying `AtifExporter::export()`
     /// is non-destructive so each snapshot is a cumulative superset of prior writes.
     TurnEnded(SessionEvent),

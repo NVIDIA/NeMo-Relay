@@ -305,11 +305,14 @@ pub(crate) fn command_hook_hash(
                 "generated Codex {event_key} hook command was missing"
             ))
         })?;
-    let timeout = handler
-        .get("timeout")
-        .and_then(Value::as_u64)
-        .unwrap_or(600)
-        .max(1);
+    // Codex normalizes teardown hooks to a 1-second default and a 3-second cap before hashing.
+    let teardown = matches!(event_key, "session_end" | "interrupt");
+    let configured = handler.get("timeout").and_then(Value::as_u64);
+    let timeout = if teardown {
+        configured.unwrap_or(1).clamp(1, 3)
+    } else {
+        configured.unwrap_or(600).max(1)
+    };
     let mut normalized_handler = serde_json::Map::new();
     normalized_handler.insert("type".into(), Value::String("command".into()));
     normalized_handler.insert("command".into(), Value::String(command.into()));
@@ -374,10 +377,12 @@ pub(crate) fn hook_groups_toml(value: &Value) -> String {
             .map(|matcher| format!("matcher={},", toml_string(matcher)))
             .unwrap_or_default();
         let command = group["hooks"][0]["command"].as_str().unwrap_or_default();
+        let timeout = group["hooks"][0]["timeout"]
+            .as_u64()
+            .unwrap_or(crate::hooks::HOOK_FORWARD_TIMEOUT.as_secs());
         groups.push(format!(
-            "{{{matcher}hooks=[{{type=\"command\",command={},timeout={}}}]}}",
+            "{{{matcher}hooks=[{{type=\"command\",command={},timeout={timeout}}}]}}",
             toml_string(command),
-            crate::hooks::HOOK_FORWARD_TIMEOUT.as_secs()
         ));
     }
     format!("[{}]", groups.join(","))

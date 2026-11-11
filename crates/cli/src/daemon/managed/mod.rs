@@ -53,8 +53,9 @@ const PI_ARTIFACT_PATHS: &[&str] = &[
     "pi/extension-v1/tsconfig.json",
 ];
 
-// Part of the v1 artifact family. The 0.11 Claude StopFailure addition intentionally changes
-// its canonical bytes. Validation rejects older Claude bundles; refresh never rewrites them.
+// Part of the v1 artifact family. The 0.11 Claude StopFailure and the Codex SessionEnd and
+// Interrupt additions intentionally change canonical bytes. Validation rejects older bundles;
+// refresh never rewrites them.
 const CODEX_HOOK_EVENTS: &[&str] = &[
     "SessionStart",
     "UserPromptSubmit",
@@ -63,8 +64,10 @@ const CODEX_HOOK_EVENTS: &[&str] = &[
     "SubagentStart",
     "SubagentStop",
     "Stop",
+    "Interrupt",
     "PreCompact",
     "PostCompact",
+    "SessionEnd",
 ];
 const CLAUDE_HOOK_EVENTS: &[&str] = &[
     "SessionStart",
@@ -646,6 +649,13 @@ fn plugin_manifest(agent: &str) -> Value {
     })
 }
 
+fn hook_timeout_secs(agent: ManagedAgent, event: &str) -> u64 {
+    match agent {
+        ManagedAgent::Codex => crate::agents::CodingAgent::Codex.hook_timeout_secs(event),
+        _ => crate::hooks::HOOK_FORWARD_TIMEOUT.as_secs(),
+    }
+}
+
 fn hook_bytes(
     agent: ManagedAgent,
     events: &[&str],
@@ -670,7 +680,7 @@ fn hook_bytes(
             };
             group.insert(
                 "hooks".into(),
-                json!([{ "type": "command", "command": command, "timeout": crate::hooks::HOOK_FORWARD_TIMEOUT.as_secs() }]),
+                json!([{ "type": "command", "command": command, "timeout": hook_timeout_secs(agent, event) }]),
             );
             (
                 (*event).to_string(),

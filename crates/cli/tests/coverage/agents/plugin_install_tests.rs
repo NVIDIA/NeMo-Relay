@@ -333,16 +333,16 @@ fn codex_plugin_requires_version_with_complete_hook_support() {
     let normal = options(dir.path());
     let supported = MockRunner::default()
         .with_executable("codex", "/bin/codex")
-        .with_capture_output("/bin/codex --version", "codex-cli 0.143.0\n");
+        .with_capture_output("/bin/codex --version", "codex-cli 0.150.0\n");
     validate_host_version(CodingAgent::Codex, &normal, &supported).unwrap();
 
     let old = MockRunner::default()
         .with_executable("codex", "/bin/codex")
-        .with_capture_output("/bin/codex --version", "codex-cli 0.142.9\n");
+        .with_capture_output("/bin/codex --version", "codex-cli 0.149.1\n");
     assert!(
         validate_host_version(CodingAgent::Codex, &normal, &old)
             .unwrap_err()
-            .contains("requires codex-cli 0.143.0")
+            .contains("requires codex-cli 0.150.0")
     );
 
     let invalid = MockRunner::default()
@@ -356,11 +356,11 @@ fn codex_plugin_requires_version_with_complete_hook_support() {
 
     let prerelease = MockRunner::default()
         .with_executable("codex", "/bin/codex")
-        .with_capture_output("/bin/codex --version", "codex-cli 0.143.0-alpha.1\n");
+        .with_capture_output("/bin/codex --version", "codex-cli 0.150.0-alpha.1\n");
     assert!(
         validate_host_version(CodingAgent::Codex, &normal, &prerelease)
             .unwrap_err()
-            .contains("codex-cli 0.143.0-alpha.1 is unsupported")
+            .contains("codex-cli 0.150.0-alpha.1 is unsupported")
     );
 
     for malformed in [
@@ -785,7 +785,7 @@ impl CommandRunner for MockRunner {
             .cloned()
             .unwrap_or_else(|| {
                 if rendered.ends_with("codex --version") {
-                    CommandOutput::success("codex-cli 0.143.0\n".into())
+                    CommandOutput::success("codex-cli 0.150.0\n".into())
                 } else if rendered.ends_with("claude --version") {
                     CommandOutput::success("2.1.121 (Claude Code)\n".into())
                 } else if rendered.ends_with("claude plugin list --json")
@@ -6345,7 +6345,7 @@ fn doctor_uses_plugin_root_persisted_in_install_state() {
 #[test]
 fn codex_doctor_reports_upgrade_remediation_for_old_and_malformed_versions() {
     for (version_output, expected_detail) in [
-        ("codex-cli 0.142.9\n", "requires codex-cli 0.143.0"),
+        ("codex-cli 0.149.1\n", "requires codex-cli 0.150.0"),
         ("codex nightly\n", "could not parse"),
     ] {
         let dir = tempdir().unwrap();
@@ -6377,14 +6377,14 @@ fn codex_doctor_reports_upgrade_remediation_for_old_and_malformed_versions() {
         assert_eq!(
             report["remediation"],
             json!(
-                "upgrade to codex-cli 0.143.0 or newer, then run `nemo-relay install codex --force`"
+                "upgrade to codex-cli 0.150.0 or newer, then run `nemo-relay install codex --force`"
             )
         );
 
         let text_error =
             doctor_host(CodingAgent::Codex, &options, &runner, &setup_runner).unwrap_err();
         assert!(text_error.contains("remediation: upgrade to codex-cli"));
-        assert!(text_error.contains("codex-cli 0.143.0 or newer"));
+        assert!(text_error.contains("codex-cli 0.150.0 or newer"));
     }
 }
 
