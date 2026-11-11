@@ -351,6 +351,8 @@ pub(crate) async fn run_request_intercepts_with_codec_and_recorder(
     .await
 }
 
+/// Decode the request, run enabled intercepts, and rebuild the provider request.
+/// Codecs and session headers also run when request intercepts are disabled.
 async fn run_request_intercepts_with_codec_inner(
     name: &str,
     request: LlmRequest,

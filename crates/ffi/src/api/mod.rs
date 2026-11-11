@@ -58,6 +58,7 @@ pub const NEMO_RELAY_SKIP_REQUEST_INTERCEPTS: u32 = 2;
 /// Skip execution intercepts for one managed call (stream intercepts for streams).
 pub const NEMO_RELAY_SKIP_EXECUTION_INTERCEPTS: u32 = 4;
 
+/// Convert known skip flags to stage options. Reject flags that this API does not support.
 fn execution_options(
     skip_stages: u32,
 ) -> Result<nemo_relay_runtime::api::execution::ExecutionOptions, NemoRelayStatus> {

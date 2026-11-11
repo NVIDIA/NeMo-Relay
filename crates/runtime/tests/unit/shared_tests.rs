@@ -371,6 +371,7 @@ async fn test_run_request_intercepts_with_codec_none_and_codec_paths() {
     reset_global();
 }
 
+/// Check that managed calls record contributions and standalone calls return them.
 #[tokio::test]
 #[allow(clippy::await_holding_lock)] // Serializes access to global runtime state.
 async fn managed_request_chain_records_contributions_incrementally_while_standalone_retains_them() {
@@ -729,6 +730,7 @@ async fn request_encoding_reuses_the_original_decoded_baseline() {
     reset_global();
 }
 
+/// Check that skipping intercepts preserves codec output and session headers.
 #[tokio::test]
 #[allow(clippy::await_holding_lock)]
 async fn disabled_request_intercepts_keep_codecs_and_session_headers() {

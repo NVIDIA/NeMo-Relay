@@ -135,6 +135,7 @@ fn tool_call_execute_adds_otel_status_metadata_to_end_events() {
     );
 }
 
+/// Check stage order, result annotations, and lifecycle events for all tool option combinations.
 #[test]
 fn execution_options_select_stages_and_preserve_results_and_lifecycle() {
     use crate::api::execution::ExecutionOptions;

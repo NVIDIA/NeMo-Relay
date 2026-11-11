@@ -2139,6 +2139,7 @@ func TestLlmExecutionPanicReturnsErrorAndRuntimeStaysUsable(t *testing.T) {
 	}
 }
 
+// TestLLMExecutionOptions checks bypass for regular and streaming LLM calls.
 func TestLLMExecutionOptions(t *testing.T) {
 	reason := "blocked"
 	if err := RegisterLlmConditionalExecutionGuardrail("options-block", 0,

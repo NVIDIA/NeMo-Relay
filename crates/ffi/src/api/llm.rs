@@ -436,6 +436,7 @@ fn parse_optional_model_name(model_name: *const c_char) -> Result<Option<String>
     }
 }
 
+/// Parse LLM call inputs while keeping ownership of the request codec.
 fn parse_execute_inputs(raw: RawExecuteInputs) -> Result<ParsedExecuteInputs, NemoRelayStatus> {
     let name = c_str_to_string(raw.name)?;
     let request = parse_llm_request(raw.native_json)?;

@@ -15,6 +15,7 @@ from nemo_relay import ExecutionOptions, ToolExecutionResult, guardrails, interc
 @pytest.mark.parametrize("conditional,requests,execution", product((False, True), repeat=3))
 @pytest.mark.parametrize("kind", ["tool", "llm", "stream", "typed_tool", "typed_llm", "typed_stream"])
 async def test_execution_stage_combinations(conditional, requests, execution, kind, subscribed_events):
+    """Check stage order, results, and events through public and typed wrappers."""
     calls = []
     is_tool = kind.endswith("tool")
     name = "stage-options"
@@ -24,12 +25,14 @@ async def test_execution_stage_combinations(conditional, requests, execution, ki
         return None
 
     def rewrite(*args):
+        """Return changed inputs so the test can detect whether this stage ran."""
         calls.append("request")
         if is_tool:
             return {"rewritten": True}
         return relay.LLMRequestInterceptOutcome(relay.LLMRequest({}, {"rewritten": True}), None)
 
     async def wrap(*args):
+        """Record the execution stage and call the next handler."""
         calls.append("execution")
         if is_tool:
             context, next_call = args
@@ -124,6 +127,7 @@ async def test_execution_stage_combinations(conditional, requests, execution, ki
 
 
 async def test_options_do_not_inherit_into_nested_or_concurrent_calls():
+    """Keep each call's stage options separate from other calls."""
     intercepts.register_tool_request("options-isolation", 0, False, lambda name, args: {"intercepted": True})
     try:
 
@@ -148,6 +152,7 @@ async def test_options_do_not_inherit_into_nested_or_concurrent_calls():
 
 
 async def test_conditional_bypass_is_explicit_and_options_are_immutable():
+    """Require an explicit option to skip checks and reject later option changes."""
     options = ExecutionOptions(conditional_execution=False)
     with pytest.raises(AttributeError):
         setattr(options, "conditional_execution", True)
@@ -162,6 +167,7 @@ async def test_conditional_bypass_is_explicit_and_options_are_immutable():
 
 
 async def test_skipping_stages_preserves_sanitization_and_failure_completion(subscribed_events):
+    """Keep event sanitization and failure completion active when stages are off."""
     options = ExecutionOptions(conditional_execution=False, request_intercepts=False, execution_intercepts=False)
     guardrails.register_tool_sanitize_request("options-sanitize", 0, lambda name, args: {"redacted": True})
     try:
@@ -181,6 +187,7 @@ async def test_skipping_stages_preserves_sanitization_and_failure_completion(sub
 
 
 async def test_skipping_stream_intercepts_preserves_early_close(subscribed_events):
+    """Close the provider and its event span when the caller stops reading."""
     closed = asyncio.Event()
     chunks = []
 

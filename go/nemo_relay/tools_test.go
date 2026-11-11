@@ -1292,6 +1292,7 @@ func TestToolEventInputOutput(t *testing.T) {
 	}
 }
 
+// TestToolExecutionOptions checks explicit bypass and rejects options on manual calls.
 func TestToolExecutionOptions(t *testing.T) {
 	if err := RegisterToolRequestIntercept("options-request", 0, false,
 		func(string, json.RawMessage) json.RawMessage { panic("skipped request intercept ran") }); err != nil {

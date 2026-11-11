@@ -1175,6 +1175,7 @@ type ExecutionOptions struct {
 	SkipExecutionIntercepts  bool
 }
 
+// skipStages converts the selected stages to the C API skip flags.
 func (o ExecutionOptions) skipStages() C.uint32_t {
 	var stages C.uint32_t
 	if o.SkipConditionalExecution {
