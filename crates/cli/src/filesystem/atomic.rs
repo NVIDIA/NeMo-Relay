@@ -579,6 +579,105 @@ fn windows_handle_is_private(handle: windows_sys::Win32::Foundation::HANDLE) -> 
     result
 }
 
+/// Checks the security descriptor of the opened object, following any resolved file links.
+#[cfg(windows)]
+pub(crate) fn windows_file_is_administrator_controlled(file: &File) -> io::Result<bool> {
+    use std::os::windows::io::AsRawHandle;
+    use windows_sys::Win32::Foundation::{ERROR_SUCCESS, GENERIC_ALL, GENERIC_WRITE, LocalFree};
+    use windows_sys::Win32::Security::Authorization::{GetSecurityInfo, SE_FILE_OBJECT};
+    use windows_sys::Win32::Security::{
+        ACCESS_ALLOWED_ACE, ACE_HEADER, DACL_SECURITY_INFORMATION, EqualSid, GetAce,
+        INHERIT_ONLY_ACE, IsWellKnownSid, OWNER_SECURITY_INFORMATION, PSECURITY_DESCRIPTOR,
+        WinBuiltinAdministratorsSid, WinLocalSystemSid,
+    };
+    use windows_sys::Win32::Storage::FileSystem::{
+        DELETE, FILE_APPEND_DATA, FILE_DELETE_CHILD, FILE_WRITE_ATTRIBUTES, FILE_WRITE_DATA,
+        FILE_WRITE_EA, WRITE_DAC, WRITE_OWNER,
+    };
+
+    let mut owner = std::ptr::null_mut();
+    let mut dacl = std::ptr::null_mut();
+    let mut descriptor: PSECURITY_DESCRIPTOR = std::ptr::null_mut();
+    // SAFETY: The File owns a live handle and the output pointers are writable.
+    let status = unsafe {
+        GetSecurityInfo(
+            file.as_raw_handle(),
+            SE_FILE_OBJECT,
+            OWNER_SECURITY_INFORMATION | DACL_SECURITY_INFORMATION,
+            &mut owner,
+            std::ptr::null_mut(),
+            &mut dacl,
+            std::ptr::null_mut(),
+            &mut descriptor,
+        )
+    };
+    if status != ERROR_SUCCESS {
+        return Err(io::Error::from_raw_os_error(status as i32));
+    }
+    let result = with_current_windows_user_sid(|user| {
+        let trusted = |sid| {
+            // SAFETY: Owner and ACE SIDs belong to the live security descriptor; user is live
+            // throughout this callback. Null owner SIDs are rejected before reaching here.
+            unsafe {
+                EqualSid(sid, user) != 0
+                    || IsWellKnownSid(sid, WinBuiltinAdministratorsSid) != 0
+                    || IsWellKnownSid(sid, WinLocalSystemSid) != 0
+            }
+        };
+        // A null DACL grants everyone full access. The owner can replace the DACL.
+        if owner.is_null() || dacl.is_null() || !trusted(owner) {
+            return Ok(false);
+        }
+        let write_access = GENERIC_ALL
+            | GENERIC_WRITE
+            | DELETE
+            | WRITE_DAC
+            | WRITE_OWNER
+            | FILE_WRITE_DATA
+            | FILE_APPEND_DATA
+            | FILE_WRITE_EA
+            | FILE_WRITE_ATTRIBUTES
+            | FILE_DELETE_CHILD;
+        // SAFETY: GetSecurityInfo returned a valid ACL backed by descriptor.
+        for index in 0..u32::from(unsafe { (*dacl).AceCount }) {
+            let mut ace = std::ptr::null_mut();
+            // SAFETY: The ACL is live and ace is a writable output pointer.
+            if unsafe { GetAce(dacl, index, &mut ace) } == 0 {
+                return Err(io::Error::last_os_error());
+            }
+            // SAFETY: GetAce returned a valid ACE, whose common prefix is ACE_HEADER.
+            let header = unsafe { &*ace.cast::<ACE_HEADER>() };
+            if u32::from(header.AceFlags) & INHERIT_ONLY_ACE != 0 {
+                continue;
+            }
+            match header.AceType {
+                // ACCESS_DENIED_ACE_TYPE cannot grant write access.
+                1 => continue,
+                // ACCESS_ALLOWED_ACE_TYPE has a mask followed by its trustee SID.
+                0 => {
+                    let allowed = ace.cast::<ACCESS_ALLOWED_ACE>();
+                    // SAFETY: This ACE type has the ACCESS_ALLOWED_ACE layout and a valid SID.
+                    let (mask, sid) = unsafe {
+                        (
+                            (*allowed).Mask,
+                            std::ptr::addr_of_mut!((*allowed).SidStart).cast(),
+                        )
+                    };
+                    if mask & write_access != 0 && !trusted(sid) {
+                        return Ok(false);
+                    }
+                }
+                // Fail closed for conditional or object-specific grants we cannot establish.
+                _ => return Ok(false),
+            }
+        }
+        Ok(true)
+    });
+    // SAFETY: GetSecurityInfo allocated descriptor for the caller, including on validation errors.
+    unsafe { LocalFree(descriptor.cast()) };
+    result
+}
+
 #[cfg(windows)]
 fn windows_dacl_sddl(
     descriptor: windows_sys::Win32::Security::PSECURITY_DESCRIPTOR,

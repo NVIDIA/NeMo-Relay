@@ -47,7 +47,8 @@ fn bounded_reader_rejects_missing_nonregular_and_oversized_files() {
 
 #[cfg(unix)]
 #[test]
-fn bounded_reader_rejects_symlinks_without_following_them() {
+/// Applies regular-file and byte-budget checks to symlink targets.
+fn bounded_reader_follows_symlinks_and_checks_the_target() {
     use std::os::unix::fs::symlink;
 
     let temp = tempfile::tempdir().unwrap();
@@ -56,6 +57,18 @@ fn bounded_reader_rejects_symlinks_without_following_them() {
     fs::write(&target, b"secret").unwrap();
     symlink(&target, &link).unwrap();
 
+    assert_eq!(
+        read_bounded_regular_file(&link, "fixture").unwrap(),
+        b"secret"
+    );
+    let error = read_regular_file_with_limit(&link, "fixture", 5).unwrap_err();
+    assert!(error.contains("exceeds the 5-byte limit"), "{error}");
+
+    fs::remove_file(&target).unwrap();
+    let error = read_bounded_regular_file(&link, "fixture").unwrap_err();
+    assert!(error.contains("failed to inspect"), "{error}");
+
+    fs::create_dir(&target).unwrap();
     let error = read_bounded_regular_file(&link, "fixture").unwrap_err();
     assert!(error.contains("must be a regular file"), "{error}");
 }
