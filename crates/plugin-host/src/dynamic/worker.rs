@@ -1509,6 +1509,7 @@ fn minimize_worker_environment(command: &mut Command, forward_env: &[String]) {
     }
 }
 
+/// Resolves the interpreter beneath the lifecycle-managed path for the requested plugin ID.
 fn resolve_python_executable(
     plugin_id: &str,
     environment_ref: Option<&str>,
@@ -1535,14 +1536,6 @@ fn resolve_python_executable(
     if !is_managed_path {
         return Err(PluginError::InvalidConfig(format!(
             "Python worker environment_ref '{}' is not the lifecycle-managed path for plugin '{plugin_id}'",
-            environment.display()
-        )));
-    }
-    if std::fs::symlink_metadata(environment)
-        .is_ok_and(|metadata| metadata.file_type().is_symlink())
-    {
-        return Err(PluginError::InvalidConfig(format!(
-            "Python worker environment_ref '{}' must not be a symbolic link",
             environment.display()
         )));
     }

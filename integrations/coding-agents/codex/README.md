@@ -13,7 +13,7 @@ supported only when they run locally and honor the same hook/plugin config and
 provider routing. Cloud or remote Codex tasks are partial or unsupported for
 local gateway LLM capture.
 
-Install `codex-cli` 0.143.0 or newer. This version includes the lifecycle-hook
+Install `codex-cli` 0.150.0 or newer. This version includes the lifecycle-hook
 set, plugin app-server metadata, `features.hooks`, and provider alias surfaces
 that the installer requires.
 
@@ -32,17 +32,18 @@ The package contains these files:
 
 ## Captured Events
 
-With `codex-cli >= 0.143.0`, persistent installation requires `SessionStart`,
+With `codex-cli >= 0.150.0`, persistent installation requires `SessionStart`,
 `UserPromptSubmit`, `PreToolUse`, `PostToolUse`,
-`SubagentStart`, `SubagentStop`, `Stop`, `PreCompact`, and `PostCompact`. Relay
+`SubagentStart`, `SubagentStop`, `Stop`, `PreCompact`, `PostCompact`,
+`SessionEnd`, and `Interrupt`. Relay
 requires exactly one enabled and trusted app-server handler for every generated
 event and forwards delivered hooks as scope, tool, mark, or private LLM
 correlation events. Relay does not generate `PermissionRequest`,
-`PostToolUseFailure`, `Notification`, or `SessionEnd` handlers.
+`PostToolUseFailure`, or `Notification` handlers.
 
 Each delivered `Stop` closes the active turn and writes a cumulative ATIF
-snapshot. Because the plugin schema does not expose `SessionEnd`, the final
-`Stop` is the final session snapshot.
+snapshot. `Interrupt` closes an interrupted turn with an error status, since
+Codex sends no `Stop` for it, and `SessionEnd` ends the session.
 
 Transparent setup injects hooks with CLI config overrides. Persistent setup
 writes `features.hooks = true` in `.codex/config.toml`, configures the
@@ -54,7 +55,7 @@ Persistent installation opens the stable Codex app-server interface and
 selects only hooks whose source is `plugin`, plugin ID is
 `nemo-relay-plugin@nemo-relay-local`, and command exactly matches the generated
 canonical Relay forwarding command. It requires exactly one handler for each
-event in the complete nine-event Relay-generated set listed above.
+event in the complete Relay-generated set listed above.
 
 Unrelated user, project, and plugin hooks are never trusted. If installation
 fails after a trust write, it restores every targeted hook's prior trusted,

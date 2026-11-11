@@ -86,6 +86,8 @@ fn v1_render_is_deterministic_and_contains_only_deployment_constants() {
     assert!(codex_settings.contains(ROUTE_TOKEN_ENV));
     assert!(!codex_settings.contains(&credential()));
 
+    assert_codex_end_hooks(&first);
+
     for artifact in first
         .artifacts
         .iter()
@@ -126,6 +128,24 @@ fn managed_claude_bundle_enables_hints_and_preserves_turn_end_hooks() {
         claude_settings["env"]["CLAUDE_CODE_GATEWAY_HINT_HEADERS"],
         "1"
     );
+}
+
+// Managed Codex installs must close interrupted turns and ended sessions like CLI installs.
+fn assert_codex_end_hooks(bundle: &RenderedBundle) {
+    let codex_hooks = bundle
+        .artifacts
+        .iter()
+        .find(|artifact| artifact.path == "codex/plugin-v1/hooks/hooks.json")
+        .unwrap();
+    let codex_hooks: serde_json::Value = serde_json::from_slice(&codex_hooks.bytes).unwrap();
+    for event in ["SessionEnd", "Interrupt"] {
+        // Codex caps these two at 3 seconds and warns about anything longer.
+        assert_eq!(
+            codex_hooks["hooks"][event][0]["hooks"][0]["timeout"].as_u64(),
+            Some(3),
+            "missing or uncapped {event}"
+        );
+    }
 }
 
 fn assert_pi_bundle_artifacts(bundle: &RenderedBundle) {
@@ -304,7 +324,7 @@ fn v1_artifact_bytes_do_not_depend_on_binary_or_platform_versioning() {
 fn canonical_v1_bundle_matches_the_golden_digest() {
     // This digest pins the v1 manifest and every artifact byte for a canonical deployment,
     // including the supported hook set. Update it only for intentional bundle changes.
-    const GOLDEN_SHA256: &str = "1d335e66375019e013de30002886bea219a97bde3eb20a20a758b6c5a1de200f";
+    const GOLDEN_SHA256: &str = "efad197e507325c5cb825a5ce62828cb910f716ea3399de02f0956095ca9787c";
     let rendered = render_bundle(&spec([
         ManagedAgent::Codex,
         ManagedAgent::ClaudeCode,
@@ -622,7 +642,8 @@ fn doctor_rejects_missing_oversized_and_non_file_artifacts() {
 
 #[cfg(unix)]
 #[test]
-fn doctor_rejects_symlinked_manifest_and_nested_artifact() {
+/// Accepts linked bundle files while rejecting changes to their target bytes.
+fn doctor_accepts_symlinked_manifest_and_nested_artifact_and_checks_target_bytes() {
     let directory = tempdir().unwrap();
     let token = credential();
     let _environment = EnvScope::set(&[(ROUTE_TOKEN_ENV, Some(OsStr::new(&token)))]);
@@ -636,8 +657,10 @@ fn doctor_rejects_symlinked_manifest_and_nested_artifact() {
             .join(format!("{}.original", relative.replace('/', "-")));
         std::fs::rename(&target, &original).unwrap();
         std::os::unix::fs::symlink(&original, &target).unwrap();
-        let error = refresh_bundle(&root, &digest).unwrap_err().to_string();
-        assert!(error.contains("symlink"), "{relative}: {error}");
+        refresh_bundle(&root, &digest).unwrap();
+        std::fs::remove_file(&original).unwrap();
+        std::fs::write(&original, b"tampered").unwrap();
+        assert!(refresh_bundle(&root, &digest).is_err(), "{relative}");
     }
 }
 
@@ -658,18 +681,20 @@ fn pi_placeholder_replacement_requires_exactly_one_json_string() {
 
 #[cfg(unix)]
 #[test]
-fn doctor_rejects_a_symlinked_bundle_root() {
+/// Validates a managed bundle through linked root and nested directories.
+fn doctor_accepts_a_symlinked_bundle_root_and_nested_directory() {
     let directory = tempdir().unwrap();
     let root = directory.path().join("bundle");
     let alias = directory.path().join("bundle-alias");
     let digest = write_new_bundle(&root, &spec([ManagedAgent::Pi])).unwrap();
+    let token = credential();
+    let _environment = EnvScope::set(&[(ROUTE_TOKEN_ENV, Some(OsStr::new(&token)))]);
+    let original = directory.path().join("pi-original");
+    std::fs::rename(root.join("pi"), &original).unwrap();
+    std::os::unix::fs::symlink(&original, root.join("pi")).unwrap();
     std::os::unix::fs::symlink(&root, &alias).unwrap();
 
-    let error = refresh_bundle(&alias, &digest).unwrap_err().to_string();
-    assert!(
-        error.contains("must be a directory, not a symlink"),
-        "{error}"
-    );
+    refresh_bundle(&alias, &digest).unwrap();
 }
 
 #[test]
@@ -820,6 +845,7 @@ fn managed_bundle_rejects_invalid_manifest_family_and_artifact_capacity() {
 }
 
 #[test]
+/// Preserves create-only writes, bounded reads, and the bundle entry budget.
 fn managed_file_helpers_reject_overwrite_oversize_and_excessive_entries() {
     let directory = tempdir().unwrap();
     let file = directory.path().join("artifact");
@@ -828,11 +854,49 @@ fn managed_file_helpers_reject_overwrite_oversize_and_excessive_entries() {
     assert_eq!(read_bounded(&file, 5).unwrap(), b"first");
     assert!(read_bounded(&file, 4).is_err());
     assert!(read_bounded(&directory.path().join("missing"), 4).is_err());
+    assert!(read_bounded(directory.path(), 4).is_err());
 
     let root = directory.path().join("bundle");
     std::fs::create_dir(&root).unwrap();
     for index in 0..=(MAX_ARTIFACTS * 4) {
         std::fs::create_dir(root.join(format!("empty-{index}"))).unwrap();
     }
-    assert!(bundle_files(&root).is_err());
+    let error = bundle_files(&root).unwrap_err().to_string();
+    assert!(error.contains("too many filesystem entries"), "{error}");
+}
+
+#[cfg(unix)]
+#[test]
+/// Distinguishes ancestor cycles from harmless aliases to sibling directories.
+fn managed_bundle_reports_directory_symlink_cycles_but_accepts_sibling_aliases() {
+    use std::os::unix::fs::symlink;
+
+    let directory = tempdir().unwrap();
+    let root = directory.path().join("bundle");
+    let nested = root.join("nested");
+    std::fs::create_dir_all(&nested).unwrap();
+    let link = nested.join("back-to-root");
+    symlink(&root, &link).unwrap();
+    let error = bundle_files(&root).unwrap_err().to_string();
+    assert!(error.contains("directory symlink cycle"), "{error}");
+    assert!(error.contains(&link.display().to_string()), "{error}");
+
+    std::fs::remove_file(link).unwrap();
+    symlink(&nested, root.join("sibling-alias")).unwrap();
+    assert!(bundle_files(&root).unwrap().is_empty());
+}
+
+#[cfg(unix)]
+#[test]
+/// Rejects a FIFO before attempting a blocking managed-artifact read.
+fn managed_file_reader_rejects_a_fifo_without_waiting_for_a_writer() {
+    use std::os::unix::ffi::OsStrExt;
+
+    let directory = tempdir().unwrap();
+    let fifo = directory.path().join("artifact");
+    let name = std::ffi::CString::new(fifo.as_os_str().as_bytes()).unwrap();
+    // SAFETY: name is a valid NUL-terminated path; mode contains only permission bits.
+    assert_eq!(unsafe { libc::mkfifo(name.as_ptr(), 0o600) }, 0);
+    let error = read_bounded(&fifo, 1024).unwrap_err().to_string();
+    assert!(error.contains("must be a regular file"), "{error}");
 }

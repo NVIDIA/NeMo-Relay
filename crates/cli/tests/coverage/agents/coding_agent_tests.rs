@@ -20,7 +20,7 @@ fn agent_descriptors_are_complete_and_unique() {
     assert_eq!(CodingAgent::ClaudeCode.label(), "Claude Code");
     assert_eq!(CodingAgent::Codex.label(), "Codex");
     assert_eq!(CodingAgent::ClaudeCode.hook_events().len(), 14);
-    assert_eq!(CodingAgent::Codex.hook_events().len(), 9);
+    assert_eq!(CodingAgent::Codex.hook_events().len(), 11);
     assert_eq!(CodingAgent::Pi.label(), "pi");
     assert_eq!(CodingAgent::Pi.hook_events().len(), 15);
     for agent in CodingAgent::ALL {
@@ -41,7 +41,7 @@ fn agent_descriptors_are_complete_and_unique() {
 fn centralized_minimum_versions_accept_stable_boundaries() {
     let cases = [
         (CodingAgent::ClaudeCode, "2.1.121 (Claude Code)"),
-        (CodingAgent::Codex, "codex-cli 0.143.0"),
+        (CodingAgent::Codex, "codex-cli 0.150.0"),
         // pi prints the bare version and nothing else, so there is no product token to match --
         // an accept path neither of the others exercises.
         (CodingAgent::Pi, "0.84.0"),
@@ -101,8 +101,8 @@ fn centralized_minimum_versions_reject_old_prerelease_and_malformed_output() {
         (CodingAgent::ClaudeCode, "2.1.120 (Claude Code)"),
         (CodingAgent::ClaudeCode, "2.1.121-beta.1 (Claude Code)"),
         (CodingAgent::ClaudeCode, "2.1.121 (Other Agent)"),
-        (CodingAgent::Codex, "codex-cli 0.142.9"),
-        (CodingAgent::Codex, "codex-cli 0.143.0-alpha.1"),
+        (CodingAgent::Codex, "codex-cli 0.149.1"),
+        (CodingAgent::Codex, "codex-cli 0.150.0-alpha.1"),
         (CodingAgent::Pi, "0.83.9"),
         (CodingAgent::Pi, "0.84.0-alpha.1"),
         // A prefixed line is not something pi emits, so it is a parse failure rather than an
