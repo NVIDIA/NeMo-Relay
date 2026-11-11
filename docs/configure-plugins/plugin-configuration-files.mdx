@@ -14,6 +14,13 @@ Python, and Node.js integrations as well as for the `nemo-relay` CLI gateway.
 The file encodes the same document that binding APIs accept, but uses TOML at
 the file root.
 
+Configuration loading and `nemo-relay doctor` follow symbolic links to
+`config.toml`, `plugins.toml`, plugin bundles, and their contents. Parent
+directories can also be symbolic links. File targets must be readable regular
+files and must pass the usual configuration, integrity, and signature checks.
+Relative plugin manifest references resolve from the directory containing the
+configured `plugins.toml` path.
+
 This guide covers file locations, the interactive editor, discovery, and merge
 rules. Use [Manage](/configure-plugins/discoverable-plugins) to install and manage
 discoverable plugins with the CLI, or [Initialize](/configure-plugins/initialize-plugins)

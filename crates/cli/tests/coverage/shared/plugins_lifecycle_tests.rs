@@ -2802,6 +2802,7 @@ port = "not-an-integer"
 }
 
 #[test]
+/// Exercises provisioning, linked-environment inspection and activation, removal, and re-addition.
 fn add_provisions_persists_and_removes_managed_python_environment() {
     let temp = tempfile::tempdir().unwrap();
     let _env = EnvScope::hermetic(&temp);
@@ -2840,6 +2841,13 @@ fn add_provisions_persists_and_removes_managed_python_environment() {
     );
     let (manifest, manifest_ref) =
         DynamicPluginManifest::load_from_path(plugin_dir.join("relay-plugin.toml")).unwrap();
+    #[cfg(unix)]
+    let environment_target = {
+        let target = temp.path().join("python-environment-target");
+        std::fs::rename(&environment_path, &target).unwrap();
+        std::os::unix::fs::symlink(&target, &environment_path).unwrap();
+        target
+    };
     let inspect = serde_json::to_value(responses::inspect_success(
         "plugins inspect",
         "acme.python",
@@ -2883,6 +2891,11 @@ fn add_provisions_persists_and_removes_managed_python_environment() {
     )
     .unwrap();
     assert!(!environment_path.exists());
+    #[cfg(unix)]
+    assert_eq!(
+        std::fs::read(environment_target.join("stale-marker")).unwrap(),
+        b"stale"
+    );
     let scopes = load_scoped_registries(None).unwrap();
     let removed = find_record_by_id(&scopes, "acme.python")
         .unwrap()
@@ -3283,13 +3296,15 @@ fn managed_environment_cleanup_refuses_paths_outside_lifecycle_directory() {
 
 #[cfg(unix)]
 #[test]
-fn managed_environment_cleanup_refuses_symlinked_environment() {
+/// Removes live and dangling environment aliases while preserving target contents.
+fn managed_environment_cleanup_unlinks_environment_without_removing_target() {
     use std::os::unix::fs::symlink;
 
     let temp = tempfile::tempdir().unwrap();
     let state_path = temp.path().join(".dynamic-plugins.json");
     let outside = temp.path().join("outside");
     std::fs::create_dir_all(&outside).unwrap();
+    std::fs::write(outside.join("keep"), b"keep").unwrap();
     let environment_name = Sha256::digest(b"acme.python")
         .iter()
         .map(|byte| format!("{byte:02x}"))
@@ -3301,16 +3316,117 @@ fn managed_environment_cleanup_refuses_symlinked_environment() {
     std::fs::create_dir_all(environment.parent().unwrap()).unwrap();
     symlink(&outside, &environment).unwrap();
 
-    let error = environment::remove_managed_environment(
+    environment::remove_managed_environment(
         &state_path,
         "acme.python",
         environment.to_string_lossy().as_ref(),
     )
-    .expect_err("symlinked environment must not be removed");
+    .unwrap();
 
-    assert!(error.contains("is not a directory"));
-    assert!(environment.is_symlink());
-    assert!(outside.exists());
+    assert!(!environment.is_symlink());
+    assert_eq!(std::fs::read(outside.join("keep")).unwrap(), b"keep");
+
+    symlink(temp.path().join("missing"), &environment).unwrap();
+    environment::remove_managed_environment_for_plugin(&state_path, "acme.python").unwrap();
+    assert!(!environment.is_symlink());
+}
+
+#[cfg(unix)]
+#[test]
+/// Resets a managed alias to a fresh environment without changing its original target.
+fn provisioning_resets_a_linked_managed_environment_without_removing_target() {
+    let temp = tempfile::tempdir().unwrap();
+    let _env = EnvScope::hermetic(&temp);
+    let plugin_dir = temp.path().join("plugin");
+    std::fs::create_dir(&plugin_dir).unwrap();
+    let manifest_path = write_python_dynamic_manifest(&plugin_dir, "acme.python-reset");
+    let (manifest, manifest_ref) = DynamicPluginManifest::load_from_path(manifest_path).unwrap();
+    let state = temp.path().join(".dynamic-plugins.json");
+    let runner = FakePythonEnvironmentRunner::default();
+    let managed =
+        environment::provision_python_environment(&manifest, &manifest_ref, &state, &runner)
+            .unwrap()
+            .unwrap();
+    let target = temp.path().join("original-environment");
+    std::fs::rename(&managed, &target).unwrap();
+    std::fs::write(target.join("keep"), b"keep").unwrap();
+    std::os::unix::fs::symlink(&target, &managed).unwrap();
+
+    let reset =
+        environment::provision_python_environment(&manifest, &manifest_ref, &state, &runner)
+            .unwrap()
+            .unwrap();
+    assert_eq!(reset, managed);
+    assert!(!managed.is_symlink());
+    assert!(environment::environment_python_path(&managed).is_file());
+    assert_eq!(std::fs::read(target.join("keep")).unwrap(), b"keep");
+}
+
+#[cfg(windows)]
+#[test]
+#[ignore = "requires Windows symlink privilege; just test-rust runs this automatically when available"]
+/// Unlinks live file and directory aliases, and dangling directory aliases, without deleting targets.
+fn windows_managed_environment_cleanup_unlinks_directory_and_file_symlinks() {
+    use std::os::windows::fs::{symlink_dir, symlink_file};
+
+    let temp = tempfile::tempdir().unwrap();
+    let state_path = temp.path().join(".dynamic-plugins.json");
+    let environment_name = Sha256::digest(b"acme.python")
+        .iter()
+        .map(|byte| format!("{byte:02x}"))
+        .collect::<String>();
+    let managed = temp
+        .path()
+        .join(".dynamic-plugin-environments")
+        .join(environment_name);
+    std::fs::create_dir_all(managed.parent().unwrap()).unwrap();
+
+    for is_directory in [true, false] {
+        let target = temp
+            .path()
+            .join(if is_directory { "directory" } else { "file" });
+        let contents = if is_directory {
+            std::fs::create_dir(&target).unwrap();
+            target.join("keep")
+        } else {
+            target.clone()
+        };
+        std::fs::write(&contents, b"keep").unwrap();
+        if is_directory {
+            symlink_dir(&target, &managed)
+        } else {
+            symlink_file(&target, &managed)
+        }
+        .unwrap();
+
+        environment::remove_managed_environment(
+            &state_path,
+            "acme.python",
+            managed.to_str().unwrap(),
+        )
+        .unwrap();
+        assert_eq!(
+            std::fs::symlink_metadata(&managed).unwrap_err().kind(),
+            std::io::ErrorKind::NotFound
+        );
+        assert_eq!(std::fs::read(&contents).unwrap(), b"keep");
+        if is_directory {
+            symlink_dir(&target, &managed).unwrap();
+            let relocated = temp.path().join("relocated-directory");
+            std::fs::rename(&target, &relocated).unwrap();
+            environment::remove_managed_environment(
+                &state_path,
+                "acme.python",
+                managed.to_str().unwrap(),
+            )
+            .unwrap();
+            assert_eq!(
+                std::fs::symlink_metadata(&managed).unwrap_err().kind(),
+                std::io::ErrorKind::NotFound
+            );
+            assert_eq!(std::fs::read(relocated.join("keep")).unwrap(), b"keep");
+        }
+    }
 }
 
 #[test]
