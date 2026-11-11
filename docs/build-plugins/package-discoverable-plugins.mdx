@@ -49,8 +49,9 @@ the library unloads. Replacing the source manifest, library, or signature after 
 does not change the library loaded by that activation. Native plugins used in embeddings
 must not depend on adjacent files being available relative to the loaded library's
 location. The CLI retains its activation snapshot, which includes adjacent native
-dependencies. Native library digest checks use bounded regular-file reads and reject
-symbolic links and special files.
+dependencies. Native library digest checks follow symbolic links and use bounded
+regular-file reads. Digests and signatures validate the target bytes; special
+files are rejected.
 
 <CodeBlocks>
 

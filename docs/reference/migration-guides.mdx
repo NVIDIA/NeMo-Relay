@@ -528,7 +528,7 @@ restarting.
 Embedded hosts load native plugins from private copies of the verified bytes.
 These plugins must not rely on adjacent files at the loaded library's location.
 The CLI keeps its activation snapshot and adjacent native dependencies. Native
-library digest checks reject symbolic links and special files. Refer to
+library digest checks follow symbolic links, validate the target bytes, and reject special files. Refer to
 [Package Discoverable Plugins](/build-plugins/package-discoverable-plugins).
 
 Short worker callbacks still have a 30-second default deadline. Use

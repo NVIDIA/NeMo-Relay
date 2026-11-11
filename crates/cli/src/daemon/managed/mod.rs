@@ -288,14 +288,14 @@ pub(crate) fn validate_bundle(
     validate_bundle_files(root, true, Some(expected_sha256))
 }
 
+/// Validates the managed manifest, exact artifact bytes, digest, and optional environment.
 fn validate_bundle_files(
     root: &Path,
     validate_environment: bool,
     expected_sha256: Option<&ManagedBundleDigest>,
 ) -> Result<ManagedBundleValidation, CliError> {
-    reject_non_directory_or_symlink(root)?;
+    require_directory(root)?;
     let manifest_path = root.join(MANIFEST_FILE);
-    reject_symlink(&manifest_path)?;
     let manifest_bytes = read_bounded(&manifest_path, MAX_MANIFEST_BYTES)?;
     let manifest: ManagedManifest = serde_json::from_slice(&manifest_bytes).map_err(|error| {
         CliError::Config(format!(
@@ -351,7 +351,6 @@ fn validate_bundle_files(
     }
     for artifact in &expected.artifacts {
         let path = root.join(artifact.path);
-        reject_symlink(&path)?;
         let actual = read_bounded(&path, artifact.bytes.len() as u64)?;
         if actual != artifact.bytes {
             return Err(CliError::Config(format!(
@@ -845,14 +844,29 @@ fn update_bundle_digest(hasher: &mut Sha256, name: &[u8], bytes: &[u8]) {
     hasher.update(bytes);
 }
 
+/// Reads a regular managed artifact through a checked handle without exceeding its byte limit.
 fn read_bounded(path: &Path, maximum: u64) -> Result<Vec<u8>, CliError> {
-    let mut file = OpenOptions::new().read(true).open(path).map_err(|error| {
+    let mut options = OpenOptions::new();
+    options.read(true);
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::OpenOptionsExt;
+        options.custom_flags(libc::O_NONBLOCK);
+    }
+    let file = options.open(path).map_err(|error| {
         CliError::Config(format!(
             "failed to read managed artifact {}: {error}",
             path.display()
         ))
     })?;
-    let length = file.metadata()?.len();
+    let metadata = file.metadata()?;
+    if !metadata.is_file() {
+        return Err(CliError::Config(format!(
+            "managed artifact {} must be a regular file",
+            path.display()
+        )));
+    }
+    let length = metadata.len();
     if length > maximum {
         return Err(CliError::Config(format!(
             "managed artifact {} exceeds its expected size limit",
@@ -860,49 +874,50 @@ fn read_bounded(path: &Path, maximum: u64) -> Result<Vec<u8>, CliError> {
         )));
     }
     let mut bytes = Vec::with_capacity(length as usize);
-    file.read_to_end(&mut bytes)?;
-    Ok(bytes)
-}
-
-fn reject_symlink(path: &Path) -> Result<(), CliError> {
-    let metadata = fs::symlink_metadata(path).map_err(|error| {
-        CliError::Config(format!(
-            "failed to inspect managed artifact {}: {error}",
-            path.display()
-        ))
-    })?;
-    if metadata.file_type().is_symlink() || !metadata.is_file() {
+    file.take(maximum.saturating_add(1))
+        .read_to_end(&mut bytes)?;
+    if bytes.len() as u64 > maximum {
         return Err(CliError::Config(format!(
-            "managed artifact {} must be a regular file, not a symlink",
+            "managed artifact {} exceeds its expected size limit",
             path.display()
         )));
     }
-    Ok(())
+    Ok(bytes)
 }
 
-fn reject_non_directory_or_symlink(path: &Path) -> Result<(), CliError> {
-    let metadata = fs::symlink_metadata(path).map_err(|error| {
+/// Requires the configured bundle path to resolve to an accessible directory.
+fn require_directory(path: &Path) -> Result<(), CliError> {
+    let metadata = fs::metadata(path).map_err(|error| {
         CliError::Config(format!(
             "failed to inspect managed bundle {}: {error}",
             path.display()
         ))
     })?;
-    if metadata.file_type().is_symlink() || !metadata.is_dir() {
+    if !metadata.is_dir() {
         return Err(CliError::Config(format!(
-            "managed bundle {} must be a directory, not a symlink",
+            "managed bundle {} must be a directory",
             path.display()
         )));
     }
     Ok(())
 }
 
+/// Inventories bundle entries, following aliases while rejecting ancestor cycles and excess entries.
 fn bundle_files(root: &Path) -> Result<BTreeSet<&'static str>, CliError> {
     let expected = all_artifact_paths();
     let expected_lookup = expected.iter().copied().collect::<BTreeSet<_>>();
     let mut actual = BTreeSet::new();
-    let mut pending = vec![root.to_path_buf()];
+    let mut pending = vec![(root.to_path_buf(), Vec::new())];
     let mut visited = 0_usize;
-    while let Some(directory) = pending.pop() {
+    while let Some((directory, mut ancestors)) = pending.pop() {
+        let resolved = fs::canonicalize(&directory)?;
+        if ancestors.contains(&resolved) {
+            return Err(CliError::Config(format!(
+                "managed bundle contains a directory symlink cycle at {}",
+                directory.display()
+            )));
+        }
+        ancestors.push(resolved);
         for entry in fs::read_dir(&directory)? {
             visited += 1;
             if visited > MAX_ARTIFACTS * 4 {
@@ -911,15 +926,9 @@ fn bundle_files(root: &Path) -> Result<BTreeSet<&'static str>, CliError> {
                 ));
             }
             let entry = entry?;
-            let metadata = entry.file_type()?;
-            if metadata.is_symlink() {
-                return Err(CliError::Config(format!(
-                    "managed bundle entry {} must not be a symlink",
-                    entry.path().display()
-                )));
-            }
+            let metadata = fs::metadata(entry.path())?;
             if metadata.is_dir() {
-                pending.push(entry.path());
+                pending.push((entry.path(), ancestors.clone()));
                 continue;
             }
             if !metadata.is_file() {

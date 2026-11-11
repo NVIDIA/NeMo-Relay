@@ -537,6 +537,7 @@ async fn continuation_context_preserves_optimization_recorder_across_tasks() {
 }
 
 #[test]
+/// Allows aliases at the managed environment path while rejecting arbitrary locations.
 fn python_environment_resolution_requires_lifecycle_managed_path() {
     enable_operational_logs();
     let plugin_id = "acme.python";
@@ -567,9 +568,10 @@ fn python_environment_resolution_requires_lifecycle_managed_path() {
         std::fs::create_dir_all(managed.parent().unwrap()).unwrap();
         symlink(&target, &managed).unwrap();
 
-        let error = resolve_python_executable(plugin_id, managed.to_str())
-            .expect_err("a symlinked environment should be rejected");
-        assert!(error.to_string().contains("must not be a symbolic link"));
+        assert_eq!(
+            resolve_python_executable(plugin_id, managed.to_str()).unwrap(),
+            python
+        );
     }
 }
 
