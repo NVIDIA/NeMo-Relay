@@ -1115,3 +1115,50 @@ async fn worker_exit_report_gives_up_within_its_window() {
     assert!(frames.try_recv().is_ok(), "the report reached the broker");
     server.abort();
 }
+
+/// A report that times out has already spent its sequence number, so it must reach the broker
+/// before the MCP's next request; the broker only accepts sequence numbers in order.
+#[tokio::test]
+async fn a_timed_out_worker_exit_report_keeps_its_place_before_the_next_request() {
+    use crate::daemon::common::socket::Request;
+    use futures_util::StreamExt;
+
+    let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
+    let origin = format!("http://{}", listener.local_addr().unwrap());
+    let (received, mut sequences) = tokio::sync::mpsc::unbounded_channel();
+    let server = tokio::spawn(async move {
+        let (stream, _) = listener.accept().await.unwrap();
+        let mut socket = tokio_tungstenite::accept_async(stream).await.unwrap();
+        // Never answer, so the report runs out its window, then record what arrives in order.
+        while let Some(Ok(message)) = socket.next().await {
+            let Ok(text) = message.to_text() else {
+                continue;
+            };
+            let request: Request = serde_json::from_str(text).unwrap();
+            let sequence = match request.command {
+                ControlCommand::WorkerExited(report) => ("worker_exited", report.sequence),
+                ControlCommand::Release(release) => ("release", release.sequence),
+                _ => continue,
+            };
+            let _ = received.send(sequence);
+        }
+    });
+    let mut lease = test_lease(origin);
+    lease
+        .client
+        .connect(&lease.daemon_origin, ComponentRole::Mcp)
+        .await
+        .unwrap();
+    report_worker_exited(&mut lease, "activation-1").await;
+    release(&mut lease).await;
+    let mut arrived = Vec::new();
+    while arrived.len() < 2 {
+        let next = tokio::time::timeout(Duration::from_secs(10), sequences.recv())
+            .await
+            .expect("both requests reach the broker")
+            .unwrap();
+        arrived.push(next);
+    }
+    assert_eq!(arrived, vec![("worker_exited", 1), ("release", 2)]);
+    server.abort();
+}

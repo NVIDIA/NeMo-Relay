@@ -67,6 +67,9 @@ pub(crate) enum Event {
     },
 }
 
+/// The answer channel for a request that is already on the control writer's queue.
+pub(crate) struct PendingReply(oneshot::Receiver<Reply>);
+
 struct Reply {
     status: u16,
     payload: Value,
@@ -194,52 +197,61 @@ impl Client {
         command: Command,
     ) -> Result<R, CliError> {
         tokio::time::timeout(ATTEMPT_TIMEOUT, async {
-            let response = {
-                let guard = self.0.lock().await;
-                let connection = guard
-                    .as_ref()
-                    .ok_or_else(|| failure("control connection is closed"))?;
-                let (reply, response) = oneshot::channel();
-                if connection
-                    .send
-                    .try_send(PendingRequest {
-                        request: Request {
-                            request_id: uuid::Uuid::now_v7().to_string(),
-                            command,
-                        },
-                        reply,
-                    })
-                    .is_err()
-                {
-                    connection.close();
-                    return Err(failure("control writer unavailable"));
-                }
-                response
-            };
-            let Reply { status, payload } = response
-                .await
-                .map_err(|_| failure("control connection lost"))?;
-            if !(200..300).contains(&status) {
-                let message = payload
-                    .pointer("/error/message")
-                    .and_then(Value::as_str)
-                    .unwrap_or("control command rejected");
-                let code = payload.pointer("/error/code").and_then(Value::as_str);
-                return Err(
-                    if status == 401 && code == Some(ROUTE_CREDENTIAL_REJECTED_CODE) {
-                        CliError::RouteCredentialRejected(message.into())
-                    } else if status == 401 {
-                        CliError::Unauthorized(message.into())
-                    } else {
-                        failure(message)
-                    },
-                );
-            }
-            serde_json::from_value(payload)
-                .map_err(|error| failure(format!("invalid control reply: {error}")))
+            let response = self.enqueue(command).await?;
+            Self::reply(response).await
         })
         .await
         .map_err(|_| failure("control operation timed out"))?
+    }
+    /// Queues a request on the control writer. It goes out as long as the returned receiver is
+    /// alive, so a caller that cannot wait can still keep its sequence number in order.
+    pub(crate) async fn enqueue(&self, command: Command) -> Result<PendingReply, CliError> {
+        let guard = self.0.lock().await;
+        let connection = guard
+            .as_ref()
+            .ok_or_else(|| failure("control connection is closed"))?;
+        let (reply, response) = oneshot::channel();
+        if connection
+            .send
+            .try_send(PendingRequest {
+                request: Request {
+                    request_id: uuid::Uuid::now_v7().to_string(),
+                    command,
+                },
+                reply,
+            })
+            .is_err()
+        {
+            connection.close();
+            return Err(failure("control writer unavailable"));
+        }
+        Ok(PendingReply(response))
+    }
+    /// Waits for the broker's answer to a queued request.
+    pub(crate) async fn reply<R: serde::de::DeserializeOwned>(
+        PendingReply(response): PendingReply,
+    ) -> Result<R, CliError> {
+        let Reply { status, payload } = response
+            .await
+            .map_err(|_| failure("control connection lost"))?;
+        if !(200..300).contains(&status) {
+            let message = payload
+                .pointer("/error/message")
+                .and_then(Value::as_str)
+                .unwrap_or("control command rejected");
+            let code = payload.pointer("/error/code").and_then(Value::as_str);
+            return Err(
+                if status == 401 && code == Some(ROUTE_CREDENTIAL_REJECTED_CODE) {
+                    CliError::RouteCredentialRejected(message.into())
+                } else if status == 401 {
+                    CliError::Unauthorized(message.into())
+                } else {
+                    failure(message)
+                },
+            );
+        }
+        serde_json::from_value(payload)
+            .map_err(|error| failure(format!("invalid control reply: {error}")))
     }
     pub(crate) async fn next(&self) -> Result<Event, CliError> {
         let receive = self

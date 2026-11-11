@@ -1021,16 +1021,35 @@ async fn report_worker_exited(lease: &mut McpSession, activation_id: &str) {
             return;
         };
         lease.sequence = sequence;
-        let remaining = deadline.saturating_duration_since(tokio::time::Instant::now());
-        // The sequence is already spent, so the request must still go out if the wait times out.
-        let client = lease.client.clone();
+        // Queue first: the sequence is spent, so the frame must go out before any later request,
+        // even if the answer misses the window.
+        let pending = match lease
+            .client
+            .enqueue(ControlCommand::WorkerExited(request))
+            .await
+        {
+            Ok(pending) => pending,
+            Err(error) => {
+                log::warn!(
+                    target: "nemo_relay.daemon.mcp",
+                    event = "worker_exit_report_failed",
+                    error_kind = error.log_kind();
+                    "Could not report the launched worker's exit: {error}"
+                );
+                return;
+            }
+        };
+        // The task keeps the answer channel open, so the writer still sends the frame after a
+        // timeout here.
         let sent = tokio::spawn(async move {
-            client
-                .request::<()>(ControlCommand::WorkerExited(request))
-                .await
+            tokio::time::timeout(
+                super::common::socket::ATTEMPT_TIMEOUT,
+                Client::reply::<()>(pending),
+            )
+            .await
+            .unwrap_or_else(|_| Err(CliError::Launch("control operation timed out".into())))
         });
-        // Let the task queue its frame before anything here can send the next sequence number.
-        tokio::task::yield_now().await;
+        let remaining = deadline.saturating_duration_since(tokio::time::Instant::now());
         let Ok(joined) = tokio::time::timeout(remaining, sent).await else {
             log::warn!(
                 target: "nemo_relay.daemon.mcp",
