@@ -999,6 +999,16 @@ const WORKER_EXIT_REPORT_RETRY: Duration = Duration::from_millis(100);
 async fn report_worker_exited(lease: &mut McpSession, activation_id: &str) {
     let deadline = tokio::time::Instant::now() + WORKER_EXIT_REPORT_WINDOW;
     loop {
+        // Spend no sequence number that might not go out before the next request.
+        if tokio::time::Instant::now() >= deadline {
+            log::warn!(
+                target: "nemo_relay.daemon.mcp",
+                event = "worker_exit_report_failed",
+                error_kind = "timeout";
+                "The worker exit report window closed before the broker accepted it"
+            );
+            return;
+        }
         let sequence = lease.sequence.saturating_add(1);
         let Ok(request) = SessionRequest::new(
             lease.session_id.clone(),
@@ -1011,11 +1021,31 @@ async fn report_worker_exited(lease: &mut McpSession, activation_id: &str) {
             return;
         };
         lease.sequence = sequence;
-        match lease
-            .client
-            .request::<()>(ControlCommand::WorkerExited(request))
-            .await
-        {
+        let remaining = deadline.saturating_duration_since(tokio::time::Instant::now());
+        // The sequence is already spent, so the request must still go out if the wait times out.
+        let client = lease.client.clone();
+        let sent = tokio::spawn(async move {
+            client
+                .request::<()>(ControlCommand::WorkerExited(request))
+                .await
+        });
+        // Let the task queue its frame before anything here can send the next sequence number.
+        tokio::task::yield_now().await;
+        let Ok(joined) = tokio::time::timeout(remaining, sent).await else {
+            log::warn!(
+                target: "nemo_relay.daemon.mcp",
+                event = "worker_exit_report_failed",
+                error_kind = "timeout";
+                "The broker did not answer the worker exit report in time"
+            );
+            return;
+        };
+        let outcome = joined.unwrap_or_else(|error| {
+            Err(CliError::Launch(format!(
+                "worker exit report task failed: {error}"
+            )))
+        });
+        match outcome {
             Ok(()) => {
                 log::info!(
                     target: "nemo_relay.daemon.mcp",
@@ -1027,7 +1057,7 @@ async fn report_worker_exited(lease: &mut McpSession, activation_id: &str) {
             }
             Err(CliError::Launch(message))
                 if message == "worker control is still connected"
-                    && tokio::time::Instant::now() < deadline =>
+                    && tokio::time::Instant::now() + WORKER_EXIT_REPORT_RETRY < deadline =>
             {
                 tokio::time::sleep(WORKER_EXIT_REPORT_RETRY).await;
             }

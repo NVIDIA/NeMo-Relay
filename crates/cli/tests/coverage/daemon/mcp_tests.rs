@@ -1077,3 +1077,41 @@ async fn worker_exit_report_stops_when_the_worker_is_already_gone() {
     assert!(server.await.unwrap(), "no retry after the worker is gone");
     assert_eq!(lease.sequence, 1);
 }
+
+/// The report blocks directive handling, so a broker that never answers costs at most the report
+/// window, not the control client's longer request timeout.
+#[tokio::test]
+async fn worker_exit_report_gives_up_within_its_window() {
+    use futures_util::StreamExt;
+
+    let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
+    let origin = format!("http://{}", listener.local_addr().unwrap());
+    let (received, mut frames) = tokio::sync::mpsc::unbounded_channel();
+    let server = tokio::spawn(async move {
+        let (stream, _) = listener.accept().await.unwrap();
+        let mut socket = tokio_tungstenite::accept_async(stream).await.unwrap();
+        // Read requests and never answer them.
+        while socket.next().await.is_some() {
+            let _ = received.send(());
+        }
+    });
+    let mut lease = test_lease(origin);
+    lease
+        .client
+        .connect(&lease.daemon_origin, ComponentRole::Mcp)
+        .await
+        .unwrap();
+    let started = tokio::time::Instant::now();
+    report_worker_exited(&mut lease, "activation-1").await;
+    let waited = started.elapsed();
+    assert!(
+        waited < WORKER_EXIT_REPORT_WINDOW + Duration::from_millis(500),
+        "the report waited {waited:?}"
+    );
+    assert!(
+        waited >= WORKER_EXIT_REPORT_WINDOW - Duration::from_millis(100),
+        "the report gave up early after {waited:?}"
+    );
+    assert!(frames.try_recv().is_ok(), "the report reached the broker");
+    server.abort();
+}
