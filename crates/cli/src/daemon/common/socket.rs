@@ -35,6 +35,7 @@ pub(crate) enum Command {
     Ready(SessionRequest<WorkerReadyPayload>),
     Release(SessionRequest<ReleasePayload>),
     ActivationFailed(SessionRequest<ActivationFailedPayload>),
+    WorkerExited(SessionRequest<super::control::WorkerExitedPayload>),
     CancelActivation(SessionRequest<super::control::CancelActivationPayload>),
     Acknowledge {
         request_id: String,
