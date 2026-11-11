@@ -100,8 +100,19 @@ async fn mcp(
     identity: &MachineIdentity,
     id: &str,
 ) -> McpRegisterResponse {
+    mcp_with_credential(client, origin, identity, id, 42).await
+}
+
+/// Registers an MCP whose route token is derived from `seed`; a token binds to one identity.
+async fn mcp_with_credential(
+    client: &Client,
+    origin: &str,
+    identity: &MachineIdentity,
+    id: &str,
+    seed: u8,
+) -> McpRegisterResponse {
     let credential =
-        RouteCredential::parse(base64::engine::general_purpose::URL_SAFE_NO_PAD.encode([42; 32]))
+        RouteCredential::parse(base64::engine::general_purpose::URL_SAFE_NO_PAD.encode([seed; 32]))
             .unwrap();
     let handshake = begin_handshake(
         client,
@@ -1890,6 +1901,7 @@ struct ReadyWorker {
     generation_grant: crate::daemon::common::control::WorkerGenerationGrant,
     activation_id: String,
     activation_token: SensitiveString,
+    owner_session_token: SensitiveString,
     tasks: Vec<tokio::task::JoinHandle<()>>,
 }
 
@@ -1899,6 +1911,7 @@ async fn ready_worker() -> ReadyWorker {
     let identity = MachineIdentity::generate().unwrap().identity;
     let owner = Client::default();
     let mcp_registration = mcp(&owner, &origin, &identity, "owner").await;
+    let owner_session_token = mcp_registration.session_token.clone();
     let crate::daemon::common::control::WorkerBootstrap {
         activation_id,
         activation_token,
@@ -1971,7 +1984,178 @@ async fn ready_worker() -> ReadyWorker {
         generation_grant: registration.generation_grant,
         activation_id,
         activation_token,
+        owner_session_token,
         tasks: vec![task, server, mcp_task],
+    }
+}
+
+fn worker_exited(session_id: &str, token: SensitiveString, activation_id: &str) -> Command {
+    Command::WorkerExited(
+        SessionRequest::new(
+            session_id.into(),
+            token,
+            1,
+            crate::daemon::common::control::WorkerExitedPayload {
+                activation_id: activation_id.into(),
+            },
+        )
+        .unwrap(),
+    )
+}
+
+/// The worker's control socket is gone but the worker announced nothing: a crash or SIGKILL.
+async fn crash_worker(fixture: &mut ReadyWorker) {
+    let worker = std::mem::take(&mut fixture.worker);
+    drop(worker);
+    tokio::time::timeout(Duration::from_secs(5), async {
+        while lock(&fixture.state.sockets.peers)
+            .get(&key(ComponentRole::Worker, "worker"))
+            .is_some_and(|peer| peer.sender.is_some())
+        {
+            tokio::task::yield_now().await;
+        }
+    })
+    .await
+    .expect("the broker sees the worker control disconnect");
+}
+
+/// A worker that dies without announcing it would wait out the reconnect grace. The MCP that
+/// launched it saw the process exit, so its report replaces the worker at once.
+#[tokio::test]
+async fn worker_crash_reported_by_its_launching_mcp_skips_the_reconnect_grace() {
+    let mut fixture = ready_worker().await;
+    crash_worker(&mut fixture).await;
+    // Without a report the dead worker keeps its route for the whole grace.
+    tokio::time::sleep(Duration::from_millis(200)).await;
+    assert!(lock(&fixture.state.worker_sessions).contains_key("worker"));
+    fixture
+        .owner
+        .request::<()>(worker_exited(
+            "owner",
+            fixture.owner_session_token.clone(),
+            &fixture.activation_id,
+        ))
+        .await
+        .unwrap();
+    tokio::time::timeout(Duration::from_secs(5), async {
+        loop {
+            let removed = !lock(&fixture.state.worker_sessions).contains_key("worker");
+            if removed
+                && matches!(
+                    owner_directive_now(&fixture.state, &fixture.identity),
+                    BrokerDirective::LaunchWorker { .. }
+                )
+            {
+                return;
+            }
+            tokio::task::yield_now().await;
+        }
+    })
+    .await
+    .expect("reported worker is removed and a replacement is nominated without the grace");
+    drop(fixture.owner);
+    for task in fixture.tasks {
+        task.abort();
+    }
+}
+
+/// A report cannot take down a worker whose control connection is still alive.
+#[tokio::test]
+async fn worker_exit_report_is_refused_while_its_control_is_connected() {
+    let fixture = ready_worker().await;
+    let reported = fixture
+        .owner
+        .request::<()>(worker_exited(
+            "owner",
+            fixture.owner_session_token.clone(),
+            &fixture.activation_id,
+        ))
+        .await;
+    assert!(
+        matches!(&reported, Err(CliError::Launch(message)) if message == "worker control is still connected"),
+        "{reported:?}"
+    );
+    let target = lock(&fixture.state.worker_sessions)["worker"]
+        .pending_target
+        .clone();
+    assert!(target.control_available());
+    assert!(!lock(&fixture.state.sockets.exiting_workers).contains("worker"));
+    drop(fixture.owner);
+    for task in fixture.tasks {
+        task.abort();
+    }
+}
+
+/// Only an MCP on the worker's own route can report its exit; any other keeps the grace.
+#[tokio::test]
+async fn worker_exit_report_requires_the_workers_route() {
+    let mut fixture = ready_worker().await;
+    crash_worker(&mut fixture).await;
+    let stranger = Client::default();
+    let stranger_identity = MachineIdentity::generate().unwrap().identity;
+    let registration = mcp_with_credential(
+        &stranger,
+        &fixture.origin,
+        &stranger_identity,
+        "stranger",
+        7,
+    )
+    .await;
+    let reported = stranger
+        .request::<()>(worker_exited(
+            "stranger",
+            registration.session_token,
+            &fixture.activation_id,
+        ))
+        .await;
+    assert!(
+        matches!(&reported, Err(CliError::Launch(message)) if message == "worker activation is not on this route"),
+        "{reported:?}"
+    );
+    tokio::time::sleep(Duration::from_millis(200)).await;
+    assert!(lock(&fixture.state.worker_sessions).contains_key("worker"));
+    assert!(!lock(&fixture.state.sockets.exiting_workers).contains("worker"));
+    drop(stranger);
+    drop(fixture.owner);
+    for task in fixture.tasks {
+        task.abort();
+    }
+}
+
+/// A report has to name a worker on this route, and the payload is bounded before any lookup.
+#[tokio::test]
+async fn worker_exit_report_rejects_unknown_and_oversized_activations() {
+    let mut fixture = ready_worker().await;
+    crash_worker(&mut fixture).await;
+    let unknown = fixture
+        .owner
+        .request::<()>(worker_exited(
+            "owner",
+            fixture.owner_session_token.clone(),
+            "not-an-activation",
+        ))
+        .await;
+    assert!(
+        matches!(&unknown, Err(CliError::Launch(message)) if message == "worker activation is not on this route"),
+        "{unknown:?}"
+    );
+    let oversized = fixture
+        .owner
+        .request::<()>(worker_exited(
+            "owner",
+            fixture.owner_session_token.clone(),
+            &"a".repeat(129),
+        ))
+        .await;
+    assert!(
+        matches!(&oversized, Err(CliError::Launch(message)) if message == "worker exit payload is too large"),
+        "{oversized:?}"
+    );
+    tokio::time::sleep(Duration::from_millis(200)).await;
+    assert!(lock(&fixture.state.worker_sessions).contains_key("worker"));
+    drop(fixture.owner);
+    for task in fixture.tasks {
+        task.abort();
     }
 }
 
