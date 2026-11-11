@@ -4,7 +4,7 @@
 import { createRequire } from 'node:module';
 
 const require = createRequire(import.meta.url);
-const plugin = require('../plugin.js');
+const plugin = require('../dist/plugin.js');
 
 let activation;
 

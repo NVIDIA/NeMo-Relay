@@ -198,7 +198,7 @@ pub mod plugin {
         register_plugin, validate, validate_exact, validate_static_plugin_config,
     };
     pub use nemo_relay_plugin::component::{
-        ConfigDiagnostic, ConfigPolicy, DiagnosticLevel, Plugin, PluginComponentSpec,
+        ConfigDiagnostic, ConfigPolicy, DiagnosticLevel, Plugin, PluginComponentSpec, PluginFuture,
         PluginRegistration, PluginRegistrationCleanupOutcome, PluginRegistrationContext, Result,
         RuntimeDiagnostic, UnsupportedBehavior, apply_global_config_policy,
     };

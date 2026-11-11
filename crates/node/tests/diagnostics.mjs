@@ -7,13 +7,16 @@ import { test } from 'node:test';
 import { createRequire } from 'node:module';
 import { Worker } from 'node:worker_threads';
 const require = createRequire(import.meta.url);
-const diagnostics = require('../diagnostics.js');
-const plugin = require('../plugin.js');
-const queryContract = require('../diagnostics_query_contract.js');
+const diagnostics = require('../dist/diagnostics.js');
+const plugin = require('../dist/plugin.js');
+const queryContract = require('../dist/diagnostics_query_contract.js');
 
 test('query adapter matches the shared cross-binding contract fixture', () => {
   const fixture = JSON.parse(
-    fs.readFileSync(new URL('../../diagnostics/tests/fixtures/diagnostics_query_contract.json', import.meta.url), 'utf8'),
+    fs.readFileSync(
+      new URL('../../diagnostics/tests/fixtures/diagnostics_query_contract.json', import.meta.url),
+      'utf8',
+    ),
   );
   assert.equal(queryContract.MAX_QUERY_BYTES, fixture.max_query_bytes);
   assert.equal(queryContract.MAX_QUERY_NODES, fixture.adapter_limits.max_query_nodes);
@@ -71,7 +74,7 @@ test('configured inspection survives plugin and Node environment cleanup', async
   assert.equal(typeof JSON.parse(reader.snapshotJson()).sequence, 'string');
   assert.equal(reader.info().limits.maxEvents, 3);
   assert.equal(reader.info().loggingCoverage, 'attached_since_service_start');
-  const modulePath = require.resolve('../diagnostics.js');
+  const modulePath = require.resolve('../dist/diagnostics.js');
   const source = await new Promise((resolve, reject) => {
     const worker = new Worker(
       `const {parentPort} = require("node:worker_threads"); const diagnostics = require(${JSON.stringify(modulePath)}); parentPort.postMessage(diagnostics.reader().snapshot().source.instanceId);`,
@@ -101,7 +104,7 @@ test('configured inspection survives plugin and Node environment cleanup', async
     ],
   });
   assert.equal(reader.inspectMemory().resource.availability, 'not_yet_sampled');
-  await require('../index.js').collectResourceMetrics();
+  await require('../dist/index.js').collectResourceMetrics();
   const sample = reader.inspectMemory().resource.sample;
   assert(sample);
   assert.equal(typeof sample.ordinal, 'bigint');
@@ -133,6 +136,12 @@ test('configured inspection survives plugin and Node environment cleanup', async
     [{ maxEvents: 4294967295 }, 'invalid_query'],
     [{ maxResponseBytes: 1 }, 'snapshot_capacity'],
     [{ ownership: { unknown: 'restricted-input' } }, 'invalid_query'],
+    [{ componentKey: 1.5 }, 'invalid_query'],
+    [{ ['k'.repeat(queryContract.MAX_QUERY_FIELD_NAME_BYTES + 1)]: true }, 'invalid_query'],
+    [
+      Object.fromEntries(Array.from({ length: queryContract.MAX_QUERY_OBJECT_FIELDS + 1 }, (_, i) => [`f${i}`, true])),
+      'invalid_query',
+    ],
   ]) {
     assert.throws(
       () => reader.snapshot(query),

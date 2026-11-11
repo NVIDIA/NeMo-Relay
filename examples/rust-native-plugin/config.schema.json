@@ -160,12 +160,12 @@
       }
     },
     "executor": {
-      "description": "SDK-owned Tokio executor settings for this configured native component.",
+      "description": "Shared Tokio runtime settings requested by this native component.",
       "type": "object",
       "additionalProperties": false,
       "properties": {
         "worker_threads": {
-          "description": "Positive number of executor workers. The example defaults to two.",
+          "description": "Positive number of shared Tokio workers. The example requests two.",
           "type": "integer",
           "minimum": 1,
           "default": 2

@@ -478,3 +478,109 @@ fn transport_names_and_flattened_extra_are_valid_native_extensions() {
         .collect(),
     });
 }
+
+/// Every provider-neutral and provider-native variant survives actual wire encoding.
+#[test]
+fn multimodal_and_tool_variants_preserve_payloads_and_extensions() {
+    use nemo_relay_types::codec::request::{ContentPart, Message, ToolChoice, ToolDefinition};
+    use nemo_relay_types::codec::response::{FinishReason, Usage};
+    let extension = json!({"nested": [null, u64::MAX, "雪\u{0}"]});
+    for value in [
+        json!({"type":"text", "text":"雪\u{0}", "vendor":extension}),
+        json!({"type":"image_url", "image_url":{"url":"https://example.test/image", "detail":"auto"}, "vendor":extension}),
+        json!({"type":"image", "image":{"data":"encoded"}, "vendor":extension}),
+        json!({"type":"audio", "audio":{"format":"wav"}, "vendor":extension}),
+        json!({"type":"file", "file":{"id":"file"}, "vendor":extension}),
+        json!({"type":"refusal", "refusal":"declined", "vendor":extension}),
+        json!({"type":"tool_use", "id":"call", "name":"tool", "input":extension, "vendor":extension}),
+        json!({"type":"tool_result", "tool_use_id":"call", "content":extension, "is_error":true, "vendor":extension}),
+        json!({"type":"provider_native", "provider":"custom", "kind":"opaque", "value":extension}),
+    ] {
+        roundtrip::<ContentPart, pb::ContentPart>(serde_json::from_value(value).unwrap());
+    }
+    for value in [
+        json!({"role":"developer", "content":"instruction", "name":"author"}),
+        json!({"role":"tool_call", "id":"item", "call_id":"call", "name":"tool", "arguments":extension, "vendor":extension}),
+        json!({"role":"tool_result", "id":"result", "call_id":"call", "output":extension, "vendor":extension}),
+        json!({"role":"provider_native", "provider":"custom", "kind":"opaque", "value":extension}),
+    ] {
+        roundtrip::<Message, pb::LlmMessage>(serde_json::from_value(value).unwrap());
+    }
+    for value in [
+        json!({"type":"function", "function":{"name":"tool", "parameters":extension}, "vendor":extension}),
+        json!({"type":"provider_native", "provider":"custom", "kind":"opaque", "value":extension}),
+    ] {
+        roundtrip::<ToolDefinition, pb::ToolDefinition>(serde_json::from_value(value).unwrap());
+    }
+    for value in [
+        json!("auto"),
+        json!("none"),
+        json!("required"),
+        json!({"type":"function", "function":{"name":"tool"}}),
+        json!({"provider":"custom", "kind":"opaque", "value":extension}),
+    ] {
+        roundtrip::<ToolChoice, pb::ToolChoice>(serde_json::from_value(value).unwrap());
+    }
+    for reason in [
+        FinishReason::Complete,
+        FinishReason::Length,
+        FinishReason::ToolUse,
+        FinishReason::ContentFilter,
+        FinishReason::Unknown("vendor\u{0}".into()),
+    ] {
+        roundtrip::<_, pb::FinishReason>(reason);
+    }
+    let usage: Usage =
+        serde_json::from_value(json!({"prompt_tokens":1,"completion_tokens":2,"total_tokens":3}))
+            .unwrap();
+    let wire: Box<pb::Usage> = encode(usage).unwrap();
+    let decoded: Usage = decode(Box::new(
+        pb::Usage::decode(wire.encode_to_vec().as_slice()).unwrap(),
+    ))
+    .unwrap();
+    assert_eq!(decoded.total_tokens, Some(3));
+}
+
+/// Collection envelopes must preserve their JSON container type and reject mismatches.
+#[test]
+fn json_collection_envelopes_preserve_shape_and_reject_wrong_container_types() {
+    for value in [
+        json!([]),
+        json!([null, true, i64::MIN, u64::MAX, "α\u{0000}", {"nested":[1]}]),
+    ] {
+        let wire: pb::JsonArray = encode(value.clone()).unwrap();
+        let wire = pb::JsonArray::decode(wire.encode_to_vec().as_slice()).unwrap();
+        assert_eq!(decode::<Json, _>(wire).unwrap(), value);
+    }
+    for value in [Json::Null, json!({}), json!("array"), json!(0)] {
+        assert!(encode::<_, pb::JsonArray>(value).is_err());
+    }
+    assert!(encode::<_, pb::JsonObject>(json!([])).is_err());
+    assert!(
+        decode::<Json, _>(pb::JsonArray {
+            values: vec![pb::JsonValue {
+                json: b"invalid JSON".to_vec()
+            }]
+        })
+        .is_err()
+    );
+    let fields =
+        std::collections::BTreeMap::from([("extension".to_owned(), json!([u64::MAX, "α"]))]);
+    let wire: pb::JsonObject = encode(fields.clone()).unwrap();
+    assert_eq!(
+        decode::<std::collections::BTreeMap<String, Json>, _>(wire).unwrap(),
+        fields
+    );
+}
+
+/// Diagnostic transport must retain opaque execution and phase identifiers unchanged.
+#[test]
+fn diagnostic_transport_preserves_opaque_execution_and_phase_names() {
+    use nemo_relay_types::diagnostics::{PluginExecutionName, PluginPhaseName};
+    for name in ["native", "future.extension-α", "opaque\u{0000}value"] {
+        let execution: PluginExecutionName = decode(name.to_owned()).unwrap();
+        assert_eq!(encode::<_, String>(execution).unwrap(), name);
+        let phase: PluginPhaseName = decode(name.to_owned()).unwrap();
+        assert_eq!(encode::<_, String>(phase).unwrap(), name);
+    }
+}

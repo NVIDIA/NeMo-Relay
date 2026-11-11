@@ -162,7 +162,7 @@ With older daemons, MCP waits for a usable route before it handles initializatio
 
 ## Shutdown and Recovery
 
-The diagram shows the main worker states and how they change:
+The diagram shows the default lifecycle with idle retention disabled:
 
 <div role="region" aria-label="Worker lifecycle diagram" tabIndex={0} style={{ overflowX: "auto" }}>
 <div style={{ minWidth: "600px" }}>
@@ -184,6 +184,9 @@ stateDiagram-v2
 </div>
 </div>
 
+Workers can stay available between MCP sessions when
+[Worker Idle Timeout](/daemon/configuration#worker-idle-timeout) is enabled.
+
 The `--pass-through` flag disables worker startup. A draining worker cannot
 return to service. Its replacement waits for it to exit. During that wait, new
 requests use passthrough by default. Accepted requests have up to two minutes to
@@ -193,17 +196,19 @@ control.
 Refer to [Identity and Lifecycle](/daemon/reference#understand-broker-identity-and-lifecycle)
 for reconnect grace, remote keepalive timing, restart recovery, and all broker states.
 
-Worker startup has no deadline. The daemon logs a progress message every
-60 seconds and records how long startup took when the worker joins the route.
+Plugin initialization has no overall timeout while MCP sessions remain connected.
+The daemon logs a progress message every 60 seconds and records how long startup
+took when the worker joins the route.
 If startup fails, the daemon retries after one second, then two, four, and so on.
 Retry delays stop increasing at 60 seconds. There is no attempt limit.
 
-If the MCP client that starts the worker disconnects, the daemon cancels its
-launch grant. Another connected MCP can then receive a new grant.
+When the launching MCP disconnects, the daemon keeps startup under the configured
+idle policy or cancels the launch grant. After cancellation, another connected
+MCP can receive a new grant.
 
 When startup fails or the daemon cancels a launch, it releases the worker's
 staged registration right away. Published workers keep their reconnect grace
-period. Slow writes to daemon state do not block request streams or health checks.
+period unless they announce their own exit. Slow writes to daemon state do not block request streams or health checks.
 
 Each request keeps the destination selected when it starts. Streams already
 sent through passthrough finish on that path. Later requests use the ready

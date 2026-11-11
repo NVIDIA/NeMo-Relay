@@ -1,7 +1,7 @@
 // SPDX-FileCopyrightText: Copyright (c) 2026, NVIDIA CORPORATION & AFFILIATES. All rights reserved.
 // SPDX-License-Identifier: Apache-2.0
 
-import { builtinConfig, type BuiltinConfig } from '../pii_redaction.js';
+import { builtinConfig, type BuiltinConfig } from '../dist/pii_redaction.js';
 
 const trajectoryContext: BuiltinConfig = {
   preset: 'trajectory_context',

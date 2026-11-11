@@ -1654,7 +1654,10 @@ pub(super) fn test_daemon_state_at(
         collector: None,
         sockets: socket::Hub::default(),
         registry: Registry::new(pass_through),
-        descriptor: crate::daemon::common::control::descriptor(ComponentRole::Daemon),
+        descriptor: crate::daemon::common::control::descriptor_with_idle_retention(
+            ComponentRole::Daemon,
+            false,
+        ),
         instance_id: "public-proxy-test-daemon".into(),
         pass_through,
         loopback_listener: true,
@@ -1690,6 +1693,226 @@ fn registration_requires_the_complete_lossless_transport_capability_set() {
         "future-version",
     );
     assert!(!has_required_transport_capabilities(&missing_trailers));
+}
+
+#[tokio::test]
+async fn retained_staged_worker_loss_allows_a_connected_client_to_retry() {
+    let mut state = test_daemon_state(false, "", GatewayConfig::default());
+    Arc::get_mut(&mut state).unwrap().registry =
+        Registry::new(false).with_worker_idle_timeout(Duration::from_secs(30));
+    let mut worker = staged_worker_session("failed-retained-worker", u64::MAX);
+    let fingerprint = worker.fingerprint;
+    let token = TokenDigest::from_token(b"retained-worker-loss");
+    let launch = fresh_launch(worker_network()).unwrap();
+    let activation_id = launch.activation_id.clone();
+    worker.publication = WorkerPublication::Activation {
+        activation_id: activation_id.clone(),
+    };
+    state
+        .registry
+        .register_connected_mcp(
+            McpRegistration {
+                fingerprint,
+                token_digest: token,
+                session_id: McpSessionId::new("owner").unwrap(),
+                lease_expires_at_unix_ms: u64::MAX,
+            },
+            launch,
+        )
+        .unwrap();
+    state
+        .registry
+        .mark_activation_registered(fingerprint, &activation_id)
+        .unwrap();
+    state
+        .registry
+        .release_mcp_with_retention(
+            fingerprint,
+            &McpSessionId::new("owner").unwrap(),
+            u64::MAX,
+            Some(&activation_id),
+        )
+        .unwrap();
+    state
+        .registry
+        .register_connected_mcp(
+            McpRegistration {
+                fingerprint,
+                token_digest: token,
+                session_id: McpSessionId::new("reconnected").unwrap(),
+                lease_expires_at_unix_ms: u64::MAX,
+            },
+            fresh_launch(worker_network()).unwrap(),
+        )
+        .unwrap();
+    socket::cleanup_worker_session(Arc::clone(&state), worker.worker_id.clone(), worker).await;
+    assert_eq!(
+        state.registry.snapshot(fingerprint).unwrap().state,
+        super::super::lifecycle::RouteStateKind::PassThrough
+    );
+    assert_eq!(
+        state.registry.activation_candidates(u64::MAX),
+        vec![(fingerprint, McpSessionId::new("reconnected").unwrap())]
+    );
+}
+
+#[tokio::test]
+async fn retained_activation_registers_after_mcp_exit_and_serves_a_reconnected_request() {
+    use crate::daemon::common::control::ReleasePayload;
+    let token = base64::engine::general_purpose::URL_SAFE_NO_PAD.encode([0x7b_u8; 32]);
+    let worker_listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
+    let worker_endpoint = format!("http://{}", worker_listener.local_addr().unwrap());
+    let worker_app = Router::new()
+        .route(
+            WORKER_PROBE_PATH,
+            axum::routing::get(|| async { StatusCode::NO_CONTENT }),
+        )
+        .route(
+            "/v1/chat/completions",
+            post(|headers: HeaderMap| async move {
+                assert!(headers.contains_key(WORKER_TOKEN_HEADER));
+                "response-from-retained-worker"
+            }),
+        );
+    let worker_server =
+        tokio::spawn(async move { axum::serve(worker_listener, worker_app).await.unwrap() });
+    let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
+    let origin = format!("http://{}", listener.local_addr().unwrap());
+    let mut state = test_daemon_state_at(false, &token, GatewayConfig::default(), origin.clone());
+    let mutable = Arc::get_mut(&mut state).unwrap();
+    mutable.registry = Registry::new(false)
+        .with_require_worker(true)
+        .with_worker_idle_timeout(Duration::from_secs(30));
+    mutable.descriptor =
+        crate::daemon::common::control::descriptor_with_idle_retention(ComponentRole::Daemon, true);
+    let server = tokio::spawn({
+        let state = Arc::clone(&state);
+        async move { axum::serve(listener, router(state)).await.unwrap() }
+    });
+    let identity = MachineIdentity::generate().unwrap().identity;
+    let response = enroll_test_mcp(&state, &origin, &identity, &token, "retaining-owner").await;
+    assert_eq!(response.status(), StatusCode::OK);
+    let registration: McpRegisterResponse =
+        serde_json::from_slice(&response.into_body().collect().await.unwrap().to_bytes()).unwrap();
+    assert!(lock(&state.mcp_sessions)["retaining-owner"].idle_retention);
+    let bootstrap =
+        crate::daemon::common::control::WorkerBootstrap::from_directive(registration.directive)
+            .unwrap();
+    assert!(lock(&state.worker_sessions).is_empty());
+    let release = SessionRequest::new(
+        "retaining-owner".into(),
+        registration.session_token,
+        1,
+        ReleasePayload {
+            retained_activation_id: Some(bootstrap.activation_id.clone()),
+        },
+    )
+    .unwrap();
+    assert_eq!(
+        release_mcp(State(Arc::clone(&state)), Json(release.clone()))
+            .await
+            .status(),
+        StatusCode::NO_CONTENT
+    );
+    assert_eq!(
+        release_mcp(State(Arc::clone(&state)), Json(release))
+            .await
+            .status(),
+        StatusCode::NO_CONTENT
+    );
+    assert!(lock(&state.activations).contains_key(&bootstrap.activation_id));
+    assert_eq!(
+        state
+            .registry
+            .snapshot(identity.fingerprint())
+            .unwrap()
+            .reference_count,
+        0
+    );
+
+    let control = control_client().unwrap();
+    let handshake = begin_handshake(
+        &control,
+        &origin,
+        ComponentRole::Worker,
+        &identity,
+        "late-worker",
+        None,
+    )
+    .await
+    .unwrap();
+    let request = WorkerRegisterRequest {
+        diagnostics: None,
+        proof: handshake.proof,
+        worker_id: "late-worker".into(),
+        endpoint: worker_endpoint,
+        activation_id: bootstrap.activation_id,
+        activation_token: bootstrap.activation_token,
+        tls_root_certificate: None,
+    };
+    let response = register_worker(State(Arc::clone(&state)), Json(request)).await;
+    assert_eq!(response.status(), StatusCode::OK);
+    let worker_registration: WorkerRegisterResponse =
+        serde_json::from_slice(&response.into_body().collect().await.unwrap().to_bytes()).unwrap();
+    assert!(lock(&state.worker_sessions).contains_key("late-worker"));
+    let ready = SessionRequest::new(
+        "late-worker".into(),
+        worker_registration.session_token,
+        1,
+        WorkerReadyPayload {
+            worker_id: "late-worker".into(),
+        },
+    )
+    .unwrap();
+    assert_eq!(
+        ready_worker(State(Arc::clone(&state)), Json(ready))
+            .await
+            .status(),
+        StatusCode::NO_CONTENT
+    );
+    assert_eq!(
+        state
+            .registry
+            .snapshot(identity.fingerprint())
+            .unwrap()
+            .reference_count,
+        0
+    );
+    let response = router(Arc::clone(&state))
+        .oneshot(
+            Request::post("/v1/chat/completions")
+                .header(CLIENT_TOKEN_HEADER, &token)
+                .body(Body::from("{}"))
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(response.status(), StatusCode::SERVICE_UNAVAILABLE);
+    let response = enroll_test_mcp(&state, &origin, &identity, &token, "new-session").await;
+    assert_eq!(response.status(), StatusCode::OK);
+    let registration: McpRegisterResponse =
+        serde_json::from_slice(&response.into_body().collect().await.unwrap().to_bytes()).unwrap();
+    assert!(matches!(
+        registration.directive,
+        BrokerDirective::ReuseWorker { .. }
+    ));
+    let response = router(Arc::clone(&state))
+        .oneshot(
+            Request::post("/v1/chat/completions")
+                .header(CLIENT_TOKEN_HEADER, &token)
+                .body(Body::from("{}"))
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(response.status(), StatusCode::OK);
+    assert_eq!(
+        response.into_body().collect().await.unwrap().to_bytes(),
+        "response-from-retained-worker"
+    );
+    assert_eq!(lock(&state.worker_sessions).len(), 1);
+    server.abort();
+    worker_server.abort();
 }
 
 #[test]
@@ -1748,6 +1971,7 @@ fn active_mcp_registration_reuses_its_session_credential() {
             last_request_id: String::new(),
             worker_network: worker_network(),
             released: false,
+            idle_retention: false,
         },
     );
 
@@ -1796,6 +2020,7 @@ fn mcp_session_reuse_rejects_identity_token_and_network_rebinding() {
             last_request_id: String::new(),
             worker_network: worker_network(),
             released: false,
+            idle_retention: false,
         },
     )]);
     for (candidate_fingerprint, candidate_token, candidate_network) in [
@@ -1896,6 +2121,7 @@ fn expired_mcp_control_sessions_and_pending_directives_are_removed_together() {
             last_request_id: String::new(),
             worker_network: worker_network(),
             released: false,
+            idle_retention: false,
         }
     };
     let mut sessions = HashMap::from([
@@ -2189,8 +2415,13 @@ async fn control_handlers_reject_unknown_sessions_and_oversized_failure_payloads
     let token = base64::engine::general_purpose::URL_SAFE_NO_PAD.encode([0x43_u8; 32]);
     let state = test_daemon_state(false, &token, GatewayConfig::default());
     let secret = SensitiveString::new("unknown-session-secret").unwrap();
-    let empty =
-        SessionRequest::new("unknown".into(), secret.clone(), 1, EmptyPayload::default()).unwrap();
+    let empty = SessionRequest::new(
+        "unknown".into(),
+        secret.clone(),
+        1,
+        crate::daemon::common::control::ReleasePayload::default(),
+    )
+    .unwrap();
     assert_eq!(
         release_mcp(State(Arc::clone(&state)), Json(empty))
             .await
@@ -2415,18 +2646,23 @@ async fn worker_registration_and_recovery_fail_closed_at_each_authority_boundary
         StatusCode::BAD_REQUEST
     );
 
-    lock(&state.activations).insert(
-        "replay-activation".into(),
-        Activation {
-            fingerprint: worker.fingerprint(),
-            secret_digest: TokenDigest::from_token(b"replay-token"),
-            deadline_unix_ms: u64::MAX,
-            consumed: false,
-            bind_ip: Ipv4Addr::LOCALHOST,
-            port: 41002,
-            advertise_address: None,
-        },
-    );
+    let mut launch =
+        fresh_launch(WorkerNetworkHint::new("127.0.0.1", Some(41002)).unwrap()).unwrap();
+    launch.activation_id = "replay-activation".into();
+    launch.activation_token = SensitiveString::new("replay-token").unwrap();
+    let directive = state
+        .registry
+        .register_mcp(
+            McpRegistration {
+                fingerprint: worker.fingerprint(),
+                token_digest: RouteCredential::parse(token.clone()).unwrap().digest(),
+                session_id: McpSessionId::new("replay-owner").unwrap(),
+                lease_expires_at_unix_ms: u64::MAX,
+            },
+            launch,
+        )
+        .unwrap();
+    remember_activation(&state, worker.fingerprint(), &directive);
     for worker_id in ["replay-worker", "replay-worker"] {
         let proof = begin_handshake(
             &client,
@@ -2891,6 +3127,7 @@ fn released_mcp_session_credential_is_never_reused() {
             last_request_id: "release-request".into(),
             worker_network: worker_network(),
             released: true,
+            idle_retention: false,
         },
     )]);
     let fresh = SensitiveString::new("fresh-secret").expect("fresh");
@@ -3275,6 +3512,7 @@ async fn retained_mcp_without_a_socket_cannot_receive_a_relaunch() {
             last_request_id: String::new(),
             worker_network: worker_network(),
             released: false,
+            idle_retention: false,
         },
     );
 

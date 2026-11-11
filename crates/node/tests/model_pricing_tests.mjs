@@ -9,8 +9,8 @@ import { tmpdir } from 'node:os';
 import path from 'node:path';
 
 const require = createRequire(import.meta.url);
-const plugin = require('../plugin.js');
-const pricing = require('../model_pricing.js');
+const plugin = require('../dist/plugin.js');
+const pricing = require('../dist/model_pricing.js');
 
 function pricedEntry(overrides = {}) {
   return pricing.catalogEntry({

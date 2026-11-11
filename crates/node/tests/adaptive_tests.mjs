@@ -7,9 +7,9 @@ import { createRequire } from 'node:module';
 import * as pluginHost from './plugin_host_test_helper.mjs';
 
 const require = createRequire(import.meta.url);
-const lib = require('../index.js');
-const plugin = require('../plugin.js');
-const adaptive = require('../adaptive.js');
+const lib = require('../dist/index.js');
+const plugin = require('../dist/plugin.js');
+const adaptive = require('../dist/adaptive.js');
 
 describe('core plugins', () => {
   it('reports active config and lists registered plugin kinds', async () => {

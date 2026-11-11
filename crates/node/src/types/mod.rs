@@ -433,58 +433,6 @@ impl From<CoreLlmHandle> for LlmHandle {
     }
 }
 
-/// An LLM request, encapsulating headers and content.
-///
-/// Construct via `new LlmRequest(headers, content)`.
-#[napi]
-pub struct LlmRequest {
-    pub(crate) inner: CoreLlmRequest,
-}
-
-#[napi]
-impl LlmRequest {
-    /// Create a new LLM request from headers and content.
-    #[napi(constructor, catch_unwind)]
-    pub fn new(
-        #[napi(ts_arg_type = "JsonObject")] headers: serde_json::Value,
-        #[napi(ts_arg_type = "Json")] content: serde_json::Value,
-    ) -> Result<Self> {
-        let Json::Object(headers) = headers else {
-            return Err(Error::invalid_argument(
-                "LlmRequest headers must be a JSON object",
-            ));
-        };
-        Ok(Self {
-            inner: CoreLlmRequest { headers, content },
-        })
-    }
-
-    #[napi(
-        factory,
-        js_name = "from",
-        ts_generic_types = "THeaders extends JsonObjectCompatible<THeaders>, TContent extends JsonCompatible<TContent>",
-        catch_unwind
-    )]
-    pub fn from_parts(
-        #[napi(ts_arg_type = "THeaders")] headers: serde_json::Value,
-        #[napi(ts_arg_type = "TContent")] content: serde_json::Value,
-    ) -> Result<Self> {
-        Self::new(headers, content)
-    }
-
-    /// The metadata headers as a JSON object.
-    #[napi(getter, catch_unwind, ts_return_type = "JsonObject")]
-    pub fn headers(&self) -> serde_json::Value {
-        Json::Object(self.inner.headers.clone())
-    }
-
-    /// The request payload as a JSON value.
-    #[napi(getter, catch_unwind, ts_return_type = "Json")]
-    pub fn content(&self) -> serde_json::Value {
-        self.inner.content.clone()
-    }
-}
-
 /// Observability fields returned by mark and scope event sanitizers.
 #[napi(object)]
 #[derive(Deserialize, Serialize)]

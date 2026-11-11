@@ -3,10 +3,16 @@
 
 //! Native diagnostic bridge: borrowed bounded inputs, one core recording boundary.
 
-use super::{NativeHostPluginRuntime, NemoRelayNativePluginRuntime, native_runtime_ref};
 use nemo_relay_diagnostics::*;
-use nemo_relay_plugin::diagnostics::{DiagnosticError as Error, abi};
+use nemo_relay_plugin::{
+    abi::{
+        borrow::{SliceMut, Str},
+        diagnostics as abi,
+    },
+    diagnostics::{DiagnosticError as Error, limits as bounds},
+};
 use std::num::NonZeroU64;
+use std::sync::Arc;
 use std::sync::{
     Mutex,
     atomic::{AtomicU64, AtomicUsize, Ordering},
@@ -49,7 +55,7 @@ struct Activation {
 }
 struct Session {
     _permit: Permit,
-    components: [Option<Registered>; abi::MAX_COMPONENTS],
+    components: [Option<Registered>; bounds::MAX_COMPONENTS],
     extensions: usize,
     metadata: usize,
 }
@@ -59,7 +65,7 @@ struct Registered {
     key_len: usize,
     owner: ComponentOwner,
     recorder: ComponentRecorder,
-    codes: [Option<Code>; abi::MAX_CODES],
+    codes: [Option<Code>; bounds::MAX_CODES],
 }
 impl Drop for Registered {
     fn drop(&mut self) {
@@ -79,7 +85,7 @@ enum Parsed<'a> {
         name: &'a str,
         description: &'a str,
         outcome: DiagnosticOutcome,
-        classes: [FailureClass; abi::MAX_CLASSES],
+        classes: [FailureClass; bounds::MAX_CLASSES],
         class_count: usize,
     },
 }
@@ -126,10 +132,11 @@ impl NativeDiagnostics {
     }
 }
 impl Activation {
+    /// Allocate bounded diagnostic session storage lazily and retain its process-wide admission permit.
     fn session(&mut self) -> Result<&mut Session> {
         if self.session.is_none() {
             let permit =
-                Permit::acquire(&SESSIONS, abi::MAX_SESSIONS).map_err(|_| Error::Unavailable)?;
+                Permit::acquire(&SESSIONS, bounds::MAX_SESSIONS).map_err(|_| Error::Unavailable)?;
             let mut storage = Vec::new();
             storage
                 .try_reserve_exact(1)
@@ -144,70 +151,48 @@ impl Activation {
         }
         Ok(&mut self.session.as_mut().expect("admitted session")[0])
     }
-    fn capabilities(&self) -> abi::Capabilities {
+    fn capabilities(&self) -> abi::DiagnosticCapabilities {
         let limits = self.context.limits();
-        abi::Capabilities {
-            contract_version: abi::CONTRACT_VERSION,
+        let registration_scratch_bytes = std::mem::size_of::<[Parsed<'_>; bounds::MAX_CODES]>()
+            + std::mem::size_of::<[BuiltinDiagnosticCode; bounds::MAX_CODES]>();
+        abi::DiagnosticCapabilities {
+            contract_version: bounds::CONTRACT_VERSION,
             availability: u32::from(
                 self.context.reader().availability() == DiagnosticAvailability::Available,
             ),
             can_read_context: u32::from(self.read),
-            max_components: abi::MAX_COMPONENTS as u32,
-            max_codes: abi::MAX_CODES as u32,
-            max_extensions: abi::MAX_EXTENSIONS as u32,
-            max_request_bytes: abi::MAX_REQUEST_BYTES as u32,
+            max_components: bounds::MAX_COMPONENTS as u32,
+            max_codes: bounds::MAX_CODES as u32,
+            max_extensions: bounds::MAX_EXTENSIONS as u32,
+            max_request_bytes: bounds::MAX_REQUEST_BYTES as u32,
             max_detail_bytes: limits.max_detail_bytes as u32,
             max_correlation_bytes: limits.max_correlation_bytes as u32,
             max_response_bytes: limits.max_snapshot_bytes,
             max_query_bytes: MAX_DIAGNOSTIC_QUERY_BYTES,
-            max_sessions: abi::MAX_SESSIONS as u32,
-            max_calls: abi::MAX_CALLS as u32,
-            adapter_max_session_bytes: abi::MAX_SESSIONS * std::mem::size_of::<Session>(),
+            max_sessions: bounds::MAX_SESSIONS as u32,
+            max_calls: bounds::MAX_CALLS as u32,
+            adapter_max_session_bytes: bounds::MAX_SESSIONS * std::mem::size_of::<Session>(),
             adapter_session_bytes: self
                 .session
                 .as_ref()
                 .map_or(0, |_| std::mem::size_of::<Session>()),
-            adapter_registration_scratch_bytes: std::mem::size_of::<[Parsed<'_>; abi::MAX_CODES]>()
-                + std::mem::size_of::<[BuiltinDiagnosticCode; abi::MAX_CODES]>(),
+            adapter_registration_scratch_bytes: registration_scratch_bytes,
         }
     }
 }
 
-fn guarded(f: impl FnOnce() -> Result<u32>) -> u32 {
+fn guarded<T>(f: impl FnOnce() -> Result<T>) -> std::result::Result<T, u32> {
     std::panic::catch_unwind(std::panic::AssertUnwindSafe(f))
         .unwrap_or(Err(Error::Internal))
-        .unwrap_or_else(Error::status)
+        .map_err(Error::status)
 }
-unsafe fn runtime<'a>(
-    runtime: *const NemoRelayNativePluginRuntime,
-) -> Result<&'a NativeHostPluginRuntime> {
-    native_runtime_ref(runtime).map_err(|_| Error::Closed)
-}
-unsafe fn text<'a>(value: abi::Bytes, budget: &mut usize) -> Result<&'a str> {
-    if value.len > *budget || value.len > isize::MAX as usize {
+/// Charge borrowed diagnostic text against the remaining request-byte budget.
+fn text<'a>(value: Str<'a>, budget: &mut usize) -> Result<&'a str> {
+    if value.len() > *budget {
         return Err(Error::Capacity);
     }
-    *budget -= value.len;
-    if value.len == 0 {
-        return Ok("");
-    }
-    if value.data.is_null() {
-        return Err(Error::Invalid);
-    }
-    std::str::from_utf8(unsafe { std::slice::from_raw_parts(value.data, value.len) })
-        .map_err(|_| Error::Invalid)
-}
-unsafe fn array<'a, T>(data: *const T, len: usize, cap: usize) -> Result<&'a [T]> {
-    if len > cap {
-        return Err(Error::Capacity);
-    }
-    if len == 0 {
-        return Ok(&[]);
-    }
-    if data.is_null() || !(data as usize).is_multiple_of(std::mem::align_of::<T>()) {
-        return Err(Error::Invalid);
-    }
-    Ok(unsafe { std::slice::from_raw_parts(data, len) })
+    *budget -= value.len();
+    Ok(value.as_str())
 }
 fn outcome(tag: u32) -> Result<DiagnosticOutcome> {
     match tag {
@@ -233,50 +218,19 @@ fn core_error(error: DiagnosticError) -> Error {
         _ => Error::Internal,
     }
 }
-unsafe extern "C" fn capabilities(
-    runtime_ptr: *const NemoRelayNativePluginRuntime,
-    out: *mut abi::Capabilities,
-) -> u32 {
-    guarded(|| {
-        if out.is_null() {
-            return Err(Error::Invalid);
-        }
-        unsafe {
-            out.write(abi::Capabilities::default());
-        }
-        let runtime = unsafe { runtime(runtime_ptr)? };
-        runtime.diagnostics.with(|a| {
-            unsafe {
-                out.write(a.capabilities());
-            }
-            Ok(0)
-        })
-    })
-}
-unsafe extern "C" fn register(
-    runtime_ptr: *const NemoRelayNativePluginRuntime,
-    input: *const abi::Registration,
-    out: *mut u64,
-) -> u32 {
-    guarded(|| {
-        if out.is_null() {
-            return Err(Error::Invalid);
-        }
-        unsafe {
-            out.write(0);
-        }
-        let runtime = unsafe { runtime(runtime_ptr)? };
-        let _call = Permit::acquire(&CALLS, abi::MAX_CALLS)?;
-        runtime.diagnostics.with(|a| {
+impl NativeDiagnostics {
+    fn capabilities(&self) -> Result<abi::DiagnosticCapabilities> {
+        self.with(|active| Ok(active.capabilities()))
+    }
+    /// Admit a bounded producer declaration and return an activation-owned component token.
+    fn register(&self, input: abi::DiagnosticRegistration<'_>) -> Result<u64> {
+        let _call = Permit::acquire(&CALLS, bounds::MAX_CALLS)?;
+        self.with(|a| {
             if a.context.reader().availability() == DiagnosticAvailability::Disabled {
-                return Ok(1);
+                return Ok(0);
             }
-            if input.is_null() {
-                return Err(Error::Invalid);
-            }
-            let input = unsafe { &*input };
-            let mut budget = abi::MAX_REQUEST_BYTES;
-            let key = unsafe { text(input.name, &mut budget)? };
+            let mut budget = bounds::MAX_REQUEST_BYTES;
+            let key = text(input.name, &mut budget)?;
             if key.is_empty()
                 || key.len() > a.context.limits().max_identity_bytes
                 || key.len() > 128
@@ -289,8 +243,8 @@ unsafe extern "C" fn register(
                 builtin_count,
                 extension_count,
                 count: definition_count,
-            } = unsafe { parse_definitions(input, &mut budget)? };
-            let metadata = abi::MAX_REQUEST_BYTES - budget;
+            } = parse_definitions(&input, &mut budget)?;
+            let metadata = bounds::MAX_REQUEST_BYTES - budget;
             let context = a.context.clone();
             let instance = a.instance;
             let responsibility = (a.responsibility_len > 0).then(|| {
@@ -312,8 +266,8 @@ unsafe extern "C" fn register(
                 .iter()
                 .position(Option::is_none)
                 .ok_or(Error::Capacity)?;
-            if session.extensions + extension_count > abi::MAX_EXTENSIONS
-                || session.metadata + metadata > abi::MAX_REQUEST_BYTES
+            if session.extensions + extension_count > bounds::MAX_EXTENSIONS
+                || session.metadata + metadata > bounds::MAX_REQUEST_BYTES
             {
                 return Err(Error::Capacity);
             }
@@ -333,7 +287,7 @@ unsafe extern "C" fn register(
                 key_len: key.len(),
                 owner,
                 recorder,
-                codes: [None; abi::MAX_CODES],
+                codes: [None; bounds::MAX_CODES],
             };
             registered.key[..key.len()].copy_from_slice(key.as_bytes());
             let mut namespace = [0u8; 39];
@@ -344,41 +298,25 @@ unsafe extern "C" fn register(
             session.extensions += extension_count;
             session.metadata += metadata;
             session.components[slot] = Some(registered);
-            unsafe {
-                out.write(token);
-            }
-            Ok(0)
+            Ok(token)
         })
-    })
-}
-unsafe extern "C" fn record(
-    runtime_ptr: *const NemoRelayNativePluginRuntime,
-    token: u64,
-    input: *const abi::Observation,
-    out: *mut abi::Receipt,
-) -> u32 {
-    guarded(|| {
-        if out.is_null() {
-            return Err(Error::Invalid);
-        }
-        unsafe {
-            out.write(abi::Receipt::default());
-        }
-        let runtime = unsafe { runtime(runtime_ptr)? };
-        let _call = Permit::acquire(&CALLS, abi::MAX_CALLS)?;
-        runtime.diagnostics.with(|a| {
+    }
+    /// Validate an owned producer observation and return its receipt, or no receipt when collection is disabled.
+    fn record(
+        &self,
+        token: u64,
+        input: abi::DiagnosticObservation<'_>,
+    ) -> Result<Option<abi::DiagnosticReceipt>> {
+        let _call = Permit::acquire(&CALLS, bounds::MAX_CALLS)?;
+        self.with(|a| {
             if a.context.reader().availability() == DiagnosticAvailability::Disabled {
-                return Ok(1);
+                return Ok(None);
             }
-            if input.is_null() {
-                return Err(Error::Invalid);
-            }
-            let input = unsafe { &*input };
-            let mut budget = abi::MAX_REQUEST_BYTES;
-            let detail = unsafe { text(input.detail, &mut budget)? };
-            let request = unsafe { text(input.request_id, &mut budget)? };
-            let session_id = unsafe { text(input.session_id, &mut budget)? };
-            let class = unsafe { text(input.failure_class, &mut budget)? };
+            let mut budget = bounds::MAX_REQUEST_BYTES;
+            let detail = text(input.detail, &mut budget)?;
+            let request = text(input.request_id, &mut budget)?;
+            let session_id = text(input.session_id, &mut budget)?;
+            let class = text(input.failure_class, &mut budget)?;
             let class = if class.is_empty() {
                 None
             } else {
@@ -426,32 +364,27 @@ unsafe extern "C" fn record(
                 .record_without_projection(observation)
                 .map_err(core_error)?
             {
-                RecordOutcome::Disabled => Ok(1),
+                RecordOutcome::Disabled => Ok(None),
                 RecordOutcome::Recorded(receipt) => {
                     let total = receipt.code_total.unwrap_or_default();
-                    unsafe {
-                        out.write(abi::Receipt {
-                            sequence: receipt.sequence,
-                            total: total.value.get(),
-                            total_present: u32::from(receipt.code_total.is_some()),
-                            saturated: u32::from(total.saturated),
-                            evidence: match receipt.evidence {
-                                EvidenceDisposition::Retained => 0,
-                                EvidenceDisposition::Truncated => 1,
-                                EvidenceDisposition::Dropped => 2,
-                            },
-                        });
-                    }
-                    Ok(0)
+                    Ok(Some(abi::DiagnosticReceipt {
+                        sequence: receipt.sequence,
+                        total: total.value.get(),
+                        total_present: u32::from(receipt.code_total.is_some()),
+                        saturated: u32::from(total.saturated),
+                        evidence: match receipt.evidence {
+                            EvidenceDisposition::Retained => 0,
+                            EvidenceDisposition::Truncated => 1,
+                            EvidenceDisposition::Dropped => 2,
+                        },
+                    }))
                 }
             }
         })
-    })
-}
-unsafe extern "C" fn close(runtime_ptr: *const NemoRelayNativePluginRuntime, token: u64) -> u32 {
-    guarded(|| {
-        let runtime = unsafe { runtime(runtime_ptr)? };
-        runtime.diagnostics.with(|a| {
+    }
+    /// Release a live component diagnostic registration identified by its session token.
+    fn close(&self, token: u64) -> Result<()> {
+        self.with(|a| {
             let session = a.session.as_mut().ok_or(Error::Closed)?;
             let slot = session[0]
                 .components
@@ -459,60 +392,25 @@ unsafe extern "C" fn close(runtime_ptr: *const NemoRelayNativePluginRuntime, tok
                 .find(|v| v.as_ref().is_some_and(|c| c.token == token))
                 .ok_or(Error::Closed)?;
             slot.take();
-            Ok(0)
+            Ok(())
         })
-    })
-}
-struct Output<'a> {
-    bytes: &'a mut [u8],
-    written: usize,
-}
-impl std::io::Write for Output<'_> {
-    fn write(&mut self, bytes: &[u8]) -> std::io::Result<usize> {
-        if bytes.len() > self.bytes.len() - self.written {
-            return Err(std::io::ErrorKind::OutOfMemory.into());
-        }
-        self.bytes[self.written..self.written + bytes.len()].copy_from_slice(bytes);
-        self.written += bytes.len();
-        Ok(bytes.len())
     }
-    fn flush(&mut self) -> std::io::Result<()> {
-        Ok(())
-    }
-}
-unsafe extern "C" fn read(
-    runtime_ptr: *const NemoRelayNativePluginRuntime,
-    kind: u32,
-    query: abi::Bytes,
-    output: *mut u8,
-    capacity: usize,
-    written: *mut usize,
-) -> u32 {
-    guarded(|| {
-        if written.is_null() {
-            return Err(Error::Invalid);
-        }
-        unsafe {
-            written.write(0);
-        }
-        let runtime = unsafe { runtime(runtime_ptr)? };
-        let _call = Permit::acquire(&CALLS, abi::MAX_CALLS)?;
-        runtime.diagnostics.with(|a| {
+    /// Check live read authority and serialize the selected diagnostic report into bounded caller-owned storage.
+    fn read(&self, kind: u32, query: Str<'_>, output: &mut [u8]) -> Result<usize> {
+        let _call = Permit::acquire(&CALLS, bounds::MAX_CALLS)?;
+        self.with(|a| {
             if !a.read {
                 return Err(Error::PermissionDenied);
             }
             if a.context.reader().availability() == DiagnosticAvailability::Disabled {
                 return Err(Error::Read(DiagnosticReadReason::Disabled));
             }
-            if output.is_null() || capacity > isize::MAX as usize {
-                return Err(Error::Invalid);
-            }
             let mut budget = MAX_DIAGNOSTIC_QUERY_BYTES;
-            let query = unsafe { text(query, &mut budget) }
+            let query = text(query, &mut budget)
                 .map_err(|_| Error::Read(DiagnosticReadReason::InvalidQuery))?;
             let query = decode_diagnostic_query(query).map_err(Error::Read)?;
-            let limit = capacity.min(a.context.limits().max_snapshot_bytes);
-            let destination = unsafe { std::slice::from_raw_parts_mut(output, limit) };
+            let limit = output.len().min(a.context.limits().max_snapshot_bytes);
+            let destination = &mut output[..limit];
             let reader = a.context.reader();
             let mut out = Output {
                 bytes: destination,
@@ -539,24 +437,28 @@ unsafe extern "C" fn read(
                 }
                 _ => return Err(Error::Invalid),
             }
-            unsafe {
-                written.write(out.written);
-            }
-            Ok(0)
+            Ok(out.written)
         })
-    })
+    }
 }
-/// Static host-lifetime callback table; the outer ABI tail is size-discovered.
-pub(super) static API: abi::NativeDiagnosticsApiV1 = abi::NativeDiagnosticsApiV1 {
-    struct_size: std::mem::size_of::<abi::NativeDiagnosticsApiV1>(),
-    contract_version: abi::CONTRACT_VERSION,
-    capabilities,
-    register,
-    record,
-    close,
-    read,
-};
-
+struct Output<'a> {
+    bytes: &'a mut [u8],
+    written: usize,
+}
+impl std::io::Write for Output<'_> {
+    /// Copy serialized diagnostic bytes into caller-owned storage without exceeding its capacity.
+    fn write(&mut self, bytes: &[u8]) -> std::io::Result<usize> {
+        if bytes.len() > self.bytes.len() - self.written {
+            return Err(std::io::ErrorKind::OutOfMemory.into());
+        }
+        self.bytes[self.written..self.written + bytes.len()].copy_from_slice(bytes);
+        self.written += bytes.len();
+        Ok(bytes.len())
+    }
+    fn flush(&mut self) -> std::io::Result<()> {
+        Ok(())
+    }
+}
 fn code_observation<'a>(
     code: Code,
     class: Option<FailureClass>,
@@ -627,30 +529,34 @@ fn register_codes(
 }
 
 struct ParsedDefinitions<'a> {
-    codes: [Parsed<'a>; abi::MAX_CODES],
-    builtin: [BuiltinDiagnosticCode; abi::MAX_CODES],
+    codes: [Parsed<'a>; bounds::MAX_CODES],
+    builtin: [BuiltinDiagnosticCode; bounds::MAX_CODES],
     builtin_count: usize,
     extension_count: usize,
     count: usize,
 }
 
-unsafe fn parse_definitions<'a>(
-    input: &'a abi::Registration,
+/// Validate bounded diagnostic code declarations and reject duplicate or unauthorized codes.
+fn parse_definitions<'a>(
+    input: &'a abi::DiagnosticRegistration<'_>,
     budget: &mut usize,
 ) -> Result<ParsedDefinitions<'a>> {
-    let definitions = unsafe { array(input.codes, input.code_count, abi::MAX_CODES)? };
+    let definitions = input.codes.as_slice();
+    if definitions.len() > bounds::MAX_CODES {
+        return Err(Error::Capacity);
+    }
     if definitions.is_empty() {
         return Err(Error::Invalid);
     }
-    let mut parsed = [Parsed::Empty; abi::MAX_CODES];
-    let mut builtin = [BuiltinDiagnosticCode::all()[0]; abi::MAX_CODES];
+    let mut parsed = [Parsed::Empty; bounds::MAX_CODES];
+    let mut builtin = [BuiltinDiagnosticCode::all()[0]; bounds::MAX_CODES];
     let mut builtin_count = 0;
     let mut extension_count = 0;
     for (index, def) in definitions.iter().enumerate() {
-        let name = unsafe { text(def.name, budget)? };
+        let name = text(def.name, budget)?;
         match def.kind {
             0 => {
-                if def.description.len != 0 || def.class_count != 0 || def.outcome != 0 {
+                if !def.description.is_empty() || !def.classes.is_empty() || def.outcome != 0 {
                     return Err(Error::Invalid);
                 }
                 let code =
@@ -669,7 +575,7 @@ unsafe fn parse_definitions<'a>(
                 parsed[index] = Parsed::Builtin(code);
             }
             1 => {
-                let description = unsafe { text(def.description, budget)? };
+                let description = text(def.description, budget)?;
                 if name.is_empty()
                     || name.len() > 32
                     || description.len() > 256
@@ -679,7 +585,7 @@ unsafe fn parse_definitions<'a>(
                 {
                     return Err(Error::Invalid);
                 }
-                parsed[index] = unsafe { parse_extension(def, name, description, budget)? };
+                parsed[index] = parse_extension(def, name, description, budget)?;
                 extension_count += 1;
             }
             _ => return Err(Error::Invalid),
@@ -694,17 +600,21 @@ unsafe fn parse_definitions<'a>(
     })
 }
 
-unsafe fn parse_extension<'a>(
-    def: &abi::Code,
+/// Validate an extension code and its allowed failure classes within the request budget.
+fn parse_extension<'a>(
+    def: &abi::DiagnosticCode<'_>,
     name: &'a str,
     description: &'a str,
     budget: &mut usize,
 ) -> Result<Parsed<'a>> {
-    let raw_classes = unsafe { array(def.classes, def.class_count, abi::MAX_CLASSES)? };
-    let mut classes = [FailureClass::Unknown; abi::MAX_CLASSES];
+    let raw_classes = def.classes.as_slice();
+    if raw_classes.len() > bounds::MAX_CLASSES {
+        return Err(Error::Capacity);
+    }
+    let mut classes = [FailureClass::Unknown; bounds::MAX_CLASSES];
     for (i, value) in raw_classes.iter().enumerate() {
-        classes[i] = FailureClass::from_canonical_name(unsafe { text(*value, budget)? })
-            .ok_or(Error::Invalid)?;
+        classes[i] =
+            FailureClass::from_canonical_name(text(*value, budget)?).ok_or(Error::Invalid)?;
         if classes[..i].contains(&classes[i]) {
             return Err(Error::Invalid);
         }
@@ -725,3 +635,53 @@ unsafe fn parse_extension<'a>(
 #[cfg(test)]
 #[path = "../../tests/unit/native_diagnostics_tests.rs"]
 mod tests;
+
+/// Typed revocable diagnostic authority; retains no executor or raw host table.
+#[derive(Clone)]
+pub(in crate::dynamic) struct CheckedDiagnostics {
+    pub(super) runtime: Arc<NativeDiagnostics>,
+}
+impl CheckedDiagnostics {
+    pub(in crate::dynamic) fn new(context: Diagnostics, read: bool, namespace: &str) -> Self {
+        Self {
+            runtime: Arc::new(NativeDiagnostics::new(context, read, namespace)),
+        }
+    }
+    pub(in crate::dynamic) fn registered(&self) {
+        self.runtime.registered();
+    }
+    pub(in crate::dynamic) fn revoke(&self) {
+        self.runtime.revoke();
+    }
+}
+impl abi::Diagnostics for CheckedDiagnostics {
+    fn capabilities(&self) -> std::result::Result<abi::DiagnosticCapabilities, u32> {
+        guarded(|| self.runtime.capabilities())
+    }
+    fn register(&self, input: abi::DiagnosticRegistration<'_>) -> std::result::Result<u64, u32> {
+        guarded(|| self.runtime.register(input))
+    }
+    /// Translate diagnostic admission results to ABI receipts, including the reserved disabled status.
+    fn record(
+        &self,
+        token: u64,
+        input: abi::DiagnosticObservation<'_>,
+    ) -> std::result::Result<abi::DiagnosticReceipt, u32> {
+        match guarded(|| self.runtime.record(token, input)) {
+            std::result::Result::Ok(Some(receipt)) => std::result::Result::Ok(receipt),
+            std::result::Result::Ok(None) => std::result::Result::Err(1),
+            std::result::Result::Err(error) => std::result::Result::Err(error),
+        }
+    }
+    fn close(&self, token: u64) -> std::result::Result<(), u32> {
+        guarded(|| self.runtime.close(token))
+    }
+    fn read(
+        &self,
+        kind: u32,
+        query: Str<'_>,
+        mut output: SliceMut<'_, u8>,
+    ) -> std::result::Result<usize, u32> {
+        guarded(|| self.runtime.read(kind, query, output.as_mut_slice()))
+    }
+}

@@ -6,7 +6,8 @@ import assert from 'node:assert/strict';
 import { createRequire } from 'node:module';
 
 const require = createRequire(import.meta.url);
-const adaptive = require('../adaptive.js');
+const adaptive = require('../dist/adaptive.js');
+const { ScopeType, withScope } = require('../dist/index.js');
 
 function acgRuntimeConfig(provider = 'anthropic') {
   return {
@@ -116,9 +117,15 @@ describe('adaptive runtime bridge', () => {
 
   it('registers an owned runtime and builds cache request facts', async () => {
     const runtime = new adaptive.AdaptiveRuntime(acgRuntimeConfig('openai'));
+    await withScope('unbound', ScopeType.Agent, (handle) => {
+      assert.throws(() => runtime.bindScope(handle), /binding ACG request intercepts/);
+    });
     await runtime.register();
     try {
       assert.deepEqual(runtime.report().diagnostics, []);
+      await withScope('bound', ScopeType.Agent, (handle) => {
+        runtime.bindScope(handle);
+      });
       const facts = runtime.buildCacheRequestFacts({
         provider: 'openai',
         requestId: '00000000-0000-0000-0000-000000000203',

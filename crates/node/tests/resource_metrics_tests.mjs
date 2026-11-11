@@ -6,8 +6,8 @@ import { describe, it } from 'node:test';
 import { createRequire } from 'node:module';
 
 const require = createRequire(import.meta.url);
-const relay = require('../index.js');
-const plugin = require('../plugin.js');
+const relay = require('../dist/index.js');
+const plugin = require('../dist/plugin.js');
 
 const config = (resourceConfig = {}) => ({
   version: 1,

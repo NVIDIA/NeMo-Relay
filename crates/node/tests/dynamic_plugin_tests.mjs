@@ -12,8 +12,8 @@ import { fileURLToPath } from 'node:url';
 import { createRequire } from 'node:module';
 
 const require = createRequire(import.meta.url);
-const lib = require('../index.js');
-const plugin = require('../plugin.js');
+const lib = require('../dist/index.js');
+const plugin = require('../dist/plugin.js');
 
 const nodeDir = fileURLToPath(new URL('..', import.meta.url));
 const repoRoot = path.resolve(nodeDir, '../..');
@@ -65,7 +65,7 @@ kind = "rust_dynamic"
 
 [compat]
 relay = ">=1.0.0,<2.0"
-native_api = "1"
+native_api = "v1.0"
 
 [defaults]
 enabled = false
@@ -81,7 +81,6 @@ sha256 = "sha256:${createHash('sha256').update(readFileSync(libraryPath)).digest
 
 [load]
 library = ${tomlString(libraryPath)}
-symbol = "nemo_relay_fixture_native_plugin"
 `,
   );
   return manifestRef;
@@ -210,8 +209,24 @@ before(() => {
   mkdirSync(isolatedConfigHome, { recursive: true });
   process.chdir(tempRoot);
   process.env.XDG_CONFIG_HOME = isolatedConfigHome;
-  const nativeFixture = path.join(repoRoot, 'crates', 'plugin-host', 'tests', 'fixtures', 'native_plugin', 'Cargo.toml');
-  const workerFixture = path.join(repoRoot, 'crates', 'plugin-host', 'tests', 'fixtures', 'worker_plugin', 'Cargo.toml');
+  const nativeFixture = path.join(
+    repoRoot,
+    'crates',
+    'plugin-host',
+    'tests',
+    'fixtures',
+    'native_plugin',
+    'Cargo.toml',
+  );
+  const workerFixture = path.join(
+    repoRoot,
+    'crates',
+    'plugin-host',
+    'tests',
+    'fixtures',
+    'worker_plugin',
+    'Cargo.toml',
+  );
   buildFixture(nativeFixture);
   buildFixture(workerFixture);
   nativeManifestRef = writeNativeManifest(path.join(fixtureTarget, 'debug', nativeLibraryName()));
@@ -587,7 +602,7 @@ enabled = true
   });
 
   it('defensively clears a native activation during garbage collection', () => {
-    const pluginModule = path.join(nodeDir, 'plugin.js');
+    const pluginModule = path.join(nodeDir, 'dist', 'plugin.js');
     const pluginsToml = writePluginHostConfig([activationSpec('fixture_native', 'rust_dynamic', nativeManifestRef)]);
     const script = `
       import { createRequire } from 'node:module';
@@ -642,7 +657,7 @@ enabled = true
       const pidFile = path.join(tempRoot, 'finalizer-worker.pid');
       const wrapper = writeWorkerWrapper(workerBinary, pidFile, 'finalizer-worker');
       const manifestRef = writeWorkerManifest(wrapper, 'finalizer-worker');
-      const pluginModule = path.join(nodeDir, 'plugin.js');
+      const pluginModule = path.join(nodeDir, 'dist', 'plugin.js');
       const pluginsToml = writePluginHostConfig([activationSpec('fixture_worker', 'worker', manifestRef)]);
       const script = `
         import { spawn } from 'node:child_process';

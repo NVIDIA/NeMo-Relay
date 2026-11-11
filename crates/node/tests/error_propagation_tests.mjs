@@ -6,8 +6,8 @@ import assert from 'node:assert/strict';
 import { createRequire } from 'node:module';
 
 const require = createRequire(import.meta.url);
-const lib = require('../index.js');
-const adaptive = require('../adaptive.js');
+const lib = require('../dist/index.js');
+const adaptive = require('../dist/adaptive.js');
 
 const {
   GeminiGenerateContentCodec,
