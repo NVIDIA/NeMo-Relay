@@ -1160,7 +1160,28 @@ docs-linkcheck: docs-examples
 
 # compile and run Rust examples shared with the documentation
 docs-examples:
-    cargo test --locked -p nemo-relay-types -p nemo-relay --test documentation_examples
+    NEMO_RELAY_TEST_SKIP_IMPLICIT_CONFIG=1 cargo test --locked -p nemo-relay-types -p nemo-relay --features nemo-relay/__skip-implicit-config --test documentation_examples
+
+# Build current bindings and exercise the source displayed in Instrument Applications.
+test-instrumentation-examples:
+    #!/usr/bin/env bash
+    {{ bash_helpers }}
+    cd "$NEMO_RELAY_REPO_ROOT"
+    uv sync --frozen --inexact --no-default-groups --group dev --group test --no-install-project
+    python_executable="$(project_python_executable)"
+    activate_project_venv
+    test_config_root="$(mktemp -d)"
+    trap 'rm -rf "$test_config_root"' EXIT
+    export XDG_CONFIG_HOME="$test_config_root/xdg"
+    export NEMO_RELAY_TEST_SYSTEM_CONFIG_DIR="$test_config_root/system"
+    export NEMO_RELAY_TEST_SKIP_IMPLICIT_CONFIG=1
+    mkdir -p "$XDG_CONFIG_HOME" "$NEMO_RELAY_TEST_SYSTEM_CONFIG_DIR"
+    use_project_python_source "$python_executable"
+    "$python_executable" -m maturin develop --locked --skip-install --features __skip-implicit-config
+    npm run build-debug --workspace=nemo-relay-node -- --features __skip-implicit-config
+    "$python_executable" -m pytest python/tests/test_instrumentation_examples.py -q
+    node --test --test-force-exit --test-timeout=30000 crates/node/tests/documentation_examples_tests.mjs
+    cargo test --locked -p nemo-relay --features __skip-implicit-config --test documentation_examples instrument_applications
 
 # regenerate the ignored Fern API reference pages
 docs-api-reference:

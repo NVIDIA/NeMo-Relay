@@ -11,6 +11,11 @@ on:
         required: false
         default: false
         type: boolean
+      run_documentation_examples:
+        description: 'Whether to run focused instrumentation example checks'
+        required: false
+        default: false
+        type: boolean
       run_python_integration_langchain:
         description: 'Whether LangChain, LangGraph, and DeepAgents Python integration checks may need optional extras'
         required: false
@@ -267,6 +272,16 @@ jobs:
             fi
             pre-commit run --from-ref "$base_ref" --to-ref HEAD --show-diff-on-failure
           fi
+
+      - name: Install locked Node dependencies for instrumentation examples
+        if: ${{ inputs.run_documentation_examples }}
+        working-directory: ${{ env.NEMO_RELAY_CI_WORKSPACE }}
+        run: npm ci --ignore-scripts
+
+      - name: Run displayed examples against current SDKs
+        if: ${{ inputs.run_documentation_examples }}
+        working-directory: ${{ env.NEMO_RELAY_CI_WORKSPACE }}
+        run: just test-instrumentation-examples
 
       - name: Test binary package assembly
         working-directory: ${{ env.NEMO_RELAY_CI_WORKSPACE }}

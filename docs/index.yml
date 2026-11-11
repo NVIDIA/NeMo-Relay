@@ -79,6 +79,10 @@ navigation:
                 icon: fa-brands fa-rust
                 path: ./getting-started/quick-start/rust.mdx
                 slug: rust
+  - folder: ./instrument-applications
+    title: "Instrument Applications"
+    slug: instrument-applications
+    title-source: frontmatter
   - section: "NVIDIA NeMo Relay CLI"
     slug: nemo-relay-cli
     contents:
@@ -160,10 +164,6 @@ navigation:
   - folder: ./supported-integrations
     title: "Supported Integrations"
     slug: supported-integrations
-    title-source: frontmatter
-  - folder: ./instrument-applications
-    title: "Instrument Applications"
-    slug: instrument-applications
     title-source: frontmatter
   - section: "Use Plugins"
     slug: configure-plugins
