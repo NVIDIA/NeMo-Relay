@@ -1,0 +1,55 @@
+---
+title: "Frameworks"
+description: "Install Relay for Google ADK, LangChain, LangGraph, or Deep Agents."
+position: 2
+---
+{/* SPDX-FileCopyrightText: Copyright (c) 2026, NVIDIA CORPORATION & AFFILIATES. All rights reserved.
+SPDX-License-Identifier: Apache-2.0 */}
+
+Add the extra for your framework to an existing Python project. These commands
+install the latest stable Relay release and the framework dependencies it needs.
+The quick starts include project creation and pin their example versions.
+
+## Google ADK
+
+```bash
+uv add "nemo-relay[google-adk]"
+```
+
+Continue with the [Google ADK Quick Start](/getting-started/quick-start/google-adk)
+or [Google ADK Integration Guide](/supported-integrations/google-adk).
+
+## LangChain
+
+```bash
+uv add "nemo-relay[langchain]"
+```
+
+Continue with the [LangChain Quick Start](/getting-started/quick-start/langchain).
+
+## LangGraph
+
+```bash
+uv add "nemo-relay[langgraph]"
+```
+
+Continue with the [LangGraph Quick Start](/getting-started/quick-start/langgraph).
+
+## Deep Agents
+
+```bash
+uv add "nemo-relay[deepagents]"
+```
+
+Continue with the [Deep Agents Quick Start](/getting-started/quick-start/deep-agents).
+
+## Installation Notes
+
+Run `uv add` in a project with a `pyproject.toml`; run `uv init` first for a new
+project. If you use an active virtual environment without project metadata, use
+`uv pip install` or `pip install` with the same package extra instead.
+
+Model providers can require additional dependencies and credentials. The LangChain
+and Deep Agents quick starts include the `langchain-nvidia` extra for their NVIDIA
+model examples. For integration coverage and configuration, use
+[Supported Integrations](/supported-integrations/about).

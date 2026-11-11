@@ -1,103 +1,125 @@
 ---
 title: "About"
-description: "Choose where NeMo Relay attaches to your agent system."
+description: "Find the right Relay guide for your goal."
 position: 1
 ---
 {/* SPDX-FileCopyrightText: Copyright (c) 2026, NVIDIA CORPORATION & AFFILIATES. All rights reserved.
 SPDX-License-Identifier: Apache-2.0 */}
 
-NeMo Relay observes and controls agent work at the boundary where it runs.
-Choose the path that matches the agent runtime, framework, or application you
-already use.
+{/* Keep navigation button spacing and colors scoped to these two tables. */}
+<style>{`
+:is(.relay-start-paths, .relay-develop-paths) td a {
+  display: inline-flex;
+  margin-block: 0.2rem;
+  margin-inline-end: 0.15rem;
+}
 
-## Choose Where Relay Attaches
+.relay-start-paths td:nth-child(2) .fern-button {
+  background-color: #e5f4ff;
+  color: #006bc2;
+}
 
-Use the boundary that owns the model request or tool execution:
+.relay-start-paths td:nth-child(3) .fern-button {
+  background-color: #fff4b8;
+  color: #715600;
+}
 
-- **Agent runtime:** Observe a coding agent without changing application code.
-- **Framework:** Use a maintained integration when the framework owns callbacks
-  and tool execution.
-- **Application:** Instrument Python, Node.js, or Rust code when your
-  application owns the tool or model call.
+.relay-develop-paths .fern-button {
+  background-color: #ffead5;
+  color: #9a4100;
+}
 
-You do not need a Rust compiler, a source checkout, or repository development
-tools to install a published CLI binary.
+:is(.relay-start-paths, .relay-develop-paths) .fern-button:hover {
+  box-shadow: inset 0 0 0 1px currentColor;
+}
 
-## Try Relay Now
+:where(.dark, html[data-theme="dark"], html[data-mode="dark"]) .relay-start-paths td:nth-child(2) .fern-button {
+  background-color: #082844;
+  color: #91caff;
+}
 
-<CardGroup cols={1}>
-<Card title="Quick Starts" icon="fa-solid fa-bolt" href="/getting-started/quick-start">
-Choose the shortest path for your runtime or application, then verify its output.
-</Card>
-</CardGroup>
+:where(.dark, html[data-theme="dark"], html[data-mode="dark"]) .relay-start-paths td:nth-child(3) .fern-button {
+  background-color: #483a0b;
+  color: #ffe58f;
+}
+
+:where(.dark, html[data-theme="dark"], html[data-mode="dark"]) .relay-develop-paths .fern-button {
+  background-color: #4d2a11;
+  color: #ffc18a;
+}
+`}</style>
+
+Getting Started is for new Relay users and anyone exploring a new feature or
+integration. Find a first workflow, then go deeper with the related guides.
+
+## Choose Your Path
+
+Start with the best match for the framework or harness you already use.
+
+<div className="relay-start-paths">
+
+| Goal | Start with | Explore further with |
+| --- | --- | --- |
+| **Observe Codex, Claude Code, or pi on your machine** | <Button small minimal href="/getting-started/quick-start/codex">Codex QS</Button> <Button small minimal href="/getting-started/quick-start/claude-code">Claude Code QS</Button> <Button small minimal href="/getting-started/quick-start/pi">pi QS</Button> | <Button small minimal href="/nemo-relay-cli/codex">Codex guide</Button> <Button small minimal href="/nemo-relay-cli/claude-code">Claude Code guide</Button> <Button small minimal href="/nemo-relay-cli/pi">pi guide</Button> |
+| **Use Relay with Hermes Agent** | <Button small minimal href="/getting-started/quick-start/hermes">Hermes Agent QS</Button> | <Button small minimal href="/configure-plugins/plugin-configuration-files">Plugin configuration</Button> |
+| **Use Relay with OpenClaw** | <Button small minimal href="/supported-integrations/openclaw-plugin">OpenClaw plugin guide</Button> | <Button small minimal href="/supported-integrations/openclaw-plugin#runtime-mapping">Runtime mapping</Button> <Button small minimal href="/supported-integrations/openclaw-plugin#llm-replay-fidelity">LLM replay fidelity</Button> |
+| **Instrument LLM or tool calls your application owns** | <Button small minimal href="/getting-started/quick-start/python">Python QS</Button> <Button small minimal href="/getting-started/quick-start/nodejs">Node.js QS</Button> <Button small minimal href="/getting-started/quick-start/rust">Rust QS</Button> | <Button small minimal href="/instrument-applications/about">Instrument Applications</Button> <Button small minimal href="/instrument-applications/advanced-guide">Advanced instrumentation</Button> |
+| **Use LangChain, LangGraph, Deep Agents, or Google ADK** | <Button small minimal href="/getting-started/quick-start/langchain">LangChain QS</Button> <Button small minimal href="/getting-started/quick-start/langgraph">LangGraph QS</Button> <Button small minimal href="/getting-started/quick-start/deep-agents">Deep Agents QS</Button> <Button small minimal href="/getting-started/quick-start/google-adk">Google ADK QS</Button> | <Button small minimal href="/supported-integrations/langchain">LangChain guide</Button> <Button small minimal href="/supported-integrations/langgraph">LangGraph guide</Button> <Button small minimal href="/supported-integrations/deepagents">Deep Agents guide</Button> <Button small minimal href="/supported-integrations/google-adk">Google ADK guide</Button> |
+| **Export traces, trajectories, or raw events** | <Button small minimal href="/configure-plugins/observability/about">Observability</Button> | <Button small minimal href="/configure-plugins/observability/configuration">Export configuration</Button> <Button small minimal href="/configure-plugins/observability/opentelemetry">OpenTelemetry</Button> <Button small minimal href="/configure-plugins/observability/openinference">OpenInference</Button> |
+| **Use plugins** | <Button small minimal href="/configure-plugins/about">Use Plugins</Button> | <Button small minimal href="/configure-plugins/plugin-configuration-files">Configure plugins</Button> <Button small minimal href="/configure-plugins/discoverable-plugins">Manage plugins</Button> |
+| **Quickly find install commands** | <Button small minimal href="/getting-started/installation">Install Overview</Button> | <Button small minimal href="/nemo-relay-cli/install-details">CLI install details</Button> |
+| **Learn how to deploy Relay across an organization** | <Button small minimal href="/getting-started/deploy">Deploy Overview</Button> | <Button small minimal href="/daemon/about">Daemon</Button> <Button small minimal href="/daemon/operations">Operations</Button> |
+| **Understand the runtime architecture** | <Button small minimal href="/about-nemo-relay/agent-runtime-primer">Agent Runtime Primer</Button> | <Button small minimal href="/about-nemo-relay/architecture">Architecture</Button> |
+
+</div>
 
 ## Using an AI Coding Assistant
 
-<CardGroup cols={1}>
-<Card
-  title="Using an AI Coding Assistant?"
-  icon="terminal"
-  iconPosition="left"
->
+[NVIDIA agent skills](https://docs.nvidia.com/skills) give your assistant
+Relay-specific installation, instrumentation, plugin, migration, and debugging
+workflows.
 
-Install [NVIDIA agent skills](https://docs.nvidia.com/skills) to give
-compatible coding agents product-specific Relay workflows and references. After
-the NeMo Relay skills are published in `nvidia/skills`, install the full Relay
-skill set without cloning the catalog:
+<Accordion title="Install all Relay skills" icon="fa-solid fa-wand-magic-sparkles">
+
+With Node.js and npm available, run this in your project:
 
 ```bash
-npx skills add nvidia/skills \
+npx skills@latest add nvidia/skills \
   --skill nemo-relay-install \
-  --skill nemo-relay-get-started \
-  --skill nemo-relay-instrument-calls \
-  --skill nemo-relay-instrument-context-isolation \
-  --skill nemo-relay-instrument-typed-wrappers \
-  --skill nemo-relay-plugin-observability \
-  --skill nemo-relay-plugin-adaptive-tuning \
-  --skill nemo-relay-plugin-build \
-  --skill nemo-relay-migrate-from-flow \
-  --skill nemo-relay-debug-runtime-integration \
-  --agent codex
+    nemo-relay-get-started \
+    nemo-relay-instrument-calls \
+    nemo-relay-instrument-context-isolation \
+    nemo-relay-instrument-typed-wrappers \
+    nemo-relay-plugin-adaptive-tuning \
+    nemo-relay-plugin-build \
+    nemo-relay-plugin-observability \
+    nemo-relay-migrate-from-flow \
+    nemo-relay-debug-runtime-integration
 ```
 
-Use `--agent claude-code`, `--agent cursor`, or another supported agent target
-when that is where you want the skill installed. To inspect the current NVIDIA
-skill catalog first, run:
+The installer detects compatible agents and lets you choose where to install.
+For agent selection and project or global scope, use the
+[skills installation guide](https://docs.nvidia.com/skills/advanced-install).
 
-```bash
-npx skills add nvidia/skills --list
-```
+Then ask your assistant:
 
-Agent skills help your coding assistant apply Relay documentation and workflows.
-They do not replace installing NeMo Relay packages, configuring runtime
-plugins, or validating emitted events.
-</Card>
-</CardGroup>
+> Help me choose the right Relay setup for this project and verify a first run.
 
-## Go Beyond the First Run
+Browse the [NVIDIA/skills catalog](https://github.com/NVIDIA/skills#skill-catalog)
+for skill descriptions and updates.
 
-After a working first run, choose an advanced path to build reusable behavior
-or operate Relay as a long-running service:
+</Accordion>
 
-<CardGroup cols={2}>
-<Card title="Build a Plugin" icon="fa-solid fa-puzzle-piece" href="/build-plugins/about">
-Create reusable behavior that observes or controls agent work.
-</Card>
+## Extend and Develop with Relay
 
-<Card title="Deploy a Daemon" icon="fa-solid fa-server" href="/daemon/about">
-Run Relay as a managed service for local users or remote clients.
-</Card>
-</CardGroup>
+Build custom integrations and plugins, or contribute to Relay itself.
 
-For deeper guidance, refer to:
+<div className="relay-develop-paths">
 
-- [Installation Overview](/getting-started/installation): Compare packages,
-  supported platforms, and alternative installers.
-- [Configuration / Setup Overview](/getting-started/configuration): Configure
-  runtime behavior and plugins in more detail.
-- [Development Setup](/contribute/development-setup): Build from source or
-  contribute to the repository.
-- [Agent Runtime Primer](/about-nemo-relay/agent-runtime-primer) and
-  [Concepts](/about-nemo-relay/concepts): Understand the runtime model.
-- [Integrate into Frameworks](/integrate-into-frameworks/about): Build custom
-  framework integrations.
+| Goal | Advanced guides |
+| --- | --- |
+| **Build a framework, host, or provider integration** | <Button small minimal href="/integrate-into-frameworks/about">Integrate into Frameworks</Button> <Button small minimal href="/integrate-into-frameworks/provider-codecs">Provider codecs</Button> |
+| **Build and package reusable plugins** | <Button small minimal href="/build-plugins/about">Build Plugins</Button> <Button small minimal href="/build-plugins/package-discoverable-plugins">Package plugins</Button> |
+| **Develop or test Relay** | <Button small minimal href="/contribute/development-setup">Development Setup</Button> <Button small minimal href="/contribute/testing-and-docs">Testing and Docs</Button> |
+
+</div>

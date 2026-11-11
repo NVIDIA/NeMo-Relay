@@ -1,6 +1,6 @@
 ---
-title: "Configuration / Setup Overview"
-sidebar-title: "Configuration / Setup Overview"
+title: "Configure Overview"
+sidebar-title: "Configure Overview"
 description: "Configure NeMo Relay runtime behavior, plugins, observability, and adaptive features."
 position: 4
 ---
@@ -12,7 +12,7 @@ Most NeMo Relay runtime behavior is configured through API objects and
 registration calls rather than a global configuration file. Process-wide
 operational logging also supports environment variables and TOML configuration.
 
-## Core Runtime Setup
+## Configure the Core Runtime
 
 Most applications follow these steps to configure NeMo Relay:
 
@@ -33,7 +33,7 @@ Configure resource metrics through the built-in `resource_metrics` plugin in
 [Resource Metrics](/configure-plugins/resource-metrics) for category options,
 units, polling marks, and on-demand snapshots.
 
-## Plugin Setup
+## Configure Plugins
 
 A plugin configuration has these parts:
 
@@ -49,7 +49,7 @@ The `nemo-relay` CLI gateway reads plugin files named `plugins.toml`. Refer to
 for file locations, precedence, merge behavior, editor controls, and validation
 rules.
 
-## Observability Setup
+## Configure Observability
 
 Agent Trajectory Observability Format (ATOF) exporters, Agent Trajectory
 Interchange Format (ATIF) exporters, and typed OpenTelemetry subscribers can
@@ -71,7 +71,7 @@ from an environment variable. Keep endpoint addresses and other export settings
 explicit so the active configuration remains visible in docs, tests, and
 deployment manifests.
 
-## Adaptive Setup
+## Configure Adaptive Tuning
 
 Enable adaptive tuning through the adaptive plugin component and binding helper
 APIs. Refer to [Adaptive Configuration](/configure-plugins/adaptive/configuration).

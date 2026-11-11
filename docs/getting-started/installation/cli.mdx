@@ -1,0 +1,88 @@
+---
+title: "CLI"
+description: "Install the Relay executable for Claude Code, Codex, and pi."
+position: 1
+---
+{/* SPDX-FileCopyrightText: Copyright (c) 2026, NVIDIA CORPORATION & AFFILIATES. All rights reserved.
+SPDX-License-Identifier: Apache-2.0 */}
+
+Install the latest stable Relay CLI for Claude Code, Codex, or pi. The prebuilt
+installers do not require a Rust compiler or Python environment.
+
+<Tabs>
+<Tab title="Unix shell">
+```bash
+curl -fsSL https://raw.githubusercontent.com/NVIDIA/NeMo-Relay/main/install.sh | sh
+export PATH="$HOME/.local/bin:$PATH"
+```
+</Tab>
+<Tab title="Windows PowerShell">
+```powershell
+irm https://raw.githubusercontent.com/NVIDIA/NeMo-Relay/main/install.ps1 | iex
+```
+</Tab>
+</Tabs>
+
+Check that the executable is available:
+
+```bash
+nemo-relay --version
+```
+
+The Unix `PATH` command applies to the current shell. The PowerShell installer
+updates the Windows user `PATH` and the installing PowerShell process.
+
+With the CLI and your coding agent installed, choose how Relay connects:
+
+## Run for One Session
+
+Launch your agent through Relay for the current session. These commands do not
+install a persistent agent integration; the CLI remains installed after the
+session ends.
+
+### Claude Code
+
+```bash
+nemo-relay claude
+```
+
+### Codex
+
+```bash
+nemo-relay codex
+```
+
+For a first complete example, follow the
+[Claude Code](/getting-started/quick-start/claude-code),
+[Codex](/getting-started/quick-start/codex), or [pi](/getting-started/quick-start/pi)
+quick start.
+
+## Install a Persistent Integration
+
+Run the matching command once to enable Relay across sessions. Then start your
+agent normally and Relay loads automatically.
+
+### Claude Code
+
+```bash
+nemo-relay install claude-code
+```
+
+### Codex
+
+```bash
+nemo-relay install codex
+```
+
+Restart your coding agent after installation so it loads the integration.
+
+<CardGroup cols={1}>
+<Card title="Manage Persistent Integrations" icon="fa-solid fa-plug" href="/nemo-relay-cli/plugin-installation">
+After installation, verify your integration, manage updates, troubleshoot startup,
+or remove it when no longer needed.
+</Card>
+</CardGroup>
+
+For supported platforms, version pinning, alternative installers, upgrades, and
+removal, use [Install Details](/nemo-relay-cli/install-details).
+For administrator-managed services, use [Deploy Overview](/getting-started/deploy).

@@ -139,7 +139,7 @@ cargo add nemo-relay
 ```
 
 On Windows, install the CLI with the
-[PowerShell installer](https://docs.nvidia.com/nemo/relay/getting-started/installation#cli).
+[PowerShell installer](https://docs.nvidia.com/nemo/relay/getting-started/installation/cli).
 Refer to [Installation](https://docs.nvidia.com/nemo/relay/getting-started/installation)
 for platforms, version pinning, and integration packages, or to
 [Quick Starts](https://docs.nvidia.com/nemo/relay/getting-started/quick-start)
