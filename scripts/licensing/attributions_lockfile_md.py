@@ -7,21 +7,25 @@ from __future__ import annotations
 import argparse
 import base64
 import binascii
+import concurrent.futures
 import hashlib
 import hmac
 import io
 import json
+import os
 import re
 import subprocess
 import sys
 import tarfile
+import tempfile
 import tomllib
-import urllib.request
 import zipfile
-from email.message import Message
-from email.parser import Parser
+from http import HTTPStatus
 from pathlib import Path
 from typing import Any, TypedDict, cast
+
+import urllib3
+from packaging.metadata import Metadata
 
 ATTRIBUTIONS_MD_LICENSE_PREFIX = """<!--
 SPDX-FileCopyrightText: Copyright (c) 2026, NVIDIA CORPORATION & AFFILIATES. All rights reserved.
@@ -33,7 +37,35 @@ ROOT = Path(__file__).resolve().parents[2]
 NODE = ROOT
 MARKDOWN_CODE_FENCE = "```\n"
 MARKDOWN_CODE_BLOCK_END = "```\n\n"
+ARTIFACT_CACHE_DIR = Path(os.environ.get("NEMO_RELAY_ATTRIBUTIONS_CACHE_DIR", ROOT / "target" / "attributions-cache"))
+FETCH_RETRIES = 4
+FETCH_TIMEOUT_SECONDS = 30
+FETCH_BACKOFF_SECONDS = 1.0
+FETCH_WORKERS = 8
+RETRYABLE_HTTP_STATUSES = frozenset(
+    {
+        HTTPStatus.REQUEST_TIMEOUT,
+        HTTPStatus.TOO_EARLY,
+        HTTPStatus.TOO_MANY_REQUESTS,
+        HTTPStatus.INTERNAL_SERVER_ERROR,
+        HTTPStatus.BAD_GATEWAY,
+        HTTPStatus.SERVICE_UNAVAILABLE,
+        HTTPStatus.GATEWAY_TIMEOUT,
+    }
+)
+HTTP = urllib3.PoolManager(
+    timeout=FETCH_TIMEOUT_SECONDS,
+    retries=urllib3.Retry(
+        total=FETCH_RETRIES,
+        other=0,
+        status_forcelist=RETRYABLE_HTTP_STATUSES,
+        backoff_factor=FETCH_BACKOFF_SECONDS,
+        backoff_jitter=FETCH_BACKOFF_SECONDS,
+        retry_after_max=FETCH_TIMEOUT_SECONDS,
+    ),
+)
 _NODE_TARBALL_LICENSE_CACHE: dict[tuple[str, str], str | None] = {}
+_LOCKED_SHA256 = re.compile(r"sha256:([0-9a-f]{64})\Z")
 
 
 class RenderedPythonPackage(TypedDict):
@@ -526,27 +558,42 @@ def _rust_license_inventory(data: dict[str, Any], workspace_members: set[str]) -
     ]
 
 
-def _hash_matches(data: bytes, expected_hash: str) -> bool:
-    """Validate an artifact against the hash recorded in uv.lock."""
-    algo, _, value = expected_hash.partition(":")
-    if algo != "sha256" or not value:
+def _expected_sha256(expected_hash: str) -> str:
+    match = _LOCKED_SHA256.fullmatch(expected_hash)
+    if match is None:
         raise ValueError(f"Unsupported hash format: {expected_hash}")
-    return hashlib.sha256(data).hexdigest() == value
+    return match.group(1)
+
+
+def _fetch_url(url: str) -> bytes:
+    response = HTTP.request("GET", url)
+    if response.status != HTTPStatus.OK:
+        raise urllib3.exceptions.HTTPError(f"{url} returned HTTP {response.status}")
+    return response.data
 
 
 def _download_locked_artifact(url: str, expected_hash: str) -> bytes:
-    """Download one locked artifact and fail closed if its hash does not match uv.lock."""
-    with urllib.request.urlopen(url, timeout=10) as response:  # noqa: S310
-        data = response.read()
-    if not _hash_matches(data, expected_hash):
+    digest = _expected_sha256(expected_hash)
+    cached = ARTIFACT_CACHE_DIR / digest
+    if cached.is_file():
+        data = cached.read_bytes()
+        if hashlib.sha256(data).hexdigest() == digest:
+            return data
+        cached.unlink(missing_ok=True)
+    data = _fetch_url(url)
+    if hashlib.sha256(data).hexdigest() != digest:
         raise ValueError(f"Hash mismatch for {url}")
+    ARTIFACT_CACHE_DIR.mkdir(parents=True, exist_ok=True)
+    with tempfile.NamedTemporaryFile(dir=ARTIFACT_CACHE_DIR, delete=False) as staged:
+        staged.write(data)
+    Path(staged.name).replace(cached)
     return data
 
 
-def _metadata_license_classifiers(msg: Message) -> list[str]:
+def _metadata_license_classifiers(metadata: Metadata) -> list[str]:
     """Extract the license portion of Trove classifiers from parsed package metadata."""
     found: list[str] = []
-    for classifier in msg.get_all("Classifier", []):
+    for classifier in metadata.classifiers or []:
         if not classifier.startswith("License ::"):
             continue
         tail = classifier.split("::")[-1].strip()
@@ -555,20 +602,19 @@ def _metadata_license_classifiers(msg: Message) -> list[str]:
     return found
 
 
-def _metadata_license_name(msg: Message) -> str:
+def _metadata_license_name(metadata: Metadata) -> str:
     """Choose the best human-readable license label from package metadata.
 
     Prefer modern SPDX-style fields, then legacy free-form license text, then
     Trove classifiers as the final fallback.
     """
-    for field in ("License-Expression", "License"):
-        value = (msg.get(field) or "").strip()
-        value = " ".join(value.split())
+    for field in (metadata.license_expression, metadata.license):
+        value = " ".join((field or "").split())
         if value:
             if len(value) > 200:
                 return "See package metadata"
             return value
-    classifiers = _metadata_license_classifiers(msg)
+    classifiers = _metadata_license_classifiers(metadata)
     if classifiers:
         return " OR ".join(classifiers)
     return "UNKNOWN"
@@ -729,9 +775,9 @@ def _wheel_metadata_from_bytes(data: bytes, *, package_name: str) -> tuple[str, 
             raise ValueError(f"No METADATA found in wheel for {package_name}")
         metadata_path = metadata_paths[0]
         dist_info_dir = metadata_path.rsplit("/", 1)[0]
-        metadata = Parser().parsestr(zf.read(metadata_path).decode("utf-8", errors="replace"))
+        metadata = Metadata.from_email(zf.read(metadata_path), validate=False)
         license_name = _metadata_license_name(metadata)
-        license_texts = _declared_wheel_license_texts(zf, dist_info_dir, metadata.get_all("License-File", []))
+        license_texts = _declared_wheel_license_texts(zf, dist_info_dir, metadata.license_files or [])
         if not license_texts:
             # Older wheels often omit License-File entries but still bundle a LICENSE-like file.
             license_texts = _heuristic_wheel_license_texts(zf, dist_info_dir)
@@ -775,12 +821,12 @@ def _sdist_metadata_from_bytes(data: bytes, *, package_name: str) -> tuple[str, 
             raise ValueError(f"No PKG-INFO found in sdist for {package_name}")
         metadata_path = min(members, key=len)
         root_dir = metadata_path.split("/", 1)[0]
-        raw = _extract_tar_text(tf, metadata_path)
-        if raw is None:
+        pkg_info = tf.extractfile(metadata_path)
+        if pkg_info is None:
             raise ValueError(f"Failed to read PKG-INFO from sdist for {package_name}")
-        metadata = Parser().parsestr(raw)
+        metadata = Metadata.from_email(pkg_info.read(), validate=False)
         license_name = _metadata_license_name(metadata)
-        license_texts = _declared_sdist_license_texts(tf, root_dir, metadata.get_all("License-File", []))
+        license_texts = _declared_sdist_license_texts(tf, root_dir, metadata.license_files or [])
         if not license_texts:
             # Sdists are our best fallback for unresolved packages because they are typically
             # platform-agnostic and more likely to include complete source-level license files.
@@ -817,16 +863,15 @@ def _sdist_artifact_metadata(artifact: Any, package_name: str) -> tuple[str, lis
 def _wheel_artifact_metadata(
     artifacts: Any, package_name: str, sdist_metadata: tuple[str, list[tuple[str, str]]] | None
 ) -> tuple[str, list[tuple[str, str]]] | None:
-    first_metadata = None
     for wheel in cast(list[dict[str, Any]], artifacts or []):
         if not wheel.get("url") or not wheel.get("hash"):
             continue
         data = _download_locked_artifact(wheel["url"], wheel["hash"])
         metadata = _wheel_metadata_from_bytes(data, package_name=package_name)
-        first_metadata = first_metadata or metadata
-        if not _is_weak_license_name(metadata[0]):
-            return (metadata[0], sdist_metadata[1]) if sdist_metadata and sdist_metadata[1] else metadata
-    return first_metadata
+        if _is_weak_license_name(metadata[0]) or not (sdist_metadata and sdist_metadata[1]):
+            return metadata
+        return (metadata[0], sdist_metadata[1])
+    return None
 
 
 def _infer_license_name(license_name: str, license_texts: list[tuple[str, str]]) -> str:
@@ -867,12 +912,12 @@ def _lockfile_python_packages(
 ) -> list[RenderedPythonPackage]:
     """Render third-party Python packages directly from uv.lock."""
     seen = seen or set()
-    packages: list[RenderedPythonPackage] = []
-    for normalized, pkg in lockfile_pkgs.items():
-        if normalized == own_name or normalized in seen:
-            continue
-        packages.append(_lockfile_only_python_package(pkg))
-    return packages
+    pending = [pkg for normalized, pkg in lockfile_pkgs.items() if normalized != own_name and normalized not in seen]
+    executor = concurrent.futures.ThreadPoolExecutor(max_workers=FETCH_WORKERS)
+    try:
+        return list(executor.map(_lockfile_only_python_package, pending))
+    finally:
+        executor.shutdown(cancel_futures=True)
 
 
 def _python_attribution_packages() -> list[RenderedPythonPackage]:
@@ -1062,9 +1107,8 @@ def _node_license_text_from_tarball(resolved: str, integrity: str) -> str:
         return ""
 
     try:
-        with urllib.request.urlopen(resolved, timeout=60) as response:  # noqa: S310
-            raw = response.read()
-    except OSError:
+        raw = _fetch_url(resolved)
+    except urllib3.exceptions.HTTPError:
         _NODE_TARBALL_LICENSE_CACHE[cache_key] = None
         return ""
     if not _node_integrity_matches(raw, integrity):
