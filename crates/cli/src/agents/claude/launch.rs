@@ -18,10 +18,10 @@ pub(crate) fn prepare(
     dry_run: bool,
 ) -> Result<(), CliError> {
     // A process default lets Claude's settings.env retain precedence, including opt-outs.
-    if std::env::var_os("CLAUDE_CODE_GATEWAY_HINT_HEADERS").is_none() {
-        launch
-            .env
-            .push(("CLAUDE_CODE_GATEWAY_HINT_HEADERS".into(), "1".into()));
+    set_process_default(launch, "CLAUDE_CODE_GATEWAY_HINT_HEADERS", "1");
+    // The /model menu then lists the models the gateway's /v1/models returns.
+    if relay_supplies_credential {
+        set_process_default(launch, "CLAUDE_CODE_ENABLE_GATEWAY_MODEL_DISCOVERY", "1");
     }
     // Claude Code needs a credential before it starts. Relay replaces this one upstream.
     if relay_supplies_credential && !inherits_anthropic_credential() {
@@ -117,6 +117,11 @@ pub(crate) fn prepare(
     Ok(())
 }
 
+fn set_process_default(launch: &mut PreparedAgentLaunch, name: &str, value: &str) {
+    if std::env::var_os(name).is_none() {
+        launch.env.push((name.into(), value.into()));
+    }
+}
 /// Not a credential: the gateway replaces it with the one Relay owns.
 const PLACEHOLDER_API_KEY: &str = "nemo-relay-supplies-this-credential";
 

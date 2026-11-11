@@ -1455,6 +1455,34 @@ fn test_claude_placeholder_api_key_keeps_a_caller_credential() {
     }
 }
 
+const GATEWAY_MODEL_DISCOVERY: &str = "CLAUDE_CODE_ENABLE_GATEWAY_MODEL_DISCOVERY";
+#[test]
+fn test_claude_gateway_model_discovery_only_when_relay_owns_the_credential() {
+    let _env = EnvScope::set(&[(GATEWAY_MODEL_DISCOVERY, None)]);
+    for gateway in [relay_oidc_gateway(), relay_helper_gateway()] {
+        let prepared = claude_dry_run_with(gateway);
+        assert_eq!(launch_env(&prepared, GATEWAY_MODEL_DISCOVERY), Some("1"));
+    }
+    let caller_credential = claude_dry_run_with(GatewayConfig::default());
+    assert_eq!(
+        launch_env(&caller_credential, GATEWAY_MODEL_DISCOVERY),
+        None
+    );
+}
+#[test]
+fn test_claude_gateway_model_discovery_keeps_a_caller_choice() {
+    for value in ["0", "1", ""] {
+        let _env = EnvScope::set(&[(GATEWAY_MODEL_DISCOVERY, Some(std::ffi::OsStr::new(value)))]);
+        for gateway in [relay_oidc_gateway(), relay_helper_gateway()] {
+            let prepared = claude_dry_run_with(gateway);
+            assert_eq!(
+                launch_env(&prepared, GATEWAY_MODEL_DISCOVERY),
+                None,
+                "an inherited {GATEWAY_MODEL_DISCOVERY}={value:?} must stay the child's value"
+            );
+        }
+    }
+}
 #[test]
 fn claude_transparent_proxy_header_preserves_existing_custom_headers() {
     let _env = EnvScope::set(&[(
