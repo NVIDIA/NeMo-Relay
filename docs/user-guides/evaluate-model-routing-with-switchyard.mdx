@@ -38,11 +38,16 @@ setup is included; the linked quickstarts and reference pages are supplemental.
 | Changes and cleanup | Plugin and route policy in the model-handling process | Isolated output, harness configuration, and plugin bundle; remove only those directories |
 
 <Warning title="Match the plugin to the Relay host">
-The published Switchyard plugin 0.3.2 declares Relay `>=0.10.1,<1.0.0`.
-It cannot load in Relay 1.0. Use the pinned host for this example; before
-upgrading, select a plugin bundle whose packaged `relay-plugin.toml` explicitly
-supports your Relay version. Follow the
-[Switchyard integration contract](https://nvidia-nemo.github.io/Switchyard/integrations/nemo_relay/).
+The published Switchyard plugin 0.3.2 declares Relay `>=0.10.1,<1.0.0` and the
+legacy `native_api = "1"` contract. This example uses the compatible Relay 0.11.1
+host.
+
+Relay 1.0 requires a Switchyard bundle rebuilt and tested for its checked native
+plugin contract (`compat.native_api = "v1.0"`) and a manifest that supports the
+host release. Widening the old bundle's version range does not make its library
+compatible. Follow the [native-plugin version contracts](/build-plugins/native/about#version-contracts)
+and [Switchyard integration contract](https://nvidia-nemo.github.io/Switchyard/integrations/nemo_relay/)
+when selecting an upgrade.
 </Warning>
 
 <Warning title="Keep system policy separate">
