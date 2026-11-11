@@ -10,6 +10,7 @@ use serde_json::json;
 use std::sync::Arc;
 use std::time::Instant;
 
+/// Register event redaction, search validation, and tool execution timing.
 pub fn register_tool_policy() -> nemo_relay::Result<()> {
     register_tool_sanitize_request_guardrail(
         "search.redact_api_key",

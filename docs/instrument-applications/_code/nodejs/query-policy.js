@@ -3,6 +3,7 @@
 
 const { registerToolConditionalExecutionGuardrail } = require('nemo-relay-node');
 
+/** Register a query check for search calls only. */
 function registerQueryPolicy() {
   registerToolConditionalExecutionGuardrail('search.require_query', 20, (toolName, toolArguments) => {
     if (toolName !== 'search') {

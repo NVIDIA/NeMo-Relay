@@ -28,7 +28,9 @@ A **mark** records a named checkpoint within that work, such as “plan created�
 “retry scheduled.” It represents a single moment and can include data describing
 what happened.
 
-## Before You Start
+<Steps toc={true} tocDepth={2}>
+
+<Step title="Prepare" id="before-you-start">
 
 Complete one binding Quick Start guide first:
 
@@ -44,35 +46,102 @@ Choose the work you want to group. Common examples include:
 - One background job
 - One tenant-isolated experiment
 
-## Integration Pattern
+</Step>
 
-Follow these steps to group related calls and marks in one scope.
+<Step title="Instrument" id="integration-pattern">
 
-1. Choose the agent run, request, or workflow step to group.
-2. Register a temporary subscriber while validating instrumentation.
-3. Push or enter the scope before tool and LLM work begins.
-4. Emit marks for important checkpoints that are not full nested calls.
-5. Close the scope when the request, agent run, or workflow ends.
-6. Confirm that the subscriber sees scope start, mark, and scope end events.
+Register a temporary subscriber, then enter the scope before tool and LLM work
+begins. Emit marks for important checkpoints that do not wrap a callback, and
+close the scope when the agent run, request, or workflow ends. The highlighted
+lines below show the scope and mark calls in each binding.
 
-## Minimal Example
+</Step>
 
-The examples below create one `agent-run` scope and emit two marks.
+<Step title="Run" id="minimal-example">
+
+Run the complete example for your binding in the project from its Quick Start.
+Each example creates one `agent-run` scope, emits two marks, and prints the
+received events before removing the temporary subscriber.
 
 <Tabs>
 <Tab title="Python" language="python">
-<Code src="_code/python/scopes_and_marks.py" language="python" title="scopes_and_marks.py" />
+Save the following code as `scopes_and_marks.py` in your Quick Start project:
+
+<Code src="_code/python/scopes_and_marks.py" language="python" title="scopes_and_marks.py" maxLines={0} highlight={[16, 21, 22]} />
+
+API references: [`nemo_relay.scope.scope`](/reference/api/python-library-reference/nemo-relay/scope#scope) and [`nemo_relay.scope.event`](/reference/api/python-library-reference/nemo-relay/scope#event).
+
+Run it from the project directory:
+
+```bash
+uv run python scopes_and_marks.py
+```
 </Tab>
 
 <Tab title="Node.js" language="node">
-<Code src="_code/nodejs/scopes-and-marks.js" language="js" title="scopes-and-marks.js" />
+Save the following code as `scopes-and-marks.cjs` in your Quick Start project:
+
+<Code src="_code/nodejs/scopes-and-marks.js" language="js" title="scopes-and-marks.cjs" maxLines={0} highlight={[19, 23, 24]} />
+
+API references: [`withScope`](/reference/api/nodejs-library-reference/nemo-relay-node#withscope) and [`event`](/reference/api/nodejs-library-reference/nemo-relay-node#event).
+
+Run it from the project directory:
+
+```bash
+node scopes-and-marks.cjs
+```
 </Tab>
 
 <Tab title="Rust" language="rust">
-<Code src="_code/rust/scopes_and_marks.rs" language="rust" title="scopes_and_marks.rs" />
+Use the following code as `src/main.rs` in your Quick Start project:
+
+<Code src="_code/rust/scopes_and_marks.rs" language="rust" title="src/main.rs" maxLines={0} highlight={[19, 28, 35, 43]} />
+
+API references: [`push_scope`](/reference/api/rust-library-reference/nemo-relay/scope/fn-push-scope), [`event`](/reference/api/rust-library-reference/nemo-relay/scope/fn-event), and [`pop_scope`](/reference/api/rust-library-reference/nemo-relay/scope/fn-pop-scope).
+
+Run it from the project directory containing `Cargo.toml`:
+
+```bash
+cargo run
+```
 </Tab>
 
 </Tabs>
+
+</Step>
+
+<Step title="Verify" id="validate-the-integration">
+
+Running the example prints:
+
+```text title="Expected output"
+scope agent-run
+mark planning-started
+mark planning-finished
+scope agent-run
+```
+
+The two `scope agent-run` lines are the start and end of the same scope.
+The named marks are checkpoints within it.
+
+Check that the subscriber prints:
+
+- One scope start event for `agent-run`
+- One mark event for `planning-started`
+- One mark event for `planning-finished`
+- One scope end event for `agent-run`
+
+<Note title="Flush Subscriber Delivery">
+The examples flush subscriber delivery before removing the temporary subscriber.
+Keep this cleanup so queued events are delivered before the program exits. If a
+subscriber callback emits another event, flush again before checking the output.
+</Note>
+
+If marks appear outside the intended trace, pass the active scope handle explicitly or make sure the mark is emitted while the scope is active.
+
+</Step>
+
+</Steps>
 
 ## When to Add Marks
 
@@ -100,33 +169,6 @@ Use the binding's metric helper for a validated metric group: `scope::metric()`
 in Rust, `scope.metric()` in Python, or `metric()` in Node.js. See
 [Emit Log and Metric Marks](/configure-plugins/observability/opentelemetry#emit-log-and-metric-marks)
 for the metric measurement shape and routing rules.
-
-## Validate the Integration
-
-Running the example prints:
-
-```text title="Expected output"
-scope agent-run
-mark planning-started
-mark planning-finished
-scope agent-run
-```
-
-The two `scope agent-run` lines are the start and end of the same scope.
-The named marks are checkpoints within it.
-
-Check that the subscriber prints:
-
-- One scope start event for `agent-run`
-- One mark event for `planning-started`
-- One mark event for `planning-finished`
-- One scope end event for `agent-run`
-
-The examples flush subscriber delivery before removing the temporary subscriber.
-Keep this cleanup so queued events are delivered before the program exits. If a
-subscriber callback emits another event, flush again before checking the output.
-
-If marks appear outside the intended trace, pass the active scope handle explicitly or make sure the mark is emitted while the scope is active.
 
 ## Production Checklist
 

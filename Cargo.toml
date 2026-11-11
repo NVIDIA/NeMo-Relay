@@ -192,7 +192,7 @@ zstd = "0.14.3"
 
 # Platform APIs and system information.
 libc = "0.2"
-rustix = "1.1.4"
+rustix = "1.1.6"
 sysinfo = { version = "0.39.6", default-features = false }
 windows-sys = "0.61"
 

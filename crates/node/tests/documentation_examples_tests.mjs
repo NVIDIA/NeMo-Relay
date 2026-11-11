@@ -97,7 +97,8 @@ for (const [name, register] of [
   ['first', queryPolicy.registerQueryPolicy],
   ['combined', toolPolicy.registerToolPolicy],
 ]) {
-  it(`${name} policy allows another tool without a query`, async () => {
+  it(`${name} policy allows another tool without a query`, async (testContext) => {
+    const timingOutput = testContext.mock.method(console, 'log', () => {});
     register();
     const received = [];
     const { result, events } = await captureEvents(() =>
@@ -109,6 +110,10 @@ for (const [name, register] of [
     assert.deepEqual(received, [{ timezone: 'UTC' }]);
     assert.deepEqual(result.result, { timezone: 'UTC', time: '12:00:00' });
     assertPair(events, 'tool', 'get_time');
+    if (name === 'combined') {
+      assert.equal(timingOutput.mock.callCount(), 1);
+      assert.match(timingOutput.mock.calls[0].arguments[0], /^get_time completed in \d+ ms$/);
+    }
   });
 
   for (const query of ['weather', '']) {

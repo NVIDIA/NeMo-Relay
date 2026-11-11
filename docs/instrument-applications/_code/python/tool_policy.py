@@ -8,6 +8,7 @@ import nemo_relay
 
 
 def redact_api_key(_tool_name: str, tool_arguments: nemo_relay.Json) -> nemo_relay.Json:
+    """Redact the API key in a copy of the event arguments."""
     safe_arguments = dict(tool_arguments)
     if "api_key" in safe_arguments:
         safe_arguments["api_key"] = "<redacted>"
@@ -15,6 +16,7 @@ def redact_api_key(_tool_name: str, tool_arguments: nemo_relay.Json) -> nemo_rel
 
 
 def require_query(tool_name: str, tool_arguments: nemo_relay.Json) -> str | None:
+    """Reject empty search queries while allowing other tools."""
     if tool_name != "search":
         return None
     if not tool_arguments.get("query"):
@@ -26,6 +28,7 @@ async def measure_tool(
     context: nemo_relay.ToolExecutionContext,
     next_call: Callable[[nemo_relay.Json], Awaitable[nemo_relay.ToolExecutionResult[nemo_relay.Json]]],
 ) -> nemo_relay.ToolExecutionInterceptOutcome:
+    """Report execution time while preserving the tool result and annotation."""
     started = time.perf_counter()
     try:
         execution_result = await next_call(context.args)

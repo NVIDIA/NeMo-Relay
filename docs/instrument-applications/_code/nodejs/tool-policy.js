@@ -7,6 +7,7 @@ const {
   registerToolSanitizeRequestGuardrail,
 } = require('nemo-relay-node');
 
+/** Register event redaction, search validation, and tool execution timing. */
 function registerToolPolicy() {
   registerToolSanitizeRequestGuardrail('search.redact_api_key', 10, (_toolName, toolArguments) => {
     if (!toolArguments.api_key) {
@@ -31,7 +32,7 @@ function registerToolPolicy() {
         ...(executionResult.annotation === undefined ? {} : { annotation: executionResult.annotation }),
       };
     } finally {
-      console.log(`search completed in ${Math.round(performance.now() - started)} ms`);
+      console.log(`${context.toolName} completed in ${Math.round(performance.now() - started)} ms`);
     }
   });
 }

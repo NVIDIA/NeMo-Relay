@@ -20,7 +20,9 @@ You will wrap one existing LLM provider invocation with the managed LLM executio
 - Keeps the LLM span attached to the current agent or request scope.
 - Returns the original provider result to the application.
 
-## Before You Start
+<Steps toc={true} tocDepth={2}>
+
+<Step title="Prepare" id="before-you-start">
 
 Complete one binding Quick Start guide first:
 
@@ -34,24 +36,27 @@ checkpoints, refer to [Adding Scopes and Marks](/instrument-applications/adding-
 
 The request and response payloads must be JSON-compatible. If your provider SDK uses clients, streams, callbacks, or other opaque objects, keep those objects in the provider callback and pass only a serializable request projection into NeMo Relay.
 
-## Integration Pattern
+</Step>
 
-Follow these steps to route the provider invocation through NeMo Relay:
+<Step title="Instrument" id="integration-pattern">
 
-1. Identify the stable provider invocation boundary in your application.
-2. Create or inherit a scope for the current agent run, request, or workflow.
-3. Register a temporary subscriber while validating the integration.
-4. Build an LLM request object with provider headers and content.
-5. Replace the direct provider invocation with the managed LLM execute helper.
-6. Pass the active scope handle and a stable `model_name`.
-7. Check that the provider result is unchanged and lifecycle events are emitted.
+Use the Execute helper for the provider invocation your application owns.
+
+Choose a stable provider name and create or inherit a scope for the current
+agent run, request, or workflow. Register a temporary subscriber, build an LLM
+request object with provider headers and content, then replace the direct
+provider invocation with Execute. Pass the active scope handle and a stable
+`model_name`. The highlighted calls below show that replacement in each binding.
 
 Add a response codec afterward when subscribers or exporters need normalized
 response usage, tool calls, or cost annotations.
 
-## Minimal Example
+</Step>
 
-The examples below wrap a local callback and print emitted events. The callback
+<Step title="Run" id="minimal-example">
+
+Run the complete example for your binding in the project from its Quick Start.
+Each example wraps a local callback and prints emitted events. The callback
 returns a response containing `hello` and the input messages. Replace its body
 with your provider SDK invocation when connecting a model provider.
 
@@ -59,45 +64,50 @@ with your provider SDK invocation when connecting a model provider.
 <Tab title="Python" language="python">
 Save the following code as `llm_call.py` in your Quick Start project:
 
-<Code src="_code/python/llm_call.py" language="python" title="llm_call.py" />
+<Code src="_code/python/llm_call.py" language="python" title="llm_call.py" maxLines={0} highlight={[29, 30, 31, 32, 33, 34, 35]} />
+
+API reference: [`nemo_relay.llm.execute`](/reference/api/python-library-reference/nemo-relay/llm#execute).
 
 Run it from the project directory:
 
 ```bash
 uv run python llm_call.py
 ```
-
 </Tab>
 
 <Tab title="Node.js" language="node">
 Save the following code as `llm-call.cjs` in your Quick Start project:
 
-<Code src="_code/nodejs/llm-call.js" language="js" title="llm-call.cjs" />
+<Code src="_code/nodejs/llm-call.js" language="js" title="llm-call.cjs" maxLines={0} highlight={[26]} />
+
+API reference: [`llmCallExecute`](/reference/api/nodejs-library-reference/nemo-relay-node#llmcallexecute).
 
 Run it from the project directory:
 
 ```bash
 node llm-call.cjs
 ```
-
 </Tab>
 
 <Tab title="Rust" language="rust">
 Use the following code as `src/main.rs` in your Quick Start project:
 
-<Code src="_code/rust/llm_call.rs" language="rust" title="src/main.rs" />
+<Code src="_code/rust/llm_call.rs" language="rust" title="src/main.rs" maxLines={0} highlight={[31, 32, 33, 34, 35, 36, 37, 38, 39, 40, 41, 42, 43, 44, 45, 46, 47]} />
+
+API reference: [`llm_call_execute`](/reference/api/rust-library-reference/nemo-relay/llm/fn-llm-call-execute).
 
 Run it from the project directory containing `Cargo.toml`:
 
 ```bash
 cargo run
 ```
-
 </Tab>
 
 </Tabs>
 
-## Validate the Integration
+</Step>
+
+<Step title="Verify" id="validate-the-integration">
 
 The subscriber prints these event lines for the local callback:
 
@@ -133,10 +143,12 @@ Check both behavior and instrumentation:
 - The subscriber prints `agent-run` twice, for scope start and end.
 - The subscriber prints `demo-provider` twice, for LLM start and end.
 
+<Note title="Flush Subscriber Delivery">
 Native subscriber delivery is asynchronous. From an `asyncio` task, await
 `nemo_relay.subscribers.flush_async()`. In Node.js, await `flushSubscribers()`
 before validating printed output. If a subscriber callback emits a native event,
 await `flushSubscribers()` again to observe that event.
+</Note>
 
 This example verifies Relay execution around a local function. It does not make
 an external model request.
@@ -144,6 +156,10 @@ an external model request.
 If the result appears without LLM events, check that the subscriber is registered,
 subscriber delivery has been flushed, and the call uses `llm.execute`,
 `llmCallExecute`, or `llm_call_execute`.
+
+</Step>
+
+</Steps>
 
 ## Inspect LLM Event Payloads
 
@@ -191,7 +207,7 @@ When those conditions match, LLM end events include
 
 ## Production Checklist
 
-Before deploying to production, ensure the following checklist is completed:
+Use this checklist before running the pattern in production traffic.
 
 - Keep provider names stable. Subscribers and exporters use names for filtering and dashboards.
 - Pass `model_name` separately when the model should be easy to filter or export.

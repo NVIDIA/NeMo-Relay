@@ -4,6 +4,7 @@
 use nemo_relay::registry::register_tool_conditional_execution_guardrail;
 use std::sync::Arc;
 
+/// Register a query check for search calls only.
 pub fn register_query_policy() -> nemo_relay::Result<()> {
     register_tool_conditional_execution_guardrail(
         "search.require_query",
