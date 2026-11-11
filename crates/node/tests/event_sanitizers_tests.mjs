@@ -10,8 +10,8 @@ import path from 'node:path';
 import * as pluginHost from './plugin_host_test_helper.mjs';
 
 const require = createRequire(import.meta.url);
-const lib = require('../index.js');
-const plugin = require('../plugin.js');
+const lib = require('../dist/index.js');
+const plugin = require('../dist/plugin.js');
 
 function capture(name) {
   const events = [];

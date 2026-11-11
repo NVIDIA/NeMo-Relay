@@ -480,7 +480,7 @@ kind = "rust_dynamic"
 
 [compat]
 relay = ">=1.0.0,<2.0"
-native_api = "1"
+native_api = "v1.0"
 
 [defaults]
 enabled = false
@@ -496,7 +496,6 @@ sha256 = "sha256:{digest}"
 
 [load]
 library = {library:?}
-symbol = "nemo_relay_fixture_native_plugin"
 "#,
             library = library.to_string_lossy(),
             digest = sha256_file(library),

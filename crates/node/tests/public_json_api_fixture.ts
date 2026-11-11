@@ -14,10 +14,10 @@ import {
   type JsonValue,
   type LlmRequestShape,
   type ScopeHandle,
-} from '../index.js';
-import type { JsonValue as TypedJsonValue } from '../typed.js';
+} from '../dist/index.js';
+import type { JsonValue as TypedJsonValue } from '../dist/typed.js';
 
-type AssertEqual<T, U> = [T] extends [U] ? ([U] extends [T] ? true : false) : false;
+type AssertEqual<T, U> = (<V>() => V extends T ? 1 : 2) extends <V>() => V extends U ? 1 : 2 ? true : false;
 
 const jsonIsJsonValue: AssertEqual<Json, JsonValue> = true;
 const typedSharesJson: AssertEqual<JsonValue, TypedJsonValue> = true;

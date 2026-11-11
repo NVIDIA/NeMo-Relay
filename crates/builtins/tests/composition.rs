@@ -52,16 +52,19 @@ fn default_composition_reports_an_external_preclaim() {
 }
 
 struct ExternalAdaptive;
+
 impl nemo_relay_plugin::component::Plugin for ExternalAdaptive {
     fn plugin_kind(&self) -> &str {
         "adaptive"
     }
+
     fn validate(
         &self,
         _: &serde_json::Map<String, nemo_relay_types::Json>,
     ) -> Vec<nemo_relay_plugin::component::ConfigDiagnostic> {
         Vec::new()
     }
+
     fn register<'a>(
         &'a self,
         _: &serde_json::Map<String, nemo_relay_types::Json>,

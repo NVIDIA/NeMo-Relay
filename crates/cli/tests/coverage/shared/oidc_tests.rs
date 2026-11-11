@@ -40,6 +40,17 @@ struct Issuer {
     grants: Vec<HashMap<String, String>>,
     /// The `code_challenge` of the last authorization address the browser opened.
     challenge: Option<String>,
+    /// Publishes `revocation_endpoint` and answers it with this status.
+    revocation_status: Option<StatusCode>,
+    revocation_endpoint: Option<String>,
+    /// Refuses to revoke access tokens with this error, like Clerk with its JWT access tokens.
+    access_revocation_error: Option<&'static str>,
+    /// Refuses to revoke refresh tokens with this error.
+    refresh_revocation_error: Option<&'static str>,
+    /// Never answers a revocation request, and pauses the clock when the first one arrives.
+    revocation_hangs: bool,
+    clock_paused: bool,
+    revocations: Vec<HashMap<String, String>>,
 }
 
 type Shared = Arc<Mutex<Issuer>>;
@@ -67,6 +78,14 @@ async fn discovery(State(issuer): State<Shared>) -> Json<serde_json::Value> {
         "authorization_endpoint": state.authorization_endpoint.clone().unwrap_or_else(|| format!("{base}/authorize")),
         "device_authorization_endpoint": format!("{base}/device"),
     });
+    if state.revocation_status.is_some() {
+        document["revocation_endpoint"] = json!(
+            state
+                .revocation_endpoint
+                .clone()
+                .unwrap_or_else(|| format!("{base}/revoke"))
+        );
+    }
     if state.omit_authorization_endpoint {
         document
             .as_object_mut()
@@ -148,6 +167,49 @@ async fn token(State(issuer): State<Shared>, body: String) -> Response {
     }
 }
 
+async fn revoke(State(issuer): State<Shared>, body: String) -> Response {
+    let reply = {
+        let mut state = issuer.lock().unwrap();
+        let form = parse_form(&body);
+        let refused = match form["token_type_hint"].as_str() {
+            "access_token" => state.access_revocation_error,
+            "refresh_token" => state.refresh_revocation_error,
+            _ => None,
+        };
+        let token = form["token"].clone();
+        state.revocations.push(form);
+        match (state.revocation_hangs, refused) {
+            (true, _) => {
+                // Paused only now, so that discovery runs on the real clock and cannot time out.
+                if !std::mem::replace(&mut state.clock_paused, true) {
+                    tokio::time::pause();
+                }
+                None
+            }
+            (false, Some(error)) => {
+                Some((StatusCode::BAD_REQUEST, Json(json!({ "error": error }))).into_response())
+            }
+            (false, None) => Some(
+                match state.revocation_status.unwrap_or(StatusCode::NOT_FOUND) {
+                    StatusCode::OK => StatusCode::OK.into_response(),
+                    status => (
+                        status,
+                        Json(json!({
+                            "error": "invalid_client",
+                            "error_description": format!("cannot revoke {token}"),
+                        })),
+                    )
+                        .into_response(),
+                },
+            ),
+        }
+    };
+    match reply {
+        Some(reply) => reply,
+        None => std::future::pending().await,
+    }
+}
+
 fn refresh_reply(state: &Issuer, form: &HashMap<String, String>) -> Response {
     match (state.refresh_status, state.refresh_error) {
         (Some(status), _) => (status, "upstream down").into_response(),
@@ -169,9 +231,44 @@ async fn start_issuer() -> (OidcSource, Shared) {
         .route("/.well-known/openid-configuration", get(discovery))
         .route("/device", post(device))
         .route("/token", post(token))
+        .route("/revoke", post(revoke))
         .with_state(shared.clone());
     tokio::spawn(async move { axum::serve(listener, app).await.unwrap() });
     (OidcSource::new(&base, CLIENT_ID, None), shared)
+}
+
+#[cfg(unix)]
+#[tokio::test]
+async fn the_sign_in_lock_file_is_private() {
+    use std::os::unix::fs::PermissionsExt;
+    let (source, _issuer) = start_issuer().await;
+    let dir = tempfile::tempdir().unwrap();
+    ensure_sessions_dir(dir.path()).unwrap();
+    let session = session_path(dir.path(), &source);
+    let _lock = super::session::SessionLock::acquire(&session)
+        .await
+        .unwrap();
+    let mode = std::fs::metadata(session.with_extension("lock"))
+        .unwrap()
+        .permissions()
+        .mode();
+    assert_eq!(mode & 0o777, 0o600);
+}
+
+#[test]
+fn doctor_describes_the_time_left_on_an_access_token_in_words() {
+    for (seconds, words) in [
+        (0, "less than a minute"),
+        (59, "less than a minute"),
+        (60, "about 1 minute"),
+        (54 * 60 + 30, "about 54 minutes"),
+        (3_600, "about 1 hour"),
+        (23 * 3_600 + 59 * 60, "about 23 hours"),
+        (86_400, "about 1 day"),
+        (7 * 86_400, "about 7 days"),
+    ] {
+        assert_eq!(describe_time_left(seconds), words, "{seconds} seconds");
+    }
 }
 
 fn store(dir: &Path, source: &OidcSource, refresh: Option<&str>, expires_at: u64) {
@@ -345,12 +442,220 @@ async fn logout_applies_to_the_next_gateway_request() {
             .unwrap(),
         "access-1"
     );
-
-    assert!(logout(dir.path(), &source).await.unwrap());
+    assert!(matches!(
+        logout(dir.path(), &source).await.unwrap(),
+        Logout::Removed(_)
+    ));
     let error = error_text(upstream_token_in(dir.path(), &source, &|| 1_000).await);
 
     assert!(error.contains("run `nemo-relay auth login`"), "{error}");
-    assert!(!logout(dir.path(), &source).await.unwrap());
+    assert!(matches!(
+        logout(dir.path(), &source).await.unwrap(),
+        Logout::NotSignedIn
+    ));
+}
+
+fn revoked(issuer: &Shared) -> Vec<(String, String, String)> {
+    issuer
+        .lock()
+        .unwrap()
+        .revocations
+        .iter()
+        .map(|form| {
+            (
+                form["token"].clone(),
+                form["token_type_hint"].clone(),
+                form["client_id"].clone(),
+            )
+        })
+        .collect()
+}
+
+#[tokio::test]
+async fn logout_revokes_the_refresh_token_and_the_access_token_at_the_issuer() {
+    let (source, issuer) = start_issuer().await;
+    issuer.lock().unwrap().revocation_status = Some(StatusCode::OK);
+    let dir = tempfile::tempdir().unwrap();
+    store(dir.path(), &source, Some("refresh-1"), 10_000);
+    assert!(matches!(
+        logout(dir.path(), &source).await.unwrap(),
+        Logout::Removed(Revocation::Revoked)
+    ));
+    assert_eq!(
+        revoked(&issuer),
+        [
+            ("refresh-1".into(), "refresh_token".into(), CLIENT_ID.into()),
+            ("access-1".into(), "access_token".into(), CLIENT_ID.into()),
+        ]
+    );
+    assert!(sign_in_state(dir.path(), &source, 1_000).unwrap() == SignInState::NotSignedIn);
+}
+
+#[tokio::test]
+async fn an_issuer_that_revokes_only_the_refresh_token_is_reported_as_such() {
+    let (source, issuer) = start_issuer().await;
+    {
+        let mut state = issuer.lock().unwrap();
+        state.revocation_status = Some(StatusCode::OK);
+        state.access_revocation_error = Some("unsupported_token_type");
+    }
+    let dir = tempfile::tempdir().unwrap();
+    store(dir.path(), &source, Some("refresh-1"), 10_000);
+    let Logout::Removed(Revocation::RefreshTokenOnly(detail)) =
+        logout(dir.path(), &source).await.unwrap()
+    else {
+        panic!("a revoked refresh token must be reported even when the access token is refused");
+    };
+    assert!(detail.contains("unsupported_token_type"), "{detail}");
+    assert_eq!(revoked(&issuer).len(), 2);
+}
+
+#[tokio::test]
+async fn a_refused_access_token_without_a_refresh_token_fails() {
+    let (source, issuer) = start_issuer().await;
+    {
+        let mut state = issuer.lock().unwrap();
+        state.revocation_status = Some(StatusCode::OK);
+        state.access_revocation_error = Some("unsupported_token_type");
+    }
+    let dir = tempfile::tempdir().unwrap();
+    store(dir.path(), &source, None, 10_000);
+    assert!(matches!(
+        logout(dir.path(), &source).await.unwrap(),
+        Logout::Removed(Revocation::Failed(_))
+    ));
+}
+
+#[tokio::test]
+async fn a_refused_refresh_token_with_a_revoked_access_token_is_reported_as_such() {
+    let (source, issuer) = start_issuer().await;
+    {
+        let mut state = issuer.lock().unwrap();
+        state.revocation_status = Some(StatusCode::OK);
+        state.refresh_revocation_error = Some("invalid_request");
+    }
+    let dir = tempfile::tempdir().unwrap();
+    store(dir.path(), &source, Some("refresh-1"), 10_000);
+    let Logout::Removed(Revocation::AccessTokenOnly(detail)) =
+        logout(dir.path(), &source).await.unwrap()
+    else {
+        panic!("a revoked access token must be reported even when the refresh token is refused");
+    };
+    assert_eq!(detail, "invalid_request");
+    assert_eq!(revoked(&issuer).len(), 2);
+}
+
+#[tokio::test]
+async fn logout_stops_waiting_for_the_issuer_after_the_revocation_deadline() {
+    let (source, issuer) = start_issuer().await;
+    {
+        let mut state = issuer.lock().unwrap();
+        state.revocation_status = Some(StatusCode::OK);
+        state.revocation_hangs = true;
+    }
+    let dir = tempfile::tempdir().unwrap();
+    store(dir.path(), &source, Some("refresh-1"), 10_000);
+    let started = tokio::time::Instant::now();
+    let Logout::Removed(Revocation::Failed(detail)) = logout(dir.path(), &source).await.unwrap()
+    else {
+        panic!("an issuer that never answers must be reported");
+    };
+    assert!(detail.contains("within 20 seconds"), "{detail}");
+    assert_eq!(started.elapsed().as_secs(), 20);
+    assert!(sign_in_state(dir.path(), &source, 1_000).unwrap() == SignInState::NotSignedIn);
+}
+
+#[tokio::test]
+async fn logout_without_a_refresh_token_revokes_the_access_token() {
+    let (source, issuer) = start_issuer().await;
+    issuer.lock().unwrap().revocation_status = Some(StatusCode::OK);
+    let dir = tempfile::tempdir().unwrap();
+    store(dir.path(), &source, None, 10_000);
+    logout(dir.path(), &source).await.unwrap();
+    assert_eq!(
+        revoked(&issuer),
+        [("access-1".into(), "access_token".into(), CLIENT_ID.into())]
+    );
+}
+
+#[tokio::test]
+async fn logout_from_an_issuer_without_revocation_removes_the_sign_in_and_says_so() {
+    let (source, issuer) = start_issuer().await;
+    let dir = tempfile::tempdir().unwrap();
+    store(dir.path(), &source, Some("refresh-1"), 10_000);
+    assert!(matches!(
+        logout(dir.path(), &source).await.unwrap(),
+        Logout::Removed(Revocation::NotOffered)
+    ));
+    assert!(revoked(&issuer).is_empty());
+    assert!(sign_in_state(dir.path(), &source, 1_000).unwrap() == SignInState::NotSignedIn);
+}
+
+#[tokio::test]
+async fn a_refused_revocation_still_removes_the_sign_in_and_reports_the_error() {
+    let (source, issuer) = start_issuer().await;
+    issuer.lock().unwrap().revocation_status = Some(StatusCode::UNAUTHORIZED);
+    let dir = tempfile::tempdir().unwrap();
+    store(dir.path(), &source, Some("refresh-1"), 10_000);
+    let Logout::Removed(Revocation::Failed(detail)) = logout(dir.path(), &source).await.unwrap()
+    else {
+        panic!("a refused revocation must be reported");
+    };
+    assert!(detail.contains("invalid_client"), "{detail}");
+    assert!(
+        !detail.contains("refresh-1") && !detail.contains("access-1"),
+        "{detail}"
+    );
+    assert!(sign_in_state(dir.path(), &source, 1_000).unwrap() == SignInState::NotSignedIn);
+}
+
+#[tokio::test]
+async fn an_unknown_revocation_error_code_is_reported_as_the_http_status() {
+    let (source, issuer) = start_issuer().await;
+    {
+        let mut state = issuer.lock().unwrap();
+        state.revocation_status = Some(StatusCode::OK);
+        state.refresh_revocation_error = Some("refresh-1 was rejected");
+    }
+    let dir = tempfile::tempdir().unwrap();
+    store(dir.path(), &source, Some("refresh-1"), 10_000);
+    let Logout::Removed(Revocation::AccessTokenOnly(detail)) =
+        logout(dir.path(), &source).await.unwrap()
+    else {
+        panic!("a refused refresh token must be reported");
+    };
+    assert_eq!(detail, "HTTP 400 Bad Request");
+}
+
+#[tokio::test]
+async fn an_unreachable_issuer_still_removes_the_sign_in() {
+    let source = OidcSource::new("http://127.0.0.1:9", CLIENT_ID, None);
+    let dir = tempfile::tempdir().unwrap();
+    store(dir.path(), &source, Some("refresh-1"), 10_000);
+    assert!(matches!(
+        logout(dir.path(), &source).await.unwrap(),
+        Logout::Removed(Revocation::Failed(_))
+    ));
+    assert!(sign_in_state(dir.path(), &source, 1_000).unwrap() == SignInState::NotSignedIn);
+}
+
+#[tokio::test]
+async fn a_revocation_endpoint_on_another_origin_fails_only_logout() {
+    let (source, issuer) = start_issuer().await;
+    {
+        let mut state = issuer.lock().unwrap();
+        state.revocation_status = Some(StatusCode::OK);
+        state.revocation_endpoint = Some("https://elsewhere.example/revoke".into());
+    }
+    assert!(OidcClient::discover(&source).await.is_ok());
+    let dir = tempfile::tempdir().unwrap();
+    store(dir.path(), &source, Some("refresh-1"), 10_000);
+    let Logout::Removed(Revocation::Failed(detail)) = logout(dir.path(), &source).await.unwrap()
+    else {
+        panic!("a foreign revocation endpoint must be reported");
+    };
+    assert!(detail.contains("another origin"), "{detail}");
+    assert!(sign_in_state(dir.path(), &source, 1_000).unwrap() == SignInState::NotSignedIn);
 }
 
 #[tokio::test]
@@ -921,4 +1226,21 @@ async fn a_redirect_iss_is_compared_with_the_published_issuer() {
     let error = pasted_sign_in_error(&client, redirect_naming(&source.issuer).as_str()).await;
     assert!(error.contains("names another issuer"), "{error}");
     assert_eq!(issuer.lock().unwrap().grants.len(), 1);
+}
+
+#[test]
+fn doctor_shows_the_exact_expiry_time_and_the_time_left() {
+    let now = 1_794_330_000;
+    assert_eq!(
+        describe_expiry(now + 3 * 3_600 + 120, now),
+        "2026-11-10 20:02:00 UTC (about 3 hours)"
+    );
+    assert_eq!(
+        describe_expiry(u64::MAX, now),
+        format!(
+            "{} (Unix time, about {} days)",
+            u64::MAX,
+            (u64::MAX - now) / 86_400
+        )
+    );
 }

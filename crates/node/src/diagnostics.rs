@@ -110,7 +110,7 @@ impl DiagnosticsReader {
     }
     /// Return a caller-owned camelCase object. Diagnostic u64 fields are always bigint.
     /// Use snapshotJson for portable serialization; JSON.stringify cannot encode bigint.
-    #[napi(ts_return_type = "object", catch_unwind)]
+    #[napi(ts_return_type = "DiagnosticSnapshot", catch_unwind)]
     pub fn snapshot<'env>(
         &self,
         env: &'env Env,
@@ -129,7 +129,7 @@ impl DiagnosticsReader {
     }
     /// Return a caller-owned camelCase object. Diagnostic u64 fields are always bigint.
     /// Use inspectMemoryJson for portable serialization; JSON.stringify cannot encode bigint.
-    #[napi(ts_return_type = "object", catch_unwind)]
+    #[napi(ts_return_type = "DiagnosticMemoryPage", catch_unwind)]
     pub fn inspect_memory<'env>(
         &self,
         env: &'env Env,
@@ -141,7 +141,7 @@ impl DiagnosticsReader {
         )
     }
     /// Return independent core/adapter budgets, occupancy, and logging coverage.
-    #[napi(ts_return_type = "object", catch_unwind)]
+    #[napi(ts_return_type = "DiagnosticsInfo", catch_unwind)]
     pub fn info<'env>(&self, env: &'env Env) -> Result<Unknown<'env>> {
         let value = serde_json::to_value(self.inner.info().map_err(Error::from)?)
             .map_err(|_| Error::generic_failure("invalid_metadata"))?;
@@ -157,8 +157,25 @@ pub fn diagnostics_reader() -> Result<DiagnosticsReader> {
         .map_err(Error::from)
 }
 
+#[napi(object)]
+pub struct DiagnosticsQueryContract {
+    pub max_query_bytes: u32,
+    pub numeric_query_fields: Vec<String>,
+}
+
+const MAX_QUERY_BYTES: u32 = {
+    assert!(embedded::MAX_BINDING_QUERY_BYTES <= u32::MAX as usize);
+    embedded::MAX_BINDING_QUERY_BYTES as u32
+};
+
 /// Internal descriptor consumed by the JavaScript query adapter.
 #[napi(js_name = "_diagnosticsQueryContract", catch_unwind)]
-pub fn diagnostics_query_contract() -> String {
-    embedded::binding_query_contract_json()
+pub fn diagnostics_query_contract() -> DiagnosticsQueryContract {
+    DiagnosticsQueryContract {
+        max_query_bytes: MAX_QUERY_BYTES,
+        numeric_query_fields: embedded::DIAGNOSTIC_QUERY_INTEGER_FIELDS
+            .iter()
+            .map(|field| (*field).to_owned())
+            .collect(),
+    }
 }

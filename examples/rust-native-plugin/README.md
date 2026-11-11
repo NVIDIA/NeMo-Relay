@@ -11,16 +11,16 @@ helpers live in separate source modules. Together they register the subscriber,
 all three event sanitizers, five tool surfaces, and six LLM surfaces exposed by
 the current typed 1.0.0 SDK.
 
-Relay 0.10 uses native ABI v7. Every LLM execution callback receives codec context
-before its continuation; streaming execution exposes request codec operations but no
-response decoder. The manifest continues to declare `native_api = "1"`, and its Relay
-compatibility range is `>=1.0.0,<2.0` to target the current SDK.
+The manifest declares `compat.native_api = "v1.0"`. The SDK export macro emits the
+standard header that Relay uses to check the plugin's interfaces before loading
+its components. `compat.relay` declares the supported Relay release range.
+The host must support the native minor required by the plugin's SDK.
 
 Run the focused tests and build the shared library from this directory. The
 configuration tests isolate validation and schema contracts. The lifecycle test
 builds a fresh `cdylib`, materializes a digest-checked manifest, activates the
 plugin in a host, executes middleware, observes its runtime mark, and clears
-the callbacks before unloading the library:
+the callbacks and executors while keeping the library resident:
 
 ```bash
 cargo test
@@ -42,7 +42,8 @@ the `sha256:` prefix. The same relative artifact path must appear in
 `source.artifact` and `load.library`.
 
 The strict schema documents every feature group and the SDK-owned
-`executor.worker_threads` override.
+`executor.worker_threads` setting. This example opts into a shared Tokio runtime;
+its active components must agree on the worker count.
 
 The optional `registration_control` group demonstrates a callback-based,
 activation-owned gate. It defaults to `enabled: false`, `kinds: ["subscriber"]`,

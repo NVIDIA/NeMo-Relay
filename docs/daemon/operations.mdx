@@ -76,9 +76,12 @@ outcome of a test policy. Confirm both model and hook activity where supported.
 <Step title="Verify Sharing and Shutdown">
 
 Open a second harness for the same user-machine identity. Confirm it reuses
-the worker. Close both sessions, allow up to two minutes for accepted requests
-to drain, and confirm the worker exits. If a process disappeared without
-unregistering, allow the 30-second reconnect grace period first.
+the worker, then close both sessions. If an MCP process exited without
+unregistering, first allow the 30-second reconnect grace period. If
+[worker idle retention](/daemon/configuration#worker-idle-timeout) is enabled,
+also wait for the configured idle period to expire. Then allow up to two minutes
+for accepted requests to drain. Confirm that the worker exits after plugin
+cleanup.
 
 </Step>
 
@@ -158,7 +161,7 @@ logging. Failure events use warning or error levels.
 | Daemon | `daemon_listening`, `daemon_pass_through_enabled`, `daemon_stopped`, `daemon_failed` |
 | MCP sessions | `mcp_added`, `mcp_removed`, `mcp_control_connected`, `mcp_control_reconnected`, `mcp_control_disconnected` |
 | Worker startup | `worker_staged`, `worker_startup_pending`, `worker_added`, `worker_ready`, `worker_recovery_started`, `worker_relaunch_requested` |
-| Worker control | `worker_control_connected`, `worker_control_reconnected`, `worker_control_disconnected`, `worker_control_lost`, `worker_control_recovery_failed` |
+| Worker control | `worker_control_connected`, `worker_control_reconnected`, `worker_control_disconnected`, `worker_control_lost`, `worker_control_recovery_failed`, `worker_exit_announced` |
 | Worker shutdown | `worker_drain_started`, `worker_removed`, `worker_stopped`, `worker_activation_cancelled` |
 | Worker degradation | `worker_registration_failed`, `worker_readiness_failed`, `worker_activation_failed`, `worker_activation_expired`, `worker_communication_failed`, `worker_failed`, `worker_recovery_failed`, `worker_recovery_expired`, `worker_relaunch_failed` |
 | Request forwarding | `public_request_pass_through`, `upstream_request_failed`, `worker_request_failed` |
@@ -228,8 +231,11 @@ original installer's bootstrap key to verify their attestations. If that key
 is missing or unreadable, reprovision the environment from the trusted plugin
 source. Newly provisioned environments store the key with the environment.
 
-Worker startup has no deadline or retry limit. A slow worker keeps its current
-launch grant. Check the worker's configured logs to find out why startup is slow.
+Plugin initialization has no overall timeout while MCP sessions remain connected.
+Retries have no attempt limit. Refer to
+[Worker Idle Timeout](/daemon/configuration#worker-idle-timeout) for registration
+deadlines and limits on time between sessions.
+Check the worker's configured logs to find out why startup is slow.
 
 Use these daemon events to track startup and retries:
 

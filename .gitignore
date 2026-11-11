@@ -24,8 +24,9 @@ go/nemo_relay/nemo_relay_test.exe
 # Node.js (NAPI-RS)
 node_modules/
 crates/node/*.node
-crates/node/index.js
-crates/node/index.d.ts
+crates/node/binding.js
+crates/node/binding.d.ts
+crates/node/dist/
 crates/node/coverage/
 crates/node/junit.xml
 integrations/openclaw/dist/

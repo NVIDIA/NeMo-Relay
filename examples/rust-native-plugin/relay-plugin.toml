@@ -9,7 +9,7 @@ kind = "rust_dynamic"
 
 [compat]
 relay = ">=1.0.0,<2.0"
-native_api = "1"
+native_api = "v1.0"
 
 [defaults]
 enabled = false
@@ -32,4 +32,3 @@ sha256 = "sha256:<artifact-sha256>"
 # Replace `<platform-library-file>` with the file built by `cargo build` for
 # your platform. Refer to README.md for the expected debug artifact names.
 library = "target/debug/<platform-library-file>"
-symbol = "nemo_relay_register_plugin"
