@@ -660,6 +660,11 @@ the separately provisioned digest, then reports missing, unexpected, or
 changed artifacts. This is a managed-only diagnostic: it does not load or fail because
 of personal configuration, plugins, or agent installations.
 
+When the bundle or its contents use symbolic links, keep the targets and the
+directories that allow their replacement under administrator control, just like
+the bundle itself. Successful validation checks the current contents; it does
+not prevent later changes to linked targets.
+
 ## Load a Managed Harness
 
 Install only the managed Relay integration for this deployment. Disable or remove

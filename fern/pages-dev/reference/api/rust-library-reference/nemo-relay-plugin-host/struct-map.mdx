@@ -690,15 +690,15 @@ map["key"] = json!("value");
 
 ### `impl WireValue<JsonObject> for Map<String, Value>`
 
-<pre className="rust-signature"><code dangerouslySetInnerHTML={{"__html": "impl WireValue&lt;JsonObject&gt; for <a href=\"struct-map\">Map</a>&lt;<a href=\"https://doc.rust-lang.org/1.96.1/alloc/string/struct.String.html\">String</a>, <a href=\"https://docs.rs/serde_json/1.0.149/serde_json/value/enum.Value.html\">Value</a>&gt;"}} /></pre>
+<pre className="rust-signature"><code dangerouslySetInnerHTML={{"__html": "impl <a href=\"../nemo-relay-worker-proto/conversions/trait-wirevalue\">WireValue</a>&lt;<a href=\"../nemo-relay-worker-proto/nvidia_worker_v1/struct-jsonobject\">JsonObject</a>&gt; for <a href=\"struct-map\">Map</a>&lt;<a href=\"https://doc.rust-lang.org/1.96.1/alloc/string/struct.String.html\">String</a>, <a href=\"https://docs.rs/serde_json/1.0.149/serde_json/value/enum.Value.html\">Value</a>&gt;"}} /></pre>
 
 #### `to_wire`
 
-<pre className="rust-signature"><code dangerouslySetInnerHTML={{"__html": "fn to_wire(self) -&gt; <a href=\"https://doc.rust-lang.org/1.96.1/core/result/enum.Result.html\">Result</a>&lt;JsonObject, ConversionError&gt;"}} /></pre>
+<pre className="rust-signature"><code dangerouslySetInnerHTML={{"__html": "fn <a href=\"../nemo-relay-worker-proto/conversions/trait-wirevalue\">to_wire</a>(self) -&gt; <a href=\"https://doc.rust-lang.org/1.96.1/core/result/enum.Result.html\">Result</a>&lt;<a href=\"../nemo-relay-worker-proto/nvidia_worker_v1/struct-jsonobject\">JsonObject</a>, <a href=\"../nemo-relay-worker-proto/conversions/struct-conversionerror\">ConversionError</a>&gt;"}} /></pre>
 
 #### `from_wire`
 
-<pre className="rust-signature"><code dangerouslySetInnerHTML={{"__html": "fn from_wire(value: JsonObject) -&gt; <a href=\"https://doc.rust-lang.org/1.96.1/core/result/enum.Result.html\">Result</a>&lt;<a href=\"struct-map\">Map</a>&lt;<a href=\"https://doc.rust-lang.org/1.96.1/alloc/string/struct.String.html\">String</a>, <a href=\"https://docs.rs/serde_json/1.0.149/serde_json/value/enum.Value.html\">Value</a>&gt;, ConversionError&gt;"}} /></pre>
+<pre className="rust-signature"><code dangerouslySetInnerHTML={{"__html": "fn <a href=\"../nemo-relay-worker-proto/conversions/trait-wirevalue\">from_wire</a>(value: <a href=\"../nemo-relay-worker-proto/nvidia_worker_v1/struct-jsonobject\">JsonObject</a>) -&gt; <a href=\"https://doc.rust-lang.org/1.96.1/core/result/enum.Result.html\">Result</a>&lt;<a href=\"struct-map\">Map</a>&lt;<a href=\"https://doc.rust-lang.org/1.96.1/alloc/string/struct.String.html\">String</a>, <a href=\"https://docs.rs/serde_json/1.0.149/serde_json/value/enum.Value.html\">Value</a>&gt;, <a href=\"../nemo-relay-worker-proto/conversions/struct-conversionerror\">ConversionError</a>&gt;"}} /></pre>
 
 ### `impl Eq for Map<String, Value>`
 

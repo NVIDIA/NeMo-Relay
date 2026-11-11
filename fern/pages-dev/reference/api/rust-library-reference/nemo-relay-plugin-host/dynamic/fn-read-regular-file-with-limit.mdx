@@ -1,7 +1,7 @@
 ---
 title: "Function read_regular_file_with_limit"
 sidebar-title: "read_regular_file_with_limit"
-description: "Reads a regular file without following a Unix symlink and with a caller-provided byte budget."
+description: "Reads a regular file, following symlinks, with a caller-provided byte budget."
 position: 69
 ---
 {/* SPDX-FileCopyrightText: Copyright (c) 2026, NVIDIA CORPORATION & AFFILIATES. All rights reserved.
@@ -11,4 +11,4 @@ Generated from `cargo doc --no-deps -p nemo-relay-builtins -p nemo-relay-diagnos
 
 <pre className="rust-signature"><code dangerouslySetInnerHTML={{"__html": "pub fn read_regular_file_with_limit(\n    path: &amp;<a href=\"https://doc.rust-lang.org/1.96.1/std/path/struct.Path.html\">Path</a>,\n    description: &amp;<a href=\"https://doc.rust-lang.org/1.96.1/std/primitive.str.html\">str</a>,\n    max_bytes: <a href=\"https://doc.rust-lang.org/1.96.1/std/primitive.u64.html\">u64</a>,\n) -&gt; <a href=\"https://doc.rust-lang.org/1.96.1/core/result/enum.Result.html\">Result</a>&lt;<a href=\"https://doc.rust-lang.org/1.96.1/alloc/vec/struct.Vec.html\">Vec</a>&lt;<a href=\"https://doc.rust-lang.org/1.96.1/std/primitive.u8.html\">u8</a>&gt;, <a href=\"https://doc.rust-lang.org/1.96.1/alloc/string/struct.String.html\">String</a>&gt;"}} /></pre>
 
-Reads a regular file without following a Unix symlink and with a caller-provided byte budget.
+Reads a regular file, following symlinks, with a caller-provided byte budget.
