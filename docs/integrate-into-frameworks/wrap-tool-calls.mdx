@@ -254,103 +254,10 @@ Check these symptoms first when the workflow does not behave as expected.
 
 ## Configure Execution Stages per Call
 
-Each managed tool or LLM call can choose which middleware stages run. You can
-turn conditional-execution guardrails, request intercepts, and execution
-intercepts on or off. All three stages run by default. The stages that run keep
-their usual order. If you turn off conditional execution, Relay skips those
-checks for that call.
-
-Options affect only the call that receives them. Nested calls and calls that
-run at the same time use their own options. Relay still sanitizes event data,
-uses codecs, and passes trace context. It still emits start and end events and
-cleans up streams. These options do not change middleware registrations,
-manual start/end APIs, or standalone middleware helpers.
-
-For example, your framework might apply request intercepts before it calls
-Relay. Turn off that stage to avoid running it twice. Keep the other stages on.
-
-<Tabs>
-<Tab title="Python">
-
-Pass an `ExecutionOptions` object to `tools.execute`:
-
-```python
-result = await nemo_relay.tools.execute(
-    "search", args, search,
-    execution_options=nemo_relay.ExecutionOptions(request_intercepts=False),
-)
-```
-
-You cannot change an `ExecutionOptions` object after you create it. Its fields
-are `conditional_execution`, `request_intercepts`, and `execution_intercepts`.
-Each field defaults to `True`.
-
-Use the same `execution_options` keyword with `llm.execute`,
-`llm.stream_execute`, and the typed execute helpers.
-
-</Tab>
-<Tab title="Rust">
-
-Create the options with the stages that you want to change:
-
-```rust
-use nemo_relay::ExecutionOptions;
-
-let options = ExecutionOptions {
-    request_intercepts: false,
-    ..ExecutionOptions::default()
-};
-```
-
-Pass the options to `.execution_options(options)` on the execute parameter
-builder before you call `.build()`. The builders are `ToolCallExecuteParams`,
-`LlmCallExecuteParams`, and `LlmStreamCallExecuteParams`.
-
-The fields are `conditional_execution`, `request_intercepts`, and
-`execution_intercepts`. `Default` turns on all three stages.
-
-</Tab>
-<Tab title="JavaScript / TypeScript">
-
-Pass `executionOptions` in the typed helper's options object:
-
-```typescript
-import { typedToolExecute } from "nemo-relay-node/typed";
-
-await typedToolExecute("search", args, search, argsCodec, resultCodec, {
-  executionOptions: { requestIntercepts: false },
-});
-```
-
-The options object has three optional boolean fields: `conditionalExecution`,
-`requestIntercepts`, and `executionIntercepts`. If you omit a field, its stage
-runs. All three typed helpers accept `executionOptions` in their options object.
-
-The following native functions accept the same object as their last optional
-argument:
-
-- `toolCallExecute`
-- `toolCallExecuteAsync`
-- `llmCallExecute`
-- `llmCallExecuteAsync`
-- `llmStreamCallExecute`
-
-Keep the other arguments in their existing positions. The native binding copies
-the options when the call starts.
-
-</Tab>
-</Tabs>
-
-For streaming LLM calls, set `execution_intercepts=False` in Python to skip
-streaming execution intercepts. Use the matching field in other bindings.
-Relay still runs the collector and finalizer and handles stream close.
-
-Turning off request intercepts does not turn off codec processing. Relay also
-still adds session headers. The provider request can therefore differ from the
-input request.
-
-These options control whole stages. They do not change stage order or select
-individual middleware registrations by name.
+Tool and LLM wrappers accept options that choose which middleware stages run
+for one call. Refer to
+[Configure Execution Stages per Call](/instrument-applications/advanced-guide#configure-execution-stages-per-call)
+for the supported bindings and the work Relay still handles when a stage is off.
 
 ## Next Steps
 

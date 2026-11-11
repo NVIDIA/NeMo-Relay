@@ -212,22 +212,10 @@ Check these symptoms first when the workflow does not behave as expected.
 
 ## Configure Execution Stages per Call
 
-Both regular and streaming LLM calls support execution options. For details,
-refer to [Configure Execution Stages per Call](/integrate-into-frameworks/wrap-tool-calls#configure-execution-stages-per-call).
-
-For example, turn off streaming execution intercepts for one call:
-
-```python
-stream = await nemo_relay.llm.stream_execute(
-    "chat", request, provider_stream, collector, finalizer,
-    execution_options=nemo_relay.ExecutionOptions(execution_intercepts=False),
-)
-```
-
-This call skips streaming execution intercepts. Relay still runs conditional
-checks, request intercepts, and codecs. It still sanitizes event data, collects
-chunks, runs the finalizer, and cleans up the stream. Omit the options to run
-all stages.
+Tool and LLM wrappers accept options that choose which middleware stages run
+for one call. Refer to
+[Configure Execution Stages per Call](/instrument-applications/advanced-guide#configure-execution-stages-per-call)
+for the supported bindings and the work Relay still handles when a stage is off.
 
 ## Next Steps
 
