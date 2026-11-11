@@ -1,7 +1,7 @@
 ---
 title: "Instrument a Tool Call"
 description: "Instrument managed tool calls with NeMo Relay scopes, middleware, events, and subscribers."
-position: 3
+position: 2
 ---
 {/* SPDX-FileCopyrightText: Copyright (c) 2026, NVIDIA CORPORATION & AFFILIATES. All rights reserved.
 SPDX-License-Identifier: Apache-2.0 */}
@@ -20,7 +20,9 @@ You will wrap one existing tool callback with the managed tool execution API. Th
 - Returns a canonical `ToolExecutionResult` containing the application-owned
   result and an optional opaque annotation.
 
-## Before You Start
+<Steps toc={true} tocDepth={2}>
+
+<Step title="Prepare" id="before-you-start">
 
 Complete one binding Quick Start guide first:
 
@@ -28,7 +30,9 @@ Complete one binding Quick Start guide first:
 - [Node.js Quick Start](/getting-started/quick-start/nodejs)
 - [Rust Quick Start](/getting-started/quick-start/rust)
 
-Create a scope for the active request or agent run before adding tool instrumentation. If you have not done that yet, start with [Adding Scopes and Marks](/instrument-applications/adding-scopes-and-marks).
+The example creates one `agent-run` scope to group the tool call. You can use it
+without first completing the scopes guide. For additional grouping and optional
+checkpoints, refer to [Adding Scopes and Marks](/instrument-applications/adding-scopes-and-marks).
 
 The tool arguments, result, and optional annotation must be JSON-compatible. If
 your framework passes clients, sockets, streams, callbacks, or other opaque
@@ -40,204 +44,126 @@ become `None` before middleware and the tool callback receive them. Validate
 the original arguments before calling Relay if you need to reject these values.
 Refer to [Non-Finite Numbers](/integrate-into-frameworks/non-serializable-data#non-finite-numbers).
 
-## Integration Pattern
+</Step>
 
-Follow this sequence to keep framework work attached to the expected runtime context.
+<Step title="Instrument" id="integration-pattern">
 
-1. Identify the stable tool boundary in your application.
-2. Create or inherit a scope for the current agent run, request, or workflow.
-3. Register a temporary subscriber while validating the integration.
-4. Replace the direct callback invocation with the managed tool execute helper.
-5. Pass the active scope handle when the binding supports it.
-6. Check that the application result is unchanged and lifecycle events are emitted.
+Use the Execute helper for the tool function your application owns.
 
-## Minimal Example
+Choose a stable tool name and create or inherit a scope for the current agent
+run, request, or workflow. Register a temporary subscriber, then replace the
+direct callback invocation with Execute and pass the active scope handle.
+The highlighted calls below show that replacement in each binding.
 
-The examples below wrap a `search` callback and print emitted events.
+</Step>
+
+<Step title="Run" id="minimal-example">
+
+Run the complete example for your binding in the project from its Quick Start.
+Each example wraps a `search` callback and prints emitted events. The callback
+returns `ToolExecutionResult`; its `result` field contains the business payload.
+The scope groups the call, and the subscriber prints events before being removed.
 
 <Tabs>
 <Tab title="Python" language="python">
-```python
-import asyncio
-from typing import TypedDict
+Save the following code as `tool_call.py` in your Quick Start project:
 
-import nemo_relay
+<Code src="_code/python/tool_call.py" language="python" title="tool_call.py" maxLines={0} highlight={[32, 33, 34, 35, 36, 37]} />
 
-class SearchArgs(TypedDict):
-    query: str
+API reference: [`nemo_relay.tools.execute`](/reference/api/python-library-reference/nemo-relay/tools#execute).
 
-def log_event(event: nemo_relay.Event) -> None:
-    print(f"{event.kind} {event.name}")
+Run it from the project directory:
 
-async def search(args: SearchArgs) -> nemo_relay.ToolExecutionResult[dict[str, object]]:
-    return nemo_relay.ToolExecutionResult(
-        {
-            "query": args["query"],
-            "hits": [{"title": "NeMo Relay"}],
-        }
-    )
-
-async def main() -> None:
-    nemo_relay.subscribers.register("instrumentation-check", log_event)
-
-    try:
-        with nemo_relay.scope.scope("agent-run", nemo_relay.ScopeType.Agent) as handle:
-            result = await nemo_relay.tools.execute(
-                "search",
-                {"query": "runtime instrumentation"},
-                search,
-                handle=handle,
-            )
-            print(result.result)
-    finally:
-        await nemo_relay.subscribers.flush_async()
-        nemo_relay.subscribers.deregister("instrumentation-check")
-
-asyncio.run(main())
+```bash
+uv run python tool_call.py
 ```
 </Tab>
 
 <Tab title="Node.js" language="node">
-```js
-const {
-  ScopeType,
-  deregisterSubscriber,
-  flushSubscribers,
-  registerSubscriber,
-  toolCallExecute,
-  withScope,
-} = require("nemo-relay-node");
+Save the following code as `tool-call.cjs` in your Quick Start project:
 
-async function main() {
-  registerSubscriber("instrumentation-check", (event) => {
-    console.log(`${event.kind} ${event.name}`);
-  });
+<Code src="_code/nodejs/tool-call.js" language="js" title="tool-call.cjs" maxLines={0} highlight={[29, 30, 31, 32, 33, 34, 35, 36, 37]} />
 
-  try {
-    await withScope("agent-run", ScopeType.Agent, async (handle) => {
-      const result = await toolCallExecute(
-        "search",
-        { query: "runtime instrumentation" },
-        (args) => ({
-          result: {
-            query: args.query,
-            hits: [{ title: "NeMo Relay" }],
-          },
-        }),
-        handle,
-        null,
-        null,
-        null,
-      );
+API reference: [`toolCallExecute`](/reference/api/nodejs-library-reference/nemo-relay-node#toolcallexecute).
 
-      console.log(result.result);
-    });
-  } finally {
-    await flushSubscribers();
-    deregisterSubscriber("instrumentation-check");
-  }
-}
+Run it from the project directory:
 
-main().catch((error) => {
-  console.error(error);
-  process.exitCode = 1;
-});
+```bash
+node tool-call.cjs
 ```
 </Tab>
 
 <Tab title="Rust" language="rust">
-```rust
-use nemo_relay::scope::{
-    self, PopScopeParams, PushScopeParams, ScopeAttributes, ScopeType,
-};
-use nemo_relay::subscriber::{deregister_subscriber, flush_subscribers, register_subscriber};
-use nemo_relay::tool::{tool_call_execute, ToolCallExecuteParams, ToolExecutionResult};
-use serde_json::json;
-use std::sync::Arc;
+Use the following code as `src/main.rs` in your Quick Start project:
 
-#[tokio::main]
-async fn main() -> Result<(), Box<dyn std::error::Error>> {
-    register_subscriber(
-        "instrumentation-check",
-        Arc::new(|event| {
-            println!("{} {}", event.kind(), event.name());
-        }),
-    )?;
+<Code src="_code/rust/tool_call.rs" language="rust" title="src/main.rs" maxLines={0} highlight={[28, 29, 30, 31, 32, 33, 34, 35, 36, 37, 38, 39, 40, 41, 42, 43]} />
 
-    let handle = scope::push_scope(
-        PushScopeParams::builder()
-            .name("agent-run")
-            .scope_type(ScopeType::Agent)
-            .attributes(ScopeAttributes::empty())
-            .data(json!({"example": "instrument-tool"}))
-            .build(),
-    )?;
+API reference: [`tool_call_execute`](/reference/api/rust-library-reference/nemo-relay/tool/fn-tool-call-execute).
 
-    let result = tool_call_execute(
-        ToolCallExecuteParams::builder()
-            .name("search")
-            .args(json!({"query": "runtime instrumentation"}))
-            .func(Arc::new(|args| {
-                Box::pin(async move {
-                    Ok(ToolExecutionResult::new(json!({
-                        "query": args["query"],
-                        "hits": [{"title": "NeMo Relay"}]
-                    })))
-                })
-            }))
-            .parent(handle.clone())
-            .build(),
-    )
-    .await?;
+Run it from the project directory containing `Cargo.toml`:
 
-    println!("{}", result.result);
-
-    scope::pop_scope(PopScopeParams::builder().handle_uuid(&handle.uuid).build())?;
-    flush_subscribers()?;
-    let _ = deregister_subscriber("instrumentation-check")?;
-    Ok(())
-}
+```bash
+cargo run
 ```
 </Tab>
 
 </Tabs>
 
-## Python: Return Tool Results to the Model
+</Step>
 
-In a Python manual chat loop, send only the managed tool result's business
-payload to the model:
+<Step title="Verify" id="validate-the-integration">
 
-```python
-import json
+The subscriber prints these event lines for the example:
 
-tool_result = await nemo_relay.tools.execute(name, args, tool_callback)
-messages.append(
-    {
-        "role": "tool",
-        "content": json.dumps(tool_result.result),
-        "tool_call_id": tool_call["id"],
-    }
-)
+```text title="Expected event lines"
+scope agent-run
+scope search
+scope search
+scope agent-run
 ```
 
-Keep `tool_result.annotation` in the Python application for its own metadata
-and observability use. Do not use `str(tool_result)` for the tool message: it
-serializes the Python wrapper and can expose annotation data instead of the
-tool's business result.
+The result contains the following business payload. Python and Node.js can
+format it differently when printing it:
 
-## Validate the Integration
+```json title="Expected result"
+{
+  "query": "runtime instrumentation",
+  "hits": [
+    {
+      "title": "NeMo Relay"
+    }
+  ]
+}
+```
+
+The result can appear between event lines because subscriber delivery is
+asynchronous. Check the event sequence separately from the result's position.
 
 Check both behavior and instrumentation:
 
 - The `ToolExecutionResult.result` field matches what the application returned
-  before the wrapper was added.
-- The subscriber prints an agent or request scope event.
-- The subscriber prints tool start and tool end events for `search`.
+  before the wrapper was added: the query `runtime instrumentation` and one hit
+  titled `NeMo Relay`.
+- The subscriber prints `agent-run` twice, for scope start and end.
+- The subscriber prints `search` twice, for tool start and end.
 
+<Note title="Flush Subscriber Delivery">
 Native subscriber delivery is asynchronous. From an `asyncio` task, await
 `nemo_relay.subscribers.flush_async()`. In Node.js, await `flushSubscribers()`
 before validating printed output. If a subscriber callback emits a native event,
 await `flushSubscribers()` again to observe that event.
+</Note>
+
+If the result appears without tool events, check that the subscriber is registered,
+subscriber delivery has been flushed, and the call uses `tools.execute`,
+`toolCallExecute`, or `tool_call_execute`.
+
+</Step>
+
+</Steps>
+
+## Inspect Tool Event Payloads
+
 - Tool start input contains the request arguments after request intercepts and
   sanitize-request guardrails.
 - Tool end output contains the tool result after response guardrails.
@@ -248,7 +174,24 @@ must travel with the result without changing the business payload. Refer to
 [Tool Execution Intercept Outcomes](/reference/tool-execution-intercept-outcomes)
 for annotation and sanitizer semantics.
 
-If only the business result appears, the callback ran but instrumentation did not run. Confirm that the call goes through `tools.execute`, `toolCallExecute`, or `tool_call_execute`.
+## Python: Return Tool Results to the Model
+
+In a Python manual chat loop, send only the managed tool result's business
+payload to the model:
+
+<Code src="_code/python/tool_result_message.py" language="python" title="tool_result_message.py" />
+
+Call `append_tool_result(...)` from the existing chat loop, passing its tool
+name, arguments, callback, tool-call record, and messages list. For a callback
+that returns `{"hits": 2}`, the appended message's `content` is the JSON string
+`{"hits": 2}`. The tool result's annotation stays in the application.
+The helper returns the complete `ToolExecutionResult` so the application can
+retain its annotation separately.
+
+Keep `tool_result.annotation` in the Python application for its own metadata
+and observability use. Do not use `str(tool_result)` for the tool message: it
+serializes the Python wrapper and can expose annotation data instead of the
+tool's business result.
 
 ## Production Checklist
 
@@ -266,13 +209,25 @@ Use this checklist before running the pattern in production traffic.
 
 Check these symptoms first when the workflow does not behave as expected.
 
-- **No events appear**: The application is still calling the tool directly.
-- **The tool appears outside the agent scope**: Pass the current scope handle into the managed execute helper.
-- **The call fails before execution**: A conditional-execution guardrail rejected the request.
-- **Subscribers see different data than the tool receives**: Sanitize guardrails change event payloads, while request intercepts change the real arguments.
-- **Python: The model receives the result wrapper or annotation metadata**:
-  Send `json.dumps(tool_result.result)` in the tool message, not
-  `str(tool_result)`.
+### No Events Appear
+
+Confirm the call uses an Execute helper, the subscriber is registered before the call, and subscriber delivery is flushed before you inspect the output.
+
+### The Tool Appears Outside the Agent Scope
+
+Pass the current scope handle into the managed execute helper.
+
+### The Call Fails Before Execution
+
+Read the reported error. A conditional-execution guardrail can reject the request, or a request intercept can fail before the tool runs.
+
+### Subscribers See Different Data Than the Tool Receives
+
+Sanitize guardrails change event payloads, while request intercepts change the real arguments.
+
+### Python: The Model Receives the Result Wrapper or Annotation Metadata
+
+Send `json.dumps(tool_result.result)` in the tool message, not `str(tool_result)`.
 
 ## Next Steps
 
