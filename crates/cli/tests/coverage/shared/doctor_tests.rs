@@ -1271,6 +1271,13 @@ async fn doctor_accepts_symlinked_gateway_and_plugin_configuration_under_a_direc
         report.configuration.plugin_host_validation.status,
         Status::Pass
     );
+    let host_report = report.configuration.plugin_host_validation.report.unwrap();
+    assert!(
+        host_report
+            .config_paths
+            .contains(&alias.join("plugins.toml").display().to_string())
+    );
+    assert_eq!(host_report.resolved_config["version"], 1);
 }
 
 #[tokio::test]
