@@ -209,11 +209,12 @@ fn overlay_openai_chat_response(mut payload: Json, annotated: &AnnotatedLlmRespo
     let Some(message) = choice.get_mut("message").and_then(Json::as_object_mut) else {
         return payload;
     };
-    set_optional_string_field(
-        message,
-        "content",
-        annotated_message_text(annotated.message.as_ref()).as_deref(),
-    );
+    let text = join_openai_fields(annotated.message.as_ref(), "text");
+    let refusal = join_openai_fields(annotated.message.as_ref(), "refusal");
+    set_optional_string_field(message, "content", text.as_deref());
+    if message.contains_key("refusal") || refusal.is_some() {
+        set_optional_string_field(message, "refusal", refusal.as_deref());
+    }
     overlay_openai_chat_tool_calls(message, annotated.tool_calls.as_deref());
     payload
 }
@@ -233,12 +234,22 @@ fn overlay_openai_responses_response(mut payload: Json, annotated: &AnnotatedLlm
             .map(openai_responses_status),
     );
 
-    let message_text = annotated_message_text(annotated.message.as_ref());
+    let message_text = join_openai_fields(annotated.message.as_ref(), "text");
     if root.contains_key("output_text") {
         set_optional_string_field(root, "output_text", message_text.as_deref());
     }
     if let Some(items) = root.get_mut("output").and_then(Json::as_array_mut) {
-        overlay_output_text_blocks(items, message_text);
+        let has_refusal = items
+            .iter()
+            .filter(|item| item.get("type").and_then(Json::as_str) == Some("message"))
+            .filter_map(|item| item.get("content").and_then(Json::as_array))
+            .flatten()
+            .any(|block| block.get("type").and_then(Json::as_str) == Some("refusal"));
+        if matches!(annotated.message, Some(MessageContent::Parts(_))) || has_refusal {
+            overlay_structured_output_blocks(items, annotated.message.as_ref());
+        } else {
+            overlay_output_text_blocks(items, message_text);
+        }
         overlay_openai_responses_tool_calls(items, annotated.tool_calls.as_deref());
     }
     payload
@@ -582,6 +593,79 @@ fn overlay_anthropic_tool_calls(blocks: &mut Vec<Json>, tool_calls: Option<&[Res
         raw_call.insert("input".into(), sanitized_call.arguments.clone());
         true
     });
+}
+
+// Keep refusal fields separate from ordinary text when projecting sanitized
+// normalized parts back into OpenAI wire payloads.
+fn openai_message_fields(
+    message: Option<&MessageContent>,
+) -> impl Iterator<Item = (&'static str, &str)> {
+    let (text, parts): (Option<&str>, &[ContentPart]) = match message {
+        Some(MessageContent::Text(text)) => (Some(text), &[]),
+        Some(MessageContent::Parts(parts)) => (None, parts),
+        None => (None, &[]),
+    };
+    text.map(|text| ("text", text))
+        .into_iter()
+        .chain(parts.iter().filter_map(|part| {
+            match part {
+                ContentPart::Text { text, .. } => Some(("text", text.as_str())),
+                ContentPart::Refusal { refusal, .. } => Some(("refusal", refusal.as_str())),
+                ContentPart::ProviderNative { value, .. } => value
+                    .get("text")
+                    .and_then(Json::as_str)
+                    .map(|text| ("text", text))
+                    .or_else(|| {
+                        value
+                            .get("refusal")
+                            .and_then(Json::as_str)
+                            .map(|text| ("refusal", text))
+                    }),
+                _ => None,
+            }
+        }))
+}
+
+fn join_openai_fields(message: Option<&MessageContent>, key: &str) -> Option<String> {
+    let mut fields =
+        openai_message_fields(message).filter_map(|(field, text)| (field == key).then_some(text));
+    let mut joined = fields.next()?.to_owned();
+    for text in fields {
+        joined.push('\n');
+        joined.push_str(text);
+    }
+    Some(joined)
+}
+
+fn overlay_structured_output_blocks(items: &mut [Json], message: Option<&MessageContent>) {
+    let mut fields = openai_message_fields(message).peekable();
+    let mut overlay_block = |block: &mut Json| {
+        let key = match block.get("type").and_then(Json::as_str) {
+            Some("output_text") => "text",
+            Some("refusal") => "refusal",
+            _ => return,
+        };
+        // Removed parts must not move text across a refusal boundary.
+        let value = if fields.peek().is_some_and(|(field, _)| *field == key) {
+            fields.next().map(|(_, text)| text)
+        } else {
+            None
+        };
+        if let Some(block) = block.as_object_mut() {
+            set_optional_string_field(block, key, value);
+        }
+    };
+    for item in items {
+        if item.get("type").and_then(Json::as_str) == Some("message") {
+            if let Some(content) = item.get_mut("content").and_then(Json::as_array_mut) {
+                for block in content {
+                    overlay_block(block);
+                }
+            }
+        } else if item.get("type").and_then(Json::as_str) == Some("output_text") {
+            overlay_block(item);
+        }
+    }
 }
 
 fn overlay_output_text_blocks(items: &mut [Json], message_text: Option<String>) {
