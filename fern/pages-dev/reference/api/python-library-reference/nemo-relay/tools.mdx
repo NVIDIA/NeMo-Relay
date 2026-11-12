@@ -34,7 +34,7 @@ Finish a manual tool span started by `call()`.
 ### `execute`
 
 ```python
-def execute(name: str, args: Json, func: Callable[[Json], ToolExecutionResult[Json] | Awaitable[ToolExecutionResult[Json]]], *, handle: ScopeHandle | None = None, attributes: ToolAttributes | None = None, data: Json | None = None, metadata: Json | None = None, tool_call_id: str | None = None) -> Awaitable[ToolExecutionResult[Json]]
+def execute(name: str, args: Json, func: Callable[[Json], ToolExecutionResult[Json] | Awaitable[ToolExecutionResult[Json]]], *, handle: ScopeHandle | None = None, attributes: ToolAttributes | None = None, data: Json | None = None, metadata: Json | None = None, tool_call_id: str | None = None, execution_options: ExecutionOptions | None = None) -> Awaitable[ToolExecutionResult[Json]]
 ```
 
 Run a tool through the managed middleware pipeline.

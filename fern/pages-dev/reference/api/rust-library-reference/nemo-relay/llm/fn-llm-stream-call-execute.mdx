@@ -2,7 +2,7 @@
 title: "Function llm_stream_call_execute"
 sidebar-title: "llm_stream_call_execute"
 description: "Execute a streaming LLM call through the managed middleware pipeline."
-position: 15
+position: 16
 ---
 {/* SPDX-FileCopyrightText: Copyright (c) 2026, NVIDIA CORPORATION & AFFILIATES. All rights reserved.
 SPDX-License-Identifier: Apache-2.0 */}
@@ -13,7 +13,9 @@ Generated from `cargo doc --no-deps -p nemo-relay-builtins -p nemo-relay-diagnos
 
 Execute a streaming LLM call through the managed middleware pipeline.
 
-This runs the same pre-execution middleware as [`llm_call_execute`](/reference/api/rust-library-reference/nemo-relay/llm/fn-llm-call-execute), emits the LLM-start event, and then wraps the provider stream so chunk callbacks and finalization can emit a single LLM-end event when streaming completes.
+By default, this runs the same middleware as [`llm_call_execute`](/reference/api/rust-library-reference/nemo-relay/llm/fn-llm-call-execute), emits the LLM-start event, and then wraps the provider stream so chunk callbacks and finalization can emit a single LLM-end event when streaming completes.
+
+Use `execution_options` to choose which middleware stages run for this call. All stages run by default. Relay still sanitizes event data, uses codecs, and handles call completion.
 
 ## Parameters
 
@@ -29,6 +31,7 @@ This runs the same pre-execution middleware as [`llm_call_execute`](/reference/a
 - `model_name`: Optional normalized model name for observability output.
 - `codec`: Optional request codec used to produce annotated request data for intercepts and events.
 - `response_codec`: Optional response codec used to attach annotated response data to the end event.
+- `execution_options`: Choose which stages run for this call. All stages run by default.
 
 ## Returns
 

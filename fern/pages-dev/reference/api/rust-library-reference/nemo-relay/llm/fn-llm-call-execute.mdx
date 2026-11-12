@@ -2,7 +2,7 @@
 title: "Function llm_call_execute"
 sidebar-title: "llm_call_execute"
 description: "Execute an LLM call through the managed middleware pipeline."
-position: 12
+position: 13
 ---
 {/* SPDX-FileCopyrightText: Copyright (c) 2026, NVIDIA CORPORATION & AFFILIATES. All rights reserved.
 SPDX-License-Identifier: Apache-2.0 */}
@@ -13,7 +13,9 @@ Generated from `cargo doc --no-deps -p nemo-relay-builtins -p nemo-relay-diagnos
 
 Execute an LLM call through the managed middleware pipeline.
 
-This runs conditional-execution guardrails, request intercepts, and sanitize-request guardrails, emits the LLM-start event, then runs execution intercepts, the provider callback when it is not replaced, and sanitize-response guardrails in the runtime-defined order.
+By default, this runs conditional-execution guardrails, request intercepts, and sanitize-request guardrails, emits the LLM-start event, then runs execution intercepts, the provider callback when it is not replaced, and sanitize-response guardrails in the runtime-defined order.
+
+Use `execution_options` to choose which middleware stages run for this call. All stages run by default. Relay still sanitizes event data, uses codecs, and handles call completion.
 
 ## Parameters
 
@@ -27,6 +29,7 @@ This runs conditional-execution guardrails, request intercepts, and sanitize-req
 - `model_name`: Optional normalized model name for observability output.
 - `codec`: Optional request codec used to produce annotated request data for intercepts and events.
 - `response_codec`: Optional response codec used to attach annotated response data to the end event.
+- `execution_options`: Choose which stages run for this call. All stages run by default.
 
 ## Returns
 

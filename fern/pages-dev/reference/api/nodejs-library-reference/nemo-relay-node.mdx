@@ -1717,6 +1717,18 @@ export interface EventSanitizeFields {
 }
 ```
 
+### `ExecutionOptions`
+
+Choose which middleware stages run for one call. Omitted fields run their stages. Relay still sanitizes event data, uses codecs, and handles call completion. Nested calls use their own options.
+
+```ts
+export interface ExecutionOptions {
+  conditionalExecution?: boolean
+  requestIntercepts?: boolean
+  executionIntercepts?: boolean
+}
+```
+
 ### `MetricMeasurement`
 
 One typed recording operation emitted by `metric`.
@@ -3107,20 +3119,24 @@ export declare function llmCallEnd<TResponse extends JsonCompatible<TResponse>, 
 
 Execute an LLM call end-to-end with full lifecycle management.
 
-Runs conditional-execution guardrails (on raw request) -> request intercepts -> sanitize-request guardrails for the emitted `Start` event payload -> execution intercepts -> `func` -> sanitize-response guardrails for the emitted `End` event payload. On rejection, only a standalone Mark event is emitted (no Start/End pair) and `GuardrailRejected` is returned. The `request` should be a JSON object with `headers` and `content` fields matching the `LlmRequest` schema. Returns the final execution response; sanitize guardrails do not rewrite the caller-visible value. Supply `codecDecode` and `codecEncode` together or omit both.
+By default, this call runs these stages:
+
+1. Check conditional-execution guardrails on the original input. 2. Apply request intercepts. 3. Sanitize the request copy in the `Start` event. 4. Run execution intercepts around `func`. 5. Sanitize the response copy in the `End` event.
+
+If a guardrail rejects the call, Relay emits a standalone Mark event. It does not emit a Start/End pair. The call returns `GuardrailRejected`. Sanitizers change event data. They do not change the result returned to the caller. Pass a JSON object with `headers` and `content` fields in `request`. Supply `codecDecode` and `codecEncode` together or omit both. Use the last `executionOptions` argument to choose which stages run for this call.
 
 ```ts
-export declare function llmCallExecute<TRequest extends LlmRequestCompatible<TRequest>, TResponse extends JsonCompatible<TResponse>, TData extends JsonCompatible<TData> = Json, TMetadata extends JsonCompatible<TMetadata> = Json, TAnnotated extends JsonCompatible<TAnnotated> = Json, TEncoded extends LlmRequestCompatible<TEncoded> = LlmRequestShape, TDecodedResponse extends JsonCompatible<TDecodedResponse> = Json>(name: string, request: TRequest, func: (request: LlmRequestShape) => TResponse, handle?: ScopeHandle | undefined | null, attributes?: number | undefined | null, data?: TData | null, metadata?: TMetadata | null, modelName?: string | undefined | null, codecDecode?: (request: LlmRequestShape) => TAnnotated, codecEncode?: (arg: { annotated: Json; original: LlmRequestShape }) => TEncoded, responseCodecDecode?: (response: Json) => TDecodedResponse): Promise<Json>
+export declare function llmCallExecute<TRequest extends LlmRequestCompatible<TRequest>, TResponse extends JsonCompatible<TResponse>, TData extends JsonCompatible<TData> = Json, TMetadata extends JsonCompatible<TMetadata> = Json, TAnnotated extends JsonCompatible<TAnnotated> = Json, TEncoded extends LlmRequestCompatible<TEncoded> = LlmRequestShape, TDecodedResponse extends JsonCompatible<TDecodedResponse> = Json>(name: string, request: TRequest, func: (request: LlmRequestShape) => TResponse, handle?: ScopeHandle | undefined | null, attributes?: number | undefined | null, data?: TData | null, metadata?: TMetadata | null, modelName?: string | undefined | null, codecDecode?: (request: LlmRequestShape) => TAnnotated, codecEncode?: (arg: { annotated: Json; original: LlmRequestShape }) => TEncoded, responseCodecDecode?: (response: Json) => TDecodedResponse, executionOptions?: ExecutionOptions | undefined | null): Promise<Json>
 ```
 
 ### `llmCallExecuteAsync`
 
 Execute an LLM call end-to-end with a callback that returns a value or a Promise.
 
-Runs the same lifecycle as `llmCallExecute`. Supply `codecDecode` and `codecEncode` together or omit both.
+Runs the same lifecycle as `llmCallExecute`. Supply `codecDecode` and `codecEncode` together or omit both. Use the last `executionOptions` argument to choose which stages run for this call.
 
 ```ts
-export declare function llmCallExecuteAsync<TRequest extends LlmRequestCompatible<TRequest>, TResponse extends JsonCompatible<TResponse>, TData extends JsonCompatible<TData> = Json, TMetadata extends JsonCompatible<TMetadata> = Json, TAnnotated extends JsonCompatible<TAnnotated> = Json, TEncoded extends LlmRequestCompatible<TEncoded> = LlmRequestShape, TDecodedResponse extends JsonCompatible<TDecodedResponse> = Json>(name: string, request: TRequest, func: (request: LlmRequestShape, signal: AbortSignal) => TResponse | Promise<TResponse>, handle?: ScopeHandle | undefined | null, attributes?: number | undefined | null, data?: TData | null, metadata?: TMetadata | null, modelName?: string | undefined | null, codecDecode?: (request: LlmRequestShape) => TAnnotated, codecEncode?: (arg: { annotated: Json; original: LlmRequestShape }) => TEncoded, responseCodecDecode?: (response: Json) => TDecodedResponse): Promise<Json>
+export declare function llmCallExecuteAsync<TRequest extends LlmRequestCompatible<TRequest>, TResponse extends JsonCompatible<TResponse>, TData extends JsonCompatible<TData> = Json, TMetadata extends JsonCompatible<TMetadata> = Json, TAnnotated extends JsonCompatible<TAnnotated> = Json, TEncoded extends LlmRequestCompatible<TEncoded> = LlmRequestShape, TDecodedResponse extends JsonCompatible<TDecodedResponse> = Json>(name: string, request: TRequest, func: (request: LlmRequestShape, signal: AbortSignal) => TResponse | Promise<TResponse>, handle?: ScopeHandle | undefined | null, attributes?: number | undefined | null, data?: TData | null, metadata?: TMetadata | null, modelName?: string | undefined | null, codecDecode?: (request: LlmRequestShape) => TAnnotated, codecEncode?: (arg: { annotated: Json; original: LlmRequestShape }) => TEncoded, responseCodecDecode?: (response: Json) => TDecodedResponse, executionOptions?: ExecutionOptions | undefined | null): Promise<Json>
 ```
 
 ### `llmConditionalExecution`
@@ -3143,12 +3159,12 @@ export declare function llmRequestIntercepts<TRequest extends LlmRequestCompatib
 
 Execute a streaming LLM call end-to-end with full lifecycle management.
 
-Like `llmCallExecute`, conditional-execution guardrails run first on the raw request. Sanitize-request guardrails only affect the emitted `Start` event payload, and sanitize-response guardrails only affect the aggregated `End` event payload. Returns an `LlmStream` whose `next()` method yields response chunks incrementally. The `func` callback receives the intercepted request as JSON and an `AbortSignal`, and returns an `AsyncIterable` of JSON chunks. Stream-level intercepts are applied to each chunk. The `request` should be a JSON object with `headers` and `content` fields matching the `LlmRequest` schema.
+By default, conditional-execution guardrails run first on the raw request. Sanitize-request guardrails only affect the emitted `Start` event payload, and sanitize-response guardrails only affect the aggregated `End` event payload. Returns an `LlmStream` whose `next()` method yields response chunks incrementally. The `func` callback receives the intercepted request as JSON and an `AbortSignal`, and returns an `AsyncIterable` of JSON chunks. Stream-level intercepts are applied to each chunk. The `request` should be a JSON object with `headers` and `content` fields matching the `LlmRequest` schema.
 
-The optional `collector` callback is invoked with each intercepted chunk as JSON, allowing the caller to accumulate chunks for aggregation. The optional `finalizer` callback is invoked once when the stream is exhausted or closed early and must return a JSON value representing the aggregated response. Both may return a Promise. If the collector throws or rejects, the stream fails with that error. If the finalizer throws or rejects, the aggregated response is `null`. Consumers that stop reading early must await `stream.close()`, which aborts the signal and waits for producer cleanup. Supply `codecDecode` and `codecEncode` together or omit both.
+The optional `collector` callback is invoked with each intercepted chunk as JSON, allowing the caller to accumulate chunks for aggregation. The optional `finalizer` callback is invoked once when the stream is exhausted or closed early and must return a JSON value representing the aggregated response. Both may return a Promise. If the collector throws or rejects, the stream fails with that error. If the finalizer throws or rejects, the aggregated response is `null`. Consumers that stop reading early must await `stream.close()`, which aborts the signal and waits for producer cleanup. Supply `codecDecode` and `codecEncode` together or omit both. Use the last `executionOptions` argument to choose which stages run for this call.
 
 ```ts
-export declare function llmStreamCallExecute<TRequest extends LlmRequestCompatible<TRequest>, TChunk extends JsonCompatible<TChunk>, TAggregate extends JsonCompatible<TAggregate> = Json, TData extends JsonCompatible<TData> = Json, TMetadata extends JsonCompatible<TMetadata> = Json, TAnnotated extends JsonCompatible<TAnnotated> = Json, TEncoded extends LlmRequestCompatible<TEncoded> = LlmRequestShape, TDecodedResponse extends JsonCompatible<TDecodedResponse> = Json>(name: string, request: TRequest, func: (request: LlmRequestShape, signal: AbortSignal) => AsyncIterable<TChunk> | Promise<AsyncIterable<TChunk>>, collector?: (chunk: Json) => void | Promise<void>, finalizer?: () => TAggregate | Promise<TAggregate>, handle?: ScopeHandle | undefined | null, attributes?: number | undefined | null, data?: TData | null, metadata?: TMetadata | null, modelName?: string | undefined | null, codecDecode?: (request: LlmRequestShape) => TAnnotated, codecEncode?: (arg: { annotated: Json; original: LlmRequestShape }) => TEncoded, responseCodecDecode?: (response: Json) => TDecodedResponse): Promise<LlmStream>
+export declare function llmStreamCallExecute<TRequest extends LlmRequestCompatible<TRequest>, TChunk extends JsonCompatible<TChunk>, TAggregate extends JsonCompatible<TAggregate> = Json, TData extends JsonCompatible<TData> = Json, TMetadata extends JsonCompatible<TMetadata> = Json, TAnnotated extends JsonCompatible<TAnnotated> = Json, TEncoded extends LlmRequestCompatible<TEncoded> = LlmRequestShape, TDecodedResponse extends JsonCompatible<TDecodedResponse> = Json>(name: string, request: TRequest, func: (request: LlmRequestShape, signal: AbortSignal) => AsyncIterable<TChunk> | Promise<AsyncIterable<TChunk>>, collector?: (chunk: Json) => void | Promise<void>, finalizer?: () => TAggregate | Promise<TAggregate>, handle?: ScopeHandle | undefined | null, attributes?: number | undefined | null, data?: TData | null, metadata?: TMetadata | null, modelName?: string | undefined | null, codecDecode?: (request: LlmRequestShape) => TAnnotated, codecEncode?: (arg: { annotated: Json; original: LlmRequestShape }) => TEncoded, responseCodecDecode?: (response: Json) => TDecodedResponse, executionOptions?: ExecutionOptions | undefined | null): Promise<LlmStream>
 ```
 
 ### `log`
@@ -3747,20 +3763,24 @@ export declare function toolCallEnd<TResult extends ToolExecutionResultCompatibl
 
 Execute a tool call end-to-end with full lifecycle management.
 
-Runs conditional-execution guardrails (on raw args) -> request intercepts -> sanitize-request guardrails for the emitted `Start` event payload -> execution intercepts -> `func` -> sanitize-response guardrails for the emitted `End` event payload. On rejection, only a standalone Mark event is emitted (no Start/End pair) and `GuardrailRejected` is returned. Returns the final execution result; sanitize guardrails do not rewrite the caller-visible value. An optional trailing `toolCallId` is recorded in both lifecycle events.
+By default, this call runs these stages:
+
+1. Check conditional-execution guardrails on the original input. 2. Apply request intercepts. 3. Sanitize the request copy in the `Start` event. 4. Run execution intercepts around `func`. 5. Sanitize the response copy in the `End` event.
+
+If a guardrail rejects the call, Relay emits a standalone Mark event. It does not emit a Start/End pair. The call returns `GuardrailRejected`. Sanitizers change event data. They do not change the result returned to the caller. An optional `toolCallId` is recorded in both lifecycle events. Use the last `executionOptions` argument to choose which stages run for this call.
 
 ```ts
-export declare function toolCallExecute<TArgs extends JsonCompatible<TArgs>, TResult extends ToolExecutionResultCompatible<TResult>, TData extends JsonCompatible<TData> = Json, TMetadata extends JsonCompatible<TMetadata> = Json>(name: string, args: TArgs, func: (arg: Json) => TResult, handle?: ScopeHandle | undefined | null, attributes?: number | undefined | null, data?: TData | null, metadata?: TMetadata | null, toolCallId?: string | undefined | null): Promise<ToolExecutionResult>
+export declare function toolCallExecute<TArgs extends JsonCompatible<TArgs>, TResult extends ToolExecutionResultCompatible<TResult>, TData extends JsonCompatible<TData> = Json, TMetadata extends JsonCompatible<TMetadata> = Json>(name: string, args: TArgs, func: (arg: Json) => TResult, handle?: ScopeHandle | undefined | null, attributes?: number | undefined | null, data?: TData | null, metadata?: TMetadata | null, toolCallId?: string | undefined | null, executionOptions?: ExecutionOptions | undefined | null): Promise<ToolExecutionResult>
 ```
 
 ### `toolCallExecuteAsync`
 
 Execute a tool call end-to-end with a callback that returns a value or a Promise.
 
-Runs the same lifecycle as `toolCallExecute`. An optional trailing `toolCallId` is recorded in both lifecycle events.
+Runs the same lifecycle as `toolCallExecute`. An optional `toolCallId` is recorded in both lifecycle events. Use the last `executionOptions` argument to choose which stages run for this call.
 
 ```ts
-export declare function toolCallExecuteAsync<TArgs extends JsonCompatible<TArgs>, TResult extends ToolExecutionResultCompatible<TResult>, TData extends JsonCompatible<TData> = Json, TMetadata extends JsonCompatible<TMetadata> = Json>(name: string, args: TArgs, func: (arg: Json, signal: AbortSignal) => TResult | Promise<TResult>, handle?: ScopeHandle | undefined | null, attributes?: number | undefined | null, data?: TData | null, metadata?: TMetadata | null, toolCallId?: string | undefined | null): Promise<ToolExecutionResult>
+export declare function toolCallExecuteAsync<TArgs extends JsonCompatible<TArgs>, TResult extends ToolExecutionResultCompatible<TResult>, TData extends JsonCompatible<TData> = Json, TMetadata extends JsonCompatible<TMetadata> = Json>(name: string, args: TArgs, func: (arg: Json, signal: AbortSignal) => TResult | Promise<TResult>, handle?: ScopeHandle | undefined | null, attributes?: number | undefined | null, data?: TData | null, metadata?: TMetadata | null, toolCallId?: string | undefined | null, executionOptions?: ExecutionOptions | undefined | null): Promise<ToolExecutionResult>
 ```
 
 ### `toolConditionalExecution`
