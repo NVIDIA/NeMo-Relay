@@ -1,0 +1,123 @@
+---
+title: "Connect to LangSmith"
+description: "Export Relay traces to a LangSmith project and inspect correlated agent work."
+hide-nav-links: true
+position: 4
+---
+{/* SPDX-FileCopyrightText: Copyright (c) 2026, NVIDIA CORPORATION & AFFILIATES. All rights reserved.
+SPDX-License-Identifier: Apache-2.0 */}
+
+Use the [shared capture and verification path](/user-guides/connecting-to-observability-platforms)
+to place work captured by [NVIDIA NeMo Relay](https://github.com/NVIDIA/NeMo-Relay)
+in a [LangSmith](https://www.langchain.com/langsmith/observability) project. Relay's `openinference`
+trace projection carries agent, model, and tool span attributes that LangSmith
+can map into its run view.
+
+<Tip title="Use the same companion workload">
+Select `--destination langsmith` in the parent guide's example. Supply the regional trace URL and `LANGSMITH_API_KEY`, then choose project or agent/environment addressing below.
+Find service `relay-support-triage` and apply this page's destination checks.
+</Tip>
+
+## Select the destination in your workspace
+
+Choose the addressing mode your LangSmith workspace uses before changing Relay:
+
+| Workspace | Destination | Companion environment |
+| --- | --- | --- |
+| Project-based, including self-hosted LangSmith | An existing tracing project | `LANGSMITH_PROJECT` |
+| Agent-based | A registered agent and one of its environments | `LANGSMITH_AGENT_ID` and `LANGSMITH_AGENT_ENVIRONMENT` |
+
+For an agent-based workspace, create the agent first and copy its identifier.
+Choose `local`, `development`, `staging`, or `production` for the environment.
+The identifier starts with a lowercase letter, contains lowercase letters,
+digits, or hyphens, and ends with a letter or digit (1–63 characters total).
+These HTTP headers determine the destination; an agent-name span attribute
+does not register or select a LangSmith agent.
+
+## Configure the exporter
+
+Choose the LangSmith region, API key, and project before changing Relay. This
+example sends OTLP/HTTP traces to the US SaaS intake and selects a project-based
+workspace. Use the regional or self-hosted URL for your deployment.
+
+```toml
+version = 1
+
+[[components]]
+kind = "observability"
+enabled = true
+
+[components.config]
+version = 4
+
+[components.config.opentelemetry]
+enabled = true
+
+[[components.config.opentelemetry.endpoints]]
+type = "openinference"
+endpoint = "https://api.smith.langchain.com/otel/v1/traces"
+transport = "http_binary"
+service_name = "relay-support-triage"
+
+[components.config.opentelemetry.endpoints.header_env]
+"x-api-key" = "LANGSMITH_API_KEY"
+
+[components.config.opentelemetry.endpoints.headers]
+"Langsmith-Project" = "relay-enterprise"
+```
+
+The `header_env` entry reads the API key from the worker or application's
+environment; the project header determines where its spans land. Relay
+preserves an explicit URL path, so the endpoint includes LangSmith's full
+`/otel/v1/traces` trace path. LangSmith's
+[OpenTelemetry guide](https://docs.langchain.com/langsmith/trace-with-opentelemetry)
+lists current regional endpoints and header options.
+
+<Accordion title="Use an agent-based workspace">
+Replace the `Langsmith-Project` headers table above with this table:
+
+```toml
+[components.config.opentelemetry.endpoints.headers]
+"Langsmith-Agent-Id" = "support-triage"
+"Langsmith-Agent-Environment" = "development"
+```
+
+Keep the API-key `header_env` table. Supply your registered identifier and
+environment. Send both agent headers together and remove `Langsmith-Project`:
+LangSmith rejects partial or mixed addressing with `400`. An archived agent
+can return `409`; self-hosted workspaces reject agent addressing with `403`.
+
+For the companion, set the corresponding non-secret environment values:
+
+```bash
+export LANGSMITH_AGENT_ID=support-triage
+export LANGSMITH_AGENT_ENVIRONMENT=development
+# Use these instead of LANGSMITH_PROJECT.
+```
+
+The runner rejects conflicting or incomplete addressing before starting the workload.
+</Accordion>
+
+## Check the LangSmith run
+
+Verification is manual in LangSmith; the companion's `--verify` option supports
+Phoenix only. An accepted export request does not establish destination visibility.
+
+Open the selected project or agent environment and find the run by time and service. Verify that the
+agent run and observed model and tool calls share the intended parentage.
+Inspect one span for model identity, token usage where the source provides it,
+and the approved redaction result.
+
+Span names depend on your capture path. Match exported scope identities and
+parentage to the local run rather than requiring the example's operation names.
+
+<Note>
+An accepted OTLP request does not by itself prove that the complete tree is
+visible. If a child span's parent is never exported, LangSmith may not show
+that child as a run. Confirm the root and descendants in the project.
+</Note>
+
+If nothing arrives, check the region, key, project header, and
+[Relay exporter diagnostics](/configure-plugins/observability/configuration).
+If part of the tree is missing, compare the LangSmith view with the events the
+chosen Relay capture path actually emits.

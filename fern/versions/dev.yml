@@ -79,6 +79,10 @@ navigation:
         icon: fa-brands fa-rust
         path: ../pages-dev/getting-started/quick-start/rust.mdx
         slug: rust
+- folder: ../pages-dev/user-guides
+  title: User Guides
+  slug: user-guides
+  title-source: frontmatter
 - folder: ../pages-dev/instrument-applications
   title: Instrument Applications
   slug: instrument-applications

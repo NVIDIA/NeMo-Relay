@@ -50,6 +50,11 @@ neither `ANTHROPIC_API_KEY` nor `ANTHROPIC_AUTH_TOKEN`, the wrapper sets
 `ANTHROPIC_API_KEY` to a placeholder, so Claude Code starts without a key of
 its own. The gateway replaces the placeholder with the credential that Relay
 supplies.
+Whenever Relay supplies the Anthropic credential, the wrapper also defaults
+`CLAUDE_CODE_ENABLE_GATEWAY_MODEL_DISCOVERY` to `1` when no value is inherited,
+so the Claude Code `/model` menu lists the models that the upstream's
+`/v1/models` returns through the gateway. Set the variable to `0` to keep the
+built-in model list.
 If a Relay plugin is already enabled, its MCP process authenticates and borrows
 the dynamic gateway instead of launching the fixed sidecar, then monitors that
 exact gateway while MCP stdio remains open. Its persistent hooks exit without
