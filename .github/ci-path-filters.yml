@@ -378,6 +378,9 @@ node:
   - 'package.json'
   - 'scripts/test-support/**'
 
+deepseek_harness:
+  - 'integrations/deepseek-harness/**'
+
 openclaw:
   - 'integrations/openclaw/**'
 

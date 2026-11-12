@@ -15,6 +15,7 @@ Use only the relevant target's instructions.
 | Target | What to establish from current documentation |
 |---|---|
 | OpenClaw | Its Relay plugin package, registered plugin ID, host/runtime compatibility, and package-registration check |
+| DeepSeek Harness | Its Relay bundle package, Loader row ID, source-build steps, and the `/relay` status check |
 | Hermes | Native Relay readiness and its managed dependency; whether a host update is needed |
 | LangChain, LangGraph, Deep Agents | Required framework extras and any provider-specific dependencies |
 | Switchyard | Its current first-party plugin installation guide, supported Relay releases, and documented user/global install scope |

@@ -1,0 +1,67 @@
+{
+  "name": "nemo-relay-deepseek-harness",
+  "version": "1.0.0",
+  "description": "NeMo Relay integration for DeepSeek Harness: managed model and tool calls, plugin-host exporters, and a conversation view.",
+  "type": "module",
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/NVIDIA/NeMo-Relay",
+    "directory": "integrations/deepseek-harness"
+  },
+  "main": "./dist/index.js",
+  "types": "./dist/index.d.ts",
+  "exports": {
+    ".": {
+      "types": "./dist/index.d.ts",
+      "default": "./dist/index.js"
+    },
+    "./client": "./client/client.js",
+    "./locale/*.json": "./locale/*.json",
+    "./icon": "./icon.svg",
+    "./package.json": "./package.json"
+  },
+  "files": [
+    "dist/**",
+    "client/client.js",
+    "cordis.patch.yml",
+    "locale/en.json",
+    "locale/zh.json",
+    "skills/*.md",
+    "icon.svg",
+    "README.md"
+  ],
+  "dsh": {
+    "bundle": {
+      "patch": "./cordis.patch.yml"
+    },
+    "client": {
+      "platform": "web",
+      "immediately": true,
+      "inject": [
+        "@deepseek-ai/dsh-client-ui-conversation",
+        "@deepseek-ai/dsh-api-workspace-files"
+      ]
+    }
+  },
+  "scripts": {
+    "build": "node scripts/build.mjs",
+    "build:test": "node scripts/build-test.mjs",
+    "pack:check": "node scripts/check-pack-payload.mjs",
+    "prepack": "npm run build",
+    "typecheck": "tsc -p tsconfig.json --noEmit",
+    "test": "npm run build:test && node --test \".test-dist/test/*.test.js\"",
+    "test:live": "npm run build:test && node scripts/test-live.mjs"
+  },
+  "dependencies": {
+    "@deepseek-ai/schemastery": "^3.19.0",
+    "nemo-relay-node": "1.0.0"
+  },
+  "devDependencies": {
+    "@types/node": "^24.0.0",
+    "typescript": "^5.8.2"
+  },
+  "engines": {
+    "node": ">=24.13.1"
+  },
+  "license": "Apache-2.0"
+}

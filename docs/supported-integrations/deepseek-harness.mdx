@@ -1,0 +1,368 @@
+---
+title: "DeepSeek Harness Plugin Guide"
+description: "Install and configure the DeepSeek Harness plugin that runs model and tool calls through NeMo Relay middleware, enforces editable guardrail rules, and shows each session's trace."
+position: 7
+---
+{/* SPDX-FileCopyrightText: Copyright (c) 2026, NVIDIA CORPORATION & AFFILIATES. All rights reserved.
+SPDX-License-Identifier: Apache-2.0 */}
+
+Use the DeepSeek Harness plugin when DeepSeek Harness owns the agent, model,
+and tool lifecycle that needs NeMo Relay. DeepSeek Harness gives plugins its
+real model stream and its real tool execution, so the plugin wraps both with
+NeMo Relay's managed execution helpers. Guardrails, sanitizers, intercepts,
+provider codecs, and lifecycle events run exactly as they do for any managed
+Relay call, and the generic plugin host activates the same `plugins.toml`
+components as every other Relay host.
+
+The plugin is one bundle with everything included:
+
+- Managed execution of every model stream and tool call, including subagents.
+- Guardrail rules that you edit in the conversation view and that take effect
+  on the next tool call.
+- Secret redaction through Relay's built-in `pii_redaction` component, so
+  credentials never reach a trace, trajectory, or exporter.
+- Per-turn ATIF trajectories, a per-session ATOF trace, and optional
+  OpenTelemetry or OpenInference export.
+- One-click [Arize Phoenix](https://github.com/Arize-ai/phoenix) tracing that
+  starts or reuses a local Phoenix and sends spans through Relay's own
+  OpenInference exporter.
+- A **NeMo Relay** conversation view and a `/relay` command.
+
+## Requirements
+
+Required:
+
+- DeepSeek Harness `0.2.2-rc.1` or later (the version used to build and test
+  this plugin), Desktop or Web.
+- A platform supported by the `nemo-relay-node` binding: Linux x86_64 or ARM64
+  (glibc or musl), macOS ARM64, or Windows x86_64 or ARM64. DeepSeek Harness
+  runs plugins on its bundled Node.js runtime, which satisfies the binding's
+  Node.js requirement (`>=24.13.1`).
+
+Optional:
+
+- [uv](https://docs.astral.sh/uv/) when you want the plugin to start a local
+  Phoenix server for you. An already running Phoenix needs nothing else.
+- An OTLP collector when exporting OpenTelemetry spans elsewhere.
+
+## Install
+
+### Ask the Agent
+
+DeepSeek Harness agents install and configure plugins, so the quickest setup is
+to ask:
+
+```text
+Install the NeMo Relay plugin nemo-relay-deepseek-harness.
+```
+
+The agent installs the bundle with the DeepSeek Harness plugin manager, which
+asks for your approval first.
+
+### From npm
+
+Open the **Plugins** page in the DeepSeek Harness sidebar, install a bundle, and
+enter the package name `nemo-relay-deepseek-harness`. From a terminal, the
+equivalent command is:
+
+```bash
+dsh plugin --profile <profile> add nemo-relay-deepseek-harness
+```
+
+The bundle adds a Loader row with the ID `nemo-relay`. No configuration is
+required: the defaults in [What You Get by Default](#what-you-get-by-default)
+apply immediately, and nothing leaves the machine unless you or an operator
+configure an exporter.
+
+<Note>
+When this bundle replaces another NeMo Relay plugin, disable or remove the
+other plugin and restart DeepSeek Harness. NeMo Relay allows one runtime per
+process, and a plugin keeps its `nemo-relay-node` binding loaded until
+DeepSeek Harness exits. Until the restart, this plugin stays off rather than
+loading a second, incompatible binding.
+</Note>
+
+### From Source
+
+Build the Node.js binding and the plugin from this repository:
+
+```bash
+npm install --ignore-scripts
+npm run build --workspace=nemo-relay-node
+npm run build --workspace=nemo-relay-deepseek-harness
+```
+
+Then install the package directory as a bundle from the **Plugins** page with
+the spec `link:/absolute/path/to/NeMo-Relay/integrations/deepseek-harness`.
+
+## What You Get by Default
+
+| Capability | Default | Where it appears |
+| --- | --- | --- |
+| Managed model and tool execution | On | Every model stream and tool call runs through Relay middleware. |
+| Session trace | On | `<dataDir>/view/<session>.atof.jsonl`, rendered by the **NeMo Relay** tab. It holds ATOF events, with each model request reduced to the messages the tab shows. |
+| ATIF trajectories | On when no configuration layer sets up ATIF | One trajectory per turn under `<dataDir>/atif/<session>`, without a copy of each provider request. |
+| Retention | 30 days | Session traces and default trajectories that no turn has touched for 30 days are removed. |
+| Secret redaction | On | Relay's `pii_redaction` component scrubs API keys, bearer tokens, JWTs, AWS access key IDs, and Google Cloud API keys from every event before any subscriber or exporter sees it. |
+| Guardrail rules | On, fail-open | The shipped rule blocks recursive deletion of `/`, `~`, or `$HOME` in the `bash` and `pwsh` tools. |
+| Phoenix tracing | Off until you start or connect it | OpenInference spans grouped into one Phoenix session per conversation. |
+| Network export | Off | Only exporters that you or an operator configure send data off the machine. |
+
+`<dataDir>` defaults to `$DSH_HOME/nemo-relay`, normally `~/.dsh/nemo-relay`.
+
+A model request repeats the conversation history and the tool list on every
+call, so the session trace and the default trajectories leave those copies out
+to stay small. To keep complete requests, configure Relay's own exporters under
+`plugins`: an ATOF file sink records every event in full, and an `atif` section
+with `include_llm_requests: true` keeps each request in its trajectory.
+
+## Change NeMo Relay by Asking the Agent
+
+The plugin gives the agent a `nemo_relay` tool and a `nemo-relay` skill, so you
+can describe what you want instead of editing configuration:
+
+| Ask | What the agent does |
+| --- | --- |
+| "Block force-pushes with NeMo Relay." | Adds a guardrail rule and tests it against a sample call. |
+| "Why was my last command blocked?" | Reads the status and rules and names the rule that matched. |
+| "Show this conversation in Phoenix." | Starts or connects Phoenix and returns a link to the session. |
+| "Turn the home-directory rule off." | Disables the rule after you approve the change. |
+
+The agent reads status, tests sample calls, adds rules, enables rules, and
+switches to fail-closed on its own. Editing, disabling, removing, or resetting
+rules, switching to fail-open, and starting, connecting, disconnecting, or
+stopping Phoenix use the DeepSeek Harness approval prompt, so they happen only
+after you approve them.
+The skill loads only when a request is about NeMo Relay. The tool adds a compact
+schema to model requests; set `agent.enabled: false` to remove both.
+
+## Use the NeMo Relay View
+
+Open the **NeMo Relay** tab beside a conversation to follow its trace:
+
+- The header shows the Relay state, the active exporters and their
+  destinations, secret redaction, and the `plugins.toml` layers that the plugin
+  host merged.
+- Each turn lists its model calls with model, finish reason, timing, and token
+  usage, and its tool calls with arguments, results, and errors.
+- A blocked tool call names the rule that blocked it. Select **Edit rule** to
+  jump to that rule.
+- The **Rules** panel lists every guardrail rule. Switch rules on or off, add or
+  edit them, test a sample call with **Try**, and save with **Save** or
+  `Cmd/Ctrl+S`. **Reset to defaults** brings back the shipped rule, and the
+  fail-mode switch chooses between fail-open and fail-closed. Each change
+  appears in the conversation as a short `/relay` result, such as
+  `Saved 2 NeMo Relay rules`.
+- The **Phoenix** menu starts or connects Phoenix and opens the current
+  conversation in it.
+
+## Guardrail Rules
+
+Each rule is an object with these fields:
+
+| Field | Description |
+| --- | --- |
+| `id` | Unique rule ID shown in traces and in block messages. |
+| `tool` | Tool selector: a tool name, a comma-separated list or array of names, `*` or empty for every tool, or a regular expression written as `/pattern/flags`. |
+| `match` | Regular expression tested against the tool arguments as JSON and against each top-level string argument, such as a shell command. |
+| `flags` | Regular-expression flags for `match`. Defaults to `i`. |
+| `reason` | Message returned to the model when the rule blocks a call. |
+| `enabled` | Set to `false` to keep a rule without enforcing it. |
+
+The plugin registers the rules as a NeMo Relay tool conditional-execution
+guardrail, so they apply wherever Relay evaluates tool calls:
+
+- Before DeepSeek Harness asks you to approve a call, a call that a rule blocks
+  is denied without a prompt.
+- When a tool runs, a blocked call returns a failed tool result whose message
+  ends with `(NeMo Relay rule "<id>")`, and the trace records the rejection.
+
+Matching runs with a time limit, so a pathological pattern cannot stall
+DeepSeek Harness, and a pattern that is too slow on ordinary text is refused
+when you save it. Rules that you save are stored in the plugin's Loader row
+configuration and apply to the next tool call without a restart. When the
+profile cannot be edited, the plugin stores them in `<dataDir>/rules.json`
+instead. If the `nemo-relay-node` binding cannot load, the plugin still checks
+the rules before each tool call runs.
+
+With `guardrails.failMode: open`, a call proceeds when a rule cannot be checked:
+Relay cannot evaluate it, a rule does not finish in time, or an argument is
+longer than two million characters. Set `failMode: closed` to block such calls
+instead.
+
+<Note>
+Rules guard against mistakes, such as a command that would delete the home
+directory. They are not a sandbox: a determined agent can hide a command, for
+example by encoding it or by writing a script. Use DeepSeek Harness approvals
+and sandboxing when you run agents you do not trust.
+</Note>
+
+## Trace with Phoenix
+
+Select **Start Phoenix** in the **Phoenix** menu, or run `/relay phoenix start`:
+
+1. If a Phoenix server already answers at `phoenix.url`, the plugin uses it and
+   never stops it.
+2. Otherwise the plugin starts one with `uv tool run`, bound to `127.0.0.1`,
+   with its own working directory under `<dataDir>/phoenix`, and with Phoenix
+   telemetry and external resources turned off. The first start downloads
+   Phoenix, which can take a few minutes.
+
+While Phoenix is connected, the plugin registers Relay's own OpenTelemetry
+subscriber with OpenInference conventions, so Phoenix receives the same
+redacted events as every other exporter, and connecting never restarts the
+plugin host. Relay maps each conversation's `session_id` to the OpenInference `session.id`,
+so every DeepSeek Harness conversation appears as one Phoenix session. Select
+**Open in Phoenix** to open the current conversation. Phoenix receives the
+turns that start after it connects. The connection is remembered and restored
+when DeepSeek Harness starts.
+
+## Configure
+
+The Loader row `config` object accepts these fields:
+
+| Field | Default | Description |
+| --- | --- | --- |
+| `enabled` | `true` | Set to `false` to leave model and tool calls untouched. |
+| `dataDir` | `$DSH_HOME/nemo-relay` | Directory for traces, trajectories, Phoenix data, and the status file. `~` is expanded. |
+| `view.enabled` | `true` | Write per-session traces for the conversation view. |
+| `capture.includePrompts` | `true` | Record model requests and the user prompt. |
+| `capture.includeResponses` | `true` | Record model responses and the final answer. |
+| `capture.stripToolArgs` | `false` | Replace tool arguments in telemetry with their key names. |
+| `capture.stripToolResults` | `false` | Replace tool results in telemetry with a completion summary. |
+| `redaction.secrets` | `true` | Add Relay's `pii_redaction` component with the `api_key`, `bearer_token`, `jwt`, `aws_access_key_id`, and `gcp_api_key` detectors. Configuration layers that already define a single-policy `pii_redaction` component keep theirs. |
+| `guardrails.enabled` | `true` | Enforce guardrail rules. |
+| `guardrails.failMode` | `open` | `open` allows a call that Relay cannot evaluate; `closed` blocks it. |
+| `guardrails.rules` | One shipped rule | Guardrail rules. The view edits this field. |
+| `phoenix.enabled` | `true` | Offer Phoenix tracing. Nothing starts until you start or connect it. |
+| `phoenix.url` | `http://127.0.0.1:6006` | Phoenix server to use or start. |
+| `phoenix.project` | `deepseek-harness` | Phoenix project that receives the spans. |
+| `phoenix.autoConnect` | `true` | Restore a previous Phoenix connection when DeepSeek Harness starts. |
+| `phoenix.launch.enabled` | `true` | Allow the plugin to start Phoenix when none is running. |
+| `phoenix.launch.version` | `21.0.0` | `arize-phoenix` release that `uv tool run` uses. |
+| `phoenix.launch.python` | `3.13` | Python version that `uv tool run` uses. |
+| `phoenix.launch.command` | Unset | Command that starts Phoenix instead of `uv tool run`, such as `["phoenix", "serve"]`. |
+| `phoenix.launch.startupTimeoutMs` | `240000` | How long a launch can take, including the first download. |
+| `agent.enabled` | `true` | Give the agent the `nemo_relay` tool and the `nemo-relay` skill. |
+| `retention.days` | `30` | Remove session traces and default ATIF trajectories that no turn has touched for this many days. `0` keeps them. Files of exporters that you configure under `plugins` are never removed. |
+| `plugins` | `{ version: 1, components: [] }` | Generic NeMo Relay plugin document passed to `initialize()`. |
+
+Capture settings and secret redaction change only what Relay records.
+Guardrails and intercepts always receive the unmodified request, arguments, and
+results.
+
+<Note>
+Fields inside `config.plugins` are NeMo Relay generic plugin configuration, so
+they use `snake_case`. Relative `output_directory` values resolve against
+`dataDir` because a desktop application has no meaningful working directory.
+</Note>
+
+Relay merges the discovered `plugins.toml` layers first and then applies
+`plugins`, so the Loader row takes precedence over user layers, and operator
+layers apply as they do for every Relay host. The **NeMo Relay** tab and
+`/relay` list each merged layer and every active exporter with its
+destination. The following row exports OpenTelemetry spans to a local
+collector in addition to the defaults:
+
+```yaml
+- id: nemo-relay
+  name: nemo-relay-deepseek-harness
+  config:
+    plugins:
+      version: 1
+      components:
+        - kind: observability
+          enabled: true
+          config:
+            version: 4
+            atif:
+              enabled: true
+              agent_name: deepseek-harness
+              output_directory: atif
+            opentelemetry:
+              enabled: true
+              endpoints:
+                - type: gen_ai
+                  endpoint: http://localhost:4318/v1/traces
+                  service_name: deepseek-harness
+```
+
+Refer to [Observability Configuration](/configure-plugins/observability/configuration)
+and [PII Redaction Configuration](/configure-plugins/pii-redaction/configuration)
+for the complete component schemas.
+
+## Verify the Integration
+
+Run `/relay` in a DeepSeek Harness session. It reports the runtime state, the
+`plugins.toml` layers the plugin host merged, every active exporter, secret
+redaction, guardrail rules, Phoenix, and counters for managed model calls, tool
+calls, and guardrail rejections. Each DeepSeek Harness process also writes the
+snapshot to its own file under `<dataDir>/status`, which the conversation view
+reads.
+
+| Command | Result |
+| --- | --- |
+| `/relay`, `/relay status` | Human-readable status. |
+| `/relay json` | The status snapshot as JSON. |
+| `/relay rules failmode open`, `/relay rules failmode closed` | Changes the fail mode without a restart. |
+| `/relay rules` | The current guardrail rules. |
+| `/relay rules test {"tool":"bash","arguments":{"command":"ls"}}` | Evaluates a sample call without running it. |
+| `/relay phoenix` | Phoenix state. `/relay phoenix start`, `stop`, `connect`, and `disconnect` change it. |
+
+## Runtime Mapping
+
+| DeepSeek Harness event | NeMo Relay behavior |
+| --- | --- |
+| `turn/start`, `turn/end` | Opens and closes one `Custom` scope per turn with `nemo_relay_scope_role: "turn"`. The observability component writes one ATIF trajectory per turn. |
+| `llm/stream` | Runs the model stream through the managed streaming LLM helper with the OpenAI Chat Completions codec. |
+| `tools/execute` | Runs the tool body through the managed tool helper, with the DeepSeek Harness tool call ID. |
+| `tools/pre-execute` | Denies an approval prompt for a call that Relay guardrails reject, before the user is asked. |
+| `tools/post-execute` | Applies tool result edits made by Relay middleware. |
+| `agent/pre-step` | Records the turn and step that each model call belongs to. |
+| `compaction/end` | Emits the reserved `compaction` mark. |
+| Approvals and subagents | Emit `deepseek-harness.*` marks inside the turn. |
+
+Session title calls stay outside the turn trajectory. Turns that are still
+running when DeepSeek Harness stops close with `otel.status_code` set to
+`UNSET`.
+
+## Middleware Behavior
+
+| Relay middleware | Behavior in DeepSeek Harness |
+| --- | --- |
+| Conditional-execution guardrails | A rejected model call ends the step with an error that names the policy reason. A rejected tool call returns a failed tool result to the model. |
+| Sanitize guardrails and PII redaction | Change only what telemetry records. |
+| Stream intercepts | Rewrite or drop streamed text, reasoning, and tool-call deltas; DeepSeek Harness records the modified stream. |
+| Execution intercepts | Can answer a model or tool call without running it, for example from the response cache. |
+| Tool response intercepts | Change the content or value the model receives. |
+| Request intercepts | Edits to model-visible fields block the call. Other added fields are not sent and are recorded in a `deepseek-harness.request_edit_dropped` mark. |
+| Tool request intercepts | Argument rewrites block the call. |
+
+DeepSeek Harness sends model requests and runs tools exactly as its session log
+records them, so the plugin refuses request and argument rewrites instead of
+applying them. For the same reason, request headers that Relay adds, such as
+`traceparent`, are not forwarded to the model provider.
+
+## Troubleshooting
+
+- `/relay` reports `degraded` when plugin-host validation or initialization
+  fails. Managed model and tool calls, guardrail rules, the conversation view,
+  and the agent tool keep working, but plugin-provided components are
+  inactive, including the default secret redaction and ATIF trajectories;
+  `/relay` and the view then report redaction as off. The reason names the
+  failing component or `plugins.toml` layer. For example, a layer that
+  registers a worker plugin built for an older Relay release fails with
+  `worker plugins must declare compat.worker_protocol`; update that worker, or
+  ask the administrator who manages the layer to update it.
+- `/relay` reports `disabled` when the `nemo-relay-node` binding cannot load on
+  this platform. The reason names the Node.js version and platform. DeepSeek
+  Harness then runs without Relay.
+- `/relay` reports `disabled` with `Another NeMo Relay runtime ... already
+  runs in this DeepSeek Harness process` when a different NeMo Relay plugin
+  loaded another major version of the binding since DeepSeek Harness started,
+  usually one that this plugin replaced. Restart DeepSeek Harness.
+- If Phoenix does not start, check that `uv` is on the `PATH` of DeepSeek
+  Harness or set `phoenix.launch.command`. The **Phoenix** menu shows the
+  launch error.
+- If the conversation view stays empty, confirm `view.enabled` is `true` and
+  that the session has started a turn since the plugin loaded.

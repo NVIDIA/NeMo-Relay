@@ -29,6 +29,8 @@ crates/node/binding.d.ts
 crates/node/dist/
 crates/node/coverage/
 crates/node/junit.xml
+integrations/deepseek-harness/dist/
+integrations/deepseek-harness/.test-dist/
 integrations/openclaw/dist/
 integrations/openclaw/.test-dist/
 

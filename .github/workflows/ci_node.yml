@@ -19,6 +19,11 @@ on:
         required: false
         default: true
         type: boolean
+      run_deepseek_harness:
+        description: 'Whether to run DeepSeek Harness integration checks'
+        required: false
+        default: false
+        type: boolean
       run_openclaw:
         description: 'Whether to run OpenClaw integration checks'
         required: false
@@ -148,6 +153,11 @@ jobs:
       - name: Run Node tests with coverage
         working-directory: ${{ env.NEMO_RELAY_CI_WORKSPACE }}
         run: just --set ci true --set output_dir "${{ github.workspace }}" test-node
+
+      - name: Run DeepSeek Harness integration checks
+        if: ${{ inputs.run_deepseek_harness }}
+        working-directory: ${{ env.NEMO_RELAY_CI_WORKSPACE }}
+        run: just --set ci true test-deepseek-harness
 
       - name: Run OpenClaw integration checks
         if: ${{ inputs.run_openclaw }}
@@ -408,6 +418,87 @@ jobs:
         with:
           name: openclaw-npm
           path: ${{ env.NEMO_RELAY_CI_WORKSPACE_TMP }}/openclaw/*.tgz
+          if-no-files-found: error
+
+  PackageDeepSeekHarness:
+    name: Package DeepSeek Harness plugin
+    if: ${{ inputs.run_deepseek_harness }}
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    permissions:
+      contents: read
+    steps:
+      - name: Checkout
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+
+      - name: Load CI tool versions
+        id: ci-config
+        uses: ./.github/actions/load-ci-tool-versions
+
+      - name: Set up Protoc
+        id: protoc
+        uses: arduino/setup-protoc@c65c819552d16ad3c9b72d9dfd5ba5237b9c906b # v3
+        with:
+          version: ${{ steps.ci-config.outputs.protoc_version }}
+          repo-token: ${{ github.token }}
+
+      - name: Set up Buf
+        uses: bufbuild/buf-setup-action@a47c93e0b1648d5651a065437926377d060baa99 # v1.50.0
+        with:
+          version: ${{ steps.ci-config.outputs.buf_version }}
+          github_token: ${{ github.token }}
+
+      - uses: actions-rust-lang/setup-rust-toolchain@166cdcfd11aee3cb47222f9ddb555ce30ddb9659 # v1.17.0
+        with:
+          cache: false
+          toolchain: ${{ steps.ci-config.outputs.rust_version }}
+
+      - uses: Swatinem/rust-cache@c19371144df3bb44fab255c43d04cbc2ab54d1c4 # v2.9.1
+        with:
+          shared-key: nemo-relay-rust-linux-amd64-${{ steps.ci-config.outputs.rust_version }}-node-debug
+          workspaces: . -> target
+          cache-all-crates: true
+          cache-bin: false
+          save-if: false
+
+      - uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
+        with:
+          node-version: ${{ steps.ci-config.outputs.node_version }}
+
+      - uses: taiki-e/install-action@c070f87102a1c75b3183910f391c1cb887fe13c8 # v2.77.6
+        with:
+          tool: just@${{ steps.ci-config.outputs.just_version }}
+
+      - name: Derive DeepSeek Harness package version
+        working-directory: ${{ env.NEMO_RELAY_CI_WORKSPACE }}
+        run: |
+          set -e
+          version="$(node -e 'const fs = require("fs"); const pkg = JSON.parse(fs.readFileSync("integrations/deepseek-harness/package.json", "utf8")); if (!pkg.version) { throw new Error("integrations/deepseek-harness/package.json missing version field"); } console.log(pkg.version);')"
+          sha="${GITHUB_SHA::8}"
+          if [ "${{ inputs.ref_type }}" = "tag" ]; then
+            version="${{ inputs.ref_name }}"
+          else
+            version="${version}+${sha}"
+          fi
+          printf 'NEMO_RELAY_DEEPSEEK_HARNESS_PACKAGE_VERSION=%s\n' "$version" >> "$GITHUB_ENV"
+
+      - name: Package DeepSeek Harness plugin
+        working-directory: ${{ env.NEMO_RELAY_CI_WORKSPACE }}
+        run: |
+          set -euo pipefail
+          just \
+            --set ci true \
+            --set output_dir "${NEMO_RELAY_CI_WORKSPACE_TMP}" \
+            --set ref_name "${NEMO_RELAY_DEEPSEEK_HARNESS_PACKAGE_VERSION}" \
+            package-deepseek-harness
+
+      - name: Upload DeepSeek Harness plugin artifact
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a  # v7.0.1
+        with:
+          name: deepseek-harness-npm
+          path: ${{ env.NEMO_RELAY_CI_WORKSPACE_TMP }}/deepseek-harness/*.tgz
           if-no-files-found: error
 
   PackageSmoke:

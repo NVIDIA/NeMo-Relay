@@ -89,10 +89,12 @@ understands NeMo Relay plugin configurations.
 | Deep Agents | Yes | Yes | Yes | Wrapped tool and LLM calling. |
 | Google ADK | Yes | Yes | Yes | Record model and tool calls and apply guardrails with the ADK plugin. |
 | OpenClaw | Yes | Partial | No | Public hook-backed telemetry with pre-tool guardrails. Public hooks do not expose managed execution rewrites. |
+| DeepSeek Harness | Yes | Yes | Partial | Managed model-stream and tool execution. Request and argument rewrites block the call because DeepSeek Harness sends what its session log records. |
 
 Install the maintained Python integrations with the `langchain`, `langgraph`,
 `deepagents`, and `google-adk` extras. Install the OpenClaw integration as the
-`nemo-relay-openclaw` plugin. Refer to [Supported
+`nemo-relay-openclaw` plugin and the DeepSeek Harness integration as the
+`nemo-relay-deepseek-harness` bundle. Refer to [Supported
 Integrations](/supported-integrations/about) for setup and guide links.
 
 ## Related Information

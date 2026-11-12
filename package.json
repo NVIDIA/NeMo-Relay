@@ -8,6 +8,7 @@
   "workspaces": [
     "crates/node",
     "examples/language-binding-plugin/node",
+    "integrations/deepseek-harness",
     "integrations/openclaw",
     "integrations/pi"
   ],

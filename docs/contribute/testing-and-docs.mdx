@@ -183,6 +183,7 @@ just test-python
 just test-go
 just test-node
 just test-openclaw
+just test-deepseek-harness
 ```
 
 The Rust-backed test recipes use `cargo-nextest`; install it with
@@ -257,12 +258,15 @@ uv run pytest
 
 Run the Node.js validation loop when a change touches the NAPI binding or
 JavaScript package surface. Run the OpenClaw target when Node changes can affect
-the OpenClaw plugin or when touching `integrations/openclaw`.
+the OpenClaw plugin or when touching `integrations/openclaw`. Run the DeepSeek
+Harness target when Node changes can affect the DeepSeek Harness plugin or when
+touching `integrations/deepseek-harness`.
 
 ```bash
 npm install --ignore-scripts
 npm test --workspace=nemo-relay-node
 just test-openclaw
+just test-deepseek-harness
 ```
 
 ## Documentation Checklist

@@ -32,7 +32,7 @@ The release pipeline publishes these package surfaces from a tag push:
 |---|---|
 | crates.io | `nemo-relay-plugin-abi`, `nemo-relay-types`, `nemo-relay-worker-proto`, `nemo-relay-codecs`, `nemo-relay-plugin`, `nemo-relay-worker`, `nemo-relay-diagnostics`, `nemo-relay-model-pricing`, `nemo-relay-logging`, `nemo-relay-observability`, `nemo-relay-resource-metrics`, `nemo-relay-runtime`, `nemo-relay-plugin-host`, `nemo-relay-adaptive`, `nemo-relay-pii-redaction`, `nemo-relay-builtins`, `nemo-relay-ffi`, `nemo-relay-cli`, and `nemo-relay` |
 | PyPI | `nemo-relay` wheels and source distribution, `nemo-relay-plugin` and `nemo-relay-cli-bin` wheels |
-| npm | `nemo-relay-node` and its seven platform packages, and `nemo-relay-openclaw` |
+| npm | `nemo-relay-node` and its seven platform packages, `nemo-relay-openclaw`, and `nemo-relay-deepseek-harness` |
 | GitHub Releases | CLI binaries, `nemo-relay` and `nemo-relay-cli-bin` wheels, Node npm tarballs, and checksums |
 | Fern | The documentation site |
 
@@ -258,6 +258,7 @@ If you want to validate the packaging recipes before pushing a tag, run:
 ```bash
 just --set output_dir "$PWD/target/release-artifacts" --set ref_name 0.1.0 package-node
 just --set output_dir "$PWD/target/release-artifacts" --set ref_name 0.1.0 package-openclaw
+just --set output_dir "$PWD/target/release-artifacts" --set ref_name 0.1.0 package-deepseek-harness
 just --set output_dir "$PWD/target/release-artifacts" --set ref_name 0.1.0 package-rust
 just --set output_dir "$PWD/target/release-artifacts" --set ref_name 0.1.0 package-python
 just --set output_dir "$PWD/target/release-artifacts" --set ref_name 0.1.0 package-python-sdist
@@ -305,6 +306,7 @@ The release pipeline then:
      including GNU and musl Linux packages for x86_64 and ARM64, and creates the
      JavaScript and TypeScript metapackage once.
    - `package-openclaw` packs the npm OpenClaw plugin package.
+   - `package-deepseek-harness` packs the npm DeepSeek Harness plugin package.
    - `package-python` builds platform `nemo-relay` wheels, including
      `musllinux_1_2_x86_64` and `musllinux_1_2_aarch64` wheels.
      Python and Node musl bindings dynamically link libc so native plugins share
@@ -382,7 +384,8 @@ npm trusted publishing has its own registry-side constraints:
 
 - Each npm package can only have one trusted publisher configured at a time.
 - Configure trusted publishers for `nemo-relay-node`, all seven Node platform
-  packages, and `nemo-relay-openclaw` before pushing a release tag.
+  packages, `nemo-relay-openclaw`, and `nemo-relay-deepseek-harness` before
+  pushing a release tag.
 - npm trusted publishing currently supports GitHub-hosted runners, not
   self-hosted runners.
 
@@ -422,8 +425,8 @@ After the release is live, verify:
    are visible on crates.io.
 2. The `nemo-relay` and `nemo-relay-cli-bin` wheels are visible on PyPI, and
    `pip install "nemo-relay[cli]"` exposes `nemo-relay`.
-3. The `nemo-relay-node`, its seven platform packages, and
-   `nemo-relay-openclaw` are visible on npm.
+3. The `nemo-relay-node`, its seven platform packages, `nemo-relay-openclaw`,
+   and `nemo-relay-deepseek-harness` are visible on npm.
 4. The Unix and Windows installers resolve the new stable tag and verify
    matching CLI release asset checksums on their supported platforms.
 5. The Fern documentation site shows the expected version and release notes.
