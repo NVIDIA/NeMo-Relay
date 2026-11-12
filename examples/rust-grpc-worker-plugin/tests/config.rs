@@ -4,7 +4,7 @@
 use nemo_relay_rust_grpc_worker_plugin_example::{
     DocumentationWorker, default_example_config, validate_example_config,
 };
-use nemo_relay_worker::{PluginContext, WorkerPlugin};
+use nemo_relay_worker::{Plugin, PluginContext};
 use serde_json::{Value as Json, json};
 
 #[test]
@@ -129,14 +129,17 @@ fn invalid_registration_control_is_reported_at_its_field() {
     }
 }
 
-#[test]
-fn register_rejects_invalid_registration_control() {
+#[tokio::test]
+async fn register_rejects_invalid_registration_control() {
     let mut context = PluginContext::new();
     let error = DocumentationWorker
         .register(
+            json!({ "registration_control": { "enabled": true, "reason": "" } })
+                .as_object()
+                .unwrap(),
             &mut context,
-            &json!({ "registration_control": { "enabled": true, "reason": "" } }),
         )
+        .await
         .expect_err("register should validate the raw configuration");
 
     assert!(

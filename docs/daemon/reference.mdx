@@ -50,12 +50,15 @@ restart, MCP must register again to restore the route bindings stored in
 memory; until then that user's requests pass through.
 
 By default, an authenticated route with an active MCP reference forwards directly
-while its worker starts or recovers. Worker startup has no time limit.
+while its worker starts or recovers. Plugin initialization has no overall timeout.
 The daemon switches new requests to the worker after these checks pass:
 
 - The worker has initialized its runtime and plugins.
 - Its control connection is authenticated.
 - Its HTTP readiness probe succeeds.
+
+To reuse a worker between MCP sessions, configure
+[Worker Idle Timeout](/daemon/configuration#worker-idle-timeout).
 
 Use `nemo-relay daemon --require-worker` when every request must pass through
 worker policies. This strict mode returns HTTP `503` until a worker is ready
@@ -71,9 +74,9 @@ LLM streaming response headers are unchanged.
 
 The daemon exposes an unauthenticated process-health probe:
 
-```bash
-curl -f http://127.0.0.1:47632/healthz
-```
+<EndpointRequestSnippet endpoint="GET /healthz" />
+
+<EndpointResponseSnippet endpoint="GET /healthz" />
 
 `/healthz` returns `200` while the daemon HTTP process is serving requests.
 Its JSON response identifies the service, Relay version, process instance,
@@ -112,21 +115,9 @@ Use these endpoints to inspect current worker assignments:
 
 The following example shows a managed daemon with one ready worker:
 
-```json
-{
-  "instance_id": "01a0caf5-7b26-7e82-a808-8f29eaf15db1",
-  "status": "ok",
-  "workers": [
-    {
-      "control_available": true,
-      "in_flight": 0,
-      "reference_count": 1,
-      "state": "ready",
-      "worker_id": "01a0caf5-b33f-7280-a916-7e15bbd574fa"
-    }
-  ]
-}
-```
+<EndpointRequestSnippet endpoint="GET /_nemo_relay/v1/workers/status" />
+
+<EndpointResponseSnippet endpoint="GET /_nemo_relay/v1/workers/status" />
 
 `state` is the broker's lifecycle state for the worker assignment. It can be
 `ready`, `draining`, or `recovering`. `control_available` is the broker's
@@ -259,7 +250,11 @@ no console. Configure a file sink to retain worker logs
 when launching from a Windows console. Relay does not create worker log files
 under daemon state.
 
-Before cleaning up a child on shutdown, MCP asks the broker about its launch.
+When idle retention is enabled and both peers support it, MCP can leave its
+worker running after the session ends. On normal exit, MCP finishes sending the
+activation grant and releases its session through an authenticated request.
+If MCP disconnects first, the daemon retains the pending activation under that
+policy. Without this support, MCP asks the broker whether it should stop its child.
 If the broker replies `cancelled` or `superseded`, MCP terminates the child and
 waits for it to exit. With a `published` reply, the broker keeps control of the
 worker. If MCP cannot confirm the outcome, it leaves cleanup to the broker and
@@ -297,7 +292,7 @@ The hook process performs the following actions:
    When the agent inherited `TRACEPARENT` and optional `TRACESTATE` from the
    process that launched it, the hook also sends them as W3C `traceparent`
    and `tracestate` headers. Refer to
-   [Continue the Launcher Trace](/nemo-relay-cli/basic-usage#continue-the-launcher-trace).
+   [Continue the Launcher Trace](/nemo-relay-cli/gateway-reference#continue-the-launcher-trace).
 5. Writes a successful, nonempty hook response to standard output without
    changing its bytes.
 
@@ -456,11 +451,12 @@ clients from retrying at the same time. Each connection and authentication
 attempt has a five-second timeout. The full recovery window is 30 seconds.
 Failed attempts do not extend it.
 
-A disconnected MCP keeps its route reference during recovery. A worker with
-its own active control connection can continue serving that route. An explicit
-release removes the reference as soon as the daemon acknowledges it. During
-recovery, clients check the daemon's current worker assignment before making
-changes.
+A disconnected MCP normally keeps its route reference during recovery. A worker
+with its own active control connection can continue serving that route. When
+idle retention applies to a pending launch, the daemon removes the launching
+MCP's route reference and retains startup instead. An explicit release also
+removes the reference as soon as the daemon acknowledges it. During recovery,
+clients check the daemon's current worker assignment before making changes.
 
 If a worker loses its control connection, it stops accepting new requests.
 Already accepted streams can finish while it reconnects. The daemon resumes
@@ -470,7 +466,19 @@ and the daemon revokes its generation. MCP clients also exit when their recovery
 window expires. After a daemon restart, persisted worker generations have a
 30-second recovery window before replacement workers can launch.
 
-When the last MCP reference leaves, the worker starts draining. It cannot
+A worker that shuts down cleanly, for example after `SIGTERM` or `SIGINT`,
+tells the daemon as it starts teardown, and the daemon stops sending it new
+requests. The worker keeps its control connection open until teardown finishes,
+for up to 30 seconds. If the daemon accepted that notice, it skips the
+30-second recovery window when the connection closes and asks a connected MCP
+client to launch a replacement; if none is connected, the replacement waits for
+one. A worker that ends without notice, for example after `SIGKILL` or a crash,
+or whose notice the daemon did not accept, still gets the 30-second recovery
+window.
+
+When the last MCP reference leaves, a ready worker starts draining immediately
+by default, or after the configured idle period expires. A session arriving
+before expiry can reuse the idle worker. Once draining starts, the worker cannot
 return to service. Accepted requests have up to two minutes to finish before
 the worker exits. A new MCP can register during the drain, but a replacement
 worker must wait for the old worker to exit. New requests use passthrough during
@@ -488,13 +496,17 @@ An MCP client must meet these conditions to receive it:
 - Its control connection is open.
 - It has not released its route reference.
 
-If the MCP that owns the launch disconnects, the daemon cancels its grant.
-Late registration or readiness messages cannot make that old attempt ready.
+If both peers support idle retention and the setting is enabled, pending startup
+can continue after its launching MCP disconnects. Otherwise, the daemon cancels
+its grant. Late registration or readiness messages cannot make a cancelled or
+expired attempt ready.
 If no MCP meets the conditions above, the daemon waits for a client to connect
 and authenticate before it issues another grant.
 
-Startup has no deadline and retries have no attempt limit. A slow worker keeps
-its current grant. Time spent starting alone never causes a replacement.
+Retries have no attempt limit. Plugin initialization has no overall timeout
+while MCP sessions remain connected. Refer to
+[Worker Idle Timeout](/daemon/configuration#worker-idle-timeout) for registration
+deadlines and limits on time between sessions.
 If startup fails, retry delays increase from one second to two, four, and so on.
 They stop increasing at 60 seconds. After a worker becomes ready, the retry
 delay resets for future failures.
@@ -572,8 +584,12 @@ execution guardrails, these response changes apply:
 
 If an execution intercept rejects a streaming request before the first chunk,
 Relay returns the corresponding HTTP error and plugin message. Errors after
-streaming begins end the response without a successful completion marker, such
-as `[DONE]` for OpenAI Chat Completions.
+managed streaming begins emit a provider-compatible SSE error before ending the
+response: `event: error` for Anthropic Messages and OpenAI Responses, or a
+`data:` payload with an `error` object for OpenAI Chat Completions. The HTTP
+status remains 200 because Relay has already sent the response headers. Failed
+streams omit successful completion markers, such as `[DONE]` for OpenAI Chat
+Completions.
 
 The response-header timeout also includes time spent in middleware. For calls
 without streaming, it includes the wait for the full response. It does not limit

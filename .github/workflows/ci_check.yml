@@ -11,6 +11,11 @@ on:
         required: false
         default: false
         type: boolean
+      run_documentation_examples:
+        description: 'Whether to run focused instrumentation example checks'
+        required: false
+        default: false
+        type: boolean
       run_python_integration_langchain:
         description: 'Whether LangChain, LangGraph, and DeepAgents Python integration checks may need optional extras'
         required: false
@@ -156,6 +161,7 @@ jobs:
         with:
           version: ${{ steps.ci-config.outputs.uv_version }}
           enable-cache: true
+          save-cache: ${{ github.ref == 'refs/heads/main' }}
           cache-dependency-glob: ${{ env.NEMO_RELAY_CI_WORKSPACE }}/uv.lock
 
       - uses: actions/setup-go@4a3601121dd01d1626a1e23e37211e3254c1c06c # v6
@@ -193,7 +199,7 @@ jobs:
 
       - uses: Swatinem/rust-cache@c19371144df3bb44fab255c43d04cbc2ab54d1c4 # v2.9.1
         with:
-          shared-key: nemo-relay-rust-linux-amd64-${{ steps.ci-config.outputs.rust_version }}-debug
+          shared-key: nemo-relay-rust-linux-amd64-${{ steps.ci-config.outputs.rust_version }}-core-debug
           workspaces: . -> target
           cache-all-crates: true
           cache-bin: false
@@ -217,6 +223,14 @@ jobs:
             nemo-relay-pre-commit-${{ runner.os }}-${{ runner.arch }}-py${{ steps.ci-config.outputs.default_python_version }}-node${{ steps.ci-config.outputs.node_version }}-rust${{ steps.ci-config.outputs.rust_version }}-pc${{ steps.ci-config.outputs.pre_commit_version }}-${{ hashFiles('.pre-commit-config.yaml') }}
           restore-keys: |
             nemo-relay-pre-commit-${{ runner.os }}-${{ runner.arch }}-py${{ steps.ci-config.outputs.default_python_version }}-node${{ steps.ci-config.outputs.node_version }}-rust${{ steps.ci-config.outputs.rust_version }}-pc${{ steps.ci-config.outputs.pre_commit_version }}-
+
+      - name: Cache Python attribution artifacts
+        uses: actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
+        with:
+          path: target/attributions-cache
+          key: nemo-relay-attributions-python-${{ hashFiles('uv.lock') }}
+          restore-keys: |
+            nemo-relay-attributions-python-
 
       - name: Validate quickstart contracts
         working-directory: ${{ env.NEMO_RELAY_CI_WORKSPACE }}
@@ -259,13 +273,33 @@ jobs:
             pre-commit run --from-ref "$base_ref" --to-ref HEAD --show-diff-on-failure
           fi
 
+      - name: Install locked Node dependencies for instrumentation examples
+        if: ${{ inputs.run_documentation_examples }}
+        working-directory: ${{ env.NEMO_RELAY_CI_WORKSPACE }}
+        run: npm ci --ignore-scripts
+
+      - name: Run displayed examples against current SDKs
+        if: ${{ inputs.run_documentation_examples }}
+        working-directory: ${{ env.NEMO_RELAY_CI_WORKSPACE }}
+        run: just test-instrumentation-examples
+
       - name: Test binary package assembly
         working-directory: ${{ env.NEMO_RELAY_CI_WORKSPACE }}
         run: |
           python -m unittest \
             scripts.tests.test_package_cli_bin \
-            scripts.tests.test_package_node_bin
+            scripts.tests.test_package_node_bin \
+            scripts.tests.test_native_abi_contract \
+            scripts.tests.test_check_native_abi_toolchains \
+            scripts.tests.test_native_plugin_benchmark
 
       - name: Test docs version retention
         working-directory: ${{ env.NEMO_RELAY_CI_WORKSPACE }}
-        run: uv run --no-sync python -m unittest scripts.tests.test_sync_fern_docs_branch
+        run: |
+          uv run --no-sync python -m unittest \
+            scripts.tests.test_sync_fern_docs_branch \
+            scripts.tests.test_attributions_lockfile_md
+
+      - name: Test Rust coverage export
+        working-directory: ${{ env.NEMO_RELAY_CI_WORKSPACE }}
+        run: python -m unittest scripts.tests.test_export_llvm_cov_lcov

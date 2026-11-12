@@ -1,0 +1,330 @@
+// SPDX-FileCopyrightText: Copyright (c) 2026, NVIDIA CORPORATION & AFFILIATES. All rights reserved.
+// SPDX-License-Identifier: Apache-2.0
+
+//! Stable diagnostic report data model.
+
+use std::path::PathBuf;
+
+use nemo_relay_plugin_host::dynamic::PluginHostReport;
+use serde::Serialize;
+
+use crate::configuration::{DynamicPluginHostConfigStatus, GatewayConfig};
+use crate::upstream_auth::AuthScheme;
+
+/// Outcome of one check inside the doctor report.
+#[derive(Debug, Clone, Serialize, PartialEq, Eq)]
+pub(crate) struct Check {
+    pub name: &'static str,
+    pub status: Status,
+    pub details: String,
+}
+
+#[derive(Debug, Clone, Copy, Serialize, PartialEq, Eq)]
+#[serde(rename_all = "lowercase")]
+pub(crate) enum Status {
+    Pass,
+    Warn,
+    Fail,
+    /// The check ran but no relevant state was detected.
+    Info,
+}
+
+/// Snapshot of the running system rendered by `doctor`.
+#[derive(Debug, Clone, Serialize)]
+pub(crate) struct DoctorReport {
+    pub schema_version: u32,
+    pub binary_version: &'static str,
+    pub target_agent: Option<String>,
+    pub environment: EnvironmentInfo,
+    pub configuration: ConfigurationInfo,
+    pub agents: Vec<AgentInfo>,
+    pub host_plugins: Vec<crate::installation::marketplace::HostPluginReadiness>,
+    pub observability: Vec<Check>,
+    pub completions: Vec<Check>,
+}
+
+/// Managed-only doctor output, intentionally separate from personal runtime diagnostics.
+#[derive(Debug, Clone, Serialize)]
+pub(crate) struct ManagedBundleDoctorReport {
+    pub schema_version: u32,
+    pub binary_version: &'static str,
+    pub managed_bundle: ManagedBundleDoctorInfo,
+}
+
+#[derive(Debug, Clone, Serialize)]
+pub(crate) struct ManagedBundleDoctorInfo {
+    pub status: Status,
+    pub path: String,
+    pub expected_sha256: String,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub artifact_count: Option<usize>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub daemon_address: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub platform: Option<String>,
+    /// Route credential source (`env` or `file`); never the credential value.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub credential_source: Option<String>,
+    pub details: String,
+}
+
+#[derive(Debug, Clone, Serialize)]
+pub(crate) struct EnvironmentInfo {
+    pub os: String,
+    pub arch: &'static str,
+    pub shell: Option<String>,
+}
+
+#[derive(Debug, Clone, Serialize)]
+pub(crate) struct ConfigurationInfo {
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub explicit: Option<ConfigLayer>,
+    pub global: ConfigLayer,
+    pub system: ConfigLayer,
+    #[serde(skip_serializing_if = "Vec::is_empty")]
+    pub unsupported_project_files: Vec<ConfigLayer>,
+    pub upstream_auth: UpstreamAuthInfo,
+    pub plugin_configs: Vec<ConfigLayer>,
+    pub plugin_resolution: Check,
+    /// The core-owned plugin-host preflight used by the public binding APIs.
+    pub plugin_host_validation: PluginHostValidation,
+    pub resolution: Check,
+    pub default_agent: Option<String>,
+    pub configured_agents: Vec<String>,
+    pub dynamic_plugins: Vec<DynamicPluginReferenceInfo>,
+}
+
+/// Result of the same non-activating plugin preflight exposed as
+/// `plugin::dynamic::validate` in Rust and `nemo_relay.plugin.validate` in Python.
+#[derive(Debug, Clone, Serialize)]
+pub(crate) struct PluginHostValidation {
+    pub status: Status,
+    pub details: String,
+    /// The full, redacted core report is present whenever the preflight ran.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub report: Option<PluginHostReport>,
+}
+
+#[derive(Debug, Clone, Serialize)]
+pub(crate) struct UpstreamAuthInfo {
+    pub openai: SecretPresence,
+    pub anthropic: SecretPresence,
+    pub checks: Vec<Check>,
+}
+
+impl UpstreamAuthInfo {
+    pub(crate) fn from_effective_gateway_auth(gateway: &GatewayConfig) -> Self {
+        let mut info = Self {
+            openai: SecretPresence::from_effective_provider_auth(
+                gateway.openai_auth_header.as_deref(),
+                gateway.openai_api_key.is_some()
+                    || gateway.openai_api_key_helper.is_some()
+                    || gateway.openai_oidc.is_some()
+                    || std::env::var("OPENAI_API_KEY")
+                        .ok()
+                        .is_some_and(|key| !key.trim().is_empty()),
+            ),
+            anthropic: SecretPresence::from_effective_provider_auth(
+                gateway.anthropic_auth_header.as_deref(),
+                gateway.anthropic_api_key.is_some()
+                    || gateway.anthropic_api_key_helper.is_some()
+                    || gateway.anthropic_oidc.is_some()
+                    || std::env::var("ANTHROPIC_API_KEY")
+                        .ok()
+                        .is_some_and(|key| !key.trim().is_empty()),
+            ),
+            checks: Vec::new(),
+        };
+        for (name, helper, key, header, environment, default_scheme) in [
+            (
+                "OpenAI auth",
+                gateway.openai_api_key_helper.as_ref(),
+                gateway.openai_api_key.is_some(),
+                gateway.openai_auth_header.is_some(),
+                &["OPENAI_API_KEY", "NEMO_RELAY_OPENAI_AUTH_HEADER"][..],
+                AuthScheme::Bearer,
+            ),
+            (
+                "Anthropic auth",
+                gateway.anthropic_api_key_helper.as_ref(),
+                gateway.anthropic_api_key.is_some(),
+                gateway.anthropic_auth_header.is_some(),
+                &[
+                    "ANTHROPIC_API_KEY",
+                    "ANTHROPIC_AUTH_TOKEN",
+                    "NEMO_RELAY_ANTHROPIC_AUTH_HEADER",
+                ][..],
+                AuthScheme::ApiKey,
+            ),
+        ] {
+            let mut status = Status::Info;
+            let oidc = crate::upstream_auth::oidc(gateway, name.starts_with("Anthropic"));
+            let details = if oidc.is_some() {
+                "OpenID Connect sign-in configured; the sign-in check reports its state.".into()
+            } else if let Some(helper) = helper {
+                let scheme = helper.auth_scheme.unwrap_or(default_scheme);
+                let scheme = match scheme {
+                    AuthScheme::Bearer => "bearer",
+                    AuthScheme::ApiKey => "x-api-key",
+                };
+                let mut details = format!(
+                    "API key helper configured. Timeout: {} ms. Authentication: {scheme}. Doctor does not run the helper or check its token.",
+                    helper.timeout_ms
+                );
+                let ignored: Vec<_> = environment
+                    .iter()
+                    .copied()
+                    .filter(|name| std::env::var_os(name).is_some())
+                    .collect();
+                if !ignored.is_empty() {
+                    status = Status::Warn;
+                    details.push_str(&format!(
+                        " Ignored environment credentials: {}.",
+                        ignored.join(", ")
+                    ));
+                }
+                details
+            } else if key {
+                "Static API key configured.".into()
+            } else if header {
+                "Custom authorization header configured.".into()
+            } else if std::env::var(environment[0])
+                .ok()
+                .is_some_and(|key| !key.trim().is_empty())
+            {
+                format!("{} supplies the fallback API key.", environment[0])
+            } else {
+                "No gateway credential configured. Requests can use client credentials.".into()
+            };
+            info.checks.push(Check {
+                name,
+                status,
+                details,
+            });
+        }
+        for (name, source) in [
+            ("OpenAI sign-in", gateway.openai_oidc.as_ref()),
+            ("Anthropic sign-in", gateway.anthropic_oidc.as_ref()),
+        ] {
+            if let Some(source) = source {
+                info.checks.push(sign_in_check(name, source));
+            }
+        }
+        info
+    }
+
+    pub(crate) fn unknown() -> Self {
+        Self {
+            openai: SecretPresence::Unknown,
+            anthropic: SecretPresence::Unknown,
+            checks: Vec::new(),
+        }
+    }
+}
+
+#[derive(Debug, Clone, Copy, Serialize, PartialEq, Eq)]
+#[serde(rename_all = "snake_case")]
+pub(crate) enum SecretPresence {
+    Configured,
+    Unset,
+    Unknown,
+}
+
+/// Reports the stored sign-in without contacting the issuer or reading its tokens.
+fn sign_in_check(name: &'static str, source: &crate::oidc::OidcSource) -> Check {
+    let now = crate::oidc::now_secs();
+    let state =
+        crate::oidc::sessions_dir().and_then(|dir| crate::oidc::sign_in_state(&dir, source, now));
+    let issuer = &source.issuer;
+    let (status, details) = match state {
+        Ok(crate::oidc::SignInState::Valid(expires_at)) => (
+            Status::Pass,
+            format!(
+                "Signed in to {issuer}. The access token is valid until {}.",
+                crate::oidc::describe_expiry(expires_at, now)
+            ),
+        ),
+        Ok(crate::oidc::SignInState::ExpiredCanRefresh) => (
+            Status::Pass,
+            format!(
+                "Signed in to {issuer}. The access token has expired; the next request refreshes it."
+            ),
+        ),
+        Ok(crate::oidc::SignInState::ExpiredSignInAgain) => (
+            Status::Warn,
+            format!(
+                "The sign-in to {issuer} has expired and cannot refresh. Run `nemo-relay auth login`."
+            ),
+        ),
+        Ok(crate::oidc::SignInState::NotSignedIn) => (
+            Status::Warn,
+            format!("Not signed in to {issuer}. Run `nemo-relay auth login`."),
+        ),
+        Err(error) => (
+            Status::Fail,
+            format!("Cannot read the sign-in for {issuer}: {error}"),
+        ),
+    };
+    Check {
+        name,
+        status,
+        details,
+    }
+}
+
+impl SecretPresence {
+    pub(crate) fn from_effective_provider_auth(
+        configured_auth_header: Option<&str>,
+        has_key_or_helper: bool,
+    ) -> Self {
+        if configured_auth_header.is_some() || has_key_or_helper {
+            Self::Configured
+        } else {
+            Self::Unset
+        }
+    }
+
+    pub(crate) fn as_str(self) -> &'static str {
+        match self {
+            Self::Configured => "configured",
+            Self::Unset => "unset",
+            Self::Unknown => "unknown",
+        }
+    }
+}
+
+#[derive(Debug, Clone, Serialize)]
+pub(crate) struct DynamicPluginReferenceInfo {
+    pub plugin_id: String,
+    pub manifest_ref: String,
+    pub source: PathBuf,
+    pub host_config_status: DynamicPluginHostConfigStatus,
+}
+
+#[derive(Debug, Clone, Serialize)]
+pub(crate) struct ConfigLayer {
+    pub path: PathBuf,
+    pub status: Status,
+    pub active: bool,
+    pub details: String,
+}
+
+#[derive(Debug, Clone, Serialize)]
+pub(crate) struct AgentInfo {
+    pub name: &'static str,
+    pub status: Status,
+    pub configured: bool,
+    pub command: String,
+    pub path: Option<PathBuf>,
+    pub version: Option<String>,
+    pub annotation: String,
+    /// Agent-specific preflight checks, folded into `status` above.
+    ///
+    /// Empty for every agent whose setup NeMo Relay writes itself, because
+    /// `annotation` already says everything there is to say about it. pi is the
+    /// exception: its hooks live in an extension the *user* installs, so where
+    /// that extension sits decides whether pi loads it at all, and that is a
+    /// finding with its own status rather than a sentence in a summary.
+    #[serde(skip_serializing_if = "Vec::is_empty")]
+    pub checks: Vec<Check>,
+}

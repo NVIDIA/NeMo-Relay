@@ -1214,7 +1214,7 @@ async fn wrapped_agent_version_probe_runs_through_the_wrapper() {
     let wrapper = temp.path().join("npx");
     std::fs::write(
         &wrapper,
-        "#!/bin/sh\n[ \"$1\" = codex ] && [ \"$2\" = --version ] || exit 9\necho 'codex-cli 0.143.0'\n",
+        "#!/bin/sh\n[ \"$1\" = codex ] && [ \"$2\" = --version ] || exit 9\necho 'codex-cli 0.150.0'\n",
     )
     .unwrap();
     make_executable(&wrapper);
@@ -1227,7 +1227,7 @@ async fn wrapped_agent_version_probe_runs_through_the_wrapper() {
         validate_agent_version(CodingAgent::Codex, &probe)
             .await
             .unwrap(),
-        semver::Version::new(0, 143, 0)
+        semver::Version::new(0, 150, 0)
     );
 }
 
@@ -1248,7 +1248,7 @@ async fn transparent_launch_retains_agent_version_for_claude_and_codex() {
             AgentKind::ClaudeCode,
             "2.1.121",
         ),
-        ("codex", "codex-cli 0.143.0", AgentKind::Codex, "0.143.0"),
+        ("codex", "codex-cli 0.150.0", AgentKind::Codex, "0.150.0"),
     ] {
         let executable = temp.path().join(name);
         std::fs::write(
@@ -1295,7 +1295,10 @@ async fn transparent_launch_retains_agent_version_for_claude_and_codex() {
 
 #[test]
 fn prepares_claude_dry_run_without_writing_plugin() {
-    let _env = EnvScope::set(&[("ANTHROPIC_CUSTOM_HEADERS", None)]);
+    let _env = EnvScope::set(&[
+        ("ANTHROPIC_CUSTOM_HEADERS", None),
+        ("CLAUDE_CODE_GATEWAY_HINT_HEADERS", None),
+    ]);
     let resolved = ResolvedConfig {
         gateway: GatewayConfig::default(),
         agents: AgentConfigs::default(),
@@ -1318,6 +1321,12 @@ fn prepares_claude_dry_run_without_writing_plugin() {
             .contains(&("ANTHROPIC_BASE_URL".into(), "http://127.0.0.1:1234".into()))
     );
     assert!(prepared.notes[0].contains("would generate"));
+    assert!(
+        prepared
+            .env
+            .contains(&("CLAUDE_CODE_GATEWAY_HINT_HEADERS".into(), "1".into()))
+    );
+    assert!(std::env::var_os("CLAUDE_CODE_GATEWAY_HINT_HEADERS").is_none());
     let custom_headers = prepared
         .env
         .iter()
@@ -1333,6 +1342,117 @@ fn prepares_claude_dry_run_without_writing_plugin() {
             .secret_env_names
             .contains(&"ANTHROPIC_CUSTOM_HEADERS".into())
     );
+}
+
+#[test]
+fn test_claude_gateway_hint_headers_explicit_environment_is_not_overridden() {
+    for value in ["0", "false", "", "1"] {
+        let _env = EnvScope::set(&[(
+            "CLAUDE_CODE_GATEWAY_HINT_HEADERS",
+            Some(std::ffi::OsStr::new(value)),
+        )]);
+        let prepared = PreparedAgentLaunch::new(
+            CodingAgent::ClaudeCode,
+            vec!["claude".into()],
+            "http://127.0.0.1:1234",
+            &ResolvedConfig::default(),
+            true,
+        )
+        .unwrap();
+        assert!(
+            !prepared
+                .env
+                .iter()
+                .any(|(name, _)| name == "CLAUDE_CODE_GATEWAY_HINT_HEADERS"),
+            "explicit value {value:?} must remain inherited"
+        );
+    }
+}
+
+fn claude_dry_run_with(gateway: GatewayConfig) -> PreparedAgentLaunch {
+    let resolved = ResolvedConfig {
+        gateway,
+        ..ResolvedConfig::default()
+    };
+    PreparedAgentLaunch::new(
+        CodingAgent::ClaudeCode,
+        vec!["claude".into()],
+        "http://127.0.0.1:1234",
+        &resolved,
+        true,
+    )
+    .unwrap()
+}
+
+fn launch_env<'a>(prepared: &'a PreparedAgentLaunch, name: &str) -> Option<&'a str> {
+    prepared
+        .env
+        .iter()
+        .find_map(|(key, value)| (key == name).then_some(value.as_str()))
+}
+
+fn relay_oidc_gateway() -> GatewayConfig {
+    GatewayConfig {
+        anthropic_oidc: Some(crate::oidc::OidcSource::new(
+            "https://issuer.example",
+            "relay-client",
+            None,
+        )),
+        ..GatewayConfig::default()
+    }
+}
+
+fn relay_helper_gateway() -> GatewayConfig {
+    GatewayConfig {
+        anthropic_api_key_helper: Some(crate::upstream_auth::ApiKeyHelper {
+            command: "not-executed".into(),
+            args: vec![],
+            timeout_ms: 10_000,
+            cache_ttl_ms: 0,
+            cache: Default::default(),
+            auth_scheme: None,
+        }),
+        ..GatewayConfig::default()
+    }
+}
+
+#[test]
+fn test_claude_placeholder_api_key_only_when_relay_owns_the_credential() {
+    let _env = EnvScope::set(&[("ANTHROPIC_API_KEY", None), ("ANTHROPIC_AUTH_TOKEN", None)]);
+
+    for gateway in [relay_oidc_gateway(), relay_helper_gateway()] {
+        let prepared = claude_dry_run_with(gateway);
+        let placeholder = launch_env(&prepared, "ANTHROPIC_API_KEY").unwrap();
+        assert!(!placeholder.is_empty());
+        assert!(
+            !prepared
+                .secret_env_names
+                .contains(&"ANTHROPIC_API_KEY".into())
+        );
+    }
+    let caller_credential = claude_dry_run_with(GatewayConfig::default());
+    assert_eq!(launch_env(&caller_credential, "ANTHROPIC_API_KEY"), None);
+}
+
+#[test]
+fn test_claude_placeholder_api_key_keeps_a_caller_credential() {
+    for name in ["ANTHROPIC_API_KEY", "ANTHROPIC_AUTH_TOKEN"] {
+        for value in ["caller-value", ""] {
+            let _env = EnvScope::set(&[
+                ("ANTHROPIC_API_KEY", None),
+                ("ANTHROPIC_AUTH_TOKEN", None),
+                (name, Some(std::ffi::OsStr::new(value))),
+            ]);
+            for gateway in [relay_oidc_gateway(), relay_helper_gateway()] {
+                let prepared = claude_dry_run_with(gateway);
+                assert_eq!(
+                    launch_env(&prepared, "ANTHROPIC_API_KEY"),
+                    None,
+                    "an inherited {name}={value:?} must stay the child's credential"
+                );
+            }
+        }
+    }
 }
 
 #[test]
@@ -1471,6 +1591,7 @@ fn prepares_claude_dry_inserts_plugin_dir_after_authoritative_agent_executable()
 
 #[test]
 fn prepares_claude_temp_plugin() {
+    let _env = EnvScope::set(&[("CLAUDE_CODE_GATEWAY_HINT_HEADERS", None)]);
     let resolved = ResolvedConfig {
         gateway: GatewayConfig::default(),
         agents: AgentConfigs::default(),
@@ -1499,6 +1620,16 @@ fn prepares_claude_temp_plugin() {
     assert_eq!(
         settings["env"]["ANTHROPIC_BASE_URL"],
         "http://127.0.0.1:1234"
+    );
+    assert!(
+        settings["env"]
+            .get("CLAUDE_CODE_GATEWAY_HINT_HEADERS")
+            .is_none()
+    );
+    assert!(
+        prepared
+            .env
+            .contains(&("CLAUDE_CODE_GATEWAY_HINT_HEADERS".into(), "1".into()))
     );
     let hooks: serde_json::Value =
         serde_json::from_slice(&std::fs::read(plugin_dir.join("hooks/hooks.json")).unwrap())
@@ -1595,13 +1726,14 @@ fn claude_transparent_run_preserves_user_settings_and_prompt_boundary() {
 fn claude_settings_overlay_handles_inline_json_and_rejects_malformed_sources() {
     let inline = vec![
         "claude".into(),
-        "--settings={\"model\":\"kept\",\"env\":{\"PRIVATE\":\"yes\"}}".into(),
+        "--settings={\"model\":\"kept\",\"env\":{\"PRIVATE\":\"yes\",\"CLAUDE_CODE_GATEWAY_HINT_HEADERS\":\"0\"}}".into(),
     ];
     let overlay =
         crate::agents::claude::launch::settings_overlay(&inline, 0, "http://127.0.0.1:4321")
             .unwrap();
     assert_eq!(overlay["model"], "kept");
     assert_eq!(overlay["env"]["PRIVATE"], "yes");
+    assert_eq!(overlay["env"]["CLAUDE_CODE_GATEWAY_HINT_HEADERS"], "0");
     assert_eq!(
         overlay["env"]["ANTHROPIC_BASE_URL"],
         "http://127.0.0.1:4321"
@@ -2009,7 +2141,7 @@ fn fake_agent_command(temp: &Path, output: &Path) -> Vec<String> {
     std::fs::write(
         &script,
         format!(
-            "#!/bin/sh\nif [ \"$1\" = \"--version\" ]; then\n  echo 'codex-cli 0.143.0'\n  exit 0\nfi\nprintf '%s' \"$NEMO_RELAY_GATEWAY_URL\" > \"{}\"\nexit 7\n",
+            "#!/bin/sh\nif [ \"$1\" = \"--version\" ]; then\n  echo 'codex-cli 0.150.0'\n  exit 0\nfi\nprintf '%s' \"$NEMO_RELAY_GATEWAY_URL\" > \"{}\"\nexit 7\n",
             output.display()
         ),
     )
@@ -2837,6 +2969,84 @@ fn transparent_codex_launch_injects_voice_url_without_overriding_cli_or_profiles
             inject,
             "{:?}",
             prepared.argv
+        );
+    }
+}
+
+/// Codex warns "clamping ... hook timeout to 3s" when a `SessionEnd` or `Interrupt` hook asks for
+/// more than 3 seconds, so every Relay hook source writes 3 for those two and keeps 30 elsewhere.
+/// Claude Code has no such cap, so its `SessionEnd` keeps 30.
+#[test]
+fn codex_teardown_hooks_are_generated_within_the_codex_timeout_cap() {
+    let timeout =
+        |hooks: &serde_json::Value, event: &str| hooks[event][0]["hooks"][0]["timeout"].as_u64();
+    let codex = generated_hooks(CodingAgent::Codex, "relay hook-forward")["hooks"].clone();
+    assert_eq!(timeout(&codex, "SessionEnd"), Some(3));
+    assert_eq!(timeout(&codex, "Interrupt"), Some(3));
+    assert_eq!(timeout(&codex, "Stop"), Some(30));
+    let claude = generated_hooks(CodingAgent::ClaudeCode, "relay hook-forward")["hooks"].clone();
+    assert_eq!(timeout(&claude, "SessionEnd"), Some(30));
+
+    assert!(
+        crate::agents::codex::launch::hook_groups_toml(&codex["Interrupt"]).contains("timeout=3}")
+    );
+    assert!(crate::agents::codex::launch::hook_groups_toml(&codex["Stop"]).contains("timeout=30}"));
+
+    let checked_in: serde_json::Value = serde_json::from_str(include_str!(
+        "../../../../../integrations/coding-agents/codex/hooks/hooks.json"
+    ))
+    .unwrap();
+    for event in ["SessionEnd", "Interrupt"] {
+        assert_eq!(timeout(&checked_in["hooks"], event), Some(3), "{event}");
+    }
+    assert_eq!(timeout(&checked_in["hooks"], "Stop"), Some(30));
+}
+
+/// Codex caps `SessionEnd` and `Interrupt` hook timeouts at 3 seconds before hashing, so a
+/// hash built from the raw timeout leaves those hooks `modified` and they never run. The
+/// expected values are the `currentHash` Codex 0.154 `hooks/list` reports for this exact hook.
+#[test]
+fn codex_end_hook_trust_hashes_match_codex_timeout_normalization() {
+    let group = serde_json::Map::new();
+    let handler = json!({
+        "type": "command",
+        "command": "nemo-relay hook-forward codex --gateway-url http://127.0.0.1:47632 --forward-only --fail-open",
+        "timeout": 30
+    });
+    for (event_key, codex_hash) in [
+        (
+            "stop",
+            "sha256:1cc37b844b4c345a3b142deaa941d14c61955bee131327d3dbb946cf855523e3",
+        ),
+        (
+            "session_end",
+            "sha256:efff3dc7eccd88a11b31e1b8d72e5c19d290a0efdb49bbd83529e7c2d2a2b65c",
+        ),
+        (
+            "interrupt",
+            "sha256:03fb0c4b3cb283dc21a0d6bcbd80918fae1b7a5dccb6a76fbfe787fc59ef5f0e",
+        ),
+    ] {
+        assert_eq!(
+            crate::agents::codex::launch::command_hook_hash(event_key, &group, &handler).unwrap(),
+            codex_hash,
+            "{event_key}"
+        );
+    }
+    // A zero or missing timeout falls back to Codex's 1-second teardown default.
+    let mut handler = handler;
+    for timeout in [Some(0), None] {
+        match timeout {
+            Some(value) => handler["timeout"] = json!(value),
+            None => {
+                handler.as_object_mut().unwrap().remove("timeout");
+            }
+        }
+        assert_eq!(
+            crate::agents::codex::launch::command_hook_hash("session_end", &group, &handler)
+                .unwrap(),
+            "sha256:17dc6a8151fb58d3eaa8d9b2820f53ac5cba88029fe04b2c9db9ce25f7821ec7",
+            "{timeout:?}"
         );
     }
 }

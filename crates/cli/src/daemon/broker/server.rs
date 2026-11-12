@@ -48,9 +48,11 @@ use super::registry::{
 use crate::configuration::GatewayConfig;
 use crate::daemon::ServerOptions;
 use crate::daemon::common::address::{daemon_url, validate_bind_ip};
+#[cfg(test)]
+use crate::daemon::common::control::EmptyPayload;
 use crate::daemon::common::control::{
     ACTIVATION_LIFETIME_MS, ActivationFailedPayload, CHALLENGE_LIFETIME_MS, CLIENT_TOKEN_HEADER,
-    ChallengeRequest, ChallengeResponse, DRAIN_LIFETIME_MS, EmptyPayload, MAX_CONTROL_BODY_BYTES,
+    ChallengeRequest, ChallengeResponse, DRAIN_LIFETIME_MS, MAX_CONTROL_BODY_BYTES,
     McpRegisterRequest, McpRegisterResponse, RECOVERY_LIFETIME_MS, ROUTE_CREDENTIAL_REJECTED_CODE,
     SessionRequest, WORKER_PROBE_PATH, WORKER_ROUTE_FAILURE_HEADER, WORKER_TOKEN_HEADER,
     WorkerDrainRequest, WorkerGenerationGrant, WorkerNetworkHint, WorkerReadyPayload,
@@ -114,6 +116,7 @@ struct McpControlSession {
     last_request_id: String,
     worker_network: WorkerNetworkHint,
     released: bool,
+    idle_retention: bool,
 }
 
 struct WorkerControlSession {
@@ -133,6 +136,12 @@ struct WorkerControlSession {
     publication: WorkerPublication,
     published: bool,
     generation_grant: WorkerGenerationGrant,
+}
+
+#[derive(Clone)]
+struct WorkerAdmission {
+    secret_digest: TokenDigest,
+    generation_id: String,
 }
 
 #[derive(Clone)]
@@ -195,14 +204,18 @@ pub(crate) async fn serve(options: ServerOptions) -> Result<(), CliError> {
         sockets,
         registry: Registry::new(options.pass_through)
             .with_require_worker(options.require_worker)
-            .with_max_tokens_per_identity(options.max_tokens_per_identity),
+            .with_max_tokens_per_identity(options.max_tokens_per_identity)
+            .with_worker_idle_timeout(Duration::from_secs(config.worker_idle_timeout_secs)),
         identity: load_or_create_daemon_identity()?,
-        descriptor: crate::daemon::common::control::descriptor(ComponentRole::Daemon),
+        descriptor: crate::daemon::common::control::descriptor_with_idle_retention(
+            ComponentRole::Daemon,
+            config.worker_idle_timeout_secs != 0,
+        ),
         instance_id: uuid::Uuid::now_v7().to_string(),
         pass_through: options.pass_through,
         loopback_listener: local.ip().is_loopback(),
         public_origin,
-        config,
+        config: config.gateway,
         upstream: pooled_client().map_err(|error| CliError::Launch(error.to_string()))?,
         worker_clients: WorkerClientPool::new()?,
         challenges: Mutex::new(HashMap::new()),
@@ -270,7 +283,15 @@ pub(crate) async fn serve(options: ServerOptions) -> Result<(), CliError> {
             let tls = load_tls_config(certificate, key)?;
             serve_tls(listener, app, tls).await
         }
-        (None, None) => serve_plain(listener, app, shutdown_signal()).await,
+        (None, None) => {
+            serve_plain(
+                listener,
+                app,
+                shutdown_signal(),
+                Duration::from_millis(DRAIN_LIFETIME_MS),
+            )
+            .await
+        }
         _ => Err(CliError::Config(
             "--tls-cert and --tls-key must be supplied together".into(),
         )),
@@ -675,6 +696,8 @@ fn register_mcp_blocking(
     };
     let now = now_unix_ms();
     expire_activation_routes(&state, now);
+    let _publication = lock(&state.worker_generation_publication);
+    expire_idle_routes_locked(&state);
     let mut launch = match fresh_launch(request.worker_network.hint.clone()) {
         Ok(launch) => launch,
         Err(error) => return control_error(StatusCode::INTERNAL_SERVER_ERROR, error),
@@ -751,6 +774,14 @@ fn register_mcp_blocking(
                 last_request_id: String::new(),
                 worker_network: request.worker_network.hint,
                 released: false,
+                idle_retention: transcript
+                    .initiator
+                    .capabilities
+                    .contains(crate::daemon::common::control::WORKER_IDLE_RETENTION_CAPABILITY)
+                    && state
+                        .descriptor
+                        .capabilities
+                        .contains(crate::daemon::common::control::WORKER_IDLE_RETENTION_CAPABILITY),
             },
         );
     }
@@ -809,14 +840,14 @@ fn select_mcp_session_token(
 
 async fn release_mcp(
     State(state): State<Arc<DaemonState>>,
-    Json(request): Json<SessionRequest<EmptyPayload>>,
+    Json(request): Json<SessionRequest<crate::daemon::common::control::ReleasePayload>>,
 ) -> Response<Body> {
     blocking_control(move || release_mcp_blocking(State(state), Json(request))).await
 }
 
 fn release_mcp_blocking(
     State(state): State<Arc<DaemonState>>,
-    Json(request): Json<SessionRequest<EmptyPayload>>,
+    Json(request): Json<SessionRequest<crate::daemon::common::control::ReleasePayload>>,
 ) -> Response<Body> {
     let authenticated = match authenticate_mcp(&state, &request, None) {
         Ok(authenticated) => authenticated,
@@ -832,18 +863,24 @@ fn release_mcp_blocking(
     if authenticated.duplicate {
         return StatusCode::NO_CONTENT.into_response();
     }
+    if let Some(activation_id) = &request.payload.retained_activation_id {
+        let supported = lock(&state.mcp_sessions)
+            .get(authenticated.session_id.as_str())
+            .is_some_and(|session| session.idle_retention);
+        if !supported || activation_id.is_empty() || activation_id.len() > 128 {
+            return control_message(StatusCode::BAD_REQUEST, "invalid activation retention");
+        }
+    }
     // Wait for durable publication before taking a route gate used by async handlers.
     let _publication = lock(&state.worker_generation_publication);
     let gate = state.sockets.route_gate(authenticated.fingerprint);
     let _route = lock(&gate);
-    if let Some(session) = lock(&state.mcp_sessions).get_mut(authenticated.session_id.as_str()) {
-        session.released = true;
-    }
-    lock(&state.pending_directives).remove(authenticated.session_id.as_str());
-    let action = match state.registry.release_mcp(
+    expire_idle_routes_locked(&state);
+    let action = match state.registry.release_mcp_with_retention(
         authenticated.fingerprint,
         &authenticated.session_id,
         now_unix_ms().saturating_add(DRAIN_LIFETIME_MS),
+        request.payload.retained_activation_id.as_deref(),
     ) {
         Ok(action) => action,
         Err(RegistryError::UnknownRoute | RegistryError::UnknownMcpSession) => {
@@ -851,6 +888,10 @@ fn release_mcp_blocking(
         }
         Err(error) => return registry_error(error),
     };
+    if let Some(session) = lock(&state.mcp_sessions).get_mut(authenticated.session_id.as_str()) {
+        session.released = true;
+    }
+    lock(&state.pending_directives).remove(authenticated.session_id.as_str());
     log_mcp_removed(
         authenticated.fingerprint,
         &authenticated.session_id,
@@ -992,6 +1033,7 @@ fn register_worker_blocking(
     };
     let _publication = lock(&state.worker_generation_publication);
     let now = now_unix_ms();
+    expire_idle_routes_locked(&state);
     let (activation_fingerprint, replay) = {
         let mut activations = lock(&state.activations);
         let Some(activation) = activations.get_mut(&request.activation_id) else {
@@ -1061,6 +1103,15 @@ fn register_worker_blocking(
         request.diagnostics,
         daemon_proof,
     );
+    if response.status().is_success()
+        && let Err(error) = state
+            .registry
+            .mark_activation_registered(activation_fingerprint, &request.activation_id)
+    {
+        lock(&state.worker_sessions).remove(&worker_id);
+        fail_worker_publication(&state, activation_fingerprint, &publication);
+        return registry_error(error);
+    }
     if !response.status().is_success() {
         let fingerprint = activation_fingerprint.to_string();
         log::error!(
@@ -1268,16 +1319,13 @@ fn replay_worker_registration(
     }
     let data_token =
         SensitiveString::new(session.pending_target.session_token().to_owned()).ok()?;
-    Some(
-        Json(WorkerRegisterResponse {
-            diagnostics: session.diagnostic_grant.clone(),
-            daemon_proof,
-            session_token: session.secret.clone(),
-            data_token,
-            generation_grant: session.generation_grant.clone(),
-        })
-        .into_response(),
-    )
+    Some(worker_registration_response(WorkerRegisterResponse {
+        diagnostics: session.diagnostic_grant.clone(),
+        daemon_proof,
+        session_token: session.secret.clone(),
+        data_token,
+        generation_grant: session.generation_grant.clone(),
+    }))
 }
 
 #[allow(clippy::too_many_arguments)]
@@ -1395,14 +1443,25 @@ fn stage_worker(
         publication = publication_name(&publication);
         "Worker registered and is awaiting readiness"
     );
-    Json(WorkerRegisterResponse {
+    worker_registration_response(WorkerRegisterResponse {
         diagnostics: diagnostic_grant,
         daemon_proof,
         session_token: control_secret,
         data_token: data_secret,
         generation_grant,
     })
-    .into_response()
+}
+
+fn worker_registration_response(reply: WorkerRegisterResponse) -> Response<Body> {
+    // Carry the exact returned identity through to socket publication without
+    // recovering it from serialized JSON or a potentially replaced session.
+    let admission = WorkerAdmission {
+        secret_digest: TokenDigest::from_token(reply.session_token.expose().as_bytes()),
+        generation_id: reply.generation_grant.generation_id.clone(),
+    };
+    let mut response = Json(reply).into_response();
+    response.extensions_mut().insert(admission);
+    response
 }
 
 struct ReadyWorker {
@@ -1565,6 +1624,7 @@ fn publish_ready_worker(
     // cannot race a replacement readiness probe. The complete file-backed transaction runs on a
     // blocking thread and this section performs no network I/O.
     let _generation_publication = lock(&state.worker_generation_publication);
+    expire_idle_routes_locked(&state);
     let previous_generation = match &publication {
         WorkerPublication::Activation { activation_id } => {
             let current = lock(&state.activations)
@@ -2039,8 +2099,10 @@ async fn forward_to_provider(
         return error.into_response();
     }
     let helper_auth = allow_environment_provider_auth
-        && crate::upstream_auth::helper(&state.config, matches!(route, ProviderRoute::Anthropic))
-            .is_some();
+        && crate::upstream_auth::mints_credential(
+            &state.config,
+            matches!(route, ProviderRoute::Anthropic),
+        );
     if crate::gateway::websocket::is_websocket(&request) {
         return crate::gateway::websocket::forward_to_provider(
             client_named,
@@ -2682,8 +2744,21 @@ fn cancel_staged_activation(state: &Arc<DaemonState>, activation_id: &str, reaso
     }
 }
 
+// Callers serialize this with publication and admission. Registry expiry fences the
+// generation before cancellation or asynchronous draining can touch its processes.
+fn expire_idle_routes_locked(state: &Arc<DaemonState>) {
+    let actions = state.registry.expire_idle_workers(
+        tokio::time::Instant::now(),
+        now_unix_ms().saturating_add(DRAIN_LIFETIME_MS),
+    );
+    for (fingerprint, action) in actions {
+        handle_release_action(Arc::clone(state), fingerprint, action);
+    }
+}
+
 fn expire_activation_routes(state: &Arc<DaemonState>, now_unix_ms: u64) {
     let _publication = lock(&state.worker_generation_publication);
+    expire_idle_routes_locked(state);
     for ExpiredActivation {
         fingerprint,
         activation_id,
@@ -2719,7 +2794,7 @@ fn handle_release_action(state: Arc<DaemonState>, fingerprint: Fingerprint, acti
                 target: "nemo_relay.daemon",
                 event = "worker_activation_cancelled",
                 fingerprint = fingerprint.as_str();
-                "Worker activation cancelled because its last MCP session left"
+                "Worker activation cancelled"
             );
         }
         ReleaseAction::BeginDrain {
@@ -3216,6 +3291,7 @@ async fn serve_plain(
     listener: TcpListener,
     app: Router,
     shutdown: impl std::future::Future<Output = ()>,
+    drain_limit: Duration,
 ) -> Result<(), CliError> {
     let (shutdown_sender, shutdown_receiver) = tokio::sync::watch::channel(());
     let mut connections = tokio::task::JoinSet::new();
@@ -3266,9 +3342,13 @@ async fn serve_plain(
             }
         }
     }
+    // Close the socket before draining: an open listener keeps completing TCP handshakes
+    // that nobody accepts, so new clients hang instead of failing fast.
+    drop(listener);
     drop(shutdown_receiver);
-    // Preserve axum::serve's graceful shutdown: admitted responses finish before return.
-    while connections.join_next().await.is_some() {}
+    // Admitted responses get until the drain limit to finish, like the TLS listener.
+    let drain = async { while connections.join_next().await.is_some() {} };
+    let _ = tokio::time::timeout(drain_limit, drain).await;
     Ok(())
 }
 
@@ -3335,6 +3415,7 @@ async fn serve_tls(
             }
         }
     }
+    drop(listener);
     let _ = shutdown_tx.send(true);
     let drain = async { while connections.join_next().await.is_some() {} };
     let _ = tokio::time::timeout(Duration::from_millis(DRAIN_LIFETIME_MS), drain).await;

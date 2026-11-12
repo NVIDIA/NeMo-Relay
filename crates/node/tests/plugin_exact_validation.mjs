@@ -6,7 +6,7 @@ import { test } from 'node:test';
 import { createRequire } from 'node:module';
 
 const require = createRequire(import.meta.url);
-const plugin = require('../plugin.js');
+const plugin = require('../dist/plugin.js');
 
 test('exact validation rejects host diagnostics instead of discarding them', () => {
   for (const diagnostics of [null, true, {}, { enabled: true }, { enabled: 'invalid' }]) {
@@ -20,7 +20,6 @@ test('exact validation rejects host diagnostics instead of discarding them', () 
 test('exact validation accepts static plugin configuration', () => {
   assert.deepEqual(plugin.validateExact(plugin.defaultConfig()).dynamic_plugins, []);
 });
-
 
 test('all built-in kinds are available without component helpers', () => {
   const kinds = new Set(plugin.listKinds());

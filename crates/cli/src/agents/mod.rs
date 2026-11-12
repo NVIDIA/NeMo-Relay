@@ -37,6 +37,9 @@ pub(super) struct AgentDescriptor {
     /// point, because the failure it guards against is silent.
     verified_through: Option<(u64, u64)>,
     hook_events: &'static [&'static str],
+    /// Events whose hook timeout the host caps, with that cap in seconds. Writing a longer
+    /// timeout makes the host clamp it and log a warning.
+    capped_hook_events: (&'static [&'static str], u64),
 }
 
 /// Why pi has no marketplace-plugin implementation.
@@ -129,6 +132,16 @@ impl CodingAgent {
     /// Complete lifecycle event set installed for this host.
     pub(crate) const fn hook_events(self) -> &'static [&'static str] {
         self.descriptor().hook_events
+    }
+
+    /// Timeout to write into this host's generated hook definition for `event`.
+    pub(crate) fn hook_timeout_secs(self, event: &str) -> u64 {
+        let (events, cap) = self.descriptor().capped_hook_events;
+        if events.contains(&event) {
+            cap
+        } else {
+            crate::hooks::HOOK_FORWARD_TIMEOUT.as_secs()
+        }
     }
 
     /// Claude Code runs command hooks through Bash on every supported platform.
@@ -492,9 +505,13 @@ pub(crate) fn prepare_launch(
     );
     match agent {
         CodingAgent::Codex => codex::launch::prepare(launch, gateway_url),
-        CodingAgent::ClaudeCode => {
-            claude::launch::prepare(launch, gateway_url, proxy_credential, dry_run)
-        }
+        CodingAgent::ClaudeCode => claude::launch::prepare(
+            launch,
+            gateway_url,
+            proxy_credential,
+            crate::upstream_auth::mints_credential(&resolved.gateway, true),
+            dry_run,
+        ),
         // pi is the only agent whose launcher needs the gateway's upstream configuration: its
         // extension redirects model traffic only when the selected model already targets that
         // upstream. See `pi::launch::prepare`.

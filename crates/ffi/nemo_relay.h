@@ -8,6 +8,21 @@
 #include <stddef.h>
 
 /**
+ * Skip conditional-execution guardrails for one managed call.
+ */
+#define NEMO_RELAY_SKIP_CONDITIONAL_EXECUTION 1
+
+/**
+ * Skip request intercepts for one managed call.
+ */
+#define NEMO_RELAY_SKIP_REQUEST_INTERCEPTS 2
+
+/**
+ * Skip execution intercepts for one managed call (stream intercepts for streams).
+ */
+#define NEMO_RELAY_SKIP_EXECUTION_INTERCEPTS 4
+
+/**
  * Status codes returned by all FFI functions.
  *
  * Every `extern "C"` function in this library returns an `NemoRelayStatus`.
@@ -1410,6 +1425,38 @@ NemoRelayStatus nemo_relay_llm_call_execute(const char *name,
                                             char **out);
 
 /**
+ * Choose which middleware stages run for one call.
+ * Combine `NEMO_RELAY_SKIP_*` constants with bitwise OR in `skip_stages`.
+ * Zero runs all stages. Unknown bits return `NEMO_RELAY_STATUS_INVALID_ARG`.
+ * Relay still sanitizes event data, uses codecs, passes trace context,
+ * and handles call completion. Nested calls use their own options.
+ *
+ * Relay takes ownership of callback data when this function starts.
+ * It releases that data even if input validation fails.
+ *
+ * # Safety
+ * Use the same pointer and callback rules as the existing execute function.
+ * `out` must point to writable storage for the output pointer.
+ */
+NemoRelayStatus nemo_relay_llm_call_execute_with_options(const char *name,
+                                                         const char *native_json,
+                                                         NemoRelayLlmExecCb func,
+                                                         void *func_user_data,
+                                                         NemoRelayFreeFn func_free,
+                                                         const struct FfiScopeHandle *parent,
+                                                         uint32_t attributes,
+                                                         const char *data_json,
+                                                         const char *metadata_json,
+                                                         const char *model_name,
+                                                         NemoRelayCodecDecodeFn codec_decode,
+                                                         NemoRelayCodecEncodeFn codec_encode,
+                                                         void *codec_user_data,
+                                                         NemoRelayFreeFn codec_free_fn,
+                                                         const struct FfiCodecHandle *response_codec,
+                                                         uint32_t skip_stages,
+                                                         char **out);
+
+/**
  * Execute a streaming LLM call end-to-end. Conditional-execution guardrails
  * run first on the raw request. Returns a stream handle that can be polled
  * with `nemo_relay_stream_next`. Blocks until the stream is set up.
@@ -1460,6 +1507,42 @@ NemoRelayStatus nemo_relay_llm_stream_call_execute(const char *name,
                                                    NemoRelayFreeFn codec_free_fn,
                                                    const struct FfiCodecHandle *response_codec,
                                                    struct FfiStream **out);
+
+/**
+ * Choose which middleware stages run for one call.
+ * Combine `NEMO_RELAY_SKIP_*` constants with bitwise OR in `skip_stages`.
+ * Zero runs all stages. Unknown bits return `NEMO_RELAY_STATUS_INVALID_ARG`.
+ * Relay still sanitizes event data, uses codecs, passes trace context,
+ * and handles call completion. Nested calls use their own options.
+ *
+ * Relay takes ownership of callback data when this function starts.
+ * It releases that data even if input validation fails.
+ *
+ * # Safety
+ * Use the same pointer and callback rules as the existing execute function.
+ * `out` must point to writable storage for the output pointer.
+ */
+NemoRelayStatus nemo_relay_llm_stream_call_execute_with_options(const char *name,
+                                                                const char *native_json,
+                                                                NemoRelayLlmExecCb func,
+                                                                void *func_user_data,
+                                                                NemoRelayFreeFn func_free,
+                                                                struct Option_NemoRelayCollectorCb collector,
+                                                                struct Option_NemoRelayFinalizerCb finalizer,
+                                                                void *callback_user_data,
+                                                                NemoRelayFreeFn callback_free,
+                                                                const struct FfiScopeHandle *parent,
+                                                                uint32_t attributes,
+                                                                const char *data_json,
+                                                                const char *metadata_json,
+                                                                const char *model_name,
+                                                                NemoRelayCodecDecodeFn codec_decode,
+                                                                NemoRelayCodecEncodeFn codec_encode,
+                                                                void *codec_user_data,
+                                                                NemoRelayFreeFn codec_free_fn,
+                                                                const struct FfiCodecHandle *response_codec,
+                                                                uint32_t skip_stages,
+                                                                struct FfiStream **out);
 
 /**
  * Stop a stream producer and wait for cleanup to complete.
@@ -3601,6 +3684,33 @@ NemoRelayStatus nemo_relay_tool_call_execute_v2(const char *name,
                                                 const char *metadata_json,
                                                 const char *tool_call_id,
                                                 char **out);
+
+/**
+ * Choose which middleware stages run for one call.
+ * Combine `NEMO_RELAY_SKIP_*` constants with bitwise OR in `skip_stages`.
+ * Zero runs all stages. Unknown bits return `NEMO_RELAY_STATUS_INVALID_ARG`.
+ * Relay still sanitizes event data, uses codecs, passes trace context,
+ * and handles call completion. Nested calls use their own options.
+ *
+ * Relay takes ownership of callback data when this function starts.
+ * It releases that data even if input validation fails.
+ *
+ * # Safety
+ * Use the same pointer and callback rules as the existing execute function.
+ * `out` must point to writable storage for the output pointer.
+ */
+NemoRelayStatus nemo_relay_tool_call_execute_with_options(const char *name,
+                                                          const char *args_json,
+                                                          NemoRelayToolExecCb func,
+                                                          void *func_user_data,
+                                                          NemoRelayFreeFn func_free,
+                                                          const struct FfiScopeHandle *parent,
+                                                          uint32_t attributes,
+                                                          const char *data_json,
+                                                          const char *metadata_json,
+                                                          const char *tool_call_id,
+                                                          uint32_t skip_stages,
+                                                          char **out);
 
 /**
  * Register a tool conditional execution guardrail. The callback decides whether

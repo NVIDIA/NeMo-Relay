@@ -703,6 +703,7 @@ pub(super) fn remove_managed_environment_for_plugin(
     remove_directory_if_present(&expected, "delete")
 }
 
+/// Checks the managed location, interpreter, and attestation of an installed Python environment.
 pub(super) fn environment_state(
     manifest: &DynamicPluginManifest,
     state_path: &Path,
@@ -721,7 +722,7 @@ pub(super) fn environment_state(
         return DynamicPluginCheckState::Invalid;
     };
     if configured != expected
-        || std::fs::symlink_metadata(&configured)
+        || std::fs::metadata(&configured)
             .map(|metadata| !metadata.file_type().is_dir())
             .unwrap_or(true)
         || !environment_python_path(&configured).is_file()
@@ -788,6 +789,7 @@ fn absolute_path(path: &Path) -> Result<PathBuf, String> {
     }
 }
 
+/// Removes an owned environment directory or unlinks its alias without traversing the target.
 fn remove_directory_if_present(path: &Path, operation: &str) -> Result<(), String> {
     let metadata = match std::fs::symlink_metadata(path) {
         Ok(metadata) => metadata,
@@ -799,6 +801,26 @@ fn remove_directory_if_present(path: &Path, operation: &str) -> Result<(), Strin
             ));
         }
     };
+    if metadata.file_type().is_symlink() {
+        // Remove only the managed name, including dangling links. Never recurse into its target.
+        #[cfg(windows)]
+        let result = {
+            use std::os::windows::fs::FileTypeExt;
+            if metadata.file_type().is_symlink_dir() {
+                std::fs::remove_dir(path)
+            } else {
+                std::fs::remove_file(path)
+            }
+        };
+        #[cfg(not(windows))]
+        let result = std::fs::remove_file(path);
+        return result.map_err(|error| {
+            format!(
+                "could not {operation} managed Python environment link {}: {error}",
+                path.display()
+            )
+        });
+    }
     if !metadata.file_type().is_dir() {
         return Err(format!(
             "refusing to {operation} managed Python environment {} because it is not a directory",

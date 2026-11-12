@@ -6,45 +6,16 @@
 use nemo_relay_types::api::{event::Event, registry::RuntimeRegistrationKind, runtime::*};
 use nemo_relay_types::diagnostics::Classification;
 pub use nemo_relay_types::plugin::{ConfigDiagnostic, DiagnosticLevel};
+pub use nemo_relay_types::plugin::{PluginError, PluginFuture};
 use serde::{Deserialize, Serialize};
-use serde_json::{Map, Value as Json};
+pub use serde_json::Map;
+use serde_json::Value as Json;
 use std::collections::BTreeSet;
 use std::fmt;
-use std::future::Future;
-use std::pin::Pin;
 use std::sync::Arc;
-use thiserror::Error;
 
 /// Result of validating, activating, or cleaning up a component.
 pub type Result<T> = std::result::Result<T, PluginError>;
-
-/// Error type for generic plugin operations.
-#[derive(Debug, Error)]
-pub enum PluginError {
-    /// Configuration validation failed.
-    #[error("invalid config: {0}")]
-    InvalidConfig(String),
-
-    /// The requested mutation conflicts with current plugin state.
-    #[error("conflict: {0}")]
-    Conflict(String),
-
-    /// The requested plugin resource was not found.
-    #[error("not found: {0}")]
-    NotFound(String),
-
-    /// A serialization or deserialization operation failed.
-    #[error("serialization error: {0}")]
-    Serialization(#[from] serde_json::Error),
-
-    /// An internal plugin-system error occurred.
-    #[error("internal error: {0}")]
-    Internal(String),
-
-    /// A runtime middleware/subscriber registration failed.
-    #[error("registration failed: {0}")]
-    RegistrationFailed(String),
-}
 
 /// One configured plugin component.
 #[derive(Debug, Clone, Serialize, Deserialize, schemars::JsonSchema)]
@@ -252,29 +223,23 @@ impl PluginRegistration {
 
 /// Implemented by custom plugins that register runtime middleware.
 pub trait Plugin: Send + Sync + 'static {
-    /// Returns the unique plugin kind string.
+    /// Returns the unique plugin kind.
     fn plugin_kind(&self) -> &str;
 
-    /// Returns whether the plugin kind can appear multiple times in the config.
-    ///
-    /// Return `false` for singleton components such as the built-in adaptive
-    /// component.
+    /// Whether multiple configured components may use this plugin kind.
     fn allows_multiple_components(&self) -> bool {
         true
     }
 
-    /// Validates one plugin component config.
-    ///
-    /// Returning error-level diagnostics prevents plugin-host activation
-    /// from activating the configuration.
-    fn validate(&self, plugin_config: &Map<String, Json>) -> Vec<ConfigDiagnostic>;
+    /// Validate one component before runtime registration.
+    fn validate(&self, _config: &Map<String, Json>) -> Vec<ConfigDiagnostic> {
+        Vec::new()
+    }
 
     /// Validates one plugin component config using the host's global policy.
     ///
-    /// The default preserves the validation behavior of existing custom
-    /// plugins. Plugins that emit policy-controlled diagnostics should
-    /// override this method so host validation honors non-default fields in
-    /// [`ConfigPolicy`].
+    /// The default calls [`Self::validate`]. Override this method when the
+    /// plugin emits diagnostics controlled by [`ConfigPolicy`].
     fn validate_with_policy(
         &self,
         plugin_config: &Map<String, Json>,
@@ -292,7 +257,7 @@ pub trait Plugin: Send + Sync + 'static {
         &'a self,
         plugin_config: &Map<String, Json>,
         ctx: &'a mut dyn PluginRegistrationContext,
-    ) -> Pin<Box<dyn Future<Output = Result<()>> + Send + 'a>>;
+    ) -> PluginFuture<'a, ()>;
 }
 
 impl PluginRegistration {

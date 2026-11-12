@@ -86,7 +86,7 @@ export async function frameworkTool(toolName: string, rawArgs: SearchArgs): Prom
   const executionResult = await toolCallExecuteAsync(
     toolName,
     rawArgs,
-    async (args: SearchArgs) => ({ result: { hits: 2, echo: args } }),
+    async (args) => ({ result: { hits: 2, echo: args } }),
     parent,
     null,
     null,
@@ -251,6 +251,13 @@ Check these symptoms first when the workflow does not behave as expected.
   JSON-compatible tool arguments, results, and annotations before NeMo Relay
   sees them.
 - **A fallback emits incomplete spans**: Manual start and end lifecycle calls must use the same handle.
+
+## Configure Execution Stages per Call
+
+Tool and LLM wrappers accept options that choose which middleware stages run
+for one call. Refer to
+[Configure Execution Stages per Call](/instrument-applications/advanced-guide#configure-execution-stages-per-call)
+for the supported bindings and the work Relay still handles when a stage is off.
 
 ## Next Steps
 

@@ -22,7 +22,8 @@ use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::{Arc, LazyLock, Mutex, OnceLock, RwLock};
 
 use serde::{Deserialize, Serialize};
-use serde_json::{Map, Value as Json};
+pub use serde_json::Map;
+use serde_json::Value as Json;
 
 use nemo_relay_diagnostics::{
     ComponentRecorder, ComponentRegistration, DiagnosticDetailRef, DiagnosticObservation,
@@ -59,7 +60,7 @@ use nemo_relay_types::diagnostics::{
     DiagnosticClassifier, DiagnosticSeverity, FailureClass, FailureCode, NoticeCode,
     PluginFailureCode, PluginObservationContext, PluginPhase,
 };
-pub use nemo_relay_types::plugin::{ConfigDiagnostic, DiagnosticLevel};
+pub use nemo_relay_types::plugin::{ConfigDiagnostic, DiagnosticLevel, PluginFuture};
 
 pub use nemo_relay_plugin::component::PluginRegistrationContext;
 pub use nemo_relay_plugin::component::{
@@ -1541,6 +1542,7 @@ pub(crate) async fn initialize_plugins_exact_for_host(
     .await
 }
 
+/// Validate off the caller's executor, then replace component registrations with rollback on failure.
 async fn initialize_plugins_exact_inner(
     config: PluginConfig,
     rollback_failures: Option<Arc<Mutex<Vec<String>>>>,
@@ -1562,9 +1564,14 @@ async fn initialize_plugins_exact_inner(
         diagnostics,
         ..ConfigReport::default()
     };
-    report
-        .diagnostics
-        .extend(validate_static_plugin_config(&config).diagnostics);
+    let validation_config = config.clone();
+    let validation =
+        tokio::task::spawn_blocking(move || validate_static_plugin_config(&validation_config))
+            .await
+            .map_err(|error| {
+                PluginError::Internal(format!("plugin validation task failed: {error}"))
+            })?;
+    report.diagnostics.extend(validation.diagnostics);
     if report.has_errors() {
         return Err(PluginError::InvalidConfig(join_error_messages(&report)));
     }

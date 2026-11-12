@@ -94,6 +94,26 @@ use crate::types::{
 #[cfg(test)]
 mod llm_stack_tests;
 
+/// Choose which middleware stages run for one call. Omitted fields run their stages.
+/// Relay still sanitizes event data, uses codecs, and handles call completion.
+/// Nested calls use their own options.
+#[napi(object)]
+pub struct ExecutionOptions {
+    pub conditional_execution: Option<bool>,
+    pub request_intercepts: Option<bool>,
+    pub execution_intercepts: Option<bool>,
+}
+
+impl From<ExecutionOptions> for nemo_relay_runtime::api::execution::ExecutionOptions {
+    fn from(options: ExecutionOptions) -> Self {
+        Self {
+            conditional_execution: options.conditional_execution.unwrap_or(true),
+            request_intercepts: options.request_intercepts.unwrap_or(true),
+            execution_intercepts: options.execution_intercepts.unwrap_or(true),
+        }
+    }
+}
+
 pub(crate) const LLM_STREAM_BRIDGE_CAPACITY: usize = 32;
 
 static NODE_ENVIRONMENT_COUNT: AtomicUsize = AtomicUsize::new(0);
@@ -116,12 +136,15 @@ fn cleanup_node_environment() {
 }
 
 /// Emit a structured operational log record through Relay's configured sinks.
-#[napi(catch_unwind)]
+#[napi(
+    ts_generic_types = "TFields extends JsonObjectCompatible<TFields> = JsonObject",
+    catch_unwind
+)]
 pub fn log(
     level: String,
     message: String,
     target: Option<String>,
-    fields: Option<Json>,
+    #[napi(ts_arg_type = "TFields | null")] fields: Option<Json>,
 ) -> Result<()> {
     let fields = match fields {
         None => serde_json::Map::new(),
@@ -140,8 +163,15 @@ pub fn log(
 macro_rules! log_levels {
     ($($level:ident: $doc:literal,)*) => {$(
         #[doc = $doc]
-        #[napi(catch_unwind)]
-        pub fn $level(message: String, target: Option<String>, fields: Option<Json>) -> Result<()> {
+        #[napi(
+            ts_generic_types = "TFields extends JsonObjectCompatible<TFields> = JsonObject",
+            catch_unwind
+        )]
+        pub fn $level(
+            message: String,
+            target: Option<String>,
+            #[napi(ts_arg_type = "TFields | null")] fields: Option<Json>,
+        ) -> Result<()> {
             log(stringify!($level).into(), message, target, fields)
         }
     )*};
@@ -1388,11 +1418,11 @@ pub fn create_scope_stack_from_propagation(context: PropagationContext) -> Resul
 /// Promise until it settles and is then expired for inherited detached work.
 /// Use this helper instead of `setThreadScopeStack` to isolate concurrent async
 /// branches.
-#[napi(catch_unwind)]
+#[napi(ts_generic_types = "T", ts_return_type = "T", catch_unwind)]
 pub fn with_scope_stack<'env>(
     env: &'env Env,
     stack: &ScopeStack,
-    #[napi(ts_arg_type = "(...args: any[]) => any")] callback: Callback,
+    #[napi(ts_arg_type = "() => T")] callback: Callback,
 ) -> Result<Unknown<'env>> {
     let scope = CallbackScope {
         scope_stack: stack.inner.clone(),
@@ -1586,7 +1616,10 @@ pub fn get_handle(env: Env) -> Result<ScopeHandle> {
 /// start time and start event timestamp. It must be a safe integer number; omit it
 /// to use the current runtime time.
 /// Returns the handle for the newly created scope.
-#[napi(catch_unwind)]
+#[napi(
+    ts_generic_types = "TData extends JsonCompatible<TData> = Json, TMetadata extends JsonCompatible<TMetadata> = Json, TInput extends JsonCompatible<TInput> = Json",
+    catch_unwind
+)]
 #[allow(clippy::too_many_arguments)]
 pub fn push_scope(
     env: Env,
@@ -1594,9 +1627,9 @@ pub fn push_scope(
     scope_type: ScopeType,
     handle: Option<&ScopeHandle>,
     attributes: Option<u32>,
-    data: Option<Json>,
-    metadata: Option<Json>,
-    input: Option<Json>,
+    #[napi(ts_arg_type = "TData | null")] data: Option<Json>,
+    #[napi(ts_arg_type = "TMetadata | null")] metadata: Option<Json>,
+    #[napi(ts_arg_type = "TInput | null")] input: Option<Json>,
     timestamp: Option<f64>,
 ) -> Result<ScopeHandle> {
     let attrs = ScopeAttributes::from_bits_truncate(attributes.unwrap_or(0));
@@ -1627,13 +1660,16 @@ pub fn push_scope(
 /// It must be a safe integer number; omit it to use the runtime default end timestamp.
 /// Optional `metadata` is a JSON metadata payload recorded on the scope end event.
 /// Throws if the handle does not match the current top scope.
-#[napi(catch_unwind)]
+#[napi(
+    ts_generic_types = "TOutput extends JsonCompatible<TOutput> = Json, TMetadata extends JsonCompatible<TMetadata> = Json",
+    catch_unwind
+)]
 pub fn pop_scope(
     env: Env,
     handle: &ScopeHandle,
-    output: Option<Json>,
+    #[napi(ts_arg_type = "TOutput | null")] output: Option<Json>,
     timestamp: Option<f64>,
-    metadata: Option<Json>,
+    #[napi(ts_arg_type = "TMetadata | null")] metadata: Option<Json>,
 ) -> Result<()> {
     let timestamp = parse_timestamp_micros(timestamp)?;
     with_effective_scope_stack(&env, || {
@@ -1664,17 +1700,21 @@ pub fn pop_scope(
 ///
 /// Returns a Promise that resolves with the callback's return value.
 #[allow(clippy::too_many_arguments)]
-#[napi(ts_return_type = "Promise<unknown>", catch_unwind)]
+#[napi(
+    ts_generic_types = "T extends JsonCompatible<T> | void = Json, TData extends JsonCompatible<TData> = Json, TMetadata extends JsonCompatible<TMetadata> = Json, TInput extends JsonCompatible<TInput> = Json",
+    ts_return_type = "Promise<T extends void ? null : T>",
+    catch_unwind
+)]
 pub fn with_scope<'env>(
     env: &'env Env,
     name: String,
     scope_type: ScopeType,
-    #[napi(ts_arg_type = "(...args: any[]) => any")] callback: Callback,
+    #[napi(ts_arg_type = "(handle: ScopeHandle) => T | Promise<T>")] callback: Callback,
     handle: Option<&ScopeHandle>,
     attributes: Option<u32>,
-    data: Option<Json>,
-    metadata: Option<Json>,
-    input: Option<Json>,
+    #[napi(ts_arg_type = "TData | null")] data: Option<Json>,
+    #[napi(ts_arg_type = "TMetadata | null")] metadata: Option<Json>,
+    #[napi(ts_arg_type = "TInput | null")] input: Option<Json>,
 ) -> Result<PromiseRaw<'env, Json>> {
     let attrs = ScopeAttributes::from_bits_truncate(attributes.unwrap_or(0));
     let context = CallContext::capture(env)?;
@@ -1739,14 +1779,17 @@ pub fn with_scope<'env>(
 /// It must be a safe integer number; omit it to use the current runtime time.
 /// Optional `dataSchema` identifies the shape of `data`; `severity` supplies the
 /// typed severity used by OpenTelemetry log exporters.
-#[napi(catch_unwind)]
+#[napi(
+    ts_generic_types = "TData extends JsonCompatible<TData> = Json, TMetadata extends JsonCompatible<TMetadata> = Json",
+    catch_unwind
+)]
 #[allow(clippy::too_many_arguments)]
 pub fn event(
     env: Env,
     name: String,
     handle: Option<&ScopeHandle>,
-    data: Option<Json>,
-    metadata: Option<Json>,
+    #[napi(ts_arg_type = "TData | null")] data: Option<Json>,
+    #[napi(ts_arg_type = "TMetadata | null")] metadata: Option<Json>,
     timestamp: Option<f64>,
     data_schema: Option<DataSchema>,
     severity: Option<LogSeverity>,
@@ -1773,13 +1816,16 @@ pub fn event(
 /// `name` is the metric mark name. Every measurement is validated before any
 /// event is published. Optional `handle`, `metadata`, and microsecond `timestamp`
 /// have the same behavior as the corresponding `event` parameters.
-#[napi(catch_unwind)]
+#[napi(
+    ts_generic_types = "TMeasurements extends MetricMeasurementsCompatible<TMeasurements>, TMetadata extends JsonCompatible<TMetadata> = Json",
+    catch_unwind
+)]
 pub fn metric(
     env: Env,
     name: String,
-    measurements: Vec<MetricMeasurement>,
+    #[napi(ts_arg_type = "TMeasurements")] measurements: Vec<MetricMeasurement>,
     handle: Option<&ScopeHandle>,
-    metadata: Option<Json>,
+    #[napi(ts_arg_type = "TMetadata | null")] metadata: Option<Json>,
     timestamp: Option<f64>,
 ) -> Result<()> {
     let timestamp = parse_timestamp_micros(timestamp)?;
@@ -1808,16 +1854,19 @@ pub fn metric(
 /// tool event category profile. Optional `timestamp` is a Unix timestamp in
 /// microseconds recorded as the handle start time and start event timestamp. It must
 /// be a safe integer number; omit it to use the current runtime time.
-#[napi(catch_unwind)]
+#[napi(
+    ts_generic_types = "TArgs extends JsonCompatible<TArgs>, TData extends JsonCompatible<TData> = Json, TMetadata extends JsonCompatible<TMetadata> = Json",
+    catch_unwind
+)]
 #[allow(clippy::too_many_arguments)]
 pub fn tool_call(
     env: Env,
     name: String,
-    args: Json,
+    #[napi(ts_arg_type = "TArgs")] args: Json,
     handle: Option<&ScopeHandle>,
     attributes: Option<u32>,
-    data: Option<Json>,
-    metadata: Option<Json>,
+    #[napi(ts_arg_type = "TData | null")] data: Option<Json>,
+    #[napi(ts_arg_type = "TMetadata | null")] metadata: Option<Json>,
     tool_call_id: Option<String>,
     timestamp: Option<f64>,
 ) -> Result<ToolHandle> {
@@ -1849,13 +1898,16 @@ pub fn tool_call(
 /// sanitized result is JSON null, and optional `metadata` is recorded on the end event.
 /// Optional `timestamp` is a Unix timestamp in microseconds recorded on the end event.
 /// It must be a safe integer number; omit it to use the runtime default end timestamp.
-#[napi(catch_unwind)]
+#[napi(
+    ts_generic_types = "TResult extends ToolExecutionResultCompatible<TResult>, TData extends JsonCompatible<TData> = Json, TMetadata extends JsonCompatible<TMetadata> = Json",
+    catch_unwind
+)]
 pub fn tool_call_end(
     env: Env,
     handle: &ToolHandle,
-    result: ToolExecutionResult,
-    data: Option<Json>,
-    metadata: Option<Json>,
+    #[napi(ts_arg_type = "TResult")] result: ToolExecutionResult,
+    #[napi(ts_arg_type = "TData | null")] data: Option<Json>,
+    #[napi(ts_arg_type = "TMetadata | null")] metadata: Option<Json>,
     timestamp: Option<f64>,
 ) -> Result<()> {
     let timestamp = parse_timestamp_micros(timestamp)?;
@@ -1875,25 +1927,36 @@ pub fn tool_call_end(
 
 /// Execute a tool call end-to-end with full lifecycle management.
 ///
-/// Runs conditional-execution guardrails (on raw args) → request intercepts →
-/// sanitize-request guardrails for the emitted `Start` event payload →
-/// execution intercepts → `func` → sanitize-response guardrails for the emitted
-/// `End` event payload. On rejection, only a standalone Mark event is emitted
-/// (no Start/End pair) and `GuardrailRejected` is returned. Returns the final
-/// execution result; sanitize guardrails do not rewrite the caller-visible value.
-/// An optional trailing `toolCallId` is recorded in both lifecycle events.
+/// By default, this call runs these stages:
+///
+/// 1. Check conditional-execution guardrails on the original input.
+/// 2. Apply request intercepts.
+/// 3. Sanitize the request copy in the `Start` event.
+/// 4. Run execution intercepts around `func`.
+/// 5. Sanitize the response copy in the `End` event.
+///
+/// If a guardrail rejects the call, Relay emits a standalone Mark event.
+/// It does not emit a Start/End pair. The call returns `GuardrailRejected`.
+/// Sanitizers change event data. They do not change the result returned to the caller.
+/// An optional `toolCallId` is recorded in both lifecycle events.
+/// Use the last `executionOptions` argument to choose which stages run for this call.
 #[allow(clippy::too_many_arguments)]
-#[napi(ts_return_type = "Promise<ToolExecutionResult>", catch_unwind)]
+#[napi(
+    ts_generic_types = "TArgs extends JsonCompatible<TArgs>, TResult extends ToolExecutionResultCompatible<TResult>, TData extends JsonCompatible<TData> = Json, TMetadata extends JsonCompatible<TMetadata> = Json",
+    ts_return_type = "Promise<ToolExecutionResult>",
+    catch_unwind
+)]
 pub fn tool_call_execute<'env>(
     env: &'env Env,
     name: String,
-    args: Json,
-    #[napi(ts_arg_type = "(arg: Json) => ToolExecutionResult")] func: Callback,
+    #[napi(ts_arg_type = "TArgs")] args: Json,
+    #[napi(ts_arg_type = "(arg: Json) => TResult")] func: Callback,
     handle: Option<&ScopeHandle>,
     attributes: Option<u32>,
-    data: Option<Json>,
-    metadata: Option<Json>,
+    #[napi(ts_arg_type = "TData | null")] data: Option<Json>,
+    #[napi(ts_arg_type = "TMetadata | null")] metadata: Option<Json>,
     tool_call_id: Option<String>,
+    execution_options: Option<ExecutionOptions>,
 ) -> Result<PromiseRaw<'env, ToolExecutionResult>> {
     let func = scoped_fn(
         env,
@@ -1912,6 +1975,7 @@ pub fn tool_call_execute<'env>(
         data,
         metadata,
         tool_call_id,
+        execution_options,
     )
 }
 
@@ -1926,7 +1990,9 @@ fn execute_tool_call<'env>(
     data: Option<Json>,
     metadata: Option<Json>,
     tool_call_id: Option<String>,
+    execution_options: Option<ExecutionOptions>,
 ) -> Result<PromiseRaw<'env, ToolExecutionResult>> {
+    let execution_options = execution_options.map(Into::into).unwrap_or_default();
     let attrs = ToolAttributes::from_bits_truncate(attributes.unwrap_or(0));
     let context = CallContext::capture(env)?;
     let parent = context.parent(handle);
@@ -1938,6 +2004,7 @@ fn execute_tool_call<'env>(
                     .name(name)
                     .args(args)
                     .func(func)
+                    .execution_options(execution_options)
                     .parent(parent)
                     .attributes(attrs)
                     .data_opt(opt_json(data))
@@ -1955,23 +2022,27 @@ fn execute_tool_call<'env>(
 
 /// Execute a tool call end-to-end with a callback that returns a value or a Promise.
 ///
-/// Runs the same lifecycle as `toolCallExecute`. An optional trailing `toolCallId` is
+/// Runs the same lifecycle as `toolCallExecute`. An optional `toolCallId` is
 /// recorded in both lifecycle events.
+/// Use the last `executionOptions` argument to choose which stages run for this call.
 #[allow(clippy::too_many_arguments)]
-#[napi(ts_return_type = "Promise<ToolExecutionResult>", catch_unwind)]
+#[napi(
+    ts_generic_types = "TArgs extends JsonCompatible<TArgs>, TResult extends ToolExecutionResultCompatible<TResult>, TData extends JsonCompatible<TData> = Json, TMetadata extends JsonCompatible<TMetadata> = Json",
+    ts_return_type = "Promise<ToolExecutionResult>",
+    catch_unwind
+)]
 pub fn tool_call_execute_async<'env>(
     env: &'env Env,
     name: String,
-    args: Json,
-    #[napi(
-        ts_arg_type = "(arg: Json, signal: AbortSignal) => ToolExecutionResult | Promise<ToolExecutionResult>"
-    )]
+    #[napi(ts_arg_type = "TArgs")] args: Json,
+    #[napi(ts_arg_type = "(arg: Json, signal: AbortSignal) => TResult | Promise<TResult>")]
     func: Callback,
     handle: Option<&ScopeHandle>,
     attributes: Option<u32>,
-    data: Option<Json>,
-    metadata: Option<Json>,
+    #[napi(ts_arg_type = "TData | null")] data: Option<Json>,
+    #[napi(ts_arg_type = "TMetadata | null")] metadata: Option<Json>,
     tool_call_id: Option<String>,
+    execution_options: Option<ExecutionOptions>,
 ) -> Result<PromiseRaw<'env, ToolExecutionResult>> {
     let pa_fn = Arc::new(PromiseAwareFn::new(env, &func)?);
     let func: ToolExecutionNextFn = Arc::new(move |args| {
@@ -1991,6 +2062,7 @@ pub fn tool_call_execute_async<'env>(
         data,
         metadata,
         tool_call_id,
+        execution_options,
     )
 }
 
@@ -2012,19 +2084,25 @@ pub fn tool_call_execute_async<'env>(
 /// If `codecDecode` throws or returns an invalid value, Relay skips the annotation, still
 /// publishes the event, and records the error for `getLastCallbackError()`.
 #[allow(clippy::too_many_arguments)]
-#[napi(catch_unwind)]
+#[napi(
+    ts_generic_types = "TRequest extends LlmRequestCompatible<TRequest>, TData extends JsonCompatible<TData> = Json, TMetadata extends JsonCompatible<TMetadata> = Json, TAnnotated extends JsonCompatible<TAnnotated> = Json, TEncoded extends LlmRequestCompatible<TEncoded> = LlmRequestShape",
+    catch_unwind
+)]
 pub fn llm_call(
     env: Env,
     name: String,
-    request: Json,
+    #[napi(ts_arg_type = "TRequest")] request: Json,
     handle: Option<&ScopeHandle>,
     attributes: Option<u32>,
-    data: Option<Json>,
-    metadata: Option<Json>,
+    #[napi(ts_arg_type = "TData | null")] data: Option<Json>,
+    #[napi(ts_arg_type = "TMetadata | null")] metadata: Option<Json>,
     model_name: Option<String>,
     timestamp: Option<f64>,
-    #[napi(ts_arg_type = "(arg: Json) => any")] codec_decode: Option<Callback>,
-    #[napi(ts_arg_type = "(arg: Json) => any")] codec_encode: Option<Callback>,
+    #[napi(ts_arg_type = "(request: LlmRequestShape) => TAnnotated")] codec_decode: Option<
+        Callback,
+    >,
+    #[napi(ts_arg_type = "(arg: { annotated: Json; original: LlmRequestShape }) => TEncoded")]
+    codec_encode: Option<Callback>,
 ) -> Result<LlmHandle> {
     let attrs = LlmAttributes::from_bits_truncate(attributes.unwrap_or(0));
     let timestamp = parse_timestamp_micros(timestamp)?;
@@ -2054,13 +2132,16 @@ pub fn llm_call(
 /// sanitized response is JSON null, and optional `metadata` is recorded on the end event.
 /// Optional `timestamp` is a Unix timestamp in microseconds recorded on the end event.
 /// It must be a safe integer number; omit it to use the runtime default end timestamp.
-#[napi(catch_unwind)]
+#[napi(
+    ts_generic_types = "TResponse extends JsonCompatible<TResponse>, TData extends JsonCompatible<TData> = Json, TMetadata extends JsonCompatible<TMetadata> = Json",
+    catch_unwind
+)]
 pub fn llm_call_end(
     env: Env,
     handle: &LlmHandle,
-    response: Json,
-    data: Option<Json>,
-    metadata: Option<Json>,
+    #[napi(ts_arg_type = "TResponse")] response: Json,
+    #[napi(ts_arg_type = "TData | null")] data: Option<Json>,
+    #[napi(ts_arg_type = "TMetadata | null")] metadata: Option<Json>,
     timestamp: Option<f64>,
 ) -> Result<()> {
     let timestamp = parse_timestamp_micros(timestamp)?;
@@ -2080,30 +2161,45 @@ pub fn llm_call_end(
 
 /// Execute an LLM call end-to-end with full lifecycle management.
 ///
-/// Runs conditional-execution guardrails (on raw request) → request intercepts →
-/// sanitize-request guardrails for the emitted `Start` event payload →
-/// execution intercepts → `func` → sanitize-response guardrails for the emitted
-/// `End` event payload. On rejection, only a standalone Mark event is emitted
-/// (no Start/End pair) and `GuardrailRejected` is returned. The `request`
-/// should be a JSON object with `headers` and `content` fields matching the
-/// `LlmRequest` schema. Returns the final execution response; sanitize
-/// guardrails do not rewrite the caller-visible value.
+/// By default, this call runs these stages:
+///
+/// 1. Check conditional-execution guardrails on the original input.
+/// 2. Apply request intercepts.
+/// 3. Sanitize the request copy in the `Start` event.
+/// 4. Run execution intercepts around `func`.
+/// 5. Sanitize the response copy in the `End` event.
+///
+/// If a guardrail rejects the call, Relay emits a standalone Mark event.
+/// It does not emit a Start/End pair. The call returns `GuardrailRejected`.
+/// Sanitizers change event data. They do not change the result returned to the caller.
+/// Pass a JSON object with `headers` and `content` fields in `request`.
 /// Supply `codecDecode` and `codecEncode` together or omit both.
+/// Use the last `executionOptions` argument to choose which stages run for this call.
 #[allow(clippy::too_many_arguments)]
-#[napi(ts_return_type = "Promise<unknown>", catch_unwind)]
+#[napi(
+    ts_generic_types = "TRequest extends LlmRequestCompatible<TRequest>, TResponse extends JsonCompatible<TResponse>, TData extends JsonCompatible<TData> = Json, TMetadata extends JsonCompatible<TMetadata> = Json, TAnnotated extends JsonCompatible<TAnnotated> = Json, TEncoded extends LlmRequestCompatible<TEncoded> = LlmRequestShape, TDecodedResponse extends JsonCompatible<TDecodedResponse> = Json",
+    ts_return_type = "Promise<Json>",
+    catch_unwind
+)]
 pub fn llm_call_execute<'env>(
     env: &'env Env,
     name: String,
-    request: Json,
-    #[napi(ts_arg_type = "(arg: Json) => any")] func: Callback,
+    #[napi(ts_arg_type = "TRequest")] request: Json,
+    #[napi(ts_arg_type = "(request: LlmRequestShape) => TResponse")] func: Callback,
     handle: Option<&ScopeHandle>,
     attributes: Option<u32>,
-    data: Option<Json>,
-    metadata: Option<Json>,
+    #[napi(ts_arg_type = "TData | null")] data: Option<Json>,
+    #[napi(ts_arg_type = "TMetadata | null")] metadata: Option<Json>,
     model_name: Option<String>,
-    #[napi(ts_arg_type = "(arg: Json) => any")] codec_decode: Option<Callback>,
-    #[napi(ts_arg_type = "(arg: Json) => any")] codec_encode: Option<Callback>,
-    #[napi(ts_arg_type = "(arg: Json) => any")] response_codec_decode: Option<Callback>,
+    #[napi(ts_arg_type = "(request: LlmRequestShape) => TAnnotated")] codec_decode: Option<
+        Callback,
+    >,
+    #[napi(ts_arg_type = "(arg: { annotated: Json; original: LlmRequestShape }) => TEncoded")]
+    codec_encode: Option<Callback>,
+    #[napi(ts_arg_type = "(response: Json) => TDecodedResponse")] response_codec_decode: Option<
+        Callback,
+    >,
+    execution_options: Option<ExecutionOptions>,
 ) -> Result<PromiseRaw<'env, Json>> {
     let request: LlmRequest = parse_json(request, "LlmRequest")?;
     let func = scoped_fn(
@@ -2126,6 +2222,7 @@ pub fn llm_call_execute<'env>(
         codec_decode,
         codec_encode,
         response_codec_decode,
+        execution_options,
     )
 }
 
@@ -2143,7 +2240,9 @@ fn execute_llm_call<'env>(
     codec_decode: Option<Callback>,
     codec_encode: Option<Callback>,
     response_codec_decode: Option<Callback>,
+    execution_options: Option<ExecutionOptions>,
 ) -> Result<PromiseRaw<'env, Json>> {
+    let execution_options = execution_options.map(Into::into).unwrap_or_default();
     let attrs = LlmAttributes::from_bits_truncate(attributes.unwrap_or(0));
     let context = CallContext::capture(env)?;
     let parent = context.parent(handle);
@@ -2156,6 +2255,7 @@ fn execute_llm_call<'env>(
                 .name(name)
                 .request(request)
                 .func(func)
+                .execution_options(execution_options)
                 .parent(parent)
                 .attributes(attrs)
                 .data_opt(opt_json(data))
@@ -2176,21 +2276,35 @@ fn execute_llm_call<'env>(
 ///
 /// Runs the same lifecycle as `llmCallExecute`. Supply `codecDecode` and `codecEncode`
 /// together or omit both.
+/// Use the last `executionOptions` argument to choose which stages run for this call.
 #[allow(clippy::too_many_arguments)]
-#[napi(ts_return_type = "Promise<unknown>", catch_unwind)]
+#[napi(
+    ts_generic_types = "TRequest extends LlmRequestCompatible<TRequest>, TResponse extends JsonCompatible<TResponse>, TData extends JsonCompatible<TData> = Json, TMetadata extends JsonCompatible<TMetadata> = Json, TAnnotated extends JsonCompatible<TAnnotated> = Json, TEncoded extends LlmRequestCompatible<TEncoded> = LlmRequestShape, TDecodedResponse extends JsonCompatible<TDecodedResponse> = Json",
+    ts_return_type = "Promise<Json>",
+    catch_unwind
+)]
 pub fn llm_call_execute_async<'env>(
     env: &'env Env,
     name: String,
-    request: Json,
-    #[napi(ts_arg_type = "(...args: any[]) => any")] func: Callback,
+    #[napi(ts_arg_type = "TRequest")] request: Json,
+    #[napi(
+        ts_arg_type = "(request: LlmRequestShape, signal: AbortSignal) => TResponse | Promise<TResponse>"
+    )]
+    func: Callback,
     handle: Option<&ScopeHandle>,
     attributes: Option<u32>,
-    data: Option<Json>,
-    metadata: Option<Json>,
+    #[napi(ts_arg_type = "TData | null")] data: Option<Json>,
+    #[napi(ts_arg_type = "TMetadata | null")] metadata: Option<Json>,
     model_name: Option<String>,
-    #[napi(ts_arg_type = "(arg: Json) => any")] codec_decode: Option<Callback>,
-    #[napi(ts_arg_type = "(arg: Json) => any")] codec_encode: Option<Callback>,
-    #[napi(ts_arg_type = "(arg: Json) => any")] response_codec_decode: Option<Callback>,
+    #[napi(ts_arg_type = "(request: LlmRequestShape) => TAnnotated")] codec_decode: Option<
+        Callback,
+    >,
+    #[napi(ts_arg_type = "(arg: { annotated: Json; original: LlmRequestShape }) => TEncoded")]
+    codec_encode: Option<Callback>,
+    #[napi(ts_arg_type = "(response: Json) => TDecodedResponse")] response_codec_decode: Option<
+        Callback,
+    >,
+    execution_options: Option<ExecutionOptions>,
 ) -> Result<PromiseRaw<'env, Json>> {
     let request: LlmRequest = parse_json(request, "LlmRequest")?;
     let pa_fn = Arc::new(PromiseAwareFn::new(env, &func)?);
@@ -2215,12 +2329,13 @@ pub fn llm_call_execute_async<'env>(
         codec_decode,
         codec_encode,
         response_codec_decode,
+        execution_options,
     )
 }
 
 /// Execute a streaming LLM call end-to-end with full lifecycle management.
 ///
-/// Like `llmCallExecute`, conditional-execution guardrails run first on the raw request.
+/// By default, conditional-execution guardrails run first on the raw request.
 /// Sanitize-request guardrails only affect the emitted `Start` event payload, and
 /// sanitize-response guardrails only affect the aggregated `End` event payload.
 /// Returns an `LlmStream` whose `next()` method yields response chunks incrementally.
@@ -2238,27 +2353,39 @@ pub fn llm_call_execute_async<'env>(
 /// the finalizer throws or rejects, the aggregated response is `null`. Consumers that
 /// stop reading early must await `stream.close()`, which aborts the signal and waits
 /// for producer cleanup. Supply `codecDecode` and `codecEncode` together or omit both.
+/// Use the last `executionOptions` argument to choose which stages run for this call.
 #[allow(clippy::too_many_arguments)]
-#[napi(ts_return_type = "Promise<LlmStream>", catch_unwind)]
+#[napi(
+    ts_generic_types = "TRequest extends LlmRequestCompatible<TRequest>, TChunk extends JsonCompatible<TChunk>, TAggregate extends JsonCompatible<TAggregate> = Json, TData extends JsonCompatible<TData> = Json, TMetadata extends JsonCompatible<TMetadata> = Json, TAnnotated extends JsonCompatible<TAnnotated> = Json, TEncoded extends LlmRequestCompatible<TEncoded> = LlmRequestShape, TDecodedResponse extends JsonCompatible<TDecodedResponse> = Json",
+    ts_return_type = "Promise<LlmStream>",
+    catch_unwind
+)]
 pub fn llm_stream_call_execute<'env>(
     env: &'env Env,
     name: String,
-    request: Json,
+    #[napi(ts_arg_type = "TRequest")] request: Json,
     #[napi(
-        ts_arg_type = "(request: Json, signal: AbortSignal) => AsyncIterable<Json> | Promise<AsyncIterable<Json>>"
+        ts_arg_type = "(request: LlmRequestShape, signal: AbortSignal) => AsyncIterable<TChunk> | Promise<AsyncIterable<TChunk>>"
     )]
     func: Callback,
     #[napi(ts_arg_type = "(chunk: Json) => void | Promise<void>")] collector: Option<Callback>,
-    #[napi(ts_arg_type = "() => Json | Promise<Json>")] finalizer: Option<Callback>,
+    #[napi(ts_arg_type = "() => TAggregate | Promise<TAggregate>")] finalizer: Option<Callback>,
     handle: Option<&ScopeHandle>,
     attributes: Option<u32>,
-    data: Option<Json>,
-    metadata: Option<Json>,
+    #[napi(ts_arg_type = "TData | null")] data: Option<Json>,
+    #[napi(ts_arg_type = "TMetadata | null")] metadata: Option<Json>,
     model_name: Option<String>,
-    #[napi(ts_arg_type = "(arg: Json) => any")] codec_decode: Option<Callback>,
-    #[napi(ts_arg_type = "(arg: Json) => any")] codec_encode: Option<Callback>,
-    #[napi(ts_arg_type = "(arg: Json) => any")] response_codec_decode: Option<Callback>,
+    #[napi(ts_arg_type = "(request: LlmRequestShape) => TAnnotated")] codec_decode: Option<
+        Callback,
+    >,
+    #[napi(ts_arg_type = "(arg: { annotated: Json; original: LlmRequestShape }) => TEncoded")]
+    codec_encode: Option<Callback>,
+    #[napi(ts_arg_type = "(response: Json) => TDecodedResponse")] response_codec_decode: Option<
+        Callback,
+    >,
+    execution_options: Option<ExecutionOptions>,
 ) -> Result<PromiseRaw<'env, LlmStream>> {
+    let execution_options = execution_options.map(Into::into).unwrap_or_default();
     let attrs = LlmAttributes::from_bits_truncate(attributes.unwrap_or(0));
     let context = CallContext::capture(env)?;
     let parent = context.parent(handle);
@@ -2291,6 +2418,7 @@ pub fn llm_stream_call_execute<'env>(
                 .name(name)
                 .request(llm_request)
                 .func(default_fn)
+                .execution_options(execution_options)
                 .collector(wrapped_collector)
                 .finalizer(wrapped_finalizer)
                 .parent(parent)
@@ -2410,6 +2538,7 @@ mirror_fields!(
 pub fn register_conditional_middleware_guardrail(
     env: Env,
     name: String,
+    #[napi(ts_arg_type = "Array<RuntimeRegistrationKind | RuntimeRegistrationKindName>")]
     kinds: Vec<RuntimeRegistrationKind>,
     registration_name: String,
     #[napi(
@@ -2434,9 +2563,15 @@ pub fn deregister_conditional_middleware_guardrail(name: String) -> Result<bool>
 }
 
 /// List global gateable runtime registrations.
-#[napi(catch_unwind)]
+#[napi(
+    ts_generic_types = "K extends RuntimeRegistrationKind | RuntimeRegistrationKindName = RuntimeRegistrationKind",
+    ts_return_type = "Array<RuntimeRegistrationIdentity & { kind: K extends RuntimeRegistrationKind ? K : Extract<RuntimeRegistrationKind, K> }>",
+    catch_unwind
+)]
 pub fn list_runtime_registrations(
-    kinds: Option<Vec<RuntimeRegistrationKind>>,
+    #[napi(ts_arg_type = "Array<K> | undefined | null")] kinds: Option<
+        Vec<RuntimeRegistrationKind>,
+    >,
 ) -> Result<Vec<RuntimeRegistrationIdentity>> {
     let selected = kinds.map(|kinds| kinds.into_iter().map(Into::into).collect::<BTreeSet<_>>());
     let registrations =
@@ -2444,11 +2579,23 @@ pub fn list_runtime_registrations(
     Ok(registrations.into_iter().map(Into::into).collect())
 }
 
+macro_rules! registration_function {
+    ([] $item:item) => {
+        #[napi(catch_unwind)]
+        $item
+    };
+    ([$generics:literal] $item:item) => {
+        #[napi(ts_generic_types = $generics, catch_unwind)]
+        $item
+    };
+}
+
 macro_rules! registration_api {
     ($(
         $(#[$register_meta:meta])*
         fn $register:ident(
             $callback:ident: $ts_arg_type:literal
+            $(, generics: $generics:literal)?
             $(, scope: $scope_uuid:ident)?
             $(, chain: $break_chain:ident)?
             $(, plugin: $plugin_method:ident($property:literal, $label:literal))?
@@ -2457,24 +2604,26 @@ macro_rules! registration_api {
         fn $deregister:ident => $core_deregister:path;
     )*) => {
         $(
-            $(#[$register_meta])*
-            #[napi(catch_unwind)]
-            pub fn $register(
-                env: Env,
-                $($scope_uuid: String,)?
-                name: String,
-                priority: i32,
-                $($break_chain: bool,)?
-                #[napi(ts_arg_type = $ts_arg_type)] $callback: Callback,
-            ) -> Result<()> {
-                $core_register(
-                    $(&parse_uuid(&$scope_uuid, "UUID")?,)?
-                    &name,
-                    priority,
-                    $($break_chain,)?
-                    $wrap(&env, &$callback)?,
-                )
-                .map_err(Error::from)
+            registration_function! {
+                [$($generics)?]
+                $(#[$register_meta])*
+                pub fn $register(
+                    env: Env,
+                    $($scope_uuid: String,)?
+                    name: String,
+                    priority: i32,
+                    $($break_chain: bool,)?
+                    #[napi(ts_arg_type = $ts_arg_type)] $callback: Callback,
+                ) -> Result<()> {
+                    $core_register(
+                        $(&parse_uuid(&$scope_uuid, "UUID")?,)?
+                        &name,
+                        priority,
+                        $($break_chain,)?
+                        $wrap(&env, &$callback)?,
+                    )
+                    .map_err(Error::from)
+                }
             }
 
             $(#[$deregister_meta])*
@@ -2500,7 +2649,7 @@ registration_api! {
     #[doc = " The callback receives an immutable event snapshot and may return additions"]
     #[doc = " directly or in a Promise. Relay validates and merges accepted additions"]
     #[doc = " before event sanitizers run."]
-    fn register_event_metadata_injector(injector: "(event: Json) => EventMetadata | Promise<EventMetadata>", plugin: method("registerEventMetadataInjector", "event metadata injector"))
+    fn register_event_metadata_injector(injector: "(event: JsonObject) => TMetadata | Promise<TMetadata>", generics: "TMetadata extends EventMetadataCompatible<TMetadata>", plugin: method("registerEventMetadataInjector", "event metadata injector"))
         = callable::wrap_js_event_metadata_injector_promise_fn => core_registry_api::register_event_metadata_injector;
     #[doc = " Deregister a global event metadata injector by name."]
     fn deregister_event_metadata_injector => core_registry_api::deregister_event_metadata_injector;
@@ -2513,7 +2662,7 @@ registration_api! {
     #[doc = " failures clear the emitted event fields and record the error for"]
     #[doc = " `getLastCallbackError()`. Await `flushSubscribers()` before inspecting"]
     #[doc = " either the delivered event or that error."]
-    fn register_mark_sanitize_guardrail(guardrail: "(event: Json, fields: EventSanitizeFields) => EventSanitizeFields | Promise<EventSanitizeFields>", plugin: method("registerMarkSanitizeGuardrail", "mark sanitize guardrail"))
+    fn register_mark_sanitize_guardrail(guardrail: "(event: JsonObject, fields: EventSanitizeFields) => TFields | Promise<TFields>", generics: "TFields extends EventSanitizeFieldsCompatible<TFields>", plugin: method("registerMarkSanitizeGuardrail", "mark sanitize guardrail"))
         = callable::wrap_js_event_sanitize_promise_fn => core_registry_api::register_mark_sanitize_guardrail;
     fn deregister_mark_sanitize_guardrail => core_registry_api::deregister_mark_sanitize_guardrail;
 
@@ -2525,7 +2674,7 @@ registration_api! {
     #[doc = " failures clear the emitted event fields and record the error for"]
     #[doc = " `getLastCallbackError()`. Await `flushSubscribers()` before inspecting"]
     #[doc = " either the delivered event or that error."]
-    fn register_scope_sanitize_start_guardrail(guardrail: "(event: Json, fields: EventSanitizeFields) => EventSanitizeFields | Promise<EventSanitizeFields>", plugin: method("registerScopeSanitizeStartGuardrail", "scope start sanitize guardrail"))
+    fn register_scope_sanitize_start_guardrail(guardrail: "(event: JsonObject, fields: EventSanitizeFields) => TFields | Promise<TFields>", generics: "TFields extends EventSanitizeFieldsCompatible<TFields>", plugin: method("registerScopeSanitizeStartGuardrail", "scope start sanitize guardrail"))
         = callable::wrap_js_event_sanitize_promise_fn => core_registry_api::register_scope_sanitize_start_guardrail;
     fn deregister_scope_sanitize_start_guardrail => core_registry_api::deregister_scope_sanitize_start_guardrail;
 
@@ -2537,7 +2686,7 @@ registration_api! {
     #[doc = " failures clear the emitted event fields and record the error for"]
     #[doc = " `getLastCallbackError()`. Await `flushSubscribers()` before inspecting"]
     #[doc = " either the delivered event or that error."]
-    fn register_scope_sanitize_end_guardrail(guardrail: "(event: Json, fields: EventSanitizeFields) => EventSanitizeFields | Promise<EventSanitizeFields>", plugin: method("registerScopeSanitizeEndGuardrail", "scope end sanitize guardrail"))
+    fn register_scope_sanitize_end_guardrail(guardrail: "(event: JsonObject, fields: EventSanitizeFields) => TFields | Promise<TFields>", generics: "TFields extends EventSanitizeFieldsCompatible<TFields>", plugin: method("registerScopeSanitizeEndGuardrail", "scope end sanitize guardrail"))
         = callable::wrap_js_event_sanitize_promise_fn => core_registry_api::register_scope_sanitize_end_guardrail;
     fn deregister_scope_sanitize_end_guardrail => core_registry_api::deregister_scope_sanitize_end_guardrail;
 
@@ -2547,7 +2696,7 @@ registration_api! {
     #[doc = " Higher `priority` values run first. Throws if a guardrail with the same `name` already exists."]
     #[doc = " If the callback throws, Relay omits the emitted payload and records the error"]
     #[doc = " for `getLastCallbackError()`."]
-    fn register_tool_sanitize_request_guardrail(guardrail: "(toolName: string, value: Json) => Json | Promise<Json>", plugin: method("registerToolSanitizeRequestGuardrail", "tool sanitize request guardrail"))
+    fn register_tool_sanitize_request_guardrail(guardrail: "(toolName: string, value: Json) => TValue | Promise<TValue>", generics: "TValue extends JsonCompatible<TValue>", plugin: method("registerToolSanitizeRequestGuardrail", "tool sanitize request guardrail"))
         = callable::wrap_js_tool_sanitize_promise_fn => core_registry_api::register_tool_sanitize_request_guardrail;
     #[doc = " Deregister a tool request sanitization guardrail by name."]
     #[doc = ""]
@@ -2560,7 +2709,7 @@ registration_api! {
     #[doc = " Higher `priority` values run first. Throws if a guardrail with the same `name` already exists."]
     #[doc = " If the callback throws, Relay omits the emitted payload and records the error"]
     #[doc = " for `getLastCallbackError()`."]
-    fn register_tool_sanitize_response_guardrail(guardrail: "(toolName: string, value: Json) => Json | Promise<Json>", plugin: method("registerToolSanitizeResponseGuardrail", "tool sanitize response guardrail"))
+    fn register_tool_sanitize_response_guardrail(guardrail: "(toolName: string, value: Json) => TValue | Promise<TValue>", generics: "TValue extends JsonCompatible<TValue>", plugin: method("registerToolSanitizeResponseGuardrail", "tool sanitize response guardrail"))
         = callable::wrap_js_tool_sanitize_promise_fn => core_registry_api::register_tool_sanitize_response_guardrail;
     #[doc = " Deregister a tool response sanitization guardrail by name."]
     #[doc = ""]
@@ -2584,7 +2733,7 @@ registration_api! {
     #[doc = " The `callable` receives `(toolName, args)` and returns transformed args. If `breakChain`"]
     #[doc = " is `true`, no lower-priority intercepts run after this one. Higher `priority` values run first."]
     #[doc = " If the callback throws, the managed call rejects and later middleware does not run."]
-    fn register_tool_request_intercept(callable: "(toolName: string, args: Json) => Json | Promise<Json>", chain: break_chain, plugin: chain_method("registerToolRequestIntercept", "tool request intercept"))
+    fn register_tool_request_intercept(callable: "(toolName: string, args: Json) => TArgs | Promise<TArgs>", generics: "TArgs extends JsonCompatible<TArgs>", chain: break_chain, plugin: chain_method("registerToolRequestIntercept", "tool request intercept"))
         = callable::wrap_js_tool_request_intercept_promise_fn => core_registry_api::register_tool_request_intercept;
     #[doc = " Deregister a tool request intercept by name."]
     #[doc = ""]
@@ -2598,7 +2747,7 @@ registration_api! {
     #[doc = " the managed call has no provider-issued correlation identifier. Call"]
     #[doc = " `next(context.args)` to continue the chain, or return an outcome directly"]
     #[doc = " to short-circuit execution."]
-    fn register_tool_execution_intercept(callable: "(context: ToolExecutionContext, next: (args: Json) => ToolExecutionResult | Promise<ToolExecutionResult>) => { result: Json; annotation?: Json; pendingMarks?: Array<PendingMarkSpec> } | Promise<{ result: Json; annotation?: Json; pendingMarks?: Array<PendingMarkSpec> }>", plugin: method("registerToolExecutionIntercept", "tool execution intercept"))
+    fn register_tool_execution_intercept(callable: "(context: ToolExecutionContext, next: <TNextArgs extends JsonCompatible<TNextArgs>>(args: TNextArgs) => ToolExecutionResult | Promise<ToolExecutionResult>) => TOutcome | Promise<TOutcome>", generics: "TOutcome extends ToolExecutionInterceptOutcomeCompatible<TOutcome>", plugin: method("registerToolExecutionIntercept", "tool execution intercept"))
         = callable::wrap_js_tool_exec_intercept_fn => core_registry_api::register_tool_execution_intercept;
     #[doc = " Deregister a tool execution intercept by name."]
     #[doc = ""]
@@ -2612,7 +2761,7 @@ registration_api! {
     #[doc = " or `null` to omit the observability payload. Lower `priority` values run first. Throws if a"]
     #[doc = " guardrail with the same `name` already exists. If the callback throws, Relay omits the payload"]
     #[doc = " and annotation, continues publication, and records the error for `getLastCallbackError()`."]
-    fn register_llm_sanitize_request_guardrail(guardrail: "(request: Json, context: LlmSanitizeRequestContext) => Json | null | Promise<Json | null>", plugin: method("registerLlmSanitizeRequestGuardrail", "llm sanitize request guardrail"))
+    fn register_llm_sanitize_request_guardrail(guardrail: "(request: LlmRequestShape, context: LlmSanitizeRequestContext) => TRequest | null | Promise<TRequest | null>", generics: "TRequest extends LlmRequestCompatible<TRequest> = LlmRequestShape", plugin: method("registerLlmSanitizeRequestGuardrail", "llm sanitize request guardrail"))
         = callable::wrap_js_llm_sanitize_request_promise_fn => core_registry_api::register_llm_sanitize_request_guardrail;
     #[doc = " Deregister an LLM request sanitization guardrail by name."]
     #[doc = ""]
@@ -2625,7 +2774,7 @@ registration_api! {
     #[doc = " or `null` to omit the observability payload. Lower `priority` values run first. Throws if a"]
     #[doc = " guardrail with the same `name` already exists. If the callback throws, Relay omits the payload"]
     #[doc = " and annotation, continues publication, and records the error for `getLastCallbackError()`."]
-    fn register_llm_sanitize_response_guardrail(guardrail: "(response: Json, context: LlmSanitizeResponseContext) => Json | null | Promise<Json | null>", plugin: method("registerLlmSanitizeResponseGuardrail", "llm sanitize response guardrail"))
+    fn register_llm_sanitize_response_guardrail(guardrail: "(response: Json, context: LlmSanitizeResponseContext) => TResponse | null | Promise<TResponse | null>", generics: "TResponse extends JsonCompatible<TResponse> = Json", plugin: method("registerLlmSanitizeResponseGuardrail", "llm sanitize response guardrail"))
         = callable::wrap_js_llm_sanitize_response_promise_fn => core_registry_api::register_llm_sanitize_response_guardrail;
     #[doc = " Deregister an LLM response sanitization guardrail by name."]
     #[doc = ""]
@@ -2637,7 +2786,7 @@ registration_api! {
     #[doc = " The `guardrail` callback receives the LLM request as JSON and must return `null` to allow"]
     #[doc = " execution or a rejection reason string to block it. Higher `priority` values run first."]
     #[doc = " If the callback throws, the managed call rejects and the protected callback does not run."]
-    fn register_llm_conditional_execution_guardrail(guardrail: "(request: Json) => string | null | Promise<string | null>", plugin: method("registerLlmConditionalExecutionGuardrail", "llm conditional execution guardrail"))
+    fn register_llm_conditional_execution_guardrail(guardrail: "(request: LlmRequestShape) => string | null | Promise<string | null>", plugin: method("registerLlmConditionalExecutionGuardrail", "llm conditional execution guardrail"))
         = callable::wrap_js_llm_conditional_promise_fn => core_registry_api::register_llm_conditional_execution_guardrail;
     #[doc = " Deregister an LLM conditional execution guardrail by name."]
     #[doc = ""]
@@ -2650,7 +2799,7 @@ registration_api! {
     #[doc = " If `breakChain` is `true`, no lower-priority intercepts run after this one."]
     #[doc = " Higher `priority` values run first."]
     #[doc = " If the callback throws, the managed call rejects and later middleware does not run."]
-    fn register_llm_request_intercept(callable: "(args: { name: string; request: Json; annotated: Json | null }) => LlmRequestInterceptOutcome | Promise<LlmRequestInterceptOutcome>", chain: break_chain, plugin: chain_method("registerLlmRequestIntercept", "llm request intercept"))
+    fn register_llm_request_intercept(callable: "(args: { name: string; request: LlmRequestShape; annotated: Json | null }) => TOutcome | Promise<TOutcome>", generics: "TOutcome extends LlmRequestInterceptOutcomeCompatible<TOutcome>", chain: break_chain, plugin: chain_method("registerLlmRequestIntercept", "llm request intercept"))
         = callable::wrap_js_llm_request_intercept_promise_fn => core_registry_api::register_llm_request_intercept;
     #[doc = " Deregister an LLM request intercept by name."]
     #[doc = ""]
@@ -2664,7 +2813,7 @@ registration_api! {
     #[doc = " `next` to short-circuit the chain. `next` may be called repeatedly or concurrently while"]
     #[doc = " `callable` is pending; each call receives an isolated scope-stack branch, and"]
     #[doc = " unfinished or later calls reject after `callable` settles."]
-    fn register_llm_execution_intercept(callable: "(request: Json, context: LlmExecutionContext, next: (request: Json) => Json | Promise<Json>) => Json | Promise<Json>", plugin: method("registerLlmExecutionIntercept", "llm execution intercept"))
+    fn register_llm_execution_intercept(callable: "(request: LlmRequestShape, context: LlmExecutionContext, next: <TNextRequest extends LlmRequestCompatible<TNextRequest>>(request: TNextRequest) => Json | Promise<Json>) => TResponse | Promise<TResponse>", generics: "TResponse extends JsonCompatible<TResponse>", plugin: method("registerLlmExecutionIntercept", "llm execution intercept"))
         = callable::wrap_js_llm_exec_intercept_fn => core_registry_api::register_llm_execution_intercept;
     #[doc = " Deregister an LLM execution intercept by name."]
     #[doc = ""]
@@ -2682,7 +2831,7 @@ registration_api! {
     #[doc = " while `callable` is pending; each call receives an isolated scope-stack branch,"]
     #[doc = " and unfinished or later calls reject after the returned interceptor stream settles."]
     #[doc = " A downstream stream returned successfully by `next` keeps its normal lifetime."]
-    fn register_llm_stream_execution_intercept(callable: "(request: Json, context: LlmExecutionContext, next: (request: Json) => Promise<AsyncIterable<Json>>) => AsyncIterable<Json> | Promise<AsyncIterable<Json>>", plugin: method("registerLlmStreamExecutionIntercept", "llm stream execution intercept"))
+    fn register_llm_stream_execution_intercept(callable: "(request: LlmRequestShape, context: LlmExecutionContext, next: <TNextRequest extends LlmRequestCompatible<TNextRequest>>(request: TNextRequest) => Promise<AsyncIterable<Json>>) => AsyncIterable<TChunk> | Promise<AsyncIterable<TChunk>>", generics: "TChunk extends JsonCompatible<TChunk>", plugin: method("registerLlmStreamExecutionIntercept", "llm stream execution intercept"))
         = callable::wrap_js_llm_stream_exec_intercept_fn => core_registry_api::register_llm_stream_execution_intercept;
     #[doc = " Deregister an LLM stream execution intercept by name."]
     #[doc = ""]
@@ -2690,7 +2839,7 @@ registration_api! {
     fn deregister_llm_stream_execution_intercept => core_registry_api::deregister_llm_stream_execution_intercept;
 
     #[doc = " Register an event metadata injector owned by an active scope."]
-    fn scope_register_event_metadata_injector(injector: "(event: Json) => EventMetadata | Promise<EventMetadata>", scope: scope_uuid)
+    fn scope_register_event_metadata_injector(injector: "(event: JsonObject) => TMetadata | Promise<TMetadata>", generics: "TMetadata extends EventMetadataCompatible<TMetadata>", scope: scope_uuid)
         = callable::wrap_js_event_metadata_injector_promise_fn => core_registry_api::scope_register_event_metadata_injector;
     #[doc = " Deregister a scope-local event metadata injector by name."]
     fn scope_deregister_event_metadata_injector => core_registry_api::scope_deregister_event_metadata_injector;
@@ -2703,7 +2852,7 @@ registration_api! {
     #[doc = " failures clear the emitted event fields and record the error for"]
     #[doc = " `getLastCallbackError()`. Await `flushSubscribers()` before inspecting"]
     #[doc = " either the delivered event or that error."]
-    fn scope_register_mark_sanitize_guardrail(guardrail: "(event: Json, fields: EventSanitizeFields) => EventSanitizeFields | Promise<EventSanitizeFields>", scope: scope_uuid)
+    fn scope_register_mark_sanitize_guardrail(guardrail: "(event: JsonObject, fields: EventSanitizeFields) => TFields | Promise<TFields>", generics: "TFields extends EventSanitizeFieldsCompatible<TFields>", scope: scope_uuid)
         = callable::wrap_js_event_sanitize_promise_fn => core_registry_api::scope_register_mark_sanitize_guardrail;
     fn scope_deregister_mark_sanitize_guardrail => core_registry_api::scope_deregister_mark_sanitize_guardrail;
 
@@ -2715,7 +2864,7 @@ registration_api! {
     #[doc = " failures clear the emitted event fields and record the error for"]
     #[doc = " `getLastCallbackError()`. Await `flushSubscribers()` before inspecting"]
     #[doc = " either the delivered event or that error."]
-    fn scope_register_scope_sanitize_start_guardrail(guardrail: "(event: Json, fields: EventSanitizeFields) => EventSanitizeFields | Promise<EventSanitizeFields>", scope: scope_uuid)
+    fn scope_register_scope_sanitize_start_guardrail(guardrail: "(event: JsonObject, fields: EventSanitizeFields) => TFields | Promise<TFields>", generics: "TFields extends EventSanitizeFieldsCompatible<TFields>", scope: scope_uuid)
         = callable::wrap_js_event_sanitize_promise_fn => core_registry_api::scope_register_scope_sanitize_start_guardrail;
     fn scope_deregister_scope_sanitize_start_guardrail => core_registry_api::scope_deregister_scope_sanitize_start_guardrail;
 
@@ -2727,7 +2876,7 @@ registration_api! {
     #[doc = " failures clear the emitted event fields and record the error for"]
     #[doc = " `getLastCallbackError()`. Await `flushSubscribers()` before inspecting"]
     #[doc = " either the delivered event or that error."]
-    fn scope_register_scope_sanitize_end_guardrail(guardrail: "(event: Json, fields: EventSanitizeFields) => EventSanitizeFields | Promise<EventSanitizeFields>", scope: scope_uuid)
+    fn scope_register_scope_sanitize_end_guardrail(guardrail: "(event: JsonObject, fields: EventSanitizeFields) => TFields | Promise<TFields>", generics: "TFields extends EventSanitizeFieldsCompatible<TFields>", scope: scope_uuid)
         = callable::wrap_js_event_sanitize_promise_fn => core_registry_api::scope_register_scope_sanitize_end_guardrail;
     fn scope_deregister_scope_sanitize_end_guardrail => core_registry_api::scope_deregister_scope_sanitize_end_guardrail;
 
@@ -2738,7 +2887,7 @@ registration_api! {
     #[doc = " on the specified scope."]
     #[doc = " If the callback throws, Relay omits the emitted payload and records the error"]
     #[doc = " for `getLastCallbackError()`."]
-    fn scope_register_tool_sanitize_request_guardrail(guardrail: "(toolName: string, value: Json) => Json | Promise<Json>", scope: scope_uuid)
+    fn scope_register_tool_sanitize_request_guardrail(guardrail: "(toolName: string, value: Json) => TValue | Promise<TValue>", generics: "TValue extends JsonCompatible<TValue>", scope: scope_uuid)
         = callable::wrap_js_tool_sanitize_promise_fn => core_registry_api::scope_register_tool_sanitize_request_guardrail;
     #[doc = " Deregister a scope-local tool request sanitization guardrail by name."]
     #[doc = ""]
@@ -2752,7 +2901,7 @@ registration_api! {
     #[doc = " on the specified scope."]
     #[doc = " If the callback throws, Relay omits the emitted payload and records the error"]
     #[doc = " for `getLastCallbackError()`."]
-    fn scope_register_tool_sanitize_response_guardrail(guardrail: "(toolName: string, value: Json) => Json | Promise<Json>", scope: scope_uuid)
+    fn scope_register_tool_sanitize_response_guardrail(guardrail: "(toolName: string, value: Json) => TValue | Promise<TValue>", generics: "TValue extends JsonCompatible<TValue>", scope: scope_uuid)
         = callable::wrap_js_tool_sanitize_promise_fn => core_registry_api::scope_register_tool_sanitize_response_guardrail;
     #[doc = " Deregister a scope-local tool response sanitization guardrail by name."]
     #[doc = ""]
@@ -2776,7 +2925,7 @@ registration_api! {
     #[doc = " The `callable` receives `(toolName, args)` and returns transformed args. If `breakChain`"]
     #[doc = " is `true`, no lower-priority intercepts run after this one. Higher `priority` values run first."]
     #[doc = " If the callback throws, the managed call rejects and later middleware does not run."]
-    fn scope_register_tool_request_intercept(callable: "(toolName: string, args: Json) => Json | Promise<Json>", scope: scope_uuid, chain: break_chain)
+    fn scope_register_tool_request_intercept(callable: "(toolName: string, args: Json) => TArgs | Promise<TArgs>", generics: "TArgs extends JsonCompatible<TArgs>", scope: scope_uuid, chain: break_chain)
         = callable::wrap_js_tool_request_intercept_promise_fn => core_registry_api::scope_register_tool_request_intercept;
     #[doc = " Deregister a scope-local tool request intercept by name."]
     #[doc = ""]
@@ -2790,7 +2939,7 @@ registration_api! {
     #[doc = " the managed call has no provider-issued correlation identifier. Call"]
     #[doc = " `next(context.args)` to continue the chain, or return an outcome directly"]
     #[doc = " to short-circuit execution."]
-    fn scope_register_tool_execution_intercept(callable: "(context: ToolExecutionContext, next: (args: Json) => ToolExecutionResult | Promise<ToolExecutionResult>) => { result: Json; annotation?: Json; pendingMarks?: Array<PendingMarkSpec> } | Promise<{ result: Json; annotation?: Json; pendingMarks?: Array<PendingMarkSpec> }>", scope: scope_uuid)
+    fn scope_register_tool_execution_intercept(callable: "(context: ToolExecutionContext, next: <TNextArgs extends JsonCompatible<TNextArgs>>(args: TNextArgs) => ToolExecutionResult | Promise<ToolExecutionResult>) => TOutcome | Promise<TOutcome>", generics: "TOutcome extends ToolExecutionInterceptOutcomeCompatible<TOutcome>", scope: scope_uuid)
         = callable::wrap_js_tool_exec_intercept_fn => core_registry_api::scope_register_tool_execution_intercept;
     #[doc = " Deregister a scope-local tool execution intercept by name."]
     #[doc = ""]
@@ -2806,7 +2955,7 @@ registration_api! {
     #[doc = " guardrail with the same `name` already exists on the specified scope. If the callback throws,"]
     #[doc = " Relay omits the payload and annotation, continues publication, and records the error for"]
     #[doc = " `getLastCallbackError()`."]
-    fn scope_register_llm_sanitize_request_guardrail(guardrail: "(request: Json, context: LlmSanitizeRequestContext) => Json | null | Promise<Json | null>", scope: scope_uuid)
+    fn scope_register_llm_sanitize_request_guardrail(guardrail: "(request: LlmRequestShape, context: LlmSanitizeRequestContext) => TRequest | null | Promise<TRequest | null>", generics: "TRequest extends LlmRequestCompatible<TRequest> = LlmRequestShape", scope: scope_uuid)
         = callable::wrap_js_llm_sanitize_request_promise_fn => core_registry_api::scope_register_llm_sanitize_request_guardrail;
     #[doc = " Deregister a scope-local LLM request sanitization guardrail by name."]
     #[doc = ""]
@@ -2820,7 +2969,7 @@ registration_api! {
     #[doc = " guardrail with the same `name` already exists on the specified scope. If the callback throws,"]
     #[doc = " Relay omits the payload and annotation, continues publication, and records the error for"]
     #[doc = " `getLastCallbackError()`."]
-    fn scope_register_llm_sanitize_response_guardrail(guardrail: "(response: Json, context: LlmSanitizeResponseContext) => Json | null | Promise<Json | null>", scope: scope_uuid)
+    fn scope_register_llm_sanitize_response_guardrail(guardrail: "(response: Json, context: LlmSanitizeResponseContext) => TResponse | null | Promise<TResponse | null>", generics: "TResponse extends JsonCompatible<TResponse> = Json", scope: scope_uuid)
         = callable::wrap_js_llm_sanitize_response_promise_fn => core_registry_api::scope_register_llm_sanitize_response_guardrail;
     #[doc = " Deregister a scope-local LLM response sanitization guardrail by name."]
     #[doc = ""]
@@ -2832,7 +2981,7 @@ registration_api! {
     #[doc = " The `guardrail` callback receives the LLM request as JSON and must return `null` to allow"]
     #[doc = " execution or a rejection reason string to block it. Higher `priority` values run first."]
     #[doc = " If the callback throws, the managed call rejects and the protected callback does not run."]
-    fn scope_register_llm_conditional_execution_guardrail(guardrail: "(request: Json) => string | null | Promise<string | null>", scope: scope_uuid)
+    fn scope_register_llm_conditional_execution_guardrail(guardrail: "(request: LlmRequestShape) => string | null | Promise<string | null>", scope: scope_uuid)
         = callable::wrap_js_llm_conditional_promise_fn => core_registry_api::scope_register_llm_conditional_execution_guardrail;
     #[doc = " Deregister a scope-local LLM conditional execution guardrail by name."]
     #[doc = ""]
@@ -2845,7 +2994,7 @@ registration_api! {
     #[doc = " If `breakChain` is `true`, no lower-priority intercepts run after this one."]
     #[doc = " Higher `priority` values run first."]
     #[doc = " If the callback throws, the managed call rejects and later middleware does not run."]
-    fn scope_register_llm_request_intercept(callable: "(args: { name: string; request: Json; annotated: Json | null }) => LlmRequestInterceptOutcome | Promise<LlmRequestInterceptOutcome>", scope: scope_uuid, chain: break_chain)
+    fn scope_register_llm_request_intercept(callable: "(args: { name: string; request: LlmRequestShape; annotated: Json | null }) => TOutcome | Promise<TOutcome>", generics: "TOutcome extends LlmRequestInterceptOutcomeCompatible<TOutcome>", scope: scope_uuid, chain: break_chain)
         = callable::wrap_js_llm_request_intercept_promise_fn => core_registry_api::scope_register_llm_request_intercept;
     #[doc = " Deregister a scope-local LLM request intercept by name."]
     #[doc = ""]
@@ -2859,7 +3008,7 @@ registration_api! {
     #[doc = " short-circuit the chain. `next` may be called repeatedly or concurrently while"]
     #[doc = " `callable` is pending; each call receives an isolated scope-stack branch, and"]
     #[doc = " unfinished or later calls reject after `callable` settles."]
-    fn scope_register_llm_execution_intercept(callable: "(request: Json, context: LlmExecutionContext, next: (request: Json) => Json | Promise<Json>) => Json | Promise<Json>", scope: scope_uuid)
+    fn scope_register_llm_execution_intercept(callable: "(request: LlmRequestShape, context: LlmExecutionContext, next: <TNextRequest extends LlmRequestCompatible<TNextRequest>>(request: TNextRequest) => Json | Promise<Json>) => TResponse | Promise<TResponse>", generics: "TResponse extends JsonCompatible<TResponse>", scope: scope_uuid)
         = callable::wrap_js_llm_exec_intercept_fn => core_registry_api::scope_register_llm_execution_intercept;
     #[doc = " Deregister a scope-local LLM execution intercept by name."]
     #[doc = ""]
@@ -2877,7 +3026,7 @@ registration_api! {
     #[doc = " while `callable` is pending; each call receives an isolated scope-stack branch,"]
     #[doc = " and unfinished or later calls reject after the returned interceptor stream settles."]
     #[doc = " A downstream stream returned successfully by `next` keeps its normal lifetime."]
-    fn scope_register_llm_stream_execution_intercept(callable: "(request: Json, context: LlmExecutionContext, next: (request: Json) => Promise<AsyncIterable<Json>>) => AsyncIterable<Json> | Promise<AsyncIterable<Json>>", scope: scope_uuid)
+    fn scope_register_llm_stream_execution_intercept(callable: "(request: LlmRequestShape, context: LlmExecutionContext, next: <TNextRequest extends LlmRequestCompatible<TNextRequest>>(request: TNextRequest) => Promise<AsyncIterable<Json>>) => AsyncIterable<TChunk> | Promise<AsyncIterable<TChunk>>", generics: "TChunk extends JsonCompatible<TChunk>", scope: scope_uuid)
         = callable::wrap_js_llm_stream_exec_intercept_fn => core_registry_api::scope_register_llm_stream_execution_intercept;
     #[doc = " Deregister a scope-local LLM stream execution intercept by name."]
     #[doc = ""]
@@ -2895,7 +3044,7 @@ registration_api! {
 pub fn register_subscriber(
     env: Env,
     name: String,
-    #[napi(ts_arg_type = "(event: Json) => void | Promise<void>")] callback: Callback,
+    #[napi(ts_arg_type = "(event: JsonObject) => void | Promise<void>")] callback: Callback,
 ) -> Result<()> {
     let callback = callable::wrap_js_event_subscriber(&env, name.clone(), &callback)?;
     core_subscriber_api::register_subscriber(&name, callback).map_err(Error::from)
@@ -2958,7 +3107,7 @@ pub fn scope_register_subscriber(
     env: Env,
     scope_uuid: String,
     name: String,
-    #[napi(ts_arg_type = "(event: Json) => void | Promise<void>")] callback: Callback,
+    #[napi(ts_arg_type = "(event: JsonObject) => void | Promise<void>")] callback: Callback,
 ) -> Result<()> {
     let uuid = parse_uuid(&scope_uuid, "UUID")?;
     let callback = callable::wrap_js_event_subscriber(&env, name.clone(), &callback)?;
@@ -2976,11 +3125,15 @@ pub fn scope_deregister_subscriber(scope_uuid: String, name: String) -> Result<b
 
 /// Run the registered tool request intercept chain on the given arguments.
 /// Returns the transformed arguments.
-#[napi(ts_return_type = "Promise<unknown>", catch_unwind)]
+#[napi(
+    ts_generic_types = "TArgs extends JsonCompatible<TArgs>",
+    ts_return_type = "Promise<Json>",
+    catch_unwind
+)]
 pub fn tool_request_intercepts<'env>(
     env: &'env Env,
     name: String,
-    args: Json,
+    #[napi(ts_arg_type = "TArgs")] args: Json,
 ) -> Result<PromiseRaw<'env, Json>> {
     let context = CallContext::capture(env)?;
     spawn_promise(
@@ -2996,11 +3149,15 @@ pub fn tool_request_intercepts<'env>(
 
 /// Run the registered tool conditional execution guardrail chain.
 /// Throws if any guardrail rejects.
-#[napi(ts_return_type = "Promise<void>", catch_unwind)]
+#[napi(
+    ts_generic_types = "TArgs extends JsonCompatible<TArgs>",
+    ts_return_type = "Promise<void>",
+    catch_unwind
+)]
 pub fn tool_conditional_execution<'env>(
     env: &'env Env,
     name: String,
-    args: Json,
+    #[napi(ts_arg_type = "TArgs")] args: Json,
 ) -> Result<PromiseRaw<'env, ()>> {
     let context = CallContext::capture(env)?;
     spawn_promise(
@@ -3017,11 +3174,15 @@ pub fn tool_conditional_execution<'env>(
 /// Run the registered LLM request intercept chain on the given request.
 /// The `request` should be a JSON object with `headers` and `content` fields matching
 /// the `LlmRequest` schema. Returns the transformed request as JSON.
-#[napi(ts_return_type = "Promise<LlmRequestInterceptOutcome>", catch_unwind)]
+#[napi(
+    ts_generic_types = "TRequest extends LlmRequestCompatible<TRequest>",
+    ts_return_type = "Promise<LlmRequestInterceptOutcome>",
+    catch_unwind
+)]
 pub fn llm_request_intercepts<'env>(
     env: &'env Env,
     name: String,
-    request: Json,
+    #[napi(ts_arg_type = "TRequest")] request: Json,
 ) -> Result<PromiseRaw<'env, Json>> {
     let llm_request: LlmRequest = parse_json(request, "LlmRequest")?;
     let context = CallContext::capture(env)?;
@@ -3047,10 +3208,14 @@ pub fn llm_request_intercepts<'env>(
 /// Run the registered LLM conditional execution guardrail chain.
 /// Throws if any guardrail rejects. The `request` should be a JSON object with `headers`
 /// and `content` fields matching the `LlmRequest` schema.
-#[napi(ts_return_type = "Promise<void>", catch_unwind)]
+#[napi(
+    ts_generic_types = "TRequest extends LlmRequestCompatible<TRequest>",
+    ts_return_type = "Promise<void>",
+    catch_unwind
+)]
 pub fn llm_conditional_execution<'env>(
     env: &'env Env,
-    request: Json,
+    #[napi(ts_arg_type = "TRequest")] request: Json,
 ) -> Result<PromiseRaw<'env, ()>> {
     let llm_request: LlmRequest = parse_json(request, "LlmRequest")?;
     let context = CallContext::capture(env)?;
@@ -3728,8 +3893,13 @@ impl AdaptiveRuntime {
     /// Create an adaptive runtime wrapper from config.
     ///
     /// The runtime is constructed lazily when `register()` is awaited.
-    #[napi(constructor, catch_unwind)]
-    pub fn new(config: Json) -> Result<Self> {
+    #[napi(
+        factory,
+        js_name = "create",
+        ts_generic_types = "TConfig extends JsonCompatible<TConfig>",
+        catch_unwind
+    )]
+    pub fn create(#[napi(ts_arg_type = "TConfig")] config: Json) -> Result<Self> {
         let config: AdaptiveConfig = serde_json::from_value(config)
             .map_err(|error| Error::invalid_argument(error.to_string()))?;
         let report = validate_adaptive_config_or_err(&config)?;
@@ -3779,7 +3949,7 @@ impl AdaptiveRuntime {
     }
 
     /// Return the validation report captured during runtime construction.
-    #[napi(catch_unwind)]
+    #[napi(ts_return_type = "ConfigReport", catch_unwind)]
     pub fn report(&self) -> Result<Json> {
         let state = self.state()?;
         let report = match &*state {
@@ -3798,8 +3968,16 @@ impl AdaptiveRuntime {
     }
 
     /// Build cache request facts for an annotated LLM request.
-    #[napi(js_name = "buildCacheRequestFacts", catch_unwind)]
-    pub fn build_cache_request_facts(&self, options: Json) -> Result<Option<Json>> {
+    #[napi(
+        js_name = "buildCacheRequestFacts",
+        ts_generic_types = "TOptions extends JsonCompatible<TOptions>",
+        ts_return_type = "CacheRequestFacts | null",
+        catch_unwind
+    )]
+    pub fn build_cache_request_facts(
+        &self,
+        #[napi(ts_arg_type = "TOptions")] options: Json,
+    ) -> Result<Option<Json>> {
         let options: CacheRequestFactsOptions = serde_json::from_value(options)
             .map_err(|error| Error::invalid_argument(error.to_string()))?;
         let _request_id = parse_uuid(&options.request_id, "requestId UUID")?;
@@ -3857,16 +4035,28 @@ fn parse_cache_request_facts(value: Option<Json>) -> Result<Option<CacheRequestF
 }
 
 /// Validate an adaptive config document without constructing a runtime.
-#[napi(js_name = "validateAdaptiveConfig", catch_unwind)]
-pub fn validate_adaptive_config(config: Json) -> Result<Json> {
+#[napi(
+    js_name = "validateAdaptiveConfig",
+    ts_generic_types = "TConfig extends JsonCompatible<TConfig>",
+    ts_return_type = "ConfigReport",
+    catch_unwind
+)]
+pub fn validate_adaptive_config(#[napi(ts_arg_type = "TConfig")] config: Json) -> Result<Json> {
     let config: AdaptiveConfig = serde_json::from_value(config)
         .map_err(|error| Error::invalid_argument(error.to_string()))?;
     serde_json::to_value(CoreAdaptiveRuntime::validate_config(&config)).map_err(Error::from)
 }
 
 /// Build one adaptive cache telemetry event from normalized usage.
-#[napi(js_name = "buildCacheTelemetryEvent", catch_unwind)]
-pub fn build_cache_telemetry_event(options: Json) -> Result<Option<Json>> {
+#[napi(
+    js_name = "buildCacheTelemetryEvent",
+    ts_generic_types = "TOptions extends JsonCompatible<TOptions>",
+    ts_return_type = "CacheTelemetryEvent | null",
+    catch_unwind
+)]
+pub fn build_cache_telemetry_event(
+    #[napi(ts_arg_type = "TOptions")] options: Json,
+) -> Result<Option<Json>> {
     let options: CacheTelemetryOptions = serde_json::from_value(options)
         .map_err(|error| Error::invalid_argument(error.to_string()))?;
     let provider = parse_cache_telemetry_provider(&options.provider)?;
@@ -3917,8 +4107,12 @@ pub fn set_latency_sensitivity(value: u32) -> Result<()> {
 pub fn register_plugin(
     env: Env,
     plugin_kind: String,
-    #[napi(ts_arg_type = "(...args: any[]) => any | undefined | null")] validate: Option<Callback>,
-    #[napi(ts_arg_type = "(...args: any[]) => any")] register: Callback,
+    #[napi(
+        ts_arg_type = "((pluginConfig: JsonObject) => ConfigDiagnostic[] | null | undefined) | undefined | null"
+    )]
+    validate: Option<Callback>,
+    #[napi(ts_arg_type = "(pluginConfig: JsonObject, context: PluginContext) => void")]
+    register: Callback,
 ) -> Result<()> {
     let validate = validate
         .map(|func| {
@@ -3956,9 +4150,29 @@ pub fn deregister_plugin(plugin_kind: String) -> bool {
 #[napi]
 pub struct PluginHostActivation {
     close_state: Arc<DynamicPluginCloseState>,
+    teardown: std::sync::mpsc::Sender<Box<CorePluginHostActivation>>,
 }
 
 type DynamicPluginTeardownResult = std::result::Result<(), Arc<Error>>;
+
+enum DynamicPluginTeardownTrigger {
+    Close,
+    Finalizer,
+}
+
+fn run_dynamic_plugin_teardown(
+    state: Arc<DynamicPluginCloseState>,
+    requests: std::sync::mpsc::Receiver<Box<CorePluginHostActivation>>,
+) {
+    while let Ok(activation) = requests.recv() {
+        if !state.close(activation, DynamicPluginTeardownTrigger::Close) {
+            return;
+        }
+    }
+    if let Some(activation) = state.take_active() {
+        state.close(activation, DynamicPluginTeardownTrigger::Finalizer);
+    }
+}
 
 enum DynamicPluginCloseStatus {
     Active(Box<CorePluginHostActivation>),
@@ -4013,81 +4227,62 @@ impl DynamicPluginCloseState {
         Some(activation)
     }
 
-    fn begin_close(self: &Arc<Self>, log_finalizer_error: bool) {
-        let Some(activation) = self.take_active() else {
-            return;
-        };
-        let activation = Arc::new(StdMutex::new(Some(activation)));
-        let worker_activation = Arc::clone(&activation);
-        let close_state = Arc::clone(self);
-        let spawn = std::thread::Builder::new()
-            .name("nemo-relay-node-plugin-teardown".into())
-            .spawn(move || {
-                let activation = lock(&worker_activation).take();
-                let (activation, result) = match activation {
-                    Some(mut activation) => {
-                        let result = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
-                            activation.close()
-                        }))
-                        .map_err(|_| Error::generic_failure("plugin host teardown task panicked"))
-                        .and_then(|result| result.map_err(Error::from))
-                        .map_err(Arc::new);
-                        *lock(&close_state.report) = activation.report();
-                        (Some(activation), result)
-                    }
-                    None => (
-                        None,
-                        Err(Arc::new(Error::generic_failure(
-                            "plugin host teardown task lost its activation",
-                        ))),
-                    ),
-                };
-                if log_finalizer_error && let Err(error) = &result {
-                    eprintln!("nemo_relay: plugin host finalizer teardown failed: {error}");
-                }
-                close_state.finish(activation, result);
-            });
-
-        if let Err(error) = spawn {
-            let activation = lock(&activation).take();
-            let error = Arc::new(Error::generic_failure(format!(
-                "failed to start dynamic plugin teardown task: {error}"
-            )));
-            if log_finalizer_error {
-                if let Some(activation) = activation {
-                    std::mem::forget(activation);
-                }
-                eprintln!("nemo_relay: dynamic plugin finalizer teardown failed: {error}");
-                self.finish(None, Err(error));
-            } else {
-                self.finish(activation, Err(error));
-            }
+    fn request_close(&self, teardown: &std::sync::mpsc::Sender<Box<CorePluginHostActivation>>) {
+        if let Some(activation) = self.take_active() {
+            teardown
+                .send(activation)
+                .expect("plugin teardown thread outlives its handles");
         }
+    }
+
+    fn close(
+        &self,
+        mut activation: Box<CorePluginHostActivation>,
+        trigger: DynamicPluginTeardownTrigger,
+    ) -> bool {
+        let result = match std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+            let result = activation.close();
+            (result, activation.report())
+        })) {
+            Ok((result, report)) => {
+                *lock(&self.report) = report;
+                result.map_err(Error::from)
+            }
+            Err(_) => Err(Error::generic_failure("plugin host teardown task panicked")),
+        }
+        .map_err(Arc::new);
+        if matches!(trigger, DynamicPluginTeardownTrigger::Finalizer)
+            && let Err(error) = &result
+        {
+            eprintln!("nemo_relay: plugin host finalizer teardown failed: {error}");
+        }
+        self.finish(activation, result)
     }
 
     fn finish(
         &self,
-        activation: Option<Box<CorePluginHostActivation>>,
+        activation: Box<CorePluginHostActivation>,
         result: DynamicPluginTeardownResult,
-    ) {
-        self.finish_with_hook(activation, result, || {});
+    ) -> bool {
+        self.finish_with_hook(activation, result, || {})
     }
 
     fn finish_with_hook(
         &self,
-        activation: Option<Box<CorePluginHostActivation>>,
+        activation: Box<CorePluginHostActivation>,
         result: DynamicPluginTeardownResult,
         before_publish: impl FnOnce(),
-    ) {
+    ) -> bool {
         let mut status = lock(&self.status);
-        *status = match activation {
-            Some(activation) if result.is_err() && activation.is_active() => {
-                DynamicPluginCloseStatus::Active(activation)
-            }
-            _ => DynamicPluginCloseStatus::Closed,
+        let retryable = result.is_err() && activation.is_active();
+        *status = if retryable {
+            DynamicPluginCloseStatus::Active(activation)
+        } else {
+            DynamicPluginCloseStatus::Closed
         };
         before_publish();
         self.completion.send_replace(Some(result));
+        retryable
     }
 
     async fn wait_for_close(&self) -> DynamicPluginTeardownResult {
@@ -4108,7 +4303,7 @@ mod dynamic_plugin_close_state_tests;
 #[napi]
 impl PluginHostActivation {
     /// Return the validation report produced by activation.
-    #[napi(getter, catch_unwind)]
+    #[napi(getter, ts_return_type = "PluginHostReport", catch_unwind)]
     pub fn report(&self) -> Result<Json> {
         serde_json::to_value(self.close_state.report()).map_err(Error::from)
     }
@@ -4127,8 +4322,8 @@ impl PluginHostActivation {
     /// close the same activation.
     #[napi(ts_return_type = "Promise<void>", catch_unwind)]
     pub fn close<'env>(&self, env: &'env Env) -> Result<PromiseRaw<'env, ()>> {
+        self.close_state.request_close(&self.teardown);
         let close_state = Arc::clone(&self.close_state);
-        close_state.begin_close(false);
         spawn_promise(
             env,
             async move {
@@ -4152,17 +4347,14 @@ impl PluginHostActivation {
     }
 }
 
-impl Drop for PluginHostActivation {
-    fn drop(&mut self) {
-        self.close_state.begin_close(true);
-    }
-}
-
 /// Initialize the core-owned static and dynamic plugin host from layered files.
-#[napi(catch_unwind)]
+#[napi(
+    ts_generic_types = "TConfig extends JsonCompatible<TConfig>",
+    catch_unwind
+)]
 pub fn initialize<'env>(
     env: &'env Env,
-    config: Json,
+    #[napi(ts_arg_type = "TConfig")] config: Json,
     additional_plugins_toml: Option<String>,
 ) -> Result<PromiseRaw<'env, PluginHostActivation>> {
     spawn_promise(
@@ -4173,16 +4365,35 @@ pub fn initialize<'env>(
             let activation = initialize_impl(config, additional_plugins_toml.map(Into::into))
                 .await
                 .map_err(Error::from)?;
+            let close_state = Arc::new(DynamicPluginCloseState::new(activation));
+            let (teardown, requests) = std::sync::mpsc::channel();
+            let worker_state = Arc::clone(&close_state);
+            std::thread::Builder::new()
+                .name("nemo-relay-node-plugin-teardown".into())
+                .spawn(move || run_dynamic_plugin_teardown(worker_state, requests))
+                .map_err(|error| {
+                    Error::generic_failure(format!(
+                        "failed to spawn plugin teardown thread: {error}"
+                    ))
+                })?;
             Ok::<_, Error>(PluginHostActivation {
-                close_state: Arc::new(DynamicPluginCloseState::new(activation)),
+                close_state,
+                teardown,
             })
         },
         js_value,
     )
 }
 /// Validate dynamic plugins without loading any plugin code.
-#[napi(catch_unwind)]
-pub fn validate(config: Json, additional_plugins_toml: Option<String>) -> Result<Json> {
+#[napi(
+    ts_generic_types = "TConfig extends JsonCompatible<TConfig>",
+    ts_return_type = "PluginHostReport",
+    catch_unwind
+)]
+pub fn validate(
+    #[napi(ts_arg_type = "TConfig")] config: Json,
+    additional_plugins_toml: Option<String>,
+) -> Result<Json> {
     let config: nemo_relay_plugin_host::dynamic::PluginHostConfig =
         parse_json(config, "plugin config")?;
     let report =
@@ -4191,8 +4402,12 @@ pub fn validate(config: Json, additional_plugins_toml: Option<String>) -> Result
 }
 
 /// Validate only the supplied static plugin configuration.
-#[napi(catch_unwind)]
-pub fn validate_exact(config: Json) -> Result<Json> {
+#[napi(
+    ts_generic_types = "TConfig extends JsonCompatible<TConfig>",
+    ts_return_type = "PluginHostReport",
+    catch_unwind
+)]
+pub fn validate_exact(#[napi(ts_arg_type = "TConfig")] config: Json) -> Result<Json> {
     if config.get("diagnostics").is_some() {
         return Err(Error::invalid_argument(
             "diagnostics is a host-only setting; use layered validation",

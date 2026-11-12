@@ -668,6 +668,61 @@ fn plugin_file_loading_skips_only_missing_paths() {
     );
 }
 
+#[cfg(unix)]
+#[test]
+/// Follows configuration aliases without changing relative manifest resolution or diagnostics.
+fn plugin_file_loading_follows_symlinks_and_preserves_source_paths() {
+    use std::os::unix::fs::symlink;
+
+    let temp = tempfile::tempdir().unwrap();
+    let owned = temp.path().join("owned");
+    let mounted = temp.path().join("mounted");
+    fs::create_dir_all(&owned).unwrap();
+    fs::create_dir_all(&mounted).unwrap();
+    let target = owned.join("plugins.toml");
+    fs::write(&target, "version = 1\n").unwrap();
+    let link = mounted.join("plugins.toml");
+    symlink("../owned/plugins.toml", &link).unwrap();
+
+    let (files, diagnostics) = read_plugin_files(std::slice::from_ref(&link), Some(&link)).unwrap();
+    assert!(diagnostics.is_empty());
+    assert_eq!(files.len(), 1);
+    assert_eq!(files[0].source, link);
+    assert_eq!(files[0].value["version"], 1);
+    assert_eq!(
+        resolve_manifest_path(&files[0].source, "relay-plugin.toml"),
+        mounted.join("relay-plugin.toml")
+    );
+
+    fs::write(&target, "[[invalid").unwrap();
+    let error = read_plugin_files(std::slice::from_ref(&link), Some(&link))
+        .err()
+        .unwrap()
+        .to_string();
+    assert!(error.contains("invalid plugin TOML"), "{error}");
+    assert!(error.contains(&link.display().to_string()), "{error}");
+}
+
+#[cfg(unix)]
+#[test]
+/// Rejects configuration aliases whose targets are missing or are not regular files.
+fn plugin_file_loading_rejects_broken_and_nonregular_symlink_targets() {
+    use std::os::unix::fs::symlink;
+
+    let temp = tempfile::tempdir().unwrap();
+    for target in [temp.path().join("missing.toml"), temp.path().to_path_buf()] {
+        let link = temp.path().join("plugins.toml");
+        symlink(target, &link).unwrap();
+        let error = read_plugin_files(std::slice::from_ref(&link), Some(&link))
+            .err()
+            .unwrap()
+            .to_string();
+        assert!(error.contains("failed to read"), "{error}");
+        assert!(error.contains(&link.display().to_string()), "{error}");
+        fs::remove_file(link).unwrap();
+    }
+}
+
 #[test]
 fn static_plugin_policy_does_not_override_dynamic_attestation_policy() {
     let temp = tempfile::tempdir().unwrap();
@@ -825,12 +880,12 @@ manifest = "relay-plugin.toml"
 
 fn write_trust_failure_manifest(manifest_path: &Path, digest: &str, kind: &str, failure: &str) {
     let compatibility = if kind == "rust_dynamic" {
-        "native_api = \"1\""
+        "native_api = \"v1.0\""
     } else {
         "worker_protocol = \"nvidia.nemo.relay.worker.v1\""
     };
     let load = if kind == "rust_dynamic" {
-        "library = \"artifact.bin\"\nsymbol = \"never_load\""
+        "library = \"artifact.bin\""
     } else {
         "runtime = \"command\"\nentrypoint = \"artifact.bin\""
     };

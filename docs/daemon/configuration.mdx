@@ -94,7 +94,7 @@ Managed workers validate base URLs when loading configuration and check the fina
 destination when forwarding requests. Base URLs must not include user information,
 query strings, or fragments.
 
-Confirm provider URL fields against [Provider Routing](/nemo-relay-cli/basic-usage).
+Confirm provider URL fields against [Provider Routing](/nemo-relay-cli/provider-upstreams#overrides-timeouts-and-routing).
 Use your approved provider URLs when they differ from these defaults. Set the same
 routing on the daemon and clients for consistent pass-through behavior. The
 primary `nemo-relay daemon` process reads only `[daemon.logging]`; `[logging]`
@@ -106,7 +106,7 @@ Relay waits for provider responses without a deadline by default, allowing long
 compaction and model execution to finish. Caller cancellation ends the request.
 Set `[upstream] response_timeout_secs` to a positive number of seconds to limit
 the response-header wait on daemon and worker hops. Set it to `0` to disable
-that limit. Connection, startup, and health checks retain their separate deadlines.
+that limit. Connection and health checks retain their separate deadlines.
 
 Create `plugins.toml` with the approved configuration from
 [Use Plugins](/configure-plugins/about). A minimal file with no plugins is:
@@ -152,6 +152,50 @@ configuration, plugin manifests, and dynamic plugins alongside the system layer.
 System settings take priority. Install required system plugin binaries and
 dependencies in the administrator-managed locations referenced by the system
 manifest.
+
+### Worker Idle Timeout
+
+By default, the daemon cancels pending startup or drains a ready worker when
+its last MCP route reference is removed. To retain that worker between short
+sessions, set `worker_idle_timeout_secs` in the daemon's `config.toml`:
+
+```toml
+[daemon]
+worker_idle_timeout_secs = 30
+```
+
+The value is a nonnegative integer in seconds. The default, `0`, cancels pending
+startup or starts draining without an idle period. A positive value starts an
+idle period after the last MCP route reference is removed. A new authenticated
+session before expiry reuses the pending activation or ready worker and clears the idle
+deadline. Becoming ready does not extend the idle period. At expiry, the daemon
+cancels pending startup or starts draining the ready worker.
+
+If the launching MCP exits before the worker registers with the daemon, the
+worker must register within the configured idle period after that handoff.
+Reconnecting does not extend this registration deadline. If it expires, the
+daemon cancels that activation and allows a connected client to retry startup.
+Worker registration happens before plugin initialization, so this deadline does
+not limit plugin initialization after registration. The ordinary idle deadline
+still applies whenever no MCP sessions remain.
+
+Set this policy in the configuration loaded by the daemon service account, not
+in the coding agent's environment or the managed worker's personal settings.
+Restart the daemon to apply a change. Retaining a worker that is still starting
+requires an MCP client and daemon that support activation retention. Older MCP
+clients can still cancel pending startup when they exit.
+
+The daemon also retains pending startup when its authenticated launching MCP
+disconnects. It removes that session's route reference and starts the idle
+period if no references remain. The control session can recover during the
+existing reconnect grace period.
+
+The timeout does not make requests wait for startup. Requests sent before
+readiness still use the existing pass-through behavior, or return `503` with
+`--require-worker`. They are not replayed after startup. Retention does not
+authorize worker requests when no MCP route references remain. To verify reuse,
+open a new session during the idle period and send a new request after the worker
+is ready.
 
 ## Provision Client Credentials
 
@@ -526,7 +570,8 @@ per-client admission controls at the proxy for larger deployments.
 A managed bundle is an administrator-owned deployment artifact, not an output
 of personal `nemo-relay install`. For each agent, platform, and deployment, its
 plugin configuration and settings must remain byte-for-byte identical across
-users and Relay binary releases.
+users. A deployed bundle is immutable; a new Relay release can change the
+generated artifacts.
 
 The bundle follows these rules:
 
@@ -536,8 +581,8 @@ The bundle follows these rules:
 - A stable administrator-owned dispatcher command or path survives Relay
   upgrades.
 - Refresh validates immutable artifacts and never rewrites them.
-- An incompatible settings change uses a separately named v2 artifact rather
-  than replacing v1 bytes.
+- When generated artifacts change, deploy a replacement bundle in a new
+  directory and provision its new digest separately.
 
 Enterprise bootstrap owns credential provisioning and login-environment
 injection. Relay validates the resolved route credential from
@@ -546,13 +591,18 @@ injection. Relay validates the resolved route credential from
 an operating-system-specific login agent.
 
 <Warning>
-NeMo Relay 0.11 intentionally changes the managed v1 Claude hook bundle to
-capture `StopFailure`. Older bundles containing Claude Code no longer match
-the canonical bytes expected by doctor, managed refresh, or output reuse.
+The generated Claude Code bundle captures `StopFailure` and enables gateway
+hints. Older Claude bundles that lack either addition no longer match the
+canonical bytes expected by doctor, managed refresh, or output reuse.
 Generate a replacement in a new directory using the same deployment values,
 deploy it, provision its newly printed digest separately, and update the
 Claude launch paths. Refresh does not migrate or overwrite the old bundle.
-Bundles containing only Codex or Pi are unaffected by this change.
+Bundles containing only Codex or Pi are unaffected by the Claude change.
+
+The generated Codex bundle captures `SessionEnd` and `Interrupt` and requires
+`codex-cli` 0.150.0 or newer. Older bundles containing Codex no longer match the
+canonical bytes. Generate a replacement in a new directory, redeploy it, and
+provision its new trusted digest separately.
 </Warning>
 
 Create a bundle once from fixed deployment values. Repeat `--agent` to select
@@ -609,6 +659,11 @@ Doctor compares the exact file set and bytes with the canonical manifest and
 the separately provisioned digest, then reports missing, unexpected, or
 changed artifacts. This is a managed-only diagnostic: it does not load or fail because
 of personal configuration, plugins, or agent installations.
+
+When the bundle or its contents use symbolic links, keep the targets and the
+directories that allow their replacement under administrator control, just like
+the bundle itself. Successful validation checks the current contents; it does
+not prevent later changes to linked targets.
 
 ## Load a Managed Harness
 
@@ -746,9 +801,12 @@ Use these arguments in the managed launcher for every session. The filename
 `managed-settings.json` does not itself enforce policy when passed with
 `--settings`; enforced deployments must install it through Claude Code's managed
 settings mechanism. Preserve any existing organization policy when merging its
-`env.ANTHROPIC_BASE_URL` value. The plugin and its MCP/hook files remain unchanged.
+`env` values. The plugin and its MCP/hook files remain unchanged.
 See Claude Code's [plugin loading guide](https://code.claude.com/docs/en/plugins)
 and [settings reference](https://code.claude.com/docs/en/settings).
+
+For Claude request classes and export settings, see
+[Separate Model Request Classes](/nemo-relay-cli/claude-code#separate-model-request-classes).
 
 Hooks and MCP can use the per-user token file when the launch environment has
 no `NEMO_RELAY_CLIENT_TOKEN`. Gateway model routing still needs
@@ -852,7 +910,7 @@ no replacement credential, requests with recognized ChatGPT OAuth use the ChatGP
 Codex backend instead. Anthropic model requests use `anthropic_base_url`.
 The caller must have Relay access to use Relay's credentials. For the credential
 selection order, refer to
-[Provider Upstreams](/nemo-relay-cli/basic-usage#provider-upstreams).
+[Credential Selection](/nemo-relay-cli/authentication#credential-selection).
 
 If Relay has no replacement, OpenAI model requests keep the caller's credential.
 This also applies to a custom `openai_base_url`.
@@ -914,7 +972,7 @@ credential. Each daemon or worker process keeps its own cache.
 
 Choose one credential source for each provider. You cannot combine a helper
 with a static API key or a custom authorization header. Refer to
-[Generate API Keys Per Request](/nemo-relay-cli/basic-usage#generate-api-keys-per-request)
+[Generate API Keys Per Request](/nemo-relay-cli/authentication#generate-api-keys-per-request)
 for examples, supported authentication methods, limits, and error handling.
 
 With an OpenAI helper, Relay warns about and ignores `OPENAI_API_KEY` and

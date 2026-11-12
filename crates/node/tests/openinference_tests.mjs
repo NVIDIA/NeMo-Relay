@@ -7,7 +7,7 @@ import { createRequire } from 'node:module';
 import { startCollector } from '../../../scripts/test-support/otel_test_utils.mjs';
 
 const require = createRequire(import.meta.url);
-const { OpenTelemetrySubscriber, ScopeType, pushScope, popScope, event } = require('../index.js');
+const { OpenTelemetrySubscriber, ScopeType, pushScope, popScope, event } = require('../dist/index.js');
 
 function unique(prefix) {
   return `${prefix}_${Date.now()}_${Math.random().toString(16).slice(2)}`;

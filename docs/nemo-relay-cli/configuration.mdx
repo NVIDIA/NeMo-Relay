@@ -1,0 +1,361 @@
+---
+title: "Configuration"
+description: "Select CLI configuration files, edit settings, and configure session metadata."
+position: 7
+---
+{/* SPDX-FileCopyrightText: Copyright (c) 2026, NVIDIA CORPORATION & AFFILIATES. All rights reserved.
+SPDX-License-Identifier: Apache-2.0 */}
+
+Configure the CLI's agent commands, provider settings, request limits, logging,
+and session metadata here. Use `config.toml` for these settings and
+`plugins.toml` for exporters and other Relay components.
+
+## Shared Configuration
+
+`nemo-relay config` and `nemo-relay config edit` write the user `config.toml`.
+Relay reads that file when resolving CLI settings. Its path is
+`$XDG_CONFIG_HOME/nemo-relay/config.toml` when `XDG_CONFIG_HOME` is an absolute
+path; otherwise, it is `~/.config/nemo-relay/config.toml`. On Windows, Relay
+falls back to `USERPROFILE` when `HOME` is unavailable.
+
+`nemo-relay plugins edit` writes the corresponding `plugins.toml`, which Relay
+reads for component configuration.
+
+System files are `/etc/nemo-relay/config.toml` and
+`/etc/nemo-relay/plugins.toml` on Unix, or
+`%ProgramData%\nemo-relay\config.toml` and
+`%ProgramData%\nemo-relay\plugins.toml` on Windows.
+
+Shared TOML config is optional. The gateway loads defaults, then the explicit
+file when supplied or the XDG user file otherwise, and finally the system file.
+System config has the highest file-level priority. CLI flags and environment
+variables override file config. Repository-local `.nemo-relay/config.toml`
+files are ignored unless selected explicitly.
+
+### Named Presets
+
+A preset is a named group of default settings in `config.toml`. An administrator
+can define presets in the system file. Users can then choose a preset in their
+own files. Users don't need to copy the preset settings.
+
+#### Define a Preset
+
+Add the following definition to the system `config.toml`. It configures
+OpenRouter for both OpenAI-compatible and Anthropic-compatible requests:
+
+```toml
+[presets.openrouter.upstream]
+openai_base_url = "https://openrouter.ai/api/v1"
+anthropic_base_url = "https://openrouter.ai/api/"
+
+[presets.openrouter.upstream.openai_oidc]
+issuer = "https://clerk.openrouter.ai"
+client_id = "<client id>"
+scope = "openid offline_access email inference"
+
+[presets.openrouter.upstream.anthropic_oidc]
+issuer = "https://clerk.openrouter.ai"
+client_id = "<client id>"
+scope = "openid offline_access email inference"
+```
+
+Replace `<client id>` with the OAuth client ID for your deployment. The system
+and user file paths are listed under [Shared Configuration](#shared-configuration).
+
+#### Select a Preset
+
+Add the following setting to your user `config.toml`, before any table headers:
+
+```toml
+preset = "openrouter"
+```
+
+Relay reads the definition from the system file. In this example, it supplies
+defaults for these sections:
+
+- `[upstream]` contains both provider URLs.
+- `[upstream.openai_oidc]` contains the OpenAI sign-in settings.
+- `[upstream.anthropic_oidc]` contains the Anthropic sign-in settings.
+
+Run `nemo-relay auth login` to sign in with OpenID Connect (OIDC). For details,
+refer to
+[Sign In With OpenID Connect](./authentication#sign-in-with-openid-connect).
+
+You can also keep the definition and the selection in the same file. Use
+`--config <path>` to select a file in place of your usual user file. Relay
+still reads the system file.
+
+#### Select Settings for One Table
+
+To apply only the upstream settings, replace the root `preset` setting in your
+user file with the following table:
+
+```toml
+[upstream]
+preset = "openrouter"
+```
+
+Keep the system definition unchanged. Relay copies
+`[presets.openrouter.upstream]` into `[upstream]`, including both OIDC sections.
+This selection doesn't apply any other sections from the preset.
+
+The same rule works for deeper tables. For example, `preset = "team"` under
+`[agents.codex]` selects `[presets.team.agents.codex]`.
+
+You can also define presets inside a table. Relay looks for the name in the
+current table first, then in each parent table up to the root. It uses the
+first definition it finds. For example, `[upstream.presets.team]` supplies
+fields directly to `[upstream]`. A definition in a parent table must contain
+the matching child table.
+
+#### Override Preset Defaults
+
+Relay applies these rules when settings overlap:
+
+- Settings written directly in any file override preset defaults.
+- Normal file priority still applies to direct settings. The system file has
+  the highest file priority.
+- If several files select a preset for the same table, the highest-priority
+  file chooses the name.
+- If several files define the same preset at the same table, the
+  highest-priority file replaces that entire definition. Other names remain
+  available.
+- A preset selected for a child table overrides preset defaults from a parent
+  table.
+- Environment variables and CLI flags override file settings as usual.
+
+Changing an upstream URL clears credentials for the old URL. An OIDC section
+written directly in a file replaces the preset's entire OIDC section. Include
+both `issuer` and `client_id` when you replace that section.
+
+#### Preset Limits
+
+Keep these rules in mind when defining and selecting presets:
+
+- Each `preset` setting accepts one name.
+- Unselected presets don't change your settings.
+- An unknown name or a missing table causes a configuration error.
+- A preset definition can't contain another preset definition or selection.
+- `preset` and `presets` are reserved keys in configuration tables. Relay
+  removes them after it resolves the presets.
+- Presets apply to `config.toml`. Configure plugins in `plugins.toml`.
+
+### Interactive Setup
+
+Run `nemo-relay config` to set up Relay interactively:
+
+1. Select the coding agents that Relay should observe.
+2. Review and save the user `config.toml`.
+3. Choose whether to continue to the plugin editor.
+
+The base `config.toml` stores the agent settings. Select **Yes** at the plugin
+prompt to configure optional Relay components and save them separately in
+`plugins.toml`. Setup writes the XDG user configuration. When the top-level
+command receives `--config path/to/config.toml`, the plugin editor instead uses
+the sibling `path/to/plugins.toml`, matching runtime selection.
+
+Plugin files use the same file-level precedence order:
+explicit-or-user, then the system file. An
+explicit `--plugin-config-path`, or the sibling selected by `--config`,
+replaces the ambient XDG user plugin file. Likewise, an explicit `--config`
+replaces the ambient XDG user base file. Neither explicit file suppresses
+system configuration.
+
+Select **No** to finish after saving `config.toml`. Canceling the prompt or
+leaving the plugin editor does not remove the saved base configuration. You can
+open the plugin editor again later with the resume command printed by Relay.
+For an explicit `--config path/to/config.toml` flow, the equivalent command is
+`nemo-relay --config path/to/config.toml plugins edit`. Otherwise,
+use `nemo-relay plugins edit` for user configuration.
+
+### Edit Gateway Configuration
+
+Use the config editor to change settings in `config.toml`. Run the following
+command to open it:
+
+```bash
+nemo-relay config edit
+```
+
+#### Choose a File
+
+By default, the editor opens your user `config.toml`. To open a different file,
+pass `--config path/to/config.toml` before `config edit`. Both `config edit` and
+`config edit --user` use that file.
+
+Use `--global` to edit the system file. The path is
+`/etc/nemo-relay/config.toml` on Unix or
+`%ProgramData%\nemo-relay\config.toml` on Windows. On Unix, the editor saves
+system files with mode `0644`, which lets other users read them.
+
+These options choose the file to edit. At runtime, Relay combines config files
+in the order described under [Shared Configuration](#shared-configuration).
+
+#### Change Settings
+
+Choose a menu for the settings you want to change:
+
+- **Gateway limits**: Set request size limits in `[gateway]`.
+- **Provider upstreams**: Set provider URLs, credentials, and response timeouts
+  in `[upstream]`. This menu also includes the ChatGPT backend URL used by Codex.
+  Set the response timeout to `0` to turn it off.
+- **Agent commands**: Choose which command starts Claude Code, Codex, or Pi.
+- **Operational logging**: Set log output in `[logging]`.
+- **Daemon logging**: Set log output in `[daemon.logging]`.
+
+Clear a setting to use values from other config sources or the defaults.
+
+#### Provider Credentials
+
+In **Provider upstreams**, set, replace, or clear a credential source for OpenAI
+or Anthropic. Choose a static API key, an authorization header, or an API key
+helper. When you set one source, the editor removes the provider's other sources
+from the selected file.
+
+Helper setup replaces all fields in that helper. Set the command, arguments,
+timeout, and authentication scheme. Enter arguments as a JSON array of strings.
+Leave the arguments blank if the helper needs none. The editor hides credentials,
+helper commands, and helper arguments during entry and in **Preview**.
+
+The editor rejects authorization headers and static API keys in global files.
+Store those values in a user config or environment variables. For authorization
+headers, you can use `NEMO_RELAY_OPENAI_AUTH_HEADER` or
+`NEMO_RELAY_ANTHROPIC_AUTH_HEADER`.
+
+#### Log Output
+
+Use **Operational logging** for `[logging]` and **Daemon logging** for
+`[daemon.logging]`. Both menus let you set log levels, standard error (stderr)
+output, and log files. You can turn stderr output on or off.
+
+For log files, use `sinks = [{ path = "relay.log" }]`, `[[logging.sinks]]`, or
+`[[daemon.logging.sinks]]`. The editor keeps the format you use.
+
+#### Save Changes
+
+Select **Preview** to review your changes. The editor keeps unrelated TOML
+sections. It creates a missing file only after you select **Save**.
+
+Select **Save** to check and save the file. The editor checks provider URLs,
+credential sources, helper settings, and log settings. If a check fails, the
+editor leaves the file unchanged. It stays open so you can fix the settings.
+These checks do not run API key helpers.
+
+Select **Cancel** to leave the editor without saving.
+
+### Edit Plugin Configuration
+
+Use `nemo-relay plugins edit` to configure exporters and other Relay components.
+For file selection, merge rules, editor controls, and restrictions on secrets in
+system files, follow [Configure Plugins](/configure-plugins/plugin-configuration-files).
+
+## Use Project Configuration
+
+Select repository configuration explicitly:
+
+```bash
+nemo-relay --config .nemo-relay/config.toml run -- codex
+```
+
+Relay uses the sibling `.nemo-relay/plugins.toml` instead of the ambient user
+plugin file. System configuration still layers on top. A repository's
+`.nemo-relay/config.toml` is ignored unless selected explicitly.
+
+For general launch syntax and argument forwarding, use
+[Command Reference](/nemo-relay-cli/command-reference#run-syntax).
+
+## Custom Launcher Commands
+
+If a launcher or wrapper hides the real agent name, set that wrapper as the
+configured command and pass `--agent`. The same pattern applies to Claude Code
+and Codex:
+
+```toml
+[agents.codex]
+command = "my-codex-wrapper"
+```
+
+```bash
+nemo-relay run --agent codex
+```
+
+## Environment Overrides and Request Limits
+
+Transparent runs always bind the managed gateway to `127.0.0.1:0`. The selected
+port is discovered by the wrapper and exposed to hooks through
+`NEMO_RELAY_GATEWAY_URL`.
+
+Common environment variables for direct gateway server use are:
+
+- `NEMO_RELAY_GATEWAY_BIND`
+- `NEMO_RELAY_OPENAI_AUTH_HEADER`
+- `NEMO_RELAY_OPENAI_BASE_URL`
+- `NEMO_RELAY_ANTHROPIC_AUTH_HEADER`
+- `NEMO_RELAY_ANTHROPIC_BASE_URL`
+- `NEMO_RELAY_MAX_HOOK_PAYLOAD_BYTES`
+- `NEMO_RELAY_MAX_PASSTHROUGH_BODY_BYTES`
+
+The default hook payload limit is `20MiB`. The default provider passthrough body
+limit is `100MiB`. Set both values in bytes.
+
+## Session Metadata
+
+Plugin configuration controls process-level Observability exporters. Per-session
+configuration controls structured metadata on the top-level agent begin event
+and the plugin configuration metadata associated with the session.
+
+For example, attach a user identity to a transparent run:
+
+```bash
+nemo-relay run --session-metadata '{"user_id":"alice"}' -- codex
+```
+
+The CLI emits one `session.start` mark for the lifecycle and copies the merged
+metadata onto each top-level trace scope. It also adds a non-overridable
+`session_instance_id` derived from the session's existing root scope UUID.
+Keep `user_id` a top-level string when OTLP exporters should expose it as
+`user.id`.
+
+## Operational Logging
+
+The CLI initializes operational logging before operational commands run.
+`nemo-relay config` and `nemo-relay plugins edit` skip initialization so invalid
+logging settings do not prevent configuration repair.
+
+File sinks from layered `config.toml` files aggregate by their resolved
+destination `path`, with system entries first. A higher layer recursively
+overlays a sink with the same path; path aliases such as `relay.log` and
+`./relay.log` resolve to one sink, while distinct destinations remain active
+together.
+
+Configure temporary CLI settings with `--log-level` and
+`--log-stderr-format`, or select an absolute TOML file with
+`--log-config-path`.
+
+For defaults, source precedence, environment variables, TOML file sinks, and
+Rust APIs, refer to
+[Operational Logging](/reference/operational-logging).
+
+## Runtime Diagnostics
+
+Enable in-memory diagnostics with `[diagnostics]` in your configuration file.
+Use `--diagnostics=true` to enable collection at startup. Add
+`--diagnostics-http=true` to allow inspection with the gateway's private credentials.
+A running gateway keeps its settings until it restarts.
+
+Use `nemo-relay diagnostics --capabilities` to check the running owner's settings.
+This command does not start or recover a gateway. To inspect an existing local
+daemon, use `--daemon-url URL`. Add `--worker UUID` to read one authorized cached
+worker page. Daemon collection requires
+`[daemon.diagnostics].collect_workers = true`. Each worker must also enable reads.
+
+For configuration, read access, storage limits, and final command views, refer to
+[CLI and Daemon Diagnostics](/reference/diagnostics/cli#cli-startup-and-inspection).
+
+## Model Pricing
+
+Follow [Model Pricing](/configure-plugins/model-pricing) to create a catalog,
+add its source to `plugins.toml`, and verify model cost estimates.
+
+For configuration and exporter check results, use
+[Troubleshoot the CLI](/nemo-relay-cli/troubleshooting#check-configuration-and-exporters).

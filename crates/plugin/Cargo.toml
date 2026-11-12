@@ -14,13 +14,13 @@ workspace = true
 
 [dependencies]
 # First-party crates.
+nemo-relay-plugin-abi.workspace = true
 nemo-relay-types.workspace = true
 
 # Third-party dependencies.
 futures.workspace = true
+schemars.workspace = true
 serde = { workspace = true, features = ["derive"] }
 serde_json.workspace = true
-thiserror.workspace = true
-schemars = { workspace = true }
 tokio = { workspace = true, default-features = true, features = ["io-util", "macros", "net", "rt-multi-thread", "sync", "time"] }
 tokio-util = { workspace = true, features = ["rt"] }

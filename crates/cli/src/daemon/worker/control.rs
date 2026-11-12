@@ -7,7 +7,7 @@ use super::super::common::socket::{Client, Command, Event};
 
 use super::super::common::client::{begin_handshake, control_client};
 use super::super::common::control::{
-    SessionRequest, WorkerBootstrap, WorkerGenerationGrant, WorkerReadyPayload,
+    ReleasePayload, SessionRequest, WorkerBootstrap, WorkerGenerationGrant, WorkerReadyPayload,
     WorkerRecoverRequest, WorkerRegisterRequest, WorkerRegisterResponse,
 };
 use super::super::common::identity::{MachineIdentity, TokenDigest};
@@ -60,6 +60,18 @@ impl Registration {
             .request::<()>(Command::Ready(request.clone()))
             .await?;
         self.pending_ready = None;
+        self.advance_sequence()
+    }
+
+    /// Tells the daemon this worker is exiting, so it does not wait for a reconnect.
+    pub(super) async fn release(&mut self, worker_id: &str) -> Result<(), CliError> {
+        let request = SessionRequest::new(
+            worker_id.to_owned(),
+            self.session_token.clone(),
+            self.next_sequence,
+            ReleasePayload::default(),
+        )?;
+        self.client.request::<()>(Command::Release(request)).await?;
         self.advance_sequence()
     }
 

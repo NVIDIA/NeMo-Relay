@@ -382,6 +382,7 @@ async fn daemon_trust_without_a_published_certificate_matches_the_same_account_d
 
 #[cfg(unix)]
 #[test]
+/// Requires one valid certificate and administrator-controlled targets and directories.
 fn published_daemon_certificate_must_be_one_administrator_controlled_block() {
     use std::os::unix::fs::PermissionsExt;
 
@@ -442,11 +443,62 @@ fn published_daemon_certificate_must_be_one_administrator_controlled_block() {
     let error = daemon_client_config().unwrap_err();
     assert!(error.contains("invalid CERTIFICATE base64"), "{error}");
 
-    // A symlink could point at a file that a user controls.
+    // Symlinks are accepted when the target and both directories remain administrator-controlled.
     let elsewhere = temp.path().join("elsewhere.pem");
     std::fs::write(&elsewhere, daemon.certificate_pem()).unwrap();
     let _ = std::fs::remove_file(&path);
     std::os::unix::fs::symlink(&elsewhere, &path).unwrap();
+    daemon_client_config().unwrap();
+    std::fs::set_permissions(&elsewhere, std::fs::Permissions::from_mode(0o664)).unwrap();
     let error = daemon_client_config().unwrap_err();
-    assert!(error.contains("must be a regular file"), "{error}");
+    assert!(
+        error.contains("must not be writable by group or other users"),
+        "{error}"
+    );
+    std::fs::set_permissions(&elsewhere, std::fs::Permissions::from_mode(0o644)).unwrap();
+    std::fs::set_permissions(temp.path(), std::fs::Permissions::from_mode(0o777)).unwrap();
+    let error = daemon_client_config().unwrap_err();
+    assert!(
+        error.contains("directory of the published daemon TLS certificate"),
+        "{error}"
+    );
+    std::fs::set_permissions(temp.path(), std::fs::Permissions::from_mode(0o700)).unwrap();
+}
+
+#[cfg(unix)]
+#[test]
+/// Keeps ownership validation and bytes bound to one handle after a link is replaced.
+fn certificate_ownership_checks_the_opened_file_after_symlink_substitution() {
+    use std::os::unix::fs::{PermissionsExt, symlink};
+
+    let temp = tempfile::tempdir().unwrap();
+    let trusted = temp.path().join("trusted");
+    let writable = temp.path().join("writable");
+    let link = temp.path().join("certificate");
+    std::fs::write(&trusted, b"trusted bytes").unwrap();
+    std::fs::set_permissions(&trusted, std::fs::Permissions::from_mode(0o644)).unwrap();
+    std::fs::write(&writable, b"untrusted bytes").unwrap();
+    std::fs::set_permissions(&writable, std::fs::Permissions::from_mode(0o666)).unwrap();
+    symlink(&writable, &link).unwrap();
+    let opened =
+        crate::filesystem::bounded::open_bounded_regular_file(&link, "certificate").unwrap();
+    std::fs::remove_file(&link).unwrap();
+    symlink(&trusted, &link).unwrap();
+
+    let error = ensure_administrator_controlled(&link, opened.file(), "certificate").unwrap_err();
+    assert!(error.contains("must not be writable"), "{error}");
+
+    let opened =
+        crate::filesystem::bounded::open_bounded_regular_file(&link, "certificate").unwrap();
+    std::fs::remove_file(&link).unwrap();
+    symlink(&writable, &link).unwrap();
+    ensure_administrator_controlled(&link, opened.file(), "certificate").unwrap();
+    let mut bytes = Vec::new();
+    opened
+        .stream(|chunk| {
+            bytes.extend_from_slice(chunk);
+            Ok(())
+        })
+        .unwrap();
+    assert_eq!(bytes, b"trusted bytes");
 }

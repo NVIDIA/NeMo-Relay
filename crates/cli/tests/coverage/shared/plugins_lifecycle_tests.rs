@@ -1216,7 +1216,7 @@ kind = "rust_dynamic"
 
 [compat]
 relay = ">=1.0.0,<2.0"
-native_api = "1"
+native_api = "v1.0"
 
 [defaults]
 enabled = false
@@ -1232,7 +1232,6 @@ sha256 = "{digest}"
 
 [load]
 library = "libfixture_native.so"
-symbol = "nemo_relay_fixture_native_plugin"
 "#,
             digest = digest,
         ),
@@ -1523,7 +1522,7 @@ kind = "rust_dynamic"
 
 [compat]
 relay = ">=1.0.0,<2.0"
-native_api = "1"
+native_api = "v1.0"
 
 [defaults]
 enabled = false
@@ -1539,7 +1538,6 @@ sha256 = "sha256:{digest}"
 
 [load]
 library = "../native-runtime/libfixture_native.so"
-symbol = "nemo_relay_fixture_native_plugin"
 "#,
         ),
     )
@@ -1803,6 +1801,110 @@ fn activation_snapshot_copies_declared_signature_into_stable_identity() {
     assert_eq!(
         snapshot.closure_digest(),
         dynamic_plugin_runtime_closure_digest(manifest.to_string_lossy().as_ref(), None).unwrap()
+    );
+}
+
+#[test]
+fn activation_snapshot_retains_native_dependency_signature_evidence() {
+    let temp = tempfile::tempdir().unwrap();
+    let directory = temp.path().join("plugin");
+    std::fs::create_dir_all(&directory).unwrap();
+    let manifest = write_native_dynamic_manifest(&directory, "acme.dependency-signature");
+    std::fs::write(directory.join("helper.so"), b"dependency").unwrap();
+    let signature = temp.path().join("helper.sig");
+    std::fs::write(&signature, b"dependency signature").unwrap();
+    let text = std::fs::read_to_string(&manifest).unwrap();
+    let digest = Sha256::digest(b"dependency")
+        .iter()
+        .map(|byte| format!("{byte:02x}"))
+        .collect::<String>();
+    std::fs::write(&manifest, format!("{text}\n[integrity.dependencies.\"helper.so\"]\nsha256 = \"sha256:{digest}\"\nsignature = \"../helper.sig\"\n")).unwrap();
+    let snapshot = DynamicPluginActivationSnapshot::create(
+        manifest.to_str().unwrap(),
+        "acme.dependency-signature",
+        DynamicPluginKind::RustDynamic,
+        None,
+        &crate::plugins::policy::DynamicPluginHostPolicy::default(),
+    )
+    .unwrap();
+    let (captured, _) =
+        DynamicPluginManifest::load_from_path(&snapshot.activation_manifest).unwrap();
+    let copied = captured.integrity.unwrap().dependencies["helper.so"]
+        .signature
+        .clone()
+        .unwrap();
+    std::fs::write(&signature, b"replacement").unwrap();
+    assert_eq!(std::fs::read(copied).unwrap(), b"dependency signature");
+    assert_ne!(
+        snapshot.closure_digest(),
+        dynamic_plugin_runtime_closure_digest(manifest.to_str().unwrap(), None).unwrap()
+    );
+}
+
+/// External signatures with equal filenames keep separate captured bytes and closure identities.
+#[test]
+fn activation_snapshot_distinguishes_external_signature_sources_with_equal_names() {
+    let temp = tempfile::tempdir().unwrap();
+    let directory = temp.path().join("plugin");
+    let signatures = temp.path().join("signatures");
+    for path in [
+        &directory,
+        &signatures.join("main"),
+        &signatures.join("dependency"),
+    ] {
+        std::fs::create_dir_all(path).unwrap();
+    }
+    let manifest = write_native_dynamic_manifest(&directory, "acme.distinct-signatures");
+    let main_signature = signatures.join("main/plugin.sig");
+    let dependency_signature = signatures.join("dependency/plugin.sig");
+    std::fs::write(&main_signature, b"main signature").unwrap();
+    std::fs::write(&dependency_signature, b"dependency signature").unwrap();
+    std::fs::write(directory.join("helper.so"), b"dependency").unwrap();
+    let text = std::fs::read_to_string(&manifest).unwrap().replace(
+        "[integrity]",
+        "[integrity]\nsignature = \"../signatures/main/plugin.sig\"",
+    );
+    let digest = Sha256::digest(b"dependency")
+        .iter()
+        .map(|byte| format!("{byte:02x}"))
+        .collect::<String>();
+    std::fs::write(&manifest, format!("{text}\n[integrity.dependencies.\"helper.so\"]\nsha256 = \"sha256:{digest}\"\nsignature = \"../signatures/dependency/plugin.sig\"\n")).unwrap();
+    let snapshot = DynamicPluginActivationSnapshot::create(
+        manifest.to_str().unwrap(),
+        "acme.distinct-signatures",
+        DynamicPluginKind::RustDynamic,
+        None,
+        &crate::plugins::policy::DynamicPluginHostPolicy::default(),
+    )
+    .unwrap();
+    let (captured, _) =
+        DynamicPluginManifest::load_from_path(&snapshot.activation_manifest).unwrap();
+    let integrity = captured.integrity.unwrap();
+    let main_copy = integrity.signature.unwrap();
+    let dependency_copy = integrity.dependencies["helper.so"]
+        .signature
+        .as_ref()
+        .unwrap();
+    assert_ne!(&main_copy, dependency_copy);
+    assert_eq!(std::fs::read(&main_copy).unwrap(), b"main signature");
+    assert_eq!(
+        std::fs::read(dependency_copy).unwrap(),
+        b"dependency signature"
+    );
+    assert_eq!(
+        snapshot.closure_digest(),
+        dynamic_plugin_runtime_closure_digest(manifest.to_str().unwrap(), None).unwrap()
+    );
+    std::fs::write(&main_signature, b"changed main signature").unwrap();
+    std::fs::write(&dependency_signature, b"changed dependency signature").unwrap();
+    assert_eq!(std::fs::read(main_copy).unwrap(), b"main signature");
+    assert_eq!(
+        std::fs::read(dependency_copy).unwrap(),
+        b"dependency signature"
+    );
+    assert_ne!(
+        snapshot.closure_digest(),
+        dynamic_plugin_runtime_closure_digest(manifest.to_str().unwrap(), None).unwrap()
     );
 }
 
@@ -2700,6 +2802,7 @@ port = "not-an-integer"
 }
 
 #[test]
+/// Exercises provisioning, linked-environment inspection and activation, removal, and re-addition.
 fn add_provisions_persists_and_removes_managed_python_environment() {
     let temp = tempfile::tempdir().unwrap();
     let _env = EnvScope::hermetic(&temp);
@@ -2738,6 +2841,13 @@ fn add_provisions_persists_and_removes_managed_python_environment() {
     );
     let (manifest, manifest_ref) =
         DynamicPluginManifest::load_from_path(plugin_dir.join("relay-plugin.toml")).unwrap();
+    #[cfg(unix)]
+    let environment_target = {
+        let target = temp.path().join("python-environment-target");
+        std::fs::rename(&environment_path, &target).unwrap();
+        std::os::unix::fs::symlink(&target, &environment_path).unwrap();
+        target
+    };
     let inspect = serde_json::to_value(responses::inspect_success(
         "plugins inspect",
         "acme.python",
@@ -2781,6 +2891,11 @@ fn add_provisions_persists_and_removes_managed_python_environment() {
     )
     .unwrap();
     assert!(!environment_path.exists());
+    #[cfg(unix)]
+    assert_eq!(
+        std::fs::read(environment_target.join("stale-marker")).unwrap(),
+        b"stale"
+    );
     let scopes = load_scoped_registries(None).unwrap();
     let removed = find_record_by_id(&scopes, "acme.python")
         .unwrap()
@@ -3181,13 +3296,15 @@ fn managed_environment_cleanup_refuses_paths_outside_lifecycle_directory() {
 
 #[cfg(unix)]
 #[test]
-fn managed_environment_cleanup_refuses_symlinked_environment() {
+/// Removes live and dangling environment aliases while preserving target contents.
+fn managed_environment_cleanup_unlinks_environment_without_removing_target() {
     use std::os::unix::fs::symlink;
 
     let temp = tempfile::tempdir().unwrap();
     let state_path = temp.path().join(".dynamic-plugins.json");
     let outside = temp.path().join("outside");
     std::fs::create_dir_all(&outside).unwrap();
+    std::fs::write(outside.join("keep"), b"keep").unwrap();
     let environment_name = Sha256::digest(b"acme.python")
         .iter()
         .map(|byte| format!("{byte:02x}"))
@@ -3199,16 +3316,117 @@ fn managed_environment_cleanup_refuses_symlinked_environment() {
     std::fs::create_dir_all(environment.parent().unwrap()).unwrap();
     symlink(&outside, &environment).unwrap();
 
-    let error = environment::remove_managed_environment(
+    environment::remove_managed_environment(
         &state_path,
         "acme.python",
         environment.to_string_lossy().as_ref(),
     )
-    .expect_err("symlinked environment must not be removed");
+    .unwrap();
 
-    assert!(error.contains("is not a directory"));
-    assert!(environment.is_symlink());
-    assert!(outside.exists());
+    assert!(!environment.is_symlink());
+    assert_eq!(std::fs::read(outside.join("keep")).unwrap(), b"keep");
+
+    symlink(temp.path().join("missing"), &environment).unwrap();
+    environment::remove_managed_environment_for_plugin(&state_path, "acme.python").unwrap();
+    assert!(!environment.is_symlink());
+}
+
+#[cfg(unix)]
+#[test]
+/// Resets a managed alias to a fresh environment without changing its original target.
+fn provisioning_resets_a_linked_managed_environment_without_removing_target() {
+    let temp = tempfile::tempdir().unwrap();
+    let _env = EnvScope::hermetic(&temp);
+    let plugin_dir = temp.path().join("plugin");
+    std::fs::create_dir(&plugin_dir).unwrap();
+    let manifest_path = write_python_dynamic_manifest(&plugin_dir, "acme.python-reset");
+    let (manifest, manifest_ref) = DynamicPluginManifest::load_from_path(manifest_path).unwrap();
+    let state = temp.path().join(".dynamic-plugins.json");
+    let runner = FakePythonEnvironmentRunner::default();
+    let managed =
+        environment::provision_python_environment(&manifest, &manifest_ref, &state, &runner)
+            .unwrap()
+            .unwrap();
+    let target = temp.path().join("original-environment");
+    std::fs::rename(&managed, &target).unwrap();
+    std::fs::write(target.join("keep"), b"keep").unwrap();
+    std::os::unix::fs::symlink(&target, &managed).unwrap();
+
+    let reset =
+        environment::provision_python_environment(&manifest, &manifest_ref, &state, &runner)
+            .unwrap()
+            .unwrap();
+    assert_eq!(reset, managed);
+    assert!(!managed.is_symlink());
+    assert!(environment::environment_python_path(&managed).is_file());
+    assert_eq!(std::fs::read(target.join("keep")).unwrap(), b"keep");
+}
+
+#[cfg(windows)]
+#[test]
+#[ignore = "requires Windows symlink privilege; just test-rust runs this automatically when available"]
+/// Unlinks live file and directory aliases, and dangling directory aliases, without deleting targets.
+fn windows_managed_environment_cleanup_unlinks_directory_and_file_symlinks() {
+    use std::os::windows::fs::{symlink_dir, symlink_file};
+
+    let temp = tempfile::tempdir().unwrap();
+    let state_path = temp.path().join(".dynamic-plugins.json");
+    let environment_name = Sha256::digest(b"acme.python")
+        .iter()
+        .map(|byte| format!("{byte:02x}"))
+        .collect::<String>();
+    let managed = temp
+        .path()
+        .join(".dynamic-plugin-environments")
+        .join(environment_name);
+    std::fs::create_dir_all(managed.parent().unwrap()).unwrap();
+
+    for is_directory in [true, false] {
+        let target = temp
+            .path()
+            .join(if is_directory { "directory" } else { "file" });
+        let contents = if is_directory {
+            std::fs::create_dir(&target).unwrap();
+            target.join("keep")
+        } else {
+            target.clone()
+        };
+        std::fs::write(&contents, b"keep").unwrap();
+        if is_directory {
+            symlink_dir(&target, &managed)
+        } else {
+            symlink_file(&target, &managed)
+        }
+        .unwrap();
+
+        environment::remove_managed_environment(
+            &state_path,
+            "acme.python",
+            managed.to_str().unwrap(),
+        )
+        .unwrap();
+        assert_eq!(
+            std::fs::symlink_metadata(&managed).unwrap_err().kind(),
+            std::io::ErrorKind::NotFound
+        );
+        assert_eq!(std::fs::read(&contents).unwrap(), b"keep");
+        if is_directory {
+            symlink_dir(&target, &managed).unwrap();
+            let relocated = temp.path().join("relocated-directory");
+            std::fs::rename(&target, &relocated).unwrap();
+            environment::remove_managed_environment(
+                &state_path,
+                "acme.python",
+                managed.to_str().unwrap(),
+            )
+            .unwrap();
+            assert_eq!(
+                std::fs::symlink_metadata(&managed).unwrap_err().kind(),
+                std::io::ErrorKind::NotFound
+            );
+            assert_eq!(std::fs::read(relocated.join("keep")).unwrap(), b"keep");
+        }
+    }
 }
 
 #[test]
@@ -5832,5 +6050,48 @@ fn incompatible_workers_cannot_activate_after_validation_refresh() {
         let failure = required_startup_failure(&entry, &resolved.dynamic_plugins).unwrap();
         assert!(failure.contains(id), "{failure}");
         assert!(failure.contains("rebuild and reinstall"), "{failure}");
+    }
+}
+
+/// Refreshing registry validation must retain an unsupported native API failure.
+#[test]
+fn native_api_rejections_survive_registry_validation_refresh() {
+    let temp = tempfile::tempdir().unwrap();
+    let _env = EnvScope::hermetic(&temp);
+    let _cwd = CurrentDirGuard::enter(temp.path());
+    let id = "acme.unsupported-native";
+    let plugin_dir = temp.path().join("plugin");
+    std::fs::create_dir_all(&plugin_dir).unwrap();
+    let manifest_path = write_native_dynamic_manifest(&plugin_dir, id);
+    let server = GatewayOverrides::default();
+    add(
+        PluginsAddRequest {
+            scope: ConfigurationScope::User,
+            path: plugin_dir,
+        },
+        &server,
+    )
+    .unwrap();
+    let resolved = resolve_plugins_config(None).unwrap();
+    let mut scopes = load_and_hydrate_scopes(None, &resolved).unwrap();
+    let entry = find_record_by_id(&scopes, id).unwrap().unwrap();
+    let scope = &mut scopes[entry.scope_index];
+    for api in ["1", "v1.1", "v2.0"] {
+        let (mut manifest, manifest_ref) =
+            load_manifest_for_action("test", &manifest_path).unwrap();
+        manifest.compat.native_api = Some(api.into());
+        let policy =
+            evaluate_dynamic_plugin_host_policy(&resolved.dynamic_plugin_policy, &manifest);
+        let trust = evaluate_dynamic_plugin_trust(&manifest, &manifest_ref, &policy);
+        update_registry_validation_status(scope, id, &manifest, &policy, &trust).unwrap();
+        let record = scope.registry.get(id).unwrap();
+        assert_eq!(
+            record.status.validation.compatibility,
+            DynamicPluginCheckState::Invalid
+        );
+        assert_eq!(
+            record.status.last_error.as_ref().unwrap().code,
+            "native_api_unsupported"
+        );
     }
 }

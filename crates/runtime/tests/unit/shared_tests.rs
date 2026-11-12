@@ -371,6 +371,7 @@ async fn test_run_request_intercepts_with_codec_none_and_codec_paths() {
     reset_global();
 }
 
+/// Check that managed calls record contributions and standalone calls return them.
 #[tokio::test]
 #[allow(clippy::await_holding_lock)] // Serializes access to global runtime state.
 async fn managed_request_chain_records_contributions_incrementally_while_standalone_retains_them() {
@@ -429,6 +430,7 @@ async fn managed_request_chain_records_contributions_incrementally_while_standal
         },
         None,
         &recorder,
+        true,
     )
     .await
     .unwrap();
@@ -725,5 +727,58 @@ async fn request_encoding_reuses_the_original_decoded_baseline() {
             deregister_llm_request_intercept("baseline-edit").unwrap();
         }
     }
+    reset_global();
+}
+
+/// Check that skipping intercepts preserves codec output and session headers.
+#[tokio::test]
+#[allow(clippy::await_holding_lock)]
+async fn disabled_request_intercepts_keep_codecs_and_session_headers() {
+    let _guard = lock_runtime_owner();
+    reset_global();
+    let agent = push_scope(
+        crate::api::scope::PushScopeParams::builder()
+            .name("options-agent")
+            .scope_type(ScopeType::Agent)
+            .metadata(json!({"session_id": "options-session"}))
+            .build(),
+    )
+    .unwrap();
+    register_llm_request_intercept(
+        "options-must-not-run",
+        0,
+        false,
+        Arc::new(|_, _, _| Box::pin(async { panic!("disabled request intercept ran") })),
+    )
+    .unwrap();
+    let recorder = LlmOptimizationRecorder::default();
+    let (request, annotated, marks, contributions) =
+        run_request_intercepts_with_codec_and_recorder(
+            "options-codec",
+            LlmRequest {
+                headers: Map::new(),
+                content: json!({"prompt":"hello"}),
+            },
+            Some(Arc::new(SharedTestCodec)),
+            &recorder,
+            false,
+        )
+        .await
+        .unwrap();
+    assert_eq!(request.headers["x-codec-encoded"], json!(true));
+    assert_eq!(
+        request.headers[DYNAMO_SESSION_ID_HEADER_KEY],
+        json!("options-session")
+    );
+    assert!(annotated.is_some());
+    assert!(marks.is_empty());
+    assert!(contributions.is_empty());
+    assert!(recorder.unemitted().is_empty());
+    pop_scope(
+        crate::api::scope::PopScopeParams::builder()
+            .handle_uuid(&agent.uuid)
+            .build(),
+    )
+    .unwrap();
     reset_global();
 }

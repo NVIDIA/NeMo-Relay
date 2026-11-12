@@ -10,7 +10,7 @@ import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 
 const require = createRequire(import.meta.url);
-const lib = require('../index.js');
+const lib = require('../dist/index.js');
 const nodeDir = fileURLToPath(new URL('..', import.meta.url));
 
 const {
@@ -236,7 +236,7 @@ describe('LLM execute', () => {
       stage('JavaScript startup');
       const assert = require('node:assert/strict');
       const { parentPort } = require('node:worker_threads');
-      const lib = require(${JSON.stringify(path.join(nodeDir, 'index.js'))});
+      const lib = require(${JSON.stringify(path.join(nodeDir, 'dist', 'index.js'))});
       stage('addon loaded');
       const request = () => ({ headers: {}, content: { messages: [], model: 'test-model' } });
 
@@ -1031,7 +1031,7 @@ describe('LLM guardrails', () => {
   });
 
   it('releases custom stream codec references safely after early garbage collection', () => {
-    const modulePath = path.join(nodeDir, 'index.js');
+    const modulePath = path.join(nodeDir, 'dist', 'index.js');
     const script = `
       import { createRequire } from 'node:module';
       const require = createRequire(${JSON.stringify(path.join(nodeDir, 'package.json'))});
@@ -3405,7 +3405,7 @@ describe('LLM intercepts', () => {
   });
 
   it('terminating a worker with a pending next() leaves the process running', () => {
-    const modulePath = JSON.stringify(path.join(nodeDir, 'index.js'));
+    const modulePath = JSON.stringify(path.join(nodeDir, 'dist', 'index.js'));
     const script = `
       import { Worker } from 'node:worker_threads';
       const worker = new Worker(
@@ -3444,7 +3444,7 @@ describe('LLM intercepts', () => {
   });
 
   it('ignored next() and close() rejections stay unhandled', () => {
-    const modulePath = JSON.stringify(path.join(nodeDir, 'index.js'));
+    const modulePath = JSON.stringify(path.join(nodeDir, 'dist', 'index.js'));
     const script = `
       import assert from 'node:assert/strict';
       import { createRequire } from 'node:module';
@@ -3521,7 +3521,7 @@ describe('LLM intercepts', () => {
   });
 
   it('a pending next() keeps a collected handle alive until it settles', () => {
-    const modulePath = JSON.stringify(path.join(nodeDir, 'index.js'));
+    const modulePath = JSON.stringify(path.join(nodeDir, 'dist', 'index.js'));
     const script = `
       import { createRequire } from 'node:module';
       const require = createRequire(import.meta.url);
@@ -3601,7 +3601,7 @@ describe('LLM intercepts', () => {
   });
 
   it('a collected stream handle closes its stream before END', () => {
-    const modulePath = JSON.stringify(path.join(nodeDir, 'index.js'));
+    const modulePath = JSON.stringify(path.join(nodeDir, 'dist', 'index.js'));
     const script = `
       import { createRequire } from 'node:module';
       const require = createRequire(import.meta.url);
@@ -3683,7 +3683,7 @@ describe('LLM intercepts', () => {
   });
 
   it('a collected stream handle keeps the outcome of its pending close()', () => {
-    const modulePath = JSON.stringify(path.join(nodeDir, 'index.js'));
+    const modulePath = JSON.stringify(path.join(nodeDir, 'dist', 'index.js'));
     const script = `
       import { createRequire } from 'node:module';
       const require = createRequire(import.meta.url);
@@ -3857,7 +3857,7 @@ describe('LLM intercepts', () => {
   });
 
   it('completed deregistered stream intercepts do not keep Node alive', () => {
-    const modulePath = JSON.stringify(path.join(nodeDir, 'index.js'));
+    const modulePath = JSON.stringify(path.join(nodeDir, 'dist', 'index.js'));
     const script = `
       import { createRequire } from 'node:module';
       const require = createRequire(import.meta.url);
@@ -3895,7 +3895,7 @@ describe('LLM intercepts', () => {
   });
 
   it('awaiting collectors and finalizers do not starve the runtime', () => {
-    const modulePath = JSON.stringify(path.join(nodeDir, 'index.js'));
+    const modulePath = JSON.stringify(path.join(nodeDir, 'dist', 'index.js'));
     const script = `
       import { availableParallelism } from 'node:os';
       import { createRequire } from 'node:module';
@@ -3940,7 +3940,7 @@ describe('LLM intercepts', () => {
   });
 
   it('abandoned streams with a collector and finalizer do not keep Node alive', () => {
-    const modulePath = JSON.stringify(path.join(nodeDir, 'index.js'));
+    const modulePath = JSON.stringify(path.join(nodeDir, 'dist', 'index.js'));
     const script = `
       import { createRequire } from 'node:module';
       const require = createRequire(import.meta.url);
@@ -3973,7 +3973,7 @@ describe('LLM intercepts', () => {
   });
 
   it('a producer parked on a full buffer does not keep Node alive, in both modes', () => {
-    const modulePath = JSON.stringify(path.join(nodeDir, 'index.js'));
+    const modulePath = JSON.stringify(path.join(nodeDir, 'dist', 'index.js'));
     for (const forwarded of [false, true]) {
       const script = `
         import { createRequire } from 'node:module';
@@ -4095,37 +4095,45 @@ describe('LLM intercepts', () => {
   });
 
   it('generated request-intercept declarations reference the canonical open optimization type', () => {
-    const declarations = readFileSync(new URL('../index.d.ts', import.meta.url), 'utf8');
+    const declarations = readFileSync(new URL('../binding.d.ts', import.meta.url), 'utf8');
     const openKind = "kind: 'input_compression' | 'model_routing' | (string & {})";
 
     assert.equal(declarations.split(openKind).length - 1, 1);
-    assert.match(declarations, /registerLlmRequestIntercept\([^\n]*LlmRequestInterceptOutcome/);
-    assert.match(declarations, /scopeRegisterLlmRequestIntercept\([^\n]*LlmRequestInterceptOutcome/);
+    assert.match(declarations, /registerLlmRequestIntercept<[^\n]*LlmRequestInterceptOutcomeCompatible</);
+    assert.match(declarations, /scopeRegisterLlmRequestIntercept<[^\n]*LlmRequestInterceptOutcomeCompatible</);
   });
 
   it('generated LLM sanitizer declarations expose directional codec contexts', () => {
-    const declarations = readFileSync(new URL('../index.d.ts', import.meta.url), 'utf8');
+    const declarations = readFileSync(new URL('../binding.d.ts', import.meta.url), 'utf8');
 
-    assert.equal(declarations.split('context: LlmSanitizeRequestContext').length - 1, 2);
-    assert.equal(declarations.split('context: LlmSanitizeResponseContext').length - 1, 2);
+    assert.equal(
+      declarations.split('context: LlmSanitizeRequestContext').length - 1,
+      3,
+      'global, scope-local, and plugin-context sanitizer declarations must expose the request codec context',
+    );
+    assert.equal(
+      declarations.split('context: LlmSanitizeResponseContext').length - 1,
+      3,
+      'global, scope-local, and plugin-context sanitizer declarations must expose the response codec context',
+    );
     assert.match(declarations, /export type EventMetadata = Record<string, EventMetadataValue>/);
     assert.doesNotMatch(declarations, /import\('\.\/plugin'\)\./);
     assert.doesNotMatch(declarations, /registerLlmSanitizeRequestGuardrail\([^\n]*\.\.\.args: any\[\]/);
   });
 
   it('generated streaming LLM declarations expose the producer, collector, and finalizer contracts', () => {
-    const declarations = readFileSync(new URL('../index.d.ts', import.meta.url), 'utf8');
+    const declarations = readFileSync(new URL('../binding.d.ts', import.meta.url), 'utf8');
 
     assert.match(
       declarations,
-      /llmStreamCallExecute\([^\n]*func: \(request: Json, signal: AbortSignal\) => AsyncIterable<Json> \| Promise<AsyncIterable<Json>>/,
+      /llmStreamCallExecute<[^\n]*func: \(request: LlmRequestShape, signal: AbortSignal\) => AsyncIterable<TChunk> \| Promise<AsyncIterable<TChunk>>/,
     );
-    assert.match(declarations, /llmStreamCallExecute\([^\n]*collector\?: \(chunk: Json\) => void \| Promise<void>/);
-    assert.match(declarations, /llmStreamCallExecute\([^\n]*finalizer\?: \(\) => Json \| Promise<Json>/);
+    assert.match(declarations, /llmStreamCallExecute<[^\n]*collector\?: \(chunk: Json\) => void \| Promise<void>/);
+    assert.match(declarations, /llmStreamCallExecute<[^\n]*finalizer\?: \(\) => TAggregate \| Promise<TAggregate>/);
   });
 
   it('generated middleware declarations expose Promise-aware callback types', () => {
-    const declarations = readFileSync(new URL('../index.d.ts', import.meta.url), 'utf8');
+    const declarations = readFileSync(new URL('../binding.d.ts', import.meta.url), 'utf8');
     const registrations = [
       'registerToolSanitizeRequestGuardrail',
       'registerToolSanitizeResponseGuardrail',
@@ -4153,31 +4161,35 @@ describe('LLM intercepts', () => {
 
     for (const registration of registrations) {
       const declaration = declarations.match(
-        new RegExp(String.raw`export declare function ${registration}\([^\n]+`),
+        new RegExp(String.raw`export declare function ${registration}[<(][^\n]+`),
       )?.[0];
       assert.ok(declaration, `missing declaration for ${registration}`);
       assert.doesNotMatch(declaration, /\.\.\.args: any\[\]/, `${registration} must not expose an any callback`);
       assert.match(declaration, /Promise</, `${registration} must expose its Promise callback form`);
     }
     assert.equal(
-      declarations.split('next: (request: Json) => Promise<AsyncIterable<Json>>').length - 1,
-      2,
-      'global and scope-local stream intercept declarations must expose the lazy next contract',
+      declarations.match(
+        /next: <TNextRequest extends LlmRequestCompatible<TNextRequest>>\(\s*request: TNextRequest,?\s*\) => Promise<AsyncIterable<Json>>/g,
+      ).length,
+      3,
+      'global, scope-local, and plugin-context stream intercept declarations must expose the lazy next contract',
     );
     assert.equal(
-      declarations.split('next: (args: Json) => ToolExecutionResult | Promise<ToolExecutionResult>').length - 1,
-      2,
-      'global and scope-local tool intercept declarations must expose canonical tool results',
+      declarations.match(
+        /next: <TNextArgs extends JsonCompatible<TNextArgs>>\(\s*args: TNextArgs,?\s*\) => ToolExecutionResult \| Promise<ToolExecutionResult>/g,
+      ).length,
+      3,
+      'global, scope-local, and plugin-context tool intercept declarations must expose canonical tool results',
     );
     assert.equal(
       declarations.split('context: ToolExecutionContext').length - 1,
-      2,
-      'global and scope-local context intercept declarations must expose the tool execution context',
+      3,
+      'global, scope-local, and plugin-context intercept declarations must expose the tool execution context',
     );
     assert.equal(
       declarations.split('context: LlmExecutionContext').length - 1,
-      4,
-      'global and scope-local unary and streaming LLM intercept declarations must expose the execution codec context',
+      6,
+      'global, scope-local, and plugin-context unary and streaming LLM intercept declarations must expose the execution codec context',
     );
     assert.match(declarations, /export type LlmRequestContext = LlmSanitizeRequestContext/);
     assert.match(declarations, /export type LlmResponseContext = LlmSanitizeResponseContext/);
@@ -4189,20 +4201,28 @@ describe('LLM intercepts', () => {
   });
 
   it('plugin declarations expose Promise middleware and the implemented stream contract', () => {
-    const declarations = readFileSync(new URL('../plugin.d.ts', import.meta.url), 'utf8');
+    const declarations = readFileSync(new URL('../binding.d.ts', import.meta.url), 'utf8');
+    const pluginDeclarations = readFileSync(new URL('../dist/plugin.d.ts', import.meta.url), 'utf8');
+    const context = declarations.match(/export interface PluginContext \{[\s\S]*?\n\}/)?.[0];
+    assert.ok(context, 'binding.d.ts must declare PluginContext');
 
-    assert.match(declarations, /registerMarkSanitizeGuardrail\([\s\S]*?Promise<EventSanitizeFields>/);
-    assert.match(declarations, /registerScopeSanitizeStartGuardrail\([\s\S]*?Promise<EventSanitizeFields>/);
-    assert.match(declarations, /registerScopeSanitizeEndGuardrail\([\s\S]*?Promise<EventSanitizeFields>/);
-    assert.match(declarations, /registerToolSanitizeRequestGuardrail\([\s\S]*?Json \| Promise<Json>/);
-    assert.match(declarations, /registerToolSanitizeResponseGuardrail\([\s\S]*?Json \| Promise<Json>/);
-    assert.match(declarations, /registerLlmSanitizeRequestGuardrail\([\s\S]*?Promise<Json \| null>/);
-    assert.match(declarations, /registerLlmSanitizeResponseGuardrail\([\s\S]*?Promise<Json \| null>/);
-    assert.match(declarations, /registerLlmConditionalExecutionGuardrail\([\s\S]*?Promise<string \| null>/);
-    assert.match(declarations, /registerLlmRequestIntercept\([\s\S]*?Promise<LlmRequestInterceptOutcome>/);
+    assert.match(pluginDeclarations, /export type \{[\s\S]*?\bPluginContext,[\s\S]*?\} from '\.\.\/binding\.js'/);
     assert.match(
       declarations,
-      /registerLlmStreamExecutionIntercept\([\s\S]*?next: \(request: Json\) => Promise<AsyncIterable<Json>>/,
+      /registerPlugin\([^\n]*register: \(pluginConfig: JsonObject, context: PluginContext\) => void/,
+    );
+    assert.match(context, /registerMarkSanitizeGuardrail<[\s\S]*?Promise<TFields>/);
+    assert.match(context, /registerScopeSanitizeStartGuardrail<[\s\S]*?Promise<TFields>/);
+    assert.match(context, /registerScopeSanitizeEndGuardrail<[\s\S]*?Promise<TFields>/);
+    assert.match(context, /registerToolSanitizeRequestGuardrail<[\s\S]*?TValue \| Promise<TValue>/);
+    assert.match(context, /registerToolSanitizeResponseGuardrail<[\s\S]*?TValue \| Promise<TValue>/);
+    assert.match(context, /registerLlmSanitizeRequestGuardrail<[\s\S]*?Promise<TRequest \| null>/);
+    assert.match(context, /registerLlmSanitizeResponseGuardrail<[\s\S]*?Promise<TResponse \| null>/);
+    assert.match(context, /registerLlmConditionalExecutionGuardrail\([\s\S]*?Promise<string \| null>/);
+    assert.match(context, /registerLlmRequestIntercept<[\s\S]*?Promise<TOutcome>/);
+    assert.match(
+      context,
+      /registerLlmStreamExecutionIntercept<[\s\S]*?next: <TNextRequest extends LlmRequestCompatible<TNextRequest>>\([\s\S]*?\) => Promise<AsyncIterable<Json>>/,
     );
   });
 
@@ -4293,7 +4313,7 @@ describe('process exit with queued codec callbacks', () => {
         llmCallExecute,
         registerLlmSanitizeResponseGuardrail,
         OpenAIChatCodec,
-      } = require(${JSON.stringify(path.join(nodeDir, 'index.js'))});
+      } = require(${JSON.stringify(path.join(nodeDir, 'dist', 'index.js'))});
       let release;
       registerLlmSanitizeResponseGuardrail('exit_window', 10, (response) => new Promise((resolve) => {
         release = () => resolve(response);

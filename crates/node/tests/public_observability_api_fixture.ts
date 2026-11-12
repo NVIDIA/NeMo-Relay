@@ -12,8 +12,12 @@ import {
   OpenTelemetryLogSubscriber,
   OpenTelemetryMetricSubscriber,
   OpenTelemetrySubscriber,
-} from '../index.js';
-import { openTelemetrySignalEndpoint, openTelemetryLogConfig, openTelemetryMetricConfig } from '../observability.js';
+} from '../dist/index.js';
+import {
+  openTelemetrySignalEndpoint,
+  openTelemetryLogConfig,
+  openTelemetryMetricConfig,
+} from '../dist/observability.js';
 
 const dataSchema: DataSchema = { name: 'example.fixture', version: '1' };
 

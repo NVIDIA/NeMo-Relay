@@ -3,11 +3,11 @@
 
 //! Runtime event normalization through codec and pricing services.
 use crate::api::event::{
-    BaseEvent, CategoryProfile, Event, EventCategory, EventNormalizationExt, ScopeCategory,
-    ScopeEvent, llm_attributes_to_strings,
+    BaseEvent, CategoryProfile, Event, EventCategory, EventNormalizationExt, EventSanitizeFields,
+    EventTelemetryExt, ScopeCategory, ScopeEvent, llm_attributes_to_strings,
 };
-use crate::api::llm::LlmAttributes;
 use crate::api::llm::LlmHandle;
+use crate::api::llm::{LlmAttributes, LlmRequest};
 use crate::api::scope::{ScopeAttributes, ScopeHandle, ScopeType};
 use crate::api::tool::{ToolAttributes, ToolHandle};
 use nemo_relay_types::codec::request::{AnnotatedLlmRequest, Message, MessageContent};
@@ -227,4 +227,209 @@ fn handle_constructors_preserve_supplied_metadata() {
     assert_eq!(llm.parent_uuid, parent_uuid);
     assert_eq!(llm.model_name, None);
     assert_eq!(llm.uuid.get_version(), Some(Version::SortRand));
+}
+
+#[test]
+fn telemetry_request_projects_native_items_without_changing_wire_annotations() {
+    use nemo_relay_codecs::openai_responses::OpenAIResponsesCodec;
+    use nemo_relay_types::codec::traits::LlmCodec;
+
+    let input = r#"{"literal":"keep this as text"}"#;
+    let raw = LlmRequest {
+        headers: Map::new(),
+        content: json!({"input": [
+            {"type": "custom_tool_call", "id": "item-1", "call_id": "call-1",
+             "name": "exec", "input": input, "future": {"keep": true}},
+            {"type": "custom_tool_call_output", "id": "item-2", "call_id": "call-1",
+             "output": [{"type": "input_text", "text": "done"}], "future": 2}
+        ]}),
+    };
+    for annotated in [false, true] {
+        let annotation = OpenAIResponsesCodec.decode(&raw).unwrap();
+        let event = llm_start_event(
+            serde_json::to_value(&raw).unwrap(),
+            CategoryProfile::builder()
+                .annotated_request_opt(annotated.then(|| Arc::new(annotation)))
+                .build(),
+        );
+        let before = event.to_json_string().unwrap();
+        let view = event.telemetry_llm_request().unwrap();
+        assert!(matches!(&view.messages[0], Message::ToolCallItem {
+            id: Some(id), call_id, name, arguments, ..
+        } if id == "item-1" && call_id == "call-1" && name == "exec" && arguments == &json!(input)));
+        assert!(matches!(&view.messages[1], Message::ToolResultItem {
+            id: Some(id), call_id, output, ..
+        } if id == "item-2" && call_id == "call-1" && output == &raw.content["input"][1]["output"]));
+        let original = event.normalized_llm_request().unwrap();
+        assert!(matches!(
+            original.messages[0],
+            Message::ProviderNative { .. }
+        ));
+        assert_eq!(
+            OpenAIResponsesCodec
+                .encode(&original, &raw)
+                .unwrap()
+                .content,
+            raw.content
+        );
+        assert_eq!(event.to_json_string().unwrap(), before);
+    }
+}
+
+#[test]
+fn telemetry_request_keeps_unknown_and_invalid_native_items_borrowed() {
+    let mut request = annotated_request("demo-model", "hello");
+    for (provider, kind, value) in [
+        (
+            "other",
+            "custom_tool_call",
+            json!({"type": "custom_tool_call", "call_id": "call-1", "name": "exec", "input": "text"}),
+        ),
+        (
+            "openai_responses",
+            "custom_tool_call",
+            json!({"type": "custom_tool_call", "name": "exec", "input": "text"}),
+        ),
+        (
+            "openai_responses",
+            "custom_tool_call",
+            json!({"type": "custom_tool_call_output", "call_id": "call-1", "output": "done"}),
+        ),
+        (
+            "openai_responses",
+            "future_item",
+            json!({"type": "future_item", "payload": "text"}),
+        ),
+    ] {
+        request.messages.push(Message::ProviderNative {
+            provider: provider.into(),
+            kind: kind.into(),
+            value,
+        });
+    }
+    let expected = request.clone();
+    let event = llm_start_event(
+        json!(null),
+        CategoryProfile::builder()
+            .annotated_request(Arc::new(request))
+            .build(),
+    );
+    let view = event.telemetry_llm_request().unwrap();
+    assert!(matches!(view, std::borrow::Cow::Borrowed(_)));
+    assert_eq!(*view, expected);
+}
+
+#[test]
+fn telemetry_request_uses_sanitized_annotation_and_cannot_restore_removed_payloads() {
+    let mut event = llm_start_event(
+        json!({"headers": {}, "content": {"input": [
+            {"type": "custom_tool_call", "call_id": "raw-call", "name": "exec", "input": "raw-secret"}
+        ]}}),
+        CategoryProfile::builder().annotated_request(Arc::new(AnnotatedLlmRequest {
+            messages: vec![Message::ProviderNative {
+                provider: "openai_responses".into(), kind: "custom_tool_call".into(),
+                value: json!({"type": "custom_tool_call", "call_id": "safe-call", "name": "exec", "input": "redacted"}),
+            }], ..Default::default()
+        })).build(),
+    );
+    let view = event.telemetry_llm_request().unwrap();
+    assert!(
+        matches!(&view.messages[0], Message::ToolCallItem { call_id, arguments, .. }
+        if call_id == "safe-call" && arguments == &json!("redacted"))
+    );
+    event.apply_sanitize_fields(EventSanitizeFields::default());
+    assert!(event.telemetry_llm_request().is_none());
+    assert!(event.telemetry_llm_tool_calls().is_none());
+}
+
+/// Verifies malformed entries preserve valid calls and positional fallback IDs.
+#[test]
+fn telemetry_tool_calls_skip_non_object_entries_without_renumbering() {
+    for invalid in [
+        json!(null),
+        json!(false),
+        json!(42),
+        json!("invalid"),
+        json!([]),
+    ] {
+        let event = llm_end_event(
+            json!({"tool_calls": [
+                {"id": "call-1", "name": "first", "arguments": {"q": "one"}},
+                invalid,
+                {"name": "later", "arguments": {"q": "two"}}
+            ]}),
+            CategoryProfile::default(),
+        );
+        let calls = event
+            .telemetry_llm_tool_calls()
+            .expect("valid calls survive");
+        assert_eq!(calls.len(), 2);
+        assert_eq!(calls[0].id, "call-1");
+        assert_eq!(calls[0].arguments, json!({"q": "one"}));
+        assert_eq!(calls[1].id, "later:3");
+        assert_eq!(calls[1].arguments, json!({"q": "two"}));
+
+        let invalid_only =
+            llm_end_event(json!({"tool_calls": [invalid]}), CategoryProfile::default());
+        assert!(invalid_only.telemetry_llm_tool_calls().is_none());
+    }
+}
+
+#[test]
+fn telemetry_tool_calls_use_annotated_semantics_and_preserve_matching_metadata() {
+    use nemo_relay_types::codec::response::ResponseToolCall;
+    let event = llm_end_event(
+        json!({"tool_calls": [
+            {"id": "call-1", "name": "exec", "arguments": "raw-secret", "provider_data": {"status": "ok"}},
+            null,
+            {"id": "raw-only", "name": "other", "arguments": "{}"}
+        ]}),
+        CategoryProfile::builder()
+            .annotated_response(Arc::new(AnnotatedLlmResponse {
+                tool_calls: Some(vec![ResponseToolCall {
+                    id: "call-1".into(),
+                    name: "exec".into(),
+                    arguments: json!("redacted"),
+                }]),
+                ..Default::default()
+            }))
+            .build(),
+    );
+    let before = event.to_json_string().unwrap();
+    let calls = event.telemetry_llm_tool_calls().unwrap();
+    assert_eq!(calls.len(), 1);
+    assert_eq!(calls[0].id, "call-1");
+    assert_eq!(calls[0].arguments, json!("redacted"));
+    assert_eq!(
+        calls[0].extra.as_ref().unwrap()["provider_data"]["status"],
+        "ok"
+    );
+    assert_eq!(event.to_json_string().unwrap(), before);
+}
+
+#[test]
+fn telemetry_tool_calls_distinguish_empty_lists_from_partial_annotations() {
+    for tool_calls in [None, Some(Vec::new())] {
+        let partial = tool_calls.is_none();
+        let event = llm_end_event(
+            json!({"tool_calls": [{"id": "call-1", "name": "exec", "arguments": {"q": "test"}}]}),
+            CategoryProfile::builder()
+                .annotated_response(Arc::new(AnnotatedLlmResponse {
+                    tool_calls,
+                    ..Default::default()
+                }))
+                .build(),
+        );
+        let calls = event
+            .telemetry_llm_tool_calls()
+            .expect("an explicit call list or raw fallback is available");
+        if partial {
+            assert_eq!(calls.len(), 1);
+            assert_eq!(calls[0].id, "call-1");
+            assert_eq!(calls[0].name, "exec");
+            assert_eq!(calls[0].arguments, json!({"q": "test"}));
+        } else {
+            assert!(calls.is_empty());
+        }
+    }
 }

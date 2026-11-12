@@ -134,6 +134,35 @@ to `None`. A wrapper with an empty list maps to `Some([])`. Optional scalar fiel
 preserve explicit false and zero. A present `MessageContent.text = ""` differs
 from a missing content variant.
 
+`Usage.cache_write_token_counts` is the canonical duration-aware cache-write list.
+Its wrapper preserves absence versus an explicitly empty list. Each entry requires
+`count`, including explicit zero, and carries optional `duration` seconds. Entry
+order, duplicate durations, unknown durations, and uint64 values remain unchanged.
+In native Rust and Python callback data, this list is named `cache_write_tokens`.
+
+The deprecated scalar `Usage.cache_write_tokens` and `cache_write_1h_tokens` retain
+their v1 field numbers and types. Updated writers include the canonical list and
+legacy projections: a total across all entries and a one-hour subset only when a
+3600-second entry is present. Both scalar sums saturate at uint64 maximum; canonical
+entries do not change. An absent list emits no legacy counts, while an empty list
+projects total zero. Readers always prefer a present canonical wrapper, including
+an empty wrapper, without merging or checking consistency with legacy counts.
+
+Without the canonical wrapper, readers normalize legacy counts using the shared
+domain helper `CacheWriteTokenCounts::from_total_and_one_hour(total, one_hour, None)`.
+A missing total maps to absence even when a one-hour subset exists. A subset above
+the total is capped to it; a zero subset does not create a duration entry. The
+remainder has unknown duration, not an inferred five-minute duration. This legacy
+fallback does not preserve every old field's presence or subset-only evidence.
+Python adapters apply the same rules. They do not accept the old scalar shape or
+transport-only field names as native callback data.
+
+Updated host and SDK conversions preserve the canonical list losslessly. Older
+readers receive only the aggregate projection, and callbacks through an older SDK
+cannot preserve arbitrary durations or list-presence distinctions. Rebuild the
+host and SDKs together for complete duration and presence preservation; the
+unchanged v1 identity does not negotiate support for this additive field.
+
 Optional JSON fields preserve explicit null where the runtime does. Tool result
 annotations and category-profile tool annotations normalize null to absence.
 Event sanitizer output replaces the three sanitizer fields; absent means clear,

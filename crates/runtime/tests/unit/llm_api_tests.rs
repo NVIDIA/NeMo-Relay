@@ -2845,3 +2845,241 @@ fn llm_stream_call_execute_adds_otel_error_metadata_to_failed_end_events() {
             .contains("collector boom")
     );
 }
+
+#[test]
+fn responses_history_projection_recognizes_native_user_and_instruction_roles() {
+    for with_item_ids in [false, true] {
+        let mut system =
+            json!({"type": "message", "role": "system", "content": "Keep instructions"});
+        let mut developer = json!({"type": "message", "role": "developer", "content": "Keep developer instructions"});
+        let mut user = json!({"type": "message", "role": "user", "content": "Current question"});
+        if with_item_ids {
+            system["id"] = json!("msg-system");
+            developer["id"] = json!("msg-developer");
+            user["id"] = json!("msg-user");
+            user["future_field"] = json!({"preserve": true});
+        }
+        let call = json!({"type": "custom_tool_call", "id": "ctc-1", "call_id": "call-1", "name": "exec", "input": "text(42)"});
+        let output =
+            json!({"type": "custom_tool_call_output", "call_id": "call-1", "output": "42"});
+        for prior_history in [false, true] {
+            let mut input = vec![system.clone(), developer.clone()];
+            if prior_history {
+                input.extend([
+                    json!({"role": "user", "content": "Previous question"}),
+                    json!({"role": "assistant", "content": "Previous answer"}),
+                ]);
+            }
+            input.extend([user.clone(), call.clone(), output.clone()]);
+            let original = LlmRequest {
+                headers: serde_json::Map::new(),
+                content: json!({"model": "codex", "input": input}),
+            };
+            let codec = OpenAIResponsesCodec;
+            let mut observable = original.clone();
+            let mut annotation = Some(Arc::new(codec.decode(&original).unwrap()));
+            project_llm_request_to_current_user_turn(
+                &mut observable,
+                &mut annotation,
+                Some(&codec),
+            );
+            assert_eq!(annotation.unwrap().messages.len(), 5);
+            assert_eq!(
+                observable.content["input"],
+                json!([system, developer, user, call, output])
+            );
+            assert_eq!(
+                original.content["input"].as_array().unwrap().len(),
+                if prior_history { 7 } else { 5 }
+            );
+        }
+    }
+}
+
+/// Check stage order, returned values, and lifecycle events for every LLM option combination.
+#[test]
+fn execution_options_select_llm_stages_and_preserve_results_and_lifecycle() {
+    use crate::api::execution::ExecutionOptions;
+    use crate::api::llm::LlmRequestInterceptOutcome;
+    use crate::api::registry::{
+        register_llm_conditional_execution_guardrail, register_llm_request_intercept,
+    };
+
+    let _guard = lock_global_runtime();
+    reset_global();
+    set_thread_scope_stack(create_scope_stack());
+    let stages = Arc::new(Mutex::new(Vec::new()));
+    let seen = stages.clone();
+    register_llm_conditional_execution_guardrail(
+        "options-check",
+        0,
+        Arc::new(move |request| {
+            let seen = seen.clone();
+            Box::pin(async move {
+                assert_eq!(request.content, json!({"original": true}));
+                seen.lock().unwrap().push("conditional");
+                Ok(None)
+            })
+        }),
+    )
+    .unwrap();
+    let seen = stages.clone();
+    register_llm_request_intercept(
+        "options-request",
+        0,
+        false,
+        Arc::new(move |_, mut request, annotated| {
+            let seen = seen.clone();
+            Box::pin(async move {
+                seen.lock().unwrap().push("request");
+                request.content = json!({"rewritten": true});
+                Ok(LlmRequestInterceptOutcome::new(request, annotated))
+            })
+        }),
+    )
+    .unwrap();
+    let seen = stages.clone();
+    register_llm_execution_intercept(
+        "options-unary",
+        0,
+        Arc::new(move |_, request, _, next| {
+            let seen = seen.clone();
+            Box::pin(async move {
+                seen.lock().unwrap().push("unary execution");
+                next(request).await
+            })
+        }),
+    )
+    .unwrap();
+    let seen = stages.clone();
+    register_llm_stream_execution_intercept(
+        "options-stream",
+        0,
+        Arc::new(move |_, request, _, next| {
+            let seen = seen.clone();
+            Box::pin(async move {
+                seen.lock().unwrap().push("stream execution");
+                next(request).await
+            })
+        }),
+    )
+    .unwrap();
+    let events = Arc::new(Mutex::new(Vec::new()));
+    let captured = events.clone();
+    register_subscriber(
+        "options-events",
+        Arc::new(move |event| {
+            if event.name() == "options-llm" {
+                captured.lock().unwrap().push(event.scope_category());
+            }
+        }),
+    )
+    .unwrap();
+
+    tokio::runtime::Runtime::new().unwrap().block_on(async {
+        for streaming in [false, true] {
+            for mask in 0..8 {
+                let options = ExecutionOptions {
+                    conditional_execution: mask & 1 == 0,
+                    request_intercepts: mask & 2 == 0,
+                    execution_intercepts: mask & 4 == 0,
+                };
+                let expected_result = if options.request_intercepts {
+                    json!({"rewritten": true})
+                } else {
+                    json!({"original": true})
+                };
+                stages.lock().unwrap().clear();
+                events.lock().unwrap().clear();
+                let request = LlmRequest {
+                    headers: Default::default(),
+                    content: json!({"original": true}),
+                };
+                let seen = stages.clone();
+                if streaming {
+                    let collector_stages = stages.clone();
+                    let finalizer_stages = stages.clone();
+                    let final_response = expected_result.clone();
+                    let mut stream = llm_stream_call_execute(
+                        LlmStreamCallExecuteParams::builder()
+                            .name("options-llm")
+                            .request(request)
+                            .execution_options(options)
+                            .func(Arc::new(move |request| {
+                                let seen = seen.clone();
+                                Box::pin(async move {
+                                    tokio::task::yield_now().await;
+                                    seen.lock().unwrap().push("callback");
+                                    Ok(LlmJsonStream::new(tokio_stream::iter(vec![Ok(
+                                        request.content
+                                    )])))
+                                })
+                            }))
+                            .collector(Box::new(move |_| {
+                                collector_stages.lock().unwrap().push("collector");
+                                Ok(())
+                            }))
+                            .finalizer(Box::new(move || {
+                                finalizer_stages.lock().unwrap().push("finalizer");
+                                final_response.clone()
+                            }))
+                            .build(),
+                    )
+                    .await
+                    .unwrap();
+                    assert_eq!(stream.next().await.unwrap().unwrap(), expected_result);
+                    assert!(stream.next().await.is_none());
+                } else {
+                    let result = llm_call_execute(
+                        LlmCallExecuteParams::builder()
+                            .name("options-llm")
+                            .request(request)
+                            .execution_options(options)
+                            .func(Arc::new(move |request| {
+                                let seen = seen.clone();
+                                Box::pin(async move {
+                                    tokio::task::yield_now().await;
+                                    seen.lock().unwrap().push("callback");
+                                    Ok(request.content)
+                                })
+                            }))
+                            .build(),
+                    )
+                    .await
+                    .unwrap();
+                    assert_eq!(result, expected_result);
+                }
+                let mut expected_stages = vec![];
+                if options.conditional_execution {
+                    expected_stages.push("conditional");
+                }
+                if options.request_intercepts {
+                    expected_stages.push("request");
+                }
+                if options.execution_intercepts {
+                    expected_stages.push(if streaming {
+                        "stream execution"
+                    } else {
+                        "unary execution"
+                    });
+                }
+                expected_stages.push("callback");
+                if streaming {
+                    expected_stages.extend(["collector", "finalizer"]);
+                }
+                assert_eq!(
+                    *stages.lock().unwrap(),
+                    expected_stages,
+                    "streaming={streaming}, mask={mask}"
+                );
+                flush_subscribers().unwrap();
+                assert_eq!(
+                    *events.lock().unwrap(),
+                    vec![Some(ScopeCategory::Start), Some(ScopeCategory::End)],
+                    "streaming={streaming}, mask={mask}"
+                );
+            }
+        }
+    });
+    reset_global();
+}

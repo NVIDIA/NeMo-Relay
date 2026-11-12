@@ -12,6 +12,7 @@ pub mod openai_responses;
 pub mod resolve;
 mod response;
 pub mod streaming;
+mod telemetry;
 use nemo_relay_types::Json;
 use nemo_relay_types::codec::{request, traits};
 

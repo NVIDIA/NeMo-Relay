@@ -35,10 +35,12 @@ pub(crate) struct GatewayConfig {
     pub(crate) openai_auth_header: Option<String>,
     pub(crate) openai_api_key: Option<String>,
     pub(crate) openai_api_key_helper: Option<crate::upstream_auth::ApiKeyHelper>,
+    pub(crate) openai_oidc: Option<crate::oidc::OidcSource>,
     pub(crate) anthropic_base_url: String,
     pub(crate) anthropic_auth_header: Option<String>,
     pub(crate) anthropic_api_key: Option<String>,
     pub(crate) anthropic_api_key_helper: Option<crate::upstream_auth::ApiKeyHelper>,
+    pub(crate) anthropic_oidc: Option<crate::oidc::OidcSource>,
     /// Replaces the ChatGPT backend for Codex requests that carry ChatGPT auth and have no
     /// replacement OpenAI credential. The caller's ChatGPT credential is forwarded to this endpoint.
     pub(crate) chatgpt_codex_base_url: Option<String>,
@@ -50,6 +52,13 @@ pub(crate) struct GatewayConfig {
     pub(crate) plugin_config: Option<Value>,
     pub(crate) max_hook_payload_bytes: usize,
     pub(crate) max_passthrough_body_bytes: usize,
+}
+
+#[derive(Debug, Clone, Default)]
+pub(crate) struct DaemonConfig {
+    pub(crate) gateway: GatewayConfig,
+    /// Route retention after its last MCP session leaves; zero disables retention.
+    pub(crate) worker_idle_timeout_secs: u64,
 }
 
 #[derive(Debug, Clone, Default)]
@@ -123,6 +132,7 @@ impl GatewayConfig {
 
 #[derive(Debug, Clone, Default)]
 pub(crate) struct ResolvedConfig {
+    pub(crate) daemon_worker_idle_timeout_secs: u64,
     pub(crate) diagnostics: super::RuntimeDiagnosticsConfig,
     pub(crate) gateway: GatewayConfig,
     pub(crate) agents: AgentConfigs,
@@ -182,10 +192,12 @@ impl Default for GatewayConfig {
             openai_auth_header: None,
             openai_api_key: None,
             openai_api_key_helper: None,
+            openai_oidc: None,
             anthropic_base_url: "https://api.anthropic.com".into(),
             anthropic_auth_header: None,
             anthropic_api_key: None,
             anthropic_api_key_helper: None,
+            anthropic_oidc: None,
             chatgpt_codex_base_url: None,
             response_timeout_secs: 0,
             metadata: None,

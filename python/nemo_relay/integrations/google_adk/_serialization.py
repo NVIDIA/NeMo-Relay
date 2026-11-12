@@ -1729,7 +1729,7 @@ def _decode(payload: JsonObject) -> AnnotatedLLMRequest:
 class Normalized:
     """Usage, cost, and `api_specific` an API variant reads from an ADK response dump, plus keys it consumed."""
 
-    usage: dict[str, int]
+    usage: Mapping[str, Json]
     cost: Annotated[Json, "Cost provider reported, or None."]
     api_specific: JsonObject
     usage_keys: Annotated[AbstractSet[str], "`usage_metadata` keys variant consumed."]
@@ -1849,6 +1849,14 @@ def with_uncached(counts: Mapping[str, int]) -> dict[str, int]:
     if prompt is not None and cached is not None and cached <= prompt:
         usage["uncached_input_tokens"] = prompt - cached
     return usage
+
+
+def with_cache_write_list(usage: dict[str, int]) -> JsonObject:
+    """Return usage with its cache-write count as Relay's per-duration list; ADK reports no duration."""
+    normalized: JsonObject = {key: value for key, value in usage.items() if key != "cache_write_tokens"}
+    if (written := usage.get("cache_write_tokens")) is not None:
+        normalized["cache_write_tokens"] = [{"count": written}]
+    return normalized
 
 
 def without_cache(prompt: int, cached: int | None, written: int | None, *, folded: str) -> int:

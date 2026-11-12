@@ -6,6 +6,7 @@
 import asyncio
 
 import grpc
+import protovalidate
 import pytest
 
 from nemo_relay_plugin import PluginContext, PluginRuntime, WorkerPlugin
@@ -547,3 +548,166 @@ def test_arrays_and_optional_nulls_keep_native_json_serializer_semantics():
     assert absent.HasField("params")
     for raw in (None, "text", {"stop": "END"}, ("END", "STOP")):
         assert unpack(pack(common_pb.JsonValue, raw)) == (["END", "STOP"] if isinstance(raw, tuple) else raw)
+
+
+def test_cache_write_usage_roundtrip_preserves_native_list():
+    value = {
+        "prompt_tokens": 0,
+        "completion_tokens": 2,
+        "total_tokens": 2,
+        "cache_read_tokens": 0,
+        "uncached_input_tokens": 0,
+        "cache_write_tokens": [
+            {"count": 0},
+            {"count": 3, "duration": 3600},
+            {"count": 4, "duration": 0},
+            {"count": 5, "duration": 3600},
+            {"count": 2**64 - 1, "duration": 2**64 - 1},
+        ],
+        "cost": {"total": 0, "currency": "USD", "source": "provider_reported"},
+    }
+    wire = pack(llm_pb.Usage, value)
+    returned = llm_pb.Usage.FromString(wire.SerializeToString())
+    validate(returned)
+    assert unpack(returned) == value
+
+
+@pytest.mark.parametrize(
+    "value,expected",
+    [
+        ({}, {}),
+        ({"cache_write_tokens": None}, {}),
+        ({"cache_write_tokens": []}, {"cache_write_tokens": []}),
+        ({"cache_write_tokens": [{"count": 0}]}, {"cache_write_tokens": [{"count": 0}]}),
+        (
+            {"cache_write_tokens": [{"count": 0, "duration": 0}]},
+            {"cache_write_tokens": [{"count": 0, "duration": 0}]},
+        ),
+    ],
+)
+def test_cache_write_usage_optional_list_preserves_presence(value, expected):
+    wire = llm_pb.Usage.FromString(pack(llm_pb.Usage, value).SerializeToString())
+    validate(wire)
+    assert wire.HasField("cache_write_token_counts") is ("cache_write_tokens" in expected)
+    assert wire.HasField("cache_write_tokens") is ("cache_write_tokens" in expected)
+    assert not wire.HasField("cache_write_1h_tokens")
+    assert unpack(wire) == expected
+
+
+@pytest.mark.parametrize(
+    "writes,total,one_hour",
+    [
+        ([], 0, None),
+        ([{"count": 0, "duration": 3600}], 0, 0),
+        ([{"count": 3}, {"count": 4, "duration": 3600}, {"count": 5, "duration": 3600}], 12, 9),
+        (
+            [{"count": 2**64 - 1, "duration": 3600}, {"count": 1, "duration": 3600}],
+            2**64 - 1,
+            2**64 - 1,
+        ),
+    ],
+)
+def test_cache_write_usage_legacy_projection_saturates_without_changing_entries(writes, total, one_hour):
+    wire = llm_pb.Usage.FromString(pack(llm_pb.Usage, {"cache_write_tokens": writes}).SerializeToString())
+    validate(wire)
+    assert wire.cache_write_tokens == total
+    assert wire.HasField("cache_write_1h_tokens") is (one_hour is not None)
+    if one_hour is not None:
+        assert wire.cache_write_1h_tokens == one_hour
+    assert unpack(wire) == {"cache_write_tokens": writes}
+
+
+@pytest.mark.parametrize(
+    "legacy,expected",
+    [
+        ({}, {}),
+        ({"cache_write_1h_tokens": 3}, {}),
+        ({"cache_write_1h_tokens": 0}, {}),
+        ({"cache_write_tokens": 0}, {"cache_write_tokens": [{"count": 0}]}),
+        ({"cache_write_tokens": 8}, {"cache_write_tokens": [{"count": 8}]}),
+        (
+            {"cache_write_tokens": 8, "cache_write_1h_tokens": 3},
+            {"cache_write_tokens": [{"count": 5}, {"count": 3, "duration": 3600}]},
+        ),
+        (
+            {"cache_write_tokens": 8, "cache_write_1h_tokens": 0},
+            {"cache_write_tokens": [{"count": 8}]},
+        ),
+        (
+            {"cache_write_tokens": 8, "cache_write_1h_tokens": 9},
+            {"cache_write_tokens": [{"count": 8, "duration": 3600}]},
+        ),
+        (
+            {"cache_write_tokens": 0, "cache_write_1h_tokens": 3},
+            {"cache_write_tokens": [{"count": 0}]},
+        ),
+    ],
+)
+def test_cache_write_usage_legacy_wire_uses_authoritative_total_normalization(legacy, expected):
+    wire = llm_pb.Usage.FromString(llm_pb.Usage(**legacy).SerializeToString())
+    validate(wire)
+    assert unpack(wire) == expected
+
+
+@pytest.mark.parametrize("writes", [[], [{"count": 0}], [{"count": 2, "duration": 7}]])
+def test_cache_write_usage_canonical_list_overrides_contradictory_legacy_counts(writes):
+    wire = pack(llm_pb.Usage, {"cache_write_tokens": writes})
+    wire.cache_write_tokens = 1
+    wire.cache_write_1h_tokens = 9
+    wire = llm_pb.Usage.FromString(wire.SerializeToString())
+    validate(wire)
+    assert unpack(wire) == {"cache_write_tokens": writes}
+
+
+@pytest.mark.parametrize("key", ["cache_write_1h_tokens", "cache_write_token_counts"])
+def test_cache_write_usage_callback_dictionary_rejects_transport_only_keys(key):
+    with pytest.raises(ValueError, match=key):
+        pack(llm_pb.Usage, {key: 3})
+
+
+@pytest.mark.parametrize("value", [3, {}, "3"])
+def test_cache_write_usage_callback_dictionary_rejects_non_array_cache_writes(value):
+    with pytest.raises(ValueError, match="must be an array"):
+        pack(llm_pb.Usage, {"cache_write_tokens": value})
+
+
+@pytest.mark.parametrize("field", ["count", "duration"])
+@pytest.mark.parametrize("value", [True, "3", 1.5, -1, 2**64])
+def test_cache_write_usage_entries_reject_invalid_integer_values(field, value):
+    with pytest.raises(ValueError):
+        pack(llm_pb.Usage, {"cache_write_tokens": [{"count": 1, field: value}]})
+
+
+def test_cache_write_usage_wire_entry_without_count_fails_validation():
+    wire = llm_pb.Usage()
+    wire.cache_write_token_counts.values.add(duration=3600)
+    wire = llm_pb.Usage.FromString(wire.SerializeToString())
+    with pytest.raises(protovalidate.ValidationError, match="count"):
+        validate(wire)
+
+
+def test_cache_write_usage_callback_entry_without_count_is_rejected():
+    with pytest.raises((ValueError, protovalidate.ValidationError), match="count"):
+        validate(pack(llm_pb.Usage, {"cache_write_tokens": [{"duration": 3600}]}))
+
+
+def test_cache_write_usage_nested_response_and_optimization_usage_roundtrip():
+    usage = {"cache_write_tokens": [{"count": 0, "duration": 0}, {"count": 2, "duration": 7}]}
+    value = {
+        "usage": usage,
+        "optimization_summary": {
+            "schema_version": "1.0.0",
+            "calculation_version": "1.0.0",
+            "status": "complete",
+            "tokens_saved": {},
+            "effective_usage": usage,
+            "baseline_usage": {"cache_write_tokens": []},
+        },
+    }
+    wire = pack(llm_pb.AnnotatedLlmResponse, value)
+    wire = llm_pb.AnnotatedLlmResponse.FromString(wire.SerializeToString())
+    validate(wire)
+    returned = unpack(wire)
+    assert returned["usage"] == usage
+    assert returned["optimization_summary"]["effective_usage"] == usage
+    assert returned["optimization_summary"]["baseline_usage"] == {"cache_write_tokens": []}

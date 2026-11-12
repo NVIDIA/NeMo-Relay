@@ -96,10 +96,17 @@ type ModelPricing struct {
 
 // TokenPricingRates expresses model rates per one million tokens.
 type TokenPricingRates struct {
-	InputPerMillion      float64  `json:"input_per_million"`
-	OutputPerMillion     float64  `json:"output_per_million"`
-	CacheReadPerMillion  *float64 `json:"cache_read_per_million,omitempty"`
-	CacheWritePerMillion *float64 `json:"cache_write_per_million,omitempty"`
+	InputPerMillion     float64          `json:"input_per_million"`
+	OutputPerMillion    float64          `json:"output_per_million"`
+	CacheReadPerMillion *float64         `json:"cache_read_per_million,omitempty"`
+	CacheWriteRates     []CacheWriteRate `json:"cache_write_rates,omitempty"`
+}
+
+// CacheWriteRate is the prompt cache write price for a duration in seconds.
+// A rate with no Duration is the default for writes with no matching duration.
+type CacheWriteRate struct {
+	Duration   *uint64 `json:"duration,omitempty"`
+	PerMillion float64 `json:"per_million"`
 }
 
 // PromptCachePricing configures cache-read token accounting for a model pricing entry.

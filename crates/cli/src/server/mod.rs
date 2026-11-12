@@ -620,8 +620,8 @@ impl AppState {
         let http_plaintext = credential_free_http_client(idle_read_timeout)
             .build()
             .expect("credential-free HTTP client configuration is valid");
-        let http_helper = if config.openai_api_key_helper.is_some()
-            || config.anthropic_api_key_helper.is_some()
+        let http_helper = if crate::upstream_auth::mints_credential(&config, false)
+            || crate::upstream_auth::mints_credential(&config, true)
         {
             gateway_http_client(idle_read_timeout, false, true)
         } else {

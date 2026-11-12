@@ -19,7 +19,7 @@ import {
   UtilizationUnit,
   CountUnit,
   type ResourceOperatingSystem,
-} from '../index.js';
+} from '../dist/index.js';
 
 export const snapshotPromise: Promise<ResourceMetricsSnapshot> = collectResourceMetrics();
 declare const snapshot: ResourceMetricsSnapshot;
@@ -27,10 +27,10 @@ export const sampledProcesses: ResourceNumeric | undefined = snapshot.processSam
 export const nullableCpu: ResourceNumeric | null = snapshot.cpu?.totalTime?.value ?? null;
 export const timeUnit: DurationUnit | null = snapshot.cpu?.totalTime?.unit ?? null;
 export const memoryUnit: CapacityUnit | null = snapshot.memory?.resident?.unit ?? null;
-export const fileSystems: FilesystemCapacityMetrics[] = snapshot.disk?.filesystems ?? [];
-export const limits: ResourceLimitEventCount[] = snapshot.process?.limitEvents ?? [];
-export const devices: AcceleratorDeviceMetrics[] = snapshot.gpu?.deviceMetrics ?? [];
-export const processes: AcceleratorProcessMetrics[] = snapshot.gpu?.processMetrics ?? [];
+export const fileSystems: readonly FilesystemCapacityMetrics[] = snapshot.disk?.filesystems ?? [];
+export const limits: readonly ResourceLimitEventCount[] = snapshot.process?.limitEvents ?? [];
+export const devices: readonly AcceleratorDeviceMetrics[] = snapshot.gpu?.deviceMetrics ?? [];
+export const processes: readonly AcceleratorProcessMetrics[] = snapshot.gpu?.processMetrics ?? [];
 export const nullableUnit: ResourceMeasurement<number, DurationUnit> | null = null;
 export const availableMeasurement: ResourceMeasurement<ResourceNumeric, DurationUnit> = {
   value: 1n,

@@ -12,6 +12,153 @@ use prost::Message;
 use serde::{Serialize, de::DeserializeOwned};
 use serde_json::json;
 
+#[test]
+#[allow(deprecated)] // Exercise the aggregate fields retained for older worker readers.
+fn cache_write_usage_preserves_canonical_entries_and_projects_legacy_counts() {
+    use nemo_relay_types::codec::response::Usage;
+
+    for (value, total, one_hour) in [
+        (json!({}), None, None),
+        (json!({"cache_write_tokens": []}), Some(0), None),
+        (json!({"cache_write_tokens": [{"count": 0}]}), Some(0), None),
+        (
+            json!({"cache_write_tokens": [{"count": 0, "duration": 3600}]}),
+            Some(0),
+            Some(0),
+        ),
+        (
+            json!({
+                "prompt_tokens": 0, "completion_tokens": 2, "total_tokens": 2,
+                "cache_read_tokens": 0, "uncached_input_tokens": 0,
+                "cost": {"total": 0.25, "currency": "USD", "source": "provider_reported"},
+                "cache_write_tokens": [
+                    {"count": u64::MAX},
+                    {"count": 1, "duration": 3600},
+                    {"count": 2, "duration": 0},
+                    {"count": 0, "duration": 999},
+                    {"count": 4, "duration": 3600},
+                    {"count": 3, "duration": u64::MAX}
+                ]
+            }),
+            Some(u64::MAX),
+            Some(5),
+        ),
+        (
+            json!({"cache_write_tokens": [
+                {"count": u64::MAX, "duration": 3600},
+                {"count": 1, "duration": 3600}
+            ]}),
+            Some(u64::MAX),
+            Some(u64::MAX),
+        ),
+    ] {
+        let usage: Usage = serde_json::from_value(value).unwrap();
+        let expected = serde_json::to_value(&usage).unwrap();
+        let wire: pb::Usage = encode(usage).unwrap();
+        assert_eq!(wire.cache_write_tokens, total);
+        assert_eq!(wire.cache_write_1h_tokens, one_hour);
+        let wire = pb::Usage::decode(wire.encode_to_vec().as_slice()).unwrap();
+        let returned: Usage = decode(wire).unwrap();
+        assert_eq!(serde_json::to_value(returned).unwrap(), expected);
+    }
+}
+
+#[test]
+#[allow(deprecated)] // Conflicting old-reader projections must not override the canonical list.
+fn canonical_cache_write_usage_overrides_contradictory_legacy_counts() {
+    use nemo_relay_types::codec::response::Usage;
+
+    for entries in [
+        json!([]),
+        json!([{"count": 0, "duration": 0}]),
+        json!([{"count": 7}, {"count": 2, "duration": 3600}]),
+    ] {
+        let expected = json!({"cache_write_tokens": entries});
+        let usage: Usage = serde_json::from_value(expected.clone()).unwrap();
+        let mut wire: pb::Usage = encode(usage).unwrap();
+        wire.cache_write_tokens = Some(1);
+        wire.cache_write_1h_tokens = Some(9);
+        let wire = pb::Usage::decode(wire.encode_to_vec().as_slice()).unwrap();
+        let returned: Usage = decode(wire).unwrap();
+        assert_eq!(serde_json::to_value(returned).unwrap(), expected);
+    }
+}
+
+#[test]
+#[allow(deprecated)] // Decode messages containing only the original scalar fields.
+fn legacy_cache_write_usage_uses_authoritative_total_normalization() {
+    use nemo_relay_types::codec::response::Usage;
+
+    for (total, one_hour, expected) in [
+        (None, None, json!({})),
+        (None, Some(0), json!({})),
+        (None, Some(7), json!({})),
+        (Some(0), None, json!({"cache_write_tokens": [{"count": 0}]})),
+        (
+            Some(0),
+            Some(9),
+            json!({"cache_write_tokens": [{"count": 0}]}),
+        ),
+        (
+            Some(10),
+            None,
+            json!({"cache_write_tokens": [{"count": 10}]}),
+        ),
+        (
+            Some(10),
+            Some(0),
+            json!({"cache_write_tokens": [{"count": 10}]}),
+        ),
+        (
+            Some(10),
+            Some(4),
+            json!({"cache_write_tokens": [{"count": 6}, {"count": 4, "duration": 3600}]}),
+        ),
+        (
+            Some(10),
+            Some(12),
+            json!({"cache_write_tokens": [{"count": 10, "duration": 3600}]}),
+        ),
+    ] {
+        let wire = pb::Usage {
+            cache_write_tokens: total,
+            cache_write_1h_tokens: one_hour,
+            ..Default::default()
+        };
+        let wire = pb::Usage::decode(wire.encode_to_vec().as_slice()).unwrap();
+        let returned: Usage = decode(wire).unwrap();
+        assert_eq!(serde_json::to_value(returned).unwrap(), expected);
+    }
+}
+
+#[test]
+fn cache_write_usage_rejects_an_entry_without_a_count() {
+    use nemo_relay_types::codec::response::Usage;
+
+    // Usage tag 9 contains list.values[0] with duration = 1 but no count.
+    let wire = pb::Usage::decode([0x4a, 4, 0x0a, 2, 0x10, 1].as_slice()).unwrap();
+    assert!(decode::<Usage, _>(wire).is_err());
+}
+
+#[test]
+fn annotated_response_preserves_distinct_nested_cache_write_usage() {
+    use nemo_relay_types::codec::response::AnnotatedLlmResponse;
+
+    let value: AnnotatedLlmResponse = serde_json::from_value(json!({
+        "usage": {"cache_write_tokens": [{"count": 0, "duration": 0}, {"count": 7}]},
+        "optimization_summary": {
+            "schema_version": "1.0.0", "calculation_version": "1.0.0", "status": "partial",
+            "effective_usage": {"cache_write_tokens": []},
+            "baseline_usage": {"cache_write_tokens": [
+                {"count": u64::MAX, "duration": 999}, {"count": 2, "duration": 3600}
+            ]},
+            "tokens_saved": {}, "contributions": []
+        }
+    }))
+    .unwrap();
+    roundtrip::<_, pb::AnnotatedLlmResponse>(value);
+}
+
 fn roundtrip<D, W>(domain: D)
 where
     D: WireValue<W> + Serialize + DeserializeOwned,
@@ -330,4 +477,110 @@ fn transport_names_and_flattened_extra_are_valid_native_extensions() {
         .into_iter()
         .collect(),
     });
+}
+
+/// Every provider-neutral and provider-native variant survives actual wire encoding.
+#[test]
+fn multimodal_and_tool_variants_preserve_payloads_and_extensions() {
+    use nemo_relay_types::codec::request::{ContentPart, Message, ToolChoice, ToolDefinition};
+    use nemo_relay_types::codec::response::{FinishReason, Usage};
+    let extension = json!({"nested": [null, u64::MAX, "雪\u{0}"]});
+    for value in [
+        json!({"type":"text", "text":"雪\u{0}", "vendor":extension}),
+        json!({"type":"image_url", "image_url":{"url":"https://example.test/image", "detail":"auto"}, "vendor":extension}),
+        json!({"type":"image", "image":{"data":"encoded"}, "vendor":extension}),
+        json!({"type":"audio", "audio":{"format":"wav"}, "vendor":extension}),
+        json!({"type":"file", "file":{"id":"file"}, "vendor":extension}),
+        json!({"type":"refusal", "refusal":"declined", "vendor":extension}),
+        json!({"type":"tool_use", "id":"call", "name":"tool", "input":extension, "vendor":extension}),
+        json!({"type":"tool_result", "tool_use_id":"call", "content":extension, "is_error":true, "vendor":extension}),
+        json!({"type":"provider_native", "provider":"custom", "kind":"opaque", "value":extension}),
+    ] {
+        roundtrip::<ContentPart, pb::ContentPart>(serde_json::from_value(value).unwrap());
+    }
+    for value in [
+        json!({"role":"developer", "content":"instruction", "name":"author"}),
+        json!({"role":"tool_call", "id":"item", "call_id":"call", "name":"tool", "arguments":extension, "vendor":extension}),
+        json!({"role":"tool_result", "id":"result", "call_id":"call", "output":extension, "vendor":extension}),
+        json!({"role":"provider_native", "provider":"custom", "kind":"opaque", "value":extension}),
+    ] {
+        roundtrip::<Message, pb::LlmMessage>(serde_json::from_value(value).unwrap());
+    }
+    for value in [
+        json!({"type":"function", "function":{"name":"tool", "parameters":extension}, "vendor":extension}),
+        json!({"type":"provider_native", "provider":"custom", "kind":"opaque", "value":extension}),
+    ] {
+        roundtrip::<ToolDefinition, pb::ToolDefinition>(serde_json::from_value(value).unwrap());
+    }
+    for value in [
+        json!("auto"),
+        json!("none"),
+        json!("required"),
+        json!({"type":"function", "function":{"name":"tool"}}),
+        json!({"provider":"custom", "kind":"opaque", "value":extension}),
+    ] {
+        roundtrip::<ToolChoice, pb::ToolChoice>(serde_json::from_value(value).unwrap());
+    }
+    for reason in [
+        FinishReason::Complete,
+        FinishReason::Length,
+        FinishReason::ToolUse,
+        FinishReason::ContentFilter,
+        FinishReason::Unknown("vendor\u{0}".into()),
+    ] {
+        roundtrip::<_, pb::FinishReason>(reason);
+    }
+    let usage: Usage =
+        serde_json::from_value(json!({"prompt_tokens":1,"completion_tokens":2,"total_tokens":3}))
+            .unwrap();
+    let wire: Box<pb::Usage> = encode(usage).unwrap();
+    let decoded: Usage = decode(Box::new(
+        pb::Usage::decode(wire.encode_to_vec().as_slice()).unwrap(),
+    ))
+    .unwrap();
+    assert_eq!(decoded.total_tokens, Some(3));
+}
+
+/// Collection envelopes must preserve their JSON container type and reject mismatches.
+#[test]
+fn json_collection_envelopes_preserve_shape_and_reject_wrong_container_types() {
+    for value in [
+        json!([]),
+        json!([null, true, i64::MIN, u64::MAX, "α\u{0000}", {"nested":[1]}]),
+    ] {
+        let wire: pb::JsonArray = encode(value.clone()).unwrap();
+        let wire = pb::JsonArray::decode(wire.encode_to_vec().as_slice()).unwrap();
+        assert_eq!(decode::<Json, _>(wire).unwrap(), value);
+    }
+    for value in [Json::Null, json!({}), json!("array"), json!(0)] {
+        assert!(encode::<_, pb::JsonArray>(value).is_err());
+    }
+    assert!(encode::<_, pb::JsonObject>(json!([])).is_err());
+    assert!(
+        decode::<Json, _>(pb::JsonArray {
+            values: vec![pb::JsonValue {
+                json: b"invalid JSON".to_vec()
+            }]
+        })
+        .is_err()
+    );
+    let fields =
+        std::collections::BTreeMap::from([("extension".to_owned(), json!([u64::MAX, "α"]))]);
+    let wire: pb::JsonObject = encode(fields.clone()).unwrap();
+    assert_eq!(
+        decode::<std::collections::BTreeMap<String, Json>, _>(wire).unwrap(),
+        fields
+    );
+}
+
+/// Diagnostic transport must retain opaque execution and phase identifiers unchanged.
+#[test]
+fn diagnostic_transport_preserves_opaque_execution_and_phase_names() {
+    use nemo_relay_types::diagnostics::{PluginExecutionName, PluginPhaseName};
+    for name in ["native", "future.extension-α", "opaque\u{0000}value"] {
+        let execution: PluginExecutionName = decode(name.to_owned()).unwrap();
+        assert_eq!(encode::<_, String>(execution).unwrap(), name);
+        let phase: PluginPhaseName = decode(name.to_owned()).unwrap();
+        assert_eq!(encode::<_, String>(phase).unwrap(), name);
+    }
 }

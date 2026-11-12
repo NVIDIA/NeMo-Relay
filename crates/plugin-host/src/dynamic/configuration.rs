@@ -667,6 +667,7 @@ fn validate_declaration(
     .0
 }
 
+/// Validate a plugin declaration and retain the artifact bytes used for its trust check.
 fn validate_declaration_with_artifact(
     manifest: &DynamicPluginManifest,
     manifest_ref: String,
@@ -718,6 +719,11 @@ fn validate_declaration_with_artifact(
             );
         }
     }
+    let native_failure = manifest
+        .compat
+        .native_api
+        .as_deref()
+        .and_then(|api| super::native_api_support(api).err());
     let mut status = DynamicPluginValidationStatus {
         manifest: DynamicPluginCheckState::Valid,
         compatibility: DynamicPluginCheckState::Valid,
@@ -728,22 +734,35 @@ fn validate_declaration_with_artifact(
         checked_at: None,
         message: Some("validated by core".into()),
     };
-    let failure = evaluated_policy
-        .last_error(&plugin_id)
-        .or_else(|| trust.last_error(&plugin_id))
+    let failure = native_failure
+        .as_ref()
+        .map(|error| super::DynamicPluginFailure {
+            phase: super::DynamicPluginFailurePhase::Validation,
+            code: "native_api_unsupported".into(),
+            message: error.to_string(),
+        })
         .or_else(|| {
-            schema_failure
-                .as_ref()
-                .map(|error| super::DynamicPluginFailure {
-                    phase: super::DynamicPluginFailurePhase::Validation,
-                    code: "config_schema_failed".into(),
-                    message: error.to_string(),
+            evaluated_policy
+                .last_error(&plugin_id)
+                .or_else(|| trust.last_error(&plugin_id))
+                .or_else(|| {
+                    schema_failure
+                        .as_ref()
+                        .map(|error| super::DynamicPluginFailure {
+                            phase: super::DynamicPluginFailurePhase::Validation,
+                            code: "config_schema_failed".into(),
+                            message: error.to_string(),
+                        })
                 })
         });
     if schema_failure.is_some() {
         status.manifest = DynamicPluginCheckState::Invalid;
     }
+    if native_failure.is_some() {
+        status.compatibility = DynamicPluginCheckState::Invalid;
+    }
     let effective_selected = selected
+        && native_failure.is_none()
         && evaluated_policy.policy_satisfied
         && schema_failure.is_none()
         && trust.is_satisfied();

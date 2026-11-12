@@ -38,6 +38,9 @@ Install these tools before you start:
 - **cargo-deny** -- `cargo install cargo-deny`
 - **cargo-about** 0.9.1 -- `cargo install cargo-about --version 0.9.1 --locked --features cli`
 
+Install `protoc` and Buf on `PATH`, or select them with `PROTOC` and `BUF`. The first
+build needs access to the Buf Schema Registry to download the locked validation schema.
+
 When you work in Go or the raw FFI surface, build and validate those
 bindings from source in the same branch.
 

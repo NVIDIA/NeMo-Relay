@@ -2138,3 +2138,33 @@ func TestLlmExecutionPanicReturnsErrorAndRuntimeStaysUsable(t *testing.T) {
 		t.Fatalf("call after recovered panic = %s, %v", result, err)
 	}
 }
+
+// TestLLMExecutionOptions checks bypass for regular and streaming LLM calls.
+func TestLLMExecutionOptions(t *testing.T) {
+	reason := "blocked"
+	if err := RegisterLlmConditionalExecutionGuardrail("options-block", 0,
+		func(json.RawMessage, json.RawMessage) *string { return &reason }); err != nil {
+		t.Fatal(err)
+	}
+	defer DeregisterLlmConditionalExecutionGuardrail("options-block")
+	fn := func(json.RawMessage) (json.RawMessage, error) { return json.RawMessage(`{"ok":true}`), nil }
+	if _, err := LlmCallExecute("options-default", makeRequest(), fn); err == nil {
+		t.Fatal("default should reject")
+	}
+	opts := ExecutionOptions{SkipConditionalExecution: true, SkipRequestIntercepts: true, SkipExecutionIntercepts: true}
+	result, err := LlmCallExecute("options-skip", makeRequest(), fn, WithLLMExecutionOptions(opts))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if string(result) != `{"ok":true}` {
+		t.Fatalf("result: %s", result)
+	}
+	stream, err := LlmStreamCallExecute("options-stream", makeRequest(), fn, nil, nil, WithLLMExecutionOptions(opts))
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer stream.Close()
+	if _, err = LlmCall("options-manual", makeRequest(), WithLLMExecutionOptions(opts)); err == nil {
+		t.Fatal("manual API should reject execution options")
+	}
+}

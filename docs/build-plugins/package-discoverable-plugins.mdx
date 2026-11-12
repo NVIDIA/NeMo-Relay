@@ -27,12 +27,13 @@ for the configuration shape.
 | `[config_schema]` | An optional JSON Schema path resolved relative to the manifest. Packages that use it also declare the `config_schema` capability. |
 | `[source]` | The artifact covered by integrity verification and, for managed Python workers, the package root used to create the environment. |
 | `[integrity]` | The SHA-256 digest of `source.artifact`, plus optional signature evidence. |
-| `[load]` | The native library and symbol, Python module entrypoint, or Rust or custom-command executable entrypoint that Relay starts. Worker manifests can also set `forward_env`, `callback_timeouts`, and `max_message_bytes` here. |
+| `[load]` | The native library, Python module entrypoint, or Rust or custom-command executable entrypoint that Relay starts. Worker manifests can also set `forward_env`, `callback_timeouts`, and `max_message_bytes` here. |
 
-Native manifests declare `compat.native_api = "1"`. This is separate from the
-[C host-table ABI version](/build-plugins/native/native-abi-reference). The current
-host provides ABI v8 and accepts v7 callback layouts. Scope-stack inspection
-requires v8. Relay 0.10 introduced ABI v7 and rejects v2-v6 callback layouts.
+For native packages, `compat.native_api = "v1.0"` is the SDK-required minimum host
+contract. The SDK exports a standard header that Relay uses to find and check
+the plugin's interfaces. Native contract versions are separate from Relay release
+versions. A host supports the minor versions up to its own minor within the same
+native major.
 
 Worker manifests declare `compat.worker_protocol = "nvidia.nemo.relay.worker.v1"`.
 At startup, [handshake](/build-plugins/workers/grpc-v1-protocol) checks the protocol,
@@ -47,18 +48,19 @@ entrypoint from the managed environment.
 
 For application embeddings, core initialization loads a private temporary copy of the
 native library bytes checked by the host trust policy. The copy remains available until
-the library unloads. Replacing the source manifest, library, or signature after validation
-does not change the library loaded by that activation. Native plugins used in embeddings
-must not depend on adjacent files being available relative to the loaded library's
-location. The CLI retains its activation snapshot, which includes adjacent native
-dependencies. Native library digest checks use bounded regular-file reads and reject
-symbolic links and special files.
+process exit. Replacing the source manifest, library, or signature after validation
+does not change the library loaded by that activation. Embedded activation retains
+package-local libraries found through binary imports. It does not retain unimported
+adjacent files. The CLI retains an activation snapshot of the relevant directory,
+which can include those files. Native library digest checks follow symbolic links
+and use bounded regular-file reads. Digests and signatures validate the target bytes;
+special files are rejected.
 
 <CodeBlocks>
 
 <Code src="_code/python_grpc_worker/relay-plugin.toml" language="toml" title="Python Worker: relay-plugin.toml" lines="4-33" showLineNumbers={false} />
 
-<Code src="_code/rust_native_policy/relay-plugin.toml" language="toml" title="Native Rust: relay-plugin.toml" lines="4-31" showLineNumbers={false} />
+<Code src="_code/rust_native_policy/relay-plugin.toml" language="toml" title="Native Rust: relay-plugin.toml" lines="4-30" showLineNumbers={false} />
 
 <Code src="_code/rust_grpc_worker/relay-plugin.toml" language="toml" title="Rust Worker: relay-plugin.toml" lines="4-32" showLineNumbers={false} />
 
@@ -70,8 +72,7 @@ declared artifact, so regenerate it whenever `worker.py` changes. A compiled wor
 no managed Python environment and starts the executable named by `load.entrypoint`.
 
 Both worker examples use the Relay 1.0 SDK and declare `compat.relay = ">=1.0.0,<2.0"`.
-Their protocol is `nvidia.nemo.relay.worker.v1`, contract version `1.0.0`. Rebuild
-old workers and update their manifests before activation.
+Their protocol is `nvidia.nemo.relay.worker.v1`, contract version `1.0.0`.
 
 ## Package and Register the Artifact
 
@@ -110,11 +111,11 @@ Relay can validate and activate:
 5. Register the same path with `nemo-relay plugins add --user <materialized-manifest>`, or
    add an explicit `[[plugins.dynamic]]` reference to the intended `plugins.toml`.
 6. Activate a valid component, inspect the runtime report, execute a representative
-   managed call, then clear and unload or stop the plugin.
+   managed call, then close the component or stop the worker.
 
 Success means package validation passes before activation, tampering causes integrity
 validation to fail, the runtime report identifies the dynamic component, and teardown
-removes its registrations before the library unloads or worker exits. The operator-side
+removes its registrations before component teardown or worker exit. The operator-side
 trust policy and file layout are documented in [Manage](/configure-plugins/discoverable-plugins).
 
 ## Forward Host Environment Variables

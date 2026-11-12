@@ -1,13 +1,13 @@
 ---
 title: "Migration Guides"
-description: "Migrate worker plugins to NeMo Relay 1.0.0 and review the 0.11.0 upgrade."
+description: "Migrate worker plugins and managed Claude bundles to NeMo Relay 1.0.0, or review the 0.11.0 upgrade."
 position: 6
 ---
 {/* SPDX-FileCopyrightText: Copyright (c) 2026, NVIDIA CORPORATION & AFFILIATES. All rights reserved.
 SPDX-License-Identifier: Apache-2.0 */}
 
-Use this page to migrate worker plugins to NeMo Relay 1.0.0 or review the upgrade
-from NeMo Relay 0.10.0 to 0.11.0.
+Use this page to migrate worker plugins and managed Claude bundles to NeMo Relay
+1.0.0, or review the upgrade from NeMo Relay 0.10.0 to 0.11.0.
 
 The historical 0.11.0 guide below includes fixes from the 0.10
 patch releases. Configuration changes from earlier patch upgrades still apply.
@@ -45,6 +45,39 @@ alternative is invalid. Runtime failures use standard gRPC status codes.
 The old `grpc-v1` schema and generated bindings have been removed. Historical
 definitions remain in Git history, and no automatic adapter is provided. Refer to the
 [gRPC protocol reference](/build-plugins/workers/grpc-v1-protocol) for the contract.
+
+## Update Managed Claude Bundles for NeMo Relay 1.0.0
+
+Generated Claude settings now enable gateway hints by default. Previously
+generated Claude bundles no longer match canonical validation. Generate a
+replacement in a new directory, redeploy it, and provision its new trusted
+digest separately. Refresh does not rewrite existing bundles. Follow
+[Distribute Immutable Managed Settings](/daemon/configuration#distribute-immutable-managed-settings)
+for the generation and validation commands. Pi-only bundles are unaffected.
+Codex bundles change too; see the next section.
+
+## Update Codex and Managed Codex Bundles for NeMo Relay 1.0.0
+
+NeMo Relay now requires `codex-cli` 0.150.0 or newer and registers the Codex
+`SessionEnd` and `Interrupt` hooks. Upgrade Codex before upgrading Relay; Relay
+rejects older Codex versions at launch.
+
+Refresh personal Relay-managed Codex integrations so they register both hooks:
+
+```bash
+nemo-relay integrations refresh
+```
+
+To refresh only Codex, run `nemo-relay install codex --force`. Do not
+regenerate managed daemon bundles with personal install commands.
+
+Generated Codex bundles now include both hooks, so previously generated bundles
+containing Codex no longer match canonical validation. Generate a replacement in
+a new directory, redeploy it, and provision its new trusted digest separately.
+Refresh does not rewrite existing bundles. Follow
+[Distribute Immutable Managed Settings](/daemon/configuration#distribute-immutable-managed-settings)
+for the generation and validation commands. Claude-only and Pi-only bundles are
+unaffected by this change.
 
 ## Upgrade to NeMo Relay 0.11.0
 
@@ -156,14 +189,14 @@ credentials, connection errors, timeouts, and HTTP errors. Fail-open delivery
 failures return `0`. Guardrail rejections return `2` under either policy.
 Hook requests now have a 30-second timeout. Leave room for delivery when setting
 guardrail evaluation timeouts. Refer to
-[Hook Forwarding](/nemo-relay-cli/basic-usage#hook-forwarding).
+[Hook Forwarding](/nemo-relay-cli/gateway-reference#hook-forwarding).
 
 Hook sessions now use a valid `TRACEPARENT` from the launching process as their
 OpenTelemetry parent. `TRACESTATE` travels with it. The first hook that creates
 a session sets its parent; later hooks do not change it. Review launch scripts
 that already set these variables. Unset them if each session should start a new
 trace. Refer to
-[Continue the Launcher Trace](/nemo-relay-cli/basic-usage#continue-the-launcher-trace).
+[Continue the Launcher Trace](/nemo-relay-cli/gateway-reference#continue-the-launcher-trace).
 
 Make sure hooks can read `NEMO_RELAY_CLIENT_TOKEN` or the per-user token file.
 If the file is missing, run the following command as the user who runs the
@@ -298,7 +331,7 @@ A passing HTTP check only means the collector answered. It does not prove that
 the collector accepts your credentials or trace data. Doctor does not test
 whether redaction removed sensitive data. It also does not read `header_file`
 values. Refer to
-[Check Configuration and Exporters](/nemo-relay-cli/basic-usage#check-configuration-and-exporters).
+[Check Configuration and Exporters](/nemo-relay-cli/troubleshooting#check-configuration-and-exporters).
 
 ### Providers and Request Handling
 
@@ -317,11 +350,11 @@ and custom headers, ignore environment API key fallbacks, and do not run API
 key helpers. Startup fails if that provider has a configured API key,
 authentication header, or helper. Prefer HTTPS because HTTP sends model content
 without encryption. Refer to
-[Credential-Free HTTP Model Upstreams](/nemo-relay-cli/basic-usage#credential-free-http-model-upstreams).
+[Credential-Free HTTP Model Upstreams](/nemo-relay-cli/provider-upstreams#credential-free-http-model-upstreams).
 
 Relay no longer follows upstream redirects. It also removes the `Location`
 header from redirect responses. Set the final provider URL directly. Refer to
-[Provider Upstreams](/nemo-relay-cli/basic-usage#provider-upstreams).
+[Provider Upstreams](/nemo-relay-cli/provider-upstreams#provider-upstreams).
 
 #### Review Managed Provider Credentials
 
@@ -342,7 +375,7 @@ ChatGPT credentials with an administrator's OpenAI credential on managed
 routes. If Relay has no replacement, OpenAI requests keep the caller's ChatGPT
 credential. Review deployments that use a helper or an administrator credential
 to choose the provider account. For the credential selection order, refer to
-[Provider Upstreams](/nemo-relay-cli/basic-usage#provider-upstreams).
+[Credential Selection](/nemo-relay-cli/authentication#credential-selection).
 
 `GET /models` and `GET /v1/models` use Anthropic when the request includes
 `anthropic-version` or `anthropic-beta`. Otherwise, they use OpenAI. The API
@@ -549,14 +582,14 @@ callback layouts remain compatible. Scope snapshots require v8. Worker
 snapshots require the new `grpc-v1` snapshot extension. Both SDKs report an
 unsupported operation on older hosts. Check the host version before adopting
 snapshot APIs. Refer to
-[Native ABI Reference](/build-plugins/native/native-abi-reference)
+[Native ABI Reference](https://github.com/NVIDIA/NeMo-Relay/blob/0.11.0/docs/build-plugins/native/native-abi-reference.mdx)
 and [Scope Snapshot Extension](/build-plugins/workers/grpc-v1-protocol#scope-snapshot-extension).
 
 Native plugin diagnostics uses an optional table after the ABI v8 prefix.
 The execution ABI and `compat.native_api = "1"` stay unchanged. Check diagnostic
 capabilities before using the extension. If your plugin requires it, set a
 Relay compatibility range that includes its availability. Refer to
-[Native Diagnostics Extension](/build-plugins/native/native-abi-reference#native-diagnostics-extension).
+[Native Diagnostics Extension](https://github.com/NVIDIA/NeMo-Relay/blob/0.11.0/docs/build-plugins/native/native-abi-reference.mdx#native-diagnostics-extension).
 
 Failed integrity or signature checks now always prevent plugin activation.
 An optional plugin is skipped. A required plugin stops host startup. Check
@@ -566,7 +599,7 @@ restarting.
 Embedded hosts load native plugins from private copies of the verified bytes.
 These plugins must not rely on adjacent files at the loaded library's location.
 The CLI keeps its activation snapshot and adjacent native dependencies. Native
-library digest checks reject symbolic links and special files. Refer to
+library digest checks follow symbolic links, validate the target bytes, and reject special files. Refer to
 [Package Discoverable Plugins](/build-plugins/package-discoverable-plugins).
 
 Short worker callbacks still have a 30-second default deadline. Use

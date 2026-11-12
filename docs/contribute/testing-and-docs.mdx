@@ -176,7 +176,7 @@ Run the affected targets directly:
 ```bash
 just test-rust
 
-# Run Rust tests with code coverage reporting, requires installing cargo-llvm-cov with `cargo install cargo-llvm-cov`
+# Rust tests with coverage. Needs `cargo install cargo-llvm-cov` and `rustup component add llvm-tools`.
 just ci=true test-rust
 
 just test-python
@@ -291,6 +291,32 @@ just docs
 ```
 
 To check only the shared Rust examples, run `just docs-examples`.
+
+### Instrument Applications Examples
+
+Run the examples displayed in the tool, LLM, and middleware guides against the
+current Python, Node.js, and Rust SDKs:
+
+```bash
+just test-instrumentation-examples
+```
+
+The command builds the current native bindings and runs the focused example
+tests. It requires the repository's Node dependencies and normal native build
+tools. It uses locked dependencies and isolated test configuration, and does
+not require a model-provider credential.
+
+Keep example source in `docs/instrument-applications/_code/` and display that
+file with a Fern `Code` component. Add the corresponding native example test
+when adding or changing a shared example. The source-reference check reports
+shared files or documentation references missing from the registered coverage.
+The Check job runs these focused tests when instrumentation documentation
+changes. The language SDK jobs also include their corresponding example tests
+when SDK code changes.
+
+These tests cover local application callbacks, returned results, lifecycle
+events, middleware, and cleanup. External provider behavior and independent
+reader comprehension require separate verification.
 
 ## Fern Publishing
 

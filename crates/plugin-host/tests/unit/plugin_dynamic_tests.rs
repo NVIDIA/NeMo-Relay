@@ -158,6 +158,7 @@ fn registry_rejects_duplicate_live_plugin_ids() {
     }
 }
 
+/// Reject malformed persisted records before exposing them as usable registry entries.
 #[test]
 fn registry_rejects_invalid_raw_record_shapes() {
     let mut registry = DynamicPluginRegistry::new();
@@ -165,7 +166,7 @@ fn registry_rejects_invalid_raw_record_shapes() {
     record.compatibility =
         DynamicPluginCompatibility::RustDynamic(DynamicPluginRustCompatibility {
             relay: ">=1.0.0,<2.0".into(),
-            native_api: "1".into(),
+            native_api: "v1.0".into(),
         });
 
     let err = registry
@@ -228,6 +229,7 @@ fn registry_replacement_rejects_invalid_record_shapes() {
     }
 }
 
+/// Persisted compatibility metadata must have the expected shape before registry use.
 #[test]
 fn registry_rejects_invalid_raw_record_compatibility_shapes() {
     let mut registry = DynamicPluginRegistry::new();
@@ -235,7 +237,7 @@ fn registry_rejects_invalid_raw_record_compatibility_shapes() {
     record.compatibility =
         DynamicPluginCompatibility::RustDynamic(DynamicPluginRustCompatibility {
             relay: ">=1.0.0,<2.0".into(),
-            native_api: "1".into(),
+            native_api: "v1.0".into(),
         });
 
     let err = registry
@@ -249,6 +251,7 @@ fn registry_rejects_invalid_raw_record_compatibility_shapes() {
     }
 }
 
+/// Each transport must declare a nonempty compatibility value for its own lane.
 #[test]
 fn registry_rejects_empty_required_lane_specific_compatibility_strings() {
     let mut registry = DynamicPluginRegistry::new();
@@ -278,7 +281,7 @@ fn registry_rejects_empty_required_lane_specific_compatibility_strings() {
         });
     rust_record.load = DynamicPluginLoadContract::RustDynamic(DynamicPluginRustLoadContract {
         library: "target/release/libswitchyard.dylib".into(),
-        symbol: "nemo_relay_register_plugin".into(),
+        symbol: String::new(),
     });
 
     let err = registry
@@ -581,7 +584,7 @@ kind = "rust_dynamic"
 
 [compat]
 relay = ">=1.0.0,<2.0"
-native_api = "1"
+native_api = "v1.0"
 
 [defaults]
 enabled = false
@@ -591,7 +594,6 @@ items = ["plugin_native"]
 
 [load]
 library = "target/release/libswitchyard.dylib"
-symbol = "nemo_relay_register_plugin"
 "#
 }
 
@@ -1109,28 +1111,29 @@ fn manifest_parse_and_conversion_supports_rust_dynamic_lane() {
         record.load,
         DynamicPluginLoadContract::RustDynamic(DynamicPluginRustLoadContract {
             library: "target/release/libswitchyard.dylib".into(),
-            symbol: "nemo_relay_register_plugin".into(),
+            symbol: String::new(),
         })
     );
     assert_eq!(
         record.compatibility,
         DynamicPluginCompatibility::RustDynamic(DynamicPluginRustCompatibility {
             relay: ">=1.0.0,<2.0".into(),
-            native_api: "1".into(),
+            native_api: "v1.0".into(),
         })
     );
 }
 
+/// Unknown native contract declarations must fail static manifest validation.
 #[test]
 fn manifest_rejects_native_api_two_and_unknown_native_api() {
     for unsupported in ["2", "3"] {
         let manifest = valid_rust_manifest_toml().replace(
-            "native_api = \"1\"",
+            "native_api = \"v1.0\"",
             &format!("native_api = \"{unsupported}\""),
         );
         let error = DynamicPluginManifest::parse_toml(&manifest)
             .expect_err("unsupported native API should fail");
-        assert!(error.to_string().contains("native_api = \"1\""));
+        assert!(error.to_string().contains("expected native API"));
     }
 }
 
@@ -1170,6 +1173,7 @@ runtime = "python"
     }
 }
 
+/// A manifest must not advertise capabilities belonging to another plugin transport.
 #[test]
 fn manifest_rejects_capability_kind_mismatch() {
     let err = DynamicPluginManifest::parse_toml(
@@ -1182,7 +1186,7 @@ kind = "rust_dynamic"
 
 [compat]
 relay = ">=1.0.0,<2.0"
-native_api = "1"
+native_api = "v1.0"
 
 [defaults]
 enabled = false
@@ -1192,7 +1196,6 @@ items = ["plugin_worker"]
 
 [load]
 library = "target/release/libbad.dylib"
-symbol = "nemo_relay_register_plugin"
 "#,
     )
     .expect_err("capability mismatch should fail");
@@ -1261,7 +1264,6 @@ items = ["plugin_native"]
 
 [load]
 library = "target/release/libmissing.dylib"
-symbol = "nemo_relay_register_plugin"
 "#,
     )
     .expect_err("native manifest without compat.native_api should fail");
@@ -1274,6 +1276,7 @@ symbol = "nemo_relay_register_plugin"
     }
 }
 
+/// Native manifests must reject worker-only launch fields.
 #[test]
 fn manifest_rejects_worker_fields_for_rust_dynamic_plugins() {
     let err = DynamicPluginManifest::parse_toml(
@@ -1286,7 +1289,7 @@ kind = "rust_dynamic"
 
 [compat]
 relay = ">=1.0.0,<2.0"
-native_api = "1"
+native_api = "v1.0"
 
 [defaults]
 enabled = false
@@ -1298,7 +1301,6 @@ items = ["plugin_native"]
 runtime = "python"
 entrypoint = "bad.plugin:register"
 library = "target/release/libbad.dylib"
-symbol = "nemo_relay_register_plugin"
 "#,
     )
     .expect_err("native manifest with worker load fields should fail");
@@ -1711,7 +1713,7 @@ fn manifest_load_contract_serializes_both_execution_lanes() {
     let native = DynamicPluginManifest::parse_toml(valid_rust_manifest_toml()).unwrap();
     let native_toml = toml::to_string(&native).expect("serialize native manifest");
     assert!(native_toml.contains("library = \"target/release/libswitchyard.dylib\""));
-    assert!(native_toml.contains("symbol = \"nemo_relay_register_plugin\""));
+    assert!(!native_toml.contains("symbol ="));
     assert!(!native_toml.contains("runtime ="));
 
     assert_eq!(
@@ -1895,7 +1897,7 @@ fn registry_reconstruction_and_raw_native_validation_cover_rejections() {
     });
     native.load = DynamicPluginLoadContract::RustDynamic(DynamicPluginRustLoadContract {
         library: "plugin.so".into(),
-        symbol: "register".into(),
+        symbol: String::new(),
     });
     assert!(
         DynamicPluginRegistry::from_records(vec![native])
@@ -1909,7 +1911,7 @@ fn registry_reconstruction_and_raw_native_validation_cover_rejections() {
     native.compatibility =
         DynamicPluginCompatibility::RustDynamic(DynamicPluginRustCompatibility {
             relay: ">=1.0.0,<2.0".into(),
-            native_api: "1".into(),
+            native_api: "v1.0".into(),
         });
     native.load = DynamicPluginLoadContract::Worker(DynamicPluginWorkerLoadContract {
         forward_env: vec![],
@@ -1964,11 +1966,11 @@ fn registry_rejects_invalid_baselines_and_native_api_versions() {
         });
     native_v2.load = DynamicPluginLoadContract::RustDynamic(DynamicPluginRustLoadContract {
         library: "plugin.so".into(),
-        symbol: "register".into(),
+        symbol: String::new(),
     });
     let error = DynamicPluginRegistry::from_records(vec![native_v2])
         .expect_err("a persisted native API 2 record should fail");
-    assert!(error.to_string().contains("native_api = \"1\""));
+    assert!(error.to_string().contains("expected native API"));
 }
 
 #[test]

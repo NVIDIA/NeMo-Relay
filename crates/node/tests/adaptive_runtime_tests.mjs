@@ -6,7 +6,8 @@ import assert from 'node:assert/strict';
 import { createRequire } from 'node:module';
 
 const require = createRequire(import.meta.url);
-const adaptive = require('../adaptive.js');
+const adaptive = require('../dist/adaptive.js');
+const { ScopeType, withScope } = require('../dist/index.js');
 
 function acgRuntimeConfig(provider = 'anthropic') {
   return {
@@ -72,6 +73,30 @@ describe('adaptive runtime bridge', () => {
     assert.equal(event.agent_identity.agent_id, 'node-agent');
   });
 
+  it('sums cache writes across durations in cache telemetry', () => {
+    const event = adaptive.buildCacheTelemetryEvent({
+      provider: 'anthropic',
+      requestId: '00000000-0000-0000-0000-000000000204',
+      usage: {
+        prompt_tokens: 100,
+        completion_tokens: 10,
+        cache_read_tokens: 25,
+        cache_write_tokens: [
+          { count: 30, duration: 300 },
+          { count: 20, duration: 3600 },
+        ],
+      },
+      agentId: 'node-agent',
+      templateVersion: 'v1',
+      toolsetHash: 'tools',
+      modelFamily: 'claude',
+      tenantScope: 'tenant',
+      timestamp: '2026-06-15T00:00:00Z',
+    });
+
+    assert.equal(event.total_prompt_tokens, 175);
+  });
+
   it('returns null when cache telemetry lacks prompt tokens', () => {
     assert.equal(
       adaptive.buildCacheTelemetryEvent({
@@ -92,9 +117,15 @@ describe('adaptive runtime bridge', () => {
 
   it('registers an owned runtime and builds cache request facts', async () => {
     const runtime = new adaptive.AdaptiveRuntime(acgRuntimeConfig('openai'));
+    await withScope('unbound', ScopeType.Agent, (handle) => {
+      assert.throws(() => runtime.bindScope(handle), /binding ACG request intercepts/);
+    });
     await runtime.register();
     try {
       assert.deepEqual(runtime.report().diagnostics, []);
+      await withScope('bound', ScopeType.Agent, (handle) => {
+        runtime.bindScope(handle);
+      });
       const facts = runtime.buildCacheRequestFacts({
         provider: 'openai',
         requestId: '00000000-0000-0000-0000-000000000203',

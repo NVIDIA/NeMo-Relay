@@ -359,6 +359,8 @@ fn test_config() -> GatewayConfig {
         max_hook_payload_bytes: crate::configuration::DEFAULT_MAX_HOOK_PAYLOAD_BYTES,
         launched_agent: None,
         max_passthrough_body_bytes: crate::configuration::DEFAULT_MAX_PASSTHROUGH_BODY_BYTES,
+        openai_oidc: None,
+        anthropic_oidc: None,
     }
 }
 
@@ -623,7 +625,7 @@ kind = "rust_dynamic"
 
 [compat]
 relay = ">=1.0.0,<2.0"
-native_api = "1"
+native_api = "v1.0"
 
 [defaults]
 enabled = false
@@ -633,7 +635,6 @@ items = ["plugin_native"]
 
 [load]
 library = {library}
-symbol = "nemo_relay_missing_native_plugin"
 "#
         ),
     )
@@ -4296,20 +4297,30 @@ async fn gateway_rejects_responses_streams_without_final_events() {
             );
         } else {
             assert_eq!(response.status(), StatusCode::OK);
-            let mut response_body = response.into_body();
-            let first = response_body
-                .frame()
+            let bytes = response
+                .into_body()
+                .collect()
                 .await
-                .unwrap()
-                .unwrap()
-                .into_data()
-                .unwrap();
-            assert!(
-                std::str::from_utf8(&first)
-                    .unwrap()
-                    .contains("response.created")
-            );
-            assert!(response_body.frame().await.is_none());
+                .expect("stream error must preserve HTTP framing")
+                .to_bytes();
+            let text = std::str::from_utf8(&bytes).unwrap();
+            let events: Vec<_> = text
+                .split("\n\n")
+                .filter(|event| !event.is_empty())
+                .collect();
+            assert_eq!(events.len(), 2);
+            assert!(events[0].starts_with("event: response.created\n"));
+            assert!(events[1].starts_with("event: error\n"));
+            let event: Value = serde_json::from_str(
+                events[1]
+                    .lines()
+                    .find_map(|line| line.strip_prefix("data: "))
+                    .unwrap(),
+            )
+            .unwrap();
+            assert_eq!(event["type"], "error");
+            assert_eq!(event["code"], "stream_error");
+            assert!(event["error"]["message"].is_string());
         }
         handle.abort();
     }
@@ -4574,7 +4585,8 @@ async fn gateway_forwards_anthropic_count_tokens_without_llm_codec() {
 }
 
 #[tokio::test]
-async fn gateway_forwards_claude_startup_probe_without_llm_observability() {
+async fn gateway_records_literal_test_request_as_unknown_with_native_session_header() {
+    let _guard = PLUGIN_CONFIG_TEST_LOCK.lock().await;
     let subscriber_name = "server-claude-startup-probe-no-llm-test";
     let _ = deregister_subscriber(subscriber_name);
     let captured_llm_starts = Arc::new(std::sync::Mutex::new(Vec::<Value>::new()));
@@ -4586,27 +4598,9 @@ async fn gateway_forwards_claude_startup_probe_without_llm_observability() {
                 && event.name() == "anthropic.messages"
                 && event
                     .metadata()
-                    .and_then(|metadata| metadata.get("gateway_path"))
+                    .and_then(|metadata| metadata.get("session_id"))
                     .and_then(Value::as_str)
-                    == Some("/v1/messages")
-                && event
-                    .input()
-                    .and_then(|input| input.get("model"))
-                    .and_then(Value::as_str)
-                    == Some("claude-opus-4-8[1m]")
-                && event
-                    .input()
-                    .and_then(|input| input.get("max_tokens"))
-                    .and_then(Value::as_u64)
-                    == Some(1)
-                && event
-                    .input()
-                    .and_then(|input| input.get("messages"))
-                    .and_then(Value::as_array)
-                    .and_then(|messages| messages.first())
-                    .and_then(|message| message.get("content"))
-                    .and_then(Value::as_str)
-                    == Some("test")
+                    == Some("literal-test-managed-native")
             {
                 captured.lock().unwrap().push(json!({
                     "input": event.input().cloned().unwrap_or(Value::Null),
@@ -4621,7 +4615,9 @@ async fn gateway_forwards_claude_startup_probe_without_llm_observability() {
     let upstream = spawn_anthropic_upstream().await;
     let mut config = test_config();
     config.anthropic_base_url = upstream.url();
-    let app = router(config);
+    let state = AppState::new(config);
+    let sessions = state.sessions.clone();
+    let app = router_with_state(state);
     let response = app
         .oneshot(
             Request::builder()
@@ -4629,7 +4625,7 @@ async fn gateway_forwards_claude_startup_probe_without_llm_observability() {
                 .uri("/v1/messages")
                 .header("content-type", "application/json")
                 .header("x-api-key", "sk-ant-test")
-                .header("x-claude-code-session-id", "claude-probe")
+                .header("x-claude-code-session-id", "literal-test-managed-native")
                 .body(Body::from(
                     json!({
                         "model": "claude-opus-4-8[1m]",
@@ -4655,15 +4651,19 @@ async fn gateway_forwards_claude_startup_probe_without_llm_observability() {
     assert_eq!(body["model"], json!("claude-opus-4-8[1m]"));
     assert_eq!(body["prompt"], json!("test"));
 
+    sessions.close_all("test_shutdown").await.unwrap();
     flush_subscribers().unwrap();
-    assert!(
-        captured_llm_starts.lock().unwrap().is_empty(),
-        "Claude startup probe must not emit a managed LLM span"
+    let starts = captured_llm_starts.lock().unwrap();
+    assert_eq!(starts.len(), 1);
+    assert_eq!(
+        starts[0]["metadata"]["claude_code_request_class"],
+        "unknown"
     );
 }
 
 #[tokio::test]
-async fn gateway_suppresses_claude_startup_probe_without_native_session_header() {
+async fn gateway_records_literal_test_request_as_unknown_without_native_session_header() {
+    let _guard = PLUGIN_CONFIG_TEST_LOCK.lock().await;
     let subscriber_name = "server-claude-startup-probe-no-native-header-test";
     let _ = deregister_subscriber(subscriber_name);
     let captured_events = Arc::new(std::sync::Mutex::new(Vec::<Value>::new()));
@@ -4675,13 +4675,11 @@ async fn gateway_suppresses_claude_startup_probe_without_native_session_header()
                 .metadata()
                 .and_then(|metadata| metadata.get("session_id"))
                 .and_then(Value::as_str);
+            if session_id != Some("claude-probe-no-native-header") {
+                return;
+            }
             let is_probe_llm = event.scope_category() == Some(ScopeCategory::Start)
-                && event.name() == "anthropic.messages"
-                && event
-                    .input()
-                    .and_then(|input| input.get("model"))
-                    .and_then(Value::as_str)
-                    == Some("claude-opus-4-8[1m]");
+                && event.name() == "anthropic.messages";
             let is_probe_turn = event.scope_category() == Some(ScopeCategory::Start)
                 && event.name() == "claude-code-turn"
                 && session_id == Some("claude-probe-no-native-header");
@@ -4700,7 +4698,9 @@ async fn gateway_suppresses_claude_startup_probe_without_native_session_header()
     let upstream = spawn_anthropic_upstream().await;
     let mut config = test_config();
     config.anthropic_base_url = upstream.url();
-    let app = router(config);
+    let state = AppState::new(config);
+    let sessions = state.sessions.clone();
+    let app = router_with_state(state);
     let response = app
         .oneshot(
             Request::builder()
@@ -4728,11 +4728,231 @@ async fn gateway_suppresses_claude_startup_probe_without_native_session_header()
         .unwrap();
 
     assert_eq!(response.status(), StatusCode::OK);
+    response.into_body().collect().await.unwrap();
+    sessions.close_all("test_shutdown").await.unwrap();
     flush_subscribers().unwrap();
-    assert!(
-        captured_events.lock().unwrap().is_empty(),
-        "no-native-header Claude startup probe must not emit managed LLM or null-input turn events"
+    let events = captured_events.lock().unwrap();
+    assert_eq!(
+        events
+            .iter()
+            .filter(|event| event["name"] == "anthropic.messages")
+            .count(),
+        1
     );
+    let turns = events
+        .iter()
+        .filter(|event| event["name"] == "claude-code-turn")
+        .collect::<Vec<_>>();
+    assert_eq!(turns.len(), 1);
+    assert_eq!(turns[0]["metadata"]["turn_source"], "gateway_request");
+}
+
+#[tokio::test]
+async fn gateway_internal_http_completions_preserve_task_output_and_all_usage() {
+    use crate::events::{AgentKind, NormalizedEvent, SessionEvent};
+    use nemo_relay_runtime::api::event::Event;
+
+    let _guard = PLUGIN_CONFIG_TEST_LOCK.lock().await;
+    let subscriber_name = "server-claude-activity-response-isolation";
+    let events = Arc::new(Mutex::new(Vec::<Event>::new()));
+    let recorded = events.clone();
+    register_subscriber(
+        subscriber_name,
+        Arc::new(move |event| {
+            if event
+                .metadata()
+                .and_then(|metadata| metadata.get("session_id"))
+                .and_then(Value::as_str)
+                .is_some_and(|id| id.starts_with("activity-http-"))
+            {
+                recorded.lock().unwrap().push(event.clone());
+            }
+        }),
+    )
+    .unwrap();
+    let _subscriber_cleanup = SubscriberCleanup(subscriber_name);
+
+    let class = "auxiliary";
+    for streaming in [false, true] {
+        let id = format!("activity-http-{streaming}");
+        let entered = Arc::new(Semaphore::new(0));
+        let release_main = Arc::new(Semaphore::new(0));
+        let release_helper = Arc::new(Semaphore::new(0));
+        let provider = Router::new().route(
+                "/v1/messages",
+                post({
+                    let entered = entered.clone();
+                    let release_main = release_main.clone();
+                    let release_helper = release_helper.clone();
+                    move |body: Bytes| {
+                        let entered = entered.clone();
+                        let release_main = release_main.clone();
+                        let release_helper = release_helper.clone();
+                        async move {
+                            let request: Value = serde_json::from_slice(&body).unwrap();
+                            let main = request["messages"][0]["content"] == "main task";
+                            entered.add_permits(1);
+                            if main {
+                                release_main.acquire().await.unwrap().forget();
+                            } else {
+                                release_helper.acquire().await.unwrap().forget();
+                            }
+                            let response = json!({
+                                "id": if main { "msg-task" } else { "msg-helper" },
+                                "type": "message",
+                                "role": "assistant",
+                                "model": "claude-test",
+                                "content": [{"type": "text", "text": if main { "task answer" } else { "helper answer" }}],
+                                "stop_reason": "end_turn",
+                                "usage": {"input_tokens": 2, "output_tokens": 1}
+                            });
+                            if request["stream"] == true {
+                                let events = [
+                                    json!({"type":"message_start","message":{"id":response["id"],"type":"message","role":"assistant","model":"claude-test","content":[],"usage":{"input_tokens":2,"output_tokens":0}}}),
+                                    json!({"type":"content_block_start","index":0,"content_block":{"type":"text","text":""}}),
+                                    json!({"type":"content_block_delta","index":0,"delta":{"type":"text_delta","text":response["content"][0]["text"]}}),
+                                    json!({"type":"content_block_stop","index":0}),
+                                    json!({"type":"message_delta","delta":{"stop_reason":"end_turn","stop_sequence":null},"usage":{"output_tokens":1}}),
+                                    json!({"type":"message_stop"}),
+                                ];
+                                let wire = events.iter().map(|event| format!("data: {event}\n\n")).collect::<String>();
+                                ([(header::CONTENT_TYPE, "text/event-stream")], wire).into_response()
+                            } else {
+                                axum::Json(response).into_response()
+                            }
+                        }
+                    }
+                }),
+            );
+        let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let address = listener.local_addr().unwrap();
+        let upstream = TestServer {
+            url: format!("http://{address}"),
+            handle: tokio::spawn(async move { axum::serve(listener, provider).await.unwrap() }),
+        };
+        let mut config = test_config();
+        config.anthropic_base_url = upstream.url();
+        let state = AppState::new(config);
+        let sessions = state.sessions.clone();
+        let boundary = |name: &str| SessionEvent {
+            session_id: id.clone(),
+            agent_kind: AgentKind::ClaudeCode,
+            event_name: name.into(),
+            payload: json!({"prompt": "main task"}),
+            metadata: json!({}),
+        };
+        sessions
+            .apply_events(
+                &http::HeaderMap::new(),
+                vec![NormalizedEvent::PromptSubmitted(boundary(
+                    "UserPromptSubmit",
+                ))],
+            )
+            .await
+            .unwrap();
+        let app = router_with_state(state);
+        let request = |class: &str, content: &str| {
+            Request::post("/v1/messages")
+                .header("content-type", "application/json")
+                .header("x-api-key", "test-api-key")
+                .header("x-claude-code-session-id", &id)
+                .header("x-claude-code-request-class", class)
+                .body(Body::from(
+                    json!({
+                        "model": "claude-test", "max_tokens": 16, "stream": streaming,
+                        "messages": [{"role": "user", "content": content}]
+                    })
+                    .to_string(),
+                ))
+                .unwrap()
+        };
+        let main = tokio::spawn(app.clone().oneshot(request("main", "main task")));
+        let helper = tokio::spawn(app.oneshot(request(class, "helper work")));
+        tokio::time::timeout(Duration::from_secs(5), entered.acquire_many(2))
+            .await
+            .unwrap()
+            .unwrap()
+            .forget();
+        release_main.add_permits(1);
+        let response = tokio::time::timeout(Duration::from_secs(5), main)
+            .await
+            .unwrap()
+            .unwrap()
+            .unwrap();
+        assert_eq!(response.status(), StatusCode::OK);
+        assert_eq!(
+            response.headers()[header::CONTENT_TYPE],
+            if streaming {
+                "text/event-stream"
+            } else {
+                "application/json"
+            }
+        );
+        response.into_body().collect().await.unwrap();
+        release_helper.add_permits(1);
+        let response = tokio::time::timeout(Duration::from_secs(5), helper)
+            .await
+            .unwrap()
+            .unwrap()
+            .unwrap();
+        assert_eq!(response.status(), StatusCode::OK);
+        assert_eq!(
+            response.headers()[header::CONTENT_TYPE],
+            if streaming {
+                "text/event-stream"
+            } else {
+                "application/json"
+            }
+        );
+        response.into_body().collect().await.unwrap();
+        sessions
+            .apply_events(
+                &http::HeaderMap::new(),
+                vec![NormalizedEvent::TurnEnded(boundary("Stop"))],
+            )
+            .await
+            .unwrap();
+        sessions.close_all("test_shutdown").await.unwrap();
+        flush_subscribers().unwrap();
+
+        let events = events.lock().unwrap();
+        let matching = events
+            .iter()
+            .filter(|event| event.metadata().unwrap()["session_id"] == id)
+            .collect::<Vec<_>>();
+        let turn = matching
+            .iter()
+            .find(|event| {
+                event.name() == "claude-code-turn"
+                    && event.scope_category() == Some(ScopeCategory::End)
+            })
+            .unwrap();
+        assert_eq!(turn.output().unwrap()["content"][0]["text"], "task answer");
+        assert_eq!(turn.metadata().unwrap()["turn_prompt_observed"], true);
+        let llm_ends = matching
+            .iter()
+            .filter(|event| {
+                event.name() == "anthropic.messages"
+                    && event.scope_category() == Some(ScopeCategory::End)
+            })
+            .collect::<Vec<_>>();
+        assert_eq!(llm_ends.len(), 2);
+        let classes = llm_ends
+            .iter()
+            .map(|event| {
+                event.metadata().unwrap()["claude_code_request_class"]
+                    .as_str()
+                    .unwrap()
+            })
+            .collect::<std::collections::HashSet<_>>();
+        assert_eq!(classes, std::collections::HashSet::from(["main", class]));
+        for event in llm_ends {
+            let response = event.annotated_response().unwrap();
+            let usage = serde_json::to_value(response.usage.as_ref().unwrap()).unwrap();
+            assert_eq!(usage["prompt_tokens"], 2);
+            assert_eq!(usage["completion_tokens"], 1);
+        }
+    }
 }
 
 #[tokio::test]
@@ -5179,6 +5399,25 @@ async fn spawn_concurrent_attempt_upstream(release_losing: Arc<Semaphore>) -> Te
         if attempt == "losing" {
             release_losing.acquire().await.unwrap().forget();
         }
+        if attempt == "losing" && request["losing_succeeds"].as_bool() == Some(true) {
+            let body = if streaming {
+                CONCURRENT_LOSING_CHAT_SSE.to_string()
+            } else if request["same_body"].as_bool() == Some(true) {
+                // An upstream cache can answer both attempts with the same body.
+                concurrent_selected_chat_response().to_string()
+            } else {
+                let mut response = concurrent_selected_chat_response();
+                response["id"] = json!("chatcmpl-losing");
+                response.to_string()
+            };
+            return Response::builder()
+                .status(StatusCode::OK)
+                .header(header::CONTENT_TYPE, "application/x-losing-success")
+                .header("x-upstream-attempt", attempt)
+                .header("x-upstream-shared", "same")
+                .body(Body::from(body))
+                .unwrap();
+        }
 
         let (status, content_type, body) = match (attempt, streaming, both_fail) {
             ("selected", false, true) => (
@@ -5228,6 +5467,7 @@ async fn spawn_concurrent_attempt_upstream(release_losing: Arc<Semaphore>) -> Te
             .status(status)
             .header(header::CONTENT_TYPE, content_type)
             .header("x-upstream-attempt", attempt)
+            .header("x-upstream-shared", "same")
             .body(Body::from(body))
             .unwrap()
     }
@@ -5322,9 +5562,14 @@ async fn gateway_concurrent_next_uses_canonical_selected_buffered_response() {
             .and_then(|value| value.to_str().ok()),
         Some("application/json")
     );
-    assert!(
-        response.headers().get("x-upstream-attempt").is_none(),
-        "managed success must not inherit metadata from an arbitrary upstream attempt"
+    assert_eq!(
+        response
+            .headers()
+            .get_all("x-upstream-attempt")
+            .iter()
+            .collect::<Vec<_>>(),
+        ["selected"],
+        "managed success must carry the selected attempt's headers, never the losing attempt's"
     );
     let body = response.into_body().collect().await.unwrap().to_bytes();
     assert_eq!(
@@ -5407,14 +5652,267 @@ async fn gateway_concurrent_next_uses_canonical_selected_streaming_response() {
             .and_then(|value| value.to_str().ok()),
         Some("text/event-stream")
     );
-    assert!(
-        response.headers().get("x-upstream-attempt").is_none(),
-        "managed stream success must not inherit metadata from an arbitrary upstream attempt"
+    assert_eq!(
+        response
+            .headers()
+            .get_all("x-upstream-attempt")
+            .iter()
+            .collect::<Vec<_>>(),
+        ["selected"],
+        "managed stream success must carry the selected attempt's headers, never the losing attempt's"
     );
     let body = response.into_body().collect().await.unwrap().to_bytes();
     let body = std::str::from_utf8(&body).unwrap();
     assert!(body.contains("selected attempt"), "{body}");
     assert!(!body.contains("losing attempt"), "{body}");
+}
+
+/// Both concurrent attempts succeed and the later one finishes last; the returned attempt's
+/// headers must still win over the latest success.
+#[tokio::test]
+async fn gateway_concurrent_successes_keep_the_selected_attempt_headers() {
+    let _guard = PLUGIN_CONFIG_TEST_LOCK.lock().await;
+    let _ = crate::test_support::plugin_host::test_close_plugin_host();
+
+    const BUFFERED_NAME: &str = "cli-test-concurrent-buffered-successes";
+    const STREAMING_NAME: &str = "cli-test-concurrent-streaming-successes";
+    const MARKER: &str = "select one of two successful concurrent attempts";
+    let _ = deregister_llm_execution_intercept(BUFFERED_NAME);
+    let _buffered_cleanup = LlmExecutionInterceptCleanup(BUFFERED_NAME);
+    let _ = deregister_llm_stream_execution_intercept(STREAMING_NAME);
+    let _streaming_cleanup = LlmStreamExecutionInterceptCleanup(STREAMING_NAME);
+    let release_losing = Arc::new(Semaphore::new(0));
+    let buffered_release = release_losing.clone();
+    register_llm_execution_intercept(
+        BUFFERED_NAME,
+        1,
+        Arc::new(move |_name, request, _context, next| {
+            let release_losing = buffered_release.clone();
+            Box::pin(async move {
+                if request.content["messages"][0]["content"].as_str() != Some(MARKER) {
+                    return next(request).await;
+                }
+                let mut selected_request = request.clone();
+                selected_request.content["attempt"] = json!("selected");
+                let mut losing_request = request;
+                losing_request.content["attempt"] = json!("losing");
+                losing_request.content["losing_succeeds"] = json!(true);
+                let selected = next(selected_request).await;
+                release_losing.add_permits(1);
+                assert!(next(losing_request).await.is_ok());
+                selected
+            })
+        }),
+    )
+    .unwrap();
+    let streaming_release = release_losing.clone();
+    register_llm_stream_execution_intercept(
+        STREAMING_NAME,
+        1,
+        Arc::new(move |_name, request, _context, next| {
+            let release_losing = streaming_release.clone();
+            Box::pin(async move {
+                if request.content["messages"][0]["content"].as_str() != Some(MARKER) {
+                    return next(request).await;
+                }
+                let mut selected_request = request.clone();
+                selected_request.content["attempt"] = json!("selected");
+                let mut losing_request = request;
+                losing_request.content["attempt"] = json!("losing");
+                losing_request.content["losing_succeeds"] = json!(true);
+                let selected = next(selected_request).await;
+                release_losing.add_permits(1);
+                assert!(next(losing_request).await.is_ok());
+                selected
+            })
+        }),
+    )
+    .unwrap();
+
+    let upstream = spawn_concurrent_attempt_upstream(release_losing).await;
+    let mut config = test_config();
+    config.openai_base_url = upstream.url();
+    for streaming in [false, true] {
+        let response = router(config.clone())
+            .oneshot(
+                Request::builder()
+                    .method("POST")
+                    .uri("/v1/chat/completions")
+                    .header(header::CONTENT_TYPE, "application/json")
+                    .body(Body::from(
+                        json!({
+                            "model": "gpt-4o",
+                            "messages": [{"role": "user", "content": MARKER}],
+                            "stream": streaming
+                        })
+                        .to_string(),
+                    ))
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+        assert_eq!(response.status(), StatusCode::OK, "streaming={streaming}");
+        assert_eq!(
+            response
+                .headers()
+                .get_all("x-upstream-attempt")
+                .iter()
+                .collect::<Vec<_>>(),
+            ["selected"],
+            "streaming={streaming}"
+        );
+        let body = response.into_body().collect().await.unwrap().to_bytes();
+        let body = std::str::from_utf8(&body).unwrap();
+        assert!(!body.contains("losing"), "streaming={streaming}: {body}");
+    }
+}
+
+/// Middleware reads the first event of both streams, then returns the selected stream with its
+/// first event replayed. The headers must follow the returned content, not the last stream read.
+#[tokio::test]
+async fn gateway_streaming_headers_follow_the_returned_stream_after_both_are_read() {
+    use futures_util::StreamExt;
+    let _guard = PLUGIN_CONFIG_TEST_LOCK.lock().await;
+    let _ = crate::test_support::plugin_host::test_close_plugin_host();
+
+    const INTERCEPT_NAME: &str = "cli-test-concurrent-streaming-pre-read";
+    const MARKER: &str = "read both streams before returning one";
+    let _ = deregister_llm_stream_execution_intercept(INTERCEPT_NAME);
+    let _cleanup = LlmStreamExecutionInterceptCleanup(INTERCEPT_NAME);
+    let release_losing = Arc::new(Semaphore::new(0));
+    let release_from_intercept = release_losing.clone();
+    register_llm_stream_execution_intercept(
+        INTERCEPT_NAME,
+        1,
+        Arc::new(move |_name, request, _context, next| {
+            let release_losing = release_from_intercept.clone();
+            Box::pin(async move {
+                if request.content["messages"][0]["content"].as_str() != Some(MARKER) {
+                    return next(request).await;
+                }
+                let mut selected_request = request.clone();
+                selected_request.content["attempt"] = json!("selected");
+                let mut losing_request = request;
+                losing_request.content["attempt"] = json!("losing");
+                losing_request.content["losing_succeeds"] = json!(true);
+                let mut selected = next(selected_request).await?;
+                release_losing.add_permits(1);
+                let mut losing = next(losing_request).await?;
+                let selected_first = selected.next().await.expect("selected first event")?;
+                let losing_first = losing.next().await.expect("losing first event")?;
+                assert!(losing_first.get("losing").is_some());
+                drop(losing);
+                let replayed =
+                    futures_util::stream::once(async move { Ok(selected_first) }).chain(selected);
+                Ok(nemo_relay_runtime::api::runtime::LlmJsonStream::new(
+                    replayed,
+                ))
+            })
+        }),
+    )
+    .unwrap();
+
+    let upstream = spawn_concurrent_attempt_upstream(release_losing).await;
+    let mut config = test_config();
+    config.openai_base_url = upstream.url();
+    let response = router(config)
+        .oneshot(
+            Request::builder()
+                .method("POST")
+                .uri("/v1/chat/completions")
+                .header(header::CONTENT_TYPE, "application/json")
+                .body(Body::from(
+                    json!({
+                        "model": "gpt-4o",
+                        "messages": [{"role": "user", "content": MARKER}],
+                        "stream": true
+                    })
+                    .to_string(),
+                ))
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(response.status(), StatusCode::OK);
+    assert_eq!(
+        response
+            .headers()
+            .get_all("x-upstream-attempt")
+            .iter()
+            .collect::<Vec<_>>(),
+        ["selected"]
+    );
+    assert_eq!(response.headers()["x-upstream-shared"], "same");
+    assert_eq!(
+        response.headers()[header::CONTENT_TYPE],
+        "text/event-stream"
+    );
+    let body = response.into_body().collect().await.unwrap().to_bytes();
+    let body = std::str::from_utf8(&body).unwrap();
+    assert!(body.contains("selected attempt"), "{body}");
+    assert!(!body.contains("losing"), "{body}");
+}
+
+/// Two attempts return the same body with different headers, as an upstream cache can. No
+/// attempt-specific header may be guessed; headers both attempts agree on are kept.
+#[tokio::test]
+async fn gateway_identical_buffered_successes_keep_only_shared_headers() {
+    let _guard = PLUGIN_CONFIG_TEST_LOCK.lock().await;
+    let _ = crate::test_support::plugin_host::test_close_plugin_host();
+
+    const INTERCEPT_NAME: &str = "cli-test-concurrent-buffered-identical";
+    const MARKER: &str = "two attempts with the same body";
+    let _ = deregister_llm_execution_intercept(INTERCEPT_NAME);
+    let _cleanup = LlmExecutionInterceptCleanup(INTERCEPT_NAME);
+    let release_losing = Arc::new(Semaphore::new(0));
+    let release_from_intercept = release_losing.clone();
+    register_llm_execution_intercept(
+        INTERCEPT_NAME,
+        1,
+        Arc::new(move |_name, request, _context, next| {
+            let release_losing = release_from_intercept.clone();
+            Box::pin(async move {
+                if request.content["messages"][0]["content"].as_str() != Some(MARKER) {
+                    return next(request).await;
+                }
+                let mut selected_request = request.clone();
+                selected_request.content["attempt"] = json!("selected");
+                let mut losing_request = request;
+                losing_request.content["attempt"] = json!("losing");
+                losing_request.content["losing_succeeds"] = json!(true);
+                losing_request.content["same_body"] = json!(true);
+                let selected = next(selected_request).await;
+                release_losing.add_permits(1);
+                assert!(next(losing_request).await.is_ok());
+                selected
+            })
+        }),
+    )
+    .unwrap();
+
+    let upstream = spawn_concurrent_attempt_upstream(release_losing).await;
+    let mut config = test_config();
+    config.openai_base_url = upstream.url();
+    let response = router(config)
+        .oneshot(
+            Request::builder()
+                .method("POST")
+                .uri("/v1/chat/completions")
+                .header(header::CONTENT_TYPE, "application/json")
+                .body(Body::from(
+                    json!({
+                        "model": "gpt-4o",
+                        "messages": [{"role": "user", "content": MARKER}]
+                    })
+                    .to_string(),
+                ))
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(response.status(), StatusCode::OK);
+    assert!(response.headers().get("x-upstream-attempt").is_none());
+    assert_eq!(response.headers()["x-upstream-shared"], "same");
 }
 
 #[tokio::test]
@@ -5456,7 +5954,12 @@ async fn gateway_concurrent_next_relays_selected_buffered_failure() {
 
                 release_losing.add_permits(1);
                 assert!(losing.await.is_err());
-                selected_result
+                // Simulate the error context added by a pass-through worker.
+                selected_result.map_err(|error| {
+                    nemo_relay_types::error::FlowError::Internal(format!(
+                        "worker.sdk_error: host.runtime_error: {error}"
+                    ))
+                })
             })
         }),
     )
@@ -5535,7 +6038,12 @@ async fn gateway_concurrent_next_relays_selected_streaming_failure() {
 
                 release_losing.add_permits(1);
                 assert!(losing.await.is_err());
-                selected_result
+                // Simulate the error context added by a pass-through worker.
+                selected_result.map_err(|error| {
+                    nemo_relay_types::error::FlowError::Internal(format!(
+                        "worker.error: <AioRpcError details = \"{error}\">"
+                    ))
+                })
             })
         }),
     )
@@ -6962,6 +7470,118 @@ async fn unmanaged_routes_preserve_streaming_and_error_responses_without_session
         }
     }
     assert!(!state.sessions.has_open_sessions().await);
+    provider_task.abort();
+}
+
+#[tokio::test]
+async fn managed_success_responses_keep_provider_headers() {
+    use crate::gateway::websocket::tests::serve;
+    let provider = Router::new().fallback(|request: Request<Body>| async move {
+        let body = axum::body::to_bytes(request.into_body(), usize::MAX)
+            .await
+            .unwrap();
+        let body: Value = serde_json::from_slice(&body).unwrap();
+        let streaming = body["stream"] == json!(true);
+        let builder = Response::builder()
+            .status(StatusCode::OK)
+            .header("request-id", "req_mock_1")
+            .header("anthropic-ratelimit-unified-status", "allowed_warning")
+            .header("set-cookie", "a=1")
+            .header("set-cookie", "b=2")
+            .header("content-encoding", "identity")
+            .header("repr-digest", "sha-256=:AAAA:")
+            .header("x-nemo-relay-worker-route-failure", "1");
+        if streaming {
+            builder
+                .header("content-type", "text/event-stream; charset=utf-8")
+                .body(Body::from(
+                    "data: {\"type\":\"message_start\",\"message\":{\"id\":\"msg_1\",\"type\":\"message\",\"role\":\"assistant\",\"model\":\"claude-test\",\"content\":[],\"usage\":{\"input_tokens\":1,\"output_tokens\":0}}}\n\n\
+                     data: {\"type\":\"message_delta\",\"delta\":{\"stop_reason\":\"end_turn\"},\"usage\":{\"input_tokens\":1,\"output_tokens\":1}}\n\n\
+                     data: {\"type\":\"message_stop\"}\n\n",
+                ))
+                .unwrap()
+        } else {
+            builder
+                .header("content-type", "application/json; charset=utf-8")
+                .body(Body::from(
+                    json!({
+                        "id": "msg_1",
+                        "type": "message",
+                        "role": "assistant",
+                        "model": "claude-test",
+                        "content": [{"type": "text", "text": "ok"}],
+                        "stop_reason": "end_turn",
+                        "usage": {"input_tokens": 1, "output_tokens": 1}
+                    })
+                    .to_string(),
+                ))
+                .unwrap()
+        }
+    });
+    let (upstream, provider_task) = serve(provider).await;
+    let mut config = test_config();
+    config.anthropic_base_url = upstream;
+    let state = AppState::new(config);
+    let app = router_with_state(state.clone());
+    for streaming in [false, true] {
+        let response = app
+            .clone()
+            .oneshot(
+                Request::post("/v1/messages")
+                    .header("content-type", "application/json")
+                    .header("x-api-key", "sk-ant-test")
+                    .body(Body::from(
+                        json!({
+                            "model": "claude-test",
+                            "max_tokens": 1,
+                            "stream": streaming,
+                            "messages": [{"role": "user", "content": "hi"}]
+                        })
+                        .to_string(),
+                    ))
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+        assert_eq!(response.status(), StatusCode::OK, "streaming={streaming}");
+        let headers = response.headers();
+        assert_eq!(headers["request-id"], "req_mock_1", "streaming={streaming}");
+        assert_eq!(
+            headers["anthropic-ratelimit-unified-status"], "allowed_warning",
+            "streaming={streaming}"
+        );
+        assert_eq!(
+            headers.get_all("set-cookie").iter().collect::<Vec<_>>(),
+            ["a=1", "b=2"],
+            "streaming={streaming}"
+        );
+        // The body is re-encoded, so the provider's encoding and digest no longer describe it.
+        assert!(
+            headers.get("content-encoding").is_none(),
+            "streaming={streaming}"
+        );
+        assert!(
+            headers.get("repr-digest").is_none(),
+            "streaming={streaming}"
+        );
+        // A provider must not be able to raise Relay's own worker route failure signal.
+        assert!(
+            headers.get("x-nemo-relay-worker-route-failure").is_none(),
+            "streaming={streaming}"
+        );
+        // The gateway re-encodes the body, so the content type stays its own.
+        assert_eq!(
+            headers.get_all("content-type").iter().collect::<Vec<_>>(),
+            [if streaming {
+                "text/event-stream"
+            } else {
+                "application/json"
+            }],
+            "streaming={streaming}"
+        );
+        response.into_body().collect().await.unwrap();
+    }
+    state.sessions.close_all("test_shutdown").await.unwrap();
     provider_task.abort();
 }
 

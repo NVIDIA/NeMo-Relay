@@ -53,6 +53,475 @@ fn worker(worker_id: &str) -> Arc<WorkerTarget> {
     )
 }
 
+#[tokio::test(start_paused = true)]
+async fn disconnected_pending_owner_rejoins_without_extending_registration_lease() {
+    let registry = Registry::new(false).with_worker_idle_timeout(Duration::from_secs(30));
+    let fingerprint = fingerprint(1);
+    let token = TokenDigest::from_token(b"disconnected-owner");
+    registry
+        .register_connected_mcp(registration(fingerprint, token, "owner"), launch("first"))
+        .unwrap();
+    let (activation_id, action) = registry
+        .retain_disconnected_activation(fingerprint, &session("owner"), 120_000)
+        .unwrap();
+    assert_eq!(activation_id, "first");
+    assert!(matches!(action, ReleaseAction::NoChange));
+    assert_eq!(registry.snapshot(fingerprint).unwrap().reference_count, 0);
+    assert!(matches!(
+        registry.resolve_target(&token),
+        Err(ResolveError::Unavailable(RouteStateKind::Activating))
+    ));
+    assert!(
+        registry
+            .retain_disconnected_activation(fingerprint, &session("owner"), 120_000)
+            .is_none()
+    );
+    tokio::time::advance(Duration::from_secs(20)).await;
+    assert!(matches!(
+        registry
+            .register_connected_mcp(registration(fingerprint, token, "owner"), launch("unused"))
+            .unwrap(),
+        BrokerDirective::WaitForWorker { .. }
+    ));
+    registry
+        .retain_disconnected_activation(fingerprint, &session("owner"), 120_000)
+        .unwrap();
+    tokio::time::advance(Duration::from_secs(10)).await;
+    let actions = registry.expire_idle_workers(tokio::time::Instant::now(), 120_000);
+    assert!(
+        matches!(actions.as_slice(), [(_, ReleaseAction::CancelActivation { activation_id })] if activation_id == "first")
+    );
+    assert_eq!(
+        registry
+            .mark_activation_registered(fingerprint, "first")
+            .unwrap_err(),
+        RegistryError::ActivationMismatch
+    );
+}
+
+#[tokio::test(start_paused = true)]
+async fn registered_disconnected_activation_restarts_idle_period_after_rejoining() {
+    let registry = Registry::new(false).with_worker_idle_timeout(Duration::from_secs(30));
+    let fingerprint = fingerprint(1);
+    let token = TokenDigest::from_token(b"registered-disconnected-owner");
+    registry
+        .register_connected_mcp(registration(fingerprint, token, "owner"), launch("first"))
+        .unwrap();
+    registry
+        .mark_activation_registered(fingerprint, "first")
+        .unwrap();
+    registry
+        .retain_disconnected_activation(fingerprint, &session("owner"), 120_000)
+        .unwrap();
+    tokio::time::advance(Duration::from_secs(20)).await;
+    registry
+        .register_connected_mcp(registration(fingerprint, token, "owner"), launch("unused"))
+        .unwrap();
+    registry
+        .retain_disconnected_activation(fingerprint, &session("owner"), 120_000)
+        .unwrap();
+    tokio::time::advance(Duration::from_secs(10)).await;
+    assert!(
+        registry
+            .expire_idle_workers(tokio::time::Instant::now(), 120_000)
+            .is_empty()
+    );
+    registry
+        .mark_worker_ready(fingerprint, "first", worker("retained-worker"))
+        .unwrap();
+    tokio::time::advance(Duration::from_secs(20)).await;
+    let actions = registry.expire_idle_workers(tokio::time::Instant::now(), 120_000);
+    assert!(
+        matches!(actions.as_slice(), [(_, ReleaseAction::BeginDrain { target, .. })] if target.worker_id() == "retained-worker")
+    );
+}
+
+#[test]
+fn disconnect_retention_does_not_change_zero_timeout_nonowner_or_ready_references() {
+    for timeout in [Duration::ZERO, Duration::from_secs(30)] {
+        let registry = Registry::new(false).with_worker_idle_timeout(timeout);
+        let fingerprint = fingerprint(1);
+        let token = TokenDigest::from_token(b"disconnect-controls");
+        registry
+            .register_connected_mcp(registration(fingerprint, token, "owner"), launch("first"))
+            .unwrap();
+        registry
+            .register_connected_mcp(registration(fingerprint, token, "other"), launch("unused"))
+            .unwrap();
+        assert!(
+            registry
+                .retain_disconnected_activation(fingerprint, &session("other"), 120_000)
+                .is_none()
+        );
+        assert_eq!(registry.snapshot(fingerprint).unwrap().reference_count, 2);
+        if timeout.is_zero() {
+            assert!(
+                registry
+                    .retain_disconnected_activation(fingerprint, &session("owner"), 120_000)
+                    .is_none()
+            );
+            assert_eq!(registry.snapshot(fingerprint).unwrap().reference_count, 2);
+        }
+        registry
+            .mark_worker_ready(fingerprint, "first", worker("ready-worker"))
+            .unwrap();
+        assert!(
+            registry
+                .retain_disconnected_activation(fingerprint, &session("owner"), 120_000)
+                .is_none()
+        );
+        assert_eq!(registry.snapshot(fingerprint).unwrap().reference_count, 2);
+    }
+}
+
+#[test]
+fn ready_worker_with_positive_idle_timeout_is_retained_after_last_release() {
+    let registry =
+        Registry::new(false).with_worker_idle_timeout(std::time::Duration::from_secs(30));
+    let fingerprint = fingerprint(1);
+    let token = TokenDigest::from_token(b"idle-ready");
+    registry
+        .register_mcp(registration(fingerprint, token, "owner"), launch("first"))
+        .unwrap();
+    registry
+        .mark_worker_ready(fingerprint, "first", worker("worker-one"))
+        .unwrap();
+    let action = registry
+        .release_mcp(fingerprint, &session("owner"), 120_000)
+        .unwrap();
+    assert!(matches!(action, ReleaseAction::NoChange));
+    let snapshot = registry.snapshot(fingerprint).unwrap();
+    assert_eq!(snapshot.reference_count, 0);
+    assert_eq!(snapshot.state, RouteStateKind::Ready);
+    assert!(matches!(
+        registry.resolve_target(&token),
+        Err(ResolveError::Unavailable(RouteStateKind::Ready))
+    ));
+    assert_eq!(registry.snapshot(fingerprint).unwrap().in_flight, 0);
+}
+
+#[tokio::test(start_paused = true)]
+async fn retained_activation_becomes_ready_without_extending_its_idle_deadline() {
+    let registry = Registry::new(false).with_worker_idle_timeout(Duration::from_secs(30));
+    let fingerprint = fingerprint(1);
+    let token = TokenDigest::from_token(b"retained-startup");
+    registry
+        .register_connected_mcp(registration(fingerprint, token, "owner"), launch("first"))
+        .unwrap();
+    assert!(matches!(
+        registry
+            .release_mcp_with_retention(fingerprint, &session("owner"), 120_000, Some("first"))
+            .unwrap(),
+        ReleaseAction::NoChange
+    ));
+    assert!(
+        registry
+            .mcp_disconnected(fingerprint, &session("owner"))
+            .is_none()
+    );
+    tokio::time::advance(Duration::from_secs(20)).await;
+    registry
+        .mark_worker_ready(fingerprint, "first", worker("worker-one"))
+        .unwrap();
+    assert!(matches!(
+        registry
+            .release_mcp_with_retention(fingerprint, &session("owner"), 120_000, Some("first"))
+            .unwrap(),
+        ReleaseAction::NoChange
+    ));
+    tokio::time::advance(Duration::from_secs(10)).await;
+    let actions = registry.expire_idle_workers(tokio::time::Instant::now(), 120_000);
+    assert!(
+        matches!(actions.as_slice(), [(route, ReleaseAction::BeginDrain { target, .. })] if *route == fingerprint && target.worker_id() == "worker-one")
+    );
+    assert!(
+        registry
+            .expire_idle_workers(tokio::time::Instant::now(), 120_000)
+            .is_empty()
+    );
+}
+
+#[test]
+fn accepted_activation_retention_survives_owner_departure_with_other_references() {
+    let registry = Registry::new(false).with_worker_idle_timeout(Duration::from_secs(30));
+    let fingerprint = fingerprint(1);
+    let token = TokenDigest::from_token(b"remaining-session");
+    registry
+        .register_connected_mcp(registration(fingerprint, token, "owner"), launch("first"))
+        .unwrap();
+    registry
+        .register_connected_mcp(registration(fingerprint, token, "second"), launch("second"))
+        .unwrap();
+    assert!(matches!(
+        registry
+            .release_mcp_with_retention(fingerprint, &session("owner"), 120_000, Some("first"))
+            .unwrap(),
+        ReleaseAction::NoChange
+    ));
+    assert!(
+        registry
+            .mcp_disconnected(fingerprint, &session("owner"))
+            .is_none()
+    );
+    assert_eq!(registry.snapshot(fingerprint).unwrap().reference_count, 1);
+    assert_eq!(
+        registry.snapshot(fingerprint).unwrap().state,
+        RouteStateKind::Activating
+    );
+    assert!(matches!(
+        registry
+            .release_mcp(fingerprint, &session("second"), 120_000)
+            .unwrap(),
+        ReleaseAction::NoChange
+    ));
+    registry
+        .mark_worker_ready(fingerprint, "first", worker("worker-one"))
+        .unwrap();
+}
+
+#[test]
+fn invalid_retention_cannot_release_another_launch_owners_reference() {
+    let registry = Registry::new(false).with_worker_idle_timeout(Duration::from_secs(30));
+    let fingerprint = fingerprint(1);
+    let token = TokenDigest::from_token(b"invalid-retention");
+    registry
+        .register_connected_mcp(registration(fingerprint, token, "owner"), launch("first"))
+        .unwrap();
+    registry
+        .register_connected_mcp(registration(fingerprint, token, "second"), launch("second"))
+        .unwrap();
+    assert_eq!(
+        registry
+            .release_mcp_with_retention(fingerprint, &session("second"), 120_000, Some("first"))
+            .unwrap_err(),
+        RegistryError::NotLaunchOwner
+    );
+    assert_eq!(registry.snapshot(fingerprint).unwrap().reference_count, 2);
+}
+
+#[test]
+fn stale_retention_hint_releases_its_reference_without_retaining_a_replacement() {
+    let registry = Registry::new(false).with_worker_idle_timeout(Duration::from_secs(30));
+    let fingerprint = fingerprint(1);
+    let token = TokenDigest::from_token(b"superseded-retention");
+    registry
+        .register_connected_mcp(registration(fingerprint, token, "owner"), launch("first"))
+        .unwrap();
+    registry
+        .register_connected_mcp(registration(fingerprint, token, "second"), launch("unused"))
+        .unwrap();
+    registry
+        .mark_activation_failed(fingerprint, "first")
+        .unwrap();
+    registry
+        .begin_relaunch(fingerprint, &session("second"), launch("replacement"))
+        .unwrap();
+    assert!(matches!(
+        registry
+            .release_mcp_with_retention(fingerprint, &session("owner"), 120_000, Some("first"))
+            .unwrap(),
+        ReleaseAction::NoChange
+    ));
+    assert_eq!(registry.snapshot(fingerprint).unwrap().reference_count, 1);
+    assert!(matches!(
+        registry.release_mcp(fingerprint, &session("second"), 120_000).unwrap(),
+        ReleaseAction::CancelActivation { activation_id } if activation_id == "replacement"
+    ));
+}
+
+#[test]
+fn retained_launch_is_not_reissued_when_its_former_owner_reregisters() {
+    let registry = Registry::new(false).with_worker_idle_timeout(Duration::from_secs(30));
+    let fingerprint = fingerprint(1);
+    let token = TokenDigest::from_token(b"retained-former-owner");
+    registry
+        .register_connected_mcp(registration(fingerprint, token, "owner"), launch("first"))
+        .unwrap();
+    registry
+        .release_mcp_with_retention(fingerprint, &session("owner"), 120_000, Some("first"))
+        .unwrap();
+    assert!(matches!(
+        registry
+            .register_connected_mcp(registration(fingerprint, token, "owner"), launch("second"))
+            .unwrap(),
+        BrokerDirective::WaitForWorker { .. }
+    ));
+    assert!(matches!(
+        registry
+            .current_directive(fingerprint, &session("owner"))
+            .unwrap(),
+        BrokerDirective::WaitForWorker { .. }
+    ));
+    registry
+        .mark_worker_ready(fingerprint, "first", worker("worker-one"))
+        .unwrap();
+}
+
+#[tokio::test(start_paused = true)]
+async fn expired_idle_activation_rejects_readiness_and_cannot_cancel_its_replacement() {
+    let registry = Registry::new(false).with_worker_idle_timeout(Duration::from_secs(30));
+    let fingerprint = fingerprint(1);
+    let token = TokenDigest::from_token(b"expired-retention");
+    registry
+        .register_connected_mcp(registration(fingerprint, token, "owner"), launch("first"))
+        .unwrap();
+    registry
+        .release_mcp_with_retention(fingerprint, &session("owner"), 120_000, Some("first"))
+        .unwrap();
+    tokio::time::advance(Duration::from_secs(30)).await;
+    assert_eq!(
+        registry
+            .mark_worker_ready(fingerprint, "first", worker("stale"))
+            .unwrap_err(),
+        RegistryError::NoLiveMcpReferences
+    );
+    let actions = registry.expire_idle_workers(tokio::time::Instant::now(), 120_000);
+    assert!(
+        matches!(actions.as_slice(), [(_, ReleaseAction::CancelActivation { activation_id })] if activation_id == "first")
+    );
+    assert!(
+        matches!(registry.register_connected_mcp(registration(fingerprint, token, "new-owner"), launch("replacement")).unwrap(), BrokerDirective::LaunchWorker { activation_id, .. } if activation_id == "replacement")
+    );
+    assert!(
+        registry
+            .expire_idle_workers(tokio::time::Instant::now(), 120_000)
+            .is_empty()
+    );
+    registry
+        .mark_worker_ready(fingerprint, "replacement", worker("replacement-worker"))
+        .unwrap();
+}
+
+#[test]
+fn zero_idle_timeout_and_untransferred_startup_keep_immediate_cleanup() {
+    for timeout in [Duration::ZERO, Duration::from_secs(30)] {
+        let registry = Registry::new(false).with_worker_idle_timeout(timeout);
+        let fingerprint = fingerprint(1);
+        let token = TokenDigest::from_token(b"immediate-cleanup");
+        registry
+            .register_mcp(registration(fingerprint, token, "owner"), launch("first"))
+            .unwrap();
+        assert!(
+            matches!(registry.release_mcp(fingerprint, &session("owner"), 120_000).unwrap(), ReleaseAction::CancelActivation { activation_id } if activation_id == "first")
+        );
+    }
+}
+
+#[tokio::test(start_paused = true)]
+async fn unregistered_retained_launch_expires_even_after_a_session_reconnects() {
+    let registry = Registry::new(false).with_worker_idle_timeout(Duration::from_secs(30));
+    let fingerprint = fingerprint(1);
+    let token = TokenDigest::from_token(b"missing-registration");
+    let mut first_launch = launch("first");
+    first_launch.deadline_unix_ms = u64::MAX;
+    registry
+        .register_connected_mcp(registration(fingerprint, token, "owner"), first_launch)
+        .unwrap();
+    registry
+        .release_mcp_with_retention(fingerprint, &session("owner"), 120_000, Some("first"))
+        .unwrap();
+    tokio::time::advance(Duration::from_secs(20)).await;
+    registry
+        .register_connected_mcp(registration(fingerprint, token, "second"), launch("unused"))
+        .unwrap();
+    tokio::time::advance(Duration::from_secs(10)).await;
+    assert_eq!(
+        registry
+            .mark_worker_ready(fingerprint, "first", worker("late-worker"))
+            .unwrap_err(),
+        RegistryError::ActivationMismatch
+    );
+    let actions = registry.expire_idle_workers(tokio::time::Instant::now(), 120_000);
+    assert!(
+        matches!(actions.as_slice(), [(_, ReleaseAction::CancelActivation { activation_id })] if activation_id == "first")
+    );
+    assert_eq!(registry.snapshot(fingerprint).unwrap().reference_count, 1);
+    assert_eq!(
+        registry.snapshot(fingerprint).unwrap().state,
+        RouteStateKind::PassThrough
+    );
+    assert_eq!(
+        registry
+            .mark_activation_registered(fingerprint, "first")
+            .unwrap_err(),
+        RegistryError::ActivationMismatch
+    );
+    assert_eq!(
+        registry
+            .mark_worker_ready(fingerprint, "first", worker("stale"))
+            .unwrap_err(),
+        RegistryError::InvalidState {
+            expected: RouteStateKind::Activating,
+            actual: RouteStateKind::PassThrough
+        }
+    );
+    let (_, retry_after_ms) = registry.activation_retry(fingerprint);
+    assert_eq!(
+        registry.activation_candidates(
+            crate::daemon::common::control::now_unix_ms()
+                .saturating_add(retry_after_ms)
+                .saturating_add(1)
+        ),
+        vec![(fingerprint, session("second"))]
+    );
+}
+
+#[tokio::test(start_paused = true)]
+async fn authenticated_registration_before_or_after_handoff_ends_only_the_registration_lease() {
+    for registered_before_handoff in [true, false] {
+        let registry = Registry::new(false).with_worker_idle_timeout(Duration::from_secs(30));
+        let fingerprint = fingerprint(1);
+        let token = TokenDigest::from_token(b"registered-pending");
+        registry
+            .register_connected_mcp(registration(fingerprint, token, "owner"), launch("first"))
+            .unwrap();
+        if registered_before_handoff {
+            registry
+                .mark_activation_registered(fingerprint, "first")
+                .unwrap();
+        }
+        registry
+            .release_mcp_with_retention(fingerprint, &session("owner"), 120_000, Some("first"))
+            .unwrap();
+        tokio::time::advance(Duration::from_secs(20)).await;
+        let directive = registry
+            .register_connected_mcp(
+                registration(fingerprint, token, "second"),
+                launch("must-not-launch"),
+            )
+            .unwrap();
+        assert!(matches!(directive, BrokerDirective::WaitForWorker { .. }));
+        if !registered_before_handoff {
+            registry
+                .mark_activation_registered(fingerprint, "first")
+                .unwrap();
+        }
+        tokio::time::advance(Duration::from_secs(20)).await;
+        assert!(
+            registry
+                .expire_idle_workers(tokio::time::Instant::now(), 120_000)
+                .is_empty()
+        );
+        assert_eq!(
+            registry.snapshot(fingerprint).unwrap().state,
+            RouteStateKind::Activating
+        );
+        registry
+            .mark_worker_ready(fingerprint, "first", worker("worker-one"))
+            .unwrap();
+        assert!(matches!(
+            registry
+                .current_directive(fingerprint, &session("second"))
+                .unwrap(),
+            BrokerDirective::ReuseWorker { .. }
+        ));
+        assert!(matches!(
+            registry.resolve_target(&token),
+            Ok(ResolvedTarget::Worker(_))
+        ));
+    }
+}
+
 #[test]
 fn first_mcp_wins_singleflight_and_retries_idempotently() {
     let registry = Registry::new(false).with_retry_after_ms(25);

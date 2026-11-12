@@ -124,11 +124,11 @@ jobs:
         with:
           cache: false
           toolchain: ${{ steps.ci-config.outputs.rust_version }}
-          components: clippy, rustfmt
+          components: clippy, llvm-tools, rustfmt
 
       - uses: Swatinem/rust-cache@c19371144df3bb44fab255c43d04cbc2ab54d1c4 # v2.9.1
         with:
-          shared-key: nemo-relay-rust-${{ matrix.platform }}-${{ steps.ci-config.outputs.rust_version }}-debug
+          shared-key: nemo-relay-rust-${{ matrix.platform }}-${{ steps.ci-config.outputs.rust_version }}-core-debug
           workspaces: . -> target
           cache-all-crates: true
           cache-bin: false
@@ -137,8 +137,7 @@ jobs:
       - uses: astral-sh/setup-uv@cec208311dfd045dd5311c1add060b2062131d57 # v8
         with:
           version: ${{ steps.ci-config.outputs.uv_version }}
-          enable-cache: true
-          cache-dependency-glob: ${{ env.NEMO_RELAY_CI_WORKSPACE }}/uv.lock
+          enable-cache: false
 
       - name: Set up Python
         uses: actions/setup-python@5fda3b95a4ea91299a34e894583c3862153e4b97 # v7.0.0
@@ -148,6 +147,12 @@ jobs:
       - uses: taiki-e/install-action@c070f87102a1c75b3183910f391c1cb887fe13c8 # v2.77.6
         with:
           tool: cargo-llvm-cov@${{ steps.ci-config.outputs.cargo_llvm_cov_version }},cargo-nextest@${{ steps.ci-config.outputs.cargo_nextest_version }},just@${{ steps.ci-config.outputs.just_version }}
+
+      - name: Check unchanged native binaries across Rust toolchains
+        run: |
+          source .github/ci-tool-versions.env
+          rustup toolchain install "$NEMO_RELAY_CI_NATIVE_ABI_FIXTURE_RUST_VERSION" --profile minimal
+          just test-native-abi-toolchains "$NEMO_RELAY_CI_NATIVE_ABI_FIXTURE_RUST_VERSION"
 
       - name: Run Rust tests with coverage
         working-directory: ${{ env.NEMO_RELAY_CI_WORKSPACE }}
@@ -177,15 +182,31 @@ jobs:
           fi
 
       - name: Upload Rust coverage to Codecov
+        id: codecov-upload
+        continue-on-error: true
         if: ${{ matrix.platform != 'windows-arm64' }}
-        uses: codecov/codecov-action@e53489f4d376d79066609109e7a95a29eb3740b1 # v7.0.0
+        uses: codecov/codecov-action@fb8b3582c8e4def4969c97caa2f19720cb33a72f # v7.0.0
         with:
           token: ${{ secrets.CODECOV_TOKEN }}
           disable_search: true
-          files: rust-workspace.xml
+          files: rust-workspace.lcov
           flags: rust-${{ matrix.platform }}
           name: rust-${{ matrix.platform }}
           verbose: true
+          fail_ci_if_error: true
+
+      - name: Record the failed Codecov upload
+        if: ${{ steps.codecov-upload.outcome == 'failure' }}
+        env:
+          MARKER: codecov-upload-failed-rust-${{ matrix.platform }}
+        run: printf '%s\n' "$MARKER" > "$MARKER"
+
+      - name: Keep the failed Codecov upload marker
+        if: ${{ steps.codecov-upload.outcome == 'failure' }}
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: codecov-upload-failed-rust-${{ matrix.platform }}
+          path: codecov-upload-failed-rust-${{ matrix.platform }}
 
       - name: Check daemon transport benchmark
         if: ${{ matrix.platform == 'linux-amd64' }}
@@ -289,7 +310,7 @@ jobs:
 
       - uses: Swatinem/rust-cache@c19371144df3bb44fab255c43d04cbc2ab54d1c4 # v2.9.1
         with:
-          shared-key: nemo-relay-rust-${{ matrix.platform }}-${{ steps.ci-config.outputs.rust_version }}-release
+          shared-key: nemo-relay-rust-${{ matrix.platform }}-${{ steps.ci-config.outputs.rust_version }}-cli-release
           workspaces: . -> target
           cache-all-crates: true
           cache-bin: false
@@ -298,6 +319,7 @@ jobs:
       - uses: astral-sh/setup-uv@cec208311dfd045dd5311c1add060b2062131d57 # v8
         with:
           version: ${{ steps.ci-config.outputs.uv_version }}
+          enable-cache: false
 
       - uses: taiki-e/install-action@c070f87102a1c75b3183910f391c1cb887fe13c8 # v2.77.6
         with:
@@ -340,6 +362,8 @@ jobs:
           set -euo pipefail
           docker run --rm \
             --volume "${{ env.NEMO_RELAY_CI_WORKSPACE }}:${{ env.NEMO_RELAY_CI_WORKSPACE }}" \
+            --volume "$HOME/.cargo/registry:/root/.cargo/registry" \
+            --volume "$HOME/.cargo/git:/root/.cargo/git" \
             --workdir "${{ env.NEMO_RELAY_CI_WORKSPACE }}" \
             --volume "$(command -v buf):/usr/local/bin/buf:ro" \
             --volume "${{ steps.protoc.outputs.path }}/bin/protoc:/usr/local/bin/protoc:ro" \
@@ -458,6 +482,7 @@ jobs:
         if: ${{ matrix.runtime_image == '' }}
         with:
           version: ${{ steps.ci-config.outputs.uv_version }}
+          enable-cache: false
 
       - name: Set up Python
         if: ${{ matrix.runtime_image == '' }}

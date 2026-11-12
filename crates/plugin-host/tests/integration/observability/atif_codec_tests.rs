@@ -550,3 +550,112 @@ fn test_exporter_skips_duplicate_user_step_for_openai_responses_shell_call_conti
     assert_eq!(llm_request["input"][1]["type"], json!("shell_call"));
     assert_eq!(llm_request["input"][1]["call_id"], json!("sh_call"));
 }
+
+#[test]
+fn atif_custom_calls_keep_invocation_ids_and_do_not_parse_free_form_input() {
+    let _guard = crate::test_support::runtime_owner_test_mutex()
+        .lock()
+        .unwrap();
+    let input = "{\"literal\":\"text\"}";
+    let output = json!({"output": [
+        {"type": "function_call", "id": "fc-item", "call_id": "call-function", "name": "lookup", "arguments": "{}"},
+        {"type": "custom_tool_call", "id": "ctc-item", "call_id": "call-wrapper", "name": "exec", "input": input, "arguments": "unrelated", "function": {"name": "unrelated", "arguments": "unrelated"}},
+        {"type": "custom_tool_call", "id": "not-a-call-id", "name": "exec", "input": "text(1)"}
+    ]});
+    let event = event_builder(Uuid::now_v7(), EventType::End)
+        .name("openai.responses")
+        .scope_type(ScopeType::Llm)
+        .output(output)
+        .build();
+    let calls = crate::observability_runtime::event_view(&event)
+        .telemetry_llm_tool_calls()
+        .unwrap();
+    assert_eq!(calls.len(), 2);
+    assert_eq!(calls[0].id, "call-function");
+    assert_eq!(calls[0].arguments, json!({}));
+    assert_eq!(calls[1].id, "call-wrapper");
+    assert_eq!(calls[1].name, "exec");
+    assert_eq!(calls[1].arguments, json!(input));
+}
+
+#[test]
+fn atif_runtime_view_preserves_custom_call_metadata_and_result_correlation() {
+    let _guard = crate::test_support::runtime_owner_test_mutex()
+        .lock()
+        .unwrap();
+    for annotated in [false, true] {
+        let exporter = crate::exporter::atif("session-1".into(), make_agent_info());
+        let llm_uuid = Uuid::now_v7();
+        let input = r#"{"literal":"keep as text"}"#;
+        let output = json!({"status": "completed", "output": [
+            {"type": "custom_tool_call", "id": "item-1", "call_id": "call-1",
+             "name": "exec", "input": input, "provider_data": {"status": "ok"}}
+        ]});
+        let mut end = event_builder(llm_uuid, EventType::End)
+            .name("openai.responses")
+            .scope_type(ScopeType::Llm)
+            .output(output.clone());
+        if annotated {
+            end.annotated_response = Some(Arc::new(
+                OpenAIResponsesCodec.decode_response(&output).unwrap(),
+            ));
+        }
+        let mut tool_builder = event_builder(Uuid::now_v7(), EventType::End)
+            .name("exec")
+            .scope_type(ScopeType::Tool)
+            .output(json!({"stdout": "done"}));
+        tool_builder.parent_uuid = Some(llm_uuid);
+        tool_builder.tool_call_id = Some("call-1".into());
+        let tool_end = tool_builder.build();
+        let subscriber = exporter.subscriber();
+        subscriber(&end.build());
+        subscriber(&tool_end);
+        let trajectory = exporter.export().unwrap();
+        let agent = trajectory
+            .steps
+            .iter()
+            .find(|step| step.source == "agent")
+            .unwrap();
+        let calls = agent.tool_calls.as_ref().unwrap();
+        assert_eq!(calls.len(), 1);
+        assert_eq!(calls[0].tool_call_id, "call-1");
+        assert_eq!(calls[0].arguments, json!(input));
+        assert_eq!(
+            calls[0].extra.as_ref().unwrap()["provider_data"]["status"],
+            "ok"
+        );
+        assert_eq!(
+            agent.observation.as_ref().unwrap().results[0]
+                .source_call_id
+                .as_deref(),
+            Some("call-1")
+        );
+    }
+}
+
+/// A supplied empty invocation list overrides conflicting raw fallback evidence.
+#[test]
+fn atif_runtime_view_keeps_an_explicitly_empty_call_list_empty() {
+    let _guard = crate::test_support::runtime_owner_test_mutex()
+        .lock()
+        .unwrap();
+    let exporter = crate::exporter::atif("session-1".into(), make_agent_info());
+    let mut end = event_builder(Uuid::now_v7(), EventType::End)
+        .name("openai.responses")
+        .scope_type(ScopeType::Llm)
+        .output(json!({"tool_calls": [
+            {"id": "raw-only", "name": "exec", "arguments": {}}
+        ]}));
+    end.annotated_response = Some(Arc::new(AnnotatedLlmResponse {
+        tool_calls: Some(Vec::new()),
+        ..Default::default()
+    }));
+    exporter.subscriber()(&end.build());
+    let trajectory = exporter.export().unwrap();
+    let agent = trajectory
+        .steps
+        .iter()
+        .find(|step| step.source == "agent")
+        .unwrap();
+    assert!(agent.tool_calls.is_none());
+}

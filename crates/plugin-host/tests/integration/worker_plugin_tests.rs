@@ -2689,6 +2689,7 @@ async fn python_worker_execution_codec_context_round_trips_host_codecs() {
         identity_kind: &'static str,
         identity_id: &'static str,
         answer: &'static str,
+        expected_usage: Json,
         request_codec: Arc<dyn LlmCodec>,
         response_codec: Arc<dyn LlmResponseCodec>,
     }
@@ -2699,6 +2700,7 @@ async fn python_worker_execution_codec_context_round_trips_host_codecs() {
             identity_kind: "builtin",
             identity_id: "openai_chat",
             answer: "provider answer",
+            expected_usage: Json::Null,
             request_codec: Arc::new(OpenAIChatCodec),
             response_codec: Arc::new(OpenAIChatCodec),
         },
@@ -2707,6 +2709,7 @@ async fn python_worker_execution_codec_context_round_trips_host_codecs() {
             identity_kind: "runtime",
             identity_id: "tests.openai_chat.v1",
             answer: "runtime answer",
+            expected_usage: serde_json::to_value(codec_context_cache_usage()).unwrap(),
             request_codec: Arc::new(RuntimeOpenAiChatCodec),
             response_codec: Arc::new(RuntimeOpenAiChatCodec),
         },
@@ -2774,6 +2777,7 @@ async fn python_worker_execution_codec_context_round_trips_host_codecs() {
                         "response_id": case.identity_id,
                         "decoded_model": "provider-model",
                         "decoded_message": case.answer,
+                        "decoded_usage": case.expected_usage,
                     })
                 );
                 assert_eq!(response["_scope_stack_snapshot_probe"], expected_snapshot);
@@ -2820,7 +2824,39 @@ impl LlmResponseCodec for RuntimeOpenAiChatCodec {
     }
 
     fn decode_response(&self, response: &Json) -> FlowResult<AnnotatedLlmResponse> {
-        OpenAIChatCodec.decode_response(response)
+        let mut annotated = OpenAIChatCodec.decode_response(response)?;
+        annotated.usage = Some(codec_context_cache_usage());
+        Ok(annotated)
+    }
+}
+
+fn codec_context_cache_usage() -> nemo_relay_types::codec::response::Usage {
+    use nemo_relay_types::codec::response::{CacheWriteTokenCounts, Usage};
+
+    Usage {
+        cache_write_tokens: Some(vec![
+            CacheWriteTokenCounts {
+                count: u64::MAX,
+                duration: None,
+            },
+            CacheWriteTokenCounts {
+                count: 0,
+                duration: Some(0),
+            },
+            CacheWriteTokenCounts {
+                count: 7,
+                duration: Some(3600),
+            },
+            CacheWriteTokenCounts {
+                count: 5,
+                duration: Some(999),
+            },
+            CacheWriteTokenCounts {
+                count: 1,
+                duration: Some(999),
+            },
+        ]),
+        ..Default::default()
     }
 }
 
@@ -3090,6 +3126,7 @@ class CodecContextProbe(WorkerPlugin):
                 "response_id": context.response_codec.codec.id,
                 "decoded_model": decoded.get("model"),
                 "decoded_message": decoded.get("message"),
+                "decoded_usage": decoded.get("usage"),
             }
             return result
 
@@ -3251,4 +3288,120 @@ async fn scope_stack_snapshot_worker_correlates_parallel_agent_llm_and_tool_call
     assert_eq!(second_llm, second_tool);
     assert_ne!(first_llm, second_llm);
     loaded.clear();
+}
+
+/// Validation workers close immediately; only enabled configurations retain active workers.
+#[tokio::test]
+async fn worker_multiple_component_configurations_are_isolated_and_cleaned_up() {
+    const MODE: &str = "NEMO_RELAY_TEST_WORKER_MULTIPLE_COMPONENTS";
+    if std::env::var_os(MODE).is_none() {
+        // Isolate the forwarded fixture setting from other tests in this process.
+        let output = std::process::Command::new(std::env::current_exe().unwrap())
+            .args(["--exact", "worker_plugin_integration_tests::worker_multiple_component_configurations_are_isolated_and_cleaned_up", "--nocapture"])
+            .env(MODE, "1")
+            .output()
+            .unwrap();
+        assert!(
+            output.status.success(),
+            "component worker subprocess failed: {}\n{}\n{}",
+            output.status,
+            String::from_utf8_lossy(&output.stdout),
+            String::from_utf8_lossy(&output.stderr),
+        );
+        assert!(
+            String::from_utf8_lossy(&output.stdout)
+                .contains("test result: ok. 1 passed; 0 failed;"),
+            "component worker subprocess did not run exactly one test: {}",
+            String::from_utf8_lossy(&output.stdout),
+        );
+        return;
+    }
+    let _guard = WORKER_PLUGIN_TEST_LOCK.lock().await;
+    let fixture = build_fixture_worker();
+    let (_manifest_dir, manifest_ref) = write_manifest(fixture.binary_path());
+    let manifest = std::fs::read_to_string(&manifest_ref).unwrap();
+    std::fs::write(
+        &manifest_ref,
+        format!("{manifest}\nforward_env = [\"{MODE}\"]\n"),
+    )
+    .unwrap();
+    for (flag, enabled) in [
+        ("tool_request_error", true),
+        ("reject", true),
+        ("tool_request_error", false),
+    ] {
+        let diagnostics = enabled_worker_diagnostics();
+        let activation = load_worker_plugins_with_diagnostics(
+            [WorkerPluginLoadSpec {
+                plugin_id: "fixture_worker".into(),
+                manifest_ref: manifest_ref.display().to_string(),
+                environment_ref: None,
+                config: Map::new(),
+            }],
+            &diagnostics,
+        )
+        .unwrap();
+        let mut config = PluginConfig::default();
+        for (index, component_config) in [Map::new(), Map::from_iter([(flag.into(), json!(true))])]
+            .into_iter()
+            .enumerate()
+        {
+            config.components.push(PluginComponentSpec {
+                kind: "fixture_worker".into(),
+                enabled: index == 0 || enabled,
+                config: component_config,
+            });
+        }
+        let initialized = test_initialize_plugin_host_exact(config).await;
+        if flag == "reject" {
+            let error =
+                initialized.expect_err("invalid additional configuration must fail activation");
+            assert!(
+                error.to_string().contains("fixture rejection requested"),
+                "{error}"
+            );
+        } else {
+            initialized.unwrap();
+            let result = tool_request_intercepts("demo_tool", json!({"input": "value"})).await;
+            if enabled {
+                let error = result.expect_err("the second worker must apply its own configuration");
+                assert!(
+                    error
+                        .to_string()
+                        .contains("fixture tool request error requested"),
+                    "{error}"
+                );
+            } else {
+                result.expect("disabled configuration must not install its failing callback");
+            }
+        }
+        let snapshot = worker_diagnostic_snapshot(&diagnostics);
+        let started = snapshot
+            .events
+            .iter()
+            .filter(|event| event.code() == "plugin.worker.started")
+            .count();
+        let cleaned = snapshot
+            .events
+            .iter()
+            .filter(|event| event.code() == "plugin.worker.process_cleaned")
+            .count();
+        assert!(cleaned > 0, "validation must clean up its temporary worker");
+        assert_eq!(
+            started - cleaned,
+            if enabled && flag != "reject" { 2 } else { 1 },
+            "only enabled component workers may remain alive after validation"
+        );
+        test_close_plugin_host().unwrap();
+        activation.clear();
+        let snapshot = worker_diagnostic_snapshot(&diagnostics);
+        assert_eq!(
+            snapshot
+                .events
+                .iter()
+                .filter(|event| event.code() == "plugin.worker.process_cleaned")
+                .count(),
+            started
+        );
+    }
 }

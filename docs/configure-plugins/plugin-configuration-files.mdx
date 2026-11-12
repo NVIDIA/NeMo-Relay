@@ -14,6 +14,13 @@ Python, and Node.js integrations as well as for the `nemo-relay` CLI gateway.
 The file encodes the same document that binding APIs accept, but uses TOML at
 the file root.
 
+Configuration loading and `nemo-relay doctor` follow symbolic links to
+`config.toml`, `plugins.toml`, plugin bundles, and their contents. Parent
+directories can also be symbolic links. File targets must be readable regular
+files and must pass the usual configuration, integrity, and signature checks.
+Relative plugin manifest references resolve from the directory containing the
+configured `plugins.toml` path.
+
 This guide covers file locations, the interactive editor, discovery, and merge
 rules. Use [Manage](/configure-plugins/discoverable-plugins) to install and manage
 discoverable plugins with the CLI, or [Initialize](/configure-plugins/initialize-plugins)
@@ -68,7 +75,10 @@ Scope flags are mutually exclusive.
 
 `--global` writes `/etc/nemo-relay/plugins.toml` on Unix or
 `%ProgramData%\nemo-relay\plugins.toml` on Windows and usually requires
-elevated filesystem permissions.
+elevated filesystem permissions. Other users can read this file. On Unix,
+the editor saves it with mode `0644`. Keep credentials out of global plugin
+files. The editor rejects values marked as secret by a dynamic plugin's schema.
+This check does not cover built-in components, such as exporter headers.
 
 The editor menus support these controls:
 
@@ -133,7 +143,7 @@ the exporter you want to verify. The plugin file is the configuration being
 demonstrated here; `--config` only tells the gateway which low plugin layer to
 use for this run. For implicit discovery, place the file in the XDG user
 configuration directory. Refer to
-[CLI Basic Usage](/nemo-relay-cli/basic-usage) for the wrapper command shapes.
+[Command Reference](/nemo-relay-cli/command-reference#run-syntax) for the wrapper command shapes.
 
 ## What Success Looks Like
 

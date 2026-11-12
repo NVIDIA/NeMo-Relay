@@ -20,6 +20,8 @@ const ABSENT_SETTINGS_BACKUP_KEY: &str = "__nemo_relay_original_settings_absent"
 const DANGLING_SETTINGS_SYMLINK_BACKUP_KEY: &str =
     "__nemo_relay_original_settings_dangling_symlink";
 const MANAGED_PROVIDER_BACKUP_KEY: &str = "__nemo_relay_managed_anthropic_base_url";
+const GATEWAY_HINT_HEADERS_ENV: &str = "CLAUDE_CODE_GATEWAY_HINT_HEADERS";
+const MANAGED_GATEWAY_HINT_HEADERS_BACKUP_KEY: &str = "__nemo_relay_added_gateway_hint_headers";
 
 pub(crate) struct ClaudeSetupSnapshot {
     files: Vec<FileSnapshot>,
@@ -56,23 +58,38 @@ pub(crate) fn enable_claude_provider(gateway_url: &str) -> Result<(), String> {
     let backup_snapshot = snapshot_optional_file(&backup_path(&path))?;
     let current_provider = json_env_string(&settings, "ANTHROPIC_BASE_URL");
     let backup_file = backup_path(&path);
-    let previous_managed_provider = read_json_object(&backup_file).ok().and_then(|backup| {
+    let previous_backup = read_json_object(&backup_file).ok();
+    let previous_managed_provider = previous_backup.as_ref().and_then(|backup| {
         backup
             .get(MANAGED_PROVIDER_BACKUP_KEY)
             .and_then(Value::as_str)
             .map(str::to_owned)
     });
+    let add_gateway_hints = settings
+        .get("env")
+        .and_then(|env| env.get(GATEWAY_HINT_HEADERS_ENV))
+        .is_none();
+    let owns_gateway_hints = previous_backup.as_ref().is_some_and(|backup| {
+        backup.get(MANAGED_GATEWAY_HINT_HEADERS_BACKUP_KEY) == Some(&Value::Bool(true))
+    }) && json_env_string(&settings, GATEWAY_HINT_HEADERS_ENV)
+        == Some("1");
     let managed_provider = current_provider == Some(gateway_url)
         || previous_managed_provider
             .as_deref()
             .is_some_and(|previous| current_provider == Some(previous))
         || (backup_file.exists() && current_provider == Some(crate::bootstrap::DEFAULT_URL));
-    if !managed_provider && let Err(error) = backup_claude_settings(&path, true) {
+    if (!managed_provider || (add_gateway_hints && !backup_file.exists()))
+        && let Err(error) = backup_claude_settings(&path, true)
+    {
         restore_file_snapshot(&backup_snapshot)?;
         return Err(error);
     }
     if backup_file.exists()
-        && let Err(error) = record_managed_provider(&backup_file, gateway_url)
+        && let Err(error) = record_managed_provider(
+            &backup_file,
+            gateway_url,
+            owns_gateway_hints || add_gateway_hints,
+        )
     {
         restore_file_snapshot(&backup_snapshot)?;
         return Err(error);
@@ -84,6 +101,9 @@ pub(crate) fn enable_claude_provider(gateway_url: &str) -> Result<(), String> {
         .or_insert_with(|| json!({}));
     let env = env.as_object_mut().expect("env was validated as an object");
     env.insert("ANTHROPIC_BASE_URL".into(), json!(gateway_url));
+    if add_gateway_hints {
+        env.insert(GATEWAY_HINT_HEADERS_ENV.into(), json!("1"));
+    }
     if let Err(error) = write_json_preserving_symlink(&path, &settings) {
         restore_file_snapshot(&backup_snapshot)?;
         return Err(error);
@@ -92,12 +112,21 @@ pub(crate) fn enable_claude_provider(gateway_url: &str) -> Result<(), String> {
     Ok(())
 }
 
-fn record_managed_provider(backup: &Path, gateway_url: &str) -> Result<(), String> {
+fn record_managed_provider(
+    backup: &Path,
+    gateway_url: &str,
+    owns_gateway_hints: bool,
+) -> Result<(), String> {
     let mut value = read_json_object(backup)?;
-    value
+    let object = value
         .as_object_mut()
-        .expect("read_json_object returns an object")
-        .insert(MANAGED_PROVIDER_BACKUP_KEY.into(), json!(gateway_url));
+        .expect("read_json_object returns an object");
+    object.insert(MANAGED_PROVIDER_BACKUP_KEY.into(), json!(gateway_url));
+    if owns_gateway_hints {
+        object.insert(MANAGED_GATEWAY_HINT_HEADERS_BACKUP_KEY.into(), json!(true));
+    } else {
+        object.remove(MANAGED_GATEWAY_HINT_HEADERS_BACKUP_KEY);
+    }
     write_json(backup, &value)
 }
 
@@ -112,28 +141,67 @@ pub(crate) fn restore_claude_provider(gateway_url: &str) -> Result<(), String> {
         return Ok(());
     }
     let mut settings = read_json_object(&path)?;
-    if json_env_string(&settings, "ANTHROPIC_BASE_URL") == Some(gateway_url) {
-        let backup_settings = read_json_object(&backup)?;
-        restore_json_env_value(&mut settings, &backup_settings, "ANTHROPIC_BASE_URL")?;
-        if backup_settings.get(ABSENT_SETTINGS_BACKUP_KEY) == Some(&Value::Bool(true))
-            && settings.as_object().is_some_and(serde_json::Map::is_empty)
-        {
-            if backup_settings.get(DANGLING_SETTINGS_SYMLINK_BACKUP_KEY) == Some(&Value::Bool(true))
-            {
-                remove_file_preserving_symlink(&path)?;
-            } else {
-                match fs::remove_file(&path) {
-                    Ok(()) => {}
-                    Err(error) if error.kind() == std::io::ErrorKind::NotFound => {}
-                    Err(error) => {
-                        return Err(format!("failed to remove {}: {error}", path.display()));
-                    }
-                }
-            }
-        } else {
-            write_json_preserving_symlink(&path, &settings)?;
+    let restore_provider = json_env_string(&settings, "ANTHROPIC_BASE_URL") == Some(gateway_url);
+    let mut backup_settings = match read_json_object(&backup) {
+        Ok(settings) => settings,
+        Err(error) if !restore_provider => {
+            log::warn!(
+                target: "nemo_relay.cli",
+                event = "claude_setup_restore_skipped",
+                reason = "backup_ownership_unknown";
+                "Cannot establish Relay ownership from Claude setup backup {}; leaving user settings unchanged: {error}",
+                backup.display()
+            );
+            return Ok(());
         }
-        remove_backup(&path)?;
+        Err(error) => return Err(error),
+    };
+    let managed_gateway_hints =
+        backup_settings.get(MANAGED_GATEWAY_HINT_HEADERS_BACKUP_KEY) == Some(&Value::Bool(true));
+    if !restore_provider && !managed_gateway_hints {
+        println!(
+            "current Claude provider routing is not managed by Relay; left {} unchanged",
+            path.display()
+        );
+        return Ok(());
+    }
+    let snapshot = snapshot_claude_setup()?;
+    let update = (|| {
+        if restore_provider {
+            restore_json_env_value(&mut settings, &backup_settings, "ANTHROPIC_BASE_URL")?;
+        }
+        // This default was inserted only when absent. An older routing backup may contain a
+        // historical hint value, which is not the value to restore for this separate setting.
+        let remove_gateway_hints = managed_gateway_hints
+            && json_env_string(&settings, GATEWAY_HINT_HEADERS_ENV) == Some("1");
+        if remove_gateway_hints {
+            remove_json_env_string(&mut settings, GATEWAY_HINT_HEADERS_ENV)?;
+        }
+        if restore_provider || remove_gateway_hints {
+            write_restored_claude_settings(&path, &settings, &backup_settings)?;
+        }
+        if restore_provider {
+            remove_backup(&path)?;
+        } else {
+            // Routing now belongs to the user. Keep its backup but retire our independent
+            // hint ownership so a later user-supplied "1" cannot be removed by another uninstall.
+            backup_settings
+                .as_object_mut()
+                .expect("read_json_object returns an object")
+                .remove(MANAGED_GATEWAY_HINT_HEADERS_BACKUP_KEY);
+            write_json(&backup, &backup_settings)?;
+        }
+        Ok(())
+    })();
+    if let Err(error) = update {
+        return match restore_claude_setup(&snapshot) {
+            Ok(()) => Err(error),
+            Err(rollback_error) => Err(format!(
+                "{error}; failed to restore Claude setup after cleanup failure: {rollback_error}"
+            )),
+        };
+    }
+    if restore_provider {
         println!(
             "restored managed ANTHROPIC_BASE_URL in {} from {}",
             path.display(),
@@ -141,11 +209,36 @@ pub(crate) fn restore_claude_provider(gateway_url: &str) -> Result<(), String> {
         );
     } else {
         println!(
-            "current Claude provider routing is not managed by Relay; left {} unchanged",
+            "left user-managed Claude provider routing unchanged in {}",
             path.display()
         );
     }
     Ok(())
+}
+
+fn write_restored_claude_settings(
+    path: &Path,
+    settings: &Value,
+    backup_settings: &Value,
+) -> Result<(), String> {
+    if backup_settings.get(ABSENT_SETTINGS_BACKUP_KEY) == Some(&Value::Bool(true))
+        && settings.as_object().is_some_and(serde_json::Map::is_empty)
+    {
+        if backup_settings.get(DANGLING_SETTINGS_SYMLINK_BACKUP_KEY) == Some(&Value::Bool(true)) {
+            remove_file_preserving_symlink(path)?;
+        } else {
+            match fs::remove_file(path) {
+                Ok(()) => {}
+                Err(error) if error.kind() == std::io::ErrorKind::NotFound => {}
+                Err(error) => {
+                    return Err(format!("failed to remove {}: {error}", path.display()));
+                }
+            }
+        }
+        Ok(())
+    } else {
+        write_json_preserving_symlink(path, settings)
+    }
 }
 
 pub(crate) fn json_env_string<'a>(value: &'a Value, key: &str) -> Option<&'a str> {

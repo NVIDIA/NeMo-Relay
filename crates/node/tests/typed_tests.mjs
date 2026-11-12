@@ -7,16 +7,10 @@ import { createRequire } from 'node:module';
 import * as pluginHost from './plugin_host_test_helper.mjs';
 
 const require = createRequire(import.meta.url);
-const lib = require('../index.js');
-const {
-  __testEncodeWithCodec,
-  typedToolExecute,
-  typedLlmExecute,
-  typedLlmStreamExecute,
-  JsonPassthrough,
-} = require('../typed.js');
-const adaptive = require('../adaptive.js');
-const plugin = require('../plugin.js');
+const lib = require('../dist/index.js');
+const { typedToolExecute, typedLlmExecute, typedLlmStreamExecute, JsonPassthrough } = require('../dist/typed.js');
+const adaptive = require('../dist/adaptive.js');
+const plugin = require('../dist/plugin.js');
 
 const TOOL_ATTR_LOCAL = 0b01;
 
@@ -181,47 +175,11 @@ describe('JsonPassthrough', () => {
     };
     assert.equal(p.fromJson(obj), obj);
   });
-
-  it('dispatches non-annotated codec payloads through the plain encode path', () => {
-    const seen = [];
-    const result = __testEncodeWithCodec(
-      {
-        encode(annotated, original) {
-          seen.push({
-            annotated,
-            original,
-          });
-          return {
-            annotated,
-            original,
-          };
-        },
-      },
-      {
-        model: 'plain-request',
-      },
-    );
-
-    assert.deepEqual(result, {
-      annotated: {
-        model: 'plain-request',
-      },
-      original: null,
-    });
-    assert.deepEqual(seen, [
-      {
-        annotated: {
-          model: 'plain-request',
-        },
-        original: null,
-      },
-    ]);
-  });
 });
 
 describe('adaptive typed helpers', () => {
   it('keeps adaptive helpers out of typed.js', () => {
-    assert.equal('defaultAdaptiveConfig' in require('../typed.js'), false);
+    assert.equal('defaultAdaptiveConfig' in require('../dist/typed.js'), false);
     assert.equal(typeof adaptive.defaultConfig, 'function');
   });
 
@@ -325,10 +283,10 @@ describe('typedToolExecute', () => {
   it('rejects legacy raw typed-tool results from sync and async producers', async () => {
     const passthrough = new JsonPassthrough();
     for (const producer of [() => 7, async () => 7]) {
-      await assert.rejects(
-        () => typedToolExecute('typed_legacy_result', {}, producer, passthrough, passthrough),
-        /must return ToolExecutionResult/i,
-      );
+      await assert.rejects(() => typedToolExecute('typed_legacy_result', {}, producer, passthrough, passthrough), {
+        name: 'TypeError',
+        message: 'typed tool callback must return ToolExecutionResult',
+      });
     }
   });
 
@@ -1063,6 +1021,13 @@ describe('typedLlmStreamExecute', () => {
                 },
               ],
             },
+            {
+              type: 'custom_tool_call',
+              id: 'ctc-item',
+              call_id: 'call-wrapper',
+              name: 'exec',
+              input: '{"looks_like":"json"}',
+            },
           ],
           usage: {
             input_tokens: 4,
@@ -1103,6 +1068,9 @@ describe('typedLlmStreamExecute', () => {
       assert.equal(endEvent.category_profile.annotated_response.model, 'gpt-4.1-mini');
       assert.equal(endEvent.category_profile.annotated_response.message, 'hello world');
       assert.equal(endEvent.category_profile.annotated_response.finish_reason, 'complete');
+      assert.deepEqual(endEvent.category_profile.annotated_response.tool_calls, [
+        { id: 'call-wrapper', name: 'exec', arguments: '{"looks_like":"json"}' },
+      ]);
     } finally {
       deregisterSubscriber('typed_responses_stream_sub');
       deregisterLlmRequestIntercept('typed_responses_stream_req');

@@ -74,6 +74,10 @@ Install the Python API and matching CLI with the optional extra:
 pip install "nemo-relay[cli]"
 ```
 
+Building from source requires `protoc` 31.1 or later and Buf 1.75.0 or later.
+Install both on `PATH`, or select them with `PROTOC` and `BUF`. The first build
+needs access to the Buf Schema Registry to download the locked validation schema.
+
 Build and install the CLI from crates.io with Cargo:
 
 ```bash
@@ -193,7 +197,7 @@ Select **Preview** to review your changes. Select **Save** to check and save the
 file. These checks do not run API key helpers. If a check fails, the file stays
 unchanged and the editor stays open. Select **Cancel** to leave without saving.
 
-Refer to [Edit Gateway Configuration](../../docs/nemo-relay-cli/basic-usage.mdx#edit-gateway-configuration)
+Refer to [Edit Gateway Configuration](../../docs/nemo-relay-cli/configuration.mdx#edit-gateway-configuration)
 for menu details and helper setup.
 
 ### Per-Request Upstream Credentials
@@ -227,7 +231,7 @@ ignores `ANTHROPIC_AUTH_TOKEN`, `ANTHROPIC_API_KEY`, and
 `NEMO_RELAY_ANTHROPIC_AUTH_HEADER`. Without a helper, Relay can still use
 environment API keys.
 
-Refer to [Generate API Keys Per Request](../../docs/nemo-relay-cli/basic-usage.mdx#generate-api-keys-per-request)
+Refer to [Generate API Keys Per Request](../../docs/nemo-relay-cli/authentication.mdx#generate-api-keys-per-request)
 for examples and credential routing rules.
 
 ### Unauthenticated HTTP Model Gateways

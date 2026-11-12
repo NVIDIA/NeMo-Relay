@@ -3,11 +3,13 @@
 
 mod http_model_hosts;
 mod logging;
+mod presets;
 mod runtime_diagnostics;
 pub(crate) use runtime_diagnostics::{PreparedConfig, RuntimeDiagnosticsConfig};
 mod types;
 
 pub(crate) use http_model_hosts::{HttpModelHosts, remote_http};
+pub(crate) use presets::upstream_table_paths;
 pub(crate) use types::*;
 
 use crate::runtime_diagnostics::{self as diag, Operation};
@@ -66,6 +68,7 @@ const TEST_SKIP_IMPLICIT_CONFIG_ENV: &str = "NEMO_RELAY_TEST_SKIP_IMPLICIT_CONFI
 // `GatewayConfig` / `AgentConfigs`; plugin configuration lives in `plugins.toml`.
 #[derive(Debug, Clone, Default, Deserialize)]
 struct FileConfig {
+    daemon: Option<FileDaemonConfig>,
     gateway: Option<FileGatewayConfig>,
     upstream: Option<FileUpstreamConfig>,
     agents: Option<FileAgentsConfig>,
@@ -74,7 +77,7 @@ struct FileConfig {
 }
 
 impl FileConfig {
-    /// Dotted names of keys in `[gateway]`, `[upstream]` and `[agents]` that Relay does not know.
+    /// Dotted names of keys in the daemon, gateway, upstream, and agent sections that Relay does not know.
     fn unknown_keys(&self) -> Vec<String> {
         let mut keys = Vec::new();
         let mut collect = |section: &str, unknown: &BTreeMap<String, toml::Value>| {
@@ -82,6 +85,9 @@ impl FileConfig {
         };
         if let Some(gateway) = &self.gateway {
             collect("gateway", &gateway.unknown);
+        }
+        if let Some(daemon) = &self.daemon {
+            collect("daemon", &daemon.unknown);
         }
         if let Some(upstream) = &self.upstream {
             collect("upstream", &upstream.unknown);
@@ -105,6 +111,19 @@ impl FileConfig {
 // Configuration is fail-open: unknown keys in these sections are collected in `unknown` and
 // reported as warnings instead of rejecting the file.
 #[derive(Debug, Clone, Default, Deserialize)]
+struct FileDaemonConfig {
+    worker_idle_timeout_secs: Option<u64>,
+    // Daemon logging is resolved and validated through its existing independent path.
+    #[serde(rename = "logging")]
+    _logging: Option<toml::Value>,
+    // The daemon diagnostics collector has its own startup configuration path.
+    #[serde(rename = "diagnostics")]
+    _diagnostics: Option<toml::Value>,
+    #[serde(flatten)]
+    unknown: BTreeMap<String, toml::Value>,
+}
+
+#[derive(Debug, Clone, Default, Deserialize)]
 struct FileGatewayConfig {
     max_hook_payload_bytes: Option<usize>,
     max_passthrough_body_bytes: Option<usize>,
@@ -120,10 +139,12 @@ struct FileUpstreamConfig {
     openai_auth_header: Option<String>,
     openai_api_key: Option<String>,
     openai_api_key_helper: Option<crate::upstream_auth::ApiKeyHelper>,
+    openai_oidc: Option<crate::oidc::OidcSource>,
     anthropic_base_url: Option<String>,
     anthropic_auth_header: Option<String>,
     anthropic_api_key: Option<String>,
     anthropic_api_key_helper: Option<crate::upstream_auth::ApiKeyHelper>,
+    anthropic_oidc: Option<crate::oidc::OidcSource>,
     chatgpt_codex_base_url: Option<String>,
     #[serde(flatten)]
     unknown: BTreeMap<String, toml::Value>,
@@ -186,7 +207,7 @@ fn resolve_server_config_inner(args: &GatewayOverrides) -> Result<ResolvedConfig
 
 /// Loads routing settings for the daemon without reading plugin files.
 /// Gateways and daemon workers check the plugins they run.
-pub(crate) fn resolve_daemon_config(args: &GatewayOverrides) -> Result<GatewayConfig, CliError> {
+pub(crate) fn resolve_daemon_config(args: &GatewayOverrides) -> Result<DaemonConfig, CliError> {
     let explicit = args.config.as_ref();
     let paths = config_paths(explicit)
         .into_iter()
@@ -210,7 +231,10 @@ pub(crate) fn resolve_daemon_config(args: &GatewayOverrides) -> Result<GatewayCo
         mode = "daemon";
         "Daemon configuration resolved"
     );
-    Ok(resolved.gateway)
+    Ok(DaemonConfig {
+        gateway: resolved.gateway,
+        worker_idle_timeout_secs: resolved.daemon_worker_idle_timeout_secs,
+    })
 }
 
 /// Layered configuration for a daemon-managed, machine-user worker.
@@ -298,20 +322,14 @@ fn resolve_logging_config_section(
     section: &[&str],
 ) -> Result<LoggingConfig, CliError> {
     let explicit = explicit.map(Path::to_path_buf);
-    let mut merged = toml::Value::Table(toml::map::Map::new());
-    for path in config_paths(explicit.as_ref()) {
-        let required = explicit.as_ref() == Some(&path);
-        let Some(raw) = read_config_file(&path, required, "configuration")? else {
-            continue;
-        };
-        let parsed = raw
-            .parse::<toml::Table>()
-            .map(toml::Value::Table)
-            .map_err(|error| {
-                CliError::Config(format!("invalid TOML in {}: {error}", path.display()))
-            })?;
-        merge_gateway_config_toml(&mut merged, parsed);
-    }
+    let paths = config_paths(explicit.as_ref())
+        .into_iter()
+        .map(|path| {
+            let required = explicit.as_ref() == Some(&path);
+            (path, required)
+        })
+        .collect();
+    let merged = read_shared_documents_for_startup(paths, false)?.merged;
 
     resolve_logging_from_document(&merged, section)
 }
@@ -461,10 +479,12 @@ fn persistent_bootstrap_fingerprint(
         "openai_auth_header": gateway.openai_auth_header,
         "openai_api_key": gateway.openai_api_key,
         "openai_api_key_helper": gateway.openai_api_key_helper,
+        "openai_oidc": gateway.openai_oidc,
         "anthropic_base_url": gateway.anthropic_base_url,
         "anthropic_auth_header": gateway.anthropic_auth_header,
         "anthropic_api_key": gateway.anthropic_api_key,
         "anthropic_api_key_helper": gateway.anthropic_api_key_helper,
+        "anthropic_oidc": gateway.anthropic_oidc,
         "chatgpt_codex_base_url": gateway.chatgpt_codex_base_url,
         "response_timeout_secs": gateway.response_timeout_secs,
         "metadata": gateway.metadata,
@@ -1531,6 +1551,7 @@ fn apply_run_url_overrides(
         if config.openai_base_url != *value {
             config.openai_api_key = None;
             config.openai_api_key_helper = None;
+            config.openai_oidc = None;
         }
         replace_upstream_base_url(
             &mut config.openai_base_url,
@@ -1546,6 +1567,7 @@ fn apply_run_url_overrides(
         if config.anthropic_base_url != *value {
             config.anthropic_api_key = None;
             config.anthropic_api_key_helper = None;
+            config.anthropic_oidc = None;
         }
         replace_upstream_base_url(
             &mut config.anthropic_base_url,
@@ -1592,6 +1614,7 @@ fn apply_server_overrides(
         if config.openai_base_url != *value {
             config.openai_api_key = None;
             config.openai_api_key_helper = None;
+            config.openai_oidc = None;
         }
         replace_upstream_base_url(
             &mut config.openai_base_url,
@@ -1607,6 +1630,7 @@ fn apply_server_overrides(
         if config.anthropic_base_url != *value {
             config.anthropic_api_key = None;
             config.anthropic_api_key_helper = None;
+            config.anthropic_oidc = None;
         }
         replace_upstream_base_url(
             &mut config.anthropic_base_url,
@@ -1704,7 +1728,7 @@ fn read_shared_documents_for_startup(
     config_paths: Vec<(PathBuf, bool)>,
     validate_runtime: bool,
 ) -> Result<PreparedSharedDocument, CliError> {
-    let mut merged = toml::Value::Table(toml::map::Map::new());
+    let mut layers = Vec::new();
     let mut legacy_sources = Vec::new();
     for (path, required) in config_paths {
         let Some(raw) = read_config_file(&path, required, "configuration")? else {
@@ -1740,7 +1764,16 @@ fn read_shared_documents_for_startup(
                 legacy_sources.push(LegacyConfigSource { path, sections });
             }
         }
-        merge_gateway_config_toml(&mut merged, parsed);
+        layers.push(parsed);
+    }
+    let merged = presets::resolve(layers)?;
+    if validate_runtime
+        && (merged.get("plugins").is_some() || !legacy_observability_sections(&merged).is_empty())
+    {
+        return Err(CliError::Config(
+            "configure plugins and observability in plugins.toml with `nemo-relay plugins edit`"
+                .into(),
+        ));
     }
     Ok(PreparedSharedDocument {
         merged,
@@ -1942,6 +1975,24 @@ fn apply_file_config(resolved: &mut ResolvedConfig, value: toml::Value) -> Resul
         resolved.diagnostics = diagnostics;
     }
     apply_file_gateway_config(&mut resolved.gateway, config.gateway)?;
+    if let Some(seconds) = config
+        .daemon
+        .and_then(|daemon| daemon.worker_idle_timeout_secs)
+    {
+        seconds.checked_mul(1_000).ok_or_else(|| {
+            CliError::Config(
+                "daemon.worker_idle_timeout_secs exceeds the supported duration".into(),
+            )
+        })?;
+        std::time::Instant::now()
+            .checked_add(std::time::Duration::from_secs(seconds))
+            .ok_or_else(|| {
+                CliError::Config(
+                    "daemon.worker_idle_timeout_secs exceeds the supported duration".into(),
+                )
+            })?;
+        resolved.daemon_worker_idle_timeout_secs = seconds;
+    }
     apply_file_upstream_config(&mut resolved.gateway, config.upstream)?;
     apply_file_agents_config(&mut resolved.agents, config.agents);
     logging::apply_file_logging_config(&mut resolved.logging, config.logging)?;
@@ -1950,11 +2001,12 @@ fn apply_file_config(resolved: &mut ResolvedConfig, value: toml::Value) -> Resul
 
 /// Checks the shared config shape and returns the unknown keys it would ignore.
 pub(crate) fn validate_shared_config_shape(value: toml::Value) -> Result<Vec<String>, CliError> {
-    Ok(parse_file_config(value)?.unknown_keys())
+    Ok(parse_file_config(presets::validate_layer(value)?)?.unknown_keys())
 }
 
 /// Validate one editor target with runtime rules, without loading other files or credentials.
 pub(crate) fn validate_config_document(value: toml::Value) -> Result<(), CliError> {
+    let value = presets::validate_layer(value)?;
     if value.get("plugins").is_some() || !legacy_observability_sections(&value).is_empty() {
         return Err(CliError::Config(
             "configure plugins and observability in plugins.toml with `nemo-relay plugins edit`"
@@ -1973,7 +2025,7 @@ pub(crate) fn validate_config_document(value: toml::Value) -> Result<(), CliErro
     // their payload, then use the runtime's semantic checks for actionable validation errors.
     validate_shared_config_shape(value.clone()).map_err(|_| {
         CliError::Config(
-            "invalid configuration shape; check field names and types in gateway, upstream, agents, and logging".into(),
+            "invalid configuration shape; check field names and types in daemon, gateway, upstream, agents, and logging".into(),
         )
     })?;
     apply_file_config(&mut ResolvedConfig::default(), value)
@@ -2019,10 +2071,12 @@ fn apply_file_upstream_config(
         openai_auth_header,
         openai_api_key,
         openai_api_key_helper,
+        openai_oidc,
         anthropic_base_url,
         anthropic_auth_header,
         anthropic_api_key,
         anthropic_api_key_helper,
+        anthropic_oidc,
         chatgpt_codex_base_url,
         unknown: _,
     } = upstream;
@@ -2036,6 +2090,7 @@ fn apply_file_upstream_config(
         if gateway.openai_base_url != value {
             gateway.openai_api_key = None;
             gateway.openai_api_key_helper = None;
+            gateway.openai_oidc = None;
         }
         gateway.openai_base_url = validate_upstream_base_url_with_hosts(
             "upstream.openai_base_url",
@@ -2054,6 +2109,7 @@ fn apply_file_upstream_config(
         if gateway.anthropic_base_url != value {
             gateway.anthropic_api_key = None;
             gateway.anthropic_api_key_helper = None;
+            gateway.anthropic_oidc = None;
         }
         gateway.anthropic_base_url = validate_upstream_base_url_with_hosts(
             "upstream.anthropic_base_url",
@@ -2079,6 +2135,9 @@ fn apply_file_upstream_config(
     if let Some(value) = openai_api_key_helper {
         gateway.openai_api_key_helper = Some(value);
     }
+    if let Some(value) = openai_oidc {
+        gateway.openai_oidc = Some(value);
+    }
     if let Some(value) = anthropic_api_key {
         gateway.anthropic_api_key = Some(crate::upstream_auth::validate_api_key(
             "upstream.anthropic_api_key",
@@ -2087,6 +2146,9 @@ fn apply_file_upstream_config(
     }
     if let Some(value) = anthropic_api_key_helper {
         gateway.anthropic_api_key_helper = Some(value);
+    }
+    if let Some(value) = anthropic_oidc {
+        gateway.anthropic_oidc = Some(value);
     }
     if let Some(value) = chatgpt_codex_base_url {
         gateway.chatgpt_codex_base_url = Some(validate_chatgpt_codex_base_url(
@@ -2377,6 +2439,7 @@ fn apply_env_config(config: &mut GatewayConfig) -> Result<(), CliError> {
         if config.openai_base_url != value {
             config.openai_api_key = None;
             config.openai_api_key_helper = None;
+            config.openai_oidc = None;
         }
         replace_upstream_base_url(
             &mut config.openai_base_url,
@@ -2392,12 +2455,13 @@ fn apply_env_config(config: &mut GatewayConfig) -> Result<(), CliError> {
         "NEMO_RELAY_OPENAI_AUTH_HEADER",
         &mut config.openai_auth_header,
         &mut config.openai_api_key,
-        config.openai_api_key_helper.is_some(),
+        config.openai_api_key_helper.is_some() || config.openai_oidc.is_some(),
     )?;
     if let Ok(value) = std::env::var("NEMO_RELAY_ANTHROPIC_BASE_URL") {
         if config.anthropic_base_url != value {
             config.anthropic_api_key = None;
             config.anthropic_api_key_helper = None;
+            config.anthropic_oidc = None;
         }
         replace_upstream_base_url(
             &mut config.anthropic_base_url,
@@ -2413,7 +2477,7 @@ fn apply_env_config(config: &mut GatewayConfig) -> Result<(), CliError> {
         "NEMO_RELAY_ANTHROPIC_AUTH_HEADER",
         &mut config.anthropic_auth_header,
         &mut config.anthropic_api_key,
-        config.anthropic_api_key_helper.is_some(),
+        config.anthropic_api_key_helper.is_some() || config.anthropic_oidc.is_some(),
     )?;
     if let Ok(value) = std::env::var("NEMO_RELAY_CHATGPT_CODEX_BASE_URL") {
         config.chatgpt_codex_base_url = Some(validate_chatgpt_codex_base_url(
@@ -2441,13 +2505,13 @@ fn apply_managed_worker_env_config(config: &mut GatewayConfig) -> Result<(), Cli
         "NEMO_RELAY_OPENAI_AUTH_HEADER",
         &mut config.openai_auth_header,
         &mut config.openai_api_key,
-        config.openai_api_key_helper.is_some(),
+        config.openai_api_key_helper.is_some() || config.openai_oidc.is_some(),
     )?;
     apply_environment_auth_header(
         "NEMO_RELAY_ANTHROPIC_AUTH_HEADER",
         &mut config.anthropic_auth_header,
         &mut config.anthropic_api_key,
-        config.anthropic_api_key_helper.is_some(),
+        config.anthropic_api_key_helper.is_some() || config.anthropic_oidc.is_some(),
     )?;
     crate::upstream_auth::validate_config(config)?;
     Ok(())
@@ -2606,6 +2670,7 @@ fn clear_credentials_for_replaced_upstreams(left: &mut toml::Value, right: &toml
                     "openai_auth_header",
                     "openai_api_key",
                     "openai_api_key_helper",
+                    "openai_oidc",
                 ],
             ),
             (
@@ -2615,6 +2680,7 @@ fn clear_credentials_for_replaced_upstreams(left: &mut toml::Value, right: &toml
                     "anthropic_auth_header",
                     "anthropic_api_key",
                     "anthropic_api_key_helper",
+                    "anthropic_oidc",
                 ],
             ),
         ] {
@@ -2628,9 +2694,11 @@ fn clear_credentials_for_replaced_upstreams(left: &mut toml::Value, right: &toml
                     )
             });
             for credential in credentials {
-                // Replace a helper as a whole command contract, even when the endpoint is unchanged.
-                let helper = credential.ends_with("_api_key_helper");
-                let clear = if helper {
+                // Replace a helper or a sign-in as a whole, even when the endpoint is unchanged:
+                // mixing one layer's issuer with another layer's client ID names no real client.
+                let whole_section =
+                    credential.ends_with("_api_key_helper") || credential.ends_with("_oidc");
+                let clear = if whole_section {
                     endpoint_changed || override_upstream.contains_key(credential)
                 } else {
                     endpoint_changed && !override_upstream.contains_key(credential)

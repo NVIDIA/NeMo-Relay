@@ -1112,28 +1112,23 @@ function createNemoRelayRuntime(): TestNemoRelayRuntime {
       ({ id: `stack-${nextScopeId++}` }) as unknown as ReturnType<NemoRelayRuntimeModule['createScopeStack']>,
     currentScopeStack: () => previousStack as unknown as ReturnType<NemoRelayRuntimeModule['currentScopeStack']>,
     setThreadScopeStack: (stack) => calls.setThreadScopeStack.push(stack),
-    pushScope: (...args: Parameters<NemoRelayRuntimeModule['pushScope']>) => {
-      const [name, scopeType, parentHandle, , data, metadata, input, timestamp] = args;
+    pushScope: (name, scopeType, parentHandle, _attributes, data, metadata, input, timestamp) => {
       const handle = { id: `scope-${nextScopeId++}` };
       calls.pushScope.push({ name, scopeType, handle, parentHandle, data, metadata, input, timestamp });
       return handle as unknown as ReturnType<NemoRelayRuntimeModule['pushScope']>;
     },
-    popScope: (...args: Parameters<NemoRelayRuntimeModule['popScope']>) => {
-      const [handle, output, timestamp] = args;
+    popScope: (handle, output, timestamp) => {
       calls.popScope.push({ handle, output, timestamp });
     },
-    event: (...args: Parameters<NemoRelayRuntimeModule['event']>) => {
-      const [name, handle, data, metadata, timestamp] = args;
+    event: (name, handle, data, metadata, timestamp) => {
       calls.event.push({ name, handle, data, metadata, timestamp });
     },
-    llmCall: (...args: Parameters<NemoRelayRuntimeModule['llmCall']>) => {
-      const [name, request, parentHandle, , data, metadata, modelName, timestamp] = args;
+    llmCall: (name, request, parentHandle, _attributes, data, metadata, modelName, timestamp) => {
       const handle = { id: `llm-${nextScopeId++}` };
       calls.llmCall.push({ name, handle, request, parentHandle, data, metadata, modelName, timestamp });
       return handle as unknown as ReturnType<NemoRelayRuntimeModule['llmCall']>;
     },
-    llmCallEnd: (...args: Parameters<NemoRelayRuntimeModule['llmCallEnd']>) => {
-      const [handle, response, data, metadata, timestamp] = args;
+    llmCallEnd: (handle, response, data, metadata, timestamp) => {
       calls.llmCallEnd.push({ handle, response, data, metadata, timestamp });
     },
     toolCall: () => ({}) as unknown as ReturnType<NemoRelayRuntimeModule['toolCall']>,

@@ -116,18 +116,25 @@ async def framework_llm(provider_name: str, payload: Json) -> LlmResponse:
 
 <Tab title="Node.js" language="node">
 ```ts
-import { getHandle, LlmRequest, llmCallExecuteAsync, type ScopeHandle } from 'nemo-relay-node';
+import {
+  getHandle,
+  LlmRequest,
+  llmCallExecuteAsync,
+  type Json,
+  type LlmRequestShape,
+  type ScopeHandle,
+} from 'nemo-relay-node';
 
-type LlmResponse = { text: string; request: unknown };
+type LlmResponse = { text: string; request: Json };
 
-export async function frameworkLlm(providerName: string, payload: unknown): Promise<LlmResponse> {
+export async function frameworkLlm(providerName: string, payload: Json): Promise<LlmResponse> {
   const parent: ScopeHandle = getHandle();
   const request = new LlmRequest({}, payload);
 
   return (await llmCallExecuteAsync(
     providerName,
     request,
-    async (req: LlmRequest): Promise<LlmResponse> => ({ text: 'hi', request: req.content }),
+    async (req: LlmRequestShape): Promise<LlmResponse> => ({ text: 'hi', request: req.content }),
     parent,
     null,
     null,
@@ -202,6 +209,13 @@ Check these symptoms first when the workflow does not behave as expected.
 - **The model name is missing**: Pass `model_name` from the provider payload, model client, or framework run configuration.
 - **Request middleware receives provider objects**: Convert provider payloads into `LLMRequest` with JSON-compatible content before calling NeMo Relay.
 - **Stream output is incomplete**: Use the stream execute helper when NeMo Relay owns the stream boundary, or emit explicit lifecycle events when it does not.
+
+## Configure Execution Stages per Call
+
+Tool and LLM wrappers accept options that choose which middleware stages run
+for one call. Refer to
+[Configure Execution Stages per Call](/instrument-applications/advanced-guide#configure-execution-stages-per-call)
+for the supported bindings and the work Relay still handles when a stage is off.
 
 ## Next Steps
 

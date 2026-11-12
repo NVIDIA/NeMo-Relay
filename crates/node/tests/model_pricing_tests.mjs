@@ -9,8 +9,8 @@ import { tmpdir } from 'node:os';
 import path from 'node:path';
 
 const require = createRequire(import.meta.url);
-const plugin = require('../plugin.js');
-const pricing = require('../model_pricing.js');
+const plugin = require('../dist/plugin.js');
+const pricing = require('../dist/model_pricing.js');
 
 function pricedEntry(overrides = {}) {
   return pricing.catalogEntry({
@@ -88,6 +88,39 @@ describe('model pricing plugin helpers', () => {
     );
     assert.deepEqual(
       invalid.diagnostics.map((diagnostic) => diagnostic.code),
+      ['pricing.invalid_config'],
+    );
+  });
+
+  it('parses untyped documents into configs', () => {
+    const document = { sources: [pricing.inlineSource(pricing.inlineCatalog([pricedEntry()]))] };
+    assert.equal(pricing.parseConfig(document), document);
+    assert.throws(
+      () => pricing.parseConfig({ sources: 1 }),
+      (error) => /invalid model pricing config/.test(error.message) && error.cause[0].code === 'pricing.invalid_config',
+    );
+  });
+
+  it('accepts and validates cache write rates', () => {
+    const report = (rate) =>
+      pricing.validateConfig(
+        pricing.pricingConfig([
+          pricing.inlineSource(
+            pricing.inlineCatalog([
+              pricedEntry({
+                rates: pricing.tokenRates({
+                  input_per_million: 1,
+                  output_per_million: 2,
+                  cache_write_rates: [{ duration: 3600, per_million: rate }, { per_million: 3 }],
+                }),
+              }),
+            ]),
+          ),
+        ]),
+      );
+    assert.deepEqual(report(6).diagnostics, []);
+    assert.deepEqual(
+      report(-1).diagnostics.map((diagnostic) => diagnostic.code),
       ['pricing.invalid_config'],
     );
   });

@@ -1,74 +1,129 @@
 ---
-title: "Coding Agent Installation"
+title: "Manage Persistent Integrations"
 description: "Install and manage persistent NeMo Relay integrations for Claude Code, Codex, and pi."
 position: 3
 ---
 {/* SPDX-FileCopyrightText: Copyright (c) 2026, NVIDIA CORPORATION & AFFILIATES. All rights reserved.
 SPDX-License-Identifier: Apache-2.0 */}
 
+Install a persistent integration so you can start your coding agent normally
+and load NeMo Relay without a `nemo-relay run` command. This page covers
+installation, verification, updates, and removal.
 
-Install a persistent integration when you want a coding agent to load NeMo
-Relay without a `nemo-relay` wrapper command.
+The setup differs by coding agent:
 
-**Two different mechanisms live under this one command.** Claude Code and Codex
-take a generated marketplace plugin whose MCP server carries the gateway; the
-sections below describe that path, and everything they say about marketplaces,
-MCP stdio, `--install-dir`, and version gating applies only to those two hosts.
-pi has an extension and package system of its own but no marketplace and no MCP
-client, so `nemo-relay install pi` writes an extension into pi's auto-discovery
-directory and that extension talks to the gateway over plain HTTP. See
-[pi](/nemo-relay-cli/pi) for the whole of the pi path.
+| Coding Agent | What Loads When It Starts | Gateway Startup |
+| --- | --- | --- |
+| Claude Code | A generated Relay plugin that starts `nemo-relay mcp` and invokes Relay lifecycle hooks. | `nemo-relay mcp` starts or reuses a background Relay gateway. |
+| Codex | A generated Relay plugin, provider configuration, and verified lifecycle hooks. | `nemo-relay mcp` starts or reuses the same background gateway used by Claude Code. |
+| pi | A Relay extension discovered from pi's extension directory. | Start a gateway separately. Installing the extension does not start one. |
 
-Each persistent integration forwards the lifecycle signals that its host
-exposes, including agent, subagent, tool, prompt, compaction, and stop events
-where available. Model-provider routing sends LLM traffic through the local
-NeMo Relay gateway. Hooks alone cannot capture complete LLM request and response
-spans.
+The gateway is a `nemo-relay` process that receives agent events and forwards
+configured model requests. The background gateway managed by Claude Code and
+Codex is also called the shared sidecar in the detailed sections below.
 
-Both integrations share the same lifecycle gateway. Provider traffic joins
-that gateway when routing is configured for the host:
-
-```text
-Codex / Claude Code
-  |-> Relay MCP lifecycle client -------> shared Relay gateway
-  |-> generated lifecycle hooks --------> shared Relay gateway
-  \-> provider route (when configured) -> shared Relay gateway -> model provider
-```
-
-Each agent starts its own lightweight MCP stdio process. Those processes share
-one compatible gateway. Generated lifecycle hooks use `hook-forward` to deliver
-their canonical payloads to that same gateway.
+For agent-specific capture behavior and limitations, see the
+[Claude Code](/nemo-relay-cli/claude-code),
+[Codex](/nemo-relay-cli/codex), or [pi](/nemo-relay-cli/pi) guide.
 
 ## Requirements
 
-Install `nemo-relay` and ensure that it is available on `PATH` or `%PATH%`.
-The installer does not download a second Relay binary, install a daemon, or
-require an integration-local executable.
+Install the [NeMo Relay CLI](/getting-started/installation) and make
+`nemo-relay` available on `PATH` or `%PATH%`. The installer uses this executable;
+it does not download another Relay binary or install a Relay daemon.
 
-The selected coding-agent CLI must also be available at a supported version:
+To use the integration, make the selected coding-agent CLI available:
 
-- Claude Code 2.1.121 or newer through `claude`.
-- `codex-cli` 0.143.0 or newer through `codex`.
-- pi 0.84.x through `pi`.
+| Coding Agent | Command | Version |
+| --- | --- | --- |
+| Claude Code | `claude` | 2.1.121 or newer |
+| Codex | `codex` | 0.150.0 or newer |
+| pi | `pi` | 0.84.0 or newer; verified through 0.84.x |
 
-For Claude Code and Codex, Relay checks the selected CLI version before
-modifying agent configuration. Prerelease, malformed, and older versions are
-rejected consistently by install, doctor, and transparent launch paths.
+For Claude Code and Codex, install and doctor reject unsupported, malformed,
+and prerelease versions before changing agent configuration.
 
-`nemo-relay install pi` does not check pi's version, because it never runs pi:
-it writes a directory into pi's auto-discovery location, which succeeds whether
-or not pi is present. It reports when `pi` is absent from `PATH`. Version
-checking for pi happens in `nemo-relay doctor pi` and at transparent launch.
+Installing pi by name only writes extension files, so it can succeed before
+pi is installed. `nemo-relay doctor pi` and transparent launches check its
+version. Versions newer than the verified pi range are accepted with a warning.
+
+### Prepare Relay Configuration
+
+Before expecting exported activity, configure the exporter and any required
+provider settings.
+
+`nemo-relay config edit` writes the user `config.toml`, and
+`nemo-relay plugins edit` writes the user `plugins.toml`. By default, these are
+`~/.config/nemo-relay/config.toml` and `~/.config/nemo-relay/plugins.toml`.
+An absolute `XDG_CONFIG_HOME` changes their directory to
+`$XDG_CONFIG_HOME/nemo-relay`. On Windows, Relay uses `USERPROFILE` when
+`HOME` is unavailable.
+
+The Relay gateway reads these files when resolving its configuration.
+System configuration can also apply. See
+[Shared Configuration](/nemo-relay-cli/configuration#shared-configuration)
+for system file locations and precedence.
+
+For the generated Claude Code and Codex integrations, the shared gateway uses
+system and user configuration. It does not automatically select a project's
+`.nemo-relay/config.toml` or `.nemo-relay/plugins.toml`, including files created
+during a quick start.
+
+To select project configuration for an individual run, use an explicit launch:
+
+```bash
+nemo-relay --config .nemo-relay/config.toml run -- codex
+```
+
+See [Use Project Configuration](/nemo-relay-cli/configuration#use-project-configuration)
+for file selection, and
+[Provider Authentication](/nemo-relay-cli/authentication) for credentials.
 
 ## Install a Persistent Integration
 
-Run the command for the coding-agent integration that you want to install:
+To review the generated files and agent settings before installing, see
+[What Install Changes](#what-install-changes).
 
-```bash
-nemo-relay install claude-code
-nemo-relay install codex
-nemo-relay install pi
-```
+1. Optional: Preview installation without changing agent configuration:
+
+   ```bash
+   nemo-relay install codex --dry-run
+   ```
+
+   Replace `codex` with `claude-code` or `pi` for another integration.
+
+2. Run the installation command for your coding agent. Choose one:
+
+   ```bash
+   nemo-relay install claude-code
+   nemo-relay install codex
+   nemo-relay install pi
+   ```
+
+3. Close existing sessions and start a new coding-agent process. Restart the
+   Codex desktop app if it was already running so it reloads the provider,
+   environment, and hook configuration.
+
+   For Claude Code or Codex, start `claude` or `codex` normally. The installed
+   integration starts or reuses its shared gateway.
+
+   For pi, start a gateway in a separate terminal and leave it running:
+
+   ```bash
+   nemo-relay --bind 127.0.0.1:4040
+   ```
+
+   Then start `pi` normally in another terminal. Its extension uses
+   `http://127.0.0.1:4040` by default. If you set
+   `NEMO_RELAY_PI_GATEWAY_URL`, start or select a gateway at that address.
+
+   pi allows operations to continue by default when its gateway is unreachable.
+   Installation alone therefore does not establish that activity is being
+   captured. See [pi Limitations](/nemo-relay-cli/pi#limitations).
+
+Continue with [Verify the Installation](#verify-the-installation).
+
+### Installation Options
 
 Install every supported host detected on the machine:
 
@@ -79,76 +134,168 @@ nemo-relay install all
 `install all` selects only supported agents whose CLI is present. It fails if
 Claude Code, Codex and pi are all absent.
 
-`nemo-relay install pi` differs from the other two: pi has no plugin
-marketplace, so Relay writes the extension into pi's own auto-discovery
-directory rather than generating a marketplace plugin. `--install-dir` does not
-apply to it, and it does not require `pi` on `PATH` when installed by name. See
-[pi](/nemo-relay-cli/pi).
+For Claude Code and Codex, `--install-dir` selects a different generated
+marketplace directory. It does not apply to pi.
 
-Use `--dry-run` to preview the operation without changing host configuration.
-For Claude Code and Codex, the preview includes marketplace paths and host
-commands:
+The tables below use `<install-root>` for the selected directory:
 
-```bash
-nemo-relay install codex --dry-run
-```
-
-For Claude Code and Codex, use `--install-dir` when you need a non-default
-marketplace location. The default plugin directory is platform-specific:
-
-| Platform | Default Plugin Install Directory |
+| Platform | Default Install Root |
 | --- | --- |
 | macOS | `~/Library/Application Support/nemo-relay/plugins` |
-| Linux | `${XDG_DATA_HOME:-~/.local/share}/nemo-relay/plugins` |
-| Windows | `%LOCALAPPDATA%\nemo-relay\plugins` |
+| Linux | `$XDG_DATA_HOME/nemo-relay/plugins` when `XDG_DATA_HOME` is absolute; otherwise `~/.local/share/nemo-relay/plugins` |
+| Windows | `%LOCALAPPDATA%\nemo-relay\plugins`; otherwise `AppData\Local\nemo-relay\plugins` beneath `HOME`, or `USERPROFILE` when `HOME` is unavailable |
+
+pi installs into `~/.pi/agent/extensions/nemo-relay`, or
+`$PI_CODING_AGENT_DIR/extensions/nemo-relay` when `PI_CODING_AGENT_DIR` is set.
 
 Relay serializes install, force-install, rollback, and uninstall operations for
 each user and host, even when two operations name different install
 directories. If another operation is still active after a short wait, Relay
 stops with a timeout instead of changing host-wide plugin state concurrently.
 
-### Recover a Deleted Codex Marketplace
+<a id="diagnose" />
 
-If the generated Codex marketplace directory is deleted while Codex still has
-`nemo-relay-local` registered, Codex reports the marketplace as present but
-unloadable and cannot say whether `nemo-relay-plugin` is registered. Relay
-recognizes this exact dangling state when both the expected marketplace root and
-its generation marker are absent. Recovery is explicit:
+## Verify the Installation
+
+1. Check the installed integration. Choose the command for your coding agent:
+
+   ```bash
+   nemo-relay doctor --plugin claude-code
+   nemo-relay doctor --plugin codex
+   nemo-relay doctor pi
+   ```
+
+   Resolve failed checks before continuing. For Claude Code and Codex, a stopped
+   shared gateway can be informational: the next coding-agent session starts it.
+   For pi, confirm that its separately started gateway is reachable.
+
+2. Start a new session and perform a small task. Follow the export verification
+   instructions for [Claude Code](/nemo-relay-cli/claude-code#verify-export),
+   [Codex](/nemo-relay-cli/codex#verify-export), or
+   [pi](/nemo-relay-cli/pi#verify-export).
+
+Doctor checks installation and readiness. It does not prove that a model
+request succeeded or that an exporter delivered the resulting activity.
+
+For detailed checks and custom installation directories, see
+[Diagnostic Reference](#diagnostic-reference). For runtime or exporter failures,
+see [Troubleshoot the CLI](/nemo-relay-cli/troubleshooting).
+
+## Refresh Installed Integrations
+
+After upgrading the `nemo-relay` binary, refresh every Relay-managed Codex and
+Claude Code installation with:
 
 ```bash
-nemo-relay install codex --force
-nemo-relay uninstall codex --force
+nemo-relay integrations refresh
 ```
 
-Use the first command to rebuild the integration or the second to finish
-removing it. The corresponding command without `--force` does not change the
-dangling state and tells you which forced command to run.
+Refresh retires each old MCP generation, stops the authenticated Relay-owned
+sidecar, and republishes the integration from the current binary. Restart the
+affected host clients afterward. To bring a legacy custom-directory installation
+under Relay management, reinstall the appropriate host before refreshing it:
 
-Recovery reuses the surviving generation lock and fails before changing
-anything if that lock cannot be proved safe—for example, if it is missing,
-malformed, replaced, symlinked, not a regular file, or held by another process,
-or if the marketplace root or marker reappears while Relay acquires it. In that
-case, follow the manual-remediation instructions in the error instead of
-replacing the lock.
+```bash
+nemo-relay install codex --install-dir <path-to-plugins> --force
+nemo-relay integrations refresh
+```
 
-During a forced reinstall, removal of the old provider and hooks, plugin
-registration, and marketplace registration is one cleanup phase. Until all
-three areas have been cleaned, a failure restores only prior state Relay can
-prove existed. Marketplace removal is durable progress because the generated
-tree is already gone, so a later probe failure records that removal and retries
-forward. After all three are clean, cleanup is committed: a later install
-failure does not recreate the dangling Codex registration. Relay keeps the
-validated lock and records the clean progress so another
-`nemo-relay install codex --force` or `nemo-relay integrations refresh` can
-retry safely. A partially failed forced uninstall is likewise retryable with
-`nemo-relay uninstall codex --force`; Relay removes the retained lock and state
-only after cleanup succeeds completely.
+Refresh preflight validates installed targets and retires their active MCP
+generations. A preflight failure stops the refresh before any target is
+attempted. A deleted Codex marketplace has no generation to retire, so its
+recovery remains in the per-target forced-install loop. If its surviving lock is
+unsafe, Relay reports that target, continues refreshing the others, and returns
+an error after every target has been attempted.
 
-## What Install Changes
+Manual MCP configurations are not changed; reinstall them through Relay if you
+want Relay to manage future refreshes.
+
+### Update the pi Extension
+
+`nemo-relay integrations refresh` updates Claude Code and Codex installations.
+To update Relay-managed pi extension files after upgrading `nemo-relay`, run:
+
+```bash
+nemo-relay install pi
+```
+
+Restart pi, then run `nemo-relay doctor pi` and verify exported activity again.
+
+If installed extension files have been edited, installation stops rather than
+overwriting them. Review and preserve those edits before choosing `--force`,
+which permits overwriting edited Relay-managed files. Relay refuses to replace
+an unmanaged extension directory even with `--force`.
+
+Keep only one loading copy of the Relay extension. Multiple copies can deliver
+duplicate events. See [Install the Extension](/nemo-relay-cli/pi#install-the-extension).
+
+## Uninstall
+
+Close the coding agent before removing its integration.
+
+Run the command for the installed integration that you want to remove:
+
+```bash
+nemo-relay uninstall claude-code
+nemo-relay uninstall codex
+nemo-relay uninstall pi
+nemo-relay uninstall all
+```
+
+`nemo-relay uninstall pi` removes only the files its install recorded, and only
+while they still match what was written; anything you edited is kept, and a
+directory Relay did not write is never touched. `uninstall all` includes it.
+`--install-dir` addresses the marketplace root, so it is ignored for pi under
+`all` and rejected when you name pi explicitly.
+
+Uninstall removes Codex provider configuration and trust for the exact plugin
+hooks before unregistering the plugin, while Codex can still report its hook
+metadata. It then removes the host registration and marketplace. Claude Code
+provider routing is restored from the Relay backup. Unrelated user hooks and
+configuration remain unchanged.
+
+Start a new coding-agent process after removal. Restart the Codex desktop app
+if it was running so it reloads configuration without Relay's managed settings.
+
+Run the corresponding doctor command to inspect the remaining installation
+state. Removing pi's extension does not stop a gateway you started separately.
+
+## Installation Details
+
+### What Install Changes
 
 For Claude Code and Codex, `nemo-relay install` writes a local marketplace named
 `nemo-relay-local`, then registers the generated `nemo-relay-plugin` package
 with the selected host.
+
+Relay writes the following files during installation. The coding agent reads
+its settings and generated plugin or extension files when a new process starts.
+
+| Files | Writer and Reader | Purpose |
+| --- | --- | --- |
+| `~/.claude/settings.json` | Relay updates it; Claude Code reads it. | Sets `env.ANTHROPIC_BASE_URL` for Relay routing and adds `CLAUDE_CODE_GATEWAY_HINT_HEADERS` when absent. |
+| `~/.claude/settings.json.nemo-relay.bak` | Relay writes and reads it. | Records prior settings needed to restore Relay-managed changes. |
+| `$CODEX_HOME/config.toml`, default `~/.codex/config.toml` | Relay updates it; Codex reads it. | Configures provider routing, hooks, and related managed settings. |
+| `$CODEX_HOME/config.toml.nemo-relay.bak`, default `~/.codex/config.toml.nemo-relay.bak` | Relay writes and reads it. | Records prior Codex configuration for restoration. |
+| `$CODEX_HOME/.env`, default `~/.codex/.env` | Relay manages an authentication block; Codex reads it after restart. | Supplies the `OPENAI_PROJECT` assignment used for Relay client proof while preserving unrelated settings. |
+| pi's `extensions/nemo-relay/package.json`, `index.ts`, and `src/` beneath its agent directory | Relay writes them; pi loads them. | Registers and implements the Relay extension without editing pi's `settings.json`. |
+| pi's `extensions/nemo-relay/.nemo-relay-install.json` | Relay writes and reads it. | Records installed files and hashes for updates and safe removal. |
+
+For Claude Code, `<plugin-root>` is
+`<install-root>/claude-code-marketplace/plugins/nemo-relay-plugin`.
+For Codex, it is
+`<install-root>/codex-marketplace/plugins/nemo-relay-plugin`.
+
+| Generated Files | Reader and Purpose |
+| --- | --- |
+| `<plugin-root>/.mcp.json` | The coding agent reads this to start `nemo-relay mcp`. |
+| `<plugin-root>/hooks/hooks.json` | The coding agent reads this to invoke `nemo-relay hook-forward` for supported lifecycle events. |
+| `<plugin-root>/.nemo-relay-hook-config.json` | `hook-forward` reads the gateway address and installation identity needed for delivery. |
+| `<plugin-root>/.nemo-relay-generation` | Relay's MCP and hook processes use this to reject cached commands from a retired installation. |
+
+Relay also generates marketplace and plugin manifests and registers them
+through the coding agent's plugin commands. Use Relay's install, refresh,
+doctor, and uninstall commands to manage these generated files.
 
 For Claude Code, `nemo-relay install claude-code` registers the local
 marketplace, installs `nemo-relay-plugin@nemo-relay-local` at user scope, and
@@ -173,13 +320,14 @@ the Codex app-server API to select hooks by plugin ID, exact canonical command,
 and event definition. It never trusts unrelated user, project, or plugin hooks.
 If Codex does not discover exactly one enabled and trusted handler for every
 generated event—`SessionStart`, `UserPromptSubmit`, `PreToolUse`, `PostToolUse`,
-`SubagentStart`, `SubagentStop`, `Stop`, `PreCompact`, and
-`PostCompact`—installation restores the previous Codex config, legacy hooks,
-Relay backup files, and every original targeted trust entry. These nine events are
-the complete Relay-generated Codex hook set; Relay does not generate
-`PermissionRequest`, `PostToolUseFailure`, `Notification`, or `SessionEnd` handlers.
+`SubagentStart`, `SubagentStop`, `Stop`, `PreCompact`, `PostCompact`,
+`SessionEnd`, and `Interrupt`—installation restores the previous Codex config,
+legacy hooks, Relay backup files, and every original targeted trust entry. These
+eleven events are the complete Relay-generated Codex hook set; Relay does not
+generate `PermissionRequest`, `PostToolUseFailure`, or `Notification` handlers.
 Upgrade removes legacy Relay groups from
-`~/.codex/hooks.json` while preserving unrelated hooks.
+`$CODEX_HOME/hooks.json` (default `~/.codex/hooks.json`) while preserving
+unrelated hooks.
 
 After upgrading to a release with file-backed hook configuration, uninstall and
 reinstall the Relay plugin so the coding-agent host refreshes its stored hook
@@ -199,8 +347,27 @@ If `nemo-relay doctor` reports unsafe permissions on the hook configuration
 directory, run `nemo-relay install <host> --force`. Replace `<host>` with
 `claude-code` or `codex`. This recreates the plugin with safe permissions.
 
-Start a new Codex CLI process after installation. Restart the Codex desktop app
-if it was already running so it reloads the provider and hook configuration.
+### How Claude Code and Codex Connect
+
+Each persistent integration forwards the lifecycle signals that its host
+exposes, including agent, subagent, tool, prompt, compaction, and stop events
+where available. Model-provider routing sends LLM traffic through the local
+NeMo Relay gateway. Hooks alone cannot capture complete LLM request and response
+spans.
+
+Both integrations share the same lifecycle gateway. Provider traffic joins
+that gateway when routing is configured for the host:
+
+```text
+Codex / Claude Code
+  |-> Relay MCP lifecycle client -------> shared Relay gateway
+  |-> generated lifecycle hooks --------> shared Relay gateway
+  \-> provider route (when configured) -> shared Relay gateway -> model provider
+```
+
+Each agent starts its own lightweight MCP stdio process. Those processes share
+one compatible gateway. Generated lifecycle hooks use `hook-forward` to deliver
+their canonical payloads to that same gateway.
 
 ### Shared Gateway Lifecycle
 
@@ -256,34 +423,14 @@ payload once. They never start or recover the gateway, and Relay does not retry
 after payload transmission begins. The MCP server advertises no tools in any
 host.
 
-## Refresh Installed Integrations
-
-After upgrading the `nemo-relay` binary, refresh every Relay-managed Codex and
-Claude Code installation with:
-
-```bash
-nemo-relay integrations refresh
-```
-
-Refresh retires each old MCP generation, stops the authenticated Relay-owned
-sidecar, and republishes the integration from the current binary. Restart the
-affected host clients afterward. To bring a legacy custom-directory installation
-under Relay management, reinstall the appropriate host before refreshing it:
-
-```bash
-nemo-relay install codex --install-dir <path-to-plugins> --force
-nemo-relay integrations refresh
-```
-
-Refresh preflight validates installed targets and retires their active MCP
-generations. A preflight failure stops the refresh before any target is
-attempted. A deleted Codex marketplace has no generation to retire, so its
-recovery remains in the per-target forced-install loop. If its surviving lock is
-unsafe, Relay reports that target, continues refreshing the others, and returns
-an error after every target has been attempted.
-
-Manual MCP configurations are not changed; reinstall them through Relay if you
-want Relay to manage future refreshes.
+Dynamic plugin manifests,
+artifacts, and signatures included in this identity must be regular files. Relay
+limits the complete activation snapshot—including adjacent runtime files and a
+copied managed Python environment—to 100,000 filesystem entries, 512 MiB, and a
+maximum directory traversal depth of 128. When startup reports an activation
+snapshot budget error, remove unrelated files from the manifest or load-target
+directory, flatten deeply nested directories, or reduce the managed Python
+environment before retrying.
 
 To explicitly stop the managed shared gateway, first close active MCP clients,
 then run:
@@ -293,14 +440,15 @@ nemo-relay --bind 127.0.0.1:47632 gateway stop
 ```
 
 The command resolves the process listening at that exact loopback address,
-verifies that its executable is named `nemo-relay`, and stops it. It can only
+verifies that its executable is named `nemo-relay` or `nemo-relay-pinned`,
+and stops it. It can only
 stop a gateway running on the local machine; remote gateway processes are not
 supported. An open MCP client can restart the managed gateway as part of its
 one allowed recovery.
 
-`nemo-relay gateway start` starts the gateway with the same server
-configuration as a bare daemon invocation. `nemo-relay gateway stop` stops that
-gateway at the default daemon endpoint, `127.0.0.1:4040`. Pass the same `--bind`
+`nemo-relay gateway start` starts the gateway server.
+`nemo-relay gateway stop` stops that gateway at the default endpoint,
+`127.0.0.1:4040`. Pass the same `--bind`
 value to both commands for a custom endpoint. On Unix, add `--force` to terminate
 the process immediately instead of requesting a graceful shutdown. Windows
 always terminates the gateway process tree.
@@ -360,46 +508,39 @@ token to an unrelated listener.
 
 ### Configuration and Credentials
 
-Persistent mode resolves only system and user Relay configuration and starts in
-the user configuration directory. Project `.nemo-relay` layers remain available
-through transparent `nemo-relay run` invocations. Each host passes environment
-settings to MCP differently:
+For configuration files and project selection, see
+[Prepare Relay Configuration](#prepare-relay-configuration).
 
-- Codex stores variable names—not values—for provider credentials, Relay
-  runtime, OpenTelemetry, AWS, proxies, certificates, approved prefixes, and
+Each coding agent supplies environment settings differently:
+
+- Codex stores the names of forwarded variables for provider credentials,
+  Relay settings, OpenTelemetry, AWS, proxies, certificates, and supported
   credential variables referenced by user observability configuration.
 - Claude Code supplies its normal plugin MCP environment.
 
-The long-lived managed sidecar injects a forwarded provider credential only when
-a request carries provider authorization or Relay's private per-user client
-proof. The Codex installer writes a domain-separated HMAC proof into the
-managed provider's `http_headers`; Relay stores the resulting Codex config with
-an owner-only mode on Unix or protected owner/System DACL on Windows before the
-temporary file becomes visible. Relay validates and removes that header before
-middleware, observability, or upstream forwarding. The underlying HMAC key
-remains in Relay's owner-only bootstrap state. Claude Code sends its normal
-provider authorization. A foreign loopback caller cannot spend
-the sidecar's forwarded credentials. Foreground `nemo-relay --bind` use retains
-environment-key injection for explicit local proxy workflows.
+For Codex's built-in `openai` provider, Relay writes a managed `OPENAI_PROJECT`
+assignment into `$CODEX_HOME/.env`, default `~/.codex/.env`. After Codex restarts,
+its `OpenAI-Project` header carries Relay's private client proof along with any
+original project value. Relay validates and removes the proof before
+observability and upstream forwarding.
 
-## Diagnose
+The retained `nemo-relay-openai` provider alias supports older sessions. Its
+`http_headers` configuration also contains Relay client proof. This is distinct
+from the `.env` mechanism used by the built-in provider.
 
-Run the command for the installed integration that you want to diagnose:
+Codex files containing Relay proof use owner-only permissions on Unix or
+protected owner/System permissions on Windows. Installation and removal preserve
+unrelated `.env` settings. Restart Codex after either operation.
 
-```bash
-nemo-relay doctor --plugin claude-code
-nemo-relay doctor --plugin codex
-nemo-relay doctor --plugin all
-```
+Both managed background gateways and foreground gateways require Relay client
+proof before using provider credentials from the gateway's configuration or
+environment. Requests can still use provider credentials supplied by the
+coding agent. Starting `nemo-relay --bind` does not bypass this requirement.
 
-`--plugin` asks about marketplace plugin state, so it does not accept `pi` —
-there is no pi plugin to diagnose, and `--plugin all` covers the marketplace
-hosts only. Diagnose a pi install with its own command, which reports the
-extension's load path, whether pi will trust it, and whether it is up to date:
+See [Provider Authentication](/nemo-relay-cli/authentication) for the supported
+credential paths and their limitations.
 
-```bash
-nemo-relay doctor pi
-```
+### Diagnostic Reference
 
 `nemo-relay doctor` includes every persistent integration it finds. It checks
 generated marketplace and plugin files where applicable, the Relay binary and
@@ -436,32 +577,46 @@ suggests `nemo-relay install <host> --force`. Agents without a persistent
 installation remain informational, so transparent-run setup does not require
 one.
 
-## Uninstall
+## Recover a Deleted Codex Marketplace
 
-Run the command for the installed integration that you want to remove:
+If the generated Codex marketplace directory is deleted while Codex still has
+`nemo-relay-local` registered, Codex reports the marketplace as present but
+unloadable and cannot say whether `nemo-relay-plugin` is registered. Relay
+recognizes this exact dangling state when both the expected marketplace root and
+its generation marker are absent. Recovery is explicit:
 
 ```bash
-nemo-relay uninstall claude-code
-nemo-relay uninstall codex
-nemo-relay uninstall pi
-nemo-relay uninstall all
+nemo-relay install codex --force
+nemo-relay uninstall codex --force
 ```
 
-`nemo-relay uninstall pi` removes only the files its install recorded, and only
-while they still match what was written; anything you edited is kept, and a
-directory Relay did not write is never touched. `uninstall all` includes it.
-`--install-dir` addresses the marketplace root, so it is ignored for pi under
-`all` and rejected when you name pi explicitly.
+Use the first command to rebuild the integration or the second to finish
+removing it. The corresponding command without `--force` does not change the
+dangling state and tells you which forced command to run.
 
-Uninstall removes Codex provider configuration and trust for the exact plugin
-hooks before unregistering the plugin, while Codex can still report its hook
-metadata. It then removes the host registration and marketplace. Claude Code
-provider routing is restored from the Relay backup. Unrelated user hooks and
-configuration remain unchanged.
+Recovery reuses the surviving generation lock and fails before changing
+anything if that lock cannot be proved safe—for example, if it is missing,
+malformed, replaced, symlinked, not a regular file, or held by another process,
+or if the marketplace root or marker reappears while Relay acquires it. In that
+case, follow the manual-remediation instructions in the error instead of
+replacing the lock.
+
+During a forced reinstall, removal of the old provider and hooks, plugin
+registration, and marketplace registration is one cleanup phase. Until all
+three areas have been cleaned, a failure restores only prior state Relay can
+prove existed. Marketplace removal is durable progress because the generated
+tree is already gone, so a later probe failure records that removal and retries
+forward. After all three are clean, cleanup is committed: a later install
+failure does not recreate the dangling Codex registration. Relay keeps the
+validated lock and records the clean progress so another
+`nemo-relay install codex --force` or `nemo-relay integrations refresh` can
+retry safely. A partially failed forced uninstall is likewise retryable with
+`nemo-relay uninstall codex --force`; Relay removes the retained lock and state
+only after cleanup succeeds completely.
 
 ## Compatibility and Migration
 
-These integrations require Codex 0.143.0 or Claude Code 2.1.121 at minimum.
+These integrations require Codex 0.150.0 or Claude Code 2.1.121 at minimum.
 Relay rejects prerelease or malformed version output.
 If you configured an opaque wrapper, its `--version` output must identify the
 selected host.
