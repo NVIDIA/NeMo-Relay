@@ -416,10 +416,7 @@ struct RawExecuteInputs {
     data_json: *const c_char,
     metadata_json: *const c_char,
     model_name: *const c_char,
-    codec_decode: NemoRelayCodecDecodeFn,
-    codec_encode: NemoRelayCodecEncodeFn,
-    codec_user_data: *mut libc::c_void,
-    codec_free_fn: NemoRelayFreeFn,
+    codec: Option<Arc<dyn nemo_relay_types::codec::traits::LlmCodec>>,
     response_codec: *const FfiCodecHandle,
 }
 
@@ -439,6 +436,7 @@ fn parse_optional_model_name(model_name: *const c_char) -> Result<Option<String>
     }
 }
 
+/// Parse LLM call inputs while keeping ownership of the request codec.
 fn parse_execute_inputs(raw: RawExecuteInputs) -> Result<ParsedExecuteInputs, NemoRelayStatus> {
     let name = c_str_to_string(raw.name)?;
     let request = parse_llm_request(raw.native_json)?;
@@ -451,21 +449,7 @@ fn parse_execute_inputs(raw: RawExecuteInputs) -> Result<ParsedExecuteInputs, Ne
     let data = c_str_to_opt_json(raw.data_json).ok_or(NemoRelayStatus::InvalidJson)?;
     let metadata = c_str_to_opt_json(raw.metadata_json).ok_or(NemoRelayStatus::InvalidJson)?;
     let model_name = parse_optional_model_name(raw.model_name)?;
-    let codec = match (raw.codec_decode, raw.codec_encode) {
-        (Some(decode_cb), Some(encode_cb)) => Some(wrap_codec_fn(
-            decode_cb,
-            encode_cb,
-            raw.codec_user_data,
-            raw.codec_free_fn,
-        )),
-        (None, None) => None,
-        _ => {
-            set_last_error(
-                "codec_decode and codec_encode must either both be provided or both be null",
-            );
-            return Err(NemoRelayStatus::InvalidArg);
-        }
-    };
+    let codec = raw.codec;
     let response_codec = if raw.response_codec.is_null() {
         None
     } else {
@@ -528,7 +512,90 @@ pub unsafe extern "C" fn nemo_relay_llm_call_execute(
     response_codec: *const FfiCodecHandle,
     out: *mut *mut c_char,
 ) -> NemoRelayStatus {
+    unsafe {
+        nemo_relay_llm_call_execute_with_options(
+            name,
+            native_json,
+            func,
+            func_user_data,
+            func_free,
+            parent,
+            attributes,
+            data_json,
+            metadata_json,
+            model_name,
+            codec_decode,
+            codec_encode,
+            codec_user_data,
+            codec_free_fn,
+            response_codec,
+            0,
+            out,
+        )
+    }
+}
+
+/// Choose which middleware stages run for one call.
+/// Combine `NEMO_RELAY_SKIP_*` constants with bitwise OR in `skip_stages`.
+/// Zero runs all stages. Unknown bits return `NEMO_RELAY_STATUS_INVALID_ARG`.
+/// Relay still sanitizes event data, uses codecs, passes trace context,
+/// and handles call completion. Nested calls use their own options.
+///
+/// Relay takes ownership of callback data when this function starts.
+/// It releases that data even if input validation fails.
+///
+/// # Safety
+/// Use the same pointer and callback rules as the existing execute function.
+/// `out` must point to writable storage for the output pointer.
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn nemo_relay_llm_call_execute_with_options(
+    name: *const c_char,
+    native_json: *const c_char,
+    func: NemoRelayLlmExecCb,
+    func_user_data: *mut libc::c_void,
+    func_free: NemoRelayFreeFn,
+    parent: *const FfiScopeHandle,
+    attributes: u32,
+    data_json: *const c_char,
+    metadata_json: *const c_char,
+    model_name: *const c_char,
+    codec_decode: NemoRelayCodecDecodeFn,
+    codec_encode: NemoRelayCodecEncodeFn,
+    codec_user_data: *mut libc::c_void,
+    codec_free_fn: NemoRelayFreeFn,
+    response_codec: *const FfiCodecHandle,
+    skip_stages: u32,
+    out: *mut *mut c_char,
+) -> NemoRelayStatus {
     clear_last_error();
+    let exec_fn = wrap_llm_exec_fn(func, func_user_data, func_free);
+    let codec = match (codec_decode, codec_encode) {
+        (Some(decode), Some(encode)) => Some(wrap_codec_fn(
+            decode,
+            encode,
+            codec_user_data,
+            codec_free_fn,
+        )),
+        (None, None) => {
+            if let Some(free) = codec_free_fn {
+                unsafe { free(codec_user_data) };
+            }
+            None
+        }
+        _ => {
+            if let Some(free) = codec_free_fn {
+                unsafe { free(codec_user_data) };
+            }
+            set_last_error(
+                "codec_decode and codec_encode must either both be provided or both be null",
+            );
+            return NemoRelayStatus::InvalidArg;
+        }
+    };
+    let execution_options = match super::execution_options(skip_stages) {
+        Ok(options) => options,
+        Err(status) => return status,
+    };
     if out.is_null() {
         set_last_error("null pointer argument");
         return NemoRelayStatus::NullPointer;
@@ -541,17 +608,13 @@ pub unsafe extern "C" fn nemo_relay_llm_call_execute(
         data_json,
         metadata_json,
         model_name,
-        codec_decode,
-        codec_encode,
-        codec_user_data,
-        codec_free_fn,
+        codec,
         response_codec,
     }) {
         Ok(parsed) => parsed,
         Err(status) => return status,
     };
 
-    let exec_fn = wrap_llm_exec_fn(func, func_user_data, func_free);
     let default_fn: LlmExecutionNextFn = Arc::new(move |request| exec_fn(request));
 
     let result = super::block_on(async {
@@ -560,6 +623,7 @@ pub unsafe extern "C" fn nemo_relay_llm_call_execute(
                 .name(parsed.name)
                 .request(parsed.request)
                 .func(default_fn)
+                .execution_options(execution_options)
                 .parent_opt(parsed.parent_handle)
                 .attributes(parsed.attrs)
                 .data_opt(parsed.data)
@@ -711,10 +775,100 @@ pub unsafe extern "C" fn nemo_relay_llm_stream_call_execute(
     response_codec: *const FfiCodecHandle,
     out: *mut *mut FfiStream,
 ) -> NemoRelayStatus {
+    unsafe {
+        nemo_relay_llm_stream_call_execute_with_options(
+            name,
+            native_json,
+            func,
+            func_user_data,
+            func_free,
+            collector,
+            finalizer,
+            callback_user_data,
+            callback_free,
+            parent,
+            attributes,
+            data_json,
+            metadata_json,
+            model_name,
+            codec_decode,
+            codec_encode,
+            codec_user_data,
+            codec_free_fn,
+            response_codec,
+            0,
+            out,
+        )
+    }
+}
+
+/// Choose which middleware stages run for one call.
+/// Combine `NEMO_RELAY_SKIP_*` constants with bitwise OR in `skip_stages`.
+/// Zero runs all stages. Unknown bits return `NEMO_RELAY_STATUS_INVALID_ARG`.
+/// Relay still sanitizes event data, uses codecs, passes trace context,
+/// and handles call completion. Nested calls use their own options.
+///
+/// Relay takes ownership of callback data when this function starts.
+/// It releases that data even if input validation fails.
+///
+/// # Safety
+/// Use the same pointer and callback rules as the existing execute function.
+/// `out` must point to writable storage for the output pointer.
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn nemo_relay_llm_stream_call_execute_with_options(
+    name: *const c_char,
+    native_json: *const c_char,
+    func: NemoRelayLlmExecCb,
+    func_user_data: *mut libc::c_void,
+    func_free: NemoRelayFreeFn,
+    collector: Option<NemoRelayCollectorCb>,
+    finalizer: Option<NemoRelayFinalizerCb>,
+    callback_user_data: *mut libc::c_void,
+    callback_free: NemoRelayFreeFn,
+    parent: *const FfiScopeHandle,
+    attributes: u32,
+    data_json: *const c_char,
+    metadata_json: *const c_char,
+    model_name: *const c_char,
+    codec_decode: NemoRelayCodecDecodeFn,
+    codec_encode: NemoRelayCodecEncodeFn,
+    codec_user_data: *mut libc::c_void,
+    codec_free_fn: NemoRelayFreeFn,
+    response_codec: *const FfiCodecHandle,
+    skip_stages: u32,
+    out: *mut *mut FfiStream,
+) -> NemoRelayStatus {
     clear_last_error();
-    let exec_fn = wrap_llm_stream_exec_fn(func, func_user_data, func_free);
     let (wrapped_collector, wrapped_finalizer, callbacks) =
         wrap_stream_callbacks(collector, finalizer, callback_user_data, callback_free);
+    let exec_fn = wrap_llm_stream_exec_fn(func, func_user_data, func_free);
+    let codec = match (codec_decode, codec_encode) {
+        (Some(decode), Some(encode)) => Some(wrap_codec_fn(
+            decode,
+            encode,
+            codec_user_data,
+            codec_free_fn,
+        )),
+        (None, None) => {
+            if let Some(free) = codec_free_fn {
+                unsafe { free(codec_user_data) };
+            }
+            None
+        }
+        _ => {
+            if let Some(free) = codec_free_fn {
+                unsafe { free(codec_user_data) };
+            }
+            set_last_error(
+                "codec_decode and codec_encode must either both be provided or both be null",
+            );
+            return NemoRelayStatus::InvalidArg;
+        }
+    };
+    let execution_options = match super::execution_options(skip_stages) {
+        Ok(options) => options,
+        Err(status) => return status,
+    };
     if out.is_null() {
         set_last_error("null pointer argument");
         return NemoRelayStatus::NullPointer;
@@ -727,10 +881,7 @@ pub unsafe extern "C" fn nemo_relay_llm_stream_call_execute(
         data_json,
         metadata_json,
         model_name,
-        codec_decode,
-        codec_encode,
-        codec_user_data,
-        codec_free_fn,
+        codec,
         response_codec,
     }) {
         Ok(parsed) => parsed,
@@ -746,6 +897,7 @@ pub unsafe extern "C" fn nemo_relay_llm_stream_call_execute(
                 .name(parsed.name)
                 .request(parsed.request)
                 .func(default_fn)
+                .execution_options(execution_options)
                 .collector(wrapped_collector)
                 .finalizer(LlmFinalizer::Fallible(wrapped_finalizer))
                 .parent_opt(parsed.parent_handle)

@@ -197,6 +197,84 @@ Use scope-local middleware when a policy applies only to one request, tenant, ex
 
 Use global middleware for process-wide behavior, such as organization-wide redaction. Use scope-local middleware for request-specific policy, such as tenant routing or an A/B test.
 
+## Configure Execution Stages per Call
+
+Each managed tool or LLM call can choose which middleware stages run. You can
+turn conditional-execution guardrails, request intercepts, and execution
+intercepts on or off. All three stages run by default and keep their usual
+order. If you turn off conditional execution, Relay skips those checks for that
+call. Only skip checks when your application no longer needs them for that call.
+
+For example, your framework might apply request intercepts before it calls
+Relay. Turn off that stage to avoid running it twice. Keep the other stages on.
+Use the call from your working tool or LLM example and change only its options.
+
+<Tabs>
+<Tab title="Python" language="python">
+
+Add `execution_options=nemo_relay.ExecutionOptions(request_intercepts=False)`
+to your `nemo_relay.tools.execute` call. Keep the other arguments unchanged.
+Use the same keyword with `nemo_relay.llm.execute`,
+`nemo_relay.llm.stream_execute`, and the typed execute helpers.
+
+You cannot change an `ExecutionOptions` object after you create it. Its fields
+are `conditional_execution`, `request_intercepts`, and `execution_intercepts`.
+Each field defaults to `True`.
+
+</Tab>
+<Tab title="Node.js" language="node">
+
+The native Execute functions accept an options object as their last optional
+argument. Its fields are `conditionalExecution`, `requestIntercepts`, and
+`executionIntercepts`. A field that you omit keeps its stage on.
+
+In the working tool example, add `null` for `toolCallId` after the `metadata`
+argument. Then add `{ requestIntercepts: false }` as the last argument.
+Keep the existing argument positions. Relay copies the options when the call starts.
+
+All three typed execute helpers accept `executionOptions` in their options
+object. For example, add `executionOptions: { requestIntercepts: false }`
+to that object.
+
+</Tab>
+<Tab title="Rust" language="rust">
+
+Import `nemo_relay::ExecutionOptions`. Create a value with `request_intercepts`
+set to `false` and use `..ExecutionOptions::default()` for the other fields.
+Pass this value to `.execution_options(...)` on the execute parameter builder
+before you call `.build()`.
+
+The builders are `ToolCallExecuteParams`, `LlmCallExecuteParams`, and
+`LlmStreamCallExecuteParams`. The option fields are `conditional_execution`,
+`request_intercepts`, and `execution_intercepts`. `Default` turns on all three stages.
+
+</Tab>
+</Tabs>
+
+Run your example again. If your application registers request intercepts,
+confirm those callbacks no longer run for that call. Other stages should keep
+their existing behavior. The application should still receive its result and
+normal start/end events if the
+call is allowed to run. Restore the default options after this check if you
+need request intercepts for later calls.
+
+Options affect only the call that receives them. Nested calls and calls that
+run at the same time use their own options. These controls select whole stages,
+including global and scope-local registrations. They do not change stage order
+or select individual registrations by name. Use
+[Control a Global Registration](#control-a-global-registration) to control a
+specific global registration instead.
+
+Relay still sanitizes event data, uses codecs, passes trace context, and handles
+call completion. With all three stages off, Relay still emits start and end
+events and cleans up streams. For streaming LLM calls, `execution_intercepts`
+controls the streaming execution intercepts. The collector, finalizer, and stream
+close behavior stay active.
+
+Turning off request intercepts does not turn off codec processing or session
+headers. The provider request can therefore differ from the input request.
+These options do not change manual start/end APIs or standalone middleware helpers.
+
 ## Control a Global Registration
 
 Use a conditional middleware guardrail when an operational policy must temporarily

@@ -291,7 +291,57 @@ pub unsafe extern "C" fn nemo_relay_tool_call_execute_v2(
     tool_call_id: *const c_char,
     out: *mut *mut c_char,
 ) -> NemoRelayStatus {
+    unsafe {
+        nemo_relay_tool_call_execute_with_options(
+            name,
+            args_json,
+            func,
+            func_user_data,
+            func_free,
+            parent,
+            attributes,
+            data_json,
+            metadata_json,
+            tool_call_id,
+            0,
+            out,
+        )
+    }
+}
+
+/// Choose which middleware stages run for one call.
+/// Combine `NEMO_RELAY_SKIP_*` constants with bitwise OR in `skip_stages`.
+/// Zero runs all stages. Unknown bits return `NEMO_RELAY_STATUS_INVALID_ARG`.
+/// Relay still sanitizes event data, uses codecs, passes trace context,
+/// and handles call completion. Nested calls use their own options.
+///
+/// Relay takes ownership of callback data when this function starts.
+/// It releases that data even if input validation fails.
+///
+/// # Safety
+/// Use the same pointer and callback rules as the existing execute function.
+/// `out` must point to writable storage for the output pointer.
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn nemo_relay_tool_call_execute_with_options(
+    name: *const c_char,
+    args_json: *const c_char,
+    func: NemoRelayToolExecCb,
+    func_user_data: *mut libc::c_void,
+    func_free: NemoRelayFreeFn,
+    parent: *const FfiScopeHandle,
+    attributes: u32,
+    data_json: *const c_char,
+    metadata_json: *const c_char,
+    tool_call_id: *const c_char,
+    skip_stages: u32,
+    out: *mut *mut c_char,
+) -> NemoRelayStatus {
     clear_last_error();
+    let exec_fn = wrap_tool_exec_fn(func, func_user_data, func_free);
+    let execution_options = match super::execution_options(skip_stages) {
+        Ok(options) => options,
+        Err(status) => return status,
+    };
     if out.is_null() {
         set_last_error("out pointer is null");
         return NemoRelayStatus::NullPointer;
@@ -327,7 +377,6 @@ pub unsafe extern "C" fn nemo_relay_tool_call_execute_v2(
         }
     };
 
-    let exec_fn = wrap_tool_exec_fn(func, func_user_data, func_free);
     let default_fn: ToolExecutionNextFn = Arc::new(move |args| exec_fn(args));
 
     let result = super::block_on(async {
@@ -336,6 +385,7 @@ pub unsafe extern "C" fn nemo_relay_tool_call_execute_v2(
                 .name(name)
                 .args(args)
                 .func(default_fn)
+                .execution_options(execution_options)
                 .parent_opt(parent_handle)
                 .attributes(attrs)
                 .data_opt(data)

@@ -33,6 +33,19 @@ _Json: TypeAlias = _JsonValue
 _MessageContent: TypeAlias = str | Sequence[Mapping[str, _JsonValue]]
 _TToolResult = TypeVar("_TToolResult")
 
+class ExecutionOptions:
+    """Choose which stages run for one call. All stages run by default."""
+
+    def __init__(
+        self, *, conditional_execution: bool = True, request_intercepts: bool = True, execution_intercepts: bool = True
+    ) -> None: ...
+    @property
+    def conditional_execution(self) -> bool: ...
+    @property
+    def request_intercepts(self) -> bool: ...
+    @property
+    def execution_intercepts(self) -> bool: ...
+
 class _RuntimeRegistrationOwner(TypedDict):
     kind: str
     plugin_kind: str | None
@@ -2025,6 +2038,7 @@ def tool_call_execute(
     data: _Json | None = None,
     metadata: _Json | None = None,
     tool_call_id: str | None = None,
+    execution_options: ExecutionOptions | None = None,
 ) -> Awaitable[ToolExecutionResult[_Json]]:
     """Execute a tool through the managed native middleware pipeline.
 
@@ -2038,6 +2052,9 @@ def tool_call_execute(
         data: Optional JSON application payload stored on the managed handle.
         metadata: Optional JSON metadata recorded on emitted events.
         tool_call_id: Optional provider-specific tool-call correlation ID.
+        execution_options: Choose which middleware stages run for this call.
+            Omit this option to run all stages. Relay still sanitizes event data,
+            uses codecs, and handles call completion.
 
     Returns:
         Awaitable that resolves to the canonical tool result.
@@ -2126,7 +2143,15 @@ def llm_call_execute(
     name: str,
     request: LLMRequest,
     func: Callable[[LLMRequest], _Json | Awaitable[_Json]],
-    **kwargs: object,
+    *,
+    handle: ScopeHandle | None = None,
+    attributes: LLMAttributes | None = None,
+    data: _Json | None = None,
+    metadata: _Json | None = None,
+    model_name: str | None = None,
+    codec: object | None = None,
+    response_codec: object | None = None,
+    execution_options: ExecutionOptions | None = None,
 ) -> Awaitable[_Json]:
     """Execute a non-streaming LLM call through native middleware.
 
@@ -2134,8 +2159,16 @@ def llm_call_execute(
         name: Provider or logical call name.
         request: Initial LLM request.
         func: Awaitable provider implementation called with the final request.
-        **kwargs: Optional parent handle, attributes, data, metadata, model
-            name, request codec, and response codec.
+        handle: Optional parent scope handle.
+        attributes: Optional LLM attribute bitflags.
+        data: Optional JSON application payload.
+        metadata: Optional JSON metadata recorded on emitted events.
+        model_name: Optional normalized model name.
+        codec: Optional request codec.
+        response_codec: Optional response codec for observability.
+        execution_options: Choose which middleware stages run for this call.
+            Omit this option to run all stages. Relay still sanitizes event data,
+            uses codecs, and handles call completion.
 
     Returns:
         Awaitable that resolves to a JSON-compatible LLM response.
@@ -2153,7 +2186,15 @@ def llm_stream_call_execute(
     func: Callable[[LLMRequest], AsyncIterator[_Json]],
     collector: Callable[[_Json], None],
     finalizer: Callable[[], _Json],
-    **kwargs: object,
+    *,
+    handle: ScopeHandle | None = None,
+    attributes: LLMAttributes | None = None,
+    data: _Json | None = None,
+    metadata: _Json | None = None,
+    model_name: str | None = None,
+    codec: object | None = None,
+    response_codec: object | None = None,
+    execution_options: ExecutionOptions | None = None,
 ) -> Awaitable[LlmStream]:
     """Execute a streaming LLM call through native middleware.
 
@@ -2163,8 +2204,16 @@ def llm_stream_call_execute(
         func: Provider implementation returning an async iterator of chunks.
         collector: Callback invoked for each post-intercept chunk.
         finalizer: Callback that returns the aggregate final response.
-        **kwargs: Optional parent handle, attributes, data, metadata, model
-            name, request codec, and response codec.
+        handle: Optional parent scope handle.
+        attributes: Optional LLM attribute bitflags.
+        data: Optional JSON application payload.
+        metadata: Optional JSON metadata recorded on emitted events.
+        model_name: Optional normalized model name.
+        codec: Optional request codec.
+        response_codec: Optional response codec for observability.
+        execution_options: Choose which middleware stages run for this call.
+            Omit this option to run all stages. Relay still sanitizes event data,
+            uses codecs, and handles call completion.
 
     Returns:
         ``LlmStream`` async iterator of JSON-compatible chunks.

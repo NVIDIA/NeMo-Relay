@@ -105,6 +105,7 @@ from nemo_relay._native import (
     AtofExporterConfig,
     AtofExporterMode,
     AtofStreamSinkConfig,
+    ExecutionOptions,
     ExporterRuntimeDiagnostic,
     ExporterRuntimeDiagnostics,
     LLMAttributes,
@@ -783,6 +784,7 @@ Event = typing.Union[
 ]
 
 __all__ = [
+    "ExecutionOptions",
     # Submodules
     "scope",
     "tools",
