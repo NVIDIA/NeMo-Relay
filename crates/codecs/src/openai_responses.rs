@@ -203,22 +203,22 @@ fn json_f64(v: f64) -> Json {
         .unwrap_or(Json::Null)
 }
 
-fn collect_output_parts(items: Option<&[Json]>) -> (Vec<String>, Vec<ResponseToolCall>) {
-    let mut text_parts = Vec::new();
+fn collect_output_parts(items: Option<&[Json]>) -> (Vec<ContentPart>, Vec<ResponseToolCall>) {
+    let mut content_parts = Vec::new();
     let mut tool_calls = Vec::new();
 
     if let Some(items) = items {
         for item in items {
-            collect_output_item(item, &mut text_parts, &mut tool_calls);
+            collect_output_item(item, &mut content_parts, &mut tool_calls);
         }
     }
 
-    (text_parts, tool_calls)
+    (content_parts, tool_calls)
 }
 
 fn collect_output_item(
     item: &Json,
-    text_parts: &mut Vec<String>,
+    content_parts: &mut Vec<ContentPart>,
     tool_calls: &mut Vec<ResponseToolCall>,
 ) {
     match item
@@ -226,10 +226,10 @@ fn collect_output_item(
         .and_then(|value| value.as_str())
         .unwrap_or("")
     {
-        "message" => collect_message_text_parts(item, text_parts),
+        "message" => collect_message_content_parts(item, content_parts),
         "output_text" => {
-            if let Some(text) = output_text_block(item) {
-                text_parts.push(text);
+            if let Some(part) = output_content_part(item) {
+                content_parts.push(part);
             }
         }
         "function_call" => tool_calls.push(parse_function_call(item)),
@@ -246,23 +246,30 @@ fn collect_output_item(
     }
 }
 
-fn collect_message_text_parts(item: &Json, text_parts: &mut Vec<String>) {
+fn collect_message_content_parts(item: &Json, content_parts: &mut Vec<ContentPart>) {
     let Some(content) = item.get("content").and_then(|value| value.as_array()) else {
         return;
     };
 
     for block in content {
-        if let Some(text) = output_text_block(block) {
-            text_parts.push(text);
+        if let Some(part) = output_content_part(block) {
+            content_parts.push(part);
         }
     }
 }
 
-fn output_text_block(block: &Json) -> Option<String> {
-    (block.get("type").and_then(|value| value.as_str()) == Some("output_text"))
-        .then(|| block.get("text").and_then(|value| value.as_str()))
-        .flatten()
-        .map(str::to_string)
+fn output_content_part(block: &Json) -> Option<ContentPart> {
+    match block.get("type")?.as_str()? {
+        "output_text" => Some(ContentPart::Text {
+            text: block.get("text")?.as_str()?.to_owned(),
+            extra: Default::default(),
+        }),
+        "refusal" => Some(ContentPart::Refusal {
+            refusal: block.get("refusal")?.as_str()?.to_owned(),
+            extra: Default::default(),
+        }),
+        _ => None,
+    }
 }
 
 fn parse_function_call(item: &Json) -> ResponseToolCall {
@@ -341,12 +348,24 @@ pub(crate) fn custom_tool_message(message: &Message) -> Option<Message> {
     }
 }
 
-fn message_from_text_parts(text_parts: Vec<String>) -> Option<MessageContent> {
-    match text_parts.as_slice() {
-        [] => None,
-        [text] => Some(MessageContent::Text(text.clone())),
-        _ => Some(MessageContent::Text(text_parts.join("\n"))),
+fn message_from_content_parts(parts: Vec<ContentPart>) -> Option<MessageContent> {
+    if parts
+        .iter()
+        .any(|part| !matches!(part, ContentPart::Text { .. }))
+    {
+        return Some(MessageContent::Parts(parts));
     }
+    // Keep the existing string representation for text-only responses.
+    let mut texts = parts.into_iter().filter_map(|part| match part {
+        ContentPart::Text { text, .. } => Some(text),
+        _ => None,
+    });
+    let mut text = texts.next()?;
+    for part in texts {
+        text.push('\n');
+        text.push_str(&part);
+    }
+    Some(MessageContent::Text(text))
 }
 
 fn top_level_output_text(response: &Json) -> Option<MessageContent> {
@@ -1311,9 +1330,9 @@ impl LlmResponseCodec for OpenAIResponsesCodec {
         let raw = decode()
             .map_err(|e| FlowError::Internal(format!("OpenAI Responses response decode: {e}")))?;
 
-        let (text_parts, tool_calls) = collect_output_parts(raw.output.as_deref());
+        let (content_parts, tool_calls) = collect_output_parts(raw.output.as_deref());
         let message =
-            message_from_text_parts(text_parts).or_else(|| top_level_output_text(response));
+            message_from_content_parts(content_parts).or_else(|| top_level_output_text(response));
         let tool_calls = optional_vec(tool_calls);
 
         // Map finish reason from status + incomplete_details.

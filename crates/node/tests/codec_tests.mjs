@@ -260,3 +260,30 @@ it('built-in codec accepts multiple result edits and insertion', () => {
     { role: 'tool', tool_call_id: 'c', content: 'inserted' },
   ]);
 });
+
+for (const [name, Codec, payload] of [
+  ['Chat', lib.OpenAIChatCodec, { choices: [{ message: { content: 'prefix', refusal: 'cannot help' } }] }],
+  [
+    'Responses',
+    lib.OpenAIResponsesCodec,
+    {
+      output: [
+        {
+          type: 'message',
+          content: [
+            { type: 'output_text', text: 'prefix' },
+            { type: 'refusal', refusal: 'cannot help' },
+          ],
+        },
+      ],
+    },
+  ],
+]) {
+  it(`${name} response codec preserves structured refusals`, () => {
+    const response = new Codec().decodeResponse(payload);
+    assert.deepEqual(response.message, [
+      { type: 'text', text: 'prefix' },
+      { type: 'refusal', refusal: 'cannot help' },
+    ]);
+  });
+}

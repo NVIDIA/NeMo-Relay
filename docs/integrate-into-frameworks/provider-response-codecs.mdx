@@ -46,6 +46,20 @@ Response codecs normalize provider output into fields that subscribers can inspe
 
 Use these annotations for observability, export, and debugging. Keep business logic that changes the caller-visible response in the framework or provider adapter, not in the response codec.
 
+OpenAI Chat's structured `message.refusal` and OpenAI Responses' `refusal`
+content blocks are normalized as `ContentPart::Refusal` entries in `message`.
+When ordinary text and refusals occur together, the normalized message is a
+parts array preserving their kinds. Chat text precedes its separate refusal
+field; Responses preserves content-block order. Text-only responses retain
+their existing string representation.
+
+`response_text()` includes both text and refusal parts, joined with newlines.
+Null or missing refusals add no part; explicit empty refusal strings remain
+present. Chat's streaming collector accumulates `delta.refusal`; Responses
+uses its completed output items or terminal snapshot without duplicating
+refusal deltas. Completion reasons, usage, and tool calls remain separate.
+
+
 ## Cost Estimation
 
 Response codecs should keep reporting provider usage fields without rewriting

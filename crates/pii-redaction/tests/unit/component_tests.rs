@@ -7946,3 +7946,56 @@ async fn builtin_backend_sanitizes_raw_multi_candidate_gemini_response() {
     deregister_subscriber("pii-redaction-gemini-raw-multi-candidate-response").unwrap();
     test_close_plugin_host().unwrap();
 }
+
+#[tokio::test]
+async fn normalized_refusal_paths_redact_matching_openai_wire_fields() {
+    for mixed in [false, true] {
+        let refusal_part = usize::from(mixed);
+        let cases: [(Arc<dyn LlmResponseCodec>, Json); 2] = [
+            (
+                Arc::new(OpenAIChatCodec),
+                json!({"choices":[{"message":{
+                "content":if mixed {json!("safe\ntext")} else {Json::Null}, "refusal":"sk-secret"
+            },"finish_reason":"stop"}]}),
+            ),
+            (
+                Arc::new(OpenAIResponsesCodec),
+                json!({"status":"completed","output":[{
+                    "type":"message","content":if mixed {json!([
+                        {"type":"output_text","text":"safe\ntext"},
+                        {"type":"refusal","refusal":"sk-secret"}
+                    ])} else {json!([{"type":"refusal","refusal":"sk-secret"}])}
+                }]}),
+            ),
+        ];
+        for (codec, raw) in cases {
+            let backend = crate::builtin::CompiledBuiltinBackend::new(
+                BuiltinBackendConfig {
+                    action: "regex_replace".into(),
+                    pattern: Some("sk-secret".into()),
+                    replacement: Some("[REDACTED]".into()),
+                    target_paths: vec![format!("/message/{refusal_part}/refusal")],
+                    ..Default::default()
+                },
+                None,
+            )
+            .unwrap();
+            let sanitize = crate::builtin::llm_sanitize_response_callback(backend);
+            let sanitized = sanitize(
+                raw,
+                LlmSanitizeResponseContext::for_response_codec(Some(codec.clone())),
+            )
+            .await
+            .unwrap()
+            .expect("normalized refusal must project back to the wire");
+            assert!(!sanitized.to_string().contains("sk-secret"));
+            let response = codec.decode_response(&sanitized).unwrap();
+            let expected = if mixed {
+                "safe\ntext\n[REDACTED]"
+            } else {
+                "[REDACTED]"
+            };
+            assert_eq!(response.response_text().as_deref(), Some(expected));
+        }
+    }
+}

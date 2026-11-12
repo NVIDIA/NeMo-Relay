@@ -70,7 +70,31 @@ struct RawChoice {
 #[derive(Deserialize)]
 struct RawMessage {
     content: Option<String>,
+    refusal: Option<String>,
     tool_calls: Option<Vec<RawToolCall>>,
+}
+
+impl RawMessage {
+    fn take_content(&mut self) -> Option<MessageContent> {
+        match (self.content.take(), self.refusal.take()) {
+            (None, None) => None,
+            (Some(text), None) => Some(MessageContent::Text(text)),
+            (text, Some(refusal)) => {
+                let mut parts = Vec::with_capacity(1 + usize::from(text.is_some()));
+                if let Some(text) = text {
+                    parts.push(ContentPart::Text {
+                        text,
+                        extra: Default::default(),
+                    });
+                }
+                parts.push(ContentPart::Refusal {
+                    refusal,
+                    extra: Default::default(),
+                });
+                Some(MessageContent::Parts(parts))
+            }
+        }
+    }
 }
 
 #[derive(Deserialize)]
@@ -1132,8 +1156,7 @@ impl LlmResponseCodec for OpenAIChatCodec {
         let message = choice
             .as_mut()
             .and_then(|c| c.message.as_mut())
-            .and_then(|m| m.content.take())
-            .map(super::request::MessageContent::Text);
+            .and_then(RawMessage::take_content);
 
         // Map tool calls, skipping entries that lack a usable function body.
         // Some providers (proxies, vLLM, NIM) may return partial tool_calls
@@ -1431,7 +1454,7 @@ fn json_f64(v: f64) -> Json {
 ///
 /// Chat Completions streams untyped SSE chunks of `{choices: [{index, delta: {...},
 /// finish_reason: ...}]}`. Each delta may carry a `role` (typically only on the first chunk),
-/// incremental `content` text, or partial `tool_calls` whose `function.arguments` stream as a
+/// incremental `content` or `refusal` text, or partial `tool_calls` whose `function.arguments` stream as a
 /// JSON-encoded string fragment-by-fragment. Top-level fields (`id`, `model`, `created`) are
 /// repeated on every chunk; we capture them once. Final-chunk `usage` is preserved when emitted
 /// (only sent when `stream_options.include_usage` is set on the request).
@@ -1515,6 +1538,8 @@ struct ChoiceState {
     role: Option<String>,
     content: String,
     has_content: bool,
+    /// Presence distinguishes an explicit empty refusal from no refusal.
+    refusal: Option<String>,
     /// Tool calls keyed by their `index` within the choice. Each tool call's `arguments` is
     /// streamed as a JSON-encoded string accumulated fragment-by-fragment.
     tool_calls: std::collections::BTreeMap<u64, ToolCallState>,
@@ -1633,6 +1658,11 @@ impl ChoiceState {
             self.content.push_str(content);
             self.has_content = true;
         }
+        if let Some(refusal) = delta.get("refusal").and_then(Json::as_str) {
+            self.refusal
+                .get_or_insert_with(String::new)
+                .push_str(refusal);
+        }
         self.observe_tool_calls(delta);
     }
 
@@ -1671,6 +1701,9 @@ impl ChoiceState {
             message.insert("content".to_string(), Json::String(self.content));
         } else {
             message.insert("content".to_string(), Json::Null);
+        }
+        if let Some(refusal) = self.refusal {
+            message.insert("refusal".to_string(), Json::String(refusal));
         }
         if !self.tool_calls.is_empty() {
             let tool_calls: Vec<Json> = self
