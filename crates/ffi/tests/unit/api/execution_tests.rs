@@ -901,3 +901,174 @@ fn test_ffi_registration_and_exporter_error_paths() {
         nemo_relay_scope_stack_free(stack);
     }
 }
+
+/// Check tool skip flags and release the callback when validation fails.
+#[test]
+fn execution_options_validate_bits_and_release_callback_on_failure() {
+    let _lock = TEST_MUTEX.lock().unwrap_or_else(|e| e.into_inner());
+    reset_globals();
+    unsafe {
+        let stack = fresh_scope_stack();
+        let name = cstring("ffi-options");
+        let args = cstring(r#"{"value":2}"#);
+        let mut out = ptr::null_mut();
+        assert_status!(
+            nemo_relay_tool_call_execute_with_options(
+                name.as_ptr(),
+                args.as_ptr(),
+                tool_exec_cb,
+                ptr::null_mut(),
+                None,
+                ptr::null(),
+                0,
+                ptr::null(),
+                ptr::null(),
+                ptr::null(),
+                NEMO_RELAY_SKIP_CONDITIONAL_EXECUTION
+                    | NEMO_RELAY_SKIP_REQUEST_INTERCEPTS
+                    | NEMO_RELAY_SKIP_EXECUTION_INTERCEPTS,
+                &mut out,
+            ),
+            NemoRelayStatus::Ok
+        );
+        assert_eq!(returned_json(out)["annotation"]["source"], json!("ffi"));
+        let frees_before = *lock_unpoisoned(plugin_frees());
+        assert_status!(
+            nemo_relay_tool_call_execute_with_options(
+                name.as_ptr(),
+                args.as_ptr(),
+                tool_exec_cb,
+                ptr::null_mut(),
+                Some(plugin_free),
+                ptr::null(),
+                0,
+                ptr::null(),
+                ptr::null(),
+                ptr::null(),
+                8,
+                &mut out,
+            ),
+            NemoRelayStatus::InvalidArg
+        );
+        assert_eq!(*lock_unpoisoned(plugin_frees()), frees_before + 1);
+        assert!(
+            CStr::from_ptr(nemo_relay_last_error())
+                .to_str()
+                .unwrap()
+                .contains("skip-stage")
+        );
+        nemo_relay_scope_stack_free(stack);
+    }
+}
+
+/// Count each resource's releases without deallocating it, so duplicate releases are safe to detect.
+unsafe extern "C" fn execution_options_count_free(user_data: *mut libc::c_void) {
+    let count = unsafe { &*user_data.cast::<std::sync::atomic::AtomicUsize>() };
+    count.fetch_add(1, std::sync::atomic::Ordering::SeqCst);
+}
+
+/// Check that invalid LLM options and mismatched codecs release each callback resource once.
+#[test]
+fn llm_execution_options_release_resources_on_validation_failure() {
+    use std::sync::atomic::{AtomicUsize, Ordering};
+
+    let _lock = TEST_MUTEX.lock().unwrap_or_else(|e| e.into_inner());
+    reset_globals();
+    unsafe {
+        let stack = fresh_scope_stack();
+        let name = cstring("ffi-llm-options");
+        let request = cstring(r#"{"headers":{},"content":{"model":"test"}}"#);
+        for streaming in [false, true] {
+            for (decode, encode, skip_stages, message) in [
+                (true, true, 8, "skip-stage"),
+                (true, false, 0, "both be provided"),
+                (false, true, 0, "both be provided"),
+            ] {
+                let func_frees = AtomicUsize::new(0);
+                let codec_frees = AtomicUsize::new(0);
+                let stream_frees = AtomicUsize::new(0);
+                let func_data = (&func_frees as *const AtomicUsize).cast_mut().cast();
+                let codec_data = (&codec_frees as *const AtomicUsize).cast_mut().cast();
+                let stream_data = (&stream_frees as *const AtomicUsize).cast_mut().cast();
+                let decode: callable::NemoRelayCodecDecodeFn =
+                    if decode { Some(codec_decode_cb) } else { None };
+                let encode: callable::NemoRelayCodecEncodeFn =
+                    if encode { Some(codec_encode_cb) } else { None };
+                let status = if streaming {
+                    let mut out = ptr::null_mut();
+                    let status = nemo_relay_llm_stream_call_execute_with_options(
+                        name.as_ptr(),
+                        request.as_ptr(),
+                        llm_exec_cb,
+                        func_data,
+                        Some(execution_options_count_free),
+                        Some(collector_cb),
+                        Some(finalizer_cb),
+                        stream_data,
+                        Some(execution_options_count_free),
+                        ptr::null(),
+                        0,
+                        ptr::null(),
+                        ptr::null(),
+                        ptr::null(),
+                        decode,
+                        encode,
+                        codec_data,
+                        Some(execution_options_count_free),
+                        ptr::null(),
+                        skip_stages,
+                        &mut out,
+                    );
+                    assert!(out.is_null());
+                    status
+                } else {
+                    let mut out = ptr::null_mut();
+                    let status = nemo_relay_llm_call_execute_with_options(
+                        name.as_ptr(),
+                        request.as_ptr(),
+                        llm_exec_cb,
+                        func_data,
+                        Some(execution_options_count_free),
+                        ptr::null(),
+                        0,
+                        ptr::null(),
+                        ptr::null(),
+                        ptr::null(),
+                        decode,
+                        encode,
+                        codec_data,
+                        Some(execution_options_count_free),
+                        ptr::null(),
+                        skip_stages,
+                        &mut out,
+                    );
+                    assert!(out.is_null());
+                    status
+                };
+                assert_status!(status, NemoRelayStatus::InvalidArg);
+                assert!(
+                    CStr::from_ptr(nemo_relay_last_error())
+                        .to_str()
+                        .unwrap()
+                        .contains(message)
+                );
+                assert_eq!(
+                    func_frees.load(Ordering::SeqCst),
+                    1,
+                    "execution callback, streaming={streaming}"
+                );
+                assert_eq!(
+                    codec_frees.load(Ordering::SeqCst),
+                    1,
+                    "codec callback, streaming={streaming}"
+                );
+                assert_eq!(
+                    stream_frees.load(Ordering::SeqCst),
+                    usize::from(streaming),
+                    "stream callbacks"
+                );
+            }
+        }
+        nemo_relay_scope_stack_free(stack);
+    }
+}

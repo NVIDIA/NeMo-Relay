@@ -36,6 +36,7 @@ from typing import TYPE_CHECKING
 from nemo_relay import Json
 from nemo_relay._context import ensure_scope_stack
 from nemo_relay._native import (
+    ExecutionOptions,
     LLMAttributes,
     LLMHandle,
     LLMRequest,
@@ -214,10 +215,11 @@ def execute(
     model_name: str | None = None,
     codec: LlmCodec | None = None,
     response_codec: LlmResponseCodec | None = None,
+    execution_options: ExecutionOptions | None = None,
 ) -> Awaitable[Json]:
     """Run an LLM call through the managed middleware pipeline.
 
-    Pipeline order:
+    Default pipeline order:
 
     1. LLM conditional-execution guardrails
     2. LLM request intercepts
@@ -243,6 +245,10 @@ def execute(
             ``AnnotatedLLMRequest`` values to request intercepts.
         response_codec: Optional response codec used to attach a normalized
             response to the emitted ``LLMEnd`` event for observability.
+        execution_options: Choose which middleware stages run for this call.
+            Omit this option to run all stages. Turning off conditional execution
+            skips its checks. Relay still sanitizes event data, uses codecs,
+            and handles call completion.
 
     Returns:
         Json: The raw JSON-compatible value returned by ``func`` or by an
@@ -295,6 +301,7 @@ def execute(
         model_name=model_name,
         codec=codec,
         response_codec=response_codec,
+        execution_options=execution_options,
     )
 
 
@@ -312,6 +319,7 @@ def stream_execute(
     model_name: str | None = None,
     codec: LlmCodec | None = None,
     response_codec: LlmResponseCodec | None = None,
+    execution_options: ExecutionOptions | None = None,
 ) -> Awaitable[LlmStream]:
     """Run a streaming LLM call through the managed middleware pipeline.
 
@@ -335,6 +343,10 @@ def stream_execute(
             ``AnnotatedLLMRequest`` values to request intercepts.
         response_codec: Optional response codec used to attach a normalized
             final response to the emitted ``LLMEnd`` event for observability.
+        execution_options: Choose which middleware stages run for this call.
+            Omit this option to run all stages. Turning off conditional execution
+            skips its checks. Relay still sanitizes event data, uses codecs,
+            and handles call completion.
 
     Returns:
         LlmStream: Async iterator that yields the streamed JSON chunks.
@@ -409,6 +421,7 @@ def stream_execute(
         model_name=model_name,
         codec=codec,
         response_codec=response_codec,
+        execution_options=execution_options,
     )
 
 

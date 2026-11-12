@@ -52,8 +52,9 @@ process exit. Replacing the source manifest, library, or signature after validat
 does not change the library loaded by that activation. Embedded activation retains
 package-local libraries found through binary imports. It does not retain unimported
 adjacent files. The CLI retains an activation snapshot of the relevant directory,
-which can include those files. Native library digest checks use bounded regular-file reads and reject
-symbolic links and special files.
+which can include those files. Native library digest checks follow symbolic links
+and use bounded regular-file reads. Digests and signatures validate the target bytes;
+special files are rejected.
 
 <CodeBlocks>
 

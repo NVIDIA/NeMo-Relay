@@ -3,6 +3,7 @@
 
 /** Typed wrappers for the execute APIs, converting values with a `Codec<T>`. */
 
+import type { ExecutionOptions } from '../binding.js';
 import type {
   Json,
   JsonCompatible,
@@ -65,6 +66,7 @@ export interface TypedToolExecuteOptions<
   data?: TData;
   metadata?: TMetadata;
   toolCallId?: string | null;
+  executionOptions?: ExecutionOptions | null;
 }
 
 /** Options for `typedLlmExecute`. */
@@ -82,6 +84,7 @@ export interface TypedLlmExecuteOptions<
   modelName?: string | null;
   codec?: LlmCodec<TAnnotated, TEncoded> | null;
   responseCodec?: LlmResponseCodec<TDecodedResponse> | null;
+  executionOptions?: ExecutionOptions | null;
 }
 
 /** Options for `typedLlmStreamExecute`. */
@@ -99,6 +102,7 @@ export interface TypedLlmStreamExecuteOptions<
   modelName?: string | null;
   codec?: LlmCodec<TAnnotated, TEncoded> | null;
   responseCodec?: LlmResponseCodec<TDecodedResponse> | null;
+  executionOptions?: ExecutionOptions | null;
 }
 
 interface EncodedToolExecutionResult<TResultJson> {
@@ -161,6 +165,7 @@ export async function typedToolExecute<
     options.data,
     options.metadata,
     options.toolCallId,
+    options.executionOptions,
   );
   return {
     result: resultCodec.fromJson(jsonResult.result),
@@ -212,6 +217,7 @@ export async function typedLlmExecute<
     codec == null ? undefined : (jsonRequest: LlmRequestShape) => codec.decode(jsonRequest),
     codec == null ? undefined : ({ annotated, original }) => codec.encode(annotated, original),
     eventCodec == null ? undefined : (response: Json) => eventCodec.decodeResponse(response),
+    options.executionOptions,
   );
   return responseCodec.fromJson(jsonResult);
 }
@@ -287,5 +293,6 @@ export function typedLlmStreamExecute<
     codec == null ? undefined : (jsonRequest: LlmRequestShape) => codec.decode(jsonRequest),
     codec == null ? undefined : ({ annotated, original }) => codec.encode(annotated, original),
     eventCodec == null ? undefined : (response: Json) => eventCodec.decodeResponse(response),
+    options.executionOptions,
   );
 }

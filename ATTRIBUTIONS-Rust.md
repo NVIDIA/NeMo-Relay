@@ -43738,7 +43738,7 @@ See the License for the specific language governing permissions and
 limitations under the License.
 ```
 
-## rustix - 1.1.4
+## rustix - 1.1.6
 
 **Repository URL**: https://github.com/bytecodealliance/rustix
 **License Type(s)**: Apache-2.0

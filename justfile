@@ -1160,7 +1160,28 @@ docs-linkcheck: docs-examples
 
 # compile and run Rust examples shared with the documentation
 docs-examples:
-    cargo test --locked -p nemo-relay-types -p nemo-relay --test documentation_examples
+    NEMO_RELAY_TEST_SKIP_IMPLICIT_CONFIG=1 cargo test --locked -p nemo-relay-types -p nemo-relay --features nemo-relay/__skip-implicit-config --test documentation_examples
+
+# Build current bindings and exercise the source displayed in Instrument Applications.
+test-instrumentation-examples:
+    #!/usr/bin/env bash
+    {{ bash_helpers }}
+    cd "$NEMO_RELAY_REPO_ROOT"
+    uv sync --frozen --inexact --no-default-groups --group dev --group test --no-install-project
+    python_executable="$(project_python_executable)"
+    activate_project_venv
+    test_config_root="$(mktemp -d)"
+    trap 'rm -rf "$test_config_root"' EXIT
+    export XDG_CONFIG_HOME="$test_config_root/xdg"
+    export NEMO_RELAY_TEST_SYSTEM_CONFIG_DIR="$test_config_root/system"
+    export NEMO_RELAY_TEST_SKIP_IMPLICIT_CONFIG=1
+    mkdir -p "$XDG_CONFIG_HOME" "$NEMO_RELAY_TEST_SYSTEM_CONFIG_DIR"
+    use_project_python_source "$python_executable"
+    "$python_executable" -m maturin develop --locked --skip-install --features __skip-implicit-config
+    npm run build-debug --workspace=nemo-relay-node -- --features __skip-implicit-config
+    "$python_executable" -m pytest python/tests/test_instrumentation_examples.py -q
+    node --test --test-force-exit --test-timeout=30000 crates/node/tests/documentation_examples_tests.mjs
+    cargo test --locked -p nemo-relay --features __skip-implicit-config --test documentation_examples instrument_applications
 
 # regenerate the ignored Fern API reference pages
 docs-api-reference:
@@ -1501,6 +1522,39 @@ test-rust:
     export_uv_python_runtime
     cd "$NEMO_RELAY_REPO_ROOT"
     nextest_args=(--locked --workspace --exclude nemo-relay-python --exclude nemo-relay-node --features nemo-relay/__skip-implicit-config,nemo-relay-cli/__test-cli-port-override,nemo-relay-cli/__skip-implicit-config --profile ci)
+    run_windows_symlink_cleanup_test() {
+        if [[ "$is_windows" != true ]]; then
+            return
+        fi
+        local probe_status=0
+        local python_executable
+        python_executable="$(uv_python_executable)"
+        "$python_executable" - <<'PY' || probe_status=$?
+    import os
+    import pathlib
+    import tempfile
+
+    try:
+        with tempfile.TemporaryDirectory() as directory:
+            root = pathlib.Path(directory)
+            (root / "directory").mkdir()
+            (root / "file").write_bytes(b"probe")
+            for name, is_directory in (("directory", True), ("file", False)):
+                os.symlink(root / name, root / f"{name}-link", target_is_directory=is_directory)
+    except OSError as error:
+        if getattr(error, "winerror", None) == 1314:  # ERROR_PRIVILEGE_NOT_HELD
+            print(f"Windows symlink cleanup test remains ignored: {error}")
+            raise SystemExit(77)
+        raise
+    PY
+        case "$probe_status" in
+            0)
+                "${nextest_command[@]}" run --locked -p nemo-relay-cli --lib --features __test-cli-port-override,__skip-implicit-config --run-ignored only --profile default -E 'test(windows_managed_environment_cleanup_unlinks_directory_and_file_symlinks)'
+                ;;
+            77) ;; # The main run already reports this test as ignored.
+            *) return "$probe_status" ;;
+        esac
+    }
     if is_true "{{ ci }}"; then
         coverage_out="$(prepare_artifact rust-workspace.lcov)"
         junit_out="$(prepare_artifact rust_junit_report.xml)"
@@ -1509,6 +1563,7 @@ test-rust:
         fi
         prepare_test_plugin_fixtures
         "${nextest_command[@]}" run "${nextest_args[@]}" --no-fail-fast
+        run_windows_symlink_cleanup_test
         cp "$NEMO_RELAY_REPO_ROOT/target/nextest/ci/rust_junit_report.xml" "$junit_out"
         if rust_source_coverage_supported; then
             export_llvm_cov_lcov "$coverage_out" -- "${nextest_command[@]}" list "${nextest_args[@]}"
@@ -1516,6 +1571,7 @@ test-rust:
     else
         prepare_test_plugin_fixtures
         "${nextest_command[@]}" run "${nextest_args[@]}" --no-fail-fast
+        run_windows_symlink_cleanup_test
     fi
 
 # --set [output_dir=<path>] [ci=true|false]

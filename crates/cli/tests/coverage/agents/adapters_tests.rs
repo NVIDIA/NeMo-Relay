@@ -1468,3 +1468,58 @@ fn claude_stop_failure_is_a_failed_nonterminal_turn_boundary() {
         assert_eq!(event.metadata["error.type"], "model_not_found");
     }
 }
+
+/// Codex sends `Interrupt` instead of `Stop` for a turn the user interrupts; it closes the turn
+/// as an error, like Claude's `StopFailure`. Payload shape is from Codex 0.154.
+#[test]
+fn codex_interrupt_is_a_failed_nonterminal_turn_boundary() {
+    let outcome = codex::adapt(
+        json!({
+            "session_id": "codex-session",
+            "turn_id": "codex-turn",
+            "transcript_path": "/tmp/transcript.jsonl",
+            "cwd": "/tmp",
+            "hook_event_name": "Interrupt",
+            "model": "gpt-5"
+        }),
+        &HeaderMap::new(),
+    );
+    let turn_ends: Vec<_> = outcome
+        .events
+        .iter()
+        .filter_map(|event| match event {
+            NormalizedEvent::TurnEnded(event) => Some(event),
+            _ => None,
+        })
+        .collect();
+    assert_eq!(turn_ends.len(), 1, "{:?}", outcome.events);
+    assert!(outcome.events.iter().all(|event| !event.is_terminal()));
+    let event = turn_ends[0];
+    assert_eq!(event.session_id, "codex-session");
+    assert_eq!(event.payload["status"], "error");
+    assert_eq!(event.metadata["otel.status_code"], "ERROR");
+    assert_eq!(event.metadata["error.type"], "interrupted");
+}
+
+/// Codex 0.154 sends `SessionEnd` when a session is archived or shut down.
+#[test]
+fn codex_session_end_ends_the_agent() {
+    let outcome = codex::adapt(
+        json!({
+            "session_id": "codex-session",
+            "transcript_path": "/tmp/transcript.jsonl",
+            "cwd": "/tmp",
+            "hook_event_name": "SessionEnd",
+            "reason": "other"
+        }),
+        &HeaderMap::new(),
+    );
+    assert!(
+        outcome.events.iter().any(|event| matches!(
+            event,
+            NormalizedEvent::AgentEnded(event) if event.session_id == "codex-session"
+        )),
+        "{:?}",
+        outcome.events
+    );
+}

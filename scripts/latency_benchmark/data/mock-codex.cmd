@@ -2,7 +2,7 @@
 @REM SPDX-License-Identifier: Apache-2.0
 @echo off
 if "%1"=="--version" (
-  echo codex-cli 0.143.0
+  echo codex-cli 0.150.0
   exit /b 0
 )
 > "%BENCHMARK_GATEWAY_FILE%.tmp" echo %NEMO_RELAY_GATEWAY_URL%
