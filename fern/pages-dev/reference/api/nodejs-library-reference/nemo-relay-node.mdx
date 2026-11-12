@@ -3043,6 +3043,16 @@ The Promise rejects if the blocking task fails or the core subscriber flush retu
 export declare function flushSubscribers(): Promise<void>
 ```
 
+### `forkScopeStack`
+
+Copy the active Relay scope stack without changing the caller's binding.
+
+Preserves scope UUIDs/types, scope-local registrations, and managed event, trace, and publication context. Use one fork per concurrent operation with `withScopeStack`, and finish the operation before its inherited scopes close.
+
+```ts
+export declare function forkScopeStack(): ScopeStack
+```
+
 ### `getHandle`
 
 Get the handle for the current top-of-stack execution scope.
@@ -3733,7 +3743,7 @@ export declare function setLatencySensitivity(value: number): void
 
 Binds a scope stack to the current thread or async resource.
 
-This mutates the current execution resource. Use `withScopeStack` when concurrent asynchronous branches need isolated stack replacements.
+This mutates the current execution resource. Use `withScopeStack` when concurrent asynchronous branches need isolated stack replacements. Captured stacks require an active JavaScript callback context; otherwise this returns an error and callers must use `withScopeStack`.
 
 ```ts
 export declare function setThreadScopeStack(stack: ScopeStack): void
