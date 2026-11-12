@@ -131,6 +131,16 @@ event('initialized', handle, { binding: 'node' }, null, null, null, LogSeverity.
 Call `metric()` with `MetricMeasurement` objects for metrics; Relay validates
 the complete measurement group before publishing it.
 
+## Concurrent Work
+
+Call `forkScopeStack()` inside the parent scope to copy its scope hierarchy and
+execution context. Use a separate copy with `withScopeStack()` for each
+concurrent operation, and wait for every operation before closing the parent
+scope. Consume and close streams inside their bound operation.
+
+See [Fork Concurrent Work](../../docs/about-nemo-relay/concepts/scopes.mdx#fork-concurrent-work)
+for examples and registration-lifetime rules.
+
 ## OTLP Logs and Metrics
 
 For plugin-managed export, the `nemo-relay-node/observability` helpers create a

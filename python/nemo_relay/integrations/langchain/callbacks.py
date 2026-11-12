@@ -140,6 +140,8 @@ class NemoRelayCallbackHandler(BaseCallbackHandler):
             prepared_inputs = _prepare_lc_payloads(inputs)
             with self._lock:
                 parent = self._scope_handles.get(parent_run_id) if parent_run_id is not None else None
+                if parent is None and parent_run_id is not None:
+                    parent = _current_scope_handle()
                 handle = nemo_relay.scope.push(
                     name,
                     nemo_relay.ScopeType.Agent,

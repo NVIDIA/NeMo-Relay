@@ -54,6 +54,20 @@ impl MiddlewareContinuationContext {
         }
     }
 
+    /// Create an unbound context for a stack without captured execution metadata.
+    #[doc(hidden)]
+    #[must_use]
+    pub fn from_scope_stack(scope_stack: ScopeStackHandle) -> Self {
+        Self {
+            scope_stack,
+            active_event: None,
+            active_event_trace_context: None,
+            publication_context: None,
+            publication_buffer: None,
+            optimization_recorder: None,
+        }
+    }
+
     /// Clone this context with an isolated snapshot of its visible scope stack.
     ///
     /// Execution-intercept continuations use one isolated context per `next`
@@ -87,6 +101,27 @@ impl MiddlewareContinuationContext {
     /// Return the scope stack captured by this continuation.
     pub fn scope_stack(&self) -> ScopeStackHandle {
         self.scope_stack.clone()
+    }
+
+    /// Synchronize a captured context into a foreign executor's current thread.
+    ///
+    /// The binding must capture and restore the previous thread state when its
+    /// lexical context ends. Task-local contexts and lexical scope overrides
+    /// retain their precedence; no thread guard spans an asynchronous suspension.
+    #[doc(hidden)]
+    pub fn sync_thread_binding(&self, explicit: bool) {
+        install_thread_continuation_context(
+            &self.scope_stack,
+            self.active_event.clone(),
+            self.active_event_trace_context.clone(),
+            explicit,
+        );
+        crate::api::runtime::subscriber_dispatcher::sync_thread_publication_context(
+            self.publication_context.clone(),
+        );
+        crate::api::runtime::subscriber_dispatcher::sync_thread_publication_buffer(
+            self.publication_buffer.clone(),
+        );
     }
 
     /// Install this context on a foreign executor thread until the lease drops.

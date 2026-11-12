@@ -54,8 +54,9 @@ use nemo_relay_runtime::api::registry::{
 use nemo_relay_runtime::api::runtime::subscriber_dispatcher::with_nested_publication_buffer;
 use nemo_relay_runtime::api::runtime::{
     ConditionalMiddlewareGuardrailFn, LlmCollector, LlmExecutionNextFn, LlmFinalizer,
-    LlmJsonStream, PropagationContext as CorePropagationContext, TASK_SCOPE_STACK,
-    ToolExecutionNextFn, capture_propagation_context as capture_propagation_context_handle,
+    LlmJsonStream, MiddlewareContinuationContext, PropagationContext as CorePropagationContext,
+    TASK_SCOPE_STACK, ToolExecutionNextFn,
+    capture_propagation_context as capture_propagation_context_handle,
     capture_propagation_context_with_root as capture_propagation_context_with_root_handle,
     capture_rootless_propagation_context as capture_rootless_propagation_context_handle,
     capture_traceparent as capture_traceparent_handle,
@@ -447,14 +448,23 @@ fn effective_scope(env: &Env) -> Result<CallbackScope> {
             scope_stack: current_scope_stack_handle(),
             publication_buffer: None,
             propagation: None,
+            execution_context: None,
+            publication_context_id: None,
+            publication_context_captured: false,
         }),
     )
 }
 
-fn with_callback_scope<T>(scope: &CallbackScope, callback: impl FnOnce() -> T) -> T {
-    with_scope_stack_handle(scope.scope_stack.clone(), || {
-        with_nested_publication_buffer(scope.publication_buffer.clone(), callback)
-    })
+fn with_callback_scope<CallbackResult>(
+    scope: &CallbackScope,
+    callback: impl FnOnce() -> CallbackResult,
+) -> CallbackResult {
+    match &scope.execution_context {
+        Some(context) => context.run_sync(callback),
+        None => with_scope_stack_handle(scope.scope_stack.clone(), || {
+            with_nested_publication_buffer(scope.publication_buffer.clone(), callback)
+        }),
+    }
 }
 
 fn with_effective_scope_stack<T>(env: &Env, callback: impl FnOnce() -> T) -> Result<T> {
@@ -473,9 +483,18 @@ struct CallContext {
 
 impl CallContext {
     fn capture(env: &Env) -> Result<Self> {
+        let scope = effective_scope(env)?;
+        let publication_context_id = if scope.publication_context_captured {
+            scope.publication_context_id.clone()
+        } else {
+            scope
+                .publication_context_id
+                .clone()
+                .or(callback_factory::event_sanitizer_callback_context_id(env)?)
+        };
         Ok(Self {
-            publication_context_id: callback_factory::event_sanitizer_callback_context_id(env)?,
-            scope: effective_scope(env)?,
+            publication_context_id,
+            scope,
         })
     }
 
@@ -501,8 +520,19 @@ impl CallContext {
     where
         F: Future + Send + 'static,
     {
-        self.publication()
-            .run(TASK_SCOPE_STACK.scope(self.scope.scope_stack, future))
+        // Keep the pipeline future out of the context wrappers' inline state.
+        let future = Box::pin(future);
+        let publication = self.publication();
+        async move {
+            match self.scope.execution_context {
+                Some(context) => publication.run(context.run(future)).await,
+                None => {
+                    publication
+                        .run(TASK_SCOPE_STACK.scope(self.scope.scope_stack, future))
+                        .await
+                }
+            }
+        }
     }
 }
 
@@ -1411,6 +1441,39 @@ pub fn create_scope_stack_from_propagation(context: PropagationContext) -> Resul
         .map_err(Error::from)
 }
 
+/// Copy the active Relay scope stack without changing the caller's binding.
+///
+/// Preserves scope UUIDs/types, scope-local registrations, and managed event,
+/// trace, and publication context. Use one fork per concurrent operation with
+/// `withScopeStack`, and finish the operation before its inherited scopes close.
+#[napi(catch_unwind)]
+pub fn fork_scope_stack(env: Env) -> Result<ScopeStack> {
+    if !scope_stack_active(env)? {
+        return Err(Error::invalid_argument(
+            "cannot fork scope stack without an active Relay context",
+        ));
+    }
+    let mut scope = effective_scope(&env)?;
+    let context = with_callback_scope(&scope, MiddlewareContinuationContext::capture)
+        .isolated_with_scope_stack(&scope.scope_stack)
+        .map_err(Error::from)?;
+    scope.scope_stack = context.scope_stack();
+    scope.execution_context = Some(context);
+    scope.propagation = None;
+    if !scope.publication_context_captured {
+        scope.publication_context_id = scope
+            .publication_context_id
+            .clone()
+            .or(callback_factory::event_sanitizer_callback_context_id(&env)?);
+    }
+    scope.publication_context_captured = true;
+    Ok(ScopeStack {
+        inner: scope.scope_stack.clone(),
+        publication_buffer: scope.publication_buffer.clone(),
+        captured_scope: Some(scope),
+    })
+}
+
 /// Run a callback with an isolated scope stack installed.
 ///
 /// The caller's stack is restored immediately after callback invocation. When
@@ -1424,12 +1487,18 @@ pub fn with_scope_stack<'env>(
     stack: &ScopeStack,
     #[napi(ts_arg_type = "() => T")] callback: Callback,
 ) -> Result<Unknown<'env>> {
-    let scope = CallbackScope {
-        scope_stack: stack.inner.clone(),
-        publication_buffer: effective_scope(env)?
-            .publication_buffer
-            .or_else(|| stack.publication_buffer.clone()),
-        propagation: None,
+    let scope = match &stack.captured_scope {
+        Some(scope) => scope.clone(),
+        None => CallbackScope {
+            scope_stack: stack.inner.clone(),
+            publication_buffer: effective_scope(env)?
+                .publication_buffer
+                .or_else(|| stack.publication_buffer.clone()),
+            propagation: None,
+            execution_context: None,
+            publication_context_id: None,
+            publication_context_captured: false,
+        },
     };
     Ok(callback_factory::with_callback_scope(
         env, scope, &callback,
@@ -1454,10 +1523,7 @@ pub fn current_scope_stack_snapshot(env: Env) -> Result<Option<crate::types::Sco
 #[napi(catch_unwind)]
 pub fn current_scope_stack(env: Env) -> Result<ScopeStack> {
     if let Some(scope) = callback_factory::callback_scope(&env)? {
-        return Ok(ScopeStack {
-            inner: scope.scope_stack,
-            publication_buffer: scope.publication_buffer,
-        });
+        return Ok(ScopeStack::from(scope.scope_stack.clone()));
     }
     Ok(ScopeStack::from(current_scope_stack_handle()))
 }
@@ -1466,17 +1532,30 @@ pub fn current_scope_stack(env: Env) -> Result<ScopeStack> {
 ///
 /// This mutates the current execution resource. Use `withScopeStack` when
 /// concurrent asynchronous branches need isolated stack replacements.
+/// Captured stacks require an active JavaScript callback context; otherwise
+/// this returns an error and callers must use `withScopeStack`.
 #[napi(catch_unwind)]
 pub fn set_thread_scope_stack(env: Env, stack: &ScopeStack) -> Result<()> {
-    let scope = CallbackScope {
-        scope_stack: stack.inner.clone(),
-        publication_buffer: effective_scope(&env)?
-            .publication_buffer
-            .or_else(|| stack.publication_buffer.clone()),
-        propagation: None,
+    let scope = match &stack.captured_scope {
+        Some(scope) => scope.clone(),
+        None => CallbackScope {
+            scope_stack: stack.inner.clone(),
+            publication_buffer: effective_scope(&env)?
+                .publication_buffer
+                .or_else(|| stack.publication_buffer.clone()),
+            propagation: None,
+            execution_context: None,
+            publication_context_id: None,
+            publication_context_captured: false,
+        },
     };
     if callback_factory::set_callback_scope(&env, scope)? {
         return Ok(());
+    }
+    if stack.captured_scope.is_some() {
+        return Err(Error::invalid_argument(
+            "cannot bind a captured scope stack without an active JavaScript callback context; use withScopeStack()",
+        ));
     }
     bind_thread_scope_stack(stack.inner.clone());
     Ok(())
@@ -2615,22 +2694,26 @@ macro_rules! registration_api {
                     $($break_chain: bool,)?
                     #[napi(ts_arg_type = $ts_arg_type)] $callback: Callback,
                 ) -> Result<()> {
-                    $core_register(
-                        $(&parse_uuid(&$scope_uuid, "UUID")?,)?
-                        &name,
-                        priority,
-                        $($break_chain,)?
-                        $wrap(&env, &$callback)?,
-                    )
-                    .map_err(Error::from)
+                    with_effective_scope_stack(&env, || {
+                        $core_register(
+                            $(&parse_uuid(&$scope_uuid, "UUID")?,)?
+                            &name,
+                            priority,
+                            $($break_chain,)?
+                            $wrap(&env, &$callback)?,
+                        )
+                        .map_err(Error::from)
+                    })?
                 }
             }
 
             $(#[$deregister_meta])*
             #[napi(catch_unwind)]
-            pub fn $deregister($($scope_uuid: String,)? name: String) -> Result<bool> {
-                $core_deregister($(&parse_uuid(&$scope_uuid, "UUID")?,)? &name)
-                    .map_err(Error::from)
+            pub fn $deregister(env: Env, $($scope_uuid: String,)? name: String) -> Result<bool> {
+                with_effective_scope_stack(&env, || {
+                    $core_deregister($(&parse_uuid(&$scope_uuid, "UUID")?,)? &name)
+                        .map_err(Error::from)
+                })?
             }
         )*
 
@@ -3111,16 +3194,20 @@ pub fn scope_register_subscriber(
 ) -> Result<()> {
     let uuid = parse_uuid(&scope_uuid, "UUID")?;
     let callback = callable::wrap_js_event_subscriber(&env, name.clone(), &callback)?;
-    core_subscriber_api::scope_register_subscriber(&uuid, &name, callback).map_err(Error::from)
+    with_effective_scope_stack(&env, || {
+        core_subscriber_api::scope_register_subscriber(&uuid, &name, callback).map_err(Error::from)
+    })?
 }
 
 /// Deregister a scope-local event subscriber by name.
 ///
 /// Returns `true` if a subscriber with that name was found and removed from the specified scope.
 #[napi(catch_unwind)]
-pub fn scope_deregister_subscriber(scope_uuid: String, name: String) -> Result<bool> {
+pub fn scope_deregister_subscriber(env: Env, scope_uuid: String, name: String) -> Result<bool> {
     let uuid = parse_uuid(&scope_uuid, "UUID")?;
-    core_subscriber_api::scope_deregister_subscriber(&uuid, &name).map_err(Error::from)
+    with_effective_scope_stack(&env, || {
+        core_subscriber_api::scope_deregister_subscriber(&uuid, &name).map_err(Error::from)
+    })?
 }
 
 /// Run the registered tool request intercept chain on the given arguments.

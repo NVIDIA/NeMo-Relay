@@ -21,8 +21,9 @@ use nemo_relay_runtime::api::event::{
 use nemo_relay_runtime::api::llm::LlmRequestInterceptOutcome;
 use nemo_relay_runtime::api::runtime::subscriber_dispatcher::PublicationBuffer;
 use nemo_relay_runtime::api::runtime::{
-    LlmExecutionContext, LlmSanitizeRequestContext, LlmSanitizeResponseContext, PropagationContext,
-    ThreadScopeStackBinding, ToolExecutionContext,
+    LlmExecutionContext, LlmSanitizeRequestContext, LlmSanitizeResponseContext,
+    MiddlewareContinuationContext, PropagationContext, ThreadScopeStackBinding,
+    ToolExecutionContext,
 };
 use nemo_relay_runtime::api::tool::{ToolExecutionInterceptOutcome, ToolExecutionResult};
 use nemo_relay_types::error::FlowError;
@@ -258,6 +259,8 @@ impl Drop for PyLlmStream {
 pub struct PyScopeStack {
     pub(crate) inner: ScopeStackHandle,
     pub(crate) publication_buffer: Option<PublicationBuffer>,
+    pub(crate) execution_context: Option<MiddlewareContinuationContext>,
+    pub(crate) is_explicit_fork: bool,
 }
 
 #[pymethods]
@@ -270,8 +273,15 @@ impl PyScopeStack {
 /// Opaque captured native thread binding used to restore a Python scope context.
 #[pyclass(name = "_ThreadScopeStackBinding")]
 pub struct PyThreadScopeStackBinding {
+    pub(crate) state: PyThreadContextState,
+    pub(crate) fork_origin: Option<PyThreadContextState>,
+}
+
+#[derive(Clone)]
+pub(crate) struct PyThreadContextState {
     pub(crate) inner: ThreadScopeStackBinding,
-    pub(crate) publication_buffer: Option<PublicationBuffer>,
+    pub(crate) scope_override: Option<ScopeStackHandle>,
+    pub(crate) execution_context: MiddlewareContinuationContext,
 }
 
 #[pymethods]

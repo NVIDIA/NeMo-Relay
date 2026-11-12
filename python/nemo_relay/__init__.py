@@ -24,8 +24,8 @@ The main entry points are:
 Top-level exports also include:
 
 - scope stack helpers such as ``get_scope_stack()``, ``create_scope_stack()``,
-  ``fork_asyncio_context()``, ``set_thread_scope_stack()``, and
-  ``scope_stack_active()``
+  ``fork_scope_stack()``, ``use_scope_stack()``, ``fork_asyncio_context()``,
+  ``set_thread_scope_stack()``, and ``scope_stack_active()``
 - native runtime types such as ``ScopeHandle``, ``ToolHandle``, ``LLMHandle``,
   ``LLMRequest``, ``ScopeType``, and the lifecycle event classes
 - observability helpers such as ``AtifExporter``, ``AtofExporter``,
@@ -164,13 +164,14 @@ from nemo_relay._native import (
     create_scope_stack_from_propagation as _create_scope_stack_from_propagation,
 )
 from nemo_relay._native import current_scope_stack_snapshot as _current_scope_stack_snapshot
+from nemo_relay._native import fork_scope_stack as _fork_scope_stack
 from nemo_relay._native import (
     log as _log,
 )
 from nemo_relay._native import restore_thread_scope_stack as _restore_thread_scope_stack
 from nemo_relay._native import scope_stack_active as _native_scope_stack_active
 from nemo_relay._native import set_thread_scope_stack as _set_thread_scope_stack
-from nemo_relay._native import sync_thread_scope_stack as _sync_thread_scope_stack
+from nemo_relay._native import sync_thread_scope_stack as _native_sync_thread_scope_stack
 
 atexit.register(_shutdown_default_logging)
 
@@ -339,6 +340,9 @@ from nemo_relay import (  # noqa: E402
 )
 
 _scope_stack_var: contextvars.ContextVar[ScopeStack] = contextvars.ContextVar("scope_stack")
+_publication_scope_var: contextvars.ContextVar[ScopeStack | None] = contextvars.ContextVar(
+    "publication_scope", default=None
+)
 _propagation_parent_var: contextvars.ContextVar[str | None] = contextvars.ContextVar(
     "propagation_parent",
     default=None,
@@ -355,6 +359,10 @@ _propagation_tracestate_var: contextvars.ContextVar[str | None] = contextvars.Co
     "propagation_tracestate",
     default=None,
 )
+
+
+def _sync_thread_scope_stack(stack: ScopeStack) -> None:
+    _native_sync_thread_scope_stack(stack, _publication_scope_var.get())
 
 
 def current_scope_stack_snapshot() -> ScopeStackSnapshot | None:
@@ -634,6 +642,34 @@ def create_scope_stack_from_propagation(context: PropagationContext) -> ScopeSta
     return _create_scope_stack_from_propagation(context)
 
 
+def fork_scope_stack() -> ScopeStack:
+    """Copy the active stack and its Relay execution context without installing it.
+
+    Use one fork per concurrent operation with ``use_scope_stack()``. Scope
+    UUIDs/types and scope-local registrations are retained; inherited scopes
+    must remain open until all forked operations finish.
+
+    Registration membership is copied at capture time. Callback objects retain
+    their existing shared state. Forking emits no scope lifecycle events.
+    Consume and close streams inside the bound operation before it finishes.
+
+    Unlike ``fork_asyncio_context()``, this copies the original local hierarchy
+    rather than reconstructing a stack from propagation metadata.
+
+    Returns:
+        ScopeStack: An independent copy to install with ``use_scope_stack()``.
+
+    Raises:
+        RuntimeError: No explicitly active Relay context exists or capture fails.
+    """
+    stack = _scope_stack_var.get(None)
+    if stack is not None:
+        _sync_thread_scope_stack(stack)
+    elif not _native_scope_stack_active():
+        raise RuntimeError("cannot fork scope stack without an active Relay context")
+    return _fork_scope_stack(stack)
+
+
 def fork_asyncio_context() -> contextvars.Context:
     """Create an asyncio child context with an isolated Relay scope stack.
 
@@ -772,7 +808,7 @@ def set_thread_scope_stack(stack: ScopeStack) -> None:
             with ThreadPoolExecutor() as pool:
                 pool.submit(worker).result()
     """
-    _set_thread_scope_stack(stack)
+    _set_thread_scope_stack(stack, _publication_scope_var.get())
 
 
 #: Union of every lifecycle event emitted by the Python binding. Subscriber
@@ -817,6 +853,7 @@ __all__ = [
     "capture_traceparent",
     "create_scope_stack_from_propagation",
     "fork_asyncio_context",
+    "fork_scope_stack",
     "get_scope_stack",
     "scope_stack_active",
     "propagate_scope_to_thread",

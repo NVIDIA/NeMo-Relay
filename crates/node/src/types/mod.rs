@@ -9,6 +9,7 @@ use napi::Env;
 use napi::bindgen_prelude::Unknown;
 use napi_derive::napi;
 
+use crate::callback_factory::CallbackScope;
 use crate::convert::{checked_json, parse_json};
 use crate::error::{Error, Result};
 use nemo_relay_runtime::api::runtime::subscriber_dispatcher::PublicationBuffer;
@@ -270,6 +271,7 @@ pub struct PendingMarkSpec {
 pub struct ScopeStack {
     pub(crate) inner: ScopeStackHandle,
     pub(crate) publication_buffer: Option<PublicationBuffer>,
+    pub(crate) captured_scope: Option<CallbackScope>,
 }
 
 #[napi]
@@ -286,6 +288,7 @@ impl From<ScopeStackHandle> for ScopeStack {
         Self {
             inner: h,
             publication_buffer: None,
+            captured_scope: None,
         }
     }
 }

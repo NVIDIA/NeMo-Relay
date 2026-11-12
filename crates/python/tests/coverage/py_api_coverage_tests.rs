@@ -176,6 +176,85 @@ fn safe_future_into_py_skips_completion_on_closed_loop() {
     });
 }
 
+/// Forking a plain selected stack must not capture another task's active event.
+#[test]
+fn fork_scope_stack_selects_plain_stack_without_ambient_event() {
+    use nemo_relay_runtime::api::runtime::scope_stack::{
+        scope_stack_snapshot, with_active_event_uuid,
+    };
+
+    let _python = crate::test_support::init_python_test();
+    let selected = create_scope_stack();
+    let ambient = create_scope_stack();
+    let expected = scope_stack_snapshot(&selected.inner).unwrap();
+    let selected_parent = expected.scopes.last().unwrap().scope_id;
+    let ambient_event = Uuid::now_v7();
+    let copied = pyo3_async_runtimes::tokio::get_runtime().block_on(TASK_SCOPE_STACK.scope(
+        ambient.inner.clone(),
+        with_active_event_uuid(ambient_event, async {
+            let copied = fork_scope_stack(Some(&selected)).unwrap();
+            assert!(Arc::ptr_eq(&current_scope_stack_handle(), &ambient.inner));
+            assert_eq!(
+                capture_propagation_context_handle().unwrap().parent_uuid,
+                ambient_event
+            );
+            copied
+        }),
+    ));
+    assert_eq!(scope_stack_snapshot(&copied.inner).unwrap(), expected);
+    copied.execution_context.as_ref().unwrap().run_sync(|| {
+        assert_eq!(
+            capture_propagation_context_handle().unwrap().parent_uuid,
+            selected_parent
+        );
+    });
+}
+
+/// A captured selected stack retains its own event and exact trace headers.
+#[test]
+fn fork_scope_stack_selects_captured_stack_event_and_trace() {
+    use nemo_relay_runtime::api::runtime::scope_stack::{
+        W3cTraceContext, scope_stack_snapshot, with_active_event_trace_context,
+        with_active_event_uuid,
+    };
+
+    let _python = crate::test_support::init_python_test();
+    let selected = create_scope_stack();
+    let ambient = create_scope_stack();
+    let expected = scope_stack_snapshot(&selected.inner).unwrap();
+    let selected_event = Uuid::now_v7();
+    let ambient_event = Uuid::now_v7();
+    let traceparent = "00-11111111111111111111111111111111-2222222222222222-01";
+    let tracestate = "vendor=selected";
+    let trace_context = W3cTraceContext::new(traceparent, Some(tracestate.to_owned())).unwrap();
+    let runtime = pyo3_async_runtimes::tokio::get_runtime();
+    let selected = runtime.block_on(TASK_SCOPE_STACK.scope(
+        selected.inner,
+        with_active_event_trace_context(selected_event, Some(trace_context), async {
+            fork_scope_stack(None).unwrap()
+        }),
+    ));
+    let copied = runtime.block_on(TASK_SCOPE_STACK.scope(
+        ambient.inner.clone(),
+        with_active_event_uuid(ambient_event, async {
+            let copied = fork_scope_stack(Some(&selected)).unwrap();
+            assert!(Arc::ptr_eq(&current_scope_stack_handle(), &ambient.inner));
+            assert_eq!(
+                capture_propagation_context_handle().unwrap().parent_uuid,
+                ambient_event
+            );
+            copied
+        }),
+    ));
+    assert_eq!(scope_stack_snapshot(&copied.inner).unwrap(), expected);
+    copied.execution_context.as_ref().unwrap().run_sync(|| {
+        let propagation = capture_propagation_context_handle().unwrap();
+        assert_eq!(propagation.parent_uuid, selected_event);
+        assert_eq!(propagation.traceparent.as_deref(), Some(traceparent));
+        assert_eq!(propagation.tracestate.as_deref(), Some(tracestate));
+    });
+}
+
 /// Verify Python scope bindings and manual tool and LLM lifecycles.
 #[test]
 fn py_api_helpers_and_scope_lifecycle_round_trip() {
@@ -187,14 +266,14 @@ fn py_api_helpers_and_scope_lifecycle_round_trip() {
         assert!(module.getattr("llm_call_end").is_ok());
 
         let stack = create_scope_stack();
-        set_thread_scope_stack(&stack);
-        sync_thread_scope_stack(&stack);
+        set_thread_scope_stack(&stack, None);
+        sync_thread_scope_stack(&stack, None);
         assert!(py_scope_stack_active());
 
         let thread_binding = capture_thread_scope_stack();
         assert_eq!(thread_binding.__repr__(), "<_ThreadScopeStackBinding>");
         let replacement = create_scope_stack();
-        set_thread_scope_stack(&replacement);
+        set_thread_scope_stack(&replacement, None);
         restore_thread_scope_stack(&thread_binding);
         assert!(py_scope_stack_active());
 
@@ -212,7 +291,7 @@ fn py_api_helpers_and_scope_lifecycle_round_trip() {
             capture_propagation_context_with_root(Some(&propagation_root.to_string())).unwrap();
         assert_eq!(rooted_context.inner.root_uuid, Some(propagation_root));
         let propagated_stack = create_scope_stack_from_propagation(&rooted_context).unwrap();
-        set_thread_scope_stack(&propagated_stack);
+        set_thread_scope_stack(&propagated_stack, None);
         restore_thread_scope_stack(&thread_binding);
         assert!(capture_propagation_context_with_root(Some("not-a-uuid")).is_err());
 
@@ -552,7 +631,7 @@ async def run_stream(api, request, func, collector, finalizer, handle, attribute
             .unwrap();
 
         let stack = create_scope_stack();
-        set_thread_scope_stack(&stack);
+        set_thread_scope_stack(&stack, None);
         let root = get_handle().unwrap();
         let child = push_scope(
             py,
