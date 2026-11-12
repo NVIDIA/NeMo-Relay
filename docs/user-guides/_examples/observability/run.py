@@ -46,6 +46,14 @@ def validate_endpoint(endpoint, allow_insecure=False):
         raise ValueError("Use HTTPS, or explicitly allow trusted private-network HTTP with --allow-insecure-endpoint")
 
 
+class PhoenixNoRedirects(urllib.request.HTTPRedirectHandler):
+    """Keep Phoenix API authorization from reaching a redirect destination."""
+
+    def redirect_request(self, req, fp, code, msg, headers, newurl):
+        fp.close()
+        raise ValueError("Phoenix API redirects are disabled; set PHOENIX_API_URL to the final API URL")
+
+
 def check_events(path):
     events = [json.loads(line) for line in path.read_text().splitlines() if line.strip()]
     scopes = {event.get("uuid"): event for event in events if event.get("kind") == "scope"}
@@ -64,9 +72,11 @@ def check_events(path):
     categories = {event.get("category") for event in scopes.values()}
     if not {"agent", "llm", "tool"} <= categories:
         raise ValueError("Local capture needs agent, model, and tool scopes; inspect hermes doctor and events.jsonl")
-    # Verify ancestry, rather than accepting unrelated model/tool events in the file.
+    # Traverse all ancestors so nested agents can share a root, while unrelated
+    # model/tool trees cannot independently satisfy the correlation check.
+    ancestor_agents = {}
     for category in ("llm", "tool"):
-        correlated = False
+        ancestor_agents[category] = set()
         for event in scopes.values():
             if event.get("category") != category:
                 continue
@@ -75,11 +85,12 @@ def check_events(path):
             while parent in scopes and parent not in visited:
                 visited.add(parent)
                 if scopes[parent].get("category") == "agent":
-                    correlated = True
-                    break
+                    ancestor_agents[category].add(parent)
                 parent = scopes[parent].get("parent_uuid")
-        if not correlated:
+        if not ancestor_agents[category]:
             raise ValueError(f"No {category} scope connects to an agent scope; inspect events.jsonl")
+    if ancestor_agents["llm"].isdisjoint(ancestor_agents["tool"]):
+        raise ValueError("Model and tool scopes need a shared agent ancestor; inspect events.jsonl")
     return events
 
 
@@ -99,23 +110,27 @@ def run_hermes(command, directory, environment, timeout):
         raise ValueError(f"Hermes exited {status}; inspect agent.log and NeMo Relay Plugins in hermes doctor")
 
 
-def verify_phoenix(events, directory):
+def verify_phoenix(events, directory, *, allow_insecure=False):
     """Reconcile this run's closed scopes with delivered spans, not a fixed count."""
     closed = {e["uuid"]: e for e in events if e.get("kind") == "scope" and e.get("scope_category") == "end"}
     agent = next(e for e in closed.values() if e.get("category") == "agent")
     trace_id = agent["uuid"].replace("-", "")
     endpoint = urlsplit(os.environ.get("RELAY_OTLP_ENDPOINT", "http://127.0.0.1:6006/v1/traces"))
     base = os.environ.get("PHOENIX_API_URL", endpoint.scheme + "://" + endpoint.netloc).rstrip("/")
-    validate_endpoint(base)
+    # The collector opt-in does not authorize a different plaintext API host.
+    validate_endpoint(
+        base, allow_insecure and endpoint.scheme == "http" and urlsplit(base).hostname == endpoint.hostname
+    )
     url = base + "/v1/projects/relay-support-triage/spans?" + urlencode({"trace_id": trace_id, "limit": 1000})
     headers = {}
     if os.environ.get("PHOENIX_AUTHORIZATION"):
         headers["Authorization"] = os.environ["PHOENIX_AUTHORIZATION"]
+    opener = urllib.request.build_opener(PhoenixNoRedirects())
     expected = {key for key, e in closed.items() if e.get("category") in {"agent", "llm", "tool"}}
     failure = "No matching trace"
     for _ in range(15):
         try:
-            with urllib.request.urlopen(urllib.request.Request(url, headers=headers), timeout=5) as response:
+            with opener.open(urllib.request.Request(url, headers=headers), timeout=5) as response:
                 spans = json.load(response)["data"]
             delivered = {s.get("attributes", {}).get("nemo_relay.uuid") for s in spans}
             ids = {s["context"]["span_id"] for s in spans}
@@ -170,6 +185,15 @@ def main():
         parser.error(str(error))
     source = Path(__file__).resolve().parent
     config = (source / "plugins.toml").read_text()
+    endpoint_url = urlsplit(endpoint)
+    insecure_hosts = []
+    if (
+        args.allow_insecure_endpoint
+        and endpoint_url.scheme == "http"
+        and endpoint_url.hostname not in {"localhost", "127.0.0.1", "::1"}
+    ):
+        insecure_hosts = [endpoint_url.hostname]
+    config = config.replace("insecure_http_hosts = []", "insecure_http_hosts = " + json.dumps(insecure_hosts))
     for placeholder, value in {
         "__LOG_DIRECTORY__": str(directory / "logs"),
         "__PROJECTION__": "gen_ai" if args.destination == "weave" else "openinference",
@@ -258,7 +282,7 @@ detector = "email"
         if "sample.employee@example.com" in payload or "[REDACTED]" not in payload:
             raise ValueError("Synthetic email redaction was not established in local events")
     if args.verify:
-        verify_phoenix(events, directory)
+        verify_phoenix(events, directory, allow_insecure=args.allow_insecure_endpoint)
     print("Handoff and correlated local agent/model/tool scopes found. Verify delivery in your destination UI.")
 
 

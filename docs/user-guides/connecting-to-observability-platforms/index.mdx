@@ -297,7 +297,7 @@ for each actual run.
 In a second terminal on the same host, start disposable Phoenix:
 
 ```bash
-uvx --from arize-phoenix==21.0.0 phoenix serve
+PHOENIX_HOST=127.0.0.1 uvx --from arize-phoenix==21.0.0 phoenix serve
 ```
 
 Back in the example directory, select a tool-capable model from the

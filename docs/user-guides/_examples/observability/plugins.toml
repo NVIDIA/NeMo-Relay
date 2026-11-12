@@ -10,6 +10,7 @@ enabled = true
 [components.config]
 version = 4
 enable_full_payloads = false
+insecure_http_hosts = []
 
 [components.config.atof]
 enabled = true
