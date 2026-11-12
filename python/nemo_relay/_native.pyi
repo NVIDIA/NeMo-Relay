@@ -867,10 +867,10 @@ class AnnotatedLLMRequest:
         """Replace unknown future top-level request fields."""
         ...
     def system_prompt(self) -> Optional[str]:
-        """Return the first normalized system prompt, if one is present."""
+        """Join text/refusals from instructions or the first system/developer item with newlines."""
         ...
     def last_user_message(self) -> Optional[str]:
-        """Return the last normalized user message text, if one is present."""
+        """Join text/refusals from the last user item; do not skip textless items."""
         ...
     def has_tool_calls(self) -> bool:
         """Return whether the normalized request includes tool declarations."""
@@ -956,7 +956,7 @@ class AnnotatedLLMResponse:
         """Return additional normalized response fields."""
         ...
     def response_text(self) -> Optional[str]:
-        """Return extracted response text, if present."""
+        """Join output text/refusals with newlines, excluding tool payloads."""
         ...
     def has_tool_calls(self) -> bool:
         """Return whether the response contains tool-call payloads."""

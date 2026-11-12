@@ -90,7 +90,7 @@ fn normalized_llm_response_prefers_annotation_over_raw_output() {
             .build(),
     );
     let normalized = event.normalized_llm_response().expect("annotation present");
-    assert_eq!(normalized.response_text(), Some("from-annotation"));
+    assert_eq!(normalized.response_text(), Some("from-annotation".into()));
 }
 
 #[test]
@@ -109,7 +109,7 @@ fn normalized_llm_response_falls_back_to_codec_decode() {
     let normalized = event
         .normalized_llm_response()
         .expect("decodes raw chat output");
-    assert_eq!(normalized.response_text(), Some("from-raw"));
+    assert_eq!(normalized.response_text(), Some("from-raw".into()));
 }
 
 #[test]

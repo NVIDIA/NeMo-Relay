@@ -252,7 +252,7 @@ fn test_response_model_name_and_text_parity() {
 
     for decoded in [&chat, &anthropic, &responses] {
         assert_eq!(decoded.model.as_deref(), Some("parity-shared-model"));
-        assert_eq!(decoded.response_text(), Some("hello"));
+        assert_eq!(decoded.response_text(), Some("hello".into()));
         assert_eq!(decoded.finish_reason, Some(FinishReason::Complete));
     }
 
@@ -742,8 +742,11 @@ fn test_request_normalization_parity() {
     assert_eq!(anthropic.instructions, responses.instructions);
     for decoded in [&chat, &anthropic, &responses] {
         assert_eq!(decoded.model.as_deref(), Some("parity-request-model"));
-        assert_eq!(decoded.system_prompt(), Some("You are terse."));
-        assert_eq!(decoded.last_user_message(), Some("Summarize the docs."));
+        assert_eq!(decoded.system_prompt(), Some("You are terse.".into()));
+        assert_eq!(
+            decoded.last_user_message(),
+            Some("Summarize the docs.".into())
+        );
     }
 
     // Chat `max_tokens`/`stop` and Anthropic `max_tokens`/`stop_sequences`

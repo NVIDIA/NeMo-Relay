@@ -1963,7 +1963,7 @@ async fn observed_responses_preserve_sanitized_payloads_and_usage_without_a_fall
             .filter(|event| event.annotated_response().is_some())
         {
             let annotated = end.annotated_response().unwrap();
-            assert_eq!(annotated.response_text(), Some("[REDACTED]"));
+            assert_eq!(annotated.response_text(), Some("[REDACTED]".into()));
             let usage = serde_json::to_value(annotated.usage.as_ref().unwrap()).unwrap();
             assert_eq!(usage["prompt_tokens"], 17);
             assert_eq!(usage["completion_tokens"], 5);

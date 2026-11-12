@@ -1580,7 +1580,7 @@ async fn test_response_codec_populates_annotated_response() {
         .annotated_response()
         .expect("annotated_response should be Some when response codec is active");
     assert_eq!(ann.id, Some("mock-resp-id".into()));
-    assert_eq!(ann.response_text(), Some("mock response text"));
+    assert_eq!(ann.response_text(), Some("mock response text".into()));
     assert_eq!(
         ann.usage
             .as_ref()
@@ -1726,7 +1726,7 @@ async fn test_response_codec_annotation_uses_sanitized_managed_response() {
     let annotated = end_event
         .annotated_response()
         .expect("annotated_response should be decoded from sanitized output");
-    assert_eq!(annotated.response_text(), Some("Sanitized"));
+    assert_eq!(annotated.response_text(), Some("Sanitized".into()));
     assert!(
         !serde_json::to_string(end_event).unwrap().contains("SECRET"),
         "end event should not retain raw response content"
@@ -1991,7 +1991,7 @@ async fn test_stream_response_codec_populates_annotated_response() {
         .annotated_response()
         .expect("annotated_response should be Some on stream path when response codec is active");
     assert_eq!(ann.id, Some("mock-resp-id".into()));
-    assert_eq!(ann.response_text(), Some("mock response text"));
+    assert_eq!(ann.response_text(), Some("mock response text".into()));
     assert_eq!(
         ann.usage
             .as_ref()
@@ -2201,7 +2201,7 @@ async fn test_stream_response_codec_annotation_uses_sanitized_aggregated_respons
     let annotated = end_event
         .annotated_response()
         .expect("annotated_response should be decoded from sanitized stream output");
-    assert_eq!(annotated.response_text(), Some("Sanitized"));
+    assert_eq!(annotated.response_text(), Some("Sanitized".into()));
     assert!(
         !serde_json::to_string(end_event).unwrap().contains("SECRET"),
         "stream end event should not retain raw aggregated response content"

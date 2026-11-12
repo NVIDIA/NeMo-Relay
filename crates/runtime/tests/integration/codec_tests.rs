@@ -555,7 +555,7 @@ fn test_system_prompt_text() {
         stream: None,
         extra: serde_json::Map::new(),
     };
-    assert_eq!(req.system_prompt(), Some("Be helpful"));
+    assert_eq!(req.system_prompt(), Some("Be helpful".into()));
 }
 
 #[test]
@@ -620,7 +620,7 @@ fn test_system_prompt_parts() {
         stream: None,
         extra: serde_json::Map::new(),
     };
-    assert_eq!(req.system_prompt(), Some("Be careful"));
+    assert_eq!(req.system_prompt(), Some("Be careful".into()));
 }
 
 #[test]
@@ -662,7 +662,7 @@ fn test_last_user_message_basic() {
         stream: None,
         extra: serde_json::Map::new(),
     };
-    assert_eq!(req.last_user_message(), Some("last"));
+    assert_eq!(req.last_user_message(), Some("last".into()));
 }
 
 #[test]
