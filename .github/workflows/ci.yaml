@@ -125,6 +125,7 @@ jobs:
       full_ci: ${{ needs.prepare.outputs.full_ci == 'true' }}
       base: ${{ needs.ci_changes.outputs.base }}
       run_installer: ${{ needs.ci_changes.outputs.run_installer == 'true' }}
+      run_documentation_examples: ${{ needs.ci_changes.outputs.run_documentation_examples == 'true' }}
       run_python_integration_langchain: ${{ needs.ci_changes.outputs.run_python_integration_langchain == 'true' }}
       run_python_integration_google_adk: ${{ needs.ci_changes.outputs.run_python_integration_google_adk == 'true' }}
 

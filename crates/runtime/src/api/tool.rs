@@ -2,6 +2,9 @@
 // SPDX-License-Identifier: Apache-2.0
 
 use serde_json::json;
+use std::sync::Arc;
+
+pub use crate::api::execution::ExecutionOptions;
 
 use crate::api::event::{BaseEvent, Event, MarkEvent, PendingMarkSpec};
 use crate::api::registry::RuntimeRegistrationKind;
@@ -198,6 +201,9 @@ pub struct ToolCallExecuteParams {
     /// Optional provider-specific correlation identifier.
     #[builder(default, setter(into))]
     pub tool_call_id: Option<String>,
+    /// Choose which stages run for this call. All stages run by default.
+    #[builder(default)]
+    pub execution_options: ExecutionOptions,
 }
 
 /// Builder parameters for [`tool_call_end`].
@@ -829,9 +835,13 @@ impl Drop for ManagedToolCompletion {
 
 /// Execute a tool call through the managed middleware pipeline.
 ///
-/// This runs conditional-execution guardrails, request intercepts,
+/// By default, this runs conditional-execution guardrails, request intercepts,
 /// sanitize-request guardrails, execution intercepts, the tool callback, and
 /// sanitize-response guardrails in the runtime-defined order.
+///
+/// Use `execution_options` to choose which middleware stages run for this call.
+/// All stages run by default. Relay still sanitizes event data, uses codecs,
+/// and handles call completion.
 ///
 /// # Parameters
 /// - `name`: Tool name recorded on emitted lifecycle events.
@@ -844,6 +854,7 @@ impl Drop for ManagedToolCompletion {
 /// - `metadata`: Optional JSON metadata recorded on emitted events.
 /// - `tool_call_id`: Optional provider-specific correlation identifier recorded
 ///   on both managed lifecycle events.
+/// - `execution_options`: Choose which stages run for this call. All stages run by default.
 ///
 /// # Returns
 /// A [`Result`] containing the application result and optional opaque
@@ -867,9 +878,10 @@ pub async fn tool_call_execute(params: ToolCallExecuteParams) -> Result<ToolExec
         data,
         metadata,
         tool_call_id,
+        execution_options,
     } = params;
     ensure_runtime_owner()?;
-    {
+    if execution_options.conditional_execution {
         let (entries, subscribers, parent_uuid, guardrail_metadata) = {
             let scope_stack = current_scope_stack();
             let (scope_locals, scope_subscribers) = {
@@ -926,7 +938,7 @@ pub async fn tool_call_execute(params: ToolCallExecuteParams) -> Result<ToolExec
         }
     }
 
-    let intercept_entries = {
+    let intercept_entries = if execution_options.request_intercepts {
         let scope_stack = current_scope_stack();
         let scope_locals = scope_stack
             .read()
@@ -939,13 +951,19 @@ pub async fn tool_call_execute(params: ToolCallExecuteParams) -> Result<ToolExec
             .map_err(|error| FlowError::Internal(error.to_string()))?
             .registry_snapshot(&[RuntimeRegistrationKind::ToolRequestIntercept]);
         state.tool_request_intercept_entries(&scope_local_refs)
+    } else {
+        Vec::new()
     };
-    let intercepted_args = NemoRelayContextState::tool_request_intercepts_snapshot_chain(
-        &name,
-        args,
-        &intercept_entries,
-    )
-    .await?;
+    let intercepted_args = if execution_options.request_intercepts {
+        NemoRelayContextState::tool_request_intercepts_snapshot_chain(
+            &name,
+            args,
+            &intercept_entries,
+        )
+        .await?
+    } else {
+        args
+    };
 
     let (handle, lifecycle_subscribers) = tool_call_with_subscriber_snapshot(
         ToolCallParams::builder()
@@ -986,24 +1004,32 @@ pub async fn tool_call_execute(params: ToolCallExecuteParams) -> Result<ToolExec
     };
     let execution =
         with_active_event_trace_context(handle.uuid, Some(active_trace_context), async move {
-            let execution = {
-                let scope_stack = current_scope_stack();
-                let scope_locals = scope_stack
-                    .read()
-                    .expect("scope stack lock poisoned")
-                    .snapshot_scope_local_registries(|registries| {
-                        &registries.tool_execution_intercepts
-                    });
-                let scope_local_refs = scope_locals.iter().collect::<Vec<_>>();
-                let context = global_context();
-                let state = context
-                    .read()
-                    .map_err(|error| FlowError::Internal(error.to_string()))?
-                    .registry_snapshot(&[RuntimeRegistrationKind::ToolExecutionIntercept]);
-                let execution_context = ToolExecutionContext::new(execution_name, Json::Null)
-                    .with_tool_call_id(execution_tool_call_id);
-                state.tool_build_execution_chain(&execution_context, func, &scope_local_refs)
-            };
+            let execution: crate::api::runtime::callbacks::ToolExecutionOutcomeNextFn =
+                if execution_options.execution_intercepts {
+                    let scope_stack = current_scope_stack();
+                    let scope_locals = scope_stack
+                        .read()
+                        .expect("scope stack lock poisoned")
+                        .snapshot_scope_local_registries(|registries| {
+                            &registries.tool_execution_intercepts
+                        });
+                    let scope_local_refs = scope_locals.iter().collect::<Vec<_>>();
+                    let context = global_context();
+                    let state = context
+                        .read()
+                        .map_err(|error| FlowError::Internal(error.to_string()))?
+                        .registry_snapshot(&[RuntimeRegistrationKind::ToolExecutionIntercept]);
+                    let execution_context = ToolExecutionContext::new(execution_name, Json::Null)
+                        .with_tool_call_id(execution_tool_call_id);
+                    state.tool_build_execution_chain(&execution_context, func, &scope_local_refs)
+                } else {
+                    Arc::new(move |args| {
+                        let func = func.clone();
+                        Box::pin(async move {
+                            func(args).await.map(ToolExecutionInterceptOutcome::from)
+                        })
+                    })
+                };
             execution(intercepted_args).await
         })
         .await;

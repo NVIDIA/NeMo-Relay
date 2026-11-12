@@ -33,6 +33,9 @@ on:
       run_docs:
         description: 'Whether documentation jobs should run'
         value: ${{ jobs.changes.outputs.run_docs }}
+      run_documentation_examples:
+        description: 'Whether focused instrumentation example checks should run'
+        value: ${{ jobs.changes.outputs.run_documentation_examples }}
       run_go:
         description: 'Whether Go jobs should run'
         value: ${{ jobs.changes.outputs.run_go }}
@@ -81,6 +84,7 @@ jobs:
       base: ${{ steps.comparison-base.outputs.base }}
       run_dependencies: ${{ inputs.full_ci || steps.filter.outputs.dependencies == 'true' }}
       run_docs: ${{ (inputs.full_ci || startsWith(inputs.ref_name, 'pull-request/')) && (inputs.full_ci || steps.filter.outputs.ci == 'true' || steps.filter.outputs.shared == 'true' || steps.filter.outputs.docs == 'true') }}
+      run_documentation_examples: ${{ inputs.full_ci || steps.filter.outputs.ci == 'true' || steps.filter.outputs.documentation_examples == 'true' }}
       run_go: ${{ inputs.full_ci || steps.filter.outputs.ci == 'true' || steps.filter.outputs.shared == 'true' || steps.filter.outputs.go == 'true' }}
       run_installer: ${{ inputs.full_ci || steps.filter.outputs.installer == 'true' }}
       run_node: ${{ inputs.full_ci || steps.filter.outputs.ci == 'true' || steps.filter.outputs.shared == 'true' || steps.filter.outputs.node == 'true' || steps.filter.outputs.openclaw == 'true' || steps.filter.outputs.pi == 'true' }}

@@ -51,6 +51,28 @@ pub use crate::types::{
     nemo_relay_otel_subscriber_free,
 };
 
+/// Skip conditional-execution guardrails for one managed call.
+pub const NEMO_RELAY_SKIP_CONDITIONAL_EXECUTION: u32 = 1;
+/// Skip request intercepts for one managed call.
+pub const NEMO_RELAY_SKIP_REQUEST_INTERCEPTS: u32 = 2;
+/// Skip execution intercepts for one managed call (stream intercepts for streams).
+pub const NEMO_RELAY_SKIP_EXECUTION_INTERCEPTS: u32 = 4;
+
+/// Convert known skip flags to stage options. Reject flags that this API does not support.
+fn execution_options(
+    skip_stages: u32,
+) -> Result<nemo_relay_runtime::api::execution::ExecutionOptions, NemoRelayStatus> {
+    if skip_stages & !7 != 0 {
+        set_last_error("unknown execution skip-stage bits");
+        return Err(NemoRelayStatus::InvalidArg);
+    }
+    Ok(nemo_relay_runtime::api::execution::ExecutionOptions {
+        conditional_execution: skip_stages & NEMO_RELAY_SKIP_CONDITIONAL_EXECUTION == 0,
+        request_intercepts: skip_stages & NEMO_RELAY_SKIP_REQUEST_INTERCEPTS == 0,
+        execution_intercepts: skip_stages & NEMO_RELAY_SKIP_EXECUTION_INTERCEPTS == 0,
+    })
+}
+
 /// Start an asynchronous resource metrics collection using the active plugin.
 ///
 /// Poll the returned handle with `nemo_relay_resource_metrics_collect_poll`.

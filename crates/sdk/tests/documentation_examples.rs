@@ -3,6 +3,8 @@
 
 //! Compile and exercise the exact Rust source displayed by the concept guides.
 
+static DOCUMENTATION_REGISTRATION_LOCK: tokio::sync::Mutex<()> = tokio::sync::Mutex::const_new(());
+
 mod fork_task {
     include!("../../../docs/about-nemo-relay/concepts/_code/fork_task.rs");
 
@@ -21,6 +23,7 @@ mod run_agent {
 
     #[tokio::test]
     async fn agent_closes_its_scope_after_success_and_provider_failure() {
+        let _registration_guard = super::DOCUMENTATION_REGISTRATION_LOCK.lock().await;
         nemo_relay::context::with_task_scope_stack(
             nemo_relay::context::create_scope_stack(),
             async {
@@ -98,5 +101,396 @@ mod redact_openai {
         register_redaction().unwrap();
         nemo_relay::registry::deregister_llm_sanitize_request_guardrail("redact-openai-chat")
             .unwrap();
+    }
+}
+
+mod instrument_applications {
+    use nemo_relay::context::{
+        create_scope_stack, current_scope_stack_snapshot, set_thread_scope_stack,
+    };
+    use nemo_relay::registry::{
+        deregister_llm_conditional_execution_guardrail,
+        deregister_tool_conditional_execution_guardrail, deregister_tool_execution_intercept,
+        deregister_tool_sanitize_request_guardrail, list_runtime_registrations,
+        register_llm_conditional_execution_guardrail,
+        register_tool_conditional_execution_guardrail,
+    };
+    use nemo_relay::subscriber::{deregister_subscriber, flush_subscribers, register_subscriber};
+    use nemo_relay::tool::{ToolCallExecuteParams, ToolExecutionResult, tool_call_execute};
+    use serde_json::{Value, json};
+    use std::sync::{
+        Arc, Mutex,
+        atomic::{AtomicUsize, Ordering},
+    };
+
+    mod tool_program {
+        include!("../../../docs/instrument-applications/_code/rust/tool_call.rs");
+        pub(super) fn run() -> Result<(), Box<dyn std::error::Error>> {
+            main()
+        }
+    }
+    mod model_program {
+        include!("../../../docs/instrument-applications/_code/rust/llm_call.rs");
+        pub(super) fn run() -> Result<(), Box<dyn std::error::Error>> {
+            main()
+        }
+    }
+    mod query_policy {
+        include!("../../../docs/instrument-applications/_code/rust/query_policy.rs");
+    }
+    mod tool_policy {
+        include!("../../../docs/instrument-applications/_code/rust/tool_policy.rs");
+    }
+    mod printer {
+        include!("../../../docs/instrument-applications/_code/rust/print_event.rs");
+    }
+    mod managed_llm {
+        include!("../../../docs/instrument-applications/_code/rust/managed_llm.rs");
+    }
+    mod streaming_llm {
+        include!("../../../docs/instrument-applications/_code/rust/streaming_llm.rs");
+    }
+    mod manual_tool_lifecycle {
+        include!("../../../docs/instrument-applications/_code/rust/manual_tool_lifecycle.rs");
+    }
+    mod partial_middleware {
+        include!("../../../docs/instrument-applications/_code/rust/partial_middleware.rs");
+    }
+    mod scope_context {
+        include!("../../../docs/instrument-applications/_code/rust/scope_context.rs");
+    }
+    mod global_registration_gate {
+        include!("../../../docs/instrument-applications/_code/rust/global_registration_gate.rs");
+    }
+    mod scopes_and_marks {
+        include!("../../../docs/instrument-applications/_code/rust/scopes_and_marks.rs");
+        pub(super) fn run() -> Result<(), Box<dyn std::error::Error>> {
+            main()
+        }
+    }
+
+    fn paired_call(records: &[Value], category: &str, name: &str) -> Value {
+        let starts: Vec<_> = records
+            .iter()
+            .filter(|event| {
+                event["category"] == category
+                    && event["name"] == name
+                    && event["scope_category"] == "start"
+            })
+            .collect();
+        assert_eq!(starts.len(), 1, "{category} {name}: {records:?}");
+        let start = starts[0];
+        let ends: Vec<_> = records
+            .iter()
+            .filter(|event| event["uuid"] == start["uuid"] && event["scope_category"] == "end")
+            .collect();
+        assert_eq!(ends.len(), 1);
+        assert_eq!(start["parent_uuid"], ends[0]["parent_uuid"]);
+        start.clone()
+    }
+
+    #[test]
+    fn reference_examples_return_results_and_complete_lifecycles() {
+        let _registration_guard = super::DOCUMENTATION_REGISTRATION_LOCK.blocking_lock();
+        set_thread_scope_stack(create_scope_stack());
+        let records = Arc::new(Mutex::new(Vec::new()));
+        let captured = Arc::clone(&records);
+        register_subscriber(
+            "documentation-reference",
+            Arc::new(move |event| {
+                captured
+                    .lock()
+                    .unwrap()
+                    .push(serde_json::to_value(event).unwrap());
+            }),
+        )
+        .unwrap();
+        let runtime = tokio::runtime::Builder::new_current_thread()
+            .enable_all()
+            .build()
+            .unwrap();
+        runtime.block_on(async {
+            assert_eq!(managed_llm::run_example().await.unwrap()["text"], "hi");
+            flush_subscribers().unwrap();
+            paired_call(&records.lock().unwrap(), "llm", "demo-provider");
+            records.lock().unwrap().clear();
+            assert_eq!(
+                streaming_llm::run_example().await.unwrap(),
+                Some(json!({"delta": "hi"}))
+            );
+            flush_subscribers().unwrap();
+            paired_call(&records.lock().unwrap(), "llm", "demo-provider");
+            records.lock().unwrap().clear();
+            scope_context::run_example().await.unwrap();
+            flush_subscribers().unwrap();
+            assert!(
+                records
+                    .lock()
+                    .unwrap()
+                    .iter()
+                    .any(|event| event["name"] == "started")
+            );
+            records.lock().unwrap().clear();
+            let error = global_registration_gate::run_example(|| async { Ok(()) })
+                .await
+                .unwrap_err();
+            assert!(
+                error
+                    .to_string()
+                    .contains("OpenTelemetry subscriber was not found")
+            );
+        });
+        for query in ["weather", ""] {
+            let result = manual_tool_lifecycle::run_example(query);
+            if query.is_empty() {
+                assert!(
+                    result
+                        .unwrap_err()
+                        .to_string()
+                        .contains("query is required")
+                );
+            } else {
+                result.unwrap();
+            }
+            flush_subscribers().unwrap();
+            paired_call(&records.lock().unwrap(), "tool", "search");
+            records.lock().unwrap().clear();
+        }
+        let (arguments, request) = runtime.block_on(partial_middleware::run_example()).unwrap();
+        assert_eq!(arguments, json!({"query": "weather"}));
+        assert_eq!(
+            request.content,
+            json!({"messages": [{"role": "user", "content": "hello"}]})
+        );
+        flush_subscribers().unwrap();
+        assert!(records.lock().unwrap().is_empty());
+        scopes_and_marks::run().unwrap();
+        flush_subscribers().unwrap();
+        let events = records.lock().unwrap();
+        let parent = paired_call(&events, "agent", "agent-run");
+        let marks: Vec<_> = events
+            .iter()
+            .filter(|event| event["kind"] == "mark")
+            .collect();
+        assert_eq!(
+            marks
+                .iter()
+                .map(|event| event["name"].as_str().unwrap())
+                .collect::<Vec<_>>(),
+            ["planning-started", "planning-finished"]
+        );
+        assert!(
+            marks
+                .iter()
+                .all(|event| event["parent_uuid"] == parent["uuid"])
+        );
+        drop(events);
+        deregister_subscriber("documentation-reference").unwrap();
+    }
+
+    // One test keeps the examples' process-wide registration names sequential.
+    #[test]
+    fn documented_programs_policies_and_cleanup() {
+        let _registration_guard = super::DOCUMENTATION_REGISTRATION_LOCK.blocking_lock();
+        set_thread_scope_stack(create_scope_stack());
+        let records = Arc::new(Mutex::new(Vec::new()));
+        let captured = Arc::clone(&records);
+        register_subscriber(
+            "documentation-capture",
+            Arc::new(move |event| {
+                captured.lock().unwrap().push(event.to_json_value());
+            }),
+        )
+        .unwrap();
+
+        for (program, category, name) in [
+            (
+                tool_program::run as fn() -> Result<(), Box<dyn std::error::Error>>,
+                "tool",
+                "search",
+            ),
+            (model_program::run, "llm", "demo-provider"),
+        ] {
+            records.lock().unwrap().clear();
+            program().unwrap();
+            flush_subscribers().unwrap();
+            let events = records.lock().unwrap().clone();
+            let call = paired_call(&events, category, name);
+            let end = events
+                .iter()
+                .find(|event| event["uuid"] == call["uuid"] && event["scope_category"] == "end")
+                .unwrap();
+            let expected = if category == "tool" {
+                json!({"query": "runtime instrumentation", "hits": [{"title": "NeMo Relay"}]})
+            } else {
+                json!({"text": "hello", "messages": [{"role": "user", "content": "hello"}]})
+            };
+            assert_eq!(end["data"], expected);
+            let parent = events
+                .iter()
+                .find(|event| {
+                    event["uuid"] == call["parent_uuid"] && event["scope_category"] == "start"
+                })
+                .unwrap();
+            assert_eq!(parent["name"], "agent-run");
+            assert!(
+                events.iter().any(
+                    |event| event["uuid"] == parent["uuid"] && event["scope_category"] == "end"
+                )
+            );
+        }
+
+        let baseline = current_scope_stack_snapshot()
+            .unwrap()
+            .unwrap()
+            .scopes
+            .len();
+        register_tool_conditional_execution_guardrail(
+            "documentation.reject",
+            1,
+            Arc::new(|_, _| Box::pin(async { Ok(Some("documentation rejection".into())) })),
+        )
+        .unwrap();
+        assert!(
+            tool_program::run()
+                .unwrap_err()
+                .to_string()
+                .contains("documentation rejection")
+        );
+        deregister_tool_conditional_execution_guardrail("documentation.reject").unwrap();
+        assert_eq!(
+            current_scope_stack_snapshot()
+                .unwrap()
+                .unwrap()
+                .scopes
+                .len(),
+            baseline
+        );
+
+        register_llm_conditional_execution_guardrail(
+            "documentation.reject-model",
+            1,
+            Arc::new(|_request| Box::pin(async { Ok(Some("documentation rejection".into())) })),
+        )
+        .unwrap();
+        assert!(
+            model_program::run()
+                .unwrap_err()
+                .to_string()
+                .contains("documentation rejection")
+        );
+        deregister_llm_conditional_execution_guardrail("documentation.reject-model").unwrap();
+        assert_eq!(
+            current_scope_stack_snapshot()
+                .unwrap()
+                .unwrap()
+                .scopes
+                .len(),
+            baseline
+        );
+        let registrations = list_runtime_registrations(None).unwrap();
+        assert!(!registrations.iter().any(|registration| matches!(
+            registration.local_name.as_str(),
+            "instrumentation-check" | "llm-check"
+        )));
+
+        tokio::runtime::Runtime::new().unwrap().block_on(async {
+            for combined in [false, true] {
+                if combined { tool_policy::register_tool_policy().unwrap(); }
+                else { query_policy::register_query_policy().unwrap(); }
+                for query in ["weather", ""] {
+                    records.lock().unwrap().clear();
+                    let calls = Arc::new(AtomicUsize::new(0));
+                    let callback_calls = Arc::clone(&calls);
+                    let result = tool_call_execute(ToolCallExecuteParams::builder()
+                        .name("search")
+                        .args(json!({"query": query, "api_key": "demo-value"}))
+                        .func(Arc::new(move |arguments| {
+                            let callback_calls = Arc::clone(&callback_calls);
+                            Box::pin(async move {
+                                callback_calls.fetch_add(1, Ordering::SeqCst);
+                                assert_eq!(arguments["api_key"], "demo-value");
+                                Ok(ToolExecutionResult::new(json!({"query": arguments["query"]})))
+                            })
+                        })).build()).await;
+                    flush_subscribers().unwrap();
+                    if query.is_empty() {
+                        assert!(result.unwrap_err().to_string().contains("search.query is required"));
+                        assert_eq!(calls.load(Ordering::SeqCst), 0);
+                        let events = records.lock().unwrap();
+                        assert!(events.iter().any(|event| {
+                            event["kind"] == "mark"
+                                && event["name"] == "search"
+                                && event["data"]["rejected"] == true
+                                && event["data"]["rejection_reason"] == "search.query is required"
+                        }));
+                        assert!(!events.iter().any(|event| {
+                            event["category"] == "tool" && event["name"] == "search"
+                        }));
+                    } else {
+                        assert_eq!(result.unwrap().result, json!({"query": query}));
+                        assert_eq!(calls.load(Ordering::SeqCst), 1);
+                        if combined { assert_eq!(paired_call(&records.lock().unwrap(), "tool", "search")["data"]["api_key"], "<redacted>"); }
+                    }
+                }
+                records.lock().unwrap().clear();
+                let unrelated_tool_calls = Arc::new(AtomicUsize::new(0));
+                let unrelated_callback_calls = Arc::clone(&unrelated_tool_calls);
+                let execution = tool_call_execute(ToolCallExecuteParams::builder()
+                    .name("get_time")
+                    .args(json!({"timezone": "UTC"}))
+                    .func(Arc::new(move |arguments| {
+                        let unrelated_callback_calls = Arc::clone(&unrelated_callback_calls);
+                        Box::pin(async move {
+                            unrelated_callback_calls.fetch_add(1, Ordering::SeqCst);
+                            assert_eq!(arguments, json!({"timezone": "UTC"}));
+                            Ok(ToolExecutionResult::new(json!({
+                                "timezone": arguments["timezone"],
+                                "time": "12:00:00",
+                            })))
+                        })
+                    }))
+                    .build()).await.unwrap();
+                assert_eq!(unrelated_tool_calls.load(Ordering::SeqCst), 1);
+                assert_eq!(execution.result, json!({"timezone": "UTC", "time": "12:00:00"}));
+                flush_subscribers().unwrap();
+                paired_call(&records.lock().unwrap(), "tool", "get_time");
+                if combined {
+                    for annotation in [None, Some(json!({"verification": "preserved"}))] {
+                        let expected_annotation = annotation.clone();
+                        let execution = tool_call_execute(ToolCallExecuteParams::builder()
+                            .name("search")
+                            .args(json!({"query": "weather"}))
+                            .func(Arc::new(move |_arguments| {
+                                let annotation = annotation.clone();
+                                Box::pin(async move {
+                                    Ok(ToolExecutionResult {
+                                        result: json!({"ok": true}),
+                                        annotation,
+                                    })
+                                })
+                            }))
+                            .build()).await.unwrap();
+                        assert_eq!(execution.annotation, expected_annotation);
+                    }
+                }
+                deregister_tool_conditional_execution_guardrail("search.require_query").unwrap();
+                if combined {
+                    deregister_tool_sanitize_request_guardrail("search.redact_api_key").unwrap();
+                    deregister_tool_execution_intercept("search.measure").unwrap();
+                }
+            }
+        });
+        register_subscriber("documentation-json", Arc::new(printer::log_event)).unwrap();
+        nemo_relay::scope::event(
+            nemo_relay::scope::EmitMarkEventParams::builder()
+                .name("documentation-check")
+                .data(json!({"sample": "synthetic"}))
+                .build(),
+        )
+        .unwrap();
+        flush_subscribers().unwrap();
+        deregister_subscriber("documentation-json").unwrap();
+        deregister_subscriber("documentation-capture").unwrap();
     }
 }

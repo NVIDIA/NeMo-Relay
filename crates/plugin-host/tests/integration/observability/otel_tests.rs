@@ -97,10 +97,15 @@ impl BlockingSpanExporter {
     fn wait_until_export_starts(&self) {
         let (state, changed) = &*self.state;
         let guard = state.lock().unwrap();
-        let (guard, timeout) = changed
+        let (guard, _) = changed
             .wait_timeout_while(guard, Duration::from_secs(5), |state| !state.export_started)
             .unwrap();
-        assert!(guard.export_started && !timeout.timed_out());
+        let export_started = guard.export_started;
+        drop(guard);
+        assert!(
+            export_started,
+            "trace export did not start within five seconds"
+        );
     }
 
     fn release(&self) {
@@ -153,6 +158,8 @@ fn slow_trace_flush_does_not_block_other_subscribers_or_lifecycle_barriers() {
     let provider = SdkTracerProvider::builder()
         .with_span_processor(processor)
         .build();
+    // Drain initialization before submitting a span to the one-slot queue.
+    provider.force_flush().unwrap();
     let trace_subscriber = OpenTelemetrySubscriber::from_tracer_provider(provider, "trace")
         .with_host(crate::observability_runtime::runtime_host());
     let trace_name = format!("slow-trace-{}", Uuid::now_v7().simple());

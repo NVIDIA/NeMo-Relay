@@ -28,6 +28,7 @@ from datetime import datetime
 from nemo_relay import Json
 from nemo_relay._context import ensure_scope_stack
 from nemo_relay._native import (
+    ExecutionOptions,
     ScopeHandle,
     ToolAttributes,
     ToolExecutionResult,
@@ -164,10 +165,11 @@ def execute(
     data: Json | None = None,
     metadata: Json | None = None,
     tool_call_id: str | None = None,
+    execution_options: ExecutionOptions | None = None,
 ) -> Awaitable[ToolExecutionResult[Json]]:
     """Run a tool through the managed middleware pipeline.
 
-    Pipeline order:
+    Default pipeline order:
 
     1. tool conditional-execution guardrails
     2. tool request intercepts
@@ -188,6 +190,10 @@ def execute(
         metadata: Optional JSON metadata recorded on the emitted start event.
         tool_call_id: Optional provider-specific tool call identifier recorded
             on the emitted start and end events.
+        execution_options: Choose which middleware stages run for this call.
+            Omit this option to run all stages. Turning off conditional execution
+            skips its checks. Relay still sanitizes event data, uses codecs,
+            and handles call completion.
 
     Returns:
         ToolExecutionResult: The canonical result returned by ``func`` or an
@@ -231,6 +237,7 @@ def execute(
         data=data,
         metadata=metadata,
         tool_call_id=tool_call_id,
+        execution_options=execution_options,
     )
 
 
