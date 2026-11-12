@@ -32,9 +32,9 @@ Continue with the [Node.js Quick Start](/getting-started/quick-start/nodejs).
 
 ## Rust
 
-Building requires a Rust toolchain, `protoc` 31.1 or newer, and Buf 1.75.0 or newer
-on `PATH`, or selected through `PROTOC` and `BUF`. The first build needs access to
-the Buf Schema Registry to download the locked validation schema.
+Building requires a Rust toolchain and Buf 1.75.0 or newer on `PATH`, or selected
+through `BUF`. Cargo supplies `protoc` automatically. The first build needs
+access to the Buf Schema Registry to download the locked validation schema.
 
 ```bash
 cargo add nemo-relay

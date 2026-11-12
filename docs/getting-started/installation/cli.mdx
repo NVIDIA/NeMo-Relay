@@ -1,12 +1,12 @@
 ---
 title: "CLI"
-description: "Install the Relay executable for Claude Code, Codex, and pi."
+description: "Install the Relay executable for Claude Code and Codex."
 position: 1
 ---
 {/* SPDX-FileCopyrightText: Copyright (c) 2026, NVIDIA CORPORATION & AFFILIATES. All rights reserved.
 SPDX-License-Identifier: Apache-2.0 */}
 
-Install the latest stable Relay CLI for Claude Code, Codex, or pi. The prebuilt
+Install the latest stable Relay CLI for Claude Code or Codex. The prebuilt
 installers do not require a Rust compiler or Python environment.
 
 <Tabs>
@@ -53,11 +53,17 @@ nemo-relay codex
 ```
 
 For a first complete example, follow the
-[Claude Code](/getting-started/quick-start/claude-code),
-[Codex](/getting-started/quick-start/codex), or [pi](/getting-started/quick-start/pi)
+[Claude Code](/getting-started/quick-start/claude-code) or
+[Codex](/getting-started/quick-start/codex)
 quick start.
 
 ## Install a Persistent Integration
+
+The persistent gateway reads user and system configuration; quick-start project
+files are not selected automatically. Follow
+[Prepare Relay Configuration](/nemo-relay-cli/plugin-installation#prepare-relay-configuration)
+to copy the exporter and provider settings you need into that configuration
+before expecting exported activity.
 
 Run the matching command once to enable Relay across sessions. Then start your
 agent normally and Relay loads automatically.

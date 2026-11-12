@@ -76,7 +76,7 @@ navigation:
                 icon: fa-solid fa-terminal
                 path: ./getting-started/quick-start/hermes.mdx
                 slug: hermes
-              - page: "pi"
+              - page: "pi (PoC)"
                 icon: fa-solid fa-pi
                 path: ./getting-started/quick-start/pi.mdx
                 slug: pi
@@ -121,7 +121,7 @@ navigation:
           - page: "Codex"
             path: ./nemo-relay-cli/codex.mdx
             slug: codex
-          - page: "pi"
+          - page: "pi (PoC)"
             path: ./nemo-relay-cli/pi.mdx
             slug: pi
       - page: "Configuration"

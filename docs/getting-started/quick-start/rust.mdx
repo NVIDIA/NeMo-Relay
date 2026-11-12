@@ -68,11 +68,11 @@ Before you start, make sure you have:
 
 - Rust 1.88 or newer
 - Cargo
-- `protoc` 31.1 or later
 - Buf 1.75.0 or later
 
-Install `protoc` and Buf on `PATH`, or select them with `PROTOC` and `BUF`. The first
-build needs access to the Buf Schema Registry to download the locked validation schema.
+Install Buf on `PATH`, or select it with `BUF`. Cargo supplies `protoc`
+automatically. The first build needs access to the Buf Schema Registry to
+download the locked validation schema.
 
 <Note icon="circle-info">
 Install commands target the Relay version documented here. If that version has

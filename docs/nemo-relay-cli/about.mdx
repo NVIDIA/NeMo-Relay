@@ -14,7 +14,7 @@ diagnostics.
 You can use it to:
 
 - **Run and connect coding agents.** Launch supported agents, including Claude
-  Code, Codex, and pi, through Relay. You can also install persistent connections
+  Code and Codex, through Relay. You can also install persistent connections
   so Relay loads when the agents start normally.
 - **Handle model requests and agent events.** Start a Relay gateway process that
   receives agent events and forwards model requests to configured providers.
@@ -44,15 +44,14 @@ route, deployment mode, and enabled components. Refer to the
 Choose the path that matches your task:
 
 - **Run your first coding agent session with Relay.** Follow the
-  [Claude Code](/getting-started/quick-start/claude-code),
-  [Codex](/getting-started/quick-start/codex), or
-  [pi](/getting-started/quick-start/pi) quick start to install what you need,
+  [Claude Code](/getting-started/quick-start/claude-code) or
+  [Codex](/getting-started/quick-start/codex) quick start to install what you need,
   configure output, run a task, and verify the captured activity.
 - **Enable Relay in your coding agent.** Follow the
   [persistent setup instructions](/nemo-relay-cli/plugin-installation) so your
   coding agent loads Relay when it starts normally. Then follow the
-  [Claude Code](/nemo-relay-cli/claude-code), [Codex](/nemo-relay-cli/codex), or
-  [pi](/nemo-relay-cli/pi) guide for settings and behavior specific to that agent.
+  [Claude Code](/nemo-relay-cli/claude-code) or [Codex](/nemo-relay-cli/codex)
+  guide for settings and behavior specific to that agent.
 - **Set up a managed Relay deployment.** Follow the [Daemon](/daemon/about)
   documentation for deployment instructions and settings controlled by
   administrators. Managed deployments can serve one or multiple users.
@@ -75,7 +74,6 @@ controls.
 | --- | --- | --- | --- | --- |
 | Claude Code | Yes | Yes | Partial | Pre-tool hook responses are supported. LLM optimization uses gateway-routed traffic; full coverage depends on loaded Claude Code hooks. |
 | Codex | Yes | Yes | Partial | Persistent installation verifies the required Relay-generated hooks. A parent `Stop` or `Interrupt` finalizes the bounded task when no delegated agents remain. |
-| pi | Partial | Yes | No | Proof of concept. Tool and turn activity are captured through a Relay-authored pi extension, and both tool calls and model calls can be blocked. Model traffic reaches the gateway only when the gateway forwards to the endpoint every model of the selected provider would otherwise call, because pi's provider registration is provider-wide. |
 
 For minimum agent versions, platform support, and current limitations, refer to
 the [Support Matrix](/reference/support-matrix).
