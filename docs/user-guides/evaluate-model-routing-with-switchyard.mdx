@@ -475,7 +475,7 @@ any Relay hook trust prompts; keep the run confined to the disposable example.
 | Selection and delivery | `switchyard.routing.decision`: `selected_model`, `served_model`, `fallback_used` |
 | Judge recovery | Decision `evidence.source` and `reason_code` |
 | Provider attempts | `switchyard.routing.llm_call`: `call_role`, model, and outcome |
-| Usage and truncation | `summary.json`, answer/routing metrics, and incomplete model calls |
+| Usage and truncation | `summary.json`: `tokens_by_model` groups answer/routing usage by target model and token type; missing usage is `null`. Inspect incomplete model calls alongside usage. |
 
 Judge HTTP success does not establish a valid verdict. Review final JSON and
 recovery reasons alongside the task's acceptance log.

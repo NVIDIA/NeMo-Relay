@@ -186,6 +186,7 @@ class SummaryChecks(unittest.TestCase):
             with contextlib.redirect_stdout(io.StringIO()):
                 rows = summarize(output)
             self.assertEqual(rows[0]["tokens"]["answer"], 7)
+            self.assertEqual(rows[0]["tokens_by_model"]["answer"], {"large": {"input": 5, "output": 2, "total": 7}})
             self.assertEqual(rows[0]["truncated_calls"], 1)
             self.assertIsNone(rows[0]["tokens"]["routing"])
             self.assertEqual(rows[0]["served_models"], {"actual-large": 1})
@@ -218,6 +219,109 @@ class SummaryChecks(unittest.TestCase):
             with contextlib.redirect_stdout(io.StringIO()):
                 rows = summarize(output)
             self.assertIsNone(rows[0]["tokens"]["answer"])
+            self.assertEqual(
+                rows[0]["tokens_by_model"]["answer"], {"large": {"input": None, "output": None, "total": None}}
+            )
+
+    def test_usage_is_separate_for_each_role_model_and_token_type(self):
+        calls = [
+            {"call_role": role, "selected_model": model}
+            for role, model in [("answer", "small"), ("answer", "small"), ("answer", "large"), ("routing", "small")]
+        ]
+        observations = [
+            ("answer", "small", "input", 5),
+            ("answer", "small", "input", 8),
+            ("answer", "small", "output", 2),
+            ("answer", "small", "output", 3),
+            ("answer", "small", "total", 7),
+            ("answer", "small", "total", 11),
+            ("answer", "large", "input", 20),
+            ("answer", "large", "output", 4),
+            ("answer", "large", "total", 24),
+            ("routing", "small", "input", 9),
+            ("routing", "small", "output", 1),
+            ("routing", "small", "total", 10),
+            ("routing", "small", "reasoning", 0),
+        ]
+        row = self.summarize_usage(calls, observations)
+        self.assertEqual(
+            row["tokens_by_model"],
+            {
+                "answer": {
+                    "small": {"input": 13, "output": 5, "total": 18},
+                    "large": {"input": 20, "output": 4, "total": 24},
+                },
+                "routing": {"small": {"input": 9, "output": 1, "total": 10, "reasoning": 0}},
+            },
+        )
+        self.assertEqual(row["tokens"], {"answer": 42, "routing": 10})
+
+    def test_missing_or_invalid_usage_affects_only_its_group(self):
+        calls = [{"call_role": "answer", "selected_model": model} for model in ("small", "small", "large")]
+        for invalid in (None, True, -1, 1.5, "5"):
+            with self.subTest(invalid=invalid):
+                row = self.summarize_usage(
+                    calls,
+                    [
+                        ("answer", "small", "input", 5),
+                        ("answer", "small", "input", invalid),
+                        ("answer", "small", "output", 2),
+                        ("answer", "small", "output", 3),
+                        ("answer", "small", "total", 7),
+                        ("answer", "large", "input", 20),
+                        ("answer", "large", "output", 4),
+                        ("answer", "large", "total", 24),
+                    ],
+                )
+                self.assertEqual(row["tokens_by_model"]["answer"]["small"], {"input": None, "output": 5, "total": None})
+                self.assertEqual(row["tokens_by_model"]["answer"]["large"], {"input": 20, "output": 4, "total": 24})
+                self.assertIsNone(row["tokens"]["answer"])
+
+    def test_usage_counts_cannot_compensate_across_models(self):
+        calls = [{"call_role": "answer", "selected_model": model} for model in ("small", "small", "large")]
+        row = self.summarize_usage(
+            calls,
+            [("answer", "small", "total", 7), ("answer", "large", "total", 24), ("answer", "large", "total", 24)],
+        )
+        self.assertIsNone(row["tokens_by_model"]["answer"]["small"]["total"])
+        self.assertIsNone(row["tokens_by_model"]["answer"]["large"]["total"])
+        self.assertIsNone(row["tokens"]["answer"])
+
+    def test_missing_usage_stays_unknown_for_observed_targets(self):
+        calls = [{"call_role": "answer", "selected_model": "small"}]
+        row = self.summarize_usage(calls, [])
+        self.assertEqual(row["tokens_by_model"]["answer"], {"small": {"input": None, "output": None, "total": None}})
+        self.assertEqual(row["tokens_by_model"]["routing"], {})
+
+    def summarize_usage(self, calls, observations):
+        with tempfile.TemporaryDirectory() as directory:
+            output = Path(directory)
+            (output / "routes.toml").write_text('[targets.efficient]\nid="small"\n[targets.capable]\nid="large"\n')
+            (output / "results.json").write_text("[]")
+            events = [mark("switchyard.routing.llm_call", call, f"call-{i}") for i, call in enumerate(calls)]
+            metric = mark(
+                "metric",
+                {
+                    "measurements": [
+                        {
+                            "name": "switchyard.routing.llm_tokens",
+                            "value": value,
+                            "attributes": {"call_role": role, "target_model": model, "token_type": kind},
+                        }
+                        for role, model, kind, value in observations
+                    ]
+                },
+                "metric",
+            )
+            metric["data_schema"] = {"name": "nemo.relay.metric_measurements", "version": "1.0"}
+            # Duplicate delivery must not inflate any of the per-model groups.
+            events.extend([metric, metric])
+            logs = output / "routed/logs"
+            logs.mkdir(parents=True)
+            (logs / "events.jsonl").write_text("\n".join(map(json.dumps, events)))
+            with contextlib.redirect_stdout(io.StringIO()):
+                summarize(output)
+            return json.loads((output / "summary.json").read_text())[2]
 
 
 if __name__ == "__main__":

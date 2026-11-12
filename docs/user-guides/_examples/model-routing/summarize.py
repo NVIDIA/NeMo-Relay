@@ -6,7 +6,7 @@
 import argparse
 import json
 import tomllib
-from collections import Counter
+from collections import Counter, defaultdict
 from pathlib import Path
 
 
@@ -65,25 +65,39 @@ def summarize(output):
             if evidence.get("source") in {"fail_open", "fall_open"}:
                 recoveries[data.get("outcome_id") or mark.get("uuid")] = evidence.get("reason_code", "unspecified")
         tokens = {}
+        tokens_by_model = {}
         for role in ("answer", "routing"):
-            observed = [c for c in calls if c.get("call_role") == role]
-            totals = []
+            observed = Counter(c.get("selected_model") or "unknown" for c in calls if c.get("call_role") == role)
+            values = defaultdict(lambda: defaultdict(list))
             for mark in marks:
                 schema = mark.get("data_schema") or {}
                 if not isinstance(schema, dict) or schema.get("name") != "nemo.relay.metric_measurements":
                     continue
                 for metric in (mark.get("data") or {}).get("measurements", []):
                     attrs = metric.get("attributes") or {}
-                    if (
-                        metric.get("name") == "switchyard.routing.llm_tokens"
-                        and attrs.get("call_role") == role
-                        and attrs.get("token_type") == "total"
-                    ):
-                        value = metric.get("value")
-                        if isinstance(value, int) and not isinstance(value, bool) and value >= 0:
-                            totals.append(value)
-            # Report partial metrics as unknown, not a misleading subtotal.
-            tokens[role] = sum(totals) if observed and len(totals) == len(observed) else None
+                    if metric.get("name") == "switchyard.routing.llm_tokens" and attrs.get("call_role") == role:
+                        model, kind = attrs.get("target_model"), attrs.get("token_type")
+                        if isinstance(model, str) and model and isinstance(kind, str) and kind:
+                            values[model][kind].append(metric.get("value"))
+            tokens_by_model[role] = {}
+            for model in sorted(observed.keys() | values.keys()):
+                usage = {}
+                for kind in sorted({"input", "output", "total"} | values[model].keys()):
+                    samples = values[model][kind]
+                    # Match each group to its own attempts. Extra metrics for one
+                    # target cannot compensate for missing usage on another.
+                    complete = (
+                        observed[model]
+                        and len(samples) == observed[model]
+                        and all(
+                            isinstance(value, int) and not isinstance(value, bool) and value >= 0 for value in samples
+                        )
+                    )
+                    usage[kind] = sum(samples) if complete else None
+                tokens_by_model[role][model] = usage
+            # Keep compact role totals, but never publish a partial subtotal.
+            totals = [usage["total"] for usage in tokens_by_model[role].values()]
+            tokens[role] = sum(totals) if observed and all(value is not None for value in totals) else None
         row = {
             "arm": arm,
             "accepted": sum(t["accepted"] for t in tasks),
@@ -99,6 +113,7 @@ def summarize(output):
             "fallbacks": sum(d.get("fallback_used") is True for d in decisions),
             "unknown_fallbacks": sum(d.get("fallback_used") is None for d in decisions),
             "tokens": tokens,
+            "tokens_by_model": tokens_by_model,
         }
         rows.append(row)
     (output / "summary.json").write_text(json.dumps(rows, indent=2) + "\n")
@@ -123,7 +138,10 @@ def summarize(output):
             f"(unknown: {row['unknown_fallbacks']}) | "
             f"{row['truncated_calls']} | {display(row['tokens']['answer'])} | {display(row['tokens']['routing'])}"
         )
-    print("Answer attempts are selected targets; served_models is in summary.json. Missing usage stays unknown.")
+    print(
+        "Answer attempts are selected targets; served_models and tokens_by_model are in summary.json. "
+        "Missing usage stays unknown."
+    )
     return rows
 
 
