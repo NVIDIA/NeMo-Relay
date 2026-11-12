@@ -14,14 +14,15 @@ local gateway cannot observe provider traffic that never reaches the machine.
 
 ## Requirements
 
-Install `codex-cli` 0.143.0 or newer. Persistent installation requires one
-discovered, enabled, and trusted handler for each of the nine events in the
+Install `codex-cli` 0.150.0 or newer. Persistent installation requires one
+discovered, enabled, and trusted handler for each of the eleven events in the
 Relay-generated Codex hook set:
 `SessionStart`, `UserPromptSubmit`, `PreToolUse`, `PostToolUse`,
-`SubagentStart`, `SubagentStop`, `Stop`, `PreCompact`, and
-`PostCompact`. Persistent setup also requires the `features.hooks` flag,
-plugin app-server metadata, and Relay's built-in OpenAI endpoint override. The
-installer checks the Codex version before it changes any files.
+`SubagentStart`, `SubagentStop`, `Stop`, `PreCompact`, `PostCompact`,
+`SessionEnd`, and `Interrupt`. Persistent setup also requires the
+`features.hooks` flag, plugin app-server metadata, and Relay's built-in OpenAI
+endpoint override. The installer checks the Codex version before it changes any
+files.
 
 <Warning>
 Codex requires hooks to be trusted before they run. `nemo-relay install codex`
@@ -353,10 +354,9 @@ ls "/absolute/path/to/atif"
 
 Replace the example path with the same path you set in `plugins.toml`.
 
-The Codex plugin schema does not expose `SessionEnd`, so the gateway finalizes
-ATIF when the bounded `codex-task` closes. A parent `Stop` closes a task with no
-remaining delegated agents. Idle timeout and gateway shutdown finalize unfinished
-tasks. Unless you change `filename_template`, the file is named
+The gateway finalizes ATIF when the bounded `codex-task` closes. A parent `Stop` or `Interrupt` closes a task with no
+remaining delegated agents, and `SessionEnd` closes the session. Idle timeout and
+gateway shutdown finalize unfinished tasks. Unless you change `filename_template`, the file is named
 `nemo-relay-atif-<task-scope-id>.json`. It contains the parent turns and delegated
 work observed within that task. Separate tasks in the same Codex session produce
 separate trajectories. The native Codex session ID is retained in
@@ -368,11 +368,13 @@ the ATIF exporter with a writable `output_directory`.
 
 The generated hook set includes `SessionStart`, `UserPromptSubmit`,
 `PreToolUse`, `PostToolUse`, `SubagentStart`,
-`SubagentStop`, `Stop`, `PreCompact`, and `PostCompact`. Both compaction hooks
-emit canonical `compaction` marks. Relay requires the Codex app-server to
+`SubagentStop`, `Stop`, `PreCompact`, `PostCompact`, `SessionEnd`, and
+`Interrupt`. Both compaction hooks emit canonical `compaction` marks. `Interrupt`
+closes an interrupted turn with an error status, since Codex sends no `Stop` for
+it, and `SessionEnd` ends the session. Relay requires the Codex app-server to
 discover exactly one enabled, trusted handler for every generated event.
-Relay does not generate `PermissionRequest`, `PostToolUseFailure`, `Notification`,
-or `SessionEnd` handlers.
+Relay does not generate `PermissionRequest`, `PostToolUseFailure`, or
+`Notification` handlers.
 Codex work exports a `codex-task` agent scope rather than a session-length span.
 Parent turns and delegated agents share this exported ancestor. A child's
 `codex-turn` scope sits under its delegated agent, and owned model and tool calls

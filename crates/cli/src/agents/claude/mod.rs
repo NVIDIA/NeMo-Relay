@@ -36,6 +36,7 @@ pub(super) const DESCRIPTOR: AgentDescriptor = AgentDescriptor {
         "PostCompact",
         "SessionEnd",
     ],
+    capped_hook_events: (&[], 0),
 };
 
 pub(super) fn parse_version(raw: &str) -> Option<Version> {

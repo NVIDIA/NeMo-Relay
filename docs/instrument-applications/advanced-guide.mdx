@@ -1,17 +1,20 @@
 ---
 title: "Add Middleware"
-description: ""
+description: "Add one policy to a working Execute call, verify its effect, and extend middleware as needed."
 position: 5
 ---
 {/* SPDX-FileCopyrightText: Copyright (c) 2026, NVIDIA CORPORATION & AFFILIATES. All rights reserved.
 SPDX-License-Identifier: Apache-2.0 */}
 
 
-Use this guide when instrumentation is working and you want NeMo Relay to enforce policy, transform requests, wrap execution, or sanitize observability payloads around tool and LLM calls.
+**Middleware adds rules and behavior around tool and LLM calls without changing
+the code that performs the underlying work.** Relay uses it to check or modify
+requests, allow or block execution, add retries or fallbacks, and control what
+data is recorded in events.
 
 ## What You Build
 
-You will add middleware to an instrumented application and verify that it runs in the expected part of the pipeline:
+You will add middleware to a working Execute call and verify its effect:
 
 - Request intercepts transform the real request before execution.
 - Sanitize guardrails transform only the payload recorded on events.
@@ -20,7 +23,63 @@ You will add middleware to an instrumented application and verify that it runs i
 
 ## Before You Start
 
-Complete [Instrument a Tool Call](/instrument-applications/instrument-tool-call) or [Instrument an LLM Call](/instrument-applications/instrument-llm-call). Middleware only runs when the call goes through a NeMo Relay managed lifecycle API.
+Complete [Instrument a Tool Call](/instrument-applications/instrument-tool-call)
+or [Instrument an LLM Call](/instrument-applications/instrument-llm-call).
+Execute APIs run execution-control middleware around the actual callback. Manual
+start/end APIs apply event-payload sanitizers but do not automatically run request
+or execution intercepts.
+
+## Add One Tool Policy
+
+Start with the working `search` example from
+[Instrument a Tool Call](/instrument-applications/instrument-tool-call).
+Add the function below to the working example, merging its imports with the
+existing imports. Call `register_query_policy()` in Python,
+`registerQueryPolicy()` in Node.js, or `register_query_policy()?` in Rust inside
+`main`, before the Execute call. It rejects an empty query before the tool runs.
+
+<Tabs>
+<Tab title="Python" language="python">
+<Code src="_code/python/query_policy.py" language="python" />
+</Tab>
+
+<Tab title="Node.js" language="node">
+<Code src="_code/nodejs/query-policy.js" language="js" />
+</Tab>
+
+<Tab title="Rust" language="rust">
+<Code src="_code/rust/query_policy.rs" language="rust" />
+</Tab>
+</Tabs>
+
+Run the example with its original query. It should return the same result and
+emit the same lifecycle events. Then change the query to an empty string and run
+it again. The Execute call should fail with `search.query is required` before the
+`search` callback runs. Keep the example's scope closure and subscriber cleanup.
+With this policy, an empty query emits a `search` rejection mark with
+`rejected: true` and `rejection_reason: "search.query is required"`. The callback
+does not run, and no tool start/end events are emitted for the rejected call.
+The enclosing agent scope still closes normally.
+
+With a subscriber that prints event kind and name, the rejected call produces
+these event lines:
+
+```text title="Expected rejection events"
+scope agent-run
+scope search.require_query
+scope search.require_query
+mark search
+scope agent-run
+```
+
+The Execute call also reports `search.query is required`. The `mark search`
+line is the rejection checkpoint; it is not a tool start or end event. The two
+`scope search.require_query` lines record the guardrail's own execution. There
+is no `scope search` start/end pair for the rejected tool call.
+
+Register this process-wide policy once during application setup. Use
+[Scope Middleware to One Request](#scope-middleware-to-one-request) when a policy
+belongs to one request instead.
 
 ## Choose the Middleware Type
 
@@ -35,6 +94,108 @@ Use this table to match the behavior you need with the correct middleware family
 | Wrap streaming model output | LLM stream execution intercept | Yes |
 
 Use the narrowest middleware type that matches the behavior. For example, do not use a request intercept when you only need to hide a secret from exported events.
+
+## Add a Tool Policy
+
+Replace the entire [Add One Tool Policy](#add-one-tool-policy) example with the
+following example. Call `register_tool_policy()` in Python,
+`registerToolPolicy()` in Node.js, or `register_tool_policy()?` in Rust before
+Execute. Keep the tool guide's scope and subscriber cleanup.
+
+This example adds three behaviors around a `search` tool:
+
+- Redact `api_key` from emitted request events.
+- Reject empty queries before execution.
+- Measure execution duration.
+
+<Tabs>
+<Tab title="Python" language="python">
+<Code src="_code/python/tool_policy.py" language="python" />
+</Tab>
+
+<Tab title="Node.js" language="node">
+<Code src="_code/nodejs/tool-policy.js" language="js" />
+</Tab>
+
+<Tab title="Rust" language="rust">
+<Code src="_code/rust/tool_policy.rs" language="rust" />
+</Tab>
+
+</Tabs>
+
+Tool execution intercepts return an outcome even when they only forward the
+canonical result from `next`. A forwarding intercept must preserve both
+`result` and `annotation`; pending marks remain lifecycle-owned. Refer to
+[Tool Execution Intercept Outcomes](/reference/tool-execution-intercept-outcomes)
+for annotation, pending-mark, lifecycle, and binding-specific return semantics.
+
+## Validate the Middleware
+
+To inspect redaction, make these changes to the working tool example:
+
+1. Add an `api_key` argument with the synthetic value `demo-value` to the arguments
+   passed to Execute. In Python, also add `api_key: str` to `SearchArguments`.
+2. Replace the temporary subscriber callback with the matching function below.
+   In Node.js, pass `logEvent` to `registerSubscriber`. In Rust, pass
+   `Arc::new(log_event)` to `register_subscriber`. Keep the existing subscriber
+   name, flush, and cleanup. Use only synthetic data because this subscriber
+   prints complete events.
+
+<Tabs>
+<Tab title="Python" language="python">
+<Code src="_code/python/print_event.py" language="python" />
+</Tab>
+
+<Tab title="Node.js" language="node">
+<Code src="_code/nodejs/print-event.js" language="js" />
+</Tab>
+
+<Tab title="Rust" language="rust">
+<Code src="_code/rust/print_event.rs" language="rust" />
+</Tab>
+</Tabs>
+
+Run the example with the original nonempty query. The call returns the same search
+result as before. Check these fields in the tool start event; other event fields
+are omitted:
+
+```json title="Expected tool start fields"
+{
+  "name": "search",
+  "data": {
+    "query": "runtime instrumentation",
+    "api_key": "<redacted>"
+  }
+}
+```
+
+The allowed call also prints one timing line matching this pattern:
+
+```text title="Expected timing pattern"
+search completed in <duration>
+```
+
+`<duration>` varies between runs. Python and Node.js print a number followed by
+` ms`; Rust uses duration formatting, so the unit can vary.
+
+Then run the example with an empty query. The call fails with
+`search.query is required` before the `search` callback or timing intercept runs.
+No timing line is printed. Refer to [Add One Tool Policy](#add-one-tool-policy)
+for the rejection mark and its meaning.
+
+After checking the payload, restore the subscriber callback that prints only
+event kind and name.
+
+## Scope Middleware to One Request
+
+Use scope-local middleware when a policy applies only to one request, tenant, experiment, or agent run.
+
+1. Create or receive the active scope handle.
+2. Register middleware with the scope-local helper for that handle.
+3. Execute tools or LLM calls inside that scope.
+4. Let the scope end remove the scope-local registrations automatically.
+
+Use global middleware for process-wide behavior, such as organization-wide redaction. Use scope-local middleware for request-specific policy, such as tenant routing or an A/B test.
 
 ## Control a Global Registration
 
@@ -61,163 +222,6 @@ Refer to
 [Conditional Middleware Guardrails](/about-nemo-relay/concepts/conditional-middleware-guardrails)
 for the complete semantic model and [Code Examples](/instrument-applications/code-examples)
 for binding-specific registration and cleanup.
-
-## Add a Tool Policy
-
-This example adds three behaviors around a `search` tool:
-
-- Redact `api_key` from emitted request events.
-- Reject empty queries before execution.
-- Measure execution duration.
-
-<Tabs>
-<Tab title="Python" language="python">
-```python
-import time
-from collections.abc import Awaitable, Callable
-
-import nemo_relay
-
-def redact_api_key(_tool_name: str, args: nemo_relay.Json) -> nemo_relay.Json:
-    safe_args = dict(args)
-    if "api_key" in safe_args:
-        safe_args["api_key"] = "<redacted>"
-    return safe_args
-
-def require_query(_tool_name: str, args: nemo_relay.Json) -> str | None:
-    if not args.get("query"):
-        return "search.query is required"
-    return None
-
-async def measure_tool(
-    context: nemo_relay.ToolExecutionContext,
-    next_call: Callable[[nemo_relay.Json], Awaitable[nemo_relay.ToolExecutionResult[nemo_relay.Json]]],
-) -> nemo_relay.ToolExecutionInterceptOutcome:
-    started = time.perf_counter()
-    try:
-        execution_result = await next_call(context.args)
-        return nemo_relay.ToolExecutionInterceptOutcome(
-            execution_result.result,
-            annotation=execution_result.annotation,
-        )
-    finally:
-        elapsed_ms = round((time.perf_counter() - started) * 1000, 2)
-        print(f"{context.tool_name} completed in {elapsed_ms} ms")
-
-nemo_relay.guardrails.register_tool_sanitize_request("search.redact_api_key", 10, redact_api_key)
-nemo_relay.guardrails.register_tool_conditional_execution("search.require_query", 20, require_query)
-nemo_relay.intercepts.register_tool_execution("search.measure", 30, measure_tool)
-```
-</Tab>
-
-<Tab title="Node.js" language="node">
-```js
-const {
-  registerToolConditionalExecutionGuardrail,
-  registerToolExecutionIntercept,
-  registerToolSanitizeRequestGuardrail,
-} = require("nemo-relay-node");
-
-registerToolSanitizeRequestGuardrail("search.redact_api_key", 10, (_toolName, args) => {
-  if (!args.api_key) {
-    return args;
-  }
-  return { ...args, api_key: "<redacted>" };
-});
-
-registerToolConditionalExecutionGuardrail("search.require_query", 20, (_toolName, args) => (
-  args.query ? null : "search.query is required"
-));
-
-registerToolExecutionIntercept("search.measure", 30, async (context, next) => {
-  const started = performance.now();
-  try {
-    const executionResult = await next(context.args);
-    return {
-      result: executionResult.result,
-      annotation: executionResult.annotation,
-    };
-  } finally {
-    console.log(`search completed in ${Math.round(performance.now() - started)} ms`);
-  }
-});
-```
-</Tab>
-
-<Tab title="Rust" language="rust">
-```rust
-use nemo_relay::registry::{
-    register_tool_conditional_execution_guardrail,
-    register_tool_execution_intercept,
-    register_tool_sanitize_request_guardrail,
-};
-use nemo_relay::tool::ToolExecutionInterceptOutcome;
-use serde_json::json;
-use std::sync::Arc;
-use std::time::Instant;
-
-register_tool_sanitize_request_guardrail(
-    "search.redact_api_key",
-    10,
-    Arc::new(|_tool_name, mut args| {
-        Box::pin(async move {
-            if let Some(object) = args.as_object_mut() {
-                if object.contains_key("api_key") {
-                    object.insert("api_key".into(), json!("<redacted>"));
-                }
-            }
-            Ok(args)
-        })
-    }),
-)?;
-
-register_tool_conditional_execution_guardrail(
-    "search.require_query",
-    20,
-    Arc::new(|_tool_name, args| {
-        Box::pin(async move {
-            Ok(match args.get("query").and_then(|value| value.as_str()) {
-                Some(query) if !query.is_empty() => None,
-                _ => Some("search.query is required".into()),
-            })
-        })
-    }),
-)?;
-
-register_tool_execution_intercept(
-    "search.measure",
-    30,
-    Arc::new(|context, next| {
-        let name = context.tool_name().to_owned();
-        Box::pin(async move {
-            let started = Instant::now();
-            let result = next(context.into_args()).await;
-            println!("{name} completed in {:?}", started.elapsed());
-            Ok(ToolExecutionInterceptOutcome::from(result?))
-        })
-    }),
-)?;
-```
-</Tab>
-
-</Tabs>
-
-Tool execution intercepts return an outcome even when they only forward the
-canonical result from `next`. A forwarding intercept must preserve both
-`result` and `annotation`; pending marks remain lifecycle-owned. Refer to
-[Tool Execution Intercept Outcomes](/reference/tool-execution-intercept-outcomes)
-for annotation, pending-mark, lifecycle, and binding-specific return semantics.
-
-## Scope Middleware to One Request
-
-Use scope-local middleware when a policy applies only to one request, tenant, experiment, or agent run.
-
-1. Create or receive the active scope handle.
-2. Register middleware with the scope-local helper for that handle.
-3. Execute tools or LLM calls inside that scope.
-4. Let the scope end remove the scope-local registrations automatically.
-
-Use global middleware for process-wide behavior, such as organization-wide redaction. Use scope-local middleware for request-specific policy, such as tenant routing or an A/B test.
 
 ## Middleware Registration Families
 
@@ -257,15 +261,6 @@ emitted payload and recording the error for `getLastCallbackError()`.
 
 Scope-local variants are available through `nemo_relay.scope_local.register_*`, Node.js `scopeRegister*` helpers, and Rust `scope_register_*` functions.
 
-## Validate the Middleware
-
-Run one allowed request and one rejected request:
-
-- The allowed request should return the same business result as before.
-- The rejected request should fail before the tool callback executes.
-- Subscriber output should show redacted `api_key` values.
-- The timing intercept should print once for each executed tool call.
-
 ## Debug Middleware Order
 
 Middleware runs by ascending priority inside each middleware family. Families
@@ -283,10 +278,27 @@ If a later middleware does not run, check whether an earlier conditional-executi
 
 Check these symptoms first when the workflow does not behave as expected.
 
-- **Sanitized data reaches the real tool**: Use a sanitize guardrail only for event payloads. Use a request intercept when the real request should change.
-- **Middleware affects unrelated requests**: Register it scope-locally instead of globally.
-- **Duplicate names replace behavior**: Middleware names are registry keys. Use stable, unique names for each behavior.
-- **Execution intercept never prints**: Confirm that the application uses the managed execute helper and that no guardrail rejected the request.
+### Sanitized Data Reaches the Real Tool
+
+Use a sanitize guardrail only for event payloads. Use a request intercept when the real request should change.
+
+### Middleware Affects Unrelated Requests
+
+Register it scope-locally instead of globally.
+
+<Anchor id="duplicate-names-replace-behavior">
+
+### A Middleware Name Is Already Registered
+
+Registering middleware under a name already in use fails. Choose a unique
+name, or explicitly deregister the existing middleware before registering its
+replacement.
+
+</Anchor>
+
+### Execution Intercept Never Prints
+
+Confirm that the application uses the managed execute helper and that no guardrail rejected the request.
 
 ## Next Steps
 

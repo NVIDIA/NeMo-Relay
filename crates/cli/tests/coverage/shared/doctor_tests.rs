@@ -1211,6 +1211,75 @@ async fn doctor_warns_when_an_explicit_plugin_config_is_missing() {
     );
 }
 
+#[cfg(unix)]
+#[tokio::test]
+/// Validates plugin configuration reached through a file symlink.
+async fn doctor_accepts_symlinked_plugin_configuration() {
+    let _guard = PLUGIN_CONFIG_TEST_LOCK.lock().await;
+    let directory = tempfile::tempdir().unwrap();
+    let target = directory.path().join("owned-plugins.toml");
+    let link = directory.path().join("plugins.toml");
+    std::fs::write(&target, "version = 1\n").unwrap();
+    std::os::unix::fs::symlink(&target, &link).unwrap();
+
+    let validation = collect_plugin_host_validation(
+        &ResolvedConfig::default(),
+        &GatewayOverrides {
+            plugin_config_path: Some(link.clone()),
+            ..GatewayOverrides::default()
+        },
+    );
+
+    assert_eq!(validation.status, Status::Pass, "{}", validation.details);
+    let report = validation.report.expect("core validation report");
+    assert!(report.config_paths.contains(&link.display().to_string()));
+    assert_eq!(report.resolved_config["version"], 1);
+}
+
+#[cfg(unix)]
+#[tokio::test]
+/// Loads both TOML files through file and parent-directory aliases.
+async fn doctor_accepts_symlinked_gateway_and_plugin_configuration_under_a_directory_alias() {
+    use std::os::unix::fs::symlink;
+
+    let _guard = PLUGIN_CONFIG_TEST_LOCK.lock().await;
+    let directory = tempfile::tempdir().unwrap();
+    let mounted = directory.path().join("mounted");
+    std::fs::create_dir(&mounted).unwrap();
+    let config = directory.path().join("owned-config.toml");
+    let plugins = directory.path().join("owned-plugins.toml");
+    std::fs::write(&config, "[upstream]\n").unwrap();
+    std::fs::write(&plugins, "version = 1\ncomponents = []\n").unwrap();
+    symlink(&config, mounted.join("config.toml")).unwrap();
+    symlink(&plugins, mounted.join("plugins.toml")).unwrap();
+    let alias = directory.path().join("alias");
+    symlink(&mounted, &alias).unwrap();
+
+    let report = collect_report(
+        None,
+        DoctorProbeMode::Offline,
+        &GatewayOverrides {
+            config: Some(alias.join("config.toml")),
+            ..GatewayOverrides::default()
+        },
+    )
+    .await
+    .unwrap();
+    assert_eq!(report.configuration.resolution.status, Status::Pass);
+    assert_eq!(report.configuration.plugin_resolution.status, Status::Info);
+    assert_eq!(
+        report.configuration.plugin_host_validation.status,
+        Status::Pass
+    );
+    let host_report = report.configuration.plugin_host_validation.report.unwrap();
+    assert!(
+        host_report
+            .config_paths
+            .contains(&alias.join("plugins.toml").display().to_string())
+    );
+    assert_eq!(host_report.resolved_config["version"], 1);
+}
+
 #[tokio::test]
 async fn component_diagnostics_cover_disabled_malformed_and_explicit_sink_configuration() {
     let disabled_cache: PluginConfig = serde_json::from_value(json!({
@@ -1628,7 +1697,7 @@ async fn collect_agents_filters_target_and_records_version() {
     let temp = tempfile::tempdir().unwrap();
     let _cwd = crate::test_support::CwdTestScope::locked();
     let codex = temp.path().join("codex");
-    std::fs::write(&codex, "#!/bin/sh\nprintf 'codex-cli 0.143.0\\n'\n").unwrap();
+    std::fs::write(&codex, "#!/bin/sh\nprintf 'codex-cli 0.150.0\\n'\n").unwrap();
     make_executable(&codex);
 
     let mut resolved = ResolvedConfig::default();
@@ -1644,7 +1713,7 @@ async fn collect_agents_filters_target_and_records_version() {
     assert_eq!(agents[0].name, "codex");
     assert_eq!(agents[0].status, Status::Pass);
     assert_eq!(agents[0].path.as_deref(), Some(codex.as_path()));
-    assert_eq!(agents[0].version.as_deref(), Some("codex-cli 0.143.0"));
+    assert_eq!(agents[0].version.as_deref(), Some("codex-cli 0.150.0"));
 }
 
 #[cfg(unix)]
@@ -1656,7 +1725,7 @@ async fn collect_agents_preserves_wrapper_argv_for_version_validation() {
     let wrapper = temp.path().join("npx");
     std::fs::write(
         &wrapper,
-        "#!/bin/sh\n[ \"$1\" = codex ] && [ \"$2\" = --version ] || exit 9\nprintf 'codex-cli 0.143.0\\n'\n",
+        "#!/bin/sh\n[ \"$1\" = codex ] && [ \"$2\" = --version ] || exit 9\nprintf 'codex-cli 0.150.0\\n'\n",
     )
     .unwrap();
     make_executable(&wrapper);
@@ -1672,7 +1741,7 @@ async fn collect_agents_preserves_wrapper_argv_for_version_validation() {
 
     assert_eq!(agents[0].status, Status::Pass);
     assert_eq!(agents[0].path.as_deref(), Some(wrapper.as_path()));
-    assert_eq!(agents[0].version.as_deref(), Some("codex-cli 0.143.0"));
+    assert_eq!(agents[0].version.as_deref(), Some("codex-cli 0.150.0"));
 }
 
 #[cfg(unix)]

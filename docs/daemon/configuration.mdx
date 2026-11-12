@@ -597,7 +597,12 @@ canonical bytes expected by doctor, managed refresh, or output reuse.
 Generate a replacement in a new directory using the same deployment values,
 deploy it, provision its newly printed digest separately, and update the
 Claude launch paths. Refresh does not migrate or overwrite the old bundle.
-Bundles containing only Codex or Pi are unaffected by this change.
+Bundles containing only Codex or Pi are unaffected by the Claude change.
+
+The generated Codex bundle captures `SessionEnd` and `Interrupt` and requires
+`codex-cli` 0.150.0 or newer. Older bundles containing Codex no longer match the
+canonical bytes. Generate a replacement in a new directory, redeploy it, and
+provision its new trusted digest separately.
 </Warning>
 
 Create a bundle once from fixed deployment values. Repeat `--agent` to select
@@ -654,6 +659,11 @@ Doctor compares the exact file set and bytes with the canonical manifest and
 the separately provisioned digest, then reports missing, unexpected, or
 changed artifacts. This is a managed-only diagnostic: it does not load or fail because
 of personal configuration, plugins, or agent installations.
+
+When the bundle or its contents use symbolic links, keep the targets and the
+directories that allow their replacement under administrator control, just like
+the bundle itself. Successful validation checks the current contents; it does
+not prevent later changes to linked targets.
 
 ## Load a Managed Harness
 

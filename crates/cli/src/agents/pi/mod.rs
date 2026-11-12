@@ -63,6 +63,7 @@ pub(super) const DESCRIPTOR: AgentDescriptor = AgentDescriptor {
         // model's provider at the gateway, so a trace with no LLM spans carries its own reason.
         "model_redirect",
     ],
+    capped_hook_events: (&[], 0),
 };
 
 /// `pi --version` prints a bare semver line with no product prefix.

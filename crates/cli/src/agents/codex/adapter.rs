@@ -7,7 +7,7 @@ use serde_json::{Value, json};
 use crate::agents::shared::adapters::{
     AdapterOutcome, CODEX_PAYLOAD_EXTRACTOR, ClassificationRules, classify,
 };
-use crate::events::AgentKind;
+use crate::events::{AgentKind, NormalizedEvent};
 
 /// Normalizes Codex hook payloads and supplies the successful hook response.
 ///
@@ -36,6 +36,22 @@ pub(crate) fn adapt(payload: Value, headers: &HeaderMap) -> AdapterOutcome {
             compaction: &[],
         },
     );
+    // An interrupted turn sends `Interrupt` instead of `Stop`; close it as a failed turn.
+    let events = events
+        .into_iter()
+        .map(|event| match event {
+            NormalizedEvent::HookMark(mut event)
+                if event.event_name.eq_ignore_ascii_case("Interrupt") =>
+            {
+                event.payload["status"] = json!("error");
+                event.metadata["otel.status_code"] = json!("ERROR");
+                event.metadata["error.type"] = json!("interrupted");
+                event.metadata["otel.status_description"] = json!("interrupted");
+                NormalizedEvent::TurnEnded(event)
+            }
+            event => event,
+        })
+        .collect();
     AdapterOutcome {
         events,
         response: json!({}),

@@ -4788,7 +4788,7 @@ def handle_continue(_signal, _frame):
 signal.signal(signal.SIGCONT, handle_continue)
 
 if sys.argv[1:] == ["--version"]:
-    print("codex-cli 0.143.0")
+    print("codex-cli 0.150.0")
     raise SystemExit(0)
 
 print(f"AGENT_READY:{os.getppid()}:{os.getpgrp()}", flush=True)
@@ -5026,7 +5026,7 @@ import sys
 import time
 
 if sys.argv[1:] == ["--version"]:
-    print("codex-cli 0.143.0")
+    print("codex-cli 0.150.0")
     raise SystemExit(0)
 
 descendant = subprocess.Popen(["sleep", "30"])
