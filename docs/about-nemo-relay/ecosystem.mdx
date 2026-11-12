@@ -87,12 +87,12 @@ Choose an existing integration or connect your own application through the SDK.
 | [LangChain](/supported-integrations/langchain), [LangGraph](/supported-integrations/langgraph), [Deep Agents](/supported-integrations/deepagents) | Maintained framework integrations | Observability, security middleware, and optimization. |
 | [Google ADK](/supported-integrations/google-adk) | ADK plugin | Model and tool observability, guardrails, and optimization. |
 | [OpenClaw](/supported-integrations/openclaw-plugin) | Hook-based plugin | Observability and pre-tool guardrails; partial security coverage and no optimization. |
-| [Codex](/getting-started/quick-start/codex), [Claude Code](/getting-started/quick-start/claude-code) | CLI hooks and local gateway | Turn, tool, and model observability; model capture requires traffic through the gateway. |
+| [Codex](/getting-started/quick-start/codex), [Claude Code](/getting-started/quick-start/claude-code) | CLI hooks with a local sidecar or [managed daemon](/daemon/about) | Turn, tool, and model observability; model capture requires traffic through the configured Relay gateway. |
 | [Hermes Agent](/getting-started/quick-start/hermes) | Native Relay integration | Session, model, and tool events using Relay plugin configuration. |
-| [pi](/getting-started/quick-start/pi) | Proof-of-concept extension | Turn and tool events; model capture depends on provider redirection. |
+| [pi (PoC)](/getting-started/quick-start/pi) | Proof-of-concept extension | Turn and tool events; model capture depends on provider redirection. |
 | Arize Phoenix, Langfuse, LangSmith | Compatible OTLP ingestion | [Export traces](/configure-plugins/observability/opentelemetry) to an existing backend; configure its endpoint and supported projection. |
 
-For feature-level support, see the [framework support matrix](/supported-integrations/about#support-matrix).
+For supported platforms, coding agents, and frameworks, see the [Support Matrix](/reference/support-matrix).
 
 ## Extend Relay With Plugins
 
@@ -138,6 +138,5 @@ with every product.
 Relay can enforce policy on autonomous agent actions when the integration
 exposes the relevant execution boundary. Lifecycle notifications alone provide
 observability; they do not automatically enable blocking or request rewriting.
-See the [integration support matrix](/supported-integrations/about#support-matrix)
-for feature coverage.
+See the [Support Matrix](/reference/support-matrix) for integration coverage.
 </Note>
