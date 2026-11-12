@@ -614,7 +614,10 @@ impl AnnotatedLlmRequest {
         }
         self.messages
             .iter()
-            .find(|message| matches!(message, Message::System { .. } | Message::Developer { .. }))
+            .find(|message| {
+                matches!(message, Message::System { .. } | Message::Developer { .. })
+                    || matches!(message.native_message_role(), Some("system" | "developer"))
+            })
             .and_then(|message| message.content_view().text())
     }
 
@@ -623,15 +626,9 @@ impl AnnotatedLlmRequest {
         self.messages
             .iter()
             .rev()
-            .find(|message| match message {
-                Message::User { .. } => true,
-                Message::ProviderNative {
-                    provider, value, ..
-                } => {
-                    provider == "openai_responses"
-                        && value.get("role").and_then(Json::as_str) == Some("user")
-                }
-                _ => false,
+            .find(|message| {
+                matches!(message, Message::User { .. })
+                    || message.native_message_role() == Some("user")
             })
             .and_then(|message| message.content_view().text())
     }

@@ -113,3 +113,54 @@ fn anthropic_view_preserves_already_joined_normalization() {
     assert_eq!(response.output().parts().count(), 2);
     assert_eq!(response.response_text().as_deref(), Some("first\nsecond"));
 }
+
+#[test]
+fn extension_fields_do_not_hide_known_request_text() {
+    for (surface, field, text_type) in [
+        (ProviderSurface::OpenAIChat, "messages", "text"),
+        (ProviderSurface::OpenAIResponses, "input", "input_text"),
+        (ProviderSurface::AnthropicMessages, "messages", "text"),
+    ] {
+        let codec = request_codec(surface);
+        for role in ["user", "assistant"] {
+            for content in [
+                json!("known text"),
+                json!([
+                    {"type":text_type, "text":"first"},
+                    {"type":text_type, "text":"second"}
+                ]),
+            ] {
+                let original = LlmRequest {
+                    headers: Default::default(),
+                    content: json!({field:[{
+                        "role":role, "content":content,
+                        "provider_extra":{"content":"not message text", "future":true}
+                    }]}),
+                };
+                let annotated = codec.decode(&original).unwrap();
+                let before = serde_json::to_value(&annotated).unwrap();
+                assert!(matches!(
+                    annotated.messages[0],
+                    nemo_relay_types::codec::request::Message::ProviderNative { .. }
+                ));
+                let expected = if content.is_string() {
+                    "known text"
+                } else {
+                    "first\nsecond"
+                };
+                assert_eq!(
+                    annotated.last_message().unwrap().text().as_deref(),
+                    Some(expected),
+                    "{surface:?}: {role}"
+                );
+                assert_eq!(
+                    annotated.last_user_message().as_deref(),
+                    (role == "user").then_some(expected),
+                    "{surface:?}"
+                );
+                assert_eq!(serde_json::to_value(&annotated).unwrap(), before);
+                assert_eq!(codec.encode(&annotated, &original).unwrap(), original);
+            }
+        }
+    }
+}

@@ -81,6 +81,16 @@ fn inspect(request: &AnnotatedLlmRequest) {
   fields, not original provider ordering. Some decoders already combine text
   blocks; for example, Anthropic response text blocks become one joined string.
 
+Known OpenAI Chat, OpenAI Responses, and Anthropic Messages request messages can
+remain provider-native when they contain extension fields. Their read views
+inspect recognized `content` strings or arrays in place, and the request helpers
+recognize their user/system/developer roles where supported by that provider.
+For example, an OpenAI Chat user message with `content: "hello"` and an extra
+provider field still yields `"hello"` from `last_user_message()`.
+The native annotation, extension fields, and codec round-trip remain unchanged.
+Unknown message envelopes stay opaque; tool payloads and arbitrary nested
+metadata are not searched for text.
+
 ### Migrate Existing Text Helpers
 
 The Rust methods `system_prompt()`, `last_user_message()`, and `response_text()`
