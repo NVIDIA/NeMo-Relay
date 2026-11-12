@@ -1,5 +1,5 @@
 ---
-title: "pi"
+title: "pi (PoC)"
 description: "Install the pi extension, launch a session, and verify tool and model observability."
 position: 6
 ---
@@ -97,6 +97,25 @@ nemo-relay uninstall pi
 Uninstall removes only the files the install recorded, and only while they still
 match what was written. A file you edited is kept, and so is the directory
 holding it.
+
+### Update the Extension
+
+`nemo-relay integrations refresh` updates Claude Code and Codex installations.
+To update Relay-managed pi extension files after upgrading `nemo-relay`, run:
+
+```bash
+nemo-relay install pi
+```
+
+Restart pi, then run `nemo-relay doctor pi` and verify exported activity again.
+
+If installed extension files have been edited, installation stops rather than
+overwriting them. Review and preserve those edits before choosing `--force`,
+which permits overwriting edited Relay-managed files. Relay refuses to replace
+an unmanaged extension directory even with `--force`.
+
+Keep only one loading copy of the Relay extension. Multiple copies can deliver
+duplicate events.
 
 ### Install It Yourself Instead
 

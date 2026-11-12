@@ -12,12 +12,29 @@ navigation:
   - page: About
     path: ../pages-dev/getting-started/about.mdx
     slug: about
-  - page: Installation Overview
+  - section: Install Overview
     path: ../pages-dev/getting-started/installation.mdx
     slug: installation
-  - page: Configuration / Setup Overview
+    collapsed: open-by-default
+    contents:
+    - page: CLI
+      path: ../pages-dev/getting-started/installation/cli.mdx
+      slug: cli
+    - page: Frameworks
+      path: ../pages-dev/getting-started/installation/frameworks.mdx
+      slug: frameworks
+    - page: Harnesses
+      path: ../pages-dev/getting-started/installation/harnesses.mdx
+      slug: harnesses
+    - page: APIs
+      path: ../pages-dev/getting-started/installation/apis.mdx
+      slug: apis
+  - page: Configure Overview
     path: ../pages-dev/getting-started/configuration.mdx
     slug: configuration
+  - page: Deploy Overview
+    path: ../pages-dev/getting-started/deploy.mdx
+    slug: deploy
   - section: Quick Starts
     path: ../pages-dev/getting-started/quick-start/index.mdx
     slug: quick-start
@@ -59,7 +76,7 @@ navigation:
         icon: fa-solid fa-terminal
         path: ../pages-dev/getting-started/quick-start/hermes.mdx
         slug: hermes
-      - page: pi
+      - page: pi (PoC)
         icon: fa-solid fa-pi
         path: ../pages-dev/getting-started/quick-start/pi.mdx
         slug: pi
@@ -93,6 +110,9 @@ navigation:
   - page: Overview
     path: ../pages-dev/nemo-relay-cli/about.mdx
     slug: about
+  - page: Install Details
+    path: ../pages-dev/nemo-relay-cli/install-details.mdx
+    slug: install-details
   - page: Manage Persistent Integrations
     path: ../pages-dev/nemo-relay-cli/plugin-installation.mdx
     slug: plugin-installation
@@ -105,7 +125,7 @@ navigation:
     - page: Codex
       path: ../pages-dev/nemo-relay-cli/codex.mdx
       slug: codex
-    - page: pi
+    - page: pi (PoC)
       path: ../pages-dev/nemo-relay-cli/pi.mdx
       slug: pi
   - page: Configuration
