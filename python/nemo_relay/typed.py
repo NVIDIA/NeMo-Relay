@@ -46,7 +46,15 @@ import typing
 from typing import AsyncIterator, Awaitable, Callable, Generic, Iterable, Protocol, TypeVar, cast, overload
 
 from nemo_relay import Json, llm, tools
-from nemo_relay._native import LLMAttributes, LLMRequest, LlmStream, ScopeHandle, ToolAttributes, ToolExecutionResult
+from nemo_relay._native import (
+    ExecutionOptions,
+    LLMAttributes,
+    LLMRequest,
+    LlmStream,
+    ScopeHandle,
+    ToolAttributes,
+    ToolExecutionResult,
+)
 from nemo_relay._tool_result import TOOL_RESULT_SCHEMA, projected_tool_result
 from nemo_relay.codecs import LlmCodec, LlmResponseCodec
 
@@ -515,6 +523,7 @@ async def tool_execute(
     data: Json | None = None,
     metadata: Json | None = None,
     tool_call_id: str | None = None,
+    execution_options: ExecutionOptions | None = None,
 ) -> ToolExecutionResult[TResult]: ...
 
 
@@ -531,6 +540,7 @@ async def tool_execute(
     data: Json | None = None,
     metadata: Json | None = None,
     tool_call_id: str | None = None,
+    execution_options: ExecutionOptions | None = None,
 ) -> ToolExecutionResult[TResult]: ...
 
 
@@ -546,6 +556,7 @@ async def tool_execute(
     data: Json | None = None,
     metadata: Json | None = None,
     tool_call_id: str | None = None,
+    execution_options: ExecutionOptions | None = None,
 ) -> ToolExecutionResult[TResult]:
     """Run ``nemo_relay.tools.execute`` with typed arguments and results.
 
@@ -564,6 +575,10 @@ async def tool_execute(
         metadata: Optional JSON metadata recorded on the emitted start event.
         tool_call_id: Optional provider-specific tool call identifier recorded
             on the emitted start and end events.
+        execution_options: Choose which middleware stages run for this call.
+            Omit this option to run all stages. Turning off conditional execution
+            skips its checks. Relay still sanitizes event data, uses codecs,
+            and handles call completion.
 
     Returns:
         ToolExecutionResult[TResult]: The decoded typed result and its opaque
@@ -619,6 +634,7 @@ async def tool_execute(
         data=data,
         metadata=metadata,
         tool_call_id=tool_call_id,
+        execution_options=execution_options,
     )
     return ToolExecutionResult(result_codec.from_json(json_result.result), json_result.annotation)
 
@@ -637,6 +653,7 @@ async def llm_execute(
     model_name: str | None = None,
     codec: LlmCodec | None = None,
     response_codec: LlmResponseCodec | None = None,
+    execution_options: ExecutionOptions | None = None,
 ) -> TResponse: ...
 
 
@@ -654,6 +671,7 @@ async def llm_execute(
     model_name: str | None = None,
     codec: LlmCodec | None = None,
     response_codec: LlmResponseCodec | None = None,
+    execution_options: ExecutionOptions | None = None,
 ) -> TResponse: ...
 
 
@@ -670,6 +688,7 @@ async def llm_execute(
     model_name: str | None = None,
     codec: LlmCodec | None = None,
     response_codec: LlmResponseCodec | None = None,
+    execution_options: ExecutionOptions | None = None,
 ) -> TResponse:
     """Run ``nemo_relay.llm.execute`` and decode the returned response type.
 
@@ -691,6 +710,10 @@ async def llm_execute(
             request intercepts.
         response_codec: Optional observability codec used to attach an
             annotated response to the emitted ``LLMEnd`` event.
+        execution_options: Choose which middleware stages run for this call.
+            Omit this option to run all stages. Turning off conditional execution
+            skips its checks. Relay still sanitizes event data, uses codecs,
+            and handles call completion.
 
     Returns:
         TResponse: The decoded typed response produced by ``func``.
@@ -740,6 +763,7 @@ async def llm_execute(
         model_name=model_name,
         codec=codec,
         response_codec=response_codec,
+        execution_options=execution_options,
     )
     return response_json_codec.from_json(json_result)
 
@@ -761,6 +785,7 @@ async def llm_stream_execute(
     model_name: str | None = None,
     codec: LlmCodec | None = None,
     response_codec: LlmResponseCodec | None = None,
+    execution_options: ExecutionOptions | None = None,
 ) -> LlmStream:  # SONAR_IGNORE_STOP
     """Run ``nemo_relay.llm.stream_execute`` with typed chunks and final output.
 
@@ -787,6 +812,10 @@ async def llm_stream_execute(
             request intercepts.
         response_codec: Optional observability codec used to attach an
             annotated response to the emitted ``LLMEnd`` event.
+        execution_options: Choose which middleware stages run for this call.
+            Omit this option to run all stages. Turning off conditional execution
+            skips its checks. Relay still sanitizes event data, uses codecs,
+            and handles call completion.
 
     Returns:
         LlmStream: Async iterator that yields the streamed JSON chunks.
@@ -874,6 +903,7 @@ async def llm_stream_execute(
         model_name=model_name,
         codec=codec,
         response_codec=response_codec,
+        execution_options=execution_options,
     )
 
 

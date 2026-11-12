@@ -74,7 +74,7 @@ controls.
 | Agent | Observability | Security | Optimization | Notes |
 | --- | --- | --- | --- | --- |
 | Claude Code | Yes | Yes | Partial | Pre-tool hook responses are supported. LLM optimization uses gateway-routed traffic; full coverage depends on loaded Claude Code hooks. |
-| Codex | Yes | Yes | Partial | Persistent installation verifies the required Relay-generated hooks. A parent `Stop` finalizes the bounded task when no delegated agents remain; the plugin schema does not expose `SessionEnd`. |
+| Codex | Yes | Yes | Partial | Persistent installation verifies the required Relay-generated hooks. A parent `Stop` or `Interrupt` finalizes the bounded task when no delegated agents remain. |
 | pi | Partial | Yes | No | Proof of concept. Tool and turn activity are captured through a Relay-authored pi extension, and both tool calls and model calls can be blocked. Model traffic reaches the gateway only when the gateway forwards to the endpoint every model of the selected provider would otherwise call, because pi's provider registration is provider-wide. |
 
 For minimum agent versions, platform support, and current limitations, refer to

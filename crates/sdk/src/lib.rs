@@ -90,10 +90,13 @@ pub mod scope {
     };
     pub use nemo_relay_types::api::scope::*;
 }
+/// Stage options for managed calls.
+pub use nemo_relay_runtime::api::execution::ExecutionOptions;
+
 /// Managed and manual LLM calls.
 pub mod llm {
     pub use nemo_relay_runtime::api::llm::{
-        LlmCallEndParams, LlmCallExecuteParams, LlmCallParams, LlmHandle,
+        ExecutionOptions, LlmCallEndParams, LlmCallExecuteParams, LlmCallParams, LlmHandle,
         LlmStreamCallExecuteParams, llm_call, llm_call_end, llm_call_execute,
         llm_conditional_execution, llm_request_intercepts, llm_stream_call_execute,
     };
@@ -102,8 +105,9 @@ pub mod llm {
 /// Managed and manual tool calls.
 pub mod tool {
     pub use nemo_relay_runtime::api::tool::{
-        ToolCallEndParams, ToolCallExecuteParams, ToolCallParams, ToolHandle, tool_call,
-        tool_call_end, tool_call_execute, tool_conditional_execution, tool_request_intercepts,
+        ExecutionOptions, ToolCallEndParams, ToolCallExecuteParams, ToolCallParams, ToolHandle,
+        tool_call, tool_call_end, tool_call_execute, tool_conditional_execution,
+        tool_request_intercepts,
     };
     pub use nemo_relay_types::api::tool::*;
 }
@@ -198,7 +202,7 @@ pub mod plugin {
         register_plugin, validate, validate_exact, validate_static_plugin_config,
     };
     pub use nemo_relay_plugin::component::{
-        ConfigDiagnostic, ConfigPolicy, DiagnosticLevel, Plugin, PluginComponentSpec,
+        ConfigDiagnostic, ConfigPolicy, DiagnosticLevel, Plugin, PluginComponentSpec, PluginFuture,
         PluginRegistration, PluginRegistrationCleanupOutcome, PluginRegistrationContext, Result,
         RuntimeDiagnostic, UnsupportedBehavior, apply_global_config_policy,
     };

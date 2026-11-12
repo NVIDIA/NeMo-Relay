@@ -16,6 +16,14 @@ use crate::error::CliError;
 const LOG_LEVELS: &[&str] = &["error", "warn", "info", "debug", "trace"];
 const LOG_FORMATS: &[&str] = &["human", "jsonl"];
 const LOG_FAILURE_POLICIES: &[&str] = &["required", "optional"];
+const UPSTREAM_CREDENTIAL_KEYS: &[&str] = &[
+    "openai_auth_header",
+    "anthropic_auth_header",
+    "openai_api_key",
+    "anthropic_api_key",
+    "openai_api_key_helper",
+    "anthropic_api_key_helper",
+];
 
 mod prompt;
 
@@ -97,10 +105,12 @@ impl ConfigDocument {
     fn write(&self, scope: TargetScope) -> Result<(), CliError> {
         let contents = self.document.to_string();
         // Reject credentials in system-readable files before validating their contents.
-        if scope == TargetScope::Global && self.has_auth_headers() {
-            return Err(CliError::Config(
-                "global config cannot include upstream authorization headers or API keys; configure credentials in a user config".into(),
-            ));
+        if scope == TargetScope::Global
+            && let Some(path) = self.global_credential_path()
+        {
+            return Err(CliError::Config(format!(
+                "global config cannot include upstream authorization headers or API keys; found {path}; configure credentials in a user config"
+            )));
         }
         let parsed = toml::from_str::<toml::Value>(&contents).map_err(|_| {
             CliError::Config("configuration must be valid TOML before saving".into())
@@ -117,37 +127,41 @@ impl ConfigDocument {
         .map_err(CliError::Config)
     }
 
-    fn has_auth_headers(&self) -> bool {
-        [
-            "openai_auth_header",
-            "anthropic_auth_header",
-            "openai_api_key",
-            "anthropic_api_key",
-        ]
-        .into_iter()
-        .any(|key| self.has_key("upstream", key))
+    fn global_credential_path(&self) -> Option<String> {
+        // Inspect the original document: inactive or overridden presets are still saved.
+        crate::configuration::upstream_table_paths(self.document.as_table())
+            .into_iter()
+            .find_map(|mut path| {
+                let table = path
+                    .iter()
+                    .try_fold(self.document.as_table() as &dyn TableLike, |table, key| {
+                        table.get(key)?.as_table_like()
+                    })?;
+                let key = UPSTREAM_CREDENTIAL_KEYS.iter().find(|key| {
+                    // Global configuration permits helper commands, but not stored keys/headers.
+                    !key.ends_with("_api_key_helper") && table.contains_key(key)
+                })?;
+                path.push((*key).into());
+                Some(
+                    path.iter()
+                        .map(|key| toml_edit::Key::new(key).to_string())
+                        .collect::<Vec<_>>()
+                        .join("."),
+                )
+            })
     }
 
     fn preview(&self) -> String {
         let mut document = self.document.clone();
-        if let Some(upstream) = document.get_mut("upstream") {
-            for key in [
-                "openai_auth_header",
-                "anthropic_auth_header",
-                "openai_api_key",
-                "anthropic_api_key",
-                "openai_api_key_helper",
-                "anthropic_api_key_helper",
-            ] {
-                if let Some(table) = upstream.as_table_mut() {
+        for path in crate::configuration::upstream_table_paths(document.as_table()) {
+            if let Some(table) = path.iter().try_fold(
+                document.as_table_mut() as &mut dyn TableLike,
+                |table, key| table.get_mut(key)?.as_table_like_mut(),
+            ) {
+                for key in UPSTREAM_CREDENTIAL_KEYS {
                     if table.contains_key(key) {
-                        table[key] = value("<redacted>");
+                        table.insert(key, value("<redacted>"));
                     }
-                } else if let Some(inline) =
-                    upstream.as_value_mut().and_then(Value::as_inline_table_mut)
-                    && inline.contains_key(key)
-                {
-                    inline.insert(key, Value::from("<redacted>"));
                 }
             }
         }

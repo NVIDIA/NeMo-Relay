@@ -964,12 +964,97 @@ async fn monitor_control_rejects_work_and_exits_after_recovery_deadline() {
             "http://127.0.0.1:1".into(),
             None,
             control::test_registration("data", "control"),
+            tokio::sync::oneshot::channel().1,
         ),
     )
     .await
     .expect("monitor exits after its bounded recovery window");
     assert!(!state.accepting.load(Ordering::Acquire));
     assert!(state.exiting.load(Ordering::Acquire));
+}
+
+/// An exiting worker announces it on control, then keeps the socket open until teardown ends.
+#[tokio::test]
+async fn monitor_control_releases_on_exit_and_closes_after_teardown() {
+    let (commands, mut received) = tokio::sync::mpsc::unbounded_channel::<String>();
+    let daemon_listener = TcpListener::bind("127.0.0.1:0")
+        .await
+        .expect("bind daemon fixture");
+    let daemon_address = daemon_listener.local_addr().expect("daemon address");
+    let daemon = tokio::spawn(async move {
+        axum::serve(
+            daemon_listener,
+            Router::new().route(
+                crate::daemon::common::socket::WORKER_SOCKET_PATH,
+                get(move |ws: axum::extract::ws::WebSocketUpgrade| {
+                    let commands = commands.clone();
+                    async move {
+                        ws.on_upgrade(move |mut socket| async move {
+                            while let Some(Ok(axum::extract::ws::Message::Text(text))) =
+                                socket.recv().await
+                            {
+                                let request: crate::daemon::common::socket::Request =
+                                    serde_json::from_str(&text).unwrap();
+                                let command = serde_json::to_value(&request.command).unwrap();
+                                let _ = commands.send(command["type"].as_str().unwrap().into());
+                                let reply = crate::daemon::common::socket::Event::Reply {
+                                    request_id: request.request_id,
+                                    status: 204,
+                                    payload: serde_json::Value::Null,
+                                };
+                                socket
+                                    .send(axum::extract::ws::Message::Text(
+                                        serde_json::to_string(&reply).unwrap().into(),
+                                    ))
+                                    .await
+                                    .unwrap();
+                            }
+                            let _ = commands.send("closed".into());
+                        })
+                    }
+                }),
+            ),
+        )
+        .await
+        .expect("serve daemon fixture");
+    });
+    let registration = control::test_registration("data", "control");
+    registration
+        .test_connect(&format!("http://{daemon_address}"))
+        .await;
+    let state = state();
+    let (close_control, control_closed) = tokio::sync::oneshot::channel();
+    let monitor = tokio::spawn(monitor_control(
+        Arc::clone(&state),
+        format!("http://{daemon_address}"),
+        MachineIdentity::generate().expect("identity").identity,
+        "worker-one".into(),
+        "http://127.0.0.1:1".into(),
+        None,
+        registration,
+        control_closed,
+    ));
+
+    state.request_exit("signal");
+    let first = tokio::time::timeout(Duration::from_secs(5), received.recv())
+        .await
+        .expect("release before timeout");
+    assert_eq!(first.as_deref(), Some("release"));
+    // Teardown is still running: the socket stays open and the monitor keeps waiting.
+    tokio::time::sleep(Duration::from_millis(100)).await;
+    assert!(received.try_recv().is_err());
+    assert!(!monitor.is_finished());
+
+    close_control.send(()).unwrap();
+    tokio::time::timeout(Duration::from_secs(5), monitor)
+        .await
+        .expect("monitor returns after teardown")
+        .unwrap();
+    let closed = tokio::time::timeout(Duration::from_secs(5), received.recv())
+        .await
+        .expect("socket closes after the monitor returns");
+    assert_eq!(closed.as_deref(), Some("closed"));
+    daemon.abort();
 }
 
 #[tokio::test]
@@ -1468,4 +1553,84 @@ async fn diagnostic_recovery_rotates_authority_without_reopening_draining_worker
     state.control_restored(&registration);
     assert!(!state.diagnostic_authority.verify(&next_token));
     assert!(state.draining.load(Ordering::Acquire));
+}
+
+/// If the daemon does not accept the exit notice, the worker closes control at once so the
+/// daemon stops routing to it, instead of staying routable through teardown.
+#[tokio::test]
+async fn monitor_control_closes_at_once_when_the_release_is_rejected() {
+    let (rejected, mut rejections) = tokio::sync::mpsc::unbounded_channel::<()>();
+    let daemon_listener = TcpListener::bind("127.0.0.1:0")
+        .await
+        .expect("bind daemon fixture");
+    let daemon_address = daemon_listener.local_addr().expect("daemon address");
+    let daemon = tokio::spawn(async move {
+        axum::serve(
+            daemon_listener,
+            Router::new().route(
+                crate::daemon::common::socket::WORKER_SOCKET_PATH,
+                get(move |ws: axum::extract::ws::WebSocketUpgrade| {
+                    let rejected = rejected.clone();
+                    async move {
+                        ws.on_upgrade(move |mut socket| async move {
+                            while let Some(Ok(axum::extract::ws::Message::Text(text))) =
+                                socket.recv().await
+                            {
+                                let request: crate::daemon::common::socket::Request =
+                                    serde_json::from_str(&text).unwrap();
+                                let is_release = matches!(
+                                    &request.command,
+                                    crate::daemon::common::socket::Command::Release(_)
+                                );
+                                let reply = crate::daemon::common::socket::Event::Reply {
+                                    request_id: request.request_id,
+                                    status: 409,
+                                    payload: serde_json::json!({"error": {"message": "rejected"}}),
+                                };
+                                socket
+                                    .send(axum::extract::ws::Message::Text(
+                                        serde_json::to_string(&reply).unwrap().into(),
+                                    ))
+                                    .await
+                                    .unwrap();
+                                if is_release {
+                                    let _ = rejected.send(());
+                                }
+                            }
+                        })
+                    }
+                }),
+            ),
+        )
+        .await
+        .expect("serve daemon fixture");
+    });
+    let registration = control::test_registration("data", "control");
+    registration
+        .test_connect(&format!("http://{daemon_address}"))
+        .await;
+    let state = state();
+    // The close signal is never sent: only a rejected release may let the monitor return.
+    let (_close_control, control_closed) = tokio::sync::oneshot::channel();
+    let monitor = tokio::spawn(monitor_control(
+        Arc::clone(&state),
+        format!("http://{daemon_address}"),
+        MachineIdentity::generate().expect("identity").identity,
+        "worker-one".into(),
+        "http://127.0.0.1:1".into(),
+        None,
+        registration,
+        control_closed,
+    ));
+    state.request_exit("signal");
+    tokio::time::timeout(Duration::from_secs(5), monitor)
+        .await
+        .expect("monitor returns without waiting for teardown")
+        .unwrap();
+    // The return must come from a rejected Release, not from a transport failure.
+    tokio::time::timeout(Duration::from_secs(5), rejections.recv())
+        .await
+        .expect("release rejection before timeout")
+        .expect("the fixture rejected a Release");
+    daemon.abort();
 }

@@ -167,6 +167,12 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "d3fb67a6e08acf24fdeccbac2cb6ac4305825bd1f117462e0e6f2f193345ad56"
 
 [[package]]
+name = "async-ffi"
+version = "0.5.1"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "39cd9de47399986d5b216c6bef9434dfff1689ab61ba8d1e2720dc5fe5c84083"
+
+[[package]]
 name = "async-lock"
 version = "3.4.2"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -966,7 +972,7 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "39cab71617ae0d63f51a36d69f866391735b51691dbda63cf6f96d042b63efeb"
 dependencies = [
  "libc",
- "windows-sys 0.59.0",
+ "windows-sys 0.61.2",
 ]
 
 [[package]]
@@ -1990,6 +1996,7 @@ dependencies = [
  "serde_json",
  "tempfile",
  "tokio",
+ "tokio-stream",
 ]
 
 [[package]]
@@ -2041,6 +2048,7 @@ dependencies = [
  "axum",
  "base64",
  "bytes",
+ "chrono",
  "clap",
  "clap_complete",
  "console",
@@ -2343,13 +2351,23 @@ name = "nemo-relay-plugin"
 version = "1.0.0"
 dependencies = [
  "futures",
+ "nemo-relay-plugin-abi",
  "nemo-relay-types",
  "schemars",
  "serde",
  "serde_json",
- "thiserror 2.0.18",
  "tokio",
  "tokio-util",
+]
+
+[[package]]
+name = "nemo-relay-plugin-abi"
+version = "1.0.0"
+dependencies = [
+ "async-ffi",
+ "quote",
+ "syn 2.0.117",
+ "xabi",
 ]
 
 [[package]]
@@ -2387,6 +2405,7 @@ dependencies = [
  "nemo-relay-runtime",
  "nemo-relay-types",
  "nemo-relay-worker-proto",
+ "object",
  "object_store",
  "opentelemetry",
  "opentelemetry-http",
@@ -2413,6 +2432,7 @@ dependencies = [
  "tokio-rustls",
  "tokio-stream",
  "tokio-tungstenite",
+ "tokio-util",
  "toml",
  "tonic",
  "tower",
@@ -3714,15 +3734,15 @@ dependencies = [
 
 [[package]]
 name = "rustix"
-version = "1.1.4"
+version = "1.1.6"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "b6fe4565b9518b83ef4f91bb47ce29620ca828bd32cb7e408f0062e9930ba190"
+checksum = "e5e76742e5294153d4dde1207dbec5bdd81eef6fabdc0d2118babadabfd858aa"
 dependencies = [
  "bitflags",
  "errno",
  "libc",
  "linux-raw-sys",
- "windows-sys 0.59.0",
+ "windows-sys 0.61.2",
 ]
 
 [[package]]
@@ -3781,7 +3801,7 @@ dependencies = [
  "security-framework",
  "security-framework-sys",
  "webpki-root-certs",
- "windows-sys 0.59.0",
+ "windows-sys 0.61.2",
 ]
 
 [[package]]
@@ -4408,7 +4428,7 @@ dependencies = [
  "getrandom 0.4.2",
  "once_cell",
  "rustix",
- "windows-sys 0.59.0",
+ "windows-sys 0.61.2",
 ]
 
 [[package]]
@@ -5211,7 +5231,7 @@ version = "0.1.11"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "c2a7b1c03c876122aa43f3020e6c3c3ee5c05081c9a00739faf7503aeba10d22"
 dependencies = [
- "windows-sys 0.59.0",
+ "windows-sys 0.61.2",
 ]
 
 [[package]]
@@ -5529,6 +5549,27 @@ name = "writeable"
 version = "0.6.3"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "1ffae5123b2d3fc086436f8834ae3ab053a283cfac8fe0a0b8eaae044768a4c4"
+
+[[package]]
+name = "xabi"
+version = "0.1.2"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "5d4e2a69e91265e788d3ad6c1521a6a1e561df96d6138122d2c68821a58457e4"
+dependencies = [
+ "libloading 0.8.9",
+ "xabi-macros",
+]
+
+[[package]]
+name = "xabi-macros"
+version = "0.1.2"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "089ec5cde5ce59e9a0c275a22abc52ab9eb014d81d447c47ad3b273b43032512"
+dependencies = [
+ "proc-macro2",
+ "quote",
+ "syn 2.0.117",
+]
 
 [[package]]
 name = "xattr"

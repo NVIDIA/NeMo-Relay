@@ -9,12 +9,12 @@ use std::path::Path;
 /// Maximum accepted size for one plugin manifest, artifact, schema, or signature.
 pub const MAX_DYNAMIC_PLUGIN_FILE_BYTES: u64 = 512 * 1024 * 1024;
 
-/// Reads a regular file without following a Unix symlink and with a fixed byte budget.
+/// Reads a regular file, following symlinks, with a fixed byte budget.
 pub fn read_bounded_regular_file(path: &Path, description: &str) -> Result<Vec<u8>, String> {
     read_regular_file_with_limit(path, description, MAX_DYNAMIC_PLUGIN_FILE_BYTES)
 }
 
-/// Reads a regular file without following a Unix symlink and with a caller-provided byte budget.
+/// Reads a regular file, following symlinks, with a caller-provided byte budget.
 pub fn read_regular_file_with_limit(
     path: &Path,
     description: &str,
@@ -44,7 +44,7 @@ pub fn stream_regular_file_with_limit(
     mut consume: impl FnMut(&[u8]),
 ) -> Result<(), String> {
     const BUFFER_BYTES: usize = 64 * 1024;
-    let metadata = std::fs::symlink_metadata(path).map_err(|error| {
+    let metadata = std::fs::metadata(path).map_err(|error| {
         format!(
             "failed to inspect {description} {}: {error}",
             path.display()
@@ -69,7 +69,7 @@ pub fn stream_regular_file_with_limit(
         let fd = openat(
             rustix::fs::CWD,
             path,
-            OFlags::RDONLY | OFlags::CLOEXEC | OFlags::NOFOLLOW | OFlags::NONBLOCK,
+            OFlags::RDONLY | OFlags::CLOEXEC | OFlags::NONBLOCK,
             Mode::empty(),
         )
         .map_err(|error| format!("failed to read {description} {}: {error}", path.display()))?;

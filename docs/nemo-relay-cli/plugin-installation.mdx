@@ -37,7 +37,7 @@ To use the integration, make the selected coding-agent CLI available:
 | Coding Agent | Command | Version |
 | --- | --- | --- |
 | Claude Code | `claude` | 2.1.121 or newer |
-| Codex | `codex` | 0.143.0 or newer |
+| Codex | `codex` | 0.150.0 or newer |
 | pi | `pi` | 0.84.0 or newer; verified through 0.84.x |
 
 For Claude Code and Codex, install and doctor reject unsupported, malformed,
@@ -320,11 +320,11 @@ the Codex app-server API to select hooks by plugin ID, exact canonical command,
 and event definition. It never trusts unrelated user, project, or plugin hooks.
 If Codex does not discover exactly one enabled and trusted handler for every
 generated event—`SessionStart`, `UserPromptSubmit`, `PreToolUse`, `PostToolUse`,
-`SubagentStart`, `SubagentStop`, `Stop`, `PreCompact`, and
-`PostCompact`—installation restores the previous Codex config, legacy hooks,
-Relay backup files, and every original targeted trust entry. These nine events are
-the complete Relay-generated Codex hook set; Relay does not generate
-`PermissionRequest`, `PostToolUseFailure`, `Notification`, or `SessionEnd` handlers.
+`SubagentStart`, `SubagentStop`, `Stop`, `PreCompact`, `PostCompact`,
+`SessionEnd`, and `Interrupt`—installation restores the previous Codex config,
+legacy hooks, Relay backup files, and every original targeted trust entry. These
+eleven events are the complete Relay-generated Codex hook set; Relay does not
+generate `PermissionRequest`, `PostToolUseFailure`, or `Notification` handlers.
 Upgrade removes legacy Relay groups from
 `$CODEX_HOME/hooks.json` (default `~/.codex/hooks.json`) while preserving
 unrelated hooks.
@@ -616,7 +616,7 @@ only after cleanup succeeds completely.
 
 ## Compatibility and Migration
 
-These integrations require Codex 0.143.0 or Claude Code 2.1.121 at minimum.
+These integrations require Codex 0.150.0 or Claude Code 2.1.121 at minimum.
 Relay rejects prerelease or malformed version output.
 If you configured an opaque wrapper, its `--version` output must identify the
 selected host.

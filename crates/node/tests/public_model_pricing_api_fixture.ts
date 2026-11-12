@@ -15,8 +15,8 @@ import {
   type ModelPricing,
   type PricingCatalog,
   type PricingConfig,
-} from '../model_pricing.js';
-import type { JsonObject } from '../index.js';
+} from '../dist/model_pricing.js';
+import type { JsonObject } from '../dist/index.js';
 
 const entry: ModelPricing = catalogEntry({
   provider: 'openai',

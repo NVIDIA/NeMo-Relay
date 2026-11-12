@@ -12374,7 +12374,7 @@ Apache License
 ### Licenses
 License: `MIT`
 
-  - `LICENSE`:
+  - `licenses/LICENSE`:
 ```
 MIT License
 
@@ -12736,9 +12736,9 @@ CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE SOFTWARE.
 ## traitlets (5.14.3)
 
 ### Licenses
-License: `BSD 3-Clause License`
+License: `BSD-3-Clause`
 
-  - `LICENSE`:
+  - `licenses/LICENSE`:
 ```
 BSD 3-Clause License
 

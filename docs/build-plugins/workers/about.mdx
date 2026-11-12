@@ -54,7 +54,7 @@ cleanup in a guaranteed finalizer.
 
 ## Let the SDK Own the Transport
 
-Implement `WorkerPlugin` and let the SDK run the protobuf server. `serve_plugin`
+Implement `Plugin` and let the SDK run the protobuf server. `serve_plugin`
 reads Relay's activation environment and opens the authenticated local endpoint.
 It handles handshake, health, validation, registration, callbacks, cancellation,
 and shutdown.
@@ -115,36 +115,41 @@ if __name__ == "__main__":
 
 ```rust title="Rust"
 use nemo_relay_worker::{
-    ConfigDiagnostic, Json, PluginContext, Result,
-    WorkerPlugin, WorkerSdkError, serve_plugin,
+    ConfigDiagnostic, Json, Plugin, PluginContext, Result, WorkerSdkError, serve_plugin,
 };
 
 struct DocumentationWorker;
 
-impl WorkerPlugin for DocumentationWorker {
-    fn plugin_id(&self) -> &str {
+impl Plugin for DocumentationWorker {
+    fn plugin_kind(&self) -> &str {
         "examples.rust_grpc_worker"
     }
-
     fn allows_multiple_components(&self) -> bool {
         false
     }
-
-    fn validate(&self, config: &Json) -> Vec<ConfigDiagnostic> {
+    fn validate(&self, config: &serde_json::Map<String, Json>) -> Vec<ConfigDiagnostic> {
+        let config = &Json::Object(config.clone());
         validate_config(config)
     }
 
-    fn register(&self, context: &mut PluginContext, config: &Json) -> Result<()> {
-        let settings = ExampleConfig::parse(config)
-            .map_err(WorkerSdkError::InvalidInput)?;
-        if settings.observe.enabled {
-            register_observation(context, &settings);
-        }
-        if settings.requests.enabled {
-            register_requests(context, &settings);
-        }
-        register_execution(context, &settings);
-        Ok(())
+    fn register<'a>(
+        &'a self,
+        config: &'a serde_json::Map<String, Json>,
+        context: &'a mut PluginContext,
+    ) -> nemo_relay_worker::PluginFuture<'a, ()> {
+        Box::pin(async move {
+            let config = &Json::Object(config.clone());
+
+            let settings = ExampleConfig::parse(config).map_err(WorkerSdkError::InvalidInput)?;
+            if settings.observe.enabled {
+                register_observation(context, &settings);
+            }
+            if settings.requests.enabled {
+                register_requests(context, &settings);
+            }
+            register_execution(context, &settings);
+            Ok(())
+        })
     }
 }
 
@@ -156,11 +161,11 @@ async fn main() -> Result<()> {
 
 </CodeBlocks>
 
-The examples above use synchronous `register` methods to declare callbacks during
-activation. Python also supports an asynchronous registration method. Rust
-registration stays synchronous. The installed callbacks can be asynchronous.
+Python supports synchronous or asynchronous registration. Rust registration returns
+a future that the SDK awaits before sending the registration response. The installed callbacks can be asynchronous.
 
-The `plugin_id` must match the manifest ID and handshake identity. A mismatch
+Rust `plugin_kind()` and Python `plugin_id` must match the manifest ID and handshake
+identity. A mismatch
 fails activation before any callback runs.
 
 ## Complete Path

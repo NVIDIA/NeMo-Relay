@@ -8,7 +8,7 @@ import { spawnSync } from 'node:child_process';
 import { readFileSync } from 'node:fs';
 
 const require = createRequire(import.meta.url);
-const lib = require('../index.js');
+const lib = require('../dist/index.js');
 
 const {
   createScopeStack,
@@ -256,7 +256,7 @@ describe('scope_stack_snapshot', () => {
         '-e',
         `
       const assert = require('node:assert/strict');
-      const library = require(${JSON.stringify(require.resolve('../index.js'))});
+      const library = require(${JSON.stringify(require.resolve('../dist/index.js'))});
       assert.equal(library.currentScopeStackSnapshot(), null);
       assert.equal(library.currentScopeStackSnapshot(), null);
       assert.equal(library.scopeStackActive(), false);

@@ -64,6 +64,9 @@ from nemo_relay._native import (
     AtofStreamSinkConfig as AtofStreamSinkConfig,
 )
 from nemo_relay._native import (
+    ExecutionOptions as ExecutionOptions,
+)
+from nemo_relay._native import (
     ExporterRuntimeDiagnostic as ExporterRuntimeDiagnostic,
 )
 from nemo_relay._native import (

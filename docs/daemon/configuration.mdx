@@ -106,7 +106,7 @@ Relay waits for provider responses without a deadline by default, allowing long
 compaction and model execution to finish. Caller cancellation ends the request.
 Set `[upstream] response_timeout_secs` to a positive number of seconds to limit
 the response-header wait on daemon and worker hops. Set it to `0` to disable
-that limit. Connection, startup, and health checks retain their separate deadlines.
+that limit. Connection and health checks retain their separate deadlines.
 
 Create `plugins.toml` with the approved configuration from
 [Use Plugins](/configure-plugins/about). A minimal file with no plugins is:
@@ -152,6 +152,50 @@ configuration, plugin manifests, and dynamic plugins alongside the system layer.
 System settings take priority. Install required system plugin binaries and
 dependencies in the administrator-managed locations referenced by the system
 manifest.
+
+### Worker Idle Timeout
+
+By default, the daemon cancels pending startup or drains a ready worker when
+its last MCP route reference is removed. To retain that worker between short
+sessions, set `worker_idle_timeout_secs` in the daemon's `config.toml`:
+
+```toml
+[daemon]
+worker_idle_timeout_secs = 30
+```
+
+The value is a nonnegative integer in seconds. The default, `0`, cancels pending
+startup or starts draining without an idle period. A positive value starts an
+idle period after the last MCP route reference is removed. A new authenticated
+session before expiry reuses the pending activation or ready worker and clears the idle
+deadline. Becoming ready does not extend the idle period. At expiry, the daemon
+cancels pending startup or starts draining the ready worker.
+
+If the launching MCP exits before the worker registers with the daemon, the
+worker must register within the configured idle period after that handoff.
+Reconnecting does not extend this registration deadline. If it expires, the
+daemon cancels that activation and allows a connected client to retry startup.
+Worker registration happens before plugin initialization, so this deadline does
+not limit plugin initialization after registration. The ordinary idle deadline
+still applies whenever no MCP sessions remain.
+
+Set this policy in the configuration loaded by the daemon service account, not
+in the coding agent's environment or the managed worker's personal settings.
+Restart the daemon to apply a change. Retaining a worker that is still starting
+requires an MCP client and daemon that support activation retention. Older MCP
+clients can still cancel pending startup when they exit.
+
+The daemon also retains pending startup when its authenticated launching MCP
+disconnects. It removes that session's route reference and starts the idle
+period if no references remain. The control session can recover during the
+existing reconnect grace period.
+
+The timeout does not make requests wait for startup. Requests sent before
+readiness still use the existing pass-through behavior, or return `503` with
+`--require-worker`. They are not replayed after startup. Retention does not
+authorize worker requests when no MCP route references remain. To verify reuse,
+open a new session during the idle period and send a new request after the worker
+is ready.
 
 ## Provision Client Credentials
 
@@ -553,7 +597,12 @@ canonical bytes expected by doctor, managed refresh, or output reuse.
 Generate a replacement in a new directory using the same deployment values,
 deploy it, provision its newly printed digest separately, and update the
 Claude launch paths. Refresh does not migrate or overwrite the old bundle.
-Bundles containing only Codex or Pi are unaffected by this change.
+Bundles containing only Codex or Pi are unaffected by the Claude change.
+
+The generated Codex bundle captures `SessionEnd` and `Interrupt` and requires
+`codex-cli` 0.150.0 or newer. Older bundles containing Codex no longer match the
+canonical bytes. Generate a replacement in a new directory, redeploy it, and
+provision its new trusted digest separately.
 </Warning>
 
 Create a bundle once from fixed deployment values. Repeat `--agent` to select
@@ -610,6 +659,11 @@ Doctor compares the exact file set and bytes with the canonical manifest and
 the separately provisioned digest, then reports missing, unexpected, or
 changed artifacts. This is a managed-only diagnostic: it does not load or fail because
 of personal configuration, plugins, or agent installations.
+
+When the bundle or its contents use symbolic links, keep the targets and the
+directories that allow their replacement under administrator control, just like
+the bundle itself. Successful validation checks the current contents; it does
+not prevent later changes to linked targets.
 
 ## Load a Managed Harness
 

@@ -591,6 +591,7 @@ async fn continuation_context_preserves_optimization_recorder_across_tasks() {
 }
 
 #[test]
+/// Allows aliases at the managed environment path while rejecting arbitrary locations.
 fn python_environment_resolution_requires_lifecycle_managed_path() {
     enable_operational_logs();
     let plugin_id = "acme.python";
@@ -621,9 +622,10 @@ fn python_environment_resolution_requires_lifecycle_managed_path() {
         std::fs::create_dir_all(managed.parent().unwrap()).unwrap();
         symlink(&target, &managed).unwrap();
 
-        let error = resolve_python_executable(plugin_id, managed.to_str())
-            .expect_err("a symlinked environment should be rejected");
-        assert!(error.to_string().contains("must not be a symbolic link"));
+        assert_eq!(
+            resolve_python_executable(plugin_id, managed.to_str()).unwrap(),
+            python
+        );
     }
 }
 
@@ -641,9 +643,9 @@ fn python_worker_launch_clears_host_python_environment() {
     }
 }
 
+/// Preserves interpreter selection and forwards endpoint and transport settings.
 #[cfg(unix)]
 #[test]
-/// Preserves interpreter selection and forwards endpoint and transport settings.
 fn python_worker_process_launch_uses_the_managed_interpreter_and_endpoint_file() {
     const CHILD: &str = "RELAY_FORWARD_LAUNCH_TEST_CHILD";
     if std::env::var_os(CHILD).is_none() {
@@ -2032,8 +2034,8 @@ async fn callback_stream_stops_when_host_receiver_is_dropped() {
         .expect("worker stream drop signal should be delivered");
 }
 
-#[tokio::test(flavor = "multi_thread")]
 /// Checks that a timeout reports the callback's identity and sends cancellation.
+#[tokio::test(flavor = "multi_thread")]
 async fn callback_timeout_sends_explicit_worker_cancellation() {
     enable_operational_logs();
     let (started_tx, started_rx) = oneshot::channel();
@@ -4710,6 +4712,8 @@ async fn fake_worker_instance(
     std::fs::create_dir_all(&activation_dir).expect("unit activation dir should be created");
     (
         WorkerPluginInstance {
+            source: None,
+            component_workers: Mutex::new(Vec::new()),
             callback_timeouts: Default::default(),
             plugin_kind: "fixture_worker".into(),
             allows_multiple_components: false,
@@ -7283,3 +7287,207 @@ async fn public_worker_stream_close_bounds_host_cleanup() {
 
 #[path = "worker_scope_lifetime_tests.rs"]
 mod scope_lifetime_tests;
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn component_workers_reuse_configurations_and_reject_registration_after_shutdown() {
+    let (owner, _owner_shutdown) = fake_worker_instance(Vec::new()).await;
+    let (mut child, _child_shutdown) = fake_worker_instance(Vec::new()).await;
+    child.config.insert("component".into(), json!(2));
+    let child = Arc::new(child);
+    owner.component_workers.lock().unwrap().push(child.clone());
+    let selected = owner.component_worker(child.config.clone()).unwrap();
+    assert!(Arc::ptr_eq(&child, &selected));
+    selected.prepare_registrations().await.unwrap();
+    assert!(owner.shutdown_checked().errors.is_empty());
+    assert!(
+        selected
+            .prepare_registrations()
+            .await
+            .unwrap_err()
+            .to_string()
+            .contains("closing")
+    );
+    assert!(
+        owner
+            .component_worker(child.config.clone())
+            .err()
+            .unwrap()
+            .to_string()
+            .contains("closing")
+    );
+}
+
+/// Invalid worker result payloads must fail instead of being accepted as middleware outcomes.
+#[test]
+fn malformed_worker_callback_results_fail_closed() {
+    use wire::invoke_response::Result as R;
+    for result in [None, Some(R::Guardrail(Default::default()))] {
+        assert!(
+            json_from_invoke_response(InvokeResponse {
+                result: result.clone()
+            })
+            .is_err()
+        );
+        assert!(guardrail_from_invoke_response(InvokeResponse { result }).is_err());
+    }
+    let blocked = InvokeResponse {
+        result: Some(R::Guardrail(wire::GuardrailDecision {
+            decision: Some(wire::guardrail_decision::Decision::BlockReason(
+                String::new(),
+            )),
+        })),
+    };
+    assert!(guardrail_from_invoke_response(blocked).is_err());
+    let failure = || WorkerError {
+        code: "worker.failure".into(),
+        message: "provider failed".into(),
+        retryable: false,
+        downstream_continuation_id: None,
+        http_status: Some(503),
+    };
+    for result in [
+        json_from_invoke_response(InvokeResponse {
+            result: Some(R::Error(failure())),
+        })
+        .map(|_| ()),
+        guardrail_from_invoke_response(InvokeResponse {
+            result: Some(R::Error(failure())),
+        })
+        .map(|_| ()),
+    ] {
+        let FlowError::Upstream(error) = result.unwrap_err() else {
+            panic!("HTTP status lost")
+        };
+        assert_eq!(error.status, Some(503));
+        assert_eq!(error.body, "provider failed");
+    }
+    assert!(
+        required_envelope::<JsonEnvelope>(None, "request")
+            .unwrap_err()
+            .to_string()
+            .contains("missing request")
+    );
+    assert!(optional_envelope_to_json(Some(JsonEnvelope::default())).is_err());
+    assert!(
+        optional_worker_timestamp(Some(prost_types::Timestamp {
+            seconds: 0,
+            nanos: -1
+        }))
+        .is_err()
+    );
+    assert_eq!(
+        worker_error_to_plugin(WorkerError::default(), "registration failed").to_string(),
+        PluginError::RegistrationFailed("registration failed".into()).to_string()
+    );
+    assert_eq!(
+        status_from_flow(FlowError::InvalidArgument("invalid payload".into())).code(),
+        tonic::Code::InvalidArgument
+    );
+}
+
+/// Snapshot transport must preserve every supported domain category.
+#[test]
+fn scope_snapshot_types_preserve_all_domain_categories() {
+    for kind in [
+        ScopeType::Agent,
+        ScopeType::Function,
+        ScopeType::Tool,
+        ScopeType::Llm,
+        ScopeType::Retriever,
+        ScopeType::Embedder,
+        ScopeType::Reranker,
+        ScopeType::Guardrail,
+        ScopeType::Evaluator,
+        ScopeType::Custom,
+        ScopeType::Unknown,
+    ] {
+        assert_eq!(proto_scope_type(snapshot_scope_type_to_proto(kind)), kind);
+    }
+    assert_eq!(proto_scope_type(i32::MAX), ScopeType::Custom);
+}
+
+/// Shutdown must finish while a component process is still starting, and revoke its late result.
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn component_launch_does_not_block_shutdown_or_publish_after_revocation() {
+    let (owner, _owner_server) = fake_worker_instance(Vec::new()).await;
+    let owner = Arc::new(owner);
+    let (child, _child_server) = fake_worker_instance(Vec::new()).await;
+    let child = Arc::new(child);
+    let directory = child.activation_dir.clone();
+    let launched = child.clone();
+    let (started, ready) = oneshot::channel();
+    let (release, wait) = std::sync::mpsc::channel();
+    let launch_owner = owner.clone();
+    let launch = tokio::task::spawn_blocking(move || {
+        launch_owner.component_worker_with(Map::new(), || {
+            started.send(()).unwrap();
+            wait.recv().unwrap();
+            Ok(launched)
+        })
+    });
+    ready.await.unwrap();
+    let closing = owner.clone();
+    let mut close = tokio::task::spawn_blocking(move || closing.shutdown_checked());
+    let shutdown = tokio::time::timeout(Duration::from_secs(2), &mut close).await;
+    release.send(()).unwrap();
+    let result = launch.await.unwrap();
+    let shutdown = match shutdown {
+        Ok(result) => result.unwrap(),
+        Err(error) => {
+            close.await.unwrap();
+            panic!("component startup blocked shutdown: {error}");
+        }
+    };
+    assert!(shutdown.errors.is_empty(), "{:?}", shutdown.errors);
+    assert!(result.err().unwrap().to_string().contains("closing"));
+    assert!(owner.component_workers.lock().unwrap().is_empty());
+    assert!(child.teardown_started.load(Ordering::Acquire));
+    assert!(!directory.exists());
+}
+
+/// Concurrent launches for one configuration retain one worker and clean up the duplicate.
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn component_launch_reuses_concurrently_cached_worker_and_cleans_duplicate() {
+    let (owner, _owner_server) = fake_worker_instance(Vec::new()).await;
+    let owner = Arc::new(owner);
+    let (duplicate, _duplicate_server) = fake_worker_instance(Vec::new()).await;
+    let duplicate = Arc::new(duplicate);
+    let directory = duplicate.activation_dir.clone();
+    let (selected, _selected_server) = fake_worker_instance(Vec::new()).await;
+    let selected = Arc::new(selected);
+    let launched = duplicate.clone();
+    let (started, ready) = oneshot::channel();
+    let (release, wait) = std::sync::mpsc::channel();
+    let launch_owner = owner.clone();
+    let launch = tokio::task::spawn_blocking(move || {
+        launch_owner.component_worker_with(Map::new(), || {
+            started.send(()).unwrap();
+            wait.recv().unwrap();
+            Ok(launched)
+        })
+    });
+    ready.await.unwrap();
+    let other_owner = owner.clone();
+    let expected = selected.clone();
+    let mut other = tokio::task::spawn_blocking(move || {
+        other_owner.component_worker_with(Map::new(), || Ok(expected))
+    });
+    let result = tokio::time::timeout(Duration::from_secs(2), &mut other).await;
+    release.send(()).unwrap();
+    let first = launch.await.unwrap().unwrap();
+    let second = match result {
+        Ok(result) => result.unwrap().unwrap(),
+        Err(error) => {
+            other.await.unwrap().unwrap();
+            panic!("component startup held the cache lock: {error}");
+        }
+    };
+    assert!(Arc::ptr_eq(&first, &selected));
+    assert!(Arc::ptr_eq(&second, &selected));
+    assert_eq!(owner.component_workers.lock().unwrap().len(), 1);
+    assert!(duplicate.teardown_started.load(Ordering::Acquire));
+    assert!(!directory.exists());
+    assert!(!selected.teardown_started.load(Ordering::Acquire));
+    assert!(owner.shutdown_checked().errors.is_empty());
+    assert!(!selected.activation_dir.exists());
+}

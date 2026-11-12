@@ -83,6 +83,28 @@ fn backups_and_snapshots_restore_original_or_missing_files() {
 
 #[cfg(unix)]
 #[test]
+/// Reads linked regular files and rejects missing or nonregular targets.
+fn bounded_file_reads_follow_symlinks_and_validate_targets() {
+    let directory = tempdir().unwrap();
+    let target = directory.path().join("target");
+    let link = directory.path().join("link");
+    std::fs::write(&target, b"payload").unwrap();
+    std::os::unix::fs::symlink(&target, &link).unwrap();
+    assert_eq!(
+        crate::filesystem::bounded::read_bounded_regular_file(&link, "payload").unwrap(),
+        b"payload"
+    );
+
+    std::fs::remove_file(&target).unwrap();
+    assert!(crate::filesystem::bounded::read_bounded_regular_file(&link, "payload").is_err());
+    std::fs::create_dir(&target).unwrap();
+    let error =
+        crate::filesystem::bounded::read_bounded_regular_file(&link, "payload").unwrap_err();
+    assert!(error.contains("must be a regular file"), "{error}");
+}
+
+#[cfg(unix)]
+#[test]
 fn snapshot_restore_preserves_symlink_identity_and_target_bytes() {
     use std::os::unix::fs::symlink;
 
@@ -342,6 +364,26 @@ fn set_windows_dacl(path: &std::path::Path, sddl: &str) {
     // SAFETY: The descriptor was allocated by ConvertStringSecurityDescriptor... above.
     unsafe { LocalFree(descriptor.cast()) };
     assert_ne!(result, 0, "{}", std::io::Error::last_os_error());
+}
+
+#[cfg(windows)]
+#[test]
+/// Checks the opened target ACL even when accessed through a different file name.
+fn windows_administrator_control_checks_the_opened_target_acl() {
+    let directory = tempdir().unwrap();
+    let target = directory.path().join("certificate");
+    let alias = directory.path().join("certificate-alias");
+    atomic_write_private(&target, b"certificate").unwrap();
+    std::fs::hard_link(&target, &alias).unwrap();
+    let opened = std::fs::File::open(&alias).unwrap();
+
+    // Everyone can read this published certificate; only administrators and SYSTEM can write.
+    set_windows_dacl(&target, "D:P(A;;FA;;;SY)(A;;FA;;;BA)(A;;FR;;;WD)");
+    assert!(windows_file_is_administrator_controlled(&opened).unwrap());
+    set_windows_dacl(&target, "D:P(A;;FA;;;SY)(A;;FA;;;BA)(A;;FRFW;;;WD)");
+    assert!(!windows_file_is_administrator_controlled(&opened).unwrap());
+    set_windows_dacl(&target, "D:P(A;;FA;;;SY)(A;;FA;;;BA)(A;;FR;;;WD)");
+    assert!(windows_file_is_administrator_controlled(&opened).unwrap());
 }
 
 #[cfg(windows)]

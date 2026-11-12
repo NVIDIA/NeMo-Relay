@@ -47,7 +47,7 @@ pub(crate) fn generated_policy_hooks(
     agent: CodingAgent,
     commands: &GeneratedHookCommands,
 ) -> Value {
-    grouped_hooks(agent.hook_events(), commands)
+    grouped_hooks(agent, commands)
 }
 
 pub(crate) fn persistent_hook_forward_commands(
@@ -355,8 +355,9 @@ fn relay_for_command(relay: &Path, _windows: bool) -> std::path::PathBuf {
 #[cfg(any(windows, test))]
 const MAX_WINDOWS_HOOK_COMMAND_UTF16_UNITS: usize = 8_000;
 
-fn grouped_hooks(events: &[&str], commands: &GeneratedHookCommands) -> Value {
-    let hooks: serde_json::Map<String, Value> = events
+fn grouped_hooks(agent: CodingAgent, commands: &GeneratedHookCommands) -> Value {
+    let hooks: serde_json::Map<String, Value> = agent
+        .hook_events()
         .iter()
         .map(|event| {
             let mut group = serde_json::Map::new();
@@ -365,7 +366,7 @@ fn grouped_hooks(events: &[&str], commands: &GeneratedHookCommands) -> Value {
             }
             group.insert(
                 "hooks".into(),
-                json!([{"type": "command", "command": commands.for_event(event), "timeout": crate::hooks::HOOK_FORWARD_TIMEOUT.as_secs()}]),
+                json!([{"type": "command", "command": commands.for_event(event), "timeout": agent.hook_timeout_secs(event)}]),
             );
             (
                 (*event).to_string(),

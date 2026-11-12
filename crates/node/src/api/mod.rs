@@ -94,6 +94,26 @@ use crate::types::{
 #[cfg(test)]
 mod llm_stack_tests;
 
+/// Choose which middleware stages run for one call. Omitted fields run their stages.
+/// Relay still sanitizes event data, uses codecs, and handles call completion.
+/// Nested calls use their own options.
+#[napi(object)]
+pub struct ExecutionOptions {
+    pub conditional_execution: Option<bool>,
+    pub request_intercepts: Option<bool>,
+    pub execution_intercepts: Option<bool>,
+}
+
+impl From<ExecutionOptions> for nemo_relay_runtime::api::execution::ExecutionOptions {
+    fn from(options: ExecutionOptions) -> Self {
+        Self {
+            conditional_execution: options.conditional_execution.unwrap_or(true),
+            request_intercepts: options.request_intercepts.unwrap_or(true),
+            execution_intercepts: options.execution_intercepts.unwrap_or(true),
+        }
+    }
+}
+
 pub(crate) const LLM_STREAM_BRIDGE_CAPACITY: usize = 32;
 
 static NODE_ENVIRONMENT_COUNT: AtomicUsize = AtomicUsize::new(0);
@@ -1907,13 +1927,19 @@ pub fn tool_call_end(
 
 /// Execute a tool call end-to-end with full lifecycle management.
 ///
-/// Runs conditional-execution guardrails (on raw args) → request intercepts →
-/// sanitize-request guardrails for the emitted `Start` event payload →
-/// execution intercepts → `func` → sanitize-response guardrails for the emitted
-/// `End` event payload. On rejection, only a standalone Mark event is emitted
-/// (no Start/End pair) and `GuardrailRejected` is returned. Returns the final
-/// execution result; sanitize guardrails do not rewrite the caller-visible value.
-/// An optional trailing `toolCallId` is recorded in both lifecycle events.
+/// By default, this call runs these stages:
+///
+/// 1. Check conditional-execution guardrails on the original input.
+/// 2. Apply request intercepts.
+/// 3. Sanitize the request copy in the `Start` event.
+/// 4. Run execution intercepts around `func`.
+/// 5. Sanitize the response copy in the `End` event.
+///
+/// If a guardrail rejects the call, Relay emits a standalone Mark event.
+/// It does not emit a Start/End pair. The call returns `GuardrailRejected`.
+/// Sanitizers change event data. They do not change the result returned to the caller.
+/// An optional `toolCallId` is recorded in both lifecycle events.
+/// Use the last `executionOptions` argument to choose which stages run for this call.
 #[allow(clippy::too_many_arguments)]
 #[napi(
     ts_generic_types = "TArgs extends JsonCompatible<TArgs>, TResult extends ToolExecutionResultCompatible<TResult>, TData extends JsonCompatible<TData> = Json, TMetadata extends JsonCompatible<TMetadata> = Json",
@@ -1930,6 +1956,7 @@ pub fn tool_call_execute<'env>(
     #[napi(ts_arg_type = "TData | null")] data: Option<Json>,
     #[napi(ts_arg_type = "TMetadata | null")] metadata: Option<Json>,
     tool_call_id: Option<String>,
+    execution_options: Option<ExecutionOptions>,
 ) -> Result<PromiseRaw<'env, ToolExecutionResult>> {
     let func = scoped_fn(
         env,
@@ -1948,6 +1975,7 @@ pub fn tool_call_execute<'env>(
         data,
         metadata,
         tool_call_id,
+        execution_options,
     )
 }
 
@@ -1962,7 +1990,9 @@ fn execute_tool_call<'env>(
     data: Option<Json>,
     metadata: Option<Json>,
     tool_call_id: Option<String>,
+    execution_options: Option<ExecutionOptions>,
 ) -> Result<PromiseRaw<'env, ToolExecutionResult>> {
+    let execution_options = execution_options.map(Into::into).unwrap_or_default();
     let attrs = ToolAttributes::from_bits_truncate(attributes.unwrap_or(0));
     let context = CallContext::capture(env)?;
     let parent = context.parent(handle);
@@ -1974,6 +2004,7 @@ fn execute_tool_call<'env>(
                     .name(name)
                     .args(args)
                     .func(func)
+                    .execution_options(execution_options)
                     .parent(parent)
                     .attributes(attrs)
                     .data_opt(opt_json(data))
@@ -1991,8 +2022,9 @@ fn execute_tool_call<'env>(
 
 /// Execute a tool call end-to-end with a callback that returns a value or a Promise.
 ///
-/// Runs the same lifecycle as `toolCallExecute`. An optional trailing `toolCallId` is
+/// Runs the same lifecycle as `toolCallExecute`. An optional `toolCallId` is
 /// recorded in both lifecycle events.
+/// Use the last `executionOptions` argument to choose which stages run for this call.
 #[allow(clippy::too_many_arguments)]
 #[napi(
     ts_generic_types = "TArgs extends JsonCompatible<TArgs>, TResult extends ToolExecutionResultCompatible<TResult>, TData extends JsonCompatible<TData> = Json, TMetadata extends JsonCompatible<TMetadata> = Json",
@@ -2010,6 +2042,7 @@ pub fn tool_call_execute_async<'env>(
     #[napi(ts_arg_type = "TData | null")] data: Option<Json>,
     #[napi(ts_arg_type = "TMetadata | null")] metadata: Option<Json>,
     tool_call_id: Option<String>,
+    execution_options: Option<ExecutionOptions>,
 ) -> Result<PromiseRaw<'env, ToolExecutionResult>> {
     let pa_fn = Arc::new(PromiseAwareFn::new(env, &func)?);
     let func: ToolExecutionNextFn = Arc::new(move |args| {
@@ -2029,6 +2062,7 @@ pub fn tool_call_execute_async<'env>(
         data,
         metadata,
         tool_call_id,
+        execution_options,
     )
 }
 
@@ -2127,15 +2161,20 @@ pub fn llm_call_end(
 
 /// Execute an LLM call end-to-end with full lifecycle management.
 ///
-/// Runs conditional-execution guardrails (on raw request) → request intercepts →
-/// sanitize-request guardrails for the emitted `Start` event payload →
-/// execution intercepts → `func` → sanitize-response guardrails for the emitted
-/// `End` event payload. On rejection, only a standalone Mark event is emitted
-/// (no Start/End pair) and `GuardrailRejected` is returned. The `request`
-/// should be a JSON object with `headers` and `content` fields matching the
-/// `LlmRequest` schema. Returns the final execution response; sanitize
-/// guardrails do not rewrite the caller-visible value.
+/// By default, this call runs these stages:
+///
+/// 1. Check conditional-execution guardrails on the original input.
+/// 2. Apply request intercepts.
+/// 3. Sanitize the request copy in the `Start` event.
+/// 4. Run execution intercepts around `func`.
+/// 5. Sanitize the response copy in the `End` event.
+///
+/// If a guardrail rejects the call, Relay emits a standalone Mark event.
+/// It does not emit a Start/End pair. The call returns `GuardrailRejected`.
+/// Sanitizers change event data. They do not change the result returned to the caller.
+/// Pass a JSON object with `headers` and `content` fields in `request`.
 /// Supply `codecDecode` and `codecEncode` together or omit both.
+/// Use the last `executionOptions` argument to choose which stages run for this call.
 #[allow(clippy::too_many_arguments)]
 #[napi(
     ts_generic_types = "TRequest extends LlmRequestCompatible<TRequest>, TResponse extends JsonCompatible<TResponse>, TData extends JsonCompatible<TData> = Json, TMetadata extends JsonCompatible<TMetadata> = Json, TAnnotated extends JsonCompatible<TAnnotated> = Json, TEncoded extends LlmRequestCompatible<TEncoded> = LlmRequestShape, TDecodedResponse extends JsonCompatible<TDecodedResponse> = Json",
@@ -2160,6 +2199,7 @@ pub fn llm_call_execute<'env>(
     #[napi(ts_arg_type = "(response: Json) => TDecodedResponse")] response_codec_decode: Option<
         Callback,
     >,
+    execution_options: Option<ExecutionOptions>,
 ) -> Result<PromiseRaw<'env, Json>> {
     let request: LlmRequest = parse_json(request, "LlmRequest")?;
     let func = scoped_fn(
@@ -2182,6 +2222,7 @@ pub fn llm_call_execute<'env>(
         codec_decode,
         codec_encode,
         response_codec_decode,
+        execution_options,
     )
 }
 
@@ -2199,7 +2240,9 @@ fn execute_llm_call<'env>(
     codec_decode: Option<Callback>,
     codec_encode: Option<Callback>,
     response_codec_decode: Option<Callback>,
+    execution_options: Option<ExecutionOptions>,
 ) -> Result<PromiseRaw<'env, Json>> {
+    let execution_options = execution_options.map(Into::into).unwrap_or_default();
     let attrs = LlmAttributes::from_bits_truncate(attributes.unwrap_or(0));
     let context = CallContext::capture(env)?;
     let parent = context.parent(handle);
@@ -2212,6 +2255,7 @@ fn execute_llm_call<'env>(
                 .name(name)
                 .request(request)
                 .func(func)
+                .execution_options(execution_options)
                 .parent(parent)
                 .attributes(attrs)
                 .data_opt(opt_json(data))
@@ -2232,6 +2276,7 @@ fn execute_llm_call<'env>(
 ///
 /// Runs the same lifecycle as `llmCallExecute`. Supply `codecDecode` and `codecEncode`
 /// together or omit both.
+/// Use the last `executionOptions` argument to choose which stages run for this call.
 #[allow(clippy::too_many_arguments)]
 #[napi(
     ts_generic_types = "TRequest extends LlmRequestCompatible<TRequest>, TResponse extends JsonCompatible<TResponse>, TData extends JsonCompatible<TData> = Json, TMetadata extends JsonCompatible<TMetadata> = Json, TAnnotated extends JsonCompatible<TAnnotated> = Json, TEncoded extends LlmRequestCompatible<TEncoded> = LlmRequestShape, TDecodedResponse extends JsonCompatible<TDecodedResponse> = Json",
@@ -2242,7 +2287,9 @@ pub fn llm_call_execute_async<'env>(
     env: &'env Env,
     name: String,
     #[napi(ts_arg_type = "TRequest")] request: Json,
-    #[napi(ts_arg_type = "(request: LlmRequestShape) => TResponse | Promise<TResponse>")]
+    #[napi(
+        ts_arg_type = "(request: LlmRequestShape, signal: AbortSignal) => TResponse | Promise<TResponse>"
+    )]
     func: Callback,
     handle: Option<&ScopeHandle>,
     attributes: Option<u32>,
@@ -2257,6 +2304,7 @@ pub fn llm_call_execute_async<'env>(
     #[napi(ts_arg_type = "(response: Json) => TDecodedResponse")] response_codec_decode: Option<
         Callback,
     >,
+    execution_options: Option<ExecutionOptions>,
 ) -> Result<PromiseRaw<'env, Json>> {
     let request: LlmRequest = parse_json(request, "LlmRequest")?;
     let pa_fn = Arc::new(PromiseAwareFn::new(env, &func)?);
@@ -2281,12 +2329,13 @@ pub fn llm_call_execute_async<'env>(
         codec_decode,
         codec_encode,
         response_codec_decode,
+        execution_options,
     )
 }
 
 /// Execute a streaming LLM call end-to-end with full lifecycle management.
 ///
-/// Like `llmCallExecute`, conditional-execution guardrails run first on the raw request.
+/// By default, conditional-execution guardrails run first on the raw request.
 /// Sanitize-request guardrails only affect the emitted `Start` event payload, and
 /// sanitize-response guardrails only affect the aggregated `End` event payload.
 /// Returns an `LlmStream` whose `next()` method yields response chunks incrementally.
@@ -2304,6 +2353,7 @@ pub fn llm_call_execute_async<'env>(
 /// the finalizer throws or rejects, the aggregated response is `null`. Consumers that
 /// stop reading early must await `stream.close()`, which aborts the signal and waits
 /// for producer cleanup. Supply `codecDecode` and `codecEncode` together or omit both.
+/// Use the last `executionOptions` argument to choose which stages run for this call.
 #[allow(clippy::too_many_arguments)]
 #[napi(
     ts_generic_types = "TRequest extends LlmRequestCompatible<TRequest>, TChunk extends JsonCompatible<TChunk>, TAggregate extends JsonCompatible<TAggregate> = Json, TData extends JsonCompatible<TData> = Json, TMetadata extends JsonCompatible<TMetadata> = Json, TAnnotated extends JsonCompatible<TAnnotated> = Json, TEncoded extends LlmRequestCompatible<TEncoded> = LlmRequestShape, TDecodedResponse extends JsonCompatible<TDecodedResponse> = Json",
@@ -2333,7 +2383,9 @@ pub fn llm_stream_call_execute<'env>(
     #[napi(ts_arg_type = "(response: Json) => TDecodedResponse")] response_codec_decode: Option<
         Callback,
     >,
+    execution_options: Option<ExecutionOptions>,
 ) -> Result<PromiseRaw<'env, LlmStream>> {
+    let execution_options = execution_options.map(Into::into).unwrap_or_default();
     let attrs = LlmAttributes::from_bits_truncate(attributes.unwrap_or(0));
     let context = CallContext::capture(env)?;
     let parent = context.parent(handle);
@@ -2366,6 +2418,7 @@ pub fn llm_stream_call_execute<'env>(
                 .name(name)
                 .request(llm_request)
                 .func(default_fn)
+                .execution_options(execution_options)
                 .collector(wrapped_collector)
                 .finalizer(wrapped_finalizer)
                 .parent(parent)
@@ -2512,7 +2565,7 @@ pub fn deregister_conditional_middleware_guardrail(name: String) -> Result<bool>
 /// List global gateable runtime registrations.
 #[napi(
     ts_generic_types = "K extends RuntimeRegistrationKind | RuntimeRegistrationKindName = RuntimeRegistrationKind",
-    ts_return_type = "Array<RuntimeRegistrationIdentity & { kind: Extract<RuntimeRegistrationKind, `${K}`> }>",
+    ts_return_type = "Array<RuntimeRegistrationIdentity & { kind: K extends RuntimeRegistrationKind ? K : Extract<RuntimeRegistrationKind, K> }>",
     catch_unwind
 )]
 pub fn list_runtime_registrations(
@@ -3840,8 +3893,13 @@ impl AdaptiveRuntime {
     /// Create an adaptive runtime wrapper from config.
     ///
     /// The runtime is constructed lazily when `register()` is awaited.
-    #[napi(constructor, catch_unwind)]
-    pub fn new(config: Json) -> Result<Self> {
+    #[napi(
+        factory,
+        js_name = "create",
+        ts_generic_types = "TConfig extends JsonCompatible<TConfig>",
+        catch_unwind
+    )]
+    pub fn create(#[napi(ts_arg_type = "TConfig")] config: Json) -> Result<Self> {
         let config: AdaptiveConfig = serde_json::from_value(config)
             .map_err(|error| Error::invalid_argument(error.to_string()))?;
         let report = validate_adaptive_config_or_err(&config)?;
@@ -3891,7 +3949,7 @@ impl AdaptiveRuntime {
     }
 
     /// Return the validation report captured during runtime construction.
-    #[napi(catch_unwind)]
+    #[napi(ts_return_type = "ConfigReport", catch_unwind)]
     pub fn report(&self) -> Result<Json> {
         let state = self.state()?;
         let report = match &*state {
@@ -3910,8 +3968,16 @@ impl AdaptiveRuntime {
     }
 
     /// Build cache request facts for an annotated LLM request.
-    #[napi(js_name = "buildCacheRequestFacts", catch_unwind)]
-    pub fn build_cache_request_facts(&self, options: Json) -> Result<Option<Json>> {
+    #[napi(
+        js_name = "buildCacheRequestFacts",
+        ts_generic_types = "TOptions extends JsonCompatible<TOptions>",
+        ts_return_type = "CacheRequestFacts | null",
+        catch_unwind
+    )]
+    pub fn build_cache_request_facts(
+        &self,
+        #[napi(ts_arg_type = "TOptions")] options: Json,
+    ) -> Result<Option<Json>> {
         let options: CacheRequestFactsOptions = serde_json::from_value(options)
             .map_err(|error| Error::invalid_argument(error.to_string()))?;
         let _request_id = parse_uuid(&options.request_id, "requestId UUID")?;
@@ -3969,16 +4035,28 @@ fn parse_cache_request_facts(value: Option<Json>) -> Result<Option<CacheRequestF
 }
 
 /// Validate an adaptive config document without constructing a runtime.
-#[napi(js_name = "validateAdaptiveConfig", catch_unwind)]
-pub fn validate_adaptive_config(config: Json) -> Result<Json> {
+#[napi(
+    js_name = "validateAdaptiveConfig",
+    ts_generic_types = "TConfig extends JsonCompatible<TConfig>",
+    ts_return_type = "ConfigReport",
+    catch_unwind
+)]
+pub fn validate_adaptive_config(#[napi(ts_arg_type = "TConfig")] config: Json) -> Result<Json> {
     let config: AdaptiveConfig = serde_json::from_value(config)
         .map_err(|error| Error::invalid_argument(error.to_string()))?;
     serde_json::to_value(CoreAdaptiveRuntime::validate_config(&config)).map_err(Error::from)
 }
 
 /// Build one adaptive cache telemetry event from normalized usage.
-#[napi(js_name = "buildCacheTelemetryEvent", catch_unwind)]
-pub fn build_cache_telemetry_event(options: Json) -> Result<Option<Json>> {
+#[napi(
+    js_name = "buildCacheTelemetryEvent",
+    ts_generic_types = "TOptions extends JsonCompatible<TOptions>",
+    ts_return_type = "CacheTelemetryEvent | null",
+    catch_unwind
+)]
+pub fn build_cache_telemetry_event(
+    #[napi(ts_arg_type = "TOptions")] options: Json,
+) -> Result<Option<Json>> {
     let options: CacheTelemetryOptions = serde_json::from_value(options)
         .map_err(|error| Error::invalid_argument(error.to_string()))?;
     let provider = parse_cache_telemetry_provider(&options.provider)?;
@@ -4225,7 +4303,7 @@ mod dynamic_plugin_close_state_tests;
 #[napi]
 impl PluginHostActivation {
     /// Return the validation report produced by activation.
-    #[napi(getter, catch_unwind)]
+    #[napi(getter, ts_return_type = "PluginHostReport", catch_unwind)]
     pub fn report(&self) -> Result<Json> {
         serde_json::to_value(self.close_state.report()).map_err(Error::from)
     }
@@ -4270,10 +4348,13 @@ impl PluginHostActivation {
 }
 
 /// Initialize the core-owned static and dynamic plugin host from layered files.
-#[napi(catch_unwind)]
+#[napi(
+    ts_generic_types = "TConfig extends JsonCompatible<TConfig>",
+    catch_unwind
+)]
 pub fn initialize<'env>(
     env: &'env Env,
-    config: Json,
+    #[napi(ts_arg_type = "TConfig")] config: Json,
     additional_plugins_toml: Option<String>,
 ) -> Result<PromiseRaw<'env, PluginHostActivation>> {
     spawn_promise(
@@ -4304,8 +4385,15 @@ pub fn initialize<'env>(
     )
 }
 /// Validate dynamic plugins without loading any plugin code.
-#[napi(catch_unwind)]
-pub fn validate(config: Json, additional_plugins_toml: Option<String>) -> Result<Json> {
+#[napi(
+    ts_generic_types = "TConfig extends JsonCompatible<TConfig>",
+    ts_return_type = "PluginHostReport",
+    catch_unwind
+)]
+pub fn validate(
+    #[napi(ts_arg_type = "TConfig")] config: Json,
+    additional_plugins_toml: Option<String>,
+) -> Result<Json> {
     let config: nemo_relay_plugin_host::dynamic::PluginHostConfig =
         parse_json(config, "plugin config")?;
     let report =
@@ -4314,8 +4402,12 @@ pub fn validate(config: Json, additional_plugins_toml: Option<String>) -> Result
 }
 
 /// Validate only the supplied static plugin configuration.
-#[napi(catch_unwind)]
-pub fn validate_exact(config: Json) -> Result<Json> {
+#[napi(
+    ts_generic_types = "TConfig extends JsonCompatible<TConfig>",
+    ts_return_type = "PluginHostReport",
+    catch_unwind
+)]
+pub fn validate_exact(#[napi(ts_arg_type = "TConfig")] config: Json) -> Result<Json> {
     if config.get("diagnostics").is_some() {
         return Err(Error::invalid_argument(
             "diagnostics is a host-only setting; use layered validation",

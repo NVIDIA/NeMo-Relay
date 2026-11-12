@@ -273,6 +273,8 @@ fn generated_codex_hook_metadata(
         "stop",
         "pre_compact",
         "post_compact",
+        "session_end",
+        "interrupt",
     ]
     .into_iter()
     .enumerate()
@@ -638,7 +640,7 @@ fn codex_auto_trusts_only_exact_generated_plugin_hooks_and_verifies_them() {
     assert_eq!(
         client.trusted,
         vec![
-            (0..9)
+            (0..11)
                 .map(|index| format!("relay-hook-{index}"))
                 .collect::<Vec<_>>()
         ]
@@ -683,7 +685,11 @@ fn codex_auto_trust_refuses_duplicate_discovered_handler() {
     let config_path = dir.path().join("config.toml");
     fs::write(&config_path, "").unwrap();
     let mut hooks = generated_codex_hook_metadata(dir.path(), "untrusted", true);
-    let mut duplicate = hooks.last().unwrap().clone();
+    let mut duplicate = hooks
+        .iter()
+        .find(|hook| hook.event_name == "post_compact")
+        .unwrap()
+        .clone();
     duplicate.key = "duplicate-post-compact".into();
     hooks.push(duplicate);
     let mut client = FakeCodexHooksClient {
@@ -718,6 +724,8 @@ fn every_generated_codex_hook_is_required_exactly_once_and_trusted() {
         ("stop", "Stop"),
         ("pre_compact", "PreCompact"),
         ("post_compact", "PostCompact"),
+        ("session_end", "SessionEnd"),
+        ("interrupt", "Interrupt"),
     ] {
         for condition in ["missing", "duplicate", "disabled", "modified"] {
             let dir = tempdir().unwrap();
@@ -799,8 +807,10 @@ fn codex_auto_trust_reverifies_every_generated_hook_after_writing() {
         "subagent_start",
         "subagent_stop",
         "stop",
+        "interrupt",
         "pre_compact",
         "post_compact",
+        "session_end",
     ] {
         for condition in ["missing", "duplicate", "disabled", "modified"] {
             let dir = tempdir().unwrap();
@@ -847,7 +857,7 @@ fn codex_auto_trust_reverifies_every_generated_hook_after_writing() {
                 "{event} {condition}: {error}"
             );
             assert_eq!(client.restored.len(), 1, "{event} {condition}");
-            assert_eq!(client.restored[0].len(), 9, "{event} {condition}");
+            assert_eq!(client.restored[0].len(), 11, "{event} {condition}");
         }
     }
 }
@@ -900,7 +910,11 @@ fn codex_auto_trust_rejects_targeted_hook_that_changes_key_after_write() {
     for hook in &mut verified {
         hook.trust_status = "trusted".into();
     }
-    verified.last_mut().unwrap().key = "replacement-post-compact".into();
+    verified
+        .iter_mut()
+        .find(|hook| hook.event_name == "post_compact")
+        .unwrap()
+        .key = "replacement-post-compact".into();
     let mut client = FakeCodexHooksClient {
         hook_lists: VecDeque::from([Ok(initial.clone()), Ok(verified), Ok(initial.clone())]),
         ..FakeCodexHooksClient::default()
@@ -956,7 +970,7 @@ custom = "preserve"
 
     assert!(error.contains("did not enable and trust"), "{error}");
     assert_eq!(client.restored.len(), 1);
-    assert_eq!(client.restored[0].len(), 9);
+    assert_eq!(client.restored[0].len(), 11);
     assert_eq!(
         client.restored[0]
             .iter()
@@ -1030,7 +1044,7 @@ fn codex_auto_trust_does_not_depend_on_reported_plugin_source_path() {
     )
     .unwrap();
 
-    assert_eq!(client.trusted[0].len(), 9);
+    assert_eq!(client.trusted[0].len(), 11);
 }
 
 #[test]
@@ -1121,7 +1135,9 @@ fn codex_hook_trust_report_distinguishes_modified_disabled_and_missing_hooks() {
             "SubagentStop",
             "Stop",
             "PreCompact",
-            "PostCompact"
+            "PostCompact",
+            "SessionEnd",
+            "Interrupt"
         ])
     );
 }
@@ -2651,7 +2667,7 @@ fn codex_doctor_requires_app_server_reported_trust_but_allows_stopped_sidecar() 
     assert_eq!(
         report["codex_hook_trust"]["trusted"],
         json!(
-            (0..9)
+            (0..11)
                 .map(|index| format!("relay-hook-{index}"))
                 .collect::<Vec<_>>()
         )
@@ -2833,7 +2849,7 @@ fn codex_uninstall_clears_all_trust_for_the_exact_relay_plugin() {
     assert_eq!(
         client.cleared,
         vec![
-            (0..9)
+            (0..11)
                 .map(|index| format!("relay-hook-{index}"))
                 .chain(["unrelated-hook".into()])
                 .collect::<Vec<_>>()

@@ -8,7 +8,7 @@ SPDX-License-Identifier: Apache-2.0 */}
 
 The `examples/rust-grpc-worker-plugin` project is the Rust version of the
 [Python worker](/build-plugins/workers/python). It uses `nemo-relay-worker` 1.0.0
-and implements `WorkerPlugin`. It supports all 17
+and implements `Plugin`. It supports all 17
 [callback types](/build-plugins/workers/middleware-and-continuations). Its
 configuration selects which callbacks to register. The SDK starts the authenticated
 `nvidia.nemo.relay.worker.v1` server from Relay's activation environment.
@@ -21,8 +21,9 @@ not create a worker-local store or enable diagnostic collection.
 
 This example matches the Rust native and Python worker example. Register its
 component once from asynchronous code, then retain it for later lookups.
-`WorkerPlugin::register` is synchronous. Capture the runtime and shared state in
-an asynchronous callback, then initialize the helper once with a Tokio `OnceCell`.
+`Plugin::register` returns a future and can initialize helpers during registration.
+This example captures shared state in an asynchronous callback and initializes the
+helper once with a Tokio `OnceCell`.
 Cache initialization failure as well to avoid repeated registration attempts.
 It declares separate failure and success codes, records positive occurrence counts,
 and attaches a request ID. Call the failure helper only after observing an
@@ -83,7 +84,7 @@ Build the executable and create a manifest for your platform:
 
    ```bash
    cargo nextest run
-   cargo build
+   cargo build --target-dir target
    ```
 
 2. Copy `relay-plugin.toml` to `relay-plugin.local.toml` and replace
@@ -145,36 +146,42 @@ tests and the executable named in the manifest.
 
 <Code src="../_code/rust-worker/Cargo.toml" language="toml" title="Cargo.toml" lines="4-22" showLineNumbers={false} />
 
-`WorkerPlugin::register` is a synchronous description step. It parses the validated JSON
+`Plugin::register` is an asynchronous registration step. It parses the validated JSON
 and registers callbacks through `PluginContext`. Those callbacks return futures.
 
 ```rust
 pub struct DocumentationWorker;
 
-impl WorkerPlugin for DocumentationWorker {
-    fn plugin_id(&self) -> &str {
+impl Plugin for DocumentationWorker {
+    fn plugin_kind(&self) -> &str {
         "examples.rust_grpc_worker"
     }
-
     fn allows_multiple_components(&self) -> bool {
         false
     }
-
-    fn validate(&self, config: &Json) -> Vec<ConfigDiagnostic> {
+    fn validate(&self, config: &serde_json::Map<String, Json>) -> Vec<ConfigDiagnostic> {
+        let config = &Json::Object(config.clone());
         config::validate(config)
     }
 
-    fn register(&self, context: &mut PluginContext, config: &Json) -> Result<()> {
-        let settings = ExampleConfig::parse(config)
-            .map_err(WorkerSdkError::InvalidInput)?;
-        if settings.observe.enabled {
-            register_observation(context, &settings);
-        }
-        if settings.requests.enabled {
-            register_requests(context, &settings);
-        }
-        register_execution(context, &settings);
-        Ok(())
+    fn register<'a>(
+        &'a self,
+        config: &'a serde_json::Map<String, Json>,
+        context: &'a mut PluginContext,
+    ) -> nemo_relay_worker::PluginFuture<'a, ()> {
+        Box::pin(async move {
+            let config = &Json::Object(config.clone());
+
+            let settings = ExampleConfig::parse(config).map_err(WorkerSdkError::InvalidInput)?;
+            if settings.observe.enabled {
+                register_observation(context, &settings);
+            }
+            if settings.requests.enabled {
+                register_requests(context, &settings);
+            }
+            register_execution(context, &settings);
+            Ok(())
+        })
     }
 }
 ```

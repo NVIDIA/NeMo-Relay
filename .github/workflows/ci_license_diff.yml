@@ -89,10 +89,10 @@ jobs:
           echo "Comparing lockfile licenses against ${compare_ref}"
           printf 'compare_ref=%s\n' "$compare_ref" >> "$GITHUB_OUTPUT"
 
+          : > license-diff.md
           set +e
-          # SONAR_IGNORE_START: offline mode makes this a no-network execution.
-          uv run --no-project --offline --python ${{ steps.ci-config.outputs.default_python_version }} python scripts/licensing/license_diff.py --base-ref "$compare_ref" > license-diff.md 2> license-diff.status
-          # SONAR_IGNORE_END
+          uv sync --frozen --no-default-groups --group dev --no-install-project > license-diff.status 2>&1 \
+            && uv run --no-sync python scripts/licensing/license_diff.py --base-ref "$compare_ref" > license-diff.md 2>> license-diff.status
           diff_status=$?
           set -e
           printf 'diff_status=%s\n' "$diff_status" >> "$GITHUB_OUTPUT"

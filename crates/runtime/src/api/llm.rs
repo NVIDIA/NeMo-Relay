@@ -8,6 +8,8 @@ use std::time::Instant;
 use chrono::{DateTime, TimeDelta, Utc};
 use serde::{Deserialize, Serialize};
 use serde_json::json;
+
+pub use crate::api::execution::ExecutionOptions;
 use typed_builder::TypedBuilder;
 use uuid::Uuid;
 
@@ -269,6 +271,9 @@ pub struct LlmCallExecuteParams {
     /// Optional response codec used to attach annotated response data.
     #[builder(default)]
     pub response_codec: Option<Arc<dyn LlmResponseCodec>>,
+    /// Choose which stages run for this call. All stages run by default.
+    #[builder(default)]
+    pub execution_options: ExecutionOptions,
 }
 
 /// Builder parameters for [`llm_stream_call_execute`].
@@ -314,6 +319,9 @@ pub struct LlmStreamCallExecuteParams {
     /// Optional response codec used to attach annotated response data.
     #[builder(default)]
     pub response_codec: Option<Arc<dyn LlmResponseCodec>>,
+    /// Choose which stages run for this call. All stages run by default.
+    #[builder(default)]
+    pub execution_options: ExecutionOptions,
 }
 
 /// Builder parameters for [`llm_call_end`].
@@ -1642,10 +1650,14 @@ impl Drop for ManagedLlmCompletion {
 
 /// Execute an LLM call through the managed middleware pipeline.
 ///
-/// This runs conditional-execution guardrails, request intercepts, and
+/// By default, this runs conditional-execution guardrails, request intercepts, and
 /// sanitize-request guardrails, emits the LLM-start event, then runs execution
 /// intercepts, the provider callback when it is not replaced, and
 /// sanitize-response guardrails in the runtime-defined order.
+///
+/// Use `execution_options` to choose which middleware stages run for this call.
+/// All stages run by default. Relay still sanitizes event data, uses codecs,
+/// and handles call completion.
 ///
 /// # Parameters
 /// - `name`: Logical provider or model family name recorded on emitted events.
@@ -1661,6 +1673,7 @@ impl Drop for ManagedLlmCompletion {
 ///   intercepts and events.
 /// - `response_codec`: Optional response codec used to attach annotated
 ///   response data to the end event.
+/// - `execution_options`: Choose which stages run for this call. All stages run by default.
 ///
 /// # Returns
 /// A [`Result`] containing the raw JSON response returned by the callback or
@@ -1692,9 +1705,10 @@ pub async fn llm_call_execute(params: LlmCallExecuteParams) -> Result<Json> {
         model_name,
         codec,
         response_codec,
+        execution_options,
     } = params;
     ensure_runtime_owner()?;
-    {
+    if execution_options.conditional_execution {
         let (entries, subscribers, parent_uuid, guardrail_metadata) = {
             let scope_stack = current_scope_stack();
             let (scope_locals, scope_subscribers) = {
@@ -1760,6 +1774,7 @@ pub async fn llm_call_execute(params: LlmCallExecuteParams) -> Result<Json> {
                 request,
                 codec,
                 &optimization_recorder,
+                execution_options.request_intercepts,
             )
             .await
         })
@@ -1812,7 +1827,7 @@ pub async fn llm_call_execute(params: LlmCallExecuteParams) -> Result<Json> {
         event_uuid,
         Some(active_trace_context),
         scope_llm_optimization_recorder(handle.optimization_recorder.clone(), async move {
-            let execution = {
+            let execution = if execution_options.execution_intercepts {
                 let scope_stack = current_scope_stack();
                 let scope_locals = scope_stack
                     .read()
@@ -1832,6 +1847,8 @@ pub async fn llm_call_execute(params: LlmCallExecuteParams) -> Result<Json> {
                     &scope_local_refs,
                     execution_context,
                 )
+            } else {
+                func
             };
             execution(intercepted_request).await
         }),
@@ -1874,9 +1891,13 @@ pub async fn llm_call_execute(params: LlmCallExecuteParams) -> Result<Json> {
 
 /// Execute a streaming LLM call through the managed middleware pipeline.
 ///
-/// This runs the same pre-execution middleware as [`llm_call_execute`], emits
+/// By default, this runs the same middleware as [`llm_call_execute`], emits
 /// the LLM-start event, and then wraps the provider stream so chunk callbacks
 /// and finalization can emit a single LLM-end event when streaming completes.
+///
+/// Use `execution_options` to choose which middleware stages run for this call.
+/// All stages run by default. Relay still sanitizes event data, uses codecs,
+/// and handles call completion.
 ///
 /// # Parameters
 /// - `name`: Logical provider or model family name recorded on emitted events.
@@ -1894,6 +1915,7 @@ pub async fn llm_call_execute(params: LlmCallExecuteParams) -> Result<Json> {
 ///   intercepts and events.
 /// - `response_codec`: Optional response codec used to attach annotated
 ///   response data to the end event.
+/// - `execution_options`: Choose which stages run for this call. All stages run by default.
 ///
 /// # Returns
 /// A [`Result`] containing a boxed stream of JSON chunks.
@@ -1950,9 +1972,10 @@ async fn llm_stream_call_execute_inner(
         model_name,
         codec,
         response_codec,
+        execution_options,
     } = params;
     ensure_runtime_owner()?;
-    {
+    if execution_options.conditional_execution {
         let (entries, subscribers, parent_uuid, guardrail_metadata) = {
             let scope_stack = current_scope_stack();
             let (scope_locals, scope_subscribers) = {
@@ -2018,6 +2041,7 @@ async fn llm_stream_call_execute_inner(
                 request,
                 codec,
                 &optimization_recorder,
+                execution_options.request_intercepts,
             )
             .await
         })
@@ -2070,7 +2094,7 @@ async fn llm_stream_call_execute_inner(
         event_uuid,
         Some(active_trace_context),
         scope_llm_optimization_recorder(handle.optimization_recorder.clone(), async move {
-            let execution = {
+            let execution = if execution_options.execution_intercepts {
                 let scope_stack = current_scope_stack();
                 let scope_locals = scope_stack
                     .read()
@@ -2090,6 +2114,8 @@ async fn llm_stream_call_execute_inner(
                     &scope_local_refs,
                     execution_context,
                 )
+            } else {
+                func
             };
             let continuation_context = MiddlewareContinuationContext::capture();
             execution(intercepted_request)
