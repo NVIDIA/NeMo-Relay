@@ -1780,7 +1780,7 @@ OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
 SOFTWARE.
 ```
 
-## @hono/node-server - 2.1.5
+## @hono/node-server - 2.1.6
 **Repository URL**: https://github.com/honojs/node-server
 **License Type(s)**: MIT
 ### License: https://spdx.org/licenses/MIT.html
