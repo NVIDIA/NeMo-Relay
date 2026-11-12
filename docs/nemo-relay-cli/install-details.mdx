@@ -51,11 +51,11 @@ and install the latest stable CLI release. The version of this documentation
 page does not select the CLI version; set `NEMO_RELAY_VERSION` to install a
 specific release.
 
-The Unix installer downloads the matching GitHub Release binary to
+On Linux and macOS, the shell installer downloads the matching GitHub Release binary to
 `$HOME/.local/bin`. The PowerShell installer downloads `nemo-relay.exe` to
 `%LOCALAPPDATA%\nemo-relay\bin`, adds that directory to the persistent user
-`PATH`, and updates the installing PowerShell process. Newly opened shells
-inherit the persistent `PATH` change.
+`PATH`, and updates the installing PowerShell process. Other running terminals
+retain their existing `PATH`.
 
 The installers download the published SHA-256 checksum for the selected release
 asset and fail without replacing an existing binary if verification does not
@@ -113,13 +113,26 @@ iwr https://raw.githubusercontent.com/NVIDIA/NeMo-Relay/main/install.ps1 -OutFil
 
 </Tabs>
 
-On Windows, Git Bash, MSYS, Cygwin, and MINGW shells can use the Unix command.
-They install the matching Windows `.exe` asset into the same
-`%LOCALAPPDATA%\nemo-relay\bin` default directory and invoke PowerShell to
-persist the Windows user `PATH` update.
-
 Rerun the installer to upgrade or replace the existing binary. It verifies the
 new download before replacing the binary in the selected installation directory.
+
+## Windows POSIX Shells
+
+On Windows, Git Bash, MSYS, Cygwin, and MINGW shells can use `install.sh`.
+It installs the matching Windows `.exe` asset into
+`%LOCALAPPDATA%\nemo-relay\bin` and invokes PowerShell to persist the Windows
+user `PATH` update. The installer cannot update the calling shell's `PATH`.
+
+For the default installation directory, install Relay and add it to the current
+shell's `PATH` before checking the version:
+
+```bash
+curl -fsSL https://raw.githubusercontent.com/NVIDIA/NeMo-Relay/main/install.sh | sh
+export PATH="$(cygpath -u "$LOCALAPPDATA")/nemo-relay/bin:$PATH"
+nemo-relay --version
+```
+
+If you use `--install-dir`, add that directory to `PATH` instead.
 
 ## Remove a Script-Installed CLI
 

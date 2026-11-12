@@ -10,7 +10,7 @@ Install the latest stable Relay CLI for Claude Code or Codex. The prebuilt
 installers do not require a Rust compiler or Python environment.
 
 <Tabs>
-<Tab title="Unix shell">
+<Tab title="Linux / macOS">
 ```bash
 curl -fsSL https://raw.githubusercontent.com/NVIDIA/NeMo-Relay/main/install.sh | sh
 export PATH="$HOME/.local/bin:$PATH"
@@ -23,13 +23,16 @@ irm https://raw.githubusercontent.com/NVIDIA/NeMo-Relay/main/install.ps1 | iex
 </Tab>
 </Tabs>
 
+For Git Bash, MSYS, Cygwin, or MINGW, use the
+[Windows POSIX shell instructions](/nemo-relay-cli/install-details#windows-posix-shells).
+
 Check that the executable is available:
 
 ```bash
 nemo-relay --version
 ```
 
-The Unix `PATH` command applies to the current shell. The PowerShell installer
+The Linux / macOS `PATH` command applies to the current shell. The PowerShell installer
 updates the Windows user `PATH` and the installing PowerShell process.
 
 With the CLI and your coding agent installed, choose how Relay connects:
