@@ -10,6 +10,7 @@ package nemo_relay
 typedef struct FfiStream FfiStream;
 
 extern int32_t nemo_relay_stream_next(FfiStream* stream, char** out_chunk);
+extern void nemo_relay_stream_cancel(FfiStream* stream);
 extern int32_t nemo_relay_stream_close(FfiStream* stream);
 extern void nemo_relay_stream_free(FfiStream* stream);
 extern void nemo_relay_string_free(char* ptr);
@@ -200,6 +201,7 @@ func (s *LlmStream) Close() error {
 	ptr := s.ptr
 	s.mu.Unlock()
 
+	C.nemo_relay_stream_cancel(ptr)
 	if callbackDone, reentrant := s.callbacks.activeCallback(callerID); reentrant {
 		go func() {
 			<-callbackDone
@@ -215,7 +217,6 @@ func (s *LlmStream) Close() error {
 }
 
 func (s *LlmStream) closeNative(ptr *C.FfiStream) {
-	err := callStatus(func() C.int32_t { return C.nemo_relay_stream_close(ptr) })
 	s.mu.Lock()
 	for s.inFlight > 0 {
 		idle := s.idle
@@ -223,6 +224,9 @@ func (s *LlmStream) closeNative(ptr *C.FfiStream) {
 		<-idle
 		s.mu.Lock()
 	}
+	s.mu.Unlock()
+	err := callStatus(func() C.int32_t { return C.nemo_relay_stream_close(ptr) })
+	s.mu.Lock()
 	s.closeErr = err
 	s.ptr = nil
 	s.closed = true

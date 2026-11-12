@@ -600,6 +600,11 @@ pub(crate) struct ForwarderParts {
 }
 
 impl FfiStream {
+    fn cancel(&self) {
+        self.cancel.send_replace(true);
+        self.start();
+    }
+
     fn start(&self) {
         let parts = self
             .pending
@@ -617,8 +622,7 @@ impl FfiStream {
 
 impl Drop for FfiStream {
     fn drop(&mut self) {
-        self.cancel.send_replace(true);
-        self.start();
+        self.cancel();
     }
 }
 
@@ -780,6 +784,21 @@ pub unsafe extern "C" fn nemo_relay_llm_stream_call_execute(
     }
 }
 
+/// Stop a stream producer.
+///
+/// # Safety
+/// `stream` must be a valid `FfiStream` pointer returned by
+/// `nemo_relay_llm_stream_call_execute`, or null.
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn nemo_relay_stream_cancel(stream: *mut FfiStream) {
+    if stream.is_null() {
+        return;
+    }
+    // SAFETY: the caller guarantees `stream` came from
+    // `nemo_relay_llm_stream_call_execute` and has not been freed.
+    unsafe { &*stream }.cancel();
+}
+
 /// Stop a stream producer and wait for cleanup to complete.
 ///
 /// This operation is idempotent. It does not free `stream`; callers must still
@@ -799,8 +818,7 @@ pub unsafe extern "C" fn nemo_relay_stream_close(stream: *mut FfiStream) -> Nemo
         return NemoRelayStatus::NullPointer;
     }
     let stream = unsafe { &*stream };
-    stream.cancel.send_replace(true);
-    stream.start();
+    stream.cancel();
     if stream.callbacks.on_callback_thread() {
         return NemoRelayStatus::Ok;
     }
@@ -883,9 +901,9 @@ pub unsafe extern "C" fn nemo_relay_stream_next(
         );
         return -1;
     }
-    stream.start();
     let result = super::block_on(async {
         let mut guard = stream.receiver.lock().await;
+        stream.start();
         Ok(guard.recv().await)
     });
     match result {
