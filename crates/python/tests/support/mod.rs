@@ -81,6 +81,19 @@ pub(crate) fn init_python_test_locked(lock: MutexGuard<'static, ()>) -> PythonTe
             return;
         }
         let package = PyModule::new(py, "nemo_relay").expect("create test package");
+        let context_variables = py.import("contextvars").expect("import contextvars");
+        let keyword_arguments = pyo3::types::PyDict::new(py);
+        keyword_arguments
+            .set_item("default", py.None())
+            .expect("publication scope default");
+        let publication_scope = context_variables
+            .getattr("ContextVar")
+            .expect("ContextVar type")
+            .call(("publication_scope",), Some(&keyword_arguments))
+            .expect("publication scope ContextVar");
+        package
+            .setattr("_publication_scope_var", publication_scope)
+            .expect("register publication scope ContextVar");
         package
             .setattr("__path__", Vec::<String>::new())
             .expect("mark test package");

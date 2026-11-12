@@ -519,15 +519,31 @@ pub fn fork_scope_stack(stack: Option<&PyScopeStack>) -> PyResult<PyScopeStack> 
             "cannot fork scope stack without an active Relay context",
         ));
     }
-    if let Some(stack) = stack {
-        sync_thread_scope_stack(stack);
+    let (context, publication_buffer) = match stack {
+        Some(stack) => match &stack.execution_context {
+            Some(context) => (context.clone(), stack.publication_buffer.clone()),
+            None if Arc::ptr_eq(&current_scope_stack_handle(), &stack.inner) => (
+                MiddlewareContinuationContext::capture(),
+                capture_nested_publication_buffer(),
+            ),
+            None => (
+                MiddlewareContinuationContext::from_scope_stack(stack.inner.clone()),
+                stack.publication_buffer.clone(),
+            ),
+        },
+        None => (
+            MiddlewareContinuationContext::capture(),
+            capture_nested_publication_buffer(),
+        ),
+    };
+    let context = match stack {
+        Some(stack) => context.isolated_with_scope_stack(&stack.inner),
+        None => context.isolated(),
     }
-    let context = MiddlewareContinuationContext::capture()
-        .isolated()
-        .map_err(flow_error_to_py_err)?;
+    .map_err(flow_error_to_py_err)?;
     Ok(PyScopeStack {
         inner: context.scope_stack(),
-        publication_buffer: capture_nested_publication_buffer(),
+        publication_buffer,
         execution_context: Some(context),
     })
 }
@@ -567,9 +583,7 @@ fn synchronize_forked_context(stack: &PyScopeStack, explicit: bool) -> bool {
     } else {
         let origin = FORK_ORIGIN.with(|origin| origin.borrow_mut().take());
         if let Some(origin) = origin {
-            let publication_buffer = capture_nested_publication_buffer();
             restore_python_thread_context(&origin);
-            sync_thread_publication_buffer(publication_buffer);
         }
         false
     }
@@ -634,17 +648,16 @@ pub fn create_scope_stack_from_propagation(
 /// Args:
 ///     stack: The ``ScopeStack`` to bind to the current thread.
 #[pyfunction]
-pub fn set_thread_scope_stack(stack: &PyScopeStack) {
+#[pyo3(signature = (stack, publication_scope=None))]
+pub fn set_thread_scope_stack(stack: &PyScopeStack, publication_scope: Option<&PyScopeStack>) {
     if synchronize_forked_context(stack, true) {
         return;
     }
     bind_thread_scope_stack(stack.inner.clone());
-    sync_thread_publication_buffer(
-        stack
-            .publication_buffer
-            .clone()
-            .or_else(capture_nested_publication_buffer),
-    );
+    sync_thread_publication_buffer(match publication_scope {
+        Some(publication_scope) => publication_scope.publication_buffer.clone(),
+        None => stack.publication_buffer.clone(),
+    });
 }
 
 /// Capture the scope stack currently installed in native thread-local storage.
@@ -671,17 +684,16 @@ pub fn restore_thread_scope_stack(binding: &PyThreadScopeStackBinding) {
 /// thread-local in sync with the Python ``contextvars.ContextVar`` without
 /// affecting ``scope_stack_active()``.
 #[pyfunction]
-pub fn sync_thread_scope_stack(stack: &PyScopeStack) {
+#[pyo3(signature = (stack, publication_scope=None))]
+pub fn sync_thread_scope_stack(stack: &PyScopeStack, publication_scope: Option<&PyScopeStack>) {
     if synchronize_forked_context(stack, false) {
         return;
     }
     sync_bound_thread_scope_stack(stack.inner.clone());
-    sync_thread_publication_buffer(
-        stack
-            .publication_buffer
-            .clone()
-            .or_else(capture_nested_publication_buffer),
-    );
+    sync_thread_publication_buffer(match publication_scope {
+        Some(publication_scope) => publication_scope.publication_buffer.clone(),
+        None => stack.publication_buffer.clone(),
+    });
 }
 
 /// Return whether the current execution context has an explicitly-initialized

@@ -17,11 +17,23 @@
     return store;
   }
 
-  function replacementCallbackStore(current, scope) {
+  function selectedPublication(current, capturedPublicationContextId, hasCapturedContext) {
+    if (!hasCapturedContext) {
+      return {
+        publicationState: current?.publicationState ?? { active: false },
+        publicationContextId: current?.publicationContextId,
+      };
+    }
+    return {
+      publicationState: publicationStates.get(capturedPublicationContextId) ?? { active: false },
+      publicationContextId: capturedPublicationContextId,
+    };
+  }
+
+  function replacementCallbackStore(current, scope, capturedPublicationContextId, hasCapturedContext) {
     const store = {
       lifecycle: current.lifecycle,
-      publicationState: current.publicationState,
-      publicationContextId: current.publicationContextId,
+      ...selectedPublication(current, capturedPublicationContextId, hasCapturedContext),
       scope,
     };
     current.lifecycle.stores.add(store);
@@ -554,13 +566,13 @@
       return eventSanitizerContext.getStore()?.scope;
     },
 
-    withCallbackScope(scope, fn, capturedPublicationContextId) {
+    withCallbackScope(scope, fn, capturedPublicationContextId, hasCapturedContext) {
       const current = eventSanitizerContext.getStore();
-      const publicationContextId = capturedPublicationContextId ?? current?.publicationContextId;
-      const publicationState =
-        capturedPublicationContextId == null
-          ? (current?.publicationState ?? { active: false })
-          : (publicationStates.get(capturedPublicationContextId) ?? { active: false });
+      const { publicationContextId, publicationState } = selectedPublication(
+        current,
+        capturedPublicationContextId,
+        hasCapturedContext,
+      );
       const token = callbackStore(publicationState, publicationContextId, scope);
       const expire = () => expireCallbackStore(token);
       let value;
@@ -577,12 +589,14 @@
       return value;
     },
 
-    setCallbackScope(scope) {
+    setCallbackScope(scope, capturedPublicationContextId, hasCapturedContext) {
       const current = eventSanitizerContext.getStore();
       if (current === undefined) {
         return false;
       }
-      eventSanitizerContext.enterWith(replacementCallbackStore(current, scope));
+      eventSanitizerContext.enterWith(
+        replacementCallbackStore(current, scope, capturedPublicationContextId, hasCapturedContext),
+      );
       return true;
     },
   };

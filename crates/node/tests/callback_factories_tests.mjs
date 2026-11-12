@@ -21,8 +21,8 @@ function abortedThen(signal, started) {
   });
 }
 
-function invoke(wrapper, callId, { abort = false, streamResult = false, scope = undefined } = {}) {
-  wrapper(abort, callId, { value: 1 }, false, undefined, false, undefined, scope, streamResult);
+function invoke(wrapper, callId, { abort = false, streamResult = false, scope = undefined, publication = false } = {}) {
+  wrapper(abort, callId, { value: 1 }, false, undefined, publication, undefined, scope, streamResult);
 }
 
 function rejectSettle(name) {
@@ -105,4 +105,50 @@ describe('promise callback cancellation', () => {
     assert.equal(await ended.promise, 3);
     assert.equal(cleanedUp, true);
   });
+});
+
+describe('fork publication selection', { timeout: 3000 }, () => {
+  for (const binding of ['withCallbackScope', 'setCallbackScope']) {
+    for (const selection of ['ambient', 'absent', 'active']) {
+      it(`${binding} retains ${selection} publication ownership`, async () => {
+        const completed = Promise.withResolvers();
+        const wrapper = factories.promise(
+          async () => {
+            const originalIdentifier = factories.eventSanitizerCallbackContextId();
+            assert.equal(typeof originalIdentifier, 'string');
+            const selectedScope = { selection };
+            const capturedIdentifier = selection === 'active' ? originalIdentifier : null;
+            const captured = selection !== 'ambient';
+            const inspect = async () => {
+              for (let iteration = 0; iteration < 2; iteration += 1) {
+                assert.equal(factories.callbackScope(), selectedScope);
+                assert.equal(factories.publicationCallbackActive(), selection !== 'absent');
+                assert.equal(
+                  factories.eventSanitizerCallbackContextId(),
+                  selection === 'absent' ? undefined : originalIdentifier,
+                );
+                await Promise.resolve();
+              }
+            };
+            if (binding === 'withCallbackScope') {
+              await factories.withCallbackScope(selectedScope, inspect, capturedIdentifier, captured);
+            } else {
+              await factories.withCallbackScope({ parent: true }, async () => {
+                assert.equal(factories.setCallbackScope(selectedScope, capturedIdentifier, captured), true);
+                await inspect();
+              });
+            }
+            assert.equal(factories.eventSanitizerCallbackContextId(), originalIdentifier);
+          },
+          () => completed.resolve(),
+          (_identifier, error) => completed.reject(error),
+          rejectSettle('streamPush'),
+          rejectSettle('streamEnd'),
+          rejectSettle('next'),
+        );
+        invoke(wrapper, 1, { publication: true, scope: { parent: true } });
+        await completed.promise;
+      });
+    }
+  }
 });

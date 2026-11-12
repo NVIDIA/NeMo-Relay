@@ -1823,22 +1823,24 @@ class _ThreadScopeStackBinding: ...
 
 def capture_thread_scope_stack() -> _ThreadScopeStackBinding: ...
 def restore_thread_scope_stack(binding: _ThreadScopeStackBinding) -> None: ...
-def set_thread_scope_stack(stack: ScopeStack) -> None:
+def set_thread_scope_stack(stack: ScopeStack, publication_scope: ScopeStack | None = None) -> None:
     """Install a scope stack into native thread-local storage.
 
     Args:
         stack: Scope stack to use for subsequent native calls on this thread.
+        publication_scope: Optional owner of the selected Python publication context.
 
     Returns:
         ``None``.
     """
     ...
 
-def sync_thread_scope_stack(stack: ScopeStack) -> None:
+def sync_thread_scope_stack(stack: ScopeStack, publication_scope: ScopeStack | None = None) -> None:
     """Synchronize thread-local storage without marking it explicitly active.
 
     Args:
         stack: Scope stack to synchronize into the native thread-local slot.
+        publication_scope: Optional owner of the selected Python publication context.
 
     Returns:
         ``None``.

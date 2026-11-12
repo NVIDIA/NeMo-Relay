@@ -307,6 +307,52 @@ async def test_fork_scope_stack_routes_publications_from_an_awaited_event_saniti
                 nemo_relay.subscribers.deregister("fork-publications")
 
 
+async def test_fork_scope_stack_keeps_other_task_out_of_sanitizer_publication(restore_native_scope_stack) -> None:
+    entered = asyncio.Event()
+    release = asyncio.Event()
+    delivered = []
+
+    def record(runtime_event):
+        if runtime_event.name.startswith("isolated-publication-"):
+            delivered.append(runtime_event.name)
+
+    async def sanitize(runtime_event, fields):
+        if runtime_event.name == "isolated-publication-outer":
+            with nemo_relay.use_scope_stack(nemo_relay.fork_scope_stack()):
+                entered.set()
+                await release.wait()
+                with nemo_relay.use_scope_stack(nemo_relay.create_scope_stack()):
+                    nemo_relay.scope.event("isolated-publication-fresh")
+                nemo_relay.scope.event("isolated-publication-fork")
+        return fields
+
+    with nemo_relay.use_scope_stack(nemo_relay.create_scope_stack()):
+        with nemo_relay.scope.scope("publication-isolation-agent", nemo_relay.ScopeType.Agent):
+            original = _fork_scope_stack_entries()
+            nemo_relay.subscribers.register("isolated-publication-capture", record)
+            nemo_relay.guardrails.register_mark_sanitize("isolated-publication-sanitizer", 0, sanitize)
+            try:
+                nemo_relay.scope.event("isolated-publication-outer")
+                await asyncio.wait_for(entered.wait(), timeout=3)
+                nemo_relay.scope.event("isolated-publication-independent")
+                release.set()
+                await asyncio.wait_for(nemo_relay.subscribers.flush_async(), timeout=3)
+                assert delivered == [
+                    "isolated-publication-outer",
+                    "isolated-publication-fresh",
+                    "isolated-publication-fork",
+                    "isolated-publication-independent",
+                ]
+                assert _fork_scope_stack_entries() == original
+            finally:
+                release.set()
+                try:
+                    await asyncio.wait_for(nemo_relay.subscribers.flush_async(), timeout=3)
+                finally:
+                    nemo_relay.guardrails.deregister_mark_sanitize("isolated-publication-sanitizer")
+                    nemo_relay.subscribers.deregister("isolated-publication-capture")
+
+
 def test_propagation_context_installs_and_restores_a_scoped_stack() -> None:
     original = nemo_relay.get_scope_stack()
     root_uuid = str(uuid.uuid4())

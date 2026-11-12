@@ -54,6 +54,20 @@ impl MiddlewareContinuationContext {
         }
     }
 
+    /// Create an unbound context for a stack without captured execution metadata.
+    #[doc(hidden)]
+    #[must_use]
+    pub fn from_scope_stack(scope_stack: ScopeStackHandle) -> Self {
+        Self {
+            scope_stack,
+            active_event: None,
+            active_event_trace_context: None,
+            publication_context: None,
+            publication_buffer: None,
+            optimization_recorder: None,
+        }
+    }
+
     /// Clone this context with an isolated snapshot of its visible scope stack.
     ///
     /// Execution-intercept continuations use one isolated context per `next`

@@ -15,7 +15,7 @@ use nemo_relay_runtime::api::runtime::{
     capture_propagation_context, current_scope_stack,
 };
 
-use crate::convert::{HandledTsfn, JsArg, JsArgs2, JsArgs3, detach, js_value};
+use crate::convert::{HandledTsfn, JsArg, JsArgs2, detach, js_value};
 use crate::environment;
 
 const CALLBACK_FACTORIES_SOURCE: &str = include_str!("callback_factories.js");
@@ -77,8 +77,8 @@ factories! {
     publication_callback_active: () => bool = "publicationCallbackActive",
     event_sanitizer_callback_context_id: () => Option<String> = "eventSanitizerCallbackContextId",
     callback_scope: () => JsArg = "callbackScope",
-    with_callback_scope: JsArgs3 => JsArg = "withCallbackScope",
-    set_callback_scope: JsArg => bool = "setCallbackScope",
+    with_callback_scope: FnArgs<(JsArg, JsArg, JsArg, bool)> => JsArg = "withCallbackScope",
+    set_callback_scope: FnArgs<(JsArg, JsArg, bool)> => bool = "setCallbackScope",
 }
 
 impl Wrapper {
@@ -118,6 +118,7 @@ pub(crate) struct CallbackScope {
     pub(crate) propagation: Option<PropagationContext>,
     pub(crate) execution_context: Option<MiddlewareContinuationContext>,
     pub(crate) publication_context_id: Option<String>,
+    pub(crate) publication_context_captured: bool,
 }
 
 impl CallbackScope {
@@ -128,6 +129,7 @@ impl CallbackScope {
             propagation: capture_propagation_context().ok(),
             execution_context: Some(MiddlewareContinuationContext::capture()),
             publication_context_id: crate::promise_call::publication_callback_context_id(),
+            publication_context_captured: false,
         }
     }
 
@@ -285,6 +287,7 @@ pub(crate) fn with_callback_scope<'env>(
     callback: &Function<JsArg, JsArg>,
 ) -> napi::Result<Unknown<'env>> {
     let publication_context_id = js_value(env, scope.publication_context_id.clone())?;
+    let publication_context_captured = scope.publication_context_captured;
     call(
         env,
         |factories| &factories.with_callback_scope,
@@ -292,10 +295,17 @@ pub(crate) fn with_callback_scope<'env>(
             scope.into_js(env)?,
             detach(env, callback),
             publication_context_id,
+            publication_context_captured,
         )),
     )
 }
 
 pub(crate) fn set_callback_scope(env: &Env, scope: CallbackScope) -> napi::Result<bool> {
-    factory(env, |factories| &factories.set_callback_scope)?.call(scope.into_js(env)?)
+    let publication_context_id = js_value(env, scope.publication_context_id.clone())?;
+    let publication_context_captured = scope.publication_context_captured;
+    factory(env, |factories| &factories.set_callback_scope)?.call(FnArgs::from((
+        scope.into_js(env)?,
+        publication_context_id,
+        publication_context_captured,
+    )))
 }

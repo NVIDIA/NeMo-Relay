@@ -450,6 +450,7 @@ fn effective_scope(env: &Env) -> Result<CallbackScope> {
             propagation: None,
             execution_context: None,
             publication_context_id: None,
+            publication_context_captured: false,
         }),
     )
 }
@@ -483,10 +484,14 @@ struct CallContext {
 impl CallContext {
     fn capture(env: &Env) -> Result<Self> {
         let scope = effective_scope(env)?;
-        let publication_context_id = scope
-            .publication_context_id
-            .clone()
-            .or(callback_factory::event_sanitizer_callback_context_id(env)?);
+        let publication_context_id = if scope.publication_context_captured {
+            scope.publication_context_id.clone()
+        } else {
+            scope
+                .publication_context_id
+                .clone()
+                .or(callback_factory::event_sanitizer_callback_context_id(env)?)
+        };
         Ok(Self {
             publication_context_id,
             scope,
@@ -1455,10 +1460,13 @@ pub fn fork_scope_stack(env: Env) -> Result<ScopeStack> {
     scope.scope_stack = context.scope_stack();
     scope.execution_context = Some(context);
     scope.propagation = None;
-    scope.publication_context_id = scope
-        .publication_context_id
-        .clone()
-        .or(callback_factory::event_sanitizer_callback_context_id(&env)?);
+    if !scope.publication_context_captured {
+        scope.publication_context_id = scope
+            .publication_context_id
+            .clone()
+            .or(callback_factory::event_sanitizer_callback_context_id(&env)?);
+    }
+    scope.publication_context_captured = true;
     Ok(ScopeStack {
         inner: scope.scope_stack.clone(),
         publication_buffer: scope.publication_buffer.clone(),
@@ -1489,6 +1497,7 @@ pub fn with_scope_stack<'env>(
             propagation: None,
             execution_context: None,
             publication_context_id: None,
+            publication_context_captured: false,
         },
     };
     Ok(callback_factory::with_callback_scope(
@@ -1527,6 +1536,8 @@ pub fn current_scope_stack(env: Env) -> Result<ScopeStack> {
 ///
 /// This mutates the current execution resource. Use `withScopeStack` when
 /// concurrent asynchronous branches need isolated stack replacements.
+/// Captured stacks require an active JavaScript callback context; otherwise
+/// this returns an error and callers must use `withScopeStack`.
 #[napi(catch_unwind)]
 pub fn set_thread_scope_stack(env: Env, stack: &ScopeStack) -> Result<()> {
     let scope = match &stack.captured_scope {
@@ -1539,10 +1550,16 @@ pub fn set_thread_scope_stack(env: Env, stack: &ScopeStack) -> Result<()> {
             propagation: None,
             execution_context: None,
             publication_context_id: None,
+            publication_context_captured: false,
         },
     };
     if callback_factory::set_callback_scope(&env, scope)? {
         return Ok(());
+    }
+    if stack.captured_scope.is_some() {
+        return Err(Error::invalid_argument(
+            "cannot bind a captured scope stack without an active JavaScript callback context; use withScopeStack()",
+        ));
     }
     bind_thread_scope_stack(stack.inner.clone());
     Ok(())

@@ -171,7 +171,7 @@ from nemo_relay._native import (
 from nemo_relay._native import restore_thread_scope_stack as _restore_thread_scope_stack
 from nemo_relay._native import scope_stack_active as _native_scope_stack_active
 from nemo_relay._native import set_thread_scope_stack as _set_thread_scope_stack
-from nemo_relay._native import sync_thread_scope_stack as _sync_thread_scope_stack
+from nemo_relay._native import sync_thread_scope_stack as _native_sync_thread_scope_stack
 
 atexit.register(_shutdown_default_logging)
 
@@ -340,6 +340,9 @@ from nemo_relay import (  # noqa: E402
 )
 
 _scope_stack_var: contextvars.ContextVar[ScopeStack] = contextvars.ContextVar("scope_stack")
+_publication_scope_var: contextvars.ContextVar[ScopeStack | None] = contextvars.ContextVar(
+    "publication_scope", default=None
+)
 _propagation_parent_var: contextvars.ContextVar[str | None] = contextvars.ContextVar(
     "propagation_parent",
     default=None,
@@ -356,6 +359,10 @@ _propagation_tracestate_var: contextvars.ContextVar[str | None] = contextvars.Co
     "propagation_tracestate",
     default=None,
 )
+
+
+def _sync_thread_scope_stack(stack: ScopeStack) -> None:
+    _native_sync_thread_scope_stack(stack, _publication_scope_var.get())
 
 
 def current_scope_stack_snapshot() -> ScopeStackSnapshot | None:
@@ -801,7 +808,7 @@ def set_thread_scope_stack(stack: ScopeStack) -> None:
             with ThreadPoolExecutor() as pool:
                 pool.submit(worker).result()
     """
-    _set_thread_scope_stack(stack)
+    _set_thread_scope_stack(stack, _publication_scope_var.get())
 
 
 #: Union of every lifecycle event emitted by the Python binding. Subscriber

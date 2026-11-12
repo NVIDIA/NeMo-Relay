@@ -492,8 +492,17 @@ fn copy_publication_invocation_with_buffer<'py>(
     )?;
     let nemo_relay = py.import("nemo_relay")?;
     if let Ok(scope_stack_var) = nemo_relay.getattr("_scope_stack_var") {
-        invocation_context.call_method1("run", (scope_stack_var.getattr("set")?, scope_stack))?;
+        invocation_context.call_method1("run", (scope_stack_var.getattr("set")?, &scope_stack))?;
     }
+    invocation_context.call_method1(
+        "run",
+        (
+            nemo_relay
+                .getattr("_publication_scope_var")?
+                .getattr("set")?,
+            &scope_stack,
+        ),
+    )?;
     let task_locals = context
         .task_locals
         .clone()

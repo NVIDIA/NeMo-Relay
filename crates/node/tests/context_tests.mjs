@@ -31,6 +31,88 @@ const {
 } = lib;
 
 describe('scope_stack_fork', { timeout: 5000 }, () => {
+  it('rejects direct captured-stack binding without a callback store', () => {
+    const execution = spawnSync(
+      process.execPath,
+      [
+        '-e',
+        `
+      const assert = require('node:assert/strict');
+      const relay = require(${JSON.stringify(require.resolve('../dist/index.js'))});
+      const source = relay.createScopeStack();
+      let agent;
+      const copied = relay.withScopeStack(source, () => {
+        agent = relay.pushScope('direct-fork-agent', relay.ScopeType.Agent);
+        return relay.forkScopeStack();
+      });
+      try {
+        const previous = relay.currentScopeStackSnapshot();
+        assert.throws(() => relay.setThreadScopeStack(copied), /use withScopeStack/);
+        assert.deepEqual(relay.currentScopeStackSnapshot(), previous);
+        relay.withScopeStack(copied, () => {
+          assert.equal(relay.capturePropagationContext().parentUuid, agent.uuid);
+        });
+      } finally {
+        relay.withScopeStack(source, () => relay.popScope(agent));
+      }
+    `,
+      ],
+      { encoding: 'utf8', timeout: 5000 },
+    );
+    assert.equal(execution.status, 0, execution.stderr);
+  });
+
+  for (const binding of ['withScopeStack', 'setThreadScopeStack']) {
+    it(`keeps fork publication independent through ${binding}`, async () => {
+      const completionOrder = [];
+      const pendingFlushes = [];
+      await withScopeStack(createScopeStack(), async () => {
+        const agent = pushScope('independent-publication-agent', ScopeType.Agent);
+        const original = currentScopeStackSnapshot().scopes;
+        const copied = forkScopeStack();
+        const delivered = [];
+        lib.registerSubscriber('independent-publication-capture', (runtimeEvent) => {
+          if (runtimeEvent.name === 'independent-publication-outer') delivered.push(runtimeEvent.name);
+        });
+        lib.registerMarkSanitizeGuardrail('independent-publication-sanitizer', 0, async (runtimeEvent, fields) => {
+          if (runtimeEvent.name === 'independent-publication-outer') {
+            const execute = async () => {
+              await lib.toolCallExecuteAsync('independent-tool', {}, async () => {
+                assert.deepEqual(currentScopeStackSnapshot().scopes, original);
+                pendingFlushes.push(lib.flushSubscribers().then(() => completionOrder.push('independent-flushed')));
+                return { result: { completed: true } };
+              });
+            };
+            if (binding === 'withScopeStack') {
+              await withScopeStack(copied, execute);
+            } else {
+              await withScopeStack(createScopeStack(), async () => {
+                setThreadScopeStack(copied);
+                await execute();
+              });
+            }
+            completionOrder.push('sanitizer-finished');
+          }
+          return fields;
+        });
+        try {
+          lib.event('independent-publication-outer');
+          await lib.flushSubscribers();
+          await Promise.all(pendingFlushes);
+          assert.equal(lib.getLastCallbackError(), null);
+          assert.deepEqual(completionOrder, ['sanitizer-finished', 'independent-flushed']);
+          assert.deepEqual(delivered, ['independent-publication-outer']);
+          assert.deepEqual(currentScopeStackSnapshot().scopes, original);
+        } finally {
+          lib.deregisterMarkSanitizeGuardrail('independent-publication-sanitizer');
+          lib.deregisterSubscriber('independent-publication-capture');
+          popScope(agent);
+          await lib.flushSubscribers();
+        }
+      });
+    });
+  }
+
   it('rejects capture without an active context', () => {
     const execution = spawnSync(
       process.execPath,

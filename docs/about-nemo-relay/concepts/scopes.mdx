@@ -305,6 +305,10 @@ waits for both operations even when one throws or rejects.
 `setThreadScopeStack()` mutates the current thread or async resource. Do not use
 it to isolate concurrent branches that begin in the same synchronous callback.
 
+Installing a forked stack with `setThreadScopeStack()` requires an active
+JavaScript callback context. Outside that context, the call throws without
+changing the current binding; use `withScopeStack()` instead.
+
 </Tab>
 </Tabs>
 
