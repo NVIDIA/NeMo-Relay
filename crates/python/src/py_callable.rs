@@ -488,6 +488,7 @@ fn copy_publication_invocation_with_buffer<'py>(
             inner: scope_stack,
             publication_buffer,
             execution_context: Some(MiddlewareContinuationContext::capture()),
+            is_explicit_fork: false,
         },
     )?;
     let nemo_relay = py.import("nemo_relay")?;

@@ -1523,11 +1523,7 @@ pub fn current_scope_stack_snapshot(env: Env) -> Result<Option<crate::types::Sco
 #[napi(catch_unwind)]
 pub fn current_scope_stack(env: Env) -> Result<ScopeStack> {
     if let Some(scope) = callback_factory::callback_scope(&env)? {
-        return Ok(ScopeStack {
-            inner: scope.scope_stack.clone(),
-            publication_buffer: scope.publication_buffer.clone(),
-            captured_scope: scope.execution_context.as_ref().map(|_| scope.clone()),
-        });
+        return Ok(ScopeStack::from(scope.scope_stack.clone()));
     }
     Ok(ScopeStack::from(current_scope_stack_handle()))
 }

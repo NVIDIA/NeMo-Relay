@@ -51,6 +51,44 @@ def test_fork_scope_stack_rejects_an_inactive_thread() -> None:
         executor.submit(inspect_worker).result(timeout=5)
 
 
+@pytest.mark.parametrize("use_async", [False, True])
+async def test_publication_callbacks_keep_lexical_parents_and_explicit_fork_context(
+    use_async: bool, restore_native_scope_stack, subscribed_events
+) -> None:
+    with nemo_relay.use_scope_stack(nemo_relay.create_scope_stack()):
+        with nemo_relay.scope.scope("publication-parent", nemo_relay.ScopeType.Agent) as parent:
+            original = _fork_scope_stack_entries()
+
+            def callback(arguments):
+                with nemo_relay.scope.scope("publication-child", nemo_relay.ScopeType.Agent):
+                    nemo_relay.scope.event("publication-child-mark")
+                with nemo_relay.use_scope_stack(nemo_relay.fork_scope_stack()):
+                    nemo_relay.scope.event("publication-explicit-fork")
+                return nemo_relay.ToolExecutionResult(arguments)
+
+            async def asynchronous_callback(arguments):
+                await asyncio.sleep(0)
+                return callback(arguments)
+
+            await nemo_relay.tools.execute(
+                "publication-parent-tool", {}, asynchronous_callback if use_async else callback
+            )
+            assert _fork_scope_stack_entries() == original
+        await nemo_relay.subscribers.flush_async()
+
+    starts = {
+        event.name: event
+        for event in subscribed_events
+        if isinstance(event, nemo_relay.ScopeEvent) and event.scope_category == "start"
+    }
+    marks = {event.name: event for event in subscribed_events if isinstance(event, nemo_relay.MarkEvent)}
+    child = starts["publication-child"]
+    tool = starts["publication-parent-tool"]
+    assert child.parent_uuid == parent.uuid
+    assert marks["publication-child-mark"].parent_uuid == child.uuid
+    assert marks["publication-explicit-fork"].parent_uuid == tool.uuid
+
+
 async def test_fork_scope_stack_retains_ancestry_without_duplicate_lifecycles(
     restore_native_scope_stack, subscribed_events
 ) -> None:

@@ -714,6 +714,7 @@ fn test_request_and_handle_wrappers_cover_remaining_methods() {
                 inner: nemo_relay_runtime::api::runtime::create_scope_stack(),
                 publication_buffer: None,
                 execution_context: None,
+                is_explicit_fork: false,
             };
             assert_eq!(stack.__repr__(), "<ScopeStack>");
 

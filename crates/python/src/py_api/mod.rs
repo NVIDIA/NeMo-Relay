@@ -507,6 +507,7 @@ pub fn create_scope_stack() -> PyScopeStack {
         inner: create_scope_stack_handle(),
         publication_buffer: None,
         execution_context: None,
+        is_explicit_fork: false,
     }
 }
 
@@ -545,6 +546,7 @@ pub fn fork_scope_stack(stack: Option<&PyScopeStack>) -> PyResult<PyScopeStack> 
         inner: context.scope_stack(),
         publication_buffer,
         execution_context: Some(context),
+        is_explicit_fork: true,
     })
 }
 
@@ -570,7 +572,9 @@ fn restore_python_thread_context(state: &PyThreadContextState) {
 }
 
 fn synchronize_forked_context(stack: &PyScopeStack, explicit: bool) -> bool {
-    if let Some(context) = &stack.execution_context {
+    if stack.is_explicit_fork
+        && let Some(context) = &stack.execution_context
+    {
         FORK_ORIGIN.with(|origin| {
             let mut origin = origin.borrow_mut();
             if origin.is_none() {
@@ -635,6 +639,7 @@ pub fn create_scope_stack_from_propagation(
             inner,
             publication_buffer: None,
             execution_context: None,
+            is_explicit_fork: false,
         })
         .map_err(flow_error_to_py_err)
 }

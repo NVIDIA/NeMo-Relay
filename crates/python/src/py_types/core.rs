@@ -260,6 +260,7 @@ pub struct PyScopeStack {
     pub(crate) inner: ScopeStackHandle,
     pub(crate) publication_buffer: Option<PublicationBuffer>,
     pub(crate) execution_context: Option<MiddlewareContinuationContext>,
+    pub(crate) is_explicit_fork: bool,
 }
 
 #[pymethods]

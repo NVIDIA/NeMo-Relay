@@ -31,6 +31,44 @@ const {
 } = lib;
 
 describe('scope_stack_fork', { timeout: 5000 }, () => {
+  it('does not retain completed callback context in plain stack handles', async () => {
+    const events = [];
+    lib.registerSubscriber('plain-handle-context', (runtimeEvent) => events.push(runtimeEvent));
+    try {
+      await withScopeStack(createScopeStack(), async () => {
+        const parent = pushScope('plain-handle-parent', ScopeType.Agent);
+        const original = currentScopeStackSnapshot().scopes;
+        try {
+          let plain;
+          let forked;
+          await lib.toolCallExecuteAsync('plain-handle-tool', {}, async () => {
+            plain = currentScopeStack();
+            forked = forkScopeStack();
+            return { result: { completed: true } };
+          });
+          withScopeStack(plain, () => lib.event('plain-handle-later'));
+          withScopeStack(forked, () => lib.event('plain-handle-explicit-fork'));
+          await lib.flushSubscribers();
+          const tool = events.find(
+            (runtimeEvent) => runtimeEvent.name === 'plain-handle-tool' && runtimeEvent.scope_category === 'start',
+          );
+          const later = events.find((runtimeEvent) => runtimeEvent.name === 'plain-handle-later');
+          const explicit = events.find((runtimeEvent) => runtimeEvent.name === 'plain-handle-explicit-fork');
+          assert.ok(tool && later && explicit);
+          assert.equal(later.parent_uuid, parent.uuid);
+          assert.equal(explicit.parent_uuid, tool.uuid);
+          assert.deepEqual(currentScopeStackSnapshot().scopes, original);
+          assert.equal(lib.getLastCallbackError(), null);
+        } finally {
+          popScope(parent);
+        }
+      });
+    } finally {
+      await lib.flushSubscribers();
+      lib.deregisterSubscriber('plain-handle-context');
+    }
+  });
+
   it('rejects direct captured-stack binding without a callback store', () => {
     const execution = spawnSync(
       process.execPath,
