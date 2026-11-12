@@ -216,10 +216,19 @@ impl<'a> MessageView<'a> {
     ///
     /// Tool payloads, media, reasoning, and arbitrary nested JSON are excluded.
     pub fn text_parts(self) -> impl Iterator<Item = &'a str> + 'a {
-        self.parts().filter_map(|entry| match entry.kind {
-            ContentKind::Text(text) | ContentKind::Refusal(text) => Some(text),
-            ContentKind::ProviderNative { kind, value, .. } => native_text(kind, value),
-            _ => None,
+        self.parts().filter_map(move |entry| {
+            // A recognized message with missing or malformed content stays
+            // inspectable as opaque data, but its extension fields are not text.
+            if entry.location.field == ContentField::Value
+                && matches!(self.source, Source::Message(message) if message.native_message_role().is_some())
+            {
+                return None;
+            }
+            match entry.kind {
+                ContentKind::Text(text) | ContentKind::Refusal(text) => Some(text),
+                ContentKind::ProviderNative { kind, value, .. } => native_text(kind, value),
+                _ => None,
+            }
         })
     }
 
@@ -365,9 +374,7 @@ impl<'a> MessageView<'a> {
                     kind,
                     value,
                 } => {
-                    if provider == "openai_responses"
-                        && value.get("role").and_then(Json::as_str).is_some()
-                    {
+                    if message.native_message_role().is_some() {
                         match value.get("content") {
                             Some(Json::String(text)) => {
                                 return (index == 0).then(|| {
@@ -412,6 +419,39 @@ impl<'a> MessageView<'a> {
 }
 
 impl Message {
+    /// Identify message envelopes whose content shape this module understands.
+    ///
+    /// Keep selection independent of content availability so textless native
+    /// messages still establish the same boundary as portable messages.
+    pub(super) fn native_message_role(&self) -> Option<&str> {
+        let Self::ProviderNative {
+            provider,
+            kind,
+            value,
+        } = self
+        else {
+            return None;
+        };
+        let role = value.get("role")?.as_str()?;
+        if value
+            .get("type")
+            .is_some_and(|value| value.as_str() != Some("message"))
+        {
+            return None;
+        }
+        let recognized = match provider.as_str() {
+            "openai_chat" => {
+                kind == role && matches!(role, "system" | "developer" | "user" | "assistant")
+            }
+            "anthropic_messages" => kind == role && matches!(role, "system" | "user" | "assistant"),
+            "openai_responses" => {
+                kind == "message" && matches!(role, "system" | "developer" | "user" | "assistant")
+            }
+            _ => false,
+        };
+        recognized.then_some(role)
+    }
+
     /// Inspect every part of this item without copying its content.
     pub fn content_view(&self) -> MessageView<'_> {
         MessageView {
@@ -455,6 +495,8 @@ fn native_non_text(kind: &str) -> bool {
         "reasoning"
             | "thinking"
             | "redacted_thinking"
+            | "tool"
+            | "function"
             | "tool_use"
             | "mcp_tool_use"
             | "server_tool_use"

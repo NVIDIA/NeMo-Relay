@@ -304,3 +304,208 @@ fn media_parts_remain_distinct_and_are_not_text() {
     assert!(matches!(entries[3].kind, ContentKind::File(_)));
     assert!(value.content_view().text().is_none());
 }
+
+#[test]
+fn known_native_message_roles_share_selection_and_borrowed_content() {
+    for (provider, kind) in [
+        ("openai_chat", "user"),
+        ("anthropic_messages", "user"),
+        ("openai_responses", "message"),
+    ] {
+        let mut request = AnnotatedLlmRequest {
+            messages: vec![Message::ProviderNative {
+                provider: provider.into(),
+                kind: kind.into(),
+                value: json!({"role":"user", "content":"known", "provider_extra":true}),
+            }],
+            ..Default::default()
+        };
+        let view = request.last_message().unwrap();
+        assert_eq!(view.text().as_deref(), Some("known"), "{provider}");
+        let Some(Cow::Borrowed(text)) = view.text() else {
+            panic!("text must borrow")
+        };
+        let Message::ProviderNative { value, .. } = &request.messages[0] else {
+            unreachable!()
+        };
+        assert_eq!(text.as_ptr(), value["content"].as_str().unwrap().as_ptr());
+        let entry = view.parts().next().unwrap();
+        assert_eq!(entry.location.root, ContentRoot::RequestMessage(0));
+        assert_eq!(entry.location.field, ContentField::NativeContent);
+        assert_eq!(entry.location.index, None);
+        assert_eq!(request.last_user_message().as_deref(), Some("known"));
+
+        request.messages.push(Message::ProviderNative {
+            provider: provider.into(),
+            kind: kind.into(),
+            value: json!({"role":"user", "content":[], "provider_extra":true}),
+        });
+        assert!(
+            request.last_user_message().is_none(),
+            "must not skip textless {provider} user"
+        );
+    }
+}
+
+#[test]
+fn native_system_and_developer_selection_keeps_instruction_precedence() {
+    for (provider, role, kind) in [
+        ("openai_chat", "system", "system"),
+        ("openai_chat", "developer", "developer"),
+        ("anthropic_messages", "system", "system"),
+        ("openai_responses", "system", "message"),
+        ("openai_responses", "developer", "message"),
+    ] {
+        let mut request = AnnotatedLlmRequest {
+            messages: vec![
+                Message::ProviderNative {
+                    provider: provider.into(),
+                    kind: kind.into(),
+                    value: json!({"role":role, "content":"native policy", "provider_extra":true}),
+                },
+                message(json!({"role":"system", "content":"later policy"})),
+            ],
+            ..Default::default()
+        };
+        assert_eq!(
+            request.system_prompt().as_deref(),
+            Some("native policy"),
+            "{provider}: {role}"
+        );
+        let Message::ProviderNative { value, .. } = &mut request.messages[0] else {
+            unreachable!()
+        };
+        value["content"] = json!([]);
+        assert!(
+            request.system_prompt().is_none(),
+            "must not skip textless {provider} instruction"
+        );
+        request.instructions = Some(MessageContent::Text("top-level policy".into()));
+        assert_eq!(request.system_prompt().as_deref(), Some("top-level policy"));
+    }
+}
+
+#[test]
+fn native_message_content_projection_is_shallow_and_keeps_locations() {
+    for (provider, kind) in [
+        ("openai_chat", "assistant"),
+        ("anthropic_messages", "assistant"),
+        ("openai_responses", "message"),
+    ] {
+        let item = Message::ProviderNative {
+            provider: provider.into(),
+            kind: kind.into(),
+            value: json!({"role":"assistant", "content":[
+                {"type":"text", "text":"first", "provider_extra":true},
+                {"type":"tool_result", "text":"hidden", "content":{"text":"also hidden"}},
+                {"type":"image", "text":"hidden"},
+                {"type":"refusal", "refusal":"no"},
+                {"type":"unknown", "nested":{"text":"hidden"}}
+            ], "tool_calls":[{"function":{"arguments":"hidden"}}], "metadata":{"text":"hidden"}}),
+        };
+        let before = serde_json::to_value(&item).unwrap();
+        let view = item.content_view();
+        assert_eq!(
+            view.text_parts().collect::<Vec<_>>(),
+            ["first", "no"],
+            "{provider}"
+        );
+        for (index, entry) in view.parts().enumerate() {
+            assert_eq!(entry.location.root, ContentRoot::Message);
+            assert_eq!(entry.location.field, ContentField::NativeContent);
+            assert_eq!(entry.location.index, Some(index));
+        }
+        assert_eq!(view.parts().count(), 5);
+        assert_eq!(serde_json::to_value(&item).unwrap(), before);
+    }
+}
+
+#[test]
+fn native_projection_does_not_guess_unknown_or_non_message_envelopes() {
+    for (provider, kind, value) in [
+        ("custom", "user", json!({"role":"user", "content":"hidden"})),
+        (
+            "openai_chat",
+            "assistant",
+            json!({"type":"thinking", "role":"assistant", "content":"hidden"}),
+        ),
+        (
+            "anthropic_messages",
+            "assistant",
+            json!({"type":"tool_use", "role":"assistant", "content":"hidden"}),
+        ),
+        (
+            "openai_chat",
+            "future",
+            json!({"role":"future", "content":"hidden"}),
+        ),
+        (
+            "openai_chat",
+            "assistant",
+            json!({"role":"user", "content":"hidden"}),
+        ),
+        (
+            "openai_chat",
+            "tool",
+            json!({"role":"tool", "content":"hidden", "text":"hidden"}),
+        ),
+        (
+            "openai_chat",
+            "function",
+            json!({"role":"function", "content":"hidden", "text":"hidden"}),
+        ),
+        (
+            "anthropic_messages",
+            "developer",
+            json!({"role":"developer", "content":"hidden"}),
+        ),
+        (
+            "openai_responses",
+            "function_call",
+            json!({"role":"user", "content":"hidden"}),
+        ),
+        (
+            "openai_responses",
+            "message",
+            json!({"type":"function_call", "role":"user", "content":"hidden"}),
+        ),
+        (
+            "openai_responses",
+            "message",
+            json!({"role":"tool", "content":"hidden"}),
+        ),
+    ] {
+        let item = Message::ProviderNative {
+            provider: provider.into(),
+            kind: kind.into(),
+            value,
+        };
+        let entry = item.content_view().parts().next().unwrap();
+        assert_eq!(entry.location.field, ContentField::Value);
+        assert!(item.content_view().text().is_none(), "{provider}: {kind}");
+    }
+}
+
+#[test]
+fn malformed_native_content_does_not_search_metadata_or_earlier_users() {
+    for content in [
+        json!(null),
+        json!({"text":"not a content block"}),
+        json!(17),
+        json!(true),
+    ] {
+        let request = AnnotatedLlmRequest {
+            messages: vec![
+                message(json!({"role":"user", "content":"earlier"})),
+                Message::ProviderNative {
+                    provider: "openai_chat".into(),
+                    kind: "user".into(),
+                    value: json!({"role":"user", "content":content, "provider_extra":{"text":"hidden"}, "text":"metadata", "refusal":"metadata"}),
+                },
+            ],
+            ..Default::default()
+        };
+        assert!(request.last_message().unwrap().text().is_none());
+        assert!(request.last_user_message().is_none());
+    }
+}
