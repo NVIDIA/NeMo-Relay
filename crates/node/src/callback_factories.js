@@ -554,9 +554,14 @@
       return eventSanitizerContext.getStore()?.scope;
     },
 
-    withCallbackScope(scope, fn) {
+    withCallbackScope(scope, fn, capturedPublicationContextId) {
       const current = eventSanitizerContext.getStore();
-      const token = callbackStore(current?.publicationState ?? { active: false }, current?.publicationContextId, scope);
+      const publicationContextId = capturedPublicationContextId ?? current?.publicationContextId;
+      const publicationState =
+        capturedPublicationContextId == null
+          ? (current?.publicationState ?? { active: false })
+          : (publicationStates.get(capturedPublicationContextId) ?? { active: false });
+      const token = callbackStore(publicationState, publicationContextId, scope);
       const expire = () => expireCallbackStore(token);
       let value;
       try {

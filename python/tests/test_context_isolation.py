@@ -34,6 +34,279 @@ def test_create_scope_stack_returns_scope_stack() -> None:
     assert repr(stack) == "<ScopeStack>"
 
 
+def _fork_scope_stack_entries() -> list[tuple[str, nemo_relay.ScopeType]]:
+    snapshot = nemo_relay.current_scope_stack_snapshot()
+    assert snapshot is not None
+    return [(entry.scope_id, entry.scope_type) for entry in snapshot.scopes]
+
+
+def test_fork_scope_stack_rejects_an_inactive_thread() -> None:
+    def inspect_worker() -> None:
+        assert not nemo_relay.scope_stack_active()
+        with pytest.raises(RuntimeError, match="without an active Relay context"):
+            nemo_relay.fork_scope_stack()
+        assert not nemo_relay.scope_stack_active()
+
+    with ThreadPoolExecutor(max_workers=1) as executor:
+        executor.submit(inspect_worker).result(timeout=5)
+
+
+async def test_fork_scope_stack_retains_ancestry_without_duplicate_lifecycles(
+    restore_native_scope_stack, subscribed_events
+) -> None:
+    with nemo_relay.use_scope_stack(nemo_relay.create_scope_stack()):
+        with nemo_relay.scope.scope("fork-lifecycle-agent", nemo_relay.ScopeType.Agent):
+            with nemo_relay.scope.scope("fork-lifecycle-function", nemo_relay.ScopeType.Function):
+                original = _fork_scope_stack_entries()
+                copied = nemo_relay.fork_scope_stack()
+                assert _fork_scope_stack_entries() == original
+                failure = ValueError("fork callback failed")
+                with pytest.raises(ValueError) as observed:
+                    with nemo_relay.use_scope_stack(copied):
+                        assert _fork_scope_stack_entries() == original
+                        raise failure
+                assert observed.value is failure
+                assert _fork_scope_stack_entries() == original
+    await nemo_relay.subscribers.flush_async()
+    for name in ("fork-lifecycle-agent", "fork-lifecycle-function"):
+        assert [event.scope_category for event in subscribed_events if event.name == name] == ["start", "end"]
+
+
+async def test_fork_scope_stack_isolates_registration_membership_and_shares_callback_state(
+    restore_native_scope_stack,
+) -> None:
+    with nemo_relay.use_scope_stack(nemo_relay.create_scope_stack()):
+        with nemo_relay.scope.scope("fork-registrations", nemo_relay.ScopeType.Agent) as agent:
+            invocations = 0
+
+            def inherited(_name, arguments):
+                nonlocal invocations
+                invocations += 1
+                return {**arguments, "invocation": invocations}
+
+            nemo_relay.scope_local.register_tool_request(agent, "inherited", 0, False, inherited)
+            first = nemo_relay.fork_scope_stack()
+            second = nemo_relay.fork_scope_stack()
+            nemo_relay.scope_local.register_tool_request(
+                agent, "parent-only", 1, False, lambda _name, arguments: {**arguments, "parent": True}
+            )
+            assert await resolve_async_result(nemo_relay.tools.request_intercepts("request", {})) == {
+                "invocation": 1,
+                "parent": True,
+            }
+            with nemo_relay.use_scope_stack(first):
+                assert nemo_relay.scope_local.deregister_tool_request(agent, "inherited")
+                assert await resolve_async_result(nemo_relay.tools.request_intercepts("request", {})) == {}
+            with nemo_relay.use_scope_stack(second):
+                assert await resolve_async_result(nemo_relay.tools.request_intercepts("request", {})) == {
+                    "invocation": 2
+                }
+            assert nemo_relay.scope_local.deregister_tool_request(agent, "inherited")
+            with nemo_relay.use_scope_stack(second):
+                assert await resolve_async_result(nemo_relay.tools.request_intercepts("request", {})) == {
+                    "invocation": 3
+                }
+            assert await resolve_async_result(nemo_relay.tools.request_intercepts("request", {})) == {"parent": True}
+
+
+async def test_fork_scope_stack_isolates_awaited_siblings(restore_native_scope_stack) -> None:
+    with nemo_relay.use_scope_stack(nemo_relay.create_scope_stack()):
+        with nemo_relay.scope.scope("fork-siblings", nemo_relay.ScopeType.Agent) as agent:
+            original = _fork_scope_stack_entries()
+            stacks = [nemo_relay.fork_scope_stack(), nemo_relay.fork_scope_stack()]
+
+            async def child(stack: nemo_relay.ScopeStack) -> str | None:
+                with nemo_relay.use_scope_stack(stack):
+                    with nemo_relay.scope.scope("fork-child", nemo_relay.ScopeType.Function) as handle:
+                        await asyncio.sleep(0)
+                        assert _fork_scope_stack_entries() == [*original, (handle.uuid, nemo_relay.ScopeType.Function)]
+                        return handle.parent_uuid
+
+            outcomes = await asyncio.gather(*(child(stack) for stack in stacks), return_exceptions=True)
+            assert outcomes == [agent.uuid, agent.uuid]
+            assert _fork_scope_stack_entries() == original
+
+
+async def test_fork_scope_stack_restores_the_parent_after_cancellation(restore_native_scope_stack) -> None:
+    ready = asyncio.Event()
+    with nemo_relay.use_scope_stack(nemo_relay.create_scope_stack()):
+        original = _fork_scope_stack_entries()
+        stack = nemo_relay.fork_scope_stack()
+
+        async def child() -> None:
+            with nemo_relay.use_scope_stack(stack):
+                with nemo_relay.scope.scope("cancelled-fork", nemo_relay.ScopeType.Function):
+                    ready.set()
+                    await asyncio.Future()
+
+        task = asyncio.create_task(child())
+        try:
+            await asyncio.wait_for(ready.wait(), timeout=2)
+        finally:
+            task.cancel()
+            with pytest.raises(asyncio.CancelledError):
+                await task
+        assert _fork_scope_stack_entries() == original
+
+
+def test_fork_scope_stack_supports_explicit_worker_threads(restore_native_scope_stack) -> None:
+    with nemo_relay.use_scope_stack(nemo_relay.create_scope_stack()):
+        with nemo_relay.scope.scope("fork-thread-agent", nemo_relay.ScopeType.Agent):
+            with nemo_relay.scope.scope("fork-thread-function", nemo_relay.ScopeType.Function):
+                original = _fork_scope_stack_entries()
+                stacks = [nemo_relay.fork_scope_stack(), nemo_relay.fork_scope_stack()]
+
+                def worker(stack: nemo_relay.ScopeStack) -> str:
+                    assert nemo_relay.current_scope_stack_snapshot() is None
+                    with nemo_relay.use_scope_stack(stack):
+                        assert _fork_scope_stack_entries() == original
+                        with nemo_relay.scope.scope("worker-child", nemo_relay.ScopeType.Function) as child:
+                            assert child.parent_uuid == original[-1][0]
+                            child_identifier = child.uuid
+                        assert _fork_scope_stack_entries() == original
+                    assert nemo_relay.current_scope_stack_snapshot() is None
+                    assert not nemo_relay.scope_stack_active()
+                    return child_identifier
+
+                with ThreadPoolExecutor(max_workers=2) as executor:
+                    futures = [executor.submit(worker, stack) for stack in stacks]
+                    identifiers = [future.result(timeout=5) for future in futures]
+                assert identifiers[0] != identifiers[1]
+                assert _fork_scope_stack_entries() == original
+
+
+async def test_fork_scope_stack_correlates_model_and_tool_callbacks_with_reused_ids(restore_native_scope_stack) -> None:
+    async def run_agent(name: str):
+        with nemo_relay.use_scope_stack(nemo_relay.create_scope_stack()):
+            with nemo_relay.scope.scope(name, nemo_relay.ScopeType.Agent) as agent:
+                with nemo_relay.scope.scope(f"{name}-workflow", nemo_relay.ScopeType.Function):
+                    original = _fork_scope_stack_entries()
+                    observations = []
+
+                    async def observe_fork(boundary: str) -> None:
+                        propagation = nemo_relay.capture_propagation_context()
+                        traceparent = nemo_relay.capture_traceparent()
+                        with nemo_relay.use_scope_stack(nemo_relay.fork_scope_stack()):
+                            await asyncio.sleep(0)
+                            assert _fork_scope_stack_entries() == original
+                            assert nemo_relay.capture_propagation_context().parent_uuid == propagation.parent_uuid
+                            assert nemo_relay.capture_traceparent() == traceparent
+                            with nemo_relay.scope.scope(f"{boundary}-nested", nemo_relay.ScopeType.Function) as nested:
+                                assert nemo_relay.capture_propagation_context().parent_uuid == nested.uuid
+                            assert nemo_relay.capture_propagation_context().parent_uuid == propagation.parent_uuid
+                            observations.append((boundary, agent.uuid))
+
+                    async def model(_request):
+                        await observe_fork("model")
+                        return {"tool_call_id": "shared-call"}
+
+                    async def tool(arguments):
+                        await observe_fork("tool")
+                        return nemo_relay.ToolExecutionResult(arguments)
+
+                    with nemo_relay.use_scope_stack(nemo_relay.fork_scope_stack()):
+                        response = await nemo_relay.llm.execute(
+                            "fork-model", nemo_relay.LLMRequest({}, {"messages": []}), model
+                        )
+                    with nemo_relay.use_scope_stack(nemo_relay.fork_scope_stack()):
+                        result = await nemo_relay.tools.execute(
+                            "fork-tool",
+                            {"tool_call_id": response["tool_call_id"]},
+                            tool,
+                            tool_call_id=response["tool_call_id"],
+                        )
+                    assert result.result == {"tool_call_id": "shared-call"}
+                    assert observations == [("model", agent.uuid), ("tool", agent.uuid)]
+                    return agent.uuid
+
+    outcomes = await asyncio.gather(
+        run_agent("first-fork-agent"), run_agent("second-fork-agent"), return_exceptions=True
+    )
+    for outcome in outcomes:
+        if isinstance(outcome, BaseException):
+            raise outcome
+    assert outcomes[0] != outcomes[1]
+
+
+@pytest.mark.parametrize("early_close", [False, True], ids=["completion", "early-close"])
+async def test_fork_scope_stack_retains_context_until_stream_cleanup(
+    restore_native_scope_stack, early_close: bool
+) -> None:
+    with nemo_relay.use_scope_stack(nemo_relay.create_scope_stack()):
+        with nemo_relay.scope.scope("fork-stream-agent", nemo_relay.ScopeType.Agent):
+            original = _fork_scope_stack_entries()
+            cleanups = []
+            finalizations = []
+
+            async def stream_response(_request):
+                try:
+                    assert _fork_scope_stack_entries() == original
+                    yield {"index": 0}
+                    if early_close:
+                        await asyncio.Future()
+                    else:
+                        await asyncio.sleep(0)
+                        assert _fork_scope_stack_entries() == original
+                        yield {"index": 1}
+                finally:
+                    assert _fork_scope_stack_entries() == original
+                    cleanups.append("closed")
+
+            def finalize():
+                finalizations.append("finalized")
+                return {}
+
+            with nemo_relay.use_scope_stack(nemo_relay.fork_scope_stack()):
+                stream = await nemo_relay.llm.stream_execute(
+                    "fork-stream",
+                    nemo_relay.LLMRequest({}, {"messages": []}),
+                    stream_response,
+                    lambda _chunk: None,
+                    finalize,
+                )
+                try:
+                    assert await anext(stream) == {"index": 0}
+                    if not early_close:
+                        assert await anext(stream) == {"index": 1}
+                        with pytest.raises(StopAsyncIteration):
+                            await anext(stream)
+                finally:
+                    await stream.aclose()
+            assert cleanups == ["closed"]
+            assert finalizations == ["finalized"]
+            assert _fork_scope_stack_entries() == original
+
+
+async def test_fork_scope_stack_routes_publications_from_an_awaited_event_sanitizer(restore_native_scope_stack) -> None:
+    names = []
+    with nemo_relay.use_scope_stack(nemo_relay.create_scope_stack()):
+        with nemo_relay.scope.scope("fork-publication-agent", nemo_relay.ScopeType.Agent):
+            original = _fork_scope_stack_entries()
+
+            def subscriber(runtime_event):
+                if runtime_event.name.startswith("fork-publication-"):
+                    names.append(runtime_event.name)
+
+            async def sanitize(runtime_event, fields):
+                if runtime_event.name == "fork-publication-parent":
+                    with nemo_relay.use_scope_stack(nemo_relay.fork_scope_stack()):
+                        await asyncio.sleep(0)
+                        assert _fork_scope_stack_entries() == original
+                        nemo_relay.scope.event("fork-publication-child")
+                return fields
+
+            nemo_relay.subscribers.register("fork-publications", subscriber)
+            nemo_relay.guardrails.register_mark_sanitize("fork-publication-sanitizer", 0, sanitize)
+            try:
+                nemo_relay.scope.event("fork-publication-parent")
+                await asyncio.wait_for(nemo_relay.subscribers.flush_async(), timeout=3)
+                assert names == ["fork-publication-parent", "fork-publication-child"]
+            finally:
+                await nemo_relay.subscribers.flush_async()
+                nemo_relay.guardrails.deregister_mark_sanitize("fork-publication-sanitizer")
+                nemo_relay.subscribers.deregister("fork-publications")
+
+
 def test_propagation_context_installs_and_restores_a_scoped_stack() -> None:
     original = nemo_relay.get_scope_stack()
     root_uuid = str(uuid.uuid4())

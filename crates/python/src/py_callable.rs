@@ -487,6 +487,7 @@ fn copy_publication_invocation_with_buffer<'py>(
         PyScopeStack {
             inner: scope_stack,
             publication_buffer,
+            execution_context: Some(MiddlewareContinuationContext::capture()),
         },
     )?;
     let nemo_relay = py.import("nemo_relay")?;

@@ -89,6 +89,27 @@ impl MiddlewareContinuationContext {
         self.scope_stack.clone()
     }
 
+    /// Synchronize a captured context into a foreign executor's current thread.
+    ///
+    /// The binding must capture and restore the previous thread state when its
+    /// lexical context ends. Task-local contexts and lexical scope overrides
+    /// retain their precedence; no thread guard spans an asynchronous suspension.
+    #[doc(hidden)]
+    pub fn sync_thread_binding(&self, explicit: bool) {
+        install_thread_continuation_context(
+            &self.scope_stack,
+            self.active_event.clone(),
+            self.active_event_trace_context.clone(),
+            explicit,
+        );
+        crate::api::runtime::subscriber_dispatcher::sync_thread_publication_context(
+            self.publication_context.clone(),
+        );
+        crate::api::runtime::subscriber_dispatcher::sync_thread_publication_buffer(
+            self.publication_buffer.clone(),
+        );
+    }
+
     /// Install this context on a foreign executor thread until the lease drops.
     /// The lease must be restored on the same thread, before returning Pending.
     #[doc(hidden)]

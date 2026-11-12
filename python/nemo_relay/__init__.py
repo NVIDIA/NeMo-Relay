@@ -24,8 +24,8 @@ The main entry points are:
 Top-level exports also include:
 
 - scope stack helpers such as ``get_scope_stack()``, ``create_scope_stack()``,
-  ``fork_asyncio_context()``, ``set_thread_scope_stack()``, and
-  ``scope_stack_active()``
+  ``fork_scope_stack()``, ``use_scope_stack()``, ``fork_asyncio_context()``,
+  ``set_thread_scope_stack()``, and ``scope_stack_active()``
 - native runtime types such as ``ScopeHandle``, ``ToolHandle``, ``LLMHandle``,
   ``LLMRequest``, ``ScopeType``, and the lifecycle event classes
 - observability helpers such as ``AtifExporter``, ``AtofExporter``,
@@ -164,6 +164,7 @@ from nemo_relay._native import (
     create_scope_stack_from_propagation as _create_scope_stack_from_propagation,
 )
 from nemo_relay._native import current_scope_stack_snapshot as _current_scope_stack_snapshot
+from nemo_relay._native import fork_scope_stack as _fork_scope_stack
 from nemo_relay._native import (
     log as _log,
 )
@@ -634,6 +635,34 @@ def create_scope_stack_from_propagation(context: PropagationContext) -> ScopeSta
     return _create_scope_stack_from_propagation(context)
 
 
+def fork_scope_stack() -> ScopeStack:
+    """Copy the active stack and its Relay execution context without installing it.
+
+    Use one fork per concurrent operation with ``use_scope_stack()``. Scope
+    UUIDs/types and scope-local registrations are retained; inherited scopes
+    must remain open until all forked operations finish.
+
+    Registration membership is copied at capture time. Callback objects retain
+    their existing shared state. Forking emits no scope lifecycle events.
+    Consume and close streams inside the bound operation before it finishes.
+
+    Unlike ``fork_asyncio_context()``, this copies the original local hierarchy
+    rather than reconstructing a stack from propagation metadata.
+
+    Returns:
+        ScopeStack: An independent copy to install with ``use_scope_stack()``.
+
+    Raises:
+        RuntimeError: No explicitly active Relay context exists or capture fails.
+    """
+    stack = _scope_stack_var.get(None)
+    if stack is not None:
+        _sync_thread_scope_stack(stack)
+    elif not _native_scope_stack_active():
+        raise RuntimeError("cannot fork scope stack without an active Relay context")
+    return _fork_scope_stack(stack)
+
+
 def fork_asyncio_context() -> contextvars.Context:
     """Create an asyncio child context with an isolated Relay scope stack.
 
@@ -817,6 +846,7 @@ __all__ = [
     "capture_traceparent",
     "create_scope_stack_from_propagation",
     "fork_asyncio_context",
+    "fork_scope_stack",
     "get_scope_stack",
     "scope_stack_active",
     "propagate_scope_to_thread",

@@ -220,50 +220,87 @@ Use this when:
 
 ### Fork Concurrent Work
 
-Fork a scope stack before starting concurrent work when the child should remain
-part of the parent's event tree without sharing its mutable stack. The fork
-preserves the immediate parent but does not transfer scope-local middleware or
-subscribers. The fork also preserves the captured OpenTelemetry parent, so its
-work continues the parent's exported trace.
+Use Python's `fork_scope_stack()` or Node.js's `forkScopeStack()` to copy the
+active local stack before starting concurrent work. Each copy retains the
+original scope UUIDs, types, and ancestry, along with its managed event,
+tracing, and event-publication context. Creating a copy does not bind it or emit
+scope start/end events. Capture requires an active Relay context.
+
+Scope-local registration membership is copied at capture time. Later membership
+changes remain local to each stack; the registered callback objects retain
+their existing shared state.
+
+Give each concurrent operation its own copy. Keep inherited scopes open until
+all operations finish, including operations that fail. Consume and close streams
+inside the bound operation. Returning a lazy stream for later consumption does
+not extend the operation's context lifetime. Copying a stack reconstructed from
+propagation metadata preserves that reconstructed stack; it cannot recover
+ancestry that was already lost.
+
+The existing Rust `fork_scope_stack()` and Python `fork_asyncio_context()`
+helpers reconstruct a stack from propagation metadata. They preserve the
+immediate parent and tracing context, and omit scope-local registrations.
 
 <Tabs>
 <Tab title="Python" language="python">
 
 ```python
-import asyncio
+from concurrent.futures import ThreadPoolExecutor
 
 import nemo_relay
 
-async def worker() -> None:
-    with nemo_relay.scope.scope("worker", nemo_relay.ScopeType.Function):
-        await asyncio.sleep(0)
+def worker(stack: nemo_relay.ScopeStack, name: str) -> None:
+    with nemo_relay.use_scope_stack(stack):
+        with nemo_relay.scope.scope(name, nemo_relay.ScopeType.Function):
+            nemo_relay.scope.event("checkpoint")
 
-async def main() -> None:
+def main() -> None:
     with nemo_relay.scope.scope("parent", nemo_relay.ScopeType.Agent):
-        await asyncio.create_task(
-            worker(),
-            context=nemo_relay.fork_asyncio_context(),
-        )
+        first_stack = nemo_relay.fork_scope_stack()
+        second_stack = nemo_relay.fork_scope_stack()
+        with ThreadPoolExecutor(max_workers=2) as executor:
+            futures = [
+                executor.submit(worker, first_stack, "first"),
+                executor.submit(worker, second_stack, "second"),
+            ]
+            for future in futures:
+                future.result()
 ```
+
+The executor waits for both workers before the parent scope exits, including
+when a worker raises. The same `use_scope_stack()` helper can bind a copy inside
+an asyncio task.
 
 </Tab>
 <Tab title="Rust" language="rust">
+
+This propagation-based helper preserves parentage and tracing. It does not copy
+the original typed hierarchy or scope-local registrations.
 
 <Code src="_code/fork_task.rs" language="rust" />
 
 </Tab>
 <Tab title="Node.js" language="javascript">
 
-Use `withScopeStack()` to bind each asynchronous branch to its isolated stack.
-The stack remains active until the branch's returned Promise settles, while the
-calling context is restored immediately.
+Call this helper inside the parent Agent scope. `withScopeStack()` restores the
+calling context immediately and keeps each branch's copy active until its
+returned Promise settles.
 
 ```javascript
-const [first, second] = await Promise.all([
-  withScopeStack(firstStack, async () => runWorker("first")),
-  withScopeStack(secondStack, async () => runWorker("second")),
-]);
+import { forkScopeStack, withScopeStack } from "nemo-relay-node";
+
+export async function runConcurrentOperations(firstOperation, secondOperation) {
+  const firstStack = forkScopeStack();
+  const secondStack = forkScopeStack();
+  return await Promise.allSettled([
+    Promise.resolve().then(() => withScopeStack(firstStack, firstOperation)),
+    Promise.resolve().then(() => withScopeStack(secondStack, secondOperation)),
+  ]);
+}
 ```
+
+Inspect both returned outcomes before closing the parent scope. `allSettled()`
+waits for both operations even when one throws or rejects.
 
 `setThreadScopeStack()` mutates the current thread or async resource. Do not use
 it to isolate concurrent branches that begin in the same synchronous callback.
