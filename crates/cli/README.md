@@ -28,7 +28,7 @@ with the installed `nemo-relay` command rather than link against the crate.
 
 The CLI is designed for these tasks:
 
-- **Observe existing coding agents**: Run Claude Code, Codex, or pi through a local
+- **Observe existing coding agents**: Run Claude Code or Codex through a local
   NeMo Relay gateway without changing the agent
   itself.
 - **Configure transparent runs interactively**: Use the setup wizard to write
@@ -74,9 +74,9 @@ Install the Python API and matching CLI with the optional extra:
 pip install "nemo-relay[cli]"
 ```
 
-Building from source requires `protoc` 31.1 or later and Buf 1.75.0 or later.
-Install both on `PATH`, or select them with `PROTOC` and `BUF`. The first build
-needs access to the Buf Schema Registry to download the locked validation schema.
+Building from source requires Buf 1.75.0 or later on `PATH`, or selected through
+`BUF`. Cargo supplies `protoc` automatically. The first build needs access to
+the Buf Schema Registry to download the locked validation schema.
 
 Build and install the CLI from crates.io with Cargo:
 

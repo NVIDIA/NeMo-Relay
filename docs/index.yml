@@ -12,12 +12,29 @@ navigation:
       - page: "About"
         path: ./getting-started/about.mdx
         slug: about
-      - page: "Installation Overview"
+      - section: "Install Overview"
         path: ./getting-started/installation.mdx
         slug: installation
-      - page: "Configuration / Setup Overview"
+        collapsed: open-by-default
+        contents:
+          - page: "CLI"
+            path: ./getting-started/installation/cli.mdx
+            slug: cli
+          - page: "Frameworks"
+            path: ./getting-started/installation/frameworks.mdx
+            slug: frameworks
+          - page: "Harnesses"
+            path: ./getting-started/installation/harnesses.mdx
+            slug: harnesses
+          - page: "APIs"
+            path: ./getting-started/installation/apis.mdx
+            slug: apis
+      - page: "Configure Overview"
         path: ./getting-started/configuration.mdx
         slug: configuration
+      - page: "Deploy Overview"
+        path: ./getting-started/deploy.mdx
+        slug: deploy
       - section: "Quick Starts"
         path: ./getting-started/quick-start/index.mdx
         slug: quick-start
@@ -59,7 +76,7 @@ navigation:
                 icon: fa-solid fa-terminal
                 path: ./getting-started/quick-start/hermes.mdx
                 slug: hermes
-              - page: "pi"
+              - page: "pi (PoC)"
                 icon: fa-solid fa-pi
                 path: ./getting-started/quick-start/pi.mdx
                 slug: pi
@@ -93,6 +110,9 @@ navigation:
       - page: "Overview"
         path: ./nemo-relay-cli/about.mdx
         slug: about
+      - page: "Install Details"
+        path: ./nemo-relay-cli/install-details.mdx
+        slug: install-details
       - page: "Manage Persistent Integrations"
         path: ./nemo-relay-cli/plugin-installation.mdx
         slug: plugin-installation
@@ -105,7 +125,7 @@ navigation:
           - page: "Codex"
             path: ./nemo-relay-cli/codex.mdx
             slug: codex
-          - page: "pi"
+          - page: "pi (PoC)"
             path: ./nemo-relay-cli/pi.mdx
             slug: pi
       - page: "Configuration"
