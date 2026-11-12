@@ -35,6 +35,71 @@ A provider codec is a pure data translator at the NeMo Relay LLM boundary.
 
 Provider codecs let framework code keep using provider-native payloads while NeMo Relay middleware works against a shared annotated model. For application-facing type conversion, use [Using Codecs](/integrate-into-frameworks/using-codecs).
 
+## Inspect Normalized Content in Rust
+
+Use `AnnotatedLlmRequest.last_message()` to select exactly the final supplied
+request item. Use `AnnotatedLlmResponse.output()` for the current response's
+normalized content and tool calls. A request can contain assistant/tool history
+from earlier turns; a codec does not accumulate history between calls.
+
+Both return a borrowed `MessageView` from `nemo_relay_types::codec::content`.
+`Message.content_view()` and `MessageContent.content_view()` provide the same
+access for arbitrary history items and separate instructions.
+
+```rust
+use nemo_relay_types::codec::content::ContentKind;
+use nemo_relay_types::codec::request::AnnotatedLlmRequest;
+
+fn inspect(request: &AnnotatedLlmRequest) {
+    if let Some(view) = request.last_message() {
+        for entry in view.parts() {
+            match entry.kind {
+                ContentKind::Text(text) | ContentKind::Refusal(text) => println!("{text}"),
+                ContentKind::ToolCall(call) => println!("tool: {}", call.name),
+                _ => {}
+            }
+        }
+        if let Some(text) = view.text() {
+            println!("{text}");
+        }
+    }
+}
+```
+
+- `parts()` preserves typed text, refusals, tool calls/results, media, and opaque
+  provider-native parts. Tool arguments retain their string or JSON representation.
+  Tool-result messages yield a typed result containing their entire payload.
+- Each entry has a `location` with a normalized root, field, and optional array
+  index. Locations describe the current source, not stable edit handles or original
+  provider-wire offsets.
+- `text_parts()` yields borrowed text/refusal strings. It does not render tool
+  arguments or results, recursively scan JSON, or include reasoning/media.
+  Existing shallow native text/refusal fallbacks remain supported.
+- `text()` returns `None` when no eligible parts exist. It borrows one string and
+  joins multiple strings with newlines, preserving whitespace and empty parts.
+- Separate tool calls follow message content. This order reflects normalized
+  fields, not original provider ordering. Some decoders already combine text
+  blocks; for example, Anthropic response text blocks become one joined string.
+
+### Migrate Existing Text Helpers
+
+The Rust methods `system_prompt()`, `last_user_message()`, and `response_text()`
+now return `Option<Cow<'_, str>>` instead of `Option<&str>`. Use `.as_deref()` on
+an existing result to borrow its text, or `.map(Cow::into_owned)` to retain an
+owned string. A joined result owns its string, so keep that result alive while
+borrowing from it.
+
+All three methods now include every text/refusal part of their selected item,
+joined with newlines. `system_prompt()` selects instructions when present,
+otherwise the first system/developer item. `last_user_message()` selects the
+last user item. Neither skips a selected textless item to find earlier or later
+text. `response_text()` reads the current output and excludes tool content.
+
+Python's existing methods inherit these extraction and selection behaviors and
+continue to return `str | None`. The new typed views are Rust-only. Serialization,
+codec traits, and provider payloads are unchanged. These views are read-only;
+mutable redaction and streaming extraction are separate work.
+
 ## How Provider Codecs Work
 
 When a managed LLM call has a request codec:

@@ -952,7 +952,7 @@ async fn trajectory_event_profile_preserves_provider_and_marks_identifiers() {
             .as_deref()
             .unwrap()
             .last_user_message(),
-        Some("[REDACTED]")
+        Some("[REDACTED]".into())
     );
 }
 
@@ -2887,7 +2887,7 @@ async fn trajectory_profile_preserves_typed_llm_accounting_while_redacting_annot
     let profile = sanitized.category_profile.unwrap();
     assert_eq!(profile.model_name.as_deref(), Some("claude-sonnet-4-6"));
     let response = profile.annotated_response.unwrap();
-    assert_eq!(response.response_text(), Some("[REDACTED]"));
+    assert_eq!(response.response_text(), Some("[REDACTED]".into()));
     assert!(matches!(
         response.finish_reason,
         Some(nemo_relay_types::codec::response::FinishReason::Complete)
@@ -4524,7 +4524,10 @@ async fn trajectory_preset_sanitizes_stream_finalization_without_changing_client
         .category_profile()
         .and_then(|profile| profile.annotated_request.as_deref())
         .unwrap();
-    assert_eq!(annotated_request.last_user_message(), Some("[REDACTED]"));
+    assert_eq!(
+        annotated_request.last_user_message(),
+        Some("[REDACTED]".into())
+    );
     let chunk_mark = captured
         .iter()
         .find(|event| event.name() == "llm.chunk")
@@ -4544,7 +4547,10 @@ async fn trajectory_preset_sanitizes_stream_finalization_without_changing_client
         .category_profile()
         .and_then(|profile| profile.annotated_response.as_deref())
         .unwrap();
-    assert_eq!(annotated_response.response_text(), Some("[REDACTED]"));
+    assert_eq!(
+        annotated_response.response_text(),
+        Some("[REDACTED]".into())
+    );
     assert_eq!(
         annotated_response.usage.as_ref().unwrap().total_tokens,
         Some(11)
@@ -4634,7 +4640,7 @@ async fn normalized_paths_use_the_active_codec_for_stream_finalization() {
     assert_eq!(
         end.annotated_response()
             .and_then(|response| response.response_text()),
-        Some("[REDACTED]")
+        Some("[REDACTED]".into())
     );
 
     deregister_subscriber("pii-active-codec-stream-finalization").unwrap();
@@ -6084,7 +6090,7 @@ async fn builtin_mask_with_detector_sanitizes_llm_response_from_normalized_messa
         captured_events[1]
             .annotated_response()
             .and_then(|response| response.response_text()),
-        Some("Reach me at a****@example.com")
+        Some("Reach me at a****@example.com".into())
     );
 
     deregister_subscriber("pii-redaction-detector-llm-response-events").unwrap();
@@ -7212,7 +7218,7 @@ async fn builtin_backend_sanitizes_llm_end_payload_and_response_codec_decodes_sa
     let annotated = captured_events[1]
         .annotated_response()
         .expect("annotated_response should be present");
-    assert_eq!(annotated.response_text(), Some("[REDACTED]"));
+    assert_eq!(annotated.response_text(), Some("[REDACTED]".into()));
     assert_eq!(annotated.model.as_deref(), Some("gpt-4o-mini"));
     assert_eq!(
         captured_events[1].metadata().unwrap()["audit_owner"],
@@ -7282,7 +7288,7 @@ async fn builtin_backend_sanitizes_openai_chat_response_from_normalized_message_
         captured_events[1]
             .annotated_response()
             .and_then(|response| response.response_text()),
-        Some("[REDACTED]")
+        Some("[REDACTED]".into())
     );
 
     deregister_subscriber("pii-redaction-openai-chat-normalized-response").unwrap();
@@ -7483,7 +7489,7 @@ async fn builtin_redact_sanitizes_openai_chat_response_from_detector_path() {
         captured_events[1]
             .annotated_response()
             .and_then(|response| response.response_text()),
-        Some("[REDACTED]")
+        Some("[REDACTED]".into())
     );
 
     deregister_subscriber("pii-redaction-openai-chat-redact-response").unwrap();
@@ -7547,7 +7553,7 @@ async fn builtin_backend_sanitizes_anthropic_response_from_normalized_message_pa
         captured_events[1]
             .annotated_response()
             .and_then(|response| response.response_text()),
-        Some("[REDACTED]")
+        Some("[REDACTED]".into())
     );
 
     deregister_subscriber("pii-redaction-anthropic-normalized-response").unwrap();
@@ -7681,7 +7687,7 @@ async fn builtin_backend_sanitizes_openai_responses_response_from_normalized_mes
         captured_events[1]
             .annotated_response()
             .and_then(|response| response.response_text()),
-        Some("[REDACTED]")
+        Some("[REDACTED]".into())
     );
     assert!(
         !captured_events[1]
@@ -7780,7 +7786,7 @@ async fn builtin_backend_sanitizes_openai_responses_output_text_alias_on_stream_
     assert_eq!(
         end.annotated_response()
             .and_then(|response| response.response_text()),
-        Some("[REDACTED]")
+        Some("[REDACTED]".into())
     );
     assert!(!end.to_json_string().unwrap().contains("sk-stream-secret"));
 

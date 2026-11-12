@@ -3,6 +3,9 @@
 
 //! Shared normalized LLM request and response data types.
 
+/// Borrowed typed content traversal and text extraction.
+pub mod content;
+
 /// Stable LLM codec identities shared across SDK boundaries.
 pub mod identity;
 /// Plugin-neutral LLM optimization evidence and summaries.

@@ -255,7 +255,7 @@ fn test_response_text_returns_some_for_text_content() {
         message: Some(MessageContent::Text("Hello!".into())),
         ..minimal_response()
     };
-    assert_eq!(resp.response_text(), Some("Hello!"));
+    assert_eq!(resp.response_text(), Some("Hello!".into()));
 }
 
 #[test]
@@ -273,7 +273,7 @@ fn test_response_text_extracts_first_text_from_parts() {
         }])),
         ..minimal_response()
     };
-    assert_eq!(resp.response_text(), Some("Part text"));
+    assert_eq!(resp.response_text(), Some("Part text".into()));
 }
 
 #[test]

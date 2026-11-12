@@ -253,7 +253,7 @@ class RaisingResponseCodec:
             .unwrap();
         assert_eq!(
             outcome.annotated_request.unwrap().last_user_message(),
-            Some("annotated")
+            Some("annotated".into())
         );
 
         let bad_request_intercept = wrap_py_llm_request_intercept_fn(

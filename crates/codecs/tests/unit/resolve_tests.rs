@@ -222,7 +222,7 @@ fn normalize_response_decodes_detected_chat() {
         }]
     });
     let decoded = normalize_response(&raw).expect("chat response decodes");
-    assert_eq!(decoded.response_text(), Some("hello"));
+    assert_eq!(decoded.response_text(), Some("hello".into()));
 }
 
 #[test]
@@ -234,7 +234,7 @@ fn normalize_response_decodes_detected_responses_output_text() {
         "output_text": "hi there"
     });
     let decoded = normalize_response(&raw).expect("responses output_text decodes");
-    assert_eq!(decoded.response_text(), Some("hi there"));
+    assert_eq!(decoded.response_text(), Some("hi there".into()));
 }
 
 #[test]
@@ -247,7 +247,7 @@ fn normalize_response_decodes_detected_anthropic() {
         "stop_reason": "end_turn"
     });
     let decoded = normalize_response(&raw).expect("anthropic response decodes");
-    assert_eq!(decoded.response_text(), Some("hi"));
+    assert_eq!(decoded.response_text(), Some("hi".into()));
 }
 
 #[test]
@@ -586,7 +586,7 @@ fn response_codec_decodes_each_surface() {
             .decode_response(&chat)
             .expect("chat response decodes")
             .response_text(),
-        Some("hello")
+        Some("hello".into())
     );
 
     let anthropic = json!({
@@ -599,7 +599,7 @@ fn response_codec_decodes_each_surface() {
             .decode_response(&anthropic)
             .expect("anthropic response decodes")
             .response_text(),
-        Some("hey")
+        Some("hey".into())
     );
 
     let responses = json!({"output": [], "output_text": "yo"});
@@ -608,7 +608,7 @@ fn response_codec_decodes_each_surface() {
             .decode_response(&responses)
             .expect("responses response decodes")
             .response_text(),
-        Some("yo")
+        Some("yo".into())
     );
 
     let gemini = json!({
@@ -620,7 +620,7 @@ fn response_codec_decodes_each_surface() {
             .decode_response(&gemini)
             .expect("gemini response decodes")
             .response_text(),
-        Some("hi gemini")
+        Some("hi gemini".into())
     );
 }
 
@@ -650,7 +650,7 @@ fn streaming_codec_round_trips_through_its_response_codec() {
     let decoded = response_codec(ProviderSurface::OpenAIChat)
         .decode_response(&assembled)
         .expect("assembled stream decodes");
-    assert_eq!(decoded.response_text(), Some("Hello, world."));
+    assert_eq!(decoded.response_text(), Some("Hello, world.".into()));
 }
 
 #[test]

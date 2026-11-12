@@ -548,14 +548,16 @@ impl PyAnnotatedLLMRequest {
         Ok(())
     }
 
-    /// Extract the text content of the first system message, if any.
+    /// Join text/refusals from instructions or the first system/developer item.
     pub(crate) fn system_prompt(&self) -> Option<String> {
-        self.inner.system_prompt().map(|s| s.to_string())
+        self.inner.system_prompt().map(std::borrow::Cow::into_owned)
     }
 
-    /// Get the text content of the last user message, if any.
+    /// Join text/refusals from the last user item, without skipping textless items.
     pub(crate) fn last_user_message(&self) -> Option<String> {
-        self.inner.last_user_message().map(|s| s.to_string())
+        self.inner
+            .last_user_message()
+            .map(std::borrow::Cow::into_owned)
     }
 
     /// Check if any assistant message contains tool calls.
@@ -797,9 +799,9 @@ impl PyAnnotatedLLMResponse {
         json_to_py(py, &serde_json::Value::Object(self.inner.extra.clone()))
     }
 
-    /// Extract the text content of the response message.
+    /// Join output text/refusals with newlines, excluding tool payloads.
     pub(crate) fn response_text(&self) -> Option<String> {
-        self.inner.response_text().map(|s| s.to_string())
+        self.inner.response_text().map(std::borrow::Cow::into_owned)
     }
 
     /// Check if the response contains any tool calls.

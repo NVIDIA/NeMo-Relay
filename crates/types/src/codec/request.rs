@@ -596,40 +596,44 @@ pub struct GenerationParams {
 // ---------------------------------------------------------------------------
 
 impl AnnotatedLlmRequest {
-    /// Extract the text content of the first system message, if any.
-    ///
-    /// For [`MessageContent::Text`], returns the string directly.
-    /// For [`MessageContent::Parts`], returns the text of the first
-    /// [`ContentPart::Text`] part.
-    pub fn system_prompt(&self) -> Option<&str> {
-        if let Some(text) = self.instructions.as_ref().and_then(first_content_text) {
-            return Some(text);
-        }
-        self.messages.iter().find_map(|m| match m {
-            Message::System { content, .. } | Message::Developer { content, .. } => {
-                first_content_text(content)
-            }
-            _ => None,
-        })
+    /// Select exactly the final supplied request item, without searching backward.
+    pub fn last_message(&self) -> Option<super::content::MessageView<'_>> {
+        let index = self.messages.len().checked_sub(1)?;
+        Some(super::content::MessageView::request_message(
+            index,
+            &self.messages[index],
+        ))
     }
 
-    /// Get the text content of the last user message, if any.
+    /// Join text/refusals from instructions, or the first system/developer item.
     ///
-    /// Searches messages in reverse order and returns the first user
-    /// message found. For [`MessageContent::Parts`], returns the text of
-    /// the first [`ContentPart::Text`] part.
-    pub fn last_user_message(&self) -> Option<&str> {
-        self.messages.iter().rev().find_map(|m| match m {
-            Message::User { content, .. } => first_content_text(content),
-            Message::ProviderNative {
-                provider, value, ..
-            } if provider == "openai_responses"
-                && value.get("role").and_then(Json::as_str) == Some("user") =>
-            {
-                native_message_text(value)
-            }
-            _ => None,
-        })
+    /// A selected item without text yields `None`; later items are not searched.
+    pub fn system_prompt(&self) -> Option<std::borrow::Cow<'_, str>> {
+        if let Some(instructions) = &self.instructions {
+            return instructions.content_view().text();
+        }
+        self.messages
+            .iter()
+            .find(|message| matches!(message, Message::System { .. } | Message::Developer { .. }))
+            .and_then(|message| message.content_view().text())
+    }
+
+    /// Join text/refusals from the last user item, without skipping textless items.
+    pub fn last_user_message(&self) -> Option<std::borrow::Cow<'_, str>> {
+        self.messages
+            .iter()
+            .rev()
+            .find(|message| match message {
+                Message::User { .. } => true,
+                Message::ProviderNative {
+                    provider, value, ..
+                } => {
+                    provider == "openai_responses"
+                        && value.get("role").and_then(Json::as_str) == Some("user")
+                }
+                _ => false,
+            })
+            .and_then(|message| message.content_view().text())
     }
 
     /// Check if any assistant message in the conversation contains tool calls.
@@ -657,26 +661,6 @@ impl AnnotatedLlmRequest {
     }
 }
 
-fn first_content_text(content: &MessageContent) -> Option<&str> {
-    match content {
-        MessageContent::Text(text) => Some(text.as_str()),
-        MessageContent::Parts(parts) => parts.iter().find_map(|part| match part {
-            ContentPart::Text { text, .. } => Some(text.as_str()),
-            ContentPart::ProviderNative { value, .. } => value
-                .get("text")
-                .and_then(Json::as_str)
-                .or_else(|| value.get("refusal").and_then(Json::as_str)),
-            ContentPart::ImageUrl { .. }
-            | ContentPart::Image { .. }
-            | ContentPart::Audio { .. }
-            | ContentPart::File { .. }
-            | ContentPart::Refusal { .. }
-            | ContentPart::ToolUse { .. }
-            | ContentPart::ToolResult { .. } => None,
-        }),
-    }
-}
-
 fn content_has_tool_use(content: &MessageContent) -> bool {
     match content {
         MessageContent::Text(_) => false,
@@ -688,18 +672,6 @@ fn content_has_tool_use(content: &MessageContent) -> bool {
             ),
             _ => false,
         }),
-    }
-}
-
-fn native_message_text(value: &Json) -> Option<&str> {
-    match value.get("content")? {
-        Json::String(text) => Some(text.as_str()),
-        Json::Array(parts) => parts.iter().find_map(|part| {
-            part.get("text")
-                .and_then(Json::as_str)
-                .or_else(|| part.get("refusal").and_then(Json::as_str))
-        }),
-        _ => None,
     }
 }
 

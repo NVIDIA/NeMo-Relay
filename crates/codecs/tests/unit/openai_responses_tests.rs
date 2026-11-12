@@ -470,7 +470,7 @@ fn test_decode_request_with_input_array() {
         annotated.instructions,
         Some(MessageContent::Text("Be helpful.".into()))
     );
-    assert_eq!(annotated.system_prompt(), Some("Be helpful."));
+    assert_eq!(annotated.system_prompt(), Some("Be helpful.".into()));
 
     assert_eq!(annotated.messages.len(), 3);
 
@@ -492,7 +492,7 @@ fn test_decode_request_with_input_string() {
     }));
     let annotated = codec.decode(&request).unwrap();
     assert_eq!(annotated.messages.len(), 1);
-    assert_eq!(annotated.last_user_message(), Some("Hello, world!"));
+    assert_eq!(annotated.last_user_message(), Some("Hello, world!".into()));
 }
 
 #[test]

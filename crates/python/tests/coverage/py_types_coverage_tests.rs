@@ -2761,3 +2761,49 @@ def run(types, api):
         );
     });
 }
+
+#[test]
+fn annotated_text_helpers_join_refusals_and_do_not_skip_textless_items() {
+    let _python = crate::test_support::init_python_test();
+    Python::attach(|py| {
+        let messages = json_to_py(
+            py,
+            &json!([
+                {"role":"user", "content":[
+                    {"type":"text", "text":"first"},
+                    {"type":"refusal", "refusal":"no"}
+                ]}
+            ]),
+        )
+        .unwrap();
+        let mut request =
+            PyAnnotatedLLMRequest::new(messages.bind(py), None, None, None, None, None, None, None)
+                .unwrap();
+        assert_eq!(request.last_user_message(), Some("first\nno".into()));
+        request.inner.messages.push(Message::User {
+            content: MessageContent::Parts(vec![]),
+            name: None,
+        });
+        assert_eq!(request.last_user_message(), None);
+        request.inner.instructions = Some(
+            serde_json::from_value(json!([
+                {"type":"text", "text":"policy"}, {"type":"refusal", "refusal":"no"}
+            ]))
+            .unwrap(),
+        );
+        assert_eq!(request.system_prompt(), Some("policy\nno".into()));
+        let response = PyAnnotatedLLMResponse {
+            inner: AnnotatedLLMResponse {
+                message: Some(
+                    serde_json::from_value(json!([
+                        {"type":"text", "text":"answer"}, {"type":"refusal", "refusal":"no"},
+                        {"type":"tool_result", "tool_use_id":"c", "content":"hidden"}
+                    ]))
+                    .unwrap(),
+                ),
+                ..Default::default()
+            },
+        };
+        assert_eq!(response.response_text(), Some("answer\nno".into()));
+    });
+}
