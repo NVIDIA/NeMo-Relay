@@ -157,6 +157,20 @@ pub struct MessageView<'a> {
 }
 
 impl<'a> MessageView<'a> {
+    /// Normalized root of this selection, including when it contains no parts.
+    pub fn root(self) -> ContentRoot {
+        self.root
+    }
+
+    /// Borrow the backing normalized item so callers can retain selected storage.
+    pub fn source(self) -> ContentSource<'a> {
+        match self.source {
+            Source::Message(message) => ContentSource::Message(message),
+            Source::Response(response) => ContentSource::Response(response),
+            Source::Content(content) => ContentSource::Content(content),
+        }
+    }
+
     pub(super) fn request_message(index: usize, message: &'a Message) -> Self {
         Self {
             root: ContentRoot::RequestMessage(index),

@@ -651,3 +651,46 @@ fn owned_inspection_preserves_absence_empty_and_native_selection() {
             .is_empty()
     );
 }
+
+#[test]
+fn selected_source_and_root_preserve_empty_items_without_copying() {
+    use nemo_relay_types::codec::content::{ContentSelection, ContentSource};
+
+    let request = AnnotatedLlmRequest {
+        messages: vec![
+            message(json!({"role": "user", "content": "earlier"})),
+            message(json!({"role": "assistant", "content": []})),
+        ],
+        instructions: Some(MessageContent::Parts(vec![])),
+        ..Default::default()
+    };
+    let view = ContentSelection::LastMessage
+        .select(ContentSource::Request(&request))
+        .unwrap()
+        .unwrap();
+    assert_eq!(view.parts().count(), 0);
+    assert_eq!(view.root(), ContentRoot::RequestMessage(1));
+    let ContentSource::Message(selected) = view.source() else {
+        panic!("expected message")
+    };
+    assert!(std::ptr::eq(selected, &request.messages[1]));
+    let view = ContentSelection::Instructions
+        .select(ContentSource::Request(&request))
+        .unwrap()
+        .unwrap();
+    assert_eq!(view.parts().count(), 0);
+    assert_eq!(view.root(), ContentRoot::Content);
+    let ContentSource::Content(selected) = view.source() else {
+        panic!("expected instructions")
+    };
+    assert!(std::ptr::eq(
+        selected,
+        request.instructions.as_ref().unwrap()
+    ));
+    let response = AnnotatedLlmResponse::default();
+    let ContentSource::Response(selected) = response.output().source() else {
+        panic!("expected response")
+    };
+    assert!(std::ptr::eq(selected, &response));
+    assert_eq!(response.output().root(), ContentRoot::Response);
+}

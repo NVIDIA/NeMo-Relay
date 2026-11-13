@@ -195,9 +195,18 @@ export class MessageView {
     return this.#snapshot.text();
   }
 
-  /** @internal Select an already-located history item while retaining its normalized index. */
-  static _requestMessage(value: unknown, index: number): MessageView {
-    return new MessageView(new _ContentSnapshot('message', value as JsonValue, index));
+  /** @internal Rust selects the source; this facade only validates JavaScript data properties. */
+  static _selectRequest(request: unknown, selection: string, index?: number): MessageView | null {
+    const annotation = object(request);
+    const messages = history(request);
+    const instructions = field(annotation, 'instructions');
+    const selected = _ContentSnapshot.selectRequest(selection, {
+      messages: Array.from({ length: messages.length }, (_, index) => selectionMetadata(historyItem(messages, index))),
+      instructions: instructions == null ? null : [],
+    }, index) as { messageIndex: number } | { instructions: true } | null;
+    if (selected == null) return null;
+    if ('instructions' in selected) return MessageView.fromContent(instructions as JsonValue);
+    return new MessageView(new _ContentSnapshot('message', historyItem(messages, selected.messageIndex) as JsonValue, selected.messageIndex));
   }
 
   /** @internal Snapshot current output without retaining unrelated response metadata. */
@@ -233,45 +242,40 @@ function historyItem(messages: unknown[], index: number): unknown {
   return descriptor.value;
 }
 
-function nativeRole(item: Record<string, unknown>): string | null {
-  if (field(item, 'role') !== 'provider_native') return null;
-  const value = field(item, 'value');
+// Structural metadata adapter only: provider/role recognition belongs to Rust.
+// Content and payload fields never cross the boundary until an item is selected.
+function selectionMetadata(value: unknown): JsonValue {
   if (value === null || typeof value !== 'object' || Array.isArray(value)) return null;
-  const envelope = object(value);
-  const type = field(envelope, 'type');
-  if (Object.hasOwn(envelope, 'type') && type !== 'message') return null;
-  const role = field(envelope, 'role');
-  const provider = field(item, 'provider');
-  const kind = field(item, 'kind');
-  if (typeof role !== 'string') return null;
-  const recognized =
-    (provider === 'openai_chat' && kind === role && ['system', 'developer', 'user', 'assistant'].includes(role)) ||
-    (provider === 'anthropic_messages' && kind === role && ['system', 'user', 'assistant'].includes(role)) ||
-    (provider === 'openai_responses' &&
-      kind === 'message' &&
-      ['system', 'developer', 'user', 'assistant'].includes(role));
-  return recognized ? role : null;
+  const item = object(value);
+  const envelope = field(item, 'value');
+  const native = envelope !== null && typeof envelope === 'object' && !Array.isArray(envelope)
+    ? { role: field(object(envelope), 'role') ?? null, type: Object.hasOwn(envelope, 'type') ? (field(object(envelope), 'type') ?? null) : undefined } : null;
+  return {
+    role: field(item, 'role') ?? null,
+    content: [],
+    provider: field(item, 'provider') ?? null,
+    kind: field(item, 'kind') ?? null,
+    value: native === null ? null : {
+      role: native.role,
+      ...(native.type === undefined ? {} : { type: native.type }),
+    },
+  } as JsonValue;
 }
 
 /** Snapshot any normalized request item by integer index; negative indices count from the end. */
 export function message<T extends JsonCompatible<T>>(request: T, index: number): MessageView {
-  const messages = history(request);
   if (!Number.isSafeInteger(index)) throw new RangeError('Message index must be a safe integer');
-  const resolved = index < 0 ? messages.length + index : index;
-  if (resolved < 0 || resolved >= messages.length) throw new RangeError('Message index out of range');
-  return MessageView._requestMessage(historyItem(messages, resolved), resolved);
+  return MessageView._selectRequest(request, 'message', index)!;
 }
 
 /** Snapshot exactly the final supplied item, or null for empty history; never search backward for text. */
 export function lastMessage<T extends JsonCompatible<T>>(request: T): MessageView | null {
-  const messages = history(request);
-  return messages.length === 0 ? null : message(request, messages.length - 1);
+  return MessageView._selectRequest(request, 'last_message');
 }
 
 /** Snapshot only top-level instructions, without falling back to history. */
 export function instructionsView<T extends JsonCompatible<T>>(request: T): MessageView | null {
-  const instructions = field(object(request), 'instructions');
-  return instructions == null ? null : MessageView.fromContent(instructions as JsonValue);
+  return MessageView._selectRequest(request, 'instructions');
 }
 
 /** Snapshot current normalized message and separate tool calls, excluding response metadata. */
@@ -285,28 +289,12 @@ export function output<T extends JsonCompatible<T>>(response: T): MessageView {
 
 /** Extract instructions, otherwise the first portable/native system/developer item, including textless selections. */
 export function systemPrompt<T extends JsonCompatible<T>>(request: T): string | null {
-  const instructions = instructionsView(request);
-  if (instructions !== null) return instructions.text();
-  const messages = history(request);
-  for (let index = 0; index < messages.length; index++) {
-    const item = object(historyItem(messages, index));
-    const role = field(item, 'role');
-    const native = nativeRole(item);
-    if (role === 'system' || role === 'developer' || native === 'system' || native === 'developer') {
-      return message(request, index).text();
-    }
-  }
-  return null;
+  return MessageView._selectRequest(request, 'system_prompt')?.text() ?? null;
 }
 
 /** Extract the final portable/native user item without skipping a selected item that has no text. */
 export function lastUserMessage<T extends JsonCompatible<T>>(request: T): string | null {
-  const messages = history(request);
-  for (let index = messages.length - 1; index >= 0; index--) {
-    const item = object(historyItem(messages, index));
-    if (field(item, 'role') === 'user' || nativeRole(item) === 'user') return message(request, index).text();
-  }
-  return null;
+  return MessageView._selectRequest(request, 'last_user_message')?.text() ?? null;
 }
 
 /** Extract current normalized response text/refusals, excluding tool payloads, reasoning, and media. */
