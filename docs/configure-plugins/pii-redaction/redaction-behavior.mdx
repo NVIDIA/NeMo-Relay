@@ -261,11 +261,18 @@ default. Tool arguments and parameter schemas are emptied. Refer to the
 for the request, response, and separate tool events before and after sanitization.
 
 Response text projection accepts only explicit normalized text and refusal
-parts. It joins them with newlines without trimming whitespace or parsing text
-as JSON. Empty text remains distinct from absent text. Native values, media,
+parts. It preserves whitespace and treats text as literal content without
+parsing it as JSON. Empty text remains distinct from absent text. Native values, media,
 tool payloads, and metadata never contribute display text, even if they contain
 a field named `text` or `refusal`. These projection rules do not change how the
 preset replaces conversational content during sanitization.
+
+OpenAI Chat projections keep sanitized ordinary text in `message.content` and
+refusals in `message.refusal`, joining multiple entries within each kind with
+newlines. These separate fields cannot preserve arbitrary text/refusal
+interleaving. OpenAI Responses projections preserve the order of `output_text`
+and `refusal` blocks. Other supported providers retain the existing conversion
+of text and refusals to newline-joined text. Tool calls and usage remain separate.
 
 A configured legacy codec can also provide this projection when no active codec
 is present. Custom runtime and opaque codec identities publish `{}` instead,

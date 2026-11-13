@@ -144,8 +144,29 @@ fn render_openai_chat_response(response: &AnnotatedLlmResponse) -> Json {
 
     let mut message = Map::new();
     message.insert("role".into(), Json::String("assistant".into()));
-    if let Some(text) = response_text(response) {
+    let content = join_text_parts(
+        response
+            .output()
+            .parts()
+            .filter_map(|entry| match entry.kind {
+                ContentKind::Text(text) => Some(text),
+                _ => None,
+            }),
+    );
+    let refusal = join_text_parts(
+        response
+            .output()
+            .parts()
+            .filter_map(|entry| match entry.kind {
+                ContentKind::Refusal(text) => Some(text),
+                _ => None,
+            }),
+    );
+    if let Some(text) = content {
         message.insert("content".into(), Json::String(text.into_owned()));
+    }
+    if let Some(text) = refusal {
+        message.insert("refusal".into(), Json::String(text.into_owned()));
     }
     if let Some(calls) = response.tool_calls.as_deref() {
         message.insert("tool_calls".into(), Json::Array(openai_tool_calls(calls)));
@@ -186,11 +207,26 @@ fn render_openai_responses_response(response: &AnnotatedLlmResponse) -> Json {
     );
 
     let mut output = Vec::new();
-    if let Some(text) = response_text(response) {
+    let content: Vec<Json> = response
+        .output()
+        .parts()
+        .filter_map(|entry| {
+            let (kind, field, text) = match entry.kind {
+                ContentKind::Text(text) => ("output_text", "text", text),
+                ContentKind::Refusal(text) => ("refusal", "refusal", text),
+                _ => return None,
+            };
+            Some(Json::Object(Map::from_iter([
+                ("type".into(), Json::String(kind.into())),
+                (field.into(), Json::String(text.to_owned())),
+            ])))
+        })
+        .collect();
+    if !content.is_empty() {
         let mut message = json!({
-            "type": "message", "role": "assistant", "content": [{"type": "output_text"}],
+            "type": "message", "role": "assistant",
         });
-        message["content"][0]["text"] = Json::String(text.into_owned());
+        message["content"] = Json::Array(content);
         output.push(message);
     }
     output.extend(
