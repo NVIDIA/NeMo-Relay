@@ -56,8 +56,9 @@ their existing string representation.
 `response_text()` includes both text and refusal parts, joined with newlines.
 Null or missing refusals add no part; explicit empty refusal strings remain
 present. Chat's streaming collector accumulates `delta.refusal`; Responses
-uses its completed output items or terminal snapshot without duplicating
-refusal deltas. Completion reasons, usage, and tool calls remain separate.
+retains provisional refusal deltas and replaces them with completed content
+parts, output items, or the terminal snapshot when available. Completion reasons,
+usage, and tool calls remain separate.
 
 Gemini streaming aggregation preserves `promptFeedback`, including prompt-block
 reasons and safety ratings. A blocked prompt with no generated candidates stays
@@ -73,6 +74,15 @@ codec's completion validation. An OpenAI Responses stream that ends without a
 `response.completed`, `response.failed`, or `response.incomplete` event fails
 validation. The worker marks its observation as truncated and omits its aggregate;
 the bytes forwarded to the application are unchanged.
+
+OpenAI Responses aggregation retains partial text, refusals, and function-call
+arguments for output items supplied by the stream. Completed fields and parts
+replace provisional deltas; completed items replace their provisional content;
+a nonempty terminal output replaces the collected items. This prevents duplicate
+content while retaining observed output if a stream is interrupted. Partial
+aggregation does not imply successful completion: missing-terminal validation
+still applies, and usage is included only when the provider supplies it. The
+finalizer exposes the partial aggregate; consumers can omit it on stream failure.
 
 
 ## Cost Estimation
