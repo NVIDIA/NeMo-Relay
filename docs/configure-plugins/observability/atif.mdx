@@ -443,6 +443,14 @@ multimodal Gemini and OCI requests: text is joined with newlines, and image-only
 content without a supported image path produces an empty display message. The
 original provider payload remains in `extra.llm_request`.
 
+For annotated LLM responses without media or opaque provider parts, agent step
+messages use the shared normalized content view. Text and refusals are joined
+with newlines, preserving whitespace and empty parts; tool payloads are excluded.
+An annotation without eligible text produces an empty message instead of falling
+back to raw text. Responses with media or opaque provider parts retain the
+existing raw display projection. The provider response remains in
+`extra.llm_response`, and tool calls and usage are projected separately.
+
 When a successful tool result carries an opaque annotation, the corresponding
 ATIF observation result stores it at `extra.tool_result_annotation`. ATIF
 preserves the JSON value without interpreting application-defined keys.
