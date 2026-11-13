@@ -68,6 +68,12 @@ OpenAI Chat streaming aggregation retains `system_fingerprint` and `service_tier
 and concatenates each choice's text and refusal logprob entries in arrival order.
 These fields remain available through `api_specific` after response decoding.
 
+Both gateway aggregation and daemon worker observation apply the streaming
+codec's completion validation. An OpenAI Responses stream that ends without a
+`response.completed`, `response.failed`, or `response.incomplete` event fails
+validation. The worker marks its observation as truncated and omits its aggregate;
+the bytes forwarded to the application are unchanged.
+
 
 ## Cost Estimation
 
