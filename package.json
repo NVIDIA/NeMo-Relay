@@ -19,6 +19,7 @@
   "overrides": {
     "@hono/node-server": "2.1.6",
     "glob": "^14.0.3",
+    "hono": "4.13.16",
     "ip-address": "^10.7.4",
     "minimatch": "10.2.6",
     "openclaw": {
