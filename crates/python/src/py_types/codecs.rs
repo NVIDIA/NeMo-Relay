@@ -127,6 +127,40 @@ fn optional_json_setter(
 
 #[pymethods]
 impl PyAnnotatedLLMRequest {
+    /// Snapshot exactly the final supplied message, or None for empty history.
+    fn last_message(&self) -> Option<super::content::PyMessageView> {
+        let index = self.inner.messages.len().checked_sub(1)?;
+        Some(super::content::PyMessageView::message(
+            &self.inner.messages[index],
+            Some(index),
+        ))
+    }
+
+    /// Snapshot a history item by Python index, including negative indices.
+    fn message(&self, index: isize) -> PyResult<super::content::PyMessageView> {
+        let length = self.inner.messages.len();
+        let resolved = if index < 0 {
+            length.checked_sub(index.unsigned_abs())
+        } else {
+            Some(index as usize)
+        };
+        let index = resolved
+            .filter(|index| *index < length)
+            .ok_or_else(|| pyo3::exceptions::PyIndexError::new_err("message index out of range"))?;
+        Ok(super::content::PyMessageView::message(
+            &self.inner.messages[index],
+            Some(index),
+        ))
+    }
+
+    /// Snapshot top-level instructions without falling back to history.
+    fn instructions_view(&self) -> Option<super::content::PyMessageView> {
+        self.inner
+            .instructions
+            .as_ref()
+            .map(super::content::PyMessageView::content)
+    }
+
     /// Create a new AnnotatedLLMRequest.
     ///
     /// Args:
@@ -652,6 +686,11 @@ fn optional_finish_reason(value: Option<&Bound<'_, PyAny>>) -> PyResult<Option<F
 
 #[pymethods]
 impl PyAnnotatedLLMResponse {
+    /// Snapshot current message and separate tool calls, including textless output.
+    fn output(&self) -> super::content::PyMessageView {
+        super::content::PyMessageView::response(&self.inner)
+    }
+
     #[new]
     #[pyo3(signature = (
         id = None,

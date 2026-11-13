@@ -118,6 +118,7 @@ fn py_string_map(obj: &Bound<'_, PyAny>, field_name: &str) -> PyResult<HashMap<S
 }
 
 mod codecs;
+mod content;
 mod core;
 mod events;
 mod observability;
@@ -128,6 +129,7 @@ pub use events::*;
 pub use observability::*;
 
 pub fn register(m: &Bound<'_, PyModule>) -> PyResult<()> {
+    content::register(m)?;
     register_runtime_types(m)?;
     register_llm_types(m)?;
     register_event_types(m)?;
