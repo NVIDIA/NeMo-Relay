@@ -58,6 +58,30 @@ The Node.js package provides the following capabilities:
   `nemo-relay-node/plugin`, `nemo-relay-node/adaptive`, and
   `nemo-relay-node/observability`.
 
+## Normalized Content Access
+
+The root entry point exports a `codecs` namespace for local inspection of
+normalized request and response annotations:
+
+```typescript
+import { codecs } from 'nemo-relay-node';
+
+const view = codecs.lastMessage({ messages: [{ role: 'user', content: 'hello' }] });
+console.log(view?.text()); // hello
+```
+
+Use `message`, `instructionsView`, and `output` for other selections, and
+`MessageView.fromMessage` or `fromContent` for standalone normalized data.
+`parts()` yields a discriminated union of text, refusals, tool calls/results,
+media, and native entries. `textParts()` and `text()` use shared Rust extraction
+rules. Named helpers are `systemPrompt`, `lastUserMessage`, and `responseText`.
+
+Views retain a read-only Rust snapshot of selected content; later annotation
+edits do not change it. Tool/media/native values are independent JavaScript
+values created on access. See the
+[content snapshot guide](https://docs.nvidia.com/nemo/relay/integrate-into-frameworks/provider-codecs#nodejs-and-typescript-content-snapshots)
+for source locations, payload kinds, selection boundaries, and ownership.
+
 ## Installation
 
 Install the npm package in a Node.js 24.13.1 or newer project:

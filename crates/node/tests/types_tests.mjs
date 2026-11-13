@@ -66,6 +66,7 @@ describe('Type constants', () => {
       'tests/public_plugin_api_fixture.ts',
       'tests/public_json_compatible_api_fixture.ts',
       'tests/public_entry_points_fixture.ts',
+      'tests/public_content_api_fixture.ts',
     ]);
   });
 
