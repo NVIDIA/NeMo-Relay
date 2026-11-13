@@ -609,28 +609,12 @@ impl AnnotatedLlmRequest {
     ///
     /// A selected item without text yields `None`; later items are not searched.
     pub fn system_prompt(&self) -> Option<std::borrow::Cow<'_, str>> {
-        if let Some(instructions) = &self.instructions {
-            return instructions.content_view().text();
-        }
-        self.messages
-            .iter()
-            .find(|message| {
-                matches!(message, Message::System { .. } | Message::Developer { .. })
-                    || matches!(message.native_message_role(), Some("system" | "developer"))
-            })
-            .and_then(|message| message.content_view().text())
+        super::content_snapshot::request_system_view(self).and_then(|view| view.text())
     }
 
     /// Join text/refusals from the last user item, without skipping textless items.
     pub fn last_user_message(&self) -> Option<std::borrow::Cow<'_, str>> {
-        self.messages
-            .iter()
-            .rev()
-            .find(|message| {
-                matches!(message, Message::User { .. })
-                    || message.native_message_role() == Some("user")
-            })
-            .and_then(|message| message.content_view().text())
+        super::content_snapshot::request_user_view(self).and_then(|view| view.text())
     }
 
     /// Check if any assistant message in the conversation contains tool calls.

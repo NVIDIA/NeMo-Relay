@@ -3,8 +3,9 @@
 
 //! Shared normalized LLM request and response data types.
 
-/// Borrowed typed content traversal and text extraction.
+/// Typed content traversal, shared selection, and owned transport snapshots.
 pub mod content;
+mod content_snapshot;
 
 /// Stable LLM codec identities shared across SDK boundaries.
 pub mod identity;

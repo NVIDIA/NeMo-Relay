@@ -59,7 +59,7 @@ def contract(tmp_path_factory):
 
 
 def test_all_rpcs_have_dedicated_request_response_types(contract):
-    counts = {"PluginWorkerService": 8, "RelayHostRuntimeService": 17, "RelayDiagnosticsService": 6}
+    counts = {"PluginWorkerService": 8, "RelayHostRuntimeService": 18, "RelayDiagnosticsService": 6}
     types = set()
     for name, count in counts.items():
         service = contract.FindServiceByName(f"{PACKAGE}.{name}")
@@ -285,6 +285,10 @@ OPEN_JSON_FIELDS = frozenset(
     LlmOptimizationContribution.payload
     LlmRequest.content
     LlmRequest.headers
+    LlmContentEntry.image
+    LlmContentEntry.audio
+    LlmContentEntry.file
+    LlmContentPayload.json
     LlmSanitizeResponseInvocation.response
     LlmStreamNextResponse.value
     LogRequest.fields

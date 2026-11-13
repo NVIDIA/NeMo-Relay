@@ -1,0 +1,170 @@
+// SPDX-FileCopyrightText: Copyright (c) 2026, NVIDIA CORPORATION & AFFILIATES. All rights reserved.
+// SPDX-License-Identifier: Apache-2.0
+
+// Owned normalized content projection; the host owns all selection/extraction policy.
+syntax = "proto3";
+
+package nvidia.nemo.relay.worker.v1;
+
+import "buf/validate/validate.proto";
+import "google/protobuf/empty.proto";
+import "nvidia/nemo/relay/worker/v1/common.proto";
+import "nvidia/nemo/relay/worker/v1/llm.proto";
+
+// Selection applied to a normalized source before text extraction.
+message LlmContentSelection {
+  // Exactly one selection is required; source/selection compatibility is checked by the host.
+  oneof kind {
+    option (buf.validate.oneof).required = true;
+    // Exactly the final supplied request item.
+    google.protobuf.Empty last_message = 1;
+    // Explicit history index; negative values count from the end.
+    sint64 message_index = 2;
+    // Top-level instructions only.
+    google.protobuf.Empty instructions = 3;
+    // Instructions, otherwise the first portable/native system/developer item.
+    google.protobuf.Empty system_prompt = 4;
+    // Last portable or recognized-native user item.
+    google.protobuf.Empty last_user_message = 5;
+    // Current response message plus separate tool calls.
+    google.protobuf.Empty output = 6;
+    // Entire standalone message or standalone content.
+    google.protobuf.Empty all = 7;
+  }
+}
+
+// Normalized root category; never an original provider-wire offset.
+enum LlmContentRoot {
+  // Invalid for a concrete location.
+  LLM_CONTENT_ROOT_UNSPECIFIED = 0;
+  // A request history item with its original index.
+  LLM_CONTENT_ROOT_REQUEST_MESSAGE = 1;
+  // A standalone message.
+  LLM_CONTENT_ROOT_MESSAGE = 2;
+  // Current normalized response.
+  LLM_CONTENT_ROOT_RESPONSE = 3;
+  // Standalone content or instructions.
+  LLM_CONTENT_ROOT_CONTENT = 4;
+}
+
+// Field relative to a normalized root.
+enum LlmContentField {
+  // Invalid for a concrete location.
+  LLM_CONTENT_FIELD_UNSPECIFIED = 0;
+  // Message content or standalone content itself.
+  LLM_CONTENT_FIELD_CONTENT = 1;
+  // Response message field.
+  LLM_CONTENT_FIELD_MESSAGE = 2;
+  // Separate assistant/response tool-call array.
+  LLM_CONTENT_FIELD_TOOL_CALLS = 3;
+  // A top-level tool-call item itself.
+  LLM_CONTENT_FIELD_TOOL_CALL_ITEM = 4;
+  // A top-level tool-result output field.
+  LLM_CONTENT_FIELD_OUTPUT = 5;
+  // Opaque native value field.
+  LLM_CONTENT_FIELD_VALUE = 6;
+  // Recognized native message content at value.content.
+  LLM_CONTENT_FIELD_NATIVE_CONTENT = 7;
+}
+
+// Read-time position in the supplied normalized source, not a stable edit handle.
+message LlmContentLocation {
+  option (buf.validate.message).cel = {
+    id: "content_location.request_index"
+    message: "message_index is present exactly for request_message roots"
+    expression: "(this.root == 1) == has(this.message_index)"
+  };
+  // Defined nonzero source category.
+  LlmContentRoot root = 1 [(buf.validate.field).enum = {
+    defined_only: true
+    not_in: [0]
+  }];
+  // Original nonnegative request history index, including when selection used a negative index.
+  optional uint64 message_index = 2;
+  // Defined nonzero field identity.
+  LlmContentField field = 3 [(buf.validate.field).enum = {
+    defined_only: true
+    not_in: [0]
+  }];
+  // Array index; absence denotes a scalar or complete payload.
+  optional uint64 index = 4;
+}
+
+// Original tool payload representation; string arguments are never parsed here.
+message LlmContentPayload {
+  // Exactly one representation is required, including explicit null.
+  oneof kind {
+    option (buf.validate.oneof).required = true;
+    // Absent legacy function-result content.
+    google.protobuf.Empty null = 1;
+    // String-valued arguments or legacy result.
+    string string = 2;
+    // Parsed JSON, including a JSON string or null.
+    JsonValue json = 3;
+    // Complete tool-result message content.
+    MessageContent content = 4;
+  }
+}
+
+// Owned tool invocation identifiers and unrendered arguments.
+message LlmContentToolCall {
+  // Source item/tool-call identifier, if present.
+  optional string id = 1;
+  // Separate correlation identifier, if present.
+  optional string call_id = 2;
+  // Function/tool name.
+  string name = 3;
+  // Required original argument representation.
+  LlmContentPayload arguments = 4 [(buf.validate.field).required = true];
+}
+
+// Owned complete tool result, excluded from default text.
+message LlmContentToolResult {
+  // Source item identifier, if present.
+  optional string id = 1;
+  // Corresponding call identifier, if present.
+  optional string call_id = 2;
+  // Legacy function name, if present.
+  optional string name = 3;
+  // Explicit provider error flag, if present.
+  optional bool is_error = 4;
+  // Required complete result payload.
+  LlmContentPayload payload = 5 [(buf.validate.field).required = true];
+}
+
+// One typed entry in normalized order; separate tool calls follow content.
+message LlmContentEntry {
+  // Required normalized read-time source location.
+  LlmContentLocation location = 1 [(buf.validate.field).required = true];
+  // Exactly one content kind; open payload values remain lossless JSON.
+  oneof kind {
+    option (buf.validate.oneof).required = true;
+    // Explicit text, including empty text.
+    string text = 2;
+    // Explicit refusal, including empty refusal.
+    string refusal = 3;
+    // Tool invocation with typed payload representation.
+    LlmContentToolCall tool_call = 4;
+    // Complete result, never recursively flattened into text.
+    LlmContentToolResult tool_result = 5;
+    // Portable image URL.
+    ImageUrl image_url = 6;
+    // Portable image data.
+    JsonValue image = 7;
+    // Portable audio data.
+    JsonValue audio = 8;
+    // Portable file data.
+    JsonValue file = 9;
+    // Provider-owned opaque data.
+    ProviderNativeComponent provider_native = 10;
+  }
+}
+
+// Complete owned response to one inspection; no host-side snapshot handle is retained.
+message LlmContentSnapshot {
+  // All selected typed parts, preserving their normalized field identities.
+  repeated LlmContentEntry parts = 1;
+  // Authoritative eligible text/refusal/native-fallback strings selected by Rust.
+  // Empty list means absent text; a list containing an empty string means explicit empty text.
+  repeated string text_parts = 2;
+}

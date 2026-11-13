@@ -8,6 +8,11 @@
 
 use std::borrow::Cow;
 
+pub use super::content_snapshot::{
+    ContentSelection, ContentSelectionError, ContentSnapshot, ContentSource, SnapshotEntry,
+    SnapshotKind, SnapshotPayload, SnapshotToolCall, SnapshotToolResult,
+};
+
 use crate::Json;
 
 use super::request::{ContentPart, Message, MessageContent, OpenAiImageUrl};

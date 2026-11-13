@@ -179,3 +179,42 @@ fn isolated_scope_stack_operations_require_nonempty_handles() {
         assert_eq!(validate(&request).is_ok(), !scope_stack_id.is_empty());
     }
 }
+
+#[test]
+fn content_inspection_rejects_incomplete_or_contradictory_wire_values() {
+    assert!(validate(&pb::InspectLlmContentRequest::default()).is_err());
+    assert!(validate(&pb::InspectLlmContentResponse::default()).is_err());
+    assert!(validate(&pb::LlmContentPayload::default()).is_err());
+    assert!(validate(&pb::LlmContentEntry::default()).is_err());
+    assert!(validate(&pb::LlmContentSelection::default()).is_err());
+    let location = pb::LlmContentLocation {
+        root: pb::LlmContentRoot::RequestMessage as i32,
+        field: pb::LlmContentField::Content as i32,
+        message_index: Some(0),
+        index: None,
+    };
+    assert!(validate(&location).is_ok());
+    let invalid = pb::LlmContentLocation {
+        message_index: None,
+        ..location
+    };
+    assert!(validate(&invalid).is_err());
+    let invalid = pb::LlmContentLocation {
+        root: pb::LlmContentRoot::Response as i32,
+        ..location
+    };
+    assert!(validate(&invalid).is_err());
+    let empty_text = pb::LlmContentEntry {
+        location: Some(pb::LlmContentLocation {
+            root: pb::LlmContentRoot::Content as i32,
+            field: pb::LlmContentField::Content as i32,
+            ..Default::default()
+        }),
+        kind: Some(pb::llm_content_entry::Kind::Text(String::new())),
+    };
+    assert!(validate(&empty_text).is_ok());
+    let explicit_null = pb::LlmContentPayload {
+        kind: Some(pb::llm_content_payload::Kind::Null(())),
+    };
+    assert!(validate(&explicit_null).is_ok());
+}

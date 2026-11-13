@@ -100,7 +100,7 @@ Public authoring types:
     LlmStreamNext: Continuation for a streaming LLM execution intercept.
 
 Public functions:
-    codecs: Local selection and typed content snapshots for normalized annotations.
+    codecs: Async host inspection and typed local snapshots for normalized annotations.
     http_error_message: Format an upstream HTTP error status for forwarding.
     serve_plugin: Run a local ``nvidia.nemo.relay.worker.v1`` worker until host shutdown.
 """

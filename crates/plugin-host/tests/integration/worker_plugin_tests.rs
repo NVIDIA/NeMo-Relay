@@ -2780,6 +2780,11 @@ async fn python_worker_execution_codec_context_round_trips_host_codecs() {
                         "decoded_usage": case.expected_usage,
                     })
                 );
+                assert_eq!(response["_content_projection_probe"], json!({
+                    "request_text": "hello", "request_index": 0,
+                    "response_text": answer, "typed_kinds": ["text", "refusal", "tool_call", "provider_native"],
+                    "standalone_text": "first\n\nnative", "argument_kind": "json", "arguments": {"q":1},
+                }));
                 assert_eq!(response["_scope_stack_snapshot_probe"], expected_snapshot);
                 assert_eq!(
                     response["_scope_stack_snapshot_probe"]["scopes"]
@@ -3084,7 +3089,7 @@ entrypoint = {entrypoint}
 
 fn write_python_codec_context_worker() -> (TempDir, PathBuf) {
     const WORKER: &str = r#"
-from nemo_relay_plugin import WorkerPlugin, serve_plugin
+from nemo_relay_plugin import WorkerPlugin, codecs, serve_plugin
 
 
 class CodecContextProbe(WorkerPlugin):
@@ -3113,6 +3118,21 @@ class CodecContextProbe(WorkerPlugin):
                 raise RuntimeError("enclosing Agent snapshot is unavailable")
 
             result = dict(response)
+            request_view = await codecs.last_message(ctx.runtime, annotated)
+            response_view = await codecs.output(ctx.runtime, decoded)
+            standalone = await codecs.MessageView.from_content(ctx.runtime, [
+                {"type": "text", "text": "first"},
+                {"type": "refusal", "refusal": ""},
+                {"type": "tool_use", "id": "c", "name": "f", "input": {"q": 1}},
+                {"type": "provider_native", "provider": "custom", "kind": "extension", "value": {"text": "native"}},
+            ])
+            entries = list(standalone.parts())
+            result["_content_projection_probe"] = {
+                "request_text": request_view.text(), "request_index": next(request_view.parts()).location.message_index,
+                "response_text": response_view.text(), "typed_kinds": [entry.kind for entry in entries],
+                "standalone_text": standalone.text(), "argument_kind": entries[2].tool_call.arguments.kind,
+                "arguments": entries[2].tool_call.arguments.value,
+            }
             result["_scope_stack_snapshot_probe"] = {
                 "scopes": [
                     {"scope_id": entry.scope_id, "scope_type": entry.scope_type.value}
