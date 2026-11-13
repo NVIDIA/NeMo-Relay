@@ -175,6 +175,47 @@ fn adaptive_content_stability_distinguishes_typed_structure_from_literal_prose()
 }
 
 #[test]
+fn tool_result_stability_distinguishes_typed_structure_from_literal_text() {
+    for message in [
+        serde_json::json!({"role": "tool", "tool_call_id": "c", "content": [{"type": "refusal", "refusal": "no"}]}),
+        serde_json::json!({"role": "tool", "tool_call_id": "c", "content": [{"type": "tool_use", "id": "nested", "name": "lookup", "input": {"q": "same"}}]}),
+        serde_json::json!({"role": "tool", "tool_call_id": "c", "content": [{"type": "tool_result", "tool_use_id": "nested", "content": "same"}]}),
+        serde_json::json!({"role": "tool_result", "call_id": "c", "output": {"result": "same"}}),
+    ] {
+        let request = |message| AnnotatedLlmRequest {
+            messages: vec![message],
+            ..Default::default()
+        };
+        let structured =
+            build_prompt_ir(&request(serde_json::from_value(message).unwrap())).unwrap();
+        let literal = build_prompt_ir(&request(Message::Tool {
+            tool_call_id: "c".into(),
+            content: MessageContent::Text(structured.blocks[0].content.clone()),
+        }))
+        .unwrap();
+        assert_eq!(structured.blocks[0].content, literal.blocks[0].content);
+        assert_eq!(structured.blocks[0].span_id, literal.blocks[0].span_id);
+        assert_eq!(structured.blocks[0].role, PromptRole::Tool);
+        assert_eq!(structured.blocks[0].provenance, ProvenanceLabel::Tool);
+        assert_ne!(
+            crate::acg::stability::block_key(&structured.blocks[0]),
+            crate::acg::stability::block_key(&literal.blocks[0]),
+        );
+        assert_eq!(
+            structured.blocks[0].content_type,
+            BlockContentType::StructuredInput
+        );
+        assert_eq!(literal.blocks[0].content_type, BlockContentType::ToolResult);
+        let stability = crate::acg::stability::analyze_stability(
+            &[structured, literal],
+            &crate::acg::stability::StabilityThresholds::default(),
+        );
+        assert_eq!(stability.stable_prefix_length, 0);
+        assert_eq!(stability.scores[0].score, 0.5);
+    }
+}
+
+#[test]
 fn adaptive_content_tool_payload_whitespace_is_not_prose_normalized() {
     let request = AnnotatedLlmRequest {
         messages: vec![

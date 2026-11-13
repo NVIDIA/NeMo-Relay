@@ -286,7 +286,6 @@ fn build_serialized_message_block(
             }))?,
             BlockContentType::Opaque,
         ),
-        Message::ToolResultItem { .. } => (canonical, BlockContentType::ToolResult),
         _ => (canonical, BlockContentType::StructuredInput),
     };
     let index = *seq;
@@ -374,10 +373,11 @@ fn build_tool_result_block(
         sequence_index: index,
         role: PromptRole::Tool,
         content: text,
-        content_type: if kind == BlockContentType::Opaque {
-            kind
-        } else {
-            BlockContentType::ToolResult
+        // Tool provenance is already carried by role/provenance. Preserve the
+        // inner kind so structured payloads cannot match their literal JSON text.
+        content_type: match kind {
+            BlockContentType::Text => BlockContentType::ToolResult,
+            other => other,
         },
         provenance: ProvenanceLabel::Tool,
         sensitivity: SensitivityLabel::default(),
