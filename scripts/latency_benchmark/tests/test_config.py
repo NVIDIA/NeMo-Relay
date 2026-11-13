@@ -24,6 +24,10 @@ from scripts.latency_benchmark.src.fixtures import (
     write_plugin_configs,
 )
 
+# Keep in sync with the observability validator in
+# crates/core/src/observability/plugin_component.rs.
+OBSERVABILITY_CONFIG_VERSION = 4
+
 
 class BenchmarkConfigTests(unittest.TestCase):
     def test_default_config_defines_every_suite_and_matrix_axis(self) -> None:
@@ -198,7 +202,7 @@ class StaticFixtureTests(unittest.TestCase):
             with self.subTest(fixture=name):
                 config = tomllib.loads((fixtures.CONFIG_ROOT / name).read_text(encoding="utf-8"))
                 component = next(item for item in config["components"] if item["kind"] == "observability")
-                self.assertEqual(component["config"]["version"], 4)
+                self.assertEqual(component["config"]["version"], OBSERVABILITY_CONFIG_VERSION)
 
     def test_materializes_templates_without_embedded_markers(self) -> None:
         with tempfile.TemporaryDirectory() as temporary:
