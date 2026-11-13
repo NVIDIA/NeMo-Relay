@@ -8001,6 +8001,43 @@ async fn normalized_refusal_paths_redact_matching_openai_wire_fields() {
 }
 
 #[tokio::test]
+async fn normalized_response_removal_omits_payload_when_part_positions_cannot_be_preserved() {
+    let raw = json!({"status":"completed","output":[{
+        "type":"message","content":[
+            {"type":"output_text","text":"SECRET-first"},
+            {"type":"refusal","refusal":"SECRET-refusal"},
+            {"type":"output_text","text":"safe tail"}
+        ]
+    }]});
+    let codec: Arc<dyn LlmResponseCodec> = Arc::new(OpenAIResponsesCodec);
+    for target_paths in [
+        vec!["/message/0"],
+        vec!["/message/0", "/message/1"],
+        vec!["/message/0/text", "/message/1/refusal"],
+    ] {
+        let backend = crate::builtin::CompiledBuiltinBackend::new(
+            BuiltinBackendConfig {
+                action: "remove".into(),
+                target_paths: target_paths.into_iter().map(String::from).collect(),
+                ..Default::default()
+            },
+            None,
+        )
+        .unwrap();
+        let sanitize = crate::builtin::llm_sanitize_response_callback(backend);
+        let sanitized = sanitize(
+            raw.clone(),
+            LlmSanitizeResponseContext::for_response_codec(Some(codec.clone())),
+        )
+        .await
+        .unwrap();
+        // Removal keeps null slots or deletes required fields. Until projection
+        // carries part provenance, omit the payload rather than shifting safe tail.
+        assert!(sanitized.is_none());
+    }
+}
+
+#[tokio::test]
 async fn trajectory_refusal_projections_preserve_types_without_context_leaks() {
     let backend = trajectory_backend(None, "redact_all_leaves");
     let project_response =
