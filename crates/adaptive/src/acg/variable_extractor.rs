@@ -199,6 +199,13 @@ pub fn extract_variables_from_blocks(
 ) -> Vec<ExtractionResult> {
     blocks
         .iter()
+        .filter(|block| {
+            !matches!(
+                block.content_type,
+                crate::acg::prompt_ir::BlockContentType::Opaque
+                    | crate::acg::prompt_ir::BlockContentType::Image
+            )
+        })
         .filter_map(|block| extract_variables(&block.content, &block.span_id, patterns))
         .collect()
 }

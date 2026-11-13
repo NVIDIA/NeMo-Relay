@@ -8,7 +8,7 @@ use serde_json::json;
 use crate::acg::capability::{CacheEconomics, ModelFamilyCapabilities};
 use crate::acg::debug as acg_debug;
 use crate::acg::profile::StabilityClass;
-use crate::acg::prompt_ir::{BlockContentType, PromptBlock, PromptIR, PromptRole, ProvenanceLabel};
+use crate::acg::prompt_ir::{BlockContentType, PromptIR, PromptRole, ProvenanceLabel};
 use crate::acg::stability::StabilityAnalysisResult;
 use crate::acg::types::SharingScope;
 
@@ -401,8 +401,17 @@ fn build_prefix_stats(
             break;
         }
 
-        cumulative_tokens =
-            cumulative_tokens.saturating_add(estimate_block_tokens(&prompt_ir.blocks[index]));
+        let Some((tokens, _)) = prompt_ir.blocks[index].estimated_tokens() else {
+            acg_debug::emit(
+                "economics_candidate_rejected",
+                json!({
+                    "reason": "token_count_unavailable", "block_index": index,
+                    "model_family": capabilities.model_family,
+                }),
+            );
+            break;
+        };
+        cumulative_tokens = cumulative_tokens.saturating_add(tokens);
         weakest_prefix_signal =
             weakest_prefix_signal.min(prefix_signal(score.score, score.confidence));
 
@@ -519,6 +528,8 @@ fn classify_candidate_boundary(
         (
             _,
             BlockContentType::StructuredOutput
+            | BlockContentType::StructuredInput
+            | BlockContentType::Opaque
             | BlockContentType::ToolResult
             | BlockContentType::Image,
         ) => CandidateKind::Structured,
@@ -736,16 +747,6 @@ fn is_better_terminal_state(
     }
 
     candidates[proposal_index].stable_prefix_end > candidates[current_index].stable_prefix_end
-}
-
-fn estimate_block_tokens(block: &PromptBlock) -> u32 {
-    block.token_metadata.as_ref().map_or_else(
-        || {
-            let estimated = block.content.len() / 4;
-            estimated.try_into().unwrap_or(u32::MAX)
-        },
-        |metadata| metadata.token_count,
-    )
 }
 
 fn prefix_signal(score: f64, confidence: f64) -> f64 {

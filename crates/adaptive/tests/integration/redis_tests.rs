@@ -463,8 +463,8 @@ async fn redis_integration_persists_runtime_seed_entries_and_manifest_cleanup() 
         .await
         .expect("ACG learner should persist Redis runtime seed state");
 
-    let observations_key = format!("{prefix}acg_observations:{agent_id}");
-    let stability_key = format!("{prefix}acg_stability:{agent_id}");
+    let observations_key = format!("{prefix}acg_observations:{agent_id}::acg-ir=2");
+    let stability_key = format!("{prefix}acg_stability:{agent_id}::acg-ir=2");
     assert!(
         load_raw_json(&observations_key).await.is_some(),
         "aggregate agent observations should persist under the literal acg_observations key"
@@ -475,9 +475,12 @@ async fn redis_integration_persists_runtime_seed_entries_and_manifest_cleanup() 
     );
 
     let seeded_hot_cache = empty_hot_cache();
-    let loaded_stability = backend.load_stability(agent_id).await.unwrap();
+    let loaded_stability = backend
+        .load_stability(&format!("{agent_id}::acg-ir=2"))
+        .await
+        .unwrap();
     let loaded_observation_count = backend
-        .load_observations(agent_id)
+        .load_observations(&format!("{agent_id}::acg-ir=2"))
         .await
         .unwrap()
         .map(|observations| observations.len() as u32)

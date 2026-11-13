@@ -269,6 +269,27 @@ result. ACG records observations and, when enough stable prompt structure is
 available, emits adaptive diagnostics and cache-planning decisions through the
 adaptive runtime.
 
+Prompt analysis uses borrowed normalized content views with separate policies
+for profile fingerprints and prompt IR. It retains existing message/block
+boundaries. Plain prose is whitespace-normalized; structured input is canonical
+JSON whose payload string values keep their whitespace. Media and provider-native
+parts contribute typed fingerprints rather than disappearing from stability
+analysis or being treated as prose. These analysis representations are not sent
+to the provider.
+
+Media and opaque blocks require supplied token metadata for token-based cache
+planning. Without it, economics stops considering prefixes at that block, and
+Anthropic translation declines cache breakpoints spanning it. Character counts
+of fingerprints are not used as token counts. The full source-request fingerprint
+guard for prefixes beyond the leading scaffold remains in place.
+
+ACG now stores learning observations and the agent bootstrap seed under the
+`::acg-ir=2` namespace. Existing unversioned state is retained but is not loaded
+or mixed with the new representation; upgraded agents warm up from new samples.
+This does not change the configured agent ID, storage backend APIs, or grouping of
+growing conversations. Rust consumers matching `BlockContentType` must handle
+the new `StructuredInput` and `Opaque` variants.
+
 Provider-specific cache hints are useful only when the request surface supports
 them. Validate against representative LLM traffic before enabling ACG in
 production.

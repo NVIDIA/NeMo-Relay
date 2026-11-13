@@ -14,6 +14,11 @@ use nemo_relay_types::codec::request::{
 
 const HASH_PREFIX_LEN: usize = 16;
 
+/// Version the stored analysis representation without deleting earlier state.
+pub(crate) fn acg_state_key(agent_id: &str) -> String {
+    format!("{agent_id}::acg-ir=2")
+}
+
 struct AcgKeyParts<'a> {
     model: &'a str,
     system_hash: String,
@@ -40,8 +45,11 @@ pub(crate) fn derive_acg_learning_key(
         .map(short_hash)
         .unwrap_or("stable-scaffold");
     let key = format!(
-        "{agent_id}::model={}::seed={seed_hash}::system={}::tools={}",
-        parts.model, parts.system_hash, parts.tool_hash
+        "{}::model={}::seed={seed_hash}::system={}::tools={}",
+        acg_state_key(agent_id),
+        parts.model,
+        parts.system_hash,
+        parts.tool_hash
     );
     parts
         .response_format_hash

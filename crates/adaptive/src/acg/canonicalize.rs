@@ -40,6 +40,11 @@ pub fn canonicalize_json(json_str: &str) -> Result<String> {
 ///
 /// Returns [`AcgError::Internal`](super::error::AcgError::Internal) if canonicalization fails.
 pub fn canonicalize_value(value: &serde_json::Value) -> Result<String> {
+    canonicalize_serializable(value)
+}
+
+/// Canonicalize a borrowed normalized component without cloning it into a JSON value.
+pub(crate) fn canonicalize_serializable(value: &impl serde::Serialize) -> Result<String> {
     let canonical = serde_json_canonicalizer::to_string(value)
         .map_err(|e| super::error::AcgError::Internal(format!("canonicalization failed: {e}")))?;
     Ok(canonical)
