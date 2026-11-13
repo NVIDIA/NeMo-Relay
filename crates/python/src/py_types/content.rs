@@ -6,9 +6,10 @@
 use std::sync::Arc;
 
 use nemo_relay_types::codec::content::{
-    ContentEntry, ContentField, ContentKind, ContentRoot, MessageView, PayloadRef,
+    ContentEntry, ContentField, ContentKind, ContentRoot, ContentSelection, ContentSelectionError,
+    ContentSource, MessageView, PayloadRef,
 };
-use nemo_relay_types::codec::request::{Message, MessageContent};
+use nemo_relay_types::codec::request::{AnnotatedLlmRequest, Message, MessageContent};
 use nemo_relay_types::codec::response::AnnotatedLlmResponse;
 use pyo3::prelude::*;
 
@@ -58,6 +59,34 @@ pub struct PyMessageView {
 }
 
 impl PyMessageView {
+    pub(super) fn select_request(
+        request: &AnnotatedLlmRequest,
+        selection: ContentSelection,
+    ) -> PyResult<Option<Self>> {
+        let view =
+            selection
+                .select(ContentSource::Request(request))
+                .map_err(|error| match error {
+                    ContentSelectionError::IndexOutOfRange => {
+                        pyo3::exceptions::PyIndexError::new_err(error.to_string())
+                    }
+                    ContentSelectionError::InvalidSource => {
+                        pyo3::exceptions::PyValueError::new_err(error.to_string())
+                    }
+                })?;
+        Ok(view.map(|view| match view.source() {
+            ContentSource::Message(message) => Self::message(
+                message,
+                match view.root() {
+                    ContentRoot::RequestMessage(index) => Some(index),
+                    _ => None,
+                },
+            ),
+            ContentSource::Content(content) => Self::content(content),
+            _ => unreachable!("request selection yields a message or instructions"),
+        }))
+    }
+
     pub(super) fn message(message: &Message, request_index: Option<usize>) -> Self {
         Self {
             source: Arc::new(Source::Message {

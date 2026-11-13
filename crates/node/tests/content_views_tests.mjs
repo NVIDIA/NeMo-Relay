@@ -136,6 +136,24 @@ describe('normalized content snapshots', () => {
     assert.equal([...output.parts()].length, 2);
   });
 
+  it('retains empty selected items and ignores unrelated annotation metadata', () => {
+    const request = {
+      instructions: [],
+      messages: [{ role: 'user', content: 'earlier' }, { role: 'assistant', content: [] }],
+      get metadata() { throw new Error('unrelated metadata was read'); },
+    };
+    const selected = codecs.lastMessage(request);
+    const instructions = codecs.instructionsView(request);
+    assert.deepEqual([...selected.parts()], []);
+    assert.deepEqual([...instructions.parts()], []);
+    assert.equal(selected.text(), null);
+    assert.equal(codecs.systemPrompt(request), null);
+    request.messages[1].content.push({ type: 'text', text: 'later' });
+    request.instructions.push({ type: 'text', text: 'later policy' });
+    assert.deepEqual([...selected.parts()], []);
+    assert.deepEqual([...instructions.parts()], []);
+  });
+
   it('selects exact history items and instructions with original indices', () => {
     assert.equal(codecs.lastMessage({}), null);
     assert.equal(codecs.instructionsView({}), null);

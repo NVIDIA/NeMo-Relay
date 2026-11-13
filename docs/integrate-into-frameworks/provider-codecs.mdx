@@ -42,7 +42,12 @@ request item. Use `AnnotatedLlmResponse.output()` for the current response's
 normalized content and tool calls. A request can contain assistant/tool history
 from earlier turns; a codec does not accumulate history between calls.
 
-Both return a borrowed `MessageView` from `nemo_relay_types::codec::content`.
+Both return a borrowed `MessageView` from `nemo_relay_types::codec::content`. The
+view's `root()` identifies the normalized selection even when it has no parts;
+`source()` borrows the selected message, content, or response through
+`ContentSource`. Bindings use these accessors to retain selected storage after
+applying the shared Rust `ContentSelection::select()` policy.
+
 `Message.content_view()` and `MessageContent.content_view()` provide the same
 access for arbitrary history items and separate instructions.
 

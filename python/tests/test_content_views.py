@@ -287,3 +287,19 @@ def test_iterators_are_independent_and_retain_the_snapshot() -> None:
             next(iterator)
         with pytest.raises(StopIteration):
             next(iterator)
+
+
+def test_empty_selected_items_remain_independent_snapshots() -> None:
+    request = AnnotatedLLMRequest(
+        [{"role": "user", "content": "earlier"}, {"role": "assistant", "content": []}],
+        instructions=[],
+    )
+    selected = request.last_message()
+    instructions = request.instructions_view()
+    assert selected is not None and instructions is not None
+    assert list(selected.parts()) == list(instructions.parts()) == []
+    assert selected.text() is None
+    assert request.system_prompt() is None
+    request.messages = [{"role": "user", "content": "later"}]
+    request.instructions = "later policy"
+    assert list(selected.parts()) == list(instructions.parts()) == []
