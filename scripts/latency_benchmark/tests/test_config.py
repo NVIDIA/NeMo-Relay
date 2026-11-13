@@ -4,6 +4,7 @@
 """Tests for the latency benchmark fixture."""
 
 import tempfile
+import tomllib
 import unittest
 from pathlib import Path
 from unittest import mock
@@ -191,6 +192,14 @@ class BenchmarkConfigTests(unittest.TestCase):
 
 
 class StaticFixtureTests(unittest.TestCase):
+    def test_observability_fixtures_use_current_config_version(self) -> None:
+        # The fixture must satisfy the current observability plugin schema.
+        for name in ("plugins-file.toml", "plugins-otlp.toml"):
+            with self.subTest(fixture=name):
+                config = tomllib.loads((fixtures.CONFIG_ROOT / name).read_text(encoding="utf-8"))
+                component = next(item for item in config["components"] if item["kind"] == "observability")
+                self.assertEqual(component["config"]["version"], 4)
+
     def test_materializes_templates_without_embedded_markers(self) -> None:
         with tempfile.TemporaryDirectory() as temporary:
             root = Path(temporary)

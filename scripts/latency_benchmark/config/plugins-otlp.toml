@@ -8,7 +8,7 @@ kind = "observability"
 enabled = true
 
 [components.config]
-version = 3
+version = 4
 
 [components.config.opentelemetry]
 enabled = true
