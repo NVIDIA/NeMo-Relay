@@ -17,8 +17,8 @@ use super::common::client::{begin_handshake, control_client};
 use super::common::client_token::resolve_route_credential;
 use super::common::control::{
     ActivationFailedPayload, McpRegisterRequest, McpRegisterResponse, ReleasePayload,
-    SessionRequest, WorkerActivationFailureReason, WorkerBootstrap, WorkerNetworkHint,
-    WorkerNetworkHintProof,
+    SessionRequest, WorkerActivationFailureReason, WorkerBootstrap, WorkerExitedPayload,
+    WorkerNetworkHint, WorkerNetworkHintProof,
 };
 use super::common::identity::MachineIdentity;
 use super::common::protocol::{BrokerDirective, ComponentRole, SensitiveString};
@@ -47,6 +47,10 @@ struct McpSession {
     publication_cleanup: bool,
     idle_retention: bool,
     retained_activation_id: Option<String>,
+    /// The daemon accepts `WorkerExited`; older daemons would drop the control connection.
+    worker_exit_report: bool,
+    /// The published worker this MCP launched, kept so its exit can be reported at once.
+    watched_worker: Option<(String, ActivationChild)>,
 }
 
 struct Registration {
@@ -54,6 +58,7 @@ struct Registration {
     session_token: SensitiveString,
     publication_cleanup: bool,
     idle_retention: bool,
+    worker_exit_report: bool,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -105,6 +110,8 @@ pub(crate) async fn run(options: Options) -> Result<(), CliError> {
         publication_cleanup: registration.publication_cleanup,
         idle_retention: registration.idle_retention,
         retained_activation_id: None,
+        worker_exit_report: registration.worker_exit_report,
+        watched_worker: None,
     };
     let initial = registration.directive;
     if !lease.publication_cleanup {
@@ -275,6 +282,12 @@ async fn register_once(
             .responder
             .capabilities
             .contains(super::common::control::WORKER_IDLE_RETENTION_CAPABILITY),
+        worker_exit_report: handshake
+            .proof
+            .transcript
+            .responder
+            .capabilities
+            .contains(super::common::control::WORKER_EXIT_REPORT_CAPABILITY),
     })
 }
 
@@ -473,12 +486,13 @@ async fn stop_pending_launch(launched: &mut PendingLaunch) -> Result<(), CliErro
     Ok(())
 }
 
+/// Returns the child when the broker published it, so the launcher can keep watching it.
 async fn cleanup_pending_launch(
     lease: &mut McpSession,
     launched: &mut PendingLaunch,
-) -> Result<(), CliError> {
+) -> Result<Option<(String, ActivationChild)>, CliError> {
     let Some((activation_id, mut child, _)) = launched.take() else {
-        return Ok(());
+        return Ok(None);
     };
     if lease.publication_cleanup {
         lease.sequence = lease.sequence.saturating_add(1);
@@ -486,7 +500,9 @@ async fn cleanup_pending_launch(
             lease.session_id.clone(),
             lease.session_token.clone(),
             lease.sequence,
-            super::common::control::CancelActivationPayload { activation_id },
+            super::common::control::CancelActivationPayload {
+                activation_id: activation_id.clone(),
+            },
         )?;
         let outcome = tokio::time::timeout(
             super::common::socket::ATTEMPT_TIMEOUT,
@@ -510,7 +526,7 @@ async fn cleanup_pending_launch(
     } else if !child.published {
         child.child.kill().await.map_err(CliError::Io)?;
     }
-    Ok(())
+    Ok(child.published.then_some((activation_id, child)))
 }
 
 async fn make_route_ready(
@@ -536,10 +552,17 @@ async fn supervise_route(
             }
             match directive {
                 BrokerDirective::ReuseWorker { .. } => {
-                    if !lease.publication_cleanup {
-                        if let Some((_, child, _)) = launched.as_mut() { child.published = true; }
-                        launched.take();
-                    } else { cleanup_pending_launch(lease, &mut launched).await?; }
+                    let published = if !lease.publication_cleanup {
+                        launched.take().map(|(activation_id, mut child, _)| {
+                            child.published = true;
+                            (activation_id, child)
+                        })
+                    } else {
+                        cleanup_pending_launch(lease, &mut launched).await?
+                    };
+                    if published.is_some() && lease.worker_exit_report {
+                        lease.watched_worker = published;
+                    }
                     return Ok(());
                 }
                 BrokerDirective::UsePassThrough => return Ok(()),
@@ -556,6 +579,10 @@ async fn supervise_route(
                 BrokerDirective::WaitForWorker { .. } => {}
             }
             if shutdown.as_ref().is_some_and(|stop| *stop.borrow() != Shutdown::Running) { return Ok(()); }
+            // A launched worker that died is reported now, not after the broker's reconnect grace.
+            if let Some(activation_id) = take_exited_worker(lease) {
+                report_worker_exited(lease, &activation_id).await;
+            }
             // The local timer supervises the child; it sends no network traffic.
             let event = tokio::select! {
                 _ = async { match shutdown.as_mut() { Some(stop) => { let _ = stop.changed().await; }, None => std::future::pending().await } } => return Ok(()),
@@ -576,7 +603,7 @@ async fn supervise_route(
         retain_pending_launch(lease, &mut launched, reason);
     }
     let cleanup = cleanup_pending_launch(lease, &mut launched).await;
-    result.and(cleanup)
+    result.and(cleanup.map(drop))
 }
 
 fn retain_pending_launch(lease: &mut McpSession, launched: &mut PendingLaunch, reason: Shutdown) {
@@ -720,6 +747,7 @@ fn apply_registration(lease: &mut McpSession, registration: &Registration) {
     lease.sequence = 0;
     lease.publication_cleanup = registration.publication_cleanup;
     lease.idle_retention = registration.idle_retention;
+    lease.worker_exit_report = registration.worker_exit_report;
 }
 
 async fn launch_worker(
@@ -922,10 +950,160 @@ async fn maintain_session(
         if *shutdown.borrow() != Shutdown::Running {
             return Ok(());
         }
-        directive = tokio::select! {
-            _ = shutdown.changed() => return Ok(()),
-            directive = next_directive(lease) => directive?,
+        directive = loop {
+            let watching = lease.watched_worker.is_some();
+            tokio::select! {
+                _ = shutdown.changed() => return Ok(()),
+                // Only the receive is raced; acknowledging or re-registering must not be cut short.
+                event = lease.client.next() => break receive_directive(lease, event).await?,
+                _ = tokio::time::sleep(WORKER_EXIT_POLL), if watching => {
+                    if let Some(activation_id) = take_exited_worker(lease) {
+                        report_worker_exited(lease, &activation_id).await;
+                    }
+                }
+            }
         };
+    }
+}
+
+const WORKER_EXIT_POLL: Duration = Duration::from_millis(200);
+
+/// Takes the watched worker once its process has exited and returns its activation ID.
+fn take_exited_worker(lease: &mut McpSession) -> Option<String> {
+    // A re-registration can land on an older daemon that would drop the connection on the report.
+    if !lease.worker_exit_report {
+        lease.watched_worker = None;
+        return None;
+    }
+    let (_, child) = lease.watched_worker.as_mut()?;
+    match child.child.try_wait() {
+        Ok(Some(_)) => lease
+            .watched_worker
+            .take()
+            .map(|(activation_id, _)| activation_id),
+        Ok(None) => None,
+        // Without a usable handle, the worker's own control disconnect still applies.
+        Err(_) => {
+            lease.watched_worker = None;
+            None
+        }
+    }
+}
+
+// A dead process closes its socket within milliseconds; keep directive handling responsive.
+const WORKER_EXIT_REPORT_WINDOW: Duration = Duration::from_secs(1);
+const WORKER_EXIT_REPORT_RETRY: Duration = Duration::from_millis(100);
+
+/// Tells the broker the launched worker exited. The broker accepts it only after the worker's
+/// control socket closes, which can trail the process exit briefly, so a refusal is retried.
+async fn report_worker_exited(lease: &mut McpSession, activation_id: &str) {
+    let deadline = tokio::time::Instant::now() + WORKER_EXIT_REPORT_WINDOW;
+    loop {
+        // Spend no sequence number that might not go out before the next request.
+        if tokio::time::Instant::now() >= deadline {
+            log::warn!(
+                target: "nemo_relay.daemon.mcp",
+                event = "worker_exit_report_failed",
+                error_kind = "timeout";
+                "The worker exit report window closed before the broker accepted it"
+            );
+            return;
+        }
+        let sequence = lease.sequence.saturating_add(1);
+        let Ok(request) = SessionRequest::new(
+            lease.session_id.clone(),
+            lease.session_token.clone(),
+            sequence,
+            WorkerExitedPayload {
+                activation_id: activation_id.to_owned(),
+            },
+        ) else {
+            return;
+        };
+        lease.sequence = sequence;
+        // Queue first: the sequence is spent, so the frame must go out before any later request,
+        // even if the answer misses the window.
+        let pending = match lease
+            .client
+            .enqueue(ControlCommand::WorkerExited(request))
+            .await
+        {
+            Ok(pending) => pending,
+            Err(error) => {
+                log::warn!(
+                    target: "nemo_relay.daemon.mcp",
+                    event = "worker_exit_report_failed",
+                    error_kind = error.log_kind();
+                    "Could not report the launched worker's exit: {error}"
+                );
+                return;
+            }
+        };
+        // The task keeps the answer channel open, so the writer still sends the frame after a
+        // timeout here.
+        let sent = tokio::spawn(async move {
+            tokio::time::timeout(
+                super::common::socket::ATTEMPT_TIMEOUT,
+                Client::reply::<()>(pending),
+            )
+            .await
+            .unwrap_or_else(|_| Err(CliError::Launch("control operation timed out".into())))
+        });
+        let remaining = deadline.saturating_duration_since(tokio::time::Instant::now());
+        let Ok(joined) = tokio::time::timeout(remaining, sent).await else {
+            log::warn!(
+                target: "nemo_relay.daemon.mcp",
+                event = "worker_exit_report_failed",
+                error_kind = "timeout";
+                "The broker did not answer the worker exit report in time"
+            );
+            return;
+        };
+        let outcome = joined.unwrap_or_else(|error| {
+            Err(CliError::Launch(format!(
+                "worker exit report task failed: {error}"
+            )))
+        });
+        match outcome {
+            Ok(()) => {
+                log::info!(
+                    target: "nemo_relay.daemon.mcp",
+                    event = "worker_exit_reported",
+                    activation_id = activation_id;
+                    "Reported the launched worker's exit to the broker"
+                );
+                return;
+            }
+            Err(CliError::Launch(message))
+                if message == "worker control is still connected"
+                    && tokio::time::Instant::now() + WORKER_EXIT_REPORT_RETRY < deadline =>
+            {
+                tokio::time::sleep(WORKER_EXIT_REPORT_RETRY).await;
+            }
+            // A worker that announced its exit is usually replaced before this report lands.
+            Err(CliError::Launch(message))
+                if message == "worker activation is not on this route"
+                    || message == "worker control is not known" =>
+            {
+                log::debug!(
+                    target: "nemo_relay.daemon.mcp",
+                    event = "worker_exit_report_skipped",
+                    activation_id = activation_id;
+                    "The broker no longer tracks the launched worker"
+                );
+                return;
+            }
+            // The broker's reconnect grace still replaces the worker.
+            Err(error) => {
+                log::warn!(
+                    target: "nemo_relay.daemon.mcp",
+                    event = "worker_exit_report_failed",
+                    error_kind = error.log_kind();
+                    "Could not report the launched worker's exit: {error}"
+                );
+                return;
+            }
+        }
     }
 }
 

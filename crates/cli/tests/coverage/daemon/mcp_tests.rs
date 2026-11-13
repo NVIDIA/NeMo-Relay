@@ -381,6 +381,8 @@ fn test_lease(daemon_origin: String) -> McpSession {
         publication_cleanup: false,
         idle_retention: false,
         retained_activation_id: None,
+        worker_exit_report: false,
+        watched_worker: None,
     }
 }
 
@@ -786,4 +788,377 @@ fn a_credential_rejection_after_reconnect_keeps_serving_without_a_route() {
         ))),
         ControlEnd::Finish(Err(CliError::Launch(_)))
     ));
+}
+
+/// The launching MCP keeps the published worker's handle so a crash is seen at once, not after
+/// the broker's reconnect grace.
+#[tokio::test]
+async fn launcher_sees_its_published_worker_exit() {
+    use tokio::io::AsyncWriteExt as _;
+    let (mut child, _address) = pending_worker_fixture().await;
+    child.published = true;
+    let mut stdin = child.child.take_stdin().unwrap();
+    let mut lease = test_lease("http://127.0.0.1:9".into());
+    lease.worker_exit_report = true;
+    assert_eq!(
+        take_exited_worker(&mut lease),
+        None,
+        "nothing is watched yet"
+    );
+    lease.watched_worker = Some(("activation-1".to_owned(), child));
+    tokio::time::sleep(Duration::from_millis(300)).await;
+    assert_eq!(
+        take_exited_worker(&mut lease),
+        None,
+        "a running worker is not reported"
+    );
+    assert!(lease.watched_worker.is_some());
+    stdin.write_all(b"\n").await.unwrap();
+    drop(stdin);
+    let activation_id = tokio::time::timeout(Duration::from_secs(10), async {
+        loop {
+            if let Some(activation_id) = take_exited_worker(&mut lease) {
+                return activation_id;
+            }
+            tokio::time::sleep(Duration::from_millis(50)).await;
+        }
+    })
+    .await
+    .expect("the worker exit is seen");
+    assert_eq!(activation_id, "activation-1");
+    assert!(lease.watched_worker.is_none(), "an exit is reported once");
+}
+
+/// A child that has already exited, standing in for a crashed worker.
+async fn exited_worker_child() -> ActivationChild {
+    let mut child = Command::new(std::env::current_exe().unwrap())
+        .args(["--exact", "daemon::mcp::tests::no_such_test"])
+        .stdout(std::process::Stdio::null())
+        .stderr(std::process::Stdio::null())
+        .spawn()
+        .unwrap();
+    tokio::time::timeout(Duration::from_secs(10), async {
+        while child.try_wait().unwrap().is_none() {
+            tokio::time::sleep(Duration::from_millis(20)).await;
+        }
+    })
+    .await
+    .expect("the stand-in worker exits");
+    ActivationChild {
+        child: child.into(),
+        published: true,
+        publication_uncertain: false,
+    }
+}
+
+async fn reply(
+    socket: &mut tokio_tungstenite::WebSocketStream<tokio::net::TcpStream>,
+    request_id: String,
+    status: u16,
+    payload: serde_json::Value,
+) {
+    use futures_util::SinkExt;
+    let response = Event::Reply {
+        request_id,
+        status,
+        payload,
+    };
+    socket
+        .send(tokio_tungstenite::tungstenite::Message::Text(
+            serde_json::to_string(&response).unwrap().into(),
+        ))
+        .await
+        .unwrap();
+}
+
+/// The MCP spends a crashed worker's reconnect grace inside `supervise_route`, so the exit must be
+/// reported from there; a real SIGKILL run waited the full 30 s when only the idle loop checked.
+#[tokio::test]
+async fn supervise_route_reports_a_dead_watched_worker() {
+    use crate::daemon::common::socket::Request;
+    use futures_util::StreamExt;
+
+    let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
+    let origin = format!("http://{}", listener.local_addr().unwrap());
+    let (shutdown, mut stop) = tokio::sync::watch::channel(Shutdown::Running);
+    let server = tokio::spawn(async move {
+        let (stream, _) = listener.accept().await.unwrap();
+        let mut socket = tokio_tungstenite::accept_async(stream).await.unwrap();
+        let message = socket.next().await.unwrap().unwrap();
+        let request: Request = serde_json::from_str(message.to_text().unwrap()).unwrap();
+        let ControlCommand::WorkerExited(report) = request.command else {
+            panic!("worker exit report expected")
+        };
+        assert_eq!(report.sequence, 1);
+        assert_eq!(report.payload.activation_id, "activation-1");
+        assert!(report.validate_payload_hash());
+        reply(
+            &mut socket,
+            request.request_id,
+            204,
+            serde_json::Value::Null,
+        )
+        .await;
+        shutdown.send(Shutdown::Normal).unwrap();
+        let _ = socket.next().await;
+    });
+    let mut lease = test_lease(origin);
+    lease
+        .client
+        .connect(&lease.daemon_origin, ComponentRole::Mcp)
+        .await
+        .unwrap();
+    lease.worker_exit_report = true;
+    lease.watched_worker = Some(("activation-1".into(), exited_worker_child().await));
+    tokio::time::timeout(
+        Duration::from_secs(5),
+        supervise_route(
+            &mut lease,
+            BrokerDirective::WaitForWorker {
+                retry_after_ms: 1_000,
+            },
+            Some(&mut stop),
+        ),
+    )
+    .await
+    .expect("the report is sent while waiting for the broker")
+    .unwrap();
+    assert!(lease.watched_worker.is_none(), "an exit is reported once");
+    server.abort();
+}
+
+/// The worker's control socket can close a moment after the process exits, so a refusal for a
+/// still-connected worker is retried with the next sequence number.
+#[tokio::test]
+async fn worker_exit_report_retries_while_the_worker_control_is_still_connected() {
+    use crate::daemon::common::socket::Request;
+    use futures_util::StreamExt;
+
+    let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
+    let origin = format!("http://{}", listener.local_addr().unwrap());
+    let server = tokio::spawn(async move {
+        let (stream, _) = listener.accept().await.unwrap();
+        let mut socket = tokio_tungstenite::accept_async(stream).await.unwrap();
+        let mut sequences = Vec::new();
+        for attempt in 0..2 {
+            let message = socket.next().await.unwrap().unwrap();
+            let request: Request = serde_json::from_str(message.to_text().unwrap()).unwrap();
+            let ControlCommand::WorkerExited(report) = request.command else {
+                panic!("worker exit report expected")
+            };
+            sequences.push(report.sequence);
+            if attempt == 0 {
+                let refusal =
+                    serde_json::json!({"error": {"message": "worker control is still connected"}});
+                reply(&mut socket, request.request_id, 409, refusal).await;
+            } else {
+                reply(
+                    &mut socket,
+                    request.request_id,
+                    204,
+                    serde_json::Value::Null,
+                )
+                .await;
+            }
+        }
+        sequences
+    });
+    let mut lease = test_lease(origin);
+    lease
+        .client
+        .connect(&lease.daemon_origin, ComponentRole::Mcp)
+        .await
+        .unwrap();
+    tokio::time::timeout(
+        Duration::from_secs(5),
+        report_worker_exited(&mut lease, "activation-1"),
+    )
+    .await
+    .expect("the retry finishes");
+    assert_eq!(server.await.unwrap(), vec![1, 2]);
+    assert_eq!(lease.sequence, 2);
+}
+
+/// When the broker answers a launch cleanup with `Published`, the launcher keeps the child so it
+/// can report the worker's exit later instead of dropping the handle.
+#[tokio::test]
+async fn published_launch_cleanup_hands_the_child_back() {
+    use crate::daemon::common::socket::Request;
+    use futures_util::StreamExt;
+
+    let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
+    let origin = format!("http://{}", listener.local_addr().unwrap());
+    let server = tokio::spawn(async move {
+        let (stream, _) = listener.accept().await.unwrap();
+        let mut socket = tokio_tungstenite::accept_async(stream).await.unwrap();
+        let message = socket.next().await.unwrap().unwrap();
+        let request: Request = serde_json::from_str(message.to_text().unwrap()).unwrap();
+        let ControlCommand::CancelActivation(cancel) = request.command else {
+            panic!("activation cancellation expected")
+        };
+        assert_eq!(cancel.payload.activation_id, "activation-1");
+        reply(
+            &mut socket,
+            request.request_id,
+            200,
+            serde_json::json!("published"),
+        )
+        .await;
+        let _ = socket.next().await;
+    });
+    let mut lease = test_lease(origin);
+    lease.publication_cleanup = true;
+    lease
+        .client
+        .connect(&lease.daemon_origin, ComponentRole::Mcp)
+        .await
+        .unwrap();
+    let mut child = exited_worker_child().await;
+    child.published = false;
+    let mut launched: PendingLaunch =
+        Some(("activation-1".into(), child, tokio::time::Instant::now()));
+    let kept = tokio::time::timeout(
+        Duration::from_secs(5),
+        cleanup_pending_launch(&mut lease, &mut launched),
+    )
+    .await
+    .unwrap()
+    .unwrap();
+    let (activation_id, child) = kept.expect("a published child is handed back");
+    assert_eq!(activation_id, "activation-1");
+    assert!(child.published);
+    server.abort();
+}
+
+/// A daemon without `worker_exit_report_v1` would close the control connection on the command,
+/// so a watched exit is dropped instead of reported after re-registering with such a daemon.
+#[tokio::test]
+async fn worker_exit_is_not_reported_without_the_daemon_capability() {
+    let mut lease = test_lease("http://127.0.0.1:9".into());
+    assert!(!lease.worker_exit_report);
+    lease.watched_worker = Some(("activation-1".into(), exited_worker_child().await));
+    assert_eq!(take_exited_worker(&mut lease), None);
+    assert!(lease.watched_worker.is_none());
+}
+
+/// After an announced clean exit the broker has usually replaced the worker already; the MCP stops
+/// at the first "not known" answer instead of retrying.
+#[tokio::test]
+async fn worker_exit_report_stops_when_the_worker_is_already_gone() {
+    use crate::daemon::common::socket::Request;
+    use futures_util::StreamExt;
+
+    let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
+    let origin = format!("http://{}", listener.local_addr().unwrap());
+    let server = tokio::spawn(async move {
+        let (stream, _) = listener.accept().await.unwrap();
+        let mut socket = tokio_tungstenite::accept_async(stream).await.unwrap();
+        let message = socket.next().await.unwrap().unwrap();
+        let request: Request = serde_json::from_str(message.to_text().unwrap()).unwrap();
+        assert!(matches!(request.command, ControlCommand::WorkerExited(_)));
+        let gone = serde_json::json!({"error": {"message": "worker control is not known"}});
+        reply(&mut socket, request.request_id, 404, gone).await;
+        tokio::time::timeout(Duration::from_millis(500), socket.next())
+            .await
+            .is_err()
+    });
+    let mut lease = test_lease(origin);
+    lease
+        .client
+        .connect(&lease.daemon_origin, ComponentRole::Mcp)
+        .await
+        .unwrap();
+    tokio::time::timeout(
+        Duration::from_secs(5),
+        report_worker_exited(&mut lease, "activation-1"),
+    )
+    .await
+    .expect("the report gives up at once");
+    assert!(server.await.unwrap(), "no retry after the worker is gone");
+    assert_eq!(lease.sequence, 1);
+}
+
+/// The report blocks directive handling, so a broker that never answers costs at most the report
+/// window, not the control client's longer request timeout.
+#[tokio::test]
+async fn worker_exit_report_gives_up_within_its_window() {
+    use futures_util::StreamExt;
+
+    let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
+    let origin = format!("http://{}", listener.local_addr().unwrap());
+    let (received, mut frames) = tokio::sync::mpsc::unbounded_channel();
+    let server = tokio::spawn(async move {
+        let (stream, _) = listener.accept().await.unwrap();
+        let mut socket = tokio_tungstenite::accept_async(stream).await.unwrap();
+        // Read requests and never answer them.
+        while socket.next().await.is_some() {
+            let _ = received.send(());
+        }
+    });
+    let mut lease = test_lease(origin);
+    lease
+        .client
+        .connect(&lease.daemon_origin, ComponentRole::Mcp)
+        .await
+        .unwrap();
+    let started = tokio::time::Instant::now();
+    report_worker_exited(&mut lease, "activation-1").await;
+    let waited = started.elapsed();
+    assert!(
+        waited < WORKER_EXIT_REPORT_WINDOW + Duration::from_millis(500),
+        "the report waited {waited:?}"
+    );
+    assert!(
+        waited >= WORKER_EXIT_REPORT_WINDOW - Duration::from_millis(100),
+        "the report gave up early after {waited:?}"
+    );
+    assert!(frames.try_recv().is_ok(), "the report reached the broker");
+    server.abort();
+}
+
+/// A report that times out has already spent its sequence number, so it must reach the broker
+/// before the MCP's next request; the broker only accepts sequence numbers in order.
+#[tokio::test]
+async fn a_timed_out_worker_exit_report_keeps_its_place_before_the_next_request() {
+    use crate::daemon::common::socket::Request;
+    use futures_util::StreamExt;
+
+    let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
+    let origin = format!("http://{}", listener.local_addr().unwrap());
+    let (received, mut sequences) = tokio::sync::mpsc::unbounded_channel();
+    let server = tokio::spawn(async move {
+        let (stream, _) = listener.accept().await.unwrap();
+        let mut socket = tokio_tungstenite::accept_async(stream).await.unwrap();
+        // Never answer, so the report runs out its window, then record what arrives in order.
+        while let Some(Ok(message)) = socket.next().await {
+            let Ok(text) = message.to_text() else {
+                continue;
+            };
+            let request: Request = serde_json::from_str(text).unwrap();
+            let sequence = match request.command {
+                ControlCommand::WorkerExited(report) => ("worker_exited", report.sequence),
+                ControlCommand::Release(release) => ("release", release.sequence),
+                _ => continue,
+            };
+            let _ = received.send(sequence);
+        }
+    });
+    let mut lease = test_lease(origin);
+    lease
+        .client
+        .connect(&lease.daemon_origin, ComponentRole::Mcp)
+        .await
+        .unwrap();
+    report_worker_exited(&mut lease, "activation-1").await;
+    release(&mut lease).await;
+    let mut arrived = Vec::new();
+    while arrived.len() < 2 {
+        let next = tokio::time::timeout(Duration::from_secs(10), sequences.recv())
+            .await
+            .expect("both requests reach the broker")
+            .unwrap();
+        arrived.push(next);
+    }
+    assert_eq!(arrived, vec![("worker_exited", 1), ("release", 2)]);
+    server.abort();
 }
