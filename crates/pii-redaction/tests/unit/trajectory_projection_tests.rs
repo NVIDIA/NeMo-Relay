@@ -137,6 +137,75 @@ fn projections_are_codec_valid_and_never_copy_normalized_extras() {
 }
 
 #[test]
+fn openai_projections_preserve_refusal_fields_empty_values_and_part_order() {
+    for (message, chat_text, chat_refusal, response_parts) in [
+        (None, None, None, json!([])),
+        (Some(json!([])), None, None, json!([])),
+        (
+            Some(json!("")),
+            Some(""),
+            None,
+            json!([{"type": "output_text", "text": ""}]),
+        ),
+        (
+            Some(json!([{"type": "refusal", "refusal": ""}])),
+            None,
+            Some(""),
+            json!([{"type": "refusal", "refusal": ""}]),
+        ),
+        (
+            Some(json!([
+                {"type": "text", "text": " first "},
+                {"type": "refusal", "refusal": "no"},
+                {"type": "text", "text": ""},
+                {"type": "text", "text": "last"},
+                {"type": "refusal", "refusal": " again "}
+            ])),
+            Some(" first \n\nlast"),
+            Some("no\n again "),
+            json!([
+                {"type": "output_text", "text": " first "},
+                {"type": "refusal", "refusal": "no"},
+                {"type": "output_text", "text": ""},
+                {"type": "output_text", "text": "last"},
+                {"type": "refusal", "refusal": " again "}
+            ]),
+        ),
+    ] {
+        let response = AnnotatedLlmResponse {
+            message: message.map(|value| serde_json::from_value(value).unwrap()),
+            ..Default::default()
+        };
+        for surface in [
+            ProviderSurface::OpenAIChat,
+            ProviderSurface::OpenAIResponses,
+        ] {
+            let rendered = render_response(surface, &response).unwrap();
+            if surface == ProviderSurface::OpenAIChat {
+                let message = &rendered["choices"][0]["message"];
+                assert_eq!(message.get("content"), chat_text.map(Json::from).as_ref());
+                assert_eq!(
+                    message.get("refusal"),
+                    chat_refusal.map(Json::from).as_ref()
+                );
+            } else if response_parts.as_array().unwrap().is_empty() {
+                assert_eq!(rendered["output"], json!([]));
+            } else {
+                assert_eq!(rendered["output"][0]["content"], response_parts);
+            }
+            let decoded = response_codec(surface).decode_response(&rendered).unwrap();
+            assert_eq!(
+                decoded
+                    .output()
+                    .parts()
+                    .any(|part| matches!(part.kind, ContentKind::Refusal(_))),
+                chat_refusal.is_some()
+            );
+        }
+    }
+}
+
+#[test]
 fn request_projections_accept_sanitized_builtin_decoder_annotations() {
     let cases = [
         (

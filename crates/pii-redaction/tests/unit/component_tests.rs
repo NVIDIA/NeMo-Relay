@@ -7999,3 +7999,98 @@ async fn normalized_refusal_paths_redact_matching_openai_wire_fields() {
         }
     }
 }
+
+#[tokio::test]
+async fn trajectory_refusal_projections_preserve_types_without_context_leaks() {
+    let backend = trajectory_backend(None, "redact_all_leaves");
+    let project_response =
+        crate::builtin::trajectory_llm_response_projection_callback(backend.clone());
+    let sanitize_event = crate::builtin::event_sanitize_callback(backend);
+    for mixed in [false, true] {
+        let cases: [(Arc<dyn LlmResponseCodec>, Json); 2] = [
+            (
+                Arc::new(OpenAIChatCodec),
+                json!({
+                    "id": "SECRET-id", "model": "trusted-model", "future": "SECRET-extension",
+                    "choices": [{"message": {"role": "assistant",
+                        "content": if mixed { json!("SECRET-text") } else { Json::Null },
+                        "refusal": "SECRET-refusal", "future": "SECRET-message",
+                        "tool_calls": [{"id": "call-1", "type": "function", "function": {"name": "lookup", "arguments": "{\"secret\":\"SECRET-arguments\"}"}}]
+                    }, "finish_reason": "stop"}],
+                    "usage": {"prompt_tokens": 3, "completion_tokens": 2, "total_tokens": 5}
+                }),
+            ),
+            (
+                Arc::new(OpenAIResponsesCodec),
+                json!({
+                    "id": "SECRET-id", "model": "trusted-model", "status": "completed", "future": "SECRET-extension",
+                    "output": [
+                        {"type": "message", "content": if mixed {json!([
+                            {"type": "output_text", "text": "SECRET-text", "future": "SECRET-part"},
+                            {"type": "refusal", "refusal": "SECRET-refusal"}
+                        ])} else {json!([{ "type": "refusal", "refusal": "SECRET-refusal" }])}},
+                        {"type": "function_call", "call_id": "call-1", "name": "lookup", "arguments": "{\"secret\":\"SECRET-arguments\"}"},
+                        {"type": "reasoning", "text": "SECRET-reasoning", "summary": []}
+                    ],
+                    "usage": {"input_tokens": 3, "output_tokens": 2, "total_tokens": 5}
+                }),
+            ),
+        ];
+        for (codec, raw) in cases {
+            let projected_response = project_response(
+                raw.clone(),
+                LlmSanitizeResponseContext::for_response_codec(Some(codec.clone())),
+            )
+            .await
+            .unwrap()
+            .expect("trajectory response projection");
+            let event = Event::Scope(ScopeEvent::new(
+                BaseEvent::builder().name("trusted-provider").build(),
+                ScopeCategory::End,
+                Vec::new(),
+                EventCategory::llm(),
+                None,
+            ));
+            let fields = sanitize_event(
+                Arc::new(event),
+                EventSanitizeFields {
+                    data: Some(raw.clone()),
+                    category_profile: Some(
+                        CategoryProfile::builder()
+                            .annotated_response(Arc::new(codec.decode_response(&raw).unwrap()))
+                            .build(),
+                    ),
+                    metadata: None,
+                },
+            )
+            .await
+            .unwrap();
+            let profile = fields.category_profile.as_ref().unwrap();
+            let annotated = profile.annotated_response.as_ref().unwrap();
+            assert!(annotated.output().parts().any(|part| matches!(
+                part.kind,
+                nemo_relay_types::codec::content::ContentKind::Refusal("[REDACTED]")
+            )));
+            assert!(!serde_json::to_string(&fields).unwrap().contains("SECRET"));
+            for projected in [projected_response, fields.data.unwrap()] {
+                assert!(!projected.to_string().contains("SECRET"), "{projected}");
+                let decoded = codec.decode_response(&projected).unwrap();
+                let expected = if mixed {
+                    "[REDACTED]\n[REDACTED]"
+                } else {
+                    "[REDACTED]"
+                };
+                assert_eq!(decoded.response_text().as_deref(), Some(expected));
+                assert!(decoded.output().parts().any(|part| matches!(
+                    part.kind,
+                    nemo_relay_types::codec::content::ContentKind::Refusal("[REDACTED]")
+                )));
+                let call = &decoded.tool_calls.as_ref().unwrap()[0];
+                assert_eq!(call.id, "call-1");
+                assert_eq!(call.name, "lookup");
+                assert_eq!(call.arguments, json!({}));
+                assert_eq!(decoded.usage.unwrap().total_tokens, Some(5));
+            }
+        }
+    }
+}
