@@ -10592,7 +10592,7 @@ licenses found in LICENSE.APACHE2 or LICENSE.MIT. Contributions to are
 made under the terms of *both* these licenses.
 ```
 
-## soupsieve (2.9.2)
+## soupsieve (4.1)
 
 ### Licenses
 License: `MIT`
