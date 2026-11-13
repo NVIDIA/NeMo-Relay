@@ -303,3 +303,32 @@ def test_empty_selected_items_remain_independent_snapshots() -> None:
     request.messages = [{"role": "user", "content": "later"}]
     request.instructions = "later policy"
     assert list(selected.parts()) == list(instructions.parts()) == []
+
+
+def test_large_multipart_iteration_has_independent_cursors_and_retained_entries() -> None:
+    count = 10_000
+    view = MessageView.from_content(
+        [
+            part
+            for index in range(count)
+            for part in (
+                {"type": "image", "image": {"index": index}},
+                {"type": "text" if index % 2 == 0 else "refusal", "text" if index % 2 == 0 else "refusal": str(index)},
+            )
+        ]
+    )
+    texts = view.text_parts()
+    parts = view.parts()
+    assert next(texts) == "0"
+    retained = next(parts)
+    assert retained.kind == "image"
+    assert list(view.text_parts()) == [str(index) for index in range(count)]
+    del view
+    assert list(texts) == [str(index) for index in range(1, count)]
+    assert sum(1 for _ in parts) == 2 * count - 1
+    assert retained.value == {"index": 0}
+    for _ in range(3):
+        with pytest.raises(StopIteration):
+            next(texts)
+        with pytest.raises(StopIteration):
+            next(parts)
