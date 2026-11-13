@@ -429,7 +429,7 @@ fn adaptive_acg_defaults_and_profile_key_behavior_stay_stable() {
     );
     assert_eq!(
         learning_key,
-        "agent-1::model=claude-sonnet-4::seed=stable-scaffold::system=sha256:3087d8fd4b98c564984d0f184c06bf6346f0788022d7cb521231e65f673936ac::tools=no-tools"
+        "agent-1::acg-ir=2::model=claude-sonnet-4::seed=stable-scaffold::system=sha256:3087d8fd4b98c564984d0f184c06bf6346f0788022d7cb521231e65f673936ac::tools=no-tools"
     );
 
     let grown_chat_request = AnnotatedLlmRequest {
