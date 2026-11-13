@@ -1465,18 +1465,20 @@ impl ObservationReceiver {
         };
         let terminal = signal.wait().await;
         let truncated = signal.truncated.load(Ordering::Acquire);
-        let mut failure = match terminal {
-            OBSERVATION_COMPLETE => None,
+        let failure = match terminal {
+            // A transport failure is more specific than capture or HTTP errors.
             OBSERVATION_BODY_ERROR => Some("provider response body failed".to_owned()),
+            OBSERVATION_COMPLETE if truncated => {
+                Some("provider response observation was truncated".to_owned())
+            }
+            OBSERVATION_COMPLETE | OBSERVATION_CANCELLED if !status.is_success() => {
+                Some(format!("provider returned HTTP {}", status.as_u16()))
+            }
             // Dropping delivery is a downstream decision, not a provider failure.
-            OBSERVATION_CANCELLED => None,
+            // An already received HTTP error is still reported by the branch above.
+            OBSERVATION_COMPLETE | OBSERVATION_CANCELLED => None,
             _ => Some("provider response observation ended unexpectedly".to_owned()),
         };
-        if truncated {
-            failure = Some("provider response observation was truncated".to_owned());
-        } else if !status.is_success() {
-            failure = Some(format!("provider returned HTTP {}", status.as_u16()));
-        }
         ObservedResponse {
             value: if truncated { None } else { value },
             truncated,

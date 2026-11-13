@@ -75,6 +75,11 @@ codec's completion validation. An OpenAI Responses stream that ends without a
 validation. The worker marks its observation as truncated and omits its aggregate;
 the bytes forwarded to the application are unchanged.
 
+Observation truncation does not override delivery's terminal outcome. Body read
+failures retain their body-error description. Cancellation retains an unset
+OpenTelemetry status for successful HTTP responses; a received HTTP error is
+still reported. The truncation flag remains available separately.
+
 OpenAI Responses aggregation retains partial text, refusals, and function-call
 arguments for output items supplied by the stream. Completed fields and parts
 replace provisional deltas; completed items replace their provisional content;
