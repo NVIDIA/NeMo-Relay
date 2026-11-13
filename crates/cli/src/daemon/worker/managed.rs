@@ -1554,21 +1554,22 @@ impl ObservationReceiver {
                 None => collector(event),
             });
             if result.is_err() {
-                // A cancelled or failed transport already has its own outcome;
-                // it did not promise a complete provider event sequence.
-                if !matches!(
-                    signal.terminal.load(Ordering::Acquire),
-                    OBSERVATION_CANCELLED | OBSERVATION_BODY_ERROR
-                ) {
-                    signal.truncate();
-                }
                 valid = false;
                 break;
             }
         }
         if stream.close().await.is_err() {
-            signal.truncate();
             valid = false;
+        }
+        // Closing the observation channel and recording delivery's outcome can race.
+        // Wait for that outcome before interpreting a missing completion event.
+        if !valid
+            && !matches!(
+                signal.wait().await,
+                OBSERVATION_CANCELLED | OBSERVATION_BODY_ERROR
+            )
+        {
+            signal.truncate();
         }
         (valid && !signal.truncated.load(Ordering::Acquire)).then(finalizer)
     }

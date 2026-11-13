@@ -375,14 +375,19 @@ async fn stream_observation_rejects_malformed_trailing_sse_frames() {
     assert!(observed.failure.is_some());
 }
 
-#[tokio::test]
+#[tokio::test(start_paused = true)]
 async fn stream_observation_preserves_cancelled_and_failed_transport_outcomes() {
     for terminal in [OBSERVATION_CANCELLED, OBSERVATION_BODY_ERROR] {
         let (sender, receiver) = mpsc::channel(1);
         let signal = Arc::new(ObservationSignal::new());
         sender.send(Bytes::from_static(b"data: {\"type\":\"response.created\",\"response\":{\"id\":\"test\",\"output\":[]}}\n\n")).await.unwrap();
         drop(sender);
-        signal.finish(terminal);
+        // EOF can become visible before the delivery task records why it ended.
+        let delivery_signal = Arc::clone(&signal);
+        let delivery = tokio::spawn(async move {
+            tokio::time::sleep(Duration::from_millis(1)).await;
+            delivery_signal.finish(terminal);
+        });
         let observation = ObservationReceiver {
             receiver,
             signal,
@@ -392,6 +397,7 @@ async fn stream_observation_preserves_cancelled_and_failed_transport_outcomes() 
         let observed = observation
             .finish(ProviderSurface::OpenAIResponses, true)
             .await;
+        delivery.await.unwrap();
         assert_eq!(observed.terminal, terminal);
         assert!(!observed.truncated);
         assert!(observed.value.is_none());
