@@ -321,6 +321,24 @@ fn acg_profile_image_parts_contribute_stable_fingerprint_signal() {
 }
 
 #[test]
+fn profile_content_rendering_retains_empty_parts_image_identity_and_tool_payloads() {
+    let content: MessageContent = serde_json::from_value(json!([
+        {"type": "text", "text": "first"},
+        {"type": "refusal", "refusal": ""},
+        {"type": "image_url", "image_url": {"url": "image-a", "detail": "high"}},
+        {"type": "tool_use", "id": "c", "name": "lookup", "input": {"q": "x"}}
+    ]))
+    .unwrap();
+    assert_eq!(
+        extract_text(&content),
+        format!(
+            "first\n\n[image:high:{}]\n{{\"type\":\"tool_use\",\"id\":\"c\",\"name\":\"lookup\",\"input\":{{\"q\":\"x\"}}}}",
+            sha256_hex("image-a")
+        )
+    );
+}
+
+#[test]
 fn acg_profile_fingerprints_cover_alternate_role_sequences() {
     let late_user = request(
         vec![
