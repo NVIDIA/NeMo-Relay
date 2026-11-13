@@ -41,6 +41,31 @@ fn sample_tool_call(name: &str) -> ToolCall {
 }
 
 #[test]
+fn prompt_ir_rendering_preserves_existing_mixed_content_policy() {
+    let content: MessageContent = serde_json::from_value(serde_json::json!([
+        {"type": "text", "text": "first"},
+        {"type": "refusal", "refusal": ""},
+        {"type": "image_url", "image_url": {"url": "image-a"}},
+        {"type": "tool_use", "id": "c", "name": "lookup", "input": {"q": "x"}}
+    ]))
+    .unwrap();
+    let ir = build_prompt_ir(&AnnotatedLlmRequest {
+        messages: vec![Message::User {
+            content,
+            name: None,
+        }],
+        ..Default::default()
+    })
+    .unwrap();
+    assert_eq!(ir.blocks.len(), 1);
+    assert_eq!(
+        ir.blocks[0].content,
+        "first\n{\"type\":\"tool_use\",\"id\":\"c\",\"name\":\"lookup\",\"input\":{\"q\":\"x\"}}"
+    );
+    assert_eq!(ir.blocks[0].span_id.0, "user-0");
+}
+
+#[test]
 fn build_prompt_ir_inserts_tools_before_first_non_system_message_and_preserves_all_message_kinds() {
     let request = AnnotatedLlmRequest {
         instructions: None,

@@ -6,8 +6,11 @@
 use chrono::Utc;
 use uuid::Uuid;
 
+use nemo_relay_types::codec::content::ContentKind;
+use std::borrow::Cow;
+
 use nemo_relay_types::codec::request::{
-    AnnotatedLlmRequest, ContentPart, Message, MessageContent, ToolCall, ToolDefinition,
+    AnnotatedLlmRequest, Message, MessageContent, ToolCall, ToolDefinition,
 };
 
 use crate::acg::canonicalize::{canonicalize_value, normalize_whitespace, sha256_hex};
@@ -201,26 +204,39 @@ fn append_assistant_blocks(
 }
 
 fn extract_text(content: &MessageContent) -> String {
-    match content {
-        MessageContent::Text(text) => text.clone(),
-        MessageContent::Parts(parts) => parts
-            .iter()
-            .map(|part| match part {
-                ContentPart::Text { text, .. } => text.clone(),
-                ContentPart::Refusal { refusal, .. } => refusal.clone(),
-                ContentPart::ImageUrl { .. } | ContentPart::Image { .. } => String::new(),
-                ContentPart::Audio { .. }
-                | ContentPart::File { .. }
-                | ContentPart::ToolUse { .. }
-                | ContentPart::ToolResult { .. }
-                | ContentPart::ProviderNative { .. } => {
-                    serde_json::to_string(part).unwrap_or_default()
-                }
-            })
-            .filter(|text| !text.is_empty())
-            .collect::<Vec<_>>()
-            .join("\n"),
+    let MessageContent::Parts(parts) = content else {
+        return content
+            .content_view()
+            .text()
+            .map(Cow::into_owned)
+            .unwrap_or_default();
+    };
+    let mut rendered = String::new();
+    let mut first = true;
+    for entry in content.content_view().parts() {
+        let part = match entry.kind {
+            ContentKind::Text(text) | ContentKind::Refusal(text) => Cow::Borrowed(text),
+            ContentKind::ImageUrl(_) | ContentKind::Image(_) => Cow::Borrowed(""),
+            _ => {
+                // Preserve this consumer's existing structured rendering, including
+                // retained fields. The view's location refers to the source part.
+                let index = entry
+                    .location
+                    .index
+                    .expect("multipart entries have an index");
+                Cow::Owned(serde_json::to_string(&parts[index]).unwrap_or_default())
+            }
+        };
+        if part.is_empty() {
+            continue;
+        }
+        if !first {
+            rendered.push('\n');
+        }
+        rendered.push_str(&part);
+        first = false;
     }
+    rendered
 }
 
 fn build_serialized_message_block(
