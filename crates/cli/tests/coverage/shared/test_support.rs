@@ -36,9 +36,16 @@ pub(crate) fn enable_operational_logs() {
     });
 }
 
+/// Raise this test process's soft open-file limit toward `minimum`.
+///
+/// Loopback stress tests that hold many HTTP/1.1 connections at once run the
+/// client, relay, and provider in one process, so each concurrent stream holds
+/// several descriptors. macOS defaults the soft limit to 256, which is too low
+/// for those tests. This is best effort: the soft limit is raised up to the hard
+/// limit, and a warning is printed if that is still below `minimum`.
 #[cfg(unix)]
 pub(crate) fn ensure_open_file_limit(minimum: u64) {
-    let minimum = libc::rlim_t::try_from(minimum).expect("open-file minimum fits rlim_t");
+    let minimum = libc::rlim_t::try_from(minimum).unwrap_or(libc::rlim_t::MAX);
     let mut limit = libc::rlimit {
         rlim_cur: 0,
         rlim_max: 0,
@@ -50,27 +57,23 @@ pub(crate) fn ensure_open_file_limit(minimum: u64) {
     if limit.rlim_cur >= minimum {
         return;
     }
-    assert!(
-        limit.rlim_max >= minimum,
-        "this test needs {minimum} open files, but the hard limit is {}; raise it before running tests",
-        limit.rlim_max
-    );
-    limit.rlim_cur = minimum;
+    let target = minimum.min(limit.rlim_max);
+    if target < minimum {
+        eprintln!(
+            "open-file hard limit {} is below the {minimum} this test needs; it may fail with `Too many open files`",
+            limit.rlim_max
+        );
+    }
+    limit.rlim_cur = target;
     // SAFETY: `limit` is an initialized `rlimit` whose soft limit does not exceed its hard limit.
-    let result = unsafe { libc::setrlimit(libc::RLIMIT_NOFILE, &raw const limit) };
-    assert_eq!(
-        result,
-        0,
-        "raise the open-file soft limit to {minimum}: {}",
-        std::io::Error::last_os_error()
-    );
+    if unsafe { libc::setrlimit(libc::RLIMIT_NOFILE, &raw const limit) } != 0 {
+        eprintln!(
+            "could not raise the open-file soft limit to {target}: {}",
+            std::io::Error::last_os_error()
+        );
+    }
 }
-/// Ensure this test process may open at least `minimum` files and sockets.
-///
-/// Loopback stress tests that hold many HTTP/1.1 connections at once run the
-/// client, relay, and provider in one process, so each concurrent stream holds
-/// several descriptors. macOS defaults the soft limit to 256, which is too low
-/// for those tests. Only the soft limit is raised, and never above the hard limit.
+
 /// No open-file soft limit to raise on this platform.
 #[cfg(not(unix))]
 pub(crate) fn ensure_open_file_limit(_minimum: u64) {}
