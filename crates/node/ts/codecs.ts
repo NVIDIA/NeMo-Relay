@@ -2,7 +2,7 @@
 // SPDX-License-Identifier: Apache-2.0
 
 import { _ContentSnapshot } from '../binding.js';
-import type { JsonCompatible, JsonValue } from '../binding.js';
+import type { _ContentEntry, JsonCompatible, JsonValue } from '../binding.js';
 
 /** Read-time location in a normalized snapshot; not an edit handle or provider-wire offset. */
 export interface ContentLocation {
@@ -92,17 +92,17 @@ interface EntryMetadata {
   };
 }
 
-function payload(snapshot: _ContentSnapshot, index: number, kind: PayloadKind): PayloadView {
+function payload(part: _ContentEntry, kind: PayloadKind): PayloadView {
   // The native metadata and value come from the same immutable normalized entry.
   return Object.freeze({
     kind,
     get value() {
-      return snapshot.payloadValue(index);
+      return part.payloadValue();
     },
   }) as PayloadView;
 }
 
-function entry(snapshot: _ContentSnapshot, index: number, metadata: EntryMetadata): ContentEntry {
+function entry(part: _ContentEntry, metadata: EntryMetadata): ContentEntry {
   const location = Object.freeze(metadata.location);
   switch (metadata.kind) {
     case 'text':
@@ -114,7 +114,7 @@ function entry(snapshot: _ContentSnapshot, index: number, metadata: EntryMetadat
         id: call.id,
         callId: call.callId,
         name: call.name,
-        arguments: payload(snapshot, index, call.payloadKind),
+        arguments: payload(part, call.payloadKind),
       });
       return Object.freeze({ kind: 'tool_call', location, toolCall });
     }
@@ -125,7 +125,7 @@ function entry(snapshot: _ContentSnapshot, index: number, metadata: EntryMetadat
         callId: result.callId,
         name: result.name,
         isError: result.isError,
-        payload: payload(snapshot, index, result.payloadKind),
+        payload: payload(part, result.payloadKind),
       });
       return Object.freeze({ kind: 'tool_result', location, toolResult });
     }
@@ -136,7 +136,7 @@ function entry(snapshot: _ContentSnapshot, index: number, metadata: EntryMetadat
         provider: metadata.provider,
         nativeKind: metadata.nativeKind,
         get value() {
-          return snapshot.value(index);
+          return part.value();
         },
       });
     default:
@@ -144,7 +144,7 @@ function entry(snapshot: _ContentSnapshot, index: number, metadata: EntryMetadat
         kind: metadata.kind,
         location,
         get value() {
-          return snapshot.value(index);
+          return part.value();
         },
       });
   }
@@ -174,17 +174,19 @@ export class MessageView {
 
   /** Iterate typed parts in normalized order, followed by separate tool-call fields. */
   *parts(): IterableIterator<ContentEntry> {
-    for (let index = 0; ; index++) {
-      const metadata = this.#snapshot.entryMetadata(index) as unknown as EntryMetadata | null;
-      if (metadata === null) return;
-      yield entry(this.#snapshot, index, metadata);
+    const cursor = this.#snapshot.cursor();
+    for (;;) {
+      const part = cursor.nextEntry();
+      if (part == null) return;
+      yield entry(part, part.metadata() as unknown as EntryMetadata);
     }
   }
 
   /** Iterate text/refusal strings, including supported native fallbacks and excluding tool payloads. */
   *textParts(): IterableIterator<string> {
-    for (let index = 0; ; index++) {
-      const text = this.#snapshot.textPart(index);
+    const cursor = this.#snapshot.cursor();
+    for (;;) {
+      const text = cursor.nextText();
       if (text === null) return;
       yield text;
     }
@@ -200,13 +202,21 @@ export class MessageView {
     const annotation = object(request);
     const messages = history(request);
     const instructions = field(annotation, 'instructions');
-    const selected = _ContentSnapshot.selectRequest(selection, {
-      messages: Array.from({ length: messages.length }, (_, index) => selectionMetadata(historyItem(messages, index))),
-      instructions: instructions == null ? null : [],
-    }, index) as { messageIndex: number } | { instructions: true } | null;
+    const selected = _ContentSnapshot.selectRequest(
+      selection,
+      {
+        messages: Array.from({ length: messages.length }, (_, index) =>
+          selectionMetadata(historyItem(messages, index)),
+        ),
+        instructions: instructions == null ? null : [],
+      },
+      index,
+    ) as { messageIndex: number } | { instructions: true } | null;
     if (selected == null) return null;
     if ('instructions' in selected) return MessageView.fromContent(instructions as JsonValue);
-    return new MessageView(new _ContentSnapshot('message', historyItem(messages, selected.messageIndex) as JsonValue, selected.messageIndex));
+    return new MessageView(
+      new _ContentSnapshot('message', historyItem(messages, selected.messageIndex) as JsonValue, selected.messageIndex),
+    );
   }
 
   /** @internal Snapshot current output without retaining unrelated response metadata. */
@@ -248,17 +258,25 @@ function selectionMetadata(value: unknown): JsonValue {
   if (value === null || typeof value !== 'object' || Array.isArray(value)) return null;
   const item = object(value);
   const envelope = field(item, 'value');
-  const native = envelope !== null && typeof envelope === 'object' && !Array.isArray(envelope)
-    ? { role: field(object(envelope), 'role') ?? null, type: Object.hasOwn(envelope, 'type') ? (field(object(envelope), 'type') ?? null) : undefined } : null;
+  const native =
+    envelope !== null && typeof envelope === 'object' && !Array.isArray(envelope)
+      ? {
+          role: field(object(envelope), 'role') ?? null,
+          type: Object.hasOwn(envelope, 'type') ? (field(object(envelope), 'type') ?? null) : undefined,
+        }
+      : null;
   return {
     role: field(item, 'role') ?? null,
     content: [],
     provider: field(item, 'provider') ?? null,
     kind: field(item, 'kind') ?? null,
-    value: native === null ? null : {
-      role: native.role,
-      ...(native.type === undefined ? {} : { type: native.type }),
-    },
+    value:
+      native === null
+        ? null
+        : {
+            role: native.role,
+            ...(native.type === undefined ? {} : { type: native.type }),
+          },
   } as JsonValue;
 }
 

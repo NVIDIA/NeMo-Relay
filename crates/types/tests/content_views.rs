@@ -694,3 +694,38 @@ fn selected_source_and_root_preserve_empty_items_without_copying() {
     assert!(std::ptr::eq(selected, &response));
     assert_eq!(response.output().root(), ContentRoot::Response);
 }
+
+#[test]
+fn forward_cursor_preserves_borrows_checkpoints_and_exhaustion() {
+    use nemo_relay_types::codec::content::ContentCursor;
+
+    let value = content(json!([
+        {"type":"image", "image":{"data":"opaque"}},
+        {"type":"text", "text":""},
+        {"type":"tool_result", "tool_use_id":"c", "content":"hidden"},
+        {"type":"refusal", "refusal":"no"},
+        {"type":"provider_native", "provider":"custom", "kind":"extension", "value":{"text":"fallback"}}
+    ]));
+    let view = value.content_view();
+    let mut cursor = ContentCursor::default();
+    assert_eq!(cursor.next_text(view), Some(""));
+    let checkpoint = cursor;
+    let text = cursor.next_text(view).unwrap();
+    let MessageContent::Parts(parts) = &value else {
+        unreachable!()
+    };
+    let ContentPart::Refusal { refusal, .. } = &parts[3] else {
+        unreachable!()
+    };
+    assert!(std::ptr::eq(text.as_ptr(), refusal.as_ptr()));
+    let mut retained = checkpoint;
+    let entry = retained.next_part(view).unwrap();
+    assert_eq!(entry.location.index, Some(2));
+    assert!(matches!(entry.kind, ContentKind::ToolResult(_)));
+    assert_eq!(retained.next_text(view), Some("no"));
+    assert_eq!(cursor.next_text(view), Some("fallback"));
+    for _ in 0..3 {
+        assert!(cursor.next_text(view).is_none());
+        assert!(cursor.next_part(view).is_none());
+    }
+}

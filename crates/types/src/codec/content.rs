@@ -156,6 +156,78 @@ pub struct MessageView<'a> {
     source: Source<'a>,
 }
 
+/// Forward-only traversal state, independent of the borrowed source lifetime.
+///
+/// Keep one cursor per immutable selected view. Bindings can retain this state
+/// beside owned snapshot storage without a self-referential iterator or copying
+/// content. A copied cursor records a position for constant-time entry access.
+#[derive(Debug, Default, Clone, Copy)]
+pub struct ContentCursor {
+    index: usize,
+    calls: bool,
+    done: bool,
+}
+
+impl ContentCursor {
+    /// Read the next typed part. Exhaustion is permanent for this cursor.
+    pub fn next_part<'a>(&mut self, view: MessageView<'a>) -> Option<ContentEntry<'a>> {
+        if self.done {
+            return None;
+        }
+        if !self.calls {
+            if let Some(entry) = view.primary(self.index) {
+                self.index += 1;
+                return Some(entry);
+            }
+            self.calls = true;
+            self.index = 0;
+        }
+        let call = match view.source {
+            Source::Message(Message::Assistant {
+                tool_calls: Some(calls),
+                ..
+            }) => calls.get(self.index).map(|call| ToolCallView {
+                id: Some(&call.id),
+                call_id: None,
+                name: &call.function.name,
+                arguments: PayloadRef::String(&call.function.arguments),
+            }),
+            Source::Response(response) => response
+                .tool_calls
+                .as_ref()
+                .and_then(|calls| calls.get(self.index))
+                .map(|call| ToolCallView {
+                    id: Some(&call.id),
+                    call_id: None,
+                    name: &call.name,
+                    arguments: PayloadRef::Json(&call.arguments),
+                }),
+            _ => None,
+        };
+        let Some(call) = call else {
+            self.done = true;
+            return None;
+        };
+        let entry = view.entry(
+            ContentField::ToolCalls,
+            Some(self.index),
+            ContentKind::ToolCall(call),
+        );
+        self.index += 1;
+        Some(entry)
+    }
+
+    /// Read the next eligible borrowed string using the shared extraction policy.
+    pub fn next_text<'a>(&mut self, view: MessageView<'a>) -> Option<&'a str> {
+        while let Some(entry) = self.next_part(view) {
+            if let Some(text) = view.entry_text(entry) {
+                return Some(text);
+            }
+        }
+        None
+    }
+}
+
 impl<'a> MessageView<'a> {
     /// Normalized root of this selection, including when it contains no parts.
     pub fn root(self) -> ContentRoot {
@@ -190,65 +262,31 @@ impl<'a> MessageView<'a> {
     /// Tool-result messages yield one result containing the entire payload.
     /// Original provider ordering between separate fields is not recoverable.
     pub fn parts(self) -> impl Iterator<Item = ContentEntry<'a>> + 'a {
-        let mut index = 0;
-        let mut calls = false;
-        std::iter::from_fn(move || {
-            if !calls {
-                if let Some(entry) = self.primary(index) {
-                    index += 1;
-                    return Some(entry);
-                }
-                calls = true;
-                index = 0;
-            }
-            let kind = match self.source {
-                Source::Message(Message::Assistant {
-                    tool_calls: Some(calls),
-                    ..
-                }) => {
-                    let call = calls.get(index)?;
-                    ContentKind::ToolCall(ToolCallView {
-                        id: Some(&call.id),
-                        call_id: None,
-                        name: &call.function.name,
-                        arguments: PayloadRef::String(&call.function.arguments),
-                    })
-                }
-                Source::Response(response) => {
-                    let call = response.tool_calls.as_ref()?.get(index)?;
-                    ContentKind::ToolCall(ToolCallView {
-                        id: Some(&call.id),
-                        call_id: None,
-                        name: &call.name,
-                        arguments: PayloadRef::Json(&call.arguments),
-                    })
-                }
-                _ => return None,
-            };
-            let entry = self.entry(ContentField::ToolCalls, Some(index), kind);
-            index += 1;
-            Some(entry)
-        })
+        let mut cursor = ContentCursor::default();
+        std::iter::from_fn(move || cursor.next_part(self))
     }
 
     /// Iterate explicit text/refusal strings, including known native fallbacks.
     ///
     /// Tool payloads, media, reasoning, and arbitrary nested JSON are excluded.
     pub fn text_parts(self) -> impl Iterator<Item = &'a str> + 'a {
-        self.parts().filter_map(move |entry| {
-            // A recognized message with missing or malformed content stays
-            // inspectable as opaque data, but its extension fields are not text.
-            if entry.location.field == ContentField::Value
-                && matches!(self.source, Source::Message(message) if message.native_message_role().is_some())
-            {
-                return None;
-            }
-            match entry.kind {
-                ContentKind::Text(text) | ContentKind::Refusal(text) => Some(text),
-                ContentKind::ProviderNative { kind, value, .. } => native_text(kind, value),
-                _ => None,
-            }
-        })
+        let mut cursor = ContentCursor::default();
+        std::iter::from_fn(move || cursor.next_text(self))
+    }
+
+    fn entry_text(self, entry: ContentEntry<'a>) -> Option<&'a str> {
+        // A recognized message with missing or malformed content stays opaque;
+        // its extension fields are not text.
+        if entry.location.field == ContentField::Value
+            && matches!(self.source, Source::Message(message) if message.native_message_role().is_some())
+        {
+            return None;
+        }
+        match entry.kind {
+            ContentKind::Text(text) | ContentKind::Refusal(text) => Some(text),
+            ContentKind::ProviderNative { kind, value, .. } => native_text(kind, value),
+            _ => None,
+        }
     }
 
     /// Borrow a single text part, or join multiple parts with newlines.

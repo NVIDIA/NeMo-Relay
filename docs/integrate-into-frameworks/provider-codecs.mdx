@@ -157,6 +157,13 @@ to the annotation do not change an existing snapshot. A retained entry can keep
 the entire selected snapshot alive. These are read-only snapshots rather than
 zero-copy borrows of a mutable Python annotation.
 
+Python and Node.js iterators retain independent forward-only Rust cursors.
+Traversing all parts takes linear time; retained entries keep their source
+position for constant-time lookup without copying payloads. Rust callers
+that own their source storage can use `ContentCursor` with `next_part(view)` or
+`next_text(view)` for the same lifetime-independent traversal state. Use a
+separate cursor for each immutable selected view.
+
 Strings returned by `text()`, `text_parts()`, and entry properties are
 Python-owned. Media/native `entry.value` and tool `payload.value` create
 independent Python values when accessed; editing a returned dictionary or list

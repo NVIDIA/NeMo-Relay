@@ -3,11 +3,13 @@
 
 //! Rust-backed snapshots used by the TypeScript content facade.
 
+use std::sync::Arc;
+
 use napi::{Env, bindgen_prelude::Unknown};
 use napi_derive::napi;
 use nemo_relay_types::codec::content::{
-    ContentEntry, ContentField, ContentKind, ContentRoot, ContentSelection, ContentSelectionError,
-    ContentSource, MessageView, PayloadRef,
+    ContentCursor, ContentEntry, ContentField, ContentKind, ContentRoot, ContentSelection,
+    ContentSelectionError, ContentSource, MessageView, PayloadRef,
 };
 use nemo_relay_types::codec::request::{AnnotatedLlmRequest, Message, MessageContent};
 use nemo_relay_types::codec::response::AnnotatedLlmResponse;
@@ -22,34 +24,60 @@ enum Source {
     Response(Box<AnnotatedLlmResponse>),
 }
 
-/// Internal native storage for the public codecs.MessageView facade.
-#[napi(js_name = "_ContentSnapshot")]
-pub struct ContentSnapshot {
-    source: Source,
+struct SelectedSource {
+    value: Source,
     request_index: Option<usize>,
 }
 
-impl ContentSnapshot {
+impl SelectedSource {
     fn view(&self) -> MessageView<'_> {
-        match &self.source {
+        match &self.value {
             Source::Message(message) => message.content_view(),
             Source::Content(content) => content.content_view(),
             Source::Response(response) => response.output(),
         }
     }
 
-    fn entry(&self, index: u32) -> Option<ContentEntry<'_>> {
-        let mut entry = self.view().parts().nth(index as usize)?;
+    fn entry(&self, mut cursor: ContentCursor) -> ContentEntry<'_> {
+        let mut entry = cursor
+            .next_part(self.view())
+            .expect("immutable snapshot entry");
         if let Some(index) = self.request_index {
             entry.location.root = ContentRoot::RequestMessage(index);
         }
-        Some(entry)
+        entry
+    }
+}
+
+/// Internal native storage for the public codecs.MessageView facade.
+#[napi(js_name = "_ContentSnapshot")]
+pub struct ContentSnapshot {
+    source: Arc<SelectedSource>,
+}
+
+/// Forward-only traversal retaining the selected snapshot.
+#[napi(js_name = "_ContentIterator")]
+pub struct ContentIterator {
+    source: Arc<SelectedSource>,
+    cursor: ContentCursor,
+}
+
+/// Retained position in an immutable snapshot; payload access never rescans it.
+#[napi(js_name = "_ContentEntry")]
+pub struct ContentEntrySnapshot {
+    source: Arc<SelectedSource>,
+    cursor: ContentCursor,
+}
+
+impl ContentEntrySnapshot {
+    fn entry(&self) -> ContentEntry<'_> {
+        self.source.entry(self.cursor)
     }
 
-    fn payload(&self, index: u32) -> Result<PayloadRef<'_>> {
-        match self.entry(index).map(|entry| entry.kind) {
-            Some(ContentKind::ToolCall(call)) => Ok(call.arguments),
-            Some(ContentKind::ToolResult(result)) => Ok(result.payload),
+    fn payload(&self) -> Result<PayloadRef<'_>> {
+        match self.entry().kind {
+            ContentKind::ToolCall(call) => Ok(call.arguments),
+            ContentKind::ToolResult(result) => Ok(result.payload),
             _ => Err(Error::invalid_argument("entry has no tool payload")),
         }
     }
@@ -84,8 +112,10 @@ impl ContentSnapshot {
             _ => return Err(Error::invalid_argument("unknown content snapshot source")),
         };
         Ok(Self {
-            source,
-            request_index: request_index.map(|index| index as usize),
+            source: Arc::new(SelectedSource {
+                value: source,
+                request_index: request_index.map(|index| index as usize),
+            }),
         })
     }
 
@@ -156,12 +186,48 @@ impl ContentSnapshot {
         }))
     }
 
+    /// Create independent traversal state without indexing or copying content.
+    #[napi]
+    pub fn cursor(&self) -> ContentIterator {
+        ContentIterator {
+            source: Arc::clone(&self.source),
+            cursor: ContentCursor::default(),
+        }
+    }
+
+    /// Internal extraction using the shared Rust policy, preserving empty strings.
+    #[napi(ts_return_type = "string | null", catch_unwind)]
+    pub fn text(&self, env: Env) -> Result<Unknown<'_>> {
+        Ok(env.to_js_value(&self.source.view().text())?)
+    }
+}
+
+#[napi]
+impl ContentIterator {
+    /// Retain the next typed entry at its current source position.
+    #[napi(catch_unwind)]
+    pub fn next_entry(&mut self) -> Option<ContentEntrySnapshot> {
+        let cursor = self.cursor;
+        self.cursor.next_part(self.source.view())?;
+        Some(ContentEntrySnapshot {
+            source: Arc::clone(&self.source),
+            cursor,
+        })
+    }
+
+    /// Advance to the next eligible string using shared Rust extraction.
+    #[napi(ts_return_type = "string | null", catch_unwind)]
+    pub fn next_text(&mut self, env: Env) -> Result<Unknown<'_>> {
+        Ok(env.to_js_value(&self.cursor.next_text(self.source.view()))?)
+    }
+}
+
+#[napi]
+impl ContentEntrySnapshot {
     /// Internal typed metadata without materializing media or tool payloads.
     #[napi(catch_unwind)]
-    pub fn entry_metadata(&self, index: u32) -> Result<Json> {
-        let Some(entry) = self.entry(index) else {
-            return Ok(Json::Null);
-        };
+    pub fn metadata(&self) -> Result<Json> {
+        let entry = self.entry();
         let (root, message_index) = match entry.location.root {
             ContentRoot::RequestMessage(index) => ("request_message", Some(index)),
             ContentRoot::Message => ("message", None),
@@ -216,8 +282,8 @@ impl ContentSnapshot {
 
     /// Internal payload conversion directly from borrowed Rust data to a fresh JavaScript value.
     #[napi(ts_return_type = "JsonValue", catch_unwind)]
-    pub fn payload_value(&self, env: Env, index: u32) -> Result<Unknown<'_>> {
-        Ok(match self.payload(index)? {
+    pub fn payload_value(&self, env: Env) -> Result<Unknown<'_>> {
+        Ok(match self.payload()? {
             PayloadRef::Null => env.to_js_value(&())?,
             PayloadRef::String(text) => env.to_js_value(&text)?,
             PayloadRef::Json(value) => env.to_js_value(value)?,
@@ -227,28 +293,14 @@ impl ContentSnapshot {
 
     /// Internal media/native conversion; returned values do not share mutable Rust storage.
     #[napi(ts_return_type = "JsonValue", catch_unwind)]
-    pub fn value(&self, env: Env, index: u32) -> Result<Unknown<'_>> {
-        Ok(match self.entry(index).map(|entry| entry.kind) {
-            Some(ContentKind::ImageUrl(value)) => env.to_js_value(value)?,
-            Some(
-                ContentKind::Image(value)
-                | ContentKind::Audio(value)
-                | ContentKind::File(value)
-                | ContentKind::ProviderNative { value, .. },
-            ) => env.to_js_value(value)?,
+    pub fn value(&self, env: Env) -> Result<Unknown<'_>> {
+        Ok(match self.entry().kind {
+            ContentKind::ImageUrl(value) => env.to_js_value(value)?,
+            ContentKind::Image(value)
+            | ContentKind::Audio(value)
+            | ContentKind::File(value)
+            | ContentKind::ProviderNative { value, .. } => env.to_js_value(value)?,
             _ => env.to_js_value(&())?,
         })
-    }
-
-    /// Internal extraction using the shared Rust policy, preserving empty strings.
-    #[napi(ts_return_type = "string | null", catch_unwind)]
-    pub fn text(&self, env: Env) -> Result<Unknown<'_>> {
-        Ok(env.to_js_value(&self.view().text())?)
-    }
-
-    /// Internal single text part conversion without an intermediate owned Rust string.
-    #[napi(ts_return_type = "string | null", catch_unwind)]
-    pub fn text_part(&self, env: Env, index: u32) -> Result<Unknown<'_>> {
-        Ok(env.to_js_value(&self.view().text_parts().nth(index as usize))?)
     }
 }

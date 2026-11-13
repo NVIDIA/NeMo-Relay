@@ -6,8 +6,8 @@
 use std::sync::Arc;
 
 use nemo_relay_types::codec::content::{
-    ContentEntry, ContentField, ContentKind, ContentRoot, ContentSelection, ContentSelectionError,
-    ContentSource, MessageView, PayloadRef,
+    ContentCursor, ContentEntry, ContentField, ContentKind, ContentRoot, ContentSelection,
+    ContentSelectionError, ContentSource, MessageView, PayloadRef,
 };
 use nemo_relay_types::codec::request::{AnnotatedLlmRequest, Message, MessageContent};
 use nemo_relay_types::codec::response::AnnotatedLlmResponse;
@@ -39,8 +39,8 @@ impl Source {
         }
     }
 
-    fn entry(&self, index: usize) -> Option<ContentEntry<'_>> {
-        let mut entry = self.view().parts().nth(index)?;
+    fn entry(&self, mut cursor: ContentCursor) -> Option<ContentEntry<'_>> {
+        let mut entry = cursor.next_part(self.view())?;
         if let Self::Message {
             request_index: Some(index),
             ..
@@ -142,7 +142,7 @@ impl PyMessageView {
     fn parts(&self) -> PyContentIterator {
         PyContentIterator {
             source: Arc::clone(&self.source),
-            index: 0,
+            cursor: ContentCursor::default(),
         }
     }
 
@@ -150,7 +150,7 @@ impl PyMessageView {
     fn text_parts(&self) -> PyTextIterator {
         PyTextIterator {
             source: Arc::clone(&self.source),
-            index: 0,
+            cursor: ContentCursor::default(),
         }
     }
 
@@ -167,7 +167,7 @@ impl PyMessageView {
 #[pyclass(name = "_TextIterator")]
 pub struct PyTextIterator {
     source: Arc<Source>,
-    index: usize,
+    cursor: ContentCursor,
 }
 
 #[pymethods]
@@ -177,9 +177,7 @@ impl PyTextIterator {
     }
 
     fn __next__(&mut self) -> Option<&str> {
-        let text = self.source.view().text_parts().nth(self.index)?;
-        self.index += 1;
-        Some(text)
+        self.cursor.next_text(self.source.view())
     }
 }
 
@@ -187,7 +185,7 @@ impl PyTextIterator {
 #[pyclass(name = "ContentIterator")]
 pub struct PyContentIterator {
     source: Arc<Source>,
-    index: usize,
+    cursor: ContentCursor,
 }
 
 #[pymethods]
@@ -197,13 +195,12 @@ impl PyContentIterator {
     }
 
     fn __next__(&mut self) -> Option<PyContentEntry> {
-        self.source.entry(self.index)?;
-        let entry = PyContentEntry {
+        let cursor = self.cursor;
+        self.cursor.next_part(self.source.view())?;
+        Some(PyContentEntry {
             source: Arc::clone(&self.source),
-            index: self.index,
-        };
-        self.index += 1;
-        Some(entry)
+            cursor,
+        })
     }
 }
 
@@ -220,13 +217,13 @@ pub struct PyContentLocation {
 #[pyclass(name = "ContentEntry", frozen)]
 pub struct PyContentEntry {
     source: Arc<Source>,
-    index: usize,
+    cursor: ContentCursor,
 }
 
 impl PyContentEntry {
     fn entry(&self) -> ContentEntry<'_> {
         self.source
-            .entry(self.index)
+            .entry(self.cursor)
             .expect("entry belongs to immutable snapshot")
     }
 }
@@ -291,7 +288,7 @@ impl PyContentEntry {
     fn tool_call(&self) -> Option<PyToolCallView> {
         matches!(self.entry().kind, ContentKind::ToolCall(_)).then(|| PyToolCallView {
             source: Arc::clone(&self.source),
-            index: self.index,
+            cursor: self.cursor,
         })
     }
 
@@ -300,7 +297,7 @@ impl PyContentEntry {
     fn tool_result(&self) -> Option<PyToolResultView> {
         matches!(self.entry().kind, ContentKind::ToolResult(_)).then(|| PyToolResultView {
             source: Arc::clone(&self.source),
-            index: self.index,
+            cursor: self.cursor,
         })
     }
 
@@ -340,12 +337,12 @@ impl PyContentEntry {
 #[pyclass(name = "ToolCallView", frozen)]
 pub struct PyToolCallView {
     source: Arc<Source>,
-    index: usize,
+    cursor: ContentCursor,
 }
 
 impl PyToolCallView {
     fn call(&self) -> nemo_relay_types::codec::content::ToolCallView<'_> {
-        match self.source.entry(self.index).expect("snapshot entry").kind {
+        match self.source.entry(self.cursor).expect("snapshot entry").kind {
             ContentKind::ToolCall(call) => call,
             _ => unreachable!("tool-call view is constructed only for calls"),
         }
@@ -374,7 +371,7 @@ impl PyToolCallView {
     fn arguments(&self) -> PyPayloadView {
         PyPayloadView {
             source: Arc::clone(&self.source),
-            index: self.index,
+            cursor: self.cursor,
         }
     }
 }
@@ -383,12 +380,12 @@ impl PyToolCallView {
 #[pyclass(name = "ToolResultView", frozen)]
 pub struct PyToolResultView {
     source: Arc<Source>,
-    index: usize,
+    cursor: ContentCursor,
 }
 
 impl PyToolResultView {
     fn result(&self) -> nemo_relay_types::codec::content::ToolResultView<'_> {
-        match self.source.entry(self.index).expect("snapshot entry").kind {
+        match self.source.entry(self.cursor).expect("snapshot entry").kind {
             ContentKind::ToolResult(result) => result,
             _ => unreachable!("tool-result view is constructed only for results"),
         }
@@ -422,7 +419,7 @@ impl PyToolResultView {
     fn payload(&self) -> PyPayloadView {
         PyPayloadView {
             source: Arc::clone(&self.source),
-            index: self.index,
+            cursor: self.cursor,
         }
     }
 }
@@ -431,12 +428,12 @@ impl PyToolResultView {
 #[pyclass(name = "PayloadView", frozen)]
 pub struct PyPayloadView {
     source: Arc<Source>,
-    index: usize,
+    cursor: ContentCursor,
 }
 
 impl PyPayloadView {
     fn payload(&self) -> PayloadRef<'_> {
-        match self.source.entry(self.index).expect("snapshot entry").kind {
+        match self.source.entry(self.cursor).expect("snapshot entry").kind {
             ContentKind::ToolCall(call) => call.arguments,
             ContentKind::ToolResult(result) => result.payload,
             _ => unreachable!("payload views belong to tools"),

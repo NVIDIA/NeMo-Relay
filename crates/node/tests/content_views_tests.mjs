@@ -139,8 +139,13 @@ describe('normalized content snapshots', () => {
   it('retains empty selected items and ignores unrelated annotation metadata', () => {
     const request = {
       instructions: [],
-      messages: [{ role: 'user', content: 'earlier' }, { role: 'assistant', content: [] }],
-      get metadata() { throw new Error('unrelated metadata was read'); },
+      messages: [
+        { role: 'user', content: 'earlier' },
+        { role: 'assistant', content: [] },
+      ],
+      get metadata() {
+        throw new Error('unrelated metadata was read');
+      },
     };
     const selected = codecs.lastMessage(request);
     const instructions = codecs.instructionsView(request);
@@ -407,6 +412,36 @@ describe('normalized content snapshots', () => {
       },
     };
     assert.equal(codecs.MessageView.fromMessage(responses).text(), 'known');
+  });
+
+  it('traverses large mixed snapshots with independent cursors and retained entries', () => {
+    const count = 10_000;
+    let view = codecs.MessageView.fromContent(
+      Array.from({ length: count }, (_, index) => [
+        { type: 'image', image: { index } },
+        index % 2 === 0 ? { type: 'text', text: String(index) } : { type: 'refusal', refusal: String(index) },
+      ]).flat(),
+    );
+    const texts = view.textParts();
+    const parts = view.parts();
+    assert.equal(texts.next().value, '0');
+    const retained = parts.next().value;
+    assert.equal(retained.kind, 'image');
+    assert.deepEqual(
+      [...view.textParts()],
+      Array.from({ length: count }, (_, index) => String(index)),
+    );
+    view = null;
+    assert.deepEqual(
+      [...texts],
+      Array.from({ length: count - 1 }, (_, index) => String(index + 1)),
+    );
+    assert.equal([...parts].length, 2 * count - 1);
+    assert.deepEqual(retained.value, { index: 0 });
+    for (let index = 0; index < 3; index++) {
+      assert.equal(texts.next().done, true);
+      assert.equal(parts.next().done, true);
+    }
   });
 
   it('retains independent iterators and permanent exhaustion', () => {
