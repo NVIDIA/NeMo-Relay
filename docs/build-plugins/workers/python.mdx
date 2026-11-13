@@ -11,6 +11,63 @@ It supports all 17 [callback types](/build-plugins/workers/middleware-and-contin
 Its configuration selects which callbacks to register. The SDK handles generated
 protobuf bindings, the authenticated server, and task cancellation.
 
+## Inspect Normalized LLM Content
+
+Worker codec capabilities return normalized dictionaries. Keep those dictionaries
+for callbacks and encoding; use `nemo_relay_plugin.codecs` for local, read-only
+content inspection:
+
+```python
+from nemo_relay_plugin import codecs
+
+annotation = {"messages": [{"role": "user", "content": "hello"}]}
+view = codecs.last_message(annotation)
+if view is not None:
+    assert view.text() == "hello"
+    for entry in view.parts():
+        print(entry.kind, entry.location.message_index, entry.location.field)
+```
+
+These helpers accept normalized annotations from codec decoding, request
+intercepts, or event category profiles. They do not decode raw provider payloads.
+Use the invocation's `WorkerRequestCodec.decode()` or
+`WorkerResponseCodec.decode_response()` capability first when starting with a
+raw request or response. Content inspection itself performs no RPC and does not
+require the main `nemo_relay` runtime extension.
+
+| Worker helper | Selection |
+| --- | --- |
+| `last_message(request)` | Exactly the final request item, or `None` for empty history |
+| `message(request, index)` | Any history item, including negative Python indices |
+| `instructions_view(request)` | Top-level instructions, without a history fallback |
+| `output(response)` | Current normalized message and separate tool calls, including textless output |
+| `MessageView.from_message(message)` | A standalone normalized message dictionary |
+| `MessageView.from_content(content)` | A standalone string or normalized content-part list |
+
+Views expose `parts()`, `text_parts()`, and `text()`. Entries, locations, tool
+views, and payload views follow the [Python content snapshot API](/integrate-into-frameworks/provider-codecs#python-content-snapshots).
+Tool payloads retain their string, JSON, null, or complete-content representation.
+Default text includes text/refusals and supported shallow native fallbacks;
+tools, reasoning, media, and arbitrary nested metadata are excluded. Empty text
+remains distinct from absent text, and newline joining preserves whitespace.
+
+The module also provides `system_prompt(request)`, `last_user_message(request)`,
+and `response_text(response)` with the same selection and extraction rules as
+the main Python binding. A selected textless item does not cause a search for
+another item with text.
+
+Selection copies only the selected item/content/output into immutable Python
+storage. Iterators and entries remain usable after the input dictionary or
+parent view is deleted. Later edits to the input do not change a snapshot;
+returned media/native and tool payload dictionaries/lists are independent copies.
+Retaining entries can retain selected snapshot data. Locations describe the
+normalized snapshot, not stable editing handles or provider-wire offsets.
+
+Out-of-range history indices raise `IndexError`. Invalid selected normalized
+content raises `ValueError`. The helpers preserve the dictionary-based callback
+and wire contracts; they add neither mutable redaction nor live streaming
+extraction.
+
 ## Internal Diagnostic Observations
 
 Use `await runtime.diagnostics()` to obtain diagnostics for the activation.

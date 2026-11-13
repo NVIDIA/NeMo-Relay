@@ -41,10 +41,26 @@ The SDK provides the following types and helpers.
 | Typed runtime helpers | Share JSON, event, scope, middleware, continuation, and diagnostic contracts with the Relay host. |
 | Tool results | Preserve application results and opaque annotations across tool callbacks and continuations. |
 | `LlmExecutionContext` | Provides the selected request codec and, for non-streaming calls, the completed-response codec while the callback is active. |
+| `nemo_relay_plugin.codecs` | Selects normalized messages and exposes read-only typed content snapshots and text extraction without a host call or the main runtime extension. |
 | Generated transport bindings | Ship private protobuf bindings in the wheel, so installation does not require `protoc` or `grpcio-tools`. |
 
 The worker process isolates Python dependencies and crashes from Relay while preserving
 host-owned execution, event, scope, cancellation, and shutdown semantics.
+
+### Normalized Content Access
+
+Annotations remain dictionaries. Inspect them with `codecs.last_message(request)`,
+`codecs.message(request, index)`, `codecs.instructions_view(request)`, or
+`codecs.output(response)`. Views provide `parts()`, `text_parts()`, and `text()`;
+typed entries distinguish text/refusals, tools, media, and opaque native content.
+The module also offers `system_prompt`, `last_user_message`, and `response_text`.
+
+Selections copy only selected content into immutable local snapshots. Entries
+and iterators survive parent deletion; changing an input or returned Python
+payload does not change the snapshot. Default extraction excludes tool payloads,
+reasoning, media, and arbitrary nested JSON. See the
+[Python worker content guide](https://docs.nvidia.com/nemo/relay/build-plugins/workers/python#inspect-normalized-llm-content)
+for selection rules, source locations, payload kinds, and examples.
 
 ## Propagating Continuation Errors
 
