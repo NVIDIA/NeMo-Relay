@@ -416,6 +416,109 @@ async fn stream_observation_preserves_cancelled_and_failed_transport_outcomes() 
     }
 }
 
+#[tokio::test]
+async fn truncated_observation_preserves_delivery_outcomes_and_http_errors() {
+    let first = Bytes::from_static(
+        b"data: {\"type\":\"response.created\",\"response\":{\"id\":\"test\",\"output\":[]}}\n\n",
+    );
+    for streaming in [false, true] {
+        for (terminal, status, failure, otel_status, terminal_name) in [
+            (
+                OBSERVATION_COMPLETE,
+                StatusCode::OK,
+                Some("provider response observation was truncated"),
+                "ERROR",
+                "complete",
+            ),
+            (
+                OBSERVATION_CANCELLED,
+                StatusCode::OK,
+                None,
+                "UNSET",
+                "cancelled",
+            ),
+            (
+                OBSERVATION_BODY_ERROR,
+                StatusCode::OK,
+                Some("provider response body failed"),
+                "ERROR",
+                "body_error",
+            ),
+            (
+                OBSERVATION_COMPLETE,
+                StatusCode::BAD_GATEWAY,
+                Some("provider response observation was truncated"),
+                "ERROR",
+                "complete",
+            ),
+            (
+                OBSERVATION_CANCELLED,
+                StatusCode::BAD_GATEWAY,
+                Some("provider returned HTTP 502"),
+                "ERROR",
+                "cancelled",
+            ),
+            (
+                OBSERVATION_BODY_ERROR,
+                StatusCode::BAD_GATEWAY,
+                Some("provider response body failed"),
+                "ERROR",
+                "body_error",
+            ),
+        ] {
+            let next = if terminal == OBSERVATION_BODY_ERROR {
+                Err(io::Error::other("transport read failed"))
+            } else {
+                Ok(Frame::data(Bytes::from_static(b"tail")))
+            };
+            let frames = futures_util::stream::iter([Ok(Frame::data(first.clone())), next]);
+            let (mut body, observation) = observe_body(
+                StreamBody::new(frames),
+                status,
+                1,
+                OperationalContext::new(),
+            );
+            // Exceed capture capacity before delivery is cancelled or fails.
+            let delivered = body.frame().await.unwrap().unwrap().into_data().unwrap();
+            assert_eq!(delivered, first);
+            match terminal {
+                OBSERVATION_CANCELLED => drop(body),
+                OBSERVATION_BODY_ERROR => {
+                    assert!(body.frame().await.unwrap().is_err());
+                    drop(body);
+                }
+                _ => {
+                    assert_eq!(body.collect().await.unwrap().to_bytes(), "tail");
+                }
+            }
+            let observed = observation
+                .finish(ProviderSurface::OpenAIResponses, streaming)
+                .await;
+            assert!(observed.truncated);
+            assert!(observed.value.is_none());
+            assert_eq!(observed.terminal, terminal);
+            assert_eq!(observed.failure.as_deref(), failure);
+            let metadata = observed.metadata();
+            assert_eq!(metadata["otel.status_code"], otel_status);
+            assert_eq!(
+                metadata
+                    .get("otel.status_description")
+                    .and_then(Value::as_str),
+                failure
+            );
+            assert_eq!(
+                metadata["daemon_worker_observation"]["terminal"],
+                terminal_name
+            );
+            assert_eq!(metadata["daemon_worker_observation"]["truncated"], true);
+            assert_eq!(
+                metadata["daemon_worker_observation"]["http_status"],
+                status.as_u16()
+            );
+        }
+    }
+}
+
 #[tokio::test(start_paused = true)]
 async fn stream_observation_rearms_stall_warning_after_each_silent_interval() {
     let (sender, receiver) = tokio::sync::mpsc::channel(2);
@@ -1307,7 +1410,10 @@ async fn observation_reports_provider_body_errors_and_metadata() {
         .await;
     assert_eq!(observed.terminal, OBSERVATION_BODY_ERROR);
     assert_eq!(observed.status, StatusCode::BAD_GATEWAY);
-    assert!(observed.failure.is_some());
+    assert_eq!(
+        observed.failure.as_deref(),
+        Some("provider response body failed")
+    );
     assert_eq!(
         observed.metadata()["daemon_worker_observation"]["terminal"],
         "body_error"
