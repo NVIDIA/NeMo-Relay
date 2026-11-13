@@ -1602,9 +1602,9 @@ impl LlmCodec for OpenAIResponsesCodec {
 ///    (`completed`, `failed`, or `incomplete`). Keep that snapshot for the rest of the stream.
 /// 2. Track output items by `output_index` — `output_item.done` events deliver the final per-item
 ///    state, used as a fallback when the terminal `response.output` is missing or empty.
-/// 3. Per-token `output_text.delta` and `function_call_arguments.delta` events are ignored
-///    because their content is redelivered in the matching `output_item.done` event. Skipping
-///    deltas keeps the codec resilient to schema additions and avoids double-accumulation.
+/// 3. Retain text, refusal, and function-argument deltas provisionally for supplied output items.
+///    Completed content parts and output items replace provisional data, so interrupted streams
+///    retain observed content without duplicating it when a completed snapshot arrives.
 ///
 /// Use [`StreamingCodec::validate_stream`](nemo_relay_types::codec::streaming::StreamingCodec::validate_stream)
 /// with this instance's collector and finalizer to report streams that end before a final event.
@@ -1754,7 +1754,149 @@ struct OpenAIResponsesStreamingState {
     /// Items keyed by `output_index`. Captured from `response.output_item.added` (initial) and
     /// replaced on `response.output_item.done` (final). Used as a fallback for `output` when the
     /// terminal `response` snapshot lacks it.
-    items: std::collections::BTreeMap<usize, Json>,
+    items: std::collections::BTreeMap<usize, ResponsesStreamingItem>,
+}
+
+/// Provisional data belongs to a supplied item; no item metadata is inferred from deltas.
+#[derive(Debug)]
+struct ResponsesStreamingItem {
+    item: Json,
+    complete: bool,
+    arguments_complete: bool,
+    content: Option<std::collections::BTreeMap<u64, ResponsesStreamingPart>>,
+}
+
+#[derive(Debug)]
+struct ResponsesStreamingPart {
+    part: Json,
+    complete: bool,
+}
+
+impl ResponsesStreamingItem {
+    fn new(mut item: Json, complete: bool) -> Self {
+        let content = if !complete && item.get("content").is_some_and(Json::is_array) {
+            let Json::Array(parts) = std::mem::take(&mut item["content"]) else {
+                unreachable!("content was checked to be an array");
+            };
+            Some(
+                parts
+                    .into_iter()
+                    .enumerate()
+                    .map(|(index, part)| {
+                        (
+                            index as u64,
+                            ResponsesStreamingPart {
+                                part,
+                                complete: false,
+                            },
+                        )
+                    })
+                    .collect(),
+            )
+        } else {
+            None
+        };
+        Self {
+            item,
+            complete,
+            arguments_complete: false,
+            content,
+        }
+    }
+
+    fn observe_content(&mut self, event: &Json, event_type: &str) {
+        if self.complete || self.item.get("type").and_then(Json::as_str) != Some("message") {
+            return;
+        }
+        let Some(index) = event.get("content_index").and_then(Json::as_u64) else {
+            return;
+        };
+        if matches!(
+            event_type,
+            "response.content_part.added" | "response.content_part.done"
+        ) {
+            let Some(part) = event.get("part").filter(|part| part.is_object()) else {
+                return;
+            };
+            let content = self.content.get_or_insert_with(Default::default);
+            if event_type == "response.content_part.done" {
+                content.insert(
+                    index,
+                    ResponsesStreamingPart {
+                        part: part.clone(),
+                        complete: true,
+                    },
+                );
+            } else {
+                content
+                    .entry(index)
+                    .or_insert_with(|| ResponsesStreamingPart {
+                        part: part.clone(),
+                        complete: false,
+                    });
+            }
+            return;
+        }
+        let (kind, field, done) = match event_type {
+            "response.output_text.delta" => ("output_text", "text", false),
+            "response.output_text.done" => ("output_text", "text", true),
+            "response.refusal.delta" => ("refusal", "refusal", false),
+            "response.refusal.done" => ("refusal", "refusal", true),
+            _ => return,
+        };
+        let Some(text) = event
+            .get(if done { field } else { "delta" })
+            .and_then(Json::as_str)
+        else {
+            return;
+        };
+        let part = self
+            .content
+            .get_or_insert_with(Default::default)
+            .entry(index)
+            .or_insert_with(|| ResponsesStreamingPart {
+                part: serde_json::json!({"type": kind}),
+                complete: false,
+            });
+        if !part.complete && part.part.get("type").and_then(Json::as_str) == Some(kind) {
+            update_streamed_string(&mut part.part, field, text, done);
+            part.complete = done;
+        }
+    }
+
+    fn observe_arguments(&mut self, event: &Json, done: bool) {
+        if self.complete
+            || self.arguments_complete
+            || self.item.get("type").and_then(Json::as_str) != Some("function_call")
+        {
+            return;
+        }
+        let Some(text) = event
+            .get(if done { "arguments" } else { "delta" })
+            .and_then(Json::as_str)
+        else {
+            return;
+        };
+        update_streamed_string(&mut self.item, "arguments", text, done);
+        self.arguments_complete = done;
+    }
+
+    fn finalize(mut self) -> Json {
+        if let Some(content) = self.content {
+            self.item["content"] =
+                Json::Array(content.into_values().map(|part| part.part).collect());
+        }
+        self.item
+    }
+}
+
+/// Deltas append; a completed field replaces the provisional string, including an empty one.
+fn update_streamed_string(object: &mut Json, field: &str, text: &str, done: bool) {
+    if !done && let Some(Json::String(current)) = object.get_mut(field) {
+        current.push_str(text);
+    } else {
+        object[field] = Json::String(text.to_owned());
+    }
 }
 
 impl OpenAIResponsesStreamingState {
@@ -1770,9 +1912,30 @@ impl OpenAIResponsesStreamingState {
             "response.output_item.added" | "response.output_item.done" => {
                 self.observe_output_item(event);
             }
-            // response.output_text.delta, response.function_call_arguments.delta,
-            // response.content_part.added/done — content is redelivered in output_item.done, so we
-            // don't accumulate deltas. Unknown events are ignored.
+            "response.content_part.added"
+            | "response.content_part.done"
+            | "response.output_text.delta"
+            | "response.output_text.done"
+            | "response.refusal.delta"
+            | "response.refusal.done"
+            | "response.function_call_arguments.delta"
+            | "response.function_call_arguments.done" => {
+                if self.has_terminal_output {
+                    return;
+                }
+                let Some(index) = event.get("output_index").and_then(Json::as_u64) else {
+                    return;
+                };
+                let Some(item) = self.items.get_mut(&(index as usize)) else {
+                    return;
+                };
+                if event_type.starts_with("response.function_call_arguments.") {
+                    item.observe_arguments(event, event_type.ends_with(".done"));
+                } else {
+                    item.observe_content(event, event_type);
+                }
+            }
+            // Unknown provider events remain opaque to aggregation.
             _ => {}
         }
     }
@@ -1810,24 +1973,37 @@ impl OpenAIResponsesStreamingState {
         let Some(item) = event.get("item") else {
             return;
         };
-        self.items.insert(index as usize, item.clone());
+        if event.get("type").and_then(Json::as_str) == Some("response.output_item.done") {
+            self.items.insert(
+                index as usize,
+                ResponsesStreamingItem::new(item.clone(), true),
+            );
+        } else {
+            self.items
+                .entry(index as usize)
+                .or_insert_with(|| ResponsesStreamingItem::new(item.clone(), false));
+        }
     }
 
     /// Builds a response, filling missing output from the collected items.
     fn finalize(self) -> Json {
         let mut output = self.response.unwrap_or_default();
-        // If the latest snapshot lacked `output` (or has an empty array because it came from an
-        // early `response.created` event), backfill from per-item accumulator. Terminal events
-        // typically carry the complete output, so this branch is a safety net for truncated
-        // streams or schemas that drop output from terminal events.
-        let snapshot_output_empty = output
-            .get("output")
-            .and_then(Json::as_array)
-            .map(|arr| arr.is_empty())
-            .unwrap_or(true);
-        if snapshot_output_empty && !self.items.is_empty() {
-            let items: Vec<Json> = self.items.into_values().collect();
-            output.insert("output".to_string(), Json::Array(items));
+        if !self.items.is_empty() {
+            // Retain snapshot-only items while replacing stale provisional entries by index.
+            // A nonempty terminal snapshot has already cleared `items` and stays authoritative.
+            let mut items: std::collections::BTreeMap<usize, Json> = match output.remove("output") {
+                Some(Json::Array(items)) => items.into_iter().enumerate().collect(),
+                _ => Default::default(),
+            };
+            items.extend(
+                self.items
+                    .into_iter()
+                    .map(|(index, item)| (index, item.finalize())),
+            );
+            output.insert(
+                "output".to_string(),
+                Json::Array(items.into_values().collect()),
+            );
         }
         Json::Object(output)
     }
