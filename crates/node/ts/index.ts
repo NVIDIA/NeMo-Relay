@@ -5,6 +5,9 @@ import type { Json, JsonCompatible, JsonObject, JsonObjectCompatible } from '../
 
 export * from '../binding.js';
 
+/** Selection, typed content snapshots, and text extraction over normalized annotations. */
+export * as codecs from './codecs.js';
+
 export class LlmRequest<
   THeaders extends JsonObjectCompatible<THeaders> = JsonObject,
   TContent extends JsonCompatible<TContent> = Json,

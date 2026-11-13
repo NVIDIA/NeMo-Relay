@@ -179,6 +179,79 @@ The standalone Python worker SDK provides equivalent typed snapshots through
 legacy text helpers are module functions such as `codecs.last_message(request)`
 and `codecs.response_text(response)`. See [Python worker content access](/build-plugins/workers/python#inspect-normalized-llm-content).
 
+### Node.js and TypeScript Content Snapshots
+
+Import the `codecs` namespace from the main `nemo-relay-node` entry point. Pass
+normalized annotations returned by codec decoding or attached to runtime events:
+
+```typescript
+import { codecs } from 'nemo-relay-node';
+
+const annotation = {
+  messages: [{
+    role: 'assistant',
+    content: [
+      { type: 'text', text: 'Checking the forecast.' },
+      { type: 'tool_use', id: 'c1', name: 'weather', input: { city: 'Boston' } },
+    ],
+  }],
+};
+
+const view = codecs.lastMessage(annotation);
+if (view !== null) {
+  for (const entry of view.parts()) {
+    if (entry.kind === 'tool_call') {
+      console.log(entry.toolCall.name, entry.toolCall.arguments.kind);
+      console.log(entry.toolCall.arguments.value);
+    }
+  }
+  console.log(view.text()); // Checking the forecast.
+}
+```
+
+`lastMessage(request)` selects exactly the final item; `message(request, index)`
+supports negative indices and raises `RangeError` for out-of-range or noninteger
+indices. `instructionsView(request)` selects only top-level instructions.
+`output(response)` views the current message and separate tool calls, including
+textless output. Empty history and absent instructions return `null`; output
+always returns a view. Use `MessageView.fromMessage(message)` or
+`MessageView.fromContent(content)` for standalone normalized data.
+
+Views expose `parts()`, `textParts()`, and `text()`. The `ContentEntry` union is
+discriminated by `kind`: text/refusals expose `text`, calls expose `toolCall`,
+results expose `toolResult`, and media/native entries expose `value`. Native
+entries also expose `provider` and `nativeKind`. Calls provide `id`, `callId`,
+`name`, and `arguments`; results provide `id`, `callId`, `name`, `isError`, and
+`payload`. Payload views preserve the `null`, `string`, `json`, or `content`
+representation. Argument strings are not parsed, and JSON values are not rendered
+into text.
+
+Locations expose `root`, `messageIndex`, `field`, and `index`. Their discriminator
+values retain normalized names such as `request_message`, `tool_calls`, and
+`native_content`. Separate tool calls follow message content without claiming to
+reconstruct provider-wire order. Locations are read-time snapshot positions,
+not stable editing handles.
+
+**Ownership:** selection copies only the selected message/content/output into
+Rust-owned storage. It leaves the remaining history and response metadata out of
+the snapshot. Iterators, structured entries, and payload views retain that storage
+after their original annotation or parent view becomes unreachable. Later edits
+to an annotation do not change existing views. Views, entries, locations, and
+tool/payload descriptors are read-only. Accessing a media/native `value` or tool
+payload `value` creates an independent JavaScript value; editing that returned
+object or array changes neither the snapshot nor the annotation. Strings are
+JavaScript-owned immutable values. A retained entry may keep the selected
+snapshot alive.
+
+`systemPrompt(request)`, `lastUserMessage(request)`, and `responseText(response)`
+provide the named text helpers with the same selection rules as Rust and Python.
+Default text includes text/refusals and supported shallow native fallbacks;
+tools, reasoning, media, and arbitrary nested metadata are excluded. No eligible
+text yields `null`, an explicit empty string yields `""`, and joining preserves
+whitespace and empty parts. Selection never searches past a selected textless
+item. Codec decoding and encoding continue to use normalized JSON objects; these
+helpers add no mutable redaction or live streaming extraction.
+
 ## How Provider Codecs Work
 
 When a managed LLM call has a request codec:

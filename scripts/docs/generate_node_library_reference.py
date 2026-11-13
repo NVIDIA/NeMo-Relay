@@ -8,7 +8,7 @@ from __future__ import annotations
 import argparse
 import json
 import re
-from dataclasses import dataclass, field
+from dataclasses import dataclass, field, replace
 from pathlib import Path
 
 from reference_common import display_path, escape_mdx_text, frontmatter, reset_output_dir
@@ -22,9 +22,13 @@ EXPORT_RE = re.compile(
 )
 REEXPORT_RE = re.compile(r"^export\s+(?:type\s+)?\{(?P<names>.*?)\}(?:\s+from\s+['\"](?P<specifier>[^'\"]+)['\"])?;?$")
 STAR_REEXPORT_RE = re.compile(r"^export\s+\*\s+from\s+['\"](?P<specifier>[^'\"]+)['\"];?$")
+NAMESPACE_REEXPORT_RE = re.compile(
+    r"^export\s+\*\s+as\s+(?P<name>[A-Za-z_$][A-Za-z0-9_$]*)\s+from\s+['\"](?P<specifier>[^'\"]+)['\"];?$"
+)
 INTERNAL_NAME_PREFIXES = ("__test",)
-SECTION_ORDER = ("interface", "class", "enum", "function", "type", "const")
+SECTION_ORDER = ("namespace", "interface", "class", "enum", "function", "type", "const")
 SECTION_TITLES = {
+    "namespace": "Namespaces",
     "interface": "Interfaces",
     "class": "Classes",
     "enum": "Enums",
@@ -33,6 +37,7 @@ SECTION_TITLES = {
     "const": "Constants",
 }
 KIND_LABELS = {
+    "namespace": "namespace",
     "interface": "interface",
     "class": "class",
     "enum": "enum",
@@ -96,6 +101,7 @@ class ModuleDoc:
     items: list[ApiItem] = field(default_factory=list)
     reexports: list[str] = field(default_factory=list)
     star_sources: list[Path] = field(default_factory=list)
+    namespace_sources: list[tuple[str, Path]] = field(default_factory=list)
 
 
 def _escape_text(value: str) -> str:
@@ -337,7 +343,16 @@ def _parse_declaration_line(
         return JsDoc(), module_doc, index + 1
     if stripped.startswith("export *"):
         declaration, next_index = _collect_statement_declaration(lines, index)
-        module.star_sources.append(_parse_star_reexport(module.source, declaration))
+        namespace = NAMESPACE_REEXPORT_RE.match(" ".join(declaration.split()))
+        if namespace is not None:
+            name = namespace.group("name")
+            if _is_public_name(name):
+                module.items.append(ApiItem(name=name, kind="namespace", declaration=declaration, doc=pending_doc))
+                module.namespace_sources.append(
+                    (name, _resolve_declaration_source(module.source, namespace.group("specifier")))
+                )
+        else:
+            module.star_sources.append(_parse_star_reexport(module.source, declaration))
         return JsDoc(), module_doc, next_index
     if stripped.startswith(("export {", "export type {")):
         declaration, next_index = _collect_statement_declaration(lines, index)
@@ -372,6 +387,19 @@ def _resolve_star_exports(module: ModuleDoc, parsed: dict[Path, ModuleDoc], visi
                 names.add(item.name)
         module.reexports.extend(target.reexports)
     module.star_sources = []
+    for namespace, target_path in module.namespace_sources:
+        target = parsed.get(target_path)
+        if target is None:
+            target = _parse_declaration_file(target_path, str(target_path))
+            parsed[target_path] = target
+        _resolve_star_exports(target, parsed, (*visiting, source))
+        for item in target.items:
+            name = f"{namespace}.{item.name}"
+            if name not in names:
+                module.items.append(replace(item, name=name))
+                names.add(name)
+        module.reexports.extend(f"{namespace}.{name}" for name in target.reexports)
+    module.namespace_sources = []
     module.reexports = sorted(set(module.reexports) - names)
 
 
