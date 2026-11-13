@@ -64,6 +64,10 @@ reasons and safety ratings. A blocked prompt with no generated candidates stays
 without candidates; buffered and aggregated responses both normalize its block
 reason to `content_filter` when applicable.
 
+OpenAI Chat streaming aggregation retains `system_fingerprint` and `service_tier`
+and concatenates each choice's text and refusal logprob entries in arrival order.
+These fields remain available through `api_specific` after response decoding.
+
 
 ## Cost Estimation
 

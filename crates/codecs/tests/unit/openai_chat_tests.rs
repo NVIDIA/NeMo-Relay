@@ -1674,6 +1674,64 @@ fn request_schema_rejects_malformed_known_chat_components() {
 use nemo_relay_types::codec::streaming::StreamingCodec;
 
 #[test]
+fn openai_chat_streaming_metadata_matches_buffered_decoding() {
+    let first_token = json!({"token": "Hello", "logprob": -0.1, "bytes": [72], "top_logprobs": []});
+    let second_token = json!({"token": "!", "logprob": -0.2, "bytes": [33], "top_logprobs": []});
+    let refusal_token = json!({"token": "No", "logprob": -0.3, "top_logprobs": []});
+    for borrowed in [false, true] {
+        let codec = OpenAIChatStreamingCodec::new();
+        let mut owned = codec.collector();
+        let mut by_ref = codec.borrowed_collector().unwrap();
+        for chunk in [
+            json!({"system_fingerprint": null, "service_tier": null, "choices": [
+                {"index": 0, "delta": {"content": "Hello"}, "logprobs": {"content": [first_token], "refusal": null}},
+                {"index": 1, "delta": {"refusal": "No"}, "logprobs": {"content": null, "refusal": [refusal_token]}}
+            ]}),
+            json!({"system_fingerprint": "fp_test", "service_tier": "default", "choices": [
+                {"index": 0, "delta": {"content": "!"}, "logprobs": {"content": [second_token]}}
+            ]}),
+            json!({"system_fingerprint": null, "service_tier": null, "choices": [
+                {"index": 1, "delta": {}, "logprobs": null, "finish_reason": "content_filter"},
+                {"index": 0, "delta": {}, "logprobs": {"content": null, "refusal": null}, "finish_reason": "stop"}
+            ]}),
+        ] {
+            if borrowed {
+                by_ref(&chunk).unwrap();
+            } else {
+                owned(chunk).unwrap();
+            }
+        }
+        let aggregate = codec.finalizer()();
+        assert_eq!(
+            aggregate["choices"][1]["logprobs"]["refusal"],
+            json!([refusal_token])
+        );
+        let buffered = json!({
+            "system_fingerprint": "fp_test", "service_tier": "default",
+            "choices": [{"message": {"content": "Hello!"}, "finish_reason": "stop",
+                "logprobs": {"content": [first_token, second_token], "refusal": null}}]
+        });
+        assert_eq!(
+            serde_json::to_value(OpenAIChatCodec.decode_response(&aggregate).unwrap()).unwrap(),
+            serde_json::to_value(OpenAIChatCodec.decode_response(&buffered).unwrap()).unwrap()
+        );
+    }
+}
+
+#[test]
+fn openai_chat_streaming_omits_unreported_metadata() {
+    let codec = OpenAIChatStreamingCodec::new();
+    codec.collector()(
+        json!({"choices": [{"index": 0, "delta": {"content": "hi"}, "logprobs": null}]}),
+    )
+    .unwrap();
+    let aggregate = codec.finalizer()();
+    assert!(aggregate.get("system_fingerprint").is_none());
+    assert!(aggregate.get("service_tier").is_none());
+    assert!(aggregate["choices"][0].get("logprobs").is_none());
+}
+
+#[test]
 fn openai_chat_streaming_codec_assembles_text_response() {
     let codec = OpenAIChatStreamingCodec::new();
     let mut collector = codec.collector();

@@ -1526,6 +1526,8 @@ struct OpenAIChatStreamingState {
     object: Option<String>,
     created: Option<u64>,
     model: Option<String>,
+    system_fingerprint: Option<String>,
+    service_tier: Option<String>,
     /// Per-choice accumulator keyed by `choice.index`. BTreeMap so finalize emits choices in
     /// stable order.
     choices: std::collections::BTreeMap<u64, ChoiceState>,
@@ -1544,6 +1546,7 @@ struct ChoiceState {
     /// streamed as a JSON-encoded string accumulated fragment-by-fragment.
     tool_calls: std::collections::BTreeMap<u64, ToolCallState>,
     finish_reason: Option<String>,
+    logprobs: Option<Json>,
 }
 
 #[derive(Debug, Default)]
@@ -1590,6 +1593,16 @@ impl OpenAIChatStreamingState {
                 self.usage = Some(usage.clone());
             }
         }
+        for (field, target) in [
+            ("system_fingerprint", &mut self.system_fingerprint),
+            ("service_tier", &mut self.service_tier),
+        ] {
+            if target.is_none()
+                && let Some(value) = chunk.get(field).and_then(Json::as_str)
+            {
+                *target = Some(value.to_owned());
+            }
+        }
         let Some(choices) = chunk.get("choices").and_then(Json::as_array) else {
             return;
         };
@@ -1601,6 +1614,7 @@ impl OpenAIChatStreamingState {
     fn observe_choice(&mut self, choice: &Json) {
         let index = choice.get("index").and_then(Json::as_u64).unwrap_or(0);
         let entry = self.choices.entry(index).or_default();
+        entry.observe_logprobs(choice.get("logprobs"));
         entry.observe_finish_reason(choice);
         entry.observe_delta(choice.get("delta"));
     }
@@ -1627,6 +1641,14 @@ impl OpenAIChatStreamingState {
         if let Some(model) = self.model {
             output.insert("model".to_string(), Json::String(model));
         }
+        for (field, value) in [
+            ("system_fingerprint", self.system_fingerprint),
+            ("service_tier", self.service_tier),
+        ] {
+            if let Some(value) = value {
+                output.insert(field.to_owned(), Json::String(value));
+            }
+        }
         let choices: Vec<Json> = self
             .choices
             .into_iter()
@@ -1641,6 +1663,36 @@ impl OpenAIChatStreamingState {
 }
 
 impl ChoiceState {
+    fn observe_logprobs(&mut self, update: Option<&Json>) {
+        let Some(update) = update.filter(|value| !value.is_null()) else {
+            return;
+        };
+        if let (Some(Json::Object(current)), Json::Object(update)) = (&mut self.logprobs, update) {
+            for (key, value) in update {
+                if matches!(key.as_str(), "content" | "refusal") {
+                    if let Some(entries) = value.as_array() {
+                        let target = current
+                            .entry(key.clone())
+                            .or_insert_with(|| Json::Array(Vec::new()));
+                        if let Some(target) = target.as_array_mut() {
+                            target.extend(entries.iter().cloned());
+                        } else {
+                            *target = value.clone();
+                        }
+                        continue;
+                    }
+                    // Usage/finish chunks can carry null fields after the actual entries.
+                    if value.is_null() && current.contains_key(key) {
+                        continue;
+                    }
+                }
+                current.insert(key.clone(), value.clone());
+            }
+        } else {
+            self.logprobs = Some(update.clone());
+        }
+    }
+
     fn observe_finish_reason(&mut self, choice: &Json) {
         if let Some(reason) = choice.get("finish_reason").and_then(Json::as_str) {
             self.finish_reason = Some(reason.to_string());
@@ -1716,6 +1768,9 @@ impl ChoiceState {
         let mut choice = serde_json::Map::new();
         choice.insert("index".to_string(), Json::Number(index.into()));
         choice.insert("message".to_string(), Json::Object(message));
+        if let Some(logprobs) = self.logprobs {
+            choice.insert("logprobs".to_owned(), logprobs);
+        }
         if let Some(reason) = self.finish_reason {
             choice.insert("finish_reason".to_string(), Json::String(reason));
         } else {
