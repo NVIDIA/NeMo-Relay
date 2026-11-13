@@ -106,9 +106,73 @@ last user item. Neither skips a selected textless item to find earlier or later
 text. `response_text()` reads the current output and excludes tool content.
 
 Python's existing methods inherit these extraction and selection behaviors and
-continue to return `str | None`. The new typed views are Rust-only. Serialization,
-codec traits, and provider payloads are unchanged. These views are read-only;
-mutable redaction and streaming extraction are separate work.
+continue to return `str | None`. Serialization, codec traits, and provider
+payloads are unchanged. These views are read-only; mutable redaction and
+streaming extraction are separate work.
+
+### Python Content Snapshots
+
+Python exposes the same typed traversal through `MessageView` in
+`nemo_relay.codecs`:
+
+```python
+from nemo_relay import AnnotatedLLMRequest
+from nemo_relay.codecs import MessageView
+
+request = AnnotatedLLMRequest([
+    {"role": "user", "content": [
+        {"type": "text", "text": "hello"},
+        {"type": "refusal", "refusal": "cannot help"},
+    ]},
+])
+view = request.last_message()
+if view is not None:
+    assert view.text() == "hello\ncannot help"
+    for entry in view.parts():
+        print(entry.kind, entry.location.field, entry.location.index)
+
+# Arbitrary normalized content can be inspected independently of an annotation.
+assert MessageView.from_content("").text() == ""
+```
+
+Use `request.message(index)` for any history item, including negative Python
+indices. Out-of-range indices raise `IndexError`. `request.instructions_view()`
+selects only top-level instructions, and `response.output()` selects the current
+message and separate tool calls. Empty request history and absent instructions
+return `None`; response output always returns a view, even without parts.
+`MessageView.from_message(message)` accepts a normalized message dictionary and
+preserves its role, including tool-result semantics. `from_content(content)`
+accepts a normalized string or content-part list without a message role.
+
+**Ownership:** selection copies the selected content and tool calls into a
+Rust-owned snapshot. It does not copy the rest of the history or response
+metadata. Iterators, entries, tool views, and payload views share that snapshot
+and remain usable after the annotation or parent view is deleted. Later edits
+to the annotation do not change an existing snapshot. A retained entry can keep
+the entire selected snapshot alive. These are read-only snapshots rather than
+zero-copy borrows of a mutable Python annotation.
+
+Strings returned by `text()`, `text_parts()`, and entry properties are
+Python-owned. Media/native `entry.value` and tool `payload.value` create
+independent Python values when accessed; editing a returned dictionary or list
+changes neither the snapshot nor the annotation. No tool JSON string is parsed
+or JSON value rendered into text during traversal.
+
+`entry.kind` distinguishes `text`, `refusal`, `tool_call`, `tool_result`,
+`image_url`, `image`, `audio`, `file`, and `provider_native`. An unrecognized
+future kind is reported as `unknown`. Explicit text/refusals use `entry.text`.
+Calls expose `entry.tool_call` with `id`, `call_id`, `name`, and `arguments`;
+results expose `entry.tool_result` with `id`, `call_id`, `name`, `is_error`, and
+`payload`. Both argument and result payload views expose `kind` (`null`,
+`string`, `json`, or `content`) and `value`. A JSON string retains kind `json`.
+Native entries also expose `provider` and `native_kind`. Inapplicable properties
+return `None`.
+
+Locations expose `root`, `message_index`, `field`, and `index`. A request-selected
+item retains its nonnegative history index; standalone views have no history
+index. Locations describe the snapshot's normalized source, not stable editing
+handles or original provider offsets. Default text extraction follows the Rust
+rules above, including exclusions and supported shallow native fallbacks.
 
 ## How Provider Codecs Work
 
