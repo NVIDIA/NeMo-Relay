@@ -7491,3 +7491,124 @@ async fn component_launch_reuses_concurrently_cached_worker_and_cleans_duplicate
     assert!(owner.shutdown_checked().errors.is_empty());
     assert!(!selected.activation_dir.exists());
 }
+
+#[tokio::test]
+async fn content_inspection_authenticates_projects_and_validates_selection() {
+    use nemo_relay_types::codec::content::{ContentSelection, ContentSnapshot};
+    use pb::inspect_llm_content_request::Source;
+    use pb::inspect_llm_content_response::Result as Outcome;
+    let state = Arc::new(WorkerHostRuntimeState::new(
+        ACTIVATION_ID.into(),
+        AUTH_TOKEN.into(),
+    ));
+    let service = WorkerHostRuntimeService {
+        state: state.clone(),
+    };
+    let annotation: AnnotatedLlmRequest = serde_json::from_value(json!({"messages":[
+        {"role":"user","content":"earlier"},
+        {"role":"assistant","content":[{"type":"refusal","refusal":""}],"tool_calls":[
+            {"id":"c","type":"function","function":{"name":"f","arguments":"{invalid}"}}
+        ]}
+    ]}))
+    .unwrap();
+    let request = pb::InspectLlmContentRequest {
+        credentials: Some(pb::Credentials {
+            activation_id: ACTIVATION_ID.into(),
+            auth_token: AUTH_TOKEN.into(),
+        }),
+        source: Some(Source::Request(Box::new(encode_wire(&annotation).unwrap()))),
+        selection: Some(
+            nemo_relay_worker_proto::conversions::encode(ContentSelection::LastMessage).unwrap(),
+        ),
+    };
+    let response = service
+        .inspect_llm_content(Request::new(request.clone()))
+        .await
+        .unwrap()
+        .into_inner();
+    let Some(Outcome::Snapshot(snapshot)) = response.result else {
+        panic!("snapshot required")
+    };
+    let snapshot: ContentSnapshot = nemo_relay_worker_proto::conversions::decode(snapshot).unwrap();
+    assert_eq!(snapshot, annotation.last_message().unwrap().snapshot());
+    assert_eq!(snapshot.text_parts, [""]);
+    let mut invalid = request.clone();
+    invalid.credentials.as_mut().unwrap().auth_token = "wrong".into();
+    assert_eq!(
+        service
+            .inspect_llm_content(Request::new(invalid))
+            .await
+            .unwrap_err()
+            .code(),
+        tonic::Code::Unauthenticated
+    );
+    let mut invalid = request.clone();
+    invalid.selection = None;
+    assert_eq!(
+        service
+            .inspect_llm_content(Request::new(invalid))
+            .await
+            .unwrap_err()
+            .code(),
+        tonic::Code::InvalidArgument
+    );
+    for (selection, expected) in [
+        (ContentSelection::Output, tonic::Code::InvalidArgument),
+        (ContentSelection::Message(i64::MIN), tonic::Code::OutOfRange),
+        (ContentSelection::Message(2), tonic::Code::OutOfRange),
+    ] {
+        let mut invalid = request.clone();
+        invalid.selection = Some(nemo_relay_worker_proto::conversions::encode(selection).unwrap());
+        assert_eq!(
+            service
+                .inspect_llm_content(Request::new(invalid))
+                .await
+                .unwrap_err()
+                .code(),
+            expected
+        );
+    }
+    let mut absent = request.clone();
+    absent.source = Some(Source::Request(Box::new(
+        encode_wire(&AnnotatedLlmRequest::default()).unwrap(),
+    )));
+    assert!(matches!(
+        service
+            .inspect_llm_content(Request::new(absent))
+            .await
+            .unwrap()
+            .into_inner()
+            .result,
+        Some(Outcome::NoSelection(()))
+    ));
+    let output = pb::InspectLlmContentRequest {
+        source: Some(Source::Response(Box::default())),
+        selection: Some(
+            nemo_relay_worker_proto::conversions::encode(ContentSelection::Output).unwrap(),
+        ),
+        ..request.clone()
+    };
+    assert!(
+        matches!(service.inspect_llm_content(Request::new(output)).await.unwrap().into_inner().result, Some(Outcome::Snapshot(snapshot)) if snapshot.parts.is_empty() && snapshot.text_parts.is_empty())
+    );
+    let mut native = request.clone();
+    native.source = Some(Source::Message(encode_wire(&serde_json::from_value::<nemo_relay_types::codec::request::Message>(json!({
+        "role":"provider_native","provider":"openai_responses","kind":"message","value":{"role":"user","content":[
+            {"type":"input_text","text":"known"},{"type":"reasoning","text":"hidden"}
+        ]}
+    })).unwrap()).unwrap()));
+    native.selection =
+        Some(nemo_relay_worker_proto::conversions::encode(ContentSelection::All).unwrap());
+    assert!(
+        matches!(service.inspect_llm_content(Request::new(native)).await.unwrap().into_inner().result, Some(Outcome::Snapshot(snapshot)) if snapshot.text_parts == ["known"])
+    );
+    state.scope_accepting.store(false, Ordering::Release);
+    assert_eq!(
+        service
+            .inspect_llm_content(Request::new(request))
+            .await
+            .unwrap_err()
+            .code(),
+        tonic::Code::FailedPrecondition
+    );
+}

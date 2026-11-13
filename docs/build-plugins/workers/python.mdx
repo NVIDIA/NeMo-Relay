@@ -14,59 +14,81 @@ protobuf bindings, the authenticated server, and task cancellation.
 ## Inspect Normalized LLM Content
 
 Worker codec capabilities return normalized dictionaries. Keep those dictionaries
-for callbacks and encoding; use `nemo_relay_plugin.codecs` for local, read-only
-content inspection:
+for callbacks and encoding. Use async helpers in `nemo_relay_plugin.codecs` to
+select content through the Rust host:
 
 ```python
 from nemo_relay_plugin import codecs
 
-annotation = {"messages": [{"role": "user", "content": "hello"}]}
-view = codecs.last_message(annotation)
-if view is not None:
-    assert view.text() == "hello"
-    for entry in view.parts():
-        print(entry.kind, entry.location.message_index, entry.location.field)
+# Inside an async callback, using the component's ctx.runtime:
+async def inspect_request(runtime, annotation):
+    view = await codecs.last_message(runtime, annotation)
+    if view is not None:
+        print(view.text())
+        for entry in view.parts():
+            print(entry.kind, entry.location.message_index, entry.location.field)
 ```
+
+Each selection makes one authenticated `InspectLlmContent` RPC. The host applies
+the shared Rust selection, typed traversal, and text extraction policies, then
+returns a complete owned snapshot. Reading `parts()`, `text_parts()`, `text()`,
+locations, and tool payloads is local and makes no further RPCs. Python adapts
+the typed response; it does not recognize providers, search history, scan native
+JSON, or decide text eligibility.
 
 These helpers accept normalized annotations from codec decoding, request
 intercepts, or event category profiles. They do not decode raw provider payloads.
 Use the invocation's `WorkerRequestCodec.decode()` or
-`WorkerResponseCodec.decode_response()` capability first when starting with a
-raw request or response. Content inspection itself performs no RPC and does not
-require the main `nemo_relay` runtime extension.
+`WorkerResponseCodec.decode()` capability first when starting with a raw
+request or response. The standalone SDK does not require the main `nemo_relay`
+runtime extension.
 
-| Worker helper | Selection |
+| Async worker helper | Host selection |
 | --- | --- |
-| `last_message(request)` | Exactly the final request item, or `None` for empty history |
-| `message(request, index)` | Any history item, including negative Python indices |
-| `instructions_view(request)` | Top-level instructions, without a history fallback |
-| `output(response)` | Current normalized message and separate tool calls, including textless output |
-| `MessageView.from_message(message)` | A standalone normalized message dictionary |
-| `MessageView.from_content(content)` | A standalone string or normalized content-part list |
+| `last_message(runtime, request)` | Exactly the final request item, or `None` for empty history |
+| `message(runtime, request, index)` | Any history item, including negative Python indices |
+| `instructions_view(runtime, request)` | Top-level instructions, without a history fallback |
+| `output(runtime, response)` | Current normalized message and separate calls, including textless output |
+| `MessageView.from_message(runtime, message)` | A standalone normalized message dictionary |
+| `MessageView.from_content(runtime, content)` | A standalone string or normalized content-part list |
 
-Views expose `parts()`, `text_parts()`, and `text()`. Entries, locations, tool
-views, and payload views follow the [Python content snapshot API](/integrate-into-frameworks/provider-codecs#python-content-snapshots).
+The named text helpers `system_prompt(runtime, request)`,
+`last_user_message(runtime, request)`, and `response_text(runtime, response)`
+also await host inspection. Selection never skips a selected textless item to
+find another item with text. Default extraction includes text/refusals and
+supported shallow native fallbacks; tools, reasoning, media, and arbitrary nested
+metadata are excluded. Empty text remains distinct from absent text.
+
+Returned entries and payload views follow the
+[Python snapshot surface](/integrate-into-frameworks/provider-codecs#python-content-snapshots).
 Tool payloads retain their string, JSON, null, or complete-content representation.
-Default text includes text/refusals and supported shallow native fallbacks;
-tools, reasoning, media, and arbitrary nested metadata are excluded. Empty text
-remains distinct from absent text, and newline joining preserves whitespace.
+Authoritative text strings come from Rust; `text()` only joins those strings
+with newlines, preserving whitespace and empty parts.
 
-The module also provides `system_prompt(request)`, `last_user_message(request)`,
-and `response_text(response)` with the same selection and extraction rules as
-the main Python binding. A selected textless item does not cause a search for
-another item with text.
+**Ownership:** inspection sends normalized content fields, omitting unrelated
+request/response metadata. It materializes an owned transport projection rather
+than borrowing across processes. After the RPC completes, the host retains no
+snapshot handle. Python stores an immutable local snapshot; iterators and
+entries remain usable after the input, runtime, or parent view is deleted.
+Later input edits do not change it. Returned media/native and tool payload
+values are independent Python dictionaries/lists. Locations describe the
+original normalized source, not editing handles or provider-wire offsets.
+Execution message limits apply to both the request and returned snapshot.
 
-Selection copies only the selected item/content/output into immutable Python
-storage. Iterators and entries remain usable after the input dictionary or
-parent view is deleted. Later edits to the input do not change a snapshot;
-returned media/native and tool payload dictionaries/lists are independent copies.
-Retaining entries can retain selected snapshot data. Locations describe the
-normalized snapshot, not stable editing handles or provider-wire offsets.
+The equivalent Rust worker method is
+`runtime.inspect_llm_content(ContentSource::Request(&request), ContentSelection::LastMessage).await`.
+Local Rust/native-plugin readers can use
+`ContentSelection::select(...)` and `MessageView::snapshot()` directly. All
+routes use the same Rust policies; dictionary callback contracts are unchanged.
 
-Out-of-range history indices raise `IndexError`. Invalid selected normalized
-content raises `ValueError`. The helpers preserve the dictionary-based callback
-and wire contracts; they add neither mutable redaction nor live streaming
-extraction.
+This is an additive worker v1 operation. Existing decode/encode RPCs and their
+fields remain unchanged. On an older host, inspection raises `WorkerSdkError`
+with an unsupported-feature message; it never falls back to Python extraction.
+Upgrade the host and SDK together when using the new helpers. Explicit history
+indices outside the supplied request raise `IndexError`; malformed input,
+expired activations, and transport/message-limit failures remain errors.
+Cancellation propagates without retries or local fallback. Mutable redaction
+and live streaming extraction remain separate work.
 
 ## Internal Diagnostic Observations
 

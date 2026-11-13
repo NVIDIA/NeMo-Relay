@@ -174,10 +174,13 @@ index. Locations describe the snapshot's normalized source, not stable editing
 handles or original provider offsets. Default text extraction follows the Rust
 rules above, including exclusions and supported shallow native fallbacks.
 
-The standalone Python worker SDK provides equivalent typed snapshots through
-`nemo_relay_plugin.codecs`. Its annotations remain dictionaries, so selection and
-legacy text helpers are module functions such as `codecs.last_message(request)`
-and `codecs.response_text(response)`. See [Python worker content access](/build-plugins/workers/python#inspect-normalized-llm-content).
+The standalone Python worker SDK obtains equivalent typed snapshots through one
+Rust-host RPC per selection. Annotations remain dictionaries; helpers are async
+module functions such as `await codecs.last_message(runtime, request)` and
+`await codecs.response_text(runtime, response)`. Reads on returned snapshots are
+local. Python does not duplicate Rust selection or extraction policies. See
+[Python worker content access](/build-plugins/workers/python#inspect-normalized-llm-content)
+for transport ownership and older-host behavior.
 
 ### Node.js and TypeScript Content Snapshots
 

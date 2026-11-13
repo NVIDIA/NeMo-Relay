@@ -509,3 +509,145 @@ fn malformed_native_content_does_not_search_metadata_or_earlier_users() {
         assert!(request.last_user_message().is_none());
     }
 }
+
+#[test]
+fn owned_inspection_uses_shared_selection_and_retains_all_kinds() {
+    use nemo_relay_types::codec::content::{
+        ContentSelection as Select, ContentSelectionError, ContentSource as Source, SnapshotKind,
+        SnapshotPayload,
+    };
+    let mut request: AnnotatedLlmRequest = serde_json::from_value(json!({
+        "instructions": [],
+        "messages": [
+            {"role":"user","content":"earlier"},
+            {"role":"assistant","content":[
+                {"type":"text","text":" first "}, {"type":"refusal","refusal":""},
+                {"type":"tool_use","id":"c","name":"f","input":{"q":1}},
+                {"type":"tool_result","tool_use_id":"c","content":"hidden","is_error":false},
+                {"type":"image_url","image_url":{"url":"https://example.com/image"}},
+                {"type":"image","image":{"data":"bytes"}}, {"type":"audio","audio":{}}, {"type":"file","file":{}},
+                {"type":"provider_native","provider":"custom","kind":"extension","value":{"text":"native"}}
+            ],"tool_calls":[{"id":"separate","type":"function","function":{"name":"f","arguments":"{invalid}"}}]}
+        ]
+    })).unwrap();
+    let before = serde_json::to_value(&request).unwrap();
+    let selected = Select::Message(-1)
+        .select(Source::Request(&request))
+        .unwrap()
+        .unwrap();
+    let snapshot = selected.snapshot();
+    assert_eq!(snapshot.text_parts, [" first ", "", "native"]);
+    assert_eq!(snapshot.parts.len(), 10);
+    for entry in &snapshot.parts {
+        assert_eq!(entry.location.root, ContentRoot::RequestMessage(1));
+    }
+    let SnapshotKind::ToolCall(call) = &snapshot.parts[2].kind else {
+        panic!("inline call expected")
+    };
+    assert_eq!(call.arguments, SnapshotPayload::Json(json!({"q":1})));
+    let SnapshotKind::ToolResult(result) = &snapshot.parts[3].kind else {
+        panic!("tool result expected")
+    };
+    assert_eq!(result.is_error, Some(false));
+    assert_eq!(result.payload, SnapshotPayload::Json(json!("hidden")));
+    let SnapshotKind::ToolCall(call) = &snapshot.parts[9].kind else {
+        panic!("separate call expected")
+    };
+    assert_eq!(call.arguments, SnapshotPayload::String("{invalid}".into()));
+    assert_eq!(snapshot.parts[9].location.field, ContentField::ToolCalls);
+    assert_eq!(serde_json::to_value(&request).unwrap(), before);
+    assert_eq!(
+        Select::SystemPrompt
+            .select(Source::Request(&request))
+            .unwrap()
+            .unwrap()
+            .text(),
+        request.system_prompt()
+    );
+    assert_eq!(
+        Select::LastUserMessage
+            .select(Source::Request(&request))
+            .unwrap()
+            .unwrap()
+            .text(),
+        request.last_user_message()
+    );
+    assert_eq!(
+        Select::Message(i64::MIN)
+            .select(Source::Request(&request))
+            .unwrap_err(),
+        ContentSelectionError::IndexOutOfRange
+    );
+    assert_eq!(
+        Select::Output
+            .select(Source::Request(&request))
+            .unwrap_err(),
+        ContentSelectionError::InvalidSource
+    );
+    request.messages.clear();
+    assert!(
+        Select::LastMessage
+            .select(Source::Request(&request))
+            .unwrap()
+            .is_none()
+    );
+    assert_eq!(snapshot.text_parts, [" first ", "", "native"]);
+}
+
+#[test]
+fn owned_inspection_preserves_absence_empty_and_native_selection() {
+    use nemo_relay_types::codec::content::{ContentSelection as Select, ContentSource as Source};
+    let request: AnnotatedLlmRequest = serde_json::from_value(json!({"messages":[
+        {"role":"user","content":"earlier"},
+        {"role":"provider_native","provider":"openai_responses","kind":"message","value":{"role":"user","content":[]}}
+    ]})).unwrap();
+    assert!(
+        Select::Instructions
+            .select(Source::Request(&request))
+            .unwrap()
+            .is_none()
+    );
+    assert!(
+        Select::SystemPrompt
+            .select(Source::Request(&request))
+            .unwrap()
+            .is_none()
+    );
+    assert!(
+        Select::LastUserMessage
+            .select(Source::Request(&request))
+            .unwrap()
+            .unwrap()
+            .snapshot()
+            .text_parts
+            .is_empty()
+    );
+    let content = MessageContent::Text(String::new());
+    assert_eq!(
+        Select::All
+            .select(Source::Content(&content))
+            .unwrap()
+            .unwrap()
+            .snapshot()
+            .text_parts,
+        [""]
+    );
+    let response = AnnotatedLlmResponse::default();
+    let snapshot = Select::Output
+        .select(Source::Response(&response))
+        .unwrap()
+        .unwrap()
+        .snapshot();
+    assert!(snapshot.parts.is_empty());
+    assert!(snapshot.text_parts.is_empty());
+    let tool = message(json!({"role":"tool", "tool_call_id":"c", "content":"hidden"}));
+    assert!(
+        Select::All
+            .select(Source::Message(&tool))
+            .unwrap()
+            .unwrap()
+            .snapshot()
+            .text_parts
+            .is_empty()
+    );
+}
