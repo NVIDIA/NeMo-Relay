@@ -472,9 +472,16 @@ requests. The worker keeps its control connection open until teardown finishes,
 for up to 30 seconds. If the daemon accepted that notice, it skips the
 30-second recovery window when the connection closes and asks a connected MCP
 client to launch a replacement; if none is connected, the replacement waits for
-one. A worker that ends without notice, for example after `SIGKILL` or a crash,
-or whose notice the daemon did not accept, still gets the 30-second recovery
-window.
+one.
+
+A worker that ends without notice, for example after `SIGKILL` or a crash, is
+reported by the MCP client that launched it, which watches the worker process.
+Once the worker's control connection has closed, the daemon accepts that report,
+skips the 30-second recovery window, and launches a replacement. The daemon
+refuses a report while the worker's control connection is open, and only an MCP
+client on the worker's route can send one. A worker whose launching MCP
+client has exited, or whose exit is not reported, still gets the 30-second
+recovery window.
 
 When the last MCP reference leaves, a ready worker starts draining immediately
 by default, or after the configured idle period expires. A session arriving

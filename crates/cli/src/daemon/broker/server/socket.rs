@@ -669,6 +669,11 @@ async fn dispatch(
         {
             release_worker(state, &request)
         }
+        Command::WorkerExited(request)
+            if role == ComponentRole::Mcp && id.as_ref() == Some(&request.session_id) =>
+        {
+            worker_exited(state, &request).await
+        }
         Command::CancelActivation(request)
             if role == ComponentRole::Mcp && id.as_ref() == Some(&request.session_id) =>
         {
@@ -844,6 +849,89 @@ fn release_worker(
         worker_id = request.session_id.as_str();
         "Worker announced its exit; its disconnect skips the reconnect grace"
     );
+    StatusCode::NO_CONTENT.into_response()
+}
+
+/// Records a worker process exit reported by an MCP on the worker's route, usually the MCP that
+/// launched it. The report only counts once the worker's own control connection is gone, so it can
+/// end a crashed worker's reconnect grace early but never take down a live worker.
+async fn worker_exited(
+    state: &Arc<DaemonState>,
+    request: &SessionRequest<crate::daemon::common::control::WorkerExitedPayload>,
+) -> Response<Body> {
+    if request.payload.activation_id.len() > 128 {
+        return control_message(StatusCode::BAD_REQUEST, "worker exit payload is too large");
+    }
+    let authenticated = match authenticate_mcp(state, request, None) {
+        Ok(authenticated) => authenticated,
+        Err(response) => return response,
+    };
+    if authenticated.released {
+        return control_message(StatusCode::UNAUTHORIZED, "MCP session was already released");
+    }
+    if authenticated.duplicate {
+        return StatusCode::NO_CONTENT.into_response();
+    }
+    let activation_id = request.payload.activation_id.as_str();
+    let worker_id = lock(&state.worker_sessions)
+        .iter()
+        .find_map(|(worker_id, session)| {
+            let launched = match &session.publication {
+                WorkerPublication::Activation {
+                    activation_id: launched,
+                    ..
+                } => Some(launched.as_str()),
+                WorkerPublication::Recovery {
+                    launch_activation_id,
+                    ..
+                } => launch_activation_id.as_deref(),
+            };
+            (session.fingerprint == authenticated.fingerprint && launched == Some(activation_id))
+                .then(|| worker_id.clone())
+        });
+    let Some(worker_id) = worker_id else {
+        return control_message(
+            StatusCode::NOT_FOUND,
+            "worker activation is not on this route",
+        );
+    };
+    let transaction = state
+        .sockets
+        .transaction(ComponentRole::Worker, &worker_id)
+        .await;
+    let generation = match lock(&state.sockets.peers).get(&key(ComponentRole::Worker, &worker_id)) {
+        Some(peer) if peer.sender.is_some() => {
+            return control_message(StatusCode::CONFLICT, "worker control is still connected");
+        }
+        Some(peer) => peer.generation.clone(),
+        None => return control_message(StatusCode::NOT_FOUND, "worker control is not known"),
+    };
+    {
+        let sessions = lock(&state.worker_sessions);
+        if !sessions.contains_key(&worker_id) {
+            return control_message(
+                StatusCode::NOT_FOUND,
+                "worker activation is not on this route",
+            );
+        }
+        // Mark under the session lock so a concurrent cleanup cannot leave a stale marker.
+        lock(&state.sockets.exiting_workers).insert(worker_id.clone());
+    }
+    log::info!(
+        target: "nemo_relay.daemon",
+        event = "worker_exit_reported",
+        worker_id = worker_id.as_str(),
+        activation_id = activation_id;
+        "MCP reported the worker process exited; replacing it without the reconnect grace"
+    );
+    drop(transaction);
+    tokio::spawn(expire_disconnected_peer(
+        Arc::clone(state),
+        ComponentRole::Worker,
+        worker_id,
+        generation,
+        tokio::time::Instant::now(),
+    ));
     StatusCode::NO_CONTENT.into_response()
 }
 
