@@ -4430,6 +4430,97 @@ async fn gateway_surfaces_streaming_upstream_errors() {
 }
 
 #[tokio::test]
+async fn gateway_keeps_the_provider_status_when_a_stream_fails_before_its_first_event() {
+    // The provider sends 200 chunked SSE headers and then drops the connection before any
+    // event. Relay keeps the provider's 200 and reports the failure in-band, the same way it
+    // reports a failure after the first event.
+    use tokio::io::{AsyncReadExt, AsyncWriteExt};
+    let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
+    let address = listener.local_addr().unwrap();
+    let handle = tokio::spawn(async move {
+        loop {
+            let (mut socket, _) = listener.accept().await.unwrap();
+            let mut request = [0_u8; 4096];
+            let _ = socket.read(&mut request).await.unwrap();
+            socket
+                .write_all(
+                    b"HTTP/1.1 200 OK\r\ncontent-type: text/event-stream\r\ntransfer-encoding: chunked\r\n\r\n",
+                )
+                .await
+                .unwrap();
+            socket.flush().await.unwrap();
+            let _ = socket.shutdown().await;
+        }
+    });
+    let upstream = format!("http://{address}");
+
+    let mut failures = Vec::new();
+    for (path, body) in [
+        (
+            "/v1/messages",
+            json!({"model": "claude-test", "max_tokens": 16, "stream": true,
+                   "messages": [{"role": "user", "content": "hello"}]}),
+        ),
+        (
+            "/v1/responses",
+            json!({"model": "gpt-test", "input": "hello", "stream": true}),
+        ),
+        (
+            "/v1/chat/completions",
+            json!({"model": "gpt-test", "stream": true,
+                   "messages": [{"role": "user", "content": "hello"}]}),
+        ),
+    ] {
+        let mut config = test_config();
+        config.openai_base_url = upstream.clone();
+        config.anthropic_base_url = upstream.clone();
+        let mut request = Request::builder()
+            .method("POST")
+            .uri(path)
+            .header("content-type", "application/json");
+        if path == "/v1/messages" {
+            request = request.header("anthropic-version", "2023-06-01");
+        }
+        let response = router(config)
+            .oneshot(request.body(Body::from(body.to_string())).unwrap())
+            .await
+            .unwrap();
+
+        let status = response.status();
+        let bytes = response.into_body().collect().await.unwrap().to_bytes();
+        let text = String::from_utf8_lossy(&bytes).into_owned();
+        let events: Vec<Value> = text
+            .lines()
+            .filter_map(|line| line.strip_prefix("data: "))
+            .filter_map(|data| serde_json::from_str(data).ok())
+            .collect();
+        let error = events.first().cloned().unwrap_or(Value::Null);
+        let expected_type = if path == "/v1/messages" {
+            "api_error"
+        } else {
+            "server_error"
+        };
+        let in_band_error = events.len() == 1
+            && error["error"]["message"] == "NeMo Relay could not complete the response stream."
+            && error["error"]["type"] == expected_type
+            && (path == "/v1/messages" || error["error"]["code"] == "stream_error")
+            && (path == "/v1/chat/completions" || text.contains("event: error\n"))
+            && !text.contains("[DONE]")
+            && !text.contains("hook payload");
+        if status != StatusCode::OK || !in_band_error {
+            failures.push(format!("{path}: {status} {text}"));
+        }
+    }
+    handle.abort();
+    assert!(
+        failures.is_empty(),
+        "the provider answered 200, so a failure before the first event must keep 200 and \
+         report the error in the provider's stream protocol:\n{}",
+        failures.join("\n")
+    );
+}
+
+#[tokio::test]
 async fn gateway_rejects_unsupported_paths() {
     let app = router(test_config());
     let response = app
