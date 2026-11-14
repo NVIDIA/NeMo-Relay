@@ -366,6 +366,7 @@ macro_rules! enum_codec {
     };
 }
 
+mod content;
 mod dto;
 mod variants;
 

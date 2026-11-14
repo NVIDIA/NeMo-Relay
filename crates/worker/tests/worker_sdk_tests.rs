@@ -3130,6 +3130,8 @@ struct MockHost {
     registration_error: Arc<Mutex<Option<Status>>>,
     snapshot_error: Arc<Mutex<Option<Status>>>,
     snapshot_response: Arc<Mutex<Option<pb::GetCurrentScopeStackSnapshotResponse>>>,
+    content_response: Arc<Mutex<Option<pb::InspectLlmContentResponse>>>,
+    content_requests: Arc<Mutex<Vec<pb::InspectLlmContentRequest>>>,
 }
 
 impl MockHost {
@@ -3561,6 +3563,20 @@ impl RelayHostRuntime for MockHost {
                 wire_value(&json!({"headers": {}, "content": {}})).expect("encode LLM request"),
             )),
         }))
+    }
+
+    async fn inspect_llm_content(
+        &self,
+        request: Request<pb::InspectLlmContentRequest>,
+    ) -> std::result::Result<Response<pb::InspectLlmContentResponse>, Status> {
+        let request = request.into_inner();
+        let credentials = request.credentials.as_ref().unwrap();
+        authorize_host(&credentials.activation_id, &credentials.auth_token)?;
+        self.content_requests.lock().unwrap().push(request);
+        match self.content_response.lock().unwrap().clone() {
+            Some(response) => Ok(Response::new(response)),
+            None => Err(Status::unimplemented("old host fixture")),
+        }
     }
 
     async fn decode_llm_codec_response(
@@ -4901,4 +4917,77 @@ async fn worker_registration_rpc_cancellation_releases_context_for_retry() {
         .unwrap();
     assert_eq!(plugin.calls.load(Ordering::SeqCst), 2);
     close_registration_worker(handle, &mut client).await;
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn content_inspection_worker_uses_typed_host_snapshot_and_explicit_unsupported_error() {
+    use nemo_relay_types::codec::request::MessageContent;
+    use nemo_relay_worker::{ContentSelection, ContentSource};
+    struct ContentRuntime(Arc<Mutex<Option<PluginRuntime>>>);
+    impl WorkerPlugin for ContentRuntime {
+        fn plugin_kind(&self) -> &str {
+            "test.content"
+        }
+        fn register<'a>(
+            &'a self,
+            _: &serde_json::Map<String, Json>,
+            context: &'a mut PluginContext,
+        ) -> nemo_relay_worker::PluginFuture<'a, ()> {
+            Box::pin(async move {
+                *self.0.lock().unwrap() = context.runtime();
+                Ok(())
+            })
+        }
+    }
+    let captured = Arc::new(Mutex::new(None));
+    let host = MockHost::default();
+    let (host_handle, endpoint) = spawn_host(host.clone()).await;
+    let (worker_handle, mut client) =
+        spawn_worker(Arc::new(ContentRuntime(captured.clone())), endpoint).await;
+    register_plugin(&mut client).await;
+    let runtime = captured.lock().unwrap().take().unwrap();
+    let content = MessageContent::Text("local text must not replace host projection".into());
+    let error = runtime
+        .inspect_llm_content(ContentSource::Content(&content), ContentSelection::All)
+        .await
+        .unwrap_err();
+    assert!(error.to_string().contains("unsupported"));
+    *host.content_response.lock().unwrap() = Some(pb::InspectLlmContentResponse {
+        result: Some(pb::inspect_llm_content_response::Result::Snapshot(
+            pb::LlmContentSnapshot {
+                parts: vec![],
+                text_parts: vec!["host authoritative".into(), "".into()],
+            },
+        )),
+    });
+    let snapshot = runtime
+        .inspect_llm_content(ContentSource::Content(&content), ContentSelection::All)
+        .await
+        .unwrap()
+        .unwrap();
+    assert_eq!(snapshot.text_parts, ["host authoritative", ""]);
+    assert!(snapshot.parts.is_empty());
+    *host.content_response.lock().unwrap() = Some(pb::InspectLlmContentResponse {
+        result: Some(pb::inspect_llm_content_response::Result::NoSelection(())),
+    });
+    assert!(
+        runtime
+            .inspect_llm_content(
+                ContentSource::Request(&Default::default()),
+                ContentSelection::LastMessage
+            )
+            .await
+            .unwrap()
+            .is_none()
+    );
+    *host.content_response.lock().unwrap() = Some(pb::InspectLlmContentResponse { result: None });
+    assert!(
+        runtime
+            .inspect_llm_content(ContentSource::Content(&content), ContentSelection::All)
+            .await
+            .is_err()
+    );
+    assert_eq!(host.content_requests.lock().unwrap().len(), 4);
+    worker_handle.abort();
+    host_handle.abort();
 }

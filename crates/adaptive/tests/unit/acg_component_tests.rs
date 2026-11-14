@@ -56,6 +56,59 @@ fn sample_hot_cache() -> Arc<RwLock<HotCache>> {
     }))
 }
 
+#[test]
+fn adaptive_content_changed_media_allows_only_the_real_stable_scaffold_to_be_hinted() {
+    let request = |image: &str| LlmRequest {
+        headers: Default::default(),
+        content: json!({
+            "model": "claude-sonnet-4", "system": [{"type": "text", "text": "stable scaffold ".repeat(500)}],
+            "messages": [{"role": "user", "content": [
+                {"type": "text", "text": "describe this"},
+                {"type": "tool_result", "tool_use_id": "c", "content": "New  York"},
+                {"type": "image", "source": {"type": "base64", "media_type": "image/png", "data": image}}
+            ]}]
+        }),
+    };
+    let first = request("YQ==");
+    let live = request("Yg==");
+    let first_view = build_semantic_request_view(&first).unwrap();
+    let live_view = build_semantic_request_view(&live).unwrap();
+    let first_ir = crate::acg::ir_builder::build_prompt_ir(&first_view.annotated_request).unwrap();
+    let live_ir = crate::acg::ir_builder::build_prompt_ir(&live_view.annotated_request).unwrap();
+    assert_eq!(first_ir.blocks.len(), 2);
+    let mut stability = crate::acg::stability::analyze_stability(
+        &[first_ir.clone(), live_ir.clone()],
+        &crate::acg::stability::StabilityThresholds {
+            min_observations_for_full_confidence: 2,
+            ..Default::default()
+        },
+    );
+    assert_eq!(stability.stable_prefix_length, 1);
+    let learning_key = derive_acg_learning_key("media-agent", &first_view.annotated_request);
+    assert_eq!(
+        learning_key,
+        derive_acg_learning_key("media-agent", &live_view.annotated_request)
+    );
+    stability.stable_prefix_fingerprint =
+        crate::acg::stability::profile_prefix_fingerprint(&first_ir, 1, &learning_key);
+    // The deeper request-bound prefix still rejects a different media payload.
+    assert_ne!(
+        crate::acg::stability::profile_prefix_fingerprint(&first_ir, 2, &learning_key),
+        crate::acg::stability::profile_prefix_fingerprint(&live_ir, 2, &learning_key)
+    );
+    let cache = sample_hot_cache();
+    {
+        let mut guard = cache.write().unwrap();
+        guard.acg_stability = Some(stability);
+        guard.acg_observation_count = 2;
+    }
+    let plugin = build_provider_plugin("anthropic").unwrap();
+    let translated =
+        translate_request(&live, "media-agent", "anthropic", plugin.as_ref(), &cache).unwrap();
+    assert!(translated.content["system"][0]["cache_control"].is_object());
+    assert_eq!(translated.content["messages"], live.content["messages"]);
+}
+
 fn sample_openai_chat_request() -> LlmRequest {
     LlmRequest {
         headers: serde_json::Map::new(),
@@ -788,7 +841,7 @@ async fn acg_component_load_persisted_state_prefers_stability_and_falls_back_to_
     let stability = layered_stability_result(5);
 
     backend
-        .store_stability("agent-stable", &stability)
+        .store_stability(&acg_state_key("agent-stable"), &stability)
         .await
         .unwrap();
     load_persisted_acg_state("agent-stable", &backend, &hot_cache)
@@ -802,7 +855,7 @@ async fn acg_component_load_persisted_state_prefers_stability_and_falls_back_to_
 
     backend
         .store_observations(
-            "agent-observed",
+            &acg_state_key("agent-observed"),
             &[sample_prompt_ir("system-0"), sample_prompt_ir("system-1")],
         )
         .await
@@ -826,7 +879,10 @@ async fn acg_component_rehydrates_matching_profile_and_rejects_changed_scaffold(
         stability_with_prefix(2, MIN_ACG_OBSERVATIONS),
     );
     let backend = InMemoryBackend::new();
-    backend.store_stability(agent_id, &stability).await.unwrap();
+    backend
+        .store_stability(&acg_state_key(agent_id), &stability)
+        .await
+        .unwrap();
 
     let hot_cache = Arc::new(RwLock::new(HotCache {
         plan: None,
@@ -860,7 +916,10 @@ async fn acg_component_load_persisted_state_handles_empty_backend_and_poisoned_c
     assert_eq!(hot_cache.read().unwrap().acg_observation_count, 8);
 
     backend
-        .store_observations("poisoned-agent", &[sample_prompt_ir("system-0")])
+        .store_observations(
+            &acg_state_key("poisoned-agent"),
+            &[sample_prompt_ir("system-0")],
+        )
         .await
         .unwrap();
     let poisoned_cache = sample_hot_cache();

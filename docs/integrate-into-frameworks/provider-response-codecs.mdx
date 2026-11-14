@@ -46,6 +46,50 @@ Response codecs normalize provider output into fields that subscribers can inspe
 
 Use these annotations for observability, export, and debugging. Keep business logic that changes the caller-visible response in the framework or provider adapter, not in the response codec.
 
+OpenAI Chat's structured `message.refusal` and OpenAI Responses' `refusal`
+content blocks are normalized as `ContentPart::Refusal` entries in `message`.
+When ordinary text and refusals occur together, the normalized message is a
+parts array preserving their kinds. Chat text precedes its separate refusal
+field; Responses preserves content-block order. Text-only responses retain
+their existing string representation.
+
+`response_text()` includes both text and refusal parts, joined with newlines.
+Null or missing refusals add no part; explicit empty refusal strings remain
+present. Chat's streaming collector accumulates `delta.refusal`; Responses
+retains provisional refusal deltas and replaces them with completed content
+parts, output items, or the terminal snapshot when available. Completion reasons,
+usage, and tool calls remain separate.
+
+Gemini streaming aggregation preserves `promptFeedback`, including prompt-block
+reasons and safety ratings. A blocked prompt with no generated candidates stays
+without candidates; buffered and aggregated responses both normalize its block
+reason to `content_filter` when applicable.
+
+OpenAI Chat streaming aggregation retains `system_fingerprint` and `service_tier`
+and concatenates each choice's text and refusal logprob entries in arrival order.
+These fields remain available through `api_specific` after response decoding.
+
+Both gateway aggregation and daemon worker observation apply the streaming
+codec's completion validation. An OpenAI Responses stream that ends without a
+`response.completed`, `response.failed`, or `response.incomplete` event fails
+validation. The worker marks its observation as truncated and omits its aggregate;
+the bytes forwarded to the application are unchanged.
+
+Observation truncation does not override delivery's terminal outcome. Body read
+failures retain their body-error description. Cancellation retains an unset
+OpenTelemetry status for successful HTTP responses; a received HTTP error is
+still reported. The truncation flag remains available separately.
+
+OpenAI Responses aggregation retains partial text, refusals, and function-call
+arguments for output items supplied by the stream. Completed fields and parts
+replace provisional deltas; completed items replace their provisional content;
+a nonempty terminal output replaces the collected items. This prevents duplicate
+content while retaining observed output if a stream is interrupted. Partial
+aggregation does not imply successful completion: missing-terminal validation
+still applies, and usage is included only when the provider supplies it. The
+finalizer exposes the partial aggregate; consumers can omit it on stream failure.
+
+
 ## Cost Estimation
 
 Response codecs should keep reporting provider usage fields without rewriting

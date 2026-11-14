@@ -584,3 +584,71 @@ fn diagnostic_transport_preserves_opaque_execution_and_phase_names() {
         assert_eq!(encode::<_, String>(phase).unwrap(), name);
     }
 }
+
+#[test]
+fn content_inspection_projection_round_trips_all_typed_payloads_and_locations() {
+    use nemo_relay_types::codec::content::{
+        ContentField, ContentLocation, ContentRoot, ContentSelection, ContentSnapshot,
+    };
+    use nemo_relay_types::codec::request::Message;
+    let messages = json!([
+        {"role":"assistant","content":[
+            {"type":"text","text":""},{"type":"refusal","refusal":"no"},
+            {"type":"tool_use","id":"c","name":"f","input":{"n":18446744073709551615u64}},
+            {"type":"tool_result","tool_use_id":"c","content":"hidden","is_error":false},
+            {"type":"image_url","image_url":{"url":"image"}}, {"type":"image","image":{}},
+            {"type":"audio","audio":{}},{"type":"file","file":{}},
+            {"type":"provider_native","provider":"custom","kind":"extension","value":{"text":"fallback"}}
+        ],"tool_calls":[{"id":"c","type":"function","function":{"name":"f","arguments":"{invalid}"}}]},
+        {"role":"tool","tool_call_id":"c","content":"hidden"},
+        {"role":"function","name":"f","content":null},
+        {"role":"function","name":"f","content":"hidden"},
+        {"role":"tool_call","id":"i","call_id":"c","name":"f","arguments":"{invalid}"},
+        {"role":"tool_result","id":"i","call_id":"c","output":null}
+    ]);
+    for value in messages.as_array().unwrap() {
+        let message: Message = serde_json::from_value(value.clone()).unwrap();
+        let original = message.content_view().snapshot();
+        let wire: pb::LlmContentSnapshot = encode(original.clone()).unwrap();
+        nemo_relay_worker_proto::validation::validate(&wire).unwrap();
+        let wire = pb::LlmContentSnapshot::decode(wire.encode_to_vec().as_slice()).unwrap();
+        assert_eq!(decode::<ContentSnapshot, _>(wire).unwrap(), original);
+    }
+    for selection in [
+        ContentSelection::LastMessage,
+        ContentSelection::Message(-1),
+        ContentSelection::Instructions,
+        ContentSelection::SystemPrompt,
+        ContentSelection::LastUserMessage,
+        ContentSelection::Output,
+        ContentSelection::All,
+    ] {
+        let wire: pb::LlmContentSelection = encode(selection).unwrap();
+        assert_eq!(decode::<ContentSelection, _>(wire).unwrap(), selection);
+    }
+    for root in [
+        ContentRoot::RequestMessage(7),
+        ContentRoot::Message,
+        ContentRoot::Response,
+        ContentRoot::Content,
+    ] {
+        for field in [
+            ContentField::Content,
+            ContentField::Message,
+            ContentField::ToolCalls,
+            ContentField::ToolCallItem,
+            ContentField::Output,
+            ContentField::Value,
+            ContentField::NativeContent,
+        ] {
+            let location = ContentLocation {
+                root,
+                field,
+                index: Some(0),
+            };
+            let wire: pb::LlmContentLocation = encode(location).unwrap();
+            nemo_relay_worker_proto::validation::validate(&wire).unwrap();
+            assert_eq!(decode::<ContentLocation, _>(wire).unwrap(), location);
+        }
+    }
+}

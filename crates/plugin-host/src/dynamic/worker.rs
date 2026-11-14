@@ -5244,6 +5244,88 @@ impl RelayHostRuntime for WorkerHostRuntimeService {
         )))
     }
 
+    async fn inspect_llm_content(
+        &self,
+        request: Request<wire::InspectLlmContentRequest>,
+    ) -> Result<Response<wire::InspectLlmContentResponse>, Status> {
+        use nemo_relay_types::codec::content::{
+            ContentSelection, ContentSelectionError, ContentSource,
+        };
+        use wire::inspect_llm_content_request::Source;
+        use wire::inspect_llm_content_response::Result as Outcome;
+
+        let request = request.into_inner();
+        let credentials = request
+            .credentials
+            .as_ref()
+            .ok_or_else(|| Status::unauthenticated("missing credentials"))?;
+        self.state
+            .authorize(&credentials.activation_id, &credentials.auth_token)?;
+        if !self.state.scope_accepting.load(Ordering::Acquire) {
+            return Err(Status::failed_precondition(
+                "worker activation is shutting down",
+            ));
+        }
+        nemo_relay_worker_proto::validation::validate(&request)
+            .map_err(Status::invalid_argument)?;
+        let selection: ContentSelection = nemo_relay_worker_proto::conversions::decode(
+            request
+                .selection
+                .ok_or_else(|| Status::invalid_argument("missing selection"))?,
+        )
+        .map_err(|error| Status::invalid_argument(error.to_string()))?;
+        let projection = |source| {
+            selection
+                .select(source)
+                .map(|view| view.map(|view| view.snapshot()))
+                .map_err(|error| match error {
+                    ContentSelectionError::IndexOutOfRange => {
+                        Status::out_of_range(error.to_string())
+                    }
+                    ContentSelectionError::InvalidSource => {
+                        Status::invalid_argument(error.to_string())
+                    }
+                })
+        };
+        let snapshot = match request
+            .source
+            .ok_or_else(|| Status::invalid_argument("missing source"))?
+        {
+            Source::Request(value) => {
+                let source: AnnotatedLlmRequest =
+                    nemo_relay_worker_proto::conversions::decode(*value)
+                        .map_err(|error| Status::invalid_argument(error.to_string()))?;
+                projection(ContentSource::Request(&source))?
+            }
+            Source::Response(value) => {
+                let source: AnnotatedLlmResponse =
+                    nemo_relay_worker_proto::conversions::decode(*value)
+                        .map_err(|error| Status::invalid_argument(error.to_string()))?;
+                projection(ContentSource::Response(&source))?
+            }
+            Source::Message(value) => {
+                let source = nemo_relay_worker_proto::conversions::decode(value)
+                    .map_err(|error| Status::invalid_argument(error.to_string()))?;
+                projection(ContentSource::Message(&source))?
+            }
+            Source::Content(value) => {
+                let source = nemo_relay_worker_proto::conversions::decode(value)
+                    .map_err(|error| Status::invalid_argument(error.to_string()))?;
+                projection(ContentSource::Content(&source))?
+            }
+        };
+        let result = match snapshot {
+            Some(snapshot) => Outcome::Snapshot(
+                nemo_relay_worker_proto::conversions::encode(snapshot)
+                    .map_err(|error| Status::internal(error.to_string()))?,
+            ),
+            None => Outcome::NoSelection(()),
+        };
+        Ok(Response::new(wire::InspectLlmContentResponse {
+            result: Some(result),
+        }))
+    }
+
     async fn decode_llm_codec_response(
         &self,
         request: Request<DecodeLlmCodecResponseRequest>,

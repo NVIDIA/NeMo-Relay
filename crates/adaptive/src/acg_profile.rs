@@ -5,11 +5,19 @@
 //! LLM requests.
 
 use crate::acg::canonicalize::{canonicalize_value, sha256_hex};
+use nemo_relay_types::codec::content::ContentKind;
+use std::borrow::Cow;
+
 use nemo_relay_types::codec::request::{
-    AnnotatedLlmRequest, ContentPart, Message, MessageContent, ToolDefinition,
+    AnnotatedLlmRequest, Message, MessageContent, ToolDefinition,
 };
 
 const HASH_PREFIX_LEN: usize = 16;
+
+/// Version the stored analysis representation without deleting earlier state.
+pub(crate) fn acg_state_key(agent_id: &str) -> String {
+    format!("{agent_id}::acg-ir=2")
+}
 
 struct AcgKeyParts<'a> {
     model: &'a str,
@@ -37,8 +45,11 @@ pub(crate) fn derive_acg_learning_key(
         .map(short_hash)
         .unwrap_or("stable-scaffold");
     let key = format!(
-        "{agent_id}::model={}::seed={seed_hash}::system={}::tools={}",
-        parts.model, parts.system_hash, parts.tool_hash
+        "{}::model={}::seed={seed_hash}::system={}::tools={}",
+        acg_state_key(agent_id),
+        parts.model,
+        parts.system_hash,
+        parts.tool_hash
     );
     parts
         .response_format_hash
@@ -303,30 +314,40 @@ fn response_format_fingerprint(annotated_request: &AnnotatedLlmRequest) -> Optio
 }
 
 fn extract_text(content: &MessageContent) -> String {
-    match content {
-        MessageContent::Text(text) => text.clone(),
-        MessageContent::Parts(parts) => parts
-            .iter()
-            .map(|part| match part {
-                ContentPart::Text { text, .. } => text.clone(),
-                ContentPart::Refusal { refusal, .. } => refusal.clone(),
-                ContentPart::ImageUrl { image_url, .. } => format!(
-                    "[image:{}:{}]",
-                    image_url.detail.as_deref().unwrap_or("none"),
-                    sha256_hex(&image_url.url)
-                ),
-                ContentPart::Image { .. }
-                | ContentPart::Audio { .. }
-                | ContentPart::File { .. }
-                | ContentPart::ToolUse { .. }
-                | ContentPart::ToolResult { .. }
-                | ContentPart::ProviderNative { .. } => {
-                    serde_json::to_string(part).unwrap_or_default()
-                }
-            })
-            .collect::<Vec<_>>()
-            .join("\n"),
+    let MessageContent::Parts(parts) = content else {
+        return content
+            .content_view()
+            .text()
+            .map(Cow::into_owned)
+            .unwrap_or_default();
+    };
+    let mut rendered = String::new();
+    let mut first = true;
+    for entry in content.content_view().parts() {
+        let part = match entry.kind {
+            ContentKind::Text(text) | ContentKind::Refusal(text) => Cow::Borrowed(text),
+            ContentKind::ImageUrl(image_url) => Cow::Owned(format!(
+                "[image:{}:{}]",
+                image_url.detail.as_deref().unwrap_or("none"),
+                sha256_hex(&image_url.url),
+            )),
+            _ => {
+                // Preserve this consumer's existing structured rendering, including
+                // retained fields. The view's location refers to the source part.
+                let index = entry
+                    .location
+                    .index
+                    .expect("multipart entries have an index");
+                Cow::Owned(serde_json::to_string(&parts[index]).unwrap_or_default())
+            }
+        };
+        if !first {
+            rendered.push('\n');
+        }
+        rendered.push_str(&part);
+        first = false;
     }
+    rendered
 }
 
 fn short_hash(value: &str) -> &str {

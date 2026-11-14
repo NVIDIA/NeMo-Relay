@@ -141,6 +141,51 @@ fn economics_internal_build_prefix_stats_stops_at_first_non_stable_block() {
 }
 
 #[test]
+fn adaptive_content_economics_stops_before_unknown_media_tokens() {
+    let mut ir = prompt_ir(vec![
+        block(
+            0,
+            PromptRole::System,
+            BlockContentType::Text,
+            ProvenanceLabel::System,
+            500,
+        ),
+        block(
+            1,
+            PromptRole::User,
+            BlockContentType::Image,
+            ProvenanceLabel::User,
+            500,
+        ),
+        block(
+            2,
+            PromptRole::Assistant,
+            BlockContentType::Text,
+            ProvenanceLabel::Developer,
+            500,
+        ),
+    ]);
+    ir.blocks[1].token_metadata = None;
+    let stability = StabilityAnalysisResult {
+        scores: (0..3)
+            .map(|index| score(index, StabilityClass::Stable, 1.0, 1.0))
+            .collect(),
+        stable_prefix_length: 3,
+        stable_prefix_fingerprint: None,
+        total_observations: 6,
+    };
+    let stats = build_prefix_stats(&ir, &stability, 3, 400, 5.0, &model_capabilities(), 6);
+    assert_eq!(stats.len(), 1);
+    ir.blocks[1].token_metadata = Some(TokenizationMetadata {
+        model_family: "claude".into(),
+        token_count: 250,
+    });
+    let stats = build_prefix_stats(&ir, &stability, 3, 400, 5.0, &model_capabilities(), 6);
+    assert_eq!(stats.len(), 3);
+    assert_eq!(stats[2].cumulative_tokens, 1250);
+}
+
+#[test]
 fn economics_internal_classify_candidate_boundary_covers_semantic_variants() {
     let prompt_ir = prompt_ir(vec![
         block(

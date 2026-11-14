@@ -18,6 +18,7 @@ use axum::http::header::AUTHORIZATION;
 use axum::http::header::{ACCEPT, CONTENT_ENCODING, CONTENT_LENGTH, CONTENT_TYPE};
 use axum::http::{HeaderMap, HeaderName, HeaderValue, Method, Request, Response, StatusCode, Uri};
 use axum::response::IntoResponse;
+use futures_util::StreamExt as _;
 use http_body_util::LengthLimitError;
 use hyper::body::{Body as HttpBody, Frame, Incoming, SizeHint};
 use nemo_relay_codecs::resolve::{ProviderSurface, request_codec, streaming_codec};
@@ -27,7 +28,7 @@ use nemo_relay_runtime::api::llm::{
     llm_request_intercepts_with_source,
 };
 use nemo_relay_runtime::api::registry::{RuntimeRegistrationKind, runtime_registration_presence};
-use nemo_relay_runtime::api::runtime::TASK_SCOPE_STACK;
+use nemo_relay_runtime::api::runtime::{LlmJsonStream, TASK_SCOPE_STACK};
 use nemo_relay_runtime::codec::response_codec;
 use nemo_relay_types::error::{FlowError, UpstreamFailure, UpstreamFailureClass};
 use serde_json::{Value, json};
@@ -1455,30 +1456,34 @@ impl ObservationReceiver {
     }
 
     async fn finish_inner(mut self, surface: ProviderSurface, streaming: bool) -> ObservedResponse {
+        let signal = Arc::clone(&self.signal);
+        let status = self.status;
         let value = if streaming {
             self.finish_stream(surface).await
         } else {
             self.finish_buffered().await
         };
-        let terminal = self.signal.wait().await;
-        let truncated = self.signal.truncated.load(Ordering::Acquire);
-        let mut failure = match terminal {
-            OBSERVATION_COMPLETE => None,
+        let terminal = signal.wait().await;
+        let truncated = signal.truncated.load(Ordering::Acquire);
+        let failure = match terminal {
+            // A transport failure is more specific than capture or HTTP errors.
             OBSERVATION_BODY_ERROR => Some("provider response body failed".to_owned()),
+            OBSERVATION_COMPLETE if truncated => {
+                Some("provider response observation was truncated".to_owned())
+            }
+            OBSERVATION_COMPLETE | OBSERVATION_CANCELLED if !status.is_success() => {
+                Some(format!("provider returned HTTP {}", status.as_u16()))
+            }
             // Dropping delivery is a downstream decision, not a provider failure.
-            OBSERVATION_CANCELLED => None,
+            // An already received HTTP error is still reported by the branch above.
+            OBSERVATION_COMPLETE | OBSERVATION_CANCELLED => None,
             _ => Some("provider response observation ended unexpectedly".to_owned()),
         };
-        if truncated {
-            failure = Some("provider response observation was truncated".to_owned());
-        } else if !self.status.is_success() {
-            failure = Some(format!("provider returned HTTP {}", self.status.as_u16()));
-        }
         ObservedResponse {
             value: if truncated { None } else { value },
             truncated,
             terminal,
-            status: self.status,
+            status,
             failure,
         }
     }
@@ -1494,61 +1499,81 @@ impl ObservationReceiver {
         serde_json::from_slice(&bytes).ok()
     }
 
-    async fn finish_stream(&mut self, surface: ProviderSurface) -> Option<Value> {
-        let mut decoder = SseEventDecoder::new();
+    async fn finish_stream(mut self, surface: ProviderSurface) -> Option<Value> {
         let codec = streaming_codec(surface);
         let mut collector = codec.collector();
+        let mut borrowed_collector = codec.borrowed_collector();
         let finalizer = codec.finalizer();
-        let mut valid = true;
-        let mut first_event = true;
-        let mut first_event_warned = false;
-        let mut last_event_at = tokio::time::Instant::now();
-        loop {
-            let chunk = self
+        let signal = Arc::clone(&self.signal);
+        // Observation owns its source, so validation stays off the delivery path.
+        let source = LlmJsonStream::new(async_stream::stream! {
+            let mut decoder = SseEventDecoder::new();
+            let mut first_event = true;
+            let mut first_event_warned = false;
+            let mut last_event_at = tokio::time::Instant::now();
+            while let Some(chunk) = self
                 .next_stream_chunk(first_event, &mut first_event_warned, &mut last_event_at)
-                .await;
-            let Some(chunk) = chunk else {
-                break;
-            };
-            if !valid || self.signal.truncated.load(Ordering::Acquire) {
-                continue;
-            }
-            for event in decoder.push_bytes_results(&chunk) {
-                match event {
-                    Ok(event) => {
-                        if first_event {
-                            operational::upstream_first_event(&self.operational);
-                            first_event = false;
+                .await
+            {
+                if self.signal.truncated.load(Ordering::Acquire) {
+                    continue;
+                }
+                for result in decoder.push_bytes_results(&chunk) {
+                    match result {
+                        Ok(event) => {
+                            if first_event {
+                                operational::upstream_first_event(&self.operational);
+                                first_event = false;
+                            }
+                            last_event_at = tokio::time::Instant::now();
+                            yield Ok(event.data);
                         }
-                        last_event_at = tokio::time::Instant::now();
-                        if collector(event.data).is_ok() {
-                            continue;
+                        Err(error) => {
+                            yield Err(error);
+                            return;
                         }
-                        valid = false;
-                        self.signal.truncate();
-                        break;
-                    }
-                    Err(_) => {
-                        valid = false;
-                        self.signal.truncate();
-                        break;
                     }
                 }
             }
-        }
-        if valid
-            && !self.signal.truncated.load(Ordering::Acquire)
-            && let Ok(Some(event)) = decoder.finish()
-        {
-            if first_event {
-                operational::upstream_first_event(&self.operational);
+            if !self.signal.truncated.load(Ordering::Acquire) {
+                match decoder.finish() {
+                    Ok(Some(event)) => {
+                        if first_event {
+                            operational::upstream_first_event(&self.operational);
+                        }
+                        yield Ok(event.data);
+                    }
+                    Ok(None) => {}
+                    Err(error) => yield Err(error),
+                }
             }
-            if collector(event.data).is_err() {
-                self.signal.truncate();
+        });
+        let mut stream = codec.validate_stream(source);
+        let mut valid = true;
+        while let Some(event) = stream.next().await {
+            let result = event.and_then(|event| match borrowed_collector.as_mut() {
+                Some(collect) => collect(&event),
+                None => collector(event),
+            });
+            if result.is_err() {
                 valid = false;
+                break;
             }
         }
-        (valid && !self.signal.truncated.load(Ordering::Acquire)).then(finalizer)
+        if stream.close().await.is_err() {
+            valid = false;
+        }
+        // Closing the observation channel and recording delivery's outcome can race.
+        // Wait for that outcome before interpreting a missing completion event.
+        if !valid
+            && !matches!(
+                signal.wait().await,
+                OBSERVATION_CANCELLED | OBSERVATION_BODY_ERROR
+            )
+        {
+            signal.truncate();
+        }
+        (valid && !signal.truncated.load(Ordering::Acquire)).then(finalizer)
     }
 
     async fn next_stream_chunk(

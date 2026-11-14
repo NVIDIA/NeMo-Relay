@@ -498,7 +498,7 @@ fn adaptive_runtime_locking_and_helper_errors_are_covered() {
             parse_annotated_request(annotated_wrapper.as_any())
                 .unwrap()
                 .last_user_message(),
-            Some("wrapped")
+            Some("wrapped".into())
         );
         assert_eq!(
             parse_annotated_request(
@@ -514,7 +514,7 @@ fn adaptive_runtime_locking_and_helper_errors_are_covered() {
             )
             .unwrap()
             .last_user_message(),
-            Some("json")
+            Some("json".into())
         );
         assert!(
             parse_annotated_request(py.None().bind(py))

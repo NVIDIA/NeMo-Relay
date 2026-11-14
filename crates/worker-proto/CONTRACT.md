@@ -25,6 +25,7 @@ The schema files have the following roles:
 | --- | --- |
 | `common.proto` | Credentials, protocol identity, lossless JSON, schema identity, errors, registration surfaces, scope types, severity |
 | `llm.proto` | Request/response DTOs, multimodal variants, open codec-owned provider data, optimization contributions and summaries |
+| `content.proto` | Content selections, read-time locations, typed owned parts/payloads, and authoritative text projections |
 | `event.proto` | ATOF envelopes, scope/mark variants, category profiles, sanitizer fields, pending marks |
 | `runtime.proto` | Lifecycle, per-surface invocation, continuations, codecs, scopes, registration, and logging messages |
 | `diagnostics.proto` | Delivery/session contracts and the canonical diagnostic snapshot graph |
@@ -32,7 +33,7 @@ The schema files have the following roles:
 | `diagnostic_memory.proto` | Canonical memory page, backing footprints, row attribution, and selection totals |
 | `diagnostic_resource.proto` | Typed resource memory samples, units, numeric kinds, availability, and fixed nullable limit slots |
 | `plugin_worker_service.proto` | Worker service and its eight request and response pairs |
-| `relay_host_runtime_service.proto` | Host runtime service and its 17 request and response pairs |
+| `relay_host_runtime_service.proto` | Host runtime service and its 18 request and response pairs |
 | `relay_diagnostics_service.proto` | Diagnostic service and its six request and response pairs |
 
 The shared data types in `nemo-relay-types` define application behavior. Protobuf
@@ -517,3 +518,22 @@ marks. Test inputs live in test source; serialized messages and descriptors are
 generated during the build or test run. Python checks also compare runtime struct
 fields with protobuf DTOs. SDK validation and Rust/Python host interoperability
 are covered by the worker SDK and installed-wheel host integration suites.
+
+## Normalized Content Inspection
+
+`InspectLlmContent` is an additive authenticated host runtime operation. It accepts
+one typed normalized request, response, message, or content source and a closed
+selection. Rust selects before extracting and returns either explicit absence
+or a complete owned `LlmContentSnapshot`. Entry kinds, normalized locations, and
+tool payload representations are closed protobuf alternatives. Provider/media
+payloads remain lossless JSON. `text_parts` is authoritative output from shared
+Rust extraction; an empty list differs from a list containing an empty string.
+
+No snapshot handle or provider state is retained by the host. Inspection needs
+activation credentials but no invocation-bound codec capability because the
+source is already supplied by the worker. Invalid source/selection pairs return
+`INVALID_ARGUMENT`; out-of-range history indices return `OUT_OF_RANGE`. Message
+limits bound the complete input and projection. Shutdown activations fail
+inspection. Old hosts return `UNIMPLEMENTED`; SDKs expose this explicitly without
+running independent extraction policies locally. Existing v1 methods, fields,
+and protocol/version identities are unchanged.

@@ -41,6 +41,28 @@ fn variable_extractor_returns_none_when_no_patterns_match() {
 }
 
 #[test]
+fn adaptive_content_opaque_fingerprints_are_not_variable_text() {
+    let mut block = PromptBlock {
+        span_id: SpanId("user-0".into()),
+        sequence_index: 0,
+        role: PromptRole::User,
+        content: "2026-04-17T12:34:56Z".into(),
+        content_type: BlockContentType::Opaque,
+        provenance: ProvenanceLabel::User,
+        sensitivity: SensitivityLabel::Public,
+        token_metadata: None,
+    };
+    assert!(
+        extract_variables_from_blocks(&[block.clone()], &default_variable_patterns()).is_empty()
+    );
+    block.content_type = BlockContentType::Text;
+    assert_eq!(
+        extract_variables_from_blocks(&[block], &default_variable_patterns()).len(),
+        1
+    );
+}
+
+#[test]
 fn variable_extractor_prefers_longer_overlapping_matches_and_extracts_blocks() {
     let patterns = vec![
         VariablePattern {

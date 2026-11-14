@@ -6156,7 +6156,7 @@ fn assert_annotated_turn_state_edge_shapes() {
             message: Some(MessageContent::Parts(vec![])),
             ..Default::default()
         }),
-        None
+        Some(json!(""))
     );
 }
 
@@ -7434,6 +7434,155 @@ fn test_exporter_annotated_tool_only_response_renders_empty_message() {
     let step = &trajectory.steps[0];
     assert_eq!(step.message, json!(""));
     assert_eq!(step.tool_calls.as_ref().unwrap()[0].function_name, "lookup");
+}
+
+#[test]
+fn test_exporter_annotated_response_preserves_multipart_text_and_refusals() {
+    let cases: Vec<(&dyn LlmResponseCodec, Json, &str)> = vec![
+        (
+            &OpenAIChatCodec,
+            json!({"choices": [{"message": {"content": null, "refusal": " cannot comply "}}]}),
+            " cannot comply ",
+        ),
+        (
+            &OpenAIChatCodec,
+            json!({"choices": [{"message": {"content": "", "refusal": ""}}]}),
+            "\n",
+        ),
+        (
+            &OpenAIResponsesCodec,
+            json!({"status": "completed", "output": [{"type": "message", "content": [
+                {"type": "output_text", "text": "first"},
+                {"type": "refusal", "refusal": ""},
+                {"type": "refusal", "refusal": "cannot comply"},
+                {"type": "output_text", "text": " last "}
+            ]}]}),
+            "first\n\ncannot comply\n last ",
+        ),
+        (
+            &OpenAIResponsesCodec,
+            json!({"status": "completed", "output": [{"type": "message", "content": [
+                {"type": "refusal", "refusal": ""}
+            ]}]}),
+            "",
+        ),
+    ];
+    for (codec, raw, expected) in cases {
+        let annotation = codec.decode_response(&raw).unwrap();
+        let trajectory = export_annotated_response(annotation, raw.clone());
+        let step = &trajectory.steps[0];
+        assert_eq!(step.message, json!(expected));
+        assert_eq!(step.extra.as_ref().unwrap()["llm_response"], raw);
+    }
+}
+
+#[test]
+fn test_exporter_annotated_response_does_not_fall_back_for_textless_or_tool_parts() {
+    for (parts, expected) in [
+        (json!([]), ""),
+        (json!([{ "type": "text", "text": "  " }]), "  "),
+        (
+            json!([
+                {"type": "tool_use", "id": "c", "name": "lookup", "input": {"text": "argument"}},
+                {"type": "tool_result", "tool_use_id": "c", "content": "result"}
+            ]),
+            "",
+        ),
+        (
+            json!([
+                {"type": "text", "text": "first"},
+                {"type": "tool_use", "id": "c", "name": "lookup", "input": "argument"},
+                {"type": "refusal", "refusal": "no"},
+                {"type": "tool_result", "tool_use_id": "c", "content": [{"type": "text", "text": "nested result"}]}
+            ]),
+            "first\nno",
+        ),
+    ] {
+        let annotation = AnnotatedLlmResponse {
+            message: Some(serde_json::from_value(parts).unwrap()),
+            ..Default::default()
+        };
+        let raw = json!({"content": "stale raw text"});
+        let trajectory = export_annotated_response(annotation, raw.clone());
+        assert_eq!(trajectory.steps[0].message, json!(expected));
+        assert_eq!(
+            trajectory.steps[0].extra.as_ref().unwrap()["llm_response"],
+            raw
+        );
+    }
+}
+
+#[test]
+fn test_exporter_annotated_response_keeps_media_and_opaque_raw_fallback() {
+    let raw_content = json!([
+        {"type": "text", "text": "raw caption"},
+        {"type": "image", "source": {"media_type": "image/png", "path": "shot.png"}}
+    ]);
+    for part in [
+        json!({"type": "image", "image": {"source": {"media_type": "image/png", "path": "shot.png"}}}),
+        json!({"type": "image_url", "image_url": {"url": "https://example.com/image.png"}}),
+        json!({"type": "audio", "audio": {"data": "YQ=="}}),
+        json!({"type": "file", "file": {"file_id": "file-1"}}),
+        json!({"type": "provider_native", "provider": "custom", "kind": "image", "value": {"opaque": true}}),
+    ] {
+        let annotation = AnnotatedLlmResponse {
+            message: Some(
+                serde_json::from_value(json!([
+                    {"type": "text", "text": "normalized caption"}, part
+                ]))
+                .unwrap(),
+            ),
+            ..Default::default()
+        };
+        let raw = json!({"content": raw_content});
+        let trajectory = export_annotated_response(annotation, raw.clone());
+        assert_eq!(trajectory.steps[0].message, raw_content);
+        assert_eq!(
+            trajectory.steps[0].extra.as_ref().unwrap()["llm_response"],
+            raw
+        );
+    }
+}
+
+#[test]
+fn test_exporter_annotated_response_keeps_tools_and_usage_separate_from_refusals() {
+    let raw = json!({
+        "choices": [{"message": {
+            "content": "prefix", "refusal": "cannot comply",
+            "tool_calls": [{"id": "call-1", "type": "function", "provider_data": {"trace_id": "t-1"},
+                "function": {"name": "lookup", "arguments": "{\"query\":\"tool payload\"}"}}]
+        }}],
+        "usage": {"prompt_tokens": 11, "completion_tokens": 5, "total_tokens": 16}
+    });
+    let annotation = OpenAIChatCodec.decode_response(&raw).unwrap();
+    let trajectory = export_annotated_response(annotation, raw.clone());
+    let step = &trajectory.steps[0];
+    assert_eq!(step.message, json!("prefix\ncannot comply"));
+    let call = &step.tool_calls.as_ref().unwrap()[0];
+    assert_eq!(call.function_name, "lookup");
+    assert_eq!(call.arguments, json!({"query": "tool payload"}));
+    assert_eq!(
+        call.extra.as_ref().unwrap()["provider_data"]["trace_id"],
+        "t-1"
+    );
+    assert_eq!(step.metrics.as_ref().unwrap().prompt_tokens, Some(11));
+    assert_eq!(step.metrics.as_ref().unwrap().completion_tokens, Some(5));
+    assert_eq!(step.extra.as_ref().unwrap()["llm_response"], raw);
+}
+
+fn export_annotated_response(annotation: AnnotatedLlmResponse, raw: Json) -> AtifTrajectory {
+    let exporter = AtifExporter::new("session-1".into(), make_agent_info())
+        .with_host(crate::test_support::detached_host());
+    exporter.state.lock().unwrap().events.push(
+        event_builder(Uuid::now_v7(), EventType::End)
+            .scope_type(ScopeType::Llm)
+            .output(raw)
+            .annotated_response(annotation)
+            .build(),
+    );
+    let trajectory = exporter.export().unwrap();
+    assert_atif_v17_shape(&trajectory);
+    trajectory
 }
 
 #[test]

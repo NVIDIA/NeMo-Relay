@@ -137,22 +137,30 @@ fn build_cache_request_facts_from_prompt_ir(
             })
     };
 
-    let current_exemplar = stable_blocks
+    let block_identities = stable_blocks
         .iter()
-        .map(|block| {
+        .filter_map(|block| {
+            crate::acg::stability::block_key(block).map(|identity| (*block, identity))
+        })
+        .collect::<Vec<_>>();
+    let current_exemplar = block_identities
+        .iter()
+        .map(|(block, identity)| {
             (
                 block.span_id.0.clone(),
                 block.sequence_index,
-                short_hash_prefix(&block.content),
+                short_hash_prefix(identity),
             )
         })
         .collect::<Vec<_>>();
     let current_prefix_hash =
-        if stable_prefix_length == 0 || stable_blocks.len() < stable_prefix_length {
+        if stable_prefix_length == 0 || block_identities.len() < stable_prefix_length {
             None
         } else {
             Some(prefix_hash(
-                stable_blocks.iter().map(|block| block.content.as_str()),
+                block_identities
+                    .iter()
+                    .map(|(_, identity)| identity.as_str()),
             ))
         };
 

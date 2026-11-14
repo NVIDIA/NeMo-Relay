@@ -7,6 +7,8 @@
 //! already-sanitized values only. They never receive the original provider
 //! payload, so an unmodeled provider field cannot bypass the trajectory policy.
 
+use std::borrow::Cow;
+
 use serde_json::{Map, Value as Json, json};
 
 use nemo_relay_codecs::resolve::{
@@ -14,7 +16,8 @@ use nemo_relay_codecs::resolve::{
 };
 use nemo_relay_runtime::api::llm::LlmRequest;
 use nemo_relay_runtime::codec::response_codec;
-use nemo_relay_types::codec::request::{AnnotatedLlmRequest, ContentPart, MessageContent};
+use nemo_relay_types::codec::content::ContentKind;
+use nemo_relay_types::codec::request::AnnotatedLlmRequest;
 use nemo_relay_types::codec::response::{
     AnnotatedLlmResponse, FinishReason, ResponseToolCall, Usage,
 };
@@ -141,7 +144,30 @@ fn render_openai_chat_response(response: &AnnotatedLlmResponse) -> Json {
 
     let mut message = Map::new();
     message.insert("role".into(), Json::String("assistant".into()));
-    insert_string(&mut message, "content", response_text(response).as_deref());
+    let content = join_text_parts(
+        response
+            .output()
+            .parts()
+            .filter_map(|entry| match entry.kind {
+                ContentKind::Text(text) => Some(text),
+                _ => None,
+            }),
+    );
+    let refusal = join_text_parts(
+        response
+            .output()
+            .parts()
+            .filter_map(|entry| match entry.kind {
+                ContentKind::Refusal(text) => Some(text),
+                _ => None,
+            }),
+    );
+    if let Some(text) = content {
+        message.insert("content".into(), Json::String(text.into_owned()));
+    }
+    if let Some(text) = refusal {
+        message.insert("refusal".into(), Json::String(text.into_owned()));
+    }
     if let Some(calls) = response.tool_calls.as_deref() {
         message.insert("tool_calls".into(), Json::Array(openai_tool_calls(calls)));
     }
@@ -181,12 +207,27 @@ fn render_openai_responses_response(response: &AnnotatedLlmResponse) -> Json {
     );
 
     let mut output = Vec::new();
-    if let Some(text) = response_text(response) {
-        output.push(json!({
-            "type": "message",
-            "role": "assistant",
-            "content": [{"type": "output_text", "text": text}],
-        }));
+    let content: Vec<Json> = response
+        .output()
+        .parts()
+        .filter_map(|entry| {
+            let (kind, field, text) = match entry.kind {
+                ContentKind::Text(text) => ("output_text", "text", text),
+                ContentKind::Refusal(text) => ("refusal", "refusal", text),
+                _ => return None,
+            };
+            Some(Json::Object(Map::from_iter([
+                ("type".into(), Json::String(kind.into())),
+                (field.into(), Json::String(text.to_owned())),
+            ])))
+        })
+        .collect();
+    if !content.is_empty() {
+        let mut message = json!({
+            "type": "message", "role": "assistant",
+        });
+        message["content"] = Json::Array(content);
+        output.push(message);
     }
     output.extend(
         response
@@ -230,7 +271,9 @@ fn render_anthropic_response(response: &AnnotatedLlmResponse) -> Json {
 
     let mut content = Vec::new();
     if let Some(text) = response_text(response) {
-        content.push(json!({"type": "text", "text": text}));
+        let mut part = json!({"type": "text"});
+        part["text"] = Json::String(text.into_owned());
+        content.push(part);
     }
     content.extend(
         response
@@ -264,10 +307,9 @@ fn render_oci_response(response: &AnnotatedLlmResponse) -> Json {
     let mut message = Map::new();
     message.insert("role".into(), Json::String("ASSISTANT".into()));
     if let Some(text) = response_text(response) {
-        message.insert(
-            "content".into(),
-            Json::Array(vec![json!({"type": "TEXT", "text": text})]),
-        );
+        let mut part = json!({"type": "TEXT"});
+        part["text"] = Json::String(text.into_owned());
+        message.insert("content".into(), Json::Array(vec![part]));
     }
     if let Some(calls) = response.tool_calls.as_deref() {
         message.insert(
@@ -319,7 +361,10 @@ fn render_gemini_response(response: &AnnotatedLlmResponse) -> Json {
 
     let mut parts = Vec::new();
     if let Some(text) = response_text(response) {
-        parts.push(json!({"text": text}));
+        parts.push(Json::Object(Map::from_iter([(
+            "text".into(),
+            Json::String(text.into_owned()),
+        )])));
     }
     parts.extend(
         response
@@ -357,27 +402,35 @@ fn render_gemini_response(response: &AnnotatedLlmResponse) -> Json {
     Json::Object(root)
 }
 
-fn response_text(response: &AnnotatedLlmResponse) -> Option<String> {
-    match response.message.as_ref()? {
-        MessageContent::Text(text) => Some(text.clone()),
-        MessageContent::Parts(parts) => {
-            let text = parts
-                .iter()
-                .filter_map(|part| match part {
-                    ContentPart::Text { text, .. } => Some(text.as_str()),
-                    ContentPart::Refusal { refusal, .. } => Some(refusal.as_str()),
-                    ContentPart::ImageUrl { .. }
-                    | ContentPart::Image { .. }
-                    | ContentPart::Audio { .. }
-                    | ContentPart::File { .. }
-                    | ContentPart::ToolUse { .. }
-                    | ContentPart::ToolResult { .. }
-                    | ContentPart::ProviderNative { .. } => None,
-                })
-                .collect::<Vec<_>>();
-            (!text.is_empty()).then(|| text.join("\n"))
-        }
+fn response_text(response: &AnnotatedLlmResponse) -> Option<Cow<'_, str>> {
+    // This fail-closed projection accepts only explicit portable text/refusals.
+    // The shared default text accessor also permits native fallbacks, which are
+    // deliberately excluded here even if a native value contains a text field.
+    join_text_parts(
+        response
+            .output()
+            .parts()
+            .filter_map(|entry| match entry.kind {
+                ContentKind::Text(text) | ContentKind::Refusal(text) => Some(text),
+                _ => None,
+            }),
+    )
+}
+
+fn join_text_parts<'a>(mut parts: impl Iterator<Item = &'a str>) -> Option<Cow<'a, str>> {
+    let first = parts.next()?;
+    let Some(second) = parts.next() else {
+        return Some(Cow::Borrowed(first));
+    };
+    let mut joined = String::with_capacity(first.len() + 1 + second.len());
+    joined.push_str(first);
+    joined.push('\n');
+    joined.push_str(second);
+    for part in parts {
+        joined.push('\n');
+        joined.push_str(part);
     }
+    Some(Cow::Owned(joined))
 }
 
 fn openai_tool_calls(calls: &[ResponseToolCall]) -> Vec<Json> {

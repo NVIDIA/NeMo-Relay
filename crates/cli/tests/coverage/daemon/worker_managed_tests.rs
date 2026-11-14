@@ -321,6 +321,204 @@ async fn observation_body_deadline_terminates_a_stalled_observer() {
     assert_eq!(started.elapsed(), OBSERVATION_COMPLETION_TIMEOUT);
 }
 
+#[tokio::test]
+async fn stream_observation_validates_responses_completion_without_changing_delivery() {
+    for terminal in [None, Some("completed"), Some("failed"), Some("incomplete")] {
+        let mut wire = String::from(
+            "data: {\"type\":\"response.created\",\"response\":{\"id\":\"test\",\"output\":[]}}\n\n",
+        );
+        if let Some(status) = terminal {
+            wire.push_str(&format!(
+                "data: {}\n\n",
+                json!({
+                    "type": format!("response.{status}"),
+                    "response": {"id": "test", "status": status, "output": []}
+                })
+            ));
+        }
+        let expected = Bytes::from(wire);
+        let (body, observation) = observe_body(
+            Full::new(expected.clone()),
+            StatusCode::OK,
+            DEFAULT_OBSERVATION_CAPTURE_BYTES,
+            OperationalContext::new(),
+        );
+        assert_eq!(body.collect().await.unwrap().to_bytes(), expected);
+        let observed = observation
+            .finish(ProviderSurface::OpenAIResponses, true)
+            .await;
+        assert_eq!(observed.terminal, OBSERVATION_COMPLETE);
+        assert_eq!(observed.truncated, terminal.is_none());
+        assert_eq!(observed.value.is_some(), terminal.is_some());
+        assert_eq!(observed.failure.is_some(), terminal.is_none());
+    }
+}
+
+#[tokio::test]
+async fn stream_observation_rejects_malformed_trailing_sse_frames() {
+    // A complete terminal event cannot hide a malformed final, unterminated frame.
+    let expected = Bytes::from_static(
+        b"data: {\"type\":\"response.completed\",\"response\":{\"output\":[]}}\n\ndata: {broken",
+    );
+    let (body, observation) = observe_body(
+        Full::new(expected.clone()),
+        StatusCode::OK,
+        DEFAULT_OBSERVATION_CAPTURE_BYTES,
+        OperationalContext::new(),
+    );
+    assert_eq!(body.collect().await.unwrap().to_bytes(), expected);
+    let observed = observation
+        .finish(ProviderSurface::OpenAIResponses, true)
+        .await;
+    assert!(observed.truncated);
+    assert!(observed.value.is_none());
+    assert!(observed.failure.is_some());
+}
+
+#[tokio::test(start_paused = true)]
+async fn stream_observation_preserves_cancelled_and_failed_transport_outcomes() {
+    for terminal in [OBSERVATION_CANCELLED, OBSERVATION_BODY_ERROR] {
+        let (sender, receiver) = mpsc::channel(1);
+        let signal = Arc::new(ObservationSignal::new());
+        sender.send(Bytes::from_static(b"data: {\"type\":\"response.created\",\"response\":{\"id\":\"test\",\"output\":[]}}\n\n")).await.unwrap();
+        drop(sender);
+        // EOF can become visible before the delivery task records why it ended.
+        let delivery_signal = Arc::clone(&signal);
+        let delivery = tokio::spawn(async move {
+            tokio::time::sleep(Duration::from_millis(1)).await;
+            delivery_signal.finish(terminal);
+        });
+        let observation = ObservationReceiver {
+            receiver,
+            signal,
+            status: StatusCode::OK,
+            operational: OperationalContext::new(),
+        };
+        let observed = observation
+            .finish(ProviderSurface::OpenAIResponses, true)
+            .await;
+        delivery.await.unwrap();
+        assert_eq!(observed.terminal, terminal);
+        assert!(!observed.truncated);
+        assert!(observed.value.is_none());
+        assert_eq!(
+            observed.failure.is_some(),
+            terminal == OBSERVATION_BODY_ERROR
+        );
+        assert_eq!(
+            observed.metadata()["otel.status_code"],
+            if terminal == OBSERVATION_CANCELLED {
+                "UNSET"
+            } else {
+                "ERROR"
+            }
+        );
+    }
+}
+
+#[tokio::test]
+async fn truncated_observation_preserves_delivery_outcomes_and_http_errors() {
+    let first = Bytes::from_static(
+        b"data: {\"type\":\"response.created\",\"response\":{\"id\":\"test\",\"output\":[]}}\n\n",
+    );
+    for streaming in [false, true] {
+        for (terminal, status, failure, otel_status, terminal_name) in [
+            (
+                OBSERVATION_COMPLETE,
+                StatusCode::OK,
+                Some("provider response observation was truncated"),
+                "ERROR",
+                "complete",
+            ),
+            (
+                OBSERVATION_CANCELLED,
+                StatusCode::OK,
+                None,
+                "UNSET",
+                "cancelled",
+            ),
+            (
+                OBSERVATION_BODY_ERROR,
+                StatusCode::OK,
+                Some("provider response body failed"),
+                "ERROR",
+                "body_error",
+            ),
+            (
+                OBSERVATION_COMPLETE,
+                StatusCode::BAD_GATEWAY,
+                Some("provider response observation was truncated"),
+                "ERROR",
+                "complete",
+            ),
+            (
+                OBSERVATION_CANCELLED,
+                StatusCode::BAD_GATEWAY,
+                Some("provider returned HTTP 502"),
+                "ERROR",
+                "cancelled",
+            ),
+            (
+                OBSERVATION_BODY_ERROR,
+                StatusCode::BAD_GATEWAY,
+                Some("provider response body failed"),
+                "ERROR",
+                "body_error",
+            ),
+        ] {
+            let next = if terminal == OBSERVATION_BODY_ERROR {
+                Err(io::Error::other("transport read failed"))
+            } else {
+                Ok(Frame::data(Bytes::from_static(b"tail")))
+            };
+            let frames = futures_util::stream::iter([Ok(Frame::data(first.clone())), next]);
+            let (mut body, observation) = observe_body(
+                StreamBody::new(frames),
+                status,
+                1,
+                OperationalContext::new(),
+            );
+            // Exceed capture capacity before delivery is cancelled or fails.
+            let delivered = body.frame().await.unwrap().unwrap().into_data().unwrap();
+            assert_eq!(delivered, first);
+            match terminal {
+                OBSERVATION_CANCELLED => drop(body),
+                OBSERVATION_BODY_ERROR => {
+                    assert!(body.frame().await.unwrap().is_err());
+                    drop(body);
+                }
+                _ => {
+                    assert_eq!(body.collect().await.unwrap().to_bytes(), "tail");
+                }
+            }
+            let observed = observation
+                .finish(ProviderSurface::OpenAIResponses, streaming)
+                .await;
+            assert!(observed.truncated);
+            assert!(observed.value.is_none());
+            assert_eq!(observed.terminal, terminal);
+            assert_eq!(observed.failure.as_deref(), failure);
+            let metadata = observed.metadata();
+            assert_eq!(metadata["otel.status_code"], otel_status);
+            assert_eq!(
+                metadata
+                    .get("otel.status_description")
+                    .and_then(Value::as_str),
+                failure
+            );
+            assert_eq!(
+                metadata["daemon_worker_observation"]["terminal"],
+                terminal_name
+            );
+            assert_eq!(metadata["daemon_worker_observation"]["truncated"], true);
+            assert_eq!(
+                metadata["daemon_worker_observation"]["http_status"],
+                status.as_u16()
+            );
+        }
+    }
+}
+
 #[tokio::test(start_paused = true)]
 async fn stream_observation_rearms_stall_warning_after_each_silent_interval() {
     let (sender, receiver) = tokio::sync::mpsc::channel(2);
@@ -1212,7 +1410,10 @@ async fn observation_reports_provider_body_errors_and_metadata() {
         .await;
     assert_eq!(observed.terminal, OBSERVATION_BODY_ERROR);
     assert_eq!(observed.status, StatusCode::BAD_GATEWAY);
-    assert!(observed.failure.is_some());
+    assert_eq!(
+        observed.failure.as_deref(),
+        Some("provider response body failed")
+    );
     assert_eq!(
         observed.metadata()["daemon_worker_observation"]["terminal"],
         "body_error"
@@ -1963,7 +2164,7 @@ async fn observed_responses_preserve_sanitized_payloads_and_usage_without_a_fall
             .filter(|event| event.annotated_response().is_some())
         {
             let annotated = end.annotated_response().unwrap();
-            assert_eq!(annotated.response_text(), Some("[REDACTED]"));
+            assert_eq!(annotated.response_text(), Some("[REDACTED]".into()));
             let usage = serde_json::to_value(annotated.usage.as_ref().unwrap()).unwrap();
             assert_eq!(usage["prompt_tokens"], 17);
             assert_eq!(usage["completion_tokens"], 5);

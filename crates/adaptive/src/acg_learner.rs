@@ -12,7 +12,7 @@ use crate::acg::ir_builder::build_prompt_ir;
 use crate::acg::prompt_ir::PromptIR;
 use crate::acg::stability::{StabilityThresholds, analyze_stability};
 
-use crate::acg_profile::derive_acg_learning_key;
+use crate::acg_profile::{acg_state_key, derive_acg_learning_key};
 use crate::error::{AdaptiveError, Result};
 use crate::learner::traits::Learner;
 use crate::storage::traits::StorageBackendDyn;
@@ -135,15 +135,15 @@ impl Learner for AcgLearner {
 
             if let Some((aggregate_observations, aggregate_stability)) = best_profile_seed.as_ref()
             {
-                // Persist the runtime seed entry under plain agent_id so registration can
+                // Persist the runtime seed entry under the versioned agent key so registration can
                 // rehydrate HotCache without scanning learning keys. Its fingerprint stays
                 // bound to the winning learning key, so a request from a different profile
                 // fails the reuse gate instead of inheriting another profile's scaffold.
                 backend
-                    .store_observations(&self.agent_id, aggregate_observations)
+                    .store_observations(&acg_state_key(&self.agent_id), aggregate_observations)
                     .await?;
                 backend
-                    .store_stability(&self.agent_id, aggregate_stability)
+                    .store_stability(&acg_state_key(&self.agent_id), aggregate_stability)
                     .await?;
             }
 

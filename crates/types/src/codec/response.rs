@@ -488,25 +488,18 @@ where
 // ---------------------------------------------------------------------------
 
 impl AnnotatedLlmResponse {
-    /// Extract the text content of the response message.
+    /// Inspect current normalized content followed by separate tool calls.
     ///
-    /// For [`MessageContent::Text`], returns the string directly.
-    /// For [`MessageContent::Parts`], returns the text of the first
-    /// [`super::request::ContentPart::Text`] part.
-    /// Returns `None` if `message` is `None`.
+    /// This does not reconstruct provider ordering between those fields.
     #[must_use]
-    pub fn response_text(&self) -> Option<&str> {
-        match self.message.as_ref()? {
-            MessageContent::Text(s) => Some(s.as_str()),
-            MessageContent::Parts(parts) => parts.iter().find_map(|p| match p {
-                crate::codec::request::ContentPart::Text { text, .. } => Some(text.as_str()),
-                crate::codec::request::ContentPart::ProviderNative { value, .. } => value
-                    .get("text")
-                    .and_then(crate::Json::as_str)
-                    .or_else(|| value.get("refusal").and_then(crate::Json::as_str)),
-                _ => None,
-            }),
-        }
+    pub fn output(&self) -> super::content::MessageView<'_> {
+        super::content::MessageView::response(self)
+    }
+
+    /// Join all explicit text/refusals in the current output, excluding tools.
+    #[must_use]
+    pub fn response_text(&self) -> Option<std::borrow::Cow<'_, str>> {
+        self.output().text()
     }
 
     /// Check if the response contains any tool calls.
