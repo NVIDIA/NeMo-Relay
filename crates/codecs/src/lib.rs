@@ -9,6 +9,7 @@ pub mod gemini_generate_content;
 pub mod oci_genai;
 pub mod openai_chat;
 pub mod openai_responses;
+mod redaction;
 pub mod resolve;
 mod response;
 pub mod streaming;

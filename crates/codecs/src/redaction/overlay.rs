@@ -3,7 +3,7 @@
 
 use serde_json::{Map, Value as Json};
 
-use nemo_relay_codecs::resolve::ProviderSurface;
+use crate::resolve::ProviderSurface;
 use nemo_relay_types::codec::request::{ContentPart, MessageContent};
 use nemo_relay_types::codec::response::{AnnotatedLlmResponse, FinishReason, ResponseToolCall};
 
@@ -841,5 +841,5 @@ fn oci_cohere_v2_finish_reason(reason: &FinishReason) -> &str {
 }
 
 #[cfg(test)]
-#[path = "../tests/coverage/overlay_tests.rs"]
+#[path = "../../tests/unit/redaction_overlay_tests.rs"]
 mod tests;

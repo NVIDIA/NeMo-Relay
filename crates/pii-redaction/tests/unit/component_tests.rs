@@ -1038,11 +1038,18 @@ fn no_codec_request_context() -> LlmSanitizeRequestContext {
 }
 
 struct IdentifiedRequestCodec {
+    redaction_enabled: bool,
     identity: LlmCodecIdentity,
     inner: OpenAIResponsesCodec,
 }
 
 impl LlmCodec for IdentifiedRequestCodec {
+    fn redaction(&self) -> Option<&dyn nemo_relay_types::codec::redaction::LlmRequestRedaction> {
+        self.redaction_enabled
+            .then(|| LlmCodec::redaction(&self.inner))
+            .flatten()
+    }
+
     fn codec_identity(&self) -> LlmCodecIdentity {
         self.identity.clone()
     }
@@ -1061,6 +1068,12 @@ impl LlmCodec for IdentifiedRequestCodec {
 }
 
 impl LlmResponseCodec for IdentifiedRequestCodec {
+    fn redaction(&self) -> Option<&dyn nemo_relay_types::codec::redaction::LlmResponseRedaction> {
+        self.redaction_enabled
+            .then(|| LlmResponseCodec::redaction(&self.inner))
+            .flatten()
+    }
+
     fn codec_identity(&self) -> LlmCodecIdentity {
         self.identity.clone()
     }
@@ -1077,6 +1090,10 @@ impl LlmResponseCodec for IdentifiedRequestCodec {
 struct WrappedResponsesCodec;
 
 impl LlmCodec for WrappedResponsesCodec {
+    fn redaction(&self) -> Option<&dyn nemo_relay_types::codec::redaction::LlmRequestRedaction> {
+        LlmCodec::redaction(&OpenAIResponsesCodec)
+    }
+
     fn codec_identity(&self) -> LlmCodecIdentity {
         LlmCodecIdentity::BuiltIn(BuiltinLlmCodec::OpenAiResponses)
     }
@@ -1114,6 +1131,10 @@ impl LlmCodec for WrappedResponsesCodec {
 }
 
 impl LlmResponseCodec for WrappedResponsesCodec {
+    fn redaction(&self) -> Option<&dyn nemo_relay_types::codec::redaction::LlmResponseRedaction> {
+        LlmResponseCodec::redaction(&OpenAIResponsesCodec)
+    }
+
     fn codec_identity(&self) -> LlmCodecIdentity {
         LlmCodecIdentity::BuiltIn(BuiltinLlmCodec::OpenAiResponses)
     }
@@ -1176,10 +1197,12 @@ async fn trajectory_managed_llm_events_fail_closed_for_runtime_and_opaque_codecs
                 .request(request)
                 .func(noop_openai_chat_exec_fn(response.clone()))
                 .codec(Arc::new(IdentifiedRequestCodec {
+                    redaction_enabled: false,
                     identity: identity.clone(),
                     inner: OpenAIResponsesCodec,
                 }))
                 .response_codec(Arc::new(IdentifiedRequestCodec {
+                    redaction_enabled: false,
                     identity,
                     inner: OpenAIResponsesCodec,
                 }))
@@ -1323,6 +1346,7 @@ async fn normalized_llm_paths_use_the_active_codec_and_fail_closed_for_unknown_c
                 }),
             },
             LlmSanitizeRequestContext::for_request_codec(Some(Arc::new(IdentifiedRequestCodec {
+                redaction_enabled: true,
                 identity,
                 inner: OpenAIResponsesCodec,
             }))),
@@ -8006,7 +8030,7 @@ async fn normalized_refusal_paths_redact_matching_openai_wire_fields() {
 }
 
 #[tokio::test]
-async fn normalized_response_removal_omits_payload_when_part_positions_cannot_be_preserved() {
+async fn normalized_response_removal_preserves_survivor_positions_or_fails_closed() {
     let raw = json!({"status":"completed","output":[{
         "type":"message","content":[
             {"type":"output_text","text":"SECRET-first"},
@@ -8023,7 +8047,10 @@ async fn normalized_response_removal_omits_payload_when_part_positions_cannot_be
         let backend = crate::builtin::CompiledBuiltinBackend::new(
             BuiltinBackendConfig {
                 action: "remove".into(),
-                target_paths: target_paths.into_iter().map(String::from).collect(),
+                target_paths: target_paths
+                    .iter()
+                    .map(|path| String::from(*path))
+                    .collect(),
                 ..Default::default()
             },
             None,
@@ -8036,9 +8063,23 @@ async fn normalized_response_removal_omits_payload_when_part_positions_cannot_be
         )
         .await
         .unwrap();
-        // Removal keeps null slots or deletes required fields. Until projection
-        // carries part provenance, omit the payload rather than shifting safe tail.
-        assert!(sanitized.is_none());
+        if target_paths[0].ends_with("/text") {
+            assert!(
+                sanitized.is_none(),
+                "removing a required field is unsupported"
+            );
+        } else {
+            let sanitized = sanitized.expect("whole-part removal retains source positions");
+            assert_eq!(
+                sanitized["output"][0]["content"]
+                    .as_array()
+                    .unwrap()
+                    .last()
+                    .unwrap()["text"],
+                "safe tail"
+            );
+            assert!(!sanitized.to_string().contains("SECRET-first"));
+        }
     }
 }
 
@@ -8132,6 +8173,75 @@ async fn trajectory_refusal_projections_preserve_types_without_context_leaks() {
                 assert_eq!(call.name, "lookup");
                 assert_eq!(call.arguments, json!({}));
                 assert_eq!(decoded.usage.unwrap().total_tokens, Some(5));
+            }
+        }
+    }
+}
+
+#[tokio::test]
+async fn runtime_and_opaque_codecs_opt_into_editing_and_clean_projection_independently_of_identity()
+{
+    for identity in [
+        LlmCodecIdentity::Opaque,
+        LlmCodecIdentity::Runtime("example.responses".into()),
+    ] {
+        for redaction_enabled in [false, true] {
+            let codec = Arc::new(IdentifiedRequestCodec {
+                identity: identity.clone(),
+                inner: OpenAIResponsesCodec,
+                redaction_enabled,
+            });
+            let request = LlmRequest {
+                headers: serde_json::Map::new(),
+                content: json!({"input":"SECRET request"}),
+            };
+            let response = json!({"output":[{"type":"message", "content":[{"type":"output_text", "text":"SECRET response"}]}]});
+            let backend = crate::builtin::CompiledBuiltinBackend::new(
+                BuiltinBackendConfig {
+                    action: "regex_replace".into(),
+                    pattern: Some("SECRET".into()),
+                    replacement: Some("[REDACTED]".into()),
+                    target_paths: vec!["/messages/0/content".into(), "/message".into()],
+                    ..Default::default()
+                },
+                None,
+            )
+            .unwrap();
+            let request_context = LlmSanitizeRequestContext::for_request_codec(Some(codec.clone()));
+            let response_context = LlmSanitizeResponseContext::for_response_codec(Some(codec));
+            let edited_request = crate::builtin::llm_sanitize_request_callback(backend.clone())(
+                request.clone(),
+                request_context.clone(),
+            )
+            .await
+            .unwrap();
+            let edited_response = crate::builtin::llm_sanitize_response_callback(backend)(
+                response.clone(),
+                response_context.clone(),
+            )
+            .await
+            .unwrap();
+            let trajectory = trajectory_backend(None, "redact_all_leaves");
+            let projected_request = crate::builtin::trajectory_llm_request_projection_callback(
+                trajectory.clone(),
+            )(request, request_context)
+            .await
+            .unwrap();
+            let projected_response = crate::builtin::trajectory_llm_response_projection_callback(
+                trajectory,
+            )(response, response_context)
+            .await
+            .unwrap();
+            for value in [
+                edited_request.map(|request| request.content),
+                edited_response,
+                projected_request.map(|request| request.content),
+                projected_response,
+            ] {
+                assert_eq!(value.is_some(), redaction_enabled, "{identity:?}");
+                if let Some(value) = value {
+                    assert!(!value.to_string().contains("SECRET"), "{value}");
+                }
             }
         }
     }
