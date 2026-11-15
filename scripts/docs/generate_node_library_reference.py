@@ -393,9 +393,10 @@ def _resolve_star_exports(module: ModuleDoc, parsed: dict[Path, ModuleDoc], visi
             target = _parse_declaration_file(target_path, str(target_path))
             parsed[target_path] = target
         _resolve_star_exports(target, parsed, (*visiting, source))
+        existing_names = names.copy()
         for item in target.items:
             name = f"{namespace}.{item.name}"
-            if name not in names:
+            if name not in existing_names:
                 module.items.append(replace(item, name=name))
                 names.add(name)
         module.reexports.extend(f"{namespace}.{name}" for name in target.reexports)
