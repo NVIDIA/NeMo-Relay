@@ -181,3 +181,57 @@ fn responses_text_response(model: &str) -> Json {
         }]
     })
 }
+
+#[test]
+fn priced_codec_redaction_keeps_estimated_cost_out_of_provider_edits() {
+    use nemo_relay_codecs::resolve::ProviderSurface;
+    use nemo_relay_types::codec::redaction::NormalizedEdits;
+    let _pricing_guard = pricing_test_mutex()
+        .lock()
+        .unwrap_or_else(|poisoned| poisoned.into_inner());
+    install_parity_pricing("redaction-priced-model");
+    let _reset_guard = ResetPricingResolverGuard;
+    let raw = chat_response_with_usage("redaction-priced-model", json!({}));
+    let codec = crate::codec::response_codec(ProviderSurface::OpenAIChat);
+    let baseline = serde_json::to_value(codec.decode_response(&raw).unwrap()).unwrap();
+    assert!(baseline.pointer("/usage/cost").is_some());
+    let mut sanitized = baseline.clone();
+    sanitized["message"] = json!("safe text");
+    let edited = codec
+        .redaction()
+        .unwrap()
+        .edit_response(
+            &raw,
+            NormalizedEdits {
+                baseline: &baseline,
+                sanitized: &sanitized,
+                require_complete_output: true,
+            },
+        )
+        .unwrap()
+        .expect("runtime wrapper must preserve redaction capability");
+    assert_eq!(edited["choices"][0]["message"]["content"], "safe text");
+    assert_eq!(edited["usage"], raw["usage"]);
+    let projected = serde_json::to_value(codec.decode_response(&edited).unwrap()).unwrap();
+    assert_eq!(
+        projected.pointer("/usage/cost"),
+        baseline.pointer("/usage/cost")
+    );
+    sanitized["usage"]["cost"]["pricing_source"] = json!("changed");
+    assert!(
+        codec
+            .redaction()
+            .unwrap()
+            .edit_response(
+                &raw,
+                NormalizedEdits {
+                    baseline: &baseline,
+                    sanitized: &sanitized,
+                    require_complete_output: true,
+                }
+            )
+            .unwrap()
+            .is_none(),
+        "wire editing cannot change runtime-only enrichment"
+    );
+}

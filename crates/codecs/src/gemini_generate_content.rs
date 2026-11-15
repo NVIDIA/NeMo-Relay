@@ -1355,6 +1355,10 @@ fn take_matching_native_group(
 // ---------------------------------------------------------------------------
 
 impl LlmResponseCodec for GeminiGenerateContentCodec {
+    fn redaction(&self) -> Option<&dyn nemo_relay_types::codec::redaction::LlmResponseRedaction> {
+        Some(self)
+    }
+
     fn codec_identity(&self) -> LlmCodecIdentity {
         LlmCodecIdentity::BuiltIn(BuiltinLlmCodec::GeminiGenerateContent)
     }
@@ -1430,6 +1434,10 @@ impl LlmResponseCodec for GeminiGenerateContentCodec {
 // ---------------------------------------------------------------------------
 
 impl LlmCodec for GeminiGenerateContentCodec {
+    fn redaction(&self) -> Option<&dyn nemo_relay_types::codec::redaction::LlmRequestRedaction> {
+        Some(self)
+    }
+
     fn codec_identity(&self) -> LlmCodecIdentity {
         LlmCodecIdentity::BuiltIn(BuiltinLlmCodec::GeminiGenerateContent)
     }

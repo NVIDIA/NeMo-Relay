@@ -33,6 +33,11 @@ use super::response::AnnotatedLlmResponse;
 ///   so the Rust core cannot know concrete types at compile time.
 ///   Store as `Arc<dyn LlmCodec>`.
 pub trait LlmCodec: Send + Sync {
+    /// Explicit redaction capabilities; identity alone does not imply support.
+    fn redaction(&self) -> Option<&dyn super::redaction::LlmRequestRedaction> {
+        None
+    }
+
     /// Return this codec's identity for LLM sanitizer context.
     ///
     /// Custom codecs should keep the default [`LlmCodecIdentity::Opaque`] unless
@@ -92,9 +97,10 @@ pub trait LlmCodec: Send + Sync {
 /// Decode-only codec for LLM API responses.
 ///
 /// Unlike [`LlmCodec`] (which is bidirectional for requests), response codecs
-/// are introspection-only: they parse a raw response into structured form but
-/// never need to encode back. This matches the pipeline design where responses
-/// are observed, not modified.
+/// parse a raw response into structured form for observation. Optional
+/// [`LlmResponseRedaction`](super::redaction::LlmResponseRedaction) capabilities
+/// can materialize sanitized observability payloads; they do not rewrite the
+/// caller-visible response.
 ///
 /// # Design
 ///
@@ -112,6 +118,11 @@ pub trait LlmCodec: Send + Sync {
 /// 1. Deserialize raw JSON into API-specific intermediate structs
 /// 2. Map intermediate structs into the normalized `AnnotatedLlmResponse`
 pub trait LlmResponseCodec: Send + Sync {
+    /// Explicit redaction capabilities; unsupported operations fail closed.
+    fn redaction(&self) -> Option<&dyn super::redaction::LlmResponseRedaction> {
+        None
+    }
+
     /// Return this codec's identity for LLM sanitizer context.
     ///
     /// Custom codecs should keep the default [`LlmCodecIdentity::Opaque`] unless

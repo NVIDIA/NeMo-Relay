@@ -645,6 +645,73 @@ Native values are not normalized across providers. Keep the `provider` tag
 unchanged unless you also replace the entire component with a representation
 that the target codec owns.
 
+## Codec-Owned Redaction in Rust
+
+Request and response codecs can opt into two separate redaction operations.
+The PII component selects fields and applies detection and replacement policy.
+The active codec owns provider formatting and decides whether it can safely
+represent the result.
+
+| Operation | Inputs | Guarantee |
+|---|---|---|
+| `edit_request` / `edit_response` | Original provider payload and `NormalizedEdits` | Apply changes at original source positions, preserve unrelated fields, and verify the normalized result. |
+| `project_request` / `project_response` | Approved sanitized annotation only | Construct clean trajectory output without restoring fields from the original provider payload. |
+
+```mermaid
+flowchart TD
+    Original[Original provider payload] --> Decode[Active codec decodes]
+    Decode --> Baseline[Normalized baseline]
+    Baseline --> Policy[PII detection and policy]
+    Policy --> Sanitized[Sanitized normalized data]
+    Baseline --> Edits[NormalizedEdits: original array slots]
+    Sanitized --> Edits
+    Original --> Edit[Codec source-aware editor]
+    Edits --> Edit
+    Edit --> Edited[Verified sanitized provider payload]
+    Sanitized --> Project[Codec clean projector]
+    Project --> Clean[Clean trajectory payload]
+    Edit -->|Unsupported or unsafe| Omit[Omit payload]
+    Project -->|Unsupported or unsafe| Omit
+```
+
+`LlmCodec::redaction()` returns an optional `LlmRequestRedaction` capability.
+`LlmResponseCodec::redaction()` returns an optional `LlmResponseRedaction`
+capability. Each operation defaults to `Ok(None)`, so a custom Rust codec can
+implement editing, projection, or both. Runtime and opaque codec identities can
+opt in; a built-in identity alone does not grant support. Codecs that implement
+only the existing decode and encode methods still compile, but normalized PII
+sanitization omits their payloads until they opt in. Generic raw JSON policies
+continue to operate independently of these capabilities.
+
+`NormalizedEdits` borrows the baseline and sanitized serialized annotations.
+Its array coordinates refer to the baseline: removing an array entry leaves a
+`null` slot, and removing an object field deletes the key. Keep array lengths
+and order through the sanitizer handoff. The codec validates the baseline and
+performs any supported compaction after mapping edits to provider locations.
+These coordinates are local to one operation, not stable edit handles.
+
+Set `require_complete_output` when the policy covers normalized output or
+provider-specific output fields, even if the first normalized result has no
+matching content. A codec must cover unmodeled alternatives or omit the
+payload. Built-in editors reject extra choices or candidates in this case.
+
+The OpenAI Responses editor supports removal of complete normalized text and
+refusal parts, retaining the surviving blocks' original provider metadata.
+Deleting required fields, compacting arrays before handoff, and ambiguous
+request-part removals fail closed. Provider decoders that combine text blocks
+retain their existing normalized representation.
+
+Clean projection accepts data already approved by the caller's policy. It has
+no original wire payload parameter and must not retrieve retained source data.
+Request projections clear headers; built-in response projections exclude
+opaque native content and extras and emit empty tool argument objects.
+
+The extension contracts currently support Rust codec implementations. Python,
+Node.js, C, and worker-defined custom codecs do not expose an opt-in redaction
+contract yet. Built-in codec handles use the Rust implementation. This API
+sanitizes observability payloads; it does not rewrite caller-visible requests
+or responses.
+
 ## Example: Write a Custom Framework Codec
 
 Use a custom codec when a framework uses a payload shape that does not directly match a built-in provider format. The codec decodes the framework shape into `AnnotatedLLMRequest`, and encodes edits back into the framework shape.
