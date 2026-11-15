@@ -1013,6 +1013,10 @@ fn patch_oci_api_specific(
 // ---------------------------------------------------------------------------
 
 impl LlmCodec for OCIGenAIChatCodec {
+    fn redaction(&self) -> Option<&dyn nemo_relay_types::codec::redaction::LlmRequestRedaction> {
+        Some(self)
+    }
+
     fn codec_identity(&self) -> LlmCodecIdentity {
         LlmCodecIdentity::BuiltIn(BuiltinLlmCodec::OCIGenAI)
     }
@@ -1195,6 +1199,10 @@ impl LlmCodec for OCIGenAIChatCodec {
 // ---------------------------------------------------------------------------
 
 impl LlmResponseCodec for OCIGenAIChatCodec {
+    fn redaction(&self) -> Option<&dyn nemo_relay_types::codec::redaction::LlmResponseRedaction> {
+        Some(self)
+    }
+
     fn codec_identity(&self) -> LlmCodecIdentity {
         LlmCodecIdentity::BuiltIn(BuiltinLlmCodec::OCIGenAI)
     }

@@ -1302,6 +1302,10 @@ fn patch_responses_common_fields(
 // ---------------------------------------------------------------------------
 
 impl LlmResponseCodec for OpenAIResponsesCodec {
+    fn redaction(&self) -> Option<&dyn nemo_relay_types::codec::redaction::LlmResponseRedaction> {
+        Some(self)
+    }
+
     fn codec_identity(&self) -> LlmCodecIdentity {
         LlmCodecIdentity::BuiltIn(BuiltinLlmCodec::OpenAiResponses)
     }
@@ -1403,6 +1407,10 @@ impl LlmResponseCodec for OpenAIResponsesCodec {
 // ---------------------------------------------------------------------------
 
 impl LlmCodec for OpenAIResponsesCodec {
+    fn redaction(&self) -> Option<&dyn nemo_relay_types::codec::redaction::LlmRequestRedaction> {
+        Some(self)
+    }
+
     fn codec_identity(&self) -> LlmCodecIdentity {
         LlmCodecIdentity::BuiltIn(BuiltinLlmCodec::OpenAiResponses)
     }

@@ -25,8 +25,7 @@ use nemo_relay_runtime::api::runtime::{
     LlmSanitizeResponseFn, ToolSanitizeFn,
 };
 use nemo_relay_runtime::codec::response_codec as build_response_codec;
-use nemo_relay_types::codec::request::{AnnotatedLlmRequest, MessageContent};
-use nemo_relay_types::codec::response::AnnotatedLlmResponse;
+use nemo_relay_types::codec::redaction::NormalizedEdits;
 use nemo_relay_types::codec::traits::{LlmCodec, LlmResponseCodec};
 
 use super::component::{
@@ -34,7 +33,6 @@ use super::component::{
     validate_metric_string_attribute_allowlist,
 };
 use super::detectors::BuiltinDetector;
-use super::overlay::{BuiltinCodecName, joined_message_text};
 use super::trajectory::{CustomMarkPayloadPolicy, TrajectorySanitizer, is_relay_metric_mark};
 
 #[derive(Clone)]
@@ -203,40 +201,6 @@ impl TargetPathMatcher {
                     })
             }
         })
-    }
-
-    fn matching_json_pointer_paths(&self, value: &Json) -> Vec<Vec<String>> {
-        let mut paths = BTreeSet::new();
-        self.collect_matching_paths(value, &mut Vec::new(), &mut paths);
-        paths.into_iter().collect()
-    }
-
-    fn collect_matching_paths(
-        &self,
-        value: &Json,
-        path_segments: &mut Vec<String>,
-        paths: &mut BTreeSet<Vec<String>>,
-    ) {
-        if self.matches(path_segments) {
-            paths.insert(path_segments.clone());
-        }
-        match value {
-            Json::Array(values) => {
-                for (index, value) in values.iter().enumerate() {
-                    path_segments.push(index.to_string());
-                    self.collect_matching_paths(value, path_segments, paths);
-                    path_segments.pop();
-                }
-            }
-            Json::Object(values) => {
-                for (key, value) in values {
-                    path_segments.push(key.clone());
-                    self.collect_matching_paths(value, path_segments, paths);
-                    path_segments.pop();
-                }
-            }
-            Json::Null | Json::Bool(_) | Json::Number(_) | Json::String(_) => {}
-        }
     }
 
     fn may_select_single_projected_response(&self) -> bool {
@@ -865,71 +829,21 @@ impl CompiledBuiltinBackend {
         codec: &dyn LlmCodec,
         request: &LlmRequest,
     ) -> Option<LlmRequest> {
-        let annotated = codec.decode(request).ok()?;
-        let sanitized_annotated = sanitize_serializable_with_backend(self, annotated).ok()?;
-        codec
-            .encode(&sanitized_annotated, request)
-            .ok()
-            .or_else(|| {
-                self.sanitize_request_target_paths_incrementally(
-                    codec,
-                    request,
-                    sanitized_annotated,
-                )
-            })
-    }
-
-    fn sanitize_request_target_paths_incrementally(
-        &self,
-        codec: &dyn LlmCodec,
-        request: &LlmRequest,
-        sanitized_annotated: AnnotatedLlmRequest,
-    ) -> Option<LlmRequest> {
-        let sanitized = serde_json::to_value(sanitized_annotated).ok()?;
-        let mut sanitized_request = request.clone();
-        let original = serde_json::to_value(codec.decode(request).ok()?).ok()?;
-        let mut target_paths = BTreeSet::new();
-        target_paths.extend(
-            self.target_path_matcher
-                .matching_json_pointer_paths(&original),
-        );
-        target_paths.extend(
-            self.target_path_matcher
-                .matching_json_pointer_paths(&sanitized),
-        );
-
-        let mut target_paths = target_paths.into_iter().collect::<Vec<_>>();
-        target_paths
-            .sort_by(|left, right| right.len().cmp(&left.len()).then_with(|| left.cmp(right)));
-
-        for target_segments in target_paths {
-            let current_annotated = codec.decode(&sanitized_request).ok()?;
-            let mut current = serde_json::to_value(&current_annotated).ok()?;
-            match (
-                sanitized_json_pointer_value(&sanitized, &target_segments),
-                sanitized_json_pointer_value(&current, &target_segments),
-            ) {
-                (None, None) => continue,
-                (Some(target_value), Some(current_value)) if current_value == target_value => {
-                    continue;
-                }
-                (Some(target_value), Some(_)) => {
-                    replace_sanitized_json_pointer_value(
-                        &mut current,
-                        &target_segments,
-                        target_value.clone(),
-                    )?;
-                }
-                (None, Some(_)) if matches!(self.action, BuiltinAction::Remove) => {
-                    remove_sanitized_json_pointer_value(&mut current, &target_segments)?;
-                }
-                _ => return None,
-            }
-            let updated = serde_json::from_value(current).ok()?;
-            sanitized_request = codec.encode(&updated, &sanitized_request).ok()?;
-        }
-
-        Some(sanitized_request)
+        let capability = codec.redaction()?;
+        let baseline = serde_json::to_value(codec.decode(request).ok()?).ok()?;
+        let sanitized = self.sanitize_json_preorder_dfs(baseline.clone());
+        capability
+            .edit_request(
+                request,
+                NormalizedEdits {
+                    baseline: &baseline,
+                    sanitized: &sanitized,
+                    require_complete_output: self
+                        .target_path_matcher
+                        .may_select_single_projected_response(),
+                },
+            )
+            .ok()?
     }
 
     fn sanitize_request_headers(&self, headers: Map<String, Json>) -> Map<String, Json> {
@@ -947,15 +861,17 @@ impl CompiledBuiltinBackend {
 
     fn sanitize_response_annotation(
         &self,
-        surface: ProviderSurface,
-        annotated: AnnotatedLlmResponse,
-    ) -> Option<AnnotatedLlmResponse> {
+        identity: LlmCodecIdentity,
+        annotated: Json,
+    ) -> Option<Json> {
         // OpenAI responses with refusals formerly exposed ordinary text as a scalar.
         // Keep policies that selected that scalar effective when the codec emits parts.
         if matches!(
-            surface,
-            ProviderSurface::OpenAIChat | ProviderSurface::OpenAIResponses
-        ) && matches!(annotated.message, Some(MessageContent::Parts(_)))
+            identity,
+            LlmCodecIdentity::BuiltIn(
+                BuiltinLlmCodec::OpenAiChat | BuiltinLlmCodec::OpenAiResponses
+            )
+        ) && annotated.get("message").is_some_and(Json::is_array)
             && !matches!(self.action, BuiltinAction::Remove)
             && self.target_path_matcher.matches(&["message".to_owned()])
         {
@@ -968,17 +884,16 @@ impl CompiledBuiltinBackend {
                     TargetPathSegment::Exact(field.to_owned()),
                 ]));
             }
-            // Check both the legacy text-only scalar and the complete content view.
-            // A match can span parts (or depend on the start/end of the scalar).
-            // Keep per-part edits only when they also satisfy the joined policy.
-            let expected = [Some("text"), None].map(|field| {
-                let original = joined_message_text(annotated.message.as_ref(), field)?;
+            // Check the legacy text-only scalar and the complete text/refusal sequence.
+            // Per-part edits are safe only when they preserve a joined match.
+            let expected = [false, true].map(|include_refusals| {
+                let original = joined_openai_message(&annotated, include_refusals)?;
                 let sanitized = self.sanitize_string_value(original.clone())?;
-                (sanitized.as_str()? != original).then_some((field, sanitized))
+                (sanitized.as_str()? != original).then_some((include_refusals, sanitized))
             });
-            let sanitized = sanitize_serializable_with_backend(&backend, annotated).ok()?;
-            for (field, expected) in expected.into_iter().flatten() {
-                if joined_message_text(sanitized.message.as_ref(), field).as_deref()
+            let sanitized = backend.sanitize_json_preorder_dfs(annotated);
+            for (include_refusals, expected) in expected.into_iter().flatten() {
+                if joined_openai_message(&sanitized, include_refusals).as_deref()
                     != expected.as_str()
                 {
                     return None;
@@ -986,87 +901,53 @@ impl CompiledBuiltinBackend {
             }
             return Some(sanitized);
         }
-        sanitize_serializable_with_backend(self, annotated).ok()
+        Some(self.sanitize_json_preorder_dfs(annotated))
     }
 
     fn sanitize_response_with_codec(
         &self,
         codec: &dyn LlmResponseCodec,
-        surface: ProviderSurface,
         payload: Json,
     ) -> Option<Json> {
-        if surface == ProviderSurface::OpenAIChat
-            && payload
-                .get("choices")
-                .and_then(Json::as_array)
-                .is_some_and(|choices| choices.len() > 1)
-            && self.targets_normalized_single_projected_response()
-        {
-            return None;
-        }
-        // Gemini responses with multiple candidates: the normalized layer only projects
-        // candidate[0], so candidate[1+] would survive in the raw payload unredacted.
-        // Fail closed identically to the OpenAI Chat multi-choice guard.
-        if surface == ProviderSurface::GeminiGenerateContent
-            && payload
-                .get("candidates")
-                .and_then(Json::as_array)
-                .is_some_and(|candidates| candidates.len() > 1)
-            && self.targets_normalized_single_projected_response()
-        {
-            return None;
-        }
-        let codec_name = BuiltinCodecName::from_provider_surface(surface);
-        let annotated = codec.decode_response(&payload).ok()?;
-        let annotated_json = serde_json::to_value(&annotated).ok()?;
-        let sanitized_annotated = self.sanitize_response_annotation(surface, annotated)?;
-        let sanitized_json = serde_json::to_value(&sanitized_annotated).ok()?;
-        let payload = codec_name.overlay_response_payload(payload, &sanitized_annotated);
-        let payload = self.sanitize_json_preorder_dfs(payload);
-        let mut target_paths = BTreeSet::new();
-        target_paths.extend(
-            self.target_path_matcher
-                .matching_json_pointer_paths(&annotated_json),
-        );
-        target_paths.extend(
-            self.target_path_matcher
-                .matching_json_pointer_paths(&sanitized_json),
-        );
-        let target_paths: Vec<_> = target_paths.into_iter().collect();
-        if target_paths.is_empty() {
-            return Some(payload);
-        }
-        let projected = codec.decode_response(&payload).ok()?;
-        let projected = serde_json::to_value(projected).ok()?;
-        Self::normalized_response_targets_match(
-            &target_paths,
-            &annotated_json,
-            &sanitized_json,
-            &projected,
-        )
-        .then_some(payload)
+        let capability = codec.redaction()?;
+        let baseline = serde_json::to_value(codec.decode_response(&payload).ok()?).ok()?;
+        let sanitized =
+            self.sanitize_response_annotation(codec.codec_identity(), baseline.clone())?;
+        let payload = capability
+            .edit_response(
+                &payload,
+                NormalizedEdits {
+                    baseline: &baseline,
+                    sanitized: &sanitized,
+                    require_complete_output: self
+                        .target_path_matcher
+                        .may_select_single_projected_response(),
+                },
+            )
+            .ok()??;
+        Some(self.sanitize_json_preorder_dfs(payload))
     }
+}
 
-    fn normalized_response_targets_match(
-        target_paths: &[Vec<String>],
-        annotated: &Json,
-        sanitized: &Json,
-        projected: &Json,
-    ) -> bool {
-        target_paths.iter().all(|target_segments| {
-            let original = sanitized_json_pointer_value(annotated, target_segments);
-            let expected = sanitized_json_pointer_value(sanitized, target_segments);
-            if original.is_none() && expected.is_none() {
-                return true;
-            }
-            sanitized_json_pointer_value(projected, target_segments) == expected
-        })
+fn joined_openai_message(annotation: &Json, include_refusals: bool) -> Option<String> {
+    let mut fields = annotation
+        .get("message")?
+        .as_array()?
+        .iter()
+        .filter_map(|part| {
+            let field = match part.get("type")?.as_str()? {
+                "text" => "text",
+                "refusal" if include_refusals => "refusal",
+                _ => return None,
+            };
+            part.get(field)?.as_str()
+        });
+    let mut joined = fields.next()?.to_owned();
+    for field in fields {
+        joined.push('\n');
+        joined.push_str(field);
     }
-
-    fn targets_normalized_single_projected_response(&self) -> bool {
-        self.target_path_matcher
-            .may_select_single_projected_response()
-    }
+    Some(joined)
 }
 
 pub(super) fn tool_sanitize_callback(backend: CompiledBuiltinBackend) -> ToolSanitizeFn {
@@ -1213,16 +1094,21 @@ pub(super) fn trajectory_llm_request_projection_callback(
                 return Ok(backend.legacy_surface.is_some().then_some(request));
             }
             let projected = (|| {
-                let surface = backend.selected_surface(context.codec())?;
                 let resolved = context.resolve_codec();
-                let fallback = resolved.is_none().then(|| build_request_codec(surface));
+                let fallback = if resolved.is_none() {
+                    backend
+                        .selected_surface(context.codec())
+                        .map(build_request_codec)
+                } else {
+                    None
+                };
                 let codec = resolved.as_deref().or(fallback.as_deref())?;
                 let annotated = codec.decode(&request).ok()?;
                 let sanitized = backend
                     .trajectory
                     .as_ref()?
                     .sanitize_annotated_request(annotated)?;
-                crate::trajectory_projection::render_request(surface, &sanitized)
+                codec.redaction()?.project_request(&sanitized).ok()?
             })();
             Ok(projected)
         })
@@ -1291,17 +1177,11 @@ pub(super) fn llm_sanitize_response_callback(
                 );
                 return Ok(None);
             }
-            let Some(surface) = backend.selected_surface(context.codec()) else {
-                log_llm_payload_omitted(
-                    "response",
-                    context.codec(),
-                    "no recognized response codec surface",
-                );
-                return Ok(None);
-            };
             let resolved = context.resolve_codec();
             let fallback = if resolved.is_none() {
-                Some(build_response_codec(surface))
+                backend
+                    .selected_surface(context.codec())
+                    .map(build_response_codec)
             } else {
                 None
             };
@@ -1309,8 +1189,9 @@ pub(super) fn llm_sanitize_response_callback(
                 log_llm_payload_omitted("response", context.codec(), "no usable response codec");
                 return Ok(None);
             };
-            let sanitized = sanitize_response_logprobs(Some(surface), payload, |p| {
-                backend.sanitize_response_with_codec(codec, surface, p)
+            let surface = backend.selected_surface(&codec.codec_identity());
+            let sanitized = sanitize_response_logprobs(surface, payload, |p| {
+                backend.sanitize_response_with_codec(codec, p)
             });
             if sanitized.is_none() {
                 log_llm_payload_omitted(
@@ -1335,16 +1216,21 @@ pub(super) fn trajectory_llm_response_projection_callback(
                 return Ok(backend.legacy_surface.is_some().then_some(payload));
             }
             let projected = (|| {
-                let surface = backend.selected_surface(context.codec())?;
                 let resolved = context.resolve_codec();
-                let fallback = resolved.is_none().then(|| build_response_codec(surface));
+                let fallback = if resolved.is_none() {
+                    backend
+                        .selected_surface(context.codec())
+                        .map(build_response_codec)
+                } else {
+                    None
+                };
                 let codec = resolved.as_deref().or(fallback.as_deref())?;
                 let annotated = codec.decode_response(&payload).ok()?;
                 let sanitized = backend
                     .trajectory
                     .as_ref()?
                     .sanitize_annotated_response(annotated)?;
-                crate::trajectory_projection::render_response(surface, &sanitized)
+                codec.redaction()?.project_response(&sanitized).ok()?
             })();
             Ok(projected)
         })
@@ -1423,68 +1309,6 @@ fn json_pointer_segments(pointer: &str) -> Option<Vec<String>> {
 
 fn unescape_json_pointer_segment(segment: &str) -> String {
     segment.replace("~1", "/").replace("~0", "~")
-}
-
-fn sanitized_json_pointer_value<'a>(value: &'a Json, segments: &[String]) -> Option<&'a Json> {
-    segments
-        .iter()
-        .try_fold(value, |value, segment| match value {
-            Json::Object(values) => values.get(segment),
-            Json::Array(values) => segment
-                .parse::<usize>()
-                .ok()
-                .and_then(|index| values.get(index)),
-            _ => None,
-        })
-}
-
-fn replace_sanitized_json_pointer_value(
-    value: &mut Json,
-    segments: &[String],
-    replacement: Json,
-) -> Option<()> {
-    let (last, parents) = segments.split_last()?;
-    let parent = parents
-        .iter()
-        .try_fold(value, |value, segment| match value {
-            Json::Object(values) => values.get_mut(segment),
-            Json::Array(values) => segment
-                .parse::<usize>()
-                .ok()
-                .and_then(|index| values.get_mut(index)),
-            _ => None,
-        })?;
-    match parent {
-        Json::Object(values) => {
-            values.insert(last.clone(), replacement);
-            Some(())
-        }
-        Json::Array(values) => {
-            let index = last.parse::<usize>().ok()?;
-            let value = values.get_mut(index)?;
-            *value = replacement;
-            Some(())
-        }
-        _ => None,
-    }
-}
-
-fn remove_sanitized_json_pointer_value(value: &mut Json, segments: &[String]) -> Option<()> {
-    let (last, parents) = segments.split_last()?;
-    let parent = parents
-        .iter()
-        .try_fold(value, |value, segment| match value {
-            Json::Object(values) => values.get_mut(segment),
-            Json::Array(values) => segment
-                .parse::<usize>()
-                .ok()
-                .and_then(|index| values.get_mut(index)),
-            _ => None,
-        })?;
-    match parent {
-        Json::Object(values) => values.remove(last).map(|_| ()),
-        Json::Array(_) | Json::Null | Json::Bool(_) | Json::Number(_) | Json::String(_) => None,
-    }
 }
 
 pub(crate) fn hex_sha256(text: &str) -> String {

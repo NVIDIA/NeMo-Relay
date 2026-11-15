@@ -10,7 +10,6 @@ pub(crate) mod builtin;
 pub mod component;
 pub(crate) mod detectors;
 pub(crate) mod local;
-pub(crate) mod overlay;
 pub(crate) mod trajectory;
 pub(crate) mod trajectory_projection;
 

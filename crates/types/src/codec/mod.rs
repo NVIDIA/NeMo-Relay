@@ -25,6 +25,9 @@ pub mod tool;
 /// Bidirectional request and response codec contracts.
 pub mod traits;
 
+/// Opt-in source-aware editing and clean sanitized projection.
+pub mod redaction;
+
 /// Checked provider token accounting and billing data.
 pub mod billing;
 
