@@ -352,7 +352,12 @@ nemo_relay.intercepts.register_tool_execution("application-review", 10, review)
 
 #### Transport Compatibility
 
-Before relying on execution context, check the helper for the Node.js API you use:
+**Application-side compatibility checks**
+
+Node.js exposes a support helper because an older JavaScript typed wrapper can
+silently ignore an unfamiliar `executionContext` options property. If your
+application calls Relay through Node.js, check the helper for the API you use
+before relying on that field:
 
 - **Typed API (`nemo-relay-node/typed`):** check that its
   [`supportsToolExecutionContext()` helper](https://github.com/NVIDIA/NeMo-Relay/blob/ccff24e06239fd7b4379872dc4d064cab3bf3a3c/crates/node/ts/typed.ts#L43)
@@ -362,11 +367,24 @@ Before relying on execution context, check the helper for the Node.js API you us
   [`supportsToolExecutionContext()` helper](https://github.com/NVIDIA/NeMo-Relay/blob/ccff24e06239fd7b4379872dc4d064cab3bf3a3c/crates/node/src/api/mod.rs#L2015)
   exists and returns `true`.
 
-Treat a missing helper, `false` result or error as unsupported. These checks
-catch older components that cannot transport the field; an older typed wrapper
-might otherwise ignore the unfamiliar options property. They perform no tool
-call and do not verify remote worker support, application approval proofs or
-permission to execute.
+Treat a missing helper, `false` result or error as unsupported. These queries
+perform no tool call and only check the application's Node wrapper/native
+binding support. They do not verify remote worker support, application approval
+proofs or permission to execute.
+
+Python and Rust do not need an equivalent application-side helper for this API:
+
+- **Python:** `tools.execute(..., execution_context=...)` uses an explicit
+  keyword parameter. An older API without that parameter raises `TypeError`
+  rather than silently ignoring it.
+- **Rust:** the execution-context builder method and fields are checked at
+  compile time. Code using them does not compile against an older API that
+  lacks them.
+
+These language-level checks do not establish remote worker support. That is
+checked separately through the worker handshake described below.
+
+**Worker-side compatibility checks**
 
 Omitting the field preserves existing calls and callback signatures. Receiving
 it requires an updated binding or worker SDK. Workers advertise the
