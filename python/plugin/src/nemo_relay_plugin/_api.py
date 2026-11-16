@@ -915,7 +915,7 @@ class LlmRequestInterceptOutcome:
         }
 
 
-@dataclass(frozen=True, slots=True, init=False)
+@dataclass(frozen=True, slots=True)
 class ToolExecutionContext:
     """Per-call context provided to a tool execution intercept.
 
@@ -923,35 +923,32 @@ class ToolExecutionContext:
     the managed tool call, or ``None`` when the call did not record one. It lets
     an intercept that completes execution without calling
     :meth:`ToolNext.call` associate its result with the originating tool call.
+
+    ``execution_context`` is opaque caller context, separate from tool arguments
+    and event metadata; it grants no authority. Construction snapshots it and
+    each read returns a defensive copy. Standard ``dataclasses.replace()`` can
+    preserve, replace or clear it without sharing mutable context data.
     """
 
     tool_name: str
     args: Json
     tool_call_id: str | None = None
-    _execution_context: dict[str, Json] | None = field(default=None, repr=False)
+    execution_context: dict[str, Json] | None = field(default=None, repr=False)
 
-    def __init__(
-        self,
-        tool_name: str,
-        args: Json,
-        tool_call_id: str | None = None,
-        execution_context: dict[str, Json] | None = None,
-    ) -> None:
-        if execution_context is not None and not isinstance(execution_context, dict):
+    def __post_init__(self) -> None:
+        # Read the stored value directly: the public getter returns a copy.
+        supplied = object.__getattribute__(self, "execution_context")
+        if supplied is not None and not isinstance(supplied, dict):
             raise WorkerSdkError("tool execution context must be an object")
-        object.__setattr__(self, "tool_name", tool_name)
-        object.__setattr__(self, "args", args)
-        object.__setattr__(self, "tool_call_id", tool_call_id)
-        object.__setattr__(self, "_execution_context", copy.deepcopy(execution_context))
+        object.__setattr__(self, "execution_context", copy.deepcopy(supplied))
 
-    @property
-    def execution_context(self) -> dict[str, Json] | None:
-        """Inspect a defensive copy of opaque caller context, without authority semantics.
-
-        This value is separate from tool arguments and event metadata. Mutating
-        the returned copy cannot change context seen by another interceptor.
-        """
-        return copy.deepcopy(self._execution_context)
+    def __getattribute__(self, name: str) -> Any:
+        """Return an independent snapshot when inspecting execution context."""
+        value = object.__getattribute__(self, name)
+        # Keep this a real constructor/dataclass field so dataclasses.replace()
+        # can preserve or replace it. Only this field needs copy-on-read;
+        # existing business arguments retain their original access semantics.
+        return copy.deepcopy(value) if name == "execution_context" else value
 
 
 @dataclass(slots=True)

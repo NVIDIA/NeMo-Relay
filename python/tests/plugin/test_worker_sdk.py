@@ -12,6 +12,7 @@ import os
 import socket
 import tempfile
 from collections.abc import AsyncIterator
+from dataclasses import replace
 from datetime import datetime, timezone
 from pathlib import Path
 from types import SimpleNamespace
@@ -3979,6 +3980,47 @@ def test_tool_execution_context_is_a_private_defensive_snapshot() -> None:
     assert "attempt" not in repr(context)
     with pytest.raises((AttributeError, TypeError)):
         setattr(context, "execution_context", {})
+
+
+@pytest.mark.parametrize("supplied", [None, {"operation": {"attempt": 1}}])
+def test_tool_execution_context_replace_preserves_context(supplied: dict[str, Json] | None) -> None:
+    context = ToolExecutionContext("lookup", {"query": "before"}, "call-1", execution_context=supplied)
+
+    updated = replace(context, args={"query": "after"})
+
+    assert context.args == {"query": "before"}
+    assert updated.args == {"query": "after"}
+    assert updated.tool_name == "lookup"
+    assert updated.tool_call_id == "call-1"
+    assert updated.execution_context == supplied
+    if supplied is not None:
+        supplied["operation"]["attempt"] = 2
+        returned = updated.execution_context
+        returned["operation"]["attempt"] = 3
+        assert context.execution_context == {"operation": {"attempt": 1}}
+        assert updated.execution_context == {"operation": {"attempt": 1}}
+
+
+def test_tool_execution_context_replace_can_replace_or_clear_context() -> None:
+    original = ToolExecutionContext("lookup", {}, execution_context={"operation": {"attempt": 1}})
+    supplied = {"operation": {"attempt": 2}}
+
+    updated = replace(original, execution_context=supplied)
+    cleared = replace(updated, execution_context=None)
+    supplied["operation"]["attempt"] = 3
+    returned = updated.execution_context
+    returned["operation"]["attempt"] = 4
+
+    assert original.execution_context == {"operation": {"attempt": 1}}
+    assert updated.execution_context == {"operation": {"attempt": 2}}
+    assert cleared.execution_context is None
+
+
+@pytest.mark.parametrize("invalid", [[], "not-an-object", True])
+def test_tool_execution_context_replace_rejects_invalid_context(invalid: Json) -> None:
+    context = ToolExecutionContext("lookup", {})
+    with pytest.raises(WorkerSdkError, match="tool execution context must be an object"):
+        replace(context, execution_context=invalid)
 
 
 async def test_tool_execution_intercept_tool_call_id_is_none_when_absent() -> None:
