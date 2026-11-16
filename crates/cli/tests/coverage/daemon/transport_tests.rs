@@ -1150,6 +1150,8 @@ async fn spawn_pooled_http1_relay(
 #[tokio::test]
 async fn pooled_http1_keeps_128_concurrent_streams_isolated() {
     const STREAMS: usize = 128;
+    // Client, relay, and provider share this process: about 4 sockets per HTTP/1.1 stream.
+    crate::test_support::ensure_open_file_limit((STREAMS * 8) as u64);
 
     let (provider, provider_task) = spawn_pooled_http1_provider().await;
     let (relay, relay_task) = spawn_pooled_http1_relay(provider).await;

@@ -36,6 +36,48 @@ pub(crate) fn enable_operational_logs() {
     });
 }
 
+/// Raise this test process's soft open-file limit toward `minimum`.
+///
+/// Loopback stress tests that hold many HTTP/1.1 connections at once run the
+/// client, relay, and provider in one process, so each concurrent stream holds
+/// several descriptors. macOS defaults the soft limit to 256, which is too low
+/// for those tests. This is best effort: the soft limit is raised up to the hard
+/// limit, and a warning is printed if that is still below `minimum`.
+#[cfg(unix)]
+pub(crate) fn ensure_open_file_limit(minimum: u64) {
+    let minimum = libc::rlim_t::try_from(minimum).unwrap_or(libc::rlim_t::MAX);
+    let mut limit = libc::rlimit {
+        rlim_cur: 0,
+        rlim_max: 0,
+    };
+    // SAFETY: `limit` is an initialized `rlimit` that `getrlimit` writes into.
+    if unsafe { libc::getrlimit(libc::RLIMIT_NOFILE, &raw mut limit) } != 0 {
+        return;
+    }
+    if limit.rlim_cur >= minimum {
+        return;
+    }
+    let target = minimum.min(limit.rlim_max);
+    if target < minimum {
+        eprintln!(
+            "open-file hard limit {} is below the {minimum} this test needs; it may fail with `Too many open files`",
+            limit.rlim_max
+        );
+    }
+    limit.rlim_cur = target;
+    // SAFETY: `limit` is an initialized `rlimit` whose soft limit does not exceed its hard limit.
+    if unsafe { libc::setrlimit(libc::RLIMIT_NOFILE, &raw const limit) } != 0 {
+        eprintln!(
+            "could not raise the open-file soft limit to {target}: {}",
+            std::io::Error::last_os_error()
+        );
+    }
+}
+
+/// No open-file soft limit to raise on this platform.
+#[cfg(not(unix))]
+pub(crate) fn ensure_open_file_limit(_minimum: u64) {}
+
 #[must_use]
 pub(crate) struct CwdTestScope {
     _guard: MutexGuard<'static, ()>,
