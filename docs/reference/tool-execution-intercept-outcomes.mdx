@@ -352,15 +352,21 @@ nemo_relay.intercepts.register_tool_execution("application-review", 10, review)
 
 #### Transport Compatibility
 
-Node.js applications that need execution context can check
-`supportsToolExecutionContext()` on both `nemo-relay-node` and
-`nemo-relay-node/typed` before enabling that integration. Require each export to
-exist and return `true`; treat a missing export or an error as unsupported. The
-typed helper delegates to the compiled native binding, so it also detects an
-older native binary paired with newer wrapper code. Older wrappers lack the
-helper and might otherwise ignore an unfamiliar options field. These queries
-perform no tool call and say nothing about worker support, application approval
-proofs or permission to execute.
+Before relying on execution context, check the helper for the Node.js API you use:
+
+- **Typed API (`nemo-relay-node/typed`):** check that its
+  [`supportsToolExecutionContext()` helper](https://github.com/NVIDIA/NeMo-Relay/blob/ccff24e06239fd7b4379872dc4d064cab3bf3a3c/crates/node/ts/typed.ts#L43)
+  exists and returns `true`. It checks both the typed wrapper and the compiled
+  native binding, so a separate native-helper check is unnecessary.
+- **Low-level API (`nemo-relay-node`):** check that its
+  [`supportsToolExecutionContext()` helper](https://github.com/NVIDIA/NeMo-Relay/blob/ccff24e06239fd7b4379872dc4d064cab3bf3a3c/crates/node/src/api/mod.rs#L2015)
+  exists and returns `true`.
+
+Treat a missing helper, `false` result or error as unsupported. These checks
+catch older components that cannot transport the field; an older typed wrapper
+might otherwise ignore the unfamiliar options property. They perform no tool
+call and do not verify remote worker support, application approval proofs or
+permission to execute.
 
 Omitting the field preserves existing calls and callback signatures. Receiving
 it requires an updated binding or worker SDK. Workers advertise the
