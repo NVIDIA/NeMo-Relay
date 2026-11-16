@@ -69,6 +69,14 @@ Apply these version and compatibility rules:
   mandatory enum values, and missing mandatory alternatives. They must not
   interpret them as success, allow, or an empty payload. Tolerating unknown wire
   fields is not proof that a runtime conversion preserves those fields.
+- `HandshakeResponse.capabilities` advertises additive SDK support. The token
+  `tool-execution-context-v1` means a worker preserves the optional
+  `ToolExecutionInvocation.execution_context` object in its callback input.
+  A host must refuse a context-bearing call before invoking a tool execution
+  interceptor whose worker did not advertise that token. An empty object is
+  context-bearing; absence preserves the previous invocation path. Unknown
+  capability names grant no behavior. Compatibility ranges and unknown-field
+  tolerance do not replace this check.
 - Provider extensions belong in explicit `extra` maps or provider-native variants.
   Unknown fields in those maps must round-trip. Encode and decode reject keys
   that shadow modeled native JSON fields, including `role` and `type`
@@ -287,6 +295,16 @@ message-limit interceptors and diagnostic admission. Preserve per-callback limit
 pre-decode admission, deadlines, retry bounds, and cleanup behavior.
 
 ## Shared Native and Worker Authoring Contract
+
+Tool execution context is an optional caller-supplied object, separate from tool
+arguments, results, annotations, and event metadata. Relay transports it without
+interpreting its contents or treating it as an authenticated assertion or an
+authorization grant. Continuations preserve the original object; changing tool
+arguments does not change context, and nested managed calls do not inherit it.
+The Python SDK exposes defensive copies. The current frozen native plugin ABI
+cannot carry this field: context-bearing calls fail explicitly at native tool
+execution interceptors instead of silently dropping it. Context-free calls are
+unchanged.
 
 Use the Rust types in `nemo-relay-types` for shared plugin APIs. Keep generated
 protobuf messages, gRPC statuses, credentials, and capability IDs out of callback

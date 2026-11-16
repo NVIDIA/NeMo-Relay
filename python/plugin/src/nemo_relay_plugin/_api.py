@@ -915,7 +915,7 @@ class LlmRequestInterceptOutcome:
         }
 
 
-@dataclass(frozen=True, slots=True)
+@dataclass(frozen=True, slots=True, init=False)
 class ToolExecutionContext:
     """Per-call context provided to a tool execution intercept.
 
@@ -928,6 +928,30 @@ class ToolExecutionContext:
     tool_name: str
     args: Json
     tool_call_id: str | None = None
+    _execution_context: dict[str, Json] | None = field(default=None, repr=False)
+
+    def __init__(
+        self,
+        tool_name: str,
+        args: Json,
+        tool_call_id: str | None = None,
+        execution_context: dict[str, Json] | None = None,
+    ) -> None:
+        if execution_context is not None and not isinstance(execution_context, dict):
+            raise WorkerSdkError("tool execution context must be an object")
+        object.__setattr__(self, "tool_name", tool_name)
+        object.__setattr__(self, "args", args)
+        object.__setattr__(self, "tool_call_id", tool_call_id)
+        object.__setattr__(self, "_execution_context", copy.deepcopy(execution_context))
+
+    @property
+    def execution_context(self) -> dict[str, Json] | None:
+        """Inspect a defensive copy of opaque caller context, without authority semantics.
+
+        This value is separate from tool arguments and event metadata. Mutating
+        the returned copy cannot change context seen by another interceptor.
+        """
+        return copy.deepcopy(self._execution_context)
 
 
 @dataclass(slots=True)
@@ -2596,6 +2620,7 @@ class _WorkerService(worker_grpc.PluginWorkerServiceServicer):
             identity=self._identity(),
             allows_multiple_components=bool(getattr(self._plugin, "allows_multiple_components", False)),
             supported_surfaces=_all_surfaces(),
+            capabilities=["tool-execution-context-v1"],
         )
 
     def _identity(self) -> Any:
@@ -2902,6 +2927,11 @@ class _WorkerService(worker_grpc.PluginWorkerServiceServicer):
                     tool_name=payload.tool_name,
                     args=_decode_payload(payload.args, "tool value"),
                     tool_call_id=(payload.tool_call_id if payload.HasField("tool_call_id") else None),
+                    execution_context=(
+                        _decode_payload(payload.execution_context, "tool execution context")
+                        if payload.HasField("execution_context")
+                        else None
+                    ),
                 )
                 result = await _maybe_await(
                     self._handler(self._handlers.tool_executions, request.registration_name)(

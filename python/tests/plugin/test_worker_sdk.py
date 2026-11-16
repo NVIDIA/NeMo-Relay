@@ -132,8 +132,10 @@ class _LlmPayload(_Fixture):
 
 
 class _ToolPayload(_Fixture):
-    def __init__(self, tool_name="lookup", value=None, tool_call_id=None):
-        super().__init__(tool_name=tool_name, value=value, tool_call_id=tool_call_id)
+    def __init__(self, tool_name="lookup", value=None, tool_call_id=None, execution_context=None):
+        super().__init__(
+            tool_name=tool_name, value=value, tool_call_id=tool_call_id, execution_context=execution_context
+        )
 
 
 def _wire_codec(kind="none", id=None):
@@ -817,6 +819,7 @@ async def test_health_handshake_validate_register_and_all_surfaces(service: _Wor
     assert handshake.identity.protocol.name == WORKER_PROTOCOL
     assert handshake.identity.sdk_version == plugin_api._SDK_VERSION
     assert set(handshake.supported_surfaces) == set(_all_expected_surfaces())
+    assert "tool-execution-context-v1" in handshake.capabilities
 
     validate = await service.Validate(
         worker_pb.ValidateRequest(
@@ -3756,6 +3759,7 @@ def _invoke_request(
                 args=tool.value,
                 tool_call_id=tool.tool_call_id,
                 continuation_id=continuation_id,
+                execution_context=tool.execution_context,
             )
         else:
             fields[surface_name] = runtime_pb.ToolValueInvocation(tool_name=tool.tool_name, value=tool.value)
@@ -3915,7 +3919,8 @@ def _all_expected_surfaces() -> list[int]:
     ]
 
 
-async def test_tool_execution_intercept_receives_tool_call_id() -> None:
+@pytest.mark.parametrize("execution_context", [None, {}, {"operation": {"attempt": 1}, "integer": 2**64 - 1}])
+async def test_tool_execution_intercept_receives_tool_call_id(execution_context) -> None:
     seen: dict[str, Json] = {}
 
     class ContextPlugin(WorkerPlugin):
@@ -3928,6 +3933,11 @@ async def test_tool_execution_intercept_receives_tool_call_id() -> None:
                 seen["tool_name"] = context.tool_name
                 seen["arguments"] = context.args
                 seen["tool_call_id"] = context.tool_call_id
+                seen["execution_context"] = context.execution_context
+                if context.execution_context is not None:
+                    changed = context.execution_context
+                    changed["changed"] = True
+                    assert context.execution_context == execution_context
                 downstream = await next_call.call(context.args)
                 return ToolExecutionInterceptOutcome(result=downstream.result)
 
@@ -3944,6 +3954,9 @@ async def test_tool_execution_intercept_receives_tool_call_id() -> None:
                 tool_name="lookup",
                 value=_encode_payload(common_pb.JsonValue, {"query": "relay"}),
                 tool_call_id="worker-call-9",
+                execution_context=(
+                    _encode_payload(common_pb.JsonObject, execution_context) if execution_context is not None else None
+                ),
             ),
         ),
         AbortContext(),
@@ -3953,6 +3966,19 @@ async def test_tool_execution_intercept_receives_tool_call_id() -> None:
     assert seen["tool_name"] == "lookup"
     assert seen["arguments"] == {"query": "relay"}
     assert seen["tool_call_id"] == "worker-call-9"
+    assert seen["execution_context"] == execution_context
+
+
+def test_tool_execution_context_is_a_private_defensive_snapshot() -> None:
+    original = {"operation": {"attempt": 1}}
+    context = ToolExecutionContext("lookup", {}, execution_context=original)
+    original["operation"]["attempt"] = 2
+    returned = context.execution_context
+    returned["operation"]["attempt"] = 3
+    assert context.execution_context == {"operation": {"attempt": 1}}
+    assert "attempt" not in repr(context)
+    with pytest.raises((AttributeError, TypeError)):
+        setattr(context, "execution_context", {})
 
 
 async def test_tool_execution_intercept_tool_call_id_is_none_when_absent() -> None:

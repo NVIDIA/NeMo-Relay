@@ -8,6 +8,7 @@ import type {
   Json,
   JsonCompatible,
   JsonValue,
+  JsonObject,
   LlmCodec,
   LlmRequestCompatible,
   LlmRequestShape,
@@ -30,6 +31,18 @@ export type {
   LlmRequestShape,
   LlmResponseCodec,
 } from '../binding.js';
+
+/**
+ * Report whether this typed wrapper and its native binding transport execution context.
+ *
+ * This performs no tool call and does not attest worker support or authorization.
+ * Applications using older packages must also check that this export exists.
+ *
+ * @returns Whether both layers support the `executionContext` option.
+ */
+export function supportsToolExecutionContext(): boolean {
+  return typeof lib.supportsToolExecutionContext === 'function' && lib.supportsToolExecutionContext() === true;
+}
 
 /** Result returned to the application after tool execution. */
 export interface ToolExecutionResult<TResult> {
@@ -66,6 +79,8 @@ export interface TypedToolExecuteOptions<
   data?: TData;
   metadata?: TMetadata;
   toolCallId?: string | null;
+  /** Host-supplied invocation-local context for execution intercepts; never event metadata. */
+  executionContext?: JsonObject | null;
   executionOptions?: ExecutionOptions | null;
 }
 
@@ -136,7 +151,7 @@ function encodeToolExecutionResult<TResult, TResultJson extends JsonCompatible<T
  * @param func - The tool. It may return the result directly or in a promise.
  * @param argsCodec - Converts the arguments to and from JSON.
  * @param resultCodec - Converts the result to and from JSON.
- * @param options - Scope handle, attributes, data, metadata, and tool call id.
+ * @param options - Scope handle, attributes, data, metadata, tool call id, and host execution context.
  * @returns The decoded result and its annotation.
  * @remarks A codec error or an execution error rejects the returned promise.
  */
@@ -166,6 +181,7 @@ export async function typedToolExecute<
     options.metadata,
     options.toolCallId,
     options.executionOptions,
+    options.executionContext,
   );
   return {
     result: resultCodec.fromJson(jsonResult.result),

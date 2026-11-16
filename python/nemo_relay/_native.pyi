@@ -632,6 +632,10 @@ class ToolExecutionContext:
     def args(self) -> _Json: ...
     @property
     def tool_call_id(self) -> str | None: ...
+    @property
+    def execution_context(self) -> dict[str, _Json] | None:
+        """A defensive copy of the host-supplied invocation object; not metadata or authority."""
+        ...
 
 class ToolExecutionInterceptOutcome:
     """Canonical result returned by a tool execution intercept.
@@ -2042,6 +2046,7 @@ def tool_call_execute(
     metadata: _Json | None = None,
     tool_call_id: str | None = None,
     execution_options: ExecutionOptions | None = None,
+    execution_context: dict[str, _Json] | None = None,
 ) -> Awaitable[ToolExecutionResult[_Json]]:
     """Execute a tool through the managed native middleware pipeline.
 
@@ -2055,6 +2060,9 @@ def tool_call_execute(
         data: Optional JSON application payload stored on the managed handle.
         metadata: Optional JSON metadata recorded on emitted events.
         tool_call_id: Optional provider-specific tool-call correlation ID.
+        execution_context: Optional invocation-local host JSON object, limited to
+            16 KiB and visible only to execution intercepts, not lifecycle events.
+            It is not inherited by nested calls and grants no authority.
         execution_options: Choose which middleware stages run for this call.
             Omit this option to run all stages. Relay still sanitizes event data,
             uses codecs, and handles call completion.

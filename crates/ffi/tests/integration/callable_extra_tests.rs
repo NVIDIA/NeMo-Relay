@@ -5,6 +5,7 @@
 
 use super::*;
 use std::ptr;
+use std::sync::atomic::{AtomicUsize, Ordering};
 
 use nemo_relay_runtime::api::runtime::ToolExecutionContext;
 use tokio_stream::StreamExt;
@@ -170,6 +171,43 @@ fn make_request() -> LlmRequest {
     LlmRequest {
         headers: serde_json::Map::new(),
         content: json!({"model": "test-model"}),
+    }
+}
+
+#[test]
+fn tool_intercept_rejects_unsupported_execution_context_before_foreign_code() {
+    unsafe extern "C" fn callback(
+        user_data: *mut libc::c_void,
+        _context_json: *const c_char,
+        _next_fn: NemoRelayToolExecNextFn,
+        _next_ctx: *mut libc::c_void,
+    ) -> *mut c_char {
+        // The test retains the Arc until after the wrapper and future finish.
+        unsafe { &*user_data.cast::<AtomicUsize>() }.fetch_add(1, Ordering::SeqCst);
+        ptr::null_mut()
+    }
+
+    for supplied in [json!({}), json!({"review": {"reference": "example"}})] {
+        let callbacks = Arc::new(AtomicUsize::new(0));
+        let continuations = Arc::new(AtomicUsize::new(0));
+        let next_calls = continuations.clone();
+        let next: ToolExecutionNextFn = Arc::new(move |_| {
+            next_calls.fetch_add(1, Ordering::SeqCst);
+            Box::pin(async { Err(FlowError::Internal("unexpected continuation".into())) })
+        });
+        let intercept =
+            wrap_tool_exec_intercept_fn(callback, Arc::as_ptr(&callbacks).cast_mut().cast(), None);
+        let context =
+            ToolExecutionContext::new("example", json!({})).with_execution_context(Some(supplied));
+        let error = resolve(intercept(context, next)).unwrap_err();
+        assert!(matches!(error, FlowError::InvalidArgument(_)));
+        assert!(
+            error
+                .to_string()
+                .contains("does not support execution context")
+        );
+        assert_eq!(callbacks.load(Ordering::SeqCst), 0);
+        assert_eq!(continuations.load(Ordering::SeqCst), 0);
     }
 }
 

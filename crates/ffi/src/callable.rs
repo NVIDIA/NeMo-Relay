@@ -537,12 +537,21 @@ pub fn wrap_tool_exec_intercept_fn(
     Arc::new(
         move |context: ToolExecutionContext, next: ToolExecutionNextFn| {
             let ud = ud.clone();
-            let context_json = serde_json::json!({
-                "tool_name": context.tool_name(),
-                "args": context.args(),
-                "tool_call_id": context.tool_call_id(),
-            });
-            Box::pin(call_tool_exec_intercept_cb(cb, ud, context_json, next))
+            Box::pin(async move {
+                // The C callback contract has no application-context field.
+                // Reject rather than silently discard caller-supplied context.
+                if context.execution_context().is_some() {
+                    return Err(FlowError::InvalidArgument(
+                        "C tool execution intercept does not support execution context".into(),
+                    ));
+                }
+                let context_json = serde_json::json!({
+                    "tool_name": context.tool_name(),
+                    "args": context.args(),
+                    "tool_call_id": context.tool_call_id(),
+                });
+                call_tool_exec_intercept_cb(cb, ud, context_json, next).await
+            })
         },
     )
 }

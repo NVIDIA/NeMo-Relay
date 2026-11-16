@@ -194,13 +194,14 @@ when materialized.
 
 Beginning with Relay 0.9, every tool execution intercept receives the tool
 call's context instead of separate tool-name and argument parameters. The
-context carries three fields:
+context carries the following fields:
 
 | Field | Description |
 | --- | --- |
 | `tool_name` | Name of the tool being executed. |
 | `args` | JSON argument payload entering this intercept. |
 | `tool_call_id` | Provider-issued correlation identifier recorded on the managed tool call, or absent when the call did not record one. |
+| `execution_context` | Optional application-supplied JSON object for execution intercepts. See [Application Execution Context](#application-execution-context) for its scope and trust requirements. |
 
 `tool_call_id` is the same identifier that Relay records on tool lifecycle
 events. An intercept that completes execution itself, without invoking the
@@ -253,6 +254,128 @@ context object uses `toolName`, `args`, and `toolCallId`, where
 `context_json` string carrying `tool_name`, `args`, and `tool_call_id`;
 callbacks must ignore unknown fields. The typed worker protocol carries the
 optional `tool_call_id` in `ToolExecutionInvocation`.
+
+### Application Execution Context
+
+An application can adopt execution middleware incrementally while retaining its
+existing human approval flow. For example, it can supply a reference to a
+completed application review separately from the tool's business arguments. A
+middleware component that understands that review can avoid repeating its own
+review, then call `next` so the remaining middleware and tool callback still run.
+Relay does not interpret the reference or change the approval flow itself.
+
+Supply `execution_context` on Python `tools.execute`, or `executionContext` in
+Node.js `typedToolExecute` options. Rust uses
+`ToolCallExecuteParams::builder().execution_context(value)`. Intercepts read
+`context.execution_context` in Python, `context.executionContext` in Node.js, and
+`context.execution_context()` in Rust. Rust and Python worker SDKs expose the
+same optional context on their tool execution callback.
+
+The value must be a JSON object with a serialized UTF-8 size of at most 16 KiB.
+Keys and nested values belong to the application; Relay defines no approval
+schema or reserved application keys. Omission means no context, whereas `{}`
+is a supplied, empty context. Invalid values fail before tool execution.
+
+This field has a narrower lifetime and audience than event metadata:
+
+- Only execution intercepts receive it. Tool arguments, request intercepts,
+  conditional guardrails, and the final tool callback do not receive it as a
+  separate parameter.
+- Each intercept receives an isolated snapshot. Changes to a binding-local
+  object do not change what another intercept sees. Calling `next` can rewrite
+  business arguments, but cannot replace the execution context.
+- A nested managed tool call has no execution context unless its caller supplies
+  one explicitly. Scope metadata does not populate it automatically.
+- Relay does not automatically copy it to lifecycle events, results,
+  annotations, or telemetry. Application and plugin code can still disclose it
+  explicitly, so avoid logging it or adding credentials to it.
+
+Application-supplied does **not** mean verified authorization. Relay does not
+verify a human decision, caller identity, signature, expiry, or operation binding
+inside this object. The application must validate its own approval proof and
+bind it to the exact tool, business arguments, owner and applicable policy before
+supplying a review claim. Do not populate it from a model-generated `approved`
+flag. An intercept must also check that the claim still covers its current
+arguments, because earlier middleware may have rewritten them. Missing,
+unrecognized or mismatched claims should use that component's normal review
+path; they must not imply approval. The application must stop a human-denied
+operation rather than ask middleware to override that denial. If human approval
+is mandatory and the operation changes, the application must reject it or obtain
+fresh approval; a component's automated review does not renew human consent.
+
+The following integration sketch keeps those application-specific checks
+explicit. `validate_existing_approval`, `approval_covers_call` and
+`perform_component_review` are application-defined functions; Relay does not
+implement them or prescribe the proof format.
+
+```python
+import nemo_relay
+from nemo_relay import tools
+
+
+async def execute_after_application_approval(name, args, receipt, implementation):
+    # Raise unless the real receipt approves this owner and exact operation,
+    # remains valid, and satisfies the application's current policy.
+    reviewed = validate_existing_approval(receipt, name, args)
+
+    async def execute_reviewed(actual_args):
+        # Later middleware can rewrite arguments. Revalidate at the actual
+        # execution boundary; automated review cannot expand human consent.
+        validate_existing_approval(receipt, name, actual_args)
+        return await implementation(actual_args)
+
+    return await tools.execute(
+        name,
+        args,
+        execute_reviewed,
+        execution_context={"application_review": reviewed},
+    )
+
+
+async def review(context, next_call):
+    supplied = context.execution_context or {}
+    if not approval_covers_call(
+        supplied.get("application_review"), context.tool_name, context.args
+    ):
+        # This function must raise or deny when its policy does not allow the call.
+        await perform_component_review(context.tool_name, context.args)
+
+    # Skip only this component's repeated review, never the remaining chain.
+    downstream = await next_call(context.args)
+    return nemo_relay.ToolExecutionInterceptOutcome(
+        result=downstream.result, annotation=downstream.annotation
+    )
+
+
+nemo_relay.intercepts.register_tool_execution("application-review", 10, review)
+```
+
+#### Transport Compatibility
+
+Node.js applications that need execution context can check
+`supportsToolExecutionContext()` on both `nemo-relay-node` and
+`nemo-relay-node/typed` before enabling that integration. Require each export to
+exist and return `true`; treat a missing export or an error as unsupported. The
+typed helper delegates to the compiled native binding, so it also detects an
+older native binary paired with newer wrapper code. Older wrappers lack the
+helper and might otherwise ignore an unfamiliar options field. These queries
+perform no tool call and say nothing about worker support, application approval
+proofs or permission to execute.
+
+Omitting the field preserves existing calls and callback signatures. Receiving
+it requires an updated binding or worker SDK. Workers advertise the
+`tool-execution-context-v1` capability; a host rejects a context-bearing call
+before invoking a worker intercept that does not advertise support. Calls
+without execution context continue to support legacy workers. The capability
+indicates transport support, not permission to execute.
+
+The native dynamic-plugin `v1.0` ABI remains frozen and cannot carry this field.
+A context-bearing call that reaches a legacy native tool execution intercept
+fails explicitly instead of silently dropping its context. Ordinary in-process
+Rust callbacks are separate from that native plugin ABI. Go and public C APIs
+are not extended by this change. A shared runtime also rejects a context-bearing
+call that reaches a C-registered execution intercept, including a Go intercept
+registered through that bridge, rather than discard the context there.
 
 ## Binding Contract
 

@@ -204,6 +204,10 @@ pub struct ToolCallExecuteParams {
     /// Choose which stages run for this call. All stages run by default.
     #[builder(default)]
     pub execution_options: ExecutionOptions,
+    /// Optional application-owned JSON object exposed only to execution interceptors.
+    /// This is not tool input, event metadata, or proof of authorization.
+    #[builder(default)]
+    pub execution_context: Option<Json>,
 }
 
 /// Builder parameters for [`tool_call_end`].
@@ -879,7 +883,24 @@ pub async fn tool_call_execute(params: ToolCallExecuteParams) -> Result<ToolExec
         metadata,
         tool_call_id,
         execution_options,
+        execution_context: host_execution_context,
     } = params;
+    if let Some(value) = &host_execution_context {
+        if !value.is_object() {
+            return Err(FlowError::InvalidArgument(
+                "tool execution context must be a JSON object".into(),
+            ));
+        }
+        if serde_json::to_vec(value)
+            .map_err(|_| FlowError::InvalidArgument("invalid tool execution context".into()))?
+            .len()
+            > 16_384
+        {
+            return Err(FlowError::InvalidArgument(
+                "tool execution context exceeds 16384 serialized bytes".into(),
+            ));
+        }
+    }
     ensure_runtime_owner()?;
     if execution_options.conditional_execution {
         let (entries, subscribers, parent_uuid, guardrail_metadata) = {
@@ -1020,7 +1041,8 @@ pub async fn tool_call_execute(params: ToolCallExecuteParams) -> Result<ToolExec
                         .map_err(|error| FlowError::Internal(error.to_string()))?
                         .registry_snapshot(&[RuntimeRegistrationKind::ToolExecutionIntercept]);
                     let execution_context = ToolExecutionContext::new(execution_name, Json::Null)
-                        .with_tool_call_id(execution_tool_call_id);
+                        .with_tool_call_id(execution_tool_call_id)
+                        .with_execution_context(host_execution_context);
                     state.tool_build_execution_chain(&execution_context, func, &scope_local_refs)
                 } else {
                     Arc::new(move |args| {

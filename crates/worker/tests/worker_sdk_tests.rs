@@ -1674,6 +1674,66 @@ async fn worker_service_validates_env_and_endpoints() {
 }
 
 #[tokio::test(flavor = "multi_thread")]
+async fn tool_execution_context_reaches_rust_worker_without_becoming_continuation_args() {
+    struct ContextPlugin;
+    impl WorkerPlugin for ContextPlugin {
+        fn plugin_kind(&self) -> &str {
+            "tool.context"
+        }
+        fn allows_multiple_components(&self) -> bool {
+            false
+        }
+        fn register<'a>(
+            &'a self,
+            _config: &'a serde_json::Map<String, Json>,
+            ctx: &'a mut PluginContext,
+        ) -> nemo_relay_worker::PluginFuture<'a, ()> {
+            Box::pin(async move {
+                ctx.register_tool_execution_intercept("context", 0, |context, next| async move {
+                    assert_eq!(context.args(), &json!({"query": "test"}));
+                    assert_eq!(context.tool_call_id(), Some("provider-call"));
+                    assert_eq!(
+                        context.execution_context(),
+                        Some(&json!({"operation": {"attempt": 1}, "integer": u64::MAX}))
+                    );
+                    assert!(!format!("{context:?}").contains("attempt"));
+                    let downstream = next.call(context.into_args()).await?;
+                    Ok(ToolExecutionInterceptOutcome::from(downstream))
+                });
+                Ok(())
+            })
+        }
+    }
+    let host = MockHost::default();
+    let (host_handle, endpoint) = spawn_host(host.clone()).await;
+    let (worker_handle, mut client) = spawn_worker(Arc::new(ContextPlugin), endpoint).await;
+    register_plugin(&mut client).await;
+    let mut request = tool_invoke(
+        "context",
+        RegistrationSurface::ToolExecutionIntercept,
+        json!({"query": "test"}),
+    );
+    let Some(Payload::Tool(tool)) = request.payload.as_mut() else {
+        panic!("expected tool")
+    };
+    tool.tool_call_id = Some("provider-call".into());
+    tool.execution_context = Some(
+        conversions::encode(json!({"operation": {"attempt": 1}, "integer": u64::MAX})).unwrap(),
+    );
+    let outcome = invoke_tool_execution(&mut client, request).await;
+    assert_eq!(outcome.result, json!({"next": "tool"}));
+    let next_requests = host.tool_next_requests.lock().unwrap();
+    assert_eq!(next_requests.len(), 1);
+    assert_eq!(
+        conversions::decode::<Json, _>(next_requests[0].value.clone().unwrap()).unwrap(),
+        json!({"query": "test"})
+    );
+    drop(next_requests);
+    worker_handle.abort();
+    host_handle.abort();
+}
+
+#[tokio::test(flavor = "multi_thread")]
 async fn worker_service_announces_ephemeral_tcp_endpoint_file() {
     const ENVS: &[&str] = &[
         "NEMO_RELAY_WORKER_SOCKET",
@@ -3121,6 +3181,7 @@ struct ScopeRequests {
 #[derive(Clone, Default)]
 struct MockHost {
     calls: Arc<Mutex<Vec<String>>>,
+    tool_next_requests: Arc<Mutex<Vec<ToolNextRequest>>>,
     logs: Arc<Mutex<Vec<LogRequest>>>,
     marks: Arc<Mutex<Vec<EmitMarkRequest>>>,
     failures: Arc<Mutex<MockHostFailures>>,
@@ -3437,6 +3498,10 @@ impl RelayHostRuntime for MockHost {
         let request = request.into_inner();
         let credentials = request.credentials.as_ref().unwrap();
         authorize_host(&credentials.activation_id, &credentials.auth_token)?;
+        self.tool_next_requests
+            .lock()
+            .unwrap()
+            .push(request.clone());
         self.record(format!("tool_next:{}", request.continuation_id));
         if self.failures().tool_next {
             return Err(Status::internal((worker_error("tool next failed")).message));
@@ -3846,6 +3911,7 @@ fn tool_invoke(
             tool_name: "tool".into(),
             value: Some(json_env(value)),
             tool_call_id: None,
+            execution_context: None,
         })),
         credentials: Some(pb::Credentials {
             activation_id: ACTIVATION_ID.into(),

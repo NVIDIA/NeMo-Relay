@@ -248,6 +248,9 @@ pub struct ToolExecutionContext {
     pub tool_name: String,
     pub args: Json,
     pub tool_call_id: Option<String>,
+    /// Host-supplied invocation-local JSON object; absent is null. Not event metadata or authority.
+    #[napi(ts_type = "JsonObject")]
+    pub execution_context: Option<Json>,
 }
 
 /// A mark Relay materializes under a managed lifecycle.

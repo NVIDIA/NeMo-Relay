@@ -166,6 +166,7 @@ def execute(
     metadata: Json | None = None,
     tool_call_id: str | None = None,
     execution_options: ExecutionOptions | None = None,
+    execution_context: dict[str, Json] | None = None,
 ) -> Awaitable[ToolExecutionResult[Json]]:
     """Run a tool through the managed middleware pipeline.
 
@@ -190,6 +191,10 @@ def execute(
         metadata: Optional JSON metadata recorded on the emitted start event.
         tool_call_id: Optional provider-specific tool call identifier recorded
             on the emitted start and end events.
+        execution_context: Optional host-supplied JSON object (at most 16 KiB).
+            Execution intercepts receive a defensive copy, separate from tool
+            arguments and event metadata. It grants no authority and is not
+            inherited by nested calls.
         execution_options: Choose which middleware stages run for this call.
             Omit this option to run all stages. Turning off conditional execution
             skips its checks. Relay still sanitizes event data, uses codecs,
@@ -238,6 +243,7 @@ def execute(
         metadata=metadata,
         tool_call_id=tool_call_id,
         execution_options=execution_options,
+        execution_context=execution_context,
     )
 
 

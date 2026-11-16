@@ -106,6 +106,19 @@ Refer to [execution message limits](https://docs.nvidia.com/nemo/relay/build-plu
 
 ## Getting Started
 
+Tool execution interceptors receive `ToolExecutionContext.execution_context`
+when the caller supplied an execution-context object. It is separate from
+`args` and event metadata. Each access returns a defensive copy; editing it or
+passing new arguments to `ToolNext.call()` does not replace the original
+context. Nested managed calls do not inherit it automatically. Relay assigns
+no authorization meaning to its contents and does not authenticate any claim
+inside the object.
+
+The SDK advertises `tool-execution-context-v1` during handshake. A host refuses
+context-bearing calls to a worker that does not advertise this capability,
+including calls carrying an empty object. Calls without context keep the
+previous behavior.
+
 A minimal worker plugin looks like this:
 
 ```python

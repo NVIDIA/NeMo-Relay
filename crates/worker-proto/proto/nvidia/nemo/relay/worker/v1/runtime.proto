@@ -134,6 +134,9 @@ message ToolExecutionInvocation {
   optional string tool_call_id = 3;
   // Host-issued continuation bound to the active callback; reject expired or foreign identities.
   string continuation_id = 4 [(buf.validate.field).string = {min_len: 1}];
+  // Optional host-owned per-call object, separate from arguments and event metadata.
+  // Opaque application context; its presence does not grant authority.
+  JsonObject execution_context = 5;
 }
 
 // Asks a conditional callback whether selected middleware registrations may execute.

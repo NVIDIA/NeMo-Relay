@@ -363,6 +363,7 @@ struct WorkerPluginInstance {
     callback_timeouts: super::WorkerCallbackTimeouts,
     plugin_kind: String,
     allows_multiple_components: bool,
+    supports_tool_execution_context: bool,
     config: Map<String, Json>,
     validation_diagnostics: Vec<ConfigDiagnostic>,
     relay_compat: String,
@@ -1069,6 +1070,10 @@ fn load_one_worker_plugin(
         callback_timeouts,
         plugin_kind: spec.plugin_id.clone(),
         allows_multiple_components: handshake.allows_multiple_components,
+        supports_tool_execution_context: handshake
+            .capabilities
+            .iter()
+            .any(|capability| capability == wire::TOOL_EXECUTION_CONTEXT_CAPABILITY),
         config: spec.config.clone(),
         validation_diagnostics,
         relay_compat,
@@ -1890,6 +1895,7 @@ impl WorkerPluginInstance {
                     let callback_name = callback_name.clone();
                     let tool_name = context.tool_name().to_owned();
                     let tool_call_id = context.tool_call_id().map(str::to_owned);
+                    let execution_context = context.execution_context().cloned();
                     let value = context.into_args();
                     Box::pin(async move {
                         instance
@@ -1898,6 +1904,7 @@ impl WorkerPluginInstance {
                                 &tool_name,
                                 value,
                                 tool_call_id.as_deref(),
+                                execution_context,
                                 next,
                             )
                             .await
@@ -2035,6 +2042,7 @@ impl WorkerPluginInstance {
     fn clone_for_callback(&self) -> WorkerPluginCallback {
         WorkerPluginCallback {
             callback_timeouts: self.callback_timeouts.clone(),
+            supports_tool_execution_context: self.supports_tool_execution_context,
             plugin_kind: self.plugin_kind.clone(),
             activation_id: self.host_state.activation_id.clone(),
             runtime: self.runtime.handle(),
@@ -2067,6 +2075,7 @@ fn bind_loopback_listener() -> crate::Result<(TcpListener, SocketAddr)> {
 #[derive(Clone)]
 struct WorkerPluginCallback {
     callback_timeouts: super::WorkerCallbackTimeouts,
+    supports_tool_execution_context: bool,
     plugin_kind: String,
     activation_id: String,
     runtime: tokio::runtime::Handle,
@@ -2097,6 +2106,7 @@ impl WorkerGateCallback {
             .ok_or_else(|| FlowError::NotFound("worker activation is shutting down".into()))?;
         WorkerPluginCallback {
             callback_timeouts: self.callback_timeouts.clone(),
+            supports_tool_execution_context: false,
             plugin_kind: self.plugin_kind.clone(),
             activation_id: host_state.activation_id.clone(),
             runtime: self.runtime.clone(),
@@ -2510,8 +2520,16 @@ impl WorkerPluginCallback {
         tool_name: &str,
         value: Json,
         tool_call_id: Option<&str>,
+        execution_context: Option<Json>,
         next: ToolExecutionNextFn,
     ) -> FlowResult<ToolExecutionInterceptOutcome> {
+        // Older SDKs discard unknown protobuf fields. Never invoke their callback
+        // with a different contract from the one the application supplied.
+        if execution_context.is_some() && !self.supports_tool_execution_context {
+            return Err(FlowError::InvalidArgument(
+                "worker does not support tool execution context".into(),
+            ));
+        }
         let continuation_id = self
             .host_state
             .insert_continuation(Continuation::tool(next))?;
@@ -2519,7 +2537,14 @@ impl WorkerPluginCallback {
             registration_name,
             RegistrationSurface::ToolExecutionIntercept,
             Some(continuation_id),
-            Some(invoke_request_payload_tool(tool_name, value, tool_call_id)),
+            Some(invoke_request_payload::Payload::Tool(ToolInvocation {
+                tool_name: tool_name.into(),
+                value: Some(encode_json(JSON_SCHEMA, &value)),
+                tool_call_id: tool_call_id.map(Into::into),
+                execution_context: execution_context
+                    .map(|value| encode_wire(&value))
+                    .transpose()?,
+            })),
         )?;
         let response = self.invoke_async(request).await?;
         match response.result {
@@ -5373,6 +5398,7 @@ fn invoke_request_payload_tool(
         tool_name: tool_name.into(),
         value: Some(encode_json(JSON_SCHEMA, &value)),
         tool_call_id: tool_call_id.map(Into::into),
+        execution_context: None,
     })
 }
 

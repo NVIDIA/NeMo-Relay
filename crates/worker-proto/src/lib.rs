@@ -85,6 +85,9 @@ pub mod nvidia_worker_v1 {
     /// Initial stable worker/schema contract baseline, independent of crate versions.
     pub const CONTRACT_VERSION: &str = "1.0.0";
 
+    /// Worker preserves the optional host-owned tool execution-context object.
+    pub const TOOL_EXECUTION_CONTEXT_CAPABILITY: &str = "tool-execution-context-v1";
+
     /// Diagnostic snapshot contract negotiated independently of the worker protocol.
     pub const DIAGNOSTIC_SNAPSHOT_CONTRACT_VERSION: &str = "1.0.0";
     /// Diagnostic provenance contract negotiated independently of the worker protocol.

@@ -80,8 +80,8 @@ use crate::callback_factory::{self, CallbackScope, Wrapper};
 use crate::convert::{
     BoxFuture, Callback, JAVASCRIPT_MAX_SAFE_INTEGER, JsArg, JsArgs2,
     clear_last_callback_error as clear_recorded_callback_error, closure_function, detach,
-    get_last_callback_error as get_recorded_callback_error, js_value, lock, opt_json, parse_json,
-    parse_timestamp_micros, record_callback_error, settled,
+    execution_context_json, get_last_callback_error as get_recorded_callback_error, js_value, lock,
+    opt_json, parse_json, parse_timestamp_micros, record_callback_error, settled,
 };
 use crate::environment::spawn_promise;
 use crate::error::{Error, Result};
@@ -2004,6 +2004,18 @@ pub fn tool_call_end(
     .map_err(Error::from)
 }
 
+/// Report whether this native binding transports application execution context.
+///
+/// This query performs no execution. It does not describe worker support or
+/// grant authorization. Check the typed wrapper separately when using it.
+///
+/// # Returns
+/// `true` when the compiled binding supports the `executionContext` argument.
+#[napi]
+pub fn supports_tool_execution_context() -> bool {
+    true
+}
+
 /// Execute a tool call end-to-end with full lifecycle management.
 ///
 /// By default, this call runs these stages:
@@ -2018,7 +2030,10 @@ pub fn tool_call_end(
 /// It does not emit a Start/End pair. The call returns `GuardrailRejected`.
 /// Sanitizers change event data. They do not change the result returned to the caller.
 /// An optional `toolCallId` is recorded in both lifecycle events.
-/// Use the last `executionOptions` argument to choose which stages run for this call.
+/// Use `executionOptions` to choose which stages run for this call.
+/// Optional `executionContext` is a host-supplied JSON object (at most 16 KiB)
+/// exposed only to execution intercepts. It is not arguments or event metadata,
+/// grants no authorization, and is not inherited by nested calls.
 #[allow(clippy::too_many_arguments)]
 #[napi(
     ts_generic_types = "TArgs extends JsonCompatible<TArgs>, TResult extends ToolExecutionResultCompatible<TResult>, TData extends JsonCompatible<TData> = Json, TMetadata extends JsonCompatible<TMetadata> = Json",
@@ -2036,7 +2051,9 @@ pub fn tool_call_execute<'env>(
     #[napi(ts_arg_type = "TMetadata | null")] metadata: Option<Json>,
     tool_call_id: Option<String>,
     execution_options: Option<ExecutionOptions>,
+    #[napi(ts_arg_type = "JsonObject | null")] execution_context: Option<Unknown<'env>>,
 ) -> Result<PromiseRaw<'env, ToolExecutionResult>> {
+    let execution_context = execution_context_json(env, execution_context)?;
     let func = scoped_fn(
         env,
         &func,
@@ -2055,6 +2072,7 @@ pub fn tool_call_execute<'env>(
         metadata,
         tool_call_id,
         execution_options,
+        execution_context,
     )
 }
 
@@ -2070,6 +2088,7 @@ fn execute_tool_call<'env>(
     metadata: Option<Json>,
     tool_call_id: Option<String>,
     execution_options: Option<ExecutionOptions>,
+    execution_context: Option<Json>,
 ) -> Result<PromiseRaw<'env, ToolExecutionResult>> {
     let execution_options = execution_options.map(Into::into).unwrap_or_default();
     let attrs = ToolAttributes::from_bits_truncate(attributes.unwrap_or(0));
@@ -2089,6 +2108,7 @@ fn execute_tool_call<'env>(
                     .data_opt(opt_json(data))
                     .metadata_opt(opt_json(metadata))
                     .tool_call_id_opt(tool_call_id)
+                    .execution_context_opt(opt_json(execution_context))
                     .build(),
             )
             .await
@@ -2103,7 +2123,10 @@ fn execute_tool_call<'env>(
 ///
 /// Runs the same lifecycle as `toolCallExecute`. An optional `toolCallId` is
 /// recorded in both lifecycle events.
-/// Use the last `executionOptions` argument to choose which stages run for this call.
+/// Use `executionOptions` to choose which stages run for this call.
+/// Optional `executionContext` is a host-supplied JSON object (at most 16 KiB)
+/// exposed only to execution intercepts. It is not arguments or event metadata,
+/// grants no authorization, and is not inherited by nested calls.
 #[allow(clippy::too_many_arguments)]
 #[napi(
     ts_generic_types = "TArgs extends JsonCompatible<TArgs>, TResult extends ToolExecutionResultCompatible<TResult>, TData extends JsonCompatible<TData> = Json, TMetadata extends JsonCompatible<TMetadata> = Json",
@@ -2122,7 +2145,9 @@ pub fn tool_call_execute_async<'env>(
     #[napi(ts_arg_type = "TMetadata | null")] metadata: Option<Json>,
     tool_call_id: Option<String>,
     execution_options: Option<ExecutionOptions>,
+    #[napi(ts_arg_type = "JsonObject | null")] execution_context: Option<Unknown<'env>>,
 ) -> Result<PromiseRaw<'env, ToolExecutionResult>> {
+    let execution_context = execution_context_json(env, execution_context)?;
     let pa_fn = Arc::new(PromiseAwareFn::new(env, &func)?);
     let func: ToolExecutionNextFn = Arc::new(move |args| {
         let pa_fn = pa_fn.clone();
@@ -2142,6 +2167,7 @@ pub fn tool_call_execute_async<'env>(
         metadata,
         tool_call_id,
         execution_options,
+        execution_context,
     )
 }
 
@@ -2826,8 +2852,10 @@ registration_api! {
     #[doc = " Register a tool execution intercept following the middleware chain pattern."]
     #[doc = ""]
     #[doc = " The `callable` receives `ToolExecutionContext` and `next`. The context"]
-    #[doc = " exposes `toolName`, `args`, and `toolCallId`; `toolCallId` is `null` when"]
-    #[doc = " the managed call has no provider-issued correlation identifier. Call"]
+    #[doc = " exposes `toolName`, `args`, `toolCallId`, and `executionContext`. The latter"]
+    #[doc = " is a host-supplied JSON object or `null`, separate from event metadata"]
+    #[doc = " and tool arguments; it grants no authorization. `toolCallId` is `null`"]
+    #[doc = " when the call has no provider-issued correlation identifier. Call"]
     #[doc = " `next(context.args)` to continue the chain, or return an outcome directly"]
     #[doc = " to short-circuit execution."]
     fn register_tool_execution_intercept(callable: "(context: ToolExecutionContext, next: <TNextArgs extends JsonCompatible<TNextArgs>>(args: TNextArgs) => ToolExecutionResult | Promise<ToolExecutionResult>) => TOutcome | Promise<TOutcome>", generics: "TOutcome extends ToolExecutionInterceptOutcomeCompatible<TOutcome>", plugin: method("registerToolExecutionIntercept", "tool execution intercept"))
@@ -3018,8 +3046,10 @@ registration_api! {
     #[doc = " Register a scope-local tool execution intercept following the middleware chain pattern."]
     #[doc = ""]
     #[doc = " The `callable` receives `ToolExecutionContext` and `next`. The context"]
-    #[doc = " exposes `toolName`, `args`, and `toolCallId`; `toolCallId` is `null` when"]
-    #[doc = " the managed call has no provider-issued correlation identifier. Call"]
+    #[doc = " exposes `toolName`, `args`, `toolCallId`, and `executionContext`. The latter"]
+    #[doc = " is a host-supplied JSON object or `null`, separate from event metadata"]
+    #[doc = " and tool arguments; it grants no authorization. `toolCallId` is `null`"]
+    #[doc = " when the call has no provider-issued correlation identifier. Call"]
     #[doc = " `next(context.args)` to continue the chain, or return an outcome directly"]
     #[doc = " to short-circuit execution."]
     fn scope_register_tool_execution_intercept(callable: "(context: ToolExecutionContext, next: <TNextArgs extends JsonCompatible<TNextArgs>>(args: TNextArgs) => ToolExecutionResult | Promise<ToolExecutionResult>) => TOutcome | Promise<TOutcome>", generics: "TOutcome extends ToolExecutionInterceptOutcomeCompatible<TOutcome>", scope: scope_uuid)

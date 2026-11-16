@@ -354,6 +354,34 @@ class TestTypedHelpers:
 
 
 class TestTypedToolExecute:
+    async def test_forwards_host_execution_context_separately_from_arguments(self) -> None:
+        seen = []
+        arguments: Json = {"value": 1}
+        host_context: dict[str, Json] = {"audit": {"label": "typed-host-context"}}
+
+        def execute(arguments: Json) -> ToolExecutionResult[Json]:
+            return ToolExecutionResult(arguments)
+
+        async def observing(context, next_call):
+            seen.append(context.execution_context)
+            downstream = await next_call(context.args)
+            return ToolExecutionInterceptOutcome(downstream.result)
+
+        intercepts.register_tool_execution("typed_execution_context", 1, observing)
+        try:
+            result = await typed.tool_execute(
+                "typed_context",
+                arguments,
+                execute,
+                JsonPassthrough(),
+                JsonPassthrough(),
+                execution_context=host_context,
+            )
+            assert result.result == {"value": 1}
+            assert seen == [{"audit": {"label": "typed-host-context"}}]
+        finally:
+            assert intercepts.deregister_tool_execution("typed_execution_context")
+
     @pytest.mark.parametrize(
         "argument_type", [NullableArguments, DefaultedNullableArguments, ConstructorExcludedArguments]
     )

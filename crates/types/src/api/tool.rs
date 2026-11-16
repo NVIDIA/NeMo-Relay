@@ -49,6 +49,9 @@ pub struct ToolExecutionContext {
     pub args: Json,
     /// Provider-issued tool-call correlation identifier, when supplied.
     pub tool_call_id: Option<String>,
+    /// Optional caller-owned execution context; not tool input or event metadata.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub execution_context: Option<Json>,
 }
 
 impl std::fmt::Debug for ToolExecutionContext {
@@ -84,6 +87,12 @@ impl ToolExecutionContext {
     #[must_use]
     pub fn tool_call_id(&self) -> Option<&str> {
         self.tool_call_id.as_deref()
+    }
+
+    /// Inspect application context without granting it authorization semantics.
+    #[must_use]
+    pub fn execution_context(&self) -> Option<&Json> {
+        self.execution_context.as_ref()
     }
 }
 

@@ -653,6 +653,66 @@ class TestToolIntercepts:
         assert seen["tool_call_id"] == "call-abc123"
         assert seen["arguments"] == {"value": 42}
 
+    async def test_execution_context_is_private_copied_and_not_inherited(self, subscribed_events) -> None:
+        seen = []
+        host = {"review": {"state": "host-only-sentinel"}}
+
+        async def outer(context, next_call):
+            if context.tool_name == "execution_context_parent":
+                assert context.execution_context == {"review": {"state": "host-only-sentinel"}}
+                context.execution_context["review"]["state"] = "changed"
+                await tools.execute("execution_context_nested", {}, lambda args: ToolExecutionResult(args))
+            downstream = await next_call(context.args)
+            return ToolExecutionInterceptOutcome(downstream.result)
+
+        async def inner(context, next_call):
+            seen.append((context.tool_name, context.execution_context))
+            downstream = await next_call({**context.args, "rewritten": True})
+            return ToolExecutionInterceptOutcome(downstream.result)
+
+        intercepts.register_tool_execution("py_execution_context_outer", 1, outer)
+        intercepts.register_tool_execution("py_execution_context_inner", 2, inner)
+        try:
+            pending = tools.execute(
+                "execution_context_parent", {"value": 1}, lambda args: ToolExecutionResult(args), execution_context=host
+            )
+            host["review"]["state"] = "changed-by-caller"
+            result = await pending
+            await tools.execute("execution_context_omitted", {}, lambda args: ToolExecutionResult(args))
+            assert result.result == {"value": 1, "rewritten": True}
+            assert seen == [
+                ("execution_context_nested", None),
+                ("execution_context_parent", {"review": {"state": "host-only-sentinel"}}),
+                ("execution_context_omitted", None),
+            ]
+            await subscribers.flush_async()
+            assert all("host-only-sentinel" not in event.to_json() for event in subscribed_events)
+        finally:
+            assert intercepts.deregister_tool_execution("py_execution_context_outer")
+            assert intercepts.deregister_tool_execution("py_execution_context_inner")
+
+    @pytest.mark.parametrize("execution_context", [[], "text", 1, True, {"value": "x" * 16384}])
+    async def test_invalid_execution_context_rejected_before_callbacks(self, execution_context) -> None:
+        calls = []
+
+        async def observing(context, next_call):
+            calls.append("intercept")
+            downstream = await next_call(context.args)
+            return ToolExecutionInterceptOutcome(downstream.result)
+
+        intercepts.register_tool_execution("py_invalid_execution_context", 1, observing)
+        try:
+            with pytest.raises((RuntimeError, ValueError, TypeError)):
+                await tools.execute(
+                    "invalid_context",
+                    {},
+                    lambda args: calls.append("tool") or ToolExecutionResult(args),
+                    execution_context=execution_context,
+                )
+            assert calls == []
+        finally:
+            assert intercepts.deregister_tool_execution("py_invalid_execution_context")
+
     async def test_execution_intercept_tool_call_id_is_none_when_absent(self) -> None:
         seen = {}
 

@@ -12,7 +12,7 @@ use napi::bindgen_prelude::{
     FnArgs, FromNapiValue, Function, JsObjectValue, JsValuesTupleIntoVec, Null, Object, Unknown,
 };
 use napi::threadsafe_function::{ThreadsafeCallContext, ThreadsafeFunctionCallMode};
-use napi::{Env, ValueType};
+use napi::{Env, Property, PropertyAttributes, ValueType};
 use nemo_relay_runtime::api::runtime::subscriber_dispatcher::in_dispatcher_callback;
 use nemo_relay_runtime::api::runtime::{
     EventMetadataInjectorFn, EventSanitizeFn, EventSubscriberFn, LlmCodecIdentity, LlmCollector,
@@ -1125,6 +1125,61 @@ impl LlmResponseCodec for NapiResponseCodec {
     }
 }
 
+/// Convert only host execution context using own data properties. The generic
+/// JSON bridge uses setters, which reinterpret a JSON `__proto__` key. Names
+/// are JavaScript strings rather than C strings, preserving embedded NULs.
+fn tool_execution_context_value(env: &Env, value: &Json) -> napi::Result<JsArg> {
+    match value {
+        Json::Object(fields) => {
+            let mut object = Object::new(env)?;
+            let mut properties = Vec::with_capacity(fields.len());
+            for (name, value) in fields {
+                let value = tool_execution_context_value(env, value)?;
+                // SAFETY: recursion creates every handle in this live callback's environment.
+                let value = unsafe { value.into_unknown(env) };
+                properties.push(
+                    Property::new()
+                        .with_name(env, name.as_str())?
+                        .with_value(&value)
+                        .with_property_attributes(
+                            PropertyAttributes::Writable
+                                | PropertyAttributes::Enumerable
+                                | PropertyAttributes::Configurable,
+                        ),
+                );
+            }
+            object.define_properties(&properties)?;
+            js_value(env, object)
+        }
+        Json::Array(values) => {
+            // The runtime's context size limit also bounds array length below u32::MAX.
+            let array = env.create_array(u32::try_from(values.len()).map_err(|_| {
+                napi::Error::from_reason("execution context array exceeds the supported length")
+            })?)?;
+            let mut object = array.coerce_to_object()?;
+            let mut properties = Vec::with_capacity(values.len());
+            for (index, value) in values.iter().enumerate() {
+                let value = tool_execution_context_value(env, value)?;
+                // SAFETY: the value was created above in this callback's live environment.
+                let value = unsafe { value.into_unknown(env) };
+                properties.push(
+                    Property::new()
+                        .with_name(env, index.to_string())?
+                        .with_value(&value)
+                        .with_property_attributes(
+                            PropertyAttributes::Writable
+                                | PropertyAttributes::Enumerable
+                                | PropertyAttributes::Configurable,
+                        ),
+                );
+            }
+            object.define_properties(&properties)?;
+            js_value(env, object)
+        }
+        _ => js_value(env, value.clone()),
+    }
+}
+
 pub(crate) fn wrap_js_tool_exec_intercept_fn(
     env: &Env,
     func: &Function<JsArg, JsArg>,
@@ -1133,10 +1188,28 @@ pub(crate) fn wrap_js_tool_exec_intercept_fn(
     Ok(Arc::new(
         move |context: ToolExecutionContext, next: ToolExecutionNextFn| {
             let func = func.clone();
-            let js_context = serde_json::json!({
-                "toolName": context.tool_name(),
-                "args": context.args(),
-                "toolCallId": context.tool_call_id(),
+            let invocation = Invocation::built(move |env| {
+                let mut object = Object::new(env)?;
+                object.set_named_property("toolName", context.tool_name())?;
+                // Keep the existing business-argument conversion contract unchanged.
+                object.set_named_property("args", context.args().clone())?;
+                object
+                    .set_named_property("toolCallId", serde_json::json!(context.tool_call_id()))?;
+                let host_context = tool_execution_context_value(
+                    env,
+                    context.execution_context().unwrap_or(&Json::Null),
+                )?;
+                // SAFETY: the host context was created in this callback's live environment.
+                let host_context = unsafe { host_context.into_unknown(env) };
+                object.define_properties(&[Property::new()
+                    .with_name(env, "executionContext")?
+                    .with_value(&host_context)
+                    .with_property_attributes(
+                        PropertyAttributes::Writable
+                            | PropertyAttributes::Enumerable
+                            | PropertyAttributes::Configurable,
+                    )])?;
+                js_value(env, object)
             });
             Box::pin(async move {
                 let next: JsonNextFn = Arc::new(move |next_args| {
@@ -1146,9 +1219,7 @@ pub(crate) fn wrap_js_tool_exec_intercept_fn(
                             .map_err(|error| FlowError::Internal(error.to_string()))
                     })
                 });
-                let result = func
-                    .call_with_next(Invocation::single(js_context), next)
-                    .await?;
+                let result = func.call_with_next(invocation, next).await?;
                 #[derive(Deserialize)]
                 #[serde(rename_all = "camelCase")]
                 struct JsOutcome {

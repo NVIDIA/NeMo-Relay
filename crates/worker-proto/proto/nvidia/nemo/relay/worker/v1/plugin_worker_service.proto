@@ -60,6 +60,9 @@ message HandshakeResponse {
     defined_only: true
     not_in: [0]
   }];
+  // Optional additive SDK capabilities. Unknown names are ignored by hosts.
+  // tool-execution-context-v1 preserves ToolExecutionInvocation.execution_context.
+  repeated string capabilities = 4;
 }
 
 // Queries readiness using activation credentials; it may precede handshake.

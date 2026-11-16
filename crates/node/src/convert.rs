@@ -9,7 +9,8 @@ use std::thread::ThreadId;
 use chrono::{DateTime, Utc};
 use napi::bindgen_prelude::{
     FnArgs, FromNapiValue, Function, FunctionCallContext, FunctionRef, JsObjectValue, JsValue,
-    JsValuesTupleIntoVec, Object, ToNapiValue, Unknown,
+    JsValuesTupleIntoVec, KeyCollectionMode, KeyConversion, KeyFilter, Object, ToNapiValue,
+    Unknown,
 };
 use napi::threadsafe_function::ThreadsafeFunction;
 use napi::{Env, Status, ValueType};
@@ -292,6 +293,90 @@ fn checked_json_within(
         }
         _ => Ok(Json::from_unknown(value)?),
     }
+}
+
+/// Snapshot the new host context from own enumerable JSON properties only.
+/// Unlike the shared JSON converter, this does not promote inherited claims.
+/// Getter values are read as ordinary JSON input; no JavaScript globals are used.
+pub(crate) fn execution_context_json(env: &Env, value: Option<Unknown>) -> Result<Option<Json>> {
+    let Some(value) = value else { return Ok(None) };
+    if matches!(value.get_type()?, ValueType::Null | ValueType::Undefined) {
+        return Ok(None);
+    }
+    let mut remaining_nodes = MAX_JSON_NODES;
+    let value = own_context_json(env, value, MAX_JSON_DEPTH, &mut remaining_nodes)?;
+    if !value.is_object() {
+        return Err(Error::invalid_argument(
+            "execution context must be a JSON object",
+        ));
+    }
+    Ok(Some(value))
+}
+
+fn own_context_json(
+    env: &Env,
+    value: Unknown,
+    remaining_depth: u32,
+    remaining_nodes: &mut usize,
+) -> Result<Json> {
+    *remaining_nodes = remaining_nodes
+        .checked_sub(1)
+        .ok_or_else(|| Error::invalid_argument("Exceeded maximum JSON value count"))?;
+    if value.get_type()? != ValueType::Object {
+        return checked_json(env, value);
+    }
+    let remaining_depth = remaining_depth
+        .checked_sub(1)
+        .ok_or_else(|| Error::invalid_argument("Exceeded maximum JSON nesting depth"))?;
+    let object = Object::from_unknown(value)?;
+    if object.is_array()? {
+        let length = object.get_array_length()?;
+        if length as usize > *remaining_nodes {
+            return Err(Error::invalid_argument("Exceeded maximum JSON value count"));
+        }
+        let mut values = Vec::new();
+        for index in 0..length {
+            // A sparse array must not import a value from its prototype.
+            values.push(if object.has_own_property(&index.to_string())? {
+                own_context_json(
+                    env,
+                    object.get_element(index)?,
+                    remaining_depth,
+                    remaining_nodes,
+                )?
+            } else {
+                *remaining_nodes = remaining_nodes
+                    .checked_sub(1)
+                    .ok_or_else(|| Error::invalid_argument("Exceeded maximum JSON value count"))?;
+                Json::Null
+            });
+        }
+        return Ok(Json::Array(values));
+    }
+    let keys = object.get_all_property_names(
+        KeyCollectionMode::OwnOnly,
+        KeyFilter::Enumerable,
+        KeyConversion::NumbersToStrings,
+    )?;
+    let mut values = serde_json::Map::new();
+    for index in 0..keys.get_array_length()? {
+        let key: Unknown = keys.get_element(index)?;
+        // JSON object keys are strings; symbols are not part of its data model.
+        if key.get_type()? != ValueType::String {
+            continue;
+        }
+        let name = key.coerce_to_string()?.into_utf8()?.into_owned()?;
+        // An earlier getter may have removed a key from the captured own-key list.
+        if !object.has_own_property(&name)? {
+            continue;
+        }
+        let value = object.get_property(key)?;
+        values.insert(
+            name,
+            own_context_json(env, value, remaining_depth, remaining_nodes)?,
+        );
+    }
+    Ok(Json::Object(values))
 }
 
 pub(crate) fn parse_timestamp_micros(value: Option<f64>) -> Result<Option<DateTime<Utc>>> {

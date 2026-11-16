@@ -922,6 +922,7 @@ impl PluginContext<'_> {
                             tool_name: i.name.to_string(),
                             args: from_abi(i.value)?,
                             tool_call_id: i.tool_call_id.map(|v| v.to_string()),
+                            execution_context: None,
                         },
                         ToolNext(Arc::new(_next.ok_or("missing tool continuation")?)),
                     )

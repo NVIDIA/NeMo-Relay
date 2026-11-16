@@ -1530,6 +1530,12 @@ pub fn apply_registration(
                 let callback = callback.clone();
                 Box::pin(async move {
                     owner.ensure()?;
+                    if context.execution_context().is_some() {
+                        return Err(FlowError::InvalidArgument(
+                            "native tool execution intercept does not support execution context"
+                                .into(),
+                        ));
+                    }
                     let (i, _life) = invocation(
                         &owner,
                         surface,

@@ -29,6 +29,205 @@ fn lock_global_runtime() -> std::sync::MutexGuard<'static, ()> {
 }
 
 #[test]
+fn execution_context_is_preserved_across_intercepts_but_not_tool_arguments_or_events() {
+    use crate::api::registry::{
+        register_tool_execution_intercept, register_tool_request_intercept,
+    };
+    let _guard = lock_global_runtime();
+    reset_global();
+    let expected = json!({"example.approval": {"receipt": "private-receipt"}});
+    let seen = Arc::new(Mutex::new(Vec::new()));
+    let events = Arc::new(Mutex::new(Vec::new()));
+    let captured = events.clone();
+    register_subscriber(
+        "context-events",
+        Arc::new(move |event| {
+            captured
+                .lock()
+                .unwrap()
+                .push(serde_json::to_string(event).unwrap());
+        }),
+    )
+    .unwrap();
+    register_tool_request_intercept(
+        "context-request",
+        0,
+        false,
+        Arc::new(|_, args| {
+            Box::pin(async move {
+                assert_eq!(args, json!({"value": 1}));
+                Ok(json!({"value": 2}))
+            })
+        }),
+    )
+    .unwrap();
+    for priority in [0, 1] {
+        let seen = seen.clone();
+        register_tool_execution_intercept(
+            &format!("context-{priority}"),
+            priority,
+            Arc::new(move |context, next| {
+                let seen = seen.clone();
+                Box::pin(async move {
+                    seen.lock()
+                        .unwrap()
+                        .push(context.execution_context().cloned());
+                    let mut local_copy = context.execution_context().cloned().unwrap();
+                    local_copy["example.approval"]["receipt"] = json!("changed-copy");
+                    Ok(next(context.args().clone()).await?.into())
+                })
+            }),
+        )
+        .unwrap();
+    }
+    tokio::runtime::Runtime::new().unwrap().block_on(async {
+        let result = tool_call_execute(
+            ToolCallExecuteParams::builder()
+                .name("context-tool")
+                .args(json!({"value": 1}))
+                .execution_context(expected.clone())
+                .func(Arc::new(|args| {
+                    Box::pin(async move {
+                        assert_eq!(args, json!({"value": 2}));
+                        Ok(args.into())
+                    })
+                }))
+                .build(),
+        )
+        .await
+        .unwrap();
+        assert_eq!(result.result, json!({"value": 2}));
+    });
+    flush_subscribers().unwrap();
+    assert_eq!(
+        *seen.lock().unwrap(),
+        vec![Some(expected.clone()), Some(expected)]
+    );
+    assert!(!events.lock().unwrap().is_empty());
+    assert!(
+        events
+            .lock()
+            .unwrap()
+            .iter()
+            .all(|event| !event.contains("private-receipt"))
+    );
+}
+
+#[test]
+fn execution_context_is_invocation_local_and_nested_calls_do_not_inherit_it() {
+    use crate::api::registry::register_tool_execution_intercept;
+    let _guard = lock_global_runtime();
+    reset_global();
+    register_tool_execution_intercept(
+        "context-isolation",
+        0,
+        Arc::new(|context, next| {
+            Box::pin(async move {
+                tokio::task::yield_now().await;
+                match context.tool_name() {
+                    "left" => {
+                        assert_eq!(context.execution_context(), Some(&json!({"owner": "left"})))
+                    }
+                    "right" => assert_eq!(
+                        context.execution_context(),
+                        Some(&json!({"owner": "right"}))
+                    ),
+                    "nested" => assert!(context.execution_context().is_none()),
+                    _ => panic!("unexpected tool"),
+                }
+                Ok(next(context.args().clone()).await?.into())
+            })
+        }),
+    )
+    .unwrap();
+    tokio::runtime::Runtime::new().unwrap().block_on(async {
+        let make_call = |name: &'static str| {
+            tool_call_execute(
+                ToolCallExecuteParams::builder()
+                    .name(name)
+                    .args(json!({}))
+                    .execution_context(json!({"owner": name}))
+                    .func(Arc::new(|_| {
+                        Box::pin(async {
+                            tool_call_execute(
+                                ToolCallExecuteParams::builder()
+                                    .name("nested")
+                                    .args(json!({}))
+                                    .func(Arc::new(|args| Box::pin(async move { Ok(args.into()) })))
+                                    .build(),
+                            )
+                            .await
+                        })
+                    }))
+                    .build(),
+            )
+        };
+        let (left, right) = tokio::join!(make_call("left"), make_call("right"));
+        left.unwrap();
+        right.unwrap();
+    });
+}
+
+#[test]
+fn invalid_execution_context_is_rejected_before_any_middleware_or_tool() {
+    use crate::api::registry::register_tool_conditional_execution_guardrail;
+    let _guard = lock_global_runtime();
+    reset_global();
+    register_tool_conditional_execution_guardrail(
+        "context-validation",
+        0,
+        Arc::new(|_, _| panic!("invalid context reached middleware")),
+    )
+    .unwrap();
+    tokio::runtime::Runtime::new().unwrap().block_on(async {
+        for value in [
+            Json::Null,
+            json!([]),
+            json!(true),
+            json!({"data": "x".repeat(16_384)}),
+        ] {
+            let error = tool_call_execute(
+                ToolCallExecuteParams::builder()
+                    .name("invalid-context")
+                    .args(json!({}))
+                    .execution_context(value)
+                    .func(Arc::new(|_| panic!("invalid context reached tool")))
+                    .build(),
+            )
+            .await
+            .unwrap_err();
+            assert!(matches!(error, FlowError::InvalidArgument(_)));
+        }
+    });
+}
+
+#[test]
+fn application_review_claim_does_not_bypass_conditional_guardrails() {
+    use crate::api::registry::register_tool_conditional_execution_guardrail;
+    let _guard = lock_global_runtime();
+    reset_global();
+    register_tool_conditional_execution_guardrail(
+        "context-is-not-authority",
+        0,
+        Arc::new(|_, _| Box::pin(async { Ok(Some("blocked by application policy".into())) })),
+    )
+    .unwrap();
+    tokio::runtime::Runtime::new().unwrap().block_on(async {
+        let error = tool_call_execute(
+            ToolCallExecuteParams::builder()
+                .name("reviewed-tool")
+                .args(json!({}))
+                .execution_context(json!({"review": {"approved": true}}))
+                .func(Arc::new(|_| panic!("review claim bypassed a guardrail")))
+                .build(),
+        )
+        .await
+        .unwrap_err();
+        assert!(error.to_string().contains("blocked by application policy"));
+    });
+}
+
+#[test]
 fn tool_call_execute_adds_otel_status_metadata_to_end_events() {
     let _guard = lock_global_runtime();
     reset_global();

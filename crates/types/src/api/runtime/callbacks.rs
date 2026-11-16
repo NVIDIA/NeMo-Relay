@@ -152,6 +152,7 @@ pub struct ToolExecutionContext {
     tool_name: String,
     args: Json,
     tool_call_id: Option<String>,
+    execution_context: Option<Json>,
 }
 
 impl std::fmt::Debug for ToolExecutionContext {
@@ -172,6 +173,7 @@ impl ToolExecutionContext {
             tool_name: tool_name.into(),
             args,
             tool_call_id: None,
+            execution_context: None,
         }
     }
 
@@ -180,6 +182,21 @@ impl ToolExecutionContext {
     pub fn with_tool_call_id(mut self, tool_call_id: Option<String>) -> Self {
         self.tool_call_id = tool_call_id;
         self
+    }
+
+    /// Attach invocation-local application context, separate from tool arguments.
+    /// Managed execution validates its object shape and size at admission.
+    #[must_use]
+    pub fn with_execution_context(mut self, execution_context: Option<Json>) -> Self {
+        self.execution_context = execution_context;
+        self
+    }
+
+    /// Inspect the caller-supplied context. Relay assigns no authorization meaning.
+    /// It is not emitted in lifecycle events or inherited by nested calls.
+    #[must_use]
+    pub fn execution_context(&self) -> Option<&Json> {
+        self.execution_context.as_ref()
     }
 
     /// Replace the argument payload, preserving the remaining fields.
