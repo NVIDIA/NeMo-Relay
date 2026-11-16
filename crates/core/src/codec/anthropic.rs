@@ -150,6 +150,7 @@ fn map_anthropic_stop_reason(reason: &str) -> FinishReason {
         "end_turn" => FinishReason::Complete,
         "max_tokens" => FinishReason::Length,
         "tool_use" => FinishReason::ToolUse,
+        "refusal" => FinishReason::ContentFilter,
         other => FinishReason::Unknown(other.to_string()),
     }
 }
