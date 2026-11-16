@@ -191,7 +191,8 @@ def execute(
         metadata: Optional JSON metadata recorded on the emitted start event.
         tool_call_id: Optional provider-specific tool call identifier recorded
             on the emitted start and end events.
-        execution_context: Optional host-supplied JSON object (at most 16 KiB).
+        execution_context: Optional host-supplied JSON object (at most 16 KiB and
+            64 object/array levels, counting the root object as level 1).
             Execution intercepts receive a defensive copy, separate from tool
             arguments and event metadata. It grants no authority and is not
             inherited by nested calls.

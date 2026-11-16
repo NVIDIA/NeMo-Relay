@@ -202,6 +202,62 @@ fn invalid_execution_context_is_rejected_before_any_middleware_or_tool() {
 }
 
 #[test]
+fn execution_context_nesting_is_bounded_before_middleware_or_tool() {
+    use crate::api::registry::register_tool_conditional_execution_guardrail;
+    let _guard = lock_global_runtime();
+    reset_global();
+    let calls = Arc::new(std::sync::atomic::AtomicUsize::new(0));
+    let observed = calls.clone();
+    register_tool_conditional_execution_guardrail(
+        "context-depth",
+        0,
+        Arc::new(move |_, _| {
+            observed.fetch_add(1, std::sync::atomic::Ordering::SeqCst);
+            Box::pin(async { Ok(None) })
+        }),
+    )
+    .unwrap();
+    tokio::runtime::Runtime::new().unwrap().block_on(async {
+        for arrays in [false, true] {
+            for levels in [64, 65, 161] {
+                let mut value = Json::Null;
+                for _ in 1..levels {
+                    value = if arrays {
+                        json!([value])
+                    } else {
+                        json!({"nested": value})
+                    };
+                }
+                let value = json!({"nested": value});
+                assert!(serde_json::to_vec(&value).unwrap().len() < 16_384);
+                let before = calls.load(std::sync::atomic::Ordering::SeqCst);
+                let result = tool_call_execute(
+                    ToolCallExecuteParams::builder()
+                        .name("context-depth")
+                        .args(json!({}))
+                        .execution_context(value)
+                        .func(Arc::new(move |args| {
+                            assert_eq!(levels, 64, "over-deep context reached tool");
+                            Box::pin(async move { Ok(args.into()) })
+                        }))
+                        .build(),
+                )
+                .await;
+                if levels == 64 {
+                    result.unwrap();
+                    assert_eq!(calls.load(std::sync::atomic::Ordering::SeqCst), before + 1);
+                } else {
+                    let error = result.unwrap_err();
+                    assert!(matches!(error, FlowError::InvalidArgument(_)));
+                    assert!(error.to_string().contains("64 container levels"));
+                    assert_eq!(calls.load(std::sync::atomic::Ordering::SeqCst), before);
+                }
+            }
+        }
+    });
+}
+
+#[test]
 fn application_review_claim_does_not_bypass_conditional_guardrails() {
     use crate::api::registry::register_tool_conditional_execution_guardrail;
     let _guard = lock_global_runtime();

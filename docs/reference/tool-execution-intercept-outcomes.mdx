@@ -271,7 +271,11 @@ Node.js `typedToolExecute` options. Rust uses
 `context.execution_context()` in Rust. Rust and Python worker SDKs expose the
 same optional context on their tool execution callback.
 
-The value must be a JSON object with a serialized UTF-8 size of at most 16 KiB.
+The value must be a JSON object with a serialized UTF-8 size of at most 16 KiB
+and at most **64 nested container levels**. The root object counts as level 1;
+each nested object or array adds one level, while scalar values add none.
+The host rejects deeper values before invoking middleware. This limit leaves
+headroom under the Rust worker decoder's recursion protection.
 Keys and nested values belong to the application; Relay defines no approval
 schema or reserved application keys. Omission means no context, whereas `{}`
 is a supplied, empty context. Invalid values fail before tool execution.

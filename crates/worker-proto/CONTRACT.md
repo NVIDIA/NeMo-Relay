@@ -296,6 +296,12 @@ pre-decode admission, deadlines, retry bounds, and cleanup behavior.
 
 ## Shared Native and Worker Authoring Contract
 
+Tool execution context is limited by host admission to 16 KiB of serialized
+UTF-8 JSON and 64 container levels (root object at level 1; each nested object
+or array adds a level; scalars add none). The depth bound is checked before
+serialization and middleware dispatch and retains the worker decoder's recursion
+protection.
+
 Tool execution context is an optional caller-supplied object, separate from tool
 arguments, results, annotations, and event metadata. Relay transports it without
 interpreting its contents or treating it as an authenticated assertion or an

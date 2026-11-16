@@ -79,7 +79,7 @@ export interface TypedToolExecuteOptions<
   data?: TData;
   metadata?: TMetadata;
   toolCallId?: string | null;
-  /** Host-supplied invocation-local context for execution intercepts; never event metadata. */
+  /** Host-supplied context for execution intercepts: at most 16 KiB and 64 object/array levels (root is level 1); never event metadata. */
   executionContext?: JsonObject | null;
   executionOptions?: ExecutionOptions | null;
 }
