@@ -658,7 +658,14 @@ fn test_attach_estimated_cost_omits_cost_when_billed_output_tokens_overflow() {
 
 #[test]
 fn documentation_catalog_matches_expected_threshold_costs() {
-    let page = include_str!("../../../docs/reference/api/model-pricing.mdx");
+    let page = include_str!("../../../docs/reference/api/model-pricing.mdx").replace("\r\n", "\n");
+    for line_ending in ["\n", "\r\n"] {
+        assert_documentation_catalog_matches_threshold_costs(&page.replace('\n', line_ending));
+    }
+}
+
+fn assert_documentation_catalog_matches_threshold_costs(page: &str) {
+    let page = page.replace("\r\n", "\n");
     let entry = page
         .split("```json title=\"Example catalog entry\"\n")
         .nth(1)

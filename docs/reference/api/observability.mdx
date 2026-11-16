@@ -292,11 +292,12 @@ logs.register("otlp-logs")
 metrics.register("otlp-metrics")
 try:
     # Run instrumented work here.
-    for diagnostic in logs.runtime_diagnostics().entries:
-        print(diagnostic.code, diagnostic.message)
+    pass
 finally:
     logs.deregister("otlp-logs")
     logs.force_flush()
+    for diagnostic in logs.runtime_diagnostics().entries:
+        print(diagnostic.code, diagnostic.message)
     logs.shutdown()
     metrics.deregister("otlp-metrics")
     metrics.force_flush()
@@ -320,12 +321,12 @@ logs.register("otlp-logs");
 metrics.register("otlp-metrics");
 try {
   // Run instrumented work here.
-  for (const diagnostic of logs.runtimeDiagnostics()) {
-    console.error(diagnostic.code, diagnostic.message);
-  }
 } finally {
   logs.deregister("otlp-logs");
   logs.forceFlush();
+  for (const diagnostic of logs.runtimeDiagnostics()) {
+    console.error(diagnostic.code, diagnostic.message);
+  }
   logs.shutdown();
   metrics.deregister("otlp-metrics");
   metrics.forceFlush();

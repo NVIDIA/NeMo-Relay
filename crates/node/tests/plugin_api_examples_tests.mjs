@@ -30,25 +30,32 @@ const examples = new Map([
   ['resource_metrics', [resourceMetrics, ['Resource Metrics', 'Collect One Snapshot']]],
 ]);
 
-function fencedExamples(relativePath) {
+function fencedExamples(relativePath, markdown = readFileSync(path.join(repositoryRoot, relativePath), 'utf8')) {
   const result = [];
   let hierarchy = [];
   let language = null;
+  let fenceMarker = '';
   let body = [];
-  for (const line of readFileSync(path.join(repositoryRoot, relativePath), 'utf8').split('\n')) {
+  for (const line of markdown.split(/\r?\n/)) {
     if (language !== null) {
-      if (line === '```') {
+      const closing = /^ {0,3}(`+|~+)[ \t]*$/.exec(line);
+      if (closing && closing[1][0] === fenceMarker[0] && closing[1].length >= fenceMarker.length) {
         result.push({ headings: hierarchy.map(([, title]) => title), language, source: `${body.join('\n')}\n` });
         language = null;
       } else body.push(line);
-    } else if (line.startsWith('```')) {
-      language = line.slice(3).split(/\s+/)[0];
-      body = [];
     } else {
-      const match = /^(#{1,6}) (.+)$/.exec(line);
-      if (match) {
-        hierarchy = hierarchy.filter(([depth]) => depth < match[1].length);
-        hierarchy.push([match[1].length, match[2]]);
+      const opening = /^ {0,3}(`{3,}|~{3,})(.*)$/.exec(line);
+      if (opening) {
+        fenceMarker = opening[1];
+        if (fenceMarker.startsWith('`') && opening[2].includes('`')) continue;
+        language = opening[2].trim().split(/\s+/)[0];
+        body = [];
+      } else {
+        const match = /^(#{1,6}) (.+)$/.exec(line);
+        if (match) {
+          hierarchy = hierarchy.filter(([depth]) => depth < match[1].length);
+          hierarchy.push([match[1].length, match[2]]);
+        }
       }
     }
   }
@@ -132,6 +139,37 @@ async function exerciseExample(name) {
 if (process.argv[2] === '--example') {
   await exerciseExample(process.argv[3]);
 } else {
+  it('includes tilde and longer fenced examples in the displayed inventory', () => {
+    for (const fence of ['```', '~~~~', '`````']) {
+      for (const lineEnding of ['\n', '\r\n']) {
+        const markdown = [
+          '# Unregistered example',
+          `${fence}javascript`,
+          'console.log(1);',
+          `${fence}${fence[0]} \t`,
+        ].join(lineEnding);
+        assert.deepEqual(fencedExamples('example.mdx', markdown), [
+          { headings: ['Unregistered example'], language: 'javascript', source: 'console.log(1);\n' },
+        ]);
+      }
+    }
+  });
+  it('keeps shorter, mismatched, and text-suffixed fences inside the source', () => {
+    for (const closing of ['```', '~~~~', '```` trailing text']) {
+      const markdown = `# Example\n\`\`\`\`js\n${closing}\n\`\`\`\`\n`;
+      assert.deepEqual(fencedExamples('example.mdx', markdown), [
+        { headings: ['Example'], language: 'js', source: `${closing}\n` },
+      ]);
+      assert.throws(() => fencedExamples('example.mdx', `\`\`\`\`js\n${closing}\n`), /Unclosed code fence/);
+    }
+  });
+  it('extracts identical displayed examples with LF and CRLF line endings', () => {
+    for (const relativePath of [observability, adaptive, resourceMetrics]) {
+      const markdown = readFileSync(path.join(repositoryRoot, relativePath), 'utf8').replace(/\r\n/g, '\n');
+      const expected = fencedExamples(relativePath, markdown);
+      assert.deepEqual(fencedExamples(relativePath, markdown.replace(/\n/g, '\r\n')), expected);
+    }
+  });
   it('registers every displayed Node.js snippet for coverage', () => {
     for (const relativePath of [observability, adaptive, resourceMetrics]) {
       const actual = fencedExamples(relativePath)

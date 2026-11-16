@@ -532,6 +532,34 @@ mod plugin_api_examples {
                 before
             );
         }
+        #[test]
+        fn export_failure_deregisters_the_example_subscriber() {
+            let _registration_guard = crate::DOCUMENTATION_REGISTRATION_LOCK.blocking_lock();
+            nemo_relay::context::set_thread_scope_stack(nemo_relay::context::create_scope_stack());
+            let before = nemo_relay::registry::list_runtime_registrations(None).unwrap();
+            let exporter = nemo_relay::exporter::atif(
+                "failed-session".into(),
+                AtifAgentInfo {
+                    name: "agent".into(),
+                    version: "1.0.0".into(),
+                    model_name: None,
+                    tool_definitions: None,
+                    extra: None,
+                },
+            );
+            register_subscriber("atif-exporter", exporter.subscriber()).unwrap();
+            let result = complete_export(
+                &exporter,
+                Err(nemo_relay::FlowError::Internal("export failed".into())),
+            );
+            let after = nemo_relay::registry::list_runtime_registrations(None).unwrap();
+            deregister_subscriber("atif-exporter").unwrap();
+            assert_eq!(
+                result.unwrap_err().to_string(),
+                "internal error: export failed"
+            );
+            assert_eq!(after, before);
+        }
     }
     mod atof_exporter {
         include!("../../../docs/reference/api/_code/rust/atof_exporter.rs");
@@ -602,6 +630,40 @@ mod plugin_api_examples {
                 nemo_relay::registry::list_runtime_registrations(None).unwrap(),
                 before
             );
+        }
+        #[test]
+        fn flush_failure_still_deregisters_and_shuts_down_both_subscribers() {
+            let _registration_guard = crate::DOCUMENTATION_REGISTRATION_LOCK.blocking_lock();
+            nemo_relay::context::set_thread_scope_stack(nemo_relay::context::create_scope_stack());
+            let before = nemo_relay::registry::list_runtime_registrations(None).unwrap();
+            for metrics_already_shutdown in [false, true] {
+                let logs = nemo_relay::exporter::opentelemetry_logs(OpenTelemetryLogConfig::new(
+                    "http://localhost:4318/v1/logs",
+                ))
+                .unwrap();
+                let metrics = nemo_relay::exporter::opentelemetry_metrics(
+                    OpenTelemetryMetricConfig::new("http://localhost:4318/v1/metrics"),
+                )
+                .unwrap();
+                logs.shutdown().unwrap();
+                if metrics_already_shutdown {
+                    metrics.shutdown().unwrap();
+                }
+                let expected_error = logs.force_flush().unwrap_err().to_string();
+                logs.register("otlp-logs").unwrap();
+                metrics.register("otlp-metrics").unwrap();
+                let result = complete_subscribers(&logs, &metrics);
+                let after = nemo_relay::registry::list_runtime_registrations(None).unwrap();
+                logs.deregister("otlp-logs").unwrap();
+                metrics.deregister("otlp-metrics").unwrap();
+                let logs_closed = logs.force_flush().is_err();
+                let metrics_closed = metrics.force_flush().is_err();
+                let _cleanup_results = [logs.shutdown(), metrics.shutdown()];
+                assert_eq!(result.unwrap_err().to_string(), expected_error);
+                assert_eq!(after, before);
+                assert!(logs_closed);
+                assert!(metrics_closed);
+            }
         }
     }
     mod openinference_subscriber {

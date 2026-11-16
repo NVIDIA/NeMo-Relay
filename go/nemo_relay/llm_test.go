@@ -1505,6 +1505,43 @@ func TestLlmStreamCollectorCanClose(t *testing.T) {
 	}
 }
 
+func TestLlmStreamCollectorCloseMarksStreamDropped(t *testing.T) {
+	output, metadata, done := captureLlmEndEvent(t, "go_stream_collector_close_dropped")
+	var stream *LlmStream
+	finalizerCalls := 0
+	stream, err := LlmStreamCallExecute("collector_close_dropped_llm", makeRequest(),
+		func(json.RawMessage) (json.RawMessage, error) { return json.RawMessage(`{"token": "hi"}`), nil },
+		func(json.RawMessage) { _ = stream.Close() },
+		func() string {
+			finalizerCalls++
+			return `{"aggregated": true}`
+		},
+	)
+	if err != nil {
+		t.Fatalf(llmStreamCallExecuteFailed, err)
+	}
+	if _, err := stream.Next(); err != nil {
+		t.Fatalf(streamNextFailed, err)
+	}
+	if _, err := stream.Next(); err != io.EOF {
+		t.Fatalf("Next after collector Close error = %v, want io.EOF", err)
+	}
+	if err := stream.Close(); err != nil {
+		t.Fatalf("Close failed: %v", err)
+	}
+	done()
+	if finalizerCalls != 1 {
+		t.Fatalf("finalizer calls = %d, want 1", finalizerCalls)
+	}
+	if string(output()) != `{"aggregated":true}` {
+		t.Fatalf("end event output = %s, want the finalizer aggregate", output())
+	}
+	fields := metadata()
+	if fields["otel.status_code"] != "ERROR" || fields["otel.status_description"] != "stream dropped before clean completion" {
+		t.Fatalf("end event metadata = %v, want dropped stream error", fields)
+	}
+}
+
 func TestLlmStreamCloseNativeWaitsForInFlightWork(t *testing.T) {
 	stream, err := LlmStreamCallExecute("finish_close_wait_llm", makeRequest(),
 		func(nativeJSON json.RawMessage) (json.RawMessage, error) {

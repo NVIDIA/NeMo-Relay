@@ -54,20 +54,25 @@ RUST_SOURCES = {
 
 
 def fenced_examples(page: Path) -> list[tuple[tuple[str, ...], str, str]]:
-    """Identify exact fenced source by its full heading hierarchy and language."""
+    """Identify fenced source by its full heading hierarchy and language."""
     hierarchy: list[tuple[int, str]] = []
     examples = []
     language: str | None = None
+    fence_marker = ""
     body: list[str] = []
     for line in page.read_text(encoding="utf-8").splitlines():
         if language is not None:
-            if line == "```":
+            closing = re.fullmatch(r" {0,3}(`+|~+)[ \t]*", line)
+            if closing and closing[1][0] == fence_marker[0] and len(closing[1]) >= len(fence_marker):
                 examples.append((tuple(title for _, title in hierarchy), language, "\n".join(body) + "\n"))
                 language = None
             else:
                 body.append(line)
-        elif line.startswith("```"):
-            language = line[3:].split()[0]
+        elif opening := re.fullmatch(r" {0,3}(`{3,}|~{3,})(.*)", line):
+            fence_marker, information = opening.groups()
+            if fence_marker.startswith("`") and "`" in information:
+                continue
+            language = information.split()[0] if information.strip() else ""
             body = []
         elif match := re.match(r"^(#{1,6}) (.+)$", line):
             level = len(match[1])
@@ -86,6 +91,39 @@ def displayed_source(name: str) -> str:
     ]
     assert len(matches) == 1, (filename, hierarchy, len(matches))
     return matches[0]
+
+
+@pytest.mark.parametrize("fence", ["```", "~~~~", "`````"])
+@pytest.mark.parametrize("line_ending", ["\n", "\r\n"])
+def test_fenced_examples_recognizes_matching_fences(tmp_path: Path, fence: str, line_ending: str) -> None:
+    page = tmp_path / "example.mdx"
+    lines = ["# New example", f"{fence}python", "print('example')", f"{fence}{fence[0]} \t"]
+    page.write_bytes(line_ending.join(lines).encode())
+    assert fenced_examples(page) == [(("New example",), "python", "print('example')\n")]
+
+
+@pytest.mark.parametrize("closing", ["```", "~~~~", "```` trailing text"])
+def test_fenced_examples_keeps_nonclosing_fences_in_source(tmp_path: Path, closing: str) -> None:
+    page = tmp_path / "example.mdx"
+    page.write_text(f"# New example\n````python\n{closing}\n````\n", encoding="utf-8")
+    assert fenced_examples(page) == [(("New example",), "python", f"{closing}\n")]
+
+
+@pytest.mark.parametrize("closing", ["```", "~~~~", "```` trailing text"])
+def test_fenced_examples_rejects_unclosed_fences(tmp_path: Path, closing: str) -> None:
+    page = tmp_path / "example.mdx"
+    page.write_text(f"````python\n{closing}\n", encoding="utf-8")
+    with pytest.raises(AssertionError, match="Unclosed code fence"):
+        fenced_examples(page)
+
+
+def test_unregistered_tilde_example_fails_inventory(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    page = tmp_path / OBSERVABILITY
+    page.parent.mkdir(parents=True)
+    page.write_text("# Unregistered example\n~~~python\nprint('example')\n~~~\n", encoding="utf-8")
+    monkeypatch.setitem(globals(), "REPOSITORY_ROOT", tmp_path)
+    with pytest.raises(AssertionError, match=OBSERVABILITY):
+        test_displayed_source_inventory_has_registered_coverage()
 
 
 def test_displayed_source_inventory_has_registered_coverage() -> None:

@@ -1,6 +1,7 @@
 // SPDX-FileCopyrightText: Copyright (c) 2026, NVIDIA CORPORATION & AFFILIATES. All rights reserved.
 // SPDX-License-Identifier: Apache-2.0
 
+use nemo_relay::exporter::atif::{AtifExporter, AtifTrajectory};
 use nemo_relay::subscriber::{deregister_subscriber, register_subscriber};
 use nemo_relay_observability::atif::AtifAgentInfo;
 
@@ -20,12 +21,19 @@ pub fn run_example()
 
     // Run instrumented application work here.
 
-    let trajectory = exporter.export()?;
+    complete_export(&exporter, exporter.export())
+}
+
+fn complete_export(
+    exporter: &AtifExporter,
+    trajectory_result: Result<AtifTrajectory, nemo_relay::FlowError>,
+) -> Result<AtifTrajectory, Box<dyn std::error::Error>> {
+    let deregistration_result = deregister_subscriber("atif-exporter");
+    exporter.clear();
+    let trajectory = trajectory_result?;
+    deregistration_result?;
     let trajectory_json = serde_json::to_string_pretty(&trajectory)?;
     println!("{trajectory_json}");
-
-    let _ = deregister_subscriber("atif-exporter")?;
-    exporter.clear();
     Ok(trajectory)
 }
 

@@ -66,8 +66,17 @@ mod framework_response_codec {
 
 #[test]
 fn documentation_resource_metrics_snapshot_matches_the_public_schema() {
+    let page =
+        include_str!("../../../docs/reference/api/resource-metrics.mdx").replace("\r\n", "\n");
+    for line_ending in ["\n", "\r\n"] {
+        assert_documentation_snapshot_matches_public_schema(&page.replace('\n', line_ending));
+    }
+}
+
+fn assert_documentation_snapshot_matches_public_schema(page: &str) {
     use nemo_relay_types::api::resource_metrics::ResourceMetricsSnapshot;
-    let page = include_str!("../../../docs/reference/api/resource-metrics.mdx");
+
+    let page = page.replace("\r\n", "\n");
     let example = page
         .split("```json title=\"Illustrative snapshot\"\n")
         .nth(1)

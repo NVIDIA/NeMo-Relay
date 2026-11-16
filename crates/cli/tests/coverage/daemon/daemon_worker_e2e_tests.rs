@@ -1781,6 +1781,9 @@ async fn pass_through_cancellation_and_backpressure_hold_over_http2() {
 async fn assert_128_concurrent_full_hop_streams(protocol: TestProtocol) {
     const STREAMS: usize = 128;
     const ROUTE_STREAMS: usize = STREAMS / 2;
+    // Client, daemon, worker, and provider share this process: about 6 sockets per HTTP/1.1
+    // stream. HTTP/2 multiplexes each hop over one connection, so this is a no-op there.
+    crate::test_support::ensure_open_file_limit((STREAMS * 12) as u64);
 
     let provider_connections = [Arc::new(AtomicUsize::new(0)), Arc::new(AtomicUsize::new(0))];
     let (provider_address_a, provider_task_a) = spawn_sequenced_provider(

@@ -548,6 +548,14 @@ pub(crate) enum ActivationCancellation {
 
 pub(crate) const ACTIVATION_CANCEL_CAPABILITY: &str = "activation_cancel_v1";
 pub(crate) const WORKER_IDLE_RETENTION_CAPABILITY: &str = "worker_idle_retention_v1";
+/// The daemon accepts `WorkerExited` from the MCP that launched a worker.
+pub(crate) const WORKER_EXIT_REPORT_CAPABILITY: &str = "worker_exit_report_v1";
+
+/// Sent by the MCP that launched a worker when that worker process exits after publication.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub(crate) struct WorkerExitedPayload {
+    pub(crate) activation_id: String,
+}
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub(crate) struct ActivationFailedPayload {
@@ -606,6 +614,7 @@ pub(crate) fn descriptor_with_idle_retention(
 ) -> ComponentDescriptor {
     let mut capabilities = super::protocol::Capabilities::streaming_transport()
         .with_capability(ACTIVATION_CANCEL_CAPABILITY)
+        .with_capability(WORKER_EXIT_REPORT_CAPABILITY)
         .with_capability(crate::daemon::diagnostics::CAPABILITY);
     if idle_retention {
         capabilities = capabilities.with_capability(WORKER_IDLE_RETENTION_CAPABILITY);
