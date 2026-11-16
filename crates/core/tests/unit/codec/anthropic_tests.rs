@@ -388,6 +388,18 @@ fn test_decode_response_finish_reason_stop_sequence() {
 }
 
 #[test]
+fn test_decode_response_finish_reason_refusal() {
+    let codec = AnthropicMessagesCodec;
+    let response = json!({
+        "content": [],
+        "stop_reason": "refusal",
+        "usage": { "input_tokens": 1, "output_tokens": 1 }
+    });
+    let resp = codec.decode_response(&response).unwrap();
+    assert_eq!(resp.finish_reason, Some(FinishReason::ContentFilter));
+}
+
+#[test]
 fn test_decode_response_usage_mapping() {
     let codec = AnthropicMessagesCodec;
     let response = json!({
