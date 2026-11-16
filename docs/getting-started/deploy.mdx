@@ -1,0 +1,61 @@
+---
+title: "Deploy Overview"
+description: "Provide an administrator-managed Relay deployment for coding agents."
+position: 5
+---
+{/* SPDX-FileCopyrightText: Copyright (c) 2026, NVIDIA CORPORATION & AFFILIATES. All rights reserved.
+SPDX-License-Identifier: Apache-2.0 */}
+
+For complete deployment instructions, use the [Daemon documentation](/daemon/about).
+
+Run Relay as a managed background service (**daemon**) on a workstation or remote
+Linux server. IT controls shared configuration, routing, and telemetry; workers
+run on each user's machine.
+
+Deploy managed Codex and Claude Code integrations using the guides below.
+
+## General Steps
+
+<Steps>
+
+<Step title="Choose a deployment and install Relay">
+
+Choose a [deployment model](/daemon/about#choose-a-deployment) and install the
+[Relay CLI](/getting-started/installation/cli) on the service host and clients.
+Remote deployments need network connectivity in both directions between the
+daemon and client workers.
+
+</Step>
+
+<Step title="Prepare managed configuration and credentials">
+
+Follow [Configuration and Managed Clients](/daemon/configuration) to prepare
+shared settings and a separate routing credential for each user-machine identity.
+System settings take priority over personal configuration.
+
+</Step>
+
+<Step title="Deploy the service and clients">
+
+Follow the path for your deployment:
+
+- **Local workstation:** Follow the runbook for [Windows](/daemon/windows),
+  [macOS](/daemon/macos), or [Linux](/daemon/linux).
+- **Remote Linux server:** Skip the local runbooks. Follow
+  [Deploy the Daemon](/daemon/remote-server), then
+  [Deploy Clients](/daemon/remote-clients).
+
+</Step>
+
+<Step title="Verify before rollout">
+
+Complete
+[Verify Worker-Backed Operation](/daemon/operations#verify-worker-backed-operation)
+with a managed test session before rollout.
+
+</Step>
+
+</Steps>
+
+For updates, removal, and troubleshooting, use
+[Operations and Troubleshooting](/daemon/operations).

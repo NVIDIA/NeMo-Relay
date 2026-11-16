@@ -24,7 +24,6 @@ source-first.
 Install these tools before you start:
 
 - Rust stable
-- `protoc` 31.1 or later
 - Buf 1.75.0 or later
 - Python 3.11 or newer
 - `uv`
@@ -35,8 +34,9 @@ Install these tools before you start:
 - `cargo-deny`
 - `cargo-about` 0.9.1
 
-Install `protoc` and Buf on `PATH`, or select them with `PROTOC` and `BUF`. The first
-build needs access to the Buf Schema Registry to download the locked validation schema.
+Install Buf on `PATH`, or select it with `BUF`. Cargo supplies `protoc`
+automatically. The first build needs access to the Buf Schema Registry to
+download the locked validation schema.
 
 If you touch Go or the raw FFI surface, build and validate those
 bindings from source in the same branch.

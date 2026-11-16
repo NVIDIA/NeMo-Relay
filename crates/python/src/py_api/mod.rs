@@ -8,6 +8,7 @@
 //! The Python wrapper modules (`nemo_relay.scope`, `nemo_relay.tools`, etc.)
 //! re-export these under shorter, idiomatic names.
 
+use std::cell::RefCell;
 use std::collections::{BTreeSet, HashSet};
 use std::future::Future;
 use std::panic::resume_unwind;
@@ -26,7 +27,8 @@ use nemo_relay_runtime::api::runtime::{
     LlmExecutionNextFn, LlmJsonStream, LlmStreamExecutionNextFn, ToolExecutionNextFn,
 };
 use nemo_relay_runtime::api::runtime::{
-    TASK_SCOPE_STACK, capture_propagation_context as capture_propagation_context_handle,
+    MiddlewareContinuationContext, TASK_SCOPE_STACK,
+    capture_propagation_context as capture_propagation_context_handle,
     capture_propagation_context_with_root as capture_propagation_context_with_root_handle,
     capture_rootless_propagation_context as capture_rootless_propagation_context_handle,
     capture_thread_scope_stack as capture_thread_scope_stack_handle,
@@ -61,7 +63,8 @@ use crate::py_types::{
     PyGeminiGenerateContentCodec, PyLLMAttributes, PyLLMHandle, PyLLMRequest, PyLlmStream,
     PyLogSeverity, PyMetricMeasurement, PyOCIGenAIChatCodec, PyOpenAIChatCodec,
     PyOpenAIResponsesCodec, PyPropagationContext, PyScopeAttributes, PyScopeHandle, PyScopeStack,
-    PyScopeType, PyThreadScopeStackBinding, PyToolAttributes, PyToolExecutionResult, PyToolHandle,
+    PyScopeType, PyThreadContextState, PyThreadScopeStackBinding, PyToolAttributes,
+    PyToolExecutionResult, PyToolHandle,
 };
 
 pub(crate) type RustJsonStream = LlmJsonStream;
@@ -503,6 +506,90 @@ pub fn create_scope_stack() -> PyScopeStack {
     PyScopeStack {
         inner: create_scope_stack_handle(),
         publication_buffer: None,
+        execution_context: None,
+        is_explicit_fork: false,
+    }
+}
+
+/// Copy the selected active stack and its execution context without binding it.
+#[pyfunction]
+#[pyo3(signature = (stack=None))]
+pub fn fork_scope_stack(stack: Option<&PyScopeStack>) -> PyResult<PyScopeStack> {
+    if stack.is_none() && !scope_stack_is_active() {
+        return Err(pyo3::exceptions::PyRuntimeError::new_err(
+            "cannot fork scope stack without an active Relay context",
+        ));
+    }
+    let (context, publication_buffer) = match stack {
+        Some(stack) => match &stack.execution_context {
+            Some(context) => (context.clone(), stack.publication_buffer.clone()),
+            None if Arc::ptr_eq(&current_scope_stack_handle(), &stack.inner) => (
+                MiddlewareContinuationContext::capture(),
+                capture_nested_publication_buffer(),
+            ),
+            None => (
+                MiddlewareContinuationContext::from_scope_stack(stack.inner.clone()),
+                stack.publication_buffer.clone(),
+            ),
+        },
+        None => (
+            MiddlewareContinuationContext::capture(),
+            capture_nested_publication_buffer(),
+        ),
+    };
+    let context = match stack {
+        Some(stack) => context.isolated_with_scope_stack(&stack.inner),
+        None => context.isolated(),
+    }
+    .map_err(flow_error_to_py_err)?;
+    Ok(PyScopeStack {
+        inner: context.scope_stack(),
+        publication_buffer,
+        execution_context: Some(context),
+        is_explicit_fork: true,
+    })
+}
+
+thread_local! {
+    // A foreign event-loop thread can switch Python ContextVars between calls.
+    static FORK_ORIGIN: RefCell<Option<PyThreadContextState>> = const { RefCell::new(None) };
+}
+
+fn capture_python_thread_context() -> PyThreadContextState {
+    PyThreadContextState {
+        inner: capture_thread_scope_stack_handle(),
+        scope_override: nemo_relay_runtime::api::runtime::current_scope_stack_override(),
+        execution_context: MiddlewareContinuationContext::capture(),
+    }
+}
+
+fn restore_python_thread_context(state: &PyThreadContextState) {
+    state.execution_context.sync_thread_binding(false);
+    restore_thread_scope_stack_handle(state.inner.clone());
+    nemo_relay_runtime::api::runtime::scope_stack::restore_scope_stack_override(
+        state.scope_override.clone(),
+    );
+}
+
+fn synchronize_forked_context(stack: &PyScopeStack, explicit: bool) -> bool {
+    if stack.is_explicit_fork
+        && let Some(context) = &stack.execution_context
+    {
+        FORK_ORIGIN.with(|origin| {
+            let mut origin = origin.borrow_mut();
+            if origin.is_none() {
+                *origin = Some(capture_python_thread_context());
+            }
+        });
+        context.sync_thread_binding(explicit);
+        sync_thread_publication_buffer(stack.publication_buffer.clone());
+        true
+    } else {
+        let origin = FORK_ORIGIN.with(|origin| origin.borrow_mut().take());
+        if let Some(origin) = origin {
+            restore_python_thread_context(&origin);
+        }
+        false
     }
 }
 
@@ -551,6 +638,8 @@ pub fn create_scope_stack_from_propagation(
         .map(|inner| PyScopeStack {
             inner,
             publication_buffer: None,
+            execution_context: None,
+            is_explicit_fork: false,
         })
         .map_err(flow_error_to_py_err)
 }
@@ -564,22 +653,24 @@ pub fn create_scope_stack_from_propagation(
 /// Args:
 ///     stack: The ``ScopeStack`` to bind to the current thread.
 #[pyfunction]
-pub fn set_thread_scope_stack(stack: &PyScopeStack) {
+#[pyo3(signature = (stack, publication_scope=None))]
+pub fn set_thread_scope_stack(stack: &PyScopeStack, publication_scope: Option<&PyScopeStack>) {
+    if synchronize_forked_context(stack, true) {
+        return;
+    }
     bind_thread_scope_stack(stack.inner.clone());
-    sync_thread_publication_buffer(
-        stack
-            .publication_buffer
-            .clone()
-            .or_else(capture_nested_publication_buffer),
-    );
+    sync_thread_publication_buffer(match publication_scope {
+        Some(publication_scope) => publication_scope.publication_buffer.clone(),
+        None => stack.publication_buffer.clone(),
+    });
 }
 
 /// Capture the scope stack currently installed in native thread-local storage.
 #[pyfunction]
 pub fn capture_thread_scope_stack() -> PyThreadScopeStackBinding {
     PyThreadScopeStackBinding {
-        inner: capture_thread_scope_stack_handle(),
-        publication_buffer: capture_nested_publication_buffer(),
+        state: capture_python_thread_context(),
+        fork_origin: FORK_ORIGIN.with(|origin| origin.borrow().clone()),
     }
 }
 
@@ -587,8 +678,8 @@ pub fn capture_thread_scope_stack() -> PyThreadScopeStackBinding {
 /// `capture_thread_scope_stack`.
 #[pyfunction]
 pub fn restore_thread_scope_stack(binding: &PyThreadScopeStackBinding) {
-    restore_thread_scope_stack_handle(binding.inner.clone());
-    sync_thread_publication_buffer(binding.publication_buffer.clone());
+    FORK_ORIGIN.with(|origin| *origin.borrow_mut() = binding.fork_origin.clone());
+    restore_python_thread_context(&binding.state);
 }
 
 /// Sync a ``ScopeStack`` to the current thread's Rust thread-local storage
@@ -598,14 +689,16 @@ pub fn restore_thread_scope_stack(binding: &PyThreadScopeStackBinding) {
 /// thread-local in sync with the Python ``contextvars.ContextVar`` without
 /// affecting ``scope_stack_active()``.
 #[pyfunction]
-pub fn sync_thread_scope_stack(stack: &PyScopeStack) {
+#[pyo3(signature = (stack, publication_scope=None))]
+pub fn sync_thread_scope_stack(stack: &PyScopeStack, publication_scope: Option<&PyScopeStack>) {
+    if synchronize_forked_context(stack, false) {
+        return;
+    }
     sync_bound_thread_scope_stack(stack.inner.clone());
-    sync_thread_publication_buffer(
-        stack
-            .publication_buffer
-            .clone()
-            .or_else(capture_nested_publication_buffer),
-    );
+    sync_thread_publication_buffer(match publication_scope {
+        Some(publication_scope) => publication_scope.publication_buffer.clone(),
+        None => stack.publication_buffer.clone(),
+    });
 }
 
 /// Return whether the current execution context has an explicitly-initialized
@@ -2409,6 +2502,7 @@ pub fn register(m: &Bound<'_, PyModule>) -> PyResult<()> {
     // Scope stack creation / binding / query
     m.add_function(wrap_pyfunction!(current_scope_stack_snapshot, m)?)?;
     m.add_function(wrap_pyfunction!(create_scope_stack, m)?)?;
+    m.add_function(wrap_pyfunction!(fork_scope_stack, m)?)?;
     m.add_function(wrap_pyfunction!(capture_propagation_context, m)?)?;
     m.add_function(wrap_pyfunction!(capture_rootless_propagation_context, m)?)?;
     m.add_function(wrap_pyfunction!(capture_propagation_context_with_root, m)?)?;

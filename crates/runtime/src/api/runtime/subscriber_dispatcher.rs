@@ -62,6 +62,12 @@ pub fn capture_publication_context() -> Option<PublicationContext> {
     current_publication_context()
 }
 
+/// Synchronize the publication context selected by a foreign language binding.
+#[doc(hidden)]
+pub fn sync_thread_publication_context(context: Option<PublicationContext>) {
+    THREAD_PUBLICATION_CONTEXT.with(|current| current.replace(context));
+}
+
 /// Run synchronous event emission with an opaque binding context snapshot.
 #[doc(hidden)]
 pub fn with_publication_context<T>(

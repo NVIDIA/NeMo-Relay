@@ -3,7 +3,7 @@
 
 //! Unit tests for context in the NeMo Relay core crate.
 
-use std::sync::{Arc, Mutex};
+use std::sync::{Arc, Barrier, Mutex, RwLock};
 
 use serde_json::{Map, json};
 use uuid::{Uuid, Version};
@@ -14,6 +14,9 @@ use crate::api::registry::{ExecutionIntercept, Guardrail, Intercept, RequestInte
 use crate::api::runtime::EventSubscriberFn;
 use crate::api::runtime::ScopeStack;
 use crate::api::runtime::global_context;
+use crate::api::runtime::scope_stack::{
+    root_scope_stack_snapshot, snapshot_scope_stack, snapshot_scope_stack_through_scope,
+};
 use crate::api::runtime::{NemoRelayContextState, flush_subscribers};
 use crate::api::scope::{EndScopeHandleParams, ScopeAttributes, ScopeHandle, ScopeType};
 use crate::api::tool::CreateToolHandleParams;
@@ -133,6 +136,144 @@ fn scope_stack_tracks_freshness_per_owning_agent() {
     assert!(stack.take_agent_freshness(Some(turn_uuid)));
     stack.remove(&turn_uuid).unwrap();
     stack.remove(&parent_uuid).unwrap();
+}
+
+#[test]
+fn scope_stack_snapshots_share_freshness_and_compaction() {
+    let source_stack = Arc::new(RwLock::new(ScopeStack::new()));
+    let root_identifier = source_stack.read().unwrap().root_uuid();
+    let full_snapshot = snapshot_scope_stack(&source_stack).unwrap();
+    let root_snapshot = root_scope_stack_snapshot(&source_stack).unwrap();
+    let partial_snapshot = snapshot_scope_stack_through_scope(&source_stack, &root_identifier)
+        .unwrap()
+        .unwrap();
+    let snapshots = [source_stack, full_snapshot, root_snapshot, partial_snapshot];
+
+    let initial = snapshots
+        .iter()
+        .map(|snapshot| {
+            snapshot
+                .write()
+                .unwrap()
+                .take_agent_freshness(Some(root_identifier))
+        })
+        .collect::<Vec<_>>();
+    assert_eq!(initial, [true, false, false, false]);
+
+    snapshots[3]
+        .write()
+        .unwrap()
+        .mark_agent_fresh(Some(root_identifier));
+    let renewed = snapshots
+        .iter()
+        .map(|snapshot| {
+            snapshot
+                .write()
+                .unwrap()
+                .take_agent_freshness(Some(root_identifier))
+        })
+        .collect::<Vec<_>>();
+    assert_eq!(renewed, [true, false, false, false]);
+}
+
+#[test]
+fn scope_stack_snapshots_consume_freshness_once_concurrently() {
+    let source_stack = Arc::new(RwLock::new(ScopeStack::new()));
+    let root_identifier = source_stack.read().unwrap().root_uuid();
+    let snapshots = (0..8)
+        .map(|_| snapshot_scope_stack(&source_stack).unwrap())
+        .collect::<Vec<_>>();
+
+    for _ in 0..2 {
+        let ready = Arc::new(Barrier::new(snapshots.len()));
+        let fresh_consumers = std::thread::scope(|threads| {
+            let workers = snapshots
+                .iter()
+                .map(|snapshot| {
+                    let snapshot = Arc::clone(snapshot);
+                    let ready = Arc::clone(&ready);
+                    threads.spawn(move || {
+                        ready.wait();
+                        snapshot
+                            .write()
+                            .unwrap()
+                            .take_agent_freshness(Some(root_identifier))
+                    })
+                })
+                .collect::<Vec<_>>();
+            workers
+                .into_iter()
+                .map(|worker| usize::from(worker.join().unwrap()))
+                .sum::<usize>()
+        });
+        assert_eq!(fresh_consumers, 1);
+        source_stack
+            .write()
+            .unwrap()
+            .mark_agent_fresh(Some(root_identifier));
+    }
+}
+
+#[test]
+fn scope_stack_forked_child_agents_keep_independent_freshness() {
+    let mut source = ScopeStack::new();
+    let parent = ScopeHandle::builder()
+        .name("freshness-parent")
+        .scope_type(ScopeType::Agent)
+        .parent_uuid(source.root_uuid())
+        .build();
+    let parent_identifier = parent.uuid;
+    source.push(parent);
+    let source_stack = Arc::new(RwLock::new(source));
+    let fork = snapshot_scope_stack(&source_stack).unwrap();
+    let parent_was_fresh = source_stack
+        .write()
+        .unwrap()
+        .take_agent_freshness(Some(parent_identifier));
+    assert!(parent_was_fresh);
+
+    let child = ScopeHandle::builder()
+        .name("freshness-child")
+        .scope_type(ScopeType::Agent)
+        .parent_uuid(parent_identifier)
+        .build();
+    let child_identifier = child.uuid;
+    fork.write().unwrap().push(child);
+    let child_copy = snapshot_scope_stack(&fork).unwrap();
+    let first_child_start = fork
+        .write()
+        .unwrap()
+        .take_agent_freshness(Some(child_identifier));
+    let copied_child_start = child_copy
+        .write()
+        .unwrap()
+        .take_agent_freshness(Some(child_identifier));
+    assert!(first_child_start);
+    assert!(!copied_child_start);
+
+    child_copy
+        .write()
+        .unwrap()
+        .mark_agent_fresh(Some(child_identifier));
+    let refreshed_child = fork
+        .write()
+        .unwrap()
+        .take_agent_freshness(Some(child_identifier));
+    let parent_after_child = source_stack
+        .write()
+        .unwrap()
+        .take_agent_freshness(Some(parent_identifier));
+    assert!(refreshed_child);
+    assert!(!parent_after_child);
+
+    drop(child_copy);
+    fork.write().unwrap().remove(&child_identifier).unwrap();
+    drop(fork);
+    source_stack
+        .write()
+        .unwrap()
+        .remove(&parent_identifier)
+        .unwrap();
 }
 
 #[test]

@@ -1,0 +1,239 @@
+---
+title: "Install Details"
+description: "CLI platforms, installer behavior, version selection, alternative methods, and removal."
+position: 2
+---
+{/* SPDX-FileCopyrightText: Copyright (c) 2026, NVIDIA CORPORATION & AFFILIATES. All rights reserved.
+SPDX-License-Identifier: Apache-2.0 */}
+
+For the primary Unix and Windows installation commands, use
+[CLI Installation](/getting-started/installation/cli).
+This page covers platform support and detailed installer management.
+
+## Supported Platforms
+
+The CLI provides prebuilt binaries for these platforms:
+
+| Operating System | Architecture | Release Target |
+| --- | --- | --- |
+| Linux (glibc) | x86_64 | `x86_64-unknown-linux-gnu` |
+| Linux (musl) | x86_64 | `x86_64-unknown-linux-musl` |
+| Linux (glibc) | ARM64 | `aarch64-unknown-linux-gnu` |
+| Linux (musl) | ARM64 | `aarch64-unknown-linux-musl` |
+| macOS | Apple Silicon | `aarch64-apple-darwin` |
+| Windows | x86_64 | `x86_64-pc-windows-msvc` |
+| Windows | ARM64 | `aarch64-pc-windows-msvc` |
+
+Use the GNU target on glibc-based distributions such as Ubuntu, Debian, and RHEL.
+
+Use the musl target on Alpine Linux and other musl-based systems.
+The musl CLI dynamically links musl 1.2 or newer to support native plugins;
+the musl loader and libc must be installed on the host.
+
+The Unix shell installer detects glibc and selects the GNU binary built in manylinux.
+Otherwise, it selects the musl binary built in musllinux.
+
+For package versions that publish the corresponding artifacts, `pip` and `uv`
+automatically select a target compatible with the host CPU and C library on
+supported platforms.
+
+The installer reports the detected operating system and architecture when no
+matching asset exists. Intel macOS is not supported because no matching release
+asset is published.
+
+For support across the core library, plugins, worker runtimes, and CLI assets,
+refer to the [Support Matrix](/reference/support-matrix).
+
+## Installer Behavior
+
+The shell installer commands intentionally download the installer from `main`
+and install the latest stable CLI release. The version of this documentation
+page does not select the CLI version; set `NEMO_RELAY_VERSION` to install a
+specific release.
+
+On Linux and macOS, the shell installer downloads the matching GitHub Release binary to
+`$HOME/.local/bin`. The PowerShell installer downloads `nemo-relay.exe` to
+`%LOCALAPPDATA%\nemo-relay\bin`, adds that directory to the persistent user
+`PATH`, and updates the installing PowerShell process. Other running terminals
+retain their existing `PATH`.
+
+The installers download the published SHA-256 checksum for the selected release
+asset and fail without replacing an existing binary if verification does not
+succeed. They do not invoke `sudo`. The PowerShell installer updates the Windows
+user `PATH`; the Unix installer does not edit shell configuration.
+
+## Installer Reference
+
+<Tabs>
+<Tab title="Unix shell">
+Install a specific version:
+
+```bash
+curl -fsSL https://raw.githubusercontent.com/NVIDIA/NeMo-Relay/main/install.sh | NEMO_RELAY_VERSION=1.0.0 sh
+```
+
+Install into another directory:
+
+```bash
+curl -fsSL https://raw.githubusercontent.com/NVIDIA/NeMo-Relay/main/install.sh | sh -s -- --install-dir "$HOME/bin"
+```
+
+Add the selected directory to `PATH` before running `nemo-relay` if it is not
+already present.
+
+| Interface | Purpose |
+| --- | --- |
+| `NEMO_RELAY_VERSION` | Optional release tag; accepts a leading `v` and defaults to the latest stable release |
+| `--install-dir DIR` | Installer destination; defaults to `$HOME/.local/bin` or `%LOCALAPPDATA%\nemo-relay\bin` in Windows POSIX shells |
+| `-h`, `--help` | Display installer usage |
+</Tab>
+
+<Tab title="Windows PowerShell">
+Set the same environment variable before invoking the installer to install a
+specific version:
+
+```powershell
+$env:NEMO_RELAY_VERSION = '1.0.0'
+irm https://raw.githubusercontent.com/NVIDIA/NeMo-Relay/main/install.ps1 | iex
+```
+
+To choose an installation directory, download the script and pass `-InstallDir`:
+
+```powershell
+iwr https://raw.githubusercontent.com/NVIDIA/NeMo-Relay/main/install.ps1 -OutFile install.ps1
+.\install.ps1 -InstallDir "$HOME\bin"
+```
+
+| Interface | Purpose |
+| --- | --- |
+| `NEMO_RELAY_VERSION` | Optional release tag; accepts a leading `v` and defaults to the latest stable release |
+| `-InstallDir DIR` | Installer destination; defaults to `%LOCALAPPDATA%\nemo-relay\bin` |
+| `-Help` | Display installer usage |
+</Tab>
+
+</Tabs>
+
+Rerun the installer to upgrade or replace the existing binary. It verifies the
+new download before replacing the binary in the selected installation directory.
+
+## Windows POSIX Shells
+
+On Windows, Git Bash, MSYS, Cygwin, and MINGW shells can use `install.sh`.
+It installs the matching Windows `.exe` asset into
+`%LOCALAPPDATA%\nemo-relay\bin` and invokes PowerShell to persist the Windows
+user `PATH` update. The installer cannot update the calling shell's `PATH`.
+
+For the default installation directory, install Relay and add it to the current
+shell's `PATH` before checking the version:
+
+```bash
+curl -fsSL https://raw.githubusercontent.com/NVIDIA/NeMo-Relay/main/install.sh | sh
+export PATH="$(cygpath -u "$LOCALAPPDATA")/nemo-relay/bin:$PATH"
+nemo-relay --version
+```
+
+If you use `--install-dir`, add that directory to `PATH` instead.
+
+## Remove a Script-Installed CLI
+
+To remove a CLI installed with the Unix shell installer, run:
+
+```bash
+curl -fsSL https://raw.githubusercontent.com/NVIDIA/NeMo-Relay/main/uninstall.sh | sh
+```
+
+For a non-default installation directory, pass the same directory used during
+installation:
+
+```bash
+curl -fsSL https://raw.githubusercontent.com/NVIDIA/NeMo-Relay/main/uninstall.sh | sh -s -- --install-dir "$HOME/bin"
+```
+
+To remove a CLI installed with the PowerShell installer, run:
+
+```powershell
+irm https://raw.githubusercontent.com/NVIDIA/NeMo-Relay/main/uninstall.ps1 | iex
+```
+
+The uninstall scripts remove only the installed CLI binary. They leave the
+installation directory, any `PATH` entry, Relay configuration and output, and
+coding-agent integrations unchanged. They refuse removal when the installed
+CLI has active Relay processes, including MCP clients owned by coding agents.
+Close those agents and retry, or use `--force` (`-Force` in PowerShell) to
+confirm termination of each detected process tree. Run `nemo-relay uninstall
+all` before removing the binary if you also want to remove Relay-managed
+coding-agent integrations.
+
+`--force` is intentionally interactive; it does not terminate a detected
+coding-agent process without its own confirmation.
+
+A dry run exits nonzero when removal would be refused because Relay processes
+are active.
+
+Active managed daemon processes using the selected binary block removal even
+with `--force` or `-Force`. This includes the broker, `daemon mcp`,
+`daemon worker`, and `daemon hook`. Stop the managed deployment through its
+service manager after closing affected coding-agent sessions and allowing shared
+workers to drain. A worker can serve multiple sessions, and its local process
+tree cannot identify every affected client.
+
+The scripts preserve administrator-managed bundles, daemon identity and trust
+state, and deployment services. Removing the binary does not tear down a managed
+deployment or reset its configuration.
+
+PowerShell cannot pass script parameters through the `irm ... | iex` form. To
+use `-Force` or `-InstallDir`, download the script and invoke it directly:
+
+```powershell
+iwr https://raw.githubusercontent.com/NVIDIA/NeMo-Relay/main/uninstall.ps1 -OutFile uninstall.ps1
+.\uninstall.ps1 -Force
+```
+
+For CLI installations managed by a package manager, use that package manager
+instead:
+
+```bash
+pip uninstall nemo-relay-cli-bin
+cargo uninstall nemo-relay-cli
+```
+
+## Alternative Installation Methods
+
+The PyPI and installer methods install the same CLI release with a binary
+compatible with the host platform. Use Cargo on unsupported platforms or when
+you prefer to build from source.
+
+### PyPI
+
+Use PyPI when you manage Relay from a Python environment. The
+`nemo-relay-cli-bin` package installs the executable only.
+
+```bash
+pip install nemo-relay-cli-bin
+```
+
+Install the Python API and matching CLI together:
+
+```bash
+pip install "nemo-relay[cli]"
+```
+
+### Cargo
+
+Building the CLI from source requires Buf 1.75.0 or later on `PATH`, or selected
+through `BUF`. Cargo supplies `protoc` automatically. The first build needs
+access to the Buf Schema Registry to download the locked validation schema.
+
+```bash
+cargo install nemo-relay-cli
+```
+
+If you already use `cargo-binstall`, it can download the same published release
+asset through the Cargo interface:
+
+```bash
+cargo binstall nemo-relay-cli
+```
+
+For source installation and unsupported-platform guidance, refer to the
+[CLI README](https://github.com/NVIDIA/NeMo-Relay/blob/main/crates/cli/README.md#installation-options).

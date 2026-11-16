@@ -615,8 +615,7 @@ nemo-relay daemon managed-bundle \
   --dispatcher-command /opt/nvidia/bin/nemo-relay \
   --platform linux \
   --agent codex \
-  --agent claude \
-  --agent pi
+  --agent claude
 ```
 
 Run bundle generation as an administrator when writing the installed system
@@ -631,7 +630,7 @@ On Windows, use an elevated PowerShell window:
   --output 'C:\ProgramData\NVIDIA\NeMoRelay\nemo-relay-managed-v1' `
   --daemon-address http://127.0.0.1:47632 `
   --dispatcher-command 'C:/ProgramData/NVIDIA/NeMoRelay/nemo-relay.exe' `
-  --platform windows --agent codex --agent claude --agent pi
+  --platform windows --agent codex --agent claude
 ```
 
 The installed bundle must be readable by users and writable only by administrators.
@@ -822,7 +821,11 @@ against its native service rather than an Anthropic-compatible gateway. Do not s
 the managed base URL for a Claude.ai OAuth-only deployment; preserve native routing
 until Anthropic provides a supported OAuth gateway contract.
 
-### Pi
+<a id="pi" />
+
+### Pi (PoC)
+
+Include `--agent pi` when generating a bundle for this proof-of-concept integration.
 
 Use the [managed Pi extension](#deploy-the-managed-pi-extension) below on Unix.
 On Windows, the equivalent launch command is:
@@ -835,7 +838,9 @@ Always include `--no-extensions` and the exact administrator-owned extension
 path. Verify a model whose provider uses one of the supported HTTP APIs. Pi
 starts the managed MCP process itself; do not register a second Relay MCP process.
 
-### Deploy the Managed Pi Extension
+<a id="deploy-the-managed-pi-extension" />
+
+### Deploy the Managed Pi Extension (PoC)
 
 The Pi artifact is a fixed TypeScript extension under
 `pi/extension-v1/index.ts`. Load that exact administrator-installed file while
