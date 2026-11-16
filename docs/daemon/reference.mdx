@@ -608,7 +608,9 @@ response: `event: error` for Anthropic Messages and OpenAI Responses, or a
 `data:` payload with an `error` object for OpenAI Chat Completions. The HTTP
 status remains 200 because Relay has already sent the response headers. Failed
 streams omit successful completion markers, such as `[DONE]` for OpenAI Chat
-Completions.
+Completions. If the provider answers a streaming request with a success status
+and its stream fails or sends malformed data before the first event, Relay keeps
+the 200 and sends the same SSE error.
 
 The response-header timeout also includes time spent in middleware. For calls
 without streaming, it includes the wait for the full response. It does not limit

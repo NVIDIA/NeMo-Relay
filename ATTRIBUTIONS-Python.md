@@ -6592,7 +6592,7 @@ Apache License
    limitations under the License.
 ```
 
-## opentelemetry-api (1.45.1)
+## opentelemetry-api (1.45.2)
 
 ### Licenses
 License: `Apache-2.0`
