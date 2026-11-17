@@ -15,7 +15,7 @@ import unittest
 from pathlib import Path
 from unittest import mock
 
-from run import main, run_task
+from run import check_acceptance, main, run_task
 from summarize import summarize
 
 
@@ -24,6 +24,57 @@ def mark(name, data, identity):
 
 
 class SummaryChecks(unittest.TestCase):
+    def test_acceptance_does_not_inherit_credentials_or_python_settings(self):
+        with tempfile.TemporaryDirectory() as directory:
+            task_dir = Path(directory)
+            (task_dir / "service.py").write_text(
+                "import os, re, sys\n"
+                "assert sys.flags.isolated\n"
+                "assert not any(k.endswith(('KEY', 'TOKEN', 'SECRET')) for k in os.environ)\n"
+                "def normalize_ticket_id(value):\n"
+                "    if not isinstance(value, str): raise ValueError()\n"
+                "    if not re.fullmatch(r'INC-[0-9]{4}', value.strip(), re.IGNORECASE | re.ASCII):\n"
+                "        raise ValueError()\n"
+                "    return value.strip().upper()\n"
+            )
+            with mock.patch.dict(
+                os.environ,
+                {
+                    "NVIDIA_API_KEY": "test-provider-key",
+                    "GH_TOKEN": "test-install-token",
+                    "UNRELATED_SECRET": "test-unrelated-secret",
+                    "PYTHONPATH": str(task_dir),
+                },
+            ):
+                self.assertTrue(check_acceptance(task_dir, "ticket-id"), (task_dir / "acceptance.log").read_text())
+
+    def test_plugin_setup_timeout_identifies_the_step_and_stops(self):
+        for operation, statuses in (("enable", ["timeout"]), ("validate", [0, "timeout"])):
+            with self.subTest(operation=operation), tempfile.TemporaryDirectory() as directory:
+                output = Path(directory) / "comparison"
+                manifest = Path(directory) / "relay-plugin.toml"
+                manifest.write_text("")
+                environment = {
+                    "NVIDIA_API_KEY": "test-only",
+                    "NVIDIA_BASE_URL": "https://integrate.api.nvidia.com/v1",
+                    "EFFICIENT_MODEL": "example/efficient",
+                    "CAPABLE_MODEL": "example/capable",
+                    "SWITCHYARD_MANIFEST": str(manifest),
+                }
+                with (
+                    mock.patch.dict(os.environ, environment, clear=True),
+                    mock.patch.object(sys, "argv", ["run.py", "--harness", "codex", "--output", str(output)]),
+                    mock.patch("run.shutil.which", return_value="installed"),
+                    mock.patch("run.Path.exists", return_value=False),
+                    mock.patch("run.run_task", side_effect=statuses) as execute,
+                    contextlib.redirect_stdout(io.StringIO()),
+                    self.assertRaisesRegex(ValueError, f"Plugin {operation} timed out for baseline"),
+                ):
+                    main()
+                self.assertEqual(execute.call_count, len(statuses))
+                self.assertTrue((output / "baseline/setup.log").is_file())
+                self.assertFalse((output / "startup.log").exists())
+
     def test_managed_host_is_rejected_before_running_tasks(self):
         with tempfile.TemporaryDirectory() as directory:
             output = Path(directory) / "unused"

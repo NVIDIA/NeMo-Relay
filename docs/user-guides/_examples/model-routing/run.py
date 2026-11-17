@@ -100,6 +100,25 @@ def run_task(command, *, cwd, env, log, timeout):
         return "timeout"
 
 
+def check_acceptance(task_dir, task):
+    """Check generated code without giving it provider or installation tokens."""
+    source = Path(__file__).resolve().parent
+    environment = {key: os.environ[key] for key in ("PATH", "LANG", "LC_ALL", "TMPDIR") if key in os.environ}
+    with (task_dir / "acceptance.log").open("w") as log:
+        # Isolated Python avoids ambient import paths and user site packages.
+        # This is still host execution; the disposable VM is the trust boundary.
+        status = run_task(
+            [sys.executable, "-I", str(source / "acceptance.py"), str(task_dir), task],
+            cwd=source,
+            env=environment,
+            log=log,
+            timeout=30,
+        )
+        if status == "timeout":
+            log.write("\nAcceptance check timed out\n")
+    return status == 0
+
+
 def main():
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--harness", choices=["claude", "codex"], required=True)
@@ -248,23 +267,32 @@ attestation = "integrity_only"
     for arm in arms:
         command = ["nemo-relay", "--config", str(output / arm / "config.toml")]
         # Dynamic manifests are added disabled. Explicit lifecycle enablement is required.
-        subprocess.run(command + ["plugins", "enable", "nvidia.switchyard"], env=environment, check=True)
-        subprocess.run(command + ["plugins", "validate", "nvidia.switchyard"], env=environment, check=True)
+        with (output / arm / "setup.log").open("w") as log:
+            for operation in ("enable", "validate"):
+                status = run_task(
+                    command + ["plugins", operation, "nvidia.switchyard"],
+                    cwd=output / arm,
+                    env=environment,
+                    log=log,
+                    timeout=30,
+                )
+                if status != 0:
+                    reason = "timed out" if status == "timeout" else f"exited {status}"
+                    raise ValueError(f"Plugin {operation} {reason} for {arm}; inspect {arm}/setup.log")
     # Manifest validation does not instantiate the native plugin's routes.
     # Start the same gateway once without an inference task to catch route/client
     # conflicts before repeating identical startup failures across every arm.
     with (output / "startup.log").open("w") as log:
-        try:
-            startup = subprocess.run(
-                ["nemo-relay", "--config", str(output / "baseline/config.toml"), args.harness, "--", "--version"],
-                env=environment,
-                stdout=log,
-                stderr=subprocess.STDOUT,
-                timeout=30,
-            )
-        except subprocess.TimeoutExpired:
-            raise ValueError("Routing startup timed out; inspect startup.log before rerunning") from None
-    if startup.returncode:
+        startup = run_task(
+            ["nemo-relay", "--config", str(output / "baseline/config.toml"), args.harness, "--", "--version"],
+            cwd=output,
+            env=environment,
+            log=log,
+            timeout=30,
+        )
+    if startup == "timeout":
+        raise ValueError("Routing startup timed out; inspect startup.log before rerunning")
+    if startup != 0:
         raise ValueError("Routing startup failed; inspect startup.log before running task comparisons")
     for trial in range(1, args.repeat + 1):
         order = arms[(trial - 1) % 3 :] + arms[: (trial - 1) % 3]
@@ -319,18 +347,7 @@ attestation = "integrity_only"
                         timeout=args.timeout,
                     )
                 seconds = round(time.monotonic() - started, 3)
-                try:
-                    check = subprocess.run(
-                        [sys.executable, str(source / "acceptance.py"), str(task_dir), task],
-                        capture_output=True,
-                        text=True,
-                        timeout=30,
-                    )
-                    accepted = check.returncode == 0
-                    (task_dir / "acceptance.log").write_text(check.stdout + check.stderr)
-                except subprocess.TimeoutExpired:
-                    accepted = False
-                    (task_dir / "acceptance.log").write_text("Acceptance check timed out\n")
+                accepted = check_acceptance(task_dir, task)
                 results.append(
                     {
                         "arm": arm,
@@ -353,9 +370,5 @@ attestation = "integrity_only"
 if __name__ == "__main__":
     try:
         main()
-    except subprocess.CalledProcessError as error:
-        raise SystemExit(
-            f"Relay setup exited {error.returncode}; inspect plugin/install diagnostics. Retry with a new --output"
-        ) from None
     except (OSError, ValueError) as error:
         raise SystemExit(f"Example failed: {error}. Inspect the run directory; use a new --output to retry.") from None
