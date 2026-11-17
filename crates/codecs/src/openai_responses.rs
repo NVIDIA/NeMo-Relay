@@ -1623,6 +1623,7 @@ impl nemo_relay_types::codec::streaming::StreamingCodec for OpenAIResponsesStrea
         LlmJsonStream::from_closeable(ResponsesCompletionStream {
             inner: stream,
             state: std::sync::Arc::clone(&self.state),
+            terminal_forwarded: false,
             ended: false,
         })
     }
@@ -1663,9 +1664,16 @@ impl nemo_relay_types::codec::streaming::StreamingCodec for OpenAIResponsesStrea
 }
 
 /// Checks completion for the paired Responses collector while preserving producer cleanup.
+///
+/// The stream notes terminal events as it forwards them. The paired collector records them into
+/// the shared state only when the runtime wrapper receives them, and middleware between this
+/// stream and that wrapper can poll the source to its end first. The end-of-stream check
+/// therefore accepts either signal instead of depending on consumer ordering.
 struct ResponsesCompletionStream {
     inner: LlmJsonStream,
     state: std::sync::Arc<std::sync::Mutex<OpenAIResponsesStreamingState>>,
+    /// A terminal response event has been forwarded downstream.
+    terminal_forwarded: bool,
     ended: bool,
 }
 
@@ -1679,13 +1687,20 @@ impl Stream for ResponsesCompletionStream {
             return Poll::Ready(None);
         }
         match Pin::new(&mut this.inner).poll_next(cx) {
+            Poll::Ready(Some(Ok(event))) => {
+                if is_terminal_response_event(&event) {
+                    this.terminal_forwarded = true;
+                }
+                Poll::Ready(Some(Ok(event)))
+            }
             Poll::Ready(None) => {
                 this.ended = true;
-                let completed = this
-                    .state
-                    .lock()
-                    .unwrap_or_else(|poisoned| poisoned.into_inner())
-                    .terminal_response_received;
+                let completed = this.terminal_forwarded
+                    || this
+                        .state
+                        .lock()
+                        .unwrap_or_else(|poisoned| poisoned.into_inner())
+                        .terminal_response_received;
                 if completed {
                     Poll::Ready(None)
                 } else {
@@ -1704,7 +1719,7 @@ impl Stream for ResponsesCompletionStream {
                 this.ended = true;
                 Poll::Ready(Some(Err(error)))
             }
-            result => result,
+            Poll::Pending => Poll::Pending,
         }
     }
 }
