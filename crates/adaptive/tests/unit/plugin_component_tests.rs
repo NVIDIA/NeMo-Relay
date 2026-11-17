@@ -251,28 +251,37 @@ fn validate_backend_config_fields_only_flags_known_backend_extras() {
 }
 
 #[test]
-fn response_cache_backend_validation_uses_the_default_backend_kind() {
+fn response_cache_section_reports_the_plugin_that_replaced_it() {
+    // A former response_cache section must fail loudly, not silently disable
+    // a cache the operator enabled; its settings now configure the plugin.
     let config = json!({
         "version": 1,
-        "response_cache": {
-            "backend": {
-                "config": {
-                    "max_byte": 1024
-                }
-            }
-        },
-        "policy": {
-            "unknown_field": "warn"
-        }
+        "response_cache": {"namespace": "team", "ttl_seconds": 60},
+        "policy": {"unknown_field": "ignore"}
     });
 
     let diagnostics = validate_adaptive_plugin_config(config.as_object().unwrap());
-    assert!(diagnostics.iter().any(|diagnostic| {
-        diagnostic.code == "adaptive.unknown_field"
-            && diagnostic.component.as_deref() == Some("response_cache.backend.in_memory")
-            && diagnostic.field.as_deref() == Some("max_byte")
-            && diagnostic.level == DiagnosticLevel::Warning
-    }));
+    let moved: Vec<_> = diagnostics
+        .iter()
+        .filter(|diagnostic| diagnostic.code == "adaptive.response_cache_moved")
+        .collect();
+    assert_eq!(moved.len(), 1, "{diagnostics:?}");
+    assert_eq!(moved[0].level, DiagnosticLevel::Error);
+    assert_eq!(moved[0].field.as_deref(), Some("response_cache"));
+    assert!(moved[0].message.contains(RESPONSE_CACHE_PLUGIN_ID));
+    assert!(
+        !diagnostics
+            .iter()
+            .any(|diagnostic| diagnostic.code == "adaptive.unknown_field"),
+        "the moved section must not also report unknown nested fields: {diagnostics:?}"
+    );
+
+    let without: serde_json::Value = json!({"version": 1});
+    assert!(
+        validate_adaptive_plugin_config(without.as_object().unwrap())
+            .iter()
+            .all(|diagnostic| diagnostic.code != "adaptive.response_cache_moved")
+    );
 }
 
 #[test]
@@ -358,9 +367,6 @@ fn validate_adaptive_plugin_config_reports_component_specific_unknown_fields() {
         "tool_parallelism": {
             "mode": "observe_only"
         },
-        "response_cache": {
-            "skip_keys": ["params"]
-        },
         "policy": {
             "unknown_field": "warn"
         }
@@ -377,47 +383,6 @@ fn validate_adaptive_plugin_config_reports_component_specific_unknown_fields() {
             && diag.component.as_deref() == Some("adaptive_hints")
             && diag.field.as_deref() == Some("extra")
     }));
-    assert!(diagnostics.iter().any(|diag| {
-        diag.code == "adaptive.unknown_field"
-            && diag.component.as_deref() == Some("response_cache")
-            && diag.field.as_deref() == Some("skip_keys")
-    }));
-}
-
-#[test]
-fn response_cache_tool_policy_validation_checks_nested_classes_and_overrides() {
-    let config = json!({
-        "version": 1,
-        "response_cache": {
-            "tools": {
-                "default": {"unexpected_default": true},
-                "classes": {
-                    "read_only": {"unexpected_class": true}
-                },
-                "overrides": {
-                    "docs_lookup": {"unexpected_override": true}
-                }
-            }
-        },
-        "policy": {"unknown_field": "warn"}
-    });
-
-    let diagnostics = validate_adaptive_plugin_config(config.as_object().unwrap());
-    for (component, field) in [
-        ("response_cache.tools.default", "unexpected_default"),
-        ("response_cache.tools.classes.read_only", "unexpected_class"),
-        (
-            "response_cache.tools.overrides.docs_lookup",
-            "unexpected_override",
-        ),
-    ] {
-        assert!(diagnostics.iter().any(|diagnostic| {
-            diagnostic.code == "adaptive.unknown_field"
-                && diagnostic.component.as_deref() == Some(component)
-                && diagnostic.field.as_deref() == Some(field)
-                && diagnostic.level == DiagnosticLevel::Warning
-        }));
-    }
 }
 
 #[tokio::test(flavor = "current_thread")]

@@ -30,7 +30,6 @@ const nodeEntries = [
       { name: 'adaptiveHintsConfig', params: ['config'] },
       { name: 'toolParallelismConfig', params: ['config'] },
       { name: 'acgConfig', params: ['config'] },
-      { name: 'responseCacheConfig', params: ['config'] },
       { name: 'ComponentSpec', params: ['config', 'options'] },
     ],
   },

@@ -259,7 +259,7 @@ fn validate_adaptive_plugin_config_with_policy(
         );
     }
 
-    validate_response_cache_section(&mut diagnostics, &config.policy, plugin_config);
+    validate_response_cache_moved(&mut diagnostics, plugin_config);
 
     diagnostics.extend(AdaptiveRuntime::validate_config(&config).diagnostics);
     diagnostics
@@ -299,150 +299,28 @@ fn validate_adaptive_state_section(
     }
 }
 
-fn validate_response_cache_section(
+/// Plugin ID of the response cache, which moved out of the adaptive plugin.
+pub const RESPONSE_CACHE_PLUGIN_ID: &str = "nvidia.response_cache";
+
+/// Rejects the former `response_cache` section, which is now its own plugin.
+///
+/// Ignoring the section would silently turn off a cache the operator enabled.
+fn validate_response_cache_moved(
     diagnostics: &mut Vec<ConfigDiagnostic>,
-    policy: &ConfigPolicy,
     plugin_config: &Map<String, Json>,
 ) {
-    let Some(response_cache_json) = plugin_config
-        .get("response_cache")
-        .and_then(Json::as_object)
-    else {
-        return;
-    };
-    validate_unknown_fields(
-        diagnostics,
-        policy,
-        Some("response_cache".to_string()),
-        response_cache_json,
-        &[
-            "ttl_seconds",
-            "namespace",
-            "priority",
-            "bypass_rate",
-            "cache_nondeterministic",
-            "key_strategy",
-            "header_allowlist",
-            "backend",
-            "tools",
-        ],
-    );
-    if let Some(backend_json) = response_cache_json.get("backend").and_then(Json::as_object) {
-        validate_unknown_fields(
-            diagnostics,
-            policy,
-            Some("response_cache.backend".to_string()),
-            backend_json,
-            &["kind", "config"],
-        );
-        let backend_kind = backend_json
-            .get("kind")
-            .and_then(Json::as_str)
-            .unwrap_or("in_memory");
-        if let Some(backend_config_json) = backend_json.get("config").and_then(Json::as_object) {
-            validate_response_cache_backend_config_fields(
-                diagnostics,
-                policy,
-                backend_kind,
-                backend_config_json,
-            );
-        }
-    }
-    if let Some(tools_json) = response_cache_json.get("tools").and_then(Json::as_object) {
-        validate_response_cache_tools_fields(diagnostics, policy, tools_json);
-    }
-}
-
-fn validate_response_cache_backend_config_fields(
-    diagnostics: &mut Vec<ConfigDiagnostic>,
-    policy: &ConfigPolicy,
-    backend_kind: &str,
-    backend_config: &Map<String, Json>,
-) {
-    let known_fields: &[&str] = match backend_kind {
-        "in_memory" => &["max_bytes"],
-        "redis" => &["url", "key_prefix"],
-        _ => return,
-    };
-    validate_unknown_fields(
-        diagnostics,
-        policy,
-        Some(format!("response_cache.backend.{backend_kind}")),
-        backend_config,
-        known_fields,
-    );
-}
-
-fn validate_response_cache_tools_fields(
-    diagnostics: &mut Vec<ConfigDiagnostic>,
-    policy: &ConfigPolicy,
-    tools_json: &Map<String, Json>,
-) {
-    const CLASS_FIELDS: &[&str] = &[
-        "cacheable",
-        "ttl_seconds",
-        "bypass_rate",
-        "tool_version",
-        "arg_skip",
-        "members",
-    ];
-    const OVERRIDE_FIELDS: &[&str] = &[
-        "cacheable",
-        "ttl_seconds",
-        "bypass_rate",
-        "tool_version",
-        "arg_skip",
-    ];
-
-    validate_unknown_fields(
-        diagnostics,
-        policy,
-        Some("response_cache.tools".to_string()),
-        tools_json,
-        &[
-            "enabled",
-            "priority",
-            "cache_errors",
-            "default",
-            "classes",
-            "overrides",
-        ],
-    );
-
-    if let Some(default_json) = tools_json.get("default").and_then(Json::as_object) {
-        validate_unknown_fields(
-            diagnostics,
-            policy,
-            Some("response_cache.tools.default".to_string()),
-            default_json,
-            CLASS_FIELDS,
-        );
-    }
-    if let Some(classes_json) = tools_json.get("classes").and_then(Json::as_object) {
-        for (class_name, class_value) in classes_json {
-            if let Some(class_object) = class_value.as_object() {
-                validate_unknown_fields(
-                    diagnostics,
-                    policy,
-                    Some(format!("response_cache.tools.classes.{class_name}")),
-                    class_object,
-                    CLASS_FIELDS,
-                );
-            }
-        }
-    }
-    if let Some(overrides_json) = tools_json.get("overrides").and_then(Json::as_object) {
-        for (tool_name, override_value) in overrides_json {
-            if let Some(override_object) = override_value.as_object() {
-                validate_unknown_fields(
-                    diagnostics,
-                    policy,
-                    Some(format!("response_cache.tools.overrides.{tool_name}")),
-                    override_object,
-                    OVERRIDE_FIELDS,
-                );
-            }
-        }
+    if plugin_config.contains_key("response_cache") {
+        diagnostics.push(ConfigDiagnostic {
+            level: DiagnosticLevel::Error,
+            code: "adaptive.response_cache_moved".to_string(),
+            component: Some(ADAPTIVE_PLUGIN_KIND.to_string()),
+            field: Some("response_cache".to_string()),
+            message: format!(
+                "the adaptive response_cache section moved to the {RESPONSE_CACHE_PLUGIN_ID} \
+                 plugin from NeMo Relay Plugins; remove this section and enable that plugin \
+                 with the same settings as its component config"
+            ),
+        });
     }
 }
 
