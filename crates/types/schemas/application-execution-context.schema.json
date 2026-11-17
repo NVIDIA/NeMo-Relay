@@ -6,7 +6,8 @@
   "type": "object",
   "properties": {
     "host_approval": {
-      "$ref": "#/$defs/HostApproval"
+      "$ref": "#/$defs/HostApproval",
+      "description": "Optional assertion supplied after the host application has verified completed human approval for one exact operation. Its presence does not authenticate the approval or instruct Relay to skip middleware."
     }
   },
   "additionalProperties": true,
@@ -25,25 +26,32 @@
       "properties": {
         "version": {
           "type": "integer",
-          "const": 1
+          "const": 1,
+          "description": "Version of the host-approval assertion format. Currently 1; this is not the Relay package or worker protocol version."
         },
         "source": {
           "type": "string",
-          "minLength": 1
+          "minLength": 1,
+          "description": "Identifier of the application asserting approval. Consuming middleware must explicitly trust this source; the identifier itself does not authenticate the sender."
         },
         "decision": {
           "type": "string",
-          "const": "approved"
+          "const": "approved",
+          "description": "Affirmative outcome asserted by the host application, always approved in this format. This is not a Council verdict. The host must stop denied or pending operations before invoking execution."
         },
         "approval_id": {
           "type": "string",
-          "minLength": 1
+          "minLength": 1,
+          "description": "Opaque identifier of the verified human approval. Consuming applications and middleware define its scope and replay protection; the identifier alone is not proof of approval."
         },
         "tool_name": {
           "type": "string",
-          "minLength": 1
+          "minLength": 1,
+          "description": "Exact name of the tool covered by the human approval. Middleware must compare it with the current tool before relying on the assertion."
         },
-        "approved_arguments": {}
+        "approved_arguments": {
+          "description": "Snapshot of the exact approved tool arguments, which may be any JSON value. Middleware must compare it with its current arguments. The application must revalidate approval immediately before the final effect, including after middleware waits or changes arguments."
+        }
       },
       "additionalProperties": true
     }
