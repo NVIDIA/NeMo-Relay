@@ -6,7 +6,6 @@ position: 3
 {/* SPDX-FileCopyrightText: Copyright (c) 2026, NVIDIA CORPORATION & AFFILIATES. All rights reserved.
 SPDX-License-Identifier: Apache-2.0 */}
 
-
 Use the `atif` section when you want one Agent Trajectory Interchange Format
 (ATIF) trajectory artifact per top-level Agent scope or supported coding-agent
 turn scope.
@@ -338,7 +337,6 @@ The following table describes secret credential settings:
 | `secret_access_key_var` | `AWS_SECRET_ACCESS_KEY` | Name of the env var that holds the static secret key. |
 | `session_token_var` | `AWS_SESSION_TOKEN` | Name of the env var that holds the optional STS session token. |
 
-
 Relay uploads each trajectory under `{key_prefix}{rendered_filename}`. It
 renders `filename_template` the same way it does for local files, so a
 local→remote transition keeps object names stable. Relay adds a trailing `/` to
@@ -390,7 +388,7 @@ values as `nemo_relay.uuid` and `nemo_relay.parent_uuid` attributes.
 When present, a step's `metrics` can carry `prompt_tokens`, `completion_tokens`,
 `cached_tokens` (cache read + write), and `cost_usd` (USD only); the trajectory
 `final_metrics` sums the metrics present on its steps as `total_*`. Refer to
-[Token and Cost Field Semantics](/integrate-into-frameworks/provider-response-codecs#token-and-cost-field-semantics)
+[Token and Cost Field Semantics](/reference/api/model-pricing#token-and-cost-field-semantics)
 for the full mapping, including how ATIF sources these values from the codec
 annotation and the raw payload.
 
@@ -587,84 +585,8 @@ Ok(())
 
 ## Manual API
 
-Use the manual `AtifExporter` API when you need explicit collection boundaries
-or one exporter object per run. `export()` and `export_json()` first wait for
-subscriber callbacks queued before the call, then take a snapshot of the
-collected event history. A separate subscriber flush immediately before export
-is unnecessary. The snapshot can also include events delivered after the
-internal flush returns but before the snapshot is taken. Events delivered after
-the snapshot are not included.
-
-<Tabs>
-<Tab title="Python" language="python">
-```python
-from nemo_relay import AtifExporter
-
-exporter = AtifExporter("session-1", "agent", "1.0.0", model_name="demo-model")
-exporter.register("atif-exporter")
-
-# Run instrumented application work here.
-
-trajectory = exporter.export()
-exporter.deregister("atif-exporter")
-exporter.clear()
-```
-
-</Tab>
-
-<Tab title="Node.js" language="node">
-```js
-const { AtifExporter } = require("nemo-relay-node");
-
-const exporter = new AtifExporter("session-1", "agent", "1.0.0", "demo-model");
-exporter.register("atif-exporter");
-
-try {
-  // Run instrumented application work here.
-
-  const trajectoryJson = exporter.exportJson();
-  console.log(trajectoryJson);
-} finally {
-  exporter.deregister("atif-exporter");
-  exporter.clear();
-}
-```
-
-</Tab>
-
-<Tab title="Rust" language="rust">
-```rust
-use nemo_relay::subscriber::{deregister_subscriber, register_subscriber};
-use nemo_relay_observability::atif::{AtifAgentInfo};
-
-fn main() -> Result<(), Box<dyn std::error::Error>> {
-    let exporter = nemo_relay::exporter::atif(
-        "session-1".to_string(),
-        AtifAgentInfo {
-            name: "agent".to_string(),
-            version: "1.0.0".to_string(),
-            model_name: Some("demo-model".to_string()),
-            tool_definitions: None,
-            extra: None,
-        },
-    );
-    register_subscriber("atif-exporter", exporter.subscriber())?;
-
-    // Run instrumented application work here.
-
-    let trajectory = exporter.export()?;
-    let trajectory_json = serde_json::to_string_pretty(&trajectory)?;
-    println!("{trajectory_json}");
-
-    let _ = deregister_subscriber("atif-exporter")?;
-    exporter.clear();
-    Ok(())
-}
-```
-
-</Tab>
-
-</Tabs>
+For direct API examples and lifecycle contracts, refer to
+[Manual API](/reference/api/observability#atif-manual-api).
 
 ## Common Configuration and Runtime Issues
 
