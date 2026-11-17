@@ -32,18 +32,6 @@ export type {
   LlmResponseCodec,
 } from '../binding.js';
 
-/**
- * Report whether this typed wrapper and its native binding transport execution context.
- *
- * This performs no tool call and does not attest worker support or authorization.
- * Applications using older packages must also check that this export exists.
- *
- * @returns Whether both layers support the `executionContext` option.
- */
-export function supportsToolExecutionContext(): boolean {
-  return typeof lib.supportsToolExecutionContext === 'function' && lib.supportsToolExecutionContext() === true;
-}
-
 /** Result returned to the application after tool execution. */
 export interface ToolExecutionResult<TResult> {
   result: TResult;

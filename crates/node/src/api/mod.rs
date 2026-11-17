@@ -2004,18 +2004,6 @@ pub fn tool_call_end(
     .map_err(Error::from)
 }
 
-/// Report whether this native binding transports application execution context.
-///
-/// This query performs no execution. It does not describe worker support or
-/// grant authorization. Check the typed wrapper separately when using it.
-///
-/// # Returns
-/// `true` when the compiled binding supports the `executionContext` argument.
-#[napi]
-pub fn supports_tool_execution_context() -> bool {
-    true
-}
-
 /// Execute a tool call end-to-end with full lifecycle management.
 ///
 /// By default, this call runs these stages:

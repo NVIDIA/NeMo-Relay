@@ -364,43 +364,18 @@ nemo_relay.intercepts.register_tool_execution("application-review", 10, review)
 
 #### Transport Compatibility
 
-**Application-side compatibility checks**
+**Application package requirements**
 
-Node.js exposes a support helper because an older JavaScript typed wrapper can
-silently ignore an unfamiliar `executionContext` options property. If your
-application calls Relay through Node.js, check the helper for the API you use
-before relying on that field:
+Use compliant Relay 1.0 components built from the matching package set. For
+Node.js this includes both the JavaScript/TypeScript wrapper and its compiled
+native binding; do not mix them with earlier development snapshots. Execution
+context is part of the required API contract, not an optionally detected feature.
+Use `executionContext` directly in the managed execute options.
 
-- **Typed API (`nemo-relay-node/typed`):** check that its
-  [`supportsToolExecutionContext()` helper](https://github.com/NVIDIA/NeMo-Relay/blob/ccff24e06239fd7b4379872dc4d064cab3bf3a3c/crates/node/ts/typed.ts#L43)
-  exists and returns `true`. It checks both the typed wrapper and the compiled
-  native binding, so a separate native-helper check is unnecessary.
-- **Low-level API (`nemo-relay-node`):** check that its
-  [`supportsToolExecutionContext()` helper](https://github.com/NVIDIA/NeMo-Relay/blob/ccff24e06239fd7b4379872dc4d064cab3bf3a3c/crates/node/src/api/mod.rs#L2015)
-  exists and returns `true`.
-
-Treat a missing helper, `false` result or error as unsupported. These queries
-perform no tool call and only check the application's Node wrapper/native
-binding support. They do not verify remote worker support, application approval
-proofs or permission to execute.
-
-Python, Rust, Go and C do not need an equivalent application-side helper for this API:
-
-- **Python:** `tools.execute(..., execution_context=...)` uses an explicit
-  keyword parameter. An older API without that parameter raises `TypeError`
-  rather than silently ignoring it.
-- **Rust:** the execution-context builder method and fields are checked at
-  compile time. Code using them does not compile against an older API that
-  lacks them.
-- **Go:** the new option is checked at compile time, and its CGo bridge links
-  against the new C export. An older source binding or native library cannot
-  silently accept and discard this option.
-- **C:** use the new declaration in the generated header and link against a
-  library exporting `nemo_relay_tool_call_execute_with_context`. Existing
-  execute symbols remain available; they do not accept context.
-
-These language-level checks do not establish a worker's protocol identity.
-Workers must implement the required contract checked during handshake below.
+The same matching-version requirement applies to Rust, Python, Go and C. Rebuild
+bindings and workers together when the unreleased 1.0 baseline changes. This
+requirement does not replace input validation: context must still be an object
+within the size and nesting limits, and supplying it grants no authorization.
 
 **Worker-side compatibility checks**
 

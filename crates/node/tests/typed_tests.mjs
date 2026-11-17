@@ -233,29 +233,6 @@ describe('adaptive typed helpers', () => {
 // ===========================================================================
 
 describe('typedToolExecute', () => {
-  it('advertises execution context support in both current transport layers', () => {
-    assert.equal(lib.supportsToolExecutionContext(), true);
-    assert.equal(require('../dist/typed.js').supportsToolExecutionContext(), true);
-  });
-
-  it('does not claim typed context support when the native layer is missing or unsupported', () => {
-    const nativePath = require.resolve('../dist/index.js');
-    const typedPath = require.resolve('../dist/typed.js');
-    const originalNative = require.cache[nativePath].exports;
-    const originalTyped = require.cache[typedPath];
-    try {
-      for (const probe of [undefined, () => false, () => 1, () => true]) {
-        require.cache[nativePath].exports = { ...originalNative, supportsToolExecutionContext: probe };
-        delete require.cache[typedPath];
-        const supported = require(typedPath).supportsToolExecutionContext();
-        assert.equal(supported, probe !== undefined && probe() === true);
-      }
-    } finally {
-      require.cache[nativePath].exports = originalNative;
-      require.cache[typedPath] = originalTyped;
-    }
-  });
-
   it('forwards host execution context independently of encoded arguments', async () => {
     const host = { audit: { label: 'typed-host-context' } };
     let seen;
