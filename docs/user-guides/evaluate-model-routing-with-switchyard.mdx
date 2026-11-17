@@ -68,10 +68,10 @@ explains how to select targets and a judge for policies that need one.
 
 ## 2. Configure a routing policy
 
-Check the [plugin's Relay version requirements](https://nvidia-nemo.github.io/Switchyard/integrations/nemo_relay/#set-up-the-plugin),
-then follow [Relay's Switchyard setup guide](/configure-plugins/switchyard) to
-install the plugin, configure trust and provider access, and enable and validate
-it. Those steps apply to your existing Relay setup.
+Use [Relay's first-party Switchyard plugin guide](/configure-plugins/switchyard)
+as the definitive source for Relay and plugin version requirements. Follow it
+to install the plugin, configure trust and provider access, and enable and
+validate it in your existing Relay setup.
 
 A Switchyard deployment defines provider connections as **clients**, model
 choices as **targets**, and selection policies as **routes**. Configure a fixed
@@ -278,11 +278,10 @@ the agent interface; the runner connects it to Relay automatically. This example
 requires no ChatGPT or Claude subscription and no OpenAI or Anthropic API key.
 </Note>
 
-<Note title="Keep the example versions together">
-This example uses Relay **0.11.1** and Switchyard plugin **0.3.2** as a tested
-pair. The plugin bundle used here does not support Relay 1.0. Before changing
-the Relay version, select a compatible bundle using the
-[Switchyard plugin requirements](https://nvidia-nemo.github.io/Switchyard/integrations/nemo_relay/#set-up-the-plugin).
+<Note title="Example version pins">
+This example was tested with Relay **0.11.1** and Switchyard plugin **0.3.2**.
+For current version requirements, refer to
+[Relay's first-party Switchyard plugin guide](/configure-plugins/switchyard).
 </Note>
 
 Install the pinned Relay version and obtain the example files:
