@@ -288,6 +288,14 @@ dependencies:
   - 'uv.lock'
 
 documentation_examples:
+  - 'docs/reference/api/**'
+  - 'docs/configure-plugins/resource-metrics.mdx'
+  - 'docs/configure-plugins/_code/rust/resource_metrics.rs'
+  - 'python/tests/test_plugin_api_examples.py'
+  - 'crates/node/tests/plugin_api_examples_tests.mjs'
+  - 'crates/types/tests/documentation_examples.rs'
+  - 'crates/adaptive/tests/integration/runtime_integration_tests.rs'
+  - 'crates/model-pricing/tests/response_cost_tests.rs'
   - 'docs/instrument-applications/**'
   - 'python/tests/test_instrumentation_examples.py'
   - 'crates/node/tests/documentation_examples_tests.mjs'

@@ -283,6 +283,11 @@ jobs:
         working-directory: ${{ env.NEMO_RELAY_CI_WORKSPACE }}
         run: just test-instrumentation-examples
 
+      - name: Run displayed plugin API examples against current SDKs
+        if: ${{ inputs.run_documentation_examples }}
+        working-directory: ${{ env.NEMO_RELAY_CI_WORKSPACE }}
+        run: just test-plugin-api-examples
+
       - name: Test binary package assembly
         working-directory: ${{ env.NEMO_RELAY_CI_WORKSPACE }}
         run: |
