@@ -71,8 +71,8 @@ fn execution_context_is_preserved_across_intercepts_but_not_tool_arguments_or_ev
                 Box::pin(async move {
                     seen.lock()
                         .unwrap()
-                        .push(context.execution_context().cloned());
-                    let mut local_copy = context.execution_context().cloned().unwrap();
+                        .push(context.execution_context().map(|value| value.to_json()));
+                    let mut local_copy = context.execution_context().unwrap().to_json();
                     local_copy["example.approval"]["receipt"] = json!("changed-copy");
                     Ok(next(context.args().clone()).await?.into())
                 })
@@ -85,7 +85,7 @@ fn execution_context_is_preserved_across_intercepts_but_not_tool_arguments_or_ev
             ToolCallExecuteParams::builder()
                 .name("context-tool")
                 .args(json!({"value": 1}))
-                .execution_context(expected.clone())
+                .execution_context(expected.clone().try_into().unwrap())
                 .func(Arc::new(|args| {
                     Box::pin(async move {
                         assert_eq!(args, json!({"value": 2}));
@@ -126,11 +126,14 @@ fn execution_context_is_invocation_local_and_nested_calls_do_not_inherit_it() {
                 tokio::task::yield_now().await;
                 match context.tool_name() {
                     "left" => {
-                        assert_eq!(context.execution_context(), Some(&json!({"owner": "left"})))
+                        assert_eq!(
+                            context.execution_context().map(|value| value.to_json()),
+                            Some(json!({"owner": "left"}))
+                        )
                     }
                     "right" => assert_eq!(
-                        context.execution_context(),
-                        Some(&json!({"owner": "right"}))
+                        context.execution_context().map(|value| value.to_json()),
+                        Some(json!({"owner": "right"}))
                     ),
                     "nested" => assert!(context.execution_context().is_none()),
                     _ => panic!("unexpected tool"),
@@ -146,7 +149,7 @@ fn execution_context_is_invocation_local_and_nested_calls_do_not_inherit_it() {
                 ToolCallExecuteParams::builder()
                     .name(name)
                     .args(json!({}))
-                    .execution_context(json!({"owner": name}))
+                    .execution_context(json!({"owner": name}).try_into().unwrap())
                     .func(Arc::new(|_| {
                         Box::pin(async {
                             tool_call_execute(
@@ -186,18 +189,26 @@ fn invalid_execution_context_is_rejected_before_any_middleware_or_tool() {
             json!(true),
             json!({"data": "x".repeat(16_384)}),
         ] {
-            let error = tool_call_execute(
-                ToolCallExecuteParams::builder()
-                    .name("invalid-context")
-                    .args(json!({}))
-                    .execution_context(value)
-                    .func(Arc::new(|_| panic!("invalid context reached tool")))
-                    .build(),
-            )
-            .await
-            .unwrap_err();
-            assert!(matches!(error, FlowError::InvalidArgument(_)));
+            let error = super::ApplicationExecutionContext::try_from(value).unwrap_err();
+            assert!(!error.to_string().is_empty());
         }
+        // Public Rust fields can be changed after checked construction. Admission
+        // must still refuse them before any conditional or execution callback.
+        let mut altered = super::ApplicationExecutionContext::default();
+        altered
+            .additional_properties
+            .insert("host_approval".into(), Json::Null);
+        let error = tool_call_execute(
+            ToolCallExecuteParams::builder()
+                .name("altered-context")
+                .args(json!({}))
+                .execution_context(altered)
+                .func(Arc::new(|_| panic!("invalid typed context reached tool")))
+                .build(),
+        )
+        .await
+        .unwrap_err();
+        assert!(matches!(error, FlowError::InvalidArgument(_)));
     });
 }
 
@@ -231,18 +242,23 @@ fn execution_context_nesting_is_bounded_before_middleware_or_tool() {
                 let value = json!({"nested": value});
                 assert!(serde_json::to_vec(&value).unwrap().len() < 16_384);
                 let before = calls.load(std::sync::atomic::Ordering::SeqCst);
-                let result = tool_call_execute(
-                    ToolCallExecuteParams::builder()
-                        .name("context-depth")
-                        .args(json!({}))
-                        .execution_context(value)
-                        .func(Arc::new(move |args| {
-                            assert_eq!(levels, 64, "over-deep context reached tool");
-                            Box::pin(async move { Ok(args.into()) })
-                        }))
-                        .build(),
-                )
-                .await;
+                let parsed = super::ApplicationExecutionContext::try_from(value);
+                let result = if let Ok(value) = parsed {
+                    tool_call_execute(
+                        ToolCallExecuteParams::builder()
+                            .name("context-depth")
+                            .args(json!({}))
+                            .execution_context(value)
+                            .func(Arc::new(move |args| {
+                                assert_eq!(levels, 64, "over-deep context reached tool");
+                                Box::pin(async move { Ok(args.into()) })
+                            }))
+                            .build(),
+                    )
+                    .await
+                } else {
+                    Err(FlowError::InvalidArgument(parsed.unwrap_err().to_string()))
+                };
                 if levels == 64 {
                     result.unwrap();
                     assert_eq!(calls.load(std::sync::atomic::Ordering::SeqCst), before + 1);
@@ -273,7 +289,7 @@ fn application_review_claim_does_not_bypass_conditional_guardrails() {
             ToolCallExecuteParams::builder()
                 .name("reviewed-tool")
                 .args(json!({}))
-                .execution_context(json!({"review": {"approved": true}}))
+                .execution_context(json!({"review": {"approved": true}}).try_into().unwrap())
                 .func(Arc::new(|_| panic!("review claim bypassed a guardrail")))
                 .build(),
         )

@@ -36,8 +36,9 @@ use typed_builder::TypedBuilder;
 use uuid::Uuid;
 
 pub use nemo_relay_types::api::tool::{
-    TOOL_EXECUTION_INTERCEPT_OUTCOME_SCHEMA, TOOL_EXECUTION_RESULT_SCHEMA, ToolAttributes,
-    ToolExecutionInterceptOutcome, ToolExecutionResult,
+    ApplicationExecutionContext, HostApproval, TOOL_EXECUTION_INTERCEPT_OUTCOME_SCHEMA,
+    TOOL_EXECUTION_RESULT_SCHEMA, ToolAttributes, ToolExecutionInterceptOutcome,
+    ToolExecutionResult,
 };
 
 fn queue_sanitized_event_with_scope_stack(
@@ -47,30 +48,6 @@ fn queue_sanitized_event_with_scope_stack(
 ) -> bool {
     let sanitizers = snapshot_event_sanitizers(&event, &scope_stack).unwrap_or_default();
     dispatch_sanitized_event(event, sanitizers, subscribers, scope_stack)
-}
-
-// Bound container nesting before recursive serialization or cloning. Counting
-// the root object as level 1, 64 levels leave headroom under the Rust worker's
-// default serde_json recursion limit, including the wire object's field encoding.
-const MAX_EXECUTION_CONTEXT_DEPTH: usize = 64;
-
-fn execution_context_exceeds_depth(value: &Json, parent_depth: usize) -> bool {
-    let depth = parent_depth + 1;
-    match value {
-        Json::Object(fields) => {
-            depth > MAX_EXECUTION_CONTEXT_DEPTH
-                || fields
-                    .values()
-                    .any(|value| execution_context_exceeds_depth(value, depth))
-        }
-        Json::Array(values) => {
-            depth > MAX_EXECUTION_CONTEXT_DEPTH
-                || values
-                    .iter()
-                    .any(|value| execution_context_exceeds_depth(value, depth))
-        }
-        _ => false,
-    }
 }
 
 /// Runtime-owned handle identifying an active or completed tool call.
@@ -228,11 +205,11 @@ pub struct ToolCallExecuteParams {
     /// Choose which stages run for this call. All stages run by default.
     #[builder(default)]
     pub execution_options: ExecutionOptions,
-    /// Optional application-owned JSON object exposed only to execution interceptors.
+    /// Optional structured application assertions exposed only to execution interceptors.
     /// Limited to 16 KiB and 64 object/array levels, counting the root as level 1.
     /// This is not tool input, event metadata, or proof of authorization.
     #[builder(default)]
-    pub execution_context: Option<Json>,
+    pub execution_context: Option<ApplicationExecutionContext>,
 }
 
 /// Builder parameters for [`tool_call_end`].
@@ -911,26 +888,9 @@ pub async fn tool_call_execute(params: ToolCallExecuteParams) -> Result<ToolExec
         execution_context: host_execution_context,
     } = params;
     if let Some(value) = &host_execution_context {
-        if !value.is_object() {
-            return Err(FlowError::InvalidArgument(
-                "tool execution context must be a JSON object".into(),
-            ));
-        }
-        if execution_context_exceeds_depth(value, 0) {
-            return Err(FlowError::InvalidArgument(
-                "tool execution context exceeds 64 container levels (root object is level 1)"
-                    .into(),
-            ));
-        }
-        if serde_json::to_vec(value)
-            .map_err(|_| FlowError::InvalidArgument("invalid tool execution context".into()))?
-            .len()
-            > 16_384
-        {
-            return Err(FlowError::InvalidArgument(
-                "tool execution context exceeds 16384 serialized bytes".into(),
-            ));
-        }
+        value
+            .validate()
+            .map_err(|error| FlowError::InvalidArgument(error.to_string()))?;
     }
     ensure_runtime_owner()?;
     if execution_options.conditional_execution {

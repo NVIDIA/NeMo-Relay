@@ -16,6 +16,8 @@ asynchronous callback and offload it with :func:`asyncio.to_thread` or another
 appropriate executor.
 
 Public data types:
+    ApplicationExecutionContext: Extensible, structured per-invocation application context.
+    HostApproval: Application assertion of one completed human approval.
     DiagnosticCodeDefinition: A built-in name or bounded extension definition.
     DiagnosticExtensionDefinition: Extension name, outcome, and allowed failure classes.
     DiagnosticObservation: One positive occurrence delta and optional restricted detail.
@@ -106,6 +108,7 @@ Public functions:
 
 from ._api import (
     AnnotatedLlmRequest,
+    ApplicationExecutionContext,
     ConditionalMiddlewareCallback,
     ConditionalMiddlewareGuardrailHandle,
     ConfigDiagnostic,
@@ -116,6 +119,7 @@ from ._api import (
     EventMetadataInjectorCallback,
     EventSanitizeCallback,
     EventSanitizeFields,
+    HostApproval,
     Json,
     LlmCodecIdentity,
     LlmConditionalCallback,
@@ -185,6 +189,8 @@ from ._diagnostics import (
 )
 
 __all__ = [
+    "ApplicationExecutionContext",
+    "HostApproval",
     "DiagnosticCodeDefinition",
     "DiagnosticComponent",
     "DiagnosticDeliveryError",

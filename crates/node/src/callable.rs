@@ -1197,7 +1197,10 @@ pub(crate) fn wrap_js_tool_exec_intercept_fn(
                     .set_named_property("toolCallId", serde_json::json!(context.tool_call_id()))?;
                 let host_context = tool_execution_context_value(
                     env,
-                    context.execution_context().unwrap_or(&Json::Null),
+                    &context
+                        .execution_context()
+                        .map(|value| value.to_json())
+                        .unwrap_or(Json::Null),
                 )?;
                 // SAFETY: the host context was created in this callback's live environment.
                 let host_context = unsafe { host_context.into_unknown(env) };

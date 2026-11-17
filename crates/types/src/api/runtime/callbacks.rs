@@ -152,7 +152,7 @@ pub struct ToolExecutionContext {
     tool_name: String,
     args: Json,
     tool_call_id: Option<String>,
-    execution_context: Option<Json>,
+    execution_context: Option<crate::api::tool::ApplicationExecutionContext>,
 }
 
 impl std::fmt::Debug for ToolExecutionContext {
@@ -185,9 +185,12 @@ impl ToolExecutionContext {
     }
 
     /// Attach invocation-local application context, separate from tool arguments.
-    /// Managed execution validates its object shape and size at admission.
+    /// Managed execution validates its standard schema and resource limits at admission.
     #[must_use]
-    pub fn with_execution_context(mut self, execution_context: Option<Json>) -> Self {
+    pub fn with_execution_context(
+        mut self,
+        execution_context: Option<crate::api::tool::ApplicationExecutionContext>,
+    ) -> Self {
         self.execution_context = execution_context;
         self
     }
@@ -195,7 +198,7 @@ impl ToolExecutionContext {
     /// Inspect the caller-supplied context. Relay assigns no authorization meaning.
     /// It is not emitted in lifecycle events or inherited by nested calls.
     #[must_use]
-    pub fn execution_context(&self) -> Option<&Json> {
+    pub fn execution_context(&self) -> Option<&crate::api::tool::ApplicationExecutionContext> {
         self.execution_context.as_ref()
     }
 

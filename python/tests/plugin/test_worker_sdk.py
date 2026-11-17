@@ -3946,7 +3946,7 @@ async def test_required_worker_contract_delivers_context_without_feature_negotia
                 seen["tool_call_id"] = context.tool_call_id
                 seen["execution_context"] = context.execution_context
                 if context.execution_context is not None:
-                    changed = context.execution_context
+                    changed = cast(dict[str, Json], context.execution_context)
                     changed["changed"] = True
                     assert context.execution_context == execution_context
                 downstream = await next_call.call(context.args)
@@ -3988,7 +3988,7 @@ def test_tool_execution_context_is_a_private_defensive_snapshot() -> None:
     original = {"operation": {"attempt": 1}}
     context = ToolExecutionContext("lookup", {}, execution_context=original)
     original["operation"]["attempt"] = 2
-    returned = context.execution_context
+    returned = cast(dict[str, Json], context.execution_context)
     returned["operation"]["attempt"] = 3
     assert context.execution_context == {"operation": {"attempt": 1}}
     assert "attempt" not in repr(context)
@@ -4009,20 +4009,20 @@ def test_tool_execution_context_replace_preserves_context(supplied: dict[str, Js
     assert updated.execution_context == supplied
     if supplied is not None:
         supplied["operation"]["attempt"] = 2
-        returned = updated.execution_context
+        returned = cast(dict[str, Json], updated.execution_context)
         returned["operation"]["attempt"] = 3
         assert context.execution_context == {"operation": {"attempt": 1}}
         assert updated.execution_context == {"operation": {"attempt": 1}}
 
 
 def test_tool_execution_context_replace_can_replace_or_clear_context() -> None:
-    original = ToolExecutionContext("lookup", {}, execution_context={"operation": {"attempt": 1}})
+    original = ToolExecutionContext("lookup", {}, execution_context=cast(Any, {"operation": {"attempt": 1}}))
     supplied = {"operation": {"attempt": 2}}
 
     updated = replace(original, execution_context=supplied)
     cleared = replace(updated, execution_context=None)
     supplied["operation"]["attempt"] = 3
-    returned = updated.execution_context
+    returned = cast(dict[str, Json], updated.execution_context)
     returned["operation"]["attempt"] = 4
 
     assert original.execution_context == {"operation": {"attempt": 1}}
@@ -4365,3 +4365,102 @@ def test_protocol_repeated_enum_round_trip() -> None:
     message.kinds.append(999)
     with pytest.raises(ValueError, match="unknown RegistrationSurface"):
         plugin_api._protocol.unpack(message)
+
+
+def _standard_host_approval() -> dict[str, Json]:
+    return {
+        "version": 1,
+        "source": "example.application",
+        "decision": "approved",
+        "approval_id": "review-123",
+        "tool_name": "lookup",
+        "approved_arguments": {"query": "example"},
+    }
+
+
+def test_standard_host_approval_retains_extension_properties() -> None:
+    approval = _standard_host_approval()
+    approval["com.example.review"] = {"category": "human"}
+    supplied = {"host_approval": approval, "com.example.request": {"id": "request-123"}}
+    context = ToolExecutionContext("lookup", {"query": "example"}, execution_context=supplied)
+    assert context.execution_context == supplied
+    assert replace(context, args={"query": "changed"}).execution_context == supplied
+    # Preserving an assertion does not establish that it authorizes changed args.
+    assert context.execution_context["host_approval"]["approved_arguments"] == {"query": "example"}
+
+
+@pytest.mark.parametrize("field", ["version", "source", "decision", "approval_id", "tool_name", "approved_arguments"])
+def test_standard_host_approval_requires_every_known_field(field: str) -> None:
+    approval = _standard_host_approval()
+    del approval[field]
+    with pytest.raises(WorkerSdkError, match="invalid application execution context"):
+        ToolExecutionContext("lookup", {}, execution_context={"host_approval": approval})
+
+
+@pytest.mark.parametrize(
+    "field,value",
+    [
+        ("version", True),
+        ("version", 2),
+        ("source", ""),
+        ("source", 1),
+        ("decision", "denied"),
+        ("decision", "pending"),
+        ("decision", None),
+        ("approval_id", ""),
+        ("tool_name", []),
+    ],
+)
+def test_standard_host_approval_rejects_invalid_known_values(field: str, value: Json) -> None:
+    approval = _standard_host_approval()
+    approval[field] = value
+    with pytest.raises(WorkerSdkError, match="invalid application execution context"):
+        ToolExecutionContext("lookup", {}, execution_context={"host_approval": approval})
+
+
+@pytest.mark.parametrize("arguments", [None, ["value"], True, 1, "text"])
+def test_standard_host_approval_can_bind_any_json_arguments(arguments: Json) -> None:
+    approval = _standard_host_approval()
+    approval["approved_arguments"] = arguments
+    context = ToolExecutionContext("lookup", arguments, execution_context={"host_approval": approval})
+    assert context.execution_context["host_approval"]["approved_arguments"] == arguments
+
+
+def test_standard_context_checks_limits_before_recursive_snapshot() -> None:
+    value: dict[str, Json] = {}
+    for _ in range(2_000):
+        value = {"child": value}
+    with pytest.raises(WorkerSdkError, match="64 container levels"):
+        ToolExecutionContext("lookup", {}, execution_context=value)
+    with pytest.raises(WorkerSdkError, match="16384 serialized bytes"):
+        ToolExecutionContext("lookup", {}, execution_context=cast(Any, {"extension": "x" * 16_384}))
+
+
+@pytest.mark.parametrize("version", [1, 1.0])
+def test_standard_approval_normalizes_schema_integer_version(version: Json) -> None:
+    approval = _standard_host_approval()
+    approval["version"] = version
+    approval["com.example.value"] = 1.0
+    context = ToolExecutionContext("lookup", {}, execution_context={"host_approval": approval})
+    output = cast(dict[str, Json], context.execution_context["host_approval"])
+    assert type(output["version"]) is int
+    assert output["version"] == 1
+    assert type(output["com.example.value"]) is float
+
+
+@pytest.mark.parametrize(
+    "case",
+    json.loads(
+        (
+            Path(__file__).resolve().parents[3] / "crates/types/tests/fixtures/application_execution_context.json"
+        ).read_text()
+    ),
+    ids=lambda case: case["name"],
+)
+def test_application_context_matches_shared_schema_vectors(case: dict[str, Any]) -> None:
+    if case["valid"]:
+        result = ToolExecutionContext("lookup", {}, execution_context=case["value"])
+        assert result.execution_context == case["value"]
+    else:
+        with pytest.raises(WorkerSdkError):
+            ToolExecutionContext("lookup", {}, execution_context=case["value"])

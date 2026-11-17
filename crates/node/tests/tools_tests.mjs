@@ -485,11 +485,11 @@ describe('Tool execute', () => {
     assert.match(declarations, /toolCallExecuteAsync<[^\n]*metadata\?: TMetadata \| null,[^\n]*toolCallId\?: string/);
     assert.match(
       declarations,
-      /toolCallExecute<[^\n]*executionOptions\?:[^\n]*executionContext\?: JsonObject \| null\)/,
+      /toolCallExecute<[^\n]*executionOptions\?:[^\n]*executionContext\?: ApplicationExecutionContext \| null\)/,
     );
     assert.match(
       declarations,
-      /toolCallExecuteAsync<[^\n]*executionOptions\?:[^\n]*executionContext\?: JsonObject \| null\)/,
+      /toolCallExecuteAsync<[^\n]*executionOptions\?:[^\n]*executionContext\?: ApplicationExecutionContext \| null\)/,
     );
   });
 
@@ -498,7 +498,7 @@ describe('Tool execute', () => {
 
     assert.match(
       declarations,
-      /export interface ToolExecutionContext \{[\s\S]*?toolName: string[\s\S]*?args: Json[\s\S]*?toolCallId: string \| null[\s\S]*?executionContext: JsonObject \| null/,
+      /export interface ToolExecutionContext \{[\s\S]*?toolName: string[\s\S]*?args: Json[\s\S]*?toolCallId: string \| null[\s\S]*?executionContext: ApplicationExecutionContext \| null/,
     );
     assert.match(
       declarations,
@@ -1049,6 +1049,18 @@ describe('Tool intercepts', () => {
         'text',
         1,
         true,
+        { host_approval: null },
+        { host_approval: { version: 1 } },
+        {
+          host_approval: {
+            version: 2,
+            source: 'application',
+            decision: 'approved',
+            approval_id: 'a',
+            tool_name: 'tool',
+            approved_arguments: {},
+          },
+        },
         { value: 'x'.repeat(16384) },
         { sparse: new Array(1_000_001) },
         cyclic,

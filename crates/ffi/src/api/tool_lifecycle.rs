@@ -436,6 +436,16 @@ pub unsafe extern "C" fn nemo_relay_tool_call_execute_with_context(
         Some(context) => context,
         None => return NemoRelayStatus::InvalidJson,
     };
+    let execution_context = match execution_context
+        .map(nemo_relay_types::api::tool::ApplicationExecutionContext::try_from)
+        .transpose()
+    {
+        Ok(context) => context,
+        Err(error) => {
+            set_last_error(&error.to_string());
+            return NemoRelayStatus::InvalidArg;
+        }
+    };
 
     let default_fn: ToolExecutionNextFn = Arc::new(move |args| exec_fn(args));
 

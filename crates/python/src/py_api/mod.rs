@@ -55,7 +55,8 @@ use tokio_stream::StreamExt;
 use uuid::Uuid;
 
 use crate::convert::{
-    flow_error_to_py_err, json_to_py, opt_py_to_json, opt_py_to_timestamp, py_to_json,
+    flow_error_to_py_err, json_to_py, opt_py_to_json, opt_py_to_timestamp,
+    py_application_execution_context, py_to_json,
 };
 use crate::py_callable;
 use crate::py_types::{
@@ -1101,7 +1102,7 @@ fn tool_call_end(
 ///         End events receive ``otel.status_code = "OK"`` on success, or
 ///         ``otel.status_code = "ERROR"`` and ``otel.status_description`` on error.
 ///     tool_call_id: Optional provider-specific tool-call correlation ID.
-///     execution_context: Optional host-supplied JSON object (at most 16 KiB),
+///     execution_context: Optional ApplicationExecutionContext (at most 16 KiB),
 ///         visible only to execution intercepts; not event metadata or authority.
 ///         Nested calls do not inherit it.
 ///     execution_options: Choose which middleware stages run for this call.
@@ -1124,8 +1125,8 @@ fn tool_call_end(
     metadata: "object | None"=None,
     tool_call_id: "str | None"=None,
     execution_options: "ExecutionOptions | None"=None,
-    execution_context: "dict[str, object] | None"=None
-) -> "object", text_signature = "(name: str, args: object, func: object, *, handle: ScopeHandle | None = None, attributes: ToolAttributes | None = None, data: object | None = None, metadata: object | None = None, tool_call_id: str | None = None, execution_options: ExecutionOptions | None = None, execution_context: dict[str, object] | None = None) -> object")]
+    execution_context: "ApplicationExecutionContext | None"=None
+) -> "object", text_signature = "(name: str, args: object, func: object, *, handle: ScopeHandle | None = None, attributes: ToolAttributes | None = None, data: object | None = None, metadata: object | None = None, tool_call_id: str | None = None, execution_options: ExecutionOptions | None = None, execution_context: ApplicationExecutionContext | None = None) -> object")]
 #[allow(clippy::too_many_arguments)]
 fn tool_call_execute<'py>(
     py: Python<'py>,
@@ -1147,7 +1148,7 @@ fn tool_call_execute<'py>(
         .unwrap_or(ToolAttributes::empty());
     let data_json = opt_py_to_json(data)?;
     let metadata_json = opt_py_to_json(metadata)?;
-    let execution_context_json = opt_py_to_json(execution_context)?;
+    let execution_context_json = py_application_execution_context(execution_context)?;
     let exec_fn = py_callable::wrap_py_tool_exec_fn(func);
     let default_fn: ToolExecutionNextFn = Arc::new(move |args| exec_fn(args));
     let parent_handle = handle.map(|h| h.inner).unwrap_or_else(task_scope_top);

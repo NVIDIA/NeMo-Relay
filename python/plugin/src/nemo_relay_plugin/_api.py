@@ -11,6 +11,8 @@ at an ``await``. Callback exceptions are returned to the Relay host as
 structured worker errors.
 
 Public data types:
+    ApplicationExecutionContext: Extensible, structured per-invocation application context.
+    HostApproval: Application assertion of one completed human approval.
     Json: Any JSON-serializable Python value.
     Event: A Relay event represented as a JSON object.
     LlmRequest: A Relay LLM request represented as a JSON object.
@@ -81,7 +83,7 @@ from datetime import datetime, timezone
 from enum import Enum
 from importlib import metadata
 from pathlib import Path
-from typing import Any, ClassVar, NotRequired, Protocol, TypeAlias, TypedDict
+from typing import Any, ClassVar, Literal, NotRequired, Protocol, TypeAlias, TypedDict
 from urllib.parse import urlsplit
 
 from . import _protocol
@@ -120,6 +122,36 @@ grpc: Any = importlib.import_module("grpc")
 
 #: Any JSON-serializable Python value accepted by the worker protocol.
 Json: TypeAlias = Any
+
+
+class HostApproval(TypedDict):
+    """Application assertion of completed approval, not Relay-verified authority.
+
+    All standard fields are required. Additional JSON properties are preserved
+    at runtime; consumers must validate the source and exact operation before
+    relying on the assertion. A denied or pending action must not be executed.
+    """
+
+    version: Literal[1]
+    source: str
+    decision: Literal["approved"]
+    approval_id: str
+    tool_name: str
+    approved_arguments: Json
+
+
+class ApplicationExecutionContext(TypedDict, total=False):
+    """Invocation-local context with optional approval and additional JSON fields.
+
+    Additional properties are accepted and preserved, although Python 3.11
+    TypedDict cannot express their arbitrary names statically. The complete
+    value is limited to 16 KiB and 64 nested object/array levels. This context
+    is separate from tool arguments and does not establish authorization.
+    """
+
+    host_approval: HostApproval
+
+
 #: A Relay event represented as a JSON object.
 Event: TypeAlias = dict[str, Any]
 
@@ -915,6 +947,55 @@ class LlmRequestInterceptOutcome:
         }
 
 
+def _validate_application_execution_context(value: object) -> None:
+    """Check the shared application-context contract without a host dependency.
+
+    Keep these structural checks aligned with the canonical schema under
+    crates/types/schemas/application-execution-context.schema.json. Unknown
+    properties are JSON extension data; their presence never grants approval.
+    Bound container depth before serialization or defensive copying.
+    """
+    if not isinstance(value, dict):
+        raise WorkerSdkError("tool execution context must be an object")
+    pending: list[tuple[object, int]] = [(value, 0)]
+    while pending:
+        item, parent_depth = pending.pop()
+        if isinstance(item, (dict, list)):
+            depth = parent_depth + 1
+            if depth > 64:
+                raise WorkerSdkError("tool execution context exceeds 64 container levels")
+            if isinstance(item, dict):
+                if any(not isinstance(key, str) for key in item):
+                    raise WorkerSdkError("invalid application execution context")
+                pending.extend((child, depth) for child in item.values())
+            else:
+                pending.extend((child, depth) for child in item)
+        elif item is not None and not isinstance(item, (str, bool, int, float)):
+            raise WorkerSdkError("invalid application execution context")
+    if "host_approval" in value:
+        approval = value["host_approval"]
+        required = {"version", "source", "decision", "approval_id", "tool_name", "approved_arguments"}
+        if (
+            not isinstance(approval, dict)
+            or not required.issubset(approval)
+            or isinstance(approval["version"], bool)
+            or not isinstance(approval["version"], (int, float))
+            or approval["version"] != 1
+            or approval["decision"] != "approved"
+            or any(
+                not isinstance(approval[field], str) or not approval[field]
+                for field in ("source", "approval_id", "tool_name")
+            )
+        ):
+            raise WorkerSdkError("invalid application execution context")
+    try:
+        encoded = json.dumps(value, ensure_ascii=False, allow_nan=False, separators=(",", ":")).encode("utf-8")
+    except (ValueError, TypeError, OverflowError, UnicodeError) as exc:
+        raise WorkerSdkError("invalid application execution context") from exc
+    if len(encoded) > 16_384:
+        raise WorkerSdkError("tool execution context exceeds 16384 serialized bytes")
+
+
 @dataclass(frozen=True, slots=True)
 class ToolExecutionContext:
     """Per-call context provided to a tool execution intercept.
@@ -924,7 +1005,7 @@ class ToolExecutionContext:
     an intercept that completes execution without calling
     :meth:`ToolNext.call` associate its result with the originating tool call.
 
-    ``execution_context`` is opaque caller context, separate from tool arguments
+    ``execution_context`` is structured application context, separate from tool arguments
     and event metadata; it grants no authority. Construction snapshots it and
     each read returns a defensive copy. Standard ``dataclasses.replace()`` can
     preserve, replace or clear it without sharing mutable context data.
@@ -933,14 +1014,17 @@ class ToolExecutionContext:
     tool_name: str
     args: Json
     tool_call_id: str | None = None
-    execution_context: dict[str, Json] | None = field(default=None, repr=False)
+    execution_context: ApplicationExecutionContext | None = field(default=None, repr=False)
 
     def __post_init__(self) -> None:
         # Read the stored value directly: the public getter returns a copy.
         supplied = object.__getattribute__(self, "execution_context")
-        if supplied is not None and not isinstance(supplied, dict):
-            raise WorkerSdkError("tool execution context must be an object")
-        object.__setattr__(self, "execution_context", copy.deepcopy(supplied))
+        if supplied is not None:
+            _validate_application_execution_context(supplied)
+        snapshot = copy.deepcopy(supplied)
+        if snapshot is not None and "host_approval" in snapshot:
+            snapshot["host_approval"]["version"] = 1
+        object.__setattr__(self, "execution_context", snapshot)
 
     def __getattribute__(self, name: str) -> Any:
         """Return an independent snapshot when inspecting execution context."""

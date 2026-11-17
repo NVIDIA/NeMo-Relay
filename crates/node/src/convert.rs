@@ -14,6 +14,7 @@ use napi::bindgen_prelude::{
 };
 use napi::threadsafe_function::ThreadsafeFunction;
 use napi::{Env, Status, ValueType};
+use nemo_relay_types::api::tool::ApplicationExecutionContext;
 use serde::de::DeserializeOwned;
 use serde_json::Value as Json;
 
@@ -298,7 +299,10 @@ fn checked_json_within(
 /// Snapshot the new host context from own enumerable JSON properties only.
 /// Unlike the shared JSON converter, this does not promote inherited claims.
 /// Getter values are read as ordinary JSON input; no JavaScript globals are used.
-pub(crate) fn execution_context_json(env: &Env, value: Option<Unknown>) -> Result<Option<Json>> {
+pub(crate) fn execution_context_json(
+    env: &Env,
+    value: Option<Unknown>,
+) -> Result<Option<ApplicationExecutionContext>> {
     let Some(value) = value else { return Ok(None) };
     if matches!(value.get_type()?, ValueType::Null | ValueType::Undefined) {
         return Ok(None);
@@ -310,7 +314,9 @@ pub(crate) fn execution_context_json(env: &Env, value: Option<Unknown>) -> Resul
             "execution context must be a JSON object",
         ));
     }
-    Ok(Some(value))
+    ApplicationExecutionContext::try_from(value)
+        .map(Some)
+        .map_err(|error| Error::invalid_argument(error.to_string()))
 }
 
 fn own_context_json(

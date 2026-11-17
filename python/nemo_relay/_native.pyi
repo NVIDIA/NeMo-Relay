@@ -26,6 +26,8 @@ from collections.abc import AsyncIterator, Awaitable, Callable, Mapping, Sequenc
 from datetime import datetime
 from typing import ClassVar, Generic, Literal, Optional, TypeAlias, TypedDict, TypeVar
 
+from nemo_relay import ApplicationExecutionContext
+
 _JsonPrimitive: TypeAlias = str | int | float | bool | None
 _JsonValue: TypeAlias = _JsonPrimitive | list["_JsonValue"] | dict[str, "_JsonValue"]
 _JsonObject: TypeAlias = dict[str, _JsonValue]
@@ -633,7 +635,7 @@ class ToolExecutionContext:
     @property
     def tool_call_id(self) -> str | None: ...
     @property
-    def execution_context(self) -> dict[str, _Json] | None:
+    def execution_context(self) -> ApplicationExecutionContext | None:
         """A defensive copy of the host-supplied invocation object; not metadata or authority."""
         ...
 
@@ -2046,7 +2048,7 @@ def tool_call_execute(
     metadata: _Json | None = None,
     tool_call_id: str | None = None,
     execution_options: ExecutionOptions | None = None,
-    execution_context: dict[str, _Json] | None = None,
+    execution_context: ApplicationExecutionContext | None = None,
 ) -> Awaitable[ToolExecutionResult[_Json]]:
     """Execute a tool through the managed native middleware pipeline.
 

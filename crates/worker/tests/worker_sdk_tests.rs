@@ -1693,8 +1693,8 @@ async fn tool_execution_context_reaches_rust_worker_without_becoming_continuatio
                     assert_eq!(context.args(), &json!({"query": "test"}));
                     assert_eq!(context.tool_call_id(), Some("provider-call"));
                     assert_eq!(
-                        context.execution_context(),
-                        Some(&json!({"operation": {"attempt": 1}, "integer": u64::MAX}))
+                        context.execution_context().map(|value| value.to_json()),
+                        Some(json!({"operation": {"attempt": 1}, "integer": u64::MAX}))
                     );
                     assert!(!format!("{context:?}").contains("attempt"));
                     let downstream = next.call(context.into_args()).await?;

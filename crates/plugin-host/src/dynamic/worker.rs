@@ -2512,7 +2512,7 @@ impl WorkerPluginCallback {
         tool_name: &str,
         value: Json,
         tool_call_id: Option<&str>,
-        execution_context: Option<Json>,
+        execution_context: Option<nemo_relay_types::api::tool::ApplicationExecutionContext>,
         next: ToolExecutionNextFn,
     ) -> FlowResult<ToolExecutionInterceptOutcome> {
         // Preserving optional execution context is required by the 1.0
@@ -2529,7 +2529,7 @@ impl WorkerPluginCallback {
                 value: Some(encode_json(JSON_SCHEMA, &value)),
                 tool_call_id: tool_call_id.map(Into::into),
                 execution_context: execution_context
-                    .map(|value| encode_wire(&value))
+                    .map(|value| encode_wire(&value.to_json()))
                     .transpose()?,
             })),
         )?;

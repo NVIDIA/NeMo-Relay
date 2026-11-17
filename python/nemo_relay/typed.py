@@ -45,7 +45,7 @@ import pickle
 import typing
 from typing import AsyncIterator, Awaitable, Callable, Generic, Iterable, Protocol, TypeVar, cast, overload
 
-from nemo_relay import Json, llm, tools
+from nemo_relay import ApplicationExecutionContext, Json, llm, tools
 from nemo_relay._native import (
     ExecutionOptions,
     LLMAttributes,
@@ -524,7 +524,7 @@ async def tool_execute(
     metadata: Json | None = None,
     tool_call_id: str | None = None,
     execution_options: ExecutionOptions | None = None,
-    execution_context: dict[str, Json] | None = None,
+    execution_context: ApplicationExecutionContext | None = None,
 ) -> ToolExecutionResult[TResult]: ...
 
 
@@ -542,7 +542,7 @@ async def tool_execute(
     metadata: Json | None = None,
     tool_call_id: str | None = None,
     execution_options: ExecutionOptions | None = None,
-    execution_context: dict[str, Json] | None = None,
+    execution_context: ApplicationExecutionContext | None = None,
 ) -> ToolExecutionResult[TResult]: ...
 
 
@@ -559,7 +559,7 @@ async def tool_execute(
     metadata: Json | None = None,
     tool_call_id: str | None = None,
     execution_options: ExecutionOptions | None = None,
-    execution_context: dict[str, Json] | None = None,
+    execution_context: ApplicationExecutionContext | None = None,
 ) -> ToolExecutionResult[TResult]:
     """Run ``nemo_relay.tools.execute`` with typed arguments and results.
 
@@ -578,7 +578,7 @@ async def tool_execute(
         metadata: Optional JSON metadata recorded on the emitted start event.
         tool_call_id: Optional provider-specific tool call identifier recorded
             on the emitted start and end events.
-        execution_context: Optional host-supplied JSON object (at most 16 KiB).
+        execution_context: Optional structured application context (at most 16 KiB).
             Execution intercepts receive a defensive copy, separate from tool
             arguments and event metadata. It grants no authority and is not
             inherited by nested calls.

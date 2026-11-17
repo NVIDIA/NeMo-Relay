@@ -9,6 +9,10 @@ use serde::{Deserialize, Serialize};
 use crate::Json;
 use crate::api::event::PendingMarkSpec;
 
+/// Structured application context and its shared JSON Schema.
+pub mod application_context;
+pub use application_context::{ApplicationExecutionContext, HostApproval};
+
 /// Versioned native-plugin JSON envelope schema for [`ToolExecutionResult`].
 pub const TOOL_EXECUTION_RESULT_SCHEMA: &str = "nemo.relay.ToolExecutionResult@1";
 
@@ -51,7 +55,7 @@ pub struct ToolExecutionContext {
     pub tool_call_id: Option<String>,
     /// Optional caller-owned execution context; not tool input or event metadata.
     #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub execution_context: Option<Json>,
+    pub execution_context: Option<ApplicationExecutionContext>,
 }
 
 impl std::fmt::Debug for ToolExecutionContext {
@@ -91,7 +95,7 @@ impl ToolExecutionContext {
 
     /// Inspect application context without granting it authorization semantics.
     #[must_use]
-    pub fn execution_context(&self) -> Option<&Json> {
+    pub fn execution_context(&self) -> Option<&ApplicationExecutionContext> {
         self.execution_context.as_ref()
     }
 }

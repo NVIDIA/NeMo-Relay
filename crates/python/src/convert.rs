@@ -47,6 +47,8 @@ pub(crate) fn flow_error_to_py_err(error: FlowError) -> PyErr {
 fn validate_acyclic(
     value: &Bound<'_, PyAny>,
     active_containers: &mut HashSet<usize>,
+    parent_depth: usize,
+    depth_limit: Option<usize>,
 ) -> PyResult<()> {
     if value.is_instance_of::<PyString>()
         || value.is_instance_of::<PyBytes>()
@@ -68,6 +70,13 @@ fn validate_acyclic(
         return Ok(());
     }
 
+    let depth = parent_depth + 1;
+    if depth_limit.is_some_and(|limit| depth > limit) {
+        return Err(pyo3::exceptions::PyValueError::new_err(
+            "tool execution context exceeds 64 container levels",
+        ));
+    }
+
     let identity = value.as_ptr() as usize;
     if !active_containers.insert(identity) {
         return Err(pyo3::exceptions::PyValueError::new_err(
@@ -77,21 +86,21 @@ fn validate_acyclic(
 
     let result = if let Ok(set) = value.cast::<PySet>() {
         set.iter()
-            .try_for_each(|child| validate_acyclic(&child, active_containers))
+            .try_for_each(|child| validate_acyclic(&child, active_containers, depth, depth_limit))
     } else if let Ok(set) = value.cast::<PyFrozenSet>() {
         set.iter()
-            .try_for_each(|child| validate_acyclic(&child, active_containers))
+            .try_for_each(|child| validate_acyclic(&child, active_containers, depth, depth_limit))
     } else if let Ok(sequence) = value.cast::<PySequence>() {
         (0..sequence.len()?).try_for_each(|index| {
             let child = sequence.get_item(index)?;
-            validate_acyclic(&child, active_containers)
+            validate_acyclic(&child, active_containers, depth, depth_limit)
         })
     } else if let Ok(mapping) = value.cast::<PyMapping>() {
         let keys = mapping.keys()?;
         let values = mapping.values()?;
         keys.iter()
             .chain(values.iter())
-            .try_for_each(|child| validate_acyclic(&child, active_containers))
+            .try_for_each(|child| validate_acyclic(&child, active_containers, depth, depth_limit))
     } else if let Some(fields) = dataclass_fields {
         let fields = fields.cast::<PyDict>()?.keys();
         let attributes = value
@@ -99,7 +108,7 @@ fn validate_acyclic(
             .cast_into::<PyDict>()?;
         fields.iter().try_for_each(|field| {
             if let Some(child) = attributes.get_item(&field)? {
-                validate_acyclic(&child, active_containers)?;
+                validate_acyclic(&child, active_containers, depth, depth_limit)?;
             }
             Ok(())
         })
@@ -113,10 +122,32 @@ fn validate_acyclic(
 
 /// Convert a Python object to serde_json::Value via pythonize.
 pub fn py_to_json(obj: &Bound<'_, PyAny>) -> PyResult<Json> {
-    validate_acyclic(obj, &mut HashSet::new())?;
+    validate_acyclic(obj, &mut HashSet::new(), 0, None)?;
     pythonize::depythonize(obj).map_err(|e| {
         PyErr::new::<pyo3::exceptions::PyValueError, _>(format!("Failed to convert to JSON: {e}"))
     })
+}
+
+/// Convert bounded execution context before recursive JSON conversion can overflow.
+///
+/// The shared Rust type validates its schema and serialized byte budget. This
+/// preflight additionally bounds Python containers, including cycles, before
+/// `pythonize` and the general-purpose recursive conversion helpers run.
+pub(crate) fn py_application_execution_context(
+    obj: Option<&Bound<'_, PyAny>>,
+) -> PyResult<Option<nemo_relay_types::api::tool::ApplicationExecutionContext>> {
+    let Some(value) = obj.filter(|value| !value.is_none()) else {
+        return Ok(None);
+    };
+    validate_acyclic(value, &mut HashSet::new(), 0, Some(64))?;
+    let json: Json = pythonize::depythonize(value).map_err(|_| {
+        pyo3::exceptions::PyValueError::new_err("invalid application execution context")
+    })?;
+    nemo_relay_types::api::tool::ApplicationExecutionContext::try_from(json)
+        .map(Some)
+        .map_err(|_| {
+            pyo3::exceptions::PyValueError::new_err("invalid application execution context")
+        })
 }
 
 /// Convert a serde_json::Value to a Python object via pythonize.

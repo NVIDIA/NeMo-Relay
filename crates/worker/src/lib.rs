@@ -50,7 +50,8 @@ pub use nemo_relay_types::api::registry::{
 };
 pub use nemo_relay_types::api::scope::{ScopeStackEntry, ScopeStackSnapshot, ScopeType};
 pub use nemo_relay_types::api::tool::{
-    ToolExecutionContext, ToolExecutionInterceptOutcome, ToolExecutionResult,
+    ApplicationExecutionContext, HostApproval, ToolExecutionContext, ToolExecutionInterceptOutcome,
+    ToolExecutionResult,
 };
 pub use nemo_relay_types::codec::identity::{BuiltinLlmCodec, LlmCodecIdentity};
 pub use nemo_relay_types::codec::optimization::{
@@ -3358,7 +3359,7 @@ struct ToolPayload {
     tool_name: String,
     value: Json,
     tool_call_id: Option<String>,
-    execution_context: Option<Json>,
+    execution_context: Option<nemo_relay_types::api::tool::ApplicationExecutionContext>,
 }
 
 #[derive(Default)]

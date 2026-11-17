@@ -39,7 +39,10 @@ fn tool_context_decoding_preserves_optional_objects_independently_of_args() {
         let invocation = CallbackInvocation::try_from(invocation).unwrap();
         let payload = tool_payload(invocation.payload).unwrap();
         assert_eq!(payload.value, json!({"query": "test"}));
-        assert_eq!(payload.execution_context, context);
+        assert_eq!(
+            payload.execution_context.map(|value| value.to_json()),
+            context
+        );
     }
 }
 

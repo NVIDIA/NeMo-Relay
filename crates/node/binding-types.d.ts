@@ -8,6 +8,27 @@ export type JsonObject = { [Key in string]: JsonValue };
 export type JsonArray = JsonValue[] | readonly JsonValue[];
 export type JsonValue = JsonPrimitive | JsonObject | JsonArray;
 export type Json = JsonValue;
+/** Application-asserted approval; middleware still decides which sources it trusts. */
+export interface HostApproval {
+  version: 1;
+  /** Nonempty identifier of the application asserting approval. */
+  source: string;
+  decision: 'approved';
+  /** Nonempty identifier of the verified approval. */
+  approval_id: string;
+  /** Nonempty name of the approved tool. */
+  tool_name: string;
+  /** Exact approved JSON arguments; explicit null is allowed. */
+  approved_arguments: JsonValue;
+  [key: string]: JsonValue;
+}
+
+/** Invocation-local context. Additional application-owned JSON fields are preserved. */
+export interface ApplicationExecutionContext {
+  host_approval?: HostApproval;
+  [key: string]: JsonValue | undefined;
+}
+
 export type LlmRequestShape = {
   headers: JsonObject;
   content: Json;

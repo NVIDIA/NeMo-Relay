@@ -221,6 +221,34 @@ Json: TypeAlias = JsonValue
 UnsupportedBehavior: TypeAlias = Literal["ignore", "warn", "error"]
 
 
+class HostApproval(TypedDict):
+    """Application assertion of completed approval, not Relay-verified authority.
+
+    All standard fields are required. Additional JSON properties are preserved
+    at runtime; consumers must validate the source and exact operation before
+    relying on the assertion. A denied or pending action must not be executed.
+    """
+
+    version: Literal[1]
+    source: str
+    decision: Literal["approved"]
+    approval_id: str
+    tool_name: str
+    approved_arguments: Json
+
+
+class ApplicationExecutionContext(TypedDict, total=False):
+    """Invocation-local context with optional approval and additional JSON fields.
+
+    Additional properties are accepted and preserved, although Python 3.11
+    TypedDict cannot express their arbitrary names statically. The complete
+    value is limited to 16 KiB and 64 nested object/array levels. This context
+    is separate from tool arguments and does not establish authorization.
+    """
+
+    host_approval: HostApproval
+
+
 class DataSchema(TypedDict):
     """Schema identifier attached to an event's opaque data payload."""
 
@@ -820,6 +848,8 @@ Event = typing.Union[
 ]
 
 __all__ = [
+    "ApplicationExecutionContext",
+    "HostApproval",
     "ExecutionOptions",
     # Submodules
     "scope",

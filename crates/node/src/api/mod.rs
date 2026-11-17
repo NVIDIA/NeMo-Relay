@@ -71,6 +71,7 @@ use nemo_relay_runtime::api::subscriber as core_subscriber_api;
 use nemo_relay_runtime::api::tool as core_tool_api;
 use nemo_relay_runtime::api::tool::ToolAttributes;
 use nemo_relay_runtime::shared_runtime::initialize_shared_runtime_binding;
+use nemo_relay_types::api::tool::ApplicationExecutionContext;
 use nemo_relay_types::codec::request::AnnotatedLlmRequest;
 use nemo_relay_types::codec::response::Usage;
 use nemo_relay_types::error::{FlowError, Result as FlowResult};
@@ -2039,7 +2040,9 @@ pub fn tool_call_execute<'env>(
     #[napi(ts_arg_type = "TMetadata | null")] metadata: Option<Json>,
     tool_call_id: Option<String>,
     execution_options: Option<ExecutionOptions>,
-    #[napi(ts_arg_type = "JsonObject | null")] execution_context: Option<Unknown<'env>>,
+    #[napi(ts_arg_type = "ApplicationExecutionContext | null")] execution_context: Option<
+        Unknown<'env>,
+    >,
 ) -> Result<PromiseRaw<'env, ToolExecutionResult>> {
     let execution_context = execution_context_json(env, execution_context)?;
     let func = scoped_fn(
@@ -2076,7 +2079,7 @@ fn execute_tool_call<'env>(
     metadata: Option<Json>,
     tool_call_id: Option<String>,
     execution_options: Option<ExecutionOptions>,
-    execution_context: Option<Json>,
+    execution_context: Option<ApplicationExecutionContext>,
 ) -> Result<PromiseRaw<'env, ToolExecutionResult>> {
     let execution_options = execution_options.map(Into::into).unwrap_or_default();
     let attrs = ToolAttributes::from_bits_truncate(attributes.unwrap_or(0));
@@ -2096,7 +2099,7 @@ fn execute_tool_call<'env>(
                     .data_opt(opt_json(data))
                     .metadata_opt(opt_json(metadata))
                     .tool_call_id_opt(tool_call_id)
-                    .execution_context_opt(opt_json(execution_context))
+                    .execution_context_opt(execution_context)
                     .build(),
             )
             .await
@@ -2133,7 +2136,9 @@ pub fn tool_call_execute_async<'env>(
     #[napi(ts_arg_type = "TMetadata | null")] metadata: Option<Json>,
     tool_call_id: Option<String>,
     execution_options: Option<ExecutionOptions>,
-    #[napi(ts_arg_type = "JsonObject | null")] execution_context: Option<Unknown<'env>>,
+    #[napi(ts_arg_type = "ApplicationExecutionContext | null")] execution_context: Option<
+        Unknown<'env>,
+    >,
 ) -> Result<PromiseRaw<'env, ToolExecutionResult>> {
     let execution_context = execution_context_json(env, execution_context)?;
     let pa_fn = Arc::new(PromiseAwareFn::new(env, &func)?);

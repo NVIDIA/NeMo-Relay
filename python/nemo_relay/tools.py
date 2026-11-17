@@ -25,7 +25,7 @@ from __future__ import annotations
 from collections.abc import Awaitable, Callable
 from datetime import datetime
 
-from nemo_relay import Json
+from nemo_relay import ApplicationExecutionContext, Json
 from nemo_relay._context import ensure_scope_stack
 from nemo_relay._native import (
     ExecutionOptions,
@@ -166,7 +166,7 @@ def execute(
     metadata: Json | None = None,
     tool_call_id: str | None = None,
     execution_options: ExecutionOptions | None = None,
-    execution_context: dict[str, Json] | None = None,
+    execution_context: ApplicationExecutionContext | None = None,
 ) -> Awaitable[ToolExecutionResult[Json]]:
     """Run a tool through the managed middleware pipeline.
 
@@ -191,7 +191,7 @@ def execute(
         metadata: Optional JSON metadata recorded on the emitted start event.
         tool_call_id: Optional provider-specific tool call identifier recorded
             on the emitted start and end events.
-        execution_context: Optional host-supplied JSON object (at most 16 KiB and
+        execution_context: Optional structured application context (at most 16 KiB and
             64 object/array levels, counting the root object as level 1).
             Execution intercepts receive a defensive copy, separate from tool
             arguments and event metadata. It grants no authority and is not

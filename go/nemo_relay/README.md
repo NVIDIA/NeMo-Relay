@@ -78,7 +78,7 @@ completion-based middleware registration.
 
 ## Application Execution Context
 
-Use `WithToolExecutionContext` on a managed tool call to give execution
+Use `WithApplicationExecutionContext` on a managed tool call to give execution
 middleware application-owned information separately from the tool's arguments:
 
 ```go
@@ -86,7 +86,13 @@ result, err := nemo.ToolCallExecute(
     "write_file",
     json.RawMessage(`{"path":"notes.txt","content":"hello"}`),
     executeWrite,
-    nemo.WithToolExecutionContext(json.RawMessage(`{"review":{"reference":"review-123"}}`)),
+    nemo.WithApplicationExecutionContext(&nemo.ApplicationExecutionContext{
+        HostApproval: &nemo.HostApproval{
+            Version: 1, Source: "application", Decision: "approved",
+            ApprovalID: "review-123", ToolName: "write_file",
+            ApprovedArguments: json.RawMessage(`{"path":"notes.txt","content":"hello"}`),
+        },
+    }),
 )
 ```
 
@@ -95,6 +101,11 @@ separate object from `ctx.ExecutionContext`; the business callback receives
 only the tool arguments. Context is not automatically added to lifecycle
 events or inherited by nested calls. Application assertions are not proof of
 approval: middleware must decide which application sources and claims it trusts.
+
+`ApplicationExecutionContext` and `HostApproval` preserve extra JSON fields in
+`AdditionalFields`. Known approval fields are validated; an incomplete approval
+is rejected. `WithToolExecutionContext(json.RawMessage(...))` remains available
+for raw JSON producers and follows the same runtime schema validation.
 
 The option snapshots its input and can be reused. A nil value omits context;
 `{}` supplies an empty object. Relay rejects invalid or non-object JSON, objects

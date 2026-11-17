@@ -216,7 +216,7 @@ fn tool_intercept_delivers_optional_execution_context_to_foreign_code() {
         let intercept =
             wrap_tool_exec_intercept_fn(callback, Arc::as_ptr(&observed).cast_mut().cast(), None);
         let context = ToolExecutionContext::new("example", json!({}))
-            .with_execution_context(supplied.clone());
+            .with_execution_context(supplied.clone().map(|value| value.try_into().unwrap()));
         let outcome = runtime.block_on(intercept(context, next)).unwrap();
         assert_eq!(outcome.result, json!({"changed":true}));
         let captured = observed.lock().unwrap().take().unwrap();

@@ -299,11 +299,14 @@ existing `ToolExecutionInvocation.tool_call_id` protobuf field. Use it when a wo
 completes execution itself and must still correlate its result with the
 originating tool call.
 
-Every Relay 1.0 worker must preserve optional `execution_context`: an opaque JSON
-object supplied by the application for this managed execution. It stays separate
+Every Relay 1.0 worker must preserve optional `execution_context`: the structured
+`ApplicationExecutionContext` object supplied by the application for this managed
+execution. Its optional `host_approval` claim has defined fields, while additional
+JSON properties remain application-owned and are preserved. It stays separate
 from tool arguments and event metadata, is isolated between intercepts, and is
-not inherited by nested calls. Relay does not validate application approval
-claims in it or automatically skip middleware. Supporting the field is required
+not inherited by nested calls. Relay validates structure and resource limits,
+but does not authenticate approval claims or automatically skip middleware.
+Supporting the field is required
 by the worker contract checked at handshake; there is no separate capability
 flag. Supplying a value remains optional. Rebuild and repackage development
 workers against the matching SDK rather than relying on an earlier development

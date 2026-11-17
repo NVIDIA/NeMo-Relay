@@ -18,7 +18,9 @@ import pytest
 from async_helpers import resolve_async_result
 
 from nemo_relay import (
+    ApplicationExecutionContext,
     Event,
+    HostApproval,
     Json,
     MarkEvent,
     PendingMarkSpec,
@@ -712,6 +714,68 @@ class TestToolIntercepts:
             assert calls == []
         finally:
             assert intercepts.deregister_tool_execution("py_invalid_execution_context")
+
+    async def test_standard_execution_context_roundtrips_with_extensions(self) -> None:
+        approval = HostApproval(
+            version=1,
+            source="example.application",
+            decision="approved",
+            approval_id="approval-123",
+            tool_name="standard_context",
+            approved_arguments={"value": 1},
+        )
+        supplied = ApplicationExecutionContext(host_approval=approval)
+        cast(dict[str, Json], supplied)["com.example.request"] = {"id": "request-123"}
+        cast(dict[str, Json], approval)["com.example.review"] = "human"
+        seen = []
+
+        async def observing(context, next_call):
+            seen.append(context.execution_context)
+            downstream = await next_call(context.args)
+            return ToolExecutionInterceptOutcome(downstream.result)
+
+        intercepts.register_tool_execution("py_standard_context", 1, observing)
+        try:
+            await tools.execute(
+                "standard_context", {"value": 1}, lambda args: ToolExecutionResult(args), execution_context=supplied
+            )
+            assert seen == [supplied]
+        finally:
+            assert intercepts.deregister_tool_execution("py_standard_context")
+
+    @pytest.mark.parametrize(
+        "approval",
+        [
+            None,
+            {},
+            {"version": 1},
+            {
+                "version": 1,
+                "source": "example.application",
+                "decision": "denied",
+                "approval_id": "approval-123",
+                "tool_name": "lookup",
+                "approved_arguments": {},
+            },
+        ],
+    )
+    async def test_invalid_standard_approval_prevents_tool_execution(self, approval) -> None:
+        calls = []
+        with pytest.raises((ValueError, RuntimeError), match="application execution context"):
+            await tools.execute(
+                "invalid_approval",
+                {},
+                lambda args: calls.append(args) or ToolExecutionResult(args),
+                execution_context={"host_approval": approval},
+            )
+        assert calls == []
+
+    async def test_deep_execution_context_rejected_before_recursive_conversion(self) -> None:
+        supplied = {}
+        for _ in range(2_000):
+            supplied = {"child": supplied}
+        with pytest.raises(ValueError, match="64 container levels"):
+            await tools.execute("deep_context", {}, lambda args: ToolExecutionResult(args), execution_context=supplied)
 
     async def test_execution_intercept_tool_call_id_is_none_when_absent(self) -> None:
         seen = {}

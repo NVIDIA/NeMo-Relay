@@ -249,7 +249,7 @@ pub struct ToolExecutionContext {
     pub args: Json,
     pub tool_call_id: Option<String>,
     /// Host-supplied invocation-local JSON object; absent is null. Not event metadata or authority.
-    #[napi(ts_type = "JsonObject")]
+    #[napi(ts_type = "ApplicationExecutionContext")]
     pub execution_context: Option<Json>,
 }
 

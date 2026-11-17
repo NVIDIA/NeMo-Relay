@@ -291,7 +291,7 @@ async fn native_tool_intercept_rejects_execution_context_without_running_tool() 
             ToolCallExecuteParams::builder()
                 .name("native-context-probe")
                 .args(json!({"query": "test"}))
-                .execution_context(context)
+                .execution_context(context.try_into().unwrap())
                 .func(Arc::new(move |args| {
                     let captured = captured.clone();
                     Box::pin(async move {

@@ -1358,7 +1358,7 @@ pub struct PyToolExecutionContext {
     tool_name: String,
     args: Arc<Py<PyAny>>,
     tool_call_id: Option<String>,
-    execution_context: Option<nemo_relay_types::Json>,
+    execution_context: Option<nemo_relay_types::api::tool::ApplicationExecutionContext>,
 }
 
 #[pymethods]
@@ -1388,7 +1388,7 @@ impl PyToolExecutionContext {
     fn execution_context(&self, py: Python<'_>) -> PyResult<Option<Py<PyAny>>> {
         self.execution_context
             .as_ref()
-            .map(|value| json_to_py(py, value))
+            .map(|value| json_to_py(py, &value.to_json()))
             .transpose()
     }
 

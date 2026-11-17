@@ -1242,7 +1242,7 @@ async fn tool_execution_context_is_forwarded_as_part_of_the_required_worker_cont
                 "lookup",
                 json!({"query": "test"}),
                 Some("call"),
-                context.clone(),
+                context.clone().map(|value| value.try_into().unwrap()),
                 Arc::new(|_| panic!("worker completes without invoking continuation")),
             )
             .await

@@ -234,7 +234,18 @@ describe('adaptive typed helpers', () => {
 
 describe('typedToolExecute', () => {
   it('forwards host execution context independently of encoded arguments', async () => {
-    const host = { audit: { label: 'typed-host-context' } };
+    const host = {
+      audit: { label: 'typed-host-context' },
+      host_approval: {
+        version: 1,
+        source: 'application',
+        decision: 'approved',
+        approval_id: 'review-123',
+        tool_name: 'typed_context',
+        approved_arguments: { value: 1 },
+        extra: { retained: true },
+      },
+    };
     let seen;
     registerToolExecutionIntercept('typed_execution_context', 1, async (context, next) => {
       seen = context.executionContext;
@@ -252,7 +263,7 @@ describe('typedToolExecute', () => {
       );
       host.audit.label = 'changed';
       assert.deepEqual(await pending, { result: { value: 1 } });
-      assert.deepEqual(seen, { audit: { label: 'typed-host-context' } });
+      assert.deepEqual(seen, { ...host, audit: { label: 'typed-host-context' } });
     } finally {
       deregisterToolExecutionIntercept('typed_execution_context');
     }

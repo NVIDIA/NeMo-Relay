@@ -7,10 +7,22 @@ import (
 	"bytes"
 	"encoding/json"
 	"fmt"
+	"reflect"
 	"strings"
 	"sync"
 	"testing"
 )
+
+func executionContextJSON(context *ApplicationExecutionContext) json.RawMessage {
+	if context == nil {
+		return nil
+	}
+	value, err := json.Marshal(context)
+	if err != nil {
+		panic(err)
+	}
+	return value
+}
 
 func TestToolExecutionContextRemainsSeparateAcrossMiddlewareAndNestedCalls(t *testing.T) {
 	const marker = "application-private-context-reference"
@@ -37,8 +49,8 @@ func TestToolExecutionContextRemainsSeparateAcrossMiddlewareAndNestedCalls(t *te
 				}
 				return toolExecutionOutcome(next(ctx.Args))
 			}
-			if !bytes.Equal(ctx.ExecutionContext, context) {
-				return ToolExecutionInterceptOutcome{}, fmt.Errorf("first middleware received wrong context: %s", ctx.ExecutionContext)
+			if !bytes.Equal(executionContextJSON(ctx.ExecutionContext), context) {
+				return ToolExecutionInterceptOutcome{}, fmt.Errorf("first middleware received wrong context: %v", ctx.ExecutionContext)
 			}
 			if ctx.ToolCallID == nil || *ctx.ToolCallID != "provider-context-call" {
 				return ToolExecutionInterceptOutcome{}, fmt.Errorf("context lost the provider tool call ID")
@@ -52,7 +64,7 @@ func TestToolExecutionContextRemainsSeparateAcrossMiddlewareAndNestedCalls(t *te
 			}
 			// This is callback-owned JSON, not a mutable reference to the context
 			// held by the runtime or supplied to the next middleware.
-			ctx.ExecutionContext[0] = '!'
+			ctx.ExecutionContext.AdditionalFields["approval"][0] = '!'
 			return toolExecutionOutcome(next(json.RawMessage(`{"value":2}`)))
 		}); err != nil {
 		t.Fatal(err)
@@ -60,8 +72,8 @@ func TestToolExecutionContextRemainsSeparateAcrossMiddlewareAndNestedCalls(t *te
 	t.Cleanup(func() { _ = DeregisterToolExecutionIntercept("execution-context-first") })
 	if err := RegisterToolExecutionIntercept("execution-context-second", 2,
 		func(ctx ToolExecutionContext, next func(json.RawMessage) (ToolExecutionResult, error)) (ToolExecutionInterceptOutcome, error) {
-			if ctx.ToolName == "execution-context-outer" && !bytes.Equal(ctx.ExecutionContext, context) {
-				return ToolExecutionInterceptOutcome{}, fmt.Errorf("earlier middleware changed held context: %s", ctx.ExecutionContext)
+			if ctx.ToolName == "execution-context-outer" && !bytes.Equal(executionContextJSON(ctx.ExecutionContext), context) {
+				return ToolExecutionInterceptOutcome{}, fmt.Errorf("earlier middleware changed held context: %v", ctx.ExecutionContext)
 			}
 			return toolExecutionOutcome(next(ctx.Args))
 		}); err != nil {
@@ -102,7 +114,7 @@ func TestToolExecutionContextOptionSnapshotAbsenceAndReuse(t *testing.T) {
 	var seen []json.RawMessage
 	if err := RegisterToolExecutionIntercept("execution-context-snapshot", 1,
 		func(ctx ToolExecutionContext, next func(json.RawMessage) (ToolExecutionResult, error)) (ToolExecutionInterceptOutcome, error) {
-			seen = append(seen, bytes.Clone(ctx.ExecutionContext))
+			seen = append(seen, bytes.Clone(executionContextJSON(ctx.ExecutionContext)))
 			return toolExecutionOutcome(next(ctx.Args))
 		}); err != nil {
 		t.Fatal(err)
@@ -147,15 +159,18 @@ func TestToolExecutionContextRejectsInvalidInputBeforeMiddlewareOrEffects(t *tes
 	}
 	t.Cleanup(func() { _ = DeregisterToolConditionalExecutionGuardrail("execution-context-invalid") })
 	invalid := map[string]json.RawMessage{
-		"empty":        {},
-		"malformed":    json.RawMessage(`{"broken":`),
-		"raw-nul":      json.RawMessage("{}\x00{}"),
-		"invalid-utf8": json.RawMessage("{\"name\":\"\xff\"}"),
-		"null":         json.RawMessage(`null`),
-		"array":        json.RawMessage(`[]`),
-		"scalar":       json.RawMessage(`true`),
-		"oversized":    json.RawMessage(`{"value":"` + strings.Repeat("x", 16*1024) + `"}`),
-		"too-deep":     json.RawMessage(strings.Repeat(`{"nested":`, 65) + `null` + strings.Repeat(`}`, 65)),
+		"empty":               {},
+		"malformed":           json.RawMessage(`{"broken":`),
+		"raw-nul":             json.RawMessage("{}\x00{}"),
+		"invalid-utf8":        json.RawMessage("{\"name\":\"\xff\"}"),
+		"null":                json.RawMessage(`null`),
+		"array":               json.RawMessage(`[]`),
+		"approval-null":       json.RawMessage(`{"host_approval":null}`),
+		"approval-incomplete": json.RawMessage(`{"host_approval":{"version":1}}`),
+		"approval-version":    json.RawMessage(`{"host_approval":{"version":2,"source":"test","decision":"approved","approval_id":"a","tool_name":"tool","approved_arguments":{}}}`),
+		"scalar":              json.RawMessage(`true`),
+		"oversized":           json.RawMessage(`{"value":"` + strings.Repeat("x", 16*1024) + `"}`),
+		"too-deep":            json.RawMessage(strings.Repeat(`{"nested":`, 65) + `null` + strings.Repeat(`}`, 65)),
 	}
 	for name, context := range invalid {
 		t.Run(name, func(t *testing.T) {
@@ -191,5 +206,80 @@ func TestToolExecutionContextRequiresManagedExecution(t *testing.T) {
 		if err := ToolCallEnd(handle, ToolExecutionResult{Result: json.RawMessage(`{}`)}); err != nil {
 			t.Fatal(err)
 		}
+	}
+}
+
+func TestApplicationExecutionContextTypedRoundTripAndValidation(t *testing.T) {
+	input := []byte(`{"host_approval":{"version":1,"source":"application","decision":"approved","approval_id":"review-1","tool_name":"demo","approved_arguments":null,"extra":{"tag":true}},"custom":[1,null]}`)
+	var context ApplicationExecutionContext
+	if err := json.Unmarshal(input, &context); err != nil {
+		t.Fatal(err)
+	}
+	if context.HostApproval.Source != "application" || string(context.HostApproval.ApprovedArguments) != "null" {
+		t.Fatal("known fields lost")
+	}
+	encoded, err := json.Marshal(context)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var before, after any
+	if err := json.Unmarshal(input, &before); err != nil {
+		t.Fatal(err)
+	}
+	if err := json.Unmarshal(encoded, &after); err != nil {
+		t.Fatal(err)
+	}
+	if !reflect.DeepEqual(before, after) {
+		t.Fatalf("extensions lost: %s", encoded)
+	}
+	for _, version := range []string{"1.0", "1e0"} {
+		var equivalent ApplicationExecutionContext
+		if err := json.Unmarshal(bytes.Replace(input, []byte(`"version":1`), []byte(`"version":`+version), 1), &equivalent); err != nil {
+			t.Fatalf("numeric version %s: %v", version, err)
+		}
+	}
+	option := WithApplicationExecutionContext(&context)
+	context.HostApproval.Source = "changed"
+	var options toolCallOptions
+	option(&options)
+	if bytes.Contains(options.executionContext, []byte("changed")) {
+		t.Fatal("typed option did not snapshot")
+	}
+	invalid := WithApplicationExecutionContext(&ApplicationExecutionContext{HostApproval: &HostApproval{}})
+	var calls int
+	if _, err := ToolCallExecute("invalid-typed-context", json.RawMessage(`{}`), func(args json.RawMessage) (ToolExecutionResult, error) {
+		calls++
+		return ToolExecutionResult{Result: args}, nil
+	}, invalid); err == nil || calls != 0 {
+		t.Fatal("invalid typed context reached effects")
+	}
+	empty, err := json.Marshal(ApplicationExecutionContext{})
+	if err != nil || string(empty) != "{}" {
+		t.Fatalf("empty object lost: %s %v", empty, err)
+	}
+}
+
+func TestApplicationExecutionContextTypedMiddleware(t *testing.T) {
+	context := &ApplicationExecutionContext{
+		HostApproval:     &HostApproval{Version: 1, Source: "application", Decision: "approved", ApprovalID: "review-123", ToolName: "typed-context", ApprovedArguments: json.RawMessage(`{"value":1}`), AdditionalFields: map[string]json.RawMessage{"extension": json.RawMessage(`true`)}},
+		AdditionalFields: map[string]json.RawMessage{"custom": json.RawMessage(`{"retained":true}`)},
+	}
+	var observed bool
+	if err := RegisterToolExecutionIntercept("typed-application-context", 1, func(ctx ToolExecutionContext, next func(json.RawMessage) (ToolExecutionResult, error)) (ToolExecutionInterceptOutcome, error) {
+		approval := ctx.ExecutionContext.HostApproval
+		if approval == nil || approval.ApprovalID != "review-123" || string(approval.AdditionalFields["extension"]) != "true" || string(ctx.ExecutionContext.AdditionalFields["custom"]) != `{"retained":true}` {
+			return ToolExecutionInterceptOutcome{}, fmt.Errorf("typed context lost standard or additional fields")
+		}
+		observed = true
+		return toolExecutionOutcome(next(ctx.Args))
+	}); err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = DeregisterToolExecutionIntercept("typed-application-context") })
+	if _, err := ToolCallExecute("typed-context", json.RawMessage(`{"value":1}`), func(args json.RawMessage) (ToolExecutionResult, error) { return ToolExecutionResult{Result: args}, nil }, WithApplicationExecutionContext(context)); err != nil {
+		t.Fatal(err)
+	}
+	if !observed {
+		t.Fatal("typed middleware was not called")
 	}
 }

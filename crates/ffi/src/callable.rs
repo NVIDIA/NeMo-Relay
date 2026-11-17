@@ -547,7 +547,7 @@ pub fn wrap_tool_exec_intercept_fn(
                 // its C signature. Keep invocation-only context separate from
                 // tool arguments and omit it for existing context-free calls.
                 if let Some(execution_context) = context.execution_context() {
-                    context_json["execution_context"] = execution_context.clone();
+                    context_json["execution_context"] = execution_context.to_json();
                 }
                 call_tool_exec_intercept_cb(cb, ud, context_json, next).await
             })

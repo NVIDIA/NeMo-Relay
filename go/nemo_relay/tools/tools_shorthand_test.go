@@ -83,7 +83,11 @@ func TestExecuteForwardsApplicationExecutionContext(t *testing.T) {
 	var seen json.RawMessage
 	if err := nemo_relay.RegisterToolExecutionIntercept("tools_execution_context", 1,
 		func(ctx nemo_relay.ToolExecutionContext, next func(json.RawMessage) (nemo_relay.ToolExecutionResult, error)) (nemo_relay.ToolExecutionInterceptOutcome, error) {
-			seen = append(json.RawMessage(nil), ctx.ExecutionContext...)
+			var err error
+			seen, err = json.Marshal(ctx.ExecutionContext)
+			if err != nil {
+				return nemo_relay.ToolExecutionInterceptOutcome{}, err
+			}
 			result, err := next(ctx.Args)
 			return nemo_relay.ToolExecutionInterceptOutcome{Result: result.Result, Annotation: result.Annotation}, err
 		}); err != nil {

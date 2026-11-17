@@ -222,16 +222,16 @@ type ToolExecutionFunc func(args json.RawMessage) (ToolExecutionResult, error)
 // associate its result with the originating tool call.
 //
 // ExecutionContext is an optional application-owned JSON object, separate from
-// Args and event metadata. It is nil when omitted. Altering these callback bytes
+// Args and event metadata. It is nil when omitted. Altering this callback value
 // does not alter the context held by later middleware.
 //
 // New fields may be added, so callers must not rely on this struct being
 // exhaustive.
 type ToolExecutionContext struct {
-	ExecutionContext json.RawMessage `json:"execution_context,omitempty"`
-	ToolName         string          `json:"tool_name"`
-	Args             json.RawMessage `json:"args"`
-	ToolCallID       *string         `json:"tool_call_id,omitempty"`
+	ExecutionContext *ApplicationExecutionContext `json:"execution_context,omitempty"`
+	ToolName         string                       `json:"tool_name"`
+	Args             json.RawMessage              `json:"args"`
+	ToolCallID       *string                      `json:"tool_call_id,omitempty"`
 }
 
 // ToolExecutionInterceptFunc is a callback for tool execution intercepts

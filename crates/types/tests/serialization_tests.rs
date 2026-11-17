@@ -900,7 +900,7 @@ fn tool_execution_context_debug_omits_arguments() {
         tool_name: "lookup".into(),
         args: json!({"secret": "credential"}),
         tool_call_id: Some("call-1".into()),
-        execution_context: Some(json!({"private-context": "do-not-log"})),
+        execution_context: Some(json!({"private-context": "do-not-log"}).try_into().unwrap()),
     };
     let debug = format!("{context:?}");
     assert!(debug.contains("lookup"));
@@ -918,7 +918,11 @@ fn tool_execution_context_preserves_legacy_json_and_optional_application_context
     let mut context: ToolExecutionContext = serde_json::from_value(legacy.clone()).unwrap();
     assert!(context.execution_context().is_none());
     assert_eq!(serde_json::to_value(&context).unwrap(), legacy);
-    context.execution_context = Some(json!({"example.review": {"reference": "review-1"}}));
+    context.execution_context = Some(
+        json!({"example.review": {"reference": "review-1"}})
+            .try_into()
+            .unwrap(),
+    );
     let restored: ToolExecutionContext =
         serde_json::from_value(serde_json::to_value(&context).unwrap()).unwrap();
     assert_eq!(restored.execution_context(), context.execution_context());

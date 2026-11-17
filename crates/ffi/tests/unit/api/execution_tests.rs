@@ -198,6 +198,10 @@ fn execution_context_validation_releases_c_callback_without_running_middleware_o
             ("[]".to_string(), NemoRelayStatus::InvalidArg),
             ("true".to_string(), NemoRelayStatus::InvalidArg),
             (
+                r#"{"host_approval":null}"#.to_string(),
+                NemoRelayStatus::InvalidArg,
+            ),
+            (
                 json!({"value":"x".repeat(16_384)}).to_string(),
                 NemoRelayStatus::InvalidArg,
             ),

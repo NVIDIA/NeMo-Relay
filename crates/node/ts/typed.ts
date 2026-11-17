@@ -9,6 +9,7 @@ import type {
   JsonCompatible,
   JsonValue,
   JsonObject,
+  ApplicationExecutionContext,
   LlmCodec,
   LlmRequestCompatible,
   LlmRequestShape,
@@ -25,6 +26,8 @@ export type {
   JsonCompatible,
   JsonObject,
   JsonPrimitive,
+  ApplicationExecutionContext,
+  HostApproval,
   JsonValue,
   LlmCodec,
   LlmRequestCompatible,
@@ -68,7 +71,7 @@ export interface TypedToolExecuteOptions<
   metadata?: TMetadata;
   toolCallId?: string | null;
   /** Host-supplied context for execution intercepts: at most 16 KiB and 64 object/array levels (root is level 1); never event metadata. */
-  executionContext?: JsonObject | null;
+  executionContext?: ApplicationExecutionContext | null;
   executionOptions?: ExecutionOptions | null;
 }
 

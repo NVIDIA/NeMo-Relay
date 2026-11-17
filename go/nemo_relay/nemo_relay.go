@@ -1163,17 +1163,18 @@ func EmitMetric(name string, measurements []MetricMeasurement, opts ...MetricOpt
 // ---------------------------------------------------------------------------
 
 type toolCallOptions struct {
-	executionContext    json.RawMessage
-	hasExecutionContext bool
-	executionOptions    ExecutionOptions
-	hasExecutionOptions bool
-	parentHandle        *ScopeHandle // retains the borrowed native handle through the FFI call
-	parent              *C.FfiScopeHandle
-	attributes          uint32
-	data                *C.char
-	metadata            *C.char
-	toolCallID          *C.char
-	timestamp           *C.int64_t
+	executionContextError error
+	executionContext      json.RawMessage
+	hasExecutionContext   bool
+	executionOptions      ExecutionOptions
+	hasExecutionOptions   bool
+	parentHandle          *ScopeHandle // retains the borrowed native handle through the FFI call
+	parent                *C.FfiScopeHandle
+	attributes            uint32
+	data                  *C.char
+	metadata              *C.char
+	toolCallID            *C.char
+	timestamp             *C.int64_t
 }
 
 // ExecutionOptions chooses which middleware stages run for one managed call.
@@ -1220,8 +1221,23 @@ func WithToolExecutionContext(context json.RawMessage) ToolCallOption {
 	snapshot := bytes.Clone(context)
 	return func(o *toolCallOptions) {
 		o.executionContext = bytes.Clone(snapshot)
+		o.executionContextError = nil
 		o.hasExecutionContext = true
 	}
+}
+
+// WithApplicationExecutionContext snapshots typed application context for managed
+// execution. A nil pointer clears context. Serialization failures are returned by
+// ToolCallExecute before middleware or the tool implementation can run.
+func WithApplicationExecutionContext(context *ApplicationExecutionContext) ToolCallOption {
+	if context == nil {
+		return WithToolExecutionContext(nil)
+	}
+	snapshot, err := json.Marshal(context)
+	if err != nil {
+		return func(o *toolCallOptions) { o.executionContextError = err; o.hasExecutionContext = true }
+	}
+	return WithToolExecutionContext(snapshot)
 }
 
 // WithLLMExecutionOptions selects stages for LlmCallExecute and
@@ -1405,6 +1421,9 @@ func ToolCallExecute(name string, args json.RawMessage, fn ToolExecutionFunc, op
 	defer freeToolOpts(o)
 
 	var cExecutionContext *C.char
+	if o.executionContextError != nil {
+		return ToolExecutionResult{}, o.executionContextError
+	}
 	if o.executionContext != nil {
 		// Validate before converting to a NUL-terminated C string: otherwise a
 		// raw NUL could truncate invalid JSON into a different valid object.
