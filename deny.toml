@@ -8,7 +8,8 @@ ignore = [
     { id = "RUSTSEC-2026-0391", reason = "Telemetry does not reuse borrowed streaming contexts: tonic creates fresh read encoders/decoders per message and opentelemetry-otlp uses bulk compression." },
     { id = "RUSTSEC-2026-0398", reason = "The zstd-safe 7.2.4 seekable feature is not enabled, including in all-features workspace builds." },
     { id = "RUSTSEC-2026-0403", reason = "Telemetry uses read-based streaming and bulk compression, not the affected write-based streaming decoder; CLI decompression uses patched zstd-safe 8.2.0." },
-    # Temporary maintenance-risk acceptance pending dependency migration.
+    # TODO: Upgrade chrono and humantime when maintained updates are available,
+    # then remove these exceptions.
     { id = "RUSTSEC-2026-0543", reason = "Accept continued chrono use pending coordinated migration of direct and transitive dependencies; no patched version exists." },
     { id = "RUSTSEC-2026-0542", reason = "Accept continued humantime use through object_store pending dependency migration; no patched version exists." },
 ]

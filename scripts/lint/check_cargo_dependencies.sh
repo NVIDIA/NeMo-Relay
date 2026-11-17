@@ -11,4 +11,4 @@ while IFS= read -r git_local_variable; do
     unset "$git_local_variable"
 done < <(git rev-parse --local-env-vars)
 
-exec cargo deny --locked --all-features check
+exec cargo deny --locked --all-features check --warn advisory-ignored
