@@ -76,6 +76,32 @@ native thread, so blocking I/O and other long-running callback work occupy that
 thread and can reduce middleware throughput. The Go binding does not provide
 completion-based middleware registration.
 
+## Application Execution Context
+
+Use `WithToolExecutionContext` on a managed tool call to give execution
+middleware application-owned information separately from the tool's arguments:
+
+```go
+result, err := nemo.ToolCallExecute(
+    "write_file",
+    json.RawMessage(`{"path":"notes.txt","content":"hello"}`),
+    executeWrite,
+    nemo.WithToolExecutionContext(json.RawMessage(`{"review":{"reference":"review-123"}}`)),
+)
+```
+
+Here `executeWrite` is the application's tool callback. Middleware reads the
+separate object from `ctx.ExecutionContext`; the business callback receives
+only the tool arguments. Context is not automatically added to lifecycle
+events or inherited by nested calls. Application assertions are not proof of
+approval: middleware must decide which application sources and claims it trusts.
+
+The option snapshots its input and can be reused. A nil value omits context;
+`{}` supplies an empty object. Relay rejects invalid or non-object JSON, objects
+over 16 KiB of serialized JSON, and nesting beyond 64 container levels before
+middleware or execution. Manual `ToolCall` and `ToolCallEnd` reject this option.
+Build the matching C FFI library when updating this source-first binding.
+
 ## Event Metadata Injection
 
 Use `RegisterEventMetadataInjector` for application-wide metadata. The callback

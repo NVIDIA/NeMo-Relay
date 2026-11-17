@@ -336,6 +336,62 @@ pub unsafe extern "C" fn nemo_relay_tool_call_execute_with_options(
     skip_stages: u32,
     out: *mut *mut c_char,
 ) -> NemoRelayStatus {
+    // Retain this symbol's original ABI; context is opt-in through the new
+    // entry point rather than an added positional parameter for old callers.
+    unsafe {
+        nemo_relay_tool_call_execute_with_context(
+            name,
+            args_json,
+            func,
+            func_user_data,
+            func_free,
+            parent,
+            attributes,
+            data_json,
+            metadata_json,
+            tool_call_id,
+            skip_stages,
+            std::ptr::null(),
+            out,
+        )
+    }
+}
+
+/// Execute a managed tool call with optional application execution context.
+///
+/// This is the context-bearing equivalent of
+/// [`nemo_relay_tool_call_execute_with_options`]. `execution_context_json` is
+/// either null (no context) or a UTF-8 JSON object, bounded to 16 KiB serialized
+/// JSON and 64 container levels. An empty object is present context; JSON null
+/// is invalid. Context is supplied to execution middleware only, not to the
+/// business callback, tool arguments, lifecycle data, or event metadata.
+/// It is invocation-local: nested calls must supply their own context.
+///
+/// Validation runs before middleware or execution. Relay takes ownership of
+/// callback data on entry and releases it even when validation fails. Existing
+/// execute entry points retain their signatures and supply no context.
+///
+/// # Safety
+/// Use the same pointer and callback rules as
+/// [`nemo_relay_tool_call_execute_with_options`]. When non-null,
+/// `execution_context_json` must be a valid C string for the duration of this
+/// call. `out` must point to writable output-pointer storage.
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn nemo_relay_tool_call_execute_with_context(
+    name: *const c_char,
+    args_json: *const c_char,
+    func: NemoRelayToolExecCb,
+    func_user_data: *mut libc::c_void,
+    func_free: NemoRelayFreeFn,
+    parent: *const FfiScopeHandle,
+    attributes: u32,
+    data_json: *const c_char,
+    metadata_json: *const c_char,
+    tool_call_id: *const c_char,
+    skip_stages: u32,
+    execution_context_json: *const c_char,
+    out: *mut *mut c_char,
+) -> NemoRelayStatus {
     clear_last_error();
     let exec_fn = wrap_tool_exec_fn(func, func_user_data, func_free);
     let execution_options = match super::execution_options(skip_stages) {
@@ -376,6 +432,10 @@ pub unsafe extern "C" fn nemo_relay_tool_call_execute_with_options(
             Err(status) => return status,
         }
     };
+    let execution_context = match c_str_to_opt_json(execution_context_json) {
+        Some(context) => context,
+        None => return NemoRelayStatus::InvalidJson,
+    };
 
     let default_fn: ToolExecutionNextFn = Arc::new(move |args| exec_fn(args));
 
@@ -391,6 +451,7 @@ pub unsafe extern "C" fn nemo_relay_tool_call_execute_with_options(
                 .data_opt(data)
                 .metadata_opt(metadata)
                 .tool_call_id_opt(tool_call_id)
+                .execution_context_opt(execution_context)
                 .build(),
         )
         .await

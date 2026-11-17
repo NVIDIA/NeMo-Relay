@@ -538,18 +538,17 @@ pub fn wrap_tool_exec_intercept_fn(
         move |context: ToolExecutionContext, next: ToolExecutionNextFn| {
             let ud = ud.clone();
             Box::pin(async move {
-                // The C callback contract has no application-context field.
-                // Reject rather than silently discard caller-supplied context.
-                if context.execution_context().is_some() {
-                    return Err(FlowError::InvalidArgument(
-                        "C tool execution intercept does not support execution context".into(),
-                    ));
-                }
-                let context_json = serde_json::json!({
+                let mut context_json = serde_json::json!({
                     "tool_name": context.tool_name(),
                     "args": context.args(),
                     "tool_call_id": context.tool_call_id(),
                 });
+                // The JSON callback envelope is extensible without changing
+                // its C signature. Keep invocation-only context separate from
+                // tool arguments and omit it for existing context-free calls.
+                if let Some(execution_context) = context.execution_context() {
+                    context_json["execution_context"] = execution_context.clone();
+                }
                 call_tool_exec_intercept_cb(cb, ud, context_json, next).await
             })
         },

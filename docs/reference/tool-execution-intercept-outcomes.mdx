@@ -264,12 +264,20 @@ middleware component that understands that review can avoid repeating its own
 review, then call `next` so the remaining middleware and tool callback still run.
 Relay does not interpret the reference or change the approval flow itself.
 
-Supply `execution_context` on Python `tools.execute`, or `executionContext` in
-Node.js `typedToolExecute` options. Rust uses
-`ToolCallExecuteParams::builder().execution_context(value)`. Intercepts read
-`context.execution_context` in Python, `context.executionContext` in Node.js, and
-`context.execution_context()` in Rust. Rust and Python worker SDKs expose the
-same optional context on their tool execution callback.
+The application APIs carry the same optional value through each binding:
+
+| Binding | Supply context when executing | Read it in execution middleware |
+| --- | --- | --- |
+| Rust | `ToolCallExecuteParams::builder().execution_context(value)` | `context.execution_context()` |
+| Python | `tools.execute(..., execution_context=value)` | `context.execution_context` |
+| Node.js | `executionContext` in `typedToolExecute` options | `context.executionContext` |
+| Go | `WithToolExecutionContext(value)` on `ToolCallExecute` or `tools.Execute` | `context.ExecutionContext` (`json.RawMessage`) |
+| C | `execution_context_json` on `nemo_relay_tool_call_execute_with_context` | Optional `execution_context` property in the callback's context JSON |
+
+Rust and Python worker SDKs expose the same optional context on their tool
+execution callback. The C entry point is additive: existing execute functions
+retain their signatures and omit context. Go rejects the option on manual
+`ToolCall` and `ToolCallEnd`, where execution middleware does not run.
 
 The value must be a JSON object with a serialized UTF-8 size of at most 16 KiB
 and at most **64 nested container levels**. The root object counts as level 1;
@@ -376,7 +384,7 @@ perform no tool call and only check the application's Node wrapper/native
 binding support. They do not verify remote worker support, application approval
 proofs or permission to execute.
 
-Python and Rust do not need an equivalent application-side helper for this API:
+Python, Rust, Go and C do not need an equivalent application-side helper for this API:
 
 - **Python:** `tools.execute(..., execution_context=...)` uses an explicit
   keyword parameter. An older API without that parameter raises `TypeError`
@@ -384,6 +392,12 @@ Python and Rust do not need an equivalent application-side helper for this API:
 - **Rust:** the execution-context builder method and fields are checked at
   compile time. Code using them does not compile against an older API that
   lacks them.
+- **Go:** the new option is checked at compile time, and its CGo bridge links
+  against the new C export. An older source binding or native library cannot
+  silently accept and discard this option.
+- **C:** use the new declaration in the generated header and link against a
+  library exporting `nemo_relay_tool_call_execute_with_context`. Existing
+  execute symbols remain available; they do not accept context.
 
 These language-level checks do not establish remote worker support. That is
 checked separately through the worker handshake described below.
@@ -399,11 +413,10 @@ indicates transport support, not permission to execute.
 
 The native dynamic-plugin `v1.0` ABI remains frozen and cannot carry this field.
 A context-bearing call that reaches a legacy native tool execution intercept
-fails explicitly instead of silently dropping its context. Ordinary in-process
-Rust callbacks are separate from that native plugin ABI. Go and public C APIs
-are not extended by this change. A shared runtime also rejects a context-bearing
-call that reaches a C-registered execution intercept, including a Go intercept
-registered through that bridge, rather than discard the context there.
+fails explicitly instead of silently dropping its context. That frozen plugin
+ABI is separate from ordinary Rust callbacks and the C JSON callback bridge.
+C-registered execution intercepts, including Go intercepts using that bridge,
+receive the same execution context through the extensible JSON envelope.
 
 ## Binding Contract
 

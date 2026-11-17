@@ -5,9 +5,9 @@
 
 use super::*;
 use std::ptr;
-use std::sync::atomic::{AtomicUsize, Ordering};
 
 use nemo_relay_runtime::api::runtime::ToolExecutionContext;
+use nemo_relay_runtime::api::tool::ToolExecutionResult;
 use tokio_stream::StreamExt;
 
 use super::test_support::resolve;
@@ -175,39 +175,53 @@ fn make_request() -> LlmRequest {
 }
 
 #[test]
-fn tool_intercept_rejects_unsupported_execution_context_before_foreign_code() {
+fn tool_intercept_delivers_optional_execution_context_to_foreign_code() {
+    // A C continuation blocks while polling Rust, as in the managed FFI API.
+    let runtime = tokio::runtime::Builder::new_multi_thread()
+        .worker_threads(1)
+        .enable_all()
+        .build()
+        .unwrap();
     unsafe extern "C" fn callback(
         user_data: *mut libc::c_void,
-        _context_json: *const c_char,
-        _next_fn: NemoRelayToolExecNextFn,
-        _next_ctx: *mut libc::c_void,
+        context_json: *const c_char,
+        next_fn: NemoRelayToolExecNextFn,
+        next_ctx: *mut libc::c_void,
     ) -> *mut c_char {
-        // The test retains the Arc until after the wrapper and future finish.
-        unsafe { &*user_data.cast::<AtomicUsize>() }.fetch_add(1, Ordering::SeqCst);
-        ptr::null_mut()
+        let observed: Json =
+            serde_json::from_str(unsafe { CStr::from_ptr(context_json) }.to_str().unwrap())
+                .unwrap();
+        // The test retains this storage until the wrapper and future finish.
+        *unsafe { &*user_data.cast::<Mutex<Option<Json>>>() }
+            .lock()
+            .unwrap() = Some(observed);
+        let args = CString::new(r#"{"changed":true}"#).unwrap();
+        unsafe { next_fn(args.as_ptr(), next_ctx) }
     }
 
-    for supplied in [json!({}), json!({"review": {"reference": "example"}})] {
-        let callbacks = Arc::new(AtomicUsize::new(0));
-        let continuations = Arc::new(AtomicUsize::new(0));
-        let next_calls = continuations.clone();
-        let next: ToolExecutionNextFn = Arc::new(move |_| {
-            next_calls.fetch_add(1, Ordering::SeqCst);
-            Box::pin(async { Err(FlowError::Internal("unexpected continuation".into())) })
+    for supplied in [
+        None,
+        Some(json!({})),
+        Some(json!({"review": {"reference": "example"}})),
+    ] {
+        let observed = Arc::new(Mutex::new(None::<Json>));
+        let next: ToolExecutionNextFn = Arc::new(move |args| {
+            Box::pin(async move {
+                Ok(ToolExecutionResult {
+                    result: args,
+                    annotation: None,
+                })
+            })
         });
         let intercept =
-            wrap_tool_exec_intercept_fn(callback, Arc::as_ptr(&callbacks).cast_mut().cast(), None);
-        let context =
-            ToolExecutionContext::new("example", json!({})).with_execution_context(Some(supplied));
-        let error = resolve(intercept(context, next)).unwrap_err();
-        assert!(matches!(error, FlowError::InvalidArgument(_)));
-        assert!(
-            error
-                .to_string()
-                .contains("does not support execution context")
-        );
-        assert_eq!(callbacks.load(Ordering::SeqCst), 0);
-        assert_eq!(continuations.load(Ordering::SeqCst), 0);
+            wrap_tool_exec_intercept_fn(callback, Arc::as_ptr(&observed).cast_mut().cast(), None);
+        let context = ToolExecutionContext::new("example", json!({}))
+            .with_execution_context(supplied.clone());
+        let outcome = runtime.block_on(intercept(context, next)).unwrap();
+        assert_eq!(outcome.result, json!({"changed":true}));
+        let captured = observed.lock().unwrap().take().unwrap();
+        assert_eq!(captured.get("execution_context"), supplied.as_ref());
+        assert_eq!(captured["args"], json!({}));
     }
 }
 
