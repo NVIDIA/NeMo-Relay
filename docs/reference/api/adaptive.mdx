@@ -1,6 +1,6 @@
 ---
 title: "Adaptive"
-description: ""
+description: "Manual adaptive runtime, ACG, hints, and response cache APIs."
 position: 5
 ---
 {/* SPDX-FileCopyrightText: Copyright (c) 2026, NVIDIA CORPORATION & AFFILIATES. All rights reserved.
@@ -10,6 +10,10 @@ Use this reference for manual adaptive runtime APIs. For plugin-managed
 configuration, start with [Adaptive Configuration](/configure-plugins/adaptive/configuration).
 
 ## Adaptive Configuration
+
+An `AdaptiveConfig` combines state, telemetry, tool parallelism, hints, ACG,
+and response cache settings. Use `AdaptiveRuntime` to register the configured
+components before application work and shut them down afterward.
 
 <a id="configuration-manual-api" />
 

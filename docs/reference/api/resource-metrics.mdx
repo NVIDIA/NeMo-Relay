@@ -1,6 +1,6 @@
 ---
 title: "Resource Metrics"
-description: ""
+description: "Resource snapshot fields, units, collection contracts, and platform support."
 position: 7
 ---
 {/* SPDX-FileCopyrightText: Copyright (c) 2026, NVIDIA CORPORATION & AFFILIATES. All rights reserved.
@@ -672,7 +672,7 @@ there before calling `collect()`.
 Collection runs OS and driver queries on a worker so they do not block your
 async runtime. Rust requires a Tokio runtime, and Python requires an active
 async event loop. Cancelling the wait does not stop a query already running.
-That query may finish and update the baseline used to calculate rates.
+That query can finish and update the baseline used to calculate rates.
 
 Python returns the timestamp as a timezone-aware `datetime`. Rust returns a
 UTC `DateTime`. Node.js returns a Promise. Await it to get a snapshot with an
