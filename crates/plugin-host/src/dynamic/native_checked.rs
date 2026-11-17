@@ -565,6 +565,46 @@ impl HostRuntime {
                 );
                 null()
             }
+            "pricing.estimate_cost" => {
+                // Prices with the host's active catalog; a plugin's own pricing
+                // crate copy would hold an empty process-local resolver.
+                let model = string("model")?;
+                let provider = optional("provider")
+                    .filter(|value| !value.is_null())
+                    .map(|value| {
+                        value
+                            .as_str()
+                            .map(str::to_owned)
+                            .ok_or_else(|| err("pricing provider must be a string"))
+                    })
+                    .transpose()?;
+                let usage: nemo_relay_types::codec::response::Usage =
+                    serde_json::from_value(args.get("usage").cloned().unwrap_or(Json::Null))
+                        .map_err(err)?;
+                let estimate = nemo_relay_runtime::pricing::active_pricing_resolver()
+                    .estimate_cost_for_provider(provider.as_deref(), model, &usage);
+                serde_json::to_value(estimate).map_err(err)
+            }
+            "pricing.estimate_response_cost" => {
+                // Applies the host's full response pricing rules, including
+                // provider-specific billing, without replacing a reported cost.
+                let provider = optional("provider")
+                    .map(|value| {
+                        value
+                            .as_str()
+                            .map(str::to_owned)
+                            .ok_or_else(|| err("pricing provider must be a string"))
+                    })
+                    .transpose()?;
+                let mut response: nemo_relay_types::codec::response::AnnotatedLlmResponse =
+                    serde_json::from_value(args.get("response").cloned().unwrap_or(Json::Null))
+                        .map_err(err)?;
+                nemo_relay_runtime::pricing::attach_estimated_cost_for_provider(
+                    &mut response,
+                    provider.as_deref(),
+                );
+                serde_json::to_value(response.usage.and_then(|usage| usage.cost)).map_err(err)
+            }
             _ => Err(err(format!(
                 "unsupported native runtime operation '{operation}'"
             ))),
