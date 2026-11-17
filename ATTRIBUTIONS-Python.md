@@ -7223,7 +7223,7 @@ Apache License
    limitations under the License.
 ```
 
-## opentelemetry-api (1.45.1)
+## opentelemetry-api (1.45.2)
 
 ### Licenses
 License: `Apache-2.0`
@@ -7643,7 +7643,7 @@ Apache License
    limitations under the License.
 ```
 
-## opentelemetry-sdk (1.45.1)
+## opentelemetry-sdk (1.45.2)
 
 ### Licenses
 License: `Apache-2.0`
@@ -7853,7 +7853,7 @@ Apache License
    limitations under the License.
 ```
 
-## opentelemetry-semantic-conventions (0.66b1)
+## opentelemetry-semantic-conventions (0.66b2)
 
 ### Licenses
 License: `Apache-2.0`
