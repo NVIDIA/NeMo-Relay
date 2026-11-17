@@ -1515,6 +1515,9 @@ struct ChoiceState {
     role: Option<String>,
     content: String,
     has_content: bool,
+    /// Non-standard reasoning text streamed by OpenAI-compatible servers, keyed by the delta field
+    /// name (`reasoning_content` or `reasoning`) so the assembled message keeps the wire name.
+    reasoning: std::collections::BTreeMap<&'static str, String>,
     /// Tool calls keyed by their `index` within the choice. Each tool call's `arguments` is
     /// streamed as a JSON-encoded string accumulated fragment-by-fragment.
     tool_calls: std::collections::BTreeMap<u64, ToolCallState>,
@@ -1633,6 +1636,11 @@ impl ChoiceState {
             self.content.push_str(content);
             self.has_content = true;
         }
+        for field in ["reasoning_content", "reasoning"] {
+            if let Some(reasoning) = delta.get(field).and_then(Json::as_str) {
+                self.reasoning.entry(field).or_default().push_str(reasoning);
+            }
+        }
         self.observe_tool_calls(delta);
     }
 
@@ -1671,6 +1679,9 @@ impl ChoiceState {
             message.insert("content".to_string(), Json::String(self.content));
         } else {
             message.insert("content".to_string(), Json::Null);
+        }
+        for (field, reasoning) in self.reasoning {
+            message.insert(field.to_string(), Json::String(reasoning));
         }
         if !self.tool_calls.is_empty() {
             let tool_calls: Vec<Json> = self
