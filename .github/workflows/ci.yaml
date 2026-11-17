@@ -78,6 +78,14 @@ jobs:
           set -euo pipefail
           full_ci=false
           publish_packages=false
+          pull_request_number=""
+          if [[ "$REF_NAME" == pull-request/* ]]; then
+            pull_request_number="${REF_NAME#pull-request/}"
+            if [[ ! "$pull_request_number" =~ ^[1-9][0-9]*$ ]]; then
+              echo "Error: invalid pull request branch: $REF_NAME" >&2
+              exit 1
+            fi
+          fi
 
           if [[ "$REF_TYPE" == "tag" || "$REF_NAME" == "$DEFAULT_BRANCH" ]]; then
             full_ci=true
@@ -88,11 +96,13 @@ jobs:
 
           {
             printf 'full_ci=%s\n' "$full_ci"
+            printf 'pull_request_number=%s\n' "$pull_request_number"
             printf 'publish_packages=%s\n' "$publish_packages"
           } >> "$GITHUB_OUTPUT"
 
     outputs:
       full_ci: ${{ steps.policy.outputs.full_ci }}
+      pull_request_number: ${{ steps.policy.outputs.pull_request_number }}
       is_pr: ${{ startsWith(github.ref_name, 'pull-request/') }}
       is_main_branch: ${{ github.ref_name == 'main' }}
       has_skip_ci_label: ${{ steps.get-pr-info.outcome == 'success' && contains(fromJSON(steps.get-pr-info.outputs.pr-info).labels.*.name, 'skip-ci') || false }}
@@ -158,6 +168,7 @@ jobs:
     secrets:
       CODECOV_TOKEN: ${{ secrets.CODECOV_TOKEN }}
     with:
+      pull_request_number: ${{ needs.prepare.outputs.pull_request_number }}
       run_package: ${{ needs.ci_changes.outputs.run_rust_package == 'true' }}
 
   ci_go:
@@ -169,6 +180,8 @@ jobs:
       contents: read
     secrets:
       CODECOV_TOKEN: ${{ secrets.CODECOV_TOKEN }}
+    with:
+      pull_request_number: ${{ needs.prepare.outputs.pull_request_number }}
 
   ci_node:
     name: Node.js
@@ -180,6 +193,7 @@ jobs:
     secrets:
       CODECOV_TOKEN: ${{ secrets.CODECOV_TOKEN }}
     with:
+      pull_request_number: ${{ needs.prepare.outputs.pull_request_number }}
       ref_type: ${{ github.ref_type }}
       ref_name: ${{ github.ref_name }}
       run_package: ${{ needs.ci_changes.outputs.run_node_package == 'true' }}
@@ -204,6 +218,7 @@ jobs:
     secrets:
       CODECOV_TOKEN: ${{ secrets.CODECOV_TOKEN }}
     with:
+      pull_request_number: ${{ needs.prepare.outputs.pull_request_number }}
       ref_type: ${{ github.ref_type }}
       ref_name: ${{ github.ref_name }}
       run_package: ${{ needs.ci_changes.outputs.run_python_package == 'true' }}
@@ -309,6 +324,7 @@ jobs:
         uses: codecov/codecov-action@fb8b3582c8e4def4969c97caa2f19720cb33a72f # v7.0.0
         with:
           token: ${{ secrets.CODECOV_TOKEN }}
+          override_pr: ${{ needs.prepare.outputs.pull_request_number }}
           run_command: empty-upload
           fail_ci_if_error: true
 

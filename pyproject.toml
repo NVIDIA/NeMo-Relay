@@ -138,6 +138,7 @@ rust = true
 auditwheel = true
 
 [tool.uv]
+environments = ["python_full_version >= '3.11.5'"]
 managed = true
 default-groups = ["dev", "test"]
 package = true

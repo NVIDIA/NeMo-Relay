@@ -1,0 +1,250 @@
+---
+title: "Adaptive"
+description: "Manual adaptive runtime, ACG, hints, and response cache APIs."
+position: 5
+---
+{/* SPDX-FileCopyrightText: Copyright (c) 2026, NVIDIA CORPORATION & AFFILIATES. All rights reserved.
+SPDX-License-Identifier: Apache-2.0 */}
+
+Use this reference for manual adaptive runtime APIs. For plugin-managed
+configuration, start with [Adaptive Configuration](/configure-plugins/adaptive/configuration).
+
+## Adaptive Configuration
+
+An `AdaptiveConfig` combines state, telemetry, tool parallelism, hints, ACG,
+and response cache settings. Use `AdaptiveRuntime` to register the configured
+components before application work and shut them down afterward.
+
+<a id="configuration-manual-api" />
+
+### Manual API
+
+Use the manual runtime API when an integration needs to own adaptive lifecycle
+directly instead of activating the top-level plugin component.
+
+<Tabs>
+<Tab title="Python" language="python">
+```python
+import asyncio
+
+import nemo_relay
+
+adaptive_config = nemo_relay.adaptive.AdaptiveConfig(
+    agent_id="planner",
+    state=nemo_relay.adaptive.StateConfig(
+        backend=nemo_relay.adaptive.BackendSpec.in_memory(),
+    ),
+    telemetry=nemo_relay.adaptive.TelemetryConfig(
+        subscriber_name="adaptive.telemetry",
+        learners=["tool_parallelism"],
+    ),
+    tool_parallelism=nemo_relay.adaptive.ToolParallelismConfig(mode="observe_only"),
+    adaptive_hints=nemo_relay.adaptive.AdaptiveHintsConfig(
+        inject_body_path="nvext.agent_hints",
+    ),
+    acg=nemo_relay.adaptive.AcgConfig(provider="passthrough"),
+)
+
+runtime = nemo_relay.adaptive.AdaptiveRuntime(adaptive_config.to_dict())
+async def main() -> None:
+    await runtime.register()
+    try:
+        # Run instrumented application work here.
+        runtime.wait_for_idle()
+    finally:
+        await runtime.shutdown()
+
+asyncio.run(main())
+```
+</Tab>
+
+<Tab title="Node.js" language="node">
+The Node.js binding exposes `adaptive.AdaptiveRuntime` for manual lifecycle
+ownership. Construct it from `adaptiveConfig` in the
+[Per-Language Plugin Configuration example](/configure-plugins/adaptive/configuration#per-language-plugin-configuration),
+then call `register()`, `waitForIdle()`, and `shutdown()`.
+</Tab>
+
+<Tab title="Rust" language="rust">
+<Code src="_code/rust/adaptive_configuration.rs" language="rust" maxLines={0} />
+</Tab>
+
+</Tabs>
+
+**Expected outcome:** Registration and shutdown complete without error. These
+examples do not print output.
+
+## Adaptive Cache Governor (ACG)
+
+<a id="acg-manual-api" />
+
+### Manual API
+
+Use the manual runtime API when an integration needs to own adaptive lifecycle
+directly instead of activating the top-level plugin component.
+
+<Tabs>
+<Tab title="Python" language="python">
+```python
+import asyncio
+
+import nemo_relay
+
+adaptive_config = nemo_relay.adaptive.AdaptiveConfig(
+    agent_id="planner",
+    state=nemo_relay.adaptive.StateConfig(
+        backend=nemo_relay.adaptive.BackendSpec.in_memory(),
+    ),
+    telemetry=nemo_relay.adaptive.TelemetryConfig(learners=["acg"]),
+    acg=nemo_relay.adaptive.AcgConfig(provider="anthropic"),
+)
+
+runtime = nemo_relay.adaptive.AdaptiveRuntime(adaptive_config.to_dict())
+async def main() -> None:
+    await runtime.register()
+    try:
+        # Run instrumented application work here.
+        runtime.wait_for_idle()
+    finally:
+        await runtime.shutdown()
+
+asyncio.run(main())
+```
+</Tab>
+
+<Tab title="Node.js" language="node">
+The Node.js binding exposes ACG through the adaptive plugin component helpers.
+Use the [Plugin Configuration example](/configure-plugins/adaptive/acg#plugin-configuration)
+when activating ACG from Node.js.
+</Tab>
+
+<Tab title="Rust" language="rust">
+<Code src="_code/rust/acg.rs" language="rust" maxLines={0} />
+</Tab>
+
+</Tabs>
+
+**Expected outcome:** Registration and shutdown complete without error. These
+examples do not print output.
+
+## Adaptive Hints
+
+<a id="adaptive-hints-manual-api" />
+
+### Manual API
+
+Use the manual runtime API when an integration needs to own adaptive lifecycle
+directly instead of activating the top-level plugin component.
+
+<Tabs>
+<Tab title="Python" language="python">
+```python
+import asyncio
+
+import nemo_relay
+
+adaptive_config = nemo_relay.adaptive.AdaptiveConfig(
+    agent_id="planner",
+    state=nemo_relay.adaptive.StateConfig(
+        backend=nemo_relay.adaptive.BackendSpec.in_memory(),
+    ),
+    telemetry=nemo_relay.adaptive.TelemetryConfig(learners=["tool_parallelism"]),
+    adaptive_hints=nemo_relay.adaptive.AdaptiveHintsConfig(
+        inject_body_path="nvext.agent_hints",
+    ),
+)
+
+runtime = nemo_relay.adaptive.AdaptiveRuntime(adaptive_config.to_dict())
+async def main() -> None:
+    await runtime.register()
+    try:
+        # Run instrumented application work here.
+        nemo_relay.adaptive.set_latency_sensitivity(8)
+    finally:
+        await runtime.shutdown()
+
+asyncio.run(main())
+```
+</Tab>
+
+<Tab title="Node.js" language="node">
+The Node.js binding exposes Adaptive Hints through the adaptive plugin component
+helpers. Use the [Plugin Configuration example](/configure-plugins/adaptive/adaptive-hints#plugin-configuration)
+when activating Adaptive Hints from Node.js.
+</Tab>
+
+<Tab title="Rust" language="rust">
+<Code src="_code/rust/adaptive_hints.rs" language="rust" maxLines={0} />
+</Tab>
+
+</Tabs>
+
+**Expected outcome:** Registration and shutdown complete without error. These
+examples do not print output.
+
+## Response Cache
+
+<a id="response-cache-manual-api" />
+
+### Manual API
+
+Use the manual runtime API when an integration needs to own the adaptive
+lifecycle directly instead of activating the top-level plugin component.
+
+<Tabs>
+<Tab title="Python" language="python">
+```python
+import asyncio
+
+import nemo_relay
+
+adaptive_config = nemo_relay.adaptive.AdaptiveConfig(
+    response_cache=nemo_relay.adaptive.ResponseCacheConfig(namespace="dev-harness"),
+)
+
+async def main() -> None:
+    runtime = nemo_relay.adaptive.AdaptiveRuntime(adaptive_config.to_dict())
+    await runtime.register()
+    try:
+        # Run instrumented application work here.
+        runtime.wait_for_idle()
+    finally:
+        await runtime.shutdown()
+
+asyncio.run(main())
+```
+</Tab>
+
+<Tab title="Node.js" language="node">
+```js
+const adaptive = require("nemo-relay-node/adaptive");
+
+const adaptiveConfig = adaptive.defaultConfig();
+adaptiveConfig.responseCache = adaptive.responseCacheConfig({
+  namespace: "dev-harness",
+});
+
+const runtime = new adaptive.AdaptiveRuntime(adaptiveConfig);
+void (async () => {
+  await runtime.register();
+  try {
+    // Run instrumented application work here.
+    runtime.waitForIdle();
+  } finally {
+    await runtime.shutdown();
+  }
+})().catch((error) => {
+  console.error(error);
+  process.exitCode = 1;
+});
+```
+</Tab>
+
+<Tab title="Rust" language="rust">
+<Code src="_code/rust/response_cache.rs" language="rust" maxLines={0} />
+</Tab>
+
+</Tabs>
+
+**Expected outcome:** Registration and shutdown complete without error. These
+examples do not print output.
