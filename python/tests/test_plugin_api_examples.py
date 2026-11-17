@@ -158,7 +158,7 @@ def test_displayed_source_inventory_has_registered_coverage() -> None:
     included_sources = set()
     for test_path in [
         "crates/sdk/tests/documentation_examples.rs",
-        "crates/adaptive/tests/integration/runtime_integration_tests.rs",
+        "crates/adaptive/tests/documentation_examples.rs",
     ]:
         test_file = REPOSITORY_ROOT / test_path
         for source in re.findall(r'include!\("([^"]+)"\)', test_file.read_text()):
