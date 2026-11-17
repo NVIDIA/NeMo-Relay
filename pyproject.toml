@@ -142,8 +142,8 @@ managed = true
 default-groups = ["dev", "test"]
 package = true
 override-dependencies = [
-    "opentelemetry-api>=1.45.1",
-    "opentelemetry-sdk>=1.45.1",
+    "opentelemetry-api>=1.45.2",
+    "opentelemetry-sdk>=1.45.2",
     # LiteLLM caps filelock below 4; GHSA-v4x8-3wr5-3wq8 requires >=4.2.1.
     # Remove this override when LiteLLM permits the patched release.
     "filelock>=4.2.1,<5",
