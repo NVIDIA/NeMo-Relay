@@ -72,21 +72,34 @@ fn v1_0_plugin_loads_on_current_and_future_hosts() {
 #[test]
 fn newer_sdk_requires_newer_host_and_selects_its_own_module() {
     let error = fixture("future").err().unwrap();
-    assert!(error.contains("requires native API v1.1"), "{error}");
+    // This intentionally different historical toy 1.1 contract remains frozen.
+    assert!(error.contains("incompatible native contract"), "{error}");
     assert_host_accepts("future-host", "future");
 }
 /// Different package releases must load the same native contract without rebuilding its binary.
 #[test]
 fn package_release_versions_do_not_define_binary_compatibility() {
+    // The independently built alternate package compiles the current SDK source,
+    // so its native contract advances with this SDK, not its 9.x release number.
     let (descriptor, manifest) = fixture("package_next").unwrap();
-    validate_descriptor(&descriptor, Api::new(1, 0), "fixture", Api::new(1, 0)).unwrap();
+    assert_eq!(descriptor.native_api, abi::NATIVE_API_VERSION);
+    validate_descriptor(
+        &descriptor,
+        abi::NATIVE_API_VERSION,
+        "fixture",
+        abi::NATIVE_API_VERSION,
+    )
+    .unwrap();
+    let new_factory = unsafe { bootstrap::factory_v1_1(manifest) }.unwrap();
+    assert!(new_factory.create().unwrap().allows_multiple_components());
+    // The legacy-author export still exercises every unchanged baseline surface.
     let factory = unsafe { bootstrap::factory(manifest) }.unwrap();
     behavior::assert_behavior(factory.create().unwrap());
-    assert_host_accepts("future-host", "package_next");
     for plugin in ["baseline", "package_next"] {
         assert_host_accepts("package-next-host", plugin);
     }
 }
+
 #[test]
 fn reject_different_major_and_missing_module_before_factory_use() {
     let error = fixture("major").err().unwrap();
@@ -161,4 +174,17 @@ fn changed_generated_field_offsets_fail_even_when_source_size_and_alignment_matc
     assert_ne!(baseline_schema, reordered_schema);
     let error = unsafe { bootstrap::check(reordered) }.err().unwrap();
     assert!(error.contains("incompatible native contract"), "{error}");
+}
+
+/// A real v1.1 binary loads only on a host checking its exact new contract.
+#[test]
+fn actual_v1_1_plugin_uses_new_factory_and_old_host_refuses_before_construction() {
+    let (descriptor, manifest) = fixture("native11").unwrap();
+    assert_eq!(descriptor.native_api, Api::new(1, 1));
+    let factory = unsafe { bootstrap::factory_v1_1(manifest) }.unwrap();
+    let plugin = factory.create().unwrap();
+    assert!(plugin.allows_multiple_components());
+    assert!(plugin.validate(abi::Json::Null).is_empty());
+    assert!(unsafe { bootstrap::factory(manifest) }.is_err());
+    assert_host_accepts("baseline-host", "native11");
 }

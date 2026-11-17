@@ -52,7 +52,7 @@ registration APIs to produce pending marks, and return the canonical outcome
 from every registered callback. Use a
 [mark event sanitizer](/reference/event-sanitizers) when the emitted pending
 mark's `data`, `category_profile`, or `metadata` must be sanitized. Public APIs,
-native `v1.0` plugins, and `nvidia.nemo.relay.worker.v1` workers require canonical
+native plugins, and `nvidia.nemo.relay.worker.v1` workers require canonical
 tool callback and intercept returns.
 
 ## Event and Exporter Projection
@@ -201,7 +201,7 @@ context carries the following fields:
 | `tool_name` | Name of the tool being executed. |
 | `args` | JSON argument payload entering this intercept. |
 | `tool_call_id` | Provider-issued correlation identifier recorded on the managed tool call, or absent when the call did not record one. |
-| `execution_context` | Optional application-supplied JSON object for execution intercepts. See [Application Execution Context](#application-execution-context) for its scope and trust requirements. |
+| `execution_context` | Optional application-supplied JSON object for execution intercepts. See [Application Execution Context](/instrument-applications/advanced-guide#application-execution-context) for its scope and trust requirements. |
 
 `tool_call_id` is the same identifier that Relay records on tool lifecycle
 events. An intercept that completes execution itself, without invoking the
@@ -257,195 +257,10 @@ optional `tool_call_id` in `ToolExecutionInvocation`.
 
 ### Application Execution Context
 
-An application can adopt execution middleware incrementally while retaining its
-existing human approval flow. For example, it can supply a reference to a
-completed application review separately from the tool's business arguments. A
-middleware component that understands that review can avoid repeating its own
-review, then call `next` so the remaining middleware and tool callback still run.
-Relay does not interpret the reference or change the approval flow itself.
-
-The application APIs carry the same optional value through each binding:
-
-| Binding | Supply context when executing | Read it in execution middleware |
-| --- | --- | --- |
-| Rust | `ToolCallExecuteParams::builder().execution_context(value)` | `context.execution_context()` |
-| Python | `tools.execute(..., execution_context=value)` | `context.execution_context` |
-| Node.js | `executionContext` in `typedToolExecute` options | `context.executionContext` |
-| Go | `WithToolExecutionContext(value)` on `ToolCallExecute` or `tools.Execute` | `context.ExecutionContext` (`json.RawMessage`) |
-| C | `execution_context_json` on `nemo_relay_tool_call_execute_with_context` | Optional `execution_context` property in the callback's context JSON |
-
-Rust and Python worker SDKs expose the same optional context on their tool
-execution callback. The C entry point is additive: existing execute functions
-retain their signatures and omit context. Go rejects the option on manual
-`ToolCall` and `ToolCallEnd`, where execution middleware does not run.
-
-The value follows the standard `ApplicationExecutionContext` JSON Schema. Its
-optional `host_approval` field asserts that the application has already verified
-human approval for an exact operation:
-
-```json
-{
-  "host_approval": {
-    "version": 1,
-    "source": "example.application",
-    "approval_id": "approval-123",
-    "tool_name": "files.write",
-    "approved_arguments": {"path": "notes.txt", "content": "Hello"}
-  },
-  "com.example.audit": {"request_id": "request-456"}
-}
-```
-
-When `host_approval` is present, it asserts completed affirmative human approval
-and all five fields are required. Version is integer `1`; source, approval ID and tool name
-are nonempty strings. Approved arguments may be any JSON value, matching tool
-arguments. They record the approved input so middleware can compare it with its
-current input after earlier middleware has rewritten arguments. Denied or
-pending operations must stop in the application; this field is not an instruction
-to Relay to enforce a review outcome.
-
-Both the context and the approval object allow additional properties. The obsolete
-`host_approval.decision` key is reserved and rejected regardless of value, so an
-old denied claim cannot become an ignored extension interpreted as approval. Unknown
-properties survive transport and isolated snapshots, but confer no authority.
-Use namespaced extension keys, such as `com.example.audit`, to reduce collisions
-with future standard fields. Omission means no context; `{}` is a supplied empty
-context with no approval assertion. An explicitly null or malformed
-`host_approval` is rejected rather than treated as absent.
-
-The entire context, including extensions, must serialize to at most **16 KiB**
-of UTF-8 JSON and contain at most **64 nested container levels**. The root object
-counts as level 1; nested objects and arrays add one level each. Limits are checked
-before JSON Schema traversal. Invalid known fields fail before middleware or the
-tool runs. Structural validation does not authenticate an approval.
-
-The canonical schema is maintained with the shared Rust types in
-[`application-execution-context.schema.json`](../../crates/types/schemas/application-execution-context.schema.json).
-Rust exposes `ApplicationExecutionContext` and `HostApproval`; other bindings and
-worker SDKs expose the same fields using their native typing conventions.
-
-Rust callers can construct the checked type with
-`ApplicationExecutionContext::try_from(json_value)?` before passing it to the
-managed execution builder. Admission also revalidates values assembled or
-modified through public Rust fields. Python keeps dictionary-compatible typed
-shapes; additional properties remain accepted at runtime despite Python 3.11's
-`TypedDict` limitations. Go offers `WithApplicationExecutionContext` for its typed
-model and retains `WithToolExecutionContext` for schema-validated raw JSON.
-
-This field has a narrower lifetime and audience than event metadata:
-
-- Only execution intercepts receive it. Tool arguments, request intercepts,
-  conditional guardrails, and the final tool callback do not receive it as a
-  separate parameter.
-- Each intercept receives an isolated snapshot. Changes to a binding-local
-  object do not change what another intercept sees. Calling `next` can rewrite
-  business arguments, but cannot replace the execution context.
-- A nested managed tool call has no execution context unless its caller supplies
-  one explicitly. Scope metadata does not populate it automatically.
-- Relay does not automatically copy it to lifecycle events, results,
-  annotations, or telemetry. Application and plugin code can still disclose it
-  explicitly, so avoid logging it or adding credentials to it.
-
-Application-supplied does **not** mean verified authorization. Relay does not
-verify a human decision, caller identity, signature, expiry, or operation binding
-inside this object. The application must validate its own approval proof and
-bind it to the exact tool, business arguments, owner and applicable policy before
-supplying a review claim. Do not populate it from a model-generated `approved`
-flag. An intercept must also check that the claim still covers its current
-arguments, because earlier middleware may have rewritten them. Missing,
-unrecognized or mismatched claims should use that component's normal review
-path; they must not imply approval. The application must stop a human-denied
-operation rather than ask middleware to override that denial. If human approval
-is mandatory and the operation changes, the application must reject it or obtain
-fresh approval; a component's automated review does not renew human consent.
-
-The following integration sketch keeps those application-specific checks
-explicit. `validate_existing_approval`, `approval_covers_call` and
-`perform_component_review` are application-defined functions; Relay does not
-implement them. `validate_existing_approval` returns the standard five-field
-`host_approval` assertion only after verifying the application-specific receipt;
-it includes the exact tool name and approved arguments. Relay does not prescribe
-the underlying receipt or signature format.
-
-```python
-import nemo_relay
-from nemo_relay import tools
-
-
-async def execute_after_application_approval(name, args, receipt, implementation):
-    # Raise unless the real receipt approves this owner and exact operation,
-    # remains valid, and satisfies the application's current policy.
-    reviewed = validate_existing_approval(receipt, name, args)
-
-    async def execute_reviewed(actual_args):
-        # Later middleware can rewrite arguments. Revalidate at the actual
-        # execution boundary; automated review cannot expand human consent.
-        validate_existing_approval(receipt, name, actual_args)
-        return await implementation(actual_args)
-
-    return await tools.execute(
-        name,
-        args,
-        execute_reviewed,
-        execution_context={"host_approval": reviewed},
-    )
-
-
-async def review(context, next_call):
-    supplied = context.execution_context or {}
-    if not approval_covers_call(
-        supplied.get("host_approval"), context.tool_name, context.args
-    ):
-        # This function must raise or deny when its policy does not allow the call.
-        await perform_component_review(context.tool_name, context.args)
-
-    # Skip only this component's repeated review, never the remaining chain.
-    downstream = await next_call(context.args)
-    return nemo_relay.ToolExecutionInterceptOutcome(
-        result=downstream.result, annotation=downstream.annotation
-    )
-
-
-nemo_relay.intercepts.register_tool_execution("application-review", 10, review)
-```
-
-#### Transport Compatibility
-
-**Application package requirements**
-
-Use compliant Relay 1.0 components built from the matching package set. For
-Node.js this includes both the JavaScript/TypeScript wrapper and its compiled
-native binding; do not mix them with earlier development snapshots. Execution
-context is part of the required API contract, not an optionally detected feature.
-Use `executionContext` directly in the managed execute options.
-
-The same matching-version requirement applies to Rust, Python, Go and C. Rebuild
-bindings and workers together when the unreleased 1.0 baseline changes. This
-requirement does not replace input validation: context must still be an object
-within the size and nesting limits, and supplying it grants no authorization.
-
-**Worker-side compatibility checks**
-
-Execution-context support is required by
-`nvidia.nemo.relay.worker.v1@1.0.0`, not an optional SDK capability. Hosts and
-workers check protocol identity and exact contract version before registration.
-Every conforming worker must preserve supplied context, including `{}`. The
-application can still omit context on any call, and callback signatures remain
-unchanged. The handshake establishes the declared protocol contract, not
-permission to execute or proof of application approval.
-
-Relay 1.0 has not yet been released. Rebuild and repackage development workers
-with the matching SDK rather than relying on compatibility with an earlier
-development snapshot. An obsolete binary that advertises the same `1.0.0`
-identity cannot be detected by version alone; the contract requires it to be
-rebuilt. Separately versioned diagnostic contracts are unchanged.
-
-The native dynamic-plugin `v1.0` ABI remains frozen and cannot carry this field.
-A context-bearing call that reaches a legacy native tool execution intercept
-fails explicitly instead of silently dropping its context. That frozen plugin
-ABI is separate from ordinary Rust callbacks and the C JSON callback bridge.
-C-registered execution intercepts, including Go intercepts using that bridge,
-receive the same execution context through the extensible JSON envelope.
+Applications can supply invocation-local context separately from tool arguments.
+See [Application Execution Context in Add Middleware](/instrument-applications/advanced-guide#application-execution-context)
+for the structured schema, binding APIs, approval example, trust requirements,
+and transport compatibility.
 
 ## Binding Contract
 
@@ -465,7 +280,7 @@ Execution intercepts add lifecycle-owned pending marks to that shape:
 | Surface | Execution-intercept Outcome |
 | --- | --- |
 | Python | `ToolExecutionInterceptOutcome` |
-| Rust and native `v1.0` SDK | `ToolExecutionInterceptOutcome` |
+| Rust and native SDKs | `ToolExecutionInterceptOutcome` |
 | Go | `ToolExecutionInterceptOutcome` |
 | Node.js | `{ result, annotation?, pendingMarks? }`; JavaScript pending-mark DTOs use `categoryProfile` |
 | Public C | Canonical JSON with `result`, optional `annotation`, and optional `pending_marks` |
@@ -474,7 +289,7 @@ Execution intercepts add lifecycle-owned pending marks to that shape:
 Canonical JSON uses `annotation`, `pending_marks`, and `category_profile`
 across bindings.
 
-Native plugins declare `compat.native_api = "v1.0"`. Their build SDK sets the
+Native plugins declare `compat.native_api = "v1.1"`. Their build SDK sets the
 minimum host contract they require. The `compat.relay` range selects supported
 Relay releases. Refer to [Native ABI Reference](/build-plugins/native/native-abi-reference).
 Workers use `nvidia.nemo.relay.worker.v1`, contract version `1.0.0`.

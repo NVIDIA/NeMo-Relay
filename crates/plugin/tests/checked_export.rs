@@ -35,7 +35,7 @@ fn checked_bootstrap_does_not_construct_author_state() {
     let (descriptor, manifest) = unsafe { bootstrap::check(raw) }.unwrap();
     assert_eq!(descriptor.native_api, NATIVE_API_VERSION);
     assert_eq!(descriptor.plugin_kind, "checked_macro_fixture");
-    let factory = unsafe { bootstrap::factory(manifest) }.unwrap();
+    let factory = unsafe { bootstrap::factory_v1_1(manifest) }.unwrap();
     assert_eq!(CONSTRUCTED.load(Ordering::SeqCst), 0);
     let plugin = factory.create().unwrap();
     assert!(!plugin.allows_multiple_components());

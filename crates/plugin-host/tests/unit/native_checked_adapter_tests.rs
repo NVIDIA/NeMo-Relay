@@ -72,8 +72,9 @@ async fn shutdown_drains_synchronous_runtime_calls_before_collecting_scopes() {
     });
 }
 
+#[derive(Clone)]
 struct CaptureRuntime {
-    base: a::RuntimeBox,
+    base: Arc<a::RuntimeBox>,
     callbacks: Arc<Mutex<Vec<a::Registration>>>,
     component: Arc<Mutex<Option<a::ComponentBox>>>,
 }
@@ -100,6 +101,17 @@ impl a::Runtime for CaptureRuntime {
     }
     fn register_gate(&self, registration: a::Registration) -> a::Result<String> {
         self.base.register_gate(registration)
+    }
+}
+impl b::Runtime for CaptureRuntime {
+    fn baseline(&self) -> a::Result<a::RuntimeBox> {
+        a::Result::Ok(a::RuntimeBox::new(self.clone()))
+    }
+    fn register_tool_execution(&self, _: b::ToolRegistration) -> a::Result<()> {
+        a::Result::Err(a::Error::new(
+            "fixture",
+            "stream fixture must not register tool middleware",
+        ))
     }
 }
 struct Source {
@@ -154,7 +166,7 @@ fn library() -> CheckedNativeLibrary {
     let bytes = std::fs::read(path).expect("run just build-test-plugin-fixtures");
     CheckedNativeLibrary::load(
         NativeLibraryArtifact::new(file.clone(), [(file, bytes)]).unwrap(),
-        "v1.0",
+        abi::NATIVE_API,
         "fixture_native",
     )
     .unwrap()
@@ -170,21 +182,18 @@ async fn stream_cleanup_retries_errors_and_cancels_a_live_pull() {
             let owner = HostRuntime::new("checked-stream-test".into()).unwrap();
             let callbacks = Arc::new(Mutex::new(Vec::new()));
             let bound = Arc::new(Mutex::new(None));
-            let runtime = a::RuntimeBox::new(
-                CaptureRuntime {
-                    base: owner.runtime_box(),
-                    callbacks: callbacks.clone(),
-                    component: bound.clone(),
-                });
-            let registered = library
-                .create_plugin()
-                .unwrap()
-                .register(
-                    into_abi(json!({"stream_only_fixture":!raw, "raw_stream_only_fixture":raw})),
-                    runtime,
-                )
-                .await
-                .unwrap();
+            let runtime = CaptureRuntime {
+                base: Arc::new(owner.runtime_box()),
+                callbacks: callbacks.clone(),
+                component: bound.clone(),
+            };
+            let config = into_abi(json!({"stream_only_fixture":!raw, "raw_stream_only_fixture":raw}));
+            let registered = match library.create_plugin().unwrap() {
+                super::super::native_library::CheckedNativePlugin::V1_0(plugin) =>
+                    plugin.register(config, a::RuntimeBox::new(runtime)).await,
+                super::super::native_library::CheckedNativePlugin::V1_1(plugin) =>
+                    plugin.register(config, b::RuntimeBox::new(runtime)).await,
+            }.unwrap();
             assert!(registered.error.is_none());
             let descriptor = callbacks.lock().unwrap().pop().unwrap();
             let callback = descriptor.callback;
@@ -825,7 +834,7 @@ async fn registration_transactions_reject_late_binding_full_queues_and_cancelled
     let (reply, _) = std::sync::mpsc::sync_channel(1);
     sender
         .try_send(RegistrationRequest {
-            registration: descriptor(),
+            registration: CheckedRegistration::Baseline(descriptor()),
             reply,
         })
         .unwrap();
@@ -904,7 +913,7 @@ async fn completed_registration_factory_releases_late_request_waiters() {
     let foreign = async move {
         sender
             .try_send(RegistrationRequest {
-                registration,
+                registration: CheckedRegistration::Baseline(registration),
                 reply,
             })
             .unwrap();
@@ -1009,9 +1018,9 @@ fn raw_registration_can_submit_callbacks_during_construction_and_polling() {
             let plugin = CheckedPlugin {
                 kind: "raw-registration".into(),
                 resident_path: Default::default(),
-                plugin: Arc::new(a::PluginBox::new(RawPlugin {
+                plugin: Arc::new(super::super::native_library::CheckedNativePlugin::V1_0(a::PluginBox::new(RawPlugin {
                     pending: cancel.then(|| (started.clone(), dropped.clone())),
-                })),
+                }))),
                 diagnostics: nemo_relay_diagnostics::Diagnostics::process_default().clone(),
                 read: false,
                 observer: Default::default(),
@@ -1100,7 +1109,7 @@ async fn sdk_background_tasks_preserve_scope_and_are_cancelled_with_their_compon
     let callbacks = Arc::new(Mutex::new(Vec::new()));
     let bound = Arc::new(Mutex::new(None));
     let runtime = a::RuntimeBox::new(CaptureRuntime {
-        base: host.runtime_box(),
+        base: Arc::new(host.runtime_box()),
         callbacks,
         component: bound.clone(),
     });
@@ -1138,4 +1147,78 @@ async fn sdk_background_tasks_preserve_scope_and_are_cancelled_with_their_compon
         })
         .await;
     host.shutdown().await.unwrap();
+}
+
+impl b::ToolCallback for CallbackStateProbe {
+    fn invoke_tool(
+        &self,
+        _: b::ToolInvocation,
+        _: a::ContinuationBox,
+    ) -> FfiFuture<a::Result<a::ToolExecutionOutcome>> {
+        self.invoked.store(true, Ordering::Release);
+        async {
+            Err(a::Error::new(
+                "fixture",
+                "tool callback must not run during ownership checks",
+            ))
+        }
+        .into_ffi()
+    }
+}
+
+/// The extension must share registration admission, revocation and foreign-owner release.
+#[tokio::test]
+async fn v1_1_tool_runtime_uses_existing_registration_and_cleanup_authority() {
+    let owner = HostRuntime::new("tool-context-authority".into()).unwrap();
+    let extended = owner.runtime_box_v1_1();
+    let baseline = extended.baseline().unwrap();
+    let registration = || b::ToolRegistration {
+        name: "context-registration".into(),
+        priority: 0,
+        callback: b::ToolCallbackBox::new(CallbackStateProbe {
+            dropped: Arc::new(AtomicBool::new(false)),
+            invoked: Arc::new(AtomicBool::new(false)),
+            _runtime: owner.clone(),
+        }),
+    };
+    assert!(extended.register_tool_execution(registration()).is_err());
+    let (sender, mut receiver) = tokio::sync::mpsc::channel(1);
+    *owner.registration.lock().unwrap() = Some(sender);
+    let pending = registration();
+    let caller = owner.runtime_box_v1_1();
+    let registration_thread = std::thread::spawn(move || caller.register_tool_execution(pending));
+    let request = receiver.recv().await.unwrap();
+    assert!(matches!(
+        &request.registration,
+        CheckedRegistration::Tool(_)
+    ));
+    request.reply.send(Ok(())).unwrap();
+    registration_thread.join().unwrap().unwrap();
+    drop(request.registration);
+    owner.registration.lock().unwrap().take();
+    assert!(extended.register_tool_execution(registration()).is_err());
+
+    let dropped = Arc::new(AtomicBool::new(false));
+    let invoked = Arc::new(AtomicBool::new(false));
+    let retained = owner
+        .own_tool_callback(b::ToolCallbackBox::new(CallbackStateProbe {
+            dropped: dropped.clone(),
+            invoked: invoked.clone(),
+            _runtime: owner.clone(),
+        }))
+        .unwrap();
+    retained.with(&owner, |_| ()).unwrap();
+    owner.shutdown().await.unwrap();
+    assert!(dropped.load(Ordering::Acquire));
+    assert!(!invoked.load(Ordering::Acquire));
+    assert!(retained.value.lock().unwrap().is_none());
+    assert!(retained.with(&owner, |_| ()).is_err());
+    assert!(owner.state.lock().unwrap().tool_callbacks.is_empty());
+    assert!(extended.baseline().is_err());
+    assert!(extended.register_tool_execution(registration()).is_err());
+    assert!(
+        baseline
+            .call_sync("scope.active".into(), abi::Json::Null)
+            .is_err()
+    );
 }

@@ -288,8 +288,8 @@ await runtime.error("cache request failed", target="payments.client", fields={"e
 </Tab>
 </Tabs>
 
-Native plugins send logs through the component runtime in the checked `v1.0`
-contract. Workers use the typed `Log` operation in
+Native plugins send logs through the component runtime's frozen `v1.0`
+baseline, retained by native contract `v1.1`. Workers use the typed `Log` operation in
 `nvidia.nemo.relay.worker.v1.RelayHostRuntimeService`.
 
 ## TOML Configuration

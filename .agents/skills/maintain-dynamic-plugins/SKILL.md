@@ -37,7 +37,8 @@ Use this skill for `plugin.kind = "rust_dynamic"`, `plugin.kind = "worker"`,
 - Treat `compat.relay` as the plugin author's supported release range. Verify
   binary layouts or worker handshake independently.
 - The worker protocol is `nvidia.nemo.relay.worker.v1`, contract version `1.0.0`.
-  Native plugins use checked contract `v1.0`. Freeze published module types
+  Native plugins use checked contract `v1.1`, retaining the frozen `v1.0` baseline.
+  Freeze published module types
   and bootstrap layouts. Add minor contracts through versioned modules; plugins
   require at least the native minor of their build SDK. Breaking layouts or
   dependency ABI generations require a native major change, independently of

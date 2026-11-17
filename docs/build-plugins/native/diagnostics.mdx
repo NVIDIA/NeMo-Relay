@@ -212,7 +212,8 @@ or allocator overhead. Caller-owned read results have their own memory cost.
 
 ## SDK and ABI Boundaries
 
-Diagnostics are part of the checked `v1.0` interface. Submission and bounded reads
+Diagnostics remain part of the frozen `v1.0` baseline, also available through
+the `v1.1` interface. Submission and bounded reads
 use typed records and borrowed ABI-safe spans; no core recorder or Tokio object
 crosses the library boundary. The host retains no plugin input pointers.
 Whole-context reads still require a separate host policy grant, and component

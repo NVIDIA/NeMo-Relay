@@ -25,18 +25,19 @@ The native contract is independent of the Relay package release:
 | Version | Purpose |
 |---|---|
 | `compat.relay` | Runtime release range asserted by the plugin author. |
-| `compat.native_api = "v1.0"` | Minimum host contract required by the build SDK. |
+| `compat.native_api = "v1.1"` | Minimum host contract required by the build SDK. |
 | ABI dependency versions | Checked type-layout compatibility. |
 
-The interface crate follows Relay's package release version. Package version
-changes leave the native contract unchanged.
+The interface crate follows Relay's package release version. Package versions do not
+automatically determine the native contract version.
 
 Export the plugin with
 `nemo_relay_plugin!(kind = "your.plugin", || YourPlugin)`. The macro sets the
 required native contract from the SDK used to build the plugin.
 
-A plugin built with SDK contract v1.1 requires a host that supports v1.1 or a
-later minor in major 1. A host that supports v1.1 also supports v1.0 plugins.
+The current SDK builds native contract v1.1 plugins, requiring a host that
+supports v1.1 or a later minor in major 1. A v1.1 host also supports published
+v1.0 plugins.
 Changes that break binary compatibility require a new native major.
 
 Refer to [Native ABI Reference](/build-plugins/native/native-abi-reference) for

@@ -32,6 +32,39 @@ impl Drop for StreamCleanup {
     }
 }
 
+/// Record context to a test-owned sink, never results or lifecycle telemetry.
+fn register_execution_context_fixture(ctx: &mut PluginContext<'_>, path: &str) -> nemo_relay_plugin::Result<()> {
+    let outer_path = std::path::PathBuf::from(path).with_extension("outer.json");
+    let inner_path = std::path::PathBuf::from(path).with_extension("inner.json");
+    ctx.register_tool_execution_intercept("context_outer", 0, move |mut context, next| {
+        let path = outer_path.clone();
+        async move {
+            std::fs::write(path, serde_json::to_vec(&json!({
+                "execution_context": &context.execution_context,
+                "args": &context.args,
+                "tool_call_id": &context.tool_call_id,
+            })).map_err(|error| error.to_string())?).map_err(|error| error.to_string())?;
+            if let Some(supplied) = context.execution_context.as_mut() {
+                supplied.additional_properties.insert("com.example.local_mutation".into(), json!(true));
+            }
+            let mut args = context.args;
+            args["context_rewritten"] = json!(true);
+            next.call(args).await.map(ToolExecutionInterceptOutcome::from)
+        }
+    })?;
+    ctx.register_tool_execution_intercept("context_inner", 10, move |context, next| {
+        let path = inner_path.clone();
+        async move {
+            std::fs::write(path, serde_json::to_vec(&json!({
+                "execution_context": &context.execution_context,
+                "args": &context.args,
+                "tool_call_id": &context.tool_call_id,
+            })).map_err(|error| error.to_string())?).map_err(|error| error.to_string())?;
+            next.call(context.args).await.map(ToolExecutionInterceptOutcome::from)
+        }
+    })
+}
+
 impl NativePlugin for FixtureNativePlugin {
     fn plugin_kind(&self) -> &str {
         "fixture_native"
@@ -72,6 +105,9 @@ impl NativePlugin for FixtureNativePlugin {
                 tokio::time::sleep(std::time::Duration::from_millis(1)).await;
                 ctx.runtime()
                     .emit_mark("fixture-registration-mark", None, None)?;
+            }
+            if let Some(path) = plugin_config.get("context_observation_path").and_then(Json::as_str) {
+                return register_execution_context_fixture(ctx, path).map_err(nemo_relay_plugin::component::PluginError::RegistrationFailed);
             }
             let result: nemo_relay_plugin::Result<()> = async move {
         if plugin_config

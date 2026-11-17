@@ -29,7 +29,7 @@ for the configuration shape.
 | `[integrity]` | The SHA-256 digest of `source.artifact`, plus optional signature evidence. |
 | `[load]` | The native library, Python module entrypoint, or Rust or custom-command executable entrypoint that Relay starts. Worker manifests can also set `forward_env`, `callback_timeouts`, and `max_message_bytes` here. |
 
-For native packages, `compat.native_api = "v1.0"` is the SDK-required minimum host
+For native packages, `compat.native_api = "v1.1"` is the SDK-required minimum host
 contract. The SDK exports a standard header that Relay uses to find and check
 the plugin's interfaces. Native contract versions are separate from Relay release
 versions. A host supports the minor versions up to its own minor within the same

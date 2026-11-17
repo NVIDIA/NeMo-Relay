@@ -27,12 +27,15 @@ with the manifest cause loading to fail before registration. Looking up the
 descriptor and modules does not create components, register callbacks, or start
 executors.
 
-Declare `compat.native_api = "v1.0"` and `load.library` in the manifest. Set
+Declare `compat.native_api = "v1.1"` and `load.library` in the manifest. Set
 `compat.relay` to the Relay release range that the plugin supports.
 
-The export macro sets the required native minor from the build SDK. For example,
-a plugin built with SDK contract v1.1 requires a host that supports v1.1 or a
-later minor in major 1. A host that supports v1.1 also supports v1.0 plugins.
+The export macro sets the required native minor from the build SDK. The current
+SDK uses native contract **v1.1**, so its plugins require a host supporting v1.1
+or a later minor in major 1. A v1.1 host also supports published v1.0 plugins.
+Set `compat.native_api` to the minimum contract required by the build SDK;
+the manifest and exported descriptor must agree. Native contract v1.1 is
+independent of Relay's package version 1.0 and the worker protocol version.
 
 Published layouts, enum variants, signatures, marker traits, ownership rules,
 and behavior stay fixed within each contract. Add interfaces through versioned
@@ -57,6 +60,30 @@ Adapters restore the callback's scope stack, event parentage, and codecs before
 an invocation and each future poll. After the host revokes a handle, it cannot
 perform runtime operations. Refer to
 [PluginContext](/build-plugins/fundamentals/plugin-context) for codec lifetimes.
+
+### Application Execution Context
+
+Native contract v1.1 adds context-aware tool execution registration without
+changing published v1.0 records or signatures. Its `v1_1::ToolInvocation`
+contains the baseline `invocation` and a separate optional `execution_context`
+value. `v1_1::Runtime::register_tool_execution` accepts this callback form;
+continuations and tool outcomes retain their baseline behavior.
+
+The current SDK's typed native tool registration converts the supplied value
+into the checked `ApplicationExecutionContext` exposed by
+`context.execution_context()` in an ordinary Rust tool execution intercept. The value stays separate from tool
+arguments, and validation establishes structure rather than authorization.
+See [Application Execution Context in Add Middleware](/instrument-applications/advanced-guide#application-execution-context)
+for the schema, limits, trust checks, and application integration example.
+
+Plugins built with the current SDK require native v1.1 support, checked before
+their factory is created. A frozen v1.0 plugin can still load on a v1.1 host and
+handle calls that omit application context. If a context-bearing call reaches
+a legacy v1.0 tool callback, Relay refuses the call explicitly rather than
+dropping the context. Explicit legacy registrations retain these semantics even
+inside a newly built v1.1 library. Receive context through the current SDK's
+typed tool registration or the new v1.1 tool interface; rebuilding a library
+alone does not migrate raw legacy registrations.
 
 ### Runtime Scope and Mark Arguments
 

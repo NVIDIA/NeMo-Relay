@@ -4,7 +4,7 @@
 //! Checked loader integration against independently compiled plugin binaries.
 
 use nemo_relay_plugin_host::dynamic::native_library::{
-    CheckedNativeLibrary, NativeLibraryArtifact, resident_library_path,
+    CheckedNativeLibrary, CheckedNativePlugin, NativeLibraryArtifact, resident_library_path,
 };
 use std::{collections::BTreeMap, path::PathBuf};
 
@@ -99,8 +99,8 @@ fn incompatible_layouts_and_unsupported_versions_fail_before_factory() {
     }
     for (version, diagnostic) in [
         ("1", "rebuild"),
-        ("v1.1", "host supports v1.0"),
-        ("v2.0", "host supports v1.0"),
+        ("v1.2", "host supports v1.1"),
+        ("v2.0", "host supports v1.1"),
     ] {
         let artifact = artifact("baseline", b"api");
         let identity = artifact.identity();
@@ -227,6 +227,33 @@ impl Runtime for ProbeRuntime {
 fn runtime(probe: &Arc<Probe>) -> RuntimeBox {
     RuntimeBox::new(ProbeRuntime(probe.clone()))
 }
+struct ProbeRuntimeV1_1(Arc<Probe>);
+impl nemo_relay_plugin::abi::v1_1::Runtime for ProbeRuntimeV1_1 {
+    fn baseline(&self) -> AbiResult<RuntimeBox> {
+        AbiResult::Ok(runtime(&self.0))
+    }
+    fn register_tool_execution(
+        &self,
+        _: nemo_relay_plugin::abi::v1_1::ToolRegistration,
+    ) -> AbiResult<()> {
+        AbiResult::Err(Error::new(
+            "fixture",
+            "lifecycle fixture must not register tool middleware",
+        ))
+    }
+}
+fn register(
+    plugin: &CheckedNativePlugin,
+    probe: &Arc<Probe>,
+) -> FfiFuture<AbiResult<nemo_relay_plugin::abi::v1_0::RegisteredComponent>> {
+    match plugin {
+        CheckedNativePlugin::V1_0(plugin) => plugin.register(Json::Null, runtime(probe)),
+        CheckedNativePlugin::V1_1(plugin) => plugin.register(
+            Json::Null,
+            nemo_relay_plugin::abi::v1_1::RuntimeBox::new(ProbeRuntimeV1_1(probe.clone())),
+        ),
+    }
+}
 fn sdk_artifact() -> NativeLibraryArtifact {
     let path = std::env::var_os("NEMO_RELAY_TEST_NATIVE_PLUGIN")
         .map(PathBuf::from)
@@ -254,16 +281,18 @@ fn sdk_artifact() -> NativeLibraryArtifact {
 #[tokio::test]
 async fn sdk_components_shutdown_independently_across_the_library_boundary() {
     // OS image validation is setup, outside the asynchronous lifecycle deadline.
-    let library = CheckedNativeLibrary::load(sdk_artifact(), "v1.0", "fixture_native").unwrap();
+    let library = CheckedNativeLibrary::load(
+        sdk_artifact(),
+        nemo_relay_plugin::abi::NATIVE_API,
+        "fixture_native",
+    )
+    .unwrap();
     tokio::time::timeout(std::time::Duration::from_secs(10), async {
         let path = library.resident_path().to_owned();
         let plugin = library.create_plugin().unwrap();
         let first = Arc::new(Probe::default());
         let second = Arc::new(Probe::default());
-        let (one, two) = tokio::join!(
-            plugin.register(Json::Null, runtime(&first)),
-            plugin.register(Json::Null, runtime(&second))
-        );
+        let (one, two) = tokio::join!(register(&plugin, &first), register(&plugin, &second));
         let one = one.unwrap();
         let two = two.unwrap();
         assert!(one.registrations.is_empty());
@@ -286,13 +315,15 @@ async fn sdk_components_shutdown_independently_across_the_library_boundary() {
         assert_eq!(second.runtime_dropped.load(Ordering::Acquire), 1);
         drop(one);
         drop(two);
-        let library = CheckedNativeLibrary::load(sdk_artifact(), "v1.0", "fixture_native").unwrap();
+        let library = CheckedNativeLibrary::load(
+            sdk_artifact(),
+            nemo_relay_plugin::abi::NATIVE_API,
+            "fixture_native",
+        )
+        .unwrap();
         assert_eq!(library.resident_path(), path);
         let fresh = Arc::new(Probe::default());
-        let component = library
-            .create_plugin()
-            .unwrap()
-            .register(Json::Null, runtime(&fresh))
+        let component = register(&library.create_plugin().unwrap(), &fresh)
             .await
             .unwrap();
         component.component.shutdown().await.unwrap();
@@ -307,12 +338,17 @@ async fn sdk_components_shutdown_independently_across_the_library_boundary() {
 #[tokio::test]
 async fn dropping_unpolled_registration_releases_foreign_component_and_runtime() {
     // OS image validation is setup, outside the asynchronous lifecycle deadline.
-    let library = CheckedNativeLibrary::load(sdk_artifact(), "v1.0", "fixture_native").unwrap();
+    let library = CheckedNativeLibrary::load(
+        sdk_artifact(),
+        nemo_relay_plugin::abi::NATIVE_API,
+        "fixture_native",
+    )
+    .unwrap();
     tokio::time::timeout(std::time::Duration::from_secs(10), async {
         let plugin = library.create_plugin().unwrap();
         for _ in 0..20 {
             let probe = Arc::new(Probe::default());
-            let registration = plugin.register(Json::Null, runtime(&probe));
+            let registration = register(&plugin, &probe);
             // Registration work has already been admitted in the SDK library,
             // but no foreign poll has happened in this host library.
             drop(registration);

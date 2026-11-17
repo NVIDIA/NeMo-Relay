@@ -585,3 +585,154 @@ fn invocation_codec_adapters_preserve_typed_values_and_missing_capabilities() {
             .is_none()
     );
 }
+
+/// The new native lane preserves structure and binds every poll to its scope.
+#[tokio::test]
+async fn native_context_lane_preserves_optional_context_and_scope_without_changing_args() {
+    let executor = ComponentExecutor::inline("context-lane");
+    let payload = serde_json::json!({
+        "host_approval": {"version": 1, "source": "example.application",
+            "approval_id": "approval-123", "tool_name": "raw-tool", "approved_arguments": {"value": 1},
+            "example.receipt": [false, null]},
+        "example.audit": {"integer": u64::MAX, "unicode": "π", "nul": "\u{0000}"}
+    });
+    for context in [Option::None, Some(serde_json::json!({})), Some(payload)] {
+        let expected = context.clone();
+        let callback = ContextToolCallback {
+            executor: executor.clone(),
+            callback: Arc::new(move |context, _next| {
+                let expected = expected.clone();
+                Box::pin(async move {
+                    assert!(BOUND.get());
+                    assert_eq!(context.tool_name, "raw-tool");
+                    assert_eq!(context.tool_call_id.as_deref(), Some("call-id"));
+                    assert_eq!(context.args, serde_json::json!({"value": 1}));
+                    assert_eq!(
+                        context.execution_context.map(|value| value.to_json()),
+                        expected
+                    );
+                    tokio::task::yield_now().await;
+                    assert!(BOUND.get());
+                    Ok(ToolExecutionInterceptOutcome::annotated(
+                        context.args,
+                        serde_json::json!({"checked": true}),
+                    ))
+                })
+            }),
+        };
+        let result = b::ToolCallback::invoke_tool(
+            &callback,
+            b::ToolInvocation {
+                invocation: raw_invocation(serde_json::json!({"value": 1})),
+                execution_context: context.map(into_abi),
+            },
+            a::ContinuationBox::new(Next),
+        )
+        .await
+        .unwrap();
+        assert_eq!(
+            from_abi(result.result.result).unwrap(),
+            serde_json::json!({"value": 1})
+        );
+        assert_eq!(
+            from_abi(result.result.annotation.unwrap()).unwrap(),
+            serde_json::json!({"checked": true})
+        );
+        assert!(!BOUND.get());
+    }
+    a::Component::shutdown(&executor).await.unwrap();
+}
+
+/// An invalid native caller cannot present a malformed approval to author code.
+#[tokio::test]
+async fn native_context_lane_rejects_invalid_schema_without_disclosing_input() {
+    let callback = ContextToolCallback {
+        executor: ComponentExecutor::inline("invalid-context"),
+        callback: Arc::new(|_, _| panic!("invalid context reached native author")),
+    };
+    let result = b::ToolCallback::invoke_tool(
+        &callback,
+        b::ToolInvocation {
+            invocation: raw_invocation(Json::Null),
+            execution_context: Some(into_abi(
+                serde_json::json!({"host_approval": {"approval_id": "private-receipt"}}),
+            )),
+        },
+        a::ContinuationBox::new(Next),
+    )
+    .await;
+    let error = match result {
+        Err(error) => error,
+        Ok(_) => panic!("invalid context accepted"),
+    };
+    assert_eq!(error.message, "invalid application execution context");
+    assert!(!error.message.contains("private-receipt"));
+    assert!(!BOUND.get());
+    a::Component::shutdown(&callback.executor).await.unwrap();
+}
+
+/// A direct native caller is bounded before recursive ABI-to-JSON conversion.
+#[tokio::test]
+async fn native_context_lane_bounds_raw_abi_depth_before_conversion() {
+    let callback = ContextToolCallback {
+        executor: ComponentExecutor::inline("deep-context"),
+        callback: Arc::new(|_, _| panic!("over-deep context reached native author")),
+    };
+    let mut value = abi::Json::Null;
+    for _ in 0..160 {
+        value = abi::Json::Array(vec![value]);
+    }
+    let result = b::ToolCallback::invoke_tool(
+        &callback,
+        b::ToolInvocation {
+            invocation: raw_invocation(Json::Null),
+            execution_context: Some(abi::Json::Object(vec![abi::Field {
+                key: "example.deep".into(),
+                value,
+            }])),
+        },
+        a::ContinuationBox::new(Next),
+    )
+    .await;
+    assert!(result.is_err());
+    assert!(!BOUND.get());
+    a::Component::shutdown(&callback.executor).await.unwrap();
+}
+
+/// Dropping an invocation before its first poll releases captured capabilities.
+#[tokio::test]
+async fn native_context_lane_unpolled_drop_releases_scope_without_calling_author() {
+    struct DropScope(Arc<AtomicUsize>);
+    impl a::Scope for DropScope {
+        fn enter(&self) -> a::Result<a::ScopeLeaseBox> {
+            Scope.enter()
+        }
+        fn snapshot(&self) -> a::Result<Option<abi::Json>> {
+            Ok(None)
+        }
+    }
+    impl Drop for DropScope {
+        fn drop(&mut self) {
+            self.0.fetch_add(1, Ordering::SeqCst);
+        }
+    }
+    let dropped = Arc::new(AtomicUsize::new(0));
+    let callback = ContextToolCallback {
+        executor: ComponentExecutor::inline("unpolled-context"),
+        callback: Arc::new(|_, _| panic!("unpolled invocation called native author")),
+    };
+    let mut invocation = raw_invocation(Json::Null);
+    invocation.context.scope = a::ScopeBox::new(DropScope(dropped.clone()));
+    let pending = b::ToolCallback::invoke_tool(
+        &callback,
+        b::ToolInvocation {
+            invocation,
+            execution_context: Some(into_abi(serde_json::json!({"example.private": "receipt"}))),
+        },
+        a::ContinuationBox::new(Next),
+    );
+    drop(pending);
+    assert_eq!(dropped.load(Ordering::SeqCst), 1);
+    assert!(!BOUND.get());
+    a::Component::shutdown(&callback.executor).await.unwrap();
+}

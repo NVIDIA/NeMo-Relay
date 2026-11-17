@@ -20,6 +20,8 @@ You will add middleware to a working Execute call and verify its effect:
 - Sanitize guardrails transform only the payload recorded on events.
 - Conditional-execution guardrails can block execution.
 - Execution intercepts wrap the callback and can add timing, retries, routing, or fallback behavior.
+- Application execution context supplies invocation-local information to execution
+  intercepts, such as an existing approval assertion.
 
 ## Before You Start
 
@@ -186,6 +188,174 @@ for the rejection mark and its meaning.
 After checking the payload, restore the subscriber callback that prints only
 event kind and name.
 
+## Application Execution Context
+
+An application can adopt execution middleware incrementally while retaining its
+existing human approval flow. For example, it can supply a reference to a
+completed application review separately from the tool's business arguments. A
+middleware component that understands that review can avoid repeating its own
+review, then call `next` so the remaining middleware and tool callback still run.
+Relay does not interpret the reference or change the approval flow itself.
+
+The application APIs carry the same optional value through each binding. Supply
+it on the managed execute call, then read it from the middleware context:
+
+| Binding | Supply context when executing | Read it in execution middleware |
+| --- | --- | --- |
+| Rust | `ToolCallExecuteParams::builder().execution_context(value)` | `context.execution_context()` |
+| Python | `tools.execute(..., execution_context=value)` | `context.execution_context` |
+| Node.js | `executionContext` in `typedToolExecute` options | `context.executionContext` |
+| Go | `WithApplicationExecutionContext(value)` on `ToolCallExecute` or `tools.Execute` | `context.ExecutionContext` (`*ApplicationExecutionContext`) |
+| C | `execution_context_json` on `nemo_relay_tool_call_execute_with_context` | Optional `execution_context` property in the callback's context JSON |
+
+Rust and Python worker SDKs expose the same optional context on their tool
+execution callback. The C entry point is additive: existing execute functions
+retain their signatures and omit context. Go rejects the option on manual
+`ToolCall` and `ToolCallEnd`, where execution middleware does not run.
+
+The value follows the standard `ApplicationExecutionContext` JSON Schema. Its
+optional `host_approval` field asserts that the application has already verified
+human approval for an exact operation:
+
+```json
+{
+  "host_approval": {
+    "version": 1,
+    "source": "example.application",
+    "approval_id": "approval-123",
+    "tool_name": "files.write",
+    "approved_arguments": {"path": "notes.txt", "content": "Hello"}
+  },
+  "com.example.audit": {"request_id": "request-456"}
+}
+```
+
+When `host_approval` is present, it asserts completed affirmative human approval
+and all five fields are required. Version is integer `1`; source, approval ID and tool name
+are nonempty strings. Approved arguments may be any JSON value, matching tool
+arguments. They record the approved input so middleware can compare it with its
+current input after earlier middleware has rewritten arguments. Denied or
+pending operations must stop in the application; this field is not an instruction
+to Relay to enforce a review outcome.
+
+Both the context and the approval object allow additional properties. The obsolete
+`host_approval.decision` key is reserved and rejected regardless of value, so an
+old denied claim cannot become an ignored extension interpreted as approval. Unknown
+properties survive transport and isolated snapshots, but confer no authority.
+Use namespaced extension keys, such as `com.example.audit`, to reduce collisions
+with future standard fields. Omission means no context; `{}` is a supplied empty
+context with no approval assertion. An explicitly null or malformed
+`host_approval` is rejected rather than treated as absent.
+
+The entire context, including extensions, must serialize to at most **16 KiB**
+of UTF-8 JSON and contain at most **64 nested container levels**. The root object
+counts as level 1; nested objects and arrays add one level each. Limits are checked
+before JSON Schema traversal. Invalid known fields fail before middleware or the
+tool runs. Structural validation does not authenticate an approval.
+
+The canonical schema is maintained with the shared Rust types in
+[`application-execution-context.schema.json`](../../crates/types/schemas/application-execution-context.schema.json).
+Rust exposes `ApplicationExecutionContext` and `HostApproval`; other bindings and
+worker SDKs expose the same fields using their native typing conventions.
+
+Rust callers can construct the checked type with
+`ApplicationExecutionContext::try_from(json_value)?` before passing it to the
+managed execution builder. Admission also revalidates values assembled or
+modified through public Rust fields. Python keeps dictionary-compatible typed
+shapes; additional properties remain accepted at runtime despite Python 3.11's
+`TypedDict` limitations. Go offers `WithApplicationExecutionContext` for its typed
+model and retains `WithToolExecutionContext` for schema-validated raw JSON.
+
+This field has a narrower lifetime and audience than event metadata:
+
+- Only execution intercepts receive it. Tool arguments, request intercepts,
+  conditional guardrails, and the final tool callback do not receive it as a
+  separate parameter.
+- Each intercept receives an isolated snapshot. Changes to a binding-local
+  object do not change what another intercept sees. Calling `next` can rewrite
+  business arguments, but cannot replace the execution context.
+- A nested managed tool call has no execution context unless its caller supplies
+  one explicitly. Scope metadata does not populate it automatically.
+- Relay does not automatically copy it to lifecycle events, results,
+  annotations, or telemetry. Application and plugin code can still disclose it
+  explicitly, so avoid logging it or adding credentials to it.
+
+Application-supplied does **not** mean verified authorization. Relay does not
+verify a human decision, caller identity, signature, expiry, or operation binding
+inside this object. The application must validate its own approval proof and
+bind it to the exact tool, business arguments, owner and applicable policy before
+supplying a review claim. Do not populate it from a model-generated `approved`
+flag. An intercept must also check that the claim still covers its current
+arguments, because earlier middleware may have rewritten them. Missing,
+unrecognized or mismatched claims should use that component's normal review
+path; they must not imply approval. The application must stop a human-denied
+operation rather than ask middleware to override that denial. If human approval
+is mandatory and the operation changes, the application must reject it or obtain
+fresh approval; a component's automated review does not renew human consent.
+
+The following tested integration sketch accepts application-defined
+`validate_existing_approval`, `approval_covers_call` and
+`perform_component_review` functions as callbacks; Relay does not implement them.
+The verifier and trust matcher are synchronous; the component reviewer is
+asynchronous. Call `register_application_review(...)` once during setup, then use
+`execute_after_application_approval(...)` to execute an approved operation.
+The verifier must raise if the receipt is invalid or no longer covers the call.
+`perform_component_review` must raise to refuse execution; returning `False`
+does not stop this wrapper. `validate_existing_approval` returns the standard
+five-field
+`host_approval` assertion only after verifying the application-specific receipt;
+it includes the exact tool name and approved arguments. Relay does not prescribe
+the underlying receipt or signature format.
+
+<Code src="_code/python/application_execution_context.py" language="python" />
+
+### Transport Compatibility
+
+**Application package requirements**
+
+Use compliant Relay 1.0 components built from the matching package set. For
+Node.js this includes both the JavaScript/TypeScript wrapper and its compiled
+native binding; do not mix them with earlier development snapshots. Execution
+context is part of the required API contract, not an optionally detected feature.
+Use `executionContext` directly in the managed execute options.
+
+The same matching-version requirement applies to Rust, Python, Go and C. Rebuild
+bindings and workers together when the unreleased 1.0 baseline changes. This
+requirement does not replace input validation: context must still be an object
+within the size and nesting limits, and supplying it grants no authorization.
+
+**Worker-side compatibility checks**
+
+Execution-context support is required by
+`nvidia.nemo.relay.worker.v1@1.0.0`, not an optional SDK capability. Hosts and
+workers check protocol identity and exact contract version before registration.
+Every conforming worker must preserve supplied context, including `{}`. The
+application can still omit context on any call, and callback signatures remain
+unchanged. The handshake establishes the declared protocol contract, not
+permission to execute or proof of application approval.
+
+Relay 1.0 has not yet been released. Rebuild and repackage development workers
+with the matching SDK rather than relying on compatibility with an earlier
+development snapshot. An obsolete binary that advertises the same `1.0.0`
+identity cannot be detected by version alone; the contract requires it to be
+rebuilt. Separately versioned diagnostic contracts are unchanged.
+
+**Native plugin compatibility**
+
+The current SDK's typed native tool registration uses native contract **v1.1**
+and exposes checked context through `context.execution_context()`. This native
+contract version is separate from Relay's package version **1.0**.
+The host checks the required native contract before creating the plugin.
+Published native v1.0 plugins still load and handle calls without application
+context as before. If supplied context reaches a legacy v1.0 tool callback,
+Relay refuses the call explicitly instead of dropping the context. This also
+applies to explicit legacy registrations in a newly built v1.1 library. Use
+the SDK's typed tool registration or the v1.1 tool interface to receive context;
+rebuilding alone does not migrate a legacy registration.
+See [Native ABI Reference](/build-plugins/native/native-abi-reference#application-execution-context)
+for the additive transport. Public C and Go callbacks receive context through
+their extensible JSON envelope.
+
 ## Scope Middleware to One Request
 
 Use scope-local middleware when a policy applies only to one request, tenant, experiment, or agent run.
@@ -224,12 +394,13 @@ Each field defaults to `True`.
 </Tab>
 <Tab title="Node.js" language="node">
 
-The native Execute functions accept an options object as their last optional
-argument. Its fields are `conditionalExecution`, `requestIntercepts`, and
-`executionIntercepts`. A field that you omit keeps its stage on.
+The native Execute functions accept an execution-options object. Its fields
+are `conditionalExecution`, `requestIntercepts`, and `executionIntercepts`.
+A field that you omit keeps its stage on. Tool execute calls can additionally
+supply application execution context after this parameter.
 
 In the working tool example, add `null` for `toolCallId` after the `metadata`
-argument. Then add `{ requestIntercepts: false }` as the last argument.
+argument. Then add `{ requestIntercepts: false }` as the execution-options argument.
 Keep the existing argument positions. Relay copies the options when the call starts.
 
 All three typed execute helpers accept `executionOptions` in their options

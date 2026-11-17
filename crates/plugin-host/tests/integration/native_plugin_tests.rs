@@ -264,7 +264,7 @@ async fn checked_sdk_preserves_all_native_callback_behavior() {
 }
 
 #[tokio::test]
-async fn native_tool_intercept_rejects_execution_context_without_running_tool() {
+async fn legacy_native_tool_intercept_rejects_execution_context_without_running_tool() {
     let _guard = NATIVE_PLUGIN_TEST_LOCK.lock().await;
     let fixture = build_fixture_plugin();
     let manifest = write_manifest(&fixture);
@@ -274,7 +274,7 @@ async fn native_tool_intercept_rejects_execution_context_without_running_tool() 
         components: vec![PluginComponentSpec {
             kind: "fixture_native".into(),
             enabled: true,
-            config: Map::new(),
+            config: Map::from_iter([("legacy_sdk_fixture".into(), json!(true))]),
         }],
         ..Default::default()
     })
@@ -311,6 +311,94 @@ async fn native_tool_intercept_rejects_execution_context_without_running_tool() 
         assert!(!error.to_string().contains("not-in-error"));
     }
     assert_eq!(calls.load(Ordering::SeqCst), 0);
+}
+
+/// A separately compiled SDK receives context without putting it in args or telemetry.
+#[tokio::test]
+async fn sdk_native_tool_context_isolated_from_arguments_and_events() {
+    let _guard = NATIVE_PLUGIN_TEST_LOCK.lock().await;
+    let fixture = build_fixture_plugin();
+    let manifest = write_manifest(&fixture);
+    let _activation = load_native_plugins([load_spec("fixture_native", &manifest)]).unwrap();
+    let observations = TempDir::new().unwrap();
+    let path = observations.path().join("context");
+    let mut cleanup = NativePluginTestCleanup::new();
+    test_initialize_plugin_host_exact(PluginConfig {
+        components: vec![PluginComponentSpec {
+            kind: "fixture_native".into(),
+            enabled: true,
+            config: Map::from_iter([("context_observation_path".into(), json!(path))]),
+        }],
+        ..Default::default()
+    })
+    .await
+    .unwrap();
+    cleanup.mark_plugin_configuration_active();
+    let events = Arc::new(Mutex::new(Vec::<Event>::new()));
+    let captured = events.clone();
+    register_subscriber(
+        "native-context-privacy",
+        Arc::new(move |event| captured.lock().unwrap().push(event.clone())),
+    )
+    .unwrap();
+    cleanup.mark_subscriber_registered("native-context-privacy");
+    let calls = Arc::new(AtomicUsize::new(0));
+    let original = json!({"query": "example"});
+    let contexts = [
+        None,
+        Some(json!({})),
+        Some(json!({
+            "host_approval": {
+                "version": 1, "source": "example.application", "approval_id": "approval-native",
+                "tool_name": "native-context-probe", "approved_arguments": original,
+                "com.example.review": {"private_marker": "native-private-context-sentinel"},
+            },
+            "com.example.audit": {"id": "native-private-context-sentinel"},
+        })),
+    ];
+    for supplied in contexts {
+        let captured = calls.clone();
+        let result = tool_call_execute(
+            ToolCallExecuteParams::builder()
+                .name("native-context-probe")
+                .args(original.clone())
+                .tool_call_id("call-native-context".to_owned())
+                .execution_context_opt(supplied.clone().map(|value| value.try_into().unwrap()))
+                .func(Arc::new(move |args| {
+                    let captured = captured.clone();
+                    Box::pin(async move {
+                        captured.fetch_add(1, Ordering::SeqCst);
+                        Ok(ToolExecutionResult::new(args))
+                    })
+                }))
+                .build(),
+        )
+        .await
+        .unwrap();
+        let rewritten = json!({"query": "example", "context_rewritten": true});
+        assert_eq!(result.result, rewritten);
+        let outer: Json =
+            serde_json::from_slice(&std::fs::read(path.with_extension("outer.json")).unwrap())
+                .unwrap();
+        let inner: Json =
+            serde_json::from_slice(&std::fs::read(path.with_extension("inner.json")).unwrap())
+                .unwrap();
+        let expected_context = supplied.unwrap_or(Json::Null);
+        assert_eq!(outer["execution_context"], expected_context);
+        assert_eq!(
+            inner["execution_context"], expected_context,
+            "one callback's mutation must not change the next snapshot"
+        );
+        assert_eq!(outer["args"], original);
+        assert_eq!(inner["args"], rewritten);
+        assert_eq!(outer["tool_call_id"], "call-native-context");
+        assert_eq!(inner["tool_call_id"], "call-native-context");
+    }
+    assert_eq!(calls.load(Ordering::SeqCst), 3);
+    flush_subscribers().unwrap();
+    let telemetry = serde_json::to_string(&*events.lock().unwrap()).unwrap();
+    assert!(!telemetry.contains("native-private-context-sentinel"));
+    assert!(!telemetry.contains("execution_context"));
 }
 
 // Keep both transports on the same end-to-end assertions during the cutover.
@@ -2197,7 +2285,12 @@ fn checked_fixture_library(
         [(file, std::fs::read(&fixture.library_path).unwrap())],
     )
     .unwrap();
-    CheckedNativeLibrary::load(artifact, "v1.0", "fixture_native").unwrap()
+    CheckedNativeLibrary::load(
+        artifact,
+        nemo_relay_plugin::abi::NATIVE_API,
+        "fixture_native",
+    )
+    .unwrap()
 }
 
 fn build_fixture_plugin() -> BuiltFixture {
@@ -2277,6 +2370,7 @@ fn write_manifest_text(options: ManifestOptions<'_>) -> PathBuf {
     let plugin_id = toml_string(options.plugin_id);
     let relay = toml_string(options.relay);
     let library = toml_string(options.library);
+    let native_api = toml_string(nemo_relay_plugin::abi::NATIVE_API);
     let manifest = format!(
         r#"
 manifest_version = 1
@@ -2287,7 +2381,7 @@ kind = "rust_dynamic"
 
 [compat]
 relay = {relay}
-native_api = "v1.0"
+native_api = {native_api}
 
 [defaults]
 enabled = false
@@ -2607,13 +2701,13 @@ fn native_activation_rejects_legacy_and_future_contracts_before_opening() {
     let fixture = build_fixture_plugin();
     for (api, expected) in [
         ("1", "rebuild"),
-        ("v1.1", "unsupported native API"),
+        ("v1.2", "unsupported native API"),
         ("v2.0", "unsupported native API"),
     ] {
         let manifest = write_manifest(&fixture);
         let text = std::fs::read_to_string(&manifest)
             .unwrap()
-            .replace("v1.0", api)
+            .replace(nemo_relay_plugin::abi::NATIVE_API, api)
             .replace(
                 &fixture.library_path.to_string_lossy().to_string(),
                 "/missing/native/library",

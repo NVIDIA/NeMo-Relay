@@ -9,12 +9,16 @@ mod contract;
 pub mod diagnostics;
 pub mod future;
 pub mod handles;
+pub mod handles_v1_1;
 pub mod transfer;
 pub mod v1_0;
+pub mod v1_1;
 mod value;
 mod values;
+mod values_v1_1;
 mod version;
 pub mod wire;
+pub mod wire_v1_1;
 pub use contract::NATIVE_API;
 pub use value::{Field, Json};
 pub use version::{NATIVE_API_VERSION, NativeApiVersion, ParseNativeApiVersionError};
@@ -69,9 +73,75 @@ macro_rules! export_factory {
                 std::panic::catch_unwind(|| $crate::handles::export_factory(create))
                     .unwrap_or(std::ptr::null_mut())
             }
+            fn create_v1_1() -> v1_0::Result<$crate::v1_1::PluginBox> {
+                create()
+                    .map(|plugin| $crate::v1_1::PluginBox::new($crate::v1_1::LegacyPlugin(plugin)))
+            }
+            unsafe extern "C" fn make_v1_1() -> *mut std::ffi::c_void {
+                std::panic::catch_unwind(|| $crate::handles_v1_1::export_factory(create_v1_1))
+                    .unwrap_or(std::ptr::null_mut())
+            }
+            static EXPORTS: [xabi::XabiExport; 2] = [
+                xabi::XabiExport::new(
+                    xabi::XabiStr::from_static($crate::wire::XabiV1AbiTraitWireFactory::ID),
+                    xabi::XabiStr::from_static(v1_0::FACTORY_MODULE),
+                    1,
+                    1,
+                    0,
+                    make,
+                ),
+                xabi::XabiExport::new(
+                    xabi::XabiStr::from_static($crate::wire_v1_1::XabiV1AbiTraitWireFactory::ID),
+                    xabi::XabiStr::from_static($crate::v1_1::FACTORY_MODULE),
+                    1,
+                    1,
+                    0,
+                    make_v1_1,
+                ),
+            ];
+            static MANIFEST: xabi::XabiManifest = xabi::XabiManifest::new(&EXPORTS);
+            #[unsafe(no_mangle)]
+            pub extern "C" fn xabi_manifest() -> *const xabi::XabiManifest {
+                &MANIFEST
+            }
+            #[unsafe(no_mangle)]
+            pub extern "C" fn nemo_relay_native_bootstrap() -> *const $crate::bootstrap::Bootstrap {
+                static BOOTSTRAP: std::sync::OnceLock<$crate::bootstrap::Bootstrap> =
+                    std::sync::OnceLock::new();
+                BOOTSTRAP.get_or_init(|| $crate::bootstrap::Bootstrap {
+                    size: std::mem::size_of::<$crate::bootstrap::Bootstrap>(),
+                    generation: 1,
+                    major: $crate::NATIVE_API_VERSION.major,
+                    minor: $crate::NATIVE_API_VERSION.minor,
+                    kind: xabi::XabiStr::from_static($kind),
+                    schema: xabi::XabiStr::from_static($crate::bootstrap::sdk_schema()),
+                    manifest: &MANIFEST,
+                })
+            }
+        }
+    };
+}
+
+/// Export a context-aware native v1.1 definition and the current checked metadata.
+///
+/// The SDK minimum is declared independently of the package release. Older hosts
+/// reject it before invoking any factory; baseline v1.0 definitions remain loadable.
+#[macro_export]
+macro_rules! export_factory_v1_1 {
+    (kind = $kind:literal, create = $factory:expr) => {
+        mod __nemo_relay_checked_export {
+            use super::*;
+            use $crate::{v1_0, v1_1, xabi};
+            fn create() -> v1_0::Result<v1_1::PluginBox> {
+                ($factory)()
+            }
+            unsafe extern "C" fn make() -> *mut std::ffi::c_void {
+                std::panic::catch_unwind(|| $crate::handles_v1_1::export_factory(create))
+                    .unwrap_or(std::ptr::null_mut())
+            }
             static EXPORTS: [xabi::XabiExport; 1] = [xabi::XabiExport::new(
-                xabi::XabiStr::from_static($crate::wire::XabiV1AbiTraitWireFactory::ID),
-                xabi::XabiStr::from_static(v1_0::FACTORY_MODULE),
+                xabi::XabiStr::from_static($crate::wire_v1_1::XabiV1AbiTraitWireFactory::ID),
+                xabi::XabiStr::from_static(v1_1::FACTORY_MODULE),
                 1,
                 1,
                 0,

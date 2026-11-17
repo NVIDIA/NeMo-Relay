@@ -101,7 +101,7 @@ or object shape:
 | Rust | `LlmRequestInterceptOutcome` |
 | Node.js | `{ request, annotated?, pendingMarks? }`; JavaScript pending-mark DTOs use `categoryProfile`, while canonical JSON retains `pending_marks` and `category_profile` |
 | Public C | An owned canonical outcome JSON string |
-| Native contract `v1.0` | ABI-safe typed JSON containing the canonical outcome fields |
+| Native contracts `v1.0` and `v1.1` | ABI-safe typed JSON containing the canonical outcome fields |
 | Rust and Python workers | The `nvidia.nemo.relay.worker.v1.LlmRequestInterceptOutcome` protobuf message |
 
 The standalone request-intercept helper returns the complete outcome but does

@@ -23,14 +23,16 @@ Compatibility uses these version rules:
 | Version | Purpose |
 |---|---|
 | Relay release | The plugin's `compat.relay` range selects supported runtime releases. |
-| Native contract, such as `v1.0` | The build SDK sets the minimum host interface required by the plugin. |
+| Native contract, currently `v1.1` | The build SDK sets the minimum host interface required by the plugin. |
 | ABI dependency versions | The loader checks shared type layouts, including dependency ABI generations. |
 
 Contract names use dots: `v1.0`, `v1.1`, and `v2.0`. Rust module names use
 underscores, such as `v1_0`, because Rust identifiers cannot contain dots.
 
-A plugin built with SDK contract v1.1 requires a host that supports v1.1 or a
-later minor in major 1. A host that supports v1.1 also supports v1.0 plugins.
+The current SDK builds native contract v1.1 plugins. They declare
+`compat.native_api = "v1.1"` and require a host supporting v1.1 or a later minor
+in major 1. A v1.1 host also supports published v1.0 plugins. Native contract
+versions are independent of Relay package versions.
 Each minor keeps its published interfaces and behavior. A breaking layout or dependency ABI change
 requires a new native major.
 
@@ -58,6 +60,24 @@ The recursive `Json` type carries application values without converting them to
 JSON text. SDK conversions preserve signed and unsigned integers, finite floating-point
 values, Unicode, embedded NULs, nested values, and negative zero. They reject
 non-finite numbers and duplicate object keys.
+
+## Tool Execution Context
+
+Native v1.1 adds `v1_1::ToolInvocation`, carrying the baseline invocation and a
+separate optional `execution_context`. The current SDK's typed tool registration
+exposes its checked `ApplicationExecutionContext` through
+`context.execution_context()` in tool middleware. Context stays separate from business arguments; structural validation
+does not authenticate approval assertions. See the
+[application integration guide](../../docs/instrument-applications/advanced-guide.mdx#application-execution-context).
+
+Published v1.0 declarations remain frozen. A v1.0 plugin still loads on a v1.1
+host and handles calls without application context. If supplied context reaches
+a legacy v1.0 tool callback, the host refuses the call rather than silently
+discarding the context. This applies even to explicit legacy registrations in a
+newly built v1.1 library. Use typed SDK tool registration or the v1.1 tool
+interface to receive context; rebuilding alone does not migrate old raw
+registrations. A v1.1 plugin is rejected by a v1.0 host before its factory is
+created.
 
 ## Loading and Component Cleanup
 

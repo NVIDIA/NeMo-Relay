@@ -14,7 +14,7 @@ use crate::{
     abi::{
         self,
         future::{FfiFuture, FutureExt as _},
-        v1_0 as a,
+        v1_0 as a, v1_1 as b,
     },
     abi_executor::{ComponentExecutor, DirectCancellation},
     abi_value::{from_abi, into_abi},
@@ -122,6 +122,7 @@ pub use Plugin as NativePlugin;
 
 pub struct PluginContext<'a> {
     registrations: Vec<a::Registration>,
+    tool_runtime: Option<Arc<b::RuntimeBox>>,
     runtime: PluginRuntime,
     executor: ComponentExecutor,
     streams: Arc<Mutex<Vec<Arc<StreamState>>>>,
@@ -174,6 +175,119 @@ struct Callback {
     unary: Option<Arc<Unary>>,
     sync: Option<Arc<SyncCallback>>,
     stream: Option<Arc<Streaming>>,
+}
+
+type ContextToolFn = dyn Fn(ToolExecutionContext, ToolNext) -> BoxFuture<'static, Result<ToolExecutionInterceptOutcome>>
+    + Send
+    + Sync;
+
+/// Versioned tool callback; component executor ownership matches baseline callbacks.
+struct ContextToolCallback {
+    executor: ComponentExecutor,
+    callback: Arc<ContextToolFn>,
+}
+impl b::ToolCallback for ContextToolCallback {
+    fn invoke_tool(
+        &self,
+        invocation: b::ToolInvocation,
+        next: a::ContinuationBox,
+    ) -> FfiFuture<a::Result<a::ToolExecutionOutcome>> {
+        let b::ToolInvocation {
+            invocation,
+            execution_context,
+        } = invocation;
+        let callback = self.callback.clone();
+        execute_tool_callback(&self.executor, invocation, move |invocation| {
+            Box::pin(async move {
+                if invocation.surface != a::Surface::ToolExecutionIntercept {
+                    return Err("invalid native tool execution surface".into());
+                }
+                // Decode inside the scoped future, before author code. Neither
+                // malformed context nor conversion diagnostics may disclose it.
+                let execution_context = execution_context
+                    .map(|value| {
+                        validate_context_depth(&value)?;
+                        let value = from_abi(value)
+                            .map_err(|_| "invalid application execution context".to_owned())?;
+                        crate::ApplicationExecutionContext::try_from(value)
+                            .map_err(|_| "invalid application execution context".to_owned())
+                    })
+                    .transpose()?;
+                callback(
+                    ToolExecutionContext {
+                        tool_name: invocation.name,
+                        args: from_abi(invocation.value)?,
+                        tool_call_id: invocation.tool_call_id,
+                        execution_context,
+                    },
+                    ToolNext(Arc::new(next)),
+                )
+                .await
+            })
+        })
+    }
+}
+
+// Native callers normally receive checked host data. Bound raw ABI trees
+// before recursive conversion too, including direct SDK invocations.
+fn validate_context_depth(value: &abi::Json) -> Result<()> {
+    let mut pending = vec![(value, 1_usize)];
+    while let Some((value, depth)) = pending.pop() {
+        match value {
+            abi::Json::Array(values) if depth <= 64 => {
+                pending.extend(values.iter().map(|value| (value, depth + 1)))
+            }
+            abi::Json::Object(fields) if depth <= 64 => {
+                pending.extend(fields.iter().map(|field| (&field.value, depth + 1)))
+            }
+            abi::Json::Array(_) | abi::Json::Object(_) => {
+                return Err("invalid application execution context".into());
+            }
+            _ => {}
+        }
+    }
+    Ok(())
+}
+
+/// Construct the future at invocation time; execute author code only when polled.
+/// Scope restoration, cancellation and unpolled drops follow the existing path.
+fn execute_tool_callback<F>(
+    executor: &ComponentExecutor,
+    invocation: a::Invocation,
+    callback: F,
+) -> FfiFuture<a::Result<a::ToolExecutionOutcome>>
+where
+    F: FnOnce(a::Invocation) -> BoxFuture<'static, Result<ToolExecutionInterceptOutcome>>
+        + Send
+        + 'static,
+{
+    let scope = Arc::new(invocation.context.scope);
+    let invocation = a::Invocation {
+        context: a::Context {
+            scope: a::ScopeBox::new(SharedScope(scope.clone())),
+            ..invocation.context
+        },
+        ..invocation
+    };
+    executor.execute_direct(scoped(a::ScopeBox::new(SharedScope(scope)), async move {
+        boundary(
+            async {
+                let value = callback(invocation).await?;
+                Ok(a::ToolExecutionOutcome {
+                    result: a::ToolExecutionResult {
+                        result: into_abi(value.result),
+                        annotation: value.annotation.filter(|v| !v.is_null()).map(into_abi),
+                    },
+                    pending_marks: value
+                        .pending_marks
+                        .into_iter()
+                        .map(encode)
+                        .collect::<Result<Vec<_>>>()?,
+                })
+            }
+            .await,
+        )
+    }))
 }
 
 // The host lease stays on this poll's thread. Only the scope capability and
@@ -266,39 +380,16 @@ impl a::Callback for Callback {
         next: a::ContinuationBox,
     ) -> FfiFuture<a::Result<a::ToolExecutionOutcome>> {
         let callback = self.unary.clone();
-        let scope = Arc::new(invocation.context.scope);
-        let invocation = a::Invocation {
-            context: a::Context {
-                scope: a::ScopeBox::new(SharedScope(scope.clone())),
-                ..invocation.context
-            },
-            ..invocation
-        };
-        self.executor
-            .execute_direct(scoped(a::ScopeBox::new(SharedScope(scope)), async move {
-                boundary(
-                    async {
-                        let callback = callback.ok_or("callback is not a tool interceptor")?;
-                        let UserResult::Tool(value) =
-                            callback(invocation, Option::Some(next)).await?
-                        else {
-                            return Err("tool callback returned an invalid outcome".into());
-                        };
-                        Ok(a::ToolExecutionOutcome {
-                            result: a::ToolExecutionResult {
-                                result: into_abi(value.result),
-                                annotation: value.annotation.filter(|v| !v.is_null()).map(into_abi),
-                            },
-                            pending_marks: value
-                                .pending_marks
-                                .into_iter()
-                                .map(encode)
-                                .collect::<Result<Vec<_>>>()?,
-                        })
-                    }
-                    .await,
-                )
-            }))
+        execute_tool_callback(&self.executor, invocation, move |invocation| {
+            Box::pin(async move {
+                let callback = callback.ok_or("callback is not a tool interceptor")?;
+                let UserResult::Tool(value) = callback(invocation, Option::Some(next)).await?
+                else {
+                    return Err("tool callback returned an invalid outcome".into());
+                };
+                Ok(value)
+            })
+        })
     }
 
     /// Admit a synchronous callback and restore its invocation scope and optional Tokio context.
@@ -908,6 +999,17 @@ impl PluginContext<'_> {
         F: Fn(ToolExecutionContext, ToolNext) -> Fut + Send + Sync + 'static,
         Fut: Future<Output = Result<ToolExecutionInterceptOutcome>> + Send + 'static,
     {
+        if let Some(runtime) = &self.tool_runtime {
+            let callback = Arc::new(callback);
+            return local(runtime.register_tool_execution(b::ToolRegistration {
+                name: name.into(),
+                priority,
+                callback: b::ToolCallbackBox::new(ContextToolCallback {
+                    executor: self.executor.clone(),
+                    callback: Arc::new(move |context, next| Box::pin(callback(context, next))),
+                }),
+            }));
+        }
         let callback = Arc::new(callback);
         self.unary(
             name,
@@ -1378,6 +1480,17 @@ impl<P: Plugin> a::Plugin for Adapter<P> {
         config: abi::Json,
         runtime: a::RuntimeBox,
     ) -> FfiFuture<a::Result<a::RegisteredComponent>> {
+        self.register_with_runtime(config, runtime, None)
+    }
+}
+
+impl<P: Plugin> Adapter<P> {
+    fn register_with_runtime(
+        &self,
+        config: abi::Json,
+        runtime: a::RuntimeBox,
+        tool_runtime: Option<Arc<b::RuntimeBox>>,
+    ) -> FfiFuture<a::Result<a::RegisteredComponent>> {
         let setup = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
             let config: Map<String, Json> = decode(config)?;
             let executor = match self.0.executor_config_for_component(&config)? {
@@ -1406,6 +1519,7 @@ impl<P: Plugin> a::Plugin for Adapter<P> {
             let diagnostic_transport = Arc::new(runtime.diagnostics());
             let mut ctx = PluginContext {
                 registrations: vec![],
+                tool_runtime,
                 runtime: PluginRuntime {
                     raw: Arc::new(runtime),
                     diagnostic_transport,
@@ -1448,31 +1562,62 @@ impl<P: Plugin> a::Plugin for Adapter<P> {
     }
 }
 
-/// Construct a checked plugin, reject an identity mismatch, and contain constructor panics in the SDK.
+impl<P: Plugin> b::Plugin for Adapter<P> {
+    fn allows_multiple_components(&self) -> bool {
+        <Self as a::Plugin>::allows_multiple_components(self)
+    }
+    fn validate(&self, config: abi::Json) -> Vec<a::ConfigDiagnostic> {
+        <Self as a::Plugin>::validate(self, config)
+    }
+    fn register(
+        &self,
+        config: abi::Json,
+        runtime: b::RuntimeBox,
+    ) -> FfiFuture<a::Result<a::RegisteredComponent>> {
+        match runtime.baseline() {
+            Ok(baseline) => self.register_with_runtime(config, baseline, Some(Arc::new(runtime))),
+            Err(error) => async move { Err(error) }.into_ffi(),
+        }
+    }
+}
+
+/// Construct a plugin using the legacy native v1.0 callback interfaces.
 pub fn create_plugin<P: Plugin>(
     constructor: impl FnOnce() -> P,
     kind: &str,
 ) -> a::Result<a::PluginBox> {
+    create_adapter(constructor, kind).map(a::PluginBox::new)
+}
+
+/// Construct a native v1.1 plugin with separate tool execution context transport.
+pub fn create_plugin_v1_1<P: Plugin>(
+    constructor: impl FnOnce() -> P,
+    kind: &str,
+) -> a::Result<b::PluginBox> {
+    create_adapter(constructor, kind).map(b::PluginBox::new)
+}
+
+fn create_adapter<P: Plugin>(constructor: impl FnOnce() -> P, kind: &str) -> a::Result<Adapter<P>> {
     std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
         let plugin = constructor();
         let _ = plugin.allows_multiple_components();
         if plugin.plugin_kind() != kind {
-            return a::Result::Err(failure(
+            return Err(failure(
                 "exported plugin kind disagrees with implementation",
             ));
         }
-        a::Result::Ok(a::PluginBox::new(Adapter(Arc::new(plugin))))
+        Ok(Adapter(Arc::new(plugin)))
     }))
-    .unwrap_or_else(|_| a::Result::Err(failure("native plugin constructor panicked")))
+    .unwrap_or_else(|_| Err(failure("native plugin constructor panicked")))
 }
 
 /// Export a native plugin with SDK-derived checked contract metadata.
 #[macro_export]
 macro_rules! nemo_relay_checked_plugin {
     (kind = $kind:literal, $constructor:expr) => {
-        $crate::abi::export_factory!(
+        $crate::abi::export_factory_v1_1!(
             kind = $kind,
-            create = || $crate::checked::create_plugin($constructor, $kind)
+            create = || $crate::checked::create_plugin_v1_1($constructor, $kind)
         );
     };
 }

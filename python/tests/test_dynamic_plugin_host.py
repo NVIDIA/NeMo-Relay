@@ -80,7 +80,7 @@ def native_dynamic_plugin(tmp_path_factory: pytest.TempPathFactory) -> _BuiltPlu
 
             [compat]
             relay = ">=1.0.0,<2.0"
-            native_api = "v1.0"
+            native_api = "v1.1"
 
             [defaults]
             enabled = false
