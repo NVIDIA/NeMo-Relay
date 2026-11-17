@@ -1132,7 +1132,6 @@ fn worker_handshake_validation_accepts_v1_and_rejects_v2() {
     let mut handshake = HandshakeResponse {
         allows_multiple_components: false,
         supported_surfaces: Vec::new(),
-        capabilities: Vec::new(),
         identity: Some(pb::WorkerIdentity {
             plugin_id: "fixture_worker".into(),
             plugin_kind: "fixture_worker".into(),
@@ -1160,7 +1159,20 @@ fn worker_handshake_validation_accepts_v1_and_rejects_v2() {
         .unwrap()
         .name = WORKER_PROTOCOL.into();
     validate_worker_handshake("fixture_worker", &handshake)
-        .expect("a grpc-v1 handshake response should be accepted");
+        .expect("the required 1.0 worker contract should be accepted");
+    for version in ["0.11.1", "2.0.0"] {
+        handshake
+            .identity
+            .as_mut()
+            .unwrap()
+            .protocol
+            .as_mut()
+            .unwrap()
+            .version = version.into();
+        let error = validate_worker_handshake("fixture_worker", &handshake)
+            .expect_err("another contract version must fail before registration");
+        assert!(error.to_string().contains("incompatible worker identity"));
+    }
 }
 
 #[test]
@@ -1195,9 +1207,9 @@ async fn worker_unix_connection_reports_a_missing_socket() {
 }
 
 #[tokio::test(flavor = "multi_thread")]
-async fn tool_execution_context_requires_worker_capability_before_invocation() {
+async fn tool_execution_context_is_forwarded_as_part_of_the_required_worker_contract() {
     let received = Arc::new(Mutex::new(Vec::new()));
-    let (mut callback, _shutdown) = fake_callback_service({
+    let (callback, _shutdown) = fake_callback_service({
         let received = received.clone();
         move |request| {
             let Some(invoke_request_payload::Payload::Tool(tool)) = request.payload else {
@@ -1218,59 +1230,31 @@ async fn tool_execution_context_requires_worker_capability_before_invocation() {
         }
     })
     .await;
-    for context in [json!({}), json!({"operation": {"attempt": 1}})] {
-        let error = callback
+    let contexts = [
+        None,
+        Some(json!({})),
+        Some(json!({"operation": {"attempt": 1}, "integer": u64::MAX})),
+    ];
+    for context in &contexts {
+        callback
             .invoke_tool_execution(
                 "context",
                 "lookup",
                 json!({"query": "test"}),
                 Some("call"),
-                Some(context),
-                Arc::new(|_| panic!("unsupported worker must not execute continuation")),
+                context.clone(),
+                Arc::new(|_| panic!("worker completes without invoking continuation")),
             )
             .await
-            .unwrap_err();
-        assert!(
-            error
-                .to_string()
-                .contains("does not support tool execution context")
-        );
+            .unwrap();
+        assert!(callback.host_state.continuations.lock().unwrap().is_empty());
     }
-    assert!(received.lock().unwrap().is_empty());
-    assert!(callback.host_state.continuations.lock().unwrap().is_empty());
-
-    // Context-free calls retain the legacy path, even for peers without the capability.
-    callback
-        .invoke_tool_execution(
-            "context",
-            "lookup",
-            json!({}),
-            None,
-            None,
-            Arc::new(|_| panic!("worker completes without invoking continuation")),
-        )
-        .await
-        .unwrap();
-    assert_eq!(received.lock().unwrap().len(), 1);
-    assert!(received.lock().unwrap()[0].is_none());
-
-    callback.supports_tool_execution_context = true;
-    let context = json!({"operation": {"attempt": 1}, "integer": u64::MAX});
-    callback
-        .invoke_tool_execution(
-            "context",
-            "lookup",
-            json!({}),
-            Some("call"),
-            Some(context.clone()),
-            Arc::new(|_| panic!("worker completes without invoking continuation")),
-        )
-        .await
-        .unwrap();
     let values = received.lock().unwrap();
-    assert_eq!(values.len(), 2);
-    let decoded: Json = decode_wire(values[1].as_ref().unwrap()).unwrap();
-    assert_eq!(decoded, context);
+    assert_eq!(values.len(), contexts.len());
+    for (encoded, expected) in values.iter().zip(contexts) {
+        let decoded: Option<Json> = encoded.as_ref().map(decode_wire).transpose().unwrap();
+        assert_eq!(decoded, expected);
+    }
 }
 
 #[tokio::test(flavor = "multi_thread")]
@@ -4771,7 +4755,6 @@ fn callback_for_client(
     (
         WorkerPluginCallback {
             callback_timeouts: Default::default(),
-            supports_tool_execution_context: false,
             activation_id: ACTIVATION_ID.into(),
             plugin_kind: "fixture_worker".into(),
             runtime: tokio::runtime::Handle::current(),
@@ -4800,7 +4783,6 @@ async fn fake_worker_instance(
             callback_timeouts: Default::default(),
             plugin_kind: "fixture_worker".into(),
             allows_multiple_components: false,
-            supports_tool_execution_context: false,
             config: serde_json::Map::new(),
             validation_diagnostics: Vec::new(),
             relay_compat: ">=1.0.0,<2.0".into(),
@@ -5156,7 +5138,6 @@ impl PluginWorker for FakePluginWorker {
         Ok(tonic::Response::new(HandshakeResponse {
             allows_multiple_components: false,
             supported_surfaces: Vec::new(),
-            capabilities: Vec::new(),
             identity: Some(pb::WorkerIdentity {
                 plugin_id: "fixture_worker".into(),
                 plugin_kind: "fixture_worker".into(),

@@ -363,7 +363,6 @@ struct WorkerPluginInstance {
     callback_timeouts: super::WorkerCallbackTimeouts,
     plugin_kind: String,
     allows_multiple_components: bool,
-    supports_tool_execution_context: bool,
     config: Map<String, Json>,
     validation_diagnostics: Vec<ConfigDiagnostic>,
     relay_compat: String,
@@ -1070,10 +1069,6 @@ fn load_one_worker_plugin(
         callback_timeouts,
         plugin_kind: spec.plugin_id.clone(),
         allows_multiple_components: handshake.allows_multiple_components,
-        supports_tool_execution_context: handshake
-            .capabilities
-            .iter()
-            .any(|capability| capability == wire::TOOL_EXECUTION_CONTEXT_CAPABILITY),
         config: spec.config.clone(),
         validation_diagnostics,
         relay_compat,
@@ -2042,7 +2037,6 @@ impl WorkerPluginInstance {
     fn clone_for_callback(&self) -> WorkerPluginCallback {
         WorkerPluginCallback {
             callback_timeouts: self.callback_timeouts.clone(),
-            supports_tool_execution_context: self.supports_tool_execution_context,
             plugin_kind: self.plugin_kind.clone(),
             activation_id: self.host_state.activation_id.clone(),
             runtime: self.runtime.handle(),
@@ -2075,7 +2069,6 @@ fn bind_loopback_listener() -> crate::Result<(TcpListener, SocketAddr)> {
 #[derive(Clone)]
 struct WorkerPluginCallback {
     callback_timeouts: super::WorkerCallbackTimeouts,
-    supports_tool_execution_context: bool,
     plugin_kind: String,
     activation_id: String,
     runtime: tokio::runtime::Handle,
@@ -2106,7 +2099,6 @@ impl WorkerGateCallback {
             .ok_or_else(|| FlowError::NotFound("worker activation is shutting down".into()))?;
         WorkerPluginCallback {
             callback_timeouts: self.callback_timeouts.clone(),
-            supports_tool_execution_context: false,
             plugin_kind: self.plugin_kind.clone(),
             activation_id: host_state.activation_id.clone(),
             runtime: self.runtime.clone(),
@@ -2523,13 +2515,8 @@ impl WorkerPluginCallback {
         execution_context: Option<Json>,
         next: ToolExecutionNextFn,
     ) -> FlowResult<ToolExecutionInterceptOutcome> {
-        // Older SDKs discard unknown protobuf fields. Never invoke their callback
-        // with a different contract from the one the application supplied.
-        if execution_context.is_some() && !self.supports_tool_execution_context {
-            return Err(FlowError::InvalidArgument(
-                "worker does not support tool execution context".into(),
-            ));
-        }
+        // Preserving optional execution context is required by the 1.0
+        // worker contract checked at activation, not a negotiated feature.
         let continuation_id = self
             .host_state
             .insert_continuation(Continuation::tool(next))?;

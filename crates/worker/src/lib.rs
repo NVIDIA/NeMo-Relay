@@ -2063,7 +2063,7 @@ impl Drop for AbortTaskOnDrop {
 
 #[tonic::async_trait]
 impl PluginWorker for WorkerService {
-    /// Authenticate the host and check plugin and protocol identity before advertising worker capabilities.
+    /// Authenticate the host and confirm the required worker contract before registration.
     async fn handshake(
         &self,
         request: Request<HandshakeRequest>,
@@ -2095,7 +2095,6 @@ impl PluginWorker for WorkerService {
             identity: Some(self.identity()),
             allows_multiple_components: self.plugin.allows_multiple_components(),
             supported_surfaces: all_surfaces().into_iter().map(|v| v as i32).collect(),
-            capabilities: vec![wire::TOOL_EXECUTION_CONTEXT_CAPABILITY.into()],
         }))
     }
 

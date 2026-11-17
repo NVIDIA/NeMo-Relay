@@ -69,14 +69,17 @@ Apply these version and compatibility rules:
   mandatory enum values, and missing mandatory alternatives. They must not
   interpret them as success, allow, or an empty payload. Tolerating unknown wire
   fields is not proof that a runtime conversion preserves those fields.
-- `HandshakeResponse.capabilities` advertises additive SDK support. The token
-  `tool-execution-context-v1` means a worker preserves the optional
-  `ToolExecutionInvocation.execution_context` object in its callback input.
-  A host must refuse a context-bearing call before invoking a tool execution
-  interceptor whose worker did not advertise that token. An empty object is
-  context-bearing; absence preserves the previous invocation path. Unknown
-  capability names grant no behavior. Compatibility ranges and unknown-field
-  tolerance do not replace this check.
+- Preserving `ToolExecutionInvocation.execution_context` in tool execution
+  callbacks is required by the `1.0.0` worker contract, not an optional negotiated
+  feature. The value remains optional on each invocation: absence means no
+  context and an empty object is present context. Every worker claiming this
+  contract must preserve both cases. Hosts and SDKs check protocol identity at
+  activation rather than negotiating a separate context capability.
+  Before the first release, rebuild and repackage development workers with the
+  matching SDK when this baseline changes. An obsolete development binary that
+  advertises the same contract version cannot be identified by version alone;
+  it is not a supported compatibility path. Unknown-field tolerance does not
+  establish conformance with the required contract.
 - Provider extensions belong in explicit `extra` maps or provider-native variants.
   Unknown fields in those maps must round-trip. Encode and decode reject keys
   that shadow modeled native JSON fields, including `role` and `type`

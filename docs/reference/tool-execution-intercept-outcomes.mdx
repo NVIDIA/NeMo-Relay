@@ -399,17 +399,24 @@ Python, Rust, Go and C do not need an equivalent application-side helper for thi
   library exporting `nemo_relay_tool_call_execute_with_context`. Existing
   execute symbols remain available; they do not accept context.
 
-These language-level checks do not establish remote worker support. That is
-checked separately through the worker handshake described below.
+These language-level checks do not establish a worker's protocol identity.
+Workers must implement the required contract checked during handshake below.
 
 **Worker-side compatibility checks**
 
-Omitting the field preserves existing calls and callback signatures. Receiving
-it requires an updated binding or worker SDK. Workers advertise the
-`tool-execution-context-v1` capability; a host rejects a context-bearing call
-before invoking a worker intercept that does not advertise support. Calls
-without execution context continue to support legacy workers. The capability
-indicates transport support, not permission to execute.
+Execution-context support is required by
+`nvidia.nemo.relay.worker.v1@1.0.0`, not an optional SDK capability. Hosts and
+workers check protocol identity and exact contract version before registration.
+Every conforming worker must preserve supplied context, including `{}`. The
+application can still omit context on any call, and callback signatures remain
+unchanged. The handshake establishes the declared protocol contract, not
+permission to execute or proof of application approval.
+
+Relay 1.0 has not yet been released. Rebuild and repackage development workers
+with the matching SDK rather than relying on compatibility with an earlier
+development snapshot. An obsolete binary that advertises the same `1.0.0`
+identity cannot be detected by version alone; the contract requires it to be
+rebuilt. Separately versioned diagnostic contracts are unchanged.
 
 The native dynamic-plugin `v1.0` ABI remains frozen and cannot carry this field.
 A context-bearing call that reaches a legacy native tool execution intercept

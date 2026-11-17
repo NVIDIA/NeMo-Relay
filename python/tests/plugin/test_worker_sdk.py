@@ -820,7 +820,7 @@ async def test_health_handshake_validate_register_and_all_surfaces(service: _Wor
     assert handshake.identity.protocol.name == WORKER_PROTOCOL
     assert handshake.identity.sdk_version == plugin_api._SDK_VERSION
     assert set(handshake.supported_surfaces) == set(_all_expected_surfaces())
-    assert "tool-execution-context-v1" in handshake.capabilities
+    assert handshake.identity.protocol.version == plugin_api._protocol.VERSION
 
     validate = await service.Validate(
         worker_pb.ValidateRequest(
@@ -927,6 +927,16 @@ def test_encode_payload_decode_rejects_non_standard_constants(payload: bytes) ->
     envelope = common_pb.JsonValue(json=payload)
     with pytest.raises(WorkerSdkError, match="non-standard JSON constant"):
         _decode_payload(envelope, "json value")
+
+
+@pytest.mark.parametrize("version", ["0.11.1", "2.0.0"])
+async def test_handshake_requires_the_exact_worker_contract_version(service: _WorkerService, version: str) -> None:
+    request = _handshake_request()
+    request.protocol.version = version
+    with pytest.raises(GrpcAbort) as error:
+        await service.Handshake(request, AbortContext())
+    assert error.value.code == grpc.StatusCode.INVALID_ARGUMENT
+    assert "protocol.version" in error.value.details
 
 
 @pytest.mark.parametrize("payload", [b"{", b"\xff"])
@@ -3921,7 +3931,7 @@ def _all_expected_surfaces() -> list[int]:
 
 
 @pytest.mark.parametrize("execution_context", [None, {}, {"operation": {"attempt": 1}, "integer": 2**64 - 1}])
-async def test_tool_execution_intercept_receives_tool_call_id(execution_context) -> None:
+async def test_required_worker_contract_delivers_context_without_feature_negotiation(execution_context) -> None:
     seen: dict[str, Json] = {}
 
     class ContextPlugin(WorkerPlugin):
@@ -3945,6 +3955,10 @@ async def test_tool_execution_intercept_receives_tool_call_id(execution_context)
             ctx.register_tool_execution_intercept("context", tool_execution)
 
     service = _service(ContextPlugin(), RecordingHostStub())
+    handshake_request = _handshake_request()
+    handshake_request.plugin_id = "tests.context"
+    handshake = await service.Handshake(handshake_request, AbortContext())
+    assert handshake.identity.protocol.version == plugin_api._protocol.VERSION
     await _register(service)
     response = await service.Invoke(
         _invoke_request(

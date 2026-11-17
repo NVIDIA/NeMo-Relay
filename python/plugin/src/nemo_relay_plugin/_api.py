@@ -2617,7 +2617,6 @@ class _WorkerService(worker_grpc.PluginWorkerServiceServicer):
             identity=self._identity(),
             allows_multiple_components=bool(getattr(self._plugin, "allows_multiple_components", False)),
             supported_surfaces=_all_surfaces(),
-            capabilities=["tool-execution-context-v1"],
         )
 
     def _identity(self) -> Any:

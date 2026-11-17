@@ -114,10 +114,13 @@ context. Nested managed calls do not inherit it automatically. Relay assigns
 no authorization meaning to its contents and does not authenticate any claim
 inside the object.
 
-The SDK advertises `tool-execution-context-v1` during handshake. A host refuses
-context-bearing calls to a worker that does not advertise this capability,
-including calls carrying an empty object. Calls without context keep the
-previous behavior.
+Preserving this field is required by the Relay 1.0 worker contract; there is no
+separate feature advertisement or opt-in. The value is still optional on each
+call: omission means no context and `{}` is a supplied, empty context. The
+handshake checks the protocol identity and exact contract version. Rebuild and
+repackage development workers with the matching SDK before using this baseline;
+an obsolete development binary advertising the same `1.0.0` identity cannot be
+distinguished by that version alone.
 
 A minimal worker plugin looks like this:
 
