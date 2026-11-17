@@ -1007,3 +1007,98 @@ fn oci_genai_overlay_maps_every_finish_reason_variant() {
         assert_eq!(overlaid["chatResponse"]["finishReason"], json!(v2));
     }
 }
+
+#[test]
+fn openai_refusal_overlays_keep_text_and_refusal_fields_separate() {
+    let parts = serde_json::from_value(json!([
+        {"type":"text", "text":"first\nline"},
+        {"type":"refusal", "refusal":"[REDACTED]"},
+        {"type":"text", "text":"last"}
+    ]))
+    .unwrap();
+    let annotated = AnnotatedLlmResponse {
+        message: Some(parts),
+        ..Default::default()
+    };
+    let chat = BuiltinCodecName::OpenAIChat.overlay_response_payload(
+        json!({"choices":[{"message":{
+            "content":"raw text", "refusal":"raw secret", "provider_extra":true
+        }}]}),
+        &annotated,
+    );
+    assert_eq!(
+        chat["choices"][0]["message"]["content"],
+        "first\nline\nlast"
+    );
+    assert_eq!(chat["choices"][0]["message"]["refusal"], "[REDACTED]");
+    assert_eq!(chat["choices"][0]["message"]["provider_extra"], true);
+
+    let responses = BuiltinCodecName::OpenAIResponses.overlay_response_payload(
+        json!({
+            "output_text":"raw text", "output":[{"type":"message","content":[
+                {"type":"output_text","text":"raw first"},
+                {"type":"refusal","refusal":"raw secret", "provider_extra":true},
+                {"type":"output_text","text":"raw last"}
+            ]}]
+        }),
+        &annotated,
+    );
+    assert_eq!(responses["output_text"], "first\nline\nlast");
+    assert_eq!(responses["output"][0]["content"][0]["text"], "first\nline");
+    assert_eq!(
+        responses["output"][0]["content"][1]["refusal"],
+        "[REDACTED]"
+    );
+    assert_eq!(responses["output"][0]["content"][1]["provider_extra"], true);
+    assert_eq!(responses["output"][0]["content"][2]["text"], "last");
+}
+
+#[test]
+fn openai_overlays_remove_refusals_when_normalized_content_is_removed() {
+    let annotated = AnnotatedLlmResponse::default();
+    let chat = BuiltinCodecName::OpenAIChat.overlay_response_payload(
+        json!({"choices":[{"message":{
+            "content":null, "refusal":"secret"
+        }}]}),
+        &annotated,
+    );
+    assert!(chat["choices"][0]["message"].get("refusal").is_none());
+    let responses = BuiltinCodecName::OpenAIResponses.overlay_response_payload(
+        json!({"output":[{
+            "type":"message","content":[{"type":"refusal","refusal":"secret"}]
+        }]}),
+        &annotated,
+    );
+    assert!(
+        responses["output"][0]["content"][0]
+            .get("refusal")
+            .is_none()
+    );
+}
+
+#[test]
+fn openai_responses_overlay_does_not_move_text_across_refusal_boundaries() {
+    let annotated = AnnotatedLlmResponse {
+        message: Some(
+            serde_json::from_value(json!([
+                {"type":"refusal","refusal":"safe refusal"},
+                {"type":"text","text":"safe tail"}
+            ]))
+            .unwrap(),
+        ),
+        ..Default::default()
+    };
+    let result = BuiltinCodecName::OpenAIResponses.overlay_response_payload(
+        json!({"output":[{
+            "type":"message","content":[
+                {"type":"output_text","text":"removed secret"},
+                {"type":"refusal","refusal":"raw refusal"},
+                {"type":"output_text","text":"raw tail"}
+            ]
+        }]}),
+        &annotated,
+    );
+    assert!(result["output"][0]["content"][0].get("text").is_none());
+    assert_eq!(result["output"][0]["content"][1]["refusal"], "safe refusal");
+    assert_eq!(result["output"][0]["content"][2]["text"], "safe tail");
+}

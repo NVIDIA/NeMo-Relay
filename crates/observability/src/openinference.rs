@@ -16,6 +16,7 @@ use super::{
 use crate::normalization::EventView;
 use nemo_relay_types::Json;
 use nemo_relay_types::api::scope::ScopeType;
+use nemo_relay_types::codec::content::MessageView;
 use nemo_relay_types::codec::request::{
     AnnotatedLlmRequest, ContentPart, Message, MessageContent, ToolDefinition,
 };
@@ -25,6 +26,7 @@ use nemo_relay_types::codec::response::{
 use opentelemetry::KeyValue;
 use opentelemetry::trace::SpanKind;
 use serde::Serialize;
+use std::borrow::Cow;
 
 pub(crate) fn span_kind(event: &EventView<'_>) -> SpanKind {
     match semantic_scope_type(event) {
@@ -290,7 +292,7 @@ pub(crate) fn push_annotated_response_attributes(
             "assistant",
         ));
     }
-    if let Some(content) = response.message.as_ref().and_then(message_content_text) {
+    if let Some(content) = message_view_text(response.output()) {
         attributes.push(KeyValue::new(
             "llm.output_messages.0.message.content",
             content,
@@ -509,25 +511,25 @@ pub(crate) fn push_message_text_value(
 }
 
 pub(crate) fn message_content_text(content: &MessageContent) -> Option<String> {
-    match content {
-        MessageContent::Text(text) => display_text_from_string(text),
-        MessageContent::Parts(parts) => {
-            let text = parts
-                .iter()
-                .filter_map(|part| match part {
-                    ContentPart::Text { text, .. } => Some(text.as_str()),
-                    ContentPart::Refusal { refusal, .. } => Some(refusal.as_str()),
-                    ContentPart::ProviderNative { value, .. } => value
-                        .get("text")
-                        .and_then(Json::as_str)
-                        .or_else(|| value.get("refusal").and_then(Json::as_str)),
-                    _ => None,
-                })
-                .collect::<Vec<_>>()
-                .join("\n")
-                .trim()
-                .to_string();
-            if text.is_empty() { None } else { Some(text) }
+    message_view_text(content.content_view())
+}
+
+fn message_view_text(view: MessageView<'_>) -> Option<String> {
+    let text = view.text()?;
+    // Apply the display policy after shared extraction. Normalized text is
+    // literal content, even when it happens to contain a JSON document.
+    let start = text.len() - text.trim_start().len();
+    let end = text.trim_end().len();
+    if start >= end {
+        return None;
+    }
+    match text {
+        Cow::Borrowed(text) => Some(text[start..end].to_owned()),
+        Cow::Owned(mut text) => {
+            // Reuse a joined string instead of copying it again to trim it.
+            text.truncate(end);
+            text.drain(..start);
+            Some(text)
         }
     }
 }

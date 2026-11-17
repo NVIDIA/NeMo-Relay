@@ -756,7 +756,7 @@ fn test_decode_request_vllm_system_array_ignores_non_text_blocks() {
     let annotated = codec.decode(&request).unwrap();
     assert_eq!(
         annotated.system_prompt(),
-        Some("Only answer in one sentence.")
+        Some("Only answer in one sentence.".into())
     );
 }
 
@@ -819,7 +819,7 @@ fn test_decode_request_litellm_cache_control_blocks_preserved() {
     }));
     let annotated = codec.decode(&request).unwrap();
     // System text should still extract.
-    assert_eq!(annotated.system_prompt(), Some("Be terse"));
+    assert_eq!(annotated.system_prompt(), Some("Be terse".into()));
     // `system` is a modeled key in Anthropic decode and should not live in extra.
     assert!(annotated.extra.get("system").is_none());
     let Some(MessageContent::Parts(parts)) = &annotated.instructions else {

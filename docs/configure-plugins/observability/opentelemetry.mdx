@@ -939,6 +939,15 @@ no requests.
 All three projections support [attribute mappings](#attribute-mappings).
 `semantic_selector` and `capture_content` are unsupported.
 
+For typed normalized LLM instructions, history content, and response output,
+`openinference` uses the shared content view to join eligible text and refusals
+with newlines. It trims the resulting display text and omits empty content
+attributes, while preserving whitespace and empty parts inside a nonempty
+message. Normalized text containing JSON stays literal. Reasoning, media, tool
+payloads, and nested metadata are excluded from this text extraction, including
+native blocks identified as those kinds. Tool messages and tool-call attributes
+retain their separate projections.
+
 On a successful tool end span with a present, non-null annotation, the `full`
 and `openinference` projections emit the opaque value as one JSON string
 attribute named `nemo_relay.tool.result.annotation`. Relay does not flatten the

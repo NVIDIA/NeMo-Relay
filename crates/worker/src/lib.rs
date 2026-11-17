@@ -52,6 +52,7 @@ pub use nemo_relay_types::api::scope::{ScopeStackEntry, ScopeStackSnapshot, Scop
 pub use nemo_relay_types::api::tool::{
     ToolExecutionContext, ToolExecutionInterceptOutcome, ToolExecutionResult,
 };
+pub use nemo_relay_types::codec::content::{ContentSelection, ContentSnapshot, ContentSource};
 pub use nemo_relay_types::codec::identity::{BuiltinLlmCodec, LlmCodecIdentity};
 pub use nemo_relay_types::codec::optimization::{
     LlmOptimizationContribution, LlmOptimizationEvidenceQuality, LlmOptimizationKind,
@@ -1344,6 +1345,67 @@ impl PluginRuntime {
             Some(wire::get_current_scope_stack_snapshot_response::Result::NoContext(_)) => Ok(None),
             None => Err(WorkerSdkError::InvalidInput(
                 "missing scope snapshot result".into(),
+            )),
+        }
+    }
+
+    /// Inspect supplied normalized content through the host's shared Rust projection.
+    ///
+    /// One RPC returns an independent snapshot. Older hosts return an explicit unsupported
+    /// error; this method never falls back to a worker-local extraction implementation.
+    pub async fn inspect_llm_content(
+        &self,
+        source: ContentSource<'_>,
+        selection: ContentSelection,
+    ) -> Result<Option<ContentSnapshot>> {
+        use wire::inspect_llm_content_request::Source;
+        use wire::inspect_llm_content_response::Result as Outcome;
+        let source = match source {
+            ContentSource::Request(request) => {
+                Source::Request(Box::new(conversions::encode(AnnotatedLlmRequest {
+                    messages: request.messages.clone(),
+                    instructions: request.instructions.clone(),
+                    ..Default::default()
+                })?))
+            }
+            ContentSource::Response(response) => {
+                Source::Response(Box::new(conversions::encode(AnnotatedLlmResponse {
+                    message: response.message.clone(),
+                    tool_calls: response.tool_calls.clone(),
+                    ..Default::default()
+                })?))
+            }
+            ContentSource::Message(message) => {
+                Source::Message(conversions::encode(message.clone())?)
+            }
+            ContentSource::Content(content) => {
+                Source::Content(conversions::encode(content.clone())?)
+            }
+        };
+        let mut client = self.host_client().await?;
+        let response = client
+            .inspect_llm_content(Request::new(wire::InspectLlmContentRequest {
+                credentials: Some(self.credentials()),
+                source: Some(source),
+                selection: Some(conversions::encode(selection)?),
+            }))
+            .await
+            .map_err(|error| {
+                if error.code() == tonic::Code::Unimplemented {
+                    WorkerSdkError::Callback(
+                        "content inspection is unsupported by this host; upgrade the Relay host"
+                            .into(),
+                    )
+                } else {
+                    WorkerSdkError::Transport(error.to_string())
+                }
+            })?
+            .into_inner();
+        match response.result {
+            Some(Outcome::Snapshot(snapshot)) => Ok(Some(conversions::decode(snapshot)?)),
+            Some(Outcome::NoSelection(())) => Ok(None),
+            None => Err(WorkerSdkError::InvalidInput(
+                "missing content inspection result".into(),
             )),
         }
     }

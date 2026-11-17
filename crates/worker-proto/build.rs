@@ -28,6 +28,8 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         "InvokeResponse.result.llm_request_outcome",
         "DecodeLlmCodecRequestResponse.result.value",
         "DecodeLlmCodecResponseResponse.result.value",
+        "InspectLlmContentRequest.source.request",
+        "InspectLlmContentRequest.source.response",
         "ReadDiagnosticPageResponse.result.snapshot",
         "GetDiagnosticDiscoveryResponse.result.discovery",
         "InspectDiagnosticMemoryResponse.result.memory",

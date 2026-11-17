@@ -41,6 +41,255 @@ fn sample_tool_call(name: &str) -> ToolCall {
 }
 
 #[test]
+fn prompt_ir_rendering_preserves_mixed_content_boundaries() {
+    let content: MessageContent = serde_json::from_value(serde_json::json!([
+        {"type": "text", "text": "first"},
+        {"type": "refusal", "refusal": ""},
+        {"type": "image_url", "image_url": {"url": "image-a"}},
+        {"type": "tool_use", "id": "c", "name": "lookup", "input": {"q": "x"}}
+    ]))
+    .unwrap();
+    let ir = build_prompt_ir(&AnnotatedLlmRequest {
+        messages: vec![Message::User {
+            content,
+            name: None,
+        }],
+        ..Default::default()
+    })
+    .unwrap();
+    assert_eq!(ir.blocks.len(), 1);
+    let content: serde_json::Value = serde_json::from_str(&ir.blocks[0].content).unwrap();
+    assert_eq!(content.as_array().unwrap().len(), 4);
+    assert_eq!(
+        content[0],
+        serde_json::json!({"type": "text", "text": "first"})
+    );
+    assert_eq!(
+        content[1],
+        serde_json::json!({"type": "refusal", "refusal": ""})
+    );
+    assert_eq!(content[2]["type"], "image_url");
+    assert!(
+        content[2]["fingerprint"]
+            .as_str()
+            .unwrap()
+            .starts_with("sha256:")
+    );
+    assert_eq!(content[3]["input"], serde_json::json!({"q": "x"}));
+    assert_eq!(ir.blocks[0].span_id.0, "user-0");
+}
+
+#[test]
+fn adaptive_content_image_changes_stop_false_stable_prefixes() {
+    let request = |url: &str| AnnotatedLlmRequest {
+        messages: vec![
+            Message::System {
+                content: MessageContent::Text("stable system".into()),
+                name: None,
+            },
+            Message::User {
+                content: serde_json::from_value(serde_json::json!([
+                    {"type": "text", "text": "describe this"},
+                    {"type": "image_url", "image_url": {"url": url}}
+                ]))
+                .unwrap(),
+                name: None,
+            },
+        ],
+        ..Default::default()
+    };
+    let first = build_prompt_ir(&request("private-image-a")).unwrap();
+    let second = build_prompt_ir(&request("private-image-b")).unwrap();
+    assert_eq!(first.blocks.len(), second.blocks.len());
+    assert_eq!(first.blocks[1].span_id, second.blocks[1].span_id);
+    assert_ne!(first.blocks[1].content, second.blocks[1].content);
+    assert!(!first.blocks[1].content.contains("private-image-a"));
+    assert_eq!(
+        serde_json::to_value(first.blocks[1].content_type).unwrap(),
+        "opaque"
+    );
+    let stability = crate::acg::stability::analyze_stability(
+        &[first, second],
+        &crate::acg::stability::StabilityThresholds::default(),
+    );
+    assert_eq!(stability.stable_prefix_length, 1);
+}
+
+#[test]
+fn adaptive_content_structured_values_preserve_whitespace_and_key_order_independence() {
+    let request = |arguments: serde_json::Value| AnnotatedLlmRequest {
+        messages: vec![Message::ToolCallItem {
+            id: None,
+            call_id: "c".into(),
+            name: "lookup".into(),
+            arguments,
+            extra: Default::default(),
+        }],
+        ..Default::default()
+    };
+    let first = build_prompt_ir(&request(
+        serde_json::from_str(r#"{"city":"New  York","days":2}"#).unwrap(),
+    ))
+    .unwrap();
+    let different =
+        build_prompt_ir(&request(serde_json::json!({"city": "New York", "days": 2}))).unwrap();
+    let reordered = build_prompt_ir(&request(
+        serde_json::from_str(r#"{"days":2,"city":"New  York"}"#).unwrap(),
+    ))
+    .unwrap();
+    assert_ne!(first.blocks[0].content, different.blocks[0].content);
+    assert_eq!(first.blocks[0].content, reordered.blocks[0].content);
+    let value: serde_json::Value = serde_json::from_str(&first.blocks[0].content).unwrap();
+    assert_eq!(value["arguments"]["city"], "New  York");
+    assert_eq!(
+        serde_json::to_value(first.blocks[0].content_type).unwrap(),
+        "structured_input"
+    );
+}
+
+#[test]
+fn adaptive_content_stability_distinguishes_typed_structure_from_literal_prose() {
+    let mut request = AnnotatedLlmRequest {
+        messages: vec![Message::User {
+            content: serde_json::from_value(serde_json::json!([
+                {"type": "tool_use", "id": "c", "name": "lookup", "input": {"q": "same"}}
+            ]))
+            .unwrap(),
+            name: None,
+        }],
+        ..Default::default()
+    };
+    let structured = build_prompt_ir(&request).unwrap();
+    request.messages = vec![Message::User {
+        content: MessageContent::Text(structured.blocks[0].content.clone()),
+        name: None,
+    }];
+    let literal = build_prompt_ir(&request).unwrap();
+    assert_eq!(structured.blocks[0].content, literal.blocks[0].content);
+    let stability = crate::acg::stability::analyze_stability(
+        &[structured, literal],
+        &crate::acg::stability::StabilityThresholds::default(),
+    );
+    assert_eq!(stability.stable_prefix_length, 0);
+    assert_eq!(stability.scores[0].score, 0.5);
+}
+
+#[test]
+fn tool_result_stability_distinguishes_typed_structure_from_literal_text() {
+    for message in [
+        serde_json::json!({"role": "tool", "tool_call_id": "c", "content": [{"type": "refusal", "refusal": "no"}]}),
+        serde_json::json!({"role": "tool", "tool_call_id": "c", "content": [{"type": "tool_use", "id": "nested", "name": "lookup", "input": {"q": "same"}}]}),
+        serde_json::json!({"role": "tool", "tool_call_id": "c", "content": [{"type": "tool_result", "tool_use_id": "nested", "content": "same"}]}),
+        serde_json::json!({"role": "tool_result", "call_id": "c", "output": {"result": "same"}}),
+    ] {
+        let request = |message| AnnotatedLlmRequest {
+            messages: vec![message],
+            ..Default::default()
+        };
+        let structured =
+            build_prompt_ir(&request(serde_json::from_value(message).unwrap())).unwrap();
+        let literal = build_prompt_ir(&request(Message::Tool {
+            tool_call_id: "c".into(),
+            content: MessageContent::Text(structured.blocks[0].content.clone()),
+        }))
+        .unwrap();
+        assert_eq!(structured.blocks[0].content, literal.blocks[0].content);
+        assert_eq!(structured.blocks[0].span_id, literal.blocks[0].span_id);
+        assert_eq!(structured.blocks[0].role, PromptRole::Tool);
+        assert_eq!(structured.blocks[0].provenance, ProvenanceLabel::Tool);
+        assert_ne!(
+            crate::acg::stability::block_key(&structured.blocks[0]),
+            crate::acg::stability::block_key(&literal.blocks[0]),
+        );
+        assert_eq!(
+            structured.blocks[0].content_type,
+            BlockContentType::StructuredInput
+        );
+        assert_eq!(literal.blocks[0].content_type, BlockContentType::ToolResult);
+        let stability = crate::acg::stability::analyze_stability(
+            &[structured, literal],
+            &crate::acg::stability::StabilityThresholds::default(),
+        );
+        assert_eq!(stability.stable_prefix_length, 0);
+        assert_eq!(stability.scores[0].score, 0.5);
+    }
+}
+
+#[test]
+fn adaptive_content_tool_payload_whitespace_is_not_prose_normalized() {
+    let request = AnnotatedLlmRequest {
+        messages: vec![
+            Message::Tool {
+                tool_call_id: "c".into(),
+                content: MessageContent::Text("{\"city\":\"New  York\"}".into()),
+            },
+            Message::Function {
+                name: "lookup".into(),
+                content: Some("{\"city\":\"New  York\"}".into()),
+            },
+            Message::Assistant {
+                content: None,
+                tool_calls: Some(vec![ToolCall {
+                    id: "c".into(),
+                    call_type: "function".into(),
+                    function: FunctionCall {
+                        name: "lookup".into(),
+                        arguments: "{\"city\":\"New  York\"}".into(),
+                    },
+                }]),
+                name: None,
+            },
+        ],
+        ..Default::default()
+    };
+    let ir = build_prompt_ir(&request).unwrap();
+    assert_eq!(ir.blocks.len(), 3);
+    assert!(
+        ir.blocks
+            .iter()
+            .all(|block| block.content.contains("New  York"))
+    );
+    assert!(
+        ir.blocks
+            .iter()
+            .all(|block| block.content_type != BlockContentType::Text)
+    );
+}
+
+#[test]
+fn adaptive_content_media_and_native_values_are_typed_opaque_fingerprints() {
+    for part in [
+        serde_json::json!({"type": "image", "image": {"data": "private-payload"}}),
+        serde_json::json!({"type": "audio", "audio": {"data": "private-payload"}}),
+        serde_json::json!({"type": "file", "file": {"file_id": "private-payload"}}),
+        serde_json::json!({"type": "provider_native", "provider": "custom", "kind": "output_text", "value": {"text": "private-payload"}}),
+    ] {
+        let ir = build_prompt_ir(&AnnotatedLlmRequest {
+            messages: vec![Message::User {
+                content: serde_json::from_value(serde_json::json!([
+                    {"type": "text", "text": "inspect"}, part
+                ]))
+                .unwrap(),
+                name: None,
+            }],
+            ..Default::default()
+        })
+        .unwrap();
+        let value: serde_json::Value = serde_json::from_str(&ir.blocks[0].content).unwrap();
+        assert_eq!(value[1]["type"], part["type"]);
+        assert!(
+            value[1]["fingerprint"]
+                .as_str()
+                .unwrap()
+                .starts_with("sha256:")
+        );
+        assert!(!ir.blocks[0].content.contains("private-payload"));
+        assert_eq!(ir.blocks[0].content_type, BlockContentType::Opaque);
+        assert!(ir.blocks[0].token_metadata.is_none());
+    }
+}
+
+#[test]
 fn build_prompt_ir_inserts_tools_before_first_non_system_message_and_preserves_all_message_kinds() {
     let request = AnnotatedLlmRequest {
         instructions: None,

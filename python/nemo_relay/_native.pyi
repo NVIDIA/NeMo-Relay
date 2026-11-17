@@ -22,7 +22,7 @@ Exceptional flow:
 
 from __future__ import annotations
 
-from collections.abc import AsyncIterator, Awaitable, Callable, Mapping, Sequence
+from collections.abc import AsyncIterator, Awaitable, Callable, Iterator, Mapping, Sequence
 from datetime import datetime
 from typing import ClassVar, Generic, Literal, Optional, TypeAlias, TypedDict, TypeVar
 
@@ -654,6 +654,164 @@ class ToolExecutionInterceptOutcome:
     @property
     def pending_marks(self) -> list[PendingMarkSpec]: ...
 
+class MessageView:
+    """Read-only snapshot; entries retain selected Rust content independently of annotations."""
+
+    @staticmethod
+    def from_message(message: Mapping[str, _JsonValue]) -> MessageView:
+        """Snapshot one normalized history item, including its role and tool semantics."""
+        ...
+    @staticmethod
+    def from_content(content: str | Sequence[_JsonValue]) -> MessageView:
+        """Snapshot standalone normalized content, including instructions."""
+        ...
+    def parts(self) -> ContentIterator:
+        """Iterate typed entries backed by shared snapshot storage."""
+        ...
+    def text_parts(self) -> Iterator[str]:
+        """Iterate Python-owned text/refusal strings using shared extraction rules."""
+        ...
+    def text(self) -> str | None:
+        """Join eligible text with newlines; preserve empty strings and whitespace."""
+        ...
+
+class ContentIterator(Iterator[ContentEntry]):
+    """Single-pass typed iterator retaining its snapshot."""
+
+    def __iter__(self) -> ContentIterator:
+        """Return this iterator."""
+        ...
+    def __next__(self) -> ContentEntry:
+        """Return the next typed entry, or raise StopIteration."""
+        ...
+
+class ContentLocation:
+    """Read-only location in a normalized snapshot, not an editing handle."""
+
+    @property
+    def root(self) -> Literal["request_message", "message", "response", "content"]:
+        """Return the normalized source category."""
+        ...
+    @property
+    def message_index(self) -> int | None:
+        """Return the original request history index, when selected from a request."""
+        ...
+    @property
+    def field(
+        self,
+    ) -> Literal["content", "message", "tool_calls", "tool_call_item", "output", "value", "native_content"]:
+        """Return the normalized field containing this entry."""
+        ...
+    @property
+    def index(self) -> int | None:
+        """Return the content/tool-call array index, or None for a scalar."""
+        ...
+
+class ContentEntry:
+    """Typed read-only entry sharing its snapshot; returned Python values are independent."""
+
+    @property
+    def kind(
+        self,
+    ) -> Literal[
+        "text",
+        "refusal",
+        "tool_call",
+        "tool_result",
+        "image_url",
+        "image",
+        "audio",
+        "file",
+        "provider_native",
+        "unknown",
+    ]:
+        """Return the content discriminator."""
+        ...
+    @property
+    def location(self) -> ContentLocation:
+        """Return the normalized source location."""
+        ...
+    @property
+    def text(self) -> str | None:
+        """Return explicit text/refusal content; None for other kinds."""
+        ...
+    @property
+    def tool_call(self) -> ToolCallView | None:
+        """Return a typed invocation when kind is tool_call."""
+        ...
+    @property
+    def tool_result(self) -> ToolResultView | None:
+        """Return a typed result when kind is tool_result."""
+        ...
+    @property
+    def value(self) -> _JsonValue:
+        """Materialize an independent media/native Python value; None for text/tools."""
+        ...
+    @property
+    def provider(self) -> str | None:
+        """Return the owning provider for native content."""
+        ...
+    @property
+    def native_kind(self) -> str | None:
+        """Return the provider-native discriminator."""
+        ...
+
+class ToolCallView:
+    """Read-only tool invocation backed by shared snapshot storage."""
+
+    @property
+    def id(self) -> str | None:
+        """Return the item/tool-call identifier."""
+        ...
+    @property
+    def call_id(self) -> str | None:
+        """Return the separate correlation identifier."""
+        ...
+    @property
+    def name(self) -> str:
+        """Return the tool/function name."""
+        ...
+    @property
+    def arguments(self) -> PayloadView:
+        """Return arguments without parsing strings or rendering JSON."""
+        ...
+
+class ToolResultView:
+    """Read-only tool result whose payload is excluded from default text."""
+
+    @property
+    def id(self) -> str | None:
+        """Return the item identifier."""
+        ...
+    @property
+    def call_id(self) -> str | None:
+        """Return the corresponding tool-call identifier."""
+        ...
+    @property
+    def name(self) -> str | None:
+        """Return the legacy function-result name, if supplied."""
+        ...
+    @property
+    def is_error(self) -> bool | None:
+        """Return the explicit failure flag, if supplied."""
+        ...
+    @property
+    def payload(self) -> PayloadView:
+        """Return the complete result payload without recursive text extraction."""
+        ...
+
+class PayloadView:
+    """Original tool payload representation backed by shared snapshot storage."""
+
+    @property
+    def kind(self) -> Literal["null", "string", "json", "content"]:
+        """Return the normalized representation; JSON strings remain json."""
+        ...
+    @property
+    def value(self) -> _JsonValue:
+        """Materialize an independent Python value without parsing/rendering strings."""
+        ...
+
 class AnnotatedLLMRequest:
     """Structured view of an LLM request produced by a codec.
 
@@ -866,11 +1024,20 @@ class AnnotatedLLMRequest:
     def extra(self, value: Mapping[str, _JsonValue]) -> None:
         """Replace unknown future top-level request fields."""
         ...
+    def last_message(self) -> MessageView | None:
+        """Snapshot exactly the final supplied request item, or None for empty history."""
+        ...
+    def message(self, index: int) -> MessageView:
+        """Snapshot a history item by Python index; raise IndexError if out of bounds."""
+        ...
+    def instructions_view(self) -> MessageView | None:
+        """Snapshot top-level instructions without searching history."""
+        ...
     def system_prompt(self) -> Optional[str]:
-        """Return the first normalized system prompt, if one is present."""
+        """Join text/refusals from instructions or the first system/developer item with newlines."""
         ...
     def last_user_message(self) -> Optional[str]:
-        """Return the last normalized user message text, if one is present."""
+        """Join text/refusals from the last user item; do not skip textless items."""
         ...
     def has_tool_calls(self) -> bool:
         """Return whether the normalized request includes tool declarations."""
@@ -955,8 +1122,11 @@ class AnnotatedLLMResponse:
     def extra(self) -> _JsonObject:
         """Return additional normalized response fields."""
         ...
+    def output(self) -> MessageView:
+        """Snapshot current message and separate tool calls, including textless output."""
+        ...
     def response_text(self) -> Optional[str]:
-        """Return extracted response text, if present."""
+        """Join output text/refusals with newlines, excluding tool payloads."""
         ...
     def has_tool_calls(self) -> bool:
         """Return whether the response contains tool-call payloads."""

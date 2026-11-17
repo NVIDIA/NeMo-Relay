@@ -53,6 +53,7 @@ pub use nemo_relay_types::api::tool::{
     TOOL_EXECUTION_INTERCEPT_OUTCOME_SCHEMA, TOOL_EXECUTION_RESULT_SCHEMA, ToolAttributes,
     ToolExecutionInterceptOutcome, ToolExecutionResult,
 };
+pub use nemo_relay_types::codec::content::{ContentSelection, ContentSnapshot, ContentSource};
 pub use nemo_relay_types::codec::identity::{BuiltinLlmCodec, LlmCodecIdentity};
 pub use nemo_relay_types::codec::optimization::{
     LlmOptimizationContribution, LlmOptimizationEvidenceQuality, LlmOptimizationKind,

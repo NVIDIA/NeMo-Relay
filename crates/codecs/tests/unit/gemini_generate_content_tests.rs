@@ -2155,6 +2155,67 @@ fn test_encode_system_instruction_edit() {
 // ===================================================================
 
 #[test]
+fn test_streaming_prompt_feedback_matches_buffered_decoding() {
+    for with_candidate in [false, true] {
+        let feedback = json!({
+            "blockReason": "SAFETY",
+            "safetyRatings": [{"category": "HARM_CATEGORY_DANGEROUS_CONTENT"}],
+            "blockReasonMessage": "blocked"
+        });
+        let candidates = if with_candidate {
+            json!([{"index": 0, "content": {"role": "model", "parts": [{"text": "hello"}]}, "finishReason": "STOP"}])
+        } else {
+            json!([])
+        };
+        let buffered = json!({
+            "candidates": candidates,
+            "promptFeedback": feedback,
+            "modelVersion": "gemini-2.0-flash",
+            "usageMetadata": {"promptTokenCount": 12}
+        });
+        let streaming = GeminiGenerateContentStreamingCodec::new();
+        let mut collect = streaming.borrowed_collector().unwrap();
+        collect(&buffered).unwrap();
+        // A later usage-only chunk must not erase the feedback or create a candidate.
+        collect(&json!({"usageMetadata": {"promptTokenCount": 12}})).unwrap();
+        let aggregate = streaming.finalizer()();
+        assert_eq!(aggregate["promptFeedback"], feedback);
+        assert_eq!(aggregate["candidates"], candidates);
+        let decoded = GeminiGenerateContentCodec
+            .decode_response(&aggregate)
+            .unwrap();
+        assert_eq!(
+            serde_json::to_value(&decoded).unwrap(),
+            serde_json::to_value(
+                GeminiGenerateContentCodec
+                    .decode_response(&buffered)
+                    .unwrap()
+            )
+            .unwrap()
+        );
+        if !with_candidate {
+            assert_eq!(decoded.finish_reason, Some(FinishReason::ContentFilter));
+            assert!(decoded.message.is_none());
+        }
+    }
+}
+
+#[test]
+fn test_streaming_without_candidates_does_not_invent_output() {
+    let streaming = GeminiGenerateContentStreamingCodec::new();
+    let mut collect = streaming.collector();
+    collect(json!({"usageMetadata": {"promptTokenCount": 12}})).unwrap();
+    let aggregate = streaming.finalizer()();
+    assert_eq!(aggregate["candidates"], json!([]));
+    assert!(aggregate.get("promptFeedback").is_none());
+    let decoded = GeminiGenerateContentCodec
+        .decode_response(&aggregate)
+        .unwrap();
+    assert!(decoded.message.is_none());
+    assert!(decoded.finish_reason.is_none());
+}
+
+#[test]
 fn test_streaming_merges_partial_function_call_arguments_into_one_call() {
     let streaming_codec = GeminiGenerateContentStreamingCodec::new();
     let mut collector = streaming_codec.collector();

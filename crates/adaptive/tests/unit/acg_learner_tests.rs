@@ -92,6 +92,66 @@ fn empty_cache() -> Arc<RwLock<HotCache>> {
     }))
 }
 
+#[tokio::test]
+async fn adaptive_content_legacy_observations_and_bootstrap_state_are_isolated() {
+    let request = sample_request("gpt-4o", "stable", "task");
+    let key = derive_acg_learning_key("agent-a", &request);
+    assert!(key.contains("::acg-ir=2::"));
+    let legacy_key = key.replace("::acg-ir=2", "");
+    let legacy = vec![build_prompt_ir(&request).unwrap(); 8];
+    let backend = SeedObservationBackend::new(&legacy_key, legacy.clone());
+    backend
+        .store_observations("agent-a", &legacy)
+        .await
+        .unwrap();
+    let old_stability = analyze_stability(&legacy, &StabilityThresholds::default());
+    backend
+        .store_stability("agent-a", &old_stability)
+        .await
+        .unwrap();
+    let cache = empty_cache();
+    crate::acg_component::load_persisted_acg_state("agent-a", &backend, &cache)
+        .await
+        .unwrap();
+    assert!(cache.read().unwrap().acg_stability.is_none());
+    AcgLearner::new("agent-a", 16, StabilityThresholds::default())
+        .process_run(&sample_run(vec![request]), &backend, &cache)
+        .await
+        .unwrap();
+    assert_eq!(
+        backend
+            .load_observations(&key)
+            .await
+            .unwrap()
+            .unwrap()
+            .len(),
+        1
+    );
+    assert_eq!(
+        backend
+            .load_observations(&legacy_key)
+            .await
+            .unwrap()
+            .unwrap()
+            .len(),
+        8
+    );
+    assert_eq!(
+        backend
+            .load_observations("agent-a")
+            .await
+            .unwrap()
+            .unwrap()
+            .len(),
+        8
+    );
+    let reloaded = empty_cache();
+    crate::acg_component::load_persisted_acg_state("agent-a", &backend, &reloaded)
+        .await
+        .unwrap();
+    assert_eq!(reloaded.read().unwrap().acg_observation_count, 1);
+}
+
 struct SeedObservationBackend {
     observations: std::sync::RwLock<HashMap<String, Vec<PromptIR>>>,
     stability: std::sync::RwLock<HashMap<String, crate::acg::stability::StabilityAnalysisResult>>,
@@ -292,7 +352,7 @@ async fn acg_learner_trims_observation_windows_and_updates_agent_seed() {
     assert!(stored.iter().all(|ir| ir.blocks[0].content != "System OLD"));
     assert!(
         backend
-            .load_observations("agent-a")
+            .load_observations(&acg_state_key("agent-a"))
             .await
             .unwrap()
             .is_some()
@@ -367,7 +427,11 @@ async fn acg_learner_seeds_agent_cache_from_profile_with_more_observations_when_
         .await
         .unwrap();
 
-    let aggregate = backend.load_observations("agent-a").await.unwrap().unwrap();
+    let aggregate = backend
+        .load_observations(&acg_state_key("agent-a"))
+        .await
+        .unwrap()
+        .unwrap();
     assert_eq!(aggregate.len(), 2);
     assert!(
         aggregate

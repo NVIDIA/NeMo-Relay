@@ -426,16 +426,29 @@ fn recursive_globs_select_zero_or_more_whole_segments() {
         "other": {"text": "outside"}
     });
     let matcher = TargetPathMatcher::new(&[], &["/messages/**/text".into()]).unwrap();
-    let paths = matcher.matching_json_pointer_paths(&payload);
-    assert_eq!(paths.len(), 4);
+    let backend = CompiledBuiltinBackend::new(
+        BuiltinBackendConfig {
+            action: "regex_replace".into(),
+            pattern: Some(".+".into()),
+            replacement: Some("[REDACTED]".into()),
+            target_path_globs: vec!["/messages/**/text".into()],
+            ..Default::default()
+        },
+        None,
+    )
+    .unwrap();
+    let sanitized = backend.sanitize_json_preorder_dfs(payload.clone());
+    assert_eq!(sanitized["text"], "root");
+    assert_eq!(sanitized["other"]["text"], "outside");
     for pointer in [
         "/messages/text",
         "/messages/A/content/0/text",
         "/messages/A/content/1/deep/text",
         "/messages/B/text",
     ] {
-        assert!(
-            paths.contains(&json_pointer_segments(pointer).unwrap()),
+        assert_eq!(
+            sanitized.pointer(pointer).unwrap(),
+            "[REDACTED]",
             "{pointer}"
         );
     }

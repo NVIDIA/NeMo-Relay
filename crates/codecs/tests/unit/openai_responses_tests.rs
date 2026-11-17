@@ -470,7 +470,7 @@ fn test_decode_request_with_input_array() {
         annotated.instructions,
         Some(MessageContent::Text("Be helpful.".into()))
     );
-    assert_eq!(annotated.system_prompt(), Some("Be helpful."));
+    assert_eq!(annotated.system_prompt(), Some("Be helpful.".into()));
 
     assert_eq!(annotated.messages.len(), 3);
 
@@ -492,7 +492,7 @@ fn test_decode_request_with_input_string() {
     }));
     let annotated = codec.decode(&request).unwrap();
     assert_eq!(annotated.messages.len(), 1);
-    assert_eq!(annotated.last_user_message(), Some("Hello, world!"));
+    assert_eq!(annotated.last_user_message(), Some("Hello, world!".into()));
 }
 
 #[test]
@@ -1795,9 +1795,8 @@ fn openai_responses_streaming_codec_preserves_incomplete_terminal_state() {
 }
 
 #[test]
-fn openai_responses_streaming_codec_ignores_per_token_deltas() {
-    // output_text.delta events are intentionally not accumulated — their content is redelivered
-    // in output_item.done. Codec must not double-count or insert delta-only state.
+fn openai_responses_streaming_codec_completed_items_do_not_duplicate_deltas() {
+    // Completed items replace provisional content; deltas alone never invent an item.
     let codec = OpenAIResponsesStreamingCodec::new();
     let mut collector = codec.collector();
     let finalizer = codec.finalizer();
@@ -1838,6 +1837,196 @@ fn openai_responses_streaming_codec_ignores_per_token_deltas() {
     assert_eq!(
         annotated.message,
         Some(MessageContent::Text("Hello".to_string()))
+    );
+}
+
+#[test]
+fn responses_interrupted_stream_retains_text_refusal_and_partial_arguments() {
+    for borrowed in [false, true] {
+        let codec = OpenAIResponsesStreamingCodec::new();
+        let mut collect = codec.collector();
+        let mut collect_ref = codec.borrowed_collector().unwrap();
+        for event in [
+            json!({"type": "response.created", "response": {"id": "r", "status": "in_progress", "output": []}}),
+            json!({"type": "response.output_item.added", "output_index": 0,
+                "item": {"type": "message", "id": "m", "role": "assistant", "status": "in_progress", "content": []}}),
+            json!({"type": "response.output_item.added", "output_index": 1,
+                "item": {"type": "function_call", "id": "f", "call_id": "call_1", "name": "weather", "arguments": ""}}),
+            json!({"type": "response.content_part.added", "output_index": 0, "content_index": 0,
+                "part": {"type": "output_text", "text": "", "annotations": []}}),
+            json!({"type": "response.output_text.delta", "output_index": 0, "content_index": 0, "delta": "Hel"}),
+            json!({"type": "response.output_text.delta", "output_index": 0, "content_index": 0, "delta": "lo"}),
+            json!({"type": "response.refusal.delta", "output_index": 0, "content_index": 1, "delta": ""}),
+            json!({"type": "response.function_call_arguments.delta", "output_index": 1, "delta": "{\"city\":\"Pa"}),
+        ] {
+            if borrowed {
+                collect_ref(&event).unwrap();
+            } else {
+                collect(event).unwrap();
+            }
+        }
+        let aggregate = codec.finalizer()();
+        assert_eq!(aggregate["status"], "in_progress");
+        assert_eq!(
+            aggregate["output"][0]["content"],
+            json!([
+                {"type": "output_text", "text": "Hello", "annotations": []},
+                {"type": "refusal", "refusal": ""}
+            ])
+        );
+        assert_eq!(aggregate["output"][1]["call_id"], "call_1");
+        let decoded = OpenAIResponsesCodec.decode_response(&aggregate).unwrap();
+        assert_eq!(decoded.response_text().as_deref(), Some("Hello\n"));
+        assert_ne!(decoded.finish_reason, Some(FinishReason::Complete));
+        let call = &decoded.tool_calls.unwrap()[0];
+        assert_eq!(call.name, "weather");
+        assert_eq!(call.arguments, json!("{\"city\":\"Pa"));
+    }
+}
+
+#[test]
+fn responses_completed_fields_parts_items_and_snapshots_replace_provisional_data() {
+    for stage in 0..4 {
+        let codec = OpenAIResponsesStreamingCodec::new();
+        let mut collect = codec.collector();
+        for event in [
+            json!({"type": "response.output_item.added", "output_index": 0, "item": {"type": "message", "content": []}}),
+            json!({"type": "response.output_text.delta", "output_index": 0, "content_index": 0, "delta": "provisional"}),
+            json!({"type": "response.output_text.done", "output_index": 0, "content_index": 0, "text": "field"}),
+            json!({"type": "response.output_text.delta", "output_index": 0, "content_index": 0, "delta": "ignored"}),
+        ] {
+            collect(event).unwrap();
+        }
+        if stage >= 1 {
+            collect(json!({"type": "response.content_part.done", "output_index": 0, "content_index": 0,
+                "part": {"type": "output_text", "text": "part", "annotations": [{"type": "citation"}]}})).unwrap();
+            collect(json!({"type": "response.output_text.delta", "output_index": 0, "content_index": 0, "delta": "ignored"})).unwrap();
+        }
+        if stage >= 2 {
+            collect(
+                json!({"type": "response.output_item.done", "output_index": 0,
+                "item": {"type": "message", "content": [{"type": "output_text", "text": "item"}]}}),
+            )
+            .unwrap();
+            collect(
+                json!({"type": "response.content_part.done", "output_index": 0, "content_index": 0,
+                "part": {"type": "output_text", "text": "ignored"}}),
+            )
+            .unwrap();
+        }
+        if stage >= 3 {
+            collect(
+                json!({"type": "response.completed", "response": {"status": "completed", "output": [
+                    {"type": "message", "content": [{"type": "output_text", "text": "snapshot"}]}
+                ]}}),
+            )
+            .unwrap();
+            collect(json!({"type": "response.output_item.done", "output_index": 0,
+                "item": {"type": "message", "content": [{"type": "output_text", "text": "ignored"}]}})).unwrap();
+        }
+        let aggregate = codec.finalizer()();
+        let decoded = OpenAIResponsesCodec.decode_response(&aggregate).unwrap();
+        assert_eq!(
+            decoded.response_text().as_deref(),
+            Some(["field", "part", "item", "snapshot"][stage])
+        );
+        if stage == 1 {
+            assert_eq!(
+                aggregate["output"][0]["content"][0]["annotations"],
+                json!([{"type": "citation"}])
+            );
+        }
+    }
+}
+
+#[tokio::test]
+async fn responses_partial_aggregate_still_fails_missing_terminal_validation() {
+    use futures_util::StreamExt;
+    let codec = OpenAIResponsesStreamingCodec::new();
+    let mut collect = codec.collector();
+    let events = [
+        json!({"type": "response.output_item.added", "output_index": 0,
+            "item": {"type": "message", "content": []}}),
+        json!({"type": "response.output_text.delta", "output_index": 0, "content_index": 0, "delta": "partial"}),
+    ];
+    let mut stream = codec.validate_stream(LlmJsonStream::new(futures_util::stream::iter(
+        events.into_iter().map(Ok),
+    )));
+    for _ in 0..2 {
+        collect(stream.next().await.unwrap().unwrap()).unwrap();
+    }
+    let error = stream.next().await.unwrap().unwrap_err();
+    assert!(
+        error
+            .to_string()
+            .contains("before its final response event")
+    );
+    assert!(stream.next().await.is_none());
+    let aggregate = codec.finalizer()();
+    let decoded = OpenAIResponsesCodec.decode_response(&aggregate).unwrap();
+    assert_eq!(decoded.response_text().as_deref(), Some("partial"));
+    assert!(decoded.finish_reason.is_none());
+    assert!(decoded.usage.is_none());
+}
+
+#[test]
+fn responses_completed_refusal_and_arguments_replace_deltas_in_terminal_fallback() {
+    let codec = OpenAIResponsesStreamingCodec::new();
+    let mut collect = codec.collector();
+    for event in [
+        json!({"type": "response.output_item.added", "output_index": 0, "item": {"type": "message", "content": []}}),
+        json!({"type": "response.refusal.delta", "output_index": 0, "content_index": 0, "delta": "partial"}),
+        json!({"type": "response.refusal.done", "output_index": 0, "content_index": 0, "refusal": "no"}),
+        json!({"type": "response.refusal.delta", "output_index": 0, "content_index": 0, "delta": "ignored"}),
+        json!({"type": "response.output_item.added", "output_index": 1,
+            "item": {"type": "function_call", "name": "weather", "call_id": "c", "arguments": ""}}),
+        json!({"type": "response.function_call_arguments.delta", "output_index": 1, "delta": "{"}),
+        json!({"type": "response.function_call_arguments.done", "output_index": 1, "arguments": "{\"city\":\"Paris\"}"}),
+        json!({"type": "response.function_call_arguments.delta", "output_index": 1, "delta": "ignored"}),
+        json!({"type": "response.completed", "response": {"status": "completed", "output": []}}),
+    ] {
+        collect(event).unwrap();
+    }
+    let aggregate = codec.finalizer()();
+    let decoded = OpenAIResponsesCodec.decode_response(&aggregate).unwrap();
+    assert_eq!(decoded.response_text().as_deref(), Some("no"));
+    assert_eq!(
+        decoded.tool_calls.unwrap()[0].arguments,
+        json!({"city": "Paris"})
+    );
+}
+
+#[test]
+fn responses_partial_items_override_stale_snapshots_without_losing_other_items() {
+    let codec = OpenAIResponsesStreamingCodec::new();
+    let mut collect = codec.collector();
+    collect(
+        json!({"type": "response.in_progress", "response": {"status": "in_progress", "output": [
+            {"type": "message", "content": [{"type": "output_text", "text": "stale"}]},
+            {"type": "reasoning", "summary": []}
+        ]}}),
+    )
+    .unwrap();
+    collect(
+        json!({"type": "response.output_item.added", "output_index": 0,
+        "item": {"type": "message", "content": []}}),
+    )
+    .unwrap();
+    // Sparse indices must not cause a proportional allocation or invent intervening parts.
+    collect(json!({"type": "response.output_text.delta", "output_index": 0, "content_index": u64::MAX, "delta": "new"})).unwrap();
+    let aggregate = codec.finalizer()();
+    assert_eq!(aggregate["output"].as_array().unwrap().len(), 2);
+    assert_eq!(
+        aggregate["output"][1],
+        json!({"type": "reasoning", "summary": []})
+    );
+    assert_eq!(
+        OpenAIResponsesCodec
+            .decode_response(&aggregate)
+            .unwrap()
+            .response_text()
+            .as_deref(),
+        Some("new")
     );
 }
 

@@ -41,10 +41,28 @@ The SDK provides the following types and helpers.
 | Typed runtime helpers | Share JSON, event, scope, middleware, continuation, and diagnostic contracts with the Relay host. |
 | Tool results | Preserve application results and opaque annotations across tool callbacks and continuations. |
 | `LlmExecutionContext` | Provides the selected request codec and, for non-streaming calls, the completed-response codec while the callback is active. |
+| `nemo_relay_plugin.codecs` | Selects normalized content through one authenticated Rust-host RPC, then exposes typed local snapshots without the main runtime extension. |
 | Generated transport bindings | Ship private protobuf bindings in the wheel, so installation does not require `protoc` or `grpcio-tools`. |
 
 The worker process isolates Python dependencies and crashes from Relay while preserving
 host-owned execution, event, scope, cancellation, and shutdown semantics.
+
+### Normalized Content Access
+
+Annotations remain dictionaries. Use async helpers such as
+`await codecs.last_message(ctx.runtime, request)` and
+`await codecs.output(ctx.runtime, response)` from `nemo_relay_plugin.codecs`.
+Each selection makes one authenticated `InspectLlmContent` RPC. Rust performs
+selection and extraction; Python only adapts the typed response.
+
+Returned views provide local `parts()`, `text_parts()`, and `text()` access.
+Typed entries distinguish text/refusals, tools, media, and opaque native content.
+Tool payloads retain their original representation. Snapshots are independent
+and read-only, and returned Python payload values are independent copies.
+Existing dictionary callbacks and codec decode/encode operations are unchanged.
+Older hosts report unsupported inspection explicitly; no Python policy fallback
+is used. See the [Python worker content guide](https://docs.nvidia.com/nemo/relay/build-plugins/workers/python#inspect-normalized-llm-content)
+for async selectors, ownership, limits, and compatibility.
 
 ## Propagating Continuation Errors
 

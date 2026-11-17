@@ -275,6 +275,49 @@ fn test_build_hint_translation_uses_surface_agnostic_breakpoint_targets() {
 }
 
 #[test]
+fn adaptive_content_translation_does_not_estimate_media_from_character_count() {
+    let plugin = AnthropicCachePlugin::new(&CapabilityRegistry::with_defaults());
+    let request = sample_anthropic_request_with_system_array("claude-sonnet-4");
+    let mut ir = sample_prompt_ir_no_token_metadata(5000);
+    ir.blocks[0].content_type = BlockContentType::Image;
+    let bundle = sample_intent_bundle(vec![OptimizationIntent::CacheStability(
+        CacheStabilityIntent {
+            stability_score: 1.0,
+            stable_prefix_end: 1,
+            recommended_retention_tier: None,
+            scope_label: SharingScope::Session,
+            confidence: 1.0,
+            evidence_count: 50,
+        },
+    )]);
+    let identity = sample_agent_identity();
+    for known_tokens in [None, Some(2000)] {
+        ir.blocks[0].token_metadata = known_tokens.map(|token_count| TokenizationMetadata {
+            model_family: "claude".into(),
+            token_count,
+        });
+        let translation = plugin
+            .build_hint_translation(&PluginInput {
+                original_request: &request,
+                rewritten_request: &request,
+                prompt_ir: &ir,
+                intent_bundle: &bundle,
+                agent_identity: &identity,
+            })
+            .unwrap();
+        let has_breakpoint = translation.hint_plan.directives.iter().any(|directive| {
+            matches!(
+                directive,
+                crate::acg::translation::HintDirective::Anthropic(
+                    AnthropicHintDirective::CacheBreakpoint { .. }
+                )
+            )
+        });
+        assert_eq!(has_breakpoint, known_tokens.is_some());
+    }
+}
+
+#[test]
 fn test_anthropic_plugin_source_routes_through_request_surface_appliers() {
     let source = include_str!("../../../src/acg/anthropic_plugin.rs");
 
