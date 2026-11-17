@@ -1051,11 +1051,20 @@ describe('Tool intercepts', () => {
         true,
         { host_approval: null },
         { host_approval: { version: 1 } },
+        ...['approved', 'denied', null].map((decision) => ({
+          host_approval: {
+            version: 1,
+            source: 'application',
+            approval_id: 'a',
+            tool_name: 'tool',
+            approved_arguments: {},
+            decision,
+          },
+        })),
         {
           host_approval: {
             version: 2,
             source: 'application',
-            decision: 'approved',
             approval_id: 'a',
             tool_name: 'tool',
             approved_arguments: {},

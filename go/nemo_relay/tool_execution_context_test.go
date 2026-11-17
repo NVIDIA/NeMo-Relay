@@ -167,10 +167,13 @@ func TestToolExecutionContextRejectsInvalidInputBeforeMiddlewareOrEffects(t *tes
 		"array":               json.RawMessage(`[]`),
 		"approval-null":       json.RawMessage(`{"host_approval":null}`),
 		"approval-incomplete": json.RawMessage(`{"host_approval":{"version":1}}`),
-		"approval-version":    json.RawMessage(`{"host_approval":{"version":2,"source":"test","decision":"approved","approval_id":"a","tool_name":"tool","approved_arguments":{}}}`),
+		"approval-version":    json.RawMessage(`{"host_approval":{"version":2,"source":"test","approval_id":"a","tool_name":"tool","approved_arguments":{}}}`),
 		"scalar":              json.RawMessage(`true`),
 		"oversized":           json.RawMessage(`{"value":"` + strings.Repeat("x", 16*1024) + `"}`),
 		"too-deep":            json.RawMessage(strings.Repeat(`{"nested":`, 65) + `null` + strings.Repeat(`}`, 65)),
+	}
+	for _, decision := range []string{`"approved"`, `"denied"`, `null`} {
+		invalid["obsolete-decision-"+decision] = json.RawMessage(`{"host_approval":{"version":1,"source":"test","approval_id":"a","tool_name":"tool","approved_arguments":{},"decision":` + decision + `}}`)
 	}
 	for name, context := range invalid {
 		t.Run(name, func(t *testing.T) {
@@ -210,7 +213,7 @@ func TestToolExecutionContextRequiresManagedExecution(t *testing.T) {
 }
 
 func TestApplicationExecutionContextTypedRoundTripAndValidation(t *testing.T) {
-	input := []byte(`{"host_approval":{"version":1,"source":"application","decision":"approved","approval_id":"review-1","tool_name":"demo","approved_arguments":null,"extra":{"tag":true}},"custom":[1,null]}`)
+	input := []byte(`{"host_approval":{"version":1,"source":"application","approval_id":"review-1","tool_name":"demo","approved_arguments":null,"extra":{"tag":true}},"custom":[1,null]}`)
 	var context ApplicationExecutionContext
 	if err := json.Unmarshal(input, &context); err != nil {
 		t.Fatal(err)
@@ -238,6 +241,23 @@ func TestApplicationExecutionContextTypedRoundTripAndValidation(t *testing.T) {
 			t.Fatalf("numeric version %s: %v", version, err)
 		}
 	}
+	for _, decision := range []json.RawMessage{json.RawMessage(`"approved"`), json.RawMessage(`"denied"`), json.RawMessage(`null`)} {
+		var obsolete ApplicationExecutionContext
+		legacy := bytes.Replace(input, []byte(`"version":1`), []byte(`"decision":`+string(decision)+`,"version":1`), 1)
+		if err := json.Unmarshal(legacy, &obsolete); err == nil {
+			t.Fatal("obsolete raw decision was accepted")
+		}
+		approval := *context.HostApproval
+		approval.AdditionalFields = map[string]json.RawMessage{"decision": decision}
+		var effects int
+		_, err := ToolCallExecute("invalid-typed-context", json.RawMessage(`{}`), func(args json.RawMessage) (ToolExecutionResult, error) {
+			effects++
+			return ToolExecutionResult{Result: args}, nil
+		}, WithApplicationExecutionContext(&ApplicationExecutionContext{HostApproval: &approval}))
+		if err == nil || effects != 0 {
+			t.Fatal("obsolete typed decision reached effects")
+		}
+	}
 	option := WithApplicationExecutionContext(&context)
 	context.HostApproval.Source = "changed"
 	var options toolCallOptions
@@ -261,7 +281,7 @@ func TestApplicationExecutionContextTypedRoundTripAndValidation(t *testing.T) {
 
 func TestApplicationExecutionContextTypedMiddleware(t *testing.T) {
 	context := &ApplicationExecutionContext{
-		HostApproval:     &HostApproval{Version: 1, Source: "application", Decision: "approved", ApprovalID: "review-123", ToolName: "typed-context", ApprovedArguments: json.RawMessage(`{"value":1}`), AdditionalFields: map[string]json.RawMessage{"extension": json.RawMessage(`true`)}},
+		HostApproval:     &HostApproval{Version: 1, Source: "application", ApprovalID: "review-123", ToolName: "typed-context", ApprovedArguments: json.RawMessage(`{"value":1}`), AdditionalFields: map[string]json.RawMessage{"extension": json.RawMessage(`true`)}},
 		AdditionalFields: map[string]json.RawMessage{"custom": json.RawMessage(`{"retained":true}`)},
 	}
 	var observed bool

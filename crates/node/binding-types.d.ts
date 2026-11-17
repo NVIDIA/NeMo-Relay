@@ -9,19 +9,19 @@ export type JsonArray = JsonValue[] | readonly JsonValue[];
 export type JsonValue = JsonPrimitive | JsonObject | JsonArray;
 export type Json = JsonValue;
 /** Application-asserted approval; middleware still decides which sources it trusts. */
-export interface HostApproval {
+export type HostApproval = {
   version: 1;
   /** Nonempty identifier of the application asserting approval. */
   source: string;
-  decision: 'approved';
+  /** Reserved obsolete field: the presence of host_approval already asserts approval. */
+  decision?: never;
   /** Nonempty identifier of the verified approval. */
   approval_id: string;
   /** Nonempty name of the approved tool. */
   tool_name: string;
   /** Exact approved JSON arguments; explicit null is allowed. */
   approved_arguments: JsonValue;
-  [key: string]: JsonValue;
-}
+} & JsonObject;
 
 /** Invocation-local context. Additional application-owned JSON fields are preserved. */
 export interface ApplicationExecutionContext {

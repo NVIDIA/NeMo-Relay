@@ -719,7 +719,6 @@ class TestToolIntercepts:
         approval = HostApproval(
             version=1,
             source="example.application",
-            decision="approved",
             approval_id="approval-123",
             tool_name="standard_context",
             approved_arguments={"value": 1},
@@ -749,14 +748,6 @@ class TestToolIntercepts:
             None,
             {},
             {"version": 1},
-            {
-                "version": 1,
-                "source": "example.application",
-                "decision": "denied",
-                "approval_id": "approval-123",
-                "tool_name": "lookup",
-                "approved_arguments": {},
-            },
         ],
     )
     async def test_invalid_standard_approval_prevents_tool_execution(self, approval) -> None:
@@ -769,6 +760,26 @@ class TestToolIntercepts:
                 execution_context={"host_approval": approval},
             )
         assert calls == []
+
+    @pytest.mark.parametrize("legacy_decision", ["approved", "denied", None, 1])
+    async def test_obsolete_approval_decision_key_prevents_execution(self, legacy_decision) -> None:
+        approval = {
+            "version": 1,
+            "source": "example.application",
+            "approval_id": "approval-123",
+            "tool_name": "legacy_approval",
+            "approved_arguments": {},
+            "decision": legacy_decision,
+        }
+        calls = []
+        with pytest.raises(ValueError, match="application execution context"):
+            await tools.execute(
+                "legacy_approval",
+                {},
+                lambda args: calls.append(args) or ToolExecutionResult(args),
+                execution_context={"host_approval": approval},
+            )
+        assert not calls
 
     async def test_deep_execution_context_rejected_before_recursive_conversion(self) -> None:
         supplied = {}

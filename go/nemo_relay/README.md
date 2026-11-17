@@ -88,7 +88,7 @@ result, err := nemo.ToolCallExecute(
     executeWrite,
     nemo.WithApplicationExecutionContext(&nemo.ApplicationExecutionContext{
         HostApproval: &nemo.HostApproval{
-            Version: 1, Source: "application", Decision: "approved",
+            Version: 1, Source: "application",
             ApprovalID: "review-123", ToolName: "write_file",
             ApprovedArguments: json.RawMessage(`{"path":"notes.txt","content":"hello"}`),
         },
@@ -104,7 +104,9 @@ approval: middleware must decide which application sources and claims it trusts.
 
 `ApplicationExecutionContext` and `HostApproval` preserve extra JSON fields in
 `AdditionalFields`. Known approval fields are validated; an incomplete approval
-is rejected. `WithToolExecutionContext(json.RawMessage(...))` remains available
+is rejected. Presence of `host_approval` asserts completed human approval; the
+obsolete `decision` key is reserved and rejected, including `"approved"` values.
+`WithToolExecutionContext(json.RawMessage(...))` remains available
 for raw JSON producers and follows the same runtime schema validation.
 
 The option snapshots its input and can be reused. A nil value omits context;

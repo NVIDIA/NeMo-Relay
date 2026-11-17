@@ -62,8 +62,10 @@ pub struct ApplicationExecutionContext {
 /// This is not a signed receipt. The host verifies identity, approval validity,
 /// expiry and policy before supplying it. Middleware compares the named tool
 /// and approved arguments with its current input before trusting the assertion.
-/// The host must stop denied/pending operations rather than execute them with
-/// a different decision value. Relay does not enforce an approval workflow.
+/// Presence of this assertion means completed affirmative approval. The host
+/// must stop denied/pending operations. The obsolete `decision` property is
+/// reserved and rejected, including in extensions. Relay does not enforce an
+/// approval workflow.
 #[derive(Clone, PartialEq, Serialize, Deserialize)]
 pub struct HostApproval {
     /// Approval-claim format; the standard schema requires integer `1`.
@@ -71,8 +73,6 @@ pub struct HostApproval {
     pub version: u8,
     /// Nonempty host identity checked against the consumer's configured trust.
     pub source: String,
-    /// The standard schema accepts only `approved`.
-    pub decision: String,
     /// Nonempty opaque approval identity; its replay policy belongs to the consumer.
     pub approval_id: String,
     /// Exact nonempty tool name covered by this assertion.
@@ -137,7 +137,9 @@ impl ApplicationExecutionContext {
     /// Revalidate a programmatically built value before managed execution.
     pub fn validate(&self) -> Result<(), ApplicationExecutionContextError> {
         // The extension maps may not redefine known fields. Reject before serde
-        // could emit duplicate JSON object keys with ambiguous interpretations.
+        // could emit duplicate JSON object keys with ambiguous interpretations. The
+        // removed decision key remains reserved: an old denial must not become
+        // an ignored extension on an affirmative assertion.
         if self.additional_properties.contains_key("host_approval")
             || self.host_approval.as_ref().is_some_and(|approval| {
                 approval.additional_properties.keys().any(|key| {

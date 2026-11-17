@@ -224,14 +224,15 @@ UnsupportedBehavior: TypeAlias = Literal["ignore", "warn", "error"]
 class HostApproval(TypedDict):
     """Application assertion of completed approval, not Relay-verified authority.
 
-    All standard fields are required. Additional JSON properties are preserved
-    at runtime; consumers must validate the source and exact operation before
-    relying on the assertion. A denied or pending action must not be executed.
+    Its presence asserts completed approval; all five standard fields are
+    required. Consumers must validate the source and exact operation before
+    relying on it. Other JSON properties are preserved, but the obsolete
+    ``decision`` key is reserved and rejected, regardless of its value.
+    A denied or pending action must not be executed.
     """
 
     version: Literal[1]
     source: str
-    decision: Literal["approved"]
     approval_id: str
     tool_name: str
     approved_arguments: Json

@@ -127,14 +127,15 @@ Json: TypeAlias = Any
 class HostApproval(TypedDict):
     """Application assertion of completed approval, not Relay-verified authority.
 
-    All standard fields are required. Additional JSON properties are preserved
-    at runtime; consumers must validate the source and exact operation before
-    relying on the assertion. A denied or pending action must not be executed.
+    Its presence asserts completed approval; all five standard fields are
+    required. Consumers must validate the source and exact operation before
+    relying on it. Other JSON properties are preserved, but the obsolete
+    ``decision`` key is reserved and rejected, regardless of its value.
+    A denied or pending action must not be executed.
     """
 
     version: Literal[1]
     source: str
-    decision: Literal["approved"]
     approval_id: str
     tool_name: str
     approved_arguments: Json
@@ -974,14 +975,14 @@ def _validate_application_execution_context(value: object) -> None:
             raise WorkerSdkError("invalid application execution context")
     if "host_approval" in value:
         approval = value["host_approval"]
-        required = {"version", "source", "decision", "approval_id", "tool_name", "approved_arguments"}
+        required = {"version", "source", "approval_id", "tool_name", "approved_arguments"}
         if (
             not isinstance(approval, dict)
             or not required.issubset(approval)
             or isinstance(approval["version"], bool)
             or not isinstance(approval["version"], (int, float))
             or approval["version"] != 1
-            or approval["decision"] != "approved"
+            or "decision" in approval
             or any(
                 not isinstance(approval[field], str) or not approval[field]
                 for field in ("source", "approval_id", "tool_name")

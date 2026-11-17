@@ -7,18 +7,17 @@
   "properties": {
     "host_approval": {
       "$ref": "#/$defs/HostApproval",
-      "description": "Optional assertion supplied after the host application has verified completed human approval for one exact operation. Its presence does not authenticate the approval or instruct Relay to skip middleware."
+      "description": "Optional assertion supplied after the host application has verified completed human approval for one exact operation. A valid object always asserts affirmative approval; its presence does not authenticate the assertion or instruct Relay to skip middleware."
     }
   },
   "additionalProperties": true,
   "$defs": {
     "HostApproval": {
       "type": "object",
-      "description": "An assertion that the host has verified completed human approval for the specified operation. Relay does not authenticate this assertion.",
+      "description": "An assertion that the host has verified completed human approval for the specified operation. Presence asserts affirmative approval; Relay does not authenticate it. The obsolete decision property is reserved and must not be supplied, so legacy denials cannot be reinterpreted as approval.",
       "required": [
         "version",
         "source",
-        "decision",
         "approval_id",
         "tool_name",
         "approved_arguments"
@@ -34,11 +33,7 @@
           "minLength": 1,
           "description": "Identifier of the application asserting approval. Consuming middleware must explicitly trust this source; the identifier itself does not authenticate the sender."
         },
-        "decision": {
-          "type": "string",
-          "const": "approved",
-          "description": "Affirmative outcome asserted by the host application, always approved in this format. This is not a Council verdict. The host must stop denied or pending operations before invoking execution."
-        },
+        "decision": false,
         "approval_id": {
           "type": "string",
           "minLength": 1,

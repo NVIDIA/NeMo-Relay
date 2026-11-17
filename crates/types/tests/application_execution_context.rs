@@ -9,7 +9,7 @@ use serde_json::json;
 
 fn assertion() -> Json {
     json!({"host_approval": {
-        "version": 1, "source": "example.application", "decision": "approved",
+        "version": 1, "source": "example.application",
         "approval_id": "approval-123", "tool_name": "files.write",
         "approved_arguments": {"path": "notes.txt", "content": "hello"}
     }})
@@ -29,7 +29,7 @@ fn standard_claim_and_extensions_round_trip_without_authorization_interpretation
         input["example.application"] = json!({"request_id":"request-456", "integer":u64::MAX});
         let typed: ApplicationExecutionContext = serde_json::from_value(input.clone()).unwrap();
         assert_eq!(typed.to_json(), input);
-        assert_eq!(typed.host_approval.as_ref().unwrap().decision, "approved");
+        assert_eq!(typed.host_approval.as_ref().unwrap().version, 1);
         typed.validate().unwrap();
         let debug = format!("{typed:?} {:?}", typed.host_approval.as_ref().unwrap());
         assert!(!debug.contains("approval-123"));
@@ -54,7 +54,6 @@ fn malformed_reserved_claims_fail_with_non_sensitive_errors() {
     for field in [
         "version",
         "source",
-        "decision",
         "approval_id",
         "tool_name",
         "approved_arguments",
@@ -72,7 +71,9 @@ fn malformed_reserved_claims_fail_with_non_sensitive_errors() {
         ("version", json!("1")),
         ("source", json!("")),
         ("source", json!(42)),
+        ("decision", json!("approved")),
         ("decision", json!("denied")),
+        ("decision", Json::Null),
         ("decision", json!("pending")),
         ("approval_id", json!(null)),
         ("tool_name", json!("")),
@@ -110,9 +111,9 @@ fn numeric_version_uses_json_schema_integer_semantics() {
 #[test]
 fn direct_rust_changes_cannot_bypass_validation_or_shadow_known_properties() {
     let mut value = ApplicationExecutionContext::try_from(assertion()).unwrap();
-    value.host_approval.as_mut().unwrap().decision = "denied".into();
+    value.host_approval.as_mut().unwrap().approval_id.clear();
     assert!(value.validate().is_err());
-    value.host_approval.as_mut().unwrap().decision = "approved".into();
+    value.host_approval.as_mut().unwrap().approval_id = "approval-123".into();
     value
         .additional_properties
         .insert("host_approval".into(), Json::Null);

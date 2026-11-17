@@ -288,7 +288,6 @@ human approval for an exact operation:
   "host_approval": {
     "version": 1,
     "source": "example.application",
-    "decision": "approved",
     "approval_id": "approval-123",
     "tool_name": "files.write",
     "approved_arguments": {"path": "notes.txt", "content": "Hello"}
@@ -297,15 +296,17 @@ human approval for an exact operation:
 }
 ```
 
-When `host_approval` is present, all six fields are required. Version is the
-integer `1`, decision is exactly `approved`, and source, approval ID and tool name
+When `host_approval` is present, it asserts completed affirmative human approval
+and all five fields are required. Version is integer `1`; source, approval ID and tool name
 are nonempty strings. Approved arguments may be any JSON value, matching tool
 arguments. They record the approved input so middleware can compare it with its
 current input after earlier middleware has rewritten arguments. Denied or
 pending operations must stop in the application; this field is not an instruction
 to Relay to enforce a review outcome.
 
-Both the context and the approval object allow additional properties. Unknown
+Both the context and the approval object allow additional properties. The obsolete
+`host_approval.decision` key is reserved and rejected regardless of value, so an
+old denied claim cannot become an ignored extension interpreted as approval. Unknown
 properties survive transport and isolated snapshots, but confer no authority.
 Use namespaced extension keys, such as `com.example.audit`, to reduce collisions
 with future standard fields. Omission means no context; `{}` is a supplied empty
@@ -361,7 +362,7 @@ fresh approval; a component's automated review does not renew human consent.
 The following integration sketch keeps those application-specific checks
 explicit. `validate_existing_approval`, `approval_covers_call` and
 `perform_component_review` are application-defined functions; Relay does not
-implement them. `validate_existing_approval` returns the standard six-field
+implement them. `validate_existing_approval` returns the standard five-field
 `host_approval` assertion only after verifying the application-specific receipt;
 it includes the exact tool name and approved arguments. Relay does not prescribe
 the underlying receipt or signature format.

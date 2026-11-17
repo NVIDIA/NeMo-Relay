@@ -7,7 +7,6 @@ import type { TypedToolExecuteOptions } from '../dist/typed.js';
 const approval: HostApproval = {
   version: 1,
   source: 'application',
-  decision: 'approved',
   approval_id: 'review-123',
   tool_name: 'write_file',
   approved_arguments: { path: 'notes.txt' },
@@ -22,8 +21,10 @@ function inspect(context: ToolExecutionContext): string | undefined {
 void inspect;
 // @ts-expect-error The standardized approval version is a numeric literal.
 const invalidVersion: HostApproval = { ...approval, version: 2 };
-// @ts-expect-error The standardized approval decision is affirmative only.
+// @ts-expect-error The obsolete decision field is reserved and forbidden.
 const invalidDecision: HostApproval = { ...approval, decision: 'denied' };
+// @ts-expect-error The obsolete approved value is also forbidden.
+const legacyApproved: HostApproval = { ...approval, decision: 'approved' };
 // @ts-expect-error Standard approval fields are required when host_approval is present.
 const incomplete: ApplicationExecutionContext = { host_approval: { version: 1 } };
-void [invalidVersion, invalidDecision, incomplete];
+void [invalidVersion, invalidDecision, legacyApproved, incomplete];

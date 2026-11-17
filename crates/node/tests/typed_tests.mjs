@@ -239,7 +239,6 @@ describe('typedToolExecute', () => {
       host_approval: {
         version: 1,
         source: 'application',
-        decision: 'approved',
         approval_id: 'review-123',
         tool_name: 'typed_context',
         approved_arguments: { value: 1 },

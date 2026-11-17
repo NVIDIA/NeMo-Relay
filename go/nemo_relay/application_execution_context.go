@@ -19,12 +19,12 @@ type ApplicationExecutionContext struct {
 }
 
 // HostApproval describes an application-asserted approval of specific arguments.
-// Version must be 1, Decision must be "approved", and identifying strings must
+// Version must be 1 and identifying strings must
 // be nonempty. ApprovedArguments accepts any JSON value, including explicit null.
+// Presence asserts completed human approval. The obsolete decision key is forbidden.
 type HostApproval struct {
 	Version           int
 	Source            string
-	Decision          string
 	ApprovalID        string
 	ToolName          string
 	ApprovedArguments json.RawMessage
@@ -86,8 +86,8 @@ func cloneContextFields(fields map[string]json.RawMessage) map[string]json.RawMe
 }
 
 func (a HostApproval) validate() error {
-	if a.Version != 1 || a.Decision != "approved" || a.Source == "" || a.ApprovalID == "" || a.ToolName == "" || !json.Valid(a.ApprovedArguments) {
-		return fmt.Errorf("host_approval requires version 1, decision approved, nonempty source, approval_id and tool_name, and JSON approved_arguments")
+	if a.Version != 1 || a.Source == "" || a.ApprovalID == "" || a.ToolName == "" || !json.Valid(a.ApprovedArguments) {
+		return fmt.Errorf("host_approval requires version 1, nonempty source, approval_id and tool_name, and JSON approved_arguments")
 	}
 	return nil
 }
@@ -98,7 +98,10 @@ func (a HostApproval) MarshalJSON() ([]byte, error) {
 		return nil, err
 	}
 	fields := cloneContextFields(a.AdditionalFields)
-	known := map[string]any{"version": a.Version, "source": a.Source, "decision": a.Decision, "approval_id": a.ApprovalID, "tool_name": a.ToolName, "approved_arguments": a.ApprovedArguments}
+	if _, exists := fields["decision"]; exists {
+		return nil, fmt.Errorf("host_approval decision is obsolete and forbidden")
+	}
+	known := map[string]any{"version": a.Version, "source": a.Source, "approval_id": a.ApprovalID, "tool_name": a.ToolName, "approved_arguments": a.ApprovedArguments}
 	for key, value := range known {
 		if _, exists := fields[key]; exists {
 			return nil, fmt.Errorf("%s must use the typed field", key)
@@ -118,8 +121,11 @@ func (a *HostApproval) UnmarshalJSON(data []byte) error {
 	if err != nil {
 		return err
 	}
+	if _, exists := fields["decision"]; exists {
+		return fmt.Errorf("host_approval decision is obsolete and forbidden")
+	}
 	var result HostApproval
-	known := map[string]any{"version": &result.Version, "source": &result.Source, "decision": &result.Decision, "approval_id": &result.ApprovalID, "tool_name": &result.ToolName, "approved_arguments": &result.ApprovedArguments}
+	known := map[string]any{"version": &result.Version, "source": &result.Source, "approval_id": &result.ApprovalID, "tool_name": &result.ToolName, "approved_arguments": &result.ApprovedArguments}
 	for key, target := range known {
 		value, exists := fields[key]
 		if !exists {

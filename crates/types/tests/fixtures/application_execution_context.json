@@ -19,7 +19,6 @@
       "host_approval": {
         "version": 1,
         "source": "example.application",
-        "decision": "approved",
         "approval_id": "approval-123",
         "tool_name": "files.write",
         "approved_arguments": {
@@ -42,7 +41,6 @@
       "host_approval": {
         "version": 1,
         "source": "example.application",
-        "decision": "approved",
         "approval_id": "approval-123",
         "tool_name": "files.write",
         "approved_arguments": null
@@ -56,7 +54,6 @@
       "host_approval": {
         "version": 1,
         "source": "example.application",
-        "decision": "approved",
         "approval_id": "approval-123",
         "tool_name": "files.write",
         "approved_arguments": false
@@ -70,7 +67,6 @@
       "host_approval": {
         "version": 1,
         "source": "example.application",
-        "decision": "approved",
         "approval_id": "approval-123",
         "tool_name": "files.write",
         "approved_arguments": 2
@@ -84,7 +80,6 @@
       "host_approval": {
         "version": 1,
         "source": "example.application",
-        "decision": "approved",
         "approval_id": "approval-123",
         "tool_name": "files.write",
         "approved_arguments": "text"
@@ -98,7 +93,6 @@
       "host_approval": {
         "version": 1,
         "source": "example.application",
-        "decision": "approved",
         "approval_id": "approval-123",
         "tool_name": "files.write",
         "approved_arguments": [
@@ -115,7 +109,6 @@
       "host_approval": {
         "version": 1,
         "source": "example.application",
-        "decision": "approved",
         "approval_id": "approval-123",
         "tool_name": "files.write",
         "approved_arguments": {}
@@ -129,7 +122,6 @@
       "host_approval": {
         "version": 1,
         "source": "example.application",
-        "decision": "approved",
         "approval_id": "approval-123",
         "tool_name": "files.write",
         "approved_arguments": {
@@ -151,7 +143,6 @@
     "value": {
       "host_approval": {
         "source": "example.application",
-        "decision": "approved",
         "approval_id": "approval-123",
         "tool_name": "files.write",
         "approved_arguments": {
@@ -166,22 +157,6 @@
     "value": {
       "host_approval": {
         "version": 1,
-        "decision": "approved",
-        "approval_id": "approval-123",
-        "tool_name": "files.write",
-        "approved_arguments": {
-          "path": "notes.txt"
-        }
-      }
-    },
-    "valid": false
-  },
-  {
-    "name": "missing decision",
-    "value": {
-      "host_approval": {
-        "version": 1,
-        "source": "example.application",
         "approval_id": "approval-123",
         "tool_name": "files.write",
         "approved_arguments": {
@@ -197,7 +172,6 @@
       "host_approval": {
         "version": 1,
         "source": "example.application",
-        "decision": "approved",
         "tool_name": "files.write",
         "approved_arguments": {
           "path": "notes.txt"
@@ -212,7 +186,6 @@
       "host_approval": {
         "version": 1,
         "source": "example.application",
-        "decision": "approved",
         "approval_id": "approval-123",
         "approved_arguments": {
           "path": "notes.txt"
@@ -227,7 +200,6 @@
       "host_approval": {
         "version": 1,
         "source": "example.application",
-        "decision": "approved",
         "approval_id": "approval-123",
         "tool_name": "files.write"
       }
@@ -240,7 +212,6 @@
       "host_approval": {
         "version": null,
         "source": "example.application",
-        "decision": "approved",
         "approval_id": "approval-123",
         "tool_name": "files.write",
         "approved_arguments": {
@@ -256,7 +227,6 @@
       "host_approval": {
         "version": true,
         "source": "example.application",
-        "decision": "approved",
         "approval_id": "approval-123",
         "tool_name": "files.write",
         "approved_arguments": {
@@ -272,7 +242,6 @@
       "host_approval": {
         "version": false,
         "source": "example.application",
-        "decision": "approved",
         "approval_id": "approval-123",
         "tool_name": "files.write",
         "approved_arguments": {
@@ -288,7 +257,6 @@
       "host_approval": {
         "version": 0,
         "source": "example.application",
-        "decision": "approved",
         "approval_id": "approval-123",
         "tool_name": "files.write",
         "approved_arguments": {
@@ -304,7 +272,6 @@
       "host_approval": {
         "version": 2,
         "source": "example.application",
-        "decision": "approved",
         "approval_id": "approval-123",
         "tool_name": "files.write",
         "approved_arguments": {
@@ -320,7 +287,6 @@
       "host_approval": {
         "version": "1",
         "source": "example.application",
-        "decision": "approved",
         "approval_id": "approval-123",
         "tool_name": "files.write",
         "approved_arguments": {
@@ -336,7 +302,6 @@
       "host_approval": {
         "version": 1.0,
         "source": "example.application",
-        "decision": "approved",
         "approval_id": "approval-123",
         "tool_name": "files.write",
         "approved_arguments": {
@@ -352,7 +317,6 @@
       "host_approval": {
         "version": 1,
         "source": "",
-        "decision": "approved",
         "approval_id": "approval-123",
         "tool_name": "files.write",
         "approved_arguments": {
@@ -368,7 +332,6 @@
       "host_approval": {
         "version": 1,
         "source": null,
-        "decision": "approved",
         "approval_id": "approval-123",
         "tool_name": "files.write",
         "approved_arguments": {
@@ -384,7 +347,6 @@
       "host_approval": {
         "version": 1,
         "source": 42,
-        "decision": "approved",
         "approval_id": "approval-123",
         "tool_name": "files.write",
         "approved_arguments": {
@@ -400,7 +362,6 @@
       "host_approval": {
         "version": 1,
         "source": [],
-        "decision": "approved",
         "approval_id": "approval-123",
         "tool_name": "files.write",
         "approved_arguments": {
@@ -416,7 +377,6 @@
       "host_approval": {
         "version": 1,
         "source": {},
-        "decision": "approved",
         "approval_id": "approval-123",
         "tool_name": "files.write",
         "approved_arguments": {
@@ -496,7 +456,6 @@
       "host_approval": {
         "version": 1,
         "source": "example.application",
-        "decision": "approved",
         "approval_id": "",
         "tool_name": "files.write",
         "approved_arguments": {
@@ -512,7 +471,6 @@
       "host_approval": {
         "version": 1,
         "source": "example.application",
-        "decision": "approved",
         "approval_id": null,
         "tool_name": "files.write",
         "approved_arguments": {
@@ -528,7 +486,6 @@
       "host_approval": {
         "version": 1,
         "source": "example.application",
-        "decision": "approved",
         "approval_id": [],
         "tool_name": "files.write",
         "approved_arguments": {
@@ -544,7 +501,6 @@
       "host_approval": {
         "version": 1,
         "source": "example.application",
-        "decision": "approved",
         "approval_id": "approval-123",
         "tool_name": "",
         "approved_arguments": {
@@ -560,7 +516,6 @@
       "host_approval": {
         "version": 1,
         "source": "example.application",
-        "decision": "approved",
         "approval_id": "approval-123",
         "tool_name": false,
         "approved_arguments": {
@@ -576,12 +531,91 @@
       "host_approval": {
         "version": 1,
         "source": "example.application",
-        "decision": "approved",
         "approval_id": "approval-123",
         "tool_name": {},
         "approved_arguments": {
           "path": "notes.txt"
         }
+      }
+    },
+    "valid": false
+  },
+  {
+    "name": "obsolete decision \"approved\"",
+    "value": {
+      "host_approval": {
+        "version": 1,
+        "source": "example.application",
+        "approval_id": "approval-123",
+        "tool_name": "files.write",
+        "approved_arguments": {
+          "path": "notes.txt"
+        },
+        "decision": "approved"
+      }
+    },
+    "valid": false
+  },
+  {
+    "name": "obsolete decision \"denied\"",
+    "value": {
+      "host_approval": {
+        "version": 1,
+        "source": "example.application",
+        "approval_id": "approval-123",
+        "tool_name": "files.write",
+        "approved_arguments": {
+          "path": "notes.txt"
+        },
+        "decision": "denied"
+      }
+    },
+    "valid": false
+  },
+  {
+    "name": "obsolete decision null",
+    "value": {
+      "host_approval": {
+        "version": 1,
+        "source": "example.application",
+        "approval_id": "approval-123",
+        "tool_name": "files.write",
+        "approved_arguments": {
+          "path": "notes.txt"
+        },
+        "decision": null
+      }
+    },
+    "valid": false
+  },
+  {
+    "name": "obsolete decision false",
+    "value": {
+      "host_approval": {
+        "version": 1,
+        "source": "example.application",
+        "approval_id": "approval-123",
+        "tool_name": "files.write",
+        "approved_arguments": {
+          "path": "notes.txt"
+        },
+        "decision": false
+      }
+    },
+    "valid": false
+  },
+  {
+    "name": "obsolete decision 1",
+    "value": {
+      "host_approval": {
+        "version": 1,
+        "source": "example.application",
+        "approval_id": "approval-123",
+        "tool_name": "files.write",
+        "approved_arguments": {
+          "path": "notes.txt"
+        },
+        "decision": 1
       }
     },
     "valid": false

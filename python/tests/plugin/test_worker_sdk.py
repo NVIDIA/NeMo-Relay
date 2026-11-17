@@ -4371,7 +4371,6 @@ def _standard_host_approval() -> dict[str, Json]:
     return {
         "version": 1,
         "source": "example.application",
-        "decision": "approved",
         "approval_id": "review-123",
         "tool_name": "lookup",
         "approved_arguments": {"query": "example"},
@@ -4389,7 +4388,7 @@ def test_standard_host_approval_retains_extension_properties() -> None:
     assert context.execution_context["host_approval"]["approved_arguments"] == {"query": "example"}
 
 
-@pytest.mark.parametrize("field", ["version", "source", "decision", "approval_id", "tool_name", "approved_arguments"])
+@pytest.mark.parametrize("field", ["version", "source", "approval_id", "tool_name", "approved_arguments"])
 def test_standard_host_approval_requires_every_known_field(field: str) -> None:
     approval = _standard_host_approval()
     del approval[field]
@@ -4404,9 +4403,6 @@ def test_standard_host_approval_requires_every_known_field(field: str) -> None:
         ("version", 2),
         ("source", ""),
         ("source", 1),
-        ("decision", "denied"),
-        ("decision", "pending"),
-        ("decision", None),
         ("approval_id", ""),
         ("tool_name", []),
     ],
@@ -4414,6 +4410,14 @@ def test_standard_host_approval_requires_every_known_field(field: str) -> None:
 def test_standard_host_approval_rejects_invalid_known_values(field: str, value: Json) -> None:
     approval = _standard_host_approval()
     approval[field] = value
+    with pytest.raises(WorkerSdkError, match="invalid application execution context"):
+        ToolExecutionContext("lookup", {}, execution_context={"host_approval": approval})
+
+
+@pytest.mark.parametrize("legacy_decision", ["approved", "denied", "pending", None, 1, False])
+def test_standard_approval_rejects_obsolete_decision_key(legacy_decision: Json) -> None:
+    approval = _standard_host_approval()
+    approval["decision"] = legacy_decision
     with pytest.raises(WorkerSdkError, match="invalid application execution context"):
         ToolExecutionContext("lookup", {}, execution_context={"host_approval": approval})
 
