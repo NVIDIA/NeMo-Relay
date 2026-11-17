@@ -1203,8 +1203,8 @@ test-plugin-api-examples:
     "$python_executable" -m pytest python/tests/test_plugin_api_examples.py -q
     node --test --test-timeout=60000 crates/node/tests/plugin_api_examples_tests.mjs
     cargo test --locked -p nemo-relay -p nemo-relay-types --features nemo-relay/__skip-implicit-config --test documentation_examples
-    cargo test --locked -p nemo-relay-adaptive --features __skip-implicit-config --test runtime_integration documentation_examples_
-    cargo test --locked -p nemo-relay-model-pricing --test response_cost_tests documentation_catalog_
+    cargo test --locked -p nemo-relay-adaptive --features __skip-implicit-config --test documentation_examples
+    cargo test --locked -p nemo-relay-model-pricing --test documentation_examples
 
 # regenerate the ignored Fern API reference pages
 docs-api-reference:
