@@ -460,19 +460,19 @@ fn push_llm_response_attributes(attributes: &mut Vec<KeyValue>, event: &Event) {
     if let Some(messages) = output_messages_json(response) {
         attributes.push(KeyValue::new(semconv::GEN_AI_OUTPUT_MESSAGES, messages));
     }
+    // Anthropic reports uncached, cache-read, and cache-creation input
+    // tokens separately. Other providers such as OpenAI include cache
+    // reads in their prompt count, so only combine known Anthropic usage.
+    if let Some(input_tokens) = gen_ai_input_tokens(event, response) {
+        attributes.push(KeyValue::new(
+            semconv::GEN_AI_USAGE_INPUT_TOKENS,
+            input_tokens,
+        ));
+    }
+    if let Some(value) = gen_ai_output_tokens(response) {
+        attributes.push(KeyValue::new(semconv::GEN_AI_USAGE_OUTPUT_TOKENS, value));
+    }
     if let Some(usage) = response.usage.as_ref() {
-        // Anthropic reports uncached, cache-read, and cache-creation input
-        // tokens separately. Other providers such as OpenAI include cache
-        // reads in their prompt count, so only combine known Anthropic usage.
-        if let Some(input_tokens) = gen_ai_input_tokens(event, response) {
-            attributes.push(KeyValue::new(
-                semconv::GEN_AI_USAGE_INPUT_TOKENS,
-                input_tokens,
-            ));
-        }
-        if let Some(value) = usage.completion_tokens.and_then(to_i64) {
-            attributes.push(KeyValue::new(semconv::GEN_AI_USAGE_OUTPUT_TOKENS, value));
-        }
         if let Some(value) = usage.cache_read_tokens.and_then(to_i64) {
             attributes.push(KeyValue::new(
                 semconv::GEN_AI_USAGE_CACHE_READ_INPUT_TOKENS,
@@ -569,6 +569,27 @@ fn reasoning_output_tokens(event: &Event, response: &AnnotatedLlmResponse) -> Op
             }) => thoughts_tokens.and_then(to_i64),
             _ => None,
         })
+}
+
+// Gemini reports thinking tokens outside candidatesTokenCount, while GenAI
+// output tokens include reasoning. Other providers' completion counts already
+// include reasoning, so only Gemini thoughts are added.
+fn gen_ai_output_tokens(response: &AnnotatedLlmResponse) -> Option<i64> {
+    let completion_tokens = response
+        .usage
+        .as_ref()
+        .and_then(|usage| usage.completion_tokens);
+    let thoughts_tokens = match response.api_specific.as_ref() {
+        Some(ApiSpecificResponse::GeminiGenerateContent {
+            thoughts_tokens, ..
+        }) => *thoughts_tokens,
+        _ => None,
+    };
+    match (completion_tokens, thoughts_tokens) {
+        (Some(completion), Some(thoughts)) => completion.checked_add(thoughts),
+        (completion, thoughts) => completion.or(thoughts),
+    }
+    .and_then(to_i64)
 }
 
 fn gen_ai_input_tokens(event: &Event, response: &AnnotatedLlmResponse) -> Option<i64> {
