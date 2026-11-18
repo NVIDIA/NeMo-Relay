@@ -92,6 +92,11 @@ async fn aep278_http2_unread_responses_do_not_starve_independent_hooks() {
         .await
         .unwrap()
         .unwrap();
+        assert_eq!(
+            response.status(),
+            StatusCode::OK,
+            "model response {count} must succeed to create backpressure"
+        );
         unread.push(response);
         if ![1, 8, 32, 128].contains(&count) {
             continue;
