@@ -553,22 +553,24 @@ fn openai_chat_output_type(modalities: Option<&[String]>) -> Option<String> {
     }
 }
 
+fn canonical_reasoning_output_tokens(event: &Event) -> Option<i64> {
+    scalar_i64(event, &[semconv::GEN_AI_USAGE_REASONING_OUTPUT_TOKENS]).filter(|value| *value >= 0)
+}
+
 fn reasoning_output_tokens(event: &Event, response: &AnnotatedLlmResponse) -> Option<i64> {
-    scalar_i64(event, &[semconv::GEN_AI_USAGE_REASONING_OUTPUT_TOKENS])
-        .filter(|value| *value >= 0)
-        .or_else(|| match response.api_specific.as_ref() {
-            Some(ApiSpecificResponse::OpenAIResponses {
-                output_tokens_details: Some(details),
-                ..
-            }) => details
-                .get("reasoning_tokens")
-                .and_then(Json::as_u64)
-                .and_then(to_i64),
-            Some(ApiSpecificResponse::GeminiGenerateContent {
-                thoughts_tokens, ..
-            }) => thoughts_tokens.and_then(to_i64),
-            _ => None,
-        })
+    canonical_reasoning_output_tokens(event).or_else(|| match response.api_specific.as_ref() {
+        Some(ApiSpecificResponse::OpenAIResponses {
+            output_tokens_details: Some(details),
+            ..
+        }) => details
+            .get("reasoning_tokens")
+            .and_then(Json::as_u64)
+            .and_then(to_i64),
+        Some(ApiSpecificResponse::GeminiGenerateContent {
+            thoughts_tokens, ..
+        }) => thoughts_tokens.and_then(to_i64),
+        _ => None,
+    })
 }
 
 // Gemini reports thinking tokens outside candidatesTokenCount, while GenAI
@@ -580,9 +582,11 @@ fn gen_ai_output_tokens(event: &Event, response: &AnnotatedLlmResponse) -> Optio
         .as_ref()
         .and_then(|usage| usage.completion_tokens);
     let thoughts_tokens = match response.api_specific.as_ref() {
-        Some(ApiSpecificResponse::GeminiGenerateContent { .. }) => {
-            reasoning_output_tokens(event, response).and_then(|value| u64::try_from(value).ok())
-        }
+        Some(ApiSpecificResponse::GeminiGenerateContent {
+            thoughts_tokens, ..
+        }) => canonical_reasoning_output_tokens(event)
+            .and_then(|value| u64::try_from(value).ok())
+            .or(*thoughts_tokens),
         _ => None,
     };
     match (completion_tokens, thoughts_tokens) {

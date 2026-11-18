@@ -4603,6 +4603,17 @@ fn gen_ai_projection_adds_only_gemini_thinking_tokens_to_output_tokens() {
         ),
         (
             json!({
+                "usage": {"completion_tokens": 1},
+                "api_specific": {
+                    "api": "gemini_generate_content",
+                    "thoughts_tokens": i64::MAX as u64 + 1
+                }
+            }),
+            None,
+            None,
+        ),
+        (
+            json!({
                 "usage": {"completion_tokens": 30},
                 "api_specific": {
                     "api": "openai_responses",
