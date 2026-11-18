@@ -2117,7 +2117,7 @@ fn gen_ai_projection_preserves_openai_responses_output_item_order() {
             tool_calls: Some(vec![ResponseToolCall {
                 id: "call-3".to_string(),
                 name: "search".to_string(),
-                arguments: json!({"query": "mixed"}),
+                arguments: json!({"query": "normalized"}),
             }]),
             finish_reason: Some(FinishReason::Complete),
             api_specific: api_specific_response(json!({
