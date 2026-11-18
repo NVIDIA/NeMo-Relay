@@ -546,14 +546,10 @@ describe('LLM codec callback failures', () => {
         llmCallEnd(handle, {});
         await flushSubscribers();
         assert.match(getLastCallbackError() ?? '', pattern);
-        const start = events.find(
-          (event) => event.name === 'manual_codec_failure' && event.scope_category === 'start',
-        );
+        const start = events.find((event) => event.name === 'manual_codec_failure' && event.scope_category === 'start');
         assert.deepEqual(start.data, original);
         assert.equal(start.category_profile.annotated_request, undefined);
-        const end = events.find(
-          (event) => event.name === 'manual_codec_failure' && event.scope_category === 'end',
-        );
+        const end = events.find((event) => event.name === 'manual_codec_failure' && event.scope_category === 'end');
         assert.notEqual(end, undefined);
         assert.deepEqual(request, original);
       } finally {
@@ -631,13 +627,8 @@ describe('LLM codec callback failures', () => {
       );
       assert.deepEqual(result, { ok: true });
       await flushSubscribers();
-      assert.match(
-        getLastCallbackError() ?? '',
-        /JS response codec decode callback failed: response decode boom/,
-      );
-      const end = events.find(
-        (event) => event.name === 'exec_response_codec_throw' && event.scope_category === 'end',
-      );
+      assert.match(getLastCallbackError() ?? '', /JS response codec decode callback failed: response decode boom/);
+      const end = events.find((event) => event.name === 'exec_response_codec_throw' && event.scope_category === 'end');
       assert.equal(end.category_profile.annotated_response, undefined);
     } finally {
       deregisterSubscriber('exec_response_codec_throw_sub');
@@ -1815,6 +1806,29 @@ describe('LLM intercepts', () => {
   it('stream execution intercept', () => {
     registerLlmStreamExecutionIntercept('node_llm_stream_exec', 10, async (native, _context, next) => next(native));
     deregisterLlmStreamExecutionIntercept('node_llm_stream_exec');
+  });
+
+  it('stream execution intercept next() rejects a payload Relay cannot convert and skips downstream', async () => {
+    let providerCalls = 0;
+    registerLlmStreamExecutionIntercept('node_llm_stream_deep_next', 10, async (native, _context, next) => {
+      let deep = native;
+      for (let depth = 0; depth < 129; depth += 1) {
+        deep = [deep];
+      }
+      return next(deep);
+    });
+    try {
+      await assert.rejects(
+        llmStreamCallExecute('deep_next_stream', makeNative(), async function* () {
+          providerCalls += 1;
+          yield { delta: 'unreachable' };
+        }),
+        /exceeded maximum JSON nesting depth/,
+      );
+    } finally {
+      assert.equal(deregisterLlmStreamExecutionIntercept('node_llm_stream_deep_next'), true);
+    }
+    assert.equal(providerCalls, 0);
   });
 
   it('request intercept with break_chain', () => {

@@ -6,11 +6,11 @@ use nemo_relay::api::runtime::LlmStreamInner;
 
 struct CancelDuringPoll {
     cancel: Option<tokio::sync::watch::Sender<bool>>,
-    item: Option<FlowResult<Json>>,
+    item: Option<FlowResult<Value>>,
 }
 
 impl Stream for CancelDuringPoll {
-    type Item = FlowResult<Json>;
+    type Item = FlowResult<Value>;
 
     fn poll_next(mut self: Pin<&mut Self>, _cx: &mut Context<'_>) -> Poll<Option<Self::Item>> {
         // The select has already polled cancellation when it calls into the stream.

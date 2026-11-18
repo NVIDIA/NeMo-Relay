@@ -20,7 +20,7 @@ use napi_derive::napi;
 use nemo_relay::api::runtime::LlmJsonStream;
 use nemo_relay::api::runtime::subscriber_dispatcher::PublicationBuffer;
 use nemo_relay::error::{FlowError, Result as FlowResult};
-use serde_json::Value as Json;
+use serde_json::Value;
 use tokio_stream::{Stream, StreamExt};
 
 use crate::api::PersistentJsFunction;
@@ -34,15 +34,15 @@ use crate::promise_call::{
 
 type CloseFuture = Pin<Box<dyn Future<Output = FlowResult<()>> + Send>>;
 type CloseResult = Arc<Mutex<Option<std::result::Result<(), String>>>>;
-type WakeResolver = Box<dyn FnOnce(Env) -> Result<Json> + Send>;
+type WakeResolver = Box<dyn FnOnce(Env) -> Result<Value> + Send>;
 
-fn wake_value(value: Json) -> WakeResolver {
+fn wake_value(value: Value) -> WakeResolver {
     Box::new(move |_| Ok(value))
 }
 
 enum WakeState {
     Idle,
-    Armed(JsDeferred<Json, WakeResolver>),
+    Armed(JsDeferred<Value, WakeResolver>),
     Fired,
 }
 
@@ -64,10 +64,10 @@ impl WakeSlot {
     }
 
     fn fire(&self) {
-        self.settle(Json::Null);
+        self.settle(Value::Null);
     }
 
-    fn settle(&self, value: Json) {
+    fn settle(&self, value: Value) {
         let mut state = self
             .state
             .lock()
@@ -82,13 +82,13 @@ impl WakeSlot {
     }
 
     // A slot is armed after its poll. Resolve at once if a wake already happened.
-    fn arm(&self, deferred: JsDeferred<Json, WakeResolver>) {
+    fn arm(&self, deferred: JsDeferred<Value, WakeResolver>) {
         let mut state = self
             .state
             .lock()
             .unwrap_or_else(|poisoned| poisoned.into_inner());
         if matches!(*state, WakeState::Fired) {
-            deferred.resolve(wake_value(Json::Null));
+            deferred.resolve(wake_value(Value::Null));
         } else {
             *state = WakeState::Armed(deferred);
         }
@@ -106,7 +106,7 @@ impl Wake for WakeSlot {
 }
 
 struct Forwarded {
-    receiver: tokio::sync::Mutex<tokio::sync::mpsc::Receiver<FlowResult<Json>>>,
+    receiver: tokio::sync::Mutex<tokio::sync::mpsc::Receiver<FlowResult<Value>>>,
     requests: tokio::sync::mpsc::Sender<()>,
     producers: StreamCancellation,
     cancel: tokio::sync::watch::Sender<bool>,
@@ -142,7 +142,7 @@ impl Forwarded {
         })
     }
 
-    async fn next(&self) -> FlowResult<Option<Json>> {
+    async fn next(&self) -> FlowResult<Option<Value>> {
         let mut receiver = self.receiver.lock().await;
         // A finished forwarder rejects a request. `recv` then reports a closed channel.
         let _ = self.requests.send(()).await;
@@ -195,7 +195,7 @@ impl Forwarded {
 
 async fn forward_stream_to_channel(
     mut stream: LlmJsonStream,
-    tx: tokio::sync::mpsc::Sender<FlowResult<Json>>,
+    tx: tokio::sync::mpsc::Sender<FlowResult<Value>>,
     mut requests: tokio::sync::mpsc::Receiver<()>,
     mut cancel: tokio::sync::watch::Receiver<bool>,
     closed: tokio::sync::watch::Sender<Option<std::result::Result<(), String>>>,
@@ -343,7 +343,7 @@ fn finish_close(
 }
 
 impl StreamState {
-    fn poll_next(&mut self, cx: &mut Context<'_>) -> Poll<FlowResult<Option<Json>>> {
+    fn poll_next(&mut self, cx: &mut Context<'_>) -> Poll<FlowResult<Option<Value>>> {
         let Mode::Pump {
             stream: Some(stream),
             closing: None,
@@ -715,7 +715,7 @@ fn rejection_for_failure(env: &Env, promise: Result<JsObject>) -> Result<JsObjec
     match promise {
         Ok(promise) => Ok(promise),
         Err(error) => {
-            let (deferred, promise) = env.create_deferred::<Json, WakeResolver>()?;
+            let (deferred, promise) = env.create_deferred::<Value, WakeResolver>()?;
             deferred.reject(error);
             Ok(promise)
         }
@@ -758,8 +758,8 @@ fn poll_step(
         Ok(state) => state,
         Err(TryLockError::Poisoned(poisoned)) => poisoned.into_inner(),
         Err(TryLockError::WouldBlock) => {
-            let (deferred, promise) = env.create_deferred::<Json, WakeResolver>()?;
-            deferred.resolve(wake_value(Json::Null));
+            let (deferred, promise) = env.create_deferred::<Value, WakeResolver>()?;
+            deferred.resolve(wake_value(Value::Null));
             return Ok(promise.into_unknown());
         }
     };
@@ -788,7 +788,7 @@ fn poll_step(
             panic_message(panic.as_ref())
         ))),
         Ok(Poll::Pending) => {
-            let (deferred, promise) = env.create_deferred::<Json, WakeResolver>()?;
+            let (deferred, promise) = env.create_deferred::<Value, WakeResolver>()?;
             slot.arm(deferred);
             if close {
                 state.close_wake = Some(slot);

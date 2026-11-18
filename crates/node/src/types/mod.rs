@@ -9,12 +9,11 @@
 
 mod resource_metrics;
 
-use napi::Env;
 use napi_derive::napi;
 use nemo_relay::api::runtime::subscriber_dispatcher::PublicationBuffer;
 use nemo_relay::api::runtime::{ScopeStackHandle, create_scope_stack};
 use serde::{Deserialize, Serialize};
-use serde_json::Value as Json;
+use serde_json::Value;
 
 use nemo_relay::api::event::{
     DataSchema as CoreDataSchema, Event, LogSeverity as CoreLogSeverity,
@@ -28,6 +27,8 @@ use nemo_relay::api::tool::{
 };
 use nemo_relay::codec::request::AnnotatedLlmRequest;
 use nemo_relay::codec::traits::{LlmCodec, LlmResponseCodec};
+
+use crate::json::Json;
 
 /// Identity of one visible Relay scope.
 #[napi(object)]
@@ -241,10 +242,10 @@ impl From<MetricMeasurement> for CoreMetricMeasurement {
             name: value.name,
             kind: value.kind.into(),
             value_type: value.value_type.into(),
-            value: value.value,
+            value: value.value.0,
             unit: value.unit,
             description: value.description,
-            attributes: value.attributes,
+            attributes: value.attributes.map(Value::from),
             boundaries: value.boundaries,
         }
     }
@@ -267,8 +268,11 @@ pub struct ToolExecutionResult {
 impl From<ToolExecutionResult> for CoreToolExecutionResult {
     fn from(value: ToolExecutionResult) -> Self {
         Self {
-            result: value.result,
-            annotation: value.annotation.filter(|annotation| !annotation.is_null()),
+            result: value.result.0,
+            annotation: value
+                .annotation
+                .map(Value::from)
+                .filter(|annotation| !annotation.is_null()),
         }
     }
 }
@@ -276,8 +280,8 @@ impl From<ToolExecutionResult> for CoreToolExecutionResult {
 impl From<CoreToolExecutionResult> for ToolExecutionResult {
     fn from(value: CoreToolExecutionResult) -> Self {
         Self {
-            result: value.result,
-            annotation: value.annotation,
+            result: Json(value.result),
+            annotation: value.annotation.map(Json),
         }
     }
 }
@@ -497,20 +501,23 @@ pub struct LlmRequest {
 impl LlmRequest {
     /// Create a new LLM request from headers and content.
     #[napi(constructor)]
-    pub fn new(headers: serde_json::Value, content: serde_json::Value) -> Self {
-        let headers = match headers {
-            Json::Object(m) => m,
+    pub fn new(headers: Json, content: Json) -> Self {
+        let headers = match headers.0 {
+            Value::Object(m) => m,
             _ => serde_json::Map::new(),
         };
         Self {
-            inner: CoreLlmRequest { headers, content },
+            inner: CoreLlmRequest {
+                headers,
+                content: content.0,
+            },
         }
     }
 
     /// The metadata headers as a JSON object.
     #[napi(getter)]
     pub fn headers(&self) -> serde_json::Value {
-        Json::Object(self.inner.headers.clone())
+        Value::Object(self.inner.headers.clone())
     }
 
     /// The request payload as a JSON value.
@@ -535,7 +542,7 @@ pub struct EventSanitizeFields {
 }
 
 pub(crate) fn event_sanitize_fields_from_json(
-    value: Json,
+    value: Value,
 ) -> serde_json::Result<EventSanitizeFields> {
     let Some(object) = value.as_object() else {
         return Err(serde_json::Error::io(std::io::Error::other(
@@ -604,27 +611,31 @@ impl OpenAIChatCodec {
     /// Decode an opaque LLM request into structured form.
     #[napi]
     pub fn decode(&self, request: Json) -> napi::Result<Json> {
-        let llm_req: CoreLlmRequest = serde_json::from_value(request)
+        let llm_req: CoreLlmRequest = serde_json::from_value(request.0)
             .map_err(|e| napi::Error::from_reason(format!("invalid LlmRequest: {e}")))?;
         let annotated = self
             .inner_codec
             .decode(&llm_req)
             .map_err(|e| napi::Error::from_reason(e.to_string()))?;
-        serde_json::to_value(&annotated).map_err(|e| napi::Error::from_reason(e.to_string()))
+        serde_json::to_value(&annotated)
+            .map(Json)
+            .map_err(|e| napi::Error::from_reason(e.to_string()))
     }
 
     /// Encode structured changes back into an opaque LLM request.
     #[napi]
     pub fn encode(&self, annotated: Json, original: Json) -> napi::Result<Json> {
-        let ann: AnnotatedLlmRequest = serde_json::from_value(annotated)
+        let ann: AnnotatedLlmRequest = serde_json::from_value(annotated.0)
             .map_err(|e| napi::Error::from_reason(format!("invalid AnnotatedLlmRequest: {e}")))?;
-        let orig: CoreLlmRequest = serde_json::from_value(original)
+        let orig: CoreLlmRequest = serde_json::from_value(original.0)
             .map_err(|e| napi::Error::from_reason(format!("invalid LlmRequest: {e}")))?;
         let result = self
             .inner_codec
             .encode(&ann, &orig)
             .map_err(|e| napi::Error::from_reason(e.to_string()))?;
-        serde_json::to_value(&result).map_err(|e| napi::Error::from_reason(e.to_string()))
+        serde_json::to_value(&result)
+            .map(Json)
+            .map_err(|e| napi::Error::from_reason(e.to_string()))
     }
 
     /// Decode a raw LLM response into structured form.
@@ -632,9 +643,11 @@ impl OpenAIChatCodec {
     pub fn decode_response(&self, response: Json) -> napi::Result<Json> {
         let annotated = self
             .inner_response_codec
-            .decode_response(&response)
+            .decode_response(&response.0)
             .map_err(|e| napi::Error::from_reason(e.to_string()))?;
-        serde_json::to_value(&annotated).map_err(|e| napi::Error::from_reason(e.to_string()))
+        serde_json::to_value(&annotated)
+            .map(Json)
+            .map_err(|e| napi::Error::from_reason(e.to_string()))
     }
 }
 
@@ -665,27 +678,31 @@ impl OpenAIResponsesCodec {
     /// Decode an opaque LLM request into structured form.
     #[napi]
     pub fn decode(&self, request: Json) -> napi::Result<Json> {
-        let llm_req: CoreLlmRequest = serde_json::from_value(request)
+        let llm_req: CoreLlmRequest = serde_json::from_value(request.0)
             .map_err(|e| napi::Error::from_reason(format!("invalid LlmRequest: {e}")))?;
         let annotated = self
             .inner_codec
             .decode(&llm_req)
             .map_err(|e| napi::Error::from_reason(e.to_string()))?;
-        serde_json::to_value(&annotated).map_err(|e| napi::Error::from_reason(e.to_string()))
+        serde_json::to_value(&annotated)
+            .map(Json)
+            .map_err(|e| napi::Error::from_reason(e.to_string()))
     }
 
     /// Encode structured changes back into an opaque LLM request.
     #[napi]
     pub fn encode(&self, annotated: Json, original: Json) -> napi::Result<Json> {
-        let ann: AnnotatedLlmRequest = serde_json::from_value(annotated)
+        let ann: AnnotatedLlmRequest = serde_json::from_value(annotated.0)
             .map_err(|e| napi::Error::from_reason(format!("invalid AnnotatedLlmRequest: {e}")))?;
-        let orig: CoreLlmRequest = serde_json::from_value(original)
+        let orig: CoreLlmRequest = serde_json::from_value(original.0)
             .map_err(|e| napi::Error::from_reason(format!("invalid LlmRequest: {e}")))?;
         let result = self
             .inner_codec
             .encode(&ann, &orig)
             .map_err(|e| napi::Error::from_reason(e.to_string()))?;
-        serde_json::to_value(&result).map_err(|e| napi::Error::from_reason(e.to_string()))
+        serde_json::to_value(&result)
+            .map(Json)
+            .map_err(|e| napi::Error::from_reason(e.to_string()))
     }
 
     /// Decode a raw LLM response into structured form.
@@ -693,9 +710,11 @@ impl OpenAIResponsesCodec {
     pub fn decode_response(&self, response: Json) -> napi::Result<Json> {
         let annotated = self
             .inner_response_codec
-            .decode_response(&response)
+            .decode_response(&response.0)
             .map_err(|e| napi::Error::from_reason(e.to_string()))?;
-        serde_json::to_value(&annotated).map_err(|e| napi::Error::from_reason(e.to_string()))
+        serde_json::to_value(&annotated)
+            .map(Json)
+            .map_err(|e| napi::Error::from_reason(e.to_string()))
     }
 }
 
@@ -726,43 +745,44 @@ impl GeminiGenerateContentCodec {
     /// Decode an opaque LLM request into structured form.
     #[napi]
     pub fn decode(&self, request: Json) -> napi::Result<Json> {
-        let llm_req: CoreLlmRequest = serde_json::from_value(request)
+        let llm_req: CoreLlmRequest = serde_json::from_value(request.0)
             .map_err(|e| napi::Error::from_reason(format!("invalid LlmRequest: {e}")))?;
         let annotated = self
             .inner_codec
             .decode(&llm_req)
             .map_err(|e| napi::Error::from_reason(e.to_string()))?;
-        serde_json::to_value(&annotated).map_err(|e| napi::Error::from_reason(e.to_string()))
+        serde_json::to_value(&annotated)
+            .map(Json)
+            .map_err(|e| napi::Error::from_reason(e.to_string()))
     }
 
     /// Encode structured changes back into an opaque LLM request.
     #[napi]
     pub fn encode(&self, annotated: Json, original: Json) -> napi::Result<Json> {
-        let ann: AnnotatedLlmRequest = serde_json::from_value(annotated)
+        let ann: AnnotatedLlmRequest = serde_json::from_value(annotated.0)
             .map_err(|e| napi::Error::from_reason(format!("invalid AnnotatedLlmRequest: {e}")))?;
-        let orig: CoreLlmRequest = serde_json::from_value(original)
+        let orig: CoreLlmRequest = serde_json::from_value(original.0)
             .map_err(|e| napi::Error::from_reason(format!("invalid LlmRequest: {e}")))?;
         let result = self
             .inner_codec
             .encode(&ann, &orig)
             .map_err(|e| napi::Error::from_reason(e.to_string()))?;
-        serde_json::to_value(&result).map_err(|e| napi::Error::from_reason(e.to_string()))
+        serde_json::to_value(&result)
+            .map(Json)
+            .map_err(|e| napi::Error::from_reason(e.to_string()))
     }
 
     /// Decode a raw LLM response into structured form.
     /// Throws a TypeError if the response contains a BigInt value.
     #[napi(js_name = "decodeResponse")]
-    pub fn decode_response(
-        &self,
-        env: Env,
-        #[napi(ts_arg_type = "any")] response: napi::JsUnknown,
-    ) -> napi::Result<Json> {
-        let response = crate::convert::checked_json(&env, response)?;
+    pub fn decode_response(&self, response: Json) -> napi::Result<Json> {
         let annotated = self
             .inner_response_codec
-            .decode_response(&response)
+            .decode_response(&response.0)
             .map_err(|e| napi::Error::from_reason(e.to_string()))?;
-        serde_json::to_value(&annotated).map_err(|e| napi::Error::from_reason(e.to_string()))
+        serde_json::to_value(&annotated)
+            .map(Json)
+            .map_err(|e| napi::Error::from_reason(e.to_string()))
     }
 }
 
@@ -791,27 +811,31 @@ impl AnthropicMessagesCodec {
     /// Decode an opaque LLM request into structured form.
     #[napi]
     pub fn decode(&self, request: Json) -> napi::Result<Json> {
-        let llm_req: CoreLlmRequest = serde_json::from_value(request)
+        let llm_req: CoreLlmRequest = serde_json::from_value(request.0)
             .map_err(|e| napi::Error::from_reason(format!("invalid LlmRequest: {e}")))?;
         let annotated = self
             .inner_codec
             .decode(&llm_req)
             .map_err(|e| napi::Error::from_reason(e.to_string()))?;
-        serde_json::to_value(&annotated).map_err(|e| napi::Error::from_reason(e.to_string()))
+        serde_json::to_value(&annotated)
+            .map(Json)
+            .map_err(|e| napi::Error::from_reason(e.to_string()))
     }
 
     /// Encode structured changes back into an opaque LLM request.
     #[napi]
     pub fn encode(&self, annotated: Json, original: Json) -> napi::Result<Json> {
-        let ann: AnnotatedLlmRequest = serde_json::from_value(annotated)
+        let ann: AnnotatedLlmRequest = serde_json::from_value(annotated.0)
             .map_err(|e| napi::Error::from_reason(format!("invalid AnnotatedLlmRequest: {e}")))?;
-        let orig: CoreLlmRequest = serde_json::from_value(original)
+        let orig: CoreLlmRequest = serde_json::from_value(original.0)
             .map_err(|e| napi::Error::from_reason(format!("invalid LlmRequest: {e}")))?;
         let result = self
             .inner_codec
             .encode(&ann, &orig)
             .map_err(|e| napi::Error::from_reason(e.to_string()))?;
-        serde_json::to_value(&result).map_err(|e| napi::Error::from_reason(e.to_string()))
+        serde_json::to_value(&result)
+            .map(Json)
+            .map_err(|e| napi::Error::from_reason(e.to_string()))
     }
 
     /// Decode a raw LLM response into structured form.
@@ -819,9 +843,11 @@ impl AnthropicMessagesCodec {
     pub fn decode_response(&self, response: Json) -> napi::Result<Json> {
         let annotated = self
             .inner_response_codec
-            .decode_response(&response)
+            .decode_response(&response.0)
             .map_err(|e| napi::Error::from_reason(e.to_string()))?;
-        serde_json::to_value(&annotated).map_err(|e| napi::Error::from_reason(e.to_string()))
+        serde_json::to_value(&annotated)
+            .map(Json)
+            .map_err(|e| napi::Error::from_reason(e.to_string()))
     }
 }
 
@@ -850,27 +876,31 @@ impl OCIGenAIChatCodec {
     /// Decode an opaque LLM request into structured form.
     #[napi]
     pub fn decode(&self, request: Json) -> napi::Result<Json> {
-        let llm_req: CoreLlmRequest = serde_json::from_value(request)
+        let llm_req: CoreLlmRequest = serde_json::from_value(request.0)
             .map_err(|e| napi::Error::from_reason(format!("invalid LlmRequest: {e}")))?;
         let annotated = self
             .inner_codec
             .decode(&llm_req)
             .map_err(|e| napi::Error::from_reason(e.to_string()))?;
-        serde_json::to_value(&annotated).map_err(|e| napi::Error::from_reason(e.to_string()))
+        serde_json::to_value(&annotated)
+            .map(Json)
+            .map_err(|e| napi::Error::from_reason(e.to_string()))
     }
 
     /// Encode structured changes back into an opaque LLM request.
     #[napi]
     pub fn encode(&self, annotated: Json, original: Json) -> napi::Result<Json> {
-        let ann: AnnotatedLlmRequest = serde_json::from_value(annotated)
+        let ann: AnnotatedLlmRequest = serde_json::from_value(annotated.0)
             .map_err(|e| napi::Error::from_reason(format!("invalid AnnotatedLlmRequest: {e}")))?;
-        let orig: CoreLlmRequest = serde_json::from_value(original)
+        let orig: CoreLlmRequest = serde_json::from_value(original.0)
             .map_err(|e| napi::Error::from_reason(format!("invalid LlmRequest: {e}")))?;
         let result = self
             .inner_codec
             .encode(&ann, &orig)
             .map_err(|e| napi::Error::from_reason(e.to_string()))?;
-        serde_json::to_value(&result).map_err(|e| napi::Error::from_reason(e.to_string()))
+        serde_json::to_value(&result)
+            .map(Json)
+            .map_err(|e| napi::Error::from_reason(e.to_string()))
     }
 
     /// Decode a raw LLM response into structured form.
@@ -878,8 +908,10 @@ impl OCIGenAIChatCodec {
     pub fn decode_response(&self, response: Json) -> napi::Result<Json> {
         let annotated = self
             .inner_response_codec
-            .decode_response(&response)
+            .decode_response(&response.0)
             .map_err(|e| napi::Error::from_reason(e.to_string()))?;
-        serde_json::to_value(&annotated).map_err(|e| napi::Error::from_reason(e.to_string()))
+        serde_json::to_value(&annotated)
+            .map(Json)
+            .map_err(|e| napi::Error::from_reason(e.to_string()))
     }
 }
