@@ -240,11 +240,19 @@ impl Client {
                 .and_then(Value::as_str)
                 .unwrap_or("control command rejected");
             let code = payload.pointer("/error/code").and_then(Value::as_str);
+            let retry_after_ms = payload
+                .pointer("/error/retry_after_ms")
+                .and_then(Value::as_u64);
             return Err(
                 if status == 401 && code == Some(ROUTE_CREDENTIAL_REJECTED_CODE) {
                     CliError::RouteCredentialRejected(message.into())
                 } else if status == 401 {
                     CliError::Unauthorized(message.into())
+                } else if let (429, Some(retry_after_ms)) = (status, retry_after_ms) {
+                    CliError::ControlBusy {
+                        message: message.into(),
+                        retry_after: Duration::from_millis(retry_after_ms).min(GRACE),
+                    }
                 } else {
                     failure(message)
                 },
@@ -288,6 +296,17 @@ pub(crate) fn is_retryable(error: &CliError) -> bool {
     !matches!(error, CliError::RouteCredentialRejected(_))
 }
 
+/// Returns how long the daemon asked a client to wait before retrying, if it said.
+pub(crate) fn retry_after(error: &CliError) -> Option<Duration> {
+    match error {
+        CliError::ControlBusy { retry_after, .. } => Some(*retry_after),
+        CliError::McpFailure { source, .. } | CliError::HookDelivery { source } => {
+            retry_after(source)
+        }
+        _ => None,
+    }
+}
+
 pub(crate) async fn retry<T, F, Fut>(operation: F) -> Result<T, CliError>
 where
     F: FnMut() -> Fut,
@@ -326,10 +345,10 @@ where
             )));
         }
         let jitter = u64::from(uuid::Uuid::now_v7().as_bytes()[15]) % 100;
-        tokio::time::sleep_until(deadline.min(
-            tokio::time::Instant::now() + delay.saturating_sub(Duration::from_millis(jitter)),
-        ))
-        .await;
+        let wait = delay
+            .saturating_sub(Duration::from_millis(jitter))
+            .max(retry_after(&error).unwrap_or_default());
+        tokio::time::sleep_until(deadline.min(tokio::time::Instant::now() + wait)).await;
         delay = (delay * 2).min(Duration::from_secs(2));
     }
 }

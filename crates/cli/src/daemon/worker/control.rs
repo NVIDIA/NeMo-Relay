@@ -132,7 +132,10 @@ pub(super) async fn register(
                 if tokio::time::Instant::now() >= recovery_deadline {
                     return Err(error);
                 }
-                tokio::time::sleep(delay).await;
+                let wait = crate::daemon::common::socket::retry_after(&error)
+                    .map_or(delay, |hint| hint.max(delay));
+                tokio::time::sleep_until(recovery_deadline.min(tokio::time::Instant::now() + wait))
+                    .await;
                 delay = (delay * 2).min(std::time::Duration::from_secs(2));
             }
         }

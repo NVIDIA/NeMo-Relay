@@ -1191,10 +1191,23 @@ async fn remote_keepalive_requires_the_matching_pong() {
         origin.clone(),
     );
     let work = state.clone();
-    let app = Router::new().route(crate::daemon::common::socket::MCP_SOCKET_PATH, axum::routing::get(move |ws: WebSocketUpgrade| {
-        let state = work.clone();
-        async move { ws.on_upgrade(move |socket| run(state, ComponentRole::Mcp, false, socket)) }
-    }));
+    let app = Router::new().route(
+        crate::daemon::common::socket::MCP_SOCKET_PATH,
+        axum::routing::get(move |ws: WebSocketUpgrade| {
+            let state = work.clone();
+            async move {
+                ws.on_upgrade(move |socket| {
+                    run(
+                        state,
+                        ComponentRole::Mcp,
+                        false,
+                        IpAddr::V4(Ipv4Addr::LOCALHOST),
+                        socket,
+                    )
+                })
+            }
+        }),
+    );
     let task = tokio::spawn(async move { axum::serve(listener, app).await.unwrap() });
     let mut socket = raw_mcp(&origin).await;
     tokio::time::pause();
@@ -2387,4 +2400,101 @@ async fn worker_recovery_is_rejected_after_an_announced_exit() {
     for task in fixture.tasks {
         task.abort();
     }
+}
+
+async fn raw_status(socket: &mut RawSocket, command: Command) -> u16 {
+    use tokio_tungstenite::tungstenite::Message as Wire;
+    let request = ControlRequest {
+        request_id: uuid::Uuid::now_v7().to_string(),
+        command,
+    };
+    socket
+        .send(Wire::Text(serde_json::to_string(&request).unwrap().into()))
+        .await
+        .unwrap();
+    loop {
+        let Wire::Text(text) = socket.next().await.unwrap().unwrap() else {
+            continue;
+        };
+        if let Event::Reply {
+            request_id, status, ..
+        } = serde_json::from_str(&text).unwrap()
+            && request_id == request.request_id
+        {
+            return status;
+        }
+    }
+}
+
+fn raw_challenge(role: ComponentRole) -> Command {
+    let identity = MachineIdentity::generate().unwrap().identity;
+    Command::Challenge(ChallengeRequest {
+        initiator: crate::daemon::common::control::descriptor(role),
+        initiator_instance_id: "one-challenge".into(),
+        initiator_public_identity: identity.public_identity(),
+        initiator_fingerprint: identity.fingerprint(),
+        initiator_nonce: crate::daemon::common::control::fresh_nonce().unwrap(),
+    })
+}
+
+async fn raw_socket(origin: &str, path: &str) -> RawSocket {
+    tokio_tungstenite::connect_async(format!("{}{path}", origin.replacen("http", "ws", 1)))
+        .await
+        .unwrap()
+        .0
+}
+
+#[tokio::test]
+async fn a_control_connection_gets_one_challenge_and_closing_it_frees_the_slot() {
+    let (state, origin, task) = daemon(false).await;
+    let mut socket = raw_socket(&origin, crate::daemon::common::socket::MCP_SOCKET_PATH).await;
+    assert_eq!(
+        raw_status(&mut socket, raw_challenge(ComponentRole::Mcp)).await,
+        StatusCode::OK.as_u16()
+    );
+    assert_eq!(lock(&state.challenges).len(), 1);
+    // A second request on the same connection is refused without a new challenge.
+    assert_eq!(
+        raw_status(&mut socket, raw_challenge(ComponentRole::Mcp)).await,
+        StatusCode::UNAUTHORIZED.as_u16()
+    );
+    assert_eq!(lock(&state.challenges).len(), 1);
+    drop(socket);
+    tokio::time::timeout(Duration::from_secs(2), async {
+        while !lock(&state.challenges).is_empty() {
+            tokio::time::sleep(Duration::from_millis(10)).await;
+        }
+    })
+    .await
+    .expect("closing the connection frees its pending challenge");
+    task.abort();
+}
+
+#[tokio::test]
+async fn a_rejected_challenge_request_cannot_be_retried_on_the_same_connection() {
+    let (state, origin, task) = daemon(false).await;
+    for _ in 0..MAX_PENDING_WORKER_CHALLENGES {
+        let Command::Challenge(request) = raw_challenge(ComponentRole::Worker) else {
+            unreachable!()
+        };
+        let status = issue_challenge(
+            State(Arc::clone(&state)),
+            IpAddr::V4(Ipv4Addr::LOCALHOST),
+            Json(request),
+        )
+        .await
+        .status();
+        assert_eq!(status, StatusCode::OK);
+    }
+    let mut socket = raw_socket(&origin, crate::daemon::common::socket::WORKER_SOCKET_PATH).await;
+    assert_eq!(
+        raw_status(&mut socket, raw_challenge(ComponentRole::Worker)).await,
+        StatusCode::TOO_MANY_REQUESTS.as_u16()
+    );
+    assert_eq!(
+        raw_status(&mut socket, raw_challenge(ComponentRole::Worker)).await,
+        StatusCode::UNAUTHORIZED.as_u16()
+    );
+    assert_eq!(lock(&state.challenges).len(), MAX_PENDING_WORKER_CHALLENGES);
+    task.abort();
 }

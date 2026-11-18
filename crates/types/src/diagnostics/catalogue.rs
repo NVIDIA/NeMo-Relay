@@ -616,6 +616,8 @@ pub enum DaemonFailureCode {
     WorkerListener,
     /// Observation identified by `daemon.worker.teardown_failed`.
     WorkerTeardown,
+    /// Observation identified by `daemon.challenge_rejected`.
+    ChallengeRejected,
 }
 impl DaemonFailureCode {
     /// Stable wire name.
@@ -631,6 +633,7 @@ impl DaemonFailureCode {
             Self::WorkerInitialize => "daemon.worker.initialize_failed",
             Self::WorkerListener => "daemon.worker.listener_failed",
             Self::WorkerTeardown => "daemon.worker.teardown_failed",
+            Self::ChallengeRejected => "daemon.challenge_rejected",
         }
     }
     /// Structured causes accepted from the owning operation.
@@ -1019,6 +1022,7 @@ impl BuiltinDiagnosticCode {
             Self::Failure(FailureCode::Daemon(DaemonFailureCode::WorkerInitialize)),
             Self::Failure(FailureCode::Daemon(DaemonFailureCode::WorkerListener)),
             Self::Failure(FailureCode::Daemon(DaemonFailureCode::WorkerTeardown)),
+            Self::Failure(FailureCode::Daemon(DaemonFailureCode::ChallengeRejected)),
             Self::Failure(FailureCode::Cli(CliFailureCode::ChildCleanup)),
             Self::Failure(FailureCode::Cli(CliFailureCode::UpstreamResponse)),
             Self::Success(SuccessCode::CliUpstreamHeadersReceived),
