@@ -54,7 +54,7 @@ fn unread_worker(counted: Arc<AtomicUsize>) -> Router {
         )
         .route(
             "/hooks/codex",
-            axum::routing::post(|| async { Json(json!({})) }),
+            axum::routing::post(|| async { Json(json!({"source": "worker-hook"})) }),
         )
         .route(
             "/v1/responses",
@@ -110,7 +110,12 @@ async fn aep278_http2_unread_responses_do_not_starve_independent_hooks() {
                 .unwrap();
             assert_eq!(response.status(), StatusCode::OK);
             stage.store(1, Ordering::SeqCst);
-            let _ = response.into_body().collect().await.unwrap();
+            let body = response.into_body().collect().await.unwrap().to_bytes();
+            assert_eq!(
+                &body[..],
+                br#"{"source":"worker-hook"}"#,
+                "hook verdict must come from the worker, not daemon pass-through"
+            );
             stage.store(2, Ordering::SeqCst);
         };
         tokio::pin!(pending);
@@ -148,7 +153,7 @@ async fn aep278_http2_unread_responses_do_not_starve_independent_hooks() {
                 assert_eq!(response.status(), StatusCode::OK);
                 assert_eq!(
                     &response.into_body().collect().await.unwrap().to_bytes()[..],
-                    b"{}"
+                    br#"{"source":"worker-hook"}"#
                 );
             })
             .await
