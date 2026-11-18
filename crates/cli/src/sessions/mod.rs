@@ -1806,7 +1806,7 @@ impl Session {
         let mut delivery = None;
         for id in &ids {
             delivery = self
-                .close_subagent_scope(id, json!({ "status": "idle_timeout" }))
+                .close_subagent_scope(id, json!({ "status": "idle_timeout" }), None)
                 .await?
                 .or(delivery);
         }
@@ -2642,7 +2642,9 @@ impl Session {
     ) -> Result<Option<SubscriberDelivery>, CliError> {
         if let Some(id) = self.child_turn_owner(&event) {
             if alignment::aliased_turn_subagent_id(&event).is_some() {
-                return self.close_subagent_scope(&id, event.payload).await;
+                return self
+                    .close_subagent_scope(&id, event.payload, Some(event.metadata))
+                    .await;
             }
             self.close_child_calls(&id, "closed_by_turn_end")?;
             return self
@@ -2865,7 +2867,7 @@ impl Session {
             // Subagent ends precede the turn end on the serial dispatcher, so the turn receipt
             // returned by `close_turn` also covers these deliveries.
             let _ = self
-                .close_subagent_scope(&subagent_id, json!({ "status": reason }))
+                .close_subagent_scope(&subagent_id, json!({ "status": reason }), None)
                 .await?;
             closed.push(subagent_id);
         }
@@ -3082,7 +3084,7 @@ impl Session {
             )?;
             return Ok(None);
         };
-        self.close_subagent_scope(&event.subagent_id, event.payload)
+        self.close_subagent_scope(&event.subagent_id, event.payload, Some(event.metadata))
             .await
     }
 
@@ -3093,9 +3095,10 @@ impl Session {
         &mut self,
         subagent_id: &str,
         output: Value,
+        boundary_metadata: Option<Value>,
     ) -> Result<Option<SubscriberDelivery>, CliError> {
         self.close_child_calls(subagent_id, "closed_by_subagent_end")?;
-        self.close_child_turn(subagent_id, output.clone(), None)
+        self.close_child_turn(subagent_id, output.clone(), boundary_metadata.clone())
             .await?;
         let Some(scope) = self.subagents.remove(subagent_id) else {
             return Ok(None);
@@ -3104,12 +3107,14 @@ impl Session {
             .subagent_stacks
             .remove(subagent_id)
             .unwrap_or_else(|| self.scope_stack.clone());
+        let boundary_metadata = self.trusted_boundary_metadata(boundary_metadata);
         let subscriber_delivery = TASK_SCOPE_STACK
             .scope(stack, async {
                 pop_scope_with_subscriber_delivery(
                     PopScopeParams::builder()
                         .handle_uuid(&scope.uuid)
                         .output(output)
+                        .metadata_opt(boundary_metadata)
                         .build(),
                 )
                 .map_err(CliError::from)
@@ -3337,7 +3342,8 @@ impl Session {
             )?;
             return match completed_agent_subagent_id {
                 Some(id) if self.subagents.contains_key(&id) => {
-                    self.close_subagent_scope(&id, event.payload).await
+                    self.close_subagent_scope(&id, event.payload, Some(event.metadata))
+                        .await
                 }
                 _ => Ok(None),
             };
@@ -3356,7 +3362,10 @@ impl Session {
                 .filter(|id| self.subagents.contains_key(id)),
         );
         match completed_agent_subagent_id {
-            Some(id) => self.close_subagent_scope(&id, event.result).await,
+            Some(id) => {
+                self.close_subagent_scope(&id, event.result, Some(event.metadata))
+                    .await
+            }
             None => Ok(None),
         }
     }

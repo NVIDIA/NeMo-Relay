@@ -1892,6 +1892,268 @@ async fn nests_agent_subagent_and_tool_lifecycle() {
 }
 
 #[tokio::test]
+async fn subagent_scope_end_names_its_closing_hook() {
+    let session_id = "subagent-end-closer";
+    let subscriber_name = "cli-subagent-end-closer-test";
+    let captured = Arc::new(StdMutex::new(
+        Vec::<(String, Option<ScopeCategory>, Value)>::new(),
+    ));
+    let events = Arc::clone(&captured);
+    register_filtered_session_subscriber(
+        subscriber_name,
+        tracked_sessions(&[session_id]),
+        Arc::new(move |event| {
+            if let Some(metadata) = event.metadata() {
+                events.lock().unwrap().push((
+                    event.name().to_string(),
+                    event.scope_category(),
+                    metadata.clone(),
+                ));
+            }
+        }),
+    );
+    let hook_metadata = |hook: &str, agent_id: Option<&str>| {
+        let mut metadata = json!({ "hook_event_name": hook, "session_id": session_id });
+        if let Some(agent_id) = agent_id {
+            metadata["agent_id"] = json!(agent_id);
+        }
+        metadata
+    };
+    let subagent_start = |agent_id: &str| {
+        NormalizedEvent::SubagentStarted(SubagentEvent {
+            session_id: session_id.into(),
+            agent_kind: AgentKind::ClaudeCode,
+            event_name: "SubagentStart".into(),
+            subagent_id: agent_id.into(),
+            payload: json!({ "agent_id": agent_id }),
+            metadata: hook_metadata("SubagentStart", Some(agent_id)),
+        })
+    };
+
+    let manager = SessionManager::new(session_test_config());
+    manager
+        .apply_events(
+            &HeaderMap::new(),
+            vec![
+                NormalizedEvent::AgentStarted(SessionEvent {
+                    session_id: session_id.into(),
+                    agent_kind: AgentKind::ClaudeCode,
+                    event_name: "SessionStart".into(),
+                    payload: json!({}),
+                    metadata: hook_metadata("SessionStart", None),
+                }),
+                subagent_start("stop-worker"),
+                subagent_start("tool-worker"),
+                subagent_start("shutdown-worker"),
+                NormalizedEvent::SubagentEnded(SubagentEvent {
+                    session_id: session_id.into(),
+                    agent_kind: AgentKind::ClaudeCode,
+                    event_name: "SubagentStop".into(),
+                    subagent_id: "stop-worker".into(),
+                    payload: json!({ "agent_id": "stop-worker" }),
+                    metadata: hook_metadata("SubagentStop", Some("stop-worker")),
+                }),
+                NormalizedEvent::ToolStarted(ToolEvent {
+                    session_id: session_id.into(),
+                    agent_kind: AgentKind::ClaudeCode,
+                    event_name: "PreToolUse".into(),
+                    tool_call_id: "agent-call".into(),
+                    tool_name: "Agent".into(),
+                    subagent_id: None,
+                    arguments: json!({ "prompt": "run ls" }),
+                    result: Value::Null,
+                    status: None,
+                    payload: json!({}),
+                    metadata: hook_metadata("PreToolUse", None),
+                }),
+                NormalizedEvent::ToolEnded(ToolEvent {
+                    session_id: session_id.into(),
+                    agent_kind: AgentKind::ClaudeCode,
+                    event_name: "PostToolUse".into(),
+                    tool_call_id: "agent-call".into(),
+                    tool_name: "Agent".into(),
+                    subagent_id: None,
+                    arguments: Value::Null,
+                    result: json!({ "status": "completed", "agentId": "tool-worker" }),
+                    status: Some("success".into()),
+                    payload: json!({}),
+                    metadata: hook_metadata("PostToolUse", None),
+                }),
+                NormalizedEvent::AgentEnded(SessionEvent {
+                    session_id: session_id.into(),
+                    agent_kind: AgentKind::ClaudeCode,
+                    event_name: "SessionEnd".into(),
+                    payload: json!({}),
+                    metadata: hook_metadata("SessionEnd", None),
+                }),
+            ],
+        )
+        .await
+        .unwrap();
+
+    flush_subscribers().unwrap();
+    let captured = captured.lock().unwrap();
+    let scope_metadata = |name: &str, category: ScopeCategory| {
+        captured
+            .iter()
+            .find(|(candidate, candidate_category, _)| {
+                candidate == name && *candidate_category == Some(category)
+            })
+            .unwrap_or_else(|| panic!("{name} should have a {category:?} event"))
+            .2
+            .clone()
+    };
+
+    let stop_end = scope_metadata("subagent:stop-worker", ScopeCategory::End);
+    assert_eq!(stop_end["hook_event_name"], json!("SubagentStop"));
+    assert_eq!(stop_end["nemo_relay_scope_role"], json!("subagent"));
+    assert_eq!(
+        scope_metadata("subagent:tool-worker", ScopeCategory::End)["hook_event_name"],
+        json!("PostToolUse")
+    );
+    assert_eq!(
+        scope_metadata("subagent:shutdown-worker", ScopeCategory::End)["hook_event_name"],
+        json!("SubagentStart")
+    );
+    assert_eq!(
+        scope_metadata("subagent:stop-worker", ScopeCategory::Start)["hook_event_name"],
+        json!("SubagentStart")
+    );
+
+    drop(captured);
+    deregister_subscriber(subscriber_name).unwrap();
+}
+
+#[tokio::test]
+async fn codex_child_turn_end_names_its_closing_hook() {
+    let session_id = "codex-child-turn-closer";
+    let subscriber_name = "cli-codex-child-turn-closer-test";
+    let captured = Arc::new(StdMutex::new(
+        Vec::<(String, Option<ScopeCategory>, Value)>::new(),
+    ));
+    let events = Arc::clone(&captured);
+    register_filtered_session_subscriber(
+        subscriber_name,
+        tracked_sessions(&[session_id]),
+        Arc::new(move |event| {
+            if let Some(metadata) = event.metadata() {
+                events.lock().unwrap().push((
+                    event.name().to_string(),
+                    event.scope_category(),
+                    metadata.clone(),
+                ));
+            }
+        }),
+    );
+    let hook_metadata = |hook: &str, agent_id: Option<&str>| {
+        let mut metadata = json!({ "hook_event_name": hook, "session_id": session_id });
+        if let Some(agent_id) = agent_id {
+            metadata["agent_id"] = json!(agent_id);
+        }
+        metadata
+    };
+    let subagent_start = |agent_id: &str| {
+        NormalizedEvent::SubagentStarted(SubagentEvent {
+            session_id: session_id.into(),
+            agent_kind: AgentKind::Codex,
+            event_name: "subagentStart".into(),
+            subagent_id: agent_id.into(),
+            payload: json!({ "agent_id": agent_id }),
+            metadata: hook_metadata("subagentStart", Some(agent_id)),
+        })
+    };
+    let child_prompt = |agent_id: &str| {
+        NormalizedEvent::PromptSubmitted(codex_session_event(
+            session_id,
+            "UserPromptSubmit",
+            hook_metadata("userPromptSubmit", Some(agent_id)),
+        ))
+    };
+
+    let manager = SessionManager::new(session_test_config());
+    manager
+        .apply_events(
+            &HeaderMap::new(),
+            vec![
+                NormalizedEvent::AgentStarted(codex_session_event(
+                    session_id,
+                    "SessionStart",
+                    hook_metadata("sessionStart", None),
+                )),
+                NormalizedEvent::PromptSubmitted(codex_session_event(
+                    session_id,
+                    "UserPromptSubmit",
+                    hook_metadata("userPromptSubmit", None),
+                )),
+                subagent_start("stopped-worker"),
+                child_prompt("stopped-worker"),
+                subagent_start("sibling-worker"),
+                child_prompt("sibling-worker"),
+                NormalizedEvent::SubagentEnded(SubagentEvent {
+                    session_id: session_id.into(),
+                    agent_kind: AgentKind::Codex,
+                    event_name: "subagentStop".into(),
+                    subagent_id: "stopped-worker".into(),
+                    payload: json!({ "agent_id": "stopped-worker" }),
+                    metadata: hook_metadata("subagentStop", Some("stopped-worker")),
+                }),
+                NormalizedEvent::AgentEnded(codex_session_event(
+                    session_id,
+                    "SessionEnd",
+                    hook_metadata("sessionEnd", None),
+                )),
+            ],
+        )
+        .await
+        .unwrap();
+
+    flush_subscribers().unwrap();
+    let captured = captured.lock().unwrap();
+    let child_turn_end = |agent_id: &str| {
+        captured
+            .iter()
+            .find(|(name, category, metadata)| {
+                name == "codex-turn"
+                    && *category == Some(ScopeCategory::End)
+                    && metadata["subagent_id"] == json!(agent_id)
+            })
+            .unwrap_or_else(|| panic!("the child turn of {agent_id} should have closed"))
+            .2
+            .clone()
+    };
+    let subagent_end = |agent_id: &str| {
+        captured
+            .iter()
+            .find(|(name, category, _)| {
+                name == &format!("subagent:{agent_id}") && *category == Some(ScopeCategory::End)
+            })
+            .unwrap_or_else(|| panic!("subagent:{agent_id} should have closed"))
+            .2
+            .clone()
+    };
+
+    assert_eq!(
+        child_turn_end("stopped-worker")["hook_event_name"],
+        json!("subagentStop")
+    );
+    assert_eq!(
+        subagent_end("stopped-worker")["hook_event_name"],
+        json!("subagentStop")
+    );
+    assert_eq!(
+        child_turn_end("sibling-worker")["hook_event_name"],
+        json!("userPromptSubmit")
+    );
+    assert_eq!(
+        subagent_end("sibling-worker")["hook_event_name"],
+        json!("subagentStart")
+    );
+
+    drop(captured);
+    deregister_subscriber(subscriber_name).unwrap();
+}
+
+#[tokio::test]
 async fn claude_paired_tool_execution_metadata() {
     assert_harness_tool_execution_metadata(AgentKind::ClaudeCode, false).await;
 }
