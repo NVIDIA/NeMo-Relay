@@ -674,9 +674,14 @@ async fn native_context_lane_rejects_invalid_schema_without_disclosing_input() {
 /// A direct native caller is bounded before recursive ABI-to-JSON conversion.
 #[tokio::test]
 async fn native_context_lane_bounds_raw_abi_depth_before_conversion() {
+    let calls = Arc::new(AtomicUsize::new(0));
+    let observed_calls = calls.clone();
     let callback = ContextToolCallback {
         executor: ComponentExecutor::inline("deep-context"),
-        callback: Arc::new(|_, _| panic!("over-deep context reached native author")),
+        callback: Arc::new(move |_, _| {
+            observed_calls.fetch_add(1, Ordering::SeqCst);
+            panic!("over-deep context reached native author")
+        }),
     };
     let mut value = abi::Json::Null;
     for _ in 0..160 {
@@ -694,7 +699,13 @@ async fn native_context_lane_bounds_raw_abi_depth_before_conversion() {
         a::ContinuationBox::new(Next),
     )
     .await;
-    assert!(result.is_err());
+    let error = match result {
+        Err(error) => error,
+        Ok(_) => panic!("over-deep context accepted"),
+    };
+    assert_eq!(error.code, "plugin");
+    assert_eq!(error.message, "invalid application execution context");
+    assert_eq!(calls.load(Ordering::SeqCst), 0);
     assert!(!BOUND.get());
     a::Component::shutdown(&callback.executor).await.unwrap();
 }

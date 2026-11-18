@@ -67,9 +67,9 @@ pub struct ApplicationExecutionContext {
 /// reserved and rejected, including in extensions. Relay does not enforce an
 /// approval workflow.
 #[derive(Clone, PartialEq, Serialize, Deserialize)]
+#[serde(try_from = "Json")]
 pub struct HostApproval {
     /// Approval-claim format; the standard schema requires integer `1`.
-    #[serde(deserialize_with = "deserialize_approval_version")]
     pub version: u8,
     /// Nonempty host identity checked against the consumer's configured trust.
     pub source: String,
@@ -100,9 +100,55 @@ impl std::fmt::Debug for HostApproval {
 
 #[derive(Deserialize)]
 struct RawApplicationExecutionContext {
-    host_approval: Option<Box<HostApproval>>,
+    host_approval: Option<Box<RawHostApproval>>,
     #[serde(flatten)]
     additional_properties: BTreeMap<String, Json>,
+}
+
+// Decode only after the enclosing schema check. Keeping this raw representation
+// separate avoids recursively invoking HostApproval's validating deserializer.
+#[derive(Deserialize)]
+struct RawHostApproval {
+    #[serde(deserialize_with = "deserialize_approval_version")]
+    version: u8,
+    source: String,
+    approval_id: String,
+    tool_name: String,
+    approved_arguments: Json,
+    #[serde(flatten)]
+    additional_properties: BTreeMap<String, Json>,
+}
+
+impl From<RawHostApproval> for HostApproval {
+    fn from(raw: RawHostApproval) -> Self {
+        Self {
+            version: raw.version,
+            source: raw.source,
+            approval_id: raw.approval_id,
+            tool_name: raw.tool_name,
+            approved_arguments: raw.approved_arguments,
+            additional_properties: raw.additional_properties,
+        }
+    }
+}
+
+impl TryFrom<Json> for HostApproval {
+    type Error = ApplicationExecutionContextError;
+
+    /// Validate a standalone claim under the same schema and limits as an invocation.
+    fn try_from(value: Json) -> Result<Self, Self::Error> {
+        // Move into the envelope without serializing or traversing the input
+        // before the shared bounded preflight. The raw decoder above prevents
+        // this from recursing through HostApproval::deserialize again.
+        let envelope = Json::Object(serde_json::Map::from_iter([(
+            "host_approval".into(),
+            value,
+        )]));
+        ApplicationExecutionContext::try_from(envelope)?
+            .host_approval
+            .map(|approval| *approval)
+            .ok_or(ApplicationExecutionContextError::InvalidSchema)
+    }
 }
 
 impl ApplicationExecutionContext {
@@ -184,7 +230,9 @@ impl TryFrom<Json> for ApplicationExecutionContext {
         let raw: RawApplicationExecutionContext = serde_json::from_value(value)
             .map_err(|_| ApplicationExecutionContextError::InvalidSchema)?;
         Ok(Self {
-            host_approval: raw.host_approval,
+            host_approval: raw
+                .host_approval
+                .map(|approval| Box::new((*approval).into())),
             additional_properties: raw.additional_properties,
         })
     }

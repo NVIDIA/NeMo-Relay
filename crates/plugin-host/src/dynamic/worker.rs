@@ -2515,8 +2515,10 @@ impl WorkerPluginCallback {
         execution_context: Option<nemo_relay_types::api::tool::ApplicationExecutionContext>,
         next: ToolExecutionNextFn,
     ) -> FlowResult<ToolExecutionInterceptOutcome> {
-        // Preserving optional execution context is required by the 1.0
-        // worker contract checked at activation, not a negotiated feature.
+        // Preserving optional execution context is required by the 1.0 worker
+        // contract, not negotiated. Activation checks the declared identity and
+        // version; it cannot detect obsolete development binaries claiming the
+        // same identity. Those binaries are unsupported and must be rebuilt.
         let continuation_id = self
             .host_state
             .insert_continuation(Continuation::tool(next))?;

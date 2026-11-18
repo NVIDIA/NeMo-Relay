@@ -4,7 +4,7 @@
 //! Standard assertions validate without sacrificing extension data or privacy.
 
 use nemo_relay_types::Json;
-use nemo_relay_types::api::tool::ApplicationExecutionContext;
+use nemo_relay_types::api::tool::{ApplicationExecutionContext, HostApproval};
 use serde_json::json;
 
 fn assertion() -> Json {
@@ -97,6 +97,9 @@ fn numeric_version_uses_json_schema_integer_semantics() {
     for version in ["1", "1.0", "1e0"] {
         let mut value = assertion();
         value["host_approval"]["version"] = serde_json::from_str(version).unwrap();
+        let approval: HostApproval =
+            serde_json::from_value(value["host_approval"].clone()).unwrap();
+        assert_eq!(approval.version, 1);
         assert_eq!(
             ApplicationExecutionContext::try_from(value)
                 .unwrap()
@@ -106,6 +109,48 @@ fn numeric_version_uses_json_schema_integer_semantics() {
             1
         );
     }
+}
+
+/// Reserved decisions cannot turn a legacy denied claim into an approval assertion.
+#[test]
+fn direct_host_approval_rejects_reserved_decision_field() {
+    for decision in [
+        json!("approved"),
+        json!("denied"),
+        json!("pending"),
+        Json::Null,
+        json!(false),
+        json!(1),
+    ] {
+        let mut input = assertion()["host_approval"].clone();
+        input["decision"] = decision;
+        assert!(serde_json::from_value::<HostApproval>(input).is_err());
+    }
+}
+
+/// A standalone claim has the same resource budget as when carried by an invocation.
+#[test]
+fn direct_host_approval_preserves_context_resource_limits() {
+    let mut input = assertion()["host_approval"].clone();
+    input["example.extra"] = json!("x".repeat(16_384));
+    assert!(
+        serde_json::from_value::<HostApproval>(input)
+            .unwrap_err()
+            .to_string()
+            .contains("16384")
+    );
+    let mut input = assertion()["host_approval"].clone();
+    let mut nested = Json::Null;
+    for _ in 0..160 {
+        nested = Json::Array(vec![nested]);
+    }
+    input["example.extra"] = nested;
+    assert!(
+        serde_json::from_value::<HostApproval>(input)
+            .unwrap_err()
+            .to_string()
+            .contains("64 container levels")
+    );
 }
 
 #[test]
@@ -174,5 +219,39 @@ fn published_schema_conformance_vectors_match_typed_decoding() {
             "{}",
             case["name"]
         );
+    }
+}
+
+/// Direct approval decoding must enforce the same contract as its enclosing context.
+#[test]
+fn direct_host_approval_decoding_matches_shared_conformance_vectors() {
+    let cases: Vec<Json> =
+        serde_json::from_str(include_str!("fixtures/application_execution_context.json")).unwrap();
+    for case in cases {
+        let Some(input) = case["value"].get("host_approval") else {
+            continue;
+        };
+        let decoded = serde_json::from_value::<HostApproval>(input.clone());
+        assert_eq!(
+            decoded.is_ok(),
+            case["valid"].as_bool().unwrap(),
+            "{}",
+            case["name"]
+        );
+        match decoded {
+            Ok(approval) => {
+                let mut expected = input.clone();
+                expected["version"] = json!(1);
+                assert_eq!(serde_json::to_value(approval).unwrap(), expected);
+            }
+            Err(error) => {
+                assert!(error.to_string().contains("JSON Schema"));
+                assert!(!error.to_string().contains("approval-123"));
+            }
+        }
+    }
+    for input in [Json::Null, json!([]), json!("private-receipt"), json!({})] {
+        let error = serde_json::from_value::<HostApproval>(input).unwrap_err();
+        assert!(!error.to_string().contains("private-receipt"));
     }
 }
