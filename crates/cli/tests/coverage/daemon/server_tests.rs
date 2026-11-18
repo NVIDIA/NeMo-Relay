@@ -927,7 +927,7 @@ fn worker_response_error_chain_bounds_cyclic_sources() {
     );
 }
 
-/// Exercises a real HTTP/2 reset and inspects the operational JSONL record.
+/// Checks real HTTP/2 reset details and omitted causes on non-body JSONL records.
 #[tokio::test]
 async fn worker_response_body_failure_logs_the_transport_cause() {
     const CHILD_ENV: &str = "NEMO_RELAY_TEST_WORKER_BODY_ERROR_LOG_CHILD";
@@ -1053,6 +1053,9 @@ async fn worker_response_body_failure_logs_the_transport_cause() {
         "existing failure recovery must remain intact"
     );
     worker_task.abort();
+    for reason in ["transport_error", "worker_route_rejected"] {
+        handle_worker_communication_failure(&state, fingerprint, "body-error-worker", reason, None);
+    }
     logging.shutdown();
     let logs = std::fs::read_to_string(log_path).unwrap();
     let records: Vec<serde_json::Value> = logs
@@ -1063,8 +1066,25 @@ async fn worker_response_body_failure_logs_the_transport_cause() {
         .iter()
         .filter(|record| record["event"] == "worker_communication_failed")
         .collect();
-    assert_eq!(failures.len(), 1);
-    let fields = &failures[0]["fields"];
+    assert_eq!(failures.len(), 3);
+    for reason in ["transport_error", "worker_route_rejected"] {
+        let fields = failures
+            .iter()
+            .find(|record| record["fields"]["reason"] == reason)
+            .unwrap()["fields"]
+            .as_object()
+            .unwrap();
+        assert!(
+            !fields.contains_key("error_chain"),
+            "non-body failure must omit error_chain: {fields:?}"
+        );
+        assert_eq!(fields["worker_id"], "body-error-worker");
+        assert_eq!(fields["route_mode"], "pass_through");
+    }
+    let fields = &failures
+        .iter()
+        .find(|record| record["fields"]["reason"] == "response_body_error")
+        .unwrap()["fields"];
     assert_eq!(fields["reason"], "response_body_error");
     assert_eq!(fields["worker_id"], "body-error-worker");
     let chain = fields["error_chain"]

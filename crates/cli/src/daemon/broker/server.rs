@@ -2512,17 +2512,29 @@ fn handle_worker_communication_failure(
         .cancel_worker(worker_id, "worker_communication_failed");
     state.sockets.changed.notify_waiters();
     let fingerprint = fingerprint.to_string();
-    let error_chain = error.map(worker_response_error_chain);
-    log::error!(
-        target: "nemo_relay.daemon",
-        event = "worker_communication_failed",
-        fingerprint = fingerprint.as_str(),
-        worker_id = worker_id,
-        reason = reason,
-        error_chain = error_chain.as_deref(),
-        route_mode = "pass_through";
-        "Worker communication failed; route changed to pass-through"
-    );
+    if let Some(error) = error {
+        let error_chain = worker_response_error_chain(error);
+        log::error!(
+            target: "nemo_relay.daemon",
+            event = "worker_communication_failed",
+            fingerprint = fingerprint.as_str(),
+            worker_id = worker_id,
+            reason = reason,
+            error_chain = error_chain.as_str(),
+            route_mode = "pass_through";
+            "Worker communication failed; route changed to pass-through"
+        );
+    } else {
+        log::error!(
+            target: "nemo_relay.daemon",
+            event = "worker_communication_failed",
+            fingerprint = fingerprint.as_str(),
+            worker_id = worker_id,
+            reason = reason,
+            route_mode = "pass_through";
+            "Worker communication failed; route changed to pass-through"
+        );
+    }
 }
 
 /// Summarize transport causes without formatting arbitrary error text, URLs, or payloads.
