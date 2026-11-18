@@ -4522,6 +4522,36 @@ fn gen_ai_projection_includes_gemini_thinking_tokens_in_output_tokens() {
 }
 
 #[test]
+fn gen_ai_projection_adds_canonical_reasoning_tokens_only_to_gemini_output_tokens() {
+    for (api_specific, expected_output) in [
+        (json!({"api": "gemini_generate_content"}), "25"),
+        (json!({"api": "openai_responses"}), "5"),
+    ] {
+        let response: AnnotatedLlmResponse = serde_json::from_value(json!({
+            "usage": {"completion_tokens": 5},
+            "api_specific": api_specific
+        }))
+        .unwrap();
+        let event = make_scope_event_with_profile(
+            ScopeCategory::End,
+            Uuid::now_v7(),
+            None,
+            "chat",
+            ScopeType::Llm,
+            Some(json!({"gen_ai.usage.reasoning.output_tokens": 20})),
+            Some(
+                CategoryProfile::builder()
+                    .annotated_response(Arc::new(response))
+                    .build(),
+            ),
+        );
+        let attributes = attr_map(&crate::observability::otel_genai::end_attributes(&event));
+        assert_eq!(attributes["gen_ai.usage.reasoning.output_tokens"], "20");
+        assert_eq!(attributes["gen_ai.usage.output_tokens"], expected_output);
+    }
+}
+
+#[test]
 fn gen_ai_projection_adds_only_gemini_thinking_tokens_to_output_tokens() {
     for (response, expected_output, expected_reasoning) in [
         (

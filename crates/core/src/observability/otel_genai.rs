@@ -469,7 +469,7 @@ fn push_llm_response_attributes(attributes: &mut Vec<KeyValue>, event: &Event) {
             input_tokens,
         ));
     }
-    if let Some(value) = gen_ai_output_tokens(response) {
+    if let Some(value) = gen_ai_output_tokens(event, response) {
         attributes.push(KeyValue::new(semconv::GEN_AI_USAGE_OUTPUT_TOKENS, value));
     }
     if let Some(usage) = response.usage.as_ref() {
@@ -573,16 +573,16 @@ fn reasoning_output_tokens(event: &Event, response: &AnnotatedLlmResponse) -> Op
 
 // Gemini reports thinking tokens outside candidatesTokenCount, while GenAI
 // output tokens include reasoning. Other providers' completion counts already
-// include reasoning, so only Gemini thoughts are added.
-fn gen_ai_output_tokens(response: &AnnotatedLlmResponse) -> Option<i64> {
+// include reasoning, so only Gemini adds the reported reasoning count.
+fn gen_ai_output_tokens(event: &Event, response: &AnnotatedLlmResponse) -> Option<i64> {
     let completion_tokens = response
         .usage
         .as_ref()
         .and_then(|usage| usage.completion_tokens);
     let thoughts_tokens = match response.api_specific.as_ref() {
-        Some(ApiSpecificResponse::GeminiGenerateContent {
-            thoughts_tokens, ..
-        }) => *thoughts_tokens,
+        Some(ApiSpecificResponse::GeminiGenerateContent { .. }) => {
+            reasoning_output_tokens(event, response).and_then(|value| u64::try_from(value).ok())
+        }
         _ => None,
     };
     match (completion_tokens, thoughts_tokens) {
