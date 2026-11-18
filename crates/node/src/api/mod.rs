@@ -2128,8 +2128,7 @@ impl PersistentJsFunction {
             JsUnknown::from_raw_unchecked(self.env, Value::to_napi_value(self.env, argument)?)
         };
         let returned = func.call(None, &[argument])?;
-        // SAFETY: `returned` is the live result of invoking `func` in this environment.
-        unsafe { Option::<Json>::from_napi_value(self.env, returned.raw()) }.map(callback_json)
+        callable::callback_envelope(returned)
     }
 
     fn call_conditional_gate(
@@ -2154,7 +2153,7 @@ impl PersistentJsFunction {
             )
         };
         let returned = func.call(None, &[kinds, registration_name])?;
-        unsafe { Json::from_napi_value(self.env, returned.raw()) }.map(Value::from)
+        callable::callback_envelope(returned)
     }
 }
 

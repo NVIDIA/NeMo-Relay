@@ -13,11 +13,11 @@ use std::collections::{BTreeMap, BTreeSet};
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, Condvar, Mutex, OnceLock};
 
-use napi::bindgen_prelude::{FromNapiValue, ToNapiValue};
+use napi::bindgen_prelude::ToNapiValue;
 use napi::threadsafe_function::{
     ErrorStrategy, ThreadSafeCallContext, ThreadsafeFunction, ThreadsafeFunctionCallMode,
 };
-use napi::{Env, JsFunction, JsObject, JsUnknown, NapiRaw, NapiValue, ValueType};
+use napi::{Env, JsFunction, JsObject, JsUnknown, NapiRaw, NapiValue, Status, ValueType};
 use napi_derive::napi;
 use nemo_relay::api::runtime::{
     EventMetadataInjectorFn, EventSanitizeFn, EventSubscriberFn, LlmCodecIdentity, LlmCollector,
@@ -29,7 +29,7 @@ use nemo_relay::api::runtime::{
 };
 use serde::de::DeserializeOwned;
 use serde::{Deserialize, Serialize};
-use serde_json::Value;
+use serde_json::{Map, Value};
 
 use nemo_relay::api::event::{
     CategoryProfile, DataSchema, Event, EventCategory,
@@ -880,17 +880,34 @@ fn fail_reply(slot: &ReplySlot, error: impl std::fmt::Display) {
     }
 }
 
+pub(crate) fn callback_envelope(value: JsUnknown) -> napi::Result<Value> {
+    if value.get_type()? != ValueType::Object {
+        return Err(napi::Error::new(
+            Status::InvalidArg,
+            "callback envelope must be an object".to_owned(),
+        ));
+    }
+    let envelope = value.coerce_to_object()?;
+    let mut fields = Map::new();
+    for key in ["ok", "value", "error", "exceptionType"] {
+        if let Some(field) = envelope.get::<_, Json>(key)? {
+            fields.insert(key.to_owned(), field.0);
+        }
+    }
+    Ok(Value::Object(fields))
+}
+
 fn reply_callback(env: &Env, slot: ReplySlot) -> napi::Result<JsUnknown> {
     let callback = env.create_function_from_closure("__nemo_relay_reply", move |ctx| {
-        let envelope = ctx.get::<Json>(0).map_or_else(
-            |error| {
+        let envelope = ctx
+            .get::<JsUnknown>(0)
+            .and_then(callback_envelope)
+            .unwrap_or_else(|error| {
                 serde_json::json!({
                     "ok": false,
                     "error": format!("callback reply is not JSON-compatible: {error}"),
                 })
-            },
-            Value::from,
-        );
+            });
         if let Some(reply) = take_reply(&slot) {
             reply(envelope);
         }
@@ -969,15 +986,15 @@ fn completion_envelope_callback(
     complete: CompletionSender,
 ) -> napi::Result<JsUnknown> {
     let callback = env.create_function_from_closure(name, move |ctx| {
-        let envelope = ctx.get::<Json>(0).map_or_else(
-            |error| {
+        let envelope = ctx
+            .get::<JsUnknown>(0)
+            .and_then(callback_envelope)
+            .unwrap_or_else(|error| {
                 serde_json::json!({
                     "ok": false,
                     "error": format!("completion envelope is not JSON-compatible: {error}"),
                 })
-            },
-            Value::from,
-        );
+            });
         if let Some(complete) = complete
             .lock()
             .unwrap_or_else(|poisoned| poisoned.into_inner())
@@ -1040,15 +1057,15 @@ impl DirectStreamCallback {
         if self.complete.get().is_none() {
             let pending = Arc::clone(&self.pending);
             let callback = env.create_function_from_closure(name, move |ctx| {
-                let envelope = ctx.get::<Json>(0).map_or_else(
-                    |error| {
+                let envelope = ctx
+                    .get::<JsUnknown>(0)
+                    .and_then(callback_envelope)
+                    .unwrap_or_else(|error| {
                         serde_json::json!({
                             "ok": false,
                             "error": format!("completion envelope is not JSON-compatible: {error}"),
                         })
-                    },
-                    Value::from,
-                );
+                    });
                 if let Some(sender) = pending
                     .lock()
                     .unwrap_or_else(|poisoned| poisoned.into_inner())
@@ -1088,8 +1105,7 @@ impl DirectStreamCallback {
             .function
             .call_unknowns(&args(&env, complete, direct)?)?;
         if returned.get_type()? != ValueType::Undefined {
-            // SAFETY: `returned` is the live result of the call in `env`.
-            let envelope = unsafe { Json::from_napi_value(env.raw(), returned.raw())? }.0;
+            let envelope = callback_envelope(returned)?;
             if let Some(sender) = self
                 .pending
                 .lock()

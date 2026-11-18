@@ -943,6 +943,28 @@ describe('Tool intercepts', () => {
     assert.match(nextError.message, /exceeded maximum JSON nesting depth/);
   });
 
+  it('sync and async execution results share the same nesting limit', async () => {
+    const nested = (depth) => {
+      let value = 1;
+      for (let index = 0; index < depth; index += 1) {
+        value = [value];
+      }
+      return value;
+    };
+    const deepest = { result: nested(127) };
+    assert.deepEqual(await toolCallExecute('sync_depth_tool', {}, () => deepest), deepest);
+    assert.deepEqual(await toolCallExecuteAsync('async_depth_tool', {}, async () => deepest), deepest);
+    const beyond = { result: nested(128) };
+    await assert.rejects(
+      toolCallExecute('sync_depth_tool', {}, () => beyond),
+      /exceeded maximum JSON nesting depth/,
+    );
+    await assert.rejects(
+      toolCallExecuteAsync('async_depth_tool', {}, async () => beyond),
+      /exceeded maximum JSON nesting depth/,
+    );
+  });
+
   it('terminal execution intercept can correlate a short-circuit result with the toolCallId', async () => {
     let providerCalls = 0;
     let seenToolCallId = null;
