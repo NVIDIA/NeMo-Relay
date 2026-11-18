@@ -878,6 +878,24 @@ fn worker_response_error_chain_reports_io_and_h2_without_private_error_text() {
     );
 }
 
+#[tokio::test]
+async fn worker_response_error_chain_retains_http2_io_kind() {
+    let (client, peer) = tokio::io::duplex(64);
+    drop(peer);
+    let error = match h2::client::handshake(client).await {
+        Err(error) => error,
+        Ok((_sender, connection)) => connection.await.unwrap_err(),
+    };
+    assert_eq!(
+        error.get_io().expect("HTTP/2 transport failure").kind(),
+        std::io::ErrorKind::BrokenPipe
+    );
+    assert_eq!(
+        worker_response_error_chain(&error),
+        "h2:io:reason=none:remote=false -> io:BrokenPipe"
+    );
+}
+
 #[test]
 fn worker_response_error_chain_bounds_cyclic_sources() {
     #[derive(Debug)]

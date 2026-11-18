@@ -2579,10 +2579,17 @@ fn worker_response_error_chain(error: &(dyn StdError + 'static)) -> String {
         causes.push(cause);
         // io::Error::source delegates to the wrapped error's source, omitting that
         // wrapped error itself. Retain it so an embedded HTTP/2 reason is not lost.
+        // h2::Error likewise exposes its I/O cause only through get_io(), not source().
         source = error
             .downcast_ref::<std::io::Error>()
             .and_then(std::io::Error::get_ref)
             .map(|inner| inner as &(dyn StdError + 'static))
+            .or_else(|| {
+                error
+                    .downcast_ref::<h2::Error>()
+                    .and_then(h2::Error::get_io)
+                    .map(|inner| inner as &(dyn StdError + 'static))
+            })
             .or_else(|| error.source());
     }
     if source.is_some() {
