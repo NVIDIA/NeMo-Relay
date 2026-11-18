@@ -375,3 +375,274 @@ pub(super) fn gateway_session_for_call_with_preparing(
         GatewaySessionFinish::Close,
     )
 }
+
+#[derive(Default)]
+pub(super) struct SessionCorrelation {
+    pub(super) pending_llm_hints: Vec<PendingLlmHint>,
+    pub(super) pending_tool_hints: Vec<PendingToolHint>,
+    // Conflicting owners make an affinity key ambiguous; affinity has no time-to-live.
+    pub(super) llm_request_affinity: HashMap<String, Option<String>>,
+    pub(super) last_llm_owner: Option<LastLlmOwner>,
+}
+
+impl SessionCorrelation {
+    pub(super) fn cleanup(&mut self, now: Instant) {
+        self.pending_llm_hints
+            .retain(|hint| now.duration_since(hint.inserted_at) <= LLM_HINT_TTL);
+        self.pending_tool_hints
+            .retain(|hint| now.duration_since(hint.inserted_at) <= TOOL_HINT_TTL);
+        if self
+            .last_llm_owner
+            .as_ref()
+            .is_some_and(|owner| now.duration_since(owner.updated_at) > LAST_OWNER_TTL)
+        {
+            self.last_llm_owner = None;
+        }
+    }
+
+    pub(super) fn matching_hint_index(&self, start: &LlmGatewayStart) -> Option<usize> {
+        let matches: Vec<_> = self
+            .pending_llm_hints
+            .iter()
+            .enumerate()
+            .filter_map(|(index, pending)| {
+                let score = hint_match_score(&pending.hint, start);
+                (score > 0).then_some((index, score))
+            })
+            .collect();
+        let best_score = matches.iter().map(|(_, score)| *score).max()?;
+        let best: Vec<_> = matches
+            .into_iter()
+            .filter(|(_, score)| *score == best_score)
+            .collect();
+        (best.len() == 1).then_some(best[0].0)
+    }
+
+    pub(super) fn matching_tool_hint_index(&self, event: &ToolEvent) -> Option<usize> {
+        let matches: Vec<_> = self
+            .pending_tool_hints
+            .iter()
+            .enumerate()
+            .filter_map(|(index, pending)| {
+                let score = tool_hint_match_score(&pending.hint, event);
+                (score > 0).then_some((index, score))
+            })
+            .collect();
+        let best_score = matches.iter().map(|(_, score)| *score).max()?;
+        let best: Vec<_> = matches
+            .into_iter()
+            .filter(|(_, score)| *score == best_score)
+            .collect();
+        (best.len() == 1).then_some(best[0].0)
+    }
+
+    pub(super) fn consume_matching_tool_hint(&mut self, event: &ToolEvent) {
+        if let Some(index) = self.matching_tool_hint_index(event) {
+            self.pending_tool_hints.remove(index);
+        }
+    }
+
+    pub(super) fn set_last_llm_owner(&mut self, subagent_id: Option<String>) {
+        self.last_llm_owner = subagent_id.map(|subagent_id| LastLlmOwner {
+            subagent_id,
+            updated_at: Instant::now(),
+            source: LastLlmOwnerSource::Llm,
+        });
+    }
+
+    pub(super) fn set_last_tool_owner(&mut self, subagent_id: Option<String>) {
+        if let Some(subagent_id) = subagent_id {
+            self.last_llm_owner = Some(LastLlmOwner {
+                subagent_id,
+                updated_at: Instant::now(),
+                source: LastLlmOwnerSource::Tool,
+            });
+        }
+    }
+
+    pub(super) fn set_last_subagent_start_owner(&mut self, subagent_id: Option<String>) {
+        if let Some(subagent_id) = subagent_id {
+            self.last_llm_owner = Some(LastLlmOwner {
+                subagent_id,
+                updated_at: Instant::now(),
+                source: LastLlmOwnerSource::SubagentStart,
+            });
+        }
+    }
+
+    pub(super) fn record_request_affinity(
+        &mut self,
+        provider: &str,
+        request: &LlmRequest,
+        subagent_id: Option<&str>,
+        status: &str,
+    ) {
+        if !owner_status_teaches_request_affinity(status) {
+            return;
+        }
+        let Some(subagent_id) = subagent_id else {
+            return;
+        };
+        let Some(key) = alignment::request_affinity_key(provider, request) else {
+            return;
+        };
+        match self.llm_request_affinity.get_mut(&key) {
+            Some(Some(existing)) if existing == subagent_id => {}
+            // If two live subagents share the same prompt text, the key is no longer safe as a
+            // discriminator. Mark it ambiguous instead of allowing either worker to claim it.
+            Some(owner) => *owner = None,
+            None => {
+                self.llm_request_affinity
+                    .insert(key, Some(subagent_id.to_string()));
+            }
+        }
+    }
+
+    pub(super) fn clear_root_turn(&mut self, subagents: &HashMap<String, ActiveSubagent>) {
+        self.pending_llm_hints.retain(|pending| {
+            pending
+                .hint
+                .subagent_id
+                .as_ref()
+                .or(pending.hint.agent_id.as_ref())
+                .is_some_and(|id| subagents.contains_key(id))
+        });
+        self.pending_tool_hints.retain(|pending| {
+            pending
+                .hint
+                .subagent_id
+                .as_ref()
+                .is_some_and(|id| subagents.contains_key(id))
+        });
+        self.llm_request_affinity
+            .retain(|_, owner| owner.as_ref().is_some_and(|id| subagents.contains_key(id)));
+        self.last_llm_owner = None;
+    }
+
+    pub(super) fn remove_subagent(&mut self, subagent_id: &str) {
+        self.pending_llm_hints.retain(|pending| {
+            pending
+                .hint
+                .subagent_id
+                .as_ref()
+                .or(pending.hint.agent_id.as_ref())
+                .map(String::as_str)
+                != Some(subagent_id)
+        });
+        self.pending_tool_hints
+            .retain(|pending| pending.hint.subagent_id.as_deref() != Some(subagent_id));
+        self.llm_request_affinity
+            .retain(|_, owner| owner.as_deref() != Some(subagent_id));
+        if self
+            .last_llm_owner
+            .as_ref()
+            .is_some_and(|owner| owner.subagent_id == subagent_id)
+        {
+            self.last_llm_owner = None;
+        }
+    }
+}
+
+pub(super) enum OwnershipTarget {
+    Root,
+    Subagent(String),
+}
+
+impl OwnershipTarget {
+    pub(super) fn subagent_id(&self) -> Option<&str> {
+        match self {
+            Self::Root => None,
+            Self::Subagent(identifier) => Some(identifier),
+        }
+    }
+
+    pub(super) fn into_subagent_id(self) -> Option<String> {
+        match self {
+            Self::Root => None,
+            Self::Subagent(identifier) => Some(identifier),
+        }
+    }
+}
+
+pub(super) struct OwnershipDecision {
+    pub(super) owner: OwnershipTarget,
+    pub(super) evidence: OwnershipEvidence,
+}
+
+impl OwnershipDecision {
+    pub(super) fn new(subagent_id: Option<String>, evidence: OwnershipEvidence) -> Self {
+        Self {
+            owner: subagent_id.map_or(OwnershipTarget::Root, OwnershipTarget::Subagent),
+            evidence,
+        }
+    }
+}
+
+#[derive(Clone, Copy)]
+pub(super) enum HintSelection {
+    Single,
+    Matched,
+}
+
+#[derive(Clone, Copy)]
+pub(super) enum OwnershipEvidence {
+    GatewayHeader,
+    HookPayload,
+    RootRequestPayload,
+    SingleHint,
+    MatchedHint,
+    SingleHintUnavailableOwner,
+    MatchedHintUnavailableOwner,
+    RequestAffinity,
+    Sticky(LastLlmOwnerSource),
+    SoleActiveSubagent,
+    AgentFallback,
+    AmbiguousFallback,
+    HarnessInternal,
+}
+
+impl OwnershipEvidence {
+    pub(super) fn hint(selection: HintSelection, owner_unavailable: bool) -> Self {
+        match (selection, owner_unavailable) {
+            (HintSelection::Single, false) => Self::SingleHint,
+            (HintSelection::Single, true) => Self::SingleHintUnavailableOwner,
+            (HintSelection::Matched, false) => Self::MatchedHint,
+            (HintSelection::Matched, true) => Self::MatchedHintUnavailableOwner,
+        }
+    }
+
+    pub(super) fn is_hint(self) -> bool {
+        matches!(
+            self,
+            Self::SingleHint
+                | Self::MatchedHint
+                | Self::SingleHintUnavailableOwner
+                | Self::MatchedHintUnavailableOwner
+        )
+    }
+
+    pub(super) fn status(self) -> &'static str {
+        match self {
+            Self::GatewayHeader | Self::HookPayload | Self::RootRequestPayload => "explicit",
+            Self::SingleHint | Self::SingleHintUnavailableOwner => "single_hint",
+            Self::MatchedHint | Self::MatchedHintUnavailableOwner => "matched_hint",
+            Self::RequestAffinity => "request_affinity",
+            Self::Sticky(source) => source.status(),
+            Self::SoleActiveSubagent => "active_subagent",
+            Self::AgentFallback => "agent_fallback",
+            Self::AmbiguousFallback => "ambiguous_fallback",
+            Self::HarnessInternal => "harness_internal",
+        }
+    }
+
+    pub(super) fn source(self) -> Option<&'static str> {
+        match self {
+            Self::GatewayHeader => Some("gateway_header"),
+            Self::HookPayload => Some("hook_payload"),
+            Self::RootRequestPayload | Self::RequestAffinity => Some("request_payload"),
+            Self::Sticky(source) => source.metadata_source(),
+            Self::HarnessInternal => Some("claude_code_request_class"),
+            _ => None,
+        }
+    }
+}

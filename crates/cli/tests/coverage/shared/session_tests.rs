@@ -1533,7 +1533,14 @@ async fn turn_root_reuses_startup_mark_instance_without_opening_a_turn() {
         .unwrap();
     {
         let sessions = manager.inner.lock().await;
-        assert!(sessions.get(session_id).unwrap().turn_scope.is_none());
+        assert!(
+            sessions
+                .get(session_id)
+                .unwrap()
+                .root_turn
+                .handle()
+                .is_none()
+        );
     }
     manager
         .apply_events(
@@ -1796,8 +1803,8 @@ fn active_turn_uuid(session: &Session) -> uuid::Uuid {
 
 fn active_turn_scope(session: &Session) -> &ScopeHandle {
     session
-        .turn_scope
-        .as_ref()
+        .root_turn
+        .handle()
         .expect("expected active turn scope")
 }
 
@@ -2241,7 +2248,12 @@ async fn parallel_subagents_are_siblings_under_turn_scope() {
     assert!(session.agent_scope.is_none());
     let turn_uuid = active_turn_uuid(session);
     assert_eq!(
-        session.subagents.get("worker-1").unwrap().scope_type,
+        session
+            .subagents
+            .get("worker-1")
+            .unwrap()
+            .scope_handle
+            .scope_type,
         ScopeType::Agent
     );
     assert_eq!(
@@ -2249,17 +2261,28 @@ async fn parallel_subagents_are_siblings_under_turn_scope() {
             .subagents
             .get("worker-1")
             .unwrap()
+            .scope_handle
             .metadata
             .as_ref()
             .unwrap()["nemo_relay_scope_role"],
         json!("subagent")
     );
     assert_eq!(
-        session.subagents.get("worker-1").unwrap().parent_uuid,
+        session
+            .subagents
+            .get("worker-1")
+            .unwrap()
+            .scope_handle
+            .parent_uuid,
         Some(turn_uuid)
     );
     assert_eq!(
-        session.subagents.get("worker-2").unwrap().parent_uuid,
+        session
+            .subagents
+            .get("worker-2")
+            .unwrap()
+            .scope_handle
+            .parent_uuid,
         Some(turn_uuid)
     );
     drop(sessions);
@@ -2373,7 +2396,8 @@ async fn gateway_response_bookkeeping_preserves_parent_output_and_child_tool_hin
         }
         assert!(
             manager.inner.lock().await[root_id]
-                .last_turn_llm_output
+                .root_turn
+                .model_output()
                 .is_none()
         );
         manager
@@ -2445,8 +2469,8 @@ async fn gateway_response_bookkeeping_preserves_parent_output_and_child_tool_hin
         {
             let sessions = manager.inner.lock().await;
             let root = &sessions[root_id];
-            assert_eq!(root.last_turn_llm_output.as_ref(), Some(&parent_response));
-            let hint = &root.pending_tool_hints.last().unwrap().hint;
+            assert_eq!(root.root_turn.model_output(), Some(&parent_response));
+            let hint = &root.correlation.pending_tool_hints.last().unwrap().hint;
             assert_eq!(hint.subagent_id.as_deref(), Some("worker"));
             assert_eq!(hint.tool_call_id.as_deref(), Some("aliased-tool"));
             assert_eq!(hint.tool_name.as_deref(), Some("Bash"));
@@ -2479,8 +2503,8 @@ async fn immediate_gateway_response_bookkeeping_defers_without_partial_updates_w
     {
         let sessions = manager.inner.lock().await;
         assert!(!manager.try_record_gateway_response_hints(id, None, &response));
-        assert!(sessions[id].last_turn_llm_output.is_none());
-        assert!(sessions[id].pending_tool_hints.is_empty());
+        assert!(sessions[id].root_turn.model_output().is_none());
+        assert!(sessions[id].correlation.pending_tool_hints.is_empty());
     }
     let gate = session_gate(&manager.session_gates, id).await;
     let held = gate.lock().await;
@@ -2490,17 +2514,17 @@ async fn immediate_gateway_response_bookkeeping_defers_without_partial_updates_w
     assert!(futures_util::poll!(pending.as_mut()).is_pending());
     {
         let sessions = manager.inner.lock().await;
-        assert!(sessions[id].last_turn_llm_output.is_none());
-        assert!(sessions[id].pending_tool_hints.is_empty());
+        assert!(sessions[id].root_turn.model_output().is_none());
+        assert!(sessions[id].correlation.pending_tool_hints.is_empty());
     }
     drop(held);
     pending.await;
     {
         let sessions = manager.inner.lock().await;
-        assert_eq!(sessions[id].last_turn_llm_output.as_ref(), Some(&response));
-        assert_eq!(sessions[id].pending_tool_hints.len(), 1);
+        assert_eq!(sessions[id].root_turn.model_output(), Some(&response));
+        assert_eq!(sessions[id].correlation.pending_tool_hints.len(), 1);
         assert_eq!(
-            sessions[id].pending_tool_hints[0]
+            sessions[id].correlation.pending_tool_hints[0]
                 .hint
                 .tool_call_id
                 .as_deref(),
@@ -2624,6 +2648,203 @@ async fn turn_output_uses_last_root_owned_llm_response() {
     flush_subscribers().unwrap();
     assert_eq!(*captured_output.lock().unwrap(), Some(final_response));
     deregister_subscriber(subscriber_name).unwrap();
+}
+
+#[tokio::test]
+async fn codex_root_turn_completion_does_not_reuse_previous_output() {
+    let session_id = "codex-root-turn-completion";
+    let captured_events = Arc::new(StdMutex::new(Vec::<Event>::new()));
+    let captured = Arc::clone(&captured_events);
+    register_filtered_session_subscriber(
+        session_id,
+        tracked_sessions(&[session_id]),
+        Arc::new(move |event| captured.lock().unwrap().push(event.clone())),
+    );
+    let manager = SessionManager::new(session_test_config());
+    let headers = HeaderMap::new();
+    start_codex_prompt_turn(&manager, &headers, session_id).await;
+    let first_response = json!({ "output_text": "first turn answer" });
+    let completed_call = manager
+        .start_llm(
+            &headers,
+            llm_start_with_responses_task(session_id, "Inspect the repository."),
+        )
+        .await
+        .unwrap();
+    manager
+        .end_llm(completed_call, first_response.clone(), json!({}))
+        .await
+        .unwrap();
+    stop_codex_turn(&manager, &headers, session_id).await;
+    apply_codex_payload(
+        &manager,
+        &headers,
+        json!({
+            "session_id": session_id,
+            "hook_event_name": "UserPromptSubmit",
+            "prompt": "Finish without a model call."
+        }),
+    )
+    .await;
+    stop_codex_turn(&manager, &headers, session_id).await;
+    manager.close_all("test_shutdown").await.unwrap();
+    flush_subscribers().unwrap();
+    deregister_subscriber(session_id).unwrap();
+
+    let events = captured_events.lock().unwrap();
+    let turn_events = events
+        .iter()
+        .filter(|event| event.name() == "codex-turn")
+        .collect::<Vec<_>>();
+    assert_eq!(turn_events.len(), 4);
+    for pair in turn_events.chunks_exact(2) {
+        assert_eq!(pair[0].scope_category(), Some(ScopeCategory::Start));
+        assert_eq!(pair[1].scope_category(), Some(ScopeCategory::End));
+        assert_eq!(pair[0].uuid(), pair[1].uuid());
+    }
+    assert_ne!(turn_events[0].uuid(), turn_events[2].uuid());
+    assert_eq!(turn_events[1].output(), Some(&first_response));
+    assert_eq!(
+        turn_events[3].output(),
+        Some(&json!({
+            "session_id": session_id,
+            "hook_event_name": "Stop",
+            "response": "Done."
+        }))
+    );
+}
+
+#[tokio::test]
+async fn codex_root_turn_interruption_closes_once_and_accepts_recovery() {
+    let session_id = "codex-root-turn-interruption";
+    let captured_events = Arc::new(StdMutex::new(Vec::<Event>::new()));
+    let captured = Arc::clone(&captured_events);
+    register_filtered_session_subscriber(
+        session_id,
+        tracked_sessions(&[session_id]),
+        Arc::new(move |event| captured.lock().unwrap().push(event.clone())),
+    );
+    let manager = SessionManager::new(session_test_config());
+    let headers = HeaderMap::new();
+    start_codex_prompt_turn(&manager, &headers, session_id).await;
+    let completed_call = manager
+        .start_llm(
+            &headers,
+            llm_start_with_responses_task(session_id, "Inspect the repository."),
+        )
+        .await
+        .unwrap();
+    manager
+        .end_llm(
+            completed_call,
+            json!({ "output_text": "earlier successful answer" }),
+            json!({}),
+        )
+        .await
+        .unwrap();
+    let interrupted_call = manager
+        .start_llm(
+            &headers,
+            llm_start_with_responses_task(session_id, "Continue inspecting."),
+        )
+        .await
+        .unwrap();
+    for _ in 0..2 {
+        apply_codex_payload(
+            &manager,
+            &headers,
+            json!({ "session_id": session_id, "hook_event_name": "Interrupt" }),
+        )
+        .await;
+    }
+    apply_codex_payload(
+        &manager,
+        &headers,
+        json!({
+            "session_id": session_id,
+            "hook_event_name": "UserPromptSubmit",
+            "prompt": "Recover with a new answer."
+        }),
+    )
+    .await;
+    let recovery_response = json!({ "output_text": "recovery answer" });
+    let recovery_call = manager
+        .start_llm(
+            &headers,
+            llm_start_with_responses_task(session_id, "Recover with a new answer."),
+        )
+        .await
+        .unwrap();
+    manager
+        .end_llm(recovery_call, recovery_response.clone(), json!({}))
+        .await
+        .unwrap();
+    stop_codex_turn(&manager, &headers, session_id).await;
+    manager.close_all("test_shutdown").await.unwrap();
+    flush_subscribers().unwrap();
+    deregister_subscriber(session_id).unwrap();
+
+    let events = captured_events.lock().unwrap();
+    let turn_events = events
+        .iter()
+        .filter(|event| event.name() == "codex-turn")
+        .collect::<Vec<_>>();
+    assert_eq!(turn_events.len(), 4);
+    for pair in turn_events.chunks_exact(2) {
+        assert_eq!(pair[0].scope_category(), Some(ScopeCategory::Start));
+        assert_eq!(pair[1].scope_category(), Some(ScopeCategory::End));
+        assert_eq!(pair[0].uuid(), pair[1].uuid());
+    }
+    assert_ne!(turn_events[0].uuid(), turn_events[2].uuid());
+    let interrupted_turn = turn_events[1];
+    assert_eq!(
+        interrupted_turn.output(),
+        Some(&json!({
+            "session_id": session_id,
+            "hook_event_name": "Interrupt",
+            "status": "error"
+        }))
+    );
+    assert_eq!(
+        interrupted_turn.metadata().unwrap()["otel.status_code"],
+        "ERROR"
+    );
+    assert_eq!(
+        interrupted_turn.metadata().unwrap()["error.type"],
+        "interrupted"
+    );
+    assert_eq!(turn_events[3].output(), Some(&recovery_response));
+    let interrupted_call_events = events
+        .iter()
+        .filter(|event| event.uuid() == interrupted_call.handle.uuid)
+        .collect::<Vec<_>>();
+    assert_eq!(interrupted_call_events.len(), 2);
+    for event in &interrupted_call_events {
+        assert_eq!(event.parent_uuid(), Some(interrupted_turn.uuid()));
+    }
+    assert_eq!(
+        interrupted_call_events[0].scope_category(),
+        Some(ScopeCategory::Start)
+    );
+    assert_eq!(
+        interrupted_call_events[1].scope_category(),
+        Some(ScopeCategory::End)
+    );
+    let call_end_position = events
+        .iter()
+        .position(|event| {
+            event.uuid() == interrupted_call.handle.uuid
+                && event.scope_category() == Some(ScopeCategory::End)
+        })
+        .unwrap();
+    let turn_end_position = events
+        .iter()
+        .position(|event| {
+            event.uuid() == interrupted_turn.uuid()
+                && event.scope_category() == Some(ScopeCategory::End)
+        })
+        .unwrap();
+    assert!(call_end_position < turn_end_position);
 }
 
 #[tokio::test]
@@ -3265,6 +3486,7 @@ async fn new_subagent_claims_first_unhinted_llm_when_siblings_active() {
             .subagents
             .get("worker-2")
             .unwrap()
+            .scope_handle
             .uuid
     };
     let second = manager
@@ -3350,7 +3572,12 @@ async fn codex_subagent_session_start_uses_transcript_parent_thread() {
     assert!(parent.agent_scope.is_none());
     let task_uuid = parent.task_scope.as_ref().unwrap().uuid;
     assert_eq!(
-        parent.subagents.get("child-thread").unwrap().parent_uuid,
+        parent
+            .subagents
+            .get("child-thread")
+            .unwrap()
+            .scope_handle
+            .parent_uuid,
         Some(task_uuid)
     );
     drop(sessions);
@@ -3706,6 +3933,7 @@ async fn codex_subagent_gateway_llm_routes_to_parent_subagent() {
             .subagents
             .get("child-thread")
             .unwrap()
+            .scope_handle
             .uuid
     };
 
@@ -5856,7 +6084,7 @@ async fn claude_unclassified_short_request_preserves_distinct_late_prompt_eviden
         let sessions = manager.inner.lock().await;
         let session = sessions.get("claude-probe").expect("session retained");
         assert!(
-            session.turn_scope.is_some(),
+            session.root_turn.handle().is_some(),
             "the late prompt must retain the gateway-created turn"
         );
     }
@@ -6122,7 +6350,7 @@ async fn claude_notifications_preserve_marks_without_opening_turns() {
     {
         let sessions = manager.inner.lock().await;
         let session = &sessions[session_id];
-        assert!(session.turn_scope.is_none());
+        assert!(session.root_turn.handle().is_none());
         assert_eq!(session.turn_index, 0);
         assert!(!session.blocks_plugin_idle_shutdown());
     }
@@ -6137,8 +6365,8 @@ async fn claude_notifications_preserve_marks_without_opening_turns() {
         .await
         .unwrap();
     let turn_uuid = manager.inner.lock().await[session_id]
-        .turn_scope
-        .as_ref()
+        .root_turn
+        .handle()
         .unwrap()
         .uuid;
     manager
@@ -6159,7 +6387,9 @@ async fn claude_notifications_preserve_marks_without_opening_turns() {
         )
         .await
         .unwrap();
-    let child_uuid = manager.inner.lock().await[session_id].subagents["worker"].uuid;
+    let child_uuid = manager.inner.lock().await[session_id].subagents["worker"]
+        .scope_handle
+        .uuid;
     manager
         .apply_events(
             &HeaderMap::new(),
@@ -6178,7 +6408,12 @@ async fn claude_notifications_preserve_marks_without_opening_turns() {
         )
         .await
         .unwrap();
-    assert!(manager.inner.lock().await[session_id].turn_scope.is_none());
+    assert!(
+        manager.inner.lock().await[session_id]
+            .root_turn
+            .handle()
+            .is_none()
+    );
     assert_eq!(manager.inner.lock().await[session_id].turn_index, 1);
     flush_subscribers().unwrap();
     {
@@ -6760,6 +6995,7 @@ async fn single_pending_llm_hint_claims_next_gateway_llm() {
             .subagents
             .get("worker-1")
             .unwrap()
+            .scope_handle
             .uuid
     };
     let active = manager
@@ -6891,8 +7127,25 @@ async fn multiple_llm_hints_resolve_by_generation_id() {
             .subagents
             .get("worker-2")
             .unwrap()
+            .scope_handle
             .uuid
     };
+    let request = llm_start_with_responses_task(
+        "multi-session",
+        "Inspect the repository and explain the important session ownership boundaries.",
+    );
+    manager
+        .inner
+        .lock()
+        .await
+        .get_mut("multi-session")
+        .unwrap()
+        .record_llm_request_affinity(
+            &request.provider,
+            &request.request,
+            Some("worker-1"),
+            "explicit",
+        );
     let active = manager
         .start_llm(
             &HeaderMap::new(),
@@ -6904,10 +7157,7 @@ async fn multiple_llm_hints_resolve_by_generation_id() {
                 conversation_id: Some("conv-1".into()),
                 generation_id: Some("gen-2".into()),
                 request_id: None,
-                request: LlmRequest {
-                    headers: Map::new(),
-                    content: json!({ "model": "gpt-test", "input": "hello" }),
-                },
+                request: request.request,
                 streaming: false,
                 metadata: json!({}),
             },
@@ -6920,10 +7170,28 @@ async fn multiple_llm_hints_resolve_by_generation_id() {
         active.handle.metadata.as_ref().unwrap()["llm_correlation_status"],
         json!("matched_hint")
     );
+    let affinity_key = alignment::request_affinity_key(
+        "openai.responses",
+        &llm_start_with_responses_task(
+            "multi-session",
+            "Inspect the repository and explain the important session ownership boundaries.",
+        )
+        .request,
+    )
+    .unwrap();
+    assert_eq!(
+        manager.inner.lock().await["multi-session"]
+            .correlation
+            .llm_request_affinity
+            .get(&affinity_key),
+        Some(&None),
+        "conflicting high-confidence ownership makes the learned affinity ambiguous"
+    );
     manager
         .end_llm(active, json!({ "output_text": "hello" }), json!({}))
         .await
         .unwrap();
+    manager.close_all("test_shutdown").await.unwrap();
 }
 
 #[tokio::test]
@@ -7222,6 +7490,7 @@ async fn root_llm_hint_does_not_stick_over_later_subagent() {
             .subagents
             .get("worker")
             .unwrap()
+            .scope_handle
             .uuid
     };
     let second = manager
@@ -7309,6 +7578,7 @@ async fn explicit_subagent_tool_owner_claims_next_unhinted_llm() {
             .subagents
             .get("worker-1")
             .unwrap()
+            .scope_handle
             .uuid
     };
     let active = manager
@@ -7451,6 +7721,7 @@ async fn request_affinity_pairs_parallel_subagents_across_provider_formats() {
             .subagents
             .get("python-worker")
             .unwrap()
+            .scope_handle
             .uuid
     };
     let python_later = manager
@@ -7548,7 +7819,7 @@ async fn claude_agent_tool_completion_closes_subagents_before_final_llm() {
         let sessions = manager.inner.lock().await;
         let session = sessions.get("agent-tool-finish").unwrap();
         assert!(session.subagents.is_empty());
-        assert!(session.subagent_stacks.is_empty());
+
         active_turn_uuid(session)
     };
     let final_llm = manager
@@ -7613,7 +7884,7 @@ async fn claude_agent_tool_async_launch_keeps_subagent_open_for_later_hooks() {
     let worker_uuid = {
         let sessions = manager.inner.lock().await;
         let session = sessions.get("agent-tool-async").unwrap();
-        session.subagents.get("worker").unwrap().uuid
+        session.subagents.get("worker").unwrap().scope_handle.uuid
     };
 
     manager
@@ -7965,7 +8236,7 @@ async fn idle_timeout_closes_codex_session_without_session_end_hook() {
     {
         let sessions = manager.inner.lock().await;
         let session = sessions.get("codex-idle").unwrap();
-        assert!(session.turn_scope.is_none());
+        assert!(session.root_turn.handle().is_none());
         assert!(session.subagents.is_empty());
     }
 
@@ -8016,7 +8287,7 @@ async fn idle_timeout_keeps_recent_claude_subagent_session_open() {
     assert_eq!(closed, 0);
     let sessions = manager.inner.lock().await;
     let session = sessions.get("claude-recent").unwrap();
-    assert!(session.turn_scope.is_some());
+    assert!(session.root_turn.handle().is_some());
     assert!(session.subagents.contains_key("recent-worker"));
 }
 
@@ -8084,7 +8355,7 @@ async fn idle_timeout_closes_claude_subagent_with_no_followup_activity() {
     {
         let sessions = manager.inner.lock().await;
         let session = sessions.get("claude-idle").unwrap();
-        assert!(session.turn_scope.is_none());
+        assert!(session.root_turn.handle().is_none());
         assert!(session.subagents.is_empty());
     }
 
@@ -8151,7 +8422,7 @@ async fn idle_timeout_waits_for_active_claude_subagent_tool_call() {
     assert_eq!(closed, 0);
     let sessions = manager.inner.lock().await;
     let session = sessions.get("claude-active-tool").unwrap();
-    assert!(session.turn_scope.is_some());
+    assert!(session.root_turn.handle().is_some());
     assert!(session.subagents.contains_key("active-tool-worker"));
     assert_eq!(session.tools.len(), 1);
 }
@@ -8307,6 +8578,28 @@ async fn explicit_gateway_subagent_header_sets_llm_parent() {
                     payload: json!({}),
                     metadata: json!({}),
                 }),
+                NormalizedEvent::SubagentStarted(SubagentEvent {
+                    session_id: "explicit-owner".into(),
+                    agent_kind: AgentKind::ClaudeCode,
+                    event_name: "SubagentStart".into(),
+                    subagent_id: "hinted-worker".into(),
+                    payload: json!({}),
+                    metadata: json!({}),
+                }),
+                NormalizedEvent::LlmHint(LlmHintEvent {
+                    session_id: "explicit-owner".into(),
+                    agent_kind: AgentKind::ClaudeCode,
+                    event_name: "afterAgentThought".into(),
+                    subagent_id: Some("hinted-worker".into()),
+                    agent_id: None,
+                    agent_type: None,
+                    conversation_id: None,
+                    generation_id: None,
+                    request_id: None,
+                    model: Some("gpt-test".into()),
+                    payload: json!({}),
+                    metadata: json!({}),
+                }),
             ],
         )
         .await
@@ -8320,6 +8613,7 @@ async fn explicit_gateway_subagent_header_sets_llm_parent() {
             .subagents
             .get("worker")
             .unwrap()
+            .scope_handle
             .uuid
     };
     let active = manager
@@ -8343,6 +8637,514 @@ async fn explicit_gateway_subagent_header_sets_llm_parent() {
         active.handle.metadata.as_ref().unwrap()["llm_correlation_source"],
         json!("gateway_header")
     );
+    manager.end_llm(active, json!({}), json!({})).await.unwrap();
+    let hinted_call = manager
+        .start_llm(
+            &headers,
+            LlmGatewayStart {
+                session_id: Some("explicit-owner".into()),
+                ..llm_start()
+            },
+        )
+        .await
+        .unwrap();
+    assert_eq!(
+        hinted_call.owner_subagent_id.as_deref(),
+        Some("hinted-worker")
+    );
+    assert_eq!(
+        hinted_call.handle.parent_uuid,
+        Some(
+            manager.inner.lock().await["explicit-owner"].subagents["hinted-worker"]
+                .scope_handle
+                .uuid
+        )
+    );
+    assert_eq!(
+        hinted_call.handle.metadata.as_ref().unwrap()["llm_correlation_status"],
+        "single_hint"
+    );
+    manager
+        .end_llm(hinted_call, json!({}), json!({}))
+        .await
+        .unwrap();
+    manager.close_all("test_shutdown").await.unwrap();
+}
+
+#[tokio::test]
+async fn session_refactor_expired_correlation_does_not_claim_work() {
+    for evidence in ["llm_hint", "tool_hint", "sticky_owner"] {
+        for expired in [false, true] {
+            let session_identifier = format!("correlation-expiry-{evidence}-{expired}");
+            let manager = SessionManager::new(session_test_config());
+            let headers = HeaderMap::new();
+            start_codex_prompt_turn(&manager, &headers, &session_identifier).await;
+            for child in ["worker", "sibling"] {
+                manager
+                    .apply_events(
+                        &headers,
+                        vec![NormalizedEvent::SubagentStarted(SubagentEvent {
+                            session_id: session_identifier.clone(),
+                            agent_kind: AgentKind::Codex,
+                            event_name: "SubagentStart".into(),
+                            subagent_id: child.into(),
+                            payload: json!({}),
+                            metadata: json!({}),
+                        })],
+                    )
+                    .await
+                    .unwrap();
+            }
+            let affinity_request = llm_start_with_responses_task(
+                &session_identifier,
+                "Preserve this learned request affinity after pruning expired correlation evidence.",
+            );
+            let (root_scope, child_scope) = {
+                let mut sessions = manager.inner.lock().await;
+                let session = sessions.get_mut(&session_identifier).unwrap();
+                session.correlation.pending_llm_hints.clear();
+                session.correlation.last_llm_owner = None;
+                session.record_llm_request_affinity(
+                    &affinity_request.provider,
+                    &affinity_request.request,
+                    Some("worker"),
+                    "explicit",
+                );
+                match evidence {
+                    "llm_hint" => session
+                        .add_llm_hint(LlmHintEvent {
+                            session_id: session_identifier.clone(),
+                            agent_kind: AgentKind::Codex,
+                            event_name: "afterAgentThought".into(),
+                            subagent_id: Some("worker".into()),
+                            agent_id: None,
+                            agent_type: None,
+                            conversation_id: None,
+                            generation_id: None,
+                            request_id: None,
+                            model: Some("gpt-test".into()),
+                            payload: json!({}),
+                            metadata: json!({}),
+                        })
+                        .unwrap(),
+                    "tool_hint" => session.add_tool_hints_from_llm_response(
+                        &json!({"output": [{"type": "function_call", "call_id": "expiry-tool",
+                            "name": "Read", "arguments": "{}"}]}),
+                        Some("worker".into()),
+                    ),
+                    "sticky_owner" => session.set_last_llm_owner(Some("worker".into())),
+                    _ => unreachable!(),
+                }
+                let inserted_at = Instant::now();
+                for hint in &mut session.correlation.pending_llm_hints {
+                    hint.inserted_at = inserted_at;
+                }
+                for hint in &mut session.correlation.pending_tool_hints {
+                    hint.inserted_at = inserted_at;
+                }
+                if let Some(owner) = &mut session.correlation.last_llm_owner {
+                    owner.updated_at = inserted_at;
+                }
+                let lifetime = match evidence {
+                    "llm_hint" => LLM_HINT_TTL,
+                    "tool_hint" => TOOL_HINT_TTL,
+                    _ => LAST_OWNER_TTL,
+                };
+                let cleanup_at = inserted_at
+                    + lifetime
+                    + if expired {
+                        Duration::from_nanos(1)
+                    } else {
+                        Duration::ZERO
+                    };
+                session.correlation.cleanup(cleanup_at);
+                (
+                    session.root_work_scope().unwrap().uuid,
+                    session.child_work_scope("worker").unwrap().uuid,
+                )
+            };
+            let expected_parent = if expired { root_scope } else { child_scope };
+            if evidence == "tool_hint" {
+                manager
+                    .apply_events(
+                        &headers,
+                        vec![NormalizedEvent::ToolStarted(ToolEvent {
+                            session_id: session_identifier.clone(),
+                            agent_kind: AgentKind::Codex,
+                            event_name: "PreToolUse".into(),
+                            tool_call_id: "expiry-tool".into(),
+                            tool_name: "Read".into(),
+                            subagent_id: None,
+                            arguments: json!({}),
+                            result: Value::Null,
+                            status: None,
+                            payload: json!({}),
+                            metadata: json!({}),
+                        })],
+                    )
+                    .await
+                    .unwrap();
+                let sessions = manager.inner.lock().await;
+                let tool = &sessions[&session_identifier].tools["expiry-tool"];
+                assert_eq!(
+                    tool.handle.parent_uuid,
+                    Some(expected_parent),
+                    "{evidence}: expired={expired}"
+                );
+                assert_eq!(
+                    tool.metadata.as_ref().unwrap()["tool_correlation_status"],
+                    if expired {
+                        "agent_fallback"
+                    } else {
+                        "single_hint"
+                    }
+                );
+            } else {
+                let call = manager
+                    .start_llm(
+                        &headers,
+                        LlmGatewayStart {
+                            session_id: Some(session_identifier.clone()),
+                            ..llm_start()
+                        },
+                    )
+                    .await
+                    .unwrap();
+                assert_eq!(
+                    call.handle.parent_uuid,
+                    Some(expected_parent),
+                    "{evidence}: expired={expired}"
+                );
+                assert_eq!(
+                    call.handle.metadata.as_ref().unwrap()["llm_correlation_status"],
+                    if expired {
+                        "agent_fallback"
+                    } else if evidence == "llm_hint" {
+                        "single_hint"
+                    } else {
+                        "sticky_last_owner"
+                    }
+                );
+                manager.end_llm(call, json!({}), json!({})).await.unwrap();
+            }
+            let affinity_call = manager.start_llm(&headers, affinity_request).await.unwrap();
+            assert_eq!(affinity_call.handle.parent_uuid, Some(child_scope));
+            assert_eq!(
+                affinity_call.handle.metadata.as_ref().unwrap()["llm_correlation_status"],
+                "request_affinity"
+            );
+            manager
+                .end_llm(affinity_call, json!({}), json!({}))
+                .await
+                .unwrap();
+            manager.close_all("test_shutdown").await.unwrap();
+        }
+    }
+}
+
+#[tokio::test]
+async fn session_refactor_root_boundary_preserves_only_live_child_evidence() {
+    let session_identifier = "correlation-root-boundary";
+    let manager = SessionManager::new(session_test_config());
+    let headers = HeaderMap::new();
+    start_codex_prompt_turn(&manager, &headers, session_identifier).await;
+    for child in ["worker", "sibling"] {
+        manager
+            .apply_events(
+                &headers,
+                vec![NormalizedEvent::SubagentStarted(SubagentEvent {
+                    session_id: session_identifier.into(),
+                    agent_kind: AgentKind::Codex,
+                    event_name: "SubagentStart".into(),
+                    subagent_id: child.into(),
+                    payload: json!({}),
+                    metadata: json!({}),
+                })],
+            )
+            .await
+            .unwrap();
+    }
+    let child_scope = {
+        let mut sessions = manager.inner.lock().await;
+        let session = sessions.get_mut(session_identifier).unwrap();
+        for owner in [None, Some("worker")] {
+            session
+                .add_llm_hint(LlmHintEvent {
+                    session_id: session_identifier.into(),
+                    agent_kind: AgentKind::Codex,
+                    event_name: "afterAgentThought".into(),
+                    subagent_id: owner.map(str::to_string),
+                    agent_id: None,
+                    agent_type: None,
+                    conversation_id: None,
+                    generation_id: None,
+                    request_id: None,
+                    model: Some("gpt-test".into()),
+                    payload: json!({}),
+                    metadata: json!({}),
+                })
+                .unwrap();
+            let call_identifier = if owner.is_some() {
+                "child-proposal"
+            } else {
+                "root-proposal"
+            };
+            session.add_tool_hints_from_llm_response(
+                &json!({"output": [{"type": "function_call", "call_id": call_identifier,
+                    "name": "Read", "arguments": "{}"}]}),
+                owner.map(str::to_string),
+            );
+        }
+        session.set_last_llm_owner(Some("sibling".into()));
+        session.child_work_scope("worker").unwrap().uuid
+    };
+    manager
+        .apply_events(
+            &headers,
+            vec![NormalizedEvent::TurnEnded(codex_session_event(
+                session_identifier,
+                "Stop",
+                json!({}),
+            ))],
+        )
+        .await
+        .unwrap();
+    assert!(
+        manager.inner.lock().await[session_identifier]
+            .correlation
+            .last_llm_owner
+            .is_none()
+    );
+    let call = manager
+        .start_llm(
+            &headers,
+            LlmGatewayStart {
+                session_id: Some(session_identifier.into()),
+                ..llm_start()
+            },
+        )
+        .await
+        .unwrap();
+    assert_eq!(call.handle.parent_uuid, Some(child_scope));
+    assert_eq!(
+        call.handle.metadata.as_ref().unwrap()["llm_correlation_status"],
+        "single_hint"
+    );
+    manager.end_llm(call, json!({}), json!({})).await.unwrap();
+    let fallback = manager
+        .start_llm(
+            &headers,
+            LlmGatewayStart {
+                session_id: Some(session_identifier.into()),
+                ..llm_start()
+            },
+        )
+        .await
+        .unwrap();
+    assert_eq!(fallback.owner_subagent_id.as_deref(), Some("worker"));
+    assert_eq!(
+        fallback.handle.metadata.as_ref().unwrap()["llm_correlation_status"],
+        "sticky_last_owner"
+    );
+    manager
+        .end_llm(fallback, json!({}), json!({}))
+        .await
+        .unwrap();
+    for call_identifier in ["child-proposal", "root-proposal"] {
+        manager
+            .apply_events(
+                &headers,
+                vec![NormalizedEvent::ToolStarted(ToolEvent {
+                    session_id: session_identifier.into(),
+                    agent_kind: AgentKind::Codex,
+                    event_name: "PreToolUse".into(),
+                    tool_call_id: call_identifier.into(),
+                    tool_name: "Read".into(),
+                    subagent_id: None,
+                    arguments: json!({}),
+                    result: Value::Null,
+                    status: None,
+                    payload: json!({}),
+                    metadata: json!({}),
+                })],
+            )
+            .await
+            .unwrap();
+        let sessions = manager.inner.lock().await;
+        let tool = &sessions[session_identifier].tools[call_identifier];
+        if call_identifier == "child-proposal" {
+            assert_eq!(tool.handle.parent_uuid, Some(child_scope));
+            assert_eq!(tool.owner_subagent_id.as_deref(), Some("worker"));
+            assert_eq!(
+                tool.metadata.as_ref().unwrap()["tool_correlation_status"],
+                "single_hint"
+            );
+        } else {
+            assert_eq!(tool.owner_subagent_id, None);
+            assert_eq!(
+                tool.metadata.as_ref().unwrap()["tool_correlation_status"],
+                "agent_fallback"
+            );
+        }
+    }
+    manager.close_all("test_shutdown").await.unwrap();
+}
+
+#[tokio::test]
+async fn session_refactor_subagent_pop_error_preserves_unsuccessful_cleanup_state() {
+    for missing_scope in [false, true] {
+        let session_identifier = format!("child-pop-error-{missing_scope}");
+        let manager = SessionManager::new(session_test_config());
+        let headers = HeaderMap::new();
+        start_codex_prompt_turn(&manager, &headers, &session_identifier).await;
+        for child in ["worker", "sibling"] {
+            manager
+                .apply_events(
+                    &headers,
+                    vec![NormalizedEvent::SubagentStarted(SubagentEvent {
+                        session_id: session_identifier.clone(),
+                        agent_kind: AgentKind::Codex,
+                        event_name: "SubagentStart".into(),
+                        subagent_id: child.into(),
+                        payload: json!({}),
+                        metadata: json!({}),
+                    })],
+                )
+                .await
+                .unwrap();
+        }
+        let request = llm_start_with_responses_task(
+            &session_identifier,
+            "Keep child-specific correlation evidence until its scope successfully closes.",
+        );
+        let affinity_key =
+            alignment::request_affinity_key(&request.provider, &request.request).unwrap();
+        let (child_stack, child_scope) = {
+            let mut sessions = manager.inner.lock().await;
+            let session = sessions.get_mut(&session_identifier).unwrap();
+            session.correlation.pending_llm_hints.clear();
+            session
+                .add_llm_hint(LlmHintEvent {
+                    session_id: session_identifier.clone(),
+                    agent_kind: AgentKind::Codex,
+                    event_name: "afterAgentThought".into(),
+                    subagent_id: Some("worker".into()),
+                    agent_id: None,
+                    agent_type: None,
+                    conversation_id: None,
+                    generation_id: None,
+                    request_id: None,
+                    model: Some("gpt-test".into()),
+                    payload: json!({}),
+                    metadata: json!({}),
+                })
+                .unwrap();
+            session.add_tool_hints_from_llm_response(
+                &json!({"output": [{"type": "function_call", "call_id": "child-tool",
+                    "name": "Read", "arguments": "{}"}]}),
+                Some("worker".into()),
+            );
+            session.record_llm_request_affinity(
+                &request.provider,
+                &request.request,
+                Some("worker"),
+                "explicit",
+            );
+            session.set_last_llm_owner(Some("worker".into()));
+            let child = &session.subagents["worker"];
+            (child.scope_stack.clone(), child.scope_handle.clone())
+        };
+        if missing_scope {
+            TASK_SCOPE_STACK
+                .scope(child_stack, async {
+                    nemo_relay_runtime::api::scope::pop_scope(
+                        PopScopeParams::builder()
+                            .handle_uuid(&child_scope.uuid)
+                            .output(json!({}))
+                            .build(),
+                    )
+                    .unwrap();
+                })
+                .await;
+        }
+        let result = manager
+            .apply_events(
+                &headers,
+                vec![NormalizedEvent::SubagentEnded(SubagentEvent {
+                    session_id: session_identifier.clone(),
+                    agent_kind: AgentKind::Codex,
+                    event_name: "SubagentStop".into(),
+                    subagent_id: "worker".into(),
+                    payload: json!({}),
+                    metadata: json!({}),
+                })],
+            )
+            .await;
+        if missing_scope {
+            assert!(
+                result
+                    .unwrap_err()
+                    .to_string()
+                    .contains("scope handle not found")
+            );
+        } else {
+            result.unwrap();
+        }
+        {
+            let sessions = manager.inner.lock().await;
+            let session = &sessions[&session_identifier];
+            assert!(!session.subagents.contains_key("worker"));
+            assert!(session.subagents.contains_key("sibling"));
+            assert_eq!(
+                session.completed_subagents.contains("worker"),
+                !missing_scope
+            );
+            if missing_scope {
+                assert_eq!(session.subagent_stack, ["worker", "sibling"]);
+                assert_eq!(session.correlation.pending_llm_hints.len(), 1);
+                assert_eq!(
+                    session.correlation.pending_llm_hints[0]
+                        .hint
+                        .subagent_id
+                        .as_deref(),
+                    Some("worker")
+                );
+                assert_eq!(session.correlation.pending_tool_hints.len(), 1);
+                assert_eq!(
+                    session.correlation.pending_tool_hints[0]
+                        .hint
+                        .subagent_id
+                        .as_deref(),
+                    Some("worker")
+                );
+                assert_eq!(
+                    session.correlation.llm_request_affinity.get(&affinity_key),
+                    Some(&Some("worker".into()))
+                );
+                assert_eq!(
+                    session
+                        .correlation
+                        .last_llm_owner
+                        .as_ref()
+                        .unwrap()
+                        .subagent_id,
+                    "worker"
+                );
+            } else {
+                assert_eq!(session.subagent_stack, ["sibling"]);
+                assert!(session.correlation.pending_llm_hints.is_empty());
+                assert!(session.correlation.pending_tool_hints.is_empty());
+                assert!(
+                    !session
+                        .correlation
+                        .llm_request_affinity
+                        .contains_key(&affinity_key)
+                );
+                assert!(session.correlation.last_llm_owner.is_none());
+            }
+        }
+        manager.close_all("test_shutdown").await.unwrap();
+    }
 }
 
 #[tokio::test]
@@ -8375,6 +9177,7 @@ async fn single_active_subagent_claims_unhinted_gateway_llm() {
             .subagents
             .get("worker")
             .unwrap()
+            .scope_handle
             .uuid
     };
     let active = manager
@@ -8424,6 +9227,7 @@ async fn llm_response_tool_hint_claims_next_tool_hook() {
             .subagents
             .get("worker")
             .unwrap()
+            .scope_handle
             .uuid
     };
     let active = manager
@@ -10041,7 +10845,12 @@ async fn unmatched_turn_end_closes_tools_outside_a_turn_and_allows_idle_shutdown
         apply_pi_hook(&manager, payload).await;
     }
     assert!(manager.has_open_sessions().await);
-    assert!(manager.inner.lock().await[session_id].turn_scope.is_none());
+    assert!(
+        manager.inner.lock().await[session_id]
+            .root_turn
+            .handle()
+            .is_none()
+    );
     apply_pi_hook(
         &manager,
         json!({"session_id": session_id, "hook_event_name": "turn_end"}),
@@ -10135,7 +10944,7 @@ async fn codex_native_delegation_exports_bounded_owned_task_traces() {
             let task = root.task_scope.as_ref().unwrap();
             assert_eq!(active_turn_scope(root).parent_uuid, Some(task.uuid));
             for child in root.subagents.values() {
-                assert_eq!(child.parent_uuid, Some(task.uuid));
+                assert_eq!(child.scope_handle.parent_uuid, Some(task.uuid));
             }
             task.uuid
         };
@@ -10162,14 +10971,20 @@ async fn codex_native_delegation_exports_bounded_owned_task_traces() {
                 let sessions = manager.inner.lock().await;
                 let root = sessions.get("native-root").unwrap();
                 assert!(
-                    root.turn_scope.is_none(),
+                    root.root_turn.handle().is_none(),
                     "child prompt must not invent a parent turn"
                 );
                 assert_eq!(root.task_scope.as_ref().unwrap().uuid, task_uuid);
-                let turn = root.child_turns.get(&id).unwrap();
+                let turn = root
+                    .subagents
+                    .get(&id)
+                    .unwrap()
+                    .child_turn
+                    .as_ref()
+                    .unwrap();
                 assert_eq!(
                     turn.parent_uuid,
-                    Some(root.subagents.get(&id).unwrap().uuid)
+                    Some(root.subagents.get(&id).unwrap().scope_handle.uuid)
                 );
                 turn.uuid
             };
@@ -10225,7 +11040,13 @@ async fn codex_native_delegation_exports_bounded_owned_task_traces() {
             let sessions = manager.inner.lock().await;
             let root = sessions.get("native-root").unwrap();
             assert_eq!(root.tools.len(), child_count);
-            assert_eq!(root.child_turns.len(), child_count);
+            assert_eq!(
+                root.subagents
+                    .values()
+                    .filter(|subagent| subagent.child_turn.is_some())
+                    .count(),
+                child_count
+            );
             assert_eq!(root.task_scope.as_ref().unwrap().uuid, task_uuid);
         }
         apply_owned_codex_hook(&manager, json!({
@@ -10273,7 +11094,11 @@ async fn codex_native_delegation_exports_bounded_owned_task_traces() {
                 let sessions = manager.inner.lock().await;
                 let root = sessions.get("native-root").unwrap();
                 assert_eq!(active_turn_uuid(root), parent_turn);
-                assert!(!root.child_turns.contains_key(&id));
+                assert!(
+                    root.subagents
+                        .get(&id)
+                        .is_none_or(|subagent| subagent.child_turn.is_none())
+                );
                 assert!(root.subagents.contains_key(&id));
                 assert!(!root.tools.contains_key(&format!("read-{index}")));
             }
@@ -10297,9 +11122,13 @@ async fn codex_native_delegation_exports_bounded_owned_task_traces() {
             let sessions = manager.inner.lock().await;
             let root = sessions.get("native-root").unwrap();
             assert!(root.task_scope.is_none());
-            assert!(root.turn_scope.is_none());
-            assert!(root.child_turns.is_empty());
-            assert!(root.subagent_stacks.is_empty());
+            assert!(root.root_turn.handle().is_none());
+            assert!(
+                root.subagents
+                    .values()
+                    .all(|subagent| subagent.child_turn.is_none())
+            );
+            assert!(root.subagents.is_empty());
             assert!(root.tools.is_empty());
         }
         assert!(!manager.has_open_sessions().await);
@@ -10660,7 +11489,11 @@ async fn codex_retained_delegation_closes_on_timeout_and_shutdown() {
             let root = sessions.get("cleanup-root").unwrap();
             assert!(root.task_scope.is_none());
             assert!(root.subagents.is_empty());
-            assert!(root.child_turns.is_empty());
+            assert!(
+                root.subagents
+                    .values()
+                    .all(|subagent| subagent.child_turn.is_none())
+            );
         } else if reason == "gateway_shutdown" {
             manager.close_all(reason).await.unwrap();
             assert!(!manager.test_contains_session("cleanup-root").await);
@@ -10702,7 +11535,7 @@ async fn codex_sequential_child_aliases_survive_parent_turn_closure() {
     let task_uuid = {
         let sessions = manager.inner.lock().await;
         let parent = sessions.get("parent-thread").unwrap();
-        assert!(parent.turn_scope.is_none());
+        assert!(parent.root_turn.handle().is_none());
         parent.task_scope.as_ref().unwrap().uuid
     };
     assert!(has_alignment_alias(&manager, "child-thread").await);
@@ -10740,12 +11573,24 @@ async fn codex_sequential_child_aliases_survive_parent_turn_closure() {
         let turn_uuid = {
             let sessions = manager.inner.lock().await;
             let parent = sessions.get("parent-thread").unwrap();
-            assert!(parent.turn_scope.is_none());
+            assert!(parent.root_turn.handle().is_none());
             assert_eq!(
-                parent.subagents.get(child).unwrap().parent_uuid,
+                parent
+                    .subagents
+                    .get(child)
+                    .unwrap()
+                    .scope_handle
+                    .parent_uuid,
                 Some(task_uuid)
             );
-            parent.child_turns.get(child).unwrap().uuid
+            parent
+                .subagents
+                .get(child)
+                .unwrap()
+                .child_turn
+                .as_ref()
+                .unwrap()
+                .uuid
         };
         let call = manager
             .start_llm(
@@ -10778,7 +11623,12 @@ async fn codex_sequential_child_aliases_survive_parent_turn_closure() {
         assert!(!has_alignment_alias(&manager, child).await);
         let sessions = manager.inner.lock().await;
         let parent = sessions.get("parent-thread").unwrap();
-        assert!(parent.child_turns.is_empty());
+        assert!(
+            parent
+                .subagents
+                .values()
+                .all(|subagent| subagent.child_turn.is_none())
+        );
         assert!(parent.subagents.is_empty());
         assert_eq!(parent.task_scope.as_ref().unwrap().uuid, task_uuid);
     }
@@ -10848,7 +11698,7 @@ async fn codex_synthesis_prompt_after_children_finish_preserves_task_trace() {
     {
         let sessions = manager.inner.lock().await;
         let root = &sessions["synthesis-root"];
-        assert!(root.turn_scope.is_none());
+        assert!(root.root_turn.handle().is_none());
         assert!(root.task_awaiting_synthesis);
     }
     for child in ["second", "first"] {
@@ -11000,9 +11850,9 @@ async fn codex_abandoned_child_tools_expire_without_parent_idle() {
             let sessions = manager.inner.lock().await;
             let root = &sessions["parent-thread"];
             assert!(root.subagents.is_empty());
-            assert!(root.subagent_activity.is_empty());
+
             assert!(root.tools.is_empty());
-            assert!(root.subagent_stacks.is_empty());
+            assert!(root.subagents.is_empty());
             assert!(!root.task_awaiting_synthesis);
             if boundary == "UserPromptSubmit" {
                 assert_ne!(root.task_scope.as_ref().unwrap().uuid, task);
@@ -11171,7 +12021,7 @@ async fn codex_stale_child_cleanup_preserves_live_siblings_and_gateway_calls() {
             let mut sessions = manager.inner.lock().await;
             let root = sessions.get_mut("activity-root").unwrap();
             root.last_activity = cleanup_at;
-            root.subagent_activity.insert("live".into(), cleanup_at);
+            root.subagents.get_mut("live").unwrap().last_activity = cleanup_at;
         }
         assert_eq!(
             manager
@@ -11198,7 +12048,11 @@ async fn codex_stale_child_cleanup_preserves_live_siblings_and_gateway_calls() {
             assert!(!root.tools.contains_key("stale"));
             assert!(root.subagents.contains_key("live"));
             assert!(root.tools.contains_key("live"));
-            assert!(root.child_turns.contains_key("live"));
+            assert!(
+                root.subagents
+                    .get("live")
+                    .is_some_and(|subagent| subagent.child_turn.is_some())
+            );
             assert_eq!(root.task_awaiting_synthesis, boundary == "Stop");
         }
         manager.close_all("test_shutdown").await.unwrap();
@@ -11288,7 +12142,7 @@ async fn codex_child_marks_after_parent_stop_keep_child_parentage() {
                     .unwrap();
                 let sessions = manager.inner.lock().await;
                 let root = &sessions[&root_id];
-                assert!(root.turn_scope.is_none());
+                assert!(root.root_turn.handle().is_none());
                 assert!(root.task_awaiting_synthesis);
             }
             flush_subscribers().unwrap();
@@ -11350,7 +12204,7 @@ async fn codex_root_gateway_call_does_not_protect_stale_children() {
         assert!(root.active_subagent_gateway_calls.is_empty());
         assert!(root.subagents.is_empty());
         assert!(root.tools.is_empty());
-        assert_eq!(root.turn_scope.as_ref().unwrap().uuid, parent);
+        assert_eq!(root.root_turn.handle().unwrap().uuid, parent);
     }
     manager
         .finish_gateway_call(
@@ -11402,8 +12256,8 @@ async fn codex_gateway_completion_without_response_refreshes_only_owning_child()
             task_scope = root.task_scope.as_ref().unwrap().uuid;
             // Simulate a silent two-minute request without sleeping or producing response hints.
             for child in ["caller", "stale-sibling"] {
-                root.subagent_activity
-                    .insert(child.into(), Instant::now() - Duration::from_secs(120));
+                root.subagents.get_mut(child).unwrap().last_activity =
+                    Instant::now() - Duration::from_secs(120);
             }
         }
         assert_eq!(
@@ -11495,15 +12349,17 @@ async fn codex_long_child_tool_survives_idle_sweeps_and_parent_boundaries() {
         let (task, child_turn, tool) = {
             let mut sessions = manager.inner.lock().await;
             let root = sessions.get_mut("long-root").unwrap();
-            root.subagent_activity.insert(
-                "long-child".into(),
-                Instant::now() - Duration::from_secs(120),
-            );
+            root.subagents.get_mut("long-child").unwrap().last_activity =
+                Instant::now() - Duration::from_secs(120);
             assert_eq!(root.active_gateway_calls, 0);
             assert!(root.llms.is_empty());
             (
                 root.task_scope.as_ref().unwrap().uuid,
-                root.child_turns["long-child"].uuid,
+                root.subagents["long-child"]
+                    .child_turn
+                    .as_ref()
+                    .unwrap()
+                    .uuid,
                 root.tools["compile"].uuid,
             )
         };
@@ -11532,7 +12388,14 @@ async fn codex_long_child_tool_survives_idle_sweeps_and_parent_boundaries() {
             let sessions = manager.inner.lock().await;
             let root = &sessions["long-root"];
             assert_eq!(root.task_scope.as_ref().unwrap().uuid, task);
-            assert_eq!(root.child_turns["long-child"].uuid, child_turn);
+            assert_eq!(
+                root.subagents["long-child"]
+                    .child_turn
+                    .as_ref()
+                    .unwrap()
+                    .uuid,
+                child_turn
+            );
             assert_eq!(root.tools["compile"].uuid, tool);
             assert!(root.subagents.contains_key("long-child"));
             assert!(!root.completed_subagents.contains("long-child"));
@@ -11579,7 +12442,11 @@ async fn codex_long_child_tool_survives_idle_sweeps_and_parent_boundaries() {
             let root = &sessions["long-root"];
             assert!(root.completed_subagents.contains("long-child"));
             assert!(root.subagents.is_empty());
-            assert!(root.child_turns.is_empty());
+            assert!(
+                root.subagents
+                    .values()
+                    .all(|subagent| subagent.child_turn.is_none())
+            );
         }
         apply_owned_codex_hook(
             &manager,
@@ -11681,7 +12548,12 @@ async fn codex_inferred_child_work_after_parent_stop_preserves_synthesis() {
             {
                 let mut sessions = manager.inner.lock().await;
                 // The root Stop hint must not mask the ownership mechanism under test.
-                sessions.get_mut(root_id).unwrap().pending_llm_hints.clear();
+                sessions
+                    .get_mut(root_id)
+                    .unwrap()
+                    .correlation
+                    .pending_llm_hints
+                    .clear();
             }
             if mode == "llm_hint" {
                 apply_owned_codex_hook(
@@ -11733,7 +12605,7 @@ async fn codex_inferred_child_work_after_parent_stop_preserves_synthesis() {
             {
                 let sessions = manager.inner.lock().await;
                 let root = &sessions[root_id];
-                assert!(root.turn_scope.is_none(), "{mode}");
+                assert!(root.root_turn.handle().is_none(), "{mode}");
                 assert!(root.task_awaiting_synthesis, "{mode}");
             }
             apply_owned_codex_hook(
@@ -11797,7 +12669,7 @@ async fn codex_finished_child_hooks_do_not_revive_parent_work() {
                 }]})),
                 Some(child_id.into()),
             );
-            assert!(root.pending_tool_hints.is_empty());
+            assert!(root.correlation.pending_tool_hints.is_empty());
         }
         if task_finished {
             apply_owned_codex_hook(
@@ -11845,10 +12717,11 @@ async fn codex_finished_child_hooks_do_not_revive_parent_work() {
                 continue;
             }
             let root = &sessions[root_id];
-            assert!(root.turn_scope.is_none(), "{event}");
+            assert!(root.root_turn.handle().is_none(), "{event}");
             assert!(root.tools.is_empty(), "{event}");
             assert!(
-                root.pending_llm_hints
+                root.correlation
+                    .pending_llm_hints
                     .iter()
                     .all(|pending| pending.hint.agent_id.as_deref() != Some(child_id)
                         && pending.hint.subagent_id.as_deref() != Some(child_id))
@@ -11972,11 +12845,27 @@ async fn blocked_gateway_response_does_not_block_another_session_and_can_be_canc
         .await
         .unwrap();
         let sessions = manager.inner.lock().await;
-        assert!(sessions["blocked-response"].pending_tool_hints.is_empty());
-        assert!(sessions["blocked-response"].last_turn_llm_output.is_none());
-        assert_eq!(sessions["parallel-response"].pending_tool_hints.len(), 1);
+        assert!(
+            sessions["blocked-response"]
+                .correlation
+                .pending_tool_hints
+                .is_empty()
+        );
+        assert!(
+            sessions["blocked-response"]
+                .root_turn
+                .model_output()
+                .is_none()
+        );
         assert_eq!(
-            sessions["parallel-response"].last_turn_llm_output.as_ref(),
+            sessions["parallel-response"]
+                .correlation
+                .pending_tool_hints
+                .len(),
+            1
+        );
+        assert_eq!(
+            sessions["parallel-response"].root_turn.model_output(),
             Some(&response)
         );
         // Dropping the pending future must leave the blocked session untouched.
@@ -12031,7 +12920,9 @@ async fn hook_launcher_trace_context_parents_the_session_once() {
     {
         // Provider requests made by a subagent derive their outbound context from its stack.
         let sessions = manager.inner.lock().await;
-        let stack = sessions.get(session_id).unwrap().subagent_stacks["worker"].clone();
+        let stack = sessions.get(session_id).unwrap().subagents["worker"]
+            .scope_stack
+            .clone();
         let traceparent = TASK_SCOPE_STACK
             .sync_scope(stack, nemo_relay_runtime::api::runtime::capture_traceparent)
             .unwrap();
@@ -12169,17 +13060,21 @@ async fn claude_stop_failure_closes_turn_and_allows_next_prompt() {
         .await
         .get(session_id)
         .unwrap()
-        .turn_scope
-        .clone()
+        .root_turn
+        .handle()
+        .cloned()
         .unwrap();
     // A previous successful model response must not mask the terminal failure.
-    manager
-        .inner
-        .lock()
-        .await
-        .get_mut(session_id)
-        .unwrap()
-        .last_turn_llm_output = Some(json!({"message": "earlier response"}));
+    drop(
+        manager
+            .inner
+            .lock()
+            .await
+            .get_mut(session_id)
+            .unwrap()
+            .root_turn
+            .replace_model_output(json!({"message": "earlier response"})),
+    );
     let outcome = crate::agents::shared::adapters::claude_code::adapt(
         json!({
             "session_id": session_id,
@@ -12196,7 +13091,7 @@ async fn claude_stop_failure_closes_turn_and_allows_next_prompt() {
     {
         let sessions = manager.inner.lock().await;
         let session = sessions.get(session_id).unwrap();
-        assert!(session.turn_scope.is_none());
+        assert!(session.root_turn.handle().is_none());
         assert!(session.session_started);
     }
     flush_subscribers().unwrap();
@@ -12224,7 +13119,7 @@ async fn claude_stop_failure_closes_turn_and_allows_next_prompt() {
     {
         let sessions = manager.inner.lock().await;
         let session = sessions.get(session_id).unwrap();
-        assert_ne!(session.turn_scope.as_ref().unwrap().uuid, first_turn.uuid);
+        assert_ne!(session.root_turn.handle().unwrap().uuid, first_turn.uuid);
     }
     manager.close_all("test_done").await.unwrap();
     flush_subscribers().unwrap();
@@ -12323,6 +13218,7 @@ async fn custom_call_hint_claims_only_the_matching_direct_custom_hook() {
             .subagents
             .get("worker")
             .unwrap()
+            .scope_handle
             .uuid
     };
     let active = manager
@@ -12396,7 +13292,7 @@ async fn custom_call_hint_claims_only_the_matching_direct_custom_hook() {
             handle.metadata.as_ref().unwrap()["tool_correlation_status"],
             json!("ambiguous_fallback")
         );
-        assert_eq!(session.pending_tool_hints.len(), 3);
+        assert_eq!(session.correlation.pending_tool_hints.len(), 3);
     }
 
     manager
