@@ -5,7 +5,7 @@
 use napi::{Env, JsString, JsUnknown};
 use napi_derive::napi;
 use nemo_relay::diagnostics::embedded::{self, EmbeddedDiagnosticError, EmbeddedDiagnosticsReader};
-use serde_json::Value as Json;
+use serde_json::Value;
 
 fn error(error: EmbeddedDiagnosticError) -> napi::Error {
     napi::Error::new(napi::Status::GenericFailure, error.reason())
@@ -34,29 +34,29 @@ fn camel_case(key: &str) -> String {
     }
     result
 }
-fn native_value(env: &Env, value: &Json, field: &str) -> napi::Result<JsUnknown> {
+fn native_value(env: &Env, value: &Value, field: &str) -> napi::Result<JsUnknown> {
     match value {
-        Json::String(text) if embedded::is_diagnostic_number_field(field) => {
+        Value::String(text) if embedded::is_diagnostic_number_field(field) => {
             let number = text
                 .parse::<u64>()
                 .map_err(|_| napi::Error::from_reason("invalid_snapshot"))?;
             env.create_bigint_from_u64(number)?.into_unknown()
         }
-        Json::Object(fields) => {
+        Value::Object(fields) => {
             let mut object = env.create_object()?;
             for (key, value) in fields {
                 object.set_named_property(&camel_case(key), native_value(env, value, key)?)?;
             }
             Ok(object.into_unknown())
         }
-        Json::Array(values) => {
+        Value::Array(values) => {
             let mut array = env.create_array_with_length(values.len())?;
             for (index, value) in values.iter().enumerate() {
                 array.set_element(index as u32, native_value(env, value, "")?)?;
             }
             Ok(array.into_unknown())
         }
-        Json::Number(number) => {
+        Value::Number(number) => {
             if let Some(integer) = number.as_u64()
                 && integer > 9_007_199_254_740_991
             {
@@ -92,7 +92,7 @@ impl DiagnosticsReader {
     pub fn snapshot(&self, env: Env, query_json: Option<JsString>) -> napi::Result<JsUnknown> {
         let query = bounded_query(query_json)?;
         let page = self.inner.snapshot_json(&query).map_err(error)?;
-        let value: Json = serde_json::from_str(page.as_str())
+        let value: Value = serde_json::from_str(page.as_str())
             .map_err(|_| napi::Error::from_reason("invalid_snapshot"))?;
         native_value(&env, &value, "")
     }
@@ -113,7 +113,7 @@ impl DiagnosticsReader {
     ) -> napi::Result<JsUnknown> {
         let query = bounded_query(query_json)?;
         let page = self.inner.inspect_memory_json(&query).map_err(error)?;
-        let value: Json = serde_json::from_str(page.as_str())
+        let value: Value = serde_json::from_str(page.as_str())
             .map_err(|_| napi::Error::from_reason("invalid_snapshot"))?;
         native_value(&env, &value, "")
     }

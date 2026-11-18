@@ -24,7 +24,7 @@ use napi::threadsafe_function::ThreadsafeFunctionCallMode;
 use napi::{JsFunction, JsObject, JsUnknown, NapiRaw, NapiValue};
 use napi_derive::napi;
 use serde::{Deserialize, Serialize, Serializer};
-use serde_json::Value as Json;
+use serde_json::Value;
 
 use nemo_relay::api::llm as core_llm_api;
 use nemo_relay::api::llm::{LlmAttributes, LlmRequest};
@@ -95,6 +95,7 @@ use crate::convert::{
     get_last_callback_error as get_recorded_callback_error, opt_json, parse_timestamp_micros,
     record_callback_error, to_napi_err,
 };
+use crate::json::{JAVASCRIPT_MAX_SAFE_INTEGER, Json};
 use crate::promise_call::PromiseAwareFn;
 use crate::promise_call::with_publication_callback_context;
 use crate::stream::LlmStream;
@@ -137,9 +138,9 @@ pub fn log(
     target: Option<String>,
     fields: Option<Json>,
 ) -> napi::Result<()> {
-    let fields = match fields {
+    let fields = match fields.map(Value::from) {
         None => serde_json::Map::new(),
-        Some(Json::Object(fields)) => fields,
+        Some(Value::Object(fields)) => fields,
         Some(_) => return Err(Error::from_reason("log fields must be an object")),
     };
     let target = target.unwrap_or_default();
@@ -182,8 +183,6 @@ pub fn collect_resource_metrics(env: Env) -> napi::Result<JsObject> {
         |env, snapshot| env.to_js_value(&NodeResourceMetricsSnapshot::from(snapshot)),
     )
 }
-
-const JAVASCRIPT_MAX_SAFE_INTEGER: u64 = (1_u64 << 53) - 1;
 
 #[derive(Debug, Clone, Copy, PartialEq)]
 enum NodeResourceMetricInteger {
@@ -676,17 +675,17 @@ fn parse_string_map(
     value: Option<Json>,
     field_name: &str,
 ) -> napi::Result<HashMap<String, String>> {
-    let Some(value) = value else {
+    let Some(value) = value.map(Value::from) else {
         return Ok(HashMap::new());
     };
-    let Json::Object(map) = value else {
+    let Value::Object(map) = value else {
         return Err(napi::Error::from_reason(format!(
             "{field_name} must be an object of string values",
         )));
     };
     let mut out = HashMap::with_capacity(map.len());
     for (key, value) in map {
-        let Json::String(value) = value else {
+        let Value::String(value) = value else {
             return Err(napi::Error::from_reason(format!(
                 "{field_name} must be an object of string values",
             )));
@@ -696,19 +695,19 @@ fn parse_string_map(
     Ok(out)
 }
 
-fn otel_status_metadata(status_code: &'static str, status_message: Option<String>) -> Json {
+fn otel_status_metadata(status_code: &'static str, status_message: Option<String>) -> Value {
     let mut metadata = serde_json::Map::new();
     metadata.insert(
         "otel.status_code".to_string(),
-        Json::String(status_code.to_string()),
+        Value::String(status_code.to_string()),
     );
     if let Some(status_message) = status_message {
         metadata.insert(
             "otel.status_description".to_string(),
-            Json::String(status_message),
+            Value::String(status_message),
         );
     }
-    Json::Object(metadata)
+    Value::Object(metadata)
 }
 
 fn parse_otel_type(value: &str) -> napi::Result<nemo_relay::observability::OpenTelemetryType> {
@@ -737,15 +736,17 @@ fn parse_otel_transport(
 fn parse_mark_projection(
     value: Option<String>,
 ) -> napi::Result<nemo_relay::observability::MarkProjection> {
-    serde_json::from_value(Json::String(value.unwrap_or_else(|| "inherit".to_string())))
-        .map_err(|error| napi::Error::from_reason(error.to_string()))
+    serde_json::from_value(Value::String(
+        value.unwrap_or_else(|| "inherit".to_string()),
+    ))
+    .map_err(|error| napi::Error::from_reason(error.to_string()))
 }
 
 fn parse_attribute_mappings(
     value: Option<Json>,
 ) -> napi::Result<Vec<nemo_relay::observability::OtlpAttributeMapping>> {
     let mappings = match value {
-        Some(value) => serde_json::from_value(value)
+        Some(value) => serde_json::from_value(value.0)
             .map_err(|error| napi::Error::from_reason(format!("attributeMappings: {error}")))?,
         None => Vec::new(),
     };
@@ -984,8 +985,8 @@ fn build_otel_metric_config(
 
 fn exporter_runtime_diagnostics_json(
     diagnostics: nemo_relay::observability::ExporterRuntimeDiagnostics,
-) -> Json {
-    Json::Array(
+) -> Value {
+    Value::Array(
         diagnostics
             .entries()
             .iter()
@@ -1116,7 +1117,7 @@ impl ScopedCallbackContext {
 }
 
 struct ScopedJsonCall {
-    value: Json,
+    value: Value,
     context: ScopedCallbackContext,
 }
 
@@ -1164,7 +1165,7 @@ fn scoped_json_callback_tsfn(
 
 fn scoped_tool_execution_fn(func: callable::ReplyTsfn<ScopedJsonCall>) -> ToolExecutionNextFn {
     let func = Arc::new(func);
-    Arc::new(move |args: Json| {
+    Arc::new(move |args: Value| {
         let func = func.clone();
         let context = ScopedCallbackContext::capture();
         Box::pin(async move {
@@ -1201,7 +1202,7 @@ fn scoped_llm_execution_fn(func: callable::ReplyTsfn<ScopedJsonCall>) -> LlmExec
     Arc::new(move |request: LlmRequest| {
         let func = func.clone();
         let context = ScopedCallbackContext::capture();
-        let request = serde_json::to_value(request).unwrap_or(Json::Null);
+        let request = serde_json::to_value(request).unwrap_or(Value::Null);
         Box::pin(async move {
             let (tx, rx) = tokio::sync::oneshot::channel();
             callable::call_with_reply(
@@ -1925,7 +1926,7 @@ fn build_plugin_context(
 }
 
 struct NodePluginRegisterCall {
-    plugin_config: Json,
+    plugin_config: Value,
     namespace_prefix: String,
     registrations: Arc<StdMutex<Vec<PluginRegistration>>>,
 }
@@ -2076,7 +2077,7 @@ impl PersistentJsFunction {
         self.function()?.call(None, args)
     }
 
-    fn call_validate(&self, plugin_config: &Json) -> napi::Result<Json> {
+    fn call_validate(&self, plugin_config: &Value) -> napi::Result<Value> {
         // SAFETY: `self.env` was captured from a live N-API environment when
         // this persistent reference was created and remains valid while the
         // binding module is alive.
@@ -2099,7 +2100,7 @@ impl PersistentJsFunction {
         let config = unsafe {
             JsUnknown::from_raw_unchecked(
                 self.env,
-                Json::to_napi_value(self.env, plugin_config.clone())?,
+                Value::to_napi_value(self.env, plugin_config.clone())?,
             )
         };
         let returned = func.call(None, &[config])?;
@@ -2108,7 +2109,7 @@ impl PersistentJsFunction {
         unsafe { Option::<Json>::from_napi_value(self.env, returned.raw()) }.map(callback_json)
     }
 
-    pub(crate) fn call_json(&self, argument: Json) -> napi::Result<Json> {
+    pub(crate) fn call_json(&self, argument: Value) -> napi::Result<Value> {
         let mut value = ptr::null_mut();
         // SAFETY: `self.reference` is a live N-API reference created in
         // `self.env`, and `value` is writable storage for the borrowed
@@ -2121,10 +2122,10 @@ impl PersistentJsFunction {
         // SAFETY: `value` was resolved from this struct's function reference,
         // so it is a live function value in `self.env` for this call.
         let func = unsafe { JsFunction::from_raw_unchecked(self.env, value) };
-        // SAFETY: `Json::to_napi_value` created this argument in `self.env`,
+        // SAFETY: `Value::to_napi_value` created this argument in `self.env`,
         // so wrapping it as `JsUnknown` is valid for the immediate callback.
         let argument = unsafe {
-            JsUnknown::from_raw_unchecked(self.env, Json::to_napi_value(self.env, argument)?)
+            JsUnknown::from_raw_unchecked(self.env, Value::to_napi_value(self.env, argument)?)
         };
         let returned = func.call(None, &[argument])?;
         // SAFETY: `returned` is the live result of invoking `func` in this environment.
@@ -2135,7 +2136,7 @@ impl PersistentJsFunction {
         &self,
         kinds: Vec<String>,
         registration_name: String,
-    ) -> napi::Result<Json> {
+    ) -> napi::Result<Value> {
         let mut value = ptr::null_mut();
         let status =
             unsafe { napi::sys::napi_get_reference_value(self.env, self.reference, &mut value) };
@@ -2153,11 +2154,11 @@ impl PersistentJsFunction {
             )
         };
         let returned = func.call(None, &[kinds, registration_name])?;
-        unsafe { Json::from_napi_value(self.env, returned.raw()) }
+        unsafe { Json::from_napi_value(self.env, returned.raw()) }.map(Value::from)
     }
 }
 
-fn decode_conditional_gate_result(value: Json) -> napi::Result<Option<String>> {
+fn decode_conditional_gate_result(value: Value) -> napi::Result<Option<String>> {
     let value = callable::unwrap_middleware_result(value, "conditional middleware guardrail")
         .map_err(to_napi_err)?;
     serde_json::from_value(value).map_err(|_| {
@@ -2308,12 +2309,12 @@ impl Drop for PersistentJsFunction {
 
 struct NodePluginValidateCallback {
     direct: PersistentJsFunction,
-    thread_safe: callable::ReplyTsfn<Json>,
+    thread_safe: callable::ReplyTsfn<Value>,
     registration_thread: std::thread::ThreadId,
 }
 
 impl NodePluginValidateCallback {
-    fn call(&self, plugin_config: Json) -> napi::Result<Json> {
+    fn call(&self, plugin_config: Value) -> napi::Result<Value> {
         if std::thread::current().id() == self.registration_thread {
             return self.direct.call_validate(&plugin_config);
         }
@@ -2358,8 +2359,8 @@ impl Plugin for NodePlugin {
         let Some(validate) = &self.validate else {
             return vec![];
         };
-        match validate.call(Json::Object(plugin_config.clone())) {
-            Ok(Json::Null) => vec![],
+        match validate.call(Value::Object(plugin_config.clone())) {
+            Ok(Value::Null) => vec![],
             Ok(value) => {
                 serde_json::from_value::<Vec<ConfigDiagnostic>>(value).unwrap_or_else(|e| {
                     vec![ConfigDiagnostic {
@@ -2391,7 +2392,7 @@ impl Plugin for NodePlugin {
         Box::pin(async move {
             let registrations = Arc::new(StdMutex::new(Vec::<PluginRegistration>::new()));
             let payload = NodePluginRegisterCall {
-                plugin_config: Json::Object(plugin_config),
+                plugin_config: Value::Object(plugin_config),
                 namespace_prefix,
                 registrations: registrations.clone(),
             };
@@ -2753,11 +2754,16 @@ pub fn clear_last_callback_error() {
 #[napi(js_name = "__testClosedReplyCallback")]
 pub fn test_closed_reply_callback(env: Env, callback: JsFunction, value: Json) -> Result<String> {
     let wrapper = callback_factory::wrap_execution_callback(&env, &callback)?;
-    let reply = callable::reply_tsfn(&env, &wrapper, |env, value: Json| {
+    let reply = callable::reply_tsfn(&env, &wrapper, |env, value: Value| {
         Ok(vec![callable::json_to_js_unknown(env, value)?])
     })?;
     reply.clone().abort()?;
-    match callable::call_with_reply(&reply, value, ThreadsafeFunctionCallMode::Blocking, |_| {}) {
+    match callable::call_with_reply(
+        &reply,
+        value.0,
+        ThreadsafeFunctionCallMode::Blocking,
+        |_| {},
+    ) {
         Ok(()) => Err(napi::Error::from_reason(
             "closed reply callback accepted a call",
         )),
@@ -2791,7 +2797,7 @@ pub fn test_closed_collector_callback(env: Env, callback: JsFunction, chunk: Jso
     let LlmCollector::Async(mut wrapped) = callable::wrap_js_collector_fn(callback) else {
         return Err(napi::Error::from_reason("JS collectors are asynchronous"));
     };
-    settled_now(wrapped(chunk))?.map_err(to_napi_err)
+    settled_now(wrapped(chunk.0))?.map_err(to_napi_err)
 }
 
 /// Internal test helper: invoke a closed JS finalizer wrapper and return the fallback value.
@@ -2804,7 +2810,7 @@ pub fn test_closed_finalizer_callback(env: Env, callback: JsFunction) -> Result<
     else {
         return Err(napi::Error::from_reason("JS finalizers are asynchronous"));
     };
-    Ok(settled_now(wrapped())?.unwrap_or(Json::Null))
+    Ok(Json(settled_now(wrapped())?.unwrap_or(Value::Null)))
 }
 
 /// Internal test helper: exercise PromiseAwareFn queue and conversion failures.
@@ -2837,7 +2843,7 @@ pub fn test_closed_promise_aware_call(
                     }))
                     .await
             } else {
-                promise_aware.call(Json::Null).await
+                promise_aware.call(Value::Null).await
             }
             .map_err(to_napi_err)
         },
@@ -3157,7 +3163,7 @@ pub fn tool_call(
         core_tool_api::tool_call(
             core_tool_api::ToolCallParams::builder()
                 .name(name.as_str())
-                .args(args)
+                .args(args.0)
                 .parent_opt(handle.map(|h| &h.inner))
                 .attributes(attrs)
                 .data_opt(opt_json(data))
@@ -3245,7 +3251,7 @@ pub fn tool_call_execute(
                             core_tool_api::tool_call_execute(
                                 core_tool_api::ToolCallExecuteParams::builder()
                                     .name(name)
-                                    .args(args)
+                                    .args(args.0)
                                     .func(default_fn)
                                     .parent(parent)
                                     .attributes(attrs)
@@ -3325,7 +3331,7 @@ pub fn tool_call_execute_async(
                             core_tool_api::tool_call_execute(
                                 core_tool_api::ToolCallExecuteParams::builder()
                                     .name(name)
-                                    .args(args)
+                                    .args(args.0)
                                     .func(exec_fn)
                                     .parent(parent)
                                     .attributes(attrs)
@@ -3385,7 +3391,7 @@ pub fn llm_call(
 ) -> Result<LlmHandle> {
     let attrs = LlmAttributes::from_bits_truncate(attributes.unwrap_or(0));
     let timestamp = parse_timestamp_micros(timestamp)?;
-    let llm_request: LlmRequest = serde_json::from_value(request)
+    let llm_request: LlmRequest = serde_json::from_value(request.0)
         .map_err(|e| napi::Error::from_reason(format!("invalid LlmRequest: {e}")))?;
     let codec = match (codec_decode.as_ref(), codec_encode.as_ref()) {
         (Some(decode), Some(encode)) => Some(node_llm_codec(&env, decode, encode)?.0),
@@ -3434,7 +3440,7 @@ pub fn llm_call_end(
         core_llm_api::llm_call_end(
             core_llm_api::LlmCallEndParams::builder()
                 .handle(&handle.inner)
-                .response(response)
+                .response(response.0)
                 .data_opt(opt_json(data))
                 .metadata_opt(opt_json(metadata))
                 .timestamp_opt(timestamp)
@@ -3476,7 +3482,7 @@ pub fn llm_call_execute(
     let parent = handle
         .map(|h| h.inner.clone())
         .unwrap_or_else(|| effective_scope_top(&scope_stack));
-    let llm_request: LlmRequest = serde_json::from_value(request)
+    let llm_request: LlmRequest = serde_json::from_value(request.0)
         .map_err(|e| napi::Error::from_reason(format!("invalid LlmRequest: {e}")))?;
     let callback = callable::safe_execution_callback(&env, &func)?;
     let default_fn = scoped_llm_execution_fn(scoped_json_callback_tsfn(&env, &callback)?);
@@ -3566,7 +3572,7 @@ pub fn llm_call_execute_async(
     let parent = handle
         .map(|h| h.inner.clone())
         .unwrap_or_else(|| effective_scope_top(&scope_stack));
-    let llm_request: LlmRequest = serde_json::from_value(request)
+    let llm_request: LlmRequest = serde_json::from_value(request.0)
         .map_err(|e| napi::Error::from_reason(format!("invalid LlmRequest: {e}")))?;
     let pa_fn = std::sync::Arc::new(
         crate::promise_call::PromiseAwareFn::new(&env, &func).map_err(|e| {
@@ -3576,7 +3582,7 @@ pub fn llm_call_execute_async(
 
     let exec_fn: LlmExecutionNextFn = std::sync::Arc::new(move |req| {
         let pa_fn = pa_fn.clone();
-        let req_json = serde_json::to_value(&req).unwrap_or(Json::Null);
+        let req_json = serde_json::to_value(&req).unwrap_or(Value::Null);
         Box::pin(async move { pa_fn.call(req_json).await })
     });
 
@@ -3686,12 +3692,12 @@ pub fn llm_stream_call_execute(
     let parent = handle
         .map(|h| h.inner.clone())
         .unwrap_or_else(|| effective_scope_top(&scope_stack));
-    let llm_request: LlmRequest = serde_json::from_value(request)
+    let llm_request: LlmRequest = serde_json::from_value(request.0)
         .map_err(|e| napi::Error::from_reason(format!("invalid LlmRequest: {e}")))?;
 
     let wrapped_collector = match collector {
         Some(cb) => callable::wrap_js_collector_fn(callable::js_collector_tsfn(&env, &cb)?),
-        None => LlmCollector::from(|_: Json| Ok(())),
+        None => LlmCollector::from(|_: Value| Ok(())),
     };
 
     let finalizer_error = callable::FinalizerError::default();
@@ -3700,7 +3706,7 @@ pub fn llm_stream_call_execute(
             callable::js_finalizer_tsfn(&env, &cb)?,
             finalizer_error.clone(),
         ),
-        None => LlmFinalizer::from(|| Json::Null),
+        None => LlmFinalizer::from(|| Value::Null),
     };
 
     let provider = Arc::new(PromiseAwareFn::new(&env, &func)?);
@@ -5223,7 +5229,7 @@ pub fn tool_request_intercepts(env: Env, name: String, args: Json) -> Result<JsO
                 async move {
                     TASK_SCOPE_STACK
                         .scope(scope_stack, async move {
-                            core_tool_api::tool_request_intercepts(&name, args)
+                            core_tool_api::tool_request_intercepts(&name, args.0)
                                 .await
                                 .map_err(to_napi_err)
                         })
@@ -5250,7 +5256,7 @@ pub fn tool_conditional_execution(env: Env, name: String, args: Json) -> Result<
                 async move {
                     TASK_SCOPE_STACK
                         .scope(scope_stack, async move {
-                            core_tool_api::tool_conditional_execution(&name, &args)
+                            core_tool_api::tool_conditional_execution(&name, &args.0)
                                 .await
                                 .map_err(to_napi_err)
                         })
@@ -5268,7 +5274,7 @@ pub fn tool_conditional_execution(env: Env, name: String, args: Json) -> Result<
 /// the `LlmRequest` schema. Returns the transformed request as JSON.
 #[napi(ts_return_type = "Promise<LlmRequestInterceptOutcome>")]
 pub fn llm_request_intercepts(env: Env, name: String, request: Json) -> Result<JsObject> {
-    let llm_request: LlmRequest = serde_json::from_value(request)
+    let llm_request: LlmRequest = serde_json::from_value(request.0)
         .map_err(|e| napi::Error::from_reason(format!("invalid LlmRequest: {e}")))?;
     let publication_context_id = callback_factory::event_sanitizer_callback_context_id(&env)?;
     let (scope_stack, publication_buffer) = effective_scope_context(&env)?;
@@ -5306,7 +5312,7 @@ pub fn llm_request_intercepts(env: Env, name: String, request: Json) -> Result<J
 /// and `content` fields matching the `LlmRequest` schema.
 #[napi(ts_return_type = "Promise<void>")]
 pub fn llm_conditional_execution(env: Env, request: Json) -> Result<JsObject> {
-    let llm_request: LlmRequest = serde_json::from_value(request)
+    let llm_request: LlmRequest = serde_json::from_value(request.0)
         .map_err(|e| napi::Error::from_reason(format!("invalid LlmRequest: {e}")))?;
     let publication_context_id = callback_factory::event_sanitizer_callback_context_id(&env)?;
     let (scope_stack, publication_buffer) = effective_scope_context(&env)?;
@@ -5500,7 +5506,9 @@ impl AtofExporter {
     /// Return delivery diagnostics recorded by this exporter's stream sink.
     #[napi(ts_return_type = "Array<{ code: string; message: string; count: number }>")]
     pub fn runtime_diagnostics(&self) -> Json {
-        exporter_runtime_diagnostics_json(self.inner.runtime_diagnostics())
+        Json(exporter_runtime_diagnostics_json(
+            self.inner.runtime_diagnostics(),
+        ))
     }
 }
 
@@ -5732,7 +5740,9 @@ impl OpenTelemetrySubscriber {
     /// Return bounded runtime diagnostics recorded by this subscriber.
     #[napi(ts_return_type = "Array<{ code: string; message: string; count: number }>")]
     pub fn runtime_diagnostics(&self) -> Json {
-        exporter_runtime_diagnostics_json(self.inner.runtime_diagnostics())
+        Json(exporter_runtime_diagnostics_json(
+            self.inner.runtime_diagnostics(),
+        ))
     }
 
     /// Shut down the underlying tracer provider.
@@ -5835,7 +5845,9 @@ impl OpenTelemetryLogSubscriber {
     /// Return bounded runtime diagnostics recorded by this subscriber.
     #[napi(ts_return_type = "Array<{ code: string; message: string; count: number }>")]
     pub fn runtime_diagnostics(&self) -> Json {
-        exporter_runtime_diagnostics_json(self.inner.runtime_diagnostics())
+        Json(exporter_runtime_diagnostics_json(
+            self.inner.runtime_diagnostics(),
+        ))
     }
 
     /// Shut down the underlying logger provider.
@@ -5934,7 +5946,9 @@ impl OpenTelemetryMetricSubscriber {
     /// Return bounded runtime diagnostics recorded by this subscriber.
     #[napi(ts_return_type = "Array<{ code: string; message: string; count: number }>")]
     pub fn runtime_diagnostics(&self) -> Json {
-        exporter_runtime_diagnostics_json(self.inner.runtime_diagnostics())
+        Json(exporter_runtime_diagnostics_json(
+            self.inner.runtime_diagnostics(),
+        ))
     }
 
     /// Shut down the underlying meter provider.
@@ -5952,9 +5966,9 @@ struct CacheTelemetryOptions {
     provider: String,
     #[serde(alias = "request_id")]
     request_id: String,
-    usage: Option<Json>,
+    usage: Option<Value>,
     #[serde(default, alias = "request_facts")]
-    request_facts: Option<Json>,
+    request_facts: Option<Value>,
     #[serde(alias = "agent_id")]
     agent_id: String,
     #[serde(alias = "template_version")]
@@ -5975,7 +5989,7 @@ struct CacheRequestFactsOptions {
     #[serde(alias = "request_id")]
     request_id: String,
     #[serde(alias = "annotated_request")]
-    annotated_request: Json,
+    annotated_request: Value,
     #[serde(alias = "agent_id")]
     agent_id: String,
     timestamp: Option<String>,
@@ -6002,7 +6016,7 @@ impl AdaptiveRuntime {
     /// The runtime is constructed lazily when `register()` is awaited.
     #[napi(constructor)]
     pub fn new(config: Json) -> napi::Result<Self> {
-        let config: AdaptiveConfig = serde_json::from_value(config)
+        let config: AdaptiveConfig = serde_json::from_value(config.0)
             .map_err(|error| napi::Error::from_reason(error.to_string()))?;
         let report = validate_adaptive_config_or_err(&config)?;
         Ok(Self {
@@ -6142,7 +6156,9 @@ impl AdaptiveRuntime {
             NodeAdaptiveRuntimeState::Pending { report, .. } => report,
             NodeAdaptiveRuntimeState::Ready(runtime) => runtime.report(),
         };
-        serde_json::to_value(report).map_err(|error| napi::Error::from_reason(error.to_string()))
+        serde_json::to_value(report)
+            .map(Json)
+            .map_err(|error| napi::Error::from_reason(error.to_string()))
     }
 
     /// Bind the runtime's ACG request rewrite to a scope.
@@ -6169,7 +6185,7 @@ impl AdaptiveRuntime {
     /// Build cache request facts for an annotated LLM request.
     #[napi(js_name = "buildCacheRequestFacts")]
     pub fn build_cache_request_facts(&self, options: Json) -> napi::Result<Option<Json>> {
-        let options: CacheRequestFactsOptions = serde_json::from_value(options)
+        let options: CacheRequestFactsOptions = serde_json::from_value(options.0)
             .map_err(|error| napi::Error::from_reason(error.to_string()))?;
         let _request_id = parse_cache_telemetry_request_id(&options.request_id)?;
         let _timestamp = parse_cache_telemetry_timestamp(options.timestamp.as_deref())?;
@@ -6191,7 +6207,7 @@ impl AdaptiveRuntime {
             )),
             NodeAdaptiveRuntimeState::Ready(runtime) => Ok(runtime
                 .build_cache_request_facts(&options.agent_id, &options.provider, &annotated_request)
-                .map(|facts| serde_json::to_value(&facts))
+                .map(|facts| serde_json::to_value(&facts).map(Json))
                 .transpose()
                 .map_err(|error| napi::Error::from_reason(error.to_string()))?),
         }
@@ -6239,7 +6255,7 @@ fn parse_cache_telemetry_timestamp(timestamp: Option<&str>) -> napi::Result<Date
     }
 }
 
-fn parse_cache_request_facts(value: Option<Json>) -> napi::Result<Option<CacheRequestFacts>> {
+fn parse_cache_request_facts(value: Option<Value>) -> napi::Result<Option<CacheRequestFacts>> {
     let Some(value) = value else {
         return Ok(None);
     };
@@ -6251,16 +6267,17 @@ fn parse_cache_request_facts(value: Option<Json>) -> napi::Result<Option<CacheRe
 /// Validate an adaptive config document without constructing a runtime.
 #[napi(js_name = "validateAdaptiveConfig")]
 pub fn validate_adaptive_config(config: Json) -> napi::Result<Json> {
-    let config: AdaptiveConfig = serde_json::from_value(config)
+    let config: AdaptiveConfig = serde_json::from_value(config.0)
         .map_err(|error| napi::Error::from_reason(error.to_string()))?;
     serde_json::to_value(CoreAdaptiveRuntime::validate_config(&config))
+        .map(Json)
         .map_err(|error| napi::Error::from_reason(error.to_string()))
 }
 
 /// Build one adaptive cache telemetry event from normalized usage.
 #[napi(js_name = "buildCacheTelemetryEvent")]
 pub fn build_cache_telemetry_event(options: Json) -> napi::Result<Option<Json>> {
-    let options: CacheTelemetryOptions = serde_json::from_value(options)
+    let options: CacheTelemetryOptions = serde_json::from_value(options.0)
         .map_err(|error| napi::Error::from_reason(error.to_string()))?;
     let provider = parse_cache_telemetry_provider(&options.provider)?;
     let request_id = parse_cache_telemetry_request_id(&options.request_id)?;
@@ -6286,7 +6303,7 @@ pub fn build_cache_telemetry_event(options: Json) -> napi::Result<Option<Json>> 
         timestamp,
         request_facts.as_ref(),
     )
-    .map(|event| serde_json::to_value(&event))
+    .map(|event| serde_json::to_value(&event).map(Json))
     .transpose()
     .map_err(|error| napi::Error::from_reason(error.to_string()))
 }
@@ -6319,9 +6336,10 @@ pub fn register_plugin(
         Some(func) => {
             let direct = PersistentJsFunction::new(&env, &func)?;
             let callback = callable::safe_middleware_callback(&env, &func)?;
-            let thread_safe = callable::reply_tsfn(&env, &callback, |env, plugin_config: Json| {
-                Ok(vec![callable::json_to_js_unknown(env, plugin_config)?])
-            })?;
+            let thread_safe =
+                callable::reply_tsfn(&env, &callback, |env, plugin_config: Value| {
+                    Ok(vec![callable::json_to_js_unknown(env, plugin_config)?])
+                })?;
             Some(NodePluginValidateCallback {
                 direct,
                 thread_safe,
@@ -6565,6 +6583,7 @@ impl PluginHostActivation {
     #[napi(getter)]
     pub fn report(&self) -> napi::Result<Json> {
         serde_json::to_value(self.close_state.report())
+            .map(Json)
             .map_err(|error| napi::Error::from_reason(error.to_string()))
     }
 
@@ -6617,7 +6636,7 @@ pub async fn initialize(
     config: Json,
     additional_plugins_toml: Option<String>,
 ) -> napi::Result<PluginHostActivation> {
-    let config: nemo_relay::plugin::dynamic::PluginHostConfig = serde_json::from_value(config)
+    let config: nemo_relay::plugin::dynamic::PluginHostConfig = serde_json::from_value(config.0)
         .map_err(|error| napi::Error::from_reason(format!("invalid plugin config: {error}")))?;
     let activation = initialize_impl(config, additional_plugins_toml.map(Into::into))
         .await
@@ -6630,24 +6649,27 @@ pub async fn initialize(
 /// Validate dynamic plugins without loading any plugin code.
 #[napi]
 pub fn validate(config: Json, additional_plugins_toml: Option<String>) -> napi::Result<Json> {
-    let config: nemo_relay::plugin::dynamic::PluginHostConfig = serde_json::from_value(config)
+    let config: nemo_relay::plugin::dynamic::PluginHostConfig = serde_json::from_value(config.0)
         .map_err(|error| napi::Error::from_reason(format!("invalid plugin config: {error}")))?;
     let report = validate_impl(config, additional_plugins_toml.map(Into::into))
         .map_err(|error| napi::Error::from_reason(error.to_string()))?;
-    serde_json::to_value(report).map_err(|error| napi::Error::from_reason(error.to_string()))
+    serde_json::to_value(report)
+        .map(Json)
+        .map_err(|error| napi::Error::from_reason(error.to_string()))
 }
 
 /// Validate only the supplied static plugin configuration.
 #[napi]
 pub fn validate_exact(config: Json) -> napi::Result<Json> {
-    if config.get("diagnostics").is_some() {
+    if config.0.get("diagnostics").is_some() {
         return Err(napi::Error::from_reason(
             "diagnostics is a host-only setting; use layered validation",
         ));
     }
-    let config: PluginConfig = serde_json::from_value(config)
+    let config: PluginConfig = serde_json::from_value(config.0)
         .map_err(|error| napi::Error::from_reason(format!("invalid plugin config: {error}")))?;
     serde_json::to_value(validate_exact_impl(config))
+        .map(Json)
         .map_err(|error| napi::Error::from_reason(error.to_string()))
 }
 
