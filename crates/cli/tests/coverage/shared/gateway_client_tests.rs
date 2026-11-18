@@ -459,6 +459,110 @@ fn verified_hook_payload_is_not_sent_before_the_tls_tunnel_is_authenticated() {
     server.join().unwrap();
 }
 
+fn assert_stalled_daemon_setup_is_bounded(upgrade: bool) {
+    let temp = tempfile::tempdir().unwrap();
+    let _environment = EnvScope::set(&[
+        ("XDG_CONFIG_HOME", Some(temp.path().as_os_str())),
+        ("HOME", Some(temp.path().as_os_str())),
+    ]);
+    crate::gateway::tls::RelayTlsIdentity::load_or_create().unwrap();
+    let listener = TcpListener::bind("127.0.0.1:0").unwrap();
+    let url = format!("http://{}", listener.local_addr().unwrap());
+    let (stop, stopped) = mpsc::channel();
+    let server = thread::spawn(move || {
+        let (mut stream, _) = listener.accept().unwrap();
+        stream
+            .set_read_timeout(Some(Duration::from_secs(4)))
+            .unwrap();
+        let request = read_headers(&mut stream);
+        if upgrade {
+            stream.write_all(b"HTTP/1.1 101 Switching Protocols\r\nUpgrade: nemo-relay-tls\r\nContent-Length: 0\r\n\r\n").unwrap();
+        }
+        // Keep TCP open but withhold either the upgrade or the TLS ServerHello.
+        // Finish when the client times out and closes its socket.
+        stream
+            .set_read_timeout(Some(Duration::from_millis(50)))
+            .unwrap();
+        let mut received = Vec::new();
+        while stopped.try_recv().is_err() {
+            let mut buffer = [0; 1024];
+            match stream.read(&mut buffer) {
+                Ok(0) => break,
+                Ok(read) => received.extend_from_slice(&buffer[..read]),
+                Err(error)
+                    if matches!(
+                        error.kind(),
+                        std::io::ErrorKind::WouldBlock | std::io::ErrorKind::TimedOut
+                    ) => {}
+                Err(error) => panic!("stalled server read failed: {error}"),
+            }
+        }
+        (request, received)
+    });
+    let started = std::time::Instant::now();
+    let error = post_daemon_verified(
+        &url,
+        "/hooks/codex",
+        &[(
+            BOOTSTRAP_CLIENT_TOKEN_HEADER.into(),
+            "private-route-token".into(),
+        )],
+        b"private-hook-payload",
+        Duration::from_secs(2),
+        1024,
+    )
+    .unwrap_err();
+    let elapsed = started.elapsed();
+    let _ = stop.send(());
+    let (request, received) = server.join().unwrap();
+    eprintln!("stalled daemon setup upgrade={upgrade} elapsed={elapsed:?}: {error}");
+    assert!(
+        elapsed >= Duration::from_millis(1800),
+        "configured timeout was shortened: {elapsed:?}"
+    );
+    assert!(
+        elapsed < Duration::from_millis(3500),
+        "daemon setup repeated the configured timeout: {elapsed:?}: {error}"
+    );
+    assert!(request.starts_with("GET /bootstrap/tunnel "), "{request}");
+    for secret in ["private-route-token", "private-hook-payload"] {
+        assert!(!request.contains(secret));
+        assert!(
+            !received
+                .windows(secret.len())
+                .any(|bytes| bytes == secret.as_bytes())
+        );
+    }
+    if upgrade {
+        assert!(
+            !error.readiness_failed(),
+            "TLS failure must not permit readiness fallback"
+        );
+        assert!(
+            error.to_string().contains("TLS handshake failed"),
+            "{error}"
+        );
+        assert!(!error.to_string().contains("indeterminate"), "{error}");
+        assert!(
+            !received.is_empty(),
+            "the client must attempt TLS authentication"
+        );
+    } else {
+        assert!(error.to_string().contains("TLS tunnel response"), "{error}");
+        assert!(received.is_empty(), "no payload may precede the TLS tunnel");
+    }
+}
+
+#[test]
+fn daemon_hook_stalled_upgrade_uses_one_configured_timeout() {
+    assert_stalled_daemon_setup_is_bounded(false);
+}
+
+#[test]
+fn daemon_hook_stalled_tls_uses_one_configured_timeout() {
+    assert_stalled_daemon_setup_is_bounded(true);
+}
+
 #[test]
 fn verified_transport_reuses_loaded_bootstrap_credentials() {
     let temp = tempfile::tempdir().unwrap();
@@ -541,4 +645,50 @@ fn verified_loopback_urls_preserve_an_explicit_default_http_port() {
         ("127.0.0.1".into(), 80)
     );
     assert!(parse_loopback_url("http://127.0.0.1").is_err());
+}
+
+#[test]
+fn daemon_hook_preserves_slow_valid_tls_and_guardrail_budget() {
+    let temp = tempfile::tempdir().unwrap();
+    let _environment = EnvScope::set(&[
+        ("XDG_CONFIG_HOME", Some(temp.path().as_os_str())),
+        ("HOME", Some(temp.path().as_os_str())),
+    ]);
+    let identity = crate::gateway::tls::RelayTlsIdentity::load_or_create().unwrap();
+    let config = identity.server_config().unwrap();
+    let listener = TcpListener::bind("127.0.0.1:0").unwrap();
+    let url = format!("http://{}", listener.local_addr().unwrap());
+    let server = thread::spawn(move || {
+        let (mut socket, _) = listener.accept().unwrap();
+        socket
+            .set_read_timeout(Some(Duration::from_secs(5)))
+            .unwrap();
+        let _ = read_headers(&mut socket);
+        socket.write_all(b"HTTP/1.1 101 Switching Protocols\r\nUpgrade: nemo-relay-tls\r\nContent-Length: 0\r\n\r\n").unwrap();
+        // A short setup-only policy would reject this healthy but delayed handshake.
+        thread::sleep(Duration::from_millis(750));
+        let connection = rustls::ServerConnection::new(config).unwrap();
+        let mut tls = rustls::StreamOwned::new(connection, socket);
+        let (headers, body) = read_http_message(&mut tls, 1024).unwrap();
+        assert_eq!(http_status(&headers), None);
+        assert_eq!(body, b"private-hook-payload");
+        thread::sleep(Duration::from_millis(2500));
+        tls.write_all(
+            b"HTTP/1.1 403 Forbidden\r\nContent-Length: 4\r\nConnection: close\r\n\r\ndeny",
+        )
+        .unwrap();
+        tls.flush().unwrap();
+    });
+    let response = post_daemon_verified(
+        &url,
+        "/hooks/codex",
+        &[],
+        b"private-hook-payload",
+        Duration::from_secs(5),
+        1024,
+    )
+    .unwrap();
+    assert_eq!(response.status, 403);
+    assert_eq!(response.body, b"deny");
+    server.join().unwrap();
 }

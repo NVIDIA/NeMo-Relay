@@ -339,6 +339,12 @@ fn post_authenticated(
             VerifiedHttpError::before_payload(format!("failed to create Relay TLS client: {error}"))
         })?;
     let mut stream = rustls::StreamOwned::new(connection, stream);
+    // Authenticate before buffering application bytes. Otherwise the first buffered flush
+    // starts TLS lazily; a failed handshake is misreported as ambiguous payload delivery,
+    // and BufWriter's drop retries that flush using another socket timeout.
+    stream.conn.complete_io(&mut stream.sock).map_err(|error| {
+        VerifiedHttpError::before_payload(format!("Relay TLS handshake failed: {error}"))
+    })?;
 
     // Only gateway delivery loads the challenge key, so this block never runs for a daemon.
     if !inspection && let Some(key) = key.as_deref() {
