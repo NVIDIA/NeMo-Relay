@@ -141,6 +141,7 @@ async fn close_idle_turns(
         }) else {
             continue;
         };
+        let retiring_ids = session.subagent_stack.clone();
         let stack = session.scope_stack.clone();
         match TASK_SCOPE_STACK
             .scope(stack, async {
@@ -169,8 +170,17 @@ async fn close_idle_turns(
                     first_error = Some(error.into());
                 }
             }
-            Err(error) if first_error.is_none() => first_error = Some(error),
-            Err(_) => {}
+            Err(error) => {
+                closed_subagents.extend(
+                    retiring_ids
+                        .into_iter()
+                        .filter(|subagent_id| session.completed_subagents.contains(subagent_id))
+                        .map(|subagent_id| (session_id.clone(), subagent_id)),
+                );
+                if first_error.is_none() {
+                    first_error = Some(error);
+                }
+            }
         }
         if !session.is_empty() {
             inner.lock().await.insert(session_id, session);

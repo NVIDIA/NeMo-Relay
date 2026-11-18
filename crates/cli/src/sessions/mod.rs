@@ -611,6 +611,7 @@ pub(super) struct Session {
     root_turn: RootTurnState,
     turn_index: u64,
     subagents: HashMap<String, ActiveSubagent>,
+    retiring_subagents: HashMap<String, RetiringSubagent>,
     subagent_stack: Vec<String>,
     // Tracks subagents closed by synthetic or provider-specific completion signals so a later
     // duplicate end hook does not reopen or mark an already-closed worker.
@@ -630,6 +631,12 @@ struct ActiveSubagent {
     scope_stack: ScopeStackHandle,
     last_activity: Instant,
     child_turn: Option<ScopeHandle>,
+}
+
+// A failed pop must remain retryable without making the worker available for new work.
+struct RetiringSubagent {
+    scope_handle: ScopeHandle,
+    scope_stack: ScopeStackHandle,
 }
 
 impl ActiveSubagent {
@@ -1826,6 +1833,7 @@ impl Session {
             root_turn: RootTurnState::default(),
             turn_index: 0,
             subagents: HashMap::new(),
+            retiring_subagents: HashMap::new(),
             subagent_stack: Vec::new(),
             completed_subagents: HashSet::new(),
             llms: HashMap::new(),
@@ -1852,7 +1860,7 @@ impl Session {
             && self.agent_scope.is_none()
             && self.task_scope.is_none()
             && !self.root_turn.is_open()
-            && self.subagents.is_empty()
+            && !self.has_subagent_work()
             && self.subagent_stack.is_empty()
             && self.llms.is_empty()
             && self.tools.is_empty()
@@ -1861,11 +1869,15 @@ impl Session {
     fn blocks_plugin_idle_shutdown(&self) -> bool {
         self.task_scope.is_some()
             || self.root_turn.is_open()
-            || !self.subagents.is_empty()
+            || self.has_subagent_work()
             || !self.subagent_stack.is_empty()
             || !self.llms.is_empty()
             || !self.tools.is_empty()
             || self.active_gateway_calls > 0
+    }
+
+    fn has_subagent_work(&self) -> bool {
+        !self.subagents.is_empty() || !self.retiring_subagents.is_empty()
     }
 
     fn touch_activity(&mut self) {
@@ -1911,6 +1923,7 @@ impl Session {
                     })
             })
             .map(|(id, _)| id.clone())
+            .chain(self.retiring_subagents.keys().cloned())
             .collect()
     }
 
@@ -1928,7 +1941,7 @@ impl Session {
                 .await?
                 .or(delivery);
         }
-        if !ids.is_empty() && self.subagents.is_empty() {
+        if !ids.is_empty() && !self.has_subagent_work() {
             self.task_awaiting_synthesis = false;
             if !self.root_turn.is_open() {
                 delivery = self
@@ -2297,7 +2310,7 @@ impl Session {
             subscriber_delivery = delivery;
         }
         let awaiting_synthesis = std::mem::take(&mut self.task_awaiting_synthesis);
-        if self.subagents.is_empty() && !awaiting_synthesis {
+        if !self.has_subagent_work() && !awaiting_synthesis {
             subscriber_delivery = self
                 .close_task_scope(json!({ "status": "superseded_by_next_task" }))?
                 .or(subscriber_delivery);
@@ -2790,7 +2803,7 @@ impl Session {
             if self.agent_kind != AgentKind::Codex || self.task_scope.is_some() {
                 self.completion_mark("turn_end_without_start", event.payload, event.metadata)?;
             }
-            let task_delivery = if self.subagents.is_empty() {
+            let task_delivery = if !self.has_subagent_work() {
                 self.close_task_scope(json!({ "status": "completed" }))?
             } else {
                 None
@@ -2804,7 +2817,7 @@ impl Session {
         let (_, subscriber_delivery) = self
             .close_turn(event.payload, Some(event.metadata), "closed_by_turn_end")
             .await?;
-        let task_delivery = if self.subagents.is_empty() {
+        let task_delivery = if !self.has_subagent_work() {
             self.close_task_scope(json!({ "status": "completed" }))?
         } else {
             None
@@ -2851,7 +2864,7 @@ impl Session {
             let (closed, delivery) = self
                 .close_stale_subagents(Instant::now(), AGENT_IDLE_TIMEOUT)
                 .await?;
-            if !self.subagents.is_empty() {
+            if self.has_subagent_work() {
                 self.task_awaiting_synthesis = true;
             }
             (closed, delivery)
@@ -2920,7 +2933,7 @@ impl Session {
             && self.turn_index == 0
             && self.agent_scope.is_some()
             && !self.root_turn.is_open()
-            && self.subagents.is_empty()
+            && !self.has_subagent_work()
             && self.subagent_stack.is_empty()
             && self.llms.is_empty()
             && self.tools.is_empty()
@@ -2989,12 +3002,13 @@ impl Session {
     // out of order. Applies to Claude Code Agent workers and Codex child threads today.
     async fn close_active_subagents(&mut self, reason: &str) -> Result<Vec<String>, CliError> {
         let mut closed = Vec::new();
-        while let Some(subagent_id) = self.subagent_stack.pop() {
+        while let Some(subagent_id) = self.subagent_stack.last().cloned() {
             // Subagent ends precede the turn end on the serial dispatcher, so the turn receipt
             // returned by `close_turn` also covers these deliveries.
             let _ = self
                 .close_subagent_scope(&subagent_id, json!({ "status": reason }))
                 .await?;
+            self.subagent_stack.retain(|id| id != &subagent_id);
             closed.push(subagent_id);
         }
         self.subagents.clear();
@@ -3062,6 +3076,10 @@ impl Session {
     // parentage sibling-shaped within a turn while still allowing parallel workers to end out of
     // order.
     async fn start_subagent(&mut self, event: SubagentEvent) -> Result<(), CliError> {
+        if self.retiring_subagents.contains_key(&event.subagent_id) {
+            self.close_subagent_scope(&event.subagent_id, json!({ "status": "replaced" }))
+                .await?;
+        }
         if self.task_scope.is_none() {
             self.ensure_turn_started(Value::Null)?;
         }
@@ -3139,7 +3157,9 @@ impl Session {
         {
             return Ok(None);
         }
-        if !self.subagents.contains_key(&event.subagent_id) {
+        if !self.subagents.contains_key(&event.subagent_id)
+            && !self.retiring_subagents.contains_key(&event.subagent_id)
+        {
             // Claude emits SubagentStop for internal agents such as prompt
             // suggestions, but SubagentStart covers Agent-tool subagents.
             // Matching the session type suggests internal work, but cannot
@@ -3207,38 +3227,58 @@ impl Session {
         self.close_child_calls(subagent_id, "closed_by_subagent_end")?;
         self.close_child_turn(subagent_id, output.clone(), None)
             .await?;
-        let Some(ActiveSubagent {
-            scope_handle: scope,
-            scope_stack: stack,
-            ..
-        }) = self.subagents.remove(subagent_id)
-        else {
+        let retrying = self.retiring_subagents.contains_key(subagent_id);
+        if let Some(subagent) = self.subagents.remove(subagent_id) {
+            self.retiring_subagents.insert(
+                subagent_id.to_string(),
+                RetiringSubagent {
+                    scope_handle: subagent.scope_handle,
+                    scope_stack: subagent.scope_stack,
+                },
+            );
+        }
+        let Some(retiring) = self.retiring_subagents.get(subagent_id) else {
             return Ok(None);
         };
-        let subscriber_delivery = TASK_SCOPE_STACK
-            .scope(stack, async {
-                pop_scope_with_subscriber_delivery(
-                    PopScopeParams::builder()
-                        .handle_uuid(&scope.uuid)
-                        .output(output)
-                        .build(),
-                )
-                .map_err(CliError::from)
-            })
-            .await?;
+        // A pop can fail after removing the scope. Retrying bookkeeping must not pop it twice.
+        let already_removed = retrying
+            && retiring
+                .scope_stack
+                .read()
+                .map_err(|error| nemo_relay_types::error::FlowError::Internal(error.to_string()))?
+                .find(&retiring.scope_handle.uuid)
+                .is_none();
+        let subscriber_delivery = if already_removed {
+            None
+        } else {
+            Some(
+                TASK_SCOPE_STACK
+                    .scope(retiring.scope_stack.clone(), async {
+                        pop_scope_with_subscriber_delivery(
+                            PopScopeParams::builder()
+                                .handle_uuid(&retiring.scope_handle.uuid)
+                                .output(output)
+                                .build(),
+                        )
+                        .map_err(CliError::from)
+                    })
+                    .await?,
+            )
+        };
+        self.retiring_subagents.remove(subagent_id);
         self.subagent_stack.retain(|id| id != subagent_id);
         self.completed_subagents.insert(subagent_id.to_string());
         self.correlation.remove_subagent(subagent_id);
         if self.agent_kind == AgentKind::Codex
-            && self.subagents.is_empty()
+            && !self.has_subagent_work()
             && !self.root_turn.is_open()
             && !self.task_awaiting_synthesis
         {
             return Ok(self
                 .close_task_scope(json!({ "status": "completed" }))?
-                .or(Some(subscriber_delivery)));
+                .or(subscriber_delivery));
         }
-        Ok(Some(subscriber_delivery))
+        Ok(subscriber_delivery)
     }
 
     // Stores an LLM correlation hint from hook activity after pruning expired hints. Hints do not

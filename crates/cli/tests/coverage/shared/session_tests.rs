@@ -8671,6 +8671,64 @@ async fn explicit_gateway_subagent_header_sets_llm_parent() {
     manager.close_all("test_shutdown").await.unwrap();
 }
 
+#[test]
+fn session_refactor_correlation_cleanup_preserves_exact_ttl_boundary() {
+    for (evidence, lifetime) in [
+        ("llm_hint", LLM_HINT_TTL),
+        ("tool_hint", TOOL_HINT_TTL),
+        ("sticky_owner", LAST_OWNER_TTL),
+    ] {
+        let inserted_at = Instant::now();
+        let mut correlation = SessionCorrelation::default();
+        correlation.pending_llm_hints.push(PendingLlmHint {
+            hint: LlmHintEvent {
+                session_id: "cleanup-boundary".into(),
+                agent_kind: AgentKind::Codex,
+                event_name: "afterAgentThought".into(),
+                subagent_id: Some("worker".into()),
+                agent_id: None,
+                agent_type: None,
+                conversation_id: None,
+                generation_id: None,
+                request_id: None,
+                model: None,
+                payload: json!({}),
+                metadata: json!({}),
+            },
+            inserted_at,
+        });
+        correlation.pending_tool_hints.push(PendingToolHint {
+            hint: ToolHint {
+                tool_call_id: Some("boundary-tool".into()),
+                tool_name: Some("Read".into()),
+                subagent_id: Some("worker".into()),
+                arguments: json!({}),
+                source: "test".into(),
+            },
+            inserted_at,
+        });
+        correlation.set_last_llm_owner(Some("worker".into()));
+        correlation.last_llm_owner.as_mut().unwrap().updated_at = inserted_at;
+        for expired in [false, true] {
+            correlation.cleanup(
+                inserted_at
+                    + lifetime
+                    + if expired {
+                        Duration::from_nanos(1)
+                    } else {
+                        Duration::ZERO
+                    },
+            );
+            let retained = match evidence {
+                "llm_hint" => !correlation.pending_llm_hints.is_empty(),
+                "tool_hint" => !correlation.pending_tool_hints.is_empty(),
+                _ => correlation.last_llm_owner.is_some(),
+            };
+            assert_eq!(retained, !expired, "{evidence}: expired={expired}");
+        }
+    }
+}
+
 #[tokio::test]
 async fn session_refactor_expired_correlation_does_not_claim_work() {
     for evidence in ["llm_hint", "tool_hint", "sticky_owner"] {
@@ -8735,7 +8793,16 @@ async fn session_refactor_expired_correlation_does_not_claim_work() {
                     "sticky_owner" => session.set_last_llm_owner(Some("worker".into())),
                     _ => unreachable!(),
                 }
-                let inserted_at = Instant::now();
+                let lifetime = match evidence {
+                    "llm_hint" => LLM_HINT_TTL,
+                    "tool_hint" => TOOL_HINT_TTL,
+                    _ => LAST_OWNER_TTL,
+                };
+                let inserted_at = if expired {
+                    Instant::now() - lifetime - Duration::from_secs(1)
+                } else {
+                    Instant::now()
+                };
                 for hint in &mut session.correlation.pending_llm_hints {
                     hint.inserted_at = inserted_at;
                 }
@@ -8745,19 +8812,6 @@ async fn session_refactor_expired_correlation_does_not_claim_work() {
                 if let Some(owner) = &mut session.correlation.last_llm_owner {
                     owner.updated_at = inserted_at;
                 }
-                let lifetime = match evidence {
-                    "llm_hint" => LLM_HINT_TTL,
-                    "tool_hint" => TOOL_HINT_TTL,
-                    _ => LAST_OWNER_TTL,
-                };
-                let cleanup_at = inserted_at
-                    + lifetime
-                    + if expired {
-                        Duration::from_nanos(1)
-                    } else {
-                        Duration::ZERO
-                    };
-                session.correlation.cleanup(cleanup_at);
                 (
                     session.root_work_scope().unwrap().uuid,
                     session.child_work_scope("worker").unwrap().uuid,
@@ -8991,6 +9045,169 @@ async fn session_refactor_root_boundary_preserves_only_live_child_evidence() {
 }
 
 #[tokio::test]
+async fn session_refactor_idle_sweep_retries_failed_child_retirement() {
+    for missing_scope in [false, true] {
+        let subscriber_name = "idle-retirement-retry";
+        let captured = Arc::new(StdMutex::new(Vec::<Event>::new()));
+        let capture = Arc::clone(&captured);
+        register_subscriber(
+            subscriber_name,
+            Arc::new(move |event| capture.lock().unwrap().push(event.clone())),
+        )
+        .unwrap();
+        let manager = SessionManager::new(session_test_config());
+        start_authenticated_codex_alias(&manager).await;
+        manager
+            .apply_authenticated_events(
+                &HeaderMap::new(),
+                vec![NormalizedEvent::AgentStarted(SessionEvent {
+                    session_id: "sibling-thread".into(),
+                    agent_kind: AgentKind::Codex,
+                    event_name: "SessionStart".into(),
+                    payload: json!({"source": {"subagent": {"thread_spawn": {
+                        "parent_thread_id": "parent-thread"
+                    }}}}),
+                    metadata: json!({}),
+                })],
+                "client-a",
+            )
+            .await
+            .unwrap();
+        manager
+            .apply_authenticated_events(
+                &HeaderMap::new(),
+                vec![NormalizedEvent::TurnEnded(codex_session_event(
+                    "parent-thread",
+                    "Stop",
+                    json!({}),
+                ))],
+                "client-a",
+            )
+            .await
+            .unwrap();
+        let sweep_at = Instant::now() + AGENT_IDLE_TIMEOUT + Duration::from_secs(1);
+        let (
+            child_identifier,
+            successful_identifier,
+            child_stack,
+            child_uuid,
+            task_uuid,
+            child_uuids,
+        ) = {
+            let sessions = manager.inner.lock().await;
+            let parent = &sessions["parent-thread"];
+            // Fail the second candidate so the first child's alias must still be cleared.
+            let candidates = parent.stale_subagent_ids(sweep_at, AGENT_IDLE_TIMEOUT);
+            assert_eq!(candidates.len(), 2);
+            let child_identifier = candidates[1].clone();
+            let child = &parent.subagents[&child_identifier];
+            (
+                child_identifier,
+                candidates[0].clone(),
+                child.scope_stack.clone(),
+                child.scope_handle.uuid,
+                parent.task_scope.as_ref().unwrap().uuid,
+                parent
+                    .subagents
+                    .values()
+                    .map(|child| child.scope_handle.uuid)
+                    .collect::<Vec<_>>(),
+            )
+        };
+        let blocker = TASK_SCOPE_STACK
+            .scope(child_stack.clone(), async {
+                if missing_scope {
+                    nemo_relay_runtime::api::scope::pop_scope(
+                        PopScopeParams::builder()
+                            .handle_uuid(&child_uuid)
+                            .output(json!({}))
+                            .build(),
+                    )
+                    .unwrap();
+                    None
+                } else {
+                    Some(
+                        push_scope(
+                            PushScopeParams::builder()
+                                .name("retirement-blocker")
+                                .scope_type(ScopeType::Custom)
+                                .build(),
+                        )
+                        .unwrap(),
+                    )
+                }
+            })
+            .await;
+        let error = manager
+            .close_idle_sessions_at(sweep_at, AGENT_IDLE_TIMEOUT, "idle_timeout")
+            .await
+            .unwrap_err();
+        assert!(error.to_string().contains(if missing_scope {
+            "scope handle not found"
+        } else {
+            "scope handle is not at the top"
+        }));
+        assert!(has_alignment_alias(&manager, &child_identifier).await);
+        assert!(!has_alignment_alias(&manager, &successful_identifier).await);
+        {
+            let sessions = manager.inner.lock().await;
+            let parent = &sessions["parent-thread"];
+            assert!(parent.subagents.is_empty());
+            assert!(parent.retiring_subagents.contains_key(&child_identifier));
+            assert_eq!(parent.task_scope.as_ref().unwrap().uuid, task_uuid);
+            assert!(parent.blocks_plugin_idle_shutdown());
+        }
+        if let Some(blocker) = blocker {
+            TASK_SCOPE_STACK
+                .scope(child_stack, async {
+                    nemo_relay_runtime::api::scope::pop_scope(
+                        PopScopeParams::builder()
+                            .handle_uuid(&blocker.uuid)
+                            .output(json!({}))
+                            .build(),
+                    )
+                    .unwrap();
+                })
+                .await;
+        }
+        assert_eq!(
+            manager
+                .close_idle_sessions_at(sweep_at, AGENT_IDLE_TIMEOUT, "idle_timeout")
+                .await
+                .unwrap(),
+            1
+        );
+        assert!(!has_alignment_alias(&manager, &child_identifier).await);
+        {
+            let sessions = manager.inner.lock().await;
+            let parent = &sessions["parent-thread"];
+            assert!(parent.retiring_subagents.is_empty());
+            assert!(parent.subagent_stack.is_empty());
+            assert!(parent.task_scope.is_none());
+        }
+        flush_subscribers().unwrap();
+        {
+            let events = captured.lock().unwrap();
+            for scope_uuid in child_uuids.into_iter().chain([task_uuid]) {
+                assert_eq!(
+                    events
+                        .iter()
+                        .filter(|event| {
+                            event.uuid() == scope_uuid
+                                && event.scope_category() == Some(ScopeCategory::End)
+                        })
+                        .count(),
+                    1,
+                    "scope={scope_uuid}, missing_scope={missing_scope}"
+                );
+            }
+        }
+        manager.close_all("test_shutdown").await.unwrap();
+        deregister_subscriber(subscriber_name).unwrap();
+    }
+}
+
+#[tokio::test]
 async fn session_refactor_subagent_pop_error_preserves_unsuccessful_cleanup_state() {
     for missing_scope in [false, true] {
         let session_identifier = format!("child-pop-error-{missing_scope}");
@@ -9094,6 +9311,10 @@ async fn session_refactor_subagent_pop_error_preserves_unsuccessful_cleanup_stat
             let sessions = manager.inner.lock().await;
             let session = &sessions[&session_identifier];
             assert!(!session.subagents.contains_key("worker"));
+            assert_eq!(
+                session.retiring_subagents.contains_key("worker"),
+                missing_scope
+            );
             assert!(session.subagents.contains_key("sibling"));
             assert_eq!(
                 session.completed_subagents.contains("worker"),
@@ -11438,6 +11659,13 @@ async fn codex_retained_delegation_closes_on_timeout_and_shutdown() {
         "gateway_shutdown",
         "parent_stop_after_child_end",
     ] {
+        let captured = Arc::new(StdMutex::new(Vec::<Event>::new()));
+        let capture = Arc::clone(&captured);
+        register_filtered_session_subscriber(
+            reason,
+            tracked_sessions(&["cleanup-root"]),
+            Arc::new(move |event| capture.lock().unwrap().push(event.clone())),
+        );
         let manager = SessionManager::new(session_test_config());
         for name in ["SessionStart", "UserPromptSubmit"] {
             apply_owned_codex_hook(
@@ -11473,6 +11701,14 @@ async fn codex_retained_delegation_closes_on_timeout_and_shutdown() {
                 .await,
             Err(CliError::Unauthorized(_))
         ));
+        let child_turn_uuid = {
+            let sessions = manager.inner.lock().await;
+            sessions["cleanup-root"].subagents["cleanup-child"]
+                .child_turn
+                .as_ref()
+                .unwrap()
+                .uuid
+        };
         if reason == "idle_timeout" {
             assert_eq!(
                 manager
@@ -11489,10 +11725,19 @@ async fn codex_retained_delegation_closes_on_timeout_and_shutdown() {
             let root = sessions.get("cleanup-root").unwrap();
             assert!(root.task_scope.is_none());
             assert!(root.subagents.is_empty());
-            assert!(
-                root.subagents
-                    .values()
-                    .all(|subagent| subagent.child_turn.is_none())
+            drop(sessions);
+            flush_subscribers().unwrap();
+            assert_eq!(
+                captured
+                    .lock()
+                    .unwrap()
+                    .iter()
+                    .filter(|event| {
+                        event.uuid() == child_turn_uuid
+                            && event.scope_category() == Some(ScopeCategory::End)
+                    })
+                    .count(),
+                1
             );
         } else if reason == "gateway_shutdown" {
             manager.close_all(reason).await.unwrap();
@@ -11512,6 +11757,7 @@ async fn codex_retained_delegation_closes_on_timeout_and_shutdown() {
             assert!(sessions.get("cleanup-root").unwrap().task_scope.is_none());
         }
         assert!(!manager.has_open_sessions().await);
+        deregister_subscriber(reason).unwrap();
     }
 }
 
