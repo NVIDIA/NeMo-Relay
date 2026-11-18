@@ -460,19 +460,19 @@ fn push_llm_response_attributes(attributes: &mut Vec<KeyValue>, event: &Event) {
     if let Some(messages) = output_messages_json(response) {
         attributes.push(KeyValue::new(semconv::GEN_AI_OUTPUT_MESSAGES, messages));
     }
+    // Anthropic reports uncached, cache-read, and cache-creation input
+    // tokens separately. Other providers such as OpenAI include cache
+    // reads in their prompt count, so only combine known Anthropic usage.
+    if let Some(input_tokens) = gen_ai_input_tokens(event, response) {
+        attributes.push(KeyValue::new(
+            semconv::GEN_AI_USAGE_INPUT_TOKENS,
+            input_tokens,
+        ));
+    }
+    if let Some(value) = gen_ai_output_tokens(event, response) {
+        attributes.push(KeyValue::new(semconv::GEN_AI_USAGE_OUTPUT_TOKENS, value));
+    }
     if let Some(usage) = response.usage.as_ref() {
-        // Anthropic reports uncached, cache-read, and cache-creation input
-        // tokens separately. Other providers such as OpenAI include cache
-        // reads in their prompt count, so only combine known Anthropic usage.
-        if let Some(input_tokens) = gen_ai_input_tokens(event, response) {
-            attributes.push(KeyValue::new(
-                semconv::GEN_AI_USAGE_INPUT_TOKENS,
-                input_tokens,
-            ));
-        }
-        if let Some(value) = usage.completion_tokens.and_then(to_i64) {
-            attributes.push(KeyValue::new(semconv::GEN_AI_USAGE_OUTPUT_TOKENS, value));
-        }
         if let Some(value) = usage.cache_read_tokens.and_then(to_i64) {
             attributes.push(KeyValue::new(
                 semconv::GEN_AI_USAGE_CACHE_READ_INPUT_TOKENS,
@@ -553,22 +553,47 @@ fn openai_chat_output_type(modalities: Option<&[String]>) -> Option<String> {
     }
 }
 
+fn canonical_reasoning_output_tokens(event: &Event) -> Option<i64> {
+    scalar_i64(event, &[semconv::GEN_AI_USAGE_REASONING_OUTPUT_TOKENS]).filter(|value| *value >= 0)
+}
+
 fn reasoning_output_tokens(event: &Event, response: &AnnotatedLlmResponse) -> Option<i64> {
-    scalar_i64(event, &[semconv::GEN_AI_USAGE_REASONING_OUTPUT_TOKENS])
-        .filter(|value| *value >= 0)
-        .or_else(|| match response.api_specific.as_ref() {
-            Some(ApiSpecificResponse::OpenAIResponses {
-                output_tokens_details: Some(details),
-                ..
-            }) => details
-                .get("reasoning_tokens")
-                .and_then(Json::as_u64)
-                .and_then(to_i64),
-            Some(ApiSpecificResponse::GeminiGenerateContent {
-                thoughts_tokens, ..
-            }) => thoughts_tokens.and_then(to_i64),
-            _ => None,
-        })
+    canonical_reasoning_output_tokens(event).or_else(|| match response.api_specific.as_ref() {
+        Some(ApiSpecificResponse::OpenAIResponses {
+            output_tokens_details: Some(details),
+            ..
+        }) => details
+            .get("reasoning_tokens")
+            .and_then(Json::as_u64)
+            .and_then(to_i64),
+        Some(ApiSpecificResponse::GeminiGenerateContent {
+            thoughts_tokens, ..
+        }) => thoughts_tokens.and_then(to_i64),
+        _ => None,
+    })
+}
+
+// Gemini reports thinking tokens outside candidatesTokenCount, while GenAI
+// output tokens include reasoning. Other providers' completion counts already
+// include reasoning, so only Gemini adds the reported reasoning count.
+fn gen_ai_output_tokens(event: &Event, response: &AnnotatedLlmResponse) -> Option<i64> {
+    let completion_tokens = response
+        .usage
+        .as_ref()
+        .and_then(|usage| usage.completion_tokens);
+    let thoughts_tokens = match response.api_specific.as_ref() {
+        Some(ApiSpecificResponse::GeminiGenerateContent {
+            thoughts_tokens, ..
+        }) => canonical_reasoning_output_tokens(event)
+            .and_then(|value| u64::try_from(value).ok())
+            .or(*thoughts_tokens),
+        _ => None,
+    };
+    match (completion_tokens, thoughts_tokens) {
+        (Some(completion), Some(thoughts)) => completion.checked_add(thoughts),
+        (completion, thoughts) => completion.or(thoughts),
+    }
+    .and_then(to_i64)
 }
 
 fn gen_ai_input_tokens(event: &Event, response: &AnnotatedLlmResponse) -> Option<i64> {

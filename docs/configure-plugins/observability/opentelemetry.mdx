@@ -1266,7 +1266,7 @@ metadata promotion cannot be used to add an unsupported GenAI attribute.
 | `gen_ai.usage.image.input_tokens` | Not supported | Image input-token count. Relay's normalized usage contract has no image modality breakdown. |
 | `gen_ai.usage.image.output_tokens` | Not supported | Image output-token count. Relay's normalized usage contract has no image modality breakdown. |
 | `gen_ai.usage.input_tokens` | Supported | Total GenAI input-token count. Relay uses normalized usage and includes separately reported provider cache reads and writes when required to form the total. |
-| `gen_ai.usage.output_tokens` | Supported | Total GenAI output-token count. Relay projects normalized completion usage. |
+| `gen_ai.usage.output_tokens` | Supported | Total GenAI output-token count. Relay projects normalized completion usage and, for Gemini, adds separately reported thought tokens. |
 | `gen_ai.usage.reasoning.output_tokens` | Supported | Output tokens used for reasoning or extended thinking. Relay uses exact canonical metadata, OpenAI Responses reasoning details, or Gemini thought-token usage. |
 | `gen_ai.usage.text.cache_read.input_tokens` | Not supported | Text input tokens served from a provider cache. Relay's normalized usage contract has no text and cache modality breakdown. |
 | `gen_ai.usage.text.input_tokens` | Not supported | Text input-token count. Relay's normalized usage contract has no text modality breakdown. |
