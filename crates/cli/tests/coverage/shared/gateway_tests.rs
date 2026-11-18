@@ -2769,6 +2769,23 @@ fn response_headers_preserve_duplicates() {
     assert_eq!(copied.get_all("set-cookie").iter().count(), 2);
 }
 
+#[test]
+fn failed_provider_streams_keep_their_source_and_fall_back_to_bad_gateway() {
+    let failures = CapturedUpstreamFailures::default();
+    let error = failures.capture_with_source(
+        CapturedUpstreamFailure::StreamFailed,
+        FlowError::Internal("error decoding response body".into()),
+    );
+    assert!(error.to_string().contains("error decoding response body"));
+    let failure = failures.take(&error).expect("captured stream failure");
+    assert!(matches!(failure, CapturedUpstreamFailure::StreamFailed));
+    // Only the first-event path can keep the provider's 200; anywhere else it is a 502.
+    let response = selected_upstream_failure(failure)
+        .unwrap_err()
+        .into_response();
+    assert_eq!(response.status(), StatusCode::BAD_GATEWAY);
+}
+
 /// Worker error context must preserve the captured response and single-use retrieval.
 #[tokio::test]
 async fn captured_upstream_failures_survive_worker_error_wrapping() {

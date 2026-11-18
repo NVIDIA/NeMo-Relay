@@ -14,7 +14,9 @@ use napi::bindgen_prelude::{
     within_runtime_if_available,
 };
 use napi::threadsafe_function::{ThreadsafeCallContext, ThreadsafeFunctionCallMode};
-use serde_json::Value as Json;
+use serde_json::Value;
+
+use crate::json::Json;
 
 use nemo_relay_runtime::api::runtime::subscriber_dispatcher::{
     PublicationBuffer, with_nested_publication_buffer, with_task_nested_publication_buffer,
@@ -67,9 +69,9 @@ pub(crate) fn publication_callback_context_id() -> Option<String> {
         .unwrap_or(None)
 }
 
-pub(crate) type JsonNextFn = Arc<dyn Fn(Json) -> BoxFuture<FlowResult<Json>> + Send + Sync>;
+pub(crate) type JsonNextFn = Arc<dyn Fn(Value) -> BoxFuture<FlowResult<Value>> + Send + Sync>;
 pub(crate) type JsonStreamNextFn =
-    Arc<dyn Fn(Json) -> BoxFuture<FlowResult<LlmJsonStream>> + Send + Sync>;
+    Arc<dyn Fn(Value) -> BoxFuture<FlowResult<LlmJsonStream>> + Send + Sync>;
 
 #[derive(Clone)]
 enum NextFn {
@@ -84,7 +86,7 @@ struct NextState {
 }
 
 enum PrimaryArg {
-    Json(Json),
+    Json(Value),
     Build(JsBuilder),
 }
 
@@ -96,7 +98,7 @@ pub(crate) struct Invocation {
 }
 
 impl Invocation {
-    pub(crate) fn single(arg: Json) -> Self {
+    pub(crate) fn single(arg: Value) -> Self {
         Self {
             arg0: PrimaryArg::Json(arg),
             spread: false,
@@ -104,9 +106,9 @@ impl Invocation {
         }
     }
 
-    pub(crate) fn spread(args: Vec<Json>) -> Self {
+    pub(crate) fn spread(args: Vec<Value>) -> Self {
         Self {
-            arg0: PrimaryArg::Json(Json::Array(args)),
+            arg0: PrimaryArg::Json(Value::Array(args)),
             spread: true,
             publication: false,
         }
@@ -172,12 +174,12 @@ type PromiseArgs = FnArgs<(
 type PromiseTsfn = HandledTsfn<PromiseCall, PromiseArgs>;
 
 struct JsonCompletion {
-    sender: tokio::sync::oneshot::Sender<FlowResult<Json>>,
+    sender: tokio::sync::oneshot::Sender<FlowResult<Value>>,
     finished: Arc<AtomicBool>,
 }
 
 impl JsonCompletion {
-    fn settle(self, result: FlowResult<Json>) {
+    fn settle(self, result: FlowResult<Value>) {
         self.finished.store(true, Ordering::Release);
         let _ = self.sender.send(result);
     }
@@ -185,7 +187,7 @@ impl JsonCompletion {
 
 struct StreamCompletion {
     ready: Mutex<Option<tokio::sync::oneshot::Sender<FlowResult<()>>>>,
-    chunks: Mutex<Option<tokio::sync::mpsc::Sender<FlowResult<Json>>>>,
+    chunks: Mutex<Option<tokio::sync::mpsc::Sender<FlowResult<Value>>>>,
     terminal_error: Mutex<Option<FlowError>>,
     closed: tokio::sync::watch::Sender<Option<FlowResult<()>>>,
     finished: Arc<AtomicBool>,
@@ -255,7 +257,7 @@ impl CallRegistry {
         }
     }
 
-    fn resolve(&self, call_id: u64, value: impl FnOnce() -> FlowResult<Json>) {
+    fn resolve(&self, call_id: u64, value: impl FnOnce() -> FlowResult<Value>) {
         let json = lock(&self.json).remove(&call_id);
         if let Some(completion) = json {
             completion.settle(value());
@@ -377,14 +379,14 @@ impl StreamCancellation {
 }
 
 struct JsCallbackStream {
-    receiver: tokio_stream::wrappers::ReceiverStream<FlowResult<Json>>,
+    receiver: tokio_stream::wrappers::ReceiverStream<FlowResult<Value>>,
     completion: Arc<StreamCompletion>,
     closed: tokio::sync::watch::Receiver<Option<FlowResult<()>>>,
     cancellation: CallCancellation,
 }
 
 impl Stream for JsCallbackStream {
-    type Item = FlowResult<Json>;
+    type Item = FlowResult<Value>;
 
     fn poll_next(mut self: Pin<&mut Self>, cx: &mut Context<'_>) -> Poll<Option<Self::Item>> {
         match Pin::new(&mut self.receiver).poll_next(cx) {
@@ -448,7 +450,7 @@ fn call_settlers(env: &Env, calls: &Arc<CallRegistry>) -> napi::Result<Settlers>
     let resolve_calls = Arc::clone(calls);
     let resolve = closure_function(env, "__nemo_relay_resolve", move |ctx| {
         resolve_calls.resolve(call_id_argument(&ctx)?, || {
-            ctx.get::<Json>(1).map_err(|error| {
+            ctx.get::<Json>(1).map(Value::from).map_err(|error| {
                 FlowError::Internal(format!(
                     "JavaScript callback result could not be converted to JSON: {error}"
                 ))
@@ -477,7 +479,7 @@ fn call_settlers(env: &Env, calls: &Arc<CallRegistry>) -> napi::Result<Settlers>
     let push_calls = Arc::clone(calls);
     let stream_push = closure_function(env, "__nemo_relay_stream_push", move |ctx| {
         let call_id = call_id_argument(&ctx)?;
-        let chunk = ctx.get::<Json>(1).map_err(|error| {
+        let chunk = ctx.get::<Json>(1).map(Value::from).map_err(|error| {
             Error::invalid_argument(format!("stream chunk is not JSON-compatible: {error}"))
         })?;
         push_stream_chunk(ctx.env, &push_calls, call_id, chunk)
@@ -497,7 +499,7 @@ fn call_settlers(env: &Env, calls: &Arc<CallRegistry>) -> napi::Result<Settlers>
     })
 }
 
-fn push_stream_chunk(env: &Env, calls: &CallRegistry, call_id: u64, chunk: Json) -> Result<JsArg> {
+fn push_stream_chunk(env: &Env, calls: &CallRegistry, call_id: u64, chunk: Value) -> Result<JsArg> {
     let Some(stream) = calls.stream(call_id) else {
         return Ok(js_value(env, ())?);
     };
@@ -526,7 +528,7 @@ fn continue_call(ctx: FunctionCallContext) -> Result<JsArg> {
     // SAFETY: the argument belongs to this call, and the external was created by
     // `build_invoke_args` in this environment.
     let state = unsafe { External::<NextState>::from_napi_ref(ctx.env.raw(), state.raw()) }?;
-    let arg = ctx.get::<Json>(1)?;
+    let arg = ctx.get::<Json>(1)?.0;
     let scope = callback_factory::callback_scope_from(ctx.env, ctx.get::<Unknown>(2)?)?;
     let continuation = match &scope {
         Some(scope) => state
@@ -539,7 +541,7 @@ fn continue_call(ctx: FunctionCallContext) -> Result<JsArg> {
         context_id: state.publication_context_id.clone(),
         publication_buffer: None,
     };
-    let promise: PromiseRaw<'_, Json> = match &state.next {
+    let promise: PromiseRaw<'_, Value> = match &state.next {
         NextFn::Json(next) => {
             let next = next.clone();
             spawn_promise(
@@ -679,7 +681,7 @@ impl PromiseAwareFn {
         })
     }
 
-    pub(crate) async fn call(&self, invocation: Invocation) -> FlowResult<Json> {
+    pub(crate) async fn call(&self, invocation: Invocation) -> FlowResult<Value> {
         self.call_inner(invocation, None).await
     }
 
@@ -687,7 +689,7 @@ impl PromiseAwareFn {
         &self,
         invocation: Invocation,
         next: JsonNextFn,
-    ) -> FlowResult<Json> {
+    ) -> FlowResult<Value> {
         self.call_inner(invocation, Some(NextFn::Json(next))).await
     }
 
@@ -793,7 +795,7 @@ impl PromiseAwareFn {
         }))
     }
 
-    async fn call_inner(&self, invocation: Invocation, next: Option<NextFn>) -> FlowResult<Json> {
+    async fn call_inner(&self, invocation: Invocation, next: Option<NextFn>) -> FlowResult<Value> {
         let (sender, receiver) = tokio::sync::oneshot::channel();
         let finished = Arc::new(AtomicBool::new(false));
         let (call_id, tsfn) = self.queue(
