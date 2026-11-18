@@ -1397,13 +1397,24 @@ fn stage_worker(
         Ok(client) => client,
         Err(error) => return control_error(StatusCode::BAD_REQUEST, error),
     };
+    let hook_client = match state
+        .worker_clients
+        .hook_client(tls_root_certificate.as_deref())
+    {
+        Ok(client) => client,
+        Err(error) => return control_error(StatusCode::BAD_REQUEST, error),
+    };
     let target = match WorkerTarget::with_shared_client(
         worker_id.clone(),
         endpoint,
         data_secret.clone(),
         worker_client,
     ) {
-        Ok(target) => Arc::new(target.with_websocket_client(websocket_client)),
+        Ok(target) => Arc::new(
+            target
+                .with_hook_client(hook_client)
+                .with_websocket_client(websocket_client),
+        ),
         Err(error) => return control_error(StatusCode::BAD_REQUEST, error),
     };
     let diagnostic_grant = diagnostic_collection::grant(
@@ -1768,10 +1779,13 @@ async fn probe_worker(target: &Arc<WorkerTarget>) -> Result<(), CliError> {
     let request = Request::get(uri)
         .header(WORKER_TOKEN_HEADER, target.session_token())
         .body(box_body(http_body_util::Empty::<Bytes>::new()))?;
-    let response = tokio::time::timeout(Duration::from_secs(2), target.client().request(request))
-        .await
-        .map_err(|_| CliError::Launch("worker readiness probe timed out".into()))?
-        .map_err(|error| CliError::Launch(format!("worker readiness probe failed: {error}")))?;
+    let response = tokio::time::timeout(
+        Duration::from_secs(2),
+        target.hook_client().request(request),
+    )
+    .await
+    .map_err(|_| CliError::Launch("worker readiness probe timed out".into()))?
+    .map_err(|error| CliError::Launch(format!("worker readiness probe failed: {error}")))?;
     if response.status() != StatusCode::NO_CONTENT {
         return Err(CliError::Launch(format!(
             "worker readiness probe returned HTTP {}",
@@ -1903,11 +1917,11 @@ async fn public_proxy_inner(
             }
             forward_to_provider(&state, request, provider, access).await
         }
-        (ResolvedTarget::Worker(worker), _) => {
+        (ResolvedTarget::Worker(worker), route) => {
             if !worker.target().control_available() {
                 return unavailable_response();
             }
-            forward_to_worker(Arc::clone(&state), request, worker).await
+            forward_to_worker(Arc::clone(&state), request, worker, route).await
         }
     };
     if matches!(route, PublicRoute::Provider(_)) {
@@ -2157,6 +2171,7 @@ async fn forward_to_worker(
     state: Arc<DaemonState>,
     request: Request<Body>,
     worker: WorkerRequest,
+    route: PublicRoute,
 ) -> Response<Body> {
     let fingerprint = worker.fingerprint();
     let worker_id = worker.target().shared_worker_id();
@@ -2186,7 +2201,11 @@ async fn forward_to_worker(
         )
         .await;
     }
-    let client = worker.target().client().clone();
+    let client = match route {
+        PublicRoute::Hook(_) => worker.target().hook_client(),
+        PublicRoute::Provider(_) => worker.target().client(),
+    }
+    .clone();
     let authentication = worker.target().authentication();
     let mut outcome = forward_prepared(
         &client,

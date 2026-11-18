@@ -118,6 +118,11 @@ async fn concurrent_matching_tls_lookups_share_one_pool() {
 
 #[tokio::test]
 async fn daemon_pinned_client_completes_a_real_tls_worker_round_trip() {
+    pinned_worker_round_trip(false).await;
+    pinned_worker_round_trip(true).await;
+}
+
+async fn pinned_worker_round_trip(hook: bool) {
     let identity = WorkerTlsIdentity::generate("127.0.0.1").expect("generate worker identity");
     let listener = TcpListener::bind("127.0.0.1:0")
         .await
@@ -141,9 +146,12 @@ async fn daemon_pinned_client_completes_a_real_tls_worker_round_trip() {
     });
 
     let pool = WorkerClientPool::with_tls_capacity(2).expect("worker client pool");
-    let client = pool
-        .client(Some(identity.root_certificate()))
-        .expect("pinned client");
+    let client = if hook {
+        pool.hook_client(Some(identity.root_certificate()))
+    } else {
+        pool.client(Some(identity.root_certificate()))
+    }
+    .expect("pinned client");
     let request = Request::get(format!("https://127.0.0.1:{}/probe", address.port()))
         .body(box_body(Empty::<Bytes>::new()))
         .expect("request");
@@ -169,6 +177,11 @@ async fn daemon_pinned_client_completes_a_real_tls_worker_round_trip() {
 
 #[tokio::test]
 async fn tls_pool_never_reuses_trust_across_different_roots() {
+    reject_unrelated_worker_root(false).await;
+    reject_unrelated_worker_root(true).await;
+}
+
+async fn reject_unrelated_worker_root(hook: bool) {
     let serving_identity =
         WorkerTlsIdentity::generate("127.0.0.1").expect("serving worker identity");
     let unrelated_identity =
@@ -185,9 +198,12 @@ async fn tls_pool_never_reuses_trust_across_different_roots() {
     });
 
     let pool = WorkerClientPool::with_tls_capacity(2).expect("worker client pool");
-    let unrelated_client = pool
-        .client(Some(unrelated_identity.root_certificate()))
-        .expect("unrelated pinned client");
+    let unrelated_client = if hook {
+        pool.hook_client(Some(unrelated_identity.root_certificate()))
+    } else {
+        pool.client(Some(unrelated_identity.root_certificate()))
+    }
+    .expect("unrelated pinned client");
     let request = Request::get(format!("https://127.0.0.1:{}/probe", address.port()))
         .body(box_body(Empty::<Bytes>::new()))
         .expect("request");
@@ -195,4 +211,27 @@ async fn tls_pool_never_reuses_trust_across_different_roots() {
 
     server.abort();
     let _ = server.await;
+}
+
+#[test]
+fn hook_pools_are_reused_isolated_and_evicted_with_their_tls_root() {
+    let pool = WorkerClientPool::with_tls_capacity(1).unwrap();
+    let identity = WorkerTlsIdentity::generate("127.0.0.1").unwrap();
+    for root in [None, Some(identity.root_certificate())] {
+        let model = pool.client(root).unwrap();
+        let hook = pool.hook_client(root).unwrap();
+        assert!(!Arc::ptr_eq(&model, &hook));
+        assert!(Arc::ptr_eq(&model, &pool.client(root).unwrap()));
+        assert!(Arc::ptr_eq(&hook, &pool.hook_client(root).unwrap()));
+    }
+    let hook = pool.hook_client(Some(identity.root_certificate())).unwrap();
+    let other = WorkerTlsIdentity::generate("127.0.0.1").unwrap();
+    let other_hook = pool.hook_client(Some(other.root_certificate())).unwrap();
+    assert!(!Arc::ptr_eq(&hook, &other_hook));
+    assert_eq!(super::lock(&pool.tls).entries.len(), 1);
+    assert!(!Arc::ptr_eq(
+        &hook,
+        &pool.hook_client(Some(identity.root_certificate())).unwrap()
+    ));
+    assert!(pool.hook_client(Some("not_base64!")).is_err());
 }
