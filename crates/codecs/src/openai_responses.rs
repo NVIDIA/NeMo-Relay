@@ -1618,7 +1618,12 @@ impl Default for OpenAIResponsesStreamingCodec {
 }
 
 impl nemo_relay_types::codec::streaming::StreamingCodec for OpenAIResponsesStreamingCodec {
-    /// Reports an error at EOF if this codec's collector did not receive a final response.
+    /// Reports an error at EOF unless a final response event was seen.
+    ///
+    /// The check passes when this stream forwarded a final response event or when this codec's
+    /// collector recorded one. Middleware between this stream and the collector can drain the
+    /// source first, so a clean EOF does not mean the collector has finished: the finalizer
+    /// reflects only the events that reached the collector.
     fn validate_stream(&self, stream: LlmJsonStream) -> LlmJsonStream {
         LlmJsonStream::from_closeable(ResponsesCompletionStream {
             inner: stream,
@@ -1669,6 +1674,10 @@ impl nemo_relay_types::codec::streaming::StreamingCodec for OpenAIResponsesStrea
 /// the shared state only when the runtime wrapper receives them, and middleware between this
 /// stream and that wrapper can poll the source to its end first. The end-of-stream check
 /// therefore accepts either signal instead of depending on consumer ordering.
+///
+/// The forwarded signal describes the source as this codec emits it, which is what the provider
+/// delivered. Middleware that later drops the final event does not turn the stream into an
+/// incomplete one here; the finalized response then lacks that event's snapshot.
 struct ResponsesCompletionStream {
     inner: LlmJsonStream,
     state: std::sync::Arc<std::sync::Mutex<OpenAIResponsesStreamingState>>,

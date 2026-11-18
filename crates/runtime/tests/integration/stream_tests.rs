@@ -25,7 +25,8 @@ use nemo_relay_runtime::api::llm::{
 };
 use nemo_relay_runtime::api::optimization::LlmOptimizationRecorder;
 use nemo_relay_runtime::api::registry::{
-    deregister_llm_sanitize_response_guardrail, register_llm_sanitize_response_guardrail,
+    deregister_llm_sanitize_response_guardrail, deregister_llm_stream_execution_intercept,
+    register_llm_sanitize_response_guardrail, register_llm_stream_execution_intercept,
 };
 use nemo_relay_runtime::api::runtime::global_context;
 use nemo_relay_runtime::api::runtime::subscriber_dispatcher::flush_subscribers_with_started_signal;
@@ -1129,6 +1130,115 @@ async fn responses_sessions_keep_usage_and_flag_eof_without_terminal_events() {
         }
     }
     deregister_subscriber("responses_session_completion").unwrap();
+}
+
+/// A stream execution intercept can drain the validated source to EOF before the collector sees
+/// any event. A forwarded terminal event must still end the call as OK with its snapshot, and a
+/// source without one must still end as ERROR.
+#[tokio::test]
+async fn responses_validation_survives_intercepts_that_drain_before_replaying() {
+    let _lock = TEST_MUTEX.lock().unwrap();
+    reset_global();
+    let events = Arc::new(Mutex::new(Vec::<Event>::new()));
+    let captured = events.clone();
+    register_subscriber(
+        "responses_draining_intercept",
+        Arc::new(move |event| captured.lock().unwrap().push(event.clone())),
+    )
+    .unwrap();
+    register_llm_stream_execution_intercept(
+        "drain-then-replay",
+        1,
+        Arc::new(|_name, request, _context, next| {
+            Box::pin(async move {
+                let mut source = next(request).await?;
+                let mut drained = Vec::new();
+                while let Some(item) = source.next().await {
+                    drained.push(item);
+                }
+                Ok(LlmJsonStream::new(tokio_stream::iter(drained)))
+            })
+        }),
+    )
+    .unwrap();
+
+    let created = json!({
+        "type": "response.created",
+        "response": {"id": "resp_drained", "model": "gpt-test", "status": "in_progress"}
+    });
+    let completed = json!({
+        "type": "response.completed",
+        "response": {
+            "id": "resp_drained",
+            "model": "gpt-test",
+            "status": "completed",
+            "output": [{"type": "message", "content": [{"type": "output_text", "text": "done"}]}],
+            "usage": {"input_tokens": 10, "output_tokens": 2, "total_tokens": 12}
+        }
+    });
+    for (chunks, complete) in [
+        (vec![created.clone(), completed.clone()], true),
+        (vec![created.clone()], false),
+    ] {
+        let codec = Arc::new(OpenAIResponsesStreamingCodec::new());
+        let source = Arc::new(Mutex::new(Some(chunks.clone())));
+        let validating_codec = Arc::clone(&codec);
+        let mut stream =
+            llm_stream_call_execute(
+                LlmStreamCallExecuteParams::builder()
+                    .name("openai.responses")
+                    .request(LlmRequest {
+                        headers: Default::default(),
+                        content: json!({"input": "drain"}),
+                    })
+                    .func(Arc::new(move |_| {
+                        let chunks = source.lock().unwrap().take().unwrap();
+                        let codec = Arc::clone(&validating_codec);
+                        Box::pin(async move {
+                            Ok(codec
+                                .validate_stream(make_stream(chunks.into_iter().map(Ok).collect())))
+                        })
+                    }))
+                    .collector(codec.collector())
+                    .borrowed_collector_opt(codec.borrowed_collector())
+                    .finalizer(codec.finalizer())
+                    .attributes(LlmAttributes::STREAMING)
+                    .build(),
+            )
+            .await
+            .unwrap();
+        for expected in &chunks {
+            assert_eq!(&stream.next().await.unwrap().unwrap(), expected);
+        }
+        if !complete {
+            assert!(stream.next().await.unwrap().is_err());
+        }
+        assert!(stream.next().await.is_none());
+        drop(stream);
+
+        let captured = captured_snapshot(&events);
+        let ends: Vec<_> = captured.iter().filter(|event| is_llm_end(event)).collect();
+        assert_eq!(ends.len(), 1, "exactly one END event per call");
+        let metadata = ends[0].metadata().unwrap();
+        let output = ends[0].output().unwrap();
+        if complete {
+            assert_eq!(metadata["otel.status_code"], "OK");
+            assert!(metadata.get("otel.status_description").is_none());
+            assert_eq!(output, &completed["response"]);
+        } else {
+            assert_eq!(metadata["otel.status_code"], "ERROR");
+            assert_eq!(
+                metadata["otel.status_description"],
+                FlowError::Internal("stream ended before its final response event".into())
+                    .to_string()
+            );
+            assert_eq!(output["status"], "in_progress");
+        }
+        events.lock().unwrap().clear();
+    }
+
+    assert!(deregister_llm_stream_execution_intercept("drain-then-replay").unwrap());
+    deregister_subscriber("responses_draining_intercept").unwrap();
 }
 
 /// A custom collector sets its own completion rules even for response-prefixed chunks.
