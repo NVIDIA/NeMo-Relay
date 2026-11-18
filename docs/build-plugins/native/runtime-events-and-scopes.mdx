@@ -201,6 +201,34 @@ let cost = runtime
     .and_then(|estimate| estimate.total);
 ```
 
+## Time Python Stream Consumers
+
+A stream intercept sees when the provider produces each chunk. It does not see
+when the caller reads it. For Python callers, Relay can record both times so a
+recorder can tell a slow consumer from a slow provider.
+
+Timing is off by default. Hold the guard from
+`PluginRuntime::enable_stream_consumer_timing` while a recorder is active.
+Inside an LLM stream execution intercept, call
+`capture_stream_consumer_clock`. It returns `None` when the caller has no clock,
+such as a Rust or Node.js caller or timing that is off.
+
+```rust
+let _timing = runtime.enable_stream_consumer_timing()?;
+// ... later, inside the stream execution intercept:
+if let Some(clock) = runtime.capture_stream_consumer_clock()? {
+    let prefetched = clock.was_prefetched(0)?;
+    let report = clock.finished().await?;
+    println!("{prefetched} {} {}", report.delivered.len(), report.complete);
+}
+```
+
+`was_prefetched(index)` reports whether a chunk was ready before the caller
+asked for it. `finished()` waits until the caller reaches the end or stops
+reading. Its report lists when the caller received each chunk, when it stopped,
+and whether it read the whole stream. Report times are converted to the
+plugin's `Instant` clock, so they are accurate to about a microsecond.
+
 ## Control Global Runtime Registrations
 
 The checked runtime provides activation-owned registration discovery and conditional

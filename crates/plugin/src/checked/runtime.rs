@@ -516,3 +516,110 @@ impl<F: Fn(&BTreeSet<RuntimeRegistrationKind>, &str) -> Option<String> + Send + 
 #[cfg(test)]
 #[path = "../../tests/unit/checked_runtime.rs"]
 mod tests;
+
+impl PluginRuntime {
+    /// Enable caller-poll timing for Python streams while the guard is alive.
+    ///
+    /// Relay records when a Python caller requests and receives each streamed
+    /// chunk only while at least one recorder holds this guard.
+    pub fn enable_stream_consumer_timing(&self) -> Result<StreamConsumerTimingGuard> {
+        self.call::<Json>("stream_consumer_clock.enable", Json::Null)?;
+        Ok(StreamConsumerTimingGuard {
+            runtime: self.clone(),
+        })
+    }
+
+    /// Capture the caller-poll clock of the stream call that is running now.
+    ///
+    /// Call this from an LLM stream execution intercept. Returns `None` when
+    /// the caller has no clock, such as a non-Python caller or timing that is
+    /// not enabled.
+    pub fn capture_stream_consumer_clock(&self) -> Result<Option<StreamConsumerClock>> {
+        let handle: Option<u64> = self.call("stream_consumer_clock.capture", Json::Null)?;
+        Ok(handle.map(|handle| StreamConsumerClock {
+            runtime: self.clone(),
+            handle,
+        }))
+    }
+}
+
+/// Keeps caller-poll timing enabled; dropping it disables timing again.
+pub struct StreamConsumerTimingGuard {
+    runtime: PluginRuntime,
+}
+
+impl Drop for StreamConsumerTimingGuard {
+    fn drop(&mut self) {
+        let _ = self
+            .runtime
+            .call::<Json>("stream_consumer_clock.disable", Json::Null);
+    }
+}
+
+/// Caller-side timing for one captured stream.
+pub struct StreamConsumerClock {
+    runtime: PluginRuntime,
+    handle: u64,
+}
+
+/// When the caller received each chunk and when it stopped reading.
+#[derive(Debug, Clone)]
+pub struct StreamConsumerReport {
+    /// Times the caller received each chunk, in order.
+    pub delivered: Vec<std::time::Instant>,
+    /// Time the caller reached the end of the stream or stopped reading.
+    pub ended: std::time::Instant,
+    /// True only when the caller read the final item of the stream.
+    pub complete: bool,
+}
+
+#[derive(serde::Deserialize)]
+struct StreamConsumerReceipt {
+    delivered_us_ago: Vec<u64>,
+    ended_us_ago: u64,
+    complete: bool,
+}
+
+impl StreamConsumerClock {
+    /// Whether chunk `index` became available before the caller asked for it.
+    pub fn was_prefetched(&self, index: usize) -> Result<bool> {
+        self.runtime.call(
+            "stream_consumer_clock.prefetched",
+            json!({"handle": self.handle, "index": index}),
+        )
+    }
+
+    /// Wait until the caller finishes reading, then report its timing.
+    ///
+    /// The clock stays usable afterward; dropping it releases the handle.
+    pub async fn finished(&self) -> Result<StreamConsumerReport> {
+        let value = self
+            .runtime
+            .raw
+            .call(
+                "stream_consumer_clock.finished".into(),
+                encode(json!({"handle": self.handle}))?,
+            )
+            .await;
+        let receipt: StreamConsumerReceipt = decode(local(value)?)?;
+        let now = std::time::Instant::now();
+        let at = |us_ago: u64| {
+            now.checked_sub(std::time::Duration::from_micros(us_ago))
+                .unwrap_or(now)
+        };
+        Ok(StreamConsumerReport {
+            delivered: receipt.delivered_us_ago.into_iter().map(at).collect(),
+            ended: at(receipt.ended_us_ago),
+            complete: receipt.complete,
+        })
+    }
+}
+
+impl Drop for StreamConsumerClock {
+    fn drop(&mut self) {
+        let _ = self.runtime.call::<Json>(
+            "stream_consumer_clock.release",
+            json!({"handle": self.handle}),
+        );
+    }
+}

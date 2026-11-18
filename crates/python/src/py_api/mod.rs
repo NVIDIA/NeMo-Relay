@@ -1547,9 +1547,14 @@ fn llm_stream_call_execute<'py>(
                         // Keep the large core future out of the bridge future constructed
                         // on Python's thread (musl thread stacks can be only 128 KiB).
                         // Construct and box it here when Tokio polls the bridge instead.
-                        let rust_stream = Box::pin(core_llm_api::llm_stream_call_execute(params))
-                            .await
-                            .map_err(flow_error_to_py_err)?;
+                        // Caller-poll timing exists only while a stream recorder is active.
+                        let consumer_clock = nemo_relay_runtime::api::runtime::stream_consumer_clock::StreamConsumerClock::if_enabled();
+                        let rust_stream = nemo_relay_runtime::api::runtime::stream_consumer_clock::with_stream_consumer_clock(
+                            consumer_clock.clone(),
+                            Box::pin(core_llm_api::llm_stream_call_execute(params)),
+                        )
+                        .await
+                        .map_err(flow_error_to_py_err)?;
 
                         // Spawn a tokio task that drains the Rust stream into an mpsc channel
                         let (tx, rx) =
@@ -1570,6 +1575,7 @@ fn llm_stream_call_execute<'py>(
                             cancel,
                             closed: closed_rx,
                             finalizer_error: Some(finalizer_error),
+                            consumer_clock,
                         })
                     }),
                 ),

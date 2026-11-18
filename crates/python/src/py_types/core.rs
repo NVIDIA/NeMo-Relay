@@ -160,6 +160,9 @@ pub struct PyLlmStream {
     pub cancel: tokio::sync::watch::Sender<bool>,
     pub closed: tokio::sync::watch::Receiver<Option<Result<(), String>>>,
     pub finalizer_error: Option<Arc<std::sync::Mutex<Option<FlowError>>>>,
+    /// Caller-poll timing for an active stream recorder, if any.
+    pub consumer_clock:
+        Option<nemo_relay_runtime::api::runtime::stream_consumer_clock::StreamConsumerClock>,
 }
 
 #[pymethods]
@@ -169,8 +172,12 @@ impl PyLlmStream {
     }
 
     pub(crate) fn __anext__<'py>(&self, py: Python<'py>) -> PyResult<Bound<'py, PyAny>> {
+        if let Some(clock) = &self.consumer_clock {
+            clock.requested();
+        }
         let receiver = Arc::clone(&self.receiver);
         let finalizer_error = self.finalizer_error.clone();
+        let consumer_clock = self.consumer_clock.clone();
 
         crate::py_async::future_into_py(py, async move {
             let mut guard = receiver.lock().await;
@@ -180,13 +187,28 @@ impl PyLlmStream {
                     if let Some(error) = finalizer_error
                         .and_then(|error| error.lock().expect("stream finalizer error").take())
                     {
+                        if let Some(clock) = consumer_clock {
+                            clock.finish(false);
+                        }
                         return Err(flow_error_to_py_err(error));
+                    }
+                    if let Some(clock) = consumer_clock {
+                        clock.finish(true);
                     }
                     Err(PyErr::new::<pyo3::exceptions::PyStopAsyncIteration, _>(
                         "stream exhausted",
                     ))
                 }
-                Some(Ok(value)) => Python::attach(|py| json_to_py(py, &value)),
+                Some(Ok(value)) => {
+                    let result = Python::attach(|py| json_to_py(py, &value));
+                    // A chunk counts as delivered only after it reaches Python.
+                    if result.is_ok()
+                        && let Some(clock) = consumer_clock
+                    {
+                        clock.delivered();
+                    }
+                    result
+                }
                 Some(Err(error)) => {
                     if let Some(finalizer_error) = finalizer_error {
                         finalizer_error
@@ -204,6 +226,9 @@ impl PyLlmStream {
     ///
     /// This operation is idempotent and raises when producer cleanup or finalization fails.
     fn aclose<'py>(&self, py: Python<'py>) -> PyResult<Bound<'py, PyAny>> {
+        if let Some(clock) = &self.consumer_clock {
+            clock.finish(false);
+        }
         let cancel = self.cancel.clone();
         let mut closed = self.closed.clone();
         let receiver = Arc::clone(&self.receiver);
@@ -243,6 +268,9 @@ impl PyLlmStream {
 
 impl Drop for PyLlmStream {
     fn drop(&mut self) {
+        if let Some(clock) = &self.consumer_clock {
+            clock.finish(false);
+        }
         self.cancel.send_replace(true);
     }
 }

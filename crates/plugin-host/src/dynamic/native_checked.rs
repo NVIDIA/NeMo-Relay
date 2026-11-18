@@ -102,6 +102,11 @@ struct RuntimeState {
     gates: HashMap<String, String>,
     scopes: Vec<OwnedScope>,
     callbacks: Vec<Weak<CallbackOwner>>,
+    /// Recorder registrations that keep caller-poll timing enabled.
+    clock_recorders: Vec<stream_consumer_clock::StreamConsumerClockRegistration>,
+    /// Captured stream consumer clocks by plugin-visible handle.
+    clocks: HashMap<u64, stream_consumer_clock::StreamConsumerClock>,
+    next_clock: u64,
 }
 // Registry snapshots retain a revocable host proxy for each foreign callback.
 struct CallbackOwner {
@@ -298,6 +303,11 @@ impl HostRuntime {
             .unwrap_or_else(|e| e.into_inner())
             .clear();
         self.close_scopes()?;
+        {
+            let mut state = self.state.lock().unwrap_or_else(|e| e.into_inner());
+            state.clock_recorders.clear();
+            state.clocks.clear();
+        }
         local(self.executor.shutdown().await)
             .map_err(|e| crate::PluginError::RegistrationFailed(e.to_string()))?;
         self.release_callbacks();
@@ -581,6 +591,53 @@ impl HostRuntime {
                 );
                 null()
             }
+            "stream_consumer_clock.enable" => {
+                // Python streams allocate caller-poll timing only while a recorder is active.
+                let mut state = self.state.lock().unwrap_or_else(|e| e.into_inner());
+                state
+                    .clock_recorders
+                    .push(stream_consumer_clock::StreamConsumerClockRegistration::default());
+                null()
+            }
+            "stream_consumer_clock.disable" => {
+                let mut state = self.state.lock().unwrap_or_else(|e| e.into_inner());
+                Ok(json!(state.clock_recorders.pop().is_some()))
+            }
+            "stream_consumer_clock.capture" => {
+                // Stream intercepts run in the caller's task, where the clock is task-local.
+                let Some(clock) = stream_consumer_clock::StreamConsumerClock::current() else {
+                    return null();
+                };
+                let mut state = self.state.lock().unwrap_or_else(|e| e.into_inner());
+                state.next_clock += 1;
+                let handle = state.next_clock;
+                state.clocks.insert(handle, clock);
+                Ok(json!(handle))
+            }
+            "stream_consumer_clock.prefetched" => {
+                let handle = args["handle"]
+                    .as_u64()
+                    .ok_or_else(|| err("missing handle"))?;
+                let index = args["index"]
+                    .as_u64()
+                    .and_then(|index| usize::try_from(index).ok())
+                    .ok_or_else(|| err("missing index"))?;
+                let state = self.state.lock().unwrap_or_else(|e| e.into_inner());
+                let clock = state
+                    .clocks
+                    .get(&handle)
+                    .ok_or_else(|| err("unknown stream consumer clock"))?;
+                Ok(json!(
+                    clock.was_prefetched(index, std::time::Instant::now())
+                ))
+            }
+            "stream_consumer_clock.release" => {
+                let handle = args["handle"]
+                    .as_u64()
+                    .ok_or_else(|| err("missing handle"))?;
+                let mut state = self.state.lock().unwrap_or_else(|e| e.into_inner());
+                Ok(json!(state.clocks.remove(&handle).is_some()))
+            }
             "pricing.estimate_cost_for_provider" => {
                 // Prices with the host's active catalog; a plugin's own pricing
                 // crate copy would hold an empty process-local resolver.
@@ -682,6 +739,56 @@ async fn drive_registration(
     registered
 }
 struct RuntimeProxy(Arc<HostRuntime>);
+impl RuntimeProxy {
+    /// Wait for the caller to finish a captured stream and report its timing.
+    ///
+    /// `Instant` values cannot cross the library boundary, so each timestamp
+    /// is reported as microseconds before the reply was built. The handle
+    /// stays valid until the plugin releases it.
+    fn stream_consumer_clock_finished(&self, args: abi::Json) -> FfiFuture<a::Result<abi::Json>> {
+        let owner = self.0.clone();
+        self.0.executor.execute_direct(async move {
+            let started = (|| -> Result<_> {
+                owner.ensure()?;
+                let args = from_abi(args).map_err(err)?;
+                let handle = args["handle"]
+                    .as_u64()
+                    .ok_or_else(|| err("missing handle"))?;
+                let clock = owner
+                    .state
+                    .lock()
+                    .unwrap_or_else(|e| e.into_inner())
+                    .clocks
+                    .get(&handle)
+                    .cloned()
+                    .ok_or_else(|| err("unknown stream consumer clock"))?;
+                let (sender, receiver) = tokio::sync::oneshot::channel();
+                clock.observe(move |report| {
+                    let _ = sender.send(report);
+                });
+                Ok(receiver)
+            })();
+            let receiver = match started {
+                Ok(started) => started,
+                Err(error) => return a::Result::Err(abi_error(error)),
+            };
+            let Ok(report) = receiver.await else {
+                return a::Result::Err(abi_error(err("stream consumer clock was dropped")));
+            };
+            let now = std::time::Instant::now();
+            let ago = |instant: std::time::Instant| {
+                u64::try_from(now.saturating_duration_since(instant).as_micros())
+                    .unwrap_or(u64::MAX)
+            };
+            let value = json!({
+                "delivered_us_ago": report.delivered.iter().copied().map(ago).collect::<Vec<_>>(),
+                "ended_us_ago": ago(report.ended),
+                "complete": report.complete,
+            });
+            boundary(Ok(into_abi(value)))
+        })
+    }
+}
 impl a::Runtime for RuntimeProxy {
     /// Admit a synchronous runtime operation and contain host-side panics at the ABI boundary.
     fn call_sync(&self, operation: String, args: abi::Json) -> a::Result<abi::Json> {
@@ -698,6 +805,9 @@ impl a::Runtime for RuntimeProxy {
         )
     }
     fn call(&self, operation: String, args: abi::Json) -> FfiFuture<a::Result<abi::Json>> {
+        if operation == "stream_consumer_clock.finished" {
+            return self.stream_consumer_clock_finished(args);
+        }
         let owner = self.0.clone();
         let binding = ScopeBinding::capture();
         self.0.executor.execute_direct(async move {
@@ -1794,6 +1904,9 @@ pub fn apply_registration(
                 let callback = callback.clone();
                 Box::pin(async move {
                     owner.ensure()?;
+                    // The stream opens on the caller's first read, which can run in
+                    // another task; carry the caller's clock into that opening.
+                    let consumer_clock = stream_consumer_clock::StreamConsumerClock::current();
                     let (invocation, life) = invocation(
                         &owner,
                         surface,
@@ -1838,7 +1951,12 @@ pub fn apply_registration(
                     });
                     let opened_errors = downstream.clone();
                     let opening = Box::pin(async move {
-                        let opened = first.await;
+                        // The caller's stream consumer clock follows the lazily opened stream.
+                        let opened = stream_consumer_clock::with_stream_consumer_clock(
+                            consumer_clock,
+                            first,
+                        )
+                        .await;
                         if matches!(opened, a::Result::Err(_))
                             && let Some(error) =
                                 failed.lock().unwrap_or_else(|e| e.into_inner()).take()

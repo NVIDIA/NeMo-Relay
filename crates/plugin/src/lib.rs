@@ -34,7 +34,8 @@ pub use checked::{
     LlmJsonAsyncStream, LlmNext, LlmRequestContext, LlmResponseContext, LlmSanitizeRequestContext,
     LlmSanitizeResponseContext, LlmStreamNext, NativePlugin, Plugin, PluginContext, PluginRuntime,
     PluginTaskSpawner, ScopeGuard, ScopeHandle, ScopeOptions, ScopeStack, ScopeStackBinding,
-    ThreadScopeStackGuard, ToolExecutionContext, ToolNext,
+    StreamConsumerClock, StreamConsumerReport, StreamConsumerTimingGuard, ThreadScopeStackGuard,
+    ToolExecutionContext, ToolNext,
 };
 pub use nemo_relay_types::Json;
 pub use nemo_relay_types::api::event::{

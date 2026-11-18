@@ -998,6 +998,8 @@ async def next_item(stream):
                 drop(tx_ok);
                 let (cancel_ok, _cancel_ok_rx) = tokio::sync::watch::channel(false);
                 let (_closed_ok, closed_ok_rx) = tokio::sync::watch::channel(Some(Ok(())));
+                let consumer_clock =
+                    nemo_relay_runtime::api::runtime::stream_consumer_clock::StreamConsumerClock::default();
                 let stream_ok = pyo3::Py::new(
                     py,
                     PyLlmStream {
@@ -1005,6 +1007,7 @@ async def next_item(stream):
                         cancel: cancel_ok,
                         closed: closed_ok_rx,
                         finalizer_error: None,
+                        consumer_clock: Some(consumer_clock.clone()),
                     },
                 )
                 .unwrap();
@@ -1026,6 +1029,24 @@ async def next_item(stream):
                     crate::convert::py_to_json(&ok_chunk).unwrap(),
                     json!({"chunk": 1})
                 );
+                // The bridge times each request and delivery, then reports a
+                // complete stream once the caller reads past the last chunk.
+                assert!(!consumer_clock.was_prefetched(0, std::time::Instant::now()));
+                let exhausted = event_loop.call_method1(
+                    "run_until_complete",
+                    (runner
+                        .getattr("next_item")
+                        .unwrap()
+                        .call1((stream_ok.clone_ref(py),))
+                        .unwrap(),),
+                );
+                assert!(exhausted.is_err());
+                let report = Arc::new(std::sync::Mutex::new(None));
+                let observed = Arc::clone(&report);
+                consumer_clock.observe(move |receipt| {
+                    *observed.lock().unwrap() = Some((receipt.delivered.len(), receipt.complete));
+                });
+                assert_eq!(*report.lock().unwrap(), Some((1, true)));
 
                 let (tx_err, rx_err) = tokio::sync::mpsc::channel(1);
                 tx_err
@@ -1043,6 +1064,7 @@ async def next_item(stream):
                         cancel: cancel_err,
                         closed: closed_err_rx,
                         finalizer_error: None,
+                        consumer_clock: None,
                     },
                 )
                 .unwrap();
@@ -1069,6 +1091,7 @@ async def next_item(stream):
                         cancel: cancel_done,
                         closed: closed_done_rx,
                         finalizer_error: None,
+                        consumer_clock: None,
                     },
                 )
                 .unwrap();

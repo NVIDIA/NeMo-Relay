@@ -42,6 +42,7 @@ component closes.
 | Async continuations and streams | `ToolNext`, `LlmNext`, and `LlmStreamNext` support repeated or concurrent downstream calls. Streaming LLM continuations use a pull-based host handle; `LlmStreamNext::open` also reports whether the downstream stream closed cleanly. `register_synchronous_stream_callback` accepts synchronous factories that return checked stream descriptors. |
 | Tool results | `ToolNext` returns `ToolExecutionResult`, which keeps an application result and optional annotation together. |
 | Typed telemetry marks | `emit_mark_with_options` adds `DataSchema` and `LogSeverity`; `emit_metric` validates `MetricMeasurement` values before it emits the reserved Relay metric schema. |
+| Stream consumer timing | `PluginRuntime::enable_stream_consumer_timing` turns on caller-poll timing for Python streams, and `capture_stream_consumer_clock` lets a stream intercept learn when the caller requested and received each chunk. |
 | Model pricing | `PluginRuntime::estimate_cost_for_provider` prices token usage, and `response_cost_for_provider` prices a normalized response, with the host's active pricing catalog. |
 | Legacy runtime diagnostics | `PluginRuntime::runtime_diagnostics()` returns the active host-level `RuntimeDiagnostics` report. Entries are ordered and available through `get(code)`. |
 | Canonical diagnostics | `PluginRuntime::diagnostics()` records internal observations and offers separately authorized snapshot and memory reads. |

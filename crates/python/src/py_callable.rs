@@ -1360,6 +1360,7 @@ impl PyLlmStreamNextFn {
                     cancel,
                     closed: closed_rx,
                     finalizer_error: None,
+                    consumer_clock: None,
                 })
             }),
         )

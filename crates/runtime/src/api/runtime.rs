@@ -9,6 +9,8 @@ pub mod global;
 mod llm_execution_context;
 pub mod scope_stack;
 pub mod state;
+#[doc(hidden)]
+pub mod stream_consumer_clock;
 pub mod subscriber_dispatcher;
 
 pub use callbacks::{
