@@ -1975,6 +1975,40 @@ fn gen_ai_projection_preserves_anthropic_reasoning_text_and_tool_order() {
             }
         ])
     );
+
+    let tool_fallback_messages = gen_ai_output_messages_for(
+        AnnotatedLlmResponse {
+            message: Some(MessageContent::Text("Normalized answer.".to_string())),
+            tool_calls: Some(vec![ResponseToolCall {
+                id: "call-3".to_string(),
+                name: "search".to_string(),
+                arguments: json!({"query": "mixed"}),
+            }]),
+            finish_reason: Some(FinishReason::Complete),
+            api_specific: api_specific_response(json!({
+                "api": "anthropic_messages",
+                "content_blocks": [
+                    {"type": "thinking", "thinking": "Native thought.", "signature": "sig"},
+                    {"type": "text", "text": "Native answer."}
+                ]
+            })),
+            ..empty_annotated_response()
+        },
+        None,
+    );
+    assert_eq!(
+        tool_fallback_messages[0]["parts"],
+        json!([
+            {"type": "reasoning", "content": "Native thought."},
+            {"type": "text", "content": "Native answer."},
+            {
+                "type": "tool_call",
+                "id": "call-3",
+                "name": "search",
+                "arguments": {"query": "mixed"}
+            }
+        ])
+    );
 }
 
 #[test]
@@ -2074,6 +2108,48 @@ fn gen_ai_projection_preserves_openai_responses_output_item_order() {
                 "name": "search",
                 "arguments": {"query": "fallback"}
             }
+        ])
+    );
+
+    let text_fallback_messages = gen_ai_output_messages_for(
+        AnnotatedLlmResponse {
+            message: Some(MessageContent::Text("Normalized answer.".to_string())),
+            tool_calls: Some(vec![ResponseToolCall {
+                id: "call-3".to_string(),
+                name: "search".to_string(),
+                arguments: json!({"query": "mixed"}),
+            }]),
+            finish_reason: Some(FinishReason::Complete),
+            api_specific: api_specific_response(json!({
+                "api": "openai_responses",
+                "output_items": [
+                    {
+                        "type": "reasoning",
+                        "content": [{"type": "reasoning_text", "text": "Native thought."}]
+                    },
+                    {
+                        "type": "function_call",
+                        "call_id": "call-3",
+                        "name": "search",
+                        "arguments": "{\"query\":\"mixed\"}"
+                    }
+                ]
+            })),
+            ..empty_annotated_response()
+        },
+        None,
+    );
+    assert_eq!(
+        text_fallback_messages[0]["parts"],
+        json!([
+            {"type": "reasoning", "content": "Native thought."},
+            {
+                "type": "tool_call",
+                "id": "call-3",
+                "name": "search",
+                "arguments": {"query": "mixed"}
+            },
+            {"type": "text", "content": "Normalized answer."}
         ])
     );
 }
