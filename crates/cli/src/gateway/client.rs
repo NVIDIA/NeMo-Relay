@@ -345,6 +345,12 @@ fn post_authenticated(
     stream.conn.complete_io(&mut stream.sock).map_err(|error| {
         VerifiedHttpError::before_payload(format!("Relay TLS handshake failed: {error}"))
     })?;
+    // WouldBlock after partial I/O can return Ok while the handshake is still incomplete.
+    if stream.conn.is_handshaking() {
+        return Err(VerifiedHttpError::before_payload(
+            "Relay TLS handshake failed: incomplete handshake",
+        ));
+    }
 
     // Only gateway delivery loads the challenge key, so this block never runs for a daemon.
     if !inspection && let Some(key) = key.as_deref() {

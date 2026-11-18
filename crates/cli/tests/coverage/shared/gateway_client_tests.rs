@@ -459,7 +459,7 @@ fn verified_hook_payload_is_not_sent_before_the_tls_tunnel_is_authenticated() {
     server.join().unwrap();
 }
 
-fn assert_stalled_daemon_setup_is_bounded(upgrade: bool) {
+fn assert_stalled_daemon_setup_is_bounded(upgrade: bool, tls_prefix: &'static [u8]) {
     let temp = tempfile::tempdir().unwrap();
     let _environment = EnvScope::set(&[
         ("XDG_CONFIG_HOME", Some(temp.path().as_os_str())),
@@ -478,17 +478,25 @@ fn assert_stalled_daemon_setup_is_bounded(upgrade: bool) {
         if upgrade {
             stream.write_all(b"HTTP/1.1 101 Switching Protocols\r\nUpgrade: nemo-relay-tls\r\nContent-Length: 0\r\n\r\n").unwrap();
         }
-        // Keep TCP open but withhold either the upgrade or the TLS ServerHello.
+        // Keep TCP open but withhold either the upgrade or a complete TLS ServerHello.
         // Finish when the client times out and closes its socket.
         stream
             .set_read_timeout(Some(Duration::from_millis(50)))
             .unwrap();
         let mut received = Vec::new();
+        let mut prefix_sent = tls_prefix.is_empty();
         while stopped.try_recv().is_err() {
             let mut buffer = [0; 1024];
             match stream.read(&mut buffer) {
                 Ok(0) => break,
-                Ok(read) => received.extend_from_slice(&buffer[..read]),
+                Ok(read) => {
+                    received.extend_from_slice(&buffer[..read]);
+                    if !prefix_sent {
+                        // Wait for ClientHello so the upgrade reader cannot consume these bytes.
+                        stream.write_all(tls_prefix).unwrap();
+                        prefix_sent = true;
+                    }
+                }
                 Err(error)
                     if matches!(
                         error.kind(),
@@ -555,12 +563,18 @@ fn assert_stalled_daemon_setup_is_bounded(upgrade: bool) {
 
 #[test]
 fn daemon_hook_stalled_upgrade_uses_one_configured_timeout() {
-    assert_stalled_daemon_setup_is_bounded(false);
+    assert_stalled_daemon_setup_is_bounded(false, b"");
 }
 
 #[test]
 fn daemon_hook_stalled_tls_uses_one_configured_timeout() {
-    assert_stalled_daemon_setup_is_bounded(true);
+    assert_stalled_daemon_setup_is_bounded(true, b"");
+}
+
+#[test]
+fn daemon_hook_partial_tls_uses_one_configured_timeout() {
+    // A handshake record declares four payload bytes, but only one is sent.
+    assert_stalled_daemon_setup_is_bounded(true, b"\x16\x03\x03\x00\x04\x02");
 }
 
 #[test]
