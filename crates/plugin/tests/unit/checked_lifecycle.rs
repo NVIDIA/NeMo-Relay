@@ -585,3 +585,51 @@ fn invocation_codec_adapters_preserve_typed_values_and_missing_capabilities() {
             .is_none()
     );
 }
+
+struct FailingCloseSource(Arc<AtomicUsize>);
+impl a::Continuation for FailingCloseSource {
+    fn call(&self, _: abi::Json) -> FfiFuture<a::Result<abi::Json>> {
+        unreachable!()
+    }
+    fn call_tool(&self, _: abi::Json) -> FfiFuture<a::Result<a::ToolExecutionResult>> {
+        unreachable!()
+    }
+    fn open_stream(&self, _: abi::Json) -> FfiFuture<a::Result<a::StreamBox>> {
+        let stream = a::StreamBox::new(SourceProbe {
+            dropped: Arc::new(AtomicUsize::new(0)),
+            attempts: self.0.clone(),
+            fail_first: true,
+        });
+        async move { a::Result::Ok(stream) }.into_ffi()
+    }
+}
+/// A drained input stream reports a failed downstream close instead of hiding it.
+#[tokio::test]
+async fn opened_streams_report_the_downstream_close_result() {
+    let executor =
+        ComponentExecutor::new(NativeExecutorConfig { worker_threads: 1 }, "input").unwrap();
+    let attempts = Arc::new(AtomicUsize::new(0));
+    let next = LlmStreamNext {
+        next: Arc::new(a::ContinuationBox::new(FailingCloseSource(
+            attempts.clone(),
+        ))),
+        sources: Arc::new(Mutex::new(Vec::new())),
+        executor: executor.clone(),
+        scope: Arc::new(a::ScopeBox::new(Scope)),
+    };
+    let mut stream = next
+        .open(LlmRequest {
+            headers: Map::new(),
+            content: Json::Null,
+        })
+        .await
+        .unwrap();
+    // The end of the stream starts cleanup; close waits for that same attempt.
+    assert!(stream.next().await.is_none());
+    let error = stream.close().await.unwrap_err();
+    assert!(error.contains("retry close"), "{error}");
+    assert_eq!(stream.close().await.unwrap_err(), error);
+    assert_eq!(attempts.load(Ordering::SeqCst), 1);
+    drop(stream);
+    a::Component::shutdown(&executor).await.unwrap();
+}

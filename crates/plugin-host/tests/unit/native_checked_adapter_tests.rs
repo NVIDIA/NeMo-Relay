@@ -377,6 +377,76 @@ async fn callback_observations_exclude_propagated_downstream_errors_and_revocati
     owner.shutdown().await.unwrap();
 }
 
+/// A plugin that returns a continuation failure unchanged must not change its type,
+/// headers, or retry class, while its own failures stay attributed to it.
+#[tokio::test]
+async fn propagated_downstream_failures_keep_their_original_typed_errors() {
+    use nemo_relay_types::error::{UpstreamFailure, UpstreamFailureClass};
+    let owner = HostRuntime::new("checked-propagation".into()).unwrap();
+    let downstream = DownstreamErrors::default();
+    let rate_limited = FlowError::Upstream(UpstreamFailure {
+        status: Some(429),
+        body: "slow down".into(),
+        headers: [("retry-after".to_string(), "2".to_string())].into(),
+        class: UpstreamFailureClass::RetryableStatus,
+    });
+    let connection = FlowError::Upstream(UpstreamFailure {
+        status: None,
+        body: "connection refused".into(),
+        headers: Default::default(),
+        class: UpstreamFailureClass::Connection,
+    });
+    for original in [rate_limited, connection] {
+        // The plugin sees the ABI form of the failure and returns it as-is.
+        let propagated: a::Result<()> = downstream_boundary(Err(original.clone()), &downstream);
+        let FlowError::Upstream(expected) = &original else {
+            unreachable!()
+        };
+        // Reporting context is documented for plugin-reported failures; it changes
+        // only the body and never the status, headers, or retry class.
+        let reported = format!("Reported by plugin 'native': {}", expected.body);
+        for (error, body) in [
+            (
+                owner
+                    .callback_result(propagated.clone(), &downstream)
+                    .unwrap_err(),
+                expected.body.as_str(),
+            ),
+            (
+                restore(propagated.clone(), &downstream).unwrap_err(),
+                expected.body.as_str(),
+            ),
+            (
+                owner
+                    .reported_callback_result(propagated, &downstream)
+                    .unwrap_err(),
+                reported.as_str(),
+            ),
+        ] {
+            let FlowError::Upstream(restored) = &error else {
+                panic!("expected the original upstream failure, got {error:?}");
+            };
+            assert_eq!(restored.status, expected.status);
+            assert_eq!(restored.body, body);
+            assert_eq!(restored.headers, expected.headers);
+            assert_eq!(restored.class, expected.class);
+        }
+    }
+
+    // A failure the plugin raised itself is still reconstructed and attributed.
+    let mut own = a::Error::new("plugin", "plugin rejected the request");
+    own.http_status = Some(429);
+    let FlowError::Upstream(own) = owner
+        .reported_callback_result::<()>(a::Result::Err(own), &downstream)
+        .unwrap_err()
+    else {
+        panic!("expected an upstream failure");
+    };
+    assert_eq!(own.class, UpstreamFailureClass::Other);
+    assert!(own.body.starts_with("Reported by plugin"), "{}", own.body);
+    owner.shutdown().await.unwrap();
+}
+
 #[test]
 fn checked_errors_preserve_typed_http_status_without_a_json_envelope() {
     let mut error = a::Error::new("http", "upstream response");

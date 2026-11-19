@@ -1189,13 +1189,43 @@ pub struct LlmStreamNext {
 impl LlmStreamNext {
     /// Open a component-owned downstream LLM stream for the supplied request.
     pub async fn call(&self, request: LlmRequest) -> Result<LlmJsonAsyncStream> {
+        Ok(Box::pin(self.open(request).await?))
+    }
+    /// Open a downstream LLM stream whose cleanup result the caller can await.
+    ///
+    /// Use this instead of [`Self::call`] when a result must not be used after
+    /// the downstream stream fails to close, such as a response cache.
+    pub async fn open(&self, request: LlmRequest) -> Result<LlmInputStream> {
         let stream = local(self.next.open_stream(encode(request)?).await)?;
         let source = SourceStream::new(stream, &self.executor, self.scope.clone(), &self.sources);
-        Ok(Box::pin(InputStream {
+        Ok(LlmInputStream(InputStream {
             source,
             pending: None,
             terminal: false,
         }))
+    }
+}
+/// Downstream LLM stream that reports whether its cleanup succeeded.
+///
+/// The stream closes its downstream source when it ends or is dropped, as
+/// [`LlmStreamNext::call`] streams do. [`Self::close`] waits for that cleanup.
+pub struct LlmInputStream(InputStream);
+impl Stream for LlmInputStream {
+    type Item = Result<Json>;
+    fn poll_next(mut self: Pin<&mut Self>, cx: &mut Context<'_>) -> Poll<Option<Self::Item>> {
+        Pin::new(&mut self.0).poll_next(cx)
+    }
+}
+impl LlmInputStream {
+    /// Close the downstream stream, or wait for the close that its end started,
+    /// and return the cleanup result.
+    ///
+    /// A failed cleanup is reported again on later calls rather than retried;
+    /// component shutdown retries it.
+    pub async fn close(&mut self) -> Result<()> {
+        self.0.pending.take();
+        self.0.terminal = true;
+        self.0.source.cleanup().await
     }
 }
 type SourceClose = Shared<BoxFuture<'static, Result<()>>>;
@@ -1232,6 +1262,13 @@ impl SourceStream {
             .unwrap_or_else(|e| e.into_inner())
             .push(source.clone());
         source
+    }
+    /// The cleanup already started for this source, or a new one.
+    fn cleanup(self: &Arc<Self>) -> SourceClose {
+        if let Some(future) = &self.state.lock().unwrap_or_else(|e| e.into_inner()).closing {
+            return future.clone();
+        }
+        self.close()
     }
     /// Share source-stream cleanup and release the foreign source only after close succeeds.
     fn close(self: &Arc<Self>) -> SourceClose {

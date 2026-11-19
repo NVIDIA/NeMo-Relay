@@ -30,8 +30,8 @@ pub use runtime_report::{RuntimeDiagnostic, RuntimeDiagnostics};
 /// Shared built-in component contracts.
 pub mod component;
 pub use checked::{
-    ConditionalMiddlewareGuardrailHandle, EmitMarkOptions, LlmExecutionContext, LlmJsonAsyncStream,
-    LlmNext, LlmRequestContext, LlmResponseContext, LlmSanitizeRequestContext,
+    ConditionalMiddlewareGuardrailHandle, EmitMarkOptions, LlmExecutionContext, LlmInputStream,
+    LlmJsonAsyncStream, LlmNext, LlmRequestContext, LlmResponseContext, LlmSanitizeRequestContext,
     LlmSanitizeResponseContext, LlmStreamNext, NativePlugin, Plugin, PluginContext, PluginRuntime,
     PluginTaskSpawner, ScopeGuard, ScopeHandle, ScopeOptions, ScopeStack, ScopeStackBinding,
     ThreadScopeStackGuard, ToolExecutionContext, ToolNext,
