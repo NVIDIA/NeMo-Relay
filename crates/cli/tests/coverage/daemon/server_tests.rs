@@ -911,20 +911,9 @@ fn worker_response_error_chain_bounds_cyclic_sources() {
         }
     }
     let chain = worker_response_error_chain(&CyclicError);
-    assert_eq!(
-        chain.split(" -> ").collect::<Vec<_>>(),
-        [
-            "other",
-            "other",
-            "other",
-            "other",
-            "other",
-            "other",
-            "other",
-            "other",
-            "truncated"
-        ]
-    );
+    let mut expected = vec!["other"; MAX_ERROR_CHAIN_DEPTH];
+    expected.push("truncated");
+    assert_eq!(chain.split(" -> ").collect::<Vec<_>>(), expected);
 }
 
 /// Checks real HTTP/2 reset details and omitted causes on non-body JSONL records.

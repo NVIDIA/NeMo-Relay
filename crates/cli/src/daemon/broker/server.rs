@@ -86,6 +86,7 @@ const MAX_MCP_CONTROL_SESSIONS: usize = 8_192;
 const MAX_CONCURRENT_TLS_HANDSHAKES: usize = 256;
 const TLS_HANDSHAKE_TIMEOUT: Duration = Duration::from_secs(10);
 const UPSTREAM_FAILURE_LOG_INTERVAL: Duration = Duration::from_secs(10);
+const MAX_ERROR_CHAIN_DEPTH: usize = 8;
 // A single peer cannot consume either role's challenge pool, even across a window boundary.
 const CHALLENGES_PER_PEER_WINDOW: u32 = 16;
 const MAX_CHALLENGE_PEERS: usize = 1_024;
@@ -2542,7 +2543,7 @@ fn handle_worker_communication_failure(
 fn worker_response_error_chain(error: &(dyn StdError + 'static)) -> String {
     let mut source = Some(error);
     let mut causes = Vec::new();
-    for _ in 0..8 {
+    for _ in 0..MAX_ERROR_CHAIN_DEPTH {
         let Some(error) = source else { break };
         let cause = if let Some(error) = error.downcast_ref::<std::io::Error>() {
             let mut cause = format!("io:{:?}", error.kind());
