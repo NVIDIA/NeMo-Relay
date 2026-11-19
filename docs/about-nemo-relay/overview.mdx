@@ -1,7 +1,7 @@
 ---
 title: "NVIDIA NeMo Relay Documentation"
 sidebar-title: "Overview"
-description: "Learn how NVIDIA NeMo Relay manages scopes, middleware, plugins, and lifecycle events across agent systems."
+description: "Observe and control agent runs with NeMo Relay's runtime, plugins, integrations, CLI, observability, and deployment options."
 template-library-version: "1.0.0"
 position: 1
 ---
@@ -9,149 +9,135 @@ position: 1
 {/* SPDX-FileCopyrightText: Copyright (c) 2026, NVIDIA CORPORATION & AFFILIATES. All rights reserved.
 SPDX-License-Identifier: Apache-2.0 */}
 
-{/* @tpl:naming
-Use title casing: Start with the product name followed by "Documentation". Fern renders the frontmatter `title` as the page heading, so do not add an H1.
-*/}
+NVIDIA NeMo Relay helps you observe and control what happens inside agent runs
+without rewriting the agent stack you already have. It gives coding agents,
+applications, framework integrations, middleware, and observability backends a
+shared runtime for scopes, policy, plugins, and lifecycle events.
 
-{/* @tpl:formatting
-This is the Overview template. Use it to introduce the product and explain what it is, why it matters, and how it works at a high level. Use in-page cards to navigate users to other content, and use callouts for important warnings, notes, and tips.
-*/}
+Application code / agent harness / agent framework → NeMo Relay runtime → subscribers and exporters → observability files and backends
 
-{/* @tpl:formatting
-Provide an introductory paragraph of two to three sentences explaining what the product helps users do. Link the product name to its project page on first mention. Conclude with a pointer to where readers can learn more about the benefits and features.
-*/}
-
-[NVIDIA NeMo Relay](https://docs.nvidia.com/nemo/relay) helps you observe and
-control what happens inside agent runs without rewriting the agent stack you
-already have. It gives coding agents, applications, framework integrations,
-middleware, and observability backends a shared runtime for scopes, policy,
-plugins, and lifecycle events. Relay records canonical lifecycle events in Agent
-Trajectory Observability Format (ATOF) that subscribers and exporters consume.
-
-For more information about the benefits and features, refer to
-[Tracing Agent Harness Behavior with NVIDIA NeMo Relay](https://developer.nvidia.com/blog/tracing-agent-harness-behavior-with-nvidia-nemo-relay/).
+Agent systems usually involve several components in one request: an entry point
+starts work, a model is called, tools run, subagents can branch off, and
+observability or policy systems need to understand what happened. Relay gives
+those components one runtime contract instead of asking each layer to invent
+its own wrappers, trace vocabulary, and cleanup rules.
 
 <Note>
 Relay does not replace your agent framework, model provider, application logic,
-observability backend, or guardrail authoring system. It connects those systems
-through shared scopes, middleware, plugins, and lifecycle events. For how Relay
-complements OpenTelemetry GenAI conventions and other observability or evaluation
-products, refer to
+observability backend, or guardrail authoring system. For how Relay complements
+other tooling, refer to
 [How NeMo Relay Relates to Other Tooling](/about-nemo-relay/ecosystem#how-nemo-relay-relates-to-other-tooling).
 </Note>
 
 ## Skip Ahead
-{/* @tpl:formatting
-Include in-page cards to help users navigate to information related to getting
-started, API examples or use cases, and troubleshooting guides.
-*/}
+
+Go directly to setup instructions, supported environments, or reference material.
 
 <CardGroup cols={2}>
-
+<Card title="Quick Starts" href="/getting-started/quick-start">
+Run a first working example for your coding agent, framework, or language.
+</Card>
+<Card title="Install Overview" href="/getting-started/installation">
+Choose CLI, framework, harness, or API installation for your environment.
+</Card>
 <Card title="Support Matrix" href="/reference/support-matrix">
-
-Reference the Support Matrix to understand the platforms, coding agents, and frameworks NeMo Relay supports.
+Check supported platforms, coding agents, frameworks, and language bindings.
 </Card>
-
-<Card title="Get Started" href="/getting-started/quick-start">
-
-Follow a Quick Start to evaluate a language binding with the smallest complete example.
+<Card title="API Reference" href="/reference/api">
+Look up APIs across the language bindings.
 </Card>
-
-<Card title="Reference" href="/reference/api">
-
-Look up APIs, event formats, and reference material across the supported bindings.
+<Card title="Trace Incident Runbook" href="/resources/troubleshooting/trace-incident-runbook">
+Troubleshoot missing, incomplete, or unexpected observability output.
 </Card>
-
-<Card title="Troubleshooting" href="/resources/troubleshooting/trace-incident-runbook">
-
-Resolve common trace and observability incidents with the Trace Incident Runbook.
-</Card>
-
 </CardGroup>
 
 ## Use Cases
-{/* @tpl:formatting
-List up to six common use cases using imperatives and title casing. Do not list a
-core concept here; core concepts belong in the Core Concepts section below.
-*/}
 
-Explore the common use cases for NeMo Relay.
+Choose an entry point based on the work you want to observe or control.
 
-<CardGroup cols={2}>
+### Choose Your First Path
 
-<Card title="Observe Coding Agents Locally" href="/nemo-relay-cli/about">
+Pick the row closest to what you are trying to do.
 
-Run Relay as a local CLI sidecar to observe Codex or Claude Code, forward hooks, and route provider traffic without changing application code.
-</Card>
+| Goal | Start With | Why |
+|---|---|---|
+| Observe a supported coding agent locally | [NeMo Relay CLI](/nemo-relay-cli/about) | Run Relay as a local sidecar for agents such as Codex or Claude Code, forward hooks, and route provider traffic when configured without changing application code. |
+| Instrument application-owned LLM or tool calls | [Instrument Applications](/instrument-applications/about) | Run the complete lifecycle and middleware sequence around callbacks your code owns. |
+| Connect an existing agent framework or harness | [Supported Integrations](/supported-integrations/about) | Use maintained integrations that attach to supported framework and harness execution or lifecycle boundaries. |
+| Export traces, trajectories, or lifecycle events | [Observability](/configure-plugins/observability/about) | Configure subscribers and exporters to consume the runtime event stream and produce the output your destination needs. |
 
-<Card title="Instrument Application Calls" href="/instrument-applications/about">
+Hermes Agent understands NeMo Relay plugin configurations. Relay is built into
+Hermes Agent without a separate observability plugin or Relay CLI setup.
 
-Wrap application-owned LLM and tool calls so Relay runs the complete lifecycle and middleware sequence around callbacks your code owns.
-</Card>
+## Core Capabilities
 
-<Card title="Integrate Agent Frameworks" href="/supported-integrations/about">
-
-Connect LangChain, LangGraph, Deep Agents, or OpenClaw through maintained integrations that use public framework or plugin APIs.
-</Card>
-
-<Card title="Configure Observability Export" href="/configure-plugins/observability/about">
-
-Export the same lifecycle event stream as ATOF, ATIF, OpenTelemetry, or OpenInference output.
-</Card>
-
-<Card title="Build Reusable Plugins" href="/build-plugins/about">
-
-Package reusable observability, guardrail, adaptive, and exporter behavior you can enable from configuration.
-</Card>
-
-<Card title="Extend Framework Integrations" href="/integrate-into-frameworks/about">
-
-Attach Relay to framework tool, LLM, and lifecycle boundaries with the integration APIs.
-</Card>
-
-</CardGroup>
-
-## Core Concepts
-{/* @tpl:formatting
-List up to six core concepts using noun phrasing and title casing. Include this
-section only for concepts readers should understand before diving deeper.
-*/}
-
-Explore the core concepts to understand how NeMo Relay models agent runs. Rust is
-the source of truth for runtime behavior; the Python and Node.js bindings expose
-the same core model, while Go and the raw C FFI are experimental and source-first.
+Explore the main capabilities Relay provides, then follow the links for details.
 
 <CardGroup cols={2}>
-
-<Card title="Scopes" href="/about-nemo-relay/concepts/scopes">
-
-Give runs, turns, tools, LLM calls, and subagents clear parent-child relationships, automatic cleanup, and request isolation.
+<Card title="Agent Runtime" href="/about-nemo-relay/agent-runtime-primer">
+Give agent work a shared execution and lifecycle model through scopes, events,
+marks, and managed LLM and tool calls. Scopes establish ownership, parentage,
+cleanup, and isolation; middleware observes or controls managed execution.
 </Card>
-
-<Card title="Events" href="/about-nemo-relay/concepts/events">
-
-Record canonical lifecycle activity, including marks for point-in-time events such as session starts, compaction, or skill loads.
+<Card title="Plugins" href="/configure-plugins/about">
+Enable reusable observability, guardrail, and adaptive behavior through
+configuration. Start with [plugin configuration files](/configure-plugins/plugin-configuration-files)
+or explore [adaptive behavior](/configure-plugins/adaptive/about).
 </Card>
-
-<Card title="Subscribers" href="/about-nemo-relay/concepts/subscribers">
-
-Consume the same event stream to produce ATOF events, ATIF trajectories, and typed OpenTelemetry output.
+<Card title="Integrations" href="/supported-integrations/about">
+Connect existing agent frameworks and harnesses to Relay through their supported
+execution and lifecycle boundaries.
 </Card>
-
-<Card title="Middleware" href="/about-nemo-relay/concepts/middleware">
-
-Block, sanitize, transform, route, retry, or replace execution around managed LLM and tool calls.
+<Card title="CLI" href="/nemo-relay-cli/about">
+Set up and run Relay with supported coding agents, including local configuration,
+hooks, provider routing, and session workflows.
 </Card>
-
-<Card title="Plugins" href="/about-nemo-relay/concepts/plugins">
-
-Turn on reusable observability, guardrail, adaptive, and exporter behavior from configuration.
+<Card title="Observability" href="/configure-plugins/observability/about">
+Turn agent activity into event logs, trajectories, and traces for debugging,
+analysis, and evaluation. Export [ATOF events](/configure-plugins/observability/atof),
+[ATIF trajectories](/configure-plugins/observability/atif),
+[OpenTelemetry](/configure-plugins/observability/opentelemetry), or
+[OpenInference](/configure-plugins/observability/openinference) output.
 </Card>
-
-<Card title="Provider Codecs" href="/about-nemo-relay/concepts/codecs">
-
-Keep provider-native request and response semantics consistent when Relay intercepts routed traffic.
+<Card title="Daemon and Deployment" href="/getting-started/deploy">
+Run Relay as an administrator-managed background service on a workstation or
+remote Linux server, with workers on each user's machine. Use the
+[daemon guides](/daemon/about) to choose a deployment and configure clients.
 </Card>
-
 </CardGroup>
+
+## Build on Relay
+
+Use these paths when you need to extend Relay or contribute to the repository.
+
+| Goal | Start With |
+|---|---|
+| Build a framework, host, or provider integration | [Integrate into Frameworks](/integrate-into-frameworks/about) |
+| Package reusable exporters, middleware, or policy | [Build Plugins](/build-plugins/about) and [Use Plugins](/configure-plugins/about) |
+| Develop or validate the repository | [Development Setup](/contribute/development-setup) and [Testing and Docs](/contribute/testing-and-docs) |
+
+### Choose How Relay Connects
+
+Identify where the actual LLM or tool function is invoked:
+
+- **Managed calls:** Route an invocation through Relay so it runs the applicable
+  middleware and then invokes the real function.
+- **Lifecycle hooks:** Translate before-and-after framework notifications into
+  Relay events. The framework retains execution control; Relay observes the
+  call's lifecycle.
+- **Routed traffic:** Route provider-native requests and responses through the
+  Relay gateway when they must be intercepted. Treat Relay as a production
+  dependency on that traffic path.
+
+For the detailed runtime model, refer to
+[Core Concepts](/about-nemo-relay/concepts).
+
+Rust is the source of truth for runtime behavior. The Python and Node.js
+bindings expose the same core model for primary application use. Go and raw C
+FFI are experimental and source-first.
+
+<Warning>
+Do not add behavior to one primary binding without checking Rust, Python, and
+Node.js parity. Public behavior should stay consistent across the supported
+bindings.
+</Warning>
