@@ -565,7 +565,7 @@ impl HostRuntime {
                 );
                 null()
             }
-            "pricing.estimate_cost" => {
+            "pricing.estimate_cost_for_provider" => {
                 // Prices with the host's active catalog; a plugin's own pricing
                 // crate copy would hold an empty process-local resolver.
                 let model = string("model")?;
@@ -585,7 +585,7 @@ impl HostRuntime {
                     .estimate_cost_for_provider(provider.as_deref(), model, &usage);
                 serde_json::to_value(estimate).map_err(err)
             }
-            "pricing.estimate_response_cost" => {
+            "pricing.response_cost_for_provider" => {
                 // Applies the host's full response pricing rules, including
                 // provider-specific billing, without replacing a reported cost.
                 let provider = optional("provider")

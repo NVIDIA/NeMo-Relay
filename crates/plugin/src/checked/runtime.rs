@@ -250,14 +250,14 @@ impl PluginRuntime {
     /// Returns `Ok(None)` when the catalog has no pricing for the model. Hosts
     /// older than this operation return an error, which callers should treat
     /// as an unknown cost.
-    pub fn estimate_cost(
+    pub fn estimate_cost_for_provider(
         &self,
         provider: Option<&str>,
         model: &str,
         usage: &Usage,
     ) -> Result<Option<CostEstimate>> {
         self.call(
-            "pricing.estimate_cost",
+            "pricing.estimate_cost_for_provider",
             json!({"provider":provider,"model":model,"usage":usage}),
         )
     }
@@ -267,13 +267,13 @@ impl PluginRuntime {
     /// estimate for its model and usage, or `Ok(None)` when unknown. Hosts older
     /// than this operation return an error, which callers should treat as an
     /// unknown cost.
-    pub fn estimate_response_cost(
+    pub fn response_cost_for_provider(
         &self,
         response: &AnnotatedLlmResponse,
         provider: Option<&str>,
     ) -> Result<Option<CostEstimate>> {
         self.call(
-            "pricing.estimate_response_cost",
+            "pricing.response_cost_for_provider",
             json!({"response":response,"provider":provider}),
         )
     }

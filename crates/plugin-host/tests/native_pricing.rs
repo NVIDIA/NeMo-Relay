@@ -32,7 +32,7 @@ impl CostEstimator for HostPrice {
 }
 
 #[tokio::test]
-async fn sdk_estimate_cost_uses_the_host_pricing_policy() {
+async fn sdk_pricing_operations_use_the_host_pricing_policy() {
     install_runtime_services(|| RuntimeServices {
         pricing_snapshot: || Arc::new(HostPrice),
         attach_estimated_cost: |response, provider| {
@@ -51,23 +51,23 @@ async fn sdk_estimate_cost_uses_the_host_pricing_policy() {
         ..Usage::default()
     };
 
-    let priced = runtime.estimate_cost(Some("openai"), "priced-model", &usage);
-    let unpriced = runtime.estimate_cost(None, "priced-model", &usage);
+    let priced = runtime.estimate_cost_for_provider(Some("openai"), "priced-model", &usage);
+    let unpriced = runtime.estimate_cost_for_provider(None, "priced-model", &usage);
     let response: AnnotatedLlmResponse = serde_json::from_value(json!({
         "model": "priced-model",
         "usage": {"prompt_tokens": 500}
     }))
     .unwrap();
-    let response_cost = runtime.estimate_response_cost(&response, Some("openai"));
+    let response_cost = runtime.response_cost_for_provider(&response, Some("openai"));
     let reported: AnnotatedLlmResponse = serde_json::from_value(json!({
         "model": "priced-model",
         "usage": {"prompt_tokens": 500, "cost": {"total": 9.0, "currency": "USD", "source": "provider_reported"}}
     }))
     .unwrap();
-    let reported_cost = runtime.estimate_response_cost(&reported, Some("openai"));
+    let reported_cost = runtime.response_cost_for_provider(&reported, Some("openai"));
     let raw = owner.runtime_box();
     let invalid = raw.call_sync(
-        "pricing.estimate_cost".into(),
+        "pricing.estimate_cost_for_provider".into(),
         nemo_relay_plugin::abi::Json::Null,
     );
     owner.shutdown().await.unwrap();
