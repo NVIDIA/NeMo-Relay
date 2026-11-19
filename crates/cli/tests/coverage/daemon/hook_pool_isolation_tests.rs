@@ -75,6 +75,8 @@ fn unread_worker(counted: Arc<AtomicUsize>) -> Router {
 
 #[tokio::test]
 async fn aep278_http2_unread_responses_do_not_starve_independent_hooks() {
+    const REQUEST_TIMEOUT: Duration = Duration::from_secs(2);
+
     let polls = Arc::new(AtomicUsize::new(0));
     let worker = unread_worker(polls.clone());
     let (worker_address, worker_task) = tolerant_router(TestProtocol::Http2, worker).await;
@@ -86,7 +88,7 @@ async fn aep278_http2_unread_responses_do_not_starve_independent_hooks() {
     let mut blocked_at = None;
     for count in 1..=128 {
         let response = tokio::time::timeout(
-            Duration::from_secs(2),
+            REQUEST_TIMEOUT,
             client.request(provider_request(address, ProviderKind::OpenAi, &token)),
         )
         .await
@@ -125,12 +127,12 @@ async fn aep278_http2_unread_responses_do_not_starve_independent_hooks() {
         };
         tokio::pin!(pending);
         let start = std::time::Instant::now();
-        if tokio::time::timeout(Duration::from_secs(2), &mut pending)
+        if tokio::time::timeout(REQUEST_TIMEOUT, &mut pending)
             .await
             .is_err()
         {
             let health = tokio::time::timeout(
-                Duration::from_secs(2),
+                REQUEST_TIMEOUT,
                 client.request(
                     Request::get(format!("http://{address}/healthz"))
                         .body(box_body(Empty::<Bytes>::new()))
@@ -145,7 +147,7 @@ async fn aep278_http2_unread_responses_do_not_starve_independent_hooks() {
             assert!(target.control_available());
             let direct_start = std::time::Instant::now();
             let direct = client_for(TestProtocol::Http2);
-            tokio::time::timeout(Duration::from_secs(2), async {
+            tokio::time::timeout(REQUEST_TIMEOUT, async {
                 let response = direct
                     .request(
                         Request::post(format!("http://{worker_address}/hooks/codex"))
