@@ -1922,7 +1922,8 @@ impl LlmStreamInner for ForeignStream {
             this.opening.take();
             if let Some(stream) = &this.stream {
                 let future = stream.lock().unwrap_or_else(|e| e.into_inner()).close();
-                local(future.await)?;
+                // A plugin that reports its upstream close failure keeps that failure's type.
+                restore(future.await, &this.downstream)?;
             }
             this.terminal = true;
             this._lifetime.take();
