@@ -384,7 +384,7 @@ describe('GeminiGenerateContentCodec', () => {
         for (let depth = 0; depth < 24; depth += 1) dag = { left: dag, right: dag };
         assert.throws(() => codec.decodeResponse({ ...response, extra: dag }), {
           code: 'InvalidArg',
-          message: /Exceeded maximum JSON value count/,
+          message: /exceeded maximum JSON value count/,
         });
         assert.equal(codec.decodeResponse(response).message, 'hi');
         console.log('AFTER');

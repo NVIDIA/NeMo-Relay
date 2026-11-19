@@ -635,8 +635,98 @@ struct ActiveSubagent {
 
 // A failed pop must remain retryable without making the worker available for new work.
 struct RetiringSubagent {
-    scope_handle: ScopeHandle,
+    scope: RetiringScope,
     scope_stack: ScopeStackHandle,
+    child_turn: Option<RetiringScope>,
+    output: Value,
+    boundary_metadata: Option<Value>,
+}
+
+struct RetiringScope {
+    handle: ScopeHandle,
+    pop_attempted: bool,
+    unqueued_end_error: Option<String>,
+}
+
+impl RetiringScope {
+    fn new(handle: ScopeHandle) -> Self {
+        Self {
+            handle,
+            pop_attempted: false,
+            unqueued_end_error: None,
+        }
+    }
+
+    fn close(
+        &mut self,
+        stack: &ScopeStackHandle,
+        output: Value,
+        metadata: Option<Value>,
+    ) -> Result<Option<SubscriberDelivery>, CliError> {
+        if let Some(error) = &self.unqueued_end_error {
+            return Err(nemo_relay_types::error::FlowError::Internal(format!(
+                "scope {} was removed but its End publication failed: {error}",
+                self.handle.uuid,
+            ))
+            .into());
+        }
+        let was_present = self.is_present(stack)?;
+        if self.pop_attempted && !was_present {
+            return Ok(None);
+        }
+        self.pop_attempted = true;
+        let result = pop_retiring_scope(&self.handle.uuid, output, metadata);
+        if let Err(error) = &result
+            && was_present
+        {
+            self.unqueued_end_error = match self.is_present(stack) {
+                Ok(true) => None,
+                Ok(false) => Some(error.to_string()),
+                Err(state_error) => {
+                    Some(format!("{error}; scope state unavailable: {state_error}"))
+                }
+            };
+        }
+        result.map(Some).map_err(CliError::from)
+    }
+
+    fn is_present(&self, stack: &ScopeStackHandle) -> Result<bool, CliError> {
+        Ok(stack
+            .read()
+            .map_err(|error| nemo_relay_types::error::FlowError::Internal(error.to_string()))?
+            .find(&self.handle.uuid)
+            .is_some())
+    }
+}
+
+fn pop_retiring_scope(
+    scope_identifier: &uuid::Uuid,
+    output: Value,
+    metadata: Option<Value>,
+) -> Result<SubscriberDelivery, nemo_relay_types::error::FlowError> {
+    // Unit tests model the runtime failing to queue End after actual stack removal.
+    #[cfg(test)]
+    if RETIREMENT_PUBLICATION_FAILURE
+        .try_with(|identifier| identifier == scope_identifier)
+        .unwrap_or(false)
+    {
+        nemo_relay_runtime::api::runtime::task_scope_remove(scope_identifier)?;
+        return Err(nemo_relay_types::error::FlowError::Internal(
+            "injected failure to queue tracked subscriber delivery".into(),
+        ));
+    }
+    pop_scope_with_subscriber_delivery(
+        PopScopeParams::builder()
+            .handle_uuid(scope_identifier)
+            .output(output)
+            .metadata_opt(metadata)
+            .build(),
+    )
+}
+
+#[cfg(test)]
+tokio::task_local! {
+    static RETIREMENT_PUBLICATION_FAILURE: uuid::Uuid;
 }
 
 impl ActiveSubagent {
@@ -1923,7 +2013,6 @@ impl Session {
                     })
             })
             .map(|(id, _)| id.clone())
-            .chain(self.retiring_subagents.keys().cloned())
             .collect()
     }
 
@@ -1933,11 +2022,31 @@ impl Session {
         now: Instant,
         timeout: Duration,
     ) -> Result<(Vec<String>, Option<SubscriberDelivery>), CliError> {
-        let ids = self.stale_subagent_ids(now, timeout);
+        self.close_idle_subagent_ids(self.stale_subagent_ids(now, timeout))
+            .await
+    }
+
+    async fn close_idle_subagents(
+        &mut self,
+        now: Instant,
+        timeout: Duration,
+    ) -> Result<(Vec<String>, Option<SubscriberDelivery>), CliError> {
+        let identifiers = self
+            .stale_subagent_ids(now, timeout)
+            .into_iter()
+            .chain(self.retiring_subagents.keys().cloned())
+            .collect();
+        self.close_idle_subagent_ids(identifiers).await
+    }
+
+    async fn close_idle_subagent_ids(
+        &mut self,
+        ids: Vec<String>,
+    ) -> Result<(Vec<String>, Option<SubscriberDelivery>), CliError> {
         let mut delivery = None;
         for id in &ids {
             delivery = self
-                .close_subagent_scope(id, json!({ "status": "idle_timeout" }))
+                .close_subagent_scope(id, json!({ "status": "idle_timeout" }), None)
                 .await?
                 .or(delivery);
         }
@@ -1973,7 +2082,9 @@ impl Session {
 
     /// Select idle sessions or sessions with expired Codex children for sweeping.
     fn needs_idle_cleanup(&self, now: Instant, timeout: Duration) -> bool {
-        self.is_idle_for(now, timeout) || !self.stale_subagent_ids(now, timeout).is_empty()
+        self.is_idle_for(now, timeout)
+            || !self.retiring_subagents.is_empty()
+            || !self.stale_subagent_ids(now, timeout).is_empty()
     }
 
     /// Allow whole-session idle cleanup only when no tools or model requests remain active.
@@ -2549,7 +2660,7 @@ impl Session {
         let Some(subagent) = self.subagents.get_mut(id) else {
             return Ok(None);
         };
-        let Some(scope) = subagent.child_turn.take() else {
+        let Some(scope) = subagent.child_turn.clone() else {
             return Ok(None);
         };
         let stack = subagent.scope_stack.clone();
@@ -2565,6 +2676,10 @@ impl Session {
                 )
             })
             .await?;
+        self.subagents
+            .get_mut(id)
+            .expect("active child closed its turn")
+            .child_turn = None;
         Ok(Some(delivery))
     }
 
@@ -2784,7 +2899,9 @@ impl Session {
     ) -> Result<Option<SubscriberDelivery>, CliError> {
         if let Some(id) = self.child_turn_owner(&event) {
             if alignment::aliased_turn_subagent_id(&event).is_some() {
-                return self.close_subagent_scope(&id, event.payload).await;
+                return self
+                    .close_subagent_scope(&id, event.payload, Some(event.metadata))
+                    .await;
             }
             self.close_child_calls(&id, "closed_by_turn_end")?;
             return self
@@ -3006,7 +3123,7 @@ impl Session {
             // Subagent ends precede the turn end on the serial dispatcher, so the turn receipt
             // returned by `close_turn` also covers these deliveries.
             let _ = self
-                .close_subagent_scope(&subagent_id, json!({ "status": reason }))
+                .close_subagent_scope(&subagent_id, json!({ "status": reason }), None)
                 .await?;
             self.subagent_stack.retain(|id| id != &subagent_id);
             closed.push(subagent_id);
@@ -3077,7 +3194,7 @@ impl Session {
     // order.
     async fn start_subagent(&mut self, event: SubagentEvent) -> Result<(), CliError> {
         if self.retiring_subagents.contains_key(&event.subagent_id) {
-            self.close_subagent_scope(&event.subagent_id, json!({ "status": "replaced" }))
+            self.close_subagent_scope(&event.subagent_id, json!({ "status": "replaced" }), None)
                 .await?;
         }
         if self.task_scope.is_none() {
@@ -3212,7 +3329,7 @@ impl Session {
             )?;
             return Ok(None);
         };
-        self.close_subagent_scope(&event.subagent_id, event.payload)
+        self.close_subagent_scope(&event.subagent_id, event.payload, Some(event.metadata))
             .await
     }
 
@@ -3223,48 +3340,54 @@ impl Session {
         &mut self,
         subagent_id: &str,
         output: Value,
+        boundary_metadata: Option<Value>,
     ) -> Result<Option<SubscriberDelivery>, CliError> {
         self.close_child_calls(subagent_id, "closed_by_subagent_end")?;
-        self.close_child_turn(subagent_id, output.clone(), None)
-            .await?;
-        let retrying = self.retiring_subagents.contains_key(subagent_id);
+        let boundary_metadata = self.trusted_boundary_metadata(boundary_metadata);
         if let Some(subagent) = self.subagents.remove(subagent_id) {
             self.retiring_subagents.insert(
                 subagent_id.to_string(),
                 RetiringSubagent {
-                    scope_handle: subagent.scope_handle,
+                    scope: RetiringScope::new(subagent.scope_handle),
                     scope_stack: subagent.scope_stack,
+                    child_turn: subagent.child_turn.map(RetiringScope::new),
+                    output,
+                    boundary_metadata,
                 },
             );
+        } else if let Some(retiring) = self.retiring_subagents.get_mut(subagent_id)
+            && boundary_metadata.is_some()
+        {
+            retiring.output = output;
+            retiring.boundary_metadata = boundary_metadata;
         }
-        let Some(retiring) = self.retiring_subagents.get(subagent_id) else {
+        let Some(retiring) = self.retiring_subagents.get_mut(subagent_id) else {
             return Ok(None);
         };
-        // A pop can fail after removing the scope. Retrying bookkeeping must not pop it twice.
-        let already_removed = retrying
-            && retiring
-                .scope_stack
-                .read()
-                .map_err(|error| nemo_relay_types::error::FlowError::Internal(error.to_string()))?
-                .find(&retiring.scope_handle.uuid)
-                .is_none();
-        let subscriber_delivery = if already_removed {
-            None
-        } else {
-            Some(
-                TASK_SCOPE_STACK
-                    .scope(retiring.scope_stack.clone(), async {
-                        pop_scope_with_subscriber_delivery(
-                            PopScopeParams::builder()
-                                .handle_uuid(&retiring.scope_handle.uuid)
-                                .output(output)
-                                .build(),
-                        )
-                        .map_err(CliError::from)
-                    })
-                    .await?,
-            )
-        };
+        let stack = retiring.scope_stack.clone();
+        let subscriber_delivery = TASK_SCOPE_STACK
+            .scope(stack.clone(), async {
+                let mut delivery = None;
+                if let Some(child_turn) = &mut retiring.child_turn {
+                    delivery = child_turn.close(
+                        &stack,
+                        retiring.output.clone(),
+                        retiring.boundary_metadata.clone(),
+                    )?;
+                    retiring.child_turn = None;
+                }
+                Ok::<_, CliError>(
+                    retiring
+                        .scope
+                        .close(
+                            &stack,
+                            retiring.output.clone(),
+                            retiring.boundary_metadata.clone(),
+                        )?
+                        .or(delivery),
+                )
+            })
+            .await?;
         self.retiring_subagents.remove(subagent_id);
         self.subagent_stack.retain(|id| id != subagent_id);
         self.completed_subagents.insert(subagent_id.to_string());
@@ -3469,7 +3592,8 @@ impl Session {
             )?;
             return match completed_agent_subagent_id {
                 Some(id) if self.subagents.contains_key(&id) => {
-                    self.close_subagent_scope(&id, event.payload).await
+                    self.close_subagent_scope(&id, event.payload, Some(event.metadata))
+                        .await
                 }
                 _ => Ok(None),
             };
@@ -3488,7 +3612,10 @@ impl Session {
                 .filter(|id| self.subagents.contains_key(id)),
         );
         match completed_agent_subagent_id {
-            Some(id) => self.close_subagent_scope(&id, event.result).await,
+            Some(id) => {
+                self.close_subagent_scope(&id, event.result, Some(event.metadata))
+                    .await
+            }
             None => Ok(None),
         }
     }

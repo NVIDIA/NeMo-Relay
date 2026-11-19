@@ -263,16 +263,25 @@ impl<'a> SessionEventApplier<'a> {
         {
             in_flight.session_mut().agent_kind = event_kind;
         }
-        let active_subagents: Vec<_> = in_flight.session_mut().subagents.keys().cloned().collect();
+        let session = in_flight.session_mut();
+        let tracked_subagents: Vec<_> = session
+            .subagents
+            .keys()
+            .chain(session.retiring_subagents.keys())
+            .cloned()
+            .collect();
         match in_flight.session_mut().apply(event).await {
             Ok(subscriber_delivery) => {
                 if is_completion && let Some(key) = completion_key {
                     self.completions.lock().await.record(key);
                 }
                 let session = in_flight.session_mut();
-                let closed_subagents = active_subagents
+                let closed_subagents = tracked_subagents
                     .into_iter()
-                    .filter(|id| !session.subagents.contains_key(id))
+                    .filter(|id| {
+                        !session.subagents.contains_key(id)
+                            && !session.retiring_subagents.contains_key(id)
+                    })
                     .map(|id| (session_id.to_string(), id))
                     .collect();
                 let is_empty = session.is_empty();
