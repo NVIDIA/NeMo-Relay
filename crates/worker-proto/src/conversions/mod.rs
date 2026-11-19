@@ -152,6 +152,31 @@ impl WireValue<pb::JsonObject> for Json {
     }
 }
 
+impl WireValue<pb::ApplicationExecutionContext>
+    for nemo_relay_types::api::tool::ApplicationExecutionContext
+{
+    fn to_wire(self) -> Result<pb::ApplicationExecutionContext> {
+        self.validate()
+            .map_err(|_| ConversionError("invalid application execution context".into()))?;
+        let data = self
+            .data
+            .map(|fields| Json::Object(fields.into_iter().collect()).to_wire())
+            .transpose()?;
+        Ok(pb::ApplicationExecutionContext { data })
+    }
+
+    fn from_wire(value: pb::ApplicationExecutionContext) -> Result<Self> {
+        let data = value
+            .data
+            .map(Json::from_wire)
+            .transpose()
+            .map_err(|_| ConversionError("invalid application execution context".into()))?;
+        let envelope = Json::Object(data.into_iter().map(|data| ("data".into(), data)).collect());
+        Self::try_from(envelope)
+            .map_err(|_| ConversionError("invalid application execution context".into()))
+    }
+}
+
 impl WireValue<pb::JsonArray> for Json {
     fn to_wire(self) -> Result<pb::JsonArray> {
         let Json::Array(values) = self else {

@@ -25,38 +25,28 @@ fn main() {
     assert_eq!(contract::NATIVE_API, format!("v{major}.{minor}"));
     println!("cargo:rerun-if-changed=src/contract.rs");
     std::fs::write(output.join("native_api.rs"),format!("/// Minimum native contract required by this SDK.\npub const NATIVE_API_VERSION:NativeApiVersion=NativeApiVersion::new({major},{minor});\n")).unwrap();
-    generate_schema(&root, &output, false);
-    generate_schema(&root, &output, true);
+    generate_schema(&root, &output);
 }
 
 /// Describe wire declarations and compiler-derived layouts without tying them to package versions.
-fn generate_schema(root: &std::path::Path, output: &std::path::Path, additive: bool) {
-    // The baseline file list, schema prefix and formatting remain immutable.
-    // Additive declarations use separate source and output files.
-    let mut schema = String::from(if additive {
-        "\nrelay.native.v1.1; additive-tool-context/1;\n"
-    } else {
-        "relay.native.v1.0; xabi/0.1.2; async-ffi/0.5.1/abi2; transfer/1;\n"
-    });
+fn generate_schema(root: &std::path::Path, output: &std::path::Path) {
+    let mut schema =
+        String::from("relay.native.v1.0; xabi/0.1.2; async-ffi/0.5.1/abi2; transfer/1;\n");
     let mut layouts = String::from("|result:&mut String| {\n");
-    let files: &[&str] = if additive {
-        &["v1_1", "values_v1_1", "handles_v1_1", "wire_v1_1"]
-    } else {
-        &[
-            "value",
-            "version",
-            "v1_0",
-            "diagnostics",
-            "borrow",
-            "transfer",
-            "values",
-            "handles",
-            "wire",
-            "bootstrap",
-            "future",
-        ]
-    };
-    for &file in files {
+    let files = [
+        "value",
+        "version",
+        "v1_0",
+        "diagnostics",
+        "borrow",
+        "transfer",
+        "values",
+        "handles",
+        "wire",
+        "bootstrap",
+        "future",
+    ];
+    for file in files {
         println!("cargo:rerun-if-changed=src/{file}.rs");
         let source = std::fs::read_to_string(root.join(format!("src/{file}.rs"))).unwrap();
         let parsed = syn::parse_file(&source).unwrap();
@@ -71,9 +61,8 @@ fn generate_schema(root: &std::path::Path, output: &std::path::Path, additive: b
         }
     }
     layouts.push('}');
-    let suffix = if additive { "_v1_1" } else { "" };
-    std::fs::write(output.join(format!("native_schema{suffix}.txt")), schema).unwrap();
-    std::fs::write(output.join(format!("native_layout{suffix}.rs")), layouts).unwrap();
+    std::fs::write(output.join("native_schema.txt"), schema).unwrap();
+    std::fs::write(output.join("native_layout.rs"), layouts).unwrap();
 }
 
 /// Extract checked declarations and their layout expressions without changing their order.
@@ -112,7 +101,7 @@ fn contract_tokens(file: &str, item: syn::Item, layouts: &mut String) -> Option<
                 return None;
             }
             item = clean_trait(item);
-            if matches!(file, "wire" | "wire_v1_1") {
+            if file == "wire" {
                 let name = format!("crate::{file}::XabiV1AbiTrait{}", item.ident);
                 layouts.push_str(&format!("{{let mut items=Vec::new();({name}::XABI_LAYOUT.collect)(&mut items);for item in items {{result.push_str(&format!(\";{{item:?}}\"));}}}}\n"));
             }
@@ -210,7 +199,6 @@ fn clean_trait(mut item: syn::ItemTrait) -> syn::ItemTrait {
 /// Include wire records while excluding local Rust capability implementations.
 fn is_contract_struct(file: &str, item: &syn::ItemStruct) -> bool {
     match file {
-        "handles_v1_1" => false,
         "handles" => item.ident == "LeaseWire",
         "transfer" => ["OwnedWire", "OptionalWire", "VectorWire"]
             .iter()

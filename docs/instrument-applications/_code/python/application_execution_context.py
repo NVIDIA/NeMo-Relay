@@ -12,7 +12,7 @@ async def execute_after_application_approval(
 ) -> nemo_relay.ToolExecutionResult[nemo_relay.Json]:
     """Run synchronous host verification initially and immediately before the effect."""
     # The application must verify the real receipt's owner, exact operation,
-    # validity and current policy before returning a HostApproval assertion.
+    # validity and current policy before returning its own approval assertion.
     reviewed = validate_existing_approval(receipt, name, args)
 
     async def execute_reviewed(actual_args):
@@ -25,7 +25,7 @@ async def execute_after_application_approval(
         name,
         args,
         execute_reviewed,
-        execution_context={"host_approval": reviewed},
+        execution_context={"data": {"host_approval": reviewed}},
     )
 
 
@@ -36,9 +36,10 @@ def register_application_review(approval_covers_call, perform_component_review) 
     """
 
     async def review(context, next_call):
-        supplied = context.execution_context or {}
+        supplied = (context.execution_context or {}).get("data", {})
         # This application-owned matcher must check the trusted calling host,
-        # assertion source and exact tool/arguments; a source string is not proof.
+        # payload schema, assertion source and exact tool/arguments; a source
+        # string is not proof. Relay validates only the surrounding envelope.
         if not approval_covers_call(supplied.get("host_approval"), context.tool_name, context.args):
             # Missing or mismatched assertions take the normal review path.
             # This callback must raise when its policy forbids execution.

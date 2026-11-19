@@ -2530,9 +2530,7 @@ impl WorkerPluginCallback {
                 tool_name: tool_name.into(),
                 value: Some(encode_json(JSON_SCHEMA, &value)),
                 tool_call_id: tool_call_id.map(Into::into),
-                execution_context: execution_context
-                    .map(|value| encode_wire(&value.to_json()))
-                    .transpose()?,
+                execution_context: execution_context.as_ref().map(encode_wire).transpose()?,
             })),
         )?;
         let response = self.invoke_async(request).await?;

@@ -26,7 +26,7 @@ func executionContextJSON(context *ApplicationExecutionContext) json.RawMessage 
 
 func TestToolExecutionContextRemainsSeparateAcrossMiddlewareAndNestedCalls(t *testing.T) {
 	const marker = "application-private-context-reference"
-	context := json.RawMessage(`{"approval":{"reference":"` + marker + `"}}`)
+	context := json.RawMessage(`{"data":{"approval":{"reference":"` + marker + `"}}}`)
 	var eventsMu sync.Mutex
 	var events []json.RawMessage
 	if err := RegisterSubscriber("execution-context-events", func(event Event) {
@@ -64,7 +64,7 @@ func TestToolExecutionContextRemainsSeparateAcrossMiddlewareAndNestedCalls(t *te
 			}
 			// This is callback-owned JSON, not a mutable reference to the context
 			// held by the runtime or supplied to the next middleware.
-			ctx.ExecutionContext.AdditionalFields["approval"][0] = '!'
+			ctx.ExecutionContext.Data["approval"][0] = '!'
 			return toolExecutionOutcome(next(json.RawMessage(`{"value":2}`)))
 		}); err != nil {
 		t.Fatal(err)
@@ -120,7 +120,7 @@ func TestToolExecutionContextOptionSnapshotAbsenceAndReuse(t *testing.T) {
 		t.Fatal(err)
 	}
 	t.Cleanup(func() { _ = DeregisterToolExecutionIntercept("execution-context-snapshot") })
-	input := json.RawMessage(`{"approved":true}`)
+	input := json.RawMessage(`{"data":{"approved":true}}`)
 	snapshot := WithToolExecutionContext(input)
 	input[0] = '!'
 	execute := func(options ...ToolCallOption) {
@@ -135,15 +135,15 @@ func TestToolExecutionContextOptionSnapshotAbsenceAndReuse(t *testing.T) {
 	execute()
 	execute(WithToolExecutionContext(json.RawMessage(`{}`)))
 	execute(snapshot, WithToolExecutionContext(nil))
-	execute(WithToolExecutionContext(json.RawMessage(`{"message":"before\u0000after"}`)))
-	depthBoundary := json.RawMessage(strings.Repeat(`{"nested":`, 64) + `null` + strings.Repeat(`}`, 64))
+	execute(WithToolExecutionContext(json.RawMessage(`{"data":{"message":"before\u0000after"}}`)))
+	depthBoundary := json.RawMessage(`{"data":` + strings.Repeat(`{"nested":`, 63) + `null` + strings.Repeat(`}`, 63) + `}`)
 	execute(WithToolExecutionContext(depthBoundary))
-	if len(seen) != 7 || string(seen[0]) != `{"approved":true}` || !bytes.Equal(seen[0], seen[1]) || seen[2] != nil ||
+	if len(seen) != 7 || string(seen[0]) != `{"data":{"approved":true}}` || !bytes.Equal(seen[0], seen[1]) || seen[2] != nil ||
 		string(seen[3]) != `{}` || seen[4] != nil {
 		t.Fatalf("unexpected execution contexts: %q", seen)
 	}
-	var escaped struct{ Message string }
-	if err := json.Unmarshal(seen[5], &escaped); err != nil || escaped.Message != "before\x00after" {
+	var escaped struct{ Data struct{ Message string } }
+	if err := json.Unmarshal(seen[5], &escaped); err != nil || escaped.Data.Message != "before\x00after" {
 		t.Fatalf("escaped NUL did not round trip: %q, %v", seen[5], err)
 	}
 	if !bytes.Equal(seen[6], depthBoundary) {
@@ -169,12 +169,13 @@ func TestToolExecutionContextRejectsInvalidInputBeforeMiddlewareOrEffects(t *tes
 		"approval-incomplete": json.RawMessage(`{"host_approval":{"version":1}}`),
 		"approval-version":    json.RawMessage(`{"host_approval":{"version":2,"source":"test","approval_id":"a","tool_name":"tool","approved_arguments":{}}}`),
 		"scalar":              json.RawMessage(`true`),
-		"oversized":           json.RawMessage(`{"value":"` + strings.Repeat("x", 16*1024) + `"}`),
-		"too-deep":            json.RawMessage(strings.Repeat(`{"nested":`, 65) + `null` + strings.Repeat(`}`, 65)),
+		"oversized":           json.RawMessage(`{"data":{"value":"` + strings.Repeat("x", 16*1024) + `"}}`),
+		"too-deep":            json.RawMessage(`{"data":` + strings.Repeat(`{"nested":`, 64) + `null` + strings.Repeat(`}`, 64) + `}`),
 	}
-	for _, decision := range []string{`"approved"`, `"denied"`, `null`} {
-		invalid["obsolete-decision-"+decision] = json.RawMessage(`{"host_approval":{"version":1,"source":"test","approval_id":"a","tool_name":"tool","approved_arguments":{},"decision":` + decision + `}}`)
-	}
+	invalid["data-null"] = json.RawMessage(`{"data":null}`)
+	invalid["data-array"] = json.RawMessage(`{"data":[]}`)
+	invalid["data-scalar"] = json.RawMessage(`{"data":1}`)
+
 	for name, context := range invalid {
 		t.Run(name, func(t *testing.T) {
 			_, err := ToolCallExecute("execution-context-invalid", json.RawMessage(`{}`),
@@ -213,13 +214,10 @@ func TestToolExecutionContextRequiresManagedExecution(t *testing.T) {
 }
 
 func TestApplicationExecutionContextTypedRoundTripAndValidation(t *testing.T) {
-	input := []byte(`{"host_approval":{"version":1,"source":"application","approval_id":"review-1","tool_name":"demo","approved_arguments":null,"extra":{"tag":true}},"custom":[1,null]}`)
+	input := []byte(`{"data":{"host_approval":{"decision":"application-owned","version":2},"custom":[1,null]}}`)
 	var context ApplicationExecutionContext
 	if err := json.Unmarshal(input, &context); err != nil {
 		t.Fatal(err)
-	}
-	if context.HostApproval.Source != "application" || string(context.HostApproval.ApprovedArguments) != "null" {
-		t.Fatal("known fields lost")
 	}
 	encoded, err := json.Marshal(context)
 	if err != nil {
@@ -233,62 +231,50 @@ func TestApplicationExecutionContextTypedRoundTripAndValidation(t *testing.T) {
 		t.Fatal(err)
 	}
 	if !reflect.DeepEqual(before, after) {
-		t.Fatalf("extensions lost: %s", encoded)
-	}
-	for _, version := range []string{"1.0", "1e0"} {
-		var equivalent ApplicationExecutionContext
-		if err := json.Unmarshal(bytes.Replace(input, []byte(`"version":1`), []byte(`"version":`+version), 1), &equivalent); err != nil {
-			t.Fatalf("numeric version %s: %v", version, err)
-		}
-	}
-	for _, decision := range []json.RawMessage{json.RawMessage(`"approved"`), json.RawMessage(`"denied"`), json.RawMessage(`null`)} {
-		var obsolete ApplicationExecutionContext
-		legacy := bytes.Replace(input, []byte(`"version":1`), []byte(`"decision":`+string(decision)+`,"version":1`), 1)
-		if err := json.Unmarshal(legacy, &obsolete); err == nil {
-			t.Fatal("obsolete raw decision was accepted")
-		}
-		approval := *context.HostApproval
-		approval.AdditionalFields = map[string]json.RawMessage{"decision": decision}
-		var effects int
-		_, err := ToolCallExecute("invalid-typed-context", json.RawMessage(`{}`), func(args json.RawMessage) (ToolExecutionResult, error) {
-			effects++
-			return ToolExecutionResult{Result: args}, nil
-		}, WithApplicationExecutionContext(&ApplicationExecutionContext{HostApproval: &approval}))
-		if err == nil || effects != 0 {
-			t.Fatal("obsolete typed decision reached effects")
-		}
+		t.Fatalf("application data lost: %s", encoded)
 	}
 	option := WithApplicationExecutionContext(&context)
-	context.HostApproval.Source = "changed"
+	context.Data["host_approval"][0] = '!'
 	var options toolCallOptions
 	option(&options)
-	if bytes.Contains(options.executionContext, []byte("changed")) {
-		t.Fatal("typed option did not snapshot")
+	if !json.Valid(options.executionContext) {
+		t.Fatal("typed option did not snapshot data")
 	}
-	invalid := WithApplicationExecutionContext(&ApplicationExecutionContext{HostApproval: &HostApproval{}})
+	invalid := WithApplicationExecutionContext(&ApplicationExecutionContext{Data: map[string]json.RawMessage{"invalid": json.RawMessage(`{`)}})
 	var calls int
 	if _, err := ToolCallExecute("invalid-typed-context", json.RawMessage(`{}`), func(args json.RawMessage) (ToolExecutionResult, error) {
 		calls++
 		return ToolExecutionResult{Result: args}, nil
 	}, invalid); err == nil || calls != 0 {
-		t.Fatal("invalid typed context reached effects")
+		t.Fatal("invalid typed data reached effects")
 	}
-	empty, err := json.Marshal(ApplicationExecutionContext{})
-	if err != nil || string(empty) != "{}" {
-		t.Fatalf("empty object lost: %s %v", empty, err)
+	for _, source := range []string{`{}`, `{"data":{}}`} {
+		var context ApplicationExecutionContext
+		if err := json.Unmarshal([]byte(source), &context); err != nil {
+			t.Fatal(err)
+		}
+		encoded, err := json.Marshal(context)
+		if err != nil || string(encoded) != source {
+			t.Fatalf("absence/empty distinction lost: %s %v", encoded, err)
+		}
+	}
+	for _, source := range []string{`{"unknown":1}`, `{"data":null}`, `{"data":[]}`} {
+		var context ApplicationExecutionContext
+		if err := json.Unmarshal([]byte(source), &context); err == nil {
+			t.Fatal("invalid typed context accepted")
+		}
 	}
 }
 
 func TestApplicationExecutionContextTypedMiddleware(t *testing.T) {
-	context := &ApplicationExecutionContext{
-		HostApproval:     &HostApproval{Version: 1, Source: "application", ApprovalID: "review-123", ToolName: "typed-context", ApprovedArguments: json.RawMessage(`{"value":1}`), AdditionalFields: map[string]json.RawMessage{"extension": json.RawMessage(`true`)}},
-		AdditionalFields: map[string]json.RawMessage{"custom": json.RawMessage(`{"retained":true}`)},
-	}
+	context := &ApplicationExecutionContext{Data: map[string]json.RawMessage{
+		"host_approval": json.RawMessage(`{"decision":"application-owned","version":2}`),
+		"custom":        json.RawMessage(`{"retained":true}`),
+	}}
 	var observed bool
 	if err := RegisterToolExecutionIntercept("typed-application-context", 1, func(ctx ToolExecutionContext, next func(json.RawMessage) (ToolExecutionResult, error)) (ToolExecutionInterceptOutcome, error) {
-		approval := ctx.ExecutionContext.HostApproval
-		if approval == nil || approval.ApprovalID != "review-123" || string(approval.AdditionalFields["extension"]) != "true" || string(ctx.ExecutionContext.AdditionalFields["custom"]) != `{"retained":true}` {
-			return ToolExecutionInterceptOutcome{}, fmt.Errorf("typed context lost standard or additional fields")
+		if ctx.ExecutionContext == nil || string(ctx.ExecutionContext.Data["host_approval"]) != `{"decision":"application-owned","version":2}` || string(ctx.ExecutionContext.Data["custom"]) != `{"retained":true}` {
+			return ToolExecutionInterceptOutcome{}, fmt.Errorf("typed context lost application fields")
 		}
 		observed = true
 		return toolExecutionOutcome(next(ctx.Args))

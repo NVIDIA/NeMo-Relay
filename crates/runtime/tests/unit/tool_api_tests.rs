@@ -35,7 +35,7 @@ fn execution_context_is_preserved_across_intercepts_but_not_tool_arguments_or_ev
     };
     let _guard = lock_global_runtime();
     reset_global();
-    let expected = json!({"example.approval": {"receipt": "private-receipt"}});
+    let expected = json!({"data": {"example.approval": {"receipt": "private-receipt"}}});
     let seen = Arc::new(Mutex::new(Vec::new()));
     let events = Arc::new(Mutex::new(Vec::new()));
     let captured = events.clone();
@@ -73,7 +73,7 @@ fn execution_context_is_preserved_across_intercepts_but_not_tool_arguments_or_ev
                         .unwrap()
                         .push(context.execution_context().map(|value| value.to_json()));
                     let mut local_copy = context.execution_context().unwrap().to_json();
-                    local_copy["example.approval"]["receipt"] = json!("changed-copy");
+                    local_copy["data"]["example.approval"]["receipt"] = json!("changed-copy");
                     Ok(next(context.args().clone()).await?.into())
                 })
             }),
@@ -128,12 +128,12 @@ fn execution_context_is_invocation_local_and_nested_calls_do_not_inherit_it() {
                     "left" => {
                         assert_eq!(
                             context.execution_context().map(|value| value.to_json()),
-                            Some(json!({"owner": "left"}))
+                            Some(json!({"data": {"owner": "left"}}))
                         )
                     }
                     "right" => assert_eq!(
                         context.execution_context().map(|value| value.to_json()),
-                        Some(json!({"owner": "right"}))
+                        Some(json!({"data": {"owner": "right"}}))
                     ),
                     "nested" => assert!(context.execution_context().is_none()),
                     _ => panic!("unexpected tool"),
@@ -149,7 +149,7 @@ fn execution_context_is_invocation_local_and_nested_calls_do_not_inherit_it() {
                 ToolCallExecuteParams::builder()
                     .name(name)
                     .args(json!({}))
-                    .execution_context(json!({"owner": name}).try_into().unwrap())
+                    .execution_context(json!({"data": {"owner": name}}).try_into().unwrap())
                     .func(Arc::new(|_| {
                         Box::pin(async {
                             tool_call_execute(
@@ -187,7 +187,7 @@ fn invalid_execution_context_is_rejected_before_any_middleware_or_tool() {
             Json::Null,
             json!([]),
             json!(true),
-            json!({"data": "x".repeat(16_384)}),
+            json!({"data": {"extra": "x".repeat(16_384)}}),
         ] {
             let error = super::ApplicationExecutionContext::try_from(value).unwrap_err();
             assert!(!error.to_string().is_empty());
@@ -195,9 +195,10 @@ fn invalid_execution_context_is_rejected_before_any_middleware_or_tool() {
         // Public Rust fields can be changed after checked construction. Admission
         // must still refuse them before any conditional or execution callback.
         let mut altered = super::ApplicationExecutionContext::default();
-        altered
-            .additional_properties
-            .insert("host_approval".into(), Json::Null);
+        altered.data = Some(std::collections::BTreeMap::from([(
+            "extra".into(),
+            json!("x".repeat(16_384)),
+        )]));
         let error = tool_call_execute(
             ToolCallExecuteParams::builder()
                 .name("altered-context")
@@ -232,14 +233,14 @@ fn execution_context_nesting_is_bounded_before_middleware_or_tool() {
         for arrays in [false, true] {
             for levels in [64, 65, 161] {
                 let mut value = Json::Null;
-                for _ in 1..levels {
+                for _ in 2..levels {
                     value = if arrays {
                         json!([value])
                     } else {
                         json!({"nested": value})
                     };
                 }
-                let value = json!({"nested": value});
+                let value = json!({"data": {"nested": value}});
                 assert!(serde_json::to_vec(&value).unwrap().len() < 16_384);
                 let before = calls.load(std::sync::atomic::Ordering::SeqCst);
                 let parsed = super::ApplicationExecutionContext::try_from(value);
@@ -289,7 +290,11 @@ fn application_review_claim_does_not_bypass_conditional_guardrails() {
             ToolCallExecuteParams::builder()
                 .name("reviewed-tool")
                 .args(json!({}))
-                .execution_context(json!({"review": {"approved": true}}).try_into().unwrap())
+                .execution_context(
+                    json!({"data": {"review": {"approved": true}}})
+                        .try_into()
+                        .unwrap(),
+                )
                 .func(Arc::new(|_| panic!("review claim bypassed a guardrail")))
                 .build(),
         )

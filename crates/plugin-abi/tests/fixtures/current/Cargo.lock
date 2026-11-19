@@ -25,7 +25,7 @@ dependencies = [
 ]
 
 [[package]]
-name = "nemo-relay-native-abi-fixture-native11"
+name = "nemo-relay-native-abi-fixture-current"
 version = "1.0.0"
 dependencies = [
  "nemo-relay-plugin-abi",

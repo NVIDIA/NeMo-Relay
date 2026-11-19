@@ -911,12 +911,12 @@ describe('Tool intercepts', () => {
     it(`${execute.name} isolates host execution context from arguments, nested calls, and events`, async () => {
       const seen = [];
       const events = [];
-      const host = { review: { state: 'host-only-sentinel' } };
+      const host = { data: { review: { state: 'host-only-sentinel' } } };
       registerSubscriber('node_execution_context_events', (event) => events.push(event));
       registerToolExecutionIntercept('node_execution_context_outer', 1, async (context, next) => {
         if (context.toolName === 'execution_context_parent') {
-          assert.deepEqual(context.executionContext, { review: { state: 'host-only-sentinel' } });
-          context.executionContext.review.state = 'modified';
+          assert.deepEqual(context.executionContext, { data: { review: { state: 'host-only-sentinel' } } });
+          context.executionContext.data.review.state = 'modified';
           await toolCallExecuteAsync('execution_context_nested', {}, (args) => ({ result: args }));
         }
         const downstream = await next(context.args);
@@ -940,13 +940,13 @@ describe('Tool intercepts', () => {
           null,
           host,
         );
-        host.review.state = 'changed-by-caller';
+        host.data.review.state = 'changed-by-caller';
         assert.deepEqual(await pending, { result: { value: 1, rewritten: true } });
         await execute('execution_context_omitted', {}, (args) => ({ result: args }));
         await flushSubscribers();
         assert.deepEqual(seen, [
           { name: 'execution_context_nested', context: null },
-          { name: 'execution_context_parent', context: { review: { state: 'host-only-sentinel' } } },
+          { name: 'execution_context_parent', context: { data: { review: { state: 'host-only-sentinel' } } } },
           { name: 'execution_context_omitted', context: null },
         ]);
         assert.ok(!JSON.stringify(events).includes('host-only-sentinel'));
@@ -957,6 +957,34 @@ describe('Tool intercepts', () => {
       }
     });
   }
+
+  it('preserves omitted context, empty context and explicitly empty data', async () => {
+    const seen = [];
+    registerToolExecutionIntercept('node_empty_data_context', 1, async (context, next) => {
+      seen.push(context.executionContext);
+      const downstream = await next(context.args);
+      return { result: downstream.result };
+    });
+    try {
+      for (const supplied of [undefined, null, {}, { data: {} }]) {
+        await toolCallExecuteAsync(
+          'empty_context',
+          {},
+          (args) => ({ result: args }),
+          null,
+          null,
+          null,
+          null,
+          null,
+          null,
+          supplied,
+        );
+      }
+      assert.deepEqual(seen, [null, null, {}, { data: {} }]);
+    } finally {
+      deregisterToolExecutionIntercept('node_empty_data_context');
+    }
+  });
 
   it('preserves opaque prototype-like, NUL and Unicode execution-context keys as own data', async () => {
     const supplied = JSON.parse(
@@ -969,19 +997,11 @@ describe('Tool intercepts', () => {
       return { result: downstream.result };
     });
     try {
-      await toolCallExecuteAsync(
-        'opaque_keys',
-        {},
-        (args) => ({ result: args }),
-        null,
-        null,
-        null,
-        null,
-        null,
-        null,
-        supplied,
-      );
-      assert.deepEqual(observed, supplied);
+      await toolCallExecuteAsync('opaque_keys', {}, (args) => ({ result: args }), null, null, null, null, null, null, {
+        data: supplied,
+      });
+      assert.deepEqual(observed, { data: supplied });
+      observed = observed.data;
       assert.equal(Object.hasOwn(observed, '__proto__'), true);
       assert.equal(Object.hasOwn(observed, 'constructor'), true);
       assert.equal(Object.getPrototypeOf(observed), Object.prototype);
@@ -1013,19 +1033,11 @@ describe('Tool intercepts', () => {
       return { result: downstream.result };
     });
     try {
-      await toolCallExecuteAsync(
-        'own_input',
-        {},
-        (args) => ({ result: args }),
-        null,
-        null,
-        null,
-        null,
-        null,
-        null,
-        context,
-      );
-      assert.deepEqual(observed, { ownValue: 'retained', nested: { value: 1 }, array: [null] });
+      await toolCallExecuteAsync('own_input', {}, (args) => ({ result: args }), null, null, null, null, null, null, {
+        data: context,
+      });
+      assert.deepEqual(observed, { data: { ownValue: 'retained', nested: { value: 1 }, array: [null] } });
+      observed = observed.data;
       assert.equal(observed.inheritedApproval, undefined);
       assert.equal(observed.nested.nestedApproval, undefined);
       assert.equal(Object.getPrototypeOf(observed), Object.prototype);
@@ -1049,30 +1061,15 @@ describe('Tool intercepts', () => {
         'text',
         1,
         true,
-        { host_approval: null },
-        { host_approval: { version: 1 } },
-        ...['approved', 'denied', null].map((decision) => ({
-          host_approval: {
-            version: 1,
-            source: 'application',
-            approval_id: 'a',
-            tool_name: 'tool',
-            approved_arguments: {},
-            decision,
-          },
-        })),
-        {
-          host_approval: {
-            version: 2,
-            source: 'application',
-            approval_id: 'a',
-            tool_name: 'tool',
-            approved_arguments: {},
-          },
-        },
-        { value: 'x'.repeat(16384) },
-        { sparse: new Array(1_000_001) },
-        cyclic,
+        { host_approval: {} },
+        { unexpected: true },
+        { data: null },
+        { data: [] },
+        { data: 'text' },
+        { data: true },
+        { data: { value: 'x'.repeat(16384) } },
+        { data: { sparse: new Array(1_000_001) } },
+        { data: cyclic },
       ]) {
         await assert.rejects(async () =>
           toolCallExecuteAsync(

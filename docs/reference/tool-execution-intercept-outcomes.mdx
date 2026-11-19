@@ -201,7 +201,7 @@ context carries the following fields:
 | `tool_name` | Name of the tool being executed. |
 | `args` | JSON argument payload entering this intercept. |
 | `tool_call_id` | Provider-issued correlation identifier recorded on the managed tool call, or absent when the call did not record one. |
-| `execution_context` | Optional application-supplied JSON object for execution intercepts. See [Application Execution Context](/instrument-applications/advanced-guide#application-execution-context) for its scope and trust requirements. |
+| `execution_context` | Optional concrete context with an application-defined `data` map for execution intercepts. See [Application Execution Context](/instrument-applications/advanced-guide#application-execution-context) for its scope and trust requirements. |
 
 `tool_call_id` is the same identifier that Relay records on tool lifecycle
 events. An intercept that completes execution itself, without invoking the
@@ -289,7 +289,7 @@ Execution intercepts add lifecycle-owned pending marks to that shape:
 Canonical JSON uses `annotation`, `pending_marks`, and `category_profile`
 across bindings.
 
-Native plugins declare `compat.native_api = "v1.1"`. Their build SDK sets the
+Native plugins declare `compat.native_api = "v1.0"`. Their build SDK sets the
 minimum host contract they require. The `compat.relay` range selects supported
 Relay releases. Refer to [Native ABI Reference](/build-plugins/native/native-abi-reference).
 Workers use `nvidia.nemo.relay.worker.v1`, contract version `1.0.0`.

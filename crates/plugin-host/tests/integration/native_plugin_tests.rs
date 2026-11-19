@@ -263,56 +263,6 @@ async fn checked_sdk_preserves_all_native_callback_behavior() {
     sdk_cdylib_assert_behavior().await;
 }
 
-#[tokio::test]
-async fn legacy_native_tool_intercept_rejects_execution_context_without_running_tool() {
-    let _guard = NATIVE_PLUGIN_TEST_LOCK.lock().await;
-    let fixture = build_fixture_plugin();
-    let manifest = write_manifest(&fixture);
-    let _activation = load_native_plugins([load_spec("fixture_native", &manifest)]).unwrap();
-    let mut cleanup = NativePluginTestCleanup::new();
-    test_initialize_plugin_host_exact(PluginConfig {
-        components: vec![PluginComponentSpec {
-            kind: "fixture_native".into(),
-            enabled: true,
-            config: Map::from_iter([("legacy_sdk_fixture".into(), json!(true))]),
-        }],
-        ..Default::default()
-    })
-    .await
-    .unwrap();
-    cleanup.mark_plugin_configuration_active();
-    let calls = Arc::new(AtomicUsize::new(0));
-    for context in [
-        json!({}),
-        json!({"operation": {"private_marker": "not-in-error"}}),
-    ] {
-        let captured = calls.clone();
-        let error = tool_call_execute(
-            ToolCallExecuteParams::builder()
-                .name("native-context-probe")
-                .args(json!({"query": "test"}))
-                .execution_context(context.try_into().unwrap())
-                .func(Arc::new(move |args| {
-                    let captured = captured.clone();
-                    Box::pin(async move {
-                        captured.fetch_add(1, Ordering::SeqCst);
-                        Ok(ToolExecutionResult::new(args))
-                    })
-                }))
-                .build(),
-        )
-        .await
-        .unwrap_err();
-        assert!(
-            error
-                .to_string()
-                .contains("native tool execution intercept does not support execution context")
-        );
-        assert!(!error.to_string().contains("not-in-error"));
-    }
-    assert_eq!(calls.load(Ordering::SeqCst), 0);
-}
-
 /// A separately compiled SDK receives context without putting it in args or telemetry.
 #[tokio::test]
 async fn sdk_native_tool_context_isolated_from_arguments_and_events() {
@@ -347,14 +297,14 @@ async fn sdk_native_tool_context_isolated_from_arguments_and_events() {
     let contexts = [
         None,
         Some(json!({})),
-        Some(json!({
+        Some(json!({"data": {
             "host_approval": {
                 "version": 1, "source": "example.application", "approval_id": "approval-native",
                 "tool_name": "native-context-probe", "approved_arguments": original,
                 "com.example.review": {"private_marker": "native-private-context-sentinel"},
             },
             "com.example.audit": {"id": "native-private-context-sentinel"},
-        })),
+        }})),
     ];
     for supplied in contexts {
         let captured = calls.clone();

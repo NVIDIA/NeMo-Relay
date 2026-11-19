@@ -438,7 +438,7 @@ async def test_unusable_approval_takes_normal_denial_path(application_review_exa
             "files.write",
             arguments,
             implementation,
-            execution_context=None if claim == "absent" else {"host_approval": assertion},
+            execution_context=None if claim == "absent" else {"data": {"host_approval": assertion}},
         )
     review.assert_awaited_once_with("files.write", arguments)
     implementation.assert_not_awaited()

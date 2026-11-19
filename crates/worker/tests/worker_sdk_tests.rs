@@ -1694,7 +1694,7 @@ async fn tool_execution_context_reaches_rust_worker_without_becoming_continuatio
                     assert_eq!(context.tool_call_id(), Some("provider-call"));
                     assert_eq!(
                         context.execution_context().map(|value| value.to_json()),
-                        Some(json!({"operation": {"attempt": 1}, "integer": u64::MAX}))
+                        Some(json!({"data": {"operation": {"attempt": 1}, "integer": u64::MAX}}))
                     );
                     assert!(!format!("{context:?}").contains("attempt"));
                     let downstream = next.call(context.into_args()).await?;
@@ -1718,7 +1718,13 @@ async fn tool_execution_context_reaches_rust_worker_without_becoming_continuatio
     };
     tool.tool_call_id = Some("provider-call".into());
     tool.execution_context = Some(
-        conversions::encode(json!({"operation": {"attempt": 1}, "integer": u64::MAX})).unwrap(),
+        conversions::encode(
+            nemo_relay_types::api::tool::ApplicationExecutionContext::try_from(
+                json!({"data": {"operation": {"attempt": 1}, "integer": u64::MAX}}),
+            )
+            .unwrap(),
+        )
+        .unwrap(),
     );
     let outcome = invoke_tool_execution(&mut client, request).await;
     assert_eq!(outcome.result, json!({"next": "tool"}));

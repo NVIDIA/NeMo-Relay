@@ -1,7 +1,7 @@
 // SPDX-FileCopyrightText: Copyright (c) 2026, NVIDIA CORPORATION & AFFILIATES. All rights reserved.
 // SPDX-License-Identifier: Apache-2.0
 
-//! Frozen v1.0 host must reject the real v1.1 plugin before construction.
+//! An obsolete development host rejects the changed v1.0 schema before construction.
 fn main() {
     let path = std::env::args_os().nth(1).expect("plugin path");
     let library = unsafe { abi::xabi::ModuleHandle::load(path) }.unwrap();
@@ -17,7 +17,7 @@ fn main() {
     assert_eq!(unsafe { count() }, 0);
     let error = unsafe { abi::bootstrap::check(bootstrap()) }
         .err()
-        .expect("1.0 must reject 1.1");
-    assert!(error.contains("requires native API v1.1"), "{error}");
+        .expect("obsolete development host must reject changed schema");
+    assert!(error.contains("incompatible native contract"), "{error}");
     assert_eq!(unsafe { count() }, 0, "rejection must precede construction");
 }

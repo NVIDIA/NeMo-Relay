@@ -4,31 +4,16 @@
 package nemo_relay
 
 import (
-	"bytes"
 	"encoding/json"
 	"fmt"
 )
 
-// ApplicationExecutionContext is invocation-local application context. HostApproval
-// has a checked public shape; AdditionalFields preserves application-owned JSON.
-// A nil pointer means absent context, while an empty value marshals to {}.
-// These are application assertions, not proof: middleware selects trusted sources.
+// ApplicationExecutionContext is a concrete invocation-local Relay context.
+// Application-specific fields belong in Data; middleware validates and interprets
+// them. A nil context pointer omits context. A nil Data map marshals to {}, while
+// an allocated empty map preserves {"data":{}}. Context does not grant authority.
 type ApplicationExecutionContext struct {
-	HostApproval     *HostApproval
-	AdditionalFields map[string]json.RawMessage
-}
-
-// HostApproval describes an application-asserted approval of specific arguments.
-// Version must be 1 and identifying strings must
-// be nonempty. ApprovedArguments accepts any JSON value, including explicit null.
-// Presence asserts completed human approval. The obsolete decision key is forbidden.
-type HostApproval struct {
-	Version           int
-	Source            string
-	ApprovalID        string
-	ToolName          string
-	ApprovedArguments json.RawMessage
-	AdditionalFields  map[string]json.RawMessage
+	Data map[string]json.RawMessage
 }
 
 func contextObject(data []byte) (map[string]json.RawMessage, error) {
@@ -42,38 +27,34 @@ func contextObject(data []byte) (map[string]json.RawMessage, error) {
 	return fields, nil
 }
 
-// MarshalJSON preserves additional fields and serializes the checked known field.
+// MarshalJSON preserves absent versus explicitly empty application data.
 func (c ApplicationExecutionContext) MarshalJSON() ([]byte, error) {
-	fields := cloneContextFields(c.AdditionalFields)
-	if _, exists := fields["host_approval"]; exists {
-		return nil, fmt.Errorf("host_approval must use the typed field")
-	}
-	if c.HostApproval != nil {
-		value, err := json.Marshal(c.HostApproval)
-		if err != nil {
-			return nil, err
-		}
-		fields["host_approval"] = value
+	fields := make(map[string]any)
+	if c.Data != nil {
+		fields["data"] = cloneContextFields(c.Data)
 	}
 	return json.Marshal(fields)
 }
 
-// UnmarshalJSON validates known fields while retaining unknown JSON unchanged.
+// UnmarshalJSON accepts only Relay-defined outer fields and opaque object data.
 func (c *ApplicationExecutionContext) UnmarshalJSON(data []byte) error {
 	fields, err := contextObject(data)
 	if err != nil {
 		return err
 	}
-	var approval *HostApproval
-	if value, exists := fields["host_approval"]; exists {
-		var known HostApproval
-		if err := json.Unmarshal(value, &known); err != nil {
-			return err
+	for key := range fields {
+		if key != "data" {
+			return fmt.Errorf("invalid application execution context")
 		}
-		approval = &known
-		delete(fields, "host_approval")
 	}
-	*c = ApplicationExecutionContext{HostApproval: approval, AdditionalFields: fields}
+	var payload map[string]json.RawMessage
+	if value, exists := fields["data"]; exists {
+		payload, err = contextObject(value)
+		if err != nil {
+			return fmt.Errorf("execution context data must be a JSON object")
+		}
+	}
+	*c = ApplicationExecutionContext{Data: payload}
 	return nil
 }
 
@@ -83,79 +64,4 @@ func cloneContextFields(fields map[string]json.RawMessage) map[string]json.RawMe
 		result[key] = append(json.RawMessage(nil), value...)
 	}
 	return result
-}
-
-func (a HostApproval) validate() error {
-	if a.Version != 1 || a.Source == "" || a.ApprovalID == "" || a.ToolName == "" || !json.Valid(a.ApprovedArguments) {
-		return fmt.Errorf("host_approval requires version 1, nonempty source, approval_id and tool_name, and JSON approved_arguments")
-	}
-	return nil
-}
-
-// MarshalJSON validates the standard approval fields and preserves extensions.
-func (a HostApproval) MarshalJSON() ([]byte, error) {
-	if err := a.validate(); err != nil {
-		return nil, err
-	}
-	fields := cloneContextFields(a.AdditionalFields)
-	if _, exists := fields["decision"]; exists {
-		return nil, fmt.Errorf("host_approval decision is obsolete and forbidden")
-	}
-	known := map[string]any{"version": a.Version, "source": a.Source, "approval_id": a.ApprovalID, "tool_name": a.ToolName, "approved_arguments": a.ApprovedArguments}
-	for key, value := range known {
-		if _, exists := fields[key]; exists {
-			return nil, fmt.Errorf("%s must use the typed field", key)
-		}
-		encoded, err := json.Marshal(value)
-		if err != nil {
-			return nil, err
-		}
-		fields[key] = encoded
-	}
-	return json.Marshal(fields)
-}
-
-// UnmarshalJSON rejects malformed or incomplete approval claims.
-func (a *HostApproval) UnmarshalJSON(data []byte) error {
-	fields, err := contextObject(data)
-	if err != nil {
-		return err
-	}
-	if _, exists := fields["decision"]; exists {
-		return fmt.Errorf("host_approval decision is obsolete and forbidden")
-	}
-	var result HostApproval
-	known := map[string]any{"version": &result.Version, "source": &result.Source, "approval_id": &result.ApprovalID, "tool_name": &result.ToolName, "approved_arguments": &result.ApprovedArguments}
-	for key, target := range known {
-		value, exists := fields[key]
-		if !exists {
-			return fmt.Errorf("host_approval requires %s", key)
-		}
-		if key == "version" {
-			decoder := json.NewDecoder(bytes.NewReader(value))
-			decoder.UseNumber()
-			var number any
-			if err := decoder.Decode(&number); err != nil {
-				return err
-			}
-			numeric, ok := number.(json.Number)
-			if !ok {
-				return fmt.Errorf("host_approval version must be numeric 1")
-			}
-			version, err := numeric.Float64()
-			if err != nil || version != 1 {
-				return fmt.Errorf("host_approval version must be 1")
-			}
-			result.Version = 1
-		} else if err := json.Unmarshal(value, target); err != nil {
-			return err
-		}
-		delete(fields, key)
-	}
-	if err := result.validate(); err != nil {
-		return err
-	}
-	result.AdditionalFields = fields
-	*a = result
-	return nil
 }

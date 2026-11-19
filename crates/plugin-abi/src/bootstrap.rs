@@ -27,8 +27,7 @@ pub struct Bootstrap {
 unsafe impl Send for Bootstrap {}
 unsafe impl Sync for Bootstrap {}
 
-/// Frozen v1.0 checked schema, independent of the package release number.
-/// Use [`schema_for`] to select the declared minor contract.
+/// Complete checked schema, independent of the package release number.
 pub fn schema() -> &'static str {
     static SCHEMA: std::sync::OnceLock<String> = std::sync::OnceLock::new();
     SCHEMA.get_or_init(|| {
@@ -49,7 +48,6 @@ pub fn schema() -> &'static str {
 pub fn schema_for(api: NativeApiVersion) -> Result<&'static str, String> {
     match (api.major, api.minor) {
         (1, 0) => Ok(schema()),
-        (1, 1) => Ok(schema_v1_1()),
         _ => Err(format!(
             "plugin requires native API {api}; host supports {}",
             crate::NATIVE_API_VERSION
@@ -136,45 +134,4 @@ pub unsafe fn factory(manifest: &xabi::XabiManifest) -> Result<crate::handles::F
     }
     let export = selected.ok_or("native plugin is missing required factory module")?;
     unsafe { crate::handles::load_factory(export) }.map_err(|e| e.to_string())
-}
-
-/// Complete v1.1 schema, retaining the immutable baseline as its prefix.
-fn schema_v1_1() -> &'static str {
-    static SCHEMA: std::sync::OnceLock<String> = std::sync::OnceLock::new();
-    SCHEMA.get_or_init(|| {
-        let mut result = String::from(schema());
-        result.push_str(include_str!(concat!(
-            env!("OUT_DIR"),
-            "/native_schema_v1_1.txt"
-        )));
-        let append_layouts = include!(concat!(env!("OUT_DIR"), "/native_layout_v1_1.rs"));
-        append_layouts(&mut result);
-        result
-    })
-}
-
-/// Select the v1.1 factory only after checking its complete declared contract.
-///
-/// # Safety
-/// The host must first validate the v1.1 bootstrap and resident manifest.
-pub unsafe fn factory_v1_1(
-    manifest: &xabi::XabiManifest,
-) -> Result<crate::v1_1::FactoryBox, String> {
-    let exports = unsafe { manifest.exports.as_slice() }.map_err(|error| error.to_string())?;
-    let mut selected = None;
-    for export in exports {
-        export.validate().map_err(|error| error.to_string())?;
-        let id = unsafe { export.abi_id.as_str() }.map_err(|error| error.to_string())?;
-        if id == crate::wire_v1_1::XabiV1AbiTraitWireFactory::ID {
-            if selected.is_some() {
-                return Err("duplicate native v1.1 factory module".into());
-            }
-            if export.contract_version != 1 {
-                return Err("unsupported native v1.1 factory version".into());
-            }
-            selected = Some(export);
-        }
-    }
-    let export = selected.ok_or("native plugin is missing required v1.1 factory module")?;
-    unsafe { crate::handles_v1_1::load_factory(export) }.map_err(|error| error.to_string())
 }

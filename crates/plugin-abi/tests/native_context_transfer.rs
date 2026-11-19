@@ -1,12 +1,12 @@
 // SPDX-FileCopyrightText: Copyright (c) 2026, NVIDIA CORPORATION & AFFILIATES. All rights reserved.
 // SPDX-License-Identifier: Apache-2.0
 
-//! The additive tool lane retains baseline ownership and lossless JSON behavior.
+//! The concrete native context retains ownership and lossless JSON behavior.
 use nemo_relay_plugin_abi::{
     Field, Json,
     future::{FfiFuture, FutureExt as _},
     transfer::Value,
-    v1_0 as a, v1_1 as b,
+    v1_0 as a,
     xabi::XabiType as _,
 };
 use std::sync::{
@@ -28,20 +28,23 @@ impl a::Scope for Scope {
         Ok(None)
     }
 }
-fn invocation(drops: Arc<AtomicUsize>, context: Option<Json>) -> b::ToolInvocation {
-    b::ToolInvocation {
-        invocation: a::Invocation {
-            surface: a::Surface::ToolExecutionIntercept,
-            name: "files.write".into(),
-            value: Json::String("business input".into()),
-            tool_call_id: Some("provider-call-123".into()),
-            context: a::Context {
-                scope: a::ScopeBox::new(Scope(drops)),
-                request_codec: None,
-                response_codec: None,
-            },
+fn invocation(drops: Arc<AtomicUsize>, context: Option<Json>) -> a::Invocation {
+    a::Invocation {
+        surface: a::Surface::ToolExecutionIntercept,
+        name: "files.write".into(),
+        value: Json::String("business input".into()),
+        tool_call_id: Some("provider-call-123".into()),
+        context: a::Context {
+            scope: a::ScopeBox::new(Scope(drops)),
+            request_codec: None,
+            response_codec: None,
         },
-        execution_context: context,
+        execution_context: context.map(|value| {
+            let Json::Object(fields) = value else {
+                unreachable!()
+            };
+            a::ApplicationExecutionContext { data: Some(fields) }
+        }),
     }
 }
 
@@ -57,18 +60,18 @@ fn tool_context_is_separate_and_lossless_through_owned_record_transfer() {
         ]),
     }]);
     let payload = Value(invocation(drops.clone(), Some(context.clone()))).into_payload();
-    let decoded = unsafe { Value::<b::ToolInvocation>::from_payload(payload) }
+    let decoded = unsafe { Value::<a::Invocation>::from_payload(payload) }
         .unwrap()
         .0;
+    assert_eq!(decoded.value, Json::String("business input".into()));
+    assert_eq!(decoded.tool_call_id.as_deref(), Some("provider-call-123"));
+    let Json::Object(fields) = context else {
+        unreachable!()
+    };
     assert_eq!(
-        decoded.invocation.value,
-        Json::String("business input".into())
+        decoded.execution_context.as_ref().unwrap().data,
+        Some(fields)
     );
-    assert_eq!(
-        decoded.invocation.tool_call_id.as_deref(),
-        Some("provider-call-123")
-    );
-    assert_eq!(decoded.execution_context, Some(context));
     assert_eq!(drops.load(Ordering::SeqCst), 0);
     drop(decoded);
     assert_eq!(drops.load(Ordering::SeqCst), 1);
@@ -92,10 +95,28 @@ impl a::Continuation for Next {
     }
 }
 struct Callback(Arc<AtomicUsize>);
-impl b::ToolCallback for Callback {
+impl a::Callback for Callback {
+    fn invoke(
+        &self,
+        _: a::Invocation,
+        _: Option<a::ContinuationBox>,
+    ) -> FfiFuture<a::Result<Json>> {
+        unreachable!()
+    }
+    fn invoke_sync(&self, _: a::Invocation) -> a::Result<Json> {
+        unreachable!()
+    }
+    fn open_stream(
+        &self,
+        _: a::Invocation,
+        _: a::ContinuationBox,
+    ) -> FfiFuture<a::Result<a::StreamBox>> {
+        unreachable!()
+    }
+
     fn invoke_tool(
         &self,
-        invocation: b::ToolInvocation,
+        invocation: a::Invocation,
         next: a::ContinuationBox,
     ) -> FfiFuture<a::Result<a::ToolExecutionOutcome>> {
         self.0.fetch_add(1, Ordering::SeqCst);
@@ -113,12 +134,18 @@ fn malformed_context_releases_nested_scope_and_later_continuation_without_callba
     let scopes = Arc::new(AtomicUsize::new(0));
     let continuations = Arc::new(AtomicUsize::new(0));
     let calls = Arc::new(AtomicUsize::new(0));
-    let payload = Value(b::ToolCallbackBox::new(Callback(calls.clone()))).into_payload();
-    let callback = unsafe { Value::<b::ToolCallbackBox>::from_payload(payload) }
+    let payload = Value(a::CallbackBox::new(Callback(calls.clone()))).into_payload();
+    let callback = unsafe { Value::<a::CallbackBox>::from_payload(payload) }
         .unwrap()
         .0;
     let future = callback.invoke_tool(
-        invocation(scopes.clone(), Some(Json::Float(f64::NAN))),
+        invocation(
+            scopes.clone(),
+            Some(Json::Object(vec![Field {
+                key: "invalid".into(),
+                value: Json::Float(f64::NAN),
+            }])),
+        ),
         a::ContinuationBox::new(Next(continuations.clone())),
     );
     assert_eq!(calls.load(Ordering::SeqCst), 0);
@@ -132,8 +159,8 @@ fn unpolled_callback_future_releases_invocation_and_continuation() {
     let scopes = Arc::new(AtomicUsize::new(0));
     let continuations = Arc::new(AtomicUsize::new(0));
     let calls = Arc::new(AtomicUsize::new(0));
-    let payload = Value(b::ToolCallbackBox::new(Callback(calls.clone()))).into_payload();
-    let callback = unsafe { Value::<b::ToolCallbackBox>::from_payload(payload) }
+    let payload = Value(a::CallbackBox::new(Callback(calls.clone()))).into_payload();
+    let callback = unsafe { Value::<a::CallbackBox>::from_payload(payload) }
         .unwrap()
         .0;
     let future = callback.invoke_tool(

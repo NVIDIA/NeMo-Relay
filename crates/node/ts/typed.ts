@@ -27,7 +27,6 @@ export type {
   JsonObject,
   JsonPrimitive,
   ApplicationExecutionContext,
-  HostApproval,
   JsonValue,
   LlmCodec,
   LlmRequestCompatible,

@@ -27,20 +27,25 @@ with the manifest cause loading to fail before registration. Looking up the
 descriptor and modules does not create components, register callbacks, or start
 executors.
 
-Declare `compat.native_api = "v1.1"` and `load.library` in the manifest. Set
+Declare `compat.native_api = "v1.0"` and `load.library` in the manifest. Set
 `compat.relay` to the Relay release range that the plugin supports.
 
-The export macro sets the required native minor from the build SDK. The current
-SDK uses native contract **v1.1**, so its plugins require a host supporting v1.1
-or a later minor in major 1. A v1.1 host also supports published v1.0 plugins.
-Set `compat.native_api` to the minimum contract required by the build SDK;
-the manifest and exported descriptor must agree. Native contract v1.1 is
-independent of Relay's package version 1.0 and the worker protocol version.
+The export macro sets the required native contract from the build SDK. The
+current SDK uses native contract **v1.0**; the manifest and exported descriptor
+must agree. The native contract is independent of Relay's package version and
+the worker protocol version.
 
-Published layouts, enum variants, signatures, marker traits, ownership rules,
-and behavior stay fixed within each contract. Add interfaces through versioned
-modules. Breaking layout or dependency ABI changes require a new native major.
-Dependency updates must pass the binary compatibility tests.
+Relay 1.0 is unreleased. Development-baseline changes require rebuilding matching
+hosts and plugins; the version string alone does not prove binary compatibility.
+The complete ABI schema must match before a factory can be created. A plugin
+built against an incompatible earlier development schema is rejected, even when
+its manifest also declares v1.0.
+
+After release, published layouts, enum variants, signatures, marker traits,
+ownership rules and behavior stay fixed within each contract. Add interfaces
+through versioned modules; breaking layout or dependency ABI changes require a
+new native major as appropriate. Dependency updates must pass the binary
+compatibility tests.
 
 ## Values and Capabilities
 
@@ -63,27 +68,23 @@ perform runtime operations. Refer to
 
 ### Application Execution Context
 
-Native contract v1.1 adds context-aware tool execution registration without
-changing published v1.0 records or signatures. Its `v1_1::ToolInvocation`
-contains the baseline `invocation` and a separate optional `execution_context`
-value. `v1_1::Runtime::register_tool_execution` accepts this callback form;
-continuations and tool outcomes retain their baseline behavior.
+The v1.0 invocation carries optional application execution context separately
+from its business argument value. Its concrete native context contains an
+optional `data` map represented by owned lossless JSON fields. The ordinary tool
+callback and registration path carry this envelope.
 
-The current SDK's typed native tool registration converts the supplied value
-into the checked `ApplicationExecutionContext` exposed by
-`context.execution_context()` in an ordinary Rust tool execution intercept. The value stays separate from tool
-arguments, and validation establishes structure rather than authorization.
+The SDK exposes the checked `ApplicationExecutionContext` through
+`context.execution_context()` in a Rust tool execution intercept. The outer
+context has Relay-defined fields. Applications put their payloads inside `data`,
+and middleware validates and interprets those payloads. Context never becomes
+part of the tool arguments, and structural validation grants no authorization.
 See [Application Execution Context in Add Middleware](/instrument-applications/advanced-guide#application-execution-context)
-for the schema, limits, trust checks, and application integration example.
+for the schema, limits, trust checks and application integration example.
 
-Plugins built with the current SDK require native v1.1 support, checked before
-their factory is created. A frozen v1.0 plugin can still load on a v1.1 host and
-handle calls that omit application context. If a context-bearing call reaches
-a legacy v1.0 tool callback, Relay refuses the call explicitly rather than
-dropping the context. Explicit legacy registrations retain these semantics even
-inside a newly built v1.1 library. Receive context through the current SDK's
-typed tool registration or the new v1.1 tool interface; rebuilding a library
-alone does not migrate raw legacy registrations.
+Plugins and hosts must use the matching unreleased v1.0 baseline. The host
+checks the complete declared contract before factory creation, so an obsolete
+binary with an incompatible invocation layout fails to load rather than losing
+execution context. Rebuild the plugin with the current SDK.
 
 ### Runtime Scope and Mark Arguments
 
@@ -137,9 +138,9 @@ wakers and destructors must not panic.
 ## Verification
 
 The binary compatibility tests build fixtures in separate Cargo workspaces with
-their own lockfiles. They check v1.0 plugins on v1.1 hosts, required minor and
-major versions, missing modules, changed signatures and marker traits, and
-mismatched descriptors.
+their own lockfiles. They check the current v1.0 schema, required minor and major
+versions, missing modules, changed signatures and marker traits, and mismatched
+descriptors. Obsolete development layouts are not a supported compatibility path.
 
 Run `just build-native-abi-test-fixtures` to prepare these binaries. Use
 `just build-test-plugin-fixtures` for host and SDK tests. `just test-rust`

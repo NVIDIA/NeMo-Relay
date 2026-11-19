@@ -185,7 +185,8 @@ impl ToolExecutionContext {
     }
 
     /// Attach invocation-local application context, separate from tool arguments.
-    /// Managed execution validates its standard schema and resource limits at admission.
+    /// Managed execution validates the Relay envelope and resource limits at admission.
+    /// Application-specific keys and policy belong under its `data` field.
     #[must_use]
     pub fn with_execution_context(
         mut self,

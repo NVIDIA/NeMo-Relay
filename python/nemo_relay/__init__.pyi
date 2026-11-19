@@ -238,32 +238,16 @@ def error(message: str, *, target: str = "", fields: JsonObject | None = None) -
     """Emit an error record through Relay."""
     ...
 
-class HostApproval(TypedDict):
-    """Application assertion of completed approval, not Relay-verified authority.
-
-    Its presence asserts completed approval; all five standard fields are
-    required. Consumers must validate the source and exact operation before
-    relying on it. Other JSON properties are preserved, but the obsolete
-    ``decision`` key is reserved and rejected, regardless of its value.
-    A denied or pending action must not be executed.
-    """
-
-    version: Literal[1]
-    source: str
-    approval_id: str
-    tool_name: str
-    approved_arguments: Json
-
 class ApplicationExecutionContext(TypedDict, total=False):
-    """Invocation-local context with optional approval and additional JSON fields.
+    """Concrete invocation context with optional application-owned JSON data.
 
-    Additional properties are accepted and preserved, although Python 3.11
-    TypedDict cannot express their arbitrary names statically. The complete
-    value is limited to 16 KiB and 64 nested object/array levels. This context
-    is separate from tool arguments and does not establish authorization.
+    Relay reserves the outer fields for its API. Application-specific fields
+    belong inside ``data`` and are interpreted and validated by middleware.
+    The complete context is limited to 16 KiB and 64 object/array levels.
+    Supplying context does not establish authorization.
     """
 
-    host_approval: HostApproval
+    data: dict[str, Json]
 
 class DataSchema(TypedDict):
     """Schema identifier attached to an event's opaque data payload."""

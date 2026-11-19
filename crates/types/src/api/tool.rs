@@ -11,7 +11,7 @@ use crate::api::event::PendingMarkSpec;
 
 /// Structured application context and its shared JSON Schema.
 pub mod application_context;
-pub use application_context::{ApplicationExecutionContext, HostApproval};
+pub use application_context::ApplicationExecutionContext;
 
 /// Versioned native-plugin JSON envelope schema for [`ToolExecutionResult`].
 pub const TOOL_EXECUTION_RESULT_SCHEMA: &str = "nemo.relay.ToolExecutionResult@1";

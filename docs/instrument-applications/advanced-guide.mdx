@@ -213,58 +213,64 @@ execution callback. The C entry point is additive: existing execute functions
 retain their signatures and omit context. Go rejects the option on manual
 `ToolCall` and `ToolCallEnd`, where execution middleware does not run.
 
-The value follows the standard `ApplicationExecutionContext` JSON Schema. Its
-optional `host_approval` field asserts that the application has already verified
-human approval for an exact operation:
+`ApplicationExecutionContext` is a concrete Relay-owned object. Its optional
+`data` field is a JSON object/map for application-defined payloads. The outer
+object has no arbitrary properties: applications put custom keys inside `data`,
+leaving the top level available for future Relay API fields without naming
+collisions.
+
+For example, an application with an existing human-approval workflow could send:
 
 ```json
 {
-  "host_approval": {
-    "version": 1,
-    "source": "example.application",
-    "approval_id": "approval-123",
-    "tool_name": "files.write",
-    "approved_arguments": {"path": "notes.txt", "content": "Hello"}
-  },
-  "com.example.audit": {"request_id": "request-456"}
+  "data": {
+    "host_approval": {
+      "version": 1,
+      "source": "example.application",
+      "approval_id": "approval-123",
+      "tool_name": "files.write",
+      "approved_arguments": {"path": "notes.txt", "content": "Hello"}
+    },
+    "com.example.audit": {"request_id": "request-456"}
+  }
 }
 ```
 
-When `host_approval` is present, it asserts completed affirmative human approval
-and all five fields are required. Version is integer `1`; source, approval ID and tool name
-are nonempty strings. Approved arguments may be any JSON value, matching tool
-arguments. They record the approved input so middleware can compare it with its
-current input after earlier middleware has rewritten arguments. Denied or
-pending operations must stop in the application; this field is not an instruction
-to Relay to enforce a review outcome.
+Here `host_approval` and its five fields are **an application-specific example**,
+not a built-in Relay approval type or policy. The middleware must validate the
+payload's own schema, trust the calling application, and compare the exact tool
+and arguments before acting on it. Another application can use different keys
+and payload structures inside `data`. Relay does not interpret approval states,
+receipt formats, or extension names there.
 
-Both the context and the approval object allow additional properties. The obsolete
-`host_approval.decision` key is reserved and rejected regardless of value, so an
-old denied claim cannot become an ignored extension interpreted as approval. Unknown
-properties survive transport and isolated snapshots, but confer no authority.
-Use namespaced extension keys, such as `com.example.audit`, to reduce collisions
-with future standard fields. Omission means no context; `{}` is a supplied empty
-context with no approval assertion. An explicitly null or malformed
-`host_approval` is rejected rather than treated as absent.
+Omitting execution context means no context. `{}` is a supplied context without
+application data; `{"data": {}}` explicitly supplies an empty data map. A null,
+array, or scalar `data` value is invalid, as are unknown top-level fields. Values
+inside `data` may be any JSON value. In particular, the validity of a field named
+`host_approval` belongs to the application and its middleware, not Relay's
+transport validator.
 
-The entire context, including extensions, must serialize to at most **16 KiB**
-of UTF-8 JSON and contain at most **64 nested container levels**. The root object
-counts as level 1; nested objects and arrays add one level each. Limits are checked
-before JSON Schema traversal. Invalid known fields fail before middleware or the
-tool runs. Structural validation does not authenticate an approval.
+The entire context, including `data`, must serialize to at most **16 KiB** of
+UTF-8 JSON and contain at most **64 nested container levels**. The root object
+counts as level 1, `data` as level 2, and each nested object or array adds one
+level. Limits are checked before JSON Schema traversal. Invalid envelope fields
+fail before middleware or the tool runs. Structural validation does not
+authenticate application claims.
 
-The canonical schema is maintained with the shared Rust types in
-[`application-execution-context.schema.json`](../../crates/types/schemas/application-execution-context.schema.json).
-Rust exposes `ApplicationExecutionContext` and `HostApproval`; other bindings and
-worker SDKs expose the same fields using their native typing conventions.
+The canonical envelope schema is maintained with the shared Rust types in
+[`application-execution-context.schema.json`](https://github.com/nathankw/NeMo-Relay/blob/feat/tool-execution-context/crates/types/schemas/application-execution-context.schema.json).
+Rust exposes `ApplicationExecutionContext`; other bindings and worker SDKs expose
+the same optional data map using their native typing conventions. The schema
+checks Relay's envelope; applications can apply a separate JSON Schema or their
+own validators to the content of `data`.
 
 Rust callers can construct the checked type with
 `ApplicationExecutionContext::try_from(json_value)?` before passing it to the
 managed execution builder. Admission also revalidates values assembled or
-modified through public Rust fields. Python keeps dictionary-compatible typed
-shapes; additional properties remain accepted at runtime despite Python 3.11's
-`TypedDict` limitations. Go offers `WithApplicationExecutionContext` for its typed
-model and retains `WithToolExecutionContext` for schema-validated raw JSON.
+modified through public Rust fields. Python keeps a dictionary-compatible typed
+envelope with a JSON mapping under `data`. Go offers
+`WithApplicationExecutionContext` for its typed model and retains
+`WithToolExecutionContext` for envelope-validated raw JSON.
 
 This field has a narrower lifetime and audience than event metadata:
 
@@ -301,11 +307,11 @@ asynchronous. Call `register_application_review(...)` once during setup, then us
 `execute_after_application_approval(...)` to execute an approved operation.
 The verifier must raise if the receipt is invalid or no longer covers the call.
 `perform_component_review` must raise to refuse execution; returning `False`
-does not stop this wrapper. `validate_existing_approval` returns the standard
-five-field
-`host_approval` assertion only after verifying the application-specific receipt;
-it includes the exact tool name and approved arguments. Relay does not prescribe
-the underlying receipt or signature format.
+does not stop this wrapper. In this example, `validate_existing_approval` returns
+an application-defined five-field approval assertion only after verifying the
+receipt. `approval_covers_call` validates that assertion's structure and trust
+policy, including the exact tool name and arguments. Relay prescribes neither
+the payload schema nor the underlying receipt or signature format.
 
 <Code src="_code/python/application_execution_context.py" language="python" />
 
@@ -342,19 +348,18 @@ rebuilt. Separately versioned diagnostic contracts are unchanged.
 
 **Native plugin compatibility**
 
-The current SDK's typed native tool registration uses native contract **v1.1**
-and exposes checked context through `context.execution_context()`. This native
-contract version is separate from Relay's package version **1.0**.
-The host checks the required native contract before creating the plugin.
-Published native v1.0 plugins still load and handle calls without application
-context as before. If supplied context reaches a legacy v1.0 tool callback,
-Relay refuses the call explicitly instead of dropping the context. This also
-applies to explicit legacy registrations in a newly built v1.1 library. Use
-the SDK's typed tool registration or the v1.1 tool interface to receive context;
-rebuilding alone does not migrate a legacy registration.
+Native plugins use native contract **v1.0**, including optional execution context
+on tool invocations. The SDK exposes the checked envelope through
+`context.execution_context()`. The native contract is separate from the Relay
+package version and worker protocol identity, even though all target 1.0 here.
+
+Relay 1.0 is unreleased. Rebuild native plugins with the matching SDK when this
+development baseline changes. The host checks the declared native contract and
+complete ABI schema before creating the plugin; a binary built against an
+incompatible earlier schema is rejected rather than silently losing context.
 See [Native ABI Reference](/build-plugins/native/native-abi-reference#application-execution-context)
-for the additive transport. Public C and Go callbacks receive context through
-their extensible JSON envelope.
+for the transport. Public C and Go callbacks receive context through their JSON
+envelope.
 
 ## Scope Middleware to One Request
 

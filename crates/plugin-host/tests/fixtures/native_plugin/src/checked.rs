@@ -3,8 +3,8 @@
 
 //! Checked ABI lifecycle and authoring conformance fixture.
 
-use nemo_relay_plugin::abi::future::{FfiFuture, FutureExt as _};
-use nemo_relay_plugin::abi::{Json, v1_0::*, v1_1 as b};
+use nemo_relay_plugin::abi::future::FfiFuture;
+use nemo_relay_plugin::abi::{Json, v1_0::*};
 use nemo_relay_plugin::{NativeExecutorConfig, abi_executor::ComponentExecutor};
 use std::sync::{Arc, Mutex};
 
@@ -16,7 +16,7 @@ mod author {
     include!("native_author.rs");
 }
 struct Router;
-impl b::Plugin for Router {
+impl Plugin for Router {
     fn allows_multiple_components(&self) -> bool {
         true
     }
@@ -24,65 +24,32 @@ impl b::Plugin for Router {
         if matches!(config, Json::Null) {
             return Vec::new();
         }
-        b::Plugin::validate(
-            &nemo_relay_plugin::checked::Adapter(Arc::new(author::FixtureNativePlugin)),
-            config,
-        )
+        nemo_relay_plugin::checked::Adapter(Arc::new(author::FixtureNativePlugin)).validate(config)
     }
     fn register(
         &self,
         config: Json,
-        runtime: b::RuntimeBox,
+        runtime: RuntimeBox,
     ) -> FfiFuture<Result<RegisteredComponent>> {
-        let options = nemo_relay_plugin::abi_value::from_abi(config.clone()).ok();
-        let legacy = matches!(config, Json::Null)
-            || options.as_ref().is_some_and(|value| {
-                [
-                    "stream_only_fixture",
-                    "raw_stream_only_fixture",
-                    "raw_sync_fixture",
-                    "legacy_sdk_fixture",
-                ]
-                .iter()
-                .any(|key| value[key].as_bool() == Some(true))
-            });
-        if !legacy {
-            return b::Plugin::register(
-                &nemo_relay_plugin::checked::Adapter(Arc::new(author::FixtureNativePlugin)),
-                config,
-                runtime,
-            );
-        }
-        let runtime = match runtime.baseline() {
-            Ok(runtime) => runtime,
-            Err(error) => return async move { Err(error) }.into_ffi(),
-        };
         if matches!(config, Json::Null) {
             Fixture.register(config, runtime)
-        } else if options.as_ref().is_some_and(|value| {
-            value["stream_only_fixture"].as_bool() == Some(true)
-                || value["raw_stream_only_fixture"].as_bool() == Some(true)
-        }) {
-            Plugin::register(
-                &nemo_relay_plugin::checked::Adapter(Arc::new(StreamOnlyAuthor)),
-                config,
-                runtime,
-            )
-        } else if options
-            .as_ref()
-            .is_some_and(|value| value["raw_sync_fixture"].as_bool() == Some(true))
+        } else if nemo_relay_plugin::abi_value::from_abi(config.clone())
+            .ok()
+            .is_some_and(|v| {
+                v["stream_only_fixture"].as_bool() == Some(true)
+                    || v["raw_stream_only_fixture"].as_bool() == Some(true)
+            })
         {
-            Plugin::register(
-                &nemo_relay_plugin::checked::Adapter(Arc::new(RawAuthor)),
-                config,
-                runtime,
-            )
+            nemo_relay_plugin::checked::Adapter(Arc::new(StreamOnlyAuthor))
+                .register(config, runtime)
+        } else if nemo_relay_plugin::abi_value::from_abi(config.clone())
+            .ok()
+            .is_some_and(|v| v["raw_sync_fixture"].as_bool() == Some(true))
+        {
+            nemo_relay_plugin::checked::Adapter(Arc::new(RawAuthor)).register(config, runtime)
         } else {
-            Plugin::register(
-                &nemo_relay_plugin::checked::Adapter(Arc::new(author::FixtureNativePlugin)),
-                config,
-                runtime,
-            )
+            nemo_relay_plugin::checked::Adapter(Arc::new(author::FixtureNativePlugin))
+                .register(config, runtime)
         }
     }
 }
@@ -143,9 +110,9 @@ impl Plugin for Fixture {
         })
     }
 }
-nemo_relay_plugin::abi::export_factory_v1_1!(
+nemo_relay_plugin::abi::export_factory!(
     kind = "fixture_native",
-    create = || Ok(b::PluginBox::new(Router))
+    create = || Ok(PluginBox::new(Router))
 );
 
 struct RawAuthor;

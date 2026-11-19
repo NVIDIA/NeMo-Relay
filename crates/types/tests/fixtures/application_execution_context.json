@@ -5,97 +5,67 @@
     "valid": true
   },
   {
-    "name": "unknown-only extensions",
+    "name": "empty data",
     "value": {
-      "com.example.audit": {
-        "request_id": "request-1"
+      "data": {}
+    },
+    "valid": true
+  },
+  {
+    "name": "opaque application data",
+    "value": {
+      "data": {
+        "operation": {
+          "attempt": 1
+        },
+        "unicode": "π",
+        "nul": "\u0000",
+        "integer": 18446744073709551615
       }
     },
     "valid": true
   },
   {
-    "name": "standard approval",
+    "name": "opaque host_approval null",
     "value": {
-      "host_approval": {
-        "version": 1,
-        "source": "example.application",
-        "approval_id": "approval-123",
-        "tool_name": "files.write",
-        "approved_arguments": {
-          "path": "notes.txt"
-        }
+      "data": {
+        "host_approval": null
       }
     },
     "valid": true
   },
   {
-    "name": "null approval",
+    "name": "opaque host_approval false",
     "value": {
-      "host_approval": null
-    },
-    "valid": false
-  },
-  {
-    "name": "arguments null",
-    "value": {
-      "host_approval": {
-        "version": 1,
-        "source": "example.application",
-        "approval_id": "approval-123",
-        "tool_name": "files.write",
-        "approved_arguments": null
+      "data": {
+        "host_approval": false
       }
     },
     "valid": true
   },
   {
-    "name": "arguments false",
+    "name": "opaque host_approval 2",
     "value": {
-      "host_approval": {
-        "version": 1,
-        "source": "example.application",
-        "approval_id": "approval-123",
-        "tool_name": "files.write",
-        "approved_arguments": false
+      "data": {
+        "host_approval": 2
       }
     },
     "valid": true
   },
   {
-    "name": "arguments 2",
+    "name": "opaque host_approval \"text\"",
     "value": {
-      "host_approval": {
-        "version": 1,
-        "source": "example.application",
-        "approval_id": "approval-123",
-        "tool_name": "files.write",
-        "approved_arguments": 2
+      "data": {
+        "host_approval": "text"
       }
     },
     "valid": true
   },
   {
-    "name": "arguments \"text\"",
+    "name": "opaque host_approval [1, true]",
     "value": {
-      "host_approval": {
-        "version": 1,
-        "source": "example.application",
-        "approval_id": "approval-123",
-        "tool_name": "files.write",
-        "approved_arguments": "text"
-      }
-    },
-    "valid": true
-  },
-  {
-    "name": "arguments [1, true]",
-    "value": {
-      "host_approval": {
-        "version": 1,
-        "source": "example.application",
-        "approval_id": "approval-123",
-        "tool_name": "files.write",
-        "approved_arguments": [
+      "data": {
+        "host_approval": [
           1,
           true
         ]
@@ -104,519 +74,164 @@
     "valid": true
   },
   {
-    "name": "arguments {}",
+    "name": "opaque host_approval {}",
     "value": {
-      "host_approval": {
-        "version": 1,
-        "source": "example.application",
-        "approval_id": "approval-123",
-        "tool_name": "files.write",
-        "approved_arguments": {}
+      "data": {
+        "host_approval": {}
       }
     },
     "valid": true
   },
   {
-    "name": "extensions both levels",
+    "name": "opaque host_approval {\"decision\": \"denied\"}",
     "value": {
-      "host_approval": {
-        "version": 1,
-        "source": "example.application",
-        "approval_id": "approval-123",
-        "tool_name": "files.write",
-        "approved_arguments": {
-          "path": "notes.txt"
-        },
-        "com.example.receipt": {
-          "id": "r-1"
-        }
-      },
-      "com.example.audit": [
-        false,
-        null
-      ]
-    },
-    "valid": true
-  },
-  {
-    "name": "missing version",
-    "value": {
-      "host_approval": {
-        "source": "example.application",
-        "approval_id": "approval-123",
-        "tool_name": "files.write",
-        "approved_arguments": {
-          "path": "notes.txt"
-        }
-      }
-    },
-    "valid": false
-  },
-  {
-    "name": "missing source",
-    "value": {
-      "host_approval": {
-        "version": 1,
-        "approval_id": "approval-123",
-        "tool_name": "files.write",
-        "approved_arguments": {
-          "path": "notes.txt"
-        }
-      }
-    },
-    "valid": false
-  },
-  {
-    "name": "missing approval_id",
-    "value": {
-      "host_approval": {
-        "version": 1,
-        "source": "example.application",
-        "tool_name": "files.write",
-        "approved_arguments": {
-          "path": "notes.txt"
-        }
-      }
-    },
-    "valid": false
-  },
-  {
-    "name": "missing tool_name",
-    "value": {
-      "host_approval": {
-        "version": 1,
-        "source": "example.application",
-        "approval_id": "approval-123",
-        "approved_arguments": {
-          "path": "notes.txt"
-        }
-      }
-    },
-    "valid": false
-  },
-  {
-    "name": "missing approved_arguments",
-    "value": {
-      "host_approval": {
-        "version": 1,
-        "source": "example.application",
-        "approval_id": "approval-123",
-        "tool_name": "files.write"
-      }
-    },
-    "valid": false
-  },
-  {
-    "name": "invalid version null",
-    "value": {
-      "host_approval": {
-        "version": null,
-        "source": "example.application",
-        "approval_id": "approval-123",
-        "tool_name": "files.write",
-        "approved_arguments": {
-          "path": "notes.txt"
-        }
-      }
-    },
-    "valid": false
-  },
-  {
-    "name": "invalid version true",
-    "value": {
-      "host_approval": {
-        "version": true,
-        "source": "example.application",
-        "approval_id": "approval-123",
-        "tool_name": "files.write",
-        "approved_arguments": {
-          "path": "notes.txt"
-        }
-      }
-    },
-    "valid": false
-  },
-  {
-    "name": "invalid version false",
-    "value": {
-      "host_approval": {
-        "version": false,
-        "source": "example.application",
-        "approval_id": "approval-123",
-        "tool_name": "files.write",
-        "approved_arguments": {
-          "path": "notes.txt"
-        }
-      }
-    },
-    "valid": false
-  },
-  {
-    "name": "invalid version 0",
-    "value": {
-      "host_approval": {
-        "version": 0,
-        "source": "example.application",
-        "approval_id": "approval-123",
-        "tool_name": "files.write",
-        "approved_arguments": {
-          "path": "notes.txt"
-        }
-      }
-    },
-    "valid": false
-  },
-  {
-    "name": "invalid version 2",
-    "value": {
-      "host_approval": {
-        "version": 2,
-        "source": "example.application",
-        "approval_id": "approval-123",
-        "tool_name": "files.write",
-        "approved_arguments": {
-          "path": "notes.txt"
-        }
-      }
-    },
-    "valid": false
-  },
-  {
-    "name": "invalid version \"1\"",
-    "value": {
-      "host_approval": {
-        "version": "1",
-        "source": "example.application",
-        "approval_id": "approval-123",
-        "tool_name": "files.write",
-        "approved_arguments": {
-          "path": "notes.txt"
-        }
-      }
-    },
-    "valid": false
-  },
-  {
-    "name": "integral numeric version",
-    "value": {
-      "host_approval": {
-        "version": 1.0,
-        "source": "example.application",
-        "approval_id": "approval-123",
-        "tool_name": "files.write",
-        "approved_arguments": {
-          "path": "notes.txt"
+      "data": {
+        "host_approval": {
+          "decision": "denied"
         }
       }
     },
     "valid": true
   },
   {
-    "name": "invalid source \"\"",
+    "name": "opaque host_approval {\"approval_id\": \"private-receipt\"}",
     "value": {
-      "host_approval": {
-        "version": 1,
-        "source": "",
-        "approval_id": "approval-123",
-        "tool_name": "files.write",
-        "approved_arguments": {
-          "path": "notes.txt"
+      "data": {
+        "host_approval": {
+          "approval_id": "private-receipt"
         }
       }
     },
+    "valid": true
+  },
+  {
+    "name": "application keys do not reserve Relay fields",
+    "value": {
+      "data": {
+        "data": null,
+        "tool_call_id": false,
+        "future_field": 42
+      }
+    },
+    "valid": true
+  },
+  {
+    "name": "invalid context null",
+    "value": null,
     "valid": false
   },
   {
-    "name": "invalid source null",
+    "name": "invalid data null",
     "value": {
-      "host_approval": {
-        "version": 1,
-        "source": null,
-        "approval_id": "approval-123",
-        "tool_name": "files.write",
-        "approved_arguments": {
-          "path": "notes.txt"
-        }
-      }
+      "data": null
     },
     "valid": false
   },
   {
-    "name": "invalid source 42",
+    "name": "invalid context []",
+    "value": [],
+    "valid": false
+  },
+  {
+    "name": "invalid data []",
     "value": {
-      "host_approval": {
-        "version": 1,
-        "source": 42,
-        "approval_id": "approval-123",
-        "tool_name": "files.write",
-        "approved_arguments": {
-          "path": "notes.txt"
-        }
-      }
+      "data": []
     },
     "valid": false
   },
   {
-    "name": "invalid source []",
+    "name": "invalid context true",
+    "value": true,
+    "valid": false
+  },
+  {
+    "name": "invalid data true",
     "value": {
-      "host_approval": {
-        "version": 1,
-        "source": [],
-        "approval_id": "approval-123",
-        "tool_name": "files.write",
-        "approved_arguments": {
-          "path": "notes.txt"
-        }
-      }
+      "data": true
     },
     "valid": false
   },
   {
-    "name": "invalid source {}",
+    "name": "invalid context 1",
+    "value": 1,
+    "valid": false
+  },
+  {
+    "name": "invalid data 1",
     "value": {
-      "host_approval": {
-        "version": 1,
-        "source": {},
-        "approval_id": "approval-123",
-        "tool_name": "files.write",
-        "approved_arguments": {
-          "path": "notes.txt"
-        }
-      }
+      "data": 1
     },
     "valid": false
   },
   {
-    "name": "invalid decision \"denied\"",
+    "name": "invalid context \"text\"",
+    "value": "text",
+    "valid": false
+  },
+  {
+    "name": "invalid data \"text\"",
     "value": {
-      "host_approval": {
-        "version": 1,
-        "source": "example.application",
-        "decision": "denied",
-        "approval_id": "approval-123",
-        "tool_name": "files.write",
-        "approved_arguments": {
-          "path": "notes.txt"
-        }
-      }
+      "data": "text"
     },
     "valid": false
   },
   {
-    "name": "invalid decision \"pending\"",
+    "name": "unknown top-level host_approval",
     "value": {
-      "host_approval": {
-        "version": 1,
-        "source": "example.application",
-        "decision": "pending",
-        "approval_id": "approval-123",
-        "tool_name": "files.write",
-        "approved_arguments": {
-          "path": "notes.txt"
-        }
-      }
+      "host_approval": {}
     },
     "valid": false
   },
   {
-    "name": "invalid decision null",
+    "name": "unknown top-level alongside data host_approval",
     "value": {
-      "host_approval": {
-        "version": 1,
-        "source": "example.application",
-        "decision": null,
-        "approval_id": "approval-123",
-        "tool_name": "files.write",
-        "approved_arguments": {
-          "path": "notes.txt"
-        }
-      }
+      "data": {},
+      "host_approval": null
     },
     "valid": false
   },
   {
-    "name": "invalid decision true",
+    "name": "unknown top-level custom",
     "value": {
-      "host_approval": {
-        "version": 1,
-        "source": "example.application",
-        "decision": true,
-        "approval_id": "approval-123",
-        "tool_name": "files.write",
-        "approved_arguments": {
-          "path": "notes.txt"
-        }
-      }
+      "custom": {}
     },
     "valid": false
   },
   {
-    "name": "invalid approval_id \"\"",
+    "name": "unknown top-level alongside data custom",
     "value": {
-      "host_approval": {
-        "version": 1,
-        "source": "example.application",
-        "approval_id": "",
-        "tool_name": "files.write",
-        "approved_arguments": {
-          "path": "notes.txt"
-        }
-      }
+      "data": {},
+      "custom": null
     },
     "valid": false
   },
   {
-    "name": "invalid approval_id null",
+    "name": "unknown top-level version",
     "value": {
-      "host_approval": {
-        "version": 1,
-        "source": "example.application",
-        "approval_id": null,
-        "tool_name": "files.write",
-        "approved_arguments": {
-          "path": "notes.txt"
-        }
-      }
+      "version": {}
     },
     "valid": false
   },
   {
-    "name": "invalid approval_id []",
+    "name": "unknown top-level alongside data version",
     "value": {
-      "host_approval": {
-        "version": 1,
-        "source": "example.application",
-        "approval_id": [],
-        "tool_name": "files.write",
-        "approved_arguments": {
-          "path": "notes.txt"
-        }
-      }
+      "data": {},
+      "version": null
     },
     "valid": false
   },
   {
-    "name": "invalid tool_name \"\"",
+    "name": "unknown top-level source",
     "value": {
-      "host_approval": {
-        "version": 1,
-        "source": "example.application",
-        "approval_id": "approval-123",
-        "tool_name": "",
-        "approved_arguments": {
-          "path": "notes.txt"
-        }
-      }
+      "source": {}
     },
     "valid": false
   },
   {
-    "name": "invalid tool_name false",
+    "name": "unknown top-level alongside data source",
     "value": {
-      "host_approval": {
-        "version": 1,
-        "source": "example.application",
-        "approval_id": "approval-123",
-        "tool_name": false,
-        "approved_arguments": {
-          "path": "notes.txt"
-        }
-      }
-    },
-    "valid": false
-  },
-  {
-    "name": "invalid tool_name {}",
-    "value": {
-      "host_approval": {
-        "version": 1,
-        "source": "example.application",
-        "approval_id": "approval-123",
-        "tool_name": {},
-        "approved_arguments": {
-          "path": "notes.txt"
-        }
-      }
-    },
-    "valid": false
-  },
-  {
-    "name": "obsolete decision \"approved\"",
-    "value": {
-      "host_approval": {
-        "version": 1,
-        "source": "example.application",
-        "approval_id": "approval-123",
-        "tool_name": "files.write",
-        "approved_arguments": {
-          "path": "notes.txt"
-        },
-        "decision": "approved"
-      }
-    },
-    "valid": false
-  },
-  {
-    "name": "obsolete decision \"denied\"",
-    "value": {
-      "host_approval": {
-        "version": 1,
-        "source": "example.application",
-        "approval_id": "approval-123",
-        "tool_name": "files.write",
-        "approved_arguments": {
-          "path": "notes.txt"
-        },
-        "decision": "denied"
-      }
-    },
-    "valid": false
-  },
-  {
-    "name": "obsolete decision null",
-    "value": {
-      "host_approval": {
-        "version": 1,
-        "source": "example.application",
-        "approval_id": "approval-123",
-        "tool_name": "files.write",
-        "approved_arguments": {
-          "path": "notes.txt"
-        },
-        "decision": null
-      }
-    },
-    "valid": false
-  },
-  {
-    "name": "obsolete decision false",
-    "value": {
-      "host_approval": {
-        "version": 1,
-        "source": "example.application",
-        "approval_id": "approval-123",
-        "tool_name": "files.write",
-        "approved_arguments": {
-          "path": "notes.txt"
-        },
-        "decision": false
-      }
-    },
-    "valid": false
-  },
-  {
-    "name": "obsolete decision 1",
-    "value": {
-      "host_approval": {
-        "version": 1,
-        "source": "example.application",
-        "approval_id": "approval-123",
-        "tool_name": "files.write",
-        "approved_arguments": {
-          "path": "notes.txt"
-        },
-        "decision": 1
-      }
+      "data": {},
+      "source": null
     },
     "valid": false
   }

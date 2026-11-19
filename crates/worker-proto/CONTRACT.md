@@ -305,15 +305,20 @@ or array adds a level; scalars add none). The depth bound is checked before
 serialization and middleware dispatch and retains the worker decoder's recursion
 protection.
 
-Tool execution context is an optional caller-supplied object, separate from tool
-arguments, results, annotations, and event metadata. Relay transports it without
-interpreting its contents or treating it as an authenticated assertion or an
-authorization grant. Continuations preserve the original object; changing tool
-arguments does not change context, and nested managed calls do not inherit it.
-The Python SDK exposes defensive copies. The current frozen native plugin ABI
-cannot carry this field: context-bearing calls fail explicitly at native tool
-execution interceptors instead of silently dropping it. Context-free calls are
-unchanged.
+Tool execution context is a concrete optional Relay-owned DTO, separate from tool
+arguments, results, annotations, and event metadata. Its optional `data` field is
+an application-owned JSON object/map. Unknown top-level JSON properties and
+non-object `data` are rejected. Omission, `{}`, and `{"data":{}}` remain distinct.
+Application keys belong inside `data`; middleware owns their schema and trust
+policy. Relay does not interpret approval claims or grant authorization from them.
+The protobuf `ApplicationExecutionContext` and native v1.0 DTO have a dedicated
+optional data field rather than arbitrary JSON at the top level.
+
+Continuations preserve the original context; changing tool arguments does not
+change context, and nested managed calls do not inherit it. Python SDK access
+returns defensive copies. Native and worker SDKs implement the matching
+unreleased 1.0 baseline; earlier development binaries must be rebuilt. Presence
+of a version identity alone cannot prove that an obsolete binary implements it.
 
 Use the Rust types in `nemo-relay-types` for shared plugin APIs. Keep generated
 protobuf messages, gRPC statuses, credentials, and capability IDs out of callback

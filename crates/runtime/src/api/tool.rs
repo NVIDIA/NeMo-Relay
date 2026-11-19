@@ -36,7 +36,7 @@ use typed_builder::TypedBuilder;
 use uuid::Uuid;
 
 pub use nemo_relay_types::api::tool::{
-    ApplicationExecutionContext, HostApproval, TOOL_EXECUTION_INTERCEPT_OUTCOME_SCHEMA,
+    ApplicationExecutionContext, TOOL_EXECUTION_INTERCEPT_OUTCOME_SCHEMA,
     TOOL_EXECUTION_RESULT_SCHEMA, ToolAttributes, ToolExecutionInterceptOutcome,
     ToolExecutionResult,
 };
@@ -205,7 +205,7 @@ pub struct ToolCallExecuteParams {
     /// Choose which stages run for this call. All stages run by default.
     #[builder(default)]
     pub execution_options: ExecutionOptions,
-    /// Optional structured application assertions exposed only to execution interceptors.
+    /// Optional concrete Relay context with application data for execution interceptors.
     /// Limited to 16 KiB and 64 object/array levels, counting the root as level 1.
     /// This is not tool input, event metadata, or proof of authorization.
     #[builder(default)]

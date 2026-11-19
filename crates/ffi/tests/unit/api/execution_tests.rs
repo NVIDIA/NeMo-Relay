@@ -56,7 +56,7 @@ fn execution_context_reaches_c_middleware_but_not_arguments_or_events() {
         let args = cstring(r#"{"value":2}"#);
         let call_id = cstring("provider-context-call");
         for supplied in [
-            Some(r#"{"review":{"reference":"context-only-marker"}}"#),
+            Some(r#"{"data":{"review":{"reference":"context-only-marker"}}}"#),
             Some("{}"),
             None,
         ] {
@@ -107,7 +107,7 @@ fn execution_context_reaches_c_middleware_but_not_arguments_or_events() {
         assert_eq!(captures.len(), 3);
         assert_eq!(
             captures[0]["execution_context"],
-            json!({"review":{"reference":"context-only-marker"}})
+            json!({"data":{"review":{"reference":"context-only-marker"}}})
         );
         assert_eq!(captures[1]["execution_context"], json!({}));
         assert!(captures[2].get("execution_context").is_none());

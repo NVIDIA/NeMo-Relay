@@ -5,6 +5,22 @@
 extern crate nemo_relay_plugin_abi as abi;
 #[path = "fixtures/behavior_host.rs"]
 mod behavior;
+/// Construct the invocation from this host's checked interface generation.
+fn native_test_invocation(
+    surface: abi::v1_0::Surface,
+    value: abi::Json,
+    context: abi::v1_0::Context,
+) -> abi::v1_0::Invocation {
+    abi::v1_0::Invocation {
+        surface,
+        name: "fixture".into(),
+        value,
+        tool_call_id: Some("call-id".into()),
+        execution_context: None,
+        context,
+    }
+}
+
 use abi::{NativeApiVersion as Api, PluginDescriptor, bootstrap, validate_descriptor, xabi};
 use std::path::PathBuf;
 
@@ -55,25 +71,18 @@ fn assert_host_accepts(host: &str, name: &str) {
         String::from_utf8_lossy(&output.stderr)
     );
 }
-/// Exercise an unchanged baseline binary against both supported host contracts.
+/// The unreleased v1.0 schema change rejects an obsolete development binary.
 #[test]
-fn v1_0_plugin_loads_on_current_and_future_hosts() {
-    let (descriptor, manifest) = fixture("baseline").unwrap();
-    for host in [Api::new(1, 0), Api::new(1, 1)] {
-        validate_descriptor(&descriptor, Api::new(1, 0), "fixture", host).unwrap();
-        let factory = unsafe { bootstrap::factory(manifest) }.unwrap();
-        let plugin = factory.create().unwrap();
-        assert!(plugin.allows_multiple_components());
-        assert!(plugin.validate(abi::Json::Null).is_empty());
-        behavior::assert_behavior(plugin);
-    }
+fn obsolete_development_v1_0_schema_is_rejected_before_factory_use() {
+    let error = fixture("baseline").err().unwrap();
+    assert!(error.contains("incompatible native contract"), "{error}");
+    // The frozen old binary remains internally consistent with its frozen host.
     assert_host_accepts("future-host", "baseline");
 }
 #[test]
 fn newer_sdk_requires_newer_host_and_selects_its_own_module() {
     let error = fixture("future").err().unwrap();
-    // This intentionally different historical toy 1.1 contract remains frozen.
-    assert!(error.contains("incompatible native contract"), "{error}");
+    assert!(error.contains("requires native API v1.1"), "{error}");
     assert_host_accepts("future-host", "future");
 }
 /// Different package releases must load the same native contract without rebuilding its binary.
@@ -90,12 +99,9 @@ fn package_release_versions_do_not_define_binary_compatibility() {
         abi::NATIVE_API_VERSION,
     )
     .unwrap();
-    let new_factory = unsafe { bootstrap::factory_v1_1(manifest) }.unwrap();
-    assert!(new_factory.create().unwrap().allows_multiple_components());
-    // The legacy-author export still exercises every unchanged baseline surface.
     let factory = unsafe { bootstrap::factory(manifest) }.unwrap();
     behavior::assert_behavior(factory.create().unwrap());
-    for plugin in ["baseline", "package_next"] {
+    for plugin in ["current", "package_next"] {
         assert_host_accepts("package-next-host", plugin);
     }
 }
@@ -104,8 +110,8 @@ fn package_release_versions_do_not_define_binary_compatibility() {
 fn reject_different_major_and_missing_module_before_factory_use() {
     let error = fixture("major").err().unwrap();
     assert!(error.contains("requires native API v2.0"), "{error}");
-    let (_, manifest) = fixture("missing").unwrap();
-    assert!(unsafe { bootstrap::factory(manifest) }.is_err());
+    let error = fixture("missing").err().unwrap();
+    assert!(error.contains("incompatible native contract"), "{error}");
 }
 /// Reject changes to method signatures or thread-safety requirements before factory construction.
 #[test]
@@ -132,16 +138,17 @@ fn incompatible_dependency_generation_fails_before_module_discovery() {
             &format!("xabi-generation:{};", xabi::ABI_VERSION),
             1,
         ),
-        bootstrap::schema(),
+        unsafe { (&*raw_fixture("baseline")).schema.as_str() }.unwrap(),
     );
     let error = fixture("dependency").err().unwrap();
     assert!(error.contains("dependency ABI"), "{error}");
 }
 #[test]
-fn declared_contract_requires_its_factory_module() {
-    let (descriptor, manifest) = fixture("missing").unwrap();
-    validate_descriptor(&descriptor, Api::new(1, 0), "fixture", Api::new(1, 0)).unwrap();
-    let error = unsafe { bootstrap::factory(manifest) }.err().unwrap();
+fn current_contract_requires_its_factory_module() {
+    let (_, manifest) = fixture("current").unwrap();
+    assert!(unsafe { bootstrap::factory(manifest) }.is_ok());
+    let empty = xabi::XabiManifest::new(&[]);
+    let error = unsafe { bootstrap::factory(&empty) }.err().unwrap();
     assert!(error.contains("missing required factory module"), "{error}");
 }
 #[test]
@@ -176,15 +183,15 @@ fn changed_generated_field_offsets_fail_even_when_source_size_and_alignment_matc
     assert!(error.contains("incompatible native contract"), "{error}");
 }
 
-/// A real v1.1 binary loads only on a host checking its exact new contract.
+/// An old host rejects a new same-version binary before constructing its factory.
 #[test]
-fn actual_v1_1_plugin_uses_new_factory_and_old_host_refuses_before_construction() {
-    let (descriptor, manifest) = fixture("native11").unwrap();
-    assert_eq!(descriptor.native_api, Api::new(1, 1));
-    let factory = unsafe { bootstrap::factory_v1_1(manifest) }.unwrap();
+fn current_v1_0_plugin_uses_standard_factory_and_old_host_refuses_changed_schema() {
+    let (descriptor, manifest) = fixture("current").unwrap();
+    assert_eq!(descriptor.native_api, Api::new(1, 0));
+    let factory = unsafe { bootstrap::factory(manifest) }.unwrap();
     let plugin = factory.create().unwrap();
     assert!(plugin.allows_multiple_components());
     assert!(plugin.validate(abi::Json::Null).is_empty());
-    assert!(unsafe { bootstrap::factory(manifest) }.is_err());
-    assert_host_accepts("baseline-host", "native11");
+    behavior::assert_behavior(plugin);
+    assert_host_accepts("baseline-host", "current");
 }

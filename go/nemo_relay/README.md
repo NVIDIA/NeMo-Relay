@@ -87,10 +87,8 @@ result, err := nemo.ToolCallExecute(
     json.RawMessage(`{"path":"notes.txt","content":"hello"}`),
     executeWrite,
     nemo.WithApplicationExecutionContext(&nemo.ApplicationExecutionContext{
-        HostApproval: &nemo.HostApproval{
-            Version: 1, Source: "application",
-            ApprovalID: "review-123", ToolName: "write_file",
-            ApprovedArguments: json.RawMessage(`{"path":"notes.txt","content":"hello"}`),
+        Data: map[string]json.RawMessage{
+            "host_approval": json.RawMessage(`{"approval_id":"review-123","source":"application"}`),
         },
     }),
 )
@@ -102,15 +100,14 @@ only the tool arguments. Context is not automatically added to lifecycle
 events or inherited by nested calls. Application assertions are not proof of
 approval: middleware must decide which application sources and claims it trusts.
 
-`ApplicationExecutionContext` and `HostApproval` preserve extra JSON fields in
-`AdditionalFields`. Known approval fields are validated; an incomplete approval
-is rejected. Presence of `host_approval` asserts completed human approval; the
-obsolete `decision` key is reserved and rejected, including `"approved"` values.
+`ApplicationExecutionContext` reserves outer fields for the Relay API. Application
+fields belong in its `Data` map; middleware owns their schema, interpretation and
+trust checks. Relay does not interpret approval claims or other application data.
 `WithToolExecutionContext(json.RawMessage(...))` remains available
 for raw JSON producers and follows the same runtime schema validation.
 
 The option snapshots its input and can be reused. A nil value omits context;
-`{}` supplies an empty object. Relay rejects invalid or non-object JSON, objects
+`{}` supplies an empty context and `{"data":{}}` explicitly supplies empty application data. Unknown outer fields and non-object `data` are rejected. Relay rejects invalid or non-object JSON, objects
 over 16 KiB of serialized JSON, and nesting beyond 64 container levels before
 middleware or execution. Manual `ToolCall` and `ToolCallEnd` reject this option.
 Build the matching C FFI library when updating this source-first binding.

@@ -64,13 +64,7 @@ impl TryFrom<wire::InvokeRequest> for CallbackInvocation {
                         execution_context: v
                             .execution_context
                             .as_ref()
-                            .map(|value| {
-                                let json: Json = decode_wire(value)?;
-                                nemo_relay_types::api::tool::ApplicationExecutionContext::try_from(
-                                    json,
-                                )
-                                .map_err(|error| WorkerSdkError::InvalidInput(error.to_string()))
-                            })
+                            .map(decode_wire)
                             .transpose()?,
                     }),
                 )

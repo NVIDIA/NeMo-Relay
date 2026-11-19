@@ -8,7 +8,8 @@ use std::path::{Component, Path, PathBuf};
 use std::sync::{Mutex, OnceLock};
 
 use nemo_relay_plugin::abi::{
-    NATIVE_API_VERSION, NativeApiVersion, PluginDescriptor, bootstrap, v1_0, v1_1,
+    NATIVE_API_VERSION, NativeApiVersion, PluginDescriptor, bootstrap,
+    v1_0::{self, PluginBox},
     validate_descriptor,
 };
 use sha2::{Digest, Sha256};
@@ -420,7 +421,7 @@ struct ResidentLibrary {
     // The library and its complete staging closure are deliberately process-owned.
     _directory: tempfile::TempDir,
     bootstrap: OnceLock<Result<(PluginDescriptor, &'static bootstrap::Bootstrap), String>>,
-    factory: OnceLock<Result<std::sync::Arc<CheckedFactory>, String>>,
+    factory: OnceLock<Result<std::sync::Arc<v1_0::FactoryBox>, String>>,
     identities: LibraryIdentities,
     #[cfg(windows)]
     sidecars: Vec<PathBuf>,
@@ -444,47 +445,13 @@ pub fn resident_library_path(identity: [u8; 32]) -> Option<PathBuf> {
         .map(|library| library.path.clone())
 }
 
-/// Version-selected factory, constructed only after its exact schema is checked.
-enum CheckedFactory {
-    V1_0(v1_0::FactoryBox),
-    V1_1(v1_1::FactoryBox),
-}
-
-/// A checked plugin whose registration authority matches its native contract.
-///
-/// The variants intentionally remain distinct: a v1.0 runtime cannot silently
-/// stand in for v1.1's separate tool-execution-context registration lane.
-pub enum CheckedNativePlugin {
-    /// Frozen v1.0 plugin interface.
-    V1_0(v1_0::PluginBox),
-    /// Extended v1.1 plugin interface.
-    V1_1(v1_1::PluginBox),
-}
-impl CheckedNativePlugin {
-    /// Whether this plugin permits more than one configured component.
-    pub fn allows_multiple_components(&self) -> bool {
-        match self {
-            Self::V1_0(plugin) => plugin.allows_multiple_components(),
-            Self::V1_1(plugin) => plugin.allows_multiple_components(),
-        }
-    }
-
-    /// Validate configuration without admitting registrations or component work.
-    pub fn validate(&self, config: nemo_relay_plugin::abi::Json) -> Vec<v1_0::ConfigDiagnostic> {
-        match self {
-            Self::V1_0(plugin) => plugin.validate(config),
-            Self::V1_1(plugin) => plugin.validate(config),
-        }
-    }
-}
-
 /// Checked library interfaces; holds no registrations or component executors.
 ///
 /// Each call to `create_plugin` constructs fresh adapter state. Dropping this
 /// handle leaves only resident code and staging, never an active component.
 pub struct CheckedNativeLibrary {
     resident: &'static ResidentLibrary,
-    factory: std::sync::Arc<CheckedFactory>,
+    factory: std::sync::Arc<v1_0::FactoryBox>,
     descriptor: PluginDescriptor,
     identity: [u8; 32],
 }
@@ -593,14 +560,7 @@ impl CheckedNativeLibrary {
         let manifest = unsafe { bootstrap::check_contract(header) }?;
         let factory = resident
             .factory
-            .get_or_init(|| {
-                let factory = match descriptor.native_api.minor {
-                    0 => CheckedFactory::V1_0(unsafe { bootstrap::factory(manifest) }?),
-                    1 => CheckedFactory::V1_1(unsafe { bootstrap::factory_v1_1(manifest) }?),
-                    _ => return Err("unsupported checked native factory contract".into()),
-                };
-                Ok(std::sync::Arc::new(factory))
-            })
+            .get_or_init(|| unsafe { bootstrap::factory(manifest) }.map(std::sync::Arc::new))
             .clone()?;
         Ok(Self {
             resident,
@@ -611,12 +571,10 @@ impl CheckedNativeLibrary {
     }
 
     /// Construct fresh plugin adapter state after all binary checks have passed.
-    pub fn create_plugin(&self) -> Result<CheckedNativePlugin, String> {
-        match self.factory.as_ref() {
-            CheckedFactory::V1_0(factory) => factory.create().map(CheckedNativePlugin::V1_0),
-            CheckedFactory::V1_1(factory) => factory.create().map(CheckedNativePlugin::V1_1),
-        }
-        .map_err(|e| format!("{}: {}", e.code, e.message))
+    pub fn create_plugin(&self) -> Result<PluginBox, String> {
+        self.factory
+            .create()
+            .map_err(|e| format!("{}: {}", e.code, e.message))
     }
 
     /// Binary declaration checked against this activation's manifest.

@@ -12,10 +12,10 @@ use nemo_relay_plugin::{
     abi::{
         self,
         future::{FfiFuture, FutureExt as _},
-        v1_0 as a, v1_1 as b,
+        v1_0 as a,
     },
     abi_executor::{ComponentExecutor, DirectCancellation},
-    abi_value::{from_abi, into_abi},
+    abi_value::{from_abi, into_abi, to_abi},
 };
 use nemo_relay_runtime::api::{
     registry::{
@@ -102,15 +102,14 @@ struct RuntimeState {
     gates: HashMap<String, String>,
     scopes: Vec<OwnedScope>,
     callbacks: Vec<Weak<CallbackOwner>>,
-    tool_callbacks: Vec<Weak<CallbackOwner<b::ToolCallbackBox>>>,
 }
 // Registry snapshots retain a revocable host proxy for each foreign callback.
-struct CallbackOwner<T = a::CallbackBox> {
-    value: Mutex<Option<Arc<T>>>,
+struct CallbackOwner {
+    value: Mutex<Option<Arc<a::CallbackBox>>>,
 }
-impl<T> CallbackOwner<T> {
+impl CallbackOwner {
     /// Admit a foreign call and retain its callback until the call returns.
-    fn with<R>(&self, owner: &HostRuntime, invoke: impl FnOnce(&T) -> R) -> Result<R> {
+    fn with<T>(&self, owner: &HostRuntime, invoke: impl FnOnce(&a::CallbackBox) -> T) -> Result<T> {
         let _call = local(owner.executor.enter_sync())?;
         owner.ensure()?;
         let callback = self
@@ -203,22 +202,6 @@ impl HostRuntime {
         state.callbacks.push(Arc::downgrade(&callback));
         Ok(callback)
     }
-    /// Retain a revocable v1.1 tool callback under the same component authority.
-    fn own_tool_callback(
-        &self,
-        callback: b::ToolCallbackBox,
-    ) -> Result<Arc<CallbackOwner<b::ToolCallbackBox>>> {
-        let callback = Arc::new(CallbackOwner {
-            value: Mutex::new(Some(Arc::new(callback))),
-        });
-        let mut state = self.state.lock().unwrap_or_else(|e| e.into_inner());
-        self.ensure()?;
-        state
-            .tool_callbacks
-            .retain(|entry| entry.strong_count() > 0);
-        state.tool_callbacks.push(Arc::downgrade(&callback));
-        Ok(callback)
-    }
     /// Release retained foreign callback state after component cleanup has completed.
     fn release_callbacks(&self) {
         let callbacks = std::mem::take(
@@ -236,28 +219,9 @@ impl HostRuntime {
                 .take();
             drop(value);
         }
-        let callbacks = std::mem::take(
-            &mut self
-                .state
-                .lock()
-                .unwrap_or_else(|e| e.into_inner())
-                .tool_callbacks,
-        );
-        for callback in callbacks.into_iter().filter_map(|entry| entry.upgrade()) {
-            let value = callback
-                .value
-                .lock()
-                .unwrap_or_else(|e| e.into_inner())
-                .take();
-            drop(value);
-        }
     }
     pub fn runtime_box(self: &Arc<Self>) -> a::RuntimeBox {
         a::RuntimeBox::new(RuntimeProxy(self.clone()))
-    }
-    /// Supply the versioned extension without replacing baseline host authority.
-    pub fn runtime_box_v1_1(self: &Arc<Self>) -> b::RuntimeBox {
-        b::RuntimeBox::new(RuntimeProxy(self.clone()))
     }
     fn scope(&self) -> a::ScopeBox {
         a::ScopeBox::new(HostScope {
@@ -620,12 +584,8 @@ impl log::kv::Source for LogFields<'_> {
         Ok(())
     }
 }
-enum CheckedRegistration {
-    Baseline(a::Registration),
-    Tool(b::ToolRegistration),
-}
 struct RegistrationRequest {
-    registration: CheckedRegistration,
+    registration: a::Registration,
     reply: std::sync::mpsc::SyncSender<a::Result<()>>,
 }
 
@@ -644,10 +604,8 @@ async fn drive_registration(
             biased;
             request = receive.recv(), if open => match request {
                 Some(request) => {
-                    let result = match request.registration {
-                        CheckedRegistration::Baseline(registration) => apply_registration(ctx, registration, runtime.clone()),
-                        CheckedRegistration::Tool(registration) => apply_tool_registration(ctx, registration, runtime.clone()),
-                    }.map_err(|error| a::Error::new("registration", error.to_string()));
+                    let result = apply_registration(ctx, request.registration, runtime.clone())
+                        .map_err(|error| a::Error::new("registration", error.to_string()));
                     let _ = request.reply.send(result);
                 }
                 None => {
@@ -667,50 +625,7 @@ async fn drive_registration(
     }
     registered
 }
-/// Enqueue either native lane through the same bounded activation transaction.
-fn enqueue_registration(runtime: &HostRuntime, registration: CheckedRegistration) -> a::Result<()> {
-    let sender = runtime
-        .registration
-        .lock()
-        .unwrap_or_else(|e| e.into_inner())
-        .clone();
-    let Some(sender) = sender else {
-        return a::Result::Err(a::Error::new(
-            "closed",
-            "native registration transaction has ended",
-        ));
-    };
-    let (send, receive) = std::sync::mpsc::sync_channel(1);
-    match sender.try_send(RegistrationRequest {
-        registration,
-        reply: send,
-    }) {
-        Err(_) => a::Result::Err(a::Error::new(
-            "capacity",
-            "native registration queue is closed or full",
-        )),
-        Ok(()) => receive.recv().unwrap_or_else(|_| {
-            a::Result::Err(a::Error::new(
-                "closed",
-                "native registration transaction was cancelled",
-            ))
-        }),
-    }
-}
-
 struct RuntimeProxy(Arc<HostRuntime>);
-impl b::Runtime for RuntimeProxy {
-    fn baseline(&self) -> a::Result<a::RuntimeBox> {
-        boundary(self.0.ensure().map(|_| self.0.runtime_box()))
-    }
-
-    fn register_tool_execution(&self, registration: b::ToolRegistration) -> a::Result<()> {
-        if let Err(error) = self.0.ensure() {
-            return a::Result::Err(abi_error(error));
-        }
-        enqueue_registration(&self.0, CheckedRegistration::Tool(registration))
-    }
-}
 impl a::Runtime for RuntimeProxy {
     /// Admit a synchronous runtime operation and contain host-side panics at the ABI boundary.
     fn call_sync(&self, operation: String, args: abi::Json) -> a::Result<abi::Json> {
@@ -772,7 +687,34 @@ impl a::Runtime for RuntimeProxy {
     }
     /// Send a callback to the active registration transaction and wait for its admission result.
     fn register_callback(&self, registration: a::Registration) -> a::Result<()> {
-        enqueue_registration(&self.0, CheckedRegistration::Baseline(registration))
+        let sender = self
+            .0
+            .registration
+            .lock()
+            .unwrap_or_else(|e| e.into_inner())
+            .clone();
+        let Some(sender) = sender else {
+            return a::Result::Err(a::Error::new(
+                "closed",
+                "native registration transaction has ended",
+            ));
+        };
+        let (send, receive) = std::sync::mpsc::sync_channel(1);
+        match sender.try_send(RegistrationRequest {
+            registration,
+            reply: send,
+        }) {
+            Err(_) => a::Result::Err(a::Error::new(
+                "capacity",
+                "native registration queue is closed or full",
+            )),
+            Ok(()) => receive.recv().unwrap_or_else(|_| {
+                a::Result::Err(a::Error::new(
+                    "closed",
+                    "native registration transaction was cancelled",
+                ))
+            }),
+        }
     }
     /// Register a revocable conditional gate within this component's runtime authority and namespace.
     fn register_gate(&self, registration: a::Registration) -> a::Result<String> {
@@ -994,6 +936,7 @@ fn invocation(
             name,
             value,
             tool_call_id: id,
+            execution_context: None,
             context: a::Context {
                 scope: owner.scope(),
                 request_codec,
@@ -1351,77 +1294,6 @@ fn subscriber_callback(callback: Arc<CallbackOwner>, owner: Arc<HostRuntime>) ->
     })
 }
 
-/// Apply the v1.1 tool lane using the existing transaction and callback ownership.
-fn apply_tool_registration(
-    ctx: &mut dyn crate::PluginRegistrationContext,
-    registration: b::ToolRegistration,
-    owner: Arc<HostRuntime>,
-) -> crate::Result<()> {
-    let b::ToolRegistration {
-        name,
-        priority,
-        callback,
-    } = registration;
-    let callback = owner
-        .own_tool_callback(callback)
-        .map_err(|error| crate::PluginError::RegistrationFailed(error.to_string()))?;
-    ctx.register_tool_execution_intercept(
-        name.as_str(),
-        priority,
-        Arc::new(move |context, next| {
-            let owner = owner.clone();
-            let callback = callback.clone();
-            Box::pin(async move {
-                owner.ensure()?;
-                let execution_context = context.execution_context().map(encode).transpose()?;
-                let (invocation, _lifetime) = invocation(
-                    &owner,
-                    a::Surface::ToolExecutionIntercept,
-                    context.tool_name().to_owned(),
-                    encode(context.args())?,
-                    context.tool_call_id().map(str::to_owned),
-                    None,
-                    None,
-                );
-                let invocation = b::ToolInvocation {
-                    invocation,
-                    execution_context,
-                };
-                let (lease, _guard) = MiddlewareContinuationLease::capture();
-                let downstream = DownstreamErrors::default();
-                let next = a::ContinuationBox::new(Continuation {
-                    next: Arc::new(Next::Tool(next)),
-                    lease,
-                    downstream: downstream.clone(),
-                    owner: owner.clone(),
-                });
-                let future =
-                    callback.with(&owner, |callback| callback.invoke_tool(invocation, next))?;
-                let value = owner
-                    .callback_result(future.await, &downstream)
-                    .map_err(|error| {
-                        super::http_error::reported_by(error, &owner.plugin_kind, "native")
-                    })?;
-                Ok(nemo_relay_types::api::tool::ToolExecutionInterceptOutcome {
-                    result: from_abi(value.result.result).map_err(err)?,
-                    annotation: value
-                        .result
-                        .annotation
-                        .map(from_abi)
-                        .transpose()
-                        .map_err(err)?
-                        .filter(|value| !value.is_null()),
-                    pending_marks: value
-                        .pending_marks
-                        .into_iter()
-                        .map(decode)
-                        .collect::<Result<Vec<_>>>()?,
-                })
-            })
-        }),
-    )
-}
-
 /// Apply each descriptor through the existing host transaction and name policy.
 pub fn apply_registration(
     ctx: &mut dyn crate::PluginRegistrationContext,
@@ -1659,13 +1531,7 @@ pub fn apply_registration(
                 let callback = callback.clone();
                 Box::pin(async move {
                     owner.ensure()?;
-                    if context.execution_context().is_some() {
-                        return Err(FlowError::InvalidArgument(
-                            "native tool execution intercept does not support execution context"
-                                .into(),
-                        ));
-                    }
-                    let (i, _life) = invocation(
+                    let (mut i, _life) = invocation(
                         &owner,
                         surface,
                         context.tool_name().to_owned(),
@@ -1674,6 +1540,19 @@ pub fn apply_registration(
                         None,
                         None,
                     );
+                    i.execution_context =
+                        context
+                            .execution_context()
+                            .map(|context| a::ApplicationExecutionContext {
+                                data: context.data.as_ref().map(|data| {
+                                    data.iter()
+                                        .map(|(key, value)| abi::Field {
+                                            key: key.clone(),
+                                            value: to_abi(value),
+                                        })
+                                        .collect()
+                                }),
+                            });
                     let (lease, _guard) = MiddlewareContinuationLease::capture();
                     let downstream = DownstreamErrors::default();
                     let next = a::ContinuationBox::new(Continuation {
@@ -2009,7 +1888,7 @@ impl Drop for ForeignStream {
 pub struct CheckedPlugin {
     kind: String,
     resident_path: std::path::PathBuf,
-    plugin: Arc<super::native_library::CheckedNativePlugin>,
+    plugin: Arc<a::PluginBox>,
     diagnostics: nemo_relay_diagnostics::Diagnostics,
     read: bool,
     observer: super::diagnostics::PluginDiagnostics,
@@ -2151,7 +2030,7 @@ impl crate::Plugin for CheckedPlugin {
                 .lock()
                 .unwrap_or_else(|e| e.into_inner()) = Some(sender);
             let plugin = self.plugin.clone();
-            let registration_runtime = runtime.clone();
+            let registration_runtime = runtime.runtime_box();
             let binding = ScopeBinding::capture();
             // Raw plugins can synchronously submit registrations while constructing
             // or polling this future. Keep that work off the transaction driver.
@@ -2164,12 +2043,7 @@ impl crate::Plugin for CheckedPlugin {
                     tokio::select! {
                         biased;
                         () = cancelled.cancelled() => a::Result::Err(a::Error::new("cancelled", "native registration was cancelled")),
-                        result = async {
-                            match plugin.as_ref() {
-                                super::native_library::CheckedNativePlugin::V1_0(plugin) => plugin.register(into_abi(Json::Object(config)), registration_runtime.runtime_box()).await,
-                                super::native_library::CheckedNativePlugin::V1_1(plugin) => plugin.register(into_abi(Json::Object(config)), registration_runtime.runtime_box_v1_1()).await,
-                            }
-                        } => result,
+                        result = plugin.register(into_abi(Json::Object(config)), registration_runtime) => result,
                     }
                 })
             });

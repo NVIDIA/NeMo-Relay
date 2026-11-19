@@ -45,7 +45,7 @@ fn register_execution_context_fixture(ctx: &mut PluginContext<'_>, path: &str) -
                 "tool_call_id": &context.tool_call_id,
             })).map_err(|error| error.to_string())?).map_err(|error| error.to_string())?;
             if let Some(supplied) = context.execution_context.as_mut() {
-                supplied.additional_properties.insert("com.example.local_mutation".into(), json!(true));
+                supplied.data.get_or_insert_with(Default::default).insert("com.example.local_mutation".into(), json!(true));
             }
             let mut args = context.args;
             args["context_rewritten"] = json!(true);

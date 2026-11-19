@@ -11,7 +11,7 @@ helpers live in separate source modules. Together they register the subscriber,
 all three event sanitizers, five tool surfaces, and six LLM surfaces exposed by
 the current typed 1.0.0 SDK.
 
-The manifest declares `compat.native_api = "v1.1"`. The SDK export macro emits the
+The manifest declares `compat.native_api = "v1.0"`. The SDK export macro emits the
 standard header that Relay uses to check the plugin's interfaces before loading
 its components. `compat.relay` declares the supported Relay release range.
 The host must support the native minor required by the plugin's SDK.

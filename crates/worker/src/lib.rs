@@ -50,7 +50,7 @@ pub use nemo_relay_types::api::registry::{
 };
 pub use nemo_relay_types::api::scope::{ScopeStackEntry, ScopeStackSnapshot, ScopeType};
 pub use nemo_relay_types::api::tool::{
-    ApplicationExecutionContext, HostApproval, ToolExecutionContext, ToolExecutionInterceptOutcome,
+    ApplicationExecutionContext, ToolExecutionContext, ToolExecutionInterceptOutcome,
     ToolExecutionResult,
 };
 pub use nemo_relay_types::codec::identity::{BuiltinLlmCodec, LlmCodecIdentity};

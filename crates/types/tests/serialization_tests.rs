@@ -919,7 +919,7 @@ fn tool_execution_context_preserves_legacy_json_and_optional_application_context
     assert!(context.execution_context().is_none());
     assert_eq!(serde_json::to_value(&context).unwrap(), legacy);
     context.execution_context = Some(
-        json!({"example.review": {"reference": "review-1"}})
+        json!({"data": {"example.review": {"reference": "review-1"}}})
             .try_into()
             .unwrap(),
     );

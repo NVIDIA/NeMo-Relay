@@ -2,53 +2,14 @@
   "$schema": "https://json-schema.org/draft/2020-12/schema",
   "$comment": "SPDX-FileCopyrightText: Copyright (c) 2026, NVIDIA CORPORATION & AFFILIATES. All rights reserved. SPDX-License-Identifier: Apache-2.0",
   "title": "ApplicationExecutionContext",
-  "description": "Invocation-local application assertions for execution middleware. Structural validity does not establish authorization.",
+  "description": "Concrete invocation-local context owned by Relay. Application-defined payloads belong under data, leaving the top level for built-in Relay fields. Structural validity does not establish authorization.",
   "type": "object",
   "properties": {
-    "host_approval": {
-      "$ref": "#/$defs/HostApproval",
-      "description": "Optional assertion supplied after the host application has verified completed human approval for one exact operation. A valid object always asserts affirmative approval; its presence does not authenticate the assertion or instruct Relay to skip middleware."
-    }
-  },
-  "additionalProperties": true,
-  "$defs": {
-    "HostApproval": {
+    "data": {
       "type": "object",
-      "description": "An assertion that the host has verified completed human approval for the specified operation. Presence asserts affirmative approval; Relay does not authenticate it. The obsolete decision property is reserved and must not be supplied, so legacy denials cannot be reinterpreted as approval.",
-      "required": [
-        "version",
-        "source",
-        "approval_id",
-        "tool_name",
-        "approved_arguments"
-      ],
-      "properties": {
-        "version": {
-          "type": "integer",
-          "const": 1,
-          "description": "Version of the host-approval assertion format. Currently 1; this is not the Relay package or worker protocol version."
-        },
-        "source": {
-          "type": "string",
-          "minLength": 1,
-          "description": "Identifier of the application asserting approval. Consuming middleware must explicitly trust this source; the identifier itself does not authenticate the sender."
-        },
-        "decision": false,
-        "approval_id": {
-          "type": "string",
-          "minLength": 1,
-          "description": "Opaque identifier of the verified human approval. Consuming applications and middleware define its scope and replay protection; the identifier alone is not proof of approval."
-        },
-        "tool_name": {
-          "type": "string",
-          "minLength": 1,
-          "description": "Exact name of the tool covered by the human approval. Middleware must compare it with the current tool before relying on the assertion."
-        },
-        "approved_arguments": {
-          "description": "Snapshot of the exact approved tool arguments, which may be any JSON value. Middleware must compare it with its current arguments. The application must revalidate approval immediately before the final effect, including after middleware waits or changes arguments."
-        }
-      },
+      "description": "Optional application-owned JSON object. Middleware defines its schema, meaning and trust policy. Omission and an explicitly empty object are distinct. Relay does not interpret application keys or treat them as authorization.",
       "additionalProperties": true
     }
-  }
+  },
+  "additionalProperties": false
 }

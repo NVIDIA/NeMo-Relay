@@ -27,7 +27,7 @@ pub(crate) struct ToolInvocation {
     pub tool_name: String,
     pub value: Option<wire::JsonValue>,
     pub tool_call_id: Option<String>,
-    pub execution_context: Option<wire::JsonObject>,
+    pub execution_context: Option<wire::ApplicationExecutionContext>,
 }
 #[derive(Clone)]
 pub(crate) struct LlmInvocation {

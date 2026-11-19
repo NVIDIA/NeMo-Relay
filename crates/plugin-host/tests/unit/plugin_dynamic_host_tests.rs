@@ -236,7 +236,6 @@ fn verified_native_activation_survives_source_swap(symlink_swap: bool) {
     )
     .unwrap();
     let manifest_ref = temp.path().join("relay-plugin.toml");
-    let native_api = nemo_relay_plugin::abi::NATIVE_API;
     fs::write(
         &manifest_ref,
         format!(
@@ -247,7 +246,7 @@ id = "fixture_native"
 kind = "rust_dynamic"
 [compat]
 relay = ">=1.0.0,<2.0"
-native_api = "{native_api}"
+native_api = "v1.0"
 [defaults]
 enabled = false
 [capabilities]

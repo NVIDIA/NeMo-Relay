@@ -358,7 +358,7 @@ class TestTypedToolExecute:
     async def test_forwards_host_execution_context_separately_from_arguments(self) -> None:
         seen = []
         arguments: Json = {"value": 1}
-        host_context = cast(ApplicationExecutionContext, {"audit": {"label": "typed-host-context"}})
+        host_context = cast(ApplicationExecutionContext, {"data": {"audit": {"label": "typed-host-context"}}})
 
         def execute(arguments: Json) -> ToolExecutionResult[Json]:
             return ToolExecutionResult(arguments)
@@ -379,7 +379,7 @@ class TestTypedToolExecute:
                 execution_context=host_context,
             )
             assert result.result == {"value": 1}
-            assert seen == [{"audit": {"label": "typed-host-context"}}]
+            assert seen == [{"data": {"audit": {"label": "typed-host-context"}}}]
         finally:
             assert intercepts.deregister_tool_execution("typed_execution_context")
 

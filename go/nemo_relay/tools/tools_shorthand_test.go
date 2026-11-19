@@ -97,11 +97,11 @@ func TestExecuteForwardsApplicationExecutionContext(t *testing.T) {
 	_, err := toolspkg.Execute("tools_context", json.RawMessage(`{"value":1}`),
 		func(args json.RawMessage) (nemo_relay.ToolExecutionResult, error) {
 			return nemo_relay.ToolExecutionResult{Result: args}, nil
-		}, nemo_relay.WithToolExecutionContext(json.RawMessage(`{"source":"example.application"}`)))
+		}, nemo_relay.WithToolExecutionContext(json.RawMessage(`{"data":{"source":"example.application"}}`)))
 	if err != nil {
 		t.Fatal(err)
 	}
-	if string(seen) != `{"source":"example.application"}` {
+	if string(seen) != `{"data":{"source":"example.application"}}` {
 		t.Fatalf("shorthand lost context: %s", seen)
 	}
 }

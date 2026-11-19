@@ -56,7 +56,7 @@ artifact solves a concrete operational problem.
 
 Native Rust plugins suit reusable middleware whose callback latency or throughput is
 important enough to justify platform-specific binaries and full in-process trust. A
-native plugin declares `compat.native_api = "v1.1"` and uses the checked bootstrap.
+native plugin declares `compat.native_api = "v1.0"` and uses the checked bootstrap.
 The native contract has its own version, separate from Relay releases. A host
 supports plugins built for the same native major and a supported minor version.
 Refer to the [Native ABI Reference](/build-plugins/native/native-abi-reference).

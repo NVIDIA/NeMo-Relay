@@ -202,7 +202,8 @@ fn tool_intercept_delivers_optional_execution_context_to_foreign_code() {
     for supplied in [
         None,
         Some(json!({})),
-        Some(json!({"review": {"reference": "example"}})),
+        Some(json!({"data": {}})),
+        Some(json!({"data": {"review": {"reference": "example"}}})),
     ] {
         let observed = Arc::new(Mutex::new(None::<Json>));
         let next: ToolExecutionNextFn = Arc::new(move |args| {

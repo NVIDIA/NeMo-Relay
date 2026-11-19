@@ -23,24 +23,28 @@ Compatibility uses these version rules:
 | Version | Purpose |
 |---|---|
 | Relay release | The plugin's `compat.relay` range selects supported runtime releases. |
-| Native contract, currently `v1.1` | The build SDK sets the minimum host interface required by the plugin. |
+| Native contract, currently `v1.0` | The build SDK sets the minimum host interface required by the plugin. |
 | ABI dependency versions | The loader checks shared type layouts, including dependency ABI generations. |
 
 Contract names use dots: `v1.0`, `v1.1`, and `v2.0`. Rust module names use
 underscores, such as `v1_0`, because Rust identifiers cannot contain dots.
 
-The current SDK builds native contract v1.1 plugins. They declare
-`compat.native_api = "v1.1"` and require a host supporting v1.1 or a later minor
-in major 1. A v1.1 host also supports published v1.0 plugins. Native contract
-versions are independent of Relay package versions.
-Each minor keeps its published interfaces and behavior. A breaking layout or dependency ABI change
-requires a new native major.
+The current SDK builds native contract v1.0 plugins, which declare
+`compat.native_api = "v1.0"`. Native contract versions are independent of Relay
+package versions. Relay 1.0 is unreleased: rebuild matching hosts and plugins
+when this development baseline changes. The complete contract schema must
+match before the host creates a plugin; the version string alone does not
+establish binary compatibility.
+
+After release, each minor retains its published interfaces and behavior.
+Breaking layout or dependency ABI changes require a new native major as
+appropriate.
 
 The interface crate follows Relay's package release version. That version does
 not select the native contract or determine binary compatibility. The explicit
 contract in `src/contract.rs` is the source of truth. The build script derives the
-SDK descriptor constant from that contract and checked metadata from its frozen
-declarations.
+SDK descriptor constant from that contract and checked metadata from its
+interface declarations.
 Frozen bootstrap and module headers keep their published contract versions.
 
 ## Bootstrap and Typed Values
@@ -63,21 +67,18 @@ non-finite numbers and duplicate object keys.
 
 ## Tool Execution Context
 
-Native v1.1 adds `v1_1::ToolInvocation`, carrying the baseline invocation and a
-separate optional `execution_context`. The current SDK's typed tool registration
-exposes its checked `ApplicationExecutionContext` through
-`context.execution_context()` in tool middleware. Context stays separate from business arguments; structural validation
-does not authenticate approval assertions. See the
+The v1.0 `Invocation` carries an optional concrete `ApplicationExecutionContext`
+separately from business arguments. Its optional `data` map uses owned lossless
+JSON fields for application payloads. The SDK exposes the checked envelope
+through `context.execution_context()` in ordinary tool middleware. Relay owns the
+envelope's fields; middleware owns the schema and trust policy for application
+data. Structural validation does not authenticate approval assertions. See the
 [application integration guide](../../docs/instrument-applications/advanced-guide.mdx#application-execution-context).
 
-Published v1.0 declarations remain frozen. A v1.0 plugin still loads on a v1.1
-host and handles calls without application context. If supplied context reaches
-a legacy v1.0 tool callback, the host refuses the call rather than silently
-discarding the context. This applies even to explicit legacy registrations in a
-newly built v1.1 library. Use typed SDK tool registration or the v1.1 tool
-interface to receive context; rebuilding alone does not migrate old raw
-registrations. A v1.1 plugin is rejected by a v1.0 host before its factory is
-created.
+The current unreleased baseline includes execution context in native v1.0.
+An obsolete development plugin whose invocation layout predates that field is
+rejected before factory creation, even when it also declares v1.0. Rebuild the
+plugin with the matching SDK.
 
 ## Loading and Component Cleanup
 
@@ -140,11 +141,13 @@ explicit paths to the frozen `interface-v1` snapshot and keep changed contracts
 locally. Schema checks read the same files as the compiler. Keep the snapshot
 fixed so the fixtures can detect compatibility regressions.
 
-The tests load a v1.0 plugin with v1.0 and v1.1 hosts. They also check minimum
-minor versions, major versions, changed signatures, changed `Sync` requirements,
-missing modules, descriptor mismatches, and multiple libraries. Hosts and plugins
-also load unchanged v1.0 binaries built with different Cargo package major
-versions and prereleases.
+The tests load current v1.0 plugins and hosts built with different Cargo package
+versions and prereleases. Frozen earlier development snapshots remain explicit
+rejection evidence for schema mismatches; they also prove their own older host
+and plugin agree. Tests check required minor and major versions, changed
+signatures and `Sync` requirements, missing modules, descriptor mismatches and
+multiple libraries. An old host rejects the new same-version schema before
+factory creation.
 
 To refresh fixture lockfiles, run the owning workflow:
 

@@ -1233,7 +1233,7 @@ async fn tool_execution_context_is_forwarded_as_part_of_the_required_worker_cont
     let contexts = [
         None,
         Some(json!({})),
-        Some(json!({"operation": {"attempt": 1}, "integer": u64::MAX})),
+        Some(json!({"data": {"operation": {"attempt": 1}, "integer": u64::MAX}})),
     ];
     for context in &contexts {
         callback
@@ -1252,7 +1252,9 @@ async fn tool_execution_context_is_forwarded_as_part_of_the_required_worker_cont
     let values = received.lock().unwrap();
     assert_eq!(values.len(), contexts.len());
     for (encoded, expected) in values.iter().zip(contexts) {
-        let decoded: Option<Json> = encoded.as_ref().map(decode_wire).transpose().unwrap();
+        let decoded: Option<nemo_relay_types::api::tool::ApplicationExecutionContext> =
+            encoded.as_ref().map(decode_wire).transpose().unwrap();
+        let decoded = decoded.map(|value| value.to_json());
         assert_eq!(decoded, expected);
     }
 }

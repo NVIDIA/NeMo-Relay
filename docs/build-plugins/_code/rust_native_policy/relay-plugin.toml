@@ -9,7 +9,7 @@ kind = "rust_dynamic"
 
 [compat]
 relay = ">=1.0.0,<2.0"
-native_api = "v1.1"
+native_api = "v1.0"
 
 [defaults]
 enabled = false
