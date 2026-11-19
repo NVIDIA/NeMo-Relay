@@ -36,7 +36,7 @@ pub(super) struct InFlightSession {
 }
 
 impl InFlightSession {
-    fn new(
+    pub(super) fn new(
         sessions: Arc<Mutex<HashMap<String, Session>>>,
         session_id: String,
         session: Session,
@@ -178,6 +178,7 @@ pub(super) struct SessionEventApplier<'a> {
 }
 
 pub(super) struct AppliedSessionEvent {
+    pub(super) error: Option<CliError>,
     pub(super) outcome: Option<(
         bool,
         Option<SubscriberDelivery>,
@@ -217,6 +218,7 @@ impl<'a> SessionEventApplier<'a> {
     ) -> Result<AppliedSessionEvent, CliError> {
         if self.activity.is_closing() {
             return Ok(AppliedSessionEvent {
+                error: None,
                 outcome: None,
                 closed_subagents: Vec::new(),
                 session_gate,
@@ -236,6 +238,7 @@ impl<'a> SessionEventApplier<'a> {
                     .is_some_and(|key| completions.contains(key))
             {
                 return Ok(AppliedSessionEvent {
+                    error: None,
                     outcome: None,
                     closed_subagents: Vec::new(),
                     session_gate,
@@ -270,39 +273,45 @@ impl<'a> SessionEventApplier<'a> {
             .chain(session.retiring_subagents.keys())
             .cloned()
             .collect();
-        match in_flight.session_mut().apply(event).await {
+        let result = in_flight.session_mut().apply(event).await;
+        let session = in_flight.session_mut();
+        let closed_subagents = tracked_subagents
+            .into_iter()
+            .filter(|identifier| {
+                !session.subagents.contains_key(identifier)
+                    && !session.retiring_subagents.contains_key(identifier)
+            })
+            .map(|identifier| (session_id.to_string(), identifier))
+            .collect();
+        let (outcome, error) = match result {
             Ok(subscriber_delivery) => {
                 if is_completion && let Some(key) = completion_key {
                     self.completions.lock().await.record(key);
                 }
                 let session = in_flight.session_mut();
-                let closed_subagents = tracked_subagents
-                    .into_iter()
-                    .filter(|id| {
-                        !session.subagents.contains_key(id)
-                            && !session.retiring_subagents.contains_key(id)
-                    })
-                    .map(|id| (session_id.to_string(), id))
-                    .collect();
-                let is_empty = session.is_empty();
-                let tool_argument_transform = session.take_tool_argument_transform();
-                let (session_gate, activity) = if is_empty {
-                    in_flight.discard()
-                } else {
-                    in_flight.restore().await
-                };
-                Ok(AppliedSessionEvent {
-                    outcome: Some((is_empty, subscriber_delivery, tool_argument_transform)),
-                    closed_subagents,
-                    session_gate,
-                    activity,
-                })
+                (
+                    Some((
+                        session.is_empty(),
+                        subscriber_delivery,
+                        session.take_tool_argument_transform(),
+                    )),
+                    None,
+                )
             }
-            Err(error) => {
-                drop(in_flight.restore().await);
-                Err(error)
-            }
-        }
+            Err(error) => (None, Some(error)),
+        };
+        let (session_gate, activity) = if outcome.as_ref().is_some_and(|(empty, _, _)| *empty) {
+            in_flight.discard()
+        } else {
+            in_flight.restore().await
+        };
+        Ok(AppliedSessionEvent {
+            outcome,
+            error,
+            closed_subagents,
+            session_gate,
+            activity,
+        })
     }
 }
 

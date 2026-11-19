@@ -838,7 +838,7 @@ async fn shutdown_waits_for_cancelled_alignment_cleanup() {
     let commit = tokio::spawn(
         AppliedRouteCleanup::new(
             &manager,
-            cleanup,
+            Some(cleanup),
             Vec::new(),
             session_gate,
             manager.session_activity.begin(),
@@ -3045,6 +3045,7 @@ async fn codex_root_turn_interruption_closes_once_and_accepts_recovery() {
         .await
         .unwrap();
     stop_codex_turn(&manager, &headers, session_id).await;
+    assert!(!manager.inner.lock().await[session_id].root_turn.is_open());
     manager.close_all("test_shutdown").await.unwrap();
     flush_subscribers().unwrap();
     deregister_subscriber(session_id).unwrap();
@@ -8996,6 +8997,8 @@ fn session_refactor_correlation_cleanup_preserves_exact_ttl_boundary() {
 
 #[tokio::test]
 async fn session_refactor_expired_correlation_does_not_claim_work() {
+    SESSION_CLOCK_OVERRIDE.scope(std::cell::Cell::new(Instant::now()), async {
+
     for evidence in ["llm_hint", "tool_hint", "sticky_owner"] {
         for expired in [false, true] {
             let session_identifier = format!("correlation-expiry-{evidence}-{expired}");
@@ -9063,11 +9066,11 @@ async fn session_refactor_expired_correlation_does_not_claim_work() {
                     "tool_hint" => TOOL_HINT_TTL,
                     _ => LAST_OWNER_TTL,
                 };
-                let inserted_at = if expired {
-                    Instant::now() - lifetime - Duration::from_secs(1)
-                } else {
-                    Instant::now()
-                };
+                let inserted_at = session_now();
+                if expired {
+                    SESSION_CLOCK_OVERRIDE.with(|clock|
+                        clock.set(inserted_at + lifetime + Duration::from_secs(1)));
+                }
                 for hint in &mut session.correlation.pending_llm_hints {
                     hint.inserted_at = inserted_at;
                 }
@@ -9159,6 +9162,7 @@ async fn session_refactor_expired_correlation_does_not_claim_work() {
             manager.close_all("test_shutdown").await.unwrap();
         }
     }
+    }).await;
 }
 
 #[tokio::test]
@@ -12029,6 +12033,14 @@ async fn codex_retained_delegation_closes_on_timeout_and_shutdown() {
 /// Verify authenticated sequential child aliases retain one task while awaiting parent synthesis.
 #[tokio::test]
 async fn codex_sequential_child_aliases_survive_parent_turn_closure() {
+    let captured = Arc::new(StdMutex::new(Vec::<Event>::new()));
+    let capture = Arc::clone(&captured);
+    let subscriber_name = "aliased-child-session-end";
+    register_subscriber(
+        subscriber_name,
+        Arc::new(move |event| capture.lock().unwrap().push(event.clone())),
+    )
+    .unwrap();
     let manager = SessionManager::new(session_test_config());
     start_authenticated_codex_alias(&manager).await;
     manager
@@ -12134,14 +12146,22 @@ async fn codex_sequential_child_aliases_survive_parent_turn_closure() {
         assert!(!has_alignment_alias(&manager, child).await);
         let sessions = manager.inner.lock().await;
         let parent = sessions.get("parent-thread").unwrap();
-        assert!(
-            parent
-                .subagents
-                .values()
-                .all(|subagent| subagent.child_turn.is_none())
-        );
         assert!(parent.subagents.is_empty());
         assert_eq!(parent.task_scope.as_ref().unwrap().uuid, task_uuid);
+        drop(sessions);
+        flush_subscribers().unwrap();
+        assert_eq!(
+            captured
+                .lock()
+                .unwrap()
+                .iter()
+                .filter(|event| {
+                    event.uuid() == turn_uuid && event.scope_category() == Some(ScopeCategory::End)
+                })
+                .count(),
+            1,
+            "SessionEnd must close this child's turn before the next child starts"
+        );
     }
     assert!(
         manager.has_open_sessions().await,
@@ -12162,6 +12182,7 @@ async fn codex_sequential_child_aliases_survive_parent_turn_closure() {
     assert!(!manager.has_open_sessions().await);
     let sessions = manager.inner.lock().await;
     assert!(sessions.get("parent-thread").unwrap().task_scope.is_none());
+    deregister_subscriber(subscriber_name).unwrap();
 }
 
 /// Verify parent synthesis after all child completions exports in the original task trace.
@@ -12730,85 +12751,92 @@ async fn codex_root_gateway_call_does_not_protect_stale_children() {
 // A failed or cancelled model call has no response hints to refresh its child owner.
 #[tokio::test]
 async fn codex_gateway_completion_without_response_refreshes_only_owning_child() {
-    for boundary in ["Stop", "UserPromptSubmit", "idle_sweep"] {
-        let manager = SessionManager::new(session_test_config());
-        let session_id = "failed-call-root";
-        apply_owned_codex_hook(
-            &manager,
-            json!({"session_id": session_id, "hook_event_name": "UserPromptSubmit"}),
-        )
-        .await;
-        for child in ["caller", "stale-sibling"] {
-            for event in ["SubagentStart", "UserPromptSubmit"] {
+    SESSION_CLOCK_OVERRIDE
+        .scope(std::cell::Cell::new(Instant::now()), async {
+            for boundary in ["Stop", "UserPromptSubmit", "idle_sweep"] {
+                let manager = SessionManager::new(session_test_config());
+                let session_id = "failed-call-root";
                 apply_owned_codex_hook(
+                    &manager,
+                    json!({"session_id": session_id, "hook_event_name": "UserPromptSubmit"}),
+                )
+                .await;
+                for child in ["caller", "stale-sibling"] {
+                    for event in ["SubagentStart", "UserPromptSubmit"] {
+                        apply_owned_codex_hook(
                     &manager,
                     json!({"session_id": session_id, "hook_event_name": event, "agent_id": child}),
                 )
                 .await;
-            }
-        }
-        let prep = manager
-            .prepare_gateway_call(
-                &HeaderMap::new(),
-                LlmGatewayStart {
-                    session_id: Some(session_id.into()),
-                    subagent_id: Some("caller".into()),
-                    ..llm_start()
-                },
-            )
-            .await
-            .unwrap();
-        let child_scope;
-        let task_scope;
-        {
-            let mut sessions = manager.inner.lock().await;
-            let root = sessions.get_mut(session_id).unwrap();
-            child_scope = root.child_work_scope("caller").unwrap().uuid;
-            task_scope = root.task_scope.as_ref().unwrap().uuid;
-            // Simulate a silent two-minute request without sleeping or producing response hints.
-            for child in ["caller", "stale-sibling"] {
-                root.subagents.get_mut(child).unwrap().last_activity =
-                    Instant::now() - Duration::from_secs(120);
-            }
-        }
-        assert_eq!(
-            manager
-                .close_idle_sessions_at(Instant::now(), AGENT_IDLE_TIMEOUT, "idle_timeout")
-                .await
-                .unwrap(),
-            1,
-        );
-        manager
-            .finish_gateway_call(
-                &prep.session_id,
-                prep.owner_subagent_id.as_deref(),
-                prep.session_finish,
-            )
-            .await;
-        if boundary == "idle_sweep" {
-            assert_eq!(
-                manager
-                    .close_idle_sessions_at(Instant::now(), AGENT_IDLE_TIMEOUT, "idle_timeout")
+                    }
+                }
+                let prep = manager
+                    .prepare_gateway_call(
+                        &HeaderMap::new(),
+                        LlmGatewayStart {
+                            session_id: Some(session_id.into()),
+                            subagent_id: Some("caller".into()),
+                            ..llm_start()
+                        },
+                    )
                     .await
-                    .unwrap(),
-                0,
-            );
-        } else {
-            apply_owned_codex_hook(
-                &manager,
-                json!({"session_id": session_id, "hook_event_name": boundary}),
-            )
-            .await;
-        }
-        {
-            let sessions = manager.inner.lock().await;
-            let root = &sessions[session_id];
-            assert_eq!(root.active_gateway_calls, 0);
-            assert_eq!(root.task_scope.as_ref().unwrap().uuid, task_scope);
-            assert_eq!(root.child_work_scope("caller").unwrap().uuid, child_scope);
-            assert!(!root.subagents.contains_key("stale-sibling"));
-        }
-        apply_owned_codex_hook(
+                    .unwrap();
+                let child_scope;
+                let task_scope;
+                {
+                    let mut sessions = manager.inner.lock().await;
+                    let root = sessions.get_mut(session_id).unwrap();
+                    child_scope = root.child_work_scope("caller").unwrap().uuid;
+                    task_scope = root.task_scope.as_ref().unwrap().uuid;
+                    // Simulate a silent two-minute request without sleeping or producing response hints.
+                    for child in ["caller", "stale-sibling"] {
+                        root.subagents.get_mut(child).unwrap().last_activity = session_now();
+                    }
+                }
+                SESSION_CLOCK_OVERRIDE
+                    .with(|clock| clock.set(clock.get() + Duration::from_secs(120)));
+                assert_eq!(
+                    manager
+                        .close_idle_sessions_at(session_now(), AGENT_IDLE_TIMEOUT, "idle_timeout")
+                        .await
+                        .unwrap(),
+                    1,
+                );
+                manager
+                    .finish_gateway_call(
+                        &prep.session_id,
+                        prep.owner_subagent_id.as_deref(),
+                        prep.session_finish,
+                    )
+                    .await;
+                if boundary == "idle_sweep" {
+                    assert_eq!(
+                        manager
+                            .close_idle_sessions_at(
+                                session_now(),
+                                AGENT_IDLE_TIMEOUT,
+                                "idle_timeout"
+                            )
+                            .await
+                            .unwrap(),
+                        0,
+                    );
+                } else {
+                    apply_owned_codex_hook(
+                        &manager,
+                        json!({"session_id": session_id, "hook_event_name": boundary}),
+                    )
+                    .await;
+                }
+                {
+                    let sessions = manager.inner.lock().await;
+                    let root = &sessions[session_id];
+                    assert_eq!(root.active_gateway_calls, 0);
+                    assert_eq!(root.task_scope.as_ref().unwrap().uuid, task_scope);
+                    assert_eq!(root.child_work_scope("caller").unwrap().uuid, child_scope);
+                    assert!(!root.subagents.contains_key("stale-sibling"));
+                }
+                apply_owned_codex_hook(
             &manager,
             json!({
                 "session_id": session_id, "hook_event_name": "PreToolUse", "agent_id": "caller",
@@ -12817,22 +12845,26 @@ async fn codex_gateway_completion_without_response_refreshes_only_owning_child()
             }),
         )
         .await;
-        {
-            let sessions = manager.inner.lock().await;
-            let root = &sessions[session_id];
-            assert_eq!(
-                root.tools["retry-tool"].owner_subagent_id.as_deref(),
-                Some("caller")
-            );
-            assert_eq!(root.tools["retry-tool"].parent_uuid, Some(child_scope));
-        }
-        manager.close_all("test_shutdown").await.unwrap();
-    }
+                {
+                    let sessions = manager.inner.lock().await;
+                    let root = &sessions[session_id];
+                    assert_eq!(
+                        root.tools["retry-tool"].owner_subagent_id.as_deref(),
+                        Some("caller")
+                    );
+                    assert_eq!(root.tools["retry-tool"].parent_uuid, Some(child_scope));
+                }
+                manager.close_all("test_shutdown").await.unwrap();
+            }
+        })
+        .await;
 }
 
 /// Verify a silent two-minute child tool retains completion, model ownership, and one trace.
 #[tokio::test]
 async fn codex_long_child_tool_survives_idle_sweeps_and_parent_boundaries() {
+    SESSION_CLOCK_OVERRIDE.scope(std::cell::Cell::new(Instant::now()), async {
+
     let _guard = PLUGIN_CONFIG_TEST_LOCK.lock().await;
     for boundary in ["idle_sweep", "Stop", "UserPromptSubmit"] {
         let name = "cli-codex-long-child-tool";
@@ -12861,7 +12893,7 @@ async fn codex_long_child_tool_survives_idle_sweeps_and_parent_boundaries() {
             let mut sessions = manager.inner.lock().await;
             let root = sessions.get_mut("long-root").unwrap();
             root.subagents.get_mut("long-child").unwrap().last_activity =
-                Instant::now() - Duration::from_secs(120);
+                session_now();
             assert_eq!(root.active_gateway_calls, 0);
             assert!(root.llms.is_empty());
             (
@@ -12874,6 +12906,7 @@ async fn codex_long_child_tool_survives_idle_sweeps_and_parent_boundaries() {
                 root.tools["compile"].uuid,
             )
         };
+        SESSION_CLOCK_OVERRIDE.with(|clock| clock.set(clock.get() + Duration::from_secs(120)));
         apply_owned_codex_hook(
             &manager,
             json!({
@@ -12885,7 +12918,7 @@ async fn codex_long_child_tool_survives_idle_sweeps_and_parent_boundaries() {
         if boundary == "idle_sweep" {
             assert_eq!(
                 manager
-                    .close_idle_sessions_at(Instant::now(), AGENT_IDLE_TIMEOUT, "idle_timeout")
+                    .close_idle_sessions_at(session_now(), AGENT_IDLE_TIMEOUT, "idle_timeout")
                     .await
                     .unwrap(),
                 0
@@ -12989,6 +13022,7 @@ async fn codex_long_child_tool_survives_idle_sweeps_and_parent_boundaries() {
         manager.close_all("test_shutdown").await.unwrap();
         assert!(subscriber.deregister(name).unwrap());
     }
+    }).await;
 }
 
 // Correlated child work must not consume the parent's reservation for a synthesis prompt.

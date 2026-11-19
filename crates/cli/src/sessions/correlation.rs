@@ -333,7 +333,7 @@ pub(super) fn event_agent_kind(event: &NormalizedEvent) -> AgentKind {
 // session headers use this narrow fallback to avoid cross-correlating concurrent agents.
 #[cfg(test)]
 pub(super) fn single_active_session_id(sessions: &HashMap<String, Session>) -> Option<String> {
-    let now = std::time::Instant::now();
+    let now = session_now();
     let mut active = sessions
         .iter()
         .filter(|(_, session)| session.is_active_or_recent(now));
@@ -353,7 +353,7 @@ pub(super) fn gateway_session_for_call_with_preparing(
     if let Some(session_id) = start.session_id.clone() {
         return (session_id, GatewaySessionFinish::Retain);
     }
-    let now = std::time::Instant::now();
+    let now = session_now();
     let mut active = sessions
         .iter()
         .filter(|(_, session)| session.is_active_or_recent(now))
@@ -445,7 +445,7 @@ impl SessionCorrelation {
     pub(super) fn set_last_llm_owner(&mut self, subagent_id: Option<String>) {
         self.last_llm_owner = subagent_id.map(|subagent_id| LastLlmOwner {
             subagent_id,
-            updated_at: Instant::now(),
+            updated_at: session_now(),
             source: LastLlmOwnerSource::Llm,
         });
     }
@@ -454,7 +454,7 @@ impl SessionCorrelation {
         if let Some(subagent_id) = subagent_id {
             self.last_llm_owner = Some(LastLlmOwner {
                 subagent_id,
-                updated_at: Instant::now(),
+                updated_at: session_now(),
                 source: LastLlmOwnerSource::Tool,
             });
         }
@@ -464,7 +464,7 @@ impl SessionCorrelation {
         if let Some(subagent_id) = subagent_id {
             self.last_llm_owner = Some(LastLlmOwner {
                 subagent_id,
-                updated_at: Instant::now(),
+                updated_at: session_now(),
                 source: LastLlmOwnerSource::SubagentStart,
             });
         }
