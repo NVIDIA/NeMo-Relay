@@ -6076,7 +6076,7 @@ fn native_api_rejections_survive_registry_validation_refresh() {
     let mut scopes = load_and_hydrate_scopes(None, &resolved).unwrap();
     let entry = find_record_by_id(&scopes, id).unwrap().unwrap();
     let scope = &mut scopes[entry.scope_index];
-    for api in ["1", "v1.2", "v2.0"] {
+    for api in ["1", "v1.1", "v2.0"] {
         let (mut manifest, manifest_ref) =
             load_manifest_for_action("test", &manifest_path).unwrap();
         manifest.compat.native_api = Some(api.into());

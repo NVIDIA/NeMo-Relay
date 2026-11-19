@@ -900,7 +900,11 @@ fn tool_execution_context_debug_omits_arguments() {
         tool_name: "lookup".into(),
         args: json!({"secret": "credential"}),
         tool_call_id: Some("call-1".into()),
-        execution_context: Some(json!({"private-context": "do-not-log"}).try_into().unwrap()),
+        execution_context: Some(
+            json!({"data": {"private-context": "do-not-log"}})
+                .try_into()
+                .unwrap(),
+        ),
     };
     let debug = format!("{context:?}");
     assert!(debug.contains("lookup"));

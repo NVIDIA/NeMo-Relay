@@ -219,6 +219,11 @@ object has no arbitrary properties: applications put custom keys inside `data`,
 leaving the top level available for future Relay API fields without naming
 collisions.
 
+`execution_context.data` belongs to this separate invocation-context argument.
+It is not the existing tool, scope or event `data`/`metadata` argument. The host
+application supplies it for this one execution; Relay does not automatically
+expose it to the model or record it in lifecycle events.
+
 For example, an application with an existing human-approval workflow could send:
 
 ```json
@@ -282,7 +287,7 @@ This field has a narrower lifetime and audience than event metadata:
   business arguments, but cannot replace the execution context.
 - A nested managed tool call has no execution context unless its caller supplies
   one explicitly. Scope metadata does not populate it automatically.
-- Relay does not automatically copy it to lifecycle events, results,
+- Relay does not automatically copy it to model inputs, lifecycle events, results,
   annotations, or telemetry. Application and plugin code can still disclose it
   explicitly, so avoid logging it or adding credentials to it.
 
@@ -292,9 +297,10 @@ inside this object. The application must validate its own approval proof and
 bind it to the exact tool, business arguments, owner and applicable policy before
 supplying a review claim. Do not populate it from a model-generated `approved`
 flag. An intercept must also check that the claim still covers its current
-arguments, because earlier middleware may have rewritten them. Missing,
-unrecognized or mismatched claims should use that component's normal review
-path; they must not imply approval. The application must stop a human-denied
+arguments, because earlier middleware may have rewritten them. A missing claim
+uses that component's normal review path. A supplied claim that is malformed,
+untrusted or mismatched must be rejected rather than downgraded to automated
+review. Neither case implies approval. The application must stop a human-denied
 operation rather than ask middleware to override that denial. If human approval
 is mandatory and the operation changes, the application must reject it or obtain
 fresh approval; a component's automated review does not renew human consent.
@@ -309,9 +315,12 @@ The verifier must raise if the receipt is invalid or no longer covers the call.
 `perform_component_review` must raise to refuse execution; returning `False`
 does not stop this wrapper. In this example, `validate_existing_approval` returns
 an application-defined five-field approval assertion only after verifying the
-receipt. `approval_covers_call` validates that assertion's structure and trust
-policy, including the exact tool name and arguments. Relay prescribes neither
-the payload schema nor the underlying receipt or signature format.
+receipt. The example's `_approval_has_expected_shape` function checks that
+payload's required fields, numeric version and prohibition of a separate
+`decision` field; these are application choices. `approval_covers_call` then enforces the trusted
+host/source and exact tool/arguments. A supplied claim that fails either check
+is refused without calling normal review. Relay prescribes neither the payload
+schema nor the underlying receipt or signature format.
 
 <Code src="_code/python/application_execution_context.py" language="python" />
 

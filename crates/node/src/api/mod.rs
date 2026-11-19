@@ -2045,7 +2045,7 @@ pub fn tool_call_execute<'env>(
         Unknown<'env>,
     >,
 ) -> Result<PromiseRaw<'env, ToolExecutionResult>> {
-    let execution_context = execution_context_json(env, execution_context)?;
+    let execution_context = execution_context_json(execution_context)?;
     let func = scoped_fn(
         env,
         &func,
@@ -2141,7 +2141,7 @@ pub fn tool_call_execute_async<'env>(
         Unknown<'env>,
     >,
 ) -> Result<PromiseRaw<'env, ToolExecutionResult>> {
-    let execution_context = execution_context_json(env, execution_context)?;
+    let execution_context = execution_context_json(execution_context)?;
     let pa_fn = Arc::new(PromiseAwareFn::new(env, &func)?);
     let func: ToolExecutionNextFn = Arc::new(move |args| {
         let pa_fn = pa_fn.clone();

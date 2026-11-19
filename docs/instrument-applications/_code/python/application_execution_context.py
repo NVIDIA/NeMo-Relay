@@ -7,6 +7,18 @@ import nemo_relay
 from nemo_relay import tools
 
 
+def _approval_has_expected_shape(approval) -> bool:
+    """Validate this application's example payload; this is not a Relay schema."""
+    if not isinstance(approval, dict):
+        return False
+    version = approval.get("version")
+    if isinstance(version, bool) or not isinstance(version, (int, float)) or version != 1:
+        return False
+    if "decision" in approval or "approved_arguments" not in approval:
+        return False
+    return all(isinstance(approval.get(key), str) and approval[key] for key in ("source", "approval_id", "tool_name"))
+
+
 async def execute_after_application_approval(
     name, args, receipt, implementation, *, validate_existing_approval
 ) -> nemo_relay.ToolExecutionResult[nemo_relay.Json]:
@@ -37,11 +49,17 @@ def register_application_review(approval_covers_call, perform_component_review) 
 
     async def review(context, next_call):
         supplied = (context.execution_context or {}).get("data", {})
-        # This application-owned matcher must check the trusted calling host,
-        # payload schema, assertion source and exact tool/arguments; a source
-        # string is not proof. Relay validates only the surrounding envelope.
-        if not approval_covers_call(supplied.get("host_approval"), context.tool_name, context.args):
-            # Missing or mismatched assertions take the normal review path.
+        if "host_approval" in supplied:
+            approval = supplied["host_approval"]
+            # Shape alone is not proof. The application-owned matcher checks
+            # the trusted calling host, source and exact tool/arguments.
+            if not _approval_has_expected_shape(approval) or not approval_covers_call(
+                approval, context.tool_name, context.args
+            ):
+                # A supplied claim cannot downgrade to automated review.
+                raise PermissionError("Application approval is invalid or does not cover this call")
+        else:
+            # No assertion supplied: follow this component's normal policy.
             # This callback must raise when its policy forbids execution.
             # Returning False does not stop this wrapper.
             await perform_component_review(context.tool_name, context.args)

@@ -420,8 +420,19 @@ async def test_invalid_host_receipt_stops_before_middleware(application_review_e
     implementation.assert_not_awaited()
 
 
-@pytest.mark.parametrize("claim", ["absent", "untrusted-source", "wrong-tool", "wrong-arguments"])
-async def test_unusable_approval_takes_normal_denial_path(application_review_example, claim):
+@pytest.mark.parametrize(
+    "claim",
+    [
+        "absent",
+        "untrusted-source",
+        "wrong-tool",
+        "wrong-arguments",
+        "null",
+        "missing-field",
+        "denied",
+    ],
+)
+async def test_approval_claim_cannot_downgrade_to_normal_review(application_review_example, claim):
     receipt, arguments, verify, covers = mock_host_approval()
     assertion = verify(receipt, "files.write", arguments)
     if claim == "untrusted-source":
@@ -430,22 +441,31 @@ async def test_unusable_approval_takes_normal_denial_path(application_review_exa
         assertion["tool_name"] = "other.tool"
     elif claim == "wrong-arguments":
         assertion["approved_arguments"] = {"path": "different.txt"}
+    elif claim == "null":
+        assertion = None
+    elif claim == "missing-field":
+        del assertion["approval_id"]
+    elif claim == "denied":
+        assertion["decision"] = "denied"
     review = AsyncMock(side_effect=PermissionError("component review denied"))
     implementation = AsyncMock()
     application_review_example.register_application_review(covers, review)
-    with pytest.raises(PermissionError, match="component review denied"):
+    with pytest.raises(PermissionError):
         await nemo_relay.tools.execute(
             "files.write",
             arguments,
             implementation,
             execution_context=None if claim == "absent" else {"data": {"host_approval": assertion}},
         )
-    review.assert_awaited_once_with("files.write", arguments)
+    if claim == "absent":
+        review.assert_awaited_once_with("files.write", arguments)
+    else:
+        review.assert_not_awaited()
     implementation.assert_not_awaited()
 
 
-@pytest.mark.parametrize("priority,review_count", [(5, 1), (20, 0)])
-async def test_rewritten_arguments_cannot_expand_human_approval(application_review_example, priority, review_count):
+@pytest.mark.parametrize("priority", [5, 20])
+async def test_rewritten_arguments_cannot_expand_human_approval(application_review_example, priority):
     receipt, arguments, verify, covers = mock_host_approval()
     review, implementation = AsyncMock(), AsyncMock()
 
@@ -455,13 +475,14 @@ async def test_rewritten_arguments_cannot_expand_human_approval(application_revi
 
     application_review_example.register_application_review(covers, review)
     nemo_relay.intercepts.register_tool_execution("documentation.rewrite-approved-arguments", priority, rewrite)
-    with pytest.raises(PermissionError, match="host approval does not cover"):
+    refusal = "Application approval is invalid" if priority == 5 else "host approval does not cover"
+    with pytest.raises(PermissionError, match=refusal):
         await application_review_example.execute_after_application_approval(
             "files.write", arguments, receipt, implementation, validate_existing_approval=verify
         )
-    assert verify.call_args_list == [
-        call(receipt, "files.write", arguments),
-        call(receipt, "files.write", {**arguments, "path": "different.txt"}),
-    ]
-    assert review.await_count == review_count
+    expected_verifications = [call(receipt, "files.write", arguments)]
+    if priority == 20:
+        expected_verifications.append(call(receipt, "files.write", {**arguments, "path": "different.txt"}))
+    assert verify.call_args_list == expected_verifications
+    review.assert_not_awaited()
     implementation.assert_not_awaited()

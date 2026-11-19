@@ -107,7 +107,7 @@ fn package_release_versions_do_not_define_binary_compatibility() {
 }
 
 #[test]
-fn reject_different_major_and_missing_module_before_factory_use() {
+fn reject_different_major_and_obsolete_missing_module_contracts() {
     let error = fixture("major").err().unwrap();
     assert!(error.contains("requires native API v2.0"), "{error}");
     let error = fixture("missing").err().unwrap();
@@ -129,7 +129,7 @@ fn reject_changed_function_signature_and_marker_traits() {
 /// A dependency generation difference alone must reject an otherwise identical contract.
 #[test]
 fn incompatible_dependency_generation_fails_before_module_discovery() {
-    let raw = unsafe { &*raw_fixture("dependency") };
+    let raw = unsafe { &*raw_fixture("current_dependency") };
     let schema = unsafe { raw.schema.as_str() }.unwrap();
     assert_ne!(schema, bootstrap::schema());
     assert_eq!(
@@ -138,17 +138,17 @@ fn incompatible_dependency_generation_fails_before_module_discovery() {
             &format!("xabi-generation:{};", xabi::ABI_VERSION),
             1,
         ),
-        unsafe { (&*raw_fixture("baseline")).schema.as_str() }.unwrap(),
+        bootstrap::schema(),
     );
-    let error = fixture("dependency").err().unwrap();
+    let error = fixture("current_dependency").err().unwrap();
     assert!(error.contains("dependency ABI"), "{error}");
 }
 #[test]
 fn current_contract_requires_its_factory_module() {
     let (_, manifest) = fixture("current").unwrap();
     assert!(unsafe { bootstrap::factory(manifest) }.is_ok());
-    let empty = xabi::XabiManifest::new(&[]);
-    let error = unsafe { bootstrap::factory(&empty) }.err().unwrap();
+    let (_, missing) = fixture("current_missing").unwrap();
+    let error = unsafe { bootstrap::factory(missing) }.err().unwrap();
     assert!(error.contains("missing required factory module"), "{error}");
 }
 #[test]

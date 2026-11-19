@@ -243,7 +243,6 @@ pub(crate) fn parse_json<T: DeserializeOwned>(value: Value, what: &str) -> Resul
 /// Unlike the shared JSON converter, this does not promote inherited claims.
 /// Getter values are read as ordinary JSON input; no JavaScript globals are used.
 pub(crate) fn execution_context_json(
-    env: &Env,
     value: Option<Unknown>,
 ) -> Result<Option<ApplicationExecutionContext>> {
     let Some(value) = value else { return Ok(None) };
@@ -251,7 +250,7 @@ pub(crate) fn execution_context_json(
         return Ok(None);
     }
     let mut remaining_nodes = MAX_CONTEXT_JSON_NODES;
-    let value = own_context_json(env, value, MAX_CONTEXT_JSON_DEPTH, &mut remaining_nodes)?;
+    let value = own_context_json(value, MAX_CONTEXT_JSON_DEPTH, &mut remaining_nodes)?;
     if !value.is_object() {
         return Err(Error::invalid_argument(
             "execution context must be a JSON object",
@@ -263,7 +262,6 @@ pub(crate) fn execution_context_json(
 }
 
 fn own_context_json(
-    env: &Env,
     value: Unknown,
     remaining_depth: u32,
     remaining_nodes: &mut usize,
@@ -287,12 +285,7 @@ fn own_context_json(
         for index in 0..length {
             // A sparse array must not import a value from its prototype.
             values.push(if object.has_own_property(&index.to_string())? {
-                own_context_json(
-                    env,
-                    object.get_element(index)?,
-                    remaining_depth,
-                    remaining_nodes,
-                )?
+                own_context_json(object.get_element(index)?, remaining_depth, remaining_nodes)?
             } else {
                 *remaining_nodes = remaining_nodes
                     .checked_sub(1)
@@ -322,7 +315,7 @@ fn own_context_json(
         let value = object.get_property(key)?;
         values.insert(
             name,
-            own_context_json(env, value, remaining_depth, remaining_nodes)?,
+            own_context_json(value, remaining_depth, remaining_nodes)?,
         );
     }
     Ok(Value::Object(values))
