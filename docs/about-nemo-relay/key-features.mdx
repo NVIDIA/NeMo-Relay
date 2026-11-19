@@ -1,0 +1,61 @@
+---
+title: "Key Features of NVIDIA NeMo Relay"
+sidebar-title: "Key Features"
+description: "Review the core NeMo Relay features for agent applications: events and subscribers, scopes, marks, managed LLM and tool calls, middleware, and plugins."
+template-library-version: "1.0.0"
+position: 2
+---
+{/* SPDX-FileCopyrightText: Copyright (c) 2026, NVIDIA CORPORATION & AFFILIATES. All rights reserved.
+SPDX-License-Identifier: Apache-2.0 */}
+
+NVIDIA NeMo Relay offers the following key features:
+
+- **Events and subscribers:** ATOF events, ATIF trajectories, and typed
+  OpenTelemetry output all come from the same runtime activity.
+- **Scopes:** Runs, turns, tools, LLM calls, and subagents get clear
+  parent-child relationships, automatic cleanup, and request isolation.
+- **Marks:** Point-in-time events, such as session starts, compaction, or skill
+  loads, are recorded without a start-and-end pair.
+- **Managed LLM and tool calls:** The same lifecycle and middleware rules apply
+  around each callback.
+- **Middleware:** Block, sanitize, transform, route, retry, or replace execution
+  where Relay controls the call.
+- **Plugins:** Turn on reusable observability, guardrail, adaptive, and exporter
+  behavior from configuration.
+
+To understand how these features work together, refer to the
+[Architecture](/about-nemo-relay/architecture) overview. For the deeper model of
+scopes, events, middleware, subscribers, and plugins, refer to
+[Concepts](/about-nemo-relay/concepts).
+
+## Developer Tools
+
+NeMo Relay provides the following tools for developers.
+
+**CLI** — the `nemo-relay` command runs supported coding agents through Relay and
+manages its configuration, plugins, and services:
+
+- `nemo-relay run` (and `claude`, `codex`, `pi`) — Launch a coding agent or
+  command through Relay.
+- `nemo-relay config` — Run first-time setup or edit CLI configuration.
+- `nemo-relay plugins` — Edit plugin configuration and manage discoverable
+  plugins.
+- `nemo-relay doctor` — Check configuration, integrations, and configured
+  destinations.
+- `nemo-relay gateway` / `nemo-relay daemon` — Run the standalone gateway or the
+  managed daemon.
+
+For every command and option, refer to the
+[Command Reference](/nemo-relay-cli/command-reference).
+
+**APIs and SDKs**:
+
+| | |
+| --- | --- |
+| **Python SDK (`nemo-relay`)** | Instrument application-owned LLM and tool calls and run the full lifecycle and middleware sequence around callbacks your code owns. |
+| **Node.js SDK (`nemo-relay-node`)** | Bring the same runtime model to Node.js applications and framework integrations. |
+| **Rust SDK (`nemo-relay`)** | Build on the source-of-truth runtime; the Python and Node.js bindings expose the same core model. |
+| **Plugin SDK (`nemo-relay-plugin`)** | Package reusable exporters, middleware, and policy as discoverable plugins. |
+
+For hands-on setup, refer to [Quick Start](/getting-started/quick-start) and the
+[API reference](/reference/api).
