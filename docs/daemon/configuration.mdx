@@ -215,12 +215,13 @@ Admission is per source IP address and has two limits:
   on the same host as a loopback-only daemon.
 - **Control connections.** One source IP address can open at most 512 control
   connections in each 15-second window, and each connection can request one
-  challenge. Over this limit, or when the daemon already tracks 1,024 source IP
-  addresses, the daemon returns `429` with `Retry-After: 15` before it reads
-  the request.
+  challenge. The daemon returns 429 with Retry-After: 15 before upgrading the connection if the source IP
+  address exceeds its connection limit, or if the daemon already tracks 1,024 addresses and the source
+  address is not among them.
 
-Because answered challenges free their slots at once, a burst of sessions that
-start together on one host doesn't wait for a time window. A new agent session
+Answered challenges free their pending slots immediately. Bursts can continue
+while pending capacity remains available and the source IP address stays within
+the control-connection limit. A new agent session
 that starts a new worker needs two challenges, one for its MCP server and one
 for its worker. A session that reuses a running worker needs only the MCP
 challenge. A client turned away at a pending limit gets `429` on its open
