@@ -1359,12 +1359,12 @@ impl Stream for InputStream {
             Ok(Option::Some(v)) => Poll::Ready(Some(from_abi(v))),
             Ok(Option::None) => {
                 self.terminal = true;
-                drop(self.source.close());
+                drop(self.source.cleanup());
                 Poll::Ready(None)
             }
             Err(e) => {
                 self.terminal = true;
-                drop(self.source.close());
+                drop(self.source.cleanup());
                 Poll::Ready(Some(Err(e)))
             }
         }
@@ -1373,7 +1373,7 @@ impl Stream for InputStream {
 impl Drop for InputStream {
     fn drop(&mut self) {
         self.pending.take();
-        drop(self.source.close());
+        drop(self.source.cleanup());
     }
 }
 

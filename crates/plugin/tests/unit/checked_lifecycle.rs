@@ -669,7 +669,8 @@ async fn opened_streams_report_the_downstream_close_result() {
     let error = stream.close().await.unwrap_err();
     assert!(error.contains("retry close"), "{error}");
     assert_eq!(stream.close().await.unwrap_err(), error);
-    assert_eq!(attempts.load(Ordering::SeqCst), 1);
+    // Dropping the stream leaves the failed close for shutdown instead of retrying it.
     drop(stream);
     a::Component::shutdown(&executor).await.unwrap();
+    assert_eq!(attempts.load(Ordering::SeqCst), 1);
 }
