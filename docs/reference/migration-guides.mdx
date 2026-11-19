@@ -89,34 +89,64 @@ plugin, released from the
 Validation rejects an `adaptive` component that still contains a
 `response_cache` section. It reports an error diagnostic with code
 `adaptive.response_cache_moved` for the `response_cache` field, so a cache you
-enabled is not silently turned off. Follow these steps to migrate:
+enabled is not silently turned off.
 
-1. Install the `nvidia.response_cache` plugin from a NeMo Relay Plugins release.
-2. Move the settings from the `response_cache` section into the plugin's
-   configuration. The plugin uses the same keys: `namespace`, `ttl_seconds`,
-   `priority`, `bypass_rate`, `cache_nondeterministic`, `key_strategy`,
-   `header_allowlist`, `backend`, and `tools`.
-3. Remove the `response_cache` section from the `adaptive` component.
+The plugin bundle is not signed. Relay requires a signature by default, so the
+plugin needs an explicit trust rule before it can be enabled. Follow these
+steps to migrate a user installation:
 
-For example, replace this Adaptive section:
+1. Install the plugin from its exact NeMo Relay Plugins release tag without
+   enabling it. Release tags use the `response-cache-plugin-<version>` form.
 
-```toml
-[components.config.response_cache]
-namespace = "team-dev"
-```
+   ```bash
+   nemo-relay plugins install "github:NVIDIA/NeMo-Relay-Plugins@response-cache-plugin-<version>" --user --no-enable
+   ```
 
-with a dynamic plugin entry that points to the installed plugin manifest:
+   The install adds a `[[plugins.dynamic]]` entry that points to the bundle's
+   `relay-plugin.toml` in your user `plugins.toml`.
 
-```toml
-[[plugins.dynamic]]
-manifest = "./response-cache-plugin/relay-plugin.toml"
+2. Edit that generated entry. Do not add a second `[[plugins.dynamic]]` entry
+   for the same manifest; Relay rejects a duplicate plugin ID. Directly below
+   the generated entry, add a configuration table with the settings from your
+   former `response_cache` section. The plugin uses the same keys:
+   `namespace`, `ttl_seconds`, `priority`, `bypass_rate`,
+   `cache_nondeterministic`, `key_strategy`, `header_allowlist`, `backend`, and
+   `tools`. Nested settings keep their names, such as
+   `[plugins.dynamic.config.backend]` and `[plugins.dynamic.config.tools]`.
 
-[plugins.dynamic.config]
-namespace = "team-dev"
-```
+   ```toml
+   [[plugins.dynamic]]
+   manifest = "<generated path>/relay-plugin.toml"
 
-Nested settings keep their names under the plugin configuration, such as
-`[plugins.dynamic.config.backend]` and `[plugins.dynamic.config.tools]`.
+   [plugins.dynamic.config]
+   namespace = "team-dev"
+   ```
+
+3. In the same `plugins.toml`, allow this unsigned plugin:
+
+   ```toml
+   [plugins.policy.overrides."nvidia.response_cache"]
+   attestation = "integrity_only"
+   ```
+
+   Use this setting only for a bundle from a source you trust.
+
+4. Remove the `response_cache` section from the `adaptive` component, such as:
+
+   ```toml
+   [components.config.response_cache]
+   namespace = "team-dev"
+   ```
+
+5. Enable and validate the plugin, then restart the gateway:
+
+   ```bash
+   nemo-relay plugins enable nvidia.response_cache
+   nemo-relay plugins validate nvidia.response_cache
+   ```
+
+For other scopes, signatures, and trust settings, refer to
+[Discoverable Plugins](/configure-plugins/discoverable-plugins).
 
 The plugin validates its configuration against a schema. An unknown key now
 fails validation instead of producing a warning.
