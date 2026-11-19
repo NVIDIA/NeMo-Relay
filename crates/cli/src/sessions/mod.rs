@@ -607,6 +607,7 @@ impl RootTurnState {
 pub(super) struct Session {
     agent_kind: AgentKind,
     session_id: String,
+    session_instance_identifier: uuid::Uuid,
     /// Set by `start_tool` when a request intercept rewrote the arguments; taken by the routing
     /// layer once the event batch has been applied, so the hook response can carry it back.
     tool_argument_transform: Option<ToolArgumentTransform>,
@@ -1467,16 +1468,24 @@ impl SessionManager {
     /// owning child when errors or cancellation leave no response hints.
     pub(crate) async fn finish_gateway_call(
         &self,
-        session_id: &str,
-        owner_subagent_id: Option<&str>,
+        context: &GatewayCallContext,
         finish: GatewaySessionFinish,
     ) {
+        let session_id = context.session_identifier.as_str();
         let gate = session_gate(&self.session_gates, session_id).await;
         let gate_guard = gate.lock().await;
         let mut sessions = self.inner.lock().await;
-        if let Some(session) = sessions.get_mut(session_id) {
-            session.finish_gateway_call(owner_subagent_id);
+        let Some(session) = sessions.get_mut(session_id) else {
+            return;
+        };
+        if session.session_instance_identifier != context.session_instance_identifier {
+            return;
         }
+        if session.gateway_worker_is_current(context) {
+            session.touch_subagent_activity(context.owner_subagent_identifier.as_deref());
+        }
+        // A retired worker still owns its request reservation in this session.
+        session.finish_gateway_call(context.owner_subagent_identifier.as_deref());
         let completed = sessions.get(session_id).is_some_and(|session| {
             session.active_gateway_calls == 0
                 && match finish {
@@ -1609,42 +1618,41 @@ impl SessionManager {
     /// owned responses can transfer that output directly into the session.
     pub(crate) async fn record_gateway_response_hints(
         &self,
-        session_id: &str,
-        owner_subagent_id: Option<String>,
+        context: &GatewayCallContext,
         response: Cow<'_, Value>,
     ) {
-        let alias = {
-            let alignment_state = self.alignment.lock().await;
-            alignment_state.alias_for_session(session_id)
-        };
-        let (session_id, owner_subagent_id) = match alias {
-            Some(alias) => (
-                alias.parent_session_id,
-                owner_subagent_id.or(Some(alias.subagent_id)),
-            ),
-            None => (session_id.to_string(), owner_subagent_id),
-        };
-        let gate = session_gate(&self.session_gates, &session_id).await;
+        // A prepared canonical session must never follow a newly assigned child alias.
+        if self
+            .alignment
+            .lock()
+            .await
+            .alias_for_session(&context.session_identifier)
+            .is_some()
+        {
+            return;
+        }
+        let session_id = &context.session_identifier;
+        let owner_subagent_id = context.owner_subagent_identifier.as_deref();
+        let gate = session_gate(&self.session_gates, session_id).await;
         let _gate = gate.lock().await;
         let policy = {
             let sessions = self.inner.lock().await;
             sessions
-                .get(&session_id)
-                .map(|session| session.gateway_response_policy(owner_subagent_id.as_deref()))
+                .get(session_id)
+                .map(|session| session.gateway_response_policy(context))
         };
         let Some((retain_output, collect_hints)) = policy else {
             return;
         };
-        let prepared = PreparedGatewayResponse::new(
-            response,
-            owner_subagent_id.as_deref(),
-            retain_output,
-            collect_hints,
-        );
+        if !retain_output && !collect_hints {
+            return;
+        }
+        let prepared =
+            PreparedGatewayResponse::new(response, owner_subagent_id, retain_output, collect_hints);
         let previous_output = {
             let mut sessions = self.inner.lock().await;
-            sessions.get_mut(&session_id).and_then(|session| {
-                session.record_prepared_gateway_response(prepared, owner_subagent_id.as_deref())
+            sessions.get_mut(session_id).and_then(|session| {
+                session.record_prepared_gateway_response(prepared, owner_subagent_id)
             })
         };
         // Releasing a large previous response can also be costly. Drop it after
@@ -1656,26 +1664,25 @@ impl SessionManager {
     /// Returns false without changing session state if the async path must wait.
     pub(crate) fn try_record_gateway_response_hints(
         &self,
-        session_id: &str,
-        owner_subagent_id: Option<String>,
+        context: &GatewayCallContext,
         response: &Value,
     ) -> bool {
         let Ok(alignment) = self.alignment.try_lock() else {
             return false;
         };
-        let alias = alignment.alias_for_session(session_id);
+        if alignment
+            .alias_for_session(&context.session_identifier)
+            .is_some()
+        {
+            return true;
+        }
         drop(alignment);
-        let (session_id, owner_subagent_id) = match alias {
-            Some(alias) => (
-                alias.parent_session_id,
-                owner_subagent_id.or(Some(alias.subagent_id)),
-            ),
-            None => (session_id.to_string(), owner_subagent_id),
-        };
+        let session_id = &context.session_identifier;
+        let owner_subagent_id = context.owner_subagent_identifier.as_deref();
         let Ok(gates) = self.session_gates.try_lock() else {
             return false;
         };
-        let Some(gate) = gates.get(&session_id).cloned() else {
+        let Some(gate) = gates.get(session_id).cloned() else {
             return false;
         };
         drop(gates);
@@ -1687,15 +1694,18 @@ impl SessionManager {
                 return false;
             };
             sessions
-                .get(&session_id)
-                .map(|session| session.gateway_response_policy(owner_subagent_id.as_deref()))
+                .get(session_id)
+                .map(|session| session.gateway_response_policy(context))
         };
         let Some((retain_output, collect_hints)) = policy else {
             return true;
         };
+        if !retain_output && !collect_hints {
+            return true;
+        }
         let prepared = PreparedGatewayResponse::new(
             Cow::Borrowed(response),
-            owner_subagent_id.as_deref(),
+            owner_subagent_id,
             retain_output,
             collect_hints,
         );
@@ -1704,8 +1714,8 @@ impl SessionManager {
             // therefore falls back to the async observer without partial updates.
             return false;
         };
-        let previous_output = sessions.get_mut(&session_id).and_then(|session| {
-            session.record_prepared_gateway_response(prepared, owner_subagent_id.as_deref())
+        let previous_output = sessions.get_mut(session_id).and_then(|session| {
+            session.record_prepared_gateway_response(prepared, owner_subagent_id)
         });
         drop(sessions);
         drop(previous_output);
@@ -1929,6 +1939,7 @@ impl Session {
         Self {
             agent_kind,
             session_id,
+            session_instance_identifier: uuid::Uuid::now_v7(),
             tool_argument_transform: None,
             scope_stack: session_scope_stack(launcher_trace_parent.as_ref()),
             launcher_trace_parent,
@@ -2122,7 +2133,6 @@ impl Session {
 
     fn finish_gateway_call(&mut self, owner_subagent_id: Option<&str>) {
         self.touch_activity();
-        self.touch_subagent_activity(owner_subagent_id);
         if let Some(id) = owner_subagent_id
             && let Some(count) = self.active_subagent_gateway_calls.get_mut(id)
         {
@@ -2376,6 +2386,10 @@ impl Session {
                         .or_default() += 1;
                 }
                 Ok(GatewayCallPrep {
+                    context: self.gateway_call_context(
+                        owner.decision.owner.subagent_id(),
+                        owner.parent.as_ref().map(|parent| parent.uuid),
+                    ),
                     scope_stack: stack.clone(),
                     session_id: self.session_id.clone(),
                     provider_name: start.provider,
@@ -4115,7 +4129,47 @@ impl Session {
             }));
     }
 
-    fn gateway_response_policy(&self, owner_subagent_id: Option<&str>) -> (bool, bool) {
+    fn gateway_call_context(
+        &self,
+        owner_subagent_identifier: Option<&str>,
+        original_parent_identifier: Option<uuid::Uuid>,
+    ) -> GatewayCallContext {
+        GatewayCallContext {
+            session_identifier: self.session_id.clone(),
+            session_instance_identifier: self.session_instance_identifier,
+            owner_subagent_identifier: owner_subagent_identifier.map(str::to_owned),
+            worker_scope_identifier: owner_subagent_identifier
+                .and_then(|identifier| self.subagents.get(identifier))
+                .map(|worker| worker.scope_handle.uuid),
+            original_parent_identifier,
+        }
+    }
+
+    fn gateway_worker_is_current(&self, context: &GatewayCallContext) -> bool {
+        context
+            .owner_subagent_identifier
+            .as_deref()
+            .is_none_or(|identifier| {
+                self.subagents.get(identifier).is_some_and(|worker| {
+                    Some(worker.scope_handle.uuid) == context.worker_scope_identifier
+                })
+            })
+    }
+
+    fn gateway_response_policy(&self, context: &GatewayCallContext) -> (bool, bool) {
+        if self.session_instance_identifier != context.session_instance_identifier
+            || !self.gateway_worker_is_current(context)
+        {
+            return (false, false);
+        }
+        let owner_subagent_id = context.owner_subagent_identifier.as_deref();
+        if owner_subagent_id.is_none()
+            && (context.original_parent_identifier.is_none()
+                || self.root_turn.handle().map(|turn| turn.uuid)
+                    != context.original_parent_identifier)
+        {
+            return (false, false);
+        }
         let retain_output = owner_subagent_id.is_none() && self.root_turn.is_open();
         let collect_hints = !(self.agent_kind == AgentKind::Codex
             && owner_subagent_id.is_some_and(|id| self.completed_subagents.contains(id)));

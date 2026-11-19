@@ -56,6 +56,45 @@ mod claude_activity;
 mod claude_activity_export;
 
 impl SessionManager {
+    pub(crate) async fn test_gateway_call_context(
+        &self,
+        session_identifier: &str,
+        owner_subagent_identifier: Option<&str>,
+        original_parent_identifier: Option<uuid::Uuid>,
+    ) -> GatewayCallContext {
+        let alias = self
+            .alignment
+            .lock()
+            .await
+            .alias_for_session(session_identifier);
+        let (session_identifier, owner_subagent_identifier) = match alias {
+            Some(alias) => (
+                alias.parent_session_id,
+                owner_subagent_identifier
+                    .map(str::to_owned)
+                    .or(Some(alias.subagent_id)),
+            ),
+            None => (
+                session_identifier.to_owned(),
+                owner_subagent_identifier.map(str::to_owned),
+            ),
+        };
+        let sessions = self.inner.lock().await;
+        if let Some(session) = sessions.get(&session_identifier) {
+            return session.gateway_call_context(
+                owner_subagent_identifier.as_deref(),
+                original_parent_identifier,
+            );
+        }
+        GatewayCallContext {
+            session_identifier,
+            session_instance_identifier: uuid::Uuid::nil(),
+            owner_subagent_identifier,
+            worker_scope_identifier: None,
+            original_parent_identifier,
+        }
+    }
+
     pub(crate) async fn test_lock_session_gate(
         &self,
         session_id: &str,
@@ -2661,10 +2700,16 @@ async fn gateway_response_bookkeeping_preserves_parent_output_and_child_tool_hin
             .unwrap();
         let response = json!({"output_text": "outside a turn"});
         if method == "immediate" {
-            assert!(manager.try_record_gateway_response_hints(root_id, None, &response));
+            assert!(manager.try_record_gateway_response_hints(
+                &manager.test_gateway_call_context(root_id, None, None).await,
+                &response
+            ));
         } else {
             manager
-                .record_gateway_response_hints(root_id, None, Cow::Borrowed(&response))
+                .record_gateway_response_hints(
+                    &manager.test_gateway_call_context(root_id, None, None).await,
+                    Cow::Borrowed(&response),
+                )
                 .await;
         }
         assert!(
@@ -2696,17 +2741,32 @@ async fn gateway_response_bookkeeping_preserves_parent_output_and_child_tool_hin
             )
             .await
             .unwrap();
+        let original_parent_identifier = manager.inner.lock().await[root_id]
+            .root_turn
+            .handle()
+            .map(|handle| handle.uuid);
         let parent_response = json!({"output_text": "parent answer"});
         let child_response = json!({"output": [{
             "type": "function_call", "call_id": "child-tool", "name": "Bash",
             "arguments": "{\"command\":\"cargo test\"}"
         }]});
         for (response, owner) in [
-            (&parent_response, None),
+            (&parent_response, None::<String>),
             (&child_response, Some("worker".into())),
         ] {
             if method == "immediate" {
-                assert!(manager.try_record_gateway_response_hints(root_id, owner, response));
+                assert!(
+                    manager.try_record_gateway_response_hints(
+                        &manager
+                            .test_gateway_call_context(
+                                root_id,
+                                owner.as_deref(),
+                                original_parent_identifier
+                            )
+                            .await,
+                        response
+                    )
+                );
                 continue;
             }
             let response = if method == "borrowed" {
@@ -2715,7 +2775,16 @@ async fn gateway_response_bookkeeping_preserves_parent_output_and_child_tool_hin
                 Cow::Owned(response.clone())
             };
             manager
-                .record_gateway_response_hints(root_id, owner, response)
+                .record_gateway_response_hints(
+                    &manager
+                        .test_gateway_call_context(
+                            root_id,
+                            owner.as_deref(),
+                            original_parent_identifier,
+                        )
+                        .await,
+                    response,
+                )
                 .await;
         }
         manager.alignment.lock().await.insert_alias(
@@ -2725,16 +2794,20 @@ async fn gateway_response_bookkeeping_preserves_parent_output_and_child_tool_hin
         let mut aliased_response = child_response.clone();
         aliased_response["output"][0]["call_id"] = json!("aliased-tool");
         if method == "immediate" {
-            assert!(manager.try_record_gateway_response_hints(
-                "child-session",
-                None,
-                &aliased_response
-            ));
+            assert!(
+                manager.try_record_gateway_response_hints(
+                    &manager
+                        .test_gateway_call_context("child-session", None, None)
+                        .await,
+                    &aliased_response
+                )
+            );
         } else {
             manager
                 .record_gateway_response_hints(
-                    "child-session",
-                    None,
+                    &manager
+                        .test_gateway_call_context("child-session", None, None)
+                        .await,
                     Cow::Borrowed(&aliased_response),
                 )
                 .await;
@@ -2753,6 +2826,737 @@ async fn gateway_response_bookkeeping_preserves_parent_output_and_child_tool_hin
     }
 }
 
+async fn record_response_by_method(
+    manager: &SessionManager,
+    method: &str,
+    session_identifier: &str,
+    owner_subagent_identifier: Option<String>,
+    original_parent_identifier: Option<uuid::Uuid>,
+    response: &Value,
+) {
+    let context = manager
+        .test_gateway_call_context(
+            session_identifier,
+            owner_subagent_identifier.as_deref(),
+            original_parent_identifier,
+        )
+        .await;
+    record_response_with_context(manager, method, &context, response).await;
+}
+
+async fn record_response_with_context(
+    manager: &SessionManager,
+    method: &str,
+    context: &GatewayCallContext,
+    response: &Value,
+) {
+    match method {
+        "immediate" => assert!(manager.try_record_gateway_response_hints(context, response,)),
+        "owned" | "borrowed" => {
+            manager
+                .record_gateway_response_hints(
+                    context,
+                    if method == "owned" {
+                        Cow::Owned(response.clone())
+                    } else {
+                        Cow::Borrowed(response)
+                    },
+                )
+                .await
+        }
+        _ => unreachable!("unknown response recording method"),
+    }
+}
+
+#[tokio::test]
+async fn gateway_response_bookkeeping_rejects_stale_root_output_and_hints() {
+    for method in ["owned", "borrowed", "immediate"] {
+        for boundary in ["closed", "next-turn", "reused-session"] {
+            let manager = SessionManager::new(session_test_config());
+            let headers = HeaderMap::new();
+            let session_identifier = "stale-root-bookkeeping";
+            start_codex_prompt_turn(&manager, &headers, session_identifier).await;
+            let previous = manager
+                .prepare_gateway_call(
+                    &headers,
+                    llm_start_with_responses_task(session_identifier, "Inspect the repository."),
+                )
+                .await
+                .unwrap();
+            let previous_parent_identifier = previous.parent.as_ref().map(|handle| handle.uuid);
+            assert!(previous_parent_identifier.is_some());
+            apply_codex_payload(
+                &manager,
+                &headers,
+                json!({
+                    "session_id": session_identifier, "hook_event_name": "Interrupt"
+                }),
+            )
+            .await;
+            // Finish accounting against its original session before testing session ID reuse.
+            manager
+                .finish_gateway_call(&previous.context, previous.session_finish)
+                .await;
+            if boundary == "reused-session" {
+                manager
+                    .apply_events(
+                        &headers,
+                        vec![NormalizedEvent::AgentEnded(codex_session_event(
+                            session_identifier,
+                            "SessionEnd",
+                            json!({}),
+                        ))],
+                    )
+                    .await
+                    .unwrap();
+                assert!(!manager.inner.lock().await.contains_key(session_identifier));
+            }
+            let current = if boundary == "closed" {
+                None
+            } else {
+                start_codex_prompt_turn(&manager, &headers, session_identifier).await;
+                Some(
+                    manager
+                        .prepare_gateway_call(
+                            &headers,
+                            llm_start_with_responses_task(
+                                session_identifier,
+                                "Inspect the repository.",
+                            ),
+                        )
+                        .await
+                        .unwrap(),
+                )
+            };
+            let current_parent_identifier = current
+                .as_ref()
+                .and_then(|preparation| preparation.parent.as_ref())
+                .map(|handle| handle.uuid);
+            assert_ne!(previous_parent_identifier, current_parent_identifier);
+            let current_response = json!({"output_text": "Answer B", "output": [{
+                "type": "function_call", "call_id": "current-tool", "name": "Read", "arguments": "{}"
+            }]});
+            if current.is_some() {
+                record_response_by_method(
+                    &manager,
+                    method,
+                    session_identifier,
+                    None,
+                    current_parent_identifier,
+                    &current_response,
+                )
+                .await;
+            }
+            let stale_response = json!({"output_text": "Answer A", "output": [{
+                "type": "function_call", "call_id": "stale-tool", "name": "Read", "arguments": "{}"
+            }]});
+            for original_parent_identifier in [previous_parent_identifier, None] {
+                record_response_by_method(
+                    &manager,
+                    method,
+                    session_identifier,
+                    None,
+                    original_parent_identifier,
+                    &stale_response,
+                )
+                .await;
+            }
+            {
+                let sessions = manager.inner.lock().await;
+                let session = &sessions[session_identifier];
+                assert_eq!(
+                    session.root_turn.model_output(),
+                    current.as_ref().map(|_| &current_response),
+                    "{method}: {boundary}"
+                );
+                let tool_identifiers = session
+                    .correlation
+                    .pending_tool_hints
+                    .iter()
+                    .map(|pending| pending.hint.tool_call_id.as_deref())
+                    .collect::<Vec<_>>();
+                assert_eq!(
+                    tool_identifiers,
+                    if current.is_some() {
+                        vec![Some("current-tool")]
+                    } else {
+                        vec![]
+                    },
+                    "{method}: {boundary}"
+                );
+            }
+            if let Some(current) = current {
+                manager
+                    .finish_gateway_call(&current.context, current.session_finish)
+                    .await;
+            }
+            manager.close_all("test_shutdown").await.unwrap();
+        }
+    }
+}
+
+#[tokio::test]
+async fn gateway_response_bookkeeping_preserves_live_child_hints_after_parent_interrupt() {
+    for method in ["owned", "borrowed", "immediate"] {
+        let manager = SessionManager::new(session_test_config());
+        let headers = HeaderMap::new();
+        let session_identifier = "child-response-after-interrupt";
+        start_codex_prompt_turn(&manager, &headers, session_identifier).await;
+        manager
+            .apply_events(
+                &headers,
+                vec![NormalizedEvent::SubagentStarted(SubagentEvent {
+                    session_id: session_identifier.into(),
+                    agent_kind: AgentKind::Codex,
+                    event_name: "SubagentStart".into(),
+                    subagent_id: "worker".into(),
+                    payload: json!({}),
+                    metadata: json!({}),
+                })],
+            )
+            .await
+            .unwrap();
+        let mut request =
+            llm_start_with_responses_task(session_identifier, "Inspect the repository.");
+        request.subagent_id = Some("worker".into());
+        let preparation = manager
+            .prepare_gateway_call(&headers, request)
+            .await
+            .unwrap();
+        assert_eq!(preparation.owner_subagent_id.as_deref(), Some("worker"));
+        let original_parent_identifier = preparation.parent.as_ref().map(|handle| handle.uuid);
+        apply_codex_payload(
+            &manager,
+            &headers,
+            json!({
+                "session_id": session_identifier, "hook_event_name": "Interrupt"
+            }),
+        )
+        .await;
+        let response = json!({"output_text": "child answer", "output": [{
+            "type": "function_call", "call_id": "child-tool", "name": "Read", "arguments": "{}"
+        }]});
+        record_response_by_method(
+            &manager,
+            method,
+            session_identifier,
+            Some("worker".into()),
+            original_parent_identifier,
+            &response,
+        )
+        .await;
+        {
+            let sessions = manager.inner.lock().await;
+            let session = &sessions[session_identifier];
+            assert!(!session.root_turn.is_open());
+            assert_eq!(session.correlation.pending_tool_hints.len(), 1);
+            assert_eq!(
+                session.correlation.pending_tool_hints[0]
+                    .hint
+                    .subagent_id
+                    .as_deref(),
+                Some("worker")
+            );
+        }
+        manager
+            .apply_events(
+                &headers,
+                vec![NormalizedEvent::SubagentEnded(SubagentEvent {
+                    session_id: session_identifier.into(),
+                    agent_kind: AgentKind::Codex,
+                    event_name: "SubagentStop".into(),
+                    subagent_id: "worker".into(),
+                    payload: json!({}),
+                    metadata: json!({}),
+                })],
+            )
+            .await
+            .unwrap();
+        manager
+            .finish_gateway_call(&preparation.context, preparation.session_finish)
+            .await;
+        assert!(
+            manager.inner.lock().await[session_identifier]
+                .completed_subagents
+                .contains("worker")
+        );
+        let hints_before = manager.inner.lock().await[session_identifier]
+            .correlation
+            .pending_tool_hints
+            .len();
+        record_response_by_method(
+            &manager,
+            method,
+            session_identifier,
+            Some("worker".into()),
+            original_parent_identifier,
+            &response,
+        )
+        .await;
+        assert_eq!(
+            manager.inner.lock().await[session_identifier]
+                .correlation
+                .pending_tool_hints
+                .len(),
+            hints_before
+        );
+        manager.close_all("test_shutdown").await.unwrap();
+    }
+}
+
+#[derive(Clone, Debug, PartialEq)]
+struct DelayedCompletionSnapshot {
+    turn_identifier: Option<uuid::Uuid>,
+    output: Option<Value>,
+    tool_hints: Vec<(Option<String>, Option<String>)>,
+    last_activity: Instant,
+    active_gateway_calls: usize,
+    active_worker_calls: HashMap<String, usize>,
+    worker_activity: HashMap<String, (uuid::Uuid, Instant)>,
+    cleanup_eligible: bool,
+}
+
+async fn delayed_completion_snapshot(
+    manager: &SessionManager,
+    session_identifier: &str,
+) -> Option<DelayedCompletionSnapshot> {
+    let sessions = manager.inner.lock().await;
+    let session = sessions.get(session_identifier)?;
+    Some(DelayedCompletionSnapshot {
+        turn_identifier: session.root_turn.handle().map(|handle| handle.uuid),
+        output: session.root_turn.model_output().cloned(),
+        tool_hints: session
+            .correlation
+            .pending_tool_hints
+            .iter()
+            .map(|pending| {
+                (
+                    pending.hint.subagent_id.clone(),
+                    pending.hint.tool_call_id.clone(),
+                )
+            })
+            .collect(),
+        last_activity: session.last_activity,
+        active_gateway_calls: session.active_gateway_calls,
+        active_worker_calls: session.active_subagent_gateway_calls.clone(),
+        worker_activity: session
+            .subagents
+            .iter()
+            .map(|(identifier, worker)| {
+                (
+                    identifier.clone(),
+                    (worker.scope_handle.uuid, worker.last_activity),
+                )
+            })
+            .collect(),
+        cleanup_eligible: session.needs_idle_cleanup(
+            session_now() + AGENT_IDLE_TIMEOUT + Duration::from_secs(1),
+            AGENT_IDLE_TIMEOUT,
+        ),
+    })
+}
+
+fn delayed_completion_response(tool_identifier: &str) -> Value {
+    json!({"output_text": tool_identifier, "output": [{
+        "type": "function_call", "call_id": tool_identifier,
+        "name": "Read", "arguments": "{}"
+    }]})
+}
+
+async fn prepare_delayed_completion_request(
+    manager: &SessionManager,
+    session_identifier: &str,
+    worker_identifier: Option<&str>,
+) -> GatewayCallPrep {
+    let mut request = llm_start_with_responses_task(session_identifier, "Inspect the repository.");
+    request.subagent_id = worker_identifier.map(str::to_owned);
+    manager
+        .prepare_gateway_call(&HeaderMap::new(), request)
+        .await
+        .unwrap()
+}
+
+async fn finish_delayed_completion_request(
+    manager: &SessionManager,
+    preparation: &GatewayCallPrep,
+) {
+    manager
+        .finish_gateway_call(&preparation.context, preparation.session_finish)
+        .await;
+}
+
+async fn record_delayed_completion(
+    manager: &SessionManager,
+    method: &str,
+    preparation: &GatewayCallPrep,
+    response: &Value,
+) {
+    record_response_with_context(manager, method, &preparation.context, response).await;
+}
+
+async fn reused_worker_completion_fixture() -> (SessionManager, GatewayCallPrep, GatewayCallPrep) {
+    let manager = SessionManager::new(session_test_config());
+    start_codex_prompt_turn(&manager, &HeaderMap::new(), "worker-reuse").await;
+    start_delayed_completion_alias(&manager, "worker", "worker-reuse").await;
+    let original = prepare_delayed_completion_request(&manager, "worker", None).await;
+    manager
+        .apply_events(
+            &HeaderMap::new(),
+            vec![NormalizedEvent::AgentEnded(codex_session_event(
+                "worker",
+                "SessionEnd",
+                json!({}),
+            ))],
+        )
+        .await
+        .unwrap();
+    assert!(!has_alignment_alias(&manager, "worker").await);
+    // Direct late SubagentStart hooks are tombstoned; a new child SessionStart
+    // reaches the supported alias-promotion path that creates a replacement.
+    start_delayed_completion_alias(&manager, "worker", "worker-reuse").await;
+    let replacement = prepare_delayed_completion_request(&manager, "worker", None).await;
+    assert_eq!(original.owner_subagent_id.as_deref(), Some("worker"));
+    assert_eq!(replacement.owner_subagent_id.as_deref(), Some("worker"));
+    assert_ne!(
+        original.parent.as_ref().unwrap().uuid,
+        replacement.parent.as_ref().unwrap().uuid
+    );
+    (manager, original, replacement)
+}
+
+#[tokio::test]
+async fn delayed_worker_response_preserves_reused_worker() {
+    SESSION_CLOCK_OVERRIDE
+        .scope(std::cell::Cell::new(Instant::now()), async {
+            let mut observations = Vec::new();
+            for method in ["immediate", "borrowed"] {
+                let (manager, original, replacement) = reused_worker_completion_fixture().await;
+                record_delayed_completion(
+                    &manager,
+                    method,
+                    &replacement,
+                    &delayed_completion_response("current-tool"),
+                )
+                .await;
+                let before = delayed_completion_snapshot(&manager, "worker-reuse")
+                    .await
+                    .unwrap();
+                SESSION_CLOCK_OVERRIDE
+                    .with(|clock| clock.set(clock.get() + Duration::from_secs(1)));
+                record_delayed_completion(
+                    &manager,
+                    method,
+                    &original,
+                    &delayed_completion_response("stale-tool"),
+                )
+                .await;
+                let after = delayed_completion_snapshot(&manager, "worker-reuse").await;
+                finish_delayed_completion_request(&manager, &original).await;
+                finish_delayed_completion_request(&manager, &replacement).await;
+                manager.close_all("test_shutdown").await.unwrap();
+                observations.push((method, before, after));
+            }
+            for (method, before, after) in observations {
+                assert_eq!(
+                    before.tool_hints,
+                    vec![(Some("worker".into()), Some("current-tool".into()))],
+                    "{method}: the replacement response must be accepted"
+                );
+                assert_eq!(
+                    after,
+                    Some(before),
+                    "{method}: old response changed replacement"
+                );
+            }
+        })
+        .await;
+}
+
+#[tokio::test]
+async fn delayed_worker_cleanup_preserves_reused_worker() {
+    SESSION_CLOCK_OVERRIDE
+        .scope(std::cell::Cell::new(Instant::now()), async {
+            let (manager, original, replacement) = reused_worker_completion_fixture().await;
+            let mut expected = delayed_completion_snapshot(&manager, "worker-reuse")
+                .await
+                .unwrap();
+            SESSION_CLOCK_OVERRIDE.with(|clock| clock.set(clock.get() + Duration::from_secs(1)));
+            finish_delayed_completion_request(&manager, &original).await;
+            let after_original = delayed_completion_snapshot(&manager, "worker-reuse").await;
+            // The old request still releases its reservation in the original session.
+            expected.last_activity = session_now();
+            expected.active_gateway_calls -= 1;
+            *expected.active_worker_calls.get_mut("worker").unwrap() -= 1;
+            SESSION_CLOCK_OVERRIDE.with(|clock| clock.set(clock.get() + Duration::from_secs(1)));
+            finish_delayed_completion_request(&manager, &replacement).await;
+            let after_replacement = delayed_completion_snapshot(&manager, "worker-reuse")
+                .await
+                .unwrap();
+            let replacement_completed_at = session_now();
+            manager.close_all("test_shutdown").await.unwrap();
+
+            assert_eq!(after_replacement.active_gateway_calls, 0);
+            assert!(after_replacement.active_worker_calls.is_empty());
+            assert_eq!(
+                after_replacement.worker_activity["worker"].1, replacement_completed_at,
+                "the replacement's own cleanup must refresh it"
+            );
+            assert_eq!(expected.active_gateway_calls, 1);
+            assert_eq!(expected.active_worker_calls["worker"], 1);
+            assert_eq!(
+                after_original,
+                Some(expected),
+                "old cleanup changed replacement activity"
+            );
+        })
+        .await;
+}
+
+#[tokio::test]
+async fn delayed_session_completion_preserves_recreated_session() {
+    SESSION_CLOCK_OVERRIDE
+        .scope(std::cell::Cell::new(Instant::now()), async {
+            let mut observations = Vec::new();
+            for method in ["immediate", "borrowed"] {
+                let manager = SessionManager::new(session_test_config());
+                let identifier = "recreated-pending-session";
+                start_codex_prompt_turn(&manager, &HeaderMap::new(), identifier).await;
+                let original = prepare_delayed_completion_request(&manager, identifier, None).await;
+                manager
+                    .apply_events(
+                        &HeaderMap::new(),
+                        vec![NormalizedEvent::AgentEnded(codex_session_event(
+                            identifier,
+                            "SessionEnd",
+                            json!({}),
+                        ))],
+                    )
+                    .await
+                    .unwrap();
+                assert!(!manager.inner.lock().await.contains_key(identifier));
+                start_codex_prompt_turn(&manager, &HeaderMap::new(), identifier).await;
+                let replacement =
+                    prepare_delayed_completion_request(&manager, identifier, None).await;
+                assert_ne!(
+                    original.parent.as_ref().unwrap().uuid,
+                    replacement.parent.as_ref().unwrap().uuid
+                );
+                let current_response = delayed_completion_response("current-tool");
+                record_delayed_completion(&manager, method, &replacement, &current_response).await;
+                let before = delayed_completion_snapshot(&manager, identifier)
+                    .await
+                    .unwrap();
+                SESSION_CLOCK_OVERRIDE
+                    .with(|clock| clock.set(clock.get() + Duration::from_secs(1)));
+                record_delayed_completion(
+                    &manager,
+                    method,
+                    &original,
+                    &delayed_completion_response("stale-tool"),
+                )
+                .await;
+                let after_response = delayed_completion_snapshot(&manager, identifier).await;
+                finish_delayed_completion_request(&manager, &original).await;
+                let after_cleanup = delayed_completion_snapshot(&manager, identifier).await;
+                finish_delayed_completion_request(&manager, &replacement).await;
+                let after_replacement = delayed_completion_snapshot(&manager, identifier).await;
+                manager.close_all("test_shutdown").await.unwrap();
+                observations.push((
+                    method,
+                    current_response,
+                    before,
+                    after_response,
+                    after_cleanup,
+                    after_replacement,
+                ));
+            }
+            for (
+                method,
+                current_response,
+                before,
+                after_response,
+                after_cleanup,
+                after_replacement,
+            ) in observations
+            {
+                assert_eq!(
+                    before.output,
+                    Some(current_response),
+                    "{method}: current response control"
+                );
+                assert_eq!(before.tool_hints, vec![(None, Some("current-tool".into()))]);
+                assert_eq!(before.active_gateway_calls, 1);
+                assert!(!before.cleanup_eligible);
+                assert_eq!(
+                    after_replacement.unwrap().active_gateway_calls,
+                    0,
+                    "{method}: current cleanup control"
+                );
+                assert_eq!(
+                    after_response,
+                    Some(before.clone()),
+                    "{method}: old response changed recreated session"
+                );
+                assert_eq!(
+                    after_cleanup,
+                    Some(before),
+                    "{method}: old cleanup changed recreated session"
+                );
+            }
+        })
+        .await;
+}
+
+async fn start_delayed_completion_alias(
+    manager: &SessionManager,
+    identifier: &str,
+    parent_identifier: &str,
+) {
+    manager
+        .apply_events(
+            &HeaderMap::new(),
+            vec![NormalizedEvent::AgentStarted(SessionEvent {
+                session_id: identifier.into(),
+                agent_kind: AgentKind::Codex,
+                event_name: "SessionStart".into(),
+                payload: json!({"source": {"subagent": {"thread_spawn": {
+                    "parent_thread_id": parent_identifier
+                }}}}),
+                metadata: json!({}),
+            })],
+        )
+        .await
+        .unwrap();
+}
+
+async fn reassigned_alias_completion_fixture(
+    reuse_parent_identifier: bool,
+) -> (SessionManager, GatewayCallPrep, GatewayCallPrep) {
+    let manager = SessionManager::new(session_test_config());
+    start_codex_prompt_turn(&manager, &HeaderMap::new(), "original-parent").await;
+    start_delayed_completion_alias(&manager, "aliased-worker", "original-parent").await;
+    let original = prepare_delayed_completion_request(&manager, "aliased-worker", None).await;
+    assert_eq!(original.session_id, "original-parent");
+    assert_eq!(
+        original.owner_subagent_id.as_deref(),
+        Some("aliased-worker")
+    );
+    let ended_identifier = if reuse_parent_identifier {
+        "original-parent"
+    } else {
+        "aliased-worker"
+    };
+    manager
+        .apply_events(
+            &HeaderMap::new(),
+            vec![NormalizedEvent::AgentEnded(codex_session_event(
+                ended_identifier,
+                "SessionEnd",
+                json!({}),
+            ))],
+        )
+        .await
+        .unwrap();
+    assert!(!has_alignment_alias(&manager, "aliased-worker").await);
+    start_codex_prompt_turn(&manager, &HeaderMap::new(), "replacement-parent").await;
+    start_delayed_completion_alias(&manager, ended_identifier, "replacement-parent").await;
+    let replacement = prepare_delayed_completion_request(&manager, ended_identifier, None).await;
+    assert_eq!(replacement.session_id, "replacement-parent");
+    assert_eq!(
+        replacement.owner_subagent_id.as_deref(),
+        Some(ended_identifier)
+    );
+    (manager, original, replacement)
+}
+
+async fn observe_delayed_alias_completion(
+    method: &str,
+    reuse_parent_identifier: bool,
+) -> (
+    DelayedCompletionSnapshot,
+    Option<DelayedCompletionSnapshot>,
+    Option<DelayedCompletionSnapshot>,
+) {
+    let (manager, original, replacement) =
+        reassigned_alias_completion_fixture(reuse_parent_identifier).await;
+    record_delayed_completion(
+        &manager,
+        method,
+        &replacement,
+        &delayed_completion_response("current-tool"),
+    )
+    .await;
+    let before = delayed_completion_snapshot(&manager, "replacement-parent")
+        .await
+        .unwrap();
+    record_delayed_completion(
+        &manager,
+        method,
+        &original,
+        &delayed_completion_response("stale-tool"),
+    )
+    .await;
+    let after_response = delayed_completion_snapshot(&manager, "replacement-parent").await;
+    finish_delayed_completion_request(&manager, &original).await;
+    let after_cleanup = delayed_completion_snapshot(&manager, "replacement-parent").await;
+    finish_delayed_completion_request(&manager, &replacement).await;
+    manager.close_all("test_shutdown").await.unwrap();
+    (before, after_response, after_cleanup)
+}
+
+#[tokio::test]
+async fn delayed_aliased_completion_preserves_reassigned_owner() {
+    let mut observations = Vec::new();
+    for method in ["immediate", "borrowed"] {
+        observations.push((
+            method,
+            observe_delayed_alias_completion(method, false).await,
+        ));
+    }
+    for (method, (before, after_response, after_cleanup)) in observations {
+        assert_eq!(
+            before.tool_hints,
+            vec![(Some("aliased-worker".into()), Some("current-tool".into()))]
+        );
+        assert_eq!(before.active_gateway_calls, 1);
+        assert_eq!(
+            after_response,
+            Some(before.clone()),
+            "{method}: alias reassignment redirected response"
+        );
+        assert_eq!(
+            after_cleanup,
+            Some(before),
+            "{method}: alias reassignment redirected cleanup"
+        );
+    }
+}
+
+#[tokio::test]
+async fn delayed_completion_cannot_follow_a_recreated_parent_alias() {
+    let mut observations = Vec::new();
+    for method in ["immediate", "borrowed"] {
+        observations.push((method, observe_delayed_alias_completion(method, true).await));
+    }
+    for (method, (before, after_response, after_cleanup)) in observations {
+        assert_eq!(
+            before.tool_hints,
+            vec![(Some("original-parent".into()), Some("current-tool".into()))]
+        );
+        assert_eq!(before.active_gateway_calls, 1);
+        assert_eq!(
+            after_response,
+            Some(before.clone()),
+            "{method}: recreated parent alias redirected response"
+        );
+        assert_eq!(
+            after_cleanup,
+            Some(before),
+            "{method}: recreated parent alias redirected cleanup"
+        );
+    }
+}
+
 #[tokio::test]
 async fn immediate_gateway_response_bookkeeping_defers_without_partial_updates_when_busy() {
     let manager = SessionManager::new(session_test_config());
@@ -2767,22 +3571,22 @@ async fn immediate_gateway_response_bookkeeping_defers_without_partial_updates_w
     }]});
     {
         let _alignment = manager.alignment.lock().await;
-        assert!(!manager.try_record_gateway_response_hints(id, None, &response));
+        assert!(!manager.try_record_gateway_response_hints(&prep.context, &response));
     }
     {
         let _gates = manager.session_gates.lock().await;
-        assert!(!manager.try_record_gateway_response_hints(id, None, &response));
+        assert!(!manager.try_record_gateway_response_hints(&prep.context, &response));
     }
     {
         let sessions = manager.inner.lock().await;
-        assert!(!manager.try_record_gateway_response_hints(id, None, &response));
+        assert!(!manager.try_record_gateway_response_hints(&prep.context, &response));
         assert!(sessions[id].root_turn.model_output().is_none());
         assert!(sessions[id].correlation.pending_tool_hints.is_empty());
     }
     let gate = session_gate(&manager.session_gates, id).await;
     let held = gate.lock().await;
-    assert!(!manager.try_record_gateway_response_hints(id, None, &response));
-    let pending = manager.record_gateway_response_hints(id, None, Cow::Borrowed(&response));
+    assert!(!manager.try_record_gateway_response_hints(&prep.context, &response));
+    let pending = manager.record_gateway_response_hints(&prep.context, Cow::Borrowed(&response));
     tokio::pin!(pending);
     assert!(futures_util::poll!(pending.as_mut()).is_pending());
     {
@@ -2805,7 +3609,7 @@ async fn immediate_gateway_response_bookkeeping_defers_without_partial_updates_w
         );
     }
     manager
-        .finish_gateway_call(id, prep.owner_subagent_id.as_deref(), prep.session_finish)
+        .finish_gateway_call(&prep.context, prep.session_finish)
         .await;
     manager.close_all("test_shutdown").await.unwrap();
 }
@@ -5572,15 +6376,16 @@ async fn managed_gateway_typed_projections_carry_merged_conversation_identity() 
 
 async fn execute_prepared_llm(manager: &SessionManager, prep: GatewayCallPrep, response: Value) {
     let GatewayCallPrep {
+        context,
         scope_stack,
-        session_id,
+        session_id: _,
         provider_name,
         request,
         parent,
         attributes,
         metadata,
         model_name,
-        owner_subagent_id,
+        owner_subagent_id: _,
         record_task_response: _,
         session_finish,
     } = prep;
@@ -5608,9 +6413,7 @@ async fn execute_prepared_llm(manager: &SessionManager, prep: GatewayCallPrep, r
         .scope(scope_stack, async move { llm_call_execute(params).await })
         .await
         .unwrap();
-    manager
-        .finish_gateway_call(&session_id, owner_subagent_id.as_deref(), session_finish)
-        .await;
+    manager.finish_gateway_call(&context, session_finish).await;
 }
 
 #[tokio::test]
@@ -6333,11 +7136,7 @@ async fn claude_unclassified_short_request_preserves_distinct_late_prompt_eviden
     assert!(prep.record_task_response);
     assert_eq!(prep.metadata["claude_code_request_class"], "unknown");
     manager
-        .finish_gateway_call(
-            &prep.session_id,
-            prep.owner_subagent_id.as_deref(),
-            prep.session_finish,
-        )
+        .finish_gateway_call(&prep.context, prep.session_finish)
         .await;
 
     manager
@@ -6412,11 +7211,7 @@ async fn claude_unclassified_short_request_keeps_ordinary_idle_cleanup() {
     assert!(manager.inner.lock().await.contains_key("probe-only"));
 
     manager
-        .finish_gateway_call(
-            &prep.session_id,
-            prep.owner_subagent_id.as_deref(),
-            prep.session_finish,
-        )
+        .finish_gateway_call(&prep.context, prep.session_finish)
         .await;
     assert!(manager.inner.lock().await.contains_key("probe-only"));
     assert_eq!(
@@ -6443,11 +7238,7 @@ async fn claude_unclassified_short_request_keeps_ordinary_idle_cleanup() {
         "probe-only sessions must not become the single-active fallback"
     );
     manager
-        .finish_gateway_call(
-            &next.session_id,
-            next.owner_subagent_id.as_deref(),
-            next.session_finish,
-        )
+        .finish_gateway_call(&next.context, next.session_finish)
         .await;
     manager.close_all("test_shutdown").await.unwrap();
 }
@@ -6520,11 +7311,7 @@ async fn claude_direct_gateway_request_seeds_turn_input_before_prompt_hook() {
         .unwrap();
     assert!(prep.record_task_response);
     manager
-        .finish_gateway_call(
-            &prep.session_id,
-            prep.owner_subagent_id.as_deref(),
-            prep.session_finish,
-        )
+        .finish_gateway_call(&prep.context, prep.session_finish)
         .await;
 
     manager
@@ -7171,11 +7958,7 @@ async fn unidentified_concurrent_gateway_calls_use_isolated_ephemeral_sessions()
     assert!(second.session_id.starts_with("gateway-isolated-"));
 
     manager
-        .finish_gateway_call(
-            &first.session_id,
-            first.owner_subagent_id.as_deref(),
-            first.session_finish,
-        )
+        .finish_gateway_call(&first.context, first.session_finish)
         .await;
     {
         let sessions = manager.inner.lock().await;
@@ -7186,11 +7969,7 @@ async fn unidentified_concurrent_gateway_calls_use_isolated_ephemeral_sessions()
     }
 
     manager
-        .finish_gateway_call(
-            &second.session_id,
-            second.owner_subagent_id.as_deref(),
-            second.session_finish,
-        )
+        .finish_gateway_call(&second.context, second.session_finish)
         .await;
     assert!(!manager.has_open_sessions().await);
     let sessions = manager.inner.lock().await;
@@ -8733,11 +9512,7 @@ async fn idle_timeout_waits_for_active_gateway_llm_call() {
     );
 
     manager
-        .finish_gateway_call(
-            &prep.session_id,
-            prep.owner_subagent_id.as_deref(),
-            GatewaySessionFinish::Retain,
-        )
+        .finish_gateway_call(&prep.context, GatewaySessionFinish::Retain)
         .await;
     let closed = manager
         .close_idle_sessions_at(
@@ -11813,11 +12588,7 @@ async fn codex_gateway_results_recover_missing_mcp_completions_by_id_and_owner()
                 }
             }
             manager
-                .finish_gateway_call(
-                    &prep.session_id,
-                    prep.owner_subagent_id.as_deref(),
-                    prep.session_finish,
-                )
+                .finish_gateway_call(&prep.context, prep.session_finish)
                 .await;
         }
         // A late end hook must not close the child's other call with the same arguments.
@@ -12534,17 +13305,14 @@ async fn codex_stale_child_cleanup_preserves_live_siblings_and_gateway_calls() {
         }
         manager
             .record_gateway_response_hints(
-                "activity-root",
-                Some("live".into()),
+                &manager
+                    .test_gateway_call_context("activity-root", Some("live"), None)
+                    .await,
                 Cow::Owned(json!({})),
             )
             .await;
         manager
-            .finish_gateway_call(
-                &prep.session_id,
-                prep.owner_subagent_id.as_deref(),
-                prep.session_finish,
-            )
+            .finish_gateway_call(&prep.context, prep.session_finish)
             .await;
         assert_eq!(
             manager.inner.lock().await["activity-root"].active_subagent_gateway_calls["live"],
@@ -12558,11 +13326,7 @@ async fn codex_stale_child_cleanup_preserves_live_siblings_and_gateway_calls() {
             0
         );
         manager
-            .finish_gateway_call(
-                &second.session_id,
-                second.owner_subagent_id.as_deref(),
-                second.session_finish,
-            )
+            .finish_gateway_call(&second.context, second.session_finish)
             .await;
         assert!(
             manager.inner.lock().await["activity-root"]
@@ -12761,11 +13525,7 @@ async fn codex_root_gateway_call_does_not_protect_stale_children() {
         assert_eq!(root.root_turn.handle().unwrap().uuid, parent);
     }
     manager
-        .finish_gateway_call(
-            &prep.session_id,
-            prep.owner_subagent_id.as_deref(),
-            prep.session_finish,
-        )
+        .finish_gateway_call(&prep.context, prep.session_finish)
         .await;
     manager.close_all("test_shutdown").await.unwrap();
 }
@@ -12838,11 +13598,7 @@ async fn codex_gateway_completion_without_response_refreshes_only_owning_child()
                 SESSION_CLOCK_OVERRIDE
                     .with(|clock| clock.set(clock.get() + Duration::from_secs(1)));
                 manager
-                    .finish_gateway_call(
-                        &prep.session_id,
-                        prep.owner_subagent_id.as_deref(),
-                        prep.session_finish,
-                    )
+                    .finish_gateway_call(&prep.context, prep.session_finish)
                     .await;
                 {
                     let sessions = manager.inner.lock().await;
@@ -13176,11 +13932,7 @@ async fn codex_inferred_child_work_after_parent_stop_preserves_synthesis() {
                 assert_eq!(prep.owner_subagent_id.as_deref(), Some(child_id), "{mode}");
                 assert_eq!(prep.parent.as_ref().unwrap().uuid, child_scope);
                 manager
-                    .finish_gateway_call(
-                        &prep.session_id,
-                        prep.owner_subagent_id.as_deref(),
-                        prep.session_finish,
-                    )
+                    .finish_gateway_call(&prep.context, prep.session_finish)
                     .await;
             } else {
                 let active = manager.start_llm(&HeaderMap::new(), request).await.unwrap();
@@ -13402,13 +14154,15 @@ async fn authenticated_pi_respects_pending_owner_claims() {
 #[tokio::test]
 async fn blocked_gateway_response_does_not_block_another_session_and_can_be_cancelled() {
     let manager = SessionManager::new(session_test_config());
+    let mut original_contexts = HashMap::new();
     for id in ["blocked-response", "parallel-response"] {
         let mut start = llm_start();
         start.session_id = Some(id.into());
-        manager
+        let preparation = manager
             .prepare_gateway_call(&HeaderMap::new(), start)
             .await
             .unwrap();
+        original_contexts.insert(id, preparation.context.clone());
     }
     let response = json!({"output": [{
         "type": "function_call", "call_id": "tool", "name": "Bash",
@@ -13418,8 +14172,7 @@ async fn blocked_gateway_response_does_not_block_another_session_and_can_be_canc
     let held = gate.lock().await;
     {
         let blocked = manager.record_gateway_response_hints(
-            "blocked-response",
-            None,
+            &original_contexts["blocked-response"],
             Cow::Borrowed(&response),
         );
         tokio::pin!(blocked);
@@ -13427,8 +14180,7 @@ async fn blocked_gateway_response_does_not_block_another_session_and_can_be_canc
         tokio::time::timeout(
             Duration::from_secs(1),
             manager.record_gateway_response_hints(
-                "parallel-response",
-                None,
+                &original_contexts["parallel-response"],
                 Cow::Borrowed(&response),
             ),
         )
@@ -13461,7 +14213,10 @@ async fn blocked_gateway_response_does_not_block_another_session_and_can_be_canc
         // Dropping the pending future must leave the blocked session untouched.
     }
     drop(held);
-    assert!(manager.try_record_gateway_response_hints("blocked-response", None, &response));
+    assert!(
+        manager
+            .try_record_gateway_response_hints(&original_contexts["blocked-response"], &response)
+    );
     manager.close_all("test_shutdown").await.unwrap();
 }
 

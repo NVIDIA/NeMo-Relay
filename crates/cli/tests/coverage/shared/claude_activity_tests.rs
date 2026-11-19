@@ -36,11 +36,7 @@ async fn claude_internal_requests_do_not_open_task_turns() {
         assert!(!prep.record_task_response);
         assert_eq!(prep.metadata["claude_code_request_class"], request_class);
         manager
-            .finish_gateway_call(
-                &prep.session_id,
-                prep.owner_subagent_id.as_deref(),
-                prep.session_finish,
-            )
+            .finish_gateway_call(&prep.context, prep.session_finish)
             .await;
         manager.close_all("test_shutdown").await.unwrap();
 
@@ -55,11 +51,7 @@ async fn claude_internal_requests_do_not_open_task_turns() {
 
 async fn finish_activity(manager: &SessionManager, prep: &GatewayCallPrep) {
     manager
-        .finish_gateway_call(
-            &prep.session_id,
-            prep.owner_subagent_id.as_deref(),
-            prep.session_finish,
-        )
+        .finish_gateway_call(&prep.context, prep.session_finish)
         .await;
 }
 

@@ -36,6 +36,7 @@ pub(crate) struct ActiveLlm {
 
 /// Inputs for invoking managed LLM execution after releasing the session lock.
 pub(crate) struct GatewayCallPrep {
+    pub(crate) context: GatewayCallContext,
     pub(crate) scope_stack: ScopeStackHandle,
     pub(crate) session_id: String,
     pub(crate) provider_name: String,
@@ -48,6 +49,16 @@ pub(crate) struct GatewayCallPrep {
     /// False for internal calls whose responses must not alter conversation output or hints.
     pub(crate) record_task_response: bool,
     pub(crate) session_finish: GatewaySessionFinish,
+}
+
+/// Immutable ownership captured before a managed request leaves its session gate.
+#[derive(Debug, Clone)]
+pub(crate) struct GatewayCallContext {
+    pub(crate) session_identifier: String,
+    pub(crate) session_instance_identifier: uuid::Uuid,
+    pub(crate) owner_subagent_identifier: Option<String>,
+    pub(crate) worker_scope_identifier: Option<uuid::Uuid>,
+    pub(crate) original_parent_identifier: Option<uuid::Uuid>,
 }
 
 /// Cleanup policy for the session selected by one gateway request.

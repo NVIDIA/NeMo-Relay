@@ -163,6 +163,7 @@ impl Drop for InFlightSession {
             return;
         };
         if let Some(owner) = self.gateway_call_owner.take() {
+            session.touch_subagent_activity(owner.as_deref());
             session.finish_gateway_call(owner.as_deref());
         }
         let preparing = self.gateway_preparing.take();
