@@ -16,9 +16,10 @@ use napi::threadsafe_function::ThreadsafeFunction;
 use napi::{Env, Status, ValueType};
 use nemo_relay_types::api::tool::ApplicationExecutionContext;
 use serde::de::DeserializeOwned;
-use serde_json::Value as Json;
+use serde_json::Value;
 
 use crate::error::{Error, Result};
+use crate::json::Json;
 
 pub(crate) type BoxFuture<T> = Pin<Box<dyn Future<Output = T> + Send>>;
 
@@ -101,9 +102,9 @@ pub(crate) type HandledTsfn<T, Args = T, Return = ()> =
 
 pub(crate) const JAVASCRIPT_MAX_SAFE_INTEGER: u64 = (1 << 53) - 1;
 
-const MAX_JSON_DEPTH: u32 = 128;
-
-const MAX_JSON_NODES: usize = 1_000_000;
+// Bound the prototype-safe context snapshot before shared envelope validation.
+const MAX_CONTEXT_JSON_DEPTH: u32 = 128;
+const MAX_CONTEXT_JSON_NODES: usize = 1_000_000;
 
 pub(crate) fn lock<T>(mutex: &Mutex<T>) -> MutexGuard<'_, T> {
     mutex.lock().unwrap_or_else(PoisonError::into_inner)
@@ -229,71 +230,13 @@ pub(crate) fn clear_last_callback_error() {
     *lock(&LAST_CALLBACK_ERROR) = None;
 }
 
-pub(crate) fn opt_json(val: Option<Json>) -> Option<Json> {
-    val.filter(|v| !v.is_null())
+pub(crate) fn opt_json(val: Option<Json>) -> Option<Value> {
+    val.map(Value::from).filter(|v| !v.is_null())
 }
 
-pub(crate) fn parse_json<T: DeserializeOwned>(value: Json, what: &str) -> Result<T> {
+pub(crate) fn parse_json<T: DeserializeOwned>(value: Value, what: &str) -> Result<T> {
     serde_json::from_value(value)
         .map_err(|error| Error::invalid_argument(format!("invalid {what}: {error}")))
-}
-
-pub(crate) fn checked_json(env: &Env, value: Unknown) -> Result<Json> {
-    let mut remaining_nodes = MAX_JSON_NODES;
-    checked_json_within(env, value, MAX_JSON_DEPTH, &mut remaining_nodes)
-}
-
-fn checked_json_within(
-    env: &Env,
-    value: Unknown,
-    remaining_depth: u32,
-    remaining_nodes: &mut usize,
-) -> Result<Json> {
-    *remaining_nodes = remaining_nodes
-        .checked_sub(1)
-        .ok_or_else(|| Error::invalid_argument("Exceeded maximum JSON value count"))?;
-    match value.get_type()? {
-        ValueType::BigInt => {
-            env.throw_type_error("BigInt cannot be represented as JSON", None)?;
-            Err(Error::Napi(napi::Error::new(
-                Status::PendingException,
-                "BigInt cannot be represented as JSON",
-            )))
-        }
-        ValueType::Object => {
-            let Some(remaining_depth) = remaining_depth.checked_sub(1) else {
-                return Err(Error::invalid_argument(
-                    "Exceeded maximum JSON nesting depth",
-                ));
-            };
-            let object = Object::from_unknown(value)?;
-            if object.is_array()? {
-                let mut values = Vec::new();
-                for index in 0..object.get_array_length()? {
-                    values.push(checked_json_within(
-                        env,
-                        object.get_element(index)?,
-                        remaining_depth,
-                        remaining_nodes,
-                    )?);
-                }
-                Ok(Json::Array(values))
-            } else {
-                let keys = Object::keys(&object)?;
-                let mut values = serde_json::Map::with_capacity(keys.len());
-                for key in keys {
-                    if let Some(value) = object.get::<Unknown>(&key)? {
-                        values.insert(
-                            key,
-                            checked_json_within(env, value, remaining_depth, remaining_nodes)?,
-                        );
-                    }
-                }
-                Ok(Json::Object(values))
-            }
-        }
-        _ => Ok(Json::from_unknown(value)?),
-    }
 }
 
 /// Snapshot the new host context from own enumerable JSON properties only.
@@ -307,8 +250,8 @@ pub(crate) fn execution_context_json(
     if matches!(value.get_type()?, ValueType::Null | ValueType::Undefined) {
         return Ok(None);
     }
-    let mut remaining_nodes = MAX_JSON_NODES;
-    let value = own_context_json(env, value, MAX_JSON_DEPTH, &mut remaining_nodes)?;
+    let mut remaining_nodes = MAX_CONTEXT_JSON_NODES;
+    let value = own_context_json(env, value, MAX_CONTEXT_JSON_DEPTH, &mut remaining_nodes)?;
     if !value.is_object() {
         return Err(Error::invalid_argument(
             "execution context must be a JSON object",
@@ -324,12 +267,12 @@ fn own_context_json(
     value: Unknown,
     remaining_depth: u32,
     remaining_nodes: &mut usize,
-) -> Result<Json> {
+) -> Result<Value> {
     *remaining_nodes = remaining_nodes
         .checked_sub(1)
         .ok_or_else(|| Error::invalid_argument("Exceeded maximum JSON value count"))?;
     if value.get_type()? != ValueType::Object {
-        return checked_json(env, value);
+        return Ok(Json::from_unknown(value)?.0);
     }
     let remaining_depth = remaining_depth
         .checked_sub(1)
@@ -354,10 +297,10 @@ fn own_context_json(
                 *remaining_nodes = remaining_nodes
                     .checked_sub(1)
                     .ok_or_else(|| Error::invalid_argument("Exceeded maximum JSON value count"))?;
-                Json::Null
+                Value::Null
             });
         }
-        return Ok(Json::Array(values));
+        return Ok(Value::Array(values));
     }
     let keys = object.get_all_property_names(
         KeyCollectionMode::OwnOnly,
@@ -382,7 +325,7 @@ fn own_context_json(
             own_context_json(env, value, remaining_depth, remaining_nodes)?,
         );
     }
-    Ok(Json::Object(values))
+    Ok(Value::Object(values))
 }
 
 pub(crate) fn parse_timestamp_micros(value: Option<f64>) -> Result<Option<DateTime<Utc>>> {

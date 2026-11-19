@@ -6,7 +6,6 @@ position: 4
 {/* SPDX-FileCopyrightText: Copyright (c) 2026, NVIDIA CORPORATION & AFFILIATES. All rights reserved.
 SPDX-License-Identifier: Apache-2.0 */}
 
-
 Use the `atof` section to write raw Agent Trajectory Observability Format (ATOF)
 `0.1` events to JSONL files, send them to raw-event collectors, or do both.
 
@@ -200,44 +199,8 @@ Entries have a stable code, a running count, and distinct messages recorded
 for that code. Messages name transport and URL origin. Counts persist across
 flushes and shutdown.
 
-Read the snapshot from a manual exporter with `runtime_diagnostics()` in Rust
-and Python, `runtimeDiagnostics()` in Node.js, and `RuntimeDiagnostics()` in
-Go. C FFI `nemo_relay_atof_exporter_runtime_diagnostics_json` returns a
-caller-owned JSON array released with `nemo_relay_string_free`.
-
-The following examples flush a manual exporter and print diagnostics:
-
-<Tabs>
-<Tab title="Python" language="python">
-```python
-exporter.force_flush()
-for diagnostic in exporter.runtime_diagnostics().entries:
-    print(diagnostic.code, diagnostic.count, diagnostic.message)
-```
-
-</Tab>
-
-<Tab title="Node.js" language="node">
-```js
-exporter.forceFlush();
-for (const diagnostic of exporter.runtimeDiagnostics()) {
-  console.log(diagnostic.code, diagnostic.count, diagnostic.message);
-}
-```
-
-</Tab>
-
-<Tab title="Rust" language="rust">
-```rust
-exporter.force_flush()?;
-for diagnostic in exporter.runtime_diagnostics().entries() {
-    println!("{} {} {}", diagnostic.code, diagnostic.count, diagnostic.message);
-}
-```
-
-</Tab>
-
-</Tabs>
+For direct-exporter diagnostic methods and examples, refer to
+[Runtime Diagnostics](/reference/api/observability#atof-runtime-diagnostics).
 
 Plugin-managed stream sinks also record diagnostics in the active plugin
 report's `runtime_diagnostics`, with `component` set to `observability` and
@@ -448,82 +411,8 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
 
 ## Manual API
 
-Use the manual `AtofExporter` API when a test or script needs a custom
-subscriber name or explicit registration window. A manual exporter owns one
-sink. To send the same events to several destinations, create and register one
-exporter for each sink or use the observability plugin.
-
-<Tabs>
-<Tab title="Python" language="python">
-```python
-from nemo_relay import AtofExporter, AtofExporterConfig
-
-config = AtofExporterConfig()
-config.sink_type = "stream"
-config.url = "http://localhost:8080/events"
-config.transport = "http_post"
-
-exporter = AtofExporter(config)
-exporter.register("atof-exporter")
-
-# Run instrumented application work here.
-
-exporter.force_flush()
-exporter.deregister("atof-exporter")
-exporter.shutdown()
-```
-
-</Tab>
-
-<Tab title="Node.js" language="node">
-```js
-const { AtofExporter } = require("nemo-relay-node");
-
-const exporter = new AtofExporter({
-  type: "stream",
-  url: "http://localhost:8080/events",
-  transport: "http_post",
-});
-exporter.register("atof-exporter");
-
-try {
-  // Run instrumented application work here.
-
-  exporter.forceFlush();
-} finally {
-  exporter.deregister("atof-exporter");
-  exporter.shutdown();
-}
-```
-
-</Tab>
-
-<Tab title="Rust" language="rust">
-```rust
-use nemo_relay_observability::atof::{
-    AtofEndpointTransport, AtofExporterConfig, AtofStreamSinkConfig,
-};
-
-fn main() -> Result<(), Box<dyn std::error::Error>> {
-    let config = AtofExporterConfig::new().with_stream_sink(AtofStreamSinkConfig::new(
-        "http://localhost:8080/events",
-        AtofEndpointTransport::HttpPost,
-    ));
-    let exporter = nemo_relay::exporter::atof(config)?;
-    exporter.register("atof-exporter")?;
-
-    // Run instrumented application work here.
-
-    exporter.force_flush()?;
-    let _ = exporter.deregister("atof-exporter")?;
-    exporter.shutdown()?;
-    Ok(())
-}
-```
-
-</Tab>
-
-</Tabs>
+For direct API examples and lifecycle contracts, refer to
+[Manual API](/reference/api/observability#atof-manual-api).
 
 ## Common Configuration and Runtime Issues
 

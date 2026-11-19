@@ -14,7 +14,7 @@ use chrono::{DateTime, Utc};
 use napi::bindgen_prelude::*;
 use napi_derive::napi;
 use serde::{Deserialize, Serialize, Serializer};
-use serde_json::Value as Json;
+use serde_json::Value;
 
 use nemo_relay_adaptive::acg::{
     AgentIdentity, CacheRequestFacts, CacheTelemetryEvent, CacheTelemetryProvider,
@@ -86,6 +86,7 @@ use crate::convert::{
 };
 use crate::environment::spawn_promise;
 use crate::error::{Error, Result};
+use crate::json::Json;
 use crate::promise_call::{Invocation, PromiseAwareFn, PublicationContext};
 use crate::stream::LlmStream;
 use crate::types::{
@@ -148,9 +149,9 @@ pub fn log(
     target: Option<String>,
     #[napi(ts_arg_type = "TFields | null")] fields: Option<Json>,
 ) -> Result<()> {
-    let fields = match fields {
+    let fields = match fields.map(Value::from) {
         None => serde_json::Map::new(),
-        Some(Json::Object(fields)) => fields,
+        Some(Value::Object(fields)) => fields,
         Some(_) => return Err(Error::invalid_argument("log fields must be an object")),
     };
     let target = target.unwrap_or_default();
@@ -558,17 +559,17 @@ fn initialize_node_environment(env: Env) -> napi::Result<()> {
 }
 
 fn parse_string_map(value: Option<Json>, field_name: &str) -> Result<HashMap<String, String>> {
-    let Some(value) = value else {
+    let Some(value) = value.map(Value::from) else {
         return Ok(HashMap::new());
     };
-    let Json::Object(map) = value else {
+    let Value::Object(map) = value else {
         return Err(Error::invalid_argument(format!(
             "{field_name} must be an object of string values",
         )));
     };
     let mut out = HashMap::with_capacity(map.len());
     for (key, value) in map {
-        let Json::String(value) = value else {
+        let Value::String(value) = value else {
             return Err(Error::invalid_argument(format!(
                 "{field_name} must be an object of string values",
             )));
@@ -578,19 +579,19 @@ fn parse_string_map(value: Option<Json>, field_name: &str) -> Result<HashMap<Str
     Ok(out)
 }
 
-fn otel_status_metadata(status_code: &'static str, status_message: Option<String>) -> Json {
+fn otel_status_metadata(status_code: &'static str, status_message: Option<String>) -> Value {
     let mut metadata = serde_json::Map::new();
     metadata.insert(
         "otel.status_code".to_string(),
-        Json::String(status_code.to_string()),
+        Value::String(status_code.to_string()),
     );
     if let Some(status_message) = status_message {
         metadata.insert(
             "otel.status_description".to_string(),
-            Json::String(status_message),
+            Value::String(status_message),
         );
     }
-    Json::Object(metadata)
+    Value::Object(metadata)
 }
 
 fn parse_otel_type(value: &str) -> Result<nemo_relay_observability::OpenTelemetryType> {
@@ -615,14 +616,14 @@ fn parse_otel_transport(value: &str) -> Result<nemo_relay_observability::otel::O
 }
 
 fn parse_mark_projection(value: String) -> Result<nemo_relay_observability::MarkProjection> {
-    serde_json::from_value(Json::String(value))
+    serde_json::from_value(Value::String(value))
         .map_err(|error| Error::invalid_argument(error.to_string()))
 }
 
 fn parse_attribute_mappings(
     value: Json,
 ) -> Result<Vec<nemo_relay_observability::OtlpAttributeMapping>> {
-    let mappings: Vec<_> = serde_json::from_value(value)
+    let mappings: Vec<_> = serde_json::from_value(value.0)
         .map_err(|error| Error::invalid_argument(format!("attributeMappings: {error}")))?;
     nemo_relay_observability::validate_attribute_mappings(&mappings)
         .map_err(Error::invalid_argument)?;
@@ -807,8 +808,8 @@ fn build_otel_metric_config(
 
 fn exporter_runtime_diagnostics_json(
     diagnostics: nemo_relay_observability::ExporterRuntimeDiagnostics,
-) -> Json {
-    Json::Array(
+) -> Value {
+    Value::Array(
         diagnostics
             .entries()
             .iter()
@@ -897,7 +898,7 @@ pub(crate) fn llm_stream_from_rust_stream(
 }
 
 struct ScopedJsonCall {
-    value: Json,
+    value: Value,
     scope: CallbackScope,
 }
 
@@ -912,7 +913,7 @@ impl callable::JsCall for ScopedJsonCall {
     }
 }
 
-fn serialize_llm_request(request: &LlmRequest) -> FlowResult<Json> {
+fn serialize_llm_request(request: &LlmRequest) -> FlowResult<Value> {
     serde_json::to_value(request)
         .map_err(|error| FlowError::Internal(format!("failed to serialize LlmRequest: {error}")))
 }
@@ -923,8 +924,8 @@ fn scoped_fn<A: Send + 'static, R: Send + 'static>(
     env: &Env,
     func: &Function<JsArg, JsArg>,
     error_prefix: &'static str,
-    encode: fn(A) -> FlowResult<Json>,
-    decode: fn(Json) -> FlowResult<R>,
+    encode: fn(A) -> FlowResult<Value>,
+    decode: fn(Value) -> FlowResult<R>,
 ) -> napi::Result<ScopedFn<A, R>> {
     let func: Function<JsArg, JsArg> = callback_factory::wrap(env, Wrapper::Execution, func)?;
     let scoped: Function<JsArgs2, JsArg> = callback_factory::wrap(env, Wrapper::Scoped, &func)?;
@@ -1072,7 +1073,7 @@ fn build_plugin_context<'env>(
 }
 
 struct NodePluginRegisterCall {
-    plugin_config: Json,
+    plugin_config: Value,
     namespace_prefix: String,
     registrations: PluginRegistrations,
 }
@@ -1107,7 +1108,7 @@ impl callable::JsCall for ConditionalGateCall {
     }
 }
 
-fn decode_conditional_gate_result(value: FlowResult<Json>) -> Result<Option<String>> {
+fn decode_conditional_gate_result(value: FlowResult<Value>) -> Result<Option<String>> {
     serde_json::from_value(value?).map_err(|_| {
         Error::invalid_argument("conditional middleware guardrail must return a string or null")
     })
@@ -1177,7 +1178,7 @@ const PLUGIN_REGISTER_PREFIX: &str = "JS plugin register callback failed";
 
 struct NodePlugin {
     plugin_kind: String,
-    validate: Option<callable::SyncJsCallback<Json>>,
+    validate: Option<callable::SyncJsCallback<Value>>,
     register: callable::AsyncReplyTsfn<NodePluginRegisterCall>,
 }
 
@@ -1202,8 +1203,8 @@ impl Plugin for NodePlugin {
                 message,
             }]
         };
-        match validate.call(Json::Object(plugin_config.clone())) {
-            Ok(Json::Null) => vec![],
+        match validate.call(Value::Object(plugin_config.clone())) {
+            Ok(Value::Null) => vec![],
             Ok(value) => {
                 serde_json::from_value::<Vec<ConfigDiagnostic>>(value).unwrap_or_else(|error| {
                     failed(format!(
@@ -1225,7 +1226,7 @@ impl Plugin for NodePlugin {
         Box::pin(async move {
             let registrations = Arc::new(StdMutex::new(Vec::<PluginRegistration>::new()));
             let payload = NodePluginRegisterCall {
-                plugin_config: Json::Object(plugin_config),
+                plugin_config: Value::Object(plugin_config),
                 namespace_prefix,
                 registrations: registrations.clone(),
             };
@@ -1619,7 +1620,7 @@ pub fn test_closed_collector_callback(
     let LlmCollector::Async(mut wrapped) = callable::wrap_js_collector_fn(callback) else {
         return Err(Error::generic_failure("JS collectors are asynchronous"));
     };
-    settled_now(wrapped(chunk))?.map_err(Error::from)
+    settled_now(wrapped(chunk.0))?.map_err(Error::from)
 }
 
 /// Internal test helper: invoke a closed JS finalizer wrapper and return the fallback value.
@@ -1635,7 +1636,7 @@ pub fn test_closed_finalizer_callback(
     else {
         return Err(Error::generic_failure("JS finalizers are asynchronous"));
     };
-    Ok(settled_now(wrapped())?.unwrap_or(Json::Null))
+    Ok(Json(settled_now(wrapped())?.unwrap_or(Value::Null)))
 }
 
 /// Internal test helper: exercise PromiseAwareFn queue and conversion failures.
@@ -1665,7 +1666,7 @@ pub fn test_closed_promise_aware_call<'env>(
                     ))
                 })
             } else {
-                Invocation::single(Json::Null)
+                Invocation::single(Value::Null)
             };
             promise_aware.call(invocation).await.map_err(Error::from)
         },
@@ -1956,7 +1957,7 @@ pub fn tool_call(
         core_tool_api::tool_call(
             core_tool_api::ToolCallParams::builder()
                 .name(name.as_str())
-                .args(args)
+                .args(args.0)
                 .parent_opt(handle.map(|h| &h.inner))
                 .attributes(attrs)
                 .data_opt(opt_json(data))
@@ -2091,7 +2092,7 @@ fn execute_tool_call<'env>(
             core_tool_api::tool_call_execute(
                 core_tool_api::ToolCallExecuteParams::builder()
                     .name(name)
-                    .args(args)
+                    .args(args.0)
                     .func(func)
                     .execution_options(execution_options)
                     .parent(parent)
@@ -2204,7 +2205,7 @@ pub fn llm_call(
 ) -> Result<LlmHandle> {
     let attrs = LlmAttributes::from_bits_truncate(attributes.unwrap_or(0));
     let timestamp = parse_timestamp_micros(timestamp)?;
-    let llm_request: LlmRequest = parse_json(request, "LlmRequest")?;
+    let llm_request: LlmRequest = parse_json(request.0, "LlmRequest")?;
     let codec = node_llm_codec(&env, codec_decode.as_deref(), codec_encode.as_deref())?;
     let params = core_llm_api::LlmCallParams::builder()
         .name(&name)
@@ -2247,7 +2248,7 @@ pub fn llm_call_end(
         core_llm_api::llm_call_end(
             core_llm_api::LlmCallEndParams::builder()
                 .handle(&handle.inner)
-                .response(response)
+                .response(response.0)
                 .data_opt(opt_json(data))
                 .metadata_opt(opt_json(metadata))
                 .timestamp_opt(timestamp)
@@ -2299,7 +2300,7 @@ pub fn llm_call_execute<'env>(
     >,
     execution_options: Option<ExecutionOptions>,
 ) -> Result<PromiseRaw<'env, Json>> {
-    let request: LlmRequest = parse_json(request, "LlmRequest")?;
+    let request: LlmRequest = parse_json(request.0, "LlmRequest")?;
     let func = scoped_fn(
         env,
         &func,
@@ -2404,7 +2405,7 @@ pub fn llm_call_execute_async<'env>(
     >,
     execution_options: Option<ExecutionOptions>,
 ) -> Result<PromiseRaw<'env, Json>> {
-    let request: LlmRequest = parse_json(request, "LlmRequest")?;
+    let request: LlmRequest = parse_json(request.0, "LlmRequest")?;
     let pa_fn = Arc::new(PromiseAwareFn::new(env, &func)?);
     let func: LlmExecutionNextFn = Arc::new(move |request| {
         let pa_fn = pa_fn.clone();
@@ -2487,11 +2488,11 @@ pub fn llm_stream_call_execute<'env>(
     let attrs = LlmAttributes::from_bits_truncate(attributes.unwrap_or(0));
     let context = CallContext::capture(env)?;
     let parent = context.parent(handle);
-    let llm_request: LlmRequest = parse_json(request, "LlmRequest")?;
+    let llm_request: LlmRequest = parse_json(request.0, "LlmRequest")?;
 
     let wrapped_collector = match collector {
         Some(cb) => callable::wrap_js_collector_fn(callable::JsStreamCallback::new(env, &cb)?),
-        None => LlmCollector::from(|_: Json| Ok(())),
+        None => LlmCollector::from(|_: Value| Ok(())),
     };
 
     let finalizer_error = callable::FinalizerError::default();
@@ -2500,7 +2501,7 @@ pub fn llm_stream_call_execute<'env>(
             callable::JsStreamCallback::new(env, &cb)?,
             finalizer_error.clone(),
         ),
-        None => LlmFinalizer::from(|| Json::Null),
+        None => LlmFinalizer::from(|| Value::Null),
     };
 
     let producers = crate::promise_call::StreamCancellation::default();
@@ -3249,7 +3250,7 @@ pub fn tool_request_intercepts<'env>(
     spawn_promise(
         env,
         context.run(async move {
-            core_tool_api::tool_request_intercepts(&name, args)
+            core_tool_api::tool_request_intercepts(&name, args.0)
                 .await
                 .map_err(Error::from)
         }),
@@ -3273,7 +3274,7 @@ pub fn tool_conditional_execution<'env>(
     spawn_promise(
         env,
         context.run(async move {
-            core_tool_api::tool_conditional_execution(&name, &args)
+            core_tool_api::tool_conditional_execution(&name, &args.0)
                 .await
                 .map_err(Error::from)
         }),
@@ -3294,7 +3295,7 @@ pub fn llm_request_intercepts<'env>(
     name: String,
     #[napi(ts_arg_type = "TRequest")] request: Json,
 ) -> Result<PromiseRaw<'env, Json>> {
-    let llm_request: LlmRequest = parse_json(request, "LlmRequest")?;
+    let llm_request: LlmRequest = parse_json(request.0, "LlmRequest")?;
     let context = CallContext::capture(env)?;
     spawn_promise(
         env,
@@ -3327,7 +3328,7 @@ pub fn llm_conditional_execution<'env>(
     env: &'env Env,
     #[napi(ts_arg_type = "TRequest")] request: Json,
 ) -> Result<PromiseRaw<'env, ()>> {
-    let llm_request: LlmRequest = parse_json(request, "LlmRequest")?;
+    let llm_request: LlmRequest = parse_json(request.0, "LlmRequest")?;
     let context = CallContext::capture(env)?;
     spawn_promise(
         env,
@@ -3495,7 +3496,9 @@ impl AtofExporter {
         catch_unwind
     )]
     pub fn runtime_diagnostics(&self) -> Json {
-        exporter_runtime_diagnostics_json(self.inner.runtime_diagnostics())
+        Json(exporter_runtime_diagnostics_json(
+            self.inner.runtime_diagnostics(),
+        ))
     }
 }
 
@@ -3806,7 +3809,9 @@ macro_rules! otel_subscriber_methods {
                 catch_unwind
             )]
             pub fn runtime_diagnostics(&self) -> Json {
-                exporter_runtime_diagnostics_json(self.inner.runtime_diagnostics())
+                Json(exporter_runtime_diagnostics_json(
+                    self.inner.runtime_diagnostics(),
+                ))
             }
 
             $(#[$shutdown_meta])*
@@ -3849,9 +3854,9 @@ struct CacheTelemetryOptions {
     provider: String,
     #[serde(alias = "request_id")]
     request_id: String,
-    usage: Option<Json>,
+    usage: Option<Value>,
     #[serde(default, alias = "request_facts")]
-    request_facts: Option<Json>,
+    request_facts: Option<Value>,
     #[serde(alias = "agent_id")]
     agent_id: String,
     #[serde(alias = "template_version")]
@@ -3872,7 +3877,7 @@ struct CacheRequestFactsOptions {
     #[serde(alias = "request_id")]
     request_id: String,
     #[serde(alias = "annotated_request")]
-    annotated_request: Json,
+    annotated_request: Value,
     #[serde(alias = "agent_id")]
     agent_id: String,
     timestamp: Option<String>,
@@ -4010,7 +4015,7 @@ impl AdaptiveRuntime {
         catch_unwind
     )]
     pub fn create(#[napi(ts_arg_type = "TConfig")] config: Json) -> Result<Self> {
-        let config: AdaptiveConfig = serde_json::from_value(config)
+        let config: AdaptiveConfig = serde_json::from_value(config.0)
             .map_err(|error| Error::invalid_argument(error.to_string()))?;
         let report = validate_adaptive_config_or_err(&config)?;
         let state = Arc::new(tokio::sync::Mutex::new(Some(
@@ -4066,7 +4071,7 @@ impl AdaptiveRuntime {
             NodeAdaptiveRuntimeState::Pending { report, .. } => report,
             NodeAdaptiveRuntimeState::Ready(runtime) => runtime.report(),
         };
-        serde_json::to_value(report).map_err(Error::from)
+        serde_json::to_value(report).map(Json).map_err(Error::from)
     }
 
     /// Bind the runtime's ACG request rewrite to a scope.
@@ -4088,7 +4093,7 @@ impl AdaptiveRuntime {
         &self,
         #[napi(ts_arg_type = "TOptions")] options: Json,
     ) -> Result<Option<Json>> {
-        let options: CacheRequestFactsOptions = serde_json::from_value(options)
+        let options: CacheRequestFactsOptions = serde_json::from_value(options.0)
             .map_err(|error| Error::invalid_argument(error.to_string()))?;
         let _request_id = parse_uuid(&options.request_id, "requestId UUID")?;
         let _timestamp = parse_cache_telemetry_timestamp(options.timestamp.as_deref())?;
@@ -4096,7 +4101,7 @@ impl AdaptiveRuntime {
             parse_json(options.annotated_request, "annotatedRequest")?;
         self.ready("building cache request facts")?
             .build_cache_request_facts(&options.agent_id, &options.provider, &annotated_request)
-            .map(|facts| serde_json::to_value(&facts))
+            .map(|facts| serde_json::to_value(&facts).map(Json))
             .transpose()
             .map_err(Error::from)
     }
@@ -4138,7 +4143,7 @@ fn parse_cache_telemetry_timestamp(timestamp: Option<&str>) -> Result<DateTime<U
     }
 }
 
-fn parse_cache_request_facts(value: Option<Json>) -> Result<Option<CacheRequestFacts>> {
+fn parse_cache_request_facts(value: Option<Value>) -> Result<Option<CacheRequestFacts>> {
     value
         .map(|value| parse_json(value, "requestFacts"))
         .transpose()
@@ -4152,9 +4157,11 @@ fn parse_cache_request_facts(value: Option<Json>) -> Result<Option<CacheRequestF
     catch_unwind
 )]
 pub fn validate_adaptive_config(#[napi(ts_arg_type = "TConfig")] config: Json) -> Result<Json> {
-    let config: AdaptiveConfig = serde_json::from_value(config)
+    let config: AdaptiveConfig = serde_json::from_value(config.0)
         .map_err(|error| Error::invalid_argument(error.to_string()))?;
-    serde_json::to_value(CoreAdaptiveRuntime::validate_config(&config)).map_err(Error::from)
+    serde_json::to_value(CoreAdaptiveRuntime::validate_config(&config))
+        .map(Json)
+        .map_err(Error::from)
 }
 
 /// Build one adaptive cache telemetry event from normalized usage.
@@ -4167,7 +4174,7 @@ pub fn validate_adaptive_config(#[napi(ts_arg_type = "TConfig")] config: Json) -
 pub fn build_cache_telemetry_event(
     #[napi(ts_arg_type = "TOptions")] options: Json,
 ) -> Result<Option<Json>> {
-    let options: CacheTelemetryOptions = serde_json::from_value(options)
+    let options: CacheTelemetryOptions = serde_json::from_value(options.0)
         .map_err(|error| Error::invalid_argument(error.to_string()))?;
     let provider = parse_cache_telemetry_provider(&options.provider)?;
     let request_id = parse_uuid(&options.request_id, "requestId UUID")?;
@@ -4192,7 +4199,7 @@ pub fn build_cache_telemetry_event(
         timestamp,
         request_facts.as_ref(),
     )
-    .map(|event| serde_json::to_value(&event))
+    .map(|event| serde_json::to_value(&event).map(Json))
     .transpose()
     .map_err(Error::from)
 }
@@ -4415,7 +4422,9 @@ impl PluginHostActivation {
     /// Return the validation report produced by activation.
     #[napi(getter, ts_return_type = "PluginHostReport", catch_unwind)]
     pub fn report(&self) -> Result<Json> {
-        serde_json::to_value(self.close_state.report()).map_err(Error::from)
+        serde_json::to_value(self.close_state.report())
+            .map(Json)
+            .map_err(Error::from)
     }
 
     /// Return whether this activation handle has not begun teardown.
@@ -4471,7 +4480,7 @@ pub fn initialize<'env>(
         env,
         async move {
             let config: nemo_relay_plugin_host::dynamic::PluginHostConfig =
-                parse_json(config, "plugin config")?;
+                parse_json(config.0, "plugin config")?;
             let activation = initialize_impl(config, additional_plugins_toml.map(Into::into))
                 .await
                 .map_err(Error::from)?;
@@ -4505,10 +4514,10 @@ pub fn validate(
     additional_plugins_toml: Option<String>,
 ) -> Result<Json> {
     let config: nemo_relay_plugin_host::dynamic::PluginHostConfig =
-        parse_json(config, "plugin config")?;
+        parse_json(config.0, "plugin config")?;
     let report =
         validate_impl(config, additional_plugins_toml.map(Into::into)).map_err(Error::from)?;
-    serde_json::to_value(report).map_err(Error::from)
+    serde_json::to_value(report).map(Json).map_err(Error::from)
 }
 
 /// Validate only the supplied static plugin configuration.
@@ -4518,13 +4527,15 @@ pub fn validate(
     catch_unwind
 )]
 pub fn validate_exact(#[napi(ts_arg_type = "TConfig")] config: Json) -> Result<Json> {
-    if config.get("diagnostics").is_some() {
+    if config.0.get("diagnostics").is_some() {
         return Err(Error::invalid_argument(
             "diagnostics is a host-only setting; use layered validation",
         ));
     }
-    let config: PluginConfig = parse_json(config, "plugin config")?;
-    serde_json::to_value(validate_exact_impl(config)).map_err(Error::from)
+    let config: PluginConfig = parse_json(config.0, "plugin config")?;
+    serde_json::to_value(validate_exact_impl(config))
+        .map(Json)
+        .map_err(Error::from)
 }
 
 /// List registered plugin kinds.

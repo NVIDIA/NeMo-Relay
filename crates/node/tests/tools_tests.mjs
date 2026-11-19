@@ -1110,6 +1110,58 @@ describe('Tool intercepts', () => {
     assert.equal(seen.toolCallId, null);
   });
 
+  it('execution intercept next() rejects a payload Relay cannot convert and skips downstream', async () => {
+    let providerCalls = 0;
+    let nextError = null;
+    registerToolExecutionIntercept('node_tool_exec_deep_next', 10, async (context, next) => {
+      let deep = context.args;
+      for (let depth = 0; depth < 129; depth += 1) {
+        deep = [deep];
+      }
+      try {
+        return await next(deep);
+      } catch (error) {
+        nextError = error;
+        throw error;
+      }
+    });
+    try {
+      await assert.rejects(
+        toolCallExecute('deep_next_tool', { x: 1 }, () => {
+          providerCalls += 1;
+          return { result: providerCalls };
+        }),
+        /exceeded maximum JSON nesting depth/,
+      );
+    } finally {
+      assert.equal(deregisterToolExecutionIntercept('node_tool_exec_deep_next'), true);
+    }
+    assert.equal(providerCalls, 0);
+    assert.match(nextError.message, /exceeded maximum JSON nesting depth/);
+  });
+
+  it('sync and async execution results share the same nesting limit', async () => {
+    const nested = (depth) => {
+      let value = 1;
+      for (let index = 0; index < depth; index += 1) {
+        value = [value];
+      }
+      return value;
+    };
+    const deepest = { result: nested(127) };
+    assert.deepEqual(await toolCallExecute('sync_depth_tool', {}, () => deepest), deepest);
+    assert.deepEqual(await toolCallExecuteAsync('async_depth_tool', {}, async () => deepest), deepest);
+    const beyond = { result: nested(128) };
+    await assert.rejects(
+      toolCallExecute('sync_depth_tool', {}, () => beyond),
+      /exceeded maximum JSON nesting depth/,
+    );
+    await assert.rejects(
+      toolCallExecuteAsync('async_depth_tool', {}, async () => beyond),
+      /exceeded maximum JSON nesting depth/,
+    );
+  });
+
   it('terminal execution intercept can correlate a short-circuit result with the toolCallId', async () => {
     let providerCalls = 0;
     let seenToolCallId = null;

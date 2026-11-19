@@ -318,6 +318,27 @@ These tests cover local application callbacks, returned results, lifecycle
 events, middleware, and cleanup. External provider behavior and independent
 reader comprehension require separate verification.
 
+### Plugin API Examples
+
+Run the examples displayed in the capability API references and the Resource
+Metrics collection guide against the current Python, Node.js, and Rust SDKs:
+
+```bash
+just test-plugin-api-examples
+```
+
+This command builds the current bindings, executes the displayed Python and
+Node.js snippets, and compiles the Rust files displayed with Fern `Code`
+components. Tests check API compatibility, documented outcomes, cleanup, and
+the illustrative JSON schemas. The pricing test also checks the expected-cost
+table against the displayed catalog entry. The source inventory check rejects
+executable snippets missing from the registered coverage.
+
+The examples use isolated configuration and require no model-provider
+credentials. Subscriber construction and lifecycle checks do not demonstrate
+delivery to an external collector. Resource readings depend on the machine;
+tests check their structure rather than exact CPU or memory values.
+
 ## Fern Publishing
 
 NeMo Relay uses a dual-branch Fern publishing model. Authors edit documentation

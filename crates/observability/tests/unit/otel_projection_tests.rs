@@ -1284,6 +1284,188 @@ fn gen_ai_projection_emits_normalized_response_attributes() {
     );
 }
 
+fn gemini_thinking_response(response: Json) -> AnnotatedLlmResponse {
+    serde_json::from_value(response).unwrap()
+}
+
+#[test]
+fn gen_ai_projection_includes_gemini_thinking_tokens_in_output_tokens() {
+    let event = make_scope_event_with_profile(
+        ScopeCategory::End,
+        Uuid::now_v7(),
+        None,
+        "chat",
+        ScopeType::Llm,
+        None,
+        Some(
+            CategoryProfile::builder()
+                .annotated_response(Arc::new(gemini_thinking_response(json!({
+                    "usage": {"prompt_tokens": 10, "completion_tokens": 5, "total_tokens": 35},
+                    "api_specific": {"api": "gemini_generate_content", "thoughts_tokens": 20}
+                }))))
+                .build(),
+        ),
+    );
+
+    let attributes = attr_map(&crate::test_support::otel_genai::end_attributes(&event));
+    assert_eq!(attributes["gen_ai.usage.input_tokens"], "10");
+    assert_eq!(attributes["gen_ai.usage.reasoning.output_tokens"], "20");
+    assert_eq!(attributes["gen_ai.usage.output_tokens"], "25");
+}
+
+#[test]
+fn gen_ai_projection_adds_canonical_reasoning_tokens_only_to_gemini_output_tokens() {
+    for (api_specific, expected_output) in [
+        (json!({"api": "gemini_generate_content"}), "25"),
+        (json!({"api": "openai_responses"}), "5"),
+    ] {
+        let event = make_scope_event_with_profile(
+            ScopeCategory::End,
+            Uuid::now_v7(),
+            None,
+            "chat",
+            ScopeType::Llm,
+            Some(json!({"gen_ai.usage.reasoning.output_tokens": 20})),
+            Some(
+                CategoryProfile::builder()
+                    .annotated_response(Arc::new(gemini_thinking_response(json!({
+                        "usage": {"completion_tokens": 5},
+                        "api_specific": api_specific
+                    }))))
+                    .build(),
+            ),
+        );
+        let attributes = attr_map(&crate::test_support::otel_genai::end_attributes(&event));
+        assert_eq!(attributes["gen_ai.usage.reasoning.output_tokens"], "20");
+        assert_eq!(attributes["gen_ai.usage.output_tokens"], expected_output);
+    }
+}
+
+#[test]
+fn gen_ai_projection_prefers_canonical_reasoning_tokens_over_gemini_thoughts() {
+    let event = make_scope_event_with_profile(
+        ScopeCategory::End,
+        Uuid::now_v7(),
+        None,
+        "chat",
+        ScopeType::Llm,
+        Some(json!({"gen_ai.usage.reasoning.output_tokens": 7})),
+        Some(
+            CategoryProfile::builder()
+                .annotated_response(Arc::new(gemini_thinking_response(json!({
+                    "usage": {"completion_tokens": 5},
+                    "api_specific": {"api": "gemini_generate_content", "thoughts_tokens": 20}
+                }))))
+                .build(),
+        ),
+    );
+    let attributes = attr_map(&crate::test_support::otel_genai::end_attributes(&event));
+    assert_eq!(attributes["gen_ai.usage.reasoning.output_tokens"], "7");
+    assert_eq!(attributes["gen_ai.usage.output_tokens"], "12");
+}
+
+#[test]
+fn gen_ai_projection_adds_only_gemini_thinking_tokens_to_output_tokens() {
+    for (response, expected_output, expected_reasoning) in [
+        (
+            json!({
+                "usage": {"completion_tokens": 5},
+                "api_specific": {"api": "gemini_generate_content"}
+            }),
+            Some("5"),
+            None,
+        ),
+        (
+            json!({
+                "usage": {"completion_tokens": 5},
+                "api_specific": {"api": "gemini_generate_content", "thoughts_tokens": 0}
+            }),
+            Some("5"),
+            Some("0"),
+        ),
+        (
+            json!({
+                "usage": {"total_tokens": 20},
+                "api_specific": {"api": "gemini_generate_content", "thoughts_tokens": 20}
+            }),
+            Some("20"),
+            Some("20"),
+        ),
+        (
+            json!({
+                "api_specific": {"api": "gemini_generate_content", "thoughts_tokens": 20}
+            }),
+            Some("20"),
+            Some("20"),
+        ),
+        (
+            json!({
+                "usage": {"completion_tokens": u64::MAX},
+                "api_specific": {"api": "gemini_generate_content", "thoughts_tokens": 1}
+            }),
+            None,
+            Some("1"),
+        ),
+        (
+            json!({
+                "usage": {"completion_tokens": i64::MAX},
+                "api_specific": {"api": "gemini_generate_content", "thoughts_tokens": 1}
+            }),
+            None,
+            Some("1"),
+        ),
+        (
+            json!({
+                "usage": {"completion_tokens": 1},
+                "api_specific": {
+                    "api": "gemini_generate_content",
+                    "thoughts_tokens": i64::MAX as u64 + 1
+                }
+            }),
+            None,
+            None,
+        ),
+        (
+            json!({
+                "usage": {"completion_tokens": 30},
+                "api_specific": {
+                    "api": "openai_responses",
+                    "output_tokens_details": {"reasoning_tokens": 20}
+                }
+            }),
+            Some("30"),
+            Some("20"),
+        ),
+    ] {
+        let event = make_scope_event_with_profile(
+            ScopeCategory::End,
+            Uuid::now_v7(),
+            None,
+            "chat",
+            ScopeType::Llm,
+            None,
+            Some(
+                CategoryProfile::builder()
+                    .annotated_response(Arc::new(gemini_thinking_response(response)))
+                    .build(),
+            ),
+        );
+        let attributes = attr_map(&crate::test_support::otel_genai::end_attributes(&event));
+        assert_eq!(
+            attributes
+                .get("gen_ai.usage.output_tokens")
+                .map(String::as_str),
+            expected_output
+        );
+        assert_eq!(
+            attributes
+                .get("gen_ai.usage.reasoning.output_tokens")
+                .map(String::as_str),
+            expected_reasoning
+        );
+    }
+}
+
 #[test]
 fn gen_ai_end_projection_preserves_explicit_error_type() {
     let event = Event::Scope(ScopeEvent::new(

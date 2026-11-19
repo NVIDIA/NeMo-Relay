@@ -507,6 +507,64 @@ describe('Events', () => {
       deregisterSubscriber('node_invalid_metric_collector');
     }
   });
+
+  it('metric accepts safe integers beyond 32 bits for integer value types', async () => {
+    const events = [];
+    registerSubscriber('node_metric_integer_collector', (e) => events.push(e));
+    try {
+      const values = [
+        [MetricValueType.U64, 2 ** 32 - 1],
+        [MetricValueType.U64, 2 ** 32],
+        [MetricValueType.U64, 8 * 1024 ** 3],
+        [MetricValueType.U64, Number.MAX_SAFE_INTEGER],
+        [MetricValueType.I64, -(2 ** 31)],
+        [MetricValueType.I64, -(2 ** 31) - 1],
+        [MetricValueType.I64, Number.MIN_SAFE_INTEGER],
+      ];
+      metric(
+        'large_integer_metric',
+        values.map(([valueType, value], index) => ({
+          name: `relay.integers.${index}`,
+          kind: MetricKind.Gauge,
+          valueType,
+          value,
+        })),
+        null,
+        null,
+        null,
+      );
+      await flushSubscribers();
+
+      const mark = events.find((e) => e.name === 'large_integer_metric');
+      assert.deepEqual(
+        mark.data.measurements.map((measurement) => measurement.value),
+        values.map(([, value]) => value),
+      );
+    } finally {
+      deregisterSubscriber('node_metric_integer_collector');
+    }
+  });
+
+  it('metric rejects fractional, unsafe, and BigInt values for integer value types', () => {
+    const measurements = (valueType, value) => [{ name: 'relay.rejected', kind: MetricKind.Gauge, valueType, value }];
+    for (const [valueType, value, message] of [
+      [MetricValueType.U64, 1.5, /value must be an unsigned integer/],
+      [MetricValueType.U64, -1, /value must be an unsigned integer/],
+      [MetricValueType.U64, 2 ** 53, /value must be an unsigned integer/],
+      [MetricValueType.I64, -1.5, /value must be a signed integer/],
+      [MetricValueType.I64, -(2 ** 53), /value must be a signed integer/],
+    ]) {
+      assert.throws(
+        () => metric('rejected_metric', measurements(valueType, value), null, null, null),
+        message,
+        `${valueType} ${value}`,
+      );
+    }
+    assert.throws(() => metric('rejected_metric', measurements(MetricValueType.U64, 4294967296n), null, null, null), {
+      name: 'TypeError',
+      message: /BigInt/,
+    });
+  });
 });
 
 // ===========================================================================

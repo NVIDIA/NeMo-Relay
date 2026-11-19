@@ -7,7 +7,6 @@ position: 2
 {/* SPDX-FileCopyrightText: Copyright (c) 2026, NVIDIA CORPORATION & AFFILIATES. All rights reserved.
 SPDX-License-Identifier: Apache-2.0 */}
 
-
 Use this page when you want to configure the built-in Adaptive plugin component
 as a whole. The component kind is `adaptive`.
 
@@ -243,89 +242,8 @@ Ok(())
 
 ## Manual API
 
-Use the manual runtime API when an integration needs to own adaptive lifecycle
-directly instead of activating the top-level plugin component.
-
-<Tabs>
-<Tab title="Python" language="python">
-```python
-import asyncio
-
-import nemo_relay
-
-adaptive_config = nemo_relay.adaptive.AdaptiveConfig(
-    agent_id="planner",
-    state=nemo_relay.adaptive.StateConfig(
-        backend=nemo_relay.adaptive.BackendSpec.in_memory(),
-    ),
-    telemetry=nemo_relay.adaptive.TelemetryConfig(
-        subscriber_name="adaptive.telemetry",
-        learners=["tool_parallelism"],
-    ),
-    tool_parallelism=nemo_relay.adaptive.ToolParallelismConfig(mode="observe_only"),
-    adaptive_hints=nemo_relay.adaptive.AdaptiveHintsConfig(
-        inject_body_path="nvext.agent_hints",
-    ),
-    acg=nemo_relay.adaptive.AcgConfig(provider="passthrough"),
-)
-
-runtime = nemo_relay.adaptive.AdaptiveRuntime(adaptive_config.to_dict())
-asyncio.run(runtime.register())
-try:
-    # Run instrumented application work here.
-    runtime.wait_for_idle()
-finally:
-    asyncio.run(runtime.shutdown())
-```
-</Tab>
-
-<Tab title="Node.js" language="node">
-The Node.js binding exposes `adaptive.AdaptiveRuntime` for manual lifecycle
-ownership. Construct it from the same `adaptiveConfig`, then call `register()`,
-`waitForIdle()`, and `shutdown()`.
-</Tab>
-
-<Tab title="Rust" language="rust">
-```rust
-#[tokio::main]
-async fn main() -> Result<(), Box<dyn std::error::Error>> {
-use nemo_relay_adaptive::{
-    AcgComponentConfig, AdaptiveConfig, AdaptiveHintsComponentConfig, AdaptiveRuntime,
-    BackendSpec, StateConfig, TelemetryComponentConfig, ToolParallelismComponentConfig,
-};
-
-let mut adaptive = AdaptiveConfig::default();
-adaptive.agent_id = Some("planner".into());
-adaptive.state = Some(StateConfig {
-    backend: BackendSpec::in_memory(),
-});
-adaptive.telemetry = Some(TelemetryComponentConfig {
-    subscriber_name: Some("adaptive.telemetry".into()),
-    learners: vec!["tool_parallelism".into()],
-});
-adaptive.tool_parallelism = Some(ToolParallelismComponentConfig::default());
-adaptive.adaptive_hints = Some(AdaptiveHintsComponentConfig {
-    inject_body_path: "nvext.agent_hints".into(),
-    ..AdaptiveHintsComponentConfig::default()
-});
-adaptive.acg = Some(AcgComponentConfig {
-    provider: "passthrough".into(),
-    ..AcgComponentConfig::default()
-});
-
-let mut runtime = AdaptiveRuntime::new(adaptive).await?;
-runtime.register().await?;
-
-// Run instrumented application work here.
-
-runtime.wait_for_idle();
-runtime.shutdown().await?;
-Ok(())
-}
-```
-</Tab>
-
-</Tabs>
+For manual runtime construction and lifecycle examples, refer to
+[Manual API](/reference/api/adaptive#configuration-manual-api).
 
 ## Validation and Teardown
 

@@ -24,7 +24,9 @@ use nemo_relay_runtime::api::runtime::{
 };
 use serde::de::DeserializeOwned;
 use serde::{Deserialize, Serialize};
-use serde_json::Value as Json;
+use serde_json::Value;
+
+use crate::json::Json;
 
 use nemo_relay_runtime::api::event::{
     CategoryProfile, DataSchema, Event, EventCategory,
@@ -113,11 +115,11 @@ pub(crate) struct JsPendingMarkSpec {
     #[serde(default)]
     category_profile: Option<CategoryProfile>,
     #[serde(default)]
-    data: Option<Json>,
+    data: Option<Value>,
     #[serde(default)]
     data_schema: Option<DataSchema>,
     #[serde(default)]
-    metadata: Option<Json>,
+    metadata: Option<Value>,
     #[serde(default)]
     severity: Option<LogSeverity>,
 }
@@ -140,16 +142,16 @@ fn envelope_field<T: FromNapiValue>(envelope: &Object, key: &str) -> napi::Resul
     })
 }
 
-fn decode_envelope(envelope: Unknown, error_prefix: &str) -> napi::Result<Result<Json>> {
+fn decode_envelope(envelope: Unknown, error_prefix: &str) -> napi::Result<Result<Value>> {
     let envelope = Object::from_unknown(envelope)?;
     if envelope_field::<bool>(&envelope, "ok")? {
         return Ok(match envelope.get::<Unknown>("value")? {
-            Some(value) => Json::from_unknown(value).map_err(|error| {
+            Some(value) => Json::from_unknown(value).map(Value::from).map_err(|error| {
                 FlowError::Internal(format!(
                     "{error_prefix}: callback result could not be converted: {error}"
                 ))
             }),
-            None => Ok(Json::Null),
+            None => Ok(Value::Null),
         });
     }
     if envelope.has_named_property("exception")? {
@@ -168,7 +170,7 @@ fn decode_envelope(envelope: Unknown, error_prefix: &str) -> napi::Result<Result
     Ok(Err(FlowError::Internal(format!("{error_prefix}: {error}"))))
 }
 
-pub(crate) fn unwrap_envelope(envelope: Unknown, error_prefix: &str) -> Result<Json> {
+pub(crate) fn unwrap_envelope(envelope: Unknown, error_prefix: &str) -> Result<Value> {
     decode_envelope(envelope, error_prefix).unwrap_or_else(|error| {
         Err(FlowError::Internal(format!(
             "{error_prefix}: invalid middleware callback result: {error}"
@@ -180,7 +182,7 @@ pub(crate) fn tsfn_envelope(
     env: &Env,
     value: napi::Result<JsArg>,
     error_prefix: &str,
-) -> Result<Json> {
+) -> Result<Value> {
     match value {
         // SAFETY: `value` was returned by the threadsafe call settling now, in `env`.
         Ok(value) => unwrap_envelope(unsafe { value.into_unknown(env) }, error_prefix),
@@ -189,25 +191,25 @@ pub(crate) fn tsfn_envelope(
 }
 
 async fn await_callback_result(
-    rx: tokio::sync::oneshot::Receiver<Result<Json>>,
+    rx: tokio::sync::oneshot::Receiver<Result<Value>>,
     error_prefix: &str,
-) -> Result<Json> {
+) -> Result<Value> {
     rx.await
         .map_err(|error| FlowError::Internal(format!("{error_prefix}: {error}")))?
 }
 
 pub(crate) trait ReplySender: Send + 'static {
-    fn deliver(self, result: Result<Json>);
+    fn deliver(self, result: Result<Value>);
 }
 
-impl ReplySender for tokio::sync::oneshot::Sender<Result<Json>> {
-    fn deliver(self, result: Result<Json>) {
+impl ReplySender for tokio::sync::oneshot::Sender<Result<Value>> {
+    fn deliver(self, result: Result<Value>) {
         let _ = self.send(result);
     }
 }
 
-impl ReplySender for std::sync::mpsc::SyncSender<Result<Json>> {
-    fn deliver(self, result: Result<Json>) {
+impl ReplySender for std::sync::mpsc::SyncSender<Result<Value>> {
+    fn deliver(self, result: Result<Value>) {
         let _ = self.send(result);
     }
 }
@@ -233,14 +235,14 @@ impl<S: ReplySender> Reply<S> {
         *lock(&self.0) = Some(sender);
     }
 
-    fn deliver(&self, result: Result<Json>) {
+    fn deliver(&self, result: Result<Value>) {
         if let Some(sender) = lock(&self.0).take() {
             sender.deliver(result);
         }
     }
 }
 
-pub(crate) type AsyncReply = Reply<tokio::sync::oneshot::Sender<Result<Json>>>;
+pub(crate) type AsyncReply = Reply<tokio::sync::oneshot::Sender<Result<Value>>>;
 
 pub(crate) trait JsCall: Send + 'static {
     type Args: 'static + JsValuesTupleIntoVec;
@@ -248,7 +250,7 @@ pub(crate) trait JsCall: Send + 'static {
     fn args(self, env: &Env) -> napi::Result<Self::Args>;
 }
 
-impl JsCall for Json {
+impl JsCall for Value {
     type Args = JsArg;
 
     fn args(self, env: &Env) -> napi::Result<JsArg> {
@@ -266,7 +268,7 @@ pub(crate) struct ReplyTsfn<C: JsCall, S: 'static> {
     teardown: Arc<AtomicBool>,
 }
 
-pub(crate) type AsyncReplyTsfn<C> = ReplyTsfn<C, tokio::sync::oneshot::Sender<Result<Json>>>;
+pub(crate) type AsyncReplyTsfn<C> = ReplyTsfn<C, tokio::sync::oneshot::Sender<Result<Value>>>;
 
 pub(crate) fn reply_tsfn<C: JsCall, S: ReplySender>(
     env: &Env,
@@ -327,7 +329,7 @@ pub(crate) async fn call_tsfn<C: JsCall>(
     tsfn: &AsyncReplyTsfn<C>,
     call: C,
     error_prefix: &'static str,
-) -> Result<Json> {
+) -> Result<Value> {
     let (tx, rx) = tokio::sync::oneshot::channel();
     queue_reply(tsfn, call, tx, error_prefix)?;
     rx.await.map_err(|_| {
@@ -341,25 +343,25 @@ fn recorded_internal(message: String) -> FlowError {
     error
 }
 
-async fn recorded(call: impl Future<Output = Result<Json>>) -> Result<Json> {
+async fn recorded(call: impl Future<Output = Result<Value>>) -> Result<Value> {
     call.await
         .inspect_err(|error| record_callback_error(error.to_string()))
 }
 
-fn serialized<T: Serialize>(value: &T, what: &str) -> Result<Json> {
+fn serialized<T: Serialize>(value: &T, what: &str) -> Result<Value> {
     serde_json::to_value(value)
         .map_err(|error| recorded_internal(format!("failed to serialize {what}: {error}")))
 }
 
-fn deserialized<T: DeserializeOwned>(value: Json, what: &str) -> Result<T> {
+fn deserialized<T: DeserializeOwned>(value: Value, what: &str) -> Result<T> {
     serde_json::from_value(value)
         .map_err(|error| recorded_internal(format!("invalid {what}: {error}")))
 }
 
-fn conditional_outcome(value: Json, what: &str) -> Result<Option<String>> {
+fn conditional_outcome(value: Value, what: &str) -> Result<Option<String>> {
     match value {
-        Json::Null => Ok(None),
-        Json::String(reason) => Ok(Some(reason)),
+        Value::Null => Ok(None),
+        Value::String(reason) => Ok(Some(reason)),
         other => Err(recorded_internal(format!(
             "JS {what} conditional callback failed: expected string or null, got {other:?}"
         ))),
@@ -371,11 +373,11 @@ pub(crate) fn wrap_js_tool_conditional_promise_fn(
     func: &Function<JsArg, JsArg>,
 ) -> napi::Result<ToolConditionalFn> {
     let func = Arc::new(PromiseAwareFn::new(env, func)?);
-    Ok(Arc::new(move |name: String, args: Json| {
+    Ok(Arc::new(move |name: String, args: Value| {
         let func = func.clone();
         Box::pin(async move {
             let value =
-                recorded(func.call(Invocation::spread(vec![Json::String(name), args]))).await?;
+                recorded(func.call(Invocation::spread(vec![Value::String(name), args]))).await?;
             conditional_outcome(value, "tool")
         })
     }))
@@ -386,10 +388,10 @@ pub(crate) fn wrap_js_tool_request_intercept_promise_fn(
     func: &Function<JsArg, JsArg>,
 ) -> napi::Result<ToolInterceptFn> {
     let func = Arc::new(PromiseAwareFn::new(env, func)?);
-    Ok(Arc::new(move |name: String, args: Json| {
+    Ok(Arc::new(move |name: String, args: Value| {
         let func = func.clone();
         Box::pin(async move {
-            recorded(func.call(Invocation::spread(vec![Json::String(name), args]))).await
+            recorded(func.call(Invocation::spread(vec![Value::String(name), args]))).await
         })
     }))
 }
@@ -399,15 +401,13 @@ pub(crate) fn wrap_js_tool_sanitize_promise_fn(
     func: &Function<JsArg, JsArg>,
 ) -> napi::Result<ToolSanitizeFn> {
     let func = Arc::new(PromiseAwareFn::new(env, func)?);
-    Ok(Arc::new(move |name: String, value: Json| {
+    Ok(Arc::new(move |name: String, value: Value| {
         let func = func.clone();
         let publication = in_dispatcher_callback();
         Box::pin(async move {
-            recorded(
-                func.call(
-                    Invocation::spread(vec![Json::String(name), value]).publication(publication),
-                ),
-            )
+            recorded(func.call(
+                Invocation::spread(vec![Value::String(name), value]).publication(publication),
+            ))
             .await
         })
     }))
@@ -449,7 +449,7 @@ pub(crate) fn wrap_js_llm_sanitize_response_promise_fn(
 ) -> napi::Result<LlmSanitizeResponseFn> {
     let func = Arc::new(PromiseAwareFn::new(env, func)?);
     Ok(Arc::new(
-        move |response: Json, context: LlmSanitizeResponseContext| {
+        move |response: Value, context: LlmSanitizeResponseContext| {
             let func = func.clone();
             let publication = in_dispatcher_callback();
             Box::pin(async move {
@@ -527,13 +527,15 @@ pub(crate) fn wrap_js_event_sanitize_promise_fn(
             let func = func.clone();
             Box::pin(async move {
                 let js_fields = EventSanitizeFields {
-                    data: fields.data,
+                    data: fields.data.map(Json),
                     category_profile: fields
                         .category_profile
                         .as_ref()
-                        .map(|profile| serialized(profile, "JS event sanitizer category profile"))
+                        .map(|profile| {
+                            serialized(profile, "JS event sanitizer category profile").map(Json)
+                        })
                         .transpose()?,
-                    metadata: fields.metadata,
+                    metadata: fields.metadata.map(Json),
                 };
                 let args = vec![
                     serialized(&*event, "JS event sanitizer context")?,
@@ -547,12 +549,12 @@ pub(crate) fn wrap_js_event_sanitize_promise_fn(
                 })?;
                 let category_profile = fields
                     .category_profile
-                    .map(|profile| deserialized(profile, "JS event sanitizer result"))
+                    .map(|profile| deserialized(profile.0, "JS event sanitizer result"))
                     .transpose()?;
                 Ok(CoreEventSanitizeFields {
-                    data: fields.data,
+                    data: fields.data.map(Value::from),
                     category_profile,
-                    metadata: fields.metadata,
+                    metadata: fields.metadata.map(Value::from),
                 })
             })
         },
@@ -572,7 +574,7 @@ pub(crate) fn wrap_js_event_metadata_injector_promise_fn(
             let value =
                 recorded(func.call(Invocation::spread(vec![event_json]).publication(publication)))
                     .await?;
-            deserialized::<BTreeMap<String, Json>>(
+            deserialized::<BTreeMap<String, Value>>(
                 value,
                 "JavaScript event metadata injector result",
             )
@@ -581,10 +583,10 @@ pub(crate) fn wrap_js_event_metadata_injector_promise_fn(
 }
 
 pub(crate) fn recv_callback_result(
-    rx: &std::sync::mpsc::Receiver<Result<Json>>,
+    rx: &std::sync::mpsc::Receiver<Result<Value>>,
     timeout: Option<Duration>,
     error_prefix: &str,
-) -> Result<Json> {
+) -> Result<Value> {
     let received = match timeout {
         Some(timeout) => rx.recv_timeout(timeout).map_err(|error| match error {
             RecvTimeoutError::Timeout => FlowError::Internal(format!(
@@ -602,7 +604,7 @@ pub(crate) fn recv_callback_result(
     received?
 }
 
-pub(crate) fn parse_tool_execution_result(value: Json) -> Result<ToolExecutionResult> {
+pub(crate) fn parse_tool_execution_result(value: Value) -> Result<ToolExecutionResult> {
     serde_json::from_value(value).map_err(|error| {
         FlowError::InvalidArgument(format!(
             "tool execution callback must return ToolExecutionResult; return {{ result: payload }}, not a raw object: {error}"
@@ -646,8 +648,8 @@ impl CodecObject for dyn LlmResponseCodec {
     fn object<'env>(self: Arc<Self>, env: &'env Env) -> napi::Result<Object<'env>> {
         let mut object = Object::new(env)?;
         let decode = closure_function(env, "decodeResponse", move |ctx| {
-            let response = crate::convert::checked_json(ctx.env, ctx.get(0)?)?;
-            crate::types::decode_response(&*self, &response)
+            let response: Json = ctx.get(0)?;
+            crate::types::decode_response(&*self, &response.0)
         })?;
         object.set_named_property("decodeResponse", decode)?;
         Ok(object)
@@ -670,7 +672,7 @@ fn codec_context_to_napi<C: CodecObject + ?Sized>(
 }
 
 fn sanitize_invocation<C: CodecObject + Send + Sync + ?Sized>(
-    payload: Json,
+    payload: Value,
     context: JsLlmCodecContext<C>,
 ) -> Invocation {
     Invocation::spread_built(move |env| {
@@ -743,7 +745,7 @@ pub(crate) trait StreamCall: 'static {
 }
 
 pub(crate) struct JsCollectorCall {
-    chunk: Json,
+    chunk: Value,
 }
 
 impl StreamCall for JsCollectorCall {
@@ -884,7 +886,7 @@ impl<T: StreamCall> JsStreamCallback<T> {
         Ok(())
     }
 
-    fn invoke(&self, call: T, sender: tokio::sync::oneshot::Sender<Result<Json>>) -> Result<()> {
+    fn invoke(&self, call: T, sender: tokio::sync::oneshot::Sender<Result<Value>>) -> Result<()> {
         self.pending.arm(sender);
         if self.calls_directly() {
             return self.call_directly(call).map_err(|error| {
@@ -898,7 +900,7 @@ impl<T: StreamCall> JsStreamCallback<T> {
 }
 
 pub(crate) fn wrap_js_collector_fn(callback: JsStreamCallback<JsCollectorCall>) -> LlmCollector {
-    LlmCollector::Async(Box::new(move |chunk: Json| {
+    LlmCollector::Async(Box::new(move |chunk: Value| {
         let (sender, reply) = tokio::sync::oneshot::channel();
         let queued = callback.invoke(JsCollectorCall { chunk }, sender);
         Box::pin(async move {
@@ -932,7 +934,7 @@ pub(crate) fn wrap_js_finalizer_fn(
 }
 
 struct JsSubscriberCallbackCall {
-    event: Json,
+    event: Value,
     callback_id: u64,
 }
 
@@ -1020,7 +1022,7 @@ struct JsCodecEncodeArgument<'a> {
 
 pub(crate) struct SyncJsCallback<C: JsCall> {
     direct: PersistentJsFunction<C::Args, JsArg>,
-    queued: ReplyTsfn<C, std::sync::mpsc::SyncSender<Result<Json>>>,
+    queued: ReplyTsfn<C, std::sync::mpsc::SyncSender<Result<Value>>>,
     error_prefix: &'static str,
     timeout: Option<Duration>,
 }
@@ -1040,7 +1042,7 @@ impl<C: JsCall> SyncJsCallback<C> {
         })
     }
 
-    pub(crate) fn call(&self, call: C) -> Result<Json> {
+    pub(crate) fn call(&self, call: C) -> Result<Value> {
         if self.direct.on_creating_thread() {
             let (env, envelope) = self
                 .direct
@@ -1060,7 +1062,7 @@ pub(crate) fn js_codec_callback(
     env: &Env,
     func: &Function<JsArg, JsArg>,
     error_prefix: &'static str,
-) -> napi::Result<SyncJsCallback<Json>> {
+) -> napi::Result<SyncJsCallback<Value>> {
     SyncJsCallback::new(
         env,
         callback_factory::wrap(env, Wrapper::Execution, func)?,
@@ -1070,7 +1072,7 @@ pub(crate) fn js_codec_callback(
 }
 
 fn codec_call<A: Serialize, T: DeserializeOwned>(
-    callback: &SyncJsCallback<Json>,
+    callback: &SyncJsCallback<Value>,
     argument: &A,
     expected: &str,
 ) -> Result<T> {
@@ -1094,8 +1096,8 @@ fn codec_call<A: Serialize, T: DeserializeOwned>(
 }
 
 pub(crate) struct NapiCodec {
-    pub(crate) decode: SyncJsCallback<Json>,
-    pub(crate) encode: SyncJsCallback<Json>,
+    pub(crate) decode: SyncJsCallback<Value>,
+    pub(crate) encode: SyncJsCallback<Value>,
 }
 
 impl LlmCodec for NapiCodec {
@@ -1116,11 +1118,11 @@ impl LlmCodec for NapiCodec {
 }
 
 pub(crate) struct NapiResponseCodec {
-    pub(crate) decode_response: SyncJsCallback<Json>,
+    pub(crate) decode_response: SyncJsCallback<Value>,
 }
 
 impl LlmResponseCodec for NapiResponseCodec {
-    fn decode_response(&self, response: &Json) -> Result<AnnotatedLlmResponse> {
+    fn decode_response(&self, response: &Value) -> Result<AnnotatedLlmResponse> {
         codec_call(&self.decode_response, response, "AnnotatedLlmResponse")
     }
 }
@@ -1128,9 +1130,9 @@ impl LlmResponseCodec for NapiResponseCodec {
 /// Convert only host execution context using own data properties. The generic
 /// JSON bridge uses setters, which reinterpret a JSON `__proto__` key. Names
 /// are JavaScript strings rather than C strings, preserving embedded NULs.
-fn tool_execution_context_value(env: &Env, value: &Json) -> napi::Result<JsArg> {
+fn tool_execution_context_value(env: &Env, value: &Value) -> napi::Result<JsArg> {
     match value {
-        Json::Object(fields) => {
+        Value::Object(fields) => {
             let mut object = Object::new(env)?;
             let mut properties = Vec::with_capacity(fields.len());
             for (name, value) in fields {
@@ -1151,7 +1153,7 @@ fn tool_execution_context_value(env: &Env, value: &Json) -> napi::Result<JsArg> 
             object.define_properties(&properties)?;
             js_value(env, object)
         }
-        Json::Array(values) => {
+        Value::Array(values) => {
             // The runtime's context size limit also bounds array length below u32::MAX.
             let array = env.create_array(u32::try_from(values.len()).map_err(|_| {
                 napi::Error::from_reason("execution context array exceeds the supported length")
@@ -1200,7 +1202,7 @@ pub(crate) fn wrap_js_tool_exec_intercept_fn(
                     &context
                         .execution_context()
                         .map(|value| value.to_json())
-                        .unwrap_or(Json::Null),
+                        .unwrap_or(Value::Null),
                 )?;
                 // SAFETY: the host context was created in this callback's live environment.
                 let host_context = unsafe { host_context.into_unknown(env) };
@@ -1226,9 +1228,9 @@ pub(crate) fn wrap_js_tool_exec_intercept_fn(
                 #[derive(Deserialize)]
                 #[serde(rename_all = "camelCase")]
                 struct JsOutcome {
-                    result: Json,
+                    result: Value,
                     #[serde(default)]
-                    annotation: Option<Json>,
+                    annotation: Option<Value>,
                     #[serde(default)]
                     pending_marks: Vec<JsPendingMarkSpec>,
                 }
@@ -1251,7 +1253,7 @@ pub(crate) fn wrap_js_tool_exec_intercept_fn(
 
 fn llm_next<R: Send + 'static>(
     next: Arc<dyn Fn(LlmRequest) -> BoxFuture<Result<R>> + Send + Sync>,
-) -> Arc<dyn Fn(Json) -> BoxFuture<Result<R>> + Send + Sync> {
+) -> Arc<dyn Fn(Value) -> BoxFuture<Result<R>> + Send + Sync> {
     Arc::new(move |request| {
         let next = next.clone();
         Box::pin(async move {
