@@ -848,17 +848,22 @@ fn split_normalized_text_parts<'a>(
         .iter()
         .map(|text| text.matches('\n').count())
         .collect();
-    let expected_newlines = native_newlines.iter().sum::<usize>() + native_text.len() - 1;
-    if normalized_text.matches('\n').count() != expected_newlines {
+    let boundaries = native_text.len() - 1;
+    let expected_newlines = native_newlines.iter().sum::<usize>() + boundaries;
+    let mut available_newlines = normalized_text.matches('\n').count();
+    if !(boundaries..=expected_newlines).contains(&available_newlines) {
         return None;
     }
 
     let mut remaining = normalized_text;
     let mut parts = Vec::with_capacity(native_text.len());
-    for internal_newlines in native_newlines.into_iter().take(native_text.len() - 1) {
+    for (index, internal_newlines) in native_newlines.into_iter().take(boundaries).enumerate() {
+        let later_boundaries = boundaries - index - 1;
+        let internal_newlines = internal_newlines.min(available_newlines - later_boundaries - 1);
         let separator = remaining.match_indices('\n').nth(internal_newlines)?.0;
         parts.push(&remaining[..separator]);
         remaining = &remaining[separator + 1..];
+        available_newlines -= internal_newlines + 1;
     }
     parts.push(remaining);
     Some(parts)
