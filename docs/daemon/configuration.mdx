@@ -239,8 +239,8 @@ fields:
 | `peer` | Source IP address of the rejected client. |
 | `reason` | Which limit was reached: `peer_rate`, `peer_table_full`, `peer_limit`, `mcp_pool` or `worker_pool`. |
 | `role` | For `peer_limit`, `mcp_pool` and `worker_pool`: `mcp` or `worker`. |
-| `peer_pending`, `peer_limit` | For the same three reasons: this source IP address's pending challenges for the role, and its limit. |
-| `pool_pending`, `pool_capacity` | For the same three reasons: pending challenges for the role across all clients, and the pool's size. |
+| `peer_pending`, `peer_limit` | When `reason` is `peer_limit`, `mcp_pool` or `worker_pool`: this source IP address's pending challenges for the role, and its limit. |
+| `pool_pending`, `pool_capacity` | When `reason` is `peer_limit`, `mcp_pool` or `worker_pool`: pending challenges for the role across all clients, and the pool's size. |
 | `peer_connection_limit`, `window_ms`, `peer_table_capacity` | For `peer_rate` and `peer_table_full`: the connection limit per source IP address, its window, and how many addresses the daemon tracks. |
 | `suppressed_since_last_emit` | Warnings with the same reason that were not logged since the last one. |
 
@@ -617,7 +617,7 @@ or authenticated reverse proxy; do not expose open enrollment to an untrusted
 network. TLS remains required for non-loopback communication.
 
 Challenge admission is limited per transport-peer IP, both in pending
-challenges and in control connections per 15-second window; see
+challenges and in control connections per 15-second window. For more information, refer to
 [Challenge Admission](#challenge-admission). MCP and worker challenges retain
 separate pools. Forwarded IP headers do not override these limits: clients
 behind a reverse proxy share its peer budget. Apply additional per-client
