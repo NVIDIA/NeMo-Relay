@@ -2232,6 +2232,66 @@ fn gen_ai_projection_uses_normalized_payloads_for_provider_ordering() {
 }
 
 #[test]
+fn gen_ai_projection_preserves_interleaved_sanitized_text_order() {
+    for (api, api_specific) in [
+        (
+            "anthropic_messages",
+            json!({
+                "api": "anthropic_messages",
+                "content_blocks": [
+                    {"type": "text", "text": "native-secret-a"},
+                    {"type": "thinking", "thinking": "Native thought.", "signature": "sig"},
+                    {"type": "text", "text": "native-secret-b"}
+                ]
+            }),
+        ),
+        (
+            "openai_responses",
+            json!({
+                "api": "openai_responses",
+                "output_items": [
+                    {
+                        "type": "message",
+                        "content": [{"type": "output_text", "text": "native-secret-a"}]
+                    },
+                    {
+                        "type": "reasoning",
+                        "content": [{"type": "reasoning_text", "text": "Native thought."}]
+                    },
+                    {
+                        "type": "message",
+                        "content": [{"type": "output_text", "text": "native-secret-b"}]
+                    }
+                ]
+            }),
+        ),
+    ] {
+        let messages = gen_ai_output_messages_for(
+            AnnotatedLlmResponse {
+                message: Some(MessageContent::Text(
+                    "[REDACTED-A]\n[REDACTED-B]".to_string(),
+                )),
+                finish_reason: Some(FinishReason::Complete),
+                api_specific: api_specific_response(api_specific),
+                ..empty_annotated_response()
+            },
+            None,
+        );
+
+        assert_eq!(
+            messages[0]["parts"],
+            json!([
+                {"type": "text", "content": "[REDACTED-A]"},
+                {"type": "reasoning", "content": "Native thought."},
+                {"type": "text", "content": "[REDACTED-B]"}
+            ]),
+            "api: {api}"
+        );
+        assert!(!messages.to_string().contains("secret"), "api: {api}");
+    }
+}
+
+#[test]
 fn gen_ai_projection_appends_normalized_tool_calls_missing_from_native_output() {
     let messages = gen_ai_output_messages_for(
         AnnotatedLlmResponse {

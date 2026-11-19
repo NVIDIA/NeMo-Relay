@@ -831,21 +831,37 @@ fn normalized_text_parts_for_order(
         .filter(|part| part.get("type").and_then(Json::as_str) == Some("text"))
         .filter_map(|part| part.get("content").and_then(Json::as_str))
         .collect();
-    if native_text.len() < 2 || native_text.join("\n") != *normalized_text {
+    if native_text.len() < 2 {
         return content_parts(message);
     }
 
-    let mut offset = 0;
-    native_text
+    split_normalized_text_parts(normalized_text, &native_text)
+        .map(|parts| parts.into_iter().map(text_part).collect())
+        .unwrap_or_else(|| content_parts(message))
+}
+
+fn split_normalized_text_parts<'a>(
+    normalized_text: &'a str,
+    native_text: &[&str],
+) -> Option<Vec<&'a str>> {
+    let native_newlines: Vec<usize> = native_text
         .iter()
-        .enumerate()
-        .map(|(index, native)| {
-            let end = offset + native.len();
-            let part = text_part(&normalized_text[offset..end]);
-            offset = end + usize::from(index + 1 < native_text.len());
-            part
-        })
-        .collect()
+        .map(|text| text.matches('\n').count())
+        .collect();
+    let expected_newlines = native_newlines.iter().sum::<usize>() + native_text.len() - 1;
+    if normalized_text.matches('\n').count() != expected_newlines {
+        return None;
+    }
+
+    let mut remaining = normalized_text;
+    let mut parts = Vec::with_capacity(native_text.len());
+    for internal_newlines in native_newlines.into_iter().take(native_text.len() - 1) {
+        let separator = remaining.match_indices('\n').nth(internal_newlines)?.0;
+        parts.push(&remaining[..separator]);
+        remaining = &remaining[separator + 1..];
+    }
+    parts.push(remaining);
+    Some(parts)
 }
 
 fn normalized_output_parts(
