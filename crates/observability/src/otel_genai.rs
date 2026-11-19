@@ -770,7 +770,7 @@ fn output_parts(response: &AnnotatedLlmResponse, raw_output: Option<&Json>) -> V
             ..
         }) => {
             let parts = blocks.iter().filter_map(anthropic_output_part).collect();
-            append_missing_normalized_parts(parts, response)
+            merge_normalized_output_parts(parts, response)
         }
         Some(ApiSpecificResponse::OpenAIResponses {
             output_items: Some(items),
@@ -780,29 +780,72 @@ fn output_parts(response: &AnnotatedLlmResponse, raw_output: Option<&Json>) -> V
                 .iter()
                 .flat_map(openai_responses_output_parts)
                 .collect();
-            append_missing_normalized_parts(parts, response)
+            merge_normalized_output_parts(parts, response)
         }
         _ => normalized_output_parts(response, raw_output),
     }
 }
 
-fn append_missing_normalized_parts(
-    mut ordered_parts: Vec<Json>,
+fn merge_normalized_output_parts(
+    ordered_parts: Vec<Json>,
     response: &AnnotatedLlmResponse,
 ) -> Vec<Json> {
-    let has_text = ordered_parts
-        .iter()
-        .any(|part| part.get("type").and_then(Json::as_str) == Some("text"));
-    let has_tool_call = ordered_parts
-        .iter()
-        .any(|part| part.get("type").and_then(Json::as_str) == Some("tool_call"));
-    if !has_text && let Some(message) = response.message.as_ref() {
-        ordered_parts.extend(content_parts(message));
+    let mut normalized_text = normalized_text_parts_for_order(&ordered_parts, response).into_iter();
+    let mut normalized_tool_calls: Vec<Json> = normalized_tool_call_parts(response).collect();
+    let mut merged = Vec::with_capacity(
+        ordered_parts.len() + normalized_text.len() + normalized_tool_calls.len(),
+    );
+
+    for part in ordered_parts {
+        match part.get("type").and_then(Json::as_str) {
+            Some("text") => merged.extend(normalized_text.next()),
+            Some("tool_call") => {
+                let id = part.get("id").and_then(Json::as_str);
+                if let Some(index) = normalized_tool_calls
+                    .iter()
+                    .position(|call| call.get("id").and_then(Json::as_str) == id)
+                {
+                    merged.push(normalized_tool_calls.remove(index));
+                }
+            }
+            _ => merged.push(part),
+        }
     }
-    if !has_tool_call {
-        ordered_parts.extend(normalized_tool_call_parts(response));
+    merged.extend(normalized_text);
+    merged.extend(normalized_tool_calls);
+    merged
+}
+
+fn normalized_text_parts_for_order(
+    ordered_parts: &[Json],
+    response: &AnnotatedLlmResponse,
+) -> Vec<Json> {
+    let Some(message) = response.message.as_ref() else {
+        return Vec::new();
+    };
+    let MessageContent::Text(normalized_text) = message else {
+        return content_parts(message);
+    };
+    let native_text: Vec<&str> = ordered_parts
+        .iter()
+        .filter(|part| part.get("type").and_then(Json::as_str) == Some("text"))
+        .filter_map(|part| part.get("content").and_then(Json::as_str))
+        .collect();
+    if native_text.len() < 2 || native_text.join("\n") != *normalized_text {
+        return content_parts(message);
     }
-    ordered_parts
+
+    let mut offset = 0;
+    native_text
+        .iter()
+        .enumerate()
+        .map(|(index, native)| {
+            let end = offset + native.len();
+            let part = text_part(&normalized_text[offset..end]);
+            offset = end + usize::from(index + 1 < native_text.len());
+            part
+        })
+        .collect()
 }
 
 fn normalized_output_parts(
