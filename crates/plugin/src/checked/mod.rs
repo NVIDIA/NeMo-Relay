@@ -392,7 +392,11 @@ struct StreamState {
 }
 impl StreamState {
     /// Cancel stream pulls and close retained sources under the invocation scope, preserving failed cleanup for retry.
-    fn close(self: &Arc<Self>, executor: &ComponentExecutor) -> CloseFuture {
+    ///
+    /// A first close reports a source cleanup the plugin already started, even a
+    /// failed one, instead of closing that source again. A retried close, or
+    /// `retry` at shutdown, retries failed source cleanup.
+    fn close(self: &Arc<Self>, executor: &ComponentExecutor, retry: bool) -> CloseFuture {
         self.cancelled.cancel();
         let pulls = std::mem::take(&mut *self.pulls.lock().unwrap_or_else(|e| e.into_inner()));
         for pull in pulls {
@@ -404,6 +408,7 @@ impl StreamState {
         {
             return future.clone();
         }
+        let retry = retry || closing.is_some();
         let state = self.clone();
         // Cleanup still runs after revocation. Bind scope on each poll while
         // authority is available, including polls of a raw stream's close future.
@@ -420,7 +425,12 @@ impl StreamState {
                 .unwrap_or_else(|e| e.into_inner())
                 .clone();
             for source in sources {
-                if let Err(error) = source.close().await {
+                let cleanup = if retry {
+                    source.close()
+                } else {
+                    source.cleanup()
+                };
+                if let Err(error) = cleanup.await {
                     return a::Result::Err(failure(error));
                 }
             }
@@ -471,13 +481,13 @@ impl a::Stream for OutputStream {
         future
     }
     fn close(&mut self) -> FfiFuture<a::Result<()>> {
-        let future = self.state.close(&self.executor);
+        let future = self.state.close(&self.executor, false);
         future.into_ffi()
     }
 }
 impl Drop for OutputStream {
     fn drop(&mut self) {
-        drop(self.state.close(&self.executor));
+        drop(self.state.close(&self.executor, false));
     }
 }
 struct Owner {
@@ -496,7 +506,7 @@ impl a::Component for Owner {
             let streams = registry.lock().unwrap_or_else(|e| e.into_inner()).clone();
             let closing = streams
                 .into_iter()
-                .map(|state| state.close(&executor))
+                .map(|state| state.close(&executor, true))
                 .collect::<Vec<_>>();
             for future in closing {
                 if let Err(error) = future.await {

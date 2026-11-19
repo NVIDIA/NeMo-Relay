@@ -147,7 +147,8 @@ A stream from `next.call` closes its downstream source when it ends or is droppe
 and the host keeps a failed close for component shutdown. Use `next.open` when a
 plugin must know whether that close succeeded, for example before it stores the
 response. `open` returns an `LlmInputStream`; after reading it, await `close()` to
-get the cleanup result.
+get the cleanup result. When the caller then closes the plugin's stream, Relay
+reports that same result instead of closing the downstream stream again.
 
 ```rust
 let mut stream = next.open(request).await?;

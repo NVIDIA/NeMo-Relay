@@ -158,7 +158,7 @@ async fn raw_stream_cleanup_restores_scope_on_each_poll() {
         cancelled: tokio_util::sync::CancellationToken::new(),
         pulls: Mutex::new(Vec::new()),
     });
-    state.close(&executor).await.unwrap();
+    state.close(&executor, false).await.unwrap();
     assert!(closed.load(Ordering::Acquire));
     assert!(state.closed.load(Ordering::Acquire));
     a::Component::shutdown(&executor).await.unwrap();
@@ -351,6 +351,46 @@ async fn failed_source_cleanup_retains_ownership_for_retry() {
     assert!(sources.lock().unwrap().is_empty());
     assert_eq!(dropped.load(Ordering::SeqCst), 1);
     assert_eq!(attempts.load(Ordering::SeqCst), 2);
+    a::Component::shutdown(&executor).await.unwrap();
+}
+
+/// Closing an output stream reports a source close the plugin already tried
+/// instead of closing that source again; closing again retries it.
+#[tokio::test]
+async fn output_close_reports_a_failed_source_close_before_retrying_it() {
+    let executor =
+        ComponentExecutor::new(NativeExecutorConfig { worker_threads: 1 }, "output-close").unwrap();
+    let sources = Arc::new(Mutex::new(Vec::new()));
+    let attempts = Arc::new(AtomicUsize::new(0));
+    let source = SourceStream::new(
+        a::StreamBox::new(SourceProbe {
+            dropped: Arc::new(AtomicUsize::new(0)),
+            attempts: attempts.clone(),
+            fail_first: true,
+        }),
+        &executor,
+        Arc::new(a::ScopeBox::new(Scope)),
+        &sources,
+    );
+    assert!(source.cleanup().await.is_err());
+    let state = Arc::new(StreamState {
+        value: tokio::sync::Mutex::new(StreamValue {
+            stream: None,
+            terminal: false,
+        }),
+        scope: Arc::new(a::ScopeBox::new(Scope)),
+        sources,
+        closing: Mutex::new(None),
+        closed: AtomicBool::new(false),
+        cancelled: tokio_util::sync::CancellationToken::new(),
+        pulls: Mutex::new(Vec::new()),
+    });
+    let error = state.close(&executor, false).await.unwrap_err();
+    assert!(error.message.contains("retry close"), "{error:?}");
+    assert_eq!(attempts.load(Ordering::SeqCst), 1);
+    state.close(&executor, false).await.unwrap();
+    assert_eq!(attempts.load(Ordering::SeqCst), 2);
+    assert!(state.closed.load(Ordering::Acquire));
     a::Component::shutdown(&executor).await.unwrap();
 }
 
