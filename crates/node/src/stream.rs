@@ -12,7 +12,7 @@ use napi::bindgen_prelude::*;
 use napi_derive::napi;
 use nemo_relay_runtime::api::runtime::LlmJsonStream;
 use nemo_relay_types::error::{FlowError, Result as FlowResult};
-use serde_json::Value as Json;
+use serde_json::Value;
 use tokio_stream::{Stream, StreamExt};
 
 use crate::callable::{DirectStreamCallbacks, FinalizerError};
@@ -90,7 +90,7 @@ impl From<CloseFailure> for JsBuilder {
     }
 }
 
-fn settle_with(pending: PendingPromise, value: Json) {
+fn settle_with(pending: PendingPromise, value: Value) {
     pending.resolve_with(Box::new(move |env| js_value(env, value)));
 }
 
@@ -112,12 +112,12 @@ impl WakeSlot {
     }
 
     fn fire(&self) {
-        self.settle(|pending| settle_with(pending, Json::Null));
+        self.settle(|pending| settle_with(pending, Value::Null));
     }
 
     fn release(&self, outcome: CloseOutcome) {
         self.settle(|pending| match outcome {
-            Ok(()) => settle_with(pending, Json::Bool(true)),
+            Ok(()) => settle_with(pending, Value::Bool(true)),
             Err(failure) => pending.reject_with(failure.into()),
         });
     }
@@ -132,7 +132,7 @@ impl WakeSlot {
     fn arm(&self, pending: PendingPromise) {
         let mut state = lock(&self.state);
         if matches!(*state, WakeState::Fired) {
-            settle_with(pending, Json::Null);
+            settle_with(pending, Value::Null);
         } else {
             *state = WakeState::Armed(pending);
         }
@@ -150,7 +150,7 @@ impl Wake for WakeSlot {
 }
 
 struct Forwarded {
-    receiver: tokio::sync::Mutex<tokio::sync::mpsc::Receiver<FlowResult<Json>>>,
+    receiver: tokio::sync::Mutex<tokio::sync::mpsc::Receiver<FlowResult<Value>>>,
     requests: tokio::sync::mpsc::Sender<()>,
     producers: StreamCancellation,
     cancel: tokio::sync::watch::Sender<bool>,
@@ -183,7 +183,7 @@ impl Forwarded {
         })
     }
 
-    async fn next(&self) -> FlowResult<Option<Json>> {
+    async fn next(&self) -> FlowResult<Option<Value>> {
         let mut receiver = self.receiver.lock().await;
         let _ = self.requests.send(()).await;
         receiver.recv().await.transpose()
@@ -215,7 +215,7 @@ impl Forwarded {
 
 async fn forward_stream_to_channel(
     mut stream: LlmJsonStream,
-    tx: tokio::sync::mpsc::Sender<FlowResult<Json>>,
+    tx: tokio::sync::mpsc::Sender<FlowResult<Value>>,
     mut requests: tokio::sync::mpsc::Receiver<()>,
     mut cancel: tokio::sync::watch::Receiver<bool>,
     closed: tokio::sync::watch::Sender<Option<CloseOutcome>>,
@@ -338,7 +338,7 @@ fn finish_close(
 }
 
 impl StreamState {
-    fn poll_next(&mut self, cx: &mut Context<'_>) -> Poll<FlowResult<Option<Json>>> {
+    fn poll_next(&mut self, cx: &mut Context<'_>) -> Poll<FlowResult<Option<Value>>> {
         let Mode::Pump {
             stream: Some(stream),
             closing: None,
@@ -556,7 +556,7 @@ impl LlmStream {
         };
         match promise {
             Ok(promise) => Ok(promise),
-            Err(error) => Ok(PromiseRaw::<Json>::reject(env, error)?.to_unknown()),
+            Err(error) => Ok(PromiseRaw::<Value>::reject(env, error)?.to_unknown()),
         }
     }
 
@@ -654,7 +654,7 @@ fn poll_step(env: &Env, shared: &Shared, close: bool) -> Result<JsArg> {
             panic_message(panic.as_ref())
         ))),
         Ok(Poll::Pending) => {
-            let (pending, promise) = create_promise::<Json>(env, Liveness::KeepLoopAlive)?;
+            let (pending, promise) = create_promise::<Value>(env, Liveness::KeepLoopAlive)?;
             slot.arm(pending);
             if close {
                 state.close_wake = Some(slot);

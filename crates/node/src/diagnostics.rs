@@ -10,7 +10,7 @@ use crate::error::{Error, Result};
 use nemo_relay_diagnostics::embedded::{
     self, EmbeddedDiagnosticError, EmbeddedDiagnosticPage, EmbeddedDiagnosticsReader,
 };
-use serde_json::Value as Json;
+use serde_json::Value;
 
 type PageReader = fn(
     &EmbeddedDiagnosticsReader,
@@ -41,9 +41,9 @@ fn camel_case(key: &str) -> String {
     }
     result
 }
-fn native_value<'env>(env: &'env Env, value: &Json, field: &str) -> Result<Unknown<'env>> {
+fn native_value<'env>(env: &'env Env, value: &Value, field: &str) -> Result<Unknown<'env>> {
     match value {
-        Json::String(text) if embedded::is_diagnostic_number_field(field) => {
+        Value::String(text) if embedded::is_diagnostic_number_field(field) => {
             let number = text
                 .parse::<u64>()
                 .map_err(|_| Error::generic_failure("invalid_snapshot"))?;
@@ -51,21 +51,21 @@ fn native_value<'env>(env: &'env Env, value: &Json, field: &str) -> Result<Unkno
             // SAFETY: `value` was created by the line above inside this call, in `env`.
             Ok(unsafe { value.into_unknown(env) })
         }
-        Json::Object(fields) => {
+        Value::Object(fields) => {
             let mut object = Object::new(env)?;
             for (key, value) in fields {
                 object.set_named_property(&camel_case(key), native_value(env, value, key)?)?;
             }
             Ok(object.to_unknown())
         }
-        Json::Array(values) => {
+        Value::Array(values) => {
             let mut array = env.create_array(values.len() as u32)?;
             for (index, value) in values.iter().enumerate() {
                 array.set(index as u32, native_value(env, value, "")?)?;
             }
             Ok(array.to_unknown())
         }
-        Json::Number(number) => {
+        Value::Number(number) => {
             let exceeds_safe_integer = number
                 .as_u64()
                 .is_some_and(|integer| integer > JAVASCRIPT_MAX_SAFE_INTEGER)
@@ -85,7 +85,7 @@ fn native_value<'env>(env: &'env Env, value: &Json, field: &str) -> Result<Unkno
     }
 }
 fn native_page<'env>(env: &'env Env, page: &EmbeddedDiagnosticPage) -> Result<Unknown<'env>> {
-    let value: Json = serde_json::from_str(page.as_str())
+    let value: Value = serde_json::from_str(page.as_str())
         .map_err(|_| Error::generic_failure("invalid_snapshot"))?;
     native_value(env, &value, "")
 }
