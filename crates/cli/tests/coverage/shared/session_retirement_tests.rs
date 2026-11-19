@@ -714,3 +714,280 @@ async fn idle_retirement_delivery_blocks_shutdown_and_rejects_new_checkouts() {
     );
     deregister_subscriber(subscriber_name).unwrap();
 }
+
+struct BlockedRetirementDelivery {
+    entered: tokio::sync::oneshot::Receiver<()>,
+    release: Option<std::sync::mpsc::Sender<()>>,
+    _subscriber_cleanup: SessionSubscriberCleanup,
+}
+
+impl BlockedRetirementDelivery {
+    fn new(worker_identifier: uuid::Uuid, subscriber_name: &'static str) -> Self {
+        let (entered_sender, entered) = tokio::sync::oneshot::channel();
+        let entered_sender = StdMutex::new(Some(entered_sender));
+        let (release_sender, release_receiver) = std::sync::mpsc::channel();
+        let release_receiver = StdMutex::new(release_receiver);
+        register_subscriber(
+            subscriber_name,
+            Arc::new(move |event| {
+                if event.uuid() == worker_identifier
+                    && event.scope_category() == Some(ScopeCategory::End)
+                    && let Some(sender) = entered_sender.lock().unwrap().take()
+                {
+                    let _ = sender.send(());
+                    let _ = release_receiver.lock().unwrap().recv();
+                }
+            }),
+        )
+        .unwrap();
+        Self {
+            entered,
+            release: Some(release_sender),
+            _subscriber_cleanup: SessionSubscriberCleanup(subscriber_name),
+        }
+    }
+
+    async fn wait_until_blocked<F: std::future::Future>(
+        &mut self,
+        operation: &mut std::pin::Pin<Box<F>>,
+    ) {
+        tokio::time::timeout(
+            Duration::from_secs(2),
+            std::future::poll_fn(|context| {
+                assert!(std::future::Future::poll(operation.as_mut(), context).is_pending());
+                match self.entered.try_recv() {
+                    Ok(()) => std::task::Poll::Ready(()),
+                    Err(tokio::sync::oneshot::error::TryRecvError::Empty) => {
+                        context.waker().wake_by_ref();
+                        std::task::Poll::Pending
+                    }
+                    Err(error) => panic!("End delivery channel closed: {error}"),
+                }
+            }),
+        )
+        .await
+        .expect("worker End should reach the blocked subscriber");
+    }
+
+    fn release(&mut self) {
+        self.release.take().unwrap().send(()).unwrap();
+    }
+}
+
+impl Drop for BlockedRetirementDelivery {
+    fn drop(&mut self) {
+        if let Some(release) = self.release.take() {
+            let _ = release.send(());
+        }
+    }
+}
+
+#[tokio::test]
+async fn cancelled_idle_end_delivery_restores_session_and_clears_completed_alias() {
+    let manager = retirement_fixture(false).await;
+    let (stack, blocker) = block_child(&manager, "child-thread").await;
+    manager
+        .apply_authenticated_events(
+            &HeaderMap::new(),
+            vec![NormalizedEvent::SubagentEnded(SubagentEvent {
+                session_id: "parent-thread".into(),
+                agent_kind: AgentKind::Codex,
+                event_name: "SubagentStop".into(),
+                subagent_id: "child-thread".into(),
+                payload: json!({}),
+                metadata: json!({}),
+            })],
+            "client-a",
+        )
+        .await
+        .unwrap_err();
+    apply_parent_prompt(&manager).await;
+    unblock_child(stack, blocker).await;
+    let worker_identifier =
+        manager.inner.lock().await["parent-thread"].retiring_subagents["child-thread"]
+            .scope
+            .handle
+            .uuid;
+    let mut delivery = BlockedRetirementDelivery::new(worker_identifier, "cancelled-idle-delivery");
+    let gate = session_gate(&manager.session_gates, "parent-thread").await;
+    let alignment = manager.alignment.lock().await;
+    let mut sweep = Box::pin(manager.close_idle_sessions_at(
+        Instant::now(),
+        AGENT_IDLE_TIMEOUT,
+        "idle_timeout",
+    ));
+    delivery.wait_until_blocked(&mut sweep).await;
+    assert!(!manager.inner.lock().await.contains_key("parent-thread"));
+    drop(sweep);
+    tokio::time::timeout(Duration::from_secs(2), async {
+        while !manager.inner.lock().await.contains_key("parent-thread") {
+            tokio::task::yield_now().await;
+        }
+    })
+    .await
+    .unwrap();
+    assert!(alignment.alias_for_session("child-thread").is_some());
+    assert!(gate.try_lock().is_err());
+    assert!(manager.session_activity.has_active());
+    drop(alignment);
+    let cleanup_gate = tokio::time::timeout(Duration::from_secs(2), gate.lock())
+        .await
+        .expect("recovery should release the parent gate after clearing aliases");
+    assert!(!has_alignment_alias(&manager, "child-thread").await);
+    {
+        let sessions = manager.inner.lock().await;
+        let parent = &sessions["parent-thread"];
+        assert!(parent.root_turn.is_open());
+        assert!(parent.subagents.is_empty());
+        assert!(parent.retiring_subagents.is_empty());
+        assert!(
+            !parent
+                .subagent_stack
+                .iter()
+                .any(|identifier| identifier == "child-thread")
+        );
+    }
+    drop(cleanup_gate);
+    delivery.release();
+    flush_subscribers().unwrap();
+    start_child_alias(&manager, "child-thread").await;
+    assert!(has_alignment_alias(&manager, "child-thread").await);
+    manager.close_all("test_shutdown").await.unwrap();
+}
+
+#[tokio::test]
+async fn blocked_retirement_does_not_prevent_a_ready_sibling_from_retiring() {
+    let manager = retirement_fixture(false).await;
+    start_child_alias(&manager, "sibling-thread").await;
+    let task_identifier = manager.inner.lock().await["parent-thread"]
+        .task_scope
+        .as_ref()
+        .unwrap()
+        .uuid;
+    let mut blockers = HashMap::new();
+    for identifier in ["child-thread", "sibling-thread"] {
+        blockers.insert(
+            identifier.to_string(),
+            block_child(&manager, identifier).await,
+        );
+        manager
+            .apply_authenticated_events(
+                &HeaderMap::new(),
+                vec![NormalizedEvent::SubagentEnded(SubagentEvent {
+                    session_id: "parent-thread".into(),
+                    agent_kind: AgentKind::Codex,
+                    event_name: "SubagentStop".into(),
+                    subagent_id: identifier.into(),
+                    payload: json!({}),
+                    metadata: json!({}),
+                })],
+                "client-a",
+            )
+            .await
+            .unwrap_err();
+    }
+    let candidates: Vec<_> = manager.inner.lock().await["parent-thread"]
+        .retiring_subagents
+        .keys()
+        .cloned()
+        .collect();
+    // Match the real sweep's stable map order, then unblock only the later candidate.
+    let blocked_identifier = &candidates[0];
+    let ready_identifier = &candidates[1];
+    let (stack, blocker) = blockers.remove(ready_identifier).unwrap();
+    unblock_child(stack, blocker).await;
+    let error = manager
+        .close_idle_sessions_at(Instant::now(), AGENT_IDLE_TIMEOUT, "idle_timeout")
+        .await
+        .unwrap_err();
+    assert!(error.to_string().contains("not at the top"));
+    assert!(has_alignment_alias(&manager, blocked_identifier).await);
+    assert!(!has_alignment_alias(&manager, ready_identifier).await);
+    {
+        let sessions = manager.inner.lock().await;
+        let parent = &sessions["parent-thread"];
+        assert!(parent.retiring_subagents.contains_key(blocked_identifier));
+        assert!(!parent.retiring_subagents.contains_key(ready_identifier));
+        assert!(parent.completed_subagents.contains(ready_identifier));
+        assert_eq!(parent.task_scope.as_ref().unwrap().uuid, task_identifier);
+    }
+    let (stack, blocker) = blockers.remove(blocked_identifier).unwrap();
+    unblock_child(stack, blocker).await;
+    manager
+        .close_idle_sessions_at(Instant::now(), AGENT_IDLE_TIMEOUT, "idle_timeout")
+        .await
+        .unwrap();
+    assert!(!has_alignment_alias(&manager, blocked_identifier).await);
+    manager.close_all("test_shutdown").await.unwrap();
+}
+
+#[tokio::test]
+async fn cancelled_hook_restoration_clears_completed_alias_before_releasing_gate() {
+    let manager = retirement_fixture(true).await;
+    start_child_alias(&manager, "sibling-thread").await;
+    let (worker_identifier, child_turn_identifier) = {
+        let sessions = manager.inner.lock().await;
+        let child = &sessions["parent-thread"].subagents["child-thread"];
+        (
+            child.scope_handle.uuid,
+            child.child_turn.as_ref().unwrap().uuid,
+        )
+    };
+    let mut delivery = BlockedRetirementDelivery::new(worker_identifier, "cancelled-hook-restore");
+    let gate = session_gate(&manager.session_gates, "parent-thread").await;
+    let ending = vec![NormalizedEvent::SubagentEnded(SubagentEvent {
+        session_id: "parent-thread".into(),
+        agent_kind: AgentKind::Codex,
+        event_name: "SubagentStop".into(),
+        subagent_id: "child-thread".into(),
+        payload: json!({}),
+        metadata: json!({}),
+    })];
+    let headers = HeaderMap::new();
+    let mut applying = Box::pin(RETIREMENT_PUBLICATION_FAILURE.scope(
+        child_turn_identifier,
+        manager.apply_authenticated_events(&headers, ending, "client-a"),
+    ));
+    delivery.wait_until_blocked(&mut applying).await;
+    let directory = manager.inner.lock().await;
+    let alignment = manager.alignment.lock().await;
+    assert!(!directory.contains_key("parent-thread"));
+    delivery.release();
+    // The receipt is now complete; with the directory held, the next poll reaches restore().
+    flush_subscribers().unwrap();
+    std::future::poll_fn(|context| {
+        assert!(std::future::Future::poll(applying.as_mut(), context).is_pending());
+        std::task::Poll::Ready(())
+    })
+    .await;
+    drop(applying);
+    assert!(gate.try_lock().is_err());
+    assert!(manager.session_activity.has_active());
+    drop(directory);
+    tokio::time::timeout(Duration::from_secs(2), async {
+        while !manager.inner.lock().await.contains_key("parent-thread") {
+            tokio::task::yield_now().await;
+        }
+    })
+    .await
+    .unwrap();
+    assert!(gate.try_lock().is_err());
+    assert!(alignment.alias_for_session("child-thread").is_some());
+    drop(alignment);
+    let cleanup_gate = tokio::time::timeout(Duration::from_secs(2), gate.lock())
+        .await
+        .expect("restoration must clear completed aliases before releasing the gate");
+    assert!(!has_alignment_alias(&manager, "child-thread").await);
+    assert!(has_alignment_alias(&manager, "sibling-thread").await);
+    {
+        let sessions = manager.inner.lock().await;
+        let parent = &sessions["parent-thread"];
+        assert!(!parent.subagents.contains_key("child-thread"));
+        assert!(!parent.retiring_subagents.contains_key("child-thread"));
+        assert!(parent.completed_subagents.contains("child-thread"));
+    }
+    drop(cleanup_gate);
+    start_child_alias(&manager, "child-thread").await;
+    assert!(has_alignment_alias(&manager, "child-thread").await);
+    manager.close_all("test_shutdown").await.unwrap();
+}

@@ -1164,6 +1164,7 @@ impl SessionManager {
         let event_kind = event_agent_kind(&event);
         let applied = SessionEventApplier::new(
             &self.inner,
+            &self.alignment,
             &self.session_activity,
             &self.completions,
             authenticated.owner,
@@ -2083,7 +2084,6 @@ impl Session {
                 Err(error) => {
                     if let Some(retiring) = self.retiring_subagents.get_mut(identifier) {
                         retiring.reason = *reason;
-                        return Err(first_error.unwrap_or(error));
                     }
                     first_error.get_or_insert(error);
                 }

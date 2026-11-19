@@ -225,8 +225,8 @@ impl IdleSessionCleanup<'_> {
                 session_gate,
                 activity,
             );
+            in_flight.track_subagent_aliases(alignment);
             let session = in_flight.session_mut();
-            let retiring_ids = session.subagent_stack.clone();
             let stack = session.scope_stack.clone();
             match TASK_SCOPE_STACK
                 .scope(stack, async {
@@ -255,15 +255,8 @@ impl IdleSessionCleanup<'_> {
                     }
                 }
             }
-            let closed_subagent_ids = retiring_ids
-                .into_iter()
-                .filter(|identifier| {
-                    session.completed_subagents.contains(identifier)
-                        && !session.subagents.contains_key(identifier)
-                        && !session.retiring_subagents.contains_key(identifier)
-                })
-                .collect();
             let empty = session.is_empty();
+            let closed_subagent_ids = in_flight.closed_subagent_identifiers();
             let (session_gate, activity) = if empty {
                 released_owner_ids.insert(session_id.clone());
                 in_flight.discard()

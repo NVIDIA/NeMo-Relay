@@ -35,6 +35,14 @@ use crate::test_support::PLUGIN_CONFIG_TEST_LOCK;
 
 struct ToolGuardrailCleanup(&'static str);
 
+struct SessionSubscriberCleanup(&'static str);
+
+impl Drop for SessionSubscriberCleanup {
+    fn drop(&mut self) {
+        let _ = deregister_subscriber(self.0);
+    }
+}
+
 #[path = "gateway_preparation_tests.rs"]
 mod gateway_preparation;
 
@@ -12041,6 +12049,7 @@ async fn codex_sequential_child_aliases_survive_parent_turn_closure() {
         Arc::new(move |event| capture.lock().unwrap().push(event.clone())),
     )
     .unwrap();
+    let subscriber_cleanup = SessionSubscriberCleanup(subscriber_name);
     let manager = SessionManager::new(session_test_config());
     start_authenticated_codex_alias(&manager).await;
     manager
@@ -12131,6 +12140,19 @@ async fn codex_sequential_child_aliases_survive_parent_turn_closure() {
             .end_llm(call, json!({"output_text":"done"}), json!({}))
             .await
             .unwrap();
+        flush_subscribers().unwrap();
+        assert_eq!(
+            captured
+                .lock()
+                .unwrap()
+                .iter()
+                .filter(|event| {
+                    event.uuid() == turn_uuid && event.scope_category() == Some(ScopeCategory::End)
+                })
+                .count(),
+            0,
+            "model completion must leave the child's turn open until SessionEnd"
+        );
         manager
             .apply_authenticated_events(
                 &HeaderMap::new(),
@@ -12182,7 +12204,7 @@ async fn codex_sequential_child_aliases_survive_parent_turn_closure() {
     assert!(!manager.has_open_sessions().await);
     let sessions = manager.inner.lock().await;
     assert!(sessions.get("parent-thread").unwrap().task_scope.is_none());
-    deregister_subscriber(subscriber_name).unwrap();
+    drop(subscriber_cleanup);
 }
 
 /// Verify parent synthesis after all child completions exports in the original task trace.
@@ -12802,6 +12824,19 @@ async fn codex_gateway_completion_without_response_refreshes_only_owning_child()
                         .unwrap(),
                     1,
                 );
+                apply_owned_codex_hook(
+                    &manager,
+                    json!({
+                        "session_id": session_id,
+                        "hook_event_name": "SubagentStart",
+                        "agent_id": "live-sibling"
+                    }),
+                )
+                .await;
+                let sibling_activity =
+                    manager.inner.lock().await[session_id].subagents["live-sibling"].last_activity;
+                SESSION_CLOCK_OVERRIDE
+                    .with(|clock| clock.set(clock.get() + Duration::from_secs(1)));
                 manager
                     .finish_gateway_call(
                         &prep.session_id,
@@ -12809,6 +12844,16 @@ async fn codex_gateway_completion_without_response_refreshes_only_owning_child()
                         prep.session_finish,
                     )
                     .await;
+                {
+                    let sessions = manager.inner.lock().await;
+                    let root = &sessions[session_id];
+                    assert_eq!(root.subagents["caller"].last_activity, session_now());
+                    assert_eq!(
+                        root.subagents["live-sibling"].last_activity,
+                        sibling_activity
+                    );
+                    assert!(sibling_activity < session_now());
+                }
                 if boundary == "idle_sweep" {
                     assert_eq!(
                         manager
