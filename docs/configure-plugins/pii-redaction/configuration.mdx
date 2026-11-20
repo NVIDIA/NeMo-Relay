@@ -870,7 +870,7 @@ mode = "builtin"
 [components.config.profiles.builtin]
 action = "redact"
 detector = "email"
-target_path_globs = ["/messages/*/content", "/message"]
+target_path_globs = ["/messages/*/content", "/message", "/message/*/text", "/message/*/refusal"]
 ```
 
 **Request: input event payload**
@@ -939,11 +939,11 @@ target_path_globs = ["/messages/*/content", "/message"]
 }
 ```
 
-The codec exposes request message text at `/messages/*/content` and assistant
-response text at `/message` in Relay's normalized representation. The response
-selector therefore uses `/message` even though the emitted provider-shaped
-response stores that text under `choices[0].message.content`. The selectors are
-evaluated independently for the request and response payloads.
+The codec exposes a plain request message at `/messages/*/content` and plain
+assistant response text at `/message`. When the response includes a refusal,
+the normalized text and refusal fields are `/message/*/text` and
+`/message/*/refusal`. The subscriber receives the sanitized values in
+`choices[0].message.content` and `choices[0].message.refusal`.
 
 </Tab>
 <Tab title="Trajectory removal">

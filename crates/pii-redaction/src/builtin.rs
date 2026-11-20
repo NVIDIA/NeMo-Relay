@@ -25,7 +25,8 @@ use nemo_relay_runtime::api::runtime::{
     LlmSanitizeResponseFn, ToolSanitizeFn,
 };
 use nemo_relay_runtime::codec::response_codec as build_response_codec;
-use nemo_relay_types::codec::request::AnnotatedLlmRequest;
+use nemo_relay_types::codec::request::{AnnotatedLlmRequest, MessageContent};
+use nemo_relay_types::codec::response::AnnotatedLlmResponse;
 use nemo_relay_types::codec::traits::{LlmCodec, LlmResponseCodec};
 
 use super::component::{
@@ -944,6 +945,34 @@ impl CompiledBuiltinBackend {
             .unwrap_or_default()
     }
 
+    fn sanitize_response_annotation(
+        &self,
+        surface: ProviderSurface,
+        annotated: AnnotatedLlmResponse,
+    ) -> PluginResult<AnnotatedLlmResponse> {
+        // OpenAI responses with refusals formerly exposed ordinary text as a scalar.
+        // Keep policies that selected that scalar effective when the codec emits parts.
+        if matches!(
+            surface,
+            ProviderSurface::OpenAIChat | ProviderSurface::OpenAIResponses
+        ) && matches!(annotated.message, Some(MessageContent::Parts(_)))
+            && !matches!(self.action, BuiltinAction::Remove)
+            && self.target_path_matcher.matches(&["message".to_owned()])
+        {
+            let mut backend = self.clone();
+            let matcher = Arc::make_mut(&mut backend.target_path_matcher);
+            for field in ["text", "refusal"] {
+                matcher.selectors.push(TargetPathSelector::Glob(vec![
+                    TargetPathSegment::Exact("message".to_owned()),
+                    TargetPathSegment::Any,
+                    TargetPathSegment::Exact(field.to_owned()),
+                ]));
+            }
+            return sanitize_serializable_with_backend(&backend, annotated);
+        }
+        sanitize_serializable_with_backend(self, annotated)
+    }
+
     fn sanitize_response_with_codec(
         &self,
         codec: &dyn LlmResponseCodec,
@@ -974,7 +1003,7 @@ impl CompiledBuiltinBackend {
         let codec_name = BuiltinCodecName::from_provider_surface(surface);
         let annotated = codec.decode_response(&payload).ok()?;
         let annotated_json = serde_json::to_value(&annotated).ok()?;
-        let sanitized_annotated = sanitize_serializable_with_backend(self, annotated).ok()?;
+        let sanitized_annotated = self.sanitize_response_annotation(surface, annotated).ok()?;
         let sanitized_json = serde_json::to_value(&sanitized_annotated).ok()?;
         let payload = codec_name.overlay_response_payload(payload, &sanitized_annotated);
         let payload = self.sanitize_json_preorder_dfs(payload);
