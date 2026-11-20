@@ -254,33 +254,47 @@ fn validate_backend_config_fields_only_flags_known_backend_extras() {
 fn response_cache_section_reports_the_plugin_that_replaced_it() {
     // A former response_cache section must fail loudly, not silently disable
     // a cache the operator enabled; its settings now configure the plugin.
-    let config = json!({
-        "version": 1,
-        "response_cache": {"namespace": "team", "ttl_seconds": 60},
-        "policy": {"unknown_field": "ignore"}
-    });
+    // No unknown-field policy hides it, and its obsolete nested keys are not
+    // reported again.
+    for unknown_field in ["ignore", "error"] {
+        let config = json!({
+            "version": 1,
+            "response_cache": {"namespace": "team", "ttl_seconds": 60, "skip_keys": ["x"]},
+            "policy": {"unknown_field": unknown_field}
+        });
 
-    let diagnostics = validate_adaptive_plugin_config(config.as_object().unwrap());
-    let moved: Vec<_> = diagnostics
-        .iter()
-        .filter(|diagnostic| diagnostic.code == "adaptive.response_cache_moved")
-        .collect();
-    assert_eq!(moved.len(), 1, "{diagnostics:?}");
-    assert_eq!(moved[0].level, DiagnosticLevel::Error);
-    assert_eq!(moved[0].field.as_deref(), Some("response_cache"));
-    assert!(moved[0].message.contains(RESPONSE_CACHE_PLUGIN_ID));
-    assert!(
-        !diagnostics
-            .iter()
-            .any(|diagnostic| diagnostic.code == "adaptive.unknown_field"),
-        "the moved section must not also report unknown nested fields: {diagnostics:?}"
-    );
+        let plugin = validate_adaptive_plugin_config(config.as_object().unwrap());
+        let (_, document) = AdaptiveRuntime::validate_document(config).unwrap();
+        for diagnostics in [plugin, document.diagnostics] {
+            let moved: Vec<_> = diagnostics
+                .iter()
+                .filter(|diagnostic| diagnostic.code == "adaptive.response_cache_moved")
+                .collect();
+            assert_eq!(moved.len(), 1, "{unknown_field}: {diagnostics:?}");
+            assert_eq!(moved[0].level, DiagnosticLevel::Error);
+            assert_eq!(moved[0].field.as_deref(), Some("response_cache"));
+            assert!(moved[0].message.contains(RESPONSE_CACHE_PLUGIN_ID));
+            assert!(
+                !diagnostics
+                    .iter()
+                    .any(|diagnostic| diagnostic.code == "adaptive.unknown_field"),
+                "{unknown_field}: the moved section must not also report unknown fields: \
+                 {diagnostics:?}"
+            );
+        }
+    }
 
     let without: serde_json::Value = json!({"version": 1});
     assert!(
         validate_adaptive_plugin_config(without.as_object().unwrap())
             .iter()
             .all(|diagnostic| diagnostic.code != "adaptive.response_cache_moved")
+    );
+    let (_, document) = AdaptiveRuntime::validate_document(without).unwrap();
+    assert!(
+        document.diagnostics.is_empty(),
+        "{:?}",
+        document.diagnostics
     );
 }
 

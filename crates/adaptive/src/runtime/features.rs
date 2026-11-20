@@ -247,6 +247,26 @@ impl AdaptiveRuntime {
         validate_config(config)
     }
 
+    /// Parse and validate an adaptive config document from a binding or FFI caller.
+    ///
+    /// Unlike deserializing into [`AdaptiveConfig`] directly, this reports the
+    /// former `response_cache` section as the `adaptive.response_cache_moved`
+    /// error instead of silently dropping it.
+    ///
+    /// # Errors
+    /// Returns the deserialization error when the document is not an adaptive config.
+    pub fn validate_document(
+        document: serde_json::Value,
+    ) -> serde_json::Result<(AdaptiveConfig, ConfigReport)> {
+        let moved = document
+            .as_object()
+            .and_then(crate::plugin_component::response_cache_moved);
+        let config: AdaptiveConfig = serde_json::from_value(document)?;
+        let mut report = validate_config(&config);
+        report.diagnostics.splice(0..0, moved);
+        Ok((config, report))
+    }
+
     /// Return the configuration report captured during construction.
     ///
     /// # Returns

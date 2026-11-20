@@ -3987,9 +3987,9 @@ impl AdaptiveRuntime {
         catch_unwind
     )]
     pub fn create(#[napi(ts_arg_type = "TConfig")] config: Json) -> Result<Self> {
-        let config: AdaptiveConfig = serde_json::from_value(config)
+        let (config, report) = CoreAdaptiveRuntime::validate_document(config)
             .map_err(|error| Error::invalid_argument(error.to_string()))?;
-        let report = validate_adaptive_config_or_err(&config)?;
+        let report = validate_adaptive_config_or_err(report)?;
         let state = Arc::new(tokio::sync::Mutex::new(Some(
             NodeAdaptiveRuntimeState::Pending { config, report },
         )));
@@ -4080,9 +4080,8 @@ impl AdaptiveRuntime {
 }
 
 fn validate_adaptive_config_or_err(
-    config: &AdaptiveConfig,
+    report: nemo_relay_plugin_host::ConfigReport,
 ) -> Result<nemo_relay_plugin_host::ConfigReport> {
-    let report = CoreAdaptiveRuntime::validate_config(config);
     if report.has_errors() {
         let joined = report
             .diagnostics
@@ -4129,9 +4128,9 @@ fn parse_cache_request_facts(value: Option<Json>) -> Result<Option<CacheRequestF
     catch_unwind
 )]
 pub fn validate_adaptive_config(#[napi(ts_arg_type = "TConfig")] config: Json) -> Result<Json> {
-    let config: AdaptiveConfig = serde_json::from_value(config)
+    let (_, report) = CoreAdaptiveRuntime::validate_document(config)
         .map_err(|error| Error::invalid_argument(error.to_string()))?;
-    serde_json::to_value(CoreAdaptiveRuntime::validate_config(&config)).map_err(Error::from)
+    serde_json::to_value(report).map_err(Error::from)
 }
 
 /// Build one adaptive cache telemetry event from normalized usage.

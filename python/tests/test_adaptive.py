@@ -105,6 +105,15 @@ class TestAdaptiveConfigHelpers:
             "rules": [{"name": "alpha", "weights": [1, 2, 3]}],
         }
 
+    def test_direct_entrypoints_reject_the_moved_response_cache_section(self) -> None:
+        legacy: dict[str, object] = {"version": 1, "response_cache": {"namespace": "dev", "ttl_seconds": 60}}
+        report = adaptive_module.validate_config(legacy)
+        errors = [diag["code"] for diag in report["diagnostics"] if diag["level"] == "error"]
+        assert errors == ["adaptive.response_cache_moved"]
+        with pytest.raises(RuntimeError, match="nvidia.response_cache"):
+            adaptive_module.AdaptiveRuntime(legacy)
+        assert adaptive_module.validate_config({"version": 1})["diagnostics"] == []
+
     def test_set_latency_sensitivity_accepts_positive_integer(self) -> None:
         adaptive_module.set_latency_sensitivity(1)
 

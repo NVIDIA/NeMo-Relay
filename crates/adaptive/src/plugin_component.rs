@@ -259,7 +259,7 @@ fn validate_adaptive_plugin_config_with_policy(
         );
     }
 
-    validate_response_cache_moved(&mut diagnostics, plugin_config);
+    diagnostics.extend(response_cache_moved(plugin_config));
 
     diagnostics.extend(AdaptiveRuntime::validate_config(&config).diagnostics);
     diagnostics
@@ -302,26 +302,23 @@ fn validate_adaptive_state_section(
 /// Plugin ID of the response cache, which moved out of the adaptive plugin.
 pub const RESPONSE_CACHE_PLUGIN_ID: &str = "nvidia.response_cache";
 
-/// Rejects the former `response_cache` section, which is now its own plugin.
+/// The error for the former `response_cache` section, which is now its own plugin.
 ///
 /// Ignoring the section would silently turn off a cache the operator enabled.
-fn validate_response_cache_moved(
-    diagnostics: &mut Vec<ConfigDiagnostic>,
-    plugin_config: &Map<String, Json>,
-) {
-    if plugin_config.contains_key("response_cache") {
-        diagnostics.push(ConfigDiagnostic {
+pub fn response_cache_moved(config: &Map<String, Json>) -> Option<ConfigDiagnostic> {
+    config
+        .contains_key("response_cache")
+        .then(|| ConfigDiagnostic {
             level: DiagnosticLevel::Error,
             code: "adaptive.response_cache_moved".to_string(),
             component: Some(ADAPTIVE_PLUGIN_KIND.to_string()),
             field: Some("response_cache".to_string()),
             message: format!(
                 "the adaptive response_cache section moved to the {RESPONSE_CACHE_PLUGIN_ID} \
-                 plugin from NeMo Relay Plugins; remove this section and enable that plugin \
-                 with the same settings as its component config"
+             plugin from NeMo Relay Plugins; remove this section and enable that plugin \
+             with the same settings as its component config"
             ),
-        });
-    }
+        })
 }
 
 fn validate_backend_config_fields(

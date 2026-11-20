@@ -226,12 +226,23 @@ export function acgConfig(config: AcgConfig = {}): AcgConfig {
   };
 }
 
+/**
+ * Passes a retired `responseCache` key on as `response_cache`.
+ *
+ * Relay rejects that section with `adaptive.response_cache_moved`, so an old
+ * cache setting fails with migration guidance instead of being dropped.
+ */
+function toPluginConfig(config: Config): AdaptivePluginConfig {
+  const { responseCache, ...rest } = config as Config & { responseCache?: unknown };
+  return responseCache === undefined ? rest : ({ ...rest, response_cache: responseCache } as AdaptivePluginConfig);
+}
+
 /** Adaptive runtime owned by the caller. */
 export class AdaptiveRuntime {
   readonly #native: lib.AdaptiveRuntime;
 
   constructor(config: Config) {
-    this.#native = lib.AdaptiveRuntime.create(config);
+    this.#native = lib.AdaptiveRuntime.create(toPluginConfig(config));
   }
 
   /** Registers configured runtime features. */
@@ -285,13 +296,13 @@ export function ComponentSpec(config: Config, { enabled = true }: { enabled?: bo
   return {
     kind: ADAPTIVE_PLUGIN_KIND,
     enabled,
-    config,
+    config: toPluginConfig(config),
   };
 }
 
 /** Validates adaptive config without creating a runtime. */
 export function validateConfig(config: Config): ConfigReport {
-  return lib.validateAdaptiveConfig(config);
+  return lib.validateAdaptiveConfig(toPluginConfig(config));
 }
 
 /** Builds one cache telemetry event from token usage. */

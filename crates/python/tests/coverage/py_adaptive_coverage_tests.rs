@@ -436,7 +436,9 @@ fn adaptive_runtime_locking_and_helper_errors_are_covered() {
         assert_py_error_contains(empty_runtime.bind_scope(&scope_handle), "already shut down");
 
         fn assert_adaptive_config_and_telemetry_parsing(parsed_config: &AdaptiveConfig) {
-            let valid_report = validate_adaptive_config_or_err(parsed_config).unwrap();
+            let valid_report =
+                validate_adaptive_config_or_err(AdaptiveRuntime::validate_config(parsed_config))
+                    .unwrap();
             assert!(!valid_report.has_errors());
 
             let invalid_config: AdaptiveConfig = serde_json::from_value(json!({
@@ -451,7 +453,9 @@ fn adaptive_runtime_locking_and_helper_errors_are_covered() {
                 }
             }))
             .unwrap();
-            let invalid_err = validate_adaptive_config_or_err(&invalid_config).unwrap_err();
+            let invalid_err =
+                validate_adaptive_config_or_err(AdaptiveRuntime::validate_config(&invalid_config))
+                    .unwrap_err();
             assert!(invalid_err.to_string().contains("unsupported"));
 
             assert!(matches!(
