@@ -7532,16 +7532,26 @@ async fn content_inspection_authenticates_projects_and_validates_selection() {
     let snapshot: ContentSnapshot = nemo_relay_worker_proto::conversions::decode(snapshot).unwrap();
     assert_eq!(snapshot, annotation.last_message().unwrap().snapshot());
     assert_eq!(snapshot.text_parts, [""]);
-    let mut invalid = request.clone();
-    invalid.credentials.as_mut().unwrap().auth_token = "wrong".into();
-    assert_eq!(
-        service
-            .inspect_llm_content(Request::new(invalid))
-            .await
-            .unwrap_err()
-            .code(),
-        tonic::Code::Unauthenticated
-    );
+    for credentials in [
+        None,
+        Some(pb::Credentials {
+            activation_id: ACTIVATION_ID.into(),
+            auth_token: "wrong".into(),
+        }),
+    ] {
+        let invalid = pb::InspectLlmContentRequest {
+            credentials,
+            ..request.clone()
+        };
+        assert_eq!(
+            service
+                .inspect_llm_content(Request::new(invalid))
+                .await
+                .unwrap_err()
+                .code(),
+            tonic::Code::Unauthenticated
+        );
+    }
     let mut invalid = request.clone();
     invalid.selection = None;
     assert_eq!(
