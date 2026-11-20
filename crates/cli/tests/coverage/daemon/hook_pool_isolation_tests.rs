@@ -257,6 +257,7 @@ fn daemon_router_with_staged_worker(
         instance_id: "test-daemon".into(),
         pass_through: false,
         loopback_listener: true,
+        challenge_peers: Default::default(),
         public_origin: "http://127.0.0.1:1".into(),
         config: GatewayConfig::default(),
         upstream: pooled_client().expect("daemon pass-through client"),
