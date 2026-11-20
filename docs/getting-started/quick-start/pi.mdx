@@ -118,9 +118,7 @@ Messages; Gemini and Vertex APIs are not supported by this Relay gateway.
 
 To quickly get started with NeMo Relay, complete the following steps:
 
-<Steps toc={true} tocDepth={2}>
-
-<Step title="Install pi and NeMo Relay" id="install">
+1. Install pi and NeMo Relay.
 
 Install the pinned pi release and the NeMo Relay version for these docs:
 
@@ -160,9 +158,7 @@ A local gateway reachability warning can occur before step 3 starts the temporar
 gateway. Resolve any other installation or extension-loading problems before continuing.
 </Note>
 
-</Step>
-
-<Step title="Set up a working directory" id="configure">
+2. Set up a working directory.
 
 Create a disposable working directory and make sure the agent can write files there:
 
@@ -216,9 +212,7 @@ ATOF output can contain sensitive prompts, responses, tool arguments, and tool
 results. Protect `logs/events.jsonl` even when full payload export is disabled.
 </Warning>
 
-</Step>
-
-<Step title="Run a pi task" id="run">
+3. Run a pi task.
 
 From the directory containing both files, run the common validation prompt:
 
@@ -258,9 +252,7 @@ name. A 403 can indicate that the selected model is not allowed by your key;
 confirm the endpoint and exact model ID before changing credentials.
 </Note>
 
-</Step>
-
-<Step title="Verify the output" id="verify">
+4. Verify the output.
 
 The tool marker proves that the agent created the requested file. The event
 marker proves that Relay recorded matching start/end records for the required
@@ -372,10 +364,6 @@ start and end records; `parent_uuid` connects it to its enclosing scope.
 and `metadata` can include the model identity and completion status, depending
 on the integration. These fields let you follow a call through the run without
 requiring full prompt or response capture.
-
-</Step>
-
-</Steps>
 
 This run captured pi's agent, model, and tool activity in `logs/events.jsonl`.
 The temporary gateway ends with this invocation; repeat the wrapped command
