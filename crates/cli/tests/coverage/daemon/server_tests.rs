@@ -840,19 +840,291 @@ async fn worker_response_body_errors_trigger_the_route_callback_once() {
 
     let calls = Arc::new(AtomicUsize::new(0));
     let observed = Arc::clone(&calls);
-    let frames = futures_util::stream::iter([Err::<hyper::body::Frame<Bytes>, std::io::Error>(
-        std::io::Error::other("body failed"),
-    )]);
+    let frames = futures_util::stream::iter([
+        Ok(hyper::body::Frame::data(Bytes::from_static(b"prefix"))),
+        Err(std::io::Error::new(
+            std::io::ErrorKind::ConnectionReset,
+            "body failed",
+        )),
+        Err(std::io::Error::new(
+            std::io::ErrorKind::BrokenPipe,
+            "second failure",
+        )),
+    ]);
     let mut body = ErrorObservedBody {
         body: http_body_util::StreamBody::new(frames),
-        on_error: Some(move || {
+        on_error: Some(move |error: &std::io::Error| {
+            assert_eq!(error.kind(), std::io::ErrorKind::ConnectionReset);
             observed.fetch_add(1, Ordering::SeqCst);
         }),
     };
-    assert!(body.frame().await.unwrap().is_err());
+    assert_eq!(
+        body.frame().await.unwrap().unwrap().into_data().unwrap(),
+        "prefix"
+    );
+    let error = body.frame().await.unwrap().unwrap_err();
+    assert_eq!(error.kind(), std::io::ErrorKind::ConnectionReset);
+    assert_eq!(error.to_string(), "body failed");
+    assert_eq!(calls.load(Ordering::SeqCst), 1);
+    assert_eq!(
+        body.frame().await.unwrap().unwrap_err().kind(),
+        std::io::ErrorKind::BrokenPipe
+    );
     assert_eq!(calls.load(Ordering::SeqCst), 1);
     assert!(body.frame().await.is_none());
     assert_eq!(calls.load(Ordering::SeqCst), 1);
+}
+
+#[test]
+fn worker_response_error_chain_reports_io_and_h2_without_private_error_text() {
+    #[derive(Debug)]
+    struct PrivateError(std::io::Error);
+    impl std::fmt::Display for PrivateError {
+        fn fmt(&self, _: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+            panic!("private error messages must never be formatted");
+        }
+    }
+    impl StdError for PrivateError {
+        fn source(&self) -> Option<&(dyn StdError + 'static)> {
+            Some(&self.0)
+        }
+    }
+    let error = PrivateError(std::io::Error::new(
+        std::io::ErrorKind::ConnectionReset,
+        "private-token-and-payload",
+    ));
+    assert_eq!(
+        worker_response_error_chain(&error),
+        "other -> io:ConnectionReset -> other"
+    );
+    let os_error = std::io::Error::from_raw_os_error(12345);
+    assert!(worker_response_error_chain(&os_error).ends_with(":os_code=12345"));
+    let protocol = h2::Error::from(h2::Reason::from(0xfeed));
+    assert_eq!(
+        worker_response_error_chain(&protocol),
+        "h2:protocol:reason=65261:remote=false"
+    );
+    let wrapped_protocol = std::io::Error::other(h2::Error::from(h2::Reason::CANCEL));
+    assert_eq!(
+        worker_response_error_chain(&wrapped_protocol),
+        "io:Other -> h2:protocol:reason=8:remote=false"
+    );
+}
+
+#[tokio::test]
+async fn worker_response_error_chain_retains_http2_io_kind() {
+    let (client, peer) = tokio::io::duplex(64);
+    drop(peer);
+    let error = match h2::client::handshake(client).await {
+        Err(error) => error,
+        Ok((_sender, connection)) => connection.await.unwrap_err(),
+    };
+    assert_eq!(
+        error.get_io().expect("HTTP/2 transport failure").kind(),
+        std::io::ErrorKind::BrokenPipe
+    );
+    assert_eq!(
+        worker_response_error_chain(&error),
+        "h2:io:reason=none:remote=false -> io:BrokenPipe"
+    );
+}
+
+#[test]
+fn worker_response_error_chain_bounds_cyclic_sources() {
+    #[derive(Debug)]
+    struct CyclicError;
+    impl std::fmt::Display for CyclicError {
+        fn fmt(&self, _: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+            panic!("private error messages must never be formatted");
+        }
+    }
+    impl StdError for CyclicError {
+        fn source(&self) -> Option<&(dyn StdError + 'static)> {
+            Some(self)
+        }
+    }
+    let chain = worker_response_error_chain(&CyclicError);
+    let mut expected = vec!["other"; MAX_ERROR_CHAIN_DEPTH];
+    expected.push("truncated");
+    assert_eq!(chain.split(" -> ").collect::<Vec<_>>(), expected);
+}
+
+/// Checks real HTTP/2 reset details and omitted causes on non-body JSONL records.
+#[tokio::test]
+async fn worker_response_body_failure_logs_the_transport_cause() {
+    const CHILD_ENV: &str = "NEMO_RELAY_TEST_WORKER_BODY_ERROR_LOG_CHILD";
+    if std::env::var_os(CHILD_ENV).is_none() {
+        let output = tokio::time::timeout(
+            Duration::from_secs(30),
+            tokio::process::Command::new(std::env::current_exe().unwrap())
+                .args([
+                    "--exact",
+                    "daemon::broker::server::tests::worker_response_body_failure_logs_the_transport_cause",
+                    "--nocapture",
+                ])
+                .env(CHILD_ENV, "1")
+                .kill_on_drop(true)
+                .output(),
+        )
+        .await
+        .expect("body-error logging child timed out")
+        .unwrap();
+        assert!(
+            output.status.success(),
+            "{}\n{}",
+            String::from_utf8_lossy(&output.stdout),
+            String::from_utf8_lossy(&output.stderr)
+        );
+        return;
+    }
+    use nemo_relay::logging::{
+        FileLogSinkConfig, LogFormat, LogLevel, LogSinkConfig, LoggingConfig, init_logging,
+    };
+    let directory = tempfile::tempdir().unwrap();
+    let log_path = directory.path().join("body-error.jsonl");
+    let logging = init_logging(&LoggingConfig {
+        level: LogLevel::Info,
+        stderr_enabled: false,
+        sinks: vec![LogSinkConfig::File(FileLogSinkConfig {
+            path: log_path.clone(),
+            level: LogLevel::Info,
+            format: LogFormat::Jsonl,
+            ..FileLogSinkConfig::default()
+        })],
+        ..LoggingConfig::default()
+    })
+    .unwrap();
+    let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
+    let endpoint = format!("http://{}", listener.local_addr().unwrap());
+    let (reset, reset_requested) = tokio::sync::oneshot::channel();
+    let worker_task = tokio::spawn(async move {
+        let (socket, _) = listener.accept().await.unwrap();
+        let mut connection = h2::server::handshake(socket).await.unwrap();
+        let (request, mut response) = connection.accept().await.unwrap().unwrap();
+        let reset_task = tokio::spawn(async move {
+            let mut request_body = request.into_body();
+            while let Some(data) = request_body.data().await {
+                let data = data.unwrap();
+                request_body
+                    .flow_control()
+                    .release_capacity(data.len())
+                    .unwrap();
+            }
+            let mut body = response.send_response(Response::new(()), false).unwrap();
+            body.send_data(Bytes::from_static(b"private-response-sentinel"), false)
+                .unwrap();
+            reset_requested.await.unwrap();
+            body.send_reset(h2::Reason::CANCEL);
+        });
+        while connection.accept().await.is_some() {}
+        reset_task.await.unwrap();
+    });
+    let token = base64::engine::general_purpose::URL_SAFE_NO_PAD.encode([0x79; 32]);
+    let credential = RouteCredential::parse(token.clone()).unwrap();
+    let state = test_daemon_state(false, &token, GatewayConfig::default());
+    let fingerprint = MachineIdentity::generate().unwrap().identity.fingerprint();
+    let launch = fresh_launch(WorkerNetworkHint::new("127.0.0.1", None).unwrap()).unwrap();
+    let activation_id = launch.activation_id.clone();
+    state
+        .registry
+        .register_mcp(
+            McpRegistration {
+                fingerprint,
+                token_digest: credential.digest(),
+                session_id: McpSessionId::new("body-error-session").unwrap(),
+                lease_expires_at_unix_ms: u64::MAX,
+            },
+            launch,
+        )
+        .unwrap();
+    let target = Arc::new(
+        WorkerTarget::with_shared_client(
+            "body-error-worker",
+            endpoint,
+            SensitiveString::new("private-worker-token-sentinel").unwrap(),
+            state.worker_clients.client(None).unwrap(),
+        )
+        .unwrap(),
+    );
+    state
+        .registry
+        .mark_worker_ready(fingerprint, &activation_id, Arc::clone(&target))
+        .unwrap();
+    let response = router(Arc::clone(&state))
+        .oneshot(
+            Request::post("/v1/responses?key=private-query-sentinel")
+                .header(CLIENT_TOKEN_HEADER, &token)
+                .body(Body::from("private-request-sentinel"))
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(response.status(), StatusCode::OK);
+    let mut body = response.into_body();
+    assert_eq!(
+        body.frame().await.unwrap().unwrap().into_data().unwrap(),
+        "private-response-sentinel"
+    );
+    reset.send(()).unwrap();
+    assert!(
+        body.collect().await.is_err(),
+        "the original stream error must still reach the caller"
+    );
+    assert!(
+        !target.control_available(),
+        "existing failure recovery must remain intact"
+    );
+    worker_task.abort();
+    for reason in ["transport_error", "worker_route_rejected"] {
+        handle_worker_communication_failure(&state, fingerprint, "body-error-worker", reason, None);
+    }
+    logging.shutdown();
+    let logs = std::fs::read_to_string(log_path).unwrap();
+    let records: Vec<serde_json::Value> = logs
+        .lines()
+        .map(|line| serde_json::from_str(line).unwrap())
+        .collect();
+    let failures: Vec<_> = records
+        .iter()
+        .filter(|record| record["event"] == "worker_communication_failed")
+        .collect();
+    assert_eq!(failures.len(), 3);
+    for reason in ["transport_error", "worker_route_rejected"] {
+        let fields = failures
+            .iter()
+            .find(|record| record["fields"]["reason"] == reason)
+            .unwrap()["fields"]
+            .as_object()
+            .unwrap();
+        assert!(
+            !fields.contains_key("error_chain"),
+            "non-body failure must omit error_chain: {fields:?}"
+        );
+        assert_eq!(fields["worker_id"], "body-error-worker");
+        assert_eq!(fields["route_mode"], "pass_through");
+    }
+    let fields = &failures
+        .iter()
+        .find(|record| record["fields"]["reason"] == "response_body_error")
+        .unwrap()["fields"];
+    assert_eq!(fields["reason"], "response_body_error");
+    assert_eq!(fields["worker_id"], "body-error-worker");
+    let chain = fields["error_chain"]
+        .as_str()
+        .expect("body failures must retain transport causes");
+    assert!(chain.contains("h2:reset:reason=8:remote=true"), "{chain}");
+    for secret in [
+        &token,
+        "private-worker-token-sentinel",
+        "private-query-sentinel",
+        "private-request-sentinel",
+        "private-response-sentinel",
+    ] {
+        assert!(
+            !logs.contains(secret),
+            "operational records exposed request data"
+        );
+    }
 }
 
 #[test]
@@ -3405,6 +3677,7 @@ fn communication_failure_invalidates_route_without_waiting_for_durable_revocatio
             fingerprint,
             "failed-worker",
             "transport_error",
+            None,
         );
         sent.send(()).unwrap();
     });

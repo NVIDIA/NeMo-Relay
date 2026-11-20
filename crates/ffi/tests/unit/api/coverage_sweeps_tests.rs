@@ -4678,3 +4678,84 @@ fn stream_close_and_next_from_the_stream_callback_do_not_wait() {
         nemo_relay_stream_free(stream);
     }
 }
+
+#[test]
+fn stream_cancel_stops_the_producer_without_waiting() {
+    let _lock = TEST_MUTEX.lock().unwrap_or_else(|e| e.into_inner());
+    reset_globals();
+
+    unsafe {
+        nemo_relay_stream_cancel(ptr::null_mut());
+
+        let name = cstring("cancel-stream");
+        let request = cstring(&json!({"headers": {}, "content": {"model": "m"}}).to_string());
+        let mut stream = ptr::null_mut();
+        assert_status!(
+            nemo_relay_llm_stream_call_execute(
+                name.as_ptr(),
+                request.as_ptr(),
+                llm_exec_cb,
+                ptr::null_mut(),
+                None,
+                None,
+                Some(finalizer_cb),
+                ptr::null_mut(),
+                None,
+                ptr::null(),
+                0,
+                ptr::null(),
+                ptr::null(),
+                ptr::null(),
+                None,
+                None,
+                ptr::null_mut(),
+                None,
+                ptr::null(),
+                &mut stream,
+            ),
+            NemoRelayStatus::Ok
+        );
+
+        let mut chunk = ptr::null_mut();
+        assert_eq!(nemo_relay_stream_next(stream, &mut chunk), 1);
+        nemo_relay_string_free(chunk);
+        nemo_relay_stream_cancel(stream);
+        nemo_relay_stream_cancel(stream);
+        assert_eq!(nemo_relay_stream_next(stream, &mut chunk), 0);
+        assert_status!(nemo_relay_stream_close(stream), NemoRelayStatus::Ok);
+        assert_eq!(*lock_unpoisoned(finalizer_calls()), 1);
+        nemo_relay_stream_free(stream);
+
+        let mut unpolled = ptr::null_mut();
+        assert_status!(
+            nemo_relay_llm_stream_call_execute(
+                name.as_ptr(),
+                request.as_ptr(),
+                llm_exec_cb,
+                ptr::null_mut(),
+                None,
+                None,
+                Some(finalizer_cb),
+                ptr::null_mut(),
+                None,
+                ptr::null(),
+                0,
+                ptr::null(),
+                ptr::null(),
+                ptr::null(),
+                None,
+                None,
+                ptr::null_mut(),
+                None,
+                ptr::null(),
+                &mut unpolled,
+            ),
+            NemoRelayStatus::Ok
+        );
+        nemo_relay_stream_cancel(unpolled);
+        assert_eq!(nemo_relay_stream_next(unpolled, &mut chunk), 0);
+        assert_status!(nemo_relay_stream_close(unpolled), NemoRelayStatus::Ok);
+        assert_eq!(*lock_unpoisoned(finalizer_calls()), 2);
+        nemo_relay_stream_free(unpolled);
+    }
+}

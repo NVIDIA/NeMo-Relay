@@ -32,15 +32,11 @@ async fn claude_internal_requests_do_not_open_task_turns() {
         let id = format!("activity-idle-{request_class}");
         let (headers, start) = activity_request(&id, request_class);
         let prep = manager.prepare_gateway_call(&headers, start).await.unwrap();
-        let opened_turn = manager.inner.lock().await[&id].turn_scope.is_some();
+        let opened_turn = manager.inner.lock().await[&id].root_turn.handle().is_some();
         assert!(!prep.record_task_response);
         assert_eq!(prep.metadata["claude_code_request_class"], request_class);
         manager
-            .finish_gateway_call(
-                &prep.session_id,
-                prep.owner_subagent_id.as_deref(),
-                prep.session_finish,
-            )
+            .finish_gateway_call(&prep.context, prep.session_finish)
             .await;
         manager.close_all("test_shutdown").await.unwrap();
 
@@ -55,11 +51,7 @@ async fn claude_internal_requests_do_not_open_task_turns() {
 
 async fn finish_activity(manager: &SessionManager, prep: &GatewayCallPrep) {
     manager
-        .finish_gateway_call(
-            &prep.session_id,
-            prep.owner_subagent_id.as_deref(),
-            prep.session_finish,
-        )
+        .finish_gateway_call(&prep.context, prep.session_finish)
         .await;
 }
 
@@ -102,10 +94,10 @@ async fn claude_internal_requests_preserve_parent_and_pending_conversation_evide
         let sessions = manager.inner.lock().await;
         let session = &sessions[id];
         (
-            session.turn_scope.as_ref().unwrap().uuid,
-            session.subagents["worker"].uuid,
+            session.root_turn.handle().unwrap().uuid,
+            session.subagents["worker"].scope_handle.uuid,
             session.turn_index,
-            session.pending_llm_hints.len(),
+            session.correlation.pending_llm_hints.len(),
         )
     };
     assert_eq!(hints, 1);
@@ -128,11 +120,11 @@ async fn claude_internal_requests_preserve_parent_and_pending_conversation_evide
         let sessions = manager.inner.lock().await;
         let session = &sessions[id];
         assert_eq!(session.turn_index, turn_index);
-        assert_eq!(session.pending_llm_hints.len(), hints);
-        assert!(session.last_llm_owner.is_none());
-        assert!(session.llm_request_affinity.is_empty());
-        assert!(session.pending_tool_hints.is_empty());
-        assert!(session.last_turn_llm_output.is_none());
+        assert_eq!(session.correlation.pending_llm_hints.len(), hints);
+        assert!(session.correlation.last_llm_owner.is_none());
+        assert!(session.correlation.llm_request_affinity.is_empty());
+        assert!(session.correlation.pending_tool_hints.is_empty());
+        assert!(session.root_turn.model_output().is_none());
     }
     manager.close_all("test_shutdown").await.unwrap();
 }
@@ -158,7 +150,7 @@ async fn claude_internal_session_pruning_preserves_concurrent_and_announced_work
     let (headers, start) = activity_request(&id, "main");
     let main = manager.prepare_gateway_call(&headers, start).await.unwrap();
     finish_activity(&manager, &internal).await;
-    assert!(manager.inner.lock().await[&id].turn_scope.is_some());
+    assert!(manager.inner.lock().await[&id].root_turn.handle().is_some());
     finish_activity(&manager, &main).await;
     manager.close_all("test_shutdown").await.unwrap();
 
@@ -177,7 +169,7 @@ async fn claude_internal_session_pruning_preserves_concurrent_and_announced_work
     let prep = manager.prepare_gateway_call(&headers, start).await.unwrap();
     finish_activity(&manager, &prep).await;
     assert!(manager.inner.lock().await.contains_key(&id));
-    assert!(manager.inner.lock().await[&id].turn_scope.is_none());
+    assert!(manager.inner.lock().await[&id].root_turn.handle().is_none());
     manager.close_all("test_shutdown").await.unwrap();
 }
 
@@ -252,7 +244,7 @@ async fn claude_prompt_evidence_ignores_delegated_prompts_and_resets_between_tur
         let (headers, start) = activity_request(id, "auxiliary");
         let prep = manager.prepare_gateway_call(&headers, start).await.unwrap();
         finish_activity(&manager, &prep).await;
-        assert!(manager.inner.lock().await[id].turn_scope.is_none());
+        assert!(manager.inner.lock().await[id].root_turn.handle().is_none());
         if observed {
             let mut prompt = session_event(id, "UserPromptSubmit");
             prompt.metadata = json!({"turn_prompt_observed": false});
@@ -272,8 +264,8 @@ async fn claude_prompt_evidence_ignores_delegated_prompts_and_resets_between_tur
             finish_activity(&manager, &prep).await;
         }
         let turn = manager.inner.lock().await[id]
-            .turn_scope
-            .as_ref()
+            .root_turn
+            .handle()
             .unwrap()
             .uuid;
         let (headers, start) = activity_request(id, "compaction");
@@ -302,8 +294,8 @@ async fn claude_prompt_evidence_ignores_delegated_prompts_and_resets_between_tur
                 .await
                 .unwrap();
             let sessions = manager.inner.lock().await;
-            assert_eq!(sessions[id].turn_scope.as_ref().unwrap().uuid, turn);
-            assert!(!sessions[id].turn_prompt_observed);
+            assert_eq!(sessions[id].root_turn.handle().unwrap().uuid, turn);
+            assert!(!sessions[id].root_turn.prompt_observed());
         }
         let mut stop = session_event(id, "Stop");
         stop.metadata = json!({"turn_prompt_observed": !observed});

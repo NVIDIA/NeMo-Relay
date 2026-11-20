@@ -6,6 +6,11 @@ name: Node.js
 on:
   workflow_call:
     inputs:
+      pull_request_number:
+        description: 'Pull request number for mirrored PR builds; empty for other builds'
+        required: false
+        default: ''
+        type: string
       ref_type:
         description: 'The ref type from the triggering workflow'
         required: true
@@ -166,6 +171,7 @@ jobs:
         if: ${{ !startsWith(matrix.platform, 'windows') }}
         with:
           token: ${{ secrets.CODECOV_TOKEN }}
+          override_pr: ${{ inputs.pull_request_number }}
           disable_search: true
           files: node-coverage.xml,node-rust.lcov
           flags: node-${{ matrix.platform }}

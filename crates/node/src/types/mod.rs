@@ -5,16 +5,16 @@ mod resource_metrics;
 
 use std::sync::Arc;
 
-use napi::Env;
-use napi::bindgen_prelude::Unknown;
 use napi_derive::napi;
 
-use crate::convert::{checked_json, parse_json};
+use crate::callback_factory::CallbackScope;
+use crate::convert::parse_json;
 use crate::error::{Error, Result};
+use crate::json::Json;
 use nemo_relay_runtime::api::runtime::subscriber_dispatcher::PublicationBuffer;
 use nemo_relay_runtime::api::runtime::{ScopeStackHandle, create_scope_stack};
 use serde::{Deserialize, Serialize};
-use serde_json::Value as Json;
+use serde_json::Value;
 
 use nemo_relay_codecs::resolve::ProviderSurface;
 use nemo_relay_observability::otel_metrics::MetricTemporality as CoreMetricTemporality;
@@ -210,9 +210,20 @@ pub struct MetricMeasurement {
     pub boundaries: Option<Vec<f64>>,
 }
 
-mirror_fields!(MetricMeasurement => CoreMetricMeasurement {
-    name, kind, value_type, value, unit, description, attributes, boundaries,
-});
+impl From<MetricMeasurement> for CoreMetricMeasurement {
+    fn from(value: MetricMeasurement) -> Self {
+        Self {
+            name: value.name,
+            kind: value.kind.into(),
+            value_type: value.value_type.into(),
+            value: value.value.0,
+            unit: value.unit,
+            description: value.description,
+            attributes: value.attributes.map(Value::from),
+            boundaries: value.boundaries,
+        }
+    }
+}
 
 /// Canonical application-visible result of tool execution.
 ///
@@ -227,13 +238,23 @@ pub struct ToolExecutionResult {
 impl From<ToolExecutionResult> for CoreToolExecutionResult {
     fn from(value: ToolExecutionResult) -> Self {
         Self {
-            result: value.result,
-            annotation: value.annotation.filter(|annotation| !annotation.is_null()),
+            result: value.result.0,
+            annotation: value
+                .annotation
+                .map(Value::from)
+                .filter(|annotation| !annotation.is_null()),
         }
     }
 }
 
-mirror_fields!(ToolExecutionResult <= CoreToolExecutionResult { result, annotation });
+impl From<CoreToolExecutionResult> for ToolExecutionResult {
+    fn from(value: CoreToolExecutionResult) -> Self {
+        Self {
+            result: Json(value.result),
+            annotation: value.annotation.map(Json),
+        }
+    }
+}
 
 /// Per-call context delivered to a tool execution intercept.
 ///
@@ -270,6 +291,7 @@ pub struct PendingMarkSpec {
 pub struct ScopeStack {
     pub(crate) inner: ScopeStackHandle,
     pub(crate) publication_buffer: Option<PublicationBuffer>,
+    pub(crate) captured_scope: Option<CallbackScope>,
 }
 
 #[napi]
@@ -286,6 +308,7 @@ impl From<ScopeStackHandle> for ScopeStack {
         Self {
             inner: h,
             publication_buffer: None,
+            captured_scope: None,
         }
     }
 }
@@ -444,7 +467,7 @@ pub struct EventSanitizeFields {
 }
 
 pub(crate) fn event_sanitize_fields_from_json(
-    value: Json,
+    value: Value,
 ) -> serde_json::Result<EventSanitizeFields> {
     let Some(object) = value.as_object() else {
         return Err(serde::de::Error::custom(
@@ -463,8 +486,10 @@ pub(crate) fn event_sanitize_fields_from_json(
 }
 
 pub(crate) fn decode_request(codec: &dyn LlmCodec, request: Json) -> Result<Json> {
-    let request: CoreLlmRequest = parse_json(request, "LlmRequest")?;
-    serde_json::to_value(codec.decode(&request)?).map_err(Error::from)
+    let request: CoreLlmRequest = parse_json(request.0, "LlmRequest")?;
+    serde_json::to_value(codec.decode(&request)?)
+        .map(Json)
+        .map_err(Error::from)
 }
 
 pub(crate) fn encode_request(
@@ -472,13 +497,17 @@ pub(crate) fn encode_request(
     annotated: Json,
     original: Json,
 ) -> Result<Json> {
-    let annotated: AnnotatedLlmRequest = parse_json(annotated, "AnnotatedLlmRequest")?;
-    let original: CoreLlmRequest = parse_json(original, "LlmRequest")?;
-    serde_json::to_value(codec.encode(&annotated, &original)?).map_err(Error::from)
+    let annotated: AnnotatedLlmRequest = parse_json(annotated.0, "AnnotatedLlmRequest")?;
+    let original: CoreLlmRequest = parse_json(original.0, "LlmRequest")?;
+    serde_json::to_value(codec.encode(&annotated, &original)?)
+        .map(Json)
+        .map_err(Error::from)
 }
 
-pub(crate) fn decode_response(codec: &dyn LlmResponseCodec, response: &Json) -> Result<Json> {
-    serde_json::to_value(codec.decode_response(response)?).map_err(Error::from)
+pub(crate) fn decode_response(codec: &dyn LlmResponseCodec, response: &Value) -> Result<Json> {
+    serde_json::to_value(codec.decode_response(response)?)
+        .map(Json)
+        .map_err(Error::from)
 }
 
 macro_rules! builtin_codec {
@@ -497,7 +526,7 @@ macro_rules! builtin_codec {
                 &self,
                 #[napi(ts_arg_type = "TResponse")] response: Json,
             ) -> Result<Json> {
-                decode_response(&*self.response_codec, &response)
+                decode_response(&*self.response_codec, &response.0)
             }
         }
     };
@@ -590,10 +619,9 @@ builtin_codec! {
     )]
     pub fn decode_response(
         &self,
-        env: Env,
-        #[napi(ts_arg_type = "TResponse")] response: Unknown,
+        #[napi(ts_arg_type = "TResponse")] response: Json,
     ) -> Result<Json> {
-        decode_response(&*self.response_codec, &checked_json(&env, response)?)
+        decode_response(&*self.response_codec, &response.0)
     }
 }
 

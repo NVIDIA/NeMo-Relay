@@ -9,7 +9,7 @@ SPDX-License-Identifier: Apache-2.0 */}
 
 Use daemon mode to give coding agents a shared entry point for model requests
 and hooks. A **coding harness** is the application that runs the agent, such as
-Codex, Claude Code, or Pi. A **daemon** is a background process that stays running
+Codex or Claude Code. A **daemon** is a background process that stays running
 between sessions. Each user-machine identity gets its own worker and runtime state.
 
 ## Start Here When
@@ -54,7 +54,7 @@ on one computer also need separate ports; one system service can serve all users
 ## Before You Begin
 
 Install a Relay binary that includes `nemo-relay daemon managed-bundle` on the
-server and every client. Follow [Installation](/getting-started/installation)
+server and every client. Follow [Installation](/getting-started/installation/cli)
 for supported binaries and [Support Matrix](/reference/support-matrix) for
 harness versions. Check `nemo-relay daemon --help` on each target before setup.
 

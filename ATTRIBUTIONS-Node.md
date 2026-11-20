@@ -1948,7 +1948,7 @@ OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
 SOFTWARE.
 ```
 
-## @hono/node-server - 2.1.5
+## @hono/node-server - 2.1.8
 **Repository URL**: https://github.com/honojs/node-server
 **License Type(s)**: MIT
 ### License: https://spdx.org/licenses/MIT.html
@@ -10854,7 +10854,7 @@ OR TORT (INCLUDING NEGLIGENCE OR OTHERWISE) ARISING IN ANY WAY OUT OF THE USE
 OF THIS SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
 ```
 
-## hono - 4.13.13
+## hono - 4.13.18
 **Repository URL**: https://github.com/honojs/hono
 **License Type(s)**: MIT
 ### License: https://spdx.org/licenses/MIT.html

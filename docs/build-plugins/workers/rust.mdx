@@ -74,9 +74,9 @@ export NEMO_RELAY_PLUGIN_SNAPSHOT_DIR=/var/tmp/nrs
 
 ## Build and Calculate Integrity
 
-Building a Rust worker requires `protoc` 31.1 or later and Buf 1.75.0 or later.
-Install both on `PATH`, or select them with `PROTOC` and `BUF`. The first build
-needs access to the Buf Schema Registry to download the locked validation schema.
+Building a Rust worker requires Buf 1.75.0 or later on `PATH`, or selected
+through `BUF`. Cargo supplies `protoc` automatically. The first build needs
+access to the Buf Schema Registry to download the locked validation schema.
 
 Build the executable and create a manifest for your platform:
 

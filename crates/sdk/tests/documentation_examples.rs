@@ -98,6 +98,7 @@ mod redact_openai {
 
     #[test]
     fn middleware_example_registers_through_the_sdk() {
+        let _registration_guard = super::DOCUMENTATION_REGISTRATION_LOCK.blocking_lock();
         register_redaction().unwrap();
         nemo_relay::registry::deregister_llm_sanitize_request_guardrail("redact-openai-chat")
             .unwrap();
@@ -492,5 +493,219 @@ mod instrument_applications {
         flush_subscribers().unwrap();
         deregister_subscriber("documentation-json").unwrap();
         deregister_subscriber("documentation-capture").unwrap();
+    }
+}
+
+mod plugin_api_examples {
+    fn run_with_header_environment(test_name: &str) -> bool {
+        if std::env::var("NEMO_RELAY_DOCUMENTATION_EXAMPLE").as_deref() == Ok(test_name) {
+            return false;
+        }
+        let output = std::process::Command::new(std::env::current_exe().unwrap())
+            .args(["--exact", test_name, "--nocapture"])
+            .env("NEMO_RELAY_DOCUMENTATION_EXAMPLE", test_name)
+            .env("OTEL_AUTHORIZATION", "Bearer documentation-test")
+            .output()
+            .unwrap();
+        assert!(
+            output.status.success(),
+            "{}{}",
+            String::from_utf8_lossy(&output.stdout),
+            String::from_utf8_lossy(&output.stderr)
+        );
+        true
+    }
+    mod atif_exporter {
+        include!("../../../docs/reference/api/_code/rust/atif_exporter.rs");
+        #[test]
+        fn displayed_example_matches_its_outcome() {
+            let _registration_guard = crate::DOCUMENTATION_REGISTRATION_LOCK.blocking_lock();
+            nemo_relay::context::set_thread_scope_stack(nemo_relay::context::create_scope_stack());
+            let before = nemo_relay::registry::list_runtime_registrations(None).unwrap();
+            main().unwrap();
+            let trajectory = run_example().unwrap();
+            assert_eq!(trajectory.session_id, "session-1");
+            assert_eq!(trajectory.agent.name, "agent");
+            assert!(trajectory.steps.is_empty());
+            assert_eq!(
+                nemo_relay::registry::list_runtime_registrations(None).unwrap(),
+                before
+            );
+        }
+        #[test]
+        fn export_failure_deregisters_the_example_subscriber() {
+            let _registration_guard = crate::DOCUMENTATION_REGISTRATION_LOCK.blocking_lock();
+            nemo_relay::context::set_thread_scope_stack(nemo_relay::context::create_scope_stack());
+            let before = nemo_relay::registry::list_runtime_registrations(None).unwrap();
+            let exporter = nemo_relay::exporter::atif(
+                "failed-session".into(),
+                AtifAgentInfo {
+                    name: "agent".into(),
+                    version: "1.0.0".into(),
+                    model_name: None,
+                    tool_definitions: None,
+                    extra: None,
+                },
+            );
+            register_subscriber("atif-exporter", exporter.subscriber()).unwrap();
+            let result = complete_export(
+                &exporter,
+                Err(nemo_relay::FlowError::Internal("export failed".into())),
+            );
+            let after = nemo_relay::registry::list_runtime_registrations(None).unwrap();
+            deregister_subscriber("atif-exporter").unwrap();
+            assert_eq!(
+                result.unwrap_err().to_string(),
+                "internal error: export failed"
+            );
+            assert_eq!(after, before);
+        }
+    }
+    mod atof_exporter {
+        include!("../../../docs/reference/api/_code/rust/atof_exporter.rs");
+        #[test]
+        fn displayed_example_matches_its_outcome() {
+            let _registration_guard = crate::DOCUMENTATION_REGISTRATION_LOCK.blocking_lock();
+            nemo_relay::context::set_thread_scope_stack(nemo_relay::context::create_scope_stack());
+            let before = nemo_relay::registry::list_runtime_registrations(None).unwrap();
+            main().unwrap();
+            assert_eq!(
+                nemo_relay::registry::list_runtime_registrations(None).unwrap(),
+                before
+            );
+        }
+    }
+    mod atof_diagnostics {
+        include!("../../../docs/reference/api/_code/rust/atof_diagnostics.rs");
+        #[test]
+        fn displayed_example_matches_its_outcome() {
+            let _registration_guard = crate::DOCUMENTATION_REGISTRATION_LOCK.blocking_lock();
+            nemo_relay::context::set_thread_scope_stack(nemo_relay::context::create_scope_stack());
+            let before = nemo_relay::registry::list_runtime_registrations(None).unwrap();
+            let directory = tempfile::tempdir().unwrap();
+            let exporter = nemo_relay::exporter::atof(
+                nemo_relay::exporter::atof::AtofExporterConfig::new()
+                    .with_output_directory(directory.path()),
+            )
+            .unwrap();
+            print_diagnostics(&exporter).unwrap();
+            assert!(exporter.runtime_diagnostics().entries().is_empty());
+            exporter.shutdown().unwrap();
+            assert_eq!(
+                nemo_relay::registry::list_runtime_registrations(None).unwrap(),
+                before
+            );
+        }
+    }
+    mod opentelemetry_subscriber {
+        include!("../../../docs/reference/api/_code/rust/opentelemetry_subscriber.rs");
+        #[test]
+        fn displayed_example_matches_its_outcome() {
+            if super::run_with_header_environment(
+                "plugin_api_examples::opentelemetry_subscriber::displayed_example_matches_its_outcome",
+            ) {
+                return;
+            }
+            let _registration_guard = crate::DOCUMENTATION_REGISTRATION_LOCK.blocking_lock();
+            nemo_relay::context::set_thread_scope_stack(nemo_relay::context::create_scope_stack());
+            let before = nemo_relay::registry::list_runtime_registrations(None).unwrap();
+            let subscriber = create_subscriber().unwrap();
+            assert!(subscriber.runtime_diagnostics().entries().is_empty());
+            subscriber.shutdown().unwrap();
+            assert_eq!(
+                nemo_relay::registry::list_runtime_registrations(None).unwrap(),
+                before
+            );
+        }
+    }
+    mod opentelemetry_signals {
+        include!("../../../docs/reference/api/_code/rust/opentelemetry_signals.rs");
+        #[test]
+        fn displayed_example_matches_its_outcome() {
+            let _registration_guard = crate::DOCUMENTATION_REGISTRATION_LOCK.blocking_lock();
+            nemo_relay::context::set_thread_scope_stack(nemo_relay::context::create_scope_stack());
+            let before = nemo_relay::registry::list_runtime_registrations(None).unwrap();
+            run_example().unwrap();
+            assert_eq!(
+                nemo_relay::registry::list_runtime_registrations(None).unwrap(),
+                before
+            );
+        }
+        #[test]
+        fn flush_failure_still_deregisters_and_shuts_down_both_subscribers() {
+            let _registration_guard = crate::DOCUMENTATION_REGISTRATION_LOCK.blocking_lock();
+            nemo_relay::context::set_thread_scope_stack(nemo_relay::context::create_scope_stack());
+            let before = nemo_relay::registry::list_runtime_registrations(None).unwrap();
+            for metrics_already_shutdown in [false, true] {
+                let logs = nemo_relay::exporter::opentelemetry_logs(OpenTelemetryLogConfig::new(
+                    "http://localhost:4318/v1/logs",
+                ))
+                .unwrap();
+                let metrics = nemo_relay::exporter::opentelemetry_metrics(
+                    OpenTelemetryMetricConfig::new("http://localhost:4318/v1/metrics"),
+                )
+                .unwrap();
+                logs.shutdown().unwrap();
+                if metrics_already_shutdown {
+                    metrics.shutdown().unwrap();
+                }
+                let expected_error = logs.force_flush().unwrap_err().to_string();
+                logs.register("otlp-logs").unwrap();
+                metrics.register("otlp-metrics").unwrap();
+                let result = complete_subscribers(&logs, &metrics);
+                let after = nemo_relay::registry::list_runtime_registrations(None).unwrap();
+                logs.deregister("otlp-logs").unwrap();
+                metrics.deregister("otlp-metrics").unwrap();
+                let logs_closed = logs.force_flush().is_err();
+                let metrics_closed = metrics.force_flush().is_err();
+                let _cleanup_results = [logs.shutdown(), metrics.shutdown()];
+                assert_eq!(result.unwrap_err().to_string(), expected_error);
+                assert_eq!(after, before);
+                assert!(logs_closed);
+                assert!(metrics_closed);
+            }
+        }
+    }
+    mod openinference_subscriber {
+        include!("../../../docs/reference/api/_code/rust/openinference_subscriber.rs");
+        #[test]
+        fn displayed_example_matches_its_outcome() {
+            if super::run_with_header_environment(
+                "plugin_api_examples::openinference_subscriber::displayed_example_matches_its_outcome",
+            ) {
+                return;
+            }
+            let _registration_guard = crate::DOCUMENTATION_REGISTRATION_LOCK.blocking_lock();
+            nemo_relay::context::set_thread_scope_stack(nemo_relay::context::create_scope_stack());
+            let before = nemo_relay::registry::list_runtime_registrations(None).unwrap();
+            let subscriber = create_subscriber().unwrap();
+            assert!(subscriber.runtime_diagnostics().entries().is_empty());
+            subscriber.shutdown().unwrap();
+            assert_eq!(
+                nemo_relay::registry::list_runtime_registrations(None).unwrap(),
+                before
+            );
+        }
+    }
+    mod resource_metrics {
+        include!("../../../docs/configure-plugins/_code/rust/resource_metrics.rs");
+        #[test]
+        fn displayed_example_matches_its_outcome() {
+            let _registration_guard = crate::DOCUMENTATION_REGISTRATION_LOCK.blocking_lock();
+            nemo_relay::context::set_thread_scope_stack(nemo_relay::context::create_scope_stack());
+            let before = nemo_relay::registry::list_runtime_registrations(None).unwrap();
+            main().unwrap();
+            let runtime = tokio::runtime::Runtime::new().unwrap();
+            runtime.block_on(async {
+                let snapshot = collect_snapshot().await.unwrap();
+                assert_eq!(snapshot.measurement_scope.as_str(), "process_tree");
+                assert!(snapshot.cpu.unwrap().consumption_rate.is_none());
+                assert!(resource_metrics::collect().await.is_err());
+            });
+            assert_eq!(
+                nemo_relay::registry::list_runtime_registrations(None).unwrap(),
+                before
+            );
+        }
     }
 }

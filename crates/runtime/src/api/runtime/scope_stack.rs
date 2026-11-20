@@ -11,7 +11,7 @@
 use std::cell::RefCell;
 use std::collections::{HashMap, HashSet};
 use std::future::Future;
-use std::sync::{Arc, RwLock, Weak};
+use std::sync::{Arc, Mutex, RwLock, Weak};
 
 use opentelemetry::propagation::TextMapPropagator;
 use opentelemetry::trace::{SpanContext, TraceContextExt, TraceFlags, TraceState};
@@ -35,7 +35,7 @@ use crate::registry::{RegistryEntry, SortedRegistry};
 pub struct ScopeStack {
     stack: Vec<ScopeHandle>,
     scope_registries: HashMap<Uuid, ScopeLocalRegistries>,
-    fresh_agents: HashSet<Uuid>,
+    fresh_agents: Arc<Mutex<HashSet<Uuid>>>,
     propagated_parent_uuid: Option<Uuid>,
     propagated_root_uuid: Option<Uuid>,
     propagated_traceparent: Option<String>,
@@ -283,7 +283,7 @@ impl ScopeStack {
         Self {
             stack: self.stack.clone(),
             scope_registries: self.scope_registries.clone(),
-            fresh_agents: self.fresh_agents.clone(),
+            fresh_agents: Arc::clone(&self.fresh_agents),
             propagated_parent_uuid: self.propagated_parent_uuid,
             propagated_root_uuid: self.propagated_root_uuid,
             propagated_traceparent: self.propagated_traceparent.clone(),
@@ -305,12 +305,7 @@ impl ScopeStack {
         Self {
             stack: vec![root.clone()],
             scope_registries,
-            fresh_agents: self
-                .fresh_agents
-                .contains(&root.uuid)
-                .then_some(root.uuid)
-                .into_iter()
-                .collect(),
+            fresh_agents: Arc::clone(&self.fresh_agents),
             propagated_parent_uuid: self.propagated_parent_uuid,
             propagated_root_uuid: self.propagated_root_uuid,
             propagated_traceparent: self.propagated_traceparent.clone(),
@@ -334,7 +329,7 @@ impl ScopeStack {
                 .filter(|(uuid, _)| visible.contains(uuid))
                 .map(|(uuid, registries)| (*uuid, registries.clone()))
                 .collect(),
-            fresh_agents: self.fresh_agents.intersection(&visible).copied().collect(),
+            fresh_agents: Arc::clone(&self.fresh_agents),
             propagated_parent_uuid: self.propagated_parent_uuid,
             propagated_root_uuid: self.propagated_root_uuid,
             propagated_traceparent: self.propagated_traceparent.clone(),
@@ -357,7 +352,7 @@ impl ScopeStack {
         Self {
             stack: vec![root],
             scope_registries: HashMap::new(),
-            fresh_agents: HashSet::from([root_uuid]),
+            fresh_agents: Arc::new(Mutex::new(HashSet::from([root_uuid]))),
             propagated_parent_uuid: None,
             propagated_root_uuid: None,
             propagated_traceparent: None,
@@ -403,7 +398,7 @@ impl ScopeStack {
         Ok(Self {
             stack,
             scope_registries: HashMap::new(),
-            fresh_agents: HashSet::from([root_uuid]),
+            fresh_agents: Arc::new(Mutex::new(HashSet::from([root_uuid]))),
             // The imported parent identifies the boundary crossing even when
             // Relay intentionally has no propagated root. OTel projections use
             // this marker to recognize a valid W3C remote parent.
@@ -421,7 +416,10 @@ impl ScopeStack {
     /// - `handle`: Scope handle to make the new top-most active scope.
     pub fn push(&mut self, handle: ScopeHandle) {
         if matches!(handle.scope_type, ScopeType::Agent) {
-            self.fresh_agents.insert(handle.uuid);
+            self.fresh_agents
+                .lock()
+                .unwrap_or_else(|error| error.into_inner())
+                .insert(handle.uuid);
         }
         self.stack.push(handle);
     }
@@ -558,7 +556,10 @@ impl ScopeStack {
                 ));
             }
             self.scope_registries.remove(uuid);
-            self.fresh_agents.remove(uuid);
+            self.fresh_agents
+                .lock()
+                .unwrap_or_else(|error| error.into_inner())
+                .remove(uuid);
             return Ok(self
                 .stack
                 .pop()
@@ -593,13 +594,19 @@ impl ScopeStack {
     /// Return whether the owning agent is fresh, then mark it stale.
     pub(crate) fn take_agent_freshness(&mut self, parent_uuid: Option<Uuid>) -> bool {
         let uuid = self.owning_agent_uuid(parent_uuid);
-        self.fresh_agents.remove(&uuid)
+        self.fresh_agents
+            .lock()
+            .unwrap_or_else(|error| error.into_inner())
+            .remove(&uuid)
     }
 
     /// Mark the agent that owns a compaction event as fresh.
     pub(crate) fn mark_agent_fresh(&mut self, parent_uuid: Option<Uuid>) {
         let uuid = self.owning_agent_uuid(parent_uuid);
-        self.fresh_agents.insert(uuid);
+        self.fresh_agents
+            .lock()
+            .unwrap_or_else(|error| error.into_inner())
+            .insert(uuid);
     }
 
     /// Get or create the scope-local registries for an active scope.
@@ -675,10 +682,20 @@ impl ScopeStack {
 
 impl std::fmt::Debug for ScopeStack {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        let fresh_agent_count = {
+            let fresh_agents = self
+                .fresh_agents
+                .lock()
+                .unwrap_or_else(|error| error.into_inner());
+            self.stack
+                .iter()
+                .filter(|scope| fresh_agents.contains(&scope.uuid))
+                .count()
+        };
         f.debug_struct("ScopeStack")
             .field("stack", &self.stack)
             .field("scope_registries_count", &self.scope_registries.len())
-            .field("fresh_agent_count", &self.fresh_agents.len())
+            .field("fresh_agent_count", &fresh_agent_count)
             .finish()
     }
 }

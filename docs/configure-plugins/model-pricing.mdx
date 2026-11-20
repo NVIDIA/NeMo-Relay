@@ -6,7 +6,6 @@ position: 2
 {/* SPDX-FileCopyrightText: Copyright (c) 2026, NVIDIA CORPORATION & AFFILIATES. All rights reserved.
 SPDX-License-Identifier: Apache-2.0 */}
 
-
 Use the built-in `pricing` component to configure model pricing catalogs for
 cost estimates on managed or manually observed LLM responses. Manual lifecycle
 end events must supply a response codec or normalized response annotation with
@@ -178,4 +177,4 @@ Relay does not ship a canonical price catalog. Unknown models and missing token
 fields leave cost absent instead of defaulting to zero. For the catalog schema,
 provider-aware lookup behavior, threshold-based model pricing, and custom
 `PricingSource` integrations, refer to
-[Provider Response Codecs and Model Pricing](/integrate-into-frameworks/provider-response-codecs#cost-estimation).
+[Model Pricing API Reference](/reference/api/model-pricing#cost-estimation).
