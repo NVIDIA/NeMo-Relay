@@ -7447,7 +7447,7 @@ async fn builtin_redact_sanitizes_openai_chat_response_from_detector_path() {
         "builtin": {
             "action": "redact",
             "detector": "email",
-            "target_paths": ["/message"]
+            "target_path_globs": ["/messages/*/content", "/message"]
         }
     })))
     .await
@@ -7456,41 +7456,46 @@ async fn builtin_redact_sanitizes_openai_chat_response_from_detector_path() {
     let events = capture_events("pii-redaction-openai-chat-redact-response");
     let response_codec: Arc<dyn LlmResponseCodec> = Arc::new(OpenAIChatCodec);
 
-    let _ = llm_call_execute(
-        LlmCallExecuteParams::builder()
-            .name("openai")
-            .request(LlmRequest {
-                headers: serde_json::Map::new(),
-                content: json!({"model": "gpt-4o-mini", "messages": [{"role": "user", "content": "hello"}]}),
-            })
-            .func(noop_openai_chat_exec_fn(json!({
-                "id": "chatcmpl-redact-123",
-                "model": "gpt-4o-mini",
-                "choices": [
-                    {
-                        "index": 0,
-                        "message": {"role": "assistant", "content": "alice@example.com"},
-                        "finish_reason": "stop"
-                    }
-                ]
-            })))
-            .response_codec(response_codec)
-            .build(),
-    )
-    .await
-    .unwrap();
-
-    let captured_events = captured_events_snapshot(&events);
-    assert_eq!(
-        captured_events[1].output().unwrap()["choices"][0]["message"]["content"],
-        json!("[REDACTED]")
-    );
-    assert_eq!(
-        captured_events[1]
-            .annotated_response()
-            .and_then(|response| response.response_text()),
-        Some("[REDACTED]".into())
-    );
+    for (refusal, expected_refusal) in [
+        (Json::Null, None),
+        (json!(""), Some("")),
+        (json!("Contact bob@example.com"), Some("Contact [REDACTED]")),
+    ] {
+        llm_call_execute(
+            LlmCallExecuteParams::builder()
+                .name("openai")
+                .request(LlmRequest {
+                    headers: serde_json::Map::new(),
+                    content: json!({"model": "gpt-4o-mini", "messages": [{"role": "user", "content": "hello"}]}),
+                })
+                .func(noop_openai_chat_exec_fn(json!({
+                    "id": "chatcmpl-redact-123",
+                    "model": "gpt-4o-mini",
+                    "choices": [
+                        {
+                            "index": 0,
+                            "message": {"role": "assistant", "content": "alice@example.com", "refusal": refusal},
+                            "finish_reason": "stop"
+                        }
+                    ]
+                })))
+                .response_codec(response_codec.clone())
+                .build(),
+        )
+        .await
+        .unwrap();
+        let captured_events = captured_events_snapshot(&events);
+        let end = captured_events.last().unwrap();
+        let message = &end.output().unwrap()["choices"][0]["message"];
+        assert_eq!(message["content"], "[REDACTED]");
+        assert_eq!(message["refusal"].as_str(), expected_refusal);
+        let expected = expected_refusal
+            .map_or_else(|| "[REDACTED]".to_owned(), |r| format!("[REDACTED]\n{r}"));
+        assert_eq!(
+            end.annotated_response().unwrap().response_text().as_deref(),
+            Some(expected.as_str())
+        );
+    }
 
     deregister_subscriber("pii-redaction-openai-chat-redact-response").unwrap();
     test_close_plugin_host().unwrap();
