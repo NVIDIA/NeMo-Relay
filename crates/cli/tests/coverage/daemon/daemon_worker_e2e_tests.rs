@@ -2373,3 +2373,6 @@ async fn broker_worker_disconnect_expiry_rejects_new_work_but_preserves_admitted
     worker_task.abort();
     provider_task.await.expect("HTTP/1.1 provider task");
 }
+
+#[path = "hook_pool_isolation_tests.rs"]
+mod hook_pool_isolation_tests;
