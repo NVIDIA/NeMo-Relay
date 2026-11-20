@@ -977,7 +977,7 @@ async fn worker_response_body_failure_logs_the_transport_cause() {
         );
         return;
     }
-    use nemo_relay::logging::{
+    use nemo_relay_logging::{
         FileLogSinkConfig, LogFormat, LogLevel, LogSinkConfig, LoggingConfig, init_logging,
     };
     let directory = tempfile::tempdir().unwrap();
