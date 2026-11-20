@@ -246,20 +246,13 @@ def test_custom_objects_are_recorded_with_types_and_stay_with_their_call() -> No
 @pytest.mark.parametrize("local", [False, True])
 @pytest.mark.parametrize("status", ["success", "error"])
 def test_tool_cache_replays_current_call_identity_or_runs_local_results_live(
-    integration: str, result_kind: str, local: bool, status: str, subscribed_events: list[nemo_relay.Event]
+    integration: str, result_kind: str, local: bool, status: str
 ) -> None:
     from langchain.agents.middleware import ToolCallRequest
     from langchain_core.messages import ToolMessage
     from langgraph.graph.message import add_messages
     from langgraph.types import Command, Send
 
-    from nemo_relay.adaptive import (
-        AdaptiveConfig,
-        AdaptiveRuntime,
-        ResponseCacheConfig,
-        ToolCacheConfig,
-        ToolOverride,
-    )
     from nemo_relay.integrations.langchain import NemoRelayMiddleware
     from nemo_relay.integrations.langgraph.tool_node import awrap_tool_call
 
@@ -306,19 +299,27 @@ def test_tool_cache_replays_current_call_identity_or_runs_local_results_live(
                 result = ToolMessage.model_validate(result)
         return result
 
+    stored: list[nemo_relay.Json] = []
+    hits = 0
+
+    async def replay(
+        context: nemo_relay.ToolExecutionContext,
+        next_call: Any,
+    ) -> nemo_relay.ToolExecutionInterceptOutcome:
+        """Serve the first replayable encoded result to later calls, like a tool-result cache."""
+        nonlocal hits
+        if stored:
+            hits += 1
+            return nemo_relay.ToolExecutionInterceptOutcome(stored[0])
+        downstream = await next_call(context.args)
+        encoded = downstream.result
+        if isinstance(encoded, dict) and cast(dict[str, Any], encoded.get("cache", {})).get("replayable") is True:
+            stored.append(encoded)
+        return nemo_relay.ToolExecutionInterceptOutcome(encoded, annotation=downstream.annotation)
+
     async def run() -> None:
         """Exercise repeated calls through the integration and verify results and graph history."""
-        runtime = AdaptiveRuntime(
-            AdaptiveConfig(
-                response_cache=ResponseCacheConfig(
-                    namespace="framework-tool-replay",
-                    tools=ToolCacheConfig(
-                        enabled=True, cache_errors=True, overrides={"lookup": ToolOverride(cacheable=True)}
-                    ),
-                )
-            ).to_dict()
-        )
-        await runtime.register()
+        nemo_relay.intercepts.register_tool_execution("test_tool_replay", 150, replay)
         try:
             with nemo_relay.scope.scope("cache-replay", nemo_relay.ScopeType.Agent):
                 history = []
@@ -347,17 +348,12 @@ def test_tool_cache_replays_current_call_identity_or_runs_local_results_live(
                     history = add_messages(history, [result])
                 assert len(history) == 3
         finally:
-            await runtime.shutdown()
+            nemo_relay.intercepts.deregister_tool_execution("test_tool_replay")
             await nemo_relay.subscribers.flush_async()
 
     asyncio.run(run())
     assert calls == (3 if local else 1)
-    hits = [
-        event
-        for event in subscribed_events
-        if event.name == "response_cache" and isinstance(event.data, dict) and event.data.get("status") == "hit"
-    ]
-    assert len(hits) == (0 if local else 2)
+    assert hits == (0 if local else 2)
 
 
 def test_replayed_graph_destination_binds_messages_without_display_content():

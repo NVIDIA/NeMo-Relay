@@ -392,7 +392,11 @@ struct StreamState {
 }
 impl StreamState {
     /// Cancel stream pulls and close retained sources under the invocation scope, preserving failed cleanup for retry.
-    fn close(self: &Arc<Self>, executor: &ComponentExecutor) -> CloseFuture {
+    ///
+    /// A first close reports a source cleanup the plugin already started, even a
+    /// failed one, instead of closing that source again. A retried close, or
+    /// `retry` at shutdown, retries failed source cleanup.
+    fn close(self: &Arc<Self>, executor: &ComponentExecutor, retry: bool) -> CloseFuture {
         self.cancelled.cancel();
         let pulls = std::mem::take(&mut *self.pulls.lock().unwrap_or_else(|e| e.into_inner()));
         for pull in pulls {
@@ -404,6 +408,7 @@ impl StreamState {
         {
             return future.clone();
         }
+        let retry = retry || closing.is_some();
         let state = self.clone();
         // Cleanup still runs after revocation. Bind scope on each poll while
         // authority is available, including polls of a raw stream's close future.
@@ -420,7 +425,12 @@ impl StreamState {
                 .unwrap_or_else(|e| e.into_inner())
                 .clone();
             for source in sources {
-                if let Err(error) = source.close().await {
+                let cleanup = if retry {
+                    source.close()
+                } else {
+                    source.cleanup()
+                };
+                if let Err(error) = cleanup.await {
                     return a::Result::Err(failure(error));
                 }
             }
@@ -471,13 +481,13 @@ impl a::Stream for OutputStream {
         future
     }
     fn close(&mut self) -> FfiFuture<a::Result<()>> {
-        let future = self.state.close(&self.executor);
+        let future = self.state.close(&self.executor, false);
         future.into_ffi()
     }
 }
 impl Drop for OutputStream {
     fn drop(&mut self) {
-        drop(self.state.close(&self.executor));
+        drop(self.state.close(&self.executor, false));
     }
 }
 struct Owner {
@@ -496,7 +506,7 @@ impl a::Component for Owner {
             let streams = registry.lock().unwrap_or_else(|e| e.into_inner()).clone();
             let closing = streams
                 .into_iter()
-                .map(|state| state.close(&executor))
+                .map(|state| state.close(&executor, true))
                 .collect::<Vec<_>>();
             for future in closing {
                 if let Err(error) = future.await {
@@ -1189,13 +1199,43 @@ pub struct LlmStreamNext {
 impl LlmStreamNext {
     /// Open a component-owned downstream LLM stream for the supplied request.
     pub async fn call(&self, request: LlmRequest) -> Result<LlmJsonAsyncStream> {
+        Ok(Box::pin(self.open(request).await?))
+    }
+    /// Open a downstream LLM stream whose cleanup result the caller can await.
+    ///
+    /// Use this instead of [`Self::call`] when a result must not be used after
+    /// the downstream stream fails to close, such as a response cache.
+    pub async fn open(&self, request: LlmRequest) -> Result<LlmInputStream> {
         let stream = local(self.next.open_stream(encode(request)?).await)?;
         let source = SourceStream::new(stream, &self.executor, self.scope.clone(), &self.sources);
-        Ok(Box::pin(InputStream {
+        Ok(LlmInputStream(InputStream {
             source,
             pending: None,
             terminal: false,
         }))
+    }
+}
+/// Downstream LLM stream that reports whether its cleanup succeeded.
+///
+/// The stream closes its downstream source when it ends or is dropped, as
+/// [`LlmStreamNext::call`] streams do. [`Self::close`] waits for that cleanup.
+pub struct LlmInputStream(InputStream);
+impl Stream for LlmInputStream {
+    type Item = Result<Json>;
+    fn poll_next(mut self: Pin<&mut Self>, cx: &mut Context<'_>) -> Poll<Option<Self::Item>> {
+        Pin::new(&mut self.0).poll_next(cx)
+    }
+}
+impl LlmInputStream {
+    /// Close the downstream stream, or wait for the close that its end started,
+    /// and return the cleanup result.
+    ///
+    /// A failed cleanup is reported again on later calls rather than retried;
+    /// component shutdown retries it.
+    pub async fn close(&mut self) -> Result<()> {
+        self.0.pending.take();
+        self.0.terminal = true;
+        self.0.source.cleanup().await
     }
 }
 type SourceClose = Shared<BoxFuture<'static, Result<()>>>;
@@ -1232,6 +1272,13 @@ impl SourceStream {
             .unwrap_or_else(|e| e.into_inner())
             .push(source.clone());
         source
+    }
+    /// The cleanup already started for this source, or a new one.
+    fn cleanup(self: &Arc<Self>) -> SourceClose {
+        if let Some(future) = &self.state.lock().unwrap_or_else(|e| e.into_inner()).closing {
+            return future.clone();
+        }
+        self.close()
     }
     /// Share source-stream cleanup and release the foreign source only after close succeeds.
     fn close(self: &Arc<Self>) -> SourceClose {
@@ -1312,12 +1359,12 @@ impl Stream for InputStream {
             Ok(Option::Some(v)) => Poll::Ready(Some(from_abi(v))),
             Ok(Option::None) => {
                 self.terminal = true;
-                drop(self.source.close());
+                drop(self.source.cleanup());
                 Poll::Ready(None)
             }
             Err(e) => {
                 self.terminal = true;
-                drop(self.source.close());
+                drop(self.source.cleanup());
                 Poll::Ready(Some(Err(e)))
             }
         }
@@ -1326,7 +1373,7 @@ impl Stream for InputStream {
 impl Drop for InputStream {
     fn drop(&mut self) {
         self.pending.take();
-        drop(self.source.close());
+        drop(self.source.cleanup());
     }
 }
 

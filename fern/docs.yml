@@ -114,6 +114,8 @@ redirects:
   destination: /nemo/relay/dev/reference/migration-guides
 - source: /nemo/relay/dev/configure-plugins/nemo-guardrails/configuration
   destination: /nemo/relay/dev/reference/migration-guides
+- source: /nemo/relay/dev/configure-plugins/adaptive/response-cache
+  destination: /nemo/relay/dev/reference/migration-guides
 
 # Build plugin guides
 - source: /nemo/relay/build-plugins/basic-guide

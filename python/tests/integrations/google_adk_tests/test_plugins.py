@@ -16,8 +16,6 @@ from _helpers import (
     ends,
     final_text,
     make_agent,
-    marks,
-    model_answer,
     present,
     request_of,
     responding_llm,
@@ -231,43 +229,4 @@ async def test_model_pricing_bills_gemini_tool_use_prompt_tokens_by_tool_evidenc
         assert cost is None
     else:
         assert as_object(cost)["total"] == pytest.approx(expected_total)
-    assert_balanced(subscribed_events)
-
-
-async def test_response_cache_bypasses_adk_requests_as_nondeterministic(
-    subscribed_events: list[nemo_relay.Event],
-) -> None:
-    from google.adk.agents import LlmAgent
-    from google.genai import types
-
-    from nemo_relay import plugin
-    from nemo_relay.adaptive import AdaptiveConfig, BackendSpec, ComponentSpec, ResponseCacheConfig, StateConfig
-
-    calls = 0
-
-    def count(request: LlmRequest) -> LlmResponse:
-        nonlocal calls
-        calls += 1
-        return model_answer(f"Call {calls}.")
-
-    adaptive = AdaptiveConfig(
-        state=StateConfig(backend=BackendSpec.in_memory()),
-        response_cache=ResponseCacheConfig(namespace="adk-tests", backend=BackendSpec.in_memory()),
-    )
-    agent = LlmAgent(
-        name="weather_agent",
-        model=responding_llm(count, model="gemini-2.5-flash"),
-        instruction="Be brief.",
-        generate_content_config=types.GenerateContentConfig(temperature=0),
-    )
-    async with plugin.activate(plugin.PluginConfig(components=[ComponentSpec(adaptive)])):
-        first = await run_recorded(agent)
-        second = await run_recorded(agent)
-
-    assert calls == 2
-    assert final_text(first) == "Call 1."
-    assert final_text(second) == "Call 2."
-    cache_marks = marks(subscribed_events, "response_cache")
-    statuses = [data_of(mark)["status"] for mark in cache_marks if isinstance(mark.data, dict)]
-    assert statuses == ["bypass", "bypass"]
     assert_balanced(subscribed_events)
