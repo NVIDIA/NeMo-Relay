@@ -18,6 +18,7 @@ import {
   type RedirectModel,
   decideRedirect,
   isNotable,
+  redactedUrl,
 } from './provider-redirect.ts';
 import { summarizeToolResult } from './tool-result.ts';
 import {
@@ -47,6 +48,10 @@ export type ExtensionOptions = {
 
 type UserBashStatus = 'policy-allowed' | 'fault-allowed' | 'error';
 
+type RedirectSource = 'session_start' | 'model_select';
+
+const CATALOG_TYPES = ['chat', 'image', 'classifier'] as const;
+
 export function createExtension(pi: ExtensionAPI, options: ExtensionOptions): void {
   let wiring: Promise<Wiring> | undefined;
   let attemptIndex = 0;
@@ -56,6 +61,7 @@ export function createExtension(pi: ExtensionAPI, options: ExtensionOptions): vo
   const redirectedProviders = new Set<string>();
   let registeredSessionKey: string | null = null;
   let pendingSessionStart: HookPayload | undefined;
+  let pendingRedirect: RedirectSource | undefined;
   const pristineCatalog = new Map<string, RedirectModel[]>();
 
   const bound = (): Promise<Wiring> => (wiring ??= options.bind());
@@ -87,6 +93,15 @@ export function createExtension(pi: ExtensionAPI, options: ExtensionOptions): vo
     } catch (error) {
       return { kind: 'fault', origin: 'configuration', detail: errorDetail(error) };
     }
+    const pending = pendingSessionStart;
+    if (pending === undefined) return active.post(body);
+    const retried = await active.post(pending);
+    if (retried.kind !== 'fault') pendingSessionStart = undefined;
+    if (body === pending) return retried;
+    if (retried.kind === 'fault') {
+      return { kind: 'fault', origin: retried.origin, detail: `session_start is still undelivered: ${retried.detail}` };
+    }
+    report(pending, retried);
     return active.post(body);
   }
 
@@ -106,6 +121,15 @@ export function createExtension(pi: ExtensionAPI, options: ExtensionOptions): vo
     return outcome;
   };
 
+  const retryPendingStart = (): Promise<boolean> =>
+    enqueue(async () => {
+      const pending = pendingSessionStart;
+      if (pending === undefined) return true;
+      const outcome = await deliver(pending);
+      report(pending, outcome);
+      return outcome.kind !== 'fault';
+    });
+
   async function gate(body: HookPayload, toolName: string): Promise<{ verdict: Verdict; faulted: boolean }> {
     const outcome = await enqueue(() => deliver(body));
     if (outcome.kind === 'fault') {
@@ -115,9 +139,10 @@ export function createExtension(pi: ExtensionAPI, options: ExtensionOptions): vo
   }
 
   const siblingsOf = (ctx: ExtensionContext, provider: string): RedirectModel[] =>
-    pristineCatalog.get(provider) ?? ctx.modelRegistry.getAll().filter((candidate) => candidate.provider === provider);
+    pristineCatalog.get(provider) ?? CATALOG_TYPES.flatMap((type) => ctx.modelRegistry.getModelsOfType(type, provider));
 
-  async function applyRedirect(ctx: ExtensionContext, source: 'session_start' | 'model_select'): Promise<void> {
+  async function applyRedirect(ctx: ExtensionContext, source: RedirectSource): Promise<void> {
+    pendingRedirect = source;
     const active = await bound();
     if (active.ready) {
       try {
@@ -127,11 +152,8 @@ export function createExtension(pi: ExtensionAPI, options: ExtensionOptions): vo
         return;
       }
     }
-    if (pendingSessionStart !== undefined) {
-      const retried = await emitOrdered(pendingSessionStart);
-      if (retried.kind === 'fault') return;
-      pendingSessionStart = undefined;
-    }
+    if (pendingSessionStart !== undefined && !(await retryPendingStart())) return;
+    pendingRedirect = undefined;
     const sessionKey = ctx.sessionManager.getSessionId();
     if (registeredSessionKey !== null && registeredSessionKey !== sessionKey) {
       redirectedProviders.clear();
@@ -155,7 +177,7 @@ export function createExtension(pi: ExtensionAPI, options: ExtensionOptions): vo
         reason: decision.reason,
         ...(decision.provider ? { provider: decision.provider } : {}),
         ...(decision.api ? { model_api: decision.api } : {}),
-        ...(decision.kind === 'redirect' ? { upstream: decision.upstream } : {}),
+        ...(decision.kind === 'redirect' ? { upstream: redactedUrl(decision.upstream) } : {}),
         ...(model ? { model_id: model.id } : {}),
         ...attribution(),
       }),
@@ -192,6 +214,7 @@ export function createExtension(pi: ExtensionAPI, options: ExtensionOptions): vo
     const outcome = await emitOrdered(body);
     if (outcome.kind === 'fault') {
       pendingSessionStart = body;
+      pendingRedirect = 'session_start';
       return;
     }
     await applyRedirect(ctx, 'session_start');
@@ -239,7 +262,7 @@ export function createExtension(pi: ExtensionAPI, options: ExtensionOptions): vo
   });
 
   pi.on('turn_start', async (event, ctx) => {
-    if (pendingSessionStart !== undefined) await applyRedirect(ctx, 'session_start');
+    if (pendingRedirect !== undefined) await applyRedirect(ctx, pendingRedirect);
     const seq = turnSeq;
     turnSeq += 1;
     await emitOrdered(

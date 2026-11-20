@@ -84,6 +84,14 @@ export function stubGateway(gatedHook) {
   };
 }
 
+export function modelRegistry(catalog, nativeProviders = new Set()) {
+  return {
+    getModelsOfType: (type, provider) =>
+      catalog().filter((model) => (model.type ?? 'chat') === type && model.provider === provider),
+    getRegisteredNativeProvider: (name) => (nativeProviders.has(name) ? { id: name } : undefined),
+  };
+}
+
 /** Start a stub server on a free port and return its base URL. */
 export async function listen(server) {
   await new Promise((resolve) => server.listen(0, '127.0.0.1', resolve));
@@ -120,7 +128,7 @@ export function load(extension, options = {}) {
     mode: 'interactive',
     hasUI: true,
     sessionManager: { getSessionId: () => 'sess-under-test' },
-    modelRegistry: { getAll: () => [], getRegisteredNativeProvider: () => undefined },
+    modelRegistry: modelRegistry(() => []),
     ...options.ctx,
   };
   return async (name, event = {}) => {

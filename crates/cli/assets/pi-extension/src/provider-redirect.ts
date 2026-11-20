@@ -179,6 +179,48 @@ function ipLiteral(url: URL): string | undefined {
   return isIP(host) === 0 ? undefined : host;
 }
 
+const NAT64_PREFIX = [0x64, 0xff9b, 0, 0, 0, 0];
+
+function ipv6Words(address: string): number[] {
+  const lastColon = address.lastIndexOf(':');
+  const last = address.slice(lastColon + 1);
+  const hex =
+    isIP(last) === 4
+      ? `${address.slice(0, lastColon + 1)}${last
+          .split('.')
+          .map((octet) => Number(octet).toString(16).padStart(2, '0'))
+          .join('')
+          .replace(/^(.{4})/, '$1:')}`
+      : address;
+  const gap = hex.indexOf('::');
+  const head = gap < 0 ? hex : hex.slice(0, gap);
+  const tail = gap < 0 ? '' : hex.slice(gap + 2);
+  const headWords = head === '' ? [] : head.split(':');
+  const tailWords = tail === '' ? [] : tail.split(':');
+  const fill = Array<string>(8 - headWords.length - tailWords.length).fill('0');
+  return [...headWords, ...fill, ...tailWords].map((word) => parseInt(word, 16));
+}
+
+function nat64Embedded(address: string): string | undefined {
+  if (isIP(address) !== 6) return undefined;
+  const words = ipv6Words(address);
+  if (!words.slice(0, 6).every((word, index) => word === NAT64_PREFIX[index])) return undefined;
+  return words
+    .slice(6)
+    .flatMap((word) => [word >> 8, word & 0xff])
+    .join('.');
+}
+
+function isUnroutable(address: string): boolean {
+  const embedded = nat64Embedded(address);
+  if (embedded !== undefined) return UNROUTABLE.check(embedded, 'ipv4');
+  return UNROUTABLE.check(address, isIP(address) === 6 ? 'ipv6' : 'ipv4');
+}
+
+export function redactedUrl(value: string): string {
+  return value.replace(/^([a-z][a-z0-9+.-]*:\/\/)[^/?#@]*@/i, '$1');
+}
+
 function isLoopback(url: URL): boolean {
   if (url.hostname.toLowerCase() === 'localhost') return true;
   const address = ipLiteral(url);
@@ -207,7 +249,7 @@ export function namedUpstreamRejection(baseUrl: string): string | undefined {
     return 'upstream base URL must use https unless it is a loopback address';
   }
   const address = ipLiteral(url);
-  if (address !== undefined && !isLoopback(url) && UNROUTABLE.check(address, isIP(address) === 6 ? 'ipv6' : 'ipv4')) {
+  if (address !== undefined && !isLoopback(url) && isUnroutable(address)) {
     return 'upstream base URL must name a public or loopback address';
   }
   return undefined;
@@ -221,7 +263,7 @@ function nameUpstream(model: RedirectModel, siblings: readonly RedirectModel[]):
       code: 'upstream-not-nameable',
       provider: model.provider,
       api: model.api,
-      reason: `the gateway would refuse ${model.baseUrl} as a named upstream: ${rejection}`,
+      reason: `the gateway would refuse ${redactedUrl(model.baseUrl)} as a named upstream: ${rejection}`,
     };
   }
   const target = normalizeBaseUrl(model.baseUrl);
@@ -236,7 +278,7 @@ function nameUpstream(model: RedirectModel, siblings: readonly RedirectModel[]):
       api: model.api,
       reason:
         `redirecting ${model.provider} would also move its ${unsafe.api} models, and ` +
-        `${unsafe.id} targets ${unsafe.baseUrl} rather than ${model.baseUrl}; ` +
+        `${unsafe.id} targets ${redactedUrl(unsafe.baseUrl)} rather than ${redactedUrl(model.baseUrl)}; ` +
         `a provider is named one endpoint, so its models must share one`,
     };
   }
@@ -246,7 +288,7 @@ function nameUpstream(model: RedirectModel, siblings: readonly RedirectModel[]):
     api: model.api,
     upstream: model.baseUrl,
     namedUpstream: model.baseUrl,
-    reason: `the gateway does not front ${model.baseUrl}, so each request names it`,
+    reason: `the gateway does not front ${redactedUrl(model.baseUrl)}, so each request names it`,
   };
 }
 
@@ -400,7 +442,7 @@ export function decideRedirect(
       provider: model.provider,
       api: model.api,
       reason:
-        `model targets ${model.baseUrl} but the gateway forwards ${family} traffic to ${upstream}; ` +
+        `model targets ${redactedUrl(model.baseUrl)} but the gateway forwards ${family} traffic to ${redactedUrl(upstream)}; ` +
         `redirecting would send the request to the wrong provider`,
     };
   }
@@ -422,7 +464,7 @@ export function decideRedirect(
       api: model.api,
       reason:
         `redirecting ${model.provider} would also move its ${unsafe.api} models, and ` +
-        `${unsafe.id} targets ${unsafe.baseUrl}, which the gateway does not front; ` +
+        `${unsafe.id} targets ${redactedUrl(unsafe.baseUrl)}, which the gateway does not front; ` +
         `point both upstreams at ${model.provider}, or accept no LLM spans for it`,
     };
   }
@@ -432,6 +474,6 @@ export function decideRedirect(
     provider: model.provider,
     api: model.api,
     upstream: model.baseUrl,
-    reason: `gateway forwards ${family} traffic to the same endpoint (${upstream})`,
+    reason: `gateway forwards ${family} traffic to the same endpoint (${redactedUrl(upstream)})`,
   };
 }

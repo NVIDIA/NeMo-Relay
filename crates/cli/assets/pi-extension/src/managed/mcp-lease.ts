@@ -120,12 +120,12 @@ export function createSharedLease(
 
   async function releaseActive(): Promise<void> {
     released = true;
+    removeFromRegistry();
     if (starting) await starting.catch(() => undefined);
     const active = child;
     initialized = false;
     child = undefined;
     if (active) await terminate(active, timeouts);
-    removeFromRegistry();
   }
 
   return {

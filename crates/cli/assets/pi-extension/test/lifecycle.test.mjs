@@ -16,7 +16,7 @@ import assert from 'node:assert/strict';
 import { createServer } from 'node:http';
 import { after, before, beforeEach, describe, it, mock } from 'node:test';
 
-import { listen, load as loadExtension, named, stubGateway } from './harness.mjs';
+import { listen, load as loadExtension, modelRegistry, named, stubGateway } from './harness.mjs';
 
 const extension = (await import('../index.ts')).default;
 
@@ -652,7 +652,7 @@ describe('the session join key on redirected providers', () => {
       hasUI: true,
       sessionManager: { getSessionId: () => current },
       model,
-      modelRegistry: { getAll: () => [model], getRegisteredNativeProvider: () => undefined },
+      modelRegistry: modelRegistry(() => [model]),
     };
     const fire = async (name, event = {}) => {
       for (const handler of handlers.get(name) ?? []) {
@@ -819,10 +819,7 @@ describe('redirect bookkeeping', () => {
       get model() {
         return selected;
       },
-      modelRegistry: {
-        getAll: () => catalog,
-        getRegisteredNativeProvider: (name) => (nativeProviders.has(name) ? { id: name } : undefined),
-      },
+      modelRegistry: modelRegistry(() => catalog, nativeProviders),
     };
     const fire = async (name, event = {}) => {
       for (const handler of handlers.get(name) ?? []) {
@@ -854,6 +851,25 @@ describe('redirect bookkeeping', () => {
     assert.equal(registrations.length, 1, 'the refreshed catalog decides, not the first one seen');
     assert.equal(registrations[0].config.headers['x-nemo-relay-upstream-base-url'], 'https://one.example/v1');
     await fire('session_shutdown', { reason: 'quit' });
+  });
+
+  it('skips a provider whose image or classifier models would move with the redirect', async () => {
+    const { fire, registrations, select } = loadWithCatalog();
+    const classifier = {
+      id: 'judge',
+      type: 'classifier',
+      api: 'typesafe-system-one',
+      provider: 'custom',
+      baseUrl: 'https://one.example',
+    };
+    select([serviceable, classifier], serviceable);
+    await fire('session_start', { reason: 'startup' });
+    await fire('session_shutdown', { reason: 'quit' });
+    assert.equal(registrations.length, 0, 'the gateway has no route for a classifier');
+    const [mark] = named(ctx.posts, 'model_redirect');
+    assert.equal(mark.outcome, 'skip');
+    assert.equal(mark.code, 'provider-mixed-endpoints');
+    assert.match(mark.reason, /judge/);
   });
 
   it('never overlays a natively registered provider', async () => {
@@ -924,8 +940,13 @@ describe('standalone startup', () => {
   it('returns from session_start without waiting for the gateway to answer', async () => {
     const held = [];
     let arrived;
-    const firstArrival = new Promise((resolve) => {
-      arrived = resolve;
+    let deadline;
+    const firstArrival = new Promise((resolve, reject) => {
+      deadline = setTimeout(() => reject(new Error('session_start never reached the gateway')), 10_000);
+      arrived = () => {
+        clearTimeout(deadline);
+        resolve();
+      };
     });
     const server = createServer((req, res) => {
       let body = '';
@@ -954,6 +975,7 @@ describe('standalone startup', () => {
       for (const res of held.splice(0)) res.end('{}');
       await fire('session_shutdown', { reason: 'quit' });
     } finally {
+      clearTimeout(deadline);
       for (const res of held) res.end('{}');
       await new Promise((resolve) => server.close(resolve));
       delete process.env.NEMO_RELAY_PI_GATEWAY_URL;

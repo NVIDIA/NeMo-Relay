@@ -15,7 +15,7 @@
 import assert from 'node:assert/strict';
 import { describe, it } from 'node:test';
 
-const { decideRedirect, isNotable, normalizeBaseUrl } = await import('../src/provider-redirect.ts');
+const { decideRedirect, isNotable, normalizeBaseUrl, redactedUrl } = await import('../src/provider-redirect.ts');
 
 /** The real NVIDIA catalog entry, which is what this was developed against. */
 const nvidiaModel = {
@@ -48,6 +48,9 @@ describe('redirect decision', () => {
     for (const [baseUrl, reason] of [
       ['https://10.20.30.40/v1', /public or loopback/],
       ['https://[fd00::1]/v1', /public or loopback/],
+      ['https://[::ffff:10.0.0.1]/v1', /public or loopback/],
+      ['https://[64:ff9b::a00:1]/v1', /public or loopback/],
+      ['https://[64:ff9b::169.254.169.254]/v1', /public or loopback/],
       ['http://remote.example/v1', /https unless/],
       ['https://user:secret@llm.example/v1', /credentials/],
       ['https://llm.example/v1?team=a', /query/],
@@ -61,6 +64,9 @@ describe('redirect decision', () => {
     }
     for (const baseUrl of [
       'https://llm.example/v1',
+      'https://[::ffff:8.8.8.8]/v1',
+      'https://[64:ff9b::808:808]/v1',
+      'https://[64:ff9b::127.0.0.1]/v1',
       'http://127.0.0.1:11434/v1',
       'http://localhost:8080',
       'http://[::1]:8080',
@@ -68,6 +74,42 @@ describe('redirect decision', () => {
       const model = { ...nvidiaModel, baseUrl };
       assert.equal(decideRedirect(model, naming, none, [model]).kind, 'redirect', baseUrl);
     }
+  });
+
+  it('keeps credentials in a model endpoint out of every reason', () => {
+    const secret = { ...nvidiaModel, baseUrl: 'https://user:secret@llm.example/v1' };
+    const sibling = { ...nvidiaModel, id: 'nvidia/other', baseUrl: 'https://user:secret@other.example/v1' };
+    const decisions = [
+      decideRedirect(secret, matchConfig({ canNameUpstream: true }), none, [secret]),
+      decideRedirect(secret, matchConfig({ openaiUpstream: 'https://api.openai.com/v1' }), none, [secret]),
+      decideRedirect(nvidiaModel, matchConfig({ canNameUpstream: true, openaiUpstream: undefined }), none, [
+        nvidiaModel,
+        sibling,
+      ]),
+      decideRedirect(nvidiaModel, matchConfig(), none, [nvidiaModel, sibling]),
+      decideRedirect(
+        nvidiaModel,
+        matchConfig({ openaiUpstream: 'https://user:secret@integrate.api.nvidia.com/v1' }),
+        none,
+        [],
+      ),
+    ];
+    assert.deepEqual(
+      decisions.map((decision) => (decision.kind === 'skip' ? decision.code : decision.kind)),
+      [
+        'upstream-not-nameable',
+        'upstream-mismatch',
+        'provider-mixed-endpoints',
+        'provider-mixed-endpoints',
+        'redirect',
+      ],
+    );
+    for (const decision of decisions) {
+      assert.doesNotMatch(decision.reason, /secret/, decision.reason);
+      assert.match(decision.reason, /https:\/\//);
+    }
+    assert.equal(redactedUrl('https://user:secret@llm.example/v1'), 'https://llm.example/v1');
+    assert.equal(redactedUrl('https://llm.example/v1?note=a@b'), 'https://llm.example/v1?note=a@b');
   });
 
   it('skips a natively registered provider, which an overlay would replace', () => {

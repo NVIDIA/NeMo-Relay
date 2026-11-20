@@ -161,7 +161,8 @@ The wire contract, pinned from both sides by tests:
 
 | Gateway Response | Extension Behavior |
 |---|---|
-| 2xx | allow |
+| 2xx with a JSON object body | allow; the body can carry an argument transform |
+| 2xx without a JSON object body, including `204` and `205` | fault — a success that cannot carry a transform is not a decision |
 | 403 with `error.type = "nemo_relay_guardrail_rejected"` | block, using `error.reason` |
 | 403 without that marker | fault — an authorization failure is not a policy decision |
 | other status, timeout, unreachable | fault, resolved by `NEMO_RELAY_PI_FAIL` |
@@ -357,9 +358,11 @@ header carries a single endpoint.
 The decision is re-evaluated on every `model_select`, so switching to a model the
 gateway does not front stops redirecting rather than silently misrouting.
 
-The override is provider-wide, and pi's extension API lists only chat models. A
-classifier or image model under a redirected provider moves with it, and the
-gateway has no route for it. Keep such models under a provider of their own.
+The override is provider-wide, so the sibling scan reads the provider's chat,
+image and classifier catalogs. A classifier or image model would move with the
+redirect, and the gateway has no route for it, so a provider that lists one is
+skipped with `provider-mixed-endpoints`. Keep such models under a provider of
+their own.
 
 32 of pi's 39 built-in providers speak an API the gateway serves; the seven
 above do not. Count from `builtinProviders()` rather than from the 38 files in

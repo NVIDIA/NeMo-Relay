@@ -10,13 +10,25 @@ import { describe, it, mock } from 'node:test';
 
 import { managedWiring } from '../managed.ts';
 import { createExtension } from '../src/extension.ts';
-import { createSharedLease } from '../src/managed/mcp-lease.ts';
+import { createSharedLease, sharedLease } from '../src/managed/mcp-lease.ts';
 import { postDaemonHook } from '../src/managed/transport.ts';
 
 const CREDENTIAL = Buffer.alloc(32, 7).toString('base64url');
 const DAEMON = 'https://relay.example.com';
 
 const spawnWithNode = (command, args, options) => spawn(process.execPath, [command, ...args], options);
+
+const INITIALIZE_REPLY = String.raw`import { createInterface } from 'node:readline';
+const lines = createInterface({ input: process.stdin, crlfDelay: Infinity });
+lines.on('line', (line) => {
+  const request = JSON.parse(line);
+  if (request.method === 'initialize') {
+    process.stdout.write(JSON.stringify({ jsonrpc: '2.0', id: request.id, result: {
+      protocolVersion: '2025-11-25', capabilities: {}, serverInfo: { name: 'nemo-relay', version: 'test' }
+    } }) + '\n');
+  }
+});
+`;
 
 function fakePi() {
   const handlers = new Map();
@@ -120,6 +132,41 @@ lines.on('line', (line) => {
       assert.equal(await launchCount(), 2);
     } finally {
       child?.kill('SIGKILL');
+      await rm(directory, { recursive: true, force: true });
+    }
+  });
+
+  it('frees the shared slot as soon as release starts, so a new lease never inherits a released one', async () => {
+    const directory = await mkdtemp(join(tmpdir(), 'nemo-relay-pi-lease-'));
+    const dispatcher = join(directory, 'dispatcher.mjs');
+    await writeFile(
+      dispatcher,
+      `${INITIALIZE_REPLY}process.stdin.on('end', () => setTimeout(() => process.exit(0), 100));\n`,
+    );
+    const config = {
+      schema: 'nemo-relay-managed-pi-v1',
+      daemonAddress: 'http://127.0.0.1:47632',
+      dispatcherCommand: dispatcher,
+    };
+    const children = [];
+    const track = (command, args, options) => {
+      const child = spawnWithNode(command, args, options);
+      children.push(child);
+      return child;
+    };
+    try {
+      const first = sharedLease(config, CREDENTIAL, track);
+      await first.ensureReady();
+      const releasing = first.release();
+      const second = sharedLease(config, CREDENTIAL, track);
+      assert.notEqual(second, first, 'a lease being released must not be handed out again');
+      await releasing;
+      await second.ensureReady();
+      assert.equal(children.length, 2);
+      await second.release();
+      assert.ok(children.every((child) => child.exitCode !== null || child.signalCode !== null));
+    } finally {
+      for (const child of children) child.kill('SIGKILL');
       await rm(directory, { recursive: true, force: true });
     }
   });
@@ -246,7 +293,11 @@ describe('managed pi wiring', () => {
   const context = (model, catalog) => ({
     cwd: '/workspace',
     model,
-    modelRegistry: { getAll: () => catalog, getRegisteredNativeProvider: () => undefined },
+    modelRegistry: {
+      getModelsOfType: (type, provider) =>
+        catalog.filter((candidate) => (candidate.type ?? 'chat') === type && candidate.provider === provider),
+      getRegisteredNativeProvider: () => undefined,
+    },
     sessionManager: { getSessionId: () => 'session' },
   });
 
@@ -452,6 +503,129 @@ describe('managed pi wiring', () => {
       await fire('session_shutdown', { reason: 'quit' }, ctx);
       assert.equal(registrations.length, 1, 'the provider is registered before the first model request');
       assert.deepEqual(seen, ['session_start', 'session_start', 'model_redirect', 'turn_start', 'session_shutdown']);
+    } finally {
+      spy.mock.restore();
+      globalThis.fetch = originalFetch;
+    }
+  });
+
+  it('keeps the redirect pending when the route drops after an accepted start, without reposting the start', async () => {
+    const { pi, fire, registrations } = fakePi();
+    let attempts = 0;
+    const lease = {
+      ensureReady: async () => {
+        attempts += 1;
+        if (attempts === 2) throw new Error('dispatcher exited before initialization');
+      },
+      release: async () => {},
+    };
+    const runtime = {
+      config: { schema: 'nemo-relay-managed-pi-v1', daemonAddress: DAEMON, dispatcherCommand: '/opt/nemo-relay' },
+      credential: CREDENTIAL,
+      lease,
+    };
+    const selected = { id: 'm', api: 'openai-responses', provider: 'custom', baseUrl: 'https://llm.example/v1' };
+    const errors = [];
+    const spy = mock.method(console, 'error', (line) => errors.push(String(line)));
+    try {
+      await withRecordedFetch(async (requests) => {
+        createExtension(pi, { onFault: 'closed', bind: async () => managedWiring(runtime) });
+        const ctx = context(selected, [selected]);
+        await fire('session_start', { reason: 'startup' }, ctx);
+        assert.equal(registrations.length, 0, 'no registration while the route is down');
+        assert.ok(errors.some((line) => /route is not ready/.test(line)));
+
+        await fire('turn_start', { turnIndex: 0, timestamp: 1 }, ctx);
+        assert.equal(registrations.length, 1, 'the next turn completes the registration');
+        await fire('session_shutdown', { reason: 'quit' }, ctx);
+        assert.deepEqual(
+          requests.map((request) => request.body.hook_event_name),
+          ['session_start', 'model_redirect', 'turn_start', 'session_shutdown'],
+          'the accepted session_start is not posted twice',
+        );
+      });
+    } finally {
+      spy.mock.restore();
+    }
+  });
+
+  it('delivers a rejected session_start ahead of the attempt mark that follows it', async () => {
+    const { pi, fire, registrations } = fakePi();
+    const { lease } = countingLease();
+    const runtime = {
+      config: { schema: 'nemo-relay-managed-pi-v1', daemonAddress: DAEMON, dispatcherCommand: '/opt/nemo-relay' },
+      credential: CREDENTIAL,
+      lease,
+    };
+    const selected = { id: 'm', api: 'openai-responses', provider: 'custom', baseUrl: 'https://llm.example/v1' };
+    const seen = [];
+    const originalFetch = globalThis.fetch;
+    let rejectStart = true;
+    globalThis.fetch = async (_url, request) => {
+      const body = JSON.parse(request.body);
+      seen.push(body.hook_event_name);
+      if (body.hook_event_name === 'session_start' && rejectStart) {
+        rejectStart = false;
+        return new Response(JSON.stringify({ error: { message: 'daemon draining' } }), { status: 503 });
+      }
+      return new Response('{}', { status: 200 });
+    };
+    const spy = mock.method(console, 'error', () => {});
+    try {
+      createExtension(pi, { onFault: 'closed', bind: async () => managedWiring(runtime) });
+      const ctx = context(selected, [selected]);
+      await fire('session_start', { reason: 'startup' }, ctx);
+      await fire('agent_start', {}, ctx);
+      await fire('turn_start', { turnIndex: 0, timestamp: 1 }, ctx);
+      await fire('session_shutdown', { reason: 'quit' }, ctx);
+      assert.equal(registrations.length, 1);
+      assert.deepEqual(seen, [
+        'session_start',
+        'session_start',
+        'agent_start',
+        'model_redirect',
+        'turn_start',
+        'session_shutdown',
+      ]);
+    } finally {
+      spy.mock.restore();
+      globalThis.fetch = originalFetch;
+    }
+  });
+
+  it('holds every dependent post back while the session_start retry keeps failing', async () => {
+    const { pi, fire } = fakePi();
+    const { lease } = countingLease();
+    const runtime = {
+      config: { schema: 'nemo-relay-managed-pi-v1', daemonAddress: DAEMON, dispatcherCommand: '/opt/nemo-relay' },
+      credential: CREDENTIAL,
+      lease,
+    };
+    const seen = [];
+    const originalFetch = globalThis.fetch;
+    globalThis.fetch = async (_url, request) => {
+      const body = JSON.parse(request.body);
+      seen.push(body.hook_event_name);
+      if (body.hook_event_name === 'session_start') {
+        return new Response(JSON.stringify({ error: { message: 'daemon draining' } }), { status: 503 });
+      }
+      return new Response('{}', { status: 200 });
+    };
+    const errors = [];
+    const spy = mock.method(console, 'error', (line) => errors.push(String(line)));
+    try {
+      createExtension(pi, { onFault: 'closed', bind: async () => managedWiring(runtime) });
+      const ctx = context(undefined, []);
+      await fire('session_start', { reason: 'startup' }, ctx);
+      await fire('agent_start', {}, ctx);
+      const verdict = await fire('tool_call', { toolCallId: 'c1', toolName: 'read', input: { path: 'a' } }, ctx);
+      await fire('session_shutdown', { reason: 'quit' }, ctx);
+      assert.deepEqual(seen, ['session_start', 'session_start', 'session_start', 'session_shutdown']);
+      assert.equal(verdict.block, true);
+      assert.match(verdict.reason, /session_start is still undelivered/);
+      assert.ok(
+        errors.some((line) => /agent_start hook was not accepted: session_start is still undelivered/.test(line)),
+      );
     } finally {
       spy.mock.restore();
       globalThis.fetch = originalFetch;

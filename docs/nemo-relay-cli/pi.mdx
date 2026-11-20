@@ -377,7 +377,8 @@ A guardrail rejection surfaces as HTTP 403 with
 
 | Gateway response | Extension behavior |
 | --- | --- |
-| 2xx | Allow |
+| 2xx with a JSON object body | Allow; the body can carry an argument transform |
+| 2xx without a JSON object body, including `204` and `205` | Fault — a success that cannot carry a transform is not a decision |
 | 403 with the guardrail marker | Block, using `error.reason` |
 | 403 without that marker | Fault — an authorization failure is not a policy decision |
 | Other status, timeout, unreachable | Fault, resolved by `NEMO_RELAY_PI_FAIL` |
