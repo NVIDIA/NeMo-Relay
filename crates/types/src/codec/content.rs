@@ -19,7 +19,8 @@ use super::request::{ContentPart, Message, MessageContent, OpenAiImageUrl};
 use super::response::AnnotatedLlmResponse;
 
 /// The normalized object against which a content location is interpreted.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, serde::Serialize)]
+#[serde(tag = "root", content = "message_index", rename_all = "snake_case")]
 pub enum ContentRoot {
     /// A request's message at this index.
     RequestMessage(usize),
@@ -32,7 +33,8 @@ pub enum ContentRoot {
 }
 
 /// Field containing an entry, relative to its normalized root.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, serde::Serialize)]
+#[serde(rename_all = "snake_case")]
 pub enum ContentField {
     /// Message content, or standalone content itself.
     Content,
@@ -51,9 +53,10 @@ pub enum ContentField {
 }
 
 /// Read-time location; not a stable edit handle or provider-wire offset.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, serde::Serialize)]
 pub struct ContentLocation {
     /// Owning normalized object.
+    #[serde(flatten)]
     pub root: ContentRoot,
     /// Field within that object.
     pub field: ContentField,

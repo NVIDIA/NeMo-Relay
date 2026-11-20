@@ -124,7 +124,7 @@ impl ContentSelection {
 }
 
 /// Owned snapshot; materialization copies selected content for transport or independent retention.
-#[derive(Debug, Clone, PartialEq)]
+#[derive(Debug, Clone, PartialEq, serde::Serialize)]
 pub struct ContentSnapshot {
     /// Ordered typed entries, including tool/media/native payloads.
     pub parts: Vec<SnapshotEntry>,
@@ -133,16 +133,18 @@ pub struct ContentSnapshot {
 }
 
 /// One owned typed entry and its read-time normalized location.
-#[derive(Debug, Clone, PartialEq)]
+#[derive(Debug, Clone, PartialEq, serde::Serialize)]
 pub struct SnapshotEntry {
     /// Normalized field and array position, not an edit handle.
     pub location: ContentLocation,
     /// Owned typed content.
+    #[serde(flatten)]
     pub kind: SnapshotKind,
 }
 
 /// Owned counterpart of borrowed content kinds.
-#[derive(Debug, Clone, PartialEq)]
+#[derive(Debug, Clone, PartialEq, serde::Serialize)]
+#[serde(tag = "kind", content = "value", rename_all = "snake_case")]
 pub enum SnapshotKind {
     /// Explicit text.
     Text(String),
@@ -172,7 +174,8 @@ pub enum SnapshotKind {
 }
 
 /// Tool payload in its existing normalized representation.
-#[derive(Debug, Clone, PartialEq)]
+#[derive(Debug, Clone, PartialEq, serde::Serialize)]
+#[serde(tag = "kind", content = "value", rename_all = "snake_case")]
 pub enum SnapshotPayload {
     /// Explicit absent legacy result.
     Null,
@@ -185,7 +188,7 @@ pub enum SnapshotPayload {
 }
 
 /// Owned invocation identifiers, name, and arguments.
-#[derive(Debug, Clone, PartialEq)]
+#[derive(Debug, Clone, PartialEq, serde::Serialize)]
 pub struct SnapshotToolCall {
     /// Item/tool-call identifier.
     pub id: Option<String>,
@@ -198,7 +201,7 @@ pub struct SnapshotToolCall {
 }
 
 /// Owned result identifiers and complete payload.
-#[derive(Debug, Clone, PartialEq)]
+#[derive(Debug, Clone, PartialEq, serde::Serialize)]
 pub struct SnapshotToolResult {
     /// Item identifier.
     pub id: Option<String>,
