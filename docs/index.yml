@@ -35,7 +35,7 @@ navigation:
       - page: "Deploy Overview"
         path: ./getting-started/deploy.mdx
         slug: deploy
-      - section: "Quick Starts"
+      - section: "Quickstart Guides"
         path: ./getting-started/quick-start/index.mdx
         slug: quick-start
         collapsed: open-by-default
