@@ -89,6 +89,25 @@ class DocsRetentionTests(unittest.TestCase):
         self.publish("0.10.0-beta.1", "0.10.1-rc.1")
         self.assert_layout(["v0.10.1"], None)
 
+    def test_agent_index_updates_without_replacing_release_snapshots(self) -> None:
+        """Publish agent assets alongside the shared config, independently of snapshots."""
+        self.publish("0.10.4")
+        config = SYNC.read_yaml(self.source / "fern" / "docs.yml")
+        config["agents"] = {"llms-txt": "./llms.txt", "page-directive": "Preserve the selected version."}
+        SYNC.write_yaml(self.source / "fern" / "docs.yml", config)
+        source_index = self.source / "fern" / "llms.txt"
+        snapshot = self.target / "fern" / "pages-v0.10.4" / "guide.mdx"
+        snapshot_before = snapshot.read_bytes()
+
+        for content in ("# Relay\n\nFirst index.\n", "# Relay\n\nUpdated index.\n"):
+            source_index.write_text(content)
+            SYNC.sync_dev(self.source, self.target)
+            published = SYNC.read_yaml(self.target / "fern" / "docs.yml")
+            self.assertEqual(published["agents"], config["agents"])
+            self.assertEqual((self.target / "fern" / published["agents"]["llms-txt"]).read_text(), content)
+            self.assertEqual(snapshot.read_bytes(), snapshot_before)
+            self.assert_layout(["v0.10.4"], "v0.10.4")
+
     def test_repository_redirects_survive_release_retention_and_dev_sync(self) -> None:
         """Keep legacy redirects usable after their original snapshots expire."""
         # Define targets independently of redirects so destination typos fail.
