@@ -238,6 +238,17 @@ def error(message: str, *, target: str = "", fields: JsonObject | None = None) -
     """Emit an error record through Relay."""
     ...
 
+class ApplicationExecutionContext(TypedDict, total=False):
+    """Concrete invocation context with optional application-owned JSON data.
+
+    Relay reserves the outer fields for its API. Application-specific fields
+    belong inside ``data`` and are interpreted and validated by middleware.
+    The complete context is limited to 16 KiB and 64 object/array levels.
+    Supplying context does not establish authorization.
+    """
+
+    data: dict[str, Json]
+
 class DataSchema(TypedDict):
     """Schema identifier attached to an event's opaque data payload."""
 

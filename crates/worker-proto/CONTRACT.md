@@ -69,6 +69,17 @@ Apply these version and compatibility rules:
   mandatory enum values, and missing mandatory alternatives. They must not
   interpret them as success, allow, or an empty payload. Tolerating unknown wire
   fields is not proof that a runtime conversion preserves those fields.
+- Preserving `ToolExecutionInvocation.execution_context` in tool execution
+  callbacks is required by the `1.0.0` worker contract, not an optional negotiated
+  feature. The value remains optional on each invocation: absence means no
+  context and an empty object is present context. Every worker claiming this
+  contract must preserve both cases. Hosts and SDKs check protocol identity at
+  activation rather than negotiating a separate context capability.
+  Before the first release, rebuild and repackage development workers with the
+  matching SDK when this baseline changes. An obsolete development binary that
+  advertises the same contract version cannot be identified by version alone;
+  it is not a supported compatibility path. Unknown-field tolerance does not
+  establish conformance with the required contract.
 - Provider extensions belong in explicit `extra` maps or provider-native variants.
   Unknown fields in those maps must round-trip. Encode and decode reject keys
   that shadow modeled native JSON fields, including `role` and `type`
@@ -287,6 +298,27 @@ message-limit interceptors and diagnostic admission. Preserve per-callback limit
 pre-decode admission, deadlines, retry bounds, and cleanup behavior.
 
 ## Shared Native and Worker Authoring Contract
+
+Tool execution context is limited by host admission to 16 KiB of serialized
+UTF-8 JSON and 64 container levels (root object at level 1; each nested object
+or array adds a level; scalars add none). The depth bound is checked before
+serialization and middleware dispatch and retains the worker decoder's recursion
+protection.
+
+Tool execution context is a concrete optional Relay-owned DTO, separate from tool
+arguments, results, annotations, and event metadata. Its optional `data` field is
+an application-owned JSON object/map. Unknown top-level JSON properties and
+non-object `data` are rejected. Omission, `{}`, and `{"data":{}}` remain distinct.
+Application keys belong inside `data`; middleware owns their schema and trust
+policy. Relay does not interpret approval claims or grant authorization from them.
+The protobuf `ApplicationExecutionContext` and native v1.0 DTO have a dedicated
+optional data field rather than arbitrary JSON at the top level.
+
+Continuations preserve the original context; changing tool arguments does not
+change context, and nested managed calls do not inherit it. Python SDK access
+returns defensive copies. Native and worker SDKs implement the matching
+unreleased 1.0 baseline; earlier development binaries must be rebuilt. Presence
+of a version identity alone cannot prove that an obsolete binary implements it.
 
 Use the Rust types in `nemo-relay-types` for shared plugin APIs. Keep generated
 protobuf messages, gRPC statuses, credentials, and capability IDs out of callback

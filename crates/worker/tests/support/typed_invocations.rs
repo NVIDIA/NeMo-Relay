@@ -26,6 +26,7 @@ pub(crate) struct ToolInvocation {
     pub tool_name: String,
     pub value: Option<pb::JsonValue>,
     pub tool_call_id: Option<String>,
+    pub execution_context: Option<pb::ApplicationExecutionContext>,
 }
 #[derive(Clone)]
 pub(crate) struct LlmInvocation {
@@ -71,6 +72,7 @@ impl InvocationFixture {
                         args: v.value,
                         tool_call_id: v.tool_call_id,
                         continuation_id: self.continuation_id,
+                        execution_context: v.execution_context,
                     })
                 } else {
                     let value = pb::ToolValueInvocation {

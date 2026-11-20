@@ -34,7 +34,7 @@ fn artifact(name: &str, dependency: &[u8]) -> NativeLibraryArtifact {
 #[test]
 fn checked_library_resides_without_retaining_component_state() {
     let library =
-        CheckedNativeLibrary::load(artifact("baseline", b"baseline"), "v1.0", "fixture").unwrap();
+        CheckedNativeLibrary::load(artifact("current", b"baseline"), "v1.0", "fixture").unwrap();
     assert_eq!(library.descriptor().native_api.to_string(), "v1.0");
     let identity = library.identity();
     let path = library.resident_path().to_owned();
@@ -48,11 +48,11 @@ fn checked_library_resides_without_retaining_component_state() {
         b"baseline"
     );
     let again =
-        CheckedNativeLibrary::load(artifact("baseline", b"baseline"), "v1.0", "fixture").unwrap();
+        CheckedNativeLibrary::load(artifact("current", b"baseline"), "v1.0", "fixture").unwrap();
     assert_eq!(again.identity(), identity);
     assert_eq!(again.resident_path(), path);
     let different = CheckedNativeLibrary::load(
-        artifact("baseline", b"changed dependency"),
+        artifact("current", b"changed dependency"),
         "v1.0",
         "fixture",
     )
@@ -69,12 +69,12 @@ fn checked_library_resides_without_retaining_component_state() {
 
 #[test]
 fn descriptor_disagreement_does_not_poison_resident_artifact() {
-    let error = CheckedNativeLibrary::load(artifact("baseline", b"mismatch"), "v1.0", "wrong-kind")
+    let error = CheckedNativeLibrary::load(artifact("current", b"mismatch"), "v1.0", "wrong-kind")
         .err()
         .unwrap();
     assert!(error.contains("disagrees with binary"), "{error}");
     let valid =
-        CheckedNativeLibrary::load(artifact("baseline", b"mismatch"), "v1.0", "fixture").unwrap();
+        CheckedNativeLibrary::load(artifact("current", b"mismatch"), "v1.0", "fixture").unwrap();
     assert!(valid.create_plugin().unwrap().allows_multiple_components());
     let error = CheckedNativeLibrary::load(artifact("future", b"mismatch"), "v1.0", "fixture")
         .err()
@@ -85,7 +85,7 @@ fn descriptor_disagreement_does_not_poison_resident_artifact() {
 /// Reject unsafe or unsupported contracts before constructing plugin-owned state.
 #[test]
 fn incompatible_layouts_and_unsupported_versions_fail_before_factory() {
-    for name in ["signature", "marker", "reordered"] {
+    for name in ["baseline", "signature", "marker", "reordered"] {
         let artifact = artifact(name, b"layout");
         let identity = artifact.identity();
         let error = CheckedNativeLibrary::load(artifact, "v1.0", "fixture")
@@ -116,8 +116,8 @@ fn incompatible_layouts_and_unsupported_versions_fail_before_factory() {
 #[test]
 fn missing_modules_and_incompatible_dependency_generations_are_rejected() {
     for (name, diagnostic) in [
-        ("missing", "missing required factory module"),
-        ("dependency", "dependency ABI differ"),
+        ("current_missing", "missing required factory module"),
+        ("current_dependency", "dependency ABI differ"),
     ] {
         let error = CheckedNativeLibrary::load(
             artifact(name, b"negative-compatibility"),

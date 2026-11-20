@@ -8,11 +8,13 @@ use std::thread::ThreadId;
 
 use chrono::{DateTime, Utc};
 use napi::bindgen_prelude::{
-    FnArgs, FromNapiValue, Function, FunctionCallContext, FunctionRef, JsValue,
-    JsValuesTupleIntoVec, ToNapiValue, Unknown,
+    FnArgs, FromNapiValue, Function, FunctionCallContext, FunctionRef, JsObjectValue, JsValue,
+    JsValuesTupleIntoVec, KeyCollectionMode, KeyConversion, KeyFilter, Object, ToNapiValue,
+    Unknown,
 };
 use napi::threadsafe_function::ThreadsafeFunction;
 use napi::{Env, Status, ValueType};
+use nemo_relay_types::api::tool::ApplicationExecutionContext;
 use serde::de::DeserializeOwned;
 use serde_json::Value;
 
@@ -99,6 +101,10 @@ pub(crate) type HandledTsfn<T, Args = T, Return = ()> =
     ThreadsafeFunction<T, Return, Args, Status, true, true>;
 
 pub(crate) const JAVASCRIPT_MAX_SAFE_INTEGER: u64 = (1 << 53) - 1;
+
+// Bound the prototype-safe context snapshot before shared envelope validation.
+const MAX_CONTEXT_JSON_DEPTH: u32 = 128;
+const MAX_CONTEXT_JSON_NODES: usize = 1_000_000;
 
 pub(crate) fn lock<T>(mutex: &Mutex<T>) -> MutexGuard<'_, T> {
     mutex.lock().unwrap_or_else(PoisonError::into_inner)
@@ -231,6 +237,88 @@ pub(crate) fn opt_json(val: Option<Json>) -> Option<Value> {
 pub(crate) fn parse_json<T: DeserializeOwned>(value: Value, what: &str) -> Result<T> {
     serde_json::from_value(value)
         .map_err(|error| Error::invalid_argument(format!("invalid {what}: {error}")))
+}
+
+/// Snapshot the new host context from own enumerable JSON properties only.
+/// Unlike the shared JSON converter, this does not promote inherited claims.
+/// Getter values are read as ordinary JSON input; no JavaScript globals are used.
+pub(crate) fn execution_context_json(
+    value: Option<Unknown>,
+) -> Result<Option<ApplicationExecutionContext>> {
+    let Some(value) = value else { return Ok(None) };
+    if matches!(value.get_type()?, ValueType::Null | ValueType::Undefined) {
+        return Ok(None);
+    }
+    let mut remaining_nodes = MAX_CONTEXT_JSON_NODES;
+    let value = own_context_json(value, MAX_CONTEXT_JSON_DEPTH, &mut remaining_nodes)?;
+    if !value.is_object() {
+        return Err(Error::invalid_argument(
+            "execution context must be a JSON object",
+        ));
+    }
+    ApplicationExecutionContext::try_from(value)
+        .map(Some)
+        .map_err(|error| Error::invalid_argument(error.to_string()))
+}
+
+fn own_context_json(
+    value: Unknown,
+    remaining_depth: u32,
+    remaining_nodes: &mut usize,
+) -> Result<Value> {
+    *remaining_nodes = remaining_nodes
+        .checked_sub(1)
+        .ok_or_else(|| Error::invalid_argument("Exceeded maximum JSON value count"))?;
+    if value.get_type()? != ValueType::Object {
+        return Ok(Json::from_unknown(value)?.0);
+    }
+    let remaining_depth = remaining_depth
+        .checked_sub(1)
+        .ok_or_else(|| Error::invalid_argument("Exceeded maximum JSON nesting depth"))?;
+    let object = Object::from_unknown(value)?;
+    if object.is_array()? {
+        let length = object.get_array_length()?;
+        if length as usize > *remaining_nodes {
+            return Err(Error::invalid_argument("Exceeded maximum JSON value count"));
+        }
+        let mut values = Vec::new();
+        for index in 0..length {
+            // A sparse array must not import a value from its prototype.
+            values.push(if object.has_own_property(&index.to_string())? {
+                own_context_json(object.get_element(index)?, remaining_depth, remaining_nodes)?
+            } else {
+                *remaining_nodes = remaining_nodes
+                    .checked_sub(1)
+                    .ok_or_else(|| Error::invalid_argument("Exceeded maximum JSON value count"))?;
+                Value::Null
+            });
+        }
+        return Ok(Value::Array(values));
+    }
+    let keys = object.get_all_property_names(
+        KeyCollectionMode::OwnOnly,
+        KeyFilter::Enumerable,
+        KeyConversion::NumbersToStrings,
+    )?;
+    let mut values = serde_json::Map::new();
+    for index in 0..keys.get_array_length()? {
+        let key: Unknown = keys.get_element(index)?;
+        // JSON object keys are strings; symbols are not part of its data model.
+        if key.get_type()? != ValueType::String {
+            continue;
+        }
+        let name = key.coerce_to_string()?.into_utf8()?.into_owned()?;
+        // An earlier getter may have removed a key from the captured own-key list.
+        if !object.has_own_property(&name)? {
+            continue;
+        }
+        let value = object.get_property(key)?;
+        values.insert(
+            name,
+            own_context_json(value, remaining_depth, remaining_nodes)?,
+        );
+    }
+    Ok(Value::Object(values))
 }
 
 pub(crate) fn parse_timestamp_micros(value: Option<f64>) -> Result<Option<DateTime<Utc>>> {

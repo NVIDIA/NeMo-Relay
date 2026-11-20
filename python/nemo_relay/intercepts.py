@@ -126,7 +126,9 @@ def register_tool_execution(name: str, priority: int, fn: ToolExecutionIntercept
         name: Unique intercept name used for later replacement or removal.
         priority: Execution order for the intercept. Lower values run first.
         fn: Callable invoked as ``fn(context, next_call)``. The context exposes
-            ``tool_name``, ``args``, and ``tool_call_id``. The callback may
+            ``tool_name``, ``args``, ``tool_call_id``, and optional host-supplied
+            ``execution_context``. This context is not event metadata or approval
+            authority and is not inherited by nested calls. The callback may
             await or call ``next_call(context.args)`` to continue the
             chain, modify the result, or bypass downstream execution entirely.
             It must return ``ToolExecutionInterceptOutcome``.

@@ -78,3 +78,30 @@ func TestToolShorthands(t *testing.T) {
 		t.Fatalf("ConditionalExecution failed: %v", err)
 	}
 }
+
+func TestExecuteForwardsApplicationExecutionContext(t *testing.T) {
+	var seen json.RawMessage
+	if err := nemo_relay.RegisterToolExecutionIntercept("tools_execution_context", 1,
+		func(ctx nemo_relay.ToolExecutionContext, next func(json.RawMessage) (nemo_relay.ToolExecutionResult, error)) (nemo_relay.ToolExecutionInterceptOutcome, error) {
+			var err error
+			seen, err = json.Marshal(ctx.ExecutionContext)
+			if err != nil {
+				return nemo_relay.ToolExecutionInterceptOutcome{}, err
+			}
+			result, err := next(ctx.Args)
+			return nemo_relay.ToolExecutionInterceptOutcome{Result: result.Result, Annotation: result.Annotation}, err
+		}); err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = nemo_relay.DeregisterToolExecutionIntercept("tools_execution_context") })
+	_, err := toolspkg.Execute("tools_context", json.RawMessage(`{"value":1}`),
+		func(args json.RawMessage) (nemo_relay.ToolExecutionResult, error) {
+			return nemo_relay.ToolExecutionResult{Result: args}, nil
+		}, nemo_relay.WithToolExecutionContext(json.RawMessage(`{"data":{"source":"example.application"}}`)))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if string(seen) != `{"data":{"source":"example.application"}}` {
+		t.Fatalf("shorthand lost context: %s", seen)
+	}
+}

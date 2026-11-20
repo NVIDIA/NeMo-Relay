@@ -584,3 +584,42 @@ fn diagnostic_transport_preserves_opaque_execution_and_phase_names() {
         assert_eq!(encode::<_, String>(phase).unwrap(), name);
     }
 }
+
+/// The wire DTO preserves context/data presence without interpreting application keys.
+#[test]
+fn application_execution_context_has_a_concrete_lossless_wire_envelope() {
+    use nemo_relay_types::api::tool::ApplicationExecutionContext;
+    for value in [
+        json!({}),
+        json!({"data": {}}),
+        json!({"data": {"host_approval": {"decision": "denied"}, "integer": u64::MAX,
+            "unicode": "π", "nul": "\u{0000}", "nested": [null, false, {"data": 1}]}}),
+    ] {
+        let context = ApplicationExecutionContext::try_from(value.clone()).unwrap();
+        let wire: pb::ApplicationExecutionContext = encode(context).unwrap();
+        assert_eq!(wire.data.is_some(), value.get("data").is_some());
+        let restored =
+            pb::ApplicationExecutionContext::decode(wire.encode_to_vec().as_slice()).unwrap();
+        let context: ApplicationExecutionContext = decode(restored).unwrap();
+        assert_eq!(context.to_json(), value);
+    }
+}
+
+/// Invalid application bytes fail without being included in conversion diagnostics.
+#[test]
+fn application_execution_context_wire_errors_do_not_disclose_data() {
+    use nemo_relay_types::api::tool::ApplicationExecutionContext;
+    let wire = pb::ApplicationExecutionContext {
+        data: Some(pb::JsonObject {
+            fields: [(
+                "private-key".into(),
+                pb::JsonValue {
+                    json: b"private-receipt".to_vec(),
+                },
+            )]
+            .into(),
+        }),
+    };
+    let error = decode::<ApplicationExecutionContext, _>(wire).unwrap_err();
+    assert_eq!(error.to_string(), "invalid application execution context");
+}

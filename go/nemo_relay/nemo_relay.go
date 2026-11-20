@@ -88,6 +88,13 @@ extern int32_t nemo_relay_tool_call_execute_with_options(
 	const FfiScopeHandle* parent, uint32_t attributes,
 	const char* data_json, const char* metadata_json,
 	const char* tool_call_id, uint32_t skip_stages, char** out);
+extern int32_t nemo_relay_tool_call_execute_with_context(
+	const char* name, const char* args_json,
+	NemoRelayToolExecFn func_cb, void* func_user_data, NemoRelayFreeFn func_free,
+	const FfiScopeHandle* parent, uint32_t attributes,
+	const char* data_json, const char* metadata_json,
+	const char* tool_call_id, uint32_t skip_stages,
+	const char* execution_context_json, char** out);
 
 // LLM lifecycle
 typedef int32_t (*NemoRelayCollectorCb)(void* user_data, const char* chunk_json);
@@ -378,6 +385,7 @@ extern int32_t goLlmRequestInterceptTrampoline(
 import "C"
 
 import (
+	"bytes"
 	"encoding/hex"
 	"encoding/json"
 	"errors"
@@ -1155,15 +1163,18 @@ func EmitMetric(name string, measurements []MetricMeasurement, opts ...MetricOpt
 // ---------------------------------------------------------------------------
 
 type toolCallOptions struct {
-	executionOptions    ExecutionOptions
-	hasExecutionOptions bool
-	parentHandle        *ScopeHandle // retains the borrowed native handle through the FFI call
-	parent              *C.FfiScopeHandle
-	attributes          uint32
-	data                *C.char
-	metadata            *C.char
-	toolCallID          *C.char
-	timestamp           *C.int64_t
+	executionContextError error
+	executionContext      json.RawMessage
+	hasExecutionContext   bool
+	executionOptions      ExecutionOptions
+	hasExecutionOptions   bool
+	parentHandle          *ScopeHandle // retains the borrowed native handle through the FFI call
+	parent                *C.FfiScopeHandle
+	attributes            uint32
+	data                  *C.char
+	metadata              *C.char
+	toolCallID            *C.char
+	timestamp             *C.int64_t
 }
 
 // ExecutionOptions chooses which middleware stages run for one managed call.
@@ -1196,6 +1207,39 @@ func WithToolExecutionOptions(options ExecutionOptions) ToolCallOption {
 	return func(o *toolCallOptions) { o.executionOptions = options; o.hasExecutionOptions = true }
 }
 
+// WithToolExecutionContext supplies an application-owned JSON object to tool
+// execution middleware, separately from model arguments and event metadata.
+// It is valid only on [ToolCallExecute], not [ToolCall] or [ToolCallEnd]. A nil
+// value omits the context; an empty JSON object remains a supplied context.
+//
+// Relay validates the object before middleware runs (16 KiB and 64 container
+// levels maximum). Context is neither automatically logged nor inherited by
+// nested tool calls. It carries application assertions, not proof of approval;
+// middleware must apply its own trust policy. The option snapshots its input
+// bytes and can be reused. Passing it more than once uses the last value.
+func WithToolExecutionContext(context json.RawMessage) ToolCallOption {
+	snapshot := bytes.Clone(context)
+	return func(o *toolCallOptions) {
+		o.executionContext = bytes.Clone(snapshot)
+		o.executionContextError = nil
+		o.hasExecutionContext = true
+	}
+}
+
+// WithApplicationExecutionContext snapshots typed application context for managed
+// execution. A nil pointer clears context. Serialization failures are returned by
+// ToolCallExecute before middleware or the tool implementation can run.
+func WithApplicationExecutionContext(context *ApplicationExecutionContext) ToolCallOption {
+	if context == nil {
+		return WithToolExecutionContext(nil)
+	}
+	snapshot, err := json.Marshal(context)
+	if err != nil {
+		return func(o *toolCallOptions) { o.executionContextError = err; o.hasExecutionContext = true }
+	}
+	return WithToolExecutionContext(snapshot)
+}
+
 // WithLLMExecutionOptions selects stages for LlmCallExecute and
 // LlmStreamCallExecute. It is invalid on manual LlmCall and LlmCallEnd.
 // If you pass this option more than once, Relay uses the last value.
@@ -1206,7 +1250,8 @@ func WithLLMExecutionOptions(options ExecutionOptions) LLMCallOption {
 // ToolCallOption is a functional option that configures optional parameters for
 // tool call functions ([ToolCall], [ToolCallEnd], [ToolCallExecute]). Available
 // options include [WithToolParent], [WithToolAttributes], [WithToolData],
-// [WithToolMetadata], [WithToolCallID], and [WithToolTimestamp]. Tool-call IDs
+// [WithToolMetadata], [WithToolCallID], [WithToolExecutionContext], and
+// [WithToolTimestamp]. Tool-call IDs
 // apply to both manual and managed spans. Explicit timestamps apply only to
 // manual [ToolCall] and [ToolCallEnd] spans; managed [ToolCallExecute] spans use
 // runtime-generated timestamps.
@@ -1305,6 +1350,9 @@ func ToolCall(name string, args json.RawMessage, opts ...ToolCallOption) (*ToolH
 	if o.hasExecutionOptions {
 		return nil, fmt.Errorf("execution options require ToolCallExecute")
 	}
+	if o.hasExecutionContext {
+		return nil, fmt.Errorf("execution context requires ToolCallExecute")
+	}
 
 	cName := C.CString(name)
 	cArgs := C.CString(string(args))
@@ -1336,6 +1384,9 @@ func ToolCallEnd(handle *ToolHandle, result ToolExecutionResult, opts ...ToolCal
 	defer freeToolOpts(o)
 	if o.hasExecutionOptions {
 		return fmt.Errorf("execution options require ToolCallExecute")
+	}
+	if o.hasExecutionContext {
+		return fmt.Errorf("execution context requires ToolCallExecute")
 	}
 
 	result = normalizeToolExecutionResult(result)
@@ -1369,6 +1420,20 @@ func ToolCallExecute(name string, args json.RawMessage, fn ToolExecutionFunc, op
 	defer runtime.KeepAlive(o.parentHandle)
 	defer freeToolOpts(o)
 
+	var cExecutionContext *C.char
+	if o.executionContextError != nil {
+		return ToolExecutionResult{}, o.executionContextError
+	}
+	if o.executionContext != nil {
+		// Validate before converting to a NUL-terminated C string: otherwise a
+		// raw NUL could truncate invalid JSON into a different valid object.
+		if !json.Valid(o.executionContext) {
+			return ToolExecutionResult{}, fmt.Errorf("execution context must be valid JSON")
+		}
+		cExecutionContext = C.CString(string(o.executionContext))
+		defer C.free(unsafe.Pointer(cExecutionContext))
+	}
+
 	id := registerClosure(fn)
 
 	cName := C.CString(name)
@@ -1378,14 +1443,14 @@ func ToolCallExecute(name string, args json.RawMessage, fn ToolExecutionFunc, op
 
 	var out *C.char
 	if err := callStatus(func() C.int32_t {
-		return C.nemo_relay_tool_call_execute_with_options(
+		return C.nemo_relay_tool_call_execute_with_context(
 			cName, cArgs,
 			C.NemoRelayToolExecFn(C.goToolExecTrampoline),
 			id,
 			C.NemoRelayFreeFn(C.goFreeTrampoline),
 			o.parent, C.uint32_t(o.attributes),
 			o.data, o.metadata,
-			o.toolCallID, o.executionOptions.skipStages(), &out,
+			o.toolCallID, o.executionOptions.skipStages(), cExecutionContext, &out,
 		)
 	}); err != nil {
 		return ToolExecutionResult{}, err

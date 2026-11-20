@@ -3722,6 +3722,41 @@ NemoRelayStatus nemo_relay_tool_call_execute_with_options(const char *name,
                                                           char **out);
 
 /**
+ * Execute a managed tool call with optional application execution context.
+ *
+ * This is the context-bearing equivalent of
+ * [`nemo_relay_tool_call_execute_with_options`]. `execution_context_json` is
+ * either null (no context) or a UTF-8 JSON object, bounded to 16 KiB serialized
+ * JSON and 64 container levels. An empty object is present context; JSON null
+ * is invalid. Context is supplied to execution middleware only, not to the
+ * business callback, tool arguments, lifecycle data, or event metadata.
+ * It is invocation-local: nested calls must supply their own context.
+ *
+ * Validation runs before middleware or execution. Relay takes ownership of
+ * callback data on entry and releases it even when validation fails. Existing
+ * execute entry points retain their signatures and supply no context.
+ *
+ * # Safety
+ * Use the same pointer and callback rules as
+ * [`nemo_relay_tool_call_execute_with_options`]. When non-null,
+ * `execution_context_json` must be a valid C string for the duration of this
+ * call. `out` must point to writable output-pointer storage.
+ */
+NemoRelayStatus nemo_relay_tool_call_execute_with_context(const char *name,
+                                                          const char *args_json,
+                                                          NemoRelayToolExecCb func,
+                                                          void *func_user_data,
+                                                          NemoRelayFreeFn func_free,
+                                                          const struct FfiScopeHandle *parent,
+                                                          uint32_t attributes,
+                                                          const char *data_json,
+                                                          const char *metadata_json,
+                                                          const char *tool_call_id,
+                                                          uint32_t skip_stages,
+                                                          const char *execution_context_json,
+                                                          char **out);
+
+/**
  * Register a tool conditional execution guardrail. The callback decides whether
  * a tool call should proceed. Returns an error message to reject, or null to allow.
  *

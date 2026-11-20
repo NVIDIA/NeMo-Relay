@@ -5,6 +5,242 @@
 
 use super::*;
 
+/// Observe the middleware-only envelope and forward changed business arguments.
+unsafe extern "C" fn context_capture_cb(
+    user_data: *mut libc::c_void,
+    context_json: *const c_char,
+    next_fn: NemoRelayToolExecNextFn,
+    next_ctx: *mut libc::c_void,
+) -> *mut c_char {
+    let context: Json =
+        serde_json::from_str(unsafe { CStr::from_ptr(context_json) }.to_str().unwrap()).unwrap();
+    unsafe { &*user_data.cast::<Mutex<Vec<Json>>>() }
+        .lock()
+        .unwrap()
+        .push(context.clone());
+    let mut args = context["args"].clone();
+    args["changed"] = json!(true);
+    let encoded = cstring(&args.to_string());
+    unsafe { next_fn(encoded.as_ptr(), next_ctx) }
+}
+
+#[test]
+fn execution_context_reaches_c_middleware_but_not_arguments_or_events() {
+    let _lock = TEST_MUTEX.lock().unwrap_or_else(|e| e.into_inner());
+    reset_globals();
+    let observed = Arc::new(Mutex::new(Vec::<Json>::new()));
+    unsafe {
+        let stack = fresh_scope_stack();
+        let middleware_name = cstring(&unique_name("ffi_context_middleware"));
+        let subscriber_name = cstring(&unique_name("ffi_context_events"));
+        assert_status!(
+            nemo_relay_register_tool_execution_intercept(
+                middleware_name.as_ptr(),
+                1,
+                context_capture_cb,
+                Arc::as_ptr(&observed).cast_mut().cast(),
+                None,
+            ),
+            NemoRelayStatus::Ok
+        );
+        assert_status!(
+            nemo_relay_register_subscriber(
+                subscriber_name.as_ptr(),
+                subscriber_cb,
+                ptr::null_mut(),
+                None,
+            ),
+            NemoRelayStatus::Ok
+        );
+        let name = cstring("ffi_context_tool");
+        let args = cstring(r#"{"value":2}"#);
+        let call_id = cstring("provider-context-call");
+        for supplied in [
+            Some(r#"{"data":{"review":{"reference":"context-only-marker"}}}"#),
+            Some("{}"),
+            None,
+        ] {
+            let mut out = ptr::null_mut();
+            let status = if let Some(value) = supplied {
+                let context = cstring(value);
+                nemo_relay_tool_call_execute_with_context(
+                    name.as_ptr(),
+                    args.as_ptr(),
+                    tool_exec_cb,
+                    ptr::null_mut(),
+                    None,
+                    ptr::null(),
+                    0,
+                    ptr::null(),
+                    ptr::null(),
+                    call_id.as_ptr(),
+                    0,
+                    context.as_ptr(),
+                    &mut out,
+                )
+            } else {
+                // Original ABI still works and omits the new callback field.
+                nemo_relay_tool_call_execute_with_options(
+                    name.as_ptr(),
+                    args.as_ptr(),
+                    tool_exec_cb,
+                    ptr::null_mut(),
+                    None,
+                    ptr::null(),
+                    0,
+                    ptr::null(),
+                    ptr::null(),
+                    call_id.as_ptr(),
+                    0,
+                    &mut out,
+                )
+            };
+            assert_status!(status, NemoRelayStatus::Ok);
+            let result = returned_json(out);
+            assert_eq!(
+                result["result"],
+                json!({"value":2,"changed":true,"executed":true})
+            );
+            assert_eq!(result["annotation"], json!({"source":"ffi"}));
+        }
+        let captures = observed.lock().unwrap();
+        assert_eq!(captures.len(), 3);
+        assert_eq!(
+            captures[0]["execution_context"],
+            json!({"data":{"review":{"reference":"context-only-marker"}}})
+        );
+        assert_eq!(captures[1]["execution_context"], json!({}));
+        assert!(captures[2].get("execution_context").is_none());
+        for captured in captures.iter() {
+            assert_eq!(captured["tool_call_id"], json!("provider-context-call"));
+            assert_eq!(captured["args"], json!({"value":2}));
+        }
+        assert_status!(nemo_relay_flush_subscribers(), NemoRelayStatus::Ok);
+        let events = lock_unpoisoned(event_log());
+        assert!(!events.is_empty());
+        let serialized = serde_json::to_string(&*events).unwrap();
+        assert!(!serialized.contains("context-only-marker"));
+        assert!(!serialized.contains("execution_context"));
+        drop(events);
+        assert_status!(
+            nemo_relay_deregister_subscriber(subscriber_name.as_ptr()),
+            NemoRelayStatus::Ok
+        );
+        assert_status!(
+            nemo_relay_deregister_tool_execution_intercept(middleware_name.as_ptr()),
+            NemoRelayStatus::Ok
+        );
+        nemo_relay_scope_stack_free(stack);
+    }
+}
+
+#[test]
+fn execution_context_validation_releases_c_callback_without_running_middleware_or_effect() {
+    use std::sync::atomic::{AtomicUsize, Ordering};
+
+    struct Counts {
+        effects: AtomicUsize,
+        middleware: AtomicUsize,
+        freed: AtomicUsize,
+    }
+    unsafe extern "C" fn effect(data: *mut libc::c_void, _args: *const c_char) -> *mut c_char {
+        unsafe { &*data.cast::<Counts>() }
+            .effects
+            .fetch_add(1, Ordering::SeqCst);
+        ptr::null_mut()
+    }
+    unsafe extern "C" fn middleware(
+        data: *mut libc::c_void,
+        _context: *const c_char,
+        _next: NemoRelayToolExecNextFn,
+        _next_data: *mut libc::c_void,
+    ) -> *mut c_char {
+        unsafe { &*data.cast::<Counts>() }
+            .middleware
+            .fetch_add(1, Ordering::SeqCst);
+        ptr::null_mut()
+    }
+    unsafe extern "C" fn release(data: *mut libc::c_void) {
+        unsafe { &*data.cast::<Counts>() }
+            .freed
+            .fetch_add(1, Ordering::SeqCst);
+    }
+    let _lock = TEST_MUTEX.lock().unwrap_or_else(|e| e.into_inner());
+    reset_globals();
+    let counts = Counts {
+        effects: AtomicUsize::new(0),
+        middleware: AtomicUsize::new(0),
+        freed: AtomicUsize::new(0),
+    };
+    let data = (&counts as *const Counts).cast_mut().cast();
+    unsafe {
+        let stack = fresh_scope_stack();
+        let middleware_name = cstring(&unique_name("ffi_invalid_context"));
+        assert_status!(
+            nemo_relay_register_tool_execution_intercept(
+                middleware_name.as_ptr(),
+                1,
+                middleware,
+                data,
+                None,
+            ),
+            NemoRelayStatus::Ok
+        );
+        let mut deep = json!(true);
+        for _ in 0..65 {
+            deep = json!({"nested":deep});
+        }
+        let name = cstring("ffi_invalid_context_tool");
+        let args = cstring("{}");
+        let cases = [
+            ("{".to_string(), NemoRelayStatus::InvalidJson),
+            ("null".to_string(), NemoRelayStatus::InvalidArg),
+            ("[]".to_string(), NemoRelayStatus::InvalidArg),
+            ("true".to_string(), NemoRelayStatus::InvalidArg),
+            (
+                r#"{"host_approval":null}"#.to_string(),
+                NemoRelayStatus::InvalidArg,
+            ),
+            (
+                json!({"value":"x".repeat(16_384)}).to_string(),
+                NemoRelayStatus::InvalidArg,
+            ),
+            (deep.to_string(), NemoRelayStatus::InvalidArg),
+        ];
+        for (index, (input, expected)) in cases.into_iter().enumerate() {
+            let input = cstring(&input);
+            let mut out = ptr::null_mut();
+            assert_status!(
+                nemo_relay_tool_call_execute_with_context(
+                    name.as_ptr(),
+                    args.as_ptr(),
+                    effect,
+                    data,
+                    Some(release),
+                    ptr::null(),
+                    0,
+                    ptr::null(),
+                    ptr::null(),
+                    ptr::null(),
+                    0,
+                    input.as_ptr(),
+                    &mut out,
+                ),
+                expected
+            );
+            assert!(out.is_null());
+            assert_eq!(counts.effects.load(Ordering::SeqCst), 0);
+            assert_eq!(counts.middleware.load(Ordering::SeqCst), 0);
+            assert_eq!(counts.freed.load(Ordering::SeqCst), index + 1);
+        }
+        assert_status!(
+            nemo_relay_deregister_tool_execution_intercept(middleware_name.as_ptr()),
+            NemoRelayStatus::Ok
+        );
+        nemo_relay_scope_stack_free(stack);
+    }
+}
+
 #[test]
 fn test_ffi_tool_execute_parent_data_and_error_paths() {
     let _lock = TEST_MUTEX.lock().unwrap_or_else(|e| e.into_inner());

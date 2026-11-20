@@ -295,9 +295,25 @@ A worker registers a tool execution intercept through
 `register_tool_execution_intercept`, whose callback receives
 `(context, next_call)`. The `ToolExecutionContext` carries `tool_name`,
 `args`, and the managed `tool_call_id`, which the host sends in the
-existing `ToolInvocation.tool_call_id` protobuf field. Use it when a worker
+existing `ToolExecutionInvocation.tool_call_id` protobuf field. Use it when a worker
 completes execution itself and must still correlate its result with the
 originating tool call.
+
+Every Relay 1.0 worker must preserve optional `execution_context`: the structured
+`ApplicationExecutionContext` object supplied by the application for this managed
+execution. Its optional `data` field is a JSON object/map for application-owned
+payloads; no arbitrary properties are accepted at the context's top level. The
+worker preserves application data without interpreting its meaning. It stays separate
+from tool arguments and event metadata, is isolated between intercepts, and is
+not inherited by nested calls. Relay validates structure and resource limits,
+but does not authenticate approval claims or automatically skip middleware.
+Supporting the field is required
+by the worker contract checked at handshake; there is no separate capability
+flag. Supplying a value remains optional. Rebuild and repackage development
+workers against the matching SDK rather than relying on an earlier development
+snapshot with the same contract version. See
+[Application Execution Context](/instrument-applications/advanced-guide#application-execution-context)
+for size limits, trust requirements, and an incremental adoption example.
 
 `ToolNext`, `LlmNext`, and `LlmStreamNext` are host proxies identified by an opaque
 continuation ID. Calling one issues a host-runtime RPC under the scope snapshot captured

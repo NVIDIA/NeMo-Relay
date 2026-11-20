@@ -11,6 +11,7 @@ at an ``await``. Callback exceptions are returned to the Relay host as
 structured worker errors.
 
 Public data types:
+    ApplicationExecutionContext: Extensible, structured per-invocation application context.
     Json: Any JSON-serializable Python value.
     Event: A Relay event represented as a JSON object.
     LlmRequest: A Relay LLM request represented as a JSON object.
@@ -120,6 +121,20 @@ grpc: Any = importlib.import_module("grpc")
 
 #: Any JSON-serializable Python value accepted by the worker protocol.
 Json: TypeAlias = Any
+
+
+class ApplicationExecutionContext(TypedDict, total=False):
+    """Concrete invocation context with optional application-owned JSON data.
+
+    Relay reserves the outer fields for its API. Application-specific fields
+    belong inside ``data`` and are interpreted and validated by middleware.
+    The complete context is limited to 16 KiB and 64 object/array levels.
+    Supplying context does not establish authorization.
+    """
+
+    data: dict[str, Json]
+
+
 #: A Relay event represented as a JSON object.
 Event: TypeAlias = dict[str, Any]
 
@@ -915,6 +930,49 @@ class LlmRequestInterceptOutcome:
         }
 
 
+def _validate_application_execution_context(value: object) -> None:
+    """Check the shared application-context contract without a host dependency.
+
+    Keep these structural checks aligned with the canonical schema under
+    crates/types/schemas/application-execution-context.schema.json. Only the
+    optional object-valued data field belongs at the top level; its payload
+    remains opaque application JSON and never grants authority by itself.
+    Bound container depth before serialization or defensive copying.
+    """
+    if not isinstance(value, dict):
+        raise WorkerSdkError("tool execution context must be an object")
+    pending: list[tuple[object, int]] = [(value, 0)]
+    while pending:
+        item, parent_depth = pending.pop()
+        if isinstance(item, (dict, list)):
+            depth = parent_depth + 1
+            if depth > 64:
+                raise WorkerSdkError("tool execution context exceeds 64 container levels")
+            if isinstance(item, dict):
+                if any(not isinstance(key, str) for key in item):
+                    raise WorkerSdkError("invalid application execution context")
+                pending.extend((child, depth) for child in item.values())
+            else:
+                pending.extend((child, depth) for child in item)
+        elif item is not None and not isinstance(item, (str, bool, int, float)):
+            raise WorkerSdkError("invalid application execution context")
+    if any(key != "data" for key in value) or ("data" in value and not isinstance(value["data"], dict)):
+        raise WorkerSdkError("invalid application execution context")
+    try:
+        encoded = json.dumps(value, ensure_ascii=False, allow_nan=False, separators=(",", ":")).encode("utf-8")
+    except (ValueError, TypeError, OverflowError, UnicodeError) as exc:
+        raise WorkerSdkError("invalid application execution context") from exc
+    if len(encoded) > 16_384:
+        raise WorkerSdkError("tool execution context exceeds 16384 serialized bytes")
+
+
+def _application_execution_context_from_proto(value: Any) -> ApplicationExecutionContext:
+    """Decode Relay's concrete context without interpreting application data."""
+    if value.HasField("data"):
+        return {"data": _decode_payload(value.data, "tool execution context data")}
+    return {}
+
+
 @dataclass(frozen=True, slots=True)
 class ToolExecutionContext:
     """Per-call context provided to a tool execution intercept.
@@ -923,11 +981,33 @@ class ToolExecutionContext:
     the managed tool call, or ``None`` when the call did not record one. It lets
     an intercept that completes execution without calling
     :meth:`ToolNext.call` associate its result with the originating tool call.
+
+    ``execution_context`` is structured application context, separate from tool arguments
+    and event metadata; it grants no authority. Construction snapshots it and
+    each read returns a defensive copy. Standard ``dataclasses.replace()`` can
+    preserve, replace or clear it without sharing mutable context data.
     """
 
     tool_name: str
     args: Json
     tool_call_id: str | None = None
+    execution_context: ApplicationExecutionContext | None = field(default=None, repr=False)
+
+    def __post_init__(self) -> None:
+        # Read the stored value directly: the public getter returns a copy.
+        supplied = object.__getattribute__(self, "execution_context")
+        if supplied is not None:
+            _validate_application_execution_context(supplied)
+        snapshot = copy.deepcopy(supplied)
+        object.__setattr__(self, "execution_context", snapshot)
+
+    def __getattribute__(self, name: str) -> Any:
+        """Return an independent snapshot when inspecting execution context."""
+        value = object.__getattribute__(self, name)
+        # Keep this a real constructor/dataclass field so dataclasses.replace()
+        # can preserve or replace it. Only this field needs copy-on-read;
+        # existing business arguments retain their original access semantics.
+        return copy.deepcopy(value) if name == "execution_context" else value
 
 
 @dataclass(slots=True)
@@ -2902,6 +2982,11 @@ class _WorkerService(worker_grpc.PluginWorkerServiceServicer):
                     tool_name=payload.tool_name,
                     args=_decode_payload(payload.args, "tool value"),
                     tool_call_id=(payload.tool_call_id if payload.HasField("tool_call_id") else None),
+                    execution_context=(
+                        _application_execution_context_from_proto(payload.execution_context)
+                        if payload.HasField("execution_context")
+                        else None
+                    ),
                 )
                 result = await _maybe_await(
                     self._handler(self._handlers.tool_executions, request.registration_name)(

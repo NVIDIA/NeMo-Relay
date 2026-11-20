@@ -1890,6 +1890,7 @@ impl WorkerPluginInstance {
                     let callback_name = callback_name.clone();
                     let tool_name = context.tool_name().to_owned();
                     let tool_call_id = context.tool_call_id().map(str::to_owned);
+                    let execution_context = context.execution_context().cloned();
                     let value = context.into_args();
                     Box::pin(async move {
                         instance
@@ -1898,6 +1899,7 @@ impl WorkerPluginInstance {
                                 &tool_name,
                                 value,
                                 tool_call_id.as_deref(),
+                                execution_context,
                                 next,
                             )
                             .await
@@ -2510,8 +2512,13 @@ impl WorkerPluginCallback {
         tool_name: &str,
         value: Json,
         tool_call_id: Option<&str>,
+        execution_context: Option<nemo_relay_types::api::tool::ApplicationExecutionContext>,
         next: ToolExecutionNextFn,
     ) -> FlowResult<ToolExecutionInterceptOutcome> {
+        // Preserving optional execution context is required by the 1.0 worker
+        // contract, not negotiated. Activation checks the declared identity and
+        // version; it cannot detect obsolete development binaries claiming the
+        // same identity. Those binaries are unsupported and must be rebuilt.
         let continuation_id = self
             .host_state
             .insert_continuation(Continuation::tool(next))?;
@@ -2519,7 +2526,12 @@ impl WorkerPluginCallback {
             registration_name,
             RegistrationSurface::ToolExecutionIntercept,
             Some(continuation_id),
-            Some(invoke_request_payload_tool(tool_name, value, tool_call_id)),
+            Some(invoke_request_payload::Payload::Tool(ToolInvocation {
+                tool_name: tool_name.into(),
+                value: Some(encode_json(JSON_SCHEMA, &value)),
+                tool_call_id: tool_call_id.map(Into::into),
+                execution_context: execution_context.as_ref().map(encode_wire).transpose()?,
+            })),
         )?;
         let response = self.invoke_async(request).await?;
         match response.result {
@@ -5373,6 +5385,7 @@ fn invoke_request_payload_tool(
         tool_name: tool_name.into(),
         value: Some(encode_json(JSON_SCHEMA, &value)),
         tool_call_id: tool_call_id.map(Into::into),
+        execution_context: None,
     })
 }
 

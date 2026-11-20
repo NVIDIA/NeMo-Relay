@@ -52,7 +52,7 @@ registration APIs to produce pending marks, and return the canonical outcome
 from every registered callback. Use a
 [mark event sanitizer](/reference/event-sanitizers) when the emitted pending
 mark's `data`, `category_profile`, or `metadata` must be sanitized. Public APIs,
-native `v1.0` plugins, and `nvidia.nemo.relay.worker.v1` workers require canonical
+native plugins, and `nvidia.nemo.relay.worker.v1` workers require canonical
 tool callback and intercept returns.
 
 ## Event and Exporter Projection
@@ -194,13 +194,14 @@ when materialized.
 
 Beginning with Relay 0.9, every tool execution intercept receives the tool
 call's context instead of separate tool-name and argument parameters. The
-context carries three fields:
+context carries the following fields:
 
 | Field | Description |
 | --- | --- |
 | `tool_name` | Name of the tool being executed. |
 | `args` | JSON argument payload entering this intercept. |
 | `tool_call_id` | Provider-issued correlation identifier recorded on the managed tool call, or absent when the call did not record one. |
+| `execution_context` | Optional concrete context with an application-defined `data` map for execution intercepts. See [Application Execution Context](/instrument-applications/advanced-guide#application-execution-context) for its scope and trust requirements. |
 
 `tool_call_id` is the same identifier that Relay records on tool lifecycle
 events. An intercept that completes execution itself, without invoking the
@@ -254,6 +255,13 @@ context object uses `toolName`, `args`, and `toolCallId`, where
 callbacks must ignore unknown fields. The typed worker protocol carries the
 optional `tool_call_id` in `ToolExecutionInvocation`.
 
+### Application Execution Context
+
+Applications can supply invocation-local context separately from tool arguments.
+See [Application Execution Context in Add Middleware](/instrument-applications/advanced-guide#application-execution-context)
+for the structured schema, binding APIs, approval example, trust requirements,
+and transport compatibility.
+
 ## Binding Contract
 
 Managed callbacks, continuations, and execute helpers use the same logical
@@ -272,7 +280,7 @@ Execution intercepts add lifecycle-owned pending marks to that shape:
 | Surface | Execution-intercept Outcome |
 | --- | --- |
 | Python | `ToolExecutionInterceptOutcome` |
-| Rust and native `v1.0` SDK | `ToolExecutionInterceptOutcome` |
+| Rust and native SDKs | `ToolExecutionInterceptOutcome` |
 | Go | `ToolExecutionInterceptOutcome` |
 | Node.js | `{ result, annotation?, pendingMarks? }`; JavaScript pending-mark DTOs use `categoryProfile` |
 | Public C | Canonical JSON with `result`, optional `annotation`, and optional `pending_marks` |

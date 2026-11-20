@@ -36,8 +36,9 @@ use typed_builder::TypedBuilder;
 use uuid::Uuid;
 
 pub use nemo_relay_types::api::tool::{
-    TOOL_EXECUTION_INTERCEPT_OUTCOME_SCHEMA, TOOL_EXECUTION_RESULT_SCHEMA, ToolAttributes,
-    ToolExecutionInterceptOutcome, ToolExecutionResult,
+    ApplicationExecutionContext, TOOL_EXECUTION_INTERCEPT_OUTCOME_SCHEMA,
+    TOOL_EXECUTION_RESULT_SCHEMA, ToolAttributes, ToolExecutionInterceptOutcome,
+    ToolExecutionResult,
 };
 
 fn queue_sanitized_event_with_scope_stack(
@@ -204,6 +205,11 @@ pub struct ToolCallExecuteParams {
     /// Choose which stages run for this call. All stages run by default.
     #[builder(default)]
     pub execution_options: ExecutionOptions,
+    /// Optional concrete Relay context with application data for execution interceptors.
+    /// Limited to 16 KiB and 64 object/array levels, counting the root as level 1.
+    /// This is not tool input, event metadata, or proof of authorization.
+    #[builder(default)]
+    pub execution_context: Option<ApplicationExecutionContext>,
 }
 
 /// Builder parameters for [`tool_call_end`].
@@ -879,7 +885,13 @@ pub async fn tool_call_execute(params: ToolCallExecuteParams) -> Result<ToolExec
         metadata,
         tool_call_id,
         execution_options,
+        execution_context: host_execution_context,
     } = params;
+    if let Some(value) = &host_execution_context {
+        value
+            .validate()
+            .map_err(|error| FlowError::InvalidArgument(error.to_string()))?;
+    }
     ensure_runtime_owner()?;
     if execution_options.conditional_execution {
         let (entries, subscribers, parent_uuid, guardrail_metadata) = {
@@ -1020,7 +1032,8 @@ pub async fn tool_call_execute(params: ToolCallExecuteParams) -> Result<ToolExec
                         .map_err(|error| FlowError::Internal(error.to_string()))?
                         .registry_snapshot(&[RuntimeRegistrationKind::ToolExecutionIntercept]);
                     let execution_context = ToolExecutionContext::new(execution_name, Json::Null)
-                        .with_tool_call_id(execution_tool_call_id);
+                        .with_tool_call_id(execution_tool_call_id)
+                        .with_execution_context(host_execution_context);
                     state.tool_build_execution_chain(&execution_context, func, &scope_local_refs)
                 } else {
                     Arc::new(move |args| {

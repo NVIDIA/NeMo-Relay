@@ -537,12 +537,20 @@ pub fn wrap_tool_exec_intercept_fn(
     Arc::new(
         move |context: ToolExecutionContext, next: ToolExecutionNextFn| {
             let ud = ud.clone();
-            let context_json = serde_json::json!({
-                "tool_name": context.tool_name(),
-                "args": context.args(),
-                "tool_call_id": context.tool_call_id(),
-            });
-            Box::pin(call_tool_exec_intercept_cb(cb, ud, context_json, next))
+            Box::pin(async move {
+                let mut context_json = serde_json::json!({
+                    "tool_name": context.tool_name(),
+                    "args": context.args(),
+                    "tool_call_id": context.tool_call_id(),
+                });
+                // The JSON callback envelope is extensible without changing
+                // its C signature. Keep invocation-only context separate from
+                // tool arguments and omit it for existing context-free calls.
+                if let Some(execution_context) = context.execution_context() {
+                    context_json["execution_context"] = execution_context.to_json();
+                }
+                call_tool_exec_intercept_cb(cb, ud, context_json, next).await
+            })
         },
     )
 }

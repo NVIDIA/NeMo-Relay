@@ -900,10 +900,34 @@ fn tool_execution_context_debug_omits_arguments() {
         tool_name: "lookup".into(),
         args: json!({"secret": "credential"}),
         tool_call_id: Some("call-1".into()),
+        execution_context: Some(
+            json!({"data": {"private-context": "do-not-log"}})
+                .try_into()
+                .unwrap(),
+        ),
     };
     let debug = format!("{context:?}");
     assert!(debug.contains("lookup"));
     assert!(debug.contains("call-1"));
     assert!(!debug.contains("secret"));
     assert!(!debug.contains("credential"));
+    assert!(!debug.contains("private-context"));
+    assert!(!debug.contains("do-not-log"));
+}
+
+#[test]
+fn tool_execution_context_preserves_legacy_json_and_optional_application_context() {
+    use nemo_relay_types::api::tool::ToolExecutionContext;
+    let legacy = json!({"tool_name": "lookup", "args": {}, "tool_call_id": "call-1"});
+    let mut context: ToolExecutionContext = serde_json::from_value(legacy.clone()).unwrap();
+    assert!(context.execution_context().is_none());
+    assert_eq!(serde_json::to_value(&context).unwrap(), legacy);
+    context.execution_context = Some(
+        json!({"data": {"example.review": {"reference": "review-1"}}})
+            .try_into()
+            .unwrap(),
+    );
+    let restored: ToolExecutionContext =
+        serde_json::from_value(serde_json::to_value(&context).unwrap()).unwrap();
+    assert_eq!(restored.execution_context(), context.execution_context());
 }

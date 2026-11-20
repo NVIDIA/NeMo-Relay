@@ -18,6 +18,7 @@ import pytest
 from async_helpers import resolve_async_result
 
 from nemo_relay import (
+    ApplicationExecutionContext,
     Event,
     Json,
     MarkEvent,
@@ -652,6 +653,127 @@ class TestToolIntercepts:
         assert seen["tool_name"] == "ctx_tool"
         assert seen["tool_call_id"] == "call-abc123"
         assert seen["arguments"] == {"value": 42}
+
+    async def test_execution_context_is_private_copied_and_not_inherited(self, subscribed_events) -> None:
+        seen = []
+        host = {"data": {"review": {"state": "host-only-sentinel"}}}
+
+        async def outer(context, next_call):
+            if context.tool_name == "execution_context_parent":
+                assert context.execution_context == {"data": {"review": {"state": "host-only-sentinel"}}}
+                context.execution_context["data"]["review"]["state"] = "changed"
+                await tools.execute("execution_context_nested", {}, lambda args: ToolExecutionResult(args))
+            downstream = await next_call(context.args)
+            return ToolExecutionInterceptOutcome(downstream.result)
+
+        async def inner(context, next_call):
+            seen.append((context.tool_name, context.execution_context))
+            downstream = await next_call({**context.args, "rewritten": True})
+            return ToolExecutionInterceptOutcome(downstream.result)
+
+        intercepts.register_tool_execution("py_execution_context_outer", 1, outer)
+        intercepts.register_tool_execution("py_execution_context_inner", 2, inner)
+        try:
+            pending = tools.execute(
+                "execution_context_parent", {"value": 1}, lambda args: ToolExecutionResult(args), execution_context=host
+            )
+            host["data"]["review"]["state"] = "changed-by-caller"
+            result = await pending
+            await tools.execute("execution_context_omitted", {}, lambda args: ToolExecutionResult(args))
+            assert result.result == {"value": 1, "rewritten": True}
+            assert seen == [
+                ("execution_context_nested", None),
+                ("execution_context_parent", {"data": {"review": {"state": "host-only-sentinel"}}}),
+                ("execution_context_omitted", None),
+            ]
+            await subscribers.flush_async()
+            assert all("host-only-sentinel" not in event.to_json() for event in subscribed_events)
+        finally:
+            assert intercepts.deregister_tool_execution("py_execution_context_outer")
+            assert intercepts.deregister_tool_execution("py_execution_context_inner")
+
+    @pytest.mark.parametrize(
+        "execution_context",
+        [[], "text", 1, True, {"data": None}, {"data": []}, {"unexpected": 1}, {"data": {"value": "x" * 16384}}],
+    )
+    async def test_invalid_execution_context_rejected_before_callbacks(self, execution_context) -> None:
+        calls = []
+
+        async def observing(context, next_call):
+            calls.append("intercept")
+            downstream = await next_call(context.args)
+            return ToolExecutionInterceptOutcome(downstream.result)
+
+        intercepts.register_tool_execution("py_invalid_execution_context", 1, observing)
+        try:
+            with pytest.raises((RuntimeError, ValueError, TypeError)):
+                await tools.execute(
+                    "invalid_context",
+                    {},
+                    lambda args: calls.append("tool") or ToolExecutionResult(args),
+                    execution_context=execution_context,
+                )
+            assert calls == []
+        finally:
+            assert intercepts.deregister_tool_execution("py_invalid_execution_context")
+
+    @pytest.mark.parametrize("supplied", [None, {}, {"data": {}}])
+    async def test_execution_context_preserves_absent_and_empty_data(self, supplied) -> None:
+        seen = []
+
+        async def observing(context, next_call):
+            seen.append(context.execution_context)
+            downstream = await next_call(context.args)
+            return ToolExecutionInterceptOutcome(downstream.result)
+
+        intercepts.register_tool_execution("py_empty_data_context", 1, observing)
+        try:
+            await tools.execute("empty_context", {}, lambda args: ToolExecutionResult(args), execution_context=supplied)
+            assert seen == [supplied]
+        finally:
+            assert intercepts.deregister_tool_execution("py_empty_data_context")
+
+    async def test_application_data_is_opaque_and_roundtrips(self) -> None:
+        supplied = ApplicationExecutionContext(
+            data={
+                "host_approval": {"decision": "application-defined", "version": 2},
+                "com.example.request": {"id": "request-123"},
+            }
+        )
+        seen = []
+
+        async def observing(context, next_call):
+            seen.append(context.execution_context)
+            downstream = await next_call(context.args)
+            return ToolExecutionInterceptOutcome(downstream.result)
+
+        intercepts.register_tool_execution("py_standard_context", 1, observing)
+        try:
+            await tools.execute(
+                "standard_context", {}, lambda args: ToolExecutionResult(args), execution_context=supplied
+            )
+            assert seen == [supplied]
+        finally:
+            assert intercepts.deregister_tool_execution("py_standard_context")
+
+    @pytest.mark.parametrize("invalid", [{"host_approval": {}}, {"data": None}, {"data": []}, {"data": 1}])
+    async def test_concrete_context_rejects_unknown_fields_and_nonobject_data(self, invalid) -> None:
+        calls = []
+        with pytest.raises((ValueError, RuntimeError), match="application execution context"):
+            await tools.execute(
+                "invalid_context",
+                {},
+                lambda args: calls.append(args) or ToolExecutionResult(args),
+                execution_context=invalid,
+            )
+        assert not calls
+
+    async def test_deep_execution_context_rejected_before_recursive_conversion(self) -> None:
+        supplied = {}
+        for _ in range(2_000):
+            supplied = {"child": supplied}
+        with pytest.raises(ValueError, match="64 container levels"):
+            await tools.execute("deep_context", {}, lambda args: ToolExecutionResult(args), execution_context=supplied)
 
     async def test_execution_intercept_tool_call_id_is_none_when_absent(self) -> None:
         seen = {}

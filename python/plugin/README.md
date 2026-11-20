@@ -106,6 +106,26 @@ Refer to [execution message limits](https://docs.nvidia.com/nemo/relay/build-plu
 
 ## Getting Started
 
+Tool execution interceptors receive `ToolExecutionContext.execution_context`
+when the caller supplied a concrete execution-context object. Its optional
+`data` field is a JSON object for application-owned fields; unknown outer fields
+and non-object `data` are rejected. Relay validates the envelope and resource
+limits; middleware validates and interprets the payload inside `data`. It is separate from
+`args` and event metadata. Each access returns a defensive copy; editing it or
+passing new arguments to `ToolNext.call()` does not replace the original
+context. Nested managed calls do not inherit it automatically. Relay assigns
+no authorization meaning to its contents and does not authenticate any claim
+inside the object.
+
+Preserving this field is required by the Relay 1.0 worker contract; there is no
+separate feature advertisement or opt-in. The value is still optional on each
+call: omission means no context, `{}` is an empty context, and `{"data":{}}`
+explicitly supplies empty application data. The
+handshake checks the protocol identity and exact contract version. Rebuild and
+repackage development workers with the matching SDK before using this baseline;
+an obsolete development binary advertising the same `1.0.0` identity cannot be
+distinguished by that version alone.
+
 A minimal worker plugin looks like this:
 
 ```python

@@ -27,6 +27,7 @@ pub(crate) struct ToolInvocation {
     pub tool_name: String,
     pub value: Option<wire::JsonValue>,
     pub tool_call_id: Option<String>,
+    pub execution_context: Option<wire::ApplicationExecutionContext>,
 }
 #[derive(Clone)]
 pub(crate) struct LlmInvocation {
@@ -72,6 +73,7 @@ impl PreparedInvocation {
                         args: v.value,
                         tool_call_id: v.tool_call_id,
                         continuation_id: self.continuation_id,
+                        execution_context: v.execution_context,
                     })
                 } else {
                     let value = wire::ToolValueInvocation {
