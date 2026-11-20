@@ -88,7 +88,7 @@ with `jq --version`. PowerShell uses its built-in JSON parser.
 
 <Steps toc={true}>
 
-## Install
+## Install Hermes Agent
 
 Install Hermes Agent using the commands for your platform:
 
@@ -172,7 +172,7 @@ from the model name. Preserve the model ID exactly as your endpoint expects it.
 
 </details>
 
-## Configure
+## Set up a working directory
 
 Create a disposable working directory and make sure the agent can write files there:
 
@@ -289,7 +289,7 @@ results. Working-directory paths can reveal usernames and repository names.
 Protect `logs/events.jsonl` even when full payload export is disabled.
 </Warning>
 
-## Run
+## Run a Hermes Agent turn
 
 From the same directory, run a one-shot turn with the common validation prompt:
 
@@ -321,7 +321,7 @@ repeat the configuration and gateway steps before another run if you change
 `plugins.toml` or its selection.
 </Note>
 
-## Verify
+## Verify the output
 
 The tool marker proves that the agent created the requested file. The event
 marker proves that Relay recorded matching start/end records for the required

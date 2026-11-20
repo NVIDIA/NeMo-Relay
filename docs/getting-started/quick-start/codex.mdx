@@ -116,7 +116,7 @@ Refer to [Codex authentication](https://developers.openai.com/codex/auth).
 
 <Steps toc={true}>
 
-## Install
+## Install the NeMo Relay CLI
 
 Install the NeMo Relay CLI version for these docs:
 
@@ -138,7 +138,7 @@ irm https://raw.githubusercontent.com/NVIDIA/NeMo-Relay/main/install.ps1 | iex
 </Tab>
 </Tabs>
 
-## Configure
+## Set up a working directory
 
 Create a disposable Git repository and permit Codex to write files there:
 
@@ -168,7 +168,7 @@ ATOF output can contain sensitive prompts, responses, tool arguments, and tool
 results. Protect `logs/events.jsonl` even when full payload export is disabled.
 </Warning>
 
-## Run
+## Run a Codex task
 
 The prompt asks the agent to create a known file so you can distinguish a
 successful tool action from an ordinary text reply. Relay records the turn,
@@ -214,7 +214,7 @@ Relay starts a temporary local gateway and injects Codex hooks for this run. It
 does not modify your persistent Codex plugin configuration.
 </Note>
 
-## Verify
+## Verify the output
 
 The tool marker proves that the agent created the requested file. The event
 marker proves that Relay recorded matching start/end records for the required

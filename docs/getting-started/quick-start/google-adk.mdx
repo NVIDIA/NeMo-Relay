@@ -74,7 +74,7 @@ You need:
 
 <Steps toc={true}>
 
-## Install
+## Install NeMo Relay
 
 Create a project. Install NeMo Relay with its Google ADK extra.
 If you already have a `uv` project, run only the `uv add` command in that directory.
@@ -112,7 +112,7 @@ argument and set that provider's credentials. For provider setup, refer to the
 [Google ADK Integration Guide](/supported-integrations/google-adk#setup).
 </Note>
 
-## Configure
+## Configure the plugin
 
 Create a file named `plugins.toml` in your project directory. This configuration
 saves Relay events to `logs/events.jsonl`.
@@ -125,7 +125,7 @@ ATOF output can contain sensitive prompts, responses, tool arguments, and tool
 results. Protect `logs/events.jsonl`, even with `enable_full_payloads = false`.
 </Warning>
 
-## Run
+## Run the agent
 
 The example gives an agent one tool, `emit_marker`. The tool returns a fixed
 message so you can check that it ran. The agent then returns a final answer.
@@ -147,7 +147,7 @@ Run the example from your project directory.
 uv run python quickstart.py
 ```
 
-## Verify
+## Verify the output
 
 The program checks the tool result, the final answer, and the saved events.
 It also checks that the request, tool call, and model call have matching start

@@ -74,7 +74,7 @@ Before you start, make sure you have:
 
 <Steps toc={true}>
 
-## Install
+## Install NeMo Relay
 
 Create a project and install the NeMo Relay version for these docs with the
 Deep Agents and NVIDIA model provider extras.
@@ -121,7 +121,7 @@ capability catalog lags the endpoint. This warning is advisory; the run must
 still produce the actual tool result and all three success lines below.
 </Note>
 
-## Configure
+## Configure the plugin
 
 `plugins.toml` enables Relay's observability component and writes its events
 to `logs/events.jsonl`. In your own project, use the same plugin configuration
@@ -138,7 +138,7 @@ ATOF output can contain sensitive prompts, responses, tool arguments, and tool
 results. Protect `logs/events.jsonl` even when full payload export is disabled.
 </Warning>
 
-## Run
+## Run the agent
 
 The example creates a Deep Agents agent with one marker tool.
 `add_nemo_relay_integration` adds Relay-aware middleware, including supported
@@ -164,7 +164,7 @@ Run it from the project directory:
 uv run python quickstart.py
 ```
 
-## Verify
+## Verify the output
 
 The program checks the tool result, final assistant response, and paired ATOF
 agent, tool, and LLM records. A successful run prints these markers in order:

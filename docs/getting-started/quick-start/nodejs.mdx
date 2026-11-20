@@ -71,7 +71,7 @@ Before you start, make sure you have:
 
 <Steps toc={true}>
 
-## Install
+## Install NeMo Relay
 
 Create a project and install the NeMo Relay version for these docs.
 For an existing Node.js project, run only the `npm install` command from its directory.
@@ -84,7 +84,7 @@ npm init -y
 npm install --save-exact nemo-relay-node@1.0.0
 ```
 
-## Configure
+## Configure the plugin
 
 Save the following configuration as `plugins.toml` in your project directory:
 
@@ -96,7 +96,7 @@ ATOF output can contain sensitive prompts, responses, tool arguments, and tool
 results. Protect `logs/events.jsonl` even when full payload export is disabled.
 </Warning>
 
-## Run
+## Run the program
 
 Save this file as `quickstart.js` beside `plugins.toml`:
 
@@ -110,7 +110,7 @@ Run it from the project directory so the relative output path resolves there:
 node quickstart.js
 ```
 
-## Verify
+## Verify the output
 
 The program checks the event file for paired agent, tool, and LLM lifecycle
 records. A successful run prints these markers in order:

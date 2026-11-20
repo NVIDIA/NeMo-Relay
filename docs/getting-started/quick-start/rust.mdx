@@ -82,7 +82,7 @@ Select a released documentation version to try Relay now.
 
 <Steps toc={true}>
 
-## Install
+## Install NeMo Relay
 
 Create a project and add the NeMo Relay crate version for these docs:
 
@@ -95,7 +95,7 @@ cargo add serde_json
 cargo add tokio --features macros,rt-multi-thread
 ```
 
-## Configure
+## Configure the plugin
 
 Save the following configuration as `plugins.toml` in your project directory:
 
@@ -107,7 +107,7 @@ ATOF output can contain sensitive prompts, responses, tool arguments, and tool
 results. Protect `logs/events.jsonl` even when full payload export is disabled.
 </Warning>
 
-## Run
+## Run the program
 
 Replace the generated `src/main.rs` in `relay-rust-quickstart` with this code:
 
@@ -123,7 +123,7 @@ Run it from `relay-rust-quickstart`, the directory containing `Cargo.toml` and
 cargo run
 ```
 
-## Verify
+## Verify the output
 
 The program checks the event file for paired agent, tool, and LLM lifecycle
 records. A successful run prints these markers in order:
