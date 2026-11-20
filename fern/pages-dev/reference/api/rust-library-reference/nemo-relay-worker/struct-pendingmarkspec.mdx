@@ -9,7 +9,7 @@ SPDX-License-Identifier: Apache-2.0 */}
 
 Generated from `cargo doc --no-deps -p nemo-relay-builtins -p nemo-relay-diagnostics -p nemo-relay-logging -p nemo-relay-plugin-host -p nemo-relay-codecs -p nemo-relay -p nemo-relay-runtime -p nemo-relay-model-pricing -p nemo-relay-resource-metrics -p nemo-relay-observability -p nemo-relay-adaptive -p nemo-relay-pii-redaction -p nemo-relay-ffi -p nemo-relay-types -p nemo-relay-plugin -p nemo-relay-worker-proto -p nemo-relay-worker`.
 
-<pre className="rust-signature"><code dangerouslySetInnerHTML={{"__html": "pub struct PendingMarkSpec &#123;\n    pub name: <a href=\"https://doc.rust-lang.org/1.96.1/alloc/string/struct.String.html\">String</a>,\n    pub category: <a href=\"https://doc.rust-lang.org/1.96.1/core/option/enum.Option.html\">Option</a>&lt;<a href=\"struct-eventcategory\">EventCategory</a>&gt;,\n    pub category_profile: <a href=\"https://doc.rust-lang.org/1.96.1/core/option/enum.Option.html\">Option</a>&lt;<a href=\"../nemo-relay-types/api/event/struct-categoryprofile\">CategoryProfile</a>&gt;,\n    pub data: <a href=\"https://doc.rust-lang.org/1.96.1/core/option/enum.Option.html\">Option</a>&lt;<a href=\"https://docs.rs/serde_json/1.0.149/serde_json/value/enum.Value.html\">Value</a>&gt;,\n    pub data_schema: <a href=\"https://doc.rust-lang.org/1.96.1/core/option/enum.Option.html\">Option</a>&lt;<a href=\"struct-dataschema\">DataSchema</a>&gt;,\n    pub metadata: <a href=\"https://doc.rust-lang.org/1.96.1/core/option/enum.Option.html\">Option</a>&lt;<a href=\"https://docs.rs/serde_json/1.0.149/serde_json/value/enum.Value.html\">Value</a>&gt;,\n    pub severity: <a href=\"https://doc.rust-lang.org/1.96.1/core/option/enum.Option.html\">Option</a>&lt;<a href=\"enum-logseverity\">LogSeverity</a>&gt;,\n&#125;"}} /></pre>
+<pre className="rust-signature"><code dangerouslySetInnerHTML={{"__html": "pub struct PendingMarkSpec &#123;\n    pub name: <a href=\"https://doc.rust-lang.org/1.96.1/alloc/string/struct.String.html\">String</a>,\n    pub category: <a href=\"https://doc.rust-lang.org/1.96.1/core/option/enum.Option.html\">Option</a>&lt;<a href=\"struct-eventcategory\">EventCategory</a>&gt;,\n    pub category_profile: <a href=\"https://doc.rust-lang.org/1.96.1/core/option/enum.Option.html\">Option</a>&lt;CategoryProfile&gt;,\n    pub data: <a href=\"https://doc.rust-lang.org/1.96.1/core/option/enum.Option.html\">Option</a>&lt;<a href=\"https://docs.rs/serde_json/1.0.149/serde_json/value/enum.Value.html\">Value</a>&gt;,\n    pub data_schema: <a href=\"https://doc.rust-lang.org/1.96.1/core/option/enum.Option.html\">Option</a>&lt;<a href=\"struct-dataschema\">DataSchema</a>&gt;,\n    pub metadata: <a href=\"https://doc.rust-lang.org/1.96.1/core/option/enum.Option.html\">Option</a>&lt;<a href=\"https://docs.rs/serde_json/1.0.149/serde_json/value/enum.Value.html\">Value</a>&gt;,\n    pub severity: <a href=\"https://doc.rust-lang.org/1.96.1/core/option/enum.Option.html\">Option</a>&lt;<a href=\"enum-logseverity\">LogSeverity</a>&gt;,\n&#125;"}} /></pre>
 
 Mark requested by middleware for materialization by a lifecycle owner.
 
@@ -109,27 +109,27 @@ Create a builder for building `PendingMarkSpec`. On the builder, call `.name(...
 
 ### `impl WireValue<Box<PendingMarkSpec>> for PendingMarkSpec`
 
-<pre className="rust-signature"><code dangerouslySetInnerHTML={{"__html": "impl <a href=\"../nemo-relay-worker-proto/conversions/trait-wirevalue\">WireValue</a>&lt;<a href=\"https://doc.rust-lang.org/1.96.1/alloc/boxed/struct.Box.html\">Box</a>&lt;<a href=\"../nemo-relay-worker-proto/nvidia_worker_v1/struct-pendingmarkspec\">PendingMarkSpec</a>&gt;&gt; for <a href=\"struct-pendingmarkspec\">PendingMarkSpec</a>"}} /></pre>
+<pre className="rust-signature"><code dangerouslySetInnerHTML={{"__html": "impl WireValue&lt;<a href=\"https://doc.rust-lang.org/1.96.1/alloc/boxed/struct.Box.html\">Box</a>&lt;PendingMarkSpec&gt;&gt; for <a href=\"struct-pendingmarkspec\">PendingMarkSpec</a>"}} /></pre>
 
 #### `to_wire`
 
-<pre className="rust-signature"><code dangerouslySetInnerHTML={{"__html": "fn <a href=\"../nemo-relay-worker-proto/conversions/trait-wirevalue\">to_wire</a>(self) -&gt; <a href=\"https://doc.rust-lang.org/1.96.1/core/result/enum.Result.html\">Result</a>&lt;<a href=\"https://doc.rust-lang.org/1.96.1/alloc/boxed/struct.Box.html\">Box</a>&lt;<a href=\"../nemo-relay-worker-proto/nvidia_worker_v1/struct-pendingmarkspec\">PendingMarkSpec</a>&gt;, <a href=\"../nemo-relay-worker-proto/conversions/struct-conversionerror\">ConversionError</a>&gt;"}} /></pre>
+<pre className="rust-signature"><code dangerouslySetInnerHTML={{"__html": "fn to_wire(self) -&gt; <a href=\"https://doc.rust-lang.org/1.96.1/core/result/enum.Result.html\">Result</a>&lt;<a href=\"https://doc.rust-lang.org/1.96.1/alloc/boxed/struct.Box.html\">Box</a>&lt;PendingMarkSpec&gt;, ConversionError&gt;"}} /></pre>
 
 #### `from_wire`
 
-<pre className="rust-signature"><code dangerouslySetInnerHTML={{"__html": "fn <a href=\"../nemo-relay-worker-proto/conversions/trait-wirevalue\">from_wire</a>(\n    value: <a href=\"https://doc.rust-lang.org/1.96.1/alloc/boxed/struct.Box.html\">Box</a>&lt;<a href=\"../nemo-relay-worker-proto/nvidia_worker_v1/struct-pendingmarkspec\">PendingMarkSpec</a>&gt;,\n) -&gt; <a href=\"https://doc.rust-lang.org/1.96.1/core/result/enum.Result.html\">Result</a>&lt;<a href=\"struct-pendingmarkspec\">PendingMarkSpec</a>, <a href=\"../nemo-relay-worker-proto/conversions/struct-conversionerror\">ConversionError</a>&gt;"}} /></pre>
+<pre className="rust-signature"><code dangerouslySetInnerHTML={{"__html": "fn from_wire(\n    value: <a href=\"https://doc.rust-lang.org/1.96.1/alloc/boxed/struct.Box.html\">Box</a>&lt;PendingMarkSpec&gt;,\n) -&gt; <a href=\"https://doc.rust-lang.org/1.96.1/core/result/enum.Result.html\">Result</a>&lt;<a href=\"struct-pendingmarkspec\">PendingMarkSpec</a>, ConversionError&gt;"}} /></pre>
 
 ### `impl WireValue<PendingMarkSpec> for PendingMarkSpec`
 
-<pre className="rust-signature"><code dangerouslySetInnerHTML={{"__html": "impl <a href=\"../nemo-relay-worker-proto/conversions/trait-wirevalue\">WireValue</a>&lt;<a href=\"../nemo-relay-worker-proto/nvidia_worker_v1/struct-pendingmarkspec\">PendingMarkSpec</a>&gt; for <a href=\"struct-pendingmarkspec\">PendingMarkSpec</a>"}} /></pre>
+<pre className="rust-signature"><code dangerouslySetInnerHTML={{"__html": "impl WireValue&lt;PendingMarkSpec&gt; for <a href=\"struct-pendingmarkspec\">PendingMarkSpec</a>"}} /></pre>
 
 #### `to_wire`
 
-<pre className="rust-signature"><code dangerouslySetInnerHTML={{"__html": "fn <a href=\"../nemo-relay-worker-proto/conversions/trait-wirevalue\">to_wire</a>(self) -&gt; <a href=\"https://doc.rust-lang.org/1.96.1/core/result/enum.Result.html\">Result</a>&lt;<a href=\"../nemo-relay-worker-proto/nvidia_worker_v1/struct-pendingmarkspec\">PendingMarkSpec</a>, <a href=\"../nemo-relay-worker-proto/conversions/struct-conversionerror\">ConversionError</a>&gt;"}} /></pre>
+<pre className="rust-signature"><code dangerouslySetInnerHTML={{"__html": "fn to_wire(self) -&gt; <a href=\"https://doc.rust-lang.org/1.96.1/core/result/enum.Result.html\">Result</a>&lt;PendingMarkSpec, ConversionError&gt;"}} /></pre>
 
 #### `from_wire`
 
-<pre className="rust-signature"><code dangerouslySetInnerHTML={{"__html": "fn <a href=\"../nemo-relay-worker-proto/conversions/trait-wirevalue\">from_wire</a>(value: <a href=\"../nemo-relay-worker-proto/nvidia_worker_v1/struct-pendingmarkspec\">PendingMarkSpec</a>) -&gt; <a href=\"https://doc.rust-lang.org/1.96.1/core/result/enum.Result.html\">Result</a>&lt;<a href=\"struct-pendingmarkspec\">PendingMarkSpec</a>, <a href=\"../nemo-relay-worker-proto/conversions/struct-conversionerror\">ConversionError</a>&gt;"}} /></pre>
+<pre className="rust-signature"><code dangerouslySetInnerHTML={{"__html": "fn from_wire(value: PendingMarkSpec) -&gt; <a href=\"https://doc.rust-lang.org/1.96.1/core/result/enum.Result.html\">Result</a>&lt;<a href=\"struct-pendingmarkspec\">PendingMarkSpec</a>, ConversionError&gt;"}} /></pre>
 
 ### `impl StructuralPartialEq for PendingMarkSpec`
 
