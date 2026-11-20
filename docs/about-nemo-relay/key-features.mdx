@@ -1,0 +1,45 @@
+---
+title: "Key Features of NVIDIA NeMo Relay"
+sidebar-title: "Key Features"
+description: "Explore NeMo Relay's shared runtime for observation and control, reusable instrumentation, core features, and developer tools."
+template-library-version: "1.0.0"
+position: 2
+---
+{/* SPDX-FileCopyrightText: Copyright (c) 2026, NVIDIA CORPORATION & AFFILIATES. All rights reserved.
+SPDX-License-Identifier: Apache-2.0 */}
+
+NVIDIA NeMo Relay provides a shared runtime layer for observing and controlling
+agent activity across supported applications, frameworks, and coding agents.
+It connects to your existing stack and exports data to your observability
+platforms while your application retains its orchestration and business logic.
+
+| Feature | Description |
+| --- | --- |
+| **[Unified Observation and Control](/about-nemo-relay/agent-runtime-primer)** | Observe agent activity and apply supported controls across frameworks, coding agents, and applications through one shared runtime model. |
+| **[Reusable Instrumentation](/configure-plugins/about)** | Instrument once, then configure policies, exporters, routing, and optimization without rewriting the integration. |
+| **[Connected Execution History](/about-nemo-relay/concepts/scopes)** | Keep model calls, tools, skills, and subagents connected in one hierarchical record of the observed run. |
+| **[Open Observability Formats](/configure-plugins/observability/about)** | Export events, trajectories, traces, logs, and metrics through ATOF, ATIF, and OpenTelemetry, including OpenInference projections. |
+| **[Middleware, Guardrails, and Telemetry Privacy](/about-nemo-relay/concepts/middleware)** | Apply guardrails where Relay controls execution, and redact sensitive telemetry before export. |
+| **[Extensible Plugin System](/build-plugins/about)** | Add reusable behavior through built-in components, native plugins, or separate worker processes. |
+| **[Adaptive Optimization](/configure-plugins/adaptive/about)** | Tune runtime behavior with adaptive hints, prompt-cache planning, response caching, and tool-parallelism analysis. |
+| **[Provider Gateway and Model Routing](/nemo-relay-cli/gateway-reference)** | Capture routed model traffic and extend model routing with plugins such as NeMo Switchyard. |
+| **[Framework and Coding-Agent Integrations](/supported-integrations/about)** | Connect supported frameworks and harnesses, or instrument your application directly through the SDKs. |
+| **[Managed Daemon Deployments](/daemon/about)** | Deploy local or remote services with shared configuration, per-user workers, and operational diagnostics. |
+
+To understand how these features work together, refer to
+[Architecture](/about-nemo-relay/architecture). For setup and usage, start with
+[Quick Starts](/getting-started/quick-start) or the
+[Overview](/about-nemo-relay/overview).
+
+## Developer Tools
+
+Relay provides runtime APIs, command-line tools, diagnostics, and authoring
+interfaces for application developers, framework maintainers, and plugin authors.
+
+| Tool | Description |
+| --- | --- |
+| **[Runtime APIs and SDKs](/instrument-applications/about)** | Instrument Rust, Python, and Node.js applications with scopes, events, marks, and managed LLM and tool calls. Add middleware, guardrails, subscribers, and exporters. |
+| **[Coding Agent CLI](/nemo-relay-cli/command-reference)** | Launch coding agents, inspect launch plans, configure plugins, manage integrations, and operate gateways and daemons with `nemo-relay`. |
+| **[Health Checks and Runtime Diagnostics](/reference/diagnostics)** | Check setup with `nemo-relay doctor`. Inspect runtime failures, counters, recent evidence, and diagnostic memory through CLI commands and APIs. |
+| **[Framework Integration Tools](/integrate-into-frameworks/about)** | Connect framework execution through managed wrappers or lifecycle hooks, map scopes and marks, and preserve provider request and response semantics. |
+| **[Plugin Authoring Tools](/build-plugins/about)** | Build application-local, native, or gRPC worker plugins with component registration, configuration validation, diagnostics, packaging, and lifecycle management. |
