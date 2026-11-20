@@ -115,7 +115,9 @@ Before you start, make sure you have:
 
 To quickly get started with NeMo Relay, complete the following steps:
 
-1. Install pi and NeMo Relay.
+<Steps toc={true}>
+
+### Install pi and NeMo Relay
 
 Install the pinned pi release and the NeMo Relay version for these docs:
 
@@ -155,7 +157,7 @@ A local gateway reachability warning can occur before step 3 starts the temporar
 gateway. Resolve any other installation or extension-loading problems before continuing.
 </Note>
 
-2. Set up a working directory.
+### Set up a working directory
 
 Create a disposable working directory and make sure the agent can write files there:
 
@@ -215,7 +217,7 @@ ATOF output can contain sensitive prompts, responses, tool arguments, and tool
 results. Protect `logs/events.jsonl` even when full payload export is disabled.
 </Warning>
 
-3. Run a pi task.
+### Run a pi task
 
 From the directory containing both files, run the common validation prompt:
 
@@ -255,7 +257,7 @@ name. A 403 can indicate that the selected model is not allowed by your key;
 confirm the endpoint and exact model ID before changing credentials.
 </Note>
 
-4. Verify the output.
+### Verify the output
 
 The tool marker proves that the agent created the requested file. The event
 marker proves that Relay recorded matching start/end records for the required
@@ -337,7 +339,7 @@ The verification markers confirm the tool-created file and matching start/end
 records for agent, tool, and LLM work.
 </Note>
 
-### Inspect the Recorded Activity
+#### Inspect the Recorded Activity
 
 Read the completed model calls from the same event file:
 
@@ -371,6 +373,8 @@ requiring full prompt or response capture.
 This run captured pi's agent, model, and tool activity in `logs/events.jsonl`.
 The temporary gateway ends with this invocation; repeat the wrapped command
 when you want to observe another run.
+
+</Steps>
 
 ## Next Steps
 

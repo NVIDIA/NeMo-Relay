@@ -76,7 +76,9 @@ Before you start, make sure you have:
 
 To quickly get started with NeMo Relay, complete the following steps:
 
-1. Install NeMo Relay.
+<Steps toc={true}>
+
+### Install NeMo Relay
 
 Create a project and install the NeMo Relay version for these docs with the
 LangChain and NVIDIA model provider extras.
@@ -90,7 +92,7 @@ uv init
 uv add "nemo-relay[langchain,langchain-nvidia]==1.0.0"
 ```
 
-2. Set up your API key.
+### Set up your API key
 
 Set your NVIDIA API key for the current shell:
 
@@ -119,7 +121,7 @@ The NVIDIA provider reads `NVIDIA_API_KEY`. In the LangChain string, the first `
 selects the provider; the remaining `nvidia/...` value is the model ID.
 </Note>
 
-3. Configure the plugin.
+### Configure the plugin
 
 `plugins.toml` enables Relay's observability component and writes its events
 to `logs/events.jsonl`. In your own project, use the same plugin configuration
@@ -136,7 +138,7 @@ ATOF output can contain sensitive prompts, responses, tool arguments, and tool
 results. Protect `logs/events.jsonl` even when full payload export is disabled.
 </Warning>
 
-4. Run the agent.
+### Run the agent
 
 The example creates a LangChain agent with one marker tool. The
 `require_marker_tool` middleware makes this test request a tool result before
@@ -162,7 +164,7 @@ Run it from the project directory:
 uv run python quickstart.py
 ```
 
-5. Verify the output.
+### Verify the output
 
 The program checks the tool result, final assistant response, and paired ATOF
 agent, tool, and LLM records. A successful run prints these markers in order:
@@ -179,7 +181,7 @@ The model can use different wording around the response marker. These checks
 validate a live provider call; they do not make the model deterministic.
 </Note>
 
-### Inspect the Recorded Activity
+#### Inspect the Recorded Activity
 
 Print one completed model call from the event file:
 
@@ -201,6 +203,8 @@ start and end records; `parent_uuid` connects it to its enclosing scope.
 and `metadata` can include the model identity and completion status, depending
 on the integration. These fields let you follow a call through the run without
 requiring full prompt or response capture.
+
+</Steps>
 
 ## Next Steps
 

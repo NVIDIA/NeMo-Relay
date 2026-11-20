@@ -108,7 +108,9 @@ Refer to [Claude Code authentication](https://code.claude.com/docs/en/authentica
 
 To quickly get started with NeMo Relay, complete the following steps:
 
-1. Install the NeMo Relay CLI.
+<Steps toc={true}>
+
+### Install the NeMo Relay CLI
 
 Install the NeMo Relay CLI version for these docs:
 
@@ -130,7 +132,7 @@ irm https://raw.githubusercontent.com/NVIDIA/NeMo-Relay/main/install.ps1 | iex
 </Tab>
 </Tabs>
 
-2. Set up a working directory.
+### Set up a working directory
 
 Create a disposable working directory and make sure the agent can write files there:
 
@@ -165,7 +167,7 @@ ATOF output can contain sensitive prompts, responses, tool arguments, and tool
 results. Protect `logs/events.jsonl` even when full payload export is disabled.
 </Warning>
 
-3. Run a Claude Code session.
+### Run a Claude Code session
 
 The prompt asks the agent to create a known file so you can distinguish a
 successful tool action from an ordinary text reply. Relay records the turn,
@@ -210,7 +212,7 @@ Relay starts a temporary local gateway and injects Claude Code hooks for this
 run. It does not modify your persistent Claude Code plugin configuration.
 </Note>
 
-4. Verify the output.
+### Verify the output
 
 The tool marker proves that the agent created the requested file. The event
 marker proves that Relay recorded matching start/end records for the required
@@ -294,7 +296,7 @@ The verification markers confirm the tool-created file and matching start/end
 records for custom turn, tool, and LLM work.
 </Note>
 
-### Inspect the Recorded Activity
+#### Inspect the Recorded Activity
 
 Read the completed model calls from the same event file:
 
@@ -324,6 +326,8 @@ start and end records; `parent_uuid` connects it to its enclosing scope.
 and `metadata` can include the model identity and completion status, depending
 on the integration. These fields let you follow a call through the run without
 requiring full prompt or response capture.
+
+</Steps>
 
 ## Next Steps
 

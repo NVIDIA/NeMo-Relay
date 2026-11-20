@@ -73,7 +73,9 @@ Before you start, make sure you have:
 
 To quickly get started with NeMo Relay, complete the following steps:
 
-1. Install NeMo Relay.
+<Steps toc={true}>
+
+### Install NeMo Relay
 
 Create a project and install the NeMo Relay version for these docs.
 For an existing `uv` project, run only the `uv add` command from its directory.
@@ -86,7 +88,7 @@ uv init
 uv add nemo-relay==1.0.0
 ```
 
-2. Configure the plugin.
+### Configure the plugin
 
 Save the following configuration as `plugins.toml` in your project directory:
 
@@ -98,7 +100,7 @@ ATOF output can contain sensitive prompts, responses, tool arguments, and tool
 results. Protect `logs/events.jsonl` even when full payload export is disabled.
 </Warning>
 
-3. Run the program.
+### Run the program
 
 Save this file as `quickstart.py` beside `plugins.toml`:
 
@@ -112,7 +114,7 @@ Run it from the project directory so the relative output path resolves there:
 uv run python quickstart.py
 ```
 
-4. Verify the output.
+### Verify the output
 
 The program checks the event file for paired agent, tool, and LLM lifecycle
 records. A successful run prints these markers in order:
@@ -127,6 +129,8 @@ RELAY_QUICKSTART_EVENTS_OK
 <Note icon="circle-info">
 The file stores ATOF events as newline-delimited JSON (JSONL).
 </Note>
+
+</Steps>
 
 ## Next Steps
 

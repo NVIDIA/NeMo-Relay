@@ -76,7 +76,9 @@ Before you start, make sure you have:
 
 To quickly get started with NeMo Relay, complete the following steps:
 
-1. Install NeMo Relay.
+<Steps toc={true}>
+
+### Install NeMo Relay
 
 Create a project and install the NeMo Relay version for these docs with the
 Deep Agents and NVIDIA model provider extras.
@@ -90,7 +92,7 @@ uv init
 uv add "nemo-relay[deepagents,langchain-nvidia]==1.0.0"
 ```
 
-2. Set up your API key.
+### Set up your API key
 
 Set your NVIDIA API key for the current shell:
 
@@ -122,7 +124,7 @@ $env:NVIDIA_API_KEY = "your-api-key"
   still produce the actual tool result and all three success lines below.
 </Note>
 
-3. Configure the plugin.
+### Configure the plugin
 
 `plugins.toml` enables Relay's observability component and writes its events
 to `logs/events.jsonl`. In your own project, use the same plugin configuration
@@ -139,7 +141,7 @@ ATOF output can contain sensitive prompts, responses, tool arguments, and tool
 results. Protect `logs/events.jsonl` even when full payload export is disabled.
 </Warning>
 
-4. Run the agent.
+### Run the agent
 
 The example creates a Deep Agents agent with one marker tool.
 `add_nemo_relay_integration` adds Relay-aware middleware, including supported
@@ -165,7 +167,7 @@ Run it from the project directory:
 uv run python quickstart.py
 ```
 
-5. Verify the output.
+### Verify the output
 
 The program checks the tool result, final assistant response, and paired ATOF
 agent, tool, and LLM records. A successful run prints these markers in order:
@@ -182,7 +184,7 @@ The model can use different wording around the response marker. These checks
 validate a live provider call; they do not make the model deterministic.
 </Note>
 
-### Inspect the Recorded Activity
+#### Inspect the Recorded Activity
 
 Print one completed model call from the event file:
 
@@ -204,6 +206,8 @@ start and end records; `parent_uuid` connects it to its enclosing scope.
 and `metadata` can include the model identity and completion status, depending
 on the integration. These fields let you follow a call through the run without
 requiring full prompt or response capture.
+
+</Steps>
 
 ## Next Steps
 
