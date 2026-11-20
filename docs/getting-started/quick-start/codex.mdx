@@ -296,16 +296,13 @@ The agent's final reply should include `RELAY_QUICKSTART_RESPONSE_OK`;
 its surrounding wording can vary.
 
 <Note icon="circle-info">
-The verification markers confirm the tool-created file and matching start/end
-records for custom turn, tool, and LLM work.
-</Note>
-
-<Note icon="circle-info">
-If Codex reports that approval requests are unsupported in `exec` mode, run
-the same command interactively by removing only `exec`. Keep
-`--sandbox workspace-write`, approve the file write if prompted, and exit
-Codex after the reply before running the verification checks. Existing Codex
-settings and tool policies can still require approval inside the workspace.
+- The verification markers confirm the tool-created file and matching start/end
+  records for custom turn, tool, and LLM work.
+- If Codex reports that approval requests are unsupported in `exec` mode, run
+  the same command interactively by removing only `exec`. Keep
+  `--sandbox workspace-write`, approve the file write if prompted, and exit
+  Codex after the reply before running the verification checks. Existing Codex
+  settings and tool policies can still require approval inside the workspace.
 </Note>
 
 ### Inspect the Recorded Activity

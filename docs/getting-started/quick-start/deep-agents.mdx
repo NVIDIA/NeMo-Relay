@@ -90,6 +90,8 @@ uv init
 uv add "nemo-relay[deepagents,langchain-nvidia]==1.0.0"
 ```
 
+2. Set up your API key.
+
 Set your NVIDIA API key for the current shell:
 
 <Tabs>
@@ -109,21 +111,18 @@ $env:NVIDIA_API_KEY = "your-api-key"
 </Tabs>
 
 <Note icon="circle-info">
-Relay does not impose a model choice. This copyable example selects the public
-[`nvidia/nemotron-3-nano-omni-30b-a3b-reasoning`](https://build.nvidia.com/nvidia/nemotron-3-nano-omni-30b-a3b-reasoning/playground)
-model through the NVIDIA provider. To use another model or provider, replace
-the example's `model` argument and configure that provider's credentials.
-The NVIDIA provider reads `NVIDIA_API_KEY`. In the LangChain string, the first `nvidia:`
-selects the provider; the remaining `nvidia/...` value is the model ID.
+- Relay does not impose a model choice. This copyable example selects the public
+  [`nvidia/nemotron-3-nano-omni-30b-a3b-reasoning`](https://build.nvidia.com/nvidia/nemotron-3-nano-omni-30b-a3b-reasoning/playground)
+  model through the NVIDIA provider. To use another model or provider, replace
+  the example's `model` argument and configure that provider's credentials.
+  The NVIDIA provider reads `NVIDIA_API_KEY`. In the LangChain string, the first `nvidia:`
+  selects the provider; the remaining `nvidia/...` value is the model ID.
+- The provider can warn that this model is "not known to support tools" when its
+  capability catalog lags the endpoint. This warning is advisory; the run must
+  still produce the actual tool result and all three success lines below.
 </Note>
 
-<Note icon="circle-info">
-The provider can warn that this model is "not known to support tools" when its
-capability catalog lags the endpoint. This warning is advisory; the run must
-still produce the actual tool result and all three success lines below.
-</Note>
-
-2. Configure the plugin.
+3. Configure the plugin.
 
 `plugins.toml` enables Relay's observability component and writes its events
 to `logs/events.jsonl`. In your own project, use the same plugin configuration
@@ -140,7 +139,7 @@ ATOF output can contain sensitive prompts, responses, tool arguments, and tool
 results. Protect `logs/events.jsonl` even when full payload export is disabled.
 </Warning>
 
-3. Run the agent.
+4. Run the agent.
 
 The example creates a Deep Agents agent with one marker tool.
 `add_nemo_relay_integration` adds Relay-aware middleware, including supported
@@ -166,7 +165,7 @@ Run it from the project directory:
 uv run python quickstart.py
 ```
 
-4. Verify the output.
+5. Verify the output.
 
 The program checks the tool result, final assistant response, and paired ATOF
 agent, tool, and LLM records. A successful run prints these markers in order:

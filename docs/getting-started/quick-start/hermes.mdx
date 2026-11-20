@@ -272,17 +272,14 @@ the events required by this quick start; check the supported installation for
 your operating system and architecture.
 
 <Note icon="circle-info">
-`hermes doctor` checks configuration without loading plugin code. It also checks
-optional services unrelated to Relay and can exit nonzero when they are
-unconfigured; those warnings do not require enabling the services for this quick
-start.
-</Note>
-
-<Note icon="circle-info">
-Hermes Agent does not discover repository-local configuration automatically. The
-explicit path replaces the user configuration file; system configuration still
-applies. Relay plugins affect every profile hosted in the same Hermes Agent process.
-Use separate processes when profiles require different plugin policies.
+- `hermes doctor` checks configuration without loading plugin code. It also checks
+  optional services unrelated to Relay and can exit nonzero when they are
+  unconfigured; those warnings do not require enabling the services for this quick
+  start.
+- Hermes Agent does not discover repository-local configuration automatically. The
+  explicit path replaces the user configuration file; system configuration still
+  applies. Relay plugins affect every profile hosted in the same Hermes Agent process.
+  Use separate processes when profiles require different plugin policies.
 </Note>
 
 <Warning>

@@ -89,6 +89,8 @@ uv init
 uv add "nemo-relay[google-adk]==1.0.0"
 ```
 
+2. Set up your API key.
+
 Set your Gemini API key in the current shell.
 
 <Tabs>
@@ -114,7 +116,7 @@ argument and set that provider's credentials. For provider setup, refer to the
 [Google ADK Integration Guide](/supported-integrations/google-adk#setup).
 </Note>
 
-2. Configure the plugin.
+3. Configure the plugin.
 
 Create a file named `plugins.toml` in your project directory. This configuration
 saves Relay events to `logs/events.jsonl`.
@@ -127,7 +129,7 @@ ATOF output can contain sensitive prompts, responses, tool arguments, and tool
 results. Protect `logs/events.jsonl`, even with `enable_full_payloads = false`.
 </Warning>
 
-3. Run the agent.
+4. Run the agent.
 
 The example gives an agent one tool, `emit_marker`. The tool returns a fixed
 message so you can check that it ran. The agent then returns a final answer.
@@ -149,7 +151,7 @@ Run the example from your project directory.
 uv run python quickstart.py
 ```
 
-4. Verify the output.
+5. Verify the output.
 
 The program checks the tool result, the final answer, and the saved events.
 It also checks that the request, tool call, and model call have matching start

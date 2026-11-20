@@ -100,18 +100,15 @@ Before you start, make sure you have:
 - A [supported NeMo Relay CLI platform](/nemo-relay-cli/install-details#supported-platforms)
 
 <Note icon="circle-info">
-On Unix, the verification step also uses `jq` 1.6 or newer; check your version
-with `jq --version`. PowerShell uses its built-in JSON parser.
-pi itself supports Node.js 22.19 or newer; this guide uses Node.js 24.
-</Note>
-
-<Note icon="circle-info">
-Relay does not require a particular model or an OpenAI account. The pinned pi
-release supports NVIDIA NIM through `NVIDIA_API_KEY`, as well as other providers.
-For an NVIDIA example, choose an available model from
-[build.nvidia.com](https://build.nvidia.com/explore/discover) in pi's model selector.
-Use a provider speaking OpenAI Chat Completions, OpenAI Responses, or Anthropic
-Messages; Gemini and Vertex APIs are not supported by this Relay gateway.
+- On Unix, the verification step also uses `jq` 1.6 or newer; check your version
+  with `jq --version`. PowerShell uses its built-in JSON parser.
+  pi itself supports Node.js 22.19 or newer; this guide uses Node.js 24.
+- Relay does not require a particular model or an OpenAI account. The pinned pi
+  release supports NVIDIA NIM through `NVIDIA_API_KEY`, as well as other providers.
+  For an NVIDIA example, choose an available model from
+  [build.nvidia.com](https://build.nvidia.com/explore/discover) in pi's model selector.
+  Use a provider speaking OpenAI Chat Completions, OpenAI Responses, or Anthropic
+  Messages; Gemini and Vertex APIs are not supported by this Relay gateway.
 </Note>
 
 ## Quickstart Steps
