@@ -1865,6 +1865,208 @@ async fn claude_internal_responses_preserve_task_output_in_both_worker_paths() {
 }
 
 #[tokio::test]
+async fn raw_worker_receipts_keep_llm_owner_and_header_policy_before_denial_or_body_cancellation() {
+    use nemo_relay_runtime::api::event::{Event, ScopeCategory};
+    use nemo_relay_runtime::api::registry::register_llm_sanitize_request_guardrail;
+    use nemo_relay_runtime::api::subscriber::{flush_subscribers, register_subscriber};
+
+    let _guard = PLUGIN_CONFIG_TEST_LOCK.lock().await;
+    const SUBSCRIBER: &str = "daemon-worker-openshell-receipts";
+    const SANITIZER: &str = "daemon-worker-openshell-receipt-decode";
+    const RECEIPT: &str = "7d2ef4cb-fcae-45fd-9880-deef74880df5";
+    let _subscriber = LlmGuardrailRegistration(SUBSCRIBER);
+    let recorded = Arc::new(Mutex::new(Vec::<Event>::new()));
+    let events = recorded.clone();
+    register_subscriber(
+        SUBSCRIBER,
+        Arc::new(move |event| events.lock().unwrap().push(event.clone())),
+    )
+    .unwrap();
+    let captured = Arc::new(Mutex::new(None::<HeaderMap>));
+    let app = Router::new().fallback({
+            let captured = captured.clone();
+            move |request: Request<Body>| {
+                let captured = captured.clone();
+                async move {
+                    let status = if request.uri().query() == Some("denied") {
+                        StatusCode::FORBIDDEN
+                    } else {
+                        StatusCode::OK
+                    };
+                    let cancelled = request.uri().query() == Some("cancelled");
+                    *captured.lock().unwrap() = Some(request.into_parts().0.headers);
+                    let body = if cancelled {
+                        Body::from_stream(async_stream::stream! {
+                            yield Ok::<_, Infallible>(Bytes::from_static(b"data: {\"type\":\"response.output_text.delta\",\"delta\":\"provider-secret\"}\n\n"));
+                            std::future::pending::<()>().await;
+                        })
+                    } else {
+                        Body::from(r#"{"secret":"provider-secret"}"#)
+                    };
+                    Response::builder()
+                        .status(status)
+                        .header(CONTENT_TYPE, if cancelled { "text/event-stream" } else { "application/json" })
+                        .header("x-openshell-request-id", RECEIPT)
+                        .header("x-provider-secret", "not-copied")
+                        .body(body)
+                        .unwrap()
+                }
+            }
+    });
+    let (listener, remote_address) = crate::test_support::http_model_listener().await;
+    let address = listener.local_addr().unwrap();
+    let provider = tokio::spawn(async move { axum::serve(listener, app).await.unwrap() });
+
+    // Cover both raw paths and both trust boundaries without repeating every body outcome.
+    for (index, (buffered, credential_free_http, case, status)) in [
+        (false, false, "denied", StatusCode::FORBIDDEN),
+        (true, false, "cancelled", StatusCode::OK),
+        (false, true, "complete", StatusCode::OK),
+        (true, true, "complete", StatusCode::OK),
+    ]
+    .into_iter()
+    .enumerate()
+    {
+        let caller_trace = format!("00-{:032x}-{:016x}-01", index + 1, index + 17);
+        let caller_state = format!("caller=receipt-case-{index}");
+        let prepared_context = Arc::new(Mutex::new(None::<(String, Option<String>)>));
+        let _sanitizer = LlmGuardrailRegistration(SANITIZER);
+        if buffered {
+            register_llm_sanitize_request_guardrail(
+                SANITIZER,
+                1,
+                Arc::new({
+                    let prepared_context = prepared_context.clone();
+                    move |request, _| {
+                        // Capture preparation's context before the response owner is bound.
+                        let header = |name| {
+                            request
+                                .headers
+                                .get(name)
+                                .and_then(Value::as_str)
+                                .map(str::to_owned)
+                        };
+                        *prepared_context.lock().unwrap() =
+                            Some((header("traceparent").unwrap(), header("tracestate")));
+                        Box::pin(async { Ok(None) })
+                    }
+                }),
+            )
+            .unwrap();
+        }
+        let runtime = ManagedRuntime::initialize(
+            GatewayConfig {
+                openai_base_url: if credential_free_http {
+                    format!("http://{remote_address}")
+                } else {
+                    format!("http://{address}")
+                },
+                insecure_http_model_hosts: crate::configuration::HttpModelHosts::parse(vec![
+                    remote_address.host().to_owned(),
+                ])
+                .unwrap(),
+                ..Default::default()
+            },
+            Vec::new(),
+            "receipt-owner".into(),
+        )
+        .await
+        .unwrap();
+        let requirements = runtime.provider_middleware_requirements().unwrap();
+        assert_eq!(requirements.request_body_decode_required, buffered);
+        assert!(!requirements.managed_execution_required);
+        flush_subscribers().unwrap();
+        recorded.lock().unwrap().clear();
+        let response = runtime.proxy_provider(
+            pooled_client().unwrap(),
+            Request::post(format!("/v1/responses?{case}"))
+                .header("traceparent", &caller_trace)
+                .header("tracestate", &caller_state)
+                .header(ACCEPT, if case == "cancelled" { "text/event-stream" } else { "application/json" })
+                .body(Body::from(json!({"model":"test", "input":"request-secret", "stream":case == "cancelled"}).to_string()))
+                .unwrap(),
+            ProviderRoute::OpenAi,
+        ).await.unwrap();
+        assert_eq!(response.status(), status);
+        // Observe the receipt before reading any body, including one that never completes.
+        flush_subscribers().unwrap();
+        let events = recorded.lock().unwrap().clone();
+        let start = events
+            .iter()
+            .find(|event| {
+                event.name() == "openai.responses"
+                    && event.scope_category() == Some(ScopeCategory::Start)
+            })
+            .unwrap();
+        let receipts = events
+            .iter()
+            .filter(|event| event.name() == "openshell.request.receipt")
+            .collect::<Vec<_>>();
+        assert_eq!(receipts.len(), 1);
+        let receipt = receipts[0];
+        assert_eq!(receipt.parent_uuid(), Some(start.uuid()));
+        assert_eq!(
+            receipt.data(),
+            Some(&json!({"request_id":RECEIPT, "http_status":status.as_u16()}))
+        );
+        let expected_context = if buffered {
+            let context = prepared_context
+                .lock()
+                .unwrap()
+                .take()
+                .expect("buffered request sanitizer must observe the prepared W3C context");
+            assert_ne!(context.0, caller_trace);
+            [Some(context.0), context.1]
+        } else {
+            [Some(caller_trace), Some(caller_state)]
+        };
+        let headers = captured.lock().unwrap().take().unwrap();
+        let forwarded_context = ["traceparent", "tracestate"].map(|name| {
+            headers
+                .get(name)
+                .map(|value| value.to_str().unwrap().to_owned())
+        });
+        assert_eq!(
+            forwarded_context,
+            if credential_free_http {
+                [None, None]
+            } else {
+                expected_context
+            },
+            "buffered={buffered}, credential_free_http={credential_free_http}",
+        );
+        let mut body = response.into_body();
+        if case == "cancelled" {
+            let frame = tokio::time::timeout(Duration::from_secs(5), body.frame())
+                .await
+                .unwrap()
+                .unwrap()
+                .unwrap();
+            assert!(String::from_utf8_lossy(frame.data_ref().unwrap()).contains("provider-secret"));
+            drop(body);
+        } else {
+            body.collect().await.unwrap();
+        }
+        tokio::time::timeout(Duration::from_secs(5), async {
+            loop {
+                flush_subscribers().unwrap();
+                if recorded.lock().unwrap().iter().any(|event| {
+                    event.name() == "openai.responses"
+                        && event.scope_category() == Some(ScopeCategory::End)
+                }) {
+                    break;
+                }
+                tokio::task::yield_now().await;
+            }
+        })
+        .await
+        .expect("raw LLM lifecycle must finish after delivery or cancellation");
+        runtime.close().await.unwrap();
+    }
+    provider.abort();
+}
+
+#[tokio::test]
 async fn managed_runtime_observes_a_supported_stream_without_rewriting_its_bytes() {
     let _guard = PLUGIN_CONFIG_TEST_LOCK.lock().await;
     let listener = tokio::net::TcpListener::bind("127.0.0.1:0")

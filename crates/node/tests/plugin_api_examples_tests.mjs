@@ -26,7 +26,6 @@ const examples = new Map([
     [observability, ['OpenTelemetry', 'Direct Subscribers', 'Log and Metric Subscriber Lifecycle']],
   ],
   ['openinference', [observability, ['OpenInference', 'Direct Subscriber']]],
-  ['response_cache', [adaptive, ['Response Cache', 'Manual API']]],
   ['resource_metrics', [resourceMetrics, ['Resource Metrics', 'Collect One Snapshot']]],
 ]);
 
@@ -101,7 +100,7 @@ async function exerciseExample(name) {
   try {
     // Native promises keep the event loop alive while the original example runs.
     // Waiting for beforeExit also covers examples whose top-level IIFE uses void.
-    const completed = ['response_cache', 'resource_metrics'].includes(name)
+    const completed = name === 'resource_metrics'
       ? new Promise((resolve) => process.once('beforeExit', resolve))
       : null;
     new vm.Script(displayedSource(name), { filename: examples.get(name)[0] }).runInContext(context);
@@ -118,9 +117,6 @@ async function exerciseExample(name) {
       assert.deepEqual(printed, []);
     } else if (['opentelemetry', 'openinference'].includes(name)) {
       assert.equal(vm.runInContext('subscriber.runtimeDiagnostics()', context).length, 0);
-      assert.deepEqual(printed, []);
-    } else if (name === 'response_cache') {
-      assert.throws(() => vm.runInContext('runtime.deregister()', context), /already shut down/);
       assert.deepEqual(printed, []);
     } else if (name === 'resource_metrics') {
       const snapshot = printed[0];

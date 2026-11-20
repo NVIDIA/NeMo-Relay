@@ -9,7 +9,6 @@ helpers that summarize ACG observations into structured JSON payloads.
 """
 
 from dataclasses import dataclass
-from enum import Enum
 from typing import Literal, TypedDict
 
 from nemo_relay import JsonObject, ScopeHandle, UnsupportedBehavior
@@ -31,12 +30,6 @@ class ConfigReport(TypedDict):
     """Validation report returned by adaptive configuration helpers."""
 
     diagnostics: list[ConfigDiagnostic]
-
-class ResponseCacheKeyStrategy(str, Enum):
-    """Supported LLM response-cache key derivation strategies."""
-
-    EXACT_REQUEST: ResponseCacheKeyStrategy
-    LOGICAL: ResponseCacheKeyStrategy
 
 @dataclass(slots=True)
 class ConfigPolicy:
@@ -189,85 +182,6 @@ class AcgConfig:
         ...
 
 @dataclass(slots=True)
-class ToolClass:
-    """One tool caching class (also the shape of the ``default`` default bucket)."""
-
-    cacheable: bool = ...
-    ttl_seconds: int | None = ...
-    bypass_rate: float | None = ...
-    tool_version: str | None = ...
-    arg_skip: list[str] = ...
-    members: list[str] = ...
-
-    def to_dict(self) -> JsonObject:
-        """Serialize this tool class to the canonical JSON object shape."""
-        ...
-
-@dataclass(slots=True)
-class ToolOverride:
-    """Per-tool refinement applied on top of the tool's resolved class."""
-
-    cacheable: bool | None = ...
-    ttl_seconds: int | None = ...
-    bypass_rate: float | None = ...
-    tool_version: str | None = ...
-    arg_skip: list[str] | None = ...
-
-    def to_dict(self) -> JsonObject:
-        """Serialize this tool override to the canonical JSON object shape."""
-        ...
-
-@dataclass(slots=True)
-class ToolCacheConfig:
-    """Opt-in tool-result cache settings."""
-
-    enabled: bool = ...
-    priority: int = ...
-    cache_errors: bool = ...
-    default: ToolClass = ...
-    classes: dict[str, ToolClass] = ...
-    overrides: dict[str, ToolOverride] = ...
-
-    def to_dict(self) -> JsonObject:
-        """Serialize this tool-cache config to the canonical JSON object shape."""
-        ...
-
-@dataclass(slots=True)
-class ResponseCacheConfig:
-    """Opt-in LLM response and tool-result cache settings.
-
-    A section of the adaptive component, not a standalone plugin kind.
-
-    Args:
-        ttl_seconds: How long a stored answer stays reusable, in seconds.
-        namespace: Required non-empty cache trust domain folded into every key.
-            One configured cache must not span mutually untrusted tenants or upstreams;
-            the empty default is an unconfigured sentinel rejected at validation.
-        priority: Execution-intercept priority. Lower runs first/outermost.
-        bypass_rate: Probability in ``[0.0, 1.0]`` of skipping the cache and running live.
-        cache_nondeterministic: Cache nondeterministic requests too; ``False``
-            caches only requests explicitly pinned deterministic (``temperature`` = 0).
-        key_strategy: Typed key derivation strategy.
-        header_allowlist: Request headers folded into the key.
-        backend: Cache storage backend (``in_memory`` or ``redis``).
-        tools: Opt-in tool-result cache; ``None`` leaves the tool surface off.
-    """
-
-    ttl_seconds: int = ...
-    namespace: str = ...
-    priority: int = ...
-    bypass_rate: float = ...
-    cache_nondeterministic: bool = ...
-    key_strategy: ResponseCacheKeyStrategy = ...
-    header_allowlist: list[str] = ...
-    backend: BackendSpec = ...
-    tools: ToolCacheConfig | None = ...
-
-    def to_dict(self) -> JsonObject:
-        """Serialize this response-cache config to the canonical JSON object shape."""
-        ...
-
-@dataclass(slots=True)
 class AdaptiveConfig:
     """Canonical config document for the top-level adaptive component.
 
@@ -280,7 +194,6 @@ class AdaptiveConfig:
         tool_parallelism: Built-in adaptive tool-scheduling configuration.
         acg: Adaptive Cache Governor configuration.
         policy: Policy for unsupported adaptive configuration.
-        response_cache: Opt-in LLM response and tool-result cache configuration.
     """
 
     version: int = ...
@@ -291,7 +204,6 @@ class AdaptiveConfig:
     tool_parallelism: ToolParallelismConfig | None = ...
     acg: AcgConfig | None = ...
     policy: ConfigPolicy = ...
-    response_cache: ResponseCacheConfig | None = ...
 
     def to_dict(self) -> JsonObject:
         """Serialize this adaptive config to the canonical JSON object shape."""

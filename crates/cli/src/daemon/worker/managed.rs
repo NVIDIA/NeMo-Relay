@@ -28,7 +28,7 @@ use nemo_relay_runtime::api::llm::{
     llm_request_intercepts_with_source,
 };
 use nemo_relay_runtime::api::registry::{RuntimeRegistrationKind, runtime_registration_presence};
-use nemo_relay_runtime::api::runtime::{LlmJsonStream, TASK_SCOPE_STACK};
+use nemo_relay_runtime::api::runtime::{LlmJsonStream, TASK_SCOPE_STACK, with_active_event_uuid};
 use nemo_relay_runtime::codec::response_codec;
 use nemo_relay_types::error::{FlowError, UpstreamFailure, UpstreamFailureClass};
 use serde_json::{Value, json};
@@ -397,7 +397,7 @@ impl ManagedRuntime {
         } = prep;
 
         let handle = TASK_SCOPE_STACK
-            .scope(scope_stack, async {
+            .scope(scope_stack.clone(), async {
                 llm_call(
                     LlmCallParams::builder()
                         .name(&provider_name)
@@ -418,15 +418,22 @@ impl ManagedRuntime {
                 return Err(error.into());
             }
         };
-        let response = dispatch_unbuffered_observed(
-            upstream,
-            request,
-            route,
-            &self.config,
-            self.observation_capture_bytes,
-            operational.clone(),
-        )
-        .await;
+        let response = TASK_SCOPE_STACK
+            .scope(
+                scope_stack,
+                with_active_event_uuid(
+                    handle.uuid,
+                    dispatch_unbuffered_observed(
+                        upstream,
+                        request,
+                        route,
+                        &self.config,
+                        self.observation_capture_bytes,
+                        operational.clone(),
+                    ),
+                ),
+            )
+            .await;
         let (response, observation, response_streaming) = match response {
             Ok(result) => result,
             Err(error) => {
@@ -527,7 +534,7 @@ impl ManagedRuntime {
         let annotated_request = outcome.annotated_request.take().map(Arc::new);
         let streaming = prepared_streaming(&outcome.request);
         let handle = TASK_SCOPE_STACK
-            .scope(scope_stack, async {
+            .scope(scope_stack.clone(), async {
                 llm_call(
                     LlmCallParams::builder()
                         .name(&provider_name)
@@ -561,16 +568,23 @@ impl ManagedRuntime {
             );
         }
 
-        let response = dispatch_observed(
-            upstream,
-            prepared,
-            route,
-            Some(&outcome.request),
-            &self.config,
-            self.observation_capture_bytes,
-            operational.clone(),
-        )
-        .await;
+        let response = TASK_SCOPE_STACK
+            .scope(
+                scope_stack,
+                with_active_event_uuid(
+                    handle.uuid,
+                    dispatch_observed(
+                        upstream,
+                        prepared,
+                        route,
+                        Some(&outcome.request),
+                        &self.config,
+                        self.observation_capture_bytes,
+                        operational.clone(),
+                    ),
+                ),
+            )
+            .await;
         let (response, observation) = match response {
             Ok(result) => result,
             Err(error) => {
@@ -759,6 +773,7 @@ async fn dispatch_unbuffered_observed(
         config,
     )
     .await?;
+    crate::openshell_receipts::observe(response.headers(), response.status());
     let response = prepare_forward_response(response, &strip).map_err(|error| {
         operational::upstream_failed(&operational, "invalid_response");
         CliError::Launch(error.to_string())
@@ -891,6 +906,7 @@ async fn dispatch_observed(
         config,
     )
     .await?;
+    crate::openshell_receipts::observe(response.headers(), response.status());
     let response = prepare_forward_response(response, &strip).map_err(|error| {
         operational::upstream_failed(&operational, "invalid_response");
         CliError::Launch(error.to_string())

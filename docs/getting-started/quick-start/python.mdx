@@ -1,5 +1,5 @@
 ---
-title: "Python Quick Start"
+title: "Python Quickstart for NeMo Relay"
 sidebar-title: "Python"
 slug: getting-started/quick-start/python
 description: "Instrument one Python workflow and write its Relay events to a local ATOF file."
@@ -52,10 +52,10 @@ SPDX-License-Identifier: Apache-2.0 */}
 }
 */}
 
-## Goal
-
-Instrument one scope, tool call, and large language model (LLM) call with NeMo Relay, then verify the
-result in a local Agent Trajectory Observability Format (ATOF) file.
+This Quickstart Guide walks you through the process for instrumenting one scope,
+tool call, and large language model (LLM) call with NeMo Relay, then verifying
+the result in a local Agent Trajectory Observability Format (ATOF) file. For
+detailed setup, refer to the [Installation Guide](/getting-started/installation).
 
 <Note icon="circle-info">
 This example uses local tool and model callbacks. It does not require an
@@ -69,9 +69,13 @@ Before you start, make sure you have:
 - Python 3.11 or newer
 - `uv`
 
+## Quickstart Steps
+
+To quickly get started with NeMo Relay, complete the following steps:
+
 <Steps toc={true}>
 
-## Install
+### Install NeMo Relay
 
 Create a project and install the NeMo Relay version for these docs.
 For an existing `uv` project, run only the `uv add` command from its directory.
@@ -84,7 +88,7 @@ uv init
 uv add nemo-relay==1.0.0
 ```
 
-## Configure
+### Configure the plugin
 
 Save the following configuration as `plugins.toml` in your project directory:
 
@@ -96,7 +100,7 @@ ATOF output can contain sensitive prompts, responses, tool arguments, and tool
 results. Protect `logs/events.jsonl` even when full payload export is disabled.
 </Warning>
 
-## Run
+### Run the program
 
 Save this file as `quickstart.py` beside `plugins.toml`:
 
@@ -110,7 +114,7 @@ Run it from the project directory so the relative output path resolves there:
 uv run python quickstart.py
 ```
 
-## Verify
+### Verify the output
 
 The program checks the event file for paired agent, tool, and LLM lifecycle
 records. A successful run prints these markers in order:
@@ -128,9 +132,9 @@ The file stores ATOF events as newline-delimited JSON (JSONL).
 
 </Steps>
 
-## For More Details
+## Next Steps
 
-For more details, refer to:
+Now that you have a working setup, you should explore the following resources in greater detail:
 
 - [API Installation](/getting-started/installation/apis#python)
 - [Instrument Application Code](/instrument-applications/about)

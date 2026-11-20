@@ -17,7 +17,6 @@ type AdaptiveConfig struct {
 	AdaptiveHints   *AdaptiveHintsConfig   `json:"adaptive_hints,omitempty"`
 	ToolParallelism *ToolParallelismConfig `json:"tool_parallelism,omitempty"`
 	Acg             *AcgConfig             `json:"acg,omitempty"`
-	ResponseCache   *ResponseCacheConfig   `json:"response_cache,omitempty"`
 	Policy          *ConfigPolicy          `json:"policy,omitempty"`
 }
 
@@ -65,90 +64,6 @@ type AcgConfig struct {
 	ObservationWindow   uint32                  `json:"observation_window,omitempty"`
 	Priority            int32                   `json:"priority,omitempty"`
 	StabilityThresholds *AcgStabilityThresholds `json:"stability_thresholds,omitempty"`
-}
-
-// ResponseCacheKeyStrategy selects how LLM response-cache keys are derived.
-type ResponseCacheKeyStrategy string
-
-const (
-	// ResponseCacheKeyStrategyExactRequest keys on the normalized request exactly.
-	ResponseCacheKeyStrategyExactRequest ResponseCacheKeyStrategy = "exact_request"
-	// ResponseCacheKeyStrategyLogical ignores tool-description wording while preserving interfaces.
-	ResponseCacheKeyStrategyLogical ResponseCacheKeyStrategy = "logical"
-)
-
-// ResponseCacheConfig configures the opt-in LLM response and tool-result cache: a section
-// of the adaptive config (a sibling to acg/adaptive_hints/tool_parallelism), not a
-// standalone plugin kind. The Rust core validates and installs it from the adaptive
-// runtime; this struct only has to carry the section through to the FFI validator.
-type ResponseCacheConfig struct {
-	// TTLSeconds is how long a stored answer stays reusable, in seconds (> 0).
-	// Nil delegates to Rust's default (3600); a pointer to 0 is rejected.
-	TTLSeconds *uint64 `json:"ttl_seconds,omitempty"`
-	// Namespace is a required, non-empty cache trust domain folded into every
-	// key. One configured cache must not span mutually untrusted tenants or
-	// upstreams; the empty constructor value is rejected at validation.
-	Namespace string `json:"namespace,omitempty"`
-	// Priority is the execution-intercept priority. Lower values run first.
-	// Nil uses Rust's default of 150.
-	Priority *int32 `json:"priority,omitempty"`
-	// BypassRate is the probability in [0.0, 1.0] of skipping the cache and running live.
-	BypassRate float64 `json:"bypass_rate,omitempty"`
-	// CacheNondeterministic lets requests that are not explicitly deterministic
-	// use the cache (default false).
-	CacheNondeterministic bool `json:"cache_nondeterministic"`
-	// KeyStrategy is the typed LLM response-cache key derivation strategy.
-	KeyStrategy ResponseCacheKeyStrategy `json:"key_strategy,omitempty"`
-	// HeaderAllowlist lists request headers folded into the key; never auth headers.
-	HeaderAllowlist []string `json:"header_allowlist,omitempty"`
-	// Backend selects the cache's own storage backend (distinct from the adaptive
-	// state backend). Defaults to in-memory when nil.
-	Backend *ResponseCacheBackendConfig `json:"backend,omitempty"`
-	// Tools configures the optional tool-result cache.
-	Tools *ResponseCacheToolsConfig `json:"tools,omitempty"`
-}
-
-// ResponseCacheToolsConfig configures caching for read-only, stable tools.
-type ResponseCacheToolsConfig struct {
-	Enabled bool `json:"enabled,omitempty"`
-	// Priority is the execution-intercept priority. Lower values run first.
-	// Nil uses Rust's default of 150.
-	Priority *int32 `json:"priority,omitempty"`
-	// CacheErrors lets error-shaped tool results be cached (default false).
-	CacheErrors bool                              `json:"cache_errors"`
-	Default     *ResponseCacheToolClass           `json:"default,omitempty"`
-	Classes     map[string]ResponseCacheToolClass `json:"classes,omitempty"`
-	// Overrides keys are exact tool names or prefix*, *suffix, and *contains* patterns.
-	Overrides map[string]ResponseCacheToolOverride `json:"overrides,omitempty"`
-}
-
-// ResponseCacheToolClass defines a shared tool-cache policy.
-type ResponseCacheToolClass struct {
-	Cacheable   bool     `json:"cacheable,omitempty"`
-	TTLSeconds  *uint64  `json:"ttl_seconds,omitempty"`
-	BypassRate  *float64 `json:"bypass_rate,omitempty"`
-	ToolVersion *string  `json:"tool_version,omitempty"`
-	ArgSkip     []string `json:"arg_skip,omitempty"`
-	// Members contains exact tool names or prefix*, *suffix, and *contains* patterns.
-	Members []string `json:"members,omitempty"`
-}
-
-// ResponseCacheToolOverride refines a resolved tool-cache policy.
-type ResponseCacheToolOverride struct {
-	Cacheable   *bool     `json:"cacheable,omitempty"`
-	TTLSeconds  *uint64   `json:"ttl_seconds,omitempty"`
-	BypassRate  *float64  `json:"bypass_rate,omitempty"`
-	ToolVersion *string   `json:"tool_version,omitempty"`
-	ArgSkip     *[]string `json:"arg_skip,omitempty"`
-}
-
-// ResponseCacheBackendConfig selects the response-cache backend kind and options.
-type ResponseCacheBackendConfig struct {
-	// Kind is "in_memory" or "redis" (redis needs the redis-backend build feature).
-	Kind string `json:"kind"`
-	// Config holds backend-specific options (in_memory: max_bytes;
-	// redis: url/key_prefix).
-	Config map[string]any `json:"config,omitempty"`
 }
 
 // AdaptiveComponentSpec wraps one adaptive config as a top-level plugin component.
@@ -220,50 +135,6 @@ func NewAcgConfig() AcgConfig {
 		ObservationWindow:   100,
 		Priority:            50,
 		StabilityThresholds: &thresholds,
-	}
-}
-
-// NewResponseCacheConfig returns default response cache settings, mirroring
-// the Rust ResponseCacheConfig defaults (exact-request keying with nondeterministic
-// caching disabled). Set Namespace to one cache trust domain before validation.
-// Backend is left nil so the core applies its in-memory default; set it for redis
-// or to tune the in-memory budget.
-func NewResponseCacheConfig() ResponseCacheConfig {
-	ttlSeconds := uint64(3600)
-	priority := int32(150)
-	return ResponseCacheConfig{
-		TTLSeconds:            &ttlSeconds,
-		Priority:              &priority,
-		CacheNondeterministic: false,
-		KeyStrategy:           ResponseCacheKeyStrategyExactRequest,
-	}
-}
-
-// NewInMemoryResponseCacheBackend returns an in-memory response-cache backend spec.
-func NewInMemoryResponseCacheBackend() ResponseCacheBackendConfig {
-	return ResponseCacheBackendConfig{
-		Kind:   "in_memory",
-		Config: map[string]any{},
-	}
-}
-
-// NewRedisResponseCacheBackend returns a Redis response-cache backend spec.
-func NewRedisResponseCacheBackend(url, keyPrefix string) ResponseCacheBackendConfig {
-	return ResponseCacheBackendConfig{
-		Kind: "redis",
-		Config: map[string]any{
-			"url":        url,
-			"key_prefix": keyPrefix,
-		},
-	}
-}
-
-// NewResponseCacheToolsConfig returns a disabled tool-result cache config.
-func NewResponseCacheToolsConfig() ResponseCacheToolsConfig {
-	priority := int32(150)
-	return ResponseCacheToolsConfig{
-		CacheErrors: false,
-		Priority:    &priority,
 	}
 }
 

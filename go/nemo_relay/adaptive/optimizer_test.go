@@ -109,17 +109,3 @@ func TestAdaptivePackageTelemetryAndLatencyHelpers(t *testing.T) {
 		t.Fatal("expected SetLatencySensitivity to reject zero")
 	}
 }
-
-func TestResponseCacheBuilders(t *testing.T) {
-	config := NewResponseCacheConfig()
-	if config.TTLSeconds == nil || *config.TTLSeconds != 3600 || config.KeyStrategy != "exact_request" {
-		t.Fatalf("unexpected response cache defaults: %#v", config)
-	}
-	if NewInMemoryResponseCacheBackend().Kind != "in_memory" {
-		t.Fatal("expected in-memory response cache backend")
-	}
-	backend := NewRedisResponseCacheBackend(redisURL, "responses:")
-	if backend.Kind != "redis" || backend.Config["key_prefix"] != "responses:" {
-		t.Fatalf("unexpected redis response cache backend: %#v", backend)
-	}
-}

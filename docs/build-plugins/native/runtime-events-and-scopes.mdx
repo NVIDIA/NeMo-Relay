@@ -176,6 +176,31 @@ checked v1.0 runtime interface.
 authorized reads, use `runtime.diagnostics()` as described in
 [Native Plugin Diagnostics](/build-plugins/native/diagnostics).
 
+## Estimate Model Cost
+
+`PluginRuntime::estimate_cost_for_provider` prices token usage with the host's
+active model pricing catalog. Use it instead of linking a pricing crate into the
+plugin: a copy inside the plugin library has no catalog. The method returns
+`Ok(None)` when the catalog has no price for the model. A host that predates
+this operation returns an error; treat that error as an unknown cost.
+
+`PluginRuntime::response_cost_for_provider` returns the cost of a normalized
+response. It keeps a cost the response already reports and otherwise applies
+the host's provider-specific billing rules.
+
+```rust
+let usage = Usage {
+    prompt_tokens: Some(1200),
+    completion_tokens: Some(80),
+    ..Usage::default()
+};
+let cost = runtime
+    .estimate_cost_for_provider(Some("openai"), "gpt-4o", &usage)
+    .ok()
+    .flatten()
+    .and_then(|estimate| estimate.total);
+```
+
 ## Control Global Runtime Registrations
 
 The checked runtime provides activation-owned registration discovery and conditional

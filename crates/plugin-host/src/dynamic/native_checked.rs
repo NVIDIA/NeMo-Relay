@@ -33,7 +33,7 @@ use serde::{Serialize, de::DeserializeOwned};
 use serde_json::json;
 use std::{
     any::Any,
-    collections::{BTreeSet, HashMap},
+    collections::{BTreeMap, BTreeSet, HashMap},
     future::Future,
     pin::Pin,
     sync::{
@@ -157,27 +157,43 @@ impl HostRuntime {
         }))
     }
     /// Convert a callback result and record failures that did not originate in a downstream continuation.
+    ///
+    /// A failure the plugin propagates unchanged from a continuation is returned as the
+    /// original typed error, so its status, headers, and retry class survive the boundary.
     fn callback_result<T>(&self, value: a::Result<T>, downstream: &DownstreamErrors) -> Result<T> {
         if let a::Result::Err(error) = &value {
-            let inherited = downstream
-                .lock()
-                .unwrap_or_else(|e| e.into_inner())
-                .contains(error.message.as_str());
-            if !inherited
-                && self.active.load(Ordering::Acquire)
-                && error.code.as_str() != "cancelled"
-            {
-                self.observer
-                    .lock()
-                    .unwrap_or_else(|e| e.into_inner())
-                    .failure(
-                        nemo_relay_diagnostics::PluginOperationFailureCode::NativeCallback,
-                        nemo_relay_diagnostics::FailureClass::ExecutionFailed,
-                        nemo_relay_diagnostics::PluginPhase::Runtime,
-                    );
+            match downstream_failure(error, downstream) {
+                Some(Some(original)) => return Err(original),
+                // A downstream failure whose type cannot be restored is still not a plugin failure.
+                Some(None) => {}
+                None if self.active.load(Ordering::Acquire)
+                    && error.code.as_str() != "cancelled" =>
+                {
+                    self.observer
+                        .lock()
+                        .unwrap_or_else(|e| e.into_inner())
+                        .failure(
+                            nemo_relay_diagnostics::PluginOperationFailureCode::NativeCallback,
+                            nemo_relay_diagnostics::FailureClass::ExecutionFailed,
+                            nemo_relay_diagnostics::PluginPhase::Runtime,
+                        );
+                }
+                None => {}
             }
         }
         local(value)
+    }
+    /// Convert a callback result and add the plugin's reporting identity to HTTP failures.
+    ///
+    /// A propagated downstream failure keeps its status, headers, and retry class; only
+    /// its body gains the documented reporting context.
+    fn reported_callback_result<T>(
+        &self,
+        value: a::Result<T>,
+        downstream: &DownstreamErrors,
+    ) -> Result<T> {
+        self.callback_result(value, downstream)
+            .map_err(|e| super::http_error::reported_by(e, &self.plugin_kind, "native"))
     }
     pub fn registered(&self) {
         self.diagnostics.registered();
@@ -564,6 +580,46 @@ impl HostRuntime {
                         .build(),
                 );
                 null()
+            }
+            "pricing.estimate_cost_for_provider" => {
+                // Prices with the host's active catalog; a plugin's own pricing
+                // crate copy would hold an empty process-local resolver.
+                let model = string("model")?;
+                let provider = optional("provider")
+                    .filter(|value| !value.is_null())
+                    .map(|value| {
+                        value
+                            .as_str()
+                            .map(str::to_owned)
+                            .ok_or_else(|| err("pricing provider must be a string"))
+                    })
+                    .transpose()?;
+                let usage: nemo_relay_types::codec::response::Usage =
+                    serde_json::from_value(args.get("usage").cloned().unwrap_or(Json::Null))
+                        .map_err(err)?;
+                let estimate = nemo_relay_runtime::pricing::active_pricing_resolver()
+                    .estimate_cost_for_provider(provider.as_deref(), model, &usage);
+                serde_json::to_value(estimate).map_err(err)
+            }
+            "pricing.response_cost_for_provider" => {
+                // Applies the host's full response pricing rules, including
+                // provider-specific billing, without replacing a reported cost.
+                let provider = optional("provider")
+                    .map(|value| {
+                        value
+                            .as_str()
+                            .map(str::to_owned)
+                            .ok_or_else(|| err("pricing provider must be a string"))
+                    })
+                    .transpose()?;
+                let mut response: nemo_relay_types::codec::response::AnnotatedLlmResponse =
+                    serde_json::from_value(args.get("response").cloned().unwrap_or(Json::Null))
+                        .map_err(err)?;
+                nemo_relay_runtime::pricing::attach_estimated_cost_for_provider(
+                    &mut response,
+                    provider.as_deref(),
+                );
+                serde_json::to_value(response.usage.and_then(|usage| usage.cost)).map_err(err)
             }
             _ => Err(err(format!(
                 "unsupported native runtime operation '{operation}'"
@@ -975,16 +1031,57 @@ enum Next {
     Llm(LlmExecutionNextFn),
     Stream(LlmStreamExecutionNextFn),
 }
-type DownstreamErrors = Arc<Mutex<BTreeSet<String>>>;
+/// Downstream failures by their ABI message, kept with their original typed errors.
+///
+/// A plugin hands a failure back as its message only, so different failures with
+/// the same message (for example the same status and body with different
+/// headers) cannot be told apart. Such a message maps to `None` and is never
+/// restored, rather than restoring the wrong failure.
+type DownstreamErrors = Arc<Mutex<BTreeMap<String, Option<FlowError>>>>;
 /// Remember downstream failures before converting them to checked ABI errors.
 fn downstream_boundary<T>(result: Result<T>, errors: &DownstreamErrors) -> a::Result<T> {
     if let Err(error) = &result {
         errors
             .lock()
             .unwrap_or_else(|e| e.into_inner())
-            .insert(super::http_error::to_message(error));
+            .entry(super::http_error::to_message(error))
+            .and_modify(|known| {
+                // `Debug` covers every field, including headers in a stable order.
+                if known
+                    .as_ref()
+                    .is_some_and(|known| format!("{known:?}") != format!("{error:?}"))
+                {
+                    *known = None;
+                }
+            })
+            .or_insert_with(|| Some(error.clone()));
     }
     boundary(result)
+}
+/// Whether a callback returned a downstream failure unchanged, with its original typed
+/// error when that failure can be told apart from the others with the same message.
+fn downstream_failure(
+    error: &a::Error,
+    downstream: &DownstreamErrors,
+) -> Option<Option<FlowError>> {
+    downstream
+        .lock()
+        .unwrap_or_else(|e| e.into_inner())
+        .get(error.message.as_str())
+        .cloned()
+}
+/// The original typed error when a callback returns a downstream failure unchanged.
+fn inherited_error(error: &a::Error, downstream: &DownstreamErrors) -> Option<FlowError> {
+    downstream_failure(error, downstream).flatten()
+}
+/// Convert an ABI result, restoring a downstream failure the callback propagated unchanged.
+fn restore<T>(value: a::Result<T>, downstream: &DownstreamErrors) -> Result<T> {
+    if let a::Result::Err(error) = &value
+        && let Some(original) = inherited_error(error, downstream)
+    {
+        return Err(original);
+    }
+    local(value)
 }
 struct Continuation {
     next: Arc<Next>,
@@ -1159,7 +1256,9 @@ impl HostStreamState {
         let state = self.clone();
         let context = state.context.clone();
         let foreign = executor.execute_cleanup(async move {
-            boundary(
+            // A plugin may report this failure to its caller; keep its original type.
+            let downstream = state.downstream.clone();
+            downstream_boundary(
                 context
                     .run(async {
                         let mut stream = state.value.lock().await;
@@ -1171,6 +1270,7 @@ impl HostStreamState {
                         Ok(())
                     })
                     .await,
+                &downstream,
             )
         });
         let future = foreign.boxed().shared();
@@ -1251,7 +1351,6 @@ async fn unary<T: DeserializeOwned>(
     owner.ensure()?;
     let (invocation, _lifetime) = invocation(&owner, surface, name, value, id, request, response);
     let (_lease, _guard) = MiddlewareContinuationLease::capture();
-    let plugin_kind = owner.plugin_kind.clone();
     let downstream = DownstreamErrors::default();
     let next = next.map(|next| {
         a::ContinuationBox::new(Continuation {
@@ -1262,11 +1361,7 @@ async fn unary<T: DeserializeOwned>(
         })
     });
     let future = callback.with(&owner, |callback| callback.invoke(invocation, next))?;
-    decode(
-        owner
-            .callback_result(future.await, &downstream)
-            .map_err(|e| super::http_error::reported_by(e, &plugin_kind, "native"))?,
-    )
+    decode(owner.reported_callback_result(future.await, &downstream)?)
 }
 
 /// Adapt a synchronous native subscriber and log callback failures without interrupting event delivery.
@@ -1548,11 +1643,7 @@ pub fn apply_registration(
                         owner: owner.clone(),
                     });
                     let future = callback.with(&owner, |callback| callback.invoke_tool(i, next))?;
-                    let value = owner
-                        .callback_result(future.await, &downstream)
-                        .map_err(|e| {
-                            super::http_error::reported_by(e, &owner.plugin_kind, "native")
-                        })?;
+                    let value = owner.reported_callback_result(future.await, &downstream)?;
                     Ok(nemo_relay_types::api::tool::ToolExecutionInterceptOutcome {
                         result: from_abi(value.result.result).map_err(err)?,
                         annotation: value
@@ -1720,9 +1811,11 @@ pub fn apply_registration(
                         downstream: downstream.clone(),
                         owner: owner.clone(),
                     });
-                    let plugin_kind = owner.plugin_kind.clone();
                     let observer = owner.clone();
                     let errors = downstream.clone();
+                    // Keep the typed failure; the ABI result below carries only its text.
+                    let failed = Arc::new(Mutex::new(None::<FlowError>));
+                    let open_failure = failed.clone();
                     let first = owner.executor.execute_direct(async move {
                         let future = match callback
                             .with(&observer, |callback| callback.open_stream(invocation, next))
@@ -1730,18 +1823,30 @@ pub fn apply_registration(
                             Ok(future) => future,
                             Err(error) => return a::Result::Err(abi_error(error)),
                         };
-                        let stream = match observer
-                            .callback_result(future.await, &errors)
-                            .map_err(|e| super::http_error::reported_by(e, &plugin_kind, "native"))
+                        let stream = match observer.reported_callback_result(future.await, &errors)
                         {
                             Ok(v) => Arc::new(Mutex::new(v)),
-                            Err(e) => return a::Result::Err(abi_error(e)),
+                            Err(e) => {
+                                *open_failure.lock().unwrap_or_else(|e| e.into_inner()) =
+                                    Some(e.clone());
+                                return a::Result::Err(abi_error(e));
+                            }
                         };
                         let pull = stream.lock().unwrap_or_else(|e| e.into_inner()).pull();
                         let first = pull.await;
                         a::Result::Ok(OpenedStream { stream, first })
                     });
-                    let opening = Box::pin(async move { local(first.await) });
+                    let opened_errors = downstream.clone();
+                    let opening = Box::pin(async move {
+                        let opened = first.await;
+                        if matches!(opened, a::Result::Err(_))
+                            && let Some(error) =
+                                failed.lock().unwrap_or_else(|e| e.into_inner()).take()
+                        {
+                            return Err(error);
+                        }
+                        restore(opened, &opened_errors)
+                    });
                     Ok(LlmJsonStream::from_closeable(ForeignStream {
                         stream: None,
                         opening: Some(opening),
@@ -1815,7 +1920,10 @@ impl Stream for ForeignStream {
             Poll::Ready(v) => v,
         };
         self.pending.take();
-        match self.owner.callback_result(result, &self.downstream) {
+        match self
+            .owner
+            .reported_callback_result(result, &self.downstream)
+        {
             Ok(Option::Some(v)) => Poll::Ready(Some(from_abi(v).map_err(err))),
             Ok(Option::None) => {
                 self.terminal = true;
@@ -1825,11 +1933,7 @@ impl Stream for ForeignStream {
             Err(e) => {
                 self.terminal = true;
                 self._lifetime.take();
-                Poll::Ready(Some(Err(super::http_error::reported_by(
-                    e,
-                    &self.owner.plugin_kind,
-                    "native",
-                ))))
+                Poll::Ready(Some(Err(e)))
             }
         }
     }
@@ -1846,7 +1950,8 @@ impl LlmStreamInner for ForeignStream {
             this.opening.take();
             if let Some(stream) = &this.stream {
                 let future = stream.lock().unwrap_or_else(|e| e.into_inner()).close();
-                local(future.await)?;
+                // A plugin that reports its upstream close failure keeps that failure's type.
+                restore(future.await, &this.downstream)?;
             }
             this.terminal = true;
             this._lifetime.take();
