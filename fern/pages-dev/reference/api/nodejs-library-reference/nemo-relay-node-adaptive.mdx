@@ -95,91 +95,6 @@ export interface AcgConfig {
 }
 ```
 
-### `ResponseCacheConfig`
-
-LLM response and tool-result cache settings.
-
-```ts
-export interface ResponseCacheConfig {
-    ttlSeconds?: number;
-    /** Required cache trust domain; one cache must not span untrusted tenants or upstreams. */
-    namespace?: string;
-    priority?: number;
-    bypassRate?: number;
-    cacheNondeterministic?: boolean;
-    keyStrategy?: ResponseCacheKeyStrategy;
-    headerAllowlist?: string[];
-    backend?: BackendSpec;
-    /** Tool-result cache. */
-    tools?: ToolCacheConfig;
-}
-```
-
-### `ResponseCachePluginConfig`
-
-```ts
-export interface ResponseCachePluginConfig {
-    ttl_seconds?: number;
-    /** Required cache trust domain. */
-    namespace?: string;
-    priority?: number;
-    bypass_rate?: number;
-    cache_nondeterministic?: boolean;
-    key_strategy?: ResponseCacheKeyStrategy;
-    header_allowlist?: string[];
-    backend?: BackendSpec;
-    tools?: ToolCachePluginConfig;
-}
-```
-
-### `ToolClass`
-
-Shared tool policy; omitted TTL and bypass rate use response-cache values.
-
-```ts
-export interface ToolClass {
-    cacheable?: boolean;
-    ttlSeconds?: number;
-    bypassRate?: number;
-    toolVersion?: string;
-    argSkip?: string[];
-    /** Tool names, or `prefix*`, `*suffix`, or `*contains*` patterns. */
-    members?: string[];
-}
-```
-
-### `ToolOverride`
-
-Per-tool override; `argSkip: []` clears the class list.
-
-```ts
-export interface ToolOverride {
-    cacheable?: boolean;
-    ttlSeconds?: number;
-    bypassRate?: number;
-    toolVersion?: string;
-    argSkip?: string[];
-}
-```
-
-### `ToolCacheConfig`
-
-Caching for tools that are read-only and stable for their TTL.
-
-```ts
-export interface ToolCacheConfig {
-    enabled?: boolean;
-    /** Tool execution-intercept priority, default 150. */
-    priority?: number;
-    /** Whether error results may be cached, default false. */
-    cacheErrors?: boolean;
-    default?: ToolClass;
-    classes?: Record<string, ToolClass>;
-    /** Tool names, or `prefix*`, `*suffix`, or `*contains*` patterns. */
-    overrides?: Record<string, ToolOverride>;
-}
-```
-
 ### `Config`
 
 Adaptive component config.
@@ -193,7 +108,6 @@ export interface Config {
     adaptive_hints?: AdaptiveHintsConfig;
     tool_parallelism?: ToolParallelismConfig;
     acg?: AcgConfig;
-    responseCache?: ResponseCacheConfig;
     policy?: ConfigPolicy;
 }
 ```
@@ -386,28 +300,6 @@ Thresholds in `stability_thresholds` default one by one, so one threshold can be
 export declare function acgConfig(config?: AcgConfig): AcgConfig;
 ```
 
-### `responseCacheConfig`
-
-Creates response-cache settings.
-
-Fields in `config` replace the defaults; fields left out keep them. The result is one section of an adaptive config, not a plugin kind.
-
-**Parameters**
-
-- `config`: Response-cache settings to set.
-
-**Returns**
-
-Complete response-cache settings.
-
-**Remarks**
-
-The defaults are an in-memory backend, a `bypassRate` of 0, no caching of nondeterministic requests, and an empty `namespace`. Validation rejects the empty `namespace`, so set it before validating.
-
-```ts
-export declare function responseCacheConfig(config?: ResponseCacheConfig): ResponseCacheConfig;
-```
-
 ### `ComponentSpec` function
 
 Wraps an adaptive config as a plugin component.
@@ -459,65 +351,13 @@ export declare function setLatencySensitivity(value: number): void;
 
 ## Type Aliases
 
-### `ResponseCacheKeyStrategy` type alias
-
-```ts
-export type ResponseCacheKeyStrategy = (typeof ResponseCacheKeyStrategy)[keyof typeof ResponseCacheKeyStrategy];
-```
-
-### `ToolClassPluginConfig`
-
-```ts
-export type ToolClassPluginConfig = Omit<ToolClass, 'ttlSeconds' | 'bypassRate' | 'toolVersion' | 'argSkip'> & {
-    ttl_seconds?: number;
-    bypass_rate?: number;
-    tool_version?: string;
-    arg_skip?: string[];
-};
-```
-
-### `ToolOverridePluginConfig`
-
-```ts
-export type ToolOverridePluginConfig = Omit<ToolOverride, 'ttlSeconds' | 'bypassRate' | 'toolVersion' | 'argSkip'> & {
-    ttl_seconds?: number;
-    bypass_rate?: number;
-    tool_version?: string;
-    arg_skip?: string[];
-};
-```
-
-### `ToolCachePluginConfig`
-
-```ts
-export type ToolCachePluginConfig = Omit<ToolCacheConfig, 'cacheErrors' | 'default' | 'classes' | 'overrides'> & {
-    cache_errors?: boolean;
-    default?: ToolClassPluginConfig;
-    classes?: Record<string, ToolClassPluginConfig>;
-    overrides?: Record<string, ToolOverridePluginConfig>;
-};
-```
-
 ### `AdaptivePluginConfig`
 
 ```ts
-export type AdaptivePluginConfig = Omit<Config, 'responseCache'> & {
-    response_cache?: ResponseCachePluginConfig;
-};
+export type AdaptivePluginConfig = Config;
 ```
 
 ## Constants
-
-### `ResponseCacheKeyStrategy` constant
-
-Response-cache key strategies.
-
-```ts
-export declare const ResponseCacheKeyStrategy: {
-    readonly ExactRequest: 'exact_request';
-    readonly Logical: 'logical';
-};
-```
 
 ### `ADAPTIVE_PLUGIN_KIND`
 

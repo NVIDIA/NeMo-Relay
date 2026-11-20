@@ -2,7 +2,7 @@
 title: "Struct LlmStream Next"
 sidebar-title: "LlmStreamNext"
 description: "API documentation for the Rust `LlmStreamNext` struct in crate `nemo_relay_plugin`."
-position: 36
+position: 38
 ---
 {/* SPDX-FileCopyrightText: Copyright (c) 2026, NVIDIA CORPORATION & AFFILIATES. All rights reserved.
 SPDX-License-Identifier: Apache-2.0 */}
@@ -24,6 +24,14 @@ pub struct LlmStreamNext { /* private fields */ }
 <pre className="rust-signature"><code dangerouslySetInnerHTML={{"__html": "pub async fn call(&amp;self, request: <a href=\"struct-llmrequest\">LlmRequest</a>) -&gt; Result&lt;<a href=\"type-llmjsonasyncstream\">LlmJsonAsyncStream</a>&gt;"}} /></pre>
 
 Open a component-owned downstream LLM stream for the supplied request.
+
+#### `open`
+
+<pre className="rust-signature"><code dangerouslySetInnerHTML={{"__html": "pub async fn open(&amp;self, request: <a href=\"struct-llmrequest\">LlmRequest</a>) -&gt; Result&lt;<a href=\"struct-llminputstream\">LlmInputStream</a>&gt;"}} /></pre>
+
+Open a downstream LLM stream whose cleanup result the caller can await.
+
+Use this instead of [`Self::call`](/reference/api/rust-library-reference/nemo-relay-plugin/struct-llmstreamnext) when a result must not be used after the downstream stream fails to close, such as a response cache.
 
 ## Trait Implementations
 

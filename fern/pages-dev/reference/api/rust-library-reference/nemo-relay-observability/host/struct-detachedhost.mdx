@@ -17,23 +17,23 @@ pub struct DetachedHost;
 
 ### `impl LlmNormalizer for DetachedHost`
 
-<pre className="rust-signature"><code dangerouslySetInnerHTML={{"__html": "impl LlmNormalizer for <a href=\"struct-detachedhost\">DetachedHost</a>"}} /></pre>
+<pre className="rust-signature"><code dangerouslySetInnerHTML={{"__html": "impl <a href=\"../../nemo-relay-types/codec/normalization/trait-llmnormalizer\">LlmNormalizer</a> for <a href=\"struct-detachedhost\">DetachedHost</a>"}} /></pre>
 
 #### `normalize_request`
 
-<pre className="rust-signature"><code dangerouslySetInnerHTML={{"__html": "fn normalize_request(\n    &amp;self,\n    _: &amp;LlmRequest,\n    _: <a href=\"https://doc.rust-lang.org/1.96.1/core/option/enum.Option.html\">Option</a>&lt;&amp;<a href=\"https://doc.rust-lang.org/1.96.1/std/primitive.str.html\">str</a>&gt;,\n) -&gt; <a href=\"https://doc.rust-lang.org/1.96.1/core/option/enum.Option.html\">Option</a>&lt;AnnotatedLlmRequest&gt;"}} /></pre>
+<pre className="rust-signature"><code dangerouslySetInnerHTML={{"__html": "fn <a href=\"../../nemo-relay-types/codec/normalization/trait-llmnormalizer\">normalize_request</a>(\n    &amp;self,\n    _: &amp;<a href=\"../../nemo-relay-types/api/llm/struct-llmrequest\">LlmRequest</a>,\n    _: <a href=\"https://doc.rust-lang.org/1.96.1/core/option/enum.Option.html\">Option</a>&lt;&amp;<a href=\"https://doc.rust-lang.org/1.96.1/std/primitive.str.html\">str</a>&gt;,\n) -&gt; <a href=\"https://doc.rust-lang.org/1.96.1/core/option/enum.Option.html\">Option</a>&lt;<a href=\"../../nemo-relay-types/codec/request/struct-annotatedllmrequest\">AnnotatedLlmRequest</a>&gt;"}} /></pre>
 
 #### `normalize_response`
 
-<pre className="rust-signature"><code dangerouslySetInnerHTML={{"__html": "fn normalize_response(&amp;self, _: &amp;Json) -&gt; <a href=\"https://doc.rust-lang.org/1.96.1/core/option/enum.Option.html\">Option</a>&lt;AnnotatedLlmResponse&gt;"}} /></pre>
+<pre className="rust-signature"><code dangerouslySetInnerHTML={{"__html": "fn <a href=\"../../nemo-relay-types/codec/normalization/trait-llmnormalizer\">normalize_response</a>(&amp;self, _: &amp;<a href=\"../../nemo-relay-types/type-json\">Json</a>) -&gt; <a href=\"https://doc.rust-lang.org/1.96.1/core/option/enum.Option.html\">Option</a>&lt;<a href=\"../../nemo-relay-types/codec/response/struct-annotatedllmresponse\">AnnotatedLlmResponse</a>&gt;"}} /></pre>
 
 #### `telemetry_request`
 
-<pre className="rust-signature"><code dangerouslySetInnerHTML={{"__html": "fn telemetry_request&lt;'a&gt;(\n    &amp;self,\n    request: <a href=\"https://doc.rust-lang.org/1.96.1/alloc/borrow/enum.Cow.html\">Cow</a>&lt;'a, AnnotatedLlmRequest&gt;,\n) -&gt; <a href=\"https://doc.rust-lang.org/1.96.1/alloc/borrow/enum.Cow.html\">Cow</a>&lt;'a, AnnotatedLlmRequest&gt;"}} /></pre>
+<pre className="rust-signature"><code dangerouslySetInnerHTML={{"__html": "fn <a href=\"../../nemo-relay-types/codec/normalization/trait-llmnormalizer\">telemetry_request</a>&lt;'a&gt;(\n    &amp;self,\n    request: <a href=\"https://doc.rust-lang.org/1.96.1/alloc/borrow/enum.Cow.html\">Cow</a>&lt;'a, <a href=\"../../nemo-relay-types/codec/request/struct-annotatedllmrequest\">AnnotatedLlmRequest</a>&gt;,\n) -&gt; <a href=\"https://doc.rust-lang.org/1.96.1/alloc/borrow/enum.Cow.html\">Cow</a>&lt;'a, <a href=\"../../nemo-relay-types/codec/request/struct-annotatedllmrequest\">AnnotatedLlmRequest</a>&gt;"}} /></pre>
 
 #### `telemetry_tool_calls`
 
-<pre className="rust-signature"><code dangerouslySetInnerHTML={{"__html": "fn telemetry_tool_calls(\n    &amp;self,\n    _annotation: <a href=\"https://doc.rust-lang.org/1.96.1/core/option/enum.Option.html\">Option</a>&lt;&amp;AnnotatedLlmResponse&gt;,\n    _output: <a href=\"https://doc.rust-lang.org/1.96.1/core/option/enum.Option.html\">Option</a>&lt;&amp;<a href=\"https://docs.rs/serde_json/1.0.149/serde_json/value/enum.Value.html\">Value</a>&gt;,\n) -&gt; <a href=\"https://doc.rust-lang.org/1.96.1/core/option/enum.Option.html\">Option</a>&lt;<a href=\"https://doc.rust-lang.org/1.96.1/alloc/vec/struct.Vec.html\">Vec</a>&lt;TelemetryToolCall&gt;&gt;"}} /></pre>
+<pre className="rust-signature"><code dangerouslySetInnerHTML={{"__html": "fn <a href=\"../../nemo-relay-types/codec/normalization/trait-llmnormalizer\">telemetry_tool_calls</a>(\n    &amp;self,\n    _annotation: <a href=\"https://doc.rust-lang.org/1.96.1/core/option/enum.Option.html\">Option</a>&lt;&amp;<a href=\"../../nemo-relay-types/codec/response/struct-annotatedllmresponse\">AnnotatedLlmResponse</a>&gt;,\n    _output: <a href=\"https://doc.rust-lang.org/1.96.1/core/option/enum.Option.html\">Option</a>&lt;&amp;<a href=\"https://docs.rs/serde_json/1.0.149/serde_json/value/enum.Value.html\">Value</a>&gt;,\n) -&gt; <a href=\"https://doc.rust-lang.org/1.96.1/core/option/enum.Option.html\">Option</a>&lt;<a href=\"https://doc.rust-lang.org/1.96.1/alloc/vec/struct.Vec.html\">Vec</a>&lt;<a href=\"../../nemo-relay-types/codec/normalization/struct-telemetrytoolcall\">TelemetryToolCall</a>&gt;&gt;"}} /></pre>
 
 ### `impl ObservabilityHost for DetachedHost`
 
@@ -41,19 +41,19 @@ pub struct DetachedHost;
 
 #### `pricing_snapshot`
 
-<pre className="rust-signature"><code dangerouslySetInnerHTML={{"__html": "fn <a href=\"trait-observabilityhost\">pricing_snapshot</a>(&amp;self) -&gt; <a href=\"https://doc.rust-lang.org/1.96.1/alloc/sync/struct.Arc.html\">Arc</a>&lt;dyn CostEstimator&gt;"}} /></pre>
+<pre className="rust-signature"><code dangerouslySetInnerHTML={{"__html": "fn <a href=\"trait-observabilityhost\">pricing_snapshot</a>(&amp;self) -&gt; <a href=\"https://doc.rust-lang.org/1.96.1/alloc/sync/struct.Arc.html\">Arc</a>&lt;dyn <a href=\"../../nemo-relay-types/codec/pricing/trait-costestimator\">CostEstimator</a>&gt;"}} /></pre>
 
 #### `register_subscriber`
 
-<pre className="rust-signature"><code dangerouslySetInnerHTML={{"__html": "fn <a href=\"trait-observabilityhost\">register_subscriber</a>(&amp;self, _: &amp;<a href=\"https://doc.rust-lang.org/1.96.1/std/primitive.str.html\">str</a>, _: <a href=\"type-eventsubscriberfn\">EventSubscriberFn</a>) -&gt; Result&lt;<a href=\"https://doc.rust-lang.org/1.96.1/std/primitive.unit.html\">()</a>&gt;"}} /></pre>
+<pre className="rust-signature"><code dangerouslySetInnerHTML={{"__html": "fn <a href=\"trait-observabilityhost\">register_subscriber</a>(&amp;self, _: &amp;<a href=\"https://doc.rust-lang.org/1.96.1/std/primitive.str.html\">str</a>, _: <a href=\"type-eventsubscriberfn\">EventSubscriberFn</a>) -&gt; <a href=\"../../nemo-relay-types/error/type-result\">Result</a>&lt;<a href=\"https://doc.rust-lang.org/1.96.1/std/primitive.unit.html\">()</a>&gt;"}} /></pre>
 
 #### `deregister_subscriber`
 
-<pre className="rust-signature"><code dangerouslySetInnerHTML={{"__html": "fn <a href=\"trait-observabilityhost\">deregister_subscriber</a>(&amp;self, _: &amp;<a href=\"https://doc.rust-lang.org/1.96.1/std/primitive.str.html\">str</a>) -&gt; Result&lt;<a href=\"https://doc.rust-lang.org/1.96.1/std/primitive.bool.html\">bool</a>&gt;"}} /></pre>
+<pre className="rust-signature"><code dangerouslySetInnerHTML={{"__html": "fn <a href=\"trait-observabilityhost\">deregister_subscriber</a>(&amp;self, _: &amp;<a href=\"https://doc.rust-lang.org/1.96.1/std/primitive.str.html\">str</a>) -&gt; <a href=\"../../nemo-relay-types/error/type-result\">Result</a>&lt;<a href=\"https://doc.rust-lang.org/1.96.1/std/primitive.bool.html\">bool</a>&gt;"}} /></pre>
 
 #### `flush_subscribers`
 
-<pre className="rust-signature"><code dangerouslySetInnerHTML={{"__html": "fn <a href=\"trait-observabilityhost\">flush_subscribers</a>(&amp;self) -&gt; Result&lt;<a href=\"https://doc.rust-lang.org/1.96.1/std/primitive.unit.html\">()</a>&gt;"}} /></pre>
+<pre className="rust-signature"><code dangerouslySetInnerHTML={{"__html": "fn <a href=\"trait-observabilityhost\">flush_subscribers</a>(&amp;self) -&gt; <a href=\"../../nemo-relay-types/error/type-result\">Result</a>&lt;<a href=\"https://doc.rust-lang.org/1.96.1/std/primitive.unit.html\">()</a>&gt;"}} /></pre>
 
 #### `w3c_span_context`
 
@@ -65,19 +65,19 @@ pub struct DetachedHost;
 
 #### `set_full_payloads_enabled`
 
-<pre className="rust-signature"><code dangerouslySetInnerHTML={{"__html": "fn <a href=\"trait-observabilityhost\">set_full_payloads_enabled</a>(&amp;self, _: <a href=\"https://doc.rust-lang.org/1.96.1/std/primitive.bool.html\">bool</a>) -&gt; Result&lt;<a href=\"https://doc.rust-lang.org/1.96.1/std/primitive.unit.html\">()</a>&gt;"}} /></pre>
+<pre className="rust-signature"><code dangerouslySetInnerHTML={{"__html": "fn <a href=\"trait-observabilityhost\">set_full_payloads_enabled</a>(&amp;self, _: <a href=\"https://doc.rust-lang.org/1.96.1/std/primitive.bool.html\">bool</a>) -&gt; <a href=\"../../nemo-relay-types/error/type-result\">Result</a>&lt;<a href=\"https://doc.rust-lang.org/1.96.1/std/primitive.unit.html\">()</a>&gt;"}} /></pre>
 
 #### `try_scope_register_subscriber`
 
-<pre className="rust-signature"><code dangerouslySetInnerHTML={{"__html": "fn <a href=\"trait-observabilityhost\">try_scope_register_subscriber</a>(\n    &amp;self,\n    _: &amp;<a href=\"https://docs.rs/uuid/1.18.1/uuid/struct.Uuid.html\">Uuid</a>,\n    _: &amp;<a href=\"https://doc.rust-lang.org/1.96.1/std/primitive.str.html\">str</a>,\n    _: <a href=\"type-eventsubscriberfn\">EventSubscriberFn</a>,\n) -&gt; Result&lt;<a href=\"https://doc.rust-lang.org/1.96.1/std/primitive.unit.html\">()</a>&gt;"}} /></pre>
+<pre className="rust-signature"><code dangerouslySetInnerHTML={{"__html": "fn <a href=\"trait-observabilityhost\">try_scope_register_subscriber</a>(\n    &amp;self,\n    _: &amp;<a href=\"https://docs.rs/uuid/1.18.1/uuid/struct.Uuid.html\">Uuid</a>,\n    _: &amp;<a href=\"https://doc.rust-lang.org/1.96.1/std/primitive.str.html\">str</a>,\n    _: <a href=\"type-eventsubscriberfn\">EventSubscriberFn</a>,\n) -&gt; <a href=\"../../nemo-relay-types/error/type-result\">Result</a>&lt;<a href=\"https://doc.rust-lang.org/1.96.1/std/primitive.unit.html\">()</a>&gt;"}} /></pre>
 
 #### `try_scope_deregister_subscriber`
 
-<pre className="rust-signature"><code dangerouslySetInnerHTML={{"__html": "fn <a href=\"trait-observabilityhost\">try_scope_deregister_subscriber</a>(&amp;self, _: &amp;<a href=\"https://docs.rs/uuid/1.18.1/uuid/struct.Uuid.html\">Uuid</a>, _: &amp;<a href=\"https://doc.rust-lang.org/1.96.1/std/primitive.str.html\">str</a>) -&gt; Result&lt;<a href=\"https://doc.rust-lang.org/1.96.1/std/primitive.bool.html\">bool</a>&gt;"}} /></pre>
+<pre className="rust-signature"><code dangerouslySetInnerHTML={{"__html": "fn <a href=\"trait-observabilityhost\">try_scope_deregister_subscriber</a>(&amp;self, _: &amp;<a href=\"https://docs.rs/uuid/1.18.1/uuid/struct.Uuid.html\">Uuid</a>, _: &amp;<a href=\"https://doc.rust-lang.org/1.96.1/std/primitive.str.html\">str</a>) -&gt; <a href=\"../../nemo-relay-types/error/type-result\">Result</a>&lt;<a href=\"https://doc.rust-lang.org/1.96.1/std/primitive.bool.html\">bool</a>&gt;"}} /></pre>
 
 #### `scope_deregister_subscriber`
 
-<pre className="rust-signature"><code dangerouslySetInnerHTML={{"__html": "fn <a href=\"trait-observabilityhost\">scope_deregister_subscriber</a>(&amp;self, _: &amp;<a href=\"https://docs.rs/uuid/1.18.1/uuid/struct.Uuid.html\">Uuid</a>, _: &amp;<a href=\"https://doc.rust-lang.org/1.96.1/std/primitive.str.html\">str</a>) -&gt; Result&lt;<a href=\"https://doc.rust-lang.org/1.96.1/std/primitive.bool.html\">bool</a>&gt;"}} /></pre>
+<pre className="rust-signature"><code dangerouslySetInnerHTML={{"__html": "fn <a href=\"trait-observabilityhost\">scope_deregister_subscriber</a>(&amp;self, _: &amp;<a href=\"https://docs.rs/uuid/1.18.1/uuid/struct.Uuid.html\">Uuid</a>, _: &amp;<a href=\"https://doc.rust-lang.org/1.96.1/std/primitive.str.html\">str</a>) -&gt; <a href=\"../../nemo-relay-types/error/type-result\">Result</a>&lt;<a href=\"https://doc.rust-lang.org/1.96.1/std/primitive.bool.html\">bool</a>&gt;"}} /></pre>
 
 #### `is_trajectory_parent`
 

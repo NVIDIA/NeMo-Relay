@@ -2,7 +2,7 @@
 title: "Struct Plugin Runtime"
 sidebar-title: "PluginRuntime"
 description: "API documentation for the Rust `PluginRuntime` struct in crate `nemo_relay_plugin`."
-position: 43
+position: 45
 ---
 {/* SPDX-FileCopyrightText: Copyright (c) 2026, NVIDIA CORPORATION & AFFILIATES. All rights reserved.
 SPDX-License-Identifier: Apache-2.0 */}
@@ -94,6 +94,22 @@ Validate metric measurements and emit them using Relay's reserved metric schema.
 #### `runtime_diagnostics`
 
 <pre className="rust-signature"><code dangerouslySetInnerHTML={{"__html": "pub fn runtime_diagnostics(&amp;self) -&gt; Result&lt;<a href=\"struct-runtimediagnostics\">RuntimeDiagnostics</a>&gt;"}} /></pre>
+
+#### `estimate_cost_for_provider`
+
+<pre className="rust-signature"><code dangerouslySetInnerHTML={{"__html": "pub fn estimate_cost_for_provider(\n    &amp;self,\n    provider: <a href=\"https://doc.rust-lang.org/1.96.1/core/option/enum.Option.html\">Option</a>&lt;&amp;<a href=\"https://doc.rust-lang.org/1.96.1/std/primitive.str.html\">str</a>&gt;,\n    model: &amp;<a href=\"https://doc.rust-lang.org/1.96.1/std/primitive.str.html\">str</a>,\n    usage: &amp;<a href=\"struct-usage\">Usage</a>,\n) -&gt; Result&lt;<a href=\"https://doc.rust-lang.org/1.96.1/core/option/enum.Option.html\">Option</a>&lt;<a href=\"struct-costestimate\">CostEstimate</a>&gt;&gt;"}} /></pre>
+
+Estimate cost with the host's active model pricing catalog.
+
+Returns `Ok(None)` when the catalog has no pricing for the model. Hosts older than this operation return an error, which callers should treat as an unknown cost.
+
+#### `response_cost_for_provider`
+
+<pre className="rust-signature"><code dangerouslySetInnerHTML={{"__html": "pub fn response_cost_for_provider(\n    &amp;self,\n    response: &amp;<a href=\"struct-annotatedllmresponse\">AnnotatedLlmResponse</a>,\n    provider: <a href=\"https://doc.rust-lang.org/1.96.1/core/option/enum.Option.html\">Option</a>&lt;&amp;<a href=\"https://doc.rust-lang.org/1.96.1/std/primitive.str.html\">str</a>&gt;,\n) -&gt; Result&lt;<a href=\"https://doc.rust-lang.org/1.96.1/core/option/enum.Option.html\">Option</a>&lt;<a href=\"struct-costestimate\">CostEstimate</a>&gt;&gt;"}} /></pre>
+
+Price a normalized response with the host's full pricing rules.
+
+Returns the response's reported cost when present; otherwise the host's estimate for its model and usage, or `Ok(None)` when unknown. Hosts older than this operation return an error, which callers should treat as an unknown cost.
 
 #### `log`
 

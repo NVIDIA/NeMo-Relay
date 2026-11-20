@@ -52,7 +52,7 @@ An [`EventSubscriberFn`](/reference/api/rust-library-reference/nemo-relay-observ
 
 #### `export`
 
-<pre className="rust-signature"><code dangerouslySetInnerHTML={{"__html": "pub fn export(&amp;self) -&gt; Result&lt;<a href=\"struct-atiftrajectory\">AtifTrajectory</a>&gt;"}} /></pre>
+<pre className="rust-signature"><code dangerouslySetInnerHTML={{"__html": "pub fn export(&amp;self) -&gt; <a href=\"../../nemo-relay-types/error/type-result\">Result</a>&lt;<a href=\"struct-atiftrajectory\">AtifTrajectory</a>&gt;"}} /></pre>
 
 Export the collected event history as an [`AtifTrajectory`](/reference/api/rust-library-reference/nemo-relay-observability/atif/struct-atiftrajectory).
 
@@ -70,7 +70,7 @@ Exporting does not clear the buffered events. Call [`AtifExporter::clear`](/refe
 
 #### `try_export`
 
-<pre className="rust-signature"><code dangerouslySetInnerHTML={{"__html": "pub fn try_export(&amp;self) -&gt; Result&lt;<a href=\"struct-atiftrajectory\">AtifTrajectory</a>&gt;"}} /></pre>
+<pre className="rust-signature"><code dangerouslySetInnerHTML={{"__html": "pub fn try_export(&amp;self) -&gt; <a href=\"../../nemo-relay-types/error/type-result\">Result</a>&lt;<a href=\"struct-atiftrajectory\">AtifTrajectory</a>&gt;"}} /></pre>
 
 Try to export the collected event history as an [`AtifTrajectory`](/reference/api/rust-library-reference/nemo-relay-observability/atif/struct-atiftrajectory).
 

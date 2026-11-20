@@ -20,40 +20,40 @@ Built-in codec for the OCI Generative AI chat API.
 
 ### `impl LlmCodec for OCIGenAIChatCodec`
 
-<pre className="rust-signature"><code dangerouslySetInnerHTML={{"__html": "impl LlmCodec for <a href=\"struct-ocigenaichatcodec\">OCIGenAIChatCodec</a>"}} /></pre>
+<pre className="rust-signature"><code dangerouslySetInnerHTML={{"__html": "impl <a href=\"../../nemo-relay-types/codec/traits/trait-llmcodec\">LlmCodec</a> for <a href=\"struct-ocigenaichatcodec\">OCIGenAIChatCodec</a>"}} /></pre>
 
 #### `codec_identity`
 
-<pre className="rust-signature"><code dangerouslySetInnerHTML={{"__html": "fn codec_identity(&amp;self) -&gt; LlmCodecIdentity"}} /></pre>
+<pre className="rust-signature"><code dangerouslySetInnerHTML={{"__html": "fn <a href=\"../../nemo-relay-types/codec/traits/trait-llmcodec\">codec_identity</a>(&amp;self) -&gt; <a href=\"../../nemo-relay-types/codec/identity/enum-llmcodecidentity\">LlmCodecIdentity</a>"}} /></pre>
 
 #### `decode`
 
-<pre className="rust-signature"><code dangerouslySetInnerHTML={{"__html": "fn decode(&amp;self, request: &amp;LlmRequest) -&gt; Result&lt;AnnotatedLlmRequest&gt;"}} /></pre>
+<pre className="rust-signature"><code dangerouslySetInnerHTML={{"__html": "fn <a href=\"../../nemo-relay-types/codec/traits/trait-llmcodec\">decode</a>(&amp;self, request: &amp;<a href=\"../../nemo-relay-types/api/llm/struct-llmrequest\">LlmRequest</a>) -&gt; <a href=\"../../nemo-relay-types/error/type-result\">Result</a>&lt;<a href=\"../../nemo-relay-types/codec/request/struct-annotatedllmrequest\">AnnotatedLlmRequest</a>&gt;"}} /></pre>
 
 #### `encode`
 
-<pre className="rust-signature"><code dangerouslySetInnerHTML={{"__html": "fn encode(\n    &amp;self,\n    annotated: &amp;AnnotatedLlmRequest,\n    original: &amp;LlmRequest,\n) -&gt; Result&lt;LlmRequest&gt;"}} /></pre>
+<pre className="rust-signature"><code dangerouslySetInnerHTML={{"__html": "fn <a href=\"../../nemo-relay-types/codec/traits/trait-llmcodec\">encode</a>(\n    &amp;self,\n    annotated: &amp;<a href=\"../../nemo-relay-types/codec/request/struct-annotatedllmrequest\">AnnotatedLlmRequest</a>,\n    original: &amp;<a href=\"../../nemo-relay-types/api/llm/struct-llmrequest\">LlmRequest</a>,\n) -&gt; <a href=\"../../nemo-relay-types/error/type-result\">Result</a>&lt;<a href=\"../../nemo-relay-types/api/llm/struct-llmrequest\">LlmRequest</a>&gt;"}} /></pre>
 
 #### `encode_with_baseline`
 
-<pre className="rust-signature"><code dangerouslySetInnerHTML={{"__html": "fn encode_with_baseline(\n    &amp;self,\n    annotated: &amp;AnnotatedLlmRequest,\n    original: &amp;LlmRequest,\n    baseline: &amp;AnnotatedLlmRequest,\n) -&gt; Result&lt;LlmRequest&gt;"}} /></pre>
+<pre className="rust-signature"><code dangerouslySetInnerHTML={{"__html": "fn <a href=\"../../nemo-relay-types/codec/traits/trait-llmcodec\">encode_with_baseline</a>(\n    &amp;self,\n    annotated: &amp;<a href=\"../../nemo-relay-types/codec/request/struct-annotatedllmrequest\">AnnotatedLlmRequest</a>,\n    original: &amp;<a href=\"../../nemo-relay-types/api/llm/struct-llmrequest\">LlmRequest</a>,\n    baseline: &amp;<a href=\"../../nemo-relay-types/codec/request/struct-annotatedllmrequest\">AnnotatedLlmRequest</a>,\n) -&gt; <a href=\"../../nemo-relay-types/error/type-result\">Result</a>&lt;<a href=\"../../nemo-relay-types/api/llm/struct-llmrequest\">LlmRequest</a>&gt;"}} /></pre>
 
 #### `encode_owned_with_baseline`
 
-<pre className="rust-signature"><code dangerouslySetInnerHTML={{"__html": "fn encode_owned_with_baseline(\n    &amp;self,\n    annotated: &amp;AnnotatedLlmRequest,\n    original: LlmRequest,\n    baseline: &amp;AnnotatedLlmRequest,\n) -&gt; Result&lt;LlmRequest&gt;"}} /></pre>
+<pre className="rust-signature"><code dangerouslySetInnerHTML={{"__html": "fn <a href=\"../../nemo-relay-types/codec/traits/trait-llmcodec\">encode_owned_with_baseline</a>(\n    &amp;self,\n    annotated: &amp;<a href=\"../../nemo-relay-types/codec/request/struct-annotatedllmrequest\">AnnotatedLlmRequest</a>,\n    original: <a href=\"../../nemo-relay-types/api/llm/struct-llmrequest\">LlmRequest</a>,\n    baseline: &amp;<a href=\"../../nemo-relay-types/codec/request/struct-annotatedllmrequest\">AnnotatedLlmRequest</a>,\n) -&gt; <a href=\"../../nemo-relay-types/error/type-result\">Result</a>&lt;<a href=\"../../nemo-relay-types/api/llm/struct-llmrequest\">LlmRequest</a>&gt;"}} /></pre>
 
 ### `impl LlmResponseCodec for OCIGenAIChatCodec`
 
-<pre className="rust-signature"><code dangerouslySetInnerHTML={{"__html": "impl LlmResponseCodec for <a href=\"struct-ocigenaichatcodec\">OCIGenAIChatCodec</a>"}} /></pre>
+<pre className="rust-signature"><code dangerouslySetInnerHTML={{"__html": "impl <a href=\"../../nemo-relay-types/codec/traits/trait-llmresponsecodec\">LlmResponseCodec</a> for <a href=\"struct-ocigenaichatcodec\">OCIGenAIChatCodec</a>"}} /></pre>
 
 #### `codec_identity`
 
-<pre className="rust-signature"><code dangerouslySetInnerHTML={{"__html": "fn codec_identity(&amp;self) -&gt; LlmCodecIdentity"}} /></pre>
+<pre className="rust-signature"><code dangerouslySetInnerHTML={{"__html": "fn <a href=\"../../nemo-relay-types/codec/traits/trait-llmresponsecodec\">codec_identity</a>(&amp;self) -&gt; <a href=\"../../nemo-relay-types/codec/identity/enum-llmcodecidentity\">LlmCodecIdentity</a>"}} /></pre>
 
 #### `decode_response`
 
-<pre className="rust-signature"><code dangerouslySetInnerHTML={{"__html": "fn decode_response(&amp;self, response: &amp;Json) -&gt; Result&lt;AnnotatedLlmResponse&gt;"}} /></pre>
+<pre className="rust-signature"><code dangerouslySetInnerHTML={{"__html": "fn <a href=\"../../nemo-relay-types/codec/traits/trait-llmresponsecodec\">decode_response</a>(&amp;self, response: &amp;<a href=\"../../nemo-relay-types/type-json\">Json</a>) -&gt; <a href=\"../../nemo-relay-types/error/type-result\">Result</a>&lt;<a href=\"../../nemo-relay-types/codec/response/struct-annotatedllmresponse\">AnnotatedLlmResponse</a>&gt;"}} /></pre>
 
 #### `allows_estimated_cost`
 
-<pre className="rust-signature"><code dangerouslySetInnerHTML={{"__html": "fn allows_estimated_cost(&amp;self, _response: &amp;<a href=\"https://docs.rs/serde_json/1.0.149/serde_json/value/enum.Value.html\">Value</a>) -&gt; <a href=\"https://doc.rust-lang.org/1.96.1/std/primitive.bool.html\">bool</a>"}} /></pre>
+<pre className="rust-signature"><code dangerouslySetInnerHTML={{"__html": "fn <a href=\"../../nemo-relay-types/codec/traits/trait-llmresponsecodec\">allows_estimated_cost</a>(&amp;self, _response: &amp;<a href=\"https://docs.rs/serde_json/1.0.149/serde_json/value/enum.Value.html\">Value</a>) -&gt; <a href=\"https://doc.rust-lang.org/1.96.1/std/primitive.bool.html\">bool</a>"}} /></pre>

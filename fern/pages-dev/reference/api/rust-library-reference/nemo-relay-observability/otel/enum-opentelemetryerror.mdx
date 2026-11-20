@@ -9,7 +9,7 @@ SPDX-License-Identifier: Apache-2.0 */}
 
 Generated from `cargo doc --no-deps -p nemo-relay-builtins -p nemo-relay-diagnostics -p nemo-relay-logging -p nemo-relay-plugin-host -p nemo-relay-codecs -p nemo-relay -p nemo-relay-runtime -p nemo-relay-model-pricing -p nemo-relay-resource-metrics -p nemo-relay-observability -p nemo-relay-adaptive -p nemo-relay-pii-redaction -p nemo-relay-ffi -p nemo-relay-types -p nemo-relay-plugin -p nemo-relay-worker-proto -p nemo-relay-worker`.
 
-<pre className="rust-signature"><code dangerouslySetInnerHTML={{"__html": "pub enum OpenTelemetryError &#123;\n    InvalidGrpcHeader &#123;\n        key: <a href=\"https://doc.rust-lang.org/1.96.1/alloc/string/struct.String.html\">String</a>,\n        message: <a href=\"https://doc.rust-lang.org/1.96.1/alloc/string/struct.String.html\">String</a>,\n    &#125;,\n    InvalidHeader &#123;\n        key: <a href=\"https://doc.rust-lang.org/1.96.1/alloc/string/struct.String.html\">String</a>,\n        message: <a href=\"https://doc.rust-lang.org/1.96.1/alloc/string/struct.String.html\">String</a>,\n    &#125;,\n    GlobalHeaderEnvironmentUnsupported &#123;\n        variable: &amp;'static <a href=\"https://doc.rust-lang.org/1.96.1/std/primitive.str.html\">str</a>,\n    &#125;,\n    ExporterBuild(<a href=\"https://doc.rust-lang.org/1.96.1/alloc/string/struct.String.html\">String</a>),\n    TraceProvider(<a href=\"https://doc.rust-lang.org/1.96.1/alloc/string/struct.String.html\">String</a>),\n    LogProvider(<a href=\"https://doc.rust-lang.org/1.96.1/alloc/string/struct.String.html\">String</a>),\n    MetricProvider(<a href=\"https://doc.rust-lang.org/1.96.1/alloc/string/struct.String.html\">String</a>),\n    InvalidAttributeMappings(<a href=\"https://doc.rust-lang.org/1.96.1/alloc/string/struct.String.html\">String</a>),\n    InvalidMetadataPromotionPrefixes(<a href=\"https://doc.rust-lang.org/1.96.1/alloc/string/struct.String.html\">String</a>),\n    Core(FlowError),\n&#125;"}} /></pre>
+<pre className="rust-signature"><code dangerouslySetInnerHTML={{"__html": "pub enum OpenTelemetryError &#123;\n    InvalidGrpcHeader &#123;\n        key: <a href=\"https://doc.rust-lang.org/1.96.1/alloc/string/struct.String.html\">String</a>,\n        message: <a href=\"https://doc.rust-lang.org/1.96.1/alloc/string/struct.String.html\">String</a>,\n    &#125;,\n    InvalidHeader &#123;\n        key: <a href=\"https://doc.rust-lang.org/1.96.1/alloc/string/struct.String.html\">String</a>,\n        message: <a href=\"https://doc.rust-lang.org/1.96.1/alloc/string/struct.String.html\">String</a>,\n    &#125;,\n    GlobalHeaderEnvironmentUnsupported &#123;\n        variable: &amp;'static <a href=\"https://doc.rust-lang.org/1.96.1/std/primitive.str.html\">str</a>,\n    &#125;,\n    ExporterBuild(<a href=\"https://doc.rust-lang.org/1.96.1/alloc/string/struct.String.html\">String</a>),\n    TraceProvider(<a href=\"https://doc.rust-lang.org/1.96.1/alloc/string/struct.String.html\">String</a>),\n    LogProvider(<a href=\"https://doc.rust-lang.org/1.96.1/alloc/string/struct.String.html\">String</a>),\n    MetricProvider(<a href=\"https://doc.rust-lang.org/1.96.1/alloc/string/struct.String.html\">String</a>),\n    InvalidAttributeMappings(<a href=\"https://doc.rust-lang.org/1.96.1/alloc/string/struct.String.html\">String</a>),\n    InvalidMetadataPromotionPrefixes(<a href=\"https://doc.rust-lang.org/1.96.1/alloc/string/struct.String.html\">String</a>),\n    Core(<a href=\"../../nemo-relay-types/error/enum-flowerror\">FlowError</a>),\n&#125;"}} /></pre>
 
 Errors produced while configuring or operating the OpenTelemetry subscriber.
 
@@ -97,7 +97,7 @@ Metadata promotion prefix configuration was invalid.
 
 ### `Core(FlowError)`
 
-<pre className="rust-signature"><code dangerouslySetInnerHTML={{"__html": "Core(FlowError)"}} /></pre>
+<pre className="rust-signature"><code dangerouslySetInnerHTML={{"__html": "Core(<a href=\"../../nemo-relay-types/error/enum-flowerror\">FlowError</a>)"}} /></pre>
 
 Registration errors from the core runtime.
 
@@ -141,8 +141,8 @@ Registration errors from the core runtime.
 
 ### `impl From<FlowError> for OpenTelemetryError`
 
-<pre className="rust-signature"><code dangerouslySetInnerHTML={{"__html": "impl <a href=\"https://doc.rust-lang.org/1.96.1/core/convert/trait.From.html\">From</a>&lt;FlowError&gt; for <a href=\"enum-opentelemetryerror\">OpenTelemetryError</a>"}} /></pre>
+<pre className="rust-signature"><code dangerouslySetInnerHTML={{"__html": "impl <a href=\"https://doc.rust-lang.org/1.96.1/core/convert/trait.From.html\">From</a>&lt;<a href=\"../../nemo-relay-types/error/enum-flowerror\">FlowError</a>&gt; for <a href=\"enum-opentelemetryerror\">OpenTelemetryError</a>"}} /></pre>
 
 #### `from`
 
-<pre className="rust-signature"><code dangerouslySetInnerHTML={{"__html": "fn <a href=\"https://doc.rust-lang.org/1.96.1/core/convert/trait.From.html#tymethod.from\">from</a>(source: FlowError) -&gt; Self"}} /></pre>
+<pre className="rust-signature"><code dangerouslySetInnerHTML={{"__html": "fn <a href=\"https://doc.rust-lang.org/1.96.1/core/convert/trait.From.html#tymethod.from\">from</a>(source: <a href=\"../../nemo-relay-types/error/enum-flowerror\">FlowError</a>) -&gt; Self"}} /></pre>

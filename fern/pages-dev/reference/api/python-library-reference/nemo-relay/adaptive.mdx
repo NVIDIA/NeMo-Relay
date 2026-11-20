@@ -23,10 +23,6 @@ One adaptive validation diagnostic.
 
 Validation report for adaptive configuration.
 
-### `ResponseCacheKeyStrategy(str, Enum)`
-
-Supported LLM response-cache key derivation strategies.
-
 ### `ConfigPolicy`
 
 Policy for unsupported adaptive configuration.
@@ -219,94 +215,6 @@ def to_dict() -> JsonObject
 
 Serialize this ACG config to the canonical JSON object shape.
 
-### `ToolClass`
-
-One tool caching class (also the shape of the `default` default bucket).
-
-#### Methods
-
-##### `ToolClass`
-
-```python
-def ToolClass(cacheable: bool = ..., ttl_seconds: int | None = ..., bypass_rate: float | None = ..., tool_version: str | None = ..., arg_skip: list[str] = ..., members: list[str] = ...) -> None
-```
-
-Create an instance.
-
-##### `to_dict`
-
-```python
-def to_dict() -> JsonObject
-```
-
-Serialize this tool class to the canonical JSON object shape.
-
-### `ToolOverride`
-
-Per-tool refinement applied on top of the tool's resolved class.
-
-#### Methods
-
-##### `ToolOverride`
-
-```python
-def ToolOverride(cacheable: bool | None = ..., ttl_seconds: int | None = ..., bypass_rate: float | None = ..., tool_version: str | None = ..., arg_skip: list[str] | None = ...) -> None
-```
-
-Create an instance.
-
-##### `to_dict`
-
-```python
-def to_dict() -> JsonObject
-```
-
-Serialize this tool override to the canonical JSON object shape.
-
-### `ToolCacheConfig`
-
-Opt-in tool-result cache settings.
-
-#### Methods
-
-##### `ToolCacheConfig`
-
-```python
-def ToolCacheConfig(enabled: bool = ..., priority: int = ..., cache_errors: bool = ..., default: ToolClass = ..., classes: dict[str, ToolClass] = ..., overrides: dict[str, ToolOverride] = ...) -> None
-```
-
-Create an instance.
-
-##### `to_dict`
-
-```python
-def to_dict() -> JsonObject
-```
-
-Serialize this tool-cache config to the canonical JSON object shape.
-
-### `ResponseCacheConfig`
-
-Opt-in LLM response and tool-result cache settings.
-
-#### Methods
-
-##### `ResponseCacheConfig`
-
-```python
-def ResponseCacheConfig(ttl_seconds: int = ..., namespace: str = ..., priority: int = ..., bypass_rate: float = ..., cache_nondeterministic: bool = ..., key_strategy: ResponseCacheKeyStrategy = ..., header_allowlist: list[str] = ..., backend: BackendSpec = ..., tools: ToolCacheConfig | None = ...) -> None
-```
-
-Create an instance.
-
-##### `to_dict`
-
-```python
-def to_dict() -> JsonObject
-```
-
-Serialize this response-cache config to the canonical JSON object shape.
-
 ### `AdaptiveConfig`
 
 Canonical config document for the top-level adaptive component.
@@ -316,7 +224,7 @@ Canonical config document for the top-level adaptive component.
 ##### `AdaptiveConfig`
 
 ```python
-def AdaptiveConfig(version: int = ..., agent_id: str | None = ..., state: StateConfig | None = ..., telemetry: TelemetryConfig | None = ..., adaptive_hints: AdaptiveHintsConfig | None = ..., tool_parallelism: ToolParallelismConfig | None = ..., acg: AcgConfig | None = ..., policy: ConfigPolicy = ..., response_cache: ResponseCacheConfig | None = ...) -> None
+def AdaptiveConfig(version: int = ..., agent_id: str | None = ..., state: StateConfig | None = ..., telemetry: TelemetryConfig | None = ..., adaptive_hints: AdaptiveHintsConfig | None = ..., tool_parallelism: ToolParallelismConfig | None = ..., acg: AcgConfig | None = ..., policy: ConfigPolicy = ...) -> None
 ```
 
 Create an instance.

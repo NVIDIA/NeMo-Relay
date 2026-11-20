@@ -9,7 +9,7 @@ SPDX-License-Identifier: Apache-2.0 */}
 
 Generated from `cargo doc --no-deps -p nemo-relay-builtins -p nemo-relay-diagnostics -p nemo-relay-logging -p nemo-relay-plugin-host -p nemo-relay-codecs -p nemo-relay -p nemo-relay-runtime -p nemo-relay-model-pricing -p nemo-relay-resource-metrics -p nemo-relay-observability -p nemo-relay-adaptive -p nemo-relay-pii-redaction -p nemo-relay-ffi -p nemo-relay-types -p nemo-relay-plugin -p nemo-relay-worker-proto -p nemo-relay-worker`.
 
-<pre className="rust-signature"><code dangerouslySetInnerHTML={{"__html": "pub struct MemoryLimitEvent &#123;\n    pub resource: ResourceLimitResource,\n    pub event: ResourceLimitEventKind,\n    pub count: <a href=\"https://doc.rust-lang.org/1.96.1/core/option/enum.Option.html\">Option</a>&lt;<a href=\"struct-resourcememorymeasurement\">ResourceMemoryMeasurement</a>&gt;,\n&#125;"}} /></pre>
+<pre className="rust-signature"><code dangerouslySetInnerHTML={{"__html": "pub struct MemoryLimitEvent &#123;\n    pub resource: <a href=\"../nemo-relay-types/api/resource_metrics/enum-resourcelimitresource\">ResourceLimitResource</a>,\n    pub event: <a href=\"../nemo-relay-types/api/resource_metrics/enum-resourcelimiteventkind\">ResourceLimitEventKind</a>,\n    pub count: <a href=\"https://doc.rust-lang.org/1.96.1/core/option/enum.Option.html\">Option</a>&lt;<a href=\"struct-resourcememorymeasurement\">ResourceMemoryMeasurement</a>&gt;,\n&#125;"}} /></pre>
 
 One cumulative environment limit event.
 

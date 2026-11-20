@@ -40,12 +40,14 @@ This crate intentionally does not depend on the `nemo-relay` runtime crate. Nati
 - [CategoryProfile](/reference/api/rust-library-reference/nemo-relay-plugin/struct-categoryprofile): Category-specific profile data.
 - [ConditionalMiddlewareGuardrailHandle](/reference/api/rust-library-reference/nemo-relay-plugin/struct-conditionalmiddlewareguardrailhandle)
 - [ConfigDiagnostic](/reference/api/rust-library-reference/nemo-relay-plugin/struct-configdiagnostic): Structured diagnostic reported while validating or activating plugin configuration.
+- [CostEstimate](/reference/api/rust-library-reference/nemo-relay-plugin/struct-costestimate): Normalized LLM response cost.
 - [DataSchema](/reference/api/rust-library-reference/nemo-relay-plugin/struct-dataschema): Identifier for the schema that describes an event's opaque `data` payload.
 - [EmitMarkOptions](/reference/api/rust-library-reference/nemo-relay-plugin/struct-emitmarkoptions): Optional event parent, time, schema, and severity for a native mark.
 - [EventCategory](/reference/api/rust-library-reference/nemo-relay-plugin/struct-eventcategory): Semantic category carried by ATOF `category`.
 - [EventSanitizeFields](/reference/api/rust-library-reference/nemo-relay-plugin/struct-eventsanitizefields): Observability fields that event sanitizers may rewrite.
 - [LlmAttributes](/reference/api/rust-library-reference/nemo-relay-plugin/struct-llmattributes): Bitflags that modify LLM-call behavior and observability.
 - [LlmExecutionContext](/reference/api/rust-library-reference/nemo-relay-plugin/struct-llmexecutioncontext)
+- [LlmInputStream](/reference/api/rust-library-reference/nemo-relay-plugin/struct-llminputstream): Downstream LLM stream that reports whether its cleanup succeeded.
 - [LlmNext](/reference/api/rust-library-reference/nemo-relay-plugin/struct-llmnext)
 - [LlmOptimizationContribution](/reference/api/rust-library-reference/nemo-relay-plugin/struct-llmoptimizationcontribution): One optimizer's evidence for a change to an LLM call.
 - [LlmOptimizationKind](/reference/api/rust-library-reference/nemo-relay-plugin/struct-llmoptimizationkind): Open, forward-compatible optimization classification.
@@ -87,6 +89,7 @@ This crate intentionally does not depend on the `nemo-relay` runtime crate. Nati
 - [ToolExecutionInterceptOutcome](/reference/api/rust-library-reference/nemo-relay-plugin/struct-toolexecutioninterceptoutcome): Canonical result returned by a tool execution intercept.
 - [ToolExecutionResult](/reference/api/rust-library-reference/nemo-relay-plugin/struct-toolexecutionresult): Canonical application-visible result of tool execution.
 - [ToolNext](/reference/api/rust-library-reference/nemo-relay-plugin/struct-toolnext)
+- [Usage](/reference/api/rust-library-reference/nemo-relay-plugin/struct-usage): Token usage statistics from an LLM API response.
 
 ## Enums
 

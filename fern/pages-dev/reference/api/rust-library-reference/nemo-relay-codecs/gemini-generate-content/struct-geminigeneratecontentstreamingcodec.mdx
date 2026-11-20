@@ -42,20 +42,20 @@ Creates a fresh streaming codec with empty accumulator state.
 
 ### `impl StreamingCodec for GeminiGenerateContentStreamingCodec`
 
-<pre className="rust-signature"><code dangerouslySetInnerHTML={{"__html": "impl StreamingCodec for <a href=\"struct-geminigeneratecontentstreamingcodec\">GeminiGenerateContentStreamingCodec</a>"}} /></pre>
+<pre className="rust-signature"><code dangerouslySetInnerHTML={{"__html": "impl <a href=\"../../nemo-relay-types/codec/streaming/trait-streamingcodec\">StreamingCodec</a> for <a href=\"struct-geminigeneratecontentstreamingcodec\">GeminiGenerateContentStreamingCodec</a>"}} /></pre>
 
 #### `collector`
 
-<pre className="rust-signature"><code dangerouslySetInnerHTML={{"__html": "fn collector(&amp;self) -&gt; LlmCollectorFn"}} /></pre>
+<pre className="rust-signature"><code dangerouslySetInnerHTML={{"__html": "fn <a href=\"../../nemo-relay-types/codec/streaming/trait-streamingcodec\">collector</a>(&amp;self) -&gt; <a href=\"../../nemo-relay-types/api/runtime/callbacks/type-llmcollectorfn\">LlmCollectorFn</a>"}} /></pre>
 
 #### `borrowed_collector`
 
-<pre className="rust-signature"><code dangerouslySetInnerHTML={{"__html": "fn borrowed_collector(&amp;self) -&gt; <a href=\"https://doc.rust-lang.org/1.96.1/core/option/enum.Option.html\">Option</a>&lt;LlmBorrowedCollectorFn&gt;"}} /></pre>
+<pre className="rust-signature"><code dangerouslySetInnerHTML={{"__html": "fn <a href=\"../../nemo-relay-types/codec/streaming/trait-streamingcodec\">borrowed_collector</a>(&amp;self) -&gt; <a href=\"https://doc.rust-lang.org/1.96.1/core/option/enum.Option.html\">Option</a>&lt;<a href=\"../../nemo-relay-types/api/runtime/callbacks/type-llmborrowedcollectorfn\">LlmBorrowedCollectorFn</a>&gt;"}} /></pre>
 
 #### `finalizer`
 
-<pre className="rust-signature"><code dangerouslySetInnerHTML={{"__html": "fn finalizer(&amp;self) -&gt; LlmFinalizerFn"}} /></pre>
+<pre className="rust-signature"><code dangerouslySetInnerHTML={{"__html": "fn <a href=\"../../nemo-relay-types/codec/streaming/trait-streamingcodec\">finalizer</a>(&amp;self) -&gt; <a href=\"../../nemo-relay-types/api/runtime/callbacks/type-llmfinalizerfn\">LlmFinalizerFn</a>"}} /></pre>
 
 #### `validate_stream`
 
-<pre className="rust-signature"><code dangerouslySetInnerHTML={{"__html": "fn validate_stream(&amp;self, stream: LlmJsonStream) -&gt; LlmJsonStream"}} /></pre>
+<pre className="rust-signature"><code dangerouslySetInnerHTML={{"__html": "fn <a href=\"../../nemo-relay-types/codec/streaming/trait-streamingcodec\">validate_stream</a>(&amp;self, stream: <a href=\"../../nemo-relay-types/api/runtime/callbacks/struct-llmjsonstream\">LlmJsonStream</a>) -&gt; <a href=\"../../nemo-relay-types/api/runtime/callbacks/struct-llmjsonstream\">LlmJsonStream</a>"}} /></pre>
