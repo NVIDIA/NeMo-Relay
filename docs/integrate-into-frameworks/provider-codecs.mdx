@@ -320,6 +320,40 @@ Join `text_parts` with newlines for display. An empty array means no eligible
 text. A single empty string represents explicitly empty text. On failure, the
 output pointer is null. Read `nemo_relay_last_error()` on the calling thread.
 
+### Go content snapshots
+
+The experimental Go binding accepts `json.RawMessage` annotations. Use
+`InspectLLMContent` after decoding in a sanitizer callback, or pass a retained
+normalized annotation directly. The first argument identifies the input and
+the third selects the view. The signed index applies to `ContentSelectMessage`.
+
+```go
+import (
+    "encoding/json"
+
+    relay "github.com/NVIDIA/NeMo-Relay/go/nemo_relay"
+)
+
+func responseText(codec *relay.LLMResponseSanitizeCodec, wire json.RawMessage) (string, bool, error) {
+    annotation, err := codec.Decode(wire)
+    if err != nil {
+        return "", false, err
+    }
+    snapshot, err := relay.InspectLLMContent(relay.ContentSourceResponse, annotation, relay.ContentSelectOutput, 0)
+    if err != nil {
+        return "", false, err
+    }
+    text, present := snapshot.Text()
+    return text, present, nil
+}
+```
+
+An absent selection returns `(nil, nil)`. A selected tool-only message has a
+snapshot with typed `Parts`, and its `Text()` returns `("", false)`. An explicitly
+empty text part returns `("", true)`. The snapshot and its entries belong to Go
+and can outlive the annotation and the callback. Tool arguments, result payloads,
+and opaque provider values retain their JSON representations in `json.RawMessage`.
+
 ## How Provider Codecs Work
 
 When a managed LLM call has a request codec:

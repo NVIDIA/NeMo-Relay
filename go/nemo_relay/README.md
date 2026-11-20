@@ -48,6 +48,8 @@ The Go package provides the following capabilities:
 
 - **Scope, tool, and LLM helpers**: Managed lifecycle APIs backed by the
   shared Rust runtime.
+- `InspectLLMContent` selects a Go-owned snapshot from a normalized codec
+  annotation. Read its typed parts and locations or call `Text()` for display.
 - **Middleware APIs**: Guardrails and intercepts for request rewriting,
   blocking, sanitization, and execution wrapping, including mark and scope
   event sanitizers at global, scope-local, and plugin-context levels.
