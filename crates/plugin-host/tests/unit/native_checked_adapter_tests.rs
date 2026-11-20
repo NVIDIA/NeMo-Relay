@@ -433,6 +433,36 @@ async fn propagated_downstream_failures_keep_their_original_typed_errors() {
         }
     }
 
+    // Two failures with the same message but different headers cannot be told
+    // apart once the plugin returns one, so neither is restored as the other.
+    let ambiguous = DownstreamErrors::default();
+    let retry_after = |seconds: &str| {
+        FlowError::Upstream(UpstreamFailure {
+            status: Some(429),
+            body: "slow down".into(),
+            headers: [("retry-after".to_string(), seconds.to_string())].into(),
+            class: UpstreamFailureClass::RetryableStatus,
+        })
+    };
+    let first: a::Result<()> = downstream_boundary(Err(retry_after("60")), &ambiguous);
+    let _: a::Result<()> = downstream_boundary(Err(retry_after("1")), &ambiguous);
+    let FlowError::Upstream(restored) = restore(first, &ambiguous).unwrap_err() else {
+        panic!("expected an upstream failure");
+    };
+    assert_eq!(restored.status, Some(429));
+    assert!(restored.headers.is_empty(), "{:?}", restored.headers);
+    // The same failure seen twice is still restored.
+    let repeated = DownstreamErrors::default();
+    let first: a::Result<()> = downstream_boundary(Err(retry_after("60")), &repeated);
+    let _: a::Result<()> = downstream_boundary(Err(retry_after("60")), &repeated);
+    let FlowError::Upstream(restored) = restore(first, &repeated).unwrap_err() else {
+        panic!("expected an upstream failure");
+    };
+    assert_eq!(
+        restored.headers.get("retry-after").map(String::as_str),
+        Some("60")
+    );
+
     // A failure the plugin raised itself is still reconstructed and attributed.
     let mut own = a::Error::new("plugin", "plugin rejected the request");
     own.http_status = Some(429);

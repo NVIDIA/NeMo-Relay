@@ -1027,14 +1027,29 @@ enum Next {
     Stream(LlmStreamExecutionNextFn),
 }
 /// Downstream failures by their ABI message, kept with their original typed errors.
-type DownstreamErrors = Arc<Mutex<BTreeMap<String, FlowError>>>;
+///
+/// A plugin hands a failure back as its message only, so different failures with
+/// the same message (for example the same status and body with different
+/// headers) cannot be told apart. Such a message maps to `None` and is never
+/// restored, rather than restoring the wrong failure.
+type DownstreamErrors = Arc<Mutex<BTreeMap<String, Option<FlowError>>>>;
 /// Remember downstream failures before converting them to checked ABI errors.
 fn downstream_boundary<T>(result: Result<T>, errors: &DownstreamErrors) -> a::Result<T> {
     if let Err(error) = &result {
         errors
             .lock()
             .unwrap_or_else(|e| e.into_inner())
-            .insert(super::http_error::to_message(error), error.clone());
+            .entry(super::http_error::to_message(error))
+            .and_modify(|known| {
+                // `Debug` covers every field, including headers in a stable order.
+                if known
+                    .as_ref()
+                    .is_some_and(|known| format!("{known:?}") != format!("{error:?}"))
+                {
+                    *known = None;
+                }
+            })
+            .or_insert_with(|| Some(error.clone()));
     }
     boundary(result)
 }
@@ -1045,6 +1060,7 @@ fn inherited_error(error: &a::Error, downstream: &DownstreamErrors) -> Option<Fl
         .unwrap_or_else(|e| e.into_inner())
         .get(error.message.as_str())
         .cloned()
+        .flatten()
 }
 /// Convert an ABI result, restoring a downstream failure the callback propagated unchanged.
 fn restore<T>(value: a::Result<T>, downstream: &DownstreamErrors) -> Result<T> {
