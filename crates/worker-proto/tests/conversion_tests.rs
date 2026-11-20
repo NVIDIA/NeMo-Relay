@@ -586,6 +586,36 @@ fn diagnostic_transport_preserves_opaque_execution_and_phase_names() {
 }
 
 #[test]
+fn content_location_decoder_rejects_unknown_enums_and_misplaced_message_index() {
+    use nemo_relay_types::codec::content::ContentLocation;
+
+    let location = pb::LlmContentLocation {
+        root: pb::LlmContentRoot::Response as i32,
+        field: pb::LlmContentField::Message as i32,
+        ..Default::default()
+    };
+    for invalid in [
+        pb::LlmContentLocation {
+            root: i32::MAX,
+            ..location
+        },
+        pb::LlmContentLocation {
+            field: i32::MAX,
+            ..location
+        },
+        pb::LlmContentLocation {
+            message_index: Some(0),
+            ..location
+        },
+    ] {
+        assert!(
+            decode::<ContentLocation, _>(invalid).is_err(),
+            "{invalid:?}"
+        );
+    }
+}
+
+#[test]
 fn content_inspection_projection_round_trips_all_typed_payloads_and_locations() {
     use nemo_relay_types::codec::content::{
         ContentField, ContentLocation, ContentRoot, ContentSelection, ContentSnapshot,

@@ -119,17 +119,19 @@ def test_mixed_parts_and_tool_calls_keep_typed_payloads_and_order() -> None:
 
 
 @pytest.mark.parametrize(
-    ("message", "kind", "payload"),
+    ("message", "kind", "payload", "field"),
     [
-        ({"role": "tool", "tool_call_id": "c", "content": "hidden"}, "content", "hidden"),
-        ({"role": "function", "name": "f", "content": "hidden"}, "string", "hidden"),
-        ({"role": "function", "name": "f", "content": None}, "null", None),
-        ({"role": "tool_result", "call_id": "c", "output": {"text": "hidden"}}, "json", {"text": "hidden"}),
+        ({"role": "tool", "tool_call_id": "c", "content": "hidden"}, "content", "hidden", "content"),
+        ({"role": "function", "name": "f", "content": "hidden"}, "string", "hidden", "content"),
+        ({"role": "function", "name": "f", "content": None}, "null", None, "content"),
+        ({"role": "tool_result", "call_id": "c", "output": {"text": "hidden"}}, "json", {"text": "hidden"}, "output"),
     ],
 )
-def test_whole_tool_results_are_not_recursively_extracted(message, kind, payload) -> None:
+def test_whole_tool_results_are_not_recursively_extracted(message, kind, payload, field) -> None:
     view = MessageView.from_message(message)
-    result = next(view.parts()).tool_result
+    entry = next(view.parts())
+    assert entry.location.field == field
+    result = entry.tool_result
     assert result is not None
     assert (result.payload.kind, result.payload.value) == (kind, payload)
     assert view.text() is None
@@ -157,7 +159,8 @@ def test_media_native_and_shallow_fallbacks() -> None:
     assert [entry.kind for entry in entries[:4]] == ["image_url", "image", "audio", "file"]
     assert entries[0].value == {"url": "https://example.com/i.png"}
     assert [entry.value for entry in entries[1:4]] == [{"text": "hidden"}, {"data": "sound"}, {"id": "file"}]
-    assert (entries[4].provider, entries[4].native_kind, entries[4].value) == (
+    assert (entries[4].kind, entries[4].provider, entries[4].native_kind, entries[4].value) == (
+        "provider_native",
         "custom",
         "extension",
         {"text": "native"},
@@ -173,6 +176,15 @@ def test_media_native_and_shallow_fallbacks() -> None:
     )
     assert native.text() == "known"
     assert next(native.parts()).location.field == "native_content"
+
+
+def test_opaque_provider_message_locates_the_whole_value() -> None:
+    value = {"future_field": "opaque"}
+    view = MessageView.from_message(
+        {"role": "provider_native", "provider": "custom", "kind": "extension", "value": value}
+    )
+    (entry,) = view.parts()
+    assert (entry.kind, entry.location.field, entry.value) == ("provider_native", "value", value)
 
 
 def test_snapshot_lifetime_and_python_value_mutation_isolation() -> None:
