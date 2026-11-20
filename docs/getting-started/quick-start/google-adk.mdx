@@ -76,9 +76,7 @@ You need:
 
 To quickly get started with NeMo Relay, complete the following steps:
 
-<Steps toc={true} tocDepth={2}>
-
-<Step title="Install NeMo Relay" id="install">
+1. Install NeMo Relay.
 
 Create a project. Install NeMo Relay with its Google ADK extra.
 If you already have a `uv` project, run only the `uv add` command in that directory.
@@ -116,9 +114,7 @@ argument and set that provider's credentials. For provider setup, refer to the
 [Google ADK Integration Guide](/supported-integrations/google-adk#setup).
 </Note>
 
-</Step>
-
-<Step title="Configure the plugin" id="configure">
+2. Configure the plugin.
 
 Create a file named `plugins.toml` in your project directory. This configuration
 saves Relay events to `logs/events.jsonl`.
@@ -131,9 +127,7 @@ ATOF output can contain sensitive prompts, responses, tool arguments, and tool
 results. Protect `logs/events.jsonl`, even with `enable_full_payloads = false`.
 </Warning>
 
-</Step>
-
-<Step title="Run the agent" id="run">
+3. Run the agent.
 
 The example gives an agent one tool, `emit_marker`. The tool returns a fixed
 message so you can check that it ran. The agent then returns a final answer.
@@ -155,9 +149,7 @@ Run the example from your project directory.
 uv run python quickstart.py
 ```
 
-</Step>
-
-<Step title="Verify the output" id="verify">
+4. Verify the output.
 
 The program checks the tool result, the final answer, and the saved events.
 It also checks that the request, tool call, and model call have matching start
@@ -203,10 +195,6 @@ Use these fields to understand the call:
 | `category_profile` and `metadata` | Details such as the model name or call status, when available |
 
 For example, a model call's `parent_uuid` links it to the agent that made the call.
-
-</Step>
-
-</Steps>
 
 ## Next Steps
 

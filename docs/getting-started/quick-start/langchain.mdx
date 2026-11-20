@@ -76,9 +76,7 @@ Before you start, make sure you have:
 
 To quickly get started with NeMo Relay, complete the following steps:
 
-<Steps toc={true} tocDepth={2}>
-
-<Step title="Install NeMo Relay" id="install">
+1. Install NeMo Relay.
 
 Create a project and install the NeMo Relay version for these docs with the
 LangChain and NVIDIA model provider extras.
@@ -119,9 +117,7 @@ The NVIDIA provider reads `NVIDIA_API_KEY`. In the LangChain string, the first `
 selects the provider; the remaining `nvidia/...` value is the model ID.
 </Note>
 
-</Step>
-
-<Step title="Configure the plugin" id="configure">
+2. Configure the plugin.
 
 `plugins.toml` enables Relay's observability component and writes its events
 to `logs/events.jsonl`. In your own project, use the same plugin configuration
@@ -138,9 +134,7 @@ ATOF output can contain sensitive prompts, responses, tool arguments, and tool
 results. Protect `logs/events.jsonl` even when full payload export is disabled.
 </Warning>
 
-</Step>
-
-<Step title="Run the agent" id="run">
+3. Run the agent.
 
 The example creates a LangChain agent with one marker tool. The
 `require_marker_tool` middleware makes this test request a tool result before
@@ -166,9 +160,7 @@ Run it from the project directory:
 uv run python quickstart.py
 ```
 
-</Step>
-
-<Step title="Verify the output" id="verify">
+4. Verify the output.
 
 The program checks the tool result, final assistant response, and paired ATOF
 agent, tool, and LLM records. A successful run prints these markers in order:
@@ -207,10 +199,6 @@ start and end records; `parent_uuid` connects it to its enclosing scope.
 and `metadata` can include the model identity and completion status, depending
 on the integration. These fields let you follow a call through the run without
 requiring full prompt or response capture.
-
-</Step>
-
-</Steps>
 
 ## Next Steps
 
