@@ -1,61 +1,45 @@
 ---
 title: "Key Features of NVIDIA NeMo Relay"
 sidebar-title: "Key Features"
-description: "Review the core NeMo Relay features for agent applications: events and subscribers, scopes, marks, managed LLM and tool calls, middleware, and plugins."
+description: "Explore NeMo Relay's shared runtime for observation and control, reusable instrumentation, core features, and developer tools."
 template-library-version: "1.0.0"
 position: 2
 ---
 {/* SPDX-FileCopyrightText: Copyright (c) 2026, NVIDIA CORPORATION & AFFILIATES. All rights reserved.
 SPDX-License-Identifier: Apache-2.0 */}
 
-NVIDIA NeMo Relay offers the following key features:
+NVIDIA NeMo Relay provides a shared runtime layer for observing and controlling
+agent activity across supported applications, frameworks, and coding agents.
+It connects to your existing stack and exports data to your observability
+platforms while your application retains its orchestration and business logic.
 
-- **Events and subscribers:** ATOF events, ATIF trajectories, and typed
-  OpenTelemetry output all come from the same runtime activity.
-- **Scopes:** Runs, turns, tools, LLM calls, and subagents get clear
-  parent-child relationships, automatic cleanup, and request isolation.
-- **Marks:** Point-in-time events, such as session starts, compaction, or skill
-  loads, are recorded without a start-and-end pair.
-- **Managed LLM and tool calls:** The same lifecycle and middleware rules apply
-  around each callback.
-- **Middleware:** Block, sanitize, transform, route, retry, or replace execution
-  where Relay controls the call.
-- **Plugins:** Turn on reusable observability, guardrail, adaptive, and exporter
-  behavior from configuration.
+| Feature | Description |
+| --- | --- |
+| **[Unified Observation and Control](/about-nemo-relay/agent-runtime-primer)** | Observe agent activity and apply supported controls across frameworks, coding agents, and applications through one shared runtime model. |
+| **[Reusable Instrumentation](/configure-plugins/about)** | Instrument once, then configure policies, exporters, routing, and optimization without rewriting the integration. |
+| **[Connected Execution History](/about-nemo-relay/concepts/scopes)** | Keep model calls, tools, skills, and subagents connected in one hierarchical record of the observed run. |
+| **[Open Observability Formats](/configure-plugins/observability/about)** | Export events, trajectories, traces, logs, and metrics through ATOF, ATIF, and OpenTelemetry, including OpenInference projections. |
+| **[Middleware, Guardrails, and Telemetry Privacy](/about-nemo-relay/concepts/middleware)** | Apply guardrails where Relay controls execution, and redact sensitive telemetry before export. |
+| **[Extensible Plugin System](/build-plugins/about)** | Add reusable behavior through built-in components, native plugins, or separate worker processes. |
+| **[Adaptive Optimization](/configure-plugins/adaptive/about)** | Tune runtime behavior with adaptive hints, prompt-cache planning, response caching, and tool-parallelism analysis. |
+| **[Provider Gateway and Model Routing](/nemo-relay-cli/gateway-reference)** | Capture routed model traffic and extend model routing with plugins such as NeMo Switchyard. |
+| **[Framework and Coding-Agent Integrations](/supported-integrations/about)** | Connect supported frameworks and harnesses, or instrument your application directly through the SDKs. |
+| **[Managed Daemon Deployments](/daemon/about)** | Deploy local or remote services with shared configuration, per-user workers, and operational diagnostics. |
 
-To understand how these features work together, refer to the
-[Architecture](/about-nemo-relay/architecture) overview. For the deeper model of
-scopes, events, middleware, subscribers, and plugins, refer to
-[Concepts](/about-nemo-relay/concepts).
+To understand how these features work together, refer to
+[Architecture](/about-nemo-relay/architecture). For setup and usage, start with
+[Quick Starts](/getting-started/quick-start) or the
+[Overview](/about-nemo-relay/overview).
 
 ## Developer Tools
 
-NeMo Relay provides the following tools for developers.
+Relay provides runtime APIs, command-line tools, diagnostics, and authoring
+interfaces for application developers, framework maintainers, and plugin authors.
 
-**CLI** — the `nemo-relay` command runs supported coding agents through Relay and
-manages its configuration, plugins, and services:
-
-- `nemo-relay run` (and `claude`, `codex`, `pi`) — Launch a coding agent or
-  command through Relay.
-- `nemo-relay config` — Run first-time setup or edit CLI configuration.
-- `nemo-relay plugins` — Edit plugin configuration and manage discoverable
-  plugins.
-- `nemo-relay doctor` — Check configuration, integrations, and configured
-  destinations.
-- `nemo-relay gateway` / `nemo-relay daemon` — Run the standalone gateway or the
-  managed daemon.
-
-For every command and option, refer to the
-[Command Reference](/nemo-relay-cli/command-reference).
-
-**APIs and SDKs**:
-
-| | |
+| Tool | Description |
 | --- | --- |
-| **Python SDK (`nemo-relay`)** | Instrument application-owned LLM and tool calls and run the full lifecycle and middleware sequence around callbacks your code owns. |
-| **Node.js SDK (`nemo-relay-node`)** | Bring the same runtime model to Node.js applications and framework integrations. |
-| **Rust SDK (`nemo-relay`)** | Build on the source-of-truth runtime; the Python and Node.js bindings expose the same core model. |
-| **Plugin SDK (`nemo-relay-plugin`)** | Package reusable exporters, middleware, and policy as discoverable plugins. |
-
-For hands-on setup, refer to [Quick Start](/getting-started/quick-start) and the
-[API reference](/reference/api).
+| **[Runtime APIs and SDKs](/instrument-applications/about)** | Instrument Rust, Python, and Node.js applications with scopes, events, marks, and managed LLM and tool calls. Add middleware, guardrails, subscribers, and exporters. |
+| **[Coding Agent CLI](/nemo-relay-cli/command-reference)** | Launch coding agents, inspect launch plans, configure plugins, manage integrations, and operate gateways and daemons with `nemo-relay`. |
+| **[Health Checks and Runtime Diagnostics](/reference/diagnostics)** | Check setup with `nemo-relay doctor`. Inspect runtime failures, counters, recent evidence, and diagnostic memory through CLI commands and APIs. |
+| **[Framework Integration Tools](/integrate-into-frameworks/about)** | Connect framework execution through managed wrappers or lifecycle hooks, map scopes and marks, and preserve provider request and response semantics. |
+| **[Plugin Authoring Tools](/build-plugins/about)** | Build application-local, native, or gRPC worker plugins with component registration, configuration validation, diagnostics, packaging, and lifecycle management. |
