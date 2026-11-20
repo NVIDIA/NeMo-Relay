@@ -20,6 +20,7 @@ mod installation;
 mod mcp;
 mod mcp_environment;
 mod oidc;
+mod openshell_receipts;
 mod operational;
 mod runtime_diagnostics;
 

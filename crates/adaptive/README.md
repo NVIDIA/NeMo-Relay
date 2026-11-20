@@ -18,8 +18,7 @@ SPDX-License-Identifier: Apache-2.0
 
 `nemo-relay-adaptive` is the Rust companion crate for adaptive NeMo Relay
 runtime behavior. Use it with `nemo-relay` when an agent runtime should learn
-from observed executions, inject runtime hints, persist adaptive state, or
-cache repeated LLM responses and classified tool results.
+from observed executions, inject runtime hints, or persist adaptive state.
 
 Adaptive behavior is installed through the shared NeMo Relay plugin system, so applications can enable it without changing their orchestration
 framework.
@@ -41,10 +40,9 @@ framework.
 - **`AdaptiveConfig`**: A canonical config contract for the top-level
   `adaptive` plugin component.
 - **Built-in component settings**: Typed config helpers for telemetry,
-  adaptive hints, tool parallelism, the Adaptive Cache Governor, and response
-  caching.
-- **Storage backends**: In-memory backends for adaptive state and opt-in
-  response caching, with built-in Redis-backed storage.
+  adaptive hints, tool parallelism, and the Adaptive Cache Governor.
+- **Storage backends**: In-memory and built-in Redis-backed storage for
+  adaptive state.
 - **Learning primitives**: Runtime helpers and learners built on NeMo Relay
   events.
 - **Adaptive Cache Governor (ACG) module surface**: The canonical
@@ -64,13 +62,13 @@ Install both on `PATH`, or select them with `PROTOC` and `BUF`. The first build
 needs access to the Buf Schema Registry to download the locked validation schema.
 
 Select Redis-backed storage through runtime configuration when adaptive state
-or the response cache needs shared persistence.
+needs shared persistence.
 
-The response cache is opt-in. Its required `namespace` identifies one trusted
-cache-sharing domain and must not be reused across mutually untrusted tenants
-or upstream authorities. When tenants share a backend, include every
-answer-affecting tenant or routing header in `header_allowlist`; Relay cannot
-infer application-owned tenant identity.
+The LLM response and tool-result cache is no longer part of this crate. It is
+the separate `nvidia.response_cache` native plugin from NeMo Relay Plugins, and
+its component configuration uses the keys of the former `response_cache`
+section. An adaptive configuration that still contains `response_cache` fails
+validation with `adaptive.response_cache_moved`.
 
 For local source development:
 

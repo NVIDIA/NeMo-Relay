@@ -17,13 +17,8 @@ from nemo_relay.adaptive import (
     BackendSpec,
     ComponentSpec,
     ConfigPolicy,
-    ResponseCacheConfig,
-    ResponseCacheKeyStrategy,
     StateConfig,
     TelemetryConfig,
-    ToolCacheConfig,
-    ToolClass,
-    ToolOverride,
     ToolParallelismConfig,
 )
 
@@ -163,104 +158,20 @@ class TestDynamicConfigContract:
             "min_observations_for_full_confidence": 12,
         }
 
-    def test_response_cache_config_serializes_with_defaults(self) -> None:
-        assert ResponseCacheConfig().to_dict() == {
-            "ttl_seconds": 3600,
-            "namespace": "",
-            "priority": 150,
-            "bypass_rate": 0.0,
-            "cache_nondeterministic": False,
-            "key_strategy": "exact_request",
-            "header_allowlist": [],
-            "backend": {"kind": "in_memory", "config": {}},
-        }
-
-    def test_response_cache_key_strategy_enum_serializes(self) -> None:
-        config = ResponseCacheConfig(
-            namespace="logical-cache",
-            key_strategy=ResponseCacheKeyStrategy.LOGICAL,
-        )
-
-        assert config.to_dict()["key_strategy"] == "logical"
-
-    def test_response_cache_default_preserves_positional_policy_argument(self) -> None:
+    def test_adaptive_config_accepts_positional_policy_argument(self) -> None:
         policy = ConfigPolicy(unknown_field="error")
         config = AdaptiveConfig(1, None, None, None, None, None, None, policy)
 
         assert config.policy is policy
-        assert config.response_cache is None
 
-    def test_response_cache_rides_the_adaptive_component(self) -> None:
-        component = ComponentSpec(AdaptiveConfig(response_cache=ResponseCacheConfig(namespace="dev"))).to_dict()
-        assert component["kind"] == "adaptive"
-        config = cast(dict[str, object], component["config"])
-        response_cache = cast(dict[str, object], config["response_cache"])
-        assert response_cache["namespace"] == "dev"
-
-    def test_response_cache_clean_report(self) -> None:
+    def test_legacy_response_cache_section_is_rejected(self) -> None:
         report = validate_plugin_config(
-            plugin.PluginConfig(
-                components=[ComponentSpec(AdaptiveConfig(response_cache=ResponseCacheConfig(namespace="dev")))]
-            )
+            plugin.PluginConfig(components=[ComponentSpec({"version": 1, "response_cache": {"namespace": "dev"}})])
         )
-        assert report["diagnostics"] == []
-
-    def test_unscoped_response_cache_is_rejected(self) -> None:
-        report = validate_plugin_config(
-            plugin.PluginConfig(components=[ComponentSpec(AdaptiveConfig(response_cache=ResponseCacheConfig()))])
-        )
-        codes = {diag["code"] for diag in report["diagnostics"]}
-        assert "response_cache.missing_namespace" in codes
-
-    def test_invalid_response_cache_section_is_rejected(self) -> None:
-        report = validate_plugin_config(
-            plugin.PluginConfig(
-                components=[
-                    ComponentSpec(
-                        AdaptiveConfig(
-                            response_cache=ResponseCacheConfig(
-                                ttl_seconds=0,
-                                namespace="invalid-config-test",
-                                bypass_rate=2.0,
-                            )
-                        )
-                    )
-                ]
-            )
-        )
-        codes = {diag["code"] for diag in report["diagnostics"]}
-        assert "response_cache.invalid_ttl" in codes
-        assert "response_cache.invalid_bypass_rate" in codes
-
-    def test_tool_cache_config_serializes_and_omits_unset_optionals(self) -> None:
-        tools = ToolCacheConfig(
-            enabled=True,
-            cache_errors=True,
-            classes={
-                "read_only": ToolClass(
-                    cacheable=True,
-                    tool_version="class-v1",
-                    members=["docs_lookup"],
-                )
-            },
-            overrides={"docs_lookup": ToolOverride(tool_version="v1")},
-        )
-        serialized = ResponseCacheConfig(tools=tools).to_dict()["tools"]
-        assert serialized == {
-            "enabled": True,
-            "cache_errors": True,
-            "priority": 150,
-            "default": {"cacheable": False, "arg_skip": [], "members": []},
-            "classes": {
-                "read_only": {
-                    "cacheable": True,
-                    "tool_version": "class-v1",
-                    "arg_skip": [],
-                    "members": ["docs_lookup"],
-                }
-            },
-            "overrides": {"docs_lookup": {"tool_version": "v1"}},
-        }
+        moved = [diag for diag in report["diagnostics"] if diag["code"] == "adaptive.response_cache_moved"]
+        assert len(moved) == 1
+        assert moved[0]["level"] == "error"
+        assert moved[0].get("field") == "response_cache"
 
     def test_canonical_cache_telemetry_helper_supports_openai_provider(self) -> None:
         event = adaptive_module.build_cache_telemetry_event(

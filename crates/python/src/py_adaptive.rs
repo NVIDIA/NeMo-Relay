@@ -39,9 +39,9 @@ impl PyAdaptiveRuntime {
     #[pyo3(signature = (config: "object"), text_signature = "(config: object)")]
     fn new(config: &Bound<'_, PyAny>) -> PyResult<Self> {
         let config_json = py_to_json(config)?;
-        let config: AdaptiveConfig = serde_json::from_value(config_json)
+        let (config, report) = AdaptiveRuntime::validate_document(config_json)
             .map_err(|e| pyo3::exceptions::PyValueError::new_err(e.to_string()))?;
-        let report = validate_adaptive_config_or_err(&config)?;
+        let report = validate_adaptive_config_or_err(report)?;
         Ok(Self {
             inner: Arc::new(tokio::sync::Mutex::new(Some(
                 PyAdaptiveRuntimeState::Pending { config, report },
@@ -235,9 +235,8 @@ impl PyAdaptiveRuntime {
 }
 
 fn validate_adaptive_config_or_err(
-    config: &AdaptiveConfig,
+    report: nemo_relay_plugin_host::ConfigReport,
 ) -> PyResult<nemo_relay_plugin_host::ConfigReport> {
-    let report = AdaptiveRuntime::validate_config(config);
     if report.has_errors() {
         let joined = report
             .diagnostics
@@ -370,9 +369,8 @@ fn build_cache_telemetry_event(
 #[pyo3(signature = (config: "object") -> "object", text_signature = "(config: object) -> object")]
 fn validate_adaptive_config(py: Python<'_>, config: &Bound<'_, PyAny>) -> PyResult<Py<PyAny>> {
     let config_json = py_to_json(config)?;
-    let config: AdaptiveConfig = serde_json::from_value(config_json)
+    let (_, report) = AdaptiveRuntime::validate_document(config_json)
         .map_err(|e| pyo3::exceptions::PyValueError::new_err(e.to_string()))?;
-    let report = AdaptiveRuntime::validate_config(&config);
     let report = serde_json::to_value(&report)
         .map_err(|e| pyo3::exceptions::PyRuntimeError::new_err(e.to_string()))?;
     json_to_py(py, &report)

@@ -213,6 +213,10 @@ pub(crate) fn daemon_observable_headers(headers: &HeaderMap) -> serde_json::Map<
 #[path = "../../tests/coverage/shared/gateway_tests.rs"]
 mod tests;
 
+#[cfg(test)]
+#[path = "../../tests/coverage/shared/gateway_receipts_tests.rs"]
+mod receipt_tests;
+
 const INTERNAL_DISPATCH_URL_HEADER: &str = "x-nemo-relay-internal-dispatch-url";
 const INTERNAL_DISPATCH_ROUTE_HEADER: &str = "x-nemo-relay-internal-dispatch-route";
 const INTERNAL_DISPATCH_BACKEND_HEADER: &str = "x-nemo-relay-internal-dispatch-backend";
@@ -1725,7 +1729,7 @@ async fn forward_upstream_request(
         &forwarding.config,
     )
     .await?;
-    if let Some(operational) = operational {
+    let response = if let Some(operational) = operational {
         operational::upstream_started(operational, streaming);
         let request = http.execute(upstream);
         tokio::pin!(request);
@@ -1759,7 +1763,11 @@ async fn forward_upstream_request(
             })
             .inspect_err(diag::transport_error)
             .map_err(CliError::from)
+    }?;
+    if effective_request.is_some() {
+        crate::openshell_receipts::observe(response.headers(), response.status());
     }
+    Ok(response)
 }
 
 struct UpstreamForwardRequest<'a> {

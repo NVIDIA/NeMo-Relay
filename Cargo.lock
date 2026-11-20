@@ -2007,7 +2007,6 @@ dependencies = [
  "log",
  "nemo-relay-codecs",
  "nemo-relay-logging",
- "nemo-relay-model-pricing",
  "nemo-relay-plugin-host",
  "nemo-relay-runtime",
  "nemo-relay-types",
