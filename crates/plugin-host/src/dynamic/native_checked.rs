@@ -162,18 +162,23 @@ impl HostRuntime {
     /// original typed error, so its status, headers, and retry class survive the boundary.
     fn callback_result<T>(&self, value: a::Result<T>, downstream: &DownstreamErrors) -> Result<T> {
         if let a::Result::Err(error) = &value {
-            if let Some(original) = inherited_error(error, downstream) {
-                return Err(original);
-            }
-            if self.active.load(Ordering::Acquire) && error.code.as_str() != "cancelled" {
-                self.observer
-                    .lock()
-                    .unwrap_or_else(|e| e.into_inner())
-                    .failure(
-                        nemo_relay_diagnostics::PluginOperationFailureCode::NativeCallback,
-                        nemo_relay_diagnostics::FailureClass::ExecutionFailed,
-                        nemo_relay_diagnostics::PluginPhase::Runtime,
-                    );
+            match downstream_failure(error, downstream) {
+                Some(Some(original)) => return Err(original),
+                // A downstream failure whose type cannot be restored is still not a plugin failure.
+                Some(None) => {}
+                None if self.active.load(Ordering::Acquire)
+                    && error.code.as_str() != "cancelled" =>
+                {
+                    self.observer
+                        .lock()
+                        .unwrap_or_else(|e| e.into_inner())
+                        .failure(
+                            nemo_relay_diagnostics::PluginOperationFailureCode::NativeCallback,
+                            nemo_relay_diagnostics::FailureClass::ExecutionFailed,
+                            nemo_relay_diagnostics::PluginPhase::Runtime,
+                        );
+                }
+                None => {}
             }
         }
         local(value)
@@ -1053,14 +1058,21 @@ fn downstream_boundary<T>(result: Result<T>, errors: &DownstreamErrors) -> a::Re
     }
     boundary(result)
 }
-/// The original typed error when a callback returns a downstream failure unchanged.
-fn inherited_error(error: &a::Error, downstream: &DownstreamErrors) -> Option<FlowError> {
+/// Whether a callback returned a downstream failure unchanged, with its original typed
+/// error when that failure can be told apart from the others with the same message.
+fn downstream_failure(
+    error: &a::Error,
+    downstream: &DownstreamErrors,
+) -> Option<Option<FlowError>> {
     downstream
         .lock()
         .unwrap_or_else(|e| e.into_inner())
         .get(error.message.as_str())
         .cloned()
-        .flatten()
+}
+/// The original typed error when a callback returns a downstream failure unchanged.
+fn inherited_error(error: &a::Error, downstream: &DownstreamErrors) -> Option<FlowError> {
+    downstream_failure(error, downstream).flatten()
 }
 /// Convert an ABI result, restoring a downstream failure the callback propagated unchanged.
 fn restore<T>(value: a::Result<T>, downstream: &DownstreamErrors) -> Result<T> {

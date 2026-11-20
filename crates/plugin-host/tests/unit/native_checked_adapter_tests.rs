@@ -327,6 +327,19 @@ async fn callback_observations_exclude_propagated_downstream_errors_and_revocati
     let downstream = DownstreamErrors::default();
     let failure: a::Result<()> = downstream_boundary(Err(err("downstream failure")), &downstream);
     assert!(owner.callback_result(failure, &downstream).is_err());
+    // Two downstream failures that share a message cannot be restored, but returning
+    // one is still not a plugin failure.
+    let retry_after = |seconds: &str| {
+        FlowError::Upstream(nemo_relay_types::error::UpstreamFailure {
+            status: Some(429),
+            body: "slow down".into(),
+            headers: [("retry-after".to_string(), seconds.to_string())].into(),
+            class: nemo_relay_types::error::UpstreamFailureClass::RetryableStatus,
+        })
+    };
+    let ambiguous: a::Result<()> = downstream_boundary(Err(retry_after("60")), &downstream);
+    let _: a::Result<()> = downstream_boundary(Err(retry_after("1")), &downstream);
+    assert!(owner.callback_result(ambiguous, &downstream).is_err());
     assert!(
         owner
             .callback_result::<()>(
