@@ -67,7 +67,9 @@ Before you start, make sure you have:
 
 To quickly get started with NeMo Relay, complete the following steps:
 
-1. Install NeMo Relay.
+<Steps toc={true} tocDepth={2}>
+
+<Step title="Install NeMo Relay" id="install">
 
 Create a project and install the NeMo Relay version for these docs with the
 LangGraph extra.
@@ -81,7 +83,9 @@ uv init
 uv add "nemo-relay[langgraph]==1.0.0"
 ```
 
-2. Configure the plugin.
+</Step>
+
+<Step title="Configure the plugin" id="configure">
 
 `plugins.toml` enables Relay's observability component and writes its events
 to `logs/events.jsonl`. In your own project, use the same plugin configuration
@@ -98,7 +102,9 @@ ATOF output can contain sensitive prompts, responses, tool arguments, and tool
 results. Protect `logs/events.jsonl` even when full payload export is disabled.
 </Warning>
 
-3. Run the graph.
+</Step>
+
+<Step title="Run the graph" id="run">
 
 The example runs one local `emit_marker` graph node, with no inference
 request or credentials. `NemoRelayCallbackHandler` records the graph lifecycle,
@@ -119,7 +125,9 @@ Run it from the project directory:
 uv run python quickstart.py
 ```
 
-4. Verify the output.
+</Step>
+
+<Step title="Verify the output" id="verify">
 
 The program checks the event file for matching start and end records from the
 `emit_marker` graph node. A successful run prints these markers in order:
@@ -157,6 +165,10 @@ the immediate `LangGraph` scope, whose parent is the outer `langgraph-request`
 scope. The node's `uuid` pairs its start and end records. `timestamp` records
 when each event occurred. This local graph makes no model request; the records
 demonstrate workflow structure.
+
+</Step>
+
+</Steps>
 
 ## Next Steps
 

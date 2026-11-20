@@ -84,7 +84,9 @@ Select a released documentation version to try Relay now.
 
 To quickly get started with NeMo Relay, complete the following steps:
 
-1. Install NeMo Relay.
+<Steps toc={true} tocDepth={2}>
+
+<Step title="Install NeMo Relay" id="install">
 
 Create a project and add the NeMo Relay crate version for these docs:
 
@@ -97,7 +99,9 @@ cargo add serde_json
 cargo add tokio --features macros,rt-multi-thread
 ```
 
-2. Configure the plugin.
+</Step>
+
+<Step title="Configure the plugin" id="configure">
 
 Save the following configuration as `plugins.toml` in your project directory:
 
@@ -109,7 +113,9 @@ ATOF output can contain sensitive prompts, responses, tool arguments, and tool
 results. Protect `logs/events.jsonl` even when full payload export is disabled.
 </Warning>
 
-3. Run the program.
+</Step>
+
+<Step title="Run the program" id="run">
 
 Replace the generated `src/main.rs` in `relay-rust-quickstart` with this code:
 
@@ -125,7 +131,9 @@ Run it from `relay-rust-quickstart`, the directory containing `Cargo.toml` and
 cargo run
 ```
 
-4. Verify the output.
+</Step>
+
+<Step title="Verify the output" id="verify">
 
 The program checks the event file for paired agent, tool, and LLM lifecycle
 records. A successful run prints these markers in order:
@@ -140,6 +148,10 @@ RELAY_QUICKSTART_EVENTS_OK
 <Note icon="circle-info">
 The file stores ATOF events as newline-delimited JSON (JSONL).
 </Note>
+
+</Step>
+
+</Steps>
 
 ## Next Steps
 

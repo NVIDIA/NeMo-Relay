@@ -76,7 +76,9 @@ Before you start, make sure you have:
 
 To quickly get started with NeMo Relay, complete the following steps:
 
-1. Install NeMo Relay.
+<Steps toc={true} tocDepth={2}>
+
+<Step title="Install NeMo Relay" id="install">
 
 Create a project and install the NeMo Relay version for these docs with the
 Deep Agents and NVIDIA model provider extras.
@@ -123,7 +125,9 @@ capability catalog lags the endpoint. This warning is advisory; the run must
 still produce the actual tool result and all three success lines below.
 </Note>
 
-2. Configure the plugin.
+</Step>
+
+<Step title="Configure the plugin" id="configure">
 
 `plugins.toml` enables Relay's observability component and writes its events
 to `logs/events.jsonl`. In your own project, use the same plugin configuration
@@ -140,7 +144,9 @@ ATOF output can contain sensitive prompts, responses, tool arguments, and tool
 results. Protect `logs/events.jsonl` even when full payload export is disabled.
 </Warning>
 
-3. Run the agent.
+</Step>
+
+<Step title="Run the agent" id="run">
 
 The example creates a Deep Agents agent with one marker tool.
 `add_nemo_relay_integration` adds Relay-aware middleware, including supported
@@ -166,7 +172,9 @@ Run it from the project directory:
 uv run python quickstart.py
 ```
 
-4. Verify the output.
+</Step>
+
+<Step title="Verify the output" id="verify">
 
 The program checks the tool result, final assistant response, and paired ATOF
 agent, tool, and LLM records. A successful run prints these markers in order:
@@ -205,6 +213,10 @@ start and end records; `parent_uuid` connects it to its enclosing scope.
 and `metadata` can include the model identity and completion status, depending
 on the integration. These fields let you follow a call through the run without
 requiring full prompt or response capture.
+
+</Step>
+
+</Steps>
 
 ## Next Steps
 
