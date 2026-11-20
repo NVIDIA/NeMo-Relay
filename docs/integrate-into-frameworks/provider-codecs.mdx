@@ -267,6 +267,59 @@ whitespace and empty parts. Selection never searches past a selected textless
 item. Codec decoding and encoding continue to use normalized JSON objects; these
 helpers add no mutable redaction or live streaming extraction.
 
+### C content snapshots
+
+The experimental C ABI accepts normalized JSON from a codec or runtime event.
+Call `nemo_relay_inspect_llm_content_json` with a source and selection from
+`nemo_relay.h`. Requests support last message, indexed message (including
+negative indices), instructions, system prompt, and last user message.
+Responses support output. Standalone messages and content support all parts.
+Only indexed message selection reads the signed index argument.
+
+This example runs inside a response sanitizer callback with a resolved codec:
+
+```c
+#include "nemo_relay.h"
+#include <stdio.h>
+
+void inspect_response(const FfiLlmSanitizeResponseCodec *codec, const char *wire_json) {
+    char *annotation = nemo_relay_llm_sanitize_response_codec_decode(codec, wire_json);
+    if (annotation == NULL) {
+        fprintf(stderr, "%s\n", nemo_relay_last_error());
+        return;
+    }
+    char *snapshot = NULL;
+    NemoRelayStatus status = nemo_relay_inspect_llm_content_json(
+        NEMO_RELAY_CONTENT_SOURCE_RESPONSE, annotation,
+        NEMO_RELAY_CONTENT_SELECT_OUTPUT, 0, &snapshot);
+    if (status != NEMO_RELAY_STATUS_OK) {
+        fprintf(stderr, "%s\n", nemo_relay_last_error());
+    }
+    nemo_relay_string_free(annotation);
+    if (snapshot != NULL) {
+        puts(snapshot);
+        nemo_relay_string_free(snapshot);
+    }
+}
+```
+
+On success, an absent selection sets the output pointer to null. A selected
+item returns its own JSON snapshot, including when it contains no text. Each
+snapshot contains ordered `parts` and `text_parts` arrays. Each part contains:
+
+- `location`: the normalized `root`, `field`, nullable part `index`, and a
+  `message_index` for request-message roots.
+- `kind`: `text`, `refusal`, `tool_call`, `tool_result`, `image_url`, `image`,
+  `audio`, `file`, or `provider_native`.
+- `value`: the text/refusal string, media value, typed tool object, or native
+  object with `provider`, `kind`, and `value`. Tool arguments and result
+  payloads carry their own `kind` (`null`, `string`, `json`, or `content`).
+  The `null` kind omits its value. A `json` payload can explicitly contain null.
+
+Join `text_parts` with newlines for display. An empty array means no eligible
+text. A single empty string represents explicitly empty text. On failure, the
+output pointer is null. Read `nemo_relay_last_error()` on the calling thread.
+
 ## How Provider Codecs Work
 
 When a managed LLM call has a request codec:
