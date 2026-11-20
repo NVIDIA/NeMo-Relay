@@ -190,7 +190,7 @@ The standalone Python worker SDK obtains equivalent typed snapshots through one
 Rust-host RPC per selection. Annotations remain dictionaries; helpers are async
 module functions such as `await codecs.last_message(runtime, request)` and
 `await codecs.response_text(runtime, response)`. Reads on returned snapshots are
-local. Python does not duplicate Rust selection or extraction policies. See
+local. Python does not duplicate Rust selection or extraction policies. Refer to
 [Python worker content access](/build-plugins/workers/python#inspect-normalized-llm-content)
 for transport ownership and older-host behavior.
 
