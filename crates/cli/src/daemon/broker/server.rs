@@ -86,6 +86,7 @@ const MAX_MCP_CONTROL_SESSIONS: usize = 8_192;
 const MAX_CONCURRENT_TLS_HANDSHAKES: usize = 256;
 const TLS_HANDSHAKE_TIMEOUT: Duration = Duration::from_secs(10);
 const UPSTREAM_FAILURE_LOG_INTERVAL: Duration = Duration::from_secs(10);
+const MAX_ERROR_CHAIN_DEPTH: usize = 8;
 // A single peer cannot consume either role's challenge pool, even across a window boundary.
 const CHALLENGES_PER_PEER_WINDOW: u32 = 16;
 const MAX_CHALLENGE_PEERS: usize = 1_024;
@@ -2225,18 +2226,19 @@ async fn forward_to_worker(
         let reason = outcome
             .failure
             .map_or("worker_route_rejected", ForwardFailure::as_str);
-        handle_worker_communication_failure(&state, fingerprint, &worker_id, reason);
+        handle_worker_communication_failure(&state, fingerprint, &worker_id, reason, None);
         return outcome.response;
     }
     let (parts, body) = outcome.response.into_parts();
     let observed = ErrorObservedBody {
         body,
-        on_error: Some(move || {
+        on_error: Some(move |error: &axum::Error| {
             handle_worker_communication_failure(
                 &state,
                 fingerprint,
                 &worker_id,
                 "response_body_error",
+                Some(error),
             );
         }),
     };
@@ -2258,7 +2260,7 @@ struct ErrorObservedBody<B, F> {
 impl<B, F> HttpBody for ErrorObservedBody<B, F>
 where
     B: HttpBody<Data = Bytes> + Unpin,
-    F: FnOnce() + Unpin,
+    F: FnOnce(&B::Error) + Unpin,
 {
     type Data = Bytes;
     type Error = B::Error;
@@ -2268,10 +2270,10 @@ where
         context: &mut Context<'_>,
     ) -> Poll<Option<Result<hyper::body::Frame<Self::Data>, Self::Error>>> {
         let frame = Pin::new(&mut self.body).poll_frame(context);
-        if matches!(frame, Poll::Ready(Some(Err(_))))
+        if let Poll::Ready(Some(Err(error))) = &frame
             && let Some(on_error) = self.on_error.take()
         {
-            on_error();
+            on_error(error);
         }
         frame
     }
@@ -2496,6 +2498,7 @@ fn handle_worker_communication_failure(
     fingerprint: Fingerprint,
     worker_id: &str,
     reason: &'static str,
+    error: Option<&(dyn StdError + 'static)>,
 ) {
     if state
         .registry
@@ -2510,15 +2513,102 @@ fn handle_worker_communication_failure(
         .cancel_worker(worker_id, "worker_communication_failed");
     state.sockets.changed.notify_waiters();
     let fingerprint = fingerprint.to_string();
-    log::error!(
-        target: "nemo_relay.daemon",
-        event = "worker_communication_failed",
-        fingerprint = fingerprint.as_str(),
-        worker_id = worker_id,
-        reason = reason,
-        route_mode = "pass_through";
-        "Worker communication failed; route changed to pass-through"
-    );
+    if let Some(error) = error {
+        let error_chain = worker_response_error_chain(error);
+        log::error!(
+            target: "nemo_relay.daemon",
+            event = "worker_communication_failed",
+            fingerprint = fingerprint.as_str(),
+            worker_id = worker_id,
+            reason = reason,
+            error_chain = error_chain.as_str(),
+            route_mode = "pass_through";
+            "Worker communication failed; route changed to pass-through"
+        );
+    } else {
+        log::error!(
+            target: "nemo_relay.daemon",
+            event = "worker_communication_failed",
+            fingerprint = fingerprint.as_str(),
+            worker_id = worker_id,
+            reason = reason,
+            route_mode = "pass_through";
+            "Worker communication failed; route changed to pass-through"
+        );
+    }
+}
+
+/// Summarize transport causes without formatting arbitrary error text, URLs, or payloads.
+/// Bound traversal so deep or cyclic source chains cannot grow the record indefinitely.
+fn worker_response_error_chain(error: &(dyn StdError + 'static)) -> String {
+    let mut source = Some(error);
+    let mut causes = Vec::new();
+    for _ in 0..MAX_ERROR_CHAIN_DEPTH {
+        let Some(error) = source else { break };
+        let cause = if let Some(error) = error.downcast_ref::<std::io::Error>() {
+            let mut cause = format!("io:{:?}", error.kind());
+            if let Some(code) = error.raw_os_error() {
+                cause.push_str(&format!(":os_code={code}"));
+            }
+            cause
+        } else if let Some(error) = error.downcast_ref::<h2::Error>() {
+            let kind = if error.is_reset() {
+                "reset"
+            } else if error.is_go_away() {
+                "go_away"
+            } else if error.is_io() {
+                "io"
+            } else {
+                "protocol"
+            };
+            let reason = error
+                .reason()
+                .map_or_else(|| "none".to_owned(), |reason| u32::from(reason).to_string());
+            format!("h2:{kind}:reason={reason}:remote={}", error.is_remote())
+        } else if let Some(error) = error.downcast_ref::<hyper::Error>() {
+            let kind = if error.is_timeout() {
+                "timeout"
+            } else if error.is_canceled() {
+                "canceled"
+            } else if error.is_closed() {
+                "closed"
+            } else if error.is_incomplete_message() {
+                "incomplete_message"
+            } else if error.is_body_write_aborted() {
+                "body_write_aborted"
+            } else if error.is_user() {
+                "user"
+            } else if error.is_parse() {
+                "parse"
+            } else {
+                "other"
+            };
+            format!("hyper:{kind}")
+        } else if error.is::<axum::Error>() {
+            "body".to_owned()
+        } else {
+            "other".to_owned()
+        };
+        causes.push(cause);
+        // io::Error::source delegates to the wrapped error's source, omitting that
+        // wrapped error itself. Retain it so an embedded HTTP/2 reason is not lost.
+        // h2::Error likewise exposes its I/O cause only through get_io(), not source().
+        source = error
+            .downcast_ref::<std::io::Error>()
+            .and_then(std::io::Error::get_ref)
+            .map(|inner| inner as &(dyn StdError + 'static))
+            .or_else(|| {
+                error
+                    .downcast_ref::<h2::Error>()
+                    .and_then(h2::Error::get_io)
+                    .map(|inner| inner as &(dyn StdError + 'static))
+            })
+            .or_else(|| error.source());
+    }
+    if source.is_some() {
+        causes.push("truncated".to_owned());
+    }
+    causes.join(" -> ")
 }
 
 struct AuthenticatedMcp {
