@@ -82,6 +82,33 @@ private Relay authentication and routing headers before forwarding requests.
 - `GET /v1/live` and `GET /v1/realtime` with a WebSocket upgrade (also available
   as `/live` and `/realtime`)
 
+### OpenShell Request Receipts
+
+On managed model routes, the gateway records an `openshell.request.receipt`
+mark when an upstream response contains exactly one valid UUID in
+`x-openshell-request-id`. The mark belongs to the active model call and contains
+only `request_id` and `http_status`. Capture happens before reading the body,
+including for HTTP errors, so later body failures do not erase the receipt.
+Retries can produce multiple receipts for one model call.
+
+Use the request ID to find OpenShell records with the same
+`metadata.correlation_uid`. A receipt is an unverified correlation hint, not
+proof of identity, authorization, policy denial, or downstream execution.
+OpenShell owns its enforcement trace; it does not adopt the workload's trace as
+a trusted parent. The request ID join works independently of W3C context
+propagation. Receipt capture does not change existing forwarding policy,
+including the removal of `traceparent` and `tracestate` from credential-free
+remote-HTTP model requests.
+
+ATOF and the `full` and `openinference` trace projections retain these marks.
+The `gen_ai` trace projection omits marks. Missing, malformed or duplicate
+receipt headers produce no mark and do not change response handling.
+
+This applies to model requests forwarded by the standalone gateway and daemon
+workers. It does not instrument HTTP clients inside native agent processes,
+tool subprocesses, passthrough routes or WebSocket frames. Those requests need
+their own context propagation and receipt capture.
+
 ### Passthrough Requests
 
 Voice call setup, Responses compaction, image editing, memory summarization, and
