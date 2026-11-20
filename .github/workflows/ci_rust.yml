@@ -6,6 +6,11 @@ name: Rust
 on:
   workflow_call:
     inputs:
+      pull_request_number:
+        description: 'Pull request number for mirrored PR builds; empty for other builds'
+        required: false
+        default: ''
+        type: string
       run_package:
         description: 'Whether to build package artifacts'
         required: false
@@ -188,6 +193,7 @@ jobs:
         uses: codecov/codecov-action@fb8b3582c8e4def4969c97caa2f19720cb33a72f # v7.0.0
         with:
           token: ${{ secrets.CODECOV_TOKEN }}
+          override_pr: ${{ inputs.pull_request_number }}
           disable_search: true
           files: rust-workspace.lcov
           flags: rust-${{ matrix.platform }}

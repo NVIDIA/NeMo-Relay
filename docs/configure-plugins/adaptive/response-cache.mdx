@@ -6,7 +6,6 @@ position: 5
 {/* SPDX-FileCopyrightText: Copyright (c) 2026, NVIDIA CORPORATION & AFFILIATES. All rights reserved.
 SPDX-License-Identifier: Apache-2.0 */}
 
-
 Use the response cache when a repeatable managed LLM request or explicitly
 classified tool call should be served from a store instead of running live.
 An eligible request or tool call that matches an unexpired cache entry can be
@@ -210,83 +209,8 @@ same `key_prefix` in every process and binding that should share entries.
 
 ## Manual API
 
-Use the manual runtime API when an integration needs to own the adaptive
-lifecycle directly instead of activating the top-level plugin component.
-
-<Tabs>
-<Tab title="Python" language="python">
-```python
-import asyncio
-
-import nemo_relay
-
-adaptive_config = nemo_relay.adaptive.AdaptiveConfig(
-    response_cache=nemo_relay.adaptive.ResponseCacheConfig(namespace="dev-harness"),
-)
-
-async def main() -> None:
-    runtime = nemo_relay.adaptive.AdaptiveRuntime(adaptive_config.to_dict())
-    await runtime.register()
-    try:
-        # Run instrumented application work here.
-        runtime.wait_for_idle()
-    finally:
-        await runtime.shutdown()
-
-asyncio.run(main())
-```
-</Tab>
-
-<Tab title="Node.js" language="node">
-```js
-const adaptive = require("nemo-relay-node/adaptive");
-
-const adaptiveConfig = adaptive.defaultConfig();
-adaptiveConfig.responseCache = adaptive.responseCacheConfig({
-  namespace: "dev-harness",
-});
-
-const runtime = new adaptive.AdaptiveRuntime(adaptiveConfig);
-void (async () => {
-  await runtime.register();
-  try {
-    // Run instrumented application work here.
-    runtime.waitForIdle();
-  } finally {
-    await runtime.shutdown();
-  }
-})().catch((error) => {
-  console.error(error);
-  process.exitCode = 1;
-});
-```
-</Tab>
-
-<Tab title="Rust" language="rust">
-```rust
-use nemo_relay_adaptive::{AdaptiveConfig, AdaptiveRuntime, ResponseCacheConfig};
-
-#[tokio::main]
-async fn main() -> Result<(), Box<dyn std::error::Error>> {
-    let mut adaptive = AdaptiveConfig::default();
-    adaptive.response_cache = Some(ResponseCacheConfig {
-        namespace: "dev-harness".into(),
-        ..ResponseCacheConfig::default()
-    });
-
-    let mut runtime = AdaptiveRuntime::new(adaptive).await?;
-    runtime.register().await?;
-
-    // Run instrumented application work here.
-
-    runtime.wait_for_idle();
-    runtime.shutdown().await?;
-    Ok(())
-}
-```
-</Tab>
-
-</Tabs>
+For manual runtime construction and lifecycle examples, refer to
+[Manual API](/reference/api/adaptive#response-cache-manual-api).
 
 ## LLM Responses
 

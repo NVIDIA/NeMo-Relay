@@ -461,6 +461,13 @@ describe('normalized content snapshots', () => {
     assert.equal(first.next().done, true);
   });
 
+  it('preserves safe integers in selected tool payloads', () => {
+    const input = { seed: 2 ** 32, timestamp: 1763400000000, limit: Number.MAX_SAFE_INTEGER };
+    const request = { messages: [{ role: 'assistant', content: [{ type: 'tool_use', id: 'c1', name: 'f', input }] }] };
+    const [part] = codecs.lastMessage(request).parts();
+    assert.deepEqual(part.toolCall.arguments.value, input);
+  });
+
   it('rejects invalid selected input without invoking accessors', () => {
     assert.throws(() => codecs.MessageView.fromContent({}), /normalized content/);
     assert.throws(() => codecs.MessageView.fromMessage({ role: 'unknown' }), /normalized message/);

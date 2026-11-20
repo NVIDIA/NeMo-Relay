@@ -1,0 +1,54 @@
+# SPDX-FileCopyrightText: Copyright (c) 2026, NVIDIA CORPORATION & AFFILIATES. All rights reserved.
+# SPDX-License-Identifier: Apache-2.0
+
+schema_version = 1
+
+[llm_clients.nvidia]
+format = "openai_chat"
+base_url = "__NVIDIA_BASE_URL__"
+api_key_env = "NVIDIA_API_KEY"
+
+# A model reused as judge and answer target must have identical client settings.
+# Apply the same completion cap to every target, including the judge.
+[targets.efficient]
+id = "__EFFICIENT_MODEL__"
+llm_client = "nvidia"
+extra_body = { max_tokens = "__MAX_OUTPUT_TOKENS__" }
+
+[targets.capable]
+id = "__CAPABLE_MODEL__"
+llm_client = "nvidia"
+extra_body = { max_tokens = "__MAX_OUTPUT_TOKENS__" }
+
+[targets.judge]
+id = "__JUDGE_MODEL__"
+llm_client = "nvidia"
+extra_body = { max_tokens = "__MAX_OUTPUT_TOKENS__" }
+
+# All three arms use Relay and the same plugin; only the routing policy differs.
+[routes.baseline]
+id = "switchyard/baseline"
+type = "passthrough"
+target = "capable"
+
+[routes.efficient]
+id = "switchyard/efficient"
+type = "passthrough"
+target = "efficient"
+
+[routes.routed]
+id = "switchyard/routed"
+type = "llm_classifier"
+mode = "capability"
+classifier_target = "judge"
+strong_target = "capable"
+weak_target = "efficient"
+# Raising this threshold sends more requests to the capable target.
+base_threshold = 0.8
+response_format_type = "json_object"
+# Include the judge's reasoning and final JSON in its completion budget.
+max_output_tokens = "__MAX_OUTPUT_TOKENS__"
+# Hold the task-level choice across its tool calls. Each task starts a fresh
+# gateway, so repeated opening prompts cannot share state between trials.
+classify_trigger = "new_session"
+message_hash_fallback = true

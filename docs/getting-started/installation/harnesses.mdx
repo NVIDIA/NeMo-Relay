@@ -1,0 +1,48 @@
+---
+title: "Harnesses"
+description: "Install Relay through Hermes Agent or the OpenClaw plugin."
+position: 3
+---
+{/* SPDX-FileCopyrightText: Copyright (c) 2026, NVIDIA CORPORATION & AFFILIATES. All rights reserved.
+SPDX-License-Identifier: Apache-2.0 */}
+
+Use the installation method supplied by your agent harness. The host manages its
+compatible Relay dependency.
+For Claude Code or Codex, install the [Relay CLI](/getting-started/installation/cli).
+
+## Hermes Agent
+
+<Tabs>
+<Tab title="Unix shell">
+```bash
+curl -fsSL https://hermes-agent.nousresearch.com/install.sh | bash
+```
+</Tab>
+<Tab title="Windows PowerShell">
+```powershell
+iex (irm https://hermes-agent.nousresearch.com/install.ps1)
+```
+</Tab>
+</Tabs>
+
+Hermes Agent includes native Relay support and manages its compatible dependency
+version. No separate Relay CLI or external observability plugin is required.
+Check that `hermes doctor` includes the NeMo Relay Plugins check; older builds
+can lack it.
+
+Continue with the [Hermes Agent Quick Start](/getting-started/quick-start/hermes).
+For host installation requirements, use the
+[official Hermes Agent installation guide](https://hermes-agent.nousresearch.com/docs/getting-started/installation).
+
+## OpenClaw
+
+```bash
+openclaw plugins install npm:nemo-relay-openclaw
+openclaw gateway restart
+```
+
+OpenClaw installs and manages the Relay plugin. The package name is
+`nemo-relay-openclaw`; the plugin ID used in OpenClaw configuration is `nemo-relay`.
+
+Continue with the [OpenClaw Plugin Guide](/supported-integrations/openclaw-plugin)
+for configuration, verification, and versioned examples.

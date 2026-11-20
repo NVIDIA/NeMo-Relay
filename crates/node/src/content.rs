@@ -13,10 +13,11 @@ use nemo_relay_types::codec::content::{
 };
 use nemo_relay_types::codec::request::{AnnotatedLlmRequest, Message, MessageContent};
 use nemo_relay_types::codec::response::AnnotatedLlmResponse;
-use serde_json::{Value as Json, json};
+use serde_json::{Value, json};
 
-use crate::convert::{checked_json, parse_json};
+use crate::convert::parse_json;
 use crate::error::{Error, Result};
+use crate::json::Json;
 
 enum Source {
     Message(Message),
@@ -97,12 +98,11 @@ impl ContentSnapshot {
     /// Internal constructor for standalone content and current response output.
     #[napi(constructor, catch_unwind)]
     pub fn new(
-        env: Env,
         mode: String,
-        #[napi(ts_arg_type = "JsonValue")] value: Unknown,
+        #[napi(ts_arg_type = "JsonValue")] value: Json,
         request_index: Option<u32>,
     ) -> Result<Self> {
-        let value = checked_json(&env, value)?;
+        let value = value.0;
         let source = match mode.as_str() {
             "message" => Source::Message(parse_json(value, "normalized message")?),
             "content" => Source::Content(parse_json(value, "normalized content")?),
@@ -124,12 +124,12 @@ impl ContentSnapshot {
     pub fn select_request(
         env: Env,
         mode: String,
-        #[napi(ts_arg_type = "JsonValue")] value: Unknown,
+        #[napi(ts_arg_type = "JsonValue")] value: Json,
         index: Option<f64>,
     ) -> Result<Option<Json>> {
         // The facade supplies role/envelope metadata only. Never deserialize
         // unselected tool/media payloads just to determine the selected index.
-        let value = checked_json(&env, value)?;
+        let value = value.0;
         let request = AnnotatedLlmRequest {
             messages: value["messages"]
                 .as_array()
@@ -179,10 +179,12 @@ impl ContentSnapshot {
                     Error::invalid_argument(error.to_string())
                 }
             })?;
-        Ok(selected.map(|view| match view.root() {
-            ContentRoot::RequestMessage(index) => json!({"messageIndex": index}),
-            ContentRoot::Content => json!({"instructions": true}),
-            _ => unreachable!("request selection yields a message or instructions"),
+        Ok(selected.map(|view| {
+            Json(match view.root() {
+                ContentRoot::RequestMessage(index) => json!({"messageIndex": index}),
+                ContentRoot::Content => json!({"instructions": true}),
+                _ => unreachable!("request selection yields a message or instructions"),
+            })
         }))
     }
 
@@ -277,30 +279,30 @@ impl ContentEntrySnapshot {
             }
         };
         meta["kind"] = json!(kind);
-        Ok(meta)
+        Ok(Json(meta))
     }
 
-    /// Internal payload conversion directly from borrowed Rust data to a fresh JavaScript value.
+    /// Materialize the retained tool payload as an independent JavaScript JSON value.
     #[napi(ts_return_type = "JsonValue", catch_unwind)]
-    pub fn payload_value(&self, env: Env) -> Result<Unknown<'_>> {
-        Ok(match self.payload()? {
-            PayloadRef::Null => env.to_js_value(&())?,
-            PayloadRef::String(text) => env.to_js_value(&text)?,
-            PayloadRef::Json(value) => env.to_js_value(value)?,
-            PayloadRef::Content(content) => env.to_js_value(content)?,
-        })
+    pub fn payload_value(&self) -> Result<Json> {
+        Ok(Json(match self.payload()? {
+            PayloadRef::Null => Value::Null,
+            PayloadRef::String(text) => Value::from(text),
+            PayloadRef::Json(value) => value.clone(),
+            PayloadRef::Content(content) => serde_json::to_value(content)?,
+        }))
     }
 
     /// Internal media/native conversion; returned values do not share mutable Rust storage.
     #[napi(ts_return_type = "JsonValue", catch_unwind)]
-    pub fn value(&self, env: Env) -> Result<Unknown<'_>> {
-        Ok(match self.entry().kind {
-            ContentKind::ImageUrl(value) => env.to_js_value(value)?,
+    pub fn value(&self) -> Result<Json> {
+        Ok(Json(match self.entry().kind {
+            ContentKind::ImageUrl(value) => serde_json::to_value(value)?,
             ContentKind::Image(value)
             | ContentKind::Audio(value)
             | ContentKind::File(value)
-            | ContentKind::ProviderNative { value, .. } => env.to_js_value(value)?,
-            _ => env.to_js_value(&())?,
-        })
+            | ContentKind::ProviderNative { value, .. } => value.clone(),
+            _ => Value::Null,
+        }))
     }
 }

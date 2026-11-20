@@ -1,0 +1,421 @@
+---
+title: "Routing Models with NeMo Switchyard"
+description: "Use Switchyard with Relay to route agent work across models and evaluate quality, latency, and usage."
+position: 7
+hide-nav-links: true
+---
+{/* SPDX-FileCopyrightText: Copyright (c) 2026, NVIDIA CORPORATION & AFFILIATES. All rights reserved.
+SPDX-License-Identifier: Apache-2.0 */}
+
+Running every agent request on your most capable model can waste budget and add
+latency. [NeMo Switchyard](https://nvidia-nemo.github.io/Switchyard/) chooses a
+model for each request or step, so routine work can use efficient models while
+demanding work uses capable ones.
+
+With [NVIDIA NeMo Relay](https://github.com/NVIDIA/NeMo-Relay), Switchyard runs as
+a first-party native plugin. Add routing to an existing supported agent setup
+without changing the agent or operating a separate routing service. Relay
+records model choices, fallbacks, latency, and token use so you can assess the
+tradeoff.
+
+Use this guide to evaluate a routing policy on your workload: compare it with
+fixed-model baselines and check that task quality meets your requirements.
+
+<Note title="Understand the Switchyard integration">
+[Use Switchyard with NeMo Relay](https://nvidia-nemo.github.io/Switchyard/integrations/nemo_relay/)
+explains the request flow, available routing algorithms, supported APIs,
+credential handling, and routing telemetry. It is the reference for how the
+integration works; this guide focuses on choosing and evaluating a policy.
+</Note>
+
+<Tip title="Try the complete example on Brev">
+[Run the complete example](#run-the-brev-example) to compare fixed and routed
+coding tasks using Claude Code or Codex.
+
+**What is Brev?**
+
+[NVIDIA Brev](https://brev.nvidia.com/) provides cloud development machines you
+can access from your local tools, so you can try the example without installing
+the agent stack on your workstation.
+</Tip>
+
+## 1. Choose representative tasks and models
+
+Choose tasks with clear pass/fail checks, including work that needs a capable
+model. Keep task inputs, tools, output limits, and acceptance checks the same
+across these three policies:
+
+| Policy | What it tells you |
+| --- | --- |
+| Fixed capable | The task quality, latency, and usage of your capable-model baseline. |
+| Fixed efficient | Whether the efficient model alone meets your requirements. |
+| Routed | Whether model selection preserves task quality with useful changes in latency and usage. |
+
+<CardGroup cols={2}>
+<Card title="Evaluate your deployment" href="/configure-plugins/switchyard" icon="fa-solid fa-diagram-project">
+Use the supported agent, gateway, or application you already operate. Install
+Switchyard in the Relay process that handles its model requests.
+</Card>
+<Card title="Try the included example" href="#run-the-brev-example" icon="fa-solid fa-code">
+Use Claude Code or Codex with NVIDIA-hosted models on a disposable Brev VM.
+The example supplies tasks, acceptance checks, and comparison tools.
+</Card>
+</CardGroup>
+
+Choose models that support your tools, context, and output requirements.
+Switchyard's [model selection guide](https://nvidia-nemo.github.io/Switchyard/routing_algorithms/model_selection/)
+explains how to select targets and a judge for policies that need one.
+
+## 2. Configure a routing policy
+
+Use [Relay's first-party Switchyard plugin guide](/configure-plugins/switchyard)
+as the definitive source for Relay and plugin version requirements. Follow it
+to install the plugin, configure trust and provider access, and enable and
+validate it in your existing Relay setup.
+
+A Switchyard deployment defines provider connections as **clients**, model
+choices as **targets**, and selection policies as **routes**. Configure a fixed
+route for each baseline and a candidate route for the comparison. Point your
+agent at the candidate's route ID, such as `switchyard/routed`, so Switchyard
+selects the model behind that name.
+
+For an LLM classifier policy, choose the judge, decision threshold, and when to
+classify. Keeping a selection for a session avoids changing models at each tool
+continuation; give each independent task a distinct session identity. Refer to
+[classifier routing](https://nvidia-nemo.github.io/Switchyard/routing_algorithms/llm_classifier_routing/)
+for these settings and other policy choices.
+
+## 3. Run comparable work through each policy
+
+Run the same tasks through the capable, efficient, and routed policies. Apply
+your acceptance checks to the resulting work, even when the agent exits
+successfully. Record task results, elapsed time, model choices, and available
+usage, including failed attempts, retries, and judge calls.
+
+Repeat the comparison to distinguish consistent behavior from a single good or
+bad run. Keep failed results so you can identify which tasks each policy misses.
+
+## 4. Interpret task quality and routing together
+
+Compare the routed policy with both fixed-model baselines on your workload.
+
+| Signal | How to interpret it |
+| --- | --- |
+| Task acceptance | Similar totals can hide failures on different tasks. Inspect which requirements each policy missed. |
+| Elapsed time | Compare repeated task durations and slow cases, including judge calls, retries, and timeouts. |
+| Answer usage | Compare input and output tokens by model. Lower token totals alone do not establish lower cost. |
+| Judge overhead | Include classification usage and latency when evaluating the whole workflow. |
+| Routing mix | Check whether selections match task needs. If a policy always chooses one target, compare it with that fixed-model baseline. |
+| Recoveries and truncation | Inspect fallback reasons and incomplete calls before attributing results to the routing policy. |
+
+A capable answer after an invalid judge verdict does not demonstrate successful
+classification. Inspect the recovery evidence alongside the accepted task.
+
+### Add cost when prices are known
+
+Price input and output usage separately for each answer and judge model, using
+your validated [pricing catalog](/configure-plugins/model-pricing). Keep missing
+usage or pricing marked unknown.
+
+```text
+Workload cost = answer-model cost + judge cost
+Cost per accepted task = workload cost / accepted tasks
+```
+
+Compare the result with the fixed-capable baseline. Apply your task-quality
+requirement before accepting a cost improvement.
+
+## 5. Refine and validate the policy
+
+If routing misses required tasks, inspect the chosen target and judge verdict.
+If task quality holds but latency or usage grows, check judge frequency and
+retries. If the efficient baseline already meets your requirements, consider
+whether routing adds useful value.
+
+Change one setting at a time and repeat the comparison. Adopt a policy when it
+meets your task-quality and resource requirements across repeated trials.
+Re-evaluate after changes to models, providers, or the harness.
+
+<CardGroup cols={2}>
+<Card title="Compare and tune" href="https://nvidia-nemo.github.io/Switchyard/tuning/" icon="fa-solid fa-sliders">
+Use Switchyard's evaluation loop to diagnose the decision mix and adjust a policy.
+</Card>
+<Card title="Benchmarks and runnable profiles" href="https://nvidia-nemo.github.io/Switchyard/benchmarks/" icon="fa-solid fa-chart-column">
+Explore published comparisons, routing configurations, and reproduction instructions.
+</Card>
+</CardGroup>
+
+<hr style={{ breakBefore: "page", pageBreakBefore: "always" }} />
+
+## Run the Brev example
+
+<div style={{ display: "flex", flexWrap: "wrap", gap: "0.5rem" }}>
+  <Badge intent="success" minimal>Example</Badge>
+  <Badge intent="note" minimal>Claude Code</Badge>
+  <Badge intent="note" minimal>OpenAI Codex</Badge>
+  <Badge intent="note" minimal>NeMo Switchyard</Badge>
+</div>
+
+Follow this section from a fresh VM through the evidence checks. The workload
+uses your choice of Claude Code or Codex with NVIDIA-hosted inference and the
+Switchyard native plugin. Use the same harness for all three policies in a
+comparison. Other supported model-handling processes remain deployment choices.
+
+Codex sends OpenAI Responses requests; Claude Code sends Anthropic Messages.
+Switchyard translates either format to the configured NVIDIA Chat Completions
+targets. Repeat acceptance when changing a harness, model, or plugin version.
+
+### 1. Provision and connect to a VM
+
+In the [Brev Console](https://brev.nvidia.com/), create a fresh instance using
+these recommended starting resources. Refer to [Brev provisioning](https://docs.nvidia.com/brev/cli/instance-creation)
+for instance selection; available CPU types depend on your organization and provider.
+
+| Setting | Recommendation |
+| --- | --- |
+| Operating system | Ubuntu 22.04 or 24.04 LTS, x86_64 |
+| CPU and memory | 4 vCPUs and 16 GB RAM |
+| Storage | At least 40 GB |
+| GPU | None; inference runs on the model provider |
+| Access | Administrator account with sudo and outbound HTTPS |
+
+These are starting resources for the example, not Relay sizing requirements.
+Use a fresh VM without other system-wide Relay policy: system configuration
+still applies when you select an explicit plugin file.
+
+<Warning title="Use a disposable VM">
+The acceptance checker executes generated Python outside the harness sandbox.
+Its environment excludes provider and installation credentials, but it still
+runs with your VM user's file and network access. Keep only this example's
+credentials and synthetic data on the VM.
+</Warning>
+
+On your **local computer**, install the Brev CLI if needed. On macOS:
+
+```bash
+brew install brevdev/homebrew-brev/brev
+```
+
+For other operating systems, use the [Brev CLI installation instructions](https://docs.nvidia.com/brev/getting-started/quickstart).
+Connect to the instance you created:
+
+```bash
+brev login
+brev refresh
+brev list
+brev shell YOUR_INSTANCE
+```
+
+Run the remaining setup in **Bash on the VM host**.
+
+### 2. Install the runtimes
+
+Use uv to install Python 3.12 on either Ubuntu image:
+
+```bash
+sudo apt-get update
+sudo apt-get install -y ca-certificates curl gh git python3 xz-utils
+curl -LsSf https://astral.sh/uv/install.sh | sh
+export PATH="$HOME/.local/bin:$PATH"
+uv python install 3.12
+python3.12 --version
+git --version
+gh --version
+```
+
+Install Node.js 24.13.1 system-wide so login shells can find the same runtime:
+
+```bash
+curl -fsS https://nodejs.org/dist/v24.13.1/node-v24.13.1-linux-x64.tar.xz -o /tmp/node-v24.13.1-linux-x64.tar.xz
+curl -fsS https://nodejs.org/dist/v24.13.1/SHASUMS256.txt -o /tmp/node-24.13.1-SHASUMS256.txt
+(cd /tmp && awk '$2 == "node-v24.13.1-linux-x64.tar.xz"' node-24.13.1-SHASUMS256.txt | sha256sum --check)
+sudo tar -xJf /tmp/node-v24.13.1-linux-x64.tar.xz -C /usr/local --strip-components=1
+node --version
+npm --version
+```
+
+Confirm the required platform before downloading the plugin:
+
+```bash
+uname -m
+getconf GNU_LIBC_VERSION
+python3.12 -c 'import sys; assert sys.version_info >= (3, 12); print("Python ready")'
+node --version
+```
+
+Expect `x86_64`, a glibc version, Python 3.12+, and Node.js 24.13.1.
+
+### 3. Choose a harness and install Relay and the plugin
+
+Choose **one** harness. For its Relay integration details, refer to
+[Claude Code](/nemo-relay-cli/claude-code) or [Codex](/nemo-relay-cli/codex).
+
+<Tabs>
+<Tab title="Claude Code">
+
+```bash
+sudo npm install --global --prefix /usr/local @anthropic-ai/claude-code@2.1.309
+claude --version
+export RELAY_EXAMPLE_HARNESS=claude
+```
+
+</Tab>
+<Tab title="Codex">
+
+```bash
+sudo npm install --global --prefix /usr/local @openai/codex@0.164.0
+codex --version
+export RELAY_EXAMPLE_HARNESS=codex
+```
+
+</Tab>
+</Tabs>
+
+<Note title="One key for the models">
+Switchyard uses `NVIDIA_API_KEY` to call the efficient model, capable model,
+and routing judge on NVIDIA's inference endpoint. Claude Code or Codex supplies
+the agent interface; the runner connects it to Relay automatically. This example
+requires no ChatGPT or Claude subscription and no OpenAI or Anthropic API key.
+</Note>
+
+<Note title="Example version pins">
+This example was tested with Relay **0.11.1** and Switchyard plugin **0.3.2**.
+For current version requirements, refer to
+[Relay's first-party Switchyard plugin guide](/configure-plugins/switchyard).
+</Note>
+
+Install the pinned Relay version and obtain the example files:
+
+```bash
+curl -fsSL https://raw.githubusercontent.com/NVIDIA/NeMo-Relay/0.11.1/install.sh -o /tmp/install-relay.sh
+NEMO_RELAY_VERSION=0.11.1 sh /tmp/install-relay.sh
+export PATH="$HOME/.local/bin:$PATH"
+git clone --depth 1 https://github.com/NVIDIA/NeMo-Relay.git relay-routing
+cd relay-routing/docs/user-guides/_examples/model-routing
+```
+
+Authenticate the [GitHub CLI](https://cli.github.com/) with `gh auth login`, or
+supply its supported `GH_TOKEN` environment variable. Use Relay's plugin installer
+with a separate configuration directory so this example does not alter your
+normal user policy:
+
+```bash
+SWITCHYARD_INSTALL_ROOT=$(mktemp -d /tmp/relay-switchyard-install.XXXXXX)
+GH_CONFIG_DIR="${GH_CONFIG_DIR:-${XDG_CONFIG_HOME:-$HOME/.config}/gh}" \
+XDG_CONFIG_HOME="$SWITCHYARD_INSTALL_ROOT" nemo-relay plugins install --user \
+  github:NVIDIA/NeMo-Relay-Plugins@switchyard-plugin-0.3.2 --no-enable
+SWITCHYARD_MANIFEST=$(python3.12 -c '
+import sys, tomllib
+with open(sys.argv[1], "rb") as source:
+    print(tomllib.load(source)["plugins"]["dynamic"][0]["manifest"])
+' "$SWITCHYARD_INSTALL_ROOT/nemo-relay/plugins.toml")
+export SWITCHYARD_MANIFEST
+```
+
+The [Relay plugin installer](/configure-plugins/discoverable-plugins#install-a-github-release-bundle)
+selects and verifies the platform bundle from
+[plugin release 0.3.2](https://github.com/NVIDIA/NeMo-Relay-Plugins/releases/tag/switchyard-plugin-0.3.2).
+Keep it disabled in the installation directory; the runner enables it only in
+each comparison's configuration.
+
+<Warning title="Trust the plugin publisher">
+The runner uses `integrity_only` for this unsigned native bundle. A checksum
+verifies artifact integrity, not independent publisher authenticity. Only load
+a bundle from a publisher you trust; refer to
+[plugin trust configuration](/configure-plugins/switchyard#configure) for deployment options.
+</Warning>
+
+<Note title="The runner manages the example configuration">
+The runner writes isolated route, plugin, and harness configuration,
+enables and probes the native plugin, and starts/stops its task gateways.
+You supply the plugin manifest, model IDs, and provider credentials.
+</Note>
+
+### 4. Configure inference and run one comparison
+
+Choose models from [build.nvidia.com](https://build.nvidia.com/) and use the
+[NVIDIA inference API](https://docs.api.nvidia.com/nim/reference).
+**The models below are suggestions; use any compatible models you prefer.**
+The efficient and capable models need tool calling, and the judge needs JSON
+verdict support. This example reuses the efficient model as the judge.
+
+| Role | Example model |
+| --- | --- |
+| Efficient target and judge | [NVIDIA Nemotron 3.5 Lightning 30B A3B](https://build.nvidia.com/nvidia/nemotron-3.5-lightning-30b-a3b) |
+| Capable target | [NVIDIA Nemotron 3 Ultra 550B A55B](https://build.nvidia.com/nvidia/nemotron-3-ultra-550b-a55b) |
+
+Set your chosen model IDs and API credentials in the same shell you use to run
+the comparison:
+
+```bash
+export NVIDIA_BASE_URL=https://integrate.api.nvidia.com/v1
+export EFFICIENT_MODEL=nvidia/nemotron-3.5-lightning-30b-a3b
+export CAPABLE_MODEL=nvidia/nemotron-3-ultra-550b-a55b
+export JUDGE_MODEL="$EFFICIENT_MODEL"
+IFS= read -r -s -p 'NVIDIA API key: ' NVIDIA_API_KEY; printf '\n'
+export NVIDIA_API_KEY
+```
+
+Prepare configuration and task scaffolds without making model calls:
+
+```bash
+python3.12 run.py --harness "$RELAY_EXAMPLE_HARNESS" --output /tmp/relay-routing-prepared --prepare-only
+```
+
+This checks configuration generation and TOML syntax. It does not load the
+plugin, validate provider access, or test model behavior. Inspect the generated
+files, then start with one task across three policies in a **different output directory**:
+
+```bash
+python3.12 run.py --harness "$RELAY_EXAMPLE_HARNESS" --output /tmp/relay-routing --task ticket-id --repeat 1
+python3.12 summarize.py /tmp/relay-routing
+```
+
+The first check runs incident-ID validation across all three policies. Omit
+`--task ticket-id` to include retry delays and dependency planning. The latter includes cycles, transitive blocking, lexical
+topological order, and a 10,000-node chain. It tests a broader capability boundary;
+observe the judge's actual selection rather than assuming it chooses the capable model.
+
+The full workload runs three tasks across three policies, for nine attempts.
+For a repeated full evaluation, choose a new output directory and use `--repeat 3`
+without a task filter (27 attempts); policy order rotates between trials.
+External acceptance runs outside the agent's working directory. Every arm has
+the selected harness's tools and the same 16,384-token provider completion limit,
+including reasoning. That limit also applies to the judge. Failures remain in `results.json`;
+the overall command returns nonzero if any arm fails.
+
+Compare Claude Code and Codex in separate output directories; their
+tools and prompts differ, so their results are separate experiments.
+
+The Codex path uses its workspace-write sandbox. The Claude Code path allows
+file tools and `python3` test commands for the supplied synthetic tasks. Review
+any Relay hook trust prompts; keep the run confined to the disposable example.
+
+### 5. Inspect the evidence
+
+| Evidence | Inspect |
+| --- | --- |
+| Plugin setup | Each policy's `setup.log`, and `startup.log` for the initial gateway probe |
+| Harness and task selection | `comparison.json` |
+| Task acceptance | `results.json`, generated files, and `acceptance.log` |
+| Selection and delivery | `switchyard.routing.decision`: `selected_model`, `served_model`, `fallback_used` |
+| Judge recovery | Decision `evidence.source` and `reason_code` |
+| Provider attempts | `switchyard.routing.llm_call`: `call_role`, model, and outcome |
+| Usage and truncation | `summary.json`: `tokens_by_model` groups answer/routing usage by target model and token type; missing usage is `null`. Inspect incomplete model calls alongside usage. |
+
+Judge HTTP success does not establish a valid verdict. Review final JSON and
+recovery reasons alongside the task's acceptance log.
+
+Use the interpretation guidance above to compare task acceptance, served models,
+usage, and elapsed time. A completed comparison can contain failed tasks; retain
+those results. It does not need to demonstrate savings or favor the routed policy.
+If setup fails before tasks start, check the plugin probe, model access, and the
+selected runtime versions before repeating in a new output directory.
+
+### 6. Clean up
+
+The runner stops each task gateway. Retain the scorecard and logs, then remove
+only your chosen output directories and the directory recorded in
+`SWITCHYARD_INSTALL_ROOT`, which contains this example's plugin installation.
+Leave other users' harness settings and plugin installations in place. Stop or
+delete the Brev VM when done.

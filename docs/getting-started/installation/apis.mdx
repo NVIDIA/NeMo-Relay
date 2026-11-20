@@ -1,0 +1,68 @@
+---
+title: "APIs"
+description: "Install the Python, Node.js, or Rust API for application-owned calls."
+position: 4
+---
+{/* SPDX-FileCopyrightText: Copyright (c) 2026, NVIDIA CORPORATION & AFFILIATES. All rights reserved.
+SPDX-License-Identifier: Apache-2.0 */}
+
+Install a language package when your application owns the tool or model call.
+These commands install the latest stable release. Quick starts pin the versions
+used by their examples.
+
+## Python
+
+Requires CPython 3.11 or newer.
+
+```bash
+uv add nemo-relay
+```
+
+Continue with the [Python Quick Start](/getting-started/quick-start/python).
+
+## Node.js
+
+Requires Node.js 24.13.1 or newer.
+
+```bash
+npm install nemo-relay-node
+```
+
+Continue with the [Node.js Quick Start](/getting-started/quick-start/nodejs).
+
+## Rust
+
+Building requires a Rust toolchain and Buf 1.75.0 or newer on `PATH`, or selected
+through `BUF`. Cargo supplies `protoc` automatically. The first build needs
+access to the Buf Schema Registry to download the locked validation schema.
+
+```bash
+cargo add nemo-relay
+```
+
+Continue with the [Rust Quick Start](/getting-started/quick-start/rust).
+For optional adaptive runtime primitives, use
+[Adaptive Runtime](/configure-plugins/adaptive/about).
+
+## Package Compatibility
+
+NeMo Relay publishes CPython 3.11 ABI3 wheels for x86_64 and ARM64 Linux
+systems. On supported CPython 3.11 or newer environments, `pip` and `uv` select
+`manylinux_2_17` for glibc 2.17 or newer or `musllinux_1_2` for musl 1.2 or
+newer. Supported Alpine Linux environments do not need a `--platform` override
+or source build. Alpine environments outside this wheel coverage must use a
+supported Python version and
+[build from source](/contribute/development-setup#source-development).
+
+On supported x64 and ARM64 Linux systems, npm automatically installs the native
+package for the host C library, including the musl package on Alpine Linux.
+
+## Python Installation Alternatives
+
+Use `uv add` from an application project with a `pyproject.toml`. It records Relay
+as a project dependency. In an active virtual environment without project
+metadata, use `uv pip install nemo-relay`, or `pip install nemo-relay` if you do
+not use `uv`.
+
+For supported runtime and platform combinations, use the
+[Support Matrix](/reference/support-matrix).

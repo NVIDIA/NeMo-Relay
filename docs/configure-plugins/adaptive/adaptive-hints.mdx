@@ -6,7 +6,6 @@ position: 4
 {/* SPDX-FileCopyrightText: Copyright (c) 2026, NVIDIA CORPORATION & AFFILIATES. All rights reserved.
 SPDX-License-Identifier: Apache-2.0 */}
 
-
 Use Adaptive Hints when downstream model calls or provider adapters can safely
 receive guidance metadata from the adaptive runtime.
 
@@ -173,79 +172,8 @@ Ok(())
 
 ## Manual API
 
-Use the manual runtime API when an integration needs to own adaptive lifecycle
-directly instead of activating the top-level plugin component.
-
-<Tabs>
-<Tab title="Python" language="python">
-```python
-import asyncio
-
-import nemo_relay
-
-adaptive_config = nemo_relay.adaptive.AdaptiveConfig(
-    agent_id="planner",
-    state=nemo_relay.adaptive.StateConfig(
-        backend=nemo_relay.adaptive.BackendSpec.in_memory(),
-    ),
-    telemetry=nemo_relay.adaptive.TelemetryConfig(learners=["tool_parallelism"]),
-    adaptive_hints=nemo_relay.adaptive.AdaptiveHintsConfig(
-        inject_body_path="nvext.agent_hints",
-    ),
-)
-
-runtime = nemo_relay.adaptive.AdaptiveRuntime(adaptive_config.to_dict())
-asyncio.run(runtime.register())
-try:
-    # Run instrumented application work here.
-    nemo_relay.adaptive.set_latency_sensitivity(8)
-finally:
-    asyncio.run(runtime.shutdown())
-```
-</Tab>
-
-<Tab title="Node.js" language="node">
-The Node.js binding exposes Adaptive Hints through the adaptive plugin component
-helpers. Use the Plugin Configuration example above when activating Adaptive
-Hints from Node.js.
-</Tab>
-
-<Tab title="Rust" language="rust">
-```rust
-#[tokio::main]
-async fn main() -> Result<(), Box<dyn std::error::Error>> {
-use nemo_relay_adaptive::{
-    set_latency_sensitivity, AdaptiveConfig, AdaptiveHintsComponentConfig, AdaptiveRuntime,
-    BackendSpec, StateConfig, TelemetryComponentConfig,
-};
-
-let mut adaptive = AdaptiveConfig::default();
-adaptive.agent_id = Some("planner".into());
-adaptive.state = Some(StateConfig {
-    backend: BackendSpec::in_memory(),
-});
-adaptive.telemetry = Some(TelemetryComponentConfig {
-    learners: vec!["tool_parallelism".into()],
-    ..TelemetryComponentConfig::default()
-});
-adaptive.adaptive_hints = Some(AdaptiveHintsComponentConfig {
-    inject_body_path: "nvext.agent_hints".into(),
-    ..AdaptiveHintsComponentConfig::default()
-});
-
-let mut runtime = AdaptiveRuntime::new(adaptive).await?;
-runtime.register().await?;
-
-// Run instrumented application work here.
-set_latency_sensitivity(8).ok();
-
-runtime.shutdown().await?;
-Ok(())
-}
-```
-</Tab>
-
-</Tabs>
+For manual runtime construction and lifecycle examples, refer to
+[Manual API](/reference/api/adaptive#adaptive-hints-manual-api).
 
 ## Fields
 

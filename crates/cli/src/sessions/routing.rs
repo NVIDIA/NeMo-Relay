@@ -33,10 +33,16 @@ pub(super) struct InFlightSession {
     activity: Option<SessionActivityGuard>,
     gateway_preparing: Option<Arc<std::sync::Mutex<std::collections::HashSet<String>>>>,
     gateway_call_owner: Option<Option<String>>,
+    alias_recovery: Option<SubagentAliasRecovery>,
+}
+
+struct SubagentAliasRecovery {
+    alignment: Arc<Mutex<SessionAlignmentState>>,
+    tracked_identifiers: Vec<String>,
 }
 
 impl InFlightSession {
-    fn new(
+    pub(super) fn new(
         sessions: Arc<Mutex<HashMap<String, Session>>>,
         session_id: String,
         session: Session,
@@ -51,6 +57,7 @@ impl InFlightSession {
             activity: Some(activity),
             gateway_preparing: None,
             gateway_call_owner: None,
+            alias_recovery: None,
         }
     }
 
@@ -65,6 +72,35 @@ impl InFlightSession {
         let mut in_flight = Self::new(sessions, session_id, session, gate, activity);
         in_flight.gateway_preparing = Some(preparing);
         in_flight
+    }
+
+    pub(super) fn track_subagent_aliases(&mut self, alignment: &Arc<Mutex<SessionAlignmentState>>) {
+        let session = self.session_mut();
+        let tracked_identifiers = session
+            .subagents
+            .keys()
+            .chain(session.retiring_subagents.keys())
+            .cloned()
+            .collect();
+        self.alias_recovery = Some(SubagentAliasRecovery {
+            alignment: Arc::clone(alignment),
+            tracked_identifiers,
+        });
+    }
+
+    pub(super) fn closed_subagent_identifiers(&self) -> Vec<String> {
+        let (Some(session), Some(recovery)) = (&self.session, &self.alias_recovery) else {
+            return Vec::new();
+        };
+        recovery
+            .tracked_identifiers
+            .iter()
+            .filter(|identifier| {
+                !session.subagents.contains_key(*identifier)
+                    && !session.retiring_subagents.contains_key(*identifier)
+            })
+            .cloned()
+            .collect()
     }
 
     pub(super) fn gateway_call_prepared(&mut self, owner: Option<String>) {
@@ -121,10 +157,13 @@ impl InFlightSession {
 
 impl Drop for InFlightSession {
     fn drop(&mut self) {
+        let closed_subagent_identifiers = self.closed_subagent_identifiers();
+        let alias_recovery = self.alias_recovery.take();
         let Some(mut session) = self.session.take() else {
             return;
         };
         if let Some(owner) = self.gateway_call_owner.take() {
+            session.touch_subagent_activity(owner.as_deref());
             session.finish_gateway_call(owner.as_deref());
         }
         let preparing = self.gateway_preparing.take();
@@ -142,6 +181,14 @@ impl Drop for InFlightSession {
                     .remove(&session_id);
             }
             drop(directory);
+            if let Some(recovery) = alias_recovery
+                && !closed_subagent_identifiers.is_empty()
+            {
+                let mut alignment = recovery.alignment.lock().await;
+                for identifier in closed_subagent_identifiers {
+                    alignment.clear_for_ended_subagent(&session_id, &identifier);
+                }
+            }
             drop(gate);
             drop(activity);
         }));
@@ -171,6 +218,7 @@ impl<'a> AuthenticatedRouting<'a> {
 
 pub(super) struct SessionEventApplier<'a> {
     sessions: &'a Arc<Mutex<HashMap<String, Session>>>,
+    alignment: &'a Arc<Mutex<SessionAlignmentState>>,
     activity: &'a SessionActivity,
     config: SessionConfig,
     completions: &'a Arc<Mutex<super::completion::CompletionCache>>,
@@ -178,6 +226,7 @@ pub(super) struct SessionEventApplier<'a> {
 }
 
 pub(super) struct AppliedSessionEvent {
+    pub(super) error: Option<CliError>,
     pub(super) outcome: Option<(
         bool,
         Option<SubscriberDelivery>,
@@ -191,6 +240,7 @@ pub(super) struct AppliedSessionEvent {
 impl<'a> SessionEventApplier<'a> {
     pub(super) fn new(
         sessions: &'a Arc<Mutex<HashMap<String, Session>>>,
+        alignment: &'a Arc<Mutex<SessionAlignmentState>>,
         activity: &'a SessionActivity,
         completions: &'a Arc<Mutex<super::completion::CompletionCache>>,
         owner: Option<&'a str>,
@@ -198,6 +248,7 @@ impl<'a> SessionEventApplier<'a> {
     ) -> Self {
         Self {
             sessions,
+            alignment,
             activity,
             config,
             completions,
@@ -217,6 +268,7 @@ impl<'a> SessionEventApplier<'a> {
     ) -> Result<AppliedSessionEvent, CliError> {
         if self.activity.is_closing() {
             return Ok(AppliedSessionEvent {
+                error: None,
                 outcome: None,
                 closed_subagents: Vec::new(),
                 session_gate,
@@ -236,6 +288,7 @@ impl<'a> SessionEventApplier<'a> {
                     .is_some_and(|key| completions.contains(key))
             {
                 return Ok(AppliedSessionEvent {
+                    error: None,
                     outcome: None,
                     closed_subagents: Vec::new(),
                     session_gate,
@@ -263,37 +316,42 @@ impl<'a> SessionEventApplier<'a> {
         {
             in_flight.session_mut().agent_kind = event_kind;
         }
-        let active_subagents: Vec<_> = in_flight.session_mut().subagents.keys().cloned().collect();
-        match in_flight.session_mut().apply(event).await {
+        in_flight.track_subagent_aliases(self.alignment);
+        let result = in_flight.session_mut().apply(event).await;
+        let closed_subagents = in_flight
+            .closed_subagent_identifiers()
+            .into_iter()
+            .map(|identifier| (session_id.to_string(), identifier))
+            .collect();
+        let (outcome, error) = match result {
             Ok(subscriber_delivery) => {
                 if is_completion && let Some(key) = completion_key {
                     self.completions.lock().await.record(key);
                 }
                 let session = in_flight.session_mut();
-                let closed_subagents = active_subagents
-                    .into_iter()
-                    .filter(|id| !session.subagents.contains_key(id))
-                    .map(|id| (session_id.to_string(), id))
-                    .collect();
-                let is_empty = session.is_empty();
-                let tool_argument_transform = session.take_tool_argument_transform();
-                let (session_gate, activity) = if is_empty {
-                    in_flight.discard()
-                } else {
-                    in_flight.restore().await
-                };
-                Ok(AppliedSessionEvent {
-                    outcome: Some((is_empty, subscriber_delivery, tool_argument_transform)),
-                    closed_subagents,
-                    session_gate,
-                    activity,
-                })
+                (
+                    Some((
+                        session.is_empty(),
+                        subscriber_delivery,
+                        session.take_tool_argument_transform(),
+                    )),
+                    None,
+                )
             }
-            Err(error) => {
-                drop(in_flight.restore().await);
-                Err(error)
-            }
-        }
+            Err(error) => (None, Some(error)),
+        };
+        let (session_gate, activity) = if outcome.as_ref().is_some_and(|(empty, _, _)| *empty) {
+            in_flight.discard()
+        } else {
+            in_flight.restore().await
+        };
+        Ok(AppliedSessionEvent {
+            outcome,
+            error,
+            closed_subagents,
+            session_gate,
+            activity,
+        })
     }
 }
 
