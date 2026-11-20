@@ -61,7 +61,7 @@ Tool payloads retain their original representation. Snapshots are independent
 and read-only, and returned Python payload values are independent copies.
 Existing dictionary callbacks and codec decode/encode operations are unchanged.
 Older hosts report unsupported inspection explicitly; no Python policy fallback
-is used. See the [Python worker content guide](https://docs.nvidia.com/nemo/relay/build-plugins/workers/python#inspect-normalized-llm-content)
+is used. Refer to the [Python worker content guide](https://docs.nvidia.com/nemo/relay/build-plugins/workers/python#inspect-normalized-llm-content)
 for async selectors, ownership, limits, and compatibility.
 
 ## Propagating Continuation Errors
