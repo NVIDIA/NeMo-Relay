@@ -1,5 +1,5 @@
 ---
-title: "Google ADK Quick Start"
+title: "Google ADK Quickstart for NeMo Relay"
 sidebar-title: "Google ADK"
 slug: getting-started/quick-start/google-adk
 description: "Record one Google ADK agent run with NeMo Relay."
@@ -56,9 +56,9 @@ SPDX-License-Identifier: Apache-2.0 */}
 }
 */}
 
-## Goal
-
-Run a Google ADK agent and save its activity to a local file. NeMo Relay
+This Quickstart Guide walks you through the process for running a Google ADK
+agent and saving its activity to a local file. For detailed setup, refer to the
+[Installation Guide](/getting-started/installation). NeMo Relay
 records the agent run, model calls, and tool calls. This example checks that
 the agent calls a tool and that Relay saves the events.
 
@@ -72,9 +72,13 @@ You need:
 - `uv`
 - A [Gemini API key](https://aistudio.google.com/apikey)
 
+## Quickstart Steps
+
+To quickly get started with NeMo Relay, complete the following steps:
+
 <Steps toc={true}>
 
-## Install
+### Install NeMo Relay
 
 Create a project. Install NeMo Relay with its Google ADK extra.
 If you already have a `uv` project, run only the `uv add` command in that directory.
@@ -86,6 +90,8 @@ cd relay-google-adk-quickstart
 uv init
 uv add "nemo-relay[google-adk]==1.0.0"
 ```
+
+### Set up your API key
 
 Set your Gemini API key in the current shell.
 
@@ -112,7 +118,7 @@ argument and set that provider's credentials. For provider setup, refer to the
 [Google ADK Integration Guide](/supported-integrations/google-adk#setup).
 </Note>
 
-## Configure
+### Configure the plugin
 
 Create a file named `plugins.toml` in your project directory. This configuration
 saves Relay events to `logs/events.jsonl`.
@@ -125,7 +131,7 @@ ATOF output can contain sensitive prompts, responses, tool arguments, and tool
 results. Protect `logs/events.jsonl`, even with `enable_full_payloads = false`.
 </Warning>
 
-## Run
+### Run the agent
 
 The example gives an agent one tool, `emit_marker`. The tool returns a fixed
 message so you can check that it ran. The agent then returns a final answer.
@@ -147,7 +153,7 @@ Run the example from your project directory.
 uv run python quickstart.py
 ```
 
-## Verify
+### Verify the output
 
 The program checks the tool result, the final answer, and the saved events.
 It also checks that the request, tool call, and model call have matching start
@@ -165,7 +171,7 @@ The model can use different words around `RELAY_QUICKSTART_RESPONSE_OK`.
 The check only requires that message to appear in the final answer.
 </Note>
 
-### Inspect the Recorded Activity
+#### Inspect the Recorded Activity
 
 Print the details of one completed model call from the event file.
 
@@ -196,9 +202,9 @@ For example, a model call's `parent_uuid` links it to the agent that made the ca
 
 </Steps>
 
-## For More Details
+## Next Steps
 
-Refer to:
+Now that you have a working setup, you should explore the following resources in greater detail:
 
 - [Google ADK Integration Guide](/supported-integrations/google-adk)
 - [ATOF exporter](/configure-plugins/observability/atof)

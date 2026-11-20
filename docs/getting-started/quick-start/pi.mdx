@@ -1,5 +1,5 @@
 ---
-title: "pi Quick Start (PoC)"
+title: "pi Quickstart for NeMo Relay (PoC)"
 sidebar-title: "pi (PoC)"
 slug: getting-started/quick-start/pi
 description: "Run one local pi task through NeMo Relay and write ATOF events."
@@ -64,10 +64,10 @@ SPDX-License-Identifier: Apache-2.0 */}
 }
 */}
 
-## Goal
-
-Run one local pi task through NeMo Relay and write its agent, model, and tool
-lifecycle to a local Agent Trajectory Observability Format (ATOF) file.
+This Quickstart Guide walks you through the process for running one local pi task
+through NeMo Relay and writing its agent, model, and tool lifecycle to a local
+Agent Trajectory Observability Format (ATOF) file. For detailed setup, refer to
+the [Installation Guide](/getting-started/installation).
 
 <Warning>
 The pi integration is a proof of concept. This guide pins pi 0.84.0. pi can
@@ -100,23 +100,24 @@ Before you start, make sure you have:
 - A [supported NeMo Relay CLI platform](/nemo-relay-cli/install-details#supported-platforms)
 
 <Note icon="circle-info">
-On Unix, the verification step also uses `jq` 1.6 or newer; check your version
-with `jq --version`. PowerShell uses its built-in JSON parser.
-pi itself supports Node.js 22.19 or newer; this guide uses Node.js 24.
+- On Unix, the verification step also uses `jq` 1.6 or newer; check your version
+  with `jq --version`. PowerShell uses its built-in JSON parser.
+  pi itself supports Node.js 22.19 or newer; this guide uses Node.js 24.
+- Relay does not require a particular model or an OpenAI account. The pinned pi
+  release supports NVIDIA NIM through `NVIDIA_API_KEY`, as well as other providers.
+  For an NVIDIA example, choose an available model from
+  [build.nvidia.com](https://build.nvidia.com/explore/discover) in pi's model selector.
+  Use a provider speaking OpenAI Chat Completions, OpenAI Responses, or Anthropic
+  Messages; Gemini and Vertex APIs are not supported by this Relay gateway.
 </Note>
 
-<Note icon="circle-info">
-Relay does not require a particular model or an OpenAI account. The pinned pi
-release supports NVIDIA NIM through `NVIDIA_API_KEY`, as well as other providers.
-For an NVIDIA example, choose an available model from
-[build.nvidia.com](https://build.nvidia.com/explore/discover) in pi's model selector.
-Use a provider speaking OpenAI Chat Completions, OpenAI Responses, or Anthropic
-Messages; Gemini and Vertex APIs are not supported by this Relay gateway.
-</Note>
+## Quickstart Steps
+
+To quickly get started with NeMo Relay, complete the following steps:
 
 <Steps toc={true}>
 
-## Install
+### Install pi and NeMo Relay
 
 Install the pinned pi release and the NeMo Relay version for these docs:
 
@@ -156,7 +157,7 @@ A local gateway reachability warning can occur before step 3 starts the temporar
 gateway. Resolve any other installation or extension-loading problems before continuing.
 </Note>
 
-## Configure
+### Set up a working directory
 
 Create a disposable working directory and make sure the agent can write files there:
 
@@ -193,24 +194,30 @@ provider, use its own credential rather than `NVIDIA_API_KEY`. Use the key issue
 for your endpoint; keys are not interchangeable between inference services.
 </Note>
 
+<ol type="a">
+<li>
 Save this file as `config.toml` in the directory where you will run the agent:
 
 {/* quickstart-block {"id":"config","role":"file","cwd":"relay-pi-quickstart","path":"config.toml"} */}
 <Code src="_code/pi/config.toml" language="toml" title="config.toml" />
 
 The agent entry in `config.toml` tells Relay which executable to launch.
+</li>
+<li>
 Save this sibling file as `plugins.toml` to enable ATOF export to
 `logs/events.jsonl`:
 
 {/* quickstart-block {"id":"plugins","role":"file","cwd":"relay-pi-quickstart","path":"plugins.toml"} */}
 <Code src="_code/plugins.toml" language="toml" title="plugins.toml" />
+</li>
+</ol>
 
 <Warning>
 ATOF output can contain sensitive prompts, responses, tool arguments, and tool
 results. Protect `logs/events.jsonl` even when full payload export is disabled.
 </Warning>
 
-## Run
+### Run a pi task
 
 From the directory containing both files, run the common validation prompt:
 
@@ -250,7 +257,7 @@ name. A 403 can indicate that the selected model is not allowed by your key;
 confirm the endpoint and exact model ID before changing credentials.
 </Note>
 
-## Verify
+### Verify the output
 
 The tool marker proves that the agent created the requested file. The event
 marker proves that Relay recorded matching start/end records for the required
@@ -332,7 +339,7 @@ The verification markers confirm the tool-created file and matching start/end
 records for agent, tool, and LLM work.
 </Note>
 
-### Inspect the Recorded Activity
+#### Inspect the Recorded Activity
 
 Read the completed model calls from the same event file:
 
@@ -363,15 +370,15 @@ and `metadata` can include the model identity and completion status, depending
 on the integration. These fields let you follow a call through the run without
 requiring full prompt or response capture.
 
-</Steps>
-
 This run captured pi's agent, model, and tool activity in `logs/events.jsonl`.
 The temporary gateway ends with this invocation; repeat the wrapped command
 when you want to observe another run.
 
-## For More Details
+</Steps>
 
-For more details, refer to:
+## Next Steps
+
+Now that you have a working setup, you should explore the following resources in greater detail:
 
 - [NeMo Relay pi guide](/nemo-relay-cli/pi)
 - [pi documentation and source](https://github.com/earendil-works/pi)

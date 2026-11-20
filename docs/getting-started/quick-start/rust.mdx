@@ -1,5 +1,5 @@
 ---
-title: "Rust Quick Start"
+title: "Rust Quickstart for NeMo Relay"
 sidebar-title: "Rust"
 slug: getting-started/quick-start/rust
 description: "Instrument one Rust workflow and write its Relay events to a local ATOF file."
@@ -52,10 +52,10 @@ SPDX-License-Identifier: Apache-2.0 */}
 }
 */}
 
-## Goal
-
-Instrument one scope, tool call, and large language model (LLM) call with NeMo Relay, then verify the
-result in a local Agent Trajectory Observability Format (ATOF) file.
+This Quickstart Guide walks you through the process for instrumenting one scope,
+tool call, and large language model (LLM) call with NeMo Relay, then verifying
+the result in a local Agent Trajectory Observability Format (ATOF) file. For
+detailed setup, refer to the [Installation Guide](/getting-started/installation).
 
 <Note icon="circle-info">
 This example uses local tool and model callbacks. It does not require an
@@ -80,9 +80,13 @@ not been released, its pinned packages and downloads are not available yet.
 Select a released documentation version to try Relay now.
 </Note>
 
+## Quickstart Steps
+
+To quickly get started with NeMo Relay, complete the following steps:
+
 <Steps toc={true}>
 
-## Install
+### Install NeMo Relay
 
 Create a project and add the NeMo Relay crate version for these docs:
 
@@ -95,7 +99,7 @@ cargo add serde_json
 cargo add tokio --features macros,rt-multi-thread
 ```
 
-## Configure
+### Configure the plugin
 
 Save the following configuration as `plugins.toml` in your project directory:
 
@@ -107,7 +111,7 @@ ATOF output can contain sensitive prompts, responses, tool arguments, and tool
 results. Protect `logs/events.jsonl` even when full payload export is disabled.
 </Warning>
 
-## Run
+### Run the program
 
 Replace the generated `src/main.rs` in `relay-rust-quickstart` with this code:
 
@@ -123,7 +127,7 @@ Run it from `relay-rust-quickstart`, the directory containing `Cargo.toml` and
 cargo run
 ```
 
-## Verify
+### Verify the output
 
 The program checks the event file for paired agent, tool, and LLM lifecycle
 records. A successful run prints these markers in order:
@@ -141,9 +145,9 @@ The file stores ATOF events as newline-delimited JSON (JSONL).
 
 </Steps>
 
-## For More Details
+## Next Steps
 
-For more details, refer to:
+Now that you have a working setup, you should explore the following resources in greater detail:
 
 - [API Installation](/getting-started/installation/apis#rust)
 - [Instrument Application Code](/instrument-applications/about)

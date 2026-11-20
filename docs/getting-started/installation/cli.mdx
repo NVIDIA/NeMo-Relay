@@ -9,6 +9,9 @@ SPDX-License-Identifier: Apache-2.0 */}
 Install the latest stable Relay CLI for Claude Code or Codex. The prebuilt
 installers do not require a Rust compiler or Python environment.
 
+Requires a [supported platform](/nemo-relay-cli/install-details#supported-platforms)
+and either `curl` with a Unix shell or Windows PowerShell to run the installer.
+
 <Tabs>
 <Tab title="Linux / macOS">
 ```bash
@@ -45,11 +48,17 @@ session ends.
 
 ### Claude Code
 
+Requires Claude Code 2.1.121 or newer and the Relay CLI on `PATH`;
+configure your agent's model provider and authentication before running a session.
+
 ```bash
 nemo-relay claude
 ```
 
 ### Codex
+
+Requires Codex CLI 0.150.0 or newer and the Relay CLI on `PATH`;
+configure your agent's model provider and authentication before running a session.
 
 ```bash
 nemo-relay codex
@@ -73,11 +82,17 @@ agent normally and Relay loads automatically.
 
 ### Claude Code
 
+Requires Claude Code 2.1.121 or newer and the Relay CLI on `PATH`;
+configure your agent's model provider and authentication before running a session.
+
 ```bash
 nemo-relay install claude-code
 ```
 
 ### Codex
+
+Requires Codex CLI 0.150.0 or newer and the Relay CLI on `PATH`;
+configure your agent's model provider and authentication before running a session.
 
 ```bash
 nemo-relay install codex
