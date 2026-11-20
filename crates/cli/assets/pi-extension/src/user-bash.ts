@@ -34,19 +34,9 @@
  * closed. Every path here returns an explicit decision.
  */
 
-/**
- * pi's `BashResult`, narrowed to the fields a synthetic refusal sets.
- *
- * Mirrored from pi `v0.84.0`, `core/bash-executor.ts`. `fullOutputPath` is
- * deliberately absent: it points at a temp file holding output too large to
- * inline, and a refusal has no output beyond its reason.
- */
-export type BashResult = {
-  output: string;
-  exitCode: number | undefined;
-  cancelled: boolean;
-  truncated: boolean;
-};
+import type { UserBashEventResult } from '@earendil-works/pi-coding-agent';
+
+export type BashResult = Extract<UserBashEventResult, { result: object }>['result'];
 
 /**
  * Exit code reported for a command the gateway refused.

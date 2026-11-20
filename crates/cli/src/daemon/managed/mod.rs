@@ -22,6 +22,7 @@ use uuid::Uuid;
 
 use super::common::client_token::{CredentialSource, client_token_path, resolve_route_credential};
 use super::common::state::ROUTE_TOKEN_ENV;
+use crate::agents::pi::assets::ExtensionFile;
 use crate::error::CliError;
 
 pub(crate) const BUNDLE_FAMILY: &str = "nemo-relay-managed-v1";
@@ -45,12 +46,32 @@ const CLAUDE_ARTIFACT_PATHS: &[&str] = &[
     "claude-code/plugin-v1/hooks/hooks.json",
     "claude-code/settings-v1/managed-settings.json",
 ];
-const PI_ARTIFACT_PATHS: &[&str] = &[
-    "pi/extension-v1/README.md",
-    "pi/extension-v1/index.ts",
-    "pi/extension-v1/managed-config.json",
-    "pi/extension-v1/package.json",
-    "pi/extension-v1/tsconfig.json",
+const PI_CONFIG_PATH: &str = "pi/extension-v1/managed-config.json";
+const PI_CONFIG_TEMPLATE: &str =
+    include_str!("../../../assets/pi-extension/managed/managed-config.json");
+
+macro_rules! pi_artifact {
+    ($path:literal, $source:literal) => {
+        ExtensionFile {
+            path: concat!("pi/extension-v1/", $path),
+            contents: include_str!(concat!("../../../assets/pi-extension/", $source)),
+        }
+    };
+}
+
+const PI_ARTIFACTS: &[ExtensionFile] = &[
+    pi_artifact!("README.md", "managed/README.md"),
+    pi_artifact!("index.ts", "managed.ts"),
+    pi_artifact!("package.json", "managed/package.json"),
+    pi_artifact!("src/argument-transform.ts", "src/argument-transform.ts"),
+    pi_artifact!("src/extension.ts", "src/extension.ts"),
+    pi_artifact!("src/gateway.ts", "src/gateway.ts"),
+    pi_artifact!("src/provider-redirect.ts", "src/provider-redirect.ts"),
+    pi_artifact!("src/tool-result.ts", "src/tool-result.ts"),
+    pi_artifact!("src/user-bash.ts", "src/user-bash.ts"),
+    pi_artifact!("src/managed/deployment.ts", "src/managed/deployment.ts"),
+    pi_artifact!("src/managed/mcp-lease.ts", "src/managed/mcp-lease.ts"),
+    pi_artifact!("src/managed/transport.ts", "src/managed/transport.ts"),
 ];
 
 // Part of the v1 artifact family. The 0.11 Claude StopFailure and the Codex SessionEnd and
@@ -561,36 +582,23 @@ fn render_claude(spec: &ManagedBundleSpec) -> Result<Vec<RenderedArtifact>, CliE
 }
 
 fn render_pi(spec: &ManagedBundleSpec) -> Result<Vec<RenderedArtifact>, CliError> {
-    let config = render_pi_config(spec)?;
-    Ok(vec![
-        artifact(
-            ManagedAgent::Pi,
-            PI_ARTIFACT_PATHS[0],
-            canonical_embedded_text(include_str!("pi_extension/README.md")).into_bytes(),
-        ),
-        artifact(
-            ManagedAgent::Pi,
-            PI_ARTIFACT_PATHS[1],
-            canonical_embedded_text(include_str!("pi_extension/index.ts")).into_bytes(),
-        ),
-        artifact(ManagedAgent::Pi, PI_ARTIFACT_PATHS[2], config),
-        artifact(
-            ManagedAgent::Pi,
-            PI_ARTIFACT_PATHS[3],
-            canonical_embedded_text(include_str!("pi_extension/package.json")).into_bytes(),
-        ),
-        artifact(
-            ManagedAgent::Pi,
-            PI_ARTIFACT_PATHS[4],
-            canonical_embedded_text(include_str!("pi_extension/tsconfig.json")).into_bytes(),
-        ),
-    ])
+    let config = artifact(ManagedAgent::Pi, PI_CONFIG_PATH, render_pi_config(spec)?);
+    Ok(PI_ARTIFACTS
+        .iter()
+        .map(|file| {
+            artifact(
+                ManagedAgent::Pi,
+                file.path,
+                file.contents.as_bytes().to_vec(),
+            )
+        })
+        .chain(std::iter::once(config))
+        .collect())
 }
 
 fn render_pi_config(spec: &ManagedBundleSpec) -> Result<Vec<u8>, CliError> {
-    let template = canonical_embedded_text(include_str!("pi_extension/managed-config.json"));
     let rendered = replace_json_string_value(
-        &template,
+        PI_CONFIG_TEMPLATE,
         PI_DAEMON_ADDRESS_PLACEHOLDER,
         &spec.daemon_address,
     )?;
@@ -610,10 +618,6 @@ fn render_pi_config(spec: &ManagedBundleSpec) -> Result<Vec<u8>, CliError> {
         ))
     })?;
     Ok(rendered.into_bytes())
-}
-
-fn canonical_embedded_text(template: &str) -> String {
-    template.replace("\r\n", "\n")
 }
 
 fn replace_json_string_value(
@@ -980,24 +984,11 @@ fn bundle_files(root: &Path) -> Result<BTreeSet<&'static str>, CliError> {
 
 fn all_artifact_paths() -> BTreeSet<&'static str> {
     std::iter::once(MANIFEST_FILE)
-        .chain(
-            [
-                ManagedAgent::Codex,
-                ManagedAgent::ClaudeCode,
-                ManagedAgent::Pi,
-            ]
-            .into_iter()
-            .flat_map(|agent| artifact_paths_for(agent).iter().copied()),
-        )
+        .chain(CODEX_ARTIFACT_PATHS.iter().copied())
+        .chain(CLAUDE_ARTIFACT_PATHS.iter().copied())
+        .chain(PI_ARTIFACTS.iter().map(|file| file.path))
+        .chain(std::iter::once(PI_CONFIG_PATH))
         .collect()
-}
-
-fn artifact_paths_for(agent: ManagedAgent) -> &'static [&'static str] {
-    match agent {
-        ManagedAgent::Codex => CODEX_ARTIFACT_PATHS,
-        ManagedAgent::ClaudeCode => CLAUDE_ARTIFACT_PATHS,
-        ManagedAgent::Pi => PI_ARTIFACT_PATHS,
-    }
 }
 
 fn display_paths(paths: &[&str]) -> String {

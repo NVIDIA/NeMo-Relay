@@ -44,7 +44,7 @@ fn centralized_minimum_versions_accept_stable_boundaries() {
         (CodingAgent::Codex, "codex-cli 0.150.0"),
         // pi prints the bare version and nothing else, so there is no product token to match --
         // an accept path neither of the others exercises.
-        (CodingAgent::Pi, "0.84.0"),
+        (CodingAgent::Pi, "1.5.0"),
     ];
 
     for (agent, output) in cases {
@@ -57,25 +57,25 @@ fn centralized_minimum_versions_accept_stable_boundaries() {
 
 // The floor alone said "supported" for any stable version above it, which is right for a host
 // whose minors are additive and wrong for one that can move a hook shape in a minor. pi is the
-// second kind: above 0.84.x it is untested, and the symptom of a broken hook shape is missing
+// second kind: above 1.5.x it is untested, and the symptom of a broken hook shape is missing
 // spans rather than an error, so silence is the worst possible report.
 #[test]
 fn a_minor_above_the_verified_band_is_reported_as_unverified_without_being_rejected() {
-    let newer = CodingAgent::Pi.validate_version_output("0.85.0").unwrap();
+    let newer = CodingAgent::Pi.validate_version_output("1.6.0").unwrap();
     let note = CodingAgent::Pi
         .unverified_version(&newer)
         .expect("a newer pi minor must be reported");
     assert!(
-        note.contains("0.84"),
+        note.contains("1.5"),
         "the note should name the verified band: {note}"
     );
 
     // Still accepted: refusing would make a user downgrade pi to use Relay at all.
-    assert!(CodingAgent::Pi.validate_version_output("0.85.0").is_ok());
-    assert!(CodingAgent::Pi.validate_version_output("1.0.0").is_ok());
+    assert!(CodingAgent::Pi.validate_version_output("1.6.0").is_ok());
+    assert!(CodingAgent::Pi.validate_version_output("2.0.0").is_ok());
 
     // Inside the band, nothing to say -- including a patch above the floor.
-    for inside in ["0.84.0", "0.84.7"] {
+    for inside in ["1.5.0", "1.5.7"] {
         let version = CodingAgent::Pi.validate_version_output(inside).unwrap();
         assert_eq!(
             CodingAgent::Pi.unverified_version(&version),
@@ -103,11 +103,11 @@ fn centralized_minimum_versions_reject_old_prerelease_and_malformed_output() {
         (CodingAgent::ClaudeCode, "2.1.121 (Other Agent)"),
         (CodingAgent::Codex, "codex-cli 0.149.1"),
         (CodingAgent::Codex, "codex-cli 0.150.0-alpha.1"),
-        (CodingAgent::Pi, "0.83.9"),
-        (CodingAgent::Pi, "0.84.0-alpha.1"),
+        (CodingAgent::Pi, "1.4.9"),
+        (CodingAgent::Pi, "1.5.0-alpha.1"),
         // A prefixed line is not something pi emits, so it is a parse failure rather than an
         // old-version rejection.
-        (CodingAgent::Pi, "pi 0.84.0"),
+        (CodingAgent::Pi, "pi 1.5.0"),
     ];
 
     for (agent, output) in cases {

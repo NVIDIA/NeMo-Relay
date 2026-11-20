@@ -11,7 +11,7 @@
  * a local HTTP server that reproduces the exact shapes those tests assert, so
  * the two halves are checked against the same contract from both sides.
  *
- * Run: node --test integrations/pi/test/*.test.mjs
+ * Run: npm test --workspace=nemo-relay-pi
  */
 import './harness.mjs';
 import assert from 'node:assert/strict';
@@ -20,7 +20,9 @@ import { after, before, describe, it, mock } from 'node:test';
 import childProcess from 'node:child_process';
 import { syncBuiltinESMExports } from 'node:module';
 
-const { postHook, resolveFault, configFromEnv } = await import('../src/gateway-client.ts');
+const { clientId, postHook } = await import('../src/standalone/transport.ts');
+const { resolveFault } = await import('../src/gateway.ts');
+const { faultPolicyFromEnv, gatewayConfigFromEnv } = await import('../src/standalone/config.ts');
 
 /** Start a server that replies with `handler(requestBody)`. */
 function serve(handler) {
@@ -53,23 +55,25 @@ async function listen(server) {
 }
 
 const baseConfig = (url, overrides = {}) => ({
+  ...gatewayConfigFromEnv(),
   url,
   timeoutMs: 2000,
-  onFault: 'open',
-  sessionId: 'test-session',
   ...overrides,
 });
 
-describe('gateway client wire contract', () => {
+describe('hook forward wire contract', () => {
   it('classifies oversized stdout and stderr as response faults', async () => {
     for (const stream of ['stdout', 'stderr']) {
       const config = baseConfig('http://127.0.0.1:4040');
-      const outcome = await postHook(config, { hook_event_name: 'fixture_output_overflow', stream });
+      const outcome = await postHook(config, {
+        hook_event_name: 'fixture_output_overflow',
+        stream,
+      });
       assert.equal(outcome.kind, 'fault');
       assert.equal(outcome.origin, 'response', stream);
       assert.equal(outcome.detail, 'hook forward output exceeded the output limit');
-      assert.equal(resolveFault(config, outcome, 'read').kind, 'allow');
-      const blocked = resolveFault({ ...config, onFault: 'closed' }, outcome, 'read');
+      assert.equal(resolveFault('open', outcome, 'read').kind, 'allow');
+      const blocked = resolveFault('closed', outcome, 'read');
       assert.equal(blocked.kind, 'block');
       assert.match(blocked.reason, /gateway answered/);
     }
@@ -89,7 +93,8 @@ describe('gateway client wire contract', () => {
     syncBuiltinESMExports();
     try {
       const outcome = await postHook(baseConfig('http://127.0.0.1:4040'), {
-        hook_event_name: 'fixture_output_overflow', stream: 'stdout',
+        hook_event_name: 'fixture_output_overflow',
+        stream: 'stdout',
       });
       assert.equal(outcome.kind, 'fault');
       assert.equal(outcome.origin, 'response');
@@ -101,12 +106,14 @@ describe('gateway client wire contract', () => {
   });
 
   it('reports a missing Relay executable through the existing fault policy', async () => {
-    const config = baseConfig('http://127.0.0.1:4040', { relayCommand: 'missing-nemo-relay-executable-for-test' });
+    const config = baseConfig('http://127.0.0.1:4040', {
+      relayCommand: 'missing-nemo-relay-executable-for-test',
+    });
     const outcome = await postHook(config, { hook_event_name: 'tool_call' });
     assert.equal(outcome.kind, 'fault');
     assert.equal(outcome.origin, 'transport');
-    assert.equal(resolveFault(config, outcome, 'read').kind, 'allow');
-    assert.equal(resolveFault({ ...config, onFault: 'closed' }, outcome, 'read').kind, 'block');
+    assert.equal(resolveFault('open', outcome, 'read').kind, 'allow');
+    assert.equal(resolveFault('closed', outcome, 'read').kind, 'block');
   });
 
   let ctx;
@@ -194,7 +201,7 @@ describe('gateway client wire contract', () => {
     assert.equal(outcome.origin, 'response');
   });
 
-  it('times out rather than hanging pi\'s critical path', async () => {
+  it("times out rather than hanging pi's critical path", async () => {
     const outcome = await postHook(baseConfig(url, { timeoutMs: 50 }), {
       hook_event_name: 'slow',
     });
@@ -221,27 +228,60 @@ describe('gateway client wire contract', () => {
     assert.equal(outcome.origin, 'transport');
   });
 
-  it('forwards the session id in the payload', async () => {
-    await postHook(baseConfig(url, { sessionId: 'sess-42' }), { hook_event_name: 'session_start' });
+  it('posts to the pi hook route', async () => {
+    await postHook(baseConfig(url), { hook_event_name: 'session_start', session_id: 'sess-42' });
     const last = ctx.received.at(-1);
     assert.equal(last.url, '/hooks/pi');
     assert.equal(last.body.session_id, 'sess-42');
+  });
+
+  it('passes --transparent-run to the forwarder only when the launcher set a proxy credential', async () => {
+    const seen = [];
+    const previousExecFile = childProcess.execFile;
+    const decorated = mock.method(childProcess, 'execFile', (command, args, options, callback) => {
+      seen.push(args);
+      return previousExecFile(command, args, options, callback);
+    });
+    syncBuiltinESMExports();
+    try {
+      delete process.env.NEMO_RELAY_PROXY_CREDENTIAL;
+      await postHook(baseConfig(url), { hook_event_name: 'tool_call' });
+      process.env.NEMO_RELAY_PROXY_CREDENTIAL = 'nrp_testtoken';
+      await postHook(baseConfig(url), { hook_event_name: 'tool_call' });
+    } finally {
+      decorated.mock.restore();
+      syncBuiltinESMExports();
+      delete process.env.NEMO_RELAY_PROXY_CREDENTIAL;
+    }
+    assert.equal(seen.length, 2);
+    assert.equal(seen[0].includes('--transparent-run'), false);
+    assert.equal(seen[1].includes('--transparent-run'), true);
+  });
+
+  it('reports a payload that cannot be serialized as a fault instead of throwing', async () => {
+    const outcome = await postHook(baseConfig(url), {
+      hook_event_name: 'tool_call',
+      input: {
+        toJSON() {
+          throw null;
+        },
+      },
+    });
+    assert.equal(outcome.kind, 'fault');
+    assert.equal(outcome.origin, 'handler');
+    assert.match(outcome.detail, /JSON-safe/);
   });
 });
 
 describe('failure policy', () => {
   it('fails open by default so a dead sidecar does not brick the agent', () => {
-    const outcome = resolveFault(
-      { url: '', timeoutMs: 1, onFault: 'open', sessionId: 's' },
-      { kind: 'fault', origin: 'transport', detail: 'connection refused' },
-      'read',
-    );
-    assert.deepEqual(outcome, { kind: 'allow' });
+    const outcome = resolveFault('open', { kind: 'fault', origin: 'transport', detail: 'connection refused' }, 'read');
+    assert.deepEqual(outcome, { kind: 'allow', body: {} });
   });
 
   it('fails closed on request, and says the block is infrastructure not policy', () => {
     const outcome = resolveFault(
-      { url: '', timeoutMs: 1, onFault: 'closed', sessionId: 's' },
+      'closed',
       { kind: 'fault', origin: 'transport', detail: 'connection refused' },
       'read',
     );
@@ -256,7 +296,7 @@ describe('failure policy', () => {
   // the failure that actually happened.
   it('says the gateway answered when it answered, rather than that it was unreachable', () => {
     const outcome = resolveFault(
-      { url: '', timeoutMs: 1, onFault: 'closed', sessionId: 's' },
+      'closed',
       { kind: 'fault', origin: 'response', detail: 'gateway returned HTTP 413' },
       'write',
     );
@@ -268,20 +308,18 @@ describe('failure policy', () => {
     assert.match(outcome.reason, /HTTP 413/);
   });
 
-  // A timeout is not an unreachable gateway, and a handler failure is not a transport
-  // result. All four block identically; the sentence is the only thing telling the reader
-  // which of four places to look.
+  // A timeout is not an unreachable gateway, and unreadable configuration is not a
+  // transport result. All four block identically; the sentence is the only thing telling
+  // the reader which of four places to look.
   it('gives each fault origin its own opening', () => {
-    const config = { url: '', timeoutMs: 1, onFault: 'closed', sessionId: 's' };
-    const opening = (origin) =>
-      resolveFault(config, { kind: 'fault', origin, detail: 'd' }, 'read').reason;
+    const opening = (origin) => resolveFault('closed', { kind: 'fault', origin, detail: 'd' }, 'read').reason;
 
     assert.match(opening('transport'), /could not be reached/);
     assert.match(opening('timeout'), /did not answer in time/);
     assert.match(opening('response'), /without a usable decision/);
-    assert.match(opening('handler'), /gate failed before it could authorize/);
+    assert.match(opening('configuration'), /could not load its configuration/);
 
-    const openings = ['transport', 'timeout', 'response', 'handler'].map(opening);
+    const openings = ['transport', 'timeout', 'response', 'configuration'].map(opening);
     assert.equal(new Set(openings).size, 4, 'each origin must read differently');
     for (const reason of openings) {
       assert.match(reason, /infrastructure fault, not a judgment/);
@@ -289,11 +327,10 @@ describe('failure policy', () => {
   });
 });
 
-describe('configFromEnv', () => {
+describe('configuration from the environment', () => {
   it('preserves the authenticated owner when pi reloads its extension modules', async () => {
-    const before = configFromEnv('continuing-session');
-    const reloaded = await import('../src/gateway-client.ts?reload-owner-test');
-    assert.equal(reloaded.configFromEnv('continuing-session').clientId, before.clientId);
+    const reloaded = await import('../src/standalone/transport.ts?reload-owner-test');
+    assert.equal(reloaded.clientId, clientId);
   });
 
   const saved = { ...process.env };
@@ -305,22 +342,22 @@ describe('configFromEnv', () => {
     delete process.env.NEMO_RELAY_PI_GATEWAY_URL;
     delete process.env.NEMO_RELAY_PI_TIMEOUT_MS;
     delete process.env.NEMO_RELAY_PI_FAIL;
-    const config = configFromEnv('s1');
+    const config = gatewayConfigFromEnv();
     assert.equal(config.url, 'http://127.0.0.1:4040');
     assert.equal(config.timeoutMs, 5000);
-    assert.equal(config.onFault, 'open');
+    assert.equal(faultPolicyFromEnv(), 'open');
   });
 
   it('strips a trailing slash so the path join cannot double up', () => {
     process.env.NEMO_RELAY_PI_GATEWAY_URL = 'http://127.0.0.1:9999/';
-    assert.equal(configFromEnv('s1').url, 'http://127.0.0.1:9999');
+    assert.equal(gatewayConfigFromEnv().url, 'http://127.0.0.1:9999');
   });
 
-  it('ignores a non-numeric or non-positive timeout', () => {
-    process.env.NEMO_RELAY_PI_TIMEOUT_MS = 'soon';
-    assert.equal(configFromEnv('s1').timeoutMs, 5000);
-    process.env.NEMO_RELAY_PI_TIMEOUT_MS = '0';
-    assert.equal(configFromEnv('s1').timeoutMs, 5000);
+  it('ignores a non-numeric, non-positive, or fractional timeout', () => {
+    for (const raw of ['soon', '0', '-1', '5000.5']) {
+      process.env.NEMO_RELAY_PI_TIMEOUT_MS = raw;
+      assert.equal(gatewayConfigFromEnv().timeoutMs, 5000, raw);
+    }
   });
 
   // Node holds a timer delay in a 32-bit int, so an unclamped value above 2^31-1 wraps to
@@ -329,15 +366,15 @@ describe('configFromEnv', () => {
   // to honor has to behave like "effectively never", not like "instantly".
   it('clamps a timeout too large for a timer instead of letting it wrap to ~1ms', () => {
     process.env.NEMO_RELAY_PI_TIMEOUT_MS = String(2 ** 31);
-    assert.equal(configFromEnv('s1').timeoutMs, 2_147_483_647);
+    assert.equal(gatewayConfigFromEnv().timeoutMs, 2_147_483_647);
     process.env.NEMO_RELAY_PI_TIMEOUT_MS = String(Number.MAX_SAFE_INTEGER);
-    assert.equal(configFromEnv('s1').timeoutMs, 2_147_483_647);
+    assert.equal(gatewayConfigFromEnv().timeoutMs, 2_147_483_647);
   });
 
   it('opts into fail-closed only on the exact value', () => {
     process.env.NEMO_RELAY_PI_FAIL = 'closed';
-    assert.equal(configFromEnv('s1').onFault, 'closed');
+    assert.equal(faultPolicyFromEnv(), 'closed');
     process.env.NEMO_RELAY_PI_FAIL = 'CLOSED';
-    assert.equal(configFromEnv('s1').onFault, 'open');
+    assert.equal(faultPolicyFromEnv(), 'open');
   });
 });

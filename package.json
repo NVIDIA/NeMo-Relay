@@ -9,7 +9,7 @@
     "crates/node",
     "examples/language-binding-plugin/node",
     "integrations/openclaw",
-    "integrations/pi"
+    "crates/cli/assets/pi-extension"
   ],
   "devDependencies": {
     "fern-api": "5.168.0",

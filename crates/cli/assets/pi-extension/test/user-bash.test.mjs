@@ -14,7 +14,7 @@
  * `pi_user_bash_is_not_gated_by_a_policy_that_names_the_bash_tool`
  * (`crates/cli/tests/coverage/shared/server_tests.rs`).
  *
- * Run: node --test integrations/pi/test/*.test.mjs
+ * Run: npm test --workspace=nemo-relay-pi
  */
 import assert from 'node:assert/strict';
 import { after, before, beforeEach, describe, it } from 'node:test';
@@ -121,7 +121,9 @@ describe('inline shell gate', () => {
     // rewrite cannot be honored.
     gateway.replyWith({
       status: 200,
-      payload: { tool_call: { tool_call_id: 'user-bash-0', input: { command: 'git status --short' } } },
+      payload: {
+        tool_call: { tool_call_id: 'user-bash-0', input: { command: 'git status --short' } },
+      },
     });
 
     const result = await fire('user_bash', {
@@ -133,6 +135,15 @@ describe('inline shell gate', () => {
     assert.ok(result?.result, 'a rewrite that cannot be applied must not fall through to an allow');
     assert.equal(result.result.exitCode, REFUSED_EXIT_CODE);
     assert.match(result.result.output, /no way to execute a rewritten inline shell command/);
+  });
+
+  it('refuses a malformed envelope instead of treating it as an allow', async () => {
+    const fire = load();
+    gateway.replyWith({ status: 200, payload: { tool_call: null } });
+    const result = await fire('user_bash', { command: 'git status', excludeFromContext: false, cwd: '/work' });
+    assert.ok(result?.result, 'a malformed decision must not fall through to an allow');
+    assert.equal(result.result.exitCode, REFUSED_EXIT_CODE);
+    assert.match(result.result.output, /envelope is null, not an object/);
   });
 
   it('fails open by default when the gateway cannot be reached', async () => {
@@ -258,6 +269,25 @@ describe('inline shell gate', () => {
     }
     process.env.NEMO_RELAY_PI_GATEWAY_URL = url;
     delete process.env.NEMO_RELAY_PI_TIMEOUT_MS;
+  });
+
+  it('resolves a failure inside the gate under the fault policy instead of escaping', async () => {
+    const ctx = {
+      sessionManager: {
+        getSessionId() {
+          throw new Error('session manager unavailable');
+        },
+      },
+    };
+    const command = { command: 'ls', excludeFromContext: false, cwd: '/work' };
+
+    assert.equal(await loadExtension(extension, { ctx })('user_bash', command), undefined);
+
+    process.env.NEMO_RELAY_PI_FAIL = 'closed';
+    const refused = await loadExtension(extension, { ctx })('user_bash', command);
+    assert.equal(refused.result.exitCode, REFUSED_EXIT_CODE);
+    assert.match(refused.result.output, /failed before asking the gateway/);
+    assert.match(refused.result.output, /session manager unavailable/);
   });
 });
 

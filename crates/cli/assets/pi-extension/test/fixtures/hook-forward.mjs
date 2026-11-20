@@ -17,8 +17,10 @@ if (payload.hook_event_name === 'fixture_output_overflow') {
   const gateway = args[args.indexOf('--gateway-url') + 1];
   try {
     const response = await fetch(`${gateway}/hooks/pi`, {
-      method: 'POST', redirect: 'error',
-      headers: { 'content-type': 'application/json' }, body: input,
+      method: 'POST',
+      redirect: 'error',
+      headers: { 'content-type': 'application/json' },
+      body: input,
     });
     console.log(JSON.stringify({ status: response.status, body: await response.text() }));
   } catch (error) {

@@ -42,11 +42,7 @@
  * gateway that answered with something unusable.
  */
 
-/** What the gateway sent back on an allowed `tool_call`. */
-export type TransformEnvelope = {
-  tool_call_id?: unknown;
-  input?: unknown;
-};
+import type { AllowBody } from './gateway.ts';
 
 export type TransformOutcome =
   | { kind: 'none' }
@@ -54,7 +50,7 @@ export type TransformOutcome =
   | { kind: 'refuse'; reason: string };
 
 /** JSON type name used for the type-preservation check. `null` is its own type. */
-function jsonType(value: unknown): string {
+export function jsonType(value: unknown): string {
   if (value === null) return 'null';
   if (Array.isArray(value)) return 'array';
   return typeof value;
@@ -86,9 +82,7 @@ function objectShapeViolation(current: unknown, next: unknown, path: string): st
   const removed = currentKeys.filter((key) => !nextKeys.includes(key));
   if (added.length > 0) return `${path} added ${added.join(', ')}`;
   if (removed.length > 0) return `${path} removed ${removed.join(', ')}`;
-  return firstViolation(currentKeys, (key) =>
-    shapeViolation(currentRecord[key], nextRecord[key], `${path}.${key}`),
-  );
+  return firstViolation(currentKeys, (key) => shapeViolation(currentRecord[key], nextRecord[key], `${path}.${key}`));
 }
 
 function arrayShapeViolation(current: unknown, next: unknown, path: string): string | null {
@@ -97,9 +91,7 @@ function arrayShapeViolation(current: unknown, next: unknown, path: string): str
   if (currentItems.length !== nextItems.length) {
     return `${path} changed length from ${currentItems.length} to ${nextItems.length}`;
   }
-  return firstViolation(currentItems, (item, index) =>
-    shapeViolation(item, nextItems[index], `${path}[${index}]`),
-  );
+  return firstViolation(currentItems, (item, index) => shapeViolation(item, nextItems[index], `${path}[${index}]`));
 }
 
 function firstViolation<T>(items: T[], check: (item: T, index: number) => string | null): string | null {
@@ -115,13 +107,13 @@ function firstViolation<T>(items: T[], check: (item: T, index: number) => string
  *
  * Pure, so the decision matrix is testable without pi or a gateway.
  */
-export function decideTransform(
-  body: { tool_call?: TransformEnvelope } | null,
-  toolCallId: string,
-  current: Record<string, unknown>,
-): TransformOutcome {
-  const envelope = body?.tool_call;
-  if (envelope?.input === undefined) return { kind: 'none' };
+export function decideTransform(body: AllowBody, toolCallId: string, current: object): TransformOutcome {
+  const envelope = body.tool_call;
+  if (envelope === undefined) return { kind: 'none' };
+  if (jsonType(envelope) !== 'object') {
+    return { kind: 'refuse', reason: `the tool_call envelope is ${jsonType(envelope)}, not an object` };
+  }
+  if (envelope.input === undefined) return { kind: 'none' };
 
   // The echoed id is what proves the transform belongs to the call we just posted, so it has to be
   // present and exact. Accepting a missing or non-string id would let a truncated or malformed body
@@ -130,7 +122,7 @@ export function decideTransform(
     const named =
       typeof envelope.tool_call_id === 'string'
         ? envelope.tool_call_id
-        : JSON.stringify(envelope.tool_call_id) ?? 'nothing';
+        : (JSON.stringify(envelope.tool_call_id) ?? 'nothing');
     return {
       kind: 'refuse',
       reason: `the transform names tool call ${named}, not ${toolCallId}`,
@@ -138,7 +130,10 @@ export function decideTransform(
   }
 
   if (jsonType(envelope.input) !== 'object') {
-    return { kind: 'refuse', reason: `the transform is ${jsonType(envelope.input)}, not an object` };
+    return {
+      kind: 'refuse',
+      reason: `the transform is ${jsonType(envelope.input)}, not an object`,
+    };
   }
 
   const violation = shapeViolation(current, envelope.input);
@@ -154,13 +149,8 @@ export function decideTransform(
  * and to later handlers, so replacing the reference would be discarded. Because
  * the shape check has already run, this only ever overwrites existing keys.
  */
-export function applyTransform(
-  target: Record<string, unknown>,
-  input: Record<string, unknown>,
-): void {
-  for (const [key, value] of Object.entries(input)) {
-    target[key] = value;
-  }
+export function applyTransform(target: object, input: Record<string, unknown>): void {
+  Object.assign(target, input);
 }
 
 /** The block reason used when a transform arrives but cannot be applied safely. */

@@ -1,1 +1,0 @@
-../../crates/cli/assets/pi-extension/index.ts

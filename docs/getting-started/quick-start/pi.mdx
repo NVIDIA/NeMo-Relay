@@ -70,7 +70,7 @@ Run one local pi task through NeMo Relay and write its agent, model, and tool
 lifecycle to a local Agent Trajectory Observability Format (ATOF) file.
 
 <Warning>
-The pi integration is a proof of concept. This guide pins pi 0.84.0. pi can
+The pi integration is a proof of concept. This guide pins pi 1.5.0. pi can
 introduce breaking hook changes in minor releases, so this quick start installs
 that exact version.
 </Warning>
@@ -124,7 +124,7 @@ Install the pinned pi release and the NeMo Relay version for these docs:
 <Tab title="Unix shell">
 {/* quickstart-block {"id":"install","role":"run","cwd":".","shells":["bash"],"session":"main","timeout_seconds":600} */}
 ```bash
-npm install --global @earendil-works/pi-coding-agent@0.84.0
+npm install --global @earendil-works/pi-coding-agent@1.5.0
 curl -fsSL https://raw.githubusercontent.com/NVIDIA/NeMo-Relay/main/install.sh | NEMO_RELAY_VERSION=1.0.0 sh
 export PATH="$HOME/.local/bin:$PATH"
 ```
@@ -133,14 +133,14 @@ export PATH="$HOME/.local/bin:$PATH"
 <Tab title="Windows PowerShell">
 {/* quickstart-block {"id":"install","role":"run","cwd":".","shells":["powershell"],"session":"main","timeout_seconds":600} */}
 ```powershell
-npm install --global @earendil-works/pi-coding-agent@0.84.0
+npm install --global @earendil-works/pi-coding-agent@1.5.0
 $env:NEMO_RELAY_VERSION = '1.0.0'
 irm https://raw.githubusercontent.com/NVIDIA/NeMo-Relay/main/install.ps1 | iex
 ```
 </Tab>
 </Tabs>
 
-Confirm that `pi --version` reports `0.84.0` before continuing.
+Confirm that `pi --version` reports `1.5.0` before continuing.
 
 pi hooks must originate inside the process, so install the Relay extension once
 and verify that pi can load it:

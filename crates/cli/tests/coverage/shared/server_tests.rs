@@ -6812,7 +6812,7 @@ async fn pi_tool_call_hook_omits_the_transform_when_nothing_rewrote_the_argument
 // ---------------------------------------------------------------------------
 // A launched pi session naming its own model upstream.
 //
-// The extension-side contract is asserted in `integrations/pi/test`; these cover the half
+// The extension-side contract is asserted in `crates/cli/assets/pi-extension/test`; these cover the half
 // that only the gateway can answer -- that the named endpoint is actually forwarded to, that
 // an unauthenticated caller cannot move traffic, that the routing header does not travel to
 // the provider, and that model-call policy still applies on the named path.

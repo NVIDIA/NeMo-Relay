@@ -12,14 +12,12 @@
  * types, recursively. These tests pin both the cases it must allow and the ones
  * it must refuse.
  *
- * Run: node --test integrations/pi/test/*.test.mjs
+ * Run: npm test --workspace=nemo-relay-pi
  */
 import assert from 'node:assert/strict';
 import { describe, it } from 'node:test';
 
-const { applyTransform, decideTransform, refusalReason, shapeViolation } = await import(
-  '../src/argument-transform.ts'
-);
+const { applyTransform, decideTransform, refusalReason, shapeViolation } = await import('../src/argument-transform.ts');
 
 const CALL = 'call-1';
 const envelope = (input, id = CALL) => ({ tool_call: { tool_call_id: id, input } });
@@ -27,17 +25,12 @@ const envelope = (input, id = CALL) => ({ tool_call: { tool_call_id: id, input }
 describe('transform decision', () => {
   it('has nothing to do when the body carries no transform', () => {
     assert.equal(decideTransform({}, CALL, { path: 'a.txt' }).kind, 'none');
-    assert.equal(decideTransform(null, CALL, { path: 'a.txt' }).kind, 'none');
     assert.equal(decideTransform({ tool_call: {} }, CALL, { path: 'a.txt' }).kind, 'none');
   });
 
   // The use case this exists for: a policy rewriting a path or redacting a value.
   it('applies a value rewrite that preserves the shape', () => {
-    const outcome = decideTransform(
-      envelope({ path: '.env.example' }),
-      CALL,
-      { path: '.env' },
-    );
+    const outcome = decideTransform(envelope({ path: '.env.example' }), CALL, { path: '.env' });
     assert.equal(outcome.kind, 'apply');
     assert.deepEqual(outcome.input, { path: '.env.example' });
   });
@@ -62,11 +55,9 @@ describe('transform decision', () => {
   });
 
   it('checks nested objects and arrays, naming the path', () => {
-    const nested = decideTransform(
-      envelope({ opts: { limit: 'ten' } }),
-      CALL,
-      { opts: { limit: 10 } },
-    );
+    const nested = decideTransform(envelope({ opts: { limit: 'ten' } }), CALL, {
+      opts: { limit: 10 },
+    });
     assert.equal(nested.kind, 'refuse');
     assert.match(nested.reason, /input\.opts\.limit changed type from number to string/);
 
@@ -103,6 +94,14 @@ describe('transform decision', () => {
       const outcome = decideTransform(body, CALL, { path: 'a.txt' });
       assert.equal(outcome.kind, 'refuse', `a ${label} call id must be refused`);
       assert.match(outcome.reason, /not call-1/);
+    }
+  });
+
+  it('refuses a tool_call envelope that is present but not an object', () => {
+    for (const envelope of [null, 'rewrite', 7, []]) {
+      const outcome = decideTransform({ tool_call: envelope }, CALL, { path: 'a.txt' });
+      assert.equal(outcome.kind, 'refuse', JSON.stringify(envelope));
+      assert.match(outcome.reason, /envelope is .*, not an object/);
     }
   });
 

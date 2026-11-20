@@ -205,7 +205,7 @@ fn settings_without_packages_are_not_a_finding() {
 #[test]
 fn the_gateway_url_matches_what_the_extension_resolves() {
     let _env = EnvScope::set(&[(PI_GATEWAY_URL_ENV, None)]);
-    // Kept in step with `configFromEnv` in integrations/pi/src/gateway-client.ts;
+    // Kept in step with `gatewayConfigFromEnv` in crates/cli/assets/pi-extension/src/standalone/config.ts;
     // a drift here would probe an endpoint the extension never posts to.
     assert_eq!(gateway_url(None), "http://127.0.0.1:4040");
 }

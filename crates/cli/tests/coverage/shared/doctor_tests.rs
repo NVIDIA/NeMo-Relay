@@ -217,14 +217,14 @@ fn agent_version_diagnostics_separate_unverified_optional_and_required_failures(
     let mut details = Vec::new();
     apply_agent_version_status(
         CodingAgent::Pi,
-        Some("0.85.0"),
+        Some("1.6.0"),
         true,
         false,
         &mut status,
         &mut details,
     );
     assert_eq!(status, Status::Warn);
-    assert!(details.iter().any(|detail| detail.contains("0.84")));
+    assert!(details.iter().any(|detail| detail.contains("1.5")));
 
     let mut status = Status::Pass;
     let mut details = Vec::new();
@@ -856,7 +856,7 @@ fn format_human_uses_symbols_for_agent_statuses() {
             configured: true,
             command: "pi".into(),
             path: Some(PathBuf::from("/bin/pi")),
-            version: Some("0.84.0".into()),
+            version: Some("1.5.0".into()),
             annotation: "hooks: emitted by the extension".into(),
             checks: vec![Check {
                 name: "pi extension load path",
@@ -3521,7 +3521,7 @@ fn format_agents_json_matches_doctor_agents_shape() {
             configured: true,
             command: "pi".into(),
             path: Some(PathBuf::from("/opt/homebrew/bin/pi")),
-            version: Some("0.84.0".into()),
+            version: Some("1.5.0".into()),
             annotation: "hooks: emitted by the extension".into(),
             checks: vec![Check {
                 name: "pi extension load path",

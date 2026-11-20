@@ -95,4 +95,15 @@ describe('tool result projection', () => {
       assert.equal(post.result.content, `${prefix}... [truncated 6 chars]`);
     }
   });
+
+  it('appends nothing after the first omission', async () => {
+    const prefix = 'a'.repeat(1999);
+    const post = await project({
+      content: [
+        { type: 'text', text: `${prefix}😀` },
+        { type: 'text', text: 'tail' },
+      ],
+    });
+    assert.equal(post.result.content, `${prefix}... [truncated 7 chars]`);
+  });
 });

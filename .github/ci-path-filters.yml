@@ -354,9 +354,6 @@ rust:
   - 'crates/**/*.rs'
   - 'crates/**/Cargo.toml'
   - 'crates/cli/assets/**'
-  # The managed pi extension is `.ts`/`.json` under the CLI daemon tree. Changes must run
-  # the Rust tests that verify the embedded asset inventory and package contents.
-  - 'crates/cli/src/daemon/managed/pi_extension/**'
   - 'crates/ffi/cbindgen.toml'
   - 'buf.lock'
   - 'crates/worker-proto/buf.lock'
@@ -402,14 +399,7 @@ openclaw:
 pi:
   - 'crates/cli/assets/pi-extension/**'
   - 'crates/cli/src/agents/pi/**'
-  # The extension's source lives under the CLI crate, because the published crate can only
-  # embed files below its own root. `integrations/pi` holds its README, tsconfig and test
-  # suite and symlinks the rest, so an edit to the extension itself lands here and would
-  # otherwise never reach the suite that tests it.
   - 'crates/cli/src/agents/shared/adapters.rs'
-  - 'crates/cli/src/daemon/managed/pi_extension/**'
-  - 'crates/cli/tests/managed_pi_extension_tests.mjs'
-  - 'integrations/pi/**'
 
 python:
   - 'crates/python/Cargo.toml'

@@ -36,11 +36,12 @@ const PI_CONFIG_DIR: &str = ".pi";
 const PI_SETTINGS_FILE: &str = "settings.json";
 
 /// This extension's package name -- how it is told apart from anyone else's.
-/// Must match `integrations/pi/package.json`.
+/// Must match `crates/cli/assets/pi-extension/package.json`.
 const RELAY_PACKAGE_NAME: &str = "nemo-relay-pi";
 
 /// Gateway URL the extension falls back to when nothing else resolves one.
-/// Kept in step with `configFromEnv` in `integrations/pi/src/gateway-client.ts`.
+/// Kept in step with `gatewayConfigFromEnv` in
+/// `crates/cli/assets/pi-extension/src/standalone/config.ts`.
 const DEFAULT_GATEWAY_URL: &str = "http://127.0.0.1:4040";
 
 /// How pi reaches an extension, which is what decides whether trust gates it.

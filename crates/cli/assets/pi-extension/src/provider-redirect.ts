@@ -56,9 +56,11 @@ const SERVICEABLE_APIS = new Map<string, 'openai' | 'anthropic'>([
   ['anthropic-messages', 'anthropic'],
 ]);
 
+import { BlockList, isIP } from 'node:net';
+
+import type { ExtensionContext } from '@earendil-works/pi-coding-agent';
+
 export type RedirectConfig = {
-  /** Gateway base URL; the root, never root + `/v1`. */
-  gatewayUrl: string;
   /** What the gateway forwards OpenAI-compatible traffic to, when known. */
   openaiUpstream?: string;
   /** What the gateway forwards Anthropic traffic to, when known. */
@@ -70,29 +72,12 @@ export type RedirectConfig = {
    * disables redirection entirely.
    */
   mode: 'match' | 'force' | 'off';
-  /**
-   * This invocation's transparent-proxy credential, when the launcher set one.
-   *
-   * A gateway started by `nemo-relay run` authenticates its own client before a
-   * request intercept can rewrite the route, and rejects a provider call that
-   * does not present it (`crates/cli/src/provider_auth.rs`). Hook posts are not
-   * covered by that check -- only provider passthrough is -- so without this the
-   * redirect succeeds and then every model call comes back 401, which is the one
-   * outcome the redirect exists to produce spans for.
-   *
-   * Absent for a standalone `nemo-relay --bind` daemon, which requires no
-   * credential, so the key is omitted rather than sent empty.
-   */
-  proxyToken?: string;
+  canNameUpstream: boolean;
+  /** Where redirected traffic already goes. A model there is left alone. */
+  relayBaseUrl?: string;
 };
 
-/** A model, narrowed to the fields redirection depends on. */
-export type RedirectModel = {
-  id: string;
-  api: string;
-  provider: string;
-  baseUrl: string;
-};
+export type RedirectModel = Pick<NonNullable<ExtensionContext['model']>, 'id' | 'api' | 'provider' | 'baseUrl'>;
 
 /**
  * Why a redirect did or did not happen.
@@ -109,7 +94,9 @@ export type RedirectSkipCode =
   | 'unserviceable-api'
   | 'unknown-upstream'
   | 'upstream-mismatch'
-  | 'provider-mixed-endpoints';
+  | 'provider-mixed-endpoints'
+  | 'native-provider'
+  | 'upstream-not-nameable';
 
 export type RedirectDecision =
   | {
@@ -147,20 +134,6 @@ function isSafeToRedirect(model: RedirectModel, config: RedirectConfig): boolean
 }
 
 /**
- * Whether this invocation may tell the gateway where to forward.
- *
- * The gateway honors a named upstream only from a request carrying this run's
- * proxy credential, so without one the header would be ignored and the redirect
- * would land on the gateway's own configured upstream -- the wrong provider,
- * which is the failure the static check exists to prevent. Having the credential
- * is therefore the precondition for redirecting past a mismatch, not a detail of
- * how the request is authenticated.
- */
-function canNameUpstream(config: RedirectConfig): boolean {
-  return Boolean(config.proxyToken);
-}
-
-/**
  * Redirect a provider the gateway does not front, by naming its endpoint.
  *
  * The sibling scan survives from the static path but changes its question. There
@@ -171,14 +144,131 @@ function canNameUpstream(config: RedirectConfig): boolean {
  * that has never heard of them, which is the same broken session the static path
  * refuses to create.
  */
-function nameUpstream(
-  model: RedirectModel,
-  siblings: readonly RedirectModel[],
-): RedirectDecision {
+const UNROUTABLE = new BlockList();
+for (const [subnet, prefix] of [
+  ['0.0.0.0', 8],
+  ['10.0.0.0', 8],
+  ['100.64.0.0', 10],
+  ['169.254.0.0', 16],
+  ['172.16.0.0', 12],
+  ['192.0.0.0', 24],
+  ['192.0.2.0', 24],
+  ['192.168.0.0', 16],
+  ['198.18.0.0', 15],
+  ['198.51.100.0', 24],
+  ['203.0.113.0', 24],
+  ['224.0.0.0', 4],
+  ['240.0.0.0', 4],
+] as const) {
+  UNROUTABLE.addSubnet(subnet, prefix, 'ipv4');
+}
+for (const [subnet, prefix] of [
+  ['::', 128],
+  ['::', 96],
+  ['fc00::', 7],
+  ['fe80::', 10],
+  ['fec0::', 10],
+  ['ff00::', 8],
+  ['2001:db8::', 32],
+] as const) {
+  UNROUTABLE.addSubnet(subnet, prefix, 'ipv6');
+}
+
+function ipLiteral(url: URL): string | undefined {
+  const host = url.hostname.replace(/^\[|\]$/g, '');
+  return isIP(host) === 0 ? undefined : host;
+}
+
+const NAT64_PREFIX = [0x64, 0xff9b, 0, 0, 0, 0];
+
+function ipv6Words(address: string): number[] {
+  const lastColon = address.lastIndexOf(':');
+  const last = address.slice(lastColon + 1);
+  const hex =
+    isIP(last) === 4
+      ? `${address.slice(0, lastColon + 1)}${last
+          .split('.')
+          .map((octet) => Number(octet).toString(16).padStart(2, '0'))
+          .join('')
+          .replace(/^(.{4})/, '$1:')}`
+      : address;
+  const gap = hex.indexOf('::');
+  const head = gap < 0 ? hex : hex.slice(0, gap);
+  const tail = gap < 0 ? '' : hex.slice(gap + 2);
+  const headWords = head === '' ? [] : head.split(':');
+  const tailWords = tail === '' ? [] : tail.split(':');
+  const fill = Array<string>(8 - headWords.length - tailWords.length).fill('0');
+  return [...headWords, ...fill, ...tailWords].map((word) => parseInt(word, 16));
+}
+
+function nat64Embedded(address: string): string | undefined {
+  if (isIP(address) !== 6) return undefined;
+  const words = ipv6Words(address);
+  if (!words.slice(0, 6).every((word, index) => word === NAT64_PREFIX[index])) return undefined;
+  return words
+    .slice(6)
+    .flatMap((word) => [word >> 8, word & 0xff])
+    .join('.');
+}
+
+function isUnroutable(address: string): boolean {
+  const embedded = nat64Embedded(address);
+  if (embedded !== undefined) return UNROUTABLE.check(embedded, 'ipv4');
+  return UNROUTABLE.check(address, isIP(address) === 6 ? 'ipv6' : 'ipv4');
+}
+
+export function redactedUrl(value: string): string {
+  return value.replace(/^([a-z][a-z0-9+.-]*:\/\/)[^/?#@]*@/i, '$1');
+}
+
+function isLoopback(url: URL): boolean {
+  if (url.hostname.toLowerCase() === 'localhost') return true;
+  const address = ipLiteral(url);
+  if (address === undefined) return false;
+  return address === '::1' || (isIP(address) === 4 && address.startsWith('127.'));
+}
+
+/**
+ * Why the gateway would refuse this endpoint as a named upstream, or `undefined` when it would
+ * accept it. Mirrors the gateway's checks that need no network: credentials, query, fragment,
+ * cleartext off loopback, and address literals outside public unicast.
+ */
+export function namedUpstreamRejection(baseUrl: string): string | undefined {
+  let url: URL;
+  try {
+    url = new URL(baseUrl);
+  } catch {
+    return 'upstream base URL is not an absolute URL';
+  }
+  if (url.protocol !== 'http:' && url.protocol !== 'https:') return 'upstream base URL must use http or https';
+  if (url.hostname === '') return 'upstream base URL has no host';
+  if (url.username !== '' || url.password !== '') return 'upstream base URL must not carry credentials';
+  if (baseUrl.includes('?')) return 'upstream base URL must not carry a query string';
+  if (baseUrl.includes('#')) return 'upstream base URL must not carry a fragment';
+  if (url.protocol === 'http:' && !isLoopback(url)) {
+    return 'upstream base URL must use https unless it is a loopback address';
+  }
+  const address = ipLiteral(url);
+  if (address !== undefined && !isLoopback(url) && isUnroutable(address)) {
+    return 'upstream base URL must name a public or loopback address';
+  }
+  return undefined;
+}
+
+function nameUpstream(model: RedirectModel, siblings: readonly RedirectModel[]): RedirectDecision {
+  const rejection = namedUpstreamRejection(model.baseUrl);
+  if (rejection !== undefined) {
+    return {
+      kind: 'skip',
+      code: 'upstream-not-nameable',
+      provider: model.provider,
+      api: model.api,
+      reason: `the gateway would refuse ${redactedUrl(model.baseUrl)} as a named upstream: ${rejection}`,
+    };
+  }
   const target = normalizeBaseUrl(model.baseUrl);
   const unsafe = siblings.find(
-    (sibling) =>
-      !SERVICEABLE_APIS.has(sibling.api) || normalizeBaseUrl(sibling.baseUrl) !== target,
+    (sibling) => !SERVICEABLE_APIS.has(sibling.api) || normalizeBaseUrl(sibling.baseUrl) !== target,
   );
   if (unsafe) {
     return {
@@ -188,7 +278,7 @@ function nameUpstream(
       api: model.api,
       reason:
         `redirecting ${model.provider} would also move its ${unsafe.api} models, and ` +
-        `${unsafe.id} targets ${unsafe.baseUrl} rather than ${model.baseUrl}; ` +
+        `${unsafe.id} targets ${redactedUrl(unsafe.baseUrl)} rather than ${redactedUrl(model.baseUrl)}; ` +
         `a provider is named one endpoint, so its models must share one`,
     };
   }
@@ -198,7 +288,7 @@ function nameUpstream(
     api: model.api,
     upstream: model.baseUrl,
     namedUpstream: model.baseUrl,
-    reason: `the gateway does not front ${model.baseUrl}, so each request names it`,
+    reason: `the gateway does not front ${redactedUrl(model.baseUrl)}, so each request names it`,
   };
 }
 
@@ -240,12 +330,8 @@ export function decideRedirect(
   model: RedirectModel | undefined,
   config: RedirectConfig,
   redirected: ReadonlySet<string>,
-  /**
-   * Every model of `model.provider`, as the catalog had them **before** any
-   * redirect. Optional only so an older caller still type-checks; omitting it
-   * restores the per-model check, which is unsound for a mixed provider.
-   */
-  siblings: readonly RedirectModel[] = [],
+  siblings: readonly RedirectModel[],
+  native: boolean = false,
 ): RedirectDecision {
   if (config.mode === 'off') {
     return {
@@ -264,6 +350,24 @@ export function decideRedirect(
       provider: model.provider,
       api: model.api,
       reason: 'already redirected',
+    };
+  }
+  if (config.relayBaseUrl !== undefined && normalizeBaseUrl(model.baseUrl) === normalizeBaseUrl(config.relayBaseUrl)) {
+    return {
+      kind: 'skip',
+      code: 'already-redirected',
+      provider: model.provider,
+      api: model.api,
+      reason: 'already pointed at the relay',
+    };
+  }
+  if (native) {
+    return {
+      kind: 'skip',
+      code: 'native-provider',
+      provider: model.provider,
+      api: model.api,
+      reason: `${model.provider} is a native pi provider, and a base URL overlay would replace it`,
     };
   }
 
@@ -302,7 +406,7 @@ export function decideRedirect(
     // Not knowing the gateway's upstream stops mattering once we can name ours:
     // the comparison existed to prove a redirect lands on the right provider, and
     // naming the endpoint proves it directly.
-    if (canNameUpstream(config)) {
+    if (config.canNameUpstream) {
       return nameUpstream(model, siblings);
     }
     // Launched outside `nemo-relay run --agent pi`, so the gateway's upstream
@@ -329,7 +433,7 @@ export function decideRedirect(
     // speak an API the gateway serves, but only the two it is configured for are
     // the endpoint a model already calls. Naming the endpoint turns that from a
     // refusal into a redirect.
-    if (canNameUpstream(config)) {
+    if (config.canNameUpstream) {
       return nameUpstream(model, siblings);
     }
     return {
@@ -338,7 +442,7 @@ export function decideRedirect(
       provider: model.provider,
       api: model.api,
       reason:
-        `model targets ${model.baseUrl} but the gateway forwards ${family} traffic to ${upstream}; ` +
+        `model targets ${redactedUrl(model.baseUrl)} but the gateway forwards ${family} traffic to ${redactedUrl(upstream)}; ` +
         `redirecting would send the request to the wrong provider`,
     };
   }
@@ -360,7 +464,7 @@ export function decideRedirect(
       api: model.api,
       reason:
         `redirecting ${model.provider} would also move its ${unsafe.api} models, and ` +
-        `${unsafe.id} targets ${unsafe.baseUrl}, which the gateway does not front; ` +
+        `${unsafe.id} targets ${redactedUrl(unsafe.baseUrl)}, which the gateway does not front; ` +
         `point both upstreams at ${model.provider}, or accept no LLM spans for it`,
     };
   }
@@ -370,30 +474,6 @@ export function decideRedirect(
     provider: model.provider,
     api: model.api,
     upstream: model.baseUrl,
-    reason: `gateway forwards ${family} traffic to the same endpoint (${upstream})`,
-  };
-}
-
-/** Read redirection configuration from the environment the launcher sets. */
-export function redirectConfigFromEnv(gatewayUrl: string): RedirectConfig {
-  const raw = process.env.NEMO_RELAY_PI_REDIRECT;
-  let mode: RedirectConfig['mode'] = 'match';
-  if (raw === 'off' || raw === 'force') mode = raw;
-  // Spread conditionally rather than assigning `undefined`: the package builds
-  // under `exactOptionalPropertyTypes`, where an explicit `undefined` is not
-  // the same as an absent key.
-  const openaiUpstream = process.env.NEMO_RELAY_PI_OPENAI_UPSTREAM;
-  const anthropicUpstream = process.env.NEMO_RELAY_PI_ANTHROPIC_UPSTREAM;
-  // Not a `NEMO_RELAY_PI_*` name, deliberately: the launcher exports this one for
-  // every agent it starts, and Codex reads the same variable through its
-  // `env_http_headers` provider configuration. A pi-specific alias would be a
-  // second name for one value, and the two could drift.
-  const proxyToken = process.env.NEMO_RELAY_PROXY_CREDENTIAL;
-  return {
-    gatewayUrl,
-    mode,
-    ...(openaiUpstream ? { openaiUpstream } : {}),
-    ...(anthropicUpstream ? { anthropicUpstream } : {}),
-    ...(proxyToken ? { proxyToken } : {}),
+    reason: `gateway forwards ${family} traffic to the same endpoint (${redactedUrl(upstream)})`,
   };
 }
