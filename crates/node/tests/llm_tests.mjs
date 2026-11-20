@@ -1852,6 +1852,29 @@ describe('LLM intercepts', () => {
     deregisterLlmStreamExecutionIntercept('node_llm_stream_exec');
   });
 
+  it('stream execution intercept next() rejects a payload Relay cannot convert and skips downstream', async () => {
+    let providerCalls = 0;
+    registerLlmStreamExecutionIntercept('node_llm_stream_deep_next', 10, async (native, _context, next) => {
+      let deep = native;
+      for (let depth = 0; depth < 129; depth += 1) {
+        deep = [deep];
+      }
+      return next(deep);
+    });
+    try {
+      await assert.rejects(
+        llmStreamCallExecute('deep_next_stream', makeNative(), async function* () {
+          providerCalls += 1;
+          yield { delta: 'unreachable' };
+        }),
+        /exceeded maximum JSON nesting depth/,
+      );
+    } finally {
+      assert.equal(deregisterLlmStreamExecutionIntercept('node_llm_stream_deep_next'), true);
+    }
+    assert.equal(providerCalls, 0);
+  });
+
   it('request intercept with break_chain', () => {
     registerLlmRequestIntercept('node_llm_break', 10, true, ({ name, request, annotated }) => ({
       request,

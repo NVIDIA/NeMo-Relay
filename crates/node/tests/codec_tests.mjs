@@ -260,3 +260,21 @@ it('built-in codec accepts multiple result edits and insertion', () => {
     { role: 'tool', tool_call_id: 'c', content: 'inserted' },
   ]);
 });
+
+it('built-in codec preserves integer params beyond 32 bits', () => {
+  const codec = new lib.OpenAIChatCodec();
+  for (const seed of [2 ** 32, 1763400000000, Number.MAX_SAFE_INTEGER, -(2 ** 31) - 1]) {
+    const original = {
+      headers: {},
+      content: {
+        model: 'gpt-4',
+        messages: [{ role: 'user', content: 'Hello' }],
+        seed,
+      },
+    };
+    const annotated = codec.decode(original);
+    assert.equal(annotated.api_specific.seed, seed, `decode ${seed}`);
+    assert.equal(codec.encode(annotated, original).content.seed, seed, `encode ${seed}`);
+  }
+  assert.throws(() => codec.decode({ headers: {}, content: { messages: [], seed: 1.5 } }), /seed must be an integer/);
+});

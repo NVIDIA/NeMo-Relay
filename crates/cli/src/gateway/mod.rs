@@ -415,6 +415,8 @@ enum CapturedUpstreamFailure {
     },
     Transport(reqwest::Error),
     Authentication(CliError),
+    /// The provider answered with a success status, then its stream failed or was malformed.
+    StreamFailed,
 }
 
 #[derive(Default)]
@@ -424,12 +426,29 @@ struct CapturedUpstreamFailures {
 
 impl CapturedUpstreamFailures {
     fn capture(&self, failure: CapturedUpstreamFailure) -> FlowError {
+        FlowError::Internal(self.marker(failure))
+    }
+
+    /// Captures a failure while keeping the source error text for telemetry.
+    fn capture_with_source(
+        &self,
+        failure: CapturedUpstreamFailure,
+        source: FlowError,
+    ) -> FlowError {
+        let source = match source {
+            FlowError::Internal(message) => message,
+            other => other.to_string(),
+        };
+        FlowError::Internal(format!("{source} ({})", self.marker(failure)))
+    }
+
+    fn marker(&self, failure: CapturedUpstreamFailure) -> String {
         let token = uuid::Uuid::now_v7();
         self.entries
             .lock()
             .expect("captured upstream failures lock poisoned")
             .insert(token, failure);
-        FlowError::Internal(format!("{CAPTURED_UPSTREAM_FAILURE_PREFIX}{token}"))
+        format!("{CAPTURED_UPSTREAM_FAILURE_PREFIX}{token}")
     }
 
     /// Takes the single distinct captured attempt named in a worker-wrapped error.
@@ -1121,6 +1140,13 @@ async fn run_managed_streaming(
         Ok(body) => body,
         Err(error) => {
             if let Some(failure) = upstream_failures.take(&error) {
+                if matches!(failure, CapturedUpstreamFailure::StreamFailed) {
+                    // The provider already answered 200, so keep it and report the failure
+                    // in-band, matching failures after the first event.
+                    let body = Body::from(encode_sse_error_frame(provider_route, 0));
+                    let headers = upstream_successes.response_headers(None, "text/event-stream");
+                    return build_response(StatusCode::OK, headers, body);
+                }
                 return selected_upstream_failure(failure);
             }
             return Err(translate_runtime_error(error));
@@ -1297,9 +1323,14 @@ fn build_streaming_func(
                 );
             }
             let index = upstream_successes.capture(None, response_headers);
-            let json_stream = sse_json_stream(response, operational);
+            let json_stream = sse_json_stream(response, operational).map(move |item| {
+                item.map_err(|error| {
+                    upstream_failures
+                        .capture_with_source(CapturedUpstreamFailure::StreamFailed, error)
+                })
+            });
             Ok(FirstEventTap::wrap(
-                json_stream,
+                LlmJsonStream::new(json_stream),
                 Box::new(move |event| upstream_successes.set_key(index, event.clone())),
             ))
         })
@@ -2122,6 +2153,12 @@ fn selected_upstream_failure(failure: CapturedUpstreamFailure) -> Result<Respons
         } => build_response(status, headers, Body::from(bytes)),
         CapturedUpstreamFailure::Transport(error) => Err(CliError::Upstream(error)),
         CapturedUpstreamFailure::Authentication(error) => Err(error),
+        CapturedUpstreamFailure::StreamFailed => Err(CliError::ProviderFailure(UpstreamFailure {
+            status: None,
+            body: "upstream stream failed".to_string(),
+            headers: Default::default(),
+            class: UpstreamFailureClass::Other,
+        })),
     }
 }
 

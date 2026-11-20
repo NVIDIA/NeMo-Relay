@@ -40,6 +40,15 @@ code shows whether Relay could not find or start the worker, send its activation
 permission, or wait for it to become ready. It never includes activation data or the
 source error text.
 
+Daemon `worker_communication_failed` records include `error_chain` when
+`reason` is `response_body_error`. The chain identifies known body, Hyper,
+HTTP/2, and I/O error categories, including HTTP/2 reset or GOAWAY reason codes,
+whether the HTTP/2 error came from the peer, and available OS error codes.
+For example, `h2:reset:reason=8:remote=true` identifies a peer-sent `CANCEL`.
+Unknown error types appear as `other`. Chains stop after eight causes, followed
+by `truncated` if more remain. Arbitrary error messages, URLs, headers, and
+payloads are excluded.
+
 ## CLI Hook and Upstream Records
 
 At `debug` level, the CLI writes lifecycle records for hooks and for gateway calls
