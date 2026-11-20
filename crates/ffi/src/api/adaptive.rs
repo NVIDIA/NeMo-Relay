@@ -8,6 +8,7 @@ use nemo_relay_adaptive::acg::{
 };
 use nemo_relay_adaptive::context_helpers::set_latency_sensitivity;
 use nemo_relay_adaptive::{AdaptiveConfig, AdaptiveRuntime};
+use nemo_relay_plugin_host::{ConfigReport, DiagnosticLevel};
 use nemo_relay_types::codec::request::AnnotatedLlmRequest;
 use nemo_relay_types::codec::response::Usage;
 use serde::Deserialize;
@@ -53,12 +54,26 @@ struct CacheRequestFactsOptions {
     timestamp: Option<String>,
 }
 
-fn parse_adaptive_config(config_json: *const c_char) -> Result<AdaptiveConfig, NemoRelayStatus> {
+/// Parse and validate an adaptive config document, reporting a former `response_cache` section.
+fn parse_adaptive_config(
+    config_json: *const c_char,
+) -> Result<(AdaptiveConfig, ConfigReport), NemoRelayStatus> {
     let config_json = c_str_to_json(config_json).ok_or(NemoRelayStatus::InvalidJson)?;
-    serde_json::from_value(config_json).map_err(|error| {
+    AdaptiveRuntime::validate_document(config_json).map_err(|error| {
         set_last_error(&format!("invalid adaptive config: {error}"));
         NemoRelayStatus::InvalidJson
     })
+}
+
+/// The error diagnostics of a report, joined for the last-error message.
+fn error_messages(report: &ConfigReport) -> String {
+    report
+        .diagnostics
+        .iter()
+        .filter(|diagnostic| diagnostic.level == DiagnosticLevel::Error)
+        .map(|diagnostic| diagnostic.message.as_str())
+        .collect::<Vec<_>>()
+        .join("; ")
 }
 
 fn parse_provider(provider: &str) -> Result<CacheTelemetryProvider, NemoRelayStatus> {
@@ -130,11 +145,10 @@ pub unsafe extern "C" fn nemo_relay_adaptive_validate_config(
         set_last_error("out_json pointer is null");
         return NemoRelayStatus::NullPointer;
     }
-    let config = match parse_adaptive_config(config_json) {
-        Ok(config) => config,
+    let report = match parse_adaptive_config(config_json) {
+        Ok((_, report)) => report,
         Err(status) => return status,
     };
-    let report = AdaptiveRuntime::validate_config(&config);
     match serde_json::to_value(&report) {
         Ok(value) => {
             unsafe { *out_json = json_to_c_string(&value) };
@@ -162,7 +176,11 @@ pub unsafe extern "C" fn nemo_relay_adaptive_runtime_create(
         return NemoRelayStatus::NullPointer;
     }
     let config = match parse_adaptive_config(config_json) {
-        Ok(config) => config,
+        Ok((_, report)) if report.has_errors() => {
+            set_last_error(&error_messages(&report));
+            return NemoRelayStatus::InvalidArg;
+        }
+        Ok((config, _)) => config,
         Err(status) => return status,
     };
     match super::block_on(async { Ok(AdaptiveRuntime::new(config).await) }) {

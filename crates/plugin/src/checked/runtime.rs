@@ -1,7 +1,7 @@
 // SPDX-FileCopyrightText: Copyright (c) 2026, NVIDIA CORPORATION & AFFILIATES. All rights reserved.
 // SPDX-License-Identifier: Apache-2.0
 use super::*;
-use crate::ScopeAttributes;
+use crate::{AnnotatedLlmResponse, CostEstimate, ScopeAttributes, Usage};
 use serde_json::json;
 use std::time::{SystemTime, UNIX_EPOCH};
 /// Optional parent, behavior flags, and start time for a native scope.
@@ -244,6 +244,38 @@ impl PluginRuntime {
     }
     pub fn runtime_diagnostics(&self) -> Result<RuntimeDiagnostics> {
         self.call("runtime.diagnostics", Json::Null)
+    }
+    /// Estimate cost with the host's active model pricing catalog.
+    ///
+    /// Returns `Ok(None)` when the catalog has no pricing for the model. Hosts
+    /// older than this operation return an error, which callers should treat
+    /// as an unknown cost.
+    pub fn estimate_cost_for_provider(
+        &self,
+        provider: Option<&str>,
+        model: &str,
+        usage: &Usage,
+    ) -> Result<Option<CostEstimate>> {
+        self.call(
+            "pricing.estimate_cost_for_provider",
+            json!({"provider":provider,"model":model,"usage":usage}),
+        )
+    }
+    /// Price a normalized response with the host's full pricing rules.
+    ///
+    /// Returns the response's reported cost when present; otherwise the host's
+    /// estimate for its model and usage, or `Ok(None)` when unknown. Hosts older
+    /// than this operation return an error, which callers should treat as an
+    /// unknown cost.
+    pub fn response_cost_for_provider(
+        &self,
+        response: &AnnotatedLlmResponse,
+        provider: Option<&str>,
+    ) -> Result<Option<CostEstimate>> {
+        self.call(
+            "pricing.response_cost_for_provider",
+            json!({"response":response,"provider":provider}),
+        )
     }
     /// Send a process log record with optional structured fields through the host runtime capability.
     pub fn log(

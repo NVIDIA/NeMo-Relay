@@ -265,7 +265,7 @@ Keep these limits in mind when choosing features for your app:
 
 - **Live model calls:** `Runner.run_live` and `RunConfig.support_cfc` record
   runs and agents. Their model calls have no Relay model events or middleware.
-- **Response caching:** Relay's response cache skips ADK model calls.
+- **Response caching:** The `nvidia.response_cache` plugin skips ADK model calls.
 - **PII redaction:** While redaction is active, Relay leaves the model
   response out of exported model end events.
 - **Streaming:** Chunk events contain a brief summary. Custom models that rely

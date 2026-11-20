@@ -30,8 +30,8 @@ pub use runtime_report::{RuntimeDiagnostic, RuntimeDiagnostics};
 /// Shared built-in component contracts.
 pub mod component;
 pub use checked::{
-    ConditionalMiddlewareGuardrailHandle, EmitMarkOptions, LlmExecutionContext, LlmJsonAsyncStream,
-    LlmNext, LlmRequestContext, LlmResponseContext, LlmSanitizeRequestContext,
+    ConditionalMiddlewareGuardrailHandle, EmitMarkOptions, LlmExecutionContext, LlmInputStream,
+    LlmJsonAsyncStream, LlmNext, LlmRequestContext, LlmResponseContext, LlmSanitizeRequestContext,
     LlmSanitizeResponseContext, LlmStreamNext, NativePlugin, Plugin, PluginContext, PluginRuntime,
     PluginTaskSpawner, ScopeGuard, ScopeHandle, ScopeOptions, ScopeStack, ScopeStackBinding,
     ThreadScopeStackGuard, ToolExecutionContext, ToolNext,
@@ -61,7 +61,7 @@ pub use nemo_relay_types::codec::optimization::{
     LlmOptimizationTokens,
 };
 pub use nemo_relay_types::codec::request::AnnotatedLlmRequest;
-pub use nemo_relay_types::codec::response::AnnotatedLlmResponse;
+pub use nemo_relay_types::codec::response::{AnnotatedLlmResponse, CostEstimate, Usage};
 pub use nemo_relay_types::plugin::http_error_message;
 pub use nemo_relay_types::plugin::{ConfigDiagnostic, DiagnosticLevel, PluginError, PluginFuture};
 pub use serde_json::Map;
