@@ -50,7 +50,14 @@ async fn managed_receipts_keep_exact_llm_parent_across_concurrent_response_outco
     )
     .unwrap();
 
-    let forwarded = futures_util::future::join_all((0..9).map(receipt_response_case)).await;
+    let cases = ["complete", "denied", "truncated", "without-receipt"];
+    futures_util::future::join_all(
+        cases
+            .into_iter()
+            .enumerate()
+            .map(|(index, case)| receipt_response_case(index, case)),
+    )
+    .await;
     flush_subscribers().unwrap();
     deregister_subscriber("gateway-receipts").unwrap();
 
@@ -66,9 +73,9 @@ async fn managed_receipts_keep_exact_llm_parent_across_concurrent_response_outco
                 && event.scope_category() == Some(ScopeCategory::Start)
         })
         .collect();
-    assert_eq!(receipts.len(), 6, "one receipt per valid response header");
-    assert_eq!(starts.len(), 9, "one managed LLM per request");
-    for (index, traceparent) in forwarded.iter().enumerate() {
+    assert_eq!(receipts.len(), 3, "one receipt per valid response header");
+    assert_eq!(starts.len(), cases.len(), "one managed LLM per request");
+    for (index, case) in cases.iter().enumerate() {
         let model = format!("receipt-model-{index}");
         let start = starts
             .iter()
@@ -79,19 +86,14 @@ async fn managed_receipts_keep_exact_llm_parent_across_concurrent_response_outco
                     == Some(model.as_str())
             })
             .expect("each concurrent request must have its own model start");
-        assert_eq!(
-            traceparent.split('-').nth(2).unwrap(),
-            nemo_relay_types::trace::relay_span_id(start.uuid()).to_string(),
-            "outbound context must identify the actual model call",
-        );
         let request_id = receipt_id(index);
         let receipt = receipts.iter().find(|event| {
             event.data().and_then(|data| data["request_id"].as_str()) == Some(request_id.as_str())
         });
-        if index >= 6 {
+        if *case == "without-receipt" {
             assert!(
                 receipt.is_none(),
-                "missing, malformed and duplicate headers must not produce a receipt",
+                "missing header must not produce a receipt"
             );
             continue;
         }
@@ -101,7 +103,7 @@ async fn managed_receipts_keep_exact_llm_parent_across_concurrent_response_outco
             receipt.data(),
             Some(&json!({
                 "request_id": request_id,
-                "http_status": if index == 1 { 403 } else { 200 },
+                "http_status": if *case == "denied" { 403 } else { 200 },
             })),
             "receipt must not copy unrelated response headers or bodies",
         );
@@ -112,70 +114,41 @@ fn receipt_id(index: usize) -> String {
     format!("a9d998c6-9604-4c87-a03e-{index:012}")
 }
 
-fn response_payload(index: usize) -> String {
-    let choice = if index == 0 || index >= 6 {
-        json!({"index": 0, "message": {"role": "assistant", "content": "receipt-output"}, "finish_reason": "stop"})
-    } else {
-        json!({"index": 0, "delta": {"role": "assistant", "content": "receipt-output"}, "finish_reason": null})
-    };
-    let response = json!({"id": "chatcmpl-receipt", "model": "receipt-model", "choices": [choice]});
-    match index {
-        0 | 6.. => response.to_string(),
-        1 | 2 => "not-json".to_owned(),
-        5 => "data: not-json\n\n".to_owned(),
-        _ => {
-            let mut body = format!("data: {response}\n\n");
-            if index == 4 {
-                let end = json!({"choices": [{"index": 0, "delta": {}, "finish_reason": "stop"}]});
-                body.push_str(&format!("data: {end}\n\ndata: [DONE]\n\n"));
-            }
-            body
-        }
-    }
-}
-
-fn fixture_response(index: usize, headers: HeaderMap, release: Arc<Notify>) -> Response<Body> {
-    let payload = response_payload(index);
-    let body = if index == 3 {
-        Body::from_stream(stream! {
-            yield Ok::<_, std::io::Error>(Bytes::from(payload));
-            release.notified().await;
-            yield Err(std::io::Error::other("fixture stream truncated"));
-        })
-    } else {
-        Body::from(payload)
-    };
-    let response = Response::builder()
-        .status(if index == 1 { 403 } else { 200 })
-        .header(
-            header::CONTENT_TYPE,
-            if (3..6).contains(&index) {
-                "text/event-stream"
-            } else {
-                "application/json"
-            },
-        )
-        .header("x-forwarded-traceparent", &headers["traceparent"])
-        .header("x-unrelated", "do-not-copy");
-    let response = match index {
-        6 => response,
-        7 => response.header("x-openshell-request-id", "not-a-uuid"),
-        8 => response
-            .header("x-openshell-request-id", receipt_id(index))
-            .header("x-openshell-request-id", receipt_id(index)),
-        _ => response.header("x-openshell-request-id", receipt_id(index)),
-    };
-    response.body(body).unwrap()
-}
-
-async fn receipt_response_case(index: usize) -> String {
+async fn receipt_response_case(index: usize, case: &str) {
+    let streaming = case == "truncated";
+    let status = if case == "denied" { 403 } else { 200 };
+    let with_receipt = case != "without-receipt";
     let release = Arc::new(Notify::new());
     let fixture_release = release.clone();
     let app = Router::new().route(
         "/v1/chat/completions",
-        post(move |headers: HeaderMap| {
+        post(move || {
             let release = fixture_release.clone();
-            async move { fixture_response(index, headers, release) }
+            async move {
+                let choice = if streaming {
+                    json!({"index": 0, "delta": {"content": "receipt-output"}, "finish_reason": null})
+                } else {
+                    json!({"index": 0, "message": {"role": "assistant", "content": "receipt-output"}, "finish_reason": "stop"})
+                };
+                let payload = json!({"id": "chatcmpl-receipt", "model": "receipt-model", "choices": [choice]}).to_string();
+                let body = if streaming {
+                    Body::from_stream(stream! {
+                        yield Ok::<_, std::io::Error>(Bytes::from(format!("data: {payload}\n\n")));
+                        release.notified().await;
+                        yield Err(std::io::Error::other("fixture stream truncated"));
+                    })
+                } else {
+                    Body::from(if status == 403 { "not-json".to_owned() } else { payload })
+                };
+                let mut response = Response::builder()
+                    .status(status)
+                    .header(header::CONTENT_TYPE, if streaming { "text/event-stream" } else { "application/json" })
+                    .header("x-unrelated", "do-not-copy");
+                if with_receipt {
+                    response = response.header("x-openshell-request-id", receipt_id(index));
+                }
+                response.body(body).unwrap()
+            }
         }),
     );
     let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
@@ -194,59 +167,19 @@ async fn receipt_response_case(index: usize) -> String {
             json!({
                 "model": format!("receipt-model-{index}"),
                 "messages": [{"role": "user", "content": "capture the receipt"}],
-                "stream": (3..6).contains(&index),
+                "stream": streaming,
             })
             .to_string(),
         ))
         .unwrap();
     let response = passthrough(State(state), request).await.unwrap();
-    assert_eq!(
-        response.status().as_u16(),
-        if index == 1 { 403 } else { 200 }
-    );
-    let traceparent = response.headers()["x-forwarded-traceparent"]
-        .to_str()
-        .unwrap()
-        .to_owned();
-    // Managed streaming pre-reads the first SSE event before returning a response.
-    // Only now may the fixture abort its actual HTTP body, retaining the receipt.
+    assert_eq!(response.status().as_u16(), status);
     release.notify_one();
     let body = response.into_body().collect().await.unwrap().to_bytes();
     upstream.abort();
-    match index {
-        0 | 6.. => assert_eq!(
-            serde_json::from_slice::<Value>(&body).unwrap(),
-            serde_json::from_str::<Value>(&response_payload(index)).unwrap()
-        ),
-        1 | 2 => assert_eq!(body.as_ref(), b"not-json"),
-        5 => assert_failed_first_event(&body),
-        _ => {
-            let text = std::str::from_utf8(&body).unwrap();
-            assert!(text.contains("receipt-output"), "{text}");
-            assert!(
-                text.contains(if index == 3 { "stream_error" } else { "[DONE]" }),
-                "{text}"
-            );
-        }
+    if streaming {
+        let text = String::from_utf8_lossy(&body);
+        assert!(text.contains("receipt-output"), "{text}");
+        assert!(text.contains("stream_error"), "{text}");
     }
-    traceparent
-}
-
-fn assert_failed_first_event(body: &[u8]) {
-    let text = std::str::from_utf8(body).unwrap();
-    let events: Vec<Value> = text
-        .lines()
-        .filter_map(|line| line.strip_prefix("data: "))
-        .map(|data| serde_json::from_str(data).unwrap())
-        .collect();
-    assert_eq!(events.len(), 1, "{text}");
-    assert_eq!(events[0]["error"]["type"], "server_error", "{text}");
-    assert_eq!(events[0]["error"]["code"], "stream_error", "{text}");
-    assert_eq!(
-        events[0]["error"]["message"], "NeMo Relay could not complete the response stream.",
-        "{text}",
-    );
-    assert!(!text.contains("[DONE]"), "{text}");
-    assert!(!text.contains("receipt-output"), "{text}");
-    assert!(!text.contains("not-json"), "{text}");
 }

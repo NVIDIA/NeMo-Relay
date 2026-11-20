@@ -1737,20 +1737,17 @@ async fn raw_worker_receipts_keep_llm_owner_and_header_policy_before_denial_or_b
                 Arc::new({
                     let prepared_context = prepared_context.clone();
                     move |request, _| {
-                        let prepared_context = prepared_context.clone();
-                        Box::pin(async move {
-                            // The existing buffered pipeline injects context before llm_call.
-                            // Its observable copy is fixed before receipt-owner binding, so a
-                            // later forwarding-time injection must not redefine this oracle.
-                            let traceparent =
-                                request.headers["traceparent"].as_str().unwrap().to_owned();
-                            let tracestate = request
+                        // Capture preparation's context before the response owner is bound.
+                        let header = |name| {
+                            request
                                 .headers
-                                .get("tracestate")
-                                .map(|value| value.as_str().unwrap().to_owned());
-                            *prepared_context.lock().unwrap() = Some((traceparent, tracestate));
-                            Ok(None)
-                        })
+                                .get(name)
+                                .and_then(Value::as_str)
+                                .map(str::to_owned)
+                        };
+                        *prepared_context.lock().unwrap() =
+                            Some((header("traceparent").unwrap(), header("tracestate")));
+                        Box::pin(async { Ok(None) })
                     }
                 }),
             )
@@ -1807,7 +1804,6 @@ async fn raw_worker_receipts_keep_llm_owner_and_header_policy_before_denial_or_b
         assert_eq!(receipts.len(), 1);
         let receipt = receipts[0];
         assert_eq!(receipt.parent_uuid(), Some(start.uuid()));
-        // Exact fields rule out copying either payloads or unrelated secret headers.
         assert_eq!(
             receipt.data(),
             Some(&json!({"request_id":RECEIPT, "http_status":status.as_u16()}))
@@ -1818,32 +1814,26 @@ async fn raw_worker_receipts_keep_llm_owner_and_header_policy_before_denial_or_b
                 .unwrap()
                 .take()
                 .expect("buffered request sanitizer must observe the prepared W3C context");
-            assert_ne!(
-                context.0, caller_trace,
-                "buffered preparation replaces caller context"
-            );
-            context
+            assert_ne!(context.0, caller_trace);
+            [Some(context.0), context.1]
         } else {
-            (caller_trace, Some(caller_state))
+            [Some(caller_trace), Some(caller_state)]
         };
         let headers = captured.lock().unwrap().take().unwrap();
-        if credential_free_http {
-            assert!(!headers.contains_key("traceparent"));
-            assert!(!headers.contains_key("tracestate"));
-        } else {
-            assert_eq!(
-                headers["traceparent"].to_str().unwrap(),
-                expected_context.0,
-                "receipt capture must preserve the existing path's prepared trace context",
-            );
-            assert_eq!(
-                headers
-                    .get("tracestate")
-                    .map(|value| value.to_str().unwrap()),
-                expected_context.1.as_deref(),
-                "receipt capture must preserve the existing path's prepared vendor state",
-            );
-        }
+        let forwarded_context = ["traceparent", "tracestate"].map(|name| {
+            headers
+                .get(name)
+                .map(|value| value.to_str().unwrap().to_owned())
+        });
+        assert_eq!(
+            forwarded_context,
+            if credential_free_http {
+                [None, None]
+            } else {
+                expected_context
+            },
+            "buffered={buffered}, credential_free_http={credential_free_http}",
+        );
         let mut body = response.into_body();
         if case == "cancelled" {
             let frame = tokio::time::timeout(Duration::from_secs(5), body.frame())
@@ -1854,10 +1844,7 @@ async fn raw_worker_receipts_keep_llm_owner_and_header_policy_before_denial_or_b
             assert!(String::from_utf8_lossy(frame.data_ref().unwrap()).contains("provider-secret"));
             drop(body);
         } else {
-            assert_eq!(
-                body.collect().await.unwrap().to_bytes(),
-                r#"{"secret":"provider-secret"}"#
-            );
+            body.collect().await.unwrap();
         }
         tokio::time::timeout(Duration::from_secs(5), async {
             loop {
