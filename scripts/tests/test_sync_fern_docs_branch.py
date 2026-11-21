@@ -4,16 +4,19 @@
 """Exercise documentation retention against complete temporary Fern layouts."""
 
 import importlib.util
+import sys
 import tempfile
 import unittest
 from pathlib import Path
+from unittest.mock import patch
 
 SPEC = importlib.util.spec_from_file_location(
     "sync_fern_docs_branch", Path(__file__).resolve().parents[1] / "docs" / "sync_fern_docs_branch.py"
 )
 assert SPEC is not None and SPEC.loader is not None
 SYNC = importlib.util.module_from_spec(SPEC)
-SPEC.loader.exec_module(SYNC)
+with patch.object(sys, "path", [str(Path(__file__).resolve().parents[1] / "docs"), *sys.path]):
+    SPEC.loader.exec_module(SYNC)
 
 
 class DocsRetentionTests(unittest.TestCase):
@@ -138,12 +141,21 @@ class DocsRetentionTests(unittest.TestCase):
             navigation.append({"page": route, "slug": route, "path": f"./{route}.mdx"})
         SYNC.write_yaml(self.source / "docs" / "index.yml", {"navigation": navigation})
         config = SYNC.read_yaml(Path(__file__).resolve().parents[2] / "fern" / "docs.yml")
-        config["redirects"].extend(
+        # Fern does not allow mixing inline rules and file references. Preserve
+        # all authored rules while loading the source configuration's files.
+        self.assertEqual(config["redirects"], ["./redirects/legacy.yml", "./redirects/rust-reference.yml"])
+        redirects_dir = self.source / "fern" / "redirects"
+        redirects_dir.mkdir(exist_ok=True)
+        legacy_path = Path(__file__).resolve().parents[2] / "fern" / "redirects" / "legacy.yml"
+        (redirects_dir / "legacy.yml").write_bytes(legacy_path.read_bytes())
+        legacy = SYNC.read_yaml(legacy_path)["redirects"]
+        legacy.extend(
             [
                 {"source": "/legacy/latest", "destination": "/nemo/relay/latest/guide"},
                 {"source": "/legacy/stable", "destination": "/nemo/relay/v0.12.0/guide"},
             ]
         )
+        SYNC.write_yaml(redirects_dir / "legacy.yml", {"redirects": legacy})
         SYNC.write_yaml(self.source / "fern" / "docs.yml", config)
         SYNC.sync_dev(self.source, self.target)
         self.publish("0.5.0", "0.6.0", "0.7.3", "0.8.0", "0.9.0", "0.10.0", "0.11.0", "0.12.0")
@@ -154,7 +166,9 @@ class DocsRetentionTests(unittest.TestCase):
             docs = SYNC.read_yaml(self.target / "fern" / "docs.yml")
             self.assertEqual(docs["redirects"], config["redirects"])
             entries = {entry["slug"]: entry for entry in docs["products"][0]["versions"]}
-            for redirect in docs["redirects"]:
+            published_legacy = SYNC.read_yaml(self.target / "fern" / "redirects" / "legacy.yml")["redirects"]
+            self.assertEqual(published_legacy, legacy)
+            for redirect in published_legacy:
                 destination = redirect["destination"].removeprefix("/nemo/relay/")
                 version, _, route = destination.partition("/")
                 if SYNC.SNAPSHOT_RE.fullmatch(version) or version in {"dev", "latest"}:
@@ -178,6 +192,44 @@ class DocsRetentionTests(unittest.TestCase):
                             page_path.is_relative_to((self.target / "fern" / f"pages-{snapshot}").resolve())
                         )
                         self.assertTrue(page_path.is_file(), redirect["destination"])
+
+    def test_rust_redirects_follow_snapshot_grouping_and_default_aliases(self) -> None:
+        from rust_reference_redirects import METADATA_PATH, REDIRECT_PATH, write_metadata
+
+        source = "/reference/api/rust-library-reference/sample/struct-widget"
+        old_group = "/reference/api/rust-library-reference/sample#struct-widget"
+        new_group = "/reference/api/rust-library-reference/sample/reference-types#struct-widget"
+        metadata = self.source / "docs" / METADATA_PATH
+        metadata.parent.mkdir(parents=True)
+        self.publish("0.8.0")  # Original item pages must remain accessible.
+        write_metadata(metadata, {source: old_group})
+        SYNC.sync_dev(self.source, self.target)
+        self.publish("0.9.0")
+        write_metadata(metadata, {source: new_group})
+        SYNC.sync_dev(self.source, self.target)
+
+        def redirects() -> dict[str, str]:
+            rules = SYNC.read_yaml(self.target / "fern" / REDIRECT_PATH)["redirects"]
+            self.assertTrue(all(rule["permanent"] for rule in rules))
+            self.assertEqual(len(rules), len({rule["source"] for rule in rules}))
+            return {rule["source"]: rule["destination"] for rule in rules}
+
+        rules = redirects()
+        for version, destination in (
+            ("", old_group),
+            ("/latest", old_group),
+            ("/v0.9.0", old_group),
+            ("/dev", new_group),
+        ):
+            prefix = "/nemo/relay" + version
+            self.assertEqual(rules[prefix + source], prefix + destination)
+        self.assertFalse(any("/v0.8.0/" in route for route in rules))
+        self.publish("0.10.0-beta.1")
+        self.assertEqual(redirects()["/nemo/relay/latest" + source], "/nemo/relay/latest" + old_group)
+        self.publish("0.10.0")
+        self.assertEqual(redirects()["/nemo/relay/latest" + source], "/nemo/relay/latest" + new_group)
+        self.publish("0.11.0", "0.12.0", "0.13.0", "0.14.0", "0.15.0")
+        self.assertFalse(any("/v0.9.0/" in route for route in redirects()))
 
     def test_dev_sync_prunes_existing_layout_and_orphaned_snapshots(self) -> None:
         # Assemble the legacy layout, which retained every patch and minor.

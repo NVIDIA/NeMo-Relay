@@ -6,8 +6,6 @@
 from __future__ import annotations
 
 import argparse
-import json
-import posixpath
 import re
 import subprocess
 from dataclasses import dataclass
@@ -18,6 +16,8 @@ from urllib.parse import urldefrag
 from bs4 import BeautifulSoup
 from bs4.element import NavigableString, PageElement, Tag
 from reference_common import escape_mdx_text, frontmatter, reset_output_dir
+from rust_reference_grouping import group_reference
+from rust_reference_redirects import METADATA_NAME, write_local_redirects, write_metadata
 
 CRATES = (
     ("nemo-relay-builtins", "nemo_relay_builtins", "Default plugin composition for SDKs and the CLI."),
@@ -233,18 +233,18 @@ def _discover_pages(doc_root: Path, output_dir: Path) -> dict[Path, Page]:
 
 
 def _resolve_href(page: Page, href: str, pages_by_html: dict[Path, Page]) -> str | None:
-    if not href or href.startswith("#"):
+    if not href:
         return None
     if href.startswith(("http://", "https://")):
         return href
-    href_no_fragment, _fragment = urldefrag(href)
+    href_no_fragment, fragment = urldefrag(href)
     if href_no_fragment.startswith("../src/") or "/src/" in href_no_fragment:
         return None
-    target = (page.html_path.parent / href_no_fragment).resolve()
+    target = (page.html_path.parent / href_no_fragment).resolve() if href_no_fragment else page.html_path
     target_page = pages_by_html.get(target)
     if target_page is None:
         return None
-    return target_page.url
+    return target_page.url + (f"#{fragment}" if fragment else "")
 
 
 def _tag_classes(node: Tag) -> set[str]:
@@ -303,12 +303,8 @@ def _heading_text(node: Tag) -> str:
 
 
 def _signature_link_target(page: Page, href: str, pages_by_html: dict[Path, Page]) -> str | None:
-    if not href or href.startswith("#"):
-        return None
-    target = _resolve_href(page, href, pages_by_html)
-    if target is None or not target.startswith("/"):
-        return target
-    return posixpath.relpath(target, start=posixpath.dirname(page.url))
+    # Keep source URLs until grouping has assigned every item and member a home.
+    return _resolve_href(page, href, pages_by_html)
 
 
 def _linked_signature_html(node: PageElement, page: Page, pages_by_html: dict[Path, Page]) -> str:
@@ -339,8 +335,9 @@ def _linked_signature_block(node: Tag, page: Page, pages_by_html: dict[Path, Pag
         signature = signature.replace("\n\n", "\n&#8203;\n")
     if not signature:
         return ""
-    payload = json.dumps({"__html": signature})
-    return f'<pre className="rust-signature"><code dangerouslySetInnerHTML={{{payload}}} /></pre>\n\n'
+    # Fern's Markdown exporter drops dangerouslySetInnerHTML payloads. Keeping
+    # the escaped signature as actual children preserves it in both formats.
+    return f'<pre className="rust-signature"><code>{signature}</code></pre>\n\n'
 
 
 def _code_header_label(node: Tag) -> str:
@@ -386,12 +383,18 @@ def _block_markdown(node: PageElement, page: Page, pages_by_html: dict[Path, Pag
         return ""
     if _ignore_block(node):
         return ""
+    anchor = ""
+    if node.get("id") and node.get("id") != "main-content":
+        # Namespace rustdoc IDs before combining items: every struct has, for
+        # example, an `implementations` section and often a `method.new` member.
+        prefix = _slug_part(page.html_path.stem)
+        anchor = f'<a id="{_html_attr(prefix + "--" + str(node["id"]))}"></a>\n\n'
     if node.name in {"h2", "h3", "h4", "h5"}:
-        return _render_heading(node, page, pages_by_html)
+        return anchor + _render_heading(node, page, pages_by_html)
     renderer = _BLOCK_RENDERERS.get(node.name)
     if renderer is not None:
-        return renderer(node, page, pages_by_html, depth)
-    return "".join(_block_markdown(child, page, pages_by_html, depth) for child in node.children)
+        return anchor + renderer(node, page, pages_by_html, depth)
+    return anchor + "".join(_block_markdown(child, page, pages_by_html, depth) for child in node.children)
 
 
 def _ignore_block(node: Tag) -> bool:
@@ -426,11 +429,32 @@ def _render_paragraph(node: Tag, page: Page, pages_by_html: dict[Path, Page], _d
 
 
 def _render_pre(node: Tag, page: Page, pages_by_html: dict[Path, Page], _depth: int) -> str:
-    return (
-        _linked_signature_block(node, page, pages_by_html)
-        if node.find("a", href=True)
-        else _rust_fence(_plain_code(node))
-    )
+    code = _plain_code(node)
+    # rustdoc inlines generated protobuf descriptor sets as enormous byte
+    # strings. Keep the complete value, but expose ordered literal segments
+    # rather than an indivisible signature that cannot fit on a reference page.
+    literal = re.fullmatch(r'(.+? = )b"(.*)";', code, flags=re.DOTALL) if len(code) > 20_000 else None
+    if literal:
+        tokens = re.findall(r"\\x[0-9a-fA-F]{2}|\\.|[^\\]", literal[2])
+        segments = []
+        segment = ""
+        for token in tokens:
+            if len(segment) + len(token) > 12_000:
+                segments.append(segment)
+                segment = ""
+            segment += token
+        if segment:
+            segments.append(segment)
+        return (
+            _rust_fence(literal[1].removesuffix(" = "))
+            + "The byte string value is shown as consecutive segments. Concatenate their contents in order "
+            "to recover the complete value.\n\n"
+            + "".join(
+                f"### Byte string value ({index})\n\n" + _rust_fence(f'b"{segment}"')
+                for index, segment in enumerate(segments, 1)
+            )
+        )
+    return _linked_signature_block(node, page, pages_by_html) if node.find("a", href=True) else _rust_fence(code)
 
 
 def _render_list(node: Tag, page: Page, pages_by_html: dict[Path, Page], depth: int) -> str:
@@ -670,15 +694,23 @@ def generate(repo_root: Path, doc_root: Path, output_dir: Path, *, run_cargo_doc
     pages_by_html = _discover_pages(doc_root, output_dir)
     positions = _positions(pages_by_html, doc_root)
 
+    rendered = []
+    for index, page in enumerate(sorted(pages_by_html.values(), key=lambda page: page.output_path.as_posix()), start=1):
+        position = positions.get(page.html_path, index)
+        rendered.append((page, _render_page(page, pages_by_html, position)))
+
+    # Plan and validate everything before replacing the previous generated tree.
+    redirects: dict[str, str] = {}
+    grouped = group_reference(rendered, generated_by=GENERATED_BY, redirects=redirects)
     reset_output_dir(output_dir)
     _write_index(output_dir)
+    for path, markdown in grouped.items():
+        path.parent.mkdir(parents=True, exist_ok=True)
+        path.write_text(markdown, encoding="utf-8")
 
-    for index, page in enumerate(sorted(pages_by_html.values(), key=lambda page: page.output_path.as_posix()), start=1):
-        page.output_path.parent.mkdir(parents=True, exist_ok=True)
-        position = positions.get(page.html_path, index)
-        page.output_path.write_text(_render_page(page, pages_by_html, position), encoding="utf-8")
-
-    return len(pages_by_html)
+    write_metadata(output_dir / METADATA_NAME, redirects)
+    write_local_redirects(repo_root, redirects)
+    return len(grouped) + 1
 
 
 def main() -> None:
@@ -696,7 +728,7 @@ def main() -> None:
     doc_root = args.doc_root.resolve()
     output_dir = args.output_dir.resolve()
     count = generate(repo_root, doc_root, output_dir, run_cargo_doc=not args.skip_cargo_doc)
-    print(f"Generated Rust library reference for {count} rustdoc page(s) in {output_dir}")
+    print(f"Generated Rust library reference with {count} grouped page(s) in {output_dir}")
 
 
 if __name__ == "__main__":

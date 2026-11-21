@@ -91,3 +91,6 @@ CHANGELOG.md
 
 # Generated per machine by the dynamic-plugin recipe: local dylib name + sha256.
 examples/**/relay-plugin.local.toml
+
+# Generated alongside the Rust API reference.
+fern/redirects/rust-reference.yml

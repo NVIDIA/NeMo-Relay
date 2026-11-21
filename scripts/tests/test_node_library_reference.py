@@ -1,7 +1,7 @@
 # SPDX-FileCopyrightText: Copyright (c) 2026, NVIDIA CORPORATION & AFFILIATES. All rights reserved.
 # SPDX-License-Identifier: Apache-2.0
 
-"""Keep re-exported declarations in generated Node.js reference pages."""
+"""Preserve re-exports and Runtime content in generated Node.js reference pages."""
 
 import importlib
 import json
@@ -119,7 +119,7 @@ class NodeReferenceTests(unittest.TestCase):
         with tempfile.TemporaryDirectory() as directory:
             output = Path(directory)
             REFERENCE.generate(ROOT / "crates" / "node", output)
-            runtime = (output / "nemo-relay-node.mdx").read_text(encoding="utf-8")
+            runtime = "\n".join(page.read_text(encoding="utf-8") for page in (output / "nemo-relay-node").glob("*.mdx"))
         for name in (
             "ScopeStack",
             "ScopeHandle",
@@ -131,6 +131,145 @@ class NodeReferenceTests(unittest.TestCase):
             "registerLlmExecutionIntercept",
         ):
             self.assertIn(f"### `{name}`", runtime)
+
+
+class RuntimeReferenceTests(unittest.TestCase):
+    def _package(self, root: Path, declarations: str, *, typed: str = "") -> Path:
+        package = root / "package"
+        package.mkdir()
+        exports = {".": {"types": "./index.d.ts"}}
+        (package / "index.d.ts").write_text(declarations)
+        if typed:
+            exports["./typed"] = {"types": "./typed.d.ts"}
+            (package / "typed.d.ts").write_text(typed)
+        (package / "package.json").write_text(json.dumps({"name": "nemo-relay-node", "exports": exports}))
+        return package
+
+    def test_runtime_item_content_is_unchanged_and_present_once(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            package = self._package(
+                root,
+                "/** Initialize with the original text.\n"
+                " * @param config Original **parameter** description.\n"
+                " * @returns Original return description.\n"
+                " * @remarks Original remarks.\n"
+                " */\n"
+                "export function initialize(config: Json): Promise<void>;\n"
+                "/** Preserve this class description. */\n"
+                "export class LlmRequest {\n"
+                "  value: Json\n"
+                "}\n"
+                "export { OriginalAlias };\n",
+            )
+            output = root / "reference"
+            REFERENCE.generate(package, output)
+            overview = (output / "nemo-relay-node/index.mdx").read_text()
+            pages = "\n".join(path.read_text() for path in output.rglob("*.mdx"))
+
+        original_function = (
+            "### `initialize`\n\nInitialize with the original text.\n\n"
+            "**Parameters**\n\n- `config`: Original **parameter** description.\n\n"
+            "**Returns**\n\nOriginal return description.\n\n"
+            "**Remarks**\n\nOriginal remarks.\n\n"
+            "```ts\nexport function initialize(config: Json): Promise<void>;\n```\n\n"
+        )
+        original_class = (
+            "### `LlmRequest`\n\nPreserve this class description.\n\n"
+            "```ts\nexport class LlmRequest {\n  value: Json\n}\n```\n\n"
+        )
+        self.assertEqual(pages.count(original_function), 1)
+        self.assertEqual(pages.count(original_class), 1)
+        self.assertIn("## Re-exports\n\n- `OriginalAlias`\n", overview)
+        self.assertIn('<a id="initialize"></a>', overview)
+        self.assertIn('href="nemo-relay-node/lifecycle#initialize"', overview)
+        self.assertIn('href="nemo-relay-node/llm#llmrequest"', overview)
+        self.assertNotIn("### `initialize`", overview)
+
+    def test_related_exports_follow_topics_including_scoped_registration(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            package = self._package(
+                root,
+                "export type ResourceMeasurementScope = string;\n"
+                "export function scopeRegisterSubscriber(): void;\n"
+                "export function scopeRegisterLlmExecutionIntercept(): void;\n"
+                "export function registerPlugin(): void;\n"
+                "export function llmCall(): void;\n"
+                "export function toolCall(): void;\n"
+                "export function capturePropagationContext(): void;\n"
+                "export function validateAdaptiveConfig(): void;\n"
+                "export function futureRuntimeExport(): void;\n",
+            )
+            output = root / "reference"
+            REFERENCE.generate(package, output)
+            pages = {path.stem: path.read_text() for path in (output / "nemo-relay-node").glob("*.mdx")}
+
+        for name, topic in (
+            ("ResourceMeasurementScope", "resource-metrics"),
+            ("scopeRegisterSubscriber", "observability"),
+            ("scopeRegisterLlmExecutionIntercept", "middleware"),
+            ("registerPlugin", "lifecycle"),
+            ("futureRuntimeExport", "lifecycle"),
+            ("llmCall", "llm"),
+            ("toolCall", "tools"),
+            ("capturePropagationContext", "scopes"),
+            ("validateAdaptiveConfig", "adaptive"),
+        ):
+            self.assertIn(f"### `{name}`", pages[topic])
+            self.assertEqual(sum(f"### `{name}`" in page for page in pages.values()), 1)
+
+    def test_duplicate_names_keep_the_original_kind_disambiguation(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            package = self._package(
+                root, "export interface Settings {\n value: string\n}\nexport function Settings(): string;\n"
+            )
+            output = root / "reference"
+            REFERENCE.generate(package, output)
+            runtime = output / "nemo-relay-node"
+            page = (runtime / "lifecycle.mdx").read_text()
+            overview = (runtime / "index.mdx").read_text()
+
+        self.assertIn("### `Settings` interface\n", page)
+        self.assertIn("### `Settings` function\n", page)
+        self.assertIn('#settings-interface"', overview)
+        self.assertIn('#settings-function"', overview)
+
+    def test_other_entry_point_body_is_unchanged(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            package = self._package(
+                root,
+                "export function initialize(): void;\n",
+                typed=(
+                    "/** Original helper documentation. */\nexport type TypedValue = string;\nexport { KeptAlias };\n"
+                ),
+            )
+            output = root / "reference"
+            REFERENCE.generate(package, output)
+            actual = (output / "nemo-relay-node-typed.mdx").read_text().split("Import from ", 1)[1]
+
+        self.assertEqual(
+            actual,
+            "`nemo-relay-node/typed`.\n\nTyped wrappers and codec-aware execution helpers.\n\n"
+            "## Type Aliases\n\n### `TypedValue`\n\nOriginal helper documentation.\n\n"
+            "```ts\nexport type TypedValue = string;\n```\n\n## Re-exports\n\n- `KeptAlias`\n\n",
+        )
+
+    def test_oversized_topic_fails_instead_of_truncating_content(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            package = self._package(
+                root, "/** " + "Unmodified prose. " * 3_000 + "*/\nexport function initialize(): void;\n"
+            )
+            output = root / "reference"
+            output.mkdir()
+            previous = output / "previous.mdx"
+            previous.write_text("Previous successful output.")
+            with self.assertRaisesRegex(ValueError, "Runtime reference topic exceeds"):
+                REFERENCE.generate(package, output)
+            self.assertEqual(previous.read_text(), "Previous successful output.")
 
 
 if __name__ == "__main__":
