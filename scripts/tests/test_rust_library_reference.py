@@ -4,6 +4,7 @@
 """Check grouped reference coverage, page boundaries, and cross-references."""
 
 import importlib
+import json
 import re
 import sys
 import tempfile
@@ -39,6 +40,36 @@ class RustReferenceTests(unittest.TestCase):
         self.assertEqual(count, len(output))
         self.assertTrue(all(len(body) <= ceiling for body in output.values()))
         return output
+
+    def test_redirects_cover_removed_items_and_point_to_existing_anchors(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            self._source(root, "index.html", "<p>Sample module.</p>")
+            self._source(root, "struct.First.html", '<h3 id="method.new">new</h3><p>Constructor.</p>')
+            self._source(root, "nested_module/index.html", "<p>Nested module.</p>")
+            self._source(root, "nested_module/struct.First.html", "<p>Re-export.</p>")
+            output = self._generate(root)
+            metadata = json.loads((root / "output" / "_redirects.json").read_text())["redirects"]
+            rules = yaml.safe_load((root / "fern" / "redirects" / "rust-reference.yml").read_text())["redirects"]
+            self.assertEqual(len(metadata), 2)
+            self.assertEqual(len(rules), 4)  # Default and explicit dev routes.
+            self.assertEqual(
+                metadata["/reference/api/rust-library-reference/sample/struct-first"],
+                "/reference/api/rust-library-reference/sample#struct-first",
+            )
+            pages = {}
+            for body in output.values():
+                fields = yaml.safe_load(body.split("---", 2)[1])
+                if "slug" in fields:
+                    pages[fields["slug"]] = body
+            for source, destination in metadata.items():
+                path, anchor = destination.split("#", 1)
+                self.assertNotIn(source, pages)
+                self.assertIn(f'<a id="{anchor}"></a>', pages[path])
+                self.assertFalse(any(rule["source"].endswith(destination) for rule in rules))
+            before = (root / "fern" / "redirects" / "rust-reference.yml").read_bytes()
+            self._generate(root)
+            self.assertEqual(before, (root / "fern" / "redirects" / "rust-reference.yml").read_bytes())
 
     def test_small_modules_keep_items_and_reexports_with_distinct_member_anchors(self) -> None:
         with tempfile.TemporaryDirectory() as directory:

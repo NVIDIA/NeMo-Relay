@@ -447,7 +447,9 @@ def _render(group: Group, generated_by: str, targets: dict[str, str]) -> str:
     return header + generated_by + "\n\n" + navigation + body
 
 
-def group_reference(rendered: Sequence[tuple[SourcePage, str]], *, generated_by: str) -> dict[Path, str]:
+def group_reference(
+    rendered: Sequence[tuple[SourcePage, str]], *, generated_by: str, redirects: dict[str, str] | None = None
+) -> dict[Path, str]:
     items = []
     for source, markdown in rendered:
         _, metadata, body = markdown.split("---", 2)
@@ -487,6 +489,14 @@ def group_reference(rendered: Sequence[tuple[SourcePage, str]], *, generated_by:
                 overflowing = overview_overflows if groups_by_path[path].children else overflows
                 overflowing[path.parent] = max(overflowing.get(path.parent, 0), len(body) - source_ceiling)
         if not overflows and not overview_overflows:
+            if redirects is not None:
+                # HTTP redirects match paths, not fragments. Keep existing module
+                # routes and send removed item pages to their canonical section.
+                redirects.update(
+                    (source, target)
+                    for source, target in targets.items()
+                    if "#" not in source and source != urldefrag(target)[0]
+                )
             return result
         for directory, overflow in overflows.items():
             budgets[directory] = budgets.get(directory, default_budget) - overflow - 500

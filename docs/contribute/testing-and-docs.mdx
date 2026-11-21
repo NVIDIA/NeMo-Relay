@@ -370,7 +370,11 @@ uv run python scripts/docs/generate_rust_library_reference.py --skip-cargo-doc
 ```
 
 The generated MDX directory is ignored. Change the generator and its tests,
-then regenerate; do not edit individual generated pages.
+then regenerate; do not edit individual generated pages. The same run generates
+Fern redirects from removed item URLs to their grouped item sections, including
+Markdown routes. HTTP redirects cannot distinguish incoming fragments, so old
+member links land at the item's start. Publishing keeps each snapshot's mapping;
+retained releases with individual item pages remain unchanged.
 
 ## Fern Publishing
 

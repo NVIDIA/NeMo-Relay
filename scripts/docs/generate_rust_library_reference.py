@@ -17,6 +17,7 @@ from bs4 import BeautifulSoup
 from bs4.element import NavigableString, PageElement, Tag
 from reference_common import escape_mdx_text, frontmatter, reset_output_dir
 from rust_reference_grouping import group_reference
+from rust_reference_redirects import METADATA_NAME, write_local_redirects, write_metadata
 
 CRATES = (
     ("nemo-relay-builtins", "nemo_relay_builtins", "Default plugin composition for SDKs and the CLI."),
@@ -699,13 +700,16 @@ def generate(repo_root: Path, doc_root: Path, output_dir: Path, *, run_cargo_doc
         rendered.append((page, _render_page(page, pages_by_html, position)))
 
     # Plan and validate everything before replacing the previous generated tree.
-    grouped = group_reference(rendered, generated_by=GENERATED_BY)
+    redirects: dict[str, str] = {}
+    grouped = group_reference(rendered, generated_by=GENERATED_BY, redirects=redirects)
     reset_output_dir(output_dir)
     _write_index(output_dir)
     for path, markdown in grouped.items():
         path.parent.mkdir(parents=True, exist_ok=True)
         path.write_text(markdown, encoding="utf-8")
 
+    write_metadata(output_dir / METADATA_NAME, redirects)
+    write_local_redirects(repo_root, redirects)
     return len(grouped) + 1
 
 
