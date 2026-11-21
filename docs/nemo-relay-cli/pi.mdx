@@ -45,8 +45,8 @@ not as an error.
 
 ## Requirements
 
-Install pi 0.84.x, and confirm the NeMo Relay extension is reachable. Anything
-below 0.84.0 is rejected; anything above 0.84.x is accepted but reported as
+Install pi <Markdown src="../_snippets/prerequisites/values/pi-verified.mdx" suffix="," /> and confirm the NeMo Relay extension is reachable. Anything
+below <Markdown src="../_snippets/prerequisites/values/pi.mdx" suffix=" " /> is rejected; anything above <Markdown src="../_snippets/prerequisites/values/pi-verified.mdx" suffix=" " /> is accepted but reported as
 **unverified**, because pi can change a hook shape in a minor release and the
 symptom is missing spans rather than an error. `doctor` reports it in its output;
 the launcher records it as a warning-level log line, so `nemo-relay pi` shows it

@@ -94,7 +94,7 @@ For authentication, heartbeats, recovery, and idle shutdown, refer to
 [Shared Gateway Lifecycle](/nemo-relay-cli/plugin-installation#shared-gateway-lifecycle).
 
 
-The generated entry sets `alwaysLoad: true`, so Claude Code 2.1.121 or newer
+The generated entry sets `alwaysLoad: true`, so Claude Code <Markdown src="../_snippets/prerequisites/values/claude.mdx" suffix=" " /> or newer
 waits for the MCP connection before session startup. The installed command hook
 carries the same install-generation fence, waits for the MCP-owned gateway, and
 forwards the canonical payload once. MCP owns the session-long gateway
@@ -252,7 +252,7 @@ slash-command expansions as `skill.load.inferred`; Claude Code does not
 identify whether an expansion came from a skill or a legacy custom command.
 The normal `Skill` pre-tool hook emits an observed `skill.load` mark.
 
-The wrapper requires Claude Code 2.1.121 or newer. Earlier versions do not
+The wrapper requires Claude Code <Markdown src="../_snippets/prerequisites/values/claude.mdx" suffix=" " /> or newer. Earlier versions do not
 support every required hook event, and `nemo-relay doctor` reports the version
 mismatch.
 
@@ -352,7 +352,7 @@ open main turns, replace task output, or provide hints for matching tool calls.
 An internal call between turns has no enclosing ATIF trajectory. Use ATOF or
 OpenTelemetry to include these calls in usage totals.
 
-The integration minimum remains Claude Code 2.1.121. Versions before 2.1.273
+The integration minimum remains Claude Code <Markdown src="../_snippets/prerequisites/values/claude.mdx" suffix="." /> Versions before 2.1.273
 and missing, invalid, or unsupported classes remain `unknown` and keep the
 existing turn handling and parent selection. Classes describe operations, not
 whether a person initiated them. Do not treat `unknown` as confirmed

@@ -12,8 +12,8 @@ For Claude Code or Codex, install the [Relay CLI](/getting-started/installation/
 
 ## Hermes Agent
 
-Requires Linux, Apple Silicon macOS, or Windows 10/11 (x64 or ARM64, including
-WSL2), plus permission to install in your user environment; check the
+Requires a supported platform: <Markdown src="../../_snippets/prerequisites/hermes-platforms.mdx" suffix="." />
+You need permission to install in your user environment; check the
 [Hermes Agent installation requirements](https://hermes-agent.nousresearch.com/docs/getting-started/installation)
 for host dependencies.
 
@@ -41,8 +41,8 @@ For host installation requirements, use the
 
 ## OpenClaw
 
-Requires OpenClaw 2026.9.3 with `openclaw` on `PATH` and Node.js
-`>=24.16.0 <25` or `>=26.1.0`.
+Requires OpenClaw <Markdown src="../../_snippets/prerequisites/values/openclaw-tested.mdx" suffix=" " /> with `openclaw` on `PATH` and Node.js
+<Markdown src="../../_snippets/prerequisites/values/openclaw-node.mdx" suffix="." />
 
 ```bash
 openclaw plugins install npm:nemo-relay-openclaw
