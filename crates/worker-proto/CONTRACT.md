@@ -365,13 +365,14 @@ them, and both the host and Rust worker reuse its implementations. Generated
 messages therefore stay out of callback APIs. Closed DTOs are converted by field;
 only open application data and codec-owned data use JSON serialization.
 
-The conversion code is split across three files:
+The following files implement the conversions.
 
 | File | Responsibility |
 | --- | --- |
 | `src/conversions/mod.rs` | Shared checked conversions and the private mapping macros. |
 | `src/conversions/dto.rs` | Declarative struct fields, enum mappings, and collection wrappers. |
 | `src/conversions/variants.rs` | Explicit mappings for Rust enum variants, protobuf oneofs, and structures with different layouts. |
+| `src/conversions/content.rs` | Protobuf mappings for normalized content selections, locations, and snapshots. |
 
 A `dto!` declaration uses `field: mode` when names match and
 `source => target: mode` when they differ. This example shows the declaration syntax:
