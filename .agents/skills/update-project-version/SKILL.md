@@ -41,6 +41,9 @@ Use this sequence:
    implementation changes.
 6. Refresh lockfiles or attribution files only when their versioned inputs
    changed. Do not run language suites for a metadata-only bump.
+7. Follow the [documentation maintenance review](../../../RELEASING.md#documentation-maintenance)
+   in `RELEASING.md`. Regenerate shared prerequisites when their declarations or
+   table templates change; a package version bump alone does not require it.
 
 ## Verification
 

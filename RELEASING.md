@@ -233,6 +233,17 @@ Review affected sources such as [`README.md`](README.md),
 [`docs/getting-started/installation.mdx`](docs/getting-started/installation.mdx),
 the Quick Starts, and binding READMEs or examples.
 
+When prerequisite declarations or shared prerequisite table templates change,
+run `just docs-prerequisites`. Review and commit the generated snippets with
+their source changes before cutting the tag. Review requirement copies in root
+and binding READMEs or contributor guidance, which remain manually maintained.
+Preserve intentional example pins and historical references. A Relay package
+version bump alone does not require prerequisite regeneration.
+
+See [Shared Prerequisites](docs/contribute/testing-and-docs.mdx#shared-prerequisites)
+for the source declarations, authoring rules, and stale-value checks. Release
+snapshots retain the committed prerequisite values from the tagged source.
+
 Quick Start execution is a separate validation step. When using the execution
 workflow, trigger it manually against explicitly selected development source or
 package assets. A passing run validates execution with those inputs; reviewers
