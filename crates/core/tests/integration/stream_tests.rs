@@ -2793,3 +2793,61 @@ async fn anthropic_sessions_record_in_stream_error_events_as_errors() {
     }
     deregister_subscriber("anthropic_stream_error_status").unwrap();
 }
+
+/// An Anthropic `error` event is reported before polling the source again.
+#[tokio::test]
+async fn anthropic_stream_validation_reports_error_events_before_polling_the_source_again() {
+    let delta = json!({"type": "content_block_delta", "index": 0,
+        "delta": {"type": "text_delta", "text": "Partial"}});
+    let error = json!({"type": "error",
+        "error": {"type": "overloaded_error", "message": "Overloaded"}});
+    let expected =
+        FlowError::Internal("Anthropic stream reported overloaded_error: Overloaded".into())
+            .to_string();
+
+    // A source that stalls after the error event must not keep the call open.
+    let close_calls = Arc::new(AtomicUsize::new(0));
+    let stalled = tokio_stream::iter(vec![Ok(delta.clone()), Ok(error.clone())])
+        .chain(tokio_stream::pending());
+    let source = LlmJsonStream::from_closeable(CloseTrackingStream {
+        stream: Box::pin(stalled),
+        close_calls: close_calls.clone(),
+        close_error: None,
+        closed: false,
+    });
+    let mut stream = AnthropicMessagesStreamingCodec::new().validate_stream(source);
+    assert_eq!(stream.next().await.unwrap().unwrap(), delta);
+    assert_eq!(stream.next().await.unwrap().unwrap(), error);
+    let reported = tokio::time::timeout(Duration::from_secs(1), stream.next())
+        .await
+        .expect("the error must be reported without waiting for the source")
+        .unwrap()
+        .unwrap_err();
+    assert_eq!(reported.to_string(), expected);
+    assert!(stream.next().await.is_none());
+    stream.close().await.unwrap();
+    assert_eq!(close_calls.load(Ordering::SeqCst), 1);
+
+    // A transport error after the error event must not replace the provider's error.
+    let close_calls = Arc::new(AtomicUsize::new(0));
+    let source = LlmJsonStream::from_closeable(CloseTrackingStream {
+        stream: Box::pin(tokio_stream::iter(vec![
+            Ok(delta.clone()),
+            Ok(error.clone()),
+            Err(FlowError::Internal("connection reset".into())),
+        ])),
+        close_calls: close_calls.clone(),
+        close_error: None,
+        closed: false,
+    });
+    let mut stream = AnthropicMessagesStreamingCodec::new().validate_stream(source);
+    assert_eq!(stream.next().await.unwrap().unwrap(), delta);
+    assert_eq!(stream.next().await.unwrap().unwrap(), error);
+    assert_eq!(
+        stream.next().await.unwrap().unwrap_err().to_string(),
+        expected
+    );
+    assert!(stream.next().await.is_none());
+    stream.close().await.unwrap();
+    assert_eq!(close_calls.load(Ordering::SeqCst), 1);
+}

@@ -1319,7 +1319,7 @@ impl Default for AnthropicMessagesStreamingCodec {
 }
 
 impl super::streaming::StreamingCodec for AnthropicMessagesStreamingCodec {
-    /// Reports an error at EOF if the source forwarded an Anthropic `error` event.
+    /// Reports an error right after the source forwards an Anthropic `error` event.
     fn validate_stream(&self, stream: LlmJsonStream) -> LlmJsonStream {
         LlmJsonStream::from_closeable(AnthropicCompletionStream {
             inner: stream,
@@ -1363,7 +1363,7 @@ impl super::streaming::StreamingCodec for AnthropicMessagesStreamingCodec {
     }
 }
 
-/// Forwards Anthropic events unchanged and reports an in-stream `error` event at EOF.
+/// Forwards Anthropic events unchanged and reports an in-stream `error` event right after it.
 ///
 /// The check reads forwarded events directly rather than collector state, so it does not depend
 /// on when the paired collector observes each event.
@@ -1383,26 +1383,25 @@ impl Stream for AnthropicCompletionStream {
         if this.ended {
             return Poll::Ready(None);
         }
+        // Report a forwarded `error` event on the next poll, without polling the source again,
+        // so a stalled source or a later transport error cannot delay or replace it.
+        if let Some(description) = this.error.take() {
+            this.ended = true;
+            log::warn!(
+                target: "nemo_relay.runtime",
+                event = "llm_stream_provider_error";
+                "Anthropic stream reported an error event"
+            );
+            return Poll::Ready(Some(Err(FlowError::Internal(description))));
+        }
         match Pin::new(&mut this.inner).poll_next(cx) {
             Poll::Ready(Some(Ok(event))) => {
-                if this.error.is_none() {
-                    this.error = anthropic_stream_error(&event);
-                }
+                this.error = anthropic_stream_error(&event);
                 Poll::Ready(Some(Ok(event)))
             }
             Poll::Ready(None) => {
                 this.ended = true;
-                match this.error.take() {
-                    Some(description) => {
-                        log::warn!(
-                            target: "nemo_relay.runtime",
-                            event = "llm_stream_provider_error";
-                            "Anthropic stream reported an error event"
-                        );
-                        Poll::Ready(Some(Err(FlowError::Internal(description))))
-                    }
-                    None => Poll::Ready(None),
-                }
+                Poll::Ready(None)
             }
             Poll::Ready(Some(Err(error))) => {
                 this.ended = true;
