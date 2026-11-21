@@ -7,9 +7,9 @@ use std::sync::Arc;
 
 use nemo_relay_types::codec::content::{
     ContentCursor, ContentEntry, ContentField, ContentKind, ContentRoot, ContentSelection,
-    ContentSelectionError, ContentSource, MessageView, PayloadRef,
+    ContentSelectionError, ContentSource, PayloadRef, RetainedContent,
 };
-use nemo_relay_types::codec::request::{AnnotatedLlmRequest, Message, MessageContent};
+use nemo_relay_types::codec::request::AnnotatedLlmRequest;
 use nemo_relay_types::codec::response::AnnotatedLlmResponse;
 use pyo3::prelude::*;
 
@@ -21,41 +21,10 @@ fn python_value(py: Python<'_>, value: &impl serde::Serialize) -> PyResult<Py<Py
         .map_err(|error| pyo3::exceptions::PyRuntimeError::new_err(error.to_string()))
 }
 
-enum Source {
-    Message {
-        message: Message,
-        request_index: Option<usize>,
-    },
-    Content(MessageContent),
-    Response(Box<AnnotatedLlmResponse>),
-}
-
-impl Source {
-    fn view(&self) -> MessageView<'_> {
-        match self {
-            Self::Message { message, .. } => message.content_view(),
-            Self::Content(content) => content.content_view(),
-            Self::Response(response) => response.output(),
-        }
-    }
-
-    fn entry(&self, mut cursor: ContentCursor) -> Option<ContentEntry<'_>> {
-        let mut entry = cursor.next_part(self.view())?;
-        if let Self::Message {
-            request_index: Some(index),
-            ..
-        } = self
-        {
-            entry.location.root = ContentRoot::RequestMessage(*index);
-        }
-        Some(entry)
-    }
-}
-
 /// Read-only snapshot of selected normalized content. Entries retain its storage.
 #[pyclass(name = "MessageView", frozen)]
 pub struct PyMessageView {
-    source: Arc<Source>,
+    source: Arc<RetainedContent>,
 }
 
 impl PyMessageView {
@@ -74,41 +43,14 @@ impl PyMessageView {
                         pyo3::exceptions::PyValueError::new_err(error.to_string())
                     }
                 })?;
-        Ok(view.map(|view| match view.source() {
-            ContentSource::Message(message) => Self::message(
-                message,
-                match view.root() {
-                    ContentRoot::RequestMessage(index) => Some(index),
-                    _ => None,
-                },
-            ),
-            ContentSource::Content(content) => Self::content(content),
-            _ => unreachable!("request selection yields a message or instructions"),
+        Ok(view.map(|view| Self {
+            source: Arc::new(view.retain()),
         }))
-    }
-
-    pub(super) fn message(message: &Message, request_index: Option<usize>) -> Self {
-        Self {
-            source: Arc::new(Source::Message {
-                message: message.clone(),
-                request_index,
-            }),
-        }
-    }
-
-    pub(super) fn content(content: &MessageContent) -> Self {
-        Self {
-            source: Arc::new(Source::Content(content.clone())),
-        }
     }
 
     pub(super) fn response(response: &AnnotatedLlmResponse) -> Self {
         Self {
-            source: Arc::new(Source::Response(Box::new(AnnotatedLlmResponse {
-                message: response.message.clone(),
-                tool_calls: response.tool_calls.clone(),
-                ..Default::default()
-            }))),
+            source: Arc::new(response.output().retain()),
         }
     }
 }
@@ -121,7 +63,7 @@ impl PyMessageView {
         let message = serde_json::from_value(py_to_json(message)?)
             .map_err(|error| pyo3::exceptions::PyValueError::new_err(error.to_string()))?;
         Ok(Self {
-            source: Arc::new(Source::Message {
+            source: Arc::new(RetainedContent::Message {
                 message,
                 request_index: None,
             }),
@@ -134,7 +76,7 @@ impl PyMessageView {
         let content = serde_json::from_value(py_to_json(content)?)
             .map_err(|error| pyo3::exceptions::PyValueError::new_err(error.to_string()))?;
         Ok(Self {
-            source: Arc::new(Source::Content(content)),
+            source: Arc::new(RetainedContent::Content(content)),
         })
     }
 
@@ -166,7 +108,7 @@ impl PyMessageView {
 /// Single-pass iterator materializing one Python text string at a time.
 #[pyclass(name = "_TextIterator")]
 pub struct PyTextIterator {
-    source: Arc<Source>,
+    source: Arc<RetainedContent>,
     cursor: ContentCursor,
 }
 
@@ -184,7 +126,7 @@ impl PyTextIterator {
 /// Iterator whose entries share the snapshot rather than copying payloads.
 #[pyclass(name = "ContentIterator")]
 pub struct PyContentIterator {
-    source: Arc<Source>,
+    source: Arc<RetainedContent>,
     cursor: ContentCursor,
 }
 
@@ -216,7 +158,7 @@ pub struct PyContentLocation {
 /// Typed entry in a snapshot. Payload dictionaries/lists are independent copies.
 #[pyclass(name = "ContentEntry", frozen)]
 pub struct PyContentEntry {
-    source: Arc<Source>,
+    source: Arc<RetainedContent>,
     cursor: ContentCursor,
 }
 
@@ -336,7 +278,7 @@ impl PyContentEntry {
 /// A tool invocation backed by shared snapshot storage.
 #[pyclass(name = "ToolCallView", frozen)]
 pub struct PyToolCallView {
-    source: Arc<Source>,
+    source: Arc<RetainedContent>,
     cursor: ContentCursor,
 }
 
@@ -379,7 +321,7 @@ impl PyToolCallView {
 /// A tool result backed by shared snapshot storage.
 #[pyclass(name = "ToolResultView", frozen)]
 pub struct PyToolResultView {
-    source: Arc<Source>,
+    source: Arc<RetainedContent>,
     cursor: ContentCursor,
 }
 
@@ -427,7 +369,7 @@ impl PyToolResultView {
 /// Original tool payload representation. Accessing value creates a Python-owned value.
 #[pyclass(name = "PayloadView", frozen)]
 pub struct PyPayloadView {
-    source: Arc<Source>,
+    source: Arc<RetainedContent>,
     cursor: ContentCursor,
 }
 

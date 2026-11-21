@@ -9,70 +9,40 @@ use napi::{Env, bindgen_prelude::Unknown};
 use napi_derive::napi;
 use nemo_relay_types::codec::content::{
     ContentCursor, ContentEntry, ContentField, ContentKind, ContentRoot, ContentSelection,
-    ContentSelectionError, ContentSource, MessageView, PayloadRef,
+    ContentSelectionError, ContentSource, PayloadRef, RetainedContent,
 };
 use nemo_relay_types::codec::request::{AnnotatedLlmRequest, Message, MessageContent};
-use nemo_relay_types::codec::response::AnnotatedLlmResponse;
 use serde_json::{Value, json};
 
 use crate::convert::parse_json;
 use crate::error::{Error, Result};
 use crate::json::Json;
 
-enum Source {
-    Message(Message),
-    Content(MessageContent),
-    Response(Box<AnnotatedLlmResponse>),
-}
-
-struct SelectedSource {
-    value: Source,
-    request_index: Option<usize>,
-}
-
-impl SelectedSource {
-    fn view(&self) -> MessageView<'_> {
-        match &self.value {
-            Source::Message(message) => message.content_view(),
-            Source::Content(content) => content.content_view(),
-            Source::Response(response) => response.output(),
-        }
-    }
-
-    fn entry(&self, mut cursor: ContentCursor) -> ContentEntry<'_> {
-        let mut entry = cursor
-            .next_part(self.view())
-            .expect("immutable snapshot entry");
-        if let Some(index) = self.request_index {
-            entry.location.root = ContentRoot::RequestMessage(index);
-        }
-        entry
-    }
-}
-
 /// Internal native storage for the public codecs.MessageView facade.
 #[napi(js_name = "_ContentSnapshot")]
 pub struct ContentSnapshot {
-    source: Arc<SelectedSource>,
+    source: Arc<RetainedContent>,
 }
 
 /// Forward-only traversal retaining the selected snapshot.
 #[napi(js_name = "_ContentIterator")]
 pub struct ContentIterator {
-    source: Arc<SelectedSource>,
+    source: Arc<RetainedContent>,
     cursor: ContentCursor,
 }
 
 /// Retained position in an immutable snapshot; payload access never rescans it.
 #[napi(js_name = "_ContentEntry")]
 pub struct ContentEntrySnapshot {
-    source: Arc<SelectedSource>,
+    source: Arc<RetainedContent>,
     cursor: ContentCursor,
 }
 
 impl ContentEntrySnapshot {
     fn entry(&self) -> ContentEntry<'_> {
-        self.source.entry(self.cursor)
+        self.source
+            .entry(self.cursor)
+            .expect("immutable snapshot entry")
     }
 
     fn payload(&self) -> Result<PayloadRef<'_>> {
@@ -104,18 +74,19 @@ impl ContentSnapshot {
     ) -> Result<Self> {
         let value = value.0;
         let source = match mode.as_str() {
-            "message" => Source::Message(parse_json(value, "normalized message")?),
-            "content" => Source::Content(parse_json(value, "normalized content")?),
-            "response" => {
-                Source::Response(Box::new(parse_json(value, "normalized response output")?))
-            }
+            "message" => RetainedContent::Message {
+                message: parse_json(value, "normalized message")?,
+                request_index: request_index.map(|index| index as usize),
+            },
+            "content" => RetainedContent::Content(parse_json(value, "normalized content")?),
+            "response" => RetainedContent::Response(Box::new(parse_json(
+                value,
+                "normalized response output",
+            )?)),
             _ => return Err(Error::invalid_argument("unknown content snapshot source")),
         };
         Ok(Self {
-            source: Arc::new(SelectedSource {
-                value: source,
-                request_index: request_index.map(|index| index as usize),
-            }),
+            source: Arc::new(source),
         })
     }
 

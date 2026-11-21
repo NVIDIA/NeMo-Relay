@@ -159,6 +159,44 @@ pub struct MessageView<'a> {
     source: Source<'a>,
 }
 
+/// Owned backing for lazy traversal after the original annotation is dropped.
+pub enum RetainedContent {
+    /// A selected history item (with its original index) or a standalone message.
+    Message {
+        /// The selected normalized message.
+        message: Message,
+        /// Index in the original request, if selected from history.
+        request_index: Option<usize>,
+    },
+    /// Standalone content or request instructions.
+    Content(MessageContent),
+    /// Normalized response backing the output view.
+    Response(Box<AnnotatedLlmResponse>),
+}
+
+impl RetainedContent {
+    /// Borrow the selection with its original root, including for an empty message.
+    pub fn view(&self) -> MessageView<'_> {
+        match self {
+            Self::Message {
+                message,
+                request_index: Some(index),
+            } => MessageView::request_message(*index, message),
+            Self::Message {
+                message,
+                request_index: None,
+            } => message.content_view(),
+            Self::Content(content) => content.content_view(),
+            Self::Response(response) => response.output(),
+        }
+    }
+
+    /// Read an entry from a saved cursor position without advancing the caller's cursor.
+    pub fn entry(&self, mut cursor: ContentCursor) -> Option<ContentEntry<'_>> {
+        cursor.next_part(self.view())
+    }
+}
+
 /// Forward-only traversal state, independent of the borrowed source lifetime.
 ///
 /// Keep one cursor per immutable selected view. Bindings can retain this state
@@ -235,6 +273,28 @@ impl<'a> MessageView<'a> {
     /// Normalized root of this selection, including when it contains no parts.
     pub fn root(self) -> ContentRoot {
         self.root
+    }
+
+    /// Copy the selected source for lazy traversal. For output, retain only the
+    /// response message and tool calls. Parts and eligible text are read on demand.
+    pub fn retain(self) -> RetainedContent {
+        match self.source {
+            Source::Message(message) => RetainedContent::Message {
+                message: message.clone(),
+                request_index: match self.root {
+                    ContentRoot::RequestMessage(index) => Some(index),
+                    _ => None,
+                },
+            },
+            Source::Content(content) => RetainedContent::Content(content.clone()),
+            Source::Response(response) => {
+                RetainedContent::Response(Box::new(AnnotatedLlmResponse {
+                    message: response.message.clone(),
+                    tool_calls: response.tool_calls.clone(),
+                    ..Default::default()
+                }))
+            }
+        }
     }
 
     /// Borrow the backing normalized item so callers can retain selected storage.
