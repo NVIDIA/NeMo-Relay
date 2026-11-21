@@ -43,10 +43,13 @@ normalized content and tool calls. A request can contain assistant/tool history
 from earlier turns; a codec does not accumulate history between calls.
 
 Both return a borrowed `MessageView` from `nemo_relay_types::codec::content`. The
-view's `root()` identifies the normalized selection even when it has no parts;
+view's `root()` identifies the normalized selection even when it has no parts.
 `source()` borrows the selected message, content, or response through
-`ContentSource`. Bindings use these accessors to retain selected storage after
-applying the shared Rust `ContentSelection::select()` policy.
+`ContentSource`. To keep the selection after the annotation is dropped, call
+`view.retain()`. Its `RetainedContent` result owns the selected data. Calling
+`view()` on that result preserves the original request index and lets you
+traverse parts on demand. The in-process Python and Node.js bindings use this
+storage for their read-only views.
 
 `Message.content_view()` and `MessageContent.content_view()` provide the same
 access for arbitrary history items and separate instructions.

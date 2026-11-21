@@ -696,6 +696,37 @@ fn selected_source_and_root_preserve_empty_items_without_copying() {
 }
 
 #[test]
+fn retained_selection_preserves_an_empty_history_root_and_only_copies_response_output() {
+    use nemo_relay_types::codec::content::ContentSource;
+
+    let retained = AnnotatedLlmRequest {
+        messages: vec![
+            message(json!({"role":"user","content":"first"})),
+            message(json!({"role":"assistant","content":[]})),
+        ],
+        ..Default::default()
+    }
+    .last_message()
+    .unwrap()
+    .retain();
+    assert_eq!(retained.view().root(), ContentRoot::RequestMessage(1));
+    assert_eq!(retained.view().parts().count(), 0);
+
+    let retained = AnnotatedLlmResponse {
+        model: Some("unrelated metadata".into()),
+        message: Some(MessageContent::Text("answer".into())),
+        ..Default::default()
+    }
+    .output()
+    .retain();
+    let ContentSource::Response(response) = retained.view().source() else {
+        panic!("expected response output")
+    };
+    assert!(response.model.is_none());
+    assert_eq!(retained.view().text().as_deref(), Some("answer"));
+}
+
+#[test]
 fn forward_cursor_preserves_borrows_checkpoints_and_exhaustion() {
     use nemo_relay_types::codec::content::ContentCursor;
 
