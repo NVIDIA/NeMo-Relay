@@ -1507,7 +1507,6 @@ impl ObservationReceiver {
     async fn finish_stream(mut self, surface: ProviderSurface) -> Option<Value> {
         let codec = streaming_codec(surface);
         let mut collector = codec.collector();
-        let mut borrowed_collector = codec.borrowed_collector();
         let finalizer = codec.finalizer();
         let signal = Arc::clone(&self.signal);
         // Observation owns its source, so validation stays off the delivery path.
@@ -1556,11 +1555,7 @@ impl ObservationReceiver {
         let mut stream = codec.validate_stream(source);
         let mut valid = true;
         while let Some(event) = stream.next().await {
-            let result = event.and_then(|event| match borrowed_collector.as_mut() {
-                Some(collect) => collect(&event),
-                None => collector(event),
-            });
-            if result.is_err() {
+            if event.and_then(&mut collector).is_err() {
                 valid = false;
                 break;
             }
