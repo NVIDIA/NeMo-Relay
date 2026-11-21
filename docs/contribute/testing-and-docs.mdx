@@ -292,6 +292,56 @@ just docs
 
 To check only the shared Rust examples, run `just docs-examples`.
 
+### Shared Prerequisites
+
+Current installation and compatibility requirements use Fern `Markdown` includes
+under `docs/_snippets/prerequisites/`. Reuse an existing snippet when adding a
+requirement to another page. Relative includes keep each published release
+snapshot tied to its own requirements.
+
+Inline value includes pass `suffix=" "` between words or a punctuation suffix
+such as `suffix="."` at the end of a sentence. Fern expands snippets before
+parsing Markdown; table cells must therefore use a complete table template
+under `prerequisites/templates/`, with values such as `{{claude}}`.
+Includes support static single- or double-quoted attributes in any order.
+The prerequisite validator rejects JSX expressions and ambiguous attributes
+instead of silently skipping them; code examples and comments are excluded.
+
+After changing a minimum agent version in `crates/cli/src/agents/`, Python's
+`requires-python`, Node.js's package `engines`, or the OpenClaw host dependency,
+regenerate the values:
+
+```bash
+just docs-prerequisites
+```
+
+Commit the updated files under `docs/_snippets/prerequisites/values/` with the
+source change. `just docs` and `just check-quickstarts` reject stale or missing
+values and broken snippet paths. The extractor deliberately fails if a source
+declaration changes shape, so a new constraint format requires review.
+
+Author setup requirements such as project initialization, credentials, and host
+platforms in the shared snippets outside `values/`. Buf's build minimum is also
+maintained there; CI toolchain pins are not minimum compatibility declarations.
+Quickstart `requires` metadata can reference generated constraints with
+`source:python`, `source:node`, or `source:claude`, for example. Test reports
+resolve those references to concrete requirements from the same checkout.
+
+The `python` value is Relay's package requirement, not an independently
+discovered minimum for each upstream framework. Dependency resolution also
+enforces framework and provider metadata. Recheck those constraints when
+changing integration dependencies or exact example versions.
+
+This synchronization covers the Fern pages migrated to shared snippets and
+their quickstart metadata. Root Markdown files such as `README.md`,
+`CONTRIBUTING.md`, and crate READMEs, plus build-recipe comments, remain manually
+maintained. Review their requirement text when changing a compatibility floor;
+these files cannot use Fern components and are not checked by this generator.
+
+Keep exact example pins, historical release notes, and tested host versions
+distinct from minimum supported versions. Regeneration does not rewrite
+executable examples or archived documentation.
+
 ### Instrument Applications Examples
 
 Run the examples displayed in the tool, LLM, and middleware guides against the

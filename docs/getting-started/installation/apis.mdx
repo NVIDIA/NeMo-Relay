@@ -12,8 +12,7 @@ used by their examples.
 
 ## Python
 
-Requires CPython 3.11 or newer and `uv`, with an existing `pyproject.toml`
-project; run `uv init` first if you are creating a new project.
+<Markdown src="../../_snippets/prerequisites/python-project.mdx" />
 
 ```bash
 uv add nemo-relay
@@ -23,7 +22,7 @@ Continue with the [Python Quick Start](/getting-started/quick-start/python).
 
 ## Node.js
 
-Requires Node.js 24.13.1 or newer and npm; run the command from your
+Requires Node.js <Markdown src="../../_snippets/prerequisites/values/node.mdx" suffix=" " /> or newer and npm; run the command from your
 application's Node.js project directory.
 
 ```bash
@@ -35,7 +34,7 @@ Continue with the [Node.js Quick Start](/getting-started/quick-start/nodejs).
 ## Rust
 
 Requires a Cargo project (`cargo init` for a new project); building requires a
-Rust toolchain and Buf 1.75.0 or newer on `PATH`, or selected
+Rust toolchain and Buf <Markdown src="../../_snippets/prerequisites/buf.mdx" suffix=" " /> or newer on `PATH`, or selected
 through `BUF`. Cargo supplies `protoc` automatically. The first build needs
 access to the Buf Schema Registry to download the locked validation schema.
 
@@ -50,7 +49,7 @@ For optional adaptive runtime primitives, use
 ## Package Compatibility
 
 NeMo Relay publishes CPython 3.11 ABI3 wheels for x86_64 and ARM64 Linux
-systems. On supported CPython 3.11 or newer environments, `pip` and `uv` select
+systems. On supported CPython <Markdown src="../../_snippets/prerequisites/values/python.mdx" suffix=" " /> or newer environments, `pip` and `uv` select
 `manylinux_2_17` for glibc 2.17 or newer or `musllinux_1_2` for musl 1.2 or
 newer. Supported Alpine Linux environments do not need a `--platform` override
 or source build. Alpine environments outside this wheel coverage must use a

@@ -9,11 +9,12 @@ SPDX-License-Identifier: Apache-2.0 */}
 Add the extra for your framework to an existing Python project. These commands
 install the latest stable Relay release and the framework dependencies it needs.
 The quick starts include project creation and pin their example versions.
+The Python requirement below is Relay's; `uv` also checks the selected framework
+and provider packages' requirements.
 
 ## Google ADK
 
-Requires CPython 3.11 or newer and `uv`, with an existing `pyproject.toml`
-project; run `uv init` first if you are creating a new project.
+<Markdown src="../../_snippets/prerequisites/python-project.mdx" />
 
 ```bash
 uv add "nemo-relay[google-adk]"
@@ -24,8 +25,7 @@ or [Google ADK Integration Guide](/supported-integrations/google-adk).
 
 ## LangChain
 
-Requires CPython 3.11 or newer and `uv`, with an existing `pyproject.toml`
-project; run `uv init` first if you are creating a new project.
+<Markdown src="../../_snippets/prerequisites/python-project.mdx" />
 
 ```bash
 uv add "nemo-relay[langchain]"
@@ -35,8 +35,7 @@ Continue with the [LangChain Quick Start](/getting-started/quick-start/langchain
 
 ## LangGraph
 
-Requires CPython 3.11 or newer and `uv`, with an existing `pyproject.toml`
-project; run `uv init` first if you are creating a new project.
+<Markdown src="../../_snippets/prerequisites/python-project.mdx" />
 
 ```bash
 uv add "nemo-relay[langgraph]"
@@ -46,8 +45,7 @@ Continue with the [LangGraph Quick Start](/getting-started/quick-start/langgraph
 
 ## Deep Agents
 
-Requires CPython 3.11 or newer and `uv`, with an existing `pyproject.toml`
-project; run `uv init` first if you are creating a new project.
+<Markdown src="../../_snippets/prerequisites/python-project.mdx" />
 
 ```bash
 uv add "nemo-relay[deepagents]"

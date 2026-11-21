@@ -37,6 +37,7 @@
           "minLength": 1
         },
         "requires": {
+          "description": "Literal environment requirements or source:<name> references to generated prerequisite constraints in this checkout.",
           "type": "object",
           "additionalProperties": {
             "type": "string",

@@ -19,7 +19,7 @@ SPDX-License-Identifier: Apache-2.0 */}
   ],
   "cwd": "relay-claude-code-quickstart",
   "requires": {
-    "claude": ">=2.1.121",
+    "claude": "source:claude",
     "jq (bash only)": ">=1.6"
   },
   "setup": [
@@ -84,7 +84,7 @@ check where the expected activity occurred.
 
 Before you start, make sure you have:
 
-- Claude Code 2.1.121 or newer
+- Claude Code <Markdown src="../../_snippets/prerequisites/values/claude.mdx" suffix=" " /> or newer
 - Inference access: an [Anthropic API key](https://platform.claude.com/settings/keys), a supported Claude login, or credentials for an [Anthropic Messages-compatible gateway](/nemo-relay-cli/provider-upstreams#provider-upstreams)
 - A [supported NeMo Relay CLI platform](/nemo-relay-cli/install-details#supported-platforms)
 - Permission to download the NeMo Relay version used by this guide

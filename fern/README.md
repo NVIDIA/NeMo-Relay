@@ -78,6 +78,12 @@ Run the normal docs check from the repository root:
 just docs
 ```
 
+When changing shared prerequisites, follow
+[Shared Prerequisites](../docs/contribute/testing-and-docs.mdx#shared-prerequisites).
+Run `just docs-prerequisites` after changing their source declarations or table
+templates, and commit the generated snippets with those changes. The normal
+docs check rejects stale prerequisite values.
+
 To inspect the generated docs-website layout locally, run the sync helper
 against a temporary target checkout:
 

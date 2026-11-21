@@ -33,10 +33,7 @@ it does not download another Relay binary or install a Relay daemon.
 
 To use the integration, make the selected coding-agent CLI available:
 
-| Coding Agent | Command | Version |
-| --- | --- | --- |
-| Claude Code | `claude` | 2.1.121 or newer |
-| Codex | `codex` | 0.150.0 or newer |
+<Markdown src="../_snippets/prerequisites/values/cli-install-table.mdx" />
 
 For Claude Code and Codex, install and doctor reject unsupported, malformed,
 and prerelease versions before changing agent configuration.
@@ -347,7 +344,7 @@ different Relay version, it stops that old sidecar and starts a matching one.
 This intentionally interrupts MCP clients still attached to the old gateway.
 
 Codex marks the MCP server as required, so the captured turn waits for verified
-gateway readiness. Claude Code 2.1.121 or newer uses `alwaysLoad`, which blocks
+gateway readiness. Claude Code <Markdown src="../_snippets/prerequisites/values/claude.mdx" suffix=" " /> or newer uses `alwaysLoad`, which blocks
 session startup until the MCP connection is ready. Installed MCP entries and
 `hook-forward` commands carry both the generation-file
 path and the immutable identity expected at that path. This prevents a host
@@ -495,7 +492,7 @@ integration's `host_registration` object. In that state,
 `host_plugin_registered` is `null` because Codex could not determine whether
 the plugin is registered.
 
-For Claude Code, doctor also validates version 2.1.121 or newer, the generated
+For Claude Code, doctor also validates version <Markdown src="../_snippets/prerequisites/values/claude.mdx" suffix=" " /> or newer, the generated
 `alwaysLoad` MCP server, and its generation marker. A stopped sidecar remains
 informational because the next MCP process starts it. Persistent hooks wait for
 that MCP-owned gateway instead of starting it themselves.
@@ -551,7 +548,7 @@ only after cleanup succeeds completely.
 
 ## Compatibility and Migration
 
-These integrations require Codex 0.150.0 or Claude Code 2.1.121 at minimum.
+These integrations require Codex <Markdown src="../_snippets/prerequisites/values/codex.mdx" suffix=" " /> or Claude Code <Markdown src="../_snippets/prerequisites/values/claude.mdx" suffix=" " /> at minimum.
 Relay rejects prerelease or malformed version output.
 If you configured an opaque wrapper, its `--version` output must identify the
 selected host.

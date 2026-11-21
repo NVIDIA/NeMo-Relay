@@ -600,7 +600,7 @@ Claude launch paths. Refresh does not migrate or overwrite the old bundle.
 Bundles containing only Codex or Pi are unaffected by the Claude change.
 
 The generated Codex bundle captures `SessionEnd` and `Interrupt` and requires
-`codex-cli` 0.150.0 or newer. Older bundles containing Codex no longer match the
+`codex-cli` <Markdown src="../_snippets/prerequisites/values/codex.mdx" suffix=" " /> or newer. Older bundles containing Codex no longer match the
 canonical bytes. Generate a replacement in a new directory, redeploy it, and
 provision its new trusted digest separately.
 </Warning>

@@ -322,6 +322,41 @@ class QuickstartExecutionTests(unittest.TestCase):
                 self.assertIn(error, result["error"])
                 self.assertEqual(json.loads((folder / "result.json").read_text())["status"], "failed")
 
+    def test_source_ref_uses_that_checkouts_guides_and_requirements(self):
+        source = self.root / "source"
+        pages = source / "docs/getting-started/quick-start"
+        pages.mkdir(parents=True)
+        shutil.copy2(ROOT / "docs/getting-started/quick-start/nodejs.mdx", pages / "nodejs.mdx")
+        shutil.copytree(ROOT / "docs/getting-started/quick-start/_code", pages / "_code")
+        values = source / "docs/_snippets/prerequisites/values/requirements.json"
+        values.parent.mkdir(parents=True)
+        values.write_text(json.dumps({"node": ">=99.4.0"}))
+        output = self.root / "source-ref-run"
+
+        def prepare(_root, _source, build_output, *_args):
+            (build_output / "packages").mkdir()
+
+        with (
+            patch.object(
+                sys,
+                "argv",
+                ["run-quickstarts", "--source-ref", "some-ref", "--cases", "nodejs", "--output", str(output)],
+            ),
+            patch.object(build, "checkout", return_value=(source, "1.0.0", {"commit": "a" * 40})),
+            patch.object(build, "prepare", side_effect=prepare),
+            patch.object(RUNNER.CONTRACTS, "ROOT", ROOT),
+            patch.object(RUNNER.CONTRACTS, "PAGES", ROOT / "docs/getting-started/quick-start"),
+            patch.object(ASSETS.Assets, "nodejs", return_value={}),
+            patch.object(RUNNER, "run_case", return_value={"status": "passed"}) as run_case,
+            contextlib.redirect_stdout(io.StringIO()),
+            contextlib.redirect_stderr(io.StringIO()),
+        ):
+            self.assertEqual(RUNNER.main(), 0)
+            self.assertEqual(RUNNER.CONTRACTS.ROOT, source)
+            self.assertEqual(RUNNER.CONTRACTS.PAGES, pages)
+        run_case.assert_called_once()
+        self.assertEqual(run_case.call_args.args[1]["requires"]["node"], ">=99.4.0")
+
     def test_sigterm_unwinds_case_and_stops_before_the_next_case(self):
         def interrupt(*_args, **_kwargs):
             RUNNER.interrupted(15, None)

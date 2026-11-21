@@ -49,6 +49,22 @@ class DocsRetentionTests(unittest.TestCase):
             self.assertTrue((fern / entry["path"]).is_file())
         self.assertTrue((fern / "pages-dev" / "guide.mdx").is_file())
 
+    def test_release_keeps_its_prerequisites_when_dev_changes(self) -> None:
+        snippet = Path("_snippets/prerequisites/values/claude.mdx")
+        source = self.source / "docs" / snippet
+        source.parent.mkdir(parents=True)
+        source.write_text("2.1.121\n")
+        (self.source / "docs/guide.mdx").write_text(
+            'Requires Claude Code <Markdown src="_snippets/prerequisites/values/claude.mdx" />.\n'
+        )
+        self.publish("1.0.0")
+        source.write_text("3.0.0\n")
+        SYNC.sync_dev(self.source, self.target)
+        fern = self.target / "fern"
+        self.assertEqual((fern / "pages-v1.0.0" / snippet).read_text(), "2.1.121\n")
+        self.assertEqual((fern / "pages-dev" / snippet).read_text(), "3.0.0\n")
+        self.assertIn('src="_snippets/', (fern / "pages-v1.0.0/guide.mdx").read_text())
+
     def test_replaces_patches_and_keeps_five_numeric_versions(self) -> None:
         self.publish("0.6.9", "0.7.4", "0.8.4", "0.9.3", "0.10.3", "0.10.4")
         self.assert_layout(["v0.10.4", "v0.9.3", "v0.8.4", "v0.7.4", "v0.6.9"], "v0.10.4")

@@ -196,6 +196,8 @@ ensure_node_docs_declarations() {
 
 generate_docs_api_references() {
     cd "$NEMO_RELAY_REPO_ROOT"
+    uv run --no-sync python scripts/docs/prerequisites.py --check
+    uv run --no-sync python -m unittest scripts.tests.test_doc_prerequisites
     uv run --no-sync python scripts/docs/generate_python_library_reference.py
     ensure_node_docs_declarations
     uv run --no-sync python -m unittest scripts.tests.test_node_library_reference
@@ -1124,9 +1126,15 @@ check-quickstarts:
     python_executable="$(project_python_executable)"
     # Keep automatic checks explicit: guide shell/Python execution belongs to the manual workflow.
     "$python_executable" -m unittest \
+        scripts.tests.test_doc_prerequisites \
         scripts.tests.test_quickstarts \
         scripts.tests.test_quickstart_jq
+    "$python_executable" scripts/docs/prerequisites.py --check
     "$python_executable" scripts/check-quickstarts.py check
+
+# Regenerate shared prerequisite values after changing compatibility declarations.
+docs-prerequisites:
+    uv run --no-sync python scripts/docs/prerequisites.py
 
 # Execute credential-free Quick Starts against explicit release, build, or local assets.
 [positional-arguments]

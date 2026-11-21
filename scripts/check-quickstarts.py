@@ -72,6 +72,20 @@ def extract(page: Path, shell: str | None = None) -> dict[str, Any]:
     require(len(scenarios) == 1, f"{page.name}: expected one scenario")
     scenario = json.loads(scenarios[0])
     validate_metadata(scenario, "scenario", page.name)
+    # References use the generated values from this checkout, so archived
+    # release guides retain their own requirements. Literal test-environment
+    # pins remain valid and are deliberately not rewritten by the resolver.
+    references = {key: value[7:] for key, value in scenario["requires"].items() if value.startswith("source:")}
+    if references:
+        requirements_path = ROOT / "docs/_snippets/prerequisites/values/requirements.json"
+        require(requirements_path.is_file(), "missing prerequisite values; run just docs-prerequisites")
+        requirements = json.loads(requirements_path.read_text(encoding="utf-8"))
+        for key, name in references.items():
+            require(
+                name in requirements and not name.startswith("$"),
+                f"{page.name}: unknown prerequisite source {name!r}",
+            )
+            scenario["requires"][key] = requirements[name]
     require(scenario.get("id") == page.stem, "scenario id must match the page filename")
     shells = scenario["shells"]
     require(shell is None or shell in shells, f"shell {shell!r} is not supported by this page")

@@ -139,6 +139,22 @@ class QuickstartContractTests(unittest.TestCase):
                 stdout.write_text("wrong shell output\n", encoding="utf-8")
                 self.assertEqual(QS.main(), 1)
 
+    def test_resolves_source_requirements_and_preserves_literal_pins(self):
+        values = self.root / "docs/_snippets/prerequisites/values/requirements.json"
+        values.parent.mkdir(parents=True)
+        values.write_text(json.dumps({"python": ">=3.14"}))
+        self.page.write_text(example_page().replace('">=3.11"', '"source:python"'))
+        with mock.patch.object(QS, "ROOT", self.root):
+            self.assertEqual(QS.extract(self.page)["requires"]["python"], ">=3.14")
+            self.page.write_text(example_page())
+            self.assertEqual(QS.extract(self.page)["requires"]["python"], ">=3.11")
+            self.page.write_text(example_page().replace('">=3.11"', '"source:missing"'))
+            with self.assertRaisesRegex(ValueError, "unknown prerequisite source"):
+                QS.extract(self.page)
+            values.unlink()
+            with self.assertRaisesRegex(ValueError, "missing prerequisite values"):
+                QS.extract(self.page)
+
     def test_rejects_hidden_commands_and_unsafe_paths(self):
         source = example_page()
         for label, changed in {
