@@ -6,11 +6,16 @@
 use chrono::Utc;
 use uuid::Uuid;
 
+use nemo_relay_types::codec::content::ContentKind;
+use std::borrow::Cow;
+
 use nemo_relay_types::codec::request::{
-    AnnotatedLlmRequest, ContentPart, Message, MessageContent, ToolCall, ToolDefinition,
+    AnnotatedLlmRequest, Message, MessageContent, ToolCall, ToolDefinition,
 };
 
-use crate::acg::canonicalize::{canonicalize_value, normalize_whitespace, sha256_hex};
+use crate::acg::canonicalize::{
+    canonicalize_serializable, canonicalize_value, normalize_whitespace, sha256_hex,
+};
 use crate::acg::error::Result;
 use crate::acg::prompt_ir::{
     BlockContentType, PromptBlock, PromptIR, PromptRole, ProvenanceLabel, SensitivityLabel, SpanId,
@@ -50,7 +55,7 @@ pub fn build_prompt_ir(request: &AnnotatedLlmRequest) -> Result<PromptIR> {
             PromptRole::System,
             ProvenanceLabel::System,
             Some("instructions"),
-        ));
+        )?);
     }
 
     for message in &request.messages {
@@ -106,21 +111,21 @@ fn append_message_blocks(
             PromptRole::System,
             ProvenanceLabel::System,
             None,
-        )),
+        )?),
         Message::Developer { content, .. } => blocks.push(build_text_block(
             sequence_index,
             content,
             PromptRole::System,
             ProvenanceLabel::Developer,
             Some("developer"),
-        )),
+        )?),
         Message::User { content, .. } => blocks.push(build_text_block(
             sequence_index,
             content,
             PromptRole::User,
             ProvenanceLabel::User,
             None,
-        )),
+        )?),
         Message::Assistant {
             content,
             tool_calls,
@@ -138,16 +143,10 @@ fn append_message_blocks(
             sequence_index,
             content,
             tool_call_id,
-        )),
+        )?),
         Message::Function { content, name } => {
             let content = MessageContent::Text(content.clone().unwrap_or_default());
-            blocks.push(build_text_block(
-                sequence_index,
-                &content,
-                PromptRole::Tool,
-                ProvenanceLabel::Tool,
-                Some(name),
-            ));
+            blocks.push(build_tool_result_block(sequence_index, &content, name)?);
         }
         Message::ToolCallItem { name, .. } => blocks.push(build_serialized_message_block(
             sequence_index,
@@ -188,7 +187,7 @@ fn append_assistant_blocks(
             PromptRole::Assistant,
             ProvenanceLabel::Developer,
             None,
-        ));
+        )?);
     }
 
     if let Some(tool_calls) = tool_calls {
@@ -200,27 +199,76 @@ fn append_assistant_blocks(
     Ok(())
 }
 
-fn extract_text(content: &MessageContent) -> String {
-    match content {
-        MessageContent::Text(text) => text.clone(),
-        MessageContent::Parts(parts) => parts
-            .iter()
-            .map(|part| match part {
-                ContentPart::Text { text, .. } => text.clone(),
-                ContentPart::Refusal { refusal, .. } => refusal.clone(),
-                ContentPart::ImageUrl { .. } | ContentPart::Image { .. } => String::new(),
-                ContentPart::Audio { .. }
-                | ContentPart::File { .. }
-                | ContentPart::ToolUse { .. }
-                | ContentPart::ToolResult { .. }
-                | ContentPart::ProviderNative { .. } => {
-                    serde_json::to_string(part).unwrap_or_default()
-                }
-            })
-            .filter(|text| !text.is_empty())
-            .collect::<Vec<_>>()
-            .join("\n"),
+/// Preserve part boundaries for structured input. Only explicit prose is
+/// normalized; payload values keep their exact strings and opaque data is hashed.
+fn analysis_content(
+    content: &MessageContent,
+    normalize_prose: bool,
+) -> Result<(String, BlockContentType)> {
+    let view = content.content_view();
+    if view
+        .parts()
+        .all(|entry| matches!(entry.kind, ContentKind::Text(_)))
+    {
+        let text = view.text().unwrap_or(Cow::Borrowed(""));
+        let rendered = if normalize_prose {
+            normalize_whitespace(&text)
+        } else {
+            text.into_owned()
+        };
+        return Ok((rendered, BlockContentType::Text));
     }
+    let MessageContent::Parts(parts) = content else {
+        unreachable!("non-text entries require multipart content")
+    };
+    let mut opaque = false;
+    let mut rendered = Vec::with_capacity(parts.len());
+    for entry in view.parts() {
+        let (kind, field, text) = match entry.kind {
+            ContentKind::Text(text) => ("text", "text", Some(text)),
+            ContentKind::Refusal(text) => ("refusal", "refusal", Some(text)),
+            _ => ("", "", None),
+        };
+        if let Some(text) = text {
+            let text = if normalize_prose {
+                normalize_whitespace(text)
+            } else {
+                text.to_owned()
+            };
+            rendered.push(serde_json::Value::Object(serde_json::Map::from_iter([
+                ("type".into(), serde_json::Value::String(kind.into())),
+                (field.into(), serde_json::Value::String(text)),
+            ])));
+            continue;
+        }
+        let index = entry
+            .location
+            .index
+            .expect("multipart entries have an index");
+        let opaque_kind = match entry.kind {
+            ContentKind::ImageUrl(_) => Some("image_url"),
+            ContentKind::Image(_) => Some("image"),
+            ContentKind::Audio(_) => Some("audio"),
+            ContentKind::File(_) => Some("file"),
+            ContentKind::ProviderNative { .. } => Some("provider_native"),
+            _ => None,
+        };
+        if let Some(kind) = opaque_kind {
+            opaque = true;
+            let fingerprint = sha256_hex(&canonicalize_serializable(&parts[index])?);
+            rendered.push(serde_json::json!({"type": kind, "fingerprint": fingerprint}));
+        } else {
+            rendered.push(serde_json::to_value(&parts[index])?);
+        }
+    }
+    Ok((
+        canonicalize_value(&serde_json::Value::Array(rendered))?,
+        if opaque {
+            BlockContentType::Opaque
+        } else {
+            BlockContentType::StructuredInput
+        },
+    ))
 }
 
 fn build_serialized_message_block(
@@ -230,9 +278,28 @@ fn build_serialized_message_block(
     provenance: ProvenanceLabel,
     suffix: Option<&str>,
 ) -> Result<PromptBlock> {
-    let value = serde_json::to_value(message)?;
-    let content = MessageContent::Text(canonicalize_value(&value)?);
-    Ok(build_text_block(seq, &content, role, provenance, suffix))
+    let canonical = canonicalize_serializable(message)?;
+    let (content, content_type) = match message {
+        Message::ProviderNative { .. } => (
+            canonicalize_value(&serde_json::json!({
+                "type": "provider_native", "fingerprint": sha256_hex(&canonical),
+            }))?,
+            BlockContentType::Opaque,
+        ),
+        _ => (canonical, BlockContentType::StructuredInput),
+    };
+    let index = *seq;
+    *seq += 1;
+    Ok(PromptBlock {
+        span_id: generate_span_id(role, index, suffix),
+        sequence_index: index,
+        role,
+        content,
+        content_type,
+        provenance,
+        sensitivity: SensitivityLabel::default(),
+        token_metadata: None,
+    })
 }
 
 fn generate_span_id(role: PromptRole, index: u32, suffix: Option<&str>) -> SpanId {
@@ -255,28 +322,26 @@ fn build_text_block(
     role: PromptRole,
     provenance: ProvenanceLabel,
     suffix: Option<&str>,
-) -> PromptBlock {
-    let text = normalize_whitespace(&extract_text(content));
+) -> Result<PromptBlock> {
+    let (text, content_type) = analysis_content(content, true)?;
     let index = *seq;
     let span_id = generate_span_id(role, index, suffix);
     *seq += 1;
 
-    PromptBlock {
+    Ok(PromptBlock {
         span_id,
         sequence_index: index,
         role,
         content: text,
-        content_type: BlockContentType::Text,
+        content_type,
         provenance,
         sensitivity: SensitivityLabel::default(),
         token_metadata: None,
-    }
+    })
 }
 
 fn build_tool_call_block(seq: &mut u32, call: &ToolCall) -> Result<PromptBlock> {
-    let call_value = serde_json::to_value(call)?;
-    let canonical = canonicalize_value(&call_value)?;
-    let content = normalize_whitespace(&canonical);
+    let content = canonicalize_serializable(call)?;
     let index = *seq;
     let span_id = generate_span_id(PromptRole::Assistant, index, Some(&call.function.name));
     *seq += 1;
@@ -286,7 +351,7 @@ fn build_tool_call_block(seq: &mut u32, call: &ToolCall) -> Result<PromptBlock> 
         sequence_index: index,
         role: PromptRole::Assistant,
         content,
-        content_type: BlockContentType::Text,
+        content_type: BlockContentType::StructuredInput,
         provenance: ProvenanceLabel::Developer,
         sensitivity: SensitivityLabel::default(),
         token_metadata: None,
@@ -297,22 +362,27 @@ fn build_tool_result_block(
     seq: &mut u32,
     content: &MessageContent,
     tool_call_id: &str,
-) -> PromptBlock {
-    let text = normalize_whitespace(&extract_text(content));
+) -> Result<PromptBlock> {
+    let (text, kind) = analysis_content(content, false)?;
     let index = *seq;
     let span_id = generate_span_id(PromptRole::Tool, index, Some(tool_call_id));
     *seq += 1;
 
-    PromptBlock {
+    Ok(PromptBlock {
         span_id,
         sequence_index: index,
         role: PromptRole::Tool,
         content: text,
-        content_type: BlockContentType::ToolResult,
+        // Tool provenance is already carried by role/provenance. Preserve the
+        // inner kind so structured payloads cannot match their literal JSON text.
+        content_type: match kind {
+            BlockContentType::Text => BlockContentType::ToolResult,
+            other => other,
+        },
         provenance: ProvenanceLabel::Tool,
         sensitivity: SensitivityLabel::default(),
         token_metadata: None,
-    }
+    })
 }
 
 fn append_tool_schema_blocks(
@@ -364,9 +434,7 @@ fn append_structured_output_block(
 }
 
 fn build_tool_schema_block(seq: &mut u32, tool: &ToolDefinition) -> Result<PromptBlock> {
-    let tool_value = serde_json::to_value(tool)?;
-    let canonical = canonicalize_value(&tool_value)?;
-    let content = normalize_whitespace(&canonical);
+    let content = canonicalize_serializable(tool)?;
     let index = *seq;
     let span_id = generate_span_id(PromptRole::System, index, Some(tool_definition_name(tool)));
     *seq += 1;

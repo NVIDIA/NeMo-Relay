@@ -175,11 +175,15 @@ fn cache_request_facts_reports_first_mismatch_against_last_exemplar() {
     assert_eq!(second.first_mismatch_sequence_index, Some(1));
     assert_eq!(
         second.expected_hash_prefix,
-        Some(short_hash_prefix("Find sources about caching"))
+        Some(short_hash_prefix(
+            &crate::acg::stability::block_key(&baseline.blocks[1]).unwrap()
+        ))
     );
     assert_eq!(
         second.actual_hash_prefix,
-        Some(short_hash_prefix("Find reports about caching"))
+        Some(short_hash_prefix(
+            &crate::acg::stability::block_key(&changed.blocks[1]).unwrap()
+        ))
     );
 }
 

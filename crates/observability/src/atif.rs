@@ -42,6 +42,7 @@ use crate::normalization::EventView;
 use nemo_relay_types::api::event::Event;
 
 use nemo_relay_types::Json;
+use nemo_relay_types::codec::content::ContentKind;
 use nemo_relay_types::codec::normalization::TelemetryToolCall;
 pub(crate) use nemo_relay_types::codec::normalization::{
     raw_response_message_field, tool_call_array,
@@ -1539,15 +1540,28 @@ pub(crate) fn provider_native_turn_state(value: &Json) -> Option<RequestTurnStat
 pub(crate) fn atif_message_from_annotated_response(
     response: &AnnotatedLlmResponse,
 ) -> Option<Json> {
-    match &response.message {
-        Some(MessageContent::Text(text)) => Some(Json::String(text.clone())),
-        // Multimodal: defer to the raw extractor (returns None to fall back).
-        Some(MessageContent::Parts(_)) => None,
-        // No assistant text (tool-call-only, or reasoning/thinking-only): emit an
-        // empty message rather than the raw extractor's stringified payload. Tool
-        // calls and metrics are still recovered from the raw output downstream.
-        None => Some(empty_message()),
+    let output = response.output();
+    if output.parts().any(|entry| {
+        matches!(
+            entry.kind,
+            ContentKind::ImageUrl(_)
+                | ContentKind::Image(_)
+                | ContentKind::Audio(_)
+                | ContentKind::File(_)
+                | ContentKind::ProviderNative { .. }
+        )
+    }) {
+        // Preserve ATIF's existing provider-specific media/opaque rendering.
+        return None;
     }
+    // An authoritative annotation with no text stays empty. Tool payloads are
+    // excluded by the shared view; raw tool calls and metrics are handled separately.
+    Some(Json::String(
+        output
+            .text()
+            .map(std::borrow::Cow::into_owned)
+            .unwrap_or_default(),
+    ))
 }
 
 pub(crate) fn openai_responses_function_call_items(output: &Json) -> Option<Vec<&Json>> {

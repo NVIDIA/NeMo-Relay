@@ -354,6 +354,134 @@ fn annotated_input_projection_normalizes_tool_result_messages() {
     assert!(!attributes.contains_key("llm.input_messages.5.message.role"));
 }
 
+#[test]
+fn normalized_message_text_projection_keeps_literal_text_and_display_whitespace() {
+    for (content, expected) in [
+        (json!(" \tfirst\nsecond \n"), Some("first\nsecond")),
+        (
+            json!(r#" {"text":"literal JSON"} "#),
+            Some(r#"{"text":"literal JSON"}"#),
+        ),
+        (
+            json!([{ "type": "text", "text": r#" {"text":"literal JSON"} "# }]),
+            Some(r#"{"text":"literal JSON"}"#),
+        ),
+        (
+            json!([
+                {"type": "text", "text": " \tfirst "},
+                {"type": "refusal", "refusal": ""},
+                {"type": "refusal", "refusal": " last \n"}
+            ]),
+            Some("first \n\n last"),
+        ),
+        (json!(""), None),
+        (json!(" \t\n\u{2003}"), None),
+        (json!([]), None),
+        (
+            json!([{ "type": "text", "text": " " }, {"type": "refusal", "refusal": "\t"}]),
+            None,
+        ),
+    ] {
+        assert_normalized_message_text_projection(
+            serde_json::from_value(content).unwrap(),
+            expected,
+        );
+    }
+}
+
+#[test]
+fn normalized_message_text_projection_excludes_native_reasoning_tools_and_media() {
+    let mut parts = vec![
+        json!({"type": "text", "text": " first", "metadata": {"text": "hidden"}}),
+        json!({"type": "refusal", "refusal": "no"}),
+        json!({"type": "provider_native", "provider": "custom", "kind": "output_text", "value": {"text": "native text"}}),
+        json!({"type": "provider_native", "provider": "custom", "kind": "refusal", "value": {"refusal": "native refusal "}}),
+    ];
+    let mut excluded = vec![
+        json!({"type": "tool_use", "id": "c", "name": "lookup", "input": {"text": "tool arguments"}}),
+        json!({"type": "tool_result", "tool_use_id": "c", "content": [{"type": "text", "text": "tool result"}]}),
+        json!({"type": "image", "image": {"text": "image metadata"}}),
+        json!({"type": "audio", "audio": {"text": "audio metadata"}}),
+        json!({"type": "file", "file": {"text": "file metadata"}}),
+    ];
+    for (kind, value) in [
+        ("reasoning", json!({"text": "reasoning"})),
+        ("thinking", json!({"text": "thinking"})),
+        ("output_text", json!({"thought": true, "text": "thought"})),
+        ("tool_result", json!({"text": "native tool result"})),
+        ("image", json!({"text": "native image"})),
+        (
+            "extension",
+            json!({"type": "reasoning", "text": "reasoning discriminator"}),
+        ),
+        (
+            "extension",
+            json!({"metadata": {"text": "nested metadata"}}),
+        ),
+    ] {
+        excluded.push(
+            json!({"type": "provider_native", "provider": "custom", "kind": kind, "value": value}),
+        );
+    }
+    assert_normalized_message_text_projection(
+        serde_json::from_value(json!(excluded)).unwrap(),
+        None,
+    );
+    parts.extend(excluded);
+    assert_normalized_message_text_projection(
+        serde_json::from_value(json!(parts)).unwrap(),
+        Some("first\nno\nnative text\nnative refusal"),
+    );
+}
+
+fn assert_normalized_message_text_projection(content: MessageContent, expected: Option<&str>) {
+    let request = AnnotatedLlmRequest {
+        instructions: Some(content.clone()),
+        messages: vec![Message::User {
+            content: content.clone(),
+            name: None,
+        }],
+        ..Default::default()
+    };
+    let mut input = Vec::new();
+    push_annotated_request_attributes(&mut input, &request);
+    let input = attr_map(&input);
+    let response = AnnotatedLlmResponse {
+        message: Some(content),
+        tool_calls: Some(vec![ResponseToolCall {
+            id: "c".into(),
+            name: "lookup".into(),
+            arguments: json!({"text": "tool arguments"}),
+        }]),
+        finish_reason: Some(FinishReason::ToolUse),
+        ..Default::default()
+    };
+    let mut output = Vec::new();
+    push_annotated_response_attributes(&mut output, &response);
+    let output = attr_map(&output);
+    if let Some(expected) = expected {
+        assert_attr(&input, "llm.input_messages.0.message.content", expected);
+        assert_attr(&input, "llm.input_messages.1.message.content", expected);
+        assert_attr(&output, "llm.output_messages.0.message.content", expected);
+    } else {
+        assert!(!input.keys().any(|key| key.ends_with(".message.content")));
+        assert!(!output.contains_key("llm.output_messages.0.message.content"));
+        assert_attr(&input, "llm.input_messages.0.message.role", "user");
+    }
+    assert_attr(&output, "llm.output_messages.0.message.role", "assistant");
+    assert_attr(
+        &output,
+        "llm.output_messages.0.message.tool_calls.0.tool_call.function.name",
+        "lookup",
+    );
+    assert_attr(
+        &output,
+        "llm.output_messages.0.message.tool_calls.0.tool_call.function.arguments",
+        r#"{"text":"tool arguments"}"#,
+    );
+    assert_attr(&output, "llm.finish_reason", "tool_use");
+}
+
 fn assert_attr(attributes: &HashMap<String, String>, key: &str, value: &str) {
     assert_eq!(attributes.get(key).map(String::as_str), Some(value));
 }

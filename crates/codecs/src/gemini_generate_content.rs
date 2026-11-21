@@ -2996,6 +2996,7 @@ struct GeminiGenerateContentStreamingState {
     usage_metadata: Option<Json>,
     model_version: Option<String>,
     response_id: Option<String>,
+    prompt_feedback: Option<Json>,
     /// Merged candidate-level extra fields (safetyRatings, groundingMetadata,
     /// citationMetadata, avgLogprobs, etc.) accumulated across SSE chunks.
     candidate_extra: serde_json::Map<String, Json>,
@@ -3037,6 +3038,9 @@ impl GeminiGenerateContentStreamingState {
         }
         if let Some(usage) = event.get("usageMetadata") {
             self.usage_metadata = Some(usage.clone());
+        }
+        if let Some(feedback) = event.get("promptFeedback") {
+            self.prompt_feedback = Some(feedback.clone());
         }
         if let Some(mv_val) = event.get("modelVersion") {
             match mv_val.as_str() {
@@ -3255,10 +3259,18 @@ impl GeminiGenerateContentStreamingState {
         for (k, v) in self.candidate_extra {
             candidate_obj.entry(k).or_insert(v);
         }
-        let candidate = Json::Object(candidate_obj);
+        // A blocked prompt can finish without ever producing a candidate.
+        let candidates = self
+            .candidate_index
+            .map(|_| Json::Object(candidate_obj))
+            .into_iter()
+            .collect();
 
         let mut output = serde_json::Map::new();
-        output.insert("candidates".to_string(), Json::Array(vec![candidate]));
+        output.insert("candidates".to_string(), Json::Array(candidates));
+        if let Some(feedback) = self.prompt_feedback {
+            output.insert("promptFeedback".to_string(), feedback);
+        }
         if let Some(usage) = self.usage_metadata {
             output.insert("usageMetadata".to_string(), usage);
         }
