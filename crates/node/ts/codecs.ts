@@ -197,25 +197,34 @@ export class MessageView {
     return this.#snapshot.text();
   }
 
-  /** @internal Rust selects the source; this facade only validates JavaScript data properties. */
+  /** @internal Read direct selections in place and delegate role matching to Rust. */
   static _selectRequest(request: unknown, selection: string, index?: number): MessageView | null {
     const annotation = object(request);
-    const messages = history(request);
-    const instructions = field(annotation, 'instructions');
-    const selected = _ContentSnapshot.selectRequest(
-      selection,
-      {
-        messages: Array.from({ length: messages.length }, (_, index) =>
-          selectionMetadata(historyItem(messages, index)),
-        ),
-        instructions: instructions == null ? null : [],
-      },
-      index,
-    ) as { messageIndex: number } | { instructions: true } | null;
-    if (selected == null) return null;
-    if ('instructions' in selected) return MessageView.fromContent(instructions as JsonValue);
+    if (selection === 'instructions' || selection === 'system_prompt') {
+      const instructions = field(annotation, 'instructions');
+      if (instructions != null) return MessageView.fromContent(instructions as JsonValue);
+      if (selection === 'instructions') return null;
+    }
+
+    const messages = history(annotation);
+    let messageIndex: number;
+    if (selection === 'last_message') {
+      if (messages.length === 0) return null;
+      messageIndex = messages.length - 1;
+    } else if (selection === 'message') {
+      if (index === undefined || !Number.isSafeInteger(index))
+        throw new RangeError('Message index must be a safe integer');
+      messageIndex = index < 0 ? messages.length + index : index;
+      if (messageIndex < 0 || messageIndex >= messages.length) throw new RangeError('Message index out of range');
+    } else {
+      const selected = _ContentSnapshot.selectRequest(selection, {
+        messages: Array.from({ length: messages.length }, (_, i) => selectionMetadata(historyItem(messages, i))),
+      }) as { messageIndex: number } | null;
+      if (selected == null) return null;
+      messageIndex = selected.messageIndex;
+    }
     return new MessageView(
-      new _ContentSnapshot('message', historyItem(messages, selected.messageIndex) as JsonValue, selected.messageIndex),
+      new _ContentSnapshot('message', historyItem(messages, messageIndex) as JsonValue, messageIndex),
     );
   }
 
@@ -239,8 +248,8 @@ function field(value: Record<string, unknown>, key: string): unknown {
   return descriptor.value;
 }
 
-function history(request: unknown): unknown[] {
-  const messages = field(object(request), 'messages');
+function history(request: Record<string, unknown>): unknown[] {
+  const messages = field(request, 'messages');
   if (messages === undefined) return [];
   if (!Array.isArray(messages)) throw new TypeError('Normalized request messages must be an array');
   return messages;
@@ -282,7 +291,6 @@ function selectionMetadata(value: unknown): JsonValue {
 
 /** Snapshot any normalized request item by integer index; negative indices count from the end. */
 export function message<T extends JsonCompatible<T>>(request: T, index: number): MessageView {
-  if (!Number.isSafeInteger(index)) throw new RangeError('Message index must be a safe integer');
   return MessageView._selectRequest(request, 'message', index)!;
 }
 

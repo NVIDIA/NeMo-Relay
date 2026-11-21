@@ -191,6 +191,35 @@ describe('normalized content snapshots', () => {
     assert.throws(() => codecs.message({}, 0), RangeError);
   });
 
+  it('reads only the selected history slot for positional and instruction selections', () => {
+    const reads = [];
+    const messages = new Proxy(
+      [
+        { role: 'user', content: 'first' },
+        { role: 'assistant', content: 'last' },
+      ],
+      {
+        getOwnPropertyDescriptor(target, key) {
+          if (key === '0' || key === '1') reads.push(key);
+          return Reflect.getOwnPropertyDescriptor(target, key);
+        },
+      },
+    );
+    const request = { messages, instructions: 'policy' };
+    assert.equal(codecs.instructionsView(request).text(), 'policy');
+    assert.equal(codecs.systemPrompt(request), 'policy');
+    assert.throws(() => codecs.message(request, -3), RangeError);
+    assert.deepEqual(reads, []);
+    assert.equal(codecs.message(request, 0).text(), 'first');
+    assert.equal(codecs.message(request, -1).text(), 'last');
+    assert.equal(codecs.lastMessage(request).text(), 'last');
+    assert.deepEqual(reads, ['0', '1', '1']);
+
+    Object.defineProperty(messages, '0', { get: () => assert.fail('invoked history getter') });
+    assert.equal(codecs.lastMessage(request).text(), 'last');
+    assert.throws(() => codecs.message(request, 0), /data entries/);
+  });
+
   it('joins only eligible text/refusals while preserving empty strings and whitespace', () => {
     const view = codecs.MessageView.fromContent(parts());
     assert.equal(view.text(), ' a \n\nfallback\nz\n');
