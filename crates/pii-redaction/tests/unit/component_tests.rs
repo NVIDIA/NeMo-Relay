@@ -8246,3 +8246,33 @@ async fn runtime_and_opaque_codecs_opt_into_editing_and_clean_projection_indepen
         }
     }
 }
+
+#[tokio::test]
+async fn wire_removals_stay_attached_to_original_blocks_after_normalized_compaction() {
+    let codec: Arc<dyn LlmResponseCodec> = Arc::new(OpenAIResponsesCodec);
+    let ctx = LlmSanitizeResponseContext::for_response_codec(Some(codec));
+    let backend = CompiledBuiltinBackend::new(
+        BuiltinBackendConfig {
+            action: "remove".into(),
+            target_paths: vec![
+                "/message/0".into(),
+                "/output/0/content/1/annotations".into(),
+            ],
+            ..Default::default()
+        },
+        None,
+    )
+    .unwrap();
+    let payload = json!({"output":[{"type":"message","content":[
+        {"type":"refusal","refusal":"remove me"},
+        {"type":"output_text","text":"keep me","annotations":[{"secret":"private"}]},
+        {"type":"output_text","text":"tail","annotations":[{"marker":"keep"}]}
+    ]}]});
+    let value = crate::builtin::llm_sanitize_response_callback(backend)(payload, ctx)
+        .await
+        .unwrap();
+    let blocks = &value.unwrap()["output"][0]["content"];
+    assert_eq!(blocks.as_array().unwrap().len(), 2);
+    assert_eq!(blocks[0], json!({"type":"output_text","text":"keep me"}));
+    assert_eq!(blocks[1]["annotations"], json!([{"marker":"keep"}]));
+}

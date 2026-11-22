@@ -893,6 +893,17 @@ impl CompiledBuiltinBackend {
         let capability = codec.redaction()?;
         let baseline = serde_json::to_value(codec.decode_response(&payload).ok()?).ok()?;
         let sanitized = self.sanitize_response_annotation(codec.codec_identity(), baseline.clone());
+        // Resolve wire removals while all indexes still refer to the source.
+        // A codec may compact the arrays when it applies normalized removals.
+        let removing = matches!(self.action, BuiltinAction::Remove);
+        let (payload, baseline, sanitized) = if removing {
+            let wire = self.sanitize_json_preorder_dfs(payload);
+            let decoded = serde_json::to_value(codec.decode_response(&wire).ok()?).ok()?;
+            let merged = merge_annotation_edits(&baseline, &sanitized, &decoded)?;
+            (wire, decoded, merged)
+        } else {
+            (payload, baseline, sanitized)
+        };
         let payload = capability
             .edit_response(
                 &payload,
@@ -905,7 +916,61 @@ impl CompiledBuiltinBackend {
                 },
             )
             .ok()??;
-        Some(self.sanitize_json_preorder_dfs(payload))
+        Some(if removing {
+            payload
+        } else {
+            self.sanitize_json_preorder_dfs(payload)
+        })
+    }
+}
+
+/// Reconcile independent wire and normalized edits against their common source.
+/// If both changed a slot differently, its original meaning must remain provable.
+fn merge_annotation_edits(source: &Json, normalized: &Json, wire: &Json) -> Option<Json> {
+    if normalized == source || normalized == wire {
+        return Some(wire.clone());
+    }
+    if wire == source {
+        return Some(normalized.clone());
+    }
+    match (source, normalized, wire) {
+        (Json::Object(before), Json::Object(after), Json::Object(raw)) => {
+            let mut result = raw.clone();
+            for (key, original) in before {
+                match (after.get(key), raw.get(key)) {
+                    (Some(edited), Some(current)) if edited != original => {
+                        result.insert(
+                            key.clone(),
+                            merge_annotation_edits(original, edited, current)?,
+                        );
+                    }
+                    (None, _) => {
+                        result.remove(key);
+                    }
+                    (Some(edited), None) if edited != original => return None,
+                    _ => {}
+                }
+            }
+            // A policy can remove fields or transform values, never introduce a new key.
+            after
+                .keys()
+                .all(|key| before.contains_key(key))
+                .then_some(Json::Object(result))
+        }
+        (Json::Array(before), Json::Array(after), Json::Array(raw))
+            if before.len() == after.len() && before.len() == raw.len() =>
+        {
+            before
+                .iter()
+                .zip(after)
+                .zip(raw)
+                .map(|((original, edited), current)| {
+                    merge_annotation_edits(original, edited, current)
+                })
+                .collect::<Option<Vec<_>>>()
+                .map(Json::Array)
+        }
+        _ => None,
     }
 }
 
