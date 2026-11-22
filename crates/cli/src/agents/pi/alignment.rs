@@ -50,6 +50,7 @@ use reqwest::Url;
 /// Not prefixed `x-nemo-relay-internal-`: those are stripped from inbound requests by design,
 /// and this one is meant to arrive from a client.
 pub(crate) const UPSTREAM_BASE_URL_HEADER: &str = "x-nemo-relay-upstream-base-url";
+pub(crate) const EXACT_PATH_HEADER: &str = "x-nemo-relay-pi-exact-path";
 
 /// What a request asked for, and whether it may have it.
 ///
