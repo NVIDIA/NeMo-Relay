@@ -712,7 +712,14 @@ fn sanitize_api_specific_request(
             api_format,
         } => ApiSpecificRequest::OCIGenAI {
             compartment_id: marked_option(compartment_id, replacement),
-            serving_mode: opaque_option(serving_mode),
+            serving_mode: serving_mode.map(|mode| {
+                match mode.get("servingType").and_then(Json::as_str) {
+                    Some(kind @ ("ON_DEMAND" | "DEDICATED")) => {
+                        serde_json::json!({"servingType": kind})
+                    }
+                    _ => empty_object(),
+                }
+            }),
             api_format: api_format
                 .filter(|value| ["GENERIC", "COHERE", "COHEREV2"].contains(&value.as_str())),
         },

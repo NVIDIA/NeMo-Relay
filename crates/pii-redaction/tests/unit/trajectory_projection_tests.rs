@@ -77,3 +77,36 @@ fn oci_enveloped_requests_render_from_sanitized_annotations() {
         assert_eq!(decoded.messages.len(), 1);
     }
 }
+
+#[test]
+fn dedicated_oci_projection_keeps_only_endpoint_routing_fields() {
+    let codec = request_codec(ProviderSurface::OCIGenAI);
+    let raw = LlmRequest {
+        headers: Map::new(),
+        content: json!({
+            "servingMode": {
+                "servingType": "DEDICATED", "endpointId": "trusted-endpoint",
+                "modelId": "wrong-for-dedicated", "extension": "SECRET"
+            },
+            "chatRequest": {"apiFormat": "GENERIC", "messages": []}
+        }),
+    };
+    let annotated = codec.decode(&raw).unwrap();
+    let sanitizer = TrajectorySanitizer::new(
+        "[REDACTED]".into(),
+        CustomMarkPayloadPolicy::RedactAllLeaves,
+        BTreeMap::new(),
+    );
+    let sanitized = sanitizer.sanitize_annotated_request(annotated).unwrap();
+    let rendered = render_request(ProviderSurface::OCIGenAI, &sanitized).unwrap();
+    assert_eq!(
+        rendered.content["servingMode"],
+        json!({
+            "servingType": "DEDICATED", "endpointId": "trusted-endpoint"
+        })
+    );
+    assert_eq!(
+        codec.decode(&rendered).unwrap().model.as_deref(),
+        Some("trusted-endpoint")
+    );
+}

@@ -83,10 +83,23 @@ fn request_template(surface: ProviderSurface, request: &mut AnnotatedLlmRequest)
     })
 }
 
+// Rebuild only the approved routing fields. Use the normalized model for the identifier.
+fn oci_serving_mode(source: Option<&Json>, model: &str) -> Option<Json> {
+    let kind = match source {
+        Some(mode) => mode.get("servingType")?.as_str()?,
+        None => "ON_DEMAND",
+    };
+    match kind {
+        "ON_DEMAND" => Some(json!({"servingType": kind, "modelId": model})),
+        "DEDICATED" => Some(json!({"servingType": kind, "endpointId": model})),
+        _ => None,
+    }
+}
+
 fn oci_request_template(request: &mut AnnotatedLlmRequest) -> Option<Json> {
     use nemo_relay_types::codec::request::ApiSpecificRequest;
 
-    let (api_format, compartment_id, had_serving_mode) = match request.api_specific.as_ref() {
+    let (api_format, compartment_id, source_mode) = match request.api_specific.as_ref() {
         Some(ApiSpecificRequest::OCIGenAI {
             compartment_id,
             serving_mode,
@@ -94,25 +107,22 @@ fn oci_request_template(request: &mut AnnotatedLlmRequest) -> Option<Json> {
         }) => (
             api_format.as_deref().unwrap_or("GENERIC").to_string(),
             compartment_id.clone(),
-            serving_mode.is_some(),
+            serving_mode.as_ref(),
         ),
-        _ => ("GENERIC".to_string(), None, false),
+        _ => ("GENERIC".to_string(), None, None),
     };
     let chat_request = match api_format.as_str() {
         "COHERE" => json!({"apiFormat": "COHERE"}),
         "COHEREV2" => json!({"apiFormat": "COHEREV2", "messages": []}),
         _ => json!({"apiFormat": "GENERIC", "messages": []}),
     };
-    let needs_envelope = request.model.is_some() || compartment_id.is_some() || had_serving_mode;
+    let needs_envelope =
+        request.model.is_some() || compartment_id.is_some() || source_mode.is_some();
     if !needs_envelope {
         return Some(chat_request);
     }
 
-    let model = request.model.clone()?;
-    let serving_mode = json!({
-        "servingType": "ON_DEMAND",
-        "modelId": model,
-    });
+    let serving_mode = oci_serving_mode(source_mode, request.model.as_deref()?)?;
     match request.api_specific.as_mut() {
         Some(ApiSpecificRequest::OCIGenAI {
             serving_mode: target,

@@ -262,6 +262,30 @@ fn request_projections_accept_sanitized_builtin_decoder_annotations() {
 }
 
 #[test]
+fn oci_defaults_only_an_absent_serving_mode() {
+    let mut request: AnnotatedLlmRequest = serde_json::from_value(json!({
+        "model": "approved-model",
+        "messages": [{"role": "user", "content": "[REDACTED]"}],
+    }))
+    .unwrap();
+    let rendered = render_request(ProviderSurface::OCIGenAI, &request).unwrap();
+    assert_eq!(
+        rendered.content["servingMode"],
+        json!({
+            "servingType": "ON_DEMAND", "modelId": "approved-model"
+        })
+    );
+
+    request.api_specific = Some(
+        serde_json::from_value(json!({
+            "api": "oci_genai", "serving_mode": {"servingType": "FUTURE"}
+        }))
+        .unwrap(),
+    );
+    assert!(render_request(ProviderSurface::OCIGenAI, &request).is_none());
+}
+
+#[test]
 fn oci_cohere_request_projections_use_format_specific_templates() {
     for api_format in ["COHERE", "COHEREV2"] {
         let request: AnnotatedLlmRequest = serde_json::from_value(json!({
