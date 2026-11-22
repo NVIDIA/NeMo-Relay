@@ -38,11 +38,9 @@ Delivery failures continue to use the configured fail-open or fail-closed policy
 
 ## Requirements
 
-Install Pi 1.6.0 or a supported 0.84.x baseline release, and confirm the Relay
-extension is reachable. The live acceptance suite covers 0.84.0 and 1.6.0.
-The launcher rejects versions below 0.84.0 and prereleases. Other stable
-versions above the baseline are accepted with an unverified-version warning.
-Run this check to see the local version and extension status:
+Install Pi 1.6.0, the minimum and verified release. The Relay launcher rejects
+older versions and prereleases. Newer stable versions can launch with an
+unverified-version warning. Run the following command to check the installed version and extension.
 
 ```bash
 nemo-relay doctor pi
@@ -307,10 +305,8 @@ configured in `plugins.toml`, a single-tool turn produces a `pi` session scope,
 one `pi-turn` scope with `turn_source: turn_start`, and the tool span nested
 under it.
 
-If turn scopes are missing entirely, the extension is not loading. pi 0.84 prints
-the load failure on standard error and exits before the session starts, so read
-stderr first — the failure is reported, not silent. Running pi with `-e` pointing
-at the entry point directly isolates it.
+If turn scopes are missing, check standard error for an extension load failure.
+Run Pi with `-e` pointing at the extension entry point to isolate it.
 
 ## Captured Events
 
@@ -397,8 +393,7 @@ Pi 0.99.0 introduced native MCP tools and nested calls through `ctx.executeTool(
 A policy can match the registered name, for example `mcp__docs__search`, whether
 the model calls it directly, discovers it via `tool_search`, or invokes it from
 a codemode script. Relay evaluates each child call with its own arguments.
-Allowing `codemode` leaves the child policy decisions in effect. Direct and
-nested MCP calls have been exercised with Pi 1.6.0. The CLI recognizes 1.6.0 as an individually verified release.
+Allowing `codemode` leaves the child policy decisions in effect.
 
 Relay records `mcp.method.name` as `tools/call` on qualified MCP tool spans.
 For a nested call, `parent_tool_call_id` identifies the caller in Pi. When the
@@ -483,9 +478,8 @@ gate the bang prefix.
 The posted arguments are `command`, `cwd`, and `exclude_from_context`, the last
 of which is `true` for the `!!` form.
 
-Pi 0.86.0 and later abort the shell command when a handler throws or returns
-an invalid value. Pi 0.84.0 can continue to local execution after a throw.
-Relay returns an explicit shell result on a policy denial on both versions.
+Pi 1.6.0 aborts the shell command when a handler throws or returns an invalid
+value. Relay returns an explicit shell result on a policy denial.
 
 pi's `user_bash` hook has no block-and-reason contract, so a refusal is a
 synthetic failed command result that pi records as though the command had run:
@@ -594,7 +588,7 @@ request using that physical URL and model, including host-specific options
 and Anthropic thread state. Relay applies its route and headers to the
 outgoing chat POST. Classifier and image calls keep their original transport.
 
-On the Pi 0.84 baseline, `registerProvider` rewrites every model of the provider, not only the selected
+When the provider-wide fallback is used, `registerProvider` rewrites every model of the provider, not only the selected
 one, so the check is applied to the whole provider either way. A provider that
 mixes endpoints — Fireworks serves `anthropic-messages` at `/inference` and
 `openai-completions` at `/inference/v1` — is left alone even when the selected
