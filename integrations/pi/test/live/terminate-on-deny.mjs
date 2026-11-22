@@ -7,8 +7,8 @@ import { join } from 'node:path';
 import { chatProvider, until } from './chat-provider.mjs';
 import { deny, extension, withRpc } from './rpc.mjs';
 
-const [pi, version] = process.argv.slice(2);
-assert.ok(['0.84.0', '1.6.0'].includes(version));
+const [pi] = process.argv.slice(2);
+assert.ok(pi, 'supply the Pi 1.6.0 executable');
 
 async function exercise({ enabled, verdict, expectedRequests }) {
   const paths = ['first.txt', 'second.txt'];
@@ -43,9 +43,7 @@ async function exercise({ enabled, verdict, expectedRequests }) {
   }
 }
 
-await exercise({ enabled: true, verdict: 'deny', expectedRequests: version === '1.6.0' ? 1 : 2 });
-if (version === '1.6.0') {
-  await exercise({ enabled: false, verdict: 'deny', expectedRequests: 2 });
-  await exercise({ enabled: true, verdict: 'mixed', expectedRequests: 2 });
-  await exercise({ enabled: true, verdict: 'fault', expectedRequests: 2 });
-}
+await exercise({ enabled: true, verdict: 'deny', expectedRequests: 1 });
+await exercise({ enabled: false, verdict: 'deny', expectedRequests: 2 });
+await exercise({ enabled: true, verdict: 'mixed', expectedRequests: 2 });
+await exercise({ enabled: true, verdict: 'fault', expectedRequests: 2 });
