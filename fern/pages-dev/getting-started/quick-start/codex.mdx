@@ -1,5 +1,5 @@
 ---
-title: "Codex Quick Start"
+title: "Codex Quickstart for NeMo Relay"
 sidebar-title: "Codex"
 slug: getting-started/quick-start/codex
 description: "Run one local Codex CLI task through NeMo Relay and write ATOF events."
@@ -61,10 +61,10 @@ SPDX-License-Identifier: Apache-2.0 */}
 }
 */}
 
-## Goal
-
-Run one local Codex CLI task through NeMo Relay and write its turn, model, and
-tool lifecycle to a local Agent Trajectory Observability Format (ATOF) file.
+This Quickstart Guide walks you through the process for running one local Codex
+CLI task through NeMo Relay and writing its turn, model, and tool lifecycle to a
+local Agent Trajectory Observability Format (ATOF) file. For detailed setup,
+refer to the [Installation Guide](/getting-started/installation).
 
 <Note icon="circle-info">
 This path observes local Codex processes. Cloud or remote Codex tasks are only
@@ -114,9 +114,13 @@ Codex's custom base URL is not carried over when Relay replaces its provider.
 Refer to [Codex authentication](https://developers.openai.com/codex/auth).
 </Note>
 
+## Quickstart Steps
+
+To quickly get started with NeMo Relay, complete the following steps:
+
 <Steps toc={true}>
 
-## Install
+### Install the NeMo Relay CLI
 
 Install the NeMo Relay CLI version for these docs:
 
@@ -138,7 +142,7 @@ irm https://raw.githubusercontent.com/NVIDIA/NeMo-Relay/main/install.ps1 | iex
 </Tab>
 </Tabs>
 
-## Configure
+### Set up a working directory
 
 Create a disposable Git repository and permit Codex to write files there:
 
@@ -149,26 +153,32 @@ cd relay-codex-quickstart
 git init
 ```
 
-Save and run the remaining files from this directory.
+Save and run the remaining files from this directory:
 
+<ol type="a">
+<li>
 Save this file as `config.toml` in the directory where you will run the agent:
 
 {/* quickstart-block {"id":"config","role":"file","cwd":"relay-codex-quickstart","path":"config.toml"} */}
 <Code src="_code/codex/config.toml" language="toml" title="config.toml" />
 
 The agent entry in `config.toml` tells Relay which executable to launch.
+</li>
+<li>
 Save this sibling file as `plugins.toml` to enable ATOF export to
 `logs/events.jsonl`:
 
 {/* quickstart-block {"id":"plugins","role":"file","cwd":"relay-codex-quickstart","path":"plugins.toml"} */}
 <Code src="_code/plugins.toml" language="toml" title="plugins.toml" />
+</li>
+</ol>
 
 <Warning>
 ATOF output can contain sensitive prompts, responses, tool arguments, and tool
 results. Protect `logs/events.jsonl` even when full payload export is disabled.
 </Warning>
 
-## Run
+### Run a Codex task
 
 The prompt asks the agent to create a known file so you can distinguish a
 successful tool action from an ordinary text reply. Relay records the turn,
@@ -214,7 +224,7 @@ Relay starts a temporary local gateway and injects Codex hooks for this run. It
 does not modify your persistent Codex plugin configuration.
 </Note>
 
-## Verify
+### Verify the output
 
 The tool marker proves that the agent created the requested file. The event
 marker proves that Relay recorded matching start/end records for the required
@@ -294,19 +304,16 @@ The agent's final reply should include `RELAY_QUICKSTART_RESPONSE_OK`;
 its surrounding wording can vary.
 
 <Note icon="circle-info">
-The verification markers confirm the tool-created file and matching start/end
-records for custom turn, tool, and LLM work.
+- The verification markers confirm the tool-created file and matching start/end
+  records for custom turn, tool, and LLM work.
+- If Codex reports that approval requests are unsupported in `exec` mode, run
+  the same command interactively by removing only `exec`. Keep
+  `--sandbox workspace-write`, approve the file write if prompted, and exit
+  Codex after the reply before running the verification checks. Existing Codex
+  settings and tool policies can still require approval inside the workspace.
 </Note>
 
-<Note icon="circle-info">
-If Codex reports that approval requests are unsupported in `exec` mode, run
-the same command interactively by removing only `exec`. Keep
-`--sandbox workspace-write`, approve the file write if prompted, and exit
-Codex after the reply before running the verification checks. Existing Codex
-settings and tool policies can still require approval inside the workspace.
-</Note>
-
-### Inspect the Recorded Activity
+#### Inspect the Recorded Activity
 
 Read the completed model calls from the same event file:
 
@@ -339,9 +346,9 @@ requiring full prompt or response capture.
 
 </Steps>
 
-## For More Details
+## Next Steps
 
-For more details, refer to:
+Now that you have a working setup, you should explore the following resources in greater detail:
 
 - [Codex guide](/nemo-relay-cli/codex)
 - [CLI Installation](/getting-started/installation/cli)

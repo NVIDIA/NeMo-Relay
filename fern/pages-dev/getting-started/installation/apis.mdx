@@ -12,7 +12,8 @@ used by their examples.
 
 ## Python
 
-Requires CPython 3.11 or newer.
+Requires CPython 3.11 or newer and `uv`, with an existing `pyproject.toml`
+project; run `uv init` first if you are creating a new project.
 
 ```bash
 uv add nemo-relay
@@ -22,7 +23,8 @@ Continue with the [Python Quick Start](/getting-started/quick-start/python).
 
 ## Node.js
 
-Requires Node.js 24.13.1 or newer.
+Requires Node.js 24.13.1 or newer and npm; run the command from your
+application's Node.js project directory.
 
 ```bash
 npm install nemo-relay-node
@@ -32,7 +34,8 @@ Continue with the [Node.js Quick Start](/getting-started/quick-start/nodejs).
 
 ## Rust
 
-Building requires a Rust toolchain and Buf 1.75.0 or newer on `PATH`, or selected
+Requires a Cargo project (`cargo init` for a new project); building requires a
+Rust toolchain and Buf 1.75.0 or newer on `PATH`, or selected
 through `BUF`. Cargo supplies `protoc` automatically. The first build needs
 access to the Buf Schema Registry to download the locked validation schema.
 

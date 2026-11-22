@@ -123,7 +123,9 @@ Pass this to `LlmStreamCallExecuteParams::borrowed_collector` to avoid copying e
 
 <pre className="rust-signature"><code dangerouslySetInnerHTML={{"__html": "fn validate_stream(&amp;self, stream: <a href=\"../../middleware/struct-llmjsonstream\">LlmJsonStream</a>) -&gt; <a href=\"../../middleware/struct-llmjsonstream\">LlmJsonStream</a>"}} /></pre>
 
-Reports an error at EOF if this codec's collector did not receive a final response.
+Reports an error at EOF unless a final response event was seen.
+
+The check passes when this stream forwarded a final response event or when this codec's collector recorded one. Middleware between this stream and the collector can drain the source first, so a clean EOF does not mean the collector has finished: the finalizer reflects only the events that reached the collector.
 
 #### `collector`
 
