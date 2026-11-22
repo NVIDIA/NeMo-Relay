@@ -27,7 +27,7 @@ macro_rules! redaction {
                 original: &LlmRequest,
                 edits: NormalizedEdits<'_>,
             ) -> Result<Option<LlmRequest>> {
-                Ok(edit_request(self, original, edits))
+                Ok(edit_normalized_request(self, original, edits))
             }
             fn project_request(
                 &self,
@@ -73,7 +73,9 @@ redaction!(
     GeminiGenerateContent
 );
 
-fn edit_request(
+/// Apply normalized request edits using an opted-in codec’s source-preserving encoder.
+/// Reject ambiguous structural edits and verify the result by decoding the wire payload.
+pub fn edit_normalized_request(
     codec: &dyn LlmCodec,
     original: &LlmRequest,
     edits: NormalizedEdits<'_>,

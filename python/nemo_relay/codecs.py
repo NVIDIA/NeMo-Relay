@@ -80,6 +80,9 @@ class LlmCodec(Protocol):
     structure. ``encode()`` merges any annotated edits back into the original
     raw payload before the provider callback is invoked.
 
+    A codec whose encoder preserves source positions can set
+    ``supports_request_redaction = True`` to accept verified normalized PII request edits.
+
     Notes:
         ``encode()`` should preserve unknown provider-specific fields whenever
         possible instead of rebuilding the payload from scratch. That keeps

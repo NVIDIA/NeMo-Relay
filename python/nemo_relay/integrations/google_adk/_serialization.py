@@ -1756,6 +1756,8 @@ class AdkCodec(LlmCodec, LlmResponseCodec):
     `variant` reads each response by its provider API's usage semantics.
     """
 
+    supports_request_redaction = True
+
     def __init__(self, variant: ApiVariant) -> None:
         self._variant = variant
 
