@@ -4,6 +4,44 @@
 use super::*;
 
 #[test]
+fn change_tracking_distinguishes_a_removed_key_from_an_already_null_slot() {
+    for (path, input, expected, changed) in [
+        (
+            "/0",
+            serde_json::json!([null]),
+            serde_json::json!([null]),
+            false,
+        ),
+        (
+            "/0",
+            serde_json::json!(["secret"]),
+            serde_json::json!([null]),
+            true,
+        ),
+        (
+            "/key",
+            serde_json::json!({"key":null}),
+            serde_json::json!({}),
+            true,
+        ),
+    ] {
+        let backend = CompiledBuiltinBackend::new(
+            BuiltinBackendConfig {
+                action: "remove".into(),
+                target_paths: vec![path.into()],
+                ..Default::default()
+            },
+            None,
+        )
+        .unwrap();
+        assert_eq!(
+            backend.sanitize_json_with_change(input),
+            (expected, changed)
+        );
+    }
+}
+
+#[test]
 fn selector_diagnostics_report_effectiveness_without_values() {
     use nemo_relay_diagnostics::{
         ComponentRegistration, DiagnosticQuery, Diagnostics, DiagnosticsSettings,
