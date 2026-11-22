@@ -804,7 +804,10 @@ opaque native content and extras and emit empty tool argument objects.
 Rust codecs can implement each operation independently. A Python request codec
 can set `supports_request_redaction = True` when its encoder preserves source
 positions and unrelated provider fields. Relay verifies the edited request by
-decoding it again. Google ADK uses this opt-in. Python response codecs and
+decoding it again. Google ADK uses this opt-in. If edits to repeated function
+calls leave multiple possible sources for part metadata such as a thought
+signature, the ADK encoder rejects the edit and Relay omits the published
+request payload. Python response codecs and
 Node.js, C, and worker-defined custom codecs have no opt-in yet. Built-in codec handles use the Rust implementation. This API
 sanitizes observability payloads; it does not rewrite caller-visible requests
 or responses.
