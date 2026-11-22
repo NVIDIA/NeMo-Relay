@@ -142,7 +142,7 @@ fn openai_chat_overlay_removes_tool_calls_when_typed_entry_has_wrong_shape() {
 }
 
 #[test]
-fn annotated_message_text_includes_provider_native_text_and_refusal_parts() {
+fn joined_message_text_includes_provider_native_text_and_refusal_parts() {
     let content = MessageContent::Parts(vec![
         ContentPart::ProviderNative {
             provider: "openai_responses".into(),
@@ -162,9 +162,27 @@ fn annotated_message_text_includes_provider_native_text_and_refusal_parts() {
     ]);
 
     assert_eq!(
-        annotated_message_text(Some(&content)).as_deref(),
+        joined_message_text(Some(&content), None).as_deref(),
         Some("redacted text\nredacted refusal")
     );
+}
+
+#[test]
+fn joined_message_text_distinguishes_absent_fields_from_empty_strings() {
+    let content = serde_json::from_value(json!([
+        {"type": "provider_native", "provider": "openai_responses", "kind": "message",
+         "value": {"text": "", "refusal": "lower priority"}}
+    ]))
+    .unwrap();
+    assert_eq!(
+        joined_message_text(Some(&content), None).as_deref(),
+        Some("")
+    );
+    assert_eq!(
+        joined_message_text(Some(&content), Some("text")).as_deref(),
+        Some("")
+    );
+    assert_eq!(joined_message_text(Some(&content), Some("refusal")), None);
 }
 
 #[test]
