@@ -9,10 +9,10 @@
  * misrepresents one of them, and preemption is exactly what these tests exist
  * to pin.
  *
- * | Hook | pi's rule | Catches? |
+ * | Hook | Pi's rule | Handler errors |
  * |---|---|---|
- * | `tool_call` | Runs **every** handler, keeps the **last** truthy result, and returns early **only** on `{block: true}` | No — an exception propagates |
- * | `user_bash` | From 0.86, accepts the first valid result or operations override | Errors abort the command |
+ * | `tool_call` | Runs **every** handler, keeps the **last** truthy result, and returns early **only** on `{block: true}` | Exceptions propagate |
+ * | `user_bash` | Accepts the first valid result or operations override | Errors and invalid results abort the command |
  *
  * So an earlier extension preempts the tool gate only by *blocking*; a
  * non-blocking result from one does not stop us, it is simply overwritten by
