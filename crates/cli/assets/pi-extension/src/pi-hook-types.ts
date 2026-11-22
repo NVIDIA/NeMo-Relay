@@ -183,10 +183,9 @@ export type UserBashEvent = {
  * keeps the original command. There is no block-and-reason form, so a refusal
  * is a synthetic failed result -- see `src/user-bash.ts`.
  *
- * Unlike `tool_call`, `emitUserBash` wraps handlers in try/catch, so an
- * exception here fails **open**: pi logs it and runs the command. And the first
- * handler to return anything at all wins, so an earlier-loading extension can
- * preempt this one -- `pi -e` loads first, `pi install` loads last.
+ * Pi aborts the command if a handler throws or returns an invalid value. The
+ * first valid result or operations override wins, so an earlier extension
+ * can preempt this one. Returning `undefined` lets Pi consult the next handler.
  */
 export type UserBashEventResult = {
   result?: {
