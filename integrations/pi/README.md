@@ -24,11 +24,8 @@ The existing fail-open or fail-closed policy still handles delivery faults.
 
 ## Status
 
-Proof of concept. Verified against pi `v0.84.0`. pi ships breaking changes
-through *minor* releases and has no major-release channel, so re-verify hook
-signatures before relying on them — `nemo-relay doctor pi` and the launcher both
-report a minor above 0.84.x as unverified rather than supported, and accept it
-anyway, because untested is not the same as broken.
+NeMo Relay requires Pi 1.6.0. The launcher rejects older releases and
+prereleases. Newer stable releases can launch with an unverified-version warning.
 
 **Model traffic is redirected conditionally.** pi has no base-URL flag and no
 generic environment override — it resolves `baseUrl` per model from a generated
