@@ -108,6 +108,8 @@ pub(super) fn should_forward_request_header(name: &HeaderName, headers: &HeaderM
         && name.as_str() != BOOTSTRAP_CLIENT_TOKEN_HEADER
         && name.as_str() != crate::operational::OPERATION_ID_HEADER
         && name.as_str() != crate::provider_auth::TRANSPARENT_PROXY_CREDENTIAL_HEADER
+        // Relay consumes the session join key before forwarding the provider request.
+        && name.as_str() != "x-nemo-relay-session-id"
         // A routing directive addressed to this gateway, not to the provider. Forwarding it would
         // tell the upstream which endpoint we were steered to, which is infrastructure detail it
         // has no use for, and it is meaningless to every provider API.

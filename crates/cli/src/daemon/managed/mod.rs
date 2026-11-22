@@ -51,6 +51,7 @@ const PI_ARTIFACT_PATHS: &[&str] = &[
     "pi/extension-v1/managed-config.json",
     "pi/extension-v1/package.json",
     "pi/extension-v1/tsconfig.json",
+    "pi/extension-v1/provider-transport.ts",
 ];
 
 // Part of the v1 artifact family. The 0.11 Claude StopFailure and the Codex SessionEnd and
@@ -578,6 +579,12 @@ fn render_pi(spec: &ManagedBundleSpec) -> Result<Vec<RenderedArtifact>, CliError
             ManagedAgent::Pi,
             PI_ARTIFACT_PATHS[3],
             canonical_embedded_text(include_str!("pi_extension/package.json")).into_bytes(),
+        ),
+        artifact(
+            ManagedAgent::Pi,
+            PI_ARTIFACT_PATHS[5],
+            canonical_embedded_text(include_str!("pi_extension/provider-transport.ts"))
+                .into_bytes(),
         ),
         artifact(
             ManagedAgent::Pi,

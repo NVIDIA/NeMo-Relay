@@ -54,6 +54,7 @@
  * - `NEMO_RELAY_PI_REDIRECT`     `force` to skip the upstream check, `off` to disable
  * - `NEMO_RELAY_PI_{OPENAI,ANTHROPIC}_UPSTREAM`  what the gateway forwards to
  */
+import { registerChatTransports } from './src/provider-transport.ts';
 import {
   type GatewayConfig,
   configFromEnv,
@@ -213,6 +214,8 @@ export default function nemoRelayExtension(pi: ExtensionAPI): void {
 
   /** Providers already pointed at the gateway, so the redirect is idempotent. */
   const redirectedProviders = new Set<string>();
+  const transportProviders = new Set<string>();
+  const reportedRoutes = new Set<string>();
   /** Session id the current registrations carry, so a replacement can invalidate them. */
   let registeredSessionKey: string | null = null;
   let redirect: RedirectConfig | null = null;
@@ -257,8 +260,38 @@ export default function nemoRelayExtension(pi: ExtensionAPI): void {
     const sessionKey = safeSessionId(ctx);
     if (registeredSessionKey !== null && registeredSessionKey !== sessionKey) {
       redirectedProviders.clear();
+      reportedRoutes.clear();
     }
     registeredSessionKey = sessionKey;
+    const config = redirect;
+    if (config.mode !== 'off' && ctx.model && registerChatTransports(
+      ctx.modelRegistry, ctx.model, transportProviders,
+      (provider) => pi.registerProvider(provider),
+      (model) => {
+        const decision = decideRedirect(model, config, new Set());
+        const key = JSON.stringify([model.provider, model.id, model.api, model.baseUrl, decision.kind]);
+        if (!reportedRoutes.has(key)) {
+          reportedRoutes.add(key);
+          emit(ctx, {
+            hook_event_name: 'model_redirect', source: 'provider_request', outcome: decision.kind,
+            reason: decision.reason, provider: model.provider, model_api: model.api, model_id: model.id,
+            ...(decision.kind === 'redirect' ? { upstream: decision.upstream } : { code: decision.code }),
+            ...attribution(),
+          });
+        }
+        if (decision.kind !== 'redirect') return undefined;
+        return {
+          gateway: config.gatewayUrl,
+          headers: {
+            'x-nemo-relay-session-id': registeredSessionKey ?? sessionKey,
+            ...(config.proxyToken ? { 'x-nemo-relay-proxy-token': config.proxyToken } : {}),
+            ...(decision.namedUpstream ? { 'x-nemo-relay-upstream-base-url': decision.namedUpstream } : {}),
+          },
+        };
+      },
+    )) {
+      return;
+    }
     const decision = decideRedirect(
       ctx.model,
       redirect,

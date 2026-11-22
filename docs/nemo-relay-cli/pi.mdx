@@ -565,7 +565,7 @@ the header and keeps the static behavior below. Point it at a provider with
 | Gateway forwards elsewhere | Redirected, naming the endpoint | Skipped (`upstream-mismatch`) |
 | Upstream unknown | Redirected, naming the endpoint | Skipped (`unknown-upstream`) |
 | Model's API has no gateway route | Skipped (`unserviceable-api`) | Skipped (`unserviceable-api`) |
-| The provider's models do not share one endpoint | Redirected only if both upstreams already point at it | Redirected only if both upstreams already point at it |
+| The provider's models do not share one endpoint (legacy provider-wide redirect) | Redirected only if both upstreams already point at it | Redirected only if both upstreams already point at it |
 
 The gateway does not serve Google's Gemini or Vertex API. A Gemini model is
 therefore skipped with `unserviceable-api`: pi keeps using the normal Google
@@ -580,7 +580,13 @@ Gemini codec can translate Gemini data in
 [application integrations](/integrate-into-frameworks/provider-codecs), but it
 does not add a gateway route.
 
-`registerProvider` rewrites every model of the provider, not only the selected
+On Pi 1.6.0, Relay wraps HTTP transport for supported chat requests. A virtual
+model can choose a different physical provider on each turn. Pi builds the
+request using that physical URL and model, including host-specific options
+and Anthropic thread state. Relay applies its route and headers to the
+outgoing chat POST. Classifier and image calls keep their original transport.
+
+On the Pi 0.84 baseline, `registerProvider` rewrites every model of the provider, not only the selected
 one, so the check is applied to the whole provider either way. A provider that
 mixes endpoints — Fireworks serves `anthropic-messages` at `/inference` and
 `openai-completions` at `/inference/v1` — is left alone even when the selected
