@@ -43,7 +43,7 @@ def serve_managed_requests(handler_class, credential, posts):
     handler_class.do_POST = post
 
 
-def run(pi: Path, root: Path) -> None:
+def run(pi: Path, root: Path, builtins: bool) -> None:
     credential = base64.urlsafe_b64encode(os.urandom(32)).decode().rstrip("=")
     agent = root / "agent"
     project = root / "project"
@@ -104,6 +104,9 @@ def run(pi: Path, root: Path) -> None:
 
         def choose(request, _project):
             names = {entry["function"]["name"] for entry in request["tools"]}
+            if not builtins:
+                assert "read" in names and not {"codemode", "tool_search"}.intersection(names)
+                return "read", {"path": "fixture.txt"}
             assert {"read", "codemode", "tool_search"} <= names, names
             return "codemode", {"code": "text(await tools.read({path:'fixture.txt'}))"}
 
@@ -117,15 +120,13 @@ def run(pi: Path, root: Path) -> None:
                     "--no-extensions",
                     "-e",
                     str(managed / "index.ts"),
-                    "-e",
-                    "builtin:codemode",
-                    "-e",
-                    "builtin:tool-search",
-                    "--tools",
-                    "read,codemode,tool_search",
+                    *(
+                        ["-e", "builtin:codemode", "-e", "builtin:tool-search", "--tools", "read,codemode,tool_search"]
+                        if builtins
+                        else []
+                    ),
                     "--approve",
                     "--no-session",
-                    "--offline",
                     "--model",
                     "fixture/model",
                     "-p",
@@ -145,8 +146,9 @@ def run(pi: Path, root: Path) -> None:
             )
         assert result.returncode == 0 and provider.RESPONSE_MARKER in result.stdout, result.stderr[-1500:]
         gates = [event for event in posts if event["hook_event_name"] == "tool_call"]
-        assert [e["tool_name"] for e in gates] == ["codemode", "read"], gates
-        assert gates[1]["parent_tool_call_id"] == gates[0]["tool_call_id"]
+        assert [e["tool_name"] for e in gates] == (["codemode", "read"] if builtins else ["read"]), gates
+        if builtins:
+            assert gates[1]["parent_tool_call_id"] == gates[0]["tool_call_id"]
         for directory in (agent, project / ".pi"):
             assert not (directory / "discovered").exists()
     finally:
@@ -156,6 +158,7 @@ def run(pi: Path, root: Path) -> None:
 if __name__ == "__main__":
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--pi", required=True, type=Path)
+    parser.add_argument("--default-profile", action="store_true")
     args = parser.parse_args()
     with tempfile.TemporaryDirectory(prefix="relay-managed-pi-") as directory:
-        run(args.pi.absolute(), Path(directory))
+        run(args.pi.absolute(), Path(directory), not args.default_profile)

@@ -36,21 +36,13 @@ Relay-managed extension with `nemo-relay install pi --force` after upgrading the
 gateway; refresh manually installed copies from the updated extension source.
 Delivery failures continue to use the configured fail-open or fail-closed policy.
 
-<Warning>
-pi ships breaking changes through *minor* releases and has no major-release
-channel. The integration is verified against pi `v0.84.0`. Re-verify hook
-signatures after a pi upgrade; a silent shape change appears as missing spans,
-not as an error.
-</Warning>
-
 ## Requirements
 
-Install pi 0.84.x, and confirm the NeMo Relay extension is reachable. Anything
-below 0.84.0 is rejected; anything above 0.84.x is accepted but reported as
-**unverified**, because pi can change a hook shape in a minor release and the
-symptom is missing spans rather than an error. `doctor` reports it in its output;
-the launcher records it as a warning-level log line, so `nemo-relay pi` shows it
-only at `--log-level warn` or lower:
+Install Pi 1.6.0 or a supported 0.84.x baseline release, and confirm the Relay
+extension is reachable. The live acceptance suite covers 0.84.0 and 1.6.0.
+The launcher rejects versions below 0.84.0 and prereleases. Other stable
+versions above the baseline are accepted with an unverified-version warning.
+Run this check to see the local version and extension status:
 
 ```bash
 nemo-relay doctor pi
@@ -405,8 +397,7 @@ A policy can match the registered name, for example `mcp__docs__search`, whether
 the model calls it directly, discovers it via `tool_search`, or invokes it from
 a codemode script. Relay evaluates each child call with its own arguments.
 Allowing `codemode` leaves the child policy decisions in effect. Direct and
-nested MCP calls have been exercised with Pi 1.6.0. The CLI's integration-wide
-version check still uses the 0.84.x baseline.
+nested MCP calls have been exercised with Pi 1.6.0. The CLI recognizes 1.6.0 as an individually verified release.
 
 Relay records `mcp.method.name` as `tools/call` on qualified MCP tool spans.
 For a nested call, `parent_tool_call_id` identifies the caller in Pi. When the

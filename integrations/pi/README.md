@@ -24,11 +24,16 @@ The existing fail-open or fail-closed policy still handles delivery faults.
 
 ## Status
 
-Proof of concept. Verified against pi `v0.84.0`. pi ships breaking changes
-through *minor* releases and has no major-release channel, so re-verify hook
-signatures before relying on them — `nemo-relay doctor pi` and the launcher both
-report a minor above 0.84.x as unverified rather than supported, and accept it
-anyway, because untested is not the same as broken.
+The real-host acceptance matrix runs Pi 0.84.0 and 1.6.0. The CLI retains the
+0.84.x compatibility band and recognizes exactly 1.6.0 among newer releases.
+Other stable versions above the baseline can launch with a warning.
+
+Run the matrix on a Unix host with both Pi executables and a built Relay CLI:
+
+```bash
+python3 integrations/pi/test/live/verify.py --baseline /path/to/0.84.0/pi \
+  --current /path/to/1.6.0/pi --relay /path/to/nemo-relay
+```
 
 **Model traffic is redirected conditionally.** pi has no base-URL flag and no
 generic environment override — it resolves `baseUrl` per model from a generated

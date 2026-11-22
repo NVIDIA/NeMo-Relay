@@ -75,12 +75,22 @@ fn a_minor_above_the_verified_band_is_reported_as_unverified_without_being_rejec
     assert!(CodingAgent::Pi.validate_version_output("1.0.0").is_ok());
 
     // Inside the band, nothing to say -- including a patch above the floor.
-    for inside in ["0.84.0", "0.84.7"] {
+    for inside in ["0.84.0", "0.84.7", "1.6.0"] {
         let version = CodingAgent::Pi.validate_version_output(inside).unwrap();
         assert_eq!(
             CodingAgent::Pi.unverified_version(&version),
             None,
             "{inside}"
+        );
+    }
+
+    for untested in ["0.99.0", "1.0.0", "1.5.1", "1.6.1", "1.6.0+custom", "2.0.0"] {
+        let version = CodingAgent::Pi.validate_version_output(untested).unwrap();
+        assert!(
+            CodingAgent::Pi
+                .unverified_version(&version)
+                .unwrap()
+                .contains("1.6.0")
         );
     }
 

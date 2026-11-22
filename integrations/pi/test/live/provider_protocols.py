@@ -81,7 +81,7 @@ def run(pi, relay, root, api, domain, upstream_key):
         for launch in [[str(pi)], [str(relay), "--config", str(config), "pi", "--"]]:
             records.clear()
             result = subprocess.run(
-                launch + ["--no-session", "--offline", "--model", "fixture/fixture", "-p", "Run the fixture tool"],
+                launch + ["--no-session", "--model", "fixture/fixture", "-p", "Run the fixture tool"],
                 env=env,
                 cwd=root,
                 capture_output=True,

@@ -583,8 +583,10 @@ fn render_pi(spec: &ManagedBundleSpec) -> Result<Vec<RenderedArtifact>, CliError
         artifact(
             ManagedAgent::Pi,
             PI_ARTIFACT_PATHS[5],
-            canonical_embedded_text(include_str!("pi_extension/provider-transport.ts"))
-                .into_bytes(),
+            canonical_embedded_text(include_str!(
+                "../../../assets/pi-extension/src/provider-transport.ts"
+            ))
+            .into_bytes(),
         ),
         artifact(
             ManagedAgent::Pi,
