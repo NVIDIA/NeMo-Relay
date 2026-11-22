@@ -27,8 +27,15 @@ def record_messages(handler_class, records):
         records.append(
             {
                 "roles": [message["role"] for message in request["messages"]],
-                "tools": bool(request.get("tools")),
-                "system": bool(request.get("system")),
+                "tools": request.get("tools", []),
+                "system": {
+                    "system": request.get("system"),
+                    "instructions": [
+                        message["content"]
+                        for message in request["messages"]
+                        if message["role"] in {"system", "developer"}
+                    ],
+                },
                 "thread": request.get("thread"),
                 "path": handler.path,
             }
@@ -100,7 +107,7 @@ def run(pi, relay, root, api, domain, upstream_key):
             assert direct[0]["roles"][0] == "developer", direct
         else:
             assert [r["thread"]["type"] for r in direct] == ["create", "continue"], direct
-            assert direct[1]["roles"] == ["user"] and not direct[1]["tools"] and not direct[1]["system"], direct
+            assert direct[1]["roles"] == ["user"] and not direct[1]["tools"] and not any(direct[1]["system"].values()), direct
     finally:
         fixture.close()
 
