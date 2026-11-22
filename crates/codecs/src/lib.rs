@@ -10,6 +10,7 @@ pub mod oci_genai;
 pub mod openai_chat;
 pub mod openai_responses;
 mod redaction;
+pub use redaction::edit_normalized_request;
 pub mod resolve;
 mod response;
 pub mod streaming;

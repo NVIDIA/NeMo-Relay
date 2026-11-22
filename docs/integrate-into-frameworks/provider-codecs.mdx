@@ -801,9 +801,11 @@ no original wire payload parameter and must not retrieve retained source data.
 Request projections clear headers; built-in response projections exclude
 opaque native content and extras and emit empty tool argument objects.
 
-The extension contracts currently support Rust codec implementations. Python,
-Node.js, C, and worker-defined custom codecs do not expose an opt-in redaction
-contract yet. Built-in codec handles use the Rust implementation. This API
+Rust codecs can implement each operation independently. A Python request codec
+can set `supports_request_redaction = True` when its encoder preserves source
+positions and unrelated provider fields. Relay verifies the edited request by
+decoding it again. Google ADK uses this opt-in. Python response codecs and
+Node.js, C, and worker-defined custom codecs have no opt-in yet. Built-in codec handles use the Rust implementation. This API
 sanitizes observability payloads; it does not rewrite caller-visible requests
 or responses.
 
