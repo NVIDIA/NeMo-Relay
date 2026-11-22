@@ -51,12 +51,18 @@ impl LlmResponseCodec for PricedResponseCodec {
     }
     fn decode_response(&self, raw: &Json) -> Result<AnnotatedLlmResponse> {
         let mut response = self.inner.decode_response(raw)?;
+        self.apply_pricing(raw, &mut response);
+        Ok(response)
+    }
+}
+
+impl PricedResponseCodec {
+    fn apply_pricing(&self, raw: &Json, response: &mut AnnotatedLlmResponse) {
         if self.inner.allows_estimated_cost(raw) {
             let provider =
                 crate::pricing::infer_model_provider(self.provider, response.model.as_deref());
-            crate::pricing::attach_estimated_cost_for_provider(&mut response, provider.as_deref());
+            crate::pricing::attach_estimated_cost_for_provider(response, provider.as_deref());
         }
-        Ok(response)
     }
 }
 
@@ -65,15 +71,20 @@ impl LlmResponseRedaction for PricedResponseCodec {
         let Some(capability) = self.inner.redaction() else {
             return Ok(None);
         };
-        let serialize = |value| {
-            serde_json::to_value(value)
+        let serialize = |response: &AnnotatedLlmResponse| {
+            serde_json::to_value(response)
                 .map_err(|error| nemo_relay_types::error::FlowError::Internal(error.to_string()))
         };
-        if &serialize(self.decode_response(original)?)? != edits.baseline {
-            return Ok(None);
-        }
-        let baseline = serialize(self.inner.decode_response(original)?)?;
-        let mut sanitized = edits.sanitized.clone();
+        let baseline = {
+            let mut decoded = self.inner.decode_response(original)?;
+            let provider_baseline = serialize(&decoded)?;
+            self.apply_pricing(original, &mut decoded);
+            if &serialize(&decoded)? != edits.baseline {
+                return Ok(None);
+            }
+            provider_baseline
+        };
+        let mut sanitized = std::borrow::Cow::Borrowed(edits.sanitized);
         if baseline.pointer("/usage/cost") != edits.baseline.pointer("/usage/cost") {
             // Estimated cost belongs to the runtime annotation, not provider
             // JSON. Preserve it on later decode; never send it through the
@@ -81,7 +92,11 @@ impl LlmResponseRedaction for PricedResponseCodec {
             if sanitized.pointer("/usage/cost") != edits.baseline.pointer("/usage/cost") {
                 return Ok(None);
             }
-            let Some(usage) = sanitized.get_mut("usage").and_then(Json::as_object_mut) else {
+            let Some(usage) = sanitized
+                .to_mut()
+                .get_mut("usage")
+                .and_then(Json::as_object_mut)
+            else {
                 return Ok(None);
             };
             match baseline.pointer("/usage/cost") {
