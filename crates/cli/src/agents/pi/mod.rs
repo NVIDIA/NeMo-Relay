@@ -27,7 +27,7 @@ pub(super) const DESCRIPTOR: AgentDescriptor = AgentDescriptor {
     executable: "pi",
     hook_path: "/hooks/pi",
     version_product: "pi",
-    minimum_version: (0, 84, 0),
+    minimum_version: (1, 6, 0),
     // The hooks the extension actually posts to `/hooks/pi`, which is narrower than the set it
     // registers with pi. `tool_execution_start` is registered but never forwarded -- it fires
     // before validation and for calls that never execute, so it is used only to remember a tool
@@ -59,16 +59,12 @@ pub(super) const DESCRIPTOR: AgentDescriptor = AgentDescriptor {
     capped_hook_events: (&[], 0),
 };
 
-/// Retain the historical 0.84.x band and add newer releases individually after live verification.
+/// Report accepted releases that have not passed the Pi integration suite.
 pub(super) fn unverified_version(version: &Version) -> Option<String> {
-    let tested = Version::new(1, 6, 0);
-    if (version.major, version.minor) == (0, 84) || *version == tested {
-        return None;
-    }
-    Some(format!(
-        "pi {version} is unverified. NeMo Relay accepts the 0.84.x baseline and has verified \
-         pi {tested} with live integration tests. Run the Pi acceptance suite for this version."
-    ))
+    let verified = super::CodingAgent::Pi.minimum_version();
+    (*version != verified).then(|| {
+        format!("pi {version} is unverified. NeMo Relay has verified pi {verified} with live integration tests.")
+    })
 }
 
 /// `pi --version` prints a bare semver line with no product prefix.

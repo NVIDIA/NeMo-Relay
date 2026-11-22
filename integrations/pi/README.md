@@ -24,15 +24,13 @@ The existing fail-open or fail-closed policy still handles delivery faults.
 
 ## Status
 
-The real-host acceptance matrix runs Pi 0.84.0 and 1.6.0. The CLI retains the
-0.84.x compatibility band and recognizes exactly 1.6.0 among newer releases.
-Other stable versions above the baseline can launch with a warning.
+NeMo Relay requires Pi 1.6.0. The launcher rejects older releases and
+prereleases. Newer stable releases can launch with an unverified-version warning.
 
-Run the matrix on a Unix host with both Pi executables and a built Relay CLI:
+Run the live acceptance suite on Unix with Pi 1.6.0 and a built Relay CLI:
 
 ```bash
-python3 integrations/pi/test/live/verify.py --baseline /path/to/0.84.0/pi \
-  --current /path/to/1.6.0/pi --relay /path/to/nemo-relay
+python3 integrations/pi/test/live/verify.py --pi /path/to/pi --relay /path/to/nemo-relay
 ```
 
 **Model traffic is redirected conditionally.** pi has no base-URL flag and no
