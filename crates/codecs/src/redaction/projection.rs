@@ -31,12 +31,13 @@ pub(super) fn render_request(
     surface: ProviderSurface,
     request: &AnnotatedLlmRequest,
 ) -> Option<LlmRequest> {
-    let mut request = request.clone();
+    let mut request = Cow::Borrowed(request);
     let template = LlmRequest {
         headers: Map::new(),
         content: request_template(surface, &mut request)?,
     };
-    let mut rendered = request_codec(surface).encode(&request, &template).ok()?;
+    let codec = request_codec(surface);
+    let mut rendered = codec.encode(&request, &template).ok()?;
     rendered.headers.clear();
     let provider_hint = match surface {
         ProviderSurface::AnthropicMessages => Some("anthropic.messages"),
@@ -47,7 +48,7 @@ pub(super) fn render_request(
     };
     (detect_request_surface_with_hint(&rendered.content, provider_hint) == Some(surface))
         .then_some(())?;
-    request_codec(surface).decode(&rendered).ok()?;
+    codec.decode(&rendered).ok()?;
     Some(rendered)
 }
 
@@ -72,7 +73,10 @@ pub(super) fn render_response(
     Some(rendered)
 }
 
-fn request_template(surface: ProviderSurface, request: &mut AnnotatedLlmRequest) -> Option<Json> {
+fn request_template(
+    surface: ProviderSurface,
+    request: &mut Cow<'_, AnnotatedLlmRequest>,
+) -> Option<Json> {
     Some(match surface {
         ProviderSurface::OpenAIChat | ProviderSurface::AnthropicMessages => {
             json!({"messages": []})
@@ -96,7 +100,7 @@ fn oci_serving_mode(source: Option<&Json>, model: &str) -> Option<Json> {
     }
 }
 
-fn oci_request_template(request: &mut AnnotatedLlmRequest) -> Option<Json> {
+fn oci_request_template(request: &mut Cow<'_, AnnotatedLlmRequest>) -> Option<Json> {
     use nemo_relay_types::codec::request::ApiSpecificRequest;
 
     let (api_format, compartment_id, source_mode) = match request.api_specific.as_ref() {
@@ -123,6 +127,7 @@ fn oci_request_template(request: &mut AnnotatedLlmRequest) -> Option<Json> {
     }
 
     let serving_mode = oci_serving_mode(source_mode, request.model.as_deref()?)?;
+    let request = request.to_mut();
     match request.api_specific.as_mut() {
         Some(ApiSpecificRequest::OCIGenAI {
             serving_mode: target,
