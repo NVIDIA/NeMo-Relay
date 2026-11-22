@@ -8382,3 +8382,32 @@ async fn wire_removals_stay_attached_to_original_blocks_after_normalized_compact
     assert_eq!(blocks[0], json!({"type":"output_text","text":"keep me"}));
     assert_eq!(blocks[1]["annotations"], json!([{"marker":"keep"}]));
 }
+
+#[tokio::test]
+async fn shared_response_fields_are_hashed_once_and_removed_extensions_preserve_the_response() {
+    for (action, path) in [("hash", "/model"), ("remove", "/contact_email")] {
+        let codec: Arc<dyn LlmResponseCodec> = Arc::new(OpenAIChatCodec);
+        let ctx = LlmSanitizeResponseContext::for_response_codec(Some(codec));
+        let backend = CompiledBuiltinBackend::new(
+            BuiltinBackendConfig {
+                action: action.into(),
+                target_paths: vec![path.into()],
+                ..Default::default()
+            },
+            None,
+        )
+        .unwrap();
+        let payload = json!({"model":"probe","contact_email":"private","choices":[{"message":{"content":"keep"}}]});
+        let mut expected = payload.clone();
+        if action == "hash" {
+            expected["model"] =
+                json!("ba9c736f19e7f60b7f6764adb0b7908c0a2b394e09b6c09863528c7f2bc86095");
+        } else {
+            expected.as_object_mut().unwrap().remove("contact_email");
+        }
+        let result = crate::builtin::llm_sanitize_response_callback(backend)(payload, ctx)
+            .await
+            .unwrap();
+        assert_eq!(result, Some(expected));
+    }
+}

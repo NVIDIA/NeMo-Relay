@@ -913,20 +913,19 @@ impl CompiledBuiltinBackend {
         let baseline = serde_json::to_value(codec.decode_response(&payload).ok()?).ok()?;
         let sanitized =
             self.sanitize_response_annotation(codec.codec_identity(), baseline.clone())?;
-        // Resolve wire removals while all indexes still refer to the source.
-        // A codec may compact the arrays when it applies normalized removals.
-        let removing = matches!(self.action, BuiltinAction::Remove);
-        let (payload, baseline, sanitized) = if removing {
-            let wire = self.sanitize_json_preorder_dfs(payload);
+        // Both representations see the original value, including for non-idempotent
+        // actions such as hashing. Pass any remaining normalized edits to the codec.
+        let wire = self.sanitize_json_preorder_dfs(payload.clone());
+        let (baseline, sanitized) = if wire == payload {
+            (baseline, sanitized)
+        } else {
             let decoded = serde_json::to_value(codec.decode_response(&wire).ok()?).ok()?;
             let merged = merge_annotation_edits(&baseline, &sanitized, &decoded)?;
-            (wire, decoded, merged)
-        } else {
-            (payload, baseline, sanitized)
+            (decoded, merged)
         };
-        let payload = capability
+        capability
             .edit_response(
-                &payload,
+                &wire,
                 NormalizedEdits {
                     baseline: &baseline,
                     sanitized: &sanitized,
@@ -935,12 +934,7 @@ impl CompiledBuiltinBackend {
                         .may_select_single_projected_response(),
                 },
             )
-            .ok()??;
-        Some(if removing {
-            payload
-        } else {
-            self.sanitize_json_preorder_dfs(payload)
-        })
+            .ok()?
     }
 }
 
