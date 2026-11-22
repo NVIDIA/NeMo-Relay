@@ -1655,6 +1655,48 @@ fn terminal_snapshots_without_output_keep_accepting_fallback_items() {
     }
 }
 
+/// The end-of-stream check must not depend on the collector having seen the terminal event:
+/// middleware between the validated source and the runtime wrapper can drain the source first.
+#[tokio::test]
+async fn openai_responses_validate_stream_accepts_forwarded_terminal_event_before_collection() {
+    use futures_util::StreamExt;
+
+    let created = json!({"type": "response.created", "response": {"status": "in_progress"}});
+    let completed = json!({"type": "response.completed", "response": full_responses_response()});
+    for (chunks, expect_error) in [
+        (vec![created.clone(), completed.clone()], false),
+        (vec![created.clone()], true),
+    ] {
+        let codec = OpenAIResponsesStreamingCodec::new();
+        let mut stream = codec.validate_stream(LlmJsonStream::new(futures_util::stream::iter(
+            chunks.clone().into_iter().map(Ok),
+        )));
+        // Drain the source without running the collector, as a prefetching consumer would.
+        for expected in &chunks {
+            assert_eq!(&stream.next().await.unwrap().unwrap(), expected);
+        }
+        match stream.next().await {
+            None => assert!(
+                !expect_error,
+                "a missing terminal event must still be reported"
+            ),
+            Some(Err(error)) => {
+                assert!(
+                    expect_error,
+                    "unexpected error after a forwarded terminal event: {error}"
+                );
+                assert!(
+                    error
+                        .to_string()
+                        .contains("stream ended before its final response event")
+                );
+            }
+            Some(Ok(extra)) => panic!("unexpected chunk after the source ended: {extra}"),
+        }
+        assert!(stream.next().await.is_none());
+    }
+}
+
 #[test]
 fn openai_responses_streaming_codec_uses_terminal_snapshot() {
     // Common case: response.completed carries the full final state. Streaming codec emits that
