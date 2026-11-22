@@ -149,7 +149,7 @@ def prepare(
     version = (
         (folder / "agent-version.stdout.log").read_text(encoding="utf-8-sig").strip()
         if name != "pi"
-        else "0.84.0 (guide pin)"
+        else "1.6.0 (guide pin)"
     )
     return {"version": version, "provider": "local-protocol-fixture"}
 
