@@ -1,7 +1,7 @@
 # SPDX-FileCopyrightText: Copyright (c) 2026, NVIDIA CORPORATION & AFFILIATES. All rights reserved.
 # SPDX-License-Identifier: Apache-2.0
 
-"""Run a real Pi virtual model through Relay with two offline physical providers."""
+"""Route a real Pi virtual model through Relay, including a late provider."""
 
 import argparse
 import json
@@ -49,16 +49,28 @@ def run(pi: Path, relay: Path, root: Path) -> None:
                 "api": "openai-completions",
                 "apiKey": "fixture-only",
                 "baseUrl": fixture.url + "/v1",
-                "models": [{"id": name, "contextWindow": 64000, "maxTokens": 4096}],
+                "models": [
+                    {
+                        "id": name,
+                        "name": name,
+                        "input": ["text"],
+                        "cost": {"input": 0, "output": 0, "cacheRead": 0, "cacheWrite": 0},
+                        "reasoning": False,
+                        "contextWindow": 64000,
+                        "maxTokens": 4096,
+                    }
+                ],
             }
 
         agent = root / "agent"
         agent.mkdir()
-        (agent / "models.json").write_text(json.dumps({"providers": models}))
+        (agent / "models.json").write_text(json.dumps({"providers": {"first": models["first"]}}))
         router = root / "router.mjs"
         router.write_text(
             "export default pi => pi.registerVirtualModel({provider:'router', id:'auto', name:'Auto', "
             "route(req, ctx) { const id = req.reason === 'user' ? 'first' : 'second'; "
+            "if (id === 'second' && !ctx.modelRegistry.find(id, id)) "
+            f"pi.registerProvider(id, {json.dumps(models['second'])}); "
             "return {model:ctx.modelRegistry.find(id,id)}; }});"
         )
         config = root / "config.toml"
@@ -113,7 +125,8 @@ def run(pi: Path, relay: Path, root: Path) -> None:
             for line in log.read_text().splitlines()
             if (event := json.loads(line)).get("category") == "llm" and event.get("scope_category") == "start"
         ]
-        assert [e["category_profile"]["annotated_request"]["model"] for e in starts] == ["first", "second"]
+        traced_models = [e["category_profile"]["annotated_request"]["model"] for e in starts]
+        assert traced_models == ["first", "second"], traced_models
         assert len({e["metadata"]["session_id"] for e in starts}) == 1
 
 

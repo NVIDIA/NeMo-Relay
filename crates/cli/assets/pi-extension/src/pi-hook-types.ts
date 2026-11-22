@@ -271,6 +271,7 @@ export type ExtensionAPI = {
   on(event: 'tool_call', handler: ExtensionHandler<ToolCallEvent, ToolCallEventResult>): void;
   on(event: 'user_bash', handler: ExtensionHandler<UserBashEvent, UserBashEventResult>): void;
   on(event: 'model_select', handler: ExtensionHandler<ModelSelectEvent>): void;
+  on(event: 'context_with_system', handler: ExtensionHandler<{ type: 'context_with_system' }>): void;
 
   /**
    * Register or override a model provider.

@@ -384,6 +384,12 @@ export default function nemoRelayExtension(pi: ExtensionAPI): void {
     applyRedirect(ctx, 'model_select');
   });
 
+  // Pi resolves the virtual route before assembling request context. The router can
+  // register a physical provider in that step without changing the selected model.
+  pi.on('context_with_system', async (_event, ctx) => {
+    if (ctx.model?.api === 'pi-virtual') applyRedirect(ctx, 'provider_request');
+  });
+
   /**
    * Only some shutdown reasons actually end the session.
    *
