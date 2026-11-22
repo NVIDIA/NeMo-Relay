@@ -180,17 +180,13 @@ fn edit_responses_parts(
     let origins = responses_part_origins(original)?;
     (origins.len() == before.len()).then_some(())?;
     let mut expected = edits.sanitized.clone();
-    // Overlay non-message fields with the original message still in place.
+    // Validate non-message edits separately; tool removal may compact the output array.
     let mut padded = expected.clone();
     padded["message"] = edits.baseline["message"].clone();
     same_array_slots(edits.baseline, &padded).then_some(())?;
     let padded = serde_json::from_value(padded).ok()?;
     let fields = overlay::ResponseFields::between(baseline, &padded);
-    let mut payload = overlay::BuiltinCodecName::OpenAIResponses.overlay_response_fields(
-        original.clone(),
-        &padded,
-        fields,
-    );
+    let mut payload = original.clone();
     for (index, path) in origins.iter().enumerate().rev() {
         let part = after
             .and_then(|parts| parts.get(index))
@@ -243,6 +239,8 @@ fn edit_responses_parts(
         let value = (!text.is_empty()).then(|| Json::String(text.join("\n")));
         set_path(&mut payload, &["output_text".into()], value)?;
     }
+    let payload = overlay::BuiltinCodecName::OpenAIResponses
+        .overlay_response_fields(payload, &padded, fields);
     let projected = serde_json::to_value(codec.decode_response(&payload).ok()?).ok()?;
     verifies(edits.baseline, &expected, &projected).then_some(payload)
 }

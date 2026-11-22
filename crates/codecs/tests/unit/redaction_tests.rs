@@ -403,3 +403,29 @@ fn metadata_only_edits_preserve_provider_blocks_exactly() {
         }
     }
 }
+
+#[test]
+fn removing_a_tool_before_a_message_preserves_the_original_message_target() {
+    let codec = crate::resolve::response_codec(ProviderSurface::OpenAIResponses);
+    let message = json!({"type":"message","content":[{"type":"refusal","refusal":"private","marker":"same block"}]});
+    let original = json!({"output":[{"type":"function_call","call_id":"c","name":"lookup","arguments":"{}"},message]});
+    let baseline = serde_json::to_value(codec.decode_response(&original).unwrap()).unwrap();
+    let mut sanitized = baseline.clone();
+    sanitized.as_object_mut().unwrap().remove("tool_calls");
+    sanitized["message"][0]["refusal"] = json!("approved");
+    let edited = codec
+        .redaction()
+        .unwrap()
+        .edit_response(
+            &original,
+            NormalizedEdits {
+                baseline: &baseline,
+                sanitized: &sanitized,
+                require_complete_output: true,
+            },
+        )
+        .unwrap();
+    let mut expected = json!({"output":[message]});
+    expected["output"][0]["content"][0]["refusal"] = json!("approved");
+    assert_eq!(edited, Some(expected));
+}
