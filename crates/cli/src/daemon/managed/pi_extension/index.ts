@@ -222,10 +222,12 @@ export default function managedNemoRelayPi(pi: ExtensionAPI): void {
       // MCP initialize acquires a broker reference. The worker may still be
       // starting. Only retry the broker's pre-dispatch refusal, so a session
       // start that reached a worker is never replayed.
+      const retryDelayMs = 1_000;
       while (starting && outcome.kind === 'fault' && outcome.routePending) {
-        const remaining = deadline - performance.now() - 1_000;
+        if (deadline - performance.now() <= retryDelayMs) break;
+        await delay(retryDelayMs);
+        const remaining = deadline - performance.now();
         if (remaining <= 0) break;
-        await delay(1_000);
         outcome = await postHook(active, body, Math.min(HOOK_TIMEOUT_MS, remaining));
       }
       if (outcome.kind !== 'allow') {

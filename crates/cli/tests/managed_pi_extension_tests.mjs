@@ -147,6 +147,38 @@ test('managed Pi shutdown branches preserve ordering and quit releases without r
   }
 });
 
+test('managed Pi does not retry startup after the readiness deadline', async (t) => {
+  const { installManagedNemoRelayPi } = await loadLifecycleTestApi();
+  const handlers = new Map();
+  installManagedNemoRelayPi({
+    on(name, handler) { handlers.set(name, handler); },
+    registerProvider() {},
+  }, async () => ({
+    config: { daemonAddress: 'https://relay.example.com' },
+    credential: CREDENTIAL,
+    lease: { ensureReady: async () => {} },
+  }));
+  let now = 0;
+  t.mock.method(performance, 'now', () => now);
+  const send = t.mock.method(globalThis, 'fetch', async () => Response.json(
+    { error: { message: 'route is not ready' } },
+    { status: 503, headers: { 'Retry-After': '1' } },
+  ));
+  t.mock.method(console, 'error', () => {});
+
+  const starting = handlers.get('session_start')({ type: 'session_start', reason: 'startup' }, {
+    cwd: '/workspace',
+    sessionManager: { getSessionId: () => 'session' },
+  });
+  await new Promise(setImmediate);
+  assert.equal(send.mock.callCount(), 1);
+
+  // Simulate a retry timer that fires after the monotonic deadline.
+  now = 180_001;
+  await starting;
+  assert.equal(send.mock.callCount(), 1);
+});
+
 test('custom Pi providers redirect only when every sibling API is supported', () => {
   const selected = {
     id: 'custom-response-model',
