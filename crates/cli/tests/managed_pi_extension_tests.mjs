@@ -170,7 +170,7 @@ test('managed Pi does not retry startup after the readiness deadline', async (t)
     cwd: '/workspace',
     sessionManager: { getSessionId: () => 'session' },
   });
-  await new Promise(setImmediate);
+  await new Promise((resolve) => globalThis.setImmediate(resolve));
   assert.equal(send.mock.callCount(), 1);
 
   // Simulate a retry timer that fires after the monotonic deadline.
