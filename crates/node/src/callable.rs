@@ -145,14 +145,13 @@ fn envelope_field<T: FromNapiValue>(envelope: &Object, key: &str) -> napi::Resul
 fn decode_envelope(envelope: Unknown, error_prefix: &str) -> napi::Result<Result<Value>> {
     let envelope = Object::from_unknown(envelope)?;
     if envelope_field::<bool>(&envelope, "ok")? {
-        return Ok(match envelope.get::<Unknown>("value")? {
-            Some(value) => Json::from_unknown(value).map(Value::from).map_err(|error| {
+        return Ok(envelope_field::<Json>(&envelope, "value")
+            .map(Value::from)
+            .map_err(|error| {
                 FlowError::Internal(format!(
                     "{error_prefix}: callback result could not be converted: {error}"
                 ))
-            }),
-            None => Ok(Value::Null),
-        });
+            }));
     }
     let exception = envelope.get_named_property::<Unknown>("exception")?;
     let message: String = envelope_field(&envelope, "message")?;
