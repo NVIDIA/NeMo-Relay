@@ -496,6 +496,19 @@ export default function nemoRelayExtension(pi: ExtensionAPI): void {
     });
   });
 
+  let promptWait: { session: string; start: number } | undefined;
+  pi.on('ui_prompt_start', (event, ctx) => {
+    promptWait = { session: safeSessionId(ctx), start: performance.now() };
+    emit(ctx, { hook_event_name: 'ui_prompt_start', kind: event.kind });
+  });
+
+  pi.on('ui_prompt_end', (event, ctx) => {
+    const wait = promptWait;
+    promptWait = undefined;
+    const duration = wait?.session === safeSessionId(ctx) ? performance.now() - wait.start : undefined;
+    emit(ctx, { hook_event_name: 'ui_prompt_end', kind: event.kind, wait_duration_ms: duration });
+  });
+
   pi.on('session_compact_failed', async (event: SessionCompactFailedEvent, ctx) => {
     emit(ctx, {
       hook_event_name: 'session_compact_failed', reason: event.reason, aborted: event.aborted,

@@ -45,6 +45,12 @@ export type AgentStartEvent = { type: 'agent_start' };
  */
 export type AgentEndEvent = { type: 'agent_end'; messages: unknown[] };
 
+/** Pi coalesces overlapping dialogs into one outer wait. */
+type UIPromptEvent = {
+  type: 'ui_prompt_start' | 'ui_prompt_end';
+  kind: 'select' | 'confirm' | 'input' | 'editor' | 'custom';
+};
+
 /** Fired once per logical agent run, from a `finally`. */
 export type AgentSettledEvent = { type: 'agent_settled'; aborted?: boolean };
 
@@ -250,6 +256,7 @@ export type ExtensionAPI = {
   on(event: 'session_start', handler: ExtensionHandler<SessionStartEvent>): void;
   on(event: 'session_shutdown', handler: ExtensionHandler<SessionShutdownEvent>): void;
   on(event: 'session_before_compact', handler: ExtensionHandler<SessionBeforeCompactEvent>): void;
+  on(event: 'ui_prompt_start' | 'ui_prompt_end', handler: ExtensionHandler<UIPromptEvent>): void;
   on(event: 'session_compact_failed', handler: ExtensionHandler<SessionCompactFailedEvent>): void;
   on(event: 'session_compact', handler: ExtensionHandler<SessionCompactEvent>): void;
   on(event: 'agent_start', handler: ExtensionHandler<AgentStartEvent>): void;

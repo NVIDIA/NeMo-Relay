@@ -50,6 +50,8 @@ pub(super) const DESCRIPTOR: AgentDescriptor = AgentDescriptor {
         "tool_arguments_transformed",
         // The bang-prefixed inline shell gate. `user_bash` is a pi hook; `user_bash_end` is not --
         // pi reports no completion for inline shell, so the extension synthesizes the close.
+        "ui_prompt_end",
+        "ui_prompt_start",
         "user_bash",
         "user_bash_end",
         // Not a pi hook name: the extension posts this after deciding whether to point the active

@@ -85,6 +85,11 @@ type SessionShutdownEvent = {
   targetSessionFile?: string;
 };
 
+type UIPromptEvent = {
+  type: 'ui_prompt_start' | 'ui_prompt_end';
+  kind: 'select' | 'confirm' | 'input' | 'editor' | 'custom';
+};
+
 type AgentEndEvent = { type: 'agent_end'; messages?: unknown[] };
 type TurnEvent = { type: 'turn_start' | 'turn_end'; turnIndex: number };
 type CompactEvent = {
@@ -147,6 +152,7 @@ type ExtensionAPI = {
   on(event: 'turn_start', handler: ExtensionHandler<TurnEvent>): void;
   on(event: 'turn_end', handler: ExtensionHandler<TurnEvent>): void;
   on(event: 'session_before_compact', handler: ExtensionHandler<CompactEvent>): void;
+  on(event: 'ui_prompt_start' | 'ui_prompt_end', handler: ExtensionHandler<UIPromptEvent>): void;
   on(event: 'session_compact_failed', handler: ExtensionHandler<CompactEvent>): void;
   on(event: 'session_compact', handler: ExtensionHandler<CompactEvent>): void;
   on(event: 'tool_execution_start', handler: ExtensionHandler<ToolExecutionStartEvent>): void;
@@ -418,6 +424,19 @@ export default function managedNemoRelayPi(pi: ExtensionAPI): void {
         ...attribution(),
       }),
     );
+  });
+
+  let promptWait: { session: string; start: number } | undefined;
+  pi.on('ui_prompt_start', (event, context) => {
+    promptWait = { session: sessionId(context), start: performance.now() };
+    observe(payload(context, 'ui_prompt_start', { kind: event.kind }));
+  });
+
+  pi.on('ui_prompt_end', (event, context) => {
+    const wait = promptWait;
+    promptWait = undefined;
+    const duration = wait?.session === sessionId(context) ? performance.now() - wait.start : undefined;
+    observe(payload(context, 'ui_prompt_end', { kind: event.kind, wait_duration_ms: duration }));
   });
 
   pi.on('session_compact_failed', async (event, context) => {

@@ -329,6 +329,7 @@ recorded on the session scope rather than opening an empty turn to hold it.
 | `agent_start` / `agent_end` / `agent_settled` | Marks on the session scope |
 | `turn_start` / `turn_end` | Turn scope open and close |
 | `session_before_compact` | Mark. The compaction is announced, not yet done, and a later extension can still cancel it |
+| `ui_prompt_start`, `ui_prompt_end` | Marks for Pi’s outer dialog with its kind and elapsed wait in milliseconds on exit. Overlapping dialogs share a wait. Titles, prompt text, and responses are omitted. |
 | `session_compact_failed` | Mark with reason, cancellation status, retry intent, and extension origin |
 | `session_compact` | Canonical `compaction` mark |
 | `session_start`, then every `model_select` | `model_redirect` mark, for each decision that explains something. Synthesized: the decision is re-evaluated per model, so a switch away from a provider the gateway fronts stops redirecting |
