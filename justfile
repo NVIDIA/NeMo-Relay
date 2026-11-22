@@ -1183,6 +1183,29 @@ test-instrumentation-examples:
     node --test --test-force-exit --test-timeout=30000 crates/node/tests/documentation_examples_tests.mjs
     cargo test --locked -p nemo-relay --features __skip-implicit-config --test documentation_examples instrument_applications
 
+# Build current bindings and test the examples displayed in plugin API documentation.
+test-plugin-api-examples:
+    #!/usr/bin/env bash
+    {{ bash_helpers }}
+    cd "$NEMO_RELAY_REPO_ROOT"
+    uv sync --frozen --inexact --no-default-groups --group dev --group test --no-install-project
+    python_executable="$(project_python_executable)"
+    activate_project_venv
+    test_config_root="$(mktemp -d)"
+    trap 'rm -rf "$test_config_root"' EXIT
+    export XDG_CONFIG_HOME="$test_config_root/xdg"
+    export NEMO_RELAY_TEST_SYSTEM_CONFIG_DIR="$test_config_root/system"
+    export NEMO_RELAY_TEST_SKIP_IMPLICIT_CONFIG=1
+    mkdir -p "$XDG_CONFIG_HOME" "$NEMO_RELAY_TEST_SYSTEM_CONFIG_DIR"
+    use_project_python_source "$python_executable"
+    "$python_executable" -m maturin develop --locked --skip-install --features __skip-implicit-config
+    npm run build-debug --workspace=nemo-relay-node -- --features __skip-implicit-config
+    "$python_executable" -m pytest python/tests/test_plugin_api_examples.py -q
+    node --test --test-timeout=60000 crates/node/tests/plugin_api_examples_tests.mjs
+    cargo test --locked -p nemo-relay -p nemo-relay-types --features nemo-relay/__skip-implicit-config --test documentation_examples
+    cargo test --locked -p nemo-relay-adaptive --features __skip-implicit-config --test documentation_examples
+    cargo test --locked -p nemo-relay-model-pricing --test documentation_examples
+
 # regenerate the ignored Fern API reference pages
 docs-api-reference:
     #!/usr/bin/env bash
@@ -1935,12 +1958,13 @@ test-openclaw:
     #!/usr/bin/env bash
     {{ bash_helpers }}
     cd "$NEMO_RELAY_REPO_ROOT"
+    export NEMO_RELAY_TEST_SKIP_IMPLICIT_CONFIG=1
     if is_true "{{ ci }}"; then
         npm ci --ignore-scripts
-        npm run build-debug --workspace=nemo-relay-node
     else
         npm install --ignore-scripts
     fi
+    npm run build-debug --workspace=nemo-relay-node -- --features __skip-implicit-config
     npm run typecheck --workspace=nemo-relay-openclaw
     npm test --workspace=nemo-relay-openclaw
     npm run test:live --workspace=nemo-relay-openclaw

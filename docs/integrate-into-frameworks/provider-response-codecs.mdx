@@ -6,7 +6,6 @@ position: 8
 {/* SPDX-FileCopyrightText: Copyright (c) 2026, NVIDIA CORPORATION & AFFILIATES. All rights reserved.
 SPDX-License-Identifier: Apache-2.0 */}
 
-
 Use this guide when subscribers, exporters, or diagnostics need a provider-neutral view of raw LLM responses.
 
 ## What You Build
@@ -60,20 +59,8 @@ available:
 - The decoded response includes prompt and/or completion token usage.
 - Relay has an explicit model pricing entry for that model or alias.
 
-Model pricing estimates carry `pricing_provider`, `pricing_model`,
-`pricing_as_of`, `pricing_source`, and `currency` metadata so stale model
-pricing can be audited without failing response decoding. Normalized cost uses
-currency-neutral amount fields such as `total`, `input`, `output`,
-`cache_read`, and `cache_write`.
-Unknown model pricing and missing token data are non-fatal: Relay omits the cost
-field and still exports token metrics and response annotations.
-
-Relay resolves model pricing through an active `PricingResolver` source chain.
-Provider or framework-reported cost remains authoritative. The resolver runs
-only when `Usage.cost` is missing. Relay does not ship provider price data
-by default: estimates require a configured inline, file, or embedding-provided
-model pricing source. With no configured source, every model is treated as
-unknown for model pricing.
+For cost metadata, missing-input behavior, and resolver contracts, refer to
+[Cost Estimation](/reference/api/model-pricing#cost-estimation).
 
 Model pricing is runtime state, not a CLI-only feature. Any host that initializes
 Relay plugins can activate the built-in `pricing` component before it runs
@@ -115,22 +102,8 @@ entries = []
 On Windows, use the expanded ProgramData path in TOML, for example
 `C:\\ProgramData\\nemo-relay\\pricing.json`.
 
-Each catalog entry declares:
-
-- `provider` and canonical `model_id`.
-- `aliases` for dated or provider-specific model IDs.
-- `currency`, defaulting to `USD`.
-- `unit`, defaulting to `per_token`. Relay estimates only `per_token` entries in this version. `per_request`, `per_second`, and `gpu_hour` are representable for future source integrations but are not estimated.
-- `rates` per one million input, output, cache-read, and cache-write tokens, with cache-write rates per cache duration, for flat `per_token` entries.
-- `rate_schedule` for data-driven threshold-based model pricing, such as models whose full-request input/output rates change after a prompt-token threshold.
-- `prompt_cache.read_accounting` to tell Relay whether prompt tokens include cache-read tokens. Relay ignores it for usage with `uncached_input_tokens`.
-- `pricing_as_of` and `pricing_source` for auditability.
-
-Relay validates catalogs at startup and rejects duplicate canonical IDs or
-aliases within the same normalized provider/model key. The same model ID can
-appear under distinct providers, such as `openai/gpt-4o-mini` and
-`azure/openai/gpt-4o-mini`. Adding a model should be a catalog/source update
-plus tests. It should not require adding another Rust `match` arm.
+For catalog fields, defaults, and validation rules, refer to
+[Cost Estimation](/reference/api/model-pricing#cost-estimation).
 
 Use the CLI to validate catalog files and manage file-backed model pricing sources:
 
@@ -166,72 +139,8 @@ configuration.
 `nemo-relay doctor` also validates enabled model pricing sources and reports missing,
 unreadable, or invalid catalogs before the gateway starts.
 
-Model lookup is provider-aware and route-aware. Relay uses the managed LLM call
-name as the provider/route and first tries provider-scoped keys for the full
-model and terminal model name, then falls back to model-only suffixes. For
-example, a call named `azure/openai` with response `model = "gpt-4o-mini"` tries
-`azure/openai/gpt-4o-mini` before generic `gpt-4o-mini`. If the model string is
-itself routed, such as `azure/openai/gpt-4o-mini`, Relay can infer
-`azure/openai` for the terminal model before trying slash-delimited model-only
-suffixes. This keeps route-specific enterprise model pricing authoritative when
-configured while still allowing generic model pricing to apply to routed names.
-
-For threshold-based model pricing, use `rate_schedule.type = "prompt_token_threshold"`.
-Relay picks exactly one tier from the request's input tokens, including cache
-reads and writes. It applies that tier to the full request. It does not price
-only the overflow tokens at the higher rate. This matches providers that publish
-"short context" and "long context" prices for the entire request/session. If
-usage has neither `prompt_tokens` nor `uncached_input_tokens` for a thresholded
-entry, Relay omits the estimate instead of guessing. Counts that the estimate
-folds in from `api_specific`, such as Gemini tool-use prompt tokens, are priced
-at the selected tier's rates.
-
-```json
-{
-  "provider": "google",
-  "model_id": "gemini-3.1-pro-preview",
-  "aliases": ["gemini-3.1-pro-preview-customtools"],
-  "pricing_as_of": "2026-06-05",
-  "pricing_source": "https://ai.google.dev/gemini-api/docs/pricing",
-  "rate_schedule": {
-    "type": "prompt_token_threshold",
-    "applies_to": "full_request",
-    "tiers": [
-      {
-        "max_prompt_tokens": 200000,
-        "rates": {
-          "input_per_million": 2.0,
-          "output_per_million": 12.0,
-          "cache_read_per_million": 0.2
-        }
-      },
-      {
-        "min_prompt_tokens": 200001,
-        "rates": {
-          "input_per_million": 4.0,
-          "output_per_million": 18.0,
-          "cache_read_per_million": 0.4
-        }
-      }
-    ]
-  },
-  "prompt_cache": {
-    "read_accounting": "included_in_prompt_tokens"
-  }
-}
-```
-
-Database-backed or remote model pricing should be implemented as a source that
-returns a validated `PricingCatalog` snapshot to Relay. Keep database queries,
-service auth, refresh cadence, and caching outside the LLM response hot path. A
-fleet deployment can refresh `/etc/nemo-relay/pricing.json` on Unix or the
-corresponding `%ProgramData%\nemo-relay\pricing.json` file on Windows from an
-IT-managed service, or embed a custom Rust `PricingSource` that reads from a
-database and installs a `PricingResolver` snapshot during process startup.
-
-External model pricing catalogs should be converted into Relay catalog JSON
-out-of-band and then loaded through a `file` source, unless the embedding
-application installs a custom Rust `PricingSource` directly.
+For provider and route lookup, threshold pricing, and custom Rust sources,
+refer to [Cost Estimation](/reference/api/model-pricing#cost-estimation).
 
 Embedded applications and eval harnesses can initialize the built-in `pricing`
 component for model pricing directly:
@@ -336,135 +245,31 @@ authoritative in the annotation.
 Observability exporters prefer codec-normalized usage and cost, then fall back to
 raw payload fields and model-pricing estimates, subject to each exporter's
 currency and reported-cost policy. When cost is available, each exporter projects
-it per the [exporter field mapping](#exporter-field-mapping) below.
+it per the [exporter field mapping](/reference/api/model-pricing#exporter-field-mapping).
 
 ## Token and Cost Field Semantics
 
-This section is the stable reference for the token and cost fields on LLM end
-events, carried on `AnnotatedLlmResponse.usage`.
+Refer to [Token and Cost Field Semantics](/reference/api/model-pricing#token-and-cost-field-semantics).
 
 ### Granularity
 
-Every token and cost value is **per LLM call** (one provider completion) unless
-it is an explicit aggregate:
-
-- `AnnotatedLlmResponse.usage` — The single LLM end event it is attached to.
-- OpenTelemetry projection attributes — The single LLM span they appear on;
-  spans are never summed across calls.
-- ATIF steps — An exported LLM call typically yields a `user` start step (no
-  metrics) and an `agent` end step that carries the call's `metrics`.
-- ATIF `final_metrics.total_*` — The **only** aggregate: a per-trajectory sum of
-  the metric fields present on its steps. It excludes embedded subagent
-  trajectories and can be partial.
-
-No exporter emits a running cross-call total other than ATIF `final_metrics`.
+Refer to [Granularity](/reference/api/model-pricing#granularity).
 
 ### Usage Fields
 
-All normalized fields are optional. A provider can omit a field, while a codec can
-compute one (such as Anthropic's `total_tokens`) and configured pricing can
-synthesize `cost`. `Usage` has no catch-all field, so provider usage fields that
-Relay does not model are dropped.
-
-| Field | Meaning |
-|---|---|
-| `prompt_tokens` | Input/prompt tokens. |
-| `completion_tokens` | Output/completion tokens, passed through unmodified. For OpenAI Responses this is the provider's `output_tokens` (which per OpenAI already includes any reasoning tokens); the reasoning count is reported separately under `api_specific` and is not added on top. |
-| `total_tokens` | Provider-reported, or computed as `prompt + completion` by some codecs (such as Anthropic) when the provider omits it. |
-| `cache_read_tokens` | Prompt-cache read tokens, when the provider reports prompt caching. |
-| `cache_write_tokens` | Prompt-cache write tokens as a list of `{count, duration}`, one entry per cache duration in seconds. `duration` is omitted when the provider does not say. |
-| `uncached_input_tokens` | Input tokens without cache reads or cache writes. When present, pricing bills this count at the input rate. |
-| `cost` | Normalized `CostEstimate`, when reported by the provider or estimable from configured pricing. |
-
-Built-in codecs normalize provider field names as follows:
-
-| Normalized Field | OpenAI Chat | OpenAI Responses | Anthropic Messages | OCI Generative AI | Gemini `generateContent` |
-|---|---|---|---|---|---|
-| `prompt_tokens` | `prompt_tokens` | `input_tokens` | `input_tokens` | `promptTokens` | `promptTokenCount` |
-| `completion_tokens` | `completion_tokens` | `output_tokens` | `output_tokens` | `completionTokens` | `candidatesTokenCount` |
-| `total_tokens` | `total_tokens` | `total_tokens` | computed | `totalTokens` | `totalTokenCount`, or computed as prompt + candidates + tool-use prompt + thinking |
-| `cache_read_tokens` | `prompt_tokens_details.cached_tokens` | `input_tokens_details.cached_tokens` | `cache_read_input_tokens` | `promptTokensDetails.cachedTokens` | `cachedContentTokenCount` |
-| `cache_write_tokens` | — | — | `cache_creation_input_tokens`, split into 300 and 3600 second entries by `cache_creation.ephemeral_1h_input_tokens` when present | — | — |
-| `uncached_input_tokens` | `prompt_tokens - prompt_tokens_details.cached_tokens`, when both are reported | `input_tokens - input_tokens_details.cached_tokens`, when both are reported | `input_tokens` | `promptTokens - promptTokensDetails.cachedTokens`, when both are reported | `promptTokenCount - cachedContentTokenCount`, when both are reported |
-| `cost` | `cost_usd`, structured `cost`, or scalar `cost` (OpenRouter; USD provider-reported total) | `cost_usd`, structured `cost`, or scalar `cost` (USD provider-reported total) | `cost_usd`, structured `cost`, or scalar `cost` (USD provider-reported total) | — | — |
-
-Gemini `generateContent` thinking tokens (`thoughtsTokenCount`) are stored in `api_specific.thoughts_tokens` rather than `completion_tokens`, because Google bills them as output tokens but reports them separately. The cost estimate folds them into the effective output-token count so that the pricing table reflects the real billing cost.
-
-Gemini tool-use prompt tokens, reported as `toolUsePromptTokenCount`, are stored in `api_specific.tool_use_prompt_tokens` and counted in a computed `total_tokens`. Relay bills those tokens at the input rate for URL context, code execution, and File Search. Relay excludes them for Google Search, image search, and Google Maps grounding, which are billed per request. When the count is nonzero and the tool evidence is mixed, unrecognized, or missing, Relay leaves the cost estimate unset. Mixed evidence includes Search together with URL context or code execution. Unrecognized evidence includes `retrievedContext` without a non-empty `fileSearchStore`, such as Vertex AI Search. When the count is absent or `0`, the estimate is unaffected.
-
-Relay applies both rules to any response annotation that reports `thoughts_tokens` or `tool_use_prompt_tokens` through the `gemini_generate_content` `api_specific` variant, using `grounding_metadata`, `urlContextMetadata`, and Gemini code execution parts to identify tool usage.
-
-Built-in codecs preserve only modeled provider-specific usage details under
-`api_specific`; other usage fields are dropped. For example, OpenAI Responses
-reasoning token counts are kept under `api_specific` (`output_tokens_details`),
-but OpenAI Chat `completion_tokens_details` is not.
+Refer to [Usage Fields](/reference/api/model-pricing#usage-fields).
 
 ### Cost Fields
 
-`CostEstimate` carries cost amounts (in `currency`) plus pricing provenance. Refer to
-[Cost Estimation](#cost-estimation) above for resolution order and pricing setup.
-
-| Field | Meaning |
-|---|---|
-| `total` | Optional total cost in `currency`. When absent, some exporters derive a total from the component amounts. |
-| `currency` | ISO 4217 code; defaults to `USD`. |
-| `input` / `output` / `cache_read` / `cache_write` | Per-category amounts in `currency`. |
-| `source` | `provider_reported` (authoritative) or `model_pricing` (estimated). |
-| `pricing_provider` / `pricing_model` / `pricing_as_of` / `pricing_source` | Estimate provenance, for auditing stale pricing. |
-
-For Chat Completions, Responses, and Messages, `cost_usd` takes precedence over
-`usage.cost`. Unrecognized `usage.cost` values are ignored without discarding
-token usage or other response annotations; configured pricing can still supply
-an estimate.
-
-Missing is not zero: an absent `cost` or token field means unknown, while an
-explicit `0` is a reported value and is preserved. Relay does not convert
-currencies.
+Refer to [Cost Fields](/reference/api/model-pricing#cost-fields).
 
 ### Exporter Field Mapping
 
-Each exporter projects `usage`/`cost` differently. Projections do not change the
-canonical fields above.
-
-| | ATOF | ATIF step / `final_metrics` | `openinference` | `full` | `gen_ai` |
-|---|---|---|---|---|---|
-| Prompt tokens | full `usage` preserved | `prompt_tokens` / `total_prompt_tokens` | `llm.token_count.prompt` | not emitted | `gen_ai.usage.input_tokens` |
-| Completion tokens | preserved | `completion_tokens` / `total_completion_tokens` | `llm.token_count.completion` | not emitted | `gen_ai.usage.output_tokens` |
-| Total tokens | preserved | no first-class field | `llm.token_count.total` | not emitted | not emitted |
-| Cache read / write | preserved | summed into `cached_tokens` / `total_cached_tokens` | `llm.token_count.prompt_details.cache_read` / `…cache_write` | not emitted | `gen_ai.usage.cache_read.input_tokens` / `gen_ai.usage.cache_write.input_tokens` |
-| Cost | full `cost` preserved | `cost_usd` / `total_cost_usd` (USD only) | `llm.cost.total` (USD only) | `nemo_relay.llm.cost.total` + `nemo_relay.llm.cost.currency` (any currency) | not emitted |
-
-The `full` OpenTelemetry projection carries cost in any currency, while ATIF
-and the `openinference` projection report cost only when it is USD-denominated
-and otherwise omit it. The `gen_ai` projection emits standardized token
-attributes but no cost attributes. ATIF derives metrics from codec-normalized
-usage where available and fills missing supported fields from the raw payload.
-`metrics.extra` holds only unmapped keys from the raw
-`usage`/`token_usage` object (for example reasoning token counts, or a raw
-`total_tokens`), and only when the step already has a recognized metric.
-Normalized-only or total-only values are not projected.
+Refer to [Exporter Field Mapping](/reference/api/model-pricing#exporter-field-mapping).
 
 ### Stability
 
-The `Usage` and `CostEstimate` field names and meanings, and the exporter
-mappings above, are stable as of ATOF `0.1` (ATIF schema `ATIF-v1.7`, pricing
-catalog `version: 1`). Future NeMo Relay releases can add new optional fields to
-the serialized JSON/ATOF shapes. Renames or removals are breaking changes and are
-called out in release notes.
-
-<Note>
-The Rust `Usage` and `CostEstimate` structs and the `CostSource` enum are
-exhaustive, so adding a field or variant is a source-breaking change for Rust
-consumers.
-</Note>
-
-The following behaviors are intentional in this release but can change later:
-
-- The `full` OpenTelemetry projection emits cost only, not token counts.
-- The `gen_ai` OpenTelemetry projection emits token counts but not cost.
-- ATIF and the `openinference` projection report cost only in USD.
-- Reasoning tokens are not a first-class `Usage` field.
-- Bindings expose `usage`/`cost` as snake_case JSON rather than typed objects.
+Refer to [Stability](/reference/api/model-pricing#stability).
 
 ## Built-in Response Codecs
 

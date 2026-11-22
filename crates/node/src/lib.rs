@@ -21,6 +21,7 @@ mod convert;
 mod diagnostics;
 mod environment;
 mod error;
+mod json;
 mod promise_call;
 mod stream;
 mod types;

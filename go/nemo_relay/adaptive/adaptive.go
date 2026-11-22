@@ -52,21 +52,6 @@ type AcgStabilityThresholds = nemo_relay.AcgStabilityThresholds
 // AcgConfig configures the adaptive cache governor.
 type AcgConfig = nemo_relay.AcgConfig
 
-// ResponseCacheConfig configures the opt-in LLM response and tool-result cache.
-type ResponseCacheConfig = nemo_relay.ResponseCacheConfig
-
-// ResponseCacheBackendConfig selects the response-cache backend kind and options.
-type ResponseCacheBackendConfig = nemo_relay.ResponseCacheBackendConfig
-
-// ResponseCacheToolsConfig configures the opt-in tool-result cache surface.
-type ResponseCacheToolsConfig = nemo_relay.ResponseCacheToolsConfig
-
-// ResponseCacheToolClass is one tool caching class (also the shape of default).
-type ResponseCacheToolClass = nemo_relay.ResponseCacheToolClass
-
-// ResponseCacheToolOverride refines a single tool on top of its resolved class.
-type ResponseCacheToolOverride = nemo_relay.ResponseCacheToolOverride
-
 // CacheWriteTokenCounts is prompt-cache write tokens retained for one cache duration.
 type CacheWriteTokenCounts = nemo_relay.CacheWriteTokenCounts
 
@@ -129,27 +114,6 @@ func NewAcgStabilityThresholds() AcgStabilityThresholds {
 // NewAcgConfig returns default adaptive cache governor settings.
 func NewAcgConfig() AcgConfig {
 	return nemo_relay.NewAcgConfig()
-}
-
-// NewResponseCacheConfig returns default response cache settings. Set Namespace
-// to one cache trust domain before validation.
-func NewResponseCacheConfig() ResponseCacheConfig {
-	return nemo_relay.NewResponseCacheConfig()
-}
-
-// NewInMemoryResponseCacheBackend returns an in-memory response-cache backend spec.
-func NewInMemoryResponseCacheBackend() ResponseCacheBackendConfig {
-	return nemo_relay.NewInMemoryResponseCacheBackend()
-}
-
-// NewRedisResponseCacheBackend returns a Redis response-cache backend spec.
-func NewRedisResponseCacheBackend(url, keyPrefix string) ResponseCacheBackendConfig {
-	return nemo_relay.NewRedisResponseCacheBackend(url, keyPrefix)
-}
-
-// NewResponseCacheToolsConfig returns a default (disabled) tool-result cache config.
-func NewResponseCacheToolsConfig() ResponseCacheToolsConfig {
-	return nemo_relay.NewResponseCacheToolsConfig()
 }
 
 // NewComponentSpec wraps adaptive config as an enabled top-level adaptive component.

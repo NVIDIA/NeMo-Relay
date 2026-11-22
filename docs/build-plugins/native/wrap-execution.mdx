@@ -141,6 +141,28 @@ stream-owned scope guards, including after exhaustion or a stream error. For exa
 Node.js callers await `stream.close()`, then flush exporters to collect events emitted
 during cleanup. Dropping a stream requests cancellation but does not wait for cleanup.
 
+### Check Downstream Cleanup
+
+A stream from `next.call` closes its downstream source when it ends or is dropped,
+and the host keeps a failed close for component shutdown. Use `next.open` when a
+plugin must know whether that close succeeded, for example before it stores the
+response. `open` returns an `LlmInputStream`; after reading it, await `close()` to
+get the cleanup result. When the caller then closes the plugin's stream, Relay
+reports that same result instead of closing the downstream stream again.
+
+```rust
+let mut stream = next.open(request).await?;
+while let Some(chunk) = stream.next().await {
+    // forward or collect the chunk
+}
+stream.close().await?; // fails when the downstream stream failed to close
+```
+
+Return a downstream failure unchanged to keep its original type. Relay matches it
+to the failure it sent the plugin and keeps the provider status, headers, and
+retry classification for the caller. HTTP failures still gain the plugin's
+reporting context described in [About Native Plugins](/build-plugins/native/about).
+
 ## Verify Execution Behavior
 
 Use the following procedure to verify unary, repeated, and streaming continuation

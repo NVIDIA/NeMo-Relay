@@ -21,7 +21,7 @@ async fn execution_next_context_restores_scope() {
 
 fn json_completion() -> (
     CallCompletion,
-    tokio::sync::oneshot::Receiver<FlowResult<Json>>,
+    tokio::sync::oneshot::Receiver<FlowResult<Value>>,
 ) {
     let (sender, receiver) = tokio::sync::oneshot::channel();
     (
@@ -33,7 +33,7 @@ fn json_completion() -> (
     )
 }
 
-fn assert_sender_dropped(mut receiver: tokio::sync::oneshot::Receiver<FlowResult<Json>>) {
+fn assert_sender_dropped(mut receiver: tokio::sync::oneshot::Receiver<FlowResult<Value>>) {
     assert!(matches!(
         receiver.try_recv(),
         Err(tokio::sync::oneshot::error::TryRecvError::Closed)
@@ -47,7 +47,7 @@ fn cancel_drops_a_json_call_that_never_settles() {
     let (completion, receiver) = json_completion();
     registry.insert(call_id, completion);
     registry.cancel(call_id);
-    registry.resolve(call_id, || Ok(Json::Null));
+    registry.resolve(call_id, || Ok(Value::Null));
     assert!(registry.stream(call_id).is_none());
     assert_sender_dropped(receiver);
 }

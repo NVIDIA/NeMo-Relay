@@ -55,7 +55,7 @@ use crate::operational::{
 };
 use crate::runtime_diagnostics::{self as diag, Operation};
 use crate::server::AppState;
-use crate::sessions::{GatewayCallPrep, GatewaySessionFinish, SessionManager};
+use crate::sessions::{GatewayCallContext, GatewayCallPrep, GatewaySessionFinish, SessionManager};
 
 /// Builds the same correlation input used by the foreground gateway without selecting its
 /// response-reencoding delivery path. Daemon workers use this before handing the provider body to
@@ -213,6 +213,10 @@ pub(crate) fn daemon_observable_headers(headers: &HeaderMap) -> serde_json::Map<
 #[path = "../../tests/coverage/shared/gateway_tests.rs"]
 mod tests;
 
+#[cfg(test)]
+#[path = "../../tests/coverage/shared/gateway_receipts_tests.rs"]
+mod receipt_tests;
+
 const INTERNAL_DISPATCH_URL_HEADER: &str = "x-nemo-relay-internal-dispatch-url";
 const INTERNAL_DISPATCH_ROUTE_HEADER: &str = "x-nemo-relay-internal-dispatch-route";
 const INTERNAL_DISPATCH_BACKEND_HEADER: &str = "x-nemo-relay-internal-dispatch-backend";
@@ -248,8 +252,7 @@ pub(crate) async fn daemon_execute(
     // After setup, streaming delivery owns its own guard; unary/error paths finish the call.
     let guard = GatewayCallGuard::new(
         state.sessions.clone(),
-        prep.session_id.clone(),
-        prep.owner_subagent_id.clone(),
+        prep.context.clone(),
         None,
         prep.session_finish,
         operational.clone(),
@@ -415,6 +418,8 @@ enum CapturedUpstreamFailure {
     },
     Transport(reqwest::Error),
     Authentication(CliError),
+    /// The provider answered with a success status, then its stream failed or was malformed.
+    StreamFailed,
 }
 
 #[derive(Default)]
@@ -424,12 +429,29 @@ struct CapturedUpstreamFailures {
 
 impl CapturedUpstreamFailures {
     fn capture(&self, failure: CapturedUpstreamFailure) -> FlowError {
+        FlowError::Internal(self.marker(failure))
+    }
+
+    /// Captures a failure while keeping the source error text for telemetry.
+    fn capture_with_source(
+        &self,
+        failure: CapturedUpstreamFailure,
+        source: FlowError,
+    ) -> FlowError {
+        let source = match source {
+            FlowError::Internal(message) => message,
+            other => other.to_string(),
+        };
+        FlowError::Internal(format!("{source} ({})", self.marker(failure)))
+    }
+
+    fn marker(&self, failure: CapturedUpstreamFailure) -> String {
         let token = uuid::Uuid::now_v7();
         self.entries
             .lock()
             .expect("captured upstream failures lock poisoned")
             .insert(token, failure);
-        FlowError::Internal(format!("{CAPTURED_UPSTREAM_FAILURE_PREFIX}{token}"))
+        format!("{CAPTURED_UPSTREAM_FAILURE_PREFIX}{token}")
     }
 
     /// Takes the single distinct captured attempt named in a worker-wrapped error.
@@ -818,15 +840,16 @@ async fn run_managed_buffered(
         operational.clone(),
     );
     let GatewayCallPrep {
+        context,
         scope_stack,
-        session_id,
+        session_id: _,
         provider_name,
         request,
         parent,
         attributes,
         metadata,
         model_name,
-        owner_subagent_id,
+        owner_subagent_id: _,
         record_task_response,
         session_finish,
     } = prep;
@@ -854,23 +877,19 @@ async fn run_managed_buffered(
             if record_task_response {
                 state
                     .sessions
-                    .record_gateway_response_hints(
-                        &session_id,
-                        owner_subagent_id.clone(),
-                        Cow::Owned(response_json),
-                    )
+                    .record_gateway_response_hints(&context, Cow::Owned(response_json))
                     .await;
             }
             state
                 .sessions
-                .finish_gateway_call(&session_id, owner_subagent_id.as_deref(), session_finish)
+                .finish_gateway_call(&context, session_finish)
                 .await;
             build_response(StatusCode::OK, headers, response_body)
         }
         Err(error) => {
             state
                 .sessions
-                .finish_gateway_call(&session_id, owner_subagent_id.as_deref(), session_finish)
+                .finish_gateway_call(&context, session_finish)
                 .await;
             if let Some(failure) = upstream_failures.take(&error) {
                 return selected_upstream_failure(failure);
@@ -1018,8 +1037,7 @@ async fn run_managed_streaming(
     let mut guard = cancellation_guard.unwrap_or_else(|| {
         GatewayCallGuard::new(
             state.sessions.clone(),
-            prep.session_id.clone(),
-            prep.owner_subagent_id.clone(),
+            prep.context.clone(),
             None,
             prep.session_finish,
             operational.clone(),
@@ -1056,22 +1074,22 @@ async fn run_managed_streaming(
     let finalizer = streaming_codec.finalizer();
 
     let GatewayCallPrep {
+        context,
         scope_stack,
-        session_id,
+        session_id: _,
         provider_name,
         request,
         parent,
         attributes,
         metadata,
         model_name,
-        owner_subagent_id,
+        owner_subagent_id: _,
         record_task_response,
         session_finish: _,
     } = prep;
     let (finalizer, response_completion, response_ready) = gateway_response_completion(
         state.sessions.clone(),
-        session_id.clone(),
-        owner_subagent_id.clone(),
+        context,
         record_task_response,
         finalizer,
     );
@@ -1121,6 +1139,13 @@ async fn run_managed_streaming(
         Ok(body) => body,
         Err(error) => {
             if let Some(failure) = upstream_failures.take(&error) {
+                if matches!(failure, CapturedUpstreamFailure::StreamFailed) {
+                    // The provider already answered 200, so keep it and report the failure
+                    // in-band, matching failures after the first event.
+                    let body = Body::from(encode_sse_error_frame(provider_route, 0));
+                    let headers = upstream_successes.response_headers(None, "text/event-stream");
+                    return build_response(StatusCode::OK, headers, body);
+                }
                 return selected_upstream_failure(failure);
             }
             return Err(translate_runtime_error(error));
@@ -1143,8 +1168,7 @@ async fn run_managed_streaming(
 // response annotation. The observer retains the async fallback for busy sessions.
 fn gateway_response_completion(
     sessions: SessionManager,
-    session_id: String,
-    owner_subagent_id: Option<String>,
+    context: GatewayCallContext,
     record_task_response: bool,
     finalizer: LlmFinalizerFn,
 ) -> (LlmFinalizerFn, ResponseCompletionFn, oneshot::Receiver<()>) {
@@ -1152,16 +1176,11 @@ fn gateway_response_completion(
     let ready = Arc::new(Mutex::new(Some(ready)));
     let finalizer_ready = ready.clone();
     let finalizer_sessions = sessions.clone();
-    let finalizer_session_id = session_id.clone();
-    let finalizer_owner = owner_subagent_id.clone();
+    let finalizer_context = context.clone();
     let finalizer: LlmFinalizerFn = Box::new(move || {
         let response = finalizer();
         if (!record_task_response
-            || finalizer_sessions.try_record_gateway_response_hints(
-                &finalizer_session_id,
-                finalizer_owner,
-                &response,
-            ))
+            || finalizer_sessions.try_record_gateway_response_hints(&finalizer_context, &response))
             && let Some(ready) = finalizer_ready
                 .lock()
                 .expect("stream completion lock poisoned")
@@ -1180,11 +1199,7 @@ fn gateway_response_completion(
             if let Some(ready) = ready {
                 if record_task_response {
                     sessions
-                        .record_gateway_response_hints(
-                            &session_id,
-                            owner_subagent_id,
-                            Cow::Borrowed(response),
-                        )
+                        .record_gateway_response_hints(&context, Cow::Borrowed(response))
                         .await;
                 }
                 let _ = ready.send(());
@@ -1297,9 +1312,14 @@ fn build_streaming_func(
                 );
             }
             let index = upstream_successes.capture(None, response_headers);
-            let json_stream = sse_json_stream(response, operational);
+            let json_stream = sse_json_stream(response, operational).map(move |item| {
+                item.map_err(|error| {
+                    upstream_failures
+                        .capture_with_source(CapturedUpstreamFailure::StreamFailed, error)
+                })
+            });
             Ok(FirstEventTap::wrap(
-                json_stream,
+                LlmJsonStream::new(json_stream),
                 Box::new(move |event| upstream_successes.set_key(index, event.clone())),
             ))
         })
@@ -1509,8 +1529,7 @@ fn client_sse_body(
 // the in-flight gateway call asynchronously.
 struct GatewayCallGuard {
     sessions: Option<SessionManager>,
-    session_id: String,
-    owner_subagent_id: Option<String>,
+    context: GatewayCallContext,
     response_ready: Option<oneshot::Receiver<()>>,
     json_stream: Option<LlmJsonStream>,
     session_finish: GatewaySessionFinish,
@@ -1520,16 +1539,14 @@ struct GatewayCallGuard {
 impl GatewayCallGuard {
     fn new(
         sessions: SessionManager,
-        session_id: String,
-        owner_subagent_id: Option<String>,
+        context: GatewayCallContext,
         response_ready: Option<oneshot::Receiver<()>>,
         session_finish: GatewaySessionFinish,
         operational: OperationalContext,
     ) -> Self {
         Self {
             sessions: Some(sessions),
-            session_id,
-            owner_subagent_id,
+            context,
             response_ready,
             json_stream: None,
             session_finish,
@@ -1550,8 +1567,7 @@ impl GatewayCallGuard {
             // Cleanup must survive cancellation of the request awaiting it.
             let cleanup_task = tokio::spawn(complete_gateway_call(
                 sessions,
-                self.session_id.clone(),
-                self.owner_subagent_id.clone(),
+                self.context.clone(),
                 None,
                 self.session_finish,
             ));
@@ -1564,17 +1580,14 @@ impl GatewayCallGuard {
 
 async fn complete_gateway_call(
     sessions: SessionManager,
-    session_id: String,
-    owner_subagent_id: Option<String>,
+    context: GatewayCallContext,
     response_ready: Option<oneshot::Receiver<()>>,
     session_finish: GatewaySessionFinish,
 ) {
     if let Some(ready) = response_ready {
         let _ = ready.await;
     }
-    sessions
-        .finish_gateway_call(&session_id, owner_subagent_id.as_deref(), session_finish)
-        .await;
+    sessions.finish_gateway_call(&context, session_finish).await;
 }
 
 impl Drop for GatewayCallGuard {
@@ -1584,13 +1597,11 @@ impl Drop for GatewayCallGuard {
             return;
         };
         operational::upstream_cancelled(&self.operational);
-        let session_id = self.session_id.clone();
-        let owner_subagent_id = self.owner_subagent_id.clone();
+        let context = self.context.clone();
         let session_finish = self.session_finish;
         let cleanup = complete_gateway_call(
             sessions,
-            session_id,
-            owner_subagent_id,
+            context,
             self.response_ready.take(),
             session_finish,
         );
@@ -1718,7 +1729,7 @@ async fn forward_upstream_request(
         &forwarding.config,
     )
     .await?;
-    if let Some(operational) = operational {
+    let response = if let Some(operational) = operational {
         operational::upstream_started(operational, streaming);
         let request = http.execute(upstream);
         tokio::pin!(request);
@@ -1752,7 +1763,11 @@ async fn forward_upstream_request(
             })
             .inspect_err(diag::transport_error)
             .map_err(CliError::from)
+    }?;
+    if effective_request.is_some() {
+        crate::openshell_receipts::observe(response.headers(), response.status());
     }
+    Ok(response)
 }
 
 struct UpstreamForwardRequest<'a> {
@@ -2122,6 +2137,12 @@ fn selected_upstream_failure(failure: CapturedUpstreamFailure) -> Result<Respons
         } => build_response(status, headers, Body::from(bytes)),
         CapturedUpstreamFailure::Transport(error) => Err(CliError::Upstream(error)),
         CapturedUpstreamFailure::Authentication(error) => Err(error),
+        CapturedUpstreamFailure::StreamFailed => Err(CliError::ProviderFailure(UpstreamFailure {
+            status: None,
+            body: "upstream stream failed".to_string(),
+            headers: Default::default(),
+            class: UpstreamFailureClass::Other,
+        })),
     }
 }
 

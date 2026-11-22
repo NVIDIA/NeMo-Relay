@@ -4419,6 +4419,97 @@ async fn gateway_surfaces_streaming_upstream_errors() {
 }
 
 #[tokio::test]
+async fn gateway_keeps_the_provider_status_when_a_stream_fails_before_its_first_event() {
+    // The provider sends 200 chunked SSE headers and then drops the connection before any
+    // event. Relay keeps the provider's 200 and reports the failure in-band, the same way it
+    // reports a failure after the first event.
+    use tokio::io::{AsyncReadExt, AsyncWriteExt};
+    let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
+    let address = listener.local_addr().unwrap();
+    let handle = tokio::spawn(async move {
+        loop {
+            let (mut socket, _) = listener.accept().await.unwrap();
+            let mut request = [0_u8; 4096];
+            let _ = socket.read(&mut request).await.unwrap();
+            socket
+                .write_all(
+                    b"HTTP/1.1 200 OK\r\ncontent-type: text/event-stream\r\ntransfer-encoding: chunked\r\n\r\n",
+                )
+                .await
+                .unwrap();
+            socket.flush().await.unwrap();
+            let _ = socket.shutdown().await;
+        }
+    });
+    let upstream = format!("http://{address}");
+
+    let mut failures = Vec::new();
+    for (path, body) in [
+        (
+            "/v1/messages",
+            json!({"model": "claude-test", "max_tokens": 16, "stream": true,
+                   "messages": [{"role": "user", "content": "hello"}]}),
+        ),
+        (
+            "/v1/responses",
+            json!({"model": "gpt-test", "input": "hello", "stream": true}),
+        ),
+        (
+            "/v1/chat/completions",
+            json!({"model": "gpt-test", "stream": true,
+                   "messages": [{"role": "user", "content": "hello"}]}),
+        ),
+    ] {
+        let mut config = test_config();
+        config.openai_base_url = upstream.clone();
+        config.anthropic_base_url = upstream.clone();
+        let mut request = Request::builder()
+            .method("POST")
+            .uri(path)
+            .header("content-type", "application/json");
+        if path == "/v1/messages" {
+            request = request.header("anthropic-version", "2023-06-01");
+        }
+        let response = router(config)
+            .oneshot(request.body(Body::from(body.to_string())).unwrap())
+            .await
+            .unwrap();
+
+        let status = response.status();
+        let bytes = response.into_body().collect().await.unwrap().to_bytes();
+        let text = String::from_utf8_lossy(&bytes).into_owned();
+        let events: Vec<Value> = text
+            .lines()
+            .filter_map(|line| line.strip_prefix("data: "))
+            .filter_map(|data| serde_json::from_str(data).ok())
+            .collect();
+        let error = events.first().cloned().unwrap_or(Value::Null);
+        let expected_type = if path == "/v1/messages" {
+            "api_error"
+        } else {
+            "server_error"
+        };
+        let in_band_error = events.len() == 1
+            && error["error"]["message"] == "NeMo Relay could not complete the response stream."
+            && error["error"]["type"] == expected_type
+            && (path == "/v1/messages" || error["error"]["code"] == "stream_error")
+            && (path == "/v1/chat/completions" || text.contains("event: error\n"))
+            && !text.contains("[DONE]")
+            && !text.contains("hook payload");
+        if status != StatusCode::OK || !in_band_error {
+            failures.push(format!("{path}: {status} {text}"));
+        }
+    }
+    handle.abort();
+    assert!(
+        failures.is_empty(),
+        "the provider answered 200, so a failure before the first event must keep 200 and \
+         report the error in the provider's stream protocol:\n{}",
+        failures.join("\n")
+    );
+}
+
+#[tokio::test]
 async fn gateway_rejects_unsupported_paths() {
     let app = router(test_config());
     let response = app
@@ -6084,228 +6175,15 @@ async fn gateway_concurrent_next_relays_selected_streaming_failure() {
     assert_eq!(body.as_ref(), br#"{"error":"selected streaming failure"}"#);
 }
 
-/// Gateway config wired to `upstream` with the response cache enabled.
-fn cache_gateway_config(upstream: &str) -> GatewayConfig {
+/// Gateway config wired to `upstream` for OpenAI and Anthropic routes.
+fn upstream_gateway_config(upstream: &str) -> GatewayConfig {
     let mut config = test_config();
     config.openai_base_url = upstream.into();
     config.anthropic_base_url = upstream.into();
-    config.plugin_config = Some(json!({
-        "version": 1,
-        "components": [{
-            "kind": "adaptive",
-            "enabled": true,
-            "config": {"response_cache": {
-                "ttl_seconds": 3600,
-                "bypass_rate": 0.0,
-                "namespace": "gateway-test",
-                "backend": {"kind": "in_memory"}
-            }}
-        }]
-    }));
     config
 }
 
 const MOCK_CHAT_BODY: &str = r#"{"id":"chatcmpl-1","object":"chat.completion","created":1700000000,"model":"gpt-4o","choices":[{"index":0,"message":{"role":"assistant","content":"The answer is 42."},"finish_reason":"stop"}],"usage":{"prompt_tokens":10,"completion_tokens":4,"total_tokens":14}}"#;
-
-#[tokio::test]
-async fn gateway_serves_cached_hit_with_full_body_and_json_content_type() {
-    let _guard = PLUGIN_CONFIG_TEST_LOCK.lock().await;
-    let _ = crate::test_support::plugin_host::test_close_plugin_host();
-
-    let (upstream, upstream_calls) =
-        spawn_mock_upstream(StatusCode::OK, "application/json", MOCK_CHAT_BODY).await;
-    let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
-    let url = format!("http://{}", listener.local_addr().unwrap());
-    let (shutdown_tx, shutdown_rx) = oneshot::channel();
-    let config = cache_gateway_config(&upstream);
-    let handle =
-        tokio::spawn(async move { serve_listener(listener, config, Some(shutdown_rx)).await });
-    wait_for_gateway(&url).await;
-
-    let client = test_http_client();
-    let request_body = json!({
-        "model": "gpt-4o",
-        "messages": [{"role": "user", "content": "What is the answer?"}],
-        "temperature": 0.0
-    });
-    let first = client
-        .post(format!("{url}/v1/chat/completions"))
-        .json(&request_body)
-        .send()
-        .await
-        .unwrap();
-    assert_eq!(first.status(), StatusCode::OK);
-    let first_body: Value = first.json().await.unwrap();
-
-    let second = client
-        .post(format!("{url}/v1/chat/completions"))
-        .json(&request_body)
-        .send()
-        .await
-        .unwrap();
-    assert_eq!(second.status(), StatusCode::OK);
-    assert_eq!(
-        second
-            .headers()
-            .get(http::header::CONTENT_TYPE)
-            .and_then(|value| value.to_str().ok()),
-        Some("application/json"),
-        "a cached hit must still declare its JSON content type"
-    );
-    let second_body: Value = second.json().await.unwrap();
-
-    assert_eq!(
-        upstream_calls.load(std::sync::atomic::Ordering::SeqCst),
-        1,
-        "the repeat must be served from cache, not the upstream"
-    );
-    assert_eq!(
-        second_body, first_body,
-        "the cached body must be byte-equivalent to the live one"
-    );
-    assert_eq!(
-        second_body["choices"][0]["message"]["content"],
-        json!("The answer is 42.")
-    );
-
-    shutdown_tx.send(()).unwrap();
-    handle.await.unwrap().unwrap();
-    let _ = crate::test_support::plugin_host::test_close_plugin_host();
-}
-
-#[tokio::test]
-async fn gateway_preserves_non_2xx_upstream_failure_and_never_caches_it() {
-    let _guard = PLUGIN_CONFIG_TEST_LOCK.lock().await;
-    let _ = crate::test_support::plugin_host::test_close_plugin_host();
-
-    // A 503 whose body has NO top-level `error` key — the shape the
-    // response-body error check alone would not catch; only the status gate
-    // keeps it out of the cache.
-    let (upstream, upstream_calls) = spawn_mock_upstream(
-        StatusCode::SERVICE_UNAVAILABLE,
-        "application/json",
-        r#"{"message":"service temporarily unavailable"}"#,
-    )
-    .await;
-    let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
-    let url = format!("http://{}", listener.local_addr().unwrap());
-    let (shutdown_tx, shutdown_rx) = oneshot::channel();
-    let config = cache_gateway_config(&upstream);
-    let handle =
-        tokio::spawn(async move { serve_listener(listener, config, Some(shutdown_rx)).await });
-    wait_for_gateway(&url).await;
-
-    let client = test_http_client();
-    let request_body = json!({
-        "model": "gpt-4o",
-        "messages": [{"role": "user", "content": "hello"}]
-    });
-    for _ in 0..2 {
-        let response = client
-            .post(format!("{url}/v1/chat/completions"))
-            .json(&request_body)
-            .send()
-            .await
-            .unwrap();
-        assert_eq!(
-            response.status(),
-            StatusCode::SERVICE_UNAVAILABLE,
-            "the typed provider failure must preserve the upstream status"
-        );
-        assert_eq!(
-            response
-                .headers()
-                .get("x-upstream-marker")
-                .and_then(|value| value.to_str().ok()),
-            Some("mock"),
-            "ordinary upstream failure headers must reach the client"
-        );
-        assert_eq!(
-            response.text().await.unwrap(),
-            r#"{"message":"service temporarily unavailable"}"#,
-            "ordinary upstream failure bodies must reach the client unchanged"
-        );
-    }
-    assert_eq!(
-        upstream_calls.load(std::sync::atomic::Ordering::SeqCst),
-        2,
-        "an upstream failure must never be cached"
-    );
-
-    shutdown_tx.send(()).unwrap();
-    handle.await.unwrap().unwrap();
-    let _ = crate::test_support::plugin_host::test_close_plugin_host();
-}
-
-#[tokio::test]
-async fn gateway_preserves_2xx_non_json_and_never_caches_it() {
-    let _guard = PLUGIN_CONFIG_TEST_LOCK.lock().await;
-    let _ = crate::test_support::plugin_host::test_close_plugin_host();
-
-    let (upstream, upstream_calls) = spawn_mock_upstream(
-        StatusCode::OK,
-        "text/plain",
-        "provider returned malformed JSON",
-    )
-    .await;
-    let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
-    let url = format!("http://{}", listener.local_addr().unwrap());
-    let (shutdown_tx, shutdown_rx) = oneshot::channel();
-    let config = cache_gateway_config(&upstream);
-    let handle =
-        tokio::spawn(async move { serve_listener(listener, config, Some(shutdown_rx)).await });
-    wait_for_gateway(&url).await;
-
-    let client = test_http_client();
-    let request_body = json!({
-        "model": "gpt-4o",
-        "messages": [{"role": "user", "content": "hello"}],
-        "temperature": 0.0
-    });
-    for _ in 0..2 {
-        let response = client
-            .post(format!("{url}/v1/chat/completions"))
-            .json(&request_body)
-            .send()
-            .await
-            .unwrap();
-        assert_eq!(
-            response.status(),
-            StatusCode::OK,
-            "an ordinary upstream response keeps its provider status"
-        );
-        assert_eq!(
-            response
-                .headers()
-                .get(http::header::CONTENT_TYPE)
-                .and_then(|value| value.to_str().ok()),
-            Some("text/plain"),
-            "an ordinary upstream response keeps its content type"
-        );
-        assert_eq!(
-            response
-                .headers()
-                .get("x-upstream-marker")
-                .and_then(|value| value.to_str().ok()),
-            Some("mock"),
-            "an ordinary upstream response keeps its provider headers"
-        );
-        assert_eq!(
-            response.text().await.unwrap(),
-            "provider returned malformed JSON",
-            "an undecodable provider body must reach the client unchanged"
-        );
-    }
-    assert_eq!(
-        upstream_calls.load(std::sync::atomic::Ordering::SeqCst),
-        2,
-        "an unparseable upstream response must never be cached"
-    );
-
-    shutdown_tx.send(()).unwrap();
-    handle.await.unwrap().unwrap();
-    let _ = crate::test_support::plugin_host::test_close_plugin_host();
-}
 
 #[tokio::test]
 async fn gateway_surfaces_post_upstream_intercept_rejection_instead_of_relaying_body() {
@@ -6339,7 +6217,7 @@ async fn gateway_surfaces_post_upstream_intercept_rejection_instead_of_relaying_
     let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
     let url = format!("http://{}", listener.local_addr().unwrap());
     let (shutdown_tx, shutdown_rx) = oneshot::channel();
-    let config = cache_gateway_config(&upstream);
+    let config = upstream_gateway_config(&upstream);
     let handle =
         tokio::spawn(async move { serve_listener(listener, config, Some(shutdown_rx)).await });
     wait_for_gateway(&url).await;
@@ -6367,74 +6245,6 @@ async fn gateway_surfaces_post_upstream_intercept_rejection_instead_of_relaying_
     );
     let body: Value = response.json().await.unwrap();
     assert_eq!(body["error"]["type"], json!("nemo_relay_gateway_error"));
-
-    shutdown_tx.send(()).unwrap();
-    handle.await.unwrap().unwrap();
-    let _ = crate::test_support::plugin_host::test_close_plugin_host();
-}
-
-const MOCK_CHAT_SSE: &str = "data: {\"id\":\"chatcmpl-1\",\"object\":\"chat.completion.chunk\",\"created\":1700000000,\"model\":\"gpt-4o\",\"choices\":[{\"index\":0,\"delta\":{\"role\":\"assistant\"},\"finish_reason\":null}]}\n\ndata: {\"id\":\"chatcmpl-1\",\"object\":\"chat.completion.chunk\",\"choices\":[{\"index\":0,\"delta\":{\"content\":\"The answer is 42.\"},\"finish_reason\":null}]}\n\ndata: {\"id\":\"chatcmpl-1\",\"object\":\"chat.completion.chunk\",\"choices\":[{\"index\":0,\"delta\":{},\"finish_reason\":\"stop\"}]}\n\ndata: [DONE]\n\n";
-
-#[tokio::test]
-async fn gateway_streaming_hit_carries_event_stream_content_type() {
-    let _guard = PLUGIN_CONFIG_TEST_LOCK.lock().await;
-    let _ = crate::test_support::plugin_host::test_close_plugin_host();
-
-    let (upstream, upstream_calls) =
-        spawn_mock_upstream(StatusCode::OK, "text/event-stream", MOCK_CHAT_SSE).await;
-    let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
-    let url = format!("http://{}", listener.local_addr().unwrap());
-    let (shutdown_tx, shutdown_rx) = oneshot::channel();
-    let config = cache_gateway_config(&upstream);
-    let handle =
-        tokio::spawn(async move { serve_listener(listener, config, Some(shutdown_rx)).await });
-    wait_for_gateway(&url).await;
-
-    let client = test_http_client();
-    let request_body = json!({
-        "model": "gpt-4o",
-        "messages": [{"role": "user", "content": "stream it"}],
-        "temperature": 0.0,
-        "stream": true
-    });
-    let first = client
-        .post(format!("{url}/v1/chat/completions"))
-        .json(&request_body)
-        .send()
-        .await
-        .unwrap();
-    assert_eq!(first.status(), StatusCode::OK);
-    let _ = first.text().await.unwrap(); // drain so the tee stores the aggregate
-
-    let second = client
-        .post(format!("{url}/v1/chat/completions"))
-        .json(&request_body)
-        .send()
-        .await
-        .unwrap();
-    assert_eq!(second.status(), StatusCode::OK);
-    assert_eq!(
-        second
-            .headers()
-            .get(http::header::CONTENT_TYPE)
-            .and_then(|value| value.to_str().ok()),
-        Some("text/event-stream"),
-        "a replayed stream must declare the SSE content type"
-    );
-    let replayed = second.text().await.unwrap();
-    assert!(
-        replayed.contains("The answer is 42."),
-        "the replay must carry the stored answer: {replayed}"
-    );
-    assert!(
-        replayed.trim_end().ends_with("data: [DONE]"),
-        "a chat replay must terminate the SSE stream: {replayed}"
-    );
-    assert_eq!(
-        upstream_calls.load(std::sync::atomic::Ordering::SeqCst),
-        1,
-        "the streaming repeat must be served from cache"
-    );
 
     shutdown_tx.send(()).unwrap();
     handle.await.unwrap().unwrap();

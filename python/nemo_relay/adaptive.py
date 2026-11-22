@@ -10,7 +10,6 @@ plugins remain separate top-level components managed through ``nemo_relay.plugin
 from __future__ import annotations
 
 from dataclasses import dataclass, field, fields, is_dataclass
-from enum import Enum
 from typing import Literal, Protocol, TypedDict, cast
 
 from nemo_relay import Json, JsonObject, UnsupportedBehavior
@@ -37,13 +36,6 @@ class ConfigReport(TypedDict):
     """Validation report for adaptive configuration."""
 
     diagnostics: list[ConfigDiagnostic]
-
-
-class ResponseCacheKeyStrategy(str, Enum):
-    """Supported LLM response-cache key derivation strategies."""
-
-    EXACT_REQUEST = "exact_request"
-    LOGICAL = "logical"
 
 
 class _SupportsToDict(Protocol):
@@ -260,180 +252,6 @@ class AcgConfig:
 
 
 @dataclass(slots=True)
-class ToolClass:
-    """One tool caching class (also the shape of the ``default`` default bucket).
-
-    Args:
-        cacheable: Whether tools in this class may be served from cache. Off by
-            default — a hit suppresses the real call, so caching must be opted in.
-        ttl_seconds: TTL for this class; inherits ``response_cache.ttl_seconds``
-            when ``None``.
-        bypass_rate: Live-rerun probability for this class; inherits
-            ``response_cache.bypass_rate`` when ``None``.
-        tool_version: Version string folded into the cache key for every class
-            member. A per-tool override replaces it when set.
-        arg_skip: Argument keys dropped before keying (default empty: key on all args).
-        members: Tool names in this class (unused for the ``default`` bucket).
-            Names may be exact or use ``prefix*``, ``*suffix``, or ``*contains*``;
-            an exact member wins over any wildcard match, the most-specific
-            pattern wins among wildcards, and unmatched tools fall to ``default``.
-    """
-
-    cacheable: bool = False
-    ttl_seconds: int | None = None
-    bypass_rate: float | None = None
-    tool_version: str | None = None
-    arg_skip: list[str] = field(default_factory=list)
-    members: list[str] = field(default_factory=list)
-
-    def to_dict(self) -> JsonObject:
-        """Serialize this tool class to the canonical JSON object shape."""
-        return _normalize_object(
-            {
-                "cacheable": self.cacheable,
-                "ttl_seconds": self.ttl_seconds,
-                "bypass_rate": self.bypass_rate,
-                "tool_version": self.tool_version,
-                "arg_skip": self.arg_skip,
-                "members": self.members,
-            }
-        )
-
-
-@dataclass(slots=True)
-class ToolOverride:
-    """Per-tool refinement applied on top of the tool's resolved class.
-
-    Args:
-        cacheable: Overrides the class ``cacheable`` for just this tool.
-        ttl_seconds: Overrides the class TTL for just this tool.
-        bypass_rate: Overrides the class bypass rate for just this tool.
-        tool_version: Version string folded into the key so a deployment can bust
-            stale entries before their TTL.
-        arg_skip: Replaces the class ``arg_skip`` when not ``None`` (``None``
-            inherits the class list; ``[]`` clears it).
-    """
-
-    cacheable: bool | None = None
-    ttl_seconds: int | None = None
-    bypass_rate: float | None = None
-    tool_version: str | None = None
-    arg_skip: list[str] | None = None
-
-    def to_dict(self) -> JsonObject:
-        """Serialize this tool override to the canonical JSON object shape."""
-        return _normalize_object(
-            {
-                "cacheable": self.cacheable,
-                "ttl_seconds": self.ttl_seconds,
-                "bypass_rate": self.bypass_rate,
-                "tool_version": self.tool_version,
-                "arg_skip": self.arg_skip,
-            }
-        )
-
-
-@dataclass(slots=True)
-class ToolCacheConfig:
-    """Opt-in tool-result cache settings.
-
-    A separate surface under ``response_cache`` keyed on tool name + arguments and
-    gated by user-declared safety classes. Off until ``enabled`` is set; any tool
-    not listed in a class falls into ``default``, which defaults to not cached.
-
-    Args:
-        enabled: Master switch for the tool surface. Off by default.
-        priority: Tool execution-intercept priority. Defaults to 150.
-            Lower values run first.
-        cache_errors: Whether error-shaped tool results may be cached. Off by
-            default.
-        default: Policy for tools not listed in any class (defaults to not cached).
-        classes: Named tool classes, each with its own policy and member list.
-        overrides: Per-tool refinements applied on top of the resolved class.
-            Keys may be exact tool names or use ``prefix*``, ``*suffix``, or
-            ``*contains*``; an exact key wins outright, then the most-specific
-            matching pattern applies.
-    """
-
-    enabled: bool = False
-    priority: int = 150
-    cache_errors: bool = False
-    default: ToolClass = field(default_factory=ToolClass)
-    classes: dict[str, ToolClass] = field(default_factory=dict)
-    overrides: dict[str, ToolOverride] = field(default_factory=dict)
-
-    def to_dict(self) -> JsonObject:
-        """Serialize this tool-cache config to the canonical JSON object shape."""
-        return _normalize_object(
-            {
-                "enabled": self.enabled,
-                "priority": self.priority,
-                "cache_errors": self.cache_errors,
-                "default": _normalize(self.default),
-                "classes": {name: _normalize(cls) for name, cls in self.classes.items()},
-                "overrides": {name: _normalize(ov) for name, ov in self.overrides.items()},
-            }
-        )
-
-
-@dataclass(slots=True)
-class ResponseCacheConfig:
-    """Opt-in LLM response and tool-result cache settings.
-
-    This is a section of the adaptive component, not a standalone plugin kind.
-    When present, the adaptive plugin installs the response-cache execution
-    intercepts that reuse earlier LLM answers and, when ``tools.enabled`` is
-    set, explicitly classified tool results.
-
-    Args:
-        ttl_seconds: How long a stored answer stays reusable, in seconds.
-        namespace: Required non-empty cache trust domain folded into every key.
-            One configured cache must not span mutually untrusted tenants or upstreams;
-            the empty default is an unconfigured sentinel rejected at validation.
-        priority: Execution-intercept priority. Defaults to 150.
-            Lower values run first. Give guardrails a lower priority
-            than the cache so guardrails run on cache hits.
-        bypass_rate: Probability in ``[0.0, 1.0]`` of skipping the cache and running live.
-        cache_nondeterministic: Cache nondeterministic requests too; ``False``
-            caches only requests explicitly pinned deterministic (``temperature`` = 0).
-        key_strategy: Typed key derivation strategy.
-        header_allowlist: Request headers folded into the key; never auth headers.
-        backend: Cache storage backend (``in_memory`` or ``redis``).
-        tools: Opt-in tool-result cache; ``None`` leaves it off.
-    """
-
-    ttl_seconds: int = 3600
-    namespace: str = ""
-    priority: int = 150
-    bypass_rate: float = 0.0
-    cache_nondeterministic: bool = False
-    key_strategy: ResponseCacheKeyStrategy = ResponseCacheKeyStrategy.EXACT_REQUEST
-    header_allowlist: list[str] = field(default_factory=list)
-    backend: BackendSpec = field(default_factory=BackendSpec.in_memory)
-    tools: ToolCacheConfig | None = None
-
-    def to_dict(self) -> JsonObject:
-        """Serialize this response-cache config to the canonical JSON object shape."""
-        return _normalize_object(
-            {
-                "ttl_seconds": self.ttl_seconds,
-                "namespace": self.namespace,
-                "priority": self.priority,
-                "bypass_rate": self.bypass_rate,
-                "cache_nondeterministic": self.cache_nondeterministic,
-                "key_strategy": (
-                    self.key_strategy.value
-                    if isinstance(self.key_strategy, ResponseCacheKeyStrategy)
-                    else self.key_strategy
-                ),
-                "header_allowlist": self.header_allowlist,
-                "backend": _normalize(self.backend),
-                "tools": _normalize(self.tools),
-            }
-        )
-
-
-@dataclass(slots=True)
 class AdaptiveConfig:
     """Canonical config document for the top-level adaptive component.
 
@@ -446,7 +264,6 @@ class AdaptiveConfig:
         tool_parallelism: Built-in tool scheduling settings.
         acg: Adaptive Cache Governor settings.
         policy: Unsupported-config policy applied within the adaptive config.
-        response_cache: Opt-in LLM response and tool-result cache settings.
 
     Behavior:
         This document configures only the adaptive component. Plugins are
@@ -461,7 +278,6 @@ class AdaptiveConfig:
     tool_parallelism: ToolParallelismConfig | None = None
     acg: AcgConfig | None = None
     policy: ConfigPolicy = field(default_factory=ConfigPolicy)
-    response_cache: ResponseCacheConfig | None = None
 
     def to_dict(self) -> JsonObject:
         """Serialize this adaptive config to the canonical JSON object shape."""
@@ -473,7 +289,6 @@ class AdaptiveConfig:
             "adaptive_hints": _normalize(self.adaptive_hints),
             "tool_parallelism": _normalize(self.tool_parallelism),
             "acg": _normalize(self.acg),
-            "response_cache": _normalize(self.response_cache),
             "policy": self.policy.to_dict(),
         }
 
@@ -570,13 +385,8 @@ __all__ = [
     "ConfigPolicy",
     "ConfigReport",
     "ComponentSpec",
-    "ResponseCacheConfig",
-    "ResponseCacheKeyStrategy",
     "StateConfig",
     "TelemetryConfig",
-    "ToolCacheConfig",
-    "ToolClass",
-    "ToolOverride",
     "ToolParallelismConfig",
     "set_latency_sensitivity",
     "UnsupportedBehavior",

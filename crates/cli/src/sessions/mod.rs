@@ -69,6 +69,19 @@ const ROUTING_IDENTITY_HEADERS: &[&str] = &[
     "x-nemo-relay-source",
 ];
 
+fn session_now() -> Instant {
+    #[cfg(test)]
+    if let Ok(now) = SESSION_CLOCK_OVERRIDE.try_with(std::cell::Cell::get) {
+        return now;
+    }
+    Instant::now()
+}
+
+#[cfg(test)]
+tokio::task_local! {
+    static SESSION_CLOCK_OVERRIDE: std::cell::Cell<Instant>;
+}
+
 /// Arguments a request intercept rewrote, on their way back to the agent that will execute them.
 ///
 /// The gateway cannot apply a transform itself -- it never runs the tool -- so the rewrite has to
@@ -117,7 +130,7 @@ impl AppliedRouteCleanup {
     /// Retain alignment cleanup and session lifetime guards until commit or cancellation recovery.
     fn new(
         manager: &SessionManager,
-        cleanup: alignment::SessionRouteCleanup,
+        cleanup: Option<alignment::SessionRouteCleanup>,
         closed_subagents: Vec<(String, String)>,
         session_gate: OwnedMutexGuard<()>,
         activity: SessionActivityGuard,
@@ -125,7 +138,7 @@ impl AppliedRouteCleanup {
         Self {
             alignment: Arc::clone(&manager.alignment),
             alignment_routing: Arc::clone(&manager.alignment_routing),
-            cleanup: Some(cleanup),
+            cleanup,
             closed_subagents,
             session_gate: Some(session_gate),
             activity: Some(activity),
@@ -136,15 +149,14 @@ impl AppliedRouteCleanup {
     async fn commit(mut self) {
         let _routing = self.alignment_routing.lock().await;
         let mut alignment = self.alignment.lock().await;
-        alignment.commit_route(
-            self.cleanup
-                .as_ref()
-                .expect("applied route cleanup should be armed"),
-        );
+        if let Some(cleanup) = &self.cleanup {
+            alignment.commit_route(cleanup);
+        }
         for (session_id, id) in &self.closed_subagents {
             alignment.clear_for_ended_subagent(session_id, id);
         }
         self.cleanup.take();
+        self.closed_subagents.clear();
         self.session_gate.take();
         self.activity.take();
     }
@@ -153,9 +165,10 @@ impl AppliedRouteCleanup {
 impl Drop for AppliedRouteCleanup {
     /// Finish pending alignment cleanup if the applying request is cancelled.
     fn drop(&mut self) {
-        let Some(cleanup) = self.cleanup.take() else {
+        let cleanup = self.cleanup.take();
+        if cleanup.is_none() && self.closed_subagents.is_empty() {
             return;
-        };
+        }
         let alignment = Arc::clone(&self.alignment);
         let alignment_routing = Arc::clone(&self.alignment_routing);
         let closed_subagents = std::mem::take(&mut self.closed_subagents);
@@ -164,7 +177,9 @@ impl Drop for AppliedRouteCleanup {
         drop(tokio::spawn(async move {
             let _routing = alignment_routing.lock().await;
             let mut alignment = alignment.lock().await;
-            alignment.commit_route(&cleanup);
+            if let Some(cleanup) = &cleanup {
+                alignment.commit_route(cleanup);
+            }
             for (session_id, id) in closed_subagents {
                 alignment.clear_for_ended_subagent(&session_id, &id);
             }
@@ -484,9 +499,115 @@ fn insert_routing_identity_header(headers: &mut Map<String, Value>, name: &str, 
     headers.insert(name.to_string(), json!(value));
 }
 
+#[derive(Default)]
+enum RootTurnState {
+    #[default]
+    Closed,
+    Open(OpenRootTurn),
+}
+
+struct OpenRootTurn {
+    scope_handle: ScopeHandle,
+    prompt_state: RootTurnPromptState,
+    last_model_output: Option<Value>,
+}
+
+#[derive(Clone, Copy, PartialEq, Eq)]
+enum RootTurnPromptState {
+    GatewayAwaitingPrompt,
+    Observed,
+    Unobserved,
+}
+
+impl RootTurnState {
+    fn open(&mut self, scope_handle: ScopeHandle, prompt_state: RootTurnPromptState) {
+        *self = Self::Open(OpenRootTurn {
+            scope_handle,
+            prompt_state,
+            last_model_output: None,
+        });
+    }
+
+    fn is_open(&self) -> bool {
+        matches!(self, Self::Open(_))
+    }
+
+    fn handle(&self) -> Option<&ScopeHandle> {
+        match self {
+            Self::Open(turn) => Some(&turn.scope_handle),
+            Self::Closed => None,
+        }
+    }
+
+    fn confirm_gateway_prompt(&mut self) -> bool {
+        let Self::Open(turn) = self else {
+            return false;
+        };
+        if turn.prompt_state != RootTurnPromptState::GatewayAwaitingPrompt {
+            return false;
+        }
+        turn.prompt_state = RootTurnPromptState::Observed;
+        true
+    }
+
+    fn replace_model_output(&mut self, output: Value) -> Option<Value> {
+        match self {
+            Self::Open(turn) => turn.last_model_output.replace(output),
+            Self::Closed => None,
+        }
+    }
+
+    fn take_model_output(&mut self) -> Option<Value> {
+        match self {
+            Self::Open(turn) => turn.last_model_output.take(),
+            Self::Closed => None,
+        }
+    }
+
+    #[cfg(test)]
+    fn model_output(&self) -> Option<&Value> {
+        match self {
+            Self::Open(turn) => turn.last_model_output.as_ref(),
+            Self::Closed => None,
+        }
+    }
+
+    #[cfg(test)]
+    fn prompt_observed(&self) -> bool {
+        matches!(self, Self::Open(turn) if turn.prompt_state == RootTurnPromptState::Observed)
+    }
+
+    fn close(
+        &mut self,
+        output: Value,
+        boundary_metadata: Option<Value>,
+        include_prompt_observation: bool,
+    ) -> Result<Option<SubscriberDelivery>, CliError> {
+        let Self::Open(turn) = std::mem::take(self) else {
+            return Ok(None);
+        };
+        let mut boundary_metadata = boundary_metadata;
+        if include_prompt_observation {
+            let mut metadata = merge_metadata(json!({}), boundary_metadata.unwrap_or(Value::Null));
+            metadata["turn_prompt_observed"] =
+                json!(turn.prompt_state == RootTurnPromptState::Observed);
+            boundary_metadata = Some(metadata);
+        }
+        let subscriber_delivery = pop_scope_with_subscriber_delivery(
+            PopScopeParams::builder()
+                .handle_uuid(&turn.scope_handle.uuid)
+                .output(output)
+                .metadata_opt(boundary_metadata)
+                .build(),
+        )?;
+        Ok(Some(subscriber_delivery))
+    }
+}
+
 pub(super) struct Session {
     agent_kind: AgentKind,
     session_id: String,
+    session_instance_identifier: uuid::Uuid,
     /// Set by `start_tool` when a request intercept rewrote the arguments; taken by the routing
     /// layer once the event batch has been applied, so the hook response can carry it back.
     tool_argument_transform: Option<ToolArgumentTransform>,
@@ -503,18 +624,10 @@ pub(super) struct Session {
     task_scope: Option<ScopeHandle>,
     // Consume on the next root prompt, even if every child has already ended.
     task_awaiting_synthesis: bool,
-    child_turns: HashMap<String, ScopeHandle>,
-    turn_scope: Option<ScopeHandle>,
-    gateway_request_turn_open: bool,
-    // A prompt hook can arrive after the gateway opened the turn.
-    turn_prompt_observed: bool,
+    root_turn: RootTurnState,
     turn_index: u64,
-    last_turn_llm_output: Option<Value>,
-    subagents: HashMap<String, ScopeHandle>,
-    subagent_activity: HashMap<String, Instant>,
-    // Each active subagent gets its own scope stack seeded with the parent agent handle. This lets
-    // sibling workers close out of order without corrupting the task-local stack.
-    subagent_stacks: HashMap<String, ScopeStackHandle>,
+    subagents: HashMap<String, ActiveSubagent>,
+    retiring_subagents: HashMap<String, RetiringSubagent>,
     subagent_stack: Vec<String>,
     // Tracks subagents closed by synthetic or provider-specific completion signals so a later
     // duplicate end hook does not reopen or mark an already-closed worker.
@@ -522,17 +635,115 @@ pub(super) struct Session {
     llms: HashMap<String, LlmHandle>,
     tools: HashMap<String, ActiveTool>,
     recovered_tool_completions: completion::CompletionCache,
-    pending_llm_hints: Vec<PendingLlmHint>,
-    pending_tool_hints: Vec<PendingToolHint>,
-    // Maps stable user-task text from confidently owned LLM requests to the subagent that owns
-    // that conversation. This gives parallel coding-agent workers a stronger provider-format
-    // neutral fallback than a single global "last tool owner" when requests lack subagent headers.
-    llm_request_affinity: HashMap<String, Option<String>>,
-    last_llm_owner: Option<LastLlmOwner>,
+    correlation: SessionCorrelation,
     last_activity: Instant,
     active_gateway_calls: usize,
     active_subagent_gateway_calls: HashMap<String, usize>,
     config: SessionConfig,
+}
+
+struct ActiveSubagent {
+    scope_handle: ScopeHandle,
+    scope_stack: ScopeStackHandle,
+    last_activity: Instant,
+    child_turn: Option<ScopeHandle>,
+}
+
+// A failed pop must remain retryable without making the worker available for new work.
+struct RetiringSubagent {
+    scope: RetiringScope,
+    scope_stack: ScopeStackHandle,
+    child_turn: Option<RetiringScope>,
+    output: Value,
+    boundary_metadata: Option<Value>,
+    reason: SubagentRetirementReason,
+}
+
+#[derive(Clone, Copy, PartialEq, Eq)]
+enum SubagentRetirementReason {
+    Completion,
+    IdleExpiry,
+}
+
+struct RetiringScope {
+    handle: ScopeHandle,
+    pop_attempted: bool,
+    stack_removed: bool,
+}
+
+impl RetiringScope {
+    fn new(handle: ScopeHandle) -> Self {
+        Self {
+            handle,
+            pop_attempted: false,
+            stack_removed: false,
+        }
+    }
+
+    fn close(
+        &mut self,
+        stack: &ScopeStackHandle,
+        output: Value,
+        metadata: Option<Value>,
+    ) -> Result<Option<SubscriberDelivery>, CliError> {
+        if self.stack_removed {
+            return Ok(None);
+        }
+        let was_present = self.is_present(stack)?;
+        if self.pop_attempted && !was_present {
+            self.stack_removed = true;
+            return Ok(None);
+        }
+        self.pop_attempted = true;
+        let result = pop_retiring_scope(&self.handle.uuid, output, metadata);
+        self.stack_removed =
+            result.is_ok() || (was_present && matches!(self.is_present(stack), Ok(false)));
+        result.map(Some).map_err(CliError::from)
+    }
+
+    fn is_present(&self, stack: &ScopeStackHandle) -> Result<bool, CliError> {
+        Ok(stack
+            .read()
+            .map_err(|error| nemo_relay_types::error::FlowError::Internal(error.to_string()))?
+            .find(&self.handle.uuid)
+            .is_some())
+    }
+}
+
+fn pop_retiring_scope(
+    scope_identifier: &uuid::Uuid,
+    output: Value,
+    metadata: Option<Value>,
+) -> Result<SubscriberDelivery, nemo_relay_types::error::FlowError> {
+    // Unit tests model the runtime failing to queue End after actual stack removal.
+    #[cfg(test)]
+    if RETIREMENT_PUBLICATION_FAILURE
+        .try_with(|identifier| identifier == scope_identifier)
+        .unwrap_or(false)
+    {
+        nemo_relay_runtime::api::runtime::task_scope_remove(scope_identifier)?;
+        return Err(nemo_relay_types::error::FlowError::Internal(
+            "injected failure to queue tracked subscriber delivery".into(),
+        ));
+    }
+    pop_scope_with_subscriber_delivery(
+        PopScopeParams::builder()
+            .handle_uuid(scope_identifier)
+            .output(output)
+            .metadata_opt(metadata)
+            .build(),
+    )
+}
+
+#[cfg(test)]
+tokio::task_local! {
+    static RETIREMENT_PUBLICATION_FAILURE: uuid::Uuid;
+}
+
+impl ActiveSubagent {
+    fn work_scope(&self) -> &ScopeHandle {
+        self.child_turn.as_ref().unwrap_or(&self.scope_handle)
+    }
 }
 
 #[derive(Debug, Clone)]
@@ -636,19 +847,35 @@ impl LastLlmOwnerSource {
 
 struct LlmOwnerResolution {
     parent: Option<ScopeHandle>,
-    subagent_id: Option<String>,
-    status: &'static str,
-    source: Option<String>,
+    decision: OwnershipDecision,
     hint: Option<LlmHintEvent>,
     metadata: Value,
 }
 
+impl LlmOwnerResolution {
+    fn source(&self) -> Option<&str> {
+        if self.decision.evidence.is_hint() {
+            self.hint.as_ref().map(|hint| hint.event_name.as_str())
+        } else {
+            self.decision.evidence.source()
+        }
+    }
+}
+
 struct ToolOwnerResolution {
     parent: Option<ScopeHandle>,
-    subagent_id: Option<String>,
-    status: &'static str,
-    source: Option<String>,
+    decision: OwnershipDecision,
     hint: Option<ToolHint>,
+}
+
+impl ToolOwnerResolution {
+    fn source(&self) -> Option<&str> {
+        if self.decision.evidence.is_hint() {
+            self.hint.as_ref().map(|hint| hint.source.as_str())
+        } else {
+            self.decision.evidence.source()
+        }
+    }
 }
 
 impl SessionManager {
@@ -789,6 +1016,7 @@ impl SessionManager {
         let session_gates = Arc::downgrade(&self.session_gates);
         let authenticated_owners = Arc::downgrade(&self.authenticated_owners);
         let alignment = Arc::downgrade(&self.alignment);
+        let activity = self.session_activity.clone();
         tokio::spawn(async move {
             let mut interval = tokio::time::interval(AGENT_IDLE_SWEEP_INTERVAL);
             interval.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Skip);
@@ -802,15 +1030,17 @@ impl SessionManager {
                 ) else {
                     break;
                 };
-                if let Err(error) = close_idle_sessions_from_parts(
+                if activity.is_closing() {
+                    break;
+                }
+                if let Err(error) = IdleSessionCleanup::new(
                     &inner,
                     &session_gates,
                     &authenticated_owners,
                     &alignment,
-                    Instant::now(),
-                    AGENT_IDLE_TIMEOUT,
-                    "idle_timeout",
+                    &activity,
                 )
+                .close(session_now(), AGENT_IDLE_TIMEOUT, "idle_timeout")
                 .await
                 {
                     log::warn!(
@@ -935,6 +1165,7 @@ impl SessionManager {
         let event_kind = event_agent_kind(&event);
         let applied = SessionEventApplier::new(
             &self.inner,
+            &self.alignment,
             &self.session_activity,
             &self.completions,
             authenticated.owner,
@@ -951,6 +1182,7 @@ impl SessionManager {
         .await?;
         let AppliedSessionEvent {
             outcome,
+            error,
             closed_subagents,
             session_gate,
             activity,
@@ -964,9 +1196,13 @@ impl SessionManager {
             }
             _ => {}
         }
+        let cleanup = if error.is_some() { None } else { Some(cleanup) };
         AppliedRouteCleanup::new(self, cleanup, closed_subagents, session_gate, activity)
             .commit()
             .await;
+        if let Some(error) = error {
+            return Err(error);
+        }
         let Some((_, subscriber_delivery, tool_argument_transform)) = outcome else {
             return Ok(application);
         };
@@ -1232,16 +1468,24 @@ impl SessionManager {
     /// owning child when errors or cancellation leave no response hints.
     pub(crate) async fn finish_gateway_call(
         &self,
-        session_id: &str,
-        owner_subagent_id: Option<&str>,
+        context: &GatewayCallContext,
         finish: GatewaySessionFinish,
     ) {
+        let session_id = context.session_identifier.as_str();
         let gate = session_gate(&self.session_gates, session_id).await;
         let gate_guard = gate.lock().await;
         let mut sessions = self.inner.lock().await;
-        if let Some(session) = sessions.get_mut(session_id) {
-            session.finish_gateway_call(owner_subagent_id);
+        let Some(session) = sessions.get_mut(session_id) else {
+            return;
+        };
+        if session.session_instance_identifier != context.session_instance_identifier {
+            return;
         }
+        if session.gateway_worker_is_current(context) {
+            session.touch_subagent_activity(context.owner_subagent_identifier.as_deref());
+        }
+        // A retired worker still owns its request reservation in this session.
+        session.finish_gateway_call(context.owner_subagent_identifier.as_deref());
         let completed = sessions.get(session_id).is_some_and(|session| {
             session.active_gateway_calls == 0
                 && match finish {
@@ -1374,42 +1618,41 @@ impl SessionManager {
     /// owned responses can transfer that output directly into the session.
     pub(crate) async fn record_gateway_response_hints(
         &self,
-        session_id: &str,
-        owner_subagent_id: Option<String>,
+        context: &GatewayCallContext,
         response: Cow<'_, Value>,
     ) {
-        let alias = {
-            let alignment_state = self.alignment.lock().await;
-            alignment_state.alias_for_session(session_id)
-        };
-        let (session_id, owner_subagent_id) = match alias {
-            Some(alias) => (
-                alias.parent_session_id,
-                owner_subagent_id.or(Some(alias.subagent_id)),
-            ),
-            None => (session_id.to_string(), owner_subagent_id),
-        };
-        let gate = session_gate(&self.session_gates, &session_id).await;
+        // A prepared canonical session must never follow a newly assigned child alias.
+        if self
+            .alignment
+            .lock()
+            .await
+            .alias_for_session(&context.session_identifier)
+            .is_some()
+        {
+            return;
+        }
+        let session_id = &context.session_identifier;
+        let owner_subagent_id = context.owner_subagent_identifier.as_deref();
+        let gate = session_gate(&self.session_gates, session_id).await;
         let _gate = gate.lock().await;
         let policy = {
             let sessions = self.inner.lock().await;
             sessions
-                .get(&session_id)
-                .map(|session| session.gateway_response_policy(owner_subagent_id.as_deref()))
+                .get(session_id)
+                .map(|session| session.gateway_response_policy(context))
         };
         let Some((retain_output, collect_hints)) = policy else {
             return;
         };
-        let prepared = PreparedGatewayResponse::new(
-            response,
-            owner_subagent_id.as_deref(),
-            retain_output,
-            collect_hints,
-        );
+        if !retain_output && !collect_hints {
+            return;
+        }
+        let prepared =
+            PreparedGatewayResponse::new(response, owner_subagent_id, retain_output, collect_hints);
         let previous_output = {
             let mut sessions = self.inner.lock().await;
-            sessions.get_mut(&session_id).and_then(|session| {
-                session.record_prepared_gateway_response(prepared, owner_subagent_id.as_deref())
+            sessions.get_mut(session_id).and_then(|session| {
+                session.record_prepared_gateway_response(prepared, owner_subagent_id)
             })
         };
         // Releasing a large previous response can also be costly. Drop it after
@@ -1421,26 +1664,25 @@ impl SessionManager {
     /// Returns false without changing session state if the async path must wait.
     pub(crate) fn try_record_gateway_response_hints(
         &self,
-        session_id: &str,
-        owner_subagent_id: Option<String>,
+        context: &GatewayCallContext,
         response: &Value,
     ) -> bool {
         let Ok(alignment) = self.alignment.try_lock() else {
             return false;
         };
-        let alias = alignment.alias_for_session(session_id);
+        if alignment
+            .alias_for_session(&context.session_identifier)
+            .is_some()
+        {
+            return true;
+        }
         drop(alignment);
-        let (session_id, owner_subagent_id) = match alias {
-            Some(alias) => (
-                alias.parent_session_id,
-                owner_subagent_id.or(Some(alias.subagent_id)),
-            ),
-            None => (session_id.to_string(), owner_subagent_id),
-        };
+        let session_id = &context.session_identifier;
+        let owner_subagent_id = context.owner_subagent_identifier.as_deref();
         let Ok(gates) = self.session_gates.try_lock() else {
             return false;
         };
-        let Some(gate) = gates.get(&session_id).cloned() else {
+        let Some(gate) = gates.get(session_id).cloned() else {
             return false;
         };
         drop(gates);
@@ -1452,15 +1694,18 @@ impl SessionManager {
                 return false;
             };
             sessions
-                .get(&session_id)
-                .map(|session| session.gateway_response_policy(owner_subagent_id.as_deref()))
+                .get(session_id)
+                .map(|session| session.gateway_response_policy(context))
         };
         let Some((retain_output, collect_hints)) = policy else {
             return true;
         };
+        if !retain_output && !collect_hints {
+            return true;
+        }
         let prepared = PreparedGatewayResponse::new(
             Cow::Borrowed(response),
-            owner_subagent_id.as_deref(),
+            owner_subagent_id,
             retain_output,
             collect_hints,
         );
@@ -1469,8 +1714,8 @@ impl SessionManager {
             // therefore falls back to the async observer without partial updates.
             return false;
         };
-        let previous_output = sessions.get_mut(&session_id).and_then(|session| {
-            session.record_prepared_gateway_response(prepared, owner_subagent_id.as_deref())
+        let previous_output = sessions.get_mut(session_id).and_then(|session| {
+            session.record_prepared_gateway_response(prepared, owner_subagent_id)
         });
         drop(sessions);
         drop(previous_output);
@@ -1504,15 +1749,14 @@ impl SessionManager {
         timeout: Duration,
         reason: &str,
     ) -> Result<usize, CliError> {
-        close_idle_sessions_from_parts(
+        IdleSessionCleanup::new(
             &self.inner,
             &self.session_gates,
             &self.authenticated_owners,
             &self.alignment,
-            now,
-            timeout,
-            reason,
+            &self.session_activity,
         )
+        .close(now, timeout, reason)
         .await
     }
 
@@ -1695,6 +1939,7 @@ impl Session {
         Self {
             agent_kind,
             session_id,
+            session_instance_identifier: uuid::Uuid::now_v7(),
             tool_argument_transform: None,
             scope_stack: session_scope_stack(launcher_trace_parent.as_ref()),
             launcher_trace_parent,
@@ -1704,25 +1949,17 @@ impl Session {
             agent_scope: None,
             task_scope: None,
             task_awaiting_synthesis: false,
-            child_turns: HashMap::new(),
-            turn_scope: None,
-            gateway_request_turn_open: false,
-            turn_prompt_observed: false,
+            root_turn: RootTurnState::default(),
             turn_index: 0,
-            last_turn_llm_output: None,
             subagents: HashMap::new(),
-            subagent_activity: HashMap::new(),
-            subagent_stacks: HashMap::new(),
+            retiring_subagents: HashMap::new(),
             subagent_stack: Vec::new(),
             completed_subagents: HashSet::new(),
             llms: HashMap::new(),
             tools: HashMap::new(),
             recovered_tool_completions: completion::CompletionCache::default(),
-            pending_llm_hints: Vec::new(),
-            pending_tool_hints: Vec::new(),
-            llm_request_affinity: HashMap::new(),
-            last_llm_owner: None,
-            last_activity: Instant::now(),
+            correlation: SessionCorrelation::default(),
+            last_activity: session_now(),
             active_gateway_calls: 0,
             active_subagent_gateway_calls: HashMap::new(),
             config,
@@ -1741,10 +1978,8 @@ impl Session {
         !self.session_started
             && self.agent_scope.is_none()
             && self.task_scope.is_none()
-            && self.child_turns.is_empty()
-            && self.turn_scope.is_none()
-            && self.subagents.is_empty()
-            && self.subagent_stacks.is_empty()
+            && !self.root_turn.is_open()
+            && !self.has_subagent_work()
             && self.subagent_stack.is_empty()
             && self.llms.is_empty()
             && self.tools.is_empty()
@@ -1752,23 +1987,26 @@ impl Session {
 
     fn blocks_plugin_idle_shutdown(&self) -> bool {
         self.task_scope.is_some()
-            || self.turn_scope.is_some()
-            || !self.subagents.is_empty()
-            || !self.subagent_stacks.is_empty()
+            || self.root_turn.is_open()
+            || self.has_subagent_work()
             || !self.subagent_stack.is_empty()
             || !self.llms.is_empty()
             || !self.tools.is_empty()
             || self.active_gateway_calls > 0
     }
 
+    fn has_subagent_work(&self) -> bool {
+        !self.subagents.is_empty() || !self.retiring_subagents.is_empty()
+    }
+
     fn touch_activity(&mut self) {
-        self.last_activity = Instant::now();
+        self.last_activity = session_now();
     }
 
     /// Refresh only the child that produced activity; parent traffic cannot renew a dead child.
     fn touch_subagent_activity(&mut self, id: Option<&str>) {
-        if let Some(activity) = id.and_then(|id| self.subagent_activity.get_mut(id)) {
-            *activity = Instant::now();
+        if let Some(subagent) = id.and_then(|id| self.subagents.get_mut(id)) {
+            subagent.last_activity = session_now();
         }
     }
 
@@ -1779,9 +2017,9 @@ impl Session {
         if self.agent_kind != AgentKind::Codex {
             return Vec::new();
         }
-        self.subagent_activity
+        self.subagents
             .iter()
-            .filter(|(id, activity)| {
+            .filter(|(id, subagent)| {
                 let child_timeout = if self
                     .tools
                     .values()
@@ -1791,7 +2029,7 @@ impl Session {
                 } else {
                     timeout
                 };
-                now.checked_duration_since(**activity)
+                now.checked_duration_since(subagent.last_activity)
                     .is_some_and(|elapsed| elapsed >= child_timeout)
                     && !self.active_subagent_gateway_calls.contains_key(id.as_str())
                     && !self.llms.values().any(|handle| {
@@ -1813,23 +2051,79 @@ impl Session {
         now: Instant,
         timeout: Duration,
     ) -> Result<(Vec<String>, Option<SubscriberDelivery>), CliError> {
-        let ids = self.stale_subagent_ids(now, timeout);
+        let identifiers = self
+            .stale_subagent_ids(now, timeout)
+            .into_iter()
+            .map(|identifier| (identifier, SubagentRetirementReason::IdleExpiry))
+            .collect();
+        self.close_idle_subagent_ids(identifiers).await
+    }
+
+    async fn close_idle_subagents(
+        &mut self,
+        now: Instant,
+        timeout: Duration,
+    ) -> Result<(Vec<String>, Option<SubscriberDelivery>), CliError> {
+        let identifiers = self
+            .stale_subagent_ids(now, timeout)
+            .into_iter()
+            .map(|identifier| (identifier, SubagentRetirementReason::IdleExpiry))
+            .chain(
+                self.retiring_subagents
+                    .iter()
+                    .map(|(identifier, retiring)| (identifier.clone(), retiring.reason)),
+            )
+            .collect();
+        self.close_idle_subagent_ids(identifiers).await
+    }
+
+    async fn close_idle_subagent_ids(
+        &mut self,
+        candidates: Vec<(String, SubagentRetirementReason)>,
+    ) -> Result<(Vec<String>, Option<SubscriberDelivery>), CliError> {
+        let expires_reservation = candidates
+            .iter()
+            .any(|(_, reason)| *reason == SubagentRetirementReason::IdleExpiry);
         let mut delivery = None;
-        for id in &ids {
-            delivery = self
-                .close_subagent_scope(id, json!({ "status": "idle_timeout" }))
-                .await?
-                .or(delivery);
-        }
-        if !ids.is_empty() && self.subagents.is_empty() {
-            self.task_awaiting_synthesis = false;
-            if self.turn_scope.is_none() {
-                delivery = self
-                    .close_task_scope(json!({ "status": "idle_timeout" }))?
-                    .or(delivery);
+        let mut first_error = None;
+        for (identifier, reason) in &candidates {
+            match self
+                .close_subagent_scope(identifier, json!({ "status": "idle_timeout" }), None)
+                .await
+            {
+                Ok(receipt) => delivery = receipt.or(delivery),
+                Err(error) => {
+                    if let Some(retiring) = self.retiring_subagents.get_mut(identifier) {
+                        retiring.reason = *reason;
+                    }
+                    first_error.get_or_insert(error);
+                }
             }
         }
-        Ok((ids, delivery))
+        if expires_reservation && !self.has_subagent_work() {
+            self.task_awaiting_synthesis = false;
+            if !self.root_turn.is_open() {
+                match self.close_task_scope(json!({ "status": "idle_timeout" })) {
+                    Ok(receipt) => delivery = receipt.or(delivery),
+                    Err(error) => {
+                        first_error.get_or_insert(error);
+                    }
+                }
+            }
+        }
+        if let Some(error) = first_error {
+            if let Some(receipt) = delivery {
+                let _ = receipt.wait().await;
+            }
+            return Err(error);
+        }
+        Ok((
+            candidates
+                .into_iter()
+                .map(|(identifier, _)| identifier)
+                .collect(),
+            delivery,
+        ))
     }
 
     fn begin_gateway_call(&mut self) {
@@ -1839,7 +2133,6 @@ impl Session {
 
     fn finish_gateway_call(&mut self, owner_subagent_id: Option<&str>) {
         self.touch_activity();
-        self.touch_subagent_activity(owner_subagent_id);
         if let Some(id) = owner_subagent_id
             && let Some(count) = self.active_subagent_gateway_calls.get_mut(id)
         {
@@ -1853,12 +2146,14 @@ impl Session {
 
     /// Select idle sessions or sessions with expired Codex children for sweeping.
     fn needs_idle_cleanup(&self, now: Instant, timeout: Duration) -> bool {
-        self.is_idle_for(now, timeout) || !self.stale_subagent_ids(now, timeout).is_empty()
+        self.is_idle_for(now, timeout)
+            || !self.retiring_subagents.is_empty()
+            || !self.stale_subagent_ids(now, timeout).is_empty()
     }
 
     /// Allow whole-session idle cleanup only when no tools or model requests remain active.
     fn is_idle_for(&self, now: Instant, timeout: Duration) -> bool {
-        (self.turn_scope.is_some()
+        (self.root_turn.is_open()
             || self.task_scope.is_some()
             || self.holds_only_an_unannounced_agent_scope())
             && self.active_gateway_calls == 0
@@ -1961,26 +2256,26 @@ impl Session {
         TASK_SCOPE_STACK
             .scope(stack.clone(), async move {
                 let mut owner = self.resolve_llm_owner(&start);
-                self.close_codex_mcp_results(&start, owner.subagent_id.as_deref())?;
+                self.close_codex_mcp_results(&start, owner.decision.owner.subagent_id())?;
                 self.ensure_turn_started_for_gateway(&start, &mut owner)?;
                 let mut attributes = LlmAttributes::empty();
                 if start.streaming {
                     attributes |= LlmAttributes::STREAMING;
                 }
-                self.touch_subagent_activity(owner.subagent_id.as_deref());
+                self.touch_subagent_activity(owner.decision.owner.subagent_id());
                 self.record_llm_request_affinity(
                     &start.provider,
                     &start.request,
-                    owner.subagent_id.as_deref(),
-                    owner.status,
+                    owner.decision.owner.subagent_id(),
+                    owner.decision.evidence.status(),
                 );
                 let metadata = self.merge_llm_identity_metadata(
                     merge_metadata(
                         llm_correlation_metadata(
                             start.metadata,
-                            owner.status,
-                            owner.source.as_deref(),
-                            owner.subagent_id.as_deref(),
+                            owner.decision.evidence.status(),
+                            owner.source(),
+                            owner.decision.owner.subagent_id(),
                             owner.hint.as_ref(),
                         ),
                         owner.metadata,
@@ -2001,7 +2296,7 @@ impl Session {
                     stack,
                     handle,
                     session_id: self.session_id.clone(),
-                    owner_subagent_id: owner.subagent_id,
+                    owner_subagent_id: owner.decision.owner.into_subagent_id(),
                 };
                 self.llms
                     .insert(active.handle.uuid.to_string(), active.handle.clone());
@@ -2040,23 +2335,23 @@ impl Session {
                     self.resolve_llm_owner(&start)
                 };
                 if record_task_response {
-                    self.close_codex_mcp_results(&start, owner.subagent_id.as_deref())?;
+                    self.close_codex_mcp_results(&start, owner.decision.owner.subagent_id())?;
                     self.ensure_turn_started_for_gateway(&start, &mut owner)?;
                     self.record_llm_request_affinity(
                         &start.provider,
                         &start.request,
-                        owner.subagent_id.as_deref(),
-                        owner.status,
+                        owner.decision.owner.subagent_id(),
+                        owner.decision.evidence.status(),
                     );
                 }
-                self.touch_subagent_activity(owner.subagent_id.as_deref());
+                self.touch_subagent_activity(owner.decision.owner.subagent_id());
                 let mut metadata = self.merge_llm_identity_metadata(
                     merge_metadata(
                         llm_correlation_metadata(
                             start.metadata,
-                            owner.status,
-                            owner.source.as_deref(),
-                            owner.subagent_id.as_deref(),
+                            owner.decision.evidence.status(),
+                            owner.source(),
+                            owner.decision.owner.subagent_id(),
                             owner.hint.as_ref(),
                         ),
                         owner.metadata,
@@ -2074,23 +2369,27 @@ impl Session {
                         agent_kind: self.agent_kind,
                         turn_index: self.turn_index,
                         request_id: start.request_id.as_deref(),
-                        owner_id: owner.subagent_id.as_deref(),
+                        owner_id: owner.decision.owner.subagent_id(),
                         parent: owner.parent.as_ref(),
                         root: self
                             .task_scope
                             .as_ref()
                             .or(self.agent_scope.as_ref())
-                            .or(self.turn_scope.as_ref()),
+                            .or(self.root_turn.handle()),
                         metadata: &metadata,
                     },
                 );
-                if let Some(id) = &owner.subagent_id {
+                if let Some(id) = owner.decision.owner.subagent_id() {
                     *self
                         .active_subagent_gateway_calls
-                        .entry(id.clone())
+                        .entry(id.to_owned())
                         .or_default() += 1;
                 }
                 Ok(GatewayCallPrep {
+                    context: self.gateway_call_context(
+                        owner.decision.owner.subagent_id(),
+                        owner.parent.as_ref().map(|parent| parent.uuid),
+                    ),
                     scope_stack: stack.clone(),
                     session_id: self.session_id.clone(),
                     provider_name: start.provider,
@@ -2099,7 +2398,7 @@ impl Session {
                     attributes,
                     metadata,
                     model_name: start.model_name,
-                    owner_subagent_id: owner.subagent_id,
+                    owner_subagent_id: owner.decision.owner.into_subagent_id(),
                     record_task_response,
                     session_finish: GatewaySessionFinish::Retain,
                 })
@@ -2177,12 +2476,10 @@ impl Session {
             return Ok(None);
         }
         let (_, mut subscriber_delivery) = self
-            .close_stale_subagents(Instant::now(), AGENT_IDLE_TIMEOUT)
+            .close_stale_subagents(session_now(), AGENT_IDLE_TIMEOUT)
             .await?;
-        if self.turn_scope.is_some() {
-            if self.gateway_request_turn_open {
-                self.gateway_request_turn_open = false;
-                self.turn_prompt_observed = true;
+        if self.root_turn.is_open() {
+            if self.root_turn.confirm_gateway_prompt() {
                 self.mark("prompt_submitted", event)?;
                 return Ok(subscriber_delivery);
             }
@@ -2192,7 +2489,7 @@ impl Session {
             subscriber_delivery = delivery;
         }
         let awaiting_synthesis = std::mem::take(&mut self.task_awaiting_synthesis);
-        if self.subagents.is_empty() && !awaiting_synthesis {
+        if !self.has_subagent_work() && !awaiting_synthesis {
             subscriber_delivery = self
                 .close_task_scope(json!({ "status": "superseded_by_next_task" }))?
                 .or(subscriber_delivery);
@@ -2212,7 +2509,7 @@ impl Session {
         event: SessionEvent,
     ) -> Result<Option<SubscriberDelivery>, CliError> {
         let mut subscriber_delivery = None;
-        if self.turn_scope.is_some() {
+        if self.root_turn.is_open() {
             let (_, delivery) = self
                 .close_turn_for_reason("superseded_by_next_turn")
                 .await?;
@@ -2226,7 +2523,7 @@ impl Session {
     // This keeps direct gateway traffic and sparse hook streams bounded by the same lifecycle as
     // prompt-driven turns.
     fn ensure_turn_started(&mut self, event_metadata: Value) -> Result<(), CliError> {
-        if self.turn_scope.is_some() {
+        if self.root_turn.is_open() {
             return Ok(());
         }
         self.open_turn(event_metadata, Value::Null, "implicit")
@@ -2241,7 +2538,7 @@ impl Session {
     // model-invoked tool calls always arrive inside one. Codex and Claude Code report no turn
     // start, so they keep opening turns lazily and are unaffected.
     fn ensure_tool_scope_started(&mut self, event_metadata: Value) -> Result<(), CliError> {
-        if self.agent_kind.has_explicit_turn_start() && self.turn_scope.is_none() {
+        if self.agent_kind.has_explicit_turn_start() && !self.root_turn.is_open() {
             return self.ensure_agent_started(event_metadata);
         }
         self.ensure_turn_started(event_metadata)
@@ -2253,15 +2550,14 @@ impl Session {
         start: &LlmGatewayStart,
         owner: &mut LlmOwnerResolution,
     ) -> Result<(), CliError> {
-        if owner.subagent_id.is_some() {
+        if owner.decision.owner.subagent_id().is_some() {
             return Ok(());
         }
-        if self.turn_scope.is_none() {
+        if !self.root_turn.is_open() {
             if let Some(input) =
                 alignment::gateway_turn_input(self.agent_kind, &start.provider, &start.request)
             {
                 self.open_turn(start.metadata.clone(), input, "gateway_request")?;
-                self.gateway_request_turn_open = true;
             } else {
                 self.open_turn(Value::Null, Value::Null, "implicit")?;
             }
@@ -2306,11 +2602,13 @@ impl Session {
                 .input(input)
                 .build(),
         )?;
-        self.turn_scope = Some(scope);
-        self.turn_prompt_observed = prompt_observed;
+        let prompt_state = match turn_source {
+            "gateway_request" => RootTurnPromptState::GatewayAwaitingPrompt,
+            "user_prompt" => RootTurnPromptState::Observed,
+            _ => RootTurnPromptState::Unobserved,
+        };
+        self.root_turn.open(scope, prompt_state);
         self.task_awaiting_synthesis = false;
-        self.gateway_request_turn_open = false;
-        self.last_turn_llm_output = None;
         Ok(())
     }
 
@@ -2377,22 +2675,18 @@ impl Session {
 
     /// Return the active child turn, falling back to its delegated agent scope.
     fn child_work_scope(&self, id: &str) -> Option<ScopeHandle> {
-        self.child_turns
+        self.subagents
             .get(id)
-            .or_else(|| self.subagents.get(id))
-            .cloned()
+            .map(|subagent| subagent.work_scope().clone())
     }
 
     /// Open a turn under a delegated agent using its independent scope stack.
     fn open_child_turn(&mut self, id: &str, metadata: Value, input: Value) -> Result<(), CliError> {
-        let Some(parent) = self.subagents.get(id).cloned() else {
+        let Some(subagent) = self.subagents.get(id) else {
             return Ok(());
         };
-        let stack = self
-            .subagent_stacks
-            .get(id)
-            .expect("active child has a stack")
-            .clone();
+        let parent = subagent.scope_handle.clone();
+        let stack = subagent.scope_stack.clone();
         let agent_name = scope_agent_name(&parent)
             .or_else(|| explicit_agent_name(&metadata))
             .map(ToOwned::to_owned)
@@ -2417,7 +2711,10 @@ impl Session {
                     .build(),
             )
         })?;
-        self.child_turns.insert(id.to_string(), scope);
+        self.subagents
+            .get_mut(id)
+            .expect("active child opened the turn")
+            .child_turn = Some(scope);
         Ok(())
     }
 
@@ -2428,27 +2725,32 @@ impl Session {
         output: Value,
         boundary_metadata: Option<Value>,
     ) -> Result<Option<SubscriberDelivery>, CliError> {
-        let Some(scope) = self.child_turns.remove(id) else {
+        let Some(subagent) = self.subagents.get_mut(id) else {
             return Ok(None);
         };
-        let stack = self
-            .subagent_stacks
-            .get(id)
-            .expect("active child has a stack")
-            .clone();
+        let Some(scope) = subagent.child_turn.clone() else {
+            return Ok(None);
+        };
+        let stack = subagent.scope_stack.clone();
         let boundary_metadata = self.trusted_boundary_metadata(boundary_metadata);
-        let delivery = TASK_SCOPE_STACK
-            .scope(stack, async {
-                pop_scope_with_subscriber_delivery(
-                    PopScopeParams::builder()
-                        .handle_uuid(&scope.uuid)
-                        .output(output)
-                        .metadata_opt(boundary_metadata)
-                        .build(),
-                )
+        let result = TASK_SCOPE_STACK
+            .scope(stack.clone(), async {
+                pop_retiring_scope(&scope.uuid, output, boundary_metadata)
             })
-            .await?;
-        Ok(Some(delivery))
+            .await;
+        let removed = result.is_ok()
+            || stack
+                .read()
+                .map_err(|error| nemo_relay_types::error::FlowError::Internal(error.to_string()))?
+                .find(&scope.uuid)
+                .is_none();
+        if removed {
+            self.subagents
+                .get_mut(id)
+                .expect("active child closed its turn")
+                .child_turn = None;
+        }
+        result.map(Some).map_err(CliError::from)
     }
 
     /// End only parent-owned model and tool calls.
@@ -2667,7 +2969,9 @@ impl Session {
     ) -> Result<Option<SubscriberDelivery>, CliError> {
         if let Some(id) = self.child_turn_owner(&event) {
             if alignment::aliased_turn_subagent_id(&event).is_some() {
-                return self.close_subagent_scope(&id, event.payload).await;
+                return self
+                    .close_subagent_scope(&id, event.payload, Some(event.metadata))
+                    .await;
             }
             self.close_child_calls(&id, "closed_by_turn_end")?;
             return self
@@ -2681,12 +2985,12 @@ impl Session {
                 )
                 .await;
         }
-        if self.turn_scope.is_none() {
+        if !self.root_turn.is_open() {
             let (_, turn_delivery) = self.close_turn_for_reason("closed_by_turn_end").await?;
             if self.agent_kind != AgentKind::Codex || self.task_scope.is_some() {
                 self.completion_mark("turn_end_without_start", event.payload, event.metadata)?;
             }
-            let task_delivery = if self.subagents.is_empty() {
+            let task_delivery = if !self.has_subagent_work() {
                 self.close_task_scope(json!({ "status": "completed" }))?
             } else {
                 None
@@ -2695,12 +2999,12 @@ impl Session {
         }
         // A failed boundary is authoritative even if an earlier model call succeeded.
         if event.metadata["otel.status_code"] == "ERROR" {
-            self.last_turn_llm_output = None;
+            drop(self.root_turn.take_model_output());
         }
         let (_, subscriber_delivery) = self
             .close_turn(event.payload, Some(event.metadata), "closed_by_turn_end")
             .await?;
-        let task_delivery = if self.subagents.is_empty() {
+        let task_delivery = if !self.has_subagent_work() {
             self.close_task_scope(json!({ "status": "completed" }))?
         } else {
             None
@@ -2745,20 +3049,20 @@ impl Session {
         }
         let (closed_subagents, child_delivery) = if retain_children {
             let (closed, delivery) = self
-                .close_stale_subagents(Instant::now(), AGENT_IDLE_TIMEOUT)
+                .close_stale_subagents(session_now(), AGENT_IDLE_TIMEOUT)
                 .await?;
-            if !self.subagents.is_empty() {
+            if self.has_subagent_work() {
                 self.task_awaiting_synthesis = true;
             }
             (closed, delivery)
         } else {
             (self.close_active_subagents(reason).await?, None)
         };
-        if self.turn_scope.is_none() {
+        if !self.root_turn.is_open() {
             self.clear_correlation_state();
             return Ok((closed_subagents, child_delivery));
         }
-        let output = self.last_turn_llm_output.take().unwrap_or(output);
+        let output = self.root_turn.take_model_output().unwrap_or(output);
         self.clear_correlation_state();
         let subscriber_delivery = self.close_turn_scope(output, boundary_metadata)?;
         Ok((closed_subagents, subscriber_delivery))
@@ -2770,7 +3074,7 @@ impl Session {
         &mut self,
         event: SessionEvent,
     ) -> Result<Option<SubscriberDelivery>, CliError> {
-        if !self.session_started && self.agent_scope.is_none() && self.turn_scope.is_none() {
+        if !self.session_started && self.agent_scope.is_none() && !self.root_turn.is_open() {
             self.completion_mark("agent_end_without_start", event.payload, event.metadata)?;
             return Ok(None);
         }
@@ -2815,9 +3119,8 @@ impl Session {
         !self.session_started
             && self.turn_index == 0
             && self.agent_scope.is_some()
-            && self.turn_scope.is_none()
-            && self.subagents.is_empty()
-            && self.subagent_stacks.is_empty()
+            && !self.root_turn.is_open()
+            && !self.has_subagent_work()
             && self.subagent_stack.is_empty()
             && self.llms.is_empty()
             && self.tools.is_empty()
@@ -2832,7 +3135,7 @@ impl Session {
             .scope(stack, async move {
                 if self.agent_scope.is_none()
                     && self.task_scope.is_none()
-                    && self.turn_scope.is_none()
+                    && !self.root_turn.is_open()
                 {
                     return Ok(());
                 }
@@ -2886,42 +3189,22 @@ impl Session {
     // out of order. Applies to Claude Code Agent workers and Codex child threads today.
     async fn close_active_subagents(&mut self, reason: &str) -> Result<Vec<String>, CliError> {
         let mut closed = Vec::new();
-        while let Some(subagent_id) = self.subagent_stack.pop() {
+        while let Some(subagent_id) = self.subagent_stack.last().cloned() {
             // Subagent ends precede the turn end on the serial dispatcher, so the turn receipt
             // returned by `close_turn` also covers these deliveries.
             let _ = self
-                .close_subagent_scope(&subagent_id, json!({ "status": reason }))
+                .close_subagent_scope(&subagent_id, json!({ "status": reason }), None)
                 .await?;
+            self.subagent_stack.retain(|id| id != &subagent_id);
             closed.push(subagent_id);
         }
         self.subagents.clear();
-        self.subagent_stacks.clear();
         Ok(closed)
     }
 
     // Clears parent-turn correlation while preserving hints owned by live delegated agents.
     fn clear_correlation_state(&mut self) {
-        self.pending_llm_hints.retain(|pending| {
-            pending
-                .hint
-                .subagent_id
-                .as_ref()
-                .or(pending.hint.agent_id.as_ref())
-                .is_some_and(|id| self.subagents.contains_key(id))
-        });
-        self.pending_tool_hints.retain(|pending| {
-            pending
-                .hint
-                .subagent_id
-                .as_ref()
-                .is_some_and(|id| self.subagents.contains_key(id))
-        });
-        self.llm_request_affinity.retain(|_, owner| {
-            owner
-                .as_ref()
-                .is_some_and(|id| self.subagents.contains_key(id))
-        });
-        self.last_llm_owner = None;
+        self.correlation.clear_root_turn(&self.subagents);
     }
 
     // Ends the root agent scope when present. Duplicate agent-end hooks can reach this path after the
@@ -2955,31 +3238,19 @@ impl Session {
         output: Value,
         boundary_metadata: Option<Value>,
     ) -> Result<Option<SubscriberDelivery>, CliError> {
-        let Some(scope) = self.turn_scope.take() else {
-            return Ok(None);
-        };
-        self.gateway_request_turn_open = false;
-        let prompt_observed = std::mem::take(&mut self.turn_prompt_observed);
-        let mut boundary_metadata = self.trusted_boundary_metadata(boundary_metadata);
-        if self.agent_kind == AgentKind::ClaudeCode {
-            let mut metadata = merge_metadata(json!({}), boundary_metadata.unwrap_or(Value::Null));
-            metadata["turn_prompt_observed"] = json!(prompt_observed);
-            boundary_metadata = Some(metadata);
-        }
-        let subscriber_delivery = pop_scope_with_subscriber_delivery(
-            PopScopeParams::builder()
-                .handle_uuid(&scope.uuid)
-                .output(output)
-                .metadata_opt(boundary_metadata)
-                .build(),
-        )?;
-        Ok(Some(subscriber_delivery))
+        let boundary_metadata = self.trusted_boundary_metadata(boundary_metadata);
+        self.root_turn.close(
+            output,
+            boundary_metadata,
+            self.agent_kind == AgentKind::ClaudeCode,
+        )
     }
 
     /// Return the nearest open parent turn, task, or session scope for root-owned work.
     fn root_work_scope(&self) -> Option<ScopeHandle> {
-        self.turn_scope
-            .clone()
+        self.root_turn
+            .handle()
+            .cloned()
             .or_else(|| self.task_scope.clone())
             .or_else(|| self.agent_scope.clone())
     }
@@ -2992,6 +3263,10 @@ impl Session {
     // parentage sibling-shaped within a turn while still allowing parallel workers to end out of
     // order.
     async fn start_subagent(&mut self, event: SubagentEvent) -> Result<(), CliError> {
+        if self.retiring_subagents.contains_key(&event.subagent_id) {
+            self.close_subagent_scope(&event.subagent_id, json!({ "status": "replaced" }), None)
+                .await?;
+        }
         if self.task_scope.is_none() {
             self.ensure_turn_started(Value::Null)?;
         }
@@ -3002,7 +3277,7 @@ impl Session {
         let parent_scope = self
             .task_scope
             .clone()
-            .or_else(|| self.turn_scope.clone())
+            .or_else(|| self.root_turn.handle().cloned())
             .expect("ensure_turn_started should initialize the work scope");
         let agent_scope = self.agent_scope.clone();
         let subagent_id = event.subagent_id;
@@ -3040,11 +3315,15 @@ impl Session {
             self.set_last_subagent_start_owner(Some(subagent_id.clone()));
         }
         self.subagent_stack.push(subagent_id.clone());
-        self.subagent_stacks
-            .insert(subagent_id.clone(), subagent_stack);
-        self.subagent_activity
-            .insert(subagent_id.clone(), Instant::now());
-        self.subagents.insert(subagent_id, scope);
+        self.subagents.insert(
+            subagent_id,
+            ActiveSubagent {
+                scope_handle: scope,
+                scope_stack: subagent_stack,
+                last_activity: session_now(),
+                child_turn: None,
+            },
+        );
         Ok(())
     }
 
@@ -3065,7 +3344,9 @@ impl Session {
         {
             return Ok(None);
         }
-        if !self.subagents.contains_key(&event.subagent_id) {
+        if !self.subagents.contains_key(&event.subagent_id)
+            && !self.retiring_subagents.contains_key(&event.subagent_id)
+        {
             // Claude emits SubagentStop for internal agents such as prompt
             // suggestions, but SubagentStart covers Agent-tool subagents.
             // Matching the session type suggests internal work, but cannot
@@ -3118,7 +3399,7 @@ impl Session {
             )?;
             return Ok(None);
         };
-        self.close_subagent_scope(&event.subagent_id, event.payload)
+        self.close_subagent_scope(&event.subagent_id, event.payload, Some(event.metadata))
             .await
     }
 
@@ -3129,61 +3410,87 @@ impl Session {
         &mut self,
         subagent_id: &str,
         output: Value,
+        boundary_metadata: Option<Value>,
     ) -> Result<Option<SubscriberDelivery>, CliError> {
         self.close_child_calls(subagent_id, "closed_by_subagent_end")?;
-        self.close_child_turn(subagent_id, output.clone(), None)
-            .await?;
-        let Some(scope) = self.subagents.remove(subagent_id) else {
+        let boundary_metadata = self.trusted_boundary_metadata(boundary_metadata);
+        if let Some(subagent) = self.subagents.remove(subagent_id) {
+            self.retiring_subagents.insert(
+                subagent_id.to_string(),
+                RetiringSubagent {
+                    scope: RetiringScope::new(subagent.scope_handle),
+                    scope_stack: subagent.scope_stack,
+                    child_turn: subagent.child_turn.map(RetiringScope::new),
+                    output,
+                    boundary_metadata,
+                    reason: SubagentRetirementReason::Completion,
+                },
+            );
+        } else if let Some(retiring) = self.retiring_subagents.get_mut(subagent_id)
+            && boundary_metadata.is_some()
+        {
+            retiring.output = output;
+            retiring.boundary_metadata = boundary_metadata;
+        }
+        let Some(retiring) = self.retiring_subagents.get_mut(subagent_id) else {
             return Ok(None);
         };
-        let stack = self
-            .subagent_stacks
-            .remove(subagent_id)
-            .unwrap_or_else(|| self.scope_stack.clone());
-        let subscriber_delivery = TASK_SCOPE_STACK
-            .scope(stack, async {
-                pop_scope_with_subscriber_delivery(
-                    PopScopeParams::builder()
-                        .handle_uuid(&scope.uuid)
-                        .output(output)
-                        .build(),
-                )
-                .map_err(CliError::from)
+        let stack = retiring.scope_stack.clone();
+        let (mut subscriber_delivery, mut first_error) = TASK_SCOPE_STACK
+            .scope(stack.clone(), async {
+                let mut delivery = None;
+                let mut first_error = None;
+                if let Some(child_turn) = &mut retiring.child_turn {
+                    match child_turn.close(
+                        &stack,
+                        retiring.output.clone(),
+                        retiring.boundary_metadata.clone(),
+                    ) {
+                        Ok(receipt) => delivery = receipt,
+                        Err(error) if child_turn.stack_removed => {
+                            first_error = Some(error);
+                        }
+                        Err(error) => return Err(error),
+                    }
+                    retiring.child_turn = None;
+                }
+                match retiring.scope.close(
+                    &stack,
+                    retiring.output.clone(),
+                    retiring.boundary_metadata.clone(),
+                ) {
+                    Ok(receipt) => delivery = receipt.or(delivery),
+                    Err(error) if retiring.scope.stack_removed => {
+                        first_error.get_or_insert(error);
+                    }
+                    Err(error) => return Err(first_error.unwrap_or(error)),
+                }
+                Ok::<_, CliError>((delivery, first_error))
             })
             .await?;
+        self.retiring_subagents.remove(subagent_id);
         self.subagent_stack.retain(|id| id != subagent_id);
-        self.subagent_activity.remove(subagent_id);
         self.completed_subagents.insert(subagent_id.to_string());
-        self.pending_llm_hints.retain(|pending| {
-            pending
-                .hint
-                .subagent_id
-                .as_ref()
-                .or(pending.hint.agent_id.as_ref())
-                .map(String::as_str)
-                != Some(subagent_id)
-        });
-        self.pending_tool_hints
-            .retain(|pending| pending.hint.subagent_id.as_deref() != Some(subagent_id));
-        self.llm_request_affinity
-            .retain(|_, owner| owner.as_deref() != Some(subagent_id));
-        if self
-            .last_llm_owner
-            .as_ref()
-            .is_some_and(|owner| owner.subagent_id == subagent_id)
-        {
-            self.last_llm_owner = None;
-        }
+        self.correlation.remove_subagent(subagent_id);
         if self.agent_kind == AgentKind::Codex
-            && self.subagents.is_empty()
-            && self.turn_scope.is_none()
+            && !self.has_subagent_work()
+            && !self.root_turn.is_open()
             && !self.task_awaiting_synthesis
         {
-            return Ok(self
-                .close_task_scope(json!({ "status": "completed" }))?
-                .or(Some(subscriber_delivery)));
+            match self.close_task_scope(json!({ "status": "completed" })) {
+                Ok(receipt) => subscriber_delivery = receipt.or(subscriber_delivery),
+                Err(error) => {
+                    first_error.get_or_insert(error);
+                }
+            }
         }
-        Ok(Some(subscriber_delivery))
+        if let Some(error) = first_error {
+            if let Some(receipt) = subscriber_delivery {
+                let _ = receipt.wait().await;
+            }
+            return Err(error);
+        }
+        Ok(subscriber_delivery)
     }
 
     // Stores an LLM correlation hint from hook activity after pruning expired hints. Hints do not
@@ -3200,9 +3507,9 @@ impl Session {
         self.cleanup_correlation_state();
         let owner_subagent_id = event.subagent_id.clone().or_else(|| event.agent_id.clone());
         self.add_tool_hints_from_llm_response(&event.payload, owner_subagent_id);
-        self.pending_llm_hints.push(PendingLlmHint {
+        self.correlation.pending_llm_hints.push(PendingLlmHint {
             hint: event,
-            inserted_at: Instant::now(),
+            inserted_at: session_now(),
         });
         Ok(())
     }
@@ -3224,11 +3531,11 @@ impl Session {
             return Ok(());
         }
         let mut owner = self.resolve_tool_owner(&event);
-        if owner.subagent_id.is_none() {
+        if owner.decision.owner.subagent_id().is_none() {
             self.ensure_tool_scope_started(event.metadata.clone())?;
             owner.parent = self.root_work_scope();
         }
-        self.touch_subagent_activity(owner.subagent_id.as_deref());
+        self.touch_subagent_activity(owner.decision.owner.subagent_id());
         let arguments = if event.arguments.is_null() {
             owner
                 .hint
@@ -3270,20 +3577,21 @@ impl Session {
 
         let active_tool_arguments = arguments.clone();
         let active_tool_name = event.tool_name.clone();
-        let active_tool_owner_subagent_id = owner.subagent_id.clone();
+        let active_tool_owner_subagent_id =
+            owner.decision.owner.subagent_id().map(ToOwned::to_owned);
         let mut metadata = tool_correlation_metadata(
             self.event_identity_metadata(event.metadata),
-            owner.status,
-            owner.source.as_deref(),
-            owner.subagent_id.as_deref(),
+            owner.decision.evidence.status(),
+            owner.source(),
+            owner.decision.owner.subagent_id(),
             owner.hint.as_ref(),
         );
         self.apply_tool_execution_metadata(
             &mut metadata,
-            owner.subagent_id.as_deref(),
+            owner.decision.owner.subagent_id(),
             owner.parent.as_ref(),
         );
-        self.set_last_tool_owner(owner.subagent_id.clone());
+        self.set_last_tool_owner(owner.decision.owner.subagent_id().map(ToOwned::to_owned));
         let handle = tool_call(
             ToolCallParams::builder()
                 .name(event.tool_name.as_str())
@@ -3373,7 +3681,8 @@ impl Session {
             )?;
             return match completed_agent_subagent_id {
                 Some(id) if self.subagents.contains_key(&id) => {
-                    self.close_subagent_scope(&id, event.payload).await
+                    self.close_subagent_scope(&id, event.payload, Some(event.metadata))
+                        .await
                 }
                 _ => Ok(None),
             };
@@ -3392,7 +3701,10 @@ impl Session {
                 .filter(|id| self.subagents.contains_key(id)),
         );
         match completed_agent_subagent_id {
-            Some(id) => self.close_subagent_scope(&id, event.result).await,
+            Some(id) => {
+                self.close_subagent_scope(&id, event.result, Some(event.metadata))
+                    .await
+            }
             None => Ok(None),
         }
     }
@@ -3457,7 +3769,12 @@ impl Session {
             return Some(subagent_id.clone());
         }
         self.matching_tool_hint_index(event)
-            .and_then(|index| self.pending_tool_hints[index].hint.subagent_id.clone())
+            .and_then(|index| {
+                self.correlation.pending_tool_hints[index]
+                    .hint
+                    .subagent_id
+                    .clone()
+            })
             .filter(|subagent_id| self.subagents.contains_key(subagent_id))
     }
 
@@ -3502,18 +3819,7 @@ impl Session {
     // Prunes expired LLM hints and sticky owner state. The TTLs prevent old hook activity from
     // incorrectly capturing later gateway calls when agents reuse a process or session id.
     fn cleanup_correlation_state(&mut self) {
-        let now = Instant::now();
-        self.pending_llm_hints
-            .retain(|hint| now.duration_since(hint.inserted_at) <= LLM_HINT_TTL);
-        self.pending_tool_hints
-            .retain(|hint| now.duration_since(hint.inserted_at) <= TOOL_HINT_TTL);
-        if self
-            .last_llm_owner
-            .as_ref()
-            .is_some_and(|owner| now.duration_since(owner.updated_at) > LAST_OWNER_TTL)
-        {
-            self.last_llm_owner = None;
-        }
+        self.correlation.cleanup(session_now());
     }
 
     // Resolves the parent scope for a gateway LLM call. The precedence is explicit subagent header,
@@ -3534,9 +3840,7 @@ impl Session {
             self.set_last_llm_owner(None);
             return LlmOwnerResolution {
                 parent: self.root_work_scope(),
-                subagent_id: None,
-                status: "explicit",
-                source: Some("request_payload".into()),
+                decision: OwnershipDecision::new(None, OwnershipEvidence::RootRequestPayload),
                 hint: None,
                 metadata: Value::Null,
             };
@@ -3570,9 +3874,10 @@ impl Session {
             self.set_last_llm_owner(Some(subagent_id.clone()));
             return Some(LlmOwnerResolution {
                 parent: Some(scope),
-                subagent_id: Some(subagent_id.clone()),
-                status: "explicit",
-                source: Some("gateway_header".to_string()),
+                decision: OwnershipDecision::new(
+                    Some(subagent_id.clone()),
+                    OwnershipEvidence::GatewayHeader,
+                ),
                 hint: None,
                 metadata: self.subagent_llm_metadata(subagent_id),
             });
@@ -3583,9 +3888,9 @@ impl Session {
     // Consumes a sole pending hint without scoring. A single hint is unambiguous even when it only
     // contains model or event context, and retaining it would incorrectly affect later LLM calls.
     fn single_hint_owner(&mut self) -> Option<LlmOwnerResolution> {
-        if self.pending_llm_hints.len() == 1 {
-            let hint = self.pending_llm_hints.remove(0).hint;
-            return Some(self.resolution_from_hint(hint, "single_hint"));
+        if self.correlation.pending_llm_hints.len() == 1 {
+            let hint = self.correlation.pending_llm_hints.remove(0).hint;
+            return Some(self.resolution_from_hint(hint, HintSelection::Single));
         }
         None
     }
@@ -3594,8 +3899,8 @@ impl Session {
     // ambiguous by `matching_hint_index` so this helper only returns defensible correlations.
     fn matched_hint_owner(&mut self, start: &LlmGatewayStart) -> Option<LlmOwnerResolution> {
         if let Some(index) = self.matching_hint_index(start) {
-            let hint = self.pending_llm_hints.remove(index).hint;
-            return Some(self.resolution_from_hint(hint, "matched_hint"));
+            let hint = self.correlation.pending_llm_hints.remove(index).hint;
+            return Some(self.resolution_from_hint(hint, HintSelection::Matched));
         }
         None
     }
@@ -3606,20 +3911,26 @@ impl Session {
     // the subagent that first owned the same coding task.
     fn request_affinity_owner(&mut self, start: &LlmGatewayStart) -> Option<LlmOwnerResolution> {
         let key = alignment::request_affinity_key(&start.provider, &start.request)?;
-        let subagent_id = self.llm_request_affinity.get(&key).cloned().flatten()?;
+        let subagent_id = self
+            .correlation
+            .llm_request_affinity
+            .get(&key)
+            .cloned()
+            .flatten()?;
         let parent = match self.child_work_scope(&subagent_id) {
             Some(parent) => parent,
             None => {
-                self.llm_request_affinity.remove(&key);
+                self.correlation.llm_request_affinity.remove(&key);
                 return None;
             }
         };
         self.set_last_llm_owner(Some(subagent_id.clone()));
         Some(LlmOwnerResolution {
             parent: Some(parent),
-            subagent_id: Some(subagent_id.clone()),
-            status: "request_affinity",
-            source: Some("request_payload".to_string()),
+            decision: OwnershipDecision::new(
+                Some(subagent_id.clone()),
+                OwnershipEvidence::RequestAffinity,
+            ),
             hint: None,
             metadata: self.subagent_llm_metadata(&subagent_id),
         })
@@ -3628,14 +3939,15 @@ impl Session {
     // Reuses the previous LLM owner while its TTL is valid and its scope can still be resolved.
     // This covers agents that emit one hint followed by a cluster of related provider calls.
     fn sticky_llm_owner(&self) -> Option<LlmOwnerResolution> {
-        if let Some(owner) = self.last_llm_owner.as_ref()
+        if let Some(owner) = self.correlation.last_llm_owner.as_ref()
             && let Some(parent) = self.child_work_scope(&owner.subagent_id)
         {
             return Some(LlmOwnerResolution {
                 parent: Some(parent),
-                subagent_id: Some(owner.subagent_id.clone()),
-                status: owner.source.status(),
-                source: owner.source.metadata_source().map(ToOwned::to_owned),
+                decision: OwnershipDecision::new(
+                    Some(owner.subagent_id.clone()),
+                    OwnershipEvidence::Sticky(owner.source),
+                ),
                 hint: None,
                 metadata: self.subagent_llm_metadata(&owner.subagent_id),
             });
@@ -3648,17 +3960,18 @@ impl Session {
     // metadata.
     fn sole_subagent_owner(&mut self) -> Option<LlmOwnerResolution> {
         if self.subagents.len() == 1
-            && let Some((subagent_id, scope)) = self.subagents.iter().next()
+            && let Some((subagent_id, subagent)) = self.subagents.iter().next()
         {
             let subagent_id = subagent_id.clone();
-            let scope = self.child_turns.get(&subagent_id).unwrap_or(scope).clone();
+            let scope = subagent.work_scope().clone();
             let metadata = self.subagent_llm_metadata(&subagent_id);
             self.set_last_llm_owner(Some(subagent_id.clone()));
             return Some(LlmOwnerResolution {
                 parent: Some(scope),
-                subagent_id: Some(subagent_id),
-                status: "active_subagent",
-                source: None,
+                decision: OwnershipDecision::new(
+                    Some(subagent_id),
+                    OwnershipEvidence::SoleActiveSubagent,
+                ),
                 hint: None,
                 metadata,
             });
@@ -3671,13 +3984,14 @@ impl Session {
     fn fallback_llm_owner(&self) -> LlmOwnerResolution {
         LlmOwnerResolution {
             parent: self.root_work_scope(),
-            subagent_id: None,
-            status: if self.pending_llm_hints.is_empty() {
-                "agent_fallback"
-            } else {
-                "ambiguous_fallback"
-            },
-            source: None,
+            decision: OwnershipDecision::new(
+                None,
+                if self.correlation.pending_llm_hints.is_empty() {
+                    OwnershipEvidence::AgentFallback
+                } else {
+                    OwnershipEvidence::AmbiguousFallback
+                },
+            ),
             hint: None,
             metadata: Value::Null,
         }
@@ -3690,18 +4004,17 @@ impl Session {
         {
             return LlmOwnerResolution {
                 parent: Some(parent),
-                subagent_id: Some(id.to_string()),
-                status: "explicit",
-                source: Some("gateway_header".into()),
+                decision: OwnershipDecision::new(
+                    Some(id.to_string()),
+                    OwnershipEvidence::GatewayHeader,
+                ),
                 hint: None,
                 metadata: self.subagent_llm_metadata(id),
             };
         }
         LlmOwnerResolution {
             parent: self.root_work_scope(),
-            subagent_id: None,
-            status: "harness_internal",
-            source: Some("claude_code_request_class".into()),
+            decision: OwnershipDecision::new(None, OwnershipEvidence::HarnessInternal),
             hint: None,
             metadata: Value::Null,
         }
@@ -3713,7 +4026,7 @@ impl Session {
     fn resolution_from_hint(
         &mut self,
         hint: LlmHintEvent,
-        status: &'static str,
+        selection: HintSelection,
     ) -> LlmOwnerResolution {
         let hinted_subagent_id = hint.subagent_id.clone().or_else(|| hint.agent_id.clone());
         let (parent, subagent_id, metadata) = match hinted_subagent_id.as_deref() {
@@ -3730,77 +4043,49 @@ impl Session {
         if parent.is_some() {
             self.set_last_llm_owner(subagent_id.clone());
         }
+        let evidence = OwnershipEvidence::hint(
+            selection,
+            hinted_subagent_id.is_some() && subagent_id.is_none(),
+        );
         LlmOwnerResolution {
             parent,
-            subagent_id,
-            status,
-            source: Some(hint.event_name.clone()),
+            decision: OwnershipDecision::new(subagent_id, evidence),
             hint: Some(hint),
             metadata,
         }
     }
 
     fn subagent_llm_metadata(&self, subagent_id: &str) -> Value {
-        let Some(scope) = self.subagents.get(subagent_id) else {
+        let Some(subagent) = self.subagents.get(subagent_id) else {
             return Value::Null;
         };
-        alignment::llm_owner_metadata(scope.metadata.as_ref())
+        alignment::llm_owner_metadata(subagent.scope_handle.metadata.as_ref())
     }
 
     // Finds a single best pending hint for a gateway call. Ties are treated as ambiguous and return
     // `None`, causing the caller to use fallback behavior rather than guessing between subagents.
     fn matching_hint_index(&self, start: &LlmGatewayStart) -> Option<usize> {
-        let matches: Vec<_> = self
-            .pending_llm_hints
-            .iter()
-            .enumerate()
-            .filter_map(|(index, pending)| {
-                let score = hint_match_score(&pending.hint, start);
-                (score > 0).then_some((index, score))
-            })
-            .collect();
-        let best_score = matches.iter().map(|(_, score)| *score).max()?;
-        let best: Vec<_> = matches
-            .into_iter()
-            .filter(|(_, score)| *score == best_score)
-            .collect();
-        (best.len() == 1).then_some(best[0].0)
+        self.correlation.matching_hint_index(start)
     }
 
     // Records the most recent LLM owner with a timestamp so nearby gateway calls can inherit the
     // same parent scope when explicit IDs and hints are absent.
     fn set_last_llm_owner(&mut self, subagent_id: Option<String>) {
-        self.last_llm_owner = subagent_id.map(|subagent_id| LastLlmOwner {
-            subagent_id,
-            updated_at: Instant::now(),
-            source: LastLlmOwnerSource::Llm,
-        });
+        self.correlation.set_last_llm_owner(subagent_id);
     }
 
     // Records explicit or hint-resolved tool ownership as a short-lived cue for the next unhinted
     // LLM call. Coding-agent hooks often identify tool ownership more reliably than provider
     // requests, especially for subagents that do not propagate gateway headers.
     fn set_last_tool_owner(&mut self, subagent_id: Option<String>) {
-        if let Some(subagent_id) = subagent_id {
-            self.last_llm_owner = Some(LastLlmOwner {
-                subagent_id,
-                updated_at: Instant::now(),
-                source: LastLlmOwnerSource::Tool,
-            });
-        }
+        self.correlation.set_last_tool_owner(subagent_id);
     }
 
     // Parallel subagent starts are a weak but useful ownership signal: if a new worker starts while
     // siblings are active and the next LLM lacks headers/hints, prefer the newest worker over the
     // root agent. Single-subagent ownership is handled by `sole_subagent_owner`.
     fn set_last_subagent_start_owner(&mut self, subagent_id: Option<String>) {
-        if let Some(subagent_id) = subagent_id {
-            self.last_llm_owner = Some(LastLlmOwner {
-                subagent_id,
-                updated_at: Instant::now(),
-                source: LastLlmOwnerSource::SubagentStart,
-            });
-        }
+        self.correlation.set_last_subagent_start_owner(subagent_id);
     }
 
     // Learns a subagent owner from high-confidence LLM resolutions only. Tool-owned and sticky
@@ -3813,25 +4098,8 @@ impl Session {
         subagent_id: Option<&str>,
         status: &str,
     ) {
-        if !owner_status_teaches_request_affinity(status) {
-            return;
-        }
-        let Some(subagent_id) = subagent_id else {
-            return;
-        };
-        let Some(key) = alignment::request_affinity_key(provider, request) else {
-            return;
-        };
-        match self.llm_request_affinity.get_mut(&key) {
-            Some(Some(existing)) if existing == subagent_id => {}
-            // If two live subagents share the same prompt text, the key is no longer safe as a
-            // discriminator. Mark it ambiguous instead of allowing either worker to claim it.
-            Some(owner) => *owner = None,
-            None => {
-                self.llm_request_affinity
-                    .insert(key, Some(subagent_id.to_string()));
-            }
-        }
+        self.correlation
+            .record_request_affinity(provider, request, subagent_id, status);
     }
 
     // Records tool-call suggestions from LLM responses as private correlation hints. These hints
@@ -3853,15 +4121,56 @@ impl Session {
         }
         self.cleanup_correlation_state();
         let hints = tool_hints_from_llm_response(response, owner_subagent_id.as_deref());
-        self.pending_tool_hints
+        self.correlation
+            .pending_tool_hints
             .extend(hints.into_iter().map(|hint| PendingToolHint {
                 hint,
-                inserted_at: Instant::now(),
+                inserted_at: session_now(),
             }));
     }
 
-    fn gateway_response_policy(&self, owner_subagent_id: Option<&str>) -> (bool, bool) {
-        let retain_output = owner_subagent_id.is_none() && self.turn_scope.is_some();
+    fn gateway_call_context(
+        &self,
+        owner_subagent_identifier: Option<&str>,
+        original_parent_identifier: Option<uuid::Uuid>,
+    ) -> GatewayCallContext {
+        GatewayCallContext {
+            session_identifier: self.session_id.clone(),
+            session_instance_identifier: self.session_instance_identifier,
+            owner_subagent_identifier: owner_subagent_identifier.map(str::to_owned),
+            worker_scope_identifier: owner_subagent_identifier
+                .and_then(|identifier| self.subagents.get(identifier))
+                .map(|worker| worker.scope_handle.uuid),
+            original_parent_identifier,
+        }
+    }
+
+    fn gateway_worker_is_current(&self, context: &GatewayCallContext) -> bool {
+        context
+            .owner_subagent_identifier
+            .as_deref()
+            .is_none_or(|identifier| {
+                self.subagents.get(identifier).is_some_and(|worker| {
+                    Some(worker.scope_handle.uuid) == context.worker_scope_identifier
+                })
+            })
+    }
+
+    fn gateway_response_policy(&self, context: &GatewayCallContext) -> (bool, bool) {
+        if self.session_instance_identifier != context.session_instance_identifier
+            || !self.gateway_worker_is_current(context)
+        {
+            return (false, false);
+        }
+        let owner_subagent_id = context.owner_subagent_identifier.as_deref();
+        if owner_subagent_id.is_none()
+            && (context.original_parent_identifier.is_none()
+                || self.root_turn.handle().map(|turn| turn.uuid)
+                    != context.original_parent_identifier)
+        {
+            return (false, false);
+        }
+        let retain_output = owner_subagent_id.is_none() && self.root_turn.is_open();
         let collect_hints = !(self.agent_kind == AgentKind::Codex
             && owner_subagent_id.is_some_and(|id| self.completed_subagents.contains(id)));
         (retain_output, collect_hints)
@@ -3875,8 +4184,8 @@ impl Session {
         self.touch_subagent_activity(owner_subagent_id);
         if prepared.collect_hints {
             self.cleanup_correlation_state();
-            let inserted_at = Instant::now();
-            self.pending_tool_hints.extend(
+            let inserted_at = session_now();
+            self.correlation.pending_tool_hints.extend(
                 prepared
                     .hints
                     .into_iter()
@@ -3885,7 +4194,7 @@ impl Session {
         }
         prepared
             .turn_output
-            .and_then(|output| self.last_turn_llm_output.replace(output))
+            .and_then(|output| self.root_turn.replace_model_output(output))
     }
 
     // Remembers the latest completed LLM response owned by the turn or root Agent scope so the
@@ -3899,10 +4208,10 @@ impl Session {
         owner_subagent_id: Option<String>,
     ) {
         self.touch_subagent_activity(owner_subagent_id.as_deref());
-        let retain_turn_output = owner_subagent_id.is_none() && self.turn_scope.is_some();
+        let retain_turn_output = owner_subagent_id.is_none() && self.root_turn.is_open();
         self.add_tool_hints_from_llm_response(&response, owner_subagent_id);
         if retain_turn_output {
-            self.last_turn_llm_output = Some(response.into_owned());
+            drop(self.root_turn.replace_model_output(response.into_owned()));
         }
     }
 
@@ -3917,9 +4226,10 @@ impl Session {
             self.consume_matching_tool_hint(event);
             return ToolOwnerResolution {
                 parent: Some(scope),
-                subagent_id: Some(subagent_id.clone()),
-                status: "explicit",
-                source: Some("hook_payload".to_string()),
+                decision: OwnershipDecision::new(
+                    Some(subagent_id.clone()),
+                    OwnershipEvidence::HookPayload,
+                ),
                 hint: None,
             };
         }
@@ -3929,32 +4239,31 @@ impl Session {
         {
             return ToolOwnerResolution {
                 parent: self.root_work_scope(),
-                subagent_id: None,
-                status: "explicit",
-                source: Some("hook_payload".into()),
+                decision: OwnershipDecision::new(None, OwnershipEvidence::HookPayload),
                 hint: None,
             };
         }
 
         if let Some(index) = self.matching_tool_hint_index(event) {
-            let status = if self.pending_tool_hints.len() == 1 {
-                "single_hint"
+            let selection = if self.correlation.pending_tool_hints.len() == 1 {
+                HintSelection::Single
             } else {
-                "matched_hint"
+                HintSelection::Matched
             };
-            let hint = self.pending_tool_hints.remove(index).hint;
-            return self.tool_resolution_from_hint(hint, status);
+            let hint = self.correlation.pending_tool_hints.remove(index).hint;
+            return self.tool_resolution_from_hint(hint, selection);
         }
 
         ToolOwnerResolution {
             parent: self.root_work_scope(),
-            subagent_id: None,
-            status: if self.pending_tool_hints.is_empty() {
-                "agent_fallback"
-            } else {
-                "ambiguous_fallback"
-            },
-            source: None,
+            decision: OwnershipDecision::new(
+                None,
+                if self.correlation.pending_tool_hints.is_empty() {
+                    OwnershipEvidence::AgentFallback
+                } else {
+                    OwnershipEvidence::AmbiguousFallback
+                },
+            ),
             hint: None,
         }
     }
@@ -3964,7 +4273,7 @@ impl Session {
     fn tool_resolution_from_hint(
         &mut self,
         hint: ToolHint,
-        status: &'static str,
+        selection: HintSelection,
     ) -> ToolOwnerResolution {
         let (parent, subagent_id) = match hint.subagent_id.as_deref() {
             Some(id) => match self.child_work_scope(id) {
@@ -3973,41 +4282,27 @@ impl Session {
             },
             None => (self.root_work_scope(), None),
         };
+        let evidence = OwnershipEvidence::hint(
+            selection,
+            hint.subagent_id.is_some() && subagent_id.is_none(),
+        );
         ToolOwnerResolution {
             parent,
-            subagent_id,
-            status,
-            source: Some(hint.source.clone()),
+            decision: OwnershipDecision::new(subagent_id, evidence),
             hint: Some(hint),
         }
     }
 
     // Removes a stale matching hint when a hook already carried an explicit subagent owner.
     fn consume_matching_tool_hint(&mut self, event: &ToolEvent) {
-        if let Some(index) = self.matching_tool_hint_index(event) {
-            self.pending_tool_hints.remove(index);
-        }
+        self.correlation.consume_matching_tool_hint(event);
     }
 
     // Finds a unique best-scoring tool hint by call id or name-plus-argument equality. Ties remain
     // ambiguous and are not consumed. Name-only matches are ignored because high-frequency
     // coding-agent tools repeat across parallel workers and are too weak to prove ownership.
     fn matching_tool_hint_index(&self, event: &ToolEvent) -> Option<usize> {
-        let matches: Vec<_> = self
-            .pending_tool_hints
-            .iter()
-            .enumerate()
-            .filter_map(|(index, pending)| {
-                let score = tool_hint_match_score(&pending.hint, event);
-                (score > 0).then_some((index, score))
-            })
-            .collect();
-        let best_score = matches.iter().map(|(_, score)| *score).max()?;
-        let best: Vec<_> = matches
-            .into_iter()
-            .filter(|(_, score)| *score == best_score)
-            .collect();
-        (best.len() == 1).then_some(best[0].0)
+        self.correlation.matching_tool_hint_index(event)
     }
 }
 
