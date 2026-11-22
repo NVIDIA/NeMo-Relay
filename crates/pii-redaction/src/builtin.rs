@@ -1122,11 +1122,14 @@ pub(super) fn trajectory_llm_request_projection_callback(
                 };
                 let codec = resolved.as_deref().or(fallback.as_deref())?;
                 let annotated = codec.decode(&request).ok()?;
-                let sanitized = backend
-                    .trajectory
-                    .as_ref()?
-                    .sanitize_annotated_request(annotated)?;
-                codec.redaction()?.project_request(&sanitized).ok()?
+                let policy = backend.trajectory.as_ref()?;
+                let sanitized = policy.sanitize_annotated_request(annotated)?;
+                let mut projected = codec.redaction()?.project_request(&sanitized).ok()??;
+                projected.headers.clear();
+                policy.approval.record(
+                    || serde_json::json!({"headers":projected.headers,"content":projected.content}),
+                );
+                Some(projected)
             })();
             Ok(projected)
         })
@@ -1199,11 +1202,11 @@ pub(super) fn trajectory_llm_response_projection_callback(
                 };
                 let codec = resolved.as_deref().or(fallback.as_deref())?;
                 let annotated = codec.decode_response(&payload).ok()?;
-                let sanitized = backend
-                    .trajectory
-                    .as_ref()?
-                    .sanitize_annotated_response(annotated)?;
-                codec.redaction()?.project_response(&sanitized).ok()?
+                let policy = backend.trajectory.as_ref()?;
+                let sanitized = policy.sanitize_annotated_response(annotated)?;
+                let projected = codec.redaction()?.project_response(&sanitized).ok()??;
+                policy.approval.record(|| projected.clone());
+                Some(projected)
             })();
             Ok(projected)
         })
