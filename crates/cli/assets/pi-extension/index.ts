@@ -286,6 +286,10 @@ export default function nemoRelayExtension(pi: ExtensionAPI): void {
             'x-nemo-relay-session-id': registeredSessionKey ?? sessionKey,
             ...(config.proxyToken ? { 'x-nemo-relay-proxy-token': config.proxyToken } : {}),
             ...(decision.namedUpstream ? { 'x-nemo-relay-upstream-base-url': decision.namedUpstream } : {}),
+            // A configured match already ends at Pi's base. The gateway only needs
+            // to append the SDK's suffix, even when that base has no /v1.
+            ...(!decision.namedUpstream && config.mode === 'match' && model.api !== 'anthropic-messages'
+              ? { 'x-nemo-relay-pi-exact-path': '1' } : {}),
           },
         };
       },
