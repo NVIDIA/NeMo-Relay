@@ -5,8 +5,7 @@
   const { AsyncLocalStorage } = process.getBuiltinModule('node:async_hooks');
   const eventSanitizerContext = new AsyncLocalStorage();
   const publicationStates = new Map();
-  const streamQueues = new WeakMap();
-  const streamCloses = new WeakMap();
+  const streams = new WeakMap();
   const pinnedStreams = new Map();
   const INACTIVE_PUBLICATION = Object.freeze({ active: false });
   const ACTIVE_PUBLICATION = Object.freeze({ active: true });
@@ -188,6 +187,15 @@
     return undefined;
   }
 
+  function streamState(handle) {
+    let state = streams.get(handle);
+    if (state === undefined) {
+      state = { queue: Promise.resolve(), closing: undefined };
+      streams.set(handle, state);
+    }
+    return state;
+  }
+
   function driveStream(poll, close) {
     const step = poll(close);
     if (!(step instanceof Promise)) {
@@ -229,10 +237,102 @@
     );
   }
 
+  function claimPublication(publication, publicationContextId) {
+    const inherited = publicationContextId === undefined ? undefined : publicationStates.get(publicationContextId);
+    if (inherited !== undefined) {
+      return { state: inherited, contextId: publicationContextId, owned: false };
+    }
+    if (!publication) {
+      return { state: INACTIVE_PUBLICATION, contextId: publicationContextId, owned: false };
+    }
+    const contextId = String(++nextPublicationContextId);
+    const state = { active: true };
+    publicationStates.set(contextId, state);
+    return { state, contextId, owned: true };
+  }
+
+  function releasePublication(claim) {
+    if (claim.owned) {
+      claim.state.active = false;
+      publicationStates.delete(claim.contextId);
+    }
+  }
+
+  class Downstreams {
+    #states = new Map();
+
+    track(downstream, aborted) {
+      const state = { closing: undefined, reported: false };
+      this.#states.set(downstream, state);
+      if (aborted) {
+        this.close(downstream).catch(() => {});
+      }
+      return state;
+    }
+
+    close(downstream) {
+      const state = this.#states.get(downstream);
+      state.closing ??= downstream.close();
+      return state.closing;
+    }
+
+    abort() {
+      for (const downstream of this.#states.keys()) {
+        this.close(downstream).catch(() => {});
+      }
+    }
+
+    async settle(failure) {
+      for (const [downstream, state] of this.#states) {
+        if (state.reported) {
+          continue;
+        }
+        state.reported = true;
+        try {
+          await this.close(downstream);
+        } catch (cleanup) {
+          failure = { error: failure === undefined ? cleanup : cleanupFailure(failure.error, cleanup) };
+        }
+      }
+      return failure;
+    }
+  }
+
+  class PromiseCall {
+    constructor(calls, callId, publication, publicationContextId, scope, streamResult) {
+      this.calls = calls;
+      this.callId = callId;
+      this.streamResult = streamResult;
+      this.controller = new AbortController();
+      this.claim = claimPublication(publication, publicationContextId);
+      this.token = callbackStore(this.claim.state, this.claim.contextId, scope);
+      this.downstreams = new Downstreams();
+      calls.set(callId, this);
+    }
+
+    release() {
+      releasePublication(this.claim);
+      this.calls.delete(this.callId);
+    }
+
+    finish() {
+      this.release();
+      expireCallbackStore(this.token);
+    }
+
+    abort() {
+      this.downstreams.abort();
+      if (!this.streamResult) {
+        this.release();
+      }
+      this.controller.abort();
+    }
+  }
+
   function callPromise(
     fn,
     settle,
-    controllers,
+    calls,
     callId,
     arg0,
     spread,
@@ -242,62 +342,8 @@
     scope,
     streamResult,
   ) {
-    const controller = new AbortController();
-    controllers.set(callId, controller);
-    const downstreams = new Map();
-    const closeDownstream = (downstream) => {
-      const state = downstreams.get(downstream);
-      state.closing ??= downstream.close();
-      return state.closing;
-    };
-    const settleDownstreams = async (failure) => {
-      for (const [downstream, state] of downstreams) {
-        if (state.reported) continue;
-        state.reported = true;
-        try {
-          await closeDownstream(downstream);
-        } catch (cleanup) {
-          failure = { error: failure === undefined ? cleanup : cleanupFailure(failure.error, cleanup) };
-        }
-      }
-      return failure;
-    };
-    let publicationState = publicationContextId === undefined ? undefined : publicationStates.get(publicationContextId);
-    let ownsPublicationState = false;
-    if (publicationState === undefined) {
-      if (publication) {
-        publicationContextId = String(++nextPublicationContextId);
-        publicationState = { active: true };
-        publicationStates.set(publicationContextId, publicationState);
-        ownsPublicationState = true;
-      } else {
-        publicationState = INACTIVE_PUBLICATION;
-      }
-    }
-    const token = callbackStore(publicationState, publicationContextId, scope);
-    const releaseCall = () => {
-      if (ownsPublicationState) {
-        publicationState.active = false;
-        publicationStates.delete(publicationContextId);
-      }
-      controllers.delete(callId);
-    };
-    const settlePublication = () => {
-      releaseCall();
-      expireCallbackStore(token);
-    };
-    controller.signal.addEventListener(
-      'abort',
-      () => {
-        for (const downstream of downstreams.keys()) {
-          closeDownstream(downstream).catch(() => {});
-        }
-        if (!streamResult) {
-          releaseCall();
-        }
-      },
-      { once: true },
-    );
+    const call = new PromiseCall(calls, callId, publication, publicationContextId, scope, streamResult);
+    const { controller, downstreams } = call;
     const invokeNext = (value) => settle.next(nextState, resultJson(value), eventSanitizerContext.getStore()?.scope);
     const safeNext =
       nextState === undefined
@@ -306,11 +352,7 @@
           ? invokeNext
           : async (value) => {
               const downstream = await invokeNext(value);
-              const state = { closing: undefined, reported: false };
-              downstreams.set(downstream, state);
-              if (controller.signal.aborted) {
-                closeDownstream(downstream).catch(() => {});
-              }
+              const state = downstreams.track(downstream, controller.signal.aborted);
               return {
                 async *[Symbol.asyncIterator]() {
                   try {
@@ -321,7 +363,7 @@
                     }
                   } finally {
                     state.reported = true;
-                    await closeDownstream(downstream);
+                    await downstreams.close(downstream);
                   }
                 },
               };
@@ -335,7 +377,7 @@
       outcomeOf(() => fn(...args))
         .then(async (value) => {
           if (!streamResult) {
-            settlePublication();
+            call.finish();
             settle.resolve(callId, resultJson(value));
             return;
           }
@@ -371,21 +413,21 @@
               failure = { error: failure === undefined ? cleanup : cleanupFailure(failure.error, cleanup) };
             }
           }
-          failure = await settleDownstreams(failure);
+          failure = await downstreams.settle(failure);
           if (failure !== undefined) {
             throw failure.error;
           }
           settle.streamEnd(callId);
-          settlePublication();
+          call.finish();
         })
         .catch(async (error) => {
-          const failure = await settleDownstreams({ error });
-          settlePublication();
+          const failure = await downstreams.settle({ error });
+          call.finish();
           const { message, exceptionType } = describeError(failure.error);
           settle.reject(callId, failure.error, message, exceptionType);
         });
     };
-    eventSanitizerContext.run(token, invoke);
+    eventSanitizerContext.run(call.token, invoke);
   }
 
   return {
@@ -420,10 +462,10 @@
     },
 
     streamNext(poll, handle) {
+      const state = streamState(handle);
       const run = () => pinStream(handle, () => driveStream(poll, false));
-      const current = (streamQueues.get(poll) ?? Promise.resolve()).then(run, run);
-      streamQueues.set(poll, current);
-      return current;
+      state.queue = state.queue.then(run, run);
+      return state.queue;
     },
 
     pinWhile(handle, promise) {
@@ -435,13 +477,9 @@
     },
 
     streamClose(poll, handle) {
-      const existing = streamCloses.get(poll);
-      if (existing !== undefined) {
-        return existing;
-      }
-      const closing = Promise.resolve().then(() => pinStream(handle, () => driveStream(poll, true)));
-      streamCloses.set(poll, closing);
-      return closing;
+      const state = streamState(handle);
+      state.closing ??= Promise.resolve().then(() => pinStream(handle, () => driveStream(poll, true)));
+      return state.closing;
     },
 
     collector(fn) {
@@ -464,7 +502,7 @@
 
     promise(fn, resolve, reject, streamPush, streamEnd, next) {
       const settle = { resolve, reject, streamPush, streamEnd, next };
-      const controllers = new Map();
+      const calls = new Map();
       return function __nemo_relay_promise_wrapper(
         abort,
         callId,
@@ -477,13 +515,13 @@
         streamResult,
       ) {
         if (abort) {
-          controllers.get(callId)?.abort();
+          calls.get(callId)?.abort();
           return;
         }
         callPromise(
           fn,
           settle,
-          controllers,
+          calls,
           callId,
           arg0,
           spread,

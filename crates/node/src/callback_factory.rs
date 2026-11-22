@@ -275,18 +275,28 @@ pub(crate) fn callback_scope(env: &Env) -> napi::Result<Option<CallbackScope>> {
     callback_scope_from(env, call(env, |factories| &factories.callback_scope, ())?)
 }
 
+fn scope_arguments(env: &Env, scope: CallbackScope) -> napi::Result<(JsArg, JsArg, bool)> {
+    let publication_context_id = js_value(env, scope.publication_context_id.clone())?;
+    let publication_context_captured = scope.publication_context_captured;
+    Ok((
+        scope.into_js(env)?,
+        publication_context_id,
+        publication_context_captured,
+    ))
+}
+
 pub(crate) fn with_callback_scope<'env>(
     env: &'env Env,
     scope: CallbackScope,
     callback: &Function<JsArg, JsArg>,
 ) -> napi::Result<Unknown<'env>> {
-    let publication_context_id = js_value(env, scope.publication_context_id.clone())?;
-    let publication_context_captured = scope.publication_context_captured;
+    let (scope, publication_context_id, publication_context_captured) =
+        scope_arguments(env, scope)?;
     call(
         env,
         |factories| &factories.with_callback_scope,
         FnArgs::from((
-            scope.into_js(env)?,
+            scope,
             detach(env, callback),
             publication_context_id,
             publication_context_captured,
@@ -295,11 +305,6 @@ pub(crate) fn with_callback_scope<'env>(
 }
 
 pub(crate) fn set_callback_scope(env: &Env, scope: CallbackScope) -> napi::Result<bool> {
-    let publication_context_id = js_value(env, scope.publication_context_id.clone())?;
-    let publication_context_captured = scope.publication_context_captured;
-    factory(env, |factories| &factories.set_callback_scope)?.call(FnArgs::from((
-        scope.into_js(env)?,
-        publication_context_id,
-        publication_context_captured,
-    )))
+    factory(env, |factories| &factories.set_callback_scope)?
+        .call(FnArgs::from(scope_arguments(env, scope)?))
 }
