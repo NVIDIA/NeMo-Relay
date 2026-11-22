@@ -12,6 +12,7 @@ import { spawn, type ChildProcess } from 'node:child_process';
 import { readFileSync } from 'node:fs';
 import { isAbsolute } from 'node:path';
 import { createInterface } from 'node:readline';
+import { setTimeout as delay } from 'node:timers/promises';
 
 import { registerChatTransports, type ProviderRegistry, type ChatProvider } from './provider-transport.ts';
 
@@ -53,7 +54,7 @@ type McpLease = {
 type HookOutcome =
   | { kind: 'allow'; body: Record<string, unknown> }
   | { kind: 'block'; reason: string }
-  | { kind: 'fault'; reason: string };
+  | { kind: 'fault'; reason: string; routePending?: true };
 
 type PiModel = {
   id: string;
@@ -214,7 +215,18 @@ export default function managedNemoRelayPi(pi: ExtensionAPI): void {
   async function sendObservation(body: Record<string, unknown>): Promise<void> {
     try {
       const active = await runtime();
-      const outcome = await postHook(active, body);
+      const starting = body.hook_event_name === 'session_start';
+      const deadline = performance.now() + MCP_READY_TIMEOUT_MS;
+      let outcome = await postHook(active, body);
+      // MCP initialize acquires a broker reference. The worker may still be
+      // starting. Only retry the broker's pre-dispatch refusal, so a session
+      // start that reached a worker is never replayed.
+      while (starting && outcome.kind === 'fault' && outcome.routePending) {
+        const remaining = deadline - performance.now() - 1_000;
+        if (remaining <= 0) break;
+        await delay(1_000);
+        outcome = await postHook(active, body, Math.min(HOOK_TIMEOUT_MS, remaining));
+      }
       if (outcome.kind !== 'allow') {
         console.error(`NeMo Relay managed hook was not accepted: ${outcome.reason}`);
       }
@@ -320,8 +332,7 @@ export default function managedNemoRelayPi(pi: ExtensionAPI): void {
         ...(event.previousSessionFile ? { previous_session_file: event.previousSessionFile } : {}),
       }),
     );
-    // Registration happens after the MCP initialize response. A provider call
-    // therefore cannot reach the daemon before this process owns a broker route.
+    // Wait for the initial hook to reach the route before registering providers.
     registerManagedProvider(active, context.model, context, 'session_start');
   });
 
@@ -854,7 +865,11 @@ function waitForExit(child: ChildProcess, timeoutMs: number): Promise<boolean> {
   });
 }
 
-async function postHook(runtime: Runtime, payload: Record<string, unknown>): Promise<HookOutcome> {
+async function postHook(
+  runtime: Runtime,
+  payload: Record<string, unknown>,
+  timeoutMs = HOOK_TIMEOUT_MS,
+): Promise<HookOutcome> {
   let encoded: string;
   try {
     encoded = JSON.stringify(payload);
@@ -865,7 +880,7 @@ async function postHook(runtime: Runtime, payload: Record<string, unknown>): Pro
     return { kind: 'fault', reason: 'hook payload exceeds the managed payload limit' };
   }
   const controller = new AbortController();
-  const timer = setTimeout(() => controller.abort(), HOOK_TIMEOUT_MS);
+  const timer = setTimeout(() => controller.abort(), timeoutMs);
   try {
     const response = await fetch(`${runtime.config.daemonAddress}/hooks/pi`, {
       method: 'POST',
@@ -878,6 +893,10 @@ async function postHook(runtime: Runtime, payload: Record<string, unknown>): Pro
       signal: controller.signal,
     });
     const decoded = await boundedJson(response);
+    if (response.status === 503 && response.headers.get('retry-after') === '1' &&
+      isRecord(decoded) && isRecord(decoded.error) && decoded.error.message === 'route is not ready') {
+      return { kind: 'fault', reason: 'daemon route is not ready', routePending: true };
+    }
     if (response.ok) {
       if (!isRecord(decoded)) {
         return { kind: 'fault', reason: 'daemon returned a non-object success body' };
@@ -894,7 +913,7 @@ async function postHook(runtime: Runtime, payload: Record<string, unknown>): Pro
   } catch (error) {
     const reason =
       error instanceof Error && error.name === 'AbortError'
-        ? `daemon did not answer within ${HOOK_TIMEOUT_MS}ms`
+        ? `daemon did not answer within ${timeoutMs}ms`
         : `daemon hook request failed: ${safeError(error)}`;
     return { kind: 'fault', reason };
   } finally {

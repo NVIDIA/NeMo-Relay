@@ -109,9 +109,16 @@ test('managed Pi shutdown branches preserve ordering and quit releases without r
     },
   };
   const bodies = [];
+  let startAttempts = 0;
   const originalFetch = globalThis.fetch;
   globalThis.fetch = async (_url, request) => {
-    bodies.push(JSON.parse(request.body));
+    const body = JSON.parse(request.body);
+    if (body.hook_event_name === 'session_start' && ++startAttempts === 1) {
+      return Response.json({ error: { message: 'route is not ready' } }, {
+        status: 503, headers: { 'Retry-After': '1' },
+      });
+    }
+    bodies.push(body);
     return new Response('{}', { status: 200 });
   };
   try {
@@ -119,6 +126,7 @@ test('managed Pi shutdown branches preserve ordering and quit releases without r
     installManagedNemoRelayPi(pi, async () => runtime);
     const context = { cwd: '/workspace', sessionManager: { getSessionId: () => 'session' } };
     await handlers.get('session_start')({ type: 'session_start', reason: 'startup' }, context);
+    assert.equal(startAttempts, 2, 'session startup waits for the broker to accept the hook');
     await Promise.all([
       handlers.get('turn_start')({ type: 'turn_start', turnIndex: 0 }, context),
       handlers.get('turn_start')({ type: 'turn_start', turnIndex: 1 }, context),
