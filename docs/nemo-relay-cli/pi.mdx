@@ -252,6 +252,7 @@ NEMO_RELAY_PI_GATEWAY_URL=http://127.0.0.1:4040 \
 | --- | --- | --- |
 | `NEMO_RELAY_PI_GATEWAY_URL` | `http://127.0.0.1:4040` | Gateway base URL |
 | `NEMO_RELAY_PI_TIMEOUT_MS` | `5000` | Per-request timeout |
+| `NEMO_RELAY_PI_TERMINATE_ON_DENY` | unset | Set to `1` to request that Pi stop automatic model follow-up after explicit policy denials. Pi 1.6.0 stops when every finalized tool result in the batch requests termination. A successful sibling or enclosing codemode call can continue the turn. Inline shell, gateway faults, and invalid rewrites retain their usual handling. Pi 0.84.0 continues after a denial. |
 | `NEMO_RELAY_PI_FAIL` | `open` | Set to `closed` to block tool calls when the gateway is unreachable |
 | `NEMO_RELAY_PI_REDIRECT` | `match` | `force` redirects without verifying the upstream; `off` disables redirection |
 | `NEMO_RELAY_PI_OPENAI_UPSTREAM` | unset | What the gateway forwards OpenAI-compatible traffic to. Set by `nemo-relay run` |

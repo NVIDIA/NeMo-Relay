@@ -122,7 +122,7 @@ type ToolCallEvent = {
   toolName: string;
   input: Record<string, unknown>;
 };
-type ToolCallResult = { block: true; reason: string };
+type ToolCallResult = { block: true; reason: string; terminate?: boolean };
 type UserBashEvent = {
   type: 'user_bash';
   command: string;
@@ -486,7 +486,9 @@ export default function managedNemoRelayPi(pi: ExtensionAPI): void {
       return blockedInfrastructure(event.toolName, outcome.reason);
     }
     if (outcome.kind === 'block') {
-      return { block: true, reason: outcome.reason };
+      return { block: true, reason: outcome.reason,
+        ...(process.env.NEMO_RELAY_PI_TERMINATE_ON_DENY === '1' ? { terminate: true } : {}),
+      };
     }
     const transformed = decideManagedToolTransform(outcome.body, event.toolCallId, event.input);
     if (transformed.kind === 'invalid') {

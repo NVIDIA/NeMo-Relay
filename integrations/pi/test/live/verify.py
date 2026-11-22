@@ -21,8 +21,9 @@ def verify(baseline: Path, current: Path, relay: Path) -> None:
         if actual != version:
             raise ValueError(f"Expected Pi {version}, got {actual}")
         subprocess.run(["node", HERE / "user-bash.mjs", pi, version], check=True)
+        subprocess.run(["node", HERE / "terminate-on-deny.mjs", pi, version], check=True)
         subprocess.run([sys.executable, HERE / "managed_builtins.py", "--pi", pi, "--default-profile"], check=True)
-        print(f"PASS Pi {version}: shell and managed default launch", flush=True)
+        print(f"PASS Pi {version}: shell, tool denial and managed default launch", flush=True)
 
     with tempfile.TemporaryDirectory(prefix="relay-pi-baseline-") as directory:
         provider_protocols.run(

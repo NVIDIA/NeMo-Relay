@@ -170,6 +170,7 @@ export type ToolCallEvent = {
  */
 export type ToolCallEventResult = {
   block?: boolean;
+  terminate?: boolean;
   reason?: string;
 };
 

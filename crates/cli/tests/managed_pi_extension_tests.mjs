@@ -236,6 +236,38 @@ test('managed Pi preserves the caller on nested MCP rewrites and completions', a
   }
 });
 
+test('managed Pi termination applies only to an explicit policy denial', async (t) => {
+  const key = 'NEMO_RELAY_PI_TERMINATE_ON_DENY';
+  const previous = process.env[key];
+  t.after(() => {
+    if (previous === undefined) delete process.env[key];
+    else process.env[key] = previous;
+  });
+  let status = 403;
+  t.mock.method(globalThis, 'fetch', async () => Response.json({
+    error: { type: 'nemo_relay_guardrail_rejected', reason: 'fixture policy' },
+  }, { status }));
+  const handlers = new Map();
+  const { installManagedNemoRelayPi } = await loadLifecycleTestApi();
+  installManagedNemoRelayPi({ on: (name, handler) => handlers.set(name, handler) }, async () => ({
+    config: { daemonAddress: 'https://relay.example.com' },
+    credential: CREDENTIAL,
+    lease: { ensureReady: async () => {} },
+  }));
+  const gate = () => handlers.get('tool_call')(
+    { toolCallId: 'call', toolName: 'read', input: { path: 'fixture' } },
+    { sessionManager: { getSessionId: () => 'session' } },
+  );
+  delete process.env[key];
+  assert.deepEqual(await gate(), { block: true, reason: 'fixture policy' });
+  process.env[key] = '1';
+  assert.deepEqual(await gate(), { block: true, reason: 'fixture policy', terminate: true });
+  status = 503;
+  const fault = await gate();
+  assert.equal(fault.block, true);
+  assert.equal(fault.terminate, undefined);
+});
+
 test('managed Pi tool rewrites require the exact call ID and recursively preserve shape', () => {
   const current = { path: '/before', flags: [true, { retries: 2 }] };
   assert.deepEqual(
