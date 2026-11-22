@@ -5,7 +5,7 @@ import assert from 'node:assert/strict';
 import { chmod, copyFile, mkdtemp, readFile, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
-import { setTimeout as delay } from 'node:timers/promises';
+import { setImmediate, setTimeout as delay } from 'node:timers/promises';
 import { pathToFileURL } from 'node:url';
 import test from 'node:test';
 
@@ -308,6 +308,7 @@ test('managed Pi aborts queued and in-flight gates without replay or late rewrit
   const second = handlers.get('tool_call')({ ...sent, toolCallId: 'queued' }, context);
   const turn = handlers.get('turn_end')({ turnIndex: 0 }, context);
   controller.abort();
+  let nextTurn;
   try {
     const results = await Promise.race([
       Promise.all([first, second, turn]),
@@ -318,11 +319,20 @@ test('managed Pi aborts queued and in-flight gates without replay or late rewrit
       assert.equal(outcome.block, true);
       assert.match(outcome.reason, /cancelled/);
     }
+
+    const nextContext = { ...context, signal: new AbortController().signal };
+    nextTurn = handlers.get('turn_start')({ turnIndex: 1 }, nextContext);
+    const pending = Symbol('pending');
+    assert.equal(
+      await Promise.race([nextTurn, setImmediate(pending)]),
+      pending,
+      'the next turn must wait for the cancelled turn to drain',
+    );
     assert.deepEqual(posts.map(post => post.hook_event_name), ['tool_call']);
   } finally {
     decision.resolve(Response.json({ tool_call: { tool_call_id: 'sent', input: { path: 'late' } } }));
   }
-  await handlers.get('turn_start')({ turnIndex: 1 }, { ...context, signal: undefined });
+  await nextTurn;
   assert.equal(sent.input.path, 'original');
   assert.deepEqual(posts.map(post => post.hook_event_name), ['tool_call', 'turn_end', 'turn_start']);
 });
