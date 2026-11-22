@@ -1770,6 +1770,31 @@ def test_the_extra_request_body_reaches_api_specific_and_an_edit_there_comes_bac
     assert options.headers == {"x-adk": "own"}
 
 
+def test_appended_call_with_reused_name_does_not_inherit_an_earlier_signature() -> None:
+    request = LlmRequest(
+        model="gemini-2.5-flash",
+        contents=[types.Content(role="model", parts=[_signed_call("lookup", "Paris", b"sig-paris")])],
+    )
+
+    def append_call(messages: list[nemo_relay.JsonObject]) -> None:
+        messages.append(
+            {
+                "role": "assistant",
+                "content": None,
+                "tool_calls": [
+                    {
+                        "type": "function",
+                        "id": "lookup",
+                        "function": {"name": "lookup", "arguments": '{"location":"Rome"}'},
+                    }
+                ],
+            }
+        )
+
+    edited = _edited(request, append_call)
+    assert [present(turn.parts)[0].thought_signature for turn in edited.contents] == [b"sig-paris", None]
+
+
 def test_repeated_idless_calls_in_separate_edited_turns_reject_ambiguous_signatures() -> None:
     request = LlmRequest(
         model="gemini-2.5-flash",

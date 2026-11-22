@@ -1366,12 +1366,15 @@ def _keep_call_fields(contents: Sequence[JsonObject], originals: Sequence[JsonOb
     Merge by a unique id or name. Reject ambiguous copies of source part metadata into newly rebuilt turns.
     """
     found: dict[str, JsonObject | None] = {}
-    with_part_fields: set[str] = set()
-    for part in (part for content in originals for part in _objects(content.get("parts"), field="ADK content parts")):
-        if (key := _call_key(part)) is not None:
-            found[key] = None if key in found else part
-            if part.keys() - {"function_call"}:
-                with_part_fields.add(key)
+    unclaimed_fields: set[str] = set()
+    # Unchanged turns are reused verbatim. Their signatures already have an owner.
+    retained = {id(content) for content in contents}
+    for content in originals:
+        for part in _objects(content.get("parts"), field="ADK content parts"):
+            if (key := _call_key(part)) is not None:
+                found[key] = None if key in found else part
+                if id(content) not in retained and part.keys() - {"function_call"}:
+                    unclaimed_fields.add(key)
     counts = Counter(
         key
         for content in contents
@@ -1389,7 +1392,7 @@ def _keep_call_fields(contents: Sequence[JsonObject], originals: Sequence[JsonOb
             if counts[key] == 1 and original is not None:
                 parts[position] = {**original, **part}
                 restored = True
-            elif index in unaligned and key in with_part_fields:
+            elif index in unaligned and key in unclaimed_fields:
                 raise ValueError("Cannot preserve ADK part metadata for an ambiguous repeated function call")
         if restored:
             content["parts"] = [*parts]
