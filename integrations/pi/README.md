@@ -465,7 +465,8 @@ than cutting the arguments.
 
 **Subagents.** pi ships no nested-agent hook of its own — the extension has
 nothing to derive a subagent id from — so `subagent_start` / `subagent_end` are
-empty for pi and every tool span parents to the turn. The multi-process case is
+empty for pi. A tool span parents to the active tool identified by
+`parent_tool_call_id`, or to the turn when no tool parent is resolved. The multi-process case is
 worth stating separately: a child pi process running this extension resolves its
 *own* session id and posts under it, so it does not appear as a subagent of the
 parent. It appears as an unrelated session.

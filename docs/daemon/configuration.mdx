@@ -606,7 +606,8 @@ provision its new trusted digest separately.
 
 The generated Pi extension now forwards the parent tool call ID for nested
 calls. To upgrade a bundle that includes Pi, generate it in a new directory,
-deploy it, and provision its newly printed digest.
+deploy it, provision its newly printed digest separately, and update the managed
+Pi launch command's `-e` path to the extension in the new bundle directory.
 </Warning>
 
 Create a bundle once from fixed deployment values. Repeat `--agent` to select

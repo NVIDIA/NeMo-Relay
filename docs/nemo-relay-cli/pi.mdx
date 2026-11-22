@@ -335,7 +335,9 @@ recorded on the session scope rather than opening an empty turn to hold it.
 | *(after the `user_bash` verdict)* | `user_bash_end`, a tool span end. Synthesized by the extension the moment the gate decides, **before the command runs** — pi reports no completion for inline shell, so this span measures the policy decision and not the shell command's duration |
 
 Pi 1.1.0 and later report `aborted` on `agent_settled`. A tool completion carries
-`pi_duration_ms` when Pi measured its execution. This excludes gateway and hook transport time.
+`pi_duration_ms` when Pi measured its execution. It excludes the measured call's
+own pre/post hook round trips to the gateway. It includes nested hook round trips
+and MCP transport performed inside the awaited `execute()` body.
 
 For pi's structured tool results, the extension joins text parts in order and
 omits image and other non-text parts. **Tool-result text is truncated at 2000
@@ -502,11 +504,14 @@ type a bang prefix into.
 
 ## Model Redirection
 
-pi has no base-URL flag and no generic environment override — it resolves a base
-URL per model from a generated catalog — so the extension points the active
-model's provider at the gateway directly, with
-`registerProvider(provider, { baseUrl })`. pi rewrites the URL of every existing
-model for that provider and keeps their API, headers, costs and context windows.
+Pi resolves a base URL per model from its catalog. On Pi 1.6.0, the extension
+preserves those model URLs and redirects matching chat POSTs to Relay through
+Pi's provider transport hook. Other operations retain their original routes.
+
+If the transport hook is unavailable, the extension falls back to
+`registerProvider(provider, { baseUrl })`. This fallback rewrites the URL of every
+existing model for that provider while keeping its API, headers, costs and
+context windows.
 
 The gateway forwards to one statically configured upstream per API family, set by
 `--openai-base-url` and `--anthropic-base-url`. Redirecting a model whose
