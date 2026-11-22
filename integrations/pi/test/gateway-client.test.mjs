@@ -20,7 +20,7 @@ import { after, before, describe, it, mock } from 'node:test';
 import childProcess from 'node:child_process';
 import { syncBuiltinESMExports } from 'node:module';
 
-const { postHook, resolveFault, configFromEnv } = await import('../src/gateway-client.ts');
+const { closeHookStream, postHook, resolveFault, configFromEnv } = await import('../src/gateway-client.ts');
 
 /** Start a server that replies with `handler(requestBody)`. */
 function serve(handler) {
@@ -141,6 +141,28 @@ describe('gateway client wire contract', () => {
   });
 
   after(() => ctx.server.close());
+
+  it('reuses a stream and retires it after an oversized response', async () => {
+    const config = baseConfig(url, { streamHooks: true });
+    const pid = async () => {
+      const response = await postHook(config, { hook_event_name: 'fixture_process_id' });
+      assert.equal(response.kind, 'allow');
+      assert.ok(Number.isInteger(response.body.pid));
+      return response.body.pid;
+    };
+    try {
+      const first = await pid();
+      assert.equal(await pid(), first);
+      const outcome = await postHook(config, {
+        hook_event_name: 'fixture_output_overflow', stream: 'stdout',
+      });
+      assert.equal(outcome.kind, 'fault');
+      assert.match(outcome.detail, /output limit/);
+      assert.notEqual(await pid(), first);
+    } finally {
+      closeHookStream(config);
+    }
+  });
 
   // A 2xx body may carry a required argument transform, so an unreadable one is not
   // an empty allow -- treating it as one runs the original arguments and silently

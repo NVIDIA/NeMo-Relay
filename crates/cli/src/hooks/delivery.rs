@@ -1,7 +1,7 @@
 // SPDX-FileCopyrightText: Copyright (c) 2026, NVIDIA CORPORATION & AFFILIATES. All rights reserved.
 // SPDX-License-Identifier: Apache-2.0
 
-use std::io::Read;
+use std::io::{BufRead, Read, Write};
 
 #[cfg(test)]
 use reqwest::header::CONTENT_TYPE;
@@ -22,33 +22,69 @@ use super::{GatewayMode, HOOK_FORWARD_TIMEOUT, HookForwardRequest};
 
 /// Pi invokes the same credentialed sender as native command hooks, but consumes the raw
 /// HTTP verdict itself so transport faults retain the extension's existing failure policy.
-pub(crate) async fn hook_forward_pi(command: HookForwardRequest) -> Result<(), CliError> {
-    let operational = OperationalContext::new();
+pub(crate) async fn hook_forward_pi(
+    command: HookForwardRequest,
+    stream: bool,
+) -> Result<(), CliError> {
     let destination = hook_destination(&command);
     // The challenge accepts any caller fingerprint, including on a standalone gateway.
     // Reuse the pinned TLS sender so the hook payload reaches only an authenticated Relay.
     let gateway = transparent_gateway_spec(&destination.gateway_url)?;
-    let input = read_hook_payload(
-        crate::configuration::DEFAULT_MAX_HOOK_PAYLOAD_BYTES,
-        &operational,
-    )?;
+    let limit = crate::configuration::DEFAULT_MAX_HOOK_PAYLOAD_BYTES;
+    if !stream {
+        let input = read_hook_payload(limit, &OperationalContext::new())?;
+        let response =
+            forward_pi_payload(&command, &gateway, &destination.gateway_url, input).await?;
+        println!("{response}");
+        return Ok(());
+    }
+
+    // Keep one CLI process per Pi runtime. Each frame still performs the authenticated,
+    // pinned delivery of a one-shot hook. A failed delivery is never replayed.
+    let mut stdin = std::io::stdin().lock();
+    loop {
+        let mut frame = Vec::new();
+        (&mut stdin)
+            .take((limit + 1) as u64)
+            .read_until(b'\n', &mut frame)?;
+        if frame.is_empty() {
+            return Ok(());
+        }
+        if frame.pop() != Some(b'\n') {
+            return Err(CliError::Install(
+                "invalid or oversized Pi hook frame".into(),
+            ));
+        }
+        let input = String::from_utf8(frame)
+            .map_err(|error| CliError::Install(format!("Pi hook frame is not UTF-8: {error}")))?;
+        let result = forward_pi_payload(&command, &gateway, &destination.gateway_url, input).await;
+        let response =
+            result.unwrap_or_else(|error| serde_json::json!({"transportError": error.to_string()}));
+        let mut stdout = std::io::stdout().lock();
+        writeln!(stdout, "{response}")?;
+        stdout.flush()?;
+    }
+}
+
+async fn forward_pi_payload(
+    command: &HookForwardRequest,
+    gateway: &crate::bootstrap::GatewaySpec,
+    gateway_url: &str,
+    input: String,
+) -> Result<Value, CliError> {
     let response = send_verified_hook_forward_request_with_context(
-        &command,
-        &gateway,
-        &destination.gateway_url,
+        command,
+        gateway,
+        gateway_url,
         input,
-        &operational,
+        &OperationalContext::new(),
         false,
     )
     .await?
     .map_err(|error| CliError::Launch(error.to_string()))?;
     let body = String::from_utf8(response.body)
         .map_err(|error| CliError::Install(format!("pi hook response is not UTF-8: {error}")))?;
-    println!(
-        "{}",
-        serde_json::json!({"status": response.status, "body": body})
-    );
-    Ok(())
+    Ok(serde_json::json!({"status": response.status, "body": body}))
 }
 
 pub(crate) async fn hook_forward(mut command: HookForwardRequest) -> Result<(), CliError> {

@@ -27,10 +27,16 @@ import { mock } from 'node:test';
 
 const fixture = fileURLToPath(new URL('./fixtures/hook-forward.mjs', import.meta.url));
 const realExecFile = childProcess.execFile;
+const realSpawn = childProcess.spawn;
 mock.method(childProcess, 'execFile', (command, args, options, callback) =>
   command === fixture
     ? realExecFile(process.execPath, [fixture, ...args], options, callback)
     : realExecFile(command, args, options, callback),
+);
+mock.method(childProcess, 'spawn', (command, args, options) =>
+  command === fixture
+    ? realSpawn(process.execPath, [fixture, ...args], options)
+    : realSpawn(command, args, options),
 );
 syncBuiltinESMExports();
 process.env.NEMO_RELAY_PI_COMMAND = fixture;

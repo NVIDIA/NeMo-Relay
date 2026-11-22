@@ -59,6 +59,7 @@ import {
   type GatewayConfig,
   configFromEnv,
   postAndForget,
+  closeHookStream,
   postHook,
   resolveFault,
 } from './src/gateway-client.ts';
@@ -402,6 +403,7 @@ export default function nemoRelayExtension(pi: ExtensionAPI): void {
     if (event.reason === 'reload') {
       // Still drain: posts already queued belong to the continuing session.
       await chain;
+      if (config) closeHookStream(config);
       return;
     }
     emit(ctx, {
@@ -413,6 +415,7 @@ export default function nemoRelayExtension(pi: ExtensionAPI): void {
     // queue is serial, this also guarantees session_shutdown is the last post
     // to reach the gateway rather than merely one of the last.
     await chain;
+    if (config) closeHookStream(config);
   });
 
   // ---------------------------------------------------------------------------
