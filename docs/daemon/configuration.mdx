@@ -603,6 +603,10 @@ The generated Codex bundle captures `SessionEnd` and `Interrupt` and requires
 `codex-cli` 0.150.0 or newer. Older bundles containing Codex no longer match the
 canonical bytes. Generate a replacement in a new directory, redeploy it, and
 provision its new trusted digest separately.
+
+The generated Pi extension now forwards the parent tool call ID for nested
+calls. To upgrade a bundle that includes Pi, generate it in a new directory,
+deploy it, and provision its newly printed digest.
 </Warning>
 
 Create a bundle once from fixed deployment values. Repeat `--agent` to select

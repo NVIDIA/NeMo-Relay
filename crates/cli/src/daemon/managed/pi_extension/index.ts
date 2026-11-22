@@ -101,6 +101,7 @@ type ToolExecutionStartEvent = {
 type ToolExecutionEndEvent = {
   type: 'tool_execution_end';
   toolCallId: string;
+  parentToolCallId?: string;
   toolName: string;
   result: unknown;
   isError: boolean;
@@ -108,6 +109,7 @@ type ToolExecutionEndEvent = {
 type ToolCallEvent = {
   type: 'tool_call';
   toolCallId: string;
+  parentToolCallId?: string;
   toolName: string;
   input: Record<string, unknown>;
 };
@@ -417,6 +419,7 @@ export default function managedNemoRelayPi(pi: ExtensionAPI): void {
           active,
           payload(context, 'tool_call', {
             tool_call_id: event.toolCallId,
+            parent_tool_call_id: event.parentToolCallId,
             tool_name: event.toolName,
             input: event.input,
             ...attribution(),
@@ -447,6 +450,7 @@ export default function managedNemoRelayPi(pi: ExtensionAPI): void {
       observe(
         payload(context, 'tool_arguments_transformed', {
           tool_call_id: event.toolCallId,
+          parent_tool_call_id: event.parentToolCallId,
           tool_name: event.toolName,
           ...attribution(),
         }),
@@ -461,6 +465,7 @@ export default function managedNemoRelayPi(pi: ExtensionAPI): void {
     observe(
       payload(context, 'tool_execution_end', {
         tool_call_id: event.toolCallId,
+        parent_tool_call_id: event.parentToolCallId,
         tool_name: toolName,
         result: summarizeManagedToolResult(event.result, event.isError),
         status: event.isError ? 'error' : 'ok',

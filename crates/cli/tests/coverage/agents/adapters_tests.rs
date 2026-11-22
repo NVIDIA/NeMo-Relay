@@ -1384,7 +1384,7 @@ fn mcp_tool_hooks_normalize_method_for_supported_harnesses() {
 
 #[test]
 fn mcp_metadata_defaults_preserve_explicit_values_and_reject_ambiguous_names() {
-    for kind in [AgentKind::ClaudeCode, AgentKind::Codex] {
+    for kind in [AgentKind::ClaudeCode, AgentKind::Codex, AgentKind::Pi] {
         for name in [
             "Bash",
             "mcp__",
@@ -1405,11 +1405,9 @@ fn mcp_metadata_defaults_preserve_explicit_values_and_reject_ambiguous_names() {
             assert_eq!(metadata, before);
         }
     }
-    for kind in [AgentKind::Pi, AgentKind::Gateway] {
-        let mut metadata = json!({});
-        apply_mcp_tool_metadata(&mut metadata, kind, "mcp__docs__search");
-        assert_eq!(metadata, json!({}));
-    }
+    let mut metadata = json!({});
+    apply_mcp_tool_metadata(&mut metadata, AgentKind::Gateway, "mcp__docs__search");
+    assert_eq!(metadata, json!({}));
 }
 
 #[test]

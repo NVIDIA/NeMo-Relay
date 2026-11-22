@@ -368,13 +368,21 @@ entry, so a file count loses it.
 pi's lifecycle is `session -> agent run -> turn -> message | tool execution`.
 Two shapes make a naive mapping wrong.
 
+**Nested tools (Pi 0.99.0 and later).** Native MCP, codemode, and other tools
+using `ctx.executeTool()` use the same `tool_call` gate as a direct tool call.
+Both extension packages forward Pi's optional `parentToolCallId` as
+`parent_tool_call_id`. The gateway resolves it against active calls in the
+same session and retains the ID in tool metadata even when the parent was
+unobserved. MCP tool names follow `mcp__<server>__<tool>`. A Pi 1.6.0 smoke
+run covered direct and parallel nested MCP calls.
+
 **Agent-run re-entry.** One prompt can re-enter the agent run several times
 (provider retry, post-compaction, queued follow-up), and pi's `turnIndex` resets
 to 0 each time. The extension-facing `agent_end` carries no `willRetry` marker,
 so a retry cannot be detected there — `session_before_compact` is the one hook
 that announces one in advance, and only for the compaction case;
 `agent_settled` is the only event that fires exactly once per logical run. The
-gateway's own model is flat (session -> turn -> tool) and assigns its own
+gateway assigns its own
 monotonic turn index, so the extension sends `attempt_index` and a
 session-monotonic `turn_seq` on every attributable hook — they are the only way
 to recover which attempt a turn or tool call belonged to.
@@ -386,11 +394,8 @@ call id, name, arguments, result and metadata and discard the payload entirely,
 so without it the two keys would be accepted on the wire and then dropped. Read
 them from `metadata` on scopes and spans, and from either place on marks.
 
-The consequence is worth stating plainly: **re-entry is not nested.** The
-gateway model stays flat and gains no attempt level, because that model is
-shared with Codex and Claude Code, which have no equivalent concept. Two
-attempts of one prompt appear as more turns under one session, distinguished by
-`attempt_index` — not as two subtrees.
+Two attempts of one prompt appear as turns in the same session. Each turn's
+`attempt_index` identifies the attempt it belongs to.
 
 **Known limitation.** The counters live in the extension factory's closure and
 pi re-runs the factory on `/reload` with `moduleCache: false`, while the session
@@ -450,8 +455,8 @@ which is why only results are bounded.
 The ceiling is therefore the gateway's, not the extension's:
 `gateway.max_hook_payload_bytes`, 20 MiB by default. A post above it is rejected
 with HTTP 413 before any event exists, so the call is decided by
-`NEMO_RELAY_PI_FAIL` — under `open` it runs ungated, leaving a span synthesized
-from `tool_execution_end` with no arguments. Model-authored arguments do not
+`NEMO_RELAY_PI_FAIL` — under `open` it runs ungated, and Relay records a completion mark if it receives
+`tool_execution_end`. Model-authored arguments do not
 approach that ceiling; if some tool ever does, raise the gateway limit rather
 than cutting the arguments.
 

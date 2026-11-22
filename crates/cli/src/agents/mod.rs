@@ -46,21 +46,11 @@ pub(super) struct AgentDescriptor {
 ///
 /// Codex and Claude Code both install NeMo Relay through a plugin marketplace
 /// (`codex plugin add`, `claude plugin install`) backed by a generated manifest.
-/// pi has none of that: it has no `pi plugin` verb, no marketplace, and no MCP
-/// client for a plugin-owned server to serve. Extensions are installed with
+/// Pi installs Relay as an extension. Its native MCP client consumes server
+/// configuration independently of extension installation. Extensions are installed with
 /// `pi install <source>` or by placing a file in an auto-discovered directory.
 ///
-/// Rather than synthesize manifests pi will never read, the marketplace surface
-/// rejects pi explicitly and the gateway surface (hooks, launch, doctor) is
-/// implemented for real.
-///
-/// "No marketplace" is not "nothing to install into", and this constant used to
-/// imply otherwise. `nemo-relay install pi` writes a package directory into pi's
-/// own auto-discovery location (`agents::pi::install`), which is a real
-/// persistent install by a route that has no marketplace in it. What stays
-/// unsupported is everything below: a generated plugin manifest, a host
-/// registration verb, and a plugin-owned MCP server, none of which pi has a
-/// consumer for.
+/// `nemo-relay install pi` writes directly to that discovery directory.
 pub(crate) const PI_MARKETPLACE_UNSUPPORTED: &str = "pi has no plugin marketplace; \
      `nemo-relay install pi` writes the extension into pi's own auto-discovery directory \
      instead, and `nemo-relay pi` runs pi against it";
@@ -478,7 +468,7 @@ pub(crate) fn plugin_mcp_config(
     match agent {
         CodingAgent::Codex => codex::assets::mcp_config(server),
         CodingAgent::ClaudeCode => Ok(claude::assets::mcp_config(server)),
-        // pi ships no MCP client, so a plugin-owned server would have no consumer.
+        // Pi reads mcp.json separately from its extension package.
         CodingAgent::Pi => Err(PI_MARKETPLACE_UNSUPPORTED.to_string()),
     }
 }

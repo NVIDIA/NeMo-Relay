@@ -32,14 +32,12 @@
  *    one in advance, and only for the compaction case. `agent_settled` is the
  *    only event that fires exactly once per logical run. Every attributable
  *    hook therefore carries an attempt counter and a session-monotonic turn
- *    sequence, because the gateway's own model is flat (session -> turn ->
- *    tool) and cannot express the nesting. They travel as payload keys and the
- *    gateway promotes them into event metadata, which is what makes them
- *    survive on tool spans.
+ *    sequence. The gateway records both in tool span metadata so each tool
+ *    can be traced back to its attempt.
  * 2. *Concurrent tools.* pi preflights sibling calls sequentially then executes
  *    them concurrently, so `tool_execution_end` arrives out of submission order.
- *    All per-call state is keyed by `toolCallId`, which is the only correlator
- *    pi provides.
+ *    All per-call state is keyed by `toolCallId`. Pi supplies a separate
+ *    `parentToolCallId` when a tool invokes another tool.
  *
  * Load it with `pi -e <path-to-this-file>`, or let `nemo-relay run --agent pi` do it.
  *
@@ -509,6 +507,7 @@ export default function nemoRelayExtension(pi: ExtensionAPI): void {
         postHook(active, {
           hook_event_name: 'tool_call',
           tool_call_id: event.toolCallId,
+          parent_tool_call_id: event.parentToolCallId,
           tool_name: event.toolName,
           input: event.input,
           ...attribution(),
@@ -534,6 +533,7 @@ export default function nemoRelayExtension(pi: ExtensionAPI): void {
           emit(ctx, {
             hook_event_name: 'tool_arguments_transformed',
             tool_call_id: event.toolCallId,
+            parent_tool_call_id: event.parentToolCallId,
             tool_name: event.toolName,
             ...attribution(),
           });
@@ -560,6 +560,7 @@ export default function nemoRelayExtension(pi: ExtensionAPI): void {
     emit(ctx, {
       hook_event_name: 'tool_execution_end',
       tool_call_id: event.toolCallId,
+      parent_tool_call_id: event.parentToolCallId,
       tool_name: toolName,
       result: summarize(event.result, event.isError),
       status: event.isError ? 'error' : 'ok',

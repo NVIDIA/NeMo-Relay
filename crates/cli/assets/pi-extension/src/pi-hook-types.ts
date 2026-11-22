@@ -5,7 +5,8 @@
  * Structural mirror of the subset of pi's extension API this integration uses.
  *
  * Mirrored from pi `v0.84.0` (`a5f43bf8a`),
- * `packages/coding-agent/src/core/extensions/types.ts`. Declaring the shapes
+ * `packages/coding-agent/src/core/extensions/types.ts`, with the optional
+ * nested tool call parent introduced in pi v0.99.0. Declaring the shapes
  * locally -- the same approach `integrations/openclaw/src/openclaw-hook-types.ts`
  * takes for its host agent -- keeps this directory buildable without depending
  * on the pi package, which matters because pi ships breaking changes through
@@ -121,6 +122,7 @@ export type ToolExecutionStartEvent = {
 export type ToolExecutionEndEvent = {
   type: 'tool_execution_end';
   toolCallId: string;
+  parentToolCallId?: string;
   toolName: string;
   result: unknown;
   isError: boolean;
@@ -136,6 +138,7 @@ export type ToolExecutionEndEvent = {
 export type ToolCallEvent = {
   type: 'tool_call';
   toolCallId: string;
+  parentToolCallId?: string;
   toolName: string;
   input: Record<string, unknown>;
 };
