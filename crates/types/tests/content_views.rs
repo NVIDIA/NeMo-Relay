@@ -437,7 +437,7 @@ fn native_projection_does_not_guess_unknown_or_non_message_envelopes() {
         (
             "openai_chat",
             "future",
-            json!({"role":"future", "content":"hidden"}),
+            json!({"role":"future", "content":"hidden", "text":"diagnostic metadata"}),
         ),
         (
             "openai_chat",

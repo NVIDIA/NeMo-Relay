@@ -338,11 +338,8 @@ impl<'a> MessageView<'a> {
     }
 
     fn entry_text(self, entry: ContentEntry<'a>) -> Option<&'a str> {
-        // A recognized message with missing or malformed content stays opaque;
-        // its extension fields are not text.
-        if entry.location.field == ContentField::Value
-            && matches!(self.source, Source::Message(message) if message.native_message_role().is_some())
-        {
+        // An opaque message envelope can carry diagnostic text in extension fields.
+        if entry.location.field == ContentField::Value {
             return None;
         }
         match entry.kind {
