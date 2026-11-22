@@ -272,7 +272,7 @@ fn output_content_part(block: &Json) -> Option<ContentPart> {
     }
 }
 
-fn parse_function_call(item: &Json) -> ResponseToolCall {
+pub(super) fn parse_function_call(item: &Json) -> ResponseToolCall {
     ResponseToolCall {
         id: item
             .get("call_id")
