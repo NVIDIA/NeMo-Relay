@@ -5,6 +5,23 @@ use serde_json::json;
 
 use super::*;
 
+// Exercise each overlay field, including removal of absent annotation fields.
+impl BuiltinCodecName {
+    fn overlay_response_payload(self, payload: Json, annotated: &AnnotatedLlmResponse) -> Json {
+        self.overlay_response_fields(
+            payload,
+            annotated,
+            ResponseFields {
+                id: true,
+                model: true,
+                message: true,
+                finish_reason: true,
+                tool_calls: true,
+            },
+        )
+    }
+}
+
 fn tool_call(id: &str, name: &str, arguments: Json) -> ResponseToolCall {
     ResponseToolCall {
         id: id.to_string(),

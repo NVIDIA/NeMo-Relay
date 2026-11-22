@@ -135,15 +135,20 @@ fn edit_response(
             return None;
         }
     }
+    if edits.baseline == edits.sanitized {
+        return Some(original.clone());
+    }
     if surface == ProviderSurface::OpenAIResponses
         && edits.baseline.get("message").is_some_and(Json::is_array)
+        && edits.baseline.get("message") != edits.sanitized.get("message")
     {
-        return edit_responses_parts(codec, original, edits);
+        return edit_responses_parts(codec, original, edits, &baseline);
     }
     same_array_slots(edits.baseline, edits.sanitized).then_some(())?;
     let sanitized = serde_json::from_value(edits.sanitized.clone()).ok()?;
+    let fields = overlay::ResponseFields::between(&baseline, &sanitized);
     let payload = overlay::BuiltinCodecName::from_provider_surface(surface)
-        .overlay_response_payload(original.clone(), &sanitized);
+        .overlay_response_fields(original.clone(), &sanitized, fields);
     verifies(
         edits.baseline,
         edits.sanitized,
@@ -159,6 +164,7 @@ fn edit_responses_parts(
     codec: &dyn LlmResponseCodec,
     original: &Json,
     edits: NormalizedEdits<'_>,
+    baseline: &AnnotatedLlmResponse,
 ) -> Option<Json> {
     let before = edits.baseline.get("message")?.as_array()?;
     let after = edits.sanitized.get("message").and_then(Json::as_array);
@@ -179,8 +185,12 @@ fn edit_responses_parts(
     padded["message"] = edits.baseline["message"].clone();
     same_array_slots(edits.baseline, &padded).then_some(())?;
     let padded = serde_json::from_value(padded).ok()?;
-    let mut payload = overlay::BuiltinCodecName::OpenAIResponses
-        .overlay_response_payload(original.clone(), &padded);
+    let fields = overlay::ResponseFields::between(baseline, &padded);
+    let mut payload = overlay::BuiltinCodecName::OpenAIResponses.overlay_response_fields(
+        original.clone(),
+        &padded,
+        fields,
+    );
     for (index, path) in origins.iter().enumerate().rev() {
         let part = after
             .and_then(|parts| parts.get(index))

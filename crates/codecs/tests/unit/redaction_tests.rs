@@ -342,3 +342,64 @@ fn each_capability_operation_defaults_to_unsupported() {
             .is_none()
     );
 }
+
+#[test]
+fn metadata_only_edits_preserve_provider_blocks_exactly() {
+    for (surface, original) in [
+        (
+            ProviderSurface::OpenAIResponses,
+            json!({"id":"old","output":[
+            {"type":"custom_tool_call","call_id":"a","name":"custom","input":"private"},
+            {"type":"function_call","call_id":"b","name":"ordinary","arguments":"{  }"}]}),
+        ),
+        (
+            ProviderSurface::AnthropicMessages,
+            json!({"id":"old","type":"message","content":[
+            {"type":"text","text":"one\ntwo","citations":[{"marker":"first"}]},
+            {"type":"text","text":"three","citations":[{"marker":"last"}]}]}),
+        ),
+    ] {
+        let codec = crate::resolve::response_codec(surface);
+        let baseline = serde_json::to_value(codec.decode_response(&original).unwrap()).unwrap();
+        for id in ["old", "new"] {
+            let mut sanitized = baseline.clone();
+            sanitized["id"] = json!(id);
+            let result = codec
+                .redaction()
+                .unwrap()
+                .edit_response(
+                    &original,
+                    NormalizedEdits {
+                        baseline: &baseline,
+                        sanitized: &sanitized,
+                        require_complete_output: true,
+                    },
+                )
+                .unwrap();
+            let mut expected = original.clone();
+            expected["id"] = json!(id);
+            assert_eq!(result, Some(expected));
+        }
+        if surface == ProviderSurface::OpenAIResponses {
+            let mut sanitized = baseline.clone();
+            sanitized["tool_calls"][0]["arguments"] = json!("approved");
+            let mut expected = original.clone();
+            expected["output"][0]["input"] = json!("approved");
+            assert_eq!(
+                codec
+                    .redaction()
+                    .unwrap()
+                    .edit_response(
+                        &original,
+                        NormalizedEdits {
+                            baseline: &baseline,
+                            sanitized: &sanitized,
+                            require_complete_output: true
+                        }
+                    )
+                    .unwrap(),
+                Some(expected)
+            );
+        }
+    }
+}
