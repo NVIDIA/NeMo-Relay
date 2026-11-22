@@ -699,7 +699,17 @@ class ContentLocation:
     @property
     def field(
         self,
-    ) -> Literal["content", "message", "tool_calls", "tool_call_item", "output", "value", "native_content"]:
+    ) -> Literal[
+        "content",
+        "message",
+        "tool_calls",
+        "tool_call_item",
+        "output",
+        "value",
+        "native_content",
+        "native_refusal",
+        "native_tool_calls",
+    ]:
         """Return the normalized field containing this entry."""
         ...
     @property

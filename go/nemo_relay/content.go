@@ -72,13 +72,15 @@ const (
 type ContentField string
 
 const (
-	ContentFieldContent       ContentField = "content"
-	ContentFieldMessage       ContentField = "message"
-	ContentFieldToolCalls     ContentField = "tool_calls"
-	ContentFieldToolCallItem  ContentField = "tool_call_item"
-	ContentFieldOutput        ContentField = "output"
-	ContentFieldValue         ContentField = "value"
-	ContentFieldNativeContent ContentField = "native_content"
+	ContentFieldContent         ContentField = "content"
+	ContentFieldMessage         ContentField = "message"
+	ContentFieldToolCalls       ContentField = "tool_calls"
+	ContentFieldToolCallItem    ContentField = "tool_call_item"
+	ContentFieldOutput          ContentField = "output"
+	ContentFieldValue           ContentField = "value"
+	ContentFieldNativeContent   ContentField = "native_content"
+	ContentFieldNativeRefusal   ContentField = "native_refusal"
+	ContentFieldNativeToolCalls ContentField = "native_tool_calls"
 )
 
 // ContentKind identifies the populated value in a ContentEntry.

@@ -8,7 +8,16 @@ import type { _ContentEntry, JsonCompatible, JsonValue } from '../binding.js';
 export interface ContentLocation {
   readonly root: 'request_message' | 'message' | 'response' | 'content';
   readonly messageIndex: number | null;
-  readonly field: 'content' | 'message' | 'tool_calls' | 'tool_call_item' | 'output' | 'value' | 'native_content';
+  readonly field:
+    | 'content'
+    | 'message'
+    | 'tool_calls'
+    | 'tool_call_item'
+    | 'output'
+    | 'value'
+    | 'native_content'
+    | 'native_refusal'
+    | 'native_tool_calls';
   readonly index: number | null;
 }
 

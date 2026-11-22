@@ -1374,6 +1374,56 @@ fn test_encode_does_not_inject_stream_options_on_non_streaming() {
 }
 
 #[test]
+fn native_chat_assistant_preserves_refusal_and_tool_call_locations() {
+    use nemo_relay_types::codec::content::{
+        ContentField, ContentRoot, SnapshotKind, SnapshotPayload,
+    };
+
+    let args = r#"{ "x" : 1 }"#;
+    let request = make_request(json!({"messages": [
+        {"role":"assistant", "content":null, "refusal":""},
+        {"role":"assistant", "content":"partial", "refusal":"declined", "extension":true,
+         "tool_calls":[{"type":"future", "text":"diagnostic"}, {
+             "type":"function", "id":"c", "function":{"name":"lookup", "arguments":args}
+         }]}
+    ]}));
+    let codec = OpenAIChatCodec;
+    let decoded = codec.decode(&request).unwrap();
+    let empty = decoded.messages[0].content_view();
+    assert_eq!(empty.text().as_deref(), Some(""));
+    assert_eq!(empty.parts().count(), 1);
+    assert_eq!(
+        empty.parts().next().unwrap().location.field,
+        ContentField::NativeRefusal
+    );
+    let view = decoded.last_message().unwrap();
+    assert_eq!(view.text().as_deref(), Some("partial\ndeclined"));
+    let snapshot = view.snapshot();
+    assert_eq!(snapshot.text_parts, ["partial", "declined"]);
+    let [content, refusal, extension, call] = snapshot.parts.as_slice() else {
+        panic!("expected content, refusal, and both tool-call slots")
+    };
+    assert_eq!(content.location.field, ContentField::NativeContent);
+    assert_eq!(refusal.location.field, ContentField::NativeRefusal);
+    assert_eq!(refusal.location.index, None);
+    assert!(matches!(&refusal.kind, SnapshotKind::Refusal(s) if s == "declined"));
+    assert!(matches!(
+        &extension.kind,
+        SnapshotKind::ProviderNative { .. }
+    ));
+    assert_eq!(call.location.root, ContentRoot::RequestMessage(1));
+    assert_eq!(call.location.field, ContentField::NativeToolCalls);
+    assert_eq!(call.location.index, Some(1));
+    let SnapshotKind::ToolCall(tool) = &call.kind else {
+        panic!("expected a function call")
+    };
+    assert_eq!(tool.id.as_deref(), Some("c"));
+    assert_eq!(tool.name, "lookup");
+    assert_eq!(tool.arguments, SnapshotPayload::String(args.to_owned()));
+    assert_eq!(codec.encode(&decoded, &request).unwrap(), request);
+}
+
+#[test]
 fn request_schema_fixture_round_trips_and_preserves_adjacent_native_messages() {
     let codec = OpenAIChatCodec;
     let original = make_request(json!({

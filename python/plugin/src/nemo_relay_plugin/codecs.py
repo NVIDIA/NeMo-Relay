@@ -27,7 +27,15 @@ ContentKind: TypeAlias = Literal[
 ]
 ContentRoot: TypeAlias = Literal["request_message", "message", "response", "content"]
 ContentField: TypeAlias = Literal[
-    "content", "message", "tool_calls", "tool_call_item", "output", "value", "native_content"
+    "content",
+    "message",
+    "tool_calls",
+    "tool_call_item",
+    "output",
+    "value",
+    "native_content",
+    "native_refusal",
+    "native_tool_calls",
 ]
 PayloadKind: TypeAlias = Literal["null", "string", "json", "content"]
 

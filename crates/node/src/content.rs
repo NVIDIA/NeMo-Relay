@@ -215,6 +215,8 @@ impl ContentEntrySnapshot {
             ContentField::Output => "output",
             ContentField::Value => "value",
             ContentField::NativeContent => "native_content",
+            ContentField::NativeRefusal => "native_refusal",
+            ContentField::NativeToolCalls => "native_tool_calls",
         };
         let mut meta = json!({"location": {"root": root, "messageIndex": message_index, "field": field, "index": entry.location.index}});
         let kind = match entry.kind {

@@ -670,6 +670,8 @@ fn content_inspection_projection_round_trips_all_typed_payloads_and_locations() 
             ContentField::Output,
             ContentField::Value,
             ContentField::NativeContent,
+            ContentField::NativeRefusal,
+            ContentField::NativeToolCalls,
         ] {
             let location = ContentLocation {
                 root,

@@ -50,6 +50,10 @@ pub enum ContentField {
     Value,
     /// Recognized native message content at `value.content`.
     NativeContent,
+    /// Separate refusal at `value.refusal` on a native Chat assistant.
+    NativeRefusal,
+    /// Tool calls at `value.tool_calls` on a native Chat assistant.
+    NativeToolCalls,
 }
 
 /// Read-time location; not a stable edit handle or provider-wire offset.
@@ -222,40 +226,25 @@ impl ContentCursor {
             }
             self.calls = true;
             self.index = 0;
+            if let Some(refusal) = view
+                .native_chat_assistant()
+                .and_then(|value| value.get("refusal"))
+                .and_then(Json::as_str)
+            {
+                return Some(view.entry(
+                    ContentField::NativeRefusal,
+                    None,
+                    ContentKind::Refusal(refusal),
+                ));
+            }
         }
-        let call = match view.source {
-            Source::Message(Message::Assistant {
-                tool_calls: Some(calls),
-                ..
-            }) => calls.get(self.index).map(|call| ToolCallView {
-                id: Some(&call.id),
-                call_id: None,
-                name: &call.function.name,
-                arguments: PayloadRef::String(&call.function.arguments),
-            }),
-            Source::Response(response) => response
-                .tool_calls
-                .as_ref()
-                .and_then(|calls| calls.get(self.index))
-                .map(|call| ToolCallView {
-                    id: Some(&call.id),
-                    call_id: None,
-                    name: &call.name,
-                    arguments: PayloadRef::Json(&call.arguments),
-                }),
-            _ => None,
-        };
-        let Some(call) = call else {
+        let entry = view.tool_call(self.index);
+        if entry.is_some() {
+            self.index += 1;
+        } else {
             self.done = true;
-            return None;
-        };
-        let entry = view.entry(
-            ContentField::ToolCalls,
-            Some(self.index),
-            ContentKind::ToolCall(call),
-        );
-        self.index += 1;
-        Some(entry)
+        }
+        entry
     }
 
     /// Read the next eligible borrowed string using the shared extraction policy.
@@ -338,8 +327,11 @@ impl<'a> MessageView<'a> {
     }
 
     fn entry_text(self, entry: ContentEntry<'a>) -> Option<&'a str> {
-        // An opaque message envelope can carry diagnostic text in extension fields.
-        if entry.location.field == ContentField::Value {
+        // Envelopes and native tool calls can carry diagnostic text in extension fields.
+        if matches!(
+            entry.location.field,
+            ContentField::Value | ContentField::NativeToolCalls
+        ) {
             return None;
         }
         match entry.kind {
@@ -398,6 +390,62 @@ impl<'a> MessageView<'a> {
             MessageContent::Parts(parts) => {
                 Some(self.entry(field, Some(index), part_kind(parts.get(index)?)))
             }
+        }
+    }
+
+    fn tool_call(self, index: usize) -> Option<ContentEntry<'a>> {
+        let call = match self.source {
+            Source::Message(Message::Assistant {
+                tool_calls: Some(calls),
+                ..
+            }) => calls.get(index).map(|call| ToolCallView {
+                id: Some(&call.id),
+                call_id: None,
+                name: &call.function.name,
+                arguments: PayloadRef::String(&call.function.arguments),
+            }),
+            Source::Response(response) => response
+                .tool_calls
+                .as_ref()
+                .and_then(|calls| calls.get(index))
+                .map(|call| ToolCallView {
+                    id: Some(&call.id),
+                    call_id: None,
+                    name: &call.name,
+                    arguments: PayloadRef::Json(&call.arguments),
+                }),
+            _ => {
+                let call = self
+                    .native_chat_assistant()?
+                    .get("tool_calls")?
+                    .as_array()?
+                    .get(index)?;
+                return Some(self.entry(
+                    ContentField::NativeToolCalls,
+                    Some(index),
+                    native_chat_call_kind(call),
+                ));
+            }
+        }?;
+        Some(self.entry(
+            ContentField::ToolCalls,
+            Some(index),
+            ContentKind::ToolCall(call),
+        ))
+    }
+
+    fn native_chat_assistant(self) -> Option<&'a Json> {
+        match self.source {
+            Source::Message(
+                message @ Message::ProviderNative {
+                    provider, value, ..
+                },
+            ) if provider == "openai_chat"
+                && message.native_message_role() == Some("assistant") =>
+            {
+                Some(value)
+            }
+            _ => None,
         }
     }
 
@@ -515,6 +563,17 @@ impl<'a> MessageView<'a> {
                                     },
                                 ));
                             }
+                            None | Some(Json::Null)
+                                if provider == "openai_chat"
+                                    && kind == "assistant"
+                                    && (value.get("refusal").is_some_and(Json::is_string)
+                                        || value
+                                            .get("tool_calls")
+                                            .and_then(Json::as_array)
+                                            .is_some_and(|calls| !calls.is_empty())) =>
+                            {
+                                return None;
+                            }
                             _ => {}
                         }
                     }
@@ -585,6 +644,31 @@ impl MessageContent {
             root: ContentRoot::Content,
             source: Source::Content(self),
         }
+    }
+}
+
+fn native_chat_call_kind(call: &Json) -> ContentKind<'_> {
+    let kind = call.get("type").and_then(Json::as_str);
+    let function = call.get("function");
+    if let (Some("function"), Some(id), Some(name), Some(arguments)) = (
+        kind,
+        call.get("id").and_then(Json::as_str),
+        function.and_then(|f| f.get("name")).and_then(Json::as_str),
+        function
+            .and_then(|f| f.get("arguments"))
+            .and_then(Json::as_str),
+    ) {
+        return ContentKind::ToolCall(ToolCallView {
+            id: Some(id),
+            call_id: None,
+            name,
+            arguments: PayloadRef::String(arguments),
+        });
+    }
+    ContentKind::ProviderNative {
+        provider: "openai_chat",
+        kind: kind.unwrap_or("tool_call"),
+        value: call,
     }
 }
 

@@ -57,6 +57,8 @@ impl WireValue<pb::LlmContentLocation> for ContentLocation {
             ContentField::Output => pb::LlmContentField::Output,
             ContentField::Value => pb::LlmContentField::Value,
             ContentField::NativeContent => pb::LlmContentField::NativeContent,
+            ContentField::NativeRefusal => pb::LlmContentField::NativeRefusal,
+            ContentField::NativeToolCalls => pb::LlmContentField::NativeToolCalls,
         };
         Ok(pb::LlmContentLocation {
             root: root as i32,
@@ -88,6 +90,8 @@ impl WireValue<pb::LlmContentLocation> for ContentLocation {
             Some(pb::LlmContentField::Output) => ContentField::Output,
             Some(pb::LlmContentField::Value) => ContentField::Value,
             Some(pb::LlmContentField::NativeContent) => ContentField::NativeContent,
+            Some(pb::LlmContentField::NativeRefusal) => ContentField::NativeRefusal,
+            Some(pb::LlmContentField::NativeToolCalls) => ContentField::NativeToolCalls,
             _ => return Err(ConversionError("invalid content field".into())),
         };
         Ok(Self {

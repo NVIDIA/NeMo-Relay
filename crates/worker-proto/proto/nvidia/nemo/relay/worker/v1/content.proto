@@ -65,6 +65,10 @@ enum LlmContentField {
   LLM_CONTENT_FIELD_VALUE = 6;
   // Recognized native message content at value.content.
   LLM_CONTENT_FIELD_NATIVE_CONTENT = 7;
+  // Separate native Chat assistant refusal at value.refusal.
+  LLM_CONTENT_FIELD_NATIVE_REFUSAL = 8;
+  // Native Chat assistant tool calls at value.tool_calls.
+  LLM_CONTENT_FIELD_NATIVE_TOOL_CALLS = 9;
 }
 
 // Read-time position in the supplied normalized source, not a stable edit handle.

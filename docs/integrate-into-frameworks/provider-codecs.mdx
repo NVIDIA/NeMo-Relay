@@ -95,6 +95,10 @@ inspect recognized `content` strings or arrays in place, and the request helpers
 recognize their user/system/developer roles where supported by that provider.
 For example, an OpenAI Chat user message with `content: "hello"` and an extra
 provider field still yields `"hello"` from `last_user_message()`.
+For native OpenAI Chat assistant history, a string at `value.refusal` follows
+content, including an empty refusal. Entries from `value.tool_calls` follow the
+refusal and retain their original array indices. Their location fields are
+`native_refusal` and `native_tool_calls`. Function arguments stay strings.
 The native annotation, extension fields, and codec round-trip remain unchanged.
 Unknown message envelopes stay opaque; tool payloads and arbitrary nested
 metadata are not searched for text.

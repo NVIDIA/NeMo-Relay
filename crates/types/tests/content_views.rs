@@ -410,12 +410,19 @@ fn native_message_content_projection_is_shallow_and_keeps_locations() {
             ["first", "no"],
             "{provider}"
         );
-        for (index, entry) in view.parts().enumerate() {
+        for (index, entry) in view.parts().take(5).enumerate() {
             assert_eq!(entry.location.root, ContentRoot::Message);
             assert_eq!(entry.location.field, ContentField::NativeContent);
             assert_eq!(entry.location.index, Some(index));
         }
-        assert_eq!(view.parts().count(), 5);
+        if provider == "openai_chat" {
+            let entry = view.parts().nth(5).unwrap();
+            assert_eq!(entry.location.field, ContentField::NativeToolCalls);
+            assert!(matches!(entry.kind, ContentKind::ProviderNative { .. }));
+            assert_eq!(view.parts().count(), 6);
+        } else {
+            assert_eq!(view.parts().count(), 5);
+        }
         assert_eq!(serde_json::to_value(&item).unwrap(), before);
     }
 }
