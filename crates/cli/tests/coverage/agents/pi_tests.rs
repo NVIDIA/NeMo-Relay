@@ -7,13 +7,13 @@ use super::*;
 fn parses_bare_semver_version_output() {
     // `pi --version` prints only the version, with no product prefix, unlike
     // `codex-cli 0.143.0` or `2.1.121 (Claude Code)`.
-    assert_eq!(parse_version("0.84.0"), Some(Version::new(0, 84, 0)));
-    assert_eq!(parse_version("  0.84.0  "), Some(Version::new(0, 84, 0)));
+    assert_eq!(parse_version("1.6.0"), Some(Version::new(1, 6, 0)));
+    assert_eq!(parse_version("  1.6.0  "), Some(Version::new(1, 6, 0)));
 }
 
 #[test]
 fn rejects_prefixed_or_empty_version_output() {
-    assert_eq!(parse_version("pi 0.84.0"), None);
+    assert_eq!(parse_version("pi 1.6.0"), None);
     assert_eq!(parse_version(""), None);
     assert_eq!(parse_version("not-a-version"), None);
 }

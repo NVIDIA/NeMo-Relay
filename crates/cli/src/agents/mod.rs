@@ -28,14 +28,6 @@ pub(super) struct AgentDescriptor {
     hook_path: &'static str,
     version_product: &'static str,
     minimum_version: (u64, u64, u64),
-    /// The last `major.minor` this integration was actually verified against, for a
-    /// host whose minor releases can break the hook contract.
-    ///
-    /// `None` means the floor behaves like a floor: newer minors are additive and
-    /// nothing above it needs reporting. `Some` means the opposite -- above it, the
-    /// integration is untested rather than known-good, and saying so is the whole
-    /// point, because the failure it guards against is silent.
-    verified_through: Option<(u64, u64)>,
     hook_events: &'static [&'static str],
     /// Events whose hook timeout the host caps, with that cap in seconds. Writing a longer
     /// timeout makes the host clamp it and log a warning.
@@ -187,17 +179,10 @@ impl CodingAgent {
     /// silence it replaces -- the user would have to downgrade the agent to use
     /// Relay at all. This reports; it does not gate.
     pub(crate) fn unverified_version(self, version: &Version) -> Option<String> {
-        let (major, minor) = self.descriptor().verified_through?;
-        if (version.major, version.minor) <= (major, minor) {
-            return None;
+        match self {
+            Self::Pi => pi::unverified_version(version),
+            Self::ClaudeCode | Self::Codex => None,
         }
-        Some(format!(
-            "{product} {version} is newer than the {product} {major}.{minor}.x this integration \
-             was verified against; {product} can change hook shapes in a minor release, and the \
-             symptom is missing spans rather than an error. Re-verify, or pin {product} {major}.\
-             {minor}.x",
-            product = self.descriptor().version_product,
-        ))
     }
 
     fn parse_version(self, raw: &str) -> Option<Version> {
