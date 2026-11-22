@@ -8411,3 +8411,111 @@ async fn shared_response_fields_are_hashed_once_and_removed_extensions_preserve_
         assert_eq!(result, Some(expected));
     }
 }
+
+struct ProjectingWidgetCodec;
+
+impl LlmCodec for ProjectingWidgetCodec {
+    fn decode(&self, request: &LlmRequest) -> nemo_relay_types::error::Result<AnnotatedLlmRequest> {
+        OpenAIResponsesCodec.decode(&LlmRequest {
+            headers: Default::default(),
+            content: json!({"input":request.content["widget"]}),
+        })
+    }
+    fn encode(
+        &self,
+        _: &AnnotatedLlmRequest,
+        original: &LlmRequest,
+    ) -> nemo_relay_types::error::Result<LlmRequest> {
+        Ok(original.clone())
+    }
+    fn redaction(&self) -> Option<&dyn nemo_relay_types::codec::redaction::LlmRequestRedaction> {
+        Some(self)
+    }
+}
+impl nemo_relay_types::codec::redaction::LlmRequestRedaction for ProjectingWidgetCodec {
+    fn project_request(
+        &self,
+        _: &AnnotatedLlmRequest,
+    ) -> nemo_relay_types::error::Result<Option<LlmRequest>> {
+        Ok(Some(LlmRequest {
+            headers: Default::default(),
+            content: json!({"widget":"approved request"}),
+        }))
+    }
+}
+impl LlmResponseCodec for ProjectingWidgetCodec {
+    fn decode_response(
+        &self,
+        raw: &Json,
+    ) -> nemo_relay_types::error::Result<nemo_relay_types::codec::response::AnnotatedLlmResponse>
+    {
+        OpenAIResponsesCodec
+            .decode_response(&json!({"output_text":raw["widget"].as_str().unwrap_or("default")}))
+    }
+    fn redaction(&self) -> Option<&dyn nemo_relay_types::codec::redaction::LlmResponseRedaction> {
+        Some(self)
+    }
+}
+impl nemo_relay_types::codec::redaction::LlmResponseRedaction for ProjectingWidgetCodec {
+    fn project_response(
+        &self,
+        _: &nemo_relay_types::codec::response::AnnotatedLlmResponse,
+    ) -> nemo_relay_types::error::Result<Option<Json>> {
+        Ok(Some(json!({"widget":"approved"})))
+    }
+}
+#[tokio::test]
+async fn managed_trajectory_publishes_the_opaque_codecs_clean_request_and_response() {
+    let _guard = crate::plugins::pii_redaction::test_mutex().lock().unwrap();
+    reset_runtime();
+    setup_isolated_thread();
+    test_initialize_plugin_host_exact(plugin_config(
+        json!({"mode":"builtin","builtin":{"preset":"trajectory_context"}}),
+    ))
+    .await
+    .unwrap();
+    let events = capture_events("widget-projection");
+    for modified in [false, true] {
+        let expected = if modified {
+            crate::api::registry::register_llm_sanitize_response_guardrail(
+                "change-projected-widget",
+                200,
+                Arc::new(|_, _| {
+                    Box::pin(async { Ok(Some(json!({"widget":"SECRET introduced later"}))) })
+                }),
+            )
+            .unwrap();
+            json!({})
+        } else {
+            json!({"widget":"approved"})
+        };
+        let resp = json!({"widget":"SECRET"});
+        let result = llm_call_execute(
+            LlmCallExecuteParams::builder()
+                .name("probe")
+                .request(LlmRequest {
+                    headers: Default::default(),
+                    content: json!({"widget":"SECRET request"}),
+                })
+                .func(noop_openai_chat_exec_fn(resp))
+                .codec(Arc::new(ProjectingWidgetCodec))
+                .response_codec(Arc::new(ProjectingWidgetCodec))
+                .build(),
+        )
+        .await
+        .unwrap();
+        let captured = captured_events_snapshot(&events);
+        assert_eq!(result, json!({"widget":"SECRET"}));
+        let captured = &captured[captured.len() - 2..];
+        assert_eq!(
+            captured[0].input().unwrap()["content"],
+            json!({"widget":"approved request"})
+        );
+        assert_eq!(captured[1].output(), Some(&expected));
+        assert!(!serde_json::to_string(&captured).unwrap().contains("SECRET"));
+    }
+    crate::api::registry::deregister_llm_sanitize_response_guardrail("change-projected-widget")
+        .unwrap();
+    deregister_subscriber("widget-projection").unwrap();
+    test_close_plugin_host().unwrap();
+}
