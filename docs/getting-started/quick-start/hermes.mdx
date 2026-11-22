@@ -1,5 +1,5 @@
 ---
-title: "Hermes Agent Quick Start"
+title: "Hermes Agent Quickstart for NeMo Relay"
 sidebar-title: "Hermes Agent"
 slug: getting-started/quick-start/hermes
 description: "Run one Hermes Agent turn with native NeMo Relay observability."
@@ -59,10 +59,10 @@ SPDX-License-Identifier: Apache-2.0 */}
 }
 */}
 
-## Goal
-
-Run one Hermes Agent turn and write its session, model, and tool lifecycle to a
-local Agent Trajectory Observability Format (ATOF) file.
+This Quickstart Guide walks you through the process for running one Hermes Agent
+turn and writing its session, model, and tool lifecycle to a local Agent
+Trajectory Observability Format (ATOF) file. For detailed setup, refer to the
+[Installation Guide](/getting-started/installation).
 
 Use a Hermes Agent installation with native NeMo Relay integration on a platform
 with a supported Relay native wheel. Do not install the former Hermes Agent Relay
@@ -86,9 +86,13 @@ Before you start, make sure you have:
 For the Unix-shell instructions, install `jq` 1.6 or newer and check your version
 with `jq --version`. PowerShell uses its built-in JSON parser.
 
+## Quickstart Steps
+
+To quickly get started with NeMo Relay, complete the following steps:
+
 <Steps toc={true}>
 
-## Install
+### Install Hermes Agent
 
 Install Hermes Agent using the commands for your platform:
 
@@ -172,7 +176,7 @@ from the model name. Preserve the model ID exactly as your endpoint expects it.
 
 </details>
 
-## Configure
+### Set up a working directory
 
 Create a disposable working directory and make sure the agent can write files there:
 
@@ -270,17 +274,14 @@ the events required by this quick start; check the supported installation for
 your operating system and architecture.
 
 <Note icon="circle-info">
-`hermes doctor` checks configuration without loading plugin code. It also checks
-optional services unrelated to Relay and can exit nonzero when they are
-unconfigured; those warnings do not require enabling the services for this quick
-start.
-</Note>
-
-<Note icon="circle-info">
-Hermes Agent does not discover repository-local configuration automatically. The
-explicit path replaces the user configuration file; system configuration still
-applies. Relay plugins affect every profile hosted in the same Hermes Agent process.
-Use separate processes when profiles require different plugin policies.
+- `hermes doctor` checks configuration without loading plugin code. It also checks
+  optional services unrelated to Relay and can exit nonzero when they are
+  unconfigured; those warnings do not require enabling the services for this quick
+  start.
+- Hermes Agent does not discover repository-local configuration automatically. The
+  explicit path replaces the user configuration file; system configuration still
+  applies. Relay plugins affect every profile hosted in the same Hermes Agent process.
+  Use separate processes when profiles require different plugin policies.
 </Note>
 
 <Warning>
@@ -289,7 +290,7 @@ results. Working-directory paths can reveal usernames and repository names.
 Protect `logs/events.jsonl` even when full payload export is disabled.
 </Warning>
 
-## Run
+### Run a Hermes Agent turn
 
 From the same directory, run a one-shot turn with the common validation prompt:
 
@@ -321,7 +322,7 @@ repeat the configuration and gateway steps before another run if you change
 `plugins.toml` or its selection.
 </Note>
 
-## Verify
+### Verify the output
 
 The tool marker proves that the agent created the requested file. The event
 marker proves that Relay recorded matching start/end records for the required
@@ -417,7 +418,7 @@ These markers confirm the tool-created file and matching start/end records for
 agent, tool, and LLM work.
 </Note>
 
-### Inspect the Recorded Activity
+#### Inspect the Recorded Activity
 
 Read the completed model calls from the same event file:
 
@@ -450,9 +451,9 @@ requiring full prompt or response capture.
 
 </Steps>
 
-## For More Details
+## Next Steps
 
-For more details, refer to:
+Now that you have a working setup, you should explore the following resources in greater detail:
 
 - [Hermes Agent Relay integration and shared metrics](https://hermes-agent.nousresearch.com/docs/developer-guide/relay-shared-metrics)
 - [ATOF exporter](/configure-plugins/observability/atof)
