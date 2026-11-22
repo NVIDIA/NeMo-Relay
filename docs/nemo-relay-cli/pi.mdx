@@ -498,11 +498,14 @@ type a bang prefix into.
 
 ## Model Redirection
 
-pi has no base-URL flag and no generic environment override — it resolves a base
-URL per model from a generated catalog — so the extension points the active
-model's provider at the gateway directly, with
-`registerProvider(provider, { baseUrl })`. pi rewrites the URL of every existing
-model for that provider and keeps their API, headers, costs and context windows.
+Pi resolves a base URL per model from its catalog. On Pi 1.6.0, the extension
+preserves those model URLs and redirects matching chat POSTs to Relay through
+Pi's provider transport hook. Other operations retain their original routes.
+
+If the transport hook is unavailable, the extension falls back to
+`registerProvider(provider, { baseUrl })`. This fallback rewrites the URL of every
+existing model for that provider while keeping its API, headers, costs and
+context windows.
 
 The gateway forwards to one statically configured upstream per API family, set by
 `--openai-base-url` and `--anthropic-base-url`. Redirecting a model whose
