@@ -669,13 +669,11 @@ export default function nemoRelayExtension(pi: ExtensionAPI): void {
    * 1. **There is no block-and-reason contract.** A refusal is a synthetic
    *    failed `BashResult` and pi records it exactly as if the command had run.
    *    See `src/user-bash.ts` for the shape and why those field values.
-   * 2. **Pi 0.84.0 catches handler errors**, so throwing fails *open* and the command
-   *    runs unchecked. Nothing here is allowed to escape; the catch resolves an
-   *    internal failure through the same policy as an unreachable gateway.
-   * 3. **The first handler to return anything wins.** Loaded with `-e` this one
-   *    is first; installed with `pi install` it loads last and an earlier
-   *    extension can preempt it, in which case the gateway never sees the
-   *    command at all.
+   * 2. **Pi aborts the command on a handler error.** Relay catches its own
+   *    errors so its configured fault policy still controls the outcome.
+   * 3. **The first valid result or operations override wins.** Loaded with
+   *    `-e` this one is first; installed with `pi install` it loads last and
+   *    an earlier extension can preempt it, so the gateway never sees the command.
    *
    * What the gate does *not* do is observe the command. pi has no completion
    * hook for inline shell -- `user_bash` is the only one -- so on an allow the
@@ -747,9 +745,8 @@ export default function nemoRelayExtension(pi: ExtensionAPI): void {
         // the command as the user typed it.
         return undefined;
       } catch (error) {
-        // Reached only if something inside this handler failed -- `postHook`
-        // resolves its own transport errors. Failing open here would be silent,
-        // so it is resolved as a fault under the configured policy instead.
+        // `postHook` reports transport errors as outcomes. Apply Relay's
+        // configured fault policy here when the handler itself throws.
         //
         // The policy is re-read rather than defaulted: if `ensureConfig` is
         // what failed then `config` is still null, and hard-coding fail-open
