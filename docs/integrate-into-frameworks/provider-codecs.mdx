@@ -118,9 +118,10 @@ last user item. Neither skips a selected textless item to find earlier or later
 text. `response_text()` reads the current output and excludes tool content.
 
 Python's existing methods inherit these extraction and selection behaviors and
-continue to return `str | None`. Serialization, codec traits, and provider
-payloads are unchanged. These views are read-only; mutable redaction and
-streaming extraction are separate work.
+continue to return `str | None`. The views read existing annotations and preserve
+provider wire payloads. The OpenAI Chat response decoder now represents a
+response containing both text and a refusal as typed parts at `/message`.
+For selector examples, see [Update OpenAI Response Redaction Policies](/reference/migration-guides#update-openai-response-redaction-policies).
 
 ### Python Content Snapshots
 
