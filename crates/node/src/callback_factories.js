@@ -97,56 +97,57 @@
     return result;
   }
 
-  function failureEnvelope(error, fallbackMessage) {
-    let message = fallbackMessage;
-    let exceptionType = 'Error';
+  function isObjectLike(value) {
+    return value !== null && (typeof value === 'object' || typeof value === 'function');
+  }
+
+  function readableString(read) {
     try {
-      if (typeof error === 'string') {
-        message = error;
-      } else if (error === null || (typeof error !== 'object' && typeof error !== 'function')) {
-        message = String(error);
-      } else {
-        const errorMessage = error.message;
-        if (typeof errorMessage === 'string' && errorMessage.length > 0) {
-          message = errorMessage;
-        }
-      }
-    } catch {}
+      const value = read();
+      return typeof value === 'string' && value.length > 0 ? value : undefined;
+    } catch {
+      return undefined;
+    }
+  }
+
+  function typeTag(value) {
     try {
-      const errorName = error?.name;
-      if (typeof errorName === 'string' && errorName.length > 0) {
-        exceptionType = errorName;
-      }
-    } catch {}
+      return Object.prototype.toString.call(value).slice(8, -1);
+    } catch {
+      return typeof value;
+    }
+  }
+
+  function describeError(error) {
+    if (!isObjectLike(error)) {
+      return { message: String(error), exceptionType: typeTag(error) };
+    }
+    const exceptionType = readableString(() => error.name) ?? typeTag(error);
+    return { message: readableString(() => error.message) ?? exceptionType, exceptionType };
+  }
+
+  function failureEnvelope(error) {
+    const { message, exceptionType } = describeError(error);
     return { ok: false, exception: error, message, exceptionType };
   }
 
   function cleanupFailure(error, cleanup) {
-    const primary = failureEnvelope(error, 'unknown error');
-    const secondary = failureEnvelope(cleanup, 'unknown error');
-    return new AggregateError([error, cleanup], `${primary.message}; stream cleanup also failed: ${secondary.message}`);
-  }
-
-  function isThenable(value) {
-    return (
-      value !== null && (typeof value === 'object' || typeof value === 'function') && typeof value.then === 'function'
+    return new AggregateError(
+      [error, cleanup],
+      `${describeError(error).message}; stream cleanup also failed: ${describeError(cleanup).message}`,
     );
   }
 
-  function messageFor(error) {
-    try {
-      return String(error?.message ?? error);
-    } catch {
-      return 'JavaScript callback failed';
-    }
+  function isThenable(value) {
+    return isObjectLike(value) && typeof value.then === 'function';
   }
 
-  function settleEnvelope(fn, encode, complete, fallbackMessage, direct) {
+  function settleEnvelope(fn, encode, complete, direct) {
     const envelopeFor = (value) => {
       try {
         return { ok: true, value: encode(value) };
       } catch (error) {
-        return failureEnvelope(error, fallbackMessage);
+        return failureEnvelope(error);
       }
     };
     let envelope;
@@ -155,13 +156,13 @@
       if (isThenable(value)) {
         Promise.resolve(value).then(
           (resolved) => complete(envelopeFor(resolved)),
-          (error) => complete(failureEnvelope(error, fallbackMessage)),
+          (error) => complete(failureEnvelope(error)),
         );
         return undefined;
       }
       envelope = envelopeFor(value);
     } catch (error) {
-      envelope = failureEnvelope(error, fallbackMessage);
+      envelope = failureEnvelope(error);
     }
     if (direct) {
       return envelope;
@@ -367,8 +368,8 @@
         .catch(async (error) => {
           const failure = await settleDownstreams({ error });
           settlePublication();
-          const envelope = failureEnvelope(failure.error, 'unknown error');
-          settle.reject(callId, failure.error, envelope.message, envelope.exceptionType);
+          const { message, exceptionType } = describeError(failure.error);
+          settle.reject(callId, failure.error, message, exceptionType);
         });
     };
     eventSanitizerContext.run(token, invoke);
@@ -392,7 +393,7 @@
           const value = fn(...args);
           return { ok: true, value: jsonValue(value === undefined ? null : value) };
         } catch (error) {
-          return failureEnvelope(error, 'JavaScript callback failed');
+          return failureEnvelope(error);
         }
       };
     },
@@ -403,7 +404,7 @@
           const value = fn(...args);
           return { ok: true, value: jsonValue(value === undefined ? null : value) };
         } catch (error) {
-          return failureEnvelope(error, 'JavaScript callback threw');
+          return failureEnvelope(error);
         }
       };
     },
@@ -418,7 +419,7 @@
           }
           return { ok: false, error: 'conditional middleware guardrail must return a string or null' };
         } catch (error) {
-          return failureEnvelope(error, 'JavaScript callback threw');
+          return failureEnvelope(error);
         }
       };
     },
@@ -429,7 +430,7 @@
           .then(() => fn(event))
           .then(
             () => complete(callbackId),
-            (error) => complete(callbackId, messageFor(error)),
+            (error) => complete(callbackId, describeError(error).message),
           );
       };
     },
@@ -470,7 +471,6 @@
               expireCallbackStore(token);
               complete(settled);
             },
-            'JavaScript collector callback failed',
             direct,
           ),
         );
@@ -492,7 +492,6 @@
               expireCallbackStore(token);
               complete(settled);
             },
-            'JavaScript finalizer callback failed',
             direct,
           ),
         );

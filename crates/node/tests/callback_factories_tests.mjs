@@ -107,6 +107,51 @@ describe('promise callback cancellation', () => {
   });
 });
 
+describe('failure description', () => {
+  function rejectionOf(thrown) {
+    const rejected = Promise.withResolvers();
+    const wrapper = factories.promise(
+      () => {
+        throw thrown;
+      },
+      rejectSettle('resolve'),
+      (_callId, exception, message, exceptionType) => rejected.resolve({ exception, message, exceptionType }),
+      rejectSettle('streamPush'),
+      rejectSettle('streamEnd'),
+      rejectSettle('next'),
+    );
+    invoke(wrapper, 1);
+    return rejected.promise;
+  }
+
+  it('uses the error name when the message cannot be read', async () => {
+    const thrown = new Error('hidden');
+    Object.defineProperties(thrown, {
+      name: { value: 'GetterError' },
+      message: {
+        get() {
+          throw new Error('message getter boom');
+        },
+      },
+    });
+    assert.deepEqual(await rejectionOf(thrown), {
+      exception: thrown,
+      message: 'GetterError',
+      exceptionType: 'GetterError',
+    });
+  });
+
+  it('describes thrown primitives by value and type', async () => {
+    assert.deepEqual(await rejectionOf(42), { exception: 42, message: '42', exceptionType: 'Number' });
+    assert.deepEqual(await rejectionOf(null), { exception: null, message: 'null', exceptionType: 'Null' });
+  });
+
+  it('describes objects without a name by their type tag', async () => {
+    const thrown = { message: '' };
+    assert.deepEqual(await rejectionOf(thrown), { exception: thrown, message: 'Object', exceptionType: 'Object' });
+  });
+});
+
 describe('fork publication selection', { timeout: 3000 }, () => {
   for (const binding of ['withCallbackScope', 'setCallbackScope']) {
     for (const selection of ['ambient', 'absent', 'active']) {
