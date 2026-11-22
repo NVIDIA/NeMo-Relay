@@ -4,6 +4,7 @@
 // Test double for the CLI's private pi response mode. Rust tests verify credentials;
 // this fixture keeps extension lifecycle tests independent of a compiled CLI.
 import { createInterface } from 'node:readline';
+import { setTimeout as delay } from 'node:timers/promises';
 
 const args = process.argv.slice(2);
 if (args[0] !== 'hook-forward' || args[1] !== 'pi' || !args.includes('--pi-extension-client')) {
@@ -13,6 +14,13 @@ const streaming = args.includes('--pi-extension-stream');
 
 async function forward(input) {
   const payload = JSON.parse(input);
+  if (payload.hook_event_name === 'fixture_split_stderr') {
+    const bytes = Buffer.from('é');
+    process.stderr.write(bytes.subarray(0, 1));
+    await delay(80);
+    await new Promise(resolve => process.stderr.write(bytes.subarray(1), resolve));
+    process.exit(1);
+  }
   if (payload.hook_event_name === 'fixture_output_overflow') {
     process[payload.stream].write('x'.repeat(9 * 1024 * 1024));
     return;

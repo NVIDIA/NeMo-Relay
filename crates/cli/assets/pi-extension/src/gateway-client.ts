@@ -111,9 +111,11 @@ class HookForwardStream {
     this.child.on('error', (error) => this.close(error));
     this.child.on('close', () => this.close(new Error(this.stderr.trim() || 'hook forward exited')));
     this.child.stdin.on('error', (error) => this.close(error));
-    this.child.stderr.on('data', (chunk: Buffer) => {
+    this.child.stderr.setEncoding('utf8');
+    this.child.stderr.on('data', (chunk: string) => {
       // Drain all diagnostics, retaining only the tail for transport failures.
-      this.stderr = this.stderr.slice(-4_096) + chunk.subarray(-4_096).toString('utf8');
+      // Dropping the prefix can leave the low surrogate of a split pair.
+      this.stderr = (this.stderr + chunk).slice(-4_096).replace(/^[\uDC00-\uDFFF]/u, '');
     });
     this.child.stdout.on('data', (chunk: Buffer) => this.read(chunk));
   }
