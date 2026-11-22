@@ -164,6 +164,18 @@ describe('gateway client wire contract', () => {
     }
   });
 
+  it('preserves a UTF-8 diagnostic split across stderr chunks', async () => {
+    const config = baseConfig(url, { streamHooks: true });
+    try {
+      const outcome = await postHook(config, { hook_event_name: 'fixture_split_stderr' });
+      assert.deepEqual(outcome, {
+        kind: 'fault', origin: 'transport', detail: 'gateway request failed: é',
+      });
+    } finally {
+      closeHookStream(config);
+    }
+  });
+
   // A 2xx body may carry a required argument transform, so an unreadable one is not
   // an empty allow -- treating it as one runs the original arguments and silently
   // discards a policy decision, which is the failure a refused transform blocks for.
