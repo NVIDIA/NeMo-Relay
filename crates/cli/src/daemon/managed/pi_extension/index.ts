@@ -9,6 +9,7 @@
  * extension reloads and new/resume/fork session replacement.
  */
 import { spawn, type ChildProcess } from 'node:child_process';
+import { addAbortListener } from 'node:events';
 import { readFileSync } from 'node:fs';
 import { isAbsolute } from 'node:path';
 import { createInterface } from 'node:readline';
@@ -69,6 +70,7 @@ type ProviderRedirectDecision =
 
 type ExtensionContext = {
   cwd: string;
+  signal?: AbortSignal;
   model?: PiModel;
   modelRegistry?: ProviderRegistry;
   sessionManager?: { getSessionId?(): string };
@@ -245,8 +247,8 @@ export default function managedNemoRelayPi(pi: ExtensionAPI): void {
     void enqueue(() => sendObservation(body));
   }
 
-  async function observeOrdered(body: Record<string, unknown>): Promise<void> {
-    await enqueue(() => sendObservation(body));
+  async function observeOrdered(body: Record<string, unknown>, signal?: AbortSignal): Promise<void> {
+    await waitForHook(enqueue(() => sendObservation(body)), signal);
   }
 
   function registerManagedProvider(
@@ -413,6 +415,7 @@ export default function managedNemoRelayPi(pi: ExtensionAPI): void {
         turn_seq: sequence,
         attempt_index: Math.max(0, attemptIndex - 1),
       }),
+      context.signal,
     );
   });
 
@@ -422,6 +425,7 @@ export default function managedNemoRelayPi(pi: ExtensionAPI): void {
         turn_index: event.turnIndex,
         ...attribution(),
       }),
+      context.signal,
     );
   });
 
@@ -474,10 +478,13 @@ export default function managedNemoRelayPi(pi: ExtensionAPI): void {
   });
 
   pi.on('tool_call', async (event, context) => {
-    let outcome: HookOutcome;
+    const signal = context.signal;
+    let outcome: HookOutcome | undefined;
     try {
-      outcome = await enqueue(async () => {
+      outcome = await waitForHook(enqueue(async () => {
+        if (signal?.aborted) return undefined;
         const active = await runtime();
+        if (signal?.aborted) return undefined;
         return postHook(
           active,
           payload(context, 'tool_call', {
@@ -488,11 +495,14 @@ export default function managedNemoRelayPi(pi: ExtensionAPI): void {
             ...attribution(),
           }),
         );
-      });
+      }), signal);
     } catch (error) {
       return blockedInfrastructure(event.toolName, safeError(error));
     }
 
+    if (!outcome || signal?.aborted) {
+      return { block: true, reason: 'Pi cancelled the tool call while waiting for NeMo Relay authorization.' };
+    }
     if (outcome.kind === 'fault') {
       return blockedInfrastructure(event.toolName, outcome.reason);
     }
@@ -1201,4 +1211,19 @@ function isRecord(value: unknown): value is Record<string, unknown> {
 
 function safeError(error: unknown): string {
   return error instanceof Error ? error.message : String(error);
+}
+
+// Pi may finish an aborted run while its Relay jobs drain. Keeping those jobs in
+// the queue preserves start/end ordering, even if a gate already reached Relay.
+async function waitForHook<T>(job: Promise<T>, signal?: AbortSignal): Promise<T | undefined> {
+  if (!signal) return job;
+  let listener: ReturnType<typeof addAbortListener> | undefined;
+  const aborted = new Promise<undefined>((resolve) => {
+    listener = addAbortListener(signal, () => resolve(undefined));
+  });
+  try {
+    return await Promise.race([job, aborted]);
+  } finally {
+    listener?.[Symbol.dispose]();
+  }
 }

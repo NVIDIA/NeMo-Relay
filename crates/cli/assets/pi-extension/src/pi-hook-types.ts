@@ -231,6 +231,8 @@ export type ModelSelectEvent = {
 /** Minimal view of pi's extension context. */
 export type ExtensionContext = {
   cwd: string;
+  /** Pi's current agent run cancellation signal. */
+  signal?: AbortSignal;
   mode: string;
   hasUI: boolean;
   sessionManager: { getSessionId(): string };

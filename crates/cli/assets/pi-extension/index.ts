@@ -54,6 +54,7 @@
  * - `NEMO_RELAY_PI_REDIRECT`     `force` to skip the upstream check, `off` to disable
  * - `NEMO_RELAY_PI_{OPENAI,ANTHROPIC}_UPSTREAM`  what the gateway forwards to
  */
+import { addAbortListener } from 'node:events';
 import { registerChatTransports } from './src/provider-transport.ts';
 import {
   type GatewayConfig,
@@ -191,7 +192,7 @@ export default function nemoRelayExtension(pi: ExtensionAPI): void {
     payload: Record<string, unknown>,
   ): Promise<void> => {
     const active = ensureConfig(ctx);
-    await enqueue(() => postAndForget(active, payload));
+    await waitForHook(enqueue(() => postAndForget(active, payload)), ctx.signal);
   };
 
   /**
@@ -562,19 +563,24 @@ export default function nemoRelayExtension(pi: ExtensionAPI): void {
       ctx: ExtensionContext,
     ): Promise<ToolCallEventResult | undefined> => {
       const active = ensureConfig(ctx);
+      const signal = ctx.signal;
       // Enqueued rather than posted directly, so any observability hook fired
       // earlier in the same turn reaches the gateway first and the tool span
       // opens under the right turn.
-      const outcome = await enqueue(() =>
-        postHook(active, {
+      const outcome = await waitForHook(enqueue(async () => {
+        if (signal?.aborted) return undefined;
+        return postHook(active, {
           hook_event_name: 'tool_call',
           tool_call_id: event.toolCallId,
           parent_tool_call_id: event.parentToolCallId,
           tool_name: event.toolName,
           input: event.input,
           ...attribution(),
-        }),
-      );
+        });
+      }), signal);
+      if (!outcome || signal?.aborted) {
+        return { block: true, reason: 'Pi cancelled the tool call while waiting for NeMo Relay authorization.' };
+      }
 
       const decision =
         outcome.kind === 'fault' ? resolveFault(active, outcome, event.toolName) : outcome;
@@ -875,4 +881,19 @@ function truncate(value: string): string {
   if (value.length <= MAX_CONTENT_CHARS) return value;
   const kept = sliceAtCodePointBoundary(value, MAX_CONTENT_CHARS);
   return `${kept}... [truncated ${value.length - kept.length} chars]`;
+}
+
+// Pi may finish an aborted run while its Relay jobs drain. Keeping those jobs in
+// the queue preserves start/end ordering, even if a gate already reached Relay.
+async function waitForHook<T>(job: Promise<T>, signal?: AbortSignal): Promise<T | undefined> {
+  if (!signal) return job;
+  let listener: ReturnType<typeof addAbortListener> | undefined;
+  const aborted = new Promise<undefined>((resolve) => {
+    listener = addAbortListener(signal, () => resolve(undefined));
+  });
+  try {
+    return await Promise.race([job, aborted]);
+  } finally {
+    listener?.[Symbol.dispose]();
+  }
 }

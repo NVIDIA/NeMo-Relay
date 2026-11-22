@@ -750,3 +750,6 @@ gateway answers. Posts go out one at a time in hook order, so a gating hook also
 waits for whatever is queued ahead of it: against a gateway that holds requests,
 the first gate of a session pays `NEMO_RELAY_PI_TIMEOUT_MS` once per queued post,
 not once.
+
+Cancelling the Pi run stops its pending tool calls from executing. Any hooks
+already sent still finish in order, so the next turn can wait for them.

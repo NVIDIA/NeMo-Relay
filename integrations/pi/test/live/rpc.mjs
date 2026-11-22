@@ -31,7 +31,7 @@ export async function withRpc(pi, setup, run) {
       for await (const chunk of request) data += chunk;
       const body = JSON.parse(data);
       posts.push(body);
-      const result = reply?.(body) ?? {};
+      const result = (await reply?.(body)) ?? {};
       response.writeHead(result.status ?? 200, { 'content-type': 'application/json' });
       response.end(JSON.stringify(result.body ?? {}));
     });
