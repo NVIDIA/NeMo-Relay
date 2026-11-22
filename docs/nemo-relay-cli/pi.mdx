@@ -337,6 +337,7 @@ recorded on the session scope rather than opening an empty turn to hold it.
 | `agent_start` / `agent_end` / `agent_settled` | Marks on the session scope |
 | `turn_start` / `turn_end` | Turn scope open and close |
 | `session_before_compact` | Mark. The compaction is announced, not yet done, and a later extension can still cancel it |
+| `session_compact_failed` | Mark with reason, cancellation status, retry intent, and extension origin |
 | `session_compact` | Canonical `compaction` mark |
 | `session_start`, then every `model_select` | `model_redirect` mark, for each decision that explains something. Synthesized: the decision is re-evaluated per model, so a switch away from a provider the gateway fronts stops redirecting |
 | *(after a rewrite)* | `tool_arguments_transformed` mark. Synthesized, so the trace records that the arguments the tool ran were not the ones proposed |
@@ -344,6 +345,9 @@ recorded on the session scope rather than opening an empty turn to hold it.
 | `tool_execution_end` | Closes an open tool span. If the span never opened, records a `tool_end_without_start` mark |
 | `user_bash` | Tool span start named `user_bash`, and the inline shell gate |
 | *(after the `user_bash` verdict)* | `user_bash_end`, a tool span end. Synthesized by the extension the moment the gate decides, **before the command runs** — pi reports no completion for inline shell, so this span measures the policy decision and not the shell command's duration |
+
+Pi 1.1.0 and later report `aborted` on `agent_settled`. A tool completion carries
+`pi_duration_ms` when Pi measured its execution. This excludes gateway and hook transport time.
 
 For pi's structured tool results, the extension joins text parts in order and
 omits image and other non-text parts. **Tool-result text is truncated at 2000

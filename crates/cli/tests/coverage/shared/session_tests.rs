@@ -2304,6 +2304,9 @@ async fn pi_nested_tools_resolve_only_the_explicit_active_parent() {
             "session_id": session_id, "hook_event_name": hook, "tool_name": name,
             "tool_call_id": id, "input": {}, "status": if id == "blocked" { "error" } else { "ok" },
         });
+        if hook == "tool_execution_end" && id == "left" {
+            payload["pi_duration_ms"] = json!(0);
+        }
         if let Some(parent) = parent {
             payload["parent_tool_call_id"] = json!(parent);
         }
@@ -2336,6 +2339,13 @@ async fn pi_nested_tools_resolve_only_the_explicit_active_parent() {
         assert_eq!(pair[0].parent_uuid(), pair[1].parent_uuid());
         pair[0]
     };
+    let measured_end = events
+        .iter()
+        .find(|e| {
+            e.tool_call_id() == Some("left") && e.scope_category() == Some(ScopeCategory::End)
+        })
+        .unwrap();
+    assert_eq!(measured_end.metadata().unwrap()["pi_duration_ms"], 0);
     let outer = pair("outer");
     for id in ["left", "right"] {
         let child = pair(id);

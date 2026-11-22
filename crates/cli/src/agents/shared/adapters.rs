@@ -752,6 +752,11 @@ fn common_tool_event_with_fallback(
     {
         metadata["parent_tool_call_id"] = json!(parent_id);
     }
+    if kind == AgentKind::Pi
+        && let Some(duration_ms) = payload.get("pi_duration_ms").and_then(Value::as_u64)
+    {
+        metadata["pi_duration_ms"] = json!(duration_ms);
+    }
     if tool_call.tool_call_id.is_none()
         && let Some(metadata) = metadata.as_object_mut()
     {
