@@ -145,6 +145,14 @@
     return isObjectLike(value) && typeof value.then === 'function';
   }
 
+  function outcomeOf(call) {
+    try {
+      return Promise.resolve(call());
+    } catch (error) {
+      return Promise.reject(error);
+    }
+  }
+
   function settleEnvelope(call, publicationState, encode, complete, direct) {
     const token = callbackStore(publicationState, undefined, undefined);
     const envelopeFor = (value) => {
@@ -319,15 +327,12 @@
               };
             };
     const invoke = () => {
-      Promise.resolve()
-        .then(() => {
-          const args = spread ? [...arg0] : [arg0];
-          if (safeNext !== undefined) {
-            args.push(safeNext);
-          }
-          args.push(controller.signal);
-          return fn(...args);
-        })
+      const args = spread ? [...arg0] : [arg0];
+      if (safeNext !== undefined) {
+        args.push(safeNext);
+      }
+      args.push(controller.signal);
+      outcomeOf(() => fn(...args))
         .then(async (value) => {
           if (!streamResult) {
             settlePublication();
@@ -407,12 +412,10 @@
 
     subscriber(fn, complete) {
       return function __nemo_relay_subscriber_wrapper(event, callbackId) {
-        Promise.resolve()
-          .then(() => fn(event))
-          .then(
-            () => complete(callbackId),
-            (error) => complete(callbackId, describeError(error).message),
-          );
+        outcomeOf(() => fn(event)).then(
+          () => complete(callbackId),
+          (error) => complete(callbackId, describeError(error).message),
+        );
       };
     },
 
