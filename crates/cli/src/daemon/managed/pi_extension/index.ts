@@ -155,6 +155,7 @@ type ExtensionAPI = {
   on(event: 'tool_call', handler: ExtensionHandler<ToolCallEvent, ToolCallResult>): void;
   on(event: 'user_bash', handler: ExtensionHandler<UserBashEvent, UserBashResult>): void;
   on(event: 'model_select', handler: ExtensionHandler<{ type: 'model_select'; model: PiModel }>): void;
+  on(event: 'context_with_system', handler: ExtensionHandler<{ type: 'context_with_system' }>): void;
   registerProvider(provider: ChatProvider): void;
   registerProvider(name: string, config: { baseUrl: string; headers: Record<string, string> }): void;
 };
@@ -247,7 +248,7 @@ export default function managedNemoRelayPi(pi: ExtensionAPI): void {
     active: Runtime,
     model: PiModel | undefined,
     context: ExtensionContext,
-    source: 'session_start' | 'model_select',
+    source: 'session_start' | 'model_select' | 'provider_request',
   ): void {
     if (registerChatTransports(
       context.modelRegistry, model, redirectedProviders,
@@ -339,6 +340,14 @@ export default function managedNemoRelayPi(pi: ExtensionAPI): void {
   pi.on('model_select', async (event, context) => {
     const active = await runtime();
     registerManagedProvider(active, event.model, context, 'model_select');
+  });
+
+  // The virtual router may register new providers while preparing this request.
+  pi.on('context_with_system', async (_event, context) => {
+    const model = context.model;
+    if (model?.api === 'pi-virtual') {
+      registerManagedProvider(await runtime(), model, context, 'provider_request');
+    }
   });
 
   pi.on('session_shutdown', async (event, context) => {
