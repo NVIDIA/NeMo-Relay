@@ -107,7 +107,9 @@ def run(pi, relay, root, api, domain, upstream_key):
             assert direct[0]["roles"][0] == "developer", direct
         else:
             assert [r["thread"]["type"] for r in direct] == ["create", "continue"], direct
-            assert direct[1]["roles"] == ["user"] and not direct[1]["tools"] and not any(direct[1]["system"].values()), direct
+            assert (
+                direct[1]["roles"] == ["user"] and not direct[1]["tools"] and not any(direct[1]["system"].values())
+            ), direct
     finally:
         fixture.close()
 
