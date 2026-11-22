@@ -592,11 +592,12 @@ alike. Naming cannot substitute for it: one endpoint is named per provider, so a
 provider spanning two has no single value to send. It still fails if a sibling
 speaks an API the gateway has no route for at all.
 
-Each of these outcomes is recorded as a `model_redirect` mark on the session
-scope, so a trace with no LLM spans states its own reason. The decision is
-re-made on each model switch; the two skips that explain nothing — no model
-resolved yet, and a provider already redirected — are evaluated but not marked,
-because one per `session_start` is noise in every trace.
+Relay records routing decisions as `model_redirect` marks on the session scope.
+For supported chat transports, the first mark appears when the provider stream
+runs. Send a chat request before checking the trace for that mark. The
+provider-wide fallback evaluates routing at session start and on model switches.
+It omits marks when Pi has no resolved model or Relay has already redirected the
+provider.
 
 To capture a specific provider, point the gateway at it:
 
