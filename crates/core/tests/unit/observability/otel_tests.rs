@@ -5570,7 +5570,7 @@ fn gen_ai_output_messages_for(response: AnnotatedLlmResponse, output: Option<Jso
                 .build(),
         ),
     );
-    let attributes = attr_map(&crate::test_support::otel_genai::end_attributes(&event));
+    let attributes = attr_map(&crate::observability::otel_genai::end_attributes(&event));
     serde_json::from_str(&attributes["gen_ai.output.messages"]).unwrap()
 }
 
