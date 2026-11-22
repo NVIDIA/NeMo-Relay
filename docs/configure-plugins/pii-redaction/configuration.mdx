@@ -1310,8 +1310,12 @@ and value; see [Typed Metric Marks](/configure-plugins/pii-redaction/redaction-b
 Valid selector syntax does not guarantee that the policy changes a payload.
 Enable [runtime diagnostics](/reference/diagnostics) at startup and inspect
 `pii_redaction.selector_evaluated` observations for the JSON documents the
-built-in sanitizer processes. Recording is best effort and depends on diagnostic
-admission and retention.
+built-in sanitizer processes. Each observation reports one traversal of one
+document. When the sanitizer edits a response through a codec, it traverses
+both the normalized annotation and the provider wire payload. One response
+can therefore produce two observations, and the same logical field can
+contribute to both sets of counts. Recording is best effort and depends on
+diagnostic admission and retention.
 
 | Detail | Meaning |
 | --- | --- |
