@@ -32,9 +32,7 @@ pub(crate) struct Settlers {
 
 #[derive(Clone, Copy)]
 pub(crate) enum Wrapper {
-    Execution,
-    Middleware,
-    ConditionalGate,
+    Sync,
     Collector,
     Finalizer,
     Scoped,
@@ -60,9 +58,7 @@ macro_rules! factories {
 }
 
 factories! {
-    execution: JsArg => JsArg = "execution",
-    middleware: JsArg => JsArg = "middleware",
-    conditional_gate: JsArg => JsArg = "conditionalGate",
+    sync: JsArg => JsArg = "sync",
     subscriber: JsArgs2 => JsArg = "subscriber",
     collector: JsArg => JsArg = "collector",
     finalizer: JsArg => JsArg = "finalizer",
@@ -84,9 +80,7 @@ factories! {
 impl Wrapper {
     fn select(self) -> fn(&Factories) -> &FunctionRef<JsArg, JsArg> {
         match self {
-            Self::Execution => |factories| &factories.execution,
-            Self::Middleware => |factories| &factories.middleware,
-            Self::ConditionalGate => |factories| &factories.conditional_gate,
+            Self::Sync => |factories| &factories.sync,
             Self::Collector => |factories| &factories.collector,
             Self::Finalizer => |factories| &factories.finalizer,
             Self::Scoped => |factories| &factories.scoped,

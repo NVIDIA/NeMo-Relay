@@ -8,6 +8,8 @@
   const streamQueues = new WeakMap();
   const streamCloses = new WeakMap();
   const pinnedStreams = new Map();
+  const INACTIVE_PUBLICATION = Object.freeze({ active: false });
+  const ACTIVE_PUBLICATION = Object.freeze({ active: true });
   let nextPublicationContextId = 0;
 
   function callbackStore(publicationState, publicationContextId, scope) {
@@ -20,33 +22,30 @@
   function selectedPublication(current, capturedPublicationContextId, hasCapturedContext) {
     if (!hasCapturedContext) {
       return {
-        publicationState: current?.publicationState ?? { active: false },
+        publicationState: current?.publicationState ?? INACTIVE_PUBLICATION,
         publicationContextId: current?.publicationContextId,
       };
     }
     return {
-      publicationState: publicationStates.get(capturedPublicationContextId) ?? { active: false },
+      publicationState: publicationStates.get(capturedPublicationContextId) ?? INACTIVE_PUBLICATION,
       publicationContextId: capturedPublicationContextId,
     };
   }
 
   function replacementCallbackStore(current, scope, capturedPublicationContextId, hasCapturedContext) {
+    const { lifecycle } = current;
     const store = {
-      lifecycle: current.lifecycle,
+      lifecycle,
       ...selectedPublication(current, capturedPublicationContextId, hasCapturedContext),
-      scope,
+      scope: lifecycle.expired ? undefined : scope,
     };
-    current.lifecycle.stores.add(store);
-    if (current.lifecycle.expired) {
-      store.scope = undefined;
+    if (!lifecycle.expired) {
+      lifecycle.stores.add(store);
     }
     return store;
   }
 
   function expireCallbackStore(store) {
-    if (store === undefined) {
-      return;
-    }
     store.lifecycle.expired = true;
     for (const current of store.lifecycle.stores) {
       current.scope = undefined;
@@ -97,6 +96,10 @@
     return result;
   }
 
+  function resultJson(value) {
+    return jsonValue(value === undefined ? null : value);
+  }
+
   function isObjectLike(value) {
     return value !== null && (typeof value === 'object' || typeof value === 'function');
   }
@@ -142,7 +145,8 @@
     return isObjectLike(value) && typeof value.then === 'function';
   }
 
-  function settleEnvelope(fn, encode, complete, direct) {
+  function settleEnvelope(call, publicationState, encode, complete, direct) {
+    const token = callbackStore(publicationState, undefined, undefined);
     const envelopeFor = (value) => {
       try {
         return { ok: true, value: encode(value) };
@@ -150,13 +154,17 @@
         return failureEnvelope(error);
       }
     };
+    const finish = (envelope) => {
+      expireCallbackStore(token);
+      complete(envelope);
+    };
     let envelope;
     try {
-      const value = fn();
+      const value = eventSanitizerContext.run(token, call);
       if (isThenable(value)) {
         Promise.resolve(value).then(
-          (resolved) => complete(envelopeFor(resolved)),
-          (error) => complete(failureEnvelope(error)),
+          (resolved) => finish(envelopeFor(resolved)),
+          (error) => finish(failureEnvelope(error)),
         );
         return undefined;
       }
@@ -164,6 +172,7 @@
     } catch (error) {
       envelope = failureEnvelope(error);
     }
+    expireCallbackStore(token);
     if (direct) {
       return envelope;
     }
@@ -254,7 +263,7 @@
         publicationStates.set(publicationContextId, publicationState);
         ownsPublicationState = true;
       } else {
-        publicationState = { active: false };
+        publicationState = INACTIVE_PUBLICATION;
       }
     }
     const token = callbackStore(publicationState, publicationContextId, scope);
@@ -281,8 +290,7 @@
       },
       { once: true },
     );
-    const invokeNext = (value) =>
-      settle.next(nextState, jsonValue(value === undefined ? null : value), eventSanitizerContext.getStore()?.scope);
+    const invokeNext = (value) => settle.next(nextState, resultJson(value), eventSanitizerContext.getStore()?.scope);
     const safeNext =
       nextState === undefined
         ? undefined
@@ -323,7 +331,7 @@
         .then(async (value) => {
           if (!streamResult) {
             settlePublication();
-            settle.resolve(callId, jsonValue(value === undefined ? null : value));
+            settle.resolve(callId, resultJson(value));
             return;
           }
           if (value == null || typeof value[Symbol.asyncIterator] !== 'function') {
@@ -346,7 +354,7 @@
                 finished = true;
                 break;
               }
-              await settle.streamPush(callId, jsonValue(item.value === undefined ? null : item.value));
+              await settle.streamPush(callId, resultJson(item.value));
             }
           } catch (error) {
             failure = { error };
@@ -387,37 +395,10 @@
       };
     },
 
-    execution(fn) {
-      return function __nemo_relay_execution_wrapper(...args) {
+    sync(fn) {
+      return function __nemo_relay_sync_wrapper(...args) {
         try {
-          const value = fn(...args);
-          return { ok: true, value: jsonValue(value === undefined ? null : value) };
-        } catch (error) {
-          return failureEnvelope(error);
-        }
-      };
-    },
-
-    middleware(fn) {
-      return function __nemo_relay_middleware_wrapper(...args) {
-        try {
-          const value = fn(...args);
-          return { ok: true, value: jsonValue(value === undefined ? null : value) };
-        } catch (error) {
-          return failureEnvelope(error);
-        }
-      };
-    },
-
-    conditionalGate(fn) {
-      return function __nemo_relay_conditional_gate_wrapper(...args) {
-        try {
-          const returned = fn(...args);
-          const value = returned === undefined ? null : returned;
-          if (value === null || typeof value === 'string') {
-            return { ok: true, value };
-          }
-          return { ok: false, error: 'conditional middleware guardrail must return a string or null' };
+          return { ok: true, value: resultJson(fn(...args)) };
         } catch (error) {
           return failureEnvelope(error);
         }
@@ -462,43 +443,19 @@
 
     collector(fn) {
       return function __nemo_relay_collector_wrapper(chunk, complete, direct) {
-        const token = callbackStore({ active: false }, undefined, undefined);
-        const envelope = eventSanitizerContext.run(token, () =>
-          settleEnvelope(
-            () => fn(chunk),
-            () => null,
-            (settled) => {
-              expireCallbackStore(token);
-              complete(settled);
-            },
-            direct,
-          ),
+        return settleEnvelope(
+          () => fn(chunk),
+          INACTIVE_PUBLICATION,
+          () => null,
+          complete,
+          direct,
         );
-        if (envelope !== undefined) {
-          expireCallbackStore(token);
-        }
-        return envelope;
       };
     },
 
     finalizer(fn) {
       return function __nemo_relay_finalizer_wrapper(complete, direct) {
-        const token = callbackStore({ active: true }, undefined, undefined);
-        const envelope = eventSanitizerContext.run(token, () =>
-          settleEnvelope(
-            fn,
-            (value) => jsonValue(value === undefined ? null : value),
-            (settled) => {
-              expireCallbackStore(token);
-              complete(settled);
-            },
-            direct,
-          ),
-        );
-        if (envelope !== undefined) {
-          expireCallbackStore(token);
-        }
-        return envelope;
+        return settleEnvelope(fn, ACTIVE_PUBLICATION, resultJson, complete, direct);
       };
     },
 
@@ -540,7 +497,7 @@
       return function __nemo_relay_scoped_wrapper(arg, scope) {
         const current = eventSanitizerContext.getStore();
         const token = callbackStore(
-          current?.publicationState ?? { active: false },
+          current?.publicationState ?? INACTIVE_PUBLICATION,
           current?.publicationContextId,
           scope,
         );

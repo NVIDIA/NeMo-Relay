@@ -926,7 +926,7 @@ fn scoped_fn<A: Send + 'static, R: Send + 'static>(
     encode: fn(A) -> FlowResult<Value>,
     decode: fn(Value) -> FlowResult<R>,
 ) -> napi::Result<ScopedFn<A, R>> {
-    let func: Function<JsArg, JsArg> = callback_factory::wrap(env, Wrapper::Execution, func)?;
+    let func: Function<JsArg, JsArg> = callback_factory::wrap(env, Wrapper::Sync, func)?;
     let scoped: Function<JsArgs2, JsArg> = callback_factory::wrap(env, Wrapper::Scoped, &func)?;
     let func: Arc<callable::AsyncReplyTsfn<ScopedJsonCall>> =
         Arc::new(callable::reply_tsfn(env, &scoped, error_prefix)?);
@@ -1119,7 +1119,7 @@ fn node_conditional_middleware_guardrail(
 ) -> napi::Result<ConditionalMiddlewareGuardrailFn> {
     let callback = callable::SyncJsCallback::new(
         env,
-        callback_factory::wrap::<JsArgs2, JsArg>(env, Wrapper::ConditionalGate, guardrail)?,
+        callback_factory::wrap::<JsArgs2, JsArg>(env, Wrapper::Sync, guardrail)?,
         CONDITIONAL_GATE_PREFIX,
         Some(CONDITIONAL_GATE_CALLBACK_TIMEOUT),
     )?;
@@ -4209,14 +4209,14 @@ pub fn register_plugin(
         .map(|func| {
             callable::SyncJsCallback::new(
                 &env,
-                callback_factory::wrap(&env, Wrapper::Middleware, &func)?,
+                callback_factory::wrap(&env, Wrapper::Sync, &func)?,
                 PLUGIN_VALIDATE_PREFIX,
                 None,
             )
         })
         .transpose()?;
     let register: Function<JsArgs2, JsArg> =
-        callback_factory::wrap(&env, Wrapper::Middleware, &register)?;
+        callback_factory::wrap(&env, Wrapper::Sync, &register)?;
     let register = callable::reply_tsfn(&env, &register, PLUGIN_REGISTER_PREFIX)?;
 
     register_plugin_impl(Arc::new(NodePlugin {

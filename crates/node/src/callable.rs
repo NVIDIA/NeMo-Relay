@@ -154,20 +154,16 @@ fn decode_envelope(envelope: Unknown, error_prefix: &str) -> napi::Result<Result
             None => Ok(Value::Null),
         });
     }
-    if envelope.has_named_property("exception")? {
-        let exception = envelope.get_named_property::<Unknown>("exception")?;
-        let message: String = envelope_field(&envelope, "message")?;
-        let exception_type: String = envelope_field(&envelope, "exceptionType")?;
-        return Ok(Err(FlowError::CallbackException {
-            message: format!("{error_prefix}: {message}"),
-            exception_type,
-            source: Some(Arc::new(napi::Error::from_unknown_without_coercion(
-                exception,
-            ))),
-        }));
-    }
-    let error: String = envelope_field(&envelope, "error")?;
-    Ok(Err(FlowError::Internal(format!("{error_prefix}: {error}"))))
+    let exception = envelope.get_named_property::<Unknown>("exception")?;
+    let message: String = envelope_field(&envelope, "message")?;
+    let exception_type: String = envelope_field(&envelope, "exceptionType")?;
+    Ok(Err(FlowError::CallbackException {
+        message: format!("{error_prefix}: {message}"),
+        exception_type,
+        source: Some(Arc::new(napi::Error::from_unknown_without_coercion(
+            exception,
+        ))),
+    }))
 }
 
 pub(crate) fn unwrap_envelope(envelope: Unknown, error_prefix: &str) -> Result<Value> {
@@ -1065,7 +1061,7 @@ pub(crate) fn js_codec_callback(
 ) -> napi::Result<SyncJsCallback<Value>> {
     SyncJsCallback::new(
         env,
-        callback_factory::wrap(env, Wrapper::Execution, func)?,
+        callback_factory::wrap(env, Wrapper::Sync, func)?,
         error_prefix,
         None,
     )
