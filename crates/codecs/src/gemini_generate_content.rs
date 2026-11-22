@@ -341,9 +341,7 @@ fn gemini_parts_to_message_content(
     parts: &[Json],
     context: &str,
 ) -> Result<Option<MessageContent>> {
-    let mut texts: Vec<String> = Vec::new();
     let mut content_parts: Vec<ContentPart> = Vec::new();
-    let mut requires_parts = false;
 
     for part in parts {
         let obj = part.as_object().ok_or_else(|| {
@@ -356,7 +354,6 @@ fn gemini_parts_to_message_content(
         }
 
         let Some(data_key) = validate_single_gemini_part_data_field(obj, context)? else {
-            requires_parts = true;
             content_parts.push(ContentPart::ProviderNative {
                 provider: GEMINI_PROVIDER.into(),
                 kind: "unknown".into(),
@@ -378,17 +375,12 @@ fn gemini_parts_to_message_content(
                     .filter(|(key, _)| key.as_str() != "text")
                     .map(|(key, value)| (key.clone(), value.clone()))
                     .collect();
-                if !extra.is_empty() {
-                    requires_parts = true;
-                }
-                texts.push(text.to_string());
                 content_parts.push(ContentPart::Text {
                     text: text.to_string(),
                     extra,
                 });
             }
             native_key => {
-                requires_parts = true;
                 content_parts.push(ContentPart::ProviderNative {
                     provider: GEMINI_PROVIDER.into(),
                     kind: native_key.to_string(),
@@ -398,13 +390,7 @@ fn gemini_parts_to_message_content(
         }
     }
 
-    Ok(if content_parts.is_empty() {
-        None
-    } else if requires_parts {
-        Some(MessageContent::Parts(content_parts))
-    } else {
-        Some(MessageContent::Text(texts.join("\n")))
-    })
+    Ok(crate::response::message_from_content_parts(content_parts))
 }
 
 fn validate_gemini_nested_function_response_part(part: &Json) -> Result<&str> {

@@ -348,26 +348,6 @@ pub(crate) fn custom_tool_message(message: &Message) -> Option<Message> {
     }
 }
 
-fn message_from_content_parts(parts: Vec<ContentPart>) -> Option<MessageContent> {
-    if parts
-        .iter()
-        .any(|part| !matches!(part, ContentPart::Text { .. }))
-    {
-        return Some(MessageContent::Parts(parts));
-    }
-    // Keep the existing string representation for text-only responses.
-    let mut texts = parts.into_iter().filter_map(|part| match part {
-        ContentPart::Text { text, .. } => Some(text),
-        _ => None,
-    });
-    let mut text = texts.next()?;
-    for part in texts {
-        text.push('\n');
-        text.push_str(&part);
-    }
-    Some(MessageContent::Text(text))
-}
-
 fn top_level_output_text(response: &Json) -> Option<MessageContent> {
     response
         .get("output_text")
@@ -1335,8 +1315,8 @@ impl LlmResponseCodec for OpenAIResponsesCodec {
             .map_err(|e| FlowError::Internal(format!("OpenAI Responses response decode: {e}")))?;
 
         let (content_parts, tool_calls) = collect_output_parts(raw.output.as_deref());
-        let message =
-            message_from_content_parts(content_parts).or_else(|| top_level_output_text(response));
+        let message = crate::response::message_from_content_parts(content_parts)
+            .or_else(|| top_level_output_text(response));
         let tool_calls = optional_vec(tool_calls);
 
         // Map finish reason from status + incomplete_details.
