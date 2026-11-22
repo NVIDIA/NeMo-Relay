@@ -249,7 +249,7 @@ describe('inline shell gate', () => {
         excludeFromContext: false,
         cwd: '/work',
       }).catch((error) => {
-        assert.fail(`the gate rejected under "${label}", which fails open silently: ${error}`);
+        assert.fail(`the gate rejected under "${label}", which can fail open on Pi 0.84.0: ${error}`);
       });
       assert.ok(
         result === undefined || typeof result?.result?.output === 'string',

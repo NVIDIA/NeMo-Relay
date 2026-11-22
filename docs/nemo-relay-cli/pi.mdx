@@ -481,6 +481,10 @@ gate the bang prefix.
 The posted arguments are `command`, `cwd`, and `exclude_from_context`, the last
 of which is `true` for the `!!` form.
 
+Pi 0.86.0 and later abort the shell command when a handler throws or returns
+an invalid value. Pi 0.84.0 can continue to local execution after a throw.
+Relay returns an explicit shell result on a policy denial on both versions.
+
 pi's `user_bash` hook has no block-and-reason contract, so a refusal is a
 synthetic failed command result that pi records as though the command had run:
 

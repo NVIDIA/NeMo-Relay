@@ -642,7 +642,7 @@ export default function nemoRelayExtension(pi: ExtensionAPI): void {
    * 1. **There is no block-and-reason contract.** A refusal is a synthetic
    *    failed `BashResult` and pi records it exactly as if the command had run.
    *    See `src/user-bash.ts` for the shape and why those field values.
-   * 2. **`emitUserBash` catches**, so throwing fails *open* and the command
+   * 2. **Pi 0.84.0 catches handler errors**, so throwing fails *open* and the command
    *    runs unchecked. Nothing here is allowed to escape; the catch resolves an
    *    internal failure through the same policy as an unreachable gateway.
    * 3. **The first handler to return anything wins.** Loaded with `-e` this one
