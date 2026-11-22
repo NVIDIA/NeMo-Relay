@@ -112,7 +112,14 @@ def run(pi: Path, root: Path, builtins: bool) -> None:
 
         with (
             patch.object(provider, "choose_tool", choose),
-            patch.object(provider, "tool_result", lambda req: any(m.get("role") == "tool" for m in req["messages"])),
+            patch.object(
+                provider,
+                "tool_result",
+                lambda req: any(
+                    m.get("role") == "tool" and "managed-read-ok" in json.dumps(m.get("content", ""))
+                    for m in req["messages"]
+                ),
+            ),
         ):
             result = subprocess.run(
                 [
