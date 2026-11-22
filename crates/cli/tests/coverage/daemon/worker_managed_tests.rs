@@ -355,6 +355,28 @@ async fn stream_observation_validates_responses_completion_without_changing_deli
 }
 
 #[tokio::test]
+async fn stream_observation_preserves_http_rejection_with_json_body() {
+    let expected = Bytes::from_static(br#"{"error":"busy"}"#);
+    let (body, observation) = observe_body(
+        Full::new(expected.clone()),
+        StatusCode::TOO_MANY_REQUESTS,
+        DEFAULT_OBSERVATION_CAPTURE_BYTES,
+        OperationalContext::new(),
+    );
+    assert_eq!(body.collect().await.unwrap().to_bytes(), expected);
+    let observed = observation
+        .finish(ProviderSurface::OpenAIResponses, true)
+        .await;
+    assert_eq!(observed.terminal, OBSERVATION_COMPLETE);
+    assert!(!observed.truncated);
+    assert_eq!(observed.value, Some(json!({"error":"busy"})));
+    assert_eq!(
+        observed.metadata()["otel.status_description"],
+        "provider returned HTTP 429"
+    );
+}
+
+#[tokio::test]
 async fn stream_observation_rejects_malformed_trailing_sse_frames() {
     // A complete terminal event cannot hide a malformed final, unterminated frame.
     let expected = Bytes::from_static(

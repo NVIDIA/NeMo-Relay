@@ -1463,7 +1463,8 @@ impl ObservationReceiver {
     async fn finish_inner(mut self, surface: ProviderSurface, streaming: bool) -> ObservedResponse {
         let signal = Arc::clone(&self.signal);
         let status = self.status;
-        let value = if streaming {
+        // HTTP rejection bodies can be ordinary JSON even for streaming requests.
+        let value = if streaming && status.is_success() {
             self.finish_stream(surface).await
         } else {
             self.finish_buffered().await
