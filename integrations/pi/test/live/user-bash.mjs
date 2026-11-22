@@ -7,8 +7,8 @@ import { writeFile } from 'node:fs/promises';
 import { join } from 'node:path';
 import { deny, extension, withRpc } from './rpc.mjs';
 
-const [pi, version] = process.argv.slice(2);
-assert.ok(pi && ['0.84.0', '1.6.0'].includes(version), 'supply the Pi executable and its exact version');
+const [pi] = process.argv.slice(2);
+assert.ok(pi, 'supply the Pi 1.6.0 executable');
 await withRpc(pi, async (root) => {
   const probe = join(root, 'shell-probe.mjs');
   await writeFile(probe, `export default pi => pi.on('user_bash', event => {
@@ -20,7 +20,7 @@ await withRpc(pi, async (root) => {
 }, async ({ root, posts, command }) => {
   for (const name of ['allowed', 'denied', 'thrown', 'invalid']) {
     const response = await command('bash', { command: 'echo ran > ' + name });
-    const executes = name === 'allowed' || (version === '0.84.0' && ['thrown','invalid'].includes(name));
+    const executes = name === 'allowed';
     assert.equal(existsSync(join(root, name)), executes, JSON.stringify(response));
     if (name === 'denied') {
       assert.equal(response.data.exitCode, 126);
