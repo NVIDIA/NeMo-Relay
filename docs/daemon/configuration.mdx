@@ -860,6 +860,20 @@ explicit `-e` extension, but does not also load user, project, or discovered
 extensions that could alter provider registration, tool arguments, or shell
 policy after Relay has authorized an operation.
 
+On Pi 1.6.0 the administrator can also name Pi's bundled codemode and tool
+search extensions explicitly. Keep the Relay entry point first. For example:
+
+```bash
+pi --no-extensions -e /opt/nvidia/share/nemo-relay-managed-v1/pi/extension-v1/index.ts \
+  -e builtin:codemode -e builtin:tool-search --tools read,edit,write,bash,codemode,tool_search
+```
+
+The launcher controls both the extension list and the tool list. Nested tool
+calls still pass through Relay. The default launch and this optional profile
+exclude Pi's native MCP client, which can start commands from the user's or a
+trusted project's `mcp.json`. Relay's administrator-owned MCP dispatcher runs
+independently of Pi's native MCP client.
+
 The extension starts the fixed dispatcher as
 `daemon mcp --daemon-address <URL>`, waits for MCP initialization before
 registering managed providers, and
