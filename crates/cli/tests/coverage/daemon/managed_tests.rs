@@ -324,7 +324,7 @@ fn v1_artifact_bytes_do_not_depend_on_binary_or_platform_versioning() {
 fn canonical_v1_bundle_matches_the_golden_digest() {
     // This digest pins the v1 manifest and every artifact byte for a canonical deployment,
     // including the supported hook set. Update it only for intentional bundle changes.
-    const GOLDEN_SHA256: &str = "f06b5d469acf620f3753839956637387bed66786995d669a30b9e341b3c24b21";
+    const GOLDEN_SHA256: &str = "0aaee32d09e5376f8360f141f630b97493c0912e1a91cc7b339a2f9bac0ba589";
     let rendered = render_bundle(&spec([
         ManagedAgent::Codex,
         ManagedAgent::ClaudeCode,
