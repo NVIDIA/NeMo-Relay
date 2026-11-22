@@ -48,6 +48,12 @@ pub(super) async fn prepare_gateway_request(
 ) -> Result<PreparedGatewayRequest, CliError> {
     let (mut parts, body) = request.into_parts();
     parts.headers.remove(BOOTSTRAP_CLIENT_TOKEN_HEADER);
+    let exact_pi_path = parts
+        .headers
+        .remove(crate::agents::pi::alignment::EXACT_PATH_HEADER)
+        .is_some_and(|value| value == "1")
+        && parts.method == Method::POST
+        && matches!(provider_path, "/chat/completions" | "/responses");
     // Dispatch controls are trusted only when set by in-process middleware.
     super::strip_internal_dispatch_headers(&mut parts.headers);
     let provider = ProviderRoute::from_request(provider_path, &parts.headers).ok_or_else(|| {
@@ -103,6 +109,14 @@ pub(super) async fn prepare_gateway_request(
             // falling back to the configured upstream would deliver both to a different company.
             crate::agents::pi::alignment::NamedUpstream::Rejected(reason) => {
                 return Err(CliError::InvalidPayload(reason.to_string()));
+            }
+            // Pi's dispatch wrapper verified the configured destination matches the model's
+            // base. Keep using configured upstream auth and append the SDK's exact suffix.
+            crate::agents::pi::alignment::NamedUpstream::Absent if exact_pi_path => {
+                format!(
+                    "{}{path_and_query}",
+                    config.openai_base_url.trim_end_matches('/')
+                )
             }
             crate::agents::pi::alignment::NamedUpstream::Absent => {
                 provider.upstream_url(config, &path_and_query)

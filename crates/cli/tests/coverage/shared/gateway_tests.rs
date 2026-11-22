@@ -338,6 +338,41 @@ fn removes_hop_by_hop_headers() {
 }
 
 #[tokio::test]
+async fn pi_dispatch_preserves_the_configured_openai_path_and_auth() {
+    let config = GatewayConfig {
+        openai_base_url: "https://example.test/strict/".into(),
+        ..GatewayConfig::default()
+    };
+    let path_header = crate::agents::pi::alignment::EXACT_PATH_HEADER;
+    for path in ["/chat/completions", "/responses"] {
+        for exact in [false, true] {
+            let mut request = Request::builder()
+                .method(Method::POST)
+                .uri(format!("{path}?stream=1"));
+            if exact {
+                request = request.header(path_header, "1");
+            }
+            let prepared = prepare_gateway_request(
+                &config,
+                request.body(Body::from(r#"{"model":"test"}"#)).unwrap(),
+                environment_authorization(),
+                path,
+            )
+            .await
+            .unwrap();
+            let version = if exact { "" } else { "/v1" };
+            assert_eq!(
+                prepared.upstream_url,
+                format!("https://example.test/strict{version}{path}?stream=1")
+            );
+            assert!(prepared.authorization.allow_environment_provider_auth);
+            assert!(!prepared.client_named_upstream);
+            assert!(!prepared.headers.contains_key(path_header));
+        }
+    }
+}
+
+#[tokio::test]
 async fn prepared_gateway_request_consumes_private_client_proof() {
     let request = Request::builder()
         .method(Method::POST)
