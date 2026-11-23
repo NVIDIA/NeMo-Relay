@@ -17479,7 +17479,7 @@ the following restrictions:
 3. This notice may not be removed or altered from any source distribution.
 ```
 
-## form_urlencoded - 1.2.2
+## form_urlencoded - 1.2.3
 
 **Repository URL**: https://github.com/servo/rust-url
 **License Type(s)**: Apache-2.0
@@ -56023,7 +56023,7 @@ DEALINGS IN THE SOFTWARE.
 // OR IN CONNECTION WITH THE USE OR PERFORMANCE OF THIS SOFTWARE.
 ```
 
-## url - 2.5.8
+## url - 2.5.9
 
 **Repository URL**: https://github.com/servo/rust-url
 **License Type(s)**: Apache-2.0
