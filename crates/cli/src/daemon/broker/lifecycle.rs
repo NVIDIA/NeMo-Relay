@@ -44,6 +44,7 @@ pub(crate) struct WorkerTarget {
     authentication: HeaderValue,
     session_token: SensitiveString,
     client: Arc<PooledClient>,
+    hook_client: Arc<PooledClient>,
     websocket_client: Option<PooledClient>,
     in_flight: AtomicUsize,
     control_available: AtomicBool,
@@ -99,6 +100,7 @@ impl WorkerTarget {
             origin,
             authentication,
             session_token,
+            hook_client: Arc::clone(&client),
             client,
             websocket_client: None,
             in_flight: AtomicUsize::new(0),
@@ -155,6 +157,16 @@ impl WorkerTarget {
     /// Returns the shared pool selected for this worker's transport trust identity.
     pub(crate) fn client(&self) -> &PooledClient {
         self.client.as_ref()
+    }
+
+    /// Selects the independent pool for bounded hook and readiness traffic.
+    pub(crate) fn with_hook_client(mut self, client: Arc<PooledClient>) -> Self {
+        self.hook_client = client;
+        self
+    }
+
+    pub(crate) fn hook_client(&self) -> &PooledClient {
+        self.hook_client.as_ref()
     }
 
     /// Returns the number of requests accepted by the broker and not yet dropped.

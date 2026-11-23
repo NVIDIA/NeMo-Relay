@@ -1,6 +1,8 @@
 # SPDX-FileCopyrightText: Copyright (c) 2026, NVIDIA CORPORATION & AFFILIATES. All rights reserved.
 # SPDX-License-Identifier: Apache-2.0
 
+"""Run async work synchronously while preserving NeMo Relay scope context."""
+
 import asyncio
 import contextvars
 from concurrent.futures import ThreadPoolExecutor

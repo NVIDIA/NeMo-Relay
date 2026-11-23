@@ -1,0 +1,59 @@
+<!--
+SPDX-FileCopyrightText: Copyright (c) 2026, NVIDIA CORPORATION & AFFILIATES. All rights reserved.
+SPDX-License-Identifier: Apache-2.0
+-->
+
+# NVIDIA NeMo Relay
+
+> NeMo Relay provides a shared runtime for observing and controlling agent work through scopes, middleware, plugins, and lifecycle events.
+
+## Instructions for AI Agents
+
+- This is an index of indexes. Fetch the section relevant to the task, then fetch individual pages as Markdown by appending `.md` to a page URL.
+- Section links below use `/latest/`, the latest stable release. For an installed release, replace `/latest/` with its retained `/vX.Y.Z/` snapshot. Use `/dev/` only for development behavior. Preserve the selected version throughout a task; older versions can have different sections and APIs.
+- Individual Markdown pages identify their version and list available version indexes. Use those indexes to check which snapshots exist; do not assume every past release is retained.
+- Choose the integration boundary first: coding-agent hooks and gateway traffic, framework-owned lifecycle hooks, or application-owned tool and model calls. Available observation and control depend on that boundary.
+- Rust is the runtime source of truth. Rust, Python, and Node.js are the primary bindings; Go and the raw C FFI are experimental and source-first.
+
+## Start Here
+
+- [Overview](https://docs.nvidia.com/nemo/relay/latest/about-nemo-relay/overview.md): Understand Relay and choose the integration path for your task.
+- [Choose Where Relay Attaches](https://docs.nvidia.com/nemo/relay/latest/getting-started/about.md): Select a coding-agent, framework, or application integration boundary.
+- [Installation](https://docs.nvidia.com/nemo/relay/latest/getting-started/installation.md): Compare packages, platforms, and installation methods.
+- [Quick Starts](https://docs.nvidia.com/nemo/relay/latest/getting-started/quick-start/llms.txt): Choose a first working example for an agent harness, framework, or language binding.
+- [Supported Integrations](https://docs.nvidia.com/nemo/relay/latest/supported-integrations/llms.txt): Check integration support and its observation, security, and optimization boundaries.
+
+## Understand the Runtime
+
+- [About NeMo Relay](https://docs.nvidia.com/nemo/relay/latest/about-nemo-relay/llms.txt): Product overview, ecosystem, architecture, concepts, and release notes.
+- [Agent Runtime Primer](https://docs.nvidia.com/nemo/relay/latest/about-nemo-relay/agent-runtime-primer.md): Understand the runtime ownership and execution model before choosing APIs.
+- [Concepts](https://docs.nvidia.com/nemo/relay/latest/about-nemo-relay/concepts/llms.txt): Look up scopes, events, middleware, plugins, subscribers, and provider codecs.
+
+## Integrate and Operate
+
+- [Getting Started](https://docs.nvidia.com/nemo/relay/latest/getting-started/llms.txt): Installation, configuration, and quick starts.
+- [Coding Agents and CLI](https://docs.nvidia.com/nemo/relay/latest/nemo-relay-cli/llms.txt): Observe supported local coding agents through Relay hooks and gateway routing.
+- [Daemon](https://docs.nvidia.com/nemo/relay/latest/daemon/llms.txt): Configure and operate a shared Relay daemon.
+- [Instrument Applications](https://docs.nvidia.com/nemo/relay/latest/instrument-applications/llms.txt): Add scopes, managed calls, and middleware where your application owns execution.
+- [Integrate into Frameworks](https://docs.nvidia.com/nemo/relay/latest/integrate-into-frameworks/llms.txt): Build integrations at framework-owned scope, tool, model, and codec boundaries.
+- [Use Plugins](https://docs.nvidia.com/nemo/relay/latest/configure-plugins/llms.txt): Configure, discover, and initialize plugins.
+- [Observability](https://docs.nvidia.com/nemo/relay/latest/configure-plugins/observability/llms.txt): Configure ATOF, ATIF, OpenTelemetry, and OpenInference output.
+- [Adaptive Runtime](https://docs.nvidia.com/nemo/relay/latest/configure-plugins/adaptive/llms.txt): Configure adaptive runtime behavior and hints.
+- [Build Plugins](https://docs.nvidia.com/nemo/relay/latest/build-plugins/llms.txt): Develop and package language-binding, native, and worker plugins.
+- [Troubleshooting](https://docs.nvidia.com/nemo/relay/latest/resources/troubleshooting/llms.txt): Diagnose runtime, tracing, and integration problems.
+
+## Language References
+
+Use these generated references for symbol lookup. Use the concepts and task guides above for ownership, execution ordering, cleanup, and integration behavior. The Rust reference is large; fetch a narrower module index when possible.
+
+- [Python](https://docs.nvidia.com/nemo/relay/latest/reference/api/python-library-reference/llms.txt): Python runtime and worker-plugin SDK modules.
+- [Node.js](https://docs.nvidia.com/nemo/relay/latest/reference/api/nodejs-library-reference/llms.txt): Node.js runtime and integration entry points.
+- [Rust](https://docs.nvidia.com/nemo/relay/latest/reference/api/rust-library-reference/llms.txt): Rust crates, modules, and public symbols.
+- [Reference Guides](https://docs.nvidia.com/nemo/relay/latest/reference/llms.txt): Runtime contracts, configuration reference, diagnostics, migration guides, and library references.
+
+## Contribute and Find More
+
+- [Contribute](https://docs.nvidia.com/nemo/relay/latest/contribute/llms.txt): Set up a source checkout and follow contribution, testing, and documentation workflows.
+- [Resources](https://docs.nvidia.com/nemo/relay/latest/resources/llms.txt): Troubleshooting, community, and legal information.
+- [Complete Latest Page Inventory](https://docs.nvidia.com/nemo/relay/latest/llms.txt): Exhaustive generated index; use only when a smaller section index is insufficient.
+- [Development Page Inventory](https://docs.nvidia.com/nemo/relay/dev/llms.txt): Exhaustive index for unreleased development documentation.

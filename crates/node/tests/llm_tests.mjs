@@ -440,7 +440,7 @@ describe('LLM execute', () => {
       assert.ok(errorEnd, 'expected failed llm end event');
       assert.equal(errorEnd.metadata.caller, 'node-llm-error');
       assert.equal(errorEnd.metadata['otel.status_code'], 'ERROR');
-      assert.match(errorEnd.metadata['otel.status_description'], /JavaScript callback failed/);
+      assert.match(errorEnd.metadata['otel.status_description'], /GetterError/);
       assert.equal(errorEnd.metadata['error.type'], 'internal_error');
       assert.equal(errorEnd.metadata['exception.type'], 'GetterError');
     } finally {
@@ -1222,7 +1222,7 @@ describe('LLM guardrails', () => {
           event.scope_category === 'start',
       );
       assert.equal(start.data, null);
-      assert.equal(getLastCallbackError(), 'internal error: unknown error');
+      assert.equal(getLastCallbackError(), 'internal error: GetterError');
 
       deregisterLlmSanitizeRequestGuardrail('node_llm_san_req_throw');
       const result = await llmCallExecute(

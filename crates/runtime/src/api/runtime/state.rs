@@ -91,6 +91,10 @@ impl Stream for ContextualizedLlmStream {
 }
 
 impl LlmStreamInner for ContextualizedLlmStream {
+    fn cancel(self: Pin<&mut Self>) {
+        self.get_mut().inner.cancel();
+    }
+
     fn terminalize(self: Pin<&mut Self>) {
         self.get_mut().inner.terminalize();
     }
@@ -131,6 +135,10 @@ impl Stream for ExecutionGuardedLlmStream {
 }
 
 impl LlmStreamInner for ExecutionGuardedLlmStream {
+    fn cancel(self: Pin<&mut Self>) {
+        self.get_mut().inner.cancel();
+    }
+
     fn terminalize(self: Pin<&mut Self>) {
         let this = self.get_mut();
         this.codec_guard.take();

@@ -250,7 +250,24 @@ start the worker:
    when Relay must use a non-default base interpreter. Standard pip index, proxy,
    certificate, and wheelhouse variables control dependency resolution.
 
-2. Enable the component and start Relay.
+2. Allow the unsigned example artifact. By default Relay requires a trusted
+   signature for dynamic plugins, and the example manifest has only an
+   `integrity.sha256` digest. For this local walkthrough, relax attestation in
+   the `plugins.toml` that `plugins add` wrote next to `gateway.toml`:
+
+   ```bash
+   printf '\n[plugins.policy.defaults]\nattestation = "integrity_only"\n' \
+     >> "$relay_tmp/plugins.toml"
+   ```
+
+   Run this once. If the file already has a `[plugins.policy.defaults]` table,
+   add the `attestation` line to that table instead, because TOML rejects a
+   repeated table.
+
+   Sign the artifact and configure `trusted_public_keys` instead for any shared
+   or production host. See [Discoverable Plugins](/configure-plugins/discoverable-plugins).
+
+3. Enable the component and start Relay.
 
    ```bash
    nemo-relay --config "$relay_config" plugins enable examples.python_grpc_worker

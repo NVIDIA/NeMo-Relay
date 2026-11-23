@@ -2249,6 +2249,151 @@ async fn pi_paired_tool_execution_metadata() {
 }
 
 #[tokio::test]
+async fn pi_nested_tools_resolve_only_the_explicit_active_parent() {
+    let session_id = "pi-nested-mcp-tools";
+    let captured = Arc::new(StdMutex::new(Vec::<Event>::new()));
+    let events = Arc::clone(&captured);
+    register_filtered_session_subscriber(
+        session_id,
+        tracked_sessions(&[session_id]),
+        Arc::new(move |event| events.lock().unwrap().push(event.clone())),
+    );
+    let manager = SessionManager::new(session_test_config());
+    let headers = HeaderMap::new();
+    for (hook, name, id, parent) in [
+        ("turn_start", "", "", None),
+        ("tool_call", "codemode", "outer", None),
+        ("tool_call", "mcp__docs__search", "left", Some("outer")),
+        ("tool_call", "mcp__docs__search", "right", Some("outer")),
+        ("tool_call", "read", "deep", Some("left")),
+        (
+            "tool_execution_end",
+            "mcp__docs__search",
+            "right",
+            Some("outer"),
+        ),
+        ("tool_execution_end", "read", "deep", Some("left")),
+        (
+            "tool_execution_end",
+            "mcp__docs__search",
+            "left",
+            Some("outer"),
+        ),
+        // Pi also ends calls blocked before execution, with no matching tool start.
+        (
+            "tool_execution_end",
+            "mcp__docs__delete",
+            "blocked",
+            Some("outer"),
+        ),
+        ("tool_execution_end", "codemode", "outer", None),
+        ("tool_call", "mcp__docs__search", "outer/direct", None),
+        ("tool_call", "read", "orphan", Some("outer")),
+        ("tool_execution_end", "read", "orphan", Some("outer")),
+        (
+            "tool_execution_end",
+            "mcp__docs__search",
+            "outer/direct",
+            None,
+        ),
+        ("tool_call", "codemode", "interrupted", None),
+        ("tool_call", "read", "unfinished", Some("interrupted")),
+        ("session_shutdown", "", "", None),
+    ] {
+        let mut payload = json!({
+            "session_id": session_id, "hook_event_name": hook, "tool_name": name,
+            "tool_call_id": id, "input": {}, "status": if id == "blocked" { "error" } else { "ok" },
+        });
+        if hook == "tool_execution_end" && id == "left" {
+            payload["pi_duration_ms"] = json!(0);
+        }
+        if let Some(parent) = parent {
+            payload["parent_tool_call_id"] = json!(parent);
+        }
+        let hooks = crate::agents::shared::adapters::pi::adapt(payload, &headers);
+        manager.apply_events(&headers, hooks.events).await.unwrap();
+        if hook == "turn_start" {
+            // The model also requested a direct MCP call identical to both children.
+            let mut sessions = manager.inner.lock().await;
+            sessions
+                .get_mut(session_id)
+                .unwrap()
+                .add_tool_hints_from_llm_response(
+                    &json!({"output": [{
+                        "type": "function_call", "call_id": "outer/direct",
+                        "name": "mcp__docs__search", "arguments": "{}"
+                    }]}),
+                    None,
+                );
+        }
+    }
+    flush_subscribers().unwrap();
+    deregister_subscriber(session_id).unwrap();
+    let events = captured.lock().unwrap();
+    let pair = |id: &str| {
+        let pair: Vec<_> = events
+            .iter()
+            .filter(|e| e.tool_call_id() == Some(id))
+            .collect();
+        assert_eq!(pair.len(), 2, "{id}");
+        assert_eq!(pair[0].parent_uuid(), pair[1].parent_uuid());
+        pair[0]
+    };
+    let measured_end = events
+        .iter()
+        .find(|e| {
+            e.tool_call_id() == Some("left") && e.scope_category() == Some(ScopeCategory::End)
+        })
+        .unwrap();
+    assert_eq!(measured_end.metadata().unwrap()["pi_duration_ms"], 0);
+    let outer = pair("outer");
+    for id in ["left", "right"] {
+        let child = pair(id);
+        assert_eq!(child.parent_uuid(), Some(outer.uuid()));
+        assert_eq!(child.metadata().unwrap()["parent_tool_call_id"], "outer");
+        assert_eq!(child.metadata().unwrap()["mcp.method.name"], "tools/call");
+    }
+    assert_eq!(pair("deep").parent_uuid(), Some(pair("left").uuid()));
+    let direct = pair("outer/direct");
+    assert_eq!(direct.parent_uuid(), outer.parent_uuid());
+    assert_eq!(
+        direct.metadata().unwrap()["tool_correlation_tool_call_id"],
+        "outer/direct"
+    );
+    assert!(
+        direct
+            .metadata()
+            .unwrap()
+            .get("parent_tool_call_id")
+            .is_none()
+    );
+    assert_eq!(direct.metadata().unwrap()["mcp.method.name"], "tools/call");
+    assert_eq!(pair("orphan").parent_uuid(), outer.parent_uuid());
+    assert_eq!(
+        pair("orphan").metadata().unwrap()["parent_tool_call_id"],
+        "outer"
+    );
+    assert_eq!(
+        pair("unfinished").parent_uuid(),
+        Some(pair("interrupted").uuid())
+    );
+    let interrupted_ends: Vec<_> = events
+        .iter()
+        .filter(|event| event.scope_category() == Some(ScopeCategory::End))
+        .filter_map(Event::tool_call_id)
+        .filter(|id| matches!(*id, "interrupted" | "unfinished"))
+        .collect();
+    assert_eq!(interrupted_ends, ["unfinished", "interrupted"]);
+    let blocked = events
+        .iter()
+        .find(|e| e.name() == "tool_end_without_start")
+        .unwrap();
+    assert_eq!(blocked.parent_uuid(), Some(outer.uuid()));
+    assert_eq!(blocked.data().unwrap()["tool_call_id"], "blocked");
+    assert_eq!(blocked.metadata().unwrap()["status"], "error");
+}
+
+#[tokio::test]
 async fn pi_post_only_tool_execution_metadata() {
     assert_harness_tool_execution_metadata(AgentKind::Pi, true).await;
 }
@@ -4591,6 +4736,243 @@ async fn new_subagent_claims_first_unhinted_llm_when_siblings_active() {
         .end_llm(second, json!({ "output_text": "worker-2" }), json!({}))
         .await
         .unwrap();
+}
+
+#[tokio::test]
+async fn main_request_class_keeps_the_llm_on_the_turn_while_a_subagent_runs() {
+    let manager = SessionManager::new(session_test_config());
+    manager
+        .apply_events(
+            &HeaderMap::new(),
+            vec![
+                NormalizedEvent::AgentStarted(session_event("main-class-owner", "SessionStart")),
+                NormalizedEvent::SubagentStarted(SubagentEvent {
+                    session_id: "main-class-owner".into(),
+                    agent_kind: AgentKind::ClaudeCode,
+                    event_name: "SubagentStart".into(),
+                    subagent_id: "worker-1".into(),
+                    payload: json!({}),
+                    metadata: json!({}),
+                }),
+            ],
+        )
+        .await
+        .unwrap();
+    let anthropic_start = || LlmGatewayStart {
+        session_id: Some("main-class-owner".into()),
+        provider: "anthropic.messages".into(),
+        ..llm_start()
+    };
+
+    let subagent_call = manager
+        .prepare_gateway_call(&HeaderMap::new(), anthropic_start())
+        .await
+        .unwrap();
+    assert_eq!(subagent_call.owner_subagent_id.as_deref(), Some("worker-1"));
+    manager
+        .finish_gateway_call(&subagent_call.context, subagent_call.session_finish)
+        .await;
+    let (worker_uuid, turn_uuid) = {
+        let sessions = manager.inner.lock().await;
+        let session = sessions.get("main-class-owner").unwrap();
+        (
+            session.subagents.get("worker-1").unwrap().scope_handle.uuid,
+            session.root_work_scope().unwrap().uuid,
+        )
+    };
+
+    let mut main_headers = HeaderMap::new();
+    main_headers.insert(
+        "x-claude-code-request-class",
+        axum::http::HeaderValue::from_static("main"),
+    );
+    let main_call = manager
+        .prepare_gateway_call(&main_headers, anthropic_start())
+        .await
+        .unwrap();
+    assert_eq!(main_call.owner_subagent_id, None);
+    assert_eq!(
+        main_call.parent.as_ref().map(|parent| parent.uuid),
+        Some(turn_uuid)
+    );
+    assert_eq!(
+        main_call.metadata["llm_correlation_status"],
+        json!("explicit")
+    );
+    assert_eq!(
+        main_call.metadata["llm_correlation_source"],
+        json!("claude_code_request_class")
+    );
+    assert_eq!(
+        main_call.metadata["claude_code_request_class"],
+        json!("main")
+    );
+    assert!(main_call.record_task_response);
+    manager
+        .finish_gateway_call(&main_call.context, main_call.session_finish)
+        .await;
+
+    let unlabeled_call = manager
+        .prepare_gateway_call(&HeaderMap::new(), anthropic_start())
+        .await
+        .unwrap();
+    assert_eq!(
+        unlabeled_call.owner_subagent_id.as_deref(),
+        Some("worker-1")
+    );
+    assert_eq!(
+        unlabeled_call.parent.as_ref().map(|parent| parent.uuid),
+        Some(worker_uuid)
+    );
+    assert_eq!(
+        unlabeled_call.metadata["llm_correlation_status"],
+        json!("sticky_last_owner")
+    );
+    manager
+        .finish_gateway_call(&unlabeled_call.context, unlabeled_call.session_finish)
+        .await;
+}
+
+#[tokio::test]
+async fn main_request_class_consumes_root_owned_hints_and_leaves_subagent_hints() {
+    let manager = SessionManager::new(session_test_config());
+    manager
+        .apply_events(
+            &HeaderMap::new(),
+            vec![
+                NormalizedEvent::AgentStarted(session_event("main-hint-owner", "SessionStart")),
+                NormalizedEvent::SubagentStarted(SubagentEvent {
+                    session_id: "main-hint-owner".into(),
+                    agent_kind: AgentKind::ClaudeCode,
+                    event_name: "SubagentStart".into(),
+                    subagent_id: "worker-1".into(),
+                    payload: json!({}),
+                    metadata: json!({}),
+                }),
+            ],
+        )
+        .await
+        .unwrap();
+    let anthropic_start = || LlmGatewayStart {
+        session_id: Some("main-hint-owner".into()),
+        provider: "anthropic.messages".into(),
+        ..llm_start()
+    };
+    let hint = |subagent_id: Option<&str>, generation_id: &str| {
+        NormalizedEvent::LlmHint(LlmHintEvent {
+            session_id: "main-hint-owner".into(),
+            agent_kind: AgentKind::ClaudeCode,
+            event_name: "PreLlmCall".into(),
+            subagent_id: subagent_id.map(Into::into),
+            agent_id: None,
+            agent_type: None,
+            conversation_id: None,
+            generation_id: Some(generation_id.into()),
+            request_id: None,
+            model: None,
+            payload: json!({}),
+            metadata: json!({}),
+        })
+    };
+    let mut main_headers = HeaderMap::new();
+    main_headers.insert(
+        "x-claude-code-request-class",
+        axum::http::HeaderValue::from_static("main"),
+    );
+
+    let subagent_call = manager
+        .prepare_gateway_call(&HeaderMap::new(), anthropic_start())
+        .await
+        .unwrap();
+    assert_eq!(subagent_call.owner_subagent_id.as_deref(), Some("worker-1"));
+    manager
+        .finish_gateway_call(&subagent_call.context, subagent_call.session_finish)
+        .await;
+
+    manager
+        .apply_events(&HeaderMap::new(), vec![hint(None, "gen-main")])
+        .await
+        .unwrap();
+    let main_call = manager
+        .prepare_gateway_call(&main_headers, anthropic_start())
+        .await
+        .unwrap();
+    assert_eq!(main_call.owner_subagent_id, None);
+    assert_eq!(
+        main_call.metadata["llm_correlation_status"],
+        json!("explicit")
+    );
+    assert_eq!(
+        main_call.metadata["llm_correlation_generation_id"],
+        json!("gen-main")
+    );
+    {
+        let sessions = manager.inner.lock().await;
+        assert!(
+            sessions["main-hint-owner"]
+                .correlation
+                .pending_llm_hints
+                .is_empty()
+        );
+    }
+    manager
+        .finish_gateway_call(&main_call.context, main_call.session_finish)
+        .await;
+
+    let unlabeled_call = manager
+        .prepare_gateway_call(&HeaderMap::new(), anthropic_start())
+        .await
+        .unwrap();
+    assert_eq!(
+        unlabeled_call.owner_subagent_id.as_deref(),
+        Some("worker-1")
+    );
+    assert_eq!(
+        unlabeled_call.metadata["llm_correlation_status"],
+        json!("sticky_last_owner")
+    );
+    manager
+        .finish_gateway_call(&unlabeled_call.context, unlabeled_call.session_finish)
+        .await;
+
+    manager
+        .apply_events(
+            &HeaderMap::new(),
+            vec![hint(Some("worker-1"), "gen-worker")],
+        )
+        .await
+        .unwrap();
+    let main_call = manager
+        .prepare_gateway_call(&main_headers, anthropic_start())
+        .await
+        .unwrap();
+    assert_eq!(main_call.owner_subagent_id, None);
+    assert!(
+        main_call
+            .metadata
+            .get("llm_correlation_generation_id")
+            .is_none()
+    );
+    manager
+        .finish_gateway_call(&main_call.context, main_call.session_finish)
+        .await;
+
+    let hinted_call = manager
+        .prepare_gateway_call(&HeaderMap::new(), anthropic_start())
+        .await
+        .unwrap();
+    assert_eq!(hinted_call.owner_subagent_id.as_deref(), Some("worker-1"));
+    assert_eq!(
+        hinted_call.metadata["llm_correlation_status"],
+        json!("single_hint")
+    );
+    assert_eq!(
+        hinted_call.metadata["llm_correlation_generation_id"],
+        json!("gen-worker")
+    );
+    manager
+        .finish_gateway_call(&hinted_call.context, hinted_call.session_finish)
+        .await;
 }
 
 /// Verify transcript-derived parent identity nests a Codex child under its parent task.

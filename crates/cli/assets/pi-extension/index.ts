@@ -32,14 +32,12 @@
  *    one in advance, and only for the compaction case. `agent_settled` is the
  *    only event that fires exactly once per logical run. Every attributable
  *    hook therefore carries an attempt counter and a session-monotonic turn
- *    sequence, because the gateway's own model is flat (session -> turn ->
- *    tool) and cannot express the nesting. They travel as payload keys and the
- *    gateway promotes them into event metadata, which is what makes them
- *    survive on tool spans.
+ *    sequence. The gateway records both in tool span metadata so each tool
+ *    can be traced back to its attempt.
  * 2. *Concurrent tools.* pi preflights sibling calls sequentially then executes
  *    them concurrently, so `tool_execution_end` arrives out of submission order.
- *    All per-call state is keyed by `toolCallId`, which is the only correlator
- *    pi provides.
+ *    All per-call state is keyed by `toolCallId`. Pi supplies a separate
+ *    `parentToolCallId` when a tool invokes another tool.
  *
  * Load it with `pi -e <path-to-this-file>`, or let `nemo-relay run --agent pi` do it.
  *
@@ -56,10 +54,13 @@
  * - `NEMO_RELAY_PI_REDIRECT`     `force` to skip the upstream check, `off` to disable
  * - `NEMO_RELAY_PI_{OPENAI,ANTHROPIC}_UPSTREAM`  what the gateway forwards to
  */
+import { addAbortListener } from 'node:events';
+import { registerChatTransports } from './src/provider-transport.ts';
 import {
   type GatewayConfig,
   configFromEnv,
   postAndForget,
+  closeHookStream,
   postHook,
   resolveFault,
 } from './src/gateway-client.ts';
@@ -90,6 +91,7 @@ import type {
   ModelSelectEvent,
   SessionBeforeCompactEvent,
   SessionCompactEvent,
+  SessionCompactFailedEvent,
   SessionShutdownEvent,
   SessionStartEvent,
   ToolCallEvent,
@@ -190,7 +192,7 @@ export default function nemoRelayExtension(pi: ExtensionAPI): void {
     payload: Record<string, unknown>,
   ): Promise<void> => {
     const active = ensureConfig(ctx);
-    await enqueue(() => postAndForget(active, payload));
+    await waitForHook(enqueue(() => postAndForget(active, payload)), ctx.signal);
   };
 
   /**
@@ -215,6 +217,8 @@ export default function nemoRelayExtension(pi: ExtensionAPI): void {
 
   /** Providers already pointed at the gateway, so the redirect is idempotent. */
   const redirectedProviders = new Set<string>();
+  const transportProviders = new Set<string>();
+  const reportedRoutes = new Set<string>();
   /** Session id the current registrations carry, so a replacement can invalidate them. */
   let registeredSessionKey: string | null = null;
   let redirect: RedirectConfig | null = null;
@@ -259,8 +263,42 @@ export default function nemoRelayExtension(pi: ExtensionAPI): void {
     const sessionKey = safeSessionId(ctx);
     if (registeredSessionKey !== null && registeredSessionKey !== sessionKey) {
       redirectedProviders.clear();
+      reportedRoutes.clear();
     }
     registeredSessionKey = sessionKey;
+    const config = redirect;
+    if (config.mode !== 'off' && ctx.model && registerChatTransports(
+      ctx.modelRegistry, ctx.model, transportProviders,
+      (provider) => pi.registerProvider(provider),
+      (model) => {
+        const decision = decideRedirect(model, config, new Set());
+        const key = JSON.stringify([model.provider, model.id, model.api, model.baseUrl, decision.kind]);
+        if (!reportedRoutes.has(key)) {
+          reportedRoutes.add(key);
+          emit(ctx, {
+            hook_event_name: 'model_redirect', source: 'provider_request', outcome: decision.kind,
+            reason: decision.reason, provider: model.provider, model_api: model.api, model_id: model.id,
+            ...(decision.kind === 'redirect' ? { upstream: decision.upstream } : { code: decision.code }),
+            ...attribution(),
+          });
+        }
+        if (decision.kind !== 'redirect') return undefined;
+        return {
+          gateway: config.gatewayUrl,
+          headers: {
+            'x-nemo-relay-session-id': registeredSessionKey ?? sessionKey,
+            ...(config.proxyToken ? { 'x-nemo-relay-proxy-token': config.proxyToken } : {}),
+            ...(decision.namedUpstream ? { 'x-nemo-relay-upstream-base-url': decision.namedUpstream } : {}),
+            // A configured match already ends at Pi's base. The gateway only needs
+            // to append the SDK's suffix, even when that base has no /v1.
+            ...(!decision.namedUpstream && config.mode === 'match' && model.api !== 'anthropic-messages'
+              ? { 'x-nemo-relay-pi-exact-path': '1' } : {}),
+          },
+        };
+      },
+    )) {
+      return;
+    }
     const decision = decideRedirect(
       ctx.model,
       redirect,
@@ -346,6 +384,12 @@ export default function nemoRelayExtension(pi: ExtensionAPI): void {
     applyRedirect(ctx, 'model_select');
   });
 
+  // Pi resolves the virtual route before assembling request context. The router can
+  // register a physical provider in that step without changing the selected model.
+  pi.on('context_with_system', async (_event, ctx) => {
+    if (ctx.model?.api === 'pi-virtual') applyRedirect(ctx, 'provider_request');
+  });
+
   /**
    * Only some shutdown reasons actually end the session.
    *
@@ -366,6 +410,7 @@ export default function nemoRelayExtension(pi: ExtensionAPI): void {
     if (event.reason === 'reload') {
       // Still drain: posts already queued belong to the continuing session.
       await chain;
+      if (config) closeHookStream(config);
       return;
     }
     emit(ctx, {
@@ -377,6 +422,7 @@ export default function nemoRelayExtension(pi: ExtensionAPI): void {
     // queue is serial, this also guarantees session_shutdown is the last post
     // to reach the gateway rather than merely one of the last.
     await chain;
+    if (config) closeHookStream(config);
   });
 
   // ---------------------------------------------------------------------------
@@ -397,13 +443,14 @@ export default function nemoRelayExtension(pi: ExtensionAPI): void {
     });
   });
 
-  pi.on('agent_settled', async (_event: AgentSettledEvent, ctx: ExtensionContext) => {
+  pi.on('agent_settled', async (event: AgentSettledEvent, ctx: ExtensionContext) => {
     emit(ctx, {
       hook_event_name: 'agent_settled',
       // Two different facts, both wanted: `attempts` is how many attempts the
       // run took, `attempt_index` is the last of them. Sending only the count
       // made this the one hook a consumer filtering on `attempt_index` missed.
       attempts: attemptIndex,
+      aborted: event.aborted,
       ...attribution(),
     });
     attemptIndex = 0;
@@ -463,6 +510,26 @@ export default function nemoRelayExtension(pi: ExtensionAPI): void {
     });
   });
 
+  let promptWait: { session: string; start: number } | undefined;
+  pi.on('ui_prompt_start', (event, ctx) => {
+    promptWait = { session: safeSessionId(ctx), start: performance.now() };
+    emit(ctx, { hook_event_name: 'ui_prompt_start', kind: event.kind });
+  });
+
+  pi.on('ui_prompt_end', (event, ctx) => {
+    const wait = promptWait;
+    promptWait = undefined;
+    const duration = wait?.session === safeSessionId(ctx) ? performance.now() - wait.start : undefined;
+    emit(ctx, { hook_event_name: 'ui_prompt_end', kind: event.kind, wait_duration_ms: duration });
+  });
+
+  pi.on('session_compact_failed', async (event: SessionCompactFailedEvent, ctx) => {
+    emit(ctx, {
+      hook_event_name: 'session_compact_failed', reason: event.reason, aborted: event.aborted,
+      will_retry: event.willRetry, from_extension: event.fromExtension, ...attribution(),
+    });
+  });
+
   pi.on('session_compact', async (event: SessionCompactEvent, ctx) => {
     emit(ctx, {
       hook_event_name: 'session_compact',
@@ -502,23 +569,35 @@ export default function nemoRelayExtension(pi: ExtensionAPI): void {
       ctx: ExtensionContext,
     ): Promise<ToolCallEventResult | undefined> => {
       const active = ensureConfig(ctx);
+      const signal = ctx.signal;
       // Enqueued rather than posted directly, so any observability hook fired
       // earlier in the same turn reaches the gateway first and the tool span
       // opens under the right turn.
-      const outcome = await enqueue(() =>
-        postHook(active, {
+      const outcome = await waitForHook(enqueue(async () => {
+        if (signal?.aborted) return undefined;
+        return postHook(active, {
           hook_event_name: 'tool_call',
           tool_call_id: event.toolCallId,
+          parent_tool_call_id: event.parentToolCallId,
           tool_name: event.toolName,
           input: event.input,
           ...attribution(),
-        }),
-      );
+        });
+      }), signal);
+      if (!outcome || signal?.aborted) {
+        return { block: true, reason: 'Pi cancelled the tool call while waiting for NeMo Relay authorization.' };
+      }
 
       const decision =
         outcome.kind === 'fault' ? resolveFault(active, outcome, event.toolName) : outcome;
 
-      if (decision.kind === 'block') return { block: true, reason: decision.reason };
+      if (decision.kind === 'block') {
+        return {
+          block: true,
+          reason: decision.reason,
+          ...(outcome.kind === 'block' && process.env.NEMO_RELAY_PI_TERMINATE_ON_DENY === '1' ? { terminate: true } : {}),
+        };
+      }
 
       // Allowed. A request intercept may still have rewritten the arguments, in which case they
       // arrive in the response body and pi expects them applied to `event.input` in place.
@@ -534,6 +613,7 @@ export default function nemoRelayExtension(pi: ExtensionAPI): void {
           emit(ctx, {
             hook_event_name: 'tool_arguments_transformed',
             tool_call_id: event.toolCallId,
+            parent_tool_call_id: event.parentToolCallId,
             tool_name: event.toolName,
             ...attribution(),
           });
@@ -560,7 +640,9 @@ export default function nemoRelayExtension(pi: ExtensionAPI): void {
     emit(ctx, {
       hook_event_name: 'tool_execution_end',
       tool_call_id: event.toolCallId,
+      parent_tool_call_id: event.parentToolCallId,
       tool_name: toolName,
+      pi_duration_ms: event.durationMs,
       result: summarize(event.result, event.isError),
       status: event.isError ? 'error' : 'ok',
       ...attribution(),
@@ -608,13 +690,11 @@ export default function nemoRelayExtension(pi: ExtensionAPI): void {
    * 1. **There is no block-and-reason contract.** A refusal is a synthetic
    *    failed `BashResult` and pi records it exactly as if the command had run.
    *    See `src/user-bash.ts` for the shape and why those field values.
-   * 2. **`emitUserBash` catches**, so throwing fails *open* and the command
-   *    runs unchecked. Nothing here is allowed to escape; the catch resolves an
-   *    internal failure through the same policy as an unreachable gateway.
-   * 3. **The first handler to return anything wins.** Loaded with `-e` this one
-   *    is first; installed with `pi install` it loads last and an earlier
-   *    extension can preempt it, in which case the gateway never sees the
-   *    command at all.
+   * 2. **Pi aborts the command on a handler error.** Relay catches its own
+   *    errors so its configured fault policy still controls the outcome.
+   * 3. **The first valid result or operations override wins.** Loaded with
+   *    `-e` this one is first; installed with `pi install` it loads last and
+   *    an earlier extension can preempt it, so the gateway never sees the command.
    *
    * What the gate does *not* do is observe the command. pi has no completion
    * hook for inline shell -- `user_bash` is the only one -- so on an allow the
@@ -686,9 +766,8 @@ export default function nemoRelayExtension(pi: ExtensionAPI): void {
         // the command as the user typed it.
         return undefined;
       } catch (error) {
-        // Reached only if something inside this handler failed -- `postHook`
-        // resolves its own transport errors. Failing open here would be silent,
-        // so it is resolved as a fault under the configured policy instead.
+        // `postHook` reports transport errors as outcomes. Apply Relay's
+        // configured fault policy here when the handler itself throws.
         //
         // The policy is re-read rather than defaulted: if `ensureConfig` is
         // what failed then `config` is still null, and hard-coding fail-open
@@ -805,4 +884,19 @@ function truncate(value: string): string {
   if (value.length <= MAX_CONTENT_CHARS) return value;
   const kept = sliceAtCodePointBoundary(value, MAX_CONTENT_CHARS);
   return `${kept}... [truncated ${value.length - kept.length} chars]`;
+}
+
+// Pi may finish an aborted run while its Relay jobs drain. Keeping those jobs in
+// the queue preserves start/end ordering, even if a gate already reached Relay.
+async function waitForHook<T>(job: Promise<T>, signal?: AbortSignal): Promise<T | undefined> {
+  if (!signal) return job;
+  let listener: ReturnType<typeof addAbortListener> | undefined;
+  const aborted = new Promise<undefined>((resolve) => {
+    listener = addAbortListener(signal, () => resolve(undefined));
+  });
+  try {
+    return await Promise.race([job, aborted]);
+  } finally {
+    listener?.[Symbol.dispose]();
+  }
 }

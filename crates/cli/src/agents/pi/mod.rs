@@ -27,15 +27,7 @@ pub(super) const DESCRIPTOR: AgentDescriptor = AgentDescriptor {
     executable: "pi",
     hook_path: "/hooks/pi",
     version_product: "pi",
-    // pi ships breaking changes through minor releases and has no major-release
-    // channel, so this floor is the version the integration was verified
-    // against rather than a lower bound that is expected to keep holding.
-    minimum_version: (0, 84, 0),
-    // Which is why the floor alone was a lie by omission: it accepted 0.85.0 as
-    // "supported" for a host that can move a hook shape in a minor. Below the floor
-    // is an error, above this is a warning -- untested, not broken, and blocking a
-    // launch over it would make the user downgrade pi to use Relay at all.
-    verified_through: Some((0, 84)),
+    minimum_version: (1, 6, 0),
     // The hooks the extension actually posts to `/hooks/pi`, which is narrower than the set it
     // registers with pi. `tool_execution_start` is registered but never forwarded -- it fires
     // before validation and for calls that never execute, so it is used only to remember a tool
@@ -45,6 +37,7 @@ pub(super) const DESCRIPTOR: AgentDescriptor = AgentDescriptor {
         "session_shutdown",
         "session_before_compact",
         "session_compact",
+        "session_compact_failed",
         "agent_start",
         "agent_end",
         "agent_settled",
@@ -57,6 +50,8 @@ pub(super) const DESCRIPTOR: AgentDescriptor = AgentDescriptor {
         "tool_arguments_transformed",
         // The bang-prefixed inline shell gate. `user_bash` is a pi hook; `user_bash_end` is not --
         // pi reports no completion for inline shell, so the extension synthesizes the close.
+        "ui_prompt_end",
+        "ui_prompt_start",
         "user_bash",
         "user_bash_end",
         // Not a pi hook name: the extension posts this after deciding whether to point the active
@@ -65,6 +60,14 @@ pub(super) const DESCRIPTOR: AgentDescriptor = AgentDescriptor {
     ],
     capped_hook_events: (&[], 0),
 };
+
+/// Report accepted releases that have not passed the Pi integration suite.
+pub(super) fn unverified_version(version: &Version) -> Option<String> {
+    let verified = super::CodingAgent::Pi.minimum_version();
+    (*version != verified).then(|| {
+        format!("pi {version} is unverified. NeMo Relay has verified pi {verified} with live integration tests.")
+    })
+}
 
 /// `pi --version` prints a bare semver line with no product prefix.
 pub(super) fn parse_version(raw: &str) -> Option<Version> {

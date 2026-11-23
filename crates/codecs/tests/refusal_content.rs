@@ -121,11 +121,11 @@ fn chat_stream_accumulates_refusals_independently_per_choice() {
     let codec = OpenAIChatStreamingCodec::new();
     let mut collect = codec.borrowed_collector().unwrap();
     collect(&json!({"choices":[
-        {"index":0, "delta":{"role":"assistant", "content":"prefix", "refusal":"Cannot "}},
+        {"index":0, "delta":{"role":"assistant", "content":"prefix", "refusal":"Cannot ", "reasoning_content":"Let "}},
         {"index":1, "delta":{"refusal":"other"}}
     ]}))
     .unwrap();
-    collect(&json!({"choices":[{"index":0, "delta":{"refusal":"help"}}]})).unwrap();
+    collect(&json!({"choices":[{"index":0, "delta":{"refusal":"help", "reasoning_content":"me check."}}]})).unwrap();
     collect(
         &json!({"choices":[{"index":0, "delta":{"refusal":null}, "finish_reason":"stop"}],
         "usage":{"prompt_tokens":1, "completion_tokens":2}}),
@@ -133,6 +133,15 @@ fn chat_stream_accumulates_refusals_independently_per_choice() {
     .unwrap();
     let aggregate = codec.finalizer()();
     assert_eq!(aggregate["choices"][0]["message"]["refusal"], "Cannot help");
+    assert_eq!(
+        aggregate["choices"][0]["message"]["reasoning_content"],
+        "Let me check."
+    );
+    assert!(
+        aggregate["choices"][1]["message"]
+            .get("reasoning_content")
+            .is_none()
+    );
     assert_eq!(aggregate["choices"][1]["message"]["refusal"], "other");
     assert_eq!(aggregate["choices"][1]["message"]["content"], json!(null));
     let response = OpenAIChatCodec.decode_response(&aggregate).unwrap();

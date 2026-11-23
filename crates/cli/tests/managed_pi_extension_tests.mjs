@@ -2,9 +2,10 @@
 // SPDX-License-Identifier: Apache-2.0
 
 import assert from 'node:assert/strict';
-import { chmod, mkdtemp, readFile, writeFile } from 'node:fs/promises';
+import { chmod, copyFile, mkdtemp, readFile, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
+import { setImmediate, setTimeout as delay } from 'node:timers/promises';
 import { pathToFileURL } from 'node:url';
 import test from 'node:test';
 
@@ -40,6 +41,7 @@ async function loadLifecycleTestApi() {
   source += '\nexport { managedNemoRelayPi as installManagedNemoRelayPi };\n';
   const directory = await mkdtemp(join(tmpdir(), 'nemo-relay-pi-module-'));
   const modulePath = join(directory, 'index.ts');
+  await copyFile(new URL('./provider-transport.ts', sourceUrl), join(directory, 'provider-transport.ts'));
   await writeFile(modulePath, source);
   return import(pathToFileURL(modulePath).href);
 }
@@ -108,9 +110,16 @@ test('managed Pi shutdown branches preserve ordering and quit releases without r
     },
   };
   const bodies = [];
+  let startAttempts = 0;
   const originalFetch = globalThis.fetch;
   globalThis.fetch = async (_url, request) => {
-    bodies.push(JSON.parse(request.body));
+    const body = JSON.parse(request.body);
+    if (body.hook_event_name === 'session_start' && ++startAttempts === 1) {
+      return Response.json({ error: { message: 'route is not ready' } }, {
+        status: 503, headers: { 'Retry-After': '1' },
+      });
+    }
+    bodies.push(body);
     return new Response('{}', { status: 200 });
   };
   try {
@@ -118,6 +127,7 @@ test('managed Pi shutdown branches preserve ordering and quit releases without r
     installManagedNemoRelayPi(pi, async () => runtime);
     const context = { cwd: '/workspace', sessionManager: { getSessionId: () => 'session' } };
     await handlers.get('session_start')({ type: 'session_start', reason: 'startup' }, context);
+    assert.equal(startAttempts, 2, 'session startup waits for the broker to accept the hook');
     await Promise.all([
       handlers.get('turn_start')({ type: 'turn_start', turnIndex: 0 }, context),
       handlers.get('turn_start')({ type: 'turn_start', turnIndex: 1 }, context),
@@ -136,6 +146,38 @@ test('managed Pi shutdown branches preserve ordering and quit releases without r
   } finally {
     globalThis.fetch = originalFetch;
   }
+});
+
+test('managed Pi does not retry startup after the readiness deadline', async (t) => {
+  const { installManagedNemoRelayPi } = await loadLifecycleTestApi();
+  const handlers = new Map();
+  installManagedNemoRelayPi({
+    on(name, handler) { handlers.set(name, handler); },
+    registerProvider() {},
+  }, async () => ({
+    config: { daemonAddress: 'https://relay.example.com' },
+    credential: CREDENTIAL,
+    lease: { ensureReady: async () => {} },
+  }));
+  let now = 0;
+  t.mock.method(performance, 'now', () => now);
+  const send = t.mock.method(globalThis, 'fetch', async () => Response.json(
+    { error: { message: 'route is not ready' } },
+    { status: 503, headers: { 'Retry-After': '1' } },
+  ));
+  t.mock.method(console, 'error', () => {});
+
+  const starting = handlers.get('session_start')({ type: 'session_start', reason: 'startup' }, {
+    cwd: '/workspace',
+    sessionManager: { getSessionId: () => 'session' },
+  });
+  await new Promise((resolve) => globalThis.setImmediate(resolve));
+  assert.equal(send.mock.callCount(), 1);
+
+  // Simulate a retry timer that fires after the monotonic deadline.
+  now = 180_001;
+  await starting;
+  assert.equal(send.mock.callCount(), 1);
 });
 
 test('custom Pi providers redirect only when every sibling API is supported', () => {
@@ -197,6 +239,134 @@ test('custom Pi providers redirect only when every sibling API is supported', ()
         'https://different.example/v1 rather than https://ignored-by-managed-policy.example/v1',
     },
   );
+});
+
+test('managed Pi preserves the caller on nested MCP rewrites and completions', async (t) => {
+  const bodies = [];
+  t.mock.method(globalThis, 'fetch', async (_url, request) => {
+    const body = JSON.parse(request.body);
+    bodies.push(body);
+    const reply = body.hook_event_name === 'tool_call'
+      ? { tool_call: { tool_call_id: body.tool_call_id, input: { query: 'public' } } }
+      : {};
+    return Response.json(reply);
+  });
+  const handlers = new Map();
+  const { installManagedNemoRelayPi } = await loadLifecycleTestApi();
+  installManagedNemoRelayPi({ on: (name, handler) => handlers.set(name, handler) }, async () => ({
+    config: { daemonAddress: 'https://relay.example.com' },
+    credential: CREDENTIAL,
+    lease: { ensureReady: async () => {} },
+  }));
+  const context = { sessionManager: { getSessionId: () => 'session' } };
+  const event = {
+    toolCallId: 'outer/1', parentToolCallId: 'outer', toolName: 'mcp__docs__search',
+    input: { query: 'private' },
+  };
+  assert.equal(await handlers.get('tool_call')(event, context), undefined);
+  assert.deepEqual(event.input, { query: 'public' });
+  await handlers.get('tool_execution_end')({ ...event, isError: false, result: 'ok' }, context);
+  await handlers.get('session_shutdown')({ reason: 'reload' }, context);
+  assert.deepEqual(bodies.map((body) => body.hook_event_name), [
+    'tool_call', 'tool_arguments_transformed', 'tool_execution_end',
+  ]);
+  for (const body of bodies) {
+    assert.equal(body.parent_tool_call_id, 'outer');
+    assert.equal(body.tool_call_id, 'outer/1');
+    assert.equal(body.tool_name, 'mcp__docs__search');
+  }
+});
+
+test('managed Pi termination applies only to an explicit policy denial', async (t) => {
+  const key = 'NEMO_RELAY_PI_TERMINATE_ON_DENY';
+  const previous = process.env[key];
+  t.after(() => {
+    if (previous === undefined) delete process.env[key];
+    else process.env[key] = previous;
+  });
+  let status = 403;
+  t.mock.method(globalThis, 'fetch', async () => Response.json({
+    error: { type: 'nemo_relay_guardrail_rejected', reason: 'fixture policy' },
+  }, { status }));
+  const handlers = new Map();
+  const { installManagedNemoRelayPi } = await loadLifecycleTestApi();
+  installManagedNemoRelayPi({ on: (name, handler) => handlers.set(name, handler) }, async () => ({
+    config: { daemonAddress: 'https://relay.example.com' },
+    credential: CREDENTIAL,
+    lease: { ensureReady: async () => {} },
+  }));
+  const gate = () => handlers.get('tool_call')(
+    { toolCallId: 'call', toolName: 'read', input: { path: 'fixture' } },
+    { sessionManager: { getSessionId: () => 'session' } },
+  );
+  delete process.env[key];
+  assert.deepEqual(await gate(), { block: true, reason: 'fixture policy' });
+  process.env[key] = '1';
+  assert.deepEqual(await gate(), { block: true, reason: 'fixture policy', terminate: true });
+  status = 503;
+  const fault = await gate();
+  assert.equal(fault.block, true);
+  assert.equal(fault.terminate, undefined);
+});
+
+test('managed Pi aborts queued and in-flight gates without replay or late rewrites', async (t) => {
+  const received = Promise.withResolvers();
+  const decision = Promise.withResolvers();
+  const posts = [];
+  t.mock.method(globalThis, 'fetch', async (_url, request) => {
+    const body = JSON.parse(request.body);
+    posts.push(body);
+    if (body.tool_call_id === 'sent') {
+      received.resolve();
+      return decision.promise;
+    }
+    return Response.json({});
+  });
+  const handlers = new Map();
+  const { installManagedNemoRelayPi } = await loadLifecycleTestApi();
+  installManagedNemoRelayPi({ on: (name, handler) => handlers.set(name, handler) }, async () => ({
+    config: { daemonAddress: 'https://relay.example.com' },
+    credential: CREDENTIAL,
+    lease: { ensureReady: async () => {} },
+  }));
+  const controller = new AbortController();
+  const context = {
+    sessionManager: { getSessionId: () => 'session' },
+    signal: controller.signal,
+  };
+  const sent = { toolCallId: 'sent', toolName: 'read', input: { path: 'original' } };
+  const first = handlers.get('tool_call')(sent, context);
+  await received.promise;
+  const second = handlers.get('tool_call')({ ...sent, toolCallId: 'queued' }, context);
+  const turn = handlers.get('turn_end')({ turnIndex: 0 }, context);
+  controller.abort();
+  let nextTurn;
+  try {
+    const results = await Promise.race([
+      Promise.all([first, second, turn]),
+      delay(2_000, undefined, { ref: false }),
+    ]);
+    assert.ok(results, 'Pi can settle while the earlier authorization is pending');
+    for (const outcome of results.slice(0, 2)) {
+      assert.equal(outcome.block, true);
+      assert.match(outcome.reason, /cancelled/);
+    }
+
+    const nextContext = { ...context, signal: new AbortController().signal };
+    nextTurn = handlers.get('turn_start')({ turnIndex: 1 }, nextContext);
+    const pending = Symbol('pending');
+    assert.equal(
+      await Promise.race([nextTurn, setImmediate(pending)]),
+      pending,
+      'the next turn must wait for the cancelled turn to drain',
+    );
+    assert.deepEqual(posts.map(post => post.hook_event_name), ['tool_call']);
+  } finally {
+    decision.resolve(Response.json({ tool_call: { tool_call_id: 'sent', input: { path: 'late' } } }));
+  }
+  await nextTurn;
+  assert.equal(sent.input.path, 'original');
+  assert.deepEqual(posts.map(post => post.hook_event_name), ['tool_call', 'turn_end', 'turn_start']);
 });
 
 test('managed Pi tool rewrites require the exact call ID and recursively preserve shape', () => {

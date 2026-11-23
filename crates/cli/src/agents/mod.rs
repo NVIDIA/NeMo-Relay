@@ -28,14 +28,6 @@ pub(super) struct AgentDescriptor {
     hook_path: &'static str,
     version_product: &'static str,
     minimum_version: (u64, u64, u64),
-    /// The last `major.minor` this integration was actually verified against, for a
-    /// host whose minor releases can break the hook contract.
-    ///
-    /// `None` means the floor behaves like a floor: newer minors are additive and
-    /// nothing above it needs reporting. `Some` means the opposite -- above it, the
-    /// integration is untested rather than known-good, and saying so is the whole
-    /// point, because the failure it guards against is silent.
-    verified_through: Option<(u64, u64)>,
     hook_events: &'static [&'static str],
     /// Events whose hook timeout the host caps, with that cap in seconds. Writing a longer
     /// timeout makes the host clamp it and log a warning.
@@ -46,21 +38,11 @@ pub(super) struct AgentDescriptor {
 ///
 /// Codex and Claude Code both install NeMo Relay through a plugin marketplace
 /// (`codex plugin add`, `claude plugin install`) backed by a generated manifest.
-/// pi has none of that: it has no `pi plugin` verb, no marketplace, and no MCP
-/// client for a plugin-owned server to serve. Extensions are installed with
+/// Pi installs Relay as an extension. Its native MCP client consumes server
+/// configuration independently of extension installation. Extensions are installed with
 /// `pi install <source>` or by placing a file in an auto-discovered directory.
 ///
-/// Rather than synthesize manifests pi will never read, the marketplace surface
-/// rejects pi explicitly and the gateway surface (hooks, launch, doctor) is
-/// implemented for real.
-///
-/// "No marketplace" is not "nothing to install into", and this constant used to
-/// imply otherwise. `nemo-relay install pi` writes a package directory into pi's
-/// own auto-discovery location (`agents::pi::install`), which is a real
-/// persistent install by a route that has no marketplace in it. What stays
-/// unsupported is everything below: a generated plugin manifest, a host
-/// registration verb, and a plugin-owned MCP server, none of which pi has a
-/// consumer for.
+/// `nemo-relay install pi` writes directly to that discovery directory.
 pub(crate) const PI_MARKETPLACE_UNSUPPORTED: &str = "pi has no plugin marketplace; \
      `nemo-relay install pi` writes the extension into pi's own auto-discovery directory \
      instead, and `nemo-relay pi` runs pi against it";
@@ -197,17 +179,10 @@ impl CodingAgent {
     /// silence it replaces -- the user would have to downgrade the agent to use
     /// Relay at all. This reports; it does not gate.
     pub(crate) fn unverified_version(self, version: &Version) -> Option<String> {
-        let (major, minor) = self.descriptor().verified_through?;
-        if (version.major, version.minor) <= (major, minor) {
-            return None;
+        match self {
+            Self::Pi => pi::unverified_version(version),
+            Self::ClaudeCode | Self::Codex => None,
         }
-        Some(format!(
-            "{product} {version} is newer than the {product} {major}.{minor}.x this integration \
-             was verified against; {product} can change hook shapes in a minor release, and the \
-             symptom is missing spans rather than an error. Re-verify, or pin {product} {major}.\
-             {minor}.x",
-            product = self.descriptor().version_product,
-        ))
     }
 
     fn parse_version(self, raw: &str) -> Option<Version> {
@@ -478,7 +453,7 @@ pub(crate) fn plugin_mcp_config(
     match agent {
         CodingAgent::Codex => codex::assets::mcp_config(server),
         CodingAgent::ClaudeCode => Ok(claude::assets::mcp_config(server)),
-        // pi ships no MCP client, so a plugin-owned server would have no consumer.
+        // Pi reads mcp.json separately from its extension package.
         CodingAgent::Pi => Err(PI_MARKETPLACE_UNSUPPORTED.to_string()),
     }
 }

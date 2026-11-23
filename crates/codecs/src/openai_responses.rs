@@ -1607,7 +1607,8 @@ impl LlmCodec for OpenAIResponsesCodec {
 ///    retain observed content without duplicating it when a completed snapshot arrives.
 ///
 /// Use [`StreamingCodec::validate_stream`](nemo_relay_types::codec::streaming::StreamingCodec::validate_stream)
-/// with this instance's collector and finalizer to report streams that end before a final event.
+/// with this instance's collector and finalizer to report provider failures and streams that end
+/// before a final event.
 ///
 /// Internal state lives behind `Arc<Mutex<...>>` so the `&self`-produced collector and finalizer
 /// closures share access. Each instance is single-use because [`LlmFinalizerFn`] consumes the
@@ -1637,6 +1638,7 @@ impl Default for OpenAIResponsesStreamingCodec {
 }
 
 impl nemo_relay_types::codec::streaming::StreamingCodec for OpenAIResponsesStreamingCodec {
+    /// Forwards a failed response before reporting its error on the next poll.
     /// Reports an error at EOF unless a final response event was seen.
     ///
     /// The check passes when this stream forwarded a final response event or when this codec's
@@ -1648,6 +1650,7 @@ impl nemo_relay_types::codec::streaming::StreamingCodec for OpenAIResponsesStrea
             inner: stream,
             state: std::sync::Arc::clone(&self.state),
             terminal_forwarded: false,
+            provider_error: None,
             ended: false,
         })
     }
@@ -1700,24 +1703,33 @@ impl nemo_relay_types::codec::streaming::StreamingCodec for OpenAIResponsesStrea
 struct ResponsesCompletionStream {
     inner: LlmJsonStream,
     state: std::sync::Arc<std::sync::Mutex<OpenAIResponsesStreamingState>>,
-    /// A terminal response event has been forwarded downstream.
+    // Keep failure precedence aligned with the collector's first-terminal snapshot, even when
+    // middleware reads the source before the collector runs.
     terminal_forwarded: bool,
+    provider_error: Option<FlowError>,
     ended: bool,
 }
 
 impl Stream for ResponsesCompletionStream {
     type Item = Result<Json>;
 
-    /// Forwards events and emits at most one error when the source ends early.
+    /// Forwards events and reports provider failures before polling the source again.
     fn poll_next(self: Pin<&mut Self>, cx: &mut Context<'_>) -> Poll<Option<Self::Item>> {
         let this = self.get_mut();
         if this.ended {
             return Poll::Ready(None);
         }
+        if let Some(error) = this.provider_error.take() {
+            this.ended = true;
+            return Poll::Ready(Some(Err(error)));
+        }
         match Pin::new(&mut this.inner).poll_next(cx) {
             Poll::Ready(Some(Ok(event))) => {
-                if is_terminal_response_event(&event) {
+                if !this.terminal_forwarded && is_terminal_response_event(&event) {
                     this.terminal_forwarded = true;
+                    if event.get("type").and_then(Json::as_str) == Some("response.failed") {
+                        this.provider_error = Some(responses_stream_error(&event));
+                    }
                 }
                 Poll::Ready(Some(Ok(event)))
             }
@@ -1750,6 +1762,25 @@ impl Stream for ResponsesCompletionStream {
             Poll::Pending => Poll::Pending,
         }
     }
+}
+
+/// Describes a provider failure from a terminal `response.failed` event.
+fn responses_stream_error(event: &Json) -> FlowError {
+    let error = event
+        .get("response")
+        .and_then(|response| response.get("error"));
+    let code = error
+        .and_then(|error| error.get("code"))
+        .and_then(Json::as_str)
+        .unwrap_or("error");
+    let message = error
+        .and_then(|error| error.get("message"))
+        .and_then(Json::as_str)
+        .unwrap_or("response failed");
+    // An in-stream failure must not enter the retryable upstream-dispatch path after output.
+    FlowError::Internal(format!(
+        "OpenAI Responses stream reported {code}: {message}"
+    ))
 }
 
 impl LlmStreamInner for ResponsesCompletionStream {
