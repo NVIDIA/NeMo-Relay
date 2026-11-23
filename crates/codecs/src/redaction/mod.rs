@@ -233,22 +233,28 @@ fn edit_responses_parts(
     } else {
         expected["message"] = Json::Array(surviving.clone());
     }
-    if let Some(alias) = payload.get("output_text") {
-        let original_text = before.iter().filter_map(|part| part.get("text")?.as_str());
-        // A wire policy may already have sanitized the alias independently.
-        // Only synchronize it when a normalized text block actually changed.
-        if original_text.clone().ne(text.iter().copied()) {
-            let value = (!text.is_empty()).then(|| Json::String(text.join("\n")));
-            if Some(alias) != value.as_ref() {
-                (alias.as_str()? == original_text.collect::<Vec<_>>().join("\n")).then_some(())?;
-                set_path(&mut payload, &["output_text".into()], value)?;
-            }
-        }
-    }
+    sync_responses_output_text(&mut payload, before, &text)?;
     let payload = overlay::BuiltinCodecName::OpenAIResponses
         .overlay_response_fields(payload, &padded, fields);
     let projected = serde_json::to_value(codec.decode_response(&payload).ok()?).ok()?;
     verifies(edits.baseline, &expected, &projected).then_some(payload)
+}
+
+/// Preserve independent wire edits unless the old alias still mirrors the text being replaced.
+fn sync_responses_output_text(payload: &mut Json, before: &[Json], text: &[&str]) -> Option<()> {
+    let Some(alias) = payload.get("output_text") else {
+        return Some(());
+    };
+    let original_text = before.iter().filter_map(|part| part.get("text")?.as_str());
+    if original_text.clone().eq(text.iter().copied()) {
+        return Some(());
+    }
+    let value = (!text.is_empty()).then(|| Json::String(text.join("\n")));
+    if Some(alias) != value.as_ref() {
+        (alias.as_str()? == original_text.collect::<Vec<_>>().join("\n")).then_some(())?;
+        set_path(payload, &["output_text".into()], value)?;
+    }
+    Some(())
 }
 
 fn responses_part_origins(original: &Json) -> Option<Vec<Vec<String>>> {
