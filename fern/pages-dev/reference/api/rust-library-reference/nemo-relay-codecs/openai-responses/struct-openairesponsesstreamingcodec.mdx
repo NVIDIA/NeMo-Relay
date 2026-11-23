@@ -26,7 +26,7 @@ The Responses API is a relatively forgiving streaming target because every event
 2. Track output items by `output_index` - `output_item.done` events deliver the final per-item state, used as a fallback when the terminal `response.output` is missing or empty.
 3. Per-token `output_text.delta` and `function_call_arguments.delta` events are ignored because their content is redelivered in the matching `output_item.done` event. Skipping deltas keeps the codec resilient to schema additions and avoids double-accumulation.
 
-Use [`StreamingCodec::validate_stream`](/reference/api/rust-library-reference/nemo-relay-types/codec/streaming/trait-streamingcodec) with this instance's collector and finalizer to report streams that end before a final event.
+Use [`StreamingCodec::validate_stream`](/reference/api/rust-library-reference/nemo-relay-types/codec/streaming/trait-streamingcodec) with this instance's collector and finalizer to report provider failures and streams that end before a final event.
 
 Internal state lives behind `Arc<Mutex<...>>` so the `&self`-produced collector and finalizer closures share access. Each instance is single-use because [`LlmFinalizerFn`](/reference/api/rust-library-reference/nemo-relay-types/api/runtime/callbacks/type-llmfinalizerfn) consumes the finalize step.
 
@@ -60,7 +60,7 @@ Creates a fresh streaming codec with empty accumulator state.
 
 <pre className="rust-signature"><code dangerouslySetInnerHTML={{"__html": "fn <a href=\"../../nemo-relay-types/codec/streaming/trait-streamingcodec\">validate_stream</a>(&amp;self, stream: <a href=\"../../nemo-relay-types/api/runtime/callbacks/struct-llmjsonstream\">LlmJsonStream</a>) -&gt; <a href=\"../../nemo-relay-types/api/runtime/callbacks/struct-llmjsonstream\">LlmJsonStream</a>"}} /></pre>
 
-Reports an error at EOF unless a final response event was seen.
+Forwards a failed response before reporting its error on the next poll. Reports an error at EOF unless a final response event was seen.
 
 The check passes when this stream forwarded a final response event or when this codec's collector recorded one. Middleware between this stream and the collector can drain the source first, so a clean EOF does not mean the collector has finished: the finalizer reflects only the events that reached the collector.
 

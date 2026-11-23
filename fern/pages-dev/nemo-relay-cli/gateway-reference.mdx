@@ -224,7 +224,10 @@ including delivery to daemon workers. Generated Claude Code and Codex hook
 configs use the same 30-second limit. This allows LLM judge guardrails to take
 longer than two seconds; configure their evaluation timeouts to leave room for
 hook transport within that limit. Delivery timeouts follow the hook's failure
-policy, and timed-out requests are not retried.
+policy, and timed-out requests are not retried. Relay completes pinned TLS
+authentication before buffering the hook payload. A stalled TLS handshake
+uses the configured socket timeout once and is reported as a handshake
+failure before payload delivery.
 
 The failure-policy and exit-code rules below do not apply to
 `hook-forward pi --pi-extension-client`. That mode exits successfully when it

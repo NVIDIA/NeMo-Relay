@@ -159,6 +159,7 @@ logging. Failure events use warning or error levels.
 | Lifecycle | Events |
 | --- | --- |
 | Daemon | `daemon_listening`, `daemon_pass_through_enabled`, `daemon_stopped`, `daemon_failed` |
+| Challenge admission | `control_challenge_rejected` |
 | MCP sessions | `mcp_added`, `mcp_removed`, `mcp_control_connected`, `mcp_control_reconnected`, `mcp_control_disconnected` |
 | Worker startup | `worker_staged`, `worker_startup_pending`, `worker_added`, `worker_ready`, `worker_recovery_started`, `worker_relaunch_requested` |
 | Worker control | `worker_control_connected`, `worker_control_reconnected`, `worker_control_disconnected`, `worker_control_lost`, `worker_control_recovery_failed`, `worker_exit_announced`, `worker_exit_reported` |
@@ -223,7 +224,7 @@ Use this table to choose the next check for a failure:
 | Startup fails after moving service accounts | Signing identity or state directory changed | Restore the original state and ownership. Confirm any planned identity change through a trusted channel. |
 | Control connection fails through a proxy | WebSocket upgrade or idle-session handling | Allow Relay WebSocket connections and check [proxy requirements](/daemon/reference#configure-a-trusted-reverse-proxy). |
 | Session exits after a network outage | The 30-second reconnect window expired | Restore connectivity and start a fresh harness. Failed attempts do not extend the recovery window. |
-| Many clients fail to enroll together | Limits on new identity challenges | Start clients in smaller groups. Check limits for clients that share a connection address. |
+| Many clients fail to enroll together | Limits on new identity challenges | Check the daemon log for `control_challenge_rejected` and its `reason`; see [Challenge Admission](/daemon/configuration#challenge-admission). Start clients in smaller groups. Clients that share a connection address share its limits. |
 | Hooks run twice | Personal and managed integrations both loaded | Remove the duplicate Relay integration and restart the harness. |
 
 Older Python plugin environments without `.nemo-relay-environment.key` need the

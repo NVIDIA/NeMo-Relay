@@ -45,6 +45,12 @@ Creates a fresh streaming codec with empty accumulator state.
 
 <pre className="rust-signature"><code dangerouslySetInnerHTML={{"__html": "impl <a href=\"../../nemo-relay-types/codec/streaming/trait-streamingcodec\">StreamingCodec</a> for <a href=\"struct-anthropicmessagesstreamingcodec\">AnthropicMessagesStreamingCodec</a>"}} /></pre>
 
+#### `validate_stream`
+
+<pre className="rust-signature"><code dangerouslySetInnerHTML={{"__html": "fn <a href=\"../../nemo-relay-types/codec/streaming/trait-streamingcodec\">validate_stream</a>(&amp;self, stream: <a href=\"../../nemo-relay-types/api/runtime/callbacks/struct-llmjsonstream\">LlmJsonStream</a>) -&gt; <a href=\"../../nemo-relay-types/api/runtime/callbacks/struct-llmjsonstream\">LlmJsonStream</a>"}} /></pre>
+
+Reports an error right after the source forwards an Anthropic `error` event.
+
 #### `collector`
 
 <pre className="rust-signature"><code dangerouslySetInnerHTML={{"__html": "fn <a href=\"../../nemo-relay-types/codec/streaming/trait-streamingcodec\">collector</a>(&amp;self) -&gt; <a href=\"../../nemo-relay-types/api/runtime/callbacks/type-llmcollectorfn\">LlmCollectorFn</a>"}} /></pre>
@@ -56,7 +62,3 @@ Creates a fresh streaming codec with empty accumulator state.
 #### `finalizer`
 
 <pre className="rust-signature"><code dangerouslySetInnerHTML={{"__html": "fn <a href=\"../../nemo-relay-types/codec/streaming/trait-streamingcodec\">finalizer</a>(&amp;self) -&gt; <a href=\"../../nemo-relay-types/api/runtime/callbacks/type-llmfinalizerfn\">LlmFinalizerFn</a>"}} /></pre>
-
-#### `validate_stream`
-
-<pre className="rust-signature"><code dangerouslySetInnerHTML={{"__html": "fn <a href=\"../../nemo-relay-types/codec/streaming/trait-streamingcodec\">validate_stream</a>(&amp;self, stream: <a href=\"../../nemo-relay-types/api/runtime/callbacks/struct-llmjsonstream\">LlmJsonStream</a>) -&gt; <a href=\"../../nemo-relay-types/api/runtime/callbacks/struct-llmjsonstream\">LlmJsonStream</a>"}} /></pre>
