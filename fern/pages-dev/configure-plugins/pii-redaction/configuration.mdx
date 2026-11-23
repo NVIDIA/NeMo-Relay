@@ -59,9 +59,13 @@ Choose the value by the API payload format:
 
 Omit `codec` when the managed call supplies an active codec. A configured value
 is only a fallback for a call without one; it cannot override an active codec.
-Request policies use the active codec's resolved decode/encode capability,
-including runtime and opaque codecs. Normalized response projection requires a
-recognized built-in codec because response codec capabilities are decode-only.
+Normalized request and response policies require the active codec to support
+editing in the corresponding direction. The trajectory preset uses a separate
+clean-projection operation. All five built-in codecs support both operations.
+Custom Rust codecs can opt into each operation independently. Google ADK opts
+into verified request editing through the Python bridge. When a codec lacks
+the required operation, Relay omits the governed payload. See
+[Codec-owned redaction](/integrate-into-frameworks/provider-codecs#codec-owned-redaction-in-rust).
 
 For a mixed-provider gateway, rely on the active codec of each call. The
 [LLM request-only example](#targeting-and-composition) shows the selector boundary
@@ -870,7 +874,7 @@ mode = "builtin"
 [components.config.profiles.builtin]
 action = "redact"
 detector = "email"
-target_path_globs = ["/messages/*/content", "/message"]
+target_path_globs = ["/messages/*/content", "/message", "/message/*/text", "/message/*/refusal"]
 ```
 
 **Request: input event payload**
@@ -939,11 +943,11 @@ target_path_globs = ["/messages/*/content", "/message"]
 }
 ```
 
-The codec exposes request message text at `/messages/*/content` and assistant
-response text at `/message` in Relay's normalized representation. The response
-selector therefore uses `/message` even though the emitted provider-shaped
-response stores that text under `choices[0].message.content`. The selectors are
-evaluated independently for the request and response payloads.
+The codec exposes a plain request message at `/messages/*/content` and plain
+assistant response text at `/message`. When the response includes a refusal,
+the normalized text and refusal fields are `/message/*/text` and
+`/message/*/refusal`. The subscriber receives the sanitized values in
+`choices[0].message.content` and `choices[0].message.refusal`.
 
 </Tab>
 <Tab title="Trajectory removal">
@@ -1306,8 +1310,12 @@ and value; see [Typed Metric Marks](/configure-plugins/pii-redaction/redaction-b
 Valid selector syntax does not guarantee that the policy changes a payload.
 Enable [runtime diagnostics](/reference/diagnostics) at startup and inspect
 `pii_redaction.selector_evaluated` observations for the JSON documents the
-built-in sanitizer processes. Recording is best effort and depends on diagnostic
-admission and retention.
+built-in sanitizer processes. Each observation reports one traversal of one
+document. When the sanitizer edits a response through a codec, it traverses
+both the normalized annotation and the provider wire payload. One response
+can therefore produce two observations, and the same logical field can
+contribute to both sets of counts. Recording is best effort and depends on
+diagnostic admission and retention.
 
 | Detail | Meaning |
 | --- | --- |

@@ -20,7 +20,7 @@ Replays the OpenAI Chat Completions SSE chunk sequence into the same JSON shape 
 
 ## Strategy
 
-Chat Completions streams untyped SSE chunks of `{choices: [{index, delta: {...}, finish_reason: ...}]}`. Each delta may carry a `role` (typically only on the first chunk), incremental `content` text, or partial `tool_calls` whose `function.arguments` stream as a JSON-encoded string fragment-by-fragment. Top-level fields (`id`, `model`, `created`) are repeated on every chunk; we capture them once. Final-chunk `usage` is preserved when emitted (only sent when `stream_options.include_usage` is set on the request).
+Chat Completions streams untyped SSE chunks of `{choices: [{index, delta: {...}, finish_reason: ...}]}`. Each delta may carry a `role` (typically only on the first chunk), incremental `content` or `refusal` text, or partial `tool_calls` whose `function.arguments` stream as a JSON-encoded string fragment-by-fragment. Top-level fields (`id`, `model`, `created`) are repeated on every chunk; we capture them once. Final-chunk `usage` is preserved when emitted (only sent when `stream_options.include_usage` is set on the request).
 
 The OpenAI `[DONE]` end-of-stream sentinel is dropped by the SSE event decoder before reaching the collector, so this codec never sees it.
 

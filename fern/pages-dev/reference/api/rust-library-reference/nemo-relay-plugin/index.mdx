@@ -40,6 +40,7 @@ This crate intentionally does not depend on the `nemo-relay` runtime crate. Nati
 - [CategoryProfile](/reference/api/rust-library-reference/nemo-relay-plugin/struct-categoryprofile): Category-specific profile data.
 - [ConditionalMiddlewareGuardrailHandle](/reference/api/rust-library-reference/nemo-relay-plugin/struct-conditionalmiddlewareguardrailhandle)
 - [ConfigDiagnostic](/reference/api/rust-library-reference/nemo-relay-plugin/struct-configdiagnostic): Structured diagnostic reported while validating or activating plugin configuration.
+- [ContentSnapshot](/reference/api/rust-library-reference/nemo-relay-plugin/struct-contentsnapshot): Owned snapshot; materialization copies selected content for transport or independent retention.
 - [CostEstimate](/reference/api/rust-library-reference/nemo-relay-plugin/struct-costestimate): Normalized LLM response cost.
 - [DataSchema](/reference/api/rust-library-reference/nemo-relay-plugin/struct-dataschema): Identifier for the schema that describes an event's opaque `data` payload.
 - [EmitMarkOptions](/reference/api/rust-library-reference/nemo-relay-plugin/struct-emitmarkoptions): Optional event parent, time, schema, and severity for a native mark.
@@ -94,6 +95,8 @@ This crate intentionally does not depend on the `nemo-relay` runtime crate. Nati
 ## Enums
 
 - [BuiltinLlmCodec](/reference/api/rust-library-reference/nemo-relay-plugin/enum-builtinllmcodec): Relay's built-in LLM codec identities.
+- [ContentSelection](/reference/api/rust-library-reference/nemo-relay-plugin/enum-contentselection): Selection applied before extraction. Invalid source/selection pairs are errors.
+- [ContentSource](/reference/api/rust-library-reference/nemo-relay-plugin/enum-contentsource): Borrowed normalized input for content inspection; no provider decoding occurs.
 - [DiagnosticLevel](/reference/api/rust-library-reference/nemo-relay-plugin/enum-diagnosticlevel): Severity of a plugin configuration or activation diagnostic.
 - [Event](/reference/api/rust-library-reference/nemo-relay-plugin/enum-event): Tagged union covering the two ATOF event kinds emitted by the runtime.
 - [HandleAttributes](/reference/api/rust-library-reference/nemo-relay-plugin/enum-handleattributes): Attribute bitflags attached to a concrete handle kind.

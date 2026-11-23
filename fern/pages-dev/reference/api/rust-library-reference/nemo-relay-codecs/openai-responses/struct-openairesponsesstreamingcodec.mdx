@@ -24,7 +24,7 @@ The Responses API is a relatively forgiving streaming target because every event
 
 1. Track the latest `response` snapshot until the first final response event (`completed`, `failed`, or `incomplete`). Keep that snapshot for the rest of the stream.
 2. Track output items by `output_index` - `output_item.done` events deliver the final per-item state, used as a fallback when the terminal `response.output` is missing or empty.
-3. Per-token `output_text.delta` and `function_call_arguments.delta` events are ignored because their content is redelivered in the matching `output_item.done` event. Skipping deltas keeps the codec resilient to schema additions and avoids double-accumulation.
+3. Retain text, refusal, and function-argument deltas provisionally for supplied output items. Completed content parts and output items replace provisional data, so interrupted streams retain observed content without duplicating it when a completed snapshot arrives.
 
 Use [`StreamingCodec::validate_stream`](/reference/api/rust-library-reference/nemo-relay-types/codec/streaming/trait-streamingcodec) with this instance's collector and finalizer to report provider failures and streams that end before a final event.
 

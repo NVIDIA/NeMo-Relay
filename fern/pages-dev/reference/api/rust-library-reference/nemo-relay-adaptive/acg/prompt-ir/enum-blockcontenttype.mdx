@@ -17,6 +17,8 @@ pub enum BlockContentType {
     ToolResult,
     StructuredOutput,
     Image,
+    StructuredInput,
+    Opaque,
 }
 ```
 
@@ -53,6 +55,18 @@ Structured output (e.g., JSON output).
 <pre className="rust-signature"><code dangerouslySetInnerHTML={{"__html": "Image"}} /></pre>
 
 Image content (base64 or URL reference).
+
+### `StructuredInput`
+
+<pre className="rust-signature"><code dangerouslySetInnerHTML={{"__html": "StructuredInput"}} /></pre>
+
+Canonical structured input with preserved payload string values.
+
+### `Opaque`
+
+<pre className="rust-signature"><code dangerouslySetInnerHTML={{"__html": "Opaque"}} /></pre>
+
+Typed fingerprints of media or provider-native input. Character length is not a token estimate for this analysis-only representation.
 
 ## Trait Implementations
 

@@ -39,6 +39,7 @@ Cancellation is cooperative. Dropping an async callback future releases its Rust
 - [AnnotatedLlmResponse](/reference/api/rust-library-reference/nemo-relay-worker/struct-annotatedllmresponse): Structured view of an LLM response, produced by a response codec from raw JSON API output.
 - [ConditionalMiddlewareGuardrailHandle](/reference/api/rust-library-reference/nemo-relay-worker/struct-conditionalmiddlewareguardrailhandle): Opaque activation-owned key for removing a worker-created gate.
 - [ConfigDiagnostic](/reference/api/rust-library-reference/nemo-relay-worker/struct-configdiagnostic): Structured diagnostic reported while validating or activating plugin configuration.
+- [ContentSnapshot](/reference/api/rust-library-reference/nemo-relay-worker/struct-contentsnapshot): Owned snapshot; materialization copies selected content for transport or independent retention.
 - [DataSchema](/reference/api/rust-library-reference/nemo-relay-worker/struct-dataschema): Identifier for the schema that describes an event's opaque `data` payload.
 - [EmitMarkOptions](/reference/api/rust-library-reference/nemo-relay-worker/struct-emitmarkoptions): Optional fields supported by the additive `nvidia.nemo.relay.worker.v1` mark-emission request.
 - [EventCategory](/reference/api/rust-library-reference/nemo-relay-worker/struct-eventcategory): Semantic category carried by ATOF `category`.
@@ -80,6 +81,8 @@ Cancellation is cooperative. Dropping an async callback future releases its Rust
 ## Enums
 
 - [BuiltinLlmCodec](/reference/api/rust-library-reference/nemo-relay-worker/enum-builtinllmcodec): Relay's built-in LLM codec identities.
+- [ContentSelection](/reference/api/rust-library-reference/nemo-relay-worker/enum-contentselection): Selection applied before extraction. Invalid source/selection pairs are errors.
+- [ContentSource](/reference/api/rust-library-reference/nemo-relay-worker/enum-contentsource): Borrowed normalized input for content inspection; no provider decoding occurs.
 - [DiagnosticLevel](/reference/api/rust-library-reference/nemo-relay-worker/enum-diagnosticlevel): Severity of a plugin configuration or activation diagnostic.
 - [Event](/reference/api/rust-library-reference/nemo-relay-worker/enum-event): Tagged union covering the two ATOF event kinds emitted by the runtime.
 - [LlmCodecIdentity](/reference/api/rust-library-reference/nemo-relay-worker/enum-llmcodecidentity): Per-call LLM codec identity supplied to sanitizer and SDK callbacks.

@@ -1,0 +1,21 @@
+---
+title: "Module redaction"
+sidebar-title: "redaction"
+description: "Opt-in source-aware editing and clean sanitized projection. Opt-in provider editing and clean projection, independent of PII policy."
+position: 7
+---
+{/* SPDX-FileCopyrightText: Copyright (c) 2026, NVIDIA CORPORATION & AFFILIATES. All rights reserved.
+SPDX-License-Identifier: Apache-2.0 */}
+
+Generated from `cargo doc --no-deps -p nemo-relay-builtins -p nemo-relay-diagnostics -p nemo-relay-logging -p nemo-relay-plugin-host -p nemo-relay-codecs -p nemo-relay -p nemo-relay-runtime -p nemo-relay-model-pricing -p nemo-relay-resource-metrics -p nemo-relay-observability -p nemo-relay-adaptive -p nemo-relay-pii-redaction -p nemo-relay-ffi -p nemo-relay-types -p nemo-relay-plugin -p nemo-relay-worker-proto -p nemo-relay-worker`.
+
+Opt-in source-aware editing and clean sanitized projection. Opt-in provider editing and clean projection, independent of PII policy.
+
+## Structs
+
+- [NormalizedEdits](/reference/api/rust-library-reference/nemo-relay/codec/redaction/struct-normalizededits): A sanitized serialized annotation, with positions anchored to its baseline.
+
+## Traits
+
+- [LlmRequestRedaction](/reference/api/rust-library-reference/nemo-relay/codec/redaction/trait-llmrequestredaction): Optional request redaction operations exposed by the active request codec.
+- [LlmResponseRedaction](/reference/api/rust-library-reference/nemo-relay/codec/redaction/trait-llmresponseredaction): Optional response editing and clean projection exposed by a response codec.

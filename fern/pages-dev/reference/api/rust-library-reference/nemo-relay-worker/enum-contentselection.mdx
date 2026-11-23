@@ -1,0 +1,132 @@
+---
+title: "Enum Content Selection"
+sidebar-title: "ContentSelection"
+description: "Selection applied before extraction. Invalid source/selection pairs are errors."
+position: 51
+---
+{/* SPDX-FileCopyrightText: Copyright (c) 2026, NVIDIA CORPORATION & AFFILIATES. All rights reserved.
+SPDX-License-Identifier: Apache-2.0 */}
+
+Generated from `cargo doc --no-deps -p nemo-relay-builtins -p nemo-relay-diagnostics -p nemo-relay-logging -p nemo-relay-plugin-host -p nemo-relay-codecs -p nemo-relay -p nemo-relay-runtime -p nemo-relay-model-pricing -p nemo-relay-resource-metrics -p nemo-relay-observability -p nemo-relay-adaptive -p nemo-relay-pii-redaction -p nemo-relay-ffi -p nemo-relay-types -p nemo-relay-plugin -p nemo-relay-worker-proto -p nemo-relay-worker`.
+
+<pre className="rust-signature"><code dangerouslySetInnerHTML={{"__html": "pub enum ContentSelection &#123;\n    LastMessage,\n    Message(<a href=\"https://doc.rust-lang.org/1.96.1/std/primitive.i64.html\">i64</a>),\n    Instructions,\n    SystemPrompt,\n    LastUserMessage,\n    Output,\n    All,\n&#125;"}} /></pre>
+
+Selection applied before extraction. Invalid source/selection pairs are errors.
+
+## Variants
+
+### `LastMessage`
+
+<pre className="rust-signature"><code dangerouslySetInnerHTML={{"__html": "LastMessage"}} /></pre>
+
+Exactly the final supplied request item.
+
+### `Message(i64)`
+
+<pre className="rust-signature"><code dangerouslySetInnerHTML={{"__html": "Message(<a href=\"https://doc.rust-lang.org/1.96.1/std/primitive.i64.html\">i64</a>)"}} /></pre>
+
+Request history index; negative values count from the end.
+
+### `Instructions`
+
+<pre className="rust-signature"><code dangerouslySetInnerHTML={{"__html": "Instructions"}} /></pre>
+
+Top-level instructions only.
+
+### `SystemPrompt`
+
+<pre className="rust-signature"><code dangerouslySetInnerHTML={{"__html": "SystemPrompt"}} /></pre>
+
+Instructions, otherwise the first system/developer item.
+
+### `LastUserMessage`
+
+<pre className="rust-signature"><code dangerouslySetInnerHTML={{"__html": "LastUserMessage"}} /></pre>
+
+Last portable or recognized native user item.
+
+### `Output`
+
+<pre className="rust-signature"><code dangerouslySetInnerHTML={{"__html": "Output"}} /></pre>
+
+Current response message and separate tool calls.
+
+### `All`
+
+<pre className="rust-signature"><code dangerouslySetInnerHTML={{"__html": "All"}} /></pre>
+
+All parts of standalone message/content input.
+
+## Implementations
+
+### `impl ContentSelection`
+
+<pre className="rust-signature"><code dangerouslySetInnerHTML={{"__html": "impl <a href=\"enum-contentselection\">ContentSelection</a>"}} /></pre>
+
+#### `select`
+
+<pre className="rust-signature"><code dangerouslySetInnerHTML={{"__html": "pub fn select(\n    self,\n    source: <a href=\"enum-contentsource\">ContentSource</a>&lt;'_&gt;,\n) -&gt; <a href=\"https://doc.rust-lang.org/1.96.1/core/result/enum.Result.html\">Result</a>&lt;<a href=\"https://doc.rust-lang.org/1.96.1/core/option/enum.Option.html\">Option</a>&lt;<a href=\"../nemo-relay-types/codec/content/struct-messageview\">MessageView</a>&lt;'_&gt;&gt;, ContentSelectionError&gt;"}} /></pre>
+
+Select borrowed normalized content without searching past a selected textless item.
+
+##### Errors
+
+Returns an error for incompatible sources or an out-of-range explicit index.
+
+## Trait Implementations
+
+### `impl Clone for ContentSelection`
+
+<pre className="rust-signature"><code dangerouslySetInnerHTML={{"__html": "impl <a href=\"https://doc.rust-lang.org/1.96.1/core/clone/trait.Clone.html\">Clone</a> for <a href=\"enum-contentselection\">ContentSelection</a>"}} /></pre>
+
+#### `clone`
+
+<pre className="rust-signature"><code dangerouslySetInnerHTML={{"__html": "fn <a href=\"https://doc.rust-lang.org/1.96.1/core/clone/trait.Clone.html#tymethod.clone\">clone</a>(&amp;self) -&gt; <a href=\"enum-contentselection\">ContentSelection</a>"}} /></pre>
+
+#### `clone_from`
+
+<pre className="rust-signature"><code dangerouslySetInnerHTML={{"__html": "fn <a href=\"https://doc.rust-lang.org/1.96.1/core/clone/trait.Clone.html#method.clone_from\">clone_from</a>(&amp;mut self, source: &amp;Self)"}} /></pre>
+
+### `impl Debug for ContentSelection`
+
+<pre className="rust-signature"><code dangerouslySetInnerHTML={{"__html": "impl <a href=\"https://doc.rust-lang.org/1.96.1/core/fmt/trait.Debug.html\">Debug</a> for <a href=\"enum-contentselection\">ContentSelection</a>"}} /></pre>
+
+#### `fmt`
+
+<pre className="rust-signature"><code dangerouslySetInnerHTML={{"__html": "fn <a href=\"https://doc.rust-lang.org/1.96.1/core/fmt/trait.Debug.html#tymethod.fmt\">fmt</a>(&amp;self, f: &amp;mut <a href=\"https://doc.rust-lang.org/1.96.1/core/fmt/struct.Formatter.html\">Formatter</a>&lt;'_&gt;) -&gt; <a href=\"https://doc.rust-lang.org/1.96.1/core/result/enum.Result.html\">Result</a>&lt;<a href=\"https://doc.rust-lang.org/1.96.1/std/primitive.unit.html\">()</a>, <a href=\"https://doc.rust-lang.org/1.96.1/core/fmt/struct.Error.html\">Error</a>&gt;"}} /></pre>
+
+### `impl PartialEq for ContentSelection`
+
+<pre className="rust-signature"><code dangerouslySetInnerHTML={{"__html": "impl <a href=\"https://doc.rust-lang.org/1.96.1/core/cmp/trait.PartialEq.html\">PartialEq</a> for <a href=\"enum-contentselection\">ContentSelection</a>"}} /></pre>
+
+#### `eq`
+
+<pre className="rust-signature"><code dangerouslySetInnerHTML={{"__html": "fn <a href=\"https://doc.rust-lang.org/1.96.1/core/cmp/trait.PartialEq.html#tymethod.eq\">eq</a>(&amp;self, other: &amp;<a href=\"enum-contentselection\">ContentSelection</a>) -&gt; <a href=\"https://doc.rust-lang.org/1.96.1/std/primitive.bool.html\">bool</a>"}} /></pre>
+
+#### `ne`
+
+<pre className="rust-signature"><code dangerouslySetInnerHTML={{"__html": "fn <a href=\"https://doc.rust-lang.org/1.96.1/core/cmp/trait.PartialEq.html#method.ne\">ne</a>(&amp;self, other: <a href=\"https://doc.rust-lang.org/1.96.1/std/primitive.reference.html\">&amp;Rhs</a>) -&gt; <a href=\"https://doc.rust-lang.org/1.96.1/std/primitive.bool.html\">bool</a>"}} /></pre>
+
+### `impl WireValue<LlmContentSelection> for ContentSelection`
+
+<pre className="rust-signature"><code dangerouslySetInnerHTML={{"__html": "impl <a href=\"../nemo-relay-worker-proto/conversions/trait-wirevalue\">WireValue</a>&lt;<a href=\"../nemo-relay-worker-proto/nvidia_worker_v1/struct-llmcontentselection\">LlmContentSelection</a>&gt; for <a href=\"enum-contentselection\">ContentSelection</a>"}} /></pre>
+
+#### `to_wire`
+
+<pre className="rust-signature"><code dangerouslySetInnerHTML={{"__html": "fn <a href=\"../nemo-relay-worker-proto/conversions/trait-wirevalue\">to_wire</a>(self) -&gt; <a href=\"https://doc.rust-lang.org/1.96.1/core/result/enum.Result.html\">Result</a>&lt;<a href=\"../nemo-relay-worker-proto/nvidia_worker_v1/struct-llmcontentselection\">LlmContentSelection</a>, <a href=\"../nemo-relay-worker-proto/conversions/struct-conversionerror\">ConversionError</a>&gt;"}} /></pre>
+
+#### `from_wire`
+
+<pre className="rust-signature"><code dangerouslySetInnerHTML={{"__html": "fn <a href=\"../nemo-relay-worker-proto/conversions/trait-wirevalue\">from_wire</a>(\n    value: <a href=\"../nemo-relay-worker-proto/nvidia_worker_v1/struct-llmcontentselection\">LlmContentSelection</a>,\n) -&gt; <a href=\"https://doc.rust-lang.org/1.96.1/core/result/enum.Result.html\">Result</a>&lt;<a href=\"enum-contentselection\">ContentSelection</a>, <a href=\"../nemo-relay-worker-proto/conversions/struct-conversionerror\">ConversionError</a>&gt;"}} /></pre>
+
+### `impl Copy for ContentSelection`
+
+<pre className="rust-signature"><code dangerouslySetInnerHTML={{"__html": "impl <a href=\"https://doc.rust-lang.org/1.96.1/core/marker/trait.Copy.html\">Copy</a> for <a href=\"enum-contentselection\">ContentSelection</a>"}} /></pre>
+
+### `impl Eq for ContentSelection`
+
+<pre className="rust-signature"><code dangerouslySetInnerHTML={{"__html": "impl <a href=\"https://doc.rust-lang.org/1.96.1/core/cmp/trait.Eq.html\">Eq</a> for <a href=\"enum-contentselection\">ContentSelection</a>"}} /></pre>
+
+### `impl StructuralPartialEq for ContentSelection`
+
+<pre className="rust-signature"><code dangerouslySetInnerHTML={{"__html": "impl <a href=\"https://doc.rust-lang.org/1.96.1/core/marker/trait.StructuralPartialEq.html\">StructuralPartialEq</a> for <a href=\"enum-contentselection\">ContentSelection</a>"}} /></pre>

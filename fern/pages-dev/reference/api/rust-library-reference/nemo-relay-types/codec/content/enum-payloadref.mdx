@@ -1,0 +1,74 @@
+---
+title: "Enum Payload Ref"
+sidebar-title: "PayloadRef"
+description: "A payload in its existing representation. No parsing or rendering is performed."
+position: 17
+---
+{/* SPDX-FileCopyrightText: Copyright (c) 2026, NVIDIA CORPORATION & AFFILIATES. All rights reserved.
+SPDX-License-Identifier: Apache-2.0 */}
+
+Generated from `cargo doc --no-deps -p nemo-relay-builtins -p nemo-relay-diagnostics -p nemo-relay-logging -p nemo-relay-plugin-host -p nemo-relay-codecs -p nemo-relay -p nemo-relay-runtime -p nemo-relay-model-pricing -p nemo-relay-resource-metrics -p nemo-relay-observability -p nemo-relay-adaptive -p nemo-relay-pii-redaction -p nemo-relay-ffi -p nemo-relay-types -p nemo-relay-plugin -p nemo-relay-worker-proto -p nemo-relay-worker`.
+
+<pre className="rust-signature"><code dangerouslySetInnerHTML={{"__html": "pub enum PayloadRef&lt;'a&gt; &#123;\n    Null,\n    String(&amp;'a <a href=\"https://doc.rust-lang.org/1.96.1/std/primitive.str.html\">str</a>),\n    Json(&amp;'a <a href=\"../../type-json\">Json</a>),\n    Content(&amp;'a <a href=\"../request/enum-messagecontent\">MessageContent</a>),\n&#125;"}} /></pre>
+
+A payload in its existing representation. No parsing or rendering is performed.
+
+## Variants
+
+### `Null`
+
+<pre className="rust-signature"><code dangerouslySetInnerHTML={{"__html": "Null"}} /></pre>
+
+An explicitly absent legacy function-result value.
+
+### `String(&'a str)`
+
+<pre className="rust-signature"><code dangerouslySetInnerHTML={{"__html": "String(&amp;'a <a href=\"https://doc.rust-lang.org/1.96.1/std/primitive.str.html\">str</a>)"}} /></pre>
+
+String-valued arguments or results.
+
+### `Json(&'a Json)`
+
+<pre className="rust-signature"><code dangerouslySetInnerHTML={{"__html": "Json(&amp;'a <a href=\"../../type-json\">Json</a>)"}} /></pre>
+
+Parsed arguments or an arbitrary result payload.
+
+### `Content(&'a MessageContent)`
+
+<pre className="rust-signature"><code dangerouslySetInnerHTML={{"__html": "Content(&amp;'a <a href=\"../request/enum-messagecontent\">MessageContent</a>)"}} /></pre>
+
+A tool-result message's complete content, including multipart content.
+
+## Trait Implementations
+
+### `impl<'a> Clone for PayloadRef<'a>`
+
+<pre className="rust-signature"><code dangerouslySetInnerHTML={{"__html": "impl&lt;'a&gt; <a href=\"https://doc.rust-lang.org/1.96.1/core/clone/trait.Clone.html\">Clone</a> for <a href=\"enum-payloadref\">PayloadRef</a>&lt;'a&gt;"}} /></pre>
+
+#### `clone`
+
+<pre className="rust-signature"><code dangerouslySetInnerHTML={{"__html": "fn <a href=\"https://doc.rust-lang.org/1.96.1/core/clone/trait.Clone.html#tymethod.clone\">clone</a>(&amp;self) -&gt; <a href=\"enum-payloadref\">PayloadRef</a>&lt;'a&gt;"}} /></pre>
+
+#### `clone_from`
+
+<pre className="rust-signature"><code dangerouslySetInnerHTML={{"__html": "fn <a href=\"https://doc.rust-lang.org/1.96.1/core/clone/trait.Clone.html#method.clone_from\">clone_from</a>(&amp;mut self, source: &amp;Self)"}} /></pre>
+
+### `impl<'a> Debug for PayloadRef<'a>`
+
+<pre className="rust-signature"><code dangerouslySetInnerHTML={{"__html": "impl&lt;'a&gt; <a href=\"https://doc.rust-lang.org/1.96.1/core/fmt/trait.Debug.html\">Debug</a> for <a href=\"enum-payloadref\">PayloadRef</a>&lt;'a&gt;"}} /></pre>
+
+#### `fmt`
+
+<pre className="rust-signature"><code dangerouslySetInnerHTML={{"__html": "fn <a href=\"https://doc.rust-lang.org/1.96.1/core/fmt/trait.Debug.html#tymethod.fmt\">fmt</a>(&amp;self, f: &amp;mut <a href=\"https://doc.rust-lang.org/1.96.1/core/fmt/struct.Formatter.html\">Formatter</a>&lt;'_&gt;) -&gt; <a href=\"https://doc.rust-lang.org/1.96.1/core/fmt/type.Result.html\">Result</a>"}} /></pre>
+
+### `impl From<PayloadRef<'_>> for SnapshotPayload`
+
+<pre className="rust-signature"><code dangerouslySetInnerHTML={{"__html": "impl <a href=\"https://doc.rust-lang.org/1.96.1/core/convert/trait.From.html\">From</a>&lt;<a href=\"enum-payloadref\">PayloadRef</a>&lt;'_&gt;&gt; for <a href=\"enum-snapshotpayload\">SnapshotPayload</a>"}} /></pre>
+
+#### `from`
+
+<pre className="rust-signature"><code dangerouslySetInnerHTML={{"__html": "fn <a href=\"https://doc.rust-lang.org/1.96.1/core/convert/trait.From.html#tymethod.from\">from</a>(payload: <a href=\"enum-payloadref\">PayloadRef</a>&lt;'_&gt;) -&gt; Self"}} /></pre>
+
+### `impl<'a> Copy for PayloadRef<'a>`
+
+<pre className="rust-signature"><code dangerouslySetInnerHTML={{"__html": "impl&lt;'a&gt; <a href=\"https://doc.rust-lang.org/1.96.1/core/marker/trait.Copy.html\">Copy</a> for <a href=\"enum-payloadref\">PayloadRef</a>&lt;'a&gt;"}} /></pre>

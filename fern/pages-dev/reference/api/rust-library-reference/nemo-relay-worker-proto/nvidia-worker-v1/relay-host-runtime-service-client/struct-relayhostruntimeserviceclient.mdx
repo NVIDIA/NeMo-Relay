@@ -158,6 +158,12 @@ Encodes a normalized annotation relative to the original provider request baseli
 
 Decodes a completed provider response through the invocation's response codec.
 
+#### `inspect_llm_content`
+
+<pre className="rust-signature"><code dangerouslySetInnerHTML={{"__html": "pub async fn inspect_llm_content(\n    &amp;mut self,\n    request: impl IntoRequest&lt;<a href=\"../struct-inspectllmcontentrequest\">InspectLlmContentRequest</a>&gt;,\n) -&gt; <a href=\"https://doc.rust-lang.org/1.96.1/core/result/enum.Result.html\">Result</a>&lt;Response&lt;<a href=\"../struct-inspectllmcontentresponse\">InspectLlmContentResponse</a>&gt;, Status&gt;"}} /></pre>
+
+Selects and projects normalized content through the shared Rust implementation.
+
 #### `list_runtime_registrations`
 
 <pre className="rust-signature"><code dangerouslySetInnerHTML={{"__html": "pub async fn list_runtime_registrations(\n    &amp;mut self,\n    request: impl IntoRequest&lt;<a href=\"../struct-listruntimeregistrationsrequest\">ListRuntimeRegistrationsRequest</a>&gt;,\n) -&gt; <a href=\"https://doc.rust-lang.org/1.96.1/core/result/enum.Result.html\">Result</a>&lt;Response&lt;<a href=\"../struct-listruntimeregistrationsresponse\">ListRuntimeRegistrationsResponse</a>&gt;, Status&gt;"}} /></pre>

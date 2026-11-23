@@ -1,0 +1,57 @@
+---
+title: "Struct Projection Approval"
+sidebar-title: "ProjectionApproval"
+slug: "/reference/api/rust-library-reference/nemo-relay-runtime/api/runtime/subscriber_dispatcher/struct-projectionapproval"
+description: "Identifies one policy's clean projections across the two sanitizer stages of a queued event. Receipts live only for that event and never enter its metadata."
+position: 2
+---
+{/* SPDX-FileCopyrightText: Copyright (c) 2026, NVIDIA CORPORATION & AFFILIATES. All rights reserved.
+SPDX-License-Identifier: Apache-2.0 */}
+
+Generated from `cargo doc --no-deps -p nemo-relay-builtins -p nemo-relay-diagnostics -p nemo-relay-logging -p nemo-relay-plugin-host -p nemo-relay-codecs -p nemo-relay -p nemo-relay-runtime -p nemo-relay-model-pricing -p nemo-relay-resource-metrics -p nemo-relay-observability -p nemo-relay-adaptive -p nemo-relay-pii-redaction -p nemo-relay-ffi -p nemo-relay-types -p nemo-relay-plugin -p nemo-relay-worker-proto -p nemo-relay-worker`.
+
+```rust
+pub struct ProjectionApproval(/* private fields */);
+```
+
+Identifies one policy's clean projections across the two sanitizer stages of a queued event. Receipts live only for that event and never enter its metadata.
+
+## Implementations
+
+### `impl ProjectionApproval`
+
+<pre className="rust-signature"><code dangerouslySetInnerHTML={{"__html": "impl <a href=\"struct-projectionapproval\">ProjectionApproval</a>"}} /></pre>
+
+#### `record`
+
+<pre className="rust-signature"><code dangerouslySetInnerHTML={{"__html": "pub fn record(&amp;self, projection: impl <a href=\"https://doc.rust-lang.org/1.96.1/core/ops/function/trait.FnOnce.html\">FnOnce</a>() -&gt; <a href=\"https://docs.rs/serde_json/1.0.149/serde_json/value/enum.Value.html\">Value</a>)"}} /></pre>
+
+Remember a codec-produced clean payload for this policy and publication.
+
+#### `matches`
+
+<pre className="rust-signature"><code dangerouslySetInnerHTML={{"__html": "pub fn matches(&amp;self, candidate: &amp;<a href=\"https://docs.rs/serde_json/1.0.149/serde_json/value/enum.Value.html\">Value</a>) -&gt; <a href=\"https://doc.rust-lang.org/1.96.1/std/primitive.bool.html\">bool</a>"}} /></pre>
+
+Test exact equality so changes by later middleware always require revalidation.
+
+## Trait Implementations
+
+### `impl Clone for ProjectionApproval`
+
+<pre className="rust-signature"><code dangerouslySetInnerHTML={{"__html": "impl <a href=\"https://doc.rust-lang.org/1.96.1/core/clone/trait.Clone.html\">Clone</a> for <a href=\"struct-projectionapproval\">ProjectionApproval</a>"}} /></pre>
+
+#### `clone`
+
+<pre className="rust-signature"><code dangerouslySetInnerHTML={{"__html": "fn <a href=\"https://doc.rust-lang.org/1.96.1/core/clone/trait.Clone.html#tymethod.clone\">clone</a>(&amp;self) -&gt; <a href=\"struct-projectionapproval\">ProjectionApproval</a>"}} /></pre>
+
+#### `clone_from`
+
+<pre className="rust-signature"><code dangerouslySetInnerHTML={{"__html": "fn <a href=\"https://doc.rust-lang.org/1.96.1/core/clone/trait.Clone.html#method.clone_from\">clone_from</a>(&amp;mut self, source: &amp;Self)"}} /></pre>
+
+### `impl Default for ProjectionApproval`
+
+<pre className="rust-signature"><code dangerouslySetInnerHTML={{"__html": "impl <a href=\"https://doc.rust-lang.org/1.96.1/core/default/trait.Default.html\">Default</a> for <a href=\"struct-projectionapproval\">ProjectionApproval</a>"}} /></pre>
+
+#### `default`
+
+<pre className="rust-signature"><code dangerouslySetInnerHTML={{"__html": "fn <a href=\"https://doc.rust-lang.org/1.96.1/core/default/trait.Default.html#tymethod.default\">default</a>() -&gt; <a href=\"struct-projectionapproval\">ProjectionApproval</a>"}} /></pre>

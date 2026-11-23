@@ -25,9 +25,14 @@ Typed worker contract introduced alongside the legacy API.
 - [get_diagnostic_discovery_response](/reference/api/rust-library-reference/nemo-relay-worker-proto/nvidia_worker_v1/get_diagnostic_discovery_response): Nested message and enum types in `GetDiagnosticDiscoveryResponse`.
 - [guardrail_decision](/reference/api/rust-library-reference/nemo-relay-worker-proto/nvidia_worker_v1/guardrail_decision): Nested message and enum types in `GuardrailDecision`.
 - [inspect_diagnostic_memory_response](/reference/api/rust-library-reference/nemo-relay-worker-proto/nvidia_worker_v1/inspect_diagnostic_memory_response): Nested message and enum types in `InspectDiagnosticMemoryResponse`.
+- [inspect_llm_content_request](/reference/api/rust-library-reference/nemo-relay-worker-proto/nvidia_worker_v1/inspect_llm_content_request): Nested message and enum types in `InspectLlmContentRequest`.
+- [inspect_llm_content_response](/reference/api/rust-library-reference/nemo-relay-worker-proto/nvidia_worker_v1/inspect_llm_content_response): Nested message and enum types in `InspectLlmContentResponse`.
 - [invoke_request](/reference/api/rust-library-reference/nemo-relay-worker-proto/nvidia_worker_v1/invoke_request): Nested message and enum types in `InvokeRequest`.
 - [invoke_response](/reference/api/rust-library-reference/nemo-relay-worker-proto/nvidia_worker_v1/invoke_response): Nested message and enum types in `InvokeResponse`.
 - [invoke_stream_response](/reference/api/rust-library-reference/nemo-relay-worker-proto/nvidia_worker_v1/invoke_stream_response): Nested message and enum types in `InvokeStreamResponse`.
+- [llm_content_entry](/reference/api/rust-library-reference/nemo-relay-worker-proto/nvidia_worker_v1/llm_content_entry): Nested message and enum types in `LlmContentEntry`.
+- [llm_content_payload](/reference/api/rust-library-reference/nemo-relay-worker-proto/nvidia_worker_v1/llm_content_payload): Nested message and enum types in `LlmContentPayload`.
+- [llm_content_selection](/reference/api/rust-library-reference/nemo-relay-worker-proto/nvidia_worker_v1/llm_content_selection): Nested message and enum types in `LlmContentSelection`.
 - [llm_message](/reference/api/rust-library-reference/nemo-relay-worker-proto/nvidia_worker_v1/llm_message): Nested message and enum types in `LlmMessage`.
 - [llm_next_response](/reference/api/rust-library-reference/nemo-relay-worker-proto/nvidia_worker_v1/llm_next_response): Nested message and enum types in `LlmNextResponse`.
 - [llm_stream_next_response](/reference/api/rust-library-reference/nemo-relay-worker-proto/nvidia_worker_v1/llm_stream_next_response): Nested message and enum types in `LlmStreamNextResponse`.
@@ -149,6 +154,8 @@ Typed worker contract introduced alongside the legacy API.
 - [ImageUrlContentPart](/reference/api/rust-library-reference/nemo-relay-worker-proto/nvidia_worker_v1/struct-imageurlcontentpart): Image URL input with portable URL options and provider extensions.
 - [InspectDiagnosticMemoryRequest](/reference/api/rust-library-reference/nemo-relay-worker-proto/nvidia_worker_v1/struct-inspectdiagnosticmemoryrequest): Requests memory evidence only under the activation's separately granted read authority.
 - [InspectDiagnosticMemoryResponse](/reference/api/rust-library-reference/nemo-relay-worker-proto/nvidia_worker_v1/struct-inspectdiagnosticmemoryresponse): Returns memory evidence or a portable domain read failure; transport failures use gRPC status.
+- [InspectLlmContentRequest](/reference/api/rust-library-reference/nemo-relay-worker-proto/nvidia_worker_v1/struct-inspectllmcontentrequest): Authenticated pure inspection of caller-supplied normalized data; no codec capability is required.
+- [InspectLlmContentResponse](/reference/api/rust-library-reference/nemo-relay-worker-proto/nvidia_worker_v1/struct-inspectllmcontentresponse): Distinguishes absent selections from present snapshots containing no text or parts.
 - [InvokeRequest](/reference/api/rust-library-reference/nemo-relay-worker-proto/nvidia_worker_v1/struct-invokerequest): Requires an invocation ID, a registration name, and one invocation alternative. The alternative must match the registered callback type. The request has no separate surface enum that could conflict with that alternative.
 - [InvokeResponse](/reference/api/rust-library-reference/nemo-relay-worker-proto/nvidia_worker_v1/struct-invokeresponse): One surface-specific success alternative or one callback/domain failure.
 - [InvokeStreamRequest](/reference/api/rust-library-reference/nemo-relay-worker-proto/nvidia_worker_v1/struct-invokestreamrequest): Streaming is a distinct method with a request-only codec context.
@@ -162,6 +169,13 @@ Typed worker contract introduced alongside the legacy API.
 - [LlmCodecContext](/reference/api/rust-library-reference/nemo-relay-worker-proto/nvidia_worker_v1/struct-llmcodeccontext): Codec reference and optional invocation-scoped host access capability.
 - [LlmCodecReference](/reference/api/rust-library-reference/nemo-relay-worker-proto/nvidia_worker_v1/struct-llmcodecreference): Uniform codec reference metadata, independent of implementation or provider. The host selects the actual codec through its invocation-scoped capability.
 - [LlmConditionalInvocation](/reference/api/rust-library-reference/nemo-relay-worker-proto/nvidia_worker_v1/struct-llmconditionalinvocation): Provider request supplied to an LLM execution condition.
+- [LlmContentEntry](/reference/api/rust-library-reference/nemo-relay-worker-proto/nvidia_worker_v1/struct-llmcontententry): One typed entry in normalized order; separate tool calls follow content.
+- [LlmContentLocation](/reference/api/rust-library-reference/nemo-relay-worker-proto/nvidia_worker_v1/struct-llmcontentlocation): Read-time position in the supplied normalized source, not a stable edit handle.
+- [LlmContentPayload](/reference/api/rust-library-reference/nemo-relay-worker-proto/nvidia_worker_v1/struct-llmcontentpayload): Original tool payload representation; string arguments are never parsed here.
+- [LlmContentSelection](/reference/api/rust-library-reference/nemo-relay-worker-proto/nvidia_worker_v1/struct-llmcontentselection): Selection applied to a normalized source before text extraction.
+- [LlmContentSnapshot](/reference/api/rust-library-reference/nemo-relay-worker-proto/nvidia_worker_v1/struct-llmcontentsnapshot): Complete owned response to one inspection; no host-side snapshot handle is retained.
+- [LlmContentToolCall](/reference/api/rust-library-reference/nemo-relay-worker-proto/nvidia_worker_v1/struct-llmcontenttoolcall): Owned tool invocation identifiers and unrendered arguments.
+- [LlmContentToolResult](/reference/api/rust-library-reference/nemo-relay-worker-proto/nvidia_worker_v1/struct-llmcontenttoolresult): Owned complete tool result, excluded from default text.
 - [LlmExecutionInvocation](/reference/api/rust-library-reference/nemo-relay-worker-proto/nvidia_worker_v1/struct-llmexecutioninvocation): Unary LLM execution input with request and response codec access.
 - [LlmMessage](/reference/api/rust-library-reference/nemo-relay-worker-proto/nvidia_worker_v1/struct-llmmessage): The role is the alternative; contradictory roles cannot be represented.
 - [LlmNextRequest](/reference/api/rust-library-reference/nemo-relay-worker-proto/nvidia_worker_v1/struct-llmnextrequest): Invokes a live unary LLM continuation with a rewritten provider request.
@@ -267,6 +281,8 @@ Typed worker contract introduced alongside the legacy API.
 - [DiagnosticReceiptStatus](/reference/api/rust-library-reference/nemo-relay-worker-proto/nvidia_worker_v1/enum-diagnosticreceiptstatus): Terminal admission outcome for an ordered diagnostic submission.
 - [DiagnosticSummaryScope](/reference/api/rust-library-reference/nemo-relay-worker-proto/nvidia_worker_v1/enum-diagnosticsummaryscope): Aggregation scope of the reported lifetime summaries.
 - [DurationUnit](/reference/api/rust-library-reference/nemo-relay-worker-proto/nvidia_worker_v1/enum-durationunit): Canonical duration unit values from the shared runtime types.
+- [LlmContentField](/reference/api/rust-library-reference/nemo-relay-worker-proto/nvidia_worker_v1/enum-llmcontentfield): Field relative to a normalized root.
+- [LlmContentRoot](/reference/api/rust-library-reference/nemo-relay-worker-proto/nvidia_worker_v1/enum-llmcontentroot): Normalized root category; never an original provider-wire offset.
 - [LlmOptimizationEvidenceQuality](/reference/api/rust-library-reference/nemo-relay-worker-proto/nvidia_worker_v1/enum-llmoptimizationevidencequality): Whether token evidence was observed or estimated.
 - [LlmOptimizationSummaryStatus](/reference/api/rust-library-reference/nemo-relay-worker-proto/nvidia_worker_v1/enum-llmoptimizationsummarystatus): Whether optimization accounting is complete or limited by missing evidence.
 - [LogSeverity](/reference/api/rust-library-reference/nemo-relay-worker-proto/nvidia_worker_v1/enum-logseverity): Log evidence severity; an unspecified submitted severity is invalid.

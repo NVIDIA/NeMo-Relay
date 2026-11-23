@@ -187,6 +187,26 @@ Native discriminator or a descriptive fallback.
 
 Exact provider JSON value.
 
+## Implementations
+
+### `impl Message`
+
+<pre className="rust-signature"><code dangerouslySetInnerHTML={{"__html": "impl <a href=\"enum-message\">Message</a>"}} /></pre>
+
+#### `native_message_role`
+
+<pre className="rust-signature"><code dangerouslySetInnerHTML={{"__html": "pub fn native_message_role(&amp;self) -&gt; <a href=\"https://doc.rust-lang.org/1.96.1/core/option/enum.Option.html\">Option</a>&lt;&amp;<a href=\"https://doc.rust-lang.org/1.96.1/std/primitive.str.html\">str</a>&gt;"}} /></pre>
+
+Return the role of a recognized provider-native message envelope.
+
+Keep selection independent of content availability so textless native messages still establish the same boundary as portable messages.
+
+#### `content_view`
+
+<pre className="rust-signature"><code dangerouslySetInnerHTML={{"__html": "pub fn content_view(&amp;self) -&gt; <a href=\"../content/struct-messageview\">MessageView</a>&lt;'_&gt;"}} /></pre>
+
+Inspect every part of this item without copying its content.
+
 ## Trait Implementations
 
 ### `impl Clone for Message`

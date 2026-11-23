@@ -1,0 +1,96 @@
+---
+title: "Trait LlmResponse Redaction"
+sidebar-title: "LlmResponseRedaction"
+description: "Optional response editing and clean projection exposed by a response codec."
+position: 3
+---
+{/* SPDX-FileCopyrightText: Copyright (c) 2026, NVIDIA CORPORATION & AFFILIATES. All rights reserved.
+SPDX-License-Identifier: Apache-2.0 */}
+
+Generated from `cargo doc --no-deps -p nemo-relay-builtins -p nemo-relay-diagnostics -p nemo-relay-logging -p nemo-relay-plugin-host -p nemo-relay-codecs -p nemo-relay -p nemo-relay-runtime -p nemo-relay-model-pricing -p nemo-relay-resource-metrics -p nemo-relay-observability -p nemo-relay-adaptive -p nemo-relay-pii-redaction -p nemo-relay-ffi -p nemo-relay-types -p nemo-relay-plugin -p nemo-relay-worker-proto -p nemo-relay-worker`.
+
+<pre className="rust-signature"><code dangerouslySetInnerHTML={{"__html": "pub trait LlmResponseRedaction: <a href=\"https://doc.rust-lang.org/1.96.1/core/marker/trait.Send.html\">Send</a> + <a href=\"https://doc.rust-lang.org/1.96.1/core/marker/trait.Sync.html\">Sync</a> &#123;\n    // Provided methods\n    fn edit_response(\n        &amp;self,\n        _original: &amp;<a href=\"https://docs.rs/serde_json/1.0.149/serde_json/value/enum.Value.html\">Value</a>,\n        _edits: <a href=\"struct-normalizededits\">NormalizedEdits</a>&lt;'_&gt;,\n    ) -&gt; <a href=\"https://doc.rust-lang.org/1.96.1/core/result/enum.Result.html\">Result</a>&lt;<a href=\"https://doc.rust-lang.org/1.96.1/core/option/enum.Option.html\">Option</a>&lt;<a href=\"https://docs.rs/serde_json/1.0.149/serde_json/value/enum.Value.html\">Value</a>&gt;, <a href=\"../../enum-flowerror\">FlowError</a>&gt; &#123; ... &#125;\n    fn project_response(\n        &amp;self,\n        _sanitized: &amp;<a href=\"../../struct-annotatedllmresponse\">AnnotatedLlmResponse</a>,\n    ) -&gt; <a href=\"https://doc.rust-lang.org/1.96.1/core/result/enum.Result.html\">Result</a>&lt;<a href=\"https://doc.rust-lang.org/1.96.1/core/option/enum.Option.html\">Option</a>&lt;<a href=\"https://docs.rs/serde_json/1.0.149/serde_json/value/enum.Value.html\">Value</a>&gt;, <a href=\"../../enum-flowerror\">FlowError</a>&gt; &#123; ... &#125;\n&#125;"}} /></pre>
+
+Optional response editing and clean projection exposed by a response codec.
+
+Implementations must account for content outside the normalized result (for example, additional choices), or reject edits that could leave it unsanitized. Unsupported operations default to omission, independently of codec identity.
+
+## Provided Methods
+
+#### `edit_response`
+
+<pre className="rust-signature"><code dangerouslySetInnerHTML={{"__html": "fn edit_response(\n    &amp;self,\n    _original: &amp;<a href=\"https://docs.rs/serde_json/1.0.149/serde_json/value/enum.Value.html\">Value</a>,\n    _edits: <a href=\"struct-normalizededits\">NormalizedEdits</a>&lt;'_&gt;,\n) -&gt; <a href=\"https://doc.rust-lang.org/1.96.1/core/result/enum.Result.html\">Result</a>&lt;<a href=\"https://doc.rust-lang.org/1.96.1/core/option/enum.Option.html\">Option</a>&lt;<a href=\"https://docs.rs/serde_json/1.0.149/serde_json/value/enum.Value.html\">Value</a>&gt;, <a href=\"../../enum-flowerror\">FlowError</a>&gt;"}} /></pre>
+
+Apply anchored edits to the original response, validating the result.
+
+#### `project_response`
+
+<pre className="rust-signature"><code dangerouslySetInnerHTML={{"__html": "fn project_response(\n    &amp;self,\n    _sanitized: &amp;<a href=\"../../struct-annotatedllmresponse\">AnnotatedLlmResponse</a>,\n) -&gt; <a href=\"https://doc.rust-lang.org/1.96.1/core/result/enum.Result.html\">Result</a>&lt;<a href=\"https://doc.rust-lang.org/1.96.1/core/option/enum.Option.html\">Option</a>&lt;<a href=\"https://docs.rs/serde_json/1.0.149/serde_json/value/enum.Value.html\">Value</a>&gt;, <a href=\"../../enum-flowerror\">FlowError</a>&gt;"}} /></pre>
+
+Construct clean provider output solely from approved sanitized data.
+
+No original provider payload or retained per-call source data may be used. Exclude opaque extras, native payloads, and tool payloads; callers approve portable fields before invoking this operation.
+
+## Implementations on Foreign Types
+
+### `impl LlmResponseRedaction for AnthropicMessagesCodec`
+
+<pre className="rust-signature"><code dangerouslySetInnerHTML={{"__html": "impl <a href=\"trait-llmresponseredaction\">LlmResponseRedaction</a> for <a href=\"../../../nemo-relay-codecs/anthropic/struct-anthropicmessagescodec\">AnthropicMessagesCodec</a>"}} /></pre>
+
+#### `edit_response`
+
+<pre className="rust-signature"><code dangerouslySetInnerHTML={{"__html": "fn edit_response(\n    &amp;self,\n    original: &amp;<a href=\"https://docs.rs/serde_json/1.0.149/serde_json/value/enum.Value.html\">Value</a>,\n    edits: <a href=\"struct-normalizededits\">NormalizedEdits</a>&lt;'_&gt;,\n) -&gt; <a href=\"https://doc.rust-lang.org/1.96.1/core/result/enum.Result.html\">Result</a>&lt;<a href=\"https://doc.rust-lang.org/1.96.1/core/option/enum.Option.html\">Option</a>&lt;<a href=\"https://docs.rs/serde_json/1.0.149/serde_json/value/enum.Value.html\">Value</a>&gt;, <a href=\"../../enum-flowerror\">FlowError</a>&gt;"}} /></pre>
+
+#### `project_response`
+
+<pre className="rust-signature"><code dangerouslySetInnerHTML={{"__html": "fn project_response(\n    &amp;self,\n    sanitized: &amp;<a href=\"../../struct-annotatedllmresponse\">AnnotatedLlmResponse</a>,\n) -&gt; <a href=\"https://doc.rust-lang.org/1.96.1/core/result/enum.Result.html\">Result</a>&lt;<a href=\"https://doc.rust-lang.org/1.96.1/core/option/enum.Option.html\">Option</a>&lt;<a href=\"https://docs.rs/serde_json/1.0.149/serde_json/value/enum.Value.html\">Value</a>&gt;, <a href=\"../../enum-flowerror\">FlowError</a>&gt;"}} /></pre>
+
+### `impl LlmResponseRedaction for GeminiGenerateContentCodec`
+
+<pre className="rust-signature"><code dangerouslySetInnerHTML={{"__html": "impl <a href=\"trait-llmresponseredaction\">LlmResponseRedaction</a> for <a href=\"../../../nemo-relay-codecs/gemini_generate_content/struct-geminigeneratecontentcodec\">GeminiGenerateContentCodec</a>"}} /></pre>
+
+#### `edit_response`
+
+<pre className="rust-signature"><code dangerouslySetInnerHTML={{"__html": "fn edit_response(\n    &amp;self,\n    original: &amp;<a href=\"https://docs.rs/serde_json/1.0.149/serde_json/value/enum.Value.html\">Value</a>,\n    edits: <a href=\"struct-normalizededits\">NormalizedEdits</a>&lt;'_&gt;,\n) -&gt; <a href=\"https://doc.rust-lang.org/1.96.1/core/result/enum.Result.html\">Result</a>&lt;<a href=\"https://doc.rust-lang.org/1.96.1/core/option/enum.Option.html\">Option</a>&lt;<a href=\"https://docs.rs/serde_json/1.0.149/serde_json/value/enum.Value.html\">Value</a>&gt;, <a href=\"../../enum-flowerror\">FlowError</a>&gt;"}} /></pre>
+
+#### `project_response`
+
+<pre className="rust-signature"><code dangerouslySetInnerHTML={{"__html": "fn project_response(\n    &amp;self,\n    sanitized: &amp;<a href=\"../../struct-annotatedllmresponse\">AnnotatedLlmResponse</a>,\n) -&gt; <a href=\"https://doc.rust-lang.org/1.96.1/core/result/enum.Result.html\">Result</a>&lt;<a href=\"https://doc.rust-lang.org/1.96.1/core/option/enum.Option.html\">Option</a>&lt;<a href=\"https://docs.rs/serde_json/1.0.149/serde_json/value/enum.Value.html\">Value</a>&gt;, <a href=\"../../enum-flowerror\">FlowError</a>&gt;"}} /></pre>
+
+### `impl LlmResponseRedaction for OCIGenAIChatCodec`
+
+<pre className="rust-signature"><code dangerouslySetInnerHTML={{"__html": "impl <a href=\"trait-llmresponseredaction\">LlmResponseRedaction</a> for <a href=\"../../../nemo-relay-codecs/oci_genai/struct-ocigenaichatcodec\">OCIGenAIChatCodec</a>"}} /></pre>
+
+#### `edit_response`
+
+<pre className="rust-signature"><code dangerouslySetInnerHTML={{"__html": "fn edit_response(\n    &amp;self,\n    original: &amp;<a href=\"https://docs.rs/serde_json/1.0.149/serde_json/value/enum.Value.html\">Value</a>,\n    edits: <a href=\"struct-normalizededits\">NormalizedEdits</a>&lt;'_&gt;,\n) -&gt; <a href=\"https://doc.rust-lang.org/1.96.1/core/result/enum.Result.html\">Result</a>&lt;<a href=\"https://doc.rust-lang.org/1.96.1/core/option/enum.Option.html\">Option</a>&lt;<a href=\"https://docs.rs/serde_json/1.0.149/serde_json/value/enum.Value.html\">Value</a>&gt;, <a href=\"../../enum-flowerror\">FlowError</a>&gt;"}} /></pre>
+
+#### `project_response`
+
+<pre className="rust-signature"><code dangerouslySetInnerHTML={{"__html": "fn project_response(\n    &amp;self,\n    sanitized: &amp;<a href=\"../../struct-annotatedllmresponse\">AnnotatedLlmResponse</a>,\n) -&gt; <a href=\"https://doc.rust-lang.org/1.96.1/core/result/enum.Result.html\">Result</a>&lt;<a href=\"https://doc.rust-lang.org/1.96.1/core/option/enum.Option.html\">Option</a>&lt;<a href=\"https://docs.rs/serde_json/1.0.149/serde_json/value/enum.Value.html\">Value</a>&gt;, <a href=\"../../enum-flowerror\">FlowError</a>&gt;"}} /></pre>
+
+### `impl LlmResponseRedaction for OpenAIChatCodec`
+
+<pre className="rust-signature"><code dangerouslySetInnerHTML={{"__html": "impl <a href=\"trait-llmresponseredaction\">LlmResponseRedaction</a> for <a href=\"../../../nemo-relay-codecs/openai_chat/struct-openaichatcodec\">OpenAIChatCodec</a>"}} /></pre>
+
+#### `edit_response`
+
+<pre className="rust-signature"><code dangerouslySetInnerHTML={{"__html": "fn edit_response(\n    &amp;self,\n    original: &amp;<a href=\"https://docs.rs/serde_json/1.0.149/serde_json/value/enum.Value.html\">Value</a>,\n    edits: <a href=\"struct-normalizededits\">NormalizedEdits</a>&lt;'_&gt;,\n) -&gt; <a href=\"https://doc.rust-lang.org/1.96.1/core/result/enum.Result.html\">Result</a>&lt;<a href=\"https://doc.rust-lang.org/1.96.1/core/option/enum.Option.html\">Option</a>&lt;<a href=\"https://docs.rs/serde_json/1.0.149/serde_json/value/enum.Value.html\">Value</a>&gt;, <a href=\"../../enum-flowerror\">FlowError</a>&gt;"}} /></pre>
+
+#### `project_response`
+
+<pre className="rust-signature"><code dangerouslySetInnerHTML={{"__html": "fn project_response(\n    &amp;self,\n    sanitized: &amp;<a href=\"../../struct-annotatedllmresponse\">AnnotatedLlmResponse</a>,\n) -&gt; <a href=\"https://doc.rust-lang.org/1.96.1/core/result/enum.Result.html\">Result</a>&lt;<a href=\"https://doc.rust-lang.org/1.96.1/core/option/enum.Option.html\">Option</a>&lt;<a href=\"https://docs.rs/serde_json/1.0.149/serde_json/value/enum.Value.html\">Value</a>&gt;, <a href=\"../../enum-flowerror\">FlowError</a>&gt;"}} /></pre>
+
+### `impl LlmResponseRedaction for OpenAIResponsesCodec`
+
+<pre className="rust-signature"><code dangerouslySetInnerHTML={{"__html": "impl <a href=\"trait-llmresponseredaction\">LlmResponseRedaction</a> for <a href=\"../../../nemo-relay-codecs/openai_responses/struct-openairesponsescodec\">OpenAIResponsesCodec</a>"}} /></pre>
+
+#### `edit_response`
+
+<pre className="rust-signature"><code dangerouslySetInnerHTML={{"__html": "fn edit_response(\n    &amp;self,\n    original: &amp;<a href=\"https://docs.rs/serde_json/1.0.149/serde_json/value/enum.Value.html\">Value</a>,\n    edits: <a href=\"struct-normalizededits\">NormalizedEdits</a>&lt;'_&gt;,\n) -&gt; <a href=\"https://doc.rust-lang.org/1.96.1/core/result/enum.Result.html\">Result</a>&lt;<a href=\"https://doc.rust-lang.org/1.96.1/core/option/enum.Option.html\">Option</a>&lt;<a href=\"https://docs.rs/serde_json/1.0.149/serde_json/value/enum.Value.html\">Value</a>&gt;, <a href=\"../../enum-flowerror\">FlowError</a>&gt;"}} /></pre>
+
+#### `project_response`
+
+<pre className="rust-signature"><code dangerouslySetInnerHTML={{"__html": "fn project_response(\n    &amp;self,\n    sanitized: &amp;<a href=\"../../struct-annotatedllmresponse\">AnnotatedLlmResponse</a>,\n) -&gt; <a href=\"https://doc.rust-lang.org/1.96.1/core/result/enum.Result.html\">Result</a>&lt;<a href=\"https://doc.rust-lang.org/1.96.1/core/option/enum.Option.html\">Option</a>&lt;<a href=\"https://docs.rs/serde_json/1.0.149/serde_json/value/enum.Value.html\">Value</a>&gt;, <a href=\"../../enum-flowerror\">FlowError</a>&gt;"}} /></pre>
+
+## Implementors

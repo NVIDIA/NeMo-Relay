@@ -9,11 +9,11 @@ SPDX-License-Identifier: Apache-2.0 */}
 
 Generated from `cargo doc --no-deps -p nemo-relay-builtins -p nemo-relay-diagnostics -p nemo-relay-logging -p nemo-relay-plugin-host -p nemo-relay-codecs -p nemo-relay -p nemo-relay-runtime -p nemo-relay-model-pricing -p nemo-relay-resource-metrics -p nemo-relay-observability -p nemo-relay-adaptive -p nemo-relay-pii-redaction -p nemo-relay-ffi -p nemo-relay-types -p nemo-relay-plugin -p nemo-relay-worker-proto -p nemo-relay-worker`.
 
-<pre className="rust-signature"><code dangerouslySetInnerHTML={{"__html": "pub trait LlmResponseCodec: <a href=\"https://doc.rust-lang.org/1.96.1/core/marker/trait.Send.html\">Send</a> + <a href=\"https://doc.rust-lang.org/1.96.1/core/marker/trait.Sync.html\">Sync</a> &#123;\n    // Required method\n    fn decode_response(&amp;self, response: &amp;<a href=\"../../type-json\">Json</a>) -&gt; <a href=\"../../error/type-result\">Result</a>&lt;<a href=\"../response/struct-annotatedllmresponse\">AnnotatedLlmResponse</a>&gt;;\n&#8203;\n    // Provided methods\n    fn codec_identity(&amp;self) -&gt; <a href=\"../identity/enum-llmcodecidentity\">LlmCodecIdentity</a> &#123; ... &#125;\n    fn allows_estimated_cost(&amp;self, _response: &amp;<a href=\"../../type-json\">Json</a>) -&gt; <a href=\"https://doc.rust-lang.org/1.96.1/std/primitive.bool.html\">bool</a> &#123; ... &#125;\n&#125;"}} /></pre>
+<pre className="rust-signature"><code dangerouslySetInnerHTML={{"__html": "pub trait LlmResponseCodec: <a href=\"https://doc.rust-lang.org/1.96.1/core/marker/trait.Send.html\">Send</a> + <a href=\"https://doc.rust-lang.org/1.96.1/core/marker/trait.Sync.html\">Sync</a> &#123;\n    // Required method\n    fn decode_response(&amp;self, response: &amp;<a href=\"../../type-json\">Json</a>) -&gt; <a href=\"../../error/type-result\">Result</a>&lt;<a href=\"../response/struct-annotatedllmresponse\">AnnotatedLlmResponse</a>&gt;;\n&#8203;\n    // Provided methods\n    fn redaction(&amp;self) -&gt; <a href=\"https://doc.rust-lang.org/1.96.1/core/option/enum.Option.html\">Option</a>&lt;&amp;dyn <a href=\"../redaction/trait-llmresponseredaction\">LlmResponseRedaction</a>&gt; &#123; ... &#125;\n    fn codec_identity(&amp;self) -&gt; <a href=\"../identity/enum-llmcodecidentity\">LlmCodecIdentity</a> &#123; ... &#125;\n    fn allows_estimated_cost(&amp;self, _response: &amp;<a href=\"../../type-json\">Json</a>) -&gt; <a href=\"https://doc.rust-lang.org/1.96.1/std/primitive.bool.html\">bool</a> &#123; ... &#125;\n&#125;"}} /></pre>
 
 Decode-only codec for LLM API responses.
 
-Unlike [`LlmCodec`](/reference/api/rust-library-reference/nemo-relay-types/codec/traits/trait-llmcodec) (which is bidirectional for requests), response codecs are introspection-only: they parse a raw response into structured form but never need to encode back. This matches the pipeline design where responses are observed, not modified.
+Unlike [`LlmCodec`](/reference/api/rust-library-reference/nemo-relay-types/codec/traits/trait-llmcodec) (which is bidirectional for requests), response codecs parse a raw response into structured form for observation. Optional [`LlmResponseRedaction`](/reference/api/rust-library-reference/nemo-relay-types/codec/redaction/trait-llmresponseredaction) capabilities can materialize sanitized observability payloads; they do not rewrite the caller-visible response.
 
 ## Design
 
@@ -40,6 +40,12 @@ Parse a raw JSON response into normalized structured form.
 Implementations should return `Err` only for genuinely unparseable input.
 
 ## Provided Methods
+
+#### `redaction`
+
+<pre className="rust-signature"><code dangerouslySetInnerHTML={{"__html": "fn redaction(&amp;self) -&gt; <a href=\"https://doc.rust-lang.org/1.96.1/core/option/enum.Option.html\">Option</a>&lt;&amp;dyn <a href=\"../redaction/trait-llmresponseredaction\">LlmResponseRedaction</a>&gt;"}} /></pre>
+
+Explicit redaction capabilities; unsupported operations fail closed.
 
 #### `codec_identity`
 

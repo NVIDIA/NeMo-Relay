@@ -1,0 +1,110 @@
+---
+title: "Enum Content Kind"
+sidebar-title: "ContentKind"
+description: "Typed content without cloning the normalized source."
+position: 12
+---
+{/* SPDX-FileCopyrightText: Copyright (c) 2026, NVIDIA CORPORATION & AFFILIATES. All rights reserved.
+SPDX-License-Identifier: Apache-2.0 */}
+
+Generated from `cargo doc --no-deps -p nemo-relay-builtins -p nemo-relay-diagnostics -p nemo-relay-logging -p nemo-relay-plugin-host -p nemo-relay-codecs -p nemo-relay -p nemo-relay-runtime -p nemo-relay-model-pricing -p nemo-relay-resource-metrics -p nemo-relay-observability -p nemo-relay-adaptive -p nemo-relay-pii-redaction -p nemo-relay-ffi -p nemo-relay-types -p nemo-relay-plugin -p nemo-relay-worker-proto -p nemo-relay-worker`.
+
+<pre className="rust-signature"><code dangerouslySetInnerHTML={{"__html": "#[non_exhaustive]pub enum ContentKind&lt;'a&gt; &#123;\n    Text(&amp;'a <a href=\"https://doc.rust-lang.org/1.96.1/std/primitive.str.html\">str</a>),\n    Refusal(&amp;'a <a href=\"https://doc.rust-lang.org/1.96.1/std/primitive.str.html\">str</a>),\n    ToolCall(<a href=\"struct-toolcallview\">ToolCallView</a>&lt;'a&gt;),\n    ToolResult(<a href=\"struct-toolresultview\">ToolResultView</a>&lt;'a&gt;),\n    ImageUrl(&amp;'a <a href=\"../request/struct-openaiimageurl\">OpenAiImageUrl</a>),\n    Image(&amp;'a <a href=\"../../type-json\">Json</a>),\n    Audio(&amp;'a <a href=\"../../type-json\">Json</a>),\n    File(&amp;'a <a href=\"../../type-json\">Json</a>),\n    ProviderNative &#123;\n        provider: &amp;'a <a href=\"https://doc.rust-lang.org/1.96.1/std/primitive.str.html\">str</a>,\n        kind: &amp;'a <a href=\"https://doc.rust-lang.org/1.96.1/std/primitive.str.html\">str</a>,\n        value: &amp;'a <a href=\"../../type-json\">Json</a>,\n    &#125;,\n&#125;"}} /></pre>
+
+Typed content without cloning the normalized source.
+
+## Variants (Non-exhaustive)
+
+### `Text(&'a str)`
+
+<pre className="rust-signature"><code dangerouslySetInnerHTML={{"__html": "Text(&amp;'a <a href=\"https://doc.rust-lang.org/1.96.1/std/primitive.str.html\">str</a>)"}} /></pre>
+
+Explicit text.
+
+### `Refusal(&'a str)`
+
+<pre className="rust-signature"><code dangerouslySetInnerHTML={{"__html": "Refusal(&amp;'a <a href=\"https://doc.rust-lang.org/1.96.1/std/primitive.str.html\">str</a>)"}} /></pre>
+
+Explicit refusal text.
+
+### `ToolCall(ToolCallView<'a>)`
+
+<pre className="rust-signature"><code dangerouslySetInnerHTML={{"__html": "ToolCall(<a href=\"struct-toolcallview\">ToolCallView</a>&lt;'a&gt;)"}} /></pre>
+
+A tool invocation.
+
+### `ToolResult(ToolResultView<'a>)`
+
+<pre className="rust-signature"><code dangerouslySetInnerHTML={{"__html": "ToolResult(<a href=\"struct-toolresultview\">ToolResultView</a>&lt;'a&gt;)"}} /></pre>
+
+A tool result, including string-valued results.
+
+### `ImageUrl(&'a OpenAiImageUrl)`
+
+<pre className="rust-signature"><code dangerouslySetInnerHTML={{"__html": "ImageUrl(&amp;'a <a href=\"../request/struct-openaiimageurl\">OpenAiImageUrl</a>)"}} /></pre>
+
+An image URL.
+
+### `Image(&'a Json)`
+
+<pre className="rust-signature"><code dangerouslySetInnerHTML={{"__html": "Image(&amp;'a <a href=\"../../type-json\">Json</a>)"}} /></pre>
+
+Portable image data.
+
+### `Audio(&'a Json)`
+
+<pre className="rust-signature"><code dangerouslySetInnerHTML={{"__html": "Audio(&amp;'a <a href=\"../../type-json\">Json</a>)"}} /></pre>
+
+Portable audio data.
+
+### `File(&'a Json)`
+
+<pre className="rust-signature"><code dangerouslySetInnerHTML={{"__html": "File(&amp;'a <a href=\"../../type-json\">Json</a>)"}} /></pre>
+
+Portable file data.
+
+### `ProviderNative`
+
+<pre className="rust-signature"><code dangerouslySetInnerHTML={{"__html": "ProviderNative"}} /></pre>
+
+A provider-native payload retained without recursive interpretation.
+
+#### Fields
+
+### `provider: &'a str`
+
+Owning provider surface.
+
+### `kind: &'a str`
+
+Native discriminator.
+
+### `value: &'a Json`
+
+Original payload.
+
+## Trait Implementations
+
+### `impl<'a> Clone for ContentKind<'a>`
+
+<pre className="rust-signature"><code dangerouslySetInnerHTML={{"__html": "impl&lt;'a&gt; <a href=\"https://doc.rust-lang.org/1.96.1/core/clone/trait.Clone.html\">Clone</a> for <a href=\"enum-contentkind\">ContentKind</a>&lt;'a&gt;"}} /></pre>
+
+#### `clone`
+
+<pre className="rust-signature"><code dangerouslySetInnerHTML={{"__html": "fn <a href=\"https://doc.rust-lang.org/1.96.1/core/clone/trait.Clone.html#tymethod.clone\">clone</a>(&amp;self) -&gt; <a href=\"enum-contentkind\">ContentKind</a>&lt;'a&gt;"}} /></pre>
+
+#### `clone_from`
+
+<pre className="rust-signature"><code dangerouslySetInnerHTML={{"__html": "fn <a href=\"https://doc.rust-lang.org/1.96.1/core/clone/trait.Clone.html#method.clone_from\">clone_from</a>(&amp;mut self, source: &amp;Self)"}} /></pre>
+
+### `impl<'a> Debug for ContentKind<'a>`
+
+<pre className="rust-signature"><code dangerouslySetInnerHTML={{"__html": "impl&lt;'a&gt; <a href=\"https://doc.rust-lang.org/1.96.1/core/fmt/trait.Debug.html\">Debug</a> for <a href=\"enum-contentkind\">ContentKind</a>&lt;'a&gt;"}} /></pre>
+
+#### `fmt`
+
+<pre className="rust-signature"><code dangerouslySetInnerHTML={{"__html": "fn <a href=\"https://doc.rust-lang.org/1.96.1/core/fmt/trait.Debug.html#tymethod.fmt\">fmt</a>(&amp;self, f: &amp;mut <a href=\"https://doc.rust-lang.org/1.96.1/core/fmt/struct.Formatter.html\">Formatter</a>&lt;'_&gt;) -&gt; <a href=\"https://doc.rust-lang.org/1.96.1/core/fmt/type.Result.html\">Result</a>"}} /></pre>
+
+### `impl<'a> Copy for ContentKind<'a>`
+
+<pre className="rust-signature"><code dangerouslySetInnerHTML={{"__html": "impl&lt;'a&gt; <a href=\"https://doc.rust-lang.org/1.96.1/core/marker/trait.Copy.html\">Copy</a> for <a href=\"enum-contentkind\">ContentKind</a>&lt;'a&gt;"}} /></pre>

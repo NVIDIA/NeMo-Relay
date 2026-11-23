@@ -20,3 +20,7 @@ Provider request, response, and streaming codec implementations. Shared traits a
 - [openai_responses](/reference/api/rust-library-reference/nemo-relay-codecs/openai_responses): Built-in codec for the OpenAI Responses API.
 - [resolve](/reference/api/rust-library-reference/nemo-relay-codecs/resolve): Provider-surface detection, best-effort normalization, and construction of the matching built-in codecs from a raw payload, surface, or codec name.
 - [streaming](/reference/api/rust-library-reference/nemo-relay-codecs/streaming): Server-sent event framing for provider streams.
+
+## Functions
+
+- [edit_normalized_request](/reference/api/rust-library-reference/nemo-relay-codecs/fn-edit-normalized-request): Apply normalized request edits using an opted-in codec's source-preserving encoder. Reject ambiguous structural edits and verify the result by decoding the wire payload.

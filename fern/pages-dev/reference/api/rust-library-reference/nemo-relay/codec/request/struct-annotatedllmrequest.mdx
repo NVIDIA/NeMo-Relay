@@ -111,21 +111,25 @@ Baseline-aware codecs remove deleted keys and overlay changed or added keys with
 
 <pre className="rust-signature"><code dangerouslySetInnerHTML={{"__html": "impl <a href=\"../../struct-annotatedllmrequest\">AnnotatedLlmRequest</a>"}} /></pre>
 
+#### `last_message`
+
+<pre className="rust-signature"><code dangerouslySetInnerHTML={{"__html": "pub fn last_message(&amp;self) -&gt; <a href=\"https://doc.rust-lang.org/1.96.1/core/option/enum.Option.html\">Option</a>&lt;<a href=\"../content/struct-messageview\">MessageView</a>&lt;'_&gt;&gt;"}} /></pre>
+
+Select exactly the final supplied request item, without searching backward.
+
 #### `system_prompt`
 
-<pre className="rust-signature"><code dangerouslySetInnerHTML={{"__html": "pub fn system_prompt(&amp;self) -&gt; <a href=\"https://doc.rust-lang.org/1.96.1/core/option/enum.Option.html\">Option</a>&lt;&amp;<a href=\"https://doc.rust-lang.org/1.96.1/std/primitive.str.html\">str</a>&gt;"}} /></pre>
+<pre className="rust-signature"><code dangerouslySetInnerHTML={{"__html": "pub fn system_prompt(&amp;self) -&gt; <a href=\"https://doc.rust-lang.org/1.96.1/core/option/enum.Option.html\">Option</a>&lt;<a href=\"https://doc.rust-lang.org/1.96.1/alloc/borrow/enum.Cow.html\">Cow</a>&lt;'_, <a href=\"https://doc.rust-lang.org/1.96.1/std/primitive.str.html\">str</a>&gt;&gt;"}} /></pre>
 
-Extract the text content of the first system message, if any.
+Join text/refusals from instructions, or the first system/developer item.
 
-For [`MessageContent::Text`](/reference/api/rust-library-reference/nemo-relay/codec/request/enum-messagecontent), returns the string directly. For [`MessageContent::Parts`](/reference/api/rust-library-reference/nemo-relay/codec/request/enum-messagecontent), returns the text of the first [`ContentPart::Text`](/reference/api/rust-library-reference/nemo-relay/codec/request/enum-contentpart) part.
+A selected item without text yields `None`; later items are not searched.
 
 #### `last_user_message`
 
-<pre className="rust-signature"><code dangerouslySetInnerHTML={{"__html": "pub fn last_user_message(&amp;self) -&gt; <a href=\"https://doc.rust-lang.org/1.96.1/core/option/enum.Option.html\">Option</a>&lt;&amp;<a href=\"https://doc.rust-lang.org/1.96.1/std/primitive.str.html\">str</a>&gt;"}} /></pre>
+<pre className="rust-signature"><code dangerouslySetInnerHTML={{"__html": "pub fn last_user_message(&amp;self) -&gt; <a href=\"https://doc.rust-lang.org/1.96.1/core/option/enum.Option.html\">Option</a>&lt;<a href=\"https://doc.rust-lang.org/1.96.1/alloc/borrow/enum.Cow.html\">Cow</a>&lt;'_, <a href=\"https://doc.rust-lang.org/1.96.1/std/primitive.str.html\">str</a>&gt;&gt;"}} /></pre>
 
-Get the text content of the last user message, if any.
-
-Searches messages in reverse order and returns the first user message found. For [`MessageContent::Parts`](/reference/api/rust-library-reference/nemo-relay/codec/request/enum-messagecontent), returns the text of the first [`ContentPart::Text`](/reference/api/rust-library-reference/nemo-relay/codec/request/enum-contentpart) part.
+Join text/refusals from the last user item, without skipping textless items.
 
 #### `has_tool_calls`
 

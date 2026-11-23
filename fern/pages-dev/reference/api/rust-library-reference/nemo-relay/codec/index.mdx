@@ -14,10 +14,12 @@ Normalized LLM request and response data types. Shared normalized LLM request an
 ## Modules
 
 - [billing](/reference/api/rust-library-reference/nemo-relay/codec/billing): Checked provider token accounting and billing data. Provider token accounting contracts and checked usage arithmetic.
+- [content](/reference/api/rust-library-reference/nemo-relay/codec/content): Typed content traversal, shared selection, and owned transport snapshots. Borrowed access to normalized message content.
 - [identity](/reference/api/rust-library-reference/nemo-relay/codec/identity): Stable LLM codec identities shared across SDK boundaries. Stable LLM codec identities shared across Relay runtime and SDK boundaries.
 - [normalization](/reference/api/rust-library-reference/nemo-relay/codec/normalization): Runtime-supplied provider normalization. Provider normalization supplied by a runtime or embedding application.
 - [optimization](/reference/api/rust-library-reference/nemo-relay/codec/optimization): Plugin-neutral LLM optimization evidence and summaries. Plugin-neutral evidence and summaries for LLM optimizations.
 - [pricing](/reference/api/rust-library-reference/nemo-relay/codec/pricing): Runtime-neutral cost estimation contract. Price estimation supplied independently from runtime execution.
+- [redaction](/reference/api/rust-library-reference/nemo-relay/codec/redaction): Opt-in source-aware editing and clean sanitized projection. Opt-in provider editing and clean projection, independent of PII policy.
 - [request](/reference/api/rust-library-reference/nemo-relay/codec/request): Normalized LLM request data types. LLM request codec types and trait.
 - [response](/reference/api/rust-library-reference/nemo-relay/codec/response): Normalized LLM response data types. Normalized LLM response types produced by response codecs.
 - [streaming](/reference/api/rust-library-reference/nemo-relay/codec/streaming): Provider streaming codec contracts and normalized stream events. Streaming response codecs for the managed LLM execution pipeline.

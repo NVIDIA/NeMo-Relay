@@ -901,6 +901,14 @@ async def deregister_conditional_middleware_guardrail(handle: ConditionalMiddlew
 
 Remove a callback-based gate owned by this worker activation.
 
+##### `inspect_llm_content`
+
+```python
+async def inspect_llm_content(source: Literal['request', 'response', 'message', 'content'], value: Json, selection: Literal['last_message', 'message_index', 'instructions', 'system_prompt', 'last_user_message', 'output', 'all'], *, message_index: int | None = None) -> codecs.MessageView | None
+```
+
+Select normalized content through the Rust host and retain an owned snapshot.
+
 ##### `emit_mark`
 
 ```python
@@ -1115,7 +1123,9 @@ Format an HTTP error status (400–599) for Relay plugin error forwarding.
 - `MessageLimitInterceptor`
 - `RpcHostChannel`
 - `WorkerDiagnostics`
+- `codecs`
 - `common_pb`
+- `content_pb`
 - `diagnostics_grpc`
 - `event_pb`
 - `host_grpc`

@@ -12,6 +12,16 @@ Import from `nemo-relay-node`.
 
 Main runtime lifecycle, scope, middleware, subscriber, and exporter APIs.
 
+## Namespaces
+
+### `codecs`
+
+Selection, typed content snapshots, and text extraction over normalized annotations.
+
+```ts
+export * as codecs from './codecs.js';
+```
+
 ## Interfaces
 
 ### `ResourceMetricsPollingConfig`
@@ -2041,6 +2051,108 @@ export interface ToolExecutionResult {
 }
 ```
 
+### `codecs.ContentLocation`
+
+Read-time location in a normalized snapshot; not an edit handle or provider-wire offset.
+
+```ts
+export interface ContentLocation {
+    readonly root: 'request_message' | 'message' | 'response' | 'content';
+    readonly messageIndex: number | null;
+    readonly field: 'content' | 'message' | 'tool_calls' | 'tool_call_item' | 'output' | 'value' | 'native_content' | 'native_refusal' | 'native_tool_calls';
+    readonly index: number | null;
+}
+```
+
+### `codecs.ToolCallView`
+
+Tool invocation backed by selected Rust snapshot storage.
+
+```ts
+export interface ToolCallView {
+    readonly id: string | null;
+    readonly callId: string | null;
+    readonly name: string;
+    readonly arguments: PayloadView;
+}
+```
+
+### `codecs.ToolResultView`
+
+Complete tool result, excluded from default text extraction.
+
+```ts
+export interface ToolResultView {
+    readonly id: string | null;
+    readonly callId: string | null;
+    readonly name: string | null;
+    readonly isError: boolean | null;
+    readonly payload: PayloadView;
+}
+```
+
+### `codecs.TextEntry`
+
+Explicit normalized text or refusal.
+
+```ts
+export interface TextEntry {
+    readonly kind: 'text' | 'refusal';
+    readonly location: ContentLocation;
+    readonly text: string;
+}
+```
+
+### `codecs.ToolCallEntry`
+
+A typed tool-call entry.
+
+```ts
+export interface ToolCallEntry {
+    readonly kind: 'tool_call';
+    readonly location: ContentLocation;
+    readonly toolCall: ToolCallView;
+}
+```
+
+### `codecs.ToolResultEntry`
+
+A typed tool-result entry.
+
+```ts
+export interface ToolResultEntry {
+    readonly kind: 'tool_result';
+    readonly location: ContentLocation;
+    readonly toolResult: ToolResultView;
+}
+```
+
+### `codecs.MediaEntry`
+
+Media retained as an independent JavaScript value when value is accessed.
+
+```ts
+export interface MediaEntry {
+    readonly kind: 'image_url' | 'image' | 'audio' | 'file';
+    readonly location: ContentLocation;
+    readonly value: JsonValue;
+}
+```
+
+### `codecs.ProviderNativeEntry`
+
+Opaque provider-native content; default text permits only supported shallow fallbacks.
+
+```ts
+export interface ProviderNativeEntry {
+    readonly kind: 'provider_native';
+    readonly location: ContentLocation;
+    readonly provider: string;
+    readonly nativeKind: string;
+    readonly value: JsonValue;
+}
+```
+
 ## Classes
 
 ### `LlmRequest`
@@ -2474,6 +2586,31 @@ export declare class ToolHandle {
   get attributes(): number
   /** The UUID of the parent scope that initiated this tool call, or `null`. */
   get parentUuid(): string | null
+}
+```
+
+### `codecs.MessageView`
+
+Read-only Rust-owned snapshot. Iterators, entries, and payload views retain selected storage.
+
+```ts
+export declare class MessageView {
+    #private;
+    private constructor();
+    /** Snapshot a normalized message, preserving its role and tool-result semantics. */
+    static fromMessage<T extends JsonCompatible<T>>(value: T): MessageView;
+    /** Snapshot standalone normalized content: a string or content-part array. */
+    static fromContent<T extends JsonCompatible<T>>(value: T): MessageView;
+    /** Iterate typed parts in normalized order, followed by separate tool-call fields. */
+    parts(): IterableIterator<ContentEntry>;
+    /** Iterate text/refusal strings, including supported native fallbacks and excluding tool payloads. */
+    textParts(): IterableIterator<string>;
+    /** Return null for absent text; otherwise preserve whitespace and newline-join empty/text/refusal parts. */
+    text(): string | null;
+    /** @internal Read direct selections in place and delegate role matching to Rust. */
+    static _selectRequest(request: unknown, selection: string, index?: number): MessageView | null;
+    /** @internal Snapshot current output without retaining unrelated response metadata. */
+    static _output(value: JsonValue): MessageView;
 }
 ```
 
@@ -3873,6 +4010,62 @@ The caller's stack is restored immediately after callback invocation. When the c
 export declare function withScopeStack<T>(stack: ScopeStack, callback: () => T): T
 ```
 
+### `codecs.message`
+
+Snapshot any normalized request item by integer index; negative indices count from the end.
+
+```ts
+export declare function message<T extends JsonCompatible<T>>(request: T, index: number): MessageView;
+```
+
+### `codecs.lastMessage`
+
+Snapshot exactly the final supplied item, or null for empty history; never search backward for text.
+
+```ts
+export declare function lastMessage<T extends JsonCompatible<T>>(request: T): MessageView | null;
+```
+
+### `codecs.instructionsView`
+
+Snapshot only top-level instructions, without falling back to history.
+
+```ts
+export declare function instructionsView<T extends JsonCompatible<T>>(request: T): MessageView | null;
+```
+
+### `codecs.output`
+
+Snapshot current normalized message and separate tool calls, excluding response metadata.
+
+```ts
+export declare function output<T extends JsonCompatible<T>>(response: T): MessageView;
+```
+
+### `codecs.systemPrompt`
+
+Extract instructions, otherwise the first portable/native system/developer item, including textless selections.
+
+```ts
+export declare function systemPrompt<T extends JsonCompatible<T>>(request: T): string | null;
+```
+
+### `codecs.lastUserMessage`
+
+Extract the final portable/native user item without skipping a selected item that has no text.
+
+```ts
+export declare function lastUserMessage<T extends JsonCompatible<T>>(request: T): string | null;
+```
+
+### `codecs.responseText`
+
+Extract current normalized response text/refusals, excluding tool payloads, reasoning, and media.
+
+```ts
+export declare function responseText<T extends JsonCompatible<T>>(response: T): string | null;
+```
+
 ## Type Aliases
 
 ### `JsonPrimitive`
@@ -4160,5 +4353,48 @@ export type ResourceMemoryNumber =
   | { kind: 'integer'; value: bigint }
   | { kind: 'decimal'; value: number }
   | { kind: 'non_finite' };
+```
+
+### `ContentEntrySnapshot`
+
+```ts
+export type ContentEntrySnapshot = _ContentEntry
+```
+
+### `ContentIterator`
+
+```ts
+export type ContentIterator = _ContentIterator
+```
+
+### `ContentSnapshot`
+
+```ts
+export type ContentSnapshot = _ContentSnapshot
+```
+
+### `codecs.PayloadView`
+
+Tool payload in its original normalized representation; value materializes an independent JavaScript value.
+
+```ts
+export type PayloadView = {
+    readonly kind: 'null';
+    readonly value: null;
+} | {
+    readonly kind: 'string';
+    readonly value: string;
+} | {
+    readonly kind: 'json' | 'content';
+    readonly value: JsonValue;
+};
+```
+
+### `codecs.ContentEntry`
+
+Discriminated content union; checking kind narrows the available fields.
+
+```ts
+export type ContentEntry = TextEntry | ToolCallEntry | ToolResultEntry | MediaEntry | ProviderNativeEntry;
 ```
 

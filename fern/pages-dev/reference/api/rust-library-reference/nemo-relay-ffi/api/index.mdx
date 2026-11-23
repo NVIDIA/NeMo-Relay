@@ -26,6 +26,17 @@ Each function clears the thread-local error before executing and returns an [`Ne
 
 ## Constants
 
+- [NEMO_RELAY_CONTENT_SELECT_ALL](/reference/api/rust-library-reference/nemo-relay-ffi/api/constant-nemo-relay-content-select-all): All parts of a standalone message or content value.
+- [NEMO_RELAY_CONTENT_SELECT_INSTRUCTIONS](/reference/api/rust-library-reference/nemo-relay-ffi/api/constant-nemo-relay-content-select-instructions): Top-level request instructions.
+- [NEMO_RELAY_CONTENT_SELECT_LAST_MESSAGE](/reference/api/rust-library-reference/nemo-relay-ffi/api/constant-nemo-relay-content-select-last-message): Final supplied request message.
+- [NEMO_RELAY_CONTENT_SELECT_LAST_USER_MESSAGE](/reference/api/rust-library-reference/nemo-relay-ffi/api/constant-nemo-relay-content-select-last-user-message): Last user message in the request.
+- [NEMO_RELAY_CONTENT_SELECT_MESSAGE](/reference/api/rust-library-reference/nemo-relay-ffi/api/constant-nemo-relay-content-select-message): Request message at the signed index. Negative indices count from the end.
+- [NEMO_RELAY_CONTENT_SELECT_OUTPUT](/reference/api/rust-library-reference/nemo-relay-ffi/api/constant-nemo-relay-content-select-output): Current normalized response output.
+- [NEMO_RELAY_CONTENT_SELECT_SYSTEM_PROMPT](/reference/api/rust-library-reference/nemo-relay-ffi/api/constant-nemo-relay-content-select-system-prompt): Request instructions or the first system/developer message.
+- [NEMO_RELAY_CONTENT_SOURCE_CONTENT](/reference/api/rust-library-reference/nemo-relay-ffi/api/constant-nemo-relay-content-source-content): Standalone message content (string or parts array).
+- [NEMO_RELAY_CONTENT_SOURCE_MESSAGE](/reference/api/rust-library-reference/nemo-relay-ffi/api/constant-nemo-relay-content-source-message): Standalone normalized message.
+- [NEMO_RELAY_CONTENT_SOURCE_REQUEST](/reference/api/rust-library-reference/nemo-relay-ffi/api/constant-nemo-relay-content-source-request): Normalized LLM request.
+- [NEMO_RELAY_CONTENT_SOURCE_RESPONSE](/reference/api/rust-library-reference/nemo-relay-ffi/api/constant-nemo-relay-content-source-response): Normalized LLM response.
 - [NEMO_RELAY_SKIP_CONDITIONAL_EXECUTION](/reference/api/rust-library-reference/nemo-relay-ffi/api/constant-nemo-relay-skip-conditional-execution): Skip conditional-execution guardrails for one managed call.
 - [NEMO_RELAY_SKIP_EXECUTION_INTERCEPTS](/reference/api/rust-library-reference/nemo-relay-ffi/api/constant-nemo-relay-skip-execution-intercepts): Skip execution intercepts for one managed call (stream intercepts for streams).
 - [NEMO_RELAY_SKIP_REQUEST_INTERCEPTS](/reference/api/rust-library-reference/nemo-relay-ffi/api/constant-nemo-relay-skip-request-intercepts): Skip request intercepts for one managed call.
@@ -92,6 +103,7 @@ Each function clears the thread-local error before executing and returns an [`Ne
 - [nemo_relay_gemini_generate_content_codec_new](/reference/api/rust-library-reference/nemo-relay-ffi/api/fn-nemo-relay-gemini-generate-content-codec-new): Create a new Gemini generateContent API codec handle.
 - [nemo_relay_get_handle](/reference/api/rust-library-reference/nemo-relay-ffi/api/fn-nemo-relay-get-handle): Retrieve the current scope handle from the thread-local scope stack.
 - [nemo_relay_initialize_default_logging](/reference/api/rust-library-reference/nemo-relay-ffi/api/fn-nemo-relay-initialize-default-logging): Initializes the Go binding runtime and installs default operational logging.
+- [nemo_relay_inspect_llm_content_json](/reference/api/rust-library-reference/nemo-relay-ffi/api/fn-nemo-relay-inspect-llm-content-json): Inspect a normalized annotation, using NEMO_RELAY_CONTENT_SOURCE_* and NEMO_RELAY_CONTENT_SELECT_* constants. Only SELECT_MESSAGE reads index. Success returns an owned JSON object with ordered parts and text_parts; an absent selection succeeds with a null output. An empty selection of existing content still returns a snapshot. Free a snapshot with nemo_relay_string_free. An invalid selection/index returns InvalidArg. On failure, *out is null and nemo_relay_last_error describes the error on the calling thread.
 - [nemo_relay_list_plugin_kinds_json](/reference/api/rust-library-reference/nemo-relay-ffi/api/fn-nemo-relay-list-plugin-kinds-json): Return the registered plugin kinds as JSON.
 - [nemo_relay_list_runtime_registrations](/reference/api/rust-library-reference/nemo-relay-ffi/api/fn-nemo-relay-list-runtime-registrations): List global gateable runtime registrations as JSON.
 - [nemo_relay_llm_call](/reference/api/rust-library-reference/nemo-relay-ffi/api/fn-nemo-relay-llm-call): Begin a manual LLM call lifecycle span.
