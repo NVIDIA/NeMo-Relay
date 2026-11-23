@@ -63,6 +63,8 @@ fn hook_events_inventory_matches_what_the_extension_posts() {
             "tool_execution_end",
             "turn_end",
             "turn_start",
+            "ui_prompt_end",
+            "ui_prompt_start",
             "user_bash",
             "user_bash_end",
         ]

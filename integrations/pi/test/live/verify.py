@@ -22,7 +22,7 @@ def verify(pi: Path, relay: Path) -> None:
         subprocess.run([sys.executable, HERE / scenario, "--pi", pi, "--relay", relay], check=True)
         print(f"PASS Pi 1.6.0: {scenario}", flush=True)
     subprocess.run([sys.executable, HERE / "managed_builtins.py", "--pi", pi], check=True)
-    for scenario in ["mixed-provider.mjs", "coercion.mjs", "lifecycle.mjs"]:
+    for scenario in ["mixed-provider.mjs", "coercion.mjs", "lifecycle.mjs", "ui-waits.mjs"]:
         subprocess.run(["node", HERE / scenario, pi], check=True)
         print(f"PASS Pi 1.6.0: {scenario}", flush=True)
 
