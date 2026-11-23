@@ -1037,13 +1037,13 @@ fn no_codec_request_context() -> LlmSanitizeRequestContext {
     LlmSanitizeRequestContext::default()
 }
 
-struct IdentifiedRequestCodec {
+struct IdentifiedRequestCodec<C> {
     redaction_enabled: bool,
     identity: LlmCodecIdentity,
-    inner: OpenAIResponsesCodec,
+    inner: C,
 }
 
-impl LlmCodec for IdentifiedRequestCodec {
+impl<C: LlmCodec> LlmCodec for IdentifiedRequestCodec<C> {
     fn redaction(&self) -> Option<&dyn nemo_relay_types::codec::redaction::LlmRequestRedaction> {
         self.redaction_enabled
             .then(|| LlmCodec::redaction(&self.inner))
@@ -1067,7 +1067,7 @@ impl LlmCodec for IdentifiedRequestCodec {
     }
 }
 
-impl LlmResponseCodec for IdentifiedRequestCodec {
+impl<C: LlmResponseCodec> LlmResponseCodec for IdentifiedRequestCodec<C> {
     fn redaction(&self) -> Option<&dyn nemo_relay_types::codec::redaction::LlmResponseRedaction> {
         self.redaction_enabled
             .then(|| LlmResponseCodec::redaction(&self.inner))
@@ -8132,6 +8132,41 @@ async fn chat_redaction_drops_token_copies_only_when_choice_text_changes() {
                 assert_eq!(choice["logprobs"], chunk["choices"][0]["logprobs"]);
             }
         }
+    }
+}
+
+#[tokio::test]
+async fn custom_chat_codecs_drop_logprobs_when_message_is_removed() {
+    let backend = CompiledBuiltinBackend::new(
+        BuiltinBackendConfig {
+            action: "remove".into(),
+            target_paths: vec!["/message".into()],
+            ..Default::default()
+        },
+        None,
+    )
+    .unwrap();
+    let sanitize = crate::builtin::llm_sanitize_response_callback(backend);
+    let payload = json!({"choices":[{"message":{"role":"assistant","content":"123456"},
+        "logprobs":{"content":[{"token":"123456","bytes":[49,50,51,52,53,54],
+            "top_logprobs":[{"token":"alternative"}]}]}}]});
+    for identity in [
+        LlmCodecIdentity::Runtime("example.chat".into()),
+        LlmCodecIdentity::Opaque,
+    ] {
+        let codec = IdentifiedRequestCodec {
+            identity,
+            inner: OpenAIChatCodec,
+            redaction_enabled: true,
+        };
+        let context = LlmSanitizeResponseContext::for_response_codec(Some(Arc::new(codec)));
+        let sanitized = sanitize(payload.clone(), context)
+            .await
+            .unwrap()
+            .expect("edited response");
+        let choice = sanitized["choices"][0].as_object().unwrap();
+        assert!(choice["message"]["content"].is_null());
+        assert!(!choice.contains_key("logprobs"));
     }
 }
 
