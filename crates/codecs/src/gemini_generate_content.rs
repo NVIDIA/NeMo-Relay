@@ -1847,17 +1847,6 @@ fn gemini_call_id_to_name(messages: &[Message]) -> HashMap<String, String> {
         .collect()
 }
 
-fn push_fresh_gemini_content(
-    new_contents: &mut Vec<Json>,
-    message: &Json,
-    call_id_to_name: &HashMap<String, String>,
-) -> Result<()> {
-    if let Some(item) = normalized_to_gemini_content(message, call_id_to_name)? {
-        new_contents.push(item);
-    }
-    Ok(())
-}
-
 fn gemini_run_end(
     start: usize,
     ann_len: usize,
@@ -1934,11 +1923,15 @@ fn patch_gemini_non_system_contents(
         gemini_content_msg_counts(&content_idx_of_base_msg, orig_contents.len());
 
     let mut new_contents = Vec::new();
-    let mut processed_cidxs = std::collections::HashSet::<usize>::new();
+    let mut processed_cidxs = HashSet::new();
+    let mut fresh_contents = HashSet::new();
     let mut i = 0;
     while i < ann_non_sys.len() {
         let Some(base_idx) = alignment.base_idx_for(i) else {
-            push_fresh_gemini_content(&mut new_contents, ann_non_sys[i], &call_id_to_name)?;
+            if let Some(item) = normalized_to_gemini_content(ann_non_sys[i], &call_id_to_name)? {
+                fresh_contents.insert(new_contents.len());
+                new_contents.push(item);
+            }
             i += 1;
             continue;
         };
@@ -1996,7 +1989,12 @@ fn patch_gemini_non_system_contents(
 
         i = run_end;
     }
-    preserve_gemini_function_call_fields(&mut new_contents, &orig_contents);
+    preserve_gemini_function_call_fields(
+        &mut new_contents,
+        &orig_contents,
+        &processed_cidxs,
+        &fresh_contents,
+    )?;
     obj.insert("contents".into(), Json::Array(new_contents));
     Ok(())
 }
@@ -2004,18 +2002,30 @@ fn patch_gemini_non_system_contents(
 // A changed call list can leave its turn unmatched. Preserve the original
 // call part's metadata by unique effective call ID even across split/merged
 // turns, without borrowing fields from unrelated or ambiguous calls.
-fn preserve_gemini_function_call_fields(contents: &mut [Json], original: &[Json]) {
+fn preserve_gemini_function_call_fields(
+    contents: &mut [Json],
+    original: &[Json],
+    aligned_originals: &HashSet<usize>,
+    fresh_contents: &HashSet<usize>,
+) -> Result<()> {
     let mut original_parts: HashMap<&str, Option<&Json>> = HashMap::new();
-    for part in original
-        .iter()
-        .filter_map(|content| content.get("parts").and_then(Json::as_array))
-        .flatten()
-    {
-        if let Some(id) = gemini_function_call_part_id(part) {
-            original_parts
-                .entry(id)
-                .and_modify(|part| *part = None)
-                .or_insert(Some(part));
+    let mut unclaimed_metadata = HashSet::new();
+    for (index, content) in original.iter().enumerate() {
+        let Some(parts) = content.get("parts").and_then(Json::as_array) else {
+            continue;
+        };
+        for part in parts {
+            if let Some(id) = gemini_function_call_part_id(part) {
+                original_parts
+                    .entry(id)
+                    .and_modify(|part| *part = None)
+                    .or_insert(Some(part));
+                if !aligned_originals.contains(&index)
+                    && part.as_object().is_some_and(|fields| fields.len() > 1)
+                {
+                    unclaimed_metadata.insert(id);
+                }
+            }
         }
     }
     let mut edited_counts = HashMap::<String, usize>::new();
@@ -2028,7 +2038,7 @@ fn preserve_gemini_function_call_fields(contents: &mut [Json], original: &[Json]
             *edited_counts.entry(id.to_string()).or_default() += 1;
         }
     }
-    for content in contents {
+    for (index, content) in contents.iter_mut().enumerate() {
         let Some(parts) = content.get_mut("parts").and_then(Json::as_array_mut) else {
             continue;
         };
@@ -2036,10 +2046,14 @@ fn preserve_gemini_function_call_fields(contents: &mut [Json], original: &[Json]
             let Some(id) = gemini_function_call_part_id(part) else {
                 continue;
             };
-            if edited_counts.get(id) != Some(&1) {
-                continue;
-            }
-            let Some(Some(original_part)) = original_parts.get(id) else {
+            let original_part = original_parts.get(id).copied().flatten();
+            let Some(original_part) = original_part.filter(|_| edited_counts.get(id) == Some(&1))
+            else {
+                if fresh_contents.contains(&index) && unclaimed_metadata.contains(id) {
+                    return Err(FlowError::InvalidArgument(
+                        "Cannot preserve Gemini part metadata for an ambiguous repeated function call".into(),
+                    ));
+                }
                 continue;
             };
             let mut patched = original_part.as_object().cloned().unwrap_or_default();
@@ -2057,6 +2071,7 @@ fn preserve_gemini_function_call_fields(contents: &mut [Json], original: &[Json]
             *part = Json::Object(patched);
         }
     }
+    Ok(())
 }
 
 fn gemini_function_call_part_id(part: &Json) -> Option<&str> {

@@ -142,6 +142,65 @@ fn compacted_parts_invalid_fields_and_foreign_baselines_fail_closed() {
 }
 
 #[test]
+fn redacting_repeated_idless_gemini_calls_preserves_each_signature() {
+    let codec = crate::gemini_generate_content::GeminiGenerateContentCodec;
+    let original = LlmRequest {
+        headers: Default::default(),
+        content: json!({"contents":[
+            {"role":"model","parts":[{
+                "functionCall":{"name":"lookup","args":{"city":"Paris"}},"thoughtSignature":"cGFyaXM="
+            }]},
+            {"role":"model","parts":[{
+                "functionCall":{"name":"lookup","args":{"city":"Rome"}},"thoughtSignature":"cm9tZQ=="
+            }]}
+        ]}),
+    };
+    let decoded = codec.decode(&original).unwrap();
+    let baseline = serde_json::to_value(&decoded).unwrap();
+    let mut sanitized = baseline.clone();
+    let mut expected = original.content.clone();
+    for index in 0..2 {
+        sanitized["messages"][index]["tool_calls"][0]["function"]["arguments"] =
+            json!(r#"{"city":"masked"}"#);
+        expected["contents"][index]["parts"][0]["functionCall"]["args"]["city"] = json!("masked");
+    }
+    // A bulk rewrite cannot identify either source turn. The redaction path
+    // can still apply each edit against its original slot, one at a time.
+    let edited = serde_json::from_value(sanitized.clone()).unwrap();
+    assert!(
+        codec
+            .encode_with_baseline(&edited, &original, &decoded)
+            .is_err()
+    );
+    let request = LlmCodec::redaction(&codec)
+        .unwrap()
+        .edit_request(
+            &original,
+            NormalizedEdits {
+                baseline: &baseline,
+                sanitized: &sanitized,
+                require_complete_output: false,
+            },
+        )
+        .unwrap()
+        .unwrap();
+    assert_eq!(request.content, expected);
+
+    // An appended call has no claim on either existing signature.
+    let mut appended = decoded.clone();
+    appended.messages.push(edited.messages[0].clone());
+    let encoded = codec
+        .encode_with_baseline(&appended, &original, &decoded)
+        .unwrap();
+    let contents = encoded.content["contents"].as_array().unwrap();
+    assert_eq!(
+        &contents[..2],
+        original.content["contents"].as_array().unwrap()
+    );
+    assert!(contents[2]["parts"][0].get("thoughtSignature").is_none());
+}
+
+#[test]
 fn every_builtin_edits_text_and_preserves_unrelated_wire_fields() {
     let cases = [
         (
