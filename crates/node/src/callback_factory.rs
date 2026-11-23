@@ -116,6 +116,7 @@ pub(crate) struct CallbackScope {
 }
 
 impl CallbackScope {
+    #[must_use]
     pub(crate) fn capture() -> Self {
         Self {
             scope_stack: current_scope_stack(),
@@ -132,17 +133,18 @@ impl CallbackScope {
     }
 }
 
-pub(crate) fn callback_scope_from(
+pub(crate) fn callback_scope_from<'value>(
     env: &Env,
-    value: Unknown,
-) -> napi::Result<Option<CallbackScope>> {
+    value: Unknown<'value>,
+) -> napi::Result<Option<&'value CallbackScope>> {
     match value.get_type()? {
         ValueType::Undefined | ValueType::Null => Ok(None),
         ValueType::External => {
-            // SAFETY: `value` belongs to the running JavaScript call in `env`.
+            // SAFETY: `value` belongs to the running JavaScript call in `env`, and the
+            // returned borrow is bounded by the handle lifetime of `value`.
             let scope =
                 unsafe { External::<CallbackScope>::from_napi_ref(env.raw(), value.raw()) }?;
-            Ok(Some(CallbackScope::clone(scope)))
+            Ok(Some(scope.as_ref()))
         }
         other => Err(napi::Error::new(
             napi::Status::InvalidArg,
@@ -271,7 +273,7 @@ pub(crate) fn event_sanitizer_callback_context_id(env: &Env) -> napi::Result<Opt
     .call(())
 }
 
-pub(crate) fn callback_scope(env: &Env) -> napi::Result<Option<CallbackScope>> {
+pub(crate) fn callback_scope(env: &Env) -> napi::Result<Option<&CallbackScope>> {
     callback_scope_from(env, call(env, |factories| &factories.callback_scope, ())?)
 }
 

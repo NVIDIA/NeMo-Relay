@@ -1,6 +1,7 @@
 // SPDX-FileCopyrightText: Copyright (c) 2026, NVIDIA CORPORATION & AFFILIATES. All rights reserved.
 // SPDX-License-Identifier: Apache-2.0
 
+use std::borrow::Cow;
 use std::collections::{BTreeMap, BTreeSet, HashMap};
 use std::future::Future;
 use std::path::PathBuf;
@@ -443,9 +444,10 @@ node_metrics! {
     }
 }
 
-fn effective_scope(env: &Env) -> Result<CallbackScope> {
-    Ok(
-        callback_factory::callback_scope(env)?.unwrap_or_else(|| CallbackScope {
+fn effective_scope(env: &Env) -> Result<Cow<'_, CallbackScope>> {
+    Ok(match callback_factory::callback_scope(env)? {
+        Some(scope) => Cow::Borrowed(scope),
+        None => Cow::Owned(CallbackScope {
             scope_stack: current_scope_stack_handle(),
             publication_buffer: None,
             propagation: None,
@@ -453,7 +455,7 @@ fn effective_scope(env: &Env) -> Result<CallbackScope> {
             publication_context_id: None,
             publication_context_captured: false,
         }),
-    )
+    })
 }
 
 fn with_callback_scope<CallbackResult>(
@@ -469,7 +471,8 @@ fn with_callback_scope<CallbackResult>(
 }
 
 fn with_effective_scope_stack<T>(env: &Env, callback: impl FnOnce() -> T) -> Result<T> {
-    Ok(with_callback_scope(&effective_scope(env)?, callback))
+    let scope = effective_scope(env)?;
+    Ok(with_callback_scope(&scope, callback))
 }
 
 fn parse_uuid(value: &str, what: &str) -> Result<uuid::Uuid> {
@@ -495,7 +498,7 @@ impl CallContext {
         };
         Ok(Self {
             publication_context_id,
-            scope,
+            scope: scope.into_owned(),
         })
     }
 
@@ -1454,7 +1457,7 @@ pub fn fork_scope_stack(env: Env) -> Result<ScopeStack> {
             "cannot fork scope stack without an active Relay context",
         ));
     }
-    let mut scope = effective_scope(&env)?;
+    let mut scope = effective_scope(&env)?.into_owned();
     let context = with_callback_scope(&scope, MiddlewareContinuationContext::capture)
         .isolated_with_scope_stack(&scope.scope_stack)
         .map_err(Error::from)?;
@@ -1494,6 +1497,7 @@ pub fn with_scope_stack<'env>(
             scope_stack: stack.inner.clone(),
             publication_buffer: effective_scope(env)?
                 .publication_buffer
+                .clone()
                 .or_else(|| stack.publication_buffer.clone()),
             propagation: None,
             execution_context: None,
@@ -1543,6 +1547,7 @@ pub fn set_thread_scope_stack(env: Env, stack: &ScopeStack) -> Result<()> {
             scope_stack: stack.inner.clone(),
             publication_buffer: effective_scope(&env)?
                 .publication_buffer
+                .clone()
                 .or_else(|| stack.publication_buffer.clone()),
             propagation: None,
             execution_context: None,
