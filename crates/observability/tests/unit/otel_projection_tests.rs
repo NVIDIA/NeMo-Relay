@@ -2046,6 +2046,541 @@ fn gen_ai_projection_covers_output_tool_calls_and_empty_output() {
     assert!(!attributes.contains_key("gen_ai.output.messages"));
 }
 
+fn gen_ai_output_messages_for(response: AnnotatedLlmResponse, output: Option<Json>) -> Json {
+    let event = make_scope_event_with_profile(
+        ScopeCategory::End,
+        Uuid::now_v7(),
+        None,
+        "chat",
+        ScopeType::Llm,
+        output,
+        Some(
+            CategoryProfile::builder()
+                .annotated_response(std::sync::Arc::new(response))
+                .build(),
+        ),
+    );
+    let attributes = attr_map(&crate::test_support::otel_genai::end_attributes(&event));
+    serde_json::from_str(&attributes["gen_ai.output.messages"]).unwrap()
+}
+
+fn api_specific_response(value: Json) -> Option<ApiSpecificResponse> {
+    Some(serde_json::from_value(value).unwrap())
+}
+
+#[test]
+fn gen_ai_projection_preserves_anthropic_reasoning_text_and_tool_order() {
+    let first_answer = "a".repeat(30_000);
+    let second_answer = "Final answer.";
+    let messages = gen_ai_output_messages_for(
+        AnnotatedLlmResponse {
+            message: Some(MessageContent::Text(format!(
+                "{first_answer}\n{second_answer}"
+            ))),
+            tool_calls: Some(vec![ResponseToolCall {
+                id: "call-1".to_string(),
+                name: "lookup".to_string(),
+                arguments: json!({"topic": "Relay"}),
+            }]),
+            finish_reason: Some(FinishReason::Complete),
+            api_specific: api_specific_response(json!({
+                "api": "anthropic_messages",
+                "content_blocks": [
+                    {"type": "thinking", "thinking": "First thought.", "signature": "sig-1"},
+                    {"type": "redacted_thinking", "data": "opaque"},
+                    {"type": "thinking", "thinking": "", "signature": "sig-2"},
+                    {"type": "text", "text": first_answer},
+                    {
+                        "type": "tool_use",
+                        "id": "call-1",
+                        "name": "lookup",
+                        "input": {"topic": "Relay"}
+                    },
+                    {"type": "thinking", "thinking": "Second thought.", "signature": "sig-3"},
+                    {"type": "text", "text": second_answer}
+                ]
+            })),
+            ..empty_annotated_response()
+        },
+        None,
+    );
+
+    assert_eq!(
+        messages,
+        json!([{
+            "role": "assistant",
+            "parts": [
+                {"type": "reasoning", "content": "First thought."},
+                {"type": "text", "content": first_answer},
+                {
+                    "type": "tool_call",
+                    "id": "call-1",
+                    "name": "lookup",
+                    "arguments": {"topic": "Relay"}
+                },
+                {"type": "reasoning", "content": "Second thought."},
+                {"type": "text", "content": second_answer}
+            ],
+            "finish_reason": "stop"
+        }])
+    );
+
+    let fallback_messages = gen_ai_output_messages_for(
+        AnnotatedLlmResponse {
+            message: Some(MessageContent::Text("Normalized answer.".to_string())),
+            tool_calls: Some(vec![ResponseToolCall {
+                id: "call-2".to_string(),
+                name: "search".to_string(),
+                arguments: json!({"query": "fallback"}),
+            }]),
+            finish_reason: Some(FinishReason::Complete),
+            api_specific: api_specific_response(json!({
+                "api": "anthropic_messages",
+                "content_blocks": [
+                    {"type": "thinking", "thinking": "Native thought.", "signature": "sig"}
+                ]
+            })),
+            ..empty_annotated_response()
+        },
+        None,
+    );
+    assert_eq!(
+        fallback_messages[0]["parts"],
+        json!([
+            {"type": "reasoning", "content": "Native thought."},
+            {"type": "text", "content": "Normalized answer."},
+            {
+                "type": "tool_call",
+                "id": "call-2",
+                "name": "search",
+                "arguments": {"query": "fallback"}
+            }
+        ])
+    );
+
+    let tool_fallback_messages = gen_ai_output_messages_for(
+        AnnotatedLlmResponse {
+            message: Some(MessageContent::Text("Normalized answer.".to_string())),
+            tool_calls: Some(vec![ResponseToolCall {
+                id: "call-3".to_string(),
+                name: "search".to_string(),
+                arguments: json!({"query": "mixed"}),
+            }]),
+            finish_reason: Some(FinishReason::Complete),
+            api_specific: api_specific_response(json!({
+                "api": "anthropic_messages",
+                "content_blocks": [
+                    {"type": "thinking", "thinking": "Native thought.", "signature": "sig"},
+                    {"type": "text", "text": "Native answer."}
+                ]
+            })),
+            ..empty_annotated_response()
+        },
+        None,
+    );
+    assert_eq!(
+        tool_fallback_messages[0]["parts"],
+        json!([
+            {"type": "reasoning", "content": "Native thought."},
+            {"type": "text", "content": "Normalized answer."},
+            {
+                "type": "tool_call",
+                "id": "call-3",
+                "name": "search",
+                "arguments": {"query": "mixed"}
+            }
+        ])
+    );
+}
+
+#[test]
+fn gen_ai_projection_preserves_openai_responses_output_item_order() {
+    let messages = gen_ai_output_messages_for(
+        AnnotatedLlmResponse {
+            message: Some(MessageContent::Text(
+                "First answer.\nFinal answer.".to_string(),
+            )),
+            tool_calls: Some(vec![ResponseToolCall {
+                id: "call-1".to_string(),
+                name: "lookup".to_string(),
+                arguments: json!({"topic": "Relay"}),
+            }]),
+            finish_reason: Some(FinishReason::Complete),
+            api_specific: api_specific_response(json!({
+                "api": "openai_responses",
+                "output_items": [
+                    {
+                        "type": "reasoning",
+                        "summary": [{"type": "summary_text", "text": "Summary only."}]
+                    },
+                    {
+                        "type": "message",
+                        "content": [{"type": "output_text", "text": "First answer."}]
+                    },
+                    {
+                        "type": "function_call",
+                        "call_id": "call-1",
+                        "name": "lookup",
+                        "arguments": "{\"topic\":\"Relay\"}"
+                    },
+                    {
+                        "type": "reasoning",
+                        "summary": [{"type": "summary_text", "text": "Short summary."}],
+                        "content": [
+                            {"type": "reasoning_text", "text": "Full step one."},
+                            {"type": "reasoning_text", "text": "Full step two."}
+                        ]
+                    },
+                    {"type": "reasoning", "summary": [], "encrypted_content": "opaque"},
+                    {
+                        "type": "message",
+                        "content": [{"type": "output_text", "text": "Final answer."}]
+                    }
+                ]
+            })),
+            ..empty_annotated_response()
+        },
+        None,
+    );
+
+    assert_eq!(
+        messages[0]["parts"],
+        json!([
+            {"type": "reasoning", "content": "Summary only."},
+            {"type": "text", "content": "First answer."},
+            {
+                "type": "tool_call",
+                "id": "call-1",
+                "name": "lookup",
+                "arguments": {"topic": "Relay"}
+            },
+            {"type": "reasoning", "content": "Full step one.\n\nFull step two."},
+            {"type": "text", "content": "Final answer."}
+        ])
+    );
+
+    let fallback_messages = gen_ai_output_messages_for(
+        AnnotatedLlmResponse {
+            message: Some(MessageContent::Text("Normalized answer.".to_string())),
+            tool_calls: Some(vec![ResponseToolCall {
+                id: "call-2".to_string(),
+                name: "search".to_string(),
+                arguments: json!({"query": "fallback"}),
+            }]),
+            finish_reason: Some(FinishReason::Complete),
+            api_specific: api_specific_response(json!({
+                "api": "openai_responses",
+                "output_items": [{
+                    "type": "reasoning",
+                    "content": [{"type": "reasoning_text", "text": "Native thought."}]
+                }]
+            })),
+            ..empty_annotated_response()
+        },
+        None,
+    );
+    assert_eq!(
+        fallback_messages[0]["parts"],
+        json!([
+            {"type": "reasoning", "content": "Native thought."},
+            {"type": "text", "content": "Normalized answer."},
+            {
+                "type": "tool_call",
+                "id": "call-2",
+                "name": "search",
+                "arguments": {"query": "fallback"}
+            }
+        ])
+    );
+
+    let text_fallback_messages = gen_ai_output_messages_for(
+        AnnotatedLlmResponse {
+            message: Some(MessageContent::Text("Normalized answer.".to_string())),
+            tool_calls: Some(vec![ResponseToolCall {
+                id: "call-3".to_string(),
+                name: "search".to_string(),
+                arguments: json!({"query": "normalized"}),
+            }]),
+            finish_reason: Some(FinishReason::Complete),
+            api_specific: api_specific_response(json!({
+                "api": "openai_responses",
+                "output_items": [
+                    {
+                        "type": "reasoning",
+                        "content": [{"type": "reasoning_text", "text": "Native thought."}]
+                    },
+                    {
+                        "type": "function_call",
+                        "call_id": "call-3",
+                        "name": "search",
+                        "arguments": "{\"query\":\"mixed\"}"
+                    }
+                ]
+            })),
+            ..empty_annotated_response()
+        },
+        None,
+    );
+    assert_eq!(
+        text_fallback_messages[0]["parts"],
+        json!([
+            {"type": "reasoning", "content": "Native thought."},
+            {
+                "type": "tool_call",
+                "id": "call-3",
+                "name": "search",
+                "arguments": {"query": "normalized"}
+            },
+            {"type": "text", "content": "Normalized answer."}
+        ])
+    );
+}
+
+#[test]
+fn gen_ai_projection_uses_normalized_payloads_for_provider_ordering() {
+    for (api, api_specific, reasoning) in [
+        (
+            "anthropic_messages",
+            json!({
+                "api": "anthropic_messages",
+                "content_blocks": [
+                    {"type": "thinking", "thinking": "Native thought.", "signature": "sig"},
+                    {"type": "text", "text": "native-text-secret"},
+                    {
+                        "type": "tool_use",
+                        "id": "call-1",
+                        "name": "lookup",
+                        "input": {"query": "native-tool-secret"}
+                    }
+                ]
+            }),
+            "Native thought.",
+        ),
+        (
+            "openai_responses",
+            json!({
+                "api": "openai_responses",
+                "output_items": [
+                    {
+                        "type": "reasoning",
+                        "content": [{"type": "reasoning_text", "text": "Native thought."}]
+                    },
+                    {
+                        "type": "message",
+                        "content": [{"type": "output_text", "text": "native-text-secret"}]
+                    },
+                    {
+                        "type": "function_call",
+                        "call_id": "call-1",
+                        "name": "lookup",
+                        "arguments": "{\"query\":\"native-tool-secret\"}"
+                    }
+                ]
+            }),
+            "Native thought.",
+        ),
+    ] {
+        let messages = gen_ai_output_messages_for(
+            AnnotatedLlmResponse {
+                message: Some(MessageContent::Text("[REDACTED]".to_string())),
+                tool_calls: Some(vec![ResponseToolCall {
+                    id: "call-1".to_string(),
+                    name: "lookup".to_string(),
+                    arguments: json!({"query": "[REDACTED]"}),
+                }]),
+                finish_reason: Some(FinishReason::Complete),
+                api_specific: api_specific_response(api_specific),
+                ..empty_annotated_response()
+            },
+            None,
+        );
+
+        assert_eq!(
+            messages[0]["parts"],
+            json!([
+                {"type": "reasoning", "content": reasoning},
+                {"type": "text", "content": "[REDACTED]"},
+                {
+                    "type": "tool_call",
+                    "id": "call-1",
+                    "name": "lookup",
+                    "arguments": {"query": "[REDACTED]"}
+                }
+            ]),
+            "api: {api}"
+        );
+        assert!(!messages.to_string().contains("secret"), "api: {api}");
+    }
+}
+
+#[test]
+fn gen_ai_projection_splits_interleaved_text_only_on_exact_match() {
+    let reasoning = json!({"type": "reasoning", "content": "Native thought."});
+    for (native_a, native_b, normalized, expected) in [
+        (
+            "first\nline",
+            "second\nlast",
+            "first\nline\nsecond\nlast",
+            json!([
+                {"type": "text", "content": "first\nline"},
+                reasoning,
+                {"type": "text", "content": "second\nlast"}
+            ]),
+        ),
+        (
+            "native-secret-a",
+            "native-secret-b",
+            "[REDACTED-A]\n[REDACTED-B]",
+            json!([{"type": "text", "content": "[REDACTED-A]\n[REDACTED-B]"}, reasoning]),
+        ),
+        (
+            "native-secret\nfirst",
+            "second\nlast",
+            "[REDACTED]\nsecond\nlast",
+            json!([{"type": "text", "content": "[REDACTED]\nsecond\nlast"}, reasoning]),
+        ),
+    ] {
+        for (api, api_specific) in [
+            (
+                "anthropic_messages",
+                json!({
+                    "api": "anthropic_messages",
+                    "content_blocks": [
+                        {"type": "text", "text": native_a},
+                        {"type": "thinking", "thinking": "Native thought.", "signature": "sig"},
+                        {"type": "text", "text": native_b}
+                    ]
+                }),
+            ),
+            (
+                "openai_responses",
+                json!({
+                    "api": "openai_responses",
+                    "output_items": [
+                        {
+                            "type": "message",
+                            "content": [{"type": "output_text", "text": native_a}]
+                        },
+                        {
+                            "type": "reasoning",
+                            "content": [{"type": "reasoning_text", "text": "Native thought."}]
+                        },
+                        {
+                            "type": "message",
+                            "content": [{"type": "output_text", "text": native_b}]
+                        }
+                    ]
+                }),
+            ),
+        ] {
+            let messages = gen_ai_output_messages_for(
+                AnnotatedLlmResponse {
+                    message: Some(MessageContent::Text(normalized.to_string())),
+                    finish_reason: Some(FinishReason::Complete),
+                    api_specific: api_specific_response(api_specific),
+                    ..empty_annotated_response()
+                },
+                None,
+            );
+
+            assert_eq!(
+                messages[0]["parts"], expected,
+                "api: {api}, normalized: {normalized:?}"
+            );
+            assert!(
+                !messages.to_string().contains("secret"),
+                "api: {api}, normalized: {normalized:?}"
+            );
+        }
+    }
+}
+
+#[test]
+fn gen_ai_projection_appends_normalized_tool_calls_missing_from_native_output() {
+    let messages = gen_ai_output_messages_for(
+        AnnotatedLlmResponse {
+            tool_calls: Some(vec![
+                ResponseToolCall {
+                    id: "call-1".to_string(),
+                    name: "lookup".to_string(),
+                    arguments: json!({"query": "normalized-one"}),
+                },
+                ResponseToolCall {
+                    id: "call-2".to_string(),
+                    name: "search".to_string(),
+                    arguments: json!({"query": "normalized-two"}),
+                },
+            ]),
+            finish_reason: Some(FinishReason::Complete),
+            api_specific: api_specific_response(json!({
+                "api": "openai_responses",
+                "output_items": [{
+                    "type": "function_call",
+                    "call_id": "call-1",
+                    "name": "lookup",
+                    "arguments": "{\"query\":\"native-secret\"}"
+                }]
+            })),
+            ..empty_annotated_response()
+        },
+        None,
+    );
+
+    assert_eq!(
+        messages[0]["parts"],
+        json!([
+            {
+                "type": "tool_call",
+                "id": "call-1",
+                "name": "lookup",
+                "arguments": {"query": "normalized-one"}
+            },
+            {
+                "type": "tool_call",
+                "id": "call-2",
+                "name": "search",
+                "arguments": {"query": "normalized-two"}
+            }
+        ])
+    );
+}
+
+#[test]
+fn gen_ai_projection_exports_openai_chat_reasoning_aliases() {
+    let answer = "a".repeat(30_000);
+    for field in ["reasoning_content", "reasoning"] {
+        let mut output = json!({
+            "choices": [{
+                "index": 0,
+                "message": {
+                    "role": "assistant",
+                    "content": answer,
+                },
+                "finish_reason": "stop"
+            }]
+        });
+        output["choices"][0]["message"][field] = json!("Checked the list.");
+        let messages = gen_ai_output_messages_for(
+            AnnotatedLlmResponse {
+                message: Some(MessageContent::Text(answer.clone())),
+                finish_reason: Some(FinishReason::Complete),
+                api_specific: api_specific_response(json!({"api": "openai_chat"})),
+                ..empty_annotated_response()
+            },
+            Some(output),
+        );
+
+        assert_eq!(
+            messages[0]["parts"],
+            json!([
+                {"type": "reasoning", "content": "Checked the list."},
+                {"type": "text", "content": answer}
+            ]),
+            "field: {field}"
+        );
+    }
+}
+
 #[test]
 fn gen_ai_projection_reads_nested_scalar_fallbacks() {
     let event = Event::Scope(ScopeEvent::new(
