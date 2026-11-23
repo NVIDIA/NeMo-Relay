@@ -158,6 +158,84 @@ async fn only_coded_unauthorized_replies_are_credential_rejections() {
     }
 }
 
+#[tokio::test]
+async fn only_a_429_with_a_retry_hint_asks_the_client_to_wait() {
+    let (client, mut socket) = connected_control_pair().await;
+    for (status, error, expected) in [
+        (
+            429,
+            serde_json::json!({ "message": "busy", "retry_after_ms": 2_000 }),
+            Some(Duration::from_secs(2)),
+        ),
+        (
+            429,
+            serde_json::json!({ "message": "busy", "retry_after_ms": 3_600_000 }),
+            Some(GRACE),
+        ),
+        (429, serde_json::json!({ "message": "busy" }), None),
+        (
+            503,
+            serde_json::json!({ "message": "restarting", "retry_after_ms": 2_000 }),
+            None,
+        ),
+    ] {
+        let request = client.acknowledge("reply".into());
+        let server = async {
+            let request = receive_control_request(&mut socket).await;
+            send_control_event(
+                &mut socket,
+                Event::Reply {
+                    request_id: request.request_id,
+                    status,
+                    payload: serde_json::json!({ "error": error }),
+                },
+            )
+            .await;
+        };
+        let (result, ()) = tokio::join!(request, server);
+        let error = result.unwrap_err();
+        assert_eq!(retry_after(&error), expected, "{status} {error}");
+        assert!(is_retryable(&error));
+    }
+}
+
+#[tokio::test(start_paused = true)]
+async fn retries_wait_at_least_the_daemons_retry_hint() {
+    let busy = || CliError::ControlBusy {
+        message: "too many pending authentication challenges".into(),
+        retry_after: Duration::from_secs(2),
+    };
+    let wrapped =
+        busy().with_mcp_failure_reason(crate::error::McpFailureReason::GatewayAcquisitionFailed);
+    assert_eq!(retry_after(&wrapped), Some(Duration::from_secs(2)));
+    assert_eq!(
+        busy().to_string(),
+        failure("too many pending authentication challenges").to_string()
+    );
+
+    let started = tokio::time::Instant::now();
+    let attempts = std::sync::atomic::AtomicUsize::new(0);
+    let result: Result<(), CliError> = retry(|| {
+        let attempt = attempts.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+        async move { if attempt == 0 { Err(busy()) } else { Ok(()) } }
+    })
+    .await;
+    assert!(result.is_ok());
+    assert_eq!(started.elapsed(), Duration::from_secs(2));
+
+    // A hint never extends the reconnect deadline.
+    let started = tokio::time::Instant::now();
+    let result: Result<(), CliError> = retry_until(started + Duration::from_secs(1), || async {
+        Err(CliError::ControlBusy {
+            message: "busy".into(),
+            retry_after: Duration::from_secs(5),
+        })
+    })
+    .await;
+    assert!(result.is_err());
+    assert_eq!(started.elapsed(), Duration::from_secs(1));
+}
+
 #[tokio::test(start_paused = true)]
 async fn a_hung_reconnect_attempt_does_not_extend_grace() {
     let started = tokio::time::Instant::now();

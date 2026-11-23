@@ -338,47 +338,63 @@ async fn shared_model_catalogs_disable_cache_reuse_between_credentials() {
     provider_task.abort();
 }
 
-#[tokio::test(start_paused = true)]
-async fn challenge_admission_limits_transport_peers_before_polling_bodies() {
-    let token = base64::engine::general_purpose::URL_SAFE_NO_PAD.encode([0x91; 32]);
-    let state = test_daemon_state(false, &token, GatewayConfig::default());
-    let peers: ChallengePeers = Arc::new(Mutex::new(HashMap::new()));
-    let app = Router::new()
-        .route(
-            crate::daemon::common::socket::MCP_SOCKET_PATH,
-            post(issue_challenge),
-        )
-        .route_layer(from_fn_with_state(peers, limit_challenges))
-        .with_state(state.clone());
+fn admission_challenge(role: ComponentRole) -> ChallengeRequest {
     let identity = MachineIdentity::generate().unwrap().identity;
-    let mut challenge = ChallengeRequest {
-        initiator: crate::daemon::common::control::descriptor(ComponentRole::Mcp),
-        initiator_instance_id: "limited-peer".into(),
+    ChallengeRequest {
+        initiator: crate::daemon::common::control::descriptor(role),
+        initiator_instance_id: "admission-peer".into(),
         initiator_public_identity: identity.public_identity(),
         initiator_fingerprint: identity.fingerprint(),
         initiator_nonce: ChallengeRecord::generate(1, 1).unwrap().challenge().nonce,
+    }
+}
+
+fn network_daemon_state() -> Arc<DaemonState> {
+    let mut state = test_daemon_state(false, "", GatewayConfig::default());
+    Arc::get_mut(&mut state).unwrap().loopback_listener = false;
+    state
+}
+
+async fn issue_status(state: &Arc<DaemonState>, peer: [u8; 4], role: ComponentRole) -> StatusCode {
+    issue_challenge(
+        State(Arc::clone(state)),
+        IpAddr::from(peer),
+        Json(admission_challenge(role)),
+    )
+    .await
+    .status()
+}
+
+#[tokio::test(start_paused = true)]
+async fn challenge_request_ceiling_limits_transport_peers_before_polling_bodies() {
+    let state = test_daemon_state(false, "", GatewayConfig::default());
+    let app = Router::new()
+        .route("/", post(|| async { StatusCode::NO_CONTENT }))
+        .layer(from_fn_with_state(Arc::clone(&state), limit_challenges));
+    let request = |peer: [u8; 4], port: u16| {
+        Request::post("/")
+            .extension(ConnectInfo(SocketAddr::from((peer, port))))
+            .body(Body::empty())
+            .unwrap()
     };
+    // Clients that differ only by port share one peer budget.
     for port in 1..=CHALLENGES_PER_PEER_WINDOW {
-        let response = app
-            .clone()
-            .oneshot(
-                Request::post(crate::daemon::common::socket::MCP_SOCKET_PATH)
-                    .extension(ConnectInfo(SocketAddr::from(([192, 0, 2, 1], port as u16))))
-                    .header(CONTENT_TYPE, "application/json")
-                    .body(Body::from(serde_json::to_vec(&challenge).unwrap()))
-                    .unwrap(),
-            )
-            .await
-            .unwrap();
-        assert_eq!(response.status(), StatusCode::OK);
+        assert_eq!(
+            app.clone()
+                .oneshot(request([192, 0, 2, 1], port as u16))
+                .await
+                .unwrap()
+                .status(),
+            StatusCode::NO_CONTENT,
+            "request {port}"
+        );
     }
     let response = app
         .clone()
         .oneshot(
-            Request::post(crate::daemon::common::socket::MCP_SOCKET_PATH)
+            Request::post("/")
                 .extension(ConnectInfo(SocketAddr::from(([192, 0, 2, 1], 65535))))
                 .header("x-forwarded-for", "192.0.2.99")
-                .header(CONTENT_TYPE, "application/json")
                 .body(Body::from_stream(futures_util::stream::poll_fn(
                     |_| -> std::task::Poll<Option<Result<Bytes, std::io::Error>>> {
                         panic!("rate-limited challenge body polled")
@@ -391,45 +407,33 @@ async fn challenge_admission_limits_transport_peers_before_polling_bodies() {
     assert_eq!(response.status(), StatusCode::TOO_MANY_REQUESTS);
     assert_eq!(response.headers()[RETRY_AFTER], "15");
     assert_eq!(
-        lock(&state.challenges).len(),
-        CHALLENGES_PER_PEER_WINDOW as usize
-    );
-
-    // A worker on another peer still has capacity and needs no MCP route-token header.
-    challenge.initiator = crate::daemon::common::control::descriptor(ComponentRole::Worker);
-    let request = |peer| {
-        Request::post(crate::daemon::common::socket::MCP_SOCKET_PATH)
-            .extension(ConnectInfo(SocketAddr::from((peer, 1))))
-            .header(CONTENT_TYPE, "application/json")
-            .body(Body::from(serde_json::to_vec(&challenge).unwrap()))
-            .unwrap()
-    };
-    assert_eq!(
         app.clone()
-            .oneshot(request([192, 0, 2, 2]))
+            .oneshot(request([192, 0, 2, 2], 1))
             .await
             .unwrap()
             .status(),
-        StatusCode::OK
+        StatusCode::NO_CONTENT
     );
     tokio::time::advance(Duration::from_millis(CHALLENGE_LIFETIME_MS)).await;
     assert_eq!(
-        app.oneshot(request([192, 0, 2, 1])).await.unwrap().status(),
-        StatusCode::OK
+        app.oneshot(request([192, 0, 2, 1], 1))
+            .await
+            .unwrap()
+            .status(),
+        StatusCode::NO_CONTENT
     );
 }
 
 #[tokio::test(start_paused = true)]
 async fn challenge_peer_tracking_is_bounded_and_expired_entries_are_reclaimed() {
+    let state = test_daemon_state(false, "", GatewayConfig::default());
     let now = tokio::time::Instant::now();
-    let peers: ChallengePeers = Arc::new(Mutex::new(
-        (0..MAX_CHALLENGE_PEERS)
-            .map(|index| (IpAddr::V4(Ipv4Addr::from(index as u32)), (now, 1)))
-            .collect(),
-    ));
+    *lock(&state.challenge_peers) = (0..MAX_CHALLENGE_PEERS)
+        .map(|index| (IpAddr::V4(Ipv4Addr::from(index as u32)), (now, 1)))
+        .collect();
     let app = Router::new()
         .route("/", post(|| async { StatusCode::NO_CONTENT }))
-        .layer(from_fn_with_state(Arc::clone(&peers), limit_challenges));
+        .layer(from_fn_with_state(Arc::clone(&state), limit_challenges));
     let request = || {
         Request::post("/")
             .extension(ConnectInfo("192.0.2.1:1".parse::<SocketAddr>().unwrap()))
@@ -440,13 +444,241 @@ async fn challenge_peer_tracking_is_bounded_and_expired_entries_are_reclaimed() 
         app.clone().oneshot(request()).await.unwrap().status(),
         StatusCode::TOO_MANY_REQUESTS
     );
-    assert_eq!(lock(&peers).len(), MAX_CHALLENGE_PEERS);
+    assert_eq!(lock(&state.challenge_peers).len(), MAX_CHALLENGE_PEERS);
     tokio::time::advance(Duration::from_millis(CHALLENGE_LIFETIME_MS)).await;
     assert_eq!(
         app.oneshot(request()).await.unwrap().status(),
         StatusCode::NO_CONTENT
     );
-    assert_eq!(lock(&peers).len(), 1);
+    assert_eq!(lock(&state.challenge_peers).len(), 1);
+}
+
+#[tokio::test]
+async fn routers_built_from_one_daemon_share_the_request_ceiling() {
+    let state = test_daemon_state(false, "", GatewayConfig::default());
+    // Each router the daemon builds shares the one counter on `DaemonState`.
+    let plain = router(Arc::clone(&state));
+    let encrypted = router(Arc::clone(&state));
+    let request = || {
+        Request::get(crate::daemon::common::socket::MCP_SOCKET_PATH)
+            .extension(ConnectInfo("127.0.0.1:1".parse::<SocketAddr>().unwrap()))
+            .body(Body::empty())
+            .unwrap()
+    };
+    for index in 0..CHALLENGES_PER_PEER_WINDOW {
+        let app = if index % 2 == 0 { &plain } else { &encrypted };
+        assert_ne!(
+            app.clone().oneshot(request()).await.unwrap().status(),
+            StatusCode::TOO_MANY_REQUESTS,
+            "request {index}"
+        );
+    }
+    assert_eq!(
+        encrypted.oneshot(request()).await.unwrap().status(),
+        StatusCode::TOO_MANY_REQUESTS
+    );
+}
+
+#[test]
+fn challenge_admission_uses_the_transport_peer_only() {
+    let plain = Request::get("/")
+        .extension(ConnectInfo("192.0.2.8:1".parse::<SocketAddr>().unwrap()))
+        .header("x-forwarded-for", "192.0.2.99")
+        .body(Body::empty())
+        .unwrap();
+    assert_eq!(challenge_peer(&plain), IpAddr::from([192, 0, 2, 8]));
+    let unknown = Request::get("/").body(Body::empty()).unwrap();
+    assert_eq!(challenge_peer(&unknown), IpAddr::V4(Ipv4Addr::UNSPECIFIED));
+}
+
+#[test]
+fn challenge_rejection_diagnostics_name_the_reason_and_counts() {
+    let budget = ChallengeBudget::for_role(ComponentRole::Worker, false).unwrap();
+    let usage = ChallengeUsage {
+        budget,
+        pool_pending: 70,
+        peer_pending: 64,
+    };
+    assert_eq!(
+        challenge_rejection_diagnostic(ChallengeRejection::PeerLimit, Some(usage)),
+        "peer_limit: worker challenge; peer pending 64/64; pool pending 70/128"
+    );
+    assert_eq!(
+        challenge_rejection_diagnostic(ChallengeRejection::PeerRate, None),
+        "peer_rate: 512 control connections per peer in 15000 ms"
+    );
+    assert_eq!(
+        challenge_rejection_diagnostic(ChallengeRejection::PeerTableFull, None),
+        "peer_table_full: 1024 peers tracked"
+    );
+}
+
+#[tokio::test]
+async fn network_listener_caps_mcp_challenges_per_peer() {
+    let state = network_daemon_state();
+    for index in 0..MAX_PENDING_MCP_CHALLENGES_PER_PEER {
+        assert_eq!(
+            issue_status(&state, [192, 0, 2, 1], ComponentRole::Mcp).await,
+            StatusCode::OK,
+            "challenge {index}"
+        );
+    }
+    assert_eq!(
+        issue_status(&state, [192, 0, 2, 1], ComponentRole::Mcp).await,
+        StatusCode::TOO_MANY_REQUESTS
+    );
+    assert_eq!(
+        issue_status(&state, [192, 0, 2, 2], ComponentRole::Mcp).await,
+        StatusCode::OK
+    );
+}
+
+#[tokio::test]
+async fn network_listener_caps_each_peer_at_its_share_of_the_pool() {
+    let state = network_daemon_state();
+    for index in 0..MAX_PENDING_WORKER_CHALLENGES_PER_PEER {
+        assert_eq!(
+            issue_status(&state, [192, 0, 2, 1], ComponentRole::Worker).await,
+            StatusCode::OK,
+            "challenge {index}"
+        );
+    }
+    assert_eq!(
+        issue_status(&state, [192, 0, 2, 1], ComponentRole::Worker).await,
+        StatusCode::TOO_MANY_REQUESTS
+    );
+    // Other peers and the other role keep their own budgets.
+    assert_eq!(
+        issue_status(&state, [192, 0, 2, 2], ComponentRole::Worker).await,
+        StatusCode::OK
+    );
+    assert_eq!(
+        issue_status(&state, [192, 0, 2, 1], ComponentRole::Mcp).await,
+        StatusCode::OK
+    );
+    // An answered or abandoned challenge frees its slot at once.
+    let freed = *lock(&state.challenges)
+        .iter()
+        .find(|(_, pending)| {
+            pending.peer == IpAddr::from([192, 0, 2, 1])
+                && pending.request.initiator.role == ComponentRole::Worker
+        })
+        .unwrap()
+        .0;
+    lock(&state.challenges).remove(&freed);
+    assert_eq!(
+        issue_status(&state, [192, 0, 2, 1], ComponentRole::Worker).await,
+        StatusCode::OK
+    );
+}
+
+#[tokio::test]
+async fn pending_limit_rejections_suggest_when_to_retry() {
+    let state = network_daemon_state();
+    for _ in 0..MAX_PENDING_WORKER_CHALLENGES_PER_PEER {
+        assert_eq!(
+            issue_status(&state, [192, 0, 2, 1], ComponentRole::Worker).await,
+            StatusCode::OK
+        );
+    }
+    let response = issue_challenge(
+        State(Arc::clone(&state)),
+        IpAddr::from([192, 0, 2, 1]),
+        Json(admission_challenge(ComponentRole::Worker)),
+    )
+    .await;
+    assert_eq!(response.status(), StatusCode::TOO_MANY_REQUESTS);
+    let body = axum::body::to_bytes(response.into_body(), usize::MAX)
+        .await
+        .unwrap();
+    let body: serde_json::Value = serde_json::from_slice(&body).unwrap();
+    assert_eq!(body["error"]["retry_after_ms"], CHALLENGE_RETRY_AFTER_MS);
+    assert_eq!(
+        body["error"]["message"],
+        "too many pending authentication challenges"
+    );
+}
+
+#[tokio::test]
+async fn loopback_listener_lets_its_only_peer_use_the_whole_pool() {
+    let state = test_daemon_state(false, "", GatewayConfig::default());
+    assert!(state.loopback_listener);
+    for index in 0..MAX_PENDING_WORKER_CHALLENGES {
+        assert_eq!(
+            issue_status(&state, [127, 0, 0, 1], ComponentRole::Worker).await,
+            StatusCode::OK,
+            "challenge {index}"
+        );
+    }
+    assert_eq!(
+        issue_status(&state, [127, 0, 0, 1], ComponentRole::Worker).await,
+        StatusCode::TOO_MANY_REQUESTS
+    );
+}
+
+#[test]
+fn reserve_challenge_slot_reports_which_limit_was_reached() {
+    let peer = IpAddr::from([192, 0, 2, 1]);
+    let other = IpAddr::from([192, 0, 2, 2]);
+    let pending = |role, peer| PendingChallenge {
+        request: admission_challenge(role),
+        record: ChallengeRecord::generate(1_000, CHALLENGE_LIFETIME_MS).unwrap(),
+        peer,
+    };
+    let mut challenges = HashMap::new();
+    let network = ChallengeBudget::for_role(ComponentRole::Worker, false).unwrap();
+    assert_eq!(network.per_peer, MAX_PENDING_WORKER_CHALLENGES_PER_PEER);
+    for _ in 0..network.per_peer {
+        let entry = pending(ComponentRole::Worker, peer);
+        challenges.insert(entry.record.challenge().id, entry);
+    }
+    let (rejection, usage) = reserve_challenge_slot(&mut challenges, 1_000, network, peer)
+        .expect_err("peer share is full");
+    assert_eq!(rejection, ChallengeRejection::PeerLimit);
+    assert_eq!(
+        (usage.peer_pending, usage.pool_pending),
+        (network.per_peer, network.per_peer)
+    );
+    while challenges.len() < MAX_PENDING_WORKER_CHALLENGES {
+        let entry = pending(ComponentRole::Worker, other);
+        challenges.insert(entry.record.challenge().id, entry);
+    }
+    let third = IpAddr::from([192, 0, 2, 3]);
+    let (rejection, usage) = reserve_challenge_slot(&mut challenges, 1_000, network, third)
+        .expect_err("worker pool is full");
+    assert_eq!(rejection, ChallengeRejection::WorkerPool);
+    assert_eq!(usage.pool_pending, MAX_PENDING_WORKER_CHALLENGES);
+    let mcp = ChallengeBudget::for_role(ComponentRole::Mcp, false).unwrap();
+    assert!(reserve_challenge_slot(&mut challenges, 1_000, mcp, third).is_ok());
+    // Expired challenges free their slots.
+    assert!(
+        reserve_challenge_slot(
+            &mut challenges,
+            1_000 + CHALLENGE_LIFETIME_MS,
+            network,
+            peer
+        )
+        .is_ok()
+    );
+    assert!(challenges.is_empty());
+    assert!(ChallengeBudget::for_role(ComponentRole::Daemon, true).is_none());
+}
+
+#[test]
+fn challenge_rejections_have_distinct_reasons() {
+    let reasons = [
+        ChallengeRejection::PeerRate,
+        ChallengeRejection::PeerTableFull,
+        ChallengeRejection::PeerLimit,
+        ChallengeRejection::McpPool,
+        ChallengeRejection::WorkerPool,
+    ];
+    assert_eq!(reasons.len(), ChallengeRejection::COUNT);
+    let names: std::collections::HashSet<_> = reasons.iter().map(|r| r.as_str()).collect();
+    assert_eq!(names.len(), reasons.len());
+    for (index, reason) in reasons.iter().enumerate() {
+        assert_eq!(*reason as usize, index);
+    }
 }
 
 async fn enroll_test_mcp(
@@ -752,11 +984,7 @@ fn worker_activation_helpers_cover_remote_and_rejected_endpoint_shapes() {
         "http://worker.example:9443",
         &activation
     ));
-    assert!(!reserve_challenge_slot(
-        &mut HashMap::new(),
-        now_unix_ms(),
-        ComponentRole::Daemon
-    ));
+    assert!(ChallengeBudget::for_role(ComponentRole::Daemon, false).is_none());
 }
 
 #[tokio::test]
@@ -1900,6 +2128,7 @@ pub(super) fn test_daemon_state_at(
         instance_id: "public-proxy-test-daemon".into(),
         pass_through,
         loopback_listener: true,
+        challenge_peers: Default::default(),
         public_origin,
         config,
         upstream: pooled_client().expect("daemon client"),
@@ -2174,20 +2403,20 @@ fn pending_challenge_storage_is_bounded_and_prunes_expired_entries() {
                     initiator_nonce: challenge.nonce,
                 },
                 record,
+                peer: IpAddr::V4(Ipv4Addr::LOCALHOST),
             },
         );
     }
     assert_eq!(challenges.len(), MAX_PENDING_CHALLENGES);
-    assert!(!reserve_challenge_slot(
-        &mut challenges,
-        199,
-        ComponentRole::Mcp
-    ));
-    assert!(reserve_challenge_slot(
-        &mut challenges,
-        200,
-        ComponentRole::Mcp
-    ));
+    let budget = ChallengeBudget::for_role(ComponentRole::Mcp, true).unwrap();
+    let peer = IpAddr::V4(Ipv4Addr::LOCALHOST);
+    assert_eq!(
+        reserve_challenge_slot(&mut challenges, 199, budget, peer)
+            .unwrap_err()
+            .0,
+        ChallengeRejection::McpPool
+    );
+    assert!(reserve_challenge_slot(&mut challenges, 200, budget, peer).is_ok());
     assert!(challenges.is_empty());
 }
 
@@ -2626,25 +2855,35 @@ async fn challenge_endpoint_rejects_incompatible_and_forged_components() {
         "test",
     );
     assert_eq!(
-        issue_challenge(State(Arc::clone(&state)), Json(incompatible))
-            .await
-            .status(),
+        issue_challenge(
+            State(Arc::clone(&state)),
+            IpAddr::V4(Ipv4Addr::LOCALHOST),
+            Json(incompatible)
+        )
+        .await
+        .status(),
         StatusCode::UPGRADE_REQUIRED
     );
 
     let mut daemon_role = valid.clone();
     daemon_role.initiator = crate::daemon::common::control::descriptor(ComponentRole::Daemon);
     assert_eq!(
-        issue_challenge(State(Arc::clone(&state)), Json(daemon_role))
-            .await
-            .status(),
+        issue_challenge(
+            State(Arc::clone(&state)),
+            IpAddr::V4(Ipv4Addr::LOCALHOST),
+            Json(daemon_role)
+        )
+        .await
+        .status(),
         StatusCode::UNAUTHORIZED
     );
 
     let mut forged = valid;
     forged.initiator_fingerprint = MachineIdentity::generate().unwrap().identity.fingerprint();
     assert_eq!(
-        issue_challenge(State(state), Json(forged)).await.status(),
+        issue_challenge(State(state), IpAddr::V4(Ipv4Addr::LOCALHOST), Json(forged))
+            .await
+            .status(),
         StatusCode::UNAUTHORIZED
     );
 }
@@ -4478,7 +4717,12 @@ async fn registration_rejects_changed_transcripts_and_invalid_signatures_and_con
             initiator_fingerprint: identity.fingerprint(),
             initiator_nonce: crate::daemon::common::control::fresh_nonce().unwrap(),
         };
-        let response = issue_challenge(State(Arc::clone(&state)), Json(request.clone())).await;
+        let response = issue_challenge(
+            State(Arc::clone(&state)),
+            IpAddr::V4(Ipv4Addr::LOCALHOST),
+            Json(request.clone()),
+        )
+        .await;
         assert_eq!(response.status(), StatusCode::OK);
         let challenge: ChallengeResponse =
             serde_json::from_slice(&response.into_body().collect().await.unwrap().to_bytes())
