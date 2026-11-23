@@ -1439,6 +1439,84 @@ async fn dropped_stream_after_terminal_response_emits_success() {
 }
 
 #[tokio::test]
+async fn cancelled_stream_emits_an_unset_end_event() {
+    let _lock = TEST_MUTEX.lock().unwrap();
+    reset_global();
+    let events = capture_events("stream_cancel_status_test");
+
+    let (collector, finalizer, _collected) = make_collector_finalizer();
+    let mut wrapper = LlmStreamWrapper::new(
+        make_stream(vec![
+            Ok(json!({"token": "partial"})),
+            Ok(json!({"token": "unread"})),
+        ]),
+        make_llm_handle("stream_cancel_llm"),
+        collector,
+        finalizer,
+        None,
+        None,
+        None,
+    );
+    assert_eq!(
+        wrapper.next().await.unwrap().unwrap(),
+        json!({"token": "partial"})
+    );
+    let mut stream = LlmJsonStream::from_closeable(wrapper);
+    stream.cancel();
+    drop(stream);
+
+    let events = captured_snapshot(&events);
+    assert_eq!(events.iter().filter(|event| is_llm_end(event)).count(), 1);
+    let metadata = end_event(&events).metadata().unwrap();
+    assert_eq!(metadata["otel.status_code"], json!("UNSET"));
+    assert!(metadata.get("otel.status_description").is_none());
+    assert!(metadata.get("exception.type").is_none());
+    assert!(deregister_subscriber("stream_cancel_status_test").unwrap());
+}
+
+#[tokio::test]
+async fn cancelled_stream_after_terminal_response_emits_success() {
+    let _lock = TEST_MUTEX.lock().unwrap();
+    reset_global();
+    let events = capture_events("stream_cancel_terminal_status_test");
+
+    let terminal_event = json!({
+        "type": "response.completed",
+        "response": {
+            "id": "resp_cancel_complete",
+            "model": "gpt-5",
+            "status": "completed",
+            "output": [{
+                "type": "message",
+                "content": [{"type": "output_text", "text": "done"}]
+            }],
+            "usage": {"input_tokens": 10, "output_tokens": 2, "total_tokens": 12}
+        }
+    });
+    let streaming_codec = OpenAIResponsesStreamingCodec::new();
+    let mut wrapper = LlmStreamWrapper::new(
+        make_stream(vec![Ok(terminal_event.clone())]),
+        make_llm_handle("openai.responses"),
+        streaming_codec.collector(),
+        streaming_codec.finalizer(),
+        None,
+        None,
+        Some(Arc::new(OpenAIResponsesCodec)),
+    );
+    assert_eq!(wrapper.next().await.unwrap().unwrap(), terminal_event);
+    let mut stream = LlmJsonStream::from_closeable(wrapper);
+    stream.cancel();
+    drop(stream);
+
+    let events = captured_snapshot(&events);
+    assert_eq!(events.iter().filter(|event| is_llm_end(event)).count(), 1);
+    let metadata = end_event(&events).metadata().unwrap();
+    assert_eq!(metadata["otel.status_code"], json!("OK"));
+    assert!(metadata.get("otel.status_description").is_none());
+    assert!(deregister_subscriber("stream_cancel_terminal_status_test").unwrap());
+}
+
+#[tokio::test]
 async fn stream_termination_modes_close_accounting_without_losing_evidence() {
     let _lock = TEST_MUTEX.lock().unwrap();
     reset_global();

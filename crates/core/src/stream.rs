@@ -134,6 +134,7 @@ enum StreamTermination {
     Complete,
     Failed,
     Dropped,
+    Cancelled,
 }
 
 impl StreamTermination {
@@ -311,6 +312,19 @@ impl LlmStreamWrapper {
         self.emit_end_event(metadata, StreamTermination::Failed);
     }
 
+    fn finish_cancelled(&mut self) {
+        if self.ended {
+            return;
+        }
+        self.ended = true;
+        self.inner.terminalize();
+        self.handle
+            .optimization_recorder
+            .close_for_finalization(None);
+        let metadata = metadata_with_otel_status(self.metadata.clone(), "UNSET", None);
+        self.emit_end_event(metadata, StreamTermination::Cancelled);
+    }
+
     /// Emit the LLM END event with aggregated response data.
     ///
     /// Calls the finalizer and queues response sanitization and END publication.
@@ -384,9 +398,10 @@ impl LlmStreamWrapper {
             let finalizer_failed = finalizer_failure.is_some();
             let metadata = match (&finalizer_failure, termination) {
                 (Some(error), StreamTermination::Complete)
-                | (Some(error @ FlowError::CallbackException { .. }), StreamTermination::Dropped) => {
-                    metadata_with_otel_error(metadata, error)
-                }
+                | (
+                    Some(error @ FlowError::CallbackException { .. }),
+                    StreamTermination::Dropped | StreamTermination::Cancelled,
+                ) => metadata_with_otel_error(metadata, error),
                 _ => metadata,
             };
             let response_was_null_without_fallback = aggregated.is_null() && handle.data.is_none();
@@ -427,8 +442,10 @@ impl LlmStreamWrapper {
                     })
                 })
                 .flatten();
-            let metadata = if termination == StreamTermination::Dropped
-                && has_authoritative_terminal_outcome(annotated_response.as_ref())
+            let metadata = if matches!(
+                termination,
+                StreamTermination::Dropped | StreamTermination::Cancelled
+            ) && has_authoritative_terminal_outcome(annotated_response.as_ref())
             {
                 metadata_with_otel_status(metadata, "OK", None)
             } else {
@@ -667,6 +684,10 @@ impl Stream for LlmStreamWrapper {
 }
 
 impl LlmStreamInner for LlmStreamWrapper {
+    fn cancel(self: Pin<&mut Self>) {
+        self.get_mut().finish_cancelled();
+    }
+
     fn close(self: Pin<&mut Self>) -> Pin<Box<dyn Future<Output = Result<()>> + Send + '_>> {
         let this = self.get_mut();
         Box::pin(async move {
