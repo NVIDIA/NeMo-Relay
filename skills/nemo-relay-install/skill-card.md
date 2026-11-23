@@ -9,7 +9,7 @@ NVIDIA <br>
 ### License/Terms of Use: <br>
 Apache 2.0 <br>
 ## Use Case: <br>
-Developers and engineers use this skill to disambiguate the intended NeMo Relay install target (CLI/host integration, maintained framework or plugin integration, or an application-owned language binding), install the current stable package or executable from authoritative sources, and verify availability without extending into configuration, scopes, or a model-consuming trial. <br>
+Developers and engineers use this skill to select the right NeMo Relay installation path (CLI or coding-agent host integration, maintained framework integration or plugin bundle, or application language binding), install the current stable release, and verify availability before handing off to first-run setup. <br>
 
 ### Deployment Geography for Use: <br>
 Global <br>
@@ -26,58 +26,97 @@ Mitigation: Review and scan skill before deployment. <br>
 
 ## Reference(s): <br>
 - [CLI Installation](references/cli-install.md) <br>
-- [Language Packages](references/language-packages.md) <br>
-- [Maintained Integrations](references/maintained-integrations.md) <br>
-- [NeMo Relay Installation Guide](https://docs.nvidia.com/nemo/relay/getting-started/installation) <br>
-- [NeMo Relay Support Matrix](https://docs.nvidia.com/nemo/relay/reference/support-matrix) <br>
+- [Maintained Integration Installation](references/maintained-integrations.md) <br>
+- [Language Package Installation](references/language-packages.md) <br>
+- [NeMo Relay Codex Desktop Recovery](assets/codex-desktop-recovery.md) <br>
+- [NeMo Relay installation guide](https://docs.nvidia.com/nemo/relay/getting-started/installation) <br>
+- [NeMo Relay support matrix](https://docs.nvidia.com/nemo/relay/about-nemo-relay/support-matrix) <br>
+- [NeMo Relay latest release](https://github.com/NVIDIA/NeMo-Relay/releases/latest) <br>
+- [NeMo Relay CLI basic usage](https://docs.nvidia.com/nemo/relay/latest/nemo-relay-cli/basic-usage) <br>
+- [NeMo Relay persistent host installation](https://docs.nvidia.com/nemo/relay/latest/nemo-relay-cli/plugin-installation) <br>
+- [NeMo Relay Codex integration guide](https://docs.nvidia.com/nemo/relay/latest/nemo-relay-cli/codex) <br>
+- [NeMo Relay supported integrations](https://docs.nvidia.com/nemo/relay/latest/supported-integrations/about) <br>
 
 
 ## Skill Output: <br>
-**Output Type(s):** [Shell commands, Configuration instructions] <br>
+**Output Type(s):** [Shell commands, Configuration instructions, Analysis] <br>
 **Output Format:** [Markdown with inline bash code blocks] <br>
 **Output Parameters:** [1D] <br>
-**Other Properties Related to Output:** [None] <br>
+**Other Properties Related to Output:** [Reports the resolved release, installation location, and verification evidence; does not configure export, launch a gateway, or make model calls.] <br>
 
 ## Evaluation Agents Used: <br>
-- Claude Code (`aws/anthropic/bedrock-claude-sonnet-5-5`) <br>
-- Codex (`openai/openai/gpt-5.5`) <br>
+- Claude Code (`aws/anthropic/bedrock-claude-opus-5-5`) <br>
+- Codex (`openai/openai/gpt-6.1-sol`) <br>
 
 
 
 ## Evaluation Tasks: <br>
-15 evaluation tasks (14 positive, 1 negative), each attempt run in its own isolated k8s-sandbox pod. <br>
+15 evaluation tasks (14 positive, 1 negative), 1 attempt per task, each attempt run in its own isolated sandbox pod (`k8s-sandbox` environment), with and without the skill (baseline). <br>
 
 ## Evaluation Metrics Used: <br>
 Reported benchmark dimensions: <br>
-- Security: Is it safe to use? Checks unsafe operations, secret leakage, and unauthorized access. <br>
-- Correctness: Is the answer correct? Final-answer correctness against the reference answer. <br>
-- Discoverability: Was the right skill loaded when needed, with decoys avoided? <br>
-- Effectiveness: Did the skill help complete the task? Equal-weight mean of goal completion and expected workflow adherence. <br>
-- Efficiency: Did it avoid wasted tool calls and token usage? Equal-weight mean of tool-call productivity and token efficiency. <br>
+- Security: Is it safe to use? Scored from `security` (100%). <br>
+- Correctness: Is the answer correct? Scored from `accuracy` (100%). <br>
+- Discoverability: Was the right skill loaded when needed? Scored from `skill_execution` (100%). <br>
+- Effectiveness: Did the skill help complete the task? Scored from `goal_accuracy` (50%) + `behavior_check` (50%). <br>
+- Efficiency: Did it avoid wasted tool calls and token usage? Scored from `skill_efficiency` (50%) + `token_efficiency` (50%). <br>
 
 Underlying evaluation signals used in this run: <br>
-- `security`: Unsafe operations, secret leakage, and unauthorized access. <br>
-- `skill_execution`: Whether the expected skill was selected, decoys were avoided, and the workflow executed. <br>
-- `skill_efficiency`: Tool-call productivity (legacy wire id; routing is scored under Discoverability). <br>
-- `accuracy`: Final-answer correctness against the reference answer. <br>
-- `goal_accuracy`: Whether the user's goal was achieved. <br>
-- `behavior_check`: Whether the expected workflow behavior was followed. <br>
-- `token_efficiency`: Actual uncached prompt plus completion usage (50% of Efficiency). <br>
+- `security`: Security: unsafe operations, secret leakage, and unauthorized access. <br>
+- `skill_execution`: Skill Execution: whether the expected skill was selected, decoys were avoided, and the workflow executed. <br>
+- `skill_efficiency`: Tool Productivity: tool-call productivity (legacy wire id; routing is scored under Discoverability). <br>
+- `accuracy`: Accuracy: final-answer correctness against the reference answer. <br>
+- `goal_accuracy`: Goal Accuracy: whether the user's goal was achieved. <br>
+- `behavior_check`: Behavior Check: whether the expected workflow behavior was followed. <br>
+- `token_efficiency`: Token Efficiency: actual uncached prompt plus completion usage (50% of Efficiency). <br>
 
 
 
 ## Evaluation Results: <br>
+> ✅ **Overall verdict: PASS — Recommended for publication**
+
+### Publication Recommendation
+
+Recommended for publication based on the completed evaluation evidence in this report.
+
+### Results at a Glance
+
 | Measure | Claude Code (Baseline → Skill Uplift) | Codex (Baseline → Skill Uplift) |
 |---|---:|---:|
-| Overall | 77.2% — uplift unavailable | 69.7% — uplift unavailable |
-| Security | 70.0% → 76.7% (+6.7 points) | 73.3% → 76.7% (+3.4 points) |
-| Correctness | 50.7% → 82.7% (+32.0 points) | 52.0% → 81.3% (+29.3 points) |
-| Discoverability | 92.8% — uplift unavailable | 71.8% — uplift unavailable |
-| Effectiveness | 35.9% → 59.0% (+23.1 points) | 27.1% → 53.1% (+26.0 points) |
-| Efficiency | 75.0% — uplift unavailable | 65.7% — uplift unavailable |
+| Overall | 87.0% — baseline ran, but no comparable score was available; uplift unavailable | 78.2% — baseline ran, but no comparable score was available; uplift unavailable |
+| Security | 93.3% → 90.0% (-3.3 points) | 83.3% → 73.3% (-10.0 points) |
+| Correctness | 41.3% → 96.0% (+54.7 points) | 46.7% → 85.3% (+38.6 points) |
+| Discoverability | 97.9% — baseline ran, but no comparable score was available; uplift unavailable | 83.6% — baseline ran, but no comparable score was available; uplift unavailable |
+| Effectiveness | 31.7% → 76.0% (+44.3 points) | 32.8% → 70.6% (+37.8 points) |
+| Efficiency | 74.9% — baseline ran, but no comparable score was available; uplift unavailable | 78.0% — baseline ran, but no comparable score was available; uplift unavailable |
+
+**How to read this table:** baseline is the same task attempted without the target skill. Scores are rounded to one decimal; threshold-adjacent values use additional precision so their displayed band matches the verdict. Uplift is derived from those displayed scores and shown in percentage points.
+
+Example: `47.0% → 92.0% (+45.0 points)` means the skill-assisted run scored 92.0%, 45.0 percentage points above its 47.0% no-skill baseline.
+
+A partial dimension was calculated from only the available configured signals; review the detailed report before relying on it.
+
+#### Comparison details
+
+Shared-source comparisons use the same signals and weights on both conditions. They do not replace the full dimension scores above or change the publication verdict.
+
+| Agent | Dimension | Basis | Baseline → With skill (uplift) | Explanation |
+| --- | --- | --- | --- | --- |
+| claude-code | Discoverability | Dimension comparison | N/A | Discoverability is not applicable to the no-skill baseline; there is no installed skill to discover. |
+| claude-code | Efficiency | Token-only comparison | 98.1% → 95.4% (-2.7 points) | Only Token Efficiency is comparable; the full dimension scores use different evaluator sources. |
+| codex | Discoverability | Dimension comparison | N/A | Discoverability is not applicable to the no-skill baseline; there is no installed skill to discover. |
+| codex | Efficiency | Token-only comparison | 88.3% → 86.9% (-1.4 points) | Only Token Efficiency is comparable; the full dimension scores use different evaluator sources. |
+
+### Tier Status
+
+| Tier | Purpose | Status | Evidence |
+|---|---|---|---|
+| Tier 1 | Static validation | **PASSED WITH OBSERVATIONS** | 11 validator(s); 12 finding(s) |
+| Tier 2 | Semantic deduplication | **PASSED** | 2 validator(s); 0 finding(s) |
+| Tier 3 | Live agent evaluation | **PASS** | 2 agent(s); 15 task(s) |
 
 ## Skill Version(s): <br>
-41cf25e2 (source: git SHA, committed 2026-10-22) <br>
+c2527d57 (source: git SHA, committed 2026-11-23) <br>
 
 ## Ethical Considerations: <br>
 NVIDIA believes Trustworthy AI is a shared responsibility and we have established policies and practices to enable development for a wide array of AI applications. When downloaded or used in accordance with our terms of service, developers should work with their internal team to ensure this skill meets requirements for the relevant industry and use case and addresses unforeseen product misuse. <br>
