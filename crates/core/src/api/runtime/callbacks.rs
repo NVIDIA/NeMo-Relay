@@ -567,6 +567,11 @@ impl LlmJsonStream {
         self.inner.as_mut().close().await
     }
 
+    /// Record that the consumer stopped reading before the stream ended.
+    pub fn cancel(&mut self) {
+        self.inner.as_mut().cancel();
+    }
+
     pub(crate) fn terminalize(&mut self) {
         self.inner.as_mut().terminalize();
     }
@@ -585,6 +590,9 @@ pub trait LlmStreamInner: Stream<Item = Result<Json>> + Send {
     /// Release lifecycle guards once the consumer-visible stream has ended
     /// while retaining the producer for a later explicit close.
     fn terminalize(self: Pin<&mut Self>) {}
+
+    /// Record that the consumer stopped reading before the stream ended.
+    fn cancel(self: Pin<&mut Self>) {}
 
     /// Stop the producer and wait for cleanup. Implementations must be idempotent.
     fn close(self: Pin<&mut Self>) -> Pin<Box<dyn Future<Output = Result<()>> + Send + '_>>;
