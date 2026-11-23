@@ -12,6 +12,26 @@ the code that performs the underlying work.** Relay uses it to check or modify
 requests, allow or block execution, add retries or fallbacks, and control what
 data is recorded in events.
 
+## Choose a Guide
+
+Start with the implementation guide, or look up the contract for the middleware
+you already use:
+
+<CardGroup cols={2}>
+<Card title="Add Middleware" href="#what-you-build">
+Add a policy to a working tool or LLM call and verify its effect in this guide.
+</Card>
+<Card title="Sanitize Events" href="/instrument-applications/middleware/sanitize-events">
+Look up sanitizer callback fields, ordering, and event publication behavior.
+</Card>
+<Card title="Tool Execution Intercepts" href="/instrument-applications/middleware/tool-execution-intercepts">
+Look up tool results, continuation behavior, and managed lifecycle outcomes.
+</Card>
+<Card title="LLM Request Intercepts" href="/instrument-applications/middleware/llm-request-intercepts">
+Look up request authority, callback results, and managed lifecycle outcomes.
+</Card>
+</CardGroup>
+
 ## What You Build
 
 You will add middleware to a working Execute call and verify its effect:
