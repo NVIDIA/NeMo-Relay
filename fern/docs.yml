@@ -6,6 +6,16 @@ instances:
   custom-domain: docs.nvidia.com/nemo/relay
   multi-source: true
 title: NVIDIA NeMo Relay
+agents:
+  llms-txt: ./llms.txt
+  page-directive: 'For clean Markdown of any page, append .md to the page URL. For
+    a task-oriented documentation index, fetch https://docs.nvidia.com/nemo/relay/llms.txt.
+    Use the documentation version matching the installed NeMo Relay package: latest
+    follows the latest stable release, vX.Y.Z identifies a retained release snapshot,
+    and dev documents development changes. Preserve the selected version when following
+    links; do not mix examples or API contracts from different versions. Fetch the
+    relevant section''s /llms.txt before individual pages instead of loading a complete
+    version index.'
 navbar-links:
 - type: github
   value: https://github.com/NVIDIA/NeMo-Relay
