@@ -2980,7 +2980,10 @@ impl Session {
         let subagent_name = format!("subagent:{subagent_id}");
         let metadata = merge_metadata(
             event.metadata,
-            json!({ "nemo_relay_scope_role": "subagent" }),
+            json!({
+                "nemo_relay_scope_role": "subagent",
+                "session_id": self.session_id,
+            }),
         );
         let subagent_stack = session_scope_stack(self.launcher_trace_parent.as_ref());
         let scope = TASK_SCOPE_STACK

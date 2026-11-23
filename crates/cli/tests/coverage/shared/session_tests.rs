@@ -4904,6 +4904,133 @@ async fn codex_child_turn_and_tool_inherit_delegated_agent_identity() {
 }
 
 #[tokio::test]
+async fn claude_code_sessions_keep_one_conversation_id_per_session_on_gen_ai_spans() {
+    let _guard = PLUGIN_CONFIG_TEST_LOCK.lock().await;
+    let subscriber_name = "cli-session-conversation-id-per-session";
+    let (subscriber, exporter) = make_gen_ai_test_subscriber(subscriber_name);
+    subscriber.register(subscriber_name).unwrap();
+    let manager = SessionManager::new(session_test_config());
+    let session_ids = ["conversation-session-1", "conversation-session-2"];
+    for session_id in session_ids {
+        let hook_metadata = |hook: &str| json!({ "hook_event_name": hook });
+        manager
+            .apply_events(
+                &HeaderMap::new(),
+                vec![
+                    NormalizedEvent::AgentStarted(SessionEvent {
+                        session_id: session_id.into(),
+                        agent_kind: AgentKind::ClaudeCode,
+                        event_name: "SessionStart".into(),
+                        payload: json!({}),
+                        metadata: hook_metadata("SessionStart"),
+                    }),
+                    NormalizedEvent::PromptSubmitted(SessionEvent {
+                        session_id: session_id.into(),
+                        agent_kind: AgentKind::ClaudeCode,
+                        event_name: "UserPromptSubmit".into(),
+                        payload: json!({ "prompt": "work" }),
+                        metadata: hook_metadata("UserPromptSubmit"),
+                    }),
+                    NormalizedEvent::SubagentStarted(SubagentEvent {
+                        session_id: session_id.into(),
+                        agent_kind: AgentKind::ClaudeCode,
+                        event_name: "SubagentStart".into(),
+                        subagent_id: "worker".into(),
+                        payload: json!({}),
+                        metadata: hook_metadata("SubagentStart"),
+                    }),
+                    NormalizedEvent::ToolStarted(ToolEvent {
+                        session_id: session_id.into(),
+                        agent_kind: AgentKind::ClaudeCode,
+                        event_name: "PreToolUse".into(),
+                        tool_call_id: "call-1".into(),
+                        tool_name: "Bash".into(),
+                        subagent_id: Some("worker".into()),
+                        arguments: json!({ "command": "ls" }),
+                        result: Value::Null,
+                        status: None,
+                        payload: json!({}),
+                        metadata: hook_metadata("PreToolUse"),
+                    }),
+                    NormalizedEvent::ToolEnded(ToolEvent {
+                        session_id: session_id.into(),
+                        agent_kind: AgentKind::ClaudeCode,
+                        event_name: "PostToolUse".into(),
+                        tool_call_id: "call-1".into(),
+                        tool_name: "Bash".into(),
+                        subagent_id: Some("worker".into()),
+                        arguments: Value::Null,
+                        result: json!({ "stdout": "" }),
+                        status: None,
+                        payload: json!({}),
+                        metadata: hook_metadata("PostToolUse"),
+                    }),
+                ],
+            )
+            .await
+            .unwrap();
+        let llm = manager
+            .prepare_gateway_call(
+                &HeaderMap::new(),
+                LlmGatewayStart {
+                    session_id: Some(session_id.into()),
+                    provider: "anthropic.messages".into(),
+                    ..llm_start()
+                },
+            )
+            .await
+            .unwrap();
+        manager
+            .finish_gateway_call(
+                &llm.session_id,
+                llm.owner_subagent_id.as_deref(),
+                llm.session_finish,
+            )
+            .await;
+    }
+    manager.close_all("test_shutdown").await.unwrap();
+    flush_subscribers().unwrap();
+    subscriber.force_flush().unwrap();
+    assert!(subscriber.deregister(subscriber_name).unwrap());
+
+    let spans = exporter.get_finished_spans().unwrap();
+    for session_id in session_ids {
+        let session_spans: Vec<_> = spans
+            .iter()
+            .filter(|span| {
+                attr_map(&span.attributes).get("gen_ai.conversation.id")
+                    == Some(&session_id.to_string())
+            })
+            .collect();
+        let operations: HashSet<String> = session_spans
+            .iter()
+            .filter_map(|span| {
+                attr_map(&span.attributes)
+                    .get("gen_ai.operation.name")
+                    .cloned()
+            })
+            .collect();
+        assert_eq!(
+            operations,
+            HashSet::from(["invoke_agent".to_string(), "execute_tool".to_string()]),
+            "{session_id}: {spans:?}"
+        );
+        assert!(
+            session_spans
+                .iter()
+                .any(|span| span.name == "invoke_agent subagent:worker"),
+            "{session_id}"
+        );
+    }
+    assert!(spans.iter().all(|span| {
+        attr_map(&span.attributes)
+            .get("gen_ai.conversation.id")
+            .is_some_and(|id| session_ids.contains(&id.as_str()))
+    }));
+    subscriber.shutdown().unwrap();
+}
+
+#[tokio::test]
 async fn gateway_child_turn_uses_only_explicit_agent_identity() {
     let _guard = PLUGIN_CONFIG_TEST_LOCK.lock().await;
     let subscriber_name = "cli-unnamed-gateway-child-turn";
@@ -4953,10 +5080,7 @@ async fn gateway_child_turn_uses_only_explicit_agent_identity() {
     let spans = exporter.get_finished_spans().unwrap();
     let child = spans
         .iter()
-        .find(|span| {
-            span.name == "invoke_agent subagent:worker"
-                && !attr_map(&span.attributes).contains_key("gen_ai.conversation.id")
-        })
+        .find(|span| span.name == "invoke_agent subagent:worker")
         .expect("expected child Agent span");
     let turn = spans
         .iter()
