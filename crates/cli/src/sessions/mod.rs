@@ -3167,11 +3167,16 @@ impl Session {
     // Ends all active tool calls with a synthetic close result before ending their containing scopes.
     // Draining first avoids holding mutable map state while the runtime emits lifecycle events.
     async fn close_active_tools(&mut self, reason: &str) -> Result<(), CliError> {
-        let active_tools: Vec<_> = self
+        let mut active_tools: Vec<_> = self
             .tools
             .drain()
             .map(|(_, active)| active.handle)
             .collect();
+        if self.agent_kind == AgentKind::Pi {
+            // Runtime tool UUIDs use now_v7, ordered by creation within the process.
+            // Unwind interrupted nested calls before their parents.
+            active_tools.sort_unstable_by_key(|handle| std::cmp::Reverse(handle.uuid));
+        }
         for handle in active_tools {
             tool_call_end(
                 ToolCallEndParams::builder()
@@ -3514,7 +3519,26 @@ impl Session {
         Ok(())
     }
 
-    // Starts a tool call under an explicit subagent when available, otherwise under the turn
+    // Pi reports the calling tool explicitly for ctx.executeTool(), including concurrent
+    // codemode calls. Resolve only active handles in this session, never an ID prefix.
+    fn pi_parent_tool_scope(&self, metadata: &Value) -> Option<ScopeHandle> {
+        if self.agent_kind != AgentKind::Pi {
+            return None;
+        }
+        let id = metadata.get("parent_tool_call_id")?.as_str()?;
+        let tool = self.tools.get(id)?;
+        Some(
+            ScopeHandle::builder()
+                .uuid(tool.uuid)
+                .started_at(tool.started_at)
+                .scope_type(ScopeType::Tool)
+                .name(tool.name.as_str())
+                .parent_uuid_opt(tool.parent_uuid)
+                .build(),
+        )
+    }
+
+    // Starts a tool call under its calling tool, explicit subagent, or current turn
     // scope. Duplicate tool IDs are ignored so repeated pre-tool hooks do not create parallel
     // handles for one agent tool invocation.
     async fn start_tool(&mut self, event: ToolEvent) -> Result<(), CliError> {
@@ -3575,6 +3599,7 @@ impl Session {
             arguments
         };
 
+        let parent_tool = self.pi_parent_tool_scope(&event.metadata);
         let active_tool_arguments = arguments.clone();
         let active_tool_name = event.tool_name.clone();
         let active_tool_owner_subagent_id =
@@ -3596,7 +3621,7 @@ impl Session {
             ToolCallParams::builder()
                 .name(event.tool_name.as_str())
                 .args(arguments)
-                .parent_opt(owner.parent.as_ref())
+                .parent_opt(parent_tool.as_ref().or(owner.parent.as_ref()))
                 .metadata(metadata)
                 .tool_call_id(event.tool_call_id.clone())
                 .build(),
@@ -3710,6 +3735,7 @@ impl Session {
     }
 
     fn completion_mark(&self, name: &str, data: Value, metadata: Value) -> Result<(), CliError> {
+        let parent_tool = self.pi_parent_tool_scope(&metadata);
         let metadata = merge_metadata(
             self.scope_metadata(metadata),
             json!({ "start_observed": false }),
@@ -3717,6 +3743,7 @@ impl Session {
         emit_mark_event(
             EmitMarkEventParams::builder()
                 .name(name)
+                .parent_opt(parent_tool.as_ref())
                 .data(data)
                 .metadata(metadata)
                 .build(),

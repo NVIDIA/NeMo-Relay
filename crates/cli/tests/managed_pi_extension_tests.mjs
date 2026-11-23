@@ -199,6 +199,42 @@ test('custom Pi providers redirect only when every sibling API is supported', ()
   );
 });
 
+test('managed Pi preserves the caller on nested MCP rewrites and completions', async (t) => {
+  const bodies = [];
+  t.mock.method(globalThis, 'fetch', async (_url, request) => {
+    const body = JSON.parse(request.body);
+    bodies.push(body);
+    const reply = body.hook_event_name === 'tool_call'
+      ? { tool_call: { tool_call_id: body.tool_call_id, input: { query: 'public' } } }
+      : {};
+    return Response.json(reply);
+  });
+  const handlers = new Map();
+  const { installManagedNemoRelayPi } = await loadLifecycleTestApi();
+  installManagedNemoRelayPi({ on: (name, handler) => handlers.set(name, handler) }, async () => ({
+    config: { daemonAddress: 'https://relay.example.com' },
+    credential: CREDENTIAL,
+    lease: { ensureReady: async () => {} },
+  }));
+  const context = { sessionManager: { getSessionId: () => 'session' } };
+  const event = {
+    toolCallId: 'outer/1', parentToolCallId: 'outer', toolName: 'mcp__docs__search',
+    input: { query: 'private' },
+  };
+  assert.equal(await handlers.get('tool_call')(event, context), undefined);
+  assert.deepEqual(event.input, { query: 'public' });
+  await handlers.get('tool_execution_end')({ ...event, isError: false, result: 'ok' }, context);
+  await handlers.get('session_shutdown')({ reason: 'reload' }, context);
+  assert.deepEqual(bodies.map((body) => body.hook_event_name), [
+    'tool_call', 'tool_arguments_transformed', 'tool_execution_end',
+  ]);
+  for (const body of bodies) {
+    assert.equal(body.parent_tool_call_id, 'outer');
+    assert.equal(body.tool_call_id, 'outer/1');
+    assert.equal(body.tool_name, 'mcp__docs__search');
+  }
+});
+
 test('managed Pi tool rewrites require the exact call ID and recursively preserve shape', () => {
   const current = { path: '/before', flags: [true, { retries: 2 }] };
   assert.deepEqual(

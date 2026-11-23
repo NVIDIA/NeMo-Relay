@@ -633,6 +633,8 @@ mod plugin_api_examples {
         }
         #[test]
         fn flush_failure_still_deregisters_and_shuts_down_both_subscribers() {
+            use nemo_relay::exporter::otel::OpenTelemetryError;
+
             let _registration_guard = crate::DOCUMENTATION_REGISTRATION_LOCK.blocking_lock();
             nemo_relay::context::set_thread_scope_stack(nemo_relay::context::create_scope_stack());
             let before = nemo_relay::registry::list_runtime_registrations(None).unwrap();
@@ -649,7 +651,6 @@ mod plugin_api_examples {
                 if metrics_already_shutdown {
                     metrics.shutdown().unwrap();
                 }
-                let expected_error = logs.force_flush().unwrap_err().to_string();
                 logs.register("otlp-logs").unwrap();
                 metrics.register("otlp-metrics").unwrap();
                 let result = complete_subscribers(&logs, &metrics);
@@ -659,7 +660,12 @@ mod plugin_api_examples {
                 let logs_closed = logs.force_flush().is_err();
                 let metrics_closed = metrics.force_flush().is_err();
                 let _cleanup_results = [logs.shutdown(), metrics.shutdown()];
-                assert_eq!(result.unwrap_err().to_string(), expected_error);
+                // A stopped processor can report different internal channel errors
+                // across flushes. Assert that the first failing provider is returned.
+                assert!(matches!(
+                    result.unwrap_err().downcast_ref::<OpenTelemetryError>(),
+                    Some(OpenTelemetryError::LogProvider(_))
+                ));
                 assert_eq!(after, before);
                 assert!(logs_closed);
                 assert!(metrics_closed);

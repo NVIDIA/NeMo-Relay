@@ -63,6 +63,33 @@ describe('the tool_call gate', () => {
     });
   });
 
+  it('gates nested MCP siblings independently and forwards their explicit parent on completion', async () => {
+    const fire = load(extension);
+    const outer = { toolName: 'codemode', toolCallId: 'outer', input: { code: '...' } };
+    assert.equal(await fire('tool_call', outer), undefined);
+    const child = { toolName: 'mcp__docs__search', parentToolCallId: 'outer', input: { query: 'docs' } };
+    const denied = { ...child, toolCallId: 'outer/1' };
+    const allowed = { ...child, toolCallId: 'outer/2' };
+    gateway.replyWith(rejection('denied query'));
+    assert.deepEqual(await fire('tool_call', denied), { block: true, reason: 'denied query' });
+    gateway.replyWith({ status: 200, payload: {} });
+    assert.equal(await fire('tool_call', allowed), undefined);
+    await fire('tool_execution_end', { ...allowed, isError: false });
+    await fire('tool_execution_end', { ...denied, isError: true });
+    await drain(fire);
+
+    const [parent, ...children] = named(gateway.posts, 'tool_call');
+    assert.equal(Object.hasOwn(parent, 'parent_tool_call_id'), false);
+    assert.deepEqual(children.map((p) => [p.tool_call_id, p.parent_tool_call_id, p.tool_name]), [
+      ['outer/1', 'outer', 'mcp__docs__search'],
+      ['outer/2', 'outer', 'mcp__docs__search'],
+    ]);
+    assert.deepEqual(named(gateway.posts, 'tool_execution_end').map((p) => [p.tool_call_id, p.parent_tool_call_id, p.status]), [
+      ['outer/2', 'outer', 'ok'],
+      ['outer/1', 'outer', 'error'],
+    ]);
+  });
+
   it('allows by returning undefined, never a truthy object', async () => {
     const fire = load(extension);
     const result = await fire('tool_call', call());

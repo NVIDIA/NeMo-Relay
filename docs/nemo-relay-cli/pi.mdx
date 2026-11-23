@@ -36,21 +36,11 @@ Relay-managed extension with `nemo-relay install pi --force` after upgrading the
 gateway; refresh manually installed copies from the updated extension source.
 Delivery failures continue to use the configured fail-open or fail-closed policy.
 
-<Warning>
-pi ships breaking changes through *minor* releases and has no major-release
-channel. The integration is verified against pi `v0.84.0`. Re-verify hook
-signatures after a pi upgrade; a silent shape change appears as missing spans,
-not as an error.
-</Warning>
-
 ## Requirements
 
-Install pi 0.84.x, and confirm the NeMo Relay extension is reachable. Anything
-below 0.84.0 is rejected; anything above 0.84.x is accepted but reported as
-**unverified**, because pi can change a hook shape in a minor release and the
-symptom is missing spans rather than an error. `doctor` reports it in its output;
-the launcher records it as a warning-level log line, so `nemo-relay pi` shows it
-only at `--log-level warn` or lower:
+Install Pi 1.6.0, the minimum and verified release. The Relay launcher rejects
+older versions and prereleases. Newer stable versions can launch with an
+unverified-version warning. Run the following command to check the installed version and extension.
 
 ```bash
 nemo-relay doctor pi
@@ -82,11 +72,9 @@ setup offers this install if pi has no copy of the extension. The wizard only
 runs when no Relay configuration exists yet, so on a machine already configured
 for another agent, run the command above.
 
-pi has no plugin marketplace — no marketplace manifest, no `pi plugin` verb, and
-no MCP client for a plugin-owned server to serve — so this is not a marketplace
-install like the Claude Code and Codex ones. `--install-dir` therefore does not
-apply: pi decides where its extensions live. Set `PI_CODING_AGENT_DIR` to move
-pi's whole configuration.
+Pi discovers the Relay extension in its agent configuration directory. Set
+`PI_CODING_AGENT_DIR` to move that directory. On Pi versions with native MCP,
+configure tool servers separately in Pi's `mcp.json`.
 
 Remove it with:
 
@@ -317,10 +305,8 @@ configured in `plugins.toml`, a single-tool turn produces a `pi` session scope,
 one `pi-turn` scope with `turn_source: turn_start`, and the tool span nested
 under it.
 
-If turn scopes are missing entirely, the extension is not loading. pi 0.84 prints
-the load failure on standard error and exits before the session starts, so read
-stderr first — the failure is reported, not silent. Running pi with `-e` pointing
-at the entry point directly isolates it.
+If turn scopes are missing, check standard error for an extension load failure.
+Run Pi with `-e` pointing at the extension entry point to isolate it.
 
 ## Captured Events
 
@@ -343,7 +329,7 @@ recorded on the session scope rather than opening an empty turn to hold it.
 | `session_start`, then every `model_select` | `model_redirect` mark, for each decision that explains something. Synthesized: the decision is re-evaluated per model, so a switch away from a provider the gateway fronts stops redirecting |
 | *(after a rewrite)* | `tool_arguments_transformed` mark. Synthesized, so the trace records that the arguments the tool ran were not the ones proposed |
 | `tool_call` | Tool span start, and the gate |
-| `tool_execution_end` | Tool span end, for every outcome including blocked |
+| `tool_execution_end` | Closes an open tool span. If the span never opened, records a `tool_end_without_start` mark |
 | `user_bash` | Tool span start named `user_bash`, and the inline shell gate |
 | *(after the `user_bash` verdict)* | `user_bash_end`, a tool span end. Synthesized by the extension the moment the gate decides, **before the command runs** — pi reports no completion for inline shell, so this span measures the policy decision and not the shell command's duration |
 
@@ -359,10 +345,9 @@ argument validation and also for calls that never execute. `tool_result` is not
 forwarded either, because it does not fire at all for blocked calls and in the
 parallel path it fires before `tool_execution_end`.
 
-A blocked call still produces a well-formed tool span. The guardrail rejects
-before the span opens, but pi fires `tool_execution_end` for blocked calls too,
-and the gateway synthesizes the missing pair, tagged
-`tool_correlation_status: "agent_fallback"`.
+When a guardrail blocks a call before its span opens, Pi still fires
+`tool_execution_end`. Relay records a `tool_end_without_start` mark with the
+call ID and outcome.
 
 ## Tool Gating
 
@@ -396,6 +381,24 @@ places: nothing answered, nothing answered in time (the gateway may be up and
 slow), the gateway answered without a decision (a rejected payload, an unreadable
 body, a 403 with no guardrail marker), or the gate itself failed before the
 gateway was asked.
+
+### Native MCP and Codemode
+
+Pi 0.99.0 introduced native MCP tools and nested calls through `ctx.executeTool()`.
+A policy can match the registered name, for example `mcp__docs__search`, whether
+the model calls it directly, discovers it via `tool_search`, or invokes it from
+a codemode script. Relay evaluates each child call with its own arguments.
+Allowing `codemode` leaves the child policy decisions in effect.
+
+Relay records `mcp.method.name` as `tools/call` on qualified MCP tool spans.
+For a nested call, `parent_tool_call_id` identifies the caller in Pi. When the
+caller is active in the same Relay session, its tool span is the parent of the
+child span. If Relay first observes a blocked child's completion, it records
+a `tool_end_without_start` mark under the active caller.
+
+The managed launcher uses `--no-extensions`, which also disables Pi's built-in
+MCP and codemode extensions on these releases. The managed Relay extension
+forwards nested calls when the host supplies them.
 
 ## Argument Transforms
 
@@ -613,9 +616,7 @@ One pi prompt can re-enter the agent run several times — provider retry,
 post-compaction recovery, or a queued follow-up — and pi's own `turnIndex`
 resets to 0 on each re-entry, so turn indices collide within one prompt.
 
-Relay's session model is flat (session → turn → tool) and is shared with Codex
-and Claude Code, so it gains no attempt level for pi. **Re-entry is therefore
-not nested**: two attempts of one prompt appear as more turns under one session.
+Relay records successive attempts as turns in the same session.
 To keep them distinguishable, the extension sends two counters on every
 attributable hook, and the gateway promotes both into event metadata:
 

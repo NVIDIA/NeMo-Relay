@@ -419,6 +419,11 @@ impl SessionCorrelation {
     }
 
     pub(super) fn matching_tool_hint_index(&self, event: &ToolEvent) -> Option<usize> {
+        // Pi creates nested calls inside the calling tool. A provider hint with
+        // the same name and arguments belongs to a separate model-issued call.
+        if event.agent_kind == AgentKind::Pi && event.metadata["parent_tool_call_id"].is_string() {
+            return None;
+        }
         let matches: Vec<_> = self
             .pending_tool_hints
             .iter()
