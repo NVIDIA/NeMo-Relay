@@ -6,10 +6,15 @@
 //! Implements [`LlmCodec`] (request decode/encode) and [`LlmResponseCodec`]
 //! (response decode) for the OpenAI Chat Completions format.
 
+use std::future::Future;
+use std::pin::Pin;
+use std::task::{Context, Poll};
+
 use serde::Deserialize;
+use tokio_stream::Stream;
 
 use crate::api::llm::LlmRequest;
-use crate::api::runtime::{BuiltinLlmCodec, LlmCodecIdentity};
+use crate::api::runtime::{BuiltinLlmCodec, LlmCodecIdentity, LlmJsonStream, LlmStreamInner};
 use crate::error::{FlowError, Result};
 use crate::json::Json;
 
@@ -1449,6 +1454,9 @@ fn json_f64(v: f64) -> Json {
 /// The OpenAI `[DONE]` end-of-stream sentinel is dropped by the SSE event decoder before
 /// reaching the collector, so this codec never sees it.
 ///
+/// Use [`StreamingCodec::validate_stream`](super::streaming::StreamingCodec::validate_stream)
+/// to report provider errors carried in top-level `error` objects.
+///
 /// Internal state lives behind `Arc<Mutex<...>>` so the `&self`-produced collector and finalizer
 /// closures share access. Each instance is single-use because [`LlmFinalizerFn`] consumes the
 /// finalize step.
@@ -1474,6 +1482,15 @@ impl Default for OpenAIChatStreamingCodec {
 }
 
 impl super::streaming::StreamingCodec for OpenAIChatStreamingCodec {
+    /// Forwards a provider error chunk before reporting its error on the next poll.
+    fn validate_stream(&self, stream: LlmJsonStream) -> LlmJsonStream {
+        LlmJsonStream::from_closeable(ChatCompletionStream {
+            inner: stream,
+            provider_error: None,
+            ended: false,
+        })
+    }
+
     fn collector(&self) -> crate::api::runtime::LlmCollectorFn {
         let state = std::sync::Arc::clone(&self.state);
         Box::new(move |event: Json| -> Result<()> {
@@ -1504,6 +1521,72 @@ impl super::streaming::StreamingCodec for OpenAIChatStreamingCodec {
                 .unwrap_or_else(|poisoned| poisoned.into_inner());
             std::mem::take(&mut *guard).finalize()
         })
+    }
+}
+
+struct ChatCompletionStream {
+    inner: LlmJsonStream,
+    provider_error: Option<FlowError>,
+    ended: bool,
+}
+
+impl Stream for ChatCompletionStream {
+    type Item = Result<Json>;
+
+    fn poll_next(self: Pin<&mut Self>, cx: &mut Context<'_>) -> Poll<Option<Self::Item>> {
+        let this = self.get_mut();
+        if this.ended {
+            return Poll::Ready(None);
+        }
+        if let Some(error) = this.provider_error.take() {
+            this.ended = true;
+            return Poll::Ready(Some(Err(error)));
+        }
+        match Pin::new(&mut this.inner).poll_next(cx) {
+            Poll::Ready(Some(Ok(event))) => {
+                if let Some(error) = event.get("error").filter(|error| error.is_object()) {
+                    this.provider_error = Some(chat_stream_error(error));
+                }
+                Poll::Ready(Some(Ok(event)))
+            }
+            result @ (Poll::Ready(None) | Poll::Ready(Some(Err(_)))) => {
+                this.ended = true;
+                result
+            }
+            Poll::Pending => Poll::Pending,
+        }
+    }
+}
+
+fn chat_stream_error(error: &Json) -> FlowError {
+    let code = match error.get("code") {
+        Some(Json::String(code)) => code.clone(),
+        Some(Json::Number(code)) => code.to_string(),
+        _ => error
+            .get("type")
+            .and_then(Json::as_str)
+            .unwrap_or("error")
+            .to_owned(),
+    };
+    let message = error
+        .get("message")
+        .and_then(Json::as_str)
+        .unwrap_or("stream failed");
+    // Do not introduce a retryable upstream failure after output has been forwarded.
+    FlowError::Internal(format!("OpenAI Chat stream reported {code}: {message}"))
+}
+
+impl LlmStreamInner for ChatCompletionStream {
+    fn terminalize(self: Pin<&mut Self>) {
+        let this = self.get_mut();
+        this.ended = true;
+        this.inner.terminalize();
+    }
+
+    fn close(self: Pin<&mut Self>) -> Pin<Box<dyn Future<Output = Result<()>> + Send + '_>> {
+        let this = self.get_mut();
+        this.ended = true;
+        Box::pin(this.inner.close())
     }
 }
 
