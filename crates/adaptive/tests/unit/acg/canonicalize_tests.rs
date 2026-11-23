@@ -34,6 +34,20 @@ fn test_rfc8785_nested_objects() {
     assert_eq!(a, b);
 }
 
+#[test]
+fn prompt_identity_preserves_jcs_order_and_floats_and_keeps_signed_ids_exact() {
+    let ordinary = serde_json::json!({"\u{e000}": 1.0, "\u{10000}": [0.25, -0.0, "line\n"]});
+    assert_eq!(
+        prompt_identity_json(&ordinary).unwrap(),
+        canonicalize_value(&ordinary).unwrap()
+    );
+    let large = serde_json::json!({"ids": [i64::MIN + 1, u64::MAX]});
+    assert_eq!(
+        prompt_identity_json(&large).unwrap(),
+        r#"{"ids":[-9223372036854775807,18446744073709551615]}"#
+    );
+}
+
 // -------------------------------------------------------------------
 // Whitespace normalization
 // -------------------------------------------------------------------

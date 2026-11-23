@@ -80,6 +80,33 @@ fn prompt_ir_rendering_preserves_mixed_content_boundaries() {
 }
 
 #[test]
+fn adjacent_large_tool_argument_ids_have_distinct_block_and_request_identities() {
+    let build = |id: u64| {
+        let part =
+            serde_json::json!({"type":"tool_use", "id":"c", "name":"lookup", "input":{"id":id}});
+        let ir = build_prompt_ir(&AnnotatedLlmRequest {
+            messages: vec![Message::Assistant {
+                content: Some(serde_json::from_value(serde_json::json!([part])).unwrap()),
+                name: None,
+                tool_calls: None,
+            }],
+            ..Default::default()
+        })
+        .unwrap();
+        let rendered: serde_json::Value = serde_json::from_str(&ir.blocks[0].content).unwrap();
+        assert_eq!(rendered[0]["input"]["id"].as_u64(), Some(id));
+        (
+            crate::acg::stability::block_key(&ir.blocks[0]),
+            ir.source_request_hash.unwrap(),
+        )
+    };
+    let (first_block, first_request) = build(1 << 53);
+    let (next_block, next_request) = build((1 << 53) + 1);
+    assert_ne!(first_block, next_block);
+    assert_ne!(first_request, next_request);
+}
+
+#[test]
 fn adaptive_content_image_changes_stop_false_stable_prefixes() {
     let request = |url: &str| AnnotatedLlmRequest {
         messages: vec![

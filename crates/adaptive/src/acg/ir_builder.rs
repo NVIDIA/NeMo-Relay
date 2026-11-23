@@ -14,7 +14,8 @@ use nemo_relay_types::codec::request::{
 };
 
 use crate::acg::canonicalize::{
-    canonicalize_serializable, canonicalize_value, normalize_whitespace, sha256_hex,
+    canonicalize_serializable, canonicalize_value, normalize_whitespace, prompt_identity_json,
+    sha256_hex,
 };
 use crate::acg::error::Result;
 use crate::acg::prompt_ir::{
@@ -255,14 +256,16 @@ fn analysis_content(
         };
         if let Some(kind) = opaque_kind {
             opaque = true;
-            let fingerprint = sha256_hex(&canonicalize_serializable(&parts[index])?);
+            let fingerprint = sha256_hex(&prompt_identity_json(&serde_json::to_value(
+                &parts[index],
+            )?)?);
             rendered.push(serde_json::json!({"type": kind, "fingerprint": fingerprint}));
         } else {
             rendered.push(serde_json::to_value(&parts[index])?);
         }
     }
     Ok((
-        canonicalize_value(&serde_json::Value::Array(rendered))?,
+        prompt_identity_json(&serde_json::Value::Array(rendered))?,
         if opaque {
             BlockContentType::Opaque
         } else {
@@ -278,7 +281,7 @@ fn build_serialized_message_block(
     provenance: ProvenanceLabel,
     suffix: Option<&str>,
 ) -> Result<PromptBlock> {
-    let canonical = canonicalize_serializable(message)?;
+    let canonical = prompt_identity_json(&serde_json::to_value(message)?)?;
     let (content, content_type) = match message {
         Message::ProviderNative { .. } => (
             canonicalize_value(&serde_json::json!({
@@ -474,6 +477,6 @@ fn tool_definition_name(tool: &ToolDefinition) -> &str {
 
 fn compute_request_hash(request: &AnnotatedLlmRequest) -> Result<String> {
     let value = serde_json::to_value(request)?;
-    let canonical = canonicalize_value(&value)?;
+    let canonical = prompt_identity_json(&value)?;
     Ok(sha256_hex(&canonical))
 }
