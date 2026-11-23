@@ -47,7 +47,7 @@ export type AgentStartEvent = { type: 'agent_start' };
 export type AgentEndEvent = { type: 'agent_end'; messages: unknown[] };
 
 /** Fired once per logical agent run, from a `finally`. */
-export type AgentSettledEvent = { type: 'agent_settled' };
+export type AgentSettledEvent = { type: 'agent_settled'; aborted?: boolean };
 
 /** Fired at the start of each turn. `turnIndex` resets to 0 on run re-entry. */
 export type TurnStartEvent = { type: 'turn_start'; turnIndex: number; timestamp: number };
@@ -98,6 +98,14 @@ export type SessionBeforeCompactEvent = {
   preparation?: { tokensBefore?: number; isSplitTurn?: boolean };
 };
 
+export type SessionCompactFailedEvent = {
+  type: 'session_compact_failed';
+  reason: 'manual' | 'threshold' | 'overflow';
+  aborted: boolean;
+  willRetry: boolean;
+  fromExtension: boolean;
+};
+
 /** Fired after context compaction has actually happened. Not cancellable. */
 export type SessionCompactEvent = {
   type: 'session_compact';
@@ -123,6 +131,7 @@ export type ToolExecutionStartEvent = {
 
 export type ToolExecutionEndEvent = {
   type: 'tool_execution_end';
+  durationMs?: number;
   toolCallId: string;
   parentToolCallId?: string;
   toolName: string;
@@ -241,6 +250,7 @@ export type ExtensionAPI = {
   on(event: 'session_start', handler: ExtensionHandler<SessionStartEvent>): void;
   on(event: 'session_shutdown', handler: ExtensionHandler<SessionShutdownEvent>): void;
   on(event: 'session_before_compact', handler: ExtensionHandler<SessionBeforeCompactEvent>): void;
+  on(event: 'session_compact_failed', handler: ExtensionHandler<SessionCompactFailedEvent>): void;
   on(event: 'session_compact', handler: ExtensionHandler<SessionCompactEvent>): void;
   on(event: 'agent_start', handler: ExtensionHandler<AgentStartEvent>): void;
   on(event: 'agent_end', handler: ExtensionHandler<AgentEndEvent>): void;

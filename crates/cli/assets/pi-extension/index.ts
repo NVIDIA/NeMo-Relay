@@ -89,6 +89,7 @@ import type {
   ModelSelectEvent,
   SessionBeforeCompactEvent,
   SessionCompactEvent,
+  SessionCompactFailedEvent,
   SessionShutdownEvent,
   SessionStartEvent,
   ToolCallEvent,
@@ -438,13 +439,14 @@ export default function nemoRelayExtension(pi: ExtensionAPI): void {
     });
   });
 
-  pi.on('agent_settled', async (_event: AgentSettledEvent, ctx: ExtensionContext) => {
+  pi.on('agent_settled', async (event: AgentSettledEvent, ctx: ExtensionContext) => {
     emit(ctx, {
       hook_event_name: 'agent_settled',
       // Two different facts, both wanted: `attempts` is how many attempts the
       // run took, `attempt_index` is the last of them. Sending only the count
       // made this the one hook a consumer filtering on `attempt_index` missed.
       attempts: attemptIndex,
+      aborted: event.aborted,
       ...attribution(),
     });
     attemptIndex = 0;
@@ -501,6 +503,13 @@ export default function nemoRelayExtension(pi: ExtensionAPI): void {
       tokens_before: event.preparation?.tokensBefore,
       is_split_turn: event.preparation?.isSplitTurn,
       ...attribution(),
+    });
+  });
+
+  pi.on('session_compact_failed', async (event: SessionCompactFailedEvent, ctx) => {
+    emit(ctx, {
+      hook_event_name: 'session_compact_failed', reason: event.reason, aborted: event.aborted,
+      will_retry: event.willRetry, from_extension: event.fromExtension, ...attribution(),
     });
   });
 
@@ -605,6 +614,7 @@ export default function nemoRelayExtension(pi: ExtensionAPI): void {
       tool_call_id: event.toolCallId,
       parent_tool_call_id: event.parentToolCallId,
       tool_name: toolName,
+      pi_duration_ms: event.durationMs,
       result: summarize(event.result, event.isError),
       status: event.isError ? 'error' : 'ok',
       ...attribution(),

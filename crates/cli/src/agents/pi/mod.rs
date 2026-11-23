@@ -37,6 +37,7 @@ pub(super) const DESCRIPTOR: AgentDescriptor = AgentDescriptor {
         "session_shutdown",
         "session_before_compact",
         "session_compact",
+        "session_compact_failed",
         "agent_start",
         "agent_end",
         "agent_settled",

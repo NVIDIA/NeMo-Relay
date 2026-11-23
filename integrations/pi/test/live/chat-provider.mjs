@@ -16,6 +16,11 @@ export async function chatProvider(respond) {
     const request = JSON.parse(body);
     requests.push(request);
     const calls = respond(requests.length, request);
+    if (calls?.error) {
+      res.writeHead(calls.error, { 'content-type': 'application/json' });
+      res.end(JSON.stringify({error:{message:'Temporary server error',type:'server_error'}}));
+      return;
+    }
     const delta = calls?.length ? { role: 'assistant', tool_calls: calls.map(([name, args], i) => ({
       index: i, id: 'call_' + i, type: 'function', function: { name, arguments: JSON.stringify(args) },
     })) } : { role: 'assistant', content: 'fixture complete' };

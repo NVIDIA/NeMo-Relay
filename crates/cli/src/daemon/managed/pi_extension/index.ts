@@ -89,7 +89,8 @@ type SessionShutdownEvent = {
 type AgentEndEvent = { type: 'agent_end'; messages?: unknown[] };
 type TurnEvent = { type: 'turn_start' | 'turn_end'; turnIndex: number };
 type CompactEvent = {
-  type: 'session_before_compact' | 'session_compact';
+  type: 'session_before_compact' | 'session_compact' | 'session_compact_failed';
+  aborted?: boolean;
   reason: string;
   willRetry: boolean;
   fromExtension?: boolean;
@@ -103,6 +104,7 @@ type ToolExecutionStartEvent = {
 };
 type ToolExecutionEndEvent = {
   type: 'tool_execution_end';
+  durationMs?: number;
   toolCallId: string;
   parentToolCallId?: string;
   toolName: string;
@@ -142,10 +144,11 @@ type ExtensionAPI = {
   on(event: 'session_shutdown', handler: ExtensionHandler<SessionShutdownEvent>): void;
   on(event: 'agent_start', handler: ExtensionHandler<{ type: 'agent_start' }>): void;
   on(event: 'agent_end', handler: ExtensionHandler<AgentEndEvent>): void;
-  on(event: 'agent_settled', handler: ExtensionHandler<{ type: 'agent_settled' }>): void;
+  on(event: 'agent_settled', handler: ExtensionHandler<{ type: 'agent_settled'; aborted?: boolean }>): void;
   on(event: 'turn_start', handler: ExtensionHandler<TurnEvent>): void;
   on(event: 'turn_end', handler: ExtensionHandler<TurnEvent>): void;
   on(event: 'session_before_compact', handler: ExtensionHandler<CompactEvent>): void;
+  on(event: 'session_compact_failed', handler: ExtensionHandler<CompactEvent>): void;
   on(event: 'session_compact', handler: ExtensionHandler<CompactEvent>): void;
   on(event: 'tool_execution_start', handler: ExtensionHandler<ToolExecutionStartEvent>): void;
   on(event: 'tool_execution_end', handler: ExtensionHandler<ToolExecutionEndEvent>): void;
@@ -395,10 +398,11 @@ export default function managedNemoRelayPi(pi: ExtensionAPI): void {
     );
   });
 
-  pi.on('agent_settled', async (_event, context) => {
+  pi.on('agent_settled', async (event, context) => {
     observe(
       payload(context, 'agent_settled', {
         attempts: attemptIndex,
+        aborted: event.aborted,
         ...attribution(),
       }),
     );
@@ -436,6 +440,13 @@ export default function managedNemoRelayPi(pi: ExtensionAPI): void {
         ...attribution(),
       }),
     );
+  });
+
+  pi.on('session_compact_failed', async (event, context) => {
+    observe(payload(context, 'session_compact_failed', {
+      reason: event.reason, aborted: event.aborted, will_retry: event.willRetry,
+      from_extension: event.fromExtension, ...attribution(),
+    }));
   });
 
   pi.on('session_compact', async (event, context) => {
@@ -511,6 +522,7 @@ export default function managedNemoRelayPi(pi: ExtensionAPI): void {
         tool_call_id: event.toolCallId,
         parent_tool_call_id: event.parentToolCallId,
         tool_name: toolName,
+        pi_duration_ms: event.durationMs,
         result: summarizeManagedToolResult(event.result, event.isError),
         status: event.isError ? 'error' : 'ok',
         ...attribution(),

@@ -55,6 +55,7 @@ fn hook_events_inventory_matches_what_the_extension_posts() {
             "model_redirect",
             "session_before_compact",
             "session_compact",
+            "session_compact_failed",
             "session_shutdown",
             "session_start",
             "tool_arguments_transformed",
