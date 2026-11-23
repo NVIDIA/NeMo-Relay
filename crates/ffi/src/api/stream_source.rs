@@ -6,7 +6,9 @@
 use super::{block_on, entry_scope_stack, tokio_runtime};
 use crate::callable::NemoRelayFreeFn;
 use crate::convert::{json_to_c_string, nemo_relay_string_free};
-use crate::error::{NemoRelayStatus, clear_last_error, last_error_message, set_last_error};
+use crate::error::{
+    NemoRelayStatus, clear_last_error, last_error_as_flow_error, set_last_error, status_from_error,
+};
 use libc::{c_char, c_void};
 use nemo_relay_runtime::api::runtime::{LlmJsonStream, MiddlewareContinuationContext};
 use nemo_relay_types::{
@@ -49,7 +51,7 @@ pub type NemoRelayOptionalStreamCloseFn =
 /// An owned source, transferred to Relay when returned by a streaming callback.
 pub struct FfiLlmStreamSource(Arc<SourceHandle>);
 struct SourceHandle {
-    close_result: tokio::sync::Mutex<Option<std::result::Result<(), String>>>,
+    close_result: tokio::sync::Mutex<Option<Result<()>>>,
     stream: tokio::sync::Mutex<Option<LlmJsonStream>>,
     cancel: tokio::sync::watch::Sender<bool>,
 }
@@ -73,14 +75,14 @@ impl SourceHandle {
         self.cancel.send_replace(true);
         let mut cached = self.close_result.lock().await;
         if let Some(result) = cached.as_ref() {
-            return result.clone().map_err(FlowError::Internal);
+            return result.clone();
         }
         let result = match self.stream.lock().await.take() {
-            Some(mut stream) => stream.close().await.map_err(|error| error.to_string()),
+            Some(mut stream) => stream.close().await,
             None => Ok(()),
         };
         *cached = Some(result.clone());
-        result.map_err(FlowError::Internal)
+        result
     }
 }
 impl Drop for SourceHandle {
@@ -135,9 +137,7 @@ impl Drop for SourceAdapter {
 /// Consume a source returned by foreign code, including its ownership.
 pub(crate) unsafe fn into_native(source: *mut FfiLlmStreamSource) -> Result<LlmJsonStream> {
     if source.is_null() {
-        return Err(FlowError::Internal(
-            last_error_message().unwrap_or_else(|| "stream callback returned null".into()),
-        ));
+        return Err(last_error_as_flow_error("stream callback returned null"));
     }
     let source = unsafe { Box::from_raw(source) }.0;
     Ok(LlmJsonStream::from_closeable(SourceAdapter {
@@ -154,7 +154,7 @@ struct ForeignState {
     data: *mut c_void,
     free: NemoRelayFreeFn,
     cancelled: AtomicBool,
-    closed: OnceLock<std::result::Result<(), String>>,
+    closed: OnceLock<Result<()>>,
 }
 // The constructor contract requires callbacks and state to be thread-safe.
 unsafe impl Send for ForeignState {}
@@ -177,15 +177,13 @@ impl ForeignState {
                     clear_last_error();
                     match self.close {
                         Some(close) if unsafe { close(self.data) } != NemoRelayStatus::Ok => {
-                            Err(last_error_message()
-                                .unwrap_or_else(|| "stream source close failed".into()))
+                            Err(last_error_as_flow_error("stream source close failed"))
                         }
                         _ => Ok(()),
                     }
                 })
             })
             .clone()
-            .map_err(FlowError::Internal)
     }
     fn read(&self) -> Result<Option<Json>> {
         clear_last_error();
@@ -198,9 +196,7 @@ impl ForeignState {
                     .map(Some)
                     .map_err(|e| FlowError::Internal(format!("invalid stream chunk: {e}")))
             }
-            _ => Err(FlowError::Internal(
-                last_error_message().unwrap_or_else(|| "stream source read failed".into()),
-            )),
+            _ => Err(last_error_as_flow_error("stream source read failed")),
         };
         unsafe { nemo_relay_string_free(output) };
         result
@@ -287,16 +283,24 @@ pub unsafe extern "C" fn nemo_relay_stream_source_create(
     free: NemoRelayFreeFn,
 ) -> *mut FfiLlmStreamSource {
     clear_last_error();
+    let owner = crate::callable::UserData::new(data, free);
     let Some(read) = read else {
-        if let Some(free) = free {
-            unsafe { free(data) };
-        }
+        drop(owner);
         set_last_error("stream read callback is required");
         return std::ptr::null_mut();
     };
+    let context = match MiddlewareContinuationContext::capture().isolated() {
+        Ok(context) => context,
+        Err(error) => {
+            drop(owner);
+            status_from_error(&error);
+            return std::ptr::null_mut();
+        }
+    };
+    let (data, free) = owner.into_parts();
     from_native(LlmJsonStream::from_closeable(ForeignSource {
         state: Arc::new(ForeignState {
-            context: MiddlewareContinuationContext::capture(),
+            context,
             read,
             cancel,
             close,
@@ -330,7 +334,7 @@ pub unsafe extern "C" fn nemo_relay_stream_source_next(
         }
         Ok(None) => 0,
         Err(e) => {
-            set_last_error(&e.to_string());
+            status_from_error(&e);
             -1
         }
     }
@@ -372,7 +376,7 @@ pub unsafe extern "C" fn nemo_relay_stream_source_close(
     match block_on(source.0.close()) {
         Ok(()) => NemoRelayStatus::Ok,
         Err(e) => {
-            set_last_error(&e.to_string());
+            status_from_error(&e);
             NemoRelayStatus::Internal
         }
     }
@@ -534,7 +538,7 @@ pub unsafe extern "C" fn nemo_relay_stream_continuation_call(
     match block_on((context.0)(request)) {
         Ok(stream) => from_native(stream),
         Err(error) => {
-            set_last_error(&error.to_string());
+            status_from_error(&error);
             std::ptr::null_mut()
         }
     }

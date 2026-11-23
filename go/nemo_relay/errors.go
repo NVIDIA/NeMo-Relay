@@ -6,8 +6,8 @@ package nemo_relay
 import (
 	"context"
 	"errors"
-	"strings"
 	"sync"
+	"sync/atomic"
 )
 
 // StatusCode preserves a status returned by the native FFI. Unknown is used
@@ -116,42 +116,48 @@ func nativeExecutionError(ctx context.Context, err error) error {
 	return err
 }
 
-// Provider failures cross the FFI as Internal errors. Restore the Go cause only
-// when its message matches the failure selected by the native operation.
-type providerErrorCapture struct {
-	mu     sync.Mutex
-	causes map[string]error
+// Each callback failure has an ID so retries with the same message remain distinct.
+type callbackFailure struct {
+	id  uint64
+	err error
 }
 
-func (capture *providerErrorCapture) record(err error) {
-	if err == nil {
-		return
+func (failure *callbackFailure) Error() string { return failure.err.Error() }
+func (failure *callbackFailure) Unwrap() error { return failure.err }
+
+var callbackFailureNextID atomic.Uint64
+
+type providerErrorCapture struct {
+	mu     sync.Mutex
+	causes map[uint64]error
+}
+
+func (capture *providerErrorCapture) record(err error) error {
+	if err == nil || capture == nil {
+		return err
 	}
+	id := callbackFailureNextID.Add(1)
 	capture.mu.Lock()
 	defer capture.mu.Unlock()
 	if capture.causes == nil {
-		capture.causes = make(map[string]error)
+		capture.causes = make(map[uint64]error)
 	}
-	key := providerErrorMessage(err.Error())
-	capture.causes[key] = errors.Join(capture.causes[key], err)
+	capture.causes[id] = err
+	return &callbackFailure{id: id, err: err}
 }
 
 func (capture *providerErrorCapture) restore(err error) error {
-	var native *RelayError
-	if !errors.As(err, &native) || native.Code != StatusInternal {
+	if capture == nil {
+		return err
+	}
+	var failure *callbackFailure
+	if !errors.As(err, &failure) {
 		return err
 	}
 	capture.mu.Lock()
 	defer capture.mu.Unlock()
-	if cause := capture.causes[providerErrorMessage(native.Message)]; cause != nil {
+	if cause := capture.causes[failure.id]; cause != nil {
 		return errors.Join(err, cause)
 	}
 	return err
-}
-
-func providerErrorMessage(message string) string {
-	for strings.HasPrefix(message, "internal error: ") {
-		message = strings.TrimPrefix(message, "internal error: ")
-	}
-	return message
 }

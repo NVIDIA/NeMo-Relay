@@ -65,7 +65,7 @@ var streamCallbackOwners sync.Map // native callback token -> weak.Pointer[strea
 // without creating a global root. Active reads retain only their source state;
 // they must not retain this owner and its provider factory while blocked.
 type streamSources struct {
-	providerErrors providerErrorCapture
+	providerErrors *providerErrorCapture
 	mu             sync.Mutex
 	states         map[*foreignSourceState]struct{}
 	factory        *streamFactory
@@ -143,6 +143,7 @@ func watchCancellation(ctx context.Context, cancel func()) func() {
 }
 
 type nativeStreamSource struct {
+	capture *providerErrorCapture
 	cleanup runtime.Cleanup
 	mu      sync.RWMutex
 	ptr     *C.FfiLlmStreamSource
@@ -150,8 +151,8 @@ type nativeStreamSource struct {
 	err     error
 }
 
-func ownedStreamSource(ptr *C.FfiLlmStreamSource) *nativeStreamSource {
-	source := &nativeStreamSource{ptr: ptr}
+func ownedStreamSource(ptr *C.FfiLlmStreamSource, capture *providerErrorCapture) *nativeStreamSource {
+	source := &nativeStreamSource{ptr: ptr, capture: capture}
 	source.cleanup = runtime.AddCleanup(source, releaseNativeStreamSource, ptr)
 	return source
 }
@@ -187,7 +188,7 @@ func (source *nativeStreamSource) Next(ctx context.Context) (json.RawMessage, er
 	case 1:
 		return json.RawMessage(C.GoString(output)), nil
 	default:
-		return nil, lastError()
+		return nil, source.capture.restore(lastError())
 	}
 }
 func (source *nativeStreamSource) Close() error {
@@ -200,7 +201,7 @@ func (source *nativeStreamSource) Close() error {
 		source.mu.Lock()
 		defer source.mu.Unlock()
 		if source.ptr != nil {
-			source.err = callStatus(func() C.int32_t { return C.nemo_relay_stream_source_close(source.ptr) })
+			source.err = source.capture.restore(callStatus(func() C.int32_t { return C.nemo_relay_stream_source_close(source.ptr) }))
 			source.cleanup.Stop()
 			C.nemo_relay_stream_source_free(source.ptr)
 			source.ptr = nil
@@ -328,9 +329,9 @@ func goSourceReadTrampoline(data unsafe.Pointer, output **C.char) (status C.int3
 	}
 	if err != nil {
 		if owner := state.owner.Value(); owner != nil {
-			owner.providerErrors.record(err)
+			err = owner.providerErrors.record(err)
 		}
-		setLastErrorMessage(err.Error())
+		setCallbackError(err)
 		return -1
 	}
 	if !json.Valid(value) {
@@ -361,9 +362,12 @@ func goSourceCloseTrampoline(data unsafe.Pointer) (status C.int32_t) {
 		defer state.readMu.Unlock()
 		state.cancel()
 		state.err = state.source.Close()
+		if owner := state.owner.Value(); owner != nil {
+			state.err = owner.providerErrors.record(state.err)
+		}
 	})
 	if state.err != nil {
-		setLastErrorMessage(state.err.Error())
+		setCallbackError(state.err)
 		return 5
 	}
 	return 0

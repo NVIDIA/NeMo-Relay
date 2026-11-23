@@ -3782,6 +3782,21 @@ const char *nemo_relay_last_error(void);
 void nemo_relay_set_last_error_message(const char *msg);
 
 /**
+ * Read the opaque callback failure ID associated with the last error.
+ * Zero means no callback failure ID is available. Read on the same thread
+ * as `nemo_relay_last_error` before another FFI call clears the error.
+ */
+uint64_t nemo_relay_last_error_cause_id(void);
+
+/**
+ * Associate an opaque callback failure ID with the current last error.
+ * Call after `nemo_relay_set_last_error_message` on the same thread.
+ * Relay carries the ID through the selected failure without changing its text.
+ * Zero clears the ID. The binding owns the data identified by this value.
+ */
+void nemo_relay_set_last_error_cause_id(uint64_t id);
+
+/**
  * Free a scope handle previously returned by the runtime.
  *
  * # Safety

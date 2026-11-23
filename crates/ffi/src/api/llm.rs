@@ -604,6 +604,21 @@ pub unsafe extern "C" fn nemo_relay_llm_call_execute(
 // Stream
 // ---------------------------------------------------------------------------
 
+#[derive(Clone)]
+pub(crate) struct StreamCloseError {
+    message: String,
+    cause_id: u64,
+}
+
+impl From<nemo_relay_types::error::FlowError> for StreamCloseError {
+    fn from(error: nemo_relay_types::error::FlowError) -> Self {
+        Self {
+            message: error.to_string(),
+            cause_id: crate::error::callback_cause_id(&error),
+        }
+    }
+}
+
 /// Opaque stream handle for consuming LLM streaming responses chunk by chunk.
 /// Use `nemo_relay_stream_next` to poll and `nemo_relay_stream_free` to release.
 pub struct FfiStream {
@@ -611,16 +626,16 @@ pub struct FfiStream {
     pub(crate) receiver:
         tokio::sync::Mutex<tokio::sync::mpsc::Receiver<FlowResult<serde_json::Value>>>,
     pub(crate) cancel: tokio::sync::watch::Sender<bool>,
-    pub(crate) closed: tokio::sync::watch::Receiver<Option<Result<(), String>>>,
+    pub(crate) closed: tokio::sync::watch::Receiver<Option<Result<(), StreamCloseError>>>,
     pub(crate) callbacks: Arc<crate::callable::StreamCallbackState>,
-    pub(crate) close_result: tokio::sync::Mutex<Option<Result<(), String>>>,
+    pub(crate) close_result: tokio::sync::Mutex<Option<Result<(), StreamCloseError>>>,
 }
 
 pub(crate) struct ForwarderParts {
     pub(crate) stream: nemo_relay_runtime::api::runtime::LlmJsonStream,
     pub(crate) tx: tokio::sync::mpsc::Sender<FlowResult<serde_json::Value>>,
     pub(crate) cancel_rx: tokio::sync::watch::Receiver<bool>,
-    pub(crate) closed: tokio::sync::watch::Sender<Option<Result<(), String>>>,
+    pub(crate) closed: tokio::sync::watch::Sender<Option<Result<(), StreamCloseError>>>,
     pub(crate) context: nemo_relay_runtime::api::runtime::MiddlewareContinuationContext,
 }
 
@@ -665,7 +680,7 @@ async fn forward_stream_to_channel(
     mut stream: nemo_relay_runtime::api::runtime::LlmJsonStream,
     tx: tokio::sync::mpsc::Sender<FlowResult<serde_json::Value>>,
     mut cancel: tokio::sync::watch::Receiver<bool>,
-    closed: tokio::sync::watch::Sender<Option<Result<(), String>>>,
+    closed: tokio::sync::watch::Sender<Option<Result<(), StreamCloseError>>>,
 ) {
     // Reserve before pulling so a cancel never consumes a chunk or error it cannot deliver.
     loop {
@@ -687,7 +702,7 @@ async fn forward_stream_to_channel(
         };
         permit.send(item);
     }
-    let result = stream.close().await.map_err(|error| error.to_string());
+    let result = stream.close().await.map_err(StreamCloseError::from);
     drop(stream);
     closed.send_replace(Some(result));
 }
@@ -937,18 +952,19 @@ pub unsafe extern "C" fn nemo_relay_stream_close(stream: *mut FfiStream) -> Nemo
     stream.cancel();
     let result = match super::block_on(async { Ok(finish_close(stream).await) }) {
         Ok(result) => result,
-        Err(error) => Err(error.to_string()),
+        Err(error) => Err(StreamCloseError::from(error)),
     };
     match result {
         Ok(()) => NemoRelayStatus::Ok,
-        Err(message) => {
-            set_last_error(&message);
+        Err(error) => {
+            set_last_error(&error.message);
+            crate::error::nemo_relay_set_last_error_cause_id(error.cause_id);
             NemoRelayStatus::Internal
         }
     }
 }
 
-async fn finish_close(stream: &FfiStream) -> Result<(), String> {
+async fn finish_close(stream: &FfiStream) -> Result<(), StreamCloseError> {
     let mut close_result = stream.close_result.lock().await;
     if let Some(result) = close_result.as_ref() {
         return result.clone();
@@ -958,7 +974,10 @@ async fn finish_close(stream: &FfiStream) -> Result<(), String> {
         .clone()
         .wait_for(Option::is_some)
         .await
-        .map_err(|_| "stream close task ended early".to_string())?
+        .map_err(|_| StreamCloseError {
+            message: "stream close task ended early".into(),
+            cause_id: 0,
+        })?
         .clone()
         .expect("close state checked above");
     let mut receiver = stream.receiver.lock().await;
@@ -966,22 +985,35 @@ async fn finish_close(stream: &FfiStream) -> Result<(), String> {
     let mut undelivered = None;
     while let Ok(item) = receiver.try_recv() {
         if let Err(error) = item {
-            undelivered.get_or_insert(error.to_string());
+            undelivered.get_or_insert_with(|| StreamCloseError::from(error));
         }
     }
-    let finalizer_error = stream.callbacks.take_failure();
+    let finalizer_error = stream
+        .callbacks
+        .take_failure()
+        .map(|message| StreamCloseError {
+            message,
+            cause_id: 0,
+        });
     let result = combine_close_errors([undelivered, finalizer_error, cleanup.err()]);
     *close_result = Some(result.clone());
     result
 }
 
-fn combine_close_errors(errors: [Option<String>; 3]) -> Result<(), String> {
+fn combine_close_errors(errors: [Option<StreamCloseError>; 3]) -> Result<(), StreamCloseError> {
     let mut errors = errors.into_iter().flatten();
     let Some(first) = errors.next() else {
         return Ok(());
     };
-    Err(errors.fold(first, |acc, next| {
-        format!("{acc}; stream cleanup also failed: {next}")
+    Err(errors.fold(first, |mut acc, next| {
+        acc.message = format!(
+            "{}; stream cleanup also failed: {}",
+            acc.message, next.message
+        );
+        if acc.cause_id == 0 {
+            acc.cause_id = next.cause_id;
+        }
+        acc
     }))
 }
 
@@ -1019,7 +1051,7 @@ pub unsafe extern "C" fn nemo_relay_stream_next(
             1
         }
         Ok(Some(Err(e))) | Err(e) => {
-            set_last_error(&e.to_string());
+            status_from_error(&e);
             -1
         }
     }

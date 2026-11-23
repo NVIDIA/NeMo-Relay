@@ -42,7 +42,10 @@ use nemo_relay_types::codec::traits::LlmCodec;
 use nemo_relay_types::error::{FlowError, Result};
 
 use crate::convert::json_to_c_string;
-use crate::error::{NemoRelayStatus, clear_last_error, last_error_message, set_last_error};
+use crate::error::{
+    NemoRelayStatus, clear_last_error, last_error_as_flow_error, last_error_message,
+    set_last_error, status_from_error,
+};
 use crate::types::{FfiEvent, FfiLLMRequest, FfiPluginContext};
 
 // ---------------------------------------------------------------------------
@@ -506,7 +509,7 @@ pub fn wrap_tool_conditional_fn(
             unsafe { nemo_relay_string_free_internal(c_args) };
             let result = if result_ptr.is_null() {
                 match last_error_message() {
-                    Some(message) => Err(FlowError::Internal(message)),
+                    Some(message) => Err(last_error_as_flow_error(&message)),
                     None => Ok(None),
                 }
             } else {
@@ -637,7 +640,7 @@ async fn call_tool_exec_intercept_cb(
                         }
                     },
                     Err(e) => {
-                        set_last_error(&e.to_string());
+                        status_from_error(&e);
                         std::ptr::null_mut()
                     }
                 }
@@ -705,7 +708,7 @@ pub fn wrap_llm_exec_intercept_fn(
                     match result {
                         Ok(json) => json_to_c_string(&json),
                         Err(e) => {
-                            set_last_error(&e.to_string());
+                            status_from_error(&e);
                             std::ptr::null_mut()
                         }
                     }
@@ -911,7 +914,7 @@ pub fn wrap_llm_stream_exec_intercept_fn(
                         match result {
                             Ok(json) => json_to_c_string(&json),
                             Err(e) => {
-                                set_last_error(&e.to_string());
+                                status_from_error(&e);
                                 std::ptr::null_mut()
                             }
                         }
@@ -1021,7 +1024,7 @@ pub fn wrap_llm_request_intercept_fn(
                     unsafe { nemo_relay_string_free_internal(out_outcome) };
                     let message = last_error_message()
                         .unwrap_or_else(|| "request intercept callback failed".to_string());
-                    return Err(FlowError::Internal(message));
+                    return Err(last_error_as_flow_error(&message));
                 }
 
                 if out_outcome.is_null() {
@@ -1080,7 +1083,7 @@ pub fn wrap_llm_sanitize_request_fn(
                 if result_ptr.is_null() {
                     unsafe { drop(Box::from_raw(ffi_req)) };
                     return match last_error_message() {
-                        Some(message) => Err(FlowError::Internal(message)),
+                        Some(message) => Err(last_error_as_flow_error(&message)),
                         None => Ok(None),
                     };
                 }
@@ -1127,7 +1130,7 @@ pub fn wrap_llm_sanitize_response_fn(
             if result_ptr.is_null() {
                 unsafe { nemo_relay_string_free_internal(response_json) };
                 return match last_error_message() {
-                    Some(message) => Err(FlowError::Internal(message)),
+                    Some(message) => Err(last_error_as_flow_error(&message)),
                     None => Ok(None),
                 };
             }
@@ -1243,7 +1246,7 @@ pub fn wrap_llm_conditional_fn(
             let result_ptr = unsafe { cb(ud.ptr, &ffi_req) };
             let result = if result_ptr.is_null() {
                 match last_error_message() {
-                    Some(message) => Err(FlowError::Internal(message)),
+                    Some(message) => Err(last_error_as_flow_error(&message)),
                     None => Ok(None),
                 }
             } else {
@@ -1368,8 +1371,8 @@ pub fn wrap_stream_callbacks(
                 if status == 0 {
                     return Ok(());
                 }
-                Err(FlowError::Internal(last_error_message().unwrap_or_else(
-                    || format!("stream collector callback failed with status {status}"),
+                Err(last_error_as_flow_error(&format!(
+                    "stream collector callback failed with status {status}"
                 )))
             })
         }
@@ -1486,7 +1489,7 @@ impl LlmCodec for FfiCodec {
         if result_ptr.is_null() {
             let message = last_error_message()
                 .unwrap_or_else(|| "codec decode callback returned null".to_string());
-            return Err(FlowError::Internal(message));
+            return Err(last_error_as_flow_error(&message));
         }
         let result_str = unsafe { CStr::from_ptr(result_ptr) }.to_string_lossy();
         let annotated: AnnotatedLLMRequest = serde_json::from_str(&result_str).map_err(|e| {
@@ -1511,7 +1514,7 @@ impl LlmCodec for FfiCodec {
         if result_ptr.is_null() {
             let message = last_error_message()
                 .unwrap_or_else(|| "codec encode callback returned null".to_string());
-            return Err(FlowError::Internal(message));
+            return Err(last_error_as_flow_error(&message));
         }
         let result_str = unsafe { CStr::from_ptr(result_ptr) }.to_string_lossy();
         let content: serde_json::Value = serde_json::from_str(&result_str).map_err(|e| {
@@ -1629,7 +1632,7 @@ pub(crate) fn codec_from_callbacks(
 fn json_result_from_ptr(ptr: *mut c_char, fallback: &str) -> Result<Json> {
     if ptr.is_null() {
         let message = last_error_message().unwrap_or_else(|| fallback.to_string());
-        return Err(FlowError::Internal(message));
+        return Err(last_error_as_flow_error(&message));
     }
     let value = unsafe { CStr::from_ptr(ptr) }
         .to_str()

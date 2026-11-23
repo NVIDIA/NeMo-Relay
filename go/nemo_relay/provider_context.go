@@ -76,7 +76,14 @@ func newProviderContext(parent context.Context) (context.Context, context.Cancel
 	if parent.Err() != nil {
 		cancelWithError(parent.Err(), context.Cause(parent))
 	}
-	return ctx, func() { stopParent(); cancel() }
+	return ctx, func() {
+		stopParent()
+		if err := parent.Err(); err != nil {
+			cancelWithError(err, context.Cause(parent))
+			return
+		}
+		cancel()
+	}
 }
 
 func (ctx *providerContext) Done() <-chan struct{}       { return ctx.signal.done }

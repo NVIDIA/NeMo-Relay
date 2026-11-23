@@ -513,3 +513,77 @@ fn invalid_stream_registrations_release_callback_state() {
         }
     }
 }
+
+#[test]
+fn source_close_retains_creation_scope_after_stack_changes() {
+    use nemo_relay_runtime::api::runtime::{TASK_SCOPE_STACK, create_scope_stack};
+    use nemo_relay_runtime::api::scope::{PushScopeParams, push_scope};
+    use nemo_relay_runtime::api::subscriber::{
+        deregister_subscriber, flush_subscribers, register_subscriber,
+    };
+    unsafe extern "C" fn eof(_: *mut libc::c_void, _: *mut *mut c_char) -> i32 {
+        0
+    }
+    unsafe extern "C" fn emit(_: *mut libc::c_void) -> NemoRelayStatus {
+        unsafe {
+            nemo_relay_event(
+                c"source-creation-scope".as_ptr(),
+                ptr::null(),
+                ptr::null(),
+                ptr::null(),
+                ptr::null(),
+                ptr::null(),
+                ptr::null(),
+                ptr::null(),
+                ptr::null(),
+            )
+        }
+    }
+    let (sent, received) = std::sync::mpsc::channel();
+    register_subscriber(
+        "source-creation-scope",
+        Arc::new(move |event| {
+            if event.name() == "source-creation-scope" {
+                let _ = sent.send(event.parent_uuid());
+            }
+        }),
+    )
+    .unwrap();
+    let runtime = tokio::runtime::Builder::new_multi_thread()
+        .enable_all()
+        .build()
+        .unwrap();
+    let expected = runtime.block_on(TASK_SCOPE_STACK.scope(create_scope_stack(), async {
+        let scope_a = push_scope(
+            PushScopeParams::builder()
+                .name("source-scope-a")
+                .scope_type(ScopeType::Agent)
+                .build(),
+        )
+        .unwrap();
+        let source = unsafe {
+            nemo_relay_stream_source_create(Some(eof), None, Some(emit), ptr::null_mut(), None)
+        };
+        assert!(!source.is_null());
+        let _scope_b = push_scope(
+            PushScopeParams::builder()
+                .name("source-scope-b")
+                .scope_type(ScopeType::Agent)
+                .build(),
+        )
+        .unwrap();
+        unsafe {
+            assert_eq!(nemo_relay_stream_source_close(source), NemoRelayStatus::Ok);
+            nemo_relay_stream_source_free(source);
+        }
+        scope_a.uuid
+    }));
+    flush_subscribers().unwrap();
+    deregister_subscriber("source-creation-scope").unwrap();
+    assert_eq!(
+        received
+            .recv_timeout(std::time::Duration::from_secs(5))
+            .unwrap(),
+        Some(expected)
+    );
+}

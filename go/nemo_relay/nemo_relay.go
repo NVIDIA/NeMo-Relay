@@ -31,6 +31,7 @@ package nemo_relay
 #cgo LDFLAGS: -L${SRCDIR}/../../target/release -L${SRCDIR}/../../target/debug -lnemo_relay_ffi
 #cgo windows LDFLAGS: -luserenv -lntdll -lws2_32 -ladvapi32 -lbcrypt
 #include <stdint.h>
+extern uint64_t nemo_relay_last_error_cause_id(void);
 #include <stdbool.h>
 #include <stdlib.h>
 
@@ -495,12 +496,18 @@ var (
 // Error handling
 // ---------------------------------------------------------------------------
 
-func nativeError(code StatusCode) *RelayError {
+func nativeError(code StatusCode) error {
+	runtime.LockOSThread()
+	defer runtime.UnlockOSThread()
 	message := "unknown nemo_relay error"
 	if ptr := C.nemo_relay_last_error(); ptr != nil {
 		message = C.GoString(ptr)
 	}
-	return &RelayError{Code: code, Message: message}
+	err := &RelayError{Code: code, Message: message}
+	if id := uint64(C.nemo_relay_last_error_cause_id()); id != 0 {
+		return &callbackFailure{id: id, err: err}
+	}
+	return err
 }
 func lastError() error { return nativeError(StatusUnknown) }
 func checkStatus(status C.int32_t) error {
@@ -1466,7 +1473,8 @@ func ToolCallExecute(name string, args json.RawMessage, fn ToolExecutionFunc, op
 // ---------------------------------------------------------------------------
 
 type llmCallOptions struct {
-	optionErr            error
+	requestCodecErr      error
+	responseCodecErr     error
 	annotatedRequestErr  error
 	annotatedResponseErr error
 	ctx                  context.Context
@@ -1562,6 +1570,7 @@ func WithLLMCodec(codec RequestCodec) LLMCallOption {
 type RequestCodec interface{ applyRequestCodec(*llmCallOptions) }
 
 func (codec CodecFunc) applyRequestCodec(o *llmCallOptions) {
+	o.requestCodecErr = nil
 	if o.codecUserData != nil {
 		unregisterClosure(o.codecUserData)
 	}
@@ -1576,6 +1585,7 @@ func (codec CodecFunc) applyRequestCodec(o *llmCallOptions) {
 }
 
 func (codec *CodecHandle) applyRequestCodec(o *llmCallOptions) {
+	o.requestCodecErr = nil
 	if o.codecUserData != nil {
 		unregisterClosure(o.codecUserData)
 	}
@@ -1588,7 +1598,7 @@ func (codec *CodecHandle) applyRequestCodec(o *llmCallOptions) {
 		var err error
 		o.requestCodec, err = codec.snapshot()
 		if err != nil {
-			o.optionErr = err
+			o.requestCodecErr = err
 		}
 	}
 }
@@ -1840,6 +1850,7 @@ func (codec *CodecHandle) DecodeResponse(response json.RawMessage) (json.RawMess
 // runtime.KeepAlive, so it is safe to pass an inline-constructed handle.
 func WithLLMResponseCodec(codec *CodecHandle) LLMCallOption {
 	return func(o *llmCallOptions) {
+		o.responseCodecErr = nil
 		if o.responseCodec != nil {
 			C.nemo_relay_codec_free(o.responseCodec)
 		}
@@ -1848,7 +1859,7 @@ func WithLLMResponseCodec(codec *CodecHandle) LLMCallOption {
 			var err error
 			o.responseCodec, err = codec.snapshot()
 			if err != nil {
-				o.optionErr = err
+				o.responseCodecErr = err
 			}
 		}
 	}
@@ -1918,7 +1929,7 @@ func LlmCall(name string, request LLMRequest, opts ...LLMCallOption) (*LLMHandle
 	defer runtime.KeepAlive(o.requestCodecHandle)
 	defer runtime.KeepAlive(o.responseCodecHandle)
 	defer freeLLMOpts(o)
-	if err := errors.Join(o.optionErr, o.annotatedRequestErr, o.annotatedResponseErr); err != nil {
+	if err := errors.Join(o.requestCodecErr, o.responseCodecErr, o.annotatedRequestErr, o.annotatedResponseErr); err != nil {
 		return nil, err
 	}
 	if o.hasExecutionOptions {
@@ -1967,7 +1978,7 @@ func LlmCallEnd(handle *LLMHandle, response json.RawMessage, opts ...LLMCallOpti
 	}
 	defer runtime.KeepAlive(o.responseCodecHandle)
 	defer freeLLMOpts(o)
-	if err := errors.Join(o.optionErr, o.annotatedRequestErr, o.annotatedResponseErr); err != nil {
+	if err := errors.Join(o.requestCodecErr, o.responseCodecErr, o.annotatedRequestErr, o.annotatedResponseErr); err != nil {
 		return err
 	}
 	if o.hasExecutionOptions {
@@ -2000,7 +2011,7 @@ func LlmCallExecute(name string, request LLMRequest, fn LLMExecutionFunc, opts .
 	defer runtime.KeepAlive(o.requestCodecHandle)
 	defer runtime.KeepAlive(o.responseCodecHandle)
 	defer freeLLMOpts(o)
-	if err := errors.Join(o.optionErr, o.annotatedRequestErr, o.annotatedResponseErr); err != nil {
+	if err := errors.Join(o.requestCodecErr, o.responseCodecErr, o.annotatedRequestErr, o.annotatedResponseErr); err != nil {
 		return nil, err
 	}
 
@@ -2078,7 +2089,7 @@ func LlmStreamCallExecute(name string, request LLMRequest, fn LLMStreamExecution
 	defer runtime.KeepAlive(o.requestCodecHandle)
 	defer runtime.KeepAlive(o.responseCodecHandle)
 	defer freeLLMOpts(o)
-	if err := errors.Join(o.optionErr, o.annotatedRequestErr, o.annotatedResponseErr); err != nil {
+	if err := errors.Join(o.requestCodecErr, o.responseCodecErr, o.annotatedRequestErr, o.annotatedResponseErr); err != nil {
 		return nil, err
 	}
 
@@ -2112,7 +2123,7 @@ func LlmStreamCallExecute(name string, request LLMRequest, fn LLMStreamExecution
 			cancelProvider()
 		}
 	}()
-	sources := &streamSources{}
+	sources := &streamSources{providerErrors: &providerErrorCapture{}}
 	sources.factory = &streamFactory{ctx: providerContext, fn: provider, sources: sources}
 	defer runtime.KeepAlive(sources)
 	id := registerClosure(weak.Make(sources.factory))
@@ -4627,8 +4638,7 @@ func LlmCallExecuteContext(ctx context.Context, name string, request LLMRequest,
 	var capture providerErrorCapture
 	result, err := LlmCallExecute(name, request, func(request json.RawMessage) (json.RawMessage, error) {
 		result, err := fn(ctx, request)
-		capture.record(err)
-		return result, err
+		return result, capture.record(err)
 	}, opts...)
 	return result, capture.restore(err)
 }
@@ -4642,8 +4652,7 @@ func ToolCallExecuteContext(ctx context.Context, name string, args json.RawMessa
 	var capture providerErrorCapture
 	result, err := ToolCallExecute(name, args, func(args json.RawMessage) (ToolExecutionResult, error) {
 		result, err := fn(ctx, args)
-		capture.record(err)
-		return result, err
+		return result, capture.record(err)
 	}, opts...)
 	return result, capture.restore(err)
 }

@@ -18,6 +18,7 @@ package nemo_relay
 
 /*
 #include <stdint.h>
+extern void nemo_relay_set_last_error_cause_id(uint64_t);
 #include <stdbool.h>
 #include <stdlib.h>
 
@@ -144,6 +145,16 @@ func setLastErrorMessage(msg string) {
 	cMsg := C.CString(msg)
 	defer C.free(unsafe.Pointer(cMsg))
 	C.nemo_relay_set_last_error_message(cMsg)
+}
+
+func setCallbackError(err error) {
+	runtime.LockOSThread()
+	defer runtime.UnlockOSThread()
+	setLastErrorMessage(err.Error())
+	var failure *callbackFailure
+	if errors.As(err, &failure) {
+		C.nemo_relay_set_last_error_cause_id(C.uint64_t(failure.id))
+	}
 }
 
 const nemoRelayStatusInternal C.int32_t = 5
@@ -667,19 +678,19 @@ func pluginRegisterPayload(plugin Plugin, pluginConfigJSON json.RawMessage, ctx 
 func codecDecodeCStringForTest(codec *CodecFunc, request LLMRequest) *C.char {
 	result, err := codecDecodePayload(codec, request.Headers, request.Content)
 	if err != nil {
-		setLastErrorMessage(err.Error())
+		setCallbackError(err)
 		return nil
 	}
-	return relayCallbackString(string(result))
+	return codecCallbackString(result)
 }
 
 func codecEncodeCStringForTest(codec *CodecFunc, annotated json.RawMessage, request LLMRequest) *C.char {
 	result, err := codecEncodePayload(codec, annotated, request.Headers, request.Content)
 	if err != nil {
-		setLastErrorMessage(err.Error())
+		setCallbackError(err)
 		return nil
 	}
-	return relayCallbackString(string(result))
+	return codecCallbackString(result)
 }
 
 func codecDecodeResultForTest(codec *CodecFunc, request LLMRequest) (json.RawMessage, error) {
@@ -703,7 +714,7 @@ func codecEncodeResultForTest(codec *CodecFunc, annotated json.RawMessage, reque
 func pluginValidateCStringForTest(plugin Plugin, raw json.RawMessage) *C.char {
 	payload, err := pluginValidatePayload(plugin, raw)
 	if err != nil {
-		setLastErrorMessage(err.Error())
+		setCallbackError(err)
 		return nil
 	}
 	return relayCallbackString(string(payload))
@@ -711,7 +722,7 @@ func pluginValidateCStringForTest(plugin Plugin, raw json.RawMessage) *C.char {
 
 func pluginRegisterStatusForTest(plugin Plugin, raw json.RawMessage, ctx *PluginContext) C.int32_t {
 	if err := pluginRegisterPayload(plugin, raw, ctx); err != nil {
-		setLastErrorMessage(err.Error())
+		setCallbackError(err)
 		return 5
 	}
 	return 0
@@ -764,7 +775,7 @@ func goConditionalMiddlewareGuardrailTrampoline(userData unsafe.Pointer, kindsJS
 	fn := lookupClosure(userData).(ConditionalMiddlewareGuardrailFunc)
 	var kinds []RuntimeRegistrationKind
 	if err := json.Unmarshal([]byte(C.GoString(kindsJSON)), &kinds); err != nil {
-		setLastErrorMessage(err.Error())
+		setCallbackError(err)
 		return nil
 	}
 	reason := fn(kinds, C.GoString(registrationName))
@@ -781,13 +792,13 @@ func goToolExecTrampoline(userData unsafe.Pointer, argsJSON *C.char) (cResult *C
 	goArgs := json.RawMessage(C.GoString(argsJSON))
 	result, err := fn(goArgs)
 	if err != nil {
-		setLastErrorMessage(err.Error())
+		setCallbackError(err)
 		return nil
 	}
 	result = normalizeToolExecutionResult(result)
 	resultJSON, err := jsonMarshal(result)
 	if err != nil {
-		setLastErrorMessage(err.Error())
+		setCallbackError(err)
 		return nil
 	}
 	return relayCallbackString(string(resultJSON))
@@ -813,7 +824,7 @@ func goEventMetadataInjectorTrampoline(userData unsafe.Pointer, event *C.FfiEven
 	fn := lookupClosure(userData).(EventMetadataInjectorFunc)
 	metadata, err := fn(newEvent(event))
 	if err != nil {
-		setLastErrorMessage(err.Error())
+		setCallbackError(err)
 		return nil
 	}
 	if metadata == nil {
@@ -821,7 +832,7 @@ func goEventMetadataInjectorTrampoline(userData unsafe.Pointer, event *C.FfiEven
 	}
 	result, err := json.Marshal(metadata)
 	if err != nil {
-		setLastErrorMessage(err.Error())
+		setCallbackError(err)
 		return nil
 	}
 	return relayCallbackString(string(result))
@@ -833,12 +844,12 @@ func goEventSanitizeTrampoline(userData unsafe.Pointer, event *C.FfiEvent, field
 	fn := lookupClosure(userData).(EventSanitizeFunc)
 	var fields EventSanitizeFields
 	if err := json.Unmarshal([]byte(C.GoString(fieldsJSON)), &fields); err != nil {
-		setLastErrorMessage(err.Error())
+		setCallbackError(err)
 		return nil
 	}
 	result, err := json.Marshal(fn(newEvent(event), fields))
 	if err != nil {
-		setLastErrorMessage(err.Error())
+		setCallbackError(err)
 		return nil
 	}
 	return relayCallbackString(string(result))
@@ -976,7 +987,7 @@ func goStreamCollectorTrampoline(userData unsafe.Pointer, chunkJSON *C.char) (st
 		return nemoRelayStatusInternal
 	}
 	if err := callbacks.collector(json.RawMessage(C.GoString(chunkJSON))); err != nil {
-		setLastErrorMessage(err.Error())
+		setCallbackError(err)
 		return nemoRelayStatusInternal
 	}
 	return 0
@@ -992,7 +1003,7 @@ func goStreamFinalizerTrampoline(userData unsafe.Pointer) (cResult *C.char) {
 	}
 	response, err := callbacks.finalizer()
 	if err != nil {
-		setLastErrorMessage(err.Error())
+		setCallbackError(err)
 		return nil
 	}
 	if response == nil {
@@ -1009,7 +1020,7 @@ func goLlmExecTrampoline(userData unsafe.Pointer, nativeJSON *C.char) (cResult *
 
 	result, err := fn(goJSON)
 	if err != nil {
-		setLastErrorMessage(err.Error())
+		setCallbackError(err)
 		return nil
 	}
 	return relayCallbackString(string(result))
@@ -1021,7 +1032,7 @@ func goToolExecInterceptTrampoline(userData unsafe.Pointer, contextJSON *C.char,
 	fn := lookupClosure(userData).(ToolExecutionInterceptFunc)
 	var goContext ToolExecutionContext
 	if err := json.Unmarshal([]byte(C.GoString(contextJSON)), &goContext); err != nil {
-		setLastErrorMessage(err.Error())
+		setCallbackError(err)
 		return nil
 	}
 	goNext := func(args json.RawMessage) (ToolExecutionResult, error) {
@@ -1036,7 +1047,7 @@ func goToolExecInterceptTrampoline(userData unsafe.Pointer, contextJSON *C.char,
 	}
 	outcome, err := fn(goContext, goNext)
 	if err != nil {
-		setLastErrorMessage(err.Error())
+		setCallbackError(err)
 		return nil
 	}
 	if outcome.PendingMarks == nil {
@@ -1045,7 +1056,7 @@ func goToolExecInterceptTrampoline(userData unsafe.Pointer, contextJSON *C.char,
 	outcome.Annotation = normalizeToolExecutionAnnotation(outcome.Annotation)
 	outcomeJSON, err := jsonMarshal(outcome)
 	if err != nil {
-		setLastErrorMessage(err.Error())
+		setCallbackError(err)
 		return nil
 	}
 	return relayCallbackString(string(outcomeJSON))
@@ -1083,7 +1094,7 @@ func goLlmExecInterceptTrampoline(userData unsafe.Pointer, name *C.char, nativeJ
 
 	result, err := fn(goJSON, goContext, goNext)
 	if err != nil {
-		setLastErrorMessage(err.Error())
+		setCallbackError(err)
 		return nil
 	}
 	return relayCallbackString(string(result))
@@ -1124,7 +1135,7 @@ func goLlmRequestInterceptTrampoline(
 	}
 	outcome, err := llmRequestInterceptPayload(fn, goName, goHeaders, goContent, goAnnotated)
 	if err != nil {
-		setLastErrorMessage(err.Error())
+		setCallbackError(err)
 		return 5 // NemoRelayStatus::Internal
 	}
 	if outcome.PendingMarks == nil {
@@ -1135,7 +1146,7 @@ func goLlmRequestInterceptTrampoline(
 	}
 	outcomeJSON, err := jsonMarshal(outcome)
 	if err != nil {
-		setLastErrorMessage(err.Error())
+		setCallbackError(err)
 		return 5
 	}
 	*outOutcomeJSON = relayCallbackString(string(outcomeJSON))
@@ -1205,10 +1216,10 @@ func goCodecResponseDecodeTrampoline(userData unsafe.Pointer, response *C.char) 
 	}
 	value, err := decode(json.RawMessage(C.GoString(response)))
 	if err != nil {
-		setLastErrorMessage(err.Error())
+		setCallbackError(err)
 		return nil
 	}
-	return relayCallbackString(string(value))
+	return codecCallbackString(value)
 }
 
 //export goLlmStreamExecTrampoline
@@ -1222,13 +1233,13 @@ func goLlmStreamExecTrampoline(data unsafe.Pointer, request *C.char) (result *C.
 	defer runtime.KeepAlive(factory)
 	source, err := factory.fn(factory.ctx, json.RawMessage(C.GoString(request)))
 	if err != nil {
-		factory.sources.providerErrors.record(err)
-		setLastErrorMessage(err.Error())
+		err = factory.sources.providerErrors.record(err)
+		setCallbackError(err)
 		return nil
 	}
 	result, err = foreignStreamSource(source, factory.ctx, factory.sources)
 	if err != nil {
-		setLastErrorMessage(err.Error())
+		setCallbackError(err)
 		return nil
 	}
 	return result
@@ -1259,10 +1270,13 @@ func goLlmStreamInterceptTrampoline(data unsafe.Pointer, name *C.char, request *
 		return C.nemo_relay_stream_continuation_retain((*C.FfiLlmStreamContinuation)(nextContext))
 	})
 	if err != nil {
-		setLastErrorMessage(err.Error())
+		setCallbackError(err)
 		return nil
 	}
 	continuation := &nativeStreamContinuation{ptr: retained}
+	if sources != nil {
+		continuation.capture = sources.providerErrors
+	}
 	continuation.cleanup = runtime.AddCleanup(continuation, releaseStreamContinuation, retained)
 	transferred := false
 	defer func() {
@@ -1275,10 +1289,10 @@ func goLlmStreamInterceptTrampoline(data unsafe.Pointer, name *C.char, request *
 	source, err := fn(json.RawMessage(C.GoString(request)), goContext, goNext)
 	if err != nil {
 		if sources != nil {
-			sources.providerErrors.record(err)
+			err = sources.providerErrors.record(err)
 		}
 		continuation.close()
-		setLastErrorMessage(err.Error())
+		setCallbackError(err)
 		return nil
 	}
 	if source == nil {
@@ -1288,7 +1302,7 @@ func goLlmStreamInterceptTrampoline(data unsafe.Pointer, name *C.char, request *
 	source = &continuationSource{LLMStreamSource: source, continuation: continuation}
 	result, err = foreignStreamSource(source, callContext, sources)
 	if err != nil {
-		setLastErrorMessage(err.Error())
+		setCallbackError(err)
 		return nil
 	}
 	transferred = true
@@ -1397,6 +1411,7 @@ func (recorder *LLMOptimizationRecorder) Close() error {
 }
 
 type nativeStreamContinuation struct {
+	capture *providerErrorCapture
 	cleanup runtime.Cleanup
 	mu      sync.RWMutex
 	ptr     *C.FfiLlmStreamContinuation
@@ -1415,9 +1430,9 @@ func (c *nativeStreamContinuation) open(request json.RawMessage) (LLMStreamSourc
 	defer C.free(unsafe.Pointer(input))
 	source, err := callPointer(func() *C.FfiLlmStreamSource { return C.nemo_relay_stream_continuation_call(c.ptr, input) })
 	if err != nil {
-		return nil, err
+		return nil, c.capture.restore(err)
 	}
-	return ownedStreamSource(source), nil
+	return ownedStreamSource(source, c.capture), nil
 }
 func releaseStreamContinuation(ptr *C.FfiLlmStreamContinuation) {
 	C.nemo_relay_stream_continuation_free(ptr)
@@ -1452,4 +1467,12 @@ func relayCallbackString(value string) *C.char {
 	input := C.CString(value)
 	defer C.free(unsafe.Pointer(input))
 	return C.nemo_relay_string_clone(input)
+}
+
+func codecCallbackString(value json.RawMessage) *C.char {
+	if !json.Valid(value) {
+		setLastErrorMessage("codec callback returned invalid JSON")
+		return nil
+	}
+	return relayCallbackString(string(value))
 }

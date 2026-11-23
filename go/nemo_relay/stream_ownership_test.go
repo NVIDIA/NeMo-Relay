@@ -202,7 +202,7 @@ func TestNativeOwnedSourceSurvivesGCWithoutManagedHandle(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	native := ownedStreamSource(ptr)
+	native := ownedStreamSource(ptr, nil)
 	defer native.Close()
 	runtime.GC()
 	got, err := native.Next(context.Background())

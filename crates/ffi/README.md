@@ -106,7 +106,8 @@ read, cancel, close, and free callbacks. The callbacks follow these rules:
   setting the last error. Reads run one at a time on blocking workers. They keep
   the active Relay scope and trace context.
 - Cancel returns promptly and unblocks a pending read.
-- Close runs once after reads stop.
+- Close runs once after reads stop. Its events use the scope captured when the
+  source was created, even if the caller later changes scopes.
 - Free runs once after close and after the last native reference is released.
 
 Owned callbacks must follow their argument, result, and ownership rules. They
@@ -399,6 +400,19 @@ output pointer:
 - `agent_extra_json` sets extra agent JSON.
 
 Null JSON pointers omit the matching agent fields.
+
+## Callback Error Causes
+
+Language bindings can attach an opaque ID to a callback failure:
+
+- Set the message with `nemo_relay_set_last_error_message`.
+- Set a nonzero ID with `nemo_relay_set_last_error_cause_id` on the same thread.
+- Read `nemo_relay_last_error_cause_id` with the returned error message on the
+  calling thread. Zero means the error has no callback ID.
+
+The binding owns the data behind each ID. Relay carries the ID with the selected
+failure across worker threads. Setting or clearing the error message clears the
+ID. These helpers do not change the error text.
 
 ## Requests and Handle Fields
 

@@ -254,6 +254,9 @@ func TestStreamSourceErrorsAndCloseFailures(t *testing.T) {
 func TestCustomCodecCloseDuringReadKeepsCallbacksAlive(t *testing.T) {
 	entered := make(chan struct{})
 	release := make(chan struct{})
+	var releaseOnce sync.Once
+	releaseDecode := func() { releaseOnce.Do(func() { close(release) }) }
+	defer releaseDecode()
 	codec, err := NewCustomCodec(&CodecFunc{
 		Decode: func(_, _ json.RawMessage) (json.RawMessage, error) {
 			close(entered)
@@ -265,16 +268,32 @@ func TestCustomCodecCloseDuringReadKeepsCallbacksAlive(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	defer codec.Close()
+	defer func() { releaseDecode(); _ = codec.Close() }()
 	done := make(chan error, 1)
 	go func() { _, err := codec.Decode(LLMRequest{Content: json.RawMessage(`{}`)}); done <- err }()
-	<-entered
-	if err := codec.Close(); err != nil {
-		t.Fatal(err)
+	select {
+	case <-entered:
+	case <-time.After(time.Second):
+		t.Fatal("decode callback did not start")
 	}
-	close(release)
-	if err := <-done; err != nil {
-		t.Fatal(err)
+	closed := make(chan error, 1)
+	go func() { closed <- codec.Close() }()
+	select {
+	case err := <-closed:
+		if err != nil {
+			t.Fatal(err)
+		}
+	case <-time.After(time.Second):
+		t.Fatal("codec Close blocked on active decode")
+	}
+	releaseDecode()
+	select {
+	case err := <-done:
+		if err != nil {
+			t.Fatal(err)
+		}
+	case <-time.After(time.Second):
+		t.Fatal("decode did not finish")
 	}
 	if _, err := codec.Decode(LLMRequest{}); err == nil {
 		t.Fatal("closed codec remained callable")

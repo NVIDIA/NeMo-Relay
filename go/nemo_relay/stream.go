@@ -122,6 +122,7 @@ func (s *LlmStream) Next() (json.RawMessage, error) {
 		return nil, io.EOF
 	}
 	ptr := s.ptr
+	sources := s.sources
 	s.inFlight++
 	if s.inFlight == 1 {
 		s.idle = make(chan struct{})
@@ -147,7 +148,11 @@ func (s *LlmStream) Next() (json.RawMessage, error) {
 	case 0:
 		return nil, io.EOF
 	default:
-		return nil, lastError()
+		err := lastError()
+		if sources != nil {
+			err = sources.providerErrors.restore(err)
+		}
+		return nil, err
 	}
 }
 
@@ -210,6 +215,9 @@ func (s *LlmStream) closeNative(ptr *C.FfiStream) {
 	s.mu.Unlock()
 	err := callStatus(func() C.int32_t { return C.nemo_relay_stream_close(ptr) })
 	s.mu.Lock()
+	if s.sources != nil {
+		err = s.sources.providerErrors.restore(err)
+	}
 	stopContext := s.stopContext
 	s.stopContext = nil
 	s.closeErr = err

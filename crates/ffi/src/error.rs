@@ -10,7 +10,7 @@
 //! The error message remains valid until the next FFI call on that thread clears
 //! it via [`clear_last_error`].
 
-use std::cell::RefCell;
+use std::cell::{Cell, RefCell};
 use std::ffi::CStr;
 use std::ffi::CString;
 
@@ -53,10 +53,12 @@ pub enum NemoRelayStatus {
 
 thread_local! {
     static LAST_ERROR: RefCell<Option<CString>> = const { RefCell::new(None) };
+    static LAST_ERROR_CAUSE_ID: Cell<u64> = const { Cell::new(0) };
 }
 
 /// Store an error message in thread-local storage for later retrieval.
 pub fn set_last_error(msg: &str) {
+    LAST_ERROR_CAUSE_ID.set(0);
     LAST_ERROR.with(|cell| {
         *cell.borrow_mut() = CString::new(msg).ok();
     });
@@ -64,6 +66,7 @@ pub fn set_last_error(msg: &str) {
 
 /// Clear the thread-local last-error message.
 pub fn clear_last_error() {
+    LAST_ERROR_CAUSE_ID.set(0);
     LAST_ERROR.with(|cell| {
         *cell.borrow_mut() = None;
     });
@@ -129,11 +132,63 @@ impl From<&FlowError> for NemoRelayStatus {
     }
 }
 
+/// Read the opaque callback failure ID associated with the last error.
+/// Zero means no callback failure ID is available. Read on the same thread
+/// as `nemo_relay_last_error` before another FFI call clears the error.
+#[unsafe(no_mangle)]
+pub extern "C" fn nemo_relay_last_error_cause_id() -> u64 {
+    LAST_ERROR_CAUSE_ID.get()
+}
+
+/// Associate an opaque callback failure ID with the current last error.
+/// Call after `nemo_relay_set_last_error_message` on the same thread.
+/// Relay carries the ID through the selected failure without changing its text.
+/// Zero clears the ID. The binding owns the data identified by this value.
+#[unsafe(no_mangle)]
+pub extern "C" fn nemo_relay_set_last_error_cause_id(id: u64) {
+    LAST_ERROR_CAUSE_ID.set(id);
+}
+
+#[derive(Debug)]
+struct CallbackCauseId(u64);
+impl std::fmt::Display for CallbackCauseId {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.write_str("foreign callback failure")
+    }
+}
+impl std::error::Error for CallbackCauseId {}
+
+pub(crate) fn last_error_as_flow_error(fallback: &str) -> FlowError {
+    let message = last_error_message().unwrap_or_else(|| fallback.to_owned());
+    let id = LAST_ERROR_CAUSE_ID.get();
+    if id == 0 {
+        return FlowError::Internal(message);
+    }
+    FlowError::CallbackException {
+        message,
+        exception_type: "ForeignCallbackError".into(),
+        source: Some(std::sync::Arc::new(CallbackCauseId(id))),
+    }
+}
+
 /// Convert an `FlowError` to an `NemoRelayStatus`, storing the error message
 /// in thread-local storage.
 pub fn status_from_error(e: &FlowError) -> NemoRelayStatus {
     set_last_error(&e.to_string());
+    LAST_ERROR_CAUSE_ID.set(callback_cause_id(e));
     NemoRelayStatus::from(e)
+}
+
+pub(crate) fn callback_cause_id(error: &FlowError) -> u64 {
+    if let FlowError::CallbackException {
+        source: Some(source),
+        ..
+    } = error
+        && let Some(cause) = source.downcast_ref::<CallbackCauseId>()
+    {
+        return cause.0;
+    }
+    0
 }
 
 /// Convert a `PluginError` to an `NemoRelayStatus`, storing the error message
@@ -153,3 +208,37 @@ pub fn status_from_plugin_error(e: &PluginError) -> NemoRelayStatus {
 #[cfg(test)]
 #[path = "../tests/coverage/error_tests.rs"]
 mod tests;
+
+#[cfg(test)]
+mod callback_cause_tests {
+    use super::*;
+
+    #[test]
+    fn selected_callback_cause_survives_thread_hops_and_clears() {
+        set_last_error("same message");
+        nemo_relay_set_last_error_cause_id(1);
+        let first = last_error_as_flow_error("fallback");
+        set_last_error("same message");
+        nemo_relay_set_last_error_cause_id(2);
+        let selected = last_error_as_flow_error("fallback");
+        std::thread::spawn(move || {
+            assert_eq!(nemo_relay_last_error_cause_id(), 0);
+            assert_eq!(status_from_error(&first), NemoRelayStatus::Internal);
+            assert_eq!(nemo_relay_last_error_cause_id(), 1);
+            assert_eq!(status_from_error(&selected), NemoRelayStatus::Internal);
+            assert_eq!(nemo_relay_last_error_cause_id(), 2);
+            assert_eq!(
+                last_error_message().as_deref(),
+                Some("internal error: same message")
+            );
+            set_last_error("another error");
+            assert_eq!(nemo_relay_last_error_cause_id(), 0);
+            nemo_relay_set_last_error_cause_id(3);
+            clear_last_error();
+            assert_eq!(nemo_relay_last_error_cause_id(), 0);
+        })
+        .join()
+        .unwrap();
+        clear_last_error();
+    }
+}

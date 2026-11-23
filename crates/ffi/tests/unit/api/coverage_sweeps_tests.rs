@@ -4413,7 +4413,10 @@ fn stream_close_reports_undelivered_error_once() {
         pending: std::sync::Mutex::new(None),
         receiver: tokio::sync::Mutex::new(rx),
         cancel: tokio::sync::watch::channel(false).0,
-        closed: tokio::sync::watch::channel(Some(Err("cleanup failed".to_string()))).1,
+        closed: tokio::sync::watch::channel(Some(Err(
+            nemo_relay_types::error::FlowError::Internal("cleanup failed".into()).into(),
+        )))
+        .1,
         callbacks,
         close_result: tokio::sync::Mutex::new(None),
     }));
@@ -4425,7 +4428,7 @@ fn stream_close_reports_undelivered_error_once() {
             .into_owned();
         assert_eq!(
             message,
-            "internal error: undelivered ffi stream failure; stream cleanup also failed: finalizer failed; stream cleanup also failed: cleanup failed"
+            "internal error: undelivered ffi stream failure; stream cleanup also failed: finalizer failed; stream cleanup also failed: internal error: cleanup failed"
         );
         assert_status!(nemo_relay_stream_close(stream), NemoRelayStatus::Internal);
         let repeated = CStr::from_ptr(nemo_relay_last_error())

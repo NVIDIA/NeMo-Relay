@@ -399,8 +399,8 @@ func main() {
 
 ## Errors
 
-Native calls that return a status code report failures as `*RelayError`. This
-error includes the native code and message. Use these Go helpers to inspect it:
+Native calls that return a status code include a `*RelayError` in the error
+chain. It includes the native code and message. Use these Go helpers to inspect it:
 
 - Check a status with `errors.Is(err, nemo.ErrAlreadyExists)`.
 - Read `Code` and `Message` with `errors.As(err, &nativeError)`.
@@ -409,7 +409,9 @@ error includes the native code and message. Use these Go helpers to inspect it:
 Pointer-returning C calls and stream iteration failures provide a message
 without a status code. These errors use `StatusUnknown` and match
 `ErrUnknownStatus`. Go validation can return other error types. Context-aware
-provider errors keep their Go error causes.
+provider errors keep their Go error causes. Stream read and cleanup errors also
+keep their Go causes. Use `errors.Is` or `errors.As` to inspect them. Retries keep
+the cause of the selected failure, even when several errors share a message.
 
 ## Requests and Handle Fields
 
