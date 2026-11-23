@@ -47,6 +47,8 @@ pub(crate) fn prepare(
         "NEMO_RELAY_PI_COMMAND",
         &relay_command.to_string_lossy(),
     );
+    // This command is the same binary as the launcher, so it supports the streaming protocol.
+    set_env(launch, "NEMO_RELAY_PI_HOOK_STREAM", "1");
 
     // Tell the extension what this gateway actually forwards to.
     //

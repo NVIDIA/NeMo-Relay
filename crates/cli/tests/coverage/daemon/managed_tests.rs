@@ -53,7 +53,7 @@ fn v1_render_is_deterministic_and_contains_only_deployment_constants() {
     let first = render_bundle(&spec).unwrap();
     let second = render_bundle(&spec).unwrap();
     assert_eq!(first.manifest, second.manifest);
-    assert_eq!(first.artifacts.len(), 13);
+    assert_eq!(first.artifacts.len(), 14);
     for (left, right) in first.artifacts.iter().zip(&second.artifacts) {
         assert_eq!(left.path, right.path);
         assert_eq!(left.bytes, right.bytes);
@@ -324,7 +324,7 @@ fn v1_artifact_bytes_do_not_depend_on_binary_or_platform_versioning() {
 fn canonical_v1_bundle_matches_the_golden_digest() {
     // This digest pins the v1 manifest and every artifact byte for a canonical deployment,
     // including the supported hook set. Update it only for intentional bundle changes.
-    const GOLDEN_SHA256: &str = "efad197e507325c5cb825a5ce62828cb910f716ea3399de02f0956095ca9787c";
+    const GOLDEN_SHA256: &str = "0aaee32d09e5376f8360f141f630b97493c0912e1a91cc7b339a2f9bac0ba589";
     let rendered = render_bundle(&spec([
         ManagedAgent::Codex,
         ManagedAgent::ClaudeCode,

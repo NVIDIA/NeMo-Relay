@@ -6682,13 +6682,14 @@ fn cli_pi_extension_forwarding_authenticates_standalone_hooks_and_preserves_verd
     wait_for_port_open(address);
     assert_eq!(relay_health(address)["status"], "ok");
     let gateway_url = format!("http://{address}");
-    let forward = |client: &str, event: &str| {
-        let mut child = Command::new(gateway_bin())
+    let command = |client: &str, url: &str| {
+        let mut command = Command::new(gateway_bin());
+        command
             .args([
                 "hook-forward",
                 "pi",
                 "--gateway-url",
-                &gateway_url,
+                url,
                 "--pi-extension-client",
                 client,
                 "--fail-closed",
@@ -6698,9 +6699,11 @@ fn cli_pi_extension_forwarding_authenticates_standalone_hooks_and_preserves_verd
             .env("XDG_CONFIG_HOME", temp.path().join("xdg"))
             .stdin(Stdio::piped())
             .stdout(Stdio::piped())
-            .stderr(Stdio::piped())
-            .spawn()
-            .unwrap();
+            .stderr(Stdio::piped());
+        command
+    };
+    let forward = |client: &str, event: &str| {
+        let mut child = command(client, &gateway_url).spawn().unwrap();
         let payload = serde_json::json!({"session_id": "pi-wire-victim", "hook_event_name": event});
         child
             .stdin
@@ -6720,7 +6723,68 @@ fn cli_pi_extension_forwarding_authenticates_standalone_hooks_and_preserves_verd
     assert_eq!(started["status"], 200);
     assert_eq!(started["body"], "{}");
     assert_eq!(forward("attacker", "session_shutdown")["status"], 401);
-    assert_eq!(forward("victim", "session_shutdown")["status"], 200);
+
+    let stream = |client: &str, url: &str, frames: &[u8]| {
+        let mut child = command(client, url)
+            .arg("--pi-extension-stream")
+            .spawn()
+            .unwrap();
+        child.stdin.take().unwrap().write_all(frames).unwrap();
+        wait_child_with_output(child)
+    };
+    let verdicts = |output: Output| {
+        assert!(
+            output.status.success(),
+            "{}",
+            String::from_utf8_lossy(&output.stderr)
+        );
+        BufReader::new(output.stdout.as_slice())
+            .lines()
+            .map(|line| serde_json::from_str::<serde_json::Value>(&line.unwrap()).unwrap())
+            .collect::<Vec<_>>()
+    };
+    let frame = |session, event| {
+        format!(
+            "{}\n",
+            serde_json::json!({"session_id": session, "hook_event_name": event})
+        )
+    };
+    let shutdown = frame("pi-wire-victim", "session_shutdown");
+    let frames = format!("{shutdown}{shutdown}");
+    let refused = verdicts(stream("attacker", &gateway_url, frames.as_bytes()));
+    assert_eq!(refused.len(), 2);
+    assert!(refused.iter().all(|reply| reply["status"] == 401));
+
+    let start = frame("pi-wire-next", "session_start");
+    let joined = verdicts(stream(
+        "victim",
+        &gateway_url,
+        format!("{shutdown}{start}").as_bytes(),
+    ));
+    assert_eq!(joined, vec![started.clone(), started]);
+
+    for (frame, diagnostic) in [
+        (b"{}".as_slice(), "invalid or oversized Pi hook frame"),
+        (b"\xff\n".as_slice(), "Pi hook frame is not UTF-8"),
+    ] {
+        let invalid = stream("victim", &gateway_url, frame);
+        assert!(!invalid.status.success());
+        assert!(
+            String::from_utf8_lossy(&invalid.stderr).contains(diagnostic),
+            "{}",
+            String::from_utf8_lossy(&invalid.stderr)
+        );
+    }
+
+    // A listener that closes the connection before the bootstrap reply produces a transport
+    // fault for this frame, with the CLI still exiting cleanly on stdin EOF.
+    let foreign = TcpListener::bind("127.0.0.1:0").unwrap();
+    let foreign_url = format!("http://{}", foreign.local_addr().unwrap());
+    let closer = thread::spawn(move || drop(foreign.accept().unwrap()));
+    let faults = verdicts(stream("victim", &foreign_url, start.as_bytes()));
+    closer.join().unwrap();
+    assert_eq!(faults.len(), 1);
+    assert!(faults[0]["transportError"].is_string());
 }
 
 #[cfg(feature = "__skip-implicit-config")]

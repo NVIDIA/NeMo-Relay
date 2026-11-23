@@ -42,8 +42,7 @@ pub(crate) fn adapt(payload: Value, headers: &HeaderMap) -> AdapterOutcome {
             kind: AgentKind::Pi,
             agent_start: &["session_start", "sessionStart"],
             agent_end: &["session_shutdown", "sessionShutdown"],
-            // pi ships no MCP client and has no nested-agent hook of its own;
-            // subagents are an extension-level concept it does not surface.
+            // Pi reports nested tools through tool hooks. It has no subagent lifecycle hook.
             subagent_start: &[],
             subagent_end: &[],
             // `user_bash` is pi's bang-prefixed inline shell, which never

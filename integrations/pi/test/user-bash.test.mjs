@@ -222,10 +222,8 @@ describe('inline shell gate', () => {
     assert.equal(named(gateway.posts, 'user_bash')[0].input.exclude_from_context, true);
   });
 
-  // The highest-value assertion in this file. `emitUserBash` wraps handlers in
-  // try/catch and moves on, so anything that escapes fails *open* and is
-  // invisible: pi logs an extension error and runs the command unchecked. This
-  // is the opposite of `tool_call`, which has no try/catch and fails closed.
+  // Gateway faults must produce a Relay decision. If the handler throws,
+  // Pi aborts the command before the configured fault policy can take effect.
   it('always resolves to a legal decision, under every adverse condition', async () => {
     const conditions = [
       ['gateway error', { status: 500, payload: { error: { message: 'kaboom' } } }, url],
@@ -249,7 +247,7 @@ describe('inline shell gate', () => {
         excludeFromContext: false,
         cwd: '/work',
       }).catch((error) => {
-        assert.fail(`the gate rejected under "${label}", which fails open silently: ${error}`);
+        assert.fail(`the gate rejected under "${label}" instead of resolving the fault: ${error}`);
       });
       assert.ok(
         result === undefined || typeof result?.result?.output === 'string',

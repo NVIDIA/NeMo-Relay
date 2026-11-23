@@ -7,13 +7,13 @@ use super::*;
 fn parses_bare_semver_version_output() {
     // `pi --version` prints only the version, with no product prefix, unlike
     // `codex-cli 0.143.0` or `2.1.121 (Claude Code)`.
-    assert_eq!(parse_version("0.84.0"), Some(Version::new(0, 84, 0)));
-    assert_eq!(parse_version("  0.84.0  "), Some(Version::new(0, 84, 0)));
+    assert_eq!(parse_version("1.6.0"), Some(Version::new(1, 6, 0)));
+    assert_eq!(parse_version("  1.6.0  "), Some(Version::new(1, 6, 0)));
 }
 
 #[test]
 fn rejects_prefixed_or_empty_version_output() {
-    assert_eq!(parse_version("pi 0.84.0"), None);
+    assert_eq!(parse_version("pi 1.6.0"), None);
     assert_eq!(parse_version(""), None);
     assert_eq!(parse_version("not-a-version"), None);
 }
@@ -55,6 +55,7 @@ fn hook_events_inventory_matches_what_the_extension_posts() {
             "model_redirect",
             "session_before_compact",
             "session_compact",
+            "session_compact_failed",
             "session_shutdown",
             "session_start",
             "tool_arguments_transformed",
@@ -62,6 +63,8 @@ fn hook_events_inventory_matches_what_the_extension_posts() {
             "tool_execution_end",
             "turn_end",
             "turn_start",
+            "ui_prompt_end",
+            "ui_prompt_start",
             "user_bash",
             "user_bash_end",
         ]

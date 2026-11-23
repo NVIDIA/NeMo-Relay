@@ -9,9 +9,13 @@
  * extension reloads and new/resume/fork session replacement.
  */
 import { spawn, type ChildProcess } from 'node:child_process';
+import { addAbortListener } from 'node:events';
 import { readFileSync } from 'node:fs';
 import { isAbsolute } from 'node:path';
 import { createInterface } from 'node:readline';
+import { setTimeout as delay } from 'node:timers/promises';
+
+import { registerChatTransports, type ProviderRegistry, type ChatProvider } from './provider-transport.ts';
 
 const CLIENT_TOKEN_ENV = 'NEMO_RELAY_CLIENT_TOKEN';
 const CLIENT_TOKEN_HEADER = 'x-nemo-relay-client-token';
@@ -51,7 +55,7 @@ type McpLease = {
 type HookOutcome =
   | { kind: 'allow'; body: Record<string, unknown> }
   | { kind: 'block'; reason: string }
-  | { kind: 'fault'; reason: string };
+  | { kind: 'fault'; reason: string; routePending?: true };
 
 type PiModel = {
   id: string;
@@ -66,8 +70,9 @@ type ProviderRedirectDecision =
 
 type ExtensionContext = {
   cwd: string;
+  signal?: AbortSignal;
   model?: PiModel;
-  modelRegistry?: { getAll?(): PiModel[] };
+  modelRegistry?: ProviderRegistry;
   sessionManager?: { getSessionId?(): string };
 };
 
@@ -83,10 +88,16 @@ type SessionShutdownEvent = {
   targetSessionFile?: string;
 };
 
+type UIPromptEvent = {
+  type: 'ui_prompt_start' | 'ui_prompt_end';
+  kind: 'select' | 'confirm' | 'input' | 'editor' | 'custom';
+};
+
 type AgentEndEvent = { type: 'agent_end'; messages?: unknown[] };
 type TurnEvent = { type: 'turn_start' | 'turn_end'; turnIndex: number };
 type CompactEvent = {
-  type: 'session_before_compact' | 'session_compact';
+  type: 'session_before_compact' | 'session_compact' | 'session_compact_failed';
+  aborted?: boolean;
   reason: string;
   willRetry: boolean;
   fromExtension?: boolean;
@@ -100,7 +111,9 @@ type ToolExecutionStartEvent = {
 };
 type ToolExecutionEndEvent = {
   type: 'tool_execution_end';
+  durationMs?: number;
   toolCallId: string;
+  parentToolCallId?: string;
   toolName: string;
   result: unknown;
   isError: boolean;
@@ -108,10 +121,11 @@ type ToolExecutionEndEvent = {
 type ToolCallEvent = {
   type: 'tool_call';
   toolCallId: string;
+  parentToolCallId?: string;
   toolName: string;
   input: Record<string, unknown>;
 };
-type ToolCallResult = { block: true; reason: string };
+type ToolCallResult = { block: true; reason: string; terminate?: boolean };
 type UserBashEvent = {
   type: 'user_bash';
   command: string;
@@ -137,16 +151,20 @@ type ExtensionAPI = {
   on(event: 'session_shutdown', handler: ExtensionHandler<SessionShutdownEvent>): void;
   on(event: 'agent_start', handler: ExtensionHandler<{ type: 'agent_start' }>): void;
   on(event: 'agent_end', handler: ExtensionHandler<AgentEndEvent>): void;
-  on(event: 'agent_settled', handler: ExtensionHandler<{ type: 'agent_settled' }>): void;
+  on(event: 'agent_settled', handler: ExtensionHandler<{ type: 'agent_settled'; aborted?: boolean }>): void;
   on(event: 'turn_start', handler: ExtensionHandler<TurnEvent>): void;
   on(event: 'turn_end', handler: ExtensionHandler<TurnEvent>): void;
   on(event: 'session_before_compact', handler: ExtensionHandler<CompactEvent>): void;
+  on(event: 'ui_prompt_start' | 'ui_prompt_end', handler: ExtensionHandler<UIPromptEvent>): void;
+  on(event: 'session_compact_failed', handler: ExtensionHandler<CompactEvent>): void;
   on(event: 'session_compact', handler: ExtensionHandler<CompactEvent>): void;
   on(event: 'tool_execution_start', handler: ExtensionHandler<ToolExecutionStartEvent>): void;
   on(event: 'tool_execution_end', handler: ExtensionHandler<ToolExecutionEndEvent>): void;
   on(event: 'tool_call', handler: ExtensionHandler<ToolCallEvent, ToolCallResult>): void;
   on(event: 'user_bash', handler: ExtensionHandler<UserBashEvent, UserBashResult>): void;
   on(event: 'model_select', handler: ExtensionHandler<{ type: 'model_select'; model: PiModel }>): void;
+  on(event: 'context_with_system', handler: ExtensionHandler<{ type: 'context_with_system' }>): void;
+  registerProvider(provider: ChatProvider): void;
   registerProvider(name: string, config: { baseUrl: string; headers: Record<string, string> }): void;
 };
 
@@ -159,6 +177,7 @@ type Runtime = {
 export default function managedNemoRelayPi(pi: ExtensionAPI): void {
   let runtimePromise: Promise<Runtime> | undefined;
   const redirectedProviders = new Set<string>();
+  const reportedDispatches = new Set<string>();
   let hookQueue: Promise<unknown> = Promise.resolve();
   let attemptIndex = 0;
   let turnSequence = 0;
@@ -205,7 +224,20 @@ export default function managedNemoRelayPi(pi: ExtensionAPI): void {
   async function sendObservation(body: Record<string, unknown>): Promise<void> {
     try {
       const active = await runtime();
-      const outcome = await postHook(active, body);
+      const starting = body.hook_event_name === 'session_start';
+      const deadline = performance.now() + MCP_READY_TIMEOUT_MS;
+      let outcome = await postHook(active, body);
+      // MCP initialize acquires a broker reference. The worker may still be
+      // starting. Only retry the broker's pre-dispatch refusal, so a session
+      // start that reached a worker is never replayed.
+      const retryDelayMs = 1_000;
+      while (starting && outcome.kind === 'fault' && outcome.routePending) {
+        if (deadline - performance.now() <= retryDelayMs) break;
+        await delay(retryDelayMs);
+        const remaining = deadline - performance.now();
+        if (remaining <= 0) break;
+        outcome = await postHook(active, body, Math.min(HOOK_TIMEOUT_MS, remaining));
+      }
       if (outcome.kind !== 'allow') {
         console.error(`NeMo Relay managed hook was not accepted: ${outcome.reason}`);
       }
@@ -218,16 +250,34 @@ export default function managedNemoRelayPi(pi: ExtensionAPI): void {
     void enqueue(() => sendObservation(body));
   }
 
-  async function observeOrdered(body: Record<string, unknown>): Promise<void> {
-    await enqueue(() => sendObservation(body));
+  async function observeOrdered(body: Record<string, unknown>, signal?: AbortSignal): Promise<void> {
+    await waitForHook(enqueue(() => sendObservation(body)), signal);
   }
 
   function registerManagedProvider(
     active: Runtime,
     model: PiModel | undefined,
     context: ExtensionContext,
-    source: 'session_start' | 'model_select',
+    source: 'session_start' | 'model_select' | 'provider_request',
   ): void {
+    if (registerChatTransports(
+      context.modelRegistry, model, redirectedProviders,
+      (provider) => pi.registerProvider(provider),
+      (physical) => {
+        const key = JSON.stringify([physical.provider, physical.id, physical.baseUrl]);
+        if (!reportedDispatches.has(key)) {
+          reportedDispatches.add(key);
+          observe(payload(context, 'model_redirect', {
+            source: 'provider_request', outcome: 'redirect', provider: physical.provider,
+            model_id: physical.id, model_api: physical.api, ...attribution(),
+          }));
+        }
+        return {
+          gateway: active.config.daemonAddress,
+          headers: { [CLIENT_TOKEN_HEADER]: active.credential, [UPSTREAM_BASE_URL_HEADER]: physical.baseUrl },
+        };
+      },
+    )) return;
     if (!model || redirectedProviders.has(model.provider)) return;
     const catalog = context.modelRegistry?.getAll?.();
     const decision = decideManagedProviderRedirect(model, catalog);
@@ -293,14 +343,21 @@ export default function managedNemoRelayPi(pi: ExtensionAPI): void {
         ...(event.previousSessionFile ? { previous_session_file: event.previousSessionFile } : {}),
       }),
     );
-    // Registration happens after the MCP initialize response. A provider call
-    // therefore cannot reach the daemon before this process owns a broker route.
+    // Wait for the initial hook to reach the route before registering providers.
     registerManagedProvider(active, context.model, context, 'session_start');
   });
 
   pi.on('model_select', async (event, context) => {
     const active = await runtime();
     registerManagedProvider(active, event.model, context, 'model_select');
+  });
+
+  // The virtual router may register new providers while preparing this request.
+  pi.on('context_with_system', async (_event, context) => {
+    const model = context.model;
+    if (model?.api === 'pi-virtual') {
+      registerManagedProvider(await runtime(), model, context, 'provider_request');
+    }
   });
 
   pi.on('session_shutdown', async (event, context) => {
@@ -349,10 +406,11 @@ export default function managedNemoRelayPi(pi: ExtensionAPI): void {
     );
   });
 
-  pi.on('agent_settled', async (_event, context) => {
+  pi.on('agent_settled', async (event, context) => {
     observe(
       payload(context, 'agent_settled', {
         attempts: attemptIndex,
+        aborted: event.aborted,
         ...attribution(),
       }),
     );
@@ -368,6 +426,7 @@ export default function managedNemoRelayPi(pi: ExtensionAPI): void {
         turn_seq: sequence,
         attempt_index: Math.max(0, attemptIndex - 1),
       }),
+      context.signal,
     );
   });
 
@@ -377,6 +436,7 @@ export default function managedNemoRelayPi(pi: ExtensionAPI): void {
         turn_index: event.turnIndex,
         ...attribution(),
       }),
+      context.signal,
     );
   });
 
@@ -390,6 +450,26 @@ export default function managedNemoRelayPi(pi: ExtensionAPI): void {
         ...attribution(),
       }),
     );
+  });
+
+  let promptWait: { session: string; start: number } | undefined;
+  pi.on('ui_prompt_start', (event, context) => {
+    promptWait = { session: sessionId(context), start: performance.now() };
+    observe(payload(context, 'ui_prompt_start', { kind: event.kind }));
+  });
+
+  pi.on('ui_prompt_end', (event, context) => {
+    const wait = promptWait;
+    promptWait = undefined;
+    const duration = wait?.session === sessionId(context) ? performance.now() - wait.start : undefined;
+    observe(payload(context, 'ui_prompt_end', { kind: event.kind, wait_duration_ms: duration }));
+  });
+
+  pi.on('session_compact_failed', async (event, context) => {
+    observe(payload(context, 'session_compact_failed', {
+      reason: event.reason, aborted: event.aborted, will_retry: event.willRetry,
+      from_extension: event.fromExtension, ...attribution(),
+    }));
   });
 
   pi.on('session_compact', async (event, context) => {
@@ -409,29 +489,38 @@ export default function managedNemoRelayPi(pi: ExtensionAPI): void {
   });
 
   pi.on('tool_call', async (event, context) => {
-    let outcome: HookOutcome;
+    const signal = context.signal;
+    let outcome: HookOutcome | undefined;
     try {
-      outcome = await enqueue(async () => {
+      outcome = await waitForHook(enqueue(async () => {
+        if (signal?.aborted) return undefined;
         const active = await runtime();
+        if (signal?.aborted) return undefined;
         return postHook(
           active,
           payload(context, 'tool_call', {
             tool_call_id: event.toolCallId,
+            parent_tool_call_id: event.parentToolCallId,
             tool_name: event.toolName,
             input: event.input,
             ...attribution(),
           }),
         );
-      });
+      }), signal);
     } catch (error) {
       return blockedInfrastructure(event.toolName, safeError(error));
     }
 
+    if (!outcome || signal?.aborted) {
+      return { block: true, reason: 'Pi cancelled the tool call while waiting for NeMo Relay authorization.' };
+    }
     if (outcome.kind === 'fault') {
       return blockedInfrastructure(event.toolName, outcome.reason);
     }
     if (outcome.kind === 'block') {
-      return { block: true, reason: outcome.reason };
+      return { block: true, reason: outcome.reason,
+        ...(process.env.NEMO_RELAY_PI_TERMINATE_ON_DENY === '1' ? { terminate: true } : {}),
+      };
     }
     const transformed = decideManagedToolTransform(outcome.body, event.toolCallId, event.input);
     if (transformed.kind === 'invalid') {
@@ -447,6 +536,7 @@ export default function managedNemoRelayPi(pi: ExtensionAPI): void {
       observe(
         payload(context, 'tool_arguments_transformed', {
           tool_call_id: event.toolCallId,
+          parent_tool_call_id: event.parentToolCallId,
           tool_name: event.toolName,
           ...attribution(),
         }),
@@ -461,7 +551,9 @@ export default function managedNemoRelayPi(pi: ExtensionAPI): void {
     observe(
       payload(context, 'tool_execution_end', {
         tool_call_id: event.toolCallId,
+        parent_tool_call_id: event.parentToolCallId,
         tool_name: toolName,
+        pi_duration_ms: event.durationMs,
         result: summarizeManagedToolResult(event.result, event.isError),
         status: event.isError ? 'error' : 'ok',
         ...attribution(),
@@ -815,7 +907,11 @@ function waitForExit(child: ChildProcess, timeoutMs: number): Promise<boolean> {
   });
 }
 
-async function postHook(runtime: Runtime, payload: Record<string, unknown>): Promise<HookOutcome> {
+async function postHook(
+  runtime: Runtime,
+  payload: Record<string, unknown>,
+  timeoutMs = HOOK_TIMEOUT_MS,
+): Promise<HookOutcome> {
   let encoded: string;
   try {
     encoded = JSON.stringify(payload);
@@ -826,7 +922,7 @@ async function postHook(runtime: Runtime, payload: Record<string, unknown>): Pro
     return { kind: 'fault', reason: 'hook payload exceeds the managed payload limit' };
   }
   const controller = new AbortController();
-  const timer = setTimeout(() => controller.abort(), HOOK_TIMEOUT_MS);
+  const timer = setTimeout(() => controller.abort(), timeoutMs);
   try {
     const response = await fetch(`${runtime.config.daemonAddress}/hooks/pi`, {
       method: 'POST',
@@ -839,6 +935,10 @@ async function postHook(runtime: Runtime, payload: Record<string, unknown>): Pro
       signal: controller.signal,
     });
     const decoded = await boundedJson(response);
+    if (response.status === 503 && response.headers.get('retry-after') === '1' &&
+      isRecord(decoded) && isRecord(decoded.error) && decoded.error.message === 'route is not ready') {
+      return { kind: 'fault', reason: 'daemon route is not ready', routePending: true };
+    }
     if (response.ok) {
       if (!isRecord(decoded)) {
         return { kind: 'fault', reason: 'daemon returned a non-object success body' };
@@ -855,7 +955,7 @@ async function postHook(runtime: Runtime, payload: Record<string, unknown>): Pro
   } catch (error) {
     const reason =
       error instanceof Error && error.name === 'AbortError'
-        ? `daemon did not answer within ${HOOK_TIMEOUT_MS}ms`
+        ? `daemon did not answer within ${timeoutMs}ms`
         : `daemon hook request failed: ${safeError(error)}`;
     return { kind: 'fault', reason };
   } finally {
@@ -1122,4 +1222,19 @@ function isRecord(value: unknown): value is Record<string, unknown> {
 
 function safeError(error: unknown): string {
   return error instanceof Error ? error.message : String(error);
+}
+
+// Pi may finish an aborted run while its Relay jobs drain. Keeping those jobs in
+// the queue preserves start/end ordering, even if a gate already reached Relay.
+async function waitForHook<T>(job: Promise<T>, signal?: AbortSignal): Promise<T | undefined> {
+  if (!signal) return job;
+  let listener: ReturnType<typeof addAbortListener> | undefined;
+  const aborted = new Promise<undefined>((resolve) => {
+    listener = addAbortListener(signal, () => resolve(undefined));
+  });
+  try {
+    return await Promise.race([job, aborted]);
+  } finally {
+    listener?.[Symbol.dispose]();
+  }
 }

@@ -746,6 +746,17 @@ fn common_tool_event_with_fallback(
         .unwrap_or_else(|| "unknown_tool".to_string());
     let mut metadata = session.metadata;
     apply_mcp_tool_metadata(&mut metadata, kind, &tool_name);
+    if kind == AgentKind::Pi
+        && let Some(parent_id) = payload.get("parent_tool_call_id").and_then(Value::as_str)
+        && !parent_id.is_empty()
+    {
+        metadata["parent_tool_call_id"] = json!(parent_id);
+    }
+    if kind == AgentKind::Pi
+        && let Some(duration_ms) = payload.get("pi_duration_ms").and_then(Value::as_u64)
+    {
+        metadata["pi_duration_ms"] = json!(duration_ms);
+    }
     if tool_call.tool_call_id.is_none()
         && let Some(metadata) = metadata.as_object_mut()
     {
@@ -768,11 +779,11 @@ fn common_tool_event_with_fallback(
     }
 }
 
-/// Claude and Codex qualify MCP tool identities as `mcp__<server>__<tool>`.
+/// Claude, Codex, and Pi qualify MCP tool identities as `mcp__<server>__<tool>`.
 /// This identifies the requested operation, not successful execution or delivery
 /// to a server. Never infer an endpoint or protocol session from the server alias.
 fn apply_mcp_tool_metadata(metadata: &mut Value, kind: AgentKind, tool_name: &str) {
-    if !matches!(kind, AgentKind::ClaudeCode | AgentKind::Codex) {
+    if kind == AgentKind::Gateway {
         return;
     }
     let Some((server, tool)) = tool_name

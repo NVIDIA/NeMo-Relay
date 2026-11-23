@@ -24,11 +24,14 @@ The existing fail-open or fail-closed policy still handles delivery faults.
 
 ## Status
 
-Proof of concept. Verified against pi `v0.84.0`. pi ships breaking changes
-through *minor* releases and has no major-release channel, so re-verify hook
-signatures before relying on them — `nemo-relay doctor pi` and the launcher both
-report a minor above 0.84.x as unverified rather than supported, and accept it
-anyway, because untested is not the same as broken.
+NeMo Relay requires Pi 1.6.0. The launcher rejects older releases and
+prereleases. Newer stable releases can launch with an unverified-version warning.
+
+Run the live acceptance suite on Unix with Pi 1.6.0 and a built Relay CLI:
+
+```bash
+python3 integrations/pi/test/live/verify.py --pi /path/to/pi --relay /path/to/nemo-relay
+```
 
 **Model traffic is redirected conditionally.** pi has no base-URL flag and no
 generic environment override — it resolves `baseUrl` per model from a generated
@@ -144,6 +147,7 @@ Run it first whenever Relay does not seem to be doing anything.
 | `NEMO_RELAY_PI_GATEWAY_URL` | `http://127.0.0.1:4040` | Loopback HTTP gateway base URL |
 | `NEMO_RELAY_PI_COMMAND` | `nemo-relay` | Relay executable for authenticated hook forwarding. The launcher sets its own executable path |
 | `NEMO_RELAY_PI_TIMEOUT_MS` | `5000` | Per-request timeout. Posts are serialized, so a gating hook also waits out everything queued ahead of it — an unresponsive gateway costs this once per queued post, not once |
+| `NEMO_RELAY_PI_TERMINATE_ON_DENY` | unset | Set to `1` to request that Pi stop automatic model follow-up after explicit policy denials. Pi 1.6.0 stops when every finalized tool result in the batch requests termination. A successful sibling or enclosing codemode call can continue the turn. Inline shell, gateway faults, and invalid rewrites retain their usual handling. |
 | `NEMO_RELAY_PI_FAIL` | `open` | `closed` blocks tool calls and inline shell commands when the gateway is unreachable |
 | `NEMO_RELAY_PI_REDIRECT` | `match` | `force` redirects without checking the upstream; `off` disables redirection |
 | `NEMO_RELAY_PI_OPENAI_UPSTREAM` | unset | What the gateway forwards OpenAI-compatible traffic to. Set by the launcher |
@@ -368,13 +372,21 @@ entry, so a file count loses it.
 pi's lifecycle is `session -> agent run -> turn -> message | tool execution`.
 Two shapes make a naive mapping wrong.
 
+**Nested tools (Pi 0.99.0 and later).** Native MCP, codemode, and other tools
+using `ctx.executeTool()` use the same `tool_call` gate as a direct tool call.
+Both extension packages forward Pi's optional `parentToolCallId` as
+`parent_tool_call_id`. The gateway resolves it against active calls in the
+same session and retains the ID in tool metadata even when the parent was
+unobserved. MCP tool names follow `mcp__<server>__<tool>`. A Pi 1.6.0 smoke
+run covered direct and parallel nested MCP calls.
+
 **Agent-run re-entry.** One prompt can re-enter the agent run several times
 (provider retry, post-compaction, queued follow-up), and pi's `turnIndex` resets
 to 0 each time. The extension-facing `agent_end` carries no `willRetry` marker,
 so a retry cannot be detected there — `session_before_compact` is the one hook
 that announces one in advance, and only for the compaction case;
 `agent_settled` is the only event that fires exactly once per logical run. The
-gateway's own model is flat (session -> turn -> tool) and assigns its own
+gateway assigns its own
 monotonic turn index, so the extension sends `attempt_index` and a
 session-monotonic `turn_seq` on every attributable hook — they are the only way
 to recover which attempt a turn or tool call belonged to.
@@ -386,11 +398,8 @@ call id, name, arguments, result and metadata and discard the payload entirely,
 so without it the two keys would be accepted on the wire and then dropped. Read
 them from `metadata` on scopes and spans, and from either place on marks.
 
-The consequence is worth stating plainly: **re-entry is not nested.** The
-gateway model stays flat and gains no attempt level, because that model is
-shared with Codex and Claude Code, which have no equivalent concept. Two
-attempts of one prompt appear as more turns under one session, distinguished by
-`attempt_index` — not as two subtrees.
+Two attempts of one prompt appear as turns in the same session. Each turn's
+`attempt_index` identifies the attempt it belongs to.
 
 **Known limitation.** The counters live in the extension factory's closure and
 pi re-runs the factory on `/reload` with `moduleCache: false`, while the session
@@ -450,14 +459,15 @@ which is why only results are bounded.
 The ceiling is therefore the gateway's, not the extension's:
 `gateway.max_hook_payload_bytes`, 20 MiB by default. A post above it is rejected
 with HTTP 413 before any event exists, so the call is decided by
-`NEMO_RELAY_PI_FAIL` — under `open` it runs ungated, leaving a span synthesized
-from `tool_execution_end` with no arguments. Model-authored arguments do not
+`NEMO_RELAY_PI_FAIL` — under `open` it runs ungated, and Relay records a completion mark if it receives
+`tool_execution_end`. Model-authored arguments do not
 approach that ceiling; if some tool ever does, raise the gateway limit rather
 than cutting the arguments.
 
 **Subagents.** pi ships no nested-agent hook of its own — the extension has
 nothing to derive a subagent id from — so `subagent_start` / `subagent_end` are
-empty for pi and every tool span parents to the turn. The multi-process case is
+empty for pi. A tool span parents to the active tool identified by
+`parent_tool_call_id`, or to the turn when no tool parent is resolved. The multi-process case is
 worth stating separately: a child pi process running this extension resolves its
 *own* session id and posts under it, so it does not appear as a subagent of the
 parent. It appears as an unrelated session.

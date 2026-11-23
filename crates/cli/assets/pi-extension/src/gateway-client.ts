@@ -1,7 +1,7 @@
 // SPDX-FileCopyrightText: Copyright (c) 2026, NVIDIA CORPORATION & AFFILIATES. All rights reserved.
 // SPDX-License-Identifier: Apache-2.0
 
-import { execFile } from 'node:child_process';
+import { execFile, spawn, type ChildProcessWithoutNullStreams } from 'node:child_process';
 import { randomUUID } from 'node:crypto';
 // pi's /reload replaces modules while retaining the session. Keep its owner identity
 // on the process global so reloading cannot strand the authenticated session.
@@ -67,6 +67,8 @@ export type HookFault = Extract<HookOutcome, { kind: 'fault' }>;
 export type GatewayConfig = {
   /** Relay executable used for authenticated hook forwarding. */
   relayCommand?: string;
+  /** Set by the launcher when the Relay executable supports framed forwarding. */
+  streamHooks?: boolean;
   /** Stable identity for this extension client, signed by the Relay subprocess. */
   clientId?: string;
   /** Base URL of the gateway, e.g. `http://127.0.0.1:4040`. */
@@ -87,6 +89,128 @@ export type GatewayConfig = {
 };
 
 const GUARDRAIL_REJECTION_TYPE = 'nemo_relay_guardrail_rejected';
+// A bounded 1 MiB gateway body can expand sixfold inside the JSON envelope.
+const MAX_FORWARD_OUTPUT_BYTES = 8 * 1024 * 1024;
+const STREAM_IDLE_MS = 5_000;
+
+class HookForwardStream {
+  readonly child: ChildProcessWithoutNullStreams;
+  closed = false;
+  private pending: {
+    resolve: (value: string) => void;
+    reject: (error: Error) => void;
+    timer: ReturnType<typeof setTimeout>;
+  } | undefined;
+  private chunks: Buffer[] = [];
+  private size = 0;
+  private stderr = '';
+  private idle?: ReturnType<typeof setTimeout>;
+
+  constructor(command: string, args: string[]) {
+    this.child = spawn(command, [...args, '--pi-extension-stream'], { windowsHide: true });
+    this.child.on('error', (error) => this.close(error));
+    this.child.on('close', () => this.close(new Error(this.stderr.trim() || 'hook forward exited')));
+    this.child.stdin.on('error', (error) => this.close(error));
+    this.child.stderr.setEncoding('utf8');
+    this.child.stderr.on('data', (chunk: string) => {
+      // Drain all diagnostics, retaining only the tail for transport failures.
+      // Dropping the prefix can leave the low surrogate of a split pair.
+      this.stderr = (this.stderr + chunk).slice(-4_096).replace(/^[\uDC00-\uDFFF]/u, '');
+    });
+    this.child.stdout.on('data', (chunk: Buffer) => this.read(chunk));
+  }
+
+  send(input: string, timeoutMs: number): Promise<string> {
+    if (this.pending) return Promise.reject(new Error('a Pi hook is already in flight'));
+    clearTimeout(this.idle);
+    this.stderr = '';
+    return new Promise((resolve, reject) => {
+      const timer = setTimeout(() => {
+        this.close(Object.assign(new Error('hook forward timed out'), { killed: true, signal: 'SIGKILL' }));
+      }, timeoutMs);
+      this.pending = { resolve, reject, timer };
+      this.child.stdin.write(input + '\n');
+    });
+  }
+
+  private read(chunk: Buffer): void {
+    if (this.closed) return;
+    const pending = this.pending;
+    const end = chunk.indexOf(10);
+    if (!pending || (end !== -1 && end !== chunk.length - 1)) {
+      this.close(new Error('hook forward returned an unexpected response frame'));
+      return;
+    }
+    const data = end === -1 ? chunk : chunk.subarray(0, end);
+    this.size += data.length;
+    if (this.size > MAX_FORWARD_OUTPUT_BYTES) {
+      this.close(Object.assign(new Error('hook forward output exceeded the output limit'), {
+        code: 'ERR_CHILD_PROCESS_STDIO_MAXBUFFER',
+      }));
+      return;
+    }
+    this.chunks.push(data);
+    if (end === -1) return;
+    const raw = Buffer.concat(this.chunks, this.size).toString('utf8');
+    this.chunks = [];
+    this.size = 0;
+    this.pending = undefined;
+    clearTimeout(pending.timer);
+    // Retire idle helpers even when a host omits its session_shutdown hook.
+    this.idle = setTimeout(() => this.close(), STREAM_IDLE_MS);
+    pending.resolve(raw);
+  }
+
+  close(error = new Error('hook forward closed')): void {
+    if (this.closed) return;
+    this.closed = true;
+    clearTimeout(this.idle);
+    if (this.pending) {
+      clearTimeout(this.pending.timer);
+      this.pending.reject(error);
+      this.pending = undefined;
+    }
+    this.chunks = [];
+    this.child.kill('SIGKILL');
+  }
+}
+
+const streams = new WeakMap<GatewayConfig, HookForwardStream>();
+
+export function closeHookStream(config: GatewayConfig): void {
+  streams.get(config)?.close();
+  streams.delete(config);
+}
+
+function forwardHook(
+  config: GatewayConfig,
+  args: string[],
+  input: string,
+): Promise<string> {
+  const command = config.relayCommand ?? process.env.NEMO_RELAY_PI_COMMAND ?? 'nemo-relay';
+  if (config.streamHooks) {
+    let stream = streams.get(config);
+    if (!stream || stream.closed) {
+      stream = new HookForwardStream(command, args);
+      streams.set(config, stream);
+    }
+    return stream.send(input, config.timeoutMs);
+  }
+  return new Promise((resolve, reject) => {
+    const child = execFile(command, args, {
+      timeout: config.timeoutMs,
+      maxBuffer: MAX_FORWARD_OUTPUT_BYTES,
+      killSignal: 'SIGKILL',
+      windowsHide: true,
+      encoding: 'utf8',
+    }, (error, stdout, stderr) => {
+      if (error) reject(Object.assign(error, { detail: stderr.trim() || error.message }));
+      else resolve(stdout);
+    });
+    child.stdin?.on('error', () => undefined);
+    child.stdin?.end(input);
+  });
+}
 
 /**
  * Post one hook and wait for the verdict.
@@ -107,24 +231,13 @@ export async function postHook(
   ];
   if (process.env.NEMO_RELAY_PROXY_CREDENTIAL) args.push('--transparent-run');
   try {
-    const raw = await new Promise<string>((resolve, reject) => {
-      const child = execFile(config.relayCommand ?? process.env.NEMO_RELAY_PI_COMMAND ?? 'nemo-relay', args, {
-        timeout: config.timeoutMs,
-        // A bounded 1 MiB gateway body can expand sixfold inside the JSON envelope.
-        maxBuffer: 8 * 1024 * 1024,
-        killSignal: 'SIGKILL',
-        windowsHide: true,
-        encoding: 'utf8',
-      }, (error, stdout, stderr) => {
-        if (error) reject(Object.assign(error, { detail: stderr.trim() || error.message }));
-        else resolve(stdout);
-      });
-      child.stdin?.on('error', () => undefined);
-      child.stdin?.end(JSON.stringify({ session_id: config.sessionId, ...payload }));
-    });
-    let envelope: { status?: unknown; body?: unknown };
+    const raw = await forwardHook(config, args, JSON.stringify({ session_id: config.sessionId, ...payload }));
+    let envelope: { status?: unknown; body?: unknown; transportError?: unknown };
     try { envelope = JSON.parse(raw); }
     catch { return { kind: 'fault', origin: 'response', detail: 'hook forward returned an unreadable response' }; }
+    if (config.streamHooks && typeof envelope?.transportError === 'string') {
+      return { kind: 'fault', origin: 'transport', detail: `gateway request failed: ${envelope.transportError}` };
+    }
     if (!envelope || typeof envelope.status !== 'number' || !Number.isInteger(envelope.status)
       || envelope.status < 200 || envelope.status > 599 || typeof envelope.body !== 'string') {
       return { kind: 'fault', origin: 'response', detail: 'hook forward returned an invalid response' };
@@ -243,6 +356,7 @@ export function configFromEnv(sessionId: string): GatewayConfig {
   return {
     url,
     relayCommand: process.env.NEMO_RELAY_PI_COMMAND ?? 'nemo-relay',
+    streamHooks: process.env.NEMO_RELAY_PI_HOOK_STREAM === '1',
     clientId: fallbackClientId,
     timeoutMs,
     onFault: process.env.NEMO_RELAY_PI_FAIL === 'closed' ? 'closed' : 'open',

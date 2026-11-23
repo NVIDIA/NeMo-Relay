@@ -9,10 +9,10 @@
  * misrepresents one of them, and preemption is exactly what these tests exist
  * to pin.
  *
- * | Hook | pi's rule | Catches? |
+ * | Hook | Pi's rule | Handler errors |
  * |---|---|---|
- * | `tool_call` | Runs **every** handler, keeps the **last** truthy result, and returns early **only** on `{block: true}` | No — an exception propagates |
- * | `user_bash` | Returns the **first** truthy result and stops | Yes — a throw fails *open* |
+ * | `tool_call` | Runs **every** handler, keeps the **last** truthy result, and returns early **only** on `{block: true}` | Exceptions propagate |
+ * | `user_bash` | Accepts the first valid result or operations override | Errors and invalid results abort the command |
  *
  * So an earlier extension preempts the tool gate only by *blocking*; a
  * non-blocking result from one does not stop us, it is simply overwritten by
@@ -27,10 +27,16 @@ import { mock } from 'node:test';
 
 const fixture = fileURLToPath(new URL('./fixtures/hook-forward.mjs', import.meta.url));
 const realExecFile = childProcess.execFile;
+const realSpawn = childProcess.spawn;
 mock.method(childProcess, 'execFile', (command, args, options, callback) =>
   command === fixture
     ? realExecFile(process.execPath, [fixture, ...args], options, callback)
     : realExecFile(command, args, options, callback),
+);
+mock.method(childProcess, 'spawn', (command, args, options) =>
+  command === fixture
+    ? realSpawn(process.execPath, [fixture, ...args], options)
+    : realSpawn(command, args, options),
 );
 syncBuiltinESMExports();
 process.env.NEMO_RELAY_PI_COMMAND = fixture;
@@ -126,13 +132,20 @@ export function load(extension, options = {}) {
     let last;
     for (const handler of handlers.get(name) ?? []) {
       const result = await handler({ type: name, ...event }, ctx);
-      if (!result) continue;
       if (name === 'user_bash') {
-        // First truthy result wins and stops iteration. `{}` is truthy, so an
-        // allow must be `undefined` or it silently preempts every extension
-        // behind it while deciding nothing.
+        if (result === undefined) continue;
+        const bash = result?.result;
+        const validResult = typeof bash?.output === 'string' && 'exitCode' in bash &&
+          (bash.exitCode === undefined || typeof bash.exitCode === 'number') &&
+          typeof bash.cancelled === 'boolean' && typeof bash.truncated === 'boolean' &&
+          (bash.fullOutputPath === undefined || typeof bash.fullOutputPath === 'string');
+        if (!(validResult && result.operations === undefined) &&
+            !(typeof result?.operations?.exec === 'function' && bash === undefined)) {
+          throw new Error('Invalid user_bash handler result');
+        }
         return result;
       }
+      if (!result) continue;
       if (name === 'tool_call') {
         // Every handler runs; only a block short-circuits. A non-blocking
         // truthy result does not preempt -- it is overwritten by whoever
