@@ -372,6 +372,9 @@ pub(crate) fn push_annotated_input_messages(
                 Some(tool_result_content(output)),
                 Some(call_id.as_str()),
             ),
+            Message::ProviderNative { .. } if let Some(role) = message.native_message_role() => {
+                (role, message_view_text(message.content_view()), None)
+            }
             Message::ProviderNative { value, .. } => (
                 value
                     .get("role")

@@ -434,6 +434,34 @@ fn normalized_message_text_projection_excludes_native_reasoning_tools_and_media(
     );
 }
 
+#[test]
+fn native_chat_assistant_history_projects_literal_content_and_refusal() {
+    use nemo_relay_codecs::openai_chat::OpenAIChatCodec;
+    use nemo_relay_types::{api::llm::LlmRequest, codec::traits::LlmCodec};
+
+    let request = OpenAIChatCodec.decode(&LlmRequest {
+        headers: Default::default(),
+        content: json!({"messages":[{"role":"assistant", "content":r#"{"text":"nested"}"#, "refusal":"no"}]}),
+    }).unwrap();
+    assert!(matches!(
+        request.messages.as_slice(),
+        [Message::ProviderNative { .. }]
+    ));
+    let mut attributes = Vec::new();
+    push_annotated_request_attributes(&mut attributes, &request);
+    let attributes = attr_map(&attributes);
+    assert_attr(
+        &attributes,
+        "llm.input_messages.0.message.role",
+        "assistant",
+    );
+    assert_attr(
+        &attributes,
+        "llm.input_messages.0.message.content",
+        "{\"text\":\"nested\"}\nno",
+    );
+}
+
 fn assert_normalized_message_text_projection(content: MessageContent, expected: Option<&str>) {
     let request = AnnotatedLlmRequest {
         instructions: Some(content.clone()),

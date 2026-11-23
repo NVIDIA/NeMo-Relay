@@ -595,11 +595,11 @@ impl<'a> MessageView<'a> {
 }
 
 impl Message {
-    /// Identify message envelopes whose content shape this module understands.
+    /// Return the role of a recognized provider-native message envelope.
     ///
     /// Keep selection independent of content availability so textless native
     /// messages still establish the same boundary as portable messages.
-    pub(super) fn native_message_role(&self) -> Option<&str> {
+    pub fn native_message_role(&self) -> Option<&str> {
         let Self::ProviderNative {
             provider,
             kind,
