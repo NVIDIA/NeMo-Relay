@@ -13,6 +13,8 @@ import { readFileSync } from 'node:fs';
 import { isAbsolute } from 'node:path';
 import { createInterface } from 'node:readline';
 
+import { registerChatTransports, type ProviderRegistry, type ChatProvider } from './provider-transport.ts';
+
 const CLIENT_TOKEN_ENV = 'NEMO_RELAY_CLIENT_TOKEN';
 const CLIENT_TOKEN_HEADER = 'x-nemo-relay-client-token';
 const UPSTREAM_BASE_URL_HEADER = 'x-nemo-relay-upstream-base-url';
@@ -67,7 +69,7 @@ type ProviderRedirectDecision =
 type ExtensionContext = {
   cwd: string;
   model?: PiModel;
-  modelRegistry?: { getAll?(): PiModel[] };
+  modelRegistry?: ProviderRegistry;
   sessionManager?: { getSessionId?(): string };
 };
 
@@ -149,6 +151,8 @@ type ExtensionAPI = {
   on(event: 'tool_call', handler: ExtensionHandler<ToolCallEvent, ToolCallResult>): void;
   on(event: 'user_bash', handler: ExtensionHandler<UserBashEvent, UserBashResult>): void;
   on(event: 'model_select', handler: ExtensionHandler<{ type: 'model_select'; model: PiModel }>): void;
+  on(event: 'context_with_system', handler: ExtensionHandler<{ type: 'context_with_system' }>): void;
+  registerProvider(provider: ChatProvider): void;
   registerProvider(name: string, config: { baseUrl: string; headers: Record<string, string> }): void;
 };
 
@@ -161,6 +165,7 @@ type Runtime = {
 export default function managedNemoRelayPi(pi: ExtensionAPI): void {
   let runtimePromise: Promise<Runtime> | undefined;
   const redirectedProviders = new Set<string>();
+  const reportedDispatches = new Set<string>();
   let hookQueue: Promise<unknown> = Promise.resolve();
   let attemptIndex = 0;
   let turnSequence = 0;
@@ -228,8 +233,26 @@ export default function managedNemoRelayPi(pi: ExtensionAPI): void {
     active: Runtime,
     model: PiModel | undefined,
     context: ExtensionContext,
-    source: 'session_start' | 'model_select',
+    source: 'session_start' | 'model_select' | 'provider_request',
   ): void {
+    if (registerChatTransports(
+      context.modelRegistry, model, redirectedProviders,
+      (provider) => pi.registerProvider(provider),
+      (physical) => {
+        const key = JSON.stringify([physical.provider, physical.id, physical.baseUrl]);
+        if (!reportedDispatches.has(key)) {
+          reportedDispatches.add(key);
+          observe(payload(context, 'model_redirect', {
+            source: 'provider_request', outcome: 'redirect', provider: physical.provider,
+            model_id: physical.id, model_api: physical.api, ...attribution(),
+          }));
+        }
+        return {
+          gateway: active.config.daemonAddress,
+          headers: { [CLIENT_TOKEN_HEADER]: active.credential, [UPSTREAM_BASE_URL_HEADER]: physical.baseUrl },
+        };
+      },
+    )) return;
     if (!model || redirectedProviders.has(model.provider)) return;
     const catalog = context.modelRegistry?.getAll?.();
     const decision = decideManagedProviderRedirect(model, catalog);
@@ -303,6 +326,14 @@ export default function managedNemoRelayPi(pi: ExtensionAPI): void {
   pi.on('model_select', async (event, context) => {
     const active = await runtime();
     registerManagedProvider(active, event.model, context, 'model_select');
+  });
+
+  // The virtual router may register new providers while preparing this request.
+  pi.on('context_with_system', async (_event, context) => {
+    const model = context.model;
+    if (model?.api === 'pi-virtual') {
+      registerManagedProvider(await runtime(), model, context, 'provider_request');
+    }
   });
 
   pi.on('session_shutdown', async (event, context) => {

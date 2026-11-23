@@ -31,6 +31,8 @@
  * not a type error.
  */
 
+import type { ChatProvider, ProviderRegistry } from './provider-transport.ts';
+
 /** Fired when an agent loop starts. Carries no run identifier. */
 export type AgentStartEvent = { type: 'agent_start' };
 
@@ -227,7 +229,7 @@ export type ExtensionContext = {
    * Optional because a caller may not supply one; without it the check degrades
    * to per-model, which is unsound for a provider that mixes API families.
    */
-  modelRegistry?: { getAll(): PiModel[] };
+  modelRegistry?: ProviderRegistry;
 };
 
 export type ExtensionHandler<TEvent, TResult = void> = (
@@ -251,6 +253,7 @@ export type ExtensionAPI = {
   on(event: 'tool_call', handler: ExtensionHandler<ToolCallEvent, ToolCallEventResult>): void;
   on(event: 'user_bash', handler: ExtensionHandler<UserBashEvent, UserBashEventResult>): void;
   on(event: 'model_select', handler: ExtensionHandler<ModelSelectEvent>): void;
+  on(event: 'context_with_system', handler: ExtensionHandler<{ type: 'context_with_system' }>): void;
 
   /**
    * Register or override a model provider.
@@ -261,6 +264,7 @@ export type ExtensionAPI = {
    * queued and applied once the runner binds its context, so calling it from a
    * factory is safe.
    */
+  registerProvider(provider: ChatProvider): void;
   registerProvider(
     name: string,
     config: { baseUrl?: string; headers?: Record<string, string> },

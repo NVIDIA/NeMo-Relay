@@ -54,6 +54,7 @@
  * - `NEMO_RELAY_PI_REDIRECT`     `force` to skip the upstream check, `off` to disable
  * - `NEMO_RELAY_PI_{OPENAI,ANTHROPIC}_UPSTREAM`  what the gateway forwards to
  */
+import { registerChatTransports } from './src/provider-transport.ts';
 import {
   type GatewayConfig,
   configFromEnv,
@@ -213,6 +214,8 @@ export default function nemoRelayExtension(pi: ExtensionAPI): void {
 
   /** Providers already pointed at the gateway, so the redirect is idempotent. */
   const redirectedProviders = new Set<string>();
+  const transportProviders = new Set<string>();
+  const reportedRoutes = new Set<string>();
   /** Session id the current registrations carry, so a replacement can invalidate them. */
   let registeredSessionKey: string | null = null;
   let redirect: RedirectConfig | null = null;
@@ -257,8 +260,42 @@ export default function nemoRelayExtension(pi: ExtensionAPI): void {
     const sessionKey = safeSessionId(ctx);
     if (registeredSessionKey !== null && registeredSessionKey !== sessionKey) {
       redirectedProviders.clear();
+      reportedRoutes.clear();
     }
     registeredSessionKey = sessionKey;
+    const config = redirect;
+    if (config.mode !== 'off' && ctx.model && registerChatTransports(
+      ctx.modelRegistry, ctx.model, transportProviders,
+      (provider) => pi.registerProvider(provider),
+      (model) => {
+        const decision = decideRedirect(model, config, new Set());
+        const key = JSON.stringify([model.provider, model.id, model.api, model.baseUrl, decision.kind]);
+        if (!reportedRoutes.has(key)) {
+          reportedRoutes.add(key);
+          emit(ctx, {
+            hook_event_name: 'model_redirect', source: 'provider_request', outcome: decision.kind,
+            reason: decision.reason, provider: model.provider, model_api: model.api, model_id: model.id,
+            ...(decision.kind === 'redirect' ? { upstream: decision.upstream } : { code: decision.code }),
+            ...attribution(),
+          });
+        }
+        if (decision.kind !== 'redirect') return undefined;
+        return {
+          gateway: config.gatewayUrl,
+          headers: {
+            'x-nemo-relay-session-id': registeredSessionKey ?? sessionKey,
+            ...(config.proxyToken ? { 'x-nemo-relay-proxy-token': config.proxyToken } : {}),
+            ...(decision.namedUpstream ? { 'x-nemo-relay-upstream-base-url': decision.namedUpstream } : {}),
+            // A configured match already ends at Pi's base. The gateway only needs
+            // to append the SDK's suffix, even when that base has no /v1.
+            ...(!decision.namedUpstream && config.mode === 'match' && model.api !== 'anthropic-messages'
+              ? { 'x-nemo-relay-pi-exact-path': '1' } : {}),
+          },
+        };
+      },
+    )) {
+      return;
+    }
     const decision = decideRedirect(
       ctx.model,
       redirect,
@@ -342,6 +379,12 @@ export default function nemoRelayExtension(pi: ExtensionAPI): void {
    */
   pi.on('model_select', async (_event: ModelSelectEvent, ctx: ExtensionContext) => {
     applyRedirect(ctx, 'model_select');
+  });
+
+  // Pi resolves the virtual route before assembling request context. The router can
+  // register a physical provider in that step without changing the selected model.
+  pi.on('context_with_system', async (_event, ctx) => {
+    if (ctx.model?.api === 'pi-virtual') applyRedirect(ctx, 'provider_request');
   });
 
   /**

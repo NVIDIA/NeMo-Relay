@@ -2,7 +2,7 @@
 // SPDX-License-Identifier: Apache-2.0
 
 import assert from 'node:assert/strict';
-import { chmod, mkdtemp, readFile, writeFile } from 'node:fs/promises';
+import { chmod, copyFile, mkdtemp, readFile, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { pathToFileURL } from 'node:url';
@@ -40,6 +40,7 @@ async function loadLifecycleTestApi() {
   source += '\nexport { managedNemoRelayPi as installManagedNemoRelayPi };\n';
   const directory = await mkdtemp(join(tmpdir(), 'nemo-relay-pi-module-'));
   const modulePath = join(directory, 'index.ts');
+  await copyFile(new URL('./provider-transport.ts', sourceUrl), join(directory, 'provider-transport.ts'));
   await writeFile(modulePath, source);
   return import(pathToFileURL(modulePath).href);
 }
