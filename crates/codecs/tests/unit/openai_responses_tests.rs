@@ -2039,6 +2039,49 @@ fn responses_completed_refusal_and_arguments_replace_deltas_in_terminal_fallback
 }
 
 #[test]
+fn responses_empty_added_item_preserves_snapshot_until_item_done() {
+    let snapshot = json!({"type":"message","id":"msg","content":[
+        {"type":"output_text","text":"already observed","annotations":[]}
+    ]});
+    let empty = json!({"type":"message","id":"msg","content":[]});
+    for done in [false, true] {
+        let codec = OpenAIResponsesStreamingCodec::new();
+        let mut collect = codec.collector();
+        collect(json!({"type":"response.in_progress","response":{"output":[snapshot]}})).unwrap();
+        collect(json!({"type":"response.output_item.added","output_index":0,"item":empty}))
+            .unwrap();
+        if done {
+            collect(json!({"type":"response.output_item.done","output_index":0,"item":empty}))
+                .unwrap();
+        }
+        let expected = if done { &empty } else { &snapshot };
+        assert_eq!(&codec.finalizer()()["output"][0], expected);
+    }
+}
+
+#[test]
+fn responses_snapshot_survives_empty_fields_and_sparse_placeholders() {
+    let codec = OpenAIResponsesStreamingCodec::new();
+    let mut collect = codec.collector();
+    let message = json!({"type":"message","content":[{"type":"output_text","text":"keep"}]});
+    let call = json!({"type":"function_call","name":"tool","arguments":"original"});
+    let placeholder = json!({"type":"message","content":[]});
+    collect(json!({"type":"response.in_progress","response":{"output":[message,call]}})).unwrap();
+    collect(json!({"type":"response.output_item.added","output_index":0,
+        "item":{"type":"message","content":[{"type":"output_text","text":""}]}}))
+    .unwrap();
+    collect(json!({"type":"response.output_item.added","output_index":1,
+        "item":{"type":"function_call","name":"tool","arguments":""}}))
+    .unwrap();
+    collect(json!({"type":"response.output_item.added","output_index":100,"item":placeholder}))
+        .unwrap();
+    assert_eq!(
+        codec.finalizer()()["output"],
+        json!([message, call, placeholder])
+    );
+}
+
+#[test]
 fn responses_partial_items_override_stale_snapshots_without_losing_other_items() {
     let codec = OpenAIResponsesStreamingCodec::new();
     let mut collect = codec.collector();

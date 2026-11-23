@@ -1936,6 +1936,46 @@ impl ResponsesStreamingItem {
         self.arguments_complete = done;
     }
 
+    fn can_replace_snapshot(&self) -> bool {
+        if self.complete || self.arguments_complete {
+            return true;
+        }
+        let has_text = |value: &Json, field: &str| {
+            value
+                .get(field)
+                .and_then(Json::as_str)
+                .is_some_and(|s| !s.is_empty())
+        };
+        let item_payload = match self.item.get("type").and_then(Json::as_str) {
+            Some("function_call") => has_text(&self.item, "arguments"),
+            Some("custom_tool_call") => has_text(&self.item, "input"),
+            Some("output_text") => has_text(&self.item, "text"),
+            Some("reasoning") => self
+                .item
+                .get("summary")
+                .and_then(Json::as_array)
+                .is_some_and(|parts| !parts.is_empty()),
+            _ => false,
+        };
+        item_payload
+            || self
+                .content
+                .iter()
+                .flat_map(|parts| parts.values())
+                .any(|part| {
+                    // An empty output_text part can announce a slot before any text arrives.
+                    // Completed parts and explicit refusals (including "") carry content.
+                    part.complete
+                        || match part.part.get("type").and_then(Json::as_str) {
+                            Some("output_text") => has_text(&part.part, "text"),
+                            Some("refusal") => {
+                                part.part.get("refusal").is_some_and(Json::is_string)
+                            }
+                            kind => kind.is_some(),
+                        }
+                })
+    }
+
     fn finalize(mut self) -> Json {
         if let Some(content) = self.content {
             self.item["content"] =
@@ -2044,21 +2084,21 @@ impl OpenAIResponsesStreamingState {
     fn finalize(self) -> Json {
         let mut output = self.response.unwrap_or_default();
         if !self.items.is_empty() {
-            // Retain snapshot-only items while replacing stale provisional entries by index.
-            // A nonempty terminal snapshot has already cleared `items` and stays authoritative.
-            let mut items: std::collections::BTreeMap<usize, Json> = match output.remove("output") {
-                Some(Json::Array(items)) => items.into_iter().enumerate().collect(),
-                _ => Default::default(),
+            let mut items = match output.remove("output") {
+                Some(Json::Array(items)) => items,
+                _ => Vec::new(),
             };
-            items.extend(
-                self.items
-                    .into_iter()
-                    .map(|(index, item)| (index, item.finalize())),
-            );
-            output.insert(
-                "output".to_string(),
-                Json::Array(items.into_values().collect()),
-            );
+            // Collected indices are sorted. Append sparse fallback items without padding.
+            for (index, item) in self.items {
+                if let Some(snapshot) = items.get_mut(index) {
+                    if item.can_replace_snapshot() {
+                        *snapshot = item.finalize();
+                    }
+                } else {
+                    items.push(item.finalize());
+                }
+            }
+            output.insert("output".to_string(), Json::Array(items));
         }
         Json::Object(output)
     }
