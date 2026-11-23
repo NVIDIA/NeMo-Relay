@@ -604,6 +604,7 @@ pub(super) enum OwnershipEvidence {
     AgentFallback,
     AmbiguousFallback,
     HarnessInternal,
+    MainRequestClass,
 }
 
 impl OwnershipEvidence {
@@ -628,7 +629,10 @@ impl OwnershipEvidence {
 
     pub(super) fn status(self) -> &'static str {
         match self {
-            Self::GatewayHeader | Self::HookPayload | Self::RootRequestPayload => "explicit",
+            Self::GatewayHeader
+            | Self::HookPayload
+            | Self::RootRequestPayload
+            | Self::MainRequestClass => "explicit",
             Self::SingleHint | Self::SingleHintUnavailableOwner => "single_hint",
             Self::MatchedHint | Self::MatchedHintUnavailableOwner => "matched_hint",
             Self::RequestAffinity => "request_affinity",
@@ -646,7 +650,7 @@ impl OwnershipEvidence {
             Self::HookPayload => Some("hook_payload"),
             Self::RootRequestPayload | Self::RequestAffinity => Some("request_payload"),
             Self::Sticky(source) => source.metadata_source(),
-            Self::HarnessInternal => Some("claude_code_request_class"),
+            Self::HarnessInternal | Self::MainRequestClass => Some("claude_code_request_class"),
             _ => None,
         }
     }

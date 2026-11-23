@@ -2331,6 +2331,8 @@ impl Session {
                 }
                 let mut owner = if request_class.is_internal() {
                     self.internal_llm_owner(&start)
+                } else if request_class == RequestClass::Main {
+                    self.main_llm_owner(&start)
                 } else {
                     self.resolve_llm_owner(&start)
                 };
@@ -4042,6 +4044,18 @@ impl Session {
         LlmOwnerResolution {
             parent: self.root_work_scope(),
             decision: OwnershipDecision::new(None, OwnershipEvidence::HarnessInternal),
+            hint: None,
+            metadata: Value::Null,
+        }
+    }
+
+    fn main_llm_owner(&mut self, start: &LlmGatewayStart) -> LlmOwnerResolution {
+        if let Some(resolution) = self.explicit_llm_owner(start) {
+            return resolution;
+        }
+        LlmOwnerResolution {
+            parent: self.root_work_scope(),
+            decision: OwnershipDecision::new(None, OwnershipEvidence::MainRequestClass),
             hint: None,
             metadata: Value::Null,
         }
