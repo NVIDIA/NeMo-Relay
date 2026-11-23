@@ -120,14 +120,14 @@ events. Other Relay API calls are invalid within these callbacks. This includes:
 
 Cancel and close managed streams from outside owned callbacks.
 
-Pass a `NemoRelayLlmStreamExecCb` factory to the existing
+Pass a `NemoRelayOptionalLlmStreamExecCb` factory to the existing
 `nemo_relay_llm_stream_call_execute` operation, with a null single-value
 callback. The factory returns its owned source and transfers ownership to Relay.
 The single-value provider route remains available for callers that produce one
 JSON value.
 
 Global, scope-local, and plugin-context stream intercept registrations accept a
-`NemoRelayLlmStreamExecInterceptCb`. It receives a continuation that returns a
+`NemoRelayOptionalLlmStreamExecInterceptCb`. It receives a continuation that returns a
 complete source. Return that source or a replacement to Relay. Close and free
 any owned source that is discarded. To open the upstream source after the
 interceptor returns, retain its next-context with

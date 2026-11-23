@@ -112,6 +112,7 @@ import "C"
 
 import (
 	"bytes"
+	"context"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -302,6 +303,7 @@ type LLMResponseContext = LLMSanitizeResponseContext
 // ResponseCodec is available for unary execution and nil for streaming execution.
 // All capabilities expire when the callback returns.
 type LLMExecutionContext struct {
+	callContext   context.Context
 	recorder      unsafe.Pointer
 	invocation    *llmSanitizeCodecInvocation
 	RequestCodec  LLMRequestContext
@@ -462,6 +464,9 @@ func (codec *LLMRequestSanitizeCodec) Decode(request LLMRequest) (json.RawMessag
 	}
 	defer release()
 	request = request.withDefaults()
+	if !json.Valid(request.Headers) || !json.Valid(request.Content) {
+		return nil, &RelayError{Code: StatusInvalidJSON, Message: "invalid LLM request JSON"}
+	}
 	cHeaders := C.CString(string(request.Headers))
 	defer C.free(unsafe.Pointer(cHeaders))
 	cContent := C.CString(string(request.Content))
@@ -492,6 +497,9 @@ func (codec *LLMRequestSanitizeCodec) Encode(annotated json.RawMessage, original
 	}
 	defer release()
 	original = original.withDefaults()
+	if !json.Valid(original.Headers) || !json.Valid(original.Content) || !json.Valid(annotated) {
+		return LLMRequest{}, &RelayError{Code: StatusInvalidJSON, Message: "invalid LLM codec input JSON"}
+	}
 	cHeaders := C.CString(string(original.Headers))
 	defer C.free(unsafe.Pointer(cHeaders))
 	cContent := C.CString(string(original.Content))
@@ -527,6 +535,9 @@ func (codec *LLMResponseSanitizeCodec) Decode(response json.RawMessage) (json.Ra
 		return nil, err
 	}
 	defer release()
+	if !json.Valid(response) {
+		return nil, &RelayError{Code: StatusInvalidJSON, Message: "invalid LLM response JSON"}
+	}
 	cResponse := C.CString(string(response))
 	defer C.free(unsafe.Pointer(cResponse))
 	out, err := callPointer(func() *C.char {
@@ -1211,6 +1222,7 @@ func goLlmStreamExecTrampoline(data unsafe.Pointer, request *C.char) (result *C.
 	defer runtime.KeepAlive(factory)
 	source, err := factory.fn(factory.ctx, json.RawMessage(C.GoString(request)))
 	if err != nil {
+		factory.sources.providerErrors.record(err)
 		setLastErrorMessage(err.Error())
 		return nil
 	}
@@ -1236,9 +1248,13 @@ func goLlmStreamInterceptTrampoline(data unsafe.Pointer, name *C.char, request *
 		}
 	}
 	defer runtime.KeepAlive(sources)
+	callContext := backgroundContext()
+	if sources != nil && sources.factory != nil {
+		callContext = sources.factory.ctx
+	}
 	invocation := newLLMSanitizeCodecInvocation()
 	defer invocation.invalidate()
-	goContext := LLMExecutionContext{recorder: unsafe.Pointer(context.optimization_recorder), invocation: invocation, RequestCodec: llmSanitizeRequestContextFromC(context.request_codec, invocation)}
+	goContext := LLMExecutionContext{callContext: callContext, recorder: unsafe.Pointer(context.optimization_recorder), invocation: invocation, RequestCodec: llmSanitizeRequestContextFromC(context.request_codec, invocation)}
 	retained, err := callPointer(func() *C.FfiLlmStreamContinuation {
 		return C.nemo_relay_stream_continuation_retain((*C.FfiLlmStreamContinuation)(nextContext))
 	})
@@ -1258,6 +1274,9 @@ func goLlmStreamInterceptTrampoline(data unsafe.Pointer, name *C.char, request *
 
 	source, err := fn(json.RawMessage(C.GoString(request)), goContext, goNext)
 	if err != nil {
+		if sources != nil {
+			sources.providerErrors.record(err)
+		}
 		continuation.close()
 		setLastErrorMessage(err.Error())
 		return nil
@@ -1267,7 +1286,7 @@ func goLlmStreamInterceptTrampoline(data unsafe.Pointer, name *C.char, request *
 		return nil
 	}
 	source = &continuationSource{LLMStreamSource: source, continuation: continuation}
-	result, err = foreignStreamSource(source, backgroundContext(), sources)
+	result, err = foreignStreamSource(source, callContext, sources)
 	if err != nil {
 		setLastErrorMessage(err.Error())
 		return nil
@@ -1384,6 +1403,9 @@ type nativeStreamContinuation struct {
 }
 
 func (c *nativeStreamContinuation) open(request json.RawMessage) (LLMStreamSource, error) {
+	if !json.Valid(request) {
+		return nil, &RelayError{Code: StatusInvalidJSON, Message: "invalid stream continuation request JSON"}
+	}
 	c.mu.RLock()
 	defer c.mu.RUnlock()
 	if c.ptr == nil {

@@ -408,7 +408,8 @@ error includes the native code and message. Use these Go helpers to inspect it:
 
 Pointer-returning C calls and stream iteration failures provide a message
 without a status code. These errors use `StatusUnknown` and match
-`ErrUnknownStatus`. Go validation can return other error types.
+`ErrUnknownStatus`. Go validation can return other error types. Context-aware
+provider errors keep their Go error causes.
 
 ## Requests and Handle Fields
 

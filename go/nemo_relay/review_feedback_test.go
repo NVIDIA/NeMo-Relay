@@ -73,6 +73,67 @@ func TestJSONInputsRejectNULTrailers(t *testing.T) {
 				}
 			})
 		}
+		if err := RegisterLlmExecutionIntercept("borrowed-json-inputs", 0, func(input json.RawMessage, ctx LLMExecutionContext, next func(json.RawMessage) (json.RawMessage, error)) (json.RawMessage, error) {
+			reqCodec := ctx.RequestCodec.ResolveCodec()
+			if ctx.ResponseCodec == nil || reqCodec == nil {
+				return nil, errors.New("missing borrowed codec")
+			}
+			resCodec := ctx.ResponseCodec.ResolveCodec()
+			if resCodec == nil {
+				return nil, errors.New("missing response codec")
+			}
+			for name, check := range map[string]func() error{
+				"borrowed decode headers": func() error {
+					_, err := reqCodec.Decode(LLMRequest{Headers: bad(json.RawMessage(`{}`)), Content: request.Content})
+					return err
+				},
+				"borrowed decode content": func() error {
+					_, err := reqCodec.Decode(LLMRequest{Headers: request.Headers, Content: bad(request.Content)})
+					return err
+				},
+				"borrowed encode headers": func() error {
+					_, err := reqCodec.Encode(annotation, LLMRequest{Headers: bad(json.RawMessage(`{}`)), Content: request.Content})
+					return err
+				},
+				"borrowed encode content": func() error {
+					_, err := reqCodec.Encode(annotation, LLMRequest{Headers: request.Headers, Content: bad(request.Content)})
+					return err
+				},
+				"borrowed encode annotation": func() error { _, err := reqCodec.Encode(bad(annotation), request); return err },
+				"borrowed response":          func() error { _, err := resCodec.Decode(bad(json.RawMessage(`{}`))); return err },
+			} {
+				if err := check(); !errors.Is(err, ErrInvalidJSON) {
+					t.Errorf("%s: %v", name, err)
+				}
+			}
+			return next(input)
+		}); err != nil {
+			t.Fatal(err)
+		}
+		defer DeregisterLlmExecutionIntercept("borrowed-json-inputs")
+		if _, err := LlmCallExecute("borrowed-json-inputs", request, func(json.RawMessage) (json.RawMessage, error) { return json.RawMessage(`{}`), nil }, WithLLMCodec(codec), WithLLMResponseCodec(codec)); err != nil {
+			t.Fatal(err)
+		}
+		if err := RegisterLlmStreamExecutionIntercept("continuation-json-inputs", 0, func(input json.RawMessage, _ LLMExecutionContext, next func(json.RawMessage) (LLMStreamSource, error)) (LLMStreamSource, error) {
+			source, err := next(bad(input))
+			if source != nil {
+				_ = source.Close()
+			}
+			if !errors.Is(err, ErrInvalidJSON) {
+				t.Errorf("invalid continuation: %v", err)
+			}
+			return next(input)
+		}); err != nil {
+			t.Fatal(err)
+		}
+		defer DeregisterLlmStreamExecutionIntercept("continuation-json-inputs")
+		stream, err := LlmStreamCallExecute("continuation-json-inputs", request, func(context.Context, json.RawMessage) (LLMStreamSource, error) { return &contractSource{}, nil }, nil, nil)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if err := stream.Close(); err != nil {
+			t.Fatal(err)
+		}
 		if err := EmitEvent("cleared-profile", WithEventCategoryProfile(bad(json.RawMessage(`{}`))), WithEventCategoryProfile(nil)); err != nil {
 			t.Fatal(err)
 		}

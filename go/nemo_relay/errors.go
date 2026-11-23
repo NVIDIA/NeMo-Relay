@@ -3,7 +3,12 @@
 
 package nemo_relay
 
-import "context"
+import (
+	"context"
+	"errors"
+	"strings"
+	"sync"
+)
 
 // StatusCode preserves a status returned by the native FFI. Unknown is used
 // when a pointer-returning API supplies a message without a status code.
@@ -103,3 +108,50 @@ var (
 	ErrInvalidArgument   = statusSentinel(StatusInvalidArgument)
 	ErrCancelled         = statusSentinel(StatusCancelled)
 )
+
+func nativeExecutionError(ctx context.Context, err error) error {
+	if ctx != nil && errors.Is(err, ErrCancelled) && ctx.Err() != nil {
+		return ctx.Err()
+	}
+	return err
+}
+
+// Provider failures cross the FFI as Internal errors. Restore the Go cause only
+// when its message matches the failure selected by the native operation.
+type providerErrorCapture struct {
+	mu     sync.Mutex
+	causes map[string]error
+}
+
+func (capture *providerErrorCapture) record(err error) {
+	if err == nil {
+		return
+	}
+	capture.mu.Lock()
+	defer capture.mu.Unlock()
+	if capture.causes == nil {
+		capture.causes = make(map[string]error)
+	}
+	key := providerErrorMessage(err.Error())
+	capture.causes[key] = errors.Join(capture.causes[key], err)
+}
+
+func (capture *providerErrorCapture) restore(err error) error {
+	var native *RelayError
+	if !errors.As(err, &native) || native.Code != StatusInternal {
+		return err
+	}
+	capture.mu.Lock()
+	defer capture.mu.Unlock()
+	if cause := capture.causes[providerErrorMessage(native.Message)]; cause != nil {
+		return errors.Join(err, cause)
+	}
+	return err
+}
+
+func providerErrorMessage(message string) string {
+	for strings.HasPrefix(message, "internal error: ") {
+		message = strings.TrimPrefix(message, "internal error: ")
+	}
+	return message
+}

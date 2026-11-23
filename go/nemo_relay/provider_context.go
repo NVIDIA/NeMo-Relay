@@ -14,7 +14,7 @@ import (
 // the signal, but must not keep hooks that can refer back to the stream alive.
 type providerContext struct {
 	context.Context
-	signal      context.Context
+	signal      *providerSignal
 	hooks       *providerHooks
 	deadline    time.Time
 	hasDeadline bool
@@ -27,12 +27,36 @@ type providerHooks struct {
 	callbacks map[uint64]func()
 }
 
+// The separate Done channel prevents context from attaching child contexts to
+// the cause carrier. Children use AfterFunc instead, keeping GC cleanup free
+// of callbacks that can retain the managed stream.
+type providerSignal struct {
+	context.Context
+	done chan struct{}
+	once sync.Once
+	err  error
+}
+
+func (signal *providerSignal) Err() error {
+	select {
+	case <-signal.done:
+		return signal.err
+	default:
+		return nil
+	}
+}
+
 func newProviderContext(parent context.Context) (context.Context, context.CancelFunc) {
-	signal, cancelSignal := context.WithCancelCause(context.Background())
+	carrier, cancelCause := context.WithCancelCause(context.Background())
+	signal := &providerSignal{Context: carrier, done: make(chan struct{})}
 	hooks := &providerHooks{callbacks: make(map[uint64]func())}
 	ref := weak.Make(hooks)
-	cancelWithError := func(reason error) {
-		cancelSignal(reason)
+	cancelWithError := func(err, cause error) {
+		signal.once.Do(func() {
+			signal.err = err
+			cancelCause(cause)
+			close(signal.done)
+		})
 		if hooks := ref.Value(); hooks != nil {
 			hooks.mu.Lock()
 			hooks.cancelled = true
@@ -44,20 +68,26 @@ func newProviderContext(parent context.Context) (context.Context, context.Cancel
 			}
 		}
 	}
-	cancel := func() { cancelWithError(context.Canceled) }
-	stopParent := context.AfterFunc(parent, func() { cancelWithError(parent.Err()) })
+	cancel := func() { cancelWithError(context.Canceled, context.Canceled) }
+	stopParent := context.AfterFunc(parent, func() { cancelWithError(parent.Err(), context.Cause(parent)) })
 	deadline, hasDeadline := parent.Deadline()
 	ctx := &providerContext{Context: context.WithoutCancel(parent), signal: signal,
 		hooks: hooks, deadline: deadline, hasDeadline: hasDeadline}
 	if parent.Err() != nil {
-		cancelWithError(parent.Err())
+		cancelWithError(parent.Err(), context.Cause(parent))
 	}
 	return ctx, func() { stopParent(); cancel() }
 }
 
-func (ctx *providerContext) Done() <-chan struct{}       { return ctx.signal.Done() }
-func (ctx *providerContext) Err() error                  { return context.Cause(ctx.signal) }
+func (ctx *providerContext) Done() <-chan struct{}       { return ctx.signal.done }
+func (ctx *providerContext) Err() error                  { return ctx.signal.Err() }
 func (ctx *providerContext) Deadline() (time.Time, bool) { return ctx.deadline, ctx.hasDeadline }
+func (ctx *providerContext) Value(key any) any {
+	if value := ctx.signal.Value(key); value != nil {
+		return value
+	}
+	return ctx.Context.Value(key)
+}
 
 func (ctx *providerContext) AfterFunc(callback func()) func() bool {
 	hooks := ctx.hooks

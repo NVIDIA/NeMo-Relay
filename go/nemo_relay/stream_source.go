@@ -65,9 +65,10 @@ var streamCallbackOwners sync.Map // native callback token -> weak.Pointer[strea
 // without creating a global root. Active reads retain only their source state;
 // they must not retain this owner and its provider factory while blocked.
 type streamSources struct {
-	mu      sync.Mutex
-	states  map[*foreignSourceState]struct{}
-	factory *streamFactory
+	providerErrors providerErrorCapture
+	mu             sync.Mutex
+	states         map[*foreignSourceState]struct{}
+	factory        *streamFactory
 }
 
 func (sources *streamSources) add(state *foreignSourceState) {
@@ -260,11 +261,17 @@ func (fn LLMExecutionInterceptFunc) AsStream() LLMStreamExecutionInterceptFunc {
 	}
 	return func(request json.RawMessage, context LLMExecutionContext, next func(json.RawMessage) (LLMStreamSource, error)) (LLMStreamSource, error) {
 		var tail LLMStreamSource
+		var cleanupErr error
+		readContext := context.callContext
+		if readContext == nil {
+			readContext = backgroundContext()
+		}
 		result, err := fn(request, context, func(request json.RawMessage) (json.RawMessage, error) {
 			if tail != nil {
 				previous := tail
 				tail = nil
 				if err := previous.Close(); err != nil {
+					cleanupErr = errors.Join(cleanupErr, err)
 					return nil, err
 				}
 			}
@@ -273,13 +280,17 @@ func (fn LLMExecutionInterceptFunc) AsStream() LLMStreamExecutionInterceptFunc {
 				return nil, err
 			}
 			tail = stream
-			value, err := stream.Next(backgroundContext())
+			value, err := stream.Next(readContext)
 			if errors.Is(err, io.EOF) {
+				if err := readContext.Err(); err != nil {
+					return nil, err
+				}
 				return json.RawMessage(`null`), nil
 			}
 			return value, err
 		})
 		if err != nil {
+			err = errors.Join(err, cleanupErr)
 			if tail != nil {
 				err = errors.Join(err, tail.Close())
 			}
@@ -316,6 +327,9 @@ func goSourceReadTrampoline(data unsafe.Pointer, output **C.char) (status C.int3
 		return 0
 	}
 	if err != nil {
+		if owner := state.owner.Value(); owner != nil {
+			owner.providerErrors.record(err)
+		}
 		setLastErrorMessage(err.Error())
 		return -1
 	}

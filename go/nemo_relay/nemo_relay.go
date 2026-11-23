@@ -1447,22 +1447,12 @@ func ToolCallExecute(name string, args json.RawMessage, fn ToolExecutionFunc, op
 			o.toolCallID, o.executionOptions.skipStages(), cancellation, &out,
 		)
 	})
-	if o.ctx != nil && o.ctx.Err() != nil {
-		if out != nil {
-			C.nemo_relay_string_free(out)
-		}
-		return ToolExecutionResult{}, o.ctx.Err()
-	}
+
 	if err != nil {
-		return ToolExecutionResult{}, err
+		return ToolExecutionResult{}, nativeExecutionError(o.ctx, err)
 	}
 	result, err := decodeToolExecutionResult([]byte(C.GoString(out)))
-	if o.ctx != nil && o.ctx.Err() != nil {
-		if out != nil {
-			C.nemo_relay_string_free(out)
-		}
-		return ToolExecutionResult{}, o.ctx.Err()
-	}
+
 	if err != nil {
 		C.nemo_relay_string_free(out)
 		return ToolExecutionResult{}, err
@@ -2053,15 +2043,10 @@ func LlmCallExecute(name string, request LLMRequest, fn LLMExecutionFunc, opts .
 		)
 	})
 	o.codecUserData = nil
-	if o.ctx != nil && o.ctx.Err() != nil {
-		if out != nil {
-			C.nemo_relay_string_free(out)
-		}
-		return nil, o.ctx.Err()
-	}
+
 	runtime.KeepAlive(o.responseCodecHandle)
 	if err != nil {
-		return nil, err
+		return nil, nativeExecutionError(o.ctx, err)
 	}
 	result := json.RawMessage(C.GoString(out))
 	C.nemo_relay_string_free(out)
@@ -2073,13 +2058,13 @@ func LlmCallExecute(name string, request LLMRequest, fn LLMExecutionFunc, opts .
 // request. Sanitize-request guardrails affect the emitted Start event payload,
 // while sanitize-response guardrails affect only the aggregated End event
 // payload. If accepted, it runs the remaining middleware pipeline and returns
-// an [LlmStream] that yields individual SSE (Server-Sent Event) chunks.
-// Stream execution intercepts are applied to each chunk as it is consumed.
+// an [LlmStream] that yields JSON chunks. Stream execution intercepts open or
+// wrap a complete source. A source can transform each chunk in its Next method.
 // The caller must call [LlmStream.Next] repeatedly until [io.EOF] is
 // returned, or call [LlmStream.Close] to stop early. Close waits for producer
 // cleanup, finalizes the partial response, and returns any cleanup error.
 //
-// The optional collector callback is invoked with each intercepted chunk string,
+// The optional collector callback receives each JSON chunk,
 // allowing the caller to accumulate chunks for aggregation. The optional
 // finalizer callback is invoked once when the stream is exhausted or closed
 // early and returns aggregated JSON plus an error.
@@ -2171,15 +2156,9 @@ func LlmStreamCallExecute(name string, request LLMRequest, fn LLMStreamExecution
 		)
 	})
 	o.codecUserData = nil
-	if o.ctx != nil && o.ctx.Err() != nil {
-		if out != nil {
-			C.nemo_relay_stream_free(out)
-		}
-		return nil, o.ctx.Err()
-	}
 	runtime.KeepAlive(o.responseCodecHandle)
 	if err != nil {
-		return nil, err
+		return nil, sources.providerErrors.restore(nativeExecutionError(o.ctx, err))
 	}
 	stream := newLlmStream(out, callbacks, cancelProvider, sources)
 	providerTransferred = true
@@ -4645,7 +4624,13 @@ func LlmCallExecuteContext(ctx context.Context, name string, request LLMRequest,
 		return nil, errors.New("context is nil")
 	}
 	opts = append(opts[:len(opts):len(opts)], func(o *llmCallOptions) { o.ctx = ctx })
-	return LlmCallExecute(name, request, func(request json.RawMessage) (json.RawMessage, error) { return fn(ctx, request) }, opts...)
+	var capture providerErrorCapture
+	result, err := LlmCallExecute(name, request, func(request json.RawMessage) (json.RawMessage, error) {
+		result, err := fn(ctx, request)
+		capture.record(err)
+		return result, err
+	}, opts...)
+	return result, capture.restore(err)
 }
 
 // ToolCallExecuteContext runs a managed tool call with cooperative cancellation.
@@ -4654,7 +4639,13 @@ func ToolCallExecuteContext(ctx context.Context, name string, args json.RawMessa
 		return ToolExecutionResult{}, errors.New("context is nil")
 	}
 	opts = append(opts[:len(opts):len(opts)], func(o *toolCallOptions) { o.ctx = ctx })
-	return ToolCallExecute(name, args, func(args json.RawMessage) (ToolExecutionResult, error) { return fn(ctx, args) }, opts...)
+	var capture providerErrorCapture
+	result, err := ToolCallExecute(name, args, func(args json.RawMessage) (ToolExecutionResult, error) {
+		result, err := fn(ctx, args)
+		capture.record(err)
+		return result, err
+	}, opts...)
+	return result, capture.restore(err)
 }
 
 // LlmStreamCallExecuteContext binds stream setup and consumption to ctx.
