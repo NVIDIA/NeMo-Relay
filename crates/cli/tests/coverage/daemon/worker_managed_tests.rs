@@ -348,9 +348,10 @@ async fn stream_observation_validates_responses_completion_without_changing_deli
             .finish(ProviderSurface::OpenAIResponses, true)
             .await;
         assert_eq!(observed.terminal, OBSERVATION_COMPLETE);
-        assert_eq!(observed.truncated, terminal.is_none());
-        assert_eq!(observed.value.is_some(), terminal.is_some());
-        assert_eq!(observed.failure.is_some(), terminal.is_none());
+        let valid = matches!(terminal, Some("completed" | "incomplete"));
+        assert_eq!(observed.truncated, !valid, "{terminal:?}");
+        assert_eq!(observed.value.is_some(), valid, "{terminal:?}");
+        assert_eq!(observed.failure.is_some(), !valid, "{terminal:?}");
     }
 }
 
