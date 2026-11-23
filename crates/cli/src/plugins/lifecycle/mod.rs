@@ -388,10 +388,13 @@ pub(crate) fn validate(
                     format!("dynamic plugin target '{}' does not exist", command.target),
                 ));
             }
-            let resolved = resolve_plugins_config_with_path(
+            let mut resolved = resolve_plugins_config_with_path(
                 server.config.as_ref(),
                 server.plugin_config_path.as_ref(),
             )?;
+            crate::plugins::policy::apply_secure_runtime_defaults(
+                &mut resolved.dynamic_plugin_policy,
+            );
             let (manifest, manifest_ref) = load_manifest_for_action("validate", &path)?;
             validate_python_entrypoint_artifact(&manifest, &manifest_ref)
                 .map_err(CliError::Config)?;
@@ -429,10 +432,13 @@ pub(crate) fn validate(
         }
         PluginTarget::Id(plugin_id) => {
             let explicit_plugin_config = lifecycle_plugin_config_path(server);
-            let resolved = resolve_plugins_config_with_path(
+            let mut resolved = resolve_plugins_config_with_path(
                 server.config.as_ref(),
                 server.plugin_config_path.as_ref(),
             )?;
+            crate::plugins::policy::apply_secure_runtime_defaults(
+                &mut resolved.dynamic_plugin_policy,
+            );
             let host_config_by_id = host_config_by_id(&resolved);
             let mut scopes = load_and_hydrate_scopes(explicit_plugin_config.as_ref(), &resolved)?;
             let entry =

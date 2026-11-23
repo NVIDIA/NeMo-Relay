@@ -245,9 +245,10 @@ fn upgrade(
     ws: WebSocketUpgrade,
 ) -> impl IntoResponse {
     let local = local.is_some_and(|local| local.ip().is_loopback()) && peer.ip().is_loopback();
+    let peer = peer.ip();
     ws.max_message_size(MAX_CONTROL_BODY_BYTES)
         .max_frame_size(MAX_CONTROL_BODY_BYTES)
-        .on_upgrade(move |socket| run(state, role, local, socket))
+        .on_upgrade(move |socket| run(state, role, local, peer, socket))
 }
 
 pub(super) fn recover_after_restart(state: Arc<DaemonState>) {
@@ -291,7 +292,13 @@ pub(super) fn recover_after_restart(state: Arc<DaemonState>) {
 }
 
 #[allow(clippy::cognitive_complexity)] // One select loop owns the connection state and cancellation.
-async fn run(state: Arc<DaemonState>, role: ComponentRole, local: bool, socket: WebSocket) {
+async fn run(
+    state: Arc<DaemonState>,
+    role: ComponentRole,
+    local: bool,
+    peer: IpAddr,
+    socket: WebSocket,
+) {
     let (mut writer, mut reader) = socket.split();
     let (send, mut outgoing) = mpsc::channel::<Message>(QUEUE_CAPACITY);
     let cancel = Arc::new(ControlCancellation::new());
@@ -310,6 +317,7 @@ async fn run(state: Arc<DaemonState>, role: ComponentRole, local: bool, socket: 
     let generation = uuid::Uuid::now_v7().to_string();
     let mut id: Option<String> = None;
     let mut challenge: Option<ChallengeId> = None;
+    let mut challenge_requested = false;
     let mut last_directive = None;
     let mut last_reply: Option<(String, String, Event)> = None;
     let auth_deadline = tokio::time::Instant::now() + ATTEMPT_TIMEOUT;
@@ -430,7 +438,7 @@ async fn run(state: Arc<DaemonState>, role: ComponentRole, local: bool, socket: 
                 if let Some(id) = &id && lock(&state.sockets.peers).get(&key(role, id)).is_none_or(|p| p.generation != generation) { break "connection_replaced"; }
                 let mut response = match readiness {
                     Some(response) => response,
-                    None => dispatch(&state, role, &mut id, &mut challenge, request.command).await,
+                    None => dispatch(&state, role, peer, &mut id, &mut challenge, &mut challenge_requested, request.command).await,
                 };
                 let success = response.status().is_success();
                 #[cfg(test)]
@@ -608,16 +616,21 @@ fn validate_ready_connection(
 async fn dispatch(
     state: &Arc<DaemonState>,
     role: ComponentRole,
+    peer: IpAddr,
     id: &mut Option<String>,
     challenge: &mut Option<ChallengeId>,
+    challenge_requested: &mut bool,
     command: Command,
 ) -> Response<Body> {
     match command {
         Command::Challenge(request)
-            if id.is_none() && challenge.is_none() && request.initiator.role == role =>
+            if id.is_none() && !*challenge_requested && request.initiator.role == role =>
         {
-            // A connection gets one challenge. The upgrade endpoint retains peer rate limiting.
-            let response = issue_challenge(State(state.clone()), Json(request)).await;
+            // A connection gets one challenge request, admitted or not, so the per-peer
+            // connection ceiling at the upgrade endpoint also bounds challenge requests. The
+            // pending pool limits how many challenges each peer may hold at once.
+            *challenge_requested = true;
+            let response = issue_challenge(State(state.clone()), peer, Json(request)).await;
             let status = response.status();
             let Ok(bytes) =
                 axum::body::to_bytes(response.into_body(), MAX_CONTROL_BODY_BYTES).await

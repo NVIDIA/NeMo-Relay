@@ -725,6 +725,7 @@ fn daemon_router_with_ready_worker(
         instance_id: "test-daemon".into(),
         pass_through: false,
         loopback_listener: true,
+        challenge_peers: Default::default(),
         public_origin: "http://127.0.0.1:1".into(),
         config: GatewayConfig::default(),
         upstream: pooled_client().expect("daemon pass-through client"),
@@ -802,6 +803,7 @@ fn daemon_router_with_pass_through(
         instance_id: "test-pass-through-daemon".into(),
         pass_through: true,
         loopback_listener: true,
+        challenge_peers: Default::default(),
         public_origin: "http://127.0.0.1:1".into(),
         config,
         upstream: client_for(protocol),
@@ -890,6 +892,7 @@ fn daemon_router_with_two_ready_workers(
         instance_id: "test-two-route-daemon".into(),
         pass_through: false,
         loopback_listener: true,
+        challenge_peers: Default::default(),
         public_origin: "http://127.0.0.1:1".into(),
         config: GatewayConfig::default(),
         upstream: client_for(protocol),
@@ -2001,6 +2004,7 @@ fn lifecycle_daemon_router_with_activation(
         instance_id: "lifecycle-daemon".into(),
         pass_through: false,
         loopback_listener: true,
+        challenge_peers: Default::default(),
         public_origin: "http://127.0.0.1:1".into(),
         config,
         upstream: pooled_client().expect("daemon pass-through client"),
@@ -2376,3 +2380,6 @@ async fn broker_worker_disconnect_expiry_rejects_new_work_but_preserves_admitted
     worker_task.abort();
     provider_task.await.expect("HTTP/1.1 provider task");
 }
+
+#[path = "hook_pool_isolation_tests.rs"]
+mod hook_pool_isolation_tests;

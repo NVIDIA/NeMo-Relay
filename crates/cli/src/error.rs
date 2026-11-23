@@ -136,6 +136,12 @@ pub(crate) enum CliError {
     Config(String),
     #[error("launcher error: {0}")]
     Launch(String),
+    /// The daemon is at a capacity limit and suggested how long to wait before retrying.
+    #[error("launcher error: {message}")]
+    ControlBusy {
+        message: String,
+        retry_after: std::time::Duration,
+    },
     #[error("{source}")]
     McpFailure {
         reason: McpFailureReason,
@@ -193,7 +199,7 @@ impl CliError {
             Self::Io(_) => "io",
             Self::Install(_) => "install",
             Self::Config(_) => "configuration",
-            Self::Launch(_) => "launch",
+            Self::Launch(_) | Self::ControlBusy { .. } => "launch",
             Self::McpFailure { source, .. } => source.log_kind(),
             Self::HookDelivery { source } => source.log_kind(),
             Self::PluginLifecycle { .. } => "plugin_lifecycle",
