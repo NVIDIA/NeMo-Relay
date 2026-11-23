@@ -9,8 +9,7 @@
  * nested tool call parent introduced in pi v0.99.0. Declaring the shapes
  * locally -- the same approach `integrations/openclaw/src/openclaw-hook-types.ts`
  * takes for its host agent -- keeps this directory buildable without depending
- * on the pi package, which matters because pi ships breaking changes through
- * *minor* releases and has no major-release channel.
+ * on the pi package. The live acceptance matrix checks the host contract.
  *
  * Unlike OpenClaw, pi *does* publish these declarations -- `ToolCallEvent`,
  * `ToolCallEventResult`, `ExtensionAPI` and `ProviderConfig` all come out of

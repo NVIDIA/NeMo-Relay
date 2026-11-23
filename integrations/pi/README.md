@@ -27,6 +27,12 @@ The existing fail-open or fail-closed policy still handles delivery faults.
 NeMo Relay requires Pi 1.6.0. The launcher rejects older releases and
 prereleases. Newer stable releases can launch with an unverified-version warning.
 
+Run the live acceptance suite on Unix with Pi 1.6.0 and a built Relay CLI:
+
+```bash
+python3 integrations/pi/test/live/verify.py --pi /path/to/pi --relay /path/to/nemo-relay
+```
+
 **Model traffic is redirected conditionally.** pi has no base-URL flag and no
 generic environment override — it resolves `baseUrl` per model from a generated
 catalog — so the extension points the active model's provider at the gateway
