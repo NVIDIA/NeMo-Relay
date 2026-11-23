@@ -80,11 +80,11 @@ def test_displayed_sources_match_registered_examples():
             expected.add((GUIDES / "_code" / language / f"{filename}.{source_extension}").resolve())
     expected.add((EXAMPLES / "tool_result_message.py").resolve())
     displayed = set()
-    for page in GUIDES.glob("*.mdx"):
+    for page in (*GUIDES.glob("*.mdx"), GUIDES / "middleware/index.mdx"):
         content = page.read_text(encoding="utf-8")
         assert not re.search(r"^```(?:python|js|javascript|ts|typescript|rust)\b", content, re.MULTILINE), page
-        for source in re.findall(r'<Code\s+src="(_code/[^\"]+)"', content):
-            displayed.add((GUIDES / source).resolve())
+        for source in re.findall(r'<Code\s+src="([^\"]+)"', content):
+            displayed.add((page.parent / source).resolve())
     assert displayed == expected
     actual = {path.resolve() for path in (GUIDES / "_code").rglob("*") if path.suffix in {".py", ".js", ".ts", ".rs"}}
     assert actual == expected
@@ -255,10 +255,10 @@ async def test_documented_policies_allow_or_reject_before_execution(policy, quer
         assert {
             "name": start["name"],
             "data": {key: start["data"][key] for key in ("query", "api_key")},
-        } == json.loads(documented_output("advanced-guide", "Expected tool start fields", "json"))
+        } == json.loads(documented_output("middleware/index", "Expected tool start fields", "json"))
         timing_lines = [line for line in output.splitlines() if line.startswith("search completed in")]
         assert len(timing_lines) == 1
-        timing_pattern = re.escape(documented_output("advanced-guide", "Expected timing pattern")).replace(
+        timing_pattern = re.escape(documented_output("middleware/index", "Expected timing pattern")).replace(
             re.escape("<duration>"), r"\d+(?:\.\d+)? ms"
         )
         assert re.fullmatch(timing_pattern, timing_lines[0])
@@ -274,7 +274,7 @@ async def test_documented_policies_allow_or_reject_before_execution(policy, quer
         )
         assert not any(record.get("category") == "tool" and record["name"] == "search" for record in records)
         assert [f"{event.kind} {event.name}" for event in subscribed_events] == documented_output(
-            "advanced-guide", "Expected rejection events"
+            "middleware/index", "Expected rejection events"
         ).splitlines()
 
 
