@@ -8180,10 +8180,11 @@ async fn normalized_response_removal_preserves_survivor_positions_or_fails_close
         ]
     }]});
     let codec: Arc<dyn LlmResponseCodec> = Arc::new(OpenAIResponsesCodec);
-    for target_paths in [
-        vec!["/message/0"],
-        vec!["/message/0", "/message/1"],
-        vec!["/message/0/text", "/message/1/refusal"],
+    let parts = raw["output"][0]["content"].as_array().unwrap();
+    for (target_paths, expected) in [
+        (vec!["/message/0"], Some(&parts[1..])),
+        (vec!["/message/0", "/message/1"], Some(&parts[2..])),
+        (vec!["/message/0/text", "/message/1/refusal"], None),
     ] {
         let backend = crate::builtin::CompiledBuiltinBackend::new(
             BuiltinBackendConfig {
@@ -8204,22 +8205,20 @@ async fn normalized_response_removal_preserves_survivor_positions_or_fails_close
         )
         .await
         .unwrap();
-        if target_paths[0].ends_with("/text") {
-            assert!(
-                sanitized.is_none(),
-                "removing a required field is unsupported"
-            );
-        } else {
+        if let Some(expected) = expected {
             let sanitized = sanitized.expect("whole-part removal retains source positions");
             assert_eq!(
                 sanitized["output"][0]["content"]
                     .as_array()
                     .unwrap()
-                    .last()
-                    .unwrap()["text"],
-                "safe tail"
+                    .as_slice(),
+                expected
             );
-            assert!(!sanitized.to_string().contains("SECRET-first"));
+        } else {
+            assert!(
+                sanitized.is_none(),
+                "removing a required field is unsupported"
+            );
         }
     }
 }
