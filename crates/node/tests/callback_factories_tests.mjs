@@ -197,3 +197,53 @@ describe('fork publication selection', { timeout: 3000 }, () => {
     }
   }
 });
+
+describe('callback context boundary', () => {
+  function scopedResult(scope) {
+    assert.equal(factories.setCallbackScope(scope, null, true), true);
+    return {
+      get marker() {
+        return factories.callbackScope()?.marker;
+      },
+    };
+  }
+
+  it('encodes a synchronous finalizer result inside the callback context', () => {
+    const envelope = factories.finalizer(() => scopedResult({ marker: 'sync finalizer' }))(
+      () => assert.fail('direct settlement must not call complete'),
+      true,
+    );
+    assert.equal(envelope.ok, true);
+    assert.equal(envelope.value.marker, 'sync finalizer');
+  });
+
+  it('encodes a Promise-returning finalizer result inside the callback context', async () => {
+    const completed = Promise.withResolvers();
+    const returned = factories.finalizer(async () => {
+      const result = scopedResult({ marker: 'async finalizer' });
+      await Promise.resolve();
+      return result;
+    })(completed.resolve, false);
+    assert.equal(returned, undefined);
+    const envelope = await completed.promise;
+    assert.equal(envelope.ok, true);
+    assert.equal(envelope.value.marker, 'async finalizer');
+  });
+
+  it('adopts a thenable returned to withCallbackScope inside the callback context', async () => {
+    const observed = Promise.withResolvers();
+    const value = await factories.withCallbackScope(
+      { marker: 'thenable' },
+      () => ({
+        then(resolve) {
+          observed.resolve(factories.callbackScope()?.marker);
+          resolve('settled');
+        },
+      }),
+      null,
+      false,
+    );
+    assert.equal(value, 'settled');
+    assert.equal(await observed.promise, 'thenable');
+  });
+});

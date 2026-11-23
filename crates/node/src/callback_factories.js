@@ -157,26 +157,28 @@
       expireCallbackStore(token);
       complete(envelope);
     };
-    let envelope;
-    try {
-      const value = eventSanitizerContext.run(token, call);
-      if (isThenable(value)) {
-        Promise.resolve(value).then(
-          (resolved) => finish(envelopeFor(resolved)),
-          (error) => finish(failureEnvelope(error)),
-        );
-        return undefined;
+    return eventSanitizerContext.run(token, () => {
+      let envelope;
+      try {
+        const value = call();
+        if (isThenable(value)) {
+          Promise.resolve(value).then(
+            (resolved) => finish(envelopeFor(resolved)),
+            (error) => finish(failureEnvelope(error)),
+          );
+          return undefined;
+        }
+        envelope = envelopeFor(value);
+      } catch (error) {
+        envelope = failureEnvelope(error);
       }
-      envelope = envelopeFor(value);
-    } catch (error) {
-      envelope = failureEnvelope(error);
-    }
-    expireCallbackStore(token);
-    if (direct) {
-      return envelope;
-    }
-    complete(envelope);
-    return undefined;
+      expireCallbackStore(token);
+      if (direct) {
+        return envelope;
+      }
+      complete(envelope);
+      return undefined;
+    });
   }
 
   function streamState(handle) {
@@ -564,18 +566,20 @@
       );
       const token = callbackStore(publicationState, publicationContextId, scope);
       const expire = () => expireCallbackStore(token);
-      let value;
-      try {
-        value = eventSanitizerContext.run(token, fn);
-      } catch (error) {
+      return eventSanitizerContext.run(token, () => {
+        let value;
+        try {
+          value = fn();
+        } catch (error) {
+          expire();
+          throw error;
+        }
+        if (isThenable(value)) {
+          return Promise.resolve(value).finally(expire);
+        }
         expire();
-        throw error;
-      }
-      if (isThenable(value)) {
-        return Promise.resolve(value).finally(expire);
-      }
-      expire();
-      return value;
+        return value;
+      });
     },
 
     setCallbackScope(scope, capturedPublicationContextId, hasCapturedContext) {
