@@ -929,9 +929,10 @@ async fn responses_stream_validation_checks_completion_and_preserves_close() {
             vec![json!({"type": "response.completed", "response": null})],
             true,
         ),
-        (vec![completed], false),
-        (vec![failed], false),
-        (vec![incomplete], false),
+        (vec![completed.clone()], false),
+        (vec![incomplete.clone()], false),
+        (vec![completed, failed.clone()], false),
+        (vec![incomplete, failed], false),
     ] {
         let codec = OpenAIResponsesStreamingCodec::new();
         let close_calls = Arc::new(AtomicUsize::new(0));
@@ -1000,7 +1001,56 @@ async fn responses_stream_validation_checks_completion_and_preserves_close() {
     assert_eq!(close_calls.load(Ordering::SeqCst), 1);
 }
 
-/// Sessions keep final usage and mark only calls that end early as errors.
+#[tokio::test]
+async fn responses_stream_validation_reports_failure_before_reading_the_source_again() {
+    let failed = json!({"type": "response.failed", "response": {
+        "status": "failed", "error": {"code": "server_error", "message": "Generation failed"}
+    }});
+    let description = "OpenAI Responses stream reported server_error: Generation failed";
+    for (failed, tail, description) in [
+        (failed.clone(), make_stream(vec![]), description),
+        (
+            failed.clone(),
+            LlmJsonStream::new(tokio_stream::pending()),
+            description,
+        ),
+        (
+            failed,
+            make_stream(vec![Err(FlowError::Internal(
+                "later transport error".into(),
+            ))]),
+            description,
+        ),
+        (
+            json!({"type": "response.failed", "response": {"status": "failed"}}),
+            LlmJsonStream::new(tokio_stream::pending()),
+            "OpenAI Responses stream reported error: response failed",
+        ),
+    ] {
+        let close_calls = Arc::new(AtomicUsize::new(0));
+        let source = LlmJsonStream::from_closeable(CloseTrackingStream {
+            stream: Box::pin(tokio_stream::iter(vec![Ok(failed.clone())]).chain(tail)),
+            close_calls: close_calls.clone(),
+            close_error: None,
+            closed: false,
+        });
+        let mut stream = OpenAIResponsesStreamingCodec::new().validate_stream(source);
+        // Failure detection must not depend on a collector having run.
+        assert_eq!(stream.next().await.unwrap().unwrap(), failed);
+        let mut cx = Context::from_waker(futures::task::noop_waker_ref());
+        let Poll::Ready(Some(Err(FlowError::Internal(message)))) =
+            Pin::new(&mut stream).poll_next(&mut cx)
+        else {
+            panic!("expected the provider failure without another source read");
+        };
+        assert_eq!(message, description);
+        assert!(stream.next().await.is_none());
+        stream.close().await.unwrap();
+        assert_eq!(close_calls.load(Ordering::SeqCst), 1);
+    }
+}
+
+/// Sessions keep final usage and distinguish provider failures from successful completion.
 #[tokio::test]
 async fn responses_sessions_keep_usage_and_flag_eof_without_terminal_events() {
     let _lock = TEST_MUTEX.lock().unwrap();
@@ -1017,6 +1067,7 @@ async fn responses_sessions_keep_usage_and_flag_eof_without_terminal_events() {
         "missing_terminal",
         "late_snapshot",
         "terminal_without_usage",
+        "provider_failure",
     ] {
         let session = push_scope(
             PushScopeParams::builder()
@@ -1044,9 +1095,15 @@ async fn responses_sessions_keep_usage_and_flag_eof_without_terminal_events() {
                 } else {
                     json!({"input_tokens": 25208, "output_tokens": 356})
                 };
+                let failed = affected && scenario == "provider_failure";
                 chunks.push(json!({
-                    "type": "response.completed",
-                    "response": {"id": "resp_session", "model": "gpt-test", "status": "completed", "usage": usage}
+                    "type": if failed { "response.failed" } else { "response.completed" },
+                    "response": {
+                        "id": "resp_session", "model": "gpt-test",
+                        "status": if failed { "failed" } else { "completed" },
+                        "error": if failed { json!({"code": "server_error", "message": "Generation failed"}) } else { Json::Null },
+                        "usage": usage
+                    }
                 }));
             }
             if affected && scenario == "late_snapshot" {
@@ -1081,7 +1138,7 @@ async fn responses_sessions_keep_usage_and_flag_eof_without_terminal_events() {
             for expected in expected_chunks {
                 assert_eq!(wrapper.next().await.unwrap().unwrap(), expected);
             }
-            if affected && scenario == "missing_terminal" {
+            if affected && matches!(scenario, "missing_terminal" | "provider_failure") {
                 assert!(wrapper.next().await.unwrap().is_err());
             }
             assert!(wrapper.next().await.is_none());
@@ -1097,10 +1154,15 @@ async fn responses_sessions_keep_usage_and_flag_eof_without_terminal_events() {
         ends.sort_by_key(|event| event.metadata().unwrap()["call_index"].as_u64().unwrap());
         for (call, end) in ends.iter().enumerate() {
             let missing_terminal = call == 1 && scenario == "missing_terminal";
+            let provider_failure = call == 1 && scenario == "provider_failure";
             let metadata = end.metadata().unwrap();
             assert_eq!(
                 metadata["otel.status_code"],
-                if missing_terminal { "ERROR" } else { "OK" }
+                if missing_terminal || provider_failure {
+                    "ERROR"
+                } else {
+                    "OK"
+                }
             );
             if missing_terminal {
                 assert_eq!(
@@ -1109,12 +1171,18 @@ async fn responses_sessions_keep_usage_and_flag_eof_without_terminal_events() {
                         .to_string()
                 );
             }
+            if provider_failure {
+                assert_eq!(
+                    metadata["otel.status_description"],
+                    FlowError::Internal(
+                        "OpenAI Responses stream reported server_error: Generation failed".into()
+                    )
+                    .to_string()
+                );
+            }
             let response = end.annotated_response().unwrap();
-            assert!(
-                response.message.is_some(),
-                "keep output received before the stream ended"
-            );
-            if call == 1 && scenario != "late_snapshot" {
+            assert_eq!(response.response_text(), Some("retained output"));
+            if call == 1 && matches!(scenario, "missing_terminal" | "terminal_without_usage") {
                 assert!(
                     response.usage.is_none(),
                     "missing usage must not become zero"
