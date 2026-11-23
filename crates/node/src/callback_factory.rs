@@ -276,7 +276,7 @@ pub(crate) fn callback_scope(env: &Env) -> napi::Result<Option<CallbackScope>> {
 }
 
 fn scope_arguments(env: &Env, scope: CallbackScope) -> napi::Result<(JsArg, JsArg, bool)> {
-    let publication_context_id = js_value(env, scope.publication_context_id.clone())?;
+    let publication_context_id = js_value(env, scope.publication_context_id.as_deref())?;
     let publication_context_captured = scope.publication_context_captured;
     Ok((
         scope.into_js(env)?,
