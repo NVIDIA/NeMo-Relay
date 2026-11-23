@@ -31,6 +31,7 @@ use nemo_relay::api::runtime::{
 use nemo_relay::api::scope::{PopScopeParams, PushScopeParams, ScopeType, pop_scope, push_scope};
 use nemo_relay::api::subscriber::{deregister_subscriber, flush_subscribers, register_subscriber};
 use nemo_relay::codec::anthropic::AnthropicMessagesCodec;
+use nemo_relay::codec::openai_chat::{OpenAIChatCodec, OpenAIChatStreamingCodec};
 use nemo_relay::codec::openai_responses::{OpenAIResponsesCodec, OpenAIResponsesStreamingCodec};
 use nemo_relay::codec::optimization::LlmOptimizationContribution;
 use nemo_relay::codec::response::{
@@ -913,6 +914,126 @@ async fn test_stream_wrapper_drop_emits_end_event_for_partial_stream() {
     );
 
     deregister_subscriber("stream_drop_end_test").unwrap();
+}
+
+#[tokio::test]
+async fn chat_stream_validation_reports_provider_errors_before_reading_the_source_again() {
+    for (error, tail, description) in [
+        (
+            json!({"code": 502, "message": "Provider disconnected"}),
+            make_stream(vec![]),
+            "OpenAI Chat stream reported 502: Provider disconnected",
+        ),
+        (
+            json!({"code": "server_error", "message": "Provider disconnected"}),
+            LlmJsonStream::new(tokio_stream::pending()),
+            "OpenAI Chat stream reported server_error: Provider disconnected",
+        ),
+        (
+            json!({"type": "server_error", "code": null, "message": "Provider disconnected"}),
+            make_stream(vec![Err(FlowError::Internal(
+                "later transport error".into(),
+            ))]),
+            "OpenAI Chat stream reported server_error: Provider disconnected",
+        ),
+        (
+            json!({}),
+            LlmJsonStream::new(tokio_stream::pending()),
+            "OpenAI Chat stream reported error: stream failed",
+        ),
+    ] {
+        let event = json!({"error": error});
+        let close_calls = Arc::new(AtomicUsize::new(0));
+        let source = LlmJsonStream::from_closeable(CloseTrackingStream {
+            stream: Box::pin(tokio_stream::iter(vec![Ok(event.clone())]).chain(tail)),
+            close_calls: close_calls.clone(),
+            close_error: None,
+            closed: false,
+        });
+        let mut stream = OpenAIChatStreamingCodec::new().validate_stream(source);
+        assert_eq!(stream.next().await.unwrap().unwrap(), event);
+        let mut cx = Context::from_waker(futures::task::noop_waker_ref());
+        let Poll::Ready(Some(Err(FlowError::Internal(message)))) =
+            Pin::new(&mut stream).poll_next(&mut cx)
+        else {
+            panic!("expected the provider error without waiting for the source");
+        };
+        assert_eq!(message, description);
+        assert!(stream.next().await.is_none());
+        stream.close().await.unwrap();
+        assert_eq!(close_calls.load(Ordering::SeqCst), 1);
+    }
+}
+
+#[tokio::test]
+async fn chat_streams_record_provider_errors_and_preserve_partial_output() {
+    let _lock = TEST_MUTEX.lock().unwrap();
+    reset_global();
+    let events = Arc::new(Mutex::new(Vec::<Event>::new()));
+    let captured = events.clone();
+    register_subscriber(
+        "chat_stream_errors",
+        Arc::new(move |event| captured.lock().unwrap().push(event.clone())),
+    )
+    .unwrap();
+
+    for failed in [false, true, false] {
+        let codec = OpenAIChatStreamingCodec::new();
+        let chunks = vec![
+            json!({"id": "chatcmpl-test", "object": "chat.completion.chunk", "model": "gpt-test",
+                "choices": [{"index": 0, "delta": {"role": "assistant", "content": "Partial"}}]}),
+            json!({"object": "chat.completion.chunk",
+                "error": if failed { json!({"code": 502, "message": "Provider disconnected"}) } else { Json::Null },
+                "choices": [{"index": 0, "delta": {}, "finish_reason": if failed { "error" } else { "stop" }}],
+                "usage": {"prompt_tokens": 10, "completion_tokens": 1, "total_tokens": 11}}),
+        ];
+        let mut stream = LlmStreamWrapper::new(
+            codec.validate_stream(make_stream(chunks.clone().into_iter().map(Ok).collect())),
+            make_llm_handle("openai.chat"),
+            codec.collector(),
+            codec.finalizer(),
+            None,
+            None,
+            Some(Arc::new(OpenAIChatCodec)),
+        );
+        for chunk in chunks {
+            assert_eq!(stream.next().await.unwrap().unwrap(), chunk);
+        }
+        let terminal = stream.next().await;
+        assert!(stream.next().await.is_none());
+        let captured = captured_snapshot(&events);
+        let end = captured.iter().rfind(|event| is_llm_end(event)).unwrap();
+        let metadata = end.metadata().unwrap();
+        assert_eq!(
+            metadata["otel.status_code"],
+            if failed { "ERROR" } else { "OK" }
+        );
+        if failed {
+            assert_eq!(
+                metadata["otel.status_description"],
+                FlowError::Internal(
+                    "OpenAI Chat stream reported 502: Provider disconnected".into()
+                )
+                .to_string()
+            );
+            assert!(matches!(terminal, Some(Err(_))));
+        } else {
+            assert!(terminal.is_none());
+        }
+        let response = end.annotated_response().unwrap();
+        assert_eq!(response.response_text(), Some("Partial"));
+        let usage = response.usage.as_ref().unwrap();
+        assert_eq!(usage.prompt_tokens, Some(10));
+        assert_eq!(usage.completion_tokens, Some(1));
+    }
+    assert_eq!(
+        captured_snapshot(&events)
+            .iter()
+            .filter(|event| is_llm_end(event))
+            .count(),
+        3
+    );
+    deregister_subscriber("chat_stream_errors").unwrap();
 }
 
 /// The built-in collector rejects early EOF and forwards producer cleanup.
