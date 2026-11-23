@@ -2307,9 +2307,26 @@ fn cli_doctor_accepts_discovered_stderr_logging_opt_out() {
 
 #[test]
 fn cli_plugins_validate_json_emits_versioned_success_output() {
+    let _implicit_config = ImplicitConfigEnvScope::without_test_hook();
     let temp = tempfile::tempdir().unwrap();
     let plugin_dir = temp.path().join("plugins").join("acme");
-    write_dynamic_plugin_manifest(&plugin_dir, "acme.cli-json");
+    let user_config_dir = temp.path().join("xdg").join("nemo-relay");
+    std::fs::create_dir_all(&user_config_dir).unwrap();
+    write_dynamic_plugin_manifest_with_options(
+        &plugin_dir,
+        "acme.cli-json",
+        &["plugin_worker"],
+        Some("plugin.py.sig"),
+    );
+    let trusted_public_key = write_detached_ed25519_signature(&plugin_dir, "plugin.py.sig");
+    std::fs::write(
+        user_config_dir.join("plugins.toml"),
+        format!(
+            "[plugins.policy.defaults]\ntrusted_public_keys = [{}]\n",
+            toml_basic_string(&trusted_public_key)
+        ),
+    )
+    .unwrap();
 
     let output = Command::new(gateway_bin())
         .env("XDG_CONFIG_HOME", temp.path().join("xdg"))
@@ -2333,8 +2350,8 @@ fn cli_plugins_validate_json_emits_versioned_success_output() {
     assert_eq!(parsed["data"]["resolved_plugin_id"], "acme.cli-json");
     assert_eq!(parsed["data"]["valid"], true);
     assert_eq!(parsed["data"]["policy_state"], "valid");
-    assert_eq!(parsed["data"]["startup_class"], "optional");
-    assert_eq!(parsed["data"]["attestation_mode"], "integrity_only");
+    assert_eq!(parsed["data"]["startup_class"], "required");
+    assert_eq!(parsed["data"]["attestation_mode"], "signature_required");
 }
 
 #[test]
@@ -2537,13 +2554,95 @@ allowed = false
     assert_eq!(parsed["data"]["target_kind"], "path");
     assert_eq!(parsed["data"]["valid"], false);
     assert_eq!(parsed["data"]["policy_state"], "invalid");
-    assert_eq!(parsed["data"]["startup_class"], "optional");
-    assert_eq!(parsed["data"]["attestation_mode"], "integrity_only");
+    assert_eq!(parsed["data"]["startup_class"], "required");
+    assert_eq!(parsed["data"]["attestation_mode"], "signature_required");
     assert!(
         parsed["data"]["errors"][0]
             .as_str()
             .unwrap()
             .contains("blocked by host policy")
+    );
+}
+
+#[test]
+fn cli_plugins_validate_applies_secure_defaults_when_policy_omits_them() {
+    let _implicit_config = ImplicitConfigEnvScope::without_test_hook();
+    let temp = tempfile::tempdir().unwrap();
+    let plugin_dir = temp.path().join("plugins").join("acme");
+    write_dynamic_plugin_manifest(&plugin_dir, "acme.cli-unsigned-default");
+
+    let output = Command::new(gateway_bin())
+        .env("XDG_CONFIG_HOME", temp.path().join("xdg"))
+        .env("HOME", temp.path())
+        .args(["plugins", "validate"])
+        .arg(&plugin_dir)
+        .arg("--json")
+        .output()
+        .unwrap();
+
+    assert!(
+        output.status.success(),
+        "stderr was:\n{}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+    let parsed: serde_json::Value = serde_json::from_slice(&output.stdout).unwrap();
+    assert_eq!(parsed["data"]["valid"], false);
+    assert_eq!(parsed["data"]["startup_class"], "required");
+    assert_eq!(parsed["data"]["attestation_mode"], "signature_required");
+    assert!(
+        parsed["data"]["errors"][0]
+            .as_str()
+            .unwrap()
+            .contains("requires integrity.signature")
+    );
+}
+
+#[test]
+fn cli_plugins_validate_applies_secure_defaults_for_installed_id_target() {
+    let _implicit_config = ImplicitConfigEnvScope::without_test_hook();
+    let temp = tempfile::tempdir().unwrap();
+    let cwd = temp.path().join("workdir");
+    let plugin_dir = cwd.join("plugins").join("acme");
+    std::fs::create_dir_all(&cwd).unwrap();
+    write_dynamic_plugin_manifest(&plugin_dir, "acme.cli-unsigned-id");
+
+    let add = Command::new(gateway_bin())
+        .current_dir(&cwd)
+        .env("XDG_CONFIG_HOME", temp.path().join("xdg"))
+        .env("HOME", temp.path())
+        .args(["plugins", "add", "--user"])
+        .arg(&plugin_dir)
+        .output()
+        .unwrap();
+    assert!(
+        add.status.success(),
+        "stderr was:\n{}",
+        String::from_utf8_lossy(&add.stderr)
+    );
+
+    let validate = Command::new(gateway_bin())
+        .current_dir(&cwd)
+        .env("XDG_CONFIG_HOME", temp.path().join("xdg"))
+        .env("HOME", temp.path())
+        .args(["plugins", "validate", "acme.cli-unsigned-id", "--json"])
+        .output()
+        .unwrap();
+
+    assert!(
+        validate.status.success(),
+        "stderr was:\n{}",
+        String::from_utf8_lossy(&validate.stderr)
+    );
+    let parsed: serde_json::Value = serde_json::from_slice(&validate.stdout).unwrap();
+    assert_eq!(parsed["data"]["target_kind"], "plugin_id");
+    assert_eq!(parsed["data"]["valid"], false);
+    assert_eq!(parsed["data"]["startup_class"], "required");
+    assert_eq!(parsed["data"]["attestation_mode"], "signature_required");
+    assert!(
+        parsed["data"]["errors"][0]
+            .as_str()
+            .unwrap()
+            .contains("requires integrity.signature")
     );
 }
 

@@ -24,11 +24,13 @@ const MAX_CACHED_TLS_WORKER_POOLS: usize = 256;
 
 /// The daemon's process-wide connection pools for authenticated worker data-plane traffic.
 ///
-/// Cleartext loopback workers share one HTTP/2 prior-knowledge pool. Network-reachable workers
-/// share a pool only when they present the same pinned TLS root; the bounded LRU cache prevents
+/// Hook/readiness traffic and model traffic use independent pools so model response
+/// backpressure cannot consume the HTTP/2 receive window needed for a hook verdict.
+/// Cleartext loopback workers share one HTTP/2 prior-knowledge pool per traffic class.
+/// Network-reachable workers share pools only when they present the same pinned TLS root; the bounded LRU cache prevents
 /// unbounded retention while active targets keep their selected pool alive through [`Arc`].
 pub(crate) struct WorkerClientPool {
-    cleartext_h2c: Arc<PooledClient>,
+    cleartext_h2c: WorkerClients,
     tls: Mutex<TlsClientCache>,
 }
 
@@ -40,9 +42,16 @@ impl WorkerClientPool {
     fn with_tls_capacity(capacity: usize) -> Result<Self, CliError> {
         assert!(capacity > 0, "worker TLS pool capacity must be positive");
         Ok(Self {
-            cleartext_h2c: Arc::new(
-                pooled_worker_h2c_client().map_err(|error| CliError::Launch(error.to_string()))?,
-            ),
+            cleartext_h2c: WorkerClients {
+                model: Arc::new(
+                    pooled_worker_h2c_client()
+                        .map_err(|error| CliError::Launch(error.to_string()))?,
+                ),
+                hook: Arc::new(
+                    pooled_worker_h2c_client()
+                        .map_err(|error| CliError::Launch(error.to_string()))?,
+                ),
+            },
             tls: Mutex::new(TlsClientCache::new(capacity)),
         })
     }
@@ -52,8 +61,19 @@ impl WorkerClientPool {
         &self,
         tls_root_certificate: Option<&str>,
     ) -> Result<Arc<PooledClient>, CliError> {
+        Ok(self.clients(tls_root_certificate)?.model)
+    }
+
+    pub(crate) fn hook_client(
+        &self,
+        tls_root_certificate: Option<&str>,
+    ) -> Result<Arc<PooledClient>, CliError> {
+        Ok(self.clients(tls_root_certificate)?.hook)
+    }
+
+    fn clients(&self, tls_root_certificate: Option<&str>) -> Result<WorkerClients, CliError> {
         let Some(root_certificate) = tls_root_certificate else {
-            return Ok(Arc::clone(&self.cleartext_h2c));
+            return Ok(self.cleartext_h2c.clone());
         };
         let root_der = decode_worker_tls_root(root_certificate)?;
         let root_id = WorkerTlsRootId::from_der(&root_der);
@@ -61,10 +81,19 @@ impl WorkerClientPool {
         if let Some(client) = cache.get(root_id) {
             return Ok(client);
         }
-        let client = Arc::new(pooled_worker_tls_client_from_der(root_der)?);
-        cache.insert(root_id, Arc::clone(&client));
+        let client = WorkerClients {
+            model: Arc::new(pooled_worker_tls_client_from_der(root_der.clone())?),
+            hook: Arc::new(pooled_worker_tls_client_from_der(root_der)?),
+        };
+        cache.insert(root_id, client.clone());
         Ok(client)
     }
+}
+
+#[derive(Clone)]
+struct WorkerClients {
+    model: Arc<PooledClient>,
+    hook: Arc<PooledClient>,
 }
 
 #[derive(Clone, Copy, PartialEq, Eq, Hash)]
@@ -78,7 +107,7 @@ impl WorkerTlsRootId {
 
 struct TlsClientCache {
     capacity: usize,
-    entries: HashMap<WorkerTlsRootId, Arc<PooledClient>>,
+    entries: HashMap<WorkerTlsRootId, WorkerClients>,
     recency: VecDeque<WorkerTlsRootId>,
 }
 
@@ -91,13 +120,13 @@ impl TlsClientCache {
         }
     }
 
-    fn get(&mut self, root_id: WorkerTlsRootId) -> Option<Arc<PooledClient>> {
+    fn get(&mut self, root_id: WorkerTlsRootId) -> Option<WorkerClients> {
         let client = self.entries.get(&root_id).cloned()?;
         self.touch(root_id);
         Some(client)
     }
 
-    fn insert(&mut self, root_id: WorkerTlsRootId, client: Arc<PooledClient>) {
+    fn insert(&mut self, root_id: WorkerTlsRootId, client: WorkerClients) {
         if self.entries.len() == self.capacity
             && let Some(evicted) = self.recency.pop_front()
         {

@@ -197,6 +197,64 @@ authorize worker requests when no MCP route references remain. To verify reuse,
 open a new session during the idle period and send a new request after the worker
 is ready.
 
+### Challenge Admission
+
+Every MCP server and worker opens a control connection to the daemon and
+answers one authentication challenge on it. The daemon holds at most 384
+pending (issued but unanswered) MCP challenges and 128 pending worker
+challenges across all clients. A challenge leaves the pool as soon as it's
+answered, when its connection closes, or when it expires after 15 seconds.
+
+Admission is per source IP address and has two limits:
+
+- **Pending challenges.** On a listener that remote clients can reach, one
+  source IP address can hold at most half of each pool: 192 MCP challenges and
+  64 worker challenges. On a loopback-only listener, every client has the same
+  source IP address (`127.0.0.1`), so that address can use the whole pool.
+  Clients behind a reverse proxy share the proxy's address, including a proxy
+  on the same host as a loopback-only daemon.
+- **Control connections.** One source IP address can open at most 512 control
+  connections in each 15-second window, and each connection can request one
+  challenge. The daemon returns 429 with Retry-After: 15 before upgrading the connection if the source IP
+  address exceeds its connection limit, or if the daemon already tracks 1,024 addresses and the source
+  address is not among them.
+
+Answered challenges free their pending slots immediately. Bursts can continue
+while pending capacity remains available and the source IP address stays within
+the control-connection limit. A new agent session
+that starts a new worker needs two challenges, one for its MCP server and one
+for its worker. A session that reuses a running worker needs only the MCP
+challenge. A client turned away at a pending limit gets `429` on its open
+control connection with `retry_after_ms: 2000` in the error, and retries on a
+new connection after at least that long, until the reconnect grace period
+ends.
+
+When the daemon turns away a challenge or connection, it records a
+`daemon.challenge_rejected` diagnostic with the reason and, for pending limits,
+the counts. It also logs a `control_challenge_rejected` warning with these
+fields:
+
+| Field | Meaning |
+| --- | --- |
+| `peer` | Source IP address of the rejected client. |
+| `reason` | Which limit was reached: `peer_rate`, `peer_table_full`, `peer_limit`, `mcp_pool` or `worker_pool`. |
+| `role` | For `peer_limit`, `mcp_pool` and `worker_pool`: `mcp` or `worker`. |
+| `peer_pending`, `peer_limit` | When `reason` is `peer_limit`, `mcp_pool` or `worker_pool`: this source IP address's pending challenges for the role, and its limit. |
+| `pool_pending`, `pool_capacity` | When `reason` is `peer_limit`, `mcp_pool` or `worker_pool`: pending challenges for the role across all clients, and the pool's size. |
+| `peer_connection_limit`, `window_ms`, `peer_table_capacity` | For `peer_rate` and `peer_table_full`: the connection limit per source IP address, its window, and how many addresses the daemon tracks. |
+| `suppressed_since_last_emit` | Warnings with the same reason that were not logged since the last one. |
+
+| `reason` | Limit reached |
+| --- | --- |
+| `peer_rate` | The source IP address opened too many control connections in one window. |
+| `peer_table_full` | The daemon already tracks the maximum number of source IP addresses. |
+| `peer_limit` | The source IP address already holds its share of the role's pool. |
+| `mcp_pool` | The MCP pending pool is full. |
+| `worker_pool` | The worker pending pool is full. |
+
+The daemon logs at most one warning for each reason every 10 seconds, so the
+`peer` and counts in a warning describe the first rejection in that interval.
+
 ## Provision Client Credentials
 
 Provision one 32-byte random, base64url-encoded token for each machine-user
@@ -558,11 +616,12 @@ authorization. Restrict daemon access to trusted users through your network
 or authenticated reverse proxy; do not expose open enrollment to an untrusted
 network. TLS remains required for non-loopback communication.
 
-Challenge requests are limited to 16 per transport-peer IP in a 15-second
-window, before the request body is read. MCP and worker challenges retain
-separate capacity limits. Forwarded IP headers do not override this limit:
-clients behind a reverse proxy share its peer budget. Apply additional
-per-client admission controls at the proxy for larger deployments.
+Challenge admission is limited per transport-peer IP, both in pending
+challenges and in control connections per 15-second window. For more information, refer to
+[Challenge Admission](#challenge-admission). MCP and worker challenges retain
+separate pools. Forwarded IP headers do not override these limits: clients
+behind a reverse proxy share its peer budget. Apply additional per-client
+admission controls at the proxy for larger deployments.
 
 
 ## Distribute Immutable Managed Settings
