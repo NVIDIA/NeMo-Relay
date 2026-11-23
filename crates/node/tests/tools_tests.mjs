@@ -1095,6 +1095,135 @@ describe('Tool intercepts', () => {
     }
   });
 
+  it('context resource budget enforces byte and depth boundaries before callbacks', async () => {
+    const callbackCalls = [];
+    const execute = (supplied, argumentsValue = {}) =>
+      toolCallExecuteAsync(
+        'context-budget',
+        argumentsValue,
+        (argumentsValue) => {
+          callbackCalls.push('tool');
+          return toolResult(argumentsValue);
+        },
+        null,
+        null,
+        null,
+        null,
+        null,
+        null,
+        supplied,
+      );
+    registerToolExecutionIntercept('context-resource-budget-boundary', 1, async (context, next) => {
+      callbackCalls.push('intercept');
+      const downstream = await next(context.args);
+      return { result: downstream.result };
+    });
+    try {
+      const overheadBytes = Buffer.byteLength(JSON.stringify({ data: { value: '' } }), 'utf8');
+      const boundary = { data: { value: 'x'.repeat(16_384 - overheadBytes) } };
+      assert.equal(Buffer.byteLength(JSON.stringify(boundary), 'utf8'), 16_384);
+      await execute(boundary);
+      assert.deepEqual(callbackCalls, ['intercept', 'tool']);
+      let value = null;
+      for (let index = 0; index < 62; index++) value = [value];
+      await execute({ data: { value } });
+      callbackCalls.length = 0;
+      for (const supplied of [
+        { data: { value: boundary.data.value + 'x' } },
+        { data: { value: '\0'.repeat(3_000) } },
+        { data: { value: [value] } },
+      ]) {
+        await assert.rejects(async () => execute(supplied), /16384|nesting depth/);
+        assert.deepEqual(callbackCalls, []);
+      }
+      const ordinaryArguments = { value: 'x'.repeat(20_000) };
+      assert.deepEqual((await execute(null, ordinaryArguments)).result, ordinaryArguments);
+      assert.deepEqual(callbackCalls, ['intercept', 'tool']);
+    } finally {
+      deregisterToolExecutionIntercept('context-resource-budget-boundary');
+    }
+  });
+
+  it('context resource budget stops repeated string getters before callbacks', async () => {
+    let getterCalls = 0;
+    let callbackCalls = 0;
+    const chunks = new Array(10_000);
+    const sharedText = 'x'.repeat(4_096);
+    for (let index = 0; index < chunks.length; index++) {
+      Object.defineProperty(chunks, index, {
+        enumerable: true,
+        get() {
+          getterCalls++;
+          return sharedText;
+        },
+      });
+    }
+    registerToolExecutionIntercept('context-resource-budget-strings', 1, async (context, next) => {
+      callbackCalls++;
+      const downstream = await next(context.args);
+      return { result: downstream.result };
+    });
+    try {
+      await assert.rejects(
+        async () =>
+          toolCallExecuteAsync(
+            'context-budget',
+            {},
+            () => {
+              callbackCalls++;
+              return toolResult(null);
+            },
+            null,
+            null,
+            null,
+            null,
+            null,
+            null,
+            { data: { chunks } },
+          ),
+        /16384/,
+      );
+      assert.equal(getterCalls, 4);
+      assert.equal(callbackCalls, 0);
+    } finally {
+      deregisterToolExecutionIntercept('context-resource-budget-strings');
+    }
+  });
+
+  it('context resource budget ignores keys deleted by an earlier getter', async () => {
+    const removedKey = 'x'.repeat(20_000);
+    const supplied = {
+      get retained() {
+        delete this[removedKey];
+        return 1;
+      },
+      [removedKey]: true,
+    };
+    let observed;
+    registerToolExecutionIntercept('context-resource-budget-removed-key', 1, async (context, next) => {
+      observed = context.executionContext;
+      const downstream = await next(context.args);
+      return { result: downstream.result };
+    });
+    try {
+      await toolCallExecuteAsync(
+        'context-budget',
+        {},
+        (argumentsValue) => toolResult(argumentsValue),
+        null,
+        null,
+        null,
+        null,
+        null,
+        null,
+        { data: supplied },
+      );
+      assert.deepEqual(observed, { data: { retained: 1 } });
+    } finally {
+      deregisterToolExecutionIntercept('context-resource-budget-removed-key');
+    }
+  });
+
   it('execution intercept sees null toolCallId when absent', async () => {
     let seen = null;
     registerToolExecutionIntercept('node_tool_exec_ctx_none', 10, async (context, next) => {

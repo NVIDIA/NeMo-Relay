@@ -775,6 +775,74 @@ class TestToolIntercepts:
         with pytest.raises(ValueError, match="64 container levels"):
             await tools.execute("deep_context", {}, lambda args: ToolExecutionResult(args), execution_context=supplied)
 
+    async def test_context_resource_budget_checks_serialized_bytes_before_callbacks(self) -> None:
+        import json
+
+        overhead_bytes = len(json.dumps({"data": {"value": ""}}, separators=(",", ":")).encode("utf-8"))
+        boundary = {"data": {"value": "x" * (16_384 - overhead_bytes)}}
+        callback_calls = []
+
+        async def observing(context, next_call):
+            callback_calls.append("intercept")
+            downstream = await next_call(context.args)
+            return ToolExecutionInterceptOutcome(downstream.result)
+
+        def execute(arguments):
+            callback_calls.append("tool")
+            return ToolExecutionResult(arguments)
+
+        intercepts.register_tool_execution("context-resource-budget-bytes", 1, observing)
+        try:
+            result = await tools.execute("boundary", {"value": 1}, execute, execution_context=boundary)
+            assert result.result == {"value": 1}
+            assert callback_calls == ["intercept", "tool"]
+            callback_calls.clear()
+            for supplied in (
+                {"data": {"value": boundary["data"]["value"] + "x"}},
+                {"data": {"value": "\0" * 3_000}},
+            ):
+                with pytest.raises(ValueError, match="invalid application execution context"):
+                    await tools.execute("over-budget", {}, execute, execution_context=supplied)
+                assert callback_calls == []
+            arguments = {"value": "x" * 20_000}
+            result = await tools.execute("ordinary-arguments", arguments, execute)
+            assert result.result == arguments
+            assert callback_calls == ["intercept", "tool"]
+        finally:
+            assert intercepts.deregister_tool_execution("context-resource-budget-bytes")
+
+    async def test_context_resource_budget_bounds_shared_container_expansion(self) -> None:
+        class CountedList(list):
+            expanded_visits = 0
+
+            def __getitem__(self, index):
+                type(self).expanded_visits += 1
+                if type(self).expanded_visits > 16_384:
+                    raise AssertionError("context traversal exceeded its resource budget")
+                return super().__getitem__(index)
+
+        shared = CountedList([None, None])
+        await tools.execute(
+            "small-shared-context",
+            {},
+            lambda arguments: ToolExecutionResult(arguments),
+            execution_context={"data": {"value": [shared, shared]}},
+        )
+        supplied = None
+        for _ in range(18):
+            supplied = CountedList([supplied, supplied])
+        CountedList.expanded_visits = 0
+        callback_calls = []
+        with pytest.raises(ValueError, match="16384 serialized bytes"):
+            await tools.execute(
+                "large-shared-context",
+                {},
+                lambda arguments: callback_calls.append("tool") or ToolExecutionResult(arguments),
+                execution_context={"data": {"value": supplied}},
+            )
+        assert 0 < CountedList.expanded_visits <= 16_384
+        assert callback_calls == []
+
     async def test_execution_intercept_tool_call_id_is_none_when_absent(self) -> None:
         seen = {}
 

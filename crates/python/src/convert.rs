@@ -44,12 +44,50 @@ pub(crate) fn flow_error_to_py_err(error: FlowError) -> PyErr {
     })
 }
 
+fn validate_context_container_length(
+    value: &Bound<'_, PyAny>,
+    remaining_units: Option<usize>,
+) -> PyResult<()> {
+    if let Some(remaining) = remaining_units
+        && value.len()? > remaining
+    {
+        return Err(pyo3::exceptions::PyValueError::new_err(
+            "tool execution context exceeds 16384 serialized bytes",
+        ));
+    }
+    Ok(())
+}
+
+fn charge_context_value(
+    value: &Bound<'_, PyAny>,
+    remaining_context_units: &mut Option<usize>,
+) -> PyResult<()> {
+    if let Some(remaining_units) = remaining_context_units {
+        let minimum_units = if value.is_instance_of::<PyString>()
+            || value.is_instance_of::<PyBytes>()
+            || value.is_instance_of::<PyByteArray>()
+        {
+            value.len()?.saturating_add(1)
+        } else {
+            1
+        };
+        *remaining_units = remaining_units.checked_sub(minimum_units).ok_or_else(|| {
+            pyo3::exceptions::PyValueError::new_err(
+                "tool execution context exceeds 16384 serialized bytes",
+            )
+        })?;
+    }
+    Ok(())
+}
+
 fn validate_acyclic(
     value: &Bound<'_, PyAny>,
     active_containers: &mut HashSet<usize>,
     parent_depth: usize,
     depth_limit: Option<usize>,
+    remaining_context_units: &mut Option<usize>,
 ) -> PyResult<()> {
+    charge_context_value(value, remaining_context_units)?;
     if value.is_instance_of::<PyString>()
         || value.is_instance_of::<PyBytes>()
         || value.is_instance_of::<PyByteArray>()
@@ -64,9 +102,8 @@ fn validate_acyclic(
     let is_container = value.cast::<PySet>().is_ok()
         || value.cast::<PyFrozenSet>().is_ok()
         || value.cast::<PySequence>().is_ok()
-        || value.cast::<PyMapping>().is_ok()
-        || dataclass_fields.is_some();
-    if !is_container {
+        || value.cast::<PyMapping>().is_ok();
+    if !is_container && dataclass_fields.is_none() {
         return Ok(());
     }
 
@@ -75,6 +112,11 @@ fn validate_acyclic(
         return Err(pyo3::exceptions::PyValueError::new_err(
             "tool execution context exceeds 64 container levels",
         ));
+    }
+    if is_container {
+        validate_context_container_length(value, *remaining_context_units)?;
+    } else if let Some(fields) = &dataclass_fields {
+        validate_context_container_length(fields, *remaining_context_units)?;
     }
 
     let identity = value.as_ptr() as usize;
@@ -85,30 +127,63 @@ fn validate_acyclic(
     }
 
     let result = if let Ok(set) = value.cast::<PySet>() {
-        set.iter()
-            .try_for_each(|child| validate_acyclic(&child, active_containers, depth, depth_limit))
+        set.iter().try_for_each(|child| {
+            validate_acyclic(
+                &child,
+                active_containers,
+                depth,
+                depth_limit,
+                remaining_context_units,
+            )
+        })
     } else if let Ok(set) = value.cast::<PyFrozenSet>() {
-        set.iter()
-            .try_for_each(|child| validate_acyclic(&child, active_containers, depth, depth_limit))
+        set.iter().try_for_each(|child| {
+            validate_acyclic(
+                &child,
+                active_containers,
+                depth,
+                depth_limit,
+                remaining_context_units,
+            )
+        })
     } else if let Ok(sequence) = value.cast::<PySequence>() {
         (0..sequence.len()?).try_for_each(|index| {
             let child = sequence.get_item(index)?;
-            validate_acyclic(&child, active_containers, depth, depth_limit)
+            validate_acyclic(
+                &child,
+                active_containers,
+                depth,
+                depth_limit,
+                remaining_context_units,
+            )
         })
     } else if let Ok(mapping) = value.cast::<PyMapping>() {
         let keys = mapping.keys()?;
         let values = mapping.values()?;
-        keys.iter()
-            .chain(values.iter())
-            .try_for_each(|child| validate_acyclic(&child, active_containers, depth, depth_limit))
+        keys.iter().chain(values.iter()).try_for_each(|child| {
+            validate_acyclic(
+                &child,
+                active_containers,
+                depth,
+                depth_limit,
+                remaining_context_units,
+            )
+        })
     } else if let Some(fields) = dataclass_fields {
         let fields = fields.cast::<PyDict>()?.keys();
         let attributes = value
             .getattr(intern!(value.py(), "__dict__"))?
             .cast_into::<PyDict>()?;
         fields.iter().try_for_each(|field| {
+            charge_context_value(&field, remaining_context_units)?;
             if let Some(child) = attributes.get_item(&field)? {
-                validate_acyclic(&child, active_containers, depth, depth_limit)?;
+                validate_acyclic(
+                    &child,
+                    active_containers,
+                    depth,
+                    depth_limit,
+                    remaining_context_units,
+                )?;
             }
             Ok(())
         })
@@ -122,7 +197,7 @@ fn validate_acyclic(
 
 /// Convert a Python object to serde_json::Value via pythonize.
 pub fn py_to_json(obj: &Bound<'_, PyAny>) -> PyResult<Json> {
-    validate_acyclic(obj, &mut HashSet::new(), 0, None)?;
+    validate_acyclic(obj, &mut HashSet::new(), 0, None, &mut None)?;
     pythonize::depythonize(obj).map_err(|e| {
         PyErr::new::<pyo3::exceptions::PyValueError, _>(format!("Failed to convert to JSON: {e}"))
     })
@@ -139,7 +214,7 @@ pub(crate) fn py_application_execution_context(
     let Some(value) = obj.filter(|value| !value.is_none()) else {
         return Ok(None);
     };
-    validate_acyclic(value, &mut HashSet::new(), 0, Some(64))?;
+    validate_acyclic(value, &mut HashSet::new(), 0, Some(64), &mut Some(16_384))?;
     let json: Json = pythonize::depythonize(value).map_err(|_| {
         pyo3::exceptions::PyValueError::new_err("invalid application execution context")
     })?;

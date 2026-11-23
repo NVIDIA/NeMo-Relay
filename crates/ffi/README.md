@@ -81,7 +81,7 @@ plus `execution_context_json` immediately before `out`:
 NemoRelayStatus status = nemo_relay_tool_call_execute_with_context(
     "write_file", args_json, execute_file, user_data, free_user_data,
     NULL, 0, NULL, NULL, "provider-call-123", 0,
-    "{\"application_review\":{\"reference\":\"review-123\"}}", &out
+    "{\"data\":{\"application_review\":{\"reference\":\"review-123\"}}}", &out
 );
 ```
 

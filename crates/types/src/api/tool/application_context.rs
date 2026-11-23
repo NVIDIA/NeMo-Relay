@@ -14,6 +14,8 @@ use serde::{Deserialize, Serialize};
 
 use crate::Json;
 
+const MAXIMUM_CONTEXT_SERIALIZED_BYTES: usize = 16_384;
+
 /// Canonical Draft 2020-12 schema shared by managed execution and worker decoding.
 pub const APPLICATION_EXECUTION_CONTEXT_SCHEMA: &str =
     include_str!("../../../schemas/application-execution-context.schema.json");
@@ -83,14 +85,9 @@ impl ApplicationExecutionContext {
         if !value.is_object() {
             return Err(ApplicationExecutionContextError::InvalidSchema);
         }
-        validate_depth(vec![(value, 1)])?;
-        if serde_json::to_vec(value)
-            .map_err(|_| ApplicationExecutionContextError::InvalidSchema)?
-            .len()
-            > 16_384
-        {
-            return Err(ApplicationExecutionContextError::TooLarge);
-        }
+        let mut remaining_bytes = MAXIMUM_CONTEXT_SERIALIZED_BYTES;
+        validate_resource_budget(value, 1, &mut remaining_bytes)?;
+        validate_serialized_size(value)?;
         if !VALIDATOR.is_valid(value) {
             return Err(ApplicationExecutionContextError::InvalidSchema);
         }
@@ -105,11 +102,15 @@ impl ApplicationExecutionContext {
 
     /// Revalidate programmatically supplied data before managed execution.
     pub fn validate(&self) -> Result<(), ApplicationExecutionContextError> {
+        let mut remaining_bytes = MAXIMUM_CONTEXT_SERIALIZED_BYTES;
         if let Some(data) = &self.data {
-            // Envelope is level 1 and data is level 2; payload containers start
-            // at level 3. Bound them before recursive JSON serialization.
-            validate_depth(data.values().map(|value| (value, 3)).collect())?;
+            charge_context_budget(&mut remaining_bytes, data.len().saturating_sub(1))?;
+            for (key, value) in data {
+                charge_context_budget(&mut remaining_bytes, key.len().saturating_add(3))?;
+                validate_resource_budget(value, 3, &mut remaining_bytes)?;
+            }
         }
+        validate_serialized_size(self)?;
         Self::validate_json(&self.to_json())
     }
 }
@@ -125,21 +126,81 @@ impl TryFrom<Json> for ApplicationExecutionContext {
     }
 }
 
-fn validate_depth(
-    mut pending: Vec<(&Json, usize)>,
+fn charge_context_budget(
+    remaining_bytes: &mut usize,
+    minimum_bytes: usize,
 ) -> Result<(), ApplicationExecutionContextError> {
-    while let Some((value, depth)) = pending.pop() {
-        if !value.is_object() && !value.is_array() {
-            continue;
+    *remaining_bytes = remaining_bytes
+        .checked_sub(minimum_bytes)
+        .ok_or(ApplicationExecutionContextError::TooLarge)?;
+    Ok(())
+}
+
+fn validate_resource_budget(
+    value: &Json,
+    depth: usize,
+    remaining_bytes: &mut usize,
+) -> Result<(), ApplicationExecutionContextError> {
+    if (value.is_object() || value.is_array()) && depth > 64 {
+        return Err(ApplicationExecutionContextError::TooDeep);
+    }
+    // A lower bound rejects wide containers and long strings before scanning
+    // or expanding them; the writer below enforces exact escaped UTF-8 size.
+    let minimum_bytes = match value {
+        Json::String(text) => text.len().saturating_add(2),
+        Json::Object(fields) => fields.len().saturating_sub(1).saturating_add(2),
+        Json::Array(items) => items.len().saturating_sub(1).saturating_add(2),
+        _ => 1,
+    };
+    charge_context_budget(remaining_bytes, minimum_bytes)?;
+    match value {
+        Json::Object(fields) => {
+            for (key, value) in fields {
+                charge_context_budget(remaining_bytes, key.len().saturating_add(3))?;
+                validate_resource_budget(value, depth + 1, remaining_bytes)?;
+            }
         }
-        if depth > 64 {
-            return Err(ApplicationExecutionContextError::TooDeep);
+        Json::Array(items) => {
+            for value in items {
+                validate_resource_budget(value, depth + 1, remaining_bytes)?;
+            }
         }
-        match value {
-            Json::Object(fields) => pending.extend(fields.values().map(|value| (value, depth + 1))),
-            Json::Array(items) => pending.extend(items.iter().map(|value| (value, depth + 1))),
-            _ => unreachable!(),
-        }
+        _ => {}
     }
     Ok(())
+}
+
+struct ContextSizeLimitWriter {
+    remaining_bytes: usize,
+}
+
+impl std::io::Write for ContextSizeLimitWriter {
+    fn write(&mut self, buffer: &[u8]) -> std::io::Result<usize> {
+        self.remaining_bytes = self
+            .remaining_bytes
+            .checked_sub(buffer.len())
+            .ok_or_else(|| {
+                std::io::Error::other("application execution context size limit exceeded")
+            })?;
+        Ok(buffer.len())
+    }
+
+    fn flush(&mut self) -> std::io::Result<()> {
+        Ok(())
+    }
+}
+
+fn validate_serialized_size(
+    value: &impl Serialize,
+) -> Result<(), ApplicationExecutionContextError> {
+    let mut writer = ContextSizeLimitWriter {
+        remaining_bytes: MAXIMUM_CONTEXT_SERIALIZED_BYTES,
+    };
+    serde_json::to_writer(&mut writer, value).map_err(|error| {
+        if error.is_io() {
+            ApplicationExecutionContextError::TooLarge
+        } else {
+            ApplicationExecutionContextError::InvalidSchema
+        }
+    })
 }

@@ -103,8 +103,9 @@ pub(crate) type HandledTsfn<T, Args = T, Return = ()> =
 pub(crate) const JAVASCRIPT_MAX_SAFE_INTEGER: u64 = (1 << 53) - 1;
 
 // Bound the prototype-safe context snapshot before shared envelope validation.
-const MAX_CONTEXT_JSON_DEPTH: u32 = 128;
-const MAX_CONTEXT_JSON_NODES: usize = 1_000_000;
+const MAXIMUM_CONTEXT_CONTAINER_DEPTH: u32 = 64;
+const MAXIMUM_CONTEXT_VALUE_COUNT: usize = 16_384;
+const MAXIMUM_CONTEXT_STRING_BYTES: usize = 16_384;
 
 pub(crate) fn lock<T>(mutex: &Mutex<T>) -> MutexGuard<'_, T> {
     mutex.lock().unwrap_or_else(PoisonError::into_inner)
@@ -249,8 +250,14 @@ pub(crate) fn execution_context_json(
     if matches!(value.get_type()?, ValueType::Null | ValueType::Undefined) {
         return Ok(None);
     }
-    let mut remaining_nodes = MAX_CONTEXT_JSON_NODES;
-    let value = own_context_json(value, MAX_CONTEXT_JSON_DEPTH, &mut remaining_nodes)?;
+    let mut remaining_nodes = MAXIMUM_CONTEXT_VALUE_COUNT;
+    let mut remaining_string_bytes = MAXIMUM_CONTEXT_STRING_BYTES;
+    let value = own_context_json(
+        value,
+        MAXIMUM_CONTEXT_CONTAINER_DEPTH,
+        &mut remaining_nodes,
+        &mut remaining_string_bytes,
+    )?;
     if !value.is_object() {
         return Err(Error::invalid_argument(
             "execution context must be a JSON object",
@@ -261,15 +268,37 @@ pub(crate) fn execution_context_json(
         .map_err(|error| Error::invalid_argument(error.to_string()))
 }
 
+fn context_string(value: Unknown, remaining_string_bytes: &mut usize) -> Result<String> {
+    let string = value.coerce_to_string()?;
+    // UTF-16 length is a cheap lower bound on UTF-8 length, so huge strings
+    // are refused before even scanning their UTF-8 representation.
+    if string.utf16_len()? > *remaining_string_bytes {
+        return Err(Error::invalid_argument(
+            "tool execution context exceeds 16384 serialized bytes",
+        ));
+    }
+    *remaining_string_bytes = remaining_string_bytes
+        .checked_sub(string.utf8_len()?)
+        .ok_or_else(|| {
+            Error::invalid_argument("tool execution context exceeds 16384 serialized bytes")
+        })?;
+    Ok(string.into_utf8()?.into_owned()?)
+}
+
 fn own_context_json(
     value: Unknown,
     remaining_depth: u32,
     remaining_nodes: &mut usize,
+    remaining_string_bytes: &mut usize,
 ) -> Result<Value> {
     *remaining_nodes = remaining_nodes
         .checked_sub(1)
         .ok_or_else(|| Error::invalid_argument("Exceeded maximum JSON value count"))?;
-    if value.get_type()? != ValueType::Object {
+    let value_type = value.get_type()?;
+    if value_type == ValueType::String {
+        return context_string(value, remaining_string_bytes).map(Value::String);
+    }
+    if value_type != ValueType::Object {
         return Ok(Json::from_unknown(value)?.0);
     }
     let remaining_depth = remaining_depth
@@ -285,7 +314,12 @@ fn own_context_json(
         for index in 0..length {
             // A sparse array must not import a value from its prototype.
             values.push(if object.has_own_property(&index.to_string())? {
-                own_context_json(object.get_element(index)?, remaining_depth, remaining_nodes)?
+                own_context_json(
+                    object.get_element(index)?,
+                    remaining_depth,
+                    remaining_nodes,
+                    remaining_string_bytes,
+                )?
             } else {
                 *remaining_nodes = remaining_nodes
                     .checked_sub(1)
@@ -303,19 +337,23 @@ fn own_context_json(
     let mut values = serde_json::Map::new();
     for index in 0..keys.get_array_length()? {
         let key: Unknown = keys.get_element(index)?;
-        // JSON object keys are strings; symbols are not part of its data model.
         if key.get_type()? != ValueType::String {
             continue;
         }
-        let name = key.coerce_to_string()?.into_utf8()?.into_owned()?;
         // An earlier getter may have removed a key from the captured own-key list.
-        if !object.has_own_property(&name)? {
+        if !object.has_own_property_js(key)? {
             continue;
         }
+        let name = context_string(key, remaining_string_bytes)?;
         let value = object.get_property(key)?;
         values.insert(
             name,
-            own_context_json(value, remaining_depth, remaining_nodes)?,
+            own_context_json(
+                value,
+                remaining_depth,
+                remaining_nodes,
+                remaining_string_bytes,
+            )?,
         );
     }
     Ok(Value::Object(values))

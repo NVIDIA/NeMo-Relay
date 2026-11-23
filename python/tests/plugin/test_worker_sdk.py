@@ -4415,6 +4415,44 @@ def test_context_checks_limits_before_recursive_snapshot() -> None:
         ToolExecutionContext("lookup", {}, execution_context={"data": {"extension": "x" * 16_384}})
 
 
+def test_context_resource_budget_checks_serialized_bytes_and_large_integers() -> None:
+    overhead_bytes = len(json.dumps({"data": {"value": ""}}, separators=(",", ":")).encode("utf-8"))
+    boundary = {"data": {"value": "x" * (16_384 - overhead_bytes)}}
+    context = ToolExecutionContext("lookup", {}, execution_context=boundary)
+    assert context.execution_context == boundary
+    for supplied in (
+        {"data": {"value": boundary["data"]["value"] + "x"}},
+        {"data": {"value": "\0" * 3_000}},
+        {"data": {"value": 1 << 100_000}},
+    ):
+        with pytest.raises(WorkerSdkError, match="16384 serialized bytes"):
+            ToolExecutionContext("lookup", {}, execution_context=supplied)
+
+
+def test_context_resource_budget_bounds_shared_container_expansion() -> None:
+    class CountedList(list):
+        expanded_visits = 0
+
+        def __iter__(self):
+            for value in super().__iter__():
+                type(self).expanded_visits += 1
+                if type(self).expanded_visits > 16_384:
+                    raise AssertionError("context traversal exceeded its resource budget")
+                yield value
+
+    shared = CountedList([None, None])
+    small_context = {"data": {"value": [shared, shared]}}
+    context = ToolExecutionContext("lookup", {}, execution_context=small_context)
+    assert context.execution_context == small_context
+    supplied = None
+    for _ in range(18):
+        supplied = CountedList([supplied, supplied])
+    CountedList.expanded_visits = 0
+    with pytest.raises(WorkerSdkError, match="16384 serialized bytes"):
+        ToolExecutionContext("lookup", {}, execution_context={"data": {"value": supplied}})
+    assert 0 < CountedList.expanded_visits <= 16_384
+
+
 @pytest.mark.parametrize(
     "case",
     json.loads(

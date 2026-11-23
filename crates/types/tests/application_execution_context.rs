@@ -102,6 +102,41 @@ fn typed_mutation_is_bounded_before_serialization() {
 }
 
 #[test]
+fn context_resource_budget_counts_exact_serialized_bytes() {
+    use nemo_relay_types::api::tool::application_context::ApplicationExecutionContextError;
+
+    let overhead_bytes = serde_json::to_vec(&json!({"data": {"value": ""}}))
+        .unwrap()
+        .len();
+    let available_bytes = 16_384 - overhead_bytes;
+    let unicode_boundary = "雪".repeat(available_bytes / 3) + &"x".repeat(available_bytes % 3);
+    for (text, expected) in [
+        ("x".repeat(available_bytes), Ok(())),
+        (unicode_boundary, Ok(())),
+        (
+            "x".repeat(available_bytes + 1),
+            Err(ApplicationExecutionContextError::TooLarge),
+        ),
+        (
+            "\0".repeat(3_000),
+            Err(ApplicationExecutionContextError::TooLarge),
+        ),
+    ] {
+        let mut context = ApplicationExecutionContext::default();
+        context.data = Some(std::collections::BTreeMap::from([(
+            "value".to_owned(),
+            Json::String(text),
+        )]));
+        let raw = context.to_json();
+        if expected.is_ok() {
+            assert_eq!(serde_json::to_vec(&raw).unwrap().len(), 16_384);
+        }
+        assert_eq!(ApplicationExecutionContext::validate_json(&raw), expected);
+        assert_eq!(context.validate(), expected);
+    }
+}
+
+#[test]
 fn published_schema_conformance_vectors_match_typed_decoding() {
     let cases: Vec<Json> =
         serde_json::from_str(include_str!("fixtures/application_execution_context.json")).unwrap();

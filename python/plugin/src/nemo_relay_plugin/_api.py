@@ -941,21 +941,41 @@ def _validate_application_execution_context(value: object) -> None:
     """
     if not isinstance(value, dict):
         raise WorkerSdkError("tool execution context must be an object")
-    pending: list[tuple[object, int]] = [(value, 0)]
-    while pending:
-        item, parent_depth = pending.pop()
+    remaining_units = 16_384
+
+    def preflight(item: object, parent_depth: int) -> None:
+        nonlocal remaining_units
+        minimum_units = 1
+        if isinstance(item, str):
+            minimum_units += len(item)
+        elif isinstance(item, int) and not isinstance(item, bool):
+            # A decimal digit holds fewer than four bits. This lower bound
+            # prevents huge integers from reaching JSON string conversion.
+            minimum_units = max(1, (int.bit_length(item) + 3) // 4)
+        remaining_units -= minimum_units
+        if remaining_units < 0:
+            raise WorkerSdkError("tool execution context exceeds 16384 serialized bytes")
         if isinstance(item, (dict, list)):
             depth = parent_depth + 1
             if depth > 64:
                 raise WorkerSdkError("tool execution context exceeds 64 container levels")
+            if len(item) > remaining_units:
+                raise WorkerSdkError("tool execution context exceeds 16384 serialized bytes")
             if isinstance(item, dict):
-                if any(not isinstance(key, str) for key in item):
-                    raise WorkerSdkError("invalid application execution context")
-                pending.extend((child, depth) for child in item.values())
+                for key, child in item.items():
+                    if not isinstance(key, str):
+                        raise WorkerSdkError("invalid application execution context")
+                    remaining_units -= len(key) + 1
+                    if remaining_units < 0:
+                        raise WorkerSdkError("tool execution context exceeds 16384 serialized bytes")
+                    preflight(child, depth)
             else:
-                pending.extend((child, depth) for child in item)
+                for child in item:
+                    preflight(child, depth)
         elif item is not None and not isinstance(item, (str, bool, int, float)):
             raise WorkerSdkError("invalid application execution context")
+
+    preflight(value, 0)
     if any(key != "data" for key in value) or ("data" in value and not isinstance(value["data"], dict)):
         raise WorkerSdkError("invalid application execution context")
     try:
