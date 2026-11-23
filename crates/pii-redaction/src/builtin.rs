@@ -1229,6 +1229,44 @@ pub(super) fn trajectory_llm_request_projection_callback(
     })
 }
 
+// Logprobs duplicate output in tokens, bytes and alternatives. Invalidate the
+// affected choice after both normalized overlays and wire-level rules have run.
+fn sanitize_response_logprobs(
+    surface: Option<ProviderSurface>,
+    payload: Json,
+    sanitize: impl FnOnce(Json) -> Option<Json>,
+) -> Option<Json> {
+    fn message_fields(choice: &Json) -> [Option<&Json>; 2] {
+        ["content", "refusal"]
+            .map(|field| choice.get("message")?.get(field).filter(|v| !v.is_null()))
+    }
+
+    if surface != Some(ProviderSurface::OpenAIChat) {
+        return sanitize(payload);
+    }
+    let originals: Vec<_> = payload
+        .get("choices")
+        .and_then(Json::as_array)
+        .into_iter()
+        .flatten()
+        .enumerate()
+        .filter(|(_, choice)| choice.get("logprobs").is_some_and(|v| !v.is_null()))
+        .map(|(index, choice)| (index, message_fields(choice).map(|value| value.cloned())))
+        .collect();
+    let mut sanitized = sanitize(payload)?;
+    for (index, original) in originals {
+        if let Some(choice) = sanitized
+            .get_mut("choices")
+            .and_then(|choices| choices.get_mut(index))
+            && message_fields(choice) != original.each_ref().map(Option::as_ref)
+            && let Some(choice) = choice.as_object_mut()
+        {
+            choice.remove("logprobs");
+        }
+    }
+    Some(sanitized)
+}
+
 pub(super) fn llm_sanitize_response_callback(
     backend: CompiledBuiltinBackend,
 ) -> LlmSanitizeResponseFn {
@@ -1237,7 +1275,11 @@ pub(super) fn llm_sanitize_response_callback(
         let backend = Arc::clone(&backend);
         Box::pin(async move {
             if backend.target_path_matcher.is_empty() {
-                return Ok(Some(backend.sanitize_json_preorder_dfs(payload)));
+                let surface = detect_response_surface(&payload)
+                    .or_else(|| backend.selected_surface(context.codec()));
+                return Ok(sanitize_response_logprobs(surface, payload, |p| {
+                    Some(backend.sanitize_json_preorder_dfs(p))
+                }));
             }
             if matches!(context.codec(), LlmCodecIdentity::None)
                 && !backend.uses_compatible_legacy_response_codec(&payload)
@@ -1267,7 +1309,9 @@ pub(super) fn llm_sanitize_response_callback(
                 log_llm_payload_omitted("response", context.codec(), "no usable response codec");
                 return Ok(None);
             };
-            let sanitized = backend.sanitize_response_with_codec(codec, surface, payload);
+            let sanitized = sanitize_response_logprobs(Some(surface), payload, |p| {
+                backend.sanitize_response_with_codec(codec, surface, p)
+            });
             if sanitized.is_none() {
                 log_llm_payload_omitted(
                     "response",

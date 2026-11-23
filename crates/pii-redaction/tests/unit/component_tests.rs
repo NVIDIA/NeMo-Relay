@@ -8048,6 +8048,70 @@ async fn scalar_message_rule_keeps_cross_block_matches_with_a_refusal() {
 }
 
 #[tokio::test]
+async fn chat_redaction_drops_token_copies_only_when_choice_text_changes() {
+    use nemo_relay_codecs::openai_chat::OpenAIChatStreamingCodec;
+    use nemo_relay_types::codec::streaming::StreamingCodec;
+
+    for field in ["content", "refusal"] {
+        let chunk = json!({"choices":[{"index":0, "delta":{(field): "123456"},
+            "logprobs":{(field):[{"token":"123456","bytes":[49,50,51,52,53,54],
+                "top_logprobs":[{"token":"alternative","bytes":[97]}]}]}}]});
+        let stream = OpenAIChatStreamingCodec::new();
+        stream.borrowed_collector().unwrap()(&chunk).unwrap();
+        let raw = stream.finalizer()();
+        for (action, path, pattern, changed) in [
+            ("remove", "/message".to_string(), None, true),
+            (
+                "regex_replace",
+                "/message".to_string(),
+                Some("123456"),
+                true,
+            ),
+            (
+                "regex_replace",
+                format!("/choices/0/message/{field}"),
+                Some("123456"),
+                true,
+            ),
+            (
+                "regex_replace",
+                "/message".to_string(),
+                Some("no match"),
+                false,
+            ),
+        ] {
+            let backend = CompiledBuiltinBackend::new(
+                BuiltinBackendConfig {
+                    action: action.into(),
+                    pattern: pattern.map(str::to_owned),
+                    replacement: pattern.map(|_| "[redacted]".into()),
+                    target_paths: vec![path],
+                    ..Default::default()
+                },
+                None,
+            )
+            .unwrap();
+            let sanitize = crate::builtin::llm_sanitize_response_callback(backend);
+            let result = sanitize(
+                raw.clone(),
+                LlmSanitizeResponseContext::for_response_codec(Some(Arc::new(OpenAIChatCodec))),
+            )
+            .await
+            .unwrap()
+            .unwrap();
+            let choice = &result["choices"][0];
+            if changed {
+                assert!(choice.get("logprobs").is_none());
+                assert!(!result.to_string().contains("123456"));
+                assert!(!result.to_string().contains("[49,50,51,52,53,54]"));
+            } else {
+                assert_eq!(choice["logprobs"], chunk["choices"][0]["logprobs"]);
+            }
+        }
+    }
+}
+
+#[tokio::test]
 async fn normalized_response_removal_omits_payload_when_part_positions_cannot_be_preserved() {
     let raw = json!({"status":"completed","output":[{
         "type":"message","content":[
