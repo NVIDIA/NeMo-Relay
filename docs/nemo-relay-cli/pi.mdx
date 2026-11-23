@@ -404,6 +404,12 @@ to bundled codemode and tool search with explicit launcher arguments. See
 
 ## Argument Transforms
 
+Pi 1.5.0 and later validate plain JSON Schema tool arguments, including MCP
+arguments, before the Relay gate runs. For an integer field, a model can
+propose `"42"` and Relay receives the number `42`. An accepted rewrite to
+`7` delivers the number `7` to the MCP server. Invalid input can produce an
+error completion before Relay sees a gate request.
+
 A Relay request intercept can rewrite a tool call's arguments. The gateway never
 executes the tool, so the rewrite travels back in the allow response and the
 extension applies it to pi's `event.input` in place.
