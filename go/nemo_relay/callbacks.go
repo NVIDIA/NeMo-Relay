@@ -676,7 +676,7 @@ func codecDecodeResultForTest(codec *CodecFunc, request LLMRequest) (json.RawMes
 	if err != nil {
 		return nil, err
 	}
-	defer C.free(unsafe.Pointer(result))
+	defer C.nemo_relay_string_free(result)
 	return json.RawMessage(C.GoString(result)), nil
 }
 
@@ -685,7 +685,7 @@ func codecEncodeResultForTest(codec *CodecFunc, annotated json.RawMessage, reque
 	if err != nil {
 		return nil, err
 	}
-	defer C.free(unsafe.Pointer(result))
+	defer C.nemo_relay_string_free(result)
 	return json.RawMessage(C.GoString(result)), nil
 }
 
@@ -711,7 +711,7 @@ func pluginValidateResultForTest(plugin Plugin, raw json.RawMessage) (json.RawMe
 	if err != nil {
 		return nil, err
 	}
-	defer C.free(unsafe.Pointer(result))
+	defer C.nemo_relay_string_free(result)
 	return json.RawMessage(C.GoString(result)), nil
 }
 
