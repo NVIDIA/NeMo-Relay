@@ -129,7 +129,7 @@ fn overlay_gemini_message_parts(parts: &mut Vec<Json>, message: Option<&MessageC
         return;
     }
 
-    let message_text = annotated_message_text(message);
+    let message_text = joined_message_text(message, None);
     let mut wrote_text = false;
     parts.retain_mut(|part| {
         if part.get("text").is_none() || part.get("thought").and_then(Json::as_bool) == Some(true) {
@@ -209,11 +209,12 @@ fn overlay_openai_chat_response(mut payload: Json, annotated: &AnnotatedLlmRespo
     let Some(message) = choice.get_mut("message").and_then(Json::as_object_mut) else {
         return payload;
     };
-    set_optional_string_field(
-        message,
-        "content",
-        annotated_message_text(annotated.message.as_ref()).as_deref(),
-    );
+    let text = joined_message_text(annotated.message.as_ref(), Some("text"));
+    let refusal = joined_message_text(annotated.message.as_ref(), Some("refusal"));
+    set_optional_string_field(message, "content", text.as_deref());
+    if message.contains_key("refusal") || refusal.is_some() {
+        set_optional_string_field(message, "refusal", refusal.as_deref());
+    }
     overlay_openai_chat_tool_calls(message, annotated.tool_calls.as_deref());
     payload
 }
@@ -233,12 +234,22 @@ fn overlay_openai_responses_response(mut payload: Json, annotated: &AnnotatedLlm
             .map(openai_responses_status),
     );
 
-    let message_text = annotated_message_text(annotated.message.as_ref());
+    let message_text = joined_message_text(annotated.message.as_ref(), Some("text"));
     if root.contains_key("output_text") {
         set_optional_string_field(root, "output_text", message_text.as_deref());
     }
     if let Some(items) = root.get_mut("output").and_then(Json::as_array_mut) {
-        overlay_output_text_blocks(items, message_text);
+        let has_refusal = items
+            .iter()
+            .filter(|item| item.get("type").and_then(Json::as_str) == Some("message"))
+            .filter_map(|item| item.get("content").and_then(Json::as_array))
+            .flatten()
+            .any(|block| block.get("type").and_then(Json::as_str) == Some("refusal"));
+        if matches!(annotated.message, Some(MessageContent::Parts(_))) || has_refusal {
+            overlay_structured_output_blocks(items, annotated.message.as_ref());
+        } else {
+            overlay_output_text_blocks(items, message_text);
+        }
         overlay_openai_responses_tool_calls(items, annotated.tool_calls.as_deref());
     }
     payload
@@ -257,7 +268,10 @@ fn overlay_anthropic_response(mut payload: Json, annotated: &AnnotatedLlmRespons
     );
 
     if let Some(blocks) = root.get_mut("content").and_then(Json::as_array_mut) {
-        overlay_anthropic_text_blocks(blocks, annotated_message_text(annotated.message.as_ref()));
+        overlay_anthropic_text_blocks(
+            blocks,
+            joined_message_text(annotated.message.as_ref(), None),
+        );
         overlay_anthropic_tool_calls(blocks, annotated.tool_calls.as_deref());
     }
     payload
@@ -294,7 +308,7 @@ fn overlay_oci_chat_response(
         set_optional_string_field(
             chat_response,
             "text",
-            annotated_message_text(annotated.message.as_ref()).as_deref(),
+            joined_message_text(annotated.message.as_ref(), None).as_deref(),
         );
         set_optional_string_field(
             chat_response,
@@ -360,13 +374,16 @@ fn overlay_oci_chat_response(
 fn overlay_oci_message(message: &mut Map<String, Json>, annotated: &AnnotatedLlmResponse) {
     match message.get_mut("content") {
         Some(Json::Array(blocks)) => {
-            overlay_oci_text_parts(blocks, annotated_message_text(annotated.message.as_ref()));
+            overlay_oci_text_parts(
+                blocks,
+                joined_message_text(annotated.message.as_ref(), None),
+            );
         }
         Some(Json::String(_)) => {
             set_optional_string_field(
                 message,
                 "content",
-                annotated_message_text(annotated.message.as_ref()).as_deref(),
+                joined_message_text(annotated.message.as_ref(), None).as_deref(),
             );
         }
         _ => {}
@@ -584,6 +601,88 @@ fn overlay_anthropic_tool_calls(blocks: &mut Vec<Json>, tool_calls: Option<&[Res
     });
 }
 
+// Yield sanitized fields in source order. OpenAI overlays also use the field name
+// to keep refusals separate from ordinary text.
+fn message_text_fields(
+    message: Option<&MessageContent>,
+) -> impl Iterator<Item = (&'static str, &str)> {
+    let (text, parts): (Option<&str>, &[ContentPart]) = match message {
+        Some(MessageContent::Text(text)) => (Some(text), &[]),
+        Some(MessageContent::Parts(parts)) => (None, parts),
+        None => (None, &[]),
+    };
+    text.map(|text| ("text", text))
+        .into_iter()
+        .chain(parts.iter().filter_map(|part| {
+            match part {
+                ContentPart::Text { text, .. } => Some(("text", text.as_str())),
+                ContentPart::Refusal { refusal, .. } => Some(("refusal", refusal.as_str())),
+                ContentPart::ProviderNative { value, .. } => value
+                    .get("text")
+                    .and_then(Json::as_str)
+                    .map(|text| ("text", text))
+                    .or_else(|| {
+                        value
+                            .get("refusal")
+                            .and_then(Json::as_str)
+                            .map(|text| ("refusal", text))
+                    }),
+                ContentPart::ImageUrl { .. }
+                | ContentPart::Image { .. }
+                | ContentPart::Audio { .. }
+                | ContentPart::File { .. }
+                | ContentPart::ToolUse { .. }
+                | ContentPart::ToolResult { .. } => None,
+            }
+        }))
+}
+
+pub(super) fn joined_message_text(
+    message: Option<&MessageContent>,
+    selected_field: Option<&str>,
+) -> Option<String> {
+    let mut fields = message_text_fields(message)
+        .filter(|(field, _)| selected_field.is_none_or(|selected| selected == *field))
+        .map(|(_, text)| text);
+    let mut joined = fields.next()?.to_owned();
+    for text in fields {
+        joined.push('\n');
+        joined.push_str(text);
+    }
+    Some(joined)
+}
+
+fn overlay_structured_output_blocks(items: &mut [Json], message: Option<&MessageContent>) {
+    let mut fields = message_text_fields(message).peekable();
+    let mut overlay_block = |block: &mut Json| {
+        let key = match block.get("type").and_then(Json::as_str) {
+            Some("output_text") => "text",
+            Some("refusal") => "refusal",
+            _ => return,
+        };
+        // Removed parts must not move text across a refusal boundary.
+        let value = if fields.peek().is_some_and(|(field, _)| *field == key) {
+            fields.next().map(|(_, text)| text)
+        } else {
+            None
+        };
+        if let Some(block) = block.as_object_mut() {
+            set_optional_string_field(block, key, value);
+        }
+    };
+    for item in items {
+        if item.get("type").and_then(Json::as_str) == Some("message") {
+            if let Some(content) = item.get_mut("content").and_then(Json::as_array_mut) {
+                for block in content {
+                    overlay_block(block);
+                }
+            }
+        } else if item.get("type").and_then(Json::as_str) == Some("output_text") {
+            overlay_block(item);
+        }
+    }
+}
+
 fn overlay_output_text_blocks(items: &mut [Json], message_text: Option<String>) {
     let text_items = items.iter_mut().filter_map(|item| {
         (item.get("type").and_then(Json::as_str) == Some("message"))
@@ -665,32 +764,6 @@ fn overlay_anthropic_text_blocks(blocks: &mut [Json], message_text: Option<Strin
             });
         set_optional_string_field(block, "text", part);
         text_block_index += 1;
-    }
-}
-
-fn annotated_message_text(message: Option<&MessageContent>) -> Option<String> {
-    match message? {
-        MessageContent::Text(text) => Some(text.clone()),
-        MessageContent::Parts(parts) => {
-            let text_parts: Vec<&str> = parts
-                .iter()
-                .filter_map(|part| match part {
-                    ContentPart::Text { text, .. } => Some(text.as_str()),
-                    ContentPart::Refusal { refusal, .. } => Some(refusal.as_str()),
-                    ContentPart::ProviderNative { value, .. } => value
-                        .get("text")
-                        .and_then(Json::as_str)
-                        .or_else(|| value.get("refusal").and_then(Json::as_str)),
-                    ContentPart::ImageUrl { .. }
-                    | ContentPart::Image { .. }
-                    | ContentPart::Audio { .. }
-                    | ContentPart::File { .. }
-                    | ContentPart::ToolUse { .. }
-                    | ContentPart::ToolResult { .. } => None,
-                })
-                .collect();
-            (!text_parts.is_empty()).then(|| text_parts.join("\n"))
-        }
     }
 }
 

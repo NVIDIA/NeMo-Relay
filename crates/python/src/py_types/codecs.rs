@@ -24,6 +24,7 @@ use super::{
     FORCE_ANNOTATED_RESPONSE_TOOL_CALLS_SERIALIZATION_ERROR,
     FORCE_ANNOTATED_RESPONSE_USAGE_SERIALIZATION_ERROR,
 };
+use nemo_relay_types::codec::content::ContentSelection;
 use nemo_relay_types::codec::response::FinishReason;
 
 /// A resolved request codec available while an LLM request sanitizer runs.
@@ -127,6 +128,25 @@ fn optional_json_setter(
 
 #[pymethods]
 impl PyAnnotatedLLMRequest {
+    /// Snapshot exactly the final supplied message, or None for empty history.
+    fn last_message(&self) -> PyResult<Option<super::content::PyMessageView>> {
+        super::content::PyMessageView::select_request(&self.inner, ContentSelection::LastMessage)
+    }
+
+    /// Snapshot a history item by Python index, including negative indices.
+    fn message(&self, index: isize) -> PyResult<super::content::PyMessageView> {
+        super::content::PyMessageView::select_request(
+            &self.inner,
+            ContentSelection::Message(index as i64),
+        )?
+        .ok_or_else(|| pyo3::exceptions::PyIndexError::new_err("message index out of range"))
+    }
+
+    /// Snapshot top-level instructions without falling back to history.
+    fn instructions_view(&self) -> PyResult<Option<super::content::PyMessageView>> {
+        super::content::PyMessageView::select_request(&self.inner, ContentSelection::Instructions)
+    }
+
     /// Create a new AnnotatedLLMRequest.
     ///
     /// Args:
@@ -548,14 +568,16 @@ impl PyAnnotatedLLMRequest {
         Ok(())
     }
 
-    /// Extract the text content of the first system message, if any.
+    /// Join text/refusals from instructions or the first system/developer item.
     pub(crate) fn system_prompt(&self) -> Option<String> {
-        self.inner.system_prompt().map(|s| s.to_string())
+        self.inner.system_prompt().map(std::borrow::Cow::into_owned)
     }
 
-    /// Get the text content of the last user message, if any.
+    /// Join text/refusals from the last user item, without skipping textless items.
     pub(crate) fn last_user_message(&self) -> Option<String> {
-        self.inner.last_user_message().map(|s| s.to_string())
+        self.inner
+            .last_user_message()
+            .map(std::borrow::Cow::into_owned)
     }
 
     /// Check if any assistant message contains tool calls.
@@ -650,6 +672,11 @@ fn optional_finish_reason(value: Option<&Bound<'_, PyAny>>) -> PyResult<Option<F
 
 #[pymethods]
 impl PyAnnotatedLLMResponse {
+    /// Snapshot current message and separate tool calls, including textless output.
+    fn output(&self) -> super::content::PyMessageView {
+        super::content::PyMessageView::response(&self.inner)
+    }
+
     #[new]
     #[pyo3(signature = (
         id = None,
@@ -797,9 +824,9 @@ impl PyAnnotatedLLMResponse {
         json_to_py(py, &serde_json::Value::Object(self.inner.extra.clone()))
     }
 
-    /// Extract the text content of the response message.
+    /// Join output text/refusals with newlines, excluding tool payloads.
     pub(crate) fn response_text(&self) -> Option<String> {
-        self.inner.response_text().map(|s| s.to_string())
+        self.inner.response_text().map(std::borrow::Cow::into_owned)
     }
 
     /// Check if the response contains any tool calls.

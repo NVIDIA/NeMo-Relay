@@ -862,3 +862,38 @@ def test_multiple_tool_result_edits_and_insertion() -> None:
         {"role": "tool", "tool_call_id": "a", "content": "blocked"},
         {"role": "tool", "tool_call_id": "c", "content": "inserted"},
     ]
+
+
+@pytest.mark.parametrize(
+    ("codec", "payload"),
+    [
+        (
+            OpenAIChatCodec(),
+            {"choices": [{"message": {"content": "prefix", "refusal": "cannot help"}}]},
+        ),
+        (
+            OpenAIResponsesCodec(),
+            {
+                "output": [
+                    {
+                        "type": "message",
+                        "content": [
+                            {"type": "output_text", "text": "prefix"},
+                            {"type": "refusal", "refusal": "cannot help"},
+                        ],
+                    }
+                ]
+            },
+        ),
+    ],
+)
+def test_response_codecs_preserve_structured_refusals(
+    codec: OpenAIChatCodec | OpenAIResponsesCodec, payload: JsonObject
+) -> None:
+    """Existing codec APIs expose typed refusals and include them in extracted text."""
+    response = codec.decode_response(payload)
+    assert response.message == [
+        {"type": "text", "text": "prefix"},
+        {"type": "refusal", "refusal": "cannot help"},
+    ]
+    assert response.response_text() == "prefix\ncannot help"

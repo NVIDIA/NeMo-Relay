@@ -211,7 +211,17 @@ fn handle_cache_stability_intent(
     let end_index = cache_stability
         .stable_prefix_end
         .min(input.prompt_ir.blocks.len());
-    let token_estimate = estimate_prefix_tokens(input.prompt_ir.blocks.iter().take(end_index));
+    let Some(token_estimate) =
+        estimate_prefix_tokens(input.prompt_ir.blocks.iter().take(end_index))
+    else {
+        outcomes.push(new_intent_outcome(
+            IntentType::CacheStability,
+            TranslationStatus::Degraded,
+            ReasonCode::InsufficientEvidence,
+            Some("token count unavailable for media or opaque prefix content".into()),
+        ));
+        return;
+    };
 
     if token_estimate.cumulative_tokens < context.min_cacheable_tokens {
         acg_debug::emit(
@@ -352,28 +362,20 @@ fn new_intent_outcome(
 
 fn estimate_prefix_tokens<'a>(
     blocks: impl Iterator<Item = &'a PromptBlock>,
-) -> PrefixTokenEstimate {
-    let mut cumulative_tokens = 0;
+) -> Option<PrefixTokenEstimate> {
+    let mut cumulative_tokens = 0_u32;
     let mut used_fallback = false;
 
     for block in blocks {
-        let (tokens, fallback) = estimate_block_tokens(block);
-        cumulative_tokens += tokens;
+        let (tokens, fallback) = block.estimated_tokens()?;
+        cumulative_tokens = cumulative_tokens.saturating_add(tokens);
         used_fallback |= fallback;
     }
 
-    PrefixTokenEstimate {
+    Some(PrefixTokenEstimate {
         cumulative_tokens,
         used_fallback,
-    }
-}
-
-fn estimate_block_tokens(block: &PromptBlock) -> (u32, bool) {
-    if let Some(ref metadata) = block.token_metadata {
-        (metadata.token_count, false)
-    } else {
-        ((block.content.len() as u32) / 4, true)
-    }
+    })
 }
 
 fn format_scope(scope: &crate::acg::types::SharingScope) -> &'static str {

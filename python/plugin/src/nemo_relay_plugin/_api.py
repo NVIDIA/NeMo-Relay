@@ -81,15 +81,16 @@ from datetime import datetime, timezone
 from enum import Enum
 from importlib import metadata
 from pathlib import Path
-from typing import Any, ClassVar, NotRequired, Protocol, TypeAlias, TypedDict
+from typing import Any, ClassVar, Literal, NotRequired, Protocol, TypeAlias, TypedDict
 from urllib.parse import urlsplit
 
-from . import _protocol
+from . import _protocol, codecs
 from ._diagnostics import DiagnosticDeliveryError, WorkerDiagnostics, _open_diagnostic_channel
 from ._message_limits import CALLBACK_NAME, MessageLimitInterceptor, RpcHostChannel, named_message_limits
 from ._proto.nvidia.nemo.relay.worker.v1 import (
     common_pb2 as common_pb,
 )
+from ._proto.nvidia.nemo.relay.worker.v1 import content_pb2 as content_pb
 from ._proto.nvidia.nemo.relay.worker.v1 import (
     event_pb2 as event_pb,
 )
@@ -1877,6 +1878,78 @@ class PluginRuntime:
             self._conditional_middleware_callbacks.pop(handle._callback_name, None)
         return response.removed
 
+    async def inspect_llm_content(
+        self,
+        source: Literal["request", "response", "message", "content"],
+        value: Json,
+        selection: Literal[
+            "last_message", "message_index", "instructions", "system_prompt", "last_user_message", "output", "all"
+        ],
+        *,
+        message_index: int | None = None,
+    ) -> codecs.MessageView | None:
+        """Select normalized content through the Rust host and retain an owned snapshot.
+
+        Args:
+            source: Normalized request, response, standalone message, or content.
+            value: Caller-supplied normalized dictionary/content; no provider decoding occurs.
+            selection: Host selection applied before text extraction.
+            message_index: Signed history index when selection is message_index.
+
+        Returns:
+            An independent read-only snapshot, or None for an absent selection.
+
+        Raises:
+            WorkerSdkError: Unsupported host, expired activation, malformed input, or transport failure.
+            IndexError: The explicit history index is out of range.
+        """
+        source_types = {
+            "request": llm_pb.AnnotatedLlmRequest,
+            "response": llm_pb.AnnotatedLlmResponse,
+            "message": llm_pb.LlmMessage,
+            "content": llm_pb.MessageContent,
+        }
+        if source in {"request", "response"}:
+            if not isinstance(value, Mapping):
+                raise WorkerSdkError("normalized annotation must be an object")
+            # Transport only content fields; selection and extraction remain entirely in Rust.
+            value = (
+                {"messages": value.get("messages", []), "instructions": value.get("instructions")}
+                if source == "request"
+                else {"message": value.get("message"), "tool_calls": value.get("tool_calls")}
+            )
+        elif isinstance(value, Mapping):
+            value = dict(value)
+        try:
+            selector = content_pb.LlmContentSelection()
+            if selection == "message_index":
+                if message_index is None:
+                    raise ValueError("message_index selection requires an index")
+                selector.message_index = message_index
+            else:
+                getattr(selector, selection).SetInParent()
+            request = host_pb.InspectLlmContentRequest(
+                credentials=common_pb.Credentials(activation_id=self._activation_id, auth_token=self._auth_token),
+                selection=selector,
+                **{source: _encode_payload(source_types[source], value)},
+            )
+        except (AttributeError, KeyError, TypeError, ValueError) as error:
+            raise WorkerSdkError(f"invalid content inspection input: {error}") from error
+        try:
+            response = await self._host_stub.InspectLlmContent(request)
+        except grpc.aio.AioRpcError as error:
+            if error.code() == grpc.StatusCode.UNIMPLEMENTED:
+                raise WorkerSdkError(
+                    "content inspection is unsupported by this host; upgrade the Relay host"
+                ) from error
+            if error.code() == grpc.StatusCode.OUT_OF_RANGE:
+                raise IndexError("message index out of range") from error
+            raise WorkerSdkError(f"InspectLlmContent failed: {error.details()}") from error
+        _validate_response(response)
+        if response.WhichOneof("result") == "no_selection":
+            return None
+        return codecs._from_proto(response.snapshot)
+
     async def _decode_llm_codec_request(
         self, capability_id: str, invocation_id: str, request: LlmRequest
     ) -> AnnotatedLlmRequest:
@@ -3091,7 +3164,7 @@ def _tool_execution_intercept_outcome_to_proto(value: ToolExecutionInterceptOutc
 
 
 def _encode_payload(message_type: Any, value: Json) -> Any:
-    if message_type is not common_pb.JsonValue and not isinstance(value, dict):
+    if message_type not in (common_pb.JsonValue, llm_pb.MessageContent) and not isinstance(value, dict):
         raise WorkerSdkError(f"{message_type.DESCRIPTOR.name} payload must be a JSON object")
     _validate_json_object_keys(value)
     return _protocol.pack(message_type, value)

@@ -53,11 +53,18 @@ from nemo_relay import Json
 from nemo_relay._native import (
     AnnotatedLLMRequest,
     AnthropicMessagesCodec,
+    ContentEntry,
+    ContentIterator,
+    ContentLocation,
     GeminiGenerateContentCodec,
     LLMRequest,
+    MessageView,
     OCIGenAIChatCodec,
     OpenAIChatCodec,
     OpenAIResponsesCodec,
+    PayloadView,
+    ToolCallView,
+    ToolResultView,
 )
 
 if TYPE_CHECKING:
@@ -173,6 +180,13 @@ class LlmResponseCodec(Protocol):
 
 
 __all__ = [
+    "MessageView",
+    "ContentIterator",
+    "ContentEntry",
+    "ContentLocation",
+    "ToolCallView",
+    "ToolResultView",
+    "PayloadView",
     "AnnotatedLLMRequest",
     "AnthropicMessagesCodec",
     "GeminiGenerateContentCodec",
