@@ -4910,8 +4910,11 @@ async fn claude_code_sessions_keep_one_conversation_id_per_session_on_gen_ai_spa
     let (subscriber, exporter) = make_gen_ai_test_subscriber(subscriber_name);
     subscriber.register(subscriber_name).unwrap();
     let manager = SessionManager::new(session_test_config());
-    let session_ids = ["conversation-session-1", "conversation-session-2"];
-    for session_id in session_ids {
+    let sessions = [
+        ("conversation-session-1", "worker-1"),
+        ("conversation-session-2", "worker-2"),
+    ];
+    for (session_id, subagent_id) in sessions {
         let hook_metadata = |hook: &str| json!({ "hook_event_name": hook });
         manager
             .apply_events(
@@ -4935,7 +4938,7 @@ async fn claude_code_sessions_keep_one_conversation_id_per_session_on_gen_ai_spa
                         session_id: session_id.into(),
                         agent_kind: AgentKind::ClaudeCode,
                         event_name: "SubagentStart".into(),
-                        subagent_id: "worker".into(),
+                        subagent_id: subagent_id.into(),
                         payload: json!({}),
                         metadata: hook_metadata("SubagentStart"),
                     }),
@@ -4945,7 +4948,7 @@ async fn claude_code_sessions_keep_one_conversation_id_per_session_on_gen_ai_spa
                         event_name: "PreToolUse".into(),
                         tool_call_id: "call-1".into(),
                         tool_name: "Bash".into(),
-                        subagent_id: Some("worker".into()),
+                        subagent_id: Some(subagent_id.into()),
                         arguments: json!({ "command": "ls" }),
                         result: Value::Null,
                         status: None,
@@ -4958,7 +4961,7 @@ async fn claude_code_sessions_keep_one_conversation_id_per_session_on_gen_ai_spa
                         event_name: "PostToolUse".into(),
                         tool_call_id: "call-1".into(),
                         tool_name: "Bash".into(),
-                        subagent_id: Some("worker".into()),
+                        subagent_id: Some(subagent_id.into()),
                         arguments: Value::Null,
                         result: json!({ "stdout": "" }),
                         status: None,
@@ -4969,24 +4972,23 @@ async fn claude_code_sessions_keep_one_conversation_id_per_session_on_gen_ai_spa
             )
             .await
             .unwrap();
-        let llm = manager
+        let prep = manager
             .prepare_gateway_call(
                 &HeaderMap::new(),
-                LlmGatewayStart {
-                    session_id: Some(session_id.into()),
-                    provider: "anthropic.messages".into(),
-                    ..llm_start()
-                },
+                llm_start_with_messages_task(session_id, "work"),
             )
             .await
             .unwrap();
-        manager
-            .finish_gateway_call(
-                &llm.session_id,
-                llm.owner_subagent_id.as_deref(),
-                llm.session_finish,
-            )
-            .await;
+        execute_prepared_llm(
+            &manager,
+            prep,
+            json!({
+                "model": "claude-test",
+                "content": [{"type": "text", "text": "Done."}],
+                "stop_reason": "end_turn"
+            }),
+        )
+        .await;
     }
     manager.close_all("test_shutdown").await.unwrap();
     flush_subscribers().unwrap();
@@ -4994,14 +4996,21 @@ async fn claude_code_sessions_keep_one_conversation_id_per_session_on_gen_ai_spa
     assert!(subscriber.deregister(subscriber_name).unwrap());
 
     let spans = exporter.get_finished_spans().unwrap();
-    for session_id in session_ids {
+    let mut attributed_spans = 0;
+    let mut trace_ids = HashSet::new();
+    for (session_id, subagent_id) in sessions {
+        let subagent_span_name = format!("invoke_agent subagent:{subagent_id}");
+        let trace_id = spans
+            .iter()
+            .find(|span| span.name == subagent_span_name)
+            .map(|span| span.span_context.trace_id())
+            .expect("expected the session's subagent span");
+        assert!(trace_ids.insert(trace_id), "{session_id}: {spans:?}");
         let session_spans: Vec<_> = spans
             .iter()
-            .filter(|span| {
-                attr_map(&span.attributes).get("gen_ai.conversation.id")
-                    == Some(&session_id.to_string())
-            })
+            .filter(|span| span.span_context.trace_id() == trace_id)
             .collect();
+        attributed_spans += session_spans.len();
         let operations: HashSet<String> = session_spans
             .iter()
             .filter_map(|span| {
@@ -5012,21 +5021,22 @@ async fn claude_code_sessions_keep_one_conversation_id_per_session_on_gen_ai_spa
             .collect();
         assert_eq!(
             operations,
-            HashSet::from(["invoke_agent".to_string(), "execute_tool".to_string()]),
-            "{session_id}: {spans:?}"
+            HashSet::from([
+                "invoke_agent".to_string(),
+                "execute_tool".to_string(),
+                "chat".to_string(),
+            ]),
+            "{session_id}: {session_spans:?}"
         );
         assert!(
-            session_spans
-                .iter()
-                .any(|span| span.name == "invoke_agent subagent:worker"),
-            "{session_id}"
+            session_spans.iter().all(|span| {
+                attr_map(&span.attributes).get("gen_ai.conversation.id")
+                    == Some(&session_id.to_string())
+            }),
+            "{session_id}: {session_spans:?}"
         );
     }
-    assert!(spans.iter().all(|span| {
-        attr_map(&span.attributes)
-            .get("gen_ai.conversation.id")
-            .is_some_and(|id| session_ids.contains(&id.as_str()))
-    }));
+    assert_eq!(attributed_spans, spans.len(), "{spans:?}");
     subscriber.shutdown().unwrap();
 }
 
