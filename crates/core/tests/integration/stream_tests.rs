@@ -30,7 +30,7 @@ use nemo_relay::api::runtime::{
 };
 use nemo_relay::api::scope::{PopScopeParams, PushScopeParams, ScopeType, pop_scope, push_scope};
 use nemo_relay::api::subscriber::{deregister_subscriber, flush_subscribers, register_subscriber};
-use nemo_relay::codec::anthropic::AnthropicMessagesCodec;
+use nemo_relay::codec::anthropic::{AnthropicMessagesCodec, AnthropicMessagesStreamingCodec};
 use nemo_relay::codec::openai_chat::{OpenAIChatCodec, OpenAIChatStreamingCodec};
 use nemo_relay::codec::openai_responses::{OpenAIResponsesCodec, OpenAIResponsesStreamingCodec};
 use nemo_relay::codec::optimization::LlmOptimizationContribution;
@@ -1050,9 +1050,10 @@ async fn responses_stream_validation_checks_completion_and_preserves_close() {
             vec![json!({"type": "response.completed", "response": null})],
             true,
         ),
-        (vec![completed], false),
-        (vec![failed], false),
-        (vec![incomplete], false),
+        (vec![completed.clone()], false),
+        (vec![incomplete.clone()], false),
+        (vec![completed, failed.clone()], false),
+        (vec![incomplete, failed], false),
     ] {
         let codec = OpenAIResponsesStreamingCodec::new();
         let close_calls = Arc::new(AtomicUsize::new(0));
@@ -1121,7 +1122,56 @@ async fn responses_stream_validation_checks_completion_and_preserves_close() {
     assert_eq!(close_calls.load(Ordering::SeqCst), 1);
 }
 
-/// Sessions keep final usage and mark only calls that end early as errors.
+#[tokio::test]
+async fn responses_stream_validation_reports_failure_before_reading_the_source_again() {
+    let failed = json!({"type": "response.failed", "response": {
+        "status": "failed", "error": {"code": "server_error", "message": "Generation failed"}
+    }});
+    let description = "OpenAI Responses stream reported server_error: Generation failed";
+    for (failed, tail, description) in [
+        (failed.clone(), make_stream(vec![]), description),
+        (
+            failed.clone(),
+            LlmJsonStream::new(tokio_stream::pending()),
+            description,
+        ),
+        (
+            failed,
+            make_stream(vec![Err(FlowError::Internal(
+                "later transport error".into(),
+            ))]),
+            description,
+        ),
+        (
+            json!({"type": "response.failed", "response": {"status": "failed"}}),
+            LlmJsonStream::new(tokio_stream::pending()),
+            "OpenAI Responses stream reported error: response failed",
+        ),
+    ] {
+        let close_calls = Arc::new(AtomicUsize::new(0));
+        let source = LlmJsonStream::from_closeable(CloseTrackingStream {
+            stream: Box::pin(tokio_stream::iter(vec![Ok(failed.clone())]).chain(tail)),
+            close_calls: close_calls.clone(),
+            close_error: None,
+            closed: false,
+        });
+        let mut stream = OpenAIResponsesStreamingCodec::new().validate_stream(source);
+        // Failure detection must not depend on a collector having run.
+        assert_eq!(stream.next().await.unwrap().unwrap(), failed);
+        let mut cx = Context::from_waker(futures::task::noop_waker_ref());
+        let Poll::Ready(Some(Err(FlowError::Internal(message)))) =
+            Pin::new(&mut stream).poll_next(&mut cx)
+        else {
+            panic!("expected the provider failure without another source read");
+        };
+        assert_eq!(message, description);
+        assert!(stream.next().await.is_none());
+        stream.close().await.unwrap();
+        assert_eq!(close_calls.load(Ordering::SeqCst), 1);
+    }
+}
+
+/// Sessions keep final usage and distinguish provider failures from successful completion.
 #[tokio::test]
 async fn responses_sessions_keep_usage_and_flag_eof_without_terminal_events() {
     let _lock = TEST_MUTEX.lock().unwrap();
@@ -1138,6 +1188,7 @@ async fn responses_sessions_keep_usage_and_flag_eof_without_terminal_events() {
         "missing_terminal",
         "late_snapshot",
         "terminal_without_usage",
+        "provider_failure",
     ] {
         let session = push_scope(
             PushScopeParams::builder()
@@ -1165,9 +1216,15 @@ async fn responses_sessions_keep_usage_and_flag_eof_without_terminal_events() {
                 } else {
                     json!({"input_tokens": 25208, "output_tokens": 356})
                 };
+                let failed = affected && scenario == "provider_failure";
                 chunks.push(json!({
-                    "type": "response.completed",
-                    "response": {"id": "resp_session", "model": "gpt-test", "status": "completed", "usage": usage}
+                    "type": if failed { "response.failed" } else { "response.completed" },
+                    "response": {
+                        "id": "resp_session", "model": "gpt-test",
+                        "status": if failed { "failed" } else { "completed" },
+                        "error": if failed { json!({"code": "server_error", "message": "Generation failed"}) } else { Json::Null },
+                        "usage": usage
+                    }
                 }));
             }
             if affected && scenario == "late_snapshot" {
@@ -1202,7 +1259,7 @@ async fn responses_sessions_keep_usage_and_flag_eof_without_terminal_events() {
             for expected in expected_chunks {
                 assert_eq!(wrapper.next().await.unwrap().unwrap(), expected);
             }
-            if affected && scenario == "missing_terminal" {
+            if affected && matches!(scenario, "missing_terminal" | "provider_failure") {
                 assert!(wrapper.next().await.unwrap().is_err());
             }
             assert!(wrapper.next().await.is_none());
@@ -1218,10 +1275,15 @@ async fn responses_sessions_keep_usage_and_flag_eof_without_terminal_events() {
         ends.sort_by_key(|event| event.metadata().unwrap()["call_index"].as_u64().unwrap());
         for (call, end) in ends.iter().enumerate() {
             let missing_terminal = call == 1 && scenario == "missing_terminal";
+            let provider_failure = call == 1 && scenario == "provider_failure";
             let metadata = end.metadata().unwrap();
             assert_eq!(
                 metadata["otel.status_code"],
-                if missing_terminal { "ERROR" } else { "OK" }
+                if missing_terminal || provider_failure {
+                    "ERROR"
+                } else {
+                    "OK"
+                }
             );
             if missing_terminal {
                 assert_eq!(
@@ -1230,12 +1292,18 @@ async fn responses_sessions_keep_usage_and_flag_eof_without_terminal_events() {
                         .to_string()
                 );
             }
+            if provider_failure {
+                assert_eq!(
+                    metadata["otel.status_description"],
+                    FlowError::Internal(
+                        "OpenAI Responses stream reported server_error: Generation failed".into()
+                    )
+                    .to_string()
+                );
+            }
             let response = end.annotated_response().unwrap();
-            assert!(
-                response.message.is_some(),
-                "keep output received before the stream ended"
-            );
-            if call == 1 && scenario != "late_snapshot" {
+            assert_eq!(response.response_text(), Some("retained output"));
+            if call == 1 && matches!(scenario, "missing_terminal" | "terminal_without_usage") {
                 assert!(
                     response.usage.is_none(),
                     "missing usage must not become zero"
@@ -2728,4 +2796,247 @@ async fn close_keeps_the_stream_error_variant_when_cleanup_also_fails() {
     }
     assert_eq!(close_calls.load(Ordering::SeqCst), 1);
     assert!(stream.next().await.is_none());
+}
+
+/// The Anthropic completion check forwards events and reports an in-stream `error` event.
+#[tokio::test]
+async fn anthropic_stream_validation_reports_error_events_and_preserves_close() {
+    let start = json!({"type": "message_start", "message": {
+        "id": "msg_1", "type": "message", "role": "assistant", "content": [],
+        "usage": {"input_tokens": 1, "output_tokens": 1}}});
+    let delta = json!({"type": "content_block_delta", "index": 0,
+        "delta": {"type": "text_delta", "text": "Partial"}});
+    let stop = json!({"type": "message_stop"});
+    let unknown = json!({"type": "future_event"});
+    let error = json!({"type": "error",
+        "error": {"type": "overloaded_error", "message": "Overloaded"}});
+    for (chunks, expected_error) in [
+        (vec![], None),
+        (vec![start.clone(), delta.clone(), stop.clone()], None),
+        (vec![start.clone(), unknown.clone(), stop.clone()], None),
+        (
+            vec![start.clone(), delta.clone(), error.clone()],
+            Some("Anthropic stream reported overloaded_error: Overloaded"),
+        ),
+    ] {
+        let codec = AnthropicMessagesStreamingCodec::new();
+        let close_calls = Arc::new(AtomicUsize::new(0));
+        let source = LlmJsonStream::from_closeable(CloseTrackingStream {
+            stream: Box::pin(tokio_stream::iter(chunks.clone().into_iter().map(Ok))),
+            close_calls: close_calls.clone(),
+            close_error: None,
+            closed: false,
+        });
+        let mut stream = codec.validate_stream(source);
+        for expected in chunks {
+            assert_eq!(stream.next().await.unwrap().unwrap(), expected);
+        }
+        if let Some(description) = expected_error {
+            assert_eq!(
+                stream.next().await.unwrap().unwrap_err().to_string(),
+                FlowError::Internal(description.into()).to_string()
+            );
+        }
+        assert!(stream.next().await.is_none());
+        assert!(stream.next().await.is_none());
+        stream.close().await.unwrap();
+        assert_eq!(close_calls.load(Ordering::SeqCst), 1);
+    }
+
+    let failure = FlowError::Internal("upstream read failed".into());
+    let close_calls = Arc::new(AtomicUsize::new(0));
+    let source = LlmJsonStream::from_closeable(CloseTrackingStream {
+        stream: Box::pin(tokio_stream::iter(vec![Err(failure.clone())])),
+        close_calls: close_calls.clone(),
+        close_error: Some(failure.clone()),
+        closed: false,
+    });
+    let mut stream = AnthropicMessagesStreamingCodec::new().validate_stream(source);
+    assert_eq!(
+        stream.next().await.unwrap().unwrap_err().to_string(),
+        failure.to_string()
+    );
+    assert!(stream.next().await.is_none());
+    assert_eq!(
+        stream.close().await.unwrap_err().to_string(),
+        failure.to_string()
+    );
+    assert_eq!(close_calls.load(Ordering::SeqCst), 1);
+
+    let close_calls = Arc::new(AtomicUsize::new(0));
+    let source = LlmJsonStream::from_closeable(CloseTrackingStream {
+        stream: Box::pin(tokio_stream::pending()),
+        close_calls: close_calls.clone(),
+        close_error: None,
+        closed: false,
+    });
+    let mut stream = AnthropicMessagesStreamingCodec::new().validate_stream(source);
+    stream.close().await.unwrap();
+    assert!(stream.next().await.is_none());
+    assert_eq!(close_calls.load(Ordering::SeqCst), 1);
+}
+
+/// An Anthropic stream that ends with an `error` event is recorded as an error.
+#[tokio::test]
+async fn anthropic_sessions_record_in_stream_error_events_as_errors() {
+    let _lock = TEST_MUTEX.lock().unwrap();
+    reset_global();
+    let events = Arc::new(Mutex::new(Vec::<Event>::new()));
+    let captured = events.clone();
+    register_subscriber(
+        "anthropic_stream_error_status",
+        Arc::new(move |event| captured.lock().unwrap().push(event.clone())),
+    )
+    .unwrap();
+    let session = push_scope(
+        PushScopeParams::builder()
+            .name("anthropic_stream_error")
+            .scope_type(ScopeType::Agent)
+            .build(),
+    )
+    .unwrap();
+
+    for (call, failed) in [(0_u64, false), (1_u64, true)] {
+        let codec = AnthropicMessagesStreamingCodec::new();
+        let mut chunks = vec![
+            json!({"type": "message_start", "message": {
+                "id": "msg_1", "type": "message", "role": "assistant", "model": "claude-test",
+                "content": [], "stop_reason": null, "stop_sequence": null,
+                "usage": {"input_tokens": 10, "output_tokens": 1}}}),
+            json!({"type": "content_block_start", "index": 0,
+                "content_block": {"type": "text", "text": ""}}),
+            json!({"type": "content_block_delta", "index": 0,
+                "delta": {"type": "text_delta", "text": "Partial"}}),
+        ];
+        if failed {
+            chunks.push(json!({"type": "error",
+                "error": {"type": "overloaded_error", "message": "Overloaded"}}));
+        } else {
+            chunks.push(json!({"type": "content_block_stop", "index": 0}));
+            chunks.push(json!({"type": "message_delta",
+                "delta": {"stop_reason": "end_turn", "stop_sequence": null},
+                "usage": {"output_tokens": 5}}));
+            chunks.push(json!({"type": "message_stop"}));
+        }
+        let request = LlmRequest {
+            headers: serde_json::Map::new(),
+            content: json!({"messages": []}),
+        };
+        let handle = llm_call(
+            LlmCallParams::builder()
+                .name("anthropic.messages")
+                .parent(&session)
+                .request(&request)
+                .attributes(LlmAttributes::STREAMING)
+                .build(),
+        )
+        .unwrap();
+        let expected_chunks = chunks.clone();
+        let mut wrapper = LlmStreamWrapper::new(
+            codec.validate_stream(make_stream(chunks.into_iter().map(Ok).collect())),
+            handle,
+            codec.collector(),
+            codec.finalizer(),
+            None,
+            Some(json!({"call_index": call})),
+            Some(Arc::new(AnthropicMessagesCodec)),
+        );
+        for expected in expected_chunks {
+            assert_eq!(wrapper.next().await.unwrap().unwrap(), expected);
+        }
+        if failed {
+            assert!(wrapper.next().await.unwrap().is_err());
+        }
+        assert!(wrapper.next().await.is_none());
+    }
+    pop_scope(PopScopeParams::builder().handle_uuid(&session.uuid).build()).unwrap();
+
+    let captured = captured_snapshot(&events);
+    let mut ends: Vec<_> = captured
+        .iter()
+        .filter(|event| is_llm_end(event) && event.parent_uuid() == Some(session.uuid))
+        .collect();
+    assert_eq!(ends.len(), 2);
+    ends.sort_by_key(|event| event.metadata().unwrap()["call_index"].as_u64().unwrap());
+    for (call, end) in ends.iter().enumerate() {
+        let failed = call == 1;
+        let metadata = end.metadata().unwrap();
+        assert_eq!(
+            metadata["otel.status_code"],
+            if failed { "ERROR" } else { "OK" }
+        );
+        if failed {
+            assert_eq!(
+                metadata["otel.status_description"],
+                FlowError::Internal(
+                    "Anthropic stream reported overloaded_error: Overloaded".into()
+                )
+                .to_string()
+            );
+        }
+        let response = end.annotated_response().unwrap();
+        assert!(
+            response.message.is_some(),
+            "keep output received before the error event"
+        );
+    }
+    deregister_subscriber("anthropic_stream_error_status").unwrap();
+}
+
+/// An Anthropic `error` event is reported before polling the source again.
+#[tokio::test]
+async fn anthropic_stream_validation_reports_error_events_before_polling_the_source_again() {
+    let delta = json!({"type": "content_block_delta", "index": 0,
+        "delta": {"type": "text_delta", "text": "Partial"}});
+    let error = json!({"type": "error",
+        "error": {"type": "overloaded_error", "message": "Overloaded"}});
+    let expected =
+        FlowError::Internal("Anthropic stream reported overloaded_error: Overloaded".into())
+            .to_string();
+
+    // A source that stalls after the error event must not keep the call open.
+    let close_calls = Arc::new(AtomicUsize::new(0));
+    let stalled = tokio_stream::iter(vec![Ok(delta.clone()), Ok(error.clone())])
+        .chain(tokio_stream::pending());
+    let source = LlmJsonStream::from_closeable(CloseTrackingStream {
+        stream: Box::pin(stalled),
+        close_calls: close_calls.clone(),
+        close_error: None,
+        closed: false,
+    });
+    let mut stream = AnthropicMessagesStreamingCodec::new().validate_stream(source);
+    assert_eq!(stream.next().await.unwrap().unwrap(), delta);
+    assert_eq!(stream.next().await.unwrap().unwrap(), error);
+    let reported = tokio::time::timeout(Duration::from_secs(1), stream.next())
+        .await
+        .expect("the error must be reported without waiting for the source")
+        .unwrap()
+        .unwrap_err();
+    assert_eq!(reported.to_string(), expected);
+    assert!(stream.next().await.is_none());
+    stream.close().await.unwrap();
+    assert_eq!(close_calls.load(Ordering::SeqCst), 1);
+
+    // A transport error after the error event must not replace the provider's error.
+    let close_calls = Arc::new(AtomicUsize::new(0));
+    let source = LlmJsonStream::from_closeable(CloseTrackingStream {
+        stream: Box::pin(tokio_stream::iter(vec![
+            Ok(delta.clone()),
+            Ok(error.clone()),
+            Err(FlowError::Internal("connection reset".into())),
+        ])),
+        close_calls: close_calls.clone(),
+        close_error: None,
+        closed: false,
+    });
+    let mut stream = AnthropicMessagesStreamingCodec::new().validate_stream(source);
+    assert_eq!(stream.next().await.unwrap().unwrap(), delta);
+    assert_eq!(stream.next().await.unwrap().unwrap(), error);
+    assert_eq!(
+        stream.next().await.unwrap().unwrap_err().to_string(),
+        expected
+    );
+    assert!(stream.next().await.is_none());
+    stream.close().await.unwrap();
+    assert_eq!(close_calls.load(Ordering::SeqCst), 1);
 }

@@ -16,10 +16,15 @@
 //! - **Tool choice**: `{"type":"auto"}` / `{"type":"any"}` / `{"type":"tool","name":"..."}`
 //! - **Cache tokens**: `cache_read_input_tokens` / `cache_creation_input_tokens`
 
+use std::future::Future;
+use std::pin::Pin;
+use std::task::{Context, Poll};
+
 use serde::Deserialize;
+use tokio_stream::Stream;
 
 use crate::api::llm::LlmRequest;
-use crate::api::runtime::{BuiltinLlmCodec, LlmCodecIdentity};
+use crate::api::runtime::{BuiltinLlmCodec, LlmCodecIdentity, LlmJsonStream, LlmStreamInner};
 use crate::error::{FlowError, Result};
 use crate::json::Json;
 
@@ -1314,6 +1319,15 @@ impl Default for AnthropicMessagesStreamingCodec {
 }
 
 impl super::streaming::StreamingCodec for AnthropicMessagesStreamingCodec {
+    /// Reports an error right after the source forwards an Anthropic `error` event.
+    fn validate_stream(&self, stream: LlmJsonStream) -> LlmJsonStream {
+        LlmJsonStream::from_closeable(AnthropicCompletionStream {
+            inner: stream,
+            error: None,
+            ended: false,
+        })
+    }
+
     fn collector(&self) -> crate::api::runtime::LlmCollectorFn {
         let state = std::sync::Arc::clone(&self.state);
         Box::new(move |event: Json| -> Result<()> {
@@ -1347,6 +1361,88 @@ impl super::streaming::StreamingCodec for AnthropicMessagesStreamingCodec {
             std::mem::take(&mut *guard).finalize()
         })
     }
+}
+
+/// Forwards Anthropic events unchanged and reports an in-stream `error` event right after it.
+///
+/// The check reads forwarded events directly rather than collector state, so it does not depend
+/// on when the paired collector observes each event.
+struct AnthropicCompletionStream {
+    inner: LlmJsonStream,
+    /// Description of the first forwarded `error` event.
+    error: Option<String>,
+    ended: bool,
+}
+
+impl Stream for AnthropicCompletionStream {
+    type Item = Result<Json>;
+
+    /// Forwards events and emits at most one error after an Anthropic `error` event.
+    fn poll_next(self: Pin<&mut Self>, cx: &mut Context<'_>) -> Poll<Option<Self::Item>> {
+        let this = self.get_mut();
+        if this.ended {
+            return Poll::Ready(None);
+        }
+        // Report a forwarded `error` event on the next poll, without polling the source again,
+        // so a stalled source or a later transport error cannot delay or replace it.
+        if let Some(description) = this.error.take() {
+            this.ended = true;
+            log::warn!(
+                target: "nemo_relay.runtime",
+                event = "llm_stream_provider_error";
+                "Anthropic stream reported an error event"
+            );
+            return Poll::Ready(Some(Err(FlowError::Internal(description))));
+        }
+        match Pin::new(&mut this.inner).poll_next(cx) {
+            Poll::Ready(Some(Ok(event))) => {
+                this.error = anthropic_stream_error(&event);
+                Poll::Ready(Some(Ok(event)))
+            }
+            Poll::Ready(None) => {
+                this.ended = true;
+                Poll::Ready(None)
+            }
+            Poll::Ready(Some(Err(error))) => {
+                this.ended = true;
+                Poll::Ready(Some(Err(error)))
+            }
+            Poll::Pending => Poll::Pending,
+        }
+    }
+}
+
+impl LlmStreamInner for AnthropicCompletionStream {
+    /// Releases the source's lifecycle guards when the managed stream ends.
+    fn terminalize(self: Pin<&mut Self>) {
+        let this = self.get_mut();
+        this.ended = true;
+        this.inner.terminalize();
+    }
+
+    /// Stops the source and waits for its cleanup.
+    fn close(self: Pin<&mut Self>) -> Pin<Box<dyn Future<Output = Result<()>> + Send + '_>> {
+        let this = self.get_mut();
+        this.ended = true;
+        Box::pin(this.inner.close())
+    }
+}
+
+/// Describes an Anthropic `error` event, or returns `None` for any other event.
+fn anthropic_stream_error(event: &Json) -> Option<String> {
+    if event.get("type").and_then(Json::as_str) != Some("error") {
+        return None;
+    }
+    let error = event.get("error");
+    let kind = error
+        .and_then(|error| error.get("type"))
+        .and_then(Json::as_str)
+        .unwrap_or("error");
+    let message = error
+        .and_then(|error| error.get("message"))
+        .and_then(Json::as_str)
+        .unwrap_or("");
+    Some(format!("Anthropic stream reported {kind}: {message}"))
 }
 
 #[derive(Debug, Default)]
@@ -1401,9 +1497,10 @@ impl AnthropicMessagesStreamingState {
             "content_block_start" => self.observe_content_block_start(event),
             "content_block_delta" => self.observe_content_block_delta(event),
             "message_delta" => self.observe_message_delta(event),
-            // content_block_stop, message_stop, ping, and any unknown event type carry no
-            // accumulator-relevant payload. Unknown types are ignored rather than erroring so a
-            // future Anthropic event addition does not break observability.
+            // content_block_stop, message_stop, ping, error, and any unknown event type carry no
+            // accumulator-relevant payload; `validate_stream` reports `error` events. Unknown
+            // types are ignored rather than erroring so a future Anthropic event addition does
+            // not break observability.
             _ => {}
         }
     }
