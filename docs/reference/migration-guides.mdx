@@ -14,6 +14,21 @@ patch releases. Configuration changes from earlier patch upgrades still apply.
 
 Start with the package updates. Then review the sections for the features you use.
 
+## Update OpenAI Response Redaction Policies
+
+OpenAI Chat and OpenAI Responses codecs now represent a response containing a
+refusal as a list of typed parts, including when the refusal is an empty string.
+Text-only responses still expose a string at `/message`. Existing string
+actions selecting `/message` also sanitize the text and refusal fields in these
+OpenAI response parts. The `remove` action still removes the selected message.
+
+To sanitize only text or only refusals while retaining the rest of a multipart
+response, set `action = "mask"` and select `/message/*/text` or
+`/message/*/refusal` in `target_path_globs`. The default `remove` action deletes
+the matched field. Each typed part requires its text or refusal field, so the
+sanitizer omits the entire published response when that field is removed. Refer to the
+[request and response configuration example](/configure-plugins/pii-redaction/configuration#targeting-and-composition).
+
 ## Migrate Worker Plugins to NeMo Relay 1.0.0
 
 Upgrade the Rust host, `nemo-relay-worker`, and Python `nemo-relay-plugin` together.

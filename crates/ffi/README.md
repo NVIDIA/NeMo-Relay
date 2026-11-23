@@ -86,6 +86,17 @@ evidence later during stream reads. Release the recorder with
 `nemo_relay_llm_optimization_recorder_free`. Recording ends with the managed
 call. Later records return false.
 
+## LLM Content Inspection
+
+`nemo_relay_inspect_llm_content_json` reads normalized JSON from a codec. It can
+select content from a request, response, message, or standalone content value.
+Use the `NEMO_RELAY_CONTENT_SOURCE_*` and `NEMO_RELAY_CONTENT_SELECT_*` constants
+to choose the source and selection.
+
+The result contains ordered parts, source locations, and text parts. An absent
+selection returns success with a null output. A selected item with no text still
+returns a snapshot. Free each non-null result with `nemo_relay_string_free`.
+
 ## Streaming Sources and Cancellation
 
 `nemo_relay_stream_source_create` constructs an owned, pull-based source from

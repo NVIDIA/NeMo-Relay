@@ -154,7 +154,7 @@ pub(crate) fn prompt_prefix_fingerprint(
 ///
 /// The prefix length rule and the prefix fingerprint must agree on when two
 /// blocks are the same block, so both read this one definition.
-fn block_key(block: &PromptBlock) -> Option<String> {
+pub(crate) fn block_key(block: &PromptBlock) -> Option<String> {
     serde_json::to_string(&(
         &block.span_id,
         block.role,
@@ -350,7 +350,10 @@ fn record_block_observation(
     block: &crate::acg::prompt_ir::PromptBlock,
     span_map: &mut HashMap<SpanId, SpanObservations>,
 ) {
-    let hash = sha256_hex(&block.content);
+    let Some(key) = block_key(block) else {
+        return;
+    };
+    let hash = sha256_hex(&key);
     let entry = span_map
         .entry(block.span_id.clone())
         .or_insert_with(|| SpanObservations {

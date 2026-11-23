@@ -11,6 +11,7 @@ import "buf/validate/validate.proto";
 import "google/protobuf/empty.proto";
 import "google/protobuf/timestamp.proto";
 import "nvidia/nemo/relay/worker/v1/common.proto";
+import "nvidia/nemo/relay/worker/v1/content.proto";
 import "nvidia/nemo/relay/worker/v1/event.proto";
 import "nvidia/nemo/relay/worker/v1/llm.proto";
 import "nvidia/nemo/relay/worker/v1/runtime.proto";
@@ -46,6 +47,8 @@ service RelayHostRuntimeService {
   rpc EncodeLlmCodecRequest(EncodeLlmCodecRequestRequest) returns (EncodeLlmCodecRequestResponse);
   // Decodes a completed provider response through the invocation's response codec.
   rpc DecodeLlmCodecResponse(DecodeLlmCodecResponseRequest) returns (DecodeLlmCodecResponseResponse);
+  // Selects and projects normalized content through the shared Rust implementation.
+  rpc InspectLlmContent(InspectLlmContentRequest) returns (InspectLlmContentResponse);
   // Lists visible runtime registrations, optionally filtered by recognized surfaces.
   rpc ListRuntimeRegistrations(ListRuntimeRegistrationsRequest) returns (ListRuntimeRegistrationsResponse);
   // Installs an activation-owned conditional middleware filter and returns its handle.
@@ -378,4 +381,36 @@ message DeregisterConditionalMiddlewareGuardrailRequest {
 message DeregisterConditionalMiddlewareGuardrailResponse {
   // True when the owned guardrail existed and was removed; false is an idempotent no-op.
   bool removed = 1;
+}
+
+// Authenticated pure inspection of caller-supplied normalized data; no codec capability is required.
+message InspectLlmContentRequest {
+  // Required activation credentials; expired activations cannot inspect content.
+  Credentials credentials = 1 [(buf.validate.field).required = true];
+  // One supplied normalized source; unrelated annotation metadata may be omitted.
+  oneof source {
+    option (buf.validate.oneof).required = true;
+    // Supplied normalized history and optional instructions.
+    AnnotatedLlmRequest request = 2;
+    // Current normalized response output.
+    AnnotatedLlmResponse response = 3;
+    // Standalone normalized history item.
+    LlmMessage message = 4;
+    // Standalone normalized content.
+    MessageContent content = 5;
+  }
+  // Required selection; incompatible source/selection pairs return INVALID_ARGUMENT.
+  LlmContentSelection selection = 6 [(buf.validate.field).required = true];
+}
+
+// Distinguishes absent selections from present snapshots containing no text or parts.
+message InspectLlmContentResponse {
+  // Exactly one outcome; invalid input and unsupported hosts use gRPC status.
+  oneof result {
+    option (buf.validate.oneof).required = true;
+    // Complete independent snapshot; all later reads are local.
+    LlmContentSnapshot snapshot = 1;
+    // Empty history or absent selected instructions/system/user item.
+    google.protobuf.Empty no_selection = 2;
+  }
 }

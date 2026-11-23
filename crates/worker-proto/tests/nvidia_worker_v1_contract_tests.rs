@@ -233,7 +233,7 @@ fn compiled_descriptors_expose_only_the_current_typed_services() {
             .iter()
             .map(|service| service.method.len())
             .sum::<usize>(),
-        31
+        32
     );
     for service in services {
         assert!(service.name().ends_with("Service"));

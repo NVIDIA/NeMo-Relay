@@ -70,6 +70,8 @@ def metapackage_files(manifest: dict[str, object]) -> list[str]:
         "README.md",
         "binding.js",
         "binding.d.ts",
+        "dist/codecs.js",
+        "dist/codecs.d.ts",
         "dist/diagnostics_query_contract.js",
     }
     exports = manifest.get("exports")

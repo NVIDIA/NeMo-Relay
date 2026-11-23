@@ -341,9 +341,7 @@ fn gemini_parts_to_message_content(
     parts: &[Json],
     context: &str,
 ) -> Result<Option<MessageContent>> {
-    let mut texts: Vec<String> = Vec::new();
     let mut content_parts: Vec<ContentPart> = Vec::new();
-    let mut requires_parts = false;
 
     for part in parts {
         let obj = part.as_object().ok_or_else(|| {
@@ -356,7 +354,6 @@ fn gemini_parts_to_message_content(
         }
 
         let Some(data_key) = validate_single_gemini_part_data_field(obj, context)? else {
-            requires_parts = true;
             content_parts.push(ContentPart::ProviderNative {
                 provider: GEMINI_PROVIDER.into(),
                 kind: "unknown".into(),
@@ -378,17 +375,12 @@ fn gemini_parts_to_message_content(
                     .filter(|(key, _)| key.as_str() != "text")
                     .map(|(key, value)| (key.clone(), value.clone()))
                     .collect();
-                if !extra.is_empty() {
-                    requires_parts = true;
-                }
-                texts.push(text.to_string());
                 content_parts.push(ContentPart::Text {
                     text: text.to_string(),
                     extra,
                 });
             }
             native_key => {
-                requires_parts = true;
                 content_parts.push(ContentPart::ProviderNative {
                     provider: GEMINI_PROVIDER.into(),
                     kind: native_key.to_string(),
@@ -398,13 +390,7 @@ fn gemini_parts_to_message_content(
         }
     }
 
-    Ok(if content_parts.is_empty() {
-        None
-    } else if requires_parts {
-        Some(MessageContent::Parts(content_parts))
-    } else {
-        Some(MessageContent::Text(texts.join("\n")))
-    })
+    Ok(crate::response::message_from_content_parts(content_parts))
 }
 
 fn validate_gemini_nested_function_response_part(part: &Json) -> Result<&str> {
@@ -1355,6 +1341,10 @@ fn take_matching_native_group(
 // ---------------------------------------------------------------------------
 
 impl LlmResponseCodec for GeminiGenerateContentCodec {
+    fn redaction(&self) -> Option<&dyn nemo_relay_types::codec::redaction::LlmResponseRedaction> {
+        Some(self)
+    }
+
     fn codec_identity(&self) -> LlmCodecIdentity {
         LlmCodecIdentity::BuiltIn(BuiltinLlmCodec::GeminiGenerateContent)
     }
@@ -1430,6 +1420,10 @@ impl LlmResponseCodec for GeminiGenerateContentCodec {
 // ---------------------------------------------------------------------------
 
 impl LlmCodec for GeminiGenerateContentCodec {
+    fn redaction(&self) -> Option<&dyn nemo_relay_types::codec::redaction::LlmRequestRedaction> {
+        Some(self)
+    }
+
     fn codec_identity(&self) -> LlmCodecIdentity {
         LlmCodecIdentity::BuiltIn(BuiltinLlmCodec::GeminiGenerateContent)
     }
@@ -1839,17 +1833,6 @@ fn gemini_call_id_to_name(messages: &[Message]) -> HashMap<String, String> {
         .collect()
 }
 
-fn push_fresh_gemini_content(
-    new_contents: &mut Vec<Json>,
-    message: &Json,
-    call_id_to_name: &HashMap<String, String>,
-) -> Result<()> {
-    if let Some(item) = normalized_to_gemini_content(message, call_id_to_name)? {
-        new_contents.push(item);
-    }
-    Ok(())
-}
-
 fn gemini_run_end(
     start: usize,
     ann_len: usize,
@@ -1926,11 +1909,15 @@ fn patch_gemini_non_system_contents(
         gemini_content_msg_counts(&content_idx_of_base_msg, orig_contents.len());
 
     let mut new_contents = Vec::new();
-    let mut processed_cidxs = std::collections::HashSet::<usize>::new();
+    let mut processed_cidxs = HashSet::new();
+    let mut fresh_contents = HashSet::new();
     let mut i = 0;
     while i < ann_non_sys.len() {
         let Some(base_idx) = alignment.base_idx_for(i) else {
-            push_fresh_gemini_content(&mut new_contents, ann_non_sys[i], &call_id_to_name)?;
+            if let Some(item) = normalized_to_gemini_content(ann_non_sys[i], &call_id_to_name)? {
+                fresh_contents.insert(new_contents.len());
+                new_contents.push(item);
+            }
             i += 1;
             continue;
         };
@@ -1988,7 +1975,12 @@ fn patch_gemini_non_system_contents(
 
         i = run_end;
     }
-    preserve_gemini_function_call_fields(&mut new_contents, &orig_contents);
+    preserve_gemini_function_call_fields(
+        &mut new_contents,
+        &orig_contents,
+        &processed_cidxs,
+        &fresh_contents,
+    )?;
     obj.insert("contents".into(), Json::Array(new_contents));
     Ok(())
 }
@@ -1996,18 +1988,30 @@ fn patch_gemini_non_system_contents(
 // A changed call list can leave its turn unmatched. Preserve the original
 // call part's metadata by unique effective call ID even across split/merged
 // turns, without borrowing fields from unrelated or ambiguous calls.
-fn preserve_gemini_function_call_fields(contents: &mut [Json], original: &[Json]) {
+fn preserve_gemini_function_call_fields(
+    contents: &mut [Json],
+    original: &[Json],
+    aligned_originals: &HashSet<usize>,
+    fresh_contents: &HashSet<usize>,
+) -> Result<()> {
     let mut original_parts: HashMap<&str, Option<&Json>> = HashMap::new();
-    for part in original
-        .iter()
-        .filter_map(|content| content.get("parts").and_then(Json::as_array))
-        .flatten()
-    {
-        if let Some(id) = gemini_function_call_part_id(part) {
-            original_parts
-                .entry(id)
-                .and_modify(|part| *part = None)
-                .or_insert(Some(part));
+    let mut unclaimed_metadata = HashSet::new();
+    for (index, content) in original.iter().enumerate() {
+        let Some(parts) = content.get("parts").and_then(Json::as_array) else {
+            continue;
+        };
+        for part in parts {
+            if let Some(id) = gemini_function_call_part_id(part) {
+                original_parts
+                    .entry(id)
+                    .and_modify(|part| *part = None)
+                    .or_insert(Some(part));
+                if !aligned_originals.contains(&index)
+                    && part.as_object().is_some_and(|fields| fields.len() > 1)
+                {
+                    unclaimed_metadata.insert(id);
+                }
+            }
         }
     }
     let mut edited_counts = HashMap::<String, usize>::new();
@@ -2020,7 +2024,7 @@ fn preserve_gemini_function_call_fields(contents: &mut [Json], original: &[Json]
             *edited_counts.entry(id.to_string()).or_default() += 1;
         }
     }
-    for content in contents {
+    for (index, content) in contents.iter_mut().enumerate() {
         let Some(parts) = content.get_mut("parts").and_then(Json::as_array_mut) else {
             continue;
         };
@@ -2028,10 +2032,14 @@ fn preserve_gemini_function_call_fields(contents: &mut [Json], original: &[Json]
             let Some(id) = gemini_function_call_part_id(part) else {
                 continue;
             };
-            if edited_counts.get(id) != Some(&1) {
-                continue;
-            }
-            let Some(Some(original_part)) = original_parts.get(id) else {
+            let original_part = original_parts.get(id).copied().flatten();
+            let Some(original_part) = original_part.filter(|_| edited_counts.get(id) == Some(&1))
+            else {
+                if fresh_contents.contains(&index) && unclaimed_metadata.contains(id) {
+                    return Err(FlowError::InvalidArgument(
+                        "Cannot preserve Gemini part metadata for an ambiguous repeated function call".into(),
+                    ));
+                }
                 continue;
             };
             let mut patched = original_part.as_object().cloned().unwrap_or_default();
@@ -2049,6 +2057,7 @@ fn preserve_gemini_function_call_fields(contents: &mut [Json], original: &[Json]
             *part = Json::Object(patched);
         }
     }
+    Ok(())
 }
 
 fn gemini_function_call_part_id(part: &Json) -> Option<&str> {
@@ -2996,6 +3005,7 @@ struct GeminiGenerateContentStreamingState {
     usage_metadata: Option<Json>,
     model_version: Option<String>,
     response_id: Option<String>,
+    prompt_feedback: Option<Json>,
     /// Merged candidate-level extra fields (safetyRatings, groundingMetadata,
     /// citationMetadata, avgLogprobs, etc.) accumulated across SSE chunks.
     candidate_extra: serde_json::Map<String, Json>,
@@ -3037,6 +3047,9 @@ impl GeminiGenerateContentStreamingState {
         }
         if let Some(usage) = event.get("usageMetadata") {
             self.usage_metadata = Some(usage.clone());
+        }
+        if let Some(feedback) = event.get("promptFeedback") {
+            self.prompt_feedback = Some(feedback.clone());
         }
         if let Some(mv_val) = event.get("modelVersion") {
             match mv_val.as_str() {
@@ -3255,10 +3268,18 @@ impl GeminiGenerateContentStreamingState {
         for (k, v) in self.candidate_extra {
             candidate_obj.entry(k).or_insert(v);
         }
-        let candidate = Json::Object(candidate_obj);
+        // A blocked prompt can finish without ever producing a candidate.
+        let candidates = self
+            .candidate_index
+            .map(|_| Json::Object(candidate_obj))
+            .into_iter()
+            .collect();
 
         let mut output = serde_json::Map::new();
-        output.insert("candidates".to_string(), Json::Array(vec![candidate]));
+        output.insert("candidates".to_string(), Json::Array(candidates));
+        if let Some(feedback) = self.prompt_feedback {
+            output.insert("promptFeedback".to_string(), feedback);
+        }
         if let Some(usage) = self.usage_metadata {
             output.insert("usageMetadata".to_string(), usage);
         }

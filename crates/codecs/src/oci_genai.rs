@@ -880,11 +880,15 @@ fn encode_oci_tool_choice(tool_choice: &ToolChoice) -> Result<Json> {
 /// Extract the model identity from the `servingMode` envelope object.
 fn model_from_envelope(envelope: &serde_json::Map<String, Json>) -> Option<String> {
     let serving_mode = envelope.get("servingMode")?.as_object()?;
-    serving_mode
-        .get("modelId")
-        .or_else(|| serving_mode.get("endpointId"))
-        .and_then(Json::as_str)
-        .map(str::to_string)
+    match serving_mode.get("servingType").and_then(Json::as_str) {
+        Some("DEDICATED") => serving_mode.get("endpointId"),
+        Some("ON_DEMAND") => serving_mode.get("modelId"),
+        _ => serving_mode
+            .get("modelId")
+            .or_else(|| serving_mode.get("endpointId")),
+    }
+    .and_then(Json::as_str)
+    .map(str::to_string)
 }
 
 /// Split the request content into the optional ChatDetails envelope and the
@@ -1013,6 +1017,10 @@ fn patch_oci_api_specific(
 // ---------------------------------------------------------------------------
 
 impl LlmCodec for OCIGenAIChatCodec {
+    fn redaction(&self) -> Option<&dyn nemo_relay_types::codec::redaction::LlmRequestRedaction> {
+        Some(self)
+    }
+
     fn codec_identity(&self) -> LlmCodecIdentity {
         LlmCodecIdentity::BuiltIn(BuiltinLlmCodec::OCIGenAI)
     }
@@ -1195,6 +1203,10 @@ impl LlmCodec for OCIGenAIChatCodec {
 // ---------------------------------------------------------------------------
 
 impl LlmResponseCodec for OCIGenAIChatCodec {
+    fn redaction(&self) -> Option<&dyn nemo_relay_types::codec::redaction::LlmResponseRedaction> {
+        Some(self)
+    }
+
     fn codec_identity(&self) -> LlmCodecIdentity {
         LlmCodecIdentity::BuiltIn(BuiltinLlmCodec::OCIGenAI)
     }

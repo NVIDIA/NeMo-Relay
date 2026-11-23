@@ -336,6 +336,7 @@ type resolvedCodecCallbackState struct {
 	responseResolved      bool
 	retainedRequestCodec  *LLMRequestSanitizeCodec
 	retainedResponseCodec *LLMResponseSanitizeCodec
+	outputView            *ContentSnapshot
 	retainedRequest       LLMRequest
 	errors                []string
 }
@@ -345,6 +346,7 @@ type resolvedCodecSnapshot struct {
 	responseResolved      bool
 	retainedRequestCodec  *LLMRequestSanitizeCodec
 	retainedResponseCodec *LLMResponseSanitizeCodec
+	outputView            *ContentSnapshot
 	retainedRequest       LLMRequest
 	errors                []string
 }
@@ -404,11 +406,18 @@ func (state *resolvedCodecCallbackState) sanitizeResponse(
 	state.Lock()
 	state.retainedResponseCodec = codec
 	state.Unlock()
-	if _, err := codec.Decode(response); err != nil {
+	annotation, err := codec.Decode(response)
+	if err != nil {
 		state.recordError("response codec decode failed: %v", err)
 		return response, false
 	}
+	view, err := InspectLLMContent(ContentSourceResponse, annotation, ContentSelectOutput, 0)
+	if err != nil {
+		state.recordError("inspect decoded response: %v", err)
+		return response, false
+	}
 	state.Lock()
+	state.outputView = view
 	state.responseResolved = true
 	state.Unlock()
 	return response, false
@@ -422,6 +431,7 @@ func (state *resolvedCodecCallbackState) snapshot() resolvedCodecSnapshot {
 		responseResolved:      state.responseResolved,
 		retainedRequestCodec:  state.retainedRequestCodec,
 		retainedResponseCodec: state.retainedResponseCodec,
+		outputView:            state.outputView,
 		retainedRequest:       state.retainedRequest,
 		errors:                append([]string(nil), state.errors...),
 	}
@@ -438,6 +448,9 @@ func assertResolvedCodecsExpire(t *testing.T, snapshot resolvedCodecSnapshot, re
 			snapshot.requestResolved,
 			snapshot.responseResolved,
 		)
+	}
+	if text, ok := snapshot.outputView.Text(); !ok || text != "ok" {
+		t.Fatalf("retained response snapshot text=(%q, %t)", text, ok)
 	}
 	if _, err := snapshot.retainedRequestCodec.Decode(snapshot.retainedRequest); !errors.Is(err, ErrLLMSanitizeCodecExpired) {
 		t.Fatalf("retained request codec must expire after callback, got %v", err)

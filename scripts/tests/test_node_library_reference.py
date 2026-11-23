@@ -24,6 +24,64 @@ def write(path: Path, content: str) -> None:
 
 
 class NodeReferenceTests(unittest.TestCase):
+    def test_namespace_exports_keep_member_names_qualified(self) -> None:
+        pages = self.generate(
+            {
+                "dist/index.d.ts": """
+                /** Typed content snapshots. */
+                export * as codecs from './content.js';
+            """,
+                "dist/content.d.ts": """
+                /** Read-only snapshot. */
+                export declare class MessageView {
+                    text(): string | null;
+                }
+                /** Select the last supplied item. */
+                export declare function lastMessage(request: unknown): MessageView | null;
+                export declare class _InternalStorage {}
+            """,
+                "dist/helper.d.ts": "export declare const helper: true;",
+            }
+        )
+        runtime = pages["sample.mdx"]
+        self.assertIn("### `codecs`", runtime)
+        self.assertIn("### `codecs.MessageView`", runtime)
+        self.assertIn("### `codecs.lastMessage`", runtime)
+        self.assertIn("Read-only snapshot.", runtime)
+        self.assertNotIn("### `MessageView`", runtime)
+        self.assertNotIn("### `lastMessage`", runtime)
+        self.assertNotIn("_InternalStorage", runtime)
+
+    def test_namespace_exports_preserve_overloads_and_merged_declarations(self) -> None:
+        pages = self.generate(
+            {
+                "dist/index.d.ts": "export * as codecs from './content.js';",
+                "dist/content.d.ts": """
+                /** Parse text. */
+                export declare function parse(value: string): string;
+                /** Parse a number. */
+                export declare function parse(value: number): number;
+                /** Result value. */
+                export interface Result { value: string; }
+                /** Additional result metadata. */
+                export interface Result { complete: boolean; }
+            """,
+                "dist/helper.d.ts": "export declare const helper: true;",
+            }
+        )
+        runtime = pages["sample.mdx"]
+        for declaration in (
+            "function parse(value: string): string;",
+            "function parse(value: number): number;",
+            "interface Result { value: string; }",
+            "interface Result { complete: boolean; }",
+        ):
+            self.assertIn(declaration, runtime)
+        for summary in ("Parse text.", "Parse a number.", "Result value.", "Additional result metadata."):
+            self.assertIn(summary, runtime)
+        self.assertEqual(runtime.count("### `codecs.parse`"), 2)
+        self.assertEqual(runtime.count("### `codecs.Result`"), 2)
+
     def generate(self, files: dict[str, str]) -> dict[str, str]:
         with tempfile.TemporaryDirectory() as directory:
             root = Path(directory)

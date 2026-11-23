@@ -40,9 +40,54 @@ pub fn canonicalize_json(json_str: &str) -> Result<String> {
 ///
 /// Returns [`AcgError::Internal`](super::error::AcgError::Internal) if canonicalization fails.
 pub fn canonicalize_value(value: &serde_json::Value) -> Result<String> {
+    canonicalize_serializable(value)
+}
+
+/// Canonicalize a borrowed normalized component without cloning it into a JSON value.
+pub(crate) fn canonicalize_serializable(value: &impl serde::Serialize) -> Result<String> {
     let canonical = serde_json_canonicalizer::to_string(value)
         .map_err(|e| super::error::AcgError::Internal(format!("canonicalization failed: {e}")))?;
     Ok(canonical)
+}
+
+/// Serialize prompt identity with JCS ordering and scalar formatting, except
+/// that integer IDs retain their exact JSON digits outside the binary64 range.
+pub(crate) fn prompt_identity_json(value: &serde_json::Value) -> Result<String> {
+    fn write_value(value: &serde_json::Value, output: &mut Vec<u8>) -> serde_json::Result<()> {
+        use serde_json::Value;
+        match value {
+            Value::Array(items) => {
+                output.push(b'[');
+                for (index, item) in items.iter().enumerate() {
+                    if index != 0 {
+                        output.push(b',');
+                    }
+                    write_value(item, output)?;
+                }
+                output.push(b']');
+            }
+            Value::Object(fields) => {
+                let mut fields: Vec<_> = fields.iter().collect();
+                fields.sort_unstable_by(|(a, _), (b, _)| a.encode_utf16().cmp(b.encode_utf16()));
+                output.push(b'{');
+                for (index, (key, value)) in fields.into_iter().enumerate() {
+                    if index != 0 {
+                        output.push(b',');
+                    }
+                    serde_json::to_writer(&mut *output, key)?;
+                    output.push(b':');
+                    write_value(value, output)?;
+                }
+                output.push(b'}');
+            }
+            Value::Number(n) if n.is_f64() => serde_json_canonicalizer::to_writer(n, output)?,
+            _ => serde_json::to_writer(output, value)?,
+        }
+        Ok(())
+    }
+    let mut output = Vec::new();
+    write_value(value, &mut output)?;
+    Ok(String::from_utf8(output).expect("JSON serialization produces UTF-8"))
 }
 
 /// Normalize whitespace in text content.

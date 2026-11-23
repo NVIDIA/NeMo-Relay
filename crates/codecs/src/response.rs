@@ -3,9 +3,33 @@
 
 //! Re-exported normalized LLM response data types and core pricing helpers.
 
+use nemo_relay_types::codec::request::{ContentPart, MessageContent};
 use serde::Deserialize;
 
 pub(crate) use nemo_relay_types::codec::response::*;
+
+/// Collapse plain text into the canonical newline-separated scalar. Mixed content
+/// and metadata-bearing text must retain their original part boundaries.
+pub(crate) fn message_from_content_parts(parts: Vec<ContentPart>) -> Option<MessageContent> {
+    let mut joined_len = parts.len().saturating_sub(1);
+    for part in &parts {
+        match part {
+            ContentPart::Text { text, extra } if extra.is_empty() => joined_len += text.len(),
+            _ => return Some(MessageContent::Parts(parts)),
+        }
+    }
+    let mut texts = parts.into_iter().filter_map(|part| match part {
+        ContentPart::Text { text, .. } => Some(text),
+        _ => None,
+    });
+    let mut joined = texts.next()?;
+    joined.reserve_exact(joined_len - joined.len());
+    for text in texts {
+        joined.push('\n');
+        joined.push_str(&text);
+    }
+    Some(MessageContent::Text(joined))
+}
 
 /// Provider-reported cost accepted by OpenAI-compatible and Anthropic codecs.
 #[derive(Deserialize)]

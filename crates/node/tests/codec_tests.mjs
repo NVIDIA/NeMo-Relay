@@ -261,6 +261,33 @@ it('built-in codec accepts multiple result edits and insertion', () => {
   ]);
 });
 
+for (const [name, Codec, payload] of [
+  ['Chat', lib.OpenAIChatCodec, { choices: [{ message: { content: 'prefix', refusal: 'cannot help' } }] }],
+  [
+    'Responses',
+    lib.OpenAIResponsesCodec,
+    {
+      output: [
+        {
+          type: 'message',
+          content: [
+            { type: 'output_text', text: 'prefix' },
+            { type: 'refusal', refusal: 'cannot help' },
+          ],
+        },
+      ],
+    },
+  ],
+]) {
+  it(`${name} response codec preserves structured refusals`, () => {
+    const response = new Codec().decodeResponse(payload);
+    assert.deepEqual(response.message, [
+      { type: 'text', text: 'prefix' },
+      { type: 'refusal', refusal: 'cannot help' },
+    ]);
+  });
+}
+
 it('built-in codec preserves integer params beyond 32 bits', () => {
   const codec = new lib.OpenAIChatCodec();
   for (const seed of [2 ** 32, 1763400000000, Number.MAX_SAFE_INTEGER, -(2 ** 31) - 1]) {

@@ -208,6 +208,7 @@ mod adaptive;
 mod cancellation;
 pub use cancellation::*;
 mod codec;
+mod content;
 mod diagnostics;
 mod event_registry;
 mod llm;
@@ -226,6 +227,7 @@ mod tool_lifecycle;
 mod tool_registry;
 
 pub use adaptive::*;
+pub use content::*;
 pub use event_registry::*;
 pub use llm::*;
 pub use llm_registry::*;

@@ -53,11 +53,18 @@ from nemo_relay import Json
 from nemo_relay._native import (
     AnnotatedLLMRequest,
     AnthropicMessagesCodec,
+    ContentEntry,
+    ContentIterator,
+    ContentLocation,
     GeminiGenerateContentCodec,
     LLMRequest,
+    MessageView,
     OCIGenAIChatCodec,
     OpenAIChatCodec,
     OpenAIResponsesCodec,
+    PayloadView,
+    ToolCallView,
+    ToolResultView,
 )
 
 if TYPE_CHECKING:
@@ -72,6 +79,9 @@ class LlmCodec(Protocol):
     ``AnnotatedLLMRequest`` so request intercepts can work with a normalized
     structure. ``encode()`` merges any annotated edits back into the original
     raw payload before the provider callback is invoked.
+
+    A codec whose encoder preserves source positions can set
+    ``supports_request_redaction = True`` to accept verified normalized PII request edits.
 
     Notes:
         ``encode()`` should preserve unknown provider-specific fields whenever
@@ -173,6 +183,13 @@ class LlmResponseCodec(Protocol):
 
 
 __all__ = [
+    "MessageView",
+    "ContentIterator",
+    "ContentEntry",
+    "ContentLocation",
+    "ToolCallView",
+    "ToolResultView",
+    "PayloadView",
     "AnnotatedLLMRequest",
     "AnthropicMessagesCodec",
     "GeminiGenerateContentCodec",

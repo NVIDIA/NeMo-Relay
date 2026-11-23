@@ -77,7 +77,31 @@ struct RawChoice {
 #[derive(Deserialize)]
 struct RawMessage {
     content: Option<String>,
+    refusal: Option<String>,
     tool_calls: Option<Vec<RawToolCall>>,
+}
+
+impl RawMessage {
+    fn take_content(&mut self) -> Option<MessageContent> {
+        match (self.content.take(), self.refusal.take()) {
+            (None, None) => None,
+            (Some(text), None) => Some(MessageContent::Text(text)),
+            (text, Some(refusal)) => {
+                let mut parts = Vec::with_capacity(1 + usize::from(text.is_some()));
+                if let Some(text) = text {
+                    parts.push(ContentPart::Text {
+                        text,
+                        extra: Default::default(),
+                    });
+                }
+                parts.push(ContentPart::Refusal {
+                    refusal,
+                    extra: Default::default(),
+                });
+                Some(MessageContent::Parts(parts))
+            }
+        }
+    }
 }
 
 #[derive(Deserialize)]
@@ -1124,6 +1148,10 @@ fn patch_chat_api_fields(
 // ---------------------------------------------------------------------------
 
 impl LlmResponseCodec for OpenAIChatCodec {
+    fn redaction(&self) -> Option<&dyn nemo_relay_types::codec::redaction::LlmResponseRedaction> {
+        Some(self)
+    }
+
     fn codec_identity(&self) -> LlmCodecIdentity {
         LlmCodecIdentity::BuiltIn(BuiltinLlmCodec::OpenAiChat)
     }
@@ -1139,8 +1167,7 @@ impl LlmResponseCodec for OpenAIChatCodec {
         let message = choice
             .as_mut()
             .and_then(|c| c.message.as_mut())
-            .and_then(|m| m.content.take())
-            .map(super::request::MessageContent::Text);
+            .and_then(RawMessage::take_content);
 
         // Map tool calls, skipping entries that lack a usable function body.
         // Some providers (proxies, vLLM, NIM) may return partial tool_calls
@@ -1220,6 +1247,10 @@ impl LlmResponseCodec for OpenAIChatCodec {
 // ---------------------------------------------------------------------------
 
 impl LlmCodec for OpenAIChatCodec {
+    fn redaction(&self) -> Option<&dyn nemo_relay_types::codec::redaction::LlmRequestRedaction> {
+        Some(self)
+    }
+
     fn codec_identity(&self) -> LlmCodecIdentity {
         LlmCodecIdentity::BuiltIn(BuiltinLlmCodec::OpenAiChat)
     }
@@ -1438,7 +1469,7 @@ fn json_f64(v: f64) -> Json {
 ///
 /// Chat Completions streams untyped SSE chunks of `{choices: [{index, delta: {...},
 /// finish_reason: ...}]}`. Each delta may carry a `role` (typically only on the first chunk),
-/// incremental `content` text, or partial `tool_calls` whose `function.arguments` stream as a
+/// incremental `content` or `refusal` text, or partial `tool_calls` whose `function.arguments` stream as a
 /// JSON-encoded string fragment-by-fragment. Top-level fields (`id`, `model`, `created`) are
 /// repeated on every chunk; we capture them once. Final-chunk `usage` is preserved when emitted
 /// (only sent when `stream_options.include_usage` is set on the request).
@@ -1588,6 +1619,8 @@ struct OpenAIChatStreamingState {
     object: Option<String>,
     created: Option<u64>,
     model: Option<String>,
+    system_fingerprint: Option<String>,
+    service_tier: Option<String>,
     /// Per-choice accumulator keyed by `choice.index`. BTreeMap so finalize emits choices in
     /// stable order.
     choices: std::collections::BTreeMap<u64, ChoiceState>,
@@ -1600,6 +1633,8 @@ struct ChoiceState {
     role: Option<String>,
     content: String,
     has_content: bool,
+    /// Presence distinguishes an explicit empty refusal from no refusal.
+    refusal: Option<String>,
     /// Non-standard reasoning text streamed by OpenAI-compatible servers, keyed by the delta field
     /// name (`reasoning_content` or `reasoning`) so the assembled message keeps the wire name.
     reasoning: std::collections::BTreeMap<&'static str, String>,
@@ -1607,6 +1642,7 @@ struct ChoiceState {
     /// streamed as a JSON-encoded string accumulated fragment-by-fragment.
     tool_calls: std::collections::BTreeMap<u64, ToolCallState>,
     finish_reason: Option<String>,
+    logprobs: Option<Json>,
 }
 
 #[derive(Debug, Default)]
@@ -1653,6 +1689,16 @@ impl OpenAIChatStreamingState {
                 self.usage = Some(usage.clone());
             }
         }
+        for (field, target) in [
+            ("system_fingerprint", &mut self.system_fingerprint),
+            ("service_tier", &mut self.service_tier),
+        ] {
+            if target.is_none()
+                && let Some(value) = chunk.get(field).and_then(Json::as_str)
+            {
+                *target = Some(value.to_owned());
+            }
+        }
         let Some(choices) = chunk.get("choices").and_then(Json::as_array) else {
             return;
         };
@@ -1664,6 +1710,7 @@ impl OpenAIChatStreamingState {
     fn observe_choice(&mut self, choice: &Json) {
         let index = choice.get("index").and_then(Json::as_u64).unwrap_or(0);
         let entry = self.choices.entry(index).or_default();
+        entry.observe_logprobs(choice.get("logprobs"));
         entry.observe_finish_reason(choice);
         entry.observe_delta(choice.get("delta"));
     }
@@ -1690,6 +1737,14 @@ impl OpenAIChatStreamingState {
         if let Some(model) = self.model {
             output.insert("model".to_string(), Json::String(model));
         }
+        for (field, value) in [
+            ("system_fingerprint", self.system_fingerprint),
+            ("service_tier", self.service_tier),
+        ] {
+            if let Some(value) = value {
+                output.insert(field.to_owned(), Json::String(value));
+            }
+        }
         let choices: Vec<Json> = self
             .choices
             .into_iter()
@@ -1704,6 +1759,36 @@ impl OpenAIChatStreamingState {
 }
 
 impl ChoiceState {
+    fn observe_logprobs(&mut self, update: Option<&Json>) {
+        let Some(update) = update.filter(|value| !value.is_null()) else {
+            return;
+        };
+        if let (Some(Json::Object(current)), Json::Object(update)) = (&mut self.logprobs, update) {
+            for (key, value) in update {
+                if matches!(key.as_str(), "content" | "refusal") {
+                    if let Some(entries) = value.as_array() {
+                        let target = current
+                            .entry(key.clone())
+                            .or_insert_with(|| Json::Array(Vec::new()));
+                        if let Some(target) = target.as_array_mut() {
+                            target.extend(entries.iter().cloned());
+                        } else {
+                            *target = value.clone();
+                        }
+                        continue;
+                    }
+                    // Usage/finish chunks can carry null fields after the actual entries.
+                    if value.is_null() && current.contains_key(key) {
+                        continue;
+                    }
+                }
+                current.insert(key.clone(), value.clone());
+            }
+        } else {
+            self.logprobs = Some(update.clone());
+        }
+    }
+
     fn observe_finish_reason(&mut self, choice: &Json) {
         if let Some(reason) = choice.get("finish_reason").and_then(Json::as_str) {
             self.finish_reason = Some(reason.to_string());
@@ -1720,6 +1805,11 @@ impl ChoiceState {
         if let Some(content) = delta.get("content").and_then(Json::as_str) {
             self.content.push_str(content);
             self.has_content = true;
+        }
+        if let Some(refusal) = delta.get("refusal").and_then(Json::as_str) {
+            self.refusal
+                .get_or_insert_with(String::new)
+                .push_str(refusal);
         }
         for field in ["reasoning_content", "reasoning"] {
             if let Some(reasoning) = delta.get(field).and_then(Json::as_str) {
@@ -1765,6 +1855,9 @@ impl ChoiceState {
         } else {
             message.insert("content".to_string(), Json::Null);
         }
+        if let Some(refusal) = self.refusal {
+            message.insert("refusal".to_string(), Json::String(refusal));
+        }
         for (field, reasoning) in self.reasoning {
             message.insert(field.to_string(), Json::String(reasoning));
         }
@@ -1779,6 +1872,9 @@ impl ChoiceState {
         let mut choice = serde_json::Map::new();
         choice.insert("index".to_string(), Json::Number(index.into()));
         choice.insert("message".to_string(), Json::Object(message));
+        if let Some(logprobs) = self.logprobs {
+            choice.insert("logprobs".to_owned(), logprobs);
+        }
         if let Some(reason) = self.finish_reason {
             choice.insert("finish_reason".to_string(), Json::String(reason));
         } else {

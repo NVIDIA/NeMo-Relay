@@ -48,6 +48,8 @@ The Go package provides the following capabilities:
 
 - **Scope, tool, and LLM helpers**: Managed lifecycle APIs backed by the
   shared Rust runtime.
+- `InspectLLMContent` selects a Go-owned snapshot from a normalized codec
+  annotation. Read its typed parts and locations or call `Text()` for display.
 - **Middleware APIs**: Guardrails and intercepts for request rewriting,
   blocking, sanitization, and execution wrapping, including mark and scope
   event sanitizers at global, scope-local, and plugin-context levels.
@@ -85,6 +87,12 @@ Built-ins include `NewOpenAIChatCodec`, `NewOpenAIResponsesCodec`,
 for standalone JSON transformations. `Encode` returns an `LLMRequest` with
 headers and content. Built-in handles preserve their codec identity in sanitizer
 and execution-intercept contexts.
+
+Pass the normalized JSON from `Decode` or `DecodeResponse` to
+`InspectLLMContent` to read its content. The returned snapshot owns its parts
+and source locations. It stays valid after the codec closes or the callback
+returns. `Text()` joins text and refusal parts. Tool and media payloads remain
+available as typed parts and do not contribute display text.
 
 `NewCustomCodec(request, response)` creates an owned request codec, response
 codec, or both. Request callbacks provide `Decode` and `Encode` together.
