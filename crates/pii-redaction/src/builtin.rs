@@ -44,6 +44,25 @@ pub(super) struct CompiledBuiltinBackend {
     match_diagnostics: Option<(ComponentRecorder, ExtensionHandle)>,
 }
 
+/// Object removals delete a key; the same edit in an array preserves a null slot.
+#[derive(Clone, Copy, PartialEq, Eq)]
+enum JsonEdit {
+    Unchanged,
+    Replaced,
+    Remove,
+}
+
+impl JsonEdit {
+    /// A removed root or array element is represented by JSON null.
+    fn apply_nullable(self, value: &mut Json) -> bool {
+        match self {
+            Self::Unchanged => false,
+            Self::Replaced => true,
+            Self::Remove => !value.take().is_null(),
+        }
+    }
+}
+
 #[derive(Default)]
 struct MatchCounts {
     matched_paths: u64,
@@ -498,6 +517,10 @@ impl CompiledBuiltinBackend {
     }
 
     fn sanitize_json_preorder_dfs(&self, value: Json) -> Json {
+        self.sanitize_json_with_change(value).0
+    }
+
+    fn sanitize_json_with_change(&self, mut value: Json) -> (Json, bool) {
         let selected = if self.match_diagnostics.is_some()
             && matches!(self.action, BuiltinAction::Remove)
             && self.target_path_matcher.may_hide_descendant
@@ -509,9 +532,9 @@ impl CompiledBuiltinBackend {
             None
         };
         let mut counts = MatchCounts::default();
-        let result = self
-            .sanitize_json_preorder_dfs_at_path(value, &mut Vec::new(), &mut counts)
-            .unwrap_or(Json::Null);
+        let edit =
+            self.sanitize_json_preorder_dfs_at_path(&mut value, &mut Vec::new(), &mut counts);
+        let changed = edit.apply_nullable(&mut value);
         if let Some(selected) = selected {
             counts.matched_paths = selected.matched_paths;
             counts.eligible_string_leaves = selected.eligible_string_leaves;
@@ -527,7 +550,7 @@ impl CompiledBuiltinBackend {
                 )
             });
         }
-        result
+        (value, changed)
     }
 
     fn count_selections_at_path(
@@ -610,13 +633,16 @@ impl CompiledBuiltinBackend {
         value: String,
         path_segments: &[String],
     ) -> Option<String> {
-        let mut path_segments = path_segments.to_vec();
-        self.sanitize_json_preorder_dfs_at_path(
-            Json::String(value),
-            &mut path_segments,
+        let mut value = Json::String(value);
+        let edit = self.sanitize_json_preorder_dfs_at_path(
+            &mut value,
+            &mut path_segments.to_vec(),
             &mut MatchCounts::default(),
-        )
-        .and_then(|value| value.as_str().map(str::to_string))
+        );
+        match value {
+            Json::String(text) if edit != JsonEdit::Remove => Some(text),
+            _ => None,
+        }
     }
 
     /// Sanitize string-valued attributes while retaining analytical values.
@@ -696,10 +722,10 @@ impl CompiledBuiltinBackend {
 
     fn sanitize_json_preorder_dfs_at_path(
         &self,
-        value: Json,
+        value: &mut Json,
         path_segments: &mut Vec<String>,
         counts: &mut MatchCounts,
-    ) -> Option<Json> {
+    ) -> JsonEdit {
         let matched = self.matches_current_preorder_path(path_segments);
         if matched {
             counts.matched_paths = counts.matched_paths.saturating_add(1);
@@ -712,52 +738,58 @@ impl CompiledBuiltinBackend {
                 counts.eligible_string_leaves = counts.eligible_string_leaves.saturating_add(1);
             }
             counts.affected_values = counts.affected_values.saturating_add(1);
-            return None;
+            return JsonEdit::Remove;
         }
 
+        if let Json::String(text) = value {
+            if !matched {
+                return JsonEdit::Unchanged;
+            }
+            counts.eligible_string_leaves = counts.eligible_string_leaves.saturating_add(1);
+            let replacement = self.sanitize_string_value(text);
+            if replacement.as_ref() == Some(text) {
+                return JsonEdit::Unchanged;
+            }
+            counts.affected_values = counts.affected_values.saturating_add(1);
+            return match replacement {
+                Some(updated) => {
+                    *text = updated;
+                    JsonEdit::Replaced
+                }
+                None => JsonEdit::Remove,
+            };
+        }
+
+        if !self.target_path_matcher.is_empty()
+            && !self.target_path_matcher.may_match_descendant(path_segments)
+        {
+            return JsonEdit::Unchanged;
+        }
+        let mut edit = JsonEdit::Unchanged;
         match value {
-            Json::String(text) => {
-                if matched {
-                    counts.eligible_string_leaves = counts.eligible_string_leaves.saturating_add(1);
-                    let original = self.match_diagnostics.as_ref().map(|_| text.clone());
-                    let sanitized = self.sanitize_string_value(text);
-                    if original
-                        .is_some_and(|original| sanitized.as_ref() != Some(&Json::String(original)))
-                    {
-                        counts.affected_values = counts.affected_values.saturating_add(1);
+            Json::Array(items) => {
+                for (index, item) in items.iter_mut().enumerate() {
+                    path_segments.push(index.to_string());
+                    let child =
+                        self.sanitize_json_preorder_dfs_at_path(item, path_segments, counts);
+                    if child.apply_nullable(item) {
+                        edit = JsonEdit::Replaced;
                     }
-                    sanitized
-                } else {
-                    Some(Json::String(text))
+                    path_segments.pop();
                 }
             }
-            Json::Array(items) => Some(Json::Array(
-                items
-                    .into_iter()
-                    .enumerate()
-                    .map(|(index, item)| {
-                        path_segments.push(index.to_string());
-                        let sanitized = self
-                            .sanitize_json_preorder_dfs_at_path(item, path_segments, counts)
-                            .unwrap_or(Json::Null);
-                        path_segments.pop();
-                        sanitized
-                    })
-                    .collect(),
-            )),
-            Json::Object(map) => Some(Json::Object(
-                map.into_iter()
-                    .filter_map(|(key, value)| {
-                        path_segments.push(key.clone());
-                        let sanitized =
-                            self.sanitize_json_preorder_dfs_at_path(value, path_segments, counts);
-                        path_segments.pop();
-                        sanitized.map(|sanitized| (key, sanitized))
-                    })
-                    .collect(),
-            )),
-            other => Some(other),
+            Json::Object(map) => map.retain(|key, item| {
+                path_segments.push(key.clone());
+                let child = self.sanitize_json_preorder_dfs_at_path(item, path_segments, counts);
+                path_segments.pop();
+                if child != JsonEdit::Unchanged {
+                    edit = JsonEdit::Replaced;
+                }
+                child != JsonEdit::Remove
+            }),
+            _ => {}
         }
+        edit
     }
 
     fn matches_current_preorder_path(&self, path_segments: &[String]) -> bool {
@@ -767,32 +799,28 @@ impl CompiledBuiltinBackend {
         self.target_path_matcher.matches(path_segments)
     }
 
-    fn sanitize_string_value(&self, text: String) -> Option<Json> {
-        match &self.action {
-            BuiltinAction::Remove => None,
-            BuiltinAction::Hash { matcher } => Some(Json::String(match matcher {
-                Some(matcher) => matcher.replace_all(&text, hex_sha256),
-                None => hex_sha256(&text),
-            })),
-            BuiltinAction::Mask { matcher, strategy } => Some(Json::String(match matcher {
+    fn sanitize_string_value(&self, text: &str) -> Option<String> {
+        Some(match &self.action {
+            BuiltinAction::Remove => return None,
+            BuiltinAction::Hash { matcher } => match matcher {
+                Some(matcher) => matcher.replace_all(text, hex_sha256),
+                None => hex_sha256(text),
+            },
+            BuiltinAction::Mask { matcher, strategy } => match matcher {
                 Some(matcher) => {
-                    matcher.replace_all(&text, |matched| mask_with_strategy(matched, strategy))
+                    matcher.replace_all(text, |matched| mask_with_strategy(matched, strategy))
                 }
-                None => mask_with_strategy(&text, strategy),
-            })),
+                None => mask_with_strategy(text, strategy),
+            },
             BuiltinAction::Redact {
                 matcher,
                 replacement,
-            } => Some(Json::String(
-                matcher.replace_all(&text, |_| replacement.as_str().to_string()),
-            )),
+            } => matcher.replace_all(text, |_| replacement.as_str().to_owned()),
             BuiltinAction::RegexReplace {
                 pattern,
                 replacement,
-            } => Some(Json::String(
-                pattern.replace_all_expanded(&text, replacement),
-            )),
-        }
+            } => pattern.replace_all_expanded(text, replacement),
+        })
     }
 
     fn selected_surface(&self, codec: &LlmCodecIdentity) -> Option<ProviderSurface> {
@@ -888,13 +916,13 @@ impl CompiledBuiltinBackend {
             // Per-part edits are safe only when they preserve a joined match.
             let expected = [false, true].map(|include_refusals| {
                 let original = joined_openai_message(&annotated, include_refusals)?;
-                let sanitized = self.sanitize_string_value(original.clone())?;
-                (sanitized.as_str()? != original).then_some((include_refusals, sanitized))
+                let sanitized = self.sanitize_string_value(&original)?;
+                (sanitized != original).then_some((include_refusals, sanitized))
             });
             let sanitized = backend.sanitize_json_preorder_dfs(annotated);
             for (include_refusals, expected) in expected.into_iter().flatten() {
                 if joined_openai_message(&sanitized, include_refusals).as_deref()
-                    != expected.as_str()
+                    != Some(expected.as_str())
                 {
                     return None;
                 }
@@ -915,8 +943,8 @@ impl CompiledBuiltinBackend {
             self.sanitize_response_annotation(codec.codec_identity(), baseline.clone())?;
         // Both representations see the original value, including for non-idempotent
         // actions such as hashing. Pass any remaining normalized edits to the codec.
-        let wire = self.sanitize_json_preorder_dfs(payload.clone());
-        let (baseline, sanitized) = if wire == payload {
+        let (wire, changed) = self.sanitize_json_with_change(payload);
+        let (baseline, sanitized) = if !changed {
             (baseline, sanitized)
         } else {
             let decoded = serde_json::to_value(codec.decode_response(&wire).ok()?).ok()?;
