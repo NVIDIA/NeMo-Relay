@@ -457,7 +457,7 @@ fn push_llm_response_attributes(attributes: &mut Vec<KeyValue>, event: &Event) {
             string_array([finish_reason(value).to_string()]),
         ));
     }
-    if let Some(messages) = output_messages_json(response) {
+    if let Some(messages) = output_messages_json(response, event.output()) {
         attributes.push(KeyValue::new(semconv::GEN_AI_OUTPUT_MESSAGES, messages));
     }
     // Anthropic reports uncached, cache-read, and cache-creation input
@@ -729,21 +729,11 @@ fn is_tool_result_message(content: &MessageContent) -> bool {
     )
 }
 
-fn output_messages_json(response: &AnnotatedLlmResponse) -> Option<String> {
-    let mut parts = response
-        .message
-        .as_ref()
-        .map_or_else(Vec::new, content_parts);
-    if let Some(tool_calls) = response.tool_calls.as_ref() {
-        parts.extend(tool_calls.iter().map(|call| {
-            serde_json::json!({
-                "type": "tool_call",
-                "id": call.id,
-                "name": call.name,
-                "arguments": call.arguments,
-            })
-        }));
-    }
+fn output_messages_json(
+    response: &AnnotatedLlmResponse,
+    raw_output: Option<&Json>,
+) -> Option<String> {
+    let parts = output_parts(response, raw_output);
     if parts.is_empty() {
         return None;
     }
@@ -762,6 +752,221 @@ fn output_messages_json(response: &AnnotatedLlmResponse) -> Option<String> {
         ),
     ]);
     serde_json::to_string(&[Json::Object(object)]).ok()
+}
+
+fn output_parts(response: &AnnotatedLlmResponse, raw_output: Option<&Json>) -> Vec<Json> {
+    match response.api_specific.as_ref() {
+        Some(ApiSpecificResponse::AnthropicMessages {
+            content_blocks: Some(blocks),
+            ..
+        }) => {
+            let parts = blocks.iter().filter_map(anthropic_output_part).collect();
+            merge_normalized_output_parts(parts, response)
+        }
+        Some(ApiSpecificResponse::OpenAIResponses {
+            output_items: Some(items),
+            ..
+        }) => {
+            let parts = items
+                .iter()
+                .flat_map(openai_responses_output_parts)
+                .collect();
+            merge_normalized_output_parts(parts, response)
+        }
+        _ => normalized_output_parts(response, raw_output),
+    }
+}
+
+fn merge_normalized_output_parts(
+    ordered_parts: Vec<Json>,
+    response: &AnnotatedLlmResponse,
+) -> Vec<Json> {
+    let mut normalized_text = normalized_text_parts_for_order(&ordered_parts, response).into_iter();
+    let mut normalized_tool_calls: Vec<Json> = normalized_tool_call_parts(response).collect();
+    let mut merged = Vec::with_capacity(
+        ordered_parts.len() + normalized_text.len() + normalized_tool_calls.len(),
+    );
+
+    for part in ordered_parts {
+        match part.get("type").and_then(Json::as_str) {
+            Some("text") => merged.extend(normalized_text.next()),
+            Some("tool_call") => {
+                let id = part.get("id").and_then(Json::as_str);
+                if let Some(index) = normalized_tool_calls
+                    .iter()
+                    .position(|call| call.get("id").and_then(Json::as_str) == id)
+                {
+                    merged.push(normalized_tool_calls.remove(index));
+                }
+            }
+            _ => merged.push(part),
+        }
+    }
+    merged.extend(normalized_text);
+    merged.extend(normalized_tool_calls);
+    merged
+}
+
+fn normalized_text_parts_for_order(
+    ordered_parts: &[Json],
+    response: &AnnotatedLlmResponse,
+) -> Vec<Json> {
+    let Some(message) = response.message.as_ref() else {
+        return Vec::new();
+    };
+    let MessageContent::Text(normalized_text) = message else {
+        return content_parts(message);
+    };
+    let native_text: Vec<&str> = ordered_parts
+        .iter()
+        .filter(|part| part.get("type").and_then(Json::as_str) == Some("text"))
+        .filter_map(|part| part.get("content").and_then(Json::as_str))
+        .collect();
+    // Codecs join text blocks with "\n", so boundaries are known only when the
+    // normalized text is exactly that join; otherwise keep it as one part.
+    if native_text.len() < 2 || native_text.join("\n") != *normalized_text {
+        return content_parts(message);
+    }
+
+    let mut offset = 0;
+    native_text
+        .iter()
+        .map(|native| {
+            let part = text_part(&normalized_text[offset..offset + native.len()]);
+            offset += native.len() + 1;
+            part
+        })
+        .collect()
+}
+
+fn normalized_output_parts(
+    response: &AnnotatedLlmResponse,
+    raw_output: Option<&Json>,
+) -> Vec<Json> {
+    let mut parts = Vec::new();
+    if matches!(
+        response.api_specific.as_ref(),
+        Some(ApiSpecificResponse::OpenAIChat { .. })
+    ) {
+        parts.extend(
+            raw_output
+                .and_then(|output| output.pointer("/choices/0/message"))
+                .and_then(|message| {
+                    non_empty_str(message.get("reasoning_content"))
+                        .or_else(|| non_empty_str(message.get("reasoning")))
+                })
+                .map(reasoning_part),
+        );
+    }
+    if let Some(message) = response.message.as_ref() {
+        parts.extend(content_parts(message));
+    }
+    parts.extend(normalized_tool_call_parts(response));
+    parts
+}
+
+fn normalized_tool_call_parts(response: &AnnotatedLlmResponse) -> impl Iterator<Item = Json> + '_ {
+    response.tool_calls.iter().flatten().map(|call| {
+        serde_json::json!({
+            "type": "tool_call",
+            "id": call.id,
+            "name": call.name,
+            "arguments": call.arguments,
+        })
+    })
+}
+
+fn anthropic_output_part(block: &Json) -> Option<Json> {
+    match block.get("type").and_then(Json::as_str)? {
+        "thinking" => non_empty_str(block.get("thinking")).map(reasoning_part),
+        "text" => block.get("text").and_then(Json::as_str).map(text_part),
+        "tool_use" => Some(serde_json::json!({
+            "type": "tool_call",
+            "id": block.get("id")?.as_str()?,
+            "name": block.get("name")?.as_str()?,
+            "arguments": block.get("input")?,
+        })),
+        _ => None,
+    }
+}
+
+fn openai_responses_output_parts(item: &Json) -> Vec<Json> {
+    match item.get("type").and_then(Json::as_str) {
+        Some("reasoning") => openai_responses_reasoning_text(item)
+            .map(|content| vec![reasoning_part(&content)])
+            .unwrap_or_default(),
+        Some("message") => item
+            .get("content")
+            .and_then(Json::as_array)
+            .into_iter()
+            .flatten()
+            .filter_map(openai_responses_text_part)
+            .collect(),
+        Some("output_text") => openai_responses_text_part(item).into_iter().collect(),
+        Some("function_call") => vec![serde_json::json!({
+            "type": "tool_call",
+            "id": item.get("call_id").and_then(Json::as_str).unwrap_or(""),
+            "name": item.get("name").and_then(Json::as_str).unwrap_or(""),
+            "arguments": item
+                .get("arguments")
+                .and_then(Json::as_str)
+                .map(parse_tool_arguments)
+                .unwrap_or_else(|| Json::Object(Map::new())),
+        })],
+        Some("custom_tool_call") => custom_tool_call_part(item).into_iter().collect(),
+        _ => Vec::new(),
+    }
+}
+
+fn openai_responses_text_part(block: &Json) -> Option<Json> {
+    (block.get("type").and_then(Json::as_str) == Some("output_text"))
+        .then(|| block.get("text").and_then(Json::as_str))
+        .flatten()
+        .map(text_part)
+}
+
+fn custom_tool_call_part(item: &Json) -> Option<Json> {
+    let id = item
+        .get("call_id")?
+        .as_str()
+        .filter(|id| !id.trim().is_empty())?;
+    let name = item
+        .get("name")?
+        .as_str()
+        .filter(|name| !name.trim().is_empty())?;
+    Some(serde_json::json!({
+        "type": "tool_call",
+        "id": id,
+        "name": name,
+        "arguments": item.get("input")?.as_str()?,
+    }))
+}
+
+fn parse_tool_arguments(arguments: &str) -> Json {
+    serde_json::from_str(arguments).unwrap_or_else(|_| Json::String(arguments.to_string()))
+}
+
+fn reasoning_part(content: &str) -> Json {
+    serde_json::json!({"type": "reasoning", "content": content})
+}
+
+/// Prefers the full `content` reasoning text and falls back to the `summary`.
+fn openai_responses_reasoning_text(item: &Json) -> Option<String> {
+    ["content", "summary"].into_iter().find_map(|field| {
+        let texts: Vec<&str> = item
+            .get(field)?
+            .as_array()?
+            .iter()
+            .filter_map(|entry| non_empty_str(entry.get("text")))
+            .collect();
+        (!texts.is_empty()).then(|| texts.join("\n\n"))
+    })
+}
+
+fn non_empty_str(value: Option<&Json>) -> Option<&str> {
+    value
+        .and_then(Json::as_str)
+        .filter(|value| !value.is_empty())
 }
 
 fn content_parts(content: &MessageContent) -> Vec<Json> {

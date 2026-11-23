@@ -1908,6 +1908,41 @@ fn openai_chat_streaming_codec_handles_multiple_choices() {
 }
 
 #[test]
+fn openai_chat_streaming_codec_assembles_reasoning_aliases() {
+    for field in ["reasoning_content", "reasoning"] {
+        let codec = OpenAIChatStreamingCodec::new();
+        let mut collector = codec.collector();
+        let finalizer = codec.finalizer();
+
+        for (fragment, role) in [("Let me ", true), ("check.", false)] {
+            let mut delta = json!({});
+            if role {
+                delta["role"] = json!("assistant");
+            }
+            delta[field] = json!(fragment);
+            collector(json!({
+                "id": "chatcmpl-r", "object": "chat.completion.chunk", "model": "deepseek",
+                "choices": [{"index": 0, "delta": delta, "finish_reason": null}]
+            }))
+            .unwrap();
+        }
+        collector(json!({
+            "id": "chatcmpl-r", "object": "chat.completion.chunk", "model": "deepseek",
+            "choices": [{"index": 0, "delta": {"content": "Done."}, "finish_reason": null}]
+        }))
+        .unwrap();
+
+        let assembled = finalizer();
+        let mut expected = json!({"role": "assistant", "content": "Done."});
+        expected[field] = json!("Let me check.");
+        assert_eq!(
+            assembled["choices"][0]["message"], expected,
+            "field: {field}"
+        );
+    }
+}
+
+#[test]
 fn openai_chat_streaming_codec_skips_null_usage_chunks() {
     // Some streams emit `usage: null` on every chunk and the real usage only on the final chunk.
     // Codec must not let intermediate nulls overwrite a captured usage object.
