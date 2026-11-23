@@ -1,5 +1,5 @@
 ---
-title: "Latency Benchmark"
+title: "Run the Latency Benchmark"
 description: "Measure Relay overhead with the opt-in loopback latency benchmark."
 position: 6
 ---
@@ -11,14 +11,46 @@ adds around Codex and Claude Code traffic. The harness uses deterministic
 loopback OpenAI and Anthropic providers so network and model-service latency do
 not hide Relay's contribution.
 
-Run the benchmark with the following command:
+## Prerequisites
+
+Complete the [Development Setup](/contribute/development-setup), including
+Rust, Python 3.11 or newer, `uv`, and `just`. Run the commands from the
+repository root. The benchmark recipe builds the release CLI.
+
+Before running the default matrix, keep at least 30 GiB free in the operating
+system's temporary directory. The matrix can write about 25 GiB of temporary
+ATOF data, which it removes after a normal run.
+
+## Run a Smoke Test
+
+Start with a small matrix to verify that the benchmark works:
+
+```bash
+just latency-benchmark \
+  --tests gateway \
+  --providers openai \
+  --modes buffered \
+  --payload-sizes 4096 \
+  --concurrency 1 \
+  --samples 5 \
+  --warmup 1 \
+  --response-bytes 1024
+```
+
+Check that the command completes successfully and writes
+`target/benchmark-results/nemo-relay-latency-report.json` and
+`target/benchmark-results/nemo-relay-latency-report.html`. Do not use the smoke
+test for performance conclusions; its sample count only checks functionality.
+
+## Run the Default Matrix
+
+After checking available disk space, run the default matrix:
 
 ```bash
 just latency-benchmark
 ```
 
-The command builds the release CLI. Its default configuration measures the
-following paths:
+The default configuration measures the following paths:
 
 - Direct requests to the mock provider.
 - Relay with no exporter, which isolates the managed gateway pipeline.
