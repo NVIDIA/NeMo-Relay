@@ -20,7 +20,7 @@ import { after, before, describe, it, mock } from 'node:test';
 import childProcess from 'node:child_process';
 import { syncBuiltinESMExports } from 'node:module';
 
-const { postHook, resolveFault, configFromEnv } = await import('../src/gateway-client.ts');
+const { closeHookStream, postHook, resolveFault, configFromEnv } = await import('../src/gateway-client.ts');
 
 /** Start a server that replies with `handler(requestBody)`. */
 function serve(handler) {
@@ -122,6 +122,12 @@ describe('gateway client wire contract', () => {
       if (name === 'string-body') return { status: 200, payload: 'ok' };
       if (name === 'boom') return { status: 500, payload: { error: { message: 'kaboom' } } };
       if (name === 'naked-403') return { status: 403, payload: { error: { message: 'nope' } } };
+      if (request.body.tool_call_id === 'rewrite') {
+        return {
+          status: 200,
+          payload: { tool_call: { tool_call_id: 'rewrite', input: { path: 'README.md' } } },
+        };
+      }
       if (request.body.tool_name === 'read' && request.body.input?.path?.endsWith('.env')) {
         // Byte-for-byte the shape CliError::into_response produces.
         return {
@@ -141,6 +147,73 @@ describe('gateway client wire contract', () => {
   });
 
   after(() => ctx.server.close());
+
+  it('reuses a stream and retires it after an oversized response', async () => {
+    const config = baseConfig(url, { streamHooks: true });
+    const pid = async () => {
+      const response = await postHook(config, { hook_event_name: 'fixture_process_id' });
+      assert.equal(response.kind, 'allow');
+      assert.ok(Number.isInteger(response.body.pid));
+      return response.body.pid;
+    };
+    try {
+      const first = await pid();
+      assert.equal(await pid(), first);
+      const outcome = await postHook(config, {
+        hook_event_name: 'fixture_output_overflow', stream: 'stdout',
+      });
+      assert.equal(outcome.kind, 'fault');
+      assert.match(outcome.detail, /output limit/);
+      assert.notEqual(await pid(), first);
+    } finally {
+      closeHookStream(config);
+    }
+  });
+
+  it('preserves a UTF-8 diagnostic split across stderr chunks', async () => {
+    const config = baseConfig(url, { streamHooks: true });
+    try {
+      const outcome = await postHook(config, { hook_event_name: 'fixture_split_stderr' });
+      assert.deepEqual(outcome, {
+        kind: 'fault', origin: 'transport', detail: 'gateway request failed: é',
+      });
+    } finally {
+      closeHookStream(config);
+    }
+  });
+
+  it('forwards streamed policy decisions and recovers after a timeout', async () => {
+    const config = baseConfig(url, { streamHooks: true });
+    const usualTimeoutMs = config.timeoutMs;
+    const read = (path, id) => postHook(config, {
+      hook_event_name: 'tool_call',
+      tool_name: 'read',
+      tool_call_id: id,
+      input: { path },
+    });
+    try {
+      assert.deepEqual(await read('README.md', 'allow'), { kind: 'allow', body: {} });
+      assert.deepEqual(await read('/work/.env', 'block'), {
+        kind: 'block',
+        reason: 'read .env is blocked; use .env.example',
+      });
+      assert.deepEqual(await read('draft.md', 'rewrite'), {
+        kind: 'allow',
+        body: { tool_call: { tool_call_id: 'rewrite', input: { path: 'README.md' } } },
+      });
+
+      config.timeoutMs = 200;
+      const timeout = await postHook(config, { hook_event_name: 'slow' });
+      assert.equal(timeout.kind, 'fault');
+      assert.equal(timeout.origin, 'timeout');
+
+      config.timeoutMs = usualTimeoutMs;
+      assert.deepEqual(await read('README.md', 'after-timeout'), { kind: 'allow', body: {} });
+      assert.equal(ctx.received.at(-1).body.tool_call_id, 'after-timeout');
+    } finally {
+      closeHookStream(config);
+    }
+  });
 
   // A 2xx body may carry a required argument transform, so an unreadable one is not
   // an empty allow -- treating it as one runs the original arguments and silently

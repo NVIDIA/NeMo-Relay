@@ -478,52 +478,14 @@ class TestTypedToolExecute:
         ],
     )
     async def test_best_effort_tool_result_replays_with_a_fresh_codec(self, value, allowed_types, replayable) -> None:
-        """Replay portable results and rerun tools whose encoded values cannot be restored."""
-        from nemo_relay.adaptive import (
-            AdaptiveConfig,
-            AdaptiveRuntime,
-            ResponseCacheConfig,
-            ToolCacheConfig,
-            ToolOverride,
-        )
-
+        """Mark portable results replayable and restore them with a fresh codec."""
         codec = BestEffortAnyCodec(tool_result=True, allowed_types=allowed_types)
         encoded = cast(JsonObject, codec.to_json(value))
         assert encoded["cache"] == {"replayable": replayable}
-        expected = value if replayable else codec.from_json(encoded)
-        calls = 0
-
-        def execute(_args: Json) -> ToolExecutionResult[object]:
-            """Count tool executions and return the value and annotation used to verify replay."""
-            nonlocal calls
-            calls += 1
-            return ToolExecutionResult(value, {"source": "test"})
-
-        runtime = AdaptiveRuntime(
-            AdaptiveConfig(
-                response_cache=ResponseCacheConfig(
-                    namespace="typed-tool-replay",
-                    tools=ToolCacheConfig(enabled=True, overrides={"lookup": ToolOverride(cacheable=True)}),
-                )
-            ).to_dict()
-        )
-        await runtime.register()
-        try:
-            for call_id in ["call-1", "call-2"]:
-                outcome = await typed.tool_execute(
-                    "lookup",
-                    {},
-                    execute,
-                    JsonPassthrough(),
-                    BestEffortAnyCodec(tool_result=True, allowed_types=allowed_types),
-                    tool_call_id=call_id,
-                )
-                assert outcome.result == expected
-                assert type(outcome.result) is type(expected)
-                assert outcome.annotation == {"source": "test"}
-            assert calls == (1 if replayable else 2)
-        finally:
-            runtime.deregister()
+        if replayable:
+            restored = BestEffortAnyCodec(tool_result=True, allowed_types=allowed_types).from_json(encoded)
+            assert restored == value
+            assert type(restored) is type(value)
 
     async def test_dataclass_roundtrip(self) -> None:
         async def search(args: SearchArgs) -> ToolExecutionResult[SearchResult]:

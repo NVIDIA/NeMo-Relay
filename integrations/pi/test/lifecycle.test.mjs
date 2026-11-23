@@ -473,8 +473,7 @@ describe('unpaired tool boundaries', () => {
     await fire('tool_execution_end', { toolCallId: 'orphan', toolName: '', result: null, isError: false });
     await fire('session_shutdown', { reason: 'quit' });
 
-    // Dropping the post would lose the span entirely; the gateway synthesizes the missing
-    // start, and a named-but-unknown tool is more useful than nothing.
+    // The gateway can record a completion mark even when it never saw a start.
     const [end] = named(ctx.posts, 'tool_execution_end');
     assert.equal(end.tool_name, 'unknown');
   });

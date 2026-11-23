@@ -33,8 +33,6 @@ pub mod intercepts;
 pub mod learner;
 pub mod plugin_component;
 pub mod redis;
-/// Opt-in exact-match LLM response and tool-result cache.
-pub mod response_cache;
 mod runtime;
 /// Storage backends and backend traits for adaptive state persistence.
 pub mod storage;
@@ -46,8 +44,8 @@ pub mod trie;
 pub mod types;
 
 pub use config::{
-    AcgComponentConfig, AdaptiveConfig, AdaptiveHintsComponentConfig, BackendSpec,
-    ResponseCacheConfig, StateConfig, TelemetryComponentConfig, ToolParallelismComponentConfig,
+    AcgComponentConfig, AdaptiveConfig, AdaptiveHintsComponentConfig, BackendSpec, StateConfig,
+    TelemetryComponentConfig, ToolParallelismComponentConfig,
 };
 pub use context_helpers::{
     LATENCY_SENSITIVITY_POINTER, extract_scope_path, read_manual_latency_sensitivity,
@@ -55,8 +53,6 @@ pub use context_helpers::{
 };
 pub use error::{AdaptiveError, Result};
 pub use redis::RedisBackend;
-pub use response_cache::config::{ToolCacheConfig, ToolClass, ToolOverride};
-pub use response_cache::{RESPONSE_CACHE_MARK, ResponseCacheKeyStrategy};
 pub use runtime::features::AdaptiveRuntime;
 pub use storage::erased::AnyBackend;
 pub use storage::memory::InMemoryBackend;

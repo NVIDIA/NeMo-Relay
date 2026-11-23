@@ -86,14 +86,33 @@ const MAX_MCP_CONTROL_SESSIONS: usize = 8_192;
 const MAX_CONCURRENT_TLS_HANDSHAKES: usize = 256;
 const TLS_HANDSHAKE_TIMEOUT: Duration = Duration::from_secs(10);
 const UPSTREAM_FAILURE_LOG_INTERVAL: Duration = Duration::from_secs(10);
-// A single peer cannot consume either role's challenge pool, even across a window boundary.
-const CHALLENGES_PER_PEER_WINDOW: u32 = 16;
+const MAX_ERROR_CHAIN_DEPTH: usize = 8;
+// Admission counts each peer's pending (issued but unanswered) challenges per role. On a
+// network-reachable listener one peer may hold at most half of a role's pool, so no single peer
+// can fill it. On a loopback-only listener every client has the same source address, so that
+// one peer may use the whole pool. Clients behind a reverse proxy on the same host also share it.
+// Answered and abandoned challenges free their slots at once, so bursts of fast handshakes from
+// one host don't wait for a time window.
+const MAX_PENDING_MCP_CHALLENGES_PER_PEER: usize = MAX_PENDING_MCP_CHALLENGES / 2;
+const MAX_PENDING_WORKER_CHALLENGES_PER_PEER: usize = MAX_PENDING_WORKER_CHALLENGES / 2;
+const _: () =
+    assert!(MAX_PENDING_MCP_CHALLENGES + MAX_PENDING_WORKER_CHALLENGES <= MAX_PENDING_CHALLENGES);
+// A coarse ceiling on control connection attempts per peer and window, checked before the
+// WebSocket upgrade. Each connection may request one challenge, so this also bounds churn from
+// issuing and abandoning challenges as fast as slots free up.
+const CHALLENGES_PER_PEER_WINDOW: u32 = MAX_PENDING_CHALLENGES as u32;
 const MAX_CHALLENGE_PEERS: usize = 1_024;
-type ChallengePeers = Arc<Mutex<HashMap<IpAddr, (tokio::time::Instant, u32)>>>;
+const CHALLENGE_REJECTION_LOG_INTERVAL: Duration = Duration::from_secs(10);
+/// Suggested wait, in the reply payload, before a client retries a challenge turned away at a
+/// pending limit. A slot frees as soon as another pending challenge is answered, closed or
+/// expires. The reply travels on the open control socket, which carries no HTTP headers.
+const CHALLENGE_RETRY_AFTER_MS: u64 = 2_000;
+type ChallengePeers = Mutex<HashMap<IpAddr, (tokio::time::Instant, u32)>>;
 
 struct PendingChallenge {
     request: ChallengeRequest,
     record: ChallengeRecord,
+    peer: IpAddr,
 }
 
 struct Activation {
@@ -167,6 +186,8 @@ struct DaemonState {
     instance_id: String,
     pass_through: bool,
     loopback_listener: bool,
+    /// Per-peer challenge request windows, shared by the plain and tunneled routers.
+    challenge_peers: ChallengePeers,
     public_origin: String,
     config: GatewayConfig,
     upstream: PooledClient,
@@ -214,6 +235,7 @@ pub(crate) async fn serve(options: ServerOptions) -> Result<(), CliError> {
         instance_id: uuid::Uuid::now_v7().to_string(),
         pass_through: options.pass_through,
         loopback_listener: local.ip().is_loopback(),
+        challenge_peers: Mutex::new(HashMap::new()),
         public_origin,
         config: config.gateway,
         upstream: pooled_client().map_err(|error| CliError::Launch(error.to_string()))?,
@@ -344,7 +366,6 @@ fn local_diagnostics() -> Result<Option<crate::diagnostics_http::DiagnosticsHttp
 }
 
 fn router_with_diagnostics(state: Arc<DaemonState>, encrypted: bool) -> Router {
-    let peers: ChallengePeers = Arc::new(Mutex::new(HashMap::new()));
     let control = Router::new()
         .route(
             crate::daemon::common::socket::MCP_SOCKET_PATH,
@@ -354,7 +375,7 @@ fn router_with_diagnostics(state: Arc<DaemonState>, encrypted: bool) -> Router {
             crate::daemon::common::socket::WORKER_SOCKET_PATH,
             get(socket::worker),
         )
-        .route_layer(from_fn_with_state(peers, limit_challenges));
+        .route_layer(from_fn_with_state(Arc::clone(&state), limit_challenges));
     let diagnostics = state.diagnostics_http.clone();
     let mut app = Router::new()
         .route("/healthz", get(healthz))
@@ -483,35 +504,133 @@ async fn healthz(State(state): State<Arc<DaemonState>>) -> Response<Body> {
     response
 }
 
+/// Why the daemon refused an authentication challenge.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum ChallengeRejection {
+    /// The peer opened too many control connections in one window.
+    PeerRate,
+    /// The daemon already tracks the maximum number of peers.
+    PeerTableFull,
+    /// The peer already holds its share of the role's pending pool.
+    PeerLimit,
+    /// The MCP pending pool is full.
+    McpPool,
+    /// The worker pending pool is full.
+    WorkerPool,
+}
+
+impl ChallengeRejection {
+    const COUNT: usize = 5;
+
+    fn as_str(self) -> &'static str {
+        match self {
+            Self::PeerRate => "peer_rate",
+            Self::PeerTableFull => "peer_table_full",
+            Self::PeerLimit => "peer_limit",
+            Self::McpPool => "mcp_pool",
+            Self::WorkerPool => "worker_pool",
+        }
+    }
+
+    fn detail(self) -> &'static str {
+        match self {
+            Self::PeerRate => "Rejected a control connection at the per-peer connection limit",
+            Self::PeerTableFull => "Rejected a control connection because the peer table is full",
+            Self::PeerLimit => "Rejected a challenge at the per-peer pending limit",
+            Self::McpPool => "Rejected an MCP challenge because the pending pool is full",
+            Self::WorkerPool => "Rejected a worker challenge because the pending pool is full",
+        }
+    }
+}
+
+/// Pending-challenge limits for one role.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+struct ChallengeBudget {
+    role: ComponentRole,
+    pool: usize,
+    per_peer: usize,
+}
+
+impl ChallengeBudget {
+    fn for_role(role: ComponentRole, loopback_listener: bool) -> Option<Self> {
+        let (pool, share) = match role {
+            ComponentRole::Mcp => (
+                MAX_PENDING_MCP_CHALLENGES,
+                MAX_PENDING_MCP_CHALLENGES_PER_PEER,
+            ),
+            ComponentRole::Worker => (
+                MAX_PENDING_WORKER_CHALLENGES,
+                MAX_PENDING_WORKER_CHALLENGES_PER_PEER,
+            ),
+            ComponentRole::Daemon => return None,
+        };
+        Some(Self {
+            role,
+            pool,
+            per_peer: if loopback_listener { pool } else { share },
+        })
+    }
+
+    fn role_name(self) -> &'static str {
+        match self.role {
+            ComponentRole::Daemon => "daemon",
+            ComponentRole::Mcp => "mcp",
+            ComponentRole::Worker => "worker",
+        }
+    }
+
+    fn pool_rejection(self) -> ChallengeRejection {
+        if self.role == ComponentRole::Mcp {
+            ChallengeRejection::McpPool
+        } else {
+            ChallengeRejection::WorkerPool
+        }
+    }
+}
+
+/// Pending-challenge counts for one role when a challenge was refused.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+struct ChallengeUsage {
+    budget: ChallengeBudget,
+    pool_pending: usize,
+    peer_pending: usize,
+}
+
+/// Transport peer for challenge admission. Never trusts caller-controlled forwarding headers.
+/// In-process services without connection metadata share a conservative bucket rather than
+/// bypassing admission.
+fn challenge_peer(request: &Request<Body>) -> IpAddr {
+    request
+        .extensions()
+        .get::<ConnectInfo<SocketAddr>>()
+        .map_or(IpAddr::V4(Ipv4Addr::UNSPECIFIED), |peer| peer.0.ip())
+}
+
 async fn limit_challenges(
-    State(peers): State<ChallengePeers>,
+    State(state): State<Arc<DaemonState>>,
     request: Request<Body>,
     next: Next,
 ) -> Response<Body> {
-    // Use the transport peer, never caller-controlled forwarding headers. In-process services
-    // without connection metadata share a conservative bucket rather than bypassing admission.
-    let peer = request
-        .extensions()
-        .get::<ConnectInfo<SocketAddr>>()
-        .map_or(IpAddr::V4(Ipv4Addr::UNSPECIFIED), |peer| peer.0.ip());
-    let admitted = {
-        let mut peers = lock(&peers);
+    let peer = challenge_peer(&request);
+    let rejection = {
+        let mut peers = lock(&state.challenge_peers);
         let now = tokio::time::Instant::now();
         let window = Duration::from_millis(CHALLENGE_LIFETIME_MS);
         peers.retain(|_, (start, _)| now.duration_since(*start) < window);
         if !peers.contains_key(&peer) && peers.len() >= MAX_CHALLENGE_PEERS {
-            false
+            Some(ChallengeRejection::PeerTableFull)
         } else {
             let (_, count) = peers.entry(peer).or_insert((now, 0));
             if *count >= CHALLENGES_PER_PEER_WINDOW {
-                false
+                Some(ChallengeRejection::PeerRate)
             } else {
                 *count += 1;
-                true
+                None
             }
         }
     };
-    if !admitted {
+    if let Some(rejection) = rejection {
+        record_challenge_rejection(peer, rejection, None);
         let mut response = control_message(
             StatusCode::TOO_MANY_REQUESTS,
             "authentication challenge rate limit exceeded",
@@ -524,8 +643,83 @@ async fn limit_challenges(
     next.run(request).await
 }
 
+/// Record a refused challenge as a diagnostic and a rate-limited warning per reason.
+fn record_challenge_rejection(
+    peer: IpAddr,
+    rejection: ChallengeRejection,
+    usage: Option<ChallengeUsage>,
+) {
+    diag::record(
+        DaemonFailureCode::ChallengeRejected,
+        FailureClass::ResourceExhausted,
+        &challenge_rejection_diagnostic(rejection, usage),
+    );
+    static LIMITERS: [OnceLock<LogRateLimiter>; ChallengeRejection::COUNT] =
+        [const { OnceLock::new() }; ChallengeRejection::COUNT];
+    let Some(suppressed_since_last_emit) = LIMITERS[rejection as usize]
+        .get_or_init(|| LogRateLimiter::new(CHALLENGE_REJECTION_LOG_INTERVAL))
+        .record()
+    else {
+        return;
+    };
+    let peer = peer.to_string();
+    match usage {
+        Some(usage) => log::warn!(
+            target: "nemo_relay.daemon",
+            event = "control_challenge_rejected",
+            peer = peer.as_str(),
+            reason = rejection.as_str(),
+            role = usage.budget.role_name(),
+            peer_pending = usage.peer_pending,
+            peer_limit = usage.budget.per_peer,
+            pool_pending = usage.pool_pending,
+            pool_capacity = usage.budget.pool,
+            suppressed_since_last_emit = suppressed_since_last_emit;
+            "{}", rejection.detail()
+        ),
+        None => log::warn!(
+            target: "nemo_relay.daemon",
+            event = "control_challenge_rejected",
+            peer = peer.as_str(),
+            reason = rejection.as_str(),
+            peer_connection_limit = CHALLENGES_PER_PEER_WINDOW,
+            window_ms = CHALLENGE_LIFETIME_MS,
+            peer_table_capacity = MAX_CHALLENGE_PEERS,
+            suppressed_since_last_emit = suppressed_since_last_emit;
+            "{}", rejection.detail()
+        ),
+    }
+}
+
+/// Diagnostic detail for a refused challenge: the reason and, for pending limits, the counts.
+/// It names no peer address.
+fn challenge_rejection_diagnostic(
+    rejection: ChallengeRejection,
+    usage: Option<ChallengeUsage>,
+) -> String {
+    match (rejection, usage) {
+        (_, Some(usage)) => format!(
+            "{}: {} challenge; peer pending {}/{}; pool pending {}/{}",
+            rejection.as_str(),
+            usage.budget.role_name(),
+            usage.peer_pending,
+            usage.budget.per_peer,
+            usage.pool_pending,
+            usage.budget.pool,
+        ),
+        (ChallengeRejection::PeerTableFull, None) => {
+            format!("peer_table_full: {MAX_CHALLENGE_PEERS} peers tracked")
+        }
+        (_, None) => format!(
+            "{}: {CHALLENGES_PER_PEER_WINDOW} control connections per peer in {CHALLENGE_LIFETIME_MS} ms",
+            rejection.as_str(),
+        ),
+    }
+}
+
 async fn issue_challenge(
     State(state): State<Arc<DaemonState>>,
+    peer: IpAddr,
     Json(request): Json<ChallengeRequest>,
 ) -> Response<Body> {
     if let Err(error) = request.initiator.validate() {
@@ -555,21 +749,37 @@ async fn issue_challenge(
     {
         return control_message(StatusCode::UNAUTHORIZED, "invalid component identity");
     }
+    let Some(budget) = ChallengeBudget::for_role(request.initiator.role, state.loopback_listener)
+    else {
+        return control_message(StatusCode::UNAUTHORIZED, "invalid component identity");
+    };
     let now = now_unix_ms();
     let record = match ChallengeRecord::generate(now, CHALLENGE_LIFETIME_MS) {
         Ok(record) => record,
         Err(error) => return control_error(StatusCode::INTERNAL_SERVER_ERROR, error),
     };
     let challenge = record.challenge();
+    let challenge_id = challenge.id;
     let signed_request = request.clone();
-    let initiator_role = request.initiator.role;
-    let pending = PendingChallenge { request, record };
+    let pending = PendingChallenge {
+        request,
+        record,
+        peer,
+    };
     let mut challenges = lock(&state.challenges);
-    if !reserve_challenge_slot(&mut challenges, now, initiator_role) {
-        return control_message(
+    if let Err((rejection, usage)) = reserve_challenge_slot(&mut challenges, now, budget, peer) {
+        drop(challenges);
+        record_challenge_rejection(peer, rejection, Some(usage));
+        return (
             StatusCode::TOO_MANY_REQUESTS,
-            "too many pending authentication challenges",
-        );
+            Json(json!({
+                "error": {
+                    "message": "too many pending authentication challenges",
+                    "retry_after_ms": CHALLENGE_RETRY_AFTER_MS,
+                }
+            })),
+        )
+            .into_response();
     }
     challenges.insert(challenge.id, pending);
     drop(challenges);
@@ -584,29 +794,46 @@ async fn issue_challenge(
     let canonical =
         match crate::daemon::common::control::daemon_challenge_bytes(&signed_request, &response) {
             Ok(canonical) => canonical,
-            Err(error) => return control_error(StatusCode::INTERNAL_SERVER_ERROR, error),
+            Err(error) => {
+                // The caller never learns this challenge's id, so free its slot here.
+                lock(&state.challenges).remove(&challenge_id);
+                return control_error(StatusCode::INTERNAL_SERVER_ERROR, error);
+            }
         };
     response.daemon_challenge_proof = state.identity.sign(&canonical);
     Json(response).into_response()
 }
 
+/// Reserve a pending-challenge slot for `peer`, or report which limit was reached.
 fn reserve_challenge_slot(
     challenges: &mut HashMap<ChallengeId, PendingChallenge>,
     now_unix_ms: u64,
-    role: ComponentRole,
-) -> bool {
+    budget: ChallengeBudget,
+    peer: IpAddr,
+) -> Result<(), (ChallengeRejection, ChallengeUsage)> {
     challenges.retain(|_, pending| pending.record.challenge().expires_at_unix_ms > now_unix_ms);
-    let role_limit = match role {
-        ComponentRole::Mcp => MAX_PENDING_MCP_CHALLENGES,
-        ComponentRole::Worker => MAX_PENDING_WORKER_CHALLENGES,
-        ComponentRole::Daemon => return false,
+    let (mut pool_pending, mut peer_pending) = (0, 0);
+    for pending in challenges
+        .values()
+        .filter(|pending| pending.request.initiator.role == budget.role)
+    {
+        pool_pending += 1;
+        if pending.peer == peer {
+            peer_pending += 1;
+        }
+    }
+    let usage = ChallengeUsage {
+        budget,
+        pool_pending,
+        peer_pending,
     };
-    challenges.len() < MAX_PENDING_CHALLENGES
-        && challenges
-            .values()
-            .filter(|pending| pending.request.initiator.role == role)
-            .count()
-            < role_limit
+    if challenges.len() >= MAX_PENDING_CHALLENGES || pool_pending >= budget.pool {
+        return Err((budget.pool_rejection(), usage));
+    }
+    if peer_pending >= budget.per_peer {
+        return Err((ChallengeRejection::PeerLimit, usage));
+    }
+    Ok(())
 }
 
 fn reserve_worker_session_slot(
@@ -1397,13 +1624,24 @@ fn stage_worker(
         Ok(client) => client,
         Err(error) => return control_error(StatusCode::BAD_REQUEST, error),
     };
+    let hook_client = match state
+        .worker_clients
+        .hook_client(tls_root_certificate.as_deref())
+    {
+        Ok(client) => client,
+        Err(error) => return control_error(StatusCode::BAD_REQUEST, error),
+    };
     let target = match WorkerTarget::with_shared_client(
         worker_id.clone(),
         endpoint,
         data_secret.clone(),
         worker_client,
     ) {
-        Ok(target) => Arc::new(target.with_websocket_client(websocket_client)),
+        Ok(target) => Arc::new(
+            target
+                .with_hook_client(hook_client)
+                .with_websocket_client(websocket_client),
+        ),
         Err(error) => return control_error(StatusCode::BAD_REQUEST, error),
     };
     let diagnostic_grant = diagnostic_collection::grant(
@@ -1768,10 +2006,13 @@ async fn probe_worker(target: &Arc<WorkerTarget>) -> Result<(), CliError> {
     let request = Request::get(uri)
         .header(WORKER_TOKEN_HEADER, target.session_token())
         .body(box_body(http_body_util::Empty::<Bytes>::new()))?;
-    let response = tokio::time::timeout(Duration::from_secs(2), target.client().request(request))
-        .await
-        .map_err(|_| CliError::Launch("worker readiness probe timed out".into()))?
-        .map_err(|error| CliError::Launch(format!("worker readiness probe failed: {error}")))?;
+    let response = tokio::time::timeout(
+        Duration::from_secs(2),
+        target.hook_client().request(request),
+    )
+    .await
+    .map_err(|_| CliError::Launch("worker readiness probe timed out".into()))?
+    .map_err(|error| CliError::Launch(format!("worker readiness probe failed: {error}")))?;
     if response.status() != StatusCode::NO_CONTENT {
         return Err(CliError::Launch(format!(
             "worker readiness probe returned HTTP {}",
@@ -1903,11 +2144,11 @@ async fn public_proxy_inner(
             }
             forward_to_provider(&state, request, provider, access).await
         }
-        (ResolvedTarget::Worker(worker), _) => {
+        (ResolvedTarget::Worker(worker), route) => {
             if !worker.target().control_available() {
                 return unavailable_response();
             }
-            forward_to_worker(Arc::clone(&state), request, worker).await
+            forward_to_worker(Arc::clone(&state), request, worker, route).await
         }
     };
     if matches!(route, PublicRoute::Provider(_)) {
@@ -2159,6 +2400,7 @@ async fn forward_to_worker(
     state: Arc<DaemonState>,
     request: Request<Body>,
     worker: WorkerRequest,
+    route: PublicRoute,
 ) -> Response<Body> {
     let fingerprint = worker.fingerprint();
     let worker_id = worker.target().shared_worker_id();
@@ -2188,7 +2430,11 @@ async fn forward_to_worker(
         )
         .await;
     }
-    let client = worker.target().client().clone();
+    let client = match route {
+        PublicRoute::Hook(_) => worker.target().hook_client(),
+        PublicRoute::Provider(_) => worker.target().client(),
+    }
+    .clone();
     let authentication = worker.target().authentication();
     let mut outcome = forward_prepared(
         &client,
@@ -2227,18 +2473,19 @@ async fn forward_to_worker(
         let reason = outcome
             .failure
             .map_or("worker_route_rejected", ForwardFailure::as_str);
-        handle_worker_communication_failure(&state, fingerprint, &worker_id, reason);
+        handle_worker_communication_failure(&state, fingerprint, &worker_id, reason, None);
         return outcome.response;
     }
     let (parts, body) = outcome.response.into_parts();
     let observed = ErrorObservedBody {
         body,
-        on_error: Some(move || {
+        on_error: Some(move |error: &axum::Error| {
             handle_worker_communication_failure(
                 &state,
                 fingerprint,
                 &worker_id,
                 "response_body_error",
+                Some(error),
             );
         }),
     };
@@ -2260,7 +2507,7 @@ struct ErrorObservedBody<B, F> {
 impl<B, F> HttpBody for ErrorObservedBody<B, F>
 where
     B: HttpBody<Data = Bytes> + Unpin,
-    F: FnOnce() + Unpin,
+    F: FnOnce(&B::Error) + Unpin,
 {
     type Data = Bytes;
     type Error = B::Error;
@@ -2270,10 +2517,10 @@ where
         context: &mut Context<'_>,
     ) -> Poll<Option<Result<hyper::body::Frame<Self::Data>, Self::Error>>> {
         let frame = Pin::new(&mut self.body).poll_frame(context);
-        if matches!(frame, Poll::Ready(Some(Err(_))))
+        if let Poll::Ready(Some(Err(error))) = &frame
             && let Some(on_error) = self.on_error.take()
         {
-            on_error();
+            on_error(error);
         }
         frame
     }
@@ -2498,6 +2745,7 @@ fn handle_worker_communication_failure(
     fingerprint: Fingerprint,
     worker_id: &str,
     reason: &'static str,
+    error: Option<&(dyn StdError + 'static)>,
 ) {
     if state
         .registry
@@ -2512,15 +2760,102 @@ fn handle_worker_communication_failure(
         .cancel_worker(worker_id, "worker_communication_failed");
     state.sockets.changed.notify_waiters();
     let fingerprint = fingerprint.to_string();
-    log::error!(
-        target: "nemo_relay.daemon",
-        event = "worker_communication_failed",
-        fingerprint = fingerprint.as_str(),
-        worker_id = worker_id,
-        reason = reason,
-        route_mode = "pass_through";
-        "Worker communication failed; route changed to pass-through"
-    );
+    if let Some(error) = error {
+        let error_chain = worker_response_error_chain(error);
+        log::error!(
+            target: "nemo_relay.daemon",
+            event = "worker_communication_failed",
+            fingerprint = fingerprint.as_str(),
+            worker_id = worker_id,
+            reason = reason,
+            error_chain = error_chain.as_str(),
+            route_mode = "pass_through";
+            "Worker communication failed; route changed to pass-through"
+        );
+    } else {
+        log::error!(
+            target: "nemo_relay.daemon",
+            event = "worker_communication_failed",
+            fingerprint = fingerprint.as_str(),
+            worker_id = worker_id,
+            reason = reason,
+            route_mode = "pass_through";
+            "Worker communication failed; route changed to pass-through"
+        );
+    }
+}
+
+/// Summarize transport causes without formatting arbitrary error text, URLs, or payloads.
+/// Bound traversal so deep or cyclic source chains cannot grow the record indefinitely.
+fn worker_response_error_chain(error: &(dyn StdError + 'static)) -> String {
+    let mut source = Some(error);
+    let mut causes = Vec::new();
+    for _ in 0..MAX_ERROR_CHAIN_DEPTH {
+        let Some(error) = source else { break };
+        let cause = if let Some(error) = error.downcast_ref::<std::io::Error>() {
+            let mut cause = format!("io:{:?}", error.kind());
+            if let Some(code) = error.raw_os_error() {
+                cause.push_str(&format!(":os_code={code}"));
+            }
+            cause
+        } else if let Some(error) = error.downcast_ref::<h2::Error>() {
+            let kind = if error.is_reset() {
+                "reset"
+            } else if error.is_go_away() {
+                "go_away"
+            } else if error.is_io() {
+                "io"
+            } else {
+                "protocol"
+            };
+            let reason = error
+                .reason()
+                .map_or_else(|| "none".to_owned(), |reason| u32::from(reason).to_string());
+            format!("h2:{kind}:reason={reason}:remote={}", error.is_remote())
+        } else if let Some(error) = error.downcast_ref::<hyper::Error>() {
+            let kind = if error.is_timeout() {
+                "timeout"
+            } else if error.is_canceled() {
+                "canceled"
+            } else if error.is_closed() {
+                "closed"
+            } else if error.is_incomplete_message() {
+                "incomplete_message"
+            } else if error.is_body_write_aborted() {
+                "body_write_aborted"
+            } else if error.is_user() {
+                "user"
+            } else if error.is_parse() {
+                "parse"
+            } else {
+                "other"
+            };
+            format!("hyper:{kind}")
+        } else if error.is::<axum::Error>() {
+            "body".to_owned()
+        } else {
+            "other".to_owned()
+        };
+        causes.push(cause);
+        // io::Error::source delegates to the wrapped error's source, omitting that
+        // wrapped error itself. Retain it so an embedded HTTP/2 reason is not lost.
+        // h2::Error likewise exposes its I/O cause only through get_io(), not source().
+        source = error
+            .downcast_ref::<std::io::Error>()
+            .and_then(std::io::Error::get_ref)
+            .map(|inner| inner as &(dyn StdError + 'static))
+            .or_else(|| {
+                error
+                    .downcast_ref::<h2::Error>()
+                    .and_then(h2::Error::get_io)
+                    .map(|inner| inner as &(dyn StdError + 'static))
+            })
+            .or_else(|| error.source());
+    }
+    if source.is_some() {
+        causes.push("truncated".to_owned());
+    }
+    causes.join(" -> ")
 }
 
 struct AuthenticatedMcp {

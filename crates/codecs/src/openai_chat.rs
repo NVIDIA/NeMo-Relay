@@ -6,11 +6,18 @@
 //! Implements [`LlmCodec`] (request decode/encode) and [`LlmResponseCodec`]
 //! (response decode) for the OpenAI Chat Completions format.
 
+use std::future::Future;
+use std::pin::Pin;
+use std::task::{Context, Poll};
+
 use serde::Deserialize;
+use tokio_stream::Stream;
 
 use nemo_relay_types::Json;
 use nemo_relay_types::api::llm::LlmRequest;
-use nemo_relay_types::api::runtime::{BuiltinLlmCodec, LlmCodecIdentity};
+use nemo_relay_types::api::runtime::{
+    BuiltinLlmCodec, LlmCodecIdentity, LlmJsonStream, LlmStreamInner,
+};
 use nemo_relay_types::error::{FlowError, Result};
 
 use super::request::{
@@ -1439,6 +1446,9 @@ fn json_f64(v: f64) -> Json {
 /// The OpenAI `[DONE]` end-of-stream sentinel is dropped by the SSE event decoder before
 /// reaching the collector, so this codec never sees it.
 ///
+/// Use [`StreamingCodec::validate_stream`](nemo_relay_types::codec::streaming::StreamingCodec::validate_stream)
+/// to report provider errors carried in top-level `error` objects.
+///
 /// Internal state lives behind `Arc<Mutex<...>>` so the `&self`-produced collector and finalizer
 /// closures share access. Each instance is single-use because [`LlmFinalizerFn`] consumes the
 /// finalize step.
@@ -1464,6 +1474,15 @@ impl Default for OpenAIChatStreamingCodec {
 }
 
 impl nemo_relay_types::codec::streaming::StreamingCodec for OpenAIChatStreamingCodec {
+    /// Forwards a provider error chunk before reporting its error on the next poll.
+    fn validate_stream(&self, stream: LlmJsonStream) -> LlmJsonStream {
+        LlmJsonStream::from_closeable(ChatCompletionStream {
+            inner: stream,
+            provider_error: None,
+            ended: false,
+        })
+    }
+
     fn collector(&self) -> nemo_relay_types::api::runtime::LlmCollectorFn {
         let state = std::sync::Arc::clone(&self.state);
         Box::new(move |event: Json| -> Result<()> {
@@ -1497,6 +1516,72 @@ impl nemo_relay_types::codec::streaming::StreamingCodec for OpenAIChatStreamingC
     }
 }
 
+struct ChatCompletionStream {
+    inner: LlmJsonStream,
+    provider_error: Option<FlowError>,
+    ended: bool,
+}
+
+impl Stream for ChatCompletionStream {
+    type Item = Result<Json>;
+
+    fn poll_next(self: Pin<&mut Self>, cx: &mut Context<'_>) -> Poll<Option<Self::Item>> {
+        let this = self.get_mut();
+        if this.ended {
+            return Poll::Ready(None);
+        }
+        if let Some(error) = this.provider_error.take() {
+            this.ended = true;
+            return Poll::Ready(Some(Err(error)));
+        }
+        match Pin::new(&mut this.inner).poll_next(cx) {
+            Poll::Ready(Some(Ok(event))) => {
+                if let Some(error) = event.get("error").filter(|error| error.is_object()) {
+                    this.provider_error = Some(chat_stream_error(error));
+                }
+                Poll::Ready(Some(Ok(event)))
+            }
+            result @ (Poll::Ready(None) | Poll::Ready(Some(Err(_)))) => {
+                this.ended = true;
+                result
+            }
+            Poll::Pending => Poll::Pending,
+        }
+    }
+}
+
+fn chat_stream_error(error: &Json) -> FlowError {
+    let code = match error.get("code") {
+        Some(Json::String(code)) => code.clone(),
+        Some(Json::Number(code)) => code.to_string(),
+        _ => error
+            .get("type")
+            .and_then(Json::as_str)
+            .unwrap_or("error")
+            .to_owned(),
+    };
+    let message = error
+        .get("message")
+        .and_then(Json::as_str)
+        .unwrap_or("stream failed");
+    // Do not introduce a retryable upstream failure after output has been forwarded.
+    FlowError::Internal(format!("OpenAI Chat stream reported {code}: {message}"))
+}
+
+impl LlmStreamInner for ChatCompletionStream {
+    fn terminalize(self: Pin<&mut Self>) {
+        let this = self.get_mut();
+        this.ended = true;
+        this.inner.terminalize();
+    }
+
+    fn close(self: Pin<&mut Self>) -> Pin<Box<dyn Future<Output = Result<()>> + Send + '_>> {
+        let this = self.get_mut();
+        this.ended = true;
+        Box::pin(this.inner.close())
+    }
+}
+
 #[derive(Debug, Default)]
 struct OpenAIChatStreamingState {
     id: Option<String>,
@@ -1515,6 +1600,9 @@ struct ChoiceState {
     role: Option<String>,
     content: String,
     has_content: bool,
+    /// Non-standard reasoning text streamed by OpenAI-compatible servers, keyed by the delta field
+    /// name (`reasoning_content` or `reasoning`) so the assembled message keeps the wire name.
+    reasoning: std::collections::BTreeMap<&'static str, String>,
     /// Tool calls keyed by their `index` within the choice. Each tool call's `arguments` is
     /// streamed as a JSON-encoded string accumulated fragment-by-fragment.
     tool_calls: std::collections::BTreeMap<u64, ToolCallState>,
@@ -1633,6 +1721,11 @@ impl ChoiceState {
             self.content.push_str(content);
             self.has_content = true;
         }
+        for field in ["reasoning_content", "reasoning"] {
+            if let Some(reasoning) = delta.get(field).and_then(Json::as_str) {
+                self.reasoning.entry(field).or_default().push_str(reasoning);
+            }
+        }
         self.observe_tool_calls(delta);
     }
 
@@ -1671,6 +1764,9 @@ impl ChoiceState {
             message.insert("content".to_string(), Json::String(self.content));
         } else {
             message.insert("content".to_string(), Json::Null);
+        }
+        for (field, reasoning) in self.reasoning {
+            message.insert(field.to_string(), Json::String(reasoning));
         }
         if !self.tool_calls.is_empty() {
             let tool_calls: Vec<Json> = self

@@ -530,7 +530,7 @@ fn continue_call(ctx: FunctionCallContext) -> Result<JsArg> {
     let state = unsafe { External::<NextState>::from_napi_ref(ctx.env.raw(), state.raw()) }?;
     let arg = ctx.get::<Json>(1)?.0;
     let scope = callback_factory::callback_scope_from(ctx.env, ctx.get::<Unknown>(2)?)?;
-    let continuation = match &scope {
+    let continuation = match scope {
         Some(scope) => state
             .continuation_context
             .isolated_with_scope_stack(&scope.scope_stack),

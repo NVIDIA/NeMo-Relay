@@ -57,6 +57,10 @@ pub(crate) const EXTENSION_FILES: &[ExtensionFile] = &[
         contents: include_str!("../../../assets/pi-extension/src/provider-redirect.ts"),
     },
     ExtensionFile {
+        path: "src/provider-transport.ts",
+        contents: include_str!("../../../assets/pi-extension/src/provider-transport.ts"),
+    },
+    ExtensionFile {
         path: "src/user-bash.ts",
         contents: include_str!("../../../assets/pi-extension/src/user-bash.ts"),
     },

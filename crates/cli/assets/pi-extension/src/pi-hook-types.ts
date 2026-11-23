@@ -5,11 +5,11 @@
  * Structural mirror of the subset of pi's extension API this integration uses.
  *
  * Mirrored from pi `v0.84.0` (`a5f43bf8a`),
- * `packages/coding-agent/src/core/extensions/types.ts`. Declaring the shapes
+ * `packages/coding-agent/src/core/extensions/types.ts`, with the optional
+ * nested tool call parent introduced in pi v0.99.0. Declaring the shapes
  * locally -- the same approach `integrations/openclaw/src/openclaw-hook-types.ts`
  * takes for its host agent -- keeps this directory buildable without depending
- * on the pi package, which matters because pi ships breaking changes through
- * *minor* releases and has no major-release channel.
+ * on the pi package. The live acceptance matrix checks the host contract.
  *
  * Unlike OpenClaw, pi *does* publish these declarations -- `ToolCallEvent`,
  * `ToolCallEventResult`, `ExtensionAPI` and `ProviderConfig` all come out of
@@ -30,6 +30,8 @@
  * not a type error.
  */
 
+import type { ChatProvider, ProviderRegistry } from './provider-transport.ts';
+
 /** Fired when an agent loop starts. Carries no run identifier. */
 export type AgentStartEvent = { type: 'agent_start' };
 
@@ -43,8 +45,14 @@ export type AgentStartEvent = { type: 'agent_start' };
  */
 export type AgentEndEvent = { type: 'agent_end'; messages: unknown[] };
 
+/** Pi coalesces overlapping dialogs into one outer wait. */
+type UIPromptEvent = {
+  type: 'ui_prompt_start' | 'ui_prompt_end';
+  kind: 'select' | 'confirm' | 'input' | 'editor' | 'custom';
+};
+
 /** Fired once per logical agent run, from a `finally`. */
-export type AgentSettledEvent = { type: 'agent_settled' };
+export type AgentSettledEvent = { type: 'agent_settled'; aborted?: boolean };
 
 /** Fired at the start of each turn. `turnIndex` resets to 0 on run re-entry. */
 export type TurnStartEvent = { type: 'turn_start'; turnIndex: number; timestamp: number };
@@ -95,6 +103,14 @@ export type SessionBeforeCompactEvent = {
   preparation?: { tokensBefore?: number; isSplitTurn?: boolean };
 };
 
+export type SessionCompactFailedEvent = {
+  type: 'session_compact_failed';
+  reason: 'manual' | 'threshold' | 'overflow';
+  aborted: boolean;
+  willRetry: boolean;
+  fromExtension: boolean;
+};
+
 /** Fired after context compaction has actually happened. Not cancellable. */
 export type SessionCompactEvent = {
   type: 'session_compact';
@@ -120,7 +136,9 @@ export type ToolExecutionStartEvent = {
 
 export type ToolExecutionEndEvent = {
   type: 'tool_execution_end';
+  durationMs?: number;
   toolCallId: string;
+  parentToolCallId?: string;
   toolName: string;
   result: unknown;
   isError: boolean;
@@ -136,6 +154,7 @@ export type ToolExecutionEndEvent = {
 export type ToolCallEvent = {
   type: 'tool_call';
   toolCallId: string;
+  parentToolCallId?: string;
   toolName: string;
   input: Record<string, unknown>;
 };
@@ -151,6 +170,7 @@ export type ToolCallEvent = {
  */
 export type ToolCallEventResult = {
   block?: boolean;
+  terminate?: boolean;
   reason?: string;
 };
 
@@ -178,10 +198,9 @@ export type UserBashEvent = {
  * keeps the original command. There is no block-and-reason form, so a refusal
  * is a synthetic failed result -- see `src/user-bash.ts`.
  *
- * Unlike `tool_call`, `emitUserBash` wraps handlers in try/catch, so an
- * exception here fails **open**: pi logs it and runs the command. And the first
- * handler to return anything at all wins, so an earlier-loading extension can
- * preempt this one -- `pi -e` loads first, `pi install` loads last.
+ * Pi aborts the command if a handler throws or returns an invalid value. The
+ * first valid result or operations override wins, so an earlier extension
+ * can preempt this one. Returning `undefined` lets Pi consult the next handler.
  */
 export type UserBashEventResult = {
   result?: {
@@ -211,6 +230,8 @@ export type ModelSelectEvent = {
 /** Minimal view of pi's extension context. */
 export type ExtensionContext = {
   cwd: string;
+  /** Pi's current agent run cancellation signal. */
+  signal?: AbortSignal;
   mode: string;
   hasUI: boolean;
   sessionManager: { getSessionId(): string };
@@ -224,7 +245,7 @@ export type ExtensionContext = {
    * Optional because a caller may not supply one; without it the check degrades
    * to per-model, which is unsound for a provider that mixes API families.
    */
-  modelRegistry?: { getAll(): PiModel[] };
+  modelRegistry?: ProviderRegistry;
 };
 
 export type ExtensionHandler<TEvent, TResult = void> = (
@@ -237,6 +258,8 @@ export type ExtensionAPI = {
   on(event: 'session_start', handler: ExtensionHandler<SessionStartEvent>): void;
   on(event: 'session_shutdown', handler: ExtensionHandler<SessionShutdownEvent>): void;
   on(event: 'session_before_compact', handler: ExtensionHandler<SessionBeforeCompactEvent>): void;
+  on(event: 'ui_prompt_start' | 'ui_prompt_end', handler: ExtensionHandler<UIPromptEvent>): void;
+  on(event: 'session_compact_failed', handler: ExtensionHandler<SessionCompactFailedEvent>): void;
   on(event: 'session_compact', handler: ExtensionHandler<SessionCompactEvent>): void;
   on(event: 'agent_start', handler: ExtensionHandler<AgentStartEvent>): void;
   on(event: 'agent_end', handler: ExtensionHandler<AgentEndEvent>): void;
@@ -248,6 +271,7 @@ export type ExtensionAPI = {
   on(event: 'tool_call', handler: ExtensionHandler<ToolCallEvent, ToolCallEventResult>): void;
   on(event: 'user_bash', handler: ExtensionHandler<UserBashEvent, UserBashEventResult>): void;
   on(event: 'model_select', handler: ExtensionHandler<ModelSelectEvent>): void;
+  on(event: 'context_with_system', handler: ExtensionHandler<{ type: 'context_with_system' }>): void;
 
   /**
    * Register or override a model provider.
@@ -258,6 +282,7 @@ export type ExtensionAPI = {
    * queued and applied once the runner binds its context, so calling it from a
    * factory is safe.
    */
+  registerProvider(provider: ChatProvider): void;
   registerProvider(
     name: string,
     config: { baseUrl?: string; headers?: Record<string, string> },

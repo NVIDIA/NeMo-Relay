@@ -79,6 +79,95 @@ Refresh does not rewrite existing bundles. Follow
 for the generation and validation commands. Claude-only and Pi-only bundles are
 unaffected by this change.
 
+## Move the Response Cache to Its Plugin for NeMo Relay 1.0.0
+
+The opt-in LLM response cache and tool-result cache are no longer part of the
+built-in `adaptive` plugin. They now ship as the `nvidia.response_cache` native
+plugin, released from the
+[NeMo Relay Plugins repository](https://github.com/NVIDIA/NeMo-Relay-Plugins).
+
+Validation rejects an `adaptive` component that still contains a
+`response_cache` section. It reports an error diagnostic with code
+`adaptive.response_cache_moved` for the `response_cache` field, so a cache you
+enabled is not silently turned off.
+
+The plugin bundle is not signed. Relay requires a signature by default, so the
+plugin needs an explicit trust rule before it can be enabled. Follow these
+steps to migrate a user installation:
+
+1. Install the plugin from its exact NeMo Relay Plugins release tag without
+   enabling it. Release tags use the `response-cache-plugin-<version>` form.
+
+   ```bash
+   nemo-relay plugins install "github:NVIDIA/NeMo-Relay-Plugins@response-cache-plugin-<version>" --user --no-enable
+   ```
+
+   The install adds a `[[plugins.dynamic]]` entry that points to the bundle's
+   `relay-plugin.toml` in your user `plugins.toml`.
+
+2. Edit that generated entry. Do not add a second `[[plugins.dynamic]]` entry
+   for the same manifest; Relay rejects a duplicate plugin ID. Directly below
+   the generated entry, add a configuration table with the settings from your
+   former `response_cache` section. The plugin uses the same keys:
+   `namespace`, `ttl_seconds`, `priority`, `bypass_rate`,
+   `cache_nondeterministic`, `key_strategy`, `header_allowlist`, `backend`, and
+   `tools`. Nested settings keep their names, such as
+   `[plugins.dynamic.config.backend]` and `[plugins.dynamic.config.tools]`.
+
+   ```toml
+   [[plugins.dynamic]]
+   manifest = "<generated path>/relay-plugin.toml"
+
+   [plugins.dynamic.config]
+   namespace = "team-dev"
+   ```
+
+3. In the same `plugins.toml`, allow this unsigned plugin:
+
+   ```toml
+   [plugins.policy.overrides."nvidia.response_cache"]
+   attestation = "integrity_only"
+   ```
+
+   Use this setting only for a bundle from a source you trust.
+
+4. Remove the `response_cache` section from the `adaptive` component, such as:
+
+   ```toml
+   [components.config.response_cache]
+   namespace = "team-dev"
+   ```
+
+5. Enable and validate the plugin, then restart the gateway:
+
+   ```bash
+   nemo-relay plugins enable nvidia.response_cache
+   nemo-relay plugins validate nvidia.response_cache
+   ```
+
+For other scopes, signatures, and trust settings, refer to
+[Discoverable Plugins](/configure-plugins/discoverable-plugins).
+
+The plugin validates its configuration against a schema. An unknown key now
+fails validation instead of producing a warning.
+
+The binding helpers for the former section have been removed:
+
+- Python: `ResponseCacheConfig`, `ResponseCacheKeyStrategy`, `ToolCacheConfig`,
+  `ToolClass`, `ToolOverride`, and the `AdaptiveConfig.response_cache` field.
+- Node.js: `responseCacheConfig`, `ResponseCacheKeyStrategy`, the response-cache
+  and tool-cache types, and the `responseCache` adaptive config field.
+- Go: `ResponseCacheConfig`, `ResponseCacheKeyStrategy`, the
+  `ResponseCacheToolsConfig`, `ResponseCacheToolClass`,
+  `ResponseCacheToolOverride`, and `ResponseCacheBackendConfig` types, their
+  constructors, and the `AdaptiveConfig.ResponseCache` field.
+- Rust: the `nemo_relay_adaptive::response_cache` module, `ResponseCacheConfig`,
+  `ResponseCacheKeyStrategy`, `RESPONSE_CACHE_MARK`, `ToolCacheConfig`,
+  `ToolClass`, `ToolOverride`, and the `AdaptiveConfig::response_cache` field.
+
+Pass the plugin configuration as plain data with the `snake_case` keys
+listed above.
+
 ## Upgrade to NeMo Relay 0.11.0
 
 ### Update Packages and Plugin SDKs
@@ -480,8 +569,9 @@ authentication variables. Refer to
 
 Large language model (LLM) and tool response caches now use priority `150` by
 default. Lower values run first. Review explicit priorities so policy checks
-run before cache lookups, including on cache hits. Refer to
-[Response Cache](/configure-plugins/adaptive/response-cache).
+run before cache lookups, including on cache hits. In NeMo Relay 1.0.0, the
+response cache is a separate plugin. Refer to
+[Move the Response Cache to Its Plugin](#move-the-response-cache-to-its-plugin-for-nemo-relay-100).
 
 #### Review Operational Logging
 

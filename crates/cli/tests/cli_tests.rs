@@ -2307,9 +2307,26 @@ fn cli_doctor_accepts_discovered_stderr_logging_opt_out() {
 
 #[test]
 fn cli_plugins_validate_json_emits_versioned_success_output() {
+    let _implicit_config = ImplicitConfigEnvScope::without_test_hook();
     let temp = tempfile::tempdir().unwrap();
     let plugin_dir = temp.path().join("plugins").join("acme");
-    write_dynamic_plugin_manifest(&plugin_dir, "acme.cli-json");
+    let user_config_dir = temp.path().join("xdg").join("nemo-relay");
+    std::fs::create_dir_all(&user_config_dir).unwrap();
+    write_dynamic_plugin_manifest_with_options(
+        &plugin_dir,
+        "acme.cli-json",
+        &["plugin_worker"],
+        Some("plugin.py.sig"),
+    );
+    let trusted_public_key = write_detached_ed25519_signature(&plugin_dir, "plugin.py.sig");
+    std::fs::write(
+        user_config_dir.join("plugins.toml"),
+        format!(
+            "[plugins.policy.defaults]\ntrusted_public_keys = [{}]\n",
+            toml_basic_string(&trusted_public_key)
+        ),
+    )
+    .unwrap();
 
     let output = Command::new(gateway_bin())
         .env("XDG_CONFIG_HOME", temp.path().join("xdg"))
@@ -2333,8 +2350,8 @@ fn cli_plugins_validate_json_emits_versioned_success_output() {
     assert_eq!(parsed["data"]["resolved_plugin_id"], "acme.cli-json");
     assert_eq!(parsed["data"]["valid"], true);
     assert_eq!(parsed["data"]["policy_state"], "valid");
-    assert_eq!(parsed["data"]["startup_class"], "optional");
-    assert_eq!(parsed["data"]["attestation_mode"], "integrity_only");
+    assert_eq!(parsed["data"]["startup_class"], "required");
+    assert_eq!(parsed["data"]["attestation_mode"], "signature_required");
 }
 
 #[test]
@@ -2537,13 +2554,95 @@ allowed = false
     assert_eq!(parsed["data"]["target_kind"], "path");
     assert_eq!(parsed["data"]["valid"], false);
     assert_eq!(parsed["data"]["policy_state"], "invalid");
-    assert_eq!(parsed["data"]["startup_class"], "optional");
-    assert_eq!(parsed["data"]["attestation_mode"], "integrity_only");
+    assert_eq!(parsed["data"]["startup_class"], "required");
+    assert_eq!(parsed["data"]["attestation_mode"], "signature_required");
     assert!(
         parsed["data"]["errors"][0]
             .as_str()
             .unwrap()
             .contains("blocked by host policy")
+    );
+}
+
+#[test]
+fn cli_plugins_validate_applies_secure_defaults_when_policy_omits_them() {
+    let _implicit_config = ImplicitConfigEnvScope::without_test_hook();
+    let temp = tempfile::tempdir().unwrap();
+    let plugin_dir = temp.path().join("plugins").join("acme");
+    write_dynamic_plugin_manifest(&plugin_dir, "acme.cli-unsigned-default");
+
+    let output = Command::new(gateway_bin())
+        .env("XDG_CONFIG_HOME", temp.path().join("xdg"))
+        .env("HOME", temp.path())
+        .args(["plugins", "validate"])
+        .arg(&plugin_dir)
+        .arg("--json")
+        .output()
+        .unwrap();
+
+    assert!(
+        output.status.success(),
+        "stderr was:\n{}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+    let parsed: serde_json::Value = serde_json::from_slice(&output.stdout).unwrap();
+    assert_eq!(parsed["data"]["valid"], false);
+    assert_eq!(parsed["data"]["startup_class"], "required");
+    assert_eq!(parsed["data"]["attestation_mode"], "signature_required");
+    assert!(
+        parsed["data"]["errors"][0]
+            .as_str()
+            .unwrap()
+            .contains("requires integrity.signature")
+    );
+}
+
+#[test]
+fn cli_plugins_validate_applies_secure_defaults_for_installed_id_target() {
+    let _implicit_config = ImplicitConfigEnvScope::without_test_hook();
+    let temp = tempfile::tempdir().unwrap();
+    let cwd = temp.path().join("workdir");
+    let plugin_dir = cwd.join("plugins").join("acme");
+    std::fs::create_dir_all(&cwd).unwrap();
+    write_dynamic_plugin_manifest(&plugin_dir, "acme.cli-unsigned-id");
+
+    let add = Command::new(gateway_bin())
+        .current_dir(&cwd)
+        .env("XDG_CONFIG_HOME", temp.path().join("xdg"))
+        .env("HOME", temp.path())
+        .args(["plugins", "add", "--user"])
+        .arg(&plugin_dir)
+        .output()
+        .unwrap();
+    assert!(
+        add.status.success(),
+        "stderr was:\n{}",
+        String::from_utf8_lossy(&add.stderr)
+    );
+
+    let validate = Command::new(gateway_bin())
+        .current_dir(&cwd)
+        .env("XDG_CONFIG_HOME", temp.path().join("xdg"))
+        .env("HOME", temp.path())
+        .args(["plugins", "validate", "acme.cli-unsigned-id", "--json"])
+        .output()
+        .unwrap();
+
+    assert!(
+        validate.status.success(),
+        "stderr was:\n{}",
+        String::from_utf8_lossy(&validate.stderr)
+    );
+    let parsed: serde_json::Value = serde_json::from_slice(&validate.stdout).unwrap();
+    assert_eq!(parsed["data"]["target_kind"], "plugin_id");
+    assert_eq!(parsed["data"]["valid"], false);
+    assert_eq!(parsed["data"]["startup_class"], "required");
+    assert_eq!(parsed["data"]["attestation_mode"], "signature_required");
+    assert!(
+        parsed["data"]["errors"][0]
+            .as_str()
+            .unwrap()
+            .contains("requires integrity.signature")
     );
 }
 
@@ -6682,13 +6781,14 @@ fn cli_pi_extension_forwarding_authenticates_standalone_hooks_and_preserves_verd
     wait_for_port_open(address);
     assert_eq!(relay_health(address)["status"], "ok");
     let gateway_url = format!("http://{address}");
-    let forward = |client: &str, event: &str| {
-        let mut child = Command::new(gateway_bin())
+    let command = |client: &str, url: &str| {
+        let mut command = Command::new(gateway_bin());
+        command
             .args([
                 "hook-forward",
                 "pi",
                 "--gateway-url",
-                &gateway_url,
+                url,
                 "--pi-extension-client",
                 client,
                 "--fail-closed",
@@ -6698,9 +6798,11 @@ fn cli_pi_extension_forwarding_authenticates_standalone_hooks_and_preserves_verd
             .env("XDG_CONFIG_HOME", temp.path().join("xdg"))
             .stdin(Stdio::piped())
             .stdout(Stdio::piped())
-            .stderr(Stdio::piped())
-            .spawn()
-            .unwrap();
+            .stderr(Stdio::piped());
+        command
+    };
+    let forward = |client: &str, event: &str| {
+        let mut child = command(client, &gateway_url).spawn().unwrap();
         let payload = serde_json::json!({"session_id": "pi-wire-victim", "hook_event_name": event});
         child
             .stdin
@@ -6720,7 +6822,68 @@ fn cli_pi_extension_forwarding_authenticates_standalone_hooks_and_preserves_verd
     assert_eq!(started["status"], 200);
     assert_eq!(started["body"], "{}");
     assert_eq!(forward("attacker", "session_shutdown")["status"], 401);
-    assert_eq!(forward("victim", "session_shutdown")["status"], 200);
+
+    let stream = |client: &str, url: &str, frames: &[u8]| {
+        let mut child = command(client, url)
+            .arg("--pi-extension-stream")
+            .spawn()
+            .unwrap();
+        child.stdin.take().unwrap().write_all(frames).unwrap();
+        wait_child_with_output(child)
+    };
+    let verdicts = |output: Output| {
+        assert!(
+            output.status.success(),
+            "{}",
+            String::from_utf8_lossy(&output.stderr)
+        );
+        BufReader::new(output.stdout.as_slice())
+            .lines()
+            .map(|line| serde_json::from_str::<serde_json::Value>(&line.unwrap()).unwrap())
+            .collect::<Vec<_>>()
+    };
+    let frame = |session, event| {
+        format!(
+            "{}\n",
+            serde_json::json!({"session_id": session, "hook_event_name": event})
+        )
+    };
+    let shutdown = frame("pi-wire-victim", "session_shutdown");
+    let frames = format!("{shutdown}{shutdown}");
+    let refused = verdicts(stream("attacker", &gateway_url, frames.as_bytes()));
+    assert_eq!(refused.len(), 2);
+    assert!(refused.iter().all(|reply| reply["status"] == 401));
+
+    let start = frame("pi-wire-next", "session_start");
+    let joined = verdicts(stream(
+        "victim",
+        &gateway_url,
+        format!("{shutdown}{start}").as_bytes(),
+    ));
+    assert_eq!(joined, vec![started.clone(), started]);
+
+    for (frame, diagnostic) in [
+        (b"{}".as_slice(), "invalid or oversized Pi hook frame"),
+        (b"\xff\n".as_slice(), "Pi hook frame is not UTF-8"),
+    ] {
+        let invalid = stream("victim", &gateway_url, frame);
+        assert!(!invalid.status.success());
+        assert!(
+            String::from_utf8_lossy(&invalid.stderr).contains(diagnostic),
+            "{}",
+            String::from_utf8_lossy(&invalid.stderr)
+        );
+    }
+
+    // A listener that closes the connection before the bootstrap reply produces a transport
+    // fault for this frame, with the CLI still exiting cleanly on stdin EOF.
+    let foreign = TcpListener::bind("127.0.0.1:0").unwrap();
+    let foreign_url = format!("http://{}", foreign.local_addr().unwrap());
+    let closer = thread::spawn(move || drop(foreign.accept().unwrap()));
+    let faults = verdicts(stream("victim", &foreign_url, start.as_bytes()));
+    closer.join().unwrap();
+    assert_eq!(faults.len(), 1);
+    assert!(faults[0]["transportError"].is_string());
 }
 
 #[cfg(feature = "__skip-implicit-config")]

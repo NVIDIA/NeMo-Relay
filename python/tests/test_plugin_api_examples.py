@@ -36,7 +36,6 @@ EXAMPLES = {
     "adaptive_configuration": (ADAPTIVE, ("Adaptive Configuration", "Manual API")),
     "acg": (ADAPTIVE, ("Adaptive Cache Governor (ACG)", "Manual API")),
     "adaptive_hints": (ADAPTIVE, ("Adaptive Hints", "Manual API")),
-    "response_cache": (ADAPTIVE, ("Response Cache", "Manual API")),
     "resource_metrics": (RESOURCE_METRICS, ("Resource Metrics", "Collect One Snapshot")),
 }
 RUST_SOURCES = {
@@ -48,7 +47,7 @@ RUST_SOURCES = {
         "opentelemetry_signals",
         "openinference_subscriber",
     },
-    ADAPTIVE: {"adaptive_configuration", "acg", "adaptive_hints", "response_cache"},
+    ADAPTIVE: {"adaptive_configuration", "acg", "adaptive_hints"},
     RESOURCE_METRICS: {"resource_metrics"},
 }
 

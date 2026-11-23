@@ -28,8 +28,6 @@ use std::path::{Path, PathBuf};
 use std::time::Duration;
 
 use futures_util::{SinkExt, future::join_all};
-use nemo_relay_adaptive::plugin_component::ADAPTIVE_PLUGIN_KIND;
-use nemo_relay_adaptive::{ResponseCacheConfig, response_cache};
 use nemo_relay_model_pricing::{PricingCatalog, PricingConfig, PricingSourceConfig};
 use nemo_relay_observability::otel::resolve_http_trace_endpoint;
 use nemo_relay_observability::plugin::OBSERVABILITY_PLUGIN_KIND;
@@ -1087,13 +1085,6 @@ async fn collect_observability(gateway: &GatewayConfig, probe_mode: DoctorProbeM
         diagnostic.level == DiagnosticLevel::Error
             && diagnostic.component.as_deref() == Some("pii_redaction")
     });
-    let response_cache_invalid = report.diagnostics.iter().any(|diagnostic| {
-        diagnostic.level == DiagnosticLevel::Error
-            && diagnostic.component.as_deref().is_some_and(|component| {
-                // Backend diagnostics are tagged `response_cache.backend[.kind]`.
-                component == "response_cache" || component.starts_with("response_cache.")
-            })
-    });
     if report.diagnostics.is_empty() {
         checks.push(Check {
             name: "Plugin validation",
@@ -1140,154 +1131,8 @@ async fn collect_observability(gateway: &GatewayConfig, probe_mode: DoctorProbeM
     }
     collect_pii_checks(&mut checks, &plugin_config, pii_invalid);
     collect_pricing_component_checks(&mut checks, &plugin_config);
-    collect_response_cache_component_checks(
-        &mut checks,
-        &plugin_config,
-        response_cache_invalid,
-        probe_mode,
-    )
-    .await;
 
     checks
-}
-
-async fn collect_response_cache_component_checks(
-    checks: &mut Vec<Check>,
-    plugin_config: &PluginConfig,
-    config_invalid: bool,
-    probe_mode: DoctorProbeMode,
-) {
-    // The response cache is a section of the adaptive component, not its own
-    // plugin kind: find the adaptive component and look for `response_cache`.
-    let Some(component) = plugin_config
-        .components
-        .iter()
-        .find(|component| component.kind == ADAPTIVE_PLUGIN_KIND)
-    else {
-        checks.push(Check {
-            name: "Response cache",
-            status: Status::Info,
-            details: "not configured".into(),
-        });
-        return;
-    };
-    let Some(response_cache_value) = component
-        .config
-        .get("response_cache")
-        .filter(|value| !value.is_null())
-    else {
-        checks.push(Check {
-            name: "Response cache",
-            status: Status::Info,
-            details: "not configured".into(),
-        });
-        return;
-    };
-    if !component.enabled {
-        checks.push(Check {
-            name: "Response cache",
-            status: Status::Info,
-            details: "configured but disabled (adaptive plugin disabled)".into(),
-        });
-        return;
-    }
-    // Don't probe the backend for a config validation already rejected — that
-    // would report a misleading "reachable" Pass next to the validation failure.
-    if config_invalid {
-        checks.push(Check {
-            name: "Response cache",
-            status: Status::Fail,
-            details: "config invalid (see plugin diagnostics above)".into(),
-        });
-        return;
-    }
-    let config: ResponseCacheConfig = match serde_json::from_value(response_cache_value.clone()) {
-        Ok(config) => config,
-        Err(error) => {
-            checks.push(Check {
-                name: "Response cache",
-                status: Status::Fail,
-                details: format!("invalid response_cache config: {error}"),
-            });
-            return;
-        }
-    };
-    if probe_mode.is_offline()
-        && let Err(error) = response_cache::store::validate_backend_target(&config)
-    {
-        checks.push(Check {
-            name: "Response cache",
-            status: Status::Fail,
-            details: format!("invalid backend target: {error}"),
-        });
-        return;
-    }
-    if let Some(tools) = config.tools.as_ref() {
-        let details = if tools.enabled {
-            let cacheable_classes = tools
-                .classes
-                .values()
-                .filter(|class| class.cacheable)
-                .count();
-            let cacheable_overrides = tools
-                .overrides
-                .values()
-                .filter(|override_| override_.cacheable == Some(true))
-                .count();
-            format!(
-                "on; {cacheable_classes} cacheable class(es); {cacheable_overrides} cacheable override(s); default {}",
-                if tools.default.cacheable {
-                    "cacheable"
-                } else {
-                    "uncached"
-                }
-            )
-        } else {
-            "configured but disabled".to_string()
-        };
-        checks.push(Check {
-            name: "Response cache (tools)",
-            status: Status::Info,
-            details,
-        });
-    }
-    if probe_mode.is_offline() && config.backend.kind != "in_memory" {
-        checks.push(Check {
-            name: "Response cache",
-            status: Status::Info,
-            details: format!(
-                "configured; live {} backend probe skipped (--offline)",
-                config.backend.kind
-            ),
-        });
-        return;
-    }
-    checks.push(response_cache_backend_check(response_cache::check_backend_health(&config)).await);
-}
-
-async fn response_cache_backend_check(
-    health_check: impl std::future::Future<Output = Result<String, String>>,
-) -> Check {
-    match timeout(NETWORK_TIMEOUT, health_check).await {
-        Ok(Ok(backend)) => Check {
-            name: "Response cache",
-            status: Status::Pass,
-            details: format!("on; backend '{backend}' reachable"),
-        },
-        Ok(Err(error)) => Check {
-            name: "Response cache",
-            status: Status::Fail,
-            details: format!("backend not reachable: {error}"),
-        },
-        Err(_) => Check {
-            name: "Response cache",
-            status: Status::Fail,
-            details: format!(
-                "backend not reachable: probe timed out after {}s",
-                NETWORK_TIMEOUT.as_secs()
-            ),
-        },
-    }
 }
 
 async fn collect_observability_component_checks(

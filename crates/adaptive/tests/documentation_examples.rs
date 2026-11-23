@@ -60,19 +60,3 @@ mod documentation_examples_adaptive_hints {
         );
     }
 }
-
-mod documentation_examples_response_cache {
-    include!("../../../docs/reference/api/_code/rust/response_cache.rs");
-
-    #[test]
-    fn registers_and_shuts_down() {
-        let _guard = super::DOCUMENTATION_REGISTRATION_LOCK.blocking_lock();
-        super::reset_runtime_state();
-        let before = nemo_relay_runtime::api::registry::list_runtime_registrations(None).unwrap();
-        main().unwrap();
-        assert_eq!(
-            nemo_relay_runtime::api::registry::list_runtime_registrations(None).unwrap(),
-            before
-        );
-    }
-}

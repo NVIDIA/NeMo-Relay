@@ -8,7 +8,7 @@ SPDX-License-Identifier: Apache-2.0
 This directory is the immutable version 1 managed Pi package. Pi loads
 `index.ts` directly; the package has no runtime dependencies beyond Node.js.
 
-The administrator-owned launcher must load only this managed extension:
+The administrator-owned launcher loads this managed extension with discovery disabled:
 
 ```bash
 pi --no-extensions -e /srv/nemo-relay/nemo-relay-managed-v1/pi/extension-v1/index.ts
@@ -16,7 +16,10 @@ pi --no-extensions -e /srv/nemo-relay/nemo-relay-managed-v1/pi/extension-v1/inde
 
 `--no-extensions` is required. It preserves the explicitly loaded `-e`
 extension while preventing user, project, and discovered extensions from
-running alongside the managed policy boundary.
+running alongside the managed policy boundary. On Pi 1.6.0, administrators
+can explicitly append `-e builtin:codemode -e builtin:tool-search` and
+select those tools using `--tools`. Keep Relay first and omit `builtin:mcp`
+to keep user and project MCP server commands outside the launch profile.
 
 The managed-bundle renderer replaces the two complete JSON string values in
 `managed-config.json`:

@@ -27,7 +27,7 @@ use nemo_relay_runtime::api::llm::{
     llm_request_intercepts_with_source,
 };
 use nemo_relay_runtime::api::registry::{RuntimeRegistrationKind, runtime_registration_presence};
-use nemo_relay_runtime::api::runtime::TASK_SCOPE_STACK;
+use nemo_relay_runtime::api::runtime::{TASK_SCOPE_STACK, with_active_event_uuid};
 use nemo_relay_runtime::codec::response_codec;
 use nemo_relay_types::error::{FlowError, UpstreamFailure, UpstreamFailureClass};
 use serde_json::{Value, json};
@@ -47,14 +47,13 @@ use crate::error::CliError;
 use crate::operational::{self, OperationalContext};
 use crate::plugins::lifecycle::ActiveDynamicPluginComponent;
 use crate::server::ServerPluginActivation;
-use crate::sessions::{GatewayCallPrep, GatewaySessionFinish, SessionManager};
+use crate::sessions::{GatewayCallContext, GatewayCallPrep, GatewaySessionFinish, SessionManager};
 
 /// Owns session accounting across middleware, dispatch, and off-path observation. Cleanup is
 /// spawned before it is awaited, so cancellation of either delivery or cleanup cannot lose it.
 struct GatewayCallCleanup {
     sessions: Option<SessionManager>,
-    session_id: String,
-    owner_subagent_id: Option<String>,
+    context: GatewayCallContext,
     finish: GatewaySessionFinish,
     runtime: tokio::runtime::Handle,
 }
@@ -63,8 +62,7 @@ impl GatewayCallCleanup {
     fn new(sessions: SessionManager, prep: &GatewayCallPrep) -> Self {
         Self {
             sessions: Some(sessions),
-            session_id: prep.session_id.clone(),
-            owner_subagent_id: prep.owner_subagent_id.clone(),
+            context: prep.context.clone(),
             finish: prep.session_finish,
             runtime: tokio::runtime::Handle::current(),
         }
@@ -72,13 +70,10 @@ impl GatewayCallCleanup {
 
     fn start_cleanup(&mut self) -> Option<tokio::task::JoinHandle<()>> {
         let sessions = self.sessions.take()?;
-        let session_id = self.session_id.clone();
+        let context = self.context.clone();
         let finish = self.finish;
-        let owner_subagent_id = self.owner_subagent_id.take();
         Some(self.runtime.spawn(async move {
-            sessions
-                .finish_gateway_call(&session_id, owner_subagent_id.as_deref(), finish)
-                .await;
+            sessions.finish_gateway_call(&context, finish).await;
         }))
     }
 
@@ -386,21 +381,22 @@ impl ManagedRuntime {
         let streaming_hint = request_streaming_hint(request.headers());
         let cleanup = GatewayCallCleanup::new(self.sessions.clone(), &prep);
         let GatewayCallPrep {
+            context,
             scope_stack,
-            session_id,
+            session_id: _,
             provider_name,
             request: request_for_event,
             parent,
             attributes,
             metadata,
             model_name,
-            owner_subagent_id,
+            owner_subagent_id: _,
             record_task_response,
             session_finish: _,
         } = prep;
 
         let handle = TASK_SCOPE_STACK
-            .scope(scope_stack, async {
+            .scope(scope_stack.clone(), async {
                 llm_call(
                     LlmCallParams::builder()
                         .name(&provider_name)
@@ -421,15 +417,22 @@ impl ManagedRuntime {
                 return Err(error.into());
             }
         };
-        let response = dispatch_unbuffered_observed(
-            upstream,
-            request,
-            route,
-            &self.config,
-            self.observation_capture_bytes,
-            operational.clone(),
-        )
-        .await;
+        let response = TASK_SCOPE_STACK
+            .scope(
+                scope_stack,
+                with_active_event_uuid(
+                    handle.uuid,
+                    dispatch_unbuffered_observed(
+                        upstream,
+                        request,
+                        route,
+                        &self.config,
+                        self.observation_capture_bytes,
+                        operational.clone(),
+                    ),
+                ),
+            )
+            .await;
         let (response, observation, response_streaming) = match response {
             Ok(result) => result,
             Err(error) => {
@@ -452,11 +455,7 @@ impl ManagedRuntime {
             // Finish correlation while borrowing the payload, then move it into LLM publication.
             if record_task_response && let Some(value) = observed.value.as_ref() {
                 sessions
-                    .record_gateway_response_hints(
-                        &session_id,
-                        owner_subagent_id,
-                        std::borrow::Cow::Borrowed(value),
-                    )
+                    .record_gateway_response_hints(&context, std::borrow::Cow::Borrowed(value))
                     .await;
             }
             let response_codec = observed.value.as_ref().map(|_| response_codec(surface));
@@ -492,15 +491,16 @@ impl ManagedRuntime {
     ) -> Result<Response<RelayBody>, CliError> {
         let cleanup = GatewayCallCleanup::new(self.sessions.clone(), &prep);
         let GatewayCallPrep {
+            context,
             scope_stack,
-            session_id,
+            session_id: _,
             provider_name,
             request,
             parent,
             attributes,
             metadata,
             model_name,
-            owner_subagent_id,
+            owner_subagent_id: _,
             record_task_response,
             session_finish: _,
         } = prep;
@@ -533,7 +533,7 @@ impl ManagedRuntime {
         let annotated_request = outcome.annotated_request.take().map(Arc::new);
         let streaming = prepared_streaming(&outcome.request);
         let handle = TASK_SCOPE_STACK
-            .scope(scope_stack, async {
+            .scope(scope_stack.clone(), async {
                 llm_call(
                     LlmCallParams::builder()
                         .name(&provider_name)
@@ -567,16 +567,23 @@ impl ManagedRuntime {
             );
         }
 
-        let response = dispatch_observed(
-            upstream,
-            prepared,
-            route,
-            Some(&outcome.request),
-            &self.config,
-            self.observation_capture_bytes,
-            operational.clone(),
-        )
-        .await;
+        let response = TASK_SCOPE_STACK
+            .scope(
+                scope_stack,
+                with_active_event_uuid(
+                    handle.uuid,
+                    dispatch_observed(
+                        upstream,
+                        prepared,
+                        route,
+                        Some(&outcome.request),
+                        &self.config,
+                        self.observation_capture_bytes,
+                        operational.clone(),
+                    ),
+                ),
+            )
+            .await;
         let (response, observation) = match response {
             Ok(result) => result,
             Err(error) => {
@@ -592,11 +599,7 @@ impl ManagedRuntime {
             // Finish correlation while borrowing the payload, then move it into LLM publication.
             if record_task_response && let Some(value) = observed.value.as_ref() {
                 sessions
-                    .record_gateway_response_hints(
-                        &session_id,
-                        owner_subagent_id,
-                        std::borrow::Cow::Borrowed(value),
-                    )
+                    .record_gateway_response_hints(&context, std::borrow::Cow::Borrowed(value))
                     .await;
             }
             let response_codec = observed.value.as_ref().map(|_| response_codec(surface));
@@ -769,6 +772,7 @@ async fn dispatch_unbuffered_observed(
         config,
     )
     .await?;
+    crate::openshell_receipts::observe(response.headers(), response.status());
     let response = prepare_forward_response(response, &strip).map_err(|error| {
         operational::upstream_failed(&operational, "invalid_response");
         CliError::Launch(error.to_string())
@@ -901,6 +905,7 @@ async fn dispatch_observed(
         config,
     )
     .await?;
+    crate::openshell_receipts::observe(response.headers(), response.status());
     let response = prepare_forward_response(response, &strip).map_err(|error| {
         operational::upstream_failed(&operational, "invalid_response");
         CliError::Launch(error.to_string())

@@ -105,10 +105,9 @@ source call IDs in this object. It must bind the restored result to the new
 call. A result that needs objects from the original call must set
 `cache.replayable` to `false`.
 
-This flag does not enable caching. The tool must also meet the
-[cache policy](/configure-plugins/adaptive/response-cache#tool-result-cache).
-The built-in cache does not store or replay wrappers unless
-`cache.replayable` is `true`.
+This flag does not enable caching. A tool-result cache, such as the one in the
+`nvidia.response_cache` plugin, applies its own cache policy. That cache does
+not store or replay wrappers unless `cache.replayable` is `true`.
 
 Relay reads the content and failure flag only when the wrapper has the expected
 schema and field types. Other JSON values pass through unchanged. The optional

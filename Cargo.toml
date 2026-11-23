@@ -106,6 +106,7 @@ tokio-util = "0.7"
 # HTTP, gRPC, networking, and TLS.
 axum = "0.8"
 bytes = "1"
+h2 = "0.4"
 http = "1"
 http-body = "1"
 http-body-util = "0.1"

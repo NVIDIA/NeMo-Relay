@@ -16,6 +16,9 @@ pub(crate) struct HookForwardCommand {
     /// Private machine response mode for pi's extension, with a per-client identity.
     #[arg(long, hide = true, conflicts_with_all = ["hook_config", "generation_file", "generation_token", "forward_only"])]
     pub(crate) pi_extension_client: Option<String>,
+    /// Read newline-delimited Pi hook requests over a single subprocess.
+    #[arg(long, hide = true, requires = "pi_extension_client")]
+    pub(crate) pi_extension_stream: bool,
     /// Private Relay-owned configuration used by generated coding-agent hooks.
     #[arg(
         long,
@@ -115,6 +118,7 @@ impl From<GatewayModeArg> for crate::hooks::GatewayMode {
 /// Dispatches native command hooks or pi extension hooks through authenticated forwarding.
 pub(super) async fn execute(command: HookForwardCommand) -> Result<(), CliError> {
     let pi_client = command.pi_extension_client.clone();
+    let pi_stream = command.pi_extension_stream;
     let mut request = command.into_runtime();
     if let Some(client) = pi_client {
         if request.agent != crate::agents::CodingAgent::Pi || client.is_empty() {
@@ -123,7 +127,7 @@ pub(super) async fn execute(command: HookForwardCommand) -> Result<(), CliError>
             ));
         }
         request.generation_token = Some(format!("pi:{client}"));
-        return crate::hooks::hook_forward_pi(request).await;
+        return crate::hooks::hook_forward_pi(request, pi_stream).await;
     }
     crate::hooks::hook_forward(request).await
 }

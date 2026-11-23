@@ -338,6 +338,41 @@ fn removes_hop_by_hop_headers() {
 }
 
 #[tokio::test]
+async fn pi_dispatch_preserves_the_configured_openai_path_and_auth() {
+    let config = GatewayConfig {
+        openai_base_url: "https://example.test/strict/".into(),
+        ..GatewayConfig::default()
+    };
+    let path_header = crate::agents::pi::alignment::EXACT_PATH_HEADER;
+    for path in ["/chat/completions", "/responses"] {
+        for exact in [false, true] {
+            let mut request = Request::builder()
+                .method(Method::POST)
+                .uri(format!("{path}?stream=1"));
+            if exact {
+                request = request.header(path_header, "1");
+            }
+            let prepared = prepare_gateway_request(
+                &config,
+                request.body(Body::from(r#"{"model":"test"}"#)).unwrap(),
+                environment_authorization(),
+                path,
+            )
+            .await
+            .unwrap();
+            let version = if exact { "" } else { "/v1" };
+            assert_eq!(
+                prepared.upstream_url,
+                format!("https://example.test/strict{version}{path}?stream=1")
+            );
+            assert!(prepared.authorization.allow_environment_provider_auth);
+            assert!(!prepared.client_named_upstream);
+            assert!(!prepared.headers.contains_key(path_header));
+        }
+    }
+}
+
+#[tokio::test]
 async fn prepared_gateway_request_consumes_private_client_proof() {
     let request = Request::builder()
         .method(Method::POST)
@@ -3097,8 +3132,7 @@ async fn streaming_gateway_call_guard_finishes_when_body_is_dropped() {
         ProviderRoute::OpenAiResponses,
         GatewayCallGuard::new(
             manager.clone(),
-            prep.session_id,
-            prep.owner_subagent_id,
+            prep.context.clone(),
             None,
             prep.session_finish,
             crate::operational::OperationalContext::new(),
@@ -3147,8 +3181,7 @@ async fn streaming_gateway_call_guard_cancellation_while_waiting_releases_sessio
     let (sender, ready) = oneshot::channel();
     let mut guard = GatewayCallGuard::new(
         manager.clone(),
-        prep.session_id,
-        prep.owner_subagent_id,
+        prep.context.clone(),
         Some(ready),
         prep.session_finish,
         crate::operational::OperationalContext::new(),
@@ -3275,8 +3308,7 @@ async fn uncontended_stream_completion_finishes_before_observer_poll_without_cop
     let pointer = response["output_text"].as_str().unwrap().as_ptr();
     let (finalizer, observer, mut ready) = gateway_response_completion(
         manager.clone(),
-        prep.session_id.clone(),
-        prep.owner_subagent_id.clone(),
+        prep.context.clone(),
         true,
         Box::new(move || response),
     );
@@ -3286,16 +3318,12 @@ async fn uncontended_stream_completion_finishes_before_observer_poll_without_cop
     assert_eq!(ready.try_recv(), Ok(()));
     let newer_response = json!({"output_text": "a later response"});
     manager
-        .record_gateway_response_hints(&prep.session_id, None, Cow::Borrowed(&newer_response))
+        .record_gateway_response_hints(&prep.context, Cow::Borrowed(&newer_response))
         .await;
     // A delayed observer for the previous response must not overwrite newer output.
     observer(&response).await.unwrap();
     manager
-        .finish_gateway_call(
-            &prep.session_id,
-            prep.owner_subagent_id.as_deref(),
-            prep.session_finish,
-        )
+        .finish_gateway_call(&prep.context, prep.session_finish)
         .await;
     manager.close_all("test_shutdown").await.unwrap();
     nemo_relay_runtime::api::subscriber::flush_subscribers().unwrap();
@@ -3304,16 +3332,108 @@ async fn uncontended_stream_completion_finishes_before_observer_poll_without_cop
 }
 
 #[tokio::test]
+async fn stale_stream_completion_signals_readiness_with_or_without_session_contention() {
+    for contended in [false, true] {
+        let manager = SessionManager::new(GatewayConfig::default());
+        let session_identifier = "stale-stream-readiness";
+        let headers = HeaderMap::new();
+        let request = || LlmGatewayStart {
+            session_id: Some(session_identifier.into()),
+            provider: "openai.responses".into(),
+            model_name: None,
+            subagent_id: None,
+            conversation_id: None,
+            generation_id: None,
+            request_id: None,
+            request: LlmRequest {
+                headers: Map::new(),
+                content: json!({"input": "question"}),
+            },
+            streaming: true,
+            metadata: json!({}),
+        };
+        let previous = manager
+            .prepare_gateway_call(&headers, request())
+            .await
+            .unwrap();
+        for payload in [
+            json!({"session_id": session_identifier, "hook_event_name": "Interrupt"}),
+            json!({"session_id": session_identifier, "hook_event_name": "UserPromptSubmit", "prompt": "next question"}),
+        ] {
+            let outcome = crate::agents::shared::adapters::codex::adapt(payload, &headers);
+            manager
+                .apply_events(&headers, outcome.events)
+                .await
+                .unwrap();
+        }
+        let current = manager
+            .prepare_gateway_call(&headers, request())
+            .await
+            .unwrap();
+        assert_ne!(
+            previous.parent.as_ref().unwrap().uuid,
+            current.parent.as_ref().unwrap().uuid
+        );
+        let expected_response = json!({"output_text": "previous answer"});
+        let response_for_finalizer = expected_response.clone();
+        let (finalizer, observer, mut ready) = gateway_response_completion(
+            manager.clone(),
+            previous.context.clone(),
+            true,
+            Box::new(move || response_for_finalizer),
+        );
+        let held = if contended {
+            Some(manager.test_lock_session_gate(session_identifier).await)
+        } else {
+            None
+        };
+        let response = finalizer();
+        assert_eq!(
+            response, expected_response,
+            "bookkeeping must preserve provider delivery"
+        );
+        if contended {
+            assert!(matches!(
+                ready.try_recv(),
+                Err(oneshot::error::TryRecvError::Empty)
+            ));
+            let pending = observer(&response);
+            tokio::pin!(pending);
+            assert!(futures_util::poll!(pending.as_mut()).is_pending());
+            drop(held);
+            tokio::time::timeout(Duration::from_secs(2), pending)
+                .await
+                .unwrap()
+                .unwrap();
+            tokio::time::timeout(Duration::from_secs(2), ready)
+                .await
+                .unwrap()
+                .unwrap();
+        } else {
+            assert_eq!(ready.try_recv(), Ok(()));
+            observer(&response).await.unwrap();
+        }
+        for preparation in [&previous, &current] {
+            manager
+                .finish_gateway_call(&preparation.context, preparation.session_finish)
+                .await;
+        }
+        tokio::time::timeout(Duration::from_secs(2), manager.close_all("test_shutdown"))
+            .await
+            .unwrap()
+            .unwrap();
+    }
+}
+
+#[tokio::test]
 async fn stream_completion_observer_finishes_when_the_session_is_already_gone() {
     let manager = SessionManager::new(GatewayConfig::default());
     let response = json!({"output_text": "final"});
-    let (finalizer, observer, mut ready) = gateway_response_completion(
-        manager,
-        "removed-session".into(),
-        None,
-        true,
-        Box::new(move || response),
-    );
+    let removed_context = manager
+        .test_gateway_call_context("removed-session", None, None)
+        .await;
+    let (finalizer, observer, mut ready) =
+        gateway_response_completion(manager, removed_context, true, Box::new(move || response));
     let response = finalizer();
     assert!(matches!(
         ready.try_recv(),
@@ -3374,8 +3494,7 @@ async fn internal_stream_completion_skips_task_bookkeeping_with_or_without_sessi
             .unwrap();
         manager
             .record_gateway_response_hints(
-                &prep.session_id,
-                None,
+                &prep.context,
                 Cow::Owned(json!({"output_text": "task answer"})),
             )
             .await;
@@ -3386,8 +3505,7 @@ async fn internal_stream_completion_skips_task_bookkeeping_with_or_without_sessi
         };
         let (finalizer, observer, ready) = gateway_response_completion(
             manager.clone(),
-            prep.session_id.clone(),
-            None,
+            prep.context.clone(),
             false,
             Box::new(|| json!({"output_text": "internal answer"})),
         );
@@ -3408,7 +3526,7 @@ async fn internal_stream_completion_skips_task_bookkeeping_with_or_without_sessi
             .unwrap()
             .unwrap();
         manager
-            .finish_gateway_call(&prep.session_id, None, prep.session_finish)
+            .finish_gateway_call(&prep.context, prep.session_finish)
             .await;
         manager.close_all("test_shutdown").await.unwrap();
     }
@@ -3429,8 +3547,7 @@ async fn managed_final_response_stream(
 ) -> (LlmJsonStream, oneshot::Receiver<()>) {
     let (finalizer, observer, ready) = gateway_response_completion(
         manager.clone(),
-        prep.session_id.clone(),
-        prep.owner_subagent_id.clone(),
+        prep.context.clone(),
         true,
         Box::new(move || response),
     );
@@ -3459,6 +3576,144 @@ async fn managed_final_response_stream(
         .await
         .unwrap();
     (stream, ready)
+}
+
+#[tokio::test]
+async fn interrupted_stream_completion_preserves_the_next_turn_answer() {
+    let mut observed_answers = Vec::new();
+    for delayed_completion in [false, true] {
+        let session_identifier = format!("interrupted-stream-completion-{delayed_completion}");
+        let subscriber_name = session_identifier.clone();
+        let current_turn_identifier = Arc::new(Mutex::new(None::<uuid::Uuid>));
+        let captured_turn_identifier = current_turn_identifier.clone();
+        let captured_output = Arc::new(Mutex::new(None::<Value>));
+        let recorded_output = captured_output.clone();
+        nemo_relay_runtime::api::subscriber::register_subscriber(
+            &subscriber_name,
+            Arc::new(move |event| {
+                if event.scope_category()
+                    == Some(nemo_relay_runtime::api::event::ScopeCategory::End)
+                    && event.name() == "codex-turn"
+                    && Some(event.uuid()) == *captured_turn_identifier.lock().unwrap()
+                {
+                    *recorded_output.lock().unwrap() = event.output().cloned();
+                }
+            }),
+        )
+        .unwrap();
+        let manager = SessionManager::new(GatewayConfig::default());
+        let headers = HeaderMap::new();
+        for payload in [
+            json!({"session_id": session_identifier, "hook_event_name": "sessionStart"}),
+            json!({"session_id": session_identifier, "hook_event_name": "UserPromptSubmit", "prompt": "Question A"}),
+        ] {
+            let outcome = crate::agents::shared::adapters::codex::adapt(payload, &headers);
+            manager
+                .apply_events(&headers, outcome.events)
+                .await
+                .unwrap();
+        }
+        let request_for = |prompt: &str| LlmGatewayStart {
+            session_id: Some(session_identifier.clone()),
+            provider: "openai.responses".into(),
+            model_name: None,
+            subagent_id: None,
+            conversation_id: None,
+            generation_id: None,
+            request_id: None,
+            request: LlmRequest {
+                headers: Map::new(),
+                content: json!({"input": [{"role": "user", "content": [{"type": "input_text", "text": prompt}]}]}),
+            },
+            streaming: true,
+            metadata: json!({}),
+        };
+        let previous_preparation = manager
+            .prepare_gateway_call(&headers, request_for("Question A"))
+            .await
+            .unwrap();
+        assert!(previous_preparation.record_task_response);
+        let previous_response = json!({"id": "response-a", "output_text": "Answer A"});
+        let (previous_stream, previous_ready) =
+            managed_final_response_stream(&manager, &previous_preparation, previous_response, true)
+                .await;
+        let mut previous_stream = Some(previous_stream);
+        let mut previous_ready = Some(previous_ready);
+        if !delayed_completion {
+            drop(previous_stream.take());
+            tokio::time::timeout(Duration::from_secs(5), previous_ready.take().unwrap())
+                .await
+                .unwrap()
+                .unwrap();
+        }
+        for payload in [
+            json!({"session_id": session_identifier, "hook_event_name": "Interrupt"}),
+            json!({"session_id": session_identifier, "hook_event_name": "UserPromptSubmit", "prompt": "Question B"}),
+        ] {
+            let outcome = crate::agents::shared::adapters::codex::adapt(payload, &headers);
+            manager
+                .apply_events(&headers, outcome.events)
+                .await
+                .unwrap();
+        }
+        let current_preparation = manager
+            .prepare_gateway_call(&headers, request_for("Question B"))
+            .await
+            .unwrap();
+        assert!(current_preparation.record_task_response);
+        let previous_parent = previous_preparation.parent.as_ref().unwrap().uuid;
+        let current_parent = current_preparation.parent.as_ref().unwrap().uuid;
+        assert_ne!(previous_parent, current_parent);
+        *current_turn_identifier.lock().unwrap() = Some(current_parent);
+        let current_response = json!({"id": "response-b", "output_text": "Answer B"});
+        let (current_stream, current_ready) = managed_final_response_stream(
+            &manager,
+            &current_preparation,
+            current_response.clone(),
+            true,
+        )
+        .await;
+        drop(current_stream);
+        tokio::time::timeout(Duration::from_secs(5), current_ready)
+            .await
+            .unwrap()
+            .unwrap();
+        if delayed_completion {
+            // Keep A's real managed stream alive across the independent hook requests.
+            drop(previous_stream.take());
+            tokio::time::timeout(Duration::from_secs(5), previous_ready.take().unwrap())
+                .await
+                .unwrap()
+                .unwrap();
+        }
+        for preparation in [&previous_preparation, &current_preparation] {
+            manager
+                .finish_gateway_call(&preparation.context, preparation.session_finish)
+                .await;
+        }
+        let outcome = crate::agents::shared::adapters::codex::adapt(
+            json!({"session_id": session_identifier, "hook_event_name": "Stop"}),
+            &headers,
+        );
+        manager
+            .apply_events(&headers, outcome.events)
+            .await
+            .unwrap();
+        manager.close_all("test_shutdown").await.unwrap();
+        nemo_relay_runtime::api::subscriber::flush_subscribers().unwrap();
+        nemo_relay_runtime::api::subscriber::deregister_subscriber(&subscriber_name).unwrap();
+        observed_answers.push((
+            delayed_completion,
+            captured_output.lock().unwrap().clone(),
+            Some(current_response),
+        ));
+    }
+    for (delayed_completion, observed, expected) in observed_answers {
+        assert_eq!(
+            observed, expected,
+            "B must retain its own answer when A completion is delayed: {delayed_completion}"
+        );
+    }
 }
 
 #[test]
@@ -3525,8 +3780,7 @@ fn streaming_gateway_call_guard_finishes_without_a_current_runtime() {
         ProviderRoute::OpenAiResponses,
         GatewayCallGuard::new(
             manager.clone(),
-            prep.session_id,
-            prep.owner_subagent_id,
+            prep.context.clone(),
             Some(ready),
             prep.session_finish,
             crate::operational::OperationalContext::new(),
@@ -3596,8 +3850,6 @@ async fn streaming_body_records_final_response_for_turn_output() {
         )
         .await
         .unwrap();
-    let session_id = prep.session_id.clone();
-    let owner_subagent_id = prep.owner_subagent_id.clone();
     let final_response = json!({ "output_text": "streamed final" });
     let (stream, ready) =
         managed_final_response_stream(&manager, &prep, final_response.clone(), false).await;
@@ -3606,8 +3858,7 @@ async fn streaming_body_records_final_response_for_turn_output() {
         ProviderRoute::OpenAiResponses,
         GatewayCallGuard::new(
             manager.clone(),
-            session_id,
-            owner_subagent_id,
+            prep.context.clone(),
             Some(ready),
             prep.session_finish,
             crate::operational::OperationalContext::new(),
@@ -4589,8 +4840,7 @@ async fn stream_error_test_guard(session_name: &str) -> (SessionManager, Gateway
         .unwrap();
     let guard = GatewayCallGuard::new(
         manager.clone(),
-        preparation.session_id,
-        preparation.owner_subagent_id,
+        preparation.context.clone(),
         None,
         preparation.session_finish,
         crate::operational::OperationalContext::new(),

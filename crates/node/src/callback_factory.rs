@@ -31,10 +31,14 @@ pub(crate) struct Settlers {
 }
 
 #[derive(Clone, Copy)]
+pub(crate) enum StreamStep {
+    Next,
+    Close,
+}
+
+#[derive(Clone, Copy)]
 pub(crate) enum Wrapper {
-    Execution,
-    Middleware,
-    ConditionalGate,
+    Sync,
     Collector,
     Finalizer,
     Scoped,
@@ -60,9 +64,7 @@ macro_rules! factories {
 }
 
 factories! {
-    execution: JsArg => JsArg = "execution",
-    middleware: JsArg => JsArg = "middleware",
-    conditional_gate: JsArg => JsArg = "conditionalGate",
+    sync: JsArg => JsArg = "sync",
     subscriber: JsArgs2 => JsArg = "subscriber",
     collector: JsArg => JsArg = "collector",
     finalizer: JsArg => JsArg = "finalizer",
@@ -84,9 +86,7 @@ factories! {
 impl Wrapper {
     fn select(self) -> fn(&Factories) -> &FunctionRef<JsArg, JsArg> {
         match self {
-            Self::Execution => |factories| &factories.execution,
-            Self::Middleware => |factories| &factories.middleware,
-            Self::ConditionalGate => |factories| &factories.conditional_gate,
+            Self::Sync => |factories| &factories.sync,
             Self::Collector => |factories| &factories.collector,
             Self::Finalizer => |factories| &factories.finalizer,
             Self::Scoped => |factories| &factories.scoped,
@@ -122,6 +122,7 @@ pub(crate) struct CallbackScope {
 }
 
 impl CallbackScope {
+    #[must_use]
     pub(crate) fn capture() -> Self {
         Self {
             scope_stack: current_scope_stack(),
@@ -138,17 +139,18 @@ impl CallbackScope {
     }
 }
 
-pub(crate) fn callback_scope_from(
+pub(crate) fn callback_scope_from<'value>(
     env: &Env,
-    value: Unknown,
-) -> napi::Result<Option<CallbackScope>> {
+    value: Unknown<'value>,
+) -> napi::Result<Option<&'value CallbackScope>> {
     match value.get_type()? {
         ValueType::Undefined | ValueType::Null => Ok(None),
         ValueType::External => {
-            // SAFETY: `value` belongs to the running JavaScript call in `env`.
+            // SAFETY: `value` belongs to the running JavaScript call in `env`, and the
+            // returned borrow is bounded by the handle lifetime of `value`.
             let scope =
                 unsafe { External::<CallbackScope>::from_napi_ref(env.raw(), value.raw()) }?;
-            Ok(Some(CallbackScope::clone(scope)))
+            Ok(Some(scope.as_ref()))
         }
         other => Err(napi::Error::new(
             napi::Status::InvalidArg,
@@ -226,14 +228,13 @@ pub(crate) fn wrap_promise_callback<'env, Args: JsValuesTupleIntoVec, Return>(
 
 pub(crate) fn stream_step<'env>(
     env: &'env Env,
-    close: bool,
+    step: StreamStep,
     poll: &Function<JsArg, JsArg>,
     handle: &Object,
 ) -> napi::Result<Unknown<'env>> {
-    let helper: fn(&Factories) -> &FunctionRef<JsArgs2, JsArg> = if close {
-        |factories| &factories.stream_close
-    } else {
-        |factories| &factories.stream_next
+    let helper: fn(&Factories) -> &FunctionRef<JsArgs2, JsArg> = match step {
+        StreamStep::Next => |factories| &factories.stream_next,
+        StreamStep::Close => |factories| &factories.stream_close,
     };
     call(
         env,
@@ -277,8 +278,18 @@ pub(crate) fn event_sanitizer_callback_context_id(env: &Env) -> napi::Result<Opt
     .call(())
 }
 
-pub(crate) fn callback_scope(env: &Env) -> napi::Result<Option<CallbackScope>> {
+pub(crate) fn callback_scope(env: &Env) -> napi::Result<Option<&CallbackScope>> {
     callback_scope_from(env, call(env, |factories| &factories.callback_scope, ())?)
+}
+
+fn scope_arguments(env: &Env, scope: CallbackScope) -> napi::Result<(JsArg, JsArg, bool)> {
+    let publication_context_id = js_value(env, scope.publication_context_id.as_deref())?;
+    let publication_context_captured = scope.publication_context_captured;
+    Ok((
+        scope.into_js(env)?,
+        publication_context_id,
+        publication_context_captured,
+    ))
 }
 
 pub(crate) fn with_callback_scope<'env>(
@@ -286,13 +297,13 @@ pub(crate) fn with_callback_scope<'env>(
     scope: CallbackScope,
     callback: &Function<JsArg, JsArg>,
 ) -> napi::Result<Unknown<'env>> {
-    let publication_context_id = js_value(env, scope.publication_context_id.clone())?;
-    let publication_context_captured = scope.publication_context_captured;
+    let (scope, publication_context_id, publication_context_captured) =
+        scope_arguments(env, scope)?;
     call(
         env,
         |factories| &factories.with_callback_scope,
         FnArgs::from((
-            scope.into_js(env)?,
+            scope,
             detach(env, callback),
             publication_context_id,
             publication_context_captured,
@@ -301,11 +312,6 @@ pub(crate) fn with_callback_scope<'env>(
 }
 
 pub(crate) fn set_callback_scope(env: &Env, scope: CallbackScope) -> napi::Result<bool> {
-    let publication_context_id = js_value(env, scope.publication_context_id.clone())?;
-    let publication_context_captured = scope.publication_context_captured;
-    factory(env, |factories| &factories.set_callback_scope)?.call(FnArgs::from((
-        scope.into_js(env)?,
-        publication_context_id,
-        publication_context_captured,
-    )))
+    factory(env, |factories| &factories.set_callback_scope)?
+        .call(FnArgs::from(scope_arguments(env, scope)?))
 }

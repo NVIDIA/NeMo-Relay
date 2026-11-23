@@ -1,6 +1,7 @@
 // SPDX-FileCopyrightText: Copyright (c) 2026, NVIDIA CORPORATION & AFFILIATES. All rights reserved.
 // SPDX-License-Identifier: Apache-2.0
 
+use std::borrow::Cow;
 use std::collections::{BTreeMap, BTreeSet, HashMap};
 use std::future::Future;
 use std::path::PathBuf;
@@ -444,9 +445,10 @@ node_metrics! {
     }
 }
 
-fn effective_scope(env: &Env) -> Result<CallbackScope> {
-    Ok(
-        callback_factory::callback_scope(env)?.unwrap_or_else(|| CallbackScope {
+fn effective_scope(env: &Env) -> Result<Cow<'_, CallbackScope>> {
+    Ok(match callback_factory::callback_scope(env)? {
+        Some(scope) => Cow::Borrowed(scope),
+        None => Cow::Owned(CallbackScope {
             scope_stack: current_scope_stack_handle(),
             publication_buffer: None,
             propagation: None,
@@ -454,7 +456,7 @@ fn effective_scope(env: &Env) -> Result<CallbackScope> {
             publication_context_id: None,
             publication_context_captured: false,
         }),
-    )
+    })
 }
 
 fn with_callback_scope<CallbackResult>(
@@ -470,7 +472,8 @@ fn with_callback_scope<CallbackResult>(
 }
 
 fn with_effective_scope_stack<T>(env: &Env, callback: impl FnOnce() -> T) -> Result<T> {
-    Ok(with_callback_scope(&effective_scope(env)?, callback))
+    let scope = effective_scope(env)?;
+    Ok(with_callback_scope(&scope, callback))
 }
 
 fn parse_uuid(value: &str, what: &str) -> Result<uuid::Uuid> {
@@ -496,7 +499,7 @@ impl CallContext {
         };
         Ok(Self {
             publication_context_id,
-            scope,
+            scope: scope.into_owned(),
         })
     }
 
@@ -927,7 +930,7 @@ fn scoped_fn<A: Send + 'static, R: Send + 'static>(
     encode: fn(A) -> FlowResult<Value>,
     decode: fn(Value) -> FlowResult<R>,
 ) -> napi::Result<ScopedFn<A, R>> {
-    let func: Function<JsArg, JsArg> = callback_factory::wrap(env, Wrapper::Execution, func)?;
+    let func: Function<JsArg, JsArg> = callback_factory::wrap(env, Wrapper::Sync, func)?;
     let scoped: Function<JsArgs2, JsArg> = callback_factory::wrap(env, Wrapper::Scoped, &func)?;
     let func: Arc<callable::AsyncReplyTsfn<ScopedJsonCall>> =
         Arc::new(callable::reply_tsfn(env, &scoped, error_prefix)?);
@@ -1120,7 +1123,7 @@ fn node_conditional_middleware_guardrail(
 ) -> napi::Result<ConditionalMiddlewareGuardrailFn> {
     let callback = callable::SyncJsCallback::new(
         env,
-        callback_factory::wrap::<JsArgs2, JsArg>(env, Wrapper::ConditionalGate, guardrail)?,
+        callback_factory::wrap::<JsArgs2, JsArg>(env, Wrapper::Sync, guardrail)?,
         CONDITIONAL_GATE_PREFIX,
         Some(CONDITIONAL_GATE_CALLBACK_TIMEOUT),
     )?;
@@ -1455,7 +1458,7 @@ pub fn fork_scope_stack(env: Env) -> Result<ScopeStack> {
             "cannot fork scope stack without an active Relay context",
         ));
     }
-    let mut scope = effective_scope(&env)?;
+    let mut scope = effective_scope(&env)?.into_owned();
     let context = with_callback_scope(&scope, MiddlewareContinuationContext::capture)
         .isolated_with_scope_stack(&scope.scope_stack)
         .map_err(Error::from)?;
@@ -1495,6 +1498,7 @@ pub fn with_scope_stack<'env>(
             scope_stack: stack.inner.clone(),
             publication_buffer: effective_scope(env)?
                 .publication_buffer
+                .clone()
                 .or_else(|| stack.publication_buffer.clone()),
             propagation: None,
             execution_context: None,
@@ -1544,6 +1548,7 @@ pub fn set_thread_scope_stack(env: Env, stack: &ScopeStack) -> Result<()> {
             scope_stack: stack.inner.clone(),
             publication_buffer: effective_scope(&env)?
                 .publication_buffer
+                .clone()
                 .or_else(|| stack.publication_buffer.clone()),
             propagation: None,
             execution_context: None,
@@ -4015,9 +4020,9 @@ impl AdaptiveRuntime {
         catch_unwind
     )]
     pub fn create(#[napi(ts_arg_type = "TConfig")] config: Json) -> Result<Self> {
-        let config: AdaptiveConfig = serde_json::from_value(config.0)
+        let (config, report) = CoreAdaptiveRuntime::validate_document(config.0)
             .map_err(|error| Error::invalid_argument(error.to_string()))?;
-        let report = validate_adaptive_config_or_err(&config)?;
+        let report = validate_adaptive_config_or_err(report)?;
         let state = Arc::new(tokio::sync::Mutex::new(Some(
             NodeAdaptiveRuntimeState::Pending { config, report },
         )));
@@ -4108,9 +4113,8 @@ impl AdaptiveRuntime {
 }
 
 fn validate_adaptive_config_or_err(
-    config: &AdaptiveConfig,
+    report: nemo_relay_plugin_host::ConfigReport,
 ) -> Result<nemo_relay_plugin_host::ConfigReport> {
-    let report = CoreAdaptiveRuntime::validate_config(config);
     if report.has_errors() {
         let joined = report
             .diagnostics
@@ -4157,11 +4161,9 @@ fn parse_cache_request_facts(value: Option<Value>) -> Result<Option<CacheRequest
     catch_unwind
 )]
 pub fn validate_adaptive_config(#[napi(ts_arg_type = "TConfig")] config: Json) -> Result<Json> {
-    let config: AdaptiveConfig = serde_json::from_value(config.0)
+    let (_, report) = CoreAdaptiveRuntime::validate_document(config.0)
         .map_err(|error| Error::invalid_argument(error.to_string()))?;
-    serde_json::to_value(CoreAdaptiveRuntime::validate_config(&config))
-        .map(Json)
-        .map_err(Error::from)
+    serde_json::to_value(report).map(Json).map_err(Error::from)
 }
 
 /// Build one adaptive cache telemetry event from normalized usage.
@@ -4235,14 +4237,14 @@ pub fn register_plugin(
         .map(|func| {
             callable::SyncJsCallback::new(
                 &env,
-                callback_factory::wrap(&env, Wrapper::Middleware, &func)?,
+                callback_factory::wrap(&env, Wrapper::Sync, &func)?,
                 PLUGIN_VALIDATE_PREFIX,
                 None,
             )
         })
         .transpose()?;
     let register: Function<JsArgs2, JsArg> =
-        callback_factory::wrap(&env, Wrapper::Middleware, &register)?;
+        callback_factory::wrap(&env, Wrapper::Sync, &register)?;
     let register = callable::reply_tsfn(&env, &register, PLUGIN_REGISTER_PREFIX)?;
 
     register_plugin_impl(Arc::new(NodePlugin {

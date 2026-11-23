@@ -107,6 +107,51 @@ describe('promise callback cancellation', () => {
   });
 });
 
+describe('failure description', () => {
+  function rejectionOf(thrown) {
+    const rejected = Promise.withResolvers();
+    const wrapper = factories.promise(
+      () => {
+        throw thrown;
+      },
+      rejectSettle('resolve'),
+      (_callId, exception, message, exceptionType) => rejected.resolve({ exception, message, exceptionType }),
+      rejectSettle('streamPush'),
+      rejectSettle('streamEnd'),
+      rejectSettle('next'),
+    );
+    invoke(wrapper, 1);
+    return rejected.promise;
+  }
+
+  it('uses the error name when the message cannot be read', async () => {
+    const thrown = new Error('hidden');
+    Object.defineProperties(thrown, {
+      name: { value: 'GetterError' },
+      message: {
+        get() {
+          throw new Error('message getter boom');
+        },
+      },
+    });
+    assert.deepEqual(await rejectionOf(thrown), {
+      exception: thrown,
+      message: 'GetterError',
+      exceptionType: 'GetterError',
+    });
+  });
+
+  it('describes thrown primitives by value and type', async () => {
+    assert.deepEqual(await rejectionOf(42), { exception: 42, message: '42', exceptionType: 'Number' });
+    assert.deepEqual(await rejectionOf(null), { exception: null, message: 'null', exceptionType: 'Null' });
+  });
+
+  it('describes objects without a name by their type tag', async () => {
+    const thrown = { message: '' };
+    assert.deepEqual(await rejectionOf(thrown), { exception: thrown, message: 'Object', exceptionType: 'Object' });
+  });
+});
+
 describe('fork publication selection', { timeout: 3000 }, () => {
   for (const binding of ['withCallbackScope', 'setCallbackScope']) {
     for (const selection of ['ambient', 'absent', 'active']) {
@@ -151,4 +196,54 @@ describe('fork publication selection', { timeout: 3000 }, () => {
       });
     }
   }
+});
+
+describe('callback context boundary', () => {
+  function scopedResult(scope) {
+    assert.equal(factories.setCallbackScope(scope, null, true), true);
+    return {
+      get marker() {
+        return factories.callbackScope()?.marker;
+      },
+    };
+  }
+
+  it('encodes a synchronous finalizer result inside the callback context', () => {
+    const envelope = factories.finalizer(() => scopedResult({ marker: 'sync finalizer' }))(
+      () => assert.fail('direct settlement must not call complete'),
+      true,
+    );
+    assert.equal(envelope.ok, true);
+    assert.equal(envelope.value.marker, 'sync finalizer');
+  });
+
+  it('encodes a Promise-returning finalizer result inside the callback context', async () => {
+    const completed = Promise.withResolvers();
+    const returned = factories.finalizer(async () => {
+      const result = scopedResult({ marker: 'async finalizer' });
+      await Promise.resolve();
+      return result;
+    })(completed.resolve, false);
+    assert.equal(returned, undefined);
+    const envelope = await completed.promise;
+    assert.equal(envelope.ok, true);
+    assert.equal(envelope.value.marker, 'async finalizer');
+  });
+
+  it('adopts a thenable returned to withCallbackScope inside the callback context', async () => {
+    const observed = Promise.withResolvers();
+    const value = await factories.withCallbackScope(
+      { marker: 'thenable' },
+      () => ({
+        then(resolve) {
+          observed.resolve(factories.callbackScope()?.marker);
+          resolve('settled');
+        },
+      }),
+      null,
+      false,
+    );
+    assert.equal(value, 'settled');
+    assert.equal(await observed.promise, 'thenable');
+  });
 });

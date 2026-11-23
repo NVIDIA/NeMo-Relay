@@ -461,15 +461,12 @@ impl SessionAlignmentState {
     }
 
     pub(crate) fn clear_for_ended_subagent(&mut self, parent_session_id: &str, subagent_id: &str) {
-        self.aliases.retain(|child_session_id, alias| {
-            child_session_id != subagent_id
-                && !(alias.parent_session_id == parent_session_id
-                    && alias.subagent_id == subagent_id)
+        self.aliases.retain(|_, alias| {
+            !(alias.parent_session_id == parent_session_id && alias.subagent_id == subagent_id)
         });
-        self.pending_subagents.retain(|child_session_id, route| {
-            child_session_id != subagent_id
-                && !(route.pending.parent_session_id() == parent_session_id
-                    && route.pending.event.session_id == subagent_id)
+        self.pending_subagents.retain(|_, route| {
+            !(route.pending.parent_session_id() == parent_session_id
+                && route.pending.event.session_id == subagent_id)
         });
     }
 }

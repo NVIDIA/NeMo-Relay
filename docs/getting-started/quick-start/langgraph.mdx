@@ -1,5 +1,5 @@
 ---
-title: "LangGraph Quick Start"
+title: "LangGraph Quickstart for NeMo Relay"
 sidebar-title: "LangGraph"
 slug: getting-started/quick-start/langgraph
 description: "Run one LangGraph workflow with NeMo Relay observability."
@@ -48,10 +48,10 @@ SPDX-License-Identifier: Apache-2.0 */}
 }
 */}
 
-## Goal
-
-Run one credential-free LangGraph workflow and write its lifecycle to a local
-Agent Trajectory Observability Format (ATOF) file.
+This Quickstart Guide walks you through the process for running one
+credential-free LangGraph workflow and writing its lifecycle to a local Agent
+Trajectory Observability Format (ATOF) file. For detailed setup, refer to the
+[Installation Guide](/getting-started/installation).
 
 Use the recorded parent/child scopes to follow a workflow through its nodes
 when debugging execution.
@@ -63,9 +63,13 @@ Before you start, make sure you have:
 - Python 3.11 or newer
 - `uv`
 
+## Quickstart Steps
+
+To quickly get started with NeMo Relay, complete the following steps:
+
 <Steps toc={true}>
 
-## Install
+### Install NeMo Relay
 
 Create a project and install the NeMo Relay version for these docs with the
 LangGraph extra.
@@ -79,7 +83,7 @@ uv init
 uv add "nemo-relay[langgraph]==1.0.0"
 ```
 
-## Configure
+### Configure the plugin
 
 `plugins.toml` enables Relay's observability component and writes its events
 to `logs/events.jsonl`. In your own project, use the same plugin configuration
@@ -96,7 +100,7 @@ ATOF output can contain sensitive prompts, responses, tool arguments, and tool
 results. Protect `logs/events.jsonl` even when full payload export is disabled.
 </Warning>
 
-## Run
+### Run the graph
 
 The example runs one local `emit_marker` graph node, with no inference
 request or credentials. `NemoRelayCallbackHandler` records the graph lifecycle,
@@ -117,7 +121,7 @@ Run it from the project directory:
 uv run python quickstart.py
 ```
 
-## Verify
+### Verify the output
 
 The program checks the event file for matching start and end records from the
 `emit_marker` graph node. A successful run prints these markers in order:
@@ -134,7 +138,7 @@ This deterministic path needs no model credentials. After it works, add a model
 and tool node to observe a full agent workflow.
 </Tip>
 
-### Inspect the Recorded Activity
+#### Inspect the Recorded Activity
 
 Print one completed graph node from the event file:
 
@@ -158,9 +162,9 @@ demonstrate workflow structure.
 
 </Steps>
 
-## For More Details
+## Next Steps
 
-For more details, refer to:
+Now that you have a working setup, you should explore the following resources in greater detail:
 
 - [LangGraph integration guide](/supported-integrations/langgraph)
 - [ATOF exporter](/configure-plugins/observability/atof)
