@@ -997,12 +997,13 @@ pub unsafe extern "C" fn nemo_relay_plugin_context_register_llm_stream_execution
     ctx: *mut FfiPluginContext,
     name: *const c_char,
     priority: i32,
-    cb: crate::callable::NemoRelayOptionalLlmExecInterceptCb,
+    exec_cb: crate::callable::NemoRelayOptionalLlmExecInterceptCb,
     stream_cb: crate::callable::NemoRelayOptionalLlmStreamExecInterceptCb,
     user_data: *mut libc::c_void,
     free_fn: NemoRelayFreeFn,
 ) -> NemoRelayStatus {
     clear_last_error();
+    let data_owner = crate::callable::UserData::new(user_data, free_fn);
     if ctx.is_null() {
         set_last_error("plugin context is null");
         return NemoRelayStatus::NullPointer;
@@ -1011,11 +1012,12 @@ pub unsafe extern "C" fn nemo_relay_plugin_context_register_llm_stream_execution
         Ok(value) => value,
         Err(status) => return status,
     };
+    let (user_data, free_fn) = data_owner.into_parts();
     let wrapped = match stream_cb {
         Some(callback) => {
             crate::callable::wrap_llm_stream_source_intercept_fn(callback, user_data, free_fn)
         }
-        None => match cb {
+        None => match exec_cb {
             Some(callback) => wrap_llm_stream_exec_intercept_fn(callback, user_data, free_fn),
             None => {
                 if let Some(free) = free_fn {

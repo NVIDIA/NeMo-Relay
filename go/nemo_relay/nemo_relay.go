@@ -468,6 +468,9 @@ var (
 			defer C.free(unsafe.Pointer(definitions))
 		}
 		if settings.extra != nil {
+			if !json.Valid(settings.extra) {
+				return nil, &RelayError{Code: StatusInvalidJSON, Message: "invalid ATIF agent extra JSON"}
+			}
 			extra = C.CString(string(settings.extra))
 			defer C.free(unsafe.Pointer(extra))
 		}
@@ -928,15 +931,16 @@ func PopScope(handle *ScopeHandle, opts ...ScopeEndOption) error {
 // ---------------------------------------------------------------------------
 
 type eventOptions struct {
-	category        *C.char
-	categoryProfile *C.char
-	parentHandle    *ScopeHandle // retains the borrowed native handle through the FFI call
-	parent          *C.FfiScopeHandle
-	data            *C.char
-	dataSchema      *C.char
-	metadata        *C.char
-	severity        LogSeverity
-	timestamp       *C.int64_t
+	category           *C.char
+	categoryProfile    *C.char
+	categoryProfileErr error
+	parentHandle       *ScopeHandle // retains the borrowed native handle through the FFI call
+	parent             *C.FfiScopeHandle
+	data               *C.char
+	dataSchema         *C.char
+	metadata           *C.char
+	severity           LogSeverity
+	timestamp          *C.int64_t
 }
 
 // replaceCString replaces an option-owned C string and frees its prior value.
@@ -1028,11 +1032,16 @@ func WithEventCategory(category EventCategory) EventOption {
 // validates known fields and preserves unknown keys. Nil omits the profile.
 func WithEventCategoryProfile(profile json.RawMessage) EventOption {
 	return func(o *eventOptions) {
+		o.categoryProfileErr = nil
+		if o.categoryProfile != nil {
+			C.free(unsafe.Pointer(o.categoryProfile))
+			o.categoryProfile = nil
+		}
+		if profile != nil && !json.Valid(profile) {
+			o.categoryProfileErr = &RelayError{Code: StatusInvalidJSON, Message: "invalid event category profile JSON"}
+			return
+		}
 		if profile == nil {
-			if o.categoryProfile != nil {
-				C.free(unsafe.Pointer(o.categoryProfile))
-				o.categoryProfile = nil
-			}
 			return
 		}
 		replaceCString(&o.categoryProfile, string(profile))
@@ -1079,6 +1088,9 @@ func EmitEvent(name string, opts ...EventOption) error {
 	}
 	if o.timestamp != nil {
 		defer C.free(unsafe.Pointer(o.timestamp))
+	}
+	if o.categoryProfileErr != nil {
+		return o.categoryProfileErr
 	}
 	var severity *C.int32_t
 	if o.severity != "" {
@@ -1464,27 +1476,29 @@ func ToolCallExecute(name string, args json.RawMessage, fn ToolExecutionFunc, op
 // ---------------------------------------------------------------------------
 
 type llmCallOptions struct {
-	optionErr           error
-	ctx                 context.Context
-	executionOptions    ExecutionOptions
-	hasExecutionOptions bool
-	parentHandle        *ScopeHandle // retains the borrowed native handle through the FFI call
-	parent              *C.FfiScopeHandle
-	attributes          uint32
-	data                *C.char
-	metadata            *C.char
-	modelName           *C.char
-	timestamp           *C.int64_t
-	requestCodec        *C.FfiCodecHandle
-	requestCodecHandle  *CodecHandle
-	annotatedRequest    *C.char
-	annotatedResponse   *C.char
-	codecDecode         C.NemoRelayCodecDecodeFn
-	codecEncode         C.NemoRelayCodecEncodeFn
-	codecUserData       unsafe.Pointer
-	codecFreeFn         C.NemoRelayFreeFn
-	responseCodec       *C.FfiCodecHandle
-	responseCodecHandle *CodecHandle // prevents GC of the CodecHandle during FFI calls
+	optionErr            error
+	annotatedRequestErr  error
+	annotatedResponseErr error
+	ctx                  context.Context
+	executionOptions     ExecutionOptions
+	hasExecutionOptions  bool
+	parentHandle         *ScopeHandle // retains the borrowed native handle through the FFI call
+	parent               *C.FfiScopeHandle
+	attributes           uint32
+	data                 *C.char
+	metadata             *C.char
+	modelName            *C.char
+	timestamp            *C.int64_t
+	requestCodec         *C.FfiCodecHandle
+	requestCodecHandle   *CodecHandle
+	annotatedRequest     *C.char
+	annotatedResponse    *C.char
+	codecDecode          C.NemoRelayCodecDecodeFn
+	codecEncode          C.NemoRelayCodecEncodeFn
+	codecUserData        unsafe.Pointer
+	codecFreeFn          C.NemoRelayFreeFn
+	responseCodec        *C.FfiCodecHandle
+	responseCodecHandle  *CodecHandle // prevents GC of the CodecHandle during FFI calls
 }
 
 // LLMCallOption is a functional option that configures optional parameters for
@@ -1595,6 +1609,12 @@ func WithLLMAnnotatedRequest(annotation json.RawMessage) LLMCallOption {
 		if o.annotatedRequest != nil {
 			C.free(unsafe.Pointer(o.annotatedRequest))
 		}
+		o.annotatedRequest = nil
+		o.annotatedRequestErr = nil
+		if !json.Valid(annotation) {
+			o.annotatedRequestErr = &RelayError{Code: StatusInvalidJSON, Message: "invalid LLM annotation JSON"}
+			return
+		}
 		o.annotatedRequest = C.CString(string(annotation))
 	}
 }
@@ -1605,6 +1625,12 @@ func WithLLMAnnotatedResponse(annotation json.RawMessage) LLMCallOption {
 		if o.annotatedResponse != nil {
 			C.free(unsafe.Pointer(o.annotatedResponse))
 		}
+		o.annotatedResponse = nil
+		o.annotatedResponseErr = nil
+		if !json.Valid(annotation) {
+			o.annotatedResponseErr = &RelayError{Code: StatusInvalidJSON, Message: "invalid LLM annotation JSON"}
+			return
+		}
 		o.annotatedResponse = C.CString(string(annotation))
 	}
 }
@@ -1614,7 +1640,7 @@ func WithLLMAnnotatedResponse(annotation json.RawMessage) LLMCallOption {
 // Create via [NewOpenAIChatCodec], [NewOpenAIResponsesCodec],
 // [NewAnthropicMessagesCodec], [NewGeminiGenerateContentCodec],
 // [NewOCIGenAIChatCodec], or [NewCustomResponseCodec]. The handle is automatically
-// freed when garbage collected.
+// freed when garbage collected. Do not copy a CodecHandle value.
 type CodecHandle struct {
 	mu  sync.RWMutex
 	ptr *C.FfiCodecHandle
@@ -1744,6 +1770,9 @@ func (codec *CodecHandle) Decode(request LLMRequest) (json.RawMessage, error) {
 	defer C.nemo_relay_codec_free(owned)
 	defer runtime.KeepAlive(codec)
 	request = request.withDefaults()
+	if !json.Valid(request.Headers) || !json.Valid(request.Content) {
+		return nil, &RelayError{Code: StatusInvalidJSON, Message: "invalid LLM request JSON"}
+	}
 	headers := C.CString(string(request.Headers))
 	defer C.free(unsafe.Pointer(headers))
 	content := C.CString(string(request.Content))
@@ -1770,6 +1799,9 @@ func (codec *CodecHandle) Encode(annotated json.RawMessage, original LLMRequest)
 	defer C.nemo_relay_codec_free(owned)
 	defer runtime.KeepAlive(codec)
 	original = original.withDefaults()
+	if !json.Valid(original.Headers) || !json.Valid(original.Content) || !json.Valid(annotated) {
+		return LLMRequest{}, &RelayError{Code: StatusInvalidJSON, Message: "invalid LLM codec input JSON"}
+	}
 	headers := C.CString(string(original.Headers))
 	defer C.free(unsafe.Pointer(headers))
 	content := C.CString(string(original.Content))
@@ -1793,6 +1825,9 @@ func (codec *CodecHandle) Encode(annotated json.RawMessage, original LLMRequest)
 
 // DecodeResponse normalizes a provider response with this owned codec.
 func (codec *CodecHandle) DecodeResponse(response json.RawMessage) (json.RawMessage, error) {
+	if !json.Valid(response) {
+		return nil, &RelayError{Code: StatusInvalidJSON, Message: "invalid LLM response JSON"}
+	}
 	owned, err := codec.snapshot()
 	if err != nil {
 		return nil, err
@@ -1893,14 +1928,14 @@ func LlmCall(name string, request LLMRequest, opts ...LLMCallOption) (*LLMHandle
 	defer runtime.KeepAlive(o.requestCodecHandle)
 	defer runtime.KeepAlive(o.responseCodecHandle)
 	defer freeLLMOpts(o)
-	if o.optionErr != nil {
-		return nil, o.optionErr
+	if err := errors.Join(o.optionErr, o.annotatedRequestErr, o.annotatedResponseErr); err != nil {
+		return nil, err
 	}
 	if o.hasExecutionOptions {
 		return nil, fmt.Errorf("execution options require a managed LLM execute call")
 	}
 
-	requestJSON, err := jsonMarshal(request)
+	requestJSON, err := jsonMarshal(request.withDefaults())
 	if err != nil {
 		return nil, err
 	}
@@ -1942,8 +1977,8 @@ func LlmCallEnd(handle *LLMHandle, response json.RawMessage, opts ...LLMCallOpti
 	}
 	defer runtime.KeepAlive(o.responseCodecHandle)
 	defer freeLLMOpts(o)
-	if o.optionErr != nil {
-		return o.optionErr
+	if err := errors.Join(o.optionErr, o.annotatedRequestErr, o.annotatedResponseErr); err != nil {
+		return err
 	}
 	if o.hasExecutionOptions {
 		return fmt.Errorf("execution options require a managed LLM execute call")
@@ -1975,8 +2010,8 @@ func LlmCallExecute(name string, request LLMRequest, fn LLMExecutionFunc, opts .
 	defer runtime.KeepAlive(o.requestCodecHandle)
 	defer runtime.KeepAlive(o.responseCodecHandle)
 	defer freeLLMOpts(o)
-	if o.optionErr != nil {
-		return nil, o.optionErr
+	if err := errors.Join(o.optionErr, o.annotatedRequestErr, o.annotatedResponseErr); err != nil {
+		return nil, err
 	}
 
 	if o.annotatedRequest != nil || o.annotatedResponse != nil {
@@ -1989,7 +2024,7 @@ func LlmCallExecute(name string, request LLMRequest, fn LLMExecutionFunc, opts .
 	}
 	defer stopCancellation()
 
-	requestJSON, err := json.Marshal(request)
+	requestJSON, err := json.Marshal(request.withDefaults())
 	if err != nil {
 		return nil, err
 	}
@@ -2058,8 +2093,8 @@ func LlmStreamCallExecute(name string, request LLMRequest, fn LLMStreamExecution
 	defer runtime.KeepAlive(o.requestCodecHandle)
 	defer runtime.KeepAlive(o.responseCodecHandle)
 	defer freeLLMOpts(o)
-	if o.optionErr != nil {
-		return nil, o.optionErr
+	if err := errors.Join(o.optionErr, o.annotatedRequestErr, o.annotatedResponseErr); err != nil {
+		return nil, err
 	}
 
 	if o.annotatedRequest != nil || o.annotatedResponse != nil {
@@ -2072,7 +2107,7 @@ func LlmStreamCallExecute(name string, request LLMRequest, fn LLMStreamExecution
 	}
 	defer stopCancellation()
 
-	requestJSON, err := json.Marshal(request)
+	requestJSON, err := json.Marshal(request.withDefaults())
 	if err != nil {
 		return nil, err
 	}
@@ -2085,7 +2120,7 @@ func LlmStreamCallExecute(name string, request LLMRequest, fn LLMStreamExecution
 	if ctx == nil {
 		ctx = context.Background()
 	}
-	providerContext, cancelProvider := context.WithCancel(ctx)
+	providerContext, cancelProvider := newProviderContext(ctx)
 	providerTransferred := false
 	defer func() {
 		if !providerTransferred {
@@ -4609,7 +4644,7 @@ func LlmCallExecuteContext(ctx context.Context, name string, request LLMRequest,
 	if ctx == nil {
 		return nil, errors.New("context is nil")
 	}
-	opts = append(opts, func(o *llmCallOptions) { o.ctx = ctx })
+	opts = append(opts[:len(opts):len(opts)], func(o *llmCallOptions) { o.ctx = ctx })
 	return LlmCallExecute(name, request, func(request json.RawMessage) (json.RawMessage, error) { return fn(ctx, request) }, opts...)
 }
 
@@ -4618,7 +4653,7 @@ func ToolCallExecuteContext(ctx context.Context, name string, args json.RawMessa
 	if ctx == nil {
 		return ToolExecutionResult{}, errors.New("context is nil")
 	}
-	opts = append(opts, func(o *toolCallOptions) { o.ctx = ctx })
+	opts = append(opts[:len(opts):len(opts)], func(o *toolCallOptions) { o.ctx = ctx })
 	return ToolCallExecute(name, args, func(args json.RawMessage) (ToolExecutionResult, error) { return fn(ctx, args) }, opts...)
 }
 
@@ -4628,6 +4663,6 @@ func LlmStreamCallExecuteContext(ctx context.Context, name string, request LLMRe
 	if ctx == nil {
 		return nil, errors.New("context is nil")
 	}
-	opts = append(opts, func(o *llmCallOptions) { o.ctx = ctx })
+	opts = append(opts[:len(opts):len(opts)], func(o *llmCallOptions) { o.ctx = ctx })
 	return LlmStreamCallExecute(name, request, fn, collector, finalizer, opts...)
 }

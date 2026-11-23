@@ -5,7 +5,7 @@
 use super::*;
 
 /// An owned, thread-safe cancellation signal. Calls clone it when they start.
-/// cancelling it does not free it. Release with `nemo_relay_cancellation_free`.
+/// Cancelling it does not free it. Release with `nemo_relay_cancellation_free`.
 #[derive(Clone)]
 pub struct FfiCancellation(pub(crate) tokio::sync::watch::Sender<bool>);
 
@@ -45,21 +45,54 @@ pub unsafe extern "C" fn nemo_relay_cancellation_free(signal: *mut FfiCancellati
     }
 }
 
+pub(crate) enum Outcome<T> {
+    Completed(T),
+    Cancelled,
+}
+
 pub(crate) async fn run<T: Send + 'static>(
     signal: Option<FfiCancellation>,
     future: impl Future<Output = FlowResult<T>> + Send + 'static,
-) -> FlowResult<T> {
+) -> FlowResult<Outcome<T>> {
     let Some(signal) = signal else {
-        return future.await;
+        return future.await.map(Outcome::Completed);
     };
     let mut receiver = signal.0.subscribe();
     if *receiver.borrow() {
-        return Err(FlowError::Internal("execution cancelled".into()));
+        return Ok(Outcome::Cancelled);
     }
     // Poll in the caller's task to preserve its scope and publication context.
     tokio::select! {
         biased;
-        _ = receiver.changed() => Err(FlowError::Internal("execution cancelled".into())),
-        result = future => result,
+        _ = receiver.changed() => Ok(Outcome::Cancelled),
+        result = future => result.map(Outcome::Completed),
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn completion_keeps_its_outcome_when_it_signals_cancellation() {
+        let runtime = tokio::runtime::Runtime::new().unwrap();
+        for fail in [false, true] {
+            let (sender, _) = tokio::sync::watch::channel(false);
+            let signal = FfiCancellation(sender);
+            let during_completion = signal.clone();
+            let result = runtime.block_on(run(Some(signal), async move {
+                during_completion.0.send_replace(true);
+                if fail {
+                    Err(FlowError::Internal("provider failed".into()))
+                } else {
+                    Ok(42)
+                }
+            }));
+            match (fail, result) {
+                (false, Ok(Outcome::Completed(42))) => {}
+                (true, Err(FlowError::Internal(message))) if message == "provider failed" => {}
+                _ => panic!("late cancellation replaced the selected outcome"),
+            }
+        }
     }
 }

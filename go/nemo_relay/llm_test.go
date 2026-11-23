@@ -4,6 +4,7 @@
 package nemo_relay
 
 import (
+	"context"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -1552,13 +1553,9 @@ func TestLlmStreamCloseWaitsForActiveCollectorBeforeFinalizing(t *testing.T) {
 func TestLlmStreamCloseFinalizesPartialResponse(t *testing.T) {
 	request := makeRequest()
 	finalizerCalls := 0
-	stream, err := LlmStreamCallExecute("close_partial_llm", requestForTest(request), LLMExecutionFunc(func(nativeJSON json.RawMessage) (json.RawMessage, error) {
-		chunks := `data: {"chunk": 1}` + "\n\n" +
-			`data: {"chunk": 2}` + "\n\n" +
-			`data: [DONE]` + "\n\n"
-		encoded, err := json.Marshal(chunks)
-		return json.RawMessage(encoded), err
-	}).AsStream(), nil, func() (json.RawMessage, error) {
+	stream, err := LlmStreamCallExecute("close_partial_llm", requestForTest(request), func(context.Context, json.RawMessage) (LLMStreamSource, error) {
+		return &contractSource{chunks: []json.RawMessage{json.RawMessage(`{"chunk":1}`), json.RawMessage(`{"chunk":2}`)}}, nil
+	}, nil, func() (json.RawMessage, error) {
 		finalizerCalls++
 		return json.RawMessage(`{"partial": true}`), nil
 	},

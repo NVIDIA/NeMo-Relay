@@ -7,6 +7,8 @@ header = """
  *
  * Owned callbacks must follow their documented argument, result, and ownership
  * contracts. They can use supplied capabilities and emit observability events.
+ * They can also use helpers required by those contracts, such as allocating
+ * result strings and setting the last error.
  * Other Relay API calls are invalid. This includes managed calls, managed-stream
  * control, scope changes, registration outside a supplied plugin context,
  * and flush or shutdown operations.

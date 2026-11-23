@@ -106,6 +106,7 @@ typedef char* (*NemoRelayCodecEncodeCb)(void* user_data, const char* annotated_j
 typedef NemoRelayCodecDecodeCb NemoRelayCodecDecodeFn;
 typedef NemoRelayCodecEncodeCb NemoRelayCodecEncodeFn;
 static inline FfiLlmStreamSource* callLlmStreamNext(NemoRelayLlmStreamExecNextFn next, const char* request, void* context) { return next(request, context); }
+extern char* nemo_relay_string_clone(const char*);
 */
 import "C"
 
@@ -658,7 +659,7 @@ func codecDecodeCStringForTest(codec *CodecFunc, request LLMRequest) *C.char {
 		setLastErrorMessage(err.Error())
 		return nil
 	}
-	return C.CString(string(result))
+	return relayCallbackString(string(result))
 }
 
 func codecEncodeCStringForTest(codec *CodecFunc, annotated json.RawMessage, request LLMRequest) *C.char {
@@ -667,7 +668,7 @@ func codecEncodeCStringForTest(codec *CodecFunc, annotated json.RawMessage, requ
 		setLastErrorMessage(err.Error())
 		return nil
 	}
-	return C.CString(string(result))
+	return relayCallbackString(string(result))
 }
 
 func codecDecodeResultForTest(codec *CodecFunc, request LLMRequest) (json.RawMessage, error) {
@@ -694,7 +695,7 @@ func pluginValidateCStringForTest(plugin Plugin, raw json.RawMessage) *C.char {
 		setLastErrorMessage(err.Error())
 		return nil
 	}
-	return C.CString(string(payload))
+	return relayCallbackString(string(payload))
 }
 
 func pluginRegisterStatusForTest(plugin Plugin, raw json.RawMessage, ctx *PluginContext) C.int32_t {
@@ -730,7 +731,7 @@ func goToolSanitizeTrampoline(userData unsafe.Pointer, name *C.char, argsJSON *C
 	goName := C.GoString(name)
 	goArgs := json.RawMessage(C.GoString(argsJSON))
 	result := fn(goName, goArgs)
-	return C.CString(string(result))
+	return relayCallbackString(string(result))
 }
 
 //export goToolConditionalTrampoline
@@ -743,7 +744,7 @@ func goToolConditionalTrampoline(userData unsafe.Pointer, name *C.char, argsJSON
 	if result == nil {
 		return nil
 	}
-	return C.CString(*result)
+	return relayCallbackString(*result)
 }
 
 //export goConditionalMiddlewareGuardrailTrampoline
@@ -759,7 +760,7 @@ func goConditionalMiddlewareGuardrailTrampoline(userData unsafe.Pointer, kindsJS
 	if reason == nil {
 		return nil
 	}
-	return C.CString(*reason)
+	return relayCallbackString(*reason)
 }
 
 //export goToolExecTrampoline
@@ -778,7 +779,7 @@ func goToolExecTrampoline(userData unsafe.Pointer, argsJSON *C.char) (cResult *C
 		setLastErrorMessage(err.Error())
 		return nil
 	}
-	return C.CString(string(resultJSON))
+	return relayCallbackString(string(resultJSON))
 }
 
 func logSubscriberPanic() {
@@ -812,7 +813,7 @@ func goEventMetadataInjectorTrampoline(userData unsafe.Pointer, event *C.FfiEven
 		setLastErrorMessage(err.Error())
 		return nil
 	}
-	return C.CString(string(result))
+	return relayCallbackString(string(result))
 }
 
 //export goEventSanitizeTrampoline
@@ -829,7 +830,7 @@ func goEventSanitizeTrampoline(userData unsafe.Pointer, event *C.FfiEvent, field
 		setLastErrorMessage(err.Error())
 		return nil
 	}
-	return C.CString(string(result))
+	return relayCallbackString(string(result))
 }
 
 //export goFreeTrampoline
@@ -910,7 +911,7 @@ func goLlmResponseTrampoline(userData unsafe.Pointer, responseJSON *C.char, cont
 	if omit {
 		return nil
 	}
-	return C.CString(string(sanitized))
+	return relayCallbackString(string(sanitized))
 }
 
 func llmSanitizeResponseContextFromC(
@@ -952,7 +953,7 @@ func goLlmConditionalTrampoline(userData unsafe.Pointer, request *C.FfiLLMReques
 	if result == nil {
 		return nil
 	}
-	return C.CString(*result)
+	return relayCallbackString(*result)
 }
 
 //export goStreamCollectorTrampoline
@@ -986,7 +987,7 @@ func goStreamFinalizerTrampoline(userData unsafe.Pointer) (cResult *C.char) {
 	if response == nil {
 		response = json.RawMessage(`null`)
 	}
-	return C.CString(string(response))
+	return relayCallbackString(string(response))
 }
 
 //export goLlmExecTrampoline
@@ -1000,7 +1001,7 @@ func goLlmExecTrampoline(userData unsafe.Pointer, nativeJSON *C.char) (cResult *
 		setLastErrorMessage(err.Error())
 		return nil
 	}
-	return C.CString(string(result))
+	return relayCallbackString(string(result))
 }
 
 //export goToolExecInterceptTrampoline
@@ -1036,7 +1037,7 @@ func goToolExecInterceptTrampoline(userData unsafe.Pointer, contextJSON *C.char,
 		setLastErrorMessage(err.Error())
 		return nil
 	}
-	return C.CString(string(outcomeJSON))
+	return relayCallbackString(string(outcomeJSON))
 }
 
 //export goLlmExecInterceptTrampoline
@@ -1074,7 +1075,7 @@ func goLlmExecInterceptTrampoline(userData unsafe.Pointer, name *C.char, nativeJ
 		setLastErrorMessage(err.Error())
 		return nil
 	}
-	return C.CString(string(result))
+	return relayCallbackString(string(result))
 }
 
 //export goCodecDecodeTrampoline
@@ -1126,7 +1127,7 @@ func goLlmRequestInterceptTrampoline(
 		setLastErrorMessage(err.Error())
 		return 5
 	}
-	*outOutcomeJSON = C.CString(string(outcomeJSON))
+	*outOutcomeJSON = relayCallbackString(string(outcomeJSON))
 	return 0 // NemoRelayStatus::Ok
 }
 
@@ -1196,7 +1197,7 @@ func goCodecResponseDecodeTrampoline(userData unsafe.Pointer, response *C.char) 
 		setLastErrorMessage(err.Error())
 		return nil
 	}
-	return C.CString(string(value))
+	return relayCallbackString(string(value))
 }
 
 //export goLlmStreamExecTrampoline
@@ -1422,4 +1423,11 @@ func (s *continuationSource) Close() error {
 		return nil
 	}
 	return s.LLMStreamSource.Close()
+}
+
+// relayCallbackString allocates result strings with the native library's allocator.
+func relayCallbackString(value string) *C.char {
+	input := C.CString(value)
+	defer C.free(unsafe.Pointer(input))
+	return C.nemo_relay_string_clone(input)
 }

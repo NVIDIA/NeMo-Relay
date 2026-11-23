@@ -706,6 +706,7 @@ pub unsafe extern "C" fn nemo_relay_scope_register_llm_stream_execution_intercep
     exec_free: NemoRelayFreeFn,
 ) -> NemoRelayStatus {
     clear_last_error();
+    let data_owner = crate::callable::UserData::new(exec_user_data, exec_free);
     let uuid = match parse_scope_uuid(scope_uuid) {
         Ok(u) => u,
         Err(status) => return status,
@@ -714,6 +715,7 @@ pub unsafe extern "C" fn nemo_relay_scope_register_llm_stream_execution_intercep
         Ok(s) => s,
         Err(status) => return status,
     };
+    let (exec_user_data, exec_free) = data_owner.into_parts();
     let exec = match stream_cb {
         Some(callback) => crate::callable::wrap_llm_stream_source_intercept_fn(
             callback,

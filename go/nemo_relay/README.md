@@ -394,9 +394,9 @@ func main() {
 Native calls that return a status code report failures as `*RelayError`. This
 error includes the native code and message. Use these Go helpers to inspect it:
 
-- Use `errors.Is(err, nemo.ErrAlreadyExists)` to check a status.
-- Use `errors.As(err, &nativeError)` to read `Code` and `Message`.
-- Use `errors.Is(err, context.Canceled)` to check native cancellation.
+- Check a status with `errors.Is(err, nemo.ErrAlreadyExists)`.
+- Read `Code` and `Message` with `errors.As(err, &nativeError)`.
+- Check native cancellation with `errors.Is(err, context.Canceled)`.
 
 Pointer-returning C calls and stream iteration failures provide a message
 without a status code. These errors use `StatusUnknown` and match

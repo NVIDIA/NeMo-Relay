@@ -2,6 +2,8 @@
  *
  * Owned callbacks must follow their documented argument, result, and ownership
  * contracts. They can use supplied capabilities and emit observability events.
+ * They can also use helpers required by those contracts, such as allocating
+ * result strings and setting the last error.
  * Other Relay API calls are invalid. This includes managed calls, managed-stream
  * control, scope changes, registration outside a supplied plugin context,
  * and flush or shutdown operations.
@@ -206,7 +208,7 @@ typedef struct FfiAtofExporter FfiAtofExporter;
 
 /**
  * An owned, thread-safe cancellation signal. Calls clone it when they start.
- * cancelling it does not free it. Release with `nemo_relay_cancellation_free`.
+ * Cancelling it does not free it. Release with `nemo_relay_cancellation_free`.
  */
 typedef struct FfiCancellation FfiCancellation;
 
@@ -335,13 +337,15 @@ typedef struct FfiToolHandle FfiToolHandle;
 
 /**
  * Nullable version of [`NemoRelayCodecDecodeCb`] for use as an optional
- * parameter in FFI execute functions. Pass null to indicate no codec.
+ * parameter in FFI execute functions. Supply decode and encode together, or
+ * pass null for both. Use a request codec handle or this callback pair, never both.
  */
 typedef char *(*NemoRelayCodecDecodeFn)(void *user_data, const struct FfiLLMRequest *request);
 
 /**
  * Nullable version of [`NemoRelayCodecEncodeCb`] for use as an optional
- * parameter in FFI execute functions. Pass null to indicate no codec.
+ * parameter in FFI execute functions. Supply decode and encode together, or
+ * pass null for both. Use a request codec handle or this callback pair, never both.
  */
 typedef char *(*NemoRelayCodecEncodeFn)(void *user_data,
                                         const char *annotated_json,
@@ -624,7 +628,7 @@ typedef NemoRelayStatus (*NemoRelayPluginRegisterCb)(void *user_data,
 /**
  * Callback for tool request/response sanitization guardrails and intercepts.
  * Receives tool name and arguments as JSON, returns sanitized arguments as JSON.
- * The returned string must be allocated with `malloc` or equivalent.
+ * Allocate the returned string with `nemo_relay_string_clone`.
  */
 typedef char *(*NemoRelayToolSanitizeCb)(void *user_data, const char *name, const char *args_json);
 
@@ -655,8 +659,8 @@ typedef char *(*NemoRelayToolExecNextFn)(const char *args_json, void *next_ctx);
  * `pending_marks` are Relay-owned lifecycle metadata emitted after the
  * tool-end event and are not included in the application-visible result.
  * The returned JSON must contain a `result` field and may contain `annotation`
- * and `pending_marks` fields. The returned string must be allocated with `malloc`
- * or an equivalent allocation compatible with `nemo_relay_string_free`.
+ * and `pending_marks` fields. Allocate the returned string with
+ * `nemo_relay_string_clone`.
  * Ownership transfers to Relay when the callback returns; the callback must
  * not free or reuse the string afterward, and Relay frees it exactly once.
  * Tool execution intercept callback receiving the full call context.
@@ -774,7 +778,8 @@ typedef struct NemoRelayMetricMeasurement {
 } NemoRelayMetricMeasurement;
 
 /**
- * Nullable version of [`NemoRelayStreamReadFn`]. Pass null to omit this callback.
+ * Nullable C representation of [`NemoRelayStreamReadFn`].
+ * `nemo_relay_stream_source_create` requires a non-null read callback.
  */
 typedef int32_t (*NemoRelayOptionalStreamReadFn)(void*, char**);
 
@@ -791,8 +796,8 @@ typedef NemoRelayStatus (*NemoRelayOptionalStreamCloseFn)(void*);
 /**
  * Callback for tool execution (default callable). Receives arguments as JSON
  * and returns a serialized `ToolExecutionResult` with required `result` and
- * optional `annotation` fields. The returned string must be allocated with
- * `malloc` or equivalent.
+ * optional `annotation` fields. Allocate the returned string with
+ * `nemo_relay_string_clone`.
  */
 typedef char *(*NemoRelayToolExecCb)(void *user_data, const char *args_json);
 
@@ -2312,7 +2317,7 @@ NemoRelayStatus nemo_relay_otel_metric_subscriber_shutdown(const struct FfiOpenT
  * optional file paths: `certificate`, `client_certificate`, and `private_key`.
  * Set the client certificate and private key together.
  * `otel_type` is `full`, `gen_ai`, or `openinference`. For network export,
- * `endpoint` is required. Set `transport` to `grpc`, `http_binary`, or `http_json`.
+ * `endpoint` is required. Set `transport` to `grpc` or `http_binary`.
  * Header and resource maps are JSON objects with string values. `header_env_json`
  * maps header names to environment variable names.
  * `mark_projection` is `inherit`, `event`, or `tool`. Exclusions and promotion
@@ -2739,7 +2744,7 @@ NemoRelayStatus nemo_relay_plugin_context_register_llm_execution_intercept(struc
 NemoRelayStatus nemo_relay_plugin_context_register_llm_stream_execution_intercept(struct FfiPluginContext *ctx,
                                                                                   const char *name,
                                                                                   int32_t priority,
-                                                                                  NemoRelayOptionalLlmExecInterceptCb cb,
+                                                                                  NemoRelayOptionalLlmExecInterceptCb exec_cb,
                                                                                   NemoRelayOptionalLlmStreamExecInterceptCb stream_cb,
                                                                                   void *user_data,
                                                                                   NemoRelayFreeFn free_fn);
@@ -3661,6 +3666,16 @@ NemoRelayStatus nemo_relay_register_tool_execution_intercept(const char *name,
 NemoRelayStatus nemo_relay_deregister_tool_execution_intercept(const char *name);
 
 /**
+ * Copy a C string into Relay-owned storage for a callback result.
+ * Free the result with `nemo_relay_string_free`, or transfer it to Relay.
+ * Returns null for null input.
+ *
+ * # Safety
+ * `value` must be null or a valid NUL-terminated C string for this call.
+ */
+char *nemo_relay_string_clone(const char *value);
+
+/**
  * Free a C string previously returned by any `nemo_relay_*` accessor function.
  * Passing null is a safe no-op.
  *
@@ -3815,7 +3830,8 @@ void nemo_relay_plugin_host_activation_free(struct FfiPluginHostActivation **ptr
  * Free a codec handle previously returned by `nemo_relay_codec_new`.
  *
  * # Safety
- * `handle` must be a valid pointer returned by `nemo_relay_codec_new`, or null. Double-free is undefined behavior.
+ * `handle` must be an owned pointer returned by `nemo_relay_codec_new` or
+ * `nemo_relay_codec_clone`, or null. Double-free is undefined behavior.
  */
 void nemo_relay_codec_free(struct FfiCodecHandle *handle);
 

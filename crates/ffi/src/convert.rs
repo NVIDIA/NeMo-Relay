@@ -90,6 +90,20 @@ pub fn c_str_to_string(ptr: *const c_char) -> Result<String, NemoRelayStatus> {
         })
 }
 
+/// Copy a C string into Relay-owned storage for a callback result.
+/// Free the result with `nemo_relay_string_free`, or transfer it to Relay.
+/// Returns null for null input.
+///
+/// # Safety
+/// `value` must be null or a valid NUL-terminated C string for this call.
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn nemo_relay_string_clone(value: *const c_char) -> *mut c_char {
+    if value.is_null() {
+        return ptr::null_mut();
+    }
+    unsafe { CStr::from_ptr(value) }.to_owned().into_raw()
+}
+
 /// Free a C string previously returned by any `nemo_relay_*` accessor function.
 /// Passing null is a safe no-op.
 ///

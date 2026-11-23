@@ -165,3 +165,65 @@ func TestStreamAdapterJoinsInterceptorAndCleanupErrors(t *testing.T) {
 		t.Fatalf("source closed %d times", source.closed.Load())
 	}
 }
+
+func TestDeferredContinuationKeepsExitedChildScope(t *testing.T) {
+	runWithTestScopeStack(t, func() {
+		owner, err := PushScope("deferred-owner", ScopeTypeAgent)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if err := ScopeRegisterMarkSanitizeGuardrail(owner.UUID(), "deferred-sanitizer", 0, func(event Event, fields EventSanitizeFields) EventSanitizeFields {
+			if event.Name() == "deferred-open-mark" {
+				fields.Data = json.RawMessage(`{"redacted":true}`)
+			}
+			return fields
+		}); err != nil {
+			t.Fatal(err)
+		}
+		var mu sync.Mutex
+		var mark Event
+		if err := RegisterSubscriber("deferred-scope-events", func(event Event) {
+			if event.Name() == "deferred-open-mark" {
+				mu.Lock()
+				mark = event
+				mu.Unlock()
+			}
+		}); err != nil {
+			t.Fatal(err)
+		}
+		defer DeregisterSubscriber("deferred-scope-events")
+		if err := RegisterLlmStreamExecutionIntercept("deferred-scope", 0, func(request json.RawMessage, _ LLMExecutionContext, next func(json.RawMessage) (LLMStreamSource, error)) (LLMStreamSource, error) {
+			return &lazyOpenSource{request: request, open: next}, nil
+		}); err != nil {
+			t.Fatal(err)
+		}
+		defer DeregisterLlmStreamExecutionIntercept("deferred-scope")
+		stream, err := LlmStreamCallExecute("deferred-scope", requestForTest(makeRequest()), func(context.Context, json.RawMessage) (LLMStreamSource, error) {
+			if err := EmitEvent("deferred-open-mark", WithEventData(json.RawMessage(`{"private":true}`))); err != nil {
+				return nil, err
+			}
+			return &contractSource{chunks: []json.RawMessage{json.RawMessage(`1`)}}, nil
+		}, nil, nil)
+		if err != nil {
+			t.Fatal(err)
+		}
+		defer stream.Close()
+		if err := PopScope(owner); err != nil {
+			t.Fatal(err)
+		}
+		if _, err := stream.Next(); err != nil {
+			t.Fatal(err)
+		}
+		if err := stream.Close(); err != nil {
+			t.Fatal(err)
+		}
+		if err := FlushSubscribers(); err != nil {
+			t.Fatal(err)
+		}
+		mu.Lock()
+		defer mu.Unlock()
+		if string(mark.Data()) != `{"redacted":true}` {
+			t.Fatalf("captured scope sanitizer lost: %s", mark.Data())
+		}
+	})
+}

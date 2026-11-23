@@ -435,3 +435,81 @@ fn source_cleanup_failure_survives_cancellation_and_repeated_close() {
     assert_eq!(closed.load(Ordering::SeqCst), 1);
     assert_eq!(freed.load(Ordering::SeqCst), 1);
 }
+
+#[test]
+fn invalid_stream_registrations_release_callback_state() {
+    unsafe extern "C" fn count_free(data: *mut libc::c_void) {
+        unsafe { &*(data as *const AtomicUsize) }.fetch_add(1, Ordering::SeqCst);
+    }
+    unsafe extern "C" fn source_intercept(
+        _: *mut libc::c_void,
+        _: *const c_char,
+        _: *const c_char,
+        _: NemoRelayLlmExecutionContext,
+        _: NemoRelayLlmStreamExecNextFn,
+        _: *mut libc::c_void,
+    ) -> *mut FfiLlmStreamSource {
+        ptr::null_mut()
+    }
+    let invalid_utf8 = [0xff_u8, 0];
+    for stream_callback in [
+        None,
+        Some(source_intercept as NemoRelayLlmStreamExecInterceptCb),
+    ] {
+        let freed = AtomicUsize::new(0);
+        let data = (&freed as *const AtomicUsize).cast_mut().cast();
+        unsafe {
+            assert_eq!(
+                nemo_relay_register_llm_stream_execution_intercept(
+                    invalid_utf8.as_ptr().cast(),
+                    0,
+                    None,
+                    stream_callback,
+                    data,
+                    Some(count_free)
+                ),
+                NemoRelayStatus::InvalidUtf8
+            );
+            assert_eq!(freed.load(Ordering::SeqCst), 1);
+            assert_eq!(
+                nemo_relay_scope_register_llm_stream_execution_intercept(
+                    c"not-a-uuid".as_ptr(),
+                    c"name".as_ptr(),
+                    0,
+                    None,
+                    stream_callback,
+                    data,
+                    Some(count_free)
+                ),
+                NemoRelayStatus::InvalidArg
+            );
+            assert_eq!(freed.load(Ordering::SeqCst), 2);
+            assert_eq!(
+                nemo_relay_scope_register_llm_stream_execution_intercept(
+                    c"00000000-0000-0000-0000-000000000000".as_ptr(),
+                    invalid_utf8.as_ptr().cast(),
+                    0,
+                    None,
+                    stream_callback,
+                    data,
+                    Some(count_free)
+                ),
+                NemoRelayStatus::InvalidUtf8
+            );
+            assert_eq!(freed.load(Ordering::SeqCst), 3);
+            assert_eq!(
+                nemo_relay_plugin_context_register_llm_stream_execution_intercept(
+                    ptr::null_mut(),
+                    c"name".as_ptr(),
+                    0,
+                    None,
+                    stream_callback,
+                    data,
+                    Some(count_free)
+                ),
+                NemoRelayStatus::NullPointer
+            );
+            assert_eq!(freed.load(Ordering::SeqCst), 4);
+        }
+    }
+}

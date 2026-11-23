@@ -313,10 +313,12 @@ pub unsafe extern "C" fn nemo_relay_register_llm_stream_execution_intercept(
     exec_free: NemoRelayFreeFn,
 ) -> NemoRelayStatus {
     clear_last_error();
+    let data_owner = crate::callable::UserData::new(exec_user_data, exec_free);
     let name = match c_str_to_string(name) {
         Ok(s) => s,
         Err(status) => return status,
     };
+    let (exec_user_data, exec_free) = data_owner.into_parts();
     let exec = match stream_cb {
         Some(callback) => crate::callable::wrap_llm_stream_source_intercept_fn(
             callback,

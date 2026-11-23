@@ -59,7 +59,7 @@ pub type NemoRelayFreeFn = Option<unsafe extern "C" fn(user_data: *mut libc::c_v
 
 /// Callback for tool request/response sanitization guardrails and intercepts.
 /// Receives tool name and arguments as JSON, returns sanitized arguments as JSON.
-/// The returned string must be allocated with `malloc` or equivalent.
+/// Allocate the returned string with `nemo_relay_string_clone`.
 pub type NemoRelayToolSanitizeCb = unsafe extern "C" fn(
     user_data: *mut libc::c_void,
     name: *const c_char,
@@ -120,8 +120,8 @@ pub fn wrap_conditional_middleware_guardrail_fn(
 
 /// Callback for tool execution (default callable). Receives arguments as JSON
 /// and returns a serialized `ToolExecutionResult` with required `result` and
-/// optional `annotation` fields. The returned string must be allocated with
-/// `malloc` or equivalent.
+/// optional `annotation` fields. Allocate the returned string with
+/// `nemo_relay_string_clone`.
 pub type NemoRelayToolExecCb =
     unsafe extern "C" fn(user_data: *mut libc::c_void, args_json: *const c_char) -> *mut c_char;
 
@@ -143,8 +143,8 @@ pub type NemoRelayToolExecNextFn =
 /// `pending_marks` are Relay-owned lifecycle metadata emitted after the
 /// tool-end event and are not included in the application-visible result.
 /// The returned JSON must contain a `result` field and may contain `annotation`
-/// and `pending_marks` fields. The returned string must be allocated with `malloc`
-/// or an equivalent allocation compatible with `nemo_relay_string_free`.
+/// and `pending_marks` fields. Allocate the returned string with
+/// `nemo_relay_string_clone`.
 /// Ownership transfers to Relay when the callback returns; the callback must
 /// not free or reuse the string afterward, and Relay frees it exactly once.
 /// Tool execution intercept callback receiving the full call context.
@@ -327,7 +327,8 @@ pub type NemoRelayCodecDecodeCb = unsafe extern "C" fn(
 ) -> *mut c_char;
 
 /// Nullable version of [`NemoRelayCodecDecodeCb`] for use as an optional
-/// parameter in FFI execute functions. Pass null to indicate no codec.
+/// parameter in FFI execute functions. Supply decode and encode together, or
+/// pass null for both. Use a request codec handle or this callback pair, never both.
 pub type NemoRelayCodecDecodeFn = Option<
     unsafe extern "C" fn(
         user_data: *mut libc::c_void,
@@ -346,7 +347,8 @@ pub type NemoRelayCodecEncodeCb = unsafe extern "C" fn(
 ) -> *mut c_char;
 
 /// Nullable version of [`NemoRelayCodecEncodeCb`] for use as an optional
-/// parameter in FFI execute functions. Pass null to indicate no codec.
+/// parameter in FFI execute functions. Supply decode and encode together, or
+/// pass null for both. Use a request codec handle or this callback pair, never both.
 pub type NemoRelayCodecEncodeFn = Option<
     unsafe extern "C" fn(
         user_data: *mut libc::c_void,
@@ -388,8 +390,8 @@ pub type NemoRelayOptionalCollectorCb =
 
 /// Callback for finalizing a collected stream. Invoked once when the stream is
 /// exhausted or closed early. Must return a JSON C string representing the
-/// aggregated response. The returned string must be allocated with `malloc` or
-/// equivalent; the runtime will free it.
+/// aggregated response. Allocate the returned string with `nemo_relay_string_clone`.
+/// The runtime frees the result.
 pub type NemoRelayFinalizerCb = unsafe extern "C" fn(user_data: *mut libc::c_void) -> *mut c_char;
 
 /// Nullable version of [`NemoRelayFinalizerCb`]. Pass null to omit this callback.
@@ -426,9 +428,18 @@ pub type NemoRelayPluginRegisterCb = unsafe extern "C" fn(
 
 /// RAII wrapper around a C user-data pointer and its associated free function.
 /// Ensures the free function is called exactly once when dropped.
-struct UserData {
+pub(crate) struct UserData {
     ptr: *mut libc::c_void,
     free_fn: NemoRelayFreeFn,
+}
+
+impl UserData {
+    pub(crate) fn new(ptr: *mut libc::c_void, free_fn: NemoRelayFreeFn) -> Self {
+        Self { ptr, free_fn }
+    }
+    pub(crate) fn into_parts(mut self) -> (*mut libc::c_void, NemoRelayFreeFn) {
+        (self.ptr, self.free_fn.take())
+    }
 }
 
 unsafe impl Send for UserData {}

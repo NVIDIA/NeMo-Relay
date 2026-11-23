@@ -319,7 +319,11 @@ func goSourceReadTrampoline(data unsafe.Pointer, output **C.char) (status C.int3
 		setLastErrorMessage(err.Error())
 		return -1
 	}
-	*output = C.CString(string(value))
+	if !json.Valid(value) {
+		setLastErrorMessage("stream source returned invalid JSON")
+		return -1
+	}
+	*output = relayCallbackString(string(value))
 	return 1
 }
 

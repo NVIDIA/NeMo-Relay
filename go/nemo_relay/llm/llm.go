@@ -8,7 +8,11 @@
 //
 // Example usage:
 //
-//	import "github.com/NVIDIA/NeMo-Relay/go/nemo_relay/llm"
+//	import (
+//	    "encoding/json"
+//	    "github.com/NVIDIA/NeMo-Relay/go/nemo_relay"
+//	    "github.com/NVIDIA/NeMo-Relay/go/nemo_relay/llm"
+//	)
 //
 //	native := nemo_relay.LLMRequest{
 //	    Headers: json.RawMessage(`{}`),
@@ -58,7 +62,8 @@ func Execute(name string, native nemo_relay.LLMRequest, fn nemo_relay.LLMExecuti
 //
 // The collector callback is invoked with each intercepted chunk JSON for
 // accumulation. The finalizer callback is invoked once when the stream is
-// exhausted and returns aggregated JSON plus an error.
+// exhausted or closed early. It returns the complete or partial response JSON
+// plus an error. Check Close for finalizer errors after an early close.
 // Pass nil for either to use the default no-op behavior.
 func StreamExecute(name string, native nemo_relay.LLMRequest, fn nemo_relay.LLMStreamExecutionFunc, collector nemo_relay.CollectorFunc, finalizer nemo_relay.FinalizerFunc, opts ...nemo_relay.LLMCallOption) (*nemo_relay.LlmStream, error) {
 	return nemo_relay.LlmStreamCallExecute(name, native, fn, collector, finalizer, opts...)

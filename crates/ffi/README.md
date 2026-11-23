@@ -200,19 +200,12 @@ The following C example registers application-wide metadata injection:
 ```c
 #include <stdio.h>
 #include <stdlib.h>
-#include <string.h>
 
 static char *inject_metadata(void *user_data, const FfiEvent *event) {
     (void)user_data;
     (void)event;
     const char payload[] = "{\"application.region\":\"us-central\"}";
-    char *result = malloc(sizeof(payload));
-    if (result == NULL) {
-        nemo_relay_set_last_error_message("failed to allocate injector result");
-        return NULL;
-    }
-    memcpy(result, payload, sizeof(payload));
-    return result;
+    return nemo_relay_string_clone(payload);
 }
 
 NemoRelayStatus status = nemo_relay_register_event_metadata_injector(
@@ -429,6 +422,10 @@ The recorder stays valid after its original handle is freed. Ending the LLM call
 ends recording. Later records return success with `accepted = false`.
 
 ## Callback Ownership and Cleanup
+
+Allocate callback result strings with `nemo_relay_string_clone`. Relay frees
+these strings after use. Callbacks can use this helper and the error helpers
+required by their contracts.
 
 Stream-source cancel and close callbacks restore the scope and trace context
 from source creation. This also applies on blocking workers and before the first

@@ -560,7 +560,7 @@ pub unsafe extern "C" fn nemo_relay_llm_call_execute(
     let default_fn: LlmExecutionNextFn = Arc::new(move |request| exec_fn(request));
 
     let cancellation = unsafe { cancellation.as_ref() }.cloned();
-    let signal = cancellation.clone();
+    let signal = cancellation;
     let result = super::block_on(async move {
         super::cancellation::run(signal, async move {
             core_llm_api::llm_call_execute(
@@ -583,13 +583,14 @@ pub unsafe extern "C" fn nemo_relay_llm_call_execute(
         .await
     });
 
-    if cancellation
-        .as_ref()
-        .is_some_and(|signal| *signal.0.borrow())
-    {
-        set_last_error("execution cancelled");
-        return NemoRelayStatus::Cancelled;
-    }
+    let result = match result {
+        Ok(super::cancellation::Outcome::Completed(value)) => Ok(value),
+        Err(error) => Err(error),
+        Ok(super::cancellation::Outcome::Cancelled) => {
+            set_last_error("execution cancelled");
+            return NemoRelayStatus::Cancelled;
+        }
+    };
     match result {
         Ok(json) => {
             unsafe { *out = json_to_c_string(&json) };
@@ -839,7 +840,7 @@ pub unsafe extern "C" fn nemo_relay_llm_stream_call_execute(
     let forwarding_context =
         nemo_relay_runtime::api::runtime::MiddlewareContinuationContext::capture();
     let cancellation = unsafe { cancellation.as_ref() }.cloned();
-    let signal = cancellation.clone();
+    let signal = cancellation;
     let result = super::block_on(super::stream_source::STREAM_CALLBACK_STATE.scope(
         callbacks.clone(),
         async move {
@@ -867,13 +868,14 @@ pub unsafe extern "C" fn nemo_relay_llm_stream_call_execute(
         },
     ));
 
-    if cancellation
-        .as_ref()
-        .is_some_and(|signal| *signal.0.borrow())
-    {
-        set_last_error("execution cancelled");
-        return NemoRelayStatus::Cancelled;
-    }
+    let result = match result {
+        Ok(super::cancellation::Outcome::Completed(value)) => Ok(value),
+        Err(error) => Err(error),
+        Ok(super::cancellation::Outcome::Cancelled) => {
+            set_last_error("execution cancelled");
+            return NemoRelayStatus::Cancelled;
+        }
+    };
     match result {
         Ok(rust_stream) => {
             let (tx, rx) = tokio::sync::mpsc::channel(32);

@@ -29,7 +29,8 @@ use tokio_stream::{Stream, StreamExt};
 /// Set the last error before returning -1. Only one read runs at a time.
 pub type NemoRelayStreamReadFn = unsafe extern "C" fn(*mut c_void, *mut *mut c_char) -> i32;
 
-/// Nullable version of [`NemoRelayStreamReadFn`]. Pass null to omit this callback.
+/// Nullable C representation of [`NemoRelayStreamReadFn`].
+/// `nemo_relay_stream_source_create` requires a non-null read callback.
 pub type NemoRelayOptionalStreamReadFn =
     Option<unsafe extern "C" fn(*mut c_void, *mut *mut c_char) -> i32>;
 /// Signal cancellation promptly. This can run during a read and must unblock it.
@@ -442,7 +443,9 @@ impl FfiLlmStreamContinuation {
         use nemo_relay_runtime::api::runtime::scope_stack::{
             active_event_trace_context, active_event_uuid, with_active_event_trace_context,
         };
-        let stack = entry_scope_stack();
+        let stack = nemo_relay_runtime::api::runtime::scope_stack::snapshot_scope_stack(
+            &entry_scope_stack(),
+        );
         let event = active_event_uuid();
         let trace = active_event_trace_context();
         let callbacks = STREAM_CALLBACK_STATE
@@ -456,6 +459,7 @@ impl FfiLlmStreamContinuation {
                 let stack = stack.clone();
                 let trace = trace.clone();
                 Box::pin(async move {
+                    let stack = stack?;
                     nemo_relay_runtime::api::runtime::TASK_SCOPE_STACK
                         .scope(
                             stack,

@@ -503,7 +503,8 @@ pub unsafe extern "C" fn nemo_relay_plugin_host_activation_free(
 /// Free a codec handle previously returned by `nemo_relay_codec_new`.
 ///
 /// # Safety
-/// `handle` must be a valid pointer returned by `nemo_relay_codec_new`, or null. Double-free is undefined behavior.
+/// `handle` must be an owned pointer returned by `nemo_relay_codec_new` or
+/// `nemo_relay_codec_clone`, or null. Double-free is undefined behavior.
 #[unsafe(no_mangle)]
 pub unsafe extern "C" fn nemo_relay_codec_free(handle: *mut FfiCodecHandle) {
     if !handle.is_null() {

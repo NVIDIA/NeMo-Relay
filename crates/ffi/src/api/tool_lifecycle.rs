@@ -287,7 +287,7 @@ pub unsafe extern "C" fn nemo_relay_tool_call_execute(
     let default_fn: ToolExecutionNextFn = Arc::new(move |args| exec_fn(args));
 
     let cancellation = unsafe { cancellation.as_ref() }.cloned();
-    let signal = cancellation.clone();
+    let signal = cancellation;
     let result = super::block_on(async move {
         super::cancellation::run(signal, async move {
             core_tool_api::tool_call_execute(
@@ -308,13 +308,14 @@ pub unsafe extern "C" fn nemo_relay_tool_call_execute(
         .await
     });
 
-    if cancellation
-        .as_ref()
-        .is_some_and(|signal| *signal.0.borrow())
-    {
-        set_last_error("execution cancelled");
-        return NemoRelayStatus::Cancelled;
-    }
+    let result = match result {
+        Ok(super::cancellation::Outcome::Completed(value)) => Ok(value),
+        Err(error) => Err(error),
+        Ok(super::cancellation::Outcome::Cancelled) => {
+            set_last_error("execution cancelled");
+            return NemoRelayStatus::Cancelled;
+        }
+    };
     match result {
         Ok(execution_result) => match serde_json::to_value(execution_result) {
             Ok(json) => {

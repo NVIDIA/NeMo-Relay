@@ -1449,7 +1449,7 @@ pub unsafe extern "C" fn nemo_relay_otel_metric_subscriber_shutdown(
 /// optional file paths: `certificate`, `client_certificate`, and `private_key`.
 /// Set the client certificate and private key together.
 /// `otel_type` is `full`, `gen_ai`, or `openinference`. For network export,
-/// `endpoint` is required. Set `transport` to `grpc`, `http_binary`, or `http_json`.
+/// `endpoint` is required. Set `transport` to `grpc` or `http_binary`.
 /// Header and resource maps are JSON objects with string values. `header_env_json`
 /// maps header names to environment variable names.
 /// `mark_projection` is `inherit`, `event`, or `tool`. Exclusions and promotion

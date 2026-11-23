@@ -253,6 +253,7 @@ func (s *LlmStream) NextContext(ctx context.Context) (json.RawMessage, error) {
 		return nil, errors.New("context is nil")
 	}
 	if err := ctx.Err(); err != nil {
+		_ = s.Close()
 		return nil, err
 	}
 	stop := context.AfterFunc(ctx, func() { _ = s.Close() })
