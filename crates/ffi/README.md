@@ -403,16 +403,21 @@ Null JSON pointers omit the matching agent fields.
 
 ## Callback Error Causes
 
-Language bindings can attach an opaque ID to a callback failure:
+Language bindings can attach opaque IDs to a callback failure:
 
 - Set the message with `nemo_relay_set_last_error_message`.
-- Set a nonzero ID with `nemo_relay_set_last_error_cause_id` on the same thread.
-- Read `nemo_relay_last_error_cause_id` with the returned error message on the
-  calling thread. Zero means the error has no callback ID.
+- Pass an array of nonzero IDs and its length to
+  `nemo_relay_set_last_error_cause_ids` on the same thread. Relay copies the array.
+  Pass a length of zero to clear the IDs.
+- Call `nemo_relay_last_error_cause_ids` with a pointer to the output count.
+  Read the IDs with the error message on the calling thread. An empty list
+  returns null and sets the count to zero.
 
-The binding owns the data behind each ID. Relay carries the ID with the selected
-failure across worker threads. Setting or clearing the error message clears the
-ID. These helpers do not change the error text.
+The returned array is borrowed. Do not free it. Copy it before changing the
+error message or cause IDs. The binding owns the data behind each ID. Relay
+carries every selected cause across worker threads, including combined stream
+cleanup failures. Setting or clearing the error message clears the IDs. These
+helpers do not change the error text.
 
 ## Requests and Handle Fields
 

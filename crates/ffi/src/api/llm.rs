@@ -607,14 +607,14 @@ pub unsafe extern "C" fn nemo_relay_llm_call_execute(
 #[derive(Clone)]
 pub(crate) struct StreamCloseError {
     message: String,
-    cause_id: u64,
+    cause_ids: Vec<u64>,
 }
 
 impl From<nemo_relay_types::error::FlowError> for StreamCloseError {
     fn from(error: nemo_relay_types::error::FlowError) -> Self {
         Self {
             message: error.to_string(),
-            cause_id: crate::error::callback_cause_id(&error),
+            cause_ids: crate::error::callback_cause_ids(&error),
         }
     }
 }
@@ -958,7 +958,12 @@ pub unsafe extern "C" fn nemo_relay_stream_close(stream: *mut FfiStream) -> Nemo
         Ok(()) => NemoRelayStatus::Ok,
         Err(error) => {
             set_last_error(&error.message);
-            crate::error::nemo_relay_set_last_error_cause_id(error.cause_id);
+            unsafe {
+                crate::error::nemo_relay_set_last_error_cause_ids(
+                    error.cause_ids.as_ptr(),
+                    error.cause_ids.len(),
+                );
+            }
             NemoRelayStatus::Internal
         }
     }
@@ -976,7 +981,7 @@ async fn finish_close(stream: &FfiStream) -> Result<(), StreamCloseError> {
         .await
         .map_err(|_| StreamCloseError {
             message: "stream close task ended early".into(),
-            cause_id: 0,
+            cause_ids: Vec::new(),
         })?
         .clone()
         .expect("close state checked above");
@@ -988,13 +993,7 @@ async fn finish_close(stream: &FfiStream) -> Result<(), StreamCloseError> {
             undelivered.get_or_insert_with(|| StreamCloseError::from(error));
         }
     }
-    let finalizer_error = stream
-        .callbacks
-        .take_failure()
-        .map(|message| StreamCloseError {
-            message,
-            cause_id: 0,
-        });
+    let finalizer_error = stream.callbacks.take_failure().map(StreamCloseError::from);
     let result = combine_close_errors([undelivered, finalizer_error, cleanup.err()]);
     *close_result = Some(result.clone());
     result
@@ -1010,8 +1009,10 @@ fn combine_close_errors(errors: [Option<StreamCloseError>; 3]) -> Result<(), Str
             "{}; stream cleanup also failed: {}",
             acc.message, next.message
         );
-        if acc.cause_id == 0 {
-            acc.cause_id = next.cause_id;
+        for id in next.cause_ids {
+            if !acc.cause_ids.contains(&id) {
+                acc.cause_ids.push(id);
+            }
         }
         acc
     }))

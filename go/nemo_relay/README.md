@@ -409,8 +409,9 @@ chain. It includes the native code and message. Use these Go helpers to inspect 
 Pointer-returning C calls and stream iteration failures provide a message
 without a status code. These errors use `StatusUnknown` and match
 `ErrUnknownStatus`. Go validation can return other error types. Context-aware
-provider errors keep their Go error causes. Stream read and cleanup errors also
-keep their Go causes. Use `errors.Is` or `errors.As` to inspect them. Retries keep
+provider errors keep their Go error causes. Stream read, collector, finalizer,
+and cleanup errors also keep their Go causes. If `Close` combines failures,
+the returned error includes every selected cause. Use `errors.Is` or `errors.As` to inspect them. Retries keep
 the cause of the selected failure, even when several errors share a message.
 
 ## Requests and Handle Fields

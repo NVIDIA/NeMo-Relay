@@ -18,7 +18,7 @@ package nemo_relay
 
 /*
 #include <stdint.h>
-extern void nemo_relay_set_last_error_cause_id(uint64_t);
+extern void nemo_relay_set_last_error_cause_ids(const uint64_t*, uintptr_t);
 #include <stdbool.h>
 #include <stdlib.h>
 
@@ -153,7 +153,7 @@ func setCallbackError(err error) {
 	setLastErrorMessage(err.Error())
 	var failure *callbackFailure
 	if errors.As(err, &failure) {
-		C.nemo_relay_set_last_error_cause_id(C.uint64_t(failure.id))
+		C.nemo_relay_set_last_error_cause_ids((*C.uint64_t)(unsafe.Pointer(unsafe.SliceData(failure.ids))), C.uintptr_t(len(failure.ids)))
 	}
 }
 
@@ -987,7 +987,7 @@ func goStreamCollectorTrampoline(userData unsafe.Pointer, chunkJSON *C.char) (st
 		return nemoRelayStatusInternal
 	}
 	if err := callbacks.collector(json.RawMessage(C.GoString(chunkJSON))); err != nil {
-		setCallbackError(err)
+		setCallbackError(callbacks.providerErrors.record(err))
 		return nemoRelayStatusInternal
 	}
 	return 0
@@ -1003,7 +1003,7 @@ func goStreamFinalizerTrampoline(userData unsafe.Pointer) (cResult *C.char) {
 	}
 	response, err := callbacks.finalizer()
 	if err != nil {
-		setCallbackError(err)
+		setCallbackError(callbacks.providerErrors.record(err))
 		return nil
 	}
 	if response == nil {

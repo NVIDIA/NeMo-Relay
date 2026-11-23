@@ -925,7 +925,13 @@ fn assert_collector_and_finalizer_callbacks() {
         failure,
         "internal error: stream finalizer callback panicked: finalizer boom"
     );
-    assert_eq!(error.take_failure().as_deref(), Some(failure.as_str()));
+    assert_eq!(
+        error
+            .take_failure()
+            .map(|error| error.to_string())
+            .as_deref(),
+        Some(failure.as_str())
+    );
 
     let (mut collector, _, _) =
         wrap_stream_callbacks(Some(failing_collector_cb), None, std::ptr::null_mut(), None);

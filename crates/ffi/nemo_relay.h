@@ -3782,19 +3782,27 @@ const char *nemo_relay_last_error(void);
 void nemo_relay_set_last_error_message(const char *msg);
 
 /**
- * Read the opaque callback failure ID associated with the last error.
- * Zero means no callback failure ID is available. Read on the same thread
- * as `nemo_relay_last_error` before another FFI call clears the error.
+ * Read the opaque callback failure IDs associated with the last error.
+ * Writes the number of IDs to `out_count`. An empty list returns null.
+ * Read on the same thread as `nemo_relay_last_error`. The returned array is
+ * borrowed until the error message or cause IDs change. Do not free it.
+ *
+ * # Safety
+ * `out_count` must point to writable storage for one `uintptr_t`.
  */
-uint64_t nemo_relay_last_error_cause_id(void);
+const uint64_t *nemo_relay_last_error_cause_ids(uintptr_t *out_count);
 
 /**
- * Associate an opaque callback failure ID with the current last error.
+ * Copy opaque callback failure IDs into the current last error.
  * Call after `nemo_relay_set_last_error_message` on the same thread.
- * Relay carries the ID through the selected failure without changing its text.
- * Zero clears the ID. The binding owns the data identified by this value.
+ * Relay carries every selected ID without changing the error text.
+ * A count of zero clears the IDs. The binding owns the data behind each ID.
+ *
+ * # Safety
+ * `ids` must point to `count` readable `uint64_t` values for this call.
+ * It may be null when `count` is zero. IDs must be nonzero.
  */
-void nemo_relay_set_last_error_cause_id(uint64_t id);
+void nemo_relay_set_last_error_cause_ids(const uint64_t *ids, uintptr_t count);
 
 /**
  * Free a scope handle previously returned by the runtime.

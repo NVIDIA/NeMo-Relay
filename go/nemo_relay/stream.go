@@ -74,8 +74,9 @@ type LlmStream struct {
 }
 
 type streamCallbacks struct {
-	collector CollectorFunc
-	finalizer FinalizerFunc
+	providerErrors *providerErrorCapture
+	collector      CollectorFunc
+	finalizer      FinalizerFunc
 }
 
 func newLlmStream(ptr *C.FfiStream, callbacks *streamCallbacks, cancelProvider context.CancelFunc, sources *streamSources) *LlmStream {

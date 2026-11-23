@@ -457,6 +457,7 @@ func TestCodecOptionsAllowValidReplacement(t *testing.T) {
 		Encode: func(_, _, content json.RawMessage) (json.RawMessage, error) { return content, nil },
 	}
 	for name, options := range map[string][]LLMCallOption{
+		"request reset":     {WithLLMCodec(closed), WithLLMCodec(nil)},
 		"request handle":    {WithLLMCodec(closed), WithLLMCodec(valid)},
 		"request callbacks": {WithLLMCodec(closed), WithLLMCodec(custom)},
 		"response handle":   {WithLLMResponseCodec(closed), WithLLMResponseCodec(valid)},
@@ -482,5 +483,64 @@ func TestCodecOptionsAllowValidReplacement(t *testing.T) {
 				t.Fatal("replacement cleared another codec's error")
 			}
 		})
+	}
+}
+
+type signaledCloseSource struct {
+	contractSource
+	closeDone chan struct{}
+}
+
+func (source *signaledCloseSource) Close() error {
+	err := source.contractSource.Close()
+	close(source.closeDone)
+	return err
+}
+
+func TestStreamClosePreservesAllSelectedCauses(t *testing.T) {
+	readErr := errors.New("undelivered provider read")
+	cleanupErr := errors.New("provider cleanup")
+	finalizerErr := errors.New("finalizer failure")
+	var calls atomic.Int32
+	source := &signaledCloseSource{closeDone: make(chan struct{}), contractSource: contractSource{
+		next: func(context.Context) (json.RawMessage, error) {
+			if calls.Add(1) == 1 {
+				return json.RawMessage(`1`), nil
+			}
+			return nil, readErr
+		}, closeErr: cleanupErr,
+	}}
+	stream, err := LlmStreamCallExecute("combined-stream-errors", requestForTest(makeRequest()), func(context.Context, json.RawMessage) (LLMStreamSource, error) { return source, nil }, nil, func() (json.RawMessage, error) { return nil, finalizerErr })
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer stream.Close()
+	if _, err := stream.Next(); err != nil {
+		t.Fatal(err)
+	}
+	select {
+	case <-source.closeDone:
+	case <-time.After(5 * time.Second):
+		t.Fatal("provider did not finish before close")
+	}
+	for range 2 {
+		err := stream.Close()
+		for _, cause := range []error{readErr, cleanupErr, finalizerErr, ErrInternal} {
+			if !errors.Is(err, cause) {
+				t.Errorf("close lost %v: %v", cause, err)
+			}
+		}
+	}
+}
+
+func TestStreamClosePreservesFinalizerCause(t *testing.T) {
+	cause := errors.New("standalone finalizer failure")
+	stream, err := LlmStreamCallExecute("finalizer-cause", requestForTest(makeRequest()), func(context.Context, json.RawMessage) (LLMStreamSource, error) { return &contractSource{}, nil }, nil, func() (json.RawMessage, error) { return nil, cause })
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer stream.Close()
+	if err := stream.Close(); !errors.Is(err, cause) || !errors.Is(err, ErrInternal) {
+		t.Fatalf("close error = %v", err)
 	}
 }

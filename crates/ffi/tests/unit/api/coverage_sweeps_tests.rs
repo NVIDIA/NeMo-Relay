@@ -4401,20 +4401,25 @@ fn defaulted_file_names(directory: &std::path::Path, extension: &str) -> Vec<Str
 
 #[test]
 fn stream_close_reports_undelivered_error_once() {
+    let callback_error = |message: &str, ids: &[u64]| {
+        crate::error::set_last_error(message);
+        unsafe {
+            crate::error::nemo_relay_set_last_error_cause_ids(ids.as_ptr(), ids.len());
+        }
+        crate::error::last_error_as_flow_error("callback failed")
+    };
     let (tx, rx) = tokio::sync::mpsc::channel(4);
-    tx.blocking_send(Err(nemo_relay_types::error::FlowError::Internal(
-        "undelivered ffi stream failure".to_string(),
-    )))
-    .expect("expected error payload to be queued");
+    tx.blocking_send(Err(callback_error("undelivered ffi stream failure", &[1])))
+        .expect("expected error payload to be queued");
     drop(tx);
     let callbacks = std::sync::Arc::new(crate::callable::StreamCallbackState::default());
-    callbacks.record_failure("finalizer failed".to_string());
+    callbacks.record_failure(callback_error("finalizer failed", &[2]));
     let stream = Box::into_raw(Box::new(FfiStream {
         pending: std::sync::Mutex::new(None),
         receiver: tokio::sync::Mutex::new(rx),
         cancel: tokio::sync::watch::channel(false).0,
         closed: tokio::sync::watch::channel(Some(Err(
-            nemo_relay_types::error::FlowError::Internal("cleanup failed".into()).into(),
+            callback_error("cleanup failed", &[3]).into()
         )))
         .1,
         callbacks,
@@ -4423,14 +4428,20 @@ fn stream_close_reports_undelivered_error_once() {
 
     unsafe {
         assert_status!(nemo_relay_stream_close(stream), NemoRelayStatus::Internal);
+        let mut count = 0;
+        let ids = crate::error::nemo_relay_last_error_cause_ids(&mut count);
+        assert_eq!(std::slice::from_raw_parts(ids, count), &[1, 2, 3]);
         let message = CStr::from_ptr(nemo_relay_last_error())
             .to_string_lossy()
             .into_owned();
         assert_eq!(
             message,
-            "internal error: undelivered ffi stream failure; stream cleanup also failed: finalizer failed; stream cleanup also failed: internal error: cleanup failed"
+            "internal error: undelivered ffi stream failure; stream cleanup also failed: internal error: finalizer failed; stream cleanup also failed: internal error: cleanup failed"
         );
         assert_status!(nemo_relay_stream_close(stream), NemoRelayStatus::Internal);
+        let mut count = 0;
+        let ids = crate::error::nemo_relay_last_error_cause_ids(&mut count);
+        assert_eq!(std::slice::from_raw_parts(ids, count), &[1, 2, 3]);
         let repeated = CStr::from_ptr(nemo_relay_last_error())
             .to_string_lossy()
             .into_owned();

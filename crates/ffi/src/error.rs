@@ -10,7 +10,7 @@
 //! The error message remains valid until the next FFI call on that thread clears
 //! it via [`clear_last_error`].
 
-use std::cell::{Cell, RefCell};
+use std::cell::RefCell;
 use std::ffi::CStr;
 use std::ffi::CString;
 
@@ -53,12 +53,12 @@ pub enum NemoRelayStatus {
 
 thread_local! {
     static LAST_ERROR: RefCell<Option<CString>> = const { RefCell::new(None) };
-    static LAST_ERROR_CAUSE_ID: Cell<u64> = const { Cell::new(0) };
+    static LAST_ERROR_CAUSE_IDS: RefCell<Vec<u64>> = const { RefCell::new(Vec::new()) };
 }
 
 /// Store an error message in thread-local storage for later retrieval.
 pub fn set_last_error(msg: &str) {
-    LAST_ERROR_CAUSE_ID.set(0);
+    LAST_ERROR_CAUSE_IDS.with_borrow_mut(Vec::clear);
     LAST_ERROR.with(|cell| {
         *cell.borrow_mut() = CString::new(msg).ok();
     });
@@ -66,7 +66,7 @@ pub fn set_last_error(msg: &str) {
 
 /// Clear the thread-local last-error message.
 pub fn clear_last_error() {
-    LAST_ERROR_CAUSE_ID.set(0);
+    LAST_ERROR_CAUSE_IDS.with_borrow_mut(Vec::clear);
     LAST_ERROR.with(|cell| {
         *cell.borrow_mut() = None;
     });
@@ -132,42 +132,67 @@ impl From<&FlowError> for NemoRelayStatus {
     }
 }
 
-/// Read the opaque callback failure ID associated with the last error.
-/// Zero means no callback failure ID is available. Read on the same thread
-/// as `nemo_relay_last_error` before another FFI call clears the error.
+/// Read the opaque callback failure IDs associated with the last error.
+/// Writes the number of IDs to `out_count`. An empty list returns null.
+/// Read on the same thread as `nemo_relay_last_error`. The returned array is
+/// borrowed until the error message or cause IDs change. Do not free it.
+///
+/// # Safety
+/// `out_count` must point to writable storage for one `uintptr_t`.
 #[unsafe(no_mangle)]
-pub extern "C" fn nemo_relay_last_error_cause_id() -> u64 {
-    LAST_ERROR_CAUSE_ID.get()
+pub unsafe extern "C" fn nemo_relay_last_error_cause_ids(out_count: *mut usize) -> *const u64 {
+    if out_count.is_null() {
+        return std::ptr::null();
+    }
+    LAST_ERROR_CAUSE_IDS.with_borrow(|ids| {
+        unsafe {
+            *out_count = ids.len();
+        }
+        if ids.is_empty() {
+            std::ptr::null()
+        } else {
+            ids.as_ptr()
+        }
+    })
 }
 
-/// Associate an opaque callback failure ID with the current last error.
+/// Copy opaque callback failure IDs into the current last error.
 /// Call after `nemo_relay_set_last_error_message` on the same thread.
-/// Relay carries the ID through the selected failure without changing its text.
-/// Zero clears the ID. The binding owns the data identified by this value.
+/// Relay carries every selected ID without changing the error text.
+/// A count of zero clears the IDs. The binding owns the data behind each ID.
+///
+/// # Safety
+/// `ids` must point to `count` readable `uint64_t` values for this call.
+/// It may be null when `count` is zero. IDs must be nonzero.
 #[unsafe(no_mangle)]
-pub extern "C" fn nemo_relay_set_last_error_cause_id(id: u64) {
-    LAST_ERROR_CAUSE_ID.set(id);
+pub unsafe extern "C" fn nemo_relay_set_last_error_cause_ids(ids: *const u64, count: usize) {
+    let ids = if count == 0 {
+        Vec::new()
+    } else {
+        unsafe { std::slice::from_raw_parts(ids, count) }.to_vec()
+    };
+    LAST_ERROR_CAUSE_IDS.replace(ids);
 }
 
 #[derive(Debug)]
-struct CallbackCauseId(u64);
-impl std::fmt::Display for CallbackCauseId {
+struct CallbackCauseIds(Vec<u64>);
+impl std::fmt::Display for CallbackCauseIds {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         f.write_str("foreign callback failure")
     }
 }
-impl std::error::Error for CallbackCauseId {}
+impl std::error::Error for CallbackCauseIds {}
 
 pub(crate) fn last_error_as_flow_error(fallback: &str) -> FlowError {
     let message = last_error_message().unwrap_or_else(|| fallback.to_owned());
-    let id = LAST_ERROR_CAUSE_ID.get();
-    if id == 0 {
+    let ids = LAST_ERROR_CAUSE_IDS.with_borrow(Clone::clone);
+    if ids.is_empty() {
         return FlowError::Internal(message);
     }
     FlowError::CallbackException {
         message,
         exception_type: "ForeignCallbackError".into(),
-        source: Some(std::sync::Arc::new(CallbackCauseId(id))),
+        source: Some(std::sync::Arc::new(CallbackCauseIds(ids))),
     }
 }
 
@@ -175,20 +200,20 @@ pub(crate) fn last_error_as_flow_error(fallback: &str) -> FlowError {
 /// in thread-local storage.
 pub fn status_from_error(e: &FlowError) -> NemoRelayStatus {
     set_last_error(&e.to_string());
-    LAST_ERROR_CAUSE_ID.set(callback_cause_id(e));
+    LAST_ERROR_CAUSE_IDS.replace(callback_cause_ids(e));
     NemoRelayStatus::from(e)
 }
 
-pub(crate) fn callback_cause_id(error: &FlowError) -> u64 {
+pub(crate) fn callback_cause_ids(error: &FlowError) -> Vec<u64> {
     if let FlowError::CallbackException {
         source: Some(source),
         ..
     } = error
-        && let Some(cause) = source.downcast_ref::<CallbackCauseId>()
+        && let Some(cause) = source.downcast_ref::<CallbackCauseIds>()
     {
-        return cause.0;
+        return cause.0.clone();
     }
-    0
+    Vec::new()
 }
 
 /// Convert a `PluginError` to an `NemoRelayStatus`, storing the error message
@@ -213,29 +238,45 @@ mod tests;
 mod callback_cause_tests {
     use super::*;
 
+    fn cause_ids() -> Vec<u64> {
+        let mut count = 0;
+        let ids = unsafe { nemo_relay_last_error_cause_ids(&mut count) };
+        if count == 0 {
+            assert!(ids.is_null());
+            return Vec::new();
+        }
+        unsafe { std::slice::from_raw_parts(ids, count) }.to_vec()
+    }
+
     #[test]
     fn selected_callback_cause_survives_thread_hops_and_clears() {
         set_last_error("same message");
-        nemo_relay_set_last_error_cause_id(1);
+        unsafe {
+            nemo_relay_set_last_error_cause_ids([1].as_ptr(), 1);
+        }
         let first = last_error_as_flow_error("fallback");
         set_last_error("same message");
-        nemo_relay_set_last_error_cause_id(2);
+        unsafe {
+            nemo_relay_set_last_error_cause_ids([2, 3].as_ptr(), 2);
+        }
         let selected = last_error_as_flow_error("fallback");
         std::thread::spawn(move || {
-            assert_eq!(nemo_relay_last_error_cause_id(), 0);
+            assert!(cause_ids().is_empty());
             assert_eq!(status_from_error(&first), NemoRelayStatus::Internal);
-            assert_eq!(nemo_relay_last_error_cause_id(), 1);
+            assert_eq!(cause_ids(), [1]);
             assert_eq!(status_from_error(&selected), NemoRelayStatus::Internal);
-            assert_eq!(nemo_relay_last_error_cause_id(), 2);
+            assert_eq!(cause_ids(), [2, 3]);
             assert_eq!(
                 last_error_message().as_deref(),
                 Some("internal error: same message")
             );
             set_last_error("another error");
-            assert_eq!(nemo_relay_last_error_cause_id(), 0);
-            nemo_relay_set_last_error_cause_id(3);
+            assert!(cause_ids().is_empty());
+            unsafe {
+                nemo_relay_set_last_error_cause_ids([4].as_ptr(), 1);
+            }
             clear_last_error();
-            assert_eq!(nemo_relay_last_error_cause_id(), 0);
+            assert!(cause_ids().is_empty());
         })
         .join()
         .unwrap();

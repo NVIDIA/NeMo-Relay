@@ -118,12 +118,12 @@ func nativeExecutionError(ctx context.Context, err error) error {
 
 // Each callback failure has an ID so retries with the same message remain distinct.
 type callbackFailure struct {
-	id  uint64
-	err error
+	ids    []uint64
+	causes []error
 }
 
-func (failure *callbackFailure) Error() string { return failure.err.Error() }
-func (failure *callbackFailure) Unwrap() error { return failure.err }
+func (failure *callbackFailure) Error() string   { return failure.causes[0].Error() }
+func (failure *callbackFailure) Unwrap() []error { return failure.causes }
 
 var callbackFailureNextID atomic.Uint64
 
@@ -143,7 +143,7 @@ func (capture *providerErrorCapture) record(err error) error {
 		capture.causes = make(map[uint64]error)
 	}
 	capture.causes[id] = err
-	return &callbackFailure{id: id, err: err}
+	return &callbackFailure{ids: []uint64{id}, causes: []error{err}}
 }
 
 func (capture *providerErrorCapture) restore(err error) error {
@@ -156,8 +156,14 @@ func (capture *providerErrorCapture) restore(err error) error {
 	}
 	capture.mu.Lock()
 	defer capture.mu.Unlock()
-	if cause := capture.causes[failure.id]; cause != nil {
-		return errors.Join(err, cause)
+	causes := []error{err}
+	for _, id := range failure.ids {
+		if cause := capture.causes[id]; cause != nil {
+			causes = append(causes, cause)
+		}
 	}
-	return err
+	if len(causes) == 1 {
+		return err
+	}
+	return &callbackFailure{ids: failure.ids, causes: causes}
 }

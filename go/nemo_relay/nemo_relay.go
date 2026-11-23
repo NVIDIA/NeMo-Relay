@@ -31,7 +31,7 @@ package nemo_relay
 #cgo LDFLAGS: -L${SRCDIR}/../../target/release -L${SRCDIR}/../../target/debug -lnemo_relay_ffi
 #cgo windows LDFLAGS: -luserenv -lntdll -lws2_32 -ladvapi32 -lbcrypt
 #include <stdint.h>
-extern uint64_t nemo_relay_last_error_cause_id(void);
+extern const uint64_t* nemo_relay_last_error_cause_ids(uintptr_t*);
 #include <stdbool.h>
 #include <stdlib.h>
 
@@ -504,8 +504,10 @@ func nativeError(code StatusCode) error {
 		message = C.GoString(ptr)
 	}
 	err := &RelayError{Code: code, Message: message}
-	if id := uint64(C.nemo_relay_last_error_cause_id()); id != 0 {
-		return &callbackFailure{id: id, err: err}
+	var count C.uintptr_t
+	if ids := C.nemo_relay_last_error_cause_ids(&count); count != 0 {
+		copied := append([]uint64(nil), unsafe.Slice((*uint64)(unsafe.Pointer(ids)), int(count))...)
+		return &callbackFailure{ids: copied, causes: []error{err}}
 	}
 	return err
 }
@@ -1557,13 +1559,13 @@ func WithLLMModelName(name string) LLMCallOption {
 }
 
 // WithLLMCodec selects a built-in CodecHandle or custom CodecFunc for request
-// decoding on manual Start events and managed calls.
+// decoding on manual Start events and managed calls. Pass nil to clear an
+// earlier request codec option.
 func WithLLMCodec(codec RequestCodec) LLMCallOption {
-	return func(o *llmCallOptions) {
-		if codec != nil {
-			codec.applyRequestCodec(o)
-		}
+	if codec == nil {
+		codec = (*CodecHandle)(nil)
 	}
+	return func(o *llmCallOptions) { codec.applyRequestCodec(o) }
 }
 
 // RequestCodec is either a CodecFunc or an owned CodecHandle.
@@ -2133,7 +2135,7 @@ func LlmStreamCallExecute(name string, request LLMRequest, fn LLMStreamExecution
 	defer C.free(unsafe.Pointer(cName))
 	defer C.free(unsafe.Pointer(cRequest))
 
-	callbacks := &streamCallbacks{collector: collector, finalizer: finalizer}
+	callbacks := &streamCallbacks{collector: collector, finalizer: finalizer, providerErrors: sources.providerErrors}
 	callbackID := registerStreamCallbacks(callbacks)
 	streamCallbackOwners.Store(callbackID, weak.Make(sources))
 	var cCollector C.NemoRelayCollectorCb

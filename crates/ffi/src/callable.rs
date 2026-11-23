@@ -1316,7 +1316,7 @@ pub fn wrap_llm_stream_exec_fn(
 pub struct StreamCallbackState {
     // Continuations borrow callback data even if no collector/finalizer is set.
     user_data: Option<Arc<UserData>>,
-    failure: std::sync::Mutex<Option<String>>,
+    failure: std::sync::Mutex<Option<FlowError>>,
 }
 
 impl StreamCallbackState {
@@ -1327,12 +1327,12 @@ impl StreamCallbackState {
     }
 
     /// Record a finalizer failure for `nemo_relay_stream_close` to report.
-    pub fn record_failure(&self, message: String) {
-        *lock_unpoisoned(&self.failure) = Some(message);
+    pub fn record_failure(&self, error: FlowError) {
+        *lock_unpoisoned(&self.failure) = Some(error);
     }
 
     /// Take the recorded finalizer failure.
-    pub fn take_failure(&self) -> Option<String> {
+    pub fn take_failure(&self) -> Option<FlowError> {
         lock_unpoisoned(&self.failure).take()
     }
 }
@@ -1387,7 +1387,7 @@ pub fn wrap_stream_callbacks(
                 let result_ptr = unsafe { cb(ud.ptr) };
                 let result = json_result_from_ptr(result_ptr, "stream finalizer callback failed");
                 unsafe { nemo_relay_string_free_internal(result_ptr) };
-                result.inspect_err(|error| state.record_failure(error.to_string()))
+                result.inspect_err(|error| state.record_failure(error.clone()))
             })
         }
         None => Box::new(|| Ok(Json::Null)),
