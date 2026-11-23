@@ -4620,3 +4620,68 @@ async fn response_head_deadline_before_the_first_event_records_the_llm_call_as_f
     );
     nemo_relay::api::subscriber::deregister_subscriber(subscriber_name).unwrap();
 }
+
+#[tokio::test]
+async fn buffered_gateway_call_cancelled_by_client_releases_session_for_idle_cleanup() {
+    let entered = Arc::new(tokio::sync::Notify::new());
+    let release = Arc::new(tokio::sync::Notify::new());
+    let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+    let address = listener.local_addr().unwrap();
+    let provider = axum::Router::new().route(
+        "/v1/messages",
+        axum::routing::post({
+            let entered = Arc::clone(&entered);
+            let release = Arc::clone(&release);
+            move || {
+                let entered = Arc::clone(&entered);
+                let release = Arc::clone(&release);
+                async move {
+                    entered.notify_one();
+                    release.notified().await;
+                    StatusCode::OK
+                }
+            }
+        }),
+    );
+    let provider = tokio::spawn(async move { axum::serve(listener, provider).await.unwrap() });
+    let mut state = AppState::new(GatewayConfig {
+        anthropic_base_url: format!("http://{address}"),
+        ..GatewayConfig::default()
+    });
+    state.http = Client::builder().no_proxy().build().unwrap();
+    let sessions = state.sessions.clone();
+    let request = Request::post("/v1/messages")
+        .header(header::CONTENT_TYPE, "application/json")
+        .header("anthropic-version", "2023-06-01")
+        .header("x-api-key", "caller-owned")
+        .body(Body::from(
+            r#"{"model":"test","max_tokens":8,"messages":[{"role":"user","content":"hi"}]}"#,
+        ))
+        .unwrap();
+    let call = tokio::spawn(passthrough(State(state), request));
+    tokio::time::timeout(Duration::from_secs(5), entered.notified())
+        .await
+        .unwrap();
+    assert!(sessions.has_open_sessions().await);
+
+    call.abort();
+    assert!(call.await.unwrap_err().is_cancelled());
+
+    tokio::time::timeout(Duration::from_secs(5), async {
+        while sessions.has_open_sessions().await {
+            sessions
+                .close_idle_sessions_at(
+                    std::time::Instant::now(),
+                    Duration::ZERO,
+                    "cancelled_buffered_call",
+                )
+                .await
+                .unwrap();
+            tokio::task::yield_now().await;
+        }
+    })
+    .await
+    .expect("cancelled buffered call retained its gateway session");
+    release.notify_one();
+    provider.abort();
+}
