@@ -4863,9 +4863,13 @@ async fn streaming_response_preserves_the_first_error_before_headers() {
         response_stream,
         ProviderRoute::OpenAiChatCompletions,
         guard,
+        None,
     )
     .await
     .unwrap_err();
+    let CliError::Flow(error) = error else {
+        panic!("expected a runtime error, got {error:?}");
+    };
     let response = translate_runtime_error(error).into_response();
     assert_eq!(response.status(), StatusCode::FORBIDDEN);
     let bytes = response.into_body().collect().await.unwrap().to_bytes();
@@ -4886,6 +4890,7 @@ async fn streaming_response_delivers_the_first_chunk_once_and_completes() {
         response_stream,
         ProviderRoute::OpenAiChatCompletions,
         guard,
+        None,
     )
     .await
     .unwrap();
@@ -4912,7 +4917,7 @@ async fn streaming_response_reports_midstream_errors_in_the_provider_protocol() 
             )),
             Ok(json!({"partial": "must not be delivered"})),
         ]));
-        let body = prepare_streaming_response_body(response_stream, route, guard)
+        let body = prepare_streaming_response_body(response_stream, route, guard, None)
             .await
             .unwrap();
         let bytes = body
@@ -4980,6 +4985,7 @@ async fn streaming_response_handles_empty_streams_without_inventing_events() {
             LlmJsonStream::new(futures_util::stream::empty()),
             route,
             guard,
+            None,
         )
         .await
         .unwrap();
@@ -5007,6 +5013,7 @@ async fn streaming_response_cancellation_during_first_read_releases_stream_and_s
         response_stream,
         ProviderRoute::OpenAiChatCompletions,
         guard,
+        None,
     ));
     tokio::time::timeout(Duration::from_secs(5), started.notified())
         .await
@@ -5037,4 +5044,197 @@ async fn streaming_response_cancellation_during_first_read_releases_stream_and_s
     })
     .await
     .unwrap();
+}
+
+fn capture_llm_end_status(subscriber_name: &'static str) -> Arc<Mutex<Option<Value>>> {
+    let _ = nemo_relay_runtime::api::subscriber::deregister_subscriber(subscriber_name);
+    let captured_metadata = Arc::new(Mutex::new(None::<Value>));
+    let captured = captured_metadata.clone();
+    nemo_relay_runtime::api::subscriber::register_subscriber(
+        subscriber_name,
+        Arc::new(move |event| {
+            if event.scope_category() == Some(nemo_relay_runtime::api::event::ScopeCategory::End)
+                && event.name() == "openai.responses"
+            {
+                *captured.lock().unwrap() = event.metadata().cloned();
+            }
+        }),
+    )
+    .unwrap();
+    captured_metadata
+}
+
+async fn pending_managed_stream(
+    session_id: &str,
+) -> (SessionManager, GatewayCallPrep, LlmJsonStream) {
+    let manager = SessionManager::new(GatewayConfig::default());
+    let prep = manager
+        .prepare_gateway_call(
+            &HeaderMap::new(),
+            LlmGatewayStart {
+                session_id: Some(session_id.into()),
+                provider: "openai.responses".into(),
+                model_name: Some("gpt-test".into()),
+                subagent_id: None,
+                conversation_id: None,
+                generation_id: None,
+                request_id: None,
+                request: LlmRequest {
+                    headers: Map::new(),
+                    content: json!({ "input": "Stream until the client leaves." }),
+                },
+                streaming: true,
+                metadata: json!({}),
+            },
+        )
+        .await
+        .unwrap();
+    let (stream, _ready) =
+        managed_final_response_stream(&manager, &prep, json!({ "output_text": "" }), true).await;
+    (manager, prep, stream)
+}
+
+#[tokio::test]
+async fn dropped_streaming_body_records_the_llm_call_as_cancelled() {
+    let subscriber_name = "gateway-stream-client-cancel-status-test";
+    let captured_metadata = capture_llm_end_status(subscriber_name);
+    let (manager, prep, stream) = pending_managed_stream("stream-client-cancel").await;
+    let body = client_sse_body(
+        FirstEventTap::wrap(stream, Box::new(|_| {})),
+        ProviderRoute::OpenAiResponses,
+        GatewayCallGuard::new(
+            manager.clone(),
+            prep.context,
+            None,
+            prep.session_finish,
+            crate::operational::OperationalContext::new(),
+        ),
+        None,
+    );
+
+    drop(body);
+    tokio::task::yield_now().await;
+    nemo_relay_runtime::api::subscriber::flush_subscribers().unwrap();
+
+    let metadata = captured_metadata.lock().unwrap().take().unwrap();
+    assert_eq!(metadata["otel.status_code"], "UNSET");
+    assert!(metadata.get("otel.status_description").is_none());
+    nemo_relay_runtime::api::subscriber::deregister_subscriber(subscriber_name).unwrap();
+}
+
+#[tokio::test]
+async fn response_head_deadline_before_the_first_event_records_the_llm_call_as_failed() {
+    let subscriber_name = "gateway-stream-head-deadline-status-test";
+    let captured_metadata = capture_llm_end_status(subscriber_name);
+    let (manager, prep, stream) = pending_managed_stream("stream-head-deadline").await;
+    let guard = GatewayCallGuard::new(
+        manager.clone(),
+        prep.context,
+        None,
+        prep.session_finish,
+        crate::operational::OperationalContext::new(),
+    );
+
+    let error = prepare_streaming_response_body(
+        stream,
+        ProviderRoute::OpenAiResponses,
+        guard,
+        Some(tokio::time::Instant::now()),
+    )
+    .await
+    .unwrap_err();
+    assert!(matches!(error, CliError::Launch(_)), "{error:?}");
+    nemo_relay_runtime::api::subscriber::flush_subscribers().unwrap();
+
+    let metadata = captured_metadata.lock().unwrap().take().unwrap();
+    assert_eq!(metadata["otel.status_code"], "ERROR");
+    assert_eq!(
+        manager
+            .close_idle_sessions_at(
+                std::time::Instant::now() + Duration::from_secs(1),
+                Duration::from_millis(1),
+                "head_deadline",
+            )
+            .await
+            .unwrap(),
+        1
+    );
+    nemo_relay_runtime::api::subscriber::deregister_subscriber(subscriber_name).unwrap();
+}
+
+#[tokio::test]
+async fn buffered_gateway_call_cancelled_by_client_releases_session_for_idle_cleanup() {
+    let entered = Arc::new(tokio::sync::Notify::new());
+    let release = Arc::new(tokio::sync::Notify::new());
+    let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+    let address = listener.local_addr().unwrap();
+    let provider = axum::Router::new().route(
+        "/v1/messages",
+        axum::routing::post({
+            let entered = Arc::clone(&entered);
+            let release = Arc::clone(&release);
+            move || {
+                let entered = Arc::clone(&entered);
+                let release = Arc::clone(&release);
+                async move {
+                    entered.notify_one();
+                    release.notified().await;
+                    StatusCode::OK
+                }
+            }
+        }),
+    );
+    let provider = tokio::spawn(async move { axum::serve(listener, provider).await.unwrap() });
+    let mut state = AppState::new(GatewayConfig {
+        anthropic_base_url: format!("http://{address}"),
+        ..GatewayConfig::default()
+    });
+    state.http = Client::builder().no_proxy().build().unwrap();
+    let sessions = state.sessions.clone();
+    let request = Request::post("/v1/messages")
+        .header(header::CONTENT_TYPE, "application/json")
+        .header("anthropic-version", "2023-06-01")
+        .header("x-api-key", "caller-owned")
+        .body(Body::from(
+            r#"{"model":"test","max_tokens":8,"messages":[{"role":"user","content":"hi"}]}"#,
+        ))
+        .unwrap();
+    let call = tokio::spawn(passthrough(State(state), request));
+    tokio::time::timeout(Duration::from_secs(5), entered.notified())
+        .await
+        .unwrap();
+    assert!(sessions.has_open_sessions().await);
+    assert_eq!(
+        sessions
+            .close_idle_sessions_at(
+                std::time::Instant::now(),
+                Duration::ZERO,
+                "pending_buffered_call",
+            )
+            .await
+            .unwrap(),
+        0
+    );
+    assert!(sessions.has_open_sessions().await);
+
+    call.abort();
+    assert!(call.await.unwrap_err().is_cancelled());
+
+    tokio::time::timeout(Duration::from_secs(5), async {
+        while sessions.has_open_sessions().await {
+            sessions
+                .close_idle_sessions_at(
+                    std::time::Instant::now(),
+                    Duration::ZERO,
+                    "cancelled_buffered_call",
+                )
+                .await
+                .unwrap();
+            tokio::task::yield_now().await;
+        }
+    })
+    .await
+    .expect("cancelled buffered call retained its gateway session");
+    release.notify_one();
+    provider.abort();
 }
