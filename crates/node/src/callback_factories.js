@@ -5,9 +5,10 @@
   const { AsyncLocalStorage } = process.getBuiltinModule('node:async_hooks');
   const eventSanitizerContext = new AsyncLocalStorage();
   const publicationStates = new Map();
-  const streamQueues = new WeakMap();
-  const streamCloses = new WeakMap();
+  const streams = new WeakMap();
   const pinnedStreams = new Map();
+  const INACTIVE_PUBLICATION = Object.freeze({ active: false });
+  const ACTIVE_PUBLICATION = Object.freeze({ active: true });
   let nextPublicationContextId = 0;
 
   function callbackStore(publicationState, publicationContextId, scope) {
@@ -20,33 +21,30 @@
   function selectedPublication(current, capturedPublicationContextId, hasCapturedContext) {
     if (!hasCapturedContext) {
       return {
-        publicationState: current?.publicationState ?? { active: false },
+        publicationState: current?.publicationState ?? INACTIVE_PUBLICATION,
         publicationContextId: current?.publicationContextId,
       };
     }
     return {
-      publicationState: publicationStates.get(capturedPublicationContextId) ?? { active: false },
+      publicationState: publicationStates.get(capturedPublicationContextId) ?? INACTIVE_PUBLICATION,
       publicationContextId: capturedPublicationContextId,
     };
   }
 
   function replacementCallbackStore(current, scope, capturedPublicationContextId, hasCapturedContext) {
+    const { lifecycle } = current;
     const store = {
-      lifecycle: current.lifecycle,
+      lifecycle,
       ...selectedPublication(current, capturedPublicationContextId, hasCapturedContext),
-      scope,
+      scope: lifecycle.expired ? undefined : scope,
     };
-    current.lifecycle.stores.add(store);
-    if (current.lifecycle.expired) {
-      store.scope = undefined;
+    if (!lifecycle.expired) {
+      lifecycle.stores.add(store);
     }
     return store;
   }
 
   function expireCallbackStore(store) {
-    if (store === undefined) {
-      return;
-    }
     store.lifecycle.expired = true;
     for (const current of store.lifecycle.stores) {
       current.scope = undefined;
@@ -97,77 +95,99 @@
     return result;
   }
 
-  function failureEnvelope(error, fallbackMessage) {
-    let message = fallbackMessage;
-    let exceptionType = 'Error';
+  function resultJson(value) {
+    return jsonValue(value === undefined ? null : value);
+  }
+
+  function isObjectLike(value) {
+    return value !== null && (typeof value === 'object' || typeof value === 'function');
+  }
+
+  function readableString(read) {
     try {
-      if (typeof error === 'string') {
-        message = error;
-      } else if (error === null || (typeof error !== 'object' && typeof error !== 'function')) {
-        message = String(error);
-      } else {
-        const errorMessage = error.message;
-        if (typeof errorMessage === 'string' && errorMessage.length > 0) {
-          message = errorMessage;
-        }
-      }
-    } catch {}
+      const value = read();
+      return typeof value === 'string' && value.length > 0 ? value : undefined;
+    } catch {
+      return undefined;
+    }
+  }
+
+  function typeTag(value) {
     try {
-      const errorName = error?.name;
-      if (typeof errorName === 'string' && errorName.length > 0) {
-        exceptionType = errorName;
-      }
-    } catch {}
+      return Object.prototype.toString.call(value).slice(8, -1);
+    } catch {
+      return typeof value;
+    }
+  }
+
+  function describeError(error) {
+    if (!isObjectLike(error)) {
+      return { message: String(error), exceptionType: typeTag(error) };
+    }
+    const exceptionType = readableString(() => error.name) ?? typeTag(error);
+    return { message: readableString(() => error.message) ?? exceptionType, exceptionType };
+  }
+
+  function failureEnvelope(error) {
+    const { message, exceptionType } = describeError(error);
     return { ok: false, exception: error, message, exceptionType };
   }
 
   function cleanupFailure(error, cleanup) {
-    const primary = failureEnvelope(error, 'unknown error');
-    const secondary = failureEnvelope(cleanup, 'unknown error');
-    return new AggregateError([error, cleanup], `${primary.message}; stream cleanup also failed: ${secondary.message}`);
-  }
-
-  function isThenable(value) {
-    return (
-      value !== null && (typeof value === 'object' || typeof value === 'function') && typeof value.then === 'function'
+    return new AggregateError(
+      [error, cleanup],
+      `${describeError(error).message}; stream cleanup also failed: ${describeError(cleanup).message}`,
     );
   }
 
-  function messageFor(error) {
-    try {
-      return String(error?.message ?? error);
-    } catch {
-      return 'JavaScript callback failed';
-    }
+  function isThenable(value) {
+    return isObjectLike(value) && typeof value.then === 'function';
   }
 
-  function settleEnvelope(fn, encode, complete, fallbackMessage, direct) {
+  function settleEnvelope(call, publicationState, encode, complete, direct) {
+    const token = callbackStore(publicationState, undefined, undefined);
     const envelopeFor = (value) => {
       try {
         return { ok: true, value: encode(value) };
       } catch (error) {
-        return failureEnvelope(error, fallbackMessage);
+        return failureEnvelope(error);
       }
     };
-    let envelope;
-    try {
-      const value = fn();
-      if (isThenable(value)) {
-        Promise.resolve(value).then(
-          (resolved) => complete(envelopeFor(resolved)),
-          (error) => complete(failureEnvelope(error, fallbackMessage)),
-        );
-        return undefined;
+    const finish = (envelope) => {
+      expireCallbackStore(token);
+      complete(envelope);
+    };
+    return eventSanitizerContext.run(token, () => {
+      let envelope;
+      try {
+        const value = call();
+        if (isThenable(value)) {
+          Promise.resolve(value).then(
+            (resolved) => finish(envelopeFor(resolved)),
+            (error) => finish(failureEnvelope(error)),
+          );
+          return undefined;
+        }
+        envelope = envelopeFor(value);
+      } catch (error) {
+        envelope = failureEnvelope(error);
       }
-      envelope = envelopeFor(value);
-    } catch (error) {
-      envelope = failureEnvelope(error, fallbackMessage);
+      expireCallbackStore(token);
+      if (direct) {
+        return envelope;
+      }
+      complete(envelope);
+      return undefined;
+    });
+  }
+
+  function streamState(handle) {
+    let state = streams.get(handle);
+    if (state === undefined) {
+      state = { queue: Promise.resolve(), closing: undefined };
+      streams.set(handle, state);
     }
-    if (direct) {
-      return envelope;
-    }
-    complete(envelope);
-    return undefined;
+    return state;
   }
 
   function driveStream(poll, close) {
@@ -211,10 +231,102 @@
     );
   }
 
+  function claimPublication(publication, publicationContextId) {
+    const inherited = publicationContextId === undefined ? undefined : publicationStates.get(publicationContextId);
+    if (inherited !== undefined) {
+      return { state: inherited, contextId: publicationContextId, owned: false };
+    }
+    if (!publication) {
+      return { state: INACTIVE_PUBLICATION, contextId: publicationContextId, owned: false };
+    }
+    const contextId = String(++nextPublicationContextId);
+    const state = { active: true };
+    publicationStates.set(contextId, state);
+    return { state, contextId, owned: true };
+  }
+
+  function releasePublication(claim) {
+    if (claim.owned) {
+      claim.state.active = false;
+      publicationStates.delete(claim.contextId);
+    }
+  }
+
+  class Downstreams {
+    #states = new Map();
+
+    track(downstream, aborted) {
+      const state = { closing: undefined, reported: false };
+      this.#states.set(downstream, state);
+      if (aborted) {
+        this.close(downstream).catch(() => {});
+      }
+      return state;
+    }
+
+    close(downstream) {
+      const state = this.#states.get(downstream);
+      state.closing ??= downstream.close();
+      return state.closing;
+    }
+
+    abort() {
+      for (const downstream of this.#states.keys()) {
+        this.close(downstream).catch(() => {});
+      }
+    }
+
+    async settle(failure) {
+      for (const [downstream, state] of this.#states) {
+        if (state.reported) {
+          continue;
+        }
+        state.reported = true;
+        try {
+          await this.close(downstream);
+        } catch (cleanup) {
+          failure = { error: failure === undefined ? cleanup : cleanupFailure(failure.error, cleanup) };
+        }
+      }
+      return failure;
+    }
+  }
+
+  class PromiseCall {
+    constructor(calls, callId, publication, publicationContextId, scope, streamResult) {
+      this.calls = calls;
+      this.callId = callId;
+      this.streamResult = streamResult;
+      this.controller = new AbortController();
+      this.claim = claimPublication(publication, publicationContextId);
+      this.token = callbackStore(this.claim.state, this.claim.contextId, scope);
+      this.downstreams = new Downstreams();
+      calls.set(callId, this);
+    }
+
+    release() {
+      releasePublication(this.claim);
+      this.calls.delete(this.callId);
+    }
+
+    finish() {
+      this.release();
+      expireCallbackStore(this.token);
+    }
+
+    abort() {
+      this.downstreams.abort();
+      if (!this.streamResult) {
+        this.release();
+      }
+      this.controller.abort();
+    }
+  }
+
   function callPromise(
     fn,
     settle,
-    controllers,
+    calls,
     callId,
     arg0,
     spread,
@@ -224,64 +336,9 @@
     scope,
     streamResult,
   ) {
-    const controller = new AbortController();
-    controllers.set(callId, controller);
-    const downstreams = new Map();
-    const closeDownstream = (downstream) => {
-      const state = downstreams.get(downstream);
-      state.closing ??= downstream.close();
-      return state.closing;
-    };
-    const settleDownstreams = async (failure) => {
-      for (const [downstream, state] of downstreams) {
-        if (state.reported) continue;
-        state.reported = true;
-        try {
-          await closeDownstream(downstream);
-        } catch (cleanup) {
-          failure = { error: failure === undefined ? cleanup : cleanupFailure(failure.error, cleanup) };
-        }
-      }
-      return failure;
-    };
-    let publicationState = publicationContextId === undefined ? undefined : publicationStates.get(publicationContextId);
-    let ownsPublicationState = false;
-    if (publicationState === undefined) {
-      if (publication) {
-        publicationContextId = String(++nextPublicationContextId);
-        publicationState = { active: true };
-        publicationStates.set(publicationContextId, publicationState);
-        ownsPublicationState = true;
-      } else {
-        publicationState = { active: false };
-      }
-    }
-    const token = callbackStore(publicationState, publicationContextId, scope);
-    const releaseCall = () => {
-      if (ownsPublicationState) {
-        publicationState.active = false;
-        publicationStates.delete(publicationContextId);
-      }
-      controllers.delete(callId);
-    };
-    const settlePublication = () => {
-      releaseCall();
-      expireCallbackStore(token);
-    };
-    controller.signal.addEventListener(
-      'abort',
-      () => {
-        for (const downstream of downstreams.keys()) {
-          closeDownstream(downstream).catch(() => {});
-        }
-        if (!streamResult) {
-          releaseCall();
-        }
-      },
-      { once: true },
-    );
-    const invokeNext = (value) =>
-      settle.next(nextState, jsonValue(value === undefined ? null : value), eventSanitizerContext.getStore()?.scope);
+    const call = new PromiseCall(calls, callId, publication, publicationContextId, scope, streamResult);
+    const { controller, downstreams } = call;
+    const invokeNext = (value) => settle.next(nextState, resultJson(value), eventSanitizerContext.getStore()?.scope);
     const safeNext =
       nextState === undefined
         ? undefined
@@ -289,11 +346,7 @@
           ? invokeNext
           : async (value) => {
               const downstream = await invokeNext(value);
-              const state = { closing: undefined, reported: false };
-              downstreams.set(downstream, state);
-              if (controller.signal.aborted) {
-                closeDownstream(downstream).catch(() => {});
-              }
+              const state = downstreams.track(downstream, controller.signal.aborted);
               return {
                 async *[Symbol.asyncIterator]() {
                   try {
@@ -304,25 +357,22 @@
                     }
                   } finally {
                     state.reported = true;
-                    await closeDownstream(downstream);
+                    await downstreams.close(downstream);
                   }
                 },
               };
             };
     const invoke = () => {
-      Promise.resolve()
-        .then(() => {
-          const args = spread ? [...arg0] : [arg0];
-          if (safeNext !== undefined) {
-            args.push(safeNext);
-          }
-          args.push(controller.signal);
-          return fn(...args);
-        })
+      const args = spread ? [...arg0] : [arg0];
+      if (safeNext !== undefined) {
+        args.push(safeNext);
+      }
+      args.push(controller.signal);
+      Promise.try(fn, ...args)
         .then(async (value) => {
           if (!streamResult) {
-            settlePublication();
-            settle.resolve(callId, jsonValue(value === undefined ? null : value));
+            call.finish();
+            settle.resolve(callId, resultJson(value));
             return;
           }
           if (value == null || typeof value[Symbol.asyncIterator] !== 'function') {
@@ -345,7 +395,7 @@
                 finished = true;
                 break;
               }
-              await settle.streamPush(callId, jsonValue(item.value === undefined ? null : item.value));
+              await settle.streamPush(callId, resultJson(item.value));
             }
           } catch (error) {
             failure = { error };
@@ -357,21 +407,21 @@
               failure = { error: failure === undefined ? cleanup : cleanupFailure(failure.error, cleanup) };
             }
           }
-          failure = await settleDownstreams(failure);
+          failure = await downstreams.settle(failure);
           if (failure !== undefined) {
             throw failure.error;
           }
           settle.streamEnd(callId);
-          settlePublication();
+          call.finish();
         })
         .catch(async (error) => {
-          const failure = await settleDownstreams({ error });
-          settlePublication();
-          const envelope = failureEnvelope(failure.error, 'unknown error');
-          settle.reject(callId, failure.error, envelope.message, envelope.exceptionType);
+          const failure = await downstreams.settle({ error });
+          call.finish();
+          const { message, exceptionType } = describeError(failure.error);
+          settle.reject(callId, failure.error, message, exceptionType);
         });
     };
-    eventSanitizerContext.run(token, invoke);
+    eventSanitizerContext.run(call.token, invoke);
   }
 
   return {
@@ -386,59 +436,30 @@
       };
     },
 
-    execution(fn) {
-      return function __nemo_relay_execution_wrapper(...args) {
+    sync(fn) {
+      return function __nemo_relay_sync_wrapper(...args) {
         try {
-          const value = fn(...args);
-          return { ok: true, value: jsonValue(value === undefined ? null : value) };
+          return { ok: true, value: resultJson(fn(...args)) };
         } catch (error) {
-          return failureEnvelope(error, 'JavaScript callback failed');
-        }
-      };
-    },
-
-    middleware(fn) {
-      return function __nemo_relay_middleware_wrapper(...args) {
-        try {
-          const value = fn(...args);
-          return { ok: true, value: jsonValue(value === undefined ? null : value) };
-        } catch (error) {
-          return failureEnvelope(error, 'JavaScript callback threw');
-        }
-      };
-    },
-
-    conditionalGate(fn) {
-      return function __nemo_relay_conditional_gate_wrapper(...args) {
-        try {
-          const returned = fn(...args);
-          const value = returned === undefined ? null : returned;
-          if (value === null || typeof value === 'string') {
-            return { ok: true, value };
-          }
-          return { ok: false, error: 'conditional middleware guardrail must return a string or null' };
-        } catch (error) {
-          return failureEnvelope(error, 'JavaScript callback threw');
+          return failureEnvelope(error);
         }
       };
     },
 
     subscriber(fn, complete) {
       return function __nemo_relay_subscriber_wrapper(event, callbackId) {
-        Promise.resolve()
-          .then(() => fn(event))
-          .then(
-            () => complete(callbackId),
-            (error) => complete(callbackId, messageFor(error)),
-          );
+        Promise.try(fn, event).then(
+          () => complete(callbackId),
+          (error) => complete(callbackId, describeError(error).message),
+        );
       };
     },
 
     streamNext(poll, handle) {
+      const state = streamState(handle);
       const run = () => pinStream(handle, () => driveStream(poll, false));
-      const current = (streamQueues.get(poll) ?? Promise.resolve()).then(run, run);
-      streamQueues.set(poll, current);
-      return current;
+      state.queue = state.queue.then(run, run);
+      return state.queue;
     },
 
     pinWhile(handle, promise) {
@@ -450,62 +471,32 @@
     },
 
     streamClose(poll, handle) {
-      const existing = streamCloses.get(poll);
-      if (existing !== undefined) {
-        return existing;
-      }
-      const closing = Promise.resolve().then(() => pinStream(handle, () => driveStream(poll, true)));
-      streamCloses.set(poll, closing);
-      return closing;
+      const state = streamState(handle);
+      state.closing ??= Promise.resolve().then(() => pinStream(handle, () => driveStream(poll, true)));
+      return state.closing;
     },
 
     collector(fn) {
       return function __nemo_relay_collector_wrapper(chunk, complete, direct) {
-        const token = callbackStore({ active: false }, undefined, undefined);
-        const envelope = eventSanitizerContext.run(token, () =>
-          settleEnvelope(
-            () => fn(chunk),
-            () => null,
-            (settled) => {
-              expireCallbackStore(token);
-              complete(settled);
-            },
-            'JavaScript collector callback failed',
-            direct,
-          ),
+        return settleEnvelope(
+          () => fn(chunk),
+          INACTIVE_PUBLICATION,
+          () => null,
+          complete,
+          direct,
         );
-        if (envelope !== undefined) {
-          expireCallbackStore(token);
-        }
-        return envelope;
       };
     },
 
     finalizer(fn) {
       return function __nemo_relay_finalizer_wrapper(complete, direct) {
-        const token = callbackStore({ active: true }, undefined, undefined);
-        const envelope = eventSanitizerContext.run(token, () =>
-          settleEnvelope(
-            fn,
-            (value) => jsonValue(value === undefined ? null : value),
-            (settled) => {
-              expireCallbackStore(token);
-              complete(settled);
-            },
-            'JavaScript finalizer callback failed',
-            direct,
-          ),
-        );
-        if (envelope !== undefined) {
-          expireCallbackStore(token);
-        }
-        return envelope;
+        return settleEnvelope(fn, ACTIVE_PUBLICATION, resultJson, complete, direct);
       };
     },
 
     promise(fn, resolve, reject, streamPush, streamEnd, next) {
       const settle = { resolve, reject, streamPush, streamEnd, next };
-      const controllers = new Map();
+      const calls = new Map();
       return function __nemo_relay_promise_wrapper(
         abort,
         callId,
@@ -518,13 +509,13 @@
         streamResult,
       ) {
         if (abort) {
-          controllers.get(callId)?.abort();
+          calls.get(callId)?.abort();
           return;
         }
         callPromise(
           fn,
           settle,
-          controllers,
+          calls,
           callId,
           arg0,
           spread,
@@ -541,7 +532,7 @@
       return function __nemo_relay_scoped_wrapper(arg, scope) {
         const current = eventSanitizerContext.getStore();
         const token = callbackStore(
-          current?.publicationState ?? { active: false },
+          current?.publicationState ?? INACTIVE_PUBLICATION,
           current?.publicationContextId,
           scope,
         );
@@ -575,18 +566,20 @@
       );
       const token = callbackStore(publicationState, publicationContextId, scope);
       const expire = () => expireCallbackStore(token);
-      let value;
-      try {
-        value = eventSanitizerContext.run(token, fn);
-      } catch (error) {
+      return eventSanitizerContext.run(token, () => {
+        let value;
+        try {
+          value = fn();
+        } catch (error) {
+          expire();
+          throw error;
+        }
+        if (isThenable(value)) {
+          return Promise.resolve(value).finally(expire);
+        }
         expire();
-        throw error;
-      }
-      if (isThenable(value)) {
-        return Promise.resolve(value).finally(expire);
-      }
-      expire();
-      return value;
+        return value;
+      });
     },
 
     setCallbackScope(scope, capturedPublicationContextId, hasCapturedContext) {

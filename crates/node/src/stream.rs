@@ -16,7 +16,7 @@ use serde_json::Value;
 use tokio_stream::{Stream, StreamExt};
 
 use crate::callable::{DirectStreamCallbacks, FinalizerError};
-use crate::callback_factory;
+use crate::callback_factory::{self, StreamStep};
 use crate::convert::{
     BoxFuture, JsArg, JsBuilder, closure_function, detach, js_value, lock, settled,
 };
@@ -531,7 +531,7 @@ impl LlmStream {
         &self,
         env: &'env Env,
         this: This<'env>,
-        close: bool,
+        step: StreamStep,
         forwarded: impl FnOnce(Arc<Forwarded>) -> F,
         resolve: fn(&Env, T) -> napi::Result<JsArg>,
     ) -> Result<Unknown<'env>>
@@ -548,7 +548,7 @@ impl LlmStream {
             Path::Pump => self.poll_function(env).and_then(|poll| {
                 Ok(callback_factory::stream_step(
                     env,
-                    close,
+                    step,
                     &poll,
                     &this.object,
                 )?)
@@ -588,7 +588,7 @@ impl LlmStream {
         self.drive(
             env,
             this,
-            false,
+            StreamStep::Next,
             |forwarded| async move { forwarded.next().await.map_err(Error::from) },
             js_value,
         )
@@ -605,7 +605,7 @@ impl LlmStream {
         self.drive(
             env,
             this,
-            true,
+            StreamStep::Close,
             |forwarded| async move { forwarded.close(&finalizer_error).await },
             |env, ()| js_value(env, ()),
         )
