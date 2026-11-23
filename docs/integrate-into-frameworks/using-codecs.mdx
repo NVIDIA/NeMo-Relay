@@ -116,7 +116,7 @@ For a tool that returns several result types, set `allowed_types` and
 `tool_result=True` on the same codec. The options serve different purposes:
 `allowed_types` lists the classes the codec can restore, and `tool_result=True`
 adds the JSON wrapper described in
-[Normalized Tool Results](/reference/tool-execution-intercept-outcomes#normalized-tool-results).
+[Normalized Tool Results](/instrument-applications/middleware/tool-execution-intercepts#normalized-tool-results).
 
 For example, a search tool can return a `SearchResult` object with matches or
 plain text when it finds none. Both results use the same codec:

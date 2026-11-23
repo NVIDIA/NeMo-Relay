@@ -1,7 +1,7 @@
 ---
 title: "Diagnostics"
 description: "Understand runtime-owned diagnostic recording, bounded retention, and producer boundaries."
-position: 7
+position: 2
 ---
 {/* SPDX-FileCopyrightText: Copyright (c) 2026, NVIDIA CORPORATION & AFFILIATES. All rights reserved.
 SPDX-License-Identifier: Apache-2.0 */}
@@ -16,10 +16,10 @@ decides whether it is healthy and how to recover from failures.
 
 | Task | Guide |
 | --- | --- |
-| Configure CLI commands, persistent gateways, or daemon workers | [CLI and Daemon Diagnostics](/reference/diagnostics/cli) |
-| Configure and read diagnostics from a language-hosted application | [Embedded Diagnostics](/reference/diagnostics/bindings) |
-| Discover capabilities, query snapshots, and handle errors | [Diagnostics API](/reference/diagnostics/api) |
-| Inspect retained entry and component storage and resource context | [Diagnostic Memory Inspection](/reference/diagnostics/memory) |
+| Configure CLI commands, persistent gateways, or daemon workers | [CLI and Daemon Diagnostics](/operate-and-troubleshoot/diagnostics/cli) |
+| Configure and read diagnostics from a language-hosted application | [Embedded Diagnostics](/operate-and-troubleshoot/diagnostics/bindings) |
+| Discover capabilities, query snapshots, and handle errors | [Diagnostics API](/operate-and-troubleshoot/diagnostics/api) |
+| Inspect retained entry and component storage and resource context | [Diagnostic Memory Inspection](/operate-and-troubleshoot/diagnostics/memory) |
 | Record internal observations in native or worker plugins | [Plugin Diagnostics](/build-plugins/diagnostics) |
 
 The sections below explain how Rust records and stores diagnostics. A *producer*
@@ -66,7 +66,7 @@ before constructing those services, and inject the returned context.
 
 The Rust SDK exposes process-owned readers through `nemo_relay::diagnostics::reader()`.
 Its `plugin::initialize` API resolves the embedded
-service settings in [Embedded Diagnostics](/reference/diagnostics/bindings)
+service settings in [Embedded Diagnostics](/operate-and-troubleshoot/diagnostics/bindings)
 before plugin validation or activation.
 Standalone validation and discovery do not consume the process default.
 
@@ -264,7 +264,7 @@ capacity and ensure the resulting allocation fits the ceiling. Invalid profiles
 fail startup. The ceiling does not reserve that entire amount automatically.
 
 Use the [query limits below](#query-budgets) for response sizing and
-[Memory Inspection](/reference/diagnostics/memory) for actual reserved backing,
+[Memory Inspection](/operate-and-troubleshoot/diagnostics/memory) for actual reserved backing,
 occupancy, and compiled entry sizes. A practical tuning sequence is:
 
 1. Check loss and admission counters before changing limits. Frequent history
@@ -317,7 +317,7 @@ Enabled query paths remain preallocated and enforce their own capacities.
 Use `Diagnostics::memory_usage()` for aggregate backing and occupancy, or
 `DiagnosticsReader::inspect_memory(&query)` for bounded component/entry
 attribution with independently sampled resource context. Refer to
-[Diagnostic Memory Inspection](/reference/diagnostics/memory) for accounting,
+[Diagnostic Memory Inspection](/operate-and-troubleshoot/diagnostics/memory) for accounting,
 availability, query cost, and the distinction from process memory usage.
 
 Snapshot coverage reports rejected observations, truncated detail, eviction,
@@ -371,7 +371,7 @@ allow startup with the other sinks. Failed optional sinks have no delivery queue
 and remain disabled until logging is reinitialized. A diagnostics service attached
 later observes their current unavailable state without replaying earlier records.
 Diagnostic retention remains independent of these delivery policies. Refer to
-[File Sink Startup Failure Policy](/reference/operational-logging#file-sink-startup-failure-policy)
+[File Sink Startup Failure Policy](/operate-and-troubleshoot/operational-logging#file-sink-startup-failure-policy)
 for configuration, loss semantics, and unchanged runtime delivery behavior.
 
 OpenTelemetry subscriber and ATOF stream sink delivery diagnostics remain
@@ -398,7 +398,7 @@ that attempt rather than current exporter health.
 ## Classifiers and Producer Coverage
 
 CLI, daemon, and embedded readers use the same snapshot contract. The
-[Diagnostics API](/reference/diagnostics/api) explains discovery and snapshot queries.
+[Diagnostics API](/operate-and-troubleshoot/diagnostics/api) explains discovery and snapshot queries.
 It also covers pagination, errors, and numeric formats.
 
 A classifier maps an error to a diagnostic code and failure class. The shared

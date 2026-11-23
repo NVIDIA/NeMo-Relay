@@ -1,7 +1,7 @@
 ---
 title: "Operational Logging"
 description: "Configure NeMo Relay operational logs through CLI options, environment variables, TOML, or Rust APIs."
-position: 4
+position: 1
 ---
 {/* SPDX-FileCopyrightText: Copyright (c) 2026, NVIDIA CORPORATION & AFFILIATES. All rights reserved.
 SPDX-License-Identifier: Apache-2.0 */}
@@ -15,7 +15,7 @@ Relay writes operational logs to stderr by default. Set `stderr_enabled` to
 `false` to disable that sink; configured file sinks continue receiving records.
 Each record includes a root Relay ID for correlation.
 
-Rust hosts can create a [diagnostic context](/reference/diagnostics) before
+Rust hosts can create a [diagnostic context](/operate-and-troubleshoot/diagnostics) before
 logging initialization and pass it to
 `LoggingRuntime::configure_with_diagnostics`. Sink failures remain inspectable
 through that context even if logging cannot initialize. This opt-in API also

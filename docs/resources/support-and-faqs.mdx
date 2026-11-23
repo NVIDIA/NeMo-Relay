@@ -242,7 +242,7 @@ Choose the surface based on what must change:
 | Wrap streaming chunk delivery and finalization | Stream execution intercept |
 
 Refer to [Middleware](/about-nemo-relay/concepts/middleware) and
-[Add Middleware](/instrument-applications/advanced-guide).
+[Add Middleware](/instrument-applications/middleware).
 
 ### What Is The Middleware Pipeline?
 
@@ -279,7 +279,7 @@ scope closes.
 
 Use plugins when the behavior should be reusable and installed from
 configuration. Refer to [Registration Levels](/about-nemo-relay/concepts/middleware#registration-levels)
-and [Middleware Registration Families](/instrument-applications/advanced-guide#middleware-registration-families).
+and [Middleware Registration Families](/instrument-applications/middleware#middleware-registration-families).
 
 ### How Does Middleware Ordering Work?
 
@@ -454,7 +454,7 @@ scope-local behavior when policy should apply only to one request or workflow.
 Sanitize or summarize large payloads before production subscribers and
 exporters consume them.
 
-Refer to [Performance](/reference/performance) for runtime-model guidance and
+Refer to [Performance](/instrument-applications/performance) for runtime-model guidance and
 related topics.
 
 ## Troubleshooting, Releases, And Contributing
@@ -464,12 +464,12 @@ you are preparing a contribution.
 
 ### What Should I Check When Something Fails?
 
-Start with [Troubleshooting Guide](/resources/troubleshooting).
+Start with [Troubleshooting Guide](/operate-and-troubleshoot/troubleshooting).
 Common checks include:
 
 - Confirm the environment matches the package requirements in
   [API Installation](/getting-started/installation/apis) and the
-  [Support Matrix](/reference/support-matrix).
+  [Support Matrix](/about-nemo-relay/support-matrix).
 - Verify work is running inside the intended scope stack.
 - Check whether middleware was registered globally or scope-locally.
 - Confirm manual lifecycle calls emit matching start and end events.

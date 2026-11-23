@@ -1,0 +1,88 @@
+---
+title: "Run the Latency Benchmark"
+description: "Measure Relay overhead with the opt-in loopback latency benchmark."
+position: 6
+---
+{/* SPDX-FileCopyrightText: Copyright (c) 2026, NVIDIA CORPORATION & AFFILIATES. All rights reserved.
+SPDX-License-Identifier: Apache-2.0 */}
+
+Use the opt-in latency benchmark to measure the local latency that Relay
+adds around Codex and Claude Code traffic. The harness uses deterministic
+loopback OpenAI and Anthropic providers so network and model-service latency do
+not hide Relay's contribution.
+
+## Prerequisites
+
+Complete the [Development Setup](/contribute/development-setup), including
+Rust, Python 3.11 or newer, `uv`, and `just`. Run the commands from the
+repository root. The benchmark recipe builds the release CLI.
+
+Before running the default matrix, keep at least 30 GiB free in the operating
+system's temporary directory. The matrix can write about 25 GiB of temporary
+ATOF data, which it removes after a normal run.
+
+## Run a Smoke Test
+
+Start with a small matrix to verify that the benchmark works:
+
+```bash
+just latency-benchmark \
+  --tests gateway \
+  --providers openai \
+  --modes buffered \
+  --payload-sizes 4096 \
+  --concurrency 1 \
+  --samples 5 \
+  --warmup 1 \
+  --response-bytes 1024
+```
+
+Check that the command completes successfully and writes
+`target/benchmark-results/nemo-relay-latency-report.json` and
+`target/benchmark-results/nemo-relay-latency-report.html`. Do not use the smoke
+test for performance conclusions; its sample count only checks functionality.
+
+## Run the Default Matrix
+
+After checking available disk space, run the default matrix:
+
+```bash
+just latency-benchmark
+```
+
+The default configuration measures the following paths:
+
+- Direct requests to the mock provider.
+- Relay with no exporter, which isolates the managed gateway pipeline.
+- Relay with the ATOF file exporter.
+- Relay with the OTLP exporter sending to a local OpenTelemetry HTTP receiver.
+- Full `nemo-relay hook-forward` subprocesses for Codex and Claude Code.
+- Cold Relay process startup through gateway readiness.
+
+Gateway scenarios cover OpenAI Responses and Anthropic Messages, buffered and
+streaming responses, multiple request payload sizes, and multiple concurrency
+levels.
+
+For buffered calls, inspect total latency. For streaming calls, inspect both
+time to the first content delta and total stream time. The report includes
+p50, p95, and p99 paired latency differences and a bootstrap 95% confidence
+interval for the median.
+
+For setup, CLI options, configuration files, middleware variants, storage,
+output paths, and troubleshooting, refer to the
+[latency benchmark run guide](https://github.com/NVIDIA/NeMo-Relay/blob/main/scripts/latency_benchmark/README.md).
+
+Treat results as environment-specific. Record the commit, release build,
+hardware, operating system, workload sizes, and sample counts when sharing a
+number. Prefer added milliseconds over percentages: a small absolute increase
+can look disproportionately large when the direct loopback baseline is much
+faster than a real model call. Use real Codex or Claude Code runs as an
+end-to-end validation, not as the primary gateway measurement, because host
+startup and scheduling add unrelated variance.
+
+## Related Topics
+
+Refer to these guides for application performance and documentation validation:
+
+- [Application Performance](/instrument-applications/performance)
+- [Testing and Documentation](/contribute/testing-and-docs)

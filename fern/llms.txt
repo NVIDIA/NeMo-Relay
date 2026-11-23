@@ -40,7 +40,7 @@ SPDX-License-Identifier: Apache-2.0
 - [Observability](https://docs.nvidia.com/nemo/relay/latest/configure-plugins/observability/llms.txt): Configure ATOF, ATIF, OpenTelemetry, and OpenInference output.
 - [Adaptive Runtime](https://docs.nvidia.com/nemo/relay/latest/configure-plugins/adaptive/llms.txt): Configure adaptive runtime behavior and hints.
 - [Build Plugins](https://docs.nvidia.com/nemo/relay/latest/build-plugins/llms.txt): Develop and package language-binding, native, and worker plugins.
-- [Troubleshooting](https://docs.nvidia.com/nemo/relay/latest/resources/troubleshooting/llms.txt): Diagnose runtime, tracing, and integration problems.
+- [Troubleshooting](https://docs.nvidia.com/nemo/relay/latest/operate-and-troubleshoot/troubleshooting/llms.txt): Diagnose runtime, tracing, and integration problems.
 
 ## Language References
 
@@ -49,11 +49,12 @@ Use these generated references for symbol lookup. Use the concepts and task guid
 - [Python](https://docs.nvidia.com/nemo/relay/latest/reference/api/python-library-reference/llms.txt): Python runtime and worker-plugin SDK modules.
 - [Node.js](https://docs.nvidia.com/nemo/relay/latest/reference/api/nodejs-library-reference/llms.txt): Node.js runtime and integration entry points.
 - [Rust](https://docs.nvidia.com/nemo/relay/latest/reference/api/rust-library-reference/llms.txt): Rust crates, modules, and public symbols.
-- [Reference Guides](https://docs.nvidia.com/nemo/relay/latest/reference/llms.txt): Runtime contracts, configuration reference, diagnostics, migration guides, and library references.
+- [API Reference](https://docs.nvidia.com/nemo/relay/latest/reference/api/llms.txt): Capability contracts and generated library references.
+- [Operate and Troubleshoot](https://docs.nvidia.com/nemo/relay/latest/operate-and-troubleshoot/llms.txt): Operational logging, runtime diagnostics, and investigation guides.
 
 ## Contribute and Find More
 
 - [Contribute](https://docs.nvidia.com/nemo/relay/latest/contribute/llms.txt): Set up a source checkout and follow contribution, testing, and documentation workflows.
-- [Resources](https://docs.nvidia.com/nemo/relay/latest/resources/llms.txt): Troubleshooting, community, and legal information.
+- [Resources](https://docs.nvidia.com/nemo/relay/latest/resources/llms.txt): Community, FAQs, glossary, and legal information.
 - [Complete Latest Page Inventory](https://docs.nvidia.com/nemo/relay/latest/llms.txt): Exhaustive generated index; use only when a smaller section index is insufficient.
 - [Development Page Inventory](https://docs.nvidia.com/nemo/relay/dev/llms.txt): Exhaustive index for unreleased development documentation.

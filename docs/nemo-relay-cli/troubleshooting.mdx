@@ -14,13 +14,13 @@ include checks for a coding agent.
 
 | Symptom | What to Check |
 | --- | --- |
-| Agent launch fails | Confirm [agent requirements](/reference/support-matrix), [run syntax](/nemo-relay-cli/command-reference#run-syntax), and [configuration selection](/nemo-relay-cli/configuration#shared-configuration). |
+| Agent launch fails | Confirm [agent requirements](/about-nemo-relay/support-matrix), [run syntax](/nemo-relay-cli/command-reference#run-syntax), and [configuration selection](/nemo-relay-cli/configuration#shared-configuration). |
 | Persistent integration is missing or unhealthy | Follow [installation diagnostics](/nemo-relay-cli/plugin-installation#diagnose), then the relevant recovery instructions on that page. |
 | Tool activity appears but LLM events are missing | Follow [Claude Code](/nemo-relay-cli/claude-code#troubleshoot-llm-lifecycle), [Codex](/nemo-relay-cli/codex#troubleshoot-llm-lifecycle), or [pi](/nemo-relay-cli/pi#troubleshoot-llm-lifecycle) troubleshooting. |
 | Requests reach the wrong endpoint | Check [Provider Connections](/nemo-relay-cli/provider-upstreams), including the route-to-upstream table. |
 | Authentication or helper execution fails | Check [Provider Authentication](/nemo-relay-cli/authentication), including credential precedence and helper failure behavior. |
 | Export files are missing or an exporter check fails | Read [Check Configuration and Exporters](#check-configuration-and-exporters), then the exporter configuration named by doctor. |
-| Gateway startup or hook delivery fails | Check [Shared Gateway Lifecycle](/nemo-relay-cli/plugin-installation#shared-gateway-lifecycle) and [Hook Forwarding](/nemo-relay-cli/gateway-reference#hook-forwarding). Inspect [operational logs](/reference/operational-logging); use [runtime diagnostics](/reference/diagnostics/cli) for an existing process. |
+| Gateway startup or hook delivery fails | Check [Shared Gateway Lifecycle](/nemo-relay-cli/plugin-installation#shared-gateway-lifecycle) and [Hook Forwarding](/nemo-relay-cli/gateway-reference#hook-forwarding). Inspect [operational logs](/operate-and-troubleshoot/operational-logging); use [runtime diagnostics](/operate-and-troubleshoot/diagnostics/cli) for an existing process. |
 
 ## Check Configuration and Exporters
 

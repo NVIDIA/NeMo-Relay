@@ -113,4 +113,4 @@ or observe the new contract.
 - Registry: `crates/core/src/registry.rs`
 - Pipeline docs: `docs/about-nemo-relay/concepts/middleware.mdx`
 - Architecture docs: `docs/about-nemo-relay/architecture.mdx`
-- Registration examples: `docs/instrument-applications/advanced-guide.mdx`
+- Registration examples: `docs/instrument-applications/middleware/index.mdx`

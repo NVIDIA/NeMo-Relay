@@ -7,7 +7,7 @@ position: 1
 SPDX-License-Identifier: Apache-2.0 */}
 
 CLI gateways, daemon brokers, and managed Relay workers use the same
-[diagnostic service](/reference/diagnostics). Each process owns its settings and
+[diagnostic service](/operate-and-troubleshoot/diagnostics). Each process owns its settings and
 stored evidence, and controls who can read it. Reads use existing listeners.
 They never start or recover a runtime.
 
@@ -15,7 +15,7 @@ They never start or recover a runtime.
 
 Diagnostics is compiled in and disabled by default. Configure it through the
 existing CLI configuration layers in `config.toml`. This is separate from the
-`plugins.toml` profile used by [embedded runtimes](/reference/diagnostics/bindings).
+`plugins.toml` profile used by [embedded runtimes](/operate-and-troubleshoot/diagnostics/bindings).
 Refer to [Shared Configuration](/nemo-relay-cli/configuration#shared-configuration)
 for user and system file discovery and precedence. Use a configuration file for
 persistent settings:
@@ -135,9 +135,9 @@ forwarded diagnostic environment variables. Inspect effective settings with
 `--capabilities`. Change them through the existing explicit gateway restart
 workflow. An older or unexposed endpoint reports unsupported/unavailable.
 
-The [Diagnostics API](/reference/diagnostics/api) defines the read routes and query
+The [Diagnostics API](/operate-and-troubleshoot/diagnostics/api) defines the read routes and query
 fields. It also explains discovery, pagination, and stable HTTP errors.
-The [memory route](/reference/diagnostics/memory#detailed-memory-inspection)
+The [memory route](/operate-and-troubleshoot/diagnostics/memory#detailed-memory-inspection)
 uses the same authorization and delivery budgets.
 
 The capability response's `producers` lists supported CLI operation families and
@@ -273,7 +273,7 @@ Increasing the CLI's `--max-response-bytes` only enlarges the receive allowance.
 It does not ask the broker to collect more worker pages. For filtered or paginated
 evidence, use the worker's direct diagnostic reader through its existing
 authorized transport and current worker read grant, following the
-[query and pagination contract](/reference/diagnostics/api#continue-or-restart-a-read).
+[query and pagination contract](/operate-and-troubleshoot/diagnostics/api#continue-or-restart-a-read).
 A broker operator credential alone does not substitute for a worker read grant.
 The `--worker` CLI mode provides cached inspection, not a direct-worker pagination
 client. If direct authorized access is unavailable, treat the cached rows as

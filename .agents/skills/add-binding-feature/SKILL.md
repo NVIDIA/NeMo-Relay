@@ -87,7 +87,7 @@ Lock these before implementing:
 - Reference index: `docs/reference/api/index.mdx`
 - Getting started and binding status: `README.md`,
   `docs/getting-started/quick-start/index.mdx`,
-  `docs/reference/support-matrix.mdx`
+  `docs/about-nemo-relay/support-matrix.mdx`
 - Typed wrappers and codecs: `docs/integrate-into-frameworks/using-codecs.mdx`,
   `docs/integrate-into-frameworks/provider-codecs.mdx`
 - Adaptive config/plugins: `docs/configure-plugins/about.mdx`,

@@ -114,7 +114,20 @@ class DocsRetentionTests(unittest.TestCase):
         routes = [
             "guide",
             "nemo-relay-cli/about",
-            "reference/migration-guides",
+            "about-nemo-relay/migration-guides",
+            "about-nemo-relay/support-matrix",
+            "configure-plugins/observability/atof/spec",
+            "operate-and-troubleshoot/operational-logging",
+            "operate-and-troubleshoot/diagnostics",
+            "operate-and-troubleshoot/diagnostics/cli",
+            "operate-and-troubleshoot/troubleshooting",
+            "operate-and-troubleshoot/troubleshooting/trace-incident-runbook",
+            "instrument-applications/middleware",
+            "instrument-applications/middleware/sanitize-events",
+            "instrument-applications/middleware/tool-execution-intercepts",
+            "instrument-applications/middleware/llm-request-intercepts",
+            "instrument-applications/performance",
+            "reference/api",
             "build-plugins/about",
             "build-plugins/native/about",
             "build-plugins/native/build-and-package",
@@ -181,7 +194,11 @@ class DocsRetentionTests(unittest.TestCase):
                         self.assertIn(version, entries, redirect["destination"])
                         if ":slug*" in route:
                             example = (
-                                "langchain/callbacks"
+                                "cli"
+                                if "/diagnostics/" in route
+                                else "trace-incident-runbook"
+                                if "/troubleshooting/" in route
+                                else "langchain/callbacks"
                                 if "python-library-reference" in route
                                 else "enum-cachereadaccounting"
                                 if "/codec/" in route

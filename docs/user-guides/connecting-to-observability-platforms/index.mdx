@@ -74,7 +74,7 @@ The Brev example uses this path.
 For an existing deployment, finish the selected integration setup, then return
 here once you can capture one agent or turn scope, one model call, and one tool call.
 An exporter sends existing events; it does not add instrumentation. The
-[support matrix](/reference/support-matrix) describes each integration's coverage.
+[support matrix](/about-nemo-relay/support-matrix) describes each integration's coverage.
 
 ## 2. Enable the plugin and select a destination
 
@@ -130,7 +130,7 @@ disabled; apply your retention and access policy to `logs/events.jsonl`.
 An explicit SDK plugin file adds a configuration layer; system plugin policy still
 applies. Before upgrading an existing deployment to Relay 1.0, migrate worker
 plugins to the current protocol and check native-plugin compatibility. See the
-[migration guide](/reference/migration-guides#migrate-worker-plugins-to-nemo-relay-100).
+[migration guide](/about-nemo-relay/migration-guides#migrate-worker-plugins-to-nemo-relay-100).
 
 For a directly instrumented Python application, import the observability
 component and activate the host around application work:

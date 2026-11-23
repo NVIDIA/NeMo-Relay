@@ -1,7 +1,7 @@
 ---
 title: "Add Middleware"
 description: "Add one policy to a working Execute call, verify its effect, and extend middleware as needed."
-position: 5
+position: 1
 ---
 {/* SPDX-FileCopyrightText: Copyright (c) 2026, NVIDIA CORPORATION & AFFILIATES. All rights reserved.
 SPDX-License-Identifier: Apache-2.0 */}
@@ -11,6 +11,26 @@ SPDX-License-Identifier: Apache-2.0 */}
 the code that performs the underlying work.** Relay uses it to check or modify
 requests, allow or block execution, add retries or fallbacks, and control what
 data is recorded in events.
+
+## Choose a Guide
+
+Start with the implementation guide, or look up the contract for the middleware
+you already use:
+
+<CardGroup cols={2}>
+<Card title="Add Middleware" href="#what-you-build">
+Add a policy to a working tool or LLM call and verify its effect in this guide.
+</Card>
+<Card title="Sanitize Events" href="/instrument-applications/middleware/sanitize-events">
+Look up sanitizer callback fields, ordering, and event publication behavior.
+</Card>
+<Card title="Tool Execution Intercepts" href="/instrument-applications/middleware/tool-execution-intercepts">
+Look up tool results, continuation behavior, and managed lifecycle outcomes.
+</Card>
+<Card title="LLM Request Intercepts" href="/instrument-applications/middleware/llm-request-intercepts">
+Look up request authority, callback results, and managed lifecycle outcomes.
+</Card>
+</CardGroup>
 
 ## What You Build
 
@@ -40,15 +60,15 @@ existing imports. Call `register_query_policy()` in Python,
 
 <Tabs>
 <Tab title="Python" language="python">
-<Code src="_code/python/query_policy.py" language="python" />
+<Code src="../_code/python/query_policy.py" language="python" />
 </Tab>
 
 <Tab title="Node.js" language="node">
-<Code src="_code/nodejs/query-policy.js" language="js" />
+<Code src="../_code/nodejs/query-policy.js" language="js" />
 </Tab>
 
 <Tab title="Rust" language="rust">
-<Code src="_code/rust/query_policy.rs" language="rust" />
+<Code src="../_code/rust/query_policy.rs" language="rust" />
 </Tab>
 </Tabs>
 
@@ -110,15 +130,15 @@ This example adds three behaviors around a `search` tool:
 
 <Tabs>
 <Tab title="Python" language="python">
-<Code src="_code/python/tool_policy.py" language="python" />
+<Code src="../_code/python/tool_policy.py" language="python" />
 </Tab>
 
 <Tab title="Node.js" language="node">
-<Code src="_code/nodejs/tool-policy.js" language="js" />
+<Code src="../_code/nodejs/tool-policy.js" language="js" />
 </Tab>
 
 <Tab title="Rust" language="rust">
-<Code src="_code/rust/tool_policy.rs" language="rust" />
+<Code src="../_code/rust/tool_policy.rs" language="rust" />
 </Tab>
 
 </Tabs>
@@ -126,7 +146,7 @@ This example adds three behaviors around a `search` tool:
 Tool execution intercepts return an outcome even when they only forward the
 canonical result from `next`. A forwarding intercept must preserve both
 `result` and `annotation`; pending marks remain lifecycle-owned. Refer to
-[Tool Execution Intercept Outcomes](/reference/tool-execution-intercept-outcomes)
+[Tool Execution Intercept Outcomes](/instrument-applications/middleware/tool-execution-intercepts)
 for annotation, pending-mark, lifecycle, and binding-specific return semantics.
 
 ## Validate the Middleware
@@ -143,15 +163,15 @@ To inspect redaction, make these changes to the working tool example:
 
 <Tabs>
 <Tab title="Python" language="python">
-<Code src="_code/python/print_event.py" language="python" />
+<Code src="../_code/python/print_event.py" language="python" />
 </Tab>
 
 <Tab title="Node.js" language="node">
-<Code src="_code/nodejs/print-event.js" language="js" />
+<Code src="../_code/nodejs/print-event.js" language="js" />
 </Tab>
 
 <Tab title="Rust" language="rust">
-<Code src="_code/rust/print_event.rs" language="rust" />
+<Code src="../_code/rust/print_event.rs" language="rust" />
 </Tab>
 </Tabs>
 
@@ -325,7 +345,7 @@ A tool execution intercept receives a `ToolExecutionContext` carrying the tool
 name, the arguments, and the managed `tool_call_id`. Use it when an intercept
 short-circuits execution and must still correlate its result with the
 originating tool call. See
-[Tool Execution Intercept Outcomes](/reference/tool-execution-intercept-outcomes)
+[Tool Execution Intercept Outcomes](/instrument-applications/middleware/tool-execution-intercepts)
 for the per-binding contract.
 
 ### Node.js Callback Failures
@@ -385,3 +405,14 @@ Use these links to continue from this workflow into the next related task.
 - Use [Middleware](/about-nemo-relay/concepts/middleware) to review execution order.
 - Use [Code Examples](/instrument-applications/code-examples) for direct registration and partial-execution examples.
 - Use [Handle Non-Serializable Data](/integrate-into-frameworks/non-serializable-data) if middleware needs to work with framework objects.
+
+## Detailed Middleware Contracts
+
+Refer to these contracts for callback behavior and managed lifecycle outcomes:
+
+- [Sanitize Events](/instrument-applications/middleware/sanitize-events) defines
+  callback fields, ordering, and event publication behavior.
+- [Tool Execution Intercepts](/instrument-applications/middleware/tool-execution-intercepts)
+  defines tool results, continuation behavior, and managed lifecycle outcomes.
+- [LLM Request Intercepts](/instrument-applications/middleware/llm-request-intercepts)
+  defines request authority, callback results, and managed lifecycle outcomes.

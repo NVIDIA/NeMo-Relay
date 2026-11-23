@@ -1304,7 +1304,7 @@ and value; see [Typed Metric Marks](/configure-plugins/pii-redaction/redaction-b
 ## Verify the Policy
 
 Valid selector syntax does not guarantee that the policy changes a payload.
-Enable [runtime diagnostics](/reference/diagnostics) at startup and inspect
+Enable [runtime diagnostics](/operate-and-troubleshoot/diagnostics) at startup and inspect
 `pii_redaction.selector_evaluated` observations for the JSON documents the
 built-in sanitizer processes. Recording is best effort and depends on diagnostic
 admission and retention.

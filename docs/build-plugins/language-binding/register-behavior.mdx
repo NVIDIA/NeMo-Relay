@@ -350,7 +350,7 @@ drop. Retaining a codec object past that boundary produces an error; it does not
 the invocation lifetime.
 
 The LLM intercept returns the
-[complete outcome](/reference/llm-request-intercept-outcomes) rather than relying on
+[complete outcome](/instrument-applications/middleware/llm-request-intercepts) rather than relying on
 mutation. In particular, it preserves `annotated`. The Rust request is mutable inside its
 owned callback value; Python creates a new typed request, and Node.js creates a new plain
 object. Those language differences do not change Relay semantics.

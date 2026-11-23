@@ -15,7 +15,7 @@ means the part currently in use. Neither value measures resident set size (RSS),
 the memory currently resident in RAM. This view does not measure a plugin's
 application heap allocations.
 
-All read surfaces reuse the [query and authorization contract](/reference/diagnostics/api).
+All read surfaces reuse the [query and authorization contract](/operate-and-troubleshoot/diagnostics/api).
 Component identities can contain restricted metadata even when the memory view
 omits event text. Keep memory pages within the same inspection boundary as snapshots.
 
@@ -61,7 +61,7 @@ not measure resident pages or whole-process working-set memory.
 Memory inspection is separate from the canonical diagnostic snapshot. Embedded
 bindings expose aggregate gauges through reader metadata. The memory view adds bounded
 pages for individual entries and components and independently sampled resource context through
-[`inspect_memory` and the authorized memory route](/reference/diagnostics/memory#detailed-memory-inspection).
+[`inspect_memory` and the authorized memory route](/operate-and-troubleshoot/diagnostics/memory#detailed-memory-inspection).
 Canonical aggregate JSON quantities use lossless decimal strings. The native
 Rust aggregate fields retain `usize`.
 
@@ -100,7 +100,7 @@ For Windows PowerShell 5.1, escape the embedded JSON quotes:
 nemo-relay diagnostics --memory --query '{\"max_components\":0,\"max_events\":1}'
 ```
 
-See [JSON Queries in Windows Shells](/reference/diagnostics/cli#json-queries-in-windows-shells)
+See [JSON Queries in Windows Shells](/operate-and-troubleshoot/diagnostics/cli#json-queries-in-windows-shells)
 for PowerShell's legacy argument-passing mode.
 
 To make the same request from code, choose your binding below. These examples

@@ -1,7 +1,7 @@
 ---
 title: "Migration Guides"
 description: "Migrate worker plugins and managed Claude bundles to NeMo Relay 1.0.0, or review the 0.11.0 upgrade."
-position: 6
+position: 9
 ---
 {/* SPDX-FileCopyrightText: Copyright (c) 2026, NVIDIA CORPORATION & AFFILIATES. All rights reserved.
 SPDX-License-Identifier: Apache-2.0 */}
@@ -211,7 +211,7 @@ Custom Python objects stay with the call that returned them. Their data is
 visible in the wrapper when it has a JSON form.
 The response cache runs those tools again instead of replaying the objects.
 For the value format and replay rules, refer to
-[Normalized Tool Results](/reference/tool-execution-intercept-outcomes#normalized-tool-results)
+[Normalized Tool Results](/instrument-applications/middleware/tool-execution-intercepts#normalized-tool-results)
 and [LangChain](/supported-integrations/langchain).
 
 #### Check ADK LiteLLM Settings
@@ -343,8 +343,8 @@ collection is disabled. Later initialization with different settings returns
 `diagnostics: configuration_conflict`. Restart the process to change them.
 For an existing gateway, update its owner's configuration and restart it.
 Capture any needed evidence first because shutdown discards the stored history.
-Refer to [Embedded Diagnostics](/reference/diagnostics/bindings) and
-[CLI and Daemon Diagnostics](/reference/diagnostics/cli).
+Refer to [Embedded Diagnostics](/operate-and-troubleshoot/diagnostics/bindings) and
+[CLI and Daemon Diagnostics](/operate-and-troubleshoot/diagnostics/cli).
 
 Grant diagnostic read access only to callers allowed to inspect the whole
 context. Detail can contain private data that has not been sanitized. Query
@@ -356,8 +356,8 @@ not grant access to host snapshots. Refer to
 Diagnostic memory limits cover diagnostic storage, not total process memory.
 Daemon worker caches can contain only part of a snapshot or a stale page.
 Check the returned coverage and freshness fields. Refer to
-[Diagnostic Memory Inspection](/reference/diagnostics/memory) and
-[Diagnostics API](/reference/diagnostics/api).
+[Diagnostic Memory Inspection](/operate-and-troubleshoot/diagnostics/memory) and
+[Diagnostics API](/operate-and-troubleshoot/diagnostics/api).
 
 #### Review Exported Telemetry
 
@@ -579,14 +579,14 @@ Logging overrides now change only the fields they set. For example,
 `NEMO_RELAY_LOG=info` keeps file sinks, rotation settings, and the flush interval
 from TOML configuration. Review scripts that relied on an override to replace
 the full logging configuration. Refer to
-[Operational Logging](/reference/operational-logging#choose-a-configuration-source).
+[Operational Logging](/operate-and-troubleshoot/operational-logging#choose-a-configuration-source).
 
 File sinks remain required by default. Set `failure_policy = "optional"` on an
 individual sink to let Relay start even if it cannot open that file.
 If Relay cannot open the file, it skips that sink and does not retry automatically.
 Records for that sink are lost.
 Fix the file access problem, then restart Relay to try again. Refer to
-[File Sink Startup Failure Policy](/reference/operational-logging#file-sink-startup-failure-policy).
+[File Sink Startup Failure Policy](/operate-and-troubleshoot/operational-logging#file-sink-startup-failure-policy).
 
 #### Update Rust Logging Configuration
 
@@ -594,7 +594,7 @@ If you create `FileLogSinkConfig` directly in Rust, add the `failure_policy`
 field. Set it to `FileLogSinkFailurePolicy::Required` to keep the default
 behavior. You can also use `..Default::default()` to fill in missing fields.
 Existing TOML files need no changes to keep sinks required. Refer to
-[Rust Library API](/reference/operational-logging#rust-library-api).
+[Rust Library API](/operate-and-troubleshoot/operational-logging#rust-library-api).
 
 #### Review Adaptive Hint Injection
 

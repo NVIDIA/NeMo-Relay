@@ -15,7 +15,7 @@ Events are the runtime record of what happened. NeMo Relay uses Agent
 Trajectory Observability Format (ATOF) `0.1` as the canonical event format for
 scopes, managed execution helpers, manual lifecycle APIs, subscribers, and
 exporters. Refer to the
-[ATOF Core Specification](/reference/atof-event-format) for the normative wire
+[ATOF Core Specification](/configure-plugins/observability/atof/spec) for the normative wire
 format.
 
 ## Event Kinds
@@ -176,7 +176,7 @@ request or response data before reading raw payloads again.
 Before that handoff, event sanitizers can replace `data`, `category_profile`,
 and `metadata`. The runtime keeps identity, lifecycle, category, timestamp,
 and parent fields immutable. Refer to
-[Event Sanitizers](/reference/event-sanitizers) for registration levels and
+[Event Sanitizers](/instrument-applications/middleware/sanitize-events) for registration levels and
 ordering.
 
 Events preserve runtime facts. They do not decide which scope owns a call, how
