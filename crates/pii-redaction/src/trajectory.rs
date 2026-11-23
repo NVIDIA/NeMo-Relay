@@ -47,6 +47,8 @@ impl CustomMarkPayloadPolicy {
 
 #[derive(Clone)]
 pub(super) struct TrajectorySanitizer {
+    pub(super) approval:
+        nemo_relay_runtime::api::runtime::subscriber_dispatcher::ProjectionApproval,
     replacement: Arc<String>,
     custom_mark_payload_policy: CustomMarkPayloadPolicy,
     metric_string_attribute_allowlist: Arc<BTreeMap<String, BTreeSet<String>>>,
@@ -65,6 +67,7 @@ impl TrajectorySanitizer {
         metric_string_attribute_allowlist: BTreeMap<String, Vec<String>>,
     ) -> Self {
         Self {
+            approval: Default::default(),
             replacement: Arc::new(replacement),
             custom_mark_payload_policy: policy,
             metric_string_attribute_allowlist: Arc::new(
@@ -194,12 +197,15 @@ impl TrajectorySanitizer {
         }
 
         if category == Some("llm") {
+            // Preserve an exact clean projection from this policy. A different
+            // payload (or a manually emitted event) still needs clean rendering.
+            let approved = fields.data.take_if(|data| self.approval.matches(data));
             let projected = self.project_llm_event(event, &fields);
-            fields.data = Some(
+            fields.data = Some(approved.unwrap_or_else(|| {
                 projected
                     .as_ref()
-                    .map_or_else(empty_object, |projection| projection.data.clone()),
-            );
+                    .map_or_else(empty_object, |projection| projection.data.clone())
+            }));
             fields.category_profile = fields.category_profile.map(|profile| {
                 let mut profile = sanitize_category_profile_base(profile, self);
                 if let Some(projected) = projected.as_ref() {
@@ -706,7 +712,14 @@ fn sanitize_api_specific_request(
             api_format,
         } => ApiSpecificRequest::OCIGenAI {
             compartment_id: marked_option(compartment_id, replacement),
-            serving_mode: opaque_option(serving_mode),
+            serving_mode: serving_mode.map(|mode| {
+                match mode.get("servingType").and_then(Json::as_str) {
+                    Some(kind @ ("ON_DEMAND" | "DEDICATED")) => {
+                        serde_json::json!({"servingType": kind})
+                    }
+                    _ => empty_object(),
+                }
+            }),
             api_format: api_format
                 .filter(|value| ["GENERIC", "COHERE", "COHEREV2"].contains(&value.as_str())),
         },

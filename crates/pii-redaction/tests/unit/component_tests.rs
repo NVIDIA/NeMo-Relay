@@ -952,7 +952,7 @@ async fn trajectory_event_profile_preserves_provider_and_marks_identifiers() {
             .as_deref()
             .unwrap()
             .last_user_message(),
-        Some("[REDACTED]")
+        Some("[REDACTED]".into())
     );
 }
 
@@ -1037,12 +1037,19 @@ fn no_codec_request_context() -> LlmSanitizeRequestContext {
     LlmSanitizeRequestContext::default()
 }
 
-struct IdentifiedRequestCodec {
+struct IdentifiedRequestCodec<C> {
+    redaction_enabled: bool,
     identity: LlmCodecIdentity,
-    inner: OpenAIResponsesCodec,
+    inner: C,
 }
 
-impl LlmCodec for IdentifiedRequestCodec {
+impl<C: LlmCodec> LlmCodec for IdentifiedRequestCodec<C> {
+    fn redaction(&self) -> Option<&dyn nemo_relay_types::codec::redaction::LlmRequestRedaction> {
+        self.redaction_enabled
+            .then(|| LlmCodec::redaction(&self.inner))
+            .flatten()
+    }
+
     fn codec_identity(&self) -> LlmCodecIdentity {
         self.identity.clone()
     }
@@ -1060,7 +1067,13 @@ impl LlmCodec for IdentifiedRequestCodec {
     }
 }
 
-impl LlmResponseCodec for IdentifiedRequestCodec {
+impl<C: LlmResponseCodec> LlmResponseCodec for IdentifiedRequestCodec<C> {
+    fn redaction(&self) -> Option<&dyn nemo_relay_types::codec::redaction::LlmResponseRedaction> {
+        self.redaction_enabled
+            .then(|| LlmResponseCodec::redaction(&self.inner))
+            .flatten()
+    }
+
     fn codec_identity(&self) -> LlmCodecIdentity {
         self.identity.clone()
     }
@@ -1077,6 +1090,10 @@ impl LlmResponseCodec for IdentifiedRequestCodec {
 struct WrappedResponsesCodec;
 
 impl LlmCodec for WrappedResponsesCodec {
+    fn redaction(&self) -> Option<&dyn nemo_relay_types::codec::redaction::LlmRequestRedaction> {
+        LlmCodec::redaction(&OpenAIResponsesCodec)
+    }
+
     fn codec_identity(&self) -> LlmCodecIdentity {
         LlmCodecIdentity::BuiltIn(BuiltinLlmCodec::OpenAiResponses)
     }
@@ -1114,6 +1131,10 @@ impl LlmCodec for WrappedResponsesCodec {
 }
 
 impl LlmResponseCodec for WrappedResponsesCodec {
+    fn redaction(&self) -> Option<&dyn nemo_relay_types::codec::redaction::LlmResponseRedaction> {
+        LlmResponseCodec::redaction(&OpenAIResponsesCodec)
+    }
+
     fn codec_identity(&self) -> LlmCodecIdentity {
         LlmCodecIdentity::BuiltIn(BuiltinLlmCodec::OpenAiResponses)
     }
@@ -1176,10 +1197,12 @@ async fn trajectory_managed_llm_events_fail_closed_for_runtime_and_opaque_codecs
                 .request(request)
                 .func(noop_openai_chat_exec_fn(response.clone()))
                 .codec(Arc::new(IdentifiedRequestCodec {
+                    redaction_enabled: false,
                     identity: identity.clone(),
                     inner: OpenAIResponsesCodec,
                 }))
                 .response_codec(Arc::new(IdentifiedRequestCodec {
+                    redaction_enabled: false,
                     identity,
                     inner: OpenAIResponsesCodec,
                 }))
@@ -1323,6 +1346,7 @@ async fn normalized_llm_paths_use_the_active_codec_and_fail_closed_for_unknown_c
                 }),
             },
             LlmSanitizeRequestContext::for_request_codec(Some(Arc::new(IdentifiedRequestCodec {
+                redaction_enabled: true,
                 identity,
                 inner: OpenAIResponsesCodec,
             }))),
@@ -2887,7 +2911,7 @@ async fn trajectory_profile_preserves_typed_llm_accounting_while_redacting_annot
     let profile = sanitized.category_profile.unwrap();
     assert_eq!(profile.model_name.as_deref(), Some("claude-sonnet-4-6"));
     let response = profile.annotated_response.unwrap();
-    assert_eq!(response.response_text(), Some("[REDACTED]"));
+    assert_eq!(response.response_text(), Some("[REDACTED]".into()));
     assert!(matches!(
         response.finish_reason,
         Some(nemo_relay_types::codec::response::FinishReason::Complete)
@@ -4524,7 +4548,10 @@ async fn trajectory_preset_sanitizes_stream_finalization_without_changing_client
         .category_profile()
         .and_then(|profile| profile.annotated_request.as_deref())
         .unwrap();
-    assert_eq!(annotated_request.last_user_message(), Some("[REDACTED]"));
+    assert_eq!(
+        annotated_request.last_user_message(),
+        Some("[REDACTED]".into())
+    );
     let chunk_mark = captured
         .iter()
         .find(|event| event.name() == "llm.chunk")
@@ -4544,7 +4571,10 @@ async fn trajectory_preset_sanitizes_stream_finalization_without_changing_client
         .category_profile()
         .and_then(|profile| profile.annotated_response.as_deref())
         .unwrap();
-    assert_eq!(annotated_response.response_text(), Some("[REDACTED]"));
+    assert_eq!(
+        annotated_response.response_text(),
+        Some("[REDACTED]".into())
+    );
     assert_eq!(
         annotated_response.usage.as_ref().unwrap().total_tokens,
         Some(11)
@@ -4634,7 +4664,7 @@ async fn normalized_paths_use_the_active_codec_for_stream_finalization() {
     assert_eq!(
         end.annotated_response()
             .and_then(|response| response.response_text()),
-        Some("[REDACTED]")
+        Some("[REDACTED]".into())
     );
 
     deregister_subscriber("pii-active-codec-stream-finalization").unwrap();
@@ -6084,7 +6114,7 @@ async fn builtin_mask_with_detector_sanitizes_llm_response_from_normalized_messa
         captured_events[1]
             .annotated_response()
             .and_then(|response| response.response_text()),
-        Some("Reach me at a****@example.com")
+        Some("Reach me at a****@example.com".into())
     );
 
     deregister_subscriber("pii-redaction-detector-llm-response-events").unwrap();
@@ -7212,7 +7242,7 @@ async fn builtin_backend_sanitizes_llm_end_payload_and_response_codec_decodes_sa
     let annotated = captured_events[1]
         .annotated_response()
         .expect("annotated_response should be present");
-    assert_eq!(annotated.response_text(), Some("[REDACTED]"));
+    assert_eq!(annotated.response_text(), Some("[REDACTED]".into()));
     assert_eq!(annotated.model.as_deref(), Some("gpt-4o-mini"));
     assert_eq!(
         captured_events[1].metadata().unwrap()["audit_owner"],
@@ -7282,7 +7312,7 @@ async fn builtin_backend_sanitizes_openai_chat_response_from_normalized_message_
         captured_events[1]
             .annotated_response()
             .and_then(|response| response.response_text()),
-        Some("[REDACTED]")
+        Some("[REDACTED]".into())
     );
 
     deregister_subscriber("pii-redaction-openai-chat-normalized-response").unwrap();
@@ -7441,7 +7471,7 @@ async fn builtin_redact_sanitizes_openai_chat_response_from_detector_path() {
         "builtin": {
             "action": "redact",
             "detector": "email",
-            "target_paths": ["/message"]
+            "target_path_globs": ["/messages/*/content", "/message"]
         }
     })))
     .await
@@ -7450,41 +7480,46 @@ async fn builtin_redact_sanitizes_openai_chat_response_from_detector_path() {
     let events = capture_events("pii-redaction-openai-chat-redact-response");
     let response_codec: Arc<dyn LlmResponseCodec> = Arc::new(OpenAIChatCodec);
 
-    let _ = llm_call_execute(
-        LlmCallExecuteParams::builder()
-            .name("openai")
-            .request(LlmRequest {
-                headers: serde_json::Map::new(),
-                content: json!({"model": "gpt-4o-mini", "messages": [{"role": "user", "content": "hello"}]}),
-            })
-            .func(noop_openai_chat_exec_fn(json!({
-                "id": "chatcmpl-redact-123",
-                "model": "gpt-4o-mini",
-                "choices": [
-                    {
-                        "index": 0,
-                        "message": {"role": "assistant", "content": "alice@example.com"},
-                        "finish_reason": "stop"
-                    }
-                ]
-            })))
-            .response_codec(response_codec)
-            .build(),
-    )
-    .await
-    .unwrap();
-
-    let captured_events = captured_events_snapshot(&events);
-    assert_eq!(
-        captured_events[1].output().unwrap()["choices"][0]["message"]["content"],
-        json!("[REDACTED]")
-    );
-    assert_eq!(
-        captured_events[1]
-            .annotated_response()
-            .and_then(|response| response.response_text()),
-        Some("[REDACTED]")
-    );
+    for (refusal, expected_refusal) in [
+        (Json::Null, None),
+        (json!(""), Some("")),
+        (json!("Contact bob@example.com"), Some("Contact [REDACTED]")),
+    ] {
+        llm_call_execute(
+            LlmCallExecuteParams::builder()
+                .name("openai")
+                .request(LlmRequest {
+                    headers: serde_json::Map::new(),
+                    content: json!({"model": "gpt-4o-mini", "messages": [{"role": "user", "content": "hello"}]}),
+                })
+                .func(noop_openai_chat_exec_fn(json!({
+                    "id": "chatcmpl-redact-123",
+                    "model": "gpt-4o-mini",
+                    "choices": [
+                        {
+                            "index": 0,
+                            "message": {"role": "assistant", "content": "alice@example.com", "refusal": refusal},
+                            "finish_reason": "stop"
+                        }
+                    ]
+                })))
+                .response_codec(response_codec.clone())
+                .build(),
+        )
+        .await
+        .unwrap();
+        let captured_events = captured_events_snapshot(&events);
+        let end = captured_events.last().unwrap();
+        let message = &end.output().unwrap()["choices"][0]["message"];
+        assert_eq!(message["content"], "[REDACTED]");
+        assert_eq!(message["refusal"].as_str(), expected_refusal);
+        let expected = expected_refusal
+            .map_or_else(|| "[REDACTED]".to_owned(), |r| format!("[REDACTED]\n{r}"));
+        assert_eq!(
+            end.annotated_response().unwrap().response_text().as_deref(),
+            Some(expected.as_str())
+        );
+    }
 
     deregister_subscriber("pii-redaction-openai-chat-redact-response").unwrap();
     test_close_plugin_host().unwrap();
@@ -7547,7 +7582,7 @@ async fn builtin_backend_sanitizes_anthropic_response_from_normalized_message_pa
         captured_events[1]
             .annotated_response()
             .and_then(|response| response.response_text()),
-        Some("[REDACTED]")
+        Some("[REDACTED]".into())
     );
 
     deregister_subscriber("pii-redaction-anthropic-normalized-response").unwrap();
@@ -7681,7 +7716,7 @@ async fn builtin_backend_sanitizes_openai_responses_response_from_normalized_mes
         captured_events[1]
             .annotated_response()
             .and_then(|response| response.response_text()),
-        Some("[REDACTED]")
+        Some("[REDACTED]".into())
     );
     assert!(
         !captured_events[1]
@@ -7780,7 +7815,7 @@ async fn builtin_backend_sanitizes_openai_responses_output_text_alias_on_stream_
     assert_eq!(
         end.annotated_response()
             .and_then(|response| response.response_text()),
-        Some("[REDACTED]")
+        Some("[REDACTED]".into())
     );
     assert!(!end.to_json_string().unwrap().contains("sk-stream-secret"));
 
@@ -7938,5 +7973,609 @@ async fn builtin_backend_sanitizes_raw_multi_candidate_gemini_response() {
     assert!(captured_events[1].annotated_response().is_some());
 
     deregister_subscriber("pii-redaction-gemini-raw-multi-candidate-response").unwrap();
+    test_close_plugin_host().unwrap();
+}
+
+#[tokio::test]
+async fn normalized_refusal_paths_redact_matching_openai_wire_fields() {
+    for mixed in [false, true] {
+        let refusal_part = usize::from(mixed);
+        let cases: [(Arc<dyn LlmResponseCodec>, Json); 2] = [
+            (
+                Arc::new(OpenAIChatCodec),
+                json!({"choices":[{"message":{
+                "content":if mixed {json!("safe\ntext")} else {Json::Null}, "refusal":"sk-secret"
+            },"finish_reason":"stop"}]}),
+            ),
+            (
+                Arc::new(OpenAIResponsesCodec),
+                json!({"status":"completed","output":[{
+                    "type":"message","content":if mixed {json!([
+                        {"type":"output_text","text":"safe\ntext"},
+                        {"type":"refusal","refusal":"sk-secret"}
+                    ])} else {json!([{"type":"refusal","refusal":"sk-secret"}])}
+                }]}),
+            ),
+        ];
+        for (codec, raw) in cases {
+            let backend = crate::builtin::CompiledBuiltinBackend::new(
+                BuiltinBackendConfig {
+                    action: "regex_replace".into(),
+                    pattern: Some("sk-secret".into()),
+                    replacement: Some("[REDACTED]".into()),
+                    target_paths: vec![format!("/message/{refusal_part}/refusal")],
+                    ..Default::default()
+                },
+                None,
+            )
+            .unwrap();
+            let sanitize = crate::builtin::llm_sanitize_response_callback(backend);
+            let sanitized = sanitize(
+                raw,
+                LlmSanitizeResponseContext::for_response_codec(Some(codec.clone())),
+            )
+            .await
+            .unwrap()
+            .expect("normalized refusal must project back to the wire");
+            assert!(!sanitized.to_string().contains("sk-secret"));
+            let response = codec.decode_response(&sanitized).unwrap();
+            let expected = if mixed {
+                "safe\ntext\n[REDACTED]"
+            } else {
+                "[REDACTED]"
+            };
+            assert_eq!(response.response_text().as_deref(), Some(expected));
+        }
+    }
+}
+
+#[tokio::test]
+async fn scalar_message_rule_keeps_cross_block_matches_with_a_refusal() {
+    let backend = crate::builtin::CompiledBuiltinBackend::new(
+        BuiltinBackendConfig {
+            action: "regex_replace".into(),
+            pattern: Some(r"Account:\s+\d{6}$".into()),
+            replacement: Some("[REDACTED]".into()),
+            target_paths: vec!["/message".into()],
+            ..Default::default()
+        },
+        None,
+    )
+    .unwrap();
+    let sanitize = crate::builtin::llm_sanitize_response_callback(backend);
+    for with_refusal in [false, true] {
+        let mut blocks = vec![
+            json!({"type":"output_text","text":"Account:"}),
+            json!({"type":"output_text","text":"123456"}),
+        ];
+        if with_refusal {
+            blocks.push(json!({"type":"refusal","refusal":"no"}));
+        }
+        let raw = json!({"output":[{"type":"message","content":blocks}]});
+        let codec: Arc<dyn LlmResponseCodec> = Arc::new(OpenAIResponsesCodec);
+        let result = sanitize(
+            raw,
+            LlmSanitizeResponseContext::for_response_codec(Some(codec.clone())),
+        )
+        .await
+        .unwrap();
+        if with_refusal {
+            assert!(
+                result.is_none(),
+                "a cross-block replacement cannot be attributed safely"
+            );
+        } else {
+            let response = codec.decode_response(&result.unwrap()).unwrap();
+            assert_eq!(response.response_text().as_deref(), Some("[REDACTED]"));
+        }
+    }
+}
+
+#[tokio::test]
+async fn chat_redaction_drops_token_copies_only_when_choice_text_changes() {
+    use nemo_relay_codecs::openai_chat::OpenAIChatStreamingCodec;
+    use nemo_relay_types::codec::streaming::StreamingCodec;
+
+    for field in ["content", "refusal"] {
+        let chunk = json!({"choices":[{"index":0, "delta":{(field): "123456"},
+            "logprobs":{(field):[{"token":"123456","bytes":[49,50,51,52,53,54],
+                "top_logprobs":[{"token":"alternative","bytes":[97]}]}]}}]});
+        let stream = OpenAIChatStreamingCodec::new();
+        stream.borrowed_collector().unwrap()(&chunk).unwrap();
+        let raw = stream.finalizer()();
+        for (action, path, pattern, changed) in [
+            ("remove", "/message".to_string(), None, true),
+            (
+                "regex_replace",
+                "/message".to_string(),
+                Some("123456"),
+                true,
+            ),
+            (
+                "regex_replace",
+                format!("/choices/0/message/{field}"),
+                Some("123456"),
+                true,
+            ),
+            (
+                "regex_replace",
+                "/message".to_string(),
+                Some("no match"),
+                false,
+            ),
+        ] {
+            let backend = CompiledBuiltinBackend::new(
+                BuiltinBackendConfig {
+                    action: action.into(),
+                    pattern: pattern.map(str::to_owned),
+                    replacement: pattern.map(|_| "[redacted]".into()),
+                    target_paths: vec![path],
+                    ..Default::default()
+                },
+                None,
+            )
+            .unwrap();
+            let sanitize = crate::builtin::llm_sanitize_response_callback(backend);
+            let result = sanitize(
+                raw.clone(),
+                LlmSanitizeResponseContext::for_response_codec(Some(Arc::new(OpenAIChatCodec))),
+            )
+            .await
+            .unwrap()
+            .unwrap();
+            let choice = &result["choices"][0];
+            if changed {
+                assert!(choice.get("logprobs").is_none());
+                assert!(!result.to_string().contains("123456"));
+                assert!(!result.to_string().contains("[49,50,51,52,53,54]"));
+            } else {
+                assert_eq!(choice["logprobs"], chunk["choices"][0]["logprobs"]);
+            }
+        }
+    }
+}
+
+#[tokio::test]
+async fn custom_chat_codecs_drop_logprobs_when_message_is_removed() {
+    let backend = CompiledBuiltinBackend::new(
+        BuiltinBackendConfig {
+            action: "remove".into(),
+            target_paths: vec!["/message".into()],
+            ..Default::default()
+        },
+        None,
+    )
+    .unwrap();
+    let sanitize = crate::builtin::llm_sanitize_response_callback(backend);
+    let payload = json!({"choices":[{"message":{"role":"assistant","content":"123456"},
+        "logprobs":{"content":[{"token":"123456","bytes":[49,50,51,52,53,54],
+            "top_logprobs":[{"token":"alternative"}]}]}}]});
+    for identity in [
+        LlmCodecIdentity::Runtime("example.chat".into()),
+        LlmCodecIdentity::Opaque,
+    ] {
+        let codec = IdentifiedRequestCodec {
+            identity,
+            inner: OpenAIChatCodec,
+            redaction_enabled: true,
+        };
+        let context = LlmSanitizeResponseContext::for_response_codec(Some(Arc::new(codec)));
+        let sanitized = sanitize(payload.clone(), context)
+            .await
+            .unwrap()
+            .expect("edited response");
+        let choice = sanitized["choices"][0].as_object().unwrap();
+        assert!(choice["message"]["content"].is_null());
+        assert!(!choice.contains_key("logprobs"));
+    }
+}
+
+#[tokio::test]
+async fn normalized_response_removal_preserves_survivor_positions_or_fails_closed() {
+    let raw = json!({"status":"completed","output":[{
+        "type":"message","content":[
+            {"type":"output_text","text":"SECRET-first"},
+            {"type":"refusal","refusal":"SECRET-refusal"},
+            {"type":"output_text","text":"safe tail"}
+        ]
+    }]});
+    let codec: Arc<dyn LlmResponseCodec> = Arc::new(OpenAIResponsesCodec);
+    let parts = raw["output"][0]["content"].as_array().unwrap();
+    for (target_paths, expected) in [
+        (vec!["/message/0"], Some(&parts[1..])),
+        (vec!["/message/0", "/message/1"], Some(&parts[2..])),
+        (vec!["/message/0/text", "/message/1/refusal"], None),
+    ] {
+        let backend = crate::builtin::CompiledBuiltinBackend::new(
+            BuiltinBackendConfig {
+                action: "remove".into(),
+                target_paths: target_paths
+                    .iter()
+                    .map(|path| String::from(*path))
+                    .collect(),
+                ..Default::default()
+            },
+            None,
+        )
+        .unwrap();
+        let sanitize = crate::builtin::llm_sanitize_response_callback(backend);
+        let sanitized = sanitize(
+            raw.clone(),
+            LlmSanitizeResponseContext::for_response_codec(Some(codec.clone())),
+        )
+        .await
+        .unwrap();
+        if let Some(expected) = expected {
+            let sanitized = sanitized.expect("whole-part removal retains source positions");
+            assert_eq!(
+                sanitized["output"][0]["content"]
+                    .as_array()
+                    .unwrap()
+                    .as_slice(),
+                expected
+            );
+        } else {
+            assert!(
+                sanitized.is_none(),
+                "removing a required field is unsupported"
+            );
+        }
+    }
+}
+
+#[tokio::test]
+async fn trajectory_refusal_projections_preserve_types_without_context_leaks() {
+    let backend = trajectory_backend(None, "redact_all_leaves");
+    let project_response =
+        crate::builtin::trajectory_llm_response_projection_callback(backend.clone());
+    let sanitize_event = crate::builtin::event_sanitize_callback(backend);
+    for mixed in [false, true] {
+        let cases: [(Arc<dyn LlmResponseCodec>, Json); 2] = [
+            (
+                Arc::new(OpenAIChatCodec),
+                json!({
+                    "id": "SECRET-id", "model": "trusted-model", "future": "SECRET-extension",
+                    "choices": [{"message": {"role": "assistant",
+                        "content": if mixed { json!("SECRET-text") } else { Json::Null },
+                        "refusal": "SECRET-refusal", "future": "SECRET-message",
+                        "tool_calls": [{"id": "call-1", "type": "function", "function": {"name": "lookup", "arguments": "{\"secret\":\"SECRET-arguments\"}"}}]
+                    }, "finish_reason": "stop"}],
+                    "usage": {"prompt_tokens": 3, "completion_tokens": 2, "total_tokens": 5}
+                }),
+            ),
+            (
+                Arc::new(OpenAIResponsesCodec),
+                json!({
+                    "id": "SECRET-id", "model": "trusted-model", "status": "completed", "future": "SECRET-extension",
+                    "output": [
+                        {"type": "message", "content": if mixed {json!([
+                            {"type": "output_text", "text": "SECRET-text", "future": "SECRET-part"},
+                            {"type": "refusal", "refusal": "SECRET-refusal"}
+                        ])} else {json!([{ "type": "refusal", "refusal": "SECRET-refusal" }])}},
+                        {"type": "function_call", "call_id": "call-1", "name": "lookup", "arguments": "{\"secret\":\"SECRET-arguments\"}"},
+                        {"type": "reasoning", "text": "SECRET-reasoning", "summary": []}
+                    ],
+                    "usage": {"input_tokens": 3, "output_tokens": 2, "total_tokens": 5}
+                }),
+            ),
+        ];
+        for (codec, raw) in cases {
+            let projected_response = project_response(
+                raw.clone(),
+                LlmSanitizeResponseContext::for_response_codec(Some(codec.clone())),
+            )
+            .await
+            .unwrap()
+            .expect("trajectory response projection");
+            let event = Event::Scope(ScopeEvent::new(
+                BaseEvent::builder().name("trusted-provider").build(),
+                ScopeCategory::End,
+                Vec::new(),
+                EventCategory::llm(),
+                None,
+            ));
+            let fields = sanitize_event(
+                Arc::new(event),
+                EventSanitizeFields {
+                    data: Some(raw.clone()),
+                    category_profile: Some(
+                        CategoryProfile::builder()
+                            .annotated_response(Arc::new(codec.decode_response(&raw).unwrap()))
+                            .build(),
+                    ),
+                    metadata: None,
+                },
+            )
+            .await
+            .unwrap();
+            let profile = fields.category_profile.as_ref().unwrap();
+            let annotated = profile.annotated_response.as_ref().unwrap();
+            assert!(annotated.output().parts().any(|part| matches!(
+                part.kind,
+                nemo_relay_types::codec::content::ContentKind::Refusal("[REDACTED]")
+            )));
+            assert!(!serde_json::to_string(&fields).unwrap().contains("SECRET"));
+            for projected in [projected_response, fields.data.unwrap()] {
+                assert!(!projected.to_string().contains("SECRET"), "{projected}");
+                let decoded = codec.decode_response(&projected).unwrap();
+                let expected = if mixed {
+                    "[REDACTED]\n[REDACTED]"
+                } else {
+                    "[REDACTED]"
+                };
+                assert_eq!(decoded.response_text().as_deref(), Some(expected));
+                assert!(decoded.output().parts().any(|part| matches!(
+                    part.kind,
+                    nemo_relay_types::codec::content::ContentKind::Refusal("[REDACTED]")
+                )));
+                let call = &decoded.tool_calls.as_ref().unwrap()[0];
+                assert_eq!(call.id, "call-1");
+                assert_eq!(call.name, "lookup");
+                assert_eq!(call.arguments, json!({}));
+                assert_eq!(decoded.usage.unwrap().total_tokens, Some(5));
+            }
+        }
+    }
+}
+
+#[tokio::test]
+async fn runtime_and_opaque_codecs_opt_into_editing_and_clean_projection_independently_of_identity()
+{
+    for identity in [
+        LlmCodecIdentity::Opaque,
+        LlmCodecIdentity::Runtime("example.responses".into()),
+    ] {
+        for redaction_enabled in [false, true] {
+            let codec = Arc::new(IdentifiedRequestCodec {
+                identity: identity.clone(),
+                inner: OpenAIResponsesCodec,
+                redaction_enabled,
+            });
+            let request = LlmRequest {
+                headers: serde_json::Map::new(),
+                content: json!({"input":"SECRET request"}),
+            };
+            let response = json!({"output":[{"type":"message", "content":[{"type":"output_text", "text":"SECRET response"}]}]});
+            let backend = crate::builtin::CompiledBuiltinBackend::new(
+                BuiltinBackendConfig {
+                    action: "regex_replace".into(),
+                    pattern: Some("SECRET".into()),
+                    replacement: Some("[REDACTED]".into()),
+                    target_paths: vec!["/messages/0/content".into(), "/message".into()],
+                    ..Default::default()
+                },
+                None,
+            )
+            .unwrap();
+            let request_context = LlmSanitizeRequestContext::for_request_codec(Some(codec.clone()));
+            let response_context = LlmSanitizeResponseContext::for_response_codec(Some(codec));
+            let edited_request = crate::builtin::llm_sanitize_request_callback(backend.clone())(
+                request.clone(),
+                request_context.clone(),
+            )
+            .await
+            .unwrap();
+            let edited_response = crate::builtin::llm_sanitize_response_callback(backend)(
+                response.clone(),
+                response_context.clone(),
+            )
+            .await
+            .unwrap();
+            let trajectory = trajectory_backend(None, "redact_all_leaves");
+            let projected_request = crate::builtin::trajectory_llm_request_projection_callback(
+                trajectory.clone(),
+            )(request, request_context)
+            .await
+            .unwrap();
+            let projected_response = crate::builtin::trajectory_llm_response_projection_callback(
+                trajectory,
+            )(response, response_context)
+            .await
+            .unwrap();
+            for value in [
+                edited_request.map(|request| request.content),
+                edited_response,
+                projected_request.map(|request| request.content),
+                projected_response,
+            ] {
+                assert_eq!(value.is_some(), redaction_enabled, "{identity:?}");
+                if let Some(value) = value {
+                    assert!(!value.to_string().contains("SECRET"), "{value}");
+                }
+            }
+        }
+    }
+}
+
+#[tokio::test]
+async fn wire_removals_stay_attached_to_original_blocks_after_normalized_compaction() {
+    let codec: Arc<dyn LlmResponseCodec> = Arc::new(OpenAIResponsesCodec);
+    let ctx = LlmSanitizeResponseContext::for_response_codec(Some(codec));
+    let backend = CompiledBuiltinBackend::new(
+        BuiltinBackendConfig {
+            action: "remove".into(),
+            target_paths: vec![
+                "/message/0".into(),
+                "/output/0/content/1/annotations".into(),
+            ],
+            ..Default::default()
+        },
+        None,
+    )
+    .unwrap();
+    let payload = json!({"output":[{"type":"message","content":[
+        {"type":"refusal","refusal":"remove me"},
+        {"type":"output_text","text":"keep me","annotations":[{"secret":"private"}]},
+        {"type":"output_text","text":"tail","annotations":[{"marker":"keep"}]}
+    ]}]});
+    let value = crate::builtin::llm_sanitize_response_callback(backend)(payload, ctx)
+        .await
+        .unwrap();
+    let blocks = &value.unwrap()["output"][0]["content"];
+    assert_eq!(blocks.as_array().unwrap().len(), 2);
+    assert_eq!(blocks[0], json!({"type":"output_text","text":"keep me"}));
+    assert_eq!(blocks[1]["annotations"], json!([{"marker":"keep"}]));
+}
+
+#[tokio::test]
+async fn responses_refusal_edit_preserves_independently_hashed_output_text() {
+    let codec: Arc<dyn LlmResponseCodec> = Arc::new(OpenAIResponsesCodec);
+    let ctx = LlmSanitizeResponseContext::for_response_codec(Some(codec));
+    let backend = CompiledBuiltinBackend::new(
+        BuiltinBackendConfig {
+            action: "hash".into(),
+            target_paths: vec!["/output_text".into(), "/message/1/refusal".into()],
+            ..Default::default()
+        },
+        None,
+    )
+    .unwrap();
+    let payload = json!({"output_text":"probe","output":[{"type":"message","content":[
+        {"type":"output_text","text":"probe"},
+        {"type":"refusal","refusal":"different"}
+    ]}]});
+    let mut expected = payload.clone();
+    expected["output_text"] = json!(crate::builtin::hex_sha256("probe"));
+    expected["output"][0]["content"][1]["refusal"] = json!(crate::builtin::hex_sha256("different"));
+    let result = crate::builtin::llm_sanitize_response_callback(backend)(payload, ctx)
+        .await
+        .unwrap();
+    assert_eq!(result, Some(expected));
+}
+
+#[tokio::test]
+async fn shared_response_fields_are_hashed_once_and_removed_extensions_preserve_the_response() {
+    for (action, path) in [("hash", "/model"), ("remove", "/contact_email")] {
+        let codec: Arc<dyn LlmResponseCodec> = Arc::new(OpenAIChatCodec);
+        let ctx = LlmSanitizeResponseContext::for_response_codec(Some(codec));
+        let backend = CompiledBuiltinBackend::new(
+            BuiltinBackendConfig {
+                action: action.into(),
+                target_paths: vec![path.into()],
+                ..Default::default()
+            },
+            None,
+        )
+        .unwrap();
+        let payload = json!({"model":"probe","contact_email":"private","choices":[{"message":{"content":"keep"}}]});
+        let mut expected = payload.clone();
+        if action == "hash" {
+            expected["model"] =
+                json!("ba9c736f19e7f60b7f6764adb0b7908c0a2b394e09b6c09863528c7f2bc86095");
+        } else {
+            expected.as_object_mut().unwrap().remove("contact_email");
+        }
+        let result = crate::builtin::llm_sanitize_response_callback(backend)(payload, ctx)
+            .await
+            .unwrap();
+        assert_eq!(result, Some(expected));
+    }
+}
+
+struct ProjectingWidgetCodec;
+
+impl LlmCodec for ProjectingWidgetCodec {
+    fn decode(&self, request: &LlmRequest) -> nemo_relay_types::error::Result<AnnotatedLlmRequest> {
+        OpenAIResponsesCodec.decode(&LlmRequest {
+            headers: Default::default(),
+            content: json!({"input":request.content["widget"]}),
+        })
+    }
+    fn encode(
+        &self,
+        _: &AnnotatedLlmRequest,
+        original: &LlmRequest,
+    ) -> nemo_relay_types::error::Result<LlmRequest> {
+        Ok(original.clone())
+    }
+    fn redaction(&self) -> Option<&dyn nemo_relay_types::codec::redaction::LlmRequestRedaction> {
+        Some(self)
+    }
+}
+impl nemo_relay_types::codec::redaction::LlmRequestRedaction for ProjectingWidgetCodec {
+    fn project_request(
+        &self,
+        _: &AnnotatedLlmRequest,
+    ) -> nemo_relay_types::error::Result<Option<LlmRequest>> {
+        Ok(Some(LlmRequest {
+            headers: Default::default(),
+            content: json!({"widget":"approved request"}),
+        }))
+    }
+}
+impl LlmResponseCodec for ProjectingWidgetCodec {
+    fn decode_response(
+        &self,
+        raw: &Json,
+    ) -> nemo_relay_types::error::Result<nemo_relay_types::codec::response::AnnotatedLlmResponse>
+    {
+        OpenAIResponsesCodec
+            .decode_response(&json!({"output_text":raw["widget"].as_str().unwrap_or("default")}))
+    }
+    fn redaction(&self) -> Option<&dyn nemo_relay_types::codec::redaction::LlmResponseRedaction> {
+        Some(self)
+    }
+}
+impl nemo_relay_types::codec::redaction::LlmResponseRedaction for ProjectingWidgetCodec {
+    fn project_response(
+        &self,
+        _: &nemo_relay_types::codec::response::AnnotatedLlmResponse,
+    ) -> nemo_relay_types::error::Result<Option<Json>> {
+        Ok(Some(json!({"widget":"approved"})))
+    }
+}
+#[tokio::test]
+async fn managed_trajectory_publishes_the_opaque_codecs_clean_request_and_response() {
+    let _guard = crate::plugins::pii_redaction::test_mutex().lock().unwrap();
+    reset_runtime();
+    setup_isolated_thread();
+    test_initialize_plugin_host_exact(plugin_config(
+        json!({"mode":"builtin","builtin":{"preset":"trajectory_context"}}),
+    ))
+    .await
+    .unwrap();
+    let events = capture_events("widget-projection");
+    for modified in [false, true] {
+        let expected = if modified {
+            crate::api::registry::register_llm_sanitize_response_guardrail(
+                "change-projected-widget",
+                200,
+                Arc::new(|_, _| {
+                    Box::pin(async { Ok(Some(json!({"widget":"SECRET introduced later"}))) })
+                }),
+            )
+            .unwrap();
+            json!({})
+        } else {
+            json!({"widget":"approved"})
+        };
+        let resp = json!({"widget":"SECRET"});
+        let result = llm_call_execute(
+            LlmCallExecuteParams::builder()
+                .name("probe")
+                .request(LlmRequest {
+                    headers: Default::default(),
+                    content: json!({"widget":"SECRET request"}),
+                })
+                .func(noop_openai_chat_exec_fn(resp))
+                .codec(Arc::new(ProjectingWidgetCodec))
+                .response_codec(Arc::new(ProjectingWidgetCodec))
+                .build(),
+        )
+        .await
+        .unwrap();
+        let captured = captured_events_snapshot(&events);
+        assert_eq!(result, json!({"widget":"SECRET"}));
+        let captured = &captured[captured.len() - 2..];
+        assert_eq!(
+            captured[0].input().unwrap()["content"],
+            json!({"widget":"approved request"})
+        );
+        assert_eq!(captured[1].output(), Some(&expected));
+        assert!(!serde_json::to_string(&captured).unwrap().contains("SECRET"));
+    }
+    crate::api::registry::deregister_llm_sanitize_response_guardrail("change-projected-widget")
+        .unwrap();
+    deregister_subscriber("widget-projection").unwrap();
     test_close_plugin_host().unwrap();
 }

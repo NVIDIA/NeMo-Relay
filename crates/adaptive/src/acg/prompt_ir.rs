@@ -95,6 +95,11 @@ pub enum BlockContentType {
     StructuredOutput,
     /// Image content (base64 or URL reference).
     Image,
+    /// Canonical structured input with preserved payload string values.
+    StructuredInput,
+    /// Typed fingerprints of media or provider-native input. Character length
+    /// is not a token estimate for this analysis-only representation.
+    Opaque,
 }
 
 // ===================================================================
@@ -143,6 +148,26 @@ pub struct PromptBlock {
     #[serde(skip_serializing_if = "Option::is_none")]
     #[serde(default)]
     pub token_metadata: Option<TokenizationMetadata>,
+}
+
+impl PromptBlock {
+    /// Use supplied counts, or estimate textual content without treating an
+    /// opaque fingerprint or image representation as model tokens.
+    pub(crate) fn estimated_tokens(&self) -> Option<(u32, bool)> {
+        if let Some(metadata) = &self.token_metadata {
+            return Some((metadata.token_count, false));
+        }
+        if matches!(
+            self.content_type,
+            BlockContentType::Image | BlockContentType::Opaque
+        ) {
+            return None;
+        }
+        Some((
+            (self.content.len() / 4).try_into().unwrap_or(u32::MAX),
+            true,
+        ))
+    }
 }
 
 // ===================================================================

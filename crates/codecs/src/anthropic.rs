@@ -1017,6 +1017,10 @@ fn sum_iteration_field(
 // ---------------------------------------------------------------------------
 
 impl LlmResponseCodec for AnthropicMessagesCodec {
+    fn redaction(&self) -> Option<&dyn nemo_relay_types::codec::redaction::LlmResponseRedaction> {
+        Some(self)
+    }
+
     fn codec_identity(&self) -> LlmCodecIdentity {
         LlmCodecIdentity::BuiltIn(BuiltinLlmCodec::AnthropicMessages)
     }
@@ -1098,6 +1102,10 @@ impl LlmResponseCodec for AnthropicMessagesCodec {
 // ---------------------------------------------------------------------------
 
 impl LlmCodec for AnthropicMessagesCodec {
+    fn redaction(&self) -> Option<&dyn nemo_relay_types::codec::redaction::LlmRequestRedaction> {
+        Some(self)
+    }
+
     fn codec_identity(&self) -> LlmCodecIdentity {
         LlmCodecIdentity::BuiltIn(BuiltinLlmCodec::AnthropicMessages)
     }

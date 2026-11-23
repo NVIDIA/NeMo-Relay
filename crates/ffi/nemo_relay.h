@@ -23,6 +23,61 @@
 #define NEMO_RELAY_SKIP_EXECUTION_INTERCEPTS 4
 
 /**
+ * Normalized LLM request.
+ */
+#define NEMO_RELAY_CONTENT_SOURCE_REQUEST 1
+
+/**
+ * Normalized LLM response.
+ */
+#define NEMO_RELAY_CONTENT_SOURCE_RESPONSE 2
+
+/**
+ * Standalone normalized message.
+ */
+#define NEMO_RELAY_CONTENT_SOURCE_MESSAGE 3
+
+/**
+ * Standalone message content (string or parts array).
+ */
+#define NEMO_RELAY_CONTENT_SOURCE_CONTENT 4
+
+/**
+ * Final supplied request message.
+ */
+#define NEMO_RELAY_CONTENT_SELECT_LAST_MESSAGE 1
+
+/**
+ * Request message at the signed index. Negative indices count from the end.
+ */
+#define NEMO_RELAY_CONTENT_SELECT_MESSAGE 2
+
+/**
+ * Top-level request instructions.
+ */
+#define NEMO_RELAY_CONTENT_SELECT_INSTRUCTIONS 3
+
+/**
+ * Request instructions or the first system/developer message.
+ */
+#define NEMO_RELAY_CONTENT_SELECT_SYSTEM_PROMPT 4
+
+/**
+ * Last user message in the request.
+ */
+#define NEMO_RELAY_CONTENT_SELECT_LAST_USER_MESSAGE 5
+
+/**
+ * Current normalized response output.
+ */
+#define NEMO_RELAY_CONTENT_SELECT_OUTPUT 6
+
+/**
+ * All parts of a standalone message or content value.
+ */
+#define NEMO_RELAY_CONTENT_SELECT_ALL 7
+
+/**
  * Status codes returned by all FFI functions.
  *
  * Every `extern "C"` function in this library returns an `NemoRelayStatus`.
@@ -1009,6 +1064,25 @@ NemoRelayStatus nemo_relay_adaptive_build_cache_telemetry_event(const char *opti
  * Set manual latency sensitivity on the current scope.
  */
 NemoRelayStatus nemo_relay_adaptive_set_latency_sensitivity(uint32_t value);
+
+/**
+ * Inspect a normalized annotation, using NEMO_RELAY_CONTENT_SOURCE_* and
+ * NEMO_RELAY_CONTENT_SELECT_* constants. Only SELECT_MESSAGE reads index.
+ * Success returns an owned JSON object with ordered parts and text_parts;
+ * an absent selection succeeds with a null output. An empty selection of
+ * existing content still returns a snapshot. Free a snapshot with nemo_relay_string_free.
+ * An invalid selection/index returns InvalidArg. On failure, *out is null
+ * and nemo_relay_last_error describes the error on the calling thread.
+ *
+ * # Safety
+ * input must be readable through its NUL terminator for the call. out must
+ * point to writable pointer storage distinct from input.
+ */
+NemoRelayStatus nemo_relay_inspect_llm_content_json(uint32_t source,
+                                                    const char *input,
+                                                    uint32_t selection,
+                                                    int64_t index,
+                                                    char **out);
 
 /**
  * Return the core's maximum encoded embedded diagnostics query size.

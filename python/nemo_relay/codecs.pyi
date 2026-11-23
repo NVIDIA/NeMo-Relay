@@ -4,6 +4,27 @@
 from typing import Protocol, runtime_checkable
 
 from nemo_relay import AnnotatedLLMRequest, AnnotatedLLMResponse, Json, LLMRequest
+from nemo_relay._native import (
+    ContentEntry as ContentEntry,
+)
+from nemo_relay._native import (
+    ContentIterator as ContentIterator,
+)
+from nemo_relay._native import (
+    ContentLocation as ContentLocation,
+)
+from nemo_relay._native import (
+    MessageView as MessageView,
+)
+from nemo_relay._native import (
+    PayloadView as PayloadView,
+)
+from nemo_relay._native import (
+    ToolCallView as ToolCallView,
+)
+from nemo_relay._native import (
+    ToolResultView as ToolResultView,
+)
 
 @runtime_checkable
 class LlmCodec(Protocol):
@@ -240,6 +261,13 @@ class GeminiGenerateContentCodec:
         ...
 
 __all__ = [
+    "MessageView",
+    "ContentIterator",
+    "ContentEntry",
+    "ContentLocation",
+    "ToolCallView",
+    "ToolResultView",
+    "PayloadView",
     "AnnotatedLLMRequest",
     "AnthropicMessagesCodec",
     "GeminiGenerateContentCodec",

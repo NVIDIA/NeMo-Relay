@@ -4,6 +4,44 @@
 use super::*;
 
 #[test]
+fn change_tracking_distinguishes_a_removed_key_from_an_already_null_slot() {
+    for (path, input, expected, changed) in [
+        (
+            "/0",
+            serde_json::json!([null]),
+            serde_json::json!([null]),
+            false,
+        ),
+        (
+            "/0",
+            serde_json::json!(["secret"]),
+            serde_json::json!([null]),
+            true,
+        ),
+        (
+            "/key",
+            serde_json::json!({"key":null}),
+            serde_json::json!({}),
+            true,
+        ),
+    ] {
+        let backend = CompiledBuiltinBackend::new(
+            BuiltinBackendConfig {
+                action: "remove".into(),
+                target_paths: vec![path.into()],
+                ..Default::default()
+            },
+            None,
+        )
+        .unwrap();
+        assert_eq!(
+            backend.sanitize_json_with_change(input),
+            (expected, changed)
+        );
+    }
+}
+
+#[test]
 fn selector_diagnostics_report_effectiveness_without_values() {
     use nemo_relay_diagnostics::{
         ComponentRegistration, DiagnosticQuery, Diagnostics, DiagnosticsSettings,
@@ -426,16 +464,29 @@ fn recursive_globs_select_zero_or_more_whole_segments() {
         "other": {"text": "outside"}
     });
     let matcher = TargetPathMatcher::new(&[], &["/messages/**/text".into()]).unwrap();
-    let paths = matcher.matching_json_pointer_paths(&payload);
-    assert_eq!(paths.len(), 4);
+    let backend = CompiledBuiltinBackend::new(
+        BuiltinBackendConfig {
+            action: "regex_replace".into(),
+            pattern: Some(".+".into()),
+            replacement: Some("[REDACTED]".into()),
+            target_path_globs: vec!["/messages/**/text".into()],
+            ..Default::default()
+        },
+        None,
+    )
+    .unwrap();
+    let sanitized = backend.sanitize_json_preorder_dfs(payload.clone());
+    assert_eq!(sanitized["text"], "root");
+    assert_eq!(sanitized["other"]["text"], "outside");
     for pointer in [
         "/messages/text",
         "/messages/A/content/0/text",
         "/messages/A/content/1/deep/text",
         "/messages/B/text",
     ] {
-        assert!(
-            paths.contains(&json_pointer_segments(pointer).unwrap()),
+        assert_eq!(
+            sanitized.pointer(pointer).unwrap(),
+            "[REDACTED]",
             "{pointer}"
         );
     }

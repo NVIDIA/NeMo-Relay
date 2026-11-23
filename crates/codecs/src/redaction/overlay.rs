@@ -3,9 +3,30 @@
 
 use serde_json::{Map, Value as Json};
 
-use nemo_relay_codecs::resolve::ProviderSurface;
+use crate::resolve::ProviderSurface;
 use nemo_relay_types::codec::request::{ContentPart, MessageContent};
 use nemo_relay_types::codec::response::{AnnotatedLlmResponse, FinishReason, ResponseToolCall};
+
+#[derive(Clone, Copy)]
+pub(super) struct ResponseFields {
+    id: bool,
+    model: bool,
+    message: bool,
+    finish_reason: bool,
+    tool_calls: bool,
+}
+
+impl ResponseFields {
+    pub(super) fn between(before: &AnnotatedLlmResponse, after: &AnnotatedLlmResponse) -> Self {
+        Self {
+            id: before.id != after.id,
+            model: before.model != after.model,
+            message: before.message != after.message,
+            finish_reason: before.finish_reason != after.finish_reason,
+            tool_calls: before.tool_calls != after.tool_calls,
+        }
+    }
+}
 
 #[derive(Clone, Copy)]
 pub(crate) enum BuiltinCodecName {
@@ -27,17 +48,18 @@ impl BuiltinCodecName {
         }
     }
 
-    pub(crate) fn overlay_response_payload(
+    pub(super) fn overlay_response_fields(
         self,
         payload: Json,
         annotated: &AnnotatedLlmResponse,
+        fields: ResponseFields,
     ) -> Json {
         match self {
-            Self::OpenAIChat => overlay_openai_chat_response(payload, annotated),
-            Self::OpenAIResponses => overlay_openai_responses_response(payload, annotated),
-            Self::AnthropicMessages => overlay_anthropic_response(payload, annotated),
-            Self::OCIGenAI => overlay_oci_genai_response(payload, annotated),
-            Self::GeminiGenerateContent => overlay_gemini_response(payload, annotated),
+            Self::OpenAIChat => overlay_openai_chat_response(payload, annotated, fields),
+            Self::OpenAIResponses => overlay_openai_responses_response(payload, annotated, fields),
+            Self::AnthropicMessages => overlay_anthropic_response(payload, annotated, fields),
+            Self::OCIGenAI => overlay_oci_genai_response(payload, annotated, fields),
+            Self::GeminiGenerateContent => overlay_gemini_response(payload, annotated, fields),
         }
     }
 }
@@ -71,13 +93,21 @@ fn gemini_message_parts_for_overlay(message: Option<&MessageContent>) -> Option<
     )
 }
 
-fn overlay_gemini_response(mut payload: Json, annotated: &AnnotatedLlmResponse) -> Json {
+fn overlay_gemini_response(
+    mut payload: Json,
+    annotated: &AnnotatedLlmResponse,
+    fields: ResponseFields,
+) -> Json {
     let Some(root) = payload.as_object_mut() else {
         return payload;
     };
 
-    set_optional_string_field(root, "responseId", annotated.id.as_deref());
-    set_optional_string_field(root, "modelVersion", annotated.model.as_deref());
+    if fields.id {
+        set_optional_string_field(root, "responseId", annotated.id.as_deref());
+    }
+    if fields.model {
+        set_optional_string_field(root, "modelVersion", annotated.model.as_deref());
+    }
 
     let Some(candidate) = root
         .get_mut("candidates")
@@ -102,10 +132,14 @@ fn overlay_gemini_response(mut payload: Json, annotated: &AnnotatedLlmResponse) 
         return payload;
     };
 
-    overlay_gemini_message_parts(parts, annotated.message.as_ref());
+    if fields.message {
+        overlay_gemini_message_parts(parts, annotated.message.as_ref());
+    }
 
     // Overlay functionCall parts.
-    overlay_gemini_tool_calls(parts, annotated.tool_calls.as_deref());
+    if fields.tool_calls {
+        overlay_gemini_tool_calls(parts, annotated.tool_calls.as_deref());
+    }
 
     payload
 }
@@ -129,7 +163,7 @@ fn overlay_gemini_message_parts(parts: &mut Vec<Json>, message: Option<&MessageC
         return;
     }
 
-    let message_text = annotated_message_text(message);
+    let message_text = joined_message_text(message, None);
     let mut wrote_text = false;
     parts.retain_mut(|part| {
         if part.get("text").is_none() || part.get("thought").and_then(Json::as_bool) == Some(true) {
@@ -181,12 +215,20 @@ fn overlay_gemini_tool_calls(parts: &mut Vec<Json>, tool_calls: Option<&[Respons
     });
 }
 
-fn overlay_openai_chat_response(mut payload: Json, annotated: &AnnotatedLlmResponse) -> Json {
+fn overlay_openai_chat_response(
+    mut payload: Json,
+    annotated: &AnnotatedLlmResponse,
+    fields: ResponseFields,
+) -> Json {
     let Some(root) = payload.as_object_mut() else {
         return payload;
     };
-    set_optional_string_field(root, "id", annotated.id.as_deref());
-    set_optional_string_field(root, "model", annotated.model.as_deref());
+    if fields.id {
+        set_optional_string_field(root, "id", annotated.id.as_deref());
+    }
+    if fields.model {
+        set_optional_string_field(root, "model", annotated.model.as_deref());
+    }
 
     let Some(choice) = root
         .get_mut("choices")
@@ -197,85 +239,137 @@ fn overlay_openai_chat_response(mut payload: Json, annotated: &AnnotatedLlmRespo
         return payload;
     };
 
-    set_optional_string_field(
-        choice,
-        "finish_reason",
-        annotated
-            .finish_reason
-            .as_ref()
-            .map(openai_chat_finish_reason),
-    );
+    if fields.finish_reason {
+        set_optional_string_field(
+            choice,
+            "finish_reason",
+            annotated
+                .finish_reason
+                .as_ref()
+                .map(openai_chat_finish_reason),
+        );
+    }
 
     let Some(message) = choice.get_mut("message").and_then(Json::as_object_mut) else {
         return payload;
     };
-    set_optional_string_field(
-        message,
-        "content",
-        annotated_message_text(annotated.message.as_ref()).as_deref(),
-    );
-    overlay_openai_chat_tool_calls(message, annotated.tool_calls.as_deref());
+    if fields.message {
+        let text = joined_message_text(annotated.message.as_ref(), Some("text"));
+        let refusal = joined_message_text(annotated.message.as_ref(), Some("refusal"));
+        set_optional_string_field(message, "content", text.as_deref());
+        if message.contains_key("refusal") || refusal.is_some() {
+            set_optional_string_field(message, "refusal", refusal.as_deref());
+        }
+    }
+    if fields.tool_calls {
+        overlay_openai_chat_tool_calls(message, annotated.tool_calls.as_deref());
+    }
     payload
 }
 
-fn overlay_openai_responses_response(mut payload: Json, annotated: &AnnotatedLlmResponse) -> Json {
+fn overlay_openai_responses_response(
+    mut payload: Json,
+    annotated: &AnnotatedLlmResponse,
+    fields: ResponseFields,
+) -> Json {
     let Some(root) = payload.as_object_mut() else {
         return payload;
     };
-    set_optional_string_field(root, "id", annotated.id.as_deref());
-    set_optional_string_field(root, "model", annotated.model.as_deref());
-    set_optional_string_field(
-        root,
-        "status",
-        annotated
-            .finish_reason
-            .as_ref()
-            .map(openai_responses_status),
-    );
+    if fields.id {
+        set_optional_string_field(root, "id", annotated.id.as_deref());
+    }
+    if fields.model {
+        set_optional_string_field(root, "model", annotated.model.as_deref());
+    }
+    if fields.finish_reason {
+        set_optional_string_field(
+            root,
+            "status",
+            annotated
+                .finish_reason
+                .as_ref()
+                .map(openai_responses_status),
+        );
+    }
 
-    let message_text = annotated_message_text(annotated.message.as_ref());
-    if root.contains_key("output_text") {
+    let message_text = joined_message_text(annotated.message.as_ref(), Some("text"));
+    if fields.message && root.contains_key("output_text") {
         set_optional_string_field(root, "output_text", message_text.as_deref());
     }
     if let Some(items) = root.get_mut("output").and_then(Json::as_array_mut) {
-        overlay_output_text_blocks(items, message_text);
-        overlay_openai_responses_tool_calls(items, annotated.tool_calls.as_deref());
+        if fields.message {
+            let has_refusal = items
+                .iter()
+                .filter(|item| item.get("type").and_then(Json::as_str) == Some("message"))
+                .filter_map(|item| item.get("content").and_then(Json::as_array))
+                .flatten()
+                .any(|block| block.get("type").and_then(Json::as_str) == Some("refusal"));
+            if matches!(annotated.message, Some(MessageContent::Parts(_))) || has_refusal {
+                overlay_structured_output_blocks(items, annotated.message.as_ref());
+            } else {
+                overlay_output_text_blocks(items, message_text);
+            }
+        }
+        if fields.tool_calls {
+            overlay_openai_responses_tool_calls(items, annotated.tool_calls.as_deref());
+        }
     }
     payload
 }
 
-fn overlay_anthropic_response(mut payload: Json, annotated: &AnnotatedLlmResponse) -> Json {
+fn overlay_anthropic_response(
+    mut payload: Json,
+    annotated: &AnnotatedLlmResponse,
+    fields: ResponseFields,
+) -> Json {
     let Some(root) = payload.as_object_mut() else {
         return payload;
     };
-    set_optional_string_field(root, "id", annotated.id.as_deref());
-    set_optional_string_field(root, "model", annotated.model.as_deref());
-    set_optional_string_field(
-        root,
-        "stop_reason",
-        annotated.finish_reason.as_ref().map(anthropic_stop_reason),
-    );
+    if fields.id {
+        set_optional_string_field(root, "id", annotated.id.as_deref());
+    }
+    if fields.model {
+        set_optional_string_field(root, "model", annotated.model.as_deref());
+    }
+    if fields.finish_reason {
+        set_optional_string_field(
+            root,
+            "stop_reason",
+            annotated.finish_reason.as_ref().map(anthropic_stop_reason),
+        );
+    }
 
     if let Some(blocks) = root.get_mut("content").and_then(Json::as_array_mut) {
-        overlay_anthropic_text_blocks(blocks, annotated_message_text(annotated.message.as_ref()));
-        overlay_anthropic_tool_calls(blocks, annotated.tool_calls.as_deref());
+        if fields.message {
+            overlay_anthropic_text_blocks(
+                blocks,
+                joined_message_text(annotated.message.as_ref(), None),
+            );
+        }
+        if fields.tool_calls {
+            overlay_anthropic_tool_calls(blocks, annotated.tool_calls.as_deref());
+        }
     }
     payload
 }
 
-fn overlay_oci_genai_response(mut payload: Json, annotated: &AnnotatedLlmResponse) -> Json {
+fn overlay_oci_genai_response(
+    mut payload: Json,
+    annotated: &AnnotatedLlmResponse,
+    fields: ResponseFields,
+) -> Json {
     let Some(root) = payload.as_object_mut() else {
         return payload;
     };
-    if root.contains_key("modelId") {
+    if fields.model && root.contains_key("modelId") {
         set_optional_string_field(root, "modelId", annotated.model.as_deref());
     }
     if root.get("chatResponse").is_some_and(Json::is_object) {
         if let Some(chat_response) = root.get_mut("chatResponse").and_then(Json::as_object_mut) {
-            overlay_oci_chat_response(chat_response, annotated);
+            overlay_oci_chat_response(chat_response, annotated, fields);
         }
     } else {
-        overlay_oci_chat_response(root, annotated);
+        overlay_oci_chat_response(root, annotated, fields);
     }
     payload
 }
@@ -283,6 +377,7 @@ fn overlay_oci_genai_response(mut payload: Json, annotated: &AnnotatedLlmRespons
 fn overlay_oci_chat_response(
     chat_response: &mut Map<String, Json>,
     annotated: &AnnotatedLlmResponse,
+    fields: ResponseFields,
 ) {
     let api_format = chat_response
         .get("apiFormat")
@@ -291,41 +386,49 @@ fn overlay_oci_chat_response(
         .to_uppercase();
 
     if api_format == "COHERE" {
-        set_optional_string_field(
-            chat_response,
-            "text",
-            annotated_message_text(annotated.message.as_ref()).as_deref(),
-        );
-        set_optional_string_field(
-            chat_response,
-            "finishReason",
-            annotated
-                .finish_reason
-                .as_ref()
-                .map(oci_cohere_finish_reason),
-        );
-        overlay_oci_cohere_tool_calls(chat_response, annotated.tool_calls.as_deref());
+        if fields.message {
+            set_optional_string_field(
+                chat_response,
+                "text",
+                joined_message_text(annotated.message.as_ref(), None).as_deref(),
+            );
+        }
+        if fields.finish_reason {
+            set_optional_string_field(
+                chat_response,
+                "finishReason",
+                annotated
+                    .finish_reason
+                    .as_ref()
+                    .map(oci_cohere_finish_reason),
+            );
+        }
+        if fields.tool_calls {
+            overlay_oci_cohere_tool_calls(chat_response, annotated.tool_calls.as_deref());
+        }
         return;
     }
 
     if api_format == "COHEREV2" {
         // COHEREV2 carries a single root-level assistant `message` (typed
         // content parts, nested-function tool calls) instead of `choices`.
-        set_optional_string_field(
-            chat_response,
-            "finishReason",
-            annotated
-                .finish_reason
-                .as_ref()
-                .map(oci_cohere_v2_finish_reason),
-        );
+        if fields.finish_reason {
+            set_optional_string_field(
+                chat_response,
+                "finishReason",
+                annotated
+                    .finish_reason
+                    .as_ref()
+                    .map(oci_cohere_v2_finish_reason),
+            );
+        }
         let Some(message) = chat_response
             .get_mut("message")
             .and_then(Json::as_object_mut)
         else {
             return;
         };
-        overlay_oci_message(message, annotated);
+        overlay_oci_message(message, annotated, fields);
         return;
     }
 
@@ -337,41 +440,56 @@ fn overlay_oci_chat_response(
     };
     // The normalized annotation models a single choice; any additional raw
     // choices have no sanitized counterpart and would leak unredacted data.
-    choices.truncate(1);
+    if fields.message || fields.tool_calls {
+        choices.truncate(1);
+    }
     let Some(choice) = choices.first_mut().and_then(Json::as_object_mut) else {
         return;
     };
-    set_optional_string_field(
-        choice,
-        "finishReason",
-        annotated
-            .finish_reason
-            .as_ref()
-            .map(oci_generic_finish_reason),
-    );
+    if fields.finish_reason {
+        set_optional_string_field(
+            choice,
+            "finishReason",
+            annotated
+                .finish_reason
+                .as_ref()
+                .map(oci_generic_finish_reason),
+        );
+    }
     let Some(message) = choice.get_mut("message").and_then(Json::as_object_mut) else {
         return;
     };
-    overlay_oci_message(message, annotated);
+    overlay_oci_message(message, annotated, fields);
 }
 
 /// Sanitize an OCI assistant message: typed TEXT parts or a bare string
 /// `content` (both shapes the decoder accepts), plus tool calls.
-fn overlay_oci_message(message: &mut Map<String, Json>, annotated: &AnnotatedLlmResponse) {
-    match message.get_mut("content") {
-        Some(Json::Array(blocks)) => {
-            overlay_oci_text_parts(blocks, annotated_message_text(annotated.message.as_ref()));
+fn overlay_oci_message(
+    message: &mut Map<String, Json>,
+    annotated: &AnnotatedLlmResponse,
+    fields: ResponseFields,
+) {
+    if fields.message {
+        match message.get_mut("content") {
+            Some(Json::Array(blocks)) => {
+                overlay_oci_text_parts(
+                    blocks,
+                    joined_message_text(annotated.message.as_ref(), None),
+                );
+            }
+            Some(Json::String(_)) => {
+                set_optional_string_field(
+                    message,
+                    "content",
+                    joined_message_text(annotated.message.as_ref(), None).as_deref(),
+                );
+            }
+            _ => {}
         }
-        Some(Json::String(_)) => {
-            set_optional_string_field(
-                message,
-                "content",
-                annotated_message_text(annotated.message.as_ref()).as_deref(),
-            );
-        }
-        _ => {}
     }
-    overlay_oci_tool_calls(message, annotated.tool_calls.as_deref());
+    if fields.tool_calls {
+        overlay_oci_tool_calls(message, annotated.tool_calls.as_deref());
+    }
 }
 
 /// Sanitize flat COHERE (v1) tool calls: `{name, parameters}` entries directly
@@ -527,32 +645,34 @@ fn overlay_openai_responses_tool_calls(
     items: &mut Vec<Json>,
     tool_calls: Option<&[ResponseToolCall]>,
 ) {
-    let Some(tool_calls) = tool_calls else {
-        items.retain(|item| item.get("type").and_then(Json::as_str) != Some("function_call"));
-        return;
-    };
-
-    let mut sanitized_calls = tool_calls.iter();
+    let mut sanitized = tool_calls.unwrap_or_default().iter();
     items.retain_mut(|item| {
-        let Some(item_type) = item.get("type").and_then(Json::as_str) else {
-            return true;
-        };
-        if item_type != "function_call" {
+        let custom = crate::openai_responses::custom_tool_call_fields(item).is_some();
+        if !custom && item.get("type").and_then(Json::as_str) != Some("function_call") {
             return true;
         }
-        let Some(raw_call) = item.as_object_mut() else {
+        let Some(call) = sanitized.next() else {
             return false;
         };
-        let Some(sanitized_call) = sanitized_calls.next() else {
-            return false;
-        };
-        set_optional_string_field(raw_call, "call_id", Some(sanitized_call.id.as_str()));
-        set_optional_string_field(raw_call, "name", Some(sanitized_call.name.as_str()));
-        set_optional_string_field(
-            raw_call,
-            "arguments",
-            Some(json_string(&sanitized_call.arguments).as_str()),
-        );
+        if custom {
+            let Some(input) = call.arguments.as_str() else {
+                return false;
+            };
+            item["input"] = Json::String(input.to_owned());
+        } else if crate::openai_responses::parse_function_call(item).arguments != call.arguments {
+            item["arguments"] = Json::String(json_string(&call.arguments));
+        }
+        if item
+            .get("call_id")
+            .and_then(Json::as_str)
+            .unwrap_or_default()
+            != call.id
+        {
+            item["call_id"] = Json::String(call.id.clone());
+        }
+        if item.get("name").and_then(Json::as_str).unwrap_or_default() != call.name {
+            item["name"] = Json::String(call.name.clone());
+        }
         true
     });
 }
@@ -582,6 +702,88 @@ fn overlay_anthropic_tool_calls(blocks: &mut Vec<Json>, tool_calls: Option<&[Res
         raw_call.insert("input".into(), sanitized_call.arguments.clone());
         true
     });
+}
+
+// Yield sanitized fields in source order. OpenAI overlays also use the field name
+// to keep refusals separate from ordinary text.
+fn message_text_fields(
+    message: Option<&MessageContent>,
+) -> impl Iterator<Item = (&'static str, &str)> {
+    let (text, parts): (Option<&str>, &[ContentPart]) = match message {
+        Some(MessageContent::Text(text)) => (Some(text), &[]),
+        Some(MessageContent::Parts(parts)) => (None, parts),
+        None => (None, &[]),
+    };
+    text.map(|text| ("text", text))
+        .into_iter()
+        .chain(parts.iter().filter_map(|part| {
+            match part {
+                ContentPart::Text { text, .. } => Some(("text", text.as_str())),
+                ContentPart::Refusal { refusal, .. } => Some(("refusal", refusal.as_str())),
+                ContentPart::ProviderNative { value, .. } => value
+                    .get("text")
+                    .and_then(Json::as_str)
+                    .map(|text| ("text", text))
+                    .or_else(|| {
+                        value
+                            .get("refusal")
+                            .and_then(Json::as_str)
+                            .map(|text| ("refusal", text))
+                    }),
+                ContentPart::ImageUrl { .. }
+                | ContentPart::Image { .. }
+                | ContentPart::Audio { .. }
+                | ContentPart::File { .. }
+                | ContentPart::ToolUse { .. }
+                | ContentPart::ToolResult { .. } => None,
+            }
+        }))
+}
+
+fn joined_message_text(
+    message: Option<&MessageContent>,
+    selected_field: Option<&str>,
+) -> Option<String> {
+    let mut fields = message_text_fields(message)
+        .filter(|(field, _)| selected_field.is_none_or(|selected| selected == *field))
+        .map(|(_, text)| text);
+    let mut joined = fields.next()?.to_owned();
+    for text in fields {
+        joined.push('\n');
+        joined.push_str(text);
+    }
+    Some(joined)
+}
+
+fn overlay_structured_output_blocks(items: &mut [Json], message: Option<&MessageContent>) {
+    let mut fields = message_text_fields(message).peekable();
+    let mut overlay_block = |block: &mut Json| {
+        let key = match block.get("type").and_then(Json::as_str) {
+            Some("output_text") => "text",
+            Some("refusal") => "refusal",
+            _ => return,
+        };
+        // Removed parts must not move text across a refusal boundary.
+        let value = if fields.peek().is_some_and(|(field, _)| *field == key) {
+            fields.next().map(|(_, text)| text)
+        } else {
+            None
+        };
+        if let Some(block) = block.as_object_mut() {
+            set_optional_string_field(block, key, value);
+        }
+    };
+    for item in items {
+        if item.get("type").and_then(Json::as_str) == Some("message") {
+            if let Some(content) = item.get_mut("content").and_then(Json::as_array_mut) {
+                for block in content {
+                    overlay_block(block);
+                }
+            }
+        } else if item.get("type").and_then(Json::as_str) == Some("output_text") {
+            overlay_block(item);
+        }
+    }
 }
 
 fn overlay_output_text_blocks(items: &mut [Json], message_text: Option<String>) {
@@ -668,32 +870,6 @@ fn overlay_anthropic_text_blocks(blocks: &mut [Json], message_text: Option<Strin
     }
 }
 
-fn annotated_message_text(message: Option<&MessageContent>) -> Option<String> {
-    match message? {
-        MessageContent::Text(text) => Some(text.clone()),
-        MessageContent::Parts(parts) => {
-            let text_parts: Vec<&str> = parts
-                .iter()
-                .filter_map(|part| match part {
-                    ContentPart::Text { text, .. } => Some(text.as_str()),
-                    ContentPart::Refusal { refusal, .. } => Some(refusal.as_str()),
-                    ContentPart::ProviderNative { value, .. } => value
-                        .get("text")
-                        .and_then(Json::as_str)
-                        .or_else(|| value.get("refusal").and_then(Json::as_str)),
-                    ContentPart::ImageUrl { .. }
-                    | ContentPart::Image { .. }
-                    | ContentPart::Audio { .. }
-                    | ContentPart::File { .. }
-                    | ContentPart::ToolUse { .. }
-                    | ContentPart::ToolResult { .. } => None,
-                })
-                .collect();
-            (!text_parts.is_empty()).then(|| text_parts.join("\n"))
-        }
-    }
-}
-
 fn set_optional_string_field(object: &mut Map<String, Json>, key: &str, value: Option<&str>) {
     match value {
         Some(value) => {
@@ -768,5 +944,5 @@ fn oci_cohere_v2_finish_reason(reason: &FinishReason) -> &str {
 }
 
 #[cfg(test)]
-#[path = "../tests/coverage/overlay_tests.rs"]
+#[path = "../../tests/unit/redaction_overlay_tests.rs"]
 mod tests;

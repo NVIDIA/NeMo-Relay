@@ -1024,7 +1024,7 @@ async fn chat_streams_record_provider_errors_and_preserve_partial_output() {
             assert!(terminal.is_none());
         }
         let response = end.annotated_response().unwrap();
-        assert_eq!(response.response_text(), Some("Partial"));
+        assert_eq!(response.response_text().as_deref(), Some("Partial"));
         let usage = response.usage.as_ref().unwrap();
         assert_eq!(usage.prompt_tokens, Some(10));
         assert_eq!(usage.completion_tokens, Some(1));
@@ -1305,7 +1305,7 @@ async fn responses_sessions_keep_usage_and_flag_eof_without_terminal_events() {
                 );
             }
             let response = end.annotated_response().unwrap();
-            assert_eq!(response.response_text(), Some("retained output"));
+            assert_eq!(response.response_text().as_deref(), Some("retained output"));
             if call == 1 && matches!(scenario, "missing_terminal" | "terminal_without_usage") {
                 assert!(
                     response.usage.is_none(),

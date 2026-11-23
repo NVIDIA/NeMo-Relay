@@ -8,8 +8,12 @@ use nemo_relay_types::{
     Json,
     api::llm::LlmRequest,
     codec::{
-        identity::LlmCodecIdentity, normalization::LlmNormalizer, request::AnnotatedLlmRequest,
-        response::AnnotatedLlmResponse, traits::LlmResponseCodec,
+        identity::LlmCodecIdentity,
+        normalization::LlmNormalizer,
+        redaction::{LlmResponseRedaction, NormalizedEdits},
+        request::AnnotatedLlmRequest,
+        response::AnnotatedLlmResponse,
+        traits::LlmResponseCodec,
     },
     error::Result,
 };
@@ -33,6 +37,12 @@ struct PricedResponseCodec {
     provider: &'static str,
 }
 impl LlmResponseCodec for PricedResponseCodec {
+    fn redaction(&self) -> Option<&dyn nemo_relay_types::codec::redaction::LlmResponseRedaction> {
+        self.inner
+            .redaction()
+            .map(|_| self as &dyn LlmResponseRedaction)
+    }
+
     fn codec_identity(&self) -> LlmCodecIdentity {
         self.inner.codec_identity()
     }
@@ -41,12 +51,78 @@ impl LlmResponseCodec for PricedResponseCodec {
     }
     fn decode_response(&self, raw: &Json) -> Result<AnnotatedLlmResponse> {
         let mut response = self.inner.decode_response(raw)?;
+        self.apply_pricing(raw, &mut response);
+        Ok(response)
+    }
+}
+
+impl PricedResponseCodec {
+    fn apply_pricing(&self, raw: &Json, response: &mut AnnotatedLlmResponse) {
         if self.inner.allows_estimated_cost(raw) {
             let provider =
                 crate::pricing::infer_model_provider(self.provider, response.model.as_deref());
-            crate::pricing::attach_estimated_cost_for_provider(&mut response, provider.as_deref());
+            crate::pricing::attach_estimated_cost_for_provider(response, provider.as_deref());
         }
-        Ok(response)
+    }
+}
+
+impl LlmResponseRedaction for PricedResponseCodec {
+    fn edit_response(&self, original: &Json, edits: NormalizedEdits<'_>) -> Result<Option<Json>> {
+        let Some(capability) = self.inner.redaction() else {
+            return Ok(None);
+        };
+        let serialize = |response: &AnnotatedLlmResponse| {
+            serde_json::to_value(response)
+                .map_err(|error| nemo_relay_types::error::FlowError::Internal(error.to_string()))
+        };
+        let baseline = {
+            let mut decoded = self.inner.decode_response(original)?;
+            let provider_baseline = serialize(&decoded)?;
+            self.apply_pricing(original, &mut decoded);
+            if &serialize(&decoded)? != edits.baseline {
+                return Ok(None);
+            }
+            provider_baseline
+        };
+        let mut sanitized = std::borrow::Cow::Borrowed(edits.sanitized);
+        if baseline.pointer("/usage/cost") != edits.baseline.pointer("/usage/cost") {
+            // Estimated cost belongs to the runtime annotation, not provider
+            // JSON. Preserve it on later decode; never send it through the
+            // provider editor as though it originated in the wire payload.
+            if sanitized.pointer("/usage/cost") != edits.baseline.pointer("/usage/cost") {
+                return Ok(None);
+            }
+            let Some(usage) = sanitized
+                .to_mut()
+                .get_mut("usage")
+                .and_then(Json::as_object_mut)
+            else {
+                return Ok(None);
+            };
+            match baseline.pointer("/usage/cost") {
+                Some(cost) => {
+                    usage.insert("cost".into(), cost.clone());
+                }
+                None => {
+                    usage.remove("cost");
+                }
+            }
+        }
+        capability.edit_response(
+            original,
+            NormalizedEdits {
+                baseline: &baseline,
+                sanitized: &sanitized,
+                require_complete_output: edits.require_complete_output,
+            },
+        )
+    }
+
+    fn project_response(&self, sanitized: &AnnotatedLlmResponse) -> Result<Option<Json>> {
+        match self.inner.redaction() {
+            Some(capability) => capability.project_response(sanitized),
+            None => Ok(None),
+        }
     }
 }
 

@@ -51,6 +51,7 @@ use tokio_stream::wrappers::ReceiverStream;
 use nemo_relay_runtime::api::event::{Event, EventSanitizeFields};
 use nemo_relay_runtime::api::llm::LlmRequest;
 use nemo_relay_runtime::api::tool::{ToolExecutionInterceptOutcome, ToolExecutionResult};
+use nemo_relay_types::codec::redaction::{LlmRequestRedaction, NormalizedEdits};
 use nemo_relay_types::codec::request::AnnotatedLlmRequest as AnnotatedLLMRequest;
 use nemo_relay_types::codec::response::AnnotatedLlmResponse as AnnotatedLLMResponse;
 use nemo_relay_types::codec::traits::{LlmCodec, LlmResponseCodec};
@@ -2298,7 +2299,30 @@ pub(crate) struct PyLlmCodecWrapper {
 unsafe impl Send for PyLlmCodecWrapper {}
 unsafe impl Sync for PyLlmCodecWrapper {}
 
+impl LlmRequestRedaction for PyLlmCodecWrapper {
+    fn edit_request(
+        &self,
+        original: &LlmRequest,
+        edits: NormalizedEdits<'_>,
+    ) -> FlowResult<Option<LlmRequest>> {
+        Ok(nemo_relay_codecs::edit_normalized_request(
+            self, original, edits,
+        ))
+    }
+}
+
 impl LlmCodec for PyLlmCodecWrapper {
+    fn redaction(&self) -> Option<&dyn LlmRequestRedaction> {
+        let enabled = Python::attach(|py| {
+            self.py_codec
+                .bind(py)
+                .getattr("supports_request_redaction")
+                .and_then(|value| value.extract::<bool>())
+                .unwrap_or(false)
+        });
+        enabled.then_some(self)
+    }
+
     fn decode(&self, request: &LlmRequest) -> FlowResult<AnnotatedLLMRequest> {
         Python::attach(|py| {
             let py_req = PyLLMRequest {

@@ -33,7 +33,7 @@ use nemo_relay_runtime::json::Json;
 use nemo_relay_types::codec::request::AnnotatedLlmRequest;
 use uuid::Uuid;
 
-use crate::acg_profile::{derive_acg_learning_key, derive_acg_profile_key};
+use crate::acg_profile::{acg_state_key, derive_acg_learning_key, derive_acg_profile_key};
 use crate::error::{AdaptiveError, Result};
 use crate::storage::traits::StorageBackendDyn;
 use crate::types::cache::HotCache;
@@ -48,11 +48,12 @@ pub(crate) async fn load_persisted_acg_state(
     backend: &dyn StorageBackendDyn,
     hot_cache: &Arc<RwLock<HotCache>>,
 ) -> Result<()> {
-    let stability = backend.load_stability(agent_id).await?;
+    let state_key = acg_state_key(agent_id);
+    let stability = backend.load_stability(&state_key).await?;
     let observation_count = match stability.as_ref() {
         Some(result) => result.total_observations,
         None => backend
-            .load_observations(agent_id)
+            .load_observations(&state_key)
             .await?
             .map(|observations| observations.len() as u32)
             .unwrap_or(0),

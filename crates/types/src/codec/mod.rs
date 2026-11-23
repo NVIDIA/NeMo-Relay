@@ -3,6 +3,10 @@
 
 //! Shared normalized LLM request and response data types.
 
+/// Typed content traversal, shared selection, and owned transport snapshots.
+pub mod content;
+mod content_snapshot;
+
 /// Stable LLM codec identities shared across SDK boundaries.
 pub mod identity;
 /// Plugin-neutral LLM optimization evidence and summaries.
@@ -20,6 +24,9 @@ pub mod tool;
 
 /// Bidirectional request and response codec contracts.
 pub mod traits;
+
+/// Opt-in source-aware editing and clean sanitized projection.
+pub mod redaction;
 
 /// Checked provider token accounting and billing data.
 pub mod billing;

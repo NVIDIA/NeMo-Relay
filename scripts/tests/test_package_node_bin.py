@@ -85,6 +85,9 @@ class PackageNodeBinTests(unittest.TestCase):
                 "dist/index.js",
                 "dist/index.js.map",
                 "dist/index.d.ts",
+                "dist/codecs.js",
+                "dist/codecs.js.map",
+                "dist/codecs.d.ts",
                 "dist/typed.js",
                 "dist/typed.js.map",
                 "dist/typed.d.ts",
@@ -128,6 +131,9 @@ class PackageNodeBinTests(unittest.TestCase):
                 self.assertIn("package/binding.d.ts", names)
                 self.assertIn("package/dist/index.js", names)
                 self.assertIn("package/dist/index.js.map", names)
+                self.assertIn("package/dist/codecs.js", names)
+                self.assertIn("package/dist/codecs.js.map", names)
+                self.assertIn("package/dist/codecs.d.ts", names)
                 self.assertIn("package/dist/diagnostics.js", names)
                 self.assertNotIn("package/index.js", names)
                 self.assertEqual(

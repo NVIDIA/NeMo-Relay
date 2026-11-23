@@ -484,12 +484,12 @@ async fn runtime_integration_acg_learner_persists_agent_seed_state_for_runtime_h
         .expect("ACG learner should persist canonical state");
 
     let persisted_observations = backend
-        .load_observations(agent_id)
+        .load_observations(&format!("{agent_id}::acg-ir=2"))
         .await
         .expect("runtime seed observations should load by agent id")
         .expect("runtime seeding requires an aggregate observations entry");
     let persisted_stability = backend
-        .load_stability(agent_id)
+        .load_stability(&format!("{agent_id}::acg-ir=2"))
         .await
         .expect("runtime seed stability should load by agent id")
         .expect("runtime seeding requires an aggregate stability entry");
@@ -531,7 +531,7 @@ async fn runtime_integration_acg_learner_reuses_learning_buckets_across_growing_
     let requests = sample_growing_chat_requests("claude-3-5-sonnet");
     let learner = AcgLearner::new(agent_id, 8, StabilityThresholds::default());
     let learning_key = format!(
-        "{agent_id}::model=claude-3-5-sonnet::seed=stable-scaffold::system=sha256:3087d8fd4b98c564984d0f184c06bf6346f0788022d7cb521231e65f673936ac::tools=no-tools"
+        "{agent_id}::acg-ir=2::model=claude-3-5-sonnet::seed=stable-scaffold::system=sha256:3087d8fd4b98c564984d0f184c06bf6346f0788022d7cb521231e65f673936ac::tools=no-tools"
     );
 
     learner

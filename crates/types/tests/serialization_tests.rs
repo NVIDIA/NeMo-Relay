@@ -710,7 +710,7 @@ fn annotated_request_helpers_cover_portable_and_native_components() {
         }])),
         ..AnnotatedLlmRequest::default()
     };
-    assert_eq!(request.system_prompt(), Some("instruction refusal"));
+    assert_eq!(request.system_prompt(), Some("instruction refusal".into()));
 
     request.instructions = None;
     request.messages = vec![Message::Developer {
@@ -720,7 +720,10 @@ fn annotated_request_helpers_cover_portable_and_native_components() {
         }]),
         name: None,
     }];
-    assert_eq!(request.system_prompt(), Some("developer instruction"));
+    assert_eq!(
+        request.system_prompt(),
+        Some("developer instruction".into())
+    );
 
     for (content, expected) in [
         (json!("native string"), Some("native string")),
@@ -735,7 +738,7 @@ fn annotated_request_helpers_cover_portable_and_native_components() {
             kind: "message".into(),
             value: json!({"role": "user", "content": content}),
         }];
-        assert_eq!(request.last_user_message(), expected);
+        assert_eq!(request.last_user_message().as_deref(), expected);
     }
 
     request.messages = vec![Message::Assistant {
@@ -792,7 +795,7 @@ fn annotated_response_text_reads_provider_native_text_and_refusal() {
             }])),
             ..AnnotatedLlmResponse::default()
         };
-        assert_eq!(response.response_text(), Some(expected));
+        assert_eq!(response.response_text().as_deref(), Some(expected));
     }
 }
 
