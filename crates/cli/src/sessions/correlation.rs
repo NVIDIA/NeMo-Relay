@@ -376,6 +376,10 @@ pub(super) fn gateway_session_for_call_with_preparing(
     )
 }
 
+fn is_root_owned(hint: &LlmHintEvent) -> bool {
+    hint.subagent_id.is_none() && hint.agent_id.is_none()
+}
+
 #[derive(Default)]
 pub(super) struct SessionCorrelation {
     pub(super) pending_llm_hints: Vec<PendingLlmHint>,
@@ -401,12 +405,29 @@ impl SessionCorrelation {
     }
 
     pub(super) fn matching_hint_index(&self, start: &LlmGatewayStart) -> Option<usize> {
-        let matches: Vec<_> = self
-            .pending_llm_hints
-            .iter()
-            .enumerate()
-            .filter_map(|(index, pending)| {
-                let score = hint_match_score(&pending.hint, start);
+        self.unique_best_hint_index(start, 0..self.pending_llm_hints.len())
+    }
+
+    pub(super) fn take_root_llm_hint(&mut self, start: &LlmGatewayStart) -> Option<LlmHintEvent> {
+        let root_owned: Vec<usize> = (0..self.pending_llm_hints.len())
+            .filter(|&index| is_root_owned(&self.pending_llm_hints[index].hint))
+            .collect();
+        let index = match root_owned.as_slice() {
+            [] => return None,
+            [index] => *index,
+            _ => self.unique_best_hint_index(start, root_owned.iter().copied())?,
+        };
+        Some(self.pending_llm_hints.remove(index).hint)
+    }
+
+    fn unique_best_hint_index(
+        &self,
+        start: &LlmGatewayStart,
+        candidates: impl Iterator<Item = usize>,
+    ) -> Option<usize> {
+        let matches: Vec<_> = candidates
+            .filter_map(|index| {
+                let score = hint_match_score(&self.pending_llm_hints[index].hint, start);
                 (score > 0).then_some((index, score))
             })
             .collect();

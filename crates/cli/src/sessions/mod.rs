@@ -4053,10 +4053,11 @@ impl Session {
         if let Some(resolution) = self.explicit_llm_owner(start) {
             return resolution;
         }
+        self.cleanup_correlation_state();
         LlmOwnerResolution {
             parent: self.root_work_scope(),
             decision: OwnershipDecision::new(None, OwnershipEvidence::MainRequestClass),
-            hint: None,
+            hint: self.correlation.take_root_llm_hint(start),
             metadata: Value::Null,
         }
     }

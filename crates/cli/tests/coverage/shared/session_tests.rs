@@ -4833,6 +4833,148 @@ async fn main_request_class_keeps_the_llm_on_the_turn_while_a_subagent_runs() {
         .await;
 }
 
+#[tokio::test]
+async fn main_request_class_consumes_root_owned_hints_and_leaves_subagent_hints() {
+    let manager = SessionManager::new(session_test_config());
+    manager
+        .apply_events(
+            &HeaderMap::new(),
+            vec![
+                NormalizedEvent::AgentStarted(session_event("main-hint-owner", "SessionStart")),
+                NormalizedEvent::SubagentStarted(SubagentEvent {
+                    session_id: "main-hint-owner".into(),
+                    agent_kind: AgentKind::ClaudeCode,
+                    event_name: "SubagentStart".into(),
+                    subagent_id: "worker-1".into(),
+                    payload: json!({}),
+                    metadata: json!({}),
+                }),
+            ],
+        )
+        .await
+        .unwrap();
+    let anthropic_start = || LlmGatewayStart {
+        session_id: Some("main-hint-owner".into()),
+        provider: "anthropic.messages".into(),
+        ..llm_start()
+    };
+    let hint = |subagent_id: Option<&str>, generation_id: &str| {
+        NormalizedEvent::LlmHint(LlmHintEvent {
+            session_id: "main-hint-owner".into(),
+            agent_kind: AgentKind::ClaudeCode,
+            event_name: "PreLlmCall".into(),
+            subagent_id: subagent_id.map(Into::into),
+            agent_id: None,
+            agent_type: None,
+            conversation_id: None,
+            generation_id: Some(generation_id.into()),
+            request_id: None,
+            model: None,
+            payload: json!({}),
+            metadata: json!({}),
+        })
+    };
+    let mut main_headers = HeaderMap::new();
+    main_headers.insert(
+        "x-claude-code-request-class",
+        axum::http::HeaderValue::from_static("main"),
+    );
+
+    let subagent_call = manager
+        .prepare_gateway_call(&HeaderMap::new(), anthropic_start())
+        .await
+        .unwrap();
+    assert_eq!(subagent_call.owner_subagent_id.as_deref(), Some("worker-1"));
+    manager
+        .finish_gateway_call(&subagent_call.context, subagent_call.session_finish)
+        .await;
+
+    manager
+        .apply_events(&HeaderMap::new(), vec![hint(None, "gen-main")])
+        .await
+        .unwrap();
+    let main_call = manager
+        .prepare_gateway_call(&main_headers, anthropic_start())
+        .await
+        .unwrap();
+    assert_eq!(main_call.owner_subagent_id, None);
+    assert_eq!(
+        main_call.metadata["llm_correlation_status"],
+        json!("explicit")
+    );
+    assert_eq!(
+        main_call.metadata["llm_correlation_generation_id"],
+        json!("gen-main")
+    );
+    {
+        let sessions = manager.inner.lock().await;
+        assert!(
+            sessions["main-hint-owner"]
+                .correlation
+                .pending_llm_hints
+                .is_empty()
+        );
+    }
+    manager
+        .finish_gateway_call(&main_call.context, main_call.session_finish)
+        .await;
+
+    let unlabeled_call = manager
+        .prepare_gateway_call(&HeaderMap::new(), anthropic_start())
+        .await
+        .unwrap();
+    assert_eq!(
+        unlabeled_call.owner_subagent_id.as_deref(),
+        Some("worker-1")
+    );
+    assert_eq!(
+        unlabeled_call.metadata["llm_correlation_status"],
+        json!("sticky_last_owner")
+    );
+    manager
+        .finish_gateway_call(&unlabeled_call.context, unlabeled_call.session_finish)
+        .await;
+
+    manager
+        .apply_events(
+            &HeaderMap::new(),
+            vec![hint(Some("worker-1"), "gen-worker")],
+        )
+        .await
+        .unwrap();
+    let main_call = manager
+        .prepare_gateway_call(&main_headers, anthropic_start())
+        .await
+        .unwrap();
+    assert_eq!(main_call.owner_subagent_id, None);
+    assert!(
+        main_call
+            .metadata
+            .get("llm_correlation_generation_id")
+            .is_none()
+    );
+    manager
+        .finish_gateway_call(&main_call.context, main_call.session_finish)
+        .await;
+
+    let hinted_call = manager
+        .prepare_gateway_call(&HeaderMap::new(), anthropic_start())
+        .await
+        .unwrap();
+    assert_eq!(hinted_call.owner_subagent_id.as_deref(), Some("worker-1"));
+    assert_eq!(
+        hinted_call.metadata["llm_correlation_status"],
+        json!("single_hint")
+    );
+    assert_eq!(
+        hinted_call.metadata["llm_correlation_generation_id"],
+        json!("gen-worker")
+    );
+    manager
+        .finish_gateway_call(&hinted_call.context, hinted_call.session_finish)
+        .await;
+}
+
 /// Verify transcript-derived parent identity nests a Codex child under its parent task.
 #[tokio::test]
 async fn codex_subagent_session_start_uses_transcript_parent_thread() {
