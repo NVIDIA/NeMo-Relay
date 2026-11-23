@@ -4663,6 +4663,18 @@ async fn buffered_gateway_call_cancelled_by_client_releases_session_for_idle_cle
         .await
         .unwrap();
     assert!(sessions.has_open_sessions().await);
+    assert_eq!(
+        sessions
+            .close_idle_sessions_at(
+                std::time::Instant::now(),
+                Duration::ZERO,
+                "pending_buffered_call",
+            )
+            .await
+            .unwrap(),
+        0
+    );
+    assert!(sessions.has_open_sessions().await);
 
     call.abort();
     assert!(call.await.unwrap_err().is_cancelled());
