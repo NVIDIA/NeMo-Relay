@@ -1574,7 +1574,7 @@ Apache License
    END OF TERMS AND CONDITIONS
 ```
 
-## bracex (3.0.1)
+## bracex (3.2.4)
 
 ### Licenses
 License: `MIT`
@@ -12230,7 +12230,7 @@ Apache License
    limitations under the License.
 ```
 
-## wcmatch (11.0)
+## wcmatch (11.2)
 
 ### Licenses
 License: `MIT`
