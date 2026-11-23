@@ -582,7 +582,13 @@ export default function nemoRelayExtension(pi: ExtensionAPI): void {
       const decision =
         outcome.kind === 'fault' ? resolveFault(active, outcome, event.toolName) : outcome;
 
-      if (decision.kind === 'block') return { block: true, reason: decision.reason };
+      if (decision.kind === 'block') {
+        return {
+          block: true,
+          reason: decision.reason,
+          ...(outcome.kind === 'block' && process.env.NEMO_RELAY_PI_TERMINATE_ON_DENY === '1' ? { terminate: true } : {}),
+        };
+      }
 
       // Allowed. A request intercept may still have rewritten the arguments, in which case they
       // arrive in the response body and pi expects them applied to `event.input` in place.

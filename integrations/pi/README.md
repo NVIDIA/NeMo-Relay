@@ -147,6 +147,7 @@ Run it first whenever Relay does not seem to be doing anything.
 | `NEMO_RELAY_PI_GATEWAY_URL` | `http://127.0.0.1:4040` | Loopback HTTP gateway base URL |
 | `NEMO_RELAY_PI_COMMAND` | `nemo-relay` | Relay executable for authenticated hook forwarding. The launcher sets its own executable path |
 | `NEMO_RELAY_PI_TIMEOUT_MS` | `5000` | Per-request timeout. Posts are serialized, so a gating hook also waits out everything queued ahead of it — an unresponsive gateway costs this once per queued post, not once |
+| `NEMO_RELAY_PI_TERMINATE_ON_DENY` | unset | Set to `1` to request that Pi stop automatic model follow-up after explicit policy denials. Pi 1.6.0 stops when every finalized tool result in the batch requests termination. A successful sibling or enclosing codemode call can continue the turn. Inline shell, gateway faults, and invalid rewrites retain their usual handling. |
 | `NEMO_RELAY_PI_FAIL` | `open` | `closed` blocks tool calls and inline shell commands when the gateway is unreachable |
 | `NEMO_RELAY_PI_REDIRECT` | `match` | `force` redirects without checking the upstream; `off` disables redirection |
 | `NEMO_RELAY_PI_OPENAI_UPSTREAM` | unset | What the gateway forwards OpenAI-compatible traffic to. Set by the launcher |
