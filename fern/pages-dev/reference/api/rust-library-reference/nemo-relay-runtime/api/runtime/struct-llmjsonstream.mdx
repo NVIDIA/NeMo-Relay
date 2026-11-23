@@ -41,6 +41,12 @@ Wrap a stream that implements explicit asynchronous teardown.
 
 Stop the producer and wait for its cleanup to complete.
 
+#### `cancel`
+
+<pre className="rust-signature"><code dangerouslySetInnerHTML={{"__html": "pub fn cancel(&amp;mut self)"}} /></pre>
+
+Record that the consumer stopped reading before the stream ended.
+
 ## Trait Implementations
 
 ### `impl Stream for LlmJsonStream`
