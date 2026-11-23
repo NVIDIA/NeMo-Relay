@@ -8006,6 +8006,48 @@ async fn normalized_refusal_paths_redact_matching_openai_wire_fields() {
 }
 
 #[tokio::test]
+async fn scalar_message_rule_keeps_cross_block_matches_with_a_refusal() {
+    let backend = crate::builtin::CompiledBuiltinBackend::new(
+        BuiltinBackendConfig {
+            action: "regex_replace".into(),
+            pattern: Some(r"Account:\s+\d{6}$".into()),
+            replacement: Some("[REDACTED]".into()),
+            target_paths: vec!["/message".into()],
+            ..Default::default()
+        },
+        None,
+    )
+    .unwrap();
+    let sanitize = crate::builtin::llm_sanitize_response_callback(backend);
+    for with_refusal in [false, true] {
+        let mut blocks = vec![
+            json!({"type":"output_text","text":"Account:"}),
+            json!({"type":"output_text","text":"123456"}),
+        ];
+        if with_refusal {
+            blocks.push(json!({"type":"refusal","refusal":"no"}));
+        }
+        let raw = json!({"output":[{"type":"message","content":blocks}]});
+        let codec: Arc<dyn LlmResponseCodec> = Arc::new(OpenAIResponsesCodec);
+        let result = sanitize(
+            raw,
+            LlmSanitizeResponseContext::for_response_codec(Some(codec.clone())),
+        )
+        .await
+        .unwrap();
+        if with_refusal {
+            assert!(
+                result.is_none(),
+                "a cross-block replacement cannot be attributed safely"
+            );
+        } else {
+            let response = codec.decode_response(&result.unwrap()).unwrap();
+            assert_eq!(response.response_text().as_deref(), Some("[REDACTED]"));
+        }
+    }
+}
+
+#[tokio::test]
 async fn normalized_response_removal_omits_payload_when_part_positions_cannot_be_preserved() {
     let raw = json!({"status":"completed","output":[{
         "type":"message","content":[

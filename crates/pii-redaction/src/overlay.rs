@@ -637,7 +637,7 @@ fn message_text_fields(
         }))
 }
 
-fn joined_message_text(
+pub(super) fn joined_message_text(
     message: Option<&MessageContent>,
     selected_field: Option<&str>,
 ) -> Option<String> {

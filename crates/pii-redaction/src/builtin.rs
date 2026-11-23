@@ -34,7 +34,7 @@ use super::component::{
     validate_metric_string_attribute_allowlist,
 };
 use super::detectors::BuiltinDetector;
-use super::overlay::BuiltinCodecName;
+use super::overlay::{BuiltinCodecName, joined_message_text};
 use super::trajectory::{CustomMarkPayloadPolicy, TrajectorySanitizer, is_relay_metric_mark};
 
 #[derive(Clone)]
@@ -949,7 +949,7 @@ impl CompiledBuiltinBackend {
         &self,
         surface: ProviderSurface,
         annotated: AnnotatedLlmResponse,
-    ) -> PluginResult<AnnotatedLlmResponse> {
+    ) -> Option<AnnotatedLlmResponse> {
         // OpenAI responses with refusals formerly exposed ordinary text as a scalar.
         // Keep policies that selected that scalar effective when the codec emits parts.
         if matches!(
@@ -968,9 +968,25 @@ impl CompiledBuiltinBackend {
                     TargetPathSegment::Exact(field.to_owned()),
                 ]));
             }
-            return sanitize_serializable_with_backend(&backend, annotated);
+            // Check both the legacy text-only scalar and the complete content view.
+            // A match can span parts (or depend on the start/end of the scalar).
+            // Keep per-part edits only when they also satisfy the joined policy.
+            let expected = [Some("text"), None].map(|field| {
+                let original = joined_message_text(annotated.message.as_ref(), field)?;
+                let sanitized = self.sanitize_string_value(original.clone())?;
+                (sanitized.as_str()? != original).then_some((field, sanitized))
+            });
+            let sanitized = sanitize_serializable_with_backend(&backend, annotated).ok()?;
+            for (field, expected) in expected.into_iter().flatten() {
+                if joined_message_text(sanitized.message.as_ref(), field).as_deref()
+                    != expected.as_str()
+                {
+                    return None;
+                }
+            }
+            return Some(sanitized);
         }
-        sanitize_serializable_with_backend(self, annotated)
+        sanitize_serializable_with_backend(self, annotated).ok()
     }
 
     fn sanitize_response_with_codec(
@@ -1003,7 +1019,7 @@ impl CompiledBuiltinBackend {
         let codec_name = BuiltinCodecName::from_provider_surface(surface);
         let annotated = codec.decode_response(&payload).ok()?;
         let annotated_json = serde_json::to_value(&annotated).ok()?;
-        let sanitized_annotated = self.sanitize_response_annotation(surface, annotated).ok()?;
+        let sanitized_annotated = self.sanitize_response_annotation(surface, annotated)?;
         let sanitized_json = serde_json::to_value(&sanitized_annotated).ok()?;
         let payload = codec_name.overlay_response_payload(payload, &sanitized_annotated);
         let payload = self.sanitize_json_preorder_dfs(payload);
