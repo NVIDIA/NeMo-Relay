@@ -31,6 +31,12 @@ pub(crate) struct Settlers {
 }
 
 #[derive(Clone, Copy)]
+pub(crate) enum StreamStep {
+    Next,
+    Close,
+}
+
+#[derive(Clone, Copy)]
 pub(crate) enum Wrapper {
     Sync,
     Collector,
@@ -222,14 +228,13 @@ pub(crate) fn wrap_promise_callback<'env, Args: JsValuesTupleIntoVec, Return>(
 
 pub(crate) fn stream_step<'env>(
     env: &'env Env,
-    close: bool,
+    step: StreamStep,
     poll: &Function<JsArg, JsArg>,
     handle: &Object,
 ) -> napi::Result<Unknown<'env>> {
-    let helper: fn(&Factories) -> &FunctionRef<JsArgs2, JsArg> = if close {
-        |factories| &factories.stream_close
-    } else {
-        |factories| &factories.stream_next
+    let helper: fn(&Factories) -> &FunctionRef<JsArgs2, JsArg> = match step {
+        StreamStep::Next => |factories| &factories.stream_next,
+        StreamStep::Close => |factories| &factories.stream_close,
     };
     call(
         env,
