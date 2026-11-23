@@ -241,30 +241,39 @@ pub(crate) async fn daemon_execute(
             },
         allow_environment_provider_auth: daemon_allows_environment_provider_auth(request.headers()),
     };
-    let mut prepared =
-        prepare_gateway_request(&state.config, request, authorization, &path).await?;
+    let deadline = state
+        .config
+        .response_timeout()
+        .map(|timeout| tokio::time::Instant::now() + timeout);
+    let mut prepared = before_deadline(
+        deadline,
+        prepare_gateway_request(&state.config, request, authorization, &path),
+    )
+    .await??;
     let start = take_llm_gateway_start(&mut prepared);
-    let prep = state
-        .sessions
-        .prepare_gateway_call(&prepared.headers, start)
-        .await?;
-    // Balance daemon session accounting if the caller disconnects before response headers.
-    // After setup, streaming delivery owns its own guard; unary/error paths finish the call.
-    let guard = GatewayCallGuard::new(
-        state.sessions.clone(),
-        prep.context.clone(),
-        None,
-        prep.session_finish,
-        operational.clone(),
-    );
-    let response_timeout = state.config.response_timeout();
-    let execution = run_managed_gateway(state, prepared, prep, operational, Some(guard));
-    match response_timeout {
-        Some(timeout) => match tokio::time::timeout(timeout, execution).await {
-            Ok(result) => result,
-            Err(_) => Err(CliError::Launch("provider response-head timeout".into())),
-        },
-        None => execution.await,
+    let prep = before_deadline(
+        deadline,
+        state
+            .sessions
+            .prepare_gateway_call(&prepared.headers, start),
+    )
+    .await??;
+    run_managed_gateway(state, prepared, prep, operational, deadline).await
+}
+
+fn response_head_timeout() -> CliError {
+    CliError::Launch("provider response-head timeout".into())
+}
+
+async fn before_deadline<F: std::future::Future>(
+    deadline: Option<tokio::time::Instant>,
+    future: F,
+) -> Result<F::Output, CliError> {
+    match deadline {
+        Some(deadline) => tokio::time::timeout_at(deadline, future)
+            .await
+            .map_err(|_| response_head_timeout()),
+        None => Ok(future.await),
     }
 }
 
@@ -627,6 +636,10 @@ impl futures_util::Stream for FirstEventTap {
 }
 
 impl LlmStreamInner for FirstEventTap {
+    fn cancel(self: std::pin::Pin<&mut Self>) {
+        self.get_mut().inner.cancel();
+    }
+
     fn terminalize(self: std::pin::Pin<&mut Self>) {
         self.get_mut().inner.terminalize();
     }
@@ -646,25 +659,26 @@ async fn run_managed_gateway(
     prepared: PreparedGatewayRequest,
     prep: GatewayCallPrep,
     operational: OperationalContext,
-    mut cancellation_guard: Option<GatewayCallGuard>,
+    deadline: Option<tokio::time::Instant>,
 ) -> Result<Response<Body>, CliError> {
     let operational = operational.with_session(prep.session_id.clone());
+    let mut guard = GatewayCallGuard::new(
+        state.sessions.clone(),
+        prep.context.clone(),
+        None,
+        prep.session_finish,
+        operational.clone(),
+    );
     let codecs = codecs_for_route(prepared.provider);
     if prepared.streaming {
-        run_managed_streaming(
-            state,
-            prepared,
-            prep,
-            codecs,
-            operational,
-            cancellation_guard,
-        )
-        .await
+        run_managed_streaming(state, prepared, prep, codecs, operational, guard, deadline).await
     } else {
-        let result = run_managed_buffered(state, prepared, prep, codecs, operational).await;
-        if let Some(guard) = cancellation_guard.as_mut() {
-            guard.sessions.take();
-        }
+        let result = before_deadline(
+            deadline,
+            run_managed_buffered(state, prepared, prep, codecs, operational),
+        )
+        .await?;
+        guard.finish().await;
         result
     }
 }
@@ -851,7 +865,7 @@ async fn run_managed_buffered(
         model_name,
         owner_subagent_id: _,
         record_task_response,
-        session_finish,
+        session_finish: _,
     } = prep;
     let provider_for_event = provider_name.clone();
     let params = LlmCallExecuteParams::builder()
@@ -880,17 +894,9 @@ async fn run_managed_buffered(
                     .record_gateway_response_hints(&context, Cow::Owned(response_json))
                     .await;
             }
-            state
-                .sessions
-                .finish_gateway_call(&context, session_finish)
-                .await;
             build_response(StatusCode::OK, headers, response_body)
         }
         Err(error) => {
-            state
-                .sessions
-                .finish_gateway_call(&context, session_finish)
-                .await;
             if let Some(failure) = upstream_failures.take(&error) {
                 return selected_upstream_failure(failure);
             }
@@ -1032,17 +1038,9 @@ async fn run_managed_streaming(
     prep: GatewayCallPrep,
     codecs: RouteCodecs,
     operational: OperationalContext,
-    cancellation_guard: Option<GatewayCallGuard>,
+    mut guard: GatewayCallGuard,
+    deadline: Option<tokio::time::Instant>,
 ) -> Result<Response<Body>, CliError> {
-    let mut guard = cancellation_guard.unwrap_or_else(|| {
-        GatewayCallGuard::new(
-            state.sessions.clone(),
-            prep.context.clone(),
-            None,
-            prep.session_finish,
-            operational.clone(),
-        )
-    });
     let upstream_failures = Arc::new(CapturedUpstreamFailures::default());
     let upstream_successes = Arc::new(CapturedUpstreamSuccesses::default());
     let func = build_streaming_func(
@@ -1060,7 +1058,11 @@ async fn run_managed_streaming(
     // pipeline. This keeps non-LLM streaming paths working while typed codecs remain optional.
     let Some(streaming_codec) = codecs.streaming else {
         guard.finish().await;
-        return passthrough_streaming(state, prepared, Some(operational)).await;
+        return before_deadline(
+            deadline,
+            passthrough_streaming(state, prepared, Some(operational)),
+        )
+        .await?;
     };
     let streaming_codec: Arc<dyn StreamingCodec> = Arc::from(streaming_codec);
     let codec_for_stream = Arc::clone(&streaming_codec);
@@ -1107,20 +1109,27 @@ async fn run_managed_streaming(
         .codec_opt(codecs.request)
         .response_codec_opt(codecs.response)
         .build();
-    let json_stream_result = TASK_SCOPE_STACK
-        .scope(scope_stack, async move {
+    let json_stream_result = before_deadline(
+        deadline,
+        TASK_SCOPE_STACK.scope(scope_stack, async move {
             execute_gateway_stream(params, response_completion).await
-        })
-        .await;
+        }),
+    )
+    .await;
     let json_stream = match json_stream_result {
-        Ok(json_stream) => json_stream,
-        Err(error) => {
+        Ok(Ok(json_stream)) => json_stream,
+        Ok(Err(error)) => {
             guard.finish().await;
             if let Some(failure) = upstream_failures.take(&error) {
                 return selected_upstream_failure(failure);
             }
             operational::upstream_failed(&operational, "runtime");
             return Err(translate_runtime_error(error));
+        }
+        Err(timeout) => {
+            operational::upstream_failed(&operational, "response_head_timeout");
+            guard.finish().await;
+            return Err(timeout);
         }
     };
     guard.operational = operational;
@@ -1135,9 +1144,11 @@ async fn run_managed_streaming(
                 .expect("returned first event lock poisoned") = Some(event.clone());
         }),
     );
-    let body = match prepare_streaming_response_body(json_stream, provider_route, guard).await {
+    let body = match prepare_streaming_response_body(json_stream, provider_route, guard, deadline)
+        .await
+    {
         Ok(body) => body,
-        Err(error) => {
+        Err(CliError::Flow(error)) => {
             if let Some(failure) = upstream_failures.take(&error) {
                 if matches!(failure, CapturedUpstreamFailure::StreamFailed) {
                     // The provider already answered 200, so keep it and report the failure
@@ -1150,6 +1161,7 @@ async fn run_managed_streaming(
             }
             return Err(translate_runtime_error(error));
         }
+        Err(error) => return Err(error),
     };
     // Match the first event the client receives, so replayed or pre-read streams still pick
     // the attempt that produced it. Later retries can't change headers already sent.
@@ -1464,22 +1476,31 @@ async fn prepare_streaming_response_body(
     response_stream: LlmJsonStream,
     route: ProviderRoute,
     mut guard: GatewayCallGuard,
-) -> Result<Body, FlowError> {
+    deadline: Option<tokio::time::Instant>,
+) -> Result<Body, CliError> {
     guard.json_stream = Some(response_stream);
-    let first_event = match guard
-        .json_stream
-        .as_mut()
-        .expect("gateway stream installed")
-        .next()
-        .await
-    {
-        Some(Ok(event)) => Some(event),
-        Some(Err(error)) => {
+    let first_event = before_deadline(
+        deadline,
+        guard
+            .json_stream
+            .as_mut()
+            .expect("gateway stream installed")
+            .next(),
+    )
+    .await;
+    let first_event = match first_event {
+        Ok(Some(Ok(event))) => Some(event),
+        Ok(Some(Err(error))) => {
             operational::upstream_failed(&guard.operational, "runtime");
             guard.finish().await;
-            return Err(error);
+            return Err(CliError::Flow(error));
         }
-        None => None,
+        Ok(None) => None,
+        Err(timeout) => {
+            operational::upstream_failed(&guard.operational, "response_head_timeout");
+            guard.finish().await;
+            return Err(timeout);
+        }
     };
     let response_stream = guard.json_stream.take().expect("gateway stream installed");
     Ok(client_sse_body(response_stream, route, guard, first_event))
@@ -1592,7 +1613,9 @@ async fn complete_gateway_call(
 
 impl Drop for GatewayCallGuard {
     fn drop(&mut self) {
-        drop(self.json_stream.take());
+        if let Some(mut stream) = self.json_stream.take() {
+            stream.cancel();
+        }
         let Some(sessions) = self.sessions.take() else {
             return;
         };
