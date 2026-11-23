@@ -200,7 +200,7 @@ Relay chooses the LangChain result codec for managed tool calls. No extra
 codec setup is needed. The codec writes display text or content parts to
 `content`. It sets `is_error` from the returned `ToolMessage.status`.
 Refer to
-[Normalized Tool Results](/reference/tool-execution-intercept-outcomes#normalized-tool-results)
+[Normalized Tool Results](/instrument-applications/middleware/tool-execution-intercepts#normalized-tool-results)
 for the JSON format.
 
 For a LangGraph `Command`, the codec uses the `ToolMessage` whose `tool_call_id`

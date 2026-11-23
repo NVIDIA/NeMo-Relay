@@ -1,6 +1,7 @@
 ---
-title: "Tool Execution Intercept Outcomes"
+title: "Tool Execution Intercepts"
 description: "Canonical tool execution results, intercept outcomes, and managed lifecycle behavior."
+position: 3
 ---
 {/* SPDX-FileCopyrightText: Copyright (c) 2026, NVIDIA CORPORATION & AFFILIATES. All rights reserved.
 SPDX-License-Identifier: Apache-2.0 */}
@@ -50,7 +51,7 @@ materializes them only after the final outcome succeeds.
 Use the existing global, scope-local, or plugin-context tool execution
 registration APIs to produce pending marks, and return the canonical outcome
 from every registered callback. Use a
-[mark event sanitizer](/reference/event-sanitizers) when the emitted pending
+[mark event sanitizer](/instrument-applications/middleware/sanitize-events) when the emitted pending
 mark's `data`, `category_profile`, or `metadata` must be sanitized. Public APIs,
 native `v1.0` plugins, and `nvidia.nemo.relay.worker.v1` workers require canonical
 tool callback and intercept returns.
@@ -312,5 +313,5 @@ return `{ result: payload }` or
 
 LLM request intercepts use a different outcome because they must preserve an
 annotated request and codec authority. That contract is described in [LLM
-Request Intercept Outcomes](/reference/llm-request-intercept-outcomes). Worker
+Request Intercept Outcomes](/instrument-applications/middleware/llm-request-intercepts). Worker
 authors can refer to both outcome types in the [gRPC protocol reference](/build-plugins/workers/grpc-v1-protocol).

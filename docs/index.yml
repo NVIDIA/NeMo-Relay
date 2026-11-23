@@ -100,10 +100,31 @@ navigation:
     title: "User Guides"
     slug: user-guides
     title-source: frontmatter
-  - folder: ./instrument-applications
-    title: "Instrument Applications"
+  - section: "Instrument Applications"
     slug: instrument-applications
-    title-source: frontmatter
+    contents:
+      - page: "Overview"
+        path: ./instrument-applications/about.mdx
+        slug: about
+      - page: "Instrument a Tool Call"
+        path: ./instrument-applications/instrument-tool-call.mdx
+        slug: instrument-tool-call
+      - page: "Instrument an LLM Call"
+        path: ./instrument-applications/instrument-llm-call.mdx
+        slug: instrument-llm-call
+      - page: "Adding Scopes and Marks"
+        path: ./instrument-applications/adding-scopes-and-marks.mdx
+        slug: adding-scopes-and-marks
+      - folder: ./instrument-applications/middleware
+        title: "Middleware"
+        slug: middleware
+        title-source: frontmatter
+      - page: "Code Examples"
+        path: ./instrument-applications/code-examples.mdx
+        slug: code-examples
+      - page: "Performance"
+        path: ./instrument-applications/performance.mdx
+        slug: performance
   - section: "NVIDIA NeMo Relay CLI"
     slug: nemo-relay-cli
     contents:
@@ -208,9 +229,31 @@ navigation:
         skip-slug: true
         collapsed: open-by-default
         contents:
-          - folder: ./configure-plugins/observability
-            title: "Observability"
-            title-source: frontmatter
+          - section: "Observability"
+            slug: observability
+            contents:
+              - page: "About"
+                path: ./configure-plugins/observability/about.mdx
+                slug: about
+              - page: "Configuration"
+                path: ./configure-plugins/observability/configuration.mdx
+                slug: configuration
+              - page: "ATIF"
+                path: ./configure-plugins/observability/atif.mdx
+                slug: atif
+              - section: "ATOF"
+                path: ./configure-plugins/observability/atof/index.mdx
+                slug: atof
+                contents:
+                  - page: "Specification"
+                    path: ./configure-plugins/observability/atof/spec.mdx
+                    slug: spec
+              - page: "OpenInference"
+                path: ./configure-plugins/observability/openinference.mdx
+                slug: openinference
+              - page: "OpenTelemetry"
+                path: ./configure-plugins/observability/opentelemetry.mdx
+                slug: opentelemetry
           - folder: ./configure-plugins/adaptive
             title: "Adaptive Runtime"
             title-source: frontmatter
@@ -328,9 +371,13 @@ navigation:
     title: "Contribute"
     slug: contribute
     title-source: frontmatter
-  - folder: ./reference
-    title: "Reference"
-    slug: reference
+  - folder: ./operate-and-troubleshoot
+    title: "Operate and Troubleshoot"
+    slug: operate-and-troubleshoot
+    title-source: frontmatter
+  - folder: ./reference/api
+    title: "API Reference"
+    slug: reference/api
     title-source: frontmatter
   - folder: ./resources
     title: "Resources"

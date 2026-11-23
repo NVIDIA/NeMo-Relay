@@ -40,7 +40,7 @@ and fixes from the 0.10 patch releases. For the full release history, refer to
 
 Upgrades from 0.10.0 can change hook failure behavior, provider access, worker
 configuration, and stream error handling. Review the
-[Migration Guides](/reference/migration-guides) before updating a deployment.
+[Migration Guides](/about-nemo-relay/migration-guides) before updating a deployment.
 
 </Warning>
 
@@ -49,13 +49,13 @@ The main compatibility changes affect these areas:
 - The built-in `nemo_guardrails` plugin and `guardrails-remote` Cargo feature
   have been removed. Remove existing component entries and Rust feature
   references before upgrading. No replacement plugin is included. Refer to
-  [Remove Built-In NeMo Guardrails Configuration](/reference/migration-guides#remove-built-in-nemo-guardrails-configuration).
+  [Remove Built-In NeMo Guardrails Configuration](/about-nemo-relay/migration-guides#remove-built-in-nemo-guardrails-configuration).
 - Node.js applications and package workflows require Node.js 24.13.1 or later.
 - LangChain and LangGraph tool results use the `nemo.relay.tool_result@1`
   JSON wrapper. It holds display content, failure status, and result values
   with their types. Custom Python objects stay with the call that returned
   them. Review how custom middleware and subscribers read tool calls and results.
-  Refer to [Normalized Tool Results](/reference/tool-execution-intercept-outcomes#normalized-tool-results).
+  Refer to [Normalized Tool Results](/instrument-applications/middleware/tool-execution-intercepts#normalized-tool-results).
 - Worker messages now have size limits for sending and receiving data.
   The default is 4 MiB per message. You can set limits by callback name.
   Upgrade the host and worker SDKs together before using these settings. Refer to
@@ -123,7 +123,7 @@ These changes help you inspect runtime behavior and manage telemetry:
   limits at startup. Readers can inspect gateways, daemons, and embedded
   applications. Native and worker plugins can record their own internal work.
   Memory views show diagnostic storage use and optional resource samples.
-  Collection is disabled by default. Refer to [Diagnostics](/reference/diagnostics).
+  Collection is disabled by default. Refer to [Diagnostics](/operate-and-troubleshoot/diagnostics).
 - Doctor checks OTLP file sinks, disabled components and destinations,
   references to credentials, and personally identifiable information (PII)
   settings. A passing HTTP check only means the collector answered.
@@ -143,7 +143,7 @@ These changes help you inspect runtime behavior and manage telemetry:
   Delivery-failure warnings identify the affected trajectory.
 - Diagnostic HTTP errors now use consistent status codes and reason fields.
   Worker inspection reports whether a worker is missing or its diagnostics
-  endpoint is unavailable. Refer to [Diagnostics API](/reference/diagnostics/api).
+  endpoint is unavailable. Refer to [Diagnostics API](/operate-and-troubleshoot/diagnostics/api).
 - Gemini cost estimates account for thinking and supported tool-use tokens.
   Pricing now counts each group of input tokens once, including cached tokens.
   It uses all input tokens to choose a pricing tier. If token counts conflict,
@@ -177,7 +177,7 @@ These changes improve setup, logging, and deployment guidance:
 
 - Operational file log sinks now support `failure_policy = "optional"`.
   This lets Relay start even if it cannot open that log file. Refer to
-  [File Sink Startup Failure Policy](/reference/operational-logging#file-sink-startup-failure-policy).
+  [File Sink Startup Failure Policy](/operate-and-troubleshoot/operational-logging#file-sink-startup-failure-policy).
 - Logging overrides preserve configured file sinks.
 - The configuration editor exposes more gateway, provider, logging, and plugin
   settings. Daemon guidance now covers Kubernetes deployment planning. Refer to
@@ -214,8 +214,8 @@ The following known issues and limitations apply to NeMo Relay 0.11.0:
   detail can contain private data that has not been sanitized. Daemon worker
   caches can return stale or partial pages. Check coverage, freshness, and
   continuation fields before drawing conclusions. Refer to
-  [Diagnostics](/reference/diagnostics) and
-  [CLI and Daemon Diagnostics](/reference/diagnostics/cli).
+  [Diagnostics](/operate-and-troubleshoot/diagnostics) and
+  [CLI and Daemon Diagnostics](/operate-and-troubleshoot/diagnostics/cli).
 - Google ADK live model calls through `Runner.run_live` or
   `RunConfig.support_cfc` have no Relay model events or middleware. Relay's
   response cache skips ADK model calls. While personally identifiable information
@@ -336,7 +336,7 @@ The following known issues and limitations apply to NeMo Relay 0.11.0:
 - Default non-paused threshold compaction and unsupported or malformed
   Anthropic compaction traffic bypass the response cache. Selected compaction
   support does not let Relay replay every provider response. Refer to
-  [Move the Response Cache to Its Plugin](/reference/migration-guides#move-the-response-cache-to-its-plugin-for-nemo-relay-100).
+  [Move the Response Cache to Its Plugin](/about-nemo-relay/migration-guides#move-the-response-cache-to-its-plugin-for-nemo-relay-100).
 
 ## Previous Releases
 
@@ -347,8 +347,8 @@ history, refer to [GitHub Releases](https://github.com/NVIDIA/NeMo-Relay/release
 
 For more information, refer to the following pages:
 
-- [Support Matrix](/reference/support-matrix)
-- [Migration Guides](/reference/migration-guides)
+- [Support Matrix](/about-nemo-relay/support-matrix)
+- [Migration Guides](/about-nemo-relay/migration-guides)
 - [Installation](/getting-started/installation)
 - [NVIDIA NeMo Relay CLI](/nemo-relay-cli/about)
 - [Known Issues and Troubleshooting](/resources/support-and-faqs)

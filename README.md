@@ -37,7 +37,7 @@ agent stack you already have.
 > [!NOTE]
 > NeMo Relay is beta software. APIs and behavior may change with each release.
 > Review the [Release Notes](https://docs.nvidia.com/nemo/relay/about-nemo-relay/release-notes)
-> and [Migration Guides](https://docs.nvidia.com/nemo/relay/reference/migration-guides)
+> and [Migration Guides](https://docs.nvidia.com/nemo/relay/about-nemo-relay/migration-guides)
 > before upgrading.
 
 ## Quick Start
@@ -224,7 +224,7 @@ runtime behavior. Go and the C FFI are experimental and source-first.
 | Deep Agents | ✅ | ✅ | ✅ |
 | Google ADK | ✅ | ✅ | ✅ |
 
-Refer to the [Support Matrix](https://docs.nvidia.com/nemo/relay/reference/support-matrix)
+Refer to the [Support Matrix](https://docs.nvidia.com/nemo/relay/about-nemo-relay/support-matrix)
 for minimum versions, platforms, and current limitations.
 
 ## Documentation
@@ -237,7 +237,7 @@ Full documentation lives at [docs.nvidia.com/nemo/relay](https://docs.nvidia.com
 | Install packages | [Installation](https://docs.nvidia.com/nemo/relay/getting-started/installation) |
 | Configure plugin files | [Plugin Configuration Files](https://docs.nvidia.com/nemo/relay/configure-plugins/plugin-configuration-files) |
 | Tune performance with adaptive behavior | [Adaptive](https://docs.nvidia.com/nemo/relay/configure-plugins/adaptive/about) |
-| Debug trace incidents | [Troubleshooting Guide](https://docs.nvidia.com/nemo/relay/resources/troubleshooting) |
+| Debug trace incidents | [Troubleshooting Guide](https://docs.nvidia.com/nemo/relay/operate-and-troubleshoot/troubleshooting) |
 | Look up APIs | [APIs](https://docs.nvidia.com/nemo/relay/reference/api) |
 | See what changed | [Release Notes](https://docs.nvidia.com/nemo/relay/about-nemo-relay/release-notes) |
 

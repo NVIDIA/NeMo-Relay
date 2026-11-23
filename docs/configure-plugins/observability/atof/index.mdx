@@ -1,10 +1,15 @@
 ---
-title: "Agent Trajectory Observability Format (ATOF)"
+title: "Export ATOF Events"
 description: "Configure raw ATOF event export to JSONL files and stream sinks."
-position: 4
+position: 1
 ---
 {/* SPDX-FileCopyrightText: Copyright (c) 2026, NVIDIA CORPORATION & AFFILIATES. All rights reserved.
 SPDX-License-Identifier: Apache-2.0 */}
+
+<nav aria-label="ATOF pages" style={{ display: "flex", gap: "1.5rem", marginBottom: "1.5rem" }}>
+  <a href="/configure-plugins/observability/atof" aria-current="page" style={{ borderBottom: "2px solid currentColor", fontWeight: 600 }}>Export</a>
+  <a href="/configure-plugins/observability/atof/spec">Specification</a>
+</nav>
 
 Use the `atof` section to write raw Agent Trajectory Observability Format (ATOF)
 `0.1` events to JSONL files, send them to raw-event collectors, or do both.
@@ -212,7 +217,7 @@ Each file sink writes a scope, tool, LLM, middleware, or mark event delivered to
 the exporter as one ATOF JSON object per line. Stream sinks encode the delivered
 event as described in [Stream Sinks](#stream-sinks). For the normative event
 wire format, refer to the
-[ATOF Core Specification](/reference/atof-event-format). For Relay-specific
+[ATOF Core Specification](/configure-plugins/observability/atof/spec). For Relay-specific
 event production semantics, refer to
 [Events](/about-nemo-relay/concepts/events).
 

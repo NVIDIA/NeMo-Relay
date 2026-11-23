@@ -12,7 +12,7 @@ An empty event list does not prove that the runtime is healthy or has recovered.
 Check the snapshot's coverage and retention fields for missing evidence.
 
 Diagnostics is disabled by default. Enable it at startup through your deployment's
-[diagnostics configuration](/reference/diagnostics). Reading does not start a
+[diagnostics configuration](/operate-and-troubleshoot/diagnostics). Reading does not start a
 gateway, initialize plugins, or enable collection. A reused gateway keeps its
 existing settings until explicitly restarted.
 
@@ -29,8 +29,8 @@ runtime you want to inspect:
 | Daemon broker or managed Relay worker | Use authorized diagnostics HTTP routes. The broker also exposes cached worker pages. |
 | Embedded Python or Node.js | Optional diagnostics reader with native objects or canonical JSON |
 
-Refer to [CLI and Daemon Diagnostics](/reference/diagnostics/cli) or
-[Embedded Diagnostics](/reference/diagnostics/bindings) for startup configuration
+Refer to [CLI and Daemon Diagnostics](/operate-and-troubleshoot/diagnostics/cli) or
+[Embedded Diagnostics](/operate-and-troubleshoot/diagnostics/bindings) for startup configuration
 and language examples. A dynamic-plugin worker submits observations to its host. Its
 recording permission does not grant access to host snapshots. The plugin host's
 reader remains available after a plugin closes or fails. Native SDK readers are
@@ -98,7 +98,7 @@ For Windows PowerShell 5.1, escape the embedded JSON quotes:
 nemo-relay diagnostics --query '{\"max_components\":0,\"max_events\":10}'
 ```
 
-See [JSON Queries in Windows Shells](/reference/diagnostics/cli#json-queries-in-windows-shells)
+See [JSON Queries in Windows Shells](/operate-and-troubleshoot/diagnostics/cli#json-queries-in-windows-shells)
 for PowerShell's legacy argument-passing mode.
 
 Use a `max_events` value within the limits returned by discovery. Add
@@ -312,7 +312,7 @@ result must apply its own authorization and data-handling policy.
 Diagnostic storage and delivery have separate budgets. Caller-retained JSON and
 decoded objects are outside the service's storage limits. Memory gauges describe
 core allocation and occupancy, not a whole-process RSS ceiling or a guaranteed
-polling rate. Refer to [Runtime Diagnostics](/reference/diagnostics) for the
+polling rate. Refer to [Runtime Diagnostics](/operate-and-troubleshoot/diagnostics) for the
 deployment-specific budgets.
 
 These existing interfaces retain their own contracts:
@@ -344,6 +344,6 @@ Choose the operation for your reader:
 - Over the existing authorized HTTP transport, use
   `GET /_nemo_relay/v1/diagnostics/memory`.
 
-The [memory inspection guide](/reference/diagnostics/memory) explains the binding
+The [memory inspection guide](/operate-and-troubleshoot/diagnostics/memory) explains the binding
 APIs, memory accounting, and resource availability. It also describes memory
 pages' separate cursors and schema.

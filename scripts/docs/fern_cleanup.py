@@ -230,7 +230,7 @@ def _rewrite_repo_file_links(pages_dir: Path) -> int:
         )
         updated = re.sub(
             r"\]\(/troubleshooting(?=[)#])",
-            "](/resources/troubleshooting",
+            "](/operate-and-troubleshoot/troubleshooting",
             updated,
         )
         if _write_if_changed(mdx_file, text, updated):

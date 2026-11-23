@@ -178,7 +178,7 @@ Use this checklist before running the pattern in production traffic.
 - Use marks for business checkpoints, not verbose debug logging.
 - Include only JSON-compatible `data`, `metadata`, `input`, and `output` payloads.
 - Do not attach sensitive payloads unless a mark or scope
-  [event sanitizer](/reference/event-sanitizers) removes them before subscriber
+  [event sanitizer](/instrument-applications/middleware/sanitize-events) removes them before subscriber
   and exporter delivery.
 - Propagate the active scope stack when work crosses thread or worker boundaries.
 

@@ -34,5 +34,5 @@ environment. Tests suppress implicit discovery through the existing test hook.
 Reader access permits inspection of potentially unsanitized evidence. The examples
 do not print or export pages, attach them to exceptions, or register subscribers.
 Adapt their page-consumption comments within your application's access controls.
-See the [runtime diagnostics reference](../../docs/reference/diagnostics/index.mdx) for
+See the [runtime diagnostics reference](../../docs/operate-and-troubleshoot/diagnostics/index.mdx) for
 ownership, memory budgets, numeric representations, and failure reasons.

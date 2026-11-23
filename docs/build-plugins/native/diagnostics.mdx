@@ -10,8 +10,8 @@ The Relay host records native plugin outcomes in its diagnostic context. Enable
 diagnostics in the host before loading plugins. A native plugin uses that context.
 It does not need a separate diagnostic configuration or store.
 
-Use [CLI and Daemon Diagnostics](/reference/diagnostics/cli) for a gateway or daemon.
-Use [Embedded Diagnostics](/reference/diagnostics/bindings) for a language-hosted
+Use [CLI and Daemon Diagnostics](/operate-and-troubleshoot/diagnostics/cli) for a gateway or daemon.
+Use [Embedded Diagnostics](/operate-and-troubleshoot/diagnostics/bindings) for a language-hosted
 application. If your Rust application loads plugins directly, select its context
 with `load_native_plugins_with_diagnostics`.
 
@@ -35,7 +35,7 @@ A later success does not erase an earlier failure.
 
 Common component activation also records its own summary. Do not add that summary
 to a native operation's failure count as if they were separate failed activations.
-Refer to [producer boundaries](/reference/diagnostics#plugin-producer-boundaries)
+Refer to [producer boundaries](/operate-and-troubleshoot/diagnostics#plugin-producer-boundaries)
 for ownership across the two layers.
 
 ## Record Internal Observations
@@ -154,7 +154,7 @@ returns `permission_denied`. After teardown, handles return `closed`. An authori
 read can still fail if collection or queries are disabled, a cursor is invalid,
 or the page cannot fit. Use `DiagnosticError::reason()` for stable error labels.
 
-Follow the [Diagnostics API](/reference/diagnostics/api) for query fields, precision,
+Follow the [Diagnostics API](/operate-and-troubleshoot/diagnostics/api) for query fields, precision,
 pagination, and coverage. Snapshot and memory pages have separate cursors and
 are captured independently. Decoded pages and SDK buffers belong to the caller
 and use memory outside the core budget. A short output buffer never yields a
@@ -183,7 +183,7 @@ Use stable reason labels to handle adapter errors:
 
 `DiagnosticError::Read` carries a canonical read reason, such as `disabled`,
 `query_disabled`, `invalid_cursor`, or `snapshot_capacity`. Refer to the
-[shared read errors](/reference/diagnostics/api#handle-read-errors) for their meaning.
+[shared read errors](/operate-and-troubleshoot/diagnostics/api#handle-read-errors) for their meaning.
 Include a fallback when matching the non-exhaustive Rust error enum.
 
 ## Admission Limits

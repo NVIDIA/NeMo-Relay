@@ -112,9 +112,9 @@ redirects:
 - source: /nemo/relay/adaptive-plugin/adaptive-hints
   destination: /nemo/relay/configure-plugins/adaptive/adaptive-hints
 - source: /nemo/relay/dev/nemo-guardrails-plugin/about
-  destination: /nemo/relay/dev/reference/migration-guides
+  destination: /nemo/relay/dev/about-nemo-relay/migration-guides
 - source: /nemo/relay/dev/nemo-guardrails-plugin/configuration
-  destination: /nemo/relay/dev/reference/migration-guides
+  destination: /nemo/relay/dev/about-nemo-relay/migration-guides
 - source: /nemo/relay/pii-redaction-plugin/about
   destination: /nemo/relay/configure-plugins/pii-redaction/about
 - source: /nemo/relay/pii-redaction-plugin/configuration
@@ -122,11 +122,11 @@ redirects:
 
 # Removed built-in plugin documentation
 - source: /nemo/relay/dev/configure-plugins/nemo-guardrails/about
-  destination: /nemo/relay/dev/reference/migration-guides
+  destination: /nemo/relay/dev/about-nemo-relay/migration-guides
 - source: /nemo/relay/dev/configure-plugins/nemo-guardrails/configuration
-  destination: /nemo/relay/dev/reference/migration-guides
+  destination: /nemo/relay/dev/about-nemo-relay/migration-guides
 - source: /nemo/relay/dev/configure-plugins/adaptive/response-cache
-  destination: /nemo/relay/dev/reference/migration-guides
+  destination: /nemo/relay/dev/about-nemo-relay/migration-guides
 
 # Build plugin guides
 - source: /nemo/relay/build-plugins/basic-guide
@@ -161,6 +161,65 @@ redirects:
 # Getting started IA
 - source: /nemo/relay/getting-started/agent-runtime-primer
   destination: /nemo/relay/about-nemo-relay/agent-runtime-primer
+
+# Reference content now lives with the capability or workflow it documents.
+- source: /nemo/relay/reference/atof-event-format
+  destination: /nemo/relay/dev/configure-plugins/observability/atof/spec
+- source: /nemo/relay/reference/support-matrix
+  destination: /nemo/relay/dev/about-nemo-relay/support-matrix
+- source: /nemo/relay/reference/migration-guides
+  destination: /nemo/relay/dev/about-nemo-relay/migration-guides
+- source: /nemo/relay/reference/operational-logging
+  destination: /nemo/relay/dev/operate-and-troubleshoot/operational-logging
+- source: /nemo/relay/reference/diagnostics
+  destination: /nemo/relay/dev/operate-and-troubleshoot/diagnostics
+- source: /nemo/relay/reference/diagnostics/:slug*
+  destination: /nemo/relay/dev/operate-and-troubleshoot/diagnostics/:slug*
+- source: /nemo/relay/resources/troubleshooting
+  destination: /nemo/relay/dev/operate-and-troubleshoot/troubleshooting
+- source: /nemo/relay/resources/troubleshooting/:slug*
+  destination: /nemo/relay/dev/operate-and-troubleshoot/troubleshooting/:slug*
+- source: /nemo/relay/instrument-applications/advanced-guide
+  destination: /nemo/relay/dev/instrument-applications/middleware
+- source: /nemo/relay/reference/event-sanitizers
+  destination: /nemo/relay/dev/instrument-applications/middleware/sanitize-events
+- source: /nemo/relay/reference/tool-execution-intercept-outcomes
+  destination: /nemo/relay/dev/instrument-applications/middleware/tool-execution-intercepts
+- source: /nemo/relay/reference/llm-request-intercept-outcomes
+  destination: /nemo/relay/dev/instrument-applications/middleware/llm-request-intercepts
+- source: /nemo/relay/reference/performance
+  destination: /nemo/relay/dev/instrument-applications/performance
+- source: /nemo/relay/reference
+  destination: /nemo/relay/dev/reference/api
+# Preserve links to the previous development navigation as well.
+- source: /nemo/relay/dev/reference/atof-event-format
+  destination: /nemo/relay/dev/configure-plugins/observability/atof/spec
+- source: /nemo/relay/dev/reference/support-matrix
+  destination: /nemo/relay/dev/about-nemo-relay/support-matrix
+- source: /nemo/relay/dev/reference/migration-guides
+  destination: /nemo/relay/dev/about-nemo-relay/migration-guides
+- source: /nemo/relay/dev/reference/operational-logging
+  destination: /nemo/relay/dev/operate-and-troubleshoot/operational-logging
+- source: /nemo/relay/dev/reference/diagnostics
+  destination: /nemo/relay/dev/operate-and-troubleshoot/diagnostics
+- source: /nemo/relay/dev/reference/diagnostics/:slug*
+  destination: /nemo/relay/dev/operate-and-troubleshoot/diagnostics/:slug*
+- source: /nemo/relay/dev/resources/troubleshooting
+  destination: /nemo/relay/dev/operate-and-troubleshoot/troubleshooting
+- source: /nemo/relay/dev/resources/troubleshooting/:slug*
+  destination: /nemo/relay/dev/operate-and-troubleshoot/troubleshooting/:slug*
+- source: /nemo/relay/dev/instrument-applications/advanced-guide
+  destination: /nemo/relay/dev/instrument-applications/middleware
+- source: /nemo/relay/dev/reference/event-sanitizers
+  destination: /nemo/relay/dev/instrument-applications/middleware/sanitize-events
+- source: /nemo/relay/dev/reference/tool-execution-intercept-outcomes
+  destination: /nemo/relay/dev/instrument-applications/middleware/tool-execution-intercepts
+- source: /nemo/relay/dev/reference/llm-request-intercept-outcomes
+  destination: /nemo/relay/dev/instrument-applications/middleware/llm-request-intercepts
+- source: /nemo/relay/dev/reference/performance
+  destination: /nemo/relay/dev/instrument-applications/performance
+- source: /nemo/relay/dev/reference
+  destination: /nemo/relay/dev/reference/api
 
 experimental:
   mdx-components:

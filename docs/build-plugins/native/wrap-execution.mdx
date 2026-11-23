@@ -15,7 +15,7 @@ wrapper, and an LLM stream wrapper at the configured priority.
 
 The tool wrapper calls `next` once, awaits the downstream `ToolExecutionResult`, and
 converts it into a
-[`ToolExecutionInterceptOutcome`](/reference/tool-execution-intercept-outcomes) with the
+[`ToolExecutionInterceptOutcome`](/instrument-applications/middleware/tool-execution-intercepts) with the
 example's pending mark. The
 conversion preserves both the application `result` and any opaque `annotation`. Relay
 owns the pending mark: it is emitted in the managed lifecycle and does not appear in the

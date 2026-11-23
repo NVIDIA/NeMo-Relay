@@ -10,13 +10,13 @@ Use this page when a NeMo Relay setup, build, or runtime workflow does not behav
 
 For trace incidents involving missing traces, wrong scope attachment, export
 failures, duplicate events, or sensitive telemetry, start with the
-[Trace Incident Runbook](/resources/troubleshooting/trace-incident-runbook).
+[Trace Incident Runbook](/operate-and-troubleshoot/troubleshooting/trace-incident-runbook).
 
 ## Package Or Build Setup Fails
 
 Confirm that your environment matches the requirements in
 [API Installation](/getting-started/installation/apis) and the
-[Support Matrix](/reference/support-matrix), then rerun the
+[Support Matrix](/about-nemo-relay/support-matrix), then rerun the
 binding-specific setup command. For source builds, use
 [Development Setup](/contribute/development-setup).
 
@@ -100,7 +100,7 @@ Use [Adding Scopes and Marks](/instrument-applications/adding-scopes-and-marks) 
 
 Check whether the middleware was registered globally or scope-locally. Scope-local middleware is visible only to the owning scope and descendant scopes, and it is cleaned up when the owning scope closes.
 
-Use [Middleware](/about-nemo-relay/concepts/middleware), [Add Middleware](/instrument-applications/advanced-guide), and [Instrument Applications Code Examples](/instrument-applications/code-examples#middleware-registration-families) to verify the expected registration family.
+Use [Middleware](/about-nemo-relay/concepts/middleware), [Add Middleware](/instrument-applications/middleware), and [Instrument Applications Code Examples](/instrument-applications/code-examples#middleware-registration-families) to verify the expected registration family.
 
 ## Middleware Runs In The Wrong Order
 
@@ -112,7 +112,7 @@ Use [Middleware](/about-nemo-relay/concepts/middleware) and [Instrument Applicat
 
 A guardrail rejection is expected to stop the protected tool or LLM call. Inspect the guardrail result and confirm whether the guardrail was intended to sanitize input, sanitize output, or reject the request completely.
 
-Use [Add Middleware](/instrument-applications/advanced-guide) to verify the guardrail family and expected behavior.
+Use [Add Middleware](/instrument-applications/middleware) to verify the guardrail family and expected behavior.
 
 ## Request Intercept Changes Are Not Visible
 

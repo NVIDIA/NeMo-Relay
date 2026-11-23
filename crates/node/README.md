@@ -233,5 +233,5 @@ Set `diagnostics: { enabled: true }` on the existing plugin initialization confi
 or configure `[diagnostics]` in the resolved `plugins.toml`. Optional readers live
 at `nemo-relay-node/diagnostics`. Native snapshots use `bigint` for diagnostic
 integers; use `snapshotJson()` for portable serialization. The service outlives
-plugin activation handles. See [Runtime Diagnostics](https://docs.nvidia.com/nemo/relay/reference/diagnostics)
+plugin activation handles. See [Runtime Diagnostics](https://docs.nvidia.com/nemo/relay/operate-and-troubleshoot/diagnostics)
 for lifetime, authorization, memory bounds, and coverage.

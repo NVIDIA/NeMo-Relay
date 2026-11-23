@@ -32,7 +32,7 @@ These pages define or route the shared runtime model:
 - `docs/getting-started/quick-start/index.mdx`
 - `docs/reference/api/index.mdx`
 - `docs/configure-plugins/observability/about.mdx`
-- `docs/configure-plugins/observability/atof.mdx`
+- `docs/configure-plugins/observability/atof/index.mdx`
 - `docs/configure-plugins/observability/atif.mdx`
 - `docs/configure-plugins/observability/opentelemetry.mdx`
 - `docs/configure-plugins/observability/openinference.mdx`
@@ -117,7 +117,7 @@ Before landing a change that touches shared runtime wording, check:
   OpenTelemetry output remain projections.
 - Examples consume shared terminology instead of defining new support or
   contract language locally.
-- The [Support Matrix](/reference/support-matrix) is the canonical source for
+- The [Support Matrix](/about-nemo-relay/support-matrix) is the canonical source for
   platform, worker-runtime, coding-agent, and integration support. Task-scoped
   tables in the README, CLI docs, supported integrations, and install or
   quick-start routing pages must remain aligned with it and link to it when
@@ -143,9 +143,9 @@ its applicable family. It does not belong to Logging just because Logging also
 has success codes.
 
 Keep consumer-facing ownership and compatibility rules in
-[Runtime Diagnostics](/reference/diagnostics). Keep shared query, pagination,
+[Runtime Diagnostics](/operate-and-troubleshoot/diagnostics). Keep shared query, pagination,
 error, numeric-encoding, and access-control rules in the
-[Diagnostics API](/reference/diagnostics/api). Deployment and binding guides
+[Diagnostics API](/operate-and-troubleshoot/diagnostics/api). Deployment and binding guides
 should link to those contracts and document their specific lifecycle, authority,
 and conversion behavior.
 
