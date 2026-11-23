@@ -109,9 +109,16 @@ test('managed Pi shutdown branches preserve ordering and quit releases without r
     },
   };
   const bodies = [];
+  let startAttempts = 0;
   const originalFetch = globalThis.fetch;
   globalThis.fetch = async (_url, request) => {
-    bodies.push(JSON.parse(request.body));
+    const body = JSON.parse(request.body);
+    if (body.hook_event_name === 'session_start' && ++startAttempts === 1) {
+      return Response.json({ error: { message: 'route is not ready' } }, {
+        status: 503, headers: { 'Retry-After': '1' },
+      });
+    }
+    bodies.push(body);
     return new Response('{}', { status: 200 });
   };
   try {
@@ -119,6 +126,7 @@ test('managed Pi shutdown branches preserve ordering and quit releases without r
     installManagedNemoRelayPi(pi, async () => runtime);
     const context = { cwd: '/workspace', sessionManager: { getSessionId: () => 'session' } };
     await handlers.get('session_start')({ type: 'session_start', reason: 'startup' }, context);
+    assert.equal(startAttempts, 2, 'session startup waits for the broker to accept the hook');
     await Promise.all([
       handlers.get('turn_start')({ type: 'turn_start', turnIndex: 0 }, context),
       handlers.get('turn_start')({ type: 'turn_start', turnIndex: 1 }, context),
@@ -137,6 +145,38 @@ test('managed Pi shutdown branches preserve ordering and quit releases without r
   } finally {
     globalThis.fetch = originalFetch;
   }
+});
+
+test('managed Pi does not retry startup after the readiness deadline', async (t) => {
+  const { installManagedNemoRelayPi } = await loadLifecycleTestApi();
+  const handlers = new Map();
+  installManagedNemoRelayPi({
+    on(name, handler) { handlers.set(name, handler); },
+    registerProvider() {},
+  }, async () => ({
+    config: { daemonAddress: 'https://relay.example.com' },
+    credential: CREDENTIAL,
+    lease: { ensureReady: async () => {} },
+  }));
+  let now = 0;
+  t.mock.method(performance, 'now', () => now);
+  const send = t.mock.method(globalThis, 'fetch', async () => Response.json(
+    { error: { message: 'route is not ready' } },
+    { status: 503, headers: { 'Retry-After': '1' } },
+  ));
+  t.mock.method(console, 'error', () => {});
+
+  const starting = handlers.get('session_start')({ type: 'session_start', reason: 'startup' }, {
+    cwd: '/workspace',
+    sessionManager: { getSessionId: () => 'session' },
+  });
+  await new Promise((resolve) => globalThis.setImmediate(resolve));
+  assert.equal(send.mock.callCount(), 1);
+
+  // Simulate a retry timer that fires after the monotonic deadline.
+  now = 180_001;
+  await starting;
+  assert.equal(send.mock.callCount(), 1);
 });
 
 test('custom Pi providers redirect only when every sibling API is supported', () => {
