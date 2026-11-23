@@ -66,6 +66,29 @@ fn removal_and_replacement_remain_attached_to_original_blocks() {
 }
 
 #[test]
+fn conflicting_responses_alias_and_normalized_text_edits_fail_closed() {
+    let codec = crate::openai_responses::OpenAIResponsesCodec;
+    let wire = json!({"output_text":"already hashed","output":[{"type":"message","content":[
+        {"type":"output_text","text":"original"}, {"type":"refusal","refusal":"no"}
+    ]}]});
+    let baseline = serde_json::to_value(codec.decode_response(&wire).unwrap()).unwrap();
+    let mut sanitized = baseline.clone();
+    sanitized["message"][0]["text"] = json!("masked");
+    let result = LlmResponseCodec::redaction(&codec)
+        .unwrap()
+        .edit_response(
+            &wire,
+            NormalizedEdits {
+                baseline: &baseline,
+                sanitized: &sanitized,
+                require_complete_output: true,
+            },
+        )
+        .unwrap();
+    assert!(result.is_none());
+}
+
+#[test]
 fn compacted_parts_invalid_fields_and_foreign_baselines_fail_closed() {
     let codec = crate::openai_responses::OpenAIResponsesCodec;
     let mut original = json!({"output":[{"type":"message", "content":[

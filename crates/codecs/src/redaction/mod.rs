@@ -233,13 +233,17 @@ fn edit_responses_parts(
     } else {
         expected["message"] = Json::Array(surviving.clone());
     }
-    if payload.get("output_text").is_some() {
-        let text: Vec<&str> = surviving
-            .iter()
-            .filter_map(|part| part.get("text").and_then(Json::as_str))
-            .collect();
-        let value = (!text.is_empty()).then(|| Json::String(text.join("\n")));
-        set_path(&mut payload, &["output_text".into()], value)?;
+    if let Some(alias) = payload.get("output_text") {
+        let original_text = before.iter().filter_map(|part| part.get("text")?.as_str());
+        // A wire policy may already have sanitized the alias independently.
+        // Only synchronize it when a normalized text block actually changed.
+        if original_text.clone().ne(text.iter().copied()) {
+            let value = (!text.is_empty()).then(|| Json::String(text.join("\n")));
+            if Some(alias) != value.as_ref() {
+                (alias.as_str()? == original_text.collect::<Vec<_>>().join("\n")).then_some(())?;
+                set_path(&mut payload, &["output_text".into()], value)?;
+            }
+        }
     }
     let payload = overlay::BuiltinCodecName::OpenAIResponses
         .overlay_response_fields(payload, &padded, fields);

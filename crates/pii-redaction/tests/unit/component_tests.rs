@@ -8418,6 +8418,32 @@ async fn wire_removals_stay_attached_to_original_blocks_after_normalized_compact
 }
 
 #[tokio::test]
+async fn responses_refusal_edit_preserves_independently_hashed_output_text() {
+    let codec: Arc<dyn LlmResponseCodec> = Arc::new(OpenAIResponsesCodec);
+    let ctx = LlmSanitizeResponseContext::for_response_codec(Some(codec));
+    let backend = CompiledBuiltinBackend::new(
+        BuiltinBackendConfig {
+            action: "hash".into(),
+            target_paths: vec!["/output_text".into(), "/message/1/refusal".into()],
+            ..Default::default()
+        },
+        None,
+    )
+    .unwrap();
+    let payload = json!({"output_text":"probe","output":[{"type":"message","content":[
+        {"type":"output_text","text":"probe"},
+        {"type":"refusal","refusal":"different"}
+    ]}]});
+    let mut expected = payload.clone();
+    expected["output_text"] = json!(crate::builtin::hex_sha256("probe"));
+    expected["output"][0]["content"][1]["refusal"] = json!(crate::builtin::hex_sha256("different"));
+    let result = crate::builtin::llm_sanitize_response_callback(backend)(payload, ctx)
+        .await
+        .unwrap();
+    assert_eq!(result, Some(expected));
+}
+
+#[tokio::test]
 async fn shared_response_fields_are_hashed_once_and_removed_extensions_preserve_the_response() {
     for (action, path) in [("hash", "/model"), ("remove", "/contact_email")] {
         let codec: Arc<dyn LlmResponseCodec> = Arc::new(OpenAIChatCodec);
