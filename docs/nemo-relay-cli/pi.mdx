@@ -729,11 +729,10 @@ interactive TUI — so under `-p`, `--mode json` and `--mode rpc`, Ctrl+C is a r
 SIGINT that terminates the process with teardown never running. pi's
 `session_shutdown` never fires, and the extension never drains its queue.
 
-The loss is bounded. Every hook the extension *awaits* has already reached the
-gateway: both gates and both turn boundaries block on their round trip. An
-interrupt can therefore drop only observability marks queued since the last
-awaited hook, and the gateway keeps everything already delivered — the session
-scope is left open rather than the trace being lost.
+The gateway keeps the hooks it has already received. Cancelling a run can stop Pi
+from waiting for a hook while that hook is still queued. If Pi exits before the
+queue drains, undelivered hooks can be lost, including turn boundaries. Without
+the `session_shutdown` hook, the gateway may leave the session scope open.
 
 | Exit | Teardown runs? |
 | --- | --- |
@@ -751,3 +750,7 @@ gateway answers. Posts go out one at a time in hook order, so a gating hook also
 waits for whatever is queued ahead of it: against a gateway that holds requests,
 the first gate of a session pays `NEMO_RELAY_PI_TIMEOUT_MS` once per queued post,
 not once.
+
+Cancelling the Pi run stops its pending tool calls from executing. While Pi
+remains running, Relay drains the hook queue in order. The next turn waits for
+the earlier hooks ahead of it.

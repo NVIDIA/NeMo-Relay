@@ -5,6 +5,7 @@ import assert from 'node:assert/strict';
 import { chmod, copyFile, mkdtemp, readFile, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
+import { setImmediate, setTimeout as delay } from 'node:timers/promises';
 import { pathToFileURL } from 'node:url';
 import test from 'node:test';
 
@@ -306,6 +307,66 @@ test('managed Pi termination applies only to an explicit policy denial', async (
   const fault = await gate();
   assert.equal(fault.block, true);
   assert.equal(fault.terminate, undefined);
+});
+
+test('managed Pi aborts queued and in-flight gates without replay or late rewrites', async (t) => {
+  const received = Promise.withResolvers();
+  const decision = Promise.withResolvers();
+  const posts = [];
+  t.mock.method(globalThis, 'fetch', async (_url, request) => {
+    const body = JSON.parse(request.body);
+    posts.push(body);
+    if (body.tool_call_id === 'sent') {
+      received.resolve();
+      return decision.promise;
+    }
+    return Response.json({});
+  });
+  const handlers = new Map();
+  const { installManagedNemoRelayPi } = await loadLifecycleTestApi();
+  installManagedNemoRelayPi({ on: (name, handler) => handlers.set(name, handler) }, async () => ({
+    config: { daemonAddress: 'https://relay.example.com' },
+    credential: CREDENTIAL,
+    lease: { ensureReady: async () => {} },
+  }));
+  const controller = new AbortController();
+  const context = {
+    sessionManager: { getSessionId: () => 'session' },
+    signal: controller.signal,
+  };
+  const sent = { toolCallId: 'sent', toolName: 'read', input: { path: 'original' } };
+  const first = handlers.get('tool_call')(sent, context);
+  await received.promise;
+  const second = handlers.get('tool_call')({ ...sent, toolCallId: 'queued' }, context);
+  const turn = handlers.get('turn_end')({ turnIndex: 0 }, context);
+  controller.abort();
+  let nextTurn;
+  try {
+    const results = await Promise.race([
+      Promise.all([first, second, turn]),
+      delay(2_000, undefined, { ref: false }),
+    ]);
+    assert.ok(results, 'Pi can settle while the earlier authorization is pending');
+    for (const outcome of results.slice(0, 2)) {
+      assert.equal(outcome.block, true);
+      assert.match(outcome.reason, /cancelled/);
+    }
+
+    const nextContext = { ...context, signal: new AbortController().signal };
+    nextTurn = handlers.get('turn_start')({ turnIndex: 1 }, nextContext);
+    const pending = Symbol('pending');
+    assert.equal(
+      await Promise.race([nextTurn, setImmediate(pending)]),
+      pending,
+      'the next turn must wait for the cancelled turn to drain',
+    );
+    assert.deepEqual(posts.map(post => post.hook_event_name), ['tool_call']);
+  } finally {
+    decision.resolve(Response.json({ tool_call: { tool_call_id: 'sent', input: { path: 'late' } } }));
+  }
+  await nextTurn;
+  assert.equal(sent.input.path, 'original');
+  assert.deepEqual(posts.map(post => post.hook_event_name), ['tool_call', 'turn_end', 'turn_start']);
 });
 
 test('managed Pi tool rewrites require the exact call ID and recursively preserve shape', () => {

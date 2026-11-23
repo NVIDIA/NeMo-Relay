@@ -18,6 +18,7 @@ def verify(pi: Path, relay: Path) -> None:
         raise ValueError(f"Expected Pi 1.6.0, got {actual}")
     subprocess.run(["node", HERE / "user-bash.mjs", pi], check=True)
     subprocess.run(["node", HERE / "terminate-on-deny.mjs", pi], check=True)
+    subprocess.run(["node", HERE / "cancel-authorization.mjs", pi], check=True)
     subprocess.run([sys.executable, HERE / "managed_builtins.py", "--pi", pi, "--default-profile"], check=True)
     for scenario in ["virtual_routing.py", "provider_protocols.py"]:
         subprocess.run([sys.executable, HERE / scenario, "--pi", pi, "--relay", relay], check=True)
