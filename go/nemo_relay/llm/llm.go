@@ -10,7 +10,10 @@
 //
 //	import "github.com/NVIDIA/NeMo-Relay/go/nemo_relay/llm"
 //
-//	native := map[string]interface{}{"model": "gpt-4", "messages": []interface{}{}}
+//	native := nemo_relay.LLMRequest{
+//	    Headers: json.RawMessage(`{}`),
+//	    Content: json.RawMessage(`{"model":"gpt-4","messages":[]}`),
+//	}
 //	result, err := llm.Execute("chat", native,
 //	    func(nativeJSON json.RawMessage) (json.RawMessage, error) {
 //	        // ... call the LLM API ...
@@ -20,6 +23,7 @@
 package llm
 
 import (
+	"context"
 	"encoding/json"
 
 	"github.com/NVIDIA/NeMo-Relay/go/nemo_relay"
@@ -28,7 +32,7 @@ import (
 // Call starts an LLM call lifecycle and returns an [nemo_relay.LLMHandle],
 // emitting a Start event. End the call with [CallEnd]. This is a shorthand for
 // [nemo_relay.LlmCall].
-func Call(name string, native interface{}, opts ...nemo_relay.LLMCallOption) (*nemo_relay.LLMHandle, error) {
+func Call(name string, native nemo_relay.LLMRequest, opts ...nemo_relay.LLMCallOption) (*nemo_relay.LLMHandle, error) {
 	return nemo_relay.LlmCall(name, native, opts...)
 }
 
@@ -43,7 +47,7 @@ func CallEnd(handle *nemo_relay.LLMHandle, response json.RawMessage, opts ...nem
 // guardrails, execution intercepts, fn, sanitize-response
 // guardrails) and returns the final response JSON. This is a shorthand for
 // [nemo_relay.LlmCallExecute].
-func Execute(name string, native interface{}, fn nemo_relay.LLMExecutionFunc, opts ...nemo_relay.LLMCallOption) (json.RawMessage, error) {
+func Execute(name string, native nemo_relay.LLMRequest, fn nemo_relay.LLMExecutionFunc, opts ...nemo_relay.LLMCallOption) (json.RawMessage, error) {
 	return nemo_relay.LlmCallExecute(name, native, fn, opts...)
 }
 
@@ -54,9 +58,9 @@ func Execute(name string, native interface{}, fn nemo_relay.LLMExecutionFunc, op
 //
 // The collector callback is invoked with each intercepted chunk JSON for
 // accumulation. The finalizer callback is invoked once when the stream is
-// exhausted and must return a JSON string representing the aggregated response.
+// exhausted and returns aggregated JSON plus an error.
 // Pass nil for either to use the default no-op behavior.
-func StreamExecute(name string, native interface{}, fn nemo_relay.LLMExecutionFunc, collector nemo_relay.CollectorFunc, finalizer nemo_relay.FinalizerFunc, opts ...nemo_relay.LLMCallOption) (*nemo_relay.LlmStream, error) {
+func StreamExecute(name string, native nemo_relay.LLMRequest, fn nemo_relay.LLMStreamExecutionFunc, collector nemo_relay.CollectorFunc, finalizer nemo_relay.FinalizerFunc, opts ...nemo_relay.LLMCallOption) (*nemo_relay.LlmStream, error) {
 	return nemo_relay.LlmStreamCallExecute(name, native, fn, collector, finalizer, opts...)
 }
 
@@ -74,4 +78,14 @@ func RequestIntercepts(name string, request json.RawMessage) (nemo_relay.LLMRequ
 // [nemo_relay.LlmConditionalExecution].
 func ConditionalExecution(request json.RawMessage) error {
 	return nemo_relay.LlmConditionalExecution(request)
+}
+
+// ExecuteContext runs a managed LLM call with cancellation and deadlines.
+func ExecuteContext(ctx context.Context, name string, request nemo_relay.LLMRequest, fn func(context.Context, json.RawMessage) (json.RawMessage, error), opts ...nemo_relay.LLMCallOption) (json.RawMessage, error) {
+	return nemo_relay.LlmCallExecuteContext(ctx, name, request, fn, opts...)
+}
+
+// StreamExecuteContext binds stream setup and consumption to ctx.
+func StreamExecuteContext(ctx context.Context, name string, request nemo_relay.LLMRequest, fn nemo_relay.LLMStreamExecutionFunc, collector nemo_relay.CollectorFunc, finalizer nemo_relay.FinalizerFunc, opts ...nemo_relay.LLMCallOption) (*nemo_relay.LlmStream, error) {
+	return nemo_relay.LlmStreamCallExecuteContext(ctx, name, request, fn, collector, finalizer, opts...)
 }

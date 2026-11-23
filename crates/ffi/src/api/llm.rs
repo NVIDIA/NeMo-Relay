@@ -5,9 +5,8 @@ use super::{
     Arc, FfiCodecHandle, FfiLLMHandle, FfiLLMRequest, FfiLlmSanitizeRequestCodec,
     FfiLlmSanitizeResponseCodec, FfiScopeHandle, FlowResult, LlmAttributes, LlmExecutionNextFn,
     LlmRequest, LlmStreamExecutionNextFn, NemoRelayCodecDecodeFn, NemoRelayCodecEncodeFn,
-    NemoRelayCollectorCb, NemoRelayFinalizerCb, NemoRelayFreeFn, NemoRelayLlmExecCb,
-    NemoRelayStatus, TASK_SCOPE_STACK, c_char, c_str_to_json, c_str_to_opt_json, c_str_to_string,
-    clear_last_error, core_llm_api, entry_scope_stack, json_to_c_string, set_last_error,
+    NemoRelayFreeFn, NemoRelayLlmExecCb, NemoRelayStatus, c_char, c_str_to_json, c_str_to_opt_json,
+    c_str_to_string, clear_last_error, core_llm_api, json_to_c_string, set_last_error,
     status_from_error, tokio_runtime, unix_micros_to_opt_timestamp, wrap_codec_fn,
     wrap_llm_exec_fn, wrap_llm_stream_exec_fn, wrap_stream_callbacks,
 };
@@ -184,6 +183,8 @@ pub unsafe extern "C" fn nemo_relay_llm_call(
     data_json: *const c_char,
     metadata_json: *const c_char,
     model_name: *const c_char,
+    request_codec: *const FfiCodecHandle,
+    annotated_request_json: *const c_char,
     timestamp_unix_micros: *const i64,
     out: *mut *mut FfiLLMHandle,
 ) -> NemoRelayStatus {
@@ -234,10 +235,27 @@ pub unsafe extern "C" fn nemo_relay_llm_call(
         None => return NemoRelayStatus::InvalidArg,
     };
 
+    let codec = if request_codec.is_null() {
+        None
+    } else {
+        match unsafe { &*request_codec }.codec.clone() {
+            Some(codec) => Some(codec),
+            None => {
+                set_last_error("codec has no request decoder");
+                return NemoRelayStatus::InvalidArg;
+            }
+        }
+    };
+    let annotated = match super::codec::parse_annotation(annotated_request_json) {
+        Ok(value) => value,
+        Err(status) => return status,
+    };
     match core_llm_api::llm_call(
         core_llm_api::LlmCallParams::builder()
             .name(&name)
             .request(&request)
+            .codec_opt(codec)
+            .annotated_request_opt(annotated.map(Arc::new))
             .parent_opt(parent_ref)
             .attributes(attrs)
             .data_opt(data)
@@ -286,6 +304,8 @@ pub unsafe extern "C" fn nemo_relay_llm_call_end(
     response_json: *const c_char,
     data_json: *const c_char,
     metadata_json: *const c_char,
+    response_codec: *const FfiCodecHandle,
+    annotated_response_json: *const c_char,
     timestamp_unix_micros: *const i64,
 ) -> NemoRelayStatus {
     clear_last_error();
@@ -310,10 +330,27 @@ pub unsafe extern "C" fn nemo_relay_llm_call_end(
         None => return NemoRelayStatus::InvalidArg,
     };
 
+    let codec = if response_codec.is_null() {
+        None
+    } else {
+        match unsafe { &*response_codec }.response_codec.clone() {
+            Some(codec) => Some(codec),
+            None => {
+                set_last_error("codec has no response decoder");
+                return NemoRelayStatus::InvalidArg;
+            }
+        }
+    };
+    let annotated = match super::codec::parse_annotation(annotated_response_json) {
+        Ok(value) => value,
+        Err(status) => return status,
+    };
     match core_llm_api::llm_call_end(
         core_llm_api::LlmCallEndParams::builder()
             .handle(&unsafe { &*handle }.0)
             .response(response)
+            .response_codec_opt(codec)
+            .annotated_response_opt(annotated.map(Arc::new))
             .data_opt(data)
             .metadata_opt(metadata)
             .timestamp_opt(timestamp)
@@ -325,76 +362,8 @@ pub unsafe extern "C" fn nemo_relay_llm_call_end(
 }
 
 // ---------------------------------------------------------------------------
-// Built-in codec constructors
+// Built-in codec constructor
 // ---------------------------------------------------------------------------
-
-/// Create a new OpenAI Chat Completions codec handle.
-///
-/// The returned handle implements both request codec (decode/encode) and
-/// response codec (decode_response). Free with `nemo_relay_codec_free`.
-///
-/// # Safety
-/// Caller must free the returned handle via `nemo_relay_codec_free`.
-#[unsafe(no_mangle)]
-pub extern "C" fn nemo_relay_openai_chat_codec_new() -> *mut FfiCodecHandle {
-    Box::into_raw(Box::new(FfiCodecHandle {
-        codec: Arc::new(nemo_relay_codecs::openai_chat::OpenAIChatCodec),
-        response_codec: nemo_relay_runtime::codec::response_codec(
-            nemo_relay_codecs::resolve::ProviderSurface::OpenAIChat,
-        ),
-    }))
-}
-
-/// Create a new OpenAI Responses API codec handle.
-///
-/// The returned handle implements both request codec (decode/encode) and
-/// response codec (decode_response). Free with `nemo_relay_codec_free`.
-///
-/// # Safety
-/// Caller must free the returned handle via `nemo_relay_codec_free`.
-#[unsafe(no_mangle)]
-pub extern "C" fn nemo_relay_openai_responses_codec_new() -> *mut FfiCodecHandle {
-    Box::into_raw(Box::new(FfiCodecHandle {
-        codec: Arc::new(nemo_relay_codecs::openai_responses::OpenAIResponsesCodec),
-        response_codec: nemo_relay_runtime::codec::response_codec(
-            nemo_relay_codecs::resolve::ProviderSurface::OpenAIResponses,
-        ),
-    }))
-}
-
-/// Create a new Anthropic Messages API codec handle.
-///
-/// The returned handle implements both request codec (decode/encode) and
-/// response codec (decode_response). Free with `nemo_relay_codec_free`.
-///
-/// # Safety
-/// Caller must free the returned handle via `nemo_relay_codec_free`.
-#[unsafe(no_mangle)]
-pub extern "C" fn nemo_relay_anthropic_messages_codec_new() -> *mut FfiCodecHandle {
-    Box::into_raw(Box::new(FfiCodecHandle {
-        codec: Arc::new(nemo_relay_codecs::anthropic::AnthropicMessagesCodec),
-        response_codec: nemo_relay_runtime::codec::response_codec(
-            nemo_relay_codecs::resolve::ProviderSurface::AnthropicMessages,
-        ),
-    }))
-}
-
-/// Create a new Gemini generateContent API codec handle.
-///
-/// The returned handle implements both request codec (decode/encode) and
-/// response codec (decode_response). Free with `nemo_relay_codec_free`.
-///
-/// # Safety
-/// Caller must free the returned handle via `nemo_relay_codec_free`.
-#[unsafe(no_mangle)]
-pub extern "C" fn nemo_relay_gemini_generate_content_codec_new() -> *mut FfiCodecHandle {
-    Box::into_raw(Box::new(FfiCodecHandle {
-        codec: Arc::new(nemo_relay_codecs::gemini_generate_content::GeminiGenerateContentCodec),
-        response_codec: nemo_relay_runtime::codec::response_codec(
-            nemo_relay_codecs::resolve::ProviderSurface::GeminiGenerateContent,
-        ),
-    }))
-}
 
 struct ParsedExecuteInputs {
     name: String,
@@ -450,10 +419,14 @@ fn parse_execute_inputs(raw: RawExecuteInputs) -> Result<ParsedExecuteInputs, Ne
     let metadata = c_str_to_opt_json(raw.metadata_json).ok_or(NemoRelayStatus::InvalidJson)?;
     let model_name = parse_optional_model_name(raw.model_name)?;
     let codec = raw.codec;
+    if !raw.response_codec.is_null() && unsafe { &*raw.response_codec }.response_codec.is_none() {
+        set_last_error("codec has no response decoder");
+        return Err(NemoRelayStatus::InvalidArg);
+    }
     let response_codec = if raw.response_codec.is_null() {
         None
     } else {
-        Some(unsafe { &*raw.response_codec }.response_codec.clone())
+        unsafe { &*raw.response_codec }.response_codec.clone()
     };
 
     Ok(ParsedExecuteInputs {
@@ -491,6 +464,12 @@ fn parse_execute_inputs(raw: RawExecuteInputs) -> Result<ParsedExecuteInputs, Ne
 /// - `out`: On success, receives the response as a JSON C string. Caller must
 ///   free with `nemo_relay_string_free`.
 ///
+/// - `skip_stages`: Bitwise OR of `NEMO_RELAY_SKIP_*` constants. Zero runs all
+///   middleware stages. Unknown bits return `InvalidArg`. Event sanitization,
+///   codecs, trace context, and completion still run.
+///
+/// Relay owns callback data when the call starts. It releases the data even if validation fails.
+///
 /// # Safety
 /// `name`, `native_json`, and `out` must be valid, non-null pointers.
 #[unsafe(no_mangle)]
@@ -509,62 +488,10 @@ pub unsafe extern "C" fn nemo_relay_llm_call_execute(
     codec_encode: NemoRelayCodecEncodeFn,
     codec_user_data: *mut libc::c_void,
     codec_free_fn: NemoRelayFreeFn,
-    response_codec: *const FfiCodecHandle,
-    out: *mut *mut c_char,
-) -> NemoRelayStatus {
-    unsafe {
-        nemo_relay_llm_call_execute_with_options(
-            name,
-            native_json,
-            func,
-            func_user_data,
-            func_free,
-            parent,
-            attributes,
-            data_json,
-            metadata_json,
-            model_name,
-            codec_decode,
-            codec_encode,
-            codec_user_data,
-            codec_free_fn,
-            response_codec,
-            0,
-            out,
-        )
-    }
-}
-
-/// Choose which middleware stages run for one call.
-/// Combine `NEMO_RELAY_SKIP_*` constants with bitwise OR in `skip_stages`.
-/// Zero runs all stages. Unknown bits return `NEMO_RELAY_STATUS_INVALID_ARG`.
-/// Relay still sanitizes event data, uses codecs, passes trace context,
-/// and handles call completion. Nested calls use their own options.
-///
-/// Relay takes ownership of callback data when this function starts.
-/// It releases that data even if input validation fails.
-///
-/// # Safety
-/// Use the same pointer and callback rules as the existing execute function.
-/// `out` must point to writable storage for the output pointer.
-#[unsafe(no_mangle)]
-pub unsafe extern "C" fn nemo_relay_llm_call_execute_with_options(
-    name: *const c_char,
-    native_json: *const c_char,
-    func: NemoRelayLlmExecCb,
-    func_user_data: *mut libc::c_void,
-    func_free: NemoRelayFreeFn,
-    parent: *const FfiScopeHandle,
-    attributes: u32,
-    data_json: *const c_char,
-    metadata_json: *const c_char,
-    model_name: *const c_char,
-    codec_decode: NemoRelayCodecDecodeFn,
-    codec_encode: NemoRelayCodecEncodeFn,
-    codec_user_data: *mut libc::c_void,
-    codec_free_fn: NemoRelayFreeFn,
+    request_codec: *const FfiCodecHandle,
     response_codec: *const FfiCodecHandle,
     skip_stages: u32,
+    cancellation: *const super::FfiCancellation,
     out: *mut *mut c_char,
 ) -> NemoRelayStatus {
     clear_last_error();
@@ -592,6 +519,21 @@ pub unsafe extern "C" fn nemo_relay_llm_call_execute_with_options(
             return NemoRelayStatus::InvalidArg;
         }
     };
+    let codec = if request_codec.is_null() {
+        codec
+    } else {
+        if codec.is_some() {
+            set_last_error("supply a request codec handle or callbacks, not both");
+            return NemoRelayStatus::InvalidArg;
+        }
+        match unsafe { &*request_codec }.codec.clone() {
+            Some(codec) => Some(codec),
+            None => {
+                set_last_error("codec has no request decoder");
+                return NemoRelayStatus::InvalidArg;
+            }
+        }
+    };
     let execution_options = match super::execution_options(skip_stages) {
         Ok(options) => options,
         Err(status) => return status,
@@ -617,25 +559,37 @@ pub unsafe extern "C" fn nemo_relay_llm_call_execute_with_options(
 
     let default_fn: LlmExecutionNextFn = Arc::new(move |request| exec_fn(request));
 
-    let result = super::block_on(async {
-        core_llm_api::llm_call_execute(
-            core_llm_api::LlmCallExecuteParams::builder()
-                .name(parsed.name)
-                .request(parsed.request)
-                .func(default_fn)
-                .execution_options(execution_options)
-                .parent_opt(parsed.parent_handle)
-                .attributes(parsed.attrs)
-                .data_opt(parsed.data)
-                .metadata_opt(parsed.metadata)
-                .model_name_opt(parsed.model_name)
-                .codec_opt(parsed.codec)
-                .response_codec_opt(parsed.response_codec)
-                .build(),
-        )
+    let cancellation = unsafe { cancellation.as_ref() }.cloned();
+    let signal = cancellation.clone();
+    let result = super::block_on(async move {
+        super::cancellation::run(signal, async move {
+            core_llm_api::llm_call_execute(
+                core_llm_api::LlmCallExecuteParams::builder()
+                    .name(parsed.name)
+                    .request(parsed.request)
+                    .func(default_fn)
+                    .execution_options(execution_options)
+                    .parent_opt(parsed.parent_handle)
+                    .attributes(parsed.attrs)
+                    .data_opt(parsed.data)
+                    .metadata_opt(parsed.metadata)
+                    .model_name_opt(parsed.model_name)
+                    .codec_opt(parsed.codec)
+                    .response_codec_opt(parsed.response_codec)
+                    .build(),
+            )
+            .await
+        })
         .await
     });
 
+    if cancellation
+        .as_ref()
+        .is_some_and(|signal| *signal.0.borrow())
+    {
+        set_last_error("execution cancelled");
+        return NemoRelayStatus::Cancelled;
+    }
     match result {
         Ok(json) => {
             unsafe { *out = json_to_c_string(&json) };
@@ -666,7 +620,7 @@ pub(crate) struct ForwarderParts {
     pub(crate) tx: tokio::sync::mpsc::Sender<FlowResult<serde_json::Value>>,
     pub(crate) cancel_rx: tokio::sync::watch::Receiver<bool>,
     pub(crate) closed: tokio::sync::watch::Sender<Option<Result<(), String>>>,
-    pub(crate) scope_stack: nemo_relay_runtime::api::runtime::ScopeStackHandle,
+    pub(crate) context: nemo_relay_runtime::api::runtime::MiddlewareContinuationContext,
 }
 
 impl FfiStream {
@@ -682,9 +636,19 @@ impl FfiStream {
             .unwrap_or_else(|poisoned| poisoned.into_inner())
             .take();
         if let Some(parts) = parts {
-            tokio_runtime().spawn(TASK_SCOPE_STACK.scope(
-                parts.scope_stack,
-                forward_stream_to_channel(parts.stream, parts.tx, parts.cancel_rx, parts.closed),
+            let context = parts.context;
+            tokio_runtime().spawn(super::stream_source::STREAM_CALLBACK_STATE.scope(
+                self.callbacks.clone(),
+                async move {
+                    context
+                        .run(forward_stream_to_channel(
+                            parts.stream,
+                            parts.tx,
+                            parts.cancel_rx,
+                            parts.closed,
+                        ))
+                        .await
+                },
             ));
         }
     }
@@ -722,9 +686,9 @@ async fn forward_stream_to_channel(
         };
         permit.send(item);
     }
-    closed.send_replace(Some(
-        stream.close().await.map_err(|error| error.to_string()),
-    ));
+    let result = stream.close().await.map_err(|error| error.to_string());
+    drop(stream);
+    closed.send_replace(Some(result));
 }
 
 /// Execute a streaming LLM call end-to-end. Conditional-execution guardrails
@@ -753,6 +717,12 @@ async fn forward_stream_to_channel(
 /// - `model_name`: Optional LLM model identifier, or null.
 /// - `out`: On success, receives a heap-allocated `FfiStream`.
 ///
+/// - `skip_stages`: Bitwise OR of `NEMO_RELAY_SKIP_*` constants. Zero runs all
+///   middleware stages. Unknown bits return `InvalidArg`. Event sanitization,
+///   codecs, trace context, and completion still run.
+///
+/// Relay owns callback data when the call starts. It releases the data even if validation fails.
+///
 /// # Safety
 /// `name`, `native_json`, and `out` must be valid, non-null pointers. `collector`
 /// and `finalizer` may be null.
@@ -760,11 +730,12 @@ async fn forward_stream_to_channel(
 pub unsafe extern "C" fn nemo_relay_llm_stream_call_execute(
     name: *const c_char,
     native_json: *const c_char,
-    func: NemoRelayLlmExecCb,
+    func: crate::callable::NemoRelayOptionalLlmExecCb,
+    stream_func: crate::callable::NemoRelayOptionalLlmStreamExecCb,
     func_user_data: *mut libc::c_void,
     func_free: NemoRelayFreeFn,
-    collector: Option<NemoRelayCollectorCb>,
-    finalizer: Option<NemoRelayFinalizerCb>,
+    collector: crate::callable::NemoRelayOptionalCollectorCb,
+    finalizer: crate::callable::NemoRelayOptionalFinalizerCb,
     callback_user_data: *mut libc::c_void,
     callback_free: NemoRelayFreeFn,
     parent: *const FfiScopeHandle,
@@ -776,76 +747,34 @@ pub unsafe extern "C" fn nemo_relay_llm_stream_call_execute(
     codec_encode: NemoRelayCodecEncodeFn,
     codec_user_data: *mut libc::c_void,
     codec_free_fn: NemoRelayFreeFn,
-    response_codec: *const FfiCodecHandle,
-    out: *mut *mut FfiStream,
-) -> NemoRelayStatus {
-    unsafe {
-        nemo_relay_llm_stream_call_execute_with_options(
-            name,
-            native_json,
-            func,
-            func_user_data,
-            func_free,
-            collector,
-            finalizer,
-            callback_user_data,
-            callback_free,
-            parent,
-            attributes,
-            data_json,
-            metadata_json,
-            model_name,
-            codec_decode,
-            codec_encode,
-            codec_user_data,
-            codec_free_fn,
-            response_codec,
-            0,
-            out,
-        )
-    }
-}
-
-/// Choose which middleware stages run for one call.
-/// Combine `NEMO_RELAY_SKIP_*` constants with bitwise OR in `skip_stages`.
-/// Zero runs all stages. Unknown bits return `NEMO_RELAY_STATUS_INVALID_ARG`.
-/// Relay still sanitizes event data, uses codecs, passes trace context,
-/// and handles call completion. Nested calls use their own options.
-///
-/// Relay takes ownership of callback data when this function starts.
-/// It releases that data even if input validation fails.
-///
-/// # Safety
-/// Use the same pointer and callback rules as the existing execute function.
-/// `out` must point to writable storage for the output pointer.
-#[unsafe(no_mangle)]
-pub unsafe extern "C" fn nemo_relay_llm_stream_call_execute_with_options(
-    name: *const c_char,
-    native_json: *const c_char,
-    func: NemoRelayLlmExecCb,
-    func_user_data: *mut libc::c_void,
-    func_free: NemoRelayFreeFn,
-    collector: Option<NemoRelayCollectorCb>,
-    finalizer: Option<NemoRelayFinalizerCb>,
-    callback_user_data: *mut libc::c_void,
-    callback_free: NemoRelayFreeFn,
-    parent: *const FfiScopeHandle,
-    attributes: u32,
-    data_json: *const c_char,
-    metadata_json: *const c_char,
-    model_name: *const c_char,
-    codec_decode: NemoRelayCodecDecodeFn,
-    codec_encode: NemoRelayCodecEncodeFn,
-    codec_user_data: *mut libc::c_void,
-    codec_free_fn: NemoRelayFreeFn,
+    request_codec: *const FfiCodecHandle,
     response_codec: *const FfiCodecHandle,
     skip_stages: u32,
+    cancellation: *const super::FfiCancellation,
     out: *mut *mut FfiStream,
 ) -> NemoRelayStatus {
     clear_last_error();
     let (wrapped_collector, wrapped_finalizer, callbacks) =
         wrap_stream_callbacks(collector, finalizer, callback_user_data, callback_free);
-    let exec_fn = wrap_llm_stream_exec_fn(func, func_user_data, func_free);
+    let default_fn: LlmStreamExecutionNextFn = match stream_func {
+        Some(callback) => {
+            crate::callable::wrap_llm_stream_source_fn(callback, func_user_data, func_free)
+        }
+        None => {
+            let Some(func) = func else {
+                if let Some(free) = func_free {
+                    unsafe { free(func_user_data) };
+                }
+                if let Some(free) = codec_free_fn {
+                    unsafe { free(codec_user_data) };
+                }
+                set_last_error("a stream source factory or single-value provider is required");
+                return NemoRelayStatus::InvalidArg;
+            };
+            let exec = wrap_llm_stream_exec_fn(func, func_user_data, func_free);
+            Arc::new(move |request| exec(request))
+        }
+    };
     let codec = match (codec_decode, codec_encode) {
         (Some(decode), Some(encode)) => Some(wrap_codec_fn(
             decode,
@@ -867,6 +796,21 @@ pub unsafe extern "C" fn nemo_relay_llm_stream_call_execute_with_options(
                 "codec_decode and codec_encode must either both be provided or both be null",
             );
             return NemoRelayStatus::InvalidArg;
+        }
+    };
+    let codec = if request_codec.is_null() {
+        codec
+    } else {
+        if codec.is_some() {
+            set_last_error("supply a request codec handle or callbacks, not both");
+            return NemoRelayStatus::InvalidArg;
+        }
+        match unsafe { &*request_codec }.codec.clone() {
+            Some(codec) => Some(codec),
+            None => {
+                set_last_error("codec has no request decoder");
+                return NemoRelayStatus::InvalidArg;
+            }
         }
     };
     let execution_options = match super::execution_options(skip_stages) {
@@ -892,30 +836,44 @@ pub unsafe extern "C" fn nemo_relay_llm_stream_call_execute_with_options(
         Err(status) => return status,
     };
 
-    let default_fn: LlmStreamExecutionNextFn = Arc::new(move |request| exec_fn(request));
+    let forwarding_context =
+        nemo_relay_runtime::api::runtime::MiddlewareContinuationContext::capture();
+    let cancellation = unsafe { cancellation.as_ref() }.cloned();
+    let signal = cancellation.clone();
+    let result = super::block_on(super::stream_source::STREAM_CALLBACK_STATE.scope(
+        callbacks.clone(),
+        async move {
+            super::cancellation::run(signal, async move {
+                core_llm_api::llm_stream_call_execute(
+                    core_llm_api::LlmStreamCallExecuteParams::builder()
+                        .name(parsed.name)
+                        .request(parsed.request)
+                        .func(default_fn)
+                        .execution_options(execution_options)
+                        .collector(wrapped_collector)
+                        .finalizer(LlmFinalizer::Fallible(wrapped_finalizer))
+                        .parent_opt(parsed.parent_handle)
+                        .attributes(parsed.attrs)
+                        .data_opt(parsed.data)
+                        .metadata_opt(parsed.metadata)
+                        .model_name_opt(parsed.model_name)
+                        .codec_opt(parsed.codec)
+                        .response_codec_opt(parsed.response_codec)
+                        .build(),
+                )
+                .await
+            })
+            .await
+        },
+    ));
 
-    let scope_stack = entry_scope_stack();
-    let result = super::block_on(async {
-        core_llm_api::llm_stream_call_execute(
-            core_llm_api::LlmStreamCallExecuteParams::builder()
-                .name(parsed.name)
-                .request(parsed.request)
-                .func(default_fn)
-                .execution_options(execution_options)
-                .collector(wrapped_collector)
-                .finalizer(LlmFinalizer::Fallible(wrapped_finalizer))
-                .parent_opt(parsed.parent_handle)
-                .attributes(parsed.attrs)
-                .data_opt(parsed.data)
-                .metadata_opt(parsed.metadata)
-                .model_name_opt(parsed.model_name)
-                .codec_opt(parsed.codec)
-                .response_codec_opt(parsed.response_codec)
-                .build(),
-        )
-        .await
-    });
-
+    if cancellation
+        .as_ref()
+        .is_some_and(|signal| *signal.0.borrow())
+    {
+        set_last_error("execution cancelled");
+        return NemoRelayStatus::Cancelled;
+    }
     match result {
         Ok(rust_stream) => {
             let (tx, rx) = tokio::sync::mpsc::channel(32);
@@ -927,7 +885,7 @@ pub unsafe extern "C" fn nemo_relay_llm_stream_call_execute_with_options(
                     tx,
                     cancel_rx,
                     closed,
-                    scope_stack,
+                    context: forwarding_context,
                 })),
                 receiver: tokio::sync::Mutex::new(rx),
                 cancel,
@@ -960,14 +918,12 @@ pub unsafe extern "C" fn nemo_relay_stream_cancel(stream: *mut FfiStream) {
 /// Stop a stream producer and wait for cleanup to complete.
 ///
 /// This operation is idempotent. It does not free `stream`; callers must still
-/// release the handle with [`nemo_relay_stream_free`]. A call from inside this
-/// stream's own collector or finalizer requests cancellation and returns `Ok`
-/// at once. Cleanup finishes after the callback returns, and a later call
-/// reports its result.
+/// release the handle with [`nemo_relay_stream_free`].
 ///
 /// # Safety
 /// `stream` must be a valid `FfiStream` pointer returned by
 /// `nemo_relay_llm_stream_call_execute`, or null.
+/// Call this outside owned callbacks. Managed-stream control from a callback is invalid.
 #[unsafe(no_mangle)]
 pub unsafe extern "C" fn nemo_relay_stream_close(stream: *mut FfiStream) -> NemoRelayStatus {
     clear_last_error();
@@ -977,9 +933,6 @@ pub unsafe extern "C" fn nemo_relay_stream_close(stream: *mut FfiStream) -> Nemo
     }
     let stream = unsafe { &*stream };
     stream.cancel();
-    if stream.callbacks.on_callback_thread() {
-        return NemoRelayStatus::Ok;
-    }
     let result = match super::block_on(async { Ok(finish_close(stream).await) }) {
         Ok(result) => result,
         Err(error) => Err(error.to_string()),
@@ -1037,12 +990,11 @@ fn combine_close_errors(errors: [Option<String>; 3]) -> Result<(), String> {
 /// - `1`: A chunk was written to `*out_chunk`. Caller must free with
 ///   `nemo_relay_string_free`.
 /// - `0`: The stream is complete (no more chunks).
-/// - `-1`: An error occurred. Call `nemo_relay_last_error` for details. A call
-///   from inside this stream's own collector or finalizer fails this way
-///   instead of waiting on itself.
+/// - `-1`: An error occurred. Call `nemo_relay_last_error` for details.
 ///
 /// # Safety
 /// `stream` and `out_chunk` must be valid, non-null pointers.
+/// Call this outside owned callbacks. Managed-stream control from a callback is invalid.
 #[unsafe(no_mangle)]
 pub unsafe extern "C" fn nemo_relay_stream_next(
     stream: *mut FfiStream,
@@ -1053,15 +1005,9 @@ pub unsafe extern "C" fn nemo_relay_stream_next(
         return -1;
     }
     let stream = unsafe { &*stream };
-    if stream.callbacks.on_callback_thread() {
-        set_last_error(
-            "nemo_relay_stream_next called from inside the stream's own collector or finalizer",
-        );
-        return -1;
-    }
+    stream.start();
     let result = super::block_on(async {
         let mut guard = stream.receiver.lock().await;
-        stream.start();
         Ok(guard.recv().await)
     });
     match result {

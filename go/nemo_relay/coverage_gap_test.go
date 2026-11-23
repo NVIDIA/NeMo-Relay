@@ -116,33 +116,33 @@ func assertInvalidCallPayloads(t *testing.T) {
 		t.Fatal("expected ToolCall to fail on invalid JSON args")
 	}
 
-	badMarshal := map[string]interface{}{"ch": make(chan int)}
-	if _, err := LlmCall("llm_marshal_error", badMarshal); err == nil {
+	badMarshal := LLMRequest{Content: json.RawMessage(`{`)}
+	if _, err := LlmCall("llm_marshal_error", requestForTest(badMarshal)); err == nil {
 		t.Fatal("expected LlmCall marshal error")
 	}
-	if _, err := LlmCallExecute("llm_execute_marshal_error", badMarshal, func(json.RawMessage) (json.RawMessage, error) {
+	if _, err := LlmCallExecute("llm_execute_marshal_error", requestForTest(badMarshal), func(json.RawMessage) (json.RawMessage, error) {
 		return json.RawMessage(`null`), nil
 	}); err == nil {
 		t.Fatal("expected LlmCallExecute marshal error")
 	}
-	if _, err := LlmStreamCallExecute("llm_stream_marshal_error", badMarshal, func(json.RawMessage) (json.RawMessage, error) {
+	if _, err := LlmStreamCallExecute("llm_stream_marshal_error", requestForTest(badMarshal), LLMExecutionFunc(func(json.RawMessage) (json.RawMessage, error) {
 		return json.RawMessage(`null`), nil
-	}, nil, nil); err == nil {
+	}).AsStream(), nil, nil); err == nil {
 		t.Fatal("expected LlmStreamCallExecute marshal error")
 	}
 
-	malformedRequest := map[string]interface{}{"not": "an LLMRequest"}
-	if _, err := LlmCall("llm_invalid_request", malformedRequest); err == nil {
+	malformedRequest := LLMRequest{Headers: json.RawMessage(`[]`), Content: json.RawMessage(`{}`)}
+	if _, err := LlmCall("llm_invalid_request", requestForTest(malformedRequest)); err == nil {
 		t.Fatal("expected LlmCall request-shape error")
 	}
-	if _, err := LlmCallExecute("llm_execute_invalid_request", malformedRequest, func(json.RawMessage) (json.RawMessage, error) {
+	if _, err := LlmCallExecute("llm_execute_invalid_request", requestForTest(malformedRequest), func(json.RawMessage) (json.RawMessage, error) {
 		return json.RawMessage(`null`), nil
 	}); err == nil {
 		t.Fatal("expected LlmCallExecute request-shape error")
 	}
-	if _, err := LlmStreamCallExecute("llm_stream_invalid_request", malformedRequest, func(json.RawMessage) (json.RawMessage, error) {
+	if _, err := LlmStreamCallExecute("llm_stream_invalid_request", requestForTest(malformedRequest), LLMExecutionFunc(func(json.RawMessage) (json.RawMessage, error) {
 		return json.RawMessage(`null`), nil
-	}, nil, nil); err == nil {
+	}).AsStream(), nil, nil); err == nil {
 		t.Fatal("expected LlmStreamCallExecute request-shape error")
 	}
 
@@ -310,7 +310,7 @@ func assertMetricTimestampCoverage(t *testing.T) {
 			Name:      "example.go.timestamp",
 			Kind:      MetricKindCounter,
 			ValueType: MetricValueTypeU64,
-			Value:     uint64(1),
+			Value:     json.Number("1"),
 		}}, WithMetricTimestamp(expectedMetricTimestamp))
 		if err != nil {
 			t.Fatalf("EmitMetric with timestamp failed: %v", err)
@@ -436,7 +436,7 @@ func assertEventSnapshotAccessors(t *testing.T) {
 
 func assertExpiredCodecAndStreamErrors(t *testing.T) {
 	t.Helper()
-	request := LLMRequestDTO{Headers: json.RawMessage(`{}`), Content: json.RawMessage(`{}`)}
+	request := LLMRequest{Headers: json.RawMessage(`{}`), Content: json.RawMessage(`{}`)}
 	if _, err := (*LLMRequestSanitizeCodec)(nil).Decode(request); !errors.Is(err, ErrLLMSanitizeCodecExpired) {
 		t.Fatalf("nil request codec Decode error = %v", err)
 	}
@@ -475,7 +475,7 @@ func assertCallbackSerializationFailures(t *testing.T) {
 	defer DeregisterToolExecutionIntercept(toolName)
 
 	const llmName = "coverage_llm_intercept_serialize_failure"
-	if err := RegisterLlmRequestIntercept(llmName, 1, false, func(_ string, request LLMRequestDTO, annotated json.RawMessage) (LLMRequestInterceptOutcome, error) {
+	if err := RegisterLlmRequestIntercept(llmName, 1, false, func(_ string, request LLMRequest, annotated json.RawMessage) (LLMRequestInterceptOutcome, error) {
 		return LLMRequestInterceptOutcome{Request: request, AnnotatedRequest: annotated}, nil
 	}); err != nil {
 		t.Fatalf("RegisterLlmRequestIntercept failed: %v", err)
@@ -604,10 +604,10 @@ func testWrapperAndCodecFinalizersRun(t *testing.T) {
 		t.Fatalf("ToolCallEnd failed: %v", err)
 	}
 
-	llmHandle, err := LlmCall("finalizer_llm", map[string]interface{}{
+	llmHandle, err := LlmCall("finalizer_llm", requestForTest(map[string]interface{}{
 		"headers": map[string]interface{}{},
 		"content": map[string]interface{}{"model": "test-model"},
-	})
+	}))
 	if err != nil {
 		t.Fatalf("LlmCall failed: %v", err)
 	}
@@ -615,11 +615,11 @@ func testWrapperAndCodecFinalizersRun(t *testing.T) {
 		t.Fatalf("LlmCallEnd failed: %v", err)
 	}
 
-	request := NewLLMRequest(
-		map[string]interface{}{"x-test": "finalizer"},
-		map[string]interface{}{"model": "test-model"},
-	)
-	if request == nil {
+	request, err := NewLLMRequest(jsonForTest(map[string]interface{}{"x-test": "finalizer"}), jsonForTest(map[string]interface{}{"model": "test-model"}))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if request.Headers == nil {
 		t.Fatal("expected non-nil LLMRequest")
 	}
 
@@ -634,7 +634,7 @@ func testWrapperAndCodecFinalizersRun(t *testing.T) {
 	scopeHandle = nil
 	toolHandle = nil
 	llmHandle = nil
-	request = nil
+	request = LLMRequest{}
 	chatCodec = nil
 	responsesCodec = nil
 	anthropicCodec = nil
@@ -675,8 +675,7 @@ func testGeminiGenerateContentCodecFunctionCallID(t *testing.T) {
 	defer cleanup()
 
 	_, err := LlmCallExecute(
-		"gemini_fn_id_test",
-		map[string]interface{}{
+		"gemini_fn_id_test", requestForTest(map[string]interface{}{
 			"headers": map[string]interface{}{},
 			"content": map[string]interface{}{
 				"contents": []interface{}{
@@ -688,8 +687,7 @@ func testGeminiGenerateContentCodecFunctionCallID(t *testing.T) {
 					},
 				},
 			},
-		},
-		executor,
+		}), executor,
 		WithLLMResponseCodec(NewGeminiGenerateContentCodec()),
 	)
 	if err != nil {

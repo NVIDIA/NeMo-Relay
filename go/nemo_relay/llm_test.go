@@ -58,7 +58,7 @@ func TestLlmCallEndStatusMetadata(t *testing.T) {
 		{"manual_cancelled", `{"request_id":"request-123","otel.status_code":"UNSET"}`, "UNSET"},
 		{"manual_error", `{"request_id":"request-123","otel.status_code":"ERROR","otel.status_description":"provider timed out","error.type":"TimeoutError"}`, "ERROR"},
 	} {
-		handle, err := LlmCall(tc.name, makeRequest(), WithLLMMetadata(json.RawMessage(`{"otel.status_description":"stale at call start"}`)))
+		handle, err := LlmCall(tc.name, requestForTest(makeRequest()), WithLLMMetadata(json.RawMessage(`{"otel.status_description":"stale at call start"}`)))
 		if err != nil {
 			t.Fatalf(llmCallFailed, err)
 		}
@@ -90,7 +90,7 @@ func TestLlmCallEndStatusMetadata(t *testing.T) {
 
 func TestLlmCallAndEnd(t *testing.T) {
 	request := makeRequest()
-	handle, err := LlmCall("my_llm", request)
+	handle, err := LlmCall("my_llm", requestForTest(request))
 	if err != nil {
 		t.Fatalf(llmCallFailed, err)
 	}
@@ -112,7 +112,7 @@ func TestLlmCallAndEnd(t *testing.T) {
 
 func TestLlmCallWithAttributes(t *testing.T) {
 	request := makeRequest()
-	handle, err := LlmCall("streaming_llm", request, WithLLMAttributes(LLMAttrStreaming))
+	handle, err := LlmCall("streaming_llm", requestForTest(request), WithLLMAttributes(LLMAttrStreaming))
 	if err != nil {
 		t.Fatalf(llmCallFailed, err)
 	}
@@ -124,8 +124,7 @@ func TestLlmCallWithAttributes(t *testing.T) {
 
 func TestLlmCallWithDataMetadata(t *testing.T) {
 	request := makeRequest()
-	handle, err := LlmCall("llm_dm", request,
-		WithLLMData(json.RawMessage(`{"custom": "data"}`)),
+	handle, err := LlmCall("llm_dm", requestForTest(request), WithLLMData(json.RawMessage(`{"custom": "data"}`)),
 		WithLLMMetadata(json.RawMessage(`{"trace": "xyz"}`)),
 	)
 	if err != nil {
@@ -145,7 +144,7 @@ func testLlmCallWithParent(t *testing.T) {
 	defer PopScope(parent)
 
 	request := makeRequest()
-	handle, err := LlmCall("child_llm", request, WithLLMParent(parent))
+	handle, err := LlmCall("child_llm", requestForTest(request), WithLLMParent(parent))
 	if err != nil {
 		t.Fatalf(llmCallFailed, err)
 	}
@@ -171,7 +170,7 @@ func TestLlmEvents(t *testing.T) {
 	})
 
 	request := makeRequest()
-	handle, _ := LlmCall("evt_llm", request)
+	handle, _ := LlmCall("evt_llm", requestForTest(request))
 	LlmCallEnd(handle, json.RawMessage(`{}`))
 	if err := FlushSubscribers(); err != nil {
 		t.Fatalf(llmFlushSubscribersFailed, err)
@@ -191,13 +190,12 @@ func TestLlmEvents(t *testing.T) {
 
 func TestLlmCallExecuteBasic(t *testing.T) {
 	request := makeRequest()
-	result, err := LlmCallExecute("exec_llm", request,
-		func(nativeJSON json.RawMessage) (json.RawMessage, error) {
-			var input map[string]interface{}
-			json.Unmarshal(nativeJSON, &input)
-			out, _ := json.Marshal(map[string]interface{}{"received": true})
-			return out, nil
-		},
+	result, err := LlmCallExecute("exec_llm", requestForTest(request), func(nativeJSON json.RawMessage) (json.RawMessage, error) {
+		var input map[string]interface{}
+		json.Unmarshal(nativeJSON, &input)
+		out, _ := json.Marshal(map[string]interface{}{"received": true})
+		return out, nil
+	},
 	)
 	if err != nil {
 		t.Fatalf(llmCallExecuteFailed, err)
@@ -226,20 +224,18 @@ func TestLlmCallExecuteAddsOTELStatusMetadataToEndEvents(t *testing.T) {
 	}
 	defer DeregisterSubscriber("go_llm_status_metadata_sub")
 
-	_, err := LlmCallExecute("go_llm_status_ok", makeRequest(),
-		func(nativeJSON json.RawMessage) (json.RawMessage, error) {
-			return json.RawMessage(`{"ok":true}`), nil
-		},
+	_, err := LlmCallExecute("go_llm_status_ok", requestForTest(makeRequest()), func(nativeJSON json.RawMessage) (json.RawMessage, error) {
+		return json.RawMessage(`{"ok":true}`), nil
+	},
 		WithLLMMetadata(json.RawMessage(`{"caller":"go-llm","otel.status_code":"USER"}`)),
 	)
 	if err != nil {
 		t.Fatalf(llmCallExecuteFailed, err)
 	}
 
-	_, err = LlmCallExecute("go_llm_status_error", makeRequest(),
-		func(nativeJSON json.RawMessage) (json.RawMessage, error) {
-			return nil, errors.New("go llm status failure")
-		},
+	_, err = LlmCallExecute("go_llm_status_error", requestForTest(makeRequest()), func(nativeJSON json.RawMessage) (json.RawMessage, error) {
+		return nil, errors.New("go llm status failure")
+	},
 		WithLLMMetadata(json.RawMessage(`{"caller":"go-llm-error"}`)),
 	)
 	if err == nil {
@@ -287,9 +283,7 @@ func TestLlmCallExecuteWithRequestAndResponseCodecs(t *testing.T) {
 	defer cleanupEvents()
 
 	result, err := LlmCallExecute(
-		"codec_llm",
-		makeRequest(),
-		requireEncodedModelExecutor(t),
+		"codec_llm", requestForTest(makeRequest()), requireEncodedModelExecutor(t),
 		WithLLMAttributes(LLMAttrStreaming),
 		WithLLMCodec(codec),
 		WithLLMResponseCodec(NewOpenAIChatCodec()),
@@ -341,7 +335,7 @@ type resolvedCodecCallbackState struct {
 	responseResolved      bool
 	retainedRequestCodec  *LLMRequestSanitizeCodec
 	retainedResponseCodec *LLMResponseSanitizeCodec
-	retainedRequest       LLMRequestDTO
+	retainedRequest       LLMRequest
 	errors                []string
 }
 
@@ -350,7 +344,7 @@ type resolvedCodecSnapshot struct {
 	responseResolved      bool
 	retainedRequestCodec  *LLMRequestSanitizeCodec
 	retainedResponseCodec *LLMResponseSanitizeCodec
-	retainedRequest       LLMRequestDTO
+	retainedRequest       LLMRequest
 	errors                []string
 }
 
@@ -361,9 +355,9 @@ func (state *resolvedCodecCallbackState) recordError(format string, args ...any)
 }
 
 func (state *resolvedCodecCallbackState) sanitizeRequest(
-	request LLMRequestDTO,
+	request LLMRequest,
 	context LLMSanitizeRequestContext,
-) (LLMRequestDTO, bool) {
+) (LLMRequest, bool) {
 	if context.Codec.CodecKind != LLMCodecOpaque || context.Codec.CodecID != nil {
 		state.recordError("unexpected request codec identity: %#v", context.Codec)
 	}
@@ -489,9 +483,7 @@ func TestLlmSanitizersResolveDirectionalCodecs(t *testing.T) {
 		}]
 	}`)
 	_, err := LlmCallExecute(
-		"resolved_codec_llm",
-		makeRequest(),
-		func(json.RawMessage) (json.RawMessage, error) { return response, nil },
+		"resolved_codec_llm", requestForTest(makeRequest()), func(json.RawMessage) (json.RawMessage, error) { return response, nil },
 		WithLLMCodec(llmRequestResponseCodec()),
 		WithLLMResponseCodec(NewOpenAIChatCodec()),
 	)
@@ -587,7 +579,7 @@ func requireLlmScopeEvents(t *testing.T, events []Event) (*ScopeEvent, *ScopeEve
 
 func TestLlmSanitizeRequestGuardrail(t *testing.T) {
 	err := RegisterLlmSanitizeRequestGuardrail("go_llm_san_req", 1,
-		func(request LLMRequestDTO, _ LLMSanitizeRequestContext) (LLMRequestDTO, bool) {
+		func(request LLMRequest, _ LLMSanitizeRequestContext) (LLMRequest, bool) {
 			return request, false
 		},
 	)
@@ -647,9 +639,9 @@ func (callbackErrors *contextualLlmCallbackErrors) record(message string) {
 }
 
 func (callbackErrors *contextualLlmCallbackErrors) sanitizeRequest(
-	request LLMRequestDTO,
+	request LLMRequest,
 	context LLMSanitizeRequestContext,
-) (LLMRequestDTO, bool) {
+) (LLMRequest, bool) {
 	if context.Codec.CodecKind != LLMCodecNone {
 		callbackErrors.record("manual registration received an active codec identity")
 	}
@@ -694,10 +686,9 @@ func TestLlmSanitizeGuardrailsReceiveContext(t *testing.T) {
 	}
 	defer DeregisterLlmSanitizeResponseGuardrail(responseGuard)
 
-	result, err := LlmCallExecute("go_contextual_llm_sanitize", makeRequest(),
-		func(nativeJSON json.RawMessage) (json.RawMessage, error) {
-			return json.RawMessage(`{"response":"client-visible"}`), nil
-		},
+	result, err := LlmCallExecute("go_contextual_llm_sanitize", requestForTest(makeRequest()), func(nativeJSON json.RawMessage) (json.RawMessage, error) {
+		return json.RawMessage(`{"response":"client-visible"}`), nil
+	},
 	)
 	if err != nil {
 		t.Fatalf(llmCallExecuteFailed, err)
@@ -732,12 +723,12 @@ func TestLlmConditionalExecutionGuardrail(t *testing.T) {
 
 func TestLlmDuplicateGuardrailFails(t *testing.T) {
 	RegisterLlmSanitizeRequestGuardrail("go_llm_dup", 1,
-		func(request LLMRequestDTO, _ LLMSanitizeRequestContext) (LLMRequestDTO, bool) {
+		func(request LLMRequest, _ LLMSanitizeRequestContext) (LLMRequest, bool) {
 			return request, false
 		},
 	)
 	err := RegisterLlmSanitizeRequestGuardrail("go_llm_dup", 1,
-		func(request LLMRequestDTO, _ LLMSanitizeRequestContext) (LLMRequestDTO, bool) {
+		func(request LLMRequest, _ LLMSanitizeRequestContext) (LLMRequest, bool) {
 			return request, false
 		},
 	)
@@ -756,10 +747,9 @@ func TestLlmConditionalBlocksExecution(t *testing.T) {
 	)
 
 	request := makeRequest()
-	_, err := LlmCallExecute("blocked_llm", request,
-		func(nativeJSON json.RawMessage) (json.RawMessage, error) {
-			return json.RawMessage(`{"should": "not reach"}`), nil
-		},
+	_, err := LlmCallExecute("blocked_llm", requestForTest(request), func(nativeJSON json.RawMessage) (json.RawMessage, error) {
+		return json.RawMessage(`{"should": "not reach"}`), nil
+	},
 	)
 	if err == nil {
 		t.Fatal("expected error from guardrail rejection")
@@ -777,7 +767,7 @@ func TestLlmConditionalBlocksExecution(t *testing.T) {
 
 func TestLlmRequestInterceptRegisterDeregister(t *testing.T) {
 	err := RegisterLlmRequestIntercept("go_llm_req", 1, false,
-		func(name string, request LLMRequestDTO, annotated json.RawMessage) (LLMRequestInterceptOutcome, error) {
+		func(name string, request LLMRequest, annotated json.RawMessage) (LLMRequestInterceptOutcome, error) {
 			return LLMRequestInterceptOutcome{Request: request, AnnotatedRequest: annotated}, nil
 		},
 	)
@@ -810,9 +800,7 @@ func TestLlmExecutionInterceptRegisterDeregister(t *testing.T) {
 	defer DeregisterLlmExecutionIntercept("go_llm_exec")
 
 	response, err := LlmCallExecute(
-		"go_llm_execution_context_absent",
-		makeRequest(),
-		func(json.RawMessage) (json.RawMessage, error) {
+		"go_llm_execution_context_absent", requestForTest(makeRequest()), func(json.RawMessage) (json.RawMessage, error) {
 			return json.RawMessage(`{"ok":true}`), nil
 		},
 	)
@@ -853,7 +841,7 @@ func TestLlmExecutionInterceptResolvesDirectionalCodecs(t *testing.T) {
 	var (
 		retainedRequestCodec  *LLMRequestSanitizeCodec
 		retainedResponseCodec *LLMResponseSanitizeCodec
-		retainedRequest       LLMRequestDTO
+		retainedRequest       LLMRequest
 	)
 	err := RegisterLlmExecutionIntercept(
 		interceptName,
@@ -863,7 +851,7 @@ func TestLlmExecutionInterceptResolvesDirectionalCodecs(t *testing.T) {
 			if err != nil {
 				return nil, err
 			}
-			var request LLMRequestDTO
+			var request LLMRequest
 			if err := json.Unmarshal(nativeJSON, &request); err != nil {
 				return nil, err
 			}
@@ -897,9 +885,7 @@ func TestLlmExecutionInterceptResolvesDirectionalCodecs(t *testing.T) {
 	}
 
 	response, err := LlmCallExecute(
-		"execution_codec_context",
-		makeRequest(),
-		requireEncodedModelExecutor(t),
+		"execution_codec_context", requestForTest(makeRequest()), requireEncodedModelExecutor(t),
 		WithLLMCodec(llmRequestResponseCodec()),
 		WithLLMResponseCodec(NewOpenAIChatCodec()),
 	)
@@ -918,13 +904,12 @@ func TestLlmExecutionInterceptResolvesDirectionalCodecs(t *testing.T) {
 }
 
 func TestLlmStreamExecutionInterceptRegisterDeregister(t *testing.T) {
-	err := RegisterLlmStreamExecutionIntercept("go_llm_sexec", 1,
-		func(nativeJSON json.RawMessage, context LLMExecutionContext, next func(json.RawMessage) (json.RawMessage, error)) (json.RawMessage, error) {
-			if context.ResponseCodec != nil {
-				t.Fatal("stream execution context unexpectedly exposes a response codec")
-			}
-			return next(nativeJSON)
-		},
+	err := RegisterLlmStreamExecutionIntercept("go_llm_sexec", 1, LLMExecutionInterceptFunc(func(nativeJSON json.RawMessage, context LLMExecutionContext, next func(json.RawMessage) (json.RawMessage, error)) (json.RawMessage, error) {
+		if context.ResponseCodec != nil {
+			t.Fatal("stream execution context unexpectedly exposes a response codec")
+		}
+		return next(nativeJSON)
+	}).AsStream(),
 	)
 	if err != nil {
 		t.Fatalf(llmRegisterFailed, err)
@@ -935,25 +920,22 @@ func TestLlmStreamExecutionInterceptRegisterDeregister(t *testing.T) {
 func TestLlmStreamExecutionInterceptCanCallNext(t *testing.T) {
 	request := makeRequest()
 
-	err := RegisterLlmStreamExecutionIntercept("go_llm_stream_exec_next", 1,
-		func(nativeJSON json.RawMessage, _ LLMExecutionContext, next func(json.RawMessage) (json.RawMessage, error)) (json.RawMessage, error) {
-			nextResult, err := next(nativeJSON)
-			if err != nil {
-				return nil, err
-			}
-			return json.RawMessage(`{"intercepted":true,"next":` + string(nextResult) + `}`), nil
-		},
+	err := RegisterLlmStreamExecutionIntercept("go_llm_stream_exec_next", 1, LLMExecutionInterceptFunc(func(nativeJSON json.RawMessage, _ LLMExecutionContext, next func(json.RawMessage) (json.RawMessage, error)) (json.RawMessage, error) {
+		nextResult, err := next(nativeJSON)
+		if err != nil {
+			return nil, err
+		}
+		return json.RawMessage(`{"intercepted":true,"next":` + string(nextResult) + `}`), nil
+	}).AsStream(),
 	)
 	if err != nil {
 		t.Fatalf("RegisterLlmStreamExecutionIntercept failed: %v", err)
 	}
 	defer DeregisterLlmStreamExecutionIntercept("go_llm_stream_exec_next")
 
-	stream, err := LlmStreamCallExecute("stream_exec_next_llm", request,
-		func(nativeJSON json.RawMessage) (json.RawMessage, error) {
-			return json.RawMessage(`{"streamed":true}`), nil
-		},
-		nil, nil,
+	stream, err := LlmStreamCallExecute("stream_exec_next_llm", requestForTest(request), LLMExecutionFunc(func(nativeJSON json.RawMessage) (json.RawMessage, error) {
+		return json.RawMessage(`{"streamed":true}`), nil
+	}).AsStream(), nil, nil,
 	)
 	if err != nil {
 		t.Fatalf(llmStreamCallExecuteFailed, err)
@@ -979,7 +961,7 @@ func TestLlmStreamExecutionInterceptCanCallNext(t *testing.T) {
 
 func TestLlmRequestInterceptModifies(t *testing.T) {
 	RegisterLlmRequestIntercept("go_llm_req_mod", 1, false,
-		func(name string, request LLMRequestDTO, annotated json.RawMessage) (LLMRequestInterceptOutcome, error) {
+		func(name string, request LLMRequest, annotated json.RawMessage) (LLMRequestInterceptOutcome, error) {
 			var m map[string]interface{}
 			json.Unmarshal(request.Content, &m)
 			m["intercepted"] = true
@@ -990,15 +972,14 @@ func TestLlmRequestInterceptModifies(t *testing.T) {
 	t.Cleanup(func() { _ = DeregisterLlmRequestIntercept("go_llm_req_mod") })
 
 	request := makeRequest()
-	result, err := LlmCallExecute("int_llm", request,
-		func(nativeJSON json.RawMessage) (json.RawMessage, error) {
-			var req struct {
-				Content map[string]interface{} `json:"content"`
-			}
-			json.Unmarshal(nativeJSON, &req)
-			out, _ := json.Marshal(map[string]interface{}{"saw_intercepted": req.Content["intercepted"]})
-			return out, nil
-		},
+	result, err := LlmCallExecute("int_llm", requestForTest(request), func(nativeJSON json.RawMessage) (json.RawMessage, error) {
+		var req struct {
+			Content map[string]interface{} `json:"content"`
+		}
+		json.Unmarshal(nativeJSON, &req)
+		out, _ := json.Marshal(map[string]interface{}{"saw_intercepted": req.Content["intercepted"]})
+		return out, nil
+	},
 	)
 	if err != nil {
 		t.Fatalf(llmExecuteFailed, err)
@@ -1019,10 +1000,9 @@ func TestLlmExecutionInterceptReplaces(t *testing.T) {
 	)
 
 	request := makeRequest()
-	result, err := LlmCallExecute("exec_llm_rep", request,
-		func(nativeJSON json.RawMessage) (json.RawMessage, error) {
-			return json.RawMessage(`{"from_original": true}`), nil
-		},
+	result, err := LlmCallExecute("exec_llm_rep", requestForTest(request), func(nativeJSON json.RawMessage) (json.RawMessage, error) {
+		return json.RawMessage(`{"from_original": true}`), nil
+	},
 	)
 	if err != nil {
 		t.Fatalf(llmExecuteFailed, err)
@@ -1042,10 +1022,9 @@ func TestLlmExecutionInterceptReplaces(t *testing.T) {
 
 func TestLlmCallableErrorPropagation(t *testing.T) {
 	request := makeRequest()
-	_, err := LlmCallExecute("error_llm", request,
-		func(nativeJSON json.RawMessage) (json.RawMessage, error) {
-			return nil, errors.New("llm internal failure")
-		},
+	_, err := LlmCallExecute("error_llm", requestForTest(request), func(nativeJSON json.RawMessage) (json.RawMessage, error) {
+		return nil, errors.New("llm internal failure")
+	},
 	)
 	if err == nil {
 		t.Fatal("expected llm callable error to propagate")
@@ -1077,11 +1056,10 @@ func TestLlmFullPipelineInterceptsAndExecute(t *testing.T) {
 	defer DeregisterLlmExecutionIntercept("go_llm_pipe_exec_int")
 
 	request := makeRequest()
-	result, err := LlmCallExecute("pipeline_llm", request,
-		func(nativeJSON json.RawMessage) (json.RawMessage, error) {
-			out, _ := json.Marshal(map[string]interface{}{"llm_ran": true})
-			return out, nil
-		},
+	result, err := LlmCallExecute("pipeline_llm", requestForTest(request), func(nativeJSON json.RawMessage) (json.RawMessage, error) {
+		out, _ := json.Marshal(map[string]interface{}{"llm_ran": true})
+		return out, nil
+	},
 	)
 	if err != nil {
 		t.Fatalf(llmCallExecuteFailed, err)
@@ -1114,7 +1092,7 @@ func TestLlmSanitizeRequestGuardrailModifiesEventInput(t *testing.T) {
 	defer DeregisterSubscriber("go_llm_san_evt_sub")
 
 	RegisterLlmSanitizeRequestGuardrail("go_llm_content_mod", 1,
-		func(request LLMRequestDTO, _ LLMSanitizeRequestContext) (LLMRequestDTO, bool) {
+		func(request LLMRequest, _ LLMSanitizeRequestContext) (LLMRequest, bool) {
 			var m map[string]interface{}
 			json.Unmarshal(request.Content, &m)
 			m["system_prompt_injected"] = true
@@ -1126,10 +1104,9 @@ func TestLlmSanitizeRequestGuardrailModifiesEventInput(t *testing.T) {
 	defer DeregisterLlmSanitizeRequestGuardrail("go_llm_content_mod")
 
 	request := makeRequest()
-	_, err := LlmCallExecute("mod_llm", request,
-		func(nativeJSON json.RawMessage) (json.RawMessage, error) {
-			return json.RawMessage(`{"done": true}`), nil
-		},
+	_, err := LlmCallExecute("mod_llm", requestForTest(request), func(nativeJSON json.RawMessage) (json.RawMessage, error) {
+		return json.RawMessage(`{"done": true}`), nil
+	},
 	)
 	if err != nil {
 		t.Fatalf(llmCallExecuteFailed, err)
@@ -1167,10 +1144,9 @@ func TestLlmConditionalGuardrailSelectiveReject(t *testing.T) {
 		"headers": map[string]interface{}{},
 		"content": map[string]interface{}{"model": "blocked-model"},
 	}
-	_, err := LlmCallExecute("selective_llm", blockedReq,
-		func(nativeJSON json.RawMessage) (json.RawMessage, error) {
-			return json.RawMessage(`{}`), nil
-		},
+	_, err := LlmCallExecute("selective_llm", requestForTest(blockedReq), func(nativeJSON json.RawMessage) (json.RawMessage, error) {
+		return json.RawMessage(`{}`), nil
+	},
 	)
 	if err == nil {
 		t.Fatal("expected blocked-model to be rejected")
@@ -1178,10 +1154,9 @@ func TestLlmConditionalGuardrailSelectiveReject(t *testing.T) {
 
 	// Allowed model
 	allowedReq := makeRequest()
-	result, err := LlmCallExecute("selective_llm", allowedReq,
-		func(nativeJSON json.RawMessage) (json.RawMessage, error) {
-			return json.RawMessage(`{"ok": true}`), nil
-		},
+	result, err := LlmCallExecute("selective_llm", requestForTest(allowedReq), func(nativeJSON json.RawMessage) (json.RawMessage, error) {
+		return json.RawMessage(`{"ok": true}`), nil
+	},
 	)
 	if err != nil {
 		t.Fatalf("allowed model should succeed: %v", err)
@@ -1210,10 +1185,9 @@ func TestLlmExecutionInterceptWrapsCallable(t *testing.T) {
 	defer DeregisterLlmExecutionIntercept("go_llm_wrap_exec")
 
 	request := makeRequest()
-	result, err := LlmCallExecute("wrap_llm", request,
-		func(nativeJSON json.RawMessage) (json.RawMessage, error) {
-			return json.RawMessage(`{"original": true}`), nil
-		},
+	result, err := LlmCallExecute("wrap_llm", requestForTest(request), func(nativeJSON json.RawMessage) (json.RawMessage, error) {
+		return json.RawMessage(`{"original": true}`), nil
+	},
 	)
 	if err != nil {
 		t.Fatalf(llmCallExecuteFailed, err)
@@ -1238,10 +1212,9 @@ func TestLlmExecutionInterceptSeesNextError(t *testing.T) {
 	defer DeregisterLlmExecutionIntercept("go_llm_wrap_exec_err")
 
 	request := makeRequest()
-	_, err := LlmCallExecute("wrap_llm_err", request,
-		func(nativeJSON json.RawMessage) (json.RawMessage, error) {
-			return nil, errors.New("llm next failure")
-		},
+	_, err := LlmCallExecute("wrap_llm_err", requestForTest(request), func(nativeJSON json.RawMessage) (json.RawMessage, error) {
+		return nil, errors.New("llm next failure")
+	},
 	)
 	if err == nil {
 		t.Fatal("expected llm next error to propagate through intercept")
@@ -1264,7 +1237,7 @@ func TestLlmCallWithModelName(t *testing.T) {
 	})
 
 	request := makeRequest()
-	handle, err := LlmCall("model_llm", request, WithLLMModelName("gpt-4-turbo"))
+	handle, err := LlmCall("model_llm", requestForTest(request), WithLLMModelName("gpt-4-turbo"))
 	if err != nil {
 		t.Fatalf(llmCallFailed, err)
 	}
@@ -1297,10 +1270,9 @@ func TestLlmEventInputOutput(t *testing.T) {
 	})
 
 	request := makeRequest()
-	result, err := LlmCallExecute("io_llm", request,
-		func(nativeJSON json.RawMessage) (json.RawMessage, error) {
-			return json.RawMessage(`{"response": "hello"}`), nil
-		},
+	result, err := LlmCallExecute("io_llm", requestForTest(request), func(nativeJSON json.RawMessage) (json.RawMessage, error) {
+		return json.RawMessage(`{"response": "hello"}`), nil
+	},
 	)
 	if err != nil {
 		t.Fatalf(llmCallExecuteFailed, err)
@@ -1335,15 +1307,13 @@ func TestLlmEventInputOutput(t *testing.T) {
 func TestLlmStreamCallExecuteBasic(t *testing.T) {
 	request := makeRequest()
 
-	stream, err := LlmStreamCallExecute("stream_llm", request,
-		func(nativeJSON json.RawMessage) (json.RawMessage, error) {
-			chunks := `data: {"chunk": 1}` + "\n\n" +
-				`data: {"chunk": 2}` + "\n\n" +
-				`data: [DONE]` + "\n\n"
-			encoded, err := json.Marshal(chunks)
-			return json.RawMessage(encoded), err
-		},
-		nil, nil,
+	stream, err := LlmStreamCallExecute("stream_llm", requestForTest(request), LLMExecutionFunc(func(nativeJSON json.RawMessage) (json.RawMessage, error) {
+		chunks := `data: {"chunk": 1}` + "\n\n" +
+			`data: {"chunk": 2}` + "\n\n" +
+			`data: [DONE]` + "\n\n"
+		encoded, err := json.Marshal(chunks)
+		return json.RawMessage(encoded), err
+	}).AsStream(), nil, nil,
 	)
 	if err != nil {
 		t.Fatalf(llmStreamCallExecuteFailed, err)
@@ -1370,29 +1340,28 @@ func TestLlmStreamCallExecuteWithCollectorFinalizer(t *testing.T) {
 	var collectedChunks []json.RawMessage
 	var mu sync.Mutex
 
-	collector := func(chunk json.RawMessage) {
+	collector := func(chunk json.RawMessage) error {
 		mu.Lock()
 		collectedChunks = append(collectedChunks, append(json.RawMessage(nil), chunk...))
 		mu.Unlock()
+		return nil
 	}
 
 	finalizerCalled := false
-	finalizer := func() string {
+	finalizer := func() (json.RawMessage, error) {
 		mu.Lock()
 		finalizerCalled = true
 		count := len(collectedChunks)
 		mu.Unlock()
-		return fmt.Sprintf(`{"aggregated": true, "total_chunks": %d}`, count)
+		return json.RawMessage(fmt.Sprintf(`{"aggregated": true, "total_chunks": %d}`, count)), nil
 	}
 
-	stream, err := LlmStreamCallExecute("collector_llm", request,
-		func(nativeJSON json.RawMessage) (json.RawMessage, error) {
-			chunks := `data: {"token": "hello"}` + "\n\n" +
-				`data: [DONE]` + "\n\n"
-			encoded, err := json.Marshal(chunks)
-			return json.RawMessage(encoded), err
-		},
-		collector, finalizer,
+	stream, err := LlmStreamCallExecute("collector_llm", requestForTest(request), LLMExecutionFunc(func(nativeJSON json.RawMessage) (json.RawMessage, error) {
+		chunks := `data: {"token": "hello"}` + "\n\n" +
+			`data: [DONE]` + "\n\n"
+		encoded, err := json.Marshal(chunks)
+		return json.RawMessage(encoded), err
+	}).AsStream(), collector, finalizer,
 	)
 	if err != nil {
 		t.Fatalf(llmStreamCallExecuteFailed, err)
@@ -1421,11 +1390,9 @@ func TestLlmStreamCallExecuteWithCollectorFinalizer(t *testing.T) {
 func TestLlmStreamCloseIsIdempotent(t *testing.T) {
 	request := makeRequest()
 
-	stream, err := LlmStreamCallExecute("close_llm", request,
-		func(nativeJSON json.RawMessage) (json.RawMessage, error) {
-			return json.RawMessage(`"data: [DONE]\n\n"`), nil
-		},
-		nil, nil,
+	stream, err := LlmStreamCallExecute("close_llm", requestForTest(request), LLMExecutionFunc(func(nativeJSON json.RawMessage) (json.RawMessage, error) {
+		return json.RawMessage(`"data: [DONE]\n\n"`), nil
+	}).AsStream(), nil, nil,
 	)
 	if err != nil {
 		t.Fatalf(llmStreamCallExecuteFailed, err)
@@ -1448,11 +1415,9 @@ func TestLlmStreamCloseIsIdempotent(t *testing.T) {
 }
 
 func TestLlmStreamConcurrentCloseIsSafe(t *testing.T) {
-	stream, err := LlmStreamCallExecute("concurrent_close_llm", makeRequest(),
-		func(nativeJSON json.RawMessage) (json.RawMessage, error) {
-			return json.RawMessage(`"data: [DONE]\n\n"`), nil
-		},
-		nil, nil,
+	stream, err := LlmStreamCallExecute("concurrent_close_llm", requestForTest(makeRequest()), LLMExecutionFunc(func(nativeJSON json.RawMessage) (json.RawMessage, error) {
+		return json.RawMessage(`"data: [DONE]\n\n"`), nil
+	}).AsStream(), nil, nil,
 	)
 	if err != nil {
 		t.Fatalf(llmStreamCallExecuteFailed, err)
@@ -1479,75 +1444,10 @@ func TestLlmStreamConcurrentCloseIsSafe(t *testing.T) {
 	}
 }
 
-func TestLlmStreamCollectorCanClose(t *testing.T) {
-	var stream *LlmStream
-	var closeErr error
-	stream, closeErr = LlmStreamCallExecute("collector_close_llm", makeRequest(),
-		func(nativeJSON json.RawMessage) (json.RawMessage, error) {
-			return json.RawMessage(`"data: {\"chunk\": 1}\n\ndata: [DONE]\n\n"`), nil
-		},
-		func(json.RawMessage) {
-			closeErr = stream.Close()
-		},
-		nil,
-	)
-	if closeErr != nil {
-		t.Fatalf(llmStreamCallExecuteFailed, closeErr)
-	}
-	if _, err := stream.Next(); err != nil {
-		t.Fatalf("Next failed: %v", err)
-	}
-	if closeErr != nil {
-		t.Fatalf("Close from collector failed: %v", closeErr)
-	}
-	if _, err := stream.Next(); err != io.EOF {
-		t.Fatalf("Next after collector Close error = %v, want io.EOF", err)
-	}
-}
-
-func TestLlmStreamCollectorCloseMarksStreamDropped(t *testing.T) {
-	output, metadata, done := captureLlmEndEvent(t, "go_stream_collector_close_dropped")
-	var stream *LlmStream
-	finalizerCalls := 0
-	stream, err := LlmStreamCallExecute("collector_close_dropped_llm", makeRequest(),
-		func(json.RawMessage) (json.RawMessage, error) { return json.RawMessage(`{"token": "hi"}`), nil },
-		func(json.RawMessage) { _ = stream.Close() },
-		func() string {
-			finalizerCalls++
-			return `{"aggregated": true}`
-		},
-	)
-	if err != nil {
-		t.Fatalf(llmStreamCallExecuteFailed, err)
-	}
-	if _, err := stream.Next(); err != nil {
-		t.Fatalf(streamNextFailed, err)
-	}
-	if _, err := stream.Next(); err != io.EOF {
-		t.Fatalf("Next after collector Close error = %v, want io.EOF", err)
-	}
-	if err := stream.Close(); err != nil {
-		t.Fatalf("Close failed: %v", err)
-	}
-	done()
-	if finalizerCalls != 1 {
-		t.Fatalf("finalizer calls = %d, want 1", finalizerCalls)
-	}
-	if string(output()) != `{"aggregated":true}` {
-		t.Fatalf("end event output = %s, want the finalizer aggregate", output())
-	}
-	fields := metadata()
-	if fields["otel.status_code"] != "ERROR" || fields["otel.status_description"] != "stream dropped before clean completion" {
-		t.Fatalf("end event metadata = %v, want dropped stream error", fields)
-	}
-}
-
 func TestLlmStreamCloseNativeWaitsForInFlightWork(t *testing.T) {
-	stream, err := LlmStreamCallExecute("finish_close_wait_llm", makeRequest(),
-		func(nativeJSON json.RawMessage) (json.RawMessage, error) {
-			return json.RawMessage(`"data: [DONE]\n\n"`), nil
-		},
-		nil, nil,
+	stream, err := LlmStreamCallExecute("finish_close_wait_llm", requestForTest(makeRequest()), LLMExecutionFunc(func(nativeJSON json.RawMessage) (json.RawMessage, error) {
+		return json.RawMessage(`"data: [DONE]\n\n"`), nil
+	}).AsStream(), nil, nil,
 	)
 	if err != nil {
 		t.Fatalf(llmStreamCallExecuteFailed, err)
@@ -1586,16 +1486,15 @@ func TestLlmStreamCloseWaitsForActiveCollectorBeforeFinalizing(t *testing.T) {
 	finalizerStarted := make(chan struct{})
 	finalizerFinished := make(chan struct{})
 	allowFinalizer := make(chan struct{})
-	stream, err := LlmStreamCallExecute("collector_close_order_llm", makeRequest(),
-		func(nativeJSON json.RawMessage) (json.RawMessage, error) {
-			return json.RawMessage(`"data: {\"chunk\": 1}\n\ndata: [DONE]\n\n"`), nil
-		},
-		func(json.RawMessage) {
-			close(collectorStarted)
-			<-allowCollector
-			close(collectorFinished)
-		},
-		func() string {
+	stream, err := LlmStreamCallExecute("collector_close_order_llm", requestForTest(makeRequest()), LLMExecutionFunc(func(nativeJSON json.RawMessage) (json.RawMessage, error) {
+		return json.RawMessage(`"data: {\"chunk\": 1}\n\ndata: [DONE]\n\n"`), nil
+	}).AsStream(), func(json.RawMessage) error {
+		close(collectorStarted)
+		<-allowCollector
+		close(collectorFinished)
+		return nil
+	},
+		func() (json.RawMessage, error) {
 			select {
 			case <-collectorFinished:
 				close(finalizerStarted)
@@ -1604,7 +1503,7 @@ func TestLlmStreamCloseWaitsForActiveCollectorBeforeFinalizing(t *testing.T) {
 			}
 			<-allowFinalizer
 			close(finalizerFinished)
-			return `{"partial": true}`
+			return json.RawMessage(`{"partial": true}`), nil
 		},
 	)
 	if err != nil {
@@ -1653,18 +1552,16 @@ func TestLlmStreamCloseWaitsForActiveCollectorBeforeFinalizing(t *testing.T) {
 func TestLlmStreamCloseFinalizesPartialResponse(t *testing.T) {
 	request := makeRequest()
 	finalizerCalls := 0
-	stream, err := LlmStreamCallExecute("close_partial_llm", request,
-		func(nativeJSON json.RawMessage) (json.RawMessage, error) {
-			chunks := `data: {"chunk": 1}` + "\n\n" +
-				`data: {"chunk": 2}` + "\n\n" +
-				`data: [DONE]` + "\n\n"
-			encoded, err := json.Marshal(chunks)
-			return json.RawMessage(encoded), err
-		},
-		nil, func() string {
-			finalizerCalls++
-			return `{"partial": true}`
-		},
+	stream, err := LlmStreamCallExecute("close_partial_llm", requestForTest(request), LLMExecutionFunc(func(nativeJSON json.RawMessage) (json.RawMessage, error) {
+		chunks := `data: {"chunk": 1}` + "\n\n" +
+			`data: {"chunk": 2}` + "\n\n" +
+			`data: [DONE]` + "\n\n"
+		encoded, err := json.Marshal(chunks)
+		return json.RawMessage(encoded), err
+	}).AsStream(), nil, func() (json.RawMessage, error) {
+		finalizerCalls++
+		return json.RawMessage(`{"partial": true}`), nil
+	},
 	)
 	if err != nil {
 		t.Fatalf(llmStreamCallExecuteFailed, err)
@@ -1686,11 +1583,9 @@ func TestLlmStreamCloseFinalizesPartialResponse(t *testing.T) {
 func TestLlmStreamNilCollectorFinalizer(t *testing.T) {
 	request := makeRequest()
 
-	stream, err := LlmStreamCallExecute("nil_opts_llm", request,
-		func(nativeJSON json.RawMessage) (json.RawMessage, error) {
-			return json.RawMessage(`"data: [DONE]\n\n"`), nil
-		},
-		nil, nil,
+	stream, err := LlmStreamCallExecute("nil_opts_llm", requestForTest(request), LLMExecutionFunc(func(nativeJSON json.RawMessage) (json.RawMessage, error) {
+		return json.RawMessage(`"data: [DONE]\n\n"`), nil
+	}).AsStream(), nil, nil,
 	)
 	if err != nil {
 		t.Fatalf(llmStreamCallExecuteFailed, err)
@@ -1760,10 +1655,10 @@ func drainStream(t *testing.T, stream *LlmStream) {
 func TestLlmStreamFinalizerAggregateReachesEndEvent(t *testing.T) {
 	output, metadata, done := captureLlmEndEvent(t, "go_stream_finalizer_end_event")
 	var collected []string
-	stream, err := LlmStreamCallExecute("finalizer_end_event_llm", makeRequest(),
-		func(json.RawMessage) (json.RawMessage, error) { return json.RawMessage(`{"token": "hi"}`), nil },
-		func(chunk json.RawMessage) { collected = append(collected, string(chunk)) },
-		func() string { return fmt.Sprintf(`{"aggregated": true, "chunks": %d}`, len(collected)) },
+	stream, err := LlmStreamCallExecute("finalizer_end_event_llm", requestForTest(makeRequest()), LLMExecutionFunc(func(json.RawMessage) (json.RawMessage, error) { return json.RawMessage(`{"token": "hi"}`), nil }).AsStream(), func(chunk json.RawMessage) error { collected = append(collected, string(chunk)); return nil },
+		func() (json.RawMessage, error) {
+			return json.RawMessage(fmt.Sprintf(`{"aggregated": true, "chunks": %d}`, len(collected))), nil
+		},
 	)
 	if err != nil {
 		t.Fatalf(llmStreamCallExecuteFailed, err)
@@ -1787,10 +1682,8 @@ func TestLlmStreamFinalizerAggregateReachesEndEvent(t *testing.T) {
 
 func TestLlmStreamCollectorPanicTerminatesStream(t *testing.T) {
 	_, metadata, done := captureLlmEndEvent(t, "go_stream_collector_panic")
-	stream, err := LlmStreamCallExecute("collector_panic_llm", makeRequest(),
-		func(json.RawMessage) (json.RawMessage, error) { return json.RawMessage(`{"token": "hi"}`), nil },
-		func(json.RawMessage) { panic("collector boom") },
-		func() string { return `{"should": "still run"}` },
+	stream, err := LlmStreamCallExecute("collector_panic_llm", requestForTest(makeRequest()), LLMExecutionFunc(func(json.RawMessage) (json.RawMessage, error) { return json.RawMessage(`{"token": "hi"}`), nil }).AsStream(), func(json.RawMessage) error { panic("collector boom") },
+		func() (json.RawMessage, error) { return json.RawMessage(`{"should": "still run"}`), nil },
 	)
 	if err != nil {
 		t.Fatalf(llmStreamCallExecuteFailed, err)
@@ -1810,10 +1703,8 @@ func TestLlmStreamCollectorPanicTerminatesStream(t *testing.T) {
 
 func TestLlmStreamCloseWithoutNextNeverPullsProducer(t *testing.T) {
 	output, _, done := captureLlmEndEvent(t, "go_stream_close_without_next")
-	stream, err := LlmStreamCallExecute("close_without_next_llm", makeRequest(),
-		func(json.RawMessage) (json.RawMessage, error) { return json.RawMessage(`{"token": "hi"}`), nil },
-		func(json.RawMessage) { panic("collector must not run") },
-		func() string { return `{"partial": true}` },
+	stream, err := LlmStreamCallExecute("close_without_next_llm", requestForTest(makeRequest()), LLMExecutionFunc(func(json.RawMessage) (json.RawMessage, error) { return json.RawMessage(`{"token": "hi"}`), nil }).AsStream(), func(json.RawMessage) error { panic("collector must not run") },
+		func() (json.RawMessage, error) { return json.RawMessage(`{"partial": true}`), nil },
 	)
 	if err != nil {
 		t.Fatalf(llmStreamCallExecuteFailed, err)
@@ -1843,10 +1734,8 @@ func assertFinalizerFailureEndEvent(t *testing.T, output func() json.RawMessage,
 
 func TestLlmStreamFinalizerPanicReportedByClose(t *testing.T) {
 	output, metadata, done := captureLlmEndEvent(t, "go_stream_finalizer_panic")
-	stream, err := LlmStreamCallExecute("finalizer_panic_llm", makeRequest(),
-		func(json.RawMessage) (json.RawMessage, error) { return json.RawMessage(`{"token": "hi"}`), nil },
-		nil,
-		func() string { panic("finalizer boom") },
+	stream, err := LlmStreamCallExecute("finalizer_panic_llm", requestForTest(makeRequest()), LLMExecutionFunc(func(json.RawMessage) (json.RawMessage, error) { return json.RawMessage(`{"token": "hi"}`), nil }).AsStream(), nil,
+		func() (json.RawMessage, error) { panic("finalizer boom") },
 		WithLLMData(json.RawMessage(`{"fallback": "data"}`)),
 	)
 	if err != nil {
@@ -1863,10 +1752,8 @@ func TestLlmStreamFinalizerPanicReportedByClose(t *testing.T) {
 
 func TestLlmStreamFinalizerInvalidJSONReportedByClose(t *testing.T) {
 	output, metadata, done := captureLlmEndEvent(t, "go_stream_finalizer_invalid_json")
-	stream, err := LlmStreamCallExecute("finalizer_invalid_json_llm", makeRequest(),
-		func(json.RawMessage) (json.RawMessage, error) { return json.RawMessage(`{"token": "hi"}`), nil },
-		nil,
-		func() string { return "not json" },
+	stream, err := LlmStreamCallExecute("finalizer_invalid_json_llm", requestForTest(makeRequest()), LLMExecutionFunc(func(json.RawMessage) (json.RawMessage, error) { return json.RawMessage(`{"token": "hi"}`), nil }).AsStream(), nil,
+		func() (json.RawMessage, error) { return json.RawMessage("not json"), nil },
 		WithLLMData(json.RawMessage(`{"fallback": "data"}`)),
 	)
 	if err != nil {
@@ -1881,214 +1768,9 @@ func TestLlmStreamFinalizerInvalidJSONReportedByClose(t *testing.T) {
 	assertFinalizerFailureEndEvent(t, output, metadata, closeErr)
 }
 
-func TestLlmStreamCollectorMayCallRelay(t *testing.T) {
-	var nested json.RawMessage
-	var nestedErr, flushErr error
-	stream, err := LlmStreamCallExecute("collector_calls_relay_llm", makeRequest(),
-		func(json.RawMessage) (json.RawMessage, error) { return json.RawMessage(`{"token": "hi"}`), nil },
-		func(json.RawMessage) {
-			flushErr = FlushSubscribers()
-			nested, nestedErr = LlmCallExecute("collector_nested_llm", makeRequest(),
-				func(json.RawMessage) (json.RawMessage, error) { return json.RawMessage(`{"nested": true}`), nil })
-		},
-		nil,
-	)
-	if err != nil {
-		t.Fatalf(llmStreamCallExecuteFailed, err)
-	}
-	drainStream(t, stream)
-	if err := stream.Close(); err != nil {
-		t.Fatalf("Close failed: %v", err)
-	}
-	if flushErr != nil || nestedErr != nil || string(nested) != `{"nested":true}` {
-		t.Fatalf("collector Relay calls: flush=%v nested=%s err=%v", flushErr, nested, nestedErr)
-	}
-}
-
-func TestLlmStreamCallbacksKeepScopeLocalGuardrails(t *testing.T) {
-	stack, err := NewScopeStack()
-	if err != nil {
-		t.Fatalf(scopeLocalNewScopeStackFailed, err)
-	}
-	defer stack.Close()
-
-	stack.Run(func() {
-		handle, err := PushScope("stream_callback_scope", ScopeTypeAgent)
-		if err != nil {
-			t.Fatalf(scopeLocalPushScopeFailed, err)
-		}
-		defer PopScope(handle)
-
-		reason := "scope-local block"
-		if err := ScopeRegisterToolConditionalExecutionGuardrail(handle.UUID(), "stream_callback_gate", 1,
-			func(string, json.RawMessage) *string { return &reason },
-		); err != nil {
-			t.Fatalf("ScopeRegisterToolConditionalExecutionGuardrail failed: %v", err)
-		}
-		if err := ToolConditionalExecution("stream_callback_tool", json.RawMessage(`{}`)); err == nil {
-			t.Fatal("expected the scope-local guardrail to reject outside the stream callbacks")
-		}
-
-		results := make(chan error, 2)
-		stream, err := LlmStreamCallExecute("stream_callback_scope_llm", makeRequest(),
-			func(json.RawMessage) (json.RawMessage, error) { return json.RawMessage(`{"token": "hi"}`), nil },
-			func(json.RawMessage) {
-				results <- ToolConditionalExecution("stream_callback_tool", json.RawMessage(`{}`))
-			},
-			func() string {
-				results <- ToolConditionalExecution("stream_callback_tool", json.RawMessage(`{}`))
-				return `{}`
-			},
-		)
-		if err != nil {
-			t.Fatalf(llmStreamCallExecuteFailed, err)
-		}
-		drainStream(t, stream)
-		if err := stream.Close(); err != nil {
-			t.Fatalf("Close failed: %v", err)
-		}
-		for _, callback := range []string{"collector", "finalizer"} {
-			select {
-			case got := <-results:
-				if got == nil || !strings.Contains(got.Error(), scopeLocalGuardrailRejected) {
-					t.Fatalf("nested call from the %s = %v, want %q", callback, got, scopeLocalGuardrailRejected)
-				}
-			default:
-				t.Fatalf("the %s did not run before Close returned", callback)
-			}
-		}
-	})
-}
-
-func TestLlmStreamCallbacksHonorExplicitScopeStackRun(t *testing.T) {
-	other, err := NewScopeStack()
-	if err != nil {
-		t.Fatalf(scopeLocalNewScopeStackFailed, err)
-	}
-	defer other.Close()
-	var otherScope *ScopeHandle
-	other.Run(func() {
-		otherScope, err = PushScope("explicit_other_scope", ScopeTypeAgent)
-		if err != nil {
-			t.Fatalf(scopeLocalPushScopeFailed, err)
-		}
-		reason := "explicit stack block"
-		if err := ScopeRegisterToolConditionalExecutionGuardrail(otherScope.UUID(), "explicit_other_gate", 1,
-			func(string, json.RawMessage) *string { return &reason },
-		); err != nil {
-			t.Fatalf("ScopeRegisterToolConditionalExecutionGuardrail failed: %v", err)
-		}
-	})
-	defer other.Run(func() { PopScope(otherScope) })
-
-	stack, err := NewScopeStack()
-	if err != nil {
-		t.Fatalf(scopeLocalNewScopeStackFailed, err)
-	}
-	defer stack.Close()
-	stack.Run(func() {
-		handle, err := PushScope("explicit_stream_scope", ScopeTypeAgent)
-		if err != nil {
-			t.Fatalf(scopeLocalPushScopeFailed, err)
-		}
-		defer PopScope(handle)
-		reason := "stream stack block"
-		if err := ScopeRegisterToolConditionalExecutionGuardrail(handle.UUID(), "explicit_stream_gate", 1,
-			func(string, json.RawMessage) *string { return &reason },
-		); err != nil {
-			t.Fatalf("ScopeRegisterToolConditionalExecutionGuardrail failed: %v", err)
-		}
-
-		expectGuardrail := func(phase, want string) error {
-			err := ToolConditionalExecution("explicit_tool", json.RawMessage(`{}`))
-			if err == nil || !strings.Contains(err.Error(), want) {
-				return fmt.Errorf("guardrail %s = %v, want %q", phase, err, want)
-			}
-			return nil
-		}
-		expectCurrent := func(phase string, want *ScopeHandle) error {
-			current, err := GetHandle()
-			if err != nil {
-				return err
-			}
-			if current.UUID() != want.UUID() {
-				return fmt.Errorf("GetHandle %s = %s, want %s", phase, current.UUID(), want.UUID())
-			}
-			return nil
-		}
-		inside := func() error {
-			if err := expectGuardrail("inside Run", "explicit stack block"); err != nil {
-				return err
-			}
-			if err := expectCurrent("inside Run", otherScope); err != nil {
-				return err
-			}
-			child, err := PushScope("explicit_child", ScopeTypeAgent)
-			if err != nil {
-				return err
-			}
-			parent := child.ParentUUID()
-			if err := PopScope(child); err != nil {
-				return err
-			}
-			if parent != otherScope.UUID() {
-				return fmt.Errorf("PushScope parent inside Run = %s, want %s", parent, otherScope.UUID())
-			}
-			snapshot, err := CurrentScopeStackSnapshot()
-			if err != nil {
-				return err
-			}
-			if snapshot == nil || snapshot.Scopes[len(snapshot.Scopes)-1].ScopeID != otherScope.UUID() {
-				return fmt.Errorf("snapshot inside Run = %+v, want top %s", snapshot, otherScope.UUID())
-			}
-			return nil
-		}
-		after := func() error {
-			if err := expectGuardrail("after Run", "stream stack block"); err != nil {
-				return err
-			}
-			return expectCurrent("after Run", handle)
-		}
-		results := make(chan error, 4)
-		probe := func() {
-			other.Run(func() { results <- inside() })
-			results <- after()
-		}
-		stream, err := LlmStreamCallExecute("explicit_stack_llm", makeRequest(),
-			func(json.RawMessage) (json.RawMessage, error) { return json.RawMessage(`{"token": "hi"}`), nil },
-			func(json.RawMessage) { probe() },
-			func() string {
-				probe()
-				return `{}`
-			},
-		)
-		if err != nil {
-			t.Fatalf(llmStreamCallExecuteFailed, err)
-		}
-		drainStream(t, stream)
-		if err := stream.Close(); err != nil {
-			t.Fatalf("Close failed: %v", err)
-		}
-		for _, callback := range []string{"collector", "finalizer"} {
-			for _, phase := range []string{"inside Run", "after Run"} {
-				select {
-				case got := <-results:
-					if got != nil {
-						t.Fatalf("%s %s: %v", callback, phase, got)
-					}
-				default:
-					t.Fatalf("the %s did not run before Close returned", callback)
-				}
-			}
-		}
-	})
-}
-
 func TestLlmStreamCallbacksWaitForFirstNext(t *testing.T) {
 	collected := make(chan struct{}, 1)
-	stream, err := LlmStreamCallExecute("callbacks_wait_llm", makeRequest(),
-		func(json.RawMessage) (json.RawMessage, error) { return json.RawMessage(`{"token": "hi"}`), nil },
-		func(json.RawMessage) { collected <- struct{}{} },
+	stream, err := LlmStreamCallExecute("callbacks_wait_llm", requestForTest(makeRequest()), LLMExecutionFunc(func(json.RawMessage) (json.RawMessage, error) { return json.RawMessage(`{"token": "hi"}`), nil }).AsStream(), func(json.RawMessage) error { collected <- struct{}{}; return nil },
 		nil,
 	)
 	if err != nil {
@@ -2109,12 +1791,10 @@ func TestLlmStreamCallbacksWaitForFirstNext(t *testing.T) {
 func newSelfCapturingStream(t *testing.T, name string, finalizerRan *atomic.Bool) weak.Pointer[LlmStream] {
 	t.Helper()
 	var captured *LlmStream
-	stream, err := LlmStreamCallExecute(name, makeRequest(),
-		func(json.RawMessage) (json.RawMessage, error) { return json.RawMessage(`{"token": "hi"}`), nil },
-		func(json.RawMessage) { _ = captured.Close() },
-		func() string {
+	stream, err := LlmStreamCallExecute(name, requestForTest(makeRequest()), LLMExecutionFunc(func(json.RawMessage) (json.RawMessage, error) { return json.RawMessage(`{"token": "hi"}`), nil }).AsStream(), func(json.RawMessage) error { _ = captured.Close(); return nil },
+		func() (json.RawMessage, error) {
 			finalizerRan.Store(true)
-			return `{"finalized": true}`
+			return json.RawMessage(`{"finalized": true}`), nil
 		},
 	)
 	if err != nil {
@@ -2159,18 +1839,15 @@ func TestLlmStreamUnreachableStreamIsReleased(t *testing.T) {
 }
 
 func TestLlmExecutionPanicReturnsErrorAndRuntimeStaysUsable(t *testing.T) {
-	_, err := LlmStreamCallExecute("provider_panic_stream_llm", makeRequest(),
-		func(json.RawMessage) (json.RawMessage, error) { panic("provider boom") }, nil, nil)
+	_, err := LlmStreamCallExecute("provider_panic_stream_llm", requestForTest(makeRequest()), LLMExecutionFunc(func(json.RawMessage) (json.RawMessage, error) { panic("provider boom") }).AsStream(), nil, nil)
 	if err == nil || !strings.Contains(err.Error(), "LLM execution callback panicked: provider boom") {
 		t.Fatalf("stream provider panic error = %v", err)
 	}
-	_, err = LlmCallExecute("provider_panic_llm", makeRequest(),
-		func(json.RawMessage) (json.RawMessage, error) { panic(errors.New("typed boom")) })
+	_, err = LlmCallExecute("provider_panic_llm", requestForTest(makeRequest()), func(json.RawMessage) (json.RawMessage, error) { panic(errors.New("typed boom")) })
 	if err == nil || !strings.Contains(err.Error(), "LLM execution callback panicked: typed boom") {
 		t.Fatalf("unary provider panic error = %v", err)
 	}
-	result, err := LlmCallExecute("after_panic_llm", makeRequest(),
-		func(json.RawMessage) (json.RawMessage, error) { return json.RawMessage(`{"ok": true}`), nil })
+	result, err := LlmCallExecute("after_panic_llm", requestForTest(makeRequest()), func(json.RawMessage) (json.RawMessage, error) { return json.RawMessage(`{"ok": true}`), nil })
 	if err != nil || string(result) != `{"ok":true}` {
 		t.Fatalf("call after recovered panic = %s, %v", result, err)
 	}
@@ -2185,23 +1862,23 @@ func TestLLMExecutionOptions(t *testing.T) {
 	}
 	defer DeregisterLlmConditionalExecutionGuardrail("options-block")
 	fn := func(json.RawMessage) (json.RawMessage, error) { return json.RawMessage(`{"ok":true}`), nil }
-	if _, err := LlmCallExecute("options-default", makeRequest(), fn); err == nil {
+	if _, err := LlmCallExecute("options-default", requestForTest(makeRequest()), fn); err == nil {
 		t.Fatal("default should reject")
 	}
 	opts := ExecutionOptions{SkipConditionalExecution: true, SkipRequestIntercepts: true, SkipExecutionIntercepts: true}
-	result, err := LlmCallExecute("options-skip", makeRequest(), fn, WithLLMExecutionOptions(opts))
+	result, err := LlmCallExecute("options-skip", requestForTest(makeRequest()), fn, WithLLMExecutionOptions(opts))
 	if err != nil {
 		t.Fatal(err)
 	}
 	if string(result) != `{"ok":true}` {
 		t.Fatalf("result: %s", result)
 	}
-	stream, err := LlmStreamCallExecute("options-stream", makeRequest(), fn, nil, nil, WithLLMExecutionOptions(opts))
+	stream, err := LlmStreamCallExecute("options-stream", requestForTest(makeRequest()), LLMExecutionFunc(fn).AsStream(), nil, nil, WithLLMExecutionOptions(opts))
 	if err != nil {
 		t.Fatal(err)
 	}
 	defer stream.Close()
-	if _, err = LlmCall("options-manual", makeRequest(), WithLLMExecutionOptions(opts)); err == nil {
+	if _, err = LlmCall("options-manual", requestForTest(makeRequest()), WithLLMExecutionOptions(opts)); err == nil {
 		t.Fatal("manual API should reject execution options")
 	}
 }

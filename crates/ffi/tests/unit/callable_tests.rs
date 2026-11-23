@@ -1015,3 +1015,15 @@ fn assert_event_callbacks() {
         .build();
     assert_eq!(handle.name, "llm");
 }
+
+#[test]
+fn stream_callback_data_remains_live_without_optional_callbacks() {
+    let (user_data, freed) = user_data_counter();
+    let (collector, finalizer, state) =
+        wrap_stream_callbacks(None, None, user_data, Some(free_arc_counter));
+    drop(collector);
+    drop(finalizer);
+    assert_eq!(freed.load(Ordering::SeqCst), 0);
+    drop(state);
+    assert_eq!(freed.load(Ordering::SeqCst), 1);
+}

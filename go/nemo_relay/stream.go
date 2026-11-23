@@ -18,17 +18,17 @@ extern void nemo_relay_string_free(char* ptr);
 import "C"
 
 import (
+	"context"
 	"encoding/json"
+	"errors"
 	"io"
 	"runtime"
-	"strconv"
-	"strings"
 	"sync"
+	"weak"
 )
 
 // LlmStream wraps a streaming LLM response returned by [LlmStreamCallExecute].
-// It provides an iterator-style interface for consuming Server-Sent Event (SSE)
-// chunks from the LLM.
+// Call Next to read JSON chunks from the provider source.
 //
 // Usage pattern:
 //
@@ -50,89 +50,73 @@ import (
 //	}
 //
 // Calls to Next and Close are synchronized. If not closed explicitly, the
-// native stream is released once the handle is unreachable, and the collector
-// and finalizer do not run after that.
+// native stream is released after the handle becomes unreachable. The collector
+// and finalizer do not run after that. Garbage collection can skip provider
+// cleanup callbacks. Call Close to ensure provider Close callbacks run.
 //
 // Each stream carries its own collector and finalizer, so multiple streams can
 // operate concurrently without interfering with one another.
 type LlmStream struct {
-	mu        sync.Mutex
-	ptr       *C.FfiStream
-	callbacks *streamCallbacks
-	cleanup   runtime.Cleanup
-	closed    bool
-	closing   bool
-	inFlight  int
-	idle      chan struct{}
-	closeDone chan struct{}
-	closeErr  error
+	sources        *streamSources
+	cancelProvider context.CancelFunc
+	callContext    context.Context
+	stopContext    func() bool
+	mu             sync.Mutex
+	ptr            *C.FfiStream
+	callbacks      *streamCallbacks
+	cleanup        runtime.Cleanup
+	closed         bool
+	closing        bool
+	inFlight       int
+	idle           chan struct{}
+	closeDone      chan struct{}
+	closeErr       error
 }
 
 type streamCallbacks struct {
 	collector CollectorFunc
 	finalizer FinalizerFunc
-
-	mu                sync.Mutex
-	callbackGoroutine uint64
-	callbackDone      chan struct{}
 }
 
-func (c *streamCallbacks) enter() (release func()) {
-	done := make(chan struct{})
-	c.mu.Lock()
-	c.callbackGoroutine = currentGoroutineID()
-	c.callbackDone = done
-	c.mu.Unlock()
-	return func() {
-		c.mu.Lock()
-		c.callbackGoroutine = 0
-		c.callbackDone = nil
-		c.mu.Unlock()
-		close(done)
-	}
-}
-
-func (c *streamCallbacks) activeCallback(id uint64) (<-chan struct{}, bool) {
-	c.mu.Lock()
-	defer c.mu.Unlock()
-	if c.callbackGoroutine != 0 && c.callbackGoroutine == id {
-		return c.callbackDone, true
-	}
-	return nil, false
-}
-
-func currentGoroutineID() uint64 {
-	var stack [64]byte
-	n := runtime.Stack(stack[:], false)
-	fields := strings.Fields(string(stack[:n]))
-	if len(fields) < 2 {
-		return 0
-	}
-	id, _ := strconv.ParseUint(fields[1], 10, 64)
-	return id
-}
-
-func newLlmStream(ptr *C.FfiStream, callbacks *streamCallbacks) *LlmStream {
+func newLlmStream(ptr *C.FfiStream, callbacks *streamCallbacks, cancelProvider context.CancelFunc, sources *streamSources) *LlmStream {
 	if ptr == nil {
 		return nil
 	}
-	s := &LlmStream{ptr: ptr, callbacks: callbacks}
-	s.cleanup = runtime.AddCleanup(s, releaseStream, ptr)
+	s := &LlmStream{ptr: ptr, callbacks: callbacks, cancelProvider: cancelProvider, sources: sources}
+	s.cleanup = runtime.AddCleanup(s, releaseStream, streamCleanup{ptr: ptr, cancelProvider: cancelProvider})
 	return s
 }
 
-func releaseStream(ptr *C.FfiStream) {
-	C.nemo_relay_stream_free(ptr)
+type streamCleanup struct {
+	ptr            *C.FfiStream
+	cancelProvider context.CancelFunc
+	stopContext    func() bool
+}
+
+func releaseStream(cleanup streamCleanup) {
+	if cleanup.stopContext != nil {
+		cleanup.stopContext()
+	}
+	if cleanup.cancelProvider != nil {
+		cleanup.cancelProvider()
+	}
+	C.nemo_relay_stream_free(cleanup.ptr)
 }
 
 // Next returns the next chunk from the stream as a JSON value. It returns
 // [io.EOF] when the stream is exhausted and all chunks have been consumed.
-// Any registered stream execution intercepts are applied to each chunk before
-// it is returned.
+// Stream execution intercepts can wrap or replace the provider source before
+// chunks reach the caller.
 //
-// If the stream has already been closed, Next returns io.EOF.
+// An explicitly closed stream returns io.EOF. A stream bound to a cancelled
+// context returns that context's error.
 func (s *LlmStream) Next() (json.RawMessage, error) {
 	s.mu.Lock()
+	ctx := s.callContext
+	if ctx != nil && ctx.Err() != nil {
+		s.mu.Unlock()
+		return nil, ctx.Err()
+	}
 	if s.closed || s.closing || s.ptr == nil {
 		s.mu.Unlock()
 		return nil, io.EOF
@@ -148,7 +132,14 @@ func (s *LlmStream) Next() (json.RawMessage, error) {
 	defer runtime.UnlockOSThread()
 
 	var chunk *C.char
-	switch rc := C.nemo_relay_stream_next(ptr, &chunk); rc {
+	rc := C.nemo_relay_stream_next(ptr, &chunk)
+	if ctx != nil && ctx.Err() != nil {
+		if chunk != nil {
+			C.nemo_relay_string_free(chunk)
+		}
+		return nil, ctx.Err()
+	}
+	switch rc {
 	case 1:
 		text := C.GoString(chunk)
 		C.nemo_relay_string_free(chunk)
@@ -170,14 +161,13 @@ func (s *LlmStream) finishNext() {
 }
 
 // Close stops the producer, waits for cleanup, and releases the underlying C
-// stream resources. It is safe to call Close multiple times; later calls
-// return the first result. A Close from inside this stream's own collector or
-// finalizer returns nil at once and finishes cleanup after the callback
-// returns. After Close is called, any further calls to [LlmStream.Next] return
-// [io.EOF]. The finalizer runs once with any collected partial response, and a
-// finalizer failure is the Close error.
+// stream resources. It is safe to call Close more than once. Later calls
+// return the first result. Call Close outside owned callbacks. Managed-stream
+// control from a callback is invalid. After Close, [LlmStream.Next] returns
+// [io.EOF], or the context error if the stream's context was cancelled.
+// The finalizer runs once with any collected partial response.
+// Close returns any finalizer error.
 func (s *LlmStream) Close() error {
-	callerID := currentGoroutineID()
 	s.mu.Lock()
 	if s.closed {
 		err := s.closeErr
@@ -187,9 +177,6 @@ func (s *LlmStream) Close() error {
 	if s.closing {
 		done := s.closeDone
 		s.mu.Unlock()
-		if _, reentrant := s.callbacks.activeCallback(callerID); reentrant {
-			return nil
-		}
 		<-done
 		s.mu.Lock()
 		err := s.closeErr
@@ -199,16 +186,12 @@ func (s *LlmStream) Close() error {
 	s.closing = true
 	s.closeDone = make(chan struct{})
 	ptr := s.ptr
+	cancelProvider := s.cancelProvider
 	s.mu.Unlock()
-
-	C.nemo_relay_stream_cancel(ptr)
-	if callbackDone, reentrant := s.callbacks.activeCallback(callerID); reentrant {
-		go func() {
-			<-callbackDone
-			s.closeNative(ptr)
-		}()
-		return nil
+	if cancelProvider != nil {
+		cancelProvider()
 	}
+	C.nemo_relay_stream_cancel(ptr)
 	s.closeNative(ptr)
 	s.mu.Lock()
 	err := s.closeErr
@@ -227,12 +210,56 @@ func (s *LlmStream) closeNative(ptr *C.FfiStream) {
 	s.mu.Unlock()
 	err := callStatus(func() C.int32_t { return C.nemo_relay_stream_close(ptr) })
 	s.mu.Lock()
+	stopContext := s.stopContext
+	s.stopContext = nil
 	s.closeErr = err
 	s.ptr = nil
+	s.sources = nil
 	s.closed = true
 	close(s.closeDone)
 	s.mu.Unlock()
+	if stopContext != nil {
+		stopContext()
+	}
 	s.cleanup.Stop()
 	C.nemo_relay_stream_free(ptr)
 	runtime.KeepAlive(s)
+}
+
+func (s *LlmStream) bindContext(ctx context.Context) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	s.callContext = ctx
+	if !s.closed {
+		ref := weak.Make(s)
+		s.stopContext = context.AfterFunc(ctx, func() {
+			if stream := ref.Value(); stream != nil {
+				_ = stream.Close()
+			}
+		})
+		// Include the newly registered watcher in GC cleanup as well. Its stop
+		// function retains only the weak stream reference in the callback.
+		s.cleanup.Stop()
+		s.cleanup = runtime.AddCleanup(s, releaseStream, streamCleanup{
+			ptr: s.ptr, cancelProvider: s.cancelProvider, stopContext: s.stopContext,
+		})
+	}
+}
+
+// NextContext waits for a chunk until ctx is done. Cancellation closes the
+// stream. A cancelled read is never reused for another iteration.
+func (s *LlmStream) NextContext(ctx context.Context) (json.RawMessage, error) {
+	if ctx == nil {
+		return nil, errors.New("context is nil")
+	}
+	if err := ctx.Err(); err != nil {
+		return nil, err
+	}
+	stop := context.AfterFunc(ctx, func() { _ = s.Close() })
+	defer stop()
+	value, err := s.Next()
+	if ctx.Err() != nil {
+		return nil, ctx.Err()
+	}
+	return value, err
 }

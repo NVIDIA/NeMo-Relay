@@ -37,8 +37,8 @@ func TestPluginConfigSerializationErrorsSurfaceBeforeFFI(t *testing.T) {
 
 func TestClosedPluginContextRejectsEveryRegistrationSurface(t *testing.T) {
 	ctx := &PluginContext{}
-	request := func(LLMRequestDTO, LLMSanitizeRequestContext) (LLMRequestDTO, bool) {
-		return LLMRequestDTO{}, false
+	request := func(LLMRequest, LLMSanitizeRequestContext) (LLMRequest, bool) {
+		return LLMRequest{}, false
 	}
 	response := func(json.RawMessage, LLMSanitizeResponseContext) (json.RawMessage, bool) {
 		return nil, false

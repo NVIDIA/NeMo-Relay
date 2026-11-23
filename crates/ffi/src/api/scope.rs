@@ -211,71 +211,29 @@ pub unsafe extern "C" fn nemo_relay_pop_scope(
     }
 }
 
-/// Emit a named lifecycle event.
-///
-/// This creates a point-in-time Mark event without pushing or popping a scope.
-///
-/// # Parameters
-/// - `name`: Null-terminated event name.
-/// - `parent`: Optional parent scope handle, or null to use the current top of
-///   stack.
-/// - `data_json`: Optional null-terminated JSON data payload recorded on the
-///   mark event, or null.
-/// - `metadata_json`: Optional null-terminated JSON metadata payload recorded
-///   on the mark event, or null.
-/// - `timestamp_unix_micros`: Optional Unix microseconds timestamp for the
-///   mark event, or null to use the current UTC time.
-///
-/// # Errors
-/// Returns `InvalidJson` for invalid JSON inputs and `InvalidArg` when
-/// `timestamp_unix_micros` is outside the supported timestamp range.
-///
-/// # Safety
-/// `name` must be a valid C string. Other pointer args may be null; when
-/// non-null, optional pointers must be valid for reads for the duration of the
-/// call.
-#[unsafe(no_mangle)]
-pub unsafe extern "C" fn nemo_relay_event(
-    name: *const c_char,
-    parent: *const FfiScopeHandle,
-    data_json: *const c_char,
-    metadata_json: *const c_char,
-    timestamp_unix_micros: *const i64,
-) -> NemoRelayStatus {
-    unsafe {
-        nemo_relay_event_v2(
-            name,
-            parent,
-            data_json,
-            std::ptr::null(),
-            metadata_json,
-            std::ptr::null(),
-            timestamp_unix_micros,
-        )
-    }
-}
-
 /// Emit a named lifecycle event with optional data schema and log severity.
-///
-/// This is the additive form of [`nemo_relay_event`]. The legacy function
-/// remains ABI-compatible and behaves as if both new arguments were null.
 ///
 /// # Parameters
 /// - `data_schema_json`: Optional `{"name":"...","version":"..."}` JSON.
 /// - `severity`: Optional typed telemetry-log severity.
+/// - `category`: Optional category string, including producer-defined values.
+/// - `category_profile_json`: Optional typed profile JSON object. Unknown keys
+///   are preserved. Invalid JSON or invalid modeled fields return `InvalidJson`.
 ///
 /// # Safety
-/// The pointer requirements are the same as [`nemo_relay_event`]. Optional
-/// pointers may be null and otherwise must remain valid for the call.
+/// `name` must be a valid C string. Optional pointers can be null and
+/// otherwise must remain valid for the call.
 #[unsafe(no_mangle)]
 #[allow(clippy::too_many_arguments)]
-pub unsafe extern "C" fn nemo_relay_event_v2(
+pub unsafe extern "C" fn nemo_relay_event(
     name: *const c_char,
     parent: *const FfiScopeHandle,
     data_json: *const c_char,
     data_schema_json: *const c_char,
     metadata_json: *const c_char,
     severity: *const NemoRelayLogSeverity,
+    category: *const c_char,
+    category_profile_json: *const c_char,
     timestamp_unix_micros: *const i64,
 ) -> NemoRelayStatus {
     clear_last_error();
@@ -317,6 +275,27 @@ pub unsafe extern "C" fn nemo_relay_event_v2(
         };
         Some(severity)
     };
+    let category = if category.is_null() {
+        None
+    } else {
+        match c_str_to_string(category) {
+            Ok(category) => Some(nemo_relay_types::api::event::EventCategory::new(category)),
+            Err(status) => return status,
+        }
+    };
+    let category_profile = match c_str_to_opt_json(category_profile_json) {
+        Some(Some(value)) => {
+            match serde_json::from_value::<nemo_relay_types::api::event::CategoryProfile>(value) {
+                Ok(profile) => Some(profile),
+                Err(error) => {
+                    set_last_error(&format!("invalid category_profile JSON: {error}"));
+                    return NemoRelayStatus::InvalidJson;
+                }
+            }
+        }
+        Some(None) => None,
+        None => return NemoRelayStatus::InvalidJson,
+    };
     let timestamp = match unix_micros_to_opt_timestamp(timestamp_unix_micros) {
         Some(v) => v,
         None => return NemoRelayStatus::InvalidArg,
@@ -330,6 +309,8 @@ pub unsafe extern "C" fn nemo_relay_event_v2(
             .data_schema_opt(data_schema)
             .metadata_opt(metadata)
             .severity_opt(severity)
+            .category_opt(category)
+            .category_profile_opt(category_profile)
             .timestamp_opt(timestamp)
             .build(),
     ) {

@@ -37,7 +37,7 @@ func TestTopLevelNemoRelayCoverage(t *testing.T) {
 	assertLlmStreamExecutionCoverage(t)
 	assertCheckedValueFailureCoverage(t)
 	assertCheckedJSONStringFailureCoverage(t)
-	assertNilLLMRequestWrapperCoverage(t)
+	assertNilNativeLLMRequestCoverage(t)
 	assertOpenTelemetryMarshalFailureCoverage(t)
 }
 
@@ -73,15 +73,12 @@ func assertLlmStreamExecutionCoverage(t *testing.T) {
 	t.Helper()
 
 	stream, err := LlmStreamCallExecute(
-		"coverage_stream_opts",
-		map[string]any{
+		"coverage_stream_opts", requestForTest(map[string]any{
 			"headers": map[string]any{},
 			"content": map[string]any{"model": coverageModelName},
-		},
-		func(json.RawMessage) (json.RawMessage, error) {
+		}), LLMExecutionFunc(func(json.RawMessage) (json.RawMessage, error) {
 			return json.RawMessage(`"data: [DONE]\n\n"`), nil
-		},
-		nil,
+		}).AsStream(), nil,
 		nil,
 		WithLLMModelName(coverageModelName),
 	)
@@ -126,10 +123,10 @@ func noOpCheckedJSONStringFree() {
 	// string in this test is Go-owned and does not require freeing.
 }
 
-func assertNilLLMRequestWrapperCoverage(t *testing.T) {
+func assertNilNativeLLMRequestCoverage(t *testing.T) {
 	t.Helper()
 
-	if got := newLLMRequestFromPtr(nil); got != nil {
+	if got := llmRequestValue(nil); got.Headers != nil || got.Content != nil {
 		t.Fatalf("expected nil request wrapper, got %#v", got)
 	}
 }
@@ -176,20 +173,20 @@ func assertRegisterClosurePanicCoverage(t *testing.T) {
 	}()
 }
 
-func newCoverageRequest(t *testing.T) *LLMRequest {
+func newCoverageRequest(t *testing.T) LLMRequest {
 	t.Helper()
 
-	request := NewLLMRequest(
-		map[string]any{"x-test": "coverage"},
-		map[string]any{"model": coverageModelName},
-	)
-	if request == nil {
+	request, err := NewLLMRequest(jsonForTest(map[string]any{"x-test": "coverage"}), jsonForTest(map[string]any{"model": coverageModelName}))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if request.Headers == nil {
 		t.Fatal("expected non-nil request")
 	}
 	return request
 }
 
-func assertCodecDecodeCoverage(t *testing.T, request *LLMRequest) {
+func assertCodecDecodeCoverage(t *testing.T, request LLMRequest) {
 	t.Helper()
 
 	decodeCodec := &CodecFunc{
@@ -211,12 +208,12 @@ func assertCodecDecodeCoverage(t *testing.T, request *LLMRequest) {
 			return annotatedJSON, nil
 		},
 	}
-	if got, err := codecDecodeResultForTest(successDecodeCodec, request); err != nil || string(got) != string(request.Content()) {
+	if got, err := codecDecodeResultForTest(successDecodeCodec, request); err != nil || string(got) != string(request.Content) {
 		t.Fatalf("expected codec decode success, got %s %v", got, err)
 	}
 }
 
-func assertCodecEncodeCoverage(t *testing.T, request *LLMRequest) {
+func assertCodecEncodeCoverage(t *testing.T, request LLMRequest) {
 	t.Helper()
 
 	encodeCodec := &CodecFunc{
@@ -238,16 +235,16 @@ func assertCodecEncodeCoverage(t *testing.T, request *LLMRequest) {
 			return originalContentJSON, nil
 		},
 	}
-	if got, err := codecEncodeResultForTest(successEncodeCodec, json.RawMessage(`{"annotated":true}`), request); err != nil || string(got) != string(request.Content()) {
+	if got, err := codecEncodeResultForTest(successEncodeCodec, json.RawMessage(`{"annotated":true}`), request); err != nil || string(got) != string(request.Content) {
 		t.Fatalf("expected codec encode success, got %s %v", got, err)
 	}
 }
 
-func assertLlmRequestInterceptPayloadCoverage(t *testing.T, request *LLMRequest) {
+func assertLlmRequestInterceptPayloadCoverage(t *testing.T, request LLMRequest) {
 	t.Helper()
 
 	outcome, err := llmRequestInterceptPayload(
-		func(name string, request LLMRequestDTO, annotatedJSON json.RawMessage) (LLMRequestInterceptOutcome, error) {
+		func(name string, request LLMRequest, annotatedJSON json.RawMessage) (LLMRequestInterceptOutcome, error) {
 			if name != coverageInterceptName {
 				t.Fatalf("unexpected intercept name: %q", name)
 			}
@@ -259,8 +256,8 @@ func assertLlmRequestInterceptPayloadCoverage(t *testing.T, request *LLMRequest)
 			return LLMRequestInterceptOutcome{Request: request, AnnotatedRequest: json.RawMessage(`{"annotated":"updated"}`)}, nil
 		},
 		coverageInterceptName,
-		request.Headers(),
-		request.Content(),
+		request.Headers,
+		request.Content,
 		json.RawMessage(`{"annotated":true}`),
 	)
 	if err != nil {
@@ -277,15 +274,15 @@ func assertLlmRequestInterceptPayloadCoverage(t *testing.T, request *LLMRequest)
 	}
 
 	_, err = llmRequestInterceptPayload(
-		func(name string, request LLMRequestDTO, annotatedJSON json.RawMessage) (LLMRequestInterceptOutcome, error) {
+		func(name string, request LLMRequest, annotatedJSON json.RawMessage) (LLMRequestInterceptOutcome, error) {
 			if annotatedJSON != nil {
 				t.Fatalf("expected nil annotated JSON, got %s", annotatedJSON)
 			}
 			return LLMRequestInterceptOutcome{}, errors.New("forced intercept failure")
 		},
 		coverageInterceptName,
-		request.Headers(),
-		request.Content(),
+		request.Headers,
+		request.Content,
 		nil,
 	)
 	assertErrorContains(t, err, "forced intercept failure", "LLM request intercept")
@@ -378,22 +375,22 @@ func assertLlmCodecInterceptCoverage(t *testing.T) {
 		},
 	}
 
-	if err := RegisterLlmRequestIntercept("coverage_llm_codec_success", 1, false, func(name string, request LLMRequestDTO, annotatedJSON json.RawMessage) (LLMRequestInterceptOutcome, error) {
+	if err := RegisterLlmRequestIntercept("coverage_llm_codec_success", 1, false, func(name string, request LLMRequest, annotatedJSON json.RawMessage) (LLMRequestInterceptOutcome, error) {
 		return LLMRequestInterceptOutcome{Request: request, AnnotatedRequest: json.RawMessage(`{"messages":[{"role":"user","content":"updated"}],"model":"updated-model"}`)}, nil
 	}); err != nil {
 		t.Fatalf("RegisterLlmRequestIntercept success case failed: %v", err)
 	}
 	defer DeregisterLlmRequestIntercept("coverage_llm_codec_success")
-	if _, err := LlmCallExecute("coverage_llm_codec_success", map[string]any{
+	if _, err := LlmCallExecute("coverage_llm_codec_success", requestForTest(map[string]any{
 		"headers": map[string]any{},
 		"content": map[string]any{"model": coverageModelName},
-	}, func(json.RawMessage) (json.RawMessage, error) {
+	}), func(json.RawMessage) (json.RawMessage, error) {
 		return json.RawMessage(`{"content":"ok"}`), nil
 	}, WithLLMCodec(requestCodec)); err != nil {
 		t.Fatalf("expected codec-backed intercept success, got %v", err)
 	}
 
-	if err := RegisterLlmRequestIntercept("coverage_llm_codec_raw_content", 1, false, func(name string, request LLMRequestDTO, annotatedJSON json.RawMessage) (LLMRequestInterceptOutcome, error) {
+	if err := RegisterLlmRequestIntercept("coverage_llm_codec_raw_content", 1, false, func(name string, request LLMRequest, annotatedJSON json.RawMessage) (LLMRequestInterceptOutcome, error) {
 		request.Content = json.RawMessage(`{"model":"raw-model-edit"}`)
 		return LLMRequestInterceptOutcome{Request: request, AnnotatedRequest: annotatedJSON}, nil
 	}); err != nil {
@@ -405,10 +402,10 @@ func assertLlmCodecInterceptCoverage(t *testing.T) {
 		}
 	})
 	providerCalled := false
-	_, err := LlmCallExecute("coverage_llm_codec_raw_content", map[string]any{
+	_, err := LlmCallExecute("coverage_llm_codec_raw_content", requestForTest(map[string]any{
 		"headers": map[string]any{},
 		"content": map[string]any{"model": coverageModelName},
-	}, func(json.RawMessage) (json.RawMessage, error) {
+	}), func(json.RawMessage) (json.RawMessage, error) {
 		providerCalled = true
 		return json.RawMessage(`{"content":"unexpected"}`), nil
 	}, WithLLMCodec(requestCodec))
@@ -417,16 +414,16 @@ func assertLlmCodecInterceptCoverage(t *testing.T) {
 		t.Fatal("provider should not run after a codec-backed raw content mutation")
 	}
 
-	if err := RegisterLlmRequestIntercept("coverage_llm_codec_error", 1, false, func(name string, request LLMRequestDTO, annotatedJSON json.RawMessage) (LLMRequestInterceptOutcome, error) {
+	if err := RegisterLlmRequestIntercept("coverage_llm_codec_error", 1, false, func(name string, request LLMRequest, annotatedJSON json.RawMessage) (LLMRequestInterceptOutcome, error) {
 		return LLMRequestInterceptOutcome{}, errors.New("forced codec-backed intercept failure")
 	}); err != nil {
 		t.Fatalf("RegisterLlmRequestIntercept error case failed: %v", err)
 	}
 	defer DeregisterLlmRequestIntercept("coverage_llm_codec_error")
-	_, err = LlmCallExecute("coverage_llm_codec_error", map[string]any{
+	_, err = LlmCallExecute("coverage_llm_codec_error", requestForTest(map[string]any{
 		"headers": map[string]any{},
 		"content": map[string]any{"model": coverageModelName},
-	}, func(json.RawMessage) (json.RawMessage, error) {
+	}), func(json.RawMessage) (json.RawMessage, error) {
 		return json.RawMessage(`{"content":"ok"}`), nil
 	}, WithLLMCodec(requestCodec))
 	assertErrorContains(t, err, "forced codec-backed intercept failure", "codec-backed intercept")
@@ -456,9 +453,7 @@ func TestTopLevelPluginCoverage(t *testing.T) {
 }
 
 func TestTopLevelStreamCoverage(t *testing.T) {
-	stream, err := LlmStreamCallExecute("top_level_stream_coverage", makeRequest(),
-		func(json.RawMessage) (json.RawMessage, error) { return json.RawMessage(`{"chunk": 1}`), nil },
-		func(json.RawMessage) { panic("forced stream next failure") },
+	stream, err := LlmStreamCallExecute("top_level_stream_coverage", requestForTest(makeRequest()), LLMExecutionFunc(func(json.RawMessage) (json.RawMessage, error) { return json.RawMessage(`{"chunk": 1}`), nil }).AsStream(), func(json.RawMessage) error { panic("forced stream next failure") },
 		nil,
 	)
 	if err != nil {

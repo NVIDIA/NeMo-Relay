@@ -219,6 +219,8 @@ pub struct NemoRelayLlmExecutionContext {
     pub request_codec: NemoRelayLlmRequestContext,
     /// Active unary-response codec context, or null for streaming execution.
     pub response_codec: *const NemoRelayLlmResponseContext,
+    /// Borrowed capability for recording optimization evidence on this call.
+    pub optimization_recorder: *const crate::types::FfiLlmOptimizationRecorder,
 }
 
 /// LLM request sanitizer. It receives the request first and its codec context
@@ -253,6 +255,11 @@ pub type NemoRelayLlmConditionalCb = unsafe extern "C" fn(
 pub type NemoRelayLlmExecCb =
     unsafe extern "C" fn(user_data: *mut libc::c_void, native_json: *const c_char) -> *mut c_char;
 
+/// Nullable version of [`NemoRelayLlmExecCb`]. Pass null to omit this callback.
+pub type NemoRelayOptionalLlmExecCb = Option<
+    unsafe extern "C" fn(user_data: *mut libc::c_void, native_json: *const c_char) -> *mut c_char,
+>;
+
 /// Runtime-provided "next" callback for LLM execution middleware chain.
 /// Takes a native JSON C string, returns a response JSON C string.
 /// `next_ctx` is borrowed and valid only until the intercept callback returns;
@@ -273,6 +280,18 @@ pub type NemoRelayLlmExecInterceptCb = unsafe extern "C" fn(
     next_fn: NemoRelayLlmExecNextFn,
     next_ctx: *mut libc::c_void,
 ) -> *mut c_char;
+
+/// Nullable version of [`NemoRelayLlmExecInterceptCb`]. Pass null to omit this callback.
+pub type NemoRelayOptionalLlmExecInterceptCb = Option<
+    unsafe extern "C" fn(
+        user_data: *mut libc::c_void,
+        name: *const c_char,
+        native_json: *const c_char,
+        context: NemoRelayLlmExecutionContext,
+        next_fn: NemoRelayLlmExecNextFn,
+        next_ctx: *mut libc::c_void,
+    ) -> *mut c_char,
+>;
 
 /// Callback for event subscribers. Invoked on each lifecycle event emitted by
 /// the runtime. The `FfiEvent` pointer is only valid for the duration of the call.
@@ -363,11 +382,19 @@ pub type NemoRelayLlmRequestInterceptCb = unsafe extern "C" fn(
 pub type NemoRelayCollectorCb =
     unsafe extern "C" fn(user_data: *mut libc::c_void, chunk: *const c_char) -> i32;
 
+/// Nullable version of [`NemoRelayCollectorCb`]. Pass null to omit this callback.
+pub type NemoRelayOptionalCollectorCb =
+    Option<unsafe extern "C" fn(user_data: *mut libc::c_void, chunk: *const c_char) -> i32>;
+
 /// Callback for finalizing a collected stream. Invoked once when the stream is
 /// exhausted or closed early. Must return a JSON C string representing the
 /// aggregated response. The returned string must be allocated with `malloc` or
 /// equivalent; the runtime will free it.
 pub type NemoRelayFinalizerCb = unsafe extern "C" fn(user_data: *mut libc::c_void) -> *mut c_char;
+
+/// Nullable version of [`NemoRelayFinalizerCb`]. Pass null to omit this callback.
+pub type NemoRelayOptionalFinalizerCb =
+    Option<unsafe extern "C" fn(user_data: *mut libc::c_void) -> *mut c_char>;
 
 /// Callback for plugin validation.
 /// Receives plugin config JSON and returns a JSON array of diagnostics.
@@ -375,6 +402,14 @@ pub type NemoRelayPluginValidateCb = unsafe extern "C" fn(
     user_data: *mut libc::c_void,
     plugin_config_json: *const c_char,
 ) -> *mut c_char;
+
+/// Nullable version of [`NemoRelayPluginValidateCb`]. Pass null to omit this callback.
+pub type NemoRelayOptionalPluginValidateCb = Option<
+    unsafe extern "C" fn(
+        user_data: *mut libc::c_void,
+        plugin_config_json: *const c_char,
+    ) -> *mut c_char,
+>;
 
 /// Callback for plugin registration.
 /// Receives plugin config JSON and a plugin context pointer that is
@@ -697,9 +732,114 @@ pub fn wrap_llm_exec_intercept_fn(
     )
 }
 
+/// Create an owned stream source for a provider invocation. Ownership transfers
+/// to Relay on return. Return null and set the last error to report failure.
+pub type NemoRelayLlmStreamExecCb = unsafe extern "C" fn(
+    user_data: *mut libc::c_void,
+    request_json: *const c_char,
+) -> *mut crate::api::FfiLlmStreamSource;
+
+/// Nullable version of [`NemoRelayLlmStreamExecCb`]. Pass null to omit this callback.
+pub type NemoRelayOptionalLlmStreamExecCb = Option<
+    unsafe extern "C" fn(
+        user_data: *mut libc::c_void,
+        request_json: *const c_char,
+    ) -> *mut crate::api::FfiLlmStreamSource,
+>;
+/// Invoke the rest of a streaming chain. The continuation expires on callback return.
+/// The returned source is owned and can outlive that callback.
+pub type NemoRelayLlmStreamExecNextFn = unsafe extern "C" fn(
+    request_json: *const c_char,
+    next_context: *mut libc::c_void,
+)
+    -> *mut crate::api::FfiLlmStreamSource;
+/// Transform a complete stream. Return the owned continuation source or an owned
+/// replacement source. Never free or reuse a source after returning it to Relay.
+pub type NemoRelayLlmStreamExecInterceptCb =
+    unsafe extern "C" fn(
+        user_data: *mut libc::c_void,
+        name: *const c_char,
+        request_json: *const c_char,
+        context: NemoRelayLlmExecutionContext,
+        next: NemoRelayLlmStreamExecNextFn,
+        next_context: *mut libc::c_void,
+    ) -> *mut crate::api::FfiLlmStreamSource;
+
+/// Nullable version of [`NemoRelayLlmStreamExecInterceptCb`]. Pass null to omit this callback.
+pub type NemoRelayOptionalLlmStreamExecInterceptCb = Option<
+    unsafe extern "C" fn(
+        user_data: *mut libc::c_void,
+        name: *const c_char,
+        request_json: *const c_char,
+        context: NemoRelayLlmExecutionContext,
+        next: NemoRelayLlmStreamExecNextFn,
+        next_context: *mut libc::c_void,
+    ) -> *mut crate::api::FfiLlmStreamSource,
+>;
+
+pub(crate) fn wrap_llm_stream_source_fn(
+    cb: NemoRelayLlmStreamExecCb,
+    user_data: *mut libc::c_void,
+    free_fn: NemoRelayFreeFn,
+) -> LlmStreamExecutionNextFn {
+    let data = make_user_data(user_data, free_fn);
+    Arc::new(move |request| {
+        let data = data.clone();
+        Box::pin(async move {
+            let request = json_to_c_string(&serde_json::to_value(request).unwrap_or(Json::Null));
+            clear_last_error();
+            let source = unsafe { cb(data.ptr, request) };
+            unsafe { nemo_relay_string_free_internal(request) };
+            unsafe { crate::api::stream_source::into_native(source) }
+        })
+    })
+}
+
+pub(crate) fn wrap_llm_stream_source_intercept_fn(
+    cb: NemoRelayLlmStreamExecInterceptCb,
+    user_data: *mut libc::c_void,
+    free_fn: NemoRelayFreeFn,
+) -> LlmStreamExecutionFn {
+    let data = make_user_data(user_data, free_fn);
+    Arc::new(move |name, request, context, next| {
+        let data = data.clone();
+        let name = CString::new(name).unwrap_or_default();
+        Box::pin(async move {
+            unsafe extern "C" fn invoke(
+                request: *const c_char,
+                context: *mut libc::c_void,
+            ) -> *mut crate::api::FfiLlmStreamSource {
+                unsafe { crate::api::nemo_relay_stream_continuation_call(context.cast(), request) }
+            }
+            let request = json_to_c_string(&serde_json::to_value(request).unwrap_or(Json::Null));
+            let mut next = crate::api::FfiLlmStreamContinuation::capture(next);
+            clear_last_error();
+            let output = with_ffi_llm_execution_context(&context, |context| unsafe {
+                cb(
+                    data.ptr,
+                    name.as_ptr(),
+                    request,
+                    context,
+                    invoke,
+                    std::ptr::from_mut(&mut next).cast(),
+                )
+            });
+            unsafe { nemo_relay_string_free_internal(request) };
+            unsafe { crate::api::stream_source::into_native(output?) }
+        })
+    })
+}
+
 /// Wrap a C LLM stream execution intercept callback.
-/// Since the C callback returns a single string (not a real stream), this wraps
-/// it as a single-item stream, same as `wrap_llm_stream_exec_fn`.
+/// The single-value callback transforms the first item. An invoked continuation's
+/// remaining items and explicit cleanup are preserved. Full stream callbacks
+/// use `wrap_llm_stream_source_intercept_fn`.
+struct LegacyStreamNext {
+    next: LlmStreamExecutionNextFn,
+    tail: std::sync::Mutex<Option<LlmJsonStream>>,
+}
+
+/// Adapt a single-value interceptor while retaining the remaining upstream chunks.
 pub fn wrap_llm_stream_exec_intercept_fn(
     cb: NemoRelayLlmExecInterceptCb,
     user_data: *mut libc::c_void,
@@ -714,79 +854,106 @@ pub fn wrap_llm_stream_exec_intercept_fn(
             let ud = ud.clone();
             let c_name = CString::new(name).unwrap_or_default();
             Box::pin(async move {
-                let next_box = Box::new(next);
-                let next_ctx = Box::into_raw(next_box) as *mut libc::c_void;
-
-                unsafe extern "C" fn llm_stream_next_trampoline(
-                    native_json: *const c_char,
-                    next_ctx: *mut libc::c_void,
-                ) -> *mut c_char {
-                    let next_arc = unsafe { &*(next_ctx as *const LlmStreamExecutionNextFn) };
-                    let next = next_arc.clone();
-                    let request = if native_json.is_null() {
-                        LlmRequest {
-                            headers: serde_json::Map::new(),
-                            content: Json::Null,
-                        }
-                    } else {
-                        let s = unsafe { CStr::from_ptr(native_json) }.to_string_lossy();
-                        serde_json::from_str::<LlmRequest>(&s).unwrap_or(LlmRequest {
-                            headers: serde_json::Map::new(),
-                            content: Json::Null,
-                        })
-                    };
-                    let handle = tokio::runtime::Handle::current();
-                    let result = tokio::task::block_in_place(|| {
-                        handle.block_on(async move {
-                            let mut stream = next(request).await?;
-                            match stream.next().await {
-                                Some(item) => item,
-                                None => Ok(Json::Null),
-                            }
-                        })
+                let (result, tail) = {
+                    let next_box = Box::new(LegacyStreamNext {
+                        next,
+                        tail: std::sync::Mutex::new(None),
                     });
-                    match result {
-                        Ok(json) => json_to_c_string(&json),
-                        Err(e) => {
-                            set_last_error(&e.to_string());
-                            std::ptr::null_mut()
+                    let next_ctx = Box::into_raw(next_box) as *mut libc::c_void;
+
+                    unsafe extern "C" fn llm_stream_next_trampoline(
+                        native_json: *const c_char,
+                        next_ctx: *mut libc::c_void,
+                    ) -> *mut c_char {
+                        let continuation = unsafe { &*(next_ctx as *const LegacyStreamNext) };
+                        let next = continuation.next.clone();
+                        let request = if native_json.is_null() {
+                            LlmRequest {
+                                headers: serde_json::Map::new(),
+                                content: Json::Null,
+                            }
+                        } else {
+                            let s = unsafe { CStr::from_ptr(native_json) }.to_string_lossy();
+                            serde_json::from_str::<LlmRequest>(&s).unwrap_or(LlmRequest {
+                                headers: serde_json::Map::new(),
+                                content: Json::Null,
+                            })
+                        };
+                        let handle = tokio::runtime::Handle::current();
+                        let result = tokio::task::block_in_place(|| {
+                            handle.block_on(async move {
+                                let previous = continuation
+                                    .tail
+                                    .lock()
+                                    .unwrap_or_else(|e| e.into_inner())
+                                    .take();
+                                if let Some(mut previous) = previous {
+                                    previous.close().await?;
+                                }
+                                let mut stream = next(request).await?;
+                                let item = stream.next().await.unwrap_or(Ok(Json::Null));
+                                *continuation.tail.lock().unwrap_or_else(|e| e.into_inner()) =
+                                    Some(stream);
+                                item
+                            })
+                        });
+                        match result {
+                            Ok(json) => json_to_c_string(&json),
+                            Err(e) => {
+                                set_last_error(&e.to_string());
+                                std::ptr::null_mut()
+                            }
                         }
                     }
-                }
 
-                let request_json = serde_json::to_value(&request).unwrap_or(Json::Null);
-                let c_request = json_to_c_string(&request_json);
-                clear_last_error();
-                let result_ptr =
-                    match with_ffi_llm_execution_context(&context, |ffi_context| unsafe {
-                        cb(
-                            ud.ptr,
-                            c_name.as_ptr(),
-                            c_request,
-                            ffi_context,
-                            llm_stream_next_trampoline,
-                            next_ctx,
-                        )
-                    }) {
-                        Ok(result) => result,
-                        Err(error) => {
-                            unsafe {
-                                drop(Box::from_raw(next_ctx as *mut LlmStreamExecutionNextFn))
-                            };
-                            unsafe { nemo_relay_string_free_internal(c_request) };
-                            return Err(error);
+                    let request_json = serde_json::to_value(&request).unwrap_or(Json::Null);
+                    let c_request = json_to_c_string(&request_json);
+                    clear_last_error();
+                    let result_ptr =
+                        match with_ffi_llm_execution_context(&context, |ffi_context| unsafe {
+                            cb(
+                                ud.ptr,
+                                c_name.as_ptr(),
+                                c_request,
+                                ffi_context,
+                                llm_stream_next_trampoline,
+                                next_ctx,
+                            )
+                        }) {
+                            Ok(result) => result,
+                            Err(error) => {
+                                unsafe { drop(Box::from_raw(next_ctx as *mut LegacyStreamNext)) };
+                                unsafe { nemo_relay_string_free_internal(c_request) };
+                                return Err(error);
+                            }
+                        };
+                    let continuation = unsafe { Box::from_raw(next_ctx as *mut LegacyStreamNext) };
+                    let tail = continuation
+                        .tail
+                        .lock()
+                        .unwrap_or_else(|e| e.into_inner())
+                        .take();
+                    unsafe { nemo_relay_string_free_internal(c_request) };
+                    let result = json_result_from_ptr(
+                        result_ptr,
+                        "LLM stream execution intercept callback failed",
+                    );
+                    unsafe { nemo_relay_string_free_internal(result_ptr) };
+                    (result, tail)
+                };
+                match result {
+                    Ok(result) => Ok(crate::api::stream_source::prefix(result, tail)),
+                    Err(error) => {
+                        if let Some(mut tail) = tail
+                            && let Err(cleanup_error) = tail.close().await
+                        {
+                            return Err(FlowError::Internal(format!(
+                                "{error}; stream cleanup also failed: {cleanup_error}"
+                            )));
                         }
-                    };
-                unsafe { drop(Box::from_raw(next_ctx as *mut LlmStreamExecutionNextFn)) };
-                unsafe { nemo_relay_string_free_internal(c_request) };
-                let result = json_result_from_ptr(
-                    result_ptr,
-                    "LLM stream execution intercept callback failed",
-                );
-                unsafe { nemo_relay_string_free_internal(result_ptr) };
-                let result = result?;
-                let stream = tokio_stream::once(Ok(result));
-                Ok(LlmJsonStream::new(stream))
+                        Err(error)
+                    }
+                }
             })
         },
     )
@@ -1037,7 +1204,12 @@ fn with_ffi_llm_execution_context<T>(
     });
     // Identity strings and opaque codec wrappers stay in this stack frame for
     // the complete callback. Foreign code must not retain any of their pointers.
+    let recorder = nemo_relay_runtime::api::optimization::current_llm_optimization_recorder()
+        .map(crate::types::FfiLlmOptimizationRecorder);
     Ok(callback(NemoRelayLlmExecutionContext {
+        optimization_recorder: recorder
+            .as_ref()
+            .map_or(std::ptr::null(), std::ptr::from_ref),
         request_codec: request,
         response_codec: response
             .as_ref()
@@ -1125,15 +1297,21 @@ pub fn wrap_llm_stream_exec_fn(
     })
 }
 
-/// Failure and callback-thread state shared by a stream's callbacks and its
-/// `FfiStream`.
+/// Callback ownership and finalizer failures are shared with the managed stream.
 #[derive(Default)]
 pub struct StreamCallbackState {
+    // Continuations borrow callback data even if no collector/finalizer is set.
+    user_data: Option<Arc<UserData>>,
     failure: std::sync::Mutex<Option<String>>,
-    callback_thread: std::sync::Mutex<Option<std::thread::ThreadId>>,
 }
 
 impl StreamCallbackState {
+    pub(crate) fn user_data_ptr(&self) -> *mut libc::c_void {
+        self.user_data
+            .as_ref()
+            .map_or(std::ptr::null_mut(), |data| data.ptr)
+    }
+
     /// Record a finalizer failure for `nemo_relay_stream_close` to report.
     pub fn record_failure(&self, message: String) {
         *lock_unpoisoned(&self.failure) = Some(message);
@@ -1142,26 +1320,6 @@ impl StreamCallbackState {
     /// Take the recorded finalizer failure.
     pub fn take_failure(&self) -> Option<String> {
         lock_unpoisoned(&self.failure).take()
-    }
-
-    /// Whether the calling thread is inside this stream's collector or finalizer.
-    pub fn on_callback_thread(&self) -> bool {
-        *lock_unpoisoned(&self.callback_thread) == Some(std::thread::current().id())
-    }
-
-    fn enter_callback(&self) -> CallbackThreadGuard<'_> {
-        *lock_unpoisoned(&self.callback_thread) = Some(std::thread::current().id());
-        CallbackThreadGuard { state: self }
-    }
-}
-
-struct CallbackThreadGuard<'a> {
-    state: &'a StreamCallbackState,
-}
-
-impl Drop for CallbackThreadGuard<'_> {
-    fn drop(&mut self) {
-        *lock_unpoisoned(&self.state.callback_thread) = None;
     }
 }
 
@@ -1173,8 +1331,8 @@ fn lock_unpoisoned<T>(mutex: &std::sync::Mutex<T>) -> std::sync::MutexGuard<'_, 
 
 /// Wrap the C collector and finalizer callbacks.
 pub fn wrap_stream_callbacks(
-    collector: Option<NemoRelayCollectorCb>,
-    finalizer: Option<NemoRelayFinalizerCb>,
+    collector: crate::callable::NemoRelayOptionalCollectorCb,
+    finalizer: crate::callable::NemoRelayOptionalFinalizerCb,
     user_data: *mut libc::c_void,
     free_fn: NemoRelayFreeFn,
 ) -> (
@@ -1183,14 +1341,15 @@ pub fn wrap_stream_callbacks(
     Arc<StreamCallbackState>,
 ) {
     let ud = make_user_data(user_data, free_fn);
-    let state = Arc::new(StreamCallbackState::default());
+    let state = Arc::new(StreamCallbackState {
+        user_data: Some(ud.clone()),
+        ..Default::default()
+    });
 
     let collector_fn: LlmCollectorFn = match collector {
         Some(cb) => {
             let ud = ud.clone();
-            let state = state.clone();
             Box::new(move |chunk: Json| {
-                let _callback = state.enter_callback();
                 clear_last_error();
                 let c_chunk = json_to_c_string(&chunk);
                 let status = unsafe { cb(ud.ptr, c_chunk) };
@@ -1210,7 +1369,6 @@ pub fn wrap_stream_callbacks(
         Some(cb) => {
             let state = state.clone();
             Box::new(move || {
-                let _callback = state.enter_callback();
                 clear_last_error();
                 let result_ptr = unsafe { cb(ud.ptr) };
                 let result = json_result_from_ptr(result_ptr, "stream finalizer callback failed");
@@ -1369,6 +1527,87 @@ pub fn wrap_codec_fn(
         decode_cb,
         encode_cb,
         user_data: ud,
+    })
+}
+
+/// Response decoder callback. Returns caller-allocated annotated-response JSON.
+/// Ownership transfers to Relay. Return null and set the last error to report failure.
+pub type NemoRelayCodecResponseDecodeFn = Option<
+    unsafe extern "C" fn(user_data: *mut libc::c_void, response_json: *const c_char) -> *mut c_char,
+>;
+
+/// Custom codec callbacks, sharing one user-data allocation and destructor.
+/// Request decode and encode must be supplied together. At least one direction
+/// must be present. Callbacks can run concurrently and must be thread-safe.
+#[repr(C)]
+#[derive(Clone, Copy)]
+pub struct NemoRelayCodecCallbacks {
+    /// Optional request decoder.
+    pub decode: NemoRelayCodecDecodeFn,
+    /// Optional request encoder.
+    pub encode: NemoRelayCodecEncodeFn,
+    /// Optional response decoder.
+    pub decode_response: NemoRelayCodecResponseDecodeFn,
+    /// Shared callback state. Relay owns it when the constructor call starts.
+    pub user_data: *mut libc::c_void,
+    /// Destructor, invoked exactly once after the last codec reference is dropped.
+    pub free_fn: NemoRelayFreeFn,
+}
+
+struct FfiResponseCodec {
+    decode: unsafe extern "C" fn(*mut libc::c_void, *const c_char) -> *mut c_char,
+    user_data: Arc<UserData>,
+}
+
+impl nemo_relay_types::codec::traits::LlmResponseCodec for FfiResponseCodec {
+    fn decode_response(
+        &self,
+        response: &Json,
+    ) -> Result<nemo_relay_types::codec::response::AnnotatedLlmResponse> {
+        clear_last_error();
+        let input = json_to_c_string(response);
+        let output = unsafe { (self.decode)(self.user_data.ptr, input) };
+        unsafe { nemo_relay_string_free_internal(input) };
+        let result =
+            json_result_from_ptr(output, "response codec decode failed").and_then(|value| {
+                serde_json::from_value(value).map_err(|error| {
+                    FlowError::Internal(format!("invalid annotated response: {error}"))
+                })
+            });
+        unsafe { nemo_relay_string_free_internal(output) };
+        result
+    }
+}
+
+pub(crate) fn codec_from_callbacks(
+    callbacks: NemoRelayCodecCallbacks,
+) -> Result<crate::types::FfiCodecHandle> {
+    let user_data = make_user_data(callbacks.user_data, callbacks.free_fn);
+    let codec: Option<Arc<dyn LlmCodec>> = match (callbacks.decode, callbacks.encode) {
+        (Some(decode_cb), Some(encode_cb)) => Some(Arc::new(FfiCodec {
+            decode_cb,
+            encode_cb,
+            user_data: user_data.clone(),
+        })),
+        (None, None) => None,
+        _ => {
+            return Err(FlowError::InvalidArgument(
+                "request decode and encode must be supplied together".into(),
+            ));
+        }
+    };
+    let response_codec = callbacks.decode_response.map(|decode| {
+        Arc::new(FfiResponseCodec { decode, user_data })
+            as Arc<dyn nemo_relay_types::codec::traits::LlmResponseCodec>
+    });
+    if codec.is_none() && response_codec.is_none() {
+        return Err(FlowError::InvalidArgument(
+            "at least one codec direction is required".into(),
+        ));
+    }
+    Ok(crate::types::FfiCodecHandle {
+        codec,
+        response_codec,
     })
 }
 

@@ -102,7 +102,7 @@ func TestLLMRequestInterceptOptimizationContributionsRoundTrip(t *testing.T) {
 	fixture, contribution := optimizationContributionFixture(t)
 	const interceptName = "go_optimization_fixture"
 	if err := RegisterLlmRequestIntercept(interceptName, 1, false,
-		func(_ string, request LLMRequestDTO, annotated json.RawMessage) (LLMRequestInterceptOutcome, error) {
+		func(_ string, request LLMRequest, annotated json.RawMessage) (LLMRequestInterceptOutcome, error) {
 			return LLMRequestInterceptOutcome{
 				Request:                   request,
 				AnnotatedRequest:          annotated,

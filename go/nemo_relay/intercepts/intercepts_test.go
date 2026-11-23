@@ -87,7 +87,7 @@ func runGlobalLLMInterceptShorthandChecks(t *testing.T) {
 	t.Helper()
 
 	if err := intercepts.RegisterLlmRequest("intercepts_llm_req", 1, false,
-		func(name string, request nemo_relay.LLMRequestDTO, annotated json.RawMessage) (nemo_relay.LLMRequestInterceptOutcome, error) {
+		func(name string, request nemo_relay.LLMRequest, annotated json.RawMessage) (nemo_relay.LLMRequestInterceptOutcome, error) {
 			var payload map[string]interface{}
 			_ = json.Unmarshal(request.Content, &payload)
 			payload["intercepted"] = true
@@ -135,10 +135,10 @@ func runGlobalLLMInterceptShorthandChecks(t *testing.T) {
 		_ = intercepts.DeregisterLlmExecution("intercepts_llm_exec")
 	})
 
-	response, err := nemo_relay.LlmCallExecute("intercepts_llm", map[string]interface{}{
+	response, err := nemo_relay.LlmCallExecute("intercepts_llm", requestForTest(map[string]interface{}{
 		"headers": map[string]interface{}{},
 		"content": map[string]interface{}{"messages": []interface{}{}, "model": "test-model"},
-	}, func(nativeJSON json.RawMessage) (json.RawMessage, error) {
+	}), func(nativeJSON json.RawMessage) (json.RawMessage, error) {
 		return json.RawMessage(`{"ok": true}`), nil
 	})
 	if err != nil {
@@ -153,10 +153,9 @@ func runGlobalLLMInterceptShorthandChecks(t *testing.T) {
 		t.Fatalf("expected wrapped=true, got %v", llmResult)
 	}
 
-	if err := intercepts.RegisterLlmStreamExecution("intercepts_llm_stream", 1,
-		func(request json.RawMessage, _ nemo_relay.LLMExecutionContext, next func(json.RawMessage) (json.RawMessage, error)) (json.RawMessage, error) {
-			return next(request)
-		},
+	if err := intercepts.RegisterLlmStreamExecution("intercepts_llm_stream", 1, nemo_relay.LLMExecutionInterceptFunc(func(request json.RawMessage, _ nemo_relay.LLMExecutionContext, next func(json.RawMessage) (json.RawMessage, error)) (json.RawMessage, error) {
+		return next(request)
+	}).AsStream(),
 	); err != nil {
 		t.Fatalf("RegisterLlmStreamExecution failed: %v", err)
 	}
@@ -201,7 +200,7 @@ func runScopeLocalLLMInterceptShorthandChecks(t *testing.T, scopeUUID string) {
 	t.Helper()
 
 	if err := intercepts.ScopeRegisterLlmRequest(scopeUUID, "intercepts_scope_llm_req", 1, false,
-		func(name string, request nemo_relay.LLMRequestDTO, annotated json.RawMessage) (nemo_relay.LLMRequestInterceptOutcome, error) {
+		func(name string, request nemo_relay.LLMRequest, annotated json.RawMessage) (nemo_relay.LLMRequestInterceptOutcome, error) {
 			return nemo_relay.LLMRequestInterceptOutcome{Request: request, AnnotatedRequest: annotated}, nil
 		},
 	); err != nil {
@@ -214,17 +213,16 @@ func runScopeLocalLLMInterceptShorthandChecks(t *testing.T, scopeUUID string) {
 	); err != nil {
 		t.Fatalf("ScopeRegisterLlmExecution failed: %v", err)
 	}
-	if err := intercepts.ScopeRegisterLlmStreamExecution(scopeUUID, "intercepts_scope_llm_stream", 1,
-		func(request json.RawMessage, _ nemo_relay.LLMExecutionContext, next func(json.RawMessage) (json.RawMessage, error)) (json.RawMessage, error) {
-			return next(request)
-		},
+	if err := intercepts.ScopeRegisterLlmStreamExecution(scopeUUID, "intercepts_scope_llm_stream", 1, nemo_relay.LLMExecutionInterceptFunc(func(request json.RawMessage, _ nemo_relay.LLMExecutionContext, next func(json.RawMessage) (json.RawMessage, error)) (json.RawMessage, error) {
+		return next(request)
+	}).AsStream(),
 	); err != nil {
 		t.Fatalf("ScopeRegisterLlmStreamExecution failed: %v", err)
 	}
-	if _, err := nemo_relay.LlmCallExecute("intercepts_scope_llm", map[string]interface{}{
+	if _, err := nemo_relay.LlmCallExecute("intercepts_scope_llm", requestForTest(map[string]interface{}{
 		"headers": map[string]interface{}{},
 		"content": map[string]interface{}{"messages": []interface{}{}, "model": "test-model"},
-	}, func(nativeJSON json.RawMessage) (json.RawMessage, error) {
+	}), func(nativeJSON json.RawMessage) (json.RawMessage, error) {
 		return json.RawMessage(`{"ok": true}`), nil
 	}); err != nil {
 		t.Fatalf("LlmCallExecute failed: %v", err)

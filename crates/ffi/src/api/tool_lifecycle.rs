@@ -194,62 +194,6 @@ pub unsafe extern "C" fn nemo_relay_tool_call_end(
     }
 }
 
-/// Execute a tool call end-to-end: run conditional-execution guardrails (on raw
-/// args), then request intercepts, sanitize-request guardrails, execution
-/// intercepts, the callback, and sanitize-response
-/// guardrails. On rejection, only a standalone Mark event is emitted (no
-/// Start/End pair) and `GuardrailRejected` is returned. Blocks the calling
-/// thread until completion.
-///
-/// This legacy entry point does not accept an external tool call ID. Use
-/// `nemo_relay_tool_call_execute_v2` to record one on the managed Start and End
-/// events.
-///
-/// # Parameters
-/// - `name`: Null-terminated tool name.
-/// - `args_json`: Tool arguments as a JSON C string.
-/// - `func`: C callback that performs the actual tool execution.
-/// - `func_user_data`: Opaque pointer passed to `func`.
-/// - `func_free`: Optional destructor for `func_user_data`.
-/// - `parent`: Optional parent scope handle, or null.
-/// - `attributes`: Bitfield of tool attributes.
-/// - `data_json`: Optional JSON data, or null.
-/// - `metadata_json`: Optional JSON metadata, or null.
-/// - `out`: On success, receives a serialized `ToolExecutionResult` as a JSON C
-///   string. Caller must free it with `nemo_relay_string_free`.
-///
-/// # Safety
-/// `name`, `args_json`, and `out` must be valid, non-null pointers.
-#[unsafe(no_mangle)]
-pub unsafe extern "C" fn nemo_relay_tool_call_execute(
-    name: *const c_char,
-    args_json: *const c_char,
-    func: NemoRelayToolExecCb,
-    func_user_data: *mut libc::c_void,
-    func_free: NemoRelayFreeFn,
-    parent: *const FfiScopeHandle,
-    attributes: u32,
-    data_json: *const c_char,
-    metadata_json: *const c_char,
-    out: *mut *mut c_char,
-) -> NemoRelayStatus {
-    unsafe {
-        nemo_relay_tool_call_execute_v2(
-            name,
-            args_json,
-            func,
-            func_user_data,
-            func_free,
-            parent,
-            attributes,
-            data_json,
-            metadata_json,
-            std::ptr::null(),
-            out,
-        )
-    }
-}
-
 /// Execute a tool call end-to-end with an optional external tool call ID.
 ///
 /// This runs conditional-execution guardrails (on raw args), then request
@@ -273,56 +217,18 @@ pub unsafe extern "C" fn nemo_relay_tool_call_execute(
 /// - `out`: On success, receives the result as a JSON C string. Caller must free
 ///   with `nemo_relay_string_free`.
 ///
+/// - `skip_stages`: Bitwise OR of `NEMO_RELAY_SKIP_*` constants. Zero runs all
+///   middleware stages. Unknown bits return `InvalidArg`. Event sanitization,
+///   codecs, trace context, and completion still run.
+///
+/// Relay owns callback data when the call starts. It releases the data even if validation fails.
+///
 /// # Safety
 /// `name`, `args_json`, and `out` must be valid, non-null pointers. Optional
 /// pointer arguments may be null; when non-null, they must be valid for reads
 /// for the duration of the call.
 #[unsafe(no_mangle)]
-pub unsafe extern "C" fn nemo_relay_tool_call_execute_v2(
-    name: *const c_char,
-    args_json: *const c_char,
-    func: NemoRelayToolExecCb,
-    func_user_data: *mut libc::c_void,
-    func_free: NemoRelayFreeFn,
-    parent: *const FfiScopeHandle,
-    attributes: u32,
-    data_json: *const c_char,
-    metadata_json: *const c_char,
-    tool_call_id: *const c_char,
-    out: *mut *mut c_char,
-) -> NemoRelayStatus {
-    unsafe {
-        nemo_relay_tool_call_execute_with_options(
-            name,
-            args_json,
-            func,
-            func_user_data,
-            func_free,
-            parent,
-            attributes,
-            data_json,
-            metadata_json,
-            tool_call_id,
-            0,
-            out,
-        )
-    }
-}
-
-/// Choose which middleware stages run for one call.
-/// Combine `NEMO_RELAY_SKIP_*` constants with bitwise OR in `skip_stages`.
-/// Zero runs all stages. Unknown bits return `NEMO_RELAY_STATUS_INVALID_ARG`.
-/// Relay still sanitizes event data, uses codecs, passes trace context,
-/// and handles call completion. Nested calls use their own options.
-///
-/// Relay takes ownership of callback data when this function starts.
-/// It releases that data even if input validation fails.
-///
-/// # Safety
-/// Use the same pointer and callback rules as the existing execute function.
-/// `out` must point to writable storage for the output pointer.
-#[unsafe(no_mangle)]
-pub unsafe extern "C" fn nemo_relay_tool_call_execute_with_options(
+pub unsafe extern "C" fn nemo_relay_tool_call_execute(
     name: *const c_char,
     args_json: *const c_char,
     func: NemoRelayToolExecCb,
@@ -334,6 +240,7 @@ pub unsafe extern "C" fn nemo_relay_tool_call_execute_with_options(
     metadata_json: *const c_char,
     tool_call_id: *const c_char,
     skip_stages: u32,
+    cancellation: *const super::FfiCancellation,
     out: *mut *mut c_char,
 ) -> NemoRelayStatus {
     clear_last_error();
@@ -379,23 +286,35 @@ pub unsafe extern "C" fn nemo_relay_tool_call_execute_with_options(
 
     let default_fn: ToolExecutionNextFn = Arc::new(move |args| exec_fn(args));
 
-    let result = super::block_on(async {
-        core_tool_api::tool_call_execute(
-            core_tool_api::ToolCallExecuteParams::builder()
-                .name(name)
-                .args(args)
-                .func(default_fn)
-                .execution_options(execution_options)
-                .parent_opt(parent_handle)
-                .attributes(attrs)
-                .data_opt(data)
-                .metadata_opt(metadata)
-                .tool_call_id_opt(tool_call_id)
-                .build(),
-        )
+    let cancellation = unsafe { cancellation.as_ref() }.cloned();
+    let signal = cancellation.clone();
+    let result = super::block_on(async move {
+        super::cancellation::run(signal, async move {
+            core_tool_api::tool_call_execute(
+                core_tool_api::ToolCallExecuteParams::builder()
+                    .name(name)
+                    .args(args)
+                    .func(default_fn)
+                    .execution_options(execution_options)
+                    .parent_opt(parent_handle)
+                    .attributes(attrs)
+                    .data_opt(data)
+                    .metadata_opt(metadata)
+                    .tool_call_id_opt(tool_call_id)
+                    .build(),
+            )
+            .await
+        })
         .await
     });
 
+    if cancellation
+        .as_ref()
+        .is_some_and(|signal| *signal.0.borrow())
+    {
+        set_last_error("execution cancelled");
+        return NemoRelayStatus::Cancelled;
+    }
     match result {
         Ok(execution_result) => match serde_json::to_value(execution_result) {
             Ok(json) => {

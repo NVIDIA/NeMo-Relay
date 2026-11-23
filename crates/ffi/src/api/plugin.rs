@@ -6,10 +6,10 @@ use super::{
     Future, NemoRelayEventMetadataInjectorCb, NemoRelayEventSanitizeCb, NemoRelayEventSubscriberCb,
     NemoRelayFreeFn, NemoRelayLlmConditionalCb, NemoRelayLlmExecInterceptCb,
     NemoRelayLlmRequestInterceptCb, NemoRelayLlmSanitizeRequestCb, NemoRelayLlmSanitizeResponseCb,
-    NemoRelayPluginRegisterCb, NemoRelayPluginValidateCb, NemoRelayStatus,
-    NemoRelayToolConditionalCb, NemoRelayToolExecInterceptCb, NemoRelayToolSanitizeCb, Pin, Plugin,
-    PluginConfig, PluginError, PluginHostActivation, c_char, c_str_to_json, c_str_to_string,
-    clear_last_error, deregister_plugin, json_to_c_string, last_error_message, list_plugin_kinds,
+    NemoRelayPluginRegisterCb, NemoRelayStatus, NemoRelayToolConditionalCb,
+    NemoRelayToolExecInterceptCb, NemoRelayToolSanitizeCb, Pin, Plugin, PluginConfig, PluginError,
+    PluginHostActivation, c_char, c_str_to_json, c_str_to_string, clear_last_error,
+    deregister_plugin, json_to_c_string, last_error_message, list_plugin_kinds,
     nemo_relay_string_free, register_adaptive_component, register_plugin, set_last_error,
     status_from_error, status_from_plugin_error, wrap_event_metadata_injector_fn,
     wrap_event_sanitize_fn, wrap_event_subscriber, wrap_llm_conditional_fn,
@@ -42,7 +42,7 @@ impl Drop for FfiHostedPluginUserData {
 
 struct FfiHostedPluginAdapter {
     plugin_kind: String,
-    validate_cb: Option<NemoRelayPluginValidateCb>,
+    validate_cb: crate::callable::NemoRelayOptionalPluginValidateCb,
     register_cb: NemoRelayPluginRegisterCb,
     user_data: Arc<FfiHostedPluginUserData>,
 }
@@ -500,7 +500,7 @@ pub unsafe extern "C" fn nemo_relay_list_plugin_kinds_json(
 #[unsafe(no_mangle)]
 pub unsafe extern "C" fn nemo_relay_register_plugin(
     plugin_kind: *const c_char,
-    validate_cb: Option<NemoRelayPluginValidateCb>,
+    validate_cb: crate::callable::NemoRelayOptionalPluginValidateCb,
     register_cb: NemoRelayPluginRegisterCb,
     user_data: *mut libc::c_void,
     free_fn: NemoRelayFreeFn,
@@ -997,7 +997,8 @@ pub unsafe extern "C" fn nemo_relay_plugin_context_register_llm_stream_execution
     ctx: *mut FfiPluginContext,
     name: *const c_char,
     priority: i32,
-    cb: NemoRelayLlmExecInterceptCb,
+    cb: crate::callable::NemoRelayOptionalLlmExecInterceptCb,
+    stream_cb: crate::callable::NemoRelayOptionalLlmStreamExecInterceptCb,
     user_data: *mut libc::c_void,
     free_fn: NemoRelayFreeFn,
 ) -> NemoRelayStatus {
@@ -1010,7 +1011,21 @@ pub unsafe extern "C" fn nemo_relay_plugin_context_register_llm_stream_execution
         Ok(value) => value,
         Err(status) => return status,
     };
-    let wrapped = wrap_llm_stream_exec_intercept_fn(cb, user_data, free_fn);
+    let wrapped = match stream_cb {
+        Some(callback) => {
+            crate::callable::wrap_llm_stream_source_intercept_fn(callback, user_data, free_fn)
+        }
+        None => match cb {
+            Some(callback) => wrap_llm_stream_exec_intercept_fn(callback, user_data, free_fn),
+            None => {
+                if let Some(free) = free_fn {
+                    unsafe { free(user_data) };
+                }
+                crate::error::set_last_error("a streaming interceptor callback is required");
+                return NemoRelayStatus::InvalidArg;
+            }
+        },
+    };
     match unsafe { &mut *((*ctx).0) }
         .register_llm_stream_execution_intercept(&name, priority, wrapped)
     {

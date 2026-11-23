@@ -49,10 +49,10 @@ func TestEventSchemaSeverityAndMetricParity(t *testing.T) {
 			Name:      "example.tokens.saved",
 			Kind:      MetricKindCounter,
 			ValueType: MetricValueTypeU64,
-			Value:     uint64(42),
+			Value:     json.Number("42"),
 			Unit:      "{token}",
-			Attributes: map[string]interface{}{
-				"model": "example-model",
+			Attributes: map[string]json.RawMessage{
+				"model": json.RawMessage(`"example-model"`),
 			},
 		}},
 			WithMetricMetadata(json.RawMessage(`{"context":"ignored"}`)),
@@ -353,7 +353,7 @@ func TestOpenTelemetryMetricSubscriberLifecycleAndDerivation(t *testing.T) {
 			Name:      "example.requests",
 			Kind:      MetricKindCounter,
 			ValueType: MetricValueTypeU64,
-			Value:     uint64(1),
+			Value:     json.Number("1"),
 		}}), "EmitMetric failed")
 	})
 	requireNoError(t, subscriber.ForceFlush(), "metric ForceFlush failed")

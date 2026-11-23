@@ -124,16 +124,16 @@ fn scope_stack_propagation_entrypoints_round_trip_through_the_ffi() {
         let context = CString::new(context_text).unwrap();
         let mut stack = ptr::null_mut();
         assert_eq!(
-            nemo_relay_scope_stack_create_from_propagation_json(context.as_ptr(), ptr::null_mut()),
+            nemo_relay_scope_stack_create(context.as_ptr(), ptr::null_mut()),
             NemoRelayStatus::NullPointer
         );
         let invalid_json = CString::new("{").unwrap();
         assert_eq!(
-            nemo_relay_scope_stack_create_from_propagation_json(invalid_json.as_ptr(), &mut stack),
+            nemo_relay_scope_stack_create(invalid_json.as_ptr(), &mut stack),
             NemoRelayStatus::InvalidJson
         );
         assert_eq!(
-            nemo_relay_scope_stack_create_from_propagation_json(context.as_ptr(), &mut stack),
+            nemo_relay_scope_stack_create(context.as_ptr(), &mut stack),
             NemoRelayStatus::Ok
         );
         assert!(!stack.is_null());
@@ -230,7 +230,7 @@ fn scope_stack_snapshot_ffi_absence_owned_output_and_restore() {
         );
         let mut stack = ptr::null_mut();
         assert_eq!(
-            nemo_relay_scope_stack_create(&mut stack),
+            nemo_relay_scope_stack_create(ptr::null(), &mut stack),
             NemoRelayStatus::Ok
         );
         assert_eq!(

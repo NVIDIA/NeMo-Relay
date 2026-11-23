@@ -104,16 +104,16 @@ type CacheTelemetryEventInput struct {
 
 // CacheTelemetryEvent is the normalized adaptive cache telemetry event.
 type CacheTelemetryEvent struct {
-	RequestID           string         `json:"request_id"`
-	AgentIdentity       AgentIdentity  `json:"agent_identity"`
-	CacheReadTokens     uint64         `json:"cache_read_tokens"`
-	CacheCreationTokens uint64         `json:"cache_creation_tokens"`
-	TotalPromptTokens   uint64         `json:"total_prompt_tokens"`
-	HitRate             float64        `json:"hit_rate"`
-	MissReason          map[string]any `json:"miss_reason,omitempty"`
-	MissDiagnosis       map[string]any `json:"miss_diagnosis,omitempty"`
-	Provider            string         `json:"provider"`
-	Timestamp           string         `json:"timestamp"`
+	RequestID           string              `json:"request_id"`
+	AgentIdentity       AgentIdentity       `json:"agent_identity"`
+	CacheReadTokens     uint64              `json:"cache_read_tokens"`
+	CacheCreationTokens uint64              `json:"cache_creation_tokens"`
+	TotalPromptTokens   uint64              `json:"total_prompt_tokens"`
+	HitRate             float64             `json:"hit_rate"`
+	MissReason          *CacheMissReason    `json:"miss_reason,omitempty"`
+	MissDiagnosis       *CacheMissDiagnosis `json:"miss_diagnosis,omitempty"`
+	Provider            string              `json:"provider"`
+	Timestamp           string              `json:"timestamp"`
 }
 
 func adaptiveConfigCString(config AdaptiveConfig) (*C.char, error) {

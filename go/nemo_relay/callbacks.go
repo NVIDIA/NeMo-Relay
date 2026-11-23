@@ -40,11 +40,26 @@ typedef struct NemoRelayLlmSanitizeResponseContext {
 } NemoRelayLlmSanitizeResponseContext;
 typedef NemoRelayLlmSanitizeRequestContext NemoRelayLlmRequestContext;
 typedef NemoRelayLlmSanitizeResponseContext NemoRelayLlmResponseContext;
+typedef struct FfiLlmOptimizationRecorder FfiLlmOptimizationRecorder;
 typedef struct NemoRelayLlmExecutionContext {
 	NemoRelayLlmRequestContext request_codec;
-	const NemoRelayLlmResponseContext* response_codec;
+	const NemoRelayLlmResponseContext* response_codec; const FfiLlmOptimizationRecorder* optimization_recorder;
 } NemoRelayLlmExecutionContext;
 
+extern int32_t nemo_relay_llm_handle_retain_optimization_recorder(const FfiLLMHandle*, FfiLlmOptimizationRecorder**);
+extern FfiLlmOptimizationRecorder* nemo_relay_llm_optimization_recorder_retain(const FfiLlmOptimizationRecorder*);
+extern void nemo_relay_llm_optimization_recorder_free(FfiLlmOptimizationRecorder*);
+extern int32_t nemo_relay_llm_optimization_record(const FfiLlmOptimizationRecorder*, const char*, bool*);
+
+typedef struct FfiLlmStreamSource FfiLlmStreamSource;
+typedef struct FfiLlmStreamContinuation FfiLlmStreamContinuation;
+extern void* nemo_relay_stream_continuation_callback_data(const FfiLlmStreamContinuation*);
+extern FfiLlmStreamContinuation* nemo_relay_stream_continuation_retain(const FfiLlmStreamContinuation*);
+extern FfiLlmStreamSource* nemo_relay_stream_continuation_call(const FfiLlmStreamContinuation*, const char*);
+extern void nemo_relay_stream_continuation_free(FfiLlmStreamContinuation*);
+typedef FfiLlmStreamSource* (*NemoRelayLlmStreamExecCb)(void*, const char*);
+typedef FfiLlmStreamSource* (*NemoRelayLlmStreamExecNextFn)(const char*, void*);
+typedef FfiLlmStreamSource* (*NemoRelayLlmStreamExecInterceptCb)(void*, const char*, const char*, NemoRelayLlmExecutionContext, NemoRelayLlmStreamExecNextFn, void*);
 typedef void (*NemoRelayFreeFn)(void* user_data);
 typedef char* (*NemoRelayToolSanitizeFn)(void* user_data, const char* name, const char* args_json);
 typedef char* (*NemoRelayToolConditionalFn)(void* user_data, const char* name, const char* args_json);
@@ -90,6 +105,7 @@ typedef char* (*NemoRelayCodecDecodeCb)(void* user_data, const FfiLLMRequest* re
 typedef char* (*NemoRelayCodecEncodeCb)(void* user_data, const char* annotated_json, const FfiLLMRequest* original_request);
 typedef NemoRelayCodecDecodeCb NemoRelayCodecDecodeFn;
 typedef NemoRelayCodecEncodeCb NemoRelayCodecEncodeFn;
+static inline FfiLlmStreamSource* callLlmStreamNext(NemoRelayLlmStreamExecNextFn next, const char* request, void* context) { return next(request, context); }
 */
 import "C"
 
@@ -98,6 +114,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"runtime"
 	"sync"
 	"sync/atomic"
 	"unsafe"
@@ -279,10 +296,13 @@ type LLMSanitizeResponseContext struct {
 // LLMResponseContext is the response codec context exposed to execution intercepts.
 type LLMResponseContext = LLMSanitizeResponseContext
 
-// LLMExecutionContext provides invocation-scoped codec access to an LLM
-// execution intercept. RequestCodec is always present. ResponseCodec is
-// available for unary execution and nil for streaming execution.
+// LLMExecutionContext gives an LLM execution intercept access to codecs and
+// optimization recording for the current call. RequestCodec is always present.
+// ResponseCodec is available for unary execution and nil for streaming execution.
+// All capabilities expire when the callback returns.
 type LLMExecutionContext struct {
+	recorder      unsafe.Pointer
+	invocation    *llmSanitizeCodecInvocation
 	RequestCodec  LLMRequestContext
 	ResponseCodec *LLMResponseContext
 }
@@ -352,7 +372,7 @@ func acquireLLMSanitizeCodec(
 
 // LLMRequestFunc sanitizes an emitted LLM request. It receives the request
 // first and codec context second; returning omit true removes observability.
-type LLMRequestFunc func(request LLMRequestDTO, context LLMSanitizeRequestContext) (sanitized LLMRequestDTO, omit bool)
+type LLMRequestFunc func(request LLMRequest, context LLMSanitizeRequestContext) (sanitized LLMRequest, omit bool)
 
 // LLMResponseFunc sanitizes an emitted LLM response. It receives the response
 // first and codec context second; returning omit true removes observability.
@@ -378,16 +398,16 @@ type LLMExecutionInterceptFunc func(requestJSON json.RawMessage, context LLMExec
 // CollectorFunc is a callback invoked with each intercepted chunk during a
 // streaming LLM response. It is used to accumulate chunks on the Go side for
 // aggregation. The chunk JSON is only valid for the duration of the call.
-// It runs on a runtime worker thread. A panic ends the stream and is returned
-// from [LlmStream.Next].
-type CollectorFunc func(chunkJSON json.RawMessage)
+// It runs on a runtime worker thread. A returned error or panic ends the stream
+// and is reported by [LlmStream.Next], or Close if it has not been delivered.
+type CollectorFunc func(chunkJSON json.RawMessage) error
 
 // FinalizerFunc is a callback invoked exactly once when a streaming LLM
 // response is exhausted or closed. It takes no arguments and must
-// return a JSON string representing the aggregated response. It runs on a
-// runtime worker thread. A panic or non-JSON result marks the LLM end event
-// ERROR with a null response and is returned from [LlmStream.Close].
-type FinalizerFunc func() string
+// return JSON representing the aggregated response (nil means JSON null). It
+// runs on a runtime worker thread. An error, panic, or invalid JSON marks the
+// LLM end event ERROR with a null response and is returned from [LlmStream.Close].
+type FinalizerFunc func() (json.RawMessage, error)
 
 // EventSubscriberFunc is a callback invoked for each lifecycle event emitted
 // by the runtime. The concrete value is one of the event variant types that
@@ -430,14 +450,8 @@ type CodecFunc struct {
 	Encode func(annotatedJSON json.RawMessage, originalHeadersJSON, originalContentJSON json.RawMessage) (json.RawMessage, error)
 }
 
-// LLMRequestDTO is the JSON-shaped request used by request intercept outcomes.
-type LLMRequestDTO struct {
-	Headers json.RawMessage `json:"headers"`
-	Content json.RawMessage `json:"content"`
-}
-
 // Decode normalizes an opaque request through the active codec.
-func (codec *LLMRequestSanitizeCodec) Decode(request LLMRequestDTO) (json.RawMessage, error) {
+func (codec *LLMRequestSanitizeCodec) Decode(request LLMRequest) (json.RawMessage, error) {
 	if codec == nil {
 		return nil, ErrLLMSanitizeCodecExpired
 	}
@@ -446,6 +460,7 @@ func (codec *LLMRequestSanitizeCodec) Decode(request LLMRequestDTO) (json.RawMes
 		return nil, err
 	}
 	defer release()
+	request = request.withDefaults()
 	cHeaders := C.CString(string(request.Headers))
 	defer C.free(unsafe.Pointer(cHeaders))
 	cContent := C.CString(string(request.Content))
@@ -466,22 +481,23 @@ func (codec *LLMRequestSanitizeCodec) Decode(request LLMRequestDTO) (json.RawMes
 }
 
 // Encode merges normalized changes onto the original opaque request.
-func (codec *LLMRequestSanitizeCodec) Encode(annotated json.RawMessage, original LLMRequestDTO) (LLMRequestDTO, error) {
+func (codec *LLMRequestSanitizeCodec) Encode(annotated json.RawMessage, original LLMRequest) (LLMRequest, error) {
 	if codec == nil {
-		return LLMRequestDTO{}, ErrLLMSanitizeCodecExpired
+		return LLMRequest{}, ErrLLMSanitizeCodecExpired
 	}
 	ptr, release, err := acquireLLMSanitizeCodec(codec.ptr, codec.invocation)
 	if err != nil {
-		return LLMRequestDTO{}, err
+		return LLMRequest{}, err
 	}
 	defer release()
+	original = original.withDefaults()
 	cHeaders := C.CString(string(original.Headers))
 	defer C.free(unsafe.Pointer(cHeaders))
 	cContent := C.CString(string(original.Content))
 	defer C.free(unsafe.Pointer(cContent))
 	cOriginal, err := callPointer(func() *C.FfiLLMRequest { return C.nemo_relay_llm_request_new(cHeaders, cContent) })
 	if err != nil {
-		return LLMRequestDTO{}, err
+		return LLMRequest{}, err
 	}
 	defer C.nemo_relay_llm_request_free(cOriginal)
 	cAnnotated := C.CString(string(annotated))
@@ -490,14 +506,14 @@ func (codec *LLMRequestSanitizeCodec) Encode(annotated json.RawMessage, original
 		return C.nemo_relay_llm_sanitize_request_codec_encode((*C.FfiLlmSanitizeRequestCodec)(ptr), cAnnotated, cOriginal)
 	})
 	if err != nil {
-		return LLMRequestDTO{}, err
+		return LLMRequest{}, err
 	}
 	defer C.nemo_relay_llm_request_free(out)
 	headers := C.nemo_relay_llm_request_headers(out)
 	defer C.nemo_relay_string_free(headers)
 	content := C.nemo_relay_llm_request_content(out)
 	defer C.nemo_relay_string_free(content)
-	return LLMRequestDTO{Headers: json.RawMessage(C.GoString(headers)), Content: json.RawMessage(C.GoString(content))}, nil
+	return LLMRequest{Headers: json.RawMessage(C.GoString(headers)), Content: json.RawMessage(C.GoString(content))}, nil
 }
 
 // Decode normalizes an opaque response through the active codec.
@@ -535,7 +551,7 @@ type PendingMarkSpec struct {
 
 // LLMRequestInterceptOutcome is the canonical result of an LLM request intercept.
 type LLMRequestInterceptOutcome struct {
-	Request                   LLMRequestDTO                 `json:"request"`
+	Request                   LLMRequest                    `json:"request"`
 	AnnotatedRequest          json.RawMessage               `json:"annotated_request"`
 	PendingMarks              []PendingMarkSpec             `json:"pending_marks"`
 	OptimizationContributions []LLMOptimizationContribution `json:"optimization_contributions"`
@@ -588,7 +604,7 @@ type ToolExecutionInterceptOutcome struct {
 // content. Without an annotation, the full request is writable.
 type LLMRequestInterceptFunc func(
 	name string,
-	request LLMRequestDTO,
+	request LLMRequest,
 	annotatedJSON json.RawMessage,
 ) (LLMRequestInterceptOutcome, error)
 
@@ -606,7 +622,7 @@ func llmRequestInterceptPayload(
 	headers, content json.RawMessage,
 	annotatedJSON json.RawMessage,
 ) (LLMRequestInterceptOutcome, error) {
-	return fn(name, LLMRequestDTO{Headers: headers, Content: content}, annotatedJSON)
+	return fn(name, LLMRequest{Headers: headers, Content: content}, annotatedJSON)
 }
 
 func pluginValidatePayload(plugin Plugin, pluginConfigJSON json.RawMessage) (json.RawMessage, error) {
@@ -636,8 +652,8 @@ func pluginRegisterPayload(plugin Plugin, pluginConfigJSON json.RawMessage, ctx 
 	return plugin.Register(pluginConfig, ctx)
 }
 
-func codecDecodeCStringForTest(codec *CodecFunc, request *LLMRequest) *C.char {
-	result, err := codecDecodePayload(codec, request.Headers(), request.Content())
+func codecDecodeCStringForTest(codec *CodecFunc, request LLMRequest) *C.char {
+	result, err := codecDecodePayload(codec, request.Headers, request.Content)
 	if err != nil {
 		setLastErrorMessage(err.Error())
 		return nil
@@ -645,8 +661,8 @@ func codecDecodeCStringForTest(codec *CodecFunc, request *LLMRequest) *C.char {
 	return C.CString(string(result))
 }
 
-func codecEncodeCStringForTest(codec *CodecFunc, annotated json.RawMessage, request *LLMRequest) *C.char {
-	result, err := codecEncodePayload(codec, annotated, request.Headers(), request.Content())
+func codecEncodeCStringForTest(codec *CodecFunc, annotated json.RawMessage, request LLMRequest) *C.char {
+	result, err := codecEncodePayload(codec, annotated, request.Headers, request.Content)
 	if err != nil {
 		setLastErrorMessage(err.Error())
 		return nil
@@ -654,7 +670,7 @@ func codecEncodeCStringForTest(codec *CodecFunc, annotated json.RawMessage, requ
 	return C.CString(string(result))
 }
 
-func codecDecodeResultForTest(codec *CodecFunc, request *LLMRequest) (json.RawMessage, error) {
+func codecDecodeResultForTest(codec *CodecFunc, request LLMRequest) (json.RawMessage, error) {
 	result, err := callPointer(func() *C.char { return codecDecodeCStringForTest(codec, request) })
 	if err != nil {
 		return nil, err
@@ -663,7 +679,7 @@ func codecDecodeResultForTest(codec *CodecFunc, request *LLMRequest) (json.RawMe
 	return json.RawMessage(C.GoString(result)), nil
 }
 
-func codecEncodeResultForTest(codec *CodecFunc, annotated json.RawMessage, request *LLMRequest) (json.RawMessage, error) {
+func codecEncodeResultForTest(codec *CodecFunc, annotated json.RawMessage, request LLMRequest) (json.RawMessage, error) {
 	result, err := callPointer(func() *C.char { return codecEncodeCStringForTest(codec, annotated, request) })
 	if err != nil {
 		return nil, err
@@ -818,6 +834,7 @@ func goEventSanitizeTrampoline(userData unsafe.Pointer, event *C.FfiEvent, field
 
 //export goFreeTrampoline
 func goFreeTrampoline(userData unsafe.Pointer) {
+	streamCallbackOwners.Delete(userData)
 	unregisterClosure(userData)
 }
 
@@ -831,13 +848,14 @@ func goLlmRequestTrampoline(userData unsafe.Pointer, request *C.FfiLLMRequest, c
 	defer C.nemo_relay_string_free(cContent)
 	invocation := newLLMSanitizeCodecInvocation()
 	defer invocation.invalidate()
-	sanitized, omit := fn(LLMRequestDTO{
+	sanitized, omit := fn(LLMRequest{
 		Headers: json.RawMessage(C.GoString(cHeaders)),
 		Content: json.RawMessage(C.GoString(cContent)),
 	}, llmSanitizeRequestContextFromC(context, invocation))
 	if omit {
 		return nil
 	}
+	sanitized = sanitized.withDefaults()
 	cHeaders = C.CString(string(sanitized.Headers))
 	cContent = C.CString(string(sanitized.Content))
 	defer C.free(unsafe.Pointer(cHeaders))
@@ -945,8 +963,10 @@ func goStreamCollectorTrampoline(userData unsafe.Pointer, chunkJSON *C.char) (st
 		setLastErrorMessage("stream released before the collector ran")
 		return nemoRelayStatusInternal
 	}
-	defer callbacks.enter()()
-	callbacks.collector(json.RawMessage(C.GoString(chunkJSON)))
+	if err := callbacks.collector(json.RawMessage(C.GoString(chunkJSON))); err != nil {
+		setLastErrorMessage(err.Error())
+		return nemoRelayStatusInternal
+	}
 	return 0
 }
 
@@ -958,8 +978,15 @@ func goStreamFinalizerTrampoline(userData unsafe.Pointer) (cResult *C.char) {
 		setLastErrorMessage("stream released before the finalizer ran")
 		return nil
 	}
-	defer callbacks.enter()()
-	return C.CString(callbacks.finalizer())
+	response, err := callbacks.finalizer()
+	if err != nil {
+		setLastErrorMessage(err.Error())
+		return nil
+	}
+	if response == nil {
+		response = json.RawMessage(`null`)
+	}
+	return C.CString(string(response))
 }
 
 //export goLlmExecTrampoline
@@ -1022,6 +1049,7 @@ func goLlmExecInterceptTrampoline(userData unsafe.Pointer, name *C.char, nativeJ
 	invocation := newLLMSanitizeCodecInvocation()
 	defer invocation.invalidate()
 	goContext := LLMExecutionContext{
+		recorder: unsafe.Pointer(context.optimization_recorder), invocation: invocation,
 		RequestCodec: llmSanitizeRequestContextFromC(context.request_codec, invocation),
 	}
 	if context.response_codec != nil {
@@ -1052,16 +1080,16 @@ func goLlmExecInterceptTrampoline(userData unsafe.Pointer, name *C.char, nativeJ
 //export goCodecDecodeTrampoline
 func goCodecDecodeTrampoline(userData unsafe.Pointer, request *C.FfiLLMRequest) (cResult *C.char) {
 	defer recoverCallbackPanic("codec decode", func() { cResult = nil })
-	codec := lookupClosure(userData).(*CodecFunc)
-	return codecDecodeCStringForTest(codec, &LLMRequest{ptr: request})
+	codec := requestCodecFunctions(lookupClosure(userData))
+	return codecDecodeCStringForTest(codec, llmRequestValue(request))
 }
 
 //export goCodecEncodeTrampoline
 func goCodecEncodeTrampoline(userData unsafe.Pointer, annotatedJSON *C.char, originalRequest *C.FfiLLMRequest) (cResult *C.char) {
 	defer recoverCallbackPanic("codec encode", func() { cResult = nil })
-	codec := lookupClosure(userData).(*CodecFunc)
+	codec := requestCodecFunctions(lookupClosure(userData))
 	goAnnotated := json.RawMessage(C.GoString(annotatedJSON))
-	return codecEncodeCStringForTest(codec, goAnnotated, &LLMRequest{ptr: originalRequest})
+	return codecEncodeCStringForTest(codec, goAnnotated, llmRequestValue(originalRequest))
 }
 
 //export goLlmRequestInterceptTrampoline
@@ -1122,4 +1150,276 @@ func goPluginRegisterTrampoline(userData unsafe.Pointer, pluginConfigJSON *C.cha
 		raw = json.RawMessage(C.GoString(pluginConfigJSON))
 	}
 	return pluginRegisterStatusForTest(plugin, raw, &PluginContext{ptr: ctx})
+}
+
+// RecordOptimizationContribution tries to record evidence for this managed
+// call. The context is valid only until its execution-intercept callback returns.
+// False means no recorder is active or the runtime rejected the contribution.
+func (context LLMExecutionContext) RecordOptimizationContribution(contribution LLMOptimizationContribution) (bool, error) {
+	if context.invocation == nil {
+		return false, nil
+	}
+	release, err := context.invocation.acquire()
+	if err != nil {
+		return false, err
+	}
+	defer release()
+	if context.recorder == nil {
+		return false, nil
+	}
+	payload, err := json.Marshal(contribution)
+	if err != nil {
+		return false, err
+	}
+	input := C.CString(string(payload))
+	defer C.free(unsafe.Pointer(input))
+	var accepted C.bool
+	err = callStatus(func() C.int32_t {
+		return C.nemo_relay_llm_optimization_record((*C.FfiLlmOptimizationRecorder)(context.recorder), input, &accepted)
+	})
+	return bool(accepted), err
+}
+
+//export goCodecResponseDecodeTrampoline
+func goCodecResponseDecodeTrampoline(userData unsafe.Pointer, response *C.char) (result *C.char) {
+	defer recoverCallbackPanic("response codec decode", func() { result = nil })
+	state := lookupClosure(userData)
+	var decode ResponseCodecFunc
+	switch state := state.(type) {
+	case ResponseCodecFunc:
+		decode = state
+	case *customCodecCallbacks:
+		decode = state.response
+	}
+	value, err := decode(json.RawMessage(C.GoString(response)))
+	if err != nil {
+		setLastErrorMessage(err.Error())
+		return nil
+	}
+	return C.CString(string(value))
+}
+
+//export goLlmStreamExecTrampoline
+func goLlmStreamExecTrampoline(data unsafe.Pointer, request *C.char) (result *C.FfiLlmStreamSource) {
+	defer recoverCallbackPanic("LLM execution", func() { result = nil })
+	factory := lookupClosure(data).(weak.Pointer[streamFactory]).Value()
+	if factory == nil {
+		setLastErrorMessage("stream released before provider opened")
+		return nil
+	}
+	defer runtime.KeepAlive(factory)
+	source, err := factory.fn(factory.ctx, json.RawMessage(C.GoString(request)))
+	if err != nil {
+		setLastErrorMessage(err.Error())
+		return nil
+	}
+	result, err = foreignStreamSource(source, factory.ctx, factory.sources)
+	if err != nil {
+		setLastErrorMessage(err.Error())
+		return nil
+	}
+	return result
+}
+
+//export goLlmStreamInterceptTrampoline
+func goLlmStreamInterceptTrampoline(data unsafe.Pointer, name *C.char, request *C.char, context C.NemoRelayLlmExecutionContext, next C.NemoRelayLlmStreamExecNextFn, nextContext unsafe.Pointer) (result *C.FfiLlmStreamSource) {
+	defer recoverCallbackPanic("stream intercept", func() { result = nil })
+	fn := lookupClosure(data).(LLMStreamExecutionInterceptFunc)
+	callbackData := C.nemo_relay_stream_continuation_callback_data((*C.FfiLlmStreamContinuation)(nextContext))
+	var sources *streamSources
+	if owner, ok := streamCallbackOwners.Load(callbackData); ok {
+		sources = owner.(weak.Pointer[streamSources]).Value()
+		if sources == nil {
+			setLastErrorMessage("stream source owner is no longer live")
+			return nil
+		}
+	}
+	defer runtime.KeepAlive(sources)
+	invocation := newLLMSanitizeCodecInvocation()
+	defer invocation.invalidate()
+	goContext := LLMExecutionContext{recorder: unsafe.Pointer(context.optimization_recorder), invocation: invocation, RequestCodec: llmSanitizeRequestContextFromC(context.request_codec, invocation)}
+	retained, err := callPointer(func() *C.FfiLlmStreamContinuation {
+		return C.nemo_relay_stream_continuation_retain((*C.FfiLlmStreamContinuation)(nextContext))
+	})
+	if err != nil {
+		setLastErrorMessage(err.Error())
+		return nil
+	}
+	continuation := &nativeStreamContinuation{ptr: retained}
+	continuation.cleanup = runtime.AddCleanup(continuation, releaseStreamContinuation, retained)
+	transferred := false
+	defer func() {
+		if !transferred {
+			continuation.close()
+		}
+	}()
+	goNext := continuation.open
+
+	source, err := fn(json.RawMessage(C.GoString(request)), goContext, goNext)
+	if err != nil {
+		continuation.close()
+		setLastErrorMessage(err.Error())
+		return nil
+	}
+	if source == nil {
+		setLastErrorMessage("stream source is nil")
+		return nil
+	}
+	source = &continuationSource{LLMStreamSource: source, continuation: continuation}
+	result, err = foreignStreamSource(source, backgroundContext(), sources)
+	if err != nil {
+		setLastErrorMessage(err.Error())
+		return nil
+	}
+	transferred = true
+	return result
+}
+
+func requestCodecFunctions(state any) *CodecFunc {
+	switch state := state.(type) {
+	case *CodecFunc:
+		return state
+	case *customCodecCallbacks:
+		return state.request
+	default:
+		panic("invalid request codec callback state")
+	}
+}
+
+// LLMOptimizationRecorder records optimization evidence for an LLM
+// call. It can outlive the original handle or intercept callback. Close
+// releases its native reference. Recording after the LLM call ends returns false.
+type LLMOptimizationRecorder struct {
+	mu  sync.RWMutex
+	ptr *C.FfiLlmOptimizationRecorder
+}
+
+// RetainOptimizationRecorder keeps a recorder for use after this callback returns.
+// Call it while the callback is active. Close the recorder when finished.
+func (context LLMExecutionContext) RetainOptimizationRecorder() (*LLMOptimizationRecorder, error) {
+	if context.invocation == nil {
+		return nil, ErrLLMCodecExpired
+	}
+	release, err := context.invocation.acquire()
+	if err != nil {
+		return nil, err
+	}
+	defer release()
+	ptr, err := callPointer(func() *C.FfiLlmOptimizationRecorder {
+		return C.nemo_relay_llm_optimization_recorder_retain((*C.FfiLlmOptimizationRecorder)(context.recorder))
+	})
+	if err != nil {
+		return nil, err
+	}
+	return newLLMOptimizationRecorder(ptr), nil
+}
+
+func newLLMOptimizationRecorder(ptr *C.FfiLlmOptimizationRecorder) *LLMOptimizationRecorder {
+	recorder := &LLMOptimizationRecorder{ptr: ptr}
+	runtime.SetFinalizer(recorder, func(r *LLMOptimizationRecorder) { _ = r.Close() })
+	return recorder
+}
+
+// RetainOptimizationRecorder acquires an independent recorder for a manual LLM
+// call. Close the recorder when finished. LlmCallEnd ends recording even if
+// the recorder is still live. Later records return false without an error.
+func (handle *LLMHandle) RetainOptimizationRecorder() (*LLMOptimizationRecorder, error) {
+	defer runtime.KeepAlive(handle)
+	var nativeHandle *C.FfiLLMHandle
+	if handle != nil {
+		nativeHandle = handle.ptr
+	}
+	var recorder *C.FfiLlmOptimizationRecorder
+	if err := callStatus(func() C.int32_t {
+		return C.nemo_relay_llm_handle_retain_optimization_recorder(nativeHandle, &recorder)
+	}); err != nil {
+		return nil, err
+	}
+	return newLLMOptimizationRecorder(recorder), nil
+}
+
+// RecordOptimizationContribution returns whether Relay accepted the record.
+func (recorder *LLMOptimizationRecorder) RecordOptimizationContribution(contribution LLMOptimizationContribution) (bool, error) {
+	if recorder == nil {
+		return false, errors.New("recorder is closed")
+	}
+	recorder.mu.RLock()
+	defer recorder.mu.RUnlock()
+	if recorder.ptr == nil {
+		return false, errors.New("recorder is closed")
+	}
+	payload, err := json.Marshal(contribution)
+	if err != nil {
+		return false, err
+	}
+	input := C.CString(string(payload))
+	defer C.free(unsafe.Pointer(input))
+	var accepted C.bool
+	err = callStatus(func() C.int32_t { return C.nemo_relay_llm_optimization_record(recorder.ptr, input, &accepted) })
+	return bool(accepted), err
+}
+
+// Close waits for active records to finish and releases the recorder handle.
+// It is safe to call more than once.
+func (recorder *LLMOptimizationRecorder) Close() error {
+	if recorder == nil {
+		return nil
+	}
+	recorder.mu.Lock()
+	ptr := recorder.ptr
+	recorder.ptr = nil
+	recorder.mu.Unlock()
+	if ptr != nil {
+		C.nemo_relay_llm_optimization_recorder_free(ptr)
+	}
+	runtime.SetFinalizer(recorder, nil)
+	return nil
+}
+
+type nativeStreamContinuation struct {
+	cleanup runtime.Cleanup
+	mu      sync.RWMutex
+	ptr     *C.FfiLlmStreamContinuation
+}
+
+func (c *nativeStreamContinuation) open(request json.RawMessage) (LLMStreamSource, error) {
+	c.mu.RLock()
+	defer c.mu.RUnlock()
+	if c.ptr == nil {
+		return nil, errors.New("streaming continuation is closed")
+	}
+	input := C.CString(string(request))
+	defer C.free(unsafe.Pointer(input))
+	source, err := callPointer(func() *C.FfiLlmStreamSource { return C.nemo_relay_stream_continuation_call(c.ptr, input) })
+	if err != nil {
+		return nil, err
+	}
+	return ownedStreamSource(source), nil
+}
+func releaseStreamContinuation(ptr *C.FfiLlmStreamContinuation) {
+	C.nemo_relay_stream_continuation_free(ptr)
+}
+
+func (c *nativeStreamContinuation) close() {
+	defer runtime.KeepAlive(c)
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	if c.ptr != nil {
+		c.cleanup.Stop()
+		C.nemo_relay_stream_continuation_free(c.ptr)
+		c.ptr = nil
+	}
+}
+
+type continuationSource struct {
+	LLMStreamSource
+	continuation *nativeStreamContinuation
+}
+
+func (s *continuationSource) Close() error {
+	defer s.continuation.close()
+	if s.LLMStreamSource == nil {
+		return nil
+	}
+	return s.LLMStreamSource.Close()
 }

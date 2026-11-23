@@ -126,7 +126,7 @@ func TestAlreadyExistsErrorOnDuplicateSubscriber(t *testing.T) {
 func TestAlreadyExistsErrorOnDuplicateLlmGuardrails(t *testing.T) {
 	t.Run("LlmSanitizeRequest", func(t *testing.T) {
 		name := "go_err_dup_llm_san_req"
-		fn := func(request LLMRequestDTO, _ LLMSanitizeRequestContext) (LLMRequestDTO, bool) { return request, false }
+		fn := func(request LLMRequest, _ LLMSanitizeRequestContext) (LLMRequest, bool) { return request, false }
 
 		err := RegisterLlmSanitizeRequestGuardrail(name, 1, fn)
 		if err != nil {
@@ -216,10 +216,9 @@ func TestLlmGuardrailRejectedErrorMessage(t *testing.T) {
 		"headers": map[string]interface{}{},
 		"content": map[string]interface{}{"model": "test"},
 	}
-	_, err := LlmCallExecute("rejected_llm", request,
-		func(nativeJSON json.RawMessage) (json.RawMessage, error) {
-			return json.RawMessage(`{}`), nil
-		},
+	_, err := LlmCallExecute("rejected_llm", requestForTest(request), func(nativeJSON json.RawMessage) (json.RawMessage, error) {
+		return json.RawMessage(`{}`), nil
+	},
 	)
 	if err == nil {
 		t.Fatal("expected guardrail rejection error")

@@ -47,6 +47,8 @@ pub enum NemoRelayStatus {
     InvalidUtf8 = 8,
     /// A function argument had an invalid value (e.g. malformed UUID).
     InvalidArg = 9,
+    /// A managed execution was cancelled.
+    Cancelled = 10,
 }
 
 thread_local! {
