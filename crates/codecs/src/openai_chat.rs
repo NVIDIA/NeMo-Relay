@@ -1148,6 +1148,10 @@ fn patch_chat_api_fields(
 // ---------------------------------------------------------------------------
 
 impl LlmResponseCodec for OpenAIChatCodec {
+    fn redaction(&self) -> Option<&dyn nemo_relay_types::codec::redaction::LlmResponseRedaction> {
+        Some(self)
+    }
+
     fn codec_identity(&self) -> LlmCodecIdentity {
         LlmCodecIdentity::BuiltIn(BuiltinLlmCodec::OpenAiChat)
     }
@@ -1243,6 +1247,10 @@ impl LlmResponseCodec for OpenAIChatCodec {
 // ---------------------------------------------------------------------------
 
 impl LlmCodec for OpenAIChatCodec {
+    fn redaction(&self) -> Option<&dyn nemo_relay_types::codec::redaction::LlmRequestRedaction> {
+        Some(self)
+    }
+
     fn codec_identity(&self) -> LlmCodecIdentity {
         LlmCodecIdentity::BuiltIn(BuiltinLlmCodec::OpenAiChat)
     }

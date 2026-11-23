@@ -1770,6 +1770,52 @@ def test_the_extra_request_body_reaches_api_specific_and_an_edit_there_comes_bac
     assert options.headers == {"x-adk": "own"}
 
 
+def test_appended_call_with_reused_name_does_not_inherit_an_earlier_signature() -> None:
+    request = LlmRequest(
+        model="gemini-2.5-flash",
+        contents=[types.Content(role="model", parts=[_signed_call("lookup", "Paris", b"sig-paris")])],
+    )
+
+    def append_call(messages: list[nemo_relay.JsonObject]) -> None:
+        messages.append(
+            {
+                "role": "assistant",
+                "content": None,
+                "tool_calls": [
+                    {
+                        "type": "function",
+                        "id": "lookup",
+                        "function": {"name": "lookup", "arguments": '{"location":"Rome"}'},
+                    }
+                ],
+            }
+        )
+
+    edited = _edited(request, append_call)
+    assert [present(turn.parts)[0].thought_signature for turn in edited.contents] == [b"sig-paris", None]
+
+
+def test_repeated_idless_calls_in_separate_edited_turns_reject_ambiguous_signatures() -> None:
+    request = LlmRequest(
+        model="gemini-2.5-flash",
+        contents=[
+            types.Content(role="model", parts=[_signed_call("lookup", city, signature)])
+            for city, signature in (("Paris", b"sig-paris"), ("Rome", b"sig-rome"))
+        ],
+    )
+    raw = _raw(request)
+    annotated = GEMINI_CODEC.decode(raw)
+    messages = annotated.messages
+    for message in messages:
+        call = as_object(as_list(message["tool_calls"])[0])
+        assert call["id"] == "lookup"
+        as_object(call["function"])["arguments"] = '{"location":"masked"}'
+    annotated.messages = messages
+
+    with pytest.raises(ValueError, match="ambiguous repeated function call"):
+        GEMINI_CODEC.encode(annotated, raw)
+
+
 def test_calls_sharing_an_id_keep_their_own_part_fields_in_order_when_their_turn_is_edited() -> None:
     calls = [
         types.Part(

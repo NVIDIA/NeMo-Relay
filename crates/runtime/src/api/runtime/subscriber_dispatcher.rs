@@ -30,6 +30,36 @@ tokio::task_local! {
     static TASK_PUBLICATION_CONTEXT: Option<PublicationContext>;
 }
 
+/// Identifies one policy's clean projections across the two sanitizer stages of
+/// a queued event. Receipts live only for that event and never enter its metadata.
+#[derive(Default, Clone)]
+pub struct ProjectionApproval(Arc<()>);
+
+tokio::task_local! {
+    static APPROVED_PROJECTIONS: RefCell<Vec<(ProjectionApproval, serde_json::Value)>>;
+}
+
+impl ProjectionApproval {
+    /// Remember a codec-produced clean payload for this policy and publication.
+    pub fn record(&self, projection: impl FnOnce() -> serde_json::Value) {
+        let _ = APPROVED_PROJECTIONS.try_with(|entries| {
+            entries.borrow_mut().push((self.clone(), projection()));
+        });
+    }
+
+    /// Test exact equality so changes by later middleware always require revalidation.
+    pub fn matches(&self, candidate: &serde_json::Value) -> bool {
+        APPROVED_PROJECTIONS
+            .try_with(|entries| {
+                entries
+                    .borrow()
+                    .iter()
+                    .any(|(owner, data)| Arc::ptr_eq(&self.0, &owner.0) && data == candidate)
+            })
+            .unwrap_or(false)
+    }
+}
+
 pub(crate) struct ThreadPublicationContextGuard(Option<PublicationContext>);
 
 pub(crate) fn enter_thread_publication_context(
@@ -1289,6 +1319,7 @@ mod native {
         let propagation_parent_uuid = event.propagation_parent_uuid();
         let propagation_traceparent = event.propagation_traceparent().map(ToOwned::to_owned);
         let propagation_tracestate = event.propagation_tracestate().map(ToOwned::to_owned);
+        let mut approvals = RefCell::new(Vec::new());
         let (mut transformed, mut nested_publications) = match transform {
             Some(transform) => {
                 let runtime = match middleware_runtime.get() {
@@ -1312,11 +1343,15 @@ mod native {
                         return (None, Vec::new());
                     }
                 };
+                let mut scoped = std::pin::pin!(
+                    APPROVED_PROJECTIONS.scope(approvals, async move { transform(event).await })
+                );
                 let (transformed, nested_publications) = run_with_nested_publication_buffer(
                     runtime,
                     publication_context.clone(),
-                    async move { transform(event).await },
+                    scoped.as_mut(),
                 );
+                approvals = scoped.as_mut().take_value().unwrap_or_default();
                 match transformed {
                     Ok(event) => (event, nested_publications),
                     Err(_) => {
@@ -1372,7 +1407,10 @@ mod native {
         let (sanitized, sanitizer_publications) = run_with_nested_publication_buffer(
             runtime,
             publication_context,
-            NemoRelayContextState::event_sanitize_snapshot_chain(injected, &sanitizers),
+            APPROVED_PROJECTIONS.scope(
+                approvals,
+                NemoRelayContextState::event_sanitize_snapshot_chain(injected, &sanitizers),
+            ),
         );
         nested_publications.extend(sanitizer_publications);
         let event = match sanitized {

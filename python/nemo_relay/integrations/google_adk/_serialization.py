@@ -1360,30 +1360,40 @@ def _call_key(part: JsonObject) -> str | None:
     return _identifier(call, field="ADK function_call") or _name(call, field="ADK function_call")
 
 
-def _keep_call_fields(contents: Sequence[JsonObject], originals: Sequence[JsonObject]) -> None:
+def _keep_call_fields(contents: Sequence[JsonObject], originals: Sequence[JsonObject], unaligned: set[int]) -> None:
     """Merge each call part over original part with same call key.
 
-    Merge only when key is unique among both edited and original calls. Call key: its id, or its name when it has no id.
+    Merge by a unique id or name. Reject ambiguous copies of source part metadata into newly rebuilt turns.
     """
     found: dict[str, JsonObject | None] = {}
-    for part in (part for content in originals for part in _objects(content.get("parts"), field="ADK content parts")):
-        if (key := _call_key(part)) is not None:
-            found[key] = None if key in found else part
+    unclaimed_fields: set[str] = set()
+    # Unchanged turns are reused verbatim. Their signatures already have an owner.
+    retained = {id(content) for content in contents}
+    for content in originals:
+        for part in _objects(content.get("parts"), field="ADK content parts"):
+            if (key := _call_key(part)) is not None:
+                found[key] = None if key in found else part
+                if id(content) not in retained and part.keys() - {"function_call"}:
+                    unclaimed_fields.add(key)
     counts = Counter(
         key
         for content in contents
         for part in _objects(content.get("parts"), field="ADK content parts")
         if (key := _call_key(part)) is not None
     )
-    for content in contents:
+    for index, content in enumerate(contents):
         parts = _objects(content.get("parts"), field="ADK content parts")
         restored = False
         for position, part in enumerate(parts):
-            if (key := _call_key(part)) is None or counts[key] != 1:
+            key = _call_key(part)
+            if key is None or key not in found:
                 continue
-            if (original := found.get(key)) is not None:
+            original = found[key]
+            if counts[key] == 1 and original is not None:
                 parts[position] = {**original, **part}
                 restored = True
+            elif index in unaligned and key in unclaimed_fields:
+                raise ValueError("Cannot preserve ADK part metadata for an ambiguous repeated function call")
         if restored:
             content["parts"] = [*parts]
 
@@ -1412,6 +1422,7 @@ def _patched_contents(
     contents: list[JsonObject] = []
     responses: list[Json] = []
     written: set[int] = set()
+    unaligned: set[int] = set()
     index = 0
     while index < len(edited):
         message, match = edited[index], aligned[index]
@@ -1423,6 +1434,7 @@ def _patched_contents(
             contents.append({"role": "user", "parts": responses})
             responses = []
         if match is None:
+            unaligned.add(len(contents))
             contents.append(_content(message, names_by_id))
             index += 1
             continue
@@ -1452,7 +1464,7 @@ def _patched_contents(
         index = end
     if responses:
         contents.append({"role": "user", "parts": responses})
-    _keep_call_fields(contents, originals)
+    _keep_call_fields(contents, originals, unaligned)
     return contents
 
 
@@ -1755,6 +1767,8 @@ class AdkCodec(LlmCodec, LlmResponseCodec):
 
     `variant` reads each response by its provider API's usage semantics.
     """
+
+    supports_request_redaction = True
 
     def __init__(self, variant: ApiVariant) -> None:
         self._variant = variant
