@@ -28,16 +28,14 @@
  * - `cancelled` and `truncated` are false: nothing was started, so nothing was
  *   interrupted, and the message is whole.
  *
- * **Never throw from the handler.** `emitUserBash` wraps handlers in
- * try/catch and moves on, so a thrown error fails *open* and the command runs
- * unchecked -- the opposite of `tool_call`, which has no try/catch and fails
- * closed. Every path here returns an explicit decision.
+ * Returning a failed result lets Relay report a refusal and its reason. A
+ * thrown handler error instead aborts the command at Pi's extension boundary.
  */
 
 /**
  * pi's `BashResult`, narrowed to the fields a synthetic refusal sets.
  *
- * Mirrored from pi `v0.84.0`, `core/bash-executor.ts`. `fullOutputPath` is
+ * Mirrored from Pi 1.6.0's `core/bash-executor.ts`. `fullOutputPath` is
  * deliberately absent: it points at a temp file holding output too large to
  * inline, and a refusal has no output beyond its reason.
  */
