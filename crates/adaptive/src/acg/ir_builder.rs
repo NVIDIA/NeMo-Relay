@@ -6,7 +6,7 @@
 use chrono::Utc;
 use uuid::Uuid;
 
-use nemo_relay_types::codec::content::ContentKind;
+use nemo_relay_types::codec::content::{ContentKind, PayloadRef};
 use std::borrow::Cow;
 
 use nemo_relay_types::codec::request::{
@@ -247,6 +247,9 @@ fn analysis_content(
             .index
             .expect("multipart entries have an index");
         let opaque_kind = match entry.kind {
+            ContentKind::ToolResult(result) if tool_result_contains_image(result.payload) => {
+                Some("tool_result")
+            }
             ContentKind::ImageUrl(_) => Some("image_url"),
             ContentKind::Image(_) => Some("image"),
             ContentKind::Audio(_) => Some("audio"),
@@ -272,6 +275,15 @@ fn analysis_content(
             BlockContentType::StructuredInput
         },
     ))
+}
+
+fn tool_result_contains_image(payload: PayloadRef<'_>) -> bool {
+    let PayloadRef::Json(serde_json::Value::Array(blocks)) = payload else {
+        return false;
+    };
+    blocks
+        .iter()
+        .any(|block| block.get("type").and_then(serde_json::Value::as_str) == Some("image"))
 }
 
 fn build_serialized_message_block(

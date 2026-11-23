@@ -284,6 +284,44 @@ fn adaptive_content_tool_payload_whitespace_is_not_prose_normalized() {
 }
 
 #[test]
+fn anthropic_tool_result_images_require_an_explicit_token_count() {
+    use crate::acg::prompt_ir::TokenizationMetadata;
+    use nemo_relay_codecs::anthropic::AnthropicMessagesCodec;
+    use nemo_relay_types::{api::llm::LlmRequest, codec::traits::LlmCodec};
+    use serde_json::json;
+
+    let block_for = |content| {
+        let request = LlmRequest {
+            headers: Default::default(),
+            content: json!({"model":"claude", "max_tokens":100,
+                "messages":[{"role":"user","content":[
+                    {"type":"tool_result","tool_use_id":"call", "content":content}
+                ]}]
+            }),
+        };
+        let annotated = AnthropicMessagesCodec.decode(&request).unwrap();
+        build_prompt_ir(&annotated).unwrap().blocks.pop().unwrap()
+    };
+    let text = json!({"type":"text", "text":"screenshot"});
+    let data = "A".repeat(16_000);
+    let mut media = block_for(json!([text, {"type":"image", "source":{
+        "type":"base64", "media_type":"image/png", "data":data
+    }}]));
+    assert_eq!(media.content_type, BlockContentType::Opaque);
+    assert!(!media.content.contains(&data));
+    assert_eq!(media.estimated_tokens(), None);
+    media.token_metadata = Some(TokenizationMetadata {
+        model_family: "claude".into(),
+        token_count: 128,
+    });
+    assert_eq!(media.estimated_tokens(), Some((128, false)));
+
+    let plain = block_for(json!([text]));
+    assert_eq!(plain.content_type, BlockContentType::StructuredInput);
+    assert!(plain.estimated_tokens().is_some());
+}
+
+#[test]
 fn adaptive_content_media_and_native_values_are_typed_opaque_fingerprints() {
     for part in [
         serde_json::json!({"type": "image", "image": {"data": "private-payload"}}),
