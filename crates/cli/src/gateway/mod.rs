@@ -329,7 +329,15 @@ pub(crate) async fn passthrough(
         .sessions
         .prepare_gateway_call(&prepared.headers, start)
         .await?;
-    run_managed_gateway(state, prepared, prep, operational, None, None).await
+    let guard = GatewayCallGuard::new(
+        state.sessions.clone(),
+        prep.session_id.clone(),
+        prep.owner_subagent_id.clone(),
+        None,
+        prep.session_finish,
+        operational.clone(),
+    );
+    run_managed_gateway(state, prepared, prep, operational, Some(guard), None).await
 }
 
 /// Upgrades an authorized provider WebSocket without entering the managed LLM pipeline.
