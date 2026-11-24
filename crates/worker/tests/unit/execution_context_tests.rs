@@ -358,3 +358,73 @@ async fn cancellation_acknowledgement_matches_acceptance_after_cleanup() {
         }
     }
 }
+
+#[tokio::test]
+async fn shutdown_aborts_active_invocations() {
+    struct TestPlugin;
+
+    impl WorkerPlugin for TestPlugin {
+        fn plugin_id(&self) -> &str {
+            "test.shutdown"
+        }
+
+        fn register(&self, _ctx: &mut PluginContext, _config: &Json) -> Result<()> {
+            Ok(())
+        }
+    }
+
+    let task = tokio::spawn(std::future::pending::<()>());
+    let (_, completion) = watch::channel(false);
+    let (stream_cancel, stream_cancel_rx) = watch::channel(false);
+    let (shutdown, mut shutdown_rx) = watch::channel(false);
+    let active_invocations = Arc::new(Mutex::new(HashMap::from([(
+        "invocation".into(),
+        ActiveInvocation {
+            generation: 0,
+            abort_handle: task.abort_handle(),
+            stream_cancel: Some(stream_cancel),
+            completion,
+            cancel_requested: false,
+        },
+    )])));
+    let service = WorkerService {
+        plugin: Arc::new(TestPlugin),
+        runtime: disconnected_runtime(),
+        handlers: Arc::new(Mutex::new(WorkerHandlers::default())),
+        active_invocations: active_invocations.clone(),
+        next_invocation_generation: Arc::new(AtomicU64::new(1)),
+        shutdown,
+    };
+
+    let ack = service
+        .shutdown(Request::new(ShutdownRequest {
+            activation_id: "activation".into(),
+            auth_token: "token".into(),
+            reason: "test".into(),
+        }))
+        .await
+        .unwrap()
+        .into_inner();
+
+    assert!(ack.accepted);
+    assert!(*shutdown_rx.borrow_and_update());
+    assert!(*stream_cancel_rx.borrow());
+    assert!(
+        active_invocations
+            .lock()
+            .unwrap()
+            .get("invocation")
+            .unwrap()
+            .cancel_requested
+    );
+    assert!(task.await.unwrap_err().is_cancelled());
+
+    let late_task = tokio::spawn(std::future::pending::<()>());
+    let (_, late_completion) = watch::channel(false);
+    let error = service
+        .track_invocation("late", late_task.abort_handle(), None, late_completion)
+        .unwrap_err();
+    assert_eq!(error.code(), tonic::Code::Unavailable);
+    late_task.abort();
+    assert!(late_task.await.unwrap_err().is_cancelled());
+}

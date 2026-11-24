@@ -1975,22 +1975,6 @@ async fn serve_plugin_arc_with_endpoint_file(
         conditional_middleware_callbacks: Arc::new(Mutex::new(HashMap::new())),
     };
     let (shutdown, shutdown_receiver) = watch::channel(false);
-    if monitor_host_liveness {
-        let shutdown = shutdown.clone();
-        std::thread::Builder::new()
-            .name("nemo-relay-host-liveness".into())
-            .spawn(move || {
-                let _ = std::io::copy(&mut std::io::stdin(), &mut std::io::sink());
-                shutdown.send_replace(true);
-                std::thread::sleep(HOST_LOSS_EXIT_DELAY);
-                std::process::exit(0);
-            })
-            .map_err(|error| {
-                WorkerSdkError::Transport(format!(
-                    "failed to start Relay host liveness watcher: {error}"
-                ))
-            })?;
-    }
     let service = WorkerService {
         plugin,
         runtime,
@@ -2004,8 +1988,26 @@ async fn serve_plugin_arc_with_endpoint_file(
         &config.worker_endpoint,
         endpoint_file.as_deref(),
         shutdown_receiver,
+        monitor_host_liveness,
     )
     .await
+}
+
+fn start_host_liveness_watcher(shutdown: watch::Sender<bool>) -> Result<()> {
+    std::thread::Builder::new()
+        .name("nemo-relay-host-liveness".into())
+        .spawn(move || {
+            let _ = std::io::copy(&mut std::io::stdin(), &mut std::io::sink());
+            shutdown.send_replace(true);
+            std::thread::sleep(HOST_LOSS_EXIT_DELAY);
+            std::process::exit(0);
+        })
+        .map_err(|error| {
+            WorkerSdkError::Transport(format!(
+                "failed to start Relay host liveness watcher: {error}"
+            ))
+        })?;
+    Ok(())
 }
 
 #[cfg(unix)]
@@ -2015,6 +2017,7 @@ async fn serve_worker_service(
     endpoint: &str,
     endpoint_file: Option<&Path>,
     shutdown: watch::Receiver<bool>,
+    monitor_host_liveness: bool,
 ) -> Result<()> {
     if endpoint.starts_with("unix://") {
         let path = parse_unix_endpoint(endpoint)?;
@@ -2022,6 +2025,9 @@ async fn serve_worker_service(
         let listener = UnixListener::bind(&path).map_err(|err| {
             WorkerSdkError::Transport(format!("failed to bind worker socket: {err}"))
         })?;
+        if monitor_host_liveness {
+            start_host_liveness_watcher(service.shutdown.clone())?;
+        }
         return Server::builder()
             .add_service(worker_grpc_service(service))
             .serve_with_incoming_shutdown(
@@ -2031,7 +2037,14 @@ async fn serve_worker_service(
             .await
             .map_err(|err| WorkerSdkError::Transport(err.to_string()));
     }
-    serve_tcp_worker_service(service, endpoint, endpoint_file, shutdown).await
+    serve_tcp_worker_service(
+        service,
+        endpoint,
+        endpoint_file,
+        shutdown,
+        monitor_host_liveness,
+    )
+    .await
 }
 
 #[cfg(not(unix))]
@@ -2040,13 +2053,21 @@ async fn serve_worker_service(
     endpoint: &str,
     endpoint_file: Option<&Path>,
     shutdown: watch::Receiver<bool>,
+    monitor_host_liveness: bool,
 ) -> Result<()> {
     if endpoint.starts_with("unix://") {
         return Err(WorkerSdkError::InvalidInput(
             "unix endpoints are not supported on this platform".into(),
         ));
     }
-    serve_tcp_worker_service(service, endpoint, endpoint_file, shutdown).await
+    serve_tcp_worker_service(
+        service,
+        endpoint,
+        endpoint_file,
+        shutdown,
+        monitor_host_liveness,
+    )
+    .await
 }
 
 /// Publishes the resolved TCP endpoint and serves execution RPCs with finite caps.
@@ -2055,6 +2076,7 @@ async fn serve_tcp_worker_service(
     endpoint: &str,
     endpoint_file: Option<&Path>,
     shutdown: watch::Receiver<bool>,
+    monitor_host_liveness: bool,
 ) -> Result<()> {
     let addr = parse_tcp_endpoint(endpoint)?;
     let listener = TcpListener::bind(addr)
@@ -2065,6 +2087,9 @@ async fn serve_tcp_worker_service(
             WorkerSdkError::Transport(format!("failed to inspect worker socket: {err}"))
         })?;
         write_endpoint_file(path, &format!("http://{local_addr}"))?;
+    }
+    if monitor_host_liveness {
+        start_host_liveness_watcher(service.shutdown.clone())?;
     }
     Server::builder()
         .add_service(worker_grpc_service(service))
@@ -2662,6 +2687,19 @@ impl PluginWorker for WorkerService {
             let _ = diagnostics.close(std::time::Duration::from_secs(2)).await;
         }
         self.shutdown.send_replace(true);
+        {
+            let mut invocations = self
+                .active_invocations
+                .lock()
+                .map_err(|err| Status::internal(format!("invocation lock poisoned: {err}")))?;
+            for active in invocations.values_mut() {
+                active.cancel_requested = true;
+                if let Some(cancel) = &active.stream_cancel {
+                    cancel.send_replace(true);
+                }
+                active.abort_handle.abort();
+            }
+        }
         Ok(Response::new(WorkerAck {
             accepted: true,
             message: if request.reason.is_empty() {
@@ -2758,6 +2796,9 @@ impl WorkerService {
             .active_invocations
             .lock()
             .map_err(|err| Status::internal(format!("invocation lock poisoned: {err}")))?;
+        if *self.shutdown.borrow() {
+            return Err(Status::unavailable("worker is shutting down"));
+        }
         if active.contains_key(invocation_id) {
             return Err(Status::already_exists(format!(
                 "invocation '{invocation_id}' is already active"
