@@ -508,9 +508,7 @@ impl WorkerPluginInstance {
             return;
         };
         #[cfg(unix)]
-        if let Err(error) = terminate_worker_process_group(child)
-            && error != rustix::io::Errno::SRCH
-        {
+        if let Err(error) = terminate_worker_process_group(child) {
             outcome.record_error(
                 format!(
                     "worker plugin '{}' process group kill failed: {error}",
@@ -2873,10 +2871,15 @@ impl Drop for ChildGuard {
 
 #[cfg(unix)]
 fn terminate_worker_process_group(child: &Child) -> rustix::io::Result<()> {
-    rustix::process::kill_process_group(
+    match rustix::process::kill_process_group(
         rustix::process::Pid::from_child(child),
         rustix::process::Signal::KILL,
-    )
+    ) {
+        Err(rustix::io::Errno::SRCH) => Ok(()),
+        #[cfg(target_vendor = "apple")]
+        Err(rustix::io::Errno::PERM) => Ok(()),
+        result => result,
+    }
 }
 
 struct ActivationDirGuard {
