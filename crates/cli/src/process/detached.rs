@@ -340,6 +340,29 @@ fn spawn_with_handle_list(
         UpdateProcThreadAttribute,
     };
 
+    let launcher_job = current_launcher_job()?;
+    let (creation_flags, limited_lifetime) =
+        windows_creation_flags(launcher_job.as_ref().map(|job| job.limit_flags));
+    if let Some(job) = &launcher_job
+        && limited_lifetime
+        && job.ui_restrictions != 0
+    {
+        return Err(std::io::Error::new(
+            std::io::ErrorKind::Unsupported,
+            "the launcher's Job Object sets UI restrictions and denies breakaway, so a detached child cannot own a Job Object",
+        ));
+    }
+    let program = wide_nul(command.get_program());
+    let lifetime_limit = if limited_lifetime {
+        Some("windows_job_breakaway_denied")
+    } else if worker
+        && launcher_job.is_some()
+        && breakaway_leaves_child_in_an_ancestor_job(&program, creation_flags)?
+    {
+        Some("windows_parent_job_retained")
+    } else {
+        None
+    };
     let job = create_job_object()?;
     let job_list = [job.0];
     let handles = [
@@ -408,7 +431,6 @@ fn spawn_with_handle_list(
         return Err(windows_spawn_error("UpdateProcThreadAttribute job list"));
     }
 
-    let program = wide_nul(command.get_program());
     let mut command_line = Vec::new();
     append_quoted(&mut command_line, command.get_program());
     for argument in command.get_args() {
@@ -429,8 +451,6 @@ fn spawn_with_handle_list(
     startup.StartupInfo.hStdError = handles[2] as HANDLE;
     startup.lpAttributeList = attribute_list.0;
     let mut process = PROCESS_INFORMATION::default();
-    let (in_job, limits) = current_windows_job_limits();
-    let (creation_flags, limited_lifetime) = windows_creation_flags(in_job, limits);
     // SAFETY: Every pointer references initialized storage that remains live for this call.
     let created = unsafe {
         CreateProcessW(
@@ -460,13 +480,75 @@ fn spawn_with_handle_list(
         job,
         id: process.dwProcessId,
     };
-    if worker && limited_lifetime {
-        log::warn!(target: "nemo_relay.bootstrap", event = "worker_lifetime_limited", reason = "windows_job_breakaway_denied"; "Worker remains scoped to the host job; host shutdown can require reactivation");
-    }
     if let Err(error) = keep_job_alive_with_child(&child) {
         return Err(abandon_spawned_child(&mut child, error));
     }
+    match lifetime_limit {
+        Some(reason) if worker => {
+            log::warn!(target: "nemo_relay.bootstrap", event = "worker_lifetime_limited", reason = reason; "Worker remains scoped to the host job; host shutdown can require reactivation");
+        }
+        Some(reason) => {
+            log::warn!(target: "nemo_relay.bootstrap", event = "gateway_lifetime_limited", reason = reason; "The shared gateway lifetime is limited to the host job");
+        }
+        None => {}
+    }
     Ok(child)
+}
+
+#[cfg(windows)]
+fn breakaway_leaves_child_in_an_ancestor_job(
+    program: &[u16],
+    creation_flags: u32,
+) -> std::io::Result<bool> {
+    use windows_sys::Win32::Foundation::CloseHandle;
+    use windows_sys::Win32::System::JobObjects::IsProcessInJob;
+    use windows_sys::Win32::System::Threading::{
+        CREATE_SUSPENDED, CreateProcessW, PROCESS_INFORMATION, STARTUPINFOW, TerminateProcess,
+    };
+
+    let mut command_line = program.to_vec();
+    let startup = STARTUPINFOW {
+        cb: std::mem::size_of::<STARTUPINFOW>() as u32,
+        ..Default::default()
+    };
+    let mut process = PROCESS_INFORMATION::default();
+    // SAFETY: Every pointer references initialized storage that remains live for this call. The
+    // suspended probe never runs and is terminated below.
+    if unsafe {
+        CreateProcessW(
+            program.as_ptr(),
+            command_line.as_mut_ptr(),
+            std::ptr::null(),
+            std::ptr::null(),
+            0,
+            creation_flags | CREATE_SUSPENDED,
+            std::ptr::null_mut(),
+            std::ptr::null(),
+            &startup,
+            &mut process,
+        )
+    } == 0
+    {
+        return Err(windows_spawn_error("CreateProcessW job retention probe"));
+    }
+    let mut in_job = 0;
+    // SAFETY: The probe process handle is owned here and the output pointer is valid.
+    let queried = unsafe { IsProcessInJob(process.hProcess, std::ptr::null_mut(), &mut in_job) };
+    let query_error =
+        (queried == 0).then(|| windows_spawn_error("IsProcessInJob job retention probe"));
+    // SAFETY: The probe handles were returned by CreateProcessW and are owned here.
+    let terminated = unsafe { TerminateProcess(process.hProcess, 0) };
+    let terminate_error =
+        (terminated == 0).then(|| windows_spawn_error("TerminateProcess job retention probe"));
+    // SAFETY: Both handles are owned and unused after this point.
+    unsafe {
+        CloseHandle(process.hThread);
+        CloseHandle(process.hProcess);
+    }
+    if let Some(error) = query_error.or(terminate_error) {
+        return Err(error);
+    }
+    Ok(in_job != 0)
 }
 
 #[cfg(windows)]
@@ -644,39 +726,44 @@ pub(crate) const WINDOWS_JOB_OBJECT_LIMIT_BREAKAWAY_OK: u32 = 0x0000_0800;
 pub(crate) const WINDOWS_JOB_OBJECT_LIMIT_SILENT_BREAKAWAY_OK: u32 = 0x0000_1000;
 
 #[cfg(any(test, windows))]
-pub(crate) fn windows_creation_flags(in_job: bool, job_limit_flags: Option<u32>) -> (u32, bool) {
+pub(crate) fn windows_creation_flags(job_limit_flags: Option<u32>) -> (u32, bool) {
     let base = WINDOWS_CREATE_NEW_PROCESS_GROUP | WINDOWS_CREATE_NO_WINDOW;
-    if !in_job {
-        return (base, false);
-    }
     match job_limit_flags {
+        None => (base, false),
         Some(flags) if flags & WINDOWS_JOB_OBJECT_LIMIT_BREAKAWAY_OK != 0 => {
             (base | WINDOWS_CREATE_BREAKAWAY_FROM_JOB, false)
         }
         Some(flags) if flags & WINDOWS_JOB_OBJECT_LIMIT_SILENT_BREAKAWAY_OK != 0 => (base, false),
-        Some(_) | None => (base, true),
+        Some(_) => (base, true),
     }
 }
 
 #[cfg(windows)]
-fn current_windows_job_limits() -> (bool, Option<u32>) {
+struct LauncherJob {
+    limit_flags: u32,
+    ui_restrictions: u32,
+}
+
+#[cfg(windows)]
+fn current_launcher_job() -> std::io::Result<Option<LauncherJob>> {
     use windows_sys::Win32::System::JobObjects::{
-        IsProcessInJob, JOBOBJECT_EXTENDED_LIMIT_INFORMATION, JobObjectExtendedLimitInformation,
-        QueryInformationJobObject,
+        IsProcessInJob, JOBOBJECT_BASIC_UI_RESTRICTIONS, JOBOBJECT_EXTENDED_LIMIT_INFORMATION,
+        JobObjectBasicUIRestrictions, JobObjectExtendedLimitInformation, QueryInformationJobObject,
     };
     use windows_sys::Win32::System::Threading::GetCurrentProcess;
 
     let mut in_job = 0;
     // SAFETY: The pseudo current-process handle and null current-job handle are valid here.
     if unsafe { IsProcessInJob(GetCurrentProcess(), std::ptr::null_mut(), &mut in_job) } == 0 {
-        return (true, None);
+        return Err(windows_spawn_error("IsProcessInJob launcher"));
     }
     if in_job == 0 {
-        return (false, Some(0));
+        return Ok(None);
     }
     let mut limits = JOBOBJECT_EXTENDED_LIMIT_INFORMATION::default();
-    // SAFETY: The output buffer matches the requested information class.
-    let queried = unsafe {
+    // SAFETY: A null job handle queries the calling process's job and the buffer matches the
+    // requested information class.
+    if unsafe {
         QueryInformationJobObject(
             std::ptr::null_mut(),
             JobObjectExtendedLimitInformation,
@@ -684,29 +771,36 @@ fn current_windows_job_limits() -> (bool, Option<u32>) {
             std::mem::size_of::<JOBOBJECT_EXTENDED_LIMIT_INFORMATION>() as u32,
             std::ptr::null_mut(),
         )
-    };
-    if queried == 0 {
-        (true, None)
-    } else {
-        (true, Some(limits.BasicLimitInformation.LimitFlags))
+    } == 0
+    {
+        return Err(windows_spawn_error(
+            "QueryInformationJobObject launcher limits",
+        ));
     }
+    let mut restrictions = JOBOBJECT_BASIC_UI_RESTRICTIONS::default();
+    // SAFETY: A null job handle queries the calling process's job and the buffer matches the
+    // requested information class.
+    if unsafe {
+        QueryInformationJobObject(
+            std::ptr::null_mut(),
+            JobObjectBasicUIRestrictions,
+            std::ptr::from_mut(&mut restrictions).cast(),
+            std::mem::size_of::<JOBOBJECT_BASIC_UI_RESTRICTIONS>() as u32,
+            std::ptr::null_mut(),
+        )
+    } == 0
+    {
+        return Err(windows_spawn_error(
+            "QueryInformationJobObject launcher UI restrictions",
+        ));
+    }
+    Ok(Some(LauncherJob {
+        limit_flags: limits.BasicLimitInformation.LimitFlags,
+        ui_restrictions: restrictions.UIRestrictionsClass,
+    }))
 }
 
-#[cfg(windows)]
-pub(crate) fn configure_detached(_command: &mut Command) {
-    let (in_job, limits) = current_windows_job_limits();
-    let (_, limited_lifetime) = windows_creation_flags(in_job, limits);
-    if limited_lifetime {
-        log::warn!(
-            target: "nemo_relay.bootstrap",
-            event = "gateway_lifetime_limited",
-            reason = "windows_job_breakaway_denied";
-            "The shared gateway lifetime is limited to the host job"
-        );
-    }
-}
-
-#[cfg(not(any(unix, windows)))]
+#[cfg(not(unix))]
 pub(crate) fn configure_detached(_command: &mut Command) {}
 
 pub(crate) fn terminate_tree(child: &mut DetachedChild) {

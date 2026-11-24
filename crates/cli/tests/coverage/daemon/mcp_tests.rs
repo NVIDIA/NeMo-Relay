@@ -602,6 +602,13 @@ fn detached_windows_worker_launcher_fixture() {
         ])
         .env("NEMO_RELAY_TEST_WINDOWS_DETACHED_WORKER", "1");
     let stderr = std::fs::File::create(path.with_extension("stderr")).unwrap();
+    if std::env::var_os("NEMO_RELAY_TEST_WINDOWS_EXPECT_SPAWN_ERROR").is_some() {
+        let error = crate::process::detached::spawn_worker_detached(&command, &stderr)
+            .err()
+            .expect("a UI-limited job that denies breakaway rejects the launch");
+        std::fs::write(path.with_extension("error"), error.to_string()).unwrap();
+        return;
+    }
     if std::env::var_os("NEMO_RELAY_TEST_WINDOWS_EXPECT_BREAKAWAY_DENIED").is_some() {
         let logging = windows_worker_fixture_logging(&path.with_extension("jsonl"));
         let (child, _bootstrap) =
@@ -767,6 +774,166 @@ async fn restrictive_external_job_fixture() {
 }
 
 #[cfg(windows)]
+#[test]
+fn ui_limited_external_job_fixture() {
+    use std::ffi::{OsString, c_void};
+    use std::os::windows::ffi::OsStrExt;
+    use std::os::windows::io::{FromRawHandle, OwnedHandle};
+    use windows_sys::Win32::Foundation::{CloseHandle, HANDLE, WAIT_OBJECT_0};
+    use windows_sys::Win32::System::JobObjects::{
+        CreateJobObjectW, JOB_OBJECT_UILIMIT_HANDLES, JOBOBJECT_BASIC_UI_RESTRICTIONS,
+        JobObjectBasicUIRestrictions, SetInformationJobObject,
+    };
+    use windows_sys::Win32::System::Threading::{
+        CREATE_BREAKAWAY_FROM_JOB, CREATE_UNICODE_ENVIRONMENT, CreateProcessW,
+        DeleteProcThreadAttributeList, EXTENDED_STARTUPINFO_PRESENT, GetExitCodeProcess,
+        InitializeProcThreadAttributeList, PROC_THREAD_ATTRIBUTE_JOB_LIST, PROCESS_INFORMATION,
+        STARTUPINFOEXW, UpdateProcThreadAttribute, WaitForSingleObject,
+    };
+    let Some(path) = std::env::var_os("NEMO_RELAY_TEST_WINDOWS_UI_LIMITED_JOB") else {
+        return;
+    };
+    let path = std::path::PathBuf::from(path);
+    // SAFETY: Null arguments create a private job. The owned handle closes it once.
+    let raw_job = unsafe { CreateJobObjectW(std::ptr::null(), std::ptr::null()) };
+    assert!(!raw_job.is_null());
+    // SAFETY: CreateJobObjectW returned an owned handle.
+    let _job = unsafe { OwnedHandle::from_raw_handle(raw_job) };
+    let restrictions = JOBOBJECT_BASIC_UI_RESTRICTIONS {
+        UIRestrictionsClass: JOB_OBJECT_UILIMIT_HANDLES,
+    };
+    // SAFETY: The job handle is live and the buffer matches the information class.
+    let restricted = unsafe {
+        SetInformationJobObject(
+            raw_job,
+            JobObjectBasicUIRestrictions,
+            std::ptr::from_ref(&restrictions).cast(),
+            std::mem::size_of::<JOBOBJECT_BASIC_UI_RESTRICTIONS>() as u32,
+        )
+    };
+    assert_ne!(restricted, 0, "{}", std::io::Error::last_os_error());
+
+    let mut attribute_bytes = 0;
+    // SAFETY: A null first call obtains the required allocation size.
+    unsafe { InitializeProcThreadAttributeList(std::ptr::null_mut(), 1, 0, &mut attribute_bytes) };
+    let mut attribute_storage =
+        vec![0_usize; attribute_bytes.div_ceil(std::mem::size_of::<usize>())];
+    let attribute_list = attribute_storage.as_mut_ptr().cast::<c_void>();
+    // SAFETY: The aligned allocation has the size returned by the sizing call.
+    let initialized =
+        unsafe { InitializeProcThreadAttributeList(attribute_list, 1, 0, &mut attribute_bytes) };
+    assert_ne!(initialized, 0, "{}", std::io::Error::last_os_error());
+    let job_list = [raw_job];
+    // SAFETY: `job_list` holds the live job handle until the attribute list is deleted.
+    let updated = unsafe {
+        UpdateProcThreadAttribute(
+            attribute_list,
+            0,
+            PROC_THREAD_ATTRIBUTE_JOB_LIST as usize,
+            job_list.as_ptr().cast(),
+            std::mem::size_of::<HANDLE>(),
+            std::ptr::null_mut(),
+            std::ptr::null(),
+        )
+    };
+    assert_ne!(updated, 0, "{}", std::io::Error::last_os_error());
+
+    let exe = std::env::current_exe().unwrap();
+    let mut command_line: Vec<u16> = format!(
+        "\"{}\" --exact daemon::mcp::tests::detached_windows_worker_launcher_fixture",
+        exe.display()
+    )
+    .encode_utf16()
+    .collect();
+    command_line.push(0);
+    let mut environment = Vec::new();
+    for (key, value) in std::env::vars_os().chain([
+        (
+            OsString::from("NEMO_RELAY_TEST_WINDOWS_DETACHED_PID"),
+            path.clone().into_os_string(),
+        ),
+        (
+            OsString::from("NEMO_RELAY_TEST_WINDOWS_EXPECT_SPAWN_ERROR"),
+            OsString::from("1"),
+        ),
+    ]) {
+        environment.extend(key.encode_wide());
+        environment.push(u16::from(b'='));
+        environment.extend(value.encode_wide());
+        environment.push(0);
+    }
+    environment.push(0);
+    let mut startup = STARTUPINFOEXW::default();
+    startup.StartupInfo.cb = std::mem::size_of::<STARTUPINFOEXW>() as u32;
+    startup.lpAttributeList = attribute_list;
+    let mut process = PROCESS_INFORMATION::default();
+    // SAFETY: Every pointer references initialized storage that remains live for this call.
+    let created = unsafe {
+        CreateProcessW(
+            std::ptr::null(),
+            command_line.as_mut_ptr(),
+            std::ptr::null(),
+            std::ptr::null(),
+            0,
+            CREATE_BREAKAWAY_FROM_JOB | CREATE_UNICODE_ENVIRONMENT | EXTENDED_STARTUPINFO_PRESENT,
+            environment.as_mut_ptr().cast(),
+            std::ptr::null(),
+            (&raw const startup).cast(),
+            &mut process,
+        )
+    };
+    let create_error = std::io::Error::last_os_error();
+    // SAFETY: The attribute list was initialized above and is unused after this call.
+    unsafe { DeleteProcThreadAttributeList(attribute_list) };
+    assert_ne!(created, 0, "{create_error}");
+    // SAFETY: The process handle is owned until closed below.
+    let waited = unsafe { WaitForSingleObject(process.hProcess, 20_000) };
+    let mut exit_code = 0;
+    // SAFETY: The process handle is live and the output pointer is valid.
+    let queried = unsafe { GetExitCodeProcess(process.hProcess, &mut exit_code) };
+    // SAFETY: Both handles were returned by CreateProcessW and are unused after this point.
+    unsafe {
+        CloseHandle(process.hThread);
+        CloseHandle(process.hProcess);
+    }
+    assert_eq!(waited, WAIT_OBJECT_0);
+    assert_ne!(queried, 0);
+    assert_eq!(exit_code, 0, "the launcher fixture must exit cleanly");
+    std::fs::write(path, "ui_limited").unwrap();
+}
+
+#[cfg(windows)]
+#[tokio::test]
+async fn worker_launch_from_a_ui_limited_job_reports_the_limitation() {
+    let temp = tempfile::tempdir().unwrap();
+    let path = temp.path().join("result");
+    let output = tokio::time::timeout(
+        Duration::from_secs(30),
+        Command::new(std::env::current_exe().unwrap())
+            .args([
+                "--exact",
+                "daemon::mcp::tests::ui_limited_external_job_fixture",
+            ])
+            .env("NEMO_RELAY_TEST_WINDOWS_UI_LIMITED_JOB", &path)
+            .output(),
+    )
+    .await
+    .unwrap()
+    .unwrap();
+    assert!(
+        output.status.success(),
+        "{}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+    assert_eq!(std::fs::read_to_string(&path).unwrap(), "ui_limited");
+    let error = std::fs::read_to_string(path.with_extension("error")).unwrap();
+    assert!(
+        error.contains("UI restrictions and denies breakaway"),
+        "{error}"
+    );
+}
+
+#[cfg(windows)]
 #[tokio::test]
 async fn worker_starts_without_escaping_restrictive_external_parent_job() {
     let temp = tempfile::tempdir().unwrap();
@@ -808,10 +975,13 @@ async fn worker_starts_without_escaping_restrictive_external_parent_job() {
         direct[0]["fields"]["reason"],
         "windows_job_breakaway_denied"
     );
-    assert!(
-        lifetime_warnings("nested.jsonl").is_empty(),
-        "a launcher whose own job permits breakaway cannot observe the external job"
+    let nested = lifetime_warnings("nested.jsonl");
+    assert_eq!(
+        nested.len(),
+        1,
+        "a launcher whose own job permits breakaway warns once about the retaining ancestor"
     );
+    assert_eq!(nested[0]["fields"]["reason"], "windows_parent_job_retained");
     assert!(
         lifetime_warnings("result.failed.jsonl").is_empty(),
         "failed launches must not emit a worker lifetime warning"
