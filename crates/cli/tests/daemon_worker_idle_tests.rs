@@ -609,6 +609,18 @@ async fn cancelled_initialization_reaps_worker_and_plugin() {
     daemon.descendants_exited().await;
 }
 
+async fn gone_within(processes: &[ProcessIdentity], deadline: Instant) -> bool {
+    loop {
+        if processes.iter().all(|process| !process.present()) {
+            return true;
+        }
+        if Instant::now() >= deadline {
+            return false;
+        }
+        tokio::time::sleep(Duration::from_millis(50)).await;
+    }
+}
+
 fn plugin_child_identity(daemon: &IdleDaemon) -> ProcessIdentity {
     let marker: Value = serde_json::from_slice(
         &std::fs::read(daemon.root.path().join("gate/entered.json")).unwrap(),
@@ -644,19 +656,12 @@ async fn plugin_child_exits_after_abrupt_worker_death_without_a_launcher() {
         "the published worker tree outlives its launcher"
     );
     worker.cleanup();
-    wait_until("abrupt Relay worker exit", || {
-        (!worker.present()).then_some(())
-    })
-    .await;
-    let outcome = tokio::time::timeout(EXIT_WAIT, async {
-        wait_until("plugin and plugin child exit", || {
-            (!plugin.present() && !child.present()).then_some(())
-        })
-        .await;
-    })
-    .await;
+    let exited = gone_within(&[worker, plugin, child], Instant::now() + EXIT_WAIT).await;
     child.cleanup();
-    outcome.expect("plugin child exits after abrupt host death");
+    assert!(
+        exited,
+        "the plugin and its child exit after abrupt host death"
+    );
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
@@ -665,15 +670,16 @@ async fn plugin_child_exits_after_orderly_worker_exit_without_a_launcher() {
     let mcp = daemon.mcp().await;
     daemon.entered().await;
     let child = plugin_child_identity(&daemon);
+    let plugin = daemon.descendants[0];
+    let worker = daemon.descendants[1];
     daemon.release_gate();
     mcp.finish().await;
-    daemon.descendants_exited().await;
-    let outcome = tokio::time::timeout(EXIT_WAIT, async {
-        wait_until("plugin child exit", || (!child.present()).then_some(())).await;
-    })
-    .await;
+    let exited = gone_within(&[worker, plugin, child], Instant::now() + EXIT_WAIT).await;
     child.cleanup();
-    outcome.expect("plugin child exits after orderly worker exit");
+    assert!(
+        exited,
+        "the plugin and its child exit after orderly worker exit"
+    );
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]

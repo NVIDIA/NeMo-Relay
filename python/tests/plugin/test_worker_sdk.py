@@ -3477,6 +3477,7 @@ async def test_host_liveness_watcher_reports_eof(monkeypatch: pytest.MonkeyPatch
     read_fd, write_fd = os.pipe()
     shutdown_event = asyncio.Event()
     forced_exit = plugin_api.threading.Event()
+    monkeypatch.setattr(plugin_api, "_terminate_own_process_group", lambda: None)
     reads_started: queue.SimpleQueue[int | None] = queue.SimpleQueue()
 
     class ObservedPipe(io.FileIO):
@@ -3544,6 +3545,7 @@ async def test_host_liveness_watcher_reads_a_nonblocking_pipe_in_blocking_mode(
     os.set_blocking(read_fd, False)
     shutdown_event = asyncio.Event()
     forced_exit = plugin_api.threading.Event()
+    monkeypatch.setattr(plugin_api, "_terminate_own_process_group", lambda: None)
     monkeypatch.setattr(plugin_api.os, "_exit", lambda code: forced_exit.set())
     monkeypatch.setattr(plugin_api, "_HOST_LOSS_EXIT_DELAY_SECONDS", 0.0)
     host_lost = plugin_api.threading.Event()
