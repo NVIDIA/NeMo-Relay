@@ -2187,6 +2187,7 @@ impl<F: Future> Future for InvocationFuture<F> {
     }
 }
 
+#[must_use = "dropping an unopened gate aborts its invocation"]
 struct InvocationGate {
     start: Option<tokio::sync::oneshot::Sender<()>>,
     abort_handle: tokio::task::AbortHandle,
