@@ -346,10 +346,9 @@ fn spawn_with_handle_list(
     };
     use windows_sys::Win32::System::JobObjects::{AssignProcessToJobObject, IsProcessInJob};
     use windows_sys::Win32::System::Threading::{
-        CREATE_SUSPENDED, CREATE_UNICODE_ENVIRONMENT, CreateProcessW, EXTENDED_STARTUPINFO_PRESENT,
+        CREATE_UNICODE_ENVIRONMENT, CreateProcessW, EXTENDED_STARTUPINFO_PRESENT,
         GetCurrentProcess, InitializeProcThreadAttributeList, PROC_THREAD_ATTRIBUTE_HANDLE_LIST,
-        PROCESS_INFORMATION, ResumeThread, STARTF_USESTDHANDLES, STARTUPINFOEXW,
-        UpdateProcThreadAttribute,
+        PROCESS_INFORMATION, STARTF_USESTDHANDLES, STARTUPINFOEXW, UpdateProcThreadAttribute,
     };
 
     let job = create_job_object()?;
@@ -434,10 +433,7 @@ fn spawn_with_handle_list(
             std::ptr::null(),
             std::ptr::null(),
             1,
-            creation_flags
-                | CREATE_SUSPENDED
-                | CREATE_UNICODE_ENVIRONMENT
-                | EXTENDED_STARTUPINFO_PRESENT,
+            creation_flags | CREATE_UNICODE_ENVIRONMENT | EXTENDED_STARTUPINFO_PRESENT,
             environment.as_ptr().cast(),
             current_dir
                 .as_ref()
@@ -505,13 +501,6 @@ fn spawn_with_handle_list(
         return Err(abandon_spawned_child(
             &mut child,
             windows_spawn_error("DuplicateHandle detached child Job Object"),
-        ));
-    }
-    // SAFETY: `thread` is the suspended primary thread returned by CreateProcessW.
-    if unsafe { ResumeThread(child.thread) } == u32::MAX {
-        return Err(abandon_spawned_child(
-            &mut child,
-            windows_spawn_error("ResumeThread detached child"),
         ));
     }
     Ok(child)
