@@ -1494,17 +1494,43 @@ func TestLlmStreamCloseNativeWaitsForInFlightWork(t *testing.T) {
 }
 
 func TestLlmStreamCloseWaitsForActiveCollectorBeforeFinalizing(t *testing.T) {
+	ctx, cancel := context.WithTimeout(t.Context(), 5*time.Second)
+	defer cancel()
+	waitFor := func(signal <-chan struct{}, message string) {
+		t.Helper()
+		select {
+		case <-signal:
+		case <-ctx.Done():
+			t.Fatal(message)
+		}
+	}
+
+	providerDone := make(chan (<-chan struct{}), 1)
 	collectorStarted := make(chan struct{})
 	collectorFinished := make(chan struct{})
 	allowCollector := make(chan struct{})
 	finalizerStarted := make(chan struct{})
 	finalizerFinished := make(chan struct{})
 	allowFinalizer := make(chan struct{})
-	stream, err := LlmStreamCallExecute("collector_close_order_llm", requestForTest(makeRequest()), LLMExecutionFunc(func(nativeJSON json.RawMessage) (json.RawMessage, error) {
-		return json.RawMessage(`"data: {\"chunk\": 1}\n\ndata: [DONE]\n\n"`), nil
-	}).AsStream(), func(json.RawMessage) error {
+	stream, err := LlmStreamCallExecute("collector_close_order_llm", requestForTest(makeRequest()), func(providerCtx context.Context, _ json.RawMessage) (LLMStreamSource, error) {
+		providerDone <- providerCtx.Done()
+		// A follow-up read should end cleanly even if Close has cancelled the provider.
+		chunk := json.RawMessage(`{"chunk": 1}`)
+		return &contractSource{next: func(context.Context) (json.RawMessage, error) {
+			if chunk == nil {
+				return nil, io.EOF
+			}
+			value := chunk
+			chunk = nil
+			return value, nil
+		}}, nil
+	}, func(json.RawMessage) error {
 		close(collectorStarted)
-		<-allowCollector
+		select {
+		case <-allowCollector:
+		case <-ctx.Done():
+			return ctx.Err()
+		}
 		close(collectorFinished)
 		return nil
 	},
@@ -1515,7 +1541,11 @@ func TestLlmStreamCloseWaitsForActiveCollectorBeforeFinalizing(t *testing.T) {
 			default:
 				panic("finalizer ran before collector completed")
 			}
-			<-allowFinalizer
+			select {
+			case <-allowFinalizer:
+			case <-ctx.Done():
+				return nil, ctx.Err()
+			}
 			close(finalizerFinished)
 			return json.RawMessage(`{"partial": true}`), nil
 		},
@@ -1523,16 +1553,18 @@ func TestLlmStreamCloseWaitsForActiveCollectorBeforeFinalizing(t *testing.T) {
 	if err != nil {
 		t.Fatalf(llmStreamCallExecuteFailed, err)
 	}
+	t.Cleanup(func() { _ = stream.Close() })
 
 	nextResult := make(chan error, 1)
 	go func() {
 		_, err := stream.Next()
 		nextResult <- err
 	}()
-	<-collectorStarted
+	waitFor(collectorStarted, "collector did not start")
 	closeResults := make(chan error, 2)
 	go func() { closeResults <- stream.Close() }()
 	go func() { closeResults <- stream.Close() }()
+	waitFor(<-providerDone, "Close did not cancel the provider while the collector was active")
 	select {
 	case err := <-closeResults:
 		t.Fatalf("Close returned before collector completed: %v", err)
@@ -1548,15 +1580,15 @@ func TestLlmStreamCloseWaitsForActiveCollectorBeforeFinalizing(t *testing.T) {
 	if err := <-nextResult; err != nil {
 		t.Fatalf("Next failed: %v", err)
 	}
-	<-finalizerStarted
+	waitFor(finalizerStarted, "finalizer did not start after the collector completed")
 	select {
 	case err := <-closeResults:
 		t.Fatalf("Close returned before finalizer completed: %v", err)
 	default:
 	}
 	close(allowFinalizer)
-	<-finalizerFinished
-	for range []struct{}{{}, {}} {
+	waitFor(finalizerFinished, "finalizer did not finish after it was released")
+	for range 2 {
 		if err := <-closeResults; err != nil {
 			t.Fatalf("Close failed: %v", err)
 		}
