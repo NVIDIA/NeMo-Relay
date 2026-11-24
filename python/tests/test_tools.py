@@ -801,7 +801,7 @@ class TestToolIntercepts:
                 {"data": {"value": boundary["data"]["value"] + "x"}},
                 {"data": {"value": "\0" * 3_000}},
             ):
-                with pytest.raises(ValueError, match="invalid application execution context"):
+                with pytest.raises(ValueError, match="execution context"):
                     await tools.execute("over-budget", {}, execute, execution_context=supplied)
                 assert callback_calls == []
             arguments = {"value": "x" * 20_000}
@@ -842,6 +842,82 @@ class TestToolIntercepts:
             )
         assert 0 < CountedList.expanded_visits <= 16_384
         assert callback_calls == []
+
+    @pytest.mark.parametrize("invalid", [float("nan"), float("inf"), -float("inf")])
+    async def test_context_conversion_refuses_nonfinite_numbers_before_callbacks(self, invalid) -> None:
+        calls = []
+
+        async def observe(context, next_call):
+            calls.append("intercept")
+            downstream = await next_call(context.args)
+            return ToolExecutionInterceptOutcome(downstream.result)
+
+        def execute(arguments):
+            calls.append("tool")
+            return ToolExecutionResult(arguments)
+
+        intercepts.register_tool_execution("finite-context-conversion", 1, observe)
+        try:
+            with pytest.raises(ValueError, match="invalid application execution context"):
+                await tools.execute("invalid-number", {}, execute, execution_context={"data": {"value": invalid}})
+            assert calls == []
+            await tools.execute("valid-after-number", {}, execute, execution_context={"data": {"value": None}})
+            assert calls == ["intercept", "tool"]
+        finally:
+            assert intercepts.deregister_tool_execution("finite-context-conversion")
+
+    @pytest.mark.parametrize("invalid", [b"not-json", bytearray(b"not-json")])
+    async def test_context_conversion_retains_binary_value_refusal(self, invalid) -> None:
+        calls = []
+        with pytest.raises(ValueError, match="invalid application execution context"):
+            await tools.execute(
+                "binary-context",
+                {},
+                lambda arguments: calls.append(arguments) or ToolExecutionResult(arguments),
+                execution_context={"data": {"value": invalid}},
+            )
+        assert calls == []
+
+    async def test_context_conversion_snapshots_each_sequence_value_once(self) -> None:
+        class ChangingList(list):
+            reads = 0
+
+            def __getitem__(self, index):
+                self.reads += 1
+                return None if self.reads == 1 else [None] * 20_000
+
+        class UnreadLargeList(list):
+            def __getitem__(self, index):
+                raise AssertionError("oversized child must be refused before reading its items")
+
+        source = ChangingList([None])
+        seen = []
+
+        async def observe(context, next_call):
+            seen.append(context.execution_context)
+            downstream = await next_call(context.args)
+            return ToolExecutionInterceptOutcome(downstream.result)
+
+        intercepts.register_tool_execution("single-pass-context-conversion", 1, observe)
+        try:
+            await tools.execute(
+                "changing-context",
+                {},
+                lambda value: ToolExecutionResult(value),
+                execution_context={"data": {"value": source}},
+            )
+            assert source.reads == 1
+            assert seen == [{"data": {"value": [None]}}]
+            with pytest.raises(ValueError, match="16384 serialized bytes"):
+                await tools.execute(
+                    "oversized-child",
+                    {},
+                    lambda _: pytest.fail("tool must stay uncalled"),
+                    execution_context={"data": {"value": [UnreadLargeList([None] * 20_000)]}},
+                )
+            assert len(seen) == 1
+        finally:
+            assert intercepts.deregister_tool_execution("single-pass-context-conversion")
 
     async def test_execution_intercept_tool_call_id_is_none_when_absent(self) -> None:
         seen = {}

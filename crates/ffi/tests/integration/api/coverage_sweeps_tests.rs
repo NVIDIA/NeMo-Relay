@@ -298,8 +298,11 @@ fn test_ffi_tool_and_llm_parent_utf8_and_shape_paths() {
                 None,
                 ptr::null_mut(),
                 None,
+                std::ptr::null(),
                 ptr::null(),
-                &mut out,
+                0,
+                std::ptr::null(),
+                &mut out
             ),
             NemoRelayStatus::InvalidJson
         );
@@ -314,7 +317,8 @@ fn test_ffi_tool_and_llm_parent_utf8_and_shape_paths() {
             nemo_relay_llm_stream_call_execute(
                 llm_name.as_ptr(),
                 invalid_shape.as_ptr(),
-                llm_exec_cb,
+                Some(llm_exec_cb),
+                None,
                 ptr::null_mut(),
                 None,
                 None,
@@ -330,8 +334,11 @@ fn test_ffi_tool_and_llm_parent_utf8_and_shape_paths() {
                 None,
                 ptr::null_mut(),
                 None,
+                std::ptr::null(),
                 ptr::null(),
-                &mut stream,
+                0,
+                std::ptr::null(),
+                &mut stream
             ),
             NemoRelayStatus::InvalidJson
         );
@@ -504,9 +511,10 @@ fn test_ffi_global_registry_invalid_utf8_name_sweep() {
             nemo_relay_register_llm_stream_execution_intercept(
                 invalid,
                 1,
-                llm_exec_intercept_cb,
-                ptr::null_mut(),
+                Some(llm_exec_intercept_cb),
                 None,
+                ptr::null_mut(),
+                None
             ),
             NemoRelayStatus::InvalidUtf8
         );
@@ -1114,13 +1122,17 @@ fn test_ffi_adaptive_and_observability_entry_points_from_integration_binary() {
         let happy_filename = cstring("happy-events.jsonl");
         let happy_name = cstring(&unique_name("ffi_atof_happy"));
         let mut happy_atof = ptr::null_mut();
+        let exporter_config = cstring(
+            &json!({
+                "type": "file",
+                "output_directory": happy_dir.to_str().unwrap(),
+                "mode": append.to_str().unwrap(),
+                "filename": happy_filename.to_str().unwrap(),
+            })
+            .to_string(),
+        );
         assert_status!(
-            nemo_relay_atof_exporter_create(
-                happy_dir.as_ptr(),
-                append.as_ptr(),
-                happy_filename.as_ptr(),
-                &mut happy_atof,
-            ),
+            nemo_relay_atof_exporter_create(exporter_config.as_ptr(), &mut happy_atof),
             NemoRelayStatus::Ok
         );
         assert!(!happy_atof.is_null());
@@ -1155,36 +1167,35 @@ fn test_ffi_adaptive_and_observability_entry_points_from_integration_binary() {
         let invalid_utf8 = [0xffu8, 0];
         let invalid = invalid_utf8.as_ptr() as *const c_char;
         let mut atof = ptr::null_mut();
+        let exporter_config = cstring(
+            &json!({
+                "type": "file",
+                "mode": append.to_str().unwrap(),
+                "filename": filename.to_str().unwrap(),
+            })
+            .to_string(),
+        );
         assert_status!(
-            nemo_relay_atof_exporter_create(
-                ptr::null(),
-                append.as_ptr(),
-                filename.as_ptr(),
-                ptr::null_mut(),
-            ),
+            nemo_relay_atof_exporter_create(exporter_config.as_ptr(), ptr::null_mut()),
             NemoRelayStatus::NullPointer
         );
-        assert_status!(
-            nemo_relay_atof_exporter_create(
-                ptr::null(),
-                bad_mode.as_ptr(),
-                filename.as_ptr(),
-                &mut atof,
-            ),
-            NemoRelayStatus::InvalidArg
+        let exporter_config = cstring(
+            &json!({
+                "type": "file",
+                "mode": bad_mode.to_str().unwrap(),
+                "filename": filename.to_str().unwrap(),
+            })
+            .to_string(),
         );
         assert_status!(
-            nemo_relay_atof_exporter_create(invalid, append.as_ptr(), filename.as_ptr(), &mut atof),
+            nemo_relay_atof_exporter_create(exporter_config.as_ptr(), &mut atof),
+            NemoRelayStatus::InvalidJson
+        );
+        assert_status!(
+            nemo_relay_atof_exporter_create(invalid, &mut atof),
             NemoRelayStatus::InvalidUtf8
         );
-        assert_status!(
-            nemo_relay_atof_exporter_create(ptr::null(), invalid, filename.as_ptr(), &mut atof),
-            NemoRelayStatus::InvalidUtf8
-        );
-        assert_status!(
-            nemo_relay_atof_exporter_create(ptr::null(), append.as_ptr(), invalid, &mut atof),
-            NemoRelayStatus::InvalidUtf8
-        );
+
         assert_status!(
             nemo_relay_atof_exporter_register(ptr::null(), filename.as_ptr()),
             NemoRelayStatus::NullPointer
@@ -1290,40 +1301,46 @@ fn test_ffi_lifecycle_validation_paths_from_integration_binary() {
 
         let event_name = &fixtures.event_name;
         assert_status!(
-            api::nemo_relay_event_v2(
+            api::nemo_relay_event(
                 invalid,
                 ptr::null(),
                 ptr::null(),
                 ptr::null(),
                 ptr::null(),
                 ptr::null(),
-                ptr::null(),
+                std::ptr::null(),
+                std::ptr::null(),
+                ptr::null()
             ),
             NemoRelayStatus::InvalidUtf8
         );
         for (data, schema, metadata) in fixtures.event_json_cases() {
             assert_status!(
-                api::nemo_relay_event_v2(
+                api::nemo_relay_event(
                     event_name.as_ptr(),
                     scope,
                     data,
                     schema,
                     metadata,
                     ptr::null(),
-                    ptr::null(),
+                    std::ptr::null(),
+                    std::ptr::null(),
+                    ptr::null()
                 ),
                 NemoRelayStatus::InvalidJson
             );
         }
         assert_status!(
-            api::nemo_relay_event_v2(
+            api::nemo_relay_event(
                 event_name.as_ptr(),
                 scope,
                 ptr::null(),
                 ptr::null(),
                 ptr::null(),
                 ptr::null(),
-                ptr::from_ref(&invalid_timestamp),
+                std::ptr::null(),
+                std::ptr::null(),
+                ptr::from_ref(&invalid_timestamp)
             ),
             NemoRelayStatus::InvalidArg
         );
@@ -1527,8 +1544,10 @@ fn test_ffi_lifecycle_validation_paths_from_integration_binary() {
                     data,
                     metadata,
                     ptr::null(),
+                    std::ptr::null(),
+                    std::ptr::null(),
                     ptr::null(),
-                    &mut llm,
+                    &mut llm
                 ),
                 NemoRelayStatus::InvalidJson
             );
@@ -1542,8 +1561,10 @@ fn test_ffi_lifecycle_validation_paths_from_integration_binary() {
                 ptr::null(),
                 ptr::null(),
                 ptr::null(),
+                std::ptr::null(),
+                std::ptr::null(),
                 ptr::null(),
-                &mut llm,
+                &mut llm
             ),
             NemoRelayStatus::Ok
         );
@@ -1553,7 +1574,9 @@ fn test_ffi_lifecycle_validation_paths_from_integration_binary() {
                 llm_response.as_ptr(),
                 malformed_json.as_ptr(),
                 ptr::null(),
-                ptr::null(),
+                std::ptr::null(),
+                std::ptr::null(),
+                ptr::null()
             ),
             NemoRelayStatus::InvalidJson
         );
@@ -1563,7 +1586,9 @@ fn test_ffi_lifecycle_validation_paths_from_integration_binary() {
                 llm_response.as_ptr(),
                 ptr::null(),
                 ptr::null(),
-                ptr::null(),
+                std::ptr::null(),
+                std::ptr::null(),
+                ptr::null()
             ),
             NemoRelayStatus::Ok
         );
@@ -1573,7 +1598,9 @@ fn test_ffi_lifecycle_validation_paths_from_integration_binary() {
                 llm_response.as_ptr(),
                 ptr::null(),
                 ptr::null(),
-                ptr::null(),
+                std::ptr::null(),
+                std::ptr::null(),
+                ptr::null()
             ),
             NemoRelayStatus::Ok
         );
@@ -1649,11 +1676,12 @@ fn test_ffi_otel_projection_validation_from_integration_binary() {
         macro_rules! assert_projection_status {
             ($projection:expr, $excluded:expr, $mappings:expr, $prefixes:expr, $expected:expr) => {
                 assert_status!(
-                    nemo_relay_otel_subscriber_create_with_projection_options_v2(
+                    nemo_relay_otel_subscriber_create(
                         otel_type.as_ptr(),
                         transport.as_ptr(),
                         endpoint.as_ptr(),
                         headers.as_ptr(),
+                        ptr::null(),
                         resources.as_ptr(),
                         service_name.as_ptr(),
                         service_namespace.as_ptr(),
@@ -1664,7 +1692,14 @@ fn test_ffi_otel_projection_validation_from_integration_binary() {
                         $excluded,
                         $mappings,
                         $prefixes,
-                        &mut subscriber,
+                        ptr::null(),
+                        60_000,
+                        ptr::null(),
+                        ptr::null(),
+                        ptr::null(),
+                        ptr::null(),
+                        ptr::null(),
+                        &mut subscriber
                     ),
                     $expected
                 )
@@ -1818,11 +1853,11 @@ fn test_ffi_observability_component_and_atof_validation_from_integration_binary(
         let invalid_atof_config = cstring(r#"{"mode":17}"#);
         let mut exporter = ptr::null_mut();
         assert_status!(
-            nemo_relay_atof_exporter_create_from_json(valid_atof_config.as_ptr(), ptr::null_mut(),),
+            nemo_relay_atof_exporter_create(valid_atof_config.as_ptr(), ptr::null_mut(),),
             NemoRelayStatus::NullPointer
         );
         assert_status!(
-            nemo_relay_atof_exporter_create_from_json(invalid_atof_config.as_ptr(), &mut exporter),
+            nemo_relay_atof_exporter_create(invalid_atof_config.as_ptr(), &mut exporter),
             NemoRelayStatus::InvalidJson
         );
 
@@ -1830,13 +1865,17 @@ fn test_ffi_observability_component_and_atof_validation_from_integration_binary(
         let directory = cstring(&directory.to_string_lossy());
         let mode = cstring("overwrite");
         let filename = cstring("events.jsonl");
+        let exporter_config = cstring(
+            &json!({
+                "type": "file",
+                "output_directory": directory.to_str().unwrap(),
+                "mode": mode.to_str().unwrap(),
+                "filename": filename.to_str().unwrap(),
+            })
+            .to_string(),
+        );
         assert_status!(
-            nemo_relay_atof_exporter_create(
-                directory.as_ptr(),
-                mode.as_ptr(),
-                filename.as_ptr(),
-                &mut exporter,
-            ),
+            nemo_relay_atof_exporter_create(exporter_config.as_ptr(), &mut exporter),
             NemoRelayStatus::Ok
         );
         assert_status!(
@@ -1894,6 +1933,7 @@ fn test_ffi_typed_otel_signal_options_from_integration_binary() {
                     transport.as_ptr(),
                     log_endpoint.as_ptr(),
                     headers.as_ptr(),
+                    ptr::null(),
                     resources.as_ptr(),
                     service_name.as_ptr(),
                     service_namespace.as_ptr(),
@@ -1905,6 +1945,7 @@ fn test_ffi_typed_otel_signal_options_from_integration_binary() {
                     16,
                     10,
                     60_000,
+                    ptr::null(),
                     out,
                 )
             },
@@ -1929,6 +1970,7 @@ fn test_ffi_typed_otel_signal_options_from_integration_binary() {
                     transport.as_ptr(),
                     metric_endpoint.as_ptr(),
                     headers.as_ptr(),
+                    ptr::null(),
                     resources.as_ptr(),
                     service_name.as_ptr(),
                     service_namespace.as_ptr(),
@@ -1939,6 +1981,7 @@ fn test_ffi_typed_otel_signal_options_from_integration_binary() {
                     temporality.as_ptr(),
                     256,
                     128,
+                    ptr::null(),
                     out,
                 )
             },
@@ -1983,24 +2026,30 @@ fn test_ffi_otel_file_sink_subscriber_create_covers_success_and_rejection() {
     unsafe {
         let mut subscriber = ptr::null_mut();
         assert_status!(
-            nemo_relay_otel_subscriber_create_file_sink(
+            nemo_relay_otel_subscriber_create(
                 otel_type.as_ptr(),
-                output_directory.as_ptr(),
-                filename.as_ptr(),
-                format.as_ptr(),
-                mode.as_ptr(),
+                ptr::null(),
+                ptr::null(),
+                ptr::null(),
+                ptr::null(),
                 resource_attributes.as_ptr(),
                 service_name.as_ptr(),
                 service_namespace.as_ptr(),
                 service_version.as_ptr(),
                 instrumentation_scope.as_ptr(),
+                0,
                 ptr::null(),
                 ptr::null(),
                 ptr::null(),
                 ptr::null(),
                 ptr::null(),
                 60_000,
-                &mut subscriber,
+                ptr::null(),
+                output_directory.as_ptr(),
+                filename.as_ptr(),
+                format.as_ptr(),
+                mode.as_ptr(),
+                &mut subscriber
             ),
             NemoRelayStatus::Ok
         );
@@ -2018,9 +2067,8 @@ fn test_ffi_otel_file_sink_subscriber_create_covers_success_and_rejection() {
 
         // A null `out` is rejected before anything is parsed.
         assert_status!(
-            nemo_relay_otel_subscriber_create_file_sink(
+            nemo_relay_otel_subscriber_create(
                 otel_type.as_ptr(),
-                output_directory.as_ptr(),
                 ptr::null(),
                 ptr::null(),
                 ptr::null(),
@@ -2029,13 +2077,20 @@ fn test_ffi_otel_file_sink_subscriber_create_covers_success_and_rejection() {
                 ptr::null(),
                 ptr::null(),
                 ptr::null(),
+                ptr::null(),
+                0,
                 ptr::null(),
                 ptr::null(),
                 ptr::null(),
                 ptr::null(),
                 ptr::null(),
                 60_000,
-                ptr::null_mut(),
+                ptr::null(),
+                output_directory.as_ptr(),
+                ptr::null(),
+                ptr::null(),
+                ptr::null(),
+                ptr::null_mut()
             ),
             NemoRelayStatus::NullPointer
         );
@@ -2046,10 +2101,8 @@ fn test_ffi_otel_file_sink_subscriber_create_covers_success_and_rejection() {
             (output_directory.clone(), cstring("../escape.jsonl")),
         ] {
             assert_status!(
-                nemo_relay_otel_subscriber_create_file_sink(
+                nemo_relay_otel_subscriber_create(
                     otel_type.as_ptr(),
-                    directory_arg.as_ptr(),
-                    filename_arg.as_ptr(),
                     ptr::null(),
                     ptr::null(),
                     ptr::null(),
@@ -2057,13 +2110,21 @@ fn test_ffi_otel_file_sink_subscriber_create_covers_success_and_rejection() {
                     ptr::null(),
                     ptr::null(),
                     ptr::null(),
+                    ptr::null(),
+                    ptr::null(),
+                    0,
                     ptr::null(),
                     ptr::null(),
                     ptr::null(),
                     ptr::null(),
                     ptr::null(),
                     60_000,
-                    &mut rejected,
+                    ptr::null(),
+                    directory_arg.as_ptr(),
+                    filename_arg.as_ptr(),
+                    ptr::null(),
+                    ptr::null(),
+                    &mut rejected
                 ),
                 NemoRelayStatus::InvalidArg
             );

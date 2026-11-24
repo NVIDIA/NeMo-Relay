@@ -120,7 +120,7 @@ func runGlobalLLMGuardrailShorthandChecks(t *testing.T, output func() json.RawMe
 	t.Helper()
 
 	if err := guardrails.RegisterLlmSanitizeRequest("guardrails_llm_req", 1,
-		func(request nemo_relay.LLMRequestDTO, _ nemo_relay.LLMSanitizeRequestContext) (nemo_relay.LLMRequestDTO, bool) {
+		func(request nemo_relay.LLMRequest, _ nemo_relay.LLMSanitizeRequestContext) (nemo_relay.LLMRequest, bool) {
 			var payload map[string]interface{}
 			_ = json.Unmarshal(request.Content, &payload)
 			payload["request_sanitized"] = true
@@ -159,10 +159,9 @@ func runGlobalLLMGuardrailShorthandChecks(t *testing.T, output func() json.RawMe
 		_ = guardrails.DeregisterLlmConditionalExecution("guardrails_llm_cond")
 	})
 
-	if _, err := nemo_relay.LlmCallExecute("guardrails_llm", makeRequest(),
-		func(nativeJSON json.RawMessage) (json.RawMessage, error) {
-			return json.RawMessage(`{"ok": true}`), nil
-		},
+	if _, err := nemo_relay.LlmCallExecute("guardrails_llm", requestForTest(makeRequest()), func(nativeJSON json.RawMessage) (json.RawMessage, error) {
+		return json.RawMessage(`{"ok": true}`), nil
+	},
 	); err != nil {
 		t.Fatalf("LlmCallExecute failed: %v", err)
 	}
@@ -215,7 +214,7 @@ func runScopeLocalLLMGuardrailShorthandChecks(t *testing.T, scopeUUID string) {
 	t.Helper()
 
 	if err := guardrails.ScopeRegisterLlmSanitizeRequest(scopeUUID, "guardrails_scope_llm_req", 1,
-		func(request nemo_relay.LLMRequestDTO, _ nemo_relay.LLMSanitizeRequestContext) (nemo_relay.LLMRequestDTO, bool) {
+		func(request nemo_relay.LLMRequest, _ nemo_relay.LLMSanitizeRequestContext) (nemo_relay.LLMRequest, bool) {
 			return request, false
 		},
 	); err != nil {
@@ -234,10 +233,9 @@ func runScopeLocalLLMGuardrailShorthandChecks(t *testing.T, scopeUUID string) {
 		t.Fatalf("ScopeRegisterLlmConditionalExecution failed: %v", err)
 	}
 
-	if _, err := nemo_relay.LlmCallExecute("guardrails_scope_llm", makeRequest(),
-		func(nativeJSON json.RawMessage) (json.RawMessage, error) {
-			return json.RawMessage(`{"ok": true}`), nil
-		},
+	if _, err := nemo_relay.LlmCallExecute("guardrails_scope_llm", requestForTest(makeRequest()), func(nativeJSON json.RawMessage) (json.RawMessage, error) {
+		return json.RawMessage(`{"ok": true}`), nil
+	},
 	); err != nil {
 		t.Fatalf("LlmCallExecute failed: %v", err)
 	}

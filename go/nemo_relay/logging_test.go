@@ -54,8 +54,7 @@ func TestBindingLoggingEnvironment(t *testing.T) {
 			}); err != nil {
 				t.Fatalf("RegisterSubscriber failed: %v", err)
 			}
-			if _, err := LlmCallExecute("subscriber_panic_logged_llm", makeRequest(),
-				func(json.RawMessage) (json.RawMessage, error) { return json.RawMessage(`{}`), nil }); err != nil {
+			if _, err := LlmCallExecute("subscriber_panic_logged_llm", requestForTest(makeRequest()), func(json.RawMessage) (json.RawMessage, error) { return json.RawMessage(`{}`), nil }); err != nil {
 				t.Fatalf("LlmCallExecute failed: %v", err)
 			}
 			if err := FlushSubscribers(); err != nil {

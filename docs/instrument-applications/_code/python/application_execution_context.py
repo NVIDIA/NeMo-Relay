@@ -22,7 +22,11 @@ def _approval_has_expected_shape(approval) -> bool:
 async def execute_after_application_approval(
     name, args, receipt, implementation, *, validate_existing_approval
 ) -> nemo_relay.ToolExecutionResult[nemo_relay.Json]:
-    """Run synchronous host verification initially and immediately before the effect."""
+    """Verify approval before dispatch and again at execution callback entry.
+
+    If implementation waits before committing an effect, the application must
+    recheck approval at that boundary when its policy requires continued validity.
+    """
     # The application must verify the real receipt's owner, exact operation,
     # validity and current policy before returning its own approval assertion.
     reviewed = validate_existing_approval(receipt, name, args)

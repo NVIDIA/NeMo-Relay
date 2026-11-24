@@ -10,6 +10,19 @@
 //! [`crate::convert::nemo_relay_string_free`], and all handles must be freed
 //! with their corresponding `nemo_relay_*_free` function.
 
+/// Built-in codec selector for OpenAI Chat Completions.
+pub const NEMO_RELAY_CODEC_OPENAI_CHAT: u32 = 0;
+/// Built-in codec selector for OpenAI Responses.
+pub const NEMO_RELAY_CODEC_OPENAI_RESPONSES: u32 = 1;
+/// Built-in codec selector for Anthropic Messages.
+pub const NEMO_RELAY_CODEC_ANTHROPIC_MESSAGES: u32 = 2;
+/// Built-in codec selector for Gemini generateContent.
+pub const NEMO_RELAY_CODEC_GEMINI_GENERATE_CONTENT: u32 = 3;
+/// Built-in codec selector for OCI GenAI chat.
+pub const NEMO_RELAY_CODEC_OCI_GENAI: u32 = 4;
+/// Select caller-supplied codec callbacks.
+pub const NEMO_RELAY_CODEC_CUSTOM: u32 = u32::MAX;
+
 use libc::c_char;
 use nemo_relay_plugin_host::PluginRegistrationContext;
 use nemo_relay_runtime::api::runtime::{ScopeStackHandle, ThreadScopeStackBinding};
@@ -32,7 +45,7 @@ use nemo_relay_types::codec::traits::{LlmCodec, LlmResponseCodec};
 use crate::convert::{json_to_c_string, str_to_c_string};
 use crate::error::set_last_error;
 #[cfg(test)]
-use crate::{api, convert};
+use crate::{api, convert, error};
 
 // ---------------------------------------------------------------------------
 // Opaque handle wrappers — each wraps a core type in a Box on the heap.
@@ -108,15 +121,22 @@ pub struct FfiPluginContext<'a>(pub *mut (dyn PluginRegistrationContext + 'a));
 
 /// Opaque handle carrying both request and response codec trait objects.
 ///
-/// Created by `nemo_relay_openai_chat_codec_new` (and similar constructors).
-/// Freed by `nemo_relay_codec_free`. The handle carries two `Arc`s pointing
-/// to the same underlying codec instance: one for the `LlmCodec` trait and
-/// one for the `LlmResponseCodec` trait.
+/// Created by `nemo_relay_codec_new`.
+/// Free with `nemo_relay_codec_free`. Runtime calls keep their own references
+/// to request and response codecs for as long as they need them.
 pub struct FfiCodecHandle {
-    #[allow(dead_code)]
-    pub(crate) codec: std::sync::Arc<dyn LlmCodec>,
-    pub(crate) response_codec: std::sync::Arc<dyn LlmResponseCodec>,
+    /// Optional request codec.
+    pub codec: Option<std::sync::Arc<dyn nemo_relay_types::codec::traits::LlmCodec>>,
+    /// Optional response codec.
+    pub response_codec:
+        Option<std::sync::Arc<dyn nemo_relay_types::codec::traits::LlmResponseCodec>>,
 }
+
+/// Optimization recorder borrowed during an execution callback or independently
+/// retained from a callback or manual LLM handle.
+pub struct FfiLlmOptimizationRecorder(
+    pub nemo_relay_runtime::api::optimization::LlmOptimizationRecorder,
+);
 
 // ---------------------------------------------------------------------------
 // Enums exposed to C
@@ -404,8 +424,7 @@ pub unsafe extern "C" fn nemo_relay_atof_exporter_free(ptr: *mut FfiAtofExporter
 /// an OpenTelemetry subscriber constructor.
 ///
 /// # Safety
-/// `ptr` must be a valid pointer returned by `nemo_relay_otel_subscriber_create` or
-/// `nemo_relay_otel_subscriber_create_with_projection_options_v4`, or null.
+/// `ptr` must be a valid pointer returned by `nemo_relay_otel_subscriber_create`, or null.
 #[unsafe(no_mangle)]
 pub unsafe extern "C" fn nemo_relay_otel_subscriber_free(ptr: *mut FfiOpenTelemetrySubscriber) {
     if !ptr.is_null() {
@@ -417,8 +436,7 @@ pub unsafe extern "C" fn nemo_relay_otel_subscriber_free(ptr: *mut FfiOpenTeleme
 ///
 /// # Safety
 /// `ptr` must be a valid pointer returned by
-/// `nemo_relay_otel_log_subscriber_create` or
-/// `nemo_relay_otel_log_subscriber_create_v2`, or null.
+/// `nemo_relay_otel_log_subscriber_create`, or null.
 #[unsafe(no_mangle)]
 pub unsafe extern "C" fn nemo_relay_otel_log_subscriber_free(
     ptr: *mut FfiOpenTelemetryLogSubscriber,
@@ -432,8 +450,7 @@ pub unsafe extern "C" fn nemo_relay_otel_log_subscriber_free(
 ///
 /// # Safety
 /// `ptr` must be a valid pointer returned by
-/// `nemo_relay_otel_metric_subscriber_create` or
-/// `nemo_relay_otel_metric_subscriber_create_v2`, or null.
+/// `nemo_relay_otel_metric_subscriber_create`, or null.
 #[unsafe(no_mangle)]
 pub unsafe extern "C" fn nemo_relay_otel_metric_subscriber_free(
     ptr: *mut FfiOpenTelemetryMetricSubscriber,
@@ -483,12 +500,11 @@ pub unsafe extern "C" fn nemo_relay_plugin_host_activation_free(
     }
 }
 
-/// Free a codec handle previously returned by one of the codec constructor
-/// functions (`nemo_relay_openai_chat_codec_new`, etc.).
+/// Free a codec handle previously returned by `nemo_relay_codec_new`.
 ///
 /// # Safety
-/// `handle` must be a valid pointer returned by one of the codec constructor
-/// functions, or null. Double-free is undefined behavior.
+/// `handle` must be an owned pointer returned by `nemo_relay_codec_new` or
+/// `nemo_relay_codec_clone`, or null. Double-free is undefined behavior.
 #[unsafe(no_mangle)]
 pub unsafe extern "C" fn nemo_relay_codec_free(handle: *mut FfiCodecHandle) {
     if !handle.is_null() {
@@ -720,6 +736,162 @@ pub unsafe extern "C" fn nemo_relay_llm_handle_parent_uuid(
     }
 }
 
+/// Return the scope handle start time as an RFC 3339 string.
+/// Caller must free a non-null result with `nemo_relay_string_free`.
+/// Returns null if `ptr` is null.
+///
+/// # Safety
+/// `ptr` must be a valid `FfiScopeHandle` pointer or null.
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn nemo_relay_scope_handle_started_at(
+    ptr: *const FfiScopeHandle,
+) -> *mut c_char {
+    if ptr.is_null() {
+        return std::ptr::null_mut();
+    }
+    str_to_c_string(&unsafe { &*ptr }.0.started_at.to_rfc3339())
+}
+
+/// Return the tool handle start time as an RFC 3339 string.
+/// Caller must free a non-null result with `nemo_relay_string_free`.
+/// Returns null if `ptr` is null.
+///
+/// # Safety
+/// `ptr` must be a valid `FfiToolHandle` pointer or null.
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn nemo_relay_tool_handle_started_at(
+    ptr: *const FfiToolHandle,
+) -> *mut c_char {
+    if ptr.is_null() {
+        return std::ptr::null_mut();
+    }
+    str_to_c_string(&unsafe { &*ptr }.0.started_at.to_rfc3339())
+}
+
+/// Return the tool handle data as JSON, or null if absent.
+/// Caller must free a non-null result with `nemo_relay_string_free`.
+/// Returns null if `ptr` is null.
+///
+/// # Safety
+/// `ptr` must be a valid `FfiToolHandle` pointer or null.
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn nemo_relay_tool_handle_data(ptr: *const FfiToolHandle) -> *mut c_char {
+    if ptr.is_null() {
+        return std::ptr::null_mut();
+    }
+    unsafe { &*ptr }
+        .0
+        .data
+        .as_ref()
+        .map_or(std::ptr::null_mut(), json_to_c_string)
+}
+
+/// Return the tool handle metadata as JSON, or null if absent.
+/// Caller must free a non-null result with `nemo_relay_string_free`.
+/// Returns null if `ptr` is null.
+///
+/// # Safety
+/// `ptr` must be a valid `FfiToolHandle` pointer or null.
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn nemo_relay_tool_handle_metadata(ptr: *const FfiToolHandle) -> *mut c_char {
+    if ptr.is_null() {
+        return std::ptr::null_mut();
+    }
+    unsafe { &*ptr }
+        .0
+        .metadata
+        .as_ref()
+        .map_or(std::ptr::null_mut(), json_to_c_string)
+}
+
+/// Return the tool handle tool call ID as a string, or null if absent.
+/// Caller must free a non-null result with `nemo_relay_string_free`.
+/// Returns null if `ptr` is null.
+///
+/// # Safety
+/// `ptr` must be a valid `FfiToolHandle` pointer or null.
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn nemo_relay_tool_handle_tool_call_id(
+    ptr: *const FfiToolHandle,
+) -> *mut c_char {
+    if ptr.is_null() {
+        return std::ptr::null_mut();
+    }
+    unsafe { &*ptr }
+        .0
+        .tool_call_id
+        .as_deref()
+        .map_or(std::ptr::null_mut(), str_to_c_string)
+}
+
+/// Return the LLM handle start time as an RFC 3339 string.
+/// Caller must free a non-null result with `nemo_relay_string_free`.
+/// Returns null if `ptr` is null.
+///
+/// # Safety
+/// `ptr` must be a valid `FfiLLMHandle` pointer or null.
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn nemo_relay_llm_handle_started_at(ptr: *const FfiLLMHandle) -> *mut c_char {
+    if ptr.is_null() {
+        return std::ptr::null_mut();
+    }
+    str_to_c_string(&unsafe { &*ptr }.0.started_at.to_rfc3339())
+}
+
+/// Return the LLM handle data as JSON, or null if absent.
+/// Caller must free a non-null result with `nemo_relay_string_free`.
+/// Returns null if `ptr` is null.
+///
+/// # Safety
+/// `ptr` must be a valid `FfiLLMHandle` pointer or null.
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn nemo_relay_llm_handle_data(ptr: *const FfiLLMHandle) -> *mut c_char {
+    if ptr.is_null() {
+        return std::ptr::null_mut();
+    }
+    unsafe { &*ptr }
+        .0
+        .data
+        .as_ref()
+        .map_or(std::ptr::null_mut(), json_to_c_string)
+}
+
+/// Return the LLM handle metadata as JSON, or null if absent.
+/// Caller must free a non-null result with `nemo_relay_string_free`.
+/// Returns null if `ptr` is null.
+///
+/// # Safety
+/// `ptr` must be a valid `FfiLLMHandle` pointer or null.
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn nemo_relay_llm_handle_metadata(ptr: *const FfiLLMHandle) -> *mut c_char {
+    if ptr.is_null() {
+        return std::ptr::null_mut();
+    }
+    unsafe { &*ptr }
+        .0
+        .metadata
+        .as_ref()
+        .map_or(std::ptr::null_mut(), json_to_c_string)
+}
+
+/// Return the LLM handle model name as a string, or null if absent.
+/// Caller must free a non-null result with `nemo_relay_string_free`.
+/// Returns null if `ptr` is null.
+///
+/// # Safety
+/// `ptr` must be a valid `FfiLLMHandle` pointer or null.
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn nemo_relay_llm_handle_model_name(ptr: *const FfiLLMHandle) -> *mut c_char {
+    if ptr.is_null() {
+        return std::ptr::null_mut();
+    }
+    unsafe { &*ptr }
+        .0
+        .model_name
+        .as_deref()
+        .map_or(std::ptr::null_mut(), str_to_c_string)
+}
+
 // ---------------------------------------------------------------------------
 // LlmRequest construction + accessors
 // ---------------------------------------------------------------------------
@@ -739,11 +911,20 @@ pub unsafe extern "C" fn nemo_relay_llm_request_new(
     headers_json: *const c_char,
     content_json: *const c_char,
 ) -> *mut FfiLLMRequest {
-    let headers = match crate::convert::c_str_to_json(headers_json) {
-        Some(Json::Object(m)) => m,
-        _ => serde_json::Map::new(),
+    crate::error::clear_last_error();
+    let headers = match crate::convert::c_str_to_opt_json(headers_json) {
+        Some(Some(Json::Object(headers))) => headers,
+        Some(None) | Some(Some(Json::Null)) => serde_json::Map::new(),
+        Some(Some(_)) => {
+            set_last_error("request headers must be a JSON object or null");
+            return std::ptr::null_mut();
+        }
+        None => return std::ptr::null_mut(),
     };
-    let content = crate::convert::c_str_to_json(content_json).unwrap_or(Json::Null);
+    let content = match crate::convert::c_str_to_opt_json(content_json) {
+        Some(content) => content.unwrap_or(Json::Null),
+        None => return std::ptr::null_mut(),
+    };
 
     Box::into_raw(Box::new(FfiLLMRequest(LlmRequest { headers, content })))
 }

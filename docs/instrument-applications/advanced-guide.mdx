@@ -206,7 +206,7 @@ it on the managed execute call, then read it from the middleware context:
 | Python | `tools.execute(..., execution_context=value)` | `context.execution_context` |
 | Node.js | `executionContext` in `typedToolExecute` options | `context.executionContext` |
 | Go | `WithApplicationExecutionContext(value)` on `ToolCallExecute` or `tools.Execute` | `context.ExecutionContext` (`*ApplicationExecutionContext`) |
-| C | `execution_context_json` on `nemo_relay_tool_call_execute_with_context` | Optional `execution_context` property in the callback's context JSON |
+| C | `execution_context_json` on `nemo_relay_tool_call_execute` | Optional `execution_context` property in the callback's context JSON |
 
 Rust and Python worker SDKs expose the same optional context on their tool
 execution callback. The C entry point is additive: existing execute functions
@@ -263,7 +263,7 @@ fail before middleware or the tool runs. Structural validation does not
 authenticate application claims.
 
 The canonical envelope schema is maintained with the shared Rust types in
-[`application-execution-context.schema.json`](https://github.com/nathankw/NeMo-Relay/blob/feat/tool-execution-context/crates/types/schemas/application-execution-context.schema.json).
+[`application-execution-context.schema.json`](https://github.com/NVIDIA/NeMo-Relay/blob/24886b101854ebc8a7666487eb3cb9a2773b62b0/crates/types/schemas/application-execution-context.schema.json).
 Rust exposes `ApplicationExecutionContext`; other bindings and worker SDKs expose
 the same optional data map using their native typing conventions. The schema
 checks Relay's envelope; applications can apply a separate JSON Schema or their
@@ -322,6 +322,11 @@ host/source and exact tool/arguments. A supplied claim that fails either check
 is refused without calling normal review. Relay prescribes neither the payload
 schema nor the underlying receipt or signature format.
 
+The wrapper rechecks the receipt at callback entry, before calling
+`implementation`. If the implementation waits before writing or committing an
+effect, the application must recheck approval at that boundary when its policy
+requires continued validity.
+
 <Code src="_code/python/application_execution_context.py" language="python" />
 
 ### Transport Compatibility
@@ -367,8 +372,10 @@ development baseline changes. The host checks the declared native contract and
 complete ABI schema before creating the plugin; a binary built against an
 incompatible earlier schema is rejected rather than silently losing context.
 See [Native ABI Reference](/build-plugins/native/native-abi-reference#application-execution-context)
-for the transport. Public C and Go callbacks receive context through their JSON
-envelope.
+for the transport. Public C callbacks receive an optional `execution_context`
+property in their context JSON. The Go binding decodes that envelope before
+invoking the public callback, which receives a `ToolExecutionContext` struct and
+reads `context.ExecutionContext`.
 
 ## Scope Middleware to One Request
 

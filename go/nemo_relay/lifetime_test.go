@@ -111,22 +111,22 @@ func callWithEphemeralParent(operation string, parent *ScopeHandle, check func()
 		}, toolOpt)
 		return err
 	case "llm":
-		h, err := LlmCall("lifetime-llm", request, llmOpt)
+		h, err := LlmCall("lifetime-llm", requestForTest(request), llmOpt)
 		if err != nil {
 			return err
 		}
 		return LlmCallEnd(h, json.RawMessage(`{}`))
 	case "llm_execute":
-		_, err := LlmCallExecute("lifetime-llm", request, func(json.RawMessage) (json.RawMessage, error) {
+		_, err := LlmCallExecute("lifetime-llm", requestForTest(request), func(json.RawMessage) (json.RawMessage, error) {
 			check()
 			return json.RawMessage(`{}`), nil
 		}, llmOpt)
 		return err
 	default:
-		s, err := LlmStreamCallExecute("lifetime-llm", request, func(json.RawMessage) (json.RawMessage, error) {
+		s, err := LlmStreamCallExecute("lifetime-llm", requestForTest(request), LLMExecutionFunc(func(json.RawMessage) (json.RawMessage, error) {
 			check()
 			return json.RawMessage(`"data: {}\n\n"`), nil
-		}, nil, nil, llmOpt)
+		}).AsStream(), nil, nil, llmOpt)
 		if err != nil {
 			return err
 		}
@@ -174,7 +174,7 @@ func TestNativeWrapperAccessorsUnderGC(t *testing.T) {
 			if err := ToolCallEnd(tool, toolExecutionResult(json.RawMessage(`{}`))); err != nil {
 				t.Fatal(err)
 			}
-			llm, err := LlmCall("gc-llm", json.RawMessage(`{"headers":{},"content":{}}`))
+			llm, err := LlmCall("gc-llm", requestForTest(json.RawMessage(`{"headers":{},"content":{}}`)))
 			if err != nil {
 				t.Fatal(err)
 			}
@@ -186,10 +186,14 @@ func TestNativeWrapperAccessorsUnderGC(t *testing.T) {
 			if err := LlmCallEnd(llm, json.RawMessage(`{}`)); err != nil {
 				t.Fatal(err)
 			}
-			if string(NewLLMRequest(map[string]interface{}{}, map[string]interface{}{}).Headers()) != `{}` {
+			request, err := NewLLMRequest(jsonForTest(map[string]interface{}{}), jsonForTest(map[string]interface{}{}))
+			if err != nil {
+				t.Fatal(err)
+			}
+			if string(request.Headers) != `{}` {
 				t.Fatal("invalid request headers")
 			}
-			if string(NewLLMRequest(map[string]interface{}{}, map[string]interface{}{}).Content()) != `{}` {
+			if string(request.Content) != `{}` {
 				t.Fatal("invalid request content")
 			}
 			r, err := NewAdaptiveRuntime(testAdaptiveRuntimeConfig("openai"))

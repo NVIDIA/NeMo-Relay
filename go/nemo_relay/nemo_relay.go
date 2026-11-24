@@ -14,6 +14,11 @@
 // transformation and execution replacement, and an observer-pattern event
 // subscription system.
 //
+// Owned callbacks can use supplied capabilities and emit observability events.
+// Other Relay API calls are invalid. This includes managed calls, managed-stream
+// control, scope changes, registration outside a supplied PluginContext,
+// and flush or shutdown operations.
+//
 // Sub-packages scope, tools, llm, guardrails, intercepts, and subscribers
 // re-export the most common functions under shorter names for convenience.
 //
@@ -26,9 +31,14 @@ package nemo_relay
 #cgo LDFLAGS: -L${SRCDIR}/../../target/release -L${SRCDIR}/../../target/debug -lnemo_relay_ffi
 #cgo windows LDFLAGS: -luserenv -lntdll -lws2_32 -ladvapi32 -lbcrypt
 #include <stdint.h>
+extern const uint64_t* nemo_relay_last_error_cause_ids(uintptr_t*);
 #include <stdbool.h>
 #include <stdlib.h>
 
+typedef struct FfiCancellation FfiCancellation;
+extern FfiCancellation* nemo_relay_cancellation_create(void);
+extern void nemo_relay_cancellation_cancel(const FfiCancellation*);
+extern void nemo_relay_cancellation_free(FfiCancellation*);
 typedef struct FfiScopeHandle FfiScopeHandle;
 typedef struct FfiScopeStack FfiScopeStack;
 typedef struct FfiThreadScopeStackBinding FfiThreadScopeStackBinding;
@@ -37,6 +47,7 @@ typedef struct FfiLLMHandle FfiLLMHandle;
 typedef struct FfiLLMRequest FfiLLMRequest;
 typedef struct FfiEvent FfiEvent;
 typedef struct FfiStream FfiStream;
+extern void nemo_relay_stream_free(FfiStream*);
 typedef struct FfiCodecHandle FfiCodecHandle;
 typedef struct FfiLlmSanitizeRequestCodec FfiLlmSanitizeRequestCodec;
 typedef struct FfiLlmSanitizeResponseCodec FfiLlmSanitizeResponseCodec;
@@ -44,8 +55,15 @@ typedef struct NemoRelayLlmSanitizeRequestContext { uint32_t codec_kind; const c
 typedef struct NemoRelayLlmSanitizeResponseContext { uint32_t codec_kind; const char* codec_id; const FfiLlmSanitizeResponseCodec* codec; } NemoRelayLlmSanitizeResponseContext;
 typedef NemoRelayLlmSanitizeRequestContext NemoRelayLlmRequestContext;
 typedef NemoRelayLlmSanitizeResponseContext NemoRelayLlmResponseContext;
-typedef struct NemoRelayLlmExecutionContext { NemoRelayLlmRequestContext request_codec; const NemoRelayLlmResponseContext* response_codec; } NemoRelayLlmExecutionContext;
+typedef struct FfiLlmOptimizationRecorder FfiLlmOptimizationRecorder;
+typedef struct NemoRelayLlmExecutionContext { NemoRelayLlmRequestContext request_codec; const NemoRelayLlmResponseContext* response_codec; const FfiLlmOptimizationRecorder* optimization_recorder; } NemoRelayLlmExecutionContext;
 
+typedef struct FfiLlmStreamSource FfiLlmStreamSource;
+typedef FfiLlmStreamSource* (*NemoRelayLlmStreamExecCb)(void*, const char*);
+typedef FfiLlmStreamSource* (*NemoRelayLlmStreamExecNextFn)(const char*, void*);
+typedef FfiLlmStreamSource* (*NemoRelayLlmStreamExecInterceptCb)(void*, const char*, const char*, NemoRelayLlmExecutionContext, NemoRelayLlmStreamExecNextFn, void*);
+extern FfiLlmStreamSource* goLlmStreamExecTrampoline(void*, const char*);
+extern FfiLlmStreamSource* goLlmStreamInterceptTrampoline(void*, const char*, const char*, NemoRelayLlmExecutionContext, NemoRelayLlmStreamExecNextFn, void*);
 typedef void (*NemoRelayFreeFn)(void* user_data);
 
 typedef char* (*NemoRelayConditionalMiddlewareGuardrailFn)(void* user_data, const char* kinds_json, const char* registration_name);
@@ -60,8 +78,7 @@ extern int32_t nemo_relay_log(const char*, const char*, const char*, const char*
 extern int32_t nemo_relay_get_handle(FfiScopeHandle** out);
 extern int32_t nemo_relay_push_scope(const char* name, int32_t scope_type, const FfiScopeHandle* parent, uint32_t attributes, const char* data_json, const char* metadata_json, const char* input_json, const int64_t* timestamp_unix_micros, FfiScopeHandle** out);
 extern int32_t nemo_relay_pop_scope(const FfiScopeHandle* handle, const char* output_json, const char* metadata_json, const int64_t* timestamp_unix_micros);
-extern int32_t nemo_relay_event(const char* name, const FfiScopeHandle* parent, const char* data_json, const char* metadata_json, const int64_t* timestamp_unix_micros);
-extern int32_t nemo_relay_event_v2(const char* name, const FfiScopeHandle* parent, const char* data_json, const char* data_schema_json, const char* metadata_json, const int32_t* severity, const int64_t* timestamp_unix_micros);
+extern int32_t nemo_relay_event(const char* name, const FfiScopeHandle* parent, const char* data_json, const char* data_schema_json, const char* metadata_json, const int32_t* severity, const char* category, const char* category_profile_json, const int64_t* timestamp_unix_micros);
 extern int32_t nemo_relay_metric_json(const char* name, const FfiScopeHandle* parent, const char* measurements_json, const char* metadata_json, const int64_t* timestamp_unix_micros);
 
 // Tool lifecycle
@@ -75,44 +92,14 @@ extern int32_t nemo_relay_tool_call_execute(
 	NemoRelayToolExecFn func_cb, void* func_user_data, NemoRelayFreeFn func_free,
 	const FfiScopeHandle* parent, uint32_t attributes,
 	const char* data_json, const char* metadata_json,
-	char** out);
-extern int32_t nemo_relay_tool_call_execute_v2(
-	const char* name, const char* args_json,
-	NemoRelayToolExecFn func_cb, void* func_user_data, NemoRelayFreeFn func_free,
-	const FfiScopeHandle* parent, uint32_t attributes,
-	const char* data_json, const char* metadata_json,
-	const char* tool_call_id, char** out);
-extern int32_t nemo_relay_tool_call_execute_with_options(
-	const char* name, const char* args_json,
-	NemoRelayToolExecFn func_cb, void* func_user_data, NemoRelayFreeFn func_free,
-	const FfiScopeHandle* parent, uint32_t attributes,
-	const char* data_json, const char* metadata_json,
-	const char* tool_call_id, uint32_t skip_stages, char** out);
-extern int32_t nemo_relay_tool_call_execute_with_context(
-	const char* name, const char* args_json,
-	NemoRelayToolExecFn func_cb, void* func_user_data, NemoRelayFreeFn func_free,
-	const FfiScopeHandle* parent, uint32_t attributes,
-	const char* data_json, const char* metadata_json,
-	const char* tool_call_id, uint32_t skip_stages,
-	const char* execution_context_json, char** out);
+	const char* tool_call_id, uint32_t skip_stages, const char* execution_context_json, const FfiCancellation* cancellation, char** out);
 
 // LLM lifecycle
 typedef int32_t (*NemoRelayCollectorCb)(void* user_data, const char* chunk_json);
-typedef struct Option_NemoRelayCollectorCb { NemoRelayCollectorCb cb; } Option_NemoRelayCollectorCb;
 typedef char* (*NemoRelayFinalizerCb)(void* user_data);
-typedef struct Option_NemoRelayFinalizerCb { NemoRelayFinalizerCb cb; } Option_NemoRelayFinalizerCb;
 
-static inline Option_NemoRelayCollectorCb makeOptCollectorCb(NemoRelayCollectorCb cb) {
-	Option_NemoRelayCollectorCb opt = { cb };
-	return opt;
-}
-static inline Option_NemoRelayFinalizerCb makeOptFinalizerCb(NemoRelayFinalizerCb cb) {
-	Option_NemoRelayFinalizerCb opt = { cb };
-	return opt;
-}
-
-extern int32_t nemo_relay_llm_call(const char* name, const char* native_json, const FfiScopeHandle* parent, uint32_t attributes, const char* data_json, const char* metadata_json, const char* model_name, const int64_t* timestamp_unix_micros, FfiLLMHandle** out);
-extern int32_t nemo_relay_llm_call_end(const FfiLLMHandle* handle, const char* response_json, const char* data_json, const char* metadata_json, const int64_t* timestamp_unix_micros);
+extern int32_t nemo_relay_llm_call(const char* name, const char* native_json, const FfiScopeHandle* parent, uint32_t attributes, const char* data_json, const char* metadata_json, const char* model_name, const FfiCodecHandle* request_codec, const char* annotated_request_json, const int64_t* timestamp_unix_micros, FfiLLMHandle** out);
+extern int32_t nemo_relay_llm_call_end(const FfiLLMHandle* handle, const char* response_json, const char* data_json, const char* metadata_json, const FfiCodecHandle* response_codec, const char* annotated_response_json, const int64_t* timestamp_unix_micros);
 
 // LLM call execute
 typedef char* (*NemoRelayLlmExecFn)(void* user_data, const char* native_json);
@@ -126,51 +113,47 @@ extern int32_t nemo_relay_llm_call_execute(
 	const char* model_name,
 	NemoRelayCodecDecodeFn codec_decode, NemoRelayCodecEncodeFn codec_encode,
 	void* codec_user_data, NemoRelayFreeFn codec_free_fn,
-	const FfiCodecHandle* response_codec,
-	char** out);
-extern int32_t nemo_relay_llm_call_execute_with_options(
-	const char* name, const char* native_json,
-	NemoRelayLlmExecFn func_cb, void* func_user_data, NemoRelayFreeFn func_free,
-	const FfiScopeHandle* parent, uint32_t attributes,
-	const char* data_json, const char* metadata_json,
-	const char* model_name,
-	NemoRelayCodecDecodeFn codec_decode, NemoRelayCodecEncodeFn codec_encode,
-	void* codec_user_data, NemoRelayFreeFn codec_free_fn,
-	const FfiCodecHandle* response_codec, uint32_t skip_stages,
+	const FfiCodecHandle* request_codec, const FfiCodecHandle* response_codec, uint32_t skip_stages, const FfiCancellation* cancellation,
 	char** out);
 
 // LLM stream execute
 extern int32_t nemo_relay_llm_stream_call_execute(
 	const char* name, const char* native_json,
-	NemoRelayLlmExecFn func_cb, void* func_user_data, NemoRelayFreeFn func_free,
-	Option_NemoRelayCollectorCb collector, Option_NemoRelayFinalizerCb finalizer,
+	NemoRelayLlmExecFn func_cb, NemoRelayLlmStreamExecCb stream_cb, void* func_user_data, NemoRelayFreeFn func_free,
+	NemoRelayCollectorCb collector, NemoRelayFinalizerCb finalizer,
 	void* callback_user_data, NemoRelayFreeFn callback_free,
 	const FfiScopeHandle* parent, uint32_t attributes,
 	const char* data_json, const char* metadata_json,
 	const char* model_name,
 	NemoRelayCodecDecodeFn codec_decode, NemoRelayCodecEncodeFn codec_encode,
 	void* codec_user_data, NemoRelayFreeFn codec_free_fn,
-	const FfiCodecHandle* response_codec,
-	FfiStream** out);
-extern int32_t nemo_relay_llm_stream_call_execute_with_options(
-	const char* name, const char* native_json,
-	NemoRelayLlmExecFn func_cb, void* func_user_data, NemoRelayFreeFn func_free,
-	Option_NemoRelayCollectorCb collector, Option_NemoRelayFinalizerCb finalizer,
-	void* callback_user_data, NemoRelayFreeFn callback_free,
-	const FfiScopeHandle* parent, uint32_t attributes,
-	const char* data_json, const char* metadata_json,
-	const char* model_name,
-	NemoRelayCodecDecodeFn codec_decode, NemoRelayCodecEncodeFn codec_encode,
-	void* codec_user_data, NemoRelayFreeFn codec_free_fn,
-	const FfiCodecHandle* response_codec, uint32_t skip_stages,
+	const FfiCodecHandle* request_codec, const FfiCodecHandle* response_codec, uint32_t skip_stages, const FfiCancellation* cancellation,
 	FfiStream** out);
 
-// Built-in codec constructors
-extern FfiCodecHandle* nemo_relay_openai_chat_codec_new(void);
-extern FfiCodecHandle* nemo_relay_openai_responses_codec_new(void);
-extern FfiCodecHandle* nemo_relay_anthropic_messages_codec_new(void);
-extern FfiCodecHandle* nemo_relay_gemini_generate_content_codec_new(void);
+// Built-in codec constructor
+#define NEMO_RELAY_CODEC_OPENAI_CHAT 0
+#define NEMO_RELAY_CODEC_OPENAI_RESPONSES 1
+#define NEMO_RELAY_CODEC_ANTHROPIC_MESSAGES 2
+#define NEMO_RELAY_CODEC_GEMINI_GENERATE_CONTENT 3
+#define NEMO_RELAY_CODEC_OCI_GENAI 4
+#define NEMO_RELAY_CODEC_CUSTOM UINT32_MAX
+typedef char* (*NemoRelayCodecResponseDecodeFn)(void*, const char*);
+typedef struct NemoRelayCodecCallbacks {
+    NemoRelayCodecDecodeFn decode;
+    NemoRelayCodecEncodeFn encode;
+    NemoRelayCodecResponseDecodeFn decode_response;
+    void* user_data;
+    NemoRelayFreeFn free_fn;
+} NemoRelayCodecCallbacks;
+extern FfiCodecHandle* nemo_relay_codec_new(uint32_t provider, const NemoRelayCodecCallbacks* callbacks);
+extern char* nemo_relay_codec_decode(const FfiCodecHandle*, const FfiLLMRequest*);
+extern char* nemo_relay_codec_encode(const FfiCodecHandle*, const char*, const FfiLLMRequest*);
+extern char* nemo_relay_codec_decode_response(const FfiCodecHandle*, const char*);
+extern char* goCodecResponseDecodeTrampoline(void*, const char*);
 extern void nemo_relay_codec_free(FfiCodecHandle* handle);
+extern FfiCodecHandle* nemo_relay_codec_clone(const FfiCodecHandle*);
+extern FfiLLMRequest* nemo_relay_llm_request_new(const char*, const char*);
+extern void nemo_relay_llm_request_free(FfiLLMRequest*);
 
 extern void nemo_relay_set_last_error_message(const char* msg);
 
@@ -216,7 +199,7 @@ typedef char* (*NemoRelayLlmExecInterceptCb)(void* user_data, const char* name, 
 
 extern int32_t nemo_relay_register_llm_execution_intercept(const char* name, int32_t priority, NemoRelayLlmExecInterceptCb exec_cb, void* exec_user_data, NemoRelayFreeFn exec_free);
 extern int32_t nemo_relay_deregister_llm_execution_intercept(const char* name);
-extern int32_t nemo_relay_register_llm_stream_execution_intercept(const char* name, int32_t priority, NemoRelayLlmExecInterceptCb exec_cb, void* exec_user_data, NemoRelayFreeFn exec_free);
+extern int32_t nemo_relay_register_llm_stream_execution_intercept(const char* name, int32_t priority, NemoRelayLlmExecInterceptCb exec_cb, NemoRelayLlmStreamExecInterceptCb, void* exec_user_data, NemoRelayFreeFn exec_free);
 extern int32_t nemo_relay_deregister_llm_stream_execution_intercept(const char* name);
 
 // Subscribers
@@ -270,7 +253,7 @@ extern int32_t nemo_relay_scope_register_llm_request_intercept(const char* scope
 extern int32_t nemo_relay_scope_deregister_llm_request_intercept(const char* scope_uuid, const char* name);
 extern int32_t nemo_relay_scope_register_llm_execution_intercept(const char* scope_uuid, const char* name, int32_t priority, NemoRelayLlmExecInterceptCb exec_cb, void* exec_user_data, NemoRelayFreeFn exec_free);
 extern int32_t nemo_relay_scope_deregister_llm_execution_intercept(const char* scope_uuid, const char* name);
-extern int32_t nemo_relay_scope_register_llm_stream_execution_intercept(const char* scope_uuid, const char* name, int32_t priority, NemoRelayLlmExecInterceptCb exec_cb, void* exec_user_data, NemoRelayFreeFn exec_free);
+extern int32_t nemo_relay_scope_register_llm_stream_execution_intercept(const char* scope_uuid, const char* name, int32_t priority, NemoRelayLlmExecInterceptCb exec_cb, NemoRelayLlmStreamExecInterceptCb, void* exec_user_data, NemoRelayFreeFn exec_free);
 extern int32_t nemo_relay_scope_deregister_llm_stream_execution_intercept(const char* scope_uuid, const char* name);
 
 // Scope-local subscribers
@@ -289,14 +272,13 @@ extern const char* nemo_relay_last_error();
 extern void nemo_relay_string_free(char* ptr);
 
 // Scope stack isolation
-extern int32_t nemo_relay_scope_stack_create(FfiScopeStack** out);
 extern int32_t nemo_relay_capture_propagation_context_json(char** out);
 extern int32_t nemo_relay_capture_rootless_propagation_context_json(char** out);
 extern int32_t nemo_relay_capture_propagation_context_with_root_json(const char* root_uuid, char** out);
 extern int32_t nemo_relay_capture_traceparent(char** out);
 extern int32_t nemo_relay_propagation_context_to_traceparent(const char* context_json, char** out);
 extern int32_t nemo_relay_propagation_context_normalize_json(const char* context_json, char** out);
-extern int32_t nemo_relay_scope_stack_create_from_propagation_json(const char* context_json, FfiScopeStack** out);
+extern int32_t nemo_relay_scope_stack_create(const char* context_json, FfiScopeStack** out);
 extern int32_t nemo_relay_scope_stack_set_thread(const FfiScopeStack* stack);
 extern int32_t nemo_relay_scope_stack_capture_thread(FfiThreadScopeStackBinding** out);
 extern int32_t nemo_relay_scope_stack_restore_thread(FfiThreadScopeStackBinding* binding);
@@ -305,7 +287,7 @@ extern int32_t nemo_relay_current_scope_stack_snapshot_json(char** out);
 extern void nemo_relay_scope_stack_free(FfiScopeStack* ptr);
 
 // ATIF exporter
-extern int32_t nemo_relay_atif_exporter_create(const char*, const char*, const char*, const char*, void**);
+extern int32_t nemo_relay_atif_exporter_create(const char*, const char*, const char*, const char*, const char*, const char*, const char*, void**);
 extern int32_t nemo_relay_atif_exporter_register(const void*, const char*);
 extern int32_t nemo_relay_atif_exporter_deregister(const char*);
 extern int32_t nemo_relay_atif_exporter_export(const void*, char**);
@@ -313,8 +295,7 @@ extern int32_t nemo_relay_atif_exporter_clear(const void*);
 extern void nemo_relay_atif_exporter_free(void*);
 
 // ATOF JSONL exporter
-extern int32_t nemo_relay_atof_exporter_create(const char*, const char*, const char*, void**);
-extern int32_t nemo_relay_atof_exporter_create_from_json(const char*, void**);
+extern int32_t nemo_relay_atof_exporter_create(const char*, void**);
 extern int32_t nemo_relay_atof_exporter_register(const void*, const char*);
 extern int32_t nemo_relay_atof_exporter_deregister(const char*);
 extern int32_t nemo_relay_atof_exporter_force_flush(const void*);
@@ -324,32 +305,21 @@ extern int32_t nemo_relay_atof_exporter_runtime_diagnostics_json(const void*, ch
 extern void nemo_relay_atof_exporter_free(void*);
 
 // OpenTelemetry subscriber
-extern int32_t nemo_relay_otel_subscriber_create(const char*, const char*, const char*, const char*, const char*, const char*, const char*, const char*, const char*, uint64_t, void**);
-extern int32_t nemo_relay_otel_subscriber_create_with_projection_options(const char*, const char*, const char*, const char*, const char*, const char*, const char*, const char*, const char*, uint64_t, const char*, const char*, const char*, void**);
-extern int32_t nemo_relay_otel_subscriber_create_with_projection_options_v2(const char*, const char*, const char*, const char*, const char*, const char*, const char*, const char*, const char*, uint64_t, const char*, const char*, const char*, const char*, void**);
-extern int32_t nemo_relay_otel_subscriber_create_with_projection_options_v3(const char*, const char*, const char*, const char*, const char*, const char*, const char*, const char*, const char*, uint64_t, const char*, const char*, const char*, const char*, uint64_t, void**);
-extern int32_t nemo_relay_otel_subscriber_create_with_projection_options_v4(const char*, const char*, const char*, const char*, const char*, const char*, const char*, const char*, const char*, const char*, uint64_t, const char*, const char*, const char*, const char*, uint64_t, void**);
-extern int32_t nemo_relay_otel_subscriber_create_with_projection_options_v5(const char*, const char*, const char*, const char*, const char*, const char*, const char*, const char*, const char*, const char*, uint64_t, const char*, const char*, const char*, const char*, const char*, uint64_t, void**);
-extern int32_t nemo_relay_otel_subscriber_create_with_projection_options_with_tls(const char*, const char*, const char*, const char*, const char*, const char*, const char*, const char*, const char*, const char*, uint64_t, const char*, const char*, const char*, const char*, const char*, uint64_t, const char*, void**);
-extern int32_t nemo_relay_otel_subscriber_create_file_sink(const char*, const char*, const char*, const char*, const char*, const char*, const char*, const char*, const char*, const char*, const char*, const char*, const char*, const char*, const char*, uint64_t, void**);
+extern int32_t nemo_relay_otel_subscriber_create(const char*, const char*, const char*, const char*, const char*, const char*, const char*, const char*, const char*, const char*, uint64_t, const char*, const char*, const char*, const char*, const char*, uint64_t, const char*, const char*, const char*, const char*, const char*, void**);
 extern int32_t nemo_relay_otel_subscriber_register(const void*, const char*);
 extern int32_t nemo_relay_otel_subscriber_deregister(const char*);
 extern int32_t nemo_relay_otel_subscriber_force_flush(const void*);
 extern int32_t nemo_relay_otel_subscriber_runtime_diagnostics_json(const void*, char**);
 extern int32_t nemo_relay_otel_subscriber_shutdown(const void*);
 extern void nemo_relay_otel_subscriber_free(void*);
-extern int32_t nemo_relay_otel_log_subscriber_create(const char*, const char*, const char*, const char*, const char*, const char*, const char*, const char*, uint64_t, const char*, uint64_t, uint64_t, uint64_t, uint64_t, void**);
-extern int32_t nemo_relay_otel_log_subscriber_create_v2(const char*, const char*, const char*, const char*, const char*, const char*, const char*, const char*, const char*, uint64_t, const char*, uint64_t, uint64_t, uint64_t, uint64_t, void**);
-extern int32_t nemo_relay_otel_log_subscriber_create_with_tls(const char*, const char*, const char*, const char*, const char*, const char*, const char*, const char*, const char*, uint64_t, const char*, uint64_t, uint64_t, uint64_t, uint64_t, const char*, void**);
+extern int32_t nemo_relay_otel_log_subscriber_create(const char*, const char*, const char*, const char*, const char*, const char*, const char*, const char*, const char*, uint64_t, const char*, uint64_t, uint64_t, uint64_t, uint64_t, const char*, void**);
 extern int32_t nemo_relay_otel_log_subscriber_register(const void*, const char*);
 extern int32_t nemo_relay_otel_log_subscriber_deregister(const char*);
 extern int32_t nemo_relay_otel_log_subscriber_force_flush(const void*);
 extern int32_t nemo_relay_otel_log_subscriber_runtime_diagnostics_json(const void*, char**);
 extern int32_t nemo_relay_otel_log_subscriber_shutdown(const void*);
 extern void nemo_relay_otel_log_subscriber_free(void*);
-extern int32_t nemo_relay_otel_metric_subscriber_create(const char*, const char*, const char*, const char*, const char*, const char*, const char*, const char*, uint64_t, uint64_t, const char*, uint64_t, uint64_t, void**);
-extern int32_t nemo_relay_otel_metric_subscriber_create_v2(const char*, const char*, const char*, const char*, const char*, const char*, const char*, const char*, const char*, uint64_t, uint64_t, const char*, uint64_t, uint64_t, void**);
-extern int32_t nemo_relay_otel_metric_subscriber_create_with_tls(const char*, const char*, const char*, const char*, const char*, const char*, const char*, const char*, const char*, uint64_t, uint64_t, const char*, uint64_t, uint64_t, const char*, void**);
+extern int32_t nemo_relay_otel_metric_subscriber_create(const char*, const char*, const char*, const char*, const char*, const char*, const char*, const char*, const char*, uint64_t, uint64_t, const char*, uint64_t, uint64_t, const char*, void**);
 extern int32_t nemo_relay_otel_metric_subscriber_register(const void*, const char*);
 extern int32_t nemo_relay_otel_metric_subscriber_deregister(const char*);
 extern int32_t nemo_relay_otel_metric_subscriber_force_flush(const void*);
@@ -386,15 +356,18 @@ import "C"
 
 import (
 	"bytes"
+	"context"
 	"encoding/hex"
 	"encoding/json"
 	"errors"
 	"fmt"
 	"runtime"
+	"strconv"
 	"strings"
 	"sync"
 	"time"
 	"unsafe"
+	"weak"
 )
 
 const defaultServiceName = "nemo-relay"
@@ -463,9 +436,9 @@ var (
 	}
 	newScopeStackFunc = func() (*ScopeStack, error) {
 		var ptr *C.FfiScopeStack
-		return checkedValue(callStatus(func() C.int32_t { return C.nemo_relay_scope_stack_create(&ptr) }), &ScopeStack{ptr: ptr})
+		return checkedValue(callStatus(func() C.int32_t { return C.nemo_relay_scope_stack_create(nil, &ptr) }), &ScopeStack{ptr: ptr})
 	}
-	newAtifExporterFunc = func(sessionID, agentName, agentVersion, modelName string) (*AtifExporter, error) {
+	newAtifExporterFunc = func(sessionID, agentName, agentVersion, modelName string, opts ...AtifExporterOption) (*AtifExporter, error) {
 		cSessionID := C.CString(sessionID)
 		defer C.free(unsafe.Pointer(cSessionID))
 		cAgentName := C.CString(agentName)
@@ -479,9 +452,33 @@ var (
 			defer C.free(unsafe.Pointer(cModelName))
 		}
 
+		settings := &atifExporterOptions{}
+		for _, opt := range opts {
+			opt(settings)
+		}
+		var trajectory, definitions, extra *C.char
+		if settings.trajectoryID != nil {
+			trajectory = C.CString(*settings.trajectoryID)
+			defer C.free(unsafe.Pointer(trajectory))
+		}
+		if settings.toolDefinitions != nil {
+			payload, err := json.Marshal(settings.toolDefinitions)
+			if err != nil {
+				return nil, err
+			}
+			definitions = C.CString(string(payload))
+			defer C.free(unsafe.Pointer(definitions))
+		}
+		if settings.extra != nil {
+			if !json.Valid(settings.extra) {
+				return nil, &RelayError{Code: StatusInvalidJSON, Message: "invalid ATIF agent extra JSON"}
+			}
+			extra = C.CString(string(settings.extra))
+			defer C.free(unsafe.Pointer(extra))
+		}
 		var ptr unsafe.Pointer
 		return checkedValue(callStatus(func() C.int32_t {
-			return C.nemo_relay_atif_exporter_create(cSessionID, cAgentName, cAgentVersion, cModelName, &ptr)
+			return C.nemo_relay_atif_exporter_create(cSessionID, cAgentName, cAgentVersion, cModelName, trajectory, definitions, extra, &ptr)
 		}), &AtifExporter{ptr: ptr})
 	}
 	newAtofExporterFunc = func(config AtofExporterConfig) (*AtofExporter, error) {
@@ -492,7 +489,7 @@ var (
 		cConfig := C.CString(string(payload))
 		defer C.free(unsafe.Pointer(cConfig))
 		var ptr unsafe.Pointer
-		return checkedValue(callStatus(func() C.int32_t { return C.nemo_relay_atof_exporter_create_from_json(cConfig, &ptr) }), &AtofExporter{ptr: ptr})
+		return checkedValue(callStatus(func() C.int32_t { return C.nemo_relay_atof_exporter_create(cConfig, &ptr) }), &AtofExporter{ptr: ptr})
 	}
 )
 
@@ -500,19 +497,27 @@ var (
 // Error handling
 // ---------------------------------------------------------------------------
 
-func lastError() error {
-	msg := C.nemo_relay_last_error()
-	if msg == nil {
-		return errors.New("unknown nemo_relay error")
+func nativeError(code StatusCode) error {
+	runtime.LockOSThread()
+	defer runtime.UnlockOSThread()
+	message := "unknown nemo_relay error"
+	if ptr := C.nemo_relay_last_error(); ptr != nil {
+		message = C.GoString(ptr)
 	}
-	return errors.New(C.GoString(msg))
+	err := &RelayError{Code: code, Message: message}
+	var count C.uintptr_t
+	if ids := C.nemo_relay_last_error_cause_ids(&count); count != 0 {
+		copied := append([]uint64(nil), unsafe.Slice((*uint64)(unsafe.Pointer(ids)), int(count))...)
+		return &callbackFailure{ids: copied, causes: []error{err}}
+	}
+	return err
 }
-
+func lastError() error { return nativeError(StatusUnknown) }
 func checkStatus(status C.int32_t) error {
 	if status == 0 {
 		return nil
 	}
-	return lastError()
+	return nativeError(StatusCode(status))
 }
 
 // callStatus keeps an FFI call and its thread-local error read on one OS thread.
@@ -536,6 +541,17 @@ func pushPinned(call func() C.int32_t) error {
 		return err
 	}
 	return nil
+}
+
+func currentGoroutineID() uint64 {
+	var stack [64]byte
+	n := runtime.Stack(stack[:], false)
+	fields := strings.Fields(string(stack[:n]))
+	if len(fields) < 2 {
+		return 0
+	}
+	id, _ := strconv.ParseUint(fields[1], 10, 64)
+	return id
 }
 
 func claimScope(uuid string) {
@@ -925,13 +941,16 @@ func PopScope(handle *ScopeHandle, opts ...ScopeEndOption) error {
 // ---------------------------------------------------------------------------
 
 type eventOptions struct {
-	parentHandle *ScopeHandle // retains the borrowed native handle through the FFI call
-	parent       *C.FfiScopeHandle
-	data         *C.char
-	dataSchema   *C.char
-	metadata     *C.char
-	severity     LogSeverity
-	timestamp    *C.int64_t
+	category           *C.char
+	categoryProfile    *C.char
+	categoryProfileErr error
+	parentHandle       *ScopeHandle // retains the borrowed native handle through the FFI call
+	parent             *C.FfiScopeHandle
+	data               *C.char
+	dataSchema         *C.char
+	metadata           *C.char
+	severity           LogSeverity
+	timestamp          *C.int64_t
 }
 
 // replaceCString replaces an option-owned C string and frees its prior value.
@@ -1014,6 +1033,31 @@ func WithEventSeverity(severity LogSeverity) EventOption {
 	}
 }
 
+// WithEventCategory sets an explicit standard or producer-defined category.
+func WithEventCategory(category EventCategory) EventOption {
+	return func(o *eventOptions) { replaceCString(&o.category, string(category)) }
+}
+
+// WithEventCategoryProfile sets a typed category-profile JSON object. Relay
+// validates known fields and preserves unknown keys. Nil omits the profile.
+func WithEventCategoryProfile(profile json.RawMessage) EventOption {
+	return func(o *eventOptions) {
+		o.categoryProfileErr = nil
+		if o.categoryProfile != nil {
+			C.free(unsafe.Pointer(o.categoryProfile))
+			o.categoryProfile = nil
+		}
+		if profile != nil && !json.Valid(profile) {
+			o.categoryProfileErr = &RelayError{Code: StatusInvalidJSON, Message: "invalid event category profile JSON"}
+			return
+		}
+		if profile == nil {
+			return
+		}
+		replaceCString(&o.categoryProfile, string(profile))
+	}
+}
+
 // WithEventTimestamp records an explicit time.Time on the emitted Mark event.
 // The value is converted to UTC Unix microseconds at the FFI boundary;
 // sub-microsecond precision is truncated. Omit this option to use the current
@@ -1046,8 +1090,17 @@ func EmitEvent(name string, opts ...EventOption) error {
 	if o.metadata != nil {
 		defer C.free(unsafe.Pointer(o.metadata))
 	}
+	if o.category != nil {
+		defer C.free(unsafe.Pointer(o.category))
+	}
+	if o.categoryProfile != nil {
+		defer C.free(unsafe.Pointer(o.categoryProfile))
+	}
 	if o.timestamp != nil {
 		defer C.free(unsafe.Pointer(o.timestamp))
+	}
+	if o.categoryProfileErr != nil {
+		return o.categoryProfileErr
 	}
 	var severity *C.int32_t
 	if o.severity != "" {
@@ -1060,7 +1113,7 @@ func EmitEvent(name string, opts ...EventOption) error {
 	}
 
 	return callStatus(func() C.int32_t {
-		return C.nemo_relay_event_v2(cName, o.parent, o.data, o.dataSchema, o.metadata, severity, o.timestamp)
+		return C.nemo_relay_event(cName, o.parent, o.data, o.dataSchema, o.metadata, severity, o.category, o.categoryProfile, o.timestamp)
 	})
 }
 
@@ -1084,15 +1137,17 @@ const (
 )
 
 // MetricMeasurement is one SDK recording operation in an atomic metric mark.
+// Value is a JSON number validated against ValueType and the runtime instrument
+// range. Use json.Number to retain integer precision.
 type MetricMeasurement struct {
-	Name        string                 `json:"name"`
-	Kind        MetricKind             `json:"kind"`
-	ValueType   MetricValueType        `json:"value_type"`
-	Value       interface{}            `json:"value"`
-	Unit        string                 `json:"unit,omitempty"`
-	Description string                 `json:"description,omitempty"`
-	Attributes  map[string]interface{} `json:"attributes,omitempty"`
-	Boundaries  []float64              `json:"boundaries"`
+	Name        string                     `json:"name"`
+	Kind        MetricKind                 `json:"kind"`
+	ValueType   MetricValueType            `json:"value_type"`
+	Value       json.Number                `json:"value"`
+	Unit        string                     `json:"unit,omitempty"`
+	Description string                     `json:"description,omitempty"`
+	Attributes  map[string]json.RawMessage `json:"attributes,omitempty"`
+	Boundaries  []float64                  `json:"boundaries"`
 }
 
 type metricOptions struct {
@@ -1163,6 +1218,7 @@ func EmitMetric(name string, measurements []MetricMeasurement, opts ...MetricOpt
 // ---------------------------------------------------------------------------
 
 type toolCallOptions struct {
+	ctx                   context.Context
 	executionContextError error
 	executionContext      json.RawMessage
 	hasExecutionContext   bool
@@ -1218,10 +1274,23 @@ func WithToolExecutionOptions(options ExecutionOptions) ToolCallOption {
 // middleware must apply its own trust policy. The option snapshots its input
 // bytes and can be reused. Passing it more than once uses the last value.
 func WithToolExecutionContext(context json.RawMessage) ToolCallOption {
-	snapshot := bytes.Clone(context)
+	var snapshot []byte
+	var failure error
+	if context != nil {
+		remaining := maximumApplicationContextBytes
+		failure = validateContextBudget(context, 0, &remaining)
+		if failure == nil {
+			var checked ApplicationExecutionContext
+			failure = json.Unmarshal(context, &checked)
+			if failure == nil {
+				// Validation must not rewrite opaque numeric payloads.
+				snapshot = bytes.Clone(context)
+			}
+		}
+	}
 	return func(o *toolCallOptions) {
 		o.executionContext = bytes.Clone(snapshot)
-		o.executionContextError = nil
+		o.executionContextError = failure
 		o.hasExecutionContext = true
 	}
 }
@@ -1233,7 +1302,7 @@ func WithApplicationExecutionContext(context *ApplicationExecutionContext) ToolC
 	if context == nil {
 		return WithToolExecutionContext(nil)
 	}
-	snapshot, err := json.Marshal(context)
+	snapshot, err := marshalApplicationContext(*context)
 	if err != nil {
 		return func(o *toolCallOptions) { o.executionContextError = err; o.hasExecutionContext = true }
 	}
@@ -1434,6 +1503,11 @@ func ToolCallExecute(name string, args json.RawMessage, fn ToolExecutionFunc, op
 		defer C.free(unsafe.Pointer(cExecutionContext))
 	}
 
+	cancellation, stopCancellation, err := callCancellation(o.ctx)
+	if err != nil {
+		return ToolExecutionResult{}, err
+	}
+	defer stopCancellation()
 	id := registerClosure(fn)
 
 	cName := C.CString(name)
@@ -1442,20 +1516,23 @@ func ToolCallExecute(name string, args json.RawMessage, fn ToolExecutionFunc, op
 	defer C.free(unsafe.Pointer(cArgs))
 
 	var out *C.char
-	if err := callStatus(func() C.int32_t {
-		return C.nemo_relay_tool_call_execute_with_context(
+	err = callStatus(func() C.int32_t {
+		return C.nemo_relay_tool_call_execute(
 			cName, cArgs,
 			C.NemoRelayToolExecFn(C.goToolExecTrampoline),
 			id,
 			C.NemoRelayFreeFn(C.goFreeTrampoline),
 			o.parent, C.uint32_t(o.attributes),
 			o.data, o.metadata,
-			o.toolCallID, o.executionOptions.skipStages(), cExecutionContext, &out,
+			o.toolCallID, o.executionOptions.skipStages(), cExecutionContext, cancellation, &out,
 		)
-	}); err != nil {
-		return ToolExecutionResult{}, err
+	})
+
+	if err != nil {
+		return ToolExecutionResult{}, nativeExecutionError(o.ctx, err)
 	}
 	result, err := decodeToolExecutionResult([]byte(C.GoString(out)))
+
 	if err != nil {
 		C.nemo_relay_string_free(out)
 		return ToolExecutionResult{}, err
@@ -1469,29 +1546,39 @@ func ToolCallExecute(name string, args json.RawMessage, fn ToolExecutionFunc, op
 // ---------------------------------------------------------------------------
 
 type llmCallOptions struct {
-	executionOptions    ExecutionOptions
-	hasExecutionOptions bool
-	parentHandle        *ScopeHandle // retains the borrowed native handle through the FFI call
-	parent              *C.FfiScopeHandle
-	attributes          uint32
-	data                *C.char
-	metadata            *C.char
-	modelName           *C.char
-	timestamp           *C.int64_t
-	codecDecode         C.NemoRelayCodecDecodeFn
-	codecEncode         C.NemoRelayCodecEncodeFn
-	codecUserData       unsafe.Pointer
-	codecFreeFn         C.NemoRelayFreeFn
-	responseCodec       *C.FfiCodecHandle
-	responseCodecHandle *CodecHandle // prevents GC of the CodecHandle during FFI calls
+	requestCodecErr      error
+	responseCodecErr     error
+	annotatedRequestErr  error
+	annotatedResponseErr error
+	ctx                  context.Context
+	executionOptions     ExecutionOptions
+	hasExecutionOptions  bool
+	parentHandle         *ScopeHandle // retains the borrowed native handle through the FFI call
+	parent               *C.FfiScopeHandle
+	attributes           uint32
+	data                 *C.char
+	metadata             *C.char
+	modelName            *C.char
+	timestamp            *C.int64_t
+	requestCodec         *C.FfiCodecHandle
+	requestCodecHandle   *CodecHandle
+	annotatedRequest     *C.char
+	annotatedResponse    *C.char
+	codecDecode          C.NemoRelayCodecDecodeFn
+	codecEncode          C.NemoRelayCodecEncodeFn
+	codecUserData        unsafe.Pointer
+	codecFreeFn          C.NemoRelayFreeFn
+	responseCodec        *C.FfiCodecHandle
+	responseCodecHandle  *CodecHandle // prevents GC of the CodecHandle during FFI calls
 }
 
 // LLMCallOption is a functional option that configures optional parameters for
 // LLM call functions ([LlmCall], [LlmCallEnd], [LlmCallExecute],
 // [LlmStreamCallExecute], [LlmConditionalExecution]). Available options include
 // [WithLLMParent], [WithLLMAttributes], [WithLLMData], [WithLLMMetadata],
-// [WithLLMModelName], [WithLLMCodec], [WithLLMResponseCodec], and
-// [WithLLMTimestamp]. [WithLLMTimestamp] affects manual [LlmCall] and
+// [WithLLMModelName], [WithLLMCodec], [WithLLMResponseCodec],
+// [WithLLMAnnotatedRequest], [WithLLMAnnotatedResponse], and [WithLLMTimestamp].
+// [WithLLMTimestamp] affects manual [LlmCall] and
 // [LlmCallEnd] spans only; managed execute spans use runtime-generated timestamps.
 type LLMCallOption func(*llmCallOptions)
 
@@ -1542,24 +1629,93 @@ func WithLLMModelName(name string) LLMCallOption {
 	}
 }
 
-// WithLLMCodec sets the Codec to use for this LLM call. The codec's decode
-// and encode callbacks are passed directly to the FFI execute functions.
-func WithLLMCodec(codec CodecFunc) LLMCallOption {
+// WithLLMCodec selects a built-in CodecHandle or custom CodecFunc for request
+// decoding on manual Start events and managed calls. Pass nil to clear an
+// earlier request codec option.
+func WithLLMCodec(codec RequestCodec) LLMCallOption {
+	if codec == nil {
+		codec = (*CodecHandle)(nil)
+	}
+	return func(o *llmCallOptions) { codec.applyRequestCodec(o) }
+}
+
+// RequestCodec is either a CodecFunc or an owned CodecHandle.
+type RequestCodec interface{ applyRequestCodec(*llmCallOptions) }
+
+func (codec CodecFunc) applyRequestCodec(o *llmCallOptions) {
+	o.requestCodecErr = nil
+	if o.codecUserData != nil {
+		unregisterClosure(o.codecUserData)
+	}
+	if o.requestCodec != nil {
+		C.nemo_relay_codec_free(o.requestCodec)
+	}
+	o.requestCodec, o.requestCodecHandle = nil, nil
+	o.codecUserData = registerClosure(&codec)
+	o.codecDecode = C.NemoRelayCodecDecodeFn(C.goCodecDecodeTrampoline)
+	o.codecEncode = C.NemoRelayCodecEncodeFn(C.goCodecEncodeTrampoline)
+	o.codecFreeFn = C.NemoRelayFreeFn(C.goFreeTrampoline)
+}
+
+func (codec *CodecHandle) applyRequestCodec(o *llmCallOptions) {
+	o.requestCodecErr = nil
+	if o.codecUserData != nil {
+		unregisterClosure(o.codecUserData)
+	}
+	o.codecUserData, o.codecDecode, o.codecEncode, o.codecFreeFn = nil, nil, nil, nil
+	if o.requestCodec != nil {
+		C.nemo_relay_codec_free(o.requestCodec)
+	}
+	o.requestCodec, o.requestCodecHandle = nil, codec
+	if codec != nil {
+		var err error
+		o.requestCodec, err = codec.snapshot()
+		if err != nil {
+			o.requestCodecErr = err
+		}
+	}
+}
+
+// WithLLMAnnotatedRequest sets a manual Start annotation computed by the caller.
+func WithLLMAnnotatedRequest(annotation json.RawMessage) LLMCallOption {
 	return func(o *llmCallOptions) {
-		id := registerClosure(&codec)
-		o.codecDecode = C.NemoRelayCodecDecodeFn(C.goCodecDecodeTrampoline)
-		o.codecEncode = C.NemoRelayCodecEncodeFn(C.goCodecEncodeTrampoline)
-		o.codecUserData = id
-		o.codecFreeFn = C.NemoRelayFreeFn(C.goFreeTrampoline)
+		if o.annotatedRequest != nil {
+			C.free(unsafe.Pointer(o.annotatedRequest))
+		}
+		o.annotatedRequest = nil
+		o.annotatedRequestErr = nil
+		if !json.Valid(annotation) {
+			o.annotatedRequestErr = &RelayError{Code: StatusInvalidJSON, Message: "invalid LLM annotation JSON"}
+			return
+		}
+		o.annotatedRequest = C.CString(string(annotation))
+	}
+}
+
+// WithLLMAnnotatedResponse sets a manual End annotation computed by the caller.
+func WithLLMAnnotatedResponse(annotation json.RawMessage) LLMCallOption {
+	return func(o *llmCallOptions) {
+		if o.annotatedResponse != nil {
+			C.free(unsafe.Pointer(o.annotatedResponse))
+		}
+		o.annotatedResponse = nil
+		o.annotatedResponseErr = nil
+		if !json.Valid(annotation) {
+			o.annotatedResponseErr = &RelayError{Code: StatusInvalidJSON, Message: "invalid LLM annotation JSON"}
+			return
+		}
+		o.annotatedResponse = C.CString(string(annotation))
 	}
 }
 
 // CodecHandle wraps an opaque FFI codec handle that carries both request
 // codec (decode/encode) and response codec (decode_response) implementations.
 // Create via [NewOpenAIChatCodec], [NewOpenAIResponsesCodec],
-// [NewAnthropicMessagesCodec], or [NewGeminiGenerateContentCodec]. The handle is
-// automatically freed when garbage collected.
+// [NewAnthropicMessagesCodec], [NewGeminiGenerateContentCodec],
+// [NewOCIGenAIChatCodec], or [NewCustomResponseCodec]. The handle is automatically
+// freed when garbage collected. Do not copy a CodecHandle value.
 type CodecHandle struct {
+	mu  sync.RWMutex
 	ptr *C.FfiCodecHandle
 }
 
@@ -1569,14 +1725,7 @@ type CodecHandle struct {
 // [WithLLMResponseCodec] to enable structured request and response handling for
 // OpenAI Chat payloads.
 func NewOpenAIChatCodec() *CodecHandle {
-	h := &CodecHandle{ptr: C.nemo_relay_openai_chat_codec_new()}
-	runtime.SetFinalizer(h, func(h *CodecHandle) {
-		if h.ptr != nil {
-			C.nemo_relay_codec_free(h.ptr)
-			h.ptr = nil
-		}
-	})
-	return h
+	return newCodecHandle(C.nemo_relay_codec_new(C.NEMO_RELAY_CODEC_OPENAI_CHAT, nil))
 }
 
 // NewOpenAIResponsesCodec creates a codec for the OpenAI Responses API.
@@ -1585,14 +1734,7 @@ func NewOpenAIChatCodec() *CodecHandle {
 // [WithLLMResponseCodec] to enable structured request and response handling for
 // OpenAI Responses payloads.
 func NewOpenAIResponsesCodec() *CodecHandle {
-	h := &CodecHandle{ptr: C.nemo_relay_openai_responses_codec_new()}
-	runtime.SetFinalizer(h, func(h *CodecHandle) {
-		if h.ptr != nil {
-			C.nemo_relay_codec_free(h.ptr)
-			h.ptr = nil
-		}
-	})
-	return h
+	return newCodecHandle(C.nemo_relay_codec_new(C.NEMO_RELAY_CODEC_OPENAI_RESPONSES, nil))
 }
 
 // NewAnthropicMessagesCodec creates a codec for the Anthropic Messages API.
@@ -1601,14 +1743,7 @@ func NewOpenAIResponsesCodec() *CodecHandle {
 // [WithLLMResponseCodec] to enable structured request and response handling for
 // Anthropic Messages payloads.
 func NewAnthropicMessagesCodec() *CodecHandle {
-	h := &CodecHandle{ptr: C.nemo_relay_anthropic_messages_codec_new()}
-	runtime.SetFinalizer(h, func(h *CodecHandle) {
-		if h.ptr != nil {
-			C.nemo_relay_codec_free(h.ptr)
-			h.ptr = nil
-		}
-	})
-	return h
+	return newCodecHandle(C.nemo_relay_codec_new(C.NEMO_RELAY_CODEC_ANTHROPIC_MESSAGES, nil))
 }
 
 // NewGeminiGenerateContentCodec creates a codec for the Gemini generateContent API.
@@ -1617,26 +1752,188 @@ func NewAnthropicMessagesCodec() *CodecHandle {
 // [WithLLMResponseCodec] to enable structured request and response handling for
 // Gemini generateContent payloads.
 func NewGeminiGenerateContentCodec() *CodecHandle {
-	h := &CodecHandle{ptr: C.nemo_relay_gemini_generate_content_codec_new()}
-	runtime.SetFinalizer(h, func(h *CodecHandle) {
-		if h.ptr != nil {
-			C.nemo_relay_codec_free(h.ptr)
-			h.ptr = nil
-		}
-	})
-	return h
+	return newCodecHandle(C.nemo_relay_codec_new(C.NEMO_RELAY_CODEC_GEMINI_GENERATE_CONTENT, nil))
+}
+
+// NewOCIGenAIChatCodec creates an OCI GenAI request and response codec.
+func NewOCIGenAIChatCodec() *CodecHandle {
+	return newCodecHandle(C.nemo_relay_codec_new(C.NEMO_RELAY_CODEC_OCI_GENAI, nil))
+}
+
+// ResponseCodecFunc decodes provider response JSON to annotated response JSON.
+// It must be safe for concurrent calls.
+type ResponseCodecFunc func(json.RawMessage) (json.RawMessage, error)
+
+// NewCustomResponseCodec creates an owned custom response decoder.
+func NewCustomResponseCodec(decode ResponseCodecFunc) (*CodecHandle, error) {
+	return NewCustomCodec(nil, decode)
+}
+
+// NewCustomCodec creates an owned request codec, response codec, or both.
+// A request codec must provide both Decode and Encode. Callbacks can run concurrently.
+func NewCustomCodec(request *CodecFunc, response ResponseCodecFunc) (*CodecHandle, error) {
+	if request == nil && response == nil {
+		return nil, errors.New("at least one codec direction is required")
+	}
+	if request != nil && (request.Decode == nil || request.Encode == nil) {
+		return nil, errors.New("request Decode and Encode are required together")
+	}
+	if request != nil {
+		copy := *request
+		request = &copy
+	}
+	state := &customCodecCallbacks{request: request, response: response}
+	callbacks := C.NemoRelayCodecCallbacks{user_data: registerClosure(state), free_fn: C.NemoRelayFreeFn(C.goFreeTrampoline)}
+	if request != nil {
+		callbacks.decode = C.NemoRelayCodecDecodeFn(C.goCodecDecodeTrampoline)
+		callbacks.encode = C.NemoRelayCodecEncodeFn(C.goCodecEncodeTrampoline)
+	}
+	if response != nil {
+		callbacks.decode_response = C.NemoRelayCodecResponseDecodeFn(C.goCodecResponseDecodeTrampoline)
+	}
+	ptr, err := callPointer(func() *C.FfiCodecHandle { return C.nemo_relay_codec_new(C.NEMO_RELAY_CODEC_CUSTOM, &callbacks) })
+	if err != nil {
+		return nil, err
+	}
+	return newCodecHandle(ptr), nil
+}
+
+type customCodecCallbacks struct {
+	request  *CodecFunc
+	response ResponseCodecFunc
+}
+
+func newCodecHandle(ptr *C.FfiCodecHandle) *CodecHandle {
+	handle := &CodecHandle{ptr: ptr}
+	runtime.SetFinalizer(handle, func(h *CodecHandle) { _ = h.Close() })
+	return handle
+}
+
+// Close releases this handle's references. It is safe to call more than once.
+// Active runtime calls keep their own references and can finish after Close returns.
+func (codec *CodecHandle) Close() error {
+	if codec == nil {
+		return nil
+	}
+	codec.mu.Lock()
+	ptr := codec.ptr
+	codec.ptr = nil
+	codec.mu.Unlock()
+	if ptr != nil {
+		C.nemo_relay_codec_free(ptr)
+	}
+	runtime.SetFinalizer(codec, nil)
+	return nil
+}
+func (codec *CodecHandle) snapshot() (*C.FfiCodecHandle, error) {
+	if codec == nil {
+		return nil, errors.New("codec handle is nil")
+	}
+	codec.mu.RLock()
+	defer codec.mu.RUnlock()
+	return callPointer(func() *C.FfiCodecHandle { return C.nemo_relay_codec_clone(codec.ptr) })
+}
+
+// Decode normalizes a request with this owned codec.
+func (codec *CodecHandle) Decode(request LLMRequest) (json.RawMessage, error) {
+	owned, err := codec.snapshot()
+	if err != nil {
+		return nil, err
+	}
+	defer C.nemo_relay_codec_free(owned)
+	defer runtime.KeepAlive(codec)
+	request = request.withDefaults()
+	if !json.Valid(request.Headers) || !json.Valid(request.Content) {
+		return nil, &RelayError{Code: StatusInvalidJSON, Message: "invalid LLM request JSON"}
+	}
+	headers := C.CString(string(request.Headers))
+	defer C.free(unsafe.Pointer(headers))
+	content := C.CString(string(request.Content))
+	defer C.free(unsafe.Pointer(content))
+	req, err := callPointer(func() *C.FfiLLMRequest { return C.nemo_relay_llm_request_new(headers, content) })
+	if err != nil {
+		return nil, err
+	}
+	defer C.nemo_relay_llm_request_free(req)
+	result, err := callPointer(func() *C.char { return C.nemo_relay_codec_decode(owned, req) })
+	if err != nil {
+		return nil, err
+	}
+	defer C.nemo_relay_string_free(result)
+	return json.RawMessage(C.GoString(result)), nil
+}
+
+// Encode overlays annotated changes and returns the complete request value.
+func (codec *CodecHandle) Encode(annotated json.RawMessage, original LLMRequest) (LLMRequest, error) {
+	owned, err := codec.snapshot()
+	if err != nil {
+		return LLMRequest{}, err
+	}
+	defer C.nemo_relay_codec_free(owned)
+	defer runtime.KeepAlive(codec)
+	original = original.withDefaults()
+	if !json.Valid(original.Headers) || !json.Valid(original.Content) || !json.Valid(annotated) {
+		return LLMRequest{}, &RelayError{Code: StatusInvalidJSON, Message: "invalid LLM codec input JSON"}
+	}
+	headers := C.CString(string(original.Headers))
+	defer C.free(unsafe.Pointer(headers))
+	content := C.CString(string(original.Content))
+	defer C.free(unsafe.Pointer(content))
+	req, err := callPointer(func() *C.FfiLLMRequest { return C.nemo_relay_llm_request_new(headers, content) })
+	if err != nil {
+		return LLMRequest{}, err
+	}
+	defer C.nemo_relay_llm_request_free(req)
+	annotation := C.CString(string(annotated))
+	defer C.free(unsafe.Pointer(annotation))
+	result, err := callPointer(func() *C.char { return C.nemo_relay_codec_encode(owned, annotation, req) })
+	if err != nil {
+		return LLMRequest{}, err
+	}
+	defer C.nemo_relay_string_free(result)
+	var request LLMRequest
+	err = json.Unmarshal([]byte(C.GoString(result)), &request)
+	return request, err
+}
+
+// DecodeResponse normalizes a provider response with this owned codec.
+func (codec *CodecHandle) DecodeResponse(response json.RawMessage) (json.RawMessage, error) {
+	if !json.Valid(response) {
+		return nil, &RelayError{Code: StatusInvalidJSON, Message: "invalid LLM response JSON"}
+	}
+	owned, err := codec.snapshot()
+	if err != nil {
+		return nil, err
+	}
+	defer C.nemo_relay_codec_free(owned)
+	defer runtime.KeepAlive(codec)
+	input := C.CString(string(response))
+	defer C.free(unsafe.Pointer(input))
+	result, err := callPointer(func() *C.char { return C.nemo_relay_codec_decode_response(owned, input) })
+	if err != nil {
+		return nil, err
+	}
+	defer C.nemo_relay_string_free(result)
+	return json.RawMessage(C.GoString(result)), nil
 }
 
 // WithLLMResponseCodec sets the response codec for this LLM call.
-// Pass a CodecHandle created by [NewOpenAIChatCodec], [NewOpenAIResponsesCodec],
-// [NewAnthropicMessagesCodec], or [NewGeminiGenerateContentCodec].
+// Pass a built-in CodecHandle or one created by [NewCustomResponseCodec].
 // The codec handle is kept alive for the duration of the FFI call via
 // runtime.KeepAlive, so it is safe to pass an inline-constructed handle.
 func WithLLMResponseCodec(codec *CodecHandle) LLMCallOption {
 	return func(o *llmCallOptions) {
+		o.responseCodecErr = nil
+		if o.responseCodec != nil {
+			C.nemo_relay_codec_free(o.responseCodec)
+		}
+		o.responseCodec, o.responseCodecHandle = nil, codec
 		if codec != nil {
-			o.responseCodec = codec.ptr
-			o.responseCodecHandle = codec
+			var err error
+			o.responseCodec, err = codec.snapshot()
+			if err != nil {
+				o.responseCodecErr = err
+			}
 		}
 	}
 }
@@ -1652,6 +1949,22 @@ func WithLLMTimestamp(timestamp time.Time) LLMCallOption {
 }
 
 func freeLLMOpts(o *llmCallOptions) {
+	if o.requestCodec != nil {
+		C.nemo_relay_codec_free(o.requestCodec)
+	}
+	if o.responseCodec != nil {
+		C.nemo_relay_codec_free(o.responseCodec)
+	}
+	if o.codecUserData != nil {
+		unregisterClosure(o.codecUserData)
+	}
+	if o.annotatedRequest != nil {
+		C.free(unsafe.Pointer(o.annotatedRequest))
+	}
+	if o.annotatedResponse != nil {
+		C.free(unsafe.Pointer(o.annotatedResponse))
+	}
+
 	if o.data != nil {
 		C.free(unsafe.Pointer(o.data))
 	}
@@ -1675,26 +1988,28 @@ func freeLLMOpts(o *llmCallOptions) {
 // the full lifecycle automatically, use [LlmCallExecute] or
 // [LlmStreamCallExecute] instead.
 //
-// The name identifies the LLM provider/model, and request is an LLMRequest-shaped
-// value ({headers, content}) that will be serialized to JSON. Optional parameters
-// can be set via [LLMCallOption] values. The emitted Start event records the
-// request after sanitize-request guardrails. Request and execution intercepts
+// The name identifies the LLM provider or model. The [LLMRequest] contains
+// headers and JSON content in the provider's format. Use [LLMCallOption] values
+// to set options. The Start event records the request after sanitize-request
+// guardrails. Request and execution intercepts
 // run only through [LlmCallExecute] and [LlmStreamCallExecute].
-func LlmCall(name string, request interface{}, opts ...LLMCallOption) (*LLMHandle, error) {
+func LlmCall(name string, request LLMRequest, opts ...LLMCallOption) (*LLMHandle, error) {
 	o := &llmCallOptions{}
 	for _, opt := range opts {
 		opt(o)
 	}
 	defer runtime.KeepAlive(o.parentHandle)
+	defer runtime.KeepAlive(o.requestCodecHandle)
+	defer runtime.KeepAlive(o.responseCodecHandle)
 	defer freeLLMOpts(o)
+	if err := errors.Join(o.requestCodecErr, o.responseCodecErr, o.annotatedRequestErr, o.annotatedResponseErr); err != nil {
+		return nil, err
+	}
 	if o.hasExecutionOptions {
-		if o.codecUserData != nil {
-			unregisterClosure(o.codecUserData)
-		}
 		return nil, fmt.Errorf("execution options require a managed LLM execute call")
 	}
 
-	requestJSON, err := jsonMarshal(request)
+	requestJSON, err := jsonMarshal(request.withDefaults())
 	if err != nil {
 		return nil, err
 	}
@@ -1704,9 +2019,18 @@ func LlmCall(name string, request interface{}, opts ...LLMCallOption) (*LLMHandl
 	defer C.free(unsafe.Pointer(cName))
 	defer C.free(unsafe.Pointer(cRequest))
 
+	if o.codecUserData != nil {
+		callbacks := C.NemoRelayCodecCallbacks{decode: o.codecDecode, encode: o.codecEncode, user_data: o.codecUserData, free_fn: o.codecFreeFn}
+		codec, err := callPointer(func() *C.FfiCodecHandle { return C.nemo_relay_codec_new(C.NEMO_RELAY_CODEC_CUSTOM, &callbacks) })
+		o.codecUserData = nil
+		if err != nil {
+			return nil, err
+		}
+		o.requestCodec = codec
+	}
 	var out *C.FfiLLMHandle
 	if err := callStatus(func() C.int32_t {
-		return C.nemo_relay_llm_call(cName, cRequest, o.parent, C.uint32_t(o.attributes), o.data, o.metadata, o.modelName, o.timestamp, &out)
+		return C.nemo_relay_llm_call(cName, cRequest, o.parent, C.uint32_t(o.attributes), o.data, o.metadata, o.modelName, o.requestCodec, o.annotatedRequest, o.timestamp, &out)
 	}); err != nil {
 		return nil, err
 	}
@@ -1725,11 +2049,12 @@ func LlmCallEnd(handle *LLMHandle, response json.RawMessage, opts ...LLMCallOpti
 	for _, opt := range opts {
 		opt(o)
 	}
+	defer runtime.KeepAlive(o.responseCodecHandle)
 	defer freeLLMOpts(o)
+	if err := errors.Join(o.requestCodecErr, o.responseCodecErr, o.annotatedRequestErr, o.annotatedResponseErr); err != nil {
+		return err
+	}
 	if o.hasExecutionOptions {
-		if o.codecUserData != nil {
-			unregisterClosure(o.codecUserData)
-		}
 		return fmt.Errorf("execution options require a managed LLM execute call")
 	}
 
@@ -1737,7 +2062,7 @@ func LlmCallEnd(handle *LLMHandle, response json.RawMessage, opts ...LLMCallOpti
 	defer C.free(unsafe.Pointer(cResponse))
 
 	return callStatus(func() C.int32_t {
-		return C.nemo_relay_llm_call_end(handle.ptr, cResponse, o.data, o.metadata, o.timestamp)
+		return C.nemo_relay_llm_call_end(handle.ptr, cResponse, o.data, o.metadata, o.responseCodec, o.annotatedResponse, o.timestamp)
 	})
 }
 
@@ -1750,15 +2075,30 @@ func LlmCallEnd(handle *LLMHandle, response json.RawMessage, opts ...LLMCallOpti
 // and GuardrailRejected is returned. This is the recommended high-level API
 // for non-streaming LLM invocations. Sanitize guardrails do not rewrite the
 // request passed into fn or the value returned to the caller.
-func LlmCallExecute(name string, request interface{}, fn LLMExecutionFunc, opts ...LLMCallOption) (json.RawMessage, error) {
+func LlmCallExecute(name string, request LLMRequest, fn LLMExecutionFunc, opts ...LLMCallOption) (json.RawMessage, error) {
 	o := &llmCallOptions{}
 	for _, opt := range opts {
 		opt(o)
 	}
 	defer runtime.KeepAlive(o.parentHandle)
+	defer runtime.KeepAlive(o.requestCodecHandle)
+	defer runtime.KeepAlive(o.responseCodecHandle)
 	defer freeLLMOpts(o)
+	if err := errors.Join(o.requestCodecErr, o.responseCodecErr, o.annotatedRequestErr, o.annotatedResponseErr); err != nil {
+		return nil, err
+	}
 
-	requestJSON, err := json.Marshal(request)
+	if o.annotatedRequest != nil || o.annotatedResponse != nil {
+		return nil, errors.New("precomputed annotations require manual LLM lifecycle calls")
+	}
+
+	cancellation, stopCancellation, err := callCancellation(o.ctx)
+	if err != nil {
+		return nil, err
+	}
+	defer stopCancellation()
+
+	requestJSON, err := json.Marshal(request.withDefaults())
 	if err != nil {
 		return nil, err
 	}
@@ -1772,7 +2112,7 @@ func LlmCallExecute(name string, request interface{}, fn LLMExecutionFunc, opts 
 
 	var out *C.char
 	err = callStatus(func() C.int32_t {
-		return C.nemo_relay_llm_call_execute_with_options(
+		return C.nemo_relay_llm_call_execute(
 			cName, cRequest,
 			C.NemoRelayLlmExecFn(C.goLlmExecTrampoline),
 			id,
@@ -1782,13 +2122,15 @@ func LlmCallExecute(name string, request interface{}, fn LLMExecutionFunc, opts 
 			o.modelName,
 			o.codecDecode, o.codecEncode,
 			o.codecUserData, o.codecFreeFn,
-			o.responseCodec,
-			o.executionOptions.skipStages(), &out,
+			o.requestCodec, o.responseCodec,
+			o.executionOptions.skipStages(), cancellation, &out,
 		)
 	})
+	o.codecUserData = nil
+
 	runtime.KeepAlive(o.responseCodecHandle)
 	if err != nil {
-		return nil, err
+		return nil, nativeExecutionError(o.ctx, err)
 	}
 	result := json.RawMessage(C.GoString(out))
 	C.nemo_relay_string_free(out)
@@ -1800,53 +2142,88 @@ func LlmCallExecute(name string, request interface{}, fn LLMExecutionFunc, opts 
 // request. Sanitize-request guardrails affect the emitted Start event payload,
 // while sanitize-response guardrails affect only the aggregated End event
 // payload. If accepted, it runs the remaining middleware pipeline and returns
-// an [LlmStream] that yields individual SSE (Server-Sent Event) chunks.
-// Stream execution intercepts are applied to each chunk as it is consumed.
+// an [LlmStream] that yields JSON chunks. Stream execution intercepts open or
+// wrap a complete source. A source can transform each chunk in its Next method.
 // The caller must call [LlmStream.Next] repeatedly until [io.EOF] is
 // returned, or call [LlmStream.Close] to stop early. Close waits for producer
 // cleanup, finalizes the partial response, and returns any cleanup error.
 //
-// The optional collector callback is invoked with each intercepted chunk string,
+// The optional collector callback receives each JSON chunk,
 // allowing the caller to accumulate chunks for aggregation. The optional
 // finalizer callback is invoked once when the stream is exhausted or closed
-// early and must return a JSON string representing the aggregated response.
+// early and returns aggregated JSON plus an error.
 // Pass nil for either to use the default no-op behavior.
-func LlmStreamCallExecute(name string, request interface{}, fn LLMExecutionFunc, collector CollectorFunc, finalizer FinalizerFunc, opts ...LLMCallOption) (*LlmStream, error) {
+func LlmStreamCallExecute(name string, request LLMRequest, fn LLMStreamExecutionFunc, collector CollectorFunc, finalizer FinalizerFunc, opts ...LLMCallOption) (*LlmStream, error) {
 	o := &llmCallOptions{}
 	for _, opt := range opts {
 		opt(o)
 	}
 	defer runtime.KeepAlive(o.parentHandle)
+	defer runtime.KeepAlive(o.requestCodecHandle)
+	defer runtime.KeepAlive(o.responseCodecHandle)
 	defer freeLLMOpts(o)
+	if err := errors.Join(o.requestCodecErr, o.responseCodecErr, o.annotatedRequestErr, o.annotatedResponseErr); err != nil {
+		return nil, err
+	}
 
-	requestJSON, err := json.Marshal(request)
+	if o.annotatedRequest != nil || o.annotatedResponse != nil {
+		return nil, errors.New("precomputed annotations require manual LLM lifecycle calls")
+	}
+
+	cancellation, stopCancellation, err := callCancellation(o.ctx)
+	if err != nil {
+		return nil, err
+	}
+	defer stopCancellation()
+
+	requestJSON, err := json.Marshal(request.withDefaults())
 	if err != nil {
 		return nil, err
 	}
 
-	id := registerClosure(fn)
+	if fn == nil {
+		return nil, errors.New("stream provider is nil")
+	}
+	provider := fn
+	ctx := o.ctx
+	if ctx == nil {
+		ctx = context.Background()
+	}
+	providerContext, cancelProvider := newProviderContext(ctx)
+	providerTransferred := false
+	defer func() {
+		if !providerTransferred {
+			cancelProvider()
+		}
+	}()
+	sources := &streamSources{providerErrors: &providerErrorCapture{}}
+	sources.factory = &streamFactory{ctx: providerContext, fn: provider, sources: sources}
+	defer runtime.KeepAlive(sources)
+	id := registerClosure(weak.Make(sources.factory))
 
 	cName := C.CString(name)
 	cRequest := C.CString(string(requestJSON))
 	defer C.free(unsafe.Pointer(cName))
 	defer C.free(unsafe.Pointer(cRequest))
 
-	callbacks := &streamCallbacks{collector: collector, finalizer: finalizer}
+	callbacks := &streamCallbacks{collector: collector, finalizer: finalizer, providerErrors: sources.providerErrors}
 	callbackID := registerStreamCallbacks(callbacks)
-	cCollector := C.makeOptCollectorCb(nil)
+	streamCallbackOwners.Store(callbackID, weak.Make(sources))
+	var cCollector C.NemoRelayCollectorCb
 	if collector != nil {
-		cCollector = C.makeOptCollectorCb(C.NemoRelayCollectorCb(C.goStreamCollectorTrampoline))
+		cCollector = C.NemoRelayCollectorCb(C.goStreamCollectorTrampoline)
 	}
-	cFinalizer := C.makeOptFinalizerCb(nil)
+	var cFinalizer C.NemoRelayFinalizerCb
 	if finalizer != nil {
-		cFinalizer = C.makeOptFinalizerCb(C.NemoRelayFinalizerCb(C.goStreamFinalizerTrampoline))
+		cFinalizer = C.NemoRelayFinalizerCb(C.goStreamFinalizerTrampoline)
 	}
 
 	var out *C.FfiStream
 	err = callStatus(func() C.int32_t {
-		return C.nemo_relay_llm_stream_call_execute_with_options(
+		return C.nemo_relay_llm_stream_call_execute(
 			cName, cRequest,
-			C.NemoRelayLlmExecFn(C.goLlmExecTrampoline),
+			nil,
+			C.NemoRelayLlmStreamExecCb(C.goLlmStreamExecTrampoline),
 			id,
 			C.NemoRelayFreeFn(C.goFreeTrampoline),
 			cCollector,
@@ -1858,15 +2235,21 @@ func LlmStreamCallExecute(name string, request interface{}, fn LLMExecutionFunc,
 			o.modelName,
 			o.codecDecode, o.codecEncode,
 			o.codecUserData, o.codecFreeFn,
-			o.responseCodec,
-			o.executionOptions.skipStages(), &out,
+			o.requestCodec, o.responseCodec,
+			o.executionOptions.skipStages(), cancellation, &out,
 		)
 	})
+	o.codecUserData = nil
 	runtime.KeepAlive(o.responseCodecHandle)
 	if err != nil {
-		return nil, err
+		return nil, sources.providerErrors.restore(nativeExecutionError(o.ctx, err))
 	}
-	return newLlmStream(out, callbacks), nil
+	stream := newLlmStream(out, callbacks, cancelProvider, sources)
+	providerTransferred = true
+	if o.ctx != nil {
+		stream.bindContext(o.ctx)
+	}
+	return stream, nil
 }
 
 // ---------------------------------------------------------------------------
@@ -2231,14 +2614,19 @@ func DeregisterLlmExecutionIntercept(name string) error {
 // with the request parameters, codec context, and a `next` function. Call
 // `next` to invoke the next intercept or original implementation; skip calling
 // `next` to short-circuit.
-func RegisterLlmStreamExecutionIntercept(name string, priority int32, execFn LLMExecutionInterceptFunc) error {
-	execID := registerClosure(execFn)
+func RegisterLlmStreamExecutionIntercept(name string, priority int32, execFn LLMStreamExecutionInterceptFunc) error {
+	if execFn == nil {
+		return errors.New("stream interceptor is nil")
+	}
+	streamFn := execFn
+	execID := registerClosure(streamFn)
 	cName := C.CString(name)
 	defer C.free(unsafe.Pointer(cName))
 	return callStatus(func() C.int32_t {
 		return C.nemo_relay_register_llm_stream_execution_intercept(
 			cName, C.int32_t(priority),
-			C.NemoRelayLlmExecInterceptCb(C.goLlmExecInterceptTrampoline),
+			nil,
+			C.NemoRelayLlmStreamExecInterceptCb(C.goLlmStreamInterceptTrampoline),
 			execID,
 			C.NemoRelayFreeFn(C.goFreeTrampoline),
 		)
@@ -2513,7 +2901,18 @@ func NewScopeStackFromPropagation(context PropagationContext) (*ScopeStack, erro
 	cPayload := C.CString(string(payload))
 	defer C.free(unsafe.Pointer(cPayload))
 	var ptr *C.FfiScopeStack
-	return checkedValue(callStatus(func() C.int32_t { return C.nemo_relay_scope_stack_create_from_propagation_json(cPayload, &ptr) }), &ScopeStack{ptr: ptr})
+	return checkedValue(callStatus(func() C.int32_t { return C.nemo_relay_scope_stack_create(cPayload, &ptr) }), &ScopeStack{ptr: ptr})
+}
+
+// ForkScopeStack creates a separate child stack under the current parent.
+// Capture it in the parent goroutine before starting concurrent work. Scope-local
+// registrations are not copied. Bind it with Run in the child goroutine.
+func ForkScopeStack() (*ScopeStack, error) {
+	context, err := CapturePropagationContext()
+	if err != nil {
+		return nil, err
+	}
+	return NewScopeStackFromPropagation(context)
 }
 
 // Close frees the scope stack. After calling Close, the ScopeStack must not be used.
@@ -2570,8 +2969,8 @@ type AtifExporter struct {
 
 // NewAtifExporter creates a new ATIF exporter.
 // modelName can be empty string for no model name.
-func NewAtifExporter(sessionID, agentName, agentVersion, modelName string) (*AtifExporter, error) {
-	return newAtifExporterFunc(sessionID, agentName, agentVersion, modelName)
+func NewAtifExporter(sessionID, agentName, agentVersion, modelName string, opts ...AtifExporterOption) (*AtifExporter, error) {
+	return newAtifExporterFunc(sessionID, agentName, agentVersion, modelName, opts...)
 }
 
 // Register registers the exporter as an event subscriber with the given name.
@@ -3061,7 +3460,7 @@ func NewOpenTelemetrySubscriber(config OpenTelemetryConfig) (*OpenTelemetrySubsc
 	defer C.free(unsafe.Pointer(cTLSJSON))
 	var ptr unsafe.Pointer
 	if err := callStatus(func() C.int32_t {
-		return C.nemo_relay_otel_subscriber_create_with_projection_options_with_tls(
+		return C.nemo_relay_otel_subscriber_create(
 			cType,
 			cTransport,
 			cEndpoint,
@@ -3080,6 +3479,10 @@ func NewOpenTelemetrySubscriber(config OpenTelemetryConfig) (*OpenTelemetrySubsc
 			cPromoteResourceMetadataPrefixesJSON,
 			C.uint64_t(*config.CompletedSpanContextTTL/time.Millisecond),
 			cTLSJSON,
+			nil,
+			nil,
+			nil,
+			nil,
 			&ptr,
 		)
 	}); err != nil {
@@ -3227,23 +3630,29 @@ func NewOpenTelemetryFileSinkSubscriber(config OpenTelemetryFileSinkConfig) (*Op
 
 	var ptr unsafe.Pointer
 	if err := callStatus(func() C.int32_t {
-		return C.nemo_relay_otel_subscriber_create_file_sink(
+		return C.nemo_relay_otel_subscriber_create(
 			cType,
-			cOutputDirectory,
-			cFilename,
-			cFormat,
-			cMode,
+			nil,
+			nil,
+			nil,
+			nil,
 			cResourceAttrsJSON,
 			cServiceName,
 			cServiceNamespace,
 			cServiceVersion,
 			cInstrumentationScope,
+			0,
 			cMarkProjection,
 			cMarkExcludeNamesJSON,
 			cAttributeMappingsJSON,
 			cPromoteMetadataPrefixesJSON,
 			cPromoteResourceMetadataPrefixesJSON,
 			C.uint64_t(*config.CompletedSpanContextTTL/time.Millisecond),
+			nil,
+			cOutputDirectory,
+			cFilename,
+			cFormat,
+			cMode,
 			&ptr,
 		)
 	}); err != nil {
@@ -3541,7 +3950,7 @@ func NewOpenTelemetryLogSubscriber(config OpenTelemetryLogConfig) (*OpenTelemetr
 	defer C.free(unsafe.Pointer(cTLSJSON))
 	var ptr unsafe.Pointer
 	if err := callStatus(func() C.int32_t {
-		return C.nemo_relay_otel_log_subscriber_create_with_tls(
+		return C.nemo_relay_otel_log_subscriber_create(
 			common.transport,
 			common.endpoint,
 			common.headers,
@@ -3681,7 +4090,7 @@ func NewOpenTelemetryMetricSubscriber(config OpenTelemetryMetricConfig) (*OpenTe
 	defer C.free(unsafe.Pointer(cTLSJSON))
 	var ptr unsafe.Pointer
 	if err := callStatus(func() C.int32_t {
-		return C.nemo_relay_otel_metric_subscriber_create_with_tls(
+		return C.nemo_relay_otel_metric_subscriber_create(
 			common.transport,
 			common.endpoint,
 			common.headers,
@@ -4152,8 +4561,12 @@ func ScopeDeregisterLlmExecutionIntercept(scopeUUID, name string) error {
 
 // ScopeRegisterLlmStreamExecutionIntercept registers a scope-local streaming
 // LLM execution intercept following the middleware chain pattern.
-func ScopeRegisterLlmStreamExecutionIntercept(scopeUUID, name string, priority int32, execFn LLMExecutionInterceptFunc) error {
-	execID := registerClosure(execFn)
+func ScopeRegisterLlmStreamExecutionIntercept(scopeUUID, name string, priority int32, execFn LLMStreamExecutionInterceptFunc) error {
+	if execFn == nil {
+		return errors.New("stream interceptor is nil")
+	}
+	streamFn := execFn
+	execID := registerClosure(streamFn)
 	cScopeUUID := C.CString(scopeUUID)
 	defer C.free(unsafe.Pointer(cScopeUUID))
 	cName := C.CString(name)
@@ -4161,7 +4574,8 @@ func ScopeRegisterLlmStreamExecutionIntercept(scopeUUID, name string, priority i
 	return callStatus(func() C.int32_t {
 		return C.nemo_relay_scope_register_llm_stream_execution_intercept(
 			cScopeUUID, cName, C.int32_t(priority),
-			C.NemoRelayLlmExecInterceptCb(C.goLlmExecInterceptTrampoline),
+			nil,
+			C.NemoRelayLlmStreamExecInterceptCb(C.goLlmStreamInterceptTrampoline),
 			execID,
 			C.NemoRelayFreeFn(C.goFreeTrampoline),
 		)
@@ -4273,4 +4687,55 @@ func LlmConditionalExecution(request json.RawMessage) error {
 	defer C.free(unsafe.Pointer(cRequest))
 
 	return callStatus(func() C.int32_t { return C.nemo_relay_llm_conditional_execution(cRequest) })
+}
+
+func callCancellation(ctx context.Context) (*C.FfiCancellation, func(), error) {
+	if ctx == nil {
+		return nil, func() {}, nil
+	}
+	if err := ctx.Err(); err != nil {
+		return nil, func() {}, err
+	}
+	signal := C.nemo_relay_cancellation_create()
+	stop := watchCancellation(ctx, func() { C.nemo_relay_cancellation_cancel(signal) })
+	return signal, func() { stop(); C.nemo_relay_cancellation_free(signal) }, nil
+}
+
+// LlmCallExecuteContext runs a managed LLM call with cooperative provider
+// cancellation. The provider must honor ctx. Relay waits for callback cleanup.
+func LlmCallExecuteContext(ctx context.Context, name string, request LLMRequest, fn func(context.Context, json.RawMessage) (json.RawMessage, error), opts ...LLMCallOption) (json.RawMessage, error) {
+	if ctx == nil {
+		return nil, errors.New("context is nil")
+	}
+	opts = append(opts[:len(opts):len(opts)], func(o *llmCallOptions) { o.ctx = ctx })
+	var capture providerErrorCapture
+	result, err := LlmCallExecute(name, request, func(request json.RawMessage) (json.RawMessage, error) {
+		result, err := fn(ctx, request)
+		return result, capture.record(err)
+	}, opts...)
+	return result, capture.restore(err)
+}
+
+// ToolCallExecuteContext runs a managed tool call with cooperative cancellation.
+func ToolCallExecuteContext(ctx context.Context, name string, args json.RawMessage, fn func(context.Context, json.RawMessage) (ToolExecutionResult, error), opts ...ToolCallOption) (ToolExecutionResult, error) {
+	if ctx == nil {
+		return ToolExecutionResult{}, errors.New("context is nil")
+	}
+	opts = append(opts[:len(opts):len(opts)], func(o *toolCallOptions) { o.ctx = ctx })
+	var capture providerErrorCapture
+	result, err := ToolCallExecute(name, args, func(args json.RawMessage) (ToolExecutionResult, error) {
+		result, err := fn(ctx, args)
+		return result, capture.record(err)
+	}, opts...)
+	return result, capture.restore(err)
+}
+
+// LlmStreamCallExecuteContext binds stream setup and consumption to ctx.
+// Cancelling ctx closes the stream and unblocks a cooperative producer read.
+func LlmStreamCallExecuteContext(ctx context.Context, name string, request LLMRequest, fn LLMStreamExecutionFunc, collector CollectorFunc, finalizer FinalizerFunc, opts ...LLMCallOption) (*LlmStream, error) {
+	if ctx == nil {
+		return nil, errors.New("context is nil")
+	}
+	opts = append(opts[:len(opts):len(opts)], func(o *llmCallOptions) { o.ctx = ctx })
+	return LlmStreamCallExecute(name, request, fn, collector, finalizer, opts...)
 }

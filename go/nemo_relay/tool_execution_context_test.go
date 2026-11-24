@@ -5,7 +5,9 @@ package nemo_relay
 
 import (
 	"bytes"
+	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"reflect"
 	"strings"
@@ -24,7 +26,7 @@ func executionContextJSON(context *ApplicationExecutionContext) json.RawMessage 
 	return value
 }
 
-func TestToolExecutionContextRemainsSeparateAcrossMiddlewareAndNestedCalls(t *testing.T) {
+func TestToolExecutionContextRemainsSeparateAcrossMiddlewareAndSubsequentCalls(t *testing.T) {
 	const marker = "application-private-context-reference"
 	context := json.RawMessage(`{"data":{"approval":{"reference":"` + marker + `"}}}`)
 	var eventsMu sync.Mutex
@@ -40,12 +42,12 @@ func TestToolExecutionContextRemainsSeparateAcrossMiddlewareAndNestedCalls(t *te
 	}
 	t.Cleanup(func() { _ = DeregisterSubscriber("execution-context-events") })
 
-	var nestedCalls, businessCalls int
+	var subsequentCalls, businessCalls int
 	if err := RegisterToolExecutionIntercept("execution-context-first", 1,
 		func(ctx ToolExecutionContext, next func(json.RawMessage) (ToolExecutionResult, error)) (ToolExecutionInterceptOutcome, error) {
-			if ctx.ToolName == "execution-context-inner" {
+			if ctx.ToolName == "execution-context-subsequent" {
 				if ctx.ExecutionContext != nil {
-					return ToolExecutionInterceptOutcome{}, fmt.Errorf("nested call inherited execution context")
+					return ToolExecutionInterceptOutcome{}, fmt.Errorf("subsequent call inherited execution context")
 				}
 				return toolExecutionOutcome(next(ctx.Args))
 			}
@@ -54,13 +56,6 @@ func TestToolExecutionContextRemainsSeparateAcrossMiddlewareAndNestedCalls(t *te
 			}
 			if ctx.ToolCallID == nil || *ctx.ToolCallID != "provider-context-call" {
 				return ToolExecutionInterceptOutcome{}, fmt.Errorf("context lost the provider tool call ID")
-			}
-			if _, err := ToolCallExecute("execution-context-inner", json.RawMessage(`{}`),
-				func(args json.RawMessage) (ToolExecutionResult, error) {
-					nestedCalls++
-					return ToolExecutionResult{Result: args}, nil
-				}); err != nil {
-				return ToolExecutionInterceptOutcome{}, err
 			}
 			// This is callback-owned JSON, not a mutable reference to the context
 			// held by the runtime or supplied to the next middleware.
@@ -92,8 +87,15 @@ func TestToolExecutionContextRemainsSeparateAcrossMiddlewareAndNestedCalls(t *te
 	if err != nil {
 		t.Fatal(err)
 	}
-	if businessCalls != 1 || nestedCalls != 1 || string(result.Annotation) != `{"reviewed":true}` {
-		t.Fatalf("unexpected effect counts or annotation: business=%d nested=%d result=%+v", businessCalls, nestedCalls, result)
+	if _, failure := ToolCallExecute("execution-context-subsequent", json.RawMessage(`{}`),
+		func(arguments json.RawMessage) (ToolExecutionResult, error) {
+			subsequentCalls++
+			return ToolExecutionResult{Result: arguments}, nil
+		}); failure != nil {
+		t.Fatal(failure)
+	}
+	if businessCalls != 1 || subsequentCalls != 1 || string(result.Annotation) != `{"reviewed":true}` {
+		t.Fatalf("unexpected effect counts or annotation: business=%d subsequent=%d result=%+v", businessCalls, subsequentCalls, result)
 	}
 	if err := FlushSubscribers(); err != nil {
 		t.Fatal(err)
@@ -287,5 +289,185 @@ func TestApplicationExecutionContextTypedMiddleware(t *testing.T) {
 	}
 	if !observed {
 		t.Fatal("typed middleware was not called")
+	}
+}
+
+func TestApplicationContextEmptyRawMessageIsNotNull(test *testing.T) {
+	invalid := ApplicationExecutionContext{Data: map[string]json.RawMessage{"x": {}}}
+	if _, failure := json.Marshal(invalid); failure == nil {
+		test.Fatal("empty non-nil JSON was converted to null")
+	}
+	for _, value := range []json.RawMessage{nil, json.RawMessage("null")} {
+		context := ApplicationExecutionContext{Data: map[string]json.RawMessage{"x": value}}
+		encoded, failure := json.Marshal(context)
+		if failure != nil || string(encoded) != `{"data":{"x":null}}` {
+			test.Fatalf("null context changed: %s %v", encoded, failure)
+		}
+		result, failure := ToolCallExecute("valid-null-context", json.RawMessage(`{}`), func(arguments json.RawMessage) (ToolExecutionResult, error) {
+			return ToolExecutionResult{Result: arguments}, nil
+		}, WithApplicationExecutionContext(&context))
+		if failure != nil || string(result.Result) != "{}" {
+			test.Fatalf("null should remain valid: %s %v", result.Result, failure)
+		}
+	}
+}
+
+func TestApplicationContextBudgetRefusesBeforeCallbacksAndRecovers(test *testing.T) {
+	middlewareCalls, toolCalls := 0, 0
+	name := "review-context-budget"
+	if failure := RegisterToolExecutionIntercept(name, 1, func(context ToolExecutionContext, next func(json.RawMessage) (ToolExecutionResult, error)) (ToolExecutionInterceptOutcome, error) {
+		middlewareCalls++
+		return toolExecutionOutcome(next(context.Args))
+	}); failure != nil {
+		test.Fatal(failure)
+	}
+	test.Cleanup(func() { _ = DeregisterToolExecutionIntercept(name) })
+	raw := json.RawMessage(`{"data":{"value":"` + strings.Repeat("x", 1_048_576) + `"}}`)
+	typed := ApplicationExecutionContext{Data: map[string]json.RawMessage{"value": json.RawMessage(`"` + strings.Repeat("x", 1_048_576) + `"`)}}
+	empty := ApplicationExecutionContext{Data: map[string]json.RawMessage{"x": {}}}
+	deep := json.RawMessage(`{"data":{"value":` + strings.Repeat("[", 63) + `null` + strings.Repeat("]", 63) + `}}`)
+	for _, option := range []ToolCallOption{WithToolExecutionContext(raw), WithApplicationExecutionContext(&typed), WithApplicationExecutionContext(&empty), WithToolExecutionContext(deep)} {
+		_, failure := ToolCallExecute("refused-context", json.RawMessage(`{}`), func(arguments json.RawMessage) (ToolExecutionResult, error) {
+			toolCalls++
+			return ToolExecutionResult{Result: arguments}, nil
+		}, option)
+		if failure == nil {
+			test.Fatal("invalid context accepted")
+		}
+		if middlewareCalls != 0 || toolCalls != 0 {
+			test.Fatal("invalid context reached callbacks")
+		}
+	}
+	if _, failure := ToolCallExecute("recovered-context", json.RawMessage(`{}`), func(arguments json.RawMessage) (ToolExecutionResult, error) {
+		toolCalls++
+		return ToolExecutionResult{Result: arguments}, nil
+	}, WithToolExecutionContext(json.RawMessage(`{"data":{"value":null}}`))); failure != nil {
+		test.Fatal(failure)
+	}
+	if middlewareCalls != 1 || toolCalls != 1 {
+		test.Fatalf("valid recovery calls: %d/%d", middlewareCalls, toolCalls)
+	}
+}
+
+func TestApplicationContextFloatAndEscapedBoundaries(test *testing.T) {
+	for _, number := range []string{"1e-7", "1e-6", "0.00001", "1e+16", "-0.0", "5e-324", "18446744073709551615"} {
+		test.Run(number, func(test *testing.T) {
+			overhead := len(`{"data":{"number":` + number + `,"padding":""}}`)
+			input := json.RawMessage(`{"data":{"number":` + number + `,"padding":"` + strings.Repeat("x", 16_384-overhead) + `"}}`)
+			var options toolCallOptions
+			WithToolExecutionContext(input)(&options)
+			if options.executionContextError != nil {
+				test.Fatal(options.executionContextError)
+			}
+			if len(options.executionContext) != 16_384 {
+				test.Fatalf("canonical boundary is %d", len(options.executionContext))
+			}
+		})
+	}
+	for _, input := range []string{`{"data":{"value":"` + strings.Repeat(`\u0061`, 3_000) + `"}}`, strings.Repeat(" ", 20_000) + `{}`} {
+		var options toolCallOptions
+		WithToolExecutionContext(json.RawMessage(input))(&options)
+		if options.executionContextError != nil {
+			test.Fatal(options.executionContextError)
+		}
+	}
+}
+
+var retainedReviewContextOption ToolCallOption
+
+func TestApplicationContextOversizeOptionsDoNotCopyThePayload(test *testing.T) {
+	oversized := json.RawMessage(`{"data":{"value":"` + strings.Repeat("x", 1_048_576) + `"}}`)
+	typed := ApplicationExecutionContext{Data: map[string]json.RawMessage{"value": json.RawMessage(`"` + strings.Repeat("x", 1_048_576) + `"`)}}
+	for name, makeOption := range map[string]func() ToolCallOption{
+		"raw":   func() ToolCallOption { return WithToolExecutionContext(oversized) },
+		"typed": func() ToolCallOption { return WithApplicationExecutionContext(&typed) },
+	} {
+		test.Run(name, func(test *testing.T) {
+			measured := testing.Benchmark(func(benchmark *testing.B) {
+				for benchmark.Loop() {
+					retainedReviewContextOption = makeOption()
+				}
+			})
+			if measured.AllocedBytesPerOp() > 64*1024 {
+				test.Fatalf("option copied oversized payload: %d bytes/op", measured.AllocedBytesPerOp())
+			}
+			var options toolCallOptions
+			retainedReviewContextOption(&options)
+			if options.executionContextError == nil {
+				test.Fatal("oversized option retained no refusal")
+			}
+		})
+	}
+}
+
+func TestApplicationContextBudgetPreservesRawNumbers(test *testing.T) {
+	for _, number := range []string{"18446744073709551616", "1.00000000000000011102230246251565404236316680908203125", "1e-07"} {
+		context := ApplicationExecutionContext{Data: map[string]json.RawMessage{"number": json.RawMessage(number)}}
+		encoded, failure := json.Marshal(context)
+		expected := `{"data":{"number":` + number + `}}`
+		if failure != nil || string(encoded) != expected {
+			test.Fatalf("raw number changed: %s %v", encoded, failure)
+		}
+		var options toolCallOptions
+		WithToolExecutionContext(json.RawMessage(expected))(&options)
+		if options.executionContextError != nil || string(options.executionContext) != expected {
+			test.Fatalf("raw option changed numeric payload: %s %v", options.executionContext, options.executionContextError)
+		}
+	}
+}
+
+func TestApplicationContextAndCancellationCompose(test *testing.T) {
+	for _, cancelDuringExecution := range []bool{false, true} {
+		test.Run(fmt.Sprintf("cancel=%t", cancelDuringExecution), func(test *testing.T) {
+			requestContext, cancelRequest := context.WithCancel(context.Background())
+			defer cancelRequest()
+			applicationContext := ApplicationExecutionContext{Data: map[string]json.RawMessage{
+				"decision": json.RawMessage(`"reviewed"`),
+			}}
+			middlewareCalls, implementationCalls := 0, 0
+			name := fmt.Sprintf("application-context-cancellation-%t", cancelDuringExecution)
+			if failure := RegisterToolExecutionIntercept(name, 1,
+				func(invocation ToolExecutionContext, next func(json.RawMessage) (ToolExecutionResult, error)) (ToolExecutionInterceptOutcome, error) {
+					middlewareCalls++
+					if invocation.ExecutionContext == nil || string(invocation.ExecutionContext.Data["decision"]) != `"reviewed"` {
+						return ToolExecutionInterceptOutcome{}, fmt.Errorf("application context did not reach middleware")
+					}
+					if string(invocation.Args) != `{"value":1}` {
+						return ToolExecutionInterceptOutcome{}, fmt.Errorf("application context changed tool arguments")
+					}
+					return toolExecutionOutcome(next(invocation.Args))
+				}); failure != nil {
+				test.Fatal(failure)
+			}
+			test.Cleanup(func() { _ = DeregisterToolExecutionIntercept(name) })
+			result, failure := ToolCallExecuteContext(requestContext, name, json.RawMessage(`{"value":1}`),
+				func(executionContext context.Context, arguments json.RawMessage) (ToolExecutionResult, error) {
+					implementationCalls++
+					if cancelDuringExecution {
+						cancelRequest()
+						<-executionContext.Done()
+						return ToolExecutionResult{}, executionContext.Err()
+					}
+					return ToolExecutionResult{Result: arguments}, nil
+				}, WithApplicationExecutionContext(&applicationContext))
+			if cancelDuringExecution {
+				if !errors.Is(failure, context.Canceled) {
+					test.Fatalf("cancellation was lost: %v", failure)
+				}
+			} else if failure != nil || string(result.Result) != `{"value":1}` {
+				test.Fatalf("valid context/cancellation composition failed: %s %v", result.Result, failure)
+			}
+			if middlewareCalls != 1 || implementationCalls != 1 {
+				test.Fatalf("unexpected execution counts: %d/%d", middlewareCalls, implementationCalls)
+			}
+			recovered, failure := ToolCallExecute(name+"-recovery", json.RawMessage(`{"value":1}`),
+				func(arguments json.RawMessage) (ToolExecutionResult, error) {
+					implementationCalls++
+					return ToolExecutionResult{Result: arguments}, nil
+				}, WithApplicationExecutionContext(&applicationContext))
+			if failure != nil || string(recovered.Result) != `{"value":1}` || middlewareCalls != 2 || implementationCalls != 2 {
+				test.Fatalf("valid recovery failed: %s %v, calls=%d/%d", recovered.Result, failure, middlewareCalls, implementationCalls)
+			}
+		})
 	}
 }

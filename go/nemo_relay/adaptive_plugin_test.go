@@ -90,7 +90,7 @@ func registerLifecycleGuardrails(ctx *PluginContext) error {
 	if err := ctx.RegisterLlmSanitizeRequestGuardrail(
 		"llm_sanitize_request",
 		7,
-		func(request LLMRequestDTO, _ LLMSanitizeRequestContext) (LLMRequestDTO, bool) {
+		func(request LLMRequest, _ LLMSanitizeRequestContext) (LLMRequest, bool) {
 			return request, false
 		},
 	); err != nil {
@@ -125,7 +125,7 @@ func registerLifecycleInterceptors(ctx *PluginContext, pluginKind string) error 
 		"llm_request",
 		7,
 		false,
-		func(name string, request LLMRequestDTO, annotated json.RawMessage) (LLMRequestInterceptOutcome, error) {
+		func(name string, request LLMRequest, annotated json.RawMessage) (LLMRequestInterceptOutcome, error) {
 			out, err := decorateJSONPayload(request.Headers, "x-go-plugin", pluginKind)
 			if err != nil {
 				return LLMRequestInterceptOutcome{}, err
@@ -194,14 +194,13 @@ func registerLifecycleStreamPlugin(streamPluginKind string) error {
 		RegisterFunc: func(pluginConfig map[string]any, ctx *PluginContext) error {
 			return ctx.RegisterLlmStreamExecutionIntercept(
 				"llm_stream_exec",
-				7,
-				func(requestJSON json.RawMessage, _ LLMExecutionContext, next func(json.RawMessage) (json.RawMessage, error)) (json.RawMessage, error) {
+				7, LLMExecutionInterceptFunc(func(requestJSON json.RawMessage, _ LLMExecutionContext, next func(json.RawMessage) (json.RawMessage, error)) (json.RawMessage, error) {
 					responseJSON, err := next(requestJSON)
 					if err != nil {
 						return nil, err
 					}
 					return decorateJSONPayload(responseJSON, "goLlmStreamPlugin", streamPluginKind)
-				},
+				}).AsStream(),
 			)
 		},
 	})
@@ -229,10 +228,10 @@ func assertToolPluginPayload(t *testing.T, pluginKind string) {
 
 func assertLlmPluginPayload(t *testing.T, pluginKind string) {
 	t.Helper()
-	llmResult, err := LlmCallExecute("test-model", map[string]any{
+	llmResult, err := LlmCallExecute("test-model", requestForTest(map[string]any{
 		"headers": map[string]any{},
 		"content": map[string]any{"messages": []any{}},
-	}, func(request json.RawMessage) (json.RawMessage, error) {
+	}), func(request json.RawMessage) (json.RawMessage, error) {
 		var payload struct {
 			Headers map[string]any `json:"headers"`
 		}
@@ -268,13 +267,13 @@ func assertGuardrailError(t *testing.T, err error, want string) {
 
 func assertStreamPluginPayload(t *testing.T, streamPluginKind string) {
 	t.Helper()
-	stream, err := LlmStreamCallExecute("test-stream-model", map[string]any{
+	stream, err := LlmStreamCallExecute("test-stream-model", requestForTest(map[string]any{
 		"headers": map[string]any{},
 		"content": map[string]any{"messages": []any{}},
-	}, func(request json.RawMessage) (json.RawMessage, error) {
+	}), LLMExecutionFunc(func(request json.RawMessage) (json.RawMessage, error) {
 		return json.Marshal(map[string]any{"response": "ok"})
-	}, nil, func() string {
-		return `{"final":true}`
+	}).AsStream(), nil, func() (json.RawMessage, error) {
+		return json.RawMessage(`{"final":true}`), nil
 	})
 	if err != nil {
 		t.Fatalf("LlmStreamCallExecute failed: %v", err)
@@ -536,7 +535,7 @@ func TestPluginFuncsAndClosedContextBranches(t *testing.T) {
 			return closed.RegisterToolConditionalExecutionGuardrail("tool_conditional", 1, func(name string, args json.RawMessage) *string { return nil })
 		}},
 		{"llm sanitize request", func() error {
-			return closed.RegisterLlmSanitizeRequestGuardrail("llm_sanitize_request", 1, func(request LLMRequestDTO, _ LLMSanitizeRequestContext) (LLMRequestDTO, bool) { return request, false })
+			return closed.RegisterLlmSanitizeRequestGuardrail("llm_sanitize_request", 1, func(request LLMRequest, _ LLMSanitizeRequestContext) (LLMRequest, bool) { return request, false })
 		}},
 		{"llm sanitize response", func() error {
 			return closed.RegisterLlmSanitizeResponseGuardrail("llm_sanitize_response", 1, func(response json.RawMessage, _ LLMSanitizeResponseContext) (json.RawMessage, bool) {
@@ -547,7 +546,7 @@ func TestPluginFuncsAndClosedContextBranches(t *testing.T) {
 			return closed.RegisterLlmConditionalExecutionGuardrail("llm_conditional", 1, func(headers, content json.RawMessage) *string { return nil })
 		}},
 		{"llm request", func() error {
-			return closed.RegisterLlmRequestIntercept("llm_request", 1, false, func(name string, request LLMRequestDTO, annotated json.RawMessage) (LLMRequestInterceptOutcome, error) {
+			return closed.RegisterLlmRequestIntercept("llm_request", 1, false, func(name string, request LLMRequest, annotated json.RawMessage) (LLMRequestInterceptOutcome, error) {
 				return LLMRequestInterceptOutcome{Request: request, AnnotatedRequest: annotated}, nil
 			})
 		}},
@@ -560,9 +559,9 @@ func TestPluginFuncsAndClosedContextBranches(t *testing.T) {
 			})
 		}},
 		{"llm stream", func() error {
-			return closed.RegisterLlmStreamExecutionIntercept("llm_stream_exec", 1, func(request json.RawMessage, _ LLMExecutionContext, next func(json.RawMessage) (json.RawMessage, error)) (json.RawMessage, error) {
+			return closed.RegisterLlmStreamExecutionIntercept("llm_stream_exec", 1, LLMExecutionInterceptFunc(func(request json.RawMessage, _ LLMExecutionContext, next func(json.RawMessage) (json.RawMessage, error)) (json.RawMessage, error) {
 				return next(request)
-			})
+			}).AsStream())
 		}},
 		{"tool execution", func() error {
 			return closed.RegisterToolExecutionIntercept("tool_exec", 1, func(context ToolExecutionContext, next func(json.RawMessage) (ToolExecutionResult, error)) (ToolExecutionInterceptOutcome, error) {

@@ -925,7 +925,13 @@ fn assert_collector_and_finalizer_callbacks() {
         failure,
         "internal error: stream finalizer callback panicked: finalizer boom"
     );
-    assert_eq!(error.take_failure().as_deref(), Some(failure.as_str()));
+    assert_eq!(
+        error
+            .take_failure()
+            .map(|error| error.to_string())
+            .as_deref(),
+        Some(failure.as_str())
+    );
 
     let (mut collector, _, _) =
         wrap_stream_callbacks(Some(failing_collector_cb), None, std::ptr::null_mut(), None);
@@ -1014,4 +1020,16 @@ fn assert_event_callbacks() {
         .attributes(LlmAttributes::STATEFUL)
         .build();
     assert_eq!(handle.name, "llm");
+}
+
+#[test]
+fn stream_callback_data_remains_live_without_optional_callbacks() {
+    let (user_data, freed) = user_data_counter();
+    let (collector, finalizer, state) =
+        wrap_stream_callbacks(None, None, user_data, Some(free_arc_counter));
+    drop(collector);
+    drop(finalizer);
+    assert_eq!(freed.load(Ordering::SeqCst), 0);
+    drop(state);
+    assert_eq!(freed.load(Ordering::SeqCst), 1);
 }

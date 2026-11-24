@@ -194,60 +194,104 @@ pub unsafe extern "C" fn nemo_relay_tool_call_end(
     }
 }
 
-/// Execute a tool call end-to-end: run conditional-execution guardrails (on raw
-/// args), then request intercepts, sanitize-request guardrails, execution
-/// intercepts, the callback, and sanitize-response
-/// guardrails. On rejection, only a standalone Mark event is emitted (no
-/// Start/End pair) and `GuardrailRejected` is returned. Blocks the calling
-/// thread until completion.
-///
-/// This legacy entry point does not accept an external tool call ID. Use
-/// `nemo_relay_tool_call_execute_v2` to record one on the managed Start and End
-/// events.
-///
-/// # Parameters
-/// - `name`: Null-terminated tool name.
-/// - `args_json`: Tool arguments as a JSON C string.
-/// - `func`: C callback that performs the actual tool execution.
-/// - `func_user_data`: Opaque pointer passed to `func`.
-/// - `func_free`: Optional destructor for `func_user_data`.
-/// - `parent`: Optional parent scope handle, or null.
-/// - `attributes`: Bitfield of tool attributes.
-/// - `data_json`: Optional JSON data, or null.
-/// - `metadata_json`: Optional JSON metadata, or null.
-/// - `out`: On success, receives a serialized `ToolExecutionResult` as a JSON C
-///   string. Caller must free it with `nemo_relay_string_free`.
-///
-/// # Safety
-/// `name`, `args_json`, and `out` must be valid, non-null pointers.
-#[unsafe(no_mangle)]
-pub unsafe extern "C" fn nemo_relay_tool_call_execute(
-    name: *const c_char,
-    args_json: *const c_char,
-    func: NemoRelayToolExecCb,
-    func_user_data: *mut libc::c_void,
-    func_free: NemoRelayFreeFn,
-    parent: *const FfiScopeHandle,
-    attributes: u32,
-    data_json: *const c_char,
-    metadata_json: *const c_char,
-    out: *mut *mut c_char,
-) -> NemoRelayStatus {
-    unsafe {
-        nemo_relay_tool_call_execute_v2(
-            name,
-            args_json,
-            func,
-            func_user_data,
-            func_free,
-            parent,
-            attributes,
-            data_json,
-            metadata_json,
-            std::ptr::null(),
-            out,
-        )
+fn parse_application_context(
+    pointer: *const c_char,
+) -> Result<Option<nemo_relay_types::api::tool::ApplicationExecutionContext>, NemoRelayStatus> {
+    use nemo_relay_types::api::tool::ApplicationExecutionContext;
+    if pointer.is_null() {
+        return Ok(None);
     }
+    // The public entry point requires a readable NUL-terminated C string.
+    let input = unsafe { std::ffi::CStr::from_ptr(pointer) }
+        .to_str()
+        .map_err(|_| {
+            set_last_error("invalid execution context UTF-8");
+            NemoRelayStatus::InvalidJson
+        })?;
+    context_input_budget(input.as_bytes()).map_err(|message| {
+        set_last_error(message);
+        NemoRelayStatus::InvalidArg
+    })?;
+    let value: serde_json::Value = serde_json::from_str(input).map_err(|_| {
+        set_last_error("invalid execution context JSON");
+        NemoRelayStatus::InvalidJson
+    })?;
+    ApplicationExecutionContext::try_from(value)
+        .map(Some)
+        .map_err(|error| {
+            set_last_error(&error.to_string());
+            NemoRelayStatus::InvalidArg
+        })
+}
+
+fn context_input_budget(input: &[u8]) -> Result<(), &'static str> {
+    let mut remaining_bytes = 16_384_usize;
+    let mut depth = 0_usize;
+    let mut quoted = false;
+    let mut index = 0;
+    while let Some(&byte) = input.get(index) {
+        index += 1;
+        let charge = if quoted {
+            match byte {
+                b'"' => {
+                    quoted = false;
+                    0
+                }
+                b'\\' => match input.get(index) {
+                    Some(b'u') => {
+                        index = index.saturating_add(5);
+                        // One decoded byte is a safe lower bound, even for
+                        // paired surrogates. Exact size is checked after parsing.
+                        1
+                    }
+                    Some(b'/') => {
+                        index += 1;
+                        1
+                    }
+                    Some(_) => {
+                        index += 1;
+                        2
+                    }
+                    None => 0,
+                },
+                _ => 1,
+            }
+        } else {
+            match byte {
+                b' ' | b'\n' | b'\r' | b'\t' => 0,
+                b'"' => {
+                    quoted = true;
+                    2
+                }
+                b'{' | b'[' => {
+                    depth += 1;
+                    if depth > 64 {
+                        return Err("tool execution context exceeds 64 container levels");
+                    }
+                    1
+                }
+                b'}' | b']' => {
+                    depth = depth.saturating_sub(1);
+                    1
+                }
+                b'-' | b'0'..=b'9' => {
+                    // Number spelling can be longer than its normalized value.
+                    // serde_json parses numbers without constructing a JSON string.
+                    while input.get(index).is_some_and(|byte| {
+                        matches!(byte, b'0'..=b'9' | b'.' | b'e' | b'E' | b'+' | b'-')
+                    }) {
+                        index += 1;
+                    }
+                    1
+                }
+                _ => 1,
+            }
+        };
+        remaining_bytes = remaining_bytes
+            .checked_sub(charge)
+            .ok_or("tool execution context exceeds 16384 serialized bytes")?;
+    }
+    Ok(())
 }
 
 /// Execute a tool call end-to-end with an optional external tool call ID.
@@ -270,114 +314,26 @@ pub unsafe extern "C" fn nemo_relay_tool_call_execute(
 /// - `metadata_json`: Optional JSON metadata, or null.
 /// - `tool_call_id`: Optional null-terminated external correlation ID recorded
 ///   on both managed lifecycle events, or null.
+/// - `execution_context_json`: Optional application context JSON, separate from
+///   business arguments and event metadata. Null omits context. A supplied object
+///   is limited to 16 KiB serialized JSON and 64 container levels. It reaches
+///   execution middleware only and is not inherited by nested calls.
+/// - `cancellation`: Optional cancellation signal, or null.
 /// - `out`: On success, receives the result as a JSON C string. Caller must free
 ///   with `nemo_relay_string_free`.
+///
+/// - `skip_stages`: Bitwise OR of `NEMO_RELAY_SKIP_*` constants. Zero runs all
+///   middleware stages. Unknown bits return `InvalidArg`. Event sanitization,
+///   codecs, trace context, and completion still run.
+///
+/// Relay owns callback data when the call starts. It releases the data even if validation fails.
 ///
 /// # Safety
 /// `name`, `args_json`, and `out` must be valid, non-null pointers. Optional
 /// pointer arguments may be null; when non-null, they must be valid for reads
 /// for the duration of the call.
 #[unsafe(no_mangle)]
-pub unsafe extern "C" fn nemo_relay_tool_call_execute_v2(
-    name: *const c_char,
-    args_json: *const c_char,
-    func: NemoRelayToolExecCb,
-    func_user_data: *mut libc::c_void,
-    func_free: NemoRelayFreeFn,
-    parent: *const FfiScopeHandle,
-    attributes: u32,
-    data_json: *const c_char,
-    metadata_json: *const c_char,
-    tool_call_id: *const c_char,
-    out: *mut *mut c_char,
-) -> NemoRelayStatus {
-    unsafe {
-        nemo_relay_tool_call_execute_with_options(
-            name,
-            args_json,
-            func,
-            func_user_data,
-            func_free,
-            parent,
-            attributes,
-            data_json,
-            metadata_json,
-            tool_call_id,
-            0,
-            out,
-        )
-    }
-}
-
-/// Choose which middleware stages run for one call.
-/// Combine `NEMO_RELAY_SKIP_*` constants with bitwise OR in `skip_stages`.
-/// Zero runs all stages. Unknown bits return `NEMO_RELAY_STATUS_INVALID_ARG`.
-/// Relay still sanitizes event data, uses codecs, passes trace context,
-/// and handles call completion. Nested calls use their own options.
-///
-/// Relay takes ownership of callback data when this function starts.
-/// It releases that data even if input validation fails.
-///
-/// # Safety
-/// Use the same pointer and callback rules as the existing execute function.
-/// `out` must point to writable storage for the output pointer.
-#[unsafe(no_mangle)]
-pub unsafe extern "C" fn nemo_relay_tool_call_execute_with_options(
-    name: *const c_char,
-    args_json: *const c_char,
-    func: NemoRelayToolExecCb,
-    func_user_data: *mut libc::c_void,
-    func_free: NemoRelayFreeFn,
-    parent: *const FfiScopeHandle,
-    attributes: u32,
-    data_json: *const c_char,
-    metadata_json: *const c_char,
-    tool_call_id: *const c_char,
-    skip_stages: u32,
-    out: *mut *mut c_char,
-) -> NemoRelayStatus {
-    // Retain this symbol's original ABI; context is opt-in through the new
-    // entry point rather than an added positional parameter for old callers.
-    unsafe {
-        nemo_relay_tool_call_execute_with_context(
-            name,
-            args_json,
-            func,
-            func_user_data,
-            func_free,
-            parent,
-            attributes,
-            data_json,
-            metadata_json,
-            tool_call_id,
-            skip_stages,
-            std::ptr::null(),
-            out,
-        )
-    }
-}
-
-/// Execute a managed tool call with optional application execution context.
-///
-/// This is the context-bearing equivalent of
-/// [`nemo_relay_tool_call_execute_with_options`]. `execution_context_json` is
-/// either null (no context) or a UTF-8 JSON object, bounded to 16 KiB serialized
-/// JSON and 64 container levels. An empty object is present context; JSON null
-/// is invalid. Context is supplied to execution middleware only, not to the
-/// business callback, tool arguments, lifecycle data, or event metadata.
-/// It is invocation-local: nested calls must supply their own context.
-///
-/// Validation runs before middleware or execution. Relay takes ownership of
-/// callback data on entry and releases it even when validation fails. Existing
-/// execute entry points retain their signatures and supply no context.
-///
-/// # Safety
-/// Use the same pointer and callback rules as
-/// [`nemo_relay_tool_call_execute_with_options`]. When non-null,
-/// `execution_context_json` must be a valid C string for the duration of this
-/// call. `out` must point to writable output-pointer storage.
-#[unsafe(no_mangle)]
-pub unsafe extern "C" fn nemo_relay_tool_call_execute_with_context(
+pub unsafe extern "C" fn nemo_relay_tool_call_execute(
     name: *const c_char,
     args_json: *const c_char,
     func: NemoRelayToolExecCb,
@@ -390,6 +346,7 @@ pub unsafe extern "C" fn nemo_relay_tool_call_execute_with_context(
     tool_call_id: *const c_char,
     skip_stages: u32,
     execution_context_json: *const c_char,
+    cancellation: *const super::FfiCancellation,
     out: *mut *mut c_char,
 ) -> NemoRelayStatus {
     clear_last_error();
@@ -432,41 +389,45 @@ pub unsafe extern "C" fn nemo_relay_tool_call_execute_with_context(
             Err(status) => return status,
         }
     };
-    let execution_context = match c_str_to_opt_json(execution_context_json) {
-        Some(context) => context,
-        None => return NemoRelayStatus::InvalidJson,
-    };
-    let execution_context = match execution_context
-        .map(nemo_relay_types::api::tool::ApplicationExecutionContext::try_from)
-        .transpose()
-    {
+
+    let execution_context = match parse_application_context(execution_context_json) {
         Ok(context) => context,
-        Err(error) => {
-            set_last_error(&error.to_string());
-            return NemoRelayStatus::InvalidArg;
-        }
+        Err(status) => return status,
     };
 
     let default_fn: ToolExecutionNextFn = Arc::new(move |args| exec_fn(args));
 
-    let result = super::block_on(async {
-        core_tool_api::tool_call_execute(
-            core_tool_api::ToolCallExecuteParams::builder()
-                .name(name)
-                .args(args)
-                .func(default_fn)
-                .execution_options(execution_options)
-                .parent_opt(parent_handle)
-                .attributes(attrs)
-                .data_opt(data)
-                .metadata_opt(metadata)
-                .tool_call_id_opt(tool_call_id)
-                .execution_context_opt(execution_context)
-                .build(),
-        )
+    let cancellation = unsafe { cancellation.as_ref() }.cloned();
+    let signal = cancellation;
+    let result = super::block_on(async move {
+        super::cancellation::run(signal, async move {
+            core_tool_api::tool_call_execute(
+                core_tool_api::ToolCallExecuteParams::builder()
+                    .name(name)
+                    .args(args)
+                    .func(default_fn)
+                    .execution_options(execution_options)
+                    .parent_opt(parent_handle)
+                    .attributes(attrs)
+                    .data_opt(data)
+                    .metadata_opt(metadata)
+                    .tool_call_id_opt(tool_call_id)
+                    .execution_context_opt(execution_context)
+                    .build(),
+            )
+            .await
+        })
         .await
     });
 
+    let result = match result {
+        Ok(super::cancellation::Outcome::Completed(value)) => Ok(value),
+        Err(error) => Err(error),
+        Ok(super::cancellation::Outcome::Cancelled) => {
+            set_last_error("execution cancelled");
+            return NemoRelayStatus::Cancelled;
+        }
+    };
     match result {
         Ok(execution_result) => match serde_json::to_value(execution_result) {
             Ok(json) => {

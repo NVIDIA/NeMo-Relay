@@ -49,10 +49,10 @@ func TestEventSchemaSeverityAndMetricParity(t *testing.T) {
 			Name:      "example.tokens.saved",
 			Kind:      MetricKindCounter,
 			ValueType: MetricValueTypeU64,
-			Value:     uint64(42),
+			Value:     json.Number("9007199254740993"),
 			Unit:      "{token}",
-			Attributes: map[string]interface{}{
-				"model": "example-model",
+			Attributes: map[string]json.RawMessage{
+				"model": json.RawMessage(`"example-model"`),
 			},
 		}},
 			WithMetricMetadata(json.RawMessage(`{"context":"ignored"}`)),
@@ -90,8 +90,18 @@ func TestEventSchemaSeverityAndMetricParity(t *testing.T) {
 	if !bytes.Contains(events[1].DataSchema(), []byte("nemo.relay.metric_measurements")) {
 		t.Fatalf("metric schema missing: %s", events[1].DataSchema())
 	}
-	if !bytes.Contains(events[1].Data(), []byte("example.tokens.saved")) {
-		t.Fatalf("metric envelope missing measurement: %s", events[1].Data())
+	var envelope struct {
+		Measurements []MetricMeasurement `json:"measurements"`
+	}
+	if err := json.Unmarshal(events[1].Data(), &envelope); err != nil {
+		t.Fatal(err)
+	}
+	if len(envelope.Measurements) != 1 {
+		t.Fatalf("measurements = %s", events[1].Data())
+	}
+	measurement := envelope.Measurements[0]
+	if measurement.Name != "example.tokens.saved" || measurement.Value != json.Number("9007199254740993") || string(measurement.Attributes["model"]) != `"example-model"` {
+		t.Fatalf("metric value or attributes changed: %#v", measurement)
 	}
 	var metricMetadata map[string]interface{}
 	if err := json.Unmarshal(events[1].Metadata(), &metricMetadata); err != nil {
@@ -353,7 +363,7 @@ func TestOpenTelemetryMetricSubscriberLifecycleAndDerivation(t *testing.T) {
 			Name:      "example.requests",
 			Kind:      MetricKindCounter,
 			ValueType: MetricValueTypeU64,
-			Value:     uint64(1),
+			Value:     json.Number("1"),
 		}}), "EmitMetric failed")
 	})
 	requireNoError(t, subscriber.ForceFlush(), "metric ForceFlush failed")

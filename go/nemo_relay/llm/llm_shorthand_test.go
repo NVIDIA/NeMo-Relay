@@ -22,10 +22,9 @@ func makeRequest() map[string]interface{} {
 func assertLLMExecuteResult(t *testing.T) {
 	t.Helper()
 
-	response, err := llmpkg.Execute("llm_execute", makeRequest(),
-		func(nativeJSON json.RawMessage) (json.RawMessage, error) {
-			return json.RawMessage(`{"ok": true}`), nil
-		},
+	response, err := llmpkg.Execute("llm_execute", requestForTest(makeRequest()), func(nativeJSON json.RawMessage) (json.RawMessage, error) {
+		return json.RawMessage(`{"ok": true}`), nil
+	},
 	)
 	if err != nil {
 		t.Fatalf("Execute failed: %v", err)
@@ -44,7 +43,7 @@ func assertLLMRequestInterceptShorthand(t *testing.T) {
 	t.Helper()
 
 	if err := nemo_relay.RegisterLlmRequestIntercept("llm_req_int", 1, false,
-		func(name string, request nemo_relay.LLMRequestDTO, annotated json.RawMessage) (nemo_relay.LLMRequestInterceptOutcome, error) {
+		func(name string, request nemo_relay.LLMRequest, annotated json.RawMessage) (nemo_relay.LLMRequestInterceptOutcome, error) {
 			var payload map[string]interface{}
 			_ = json.Unmarshal(request.Content, &payload)
 			payload["intercepted"] = true
@@ -106,7 +105,7 @@ func drainShorthandStream(t *testing.T, stream *nemo_relay.LlmStream) {
 }
 
 func TestLlmShorthands(t *testing.T) {
-	handle, err := llmpkg.Call("llm_call", makeRequest())
+	handle, err := llmpkg.Call("llm_call", requestForTest(makeRequest()))
 	if err != nil {
 		t.Fatalf("Call failed: %v", err)
 	}
@@ -118,12 +117,10 @@ func TestLlmShorthands(t *testing.T) {
 	assertLLMRequestInterceptShorthand(t)
 	assertLLMConditionalShorthand(t)
 
-	stream, err := llmpkg.StreamExecute("llm_stream", makeRequest(),
-		func(nativeJSON json.RawMessage) (json.RawMessage, error) {
-			encoded, err := json.Marshal("data: {\"chunk\": 1}\n\ndata: [DONE]\n\n")
-			return json.RawMessage(encoded), err
-		},
-		nil, nil,
+	stream, err := llmpkg.StreamExecute("llm_stream", requestForTest(makeRequest()), nemo_relay.LLMExecutionFunc(func(nativeJSON json.RawMessage) (json.RawMessage, error) {
+		encoded, err := json.Marshal("data: {\"chunk\": 1}\n\ndata: [DONE]\n\n")
+		return json.RawMessage(encoded), err
+	}).AsStream(), nil, nil,
 	)
 	if err != nil {
 		t.Fatalf("StreamExecute failed: %v", err)

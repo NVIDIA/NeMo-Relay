@@ -610,7 +610,7 @@ func testEventScopeTypeMatchesEventFamily(t *testing.T) {
 		t.Fatalf("ToolCallEnd failed: %v", err)
 	}
 
-	llmHandle, err := LlmCall("scope_type_llm", makeRequest())
+	llmHandle, err := LlmCall("scope_type_llm", requestForTest(makeRequest()))
 	if err != nil {
 		t.Fatalf("LlmCall failed: %v", err)
 	}

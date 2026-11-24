@@ -71,6 +71,7 @@ import importlib
 import inspect
 import ipaddress
 import json
+import math
 import os
 import platform
 import stat
@@ -82,7 +83,7 @@ from datetime import datetime, timezone
 from enum import Enum
 from importlib import metadata
 from pathlib import Path
-from typing import Any, ClassVar, Literal, NotRequired, Protocol, TypeAlias, TypedDict
+from typing import Any, ClassVar, Literal, NotRequired, Protocol, TypeAlias, TypedDict, cast
 from urllib.parse import urlsplit
 
 from . import _protocol, codecs
@@ -931,60 +932,90 @@ class LlmRequestInterceptOutcome:
         }
 
 
-def _validate_application_execution_context(value: object) -> None:
-    """Check the shared application-context contract without a host dependency.
+def _validate_application_execution_context(value: object) -> ApplicationExecutionContext:
+    """Validate and snapshot context using the Rust serializer's byte budget."""
+    remaining_bytes = 16_384
 
-    Keep these structural checks aligned with the canonical schema under
-    crates/types/schemas/application-execution-context.schema.json. Only the
-    optional object-valued data field belongs at the top level; its payload
-    remains opaque application JSON and never grants authority by itself.
-    Bound container depth before serialization or defensive copying.
-    """
-    if not isinstance(value, dict):
-        raise WorkerSdkError("tool execution context must be an object")
-    remaining_units = 16_384
-
-    def preflight(item: object, parent_depth: int) -> None:
-        nonlocal remaining_units
-        minimum_units = 1
-        if isinstance(item, str):
-            minimum_units += len(item)
-        elif isinstance(item, int) and not isinstance(item, bool):
-            # A decimal digit holds fewer than four bits. This lower bound
-            # prevents huge integers from reaching JSON string conversion.
-            minimum_units = max(1, (int.bit_length(item) + 3) // 4)
-        remaining_units -= minimum_units
-        if remaining_units < 0:
+    def charge(amount: int) -> None:
+        nonlocal remaining_bytes
+        remaining_bytes -= amount
+        if remaining_bytes < 0:
             raise WorkerSdkError("tool execution context exceeds 16384 serialized bytes")
+
+    def encoded_string(text: str) -> str:
+        if len(text) > remaining_bytes:
+            raise WorkerSdkError("tool execution context exceeds 16384 serialized bytes")
+        try:
+            charge(len(json.dumps(text, ensure_ascii=False).encode("utf-8")))
+        except UnicodeError as error:
+            raise WorkerSdkError("invalid application execution context") from error
+        return str.__str__(text)
+
+    def snapshot(item: object, parent_depth: int) -> Any:
         if isinstance(item, (dict, list)):
             depth = parent_depth + 1
             if depth > 64:
                 raise WorkerSdkError("tool execution context exceeds 64 container levels")
-            if len(item) > remaining_units:
+            charge(2)
+            if len(item) > remaining_bytes + 1:
                 raise WorkerSdkError("tool execution context exceeds 16384 serialized bytes")
             if isinstance(item, dict):
-                for key, child in item.items():
+                result = {}
+                for index, (key, child) in enumerate(item.items()):
                     if not isinstance(key, str):
                         raise WorkerSdkError("invalid application execution context")
-                    remaining_units -= len(key) + 1
-                    if remaining_units < 0:
-                        raise WorkerSdkError("tool execution context exceeds 16384 serialized bytes")
-                    preflight(child, depth)
-            else:
-                for child in item:
-                    preflight(child, depth)
-        elif item is not None and not isinstance(item, (str, bool, int, float)):
-            raise WorkerSdkError("invalid application execution context")
-
-    preflight(value, 0)
-    if any(key != "data" for key in value) or ("data" in value and not isinstance(value["data"], dict)):
+                    charge(1 + (index > 0))
+                    key = encoded_string(key)
+                    result[key] = snapshot(child, depth)
+                return result
+            result_list = []
+            for index, child in enumerate(item):
+                charge(index > 0)
+                result_list.append(snapshot(child, depth))
+            return result_list
+        if isinstance(item, str):
+            return encoded_string(item)
+        if item is None:
+            charge(4)
+            return None
+        if isinstance(item, bool):
+            charge(4 if item else 5)
+            return item
+        if isinstance(item, int):
+            if (int.bit_length(item) + 3) // 4 > remaining_bytes:
+                raise WorkerSdkError("tool execution context exceeds 16384 serialized bytes")
+            number = int.__int__(item)
+            try:
+                charge(len(str(number)))
+            except (ValueError, OverflowError) as error:
+                raise WorkerSdkError("invalid application execution context") from error
+            return number
+        if isinstance(item, float):
+            number = float.__float__(item)
+            if not math.isfinite(number):
+                raise WorkerSdkError("invalid application execution context")
+            # Both serializers use shortest-roundtrip digits. Rust uses fixed
+            # notation at exponent -5 and unpadded scientific exponents elsewhere.
+            text = repr(number)
+            if "e" in text:
+                mantissa, exponent_text = text.split("e")
+                exponent = int(exponent_text)
+                if exponent == -5:
+                    sign = "-" if mantissa.startswith("-") else ""
+                    digits = mantissa.lstrip("-").replace(".", "")
+                    text = sign + "0.0000" + digits
+                else:
+                    text = f"{mantissa}e{exponent:+d}"
+            charge(len(text))
+            return number
         raise WorkerSdkError("invalid application execution context")
-    try:
-        encoded = json.dumps(value, ensure_ascii=False, allow_nan=False, separators=(",", ":")).encode("utf-8")
-    except (ValueError, TypeError, OverflowError, UnicodeError) as exc:
-        raise WorkerSdkError("invalid application execution context") from exc
-    if len(encoded) > 16_384:
-        raise WorkerSdkError("tool execution context exceeds 16384 serialized bytes")
+
+    if not isinstance(value, dict):
+        raise WorkerSdkError("tool execution context must be an object")
+    copied = snapshot(value, 0)
+    if any(key != "data" for key in copied) or ("data" in copied and not isinstance(copied["data"], dict)):
+        raise WorkerSdkError("invalid application execution context")
+    return cast(ApplicationExecutionContext, copied)
 
 
 def _application_execution_context_from_proto(value: Any) -> ApplicationExecutionContext:
@@ -1017,9 +1048,7 @@ class ToolExecutionContext:
     def __post_init__(self) -> None:
         # Read the stored value directly: the public getter returns a copy.
         supplied = object.__getattribute__(self, "execution_context")
-        if supplied is not None:
-            _validate_application_execution_context(supplied)
-        snapshot = copy.deepcopy(supplied)
+        snapshot = _validate_application_execution_context(supplied) if supplied is not None else None
         object.__setattr__(self, "execution_context", snapshot)
 
     def __getattribute__(self, name: str) -> Any:

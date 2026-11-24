@@ -10,7 +10,6 @@ use super::{
 
 type AtofExporterConfig = nemo_relay_observability::atof::AtofExporterConfig;
 type AtofExporterError = nemo_relay_observability::atof::AtofExporterError;
-type AtofExporterMode = nemo_relay_observability::atof::AtofExporterMode;
 type OpenTelemetryConfig = nemo_relay_observability::otel::OpenTelemetryConfig;
 type OpenTelemetryFileSinkConfig = nemo_relay_observability::otel::OpenTelemetryFileSinkConfig;
 type OpenTelemetrySubscriber = nemo_relay_observability::otel::OpenTelemetrySubscriber;
@@ -146,6 +145,9 @@ pub unsafe extern "C" fn nemo_relay_observability_component_spec_json(
 /// - `agent_name`: Agent name string (required, non-null).
 /// - `agent_version`: Agent version string (required, non-null).
 /// - `model_name`: Default model name (nullable).
+/// - `trajectory_id`: Optional trajectory ID. Null uses the session ID.
+/// - `tool_definitions_json`: Optional JSON array of agent tool definitions.
+/// - `agent_extra_json`: Optional arbitrary JSON agent metadata.
 /// - `out`: On success, receives a heap-allocated `FfiAtifExporter`.
 ///
 /// # Safety
@@ -156,6 +158,9 @@ pub unsafe extern "C" fn nemo_relay_atif_exporter_create(
     agent_name: *const c_char,
     agent_version: *const c_char,
     model_name: *const c_char,
+    trajectory_id: *const c_char,
+    tool_definitions_json: *const c_char,
+    agent_extra_json: *const c_char,
     out: *mut *mut FfiAtifExporter,
 ) -> NemoRelayStatus {
     clear_last_error();
@@ -184,15 +189,48 @@ pub unsafe extern "C" fn nemo_relay_atif_exporter_create(
         }
     };
 
+    let trajectory_id = match parse_optional_string(trajectory_id) {
+        Ok(id) => id,
+        Err(status) => return status,
+    };
+    let tool_definitions = match parse_optional_string(tool_definitions_json) {
+        Ok(Some(value)) => match serde_json::from_str::<Vec<nemo_relay_types::Json>>(&value) {
+            Ok(definitions) => Some(definitions),
+            Err(error) => {
+                set_last_error(&format!("invalid tool_definitions JSON: {error}"));
+                return NemoRelayStatus::InvalidJson;
+            }
+        },
+        Ok(None) => None,
+        Err(status) => return status,
+    };
+    let extra = match parse_optional_string(agent_extra_json) {
+        Ok(Some(value)) => match serde_json::from_str::<nemo_relay_types::Json>(&value) {
+            Ok(value) => Some(value),
+            Err(error) => {
+                set_last_error(&format!("invalid agent extra JSON: {error}"));
+                return NemoRelayStatus::InvalidJson;
+            }
+        },
+        Ok(None) => None,
+        Err(status) => return status,
+    };
     let agent_info = nemo_relay_observability::atif::AtifAgentInfo {
         name: agent_name,
         version: agent_version,
         model_name: model_name_opt,
-        tool_definitions: None,
-        extra: None,
+        tool_definitions,
+        extra,
     };
 
-    let exporter = nemo_relay_plugin_host::exporter::atif(session_id, agent_info);
+    let exporter = match trajectory_id {
+        Some(trajectory_id) => nemo_relay_plugin_host::exporter::atif_for_trajectory(
+            session_id,
+            trajectory_id,
+            agent_info,
+        ),
+        None => nemo_relay_plugin_host::exporter::atif(session_id, agent_info),
+    };
     unsafe { *out = Box::into_raw(Box::new(FfiAtifExporter(exporter))) };
     NemoRelayStatus::Ok
 }
@@ -311,63 +349,6 @@ pub unsafe extern "C" fn nemo_relay_atif_exporter_clear(
 // ATOF JSONL exporter
 // ---------------------------------------------------------------------------
 
-/// Creates a new filesystem-backed ATOF JSONL exporter.
-///
-/// # Parameters
-/// - `output_directory`: Output directory path (nullable for current directory).
-/// - `mode`: `"append"` or `"overwrite"` (nullable for `"append"`).
-/// - `filename`: Output filename (nullable for generated default).
-/// - `out`: On success, receives a heap-allocated `FfiAtofExporter`.
-///
-/// # Safety
-/// All non-null string pointers must be valid C strings. `out` must be valid.
-#[unsafe(no_mangle)]
-pub unsafe extern "C" fn nemo_relay_atof_exporter_create(
-    output_directory: *const c_char,
-    mode: *const c_char,
-    filename: *const c_char,
-    out: *mut *mut FfiAtofExporter,
-) -> NemoRelayStatus {
-    clear_last_error();
-    if let Err(status) = required_out_ptr(out) {
-        return status;
-    }
-
-    let output_directory = match parse_optional_string(output_directory) {
-        Ok(value) => value,
-        Err(status) => return status,
-    };
-    let mode = match parse_string_or_default(mode, "append") {
-        Ok(value) => value,
-        Err(status) => return status,
-    };
-    let filename = match parse_optional_string(filename) {
-        Ok(value) => value,
-        Err(status) => return status,
-    };
-
-    let Some(mode) = AtofExporterMode::parse(&mode) else {
-        set_last_error("ATOF exporter mode must be 'append' or 'overwrite'");
-        return NemoRelayStatus::InvalidArg;
-    };
-
-    let mut config = AtofExporterConfig::new().with_mode(mode);
-    if let Some(output_directory) = output_directory {
-        config = config.with_output_directory(output_directory);
-    }
-    if let Some(filename) = filename {
-        config = config.with_filename(filename);
-    }
-
-    match nemo_relay_plugin_host::exporter::atof(config) {
-        Ok(exporter) => {
-            unsafe { *out = Box::into_raw(Box::new(FfiAtofExporter(exporter))) };
-            NemoRelayStatus::Ok
-        }
-        Err(error) => status_from_atof_error(&error),
-    }
-}
-
 /// Creates a new ATOF exporter from a JSON config object.
 ///
 /// # Parameters
@@ -377,7 +358,7 @@ pub unsafe extern "C" fn nemo_relay_atof_exporter_create(
 /// # Safety
 /// `config_json` must be a valid C string. `out` must be valid.
 #[unsafe(no_mangle)]
-pub unsafe extern "C" fn nemo_relay_atof_exporter_create_from_json(
+pub unsafe extern "C" fn nemo_relay_atof_exporter_create(
     config_json: *const c_char,
     out: *mut *mut FfiAtofExporter,
 ) -> NemoRelayStatus {
@@ -856,122 +837,7 @@ fn build_ffi_otel_config(
     )
 }
 
-/// Creates one typed OpenTelemetry exporter subscriber.
-///
-/// `otel_type` must be `full`, `gen_ai`, or `openinference`. `endpoint` is required.
-///
-/// # Safety
-/// Any non-null C strings must be valid and `out` must be non-null.
-#[unsafe(no_mangle)]
-pub unsafe extern "C" fn nemo_relay_otel_subscriber_create(
-    otel_type: *const c_char,
-    transport: *const c_char,
-    endpoint: *const c_char,
-    headers_json: *const c_char,
-    resource_attributes_json: *const c_char,
-    service_name: *const c_char,
-    service_namespace: *const c_char,
-    service_version: *const c_char,
-    instrumentation_scope: *const c_char,
-    timeout_millis: u64,
-    out: *mut *mut FfiOpenTelemetrySubscriber,
-) -> NemoRelayStatus {
-    clear_last_error();
-    if let Err(status) = required_out_ptr(out) {
-        return status;
-    }
-    let config = match build_ffi_otel_config(
-        otel_type,
-        transport,
-        endpoint,
-        headers_json,
-        std::ptr::null(),
-        resource_attributes_json,
-        service_name,
-        service_namespace,
-        service_version,
-        instrumentation_scope,
-        timeout_millis,
-    ) {
-        Ok(config) => config,
-        Err(status) => return status,
-    };
-    let subscriber = match create_otel_subscriber(config) {
-        Ok(subscriber) => subscriber,
-        Err(status) => return status,
-    };
-    unsafe { *out = Box::into_raw(Box::new(FfiOpenTelemetrySubscriber(subscriber))) };
-    NemoRelayStatus::Ok
-}
-
-/// Creates one typed OpenTelemetry exporter subscriber that writes OTLP to a file.
-///
-/// `otel_type` must be `full`, `gen_ai`, or `openinference`. `output_directory` is
-/// required. `filename` may be null to use a default name for the format.
-/// `format` is `json_lines` (the OpenTelemetry file-exporter specification's
-/// serialization, and the default when null) or `proto`. `mode` is `overwrite`
-/// (the default when null) or `append`.
-///
-/// The projection controls match the endpoint entrypoints: `mark_projection` is
-/// `inherit`, `event`, or `tool`; `mark_exclude_names_json`,
-/// `promote_metadata_prefixes_json`, and `promote_resource_metadata_prefixes_json`
-/// are JSON arrays of strings; `attribute_mappings_json` is a JSON array of
-/// `{"key","alias"}` objects; and `completed_span_context_ttl_millis` must be
-/// greater than zero. A null JSON pointer takes the core default.
-///
-/// # Safety
-/// Any non-null C strings must be valid and `out` must be non-null.
-#[allow(clippy::too_many_arguments)]
-#[unsafe(no_mangle)]
-pub unsafe extern "C" fn nemo_relay_otel_subscriber_create_file_sink(
-    otel_type: *const c_char,
-    output_directory: *const c_char,
-    filename: *const c_char,
-    format: *const c_char,
-    mode: *const c_char,
-    resource_attributes_json: *const c_char,
-    service_name: *const c_char,
-    service_namespace: *const c_char,
-    service_version: *const c_char,
-    instrumentation_scope: *const c_char,
-    mark_projection: *const c_char,
-    mark_exclude_names_json: *const c_char,
-    attribute_mappings_json: *const c_char,
-    promote_metadata_prefixes_json: *const c_char,
-    promote_resource_metadata_prefixes_json: *const c_char,
-    completed_span_context_ttl_millis: u64,
-    out: *mut *mut FfiOpenTelemetrySubscriber,
-) -> NemoRelayStatus {
-    clear_last_error();
-    if let Err(status) = required_out_ptr(out) {
-        return status;
-    }
-    let subscriber = match build_otel_file_sink_subscriber(
-        otel_type,
-        output_directory,
-        filename,
-        format,
-        mode,
-        resource_attributes_json,
-        service_name,
-        service_namespace,
-        service_version,
-        instrumentation_scope,
-        mark_projection,
-        mark_exclude_names_json,
-        attribute_mappings_json,
-        promote_metadata_prefixes_json,
-        promote_resource_metadata_prefixes_json,
-        completed_span_context_ttl_millis,
-    ) {
-        Ok(subscriber) => subscriber,
-        Err(status) => return status,
-    };
-    unsafe { *out = Box::into_raw(Box::new(FfiOpenTelemetrySubscriber(subscriber))) };
-    NemoRelayStatus::Ok
-}
-
-/// Builds the subscriber behind [`nemo_relay_otel_subscriber_create_file_sink`].
+/// Builds the file-backed subscriber for [`nemo_relay_otel_subscriber_create`].
 ///
 /// Split out so each argument can propagate its own parse failure with `?`
 /// instead of a `match` arm per option.
@@ -1060,260 +926,6 @@ fn parse_ffi_file_sink_settings(
         set_last_error(&error);
         NemoRelayStatus::InvalidArg
     })
-}
-
-/// Creates one typed OpenTelemetry exporter subscriber with projection controls.
-///
-/// The JSON arrays use `mark_exclude_names: ["llm.chunk"]` and
-/// `attribute_mappings: [{"key":"…","alias":"…"}]` shapes. Pass null for either
-/// array to use its default. `mark_projection` is `inherit`, `event`, or `tool`.
-///
-/// # Safety
-/// Any non-null C strings must be valid and `out` must be non-null.
-#[allow(clippy::too_many_arguments)]
-#[unsafe(no_mangle)]
-pub unsafe extern "C" fn nemo_relay_otel_subscriber_create_with_projection_options(
-    otel_type: *const c_char,
-    transport: *const c_char,
-    endpoint: *const c_char,
-    headers_json: *const c_char,
-    resource_attributes_json: *const c_char,
-    service_name: *const c_char,
-    service_namespace: *const c_char,
-    service_version: *const c_char,
-    instrumentation_scope: *const c_char,
-    timeout_millis: u64,
-    mark_projection: *const c_char,
-    mark_exclude_names_json: *const c_char,
-    attribute_mappings_json: *const c_char,
-    out: *mut *mut FfiOpenTelemetrySubscriber,
-) -> NemoRelayStatus {
-    unsafe {
-        nemo_relay_otel_subscriber_create_with_projection_options_v2(
-            otel_type,
-            transport,
-            endpoint,
-            headers_json,
-            resource_attributes_json,
-            service_name,
-            service_namespace,
-            service_version,
-            instrumentation_scope,
-            timeout_millis,
-            mark_projection,
-            mark_exclude_names_json,
-            attribute_mappings_json,
-            std::ptr::null(),
-            out,
-        )
-    }
-}
-
-/// Creates one typed OpenTelemetry exporter subscriber with projection, metadata,
-/// resource-promotion, and lineage controls.
-///
-/// `promote_metadata_prefixes_json` and `promote_resource_metadata_prefixes_json`
-/// are JSON arrays of literal metadata prefixes, such as `["nv."]`. Pass null to
-/// disable that promotion. `completed_span_context_ttl_millis` must be greater
-/// than zero.
-///
-/// # Safety
-/// Any non-null C strings must be valid and `out` must be non-null.
-#[allow(clippy::too_many_arguments)]
-#[unsafe(no_mangle)]
-pub unsafe extern "C" fn nemo_relay_otel_subscriber_create_with_projection_options_v5(
-    otel_type: *const c_char,
-    transport: *const c_char,
-    endpoint: *const c_char,
-    headers_json: *const c_char,
-    header_env_json: *const c_char,
-    resource_attributes_json: *const c_char,
-    service_name: *const c_char,
-    service_namespace: *const c_char,
-    service_version: *const c_char,
-    instrumentation_scope: *const c_char,
-    timeout_millis: u64,
-    mark_projection: *const c_char,
-    mark_exclude_names_json: *const c_char,
-    attribute_mappings_json: *const c_char,
-    promote_metadata_prefixes_json: *const c_char,
-    promote_resource_metadata_prefixes_json: *const c_char,
-    completed_span_context_ttl_millis: u64,
-    out: *mut *mut FfiOpenTelemetrySubscriber,
-) -> NemoRelayStatus {
-    unsafe {
-        nemo_relay_otel_subscriber_create_with_projection_options_with_tls(
-            otel_type,
-            transport,
-            endpoint,
-            headers_json,
-            header_env_json,
-            resource_attributes_json,
-            service_name,
-            service_namespace,
-            service_version,
-            instrumentation_scope,
-            timeout_millis,
-            mark_projection,
-            mark_exclude_names_json,
-            attribute_mappings_json,
-            promote_metadata_prefixes_json,
-            promote_resource_metadata_prefixes_json,
-            completed_span_context_ttl_millis,
-            std::ptr::null(),
-            out,
-        )
-    }
-}
-
-/// Creates one typed OpenTelemetry exporter subscriber with projection and metadata controls.
-///
-/// This compatibility entrypoint promotes no resource metadata. Use
-/// `nemo_relay_otel_subscriber_create_with_projection_options_v5` for
-/// `promote_resource_metadata_prefixes`.
-///
-/// # Safety
-/// Any non-null C strings must be valid and `out` must be non-null.
-#[allow(clippy::too_many_arguments)]
-#[unsafe(no_mangle)]
-pub unsafe extern "C" fn nemo_relay_otel_subscriber_create_with_projection_options_v4(
-    otel_type: *const c_char,
-    transport: *const c_char,
-    endpoint: *const c_char,
-    headers_json: *const c_char,
-    header_env_json: *const c_char,
-    resource_attributes_json: *const c_char,
-    service_name: *const c_char,
-    service_namespace: *const c_char,
-    service_version: *const c_char,
-    instrumentation_scope: *const c_char,
-    timeout_millis: u64,
-    mark_projection: *const c_char,
-    mark_exclude_names_json: *const c_char,
-    attribute_mappings_json: *const c_char,
-    promote_metadata_prefixes_json: *const c_char,
-    completed_span_context_ttl_millis: u64,
-    out: *mut *mut FfiOpenTelemetrySubscriber,
-) -> NemoRelayStatus {
-    unsafe {
-        nemo_relay_otel_subscriber_create_with_projection_options_v5(
-            otel_type,
-            transport,
-            endpoint,
-            headers_json,
-            header_env_json,
-            resource_attributes_json,
-            service_name,
-            service_namespace,
-            service_version,
-            instrumentation_scope,
-            timeout_millis,
-            mark_projection,
-            mark_exclude_names_json,
-            attribute_mappings_json,
-            promote_metadata_prefixes_json,
-            std::ptr::null(),
-            completed_span_context_ttl_millis,
-            out,
-        )
-    }
-}
-
-/// Creates one typed OpenTelemetry exporter subscriber with projection, metadata, and lineage controls.
-///
-/// This compatibility entrypoint configures only static headers. Use
-/// `nemo_relay_otel_subscriber_create_with_projection_options_v4` for `header_env`.
-///
-/// # Safety
-/// Any non-null C strings must be valid and `out` must be non-null.
-#[allow(clippy::too_many_arguments)]
-#[unsafe(no_mangle)]
-pub unsafe extern "C" fn nemo_relay_otel_subscriber_create_with_projection_options_v3(
-    otel_type: *const c_char,
-    transport: *const c_char,
-    endpoint: *const c_char,
-    headers_json: *const c_char,
-    resource_attributes_json: *const c_char,
-    service_name: *const c_char,
-    service_namespace: *const c_char,
-    service_version: *const c_char,
-    instrumentation_scope: *const c_char,
-    timeout_millis: u64,
-    mark_projection: *const c_char,
-    mark_exclude_names_json: *const c_char,
-    attribute_mappings_json: *const c_char,
-    promote_metadata_prefixes_json: *const c_char,
-    completed_span_context_ttl_millis: u64,
-    out: *mut *mut FfiOpenTelemetrySubscriber,
-) -> NemoRelayStatus {
-    unsafe {
-        nemo_relay_otel_subscriber_create_with_projection_options_v4(
-            otel_type,
-            transport,
-            endpoint,
-            headers_json,
-            std::ptr::null(),
-            resource_attributes_json,
-            service_name,
-            service_namespace,
-            service_version,
-            instrumentation_scope,
-            timeout_millis,
-            mark_projection,
-            mark_exclude_names_json,
-            attribute_mappings_json,
-            promote_metadata_prefixes_json,
-            completed_span_context_ttl_millis,
-            out,
-        )
-    }
-}
-
-/// Creates one typed OpenTelemetry exporter subscriber with projection, metadata, and lineage controls.
-///
-/// This compatibility entrypoint preserves the 60-second completed-context retention default.
-///
-/// # Safety
-/// Any non-null C strings must be valid and `out` must be non-null.
-#[allow(clippy::too_many_arguments)]
-#[unsafe(no_mangle)]
-pub unsafe extern "C" fn nemo_relay_otel_subscriber_create_with_projection_options_v2(
-    otel_type: *const c_char,
-    transport: *const c_char,
-    endpoint: *const c_char,
-    headers_json: *const c_char,
-    resource_attributes_json: *const c_char,
-    service_name: *const c_char,
-    service_namespace: *const c_char,
-    service_version: *const c_char,
-    instrumentation_scope: *const c_char,
-    timeout_millis: u64,
-    mark_projection: *const c_char,
-    mark_exclude_names_json: *const c_char,
-    attribute_mappings_json: *const c_char,
-    promote_metadata_prefixes_json: *const c_char,
-    out: *mut *mut FfiOpenTelemetrySubscriber,
-) -> NemoRelayStatus {
-    unsafe {
-        nemo_relay_otel_subscriber_create_with_projection_options_v3(
-            otel_type,
-            transport,
-            endpoint,
-            headers_json,
-            resource_attributes_json,
-            service_name,
-            service_namespace,
-            service_version,
-            instrumentation_scope,
-            timeout_millis,
-            mark_projection,
-            mark_exclude_names_json,
-            attribute_mappings_json,
-            promote_metadata_prefixes_json,
-            60_000,
-            out,
-        )
-    }
 }
 
 /// Registers the OpenTelemetry subscriber as an event subscriber.
@@ -1534,101 +1146,6 @@ fn build_ffi_otel_log_config(
     )
 }
 
-/// Creates an independently managed OpenTelemetry log subscriber.
-///
-/// Numeric processing settings use their core-config defaults when zero, except
-/// `completed_span_context_ttl_millis`, which must be positive.
-///
-/// # Safety
-/// Any non-null C strings must be valid and `out` must be non-null.
-#[unsafe(no_mangle)]
-#[allow(clippy::too_many_arguments)]
-pub unsafe extern "C" fn nemo_relay_otel_log_subscriber_create(
-    transport: *const c_char,
-    endpoint: *const c_char,
-    headers_json: *const c_char,
-    resource_attributes_json: *const c_char,
-    service_name: *const c_char,
-    service_namespace: *const c_char,
-    service_version: *const c_char,
-    instrumentation_scope: *const c_char,
-    timeout_millis: u64,
-    minimum_severity: *const c_char,
-    max_queue_size: u64,
-    max_export_batch_size: u64,
-    scheduled_delay_millis: u64,
-    completed_span_context_ttl_millis: u64,
-    out: *mut *mut FfiOpenTelemetryLogSubscriber,
-) -> NemoRelayStatus {
-    unsafe {
-        nemo_relay_otel_log_subscriber_create_v2(
-            transport,
-            endpoint,
-            headers_json,
-            std::ptr::null(),
-            resource_attributes_json,
-            service_name,
-            service_namespace,
-            service_version,
-            instrumentation_scope,
-            timeout_millis,
-            minimum_severity,
-            max_queue_size,
-            max_export_batch_size,
-            scheduled_delay_millis,
-            completed_span_context_ttl_millis,
-            out,
-        )
-    }
-}
-
-/// Creates an independently managed OpenTelemetry log subscriber with `header_env` support.
-///
-/// # Safety
-/// Any non-null C strings must be valid and `out` must be non-null.
-#[unsafe(no_mangle)]
-#[allow(clippy::too_many_arguments)]
-pub unsafe extern "C" fn nemo_relay_otel_log_subscriber_create_v2(
-    transport: *const c_char,
-    endpoint: *const c_char,
-    headers_json: *const c_char,
-    header_env_json: *const c_char,
-    resource_attributes_json: *const c_char,
-    service_name: *const c_char,
-    service_namespace: *const c_char,
-    service_version: *const c_char,
-    instrumentation_scope: *const c_char,
-    timeout_millis: u64,
-    minimum_severity: *const c_char,
-    max_queue_size: u64,
-    max_export_batch_size: u64,
-    scheduled_delay_millis: u64,
-    completed_span_context_ttl_millis: u64,
-    out: *mut *mut FfiOpenTelemetryLogSubscriber,
-) -> NemoRelayStatus {
-    unsafe {
-        nemo_relay_otel_log_subscriber_create_with_tls(
-            transport,
-            endpoint,
-            headers_json,
-            header_env_json,
-            resource_attributes_json,
-            service_name,
-            service_namespace,
-            service_version,
-            instrumentation_scope,
-            timeout_millis,
-            minimum_severity,
-            max_queue_size,
-            max_export_batch_size,
-            scheduled_delay_millis,
-            completed_span_context_ttl_millis,
-            std::ptr::null(),
-            out,
-        )
-    }
-}
-
 /// Registers an OpenTelemetry log subscriber globally.
 ///
 /// # Safety
@@ -1817,96 +1334,6 @@ fn build_ffi_otel_metric_config(
     )
 }
 
-/// Creates an independently managed OpenTelemetry metric subscriber.
-///
-/// Numeric processing settings use their core-config defaults when zero.
-///
-/// # Safety
-/// Any non-null C strings must be valid and `out` must be non-null.
-#[unsafe(no_mangle)]
-#[allow(clippy::too_many_arguments)]
-pub unsafe extern "C" fn nemo_relay_otel_metric_subscriber_create(
-    transport: *const c_char,
-    endpoint: *const c_char,
-    headers_json: *const c_char,
-    resource_attributes_json: *const c_char,
-    service_name: *const c_char,
-    service_namespace: *const c_char,
-    service_version: *const c_char,
-    instrumentation_scope: *const c_char,
-    timeout_millis: u64,
-    export_interval_millis: u64,
-    temporality: *const c_char,
-    max_instruments: u64,
-    cardinality_limit: u64,
-    out: *mut *mut FfiOpenTelemetryMetricSubscriber,
-) -> NemoRelayStatus {
-    unsafe {
-        nemo_relay_otel_metric_subscriber_create_v2(
-            transport,
-            endpoint,
-            headers_json,
-            std::ptr::null(),
-            resource_attributes_json,
-            service_name,
-            service_namespace,
-            service_version,
-            instrumentation_scope,
-            timeout_millis,
-            export_interval_millis,
-            temporality,
-            max_instruments,
-            cardinality_limit,
-            out,
-        )
-    }
-}
-
-/// Creates an independently managed OpenTelemetry metric subscriber with `header_env` support.
-///
-/// # Safety
-/// Any non-null C strings must be valid and `out` must be non-null.
-#[unsafe(no_mangle)]
-#[allow(clippy::too_many_arguments)]
-pub unsafe extern "C" fn nemo_relay_otel_metric_subscriber_create_v2(
-    transport: *const c_char,
-    endpoint: *const c_char,
-    headers_json: *const c_char,
-    header_env_json: *const c_char,
-    resource_attributes_json: *const c_char,
-    service_name: *const c_char,
-    service_namespace: *const c_char,
-    service_version: *const c_char,
-    instrumentation_scope: *const c_char,
-    timeout_millis: u64,
-    export_interval_millis: u64,
-    temporality: *const c_char,
-    max_instruments: u64,
-    cardinality_limit: u64,
-    out: *mut *mut FfiOpenTelemetryMetricSubscriber,
-) -> NemoRelayStatus {
-    unsafe {
-        nemo_relay_otel_metric_subscriber_create_with_tls(
-            transport,
-            endpoint,
-            headers_json,
-            header_env_json,
-            resource_attributes_json,
-            service_name,
-            service_namespace,
-            service_version,
-            instrumentation_scope,
-            timeout_millis,
-            export_interval_millis,
-            temporality,
-            max_instruments,
-            cardinality_limit,
-            std::ptr::null(),
-            out,
-        )
-    }
-}
-
 /// Registers an OpenTelemetry metric subscriber globally.
 ///
 /// # Safety
@@ -2021,13 +1448,27 @@ pub unsafe extern "C" fn nemo_relay_otel_metric_subscriber_shutdown(
 /// `tls_json` accepts a JSON object or a null pointer. The object has three
 /// optional file paths: `certificate`, `client_certificate`, and `private_key`.
 /// Set the client certificate and private key together.
-/// Refer to [`nemo_relay_otel_subscriber_create_with_projection_options_v5`] for the other options.
+/// `otel_type` is `full`, `gen_ai`, or `openinference`. For network export,
+/// `endpoint` is required. Set `transport` to `grpc` or `http_binary`.
+/// Header and resource maps are JSON objects with string values. `header_env_json`
+/// maps header names to environment variable names.
+/// `mark_projection` is `inherit`, `event`, or `tool`. Exclusions and promotion
+/// prefixes are JSON string arrays, and mappings are `[{"key":"…","alias":"…"}]`.
+/// Null optional strings and JSON pointers select defaults. A zero timeout uses
+/// 3,000 milliseconds. `completed_span_context_ttl_millis` must be positive.
+///
+/// Set `output_directory` to select file export instead of network export.
+/// Set `filename` to null to use the default name. `format` is `json_lines` (default)
+/// or `proto`. `mode` is `overwrite` (default) or `append`. File export uses the
+/// same resource, service, projection, and lineage settings. Network settings
+/// (`transport`, `endpoint`, headers, timeout, and TLS) are ignored in file mode.
+/// In network mode, `filename`, `format`, and `mode` are ignored.
 ///
 /// # Safety
 /// Any non-null C strings must be valid and `out` must be non-null.
 #[allow(clippy::too_many_arguments)]
 #[unsafe(no_mangle)]
-pub unsafe extern "C" fn nemo_relay_otel_subscriber_create_with_projection_options_with_tls(
+pub unsafe extern "C" fn nemo_relay_otel_subscriber_create(
     otel_type: *const c_char,
     transport: *const c_char,
     endpoint: *const c_char,
@@ -2046,11 +1487,40 @@ pub unsafe extern "C" fn nemo_relay_otel_subscriber_create_with_projection_optio
     promote_resource_metadata_prefixes_json: *const c_char,
     completed_span_context_ttl_millis: u64,
     tls_json: *const c_char,
+    output_directory: *const c_char,
+    filename: *const c_char,
+    format: *const c_char,
+    mode: *const c_char,
     out: *mut *mut FfiOpenTelemetrySubscriber,
 ) -> NemoRelayStatus {
     clear_last_error();
     if let Err(status) = required_out_ptr(out) {
         return status;
+    }
+    if !output_directory.is_null() {
+        let subscriber = match build_otel_file_sink_subscriber(
+            otel_type,
+            output_directory,
+            filename,
+            format,
+            mode,
+            resource_attributes_json,
+            service_name,
+            service_namespace,
+            service_version,
+            instrumentation_scope,
+            mark_projection,
+            mark_exclude_names_json,
+            attribute_mappings_json,
+            promote_metadata_prefixes_json,
+            promote_resource_metadata_prefixes_json,
+            completed_span_context_ttl_millis,
+        ) {
+            Ok(subscriber) => subscriber,
+            Err(status) => return status,
+        };
+        unsafe { *out = Box::into_raw(Box::new(FfiOpenTelemetrySubscriber(subscriber))) };
+        return NemoRelayStatus::Ok;
     }
     let config = match build_ffi_otel_config(
         otel_type,
@@ -2116,13 +1586,16 @@ pub unsafe extern "C" fn nemo_relay_otel_subscriber_create_with_projection_optio
 /// `tls_json` accepts a JSON object or a null pointer. The object has three
 /// optional file paths: `certificate`, `client_certificate`, and `private_key`.
 /// Set the client certificate and private key together.
-/// Refer to [`nemo_relay_otel_log_subscriber_create_v2`] for the other options.
+/// Header and resource maps are JSON objects with string values. `header_env_json`
+/// maps header names to environment variable names. Null optional settings and
+/// zero numeric processing settings use core defaults, except
+/// `completed_span_context_ttl_millis`, which must be positive.
 ///
 /// # Safety
 /// Any non-null C strings must be valid and `out` must be non-null.
 #[allow(clippy::too_many_arguments)]
 #[unsafe(no_mangle)]
-pub unsafe extern "C" fn nemo_relay_otel_log_subscriber_create_with_tls(
+pub unsafe extern "C" fn nemo_relay_otel_log_subscriber_create(
     transport: *const c_char,
     endpoint: *const c_char,
     headers_json: *const c_char,
@@ -2188,13 +1661,16 @@ pub unsafe extern "C" fn nemo_relay_otel_log_subscriber_create_with_tls(
 /// `tls_json` accepts a JSON object or a null pointer. The object has three
 /// optional file paths: `certificate`, `client_certificate`, and `private_key`.
 /// Set the client certificate and private key together.
-/// Refer to [`nemo_relay_otel_metric_subscriber_create_v2`] for the other options.
+/// Header and resource maps are JSON objects with string values. `header_env_json`
+/// maps header names to environment variable names. Null optional settings and
+/// zero numeric processing settings use core defaults. `temporality` is
+/// `cumulative` or `delta`.
 ///
 /// # Safety
 /// Any non-null C strings must be valid and `out` must be non-null.
 #[allow(clippy::too_many_arguments)]
 #[unsafe(no_mangle)]
-pub unsafe extern "C" fn nemo_relay_otel_metric_subscriber_create_with_tls(
+pub unsafe extern "C" fn nemo_relay_otel_metric_subscriber_create(
     transport: *const c_char,
     endpoint: *const c_char,
     headers_json: *const c_char,

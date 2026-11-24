@@ -317,7 +317,13 @@ fn test_callable_extra_trampoline_and_helper_paths() {
         wrap_stream_callbacks(None, Some(finalizer_null_cb), std::ptr::null_mut(), None);
     let failure = finalizer().unwrap_err().to_string();
     assert_eq!(failure, "internal error: stream finalizer callback failed");
-    assert_eq!(error.take_failure().as_deref(), Some(failure.as_str()));
+    assert_eq!(
+        error
+            .take_failure()
+            .map(|error| error.to_string())
+            .as_deref(),
+        Some(failure.as_str())
+    );
 
     let (_, finalizer, error) = wrap_stream_callbacks(
         None,
@@ -330,7 +336,13 @@ fn test_callable_extra_trampoline_and_helper_paths() {
         failure,
         "internal error: stream finalizer callback failed: invalid JSON: expected ident at line 1 column 2"
     );
-    assert_eq!(error.take_failure().as_deref(), Some(failure.as_str()));
+    assert_eq!(
+        error
+            .take_failure()
+            .map(|error| error.to_string())
+            .as_deref(),
+        Some(failure.as_str())
+    );
 
     let (_, finalizer, error) = wrap_stream_callbacks(None, None, std::ptr::null_mut(), None);
     assert_eq!(finalizer().unwrap(), Json::Null);
@@ -497,4 +509,24 @@ fn test_sanitizer_context_resolves_directional_ffi_codecs() {
     .unwrap()
     .expect("codec decode returns a response");
     assert_eq!(sanitized, response);
+}
+
+#[test]
+fn finalizer_failure_retains_callback_cause_ids() {
+    unsafe extern "C" fn fail(_: *mut libc::c_void) -> *mut c_char {
+        set_last_error("finalizer cause");
+        unsafe {
+            nemo_relay_set_last_error_cause_ids([41, 42].as_ptr(), 2);
+        }
+        std::ptr::null_mut()
+    }
+    let (_, finalizer, state) = wrap_stream_callbacks(None, Some(fail), std::ptr::null_mut(), None);
+    let failure = finalizer().unwrap_err();
+    assert_eq!(failure.to_string(), "internal error: finalizer cause");
+    let captured = state.take_failure().unwrap();
+    clear_last_error();
+    assert_eq!(status_from_error(&captured), NemoRelayStatus::Internal);
+    let mut count = 0;
+    let ids = unsafe { nemo_relay_last_error_cause_ids(&mut count) };
+    assert_eq!(unsafe { std::slice::from_raw_parts(ids, count) }, &[41, 42]);
 }

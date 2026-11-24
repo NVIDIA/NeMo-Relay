@@ -30,6 +30,7 @@ extern uint32_t nemo_relay_scope_handle_attributes(const FfiScopeHandle* ptr);
 extern char* nemo_relay_scope_handle_parent_uuid(const FfiScopeHandle* ptr);
 extern char* nemo_relay_scope_handle_data(const FfiScopeHandle* ptr);
 extern char* nemo_relay_scope_handle_metadata(const FfiScopeHandle* ptr);
+extern char* nemo_relay_scope_handle_started_at(const FfiScopeHandle* ptr);
 extern void nemo_relay_scope_handle_free(FfiScopeHandle* ptr);
 
 // Accessors — ToolHandle
@@ -37,6 +38,10 @@ extern char* nemo_relay_tool_handle_uuid(const FfiToolHandle* ptr);
 extern char* nemo_relay_tool_handle_name(const FfiToolHandle* ptr);
 extern uint32_t nemo_relay_tool_handle_attributes(const FfiToolHandle* ptr);
 extern char* nemo_relay_tool_handle_parent_uuid(const FfiToolHandle* ptr);
+extern char* nemo_relay_tool_handle_started_at(const FfiToolHandle* ptr);
+extern char* nemo_relay_tool_handle_data(const FfiToolHandle* ptr);
+extern char* nemo_relay_tool_handle_metadata(const FfiToolHandle* ptr);
+extern char* nemo_relay_tool_handle_tool_call_id(const FfiToolHandle* ptr);
 extern void nemo_relay_tool_handle_free(FfiToolHandle* ptr);
 
 // Accessors — LLMHandle
@@ -44,6 +49,10 @@ extern char* nemo_relay_llm_handle_uuid(const FfiLLMHandle* ptr);
 extern char* nemo_relay_llm_handle_name(const FfiLLMHandle* ptr);
 extern uint32_t nemo_relay_llm_handle_attributes(const FfiLLMHandle* ptr);
 extern char* nemo_relay_llm_handle_parent_uuid(const FfiLLMHandle* ptr);
+extern char* nemo_relay_llm_handle_started_at(const FfiLLMHandle* ptr);
+extern char* nemo_relay_llm_handle_data(const FfiLLMHandle* ptr);
+extern char* nemo_relay_llm_handle_metadata(const FfiLLMHandle* ptr);
+extern char* nemo_relay_llm_handle_model_name(const FfiLLMHandle* ptr);
 extern void nemo_relay_llm_handle_free(FfiLLMHandle* ptr);
 
 // LLMRequest
@@ -91,30 +100,29 @@ import "C"
 
 import (
 	"encoding/json"
+	"fmt"
 	"runtime"
 	"unsafe"
 )
 
-func newLLMRequestFromPtr(ptr unsafe.Pointer) *LLMRequest {
-	if ptr == nil {
-		return nil
-	}
-	r := &LLMRequest{ptr: (*C.FfiLLMRequest)(ptr)}
-	runtime.SetFinalizer(r, func(r *LLMRequest) {
-		if r.ptr != nil {
-			C.nemo_relay_llm_request_free(r.ptr)
-			r.ptr = nil
-		}
-	})
-	return r
-}
-
-var newLLMRequestFunc = func(headersJSON, contentJSON string) *LLMRequest {
+var newLLMRequestFunc = func(headersJSON, contentJSON string) (LLMRequest, error) {
 	cHeaders := C.CString(headersJSON)
 	cContent := C.CString(contentJSON)
 	defer C.free(unsafe.Pointer(cHeaders))
 	defer C.free(unsafe.Pointer(cContent))
-	return newLLMRequestFromPtr(unsafe.Pointer(C.nemo_relay_llm_request_new(cHeaders, cContent)))
+	ptr, err := callPointer(func() *C.FfiLLMRequest { return C.nemo_relay_llm_request_new(cHeaders, cContent) })
+	if err != nil {
+		return LLMRequest{}, err
+	}
+	defer C.nemo_relay_llm_request_free(ptr)
+	return llmRequestValue(ptr), nil
+}
+
+func llmRequestValue(ptr *C.FfiLLMRequest) LLMRequest {
+	return LLMRequest{
+		Headers: goJSONOpt(C.nemo_relay_llm_request_headers(ptr)),
+		Content: goJSONOpt(C.nemo_relay_llm_request_content(ptr)),
+	}
 }
 
 // ScopeType represents the kind of execution scope. It mirrors the core Rust
@@ -347,40 +355,47 @@ func (h *LLMHandle) ParentUUID() string {
 	return goStringOpt(C.nemo_relay_llm_handle_parent_uuid(h.ptr))
 }
 
-// LLMRequest wraps an opaque C pointer to an LLM request. It contains the
-// headers and content for an LLM API call. Create instances with
-// [NewLLMRequest]. The underlying C resource is freed automatically via a Go
-// runtime finalizer.
+// LLMRequest is the typed request used by lifecycle calls, codecs, and middleware.
+// Headers is a JSON object. Content holds JSON in the provider's format.
+// Construct a literal or use NewLLMRequest for validation and default values.
 type LLMRequest struct {
-	ptr *C.FfiLLMRequest
+	Headers json.RawMessage `json:"headers"`
+	Content json.RawMessage `json:"content"`
 }
 
-// NewLLMRequest creates a new LLM request with the given headers map and
-// content. The headers and content parameters are serialized to JSON
-// internally. Returns nil if the underlying C allocation fails.
+func (request LLMRequest) withDefaults() LLMRequest {
+	if len(request.Headers) == 0 {
+		request.Headers = json.RawMessage(`{}`)
+	}
+	if len(request.Content) == 0 {
+		request.Content = json.RawMessage(`null`)
+	}
+	return request
+}
+
+// NewLLMRequest validates headers and content JSON and creates an LLM request.
+// Nil headers become an empty object. Nil content becomes JSON null.
+// Invalid JSON or headers that are not an object or null return an error.
 //
-// Example:
+// The following example creates and validates a request:
 //
-//	req := nemo_relay.NewLLMRequest(
-//	    map[string]interface{}{"Authorization": "Bearer tok"},
-//	    map[string]interface{}{"model": "gpt-4", "messages": []interface{}{}},
+//	req, err := nemo_relay.NewLLMRequest(
+//	    json.RawMessage(`{"Authorization":"Bearer tok"}`),
+//	    json.RawMessage(`{"model":"gpt-4","messages":[]}`),
 //	)
-func NewLLMRequest(headers map[string]interface{}, content interface{}) *LLMRequest {
-	headersJSON, _ := jsonMarshal(headers)
-	contentJSON, _ := jsonMarshal(content)
+//	if err != nil {
+//	    return err
+//	}
+func NewLLMRequest(headers json.RawMessage, content json.RawMessage) (LLMRequest, error) {
+	headersJSON, err := jsonMarshal(headers)
+	if err != nil {
+		return LLMRequest{}, fmt.Errorf("marshal request headers: %w", err)
+	}
+	contentJSON, err := jsonMarshal(content)
+	if err != nil {
+		return LLMRequest{}, fmt.Errorf("marshal request content: %w", err)
+	}
 	return newLLMRequestFunc(string(headersJSON), string(contentJSON))
-}
-
-// Headers returns the request headers as a JSON object.
-func (r *LLMRequest) Headers() json.RawMessage {
-	defer runtime.KeepAlive(r)
-	return goJSONOpt(C.nemo_relay_llm_request_headers(r.ptr))
-}
-
-// Content returns the request content as raw JSON.
-func (r *LLMRequest) Content() json.RawMessage {
-	defer runtime.KeepAlive(r)
-	return goJSONOpt(C.nemo_relay_llm_request_content(r.ptr))
 }
 
 // Event is the common interface implemented by ATOF lifecycle event variants.
@@ -662,4 +677,58 @@ func cloneJSON(raw json.RawMessage) json.RawMessage {
 		return nil
 	}
 	return append(json.RawMessage(nil), raw...)
+}
+
+// StartedAt returns the start time as an RFC 3339 string.
+func (h *ScopeHandle) StartedAt() string {
+	defer runtime.KeepAlive(h)
+	return goStringOpt(C.nemo_relay_scope_handle_started_at(h.ptr))
+}
+
+// StartedAt returns the start time as an RFC 3339 string.
+func (h *ToolHandle) StartedAt() string {
+	defer runtime.KeepAlive(h)
+	return goStringOpt(C.nemo_relay_tool_handle_started_at(h.ptr))
+}
+
+// Data returns the optional data JSON, or nil if absent.
+func (h *ToolHandle) Data() json.RawMessage {
+	defer runtime.KeepAlive(h)
+	return goJSONOpt(C.nemo_relay_tool_handle_data(h.ptr))
+}
+
+// Metadata returns the optional metadata JSON, or nil if absent.
+func (h *ToolHandle) Metadata() json.RawMessage {
+	defer runtime.KeepAlive(h)
+	return goJSONOpt(C.nemo_relay_tool_handle_metadata(h.ptr))
+}
+
+// ToolCallID returns the tool call ID, or an empty string if absent.
+func (h *ToolHandle) ToolCallID() string {
+	defer runtime.KeepAlive(h)
+	return goStringOpt(C.nemo_relay_tool_handle_tool_call_id(h.ptr))
+}
+
+// StartedAt returns the start time as an RFC 3339 string.
+func (h *LLMHandle) StartedAt() string {
+	defer runtime.KeepAlive(h)
+	return goStringOpt(C.nemo_relay_llm_handle_started_at(h.ptr))
+}
+
+// Data returns the optional data JSON, or nil if absent.
+func (h *LLMHandle) Data() json.RawMessage {
+	defer runtime.KeepAlive(h)
+	return goJSONOpt(C.nemo_relay_llm_handle_data(h.ptr))
+}
+
+// Metadata returns the optional metadata JSON, or nil if absent.
+func (h *LLMHandle) Metadata() json.RawMessage {
+	defer runtime.KeepAlive(h)
+	return goJSONOpt(C.nemo_relay_llm_handle_metadata(h.ptr))
+}
+
+// ModelName returns the model name, or an empty string if absent.
+func (h *LLMHandle) ModelName() string {
+	defer runtime.KeepAlive(h)
+	return goStringOpt(C.nemo_relay_llm_handle_model_name(h.ptr))
 }

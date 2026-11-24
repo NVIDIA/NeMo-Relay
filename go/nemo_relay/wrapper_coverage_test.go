@@ -59,13 +59,13 @@ func runAtifLLMCall(t *testing.T, stack *ScopeStack, name, prompt, response stri
 		}
 		_ = handle.UUID()
 
-		_, err = LlmCallExecute(name, map[string]interface{}{
+		_, err = LlmCallExecute(name, requestForTest(map[string]interface{}{
 			"headers": map[string]interface{}{},
 			"content": map[string]interface{}{
 				"messages": []map[string]interface{}{{"role": "user", "content": prompt}},
 				"model":    wrapperTestModel,
 			},
-		}, func(nativeJSON json.RawMessage) (json.RawMessage, error) {
+		}), func(nativeJSON json.RawMessage) (json.RawMessage, error) {
 			return json.RawMessage(response), nil
 		}, WithLLMModelName(wrapperTestModel))
 		if err != nil {
@@ -112,7 +112,7 @@ func TestStandaloneMiddlewareHelpers(t *testing.T) {
 	}
 
 	if err := RegisterLlmRequestIntercept("go_standalone_llm_req", 1, false,
-		func(name string, request LLMRequestDTO, annotated json.RawMessage) (LLMRequestInterceptOutcome, error) {
+		func(name string, request LLMRequest, annotated json.RawMessage) (LLMRequestInterceptOutcome, error) {
 			var payload map[string]interface{}
 			_ = json.Unmarshal(request.Content, &payload)
 			payload["intercepted"] = true
@@ -160,22 +160,22 @@ func TestNilWrapperConstructors(t *testing.T) {
 	if got := newLLMHandle(nil); got != nil {
 		t.Fatalf("expected nil llm handle, got %#v", got)
 	}
-	if got := newLlmStream(nil, nil); got != nil {
+	if got := newLlmStream(nil, nil, nil, nil); got != nil {
 		t.Fatalf("expected nil llm stream, got %#v", got)
 	}
 }
 
 func TestNewLLMRequestRoundTrip(t *testing.T) {
-	req := NewLLMRequest(
-		map[string]interface{}{"Authorization": "Bearer token"},
-		map[string]interface{}{"model": wrapperTestModel, "messages": []interface{}{}},
-	)
-	if req == nil {
+	req, err := NewLLMRequest(jsonForTest(map[string]interface{}{"Authorization": "Bearer token"}), jsonForTest(map[string]interface{}{"model": wrapperTestModel, "messages": []interface{}{}}))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if req.Headers == nil {
 		t.Fatal("expected non-nil LLM request")
 	}
 
 	var headers map[string]interface{}
-	if err := json.Unmarshal(req.Headers(), &headers); err != nil {
+	if err := json.Unmarshal(req.Headers, &headers); err != nil {
 		t.Fatalf("unmarshal headers: %v", err)
 	}
 	if headers["Authorization"] != "Bearer token" {
@@ -183,7 +183,7 @@ func TestNewLLMRequestRoundTrip(t *testing.T) {
 	}
 
 	var content map[string]interface{}
-	if err := json.Unmarshal(req.Content(), &content); err != nil {
+	if err := json.Unmarshal(req.Content, &content); err != nil {
 		t.Fatalf("unmarshal content: %v", err)
 	}
 	if content["model"] != wrapperTestModel {
@@ -254,13 +254,13 @@ func TestAtifExporterLifecycleAndFiltering(t *testing.T) {
 	assertNoTrajectorySteps(t, emptyJSON, "clear")
 
 	stack1.Run(func() {
-		_, err := LlmCallExecute("atif_llm_after_deregister", map[string]interface{}{
+		_, err := LlmCallExecute("atif_llm_after_deregister", requestForTest(map[string]interface{}{
 			"headers": map[string]interface{}{},
 			"content": map[string]interface{}{
 				"messages": []map[string]interface{}{{"role": "user", "content": "ignored"}},
 				"model":    wrapperTestModel,
 			},
-		}, func(nativeJSON json.RawMessage) (json.RawMessage, error) {
+		}), func(nativeJSON json.RawMessage) (json.RawMessage, error) {
 			return json.RawMessage(`{"content":"ignored","role":"assistant","tool_calls":[]}`), nil
 		})
 		if err != nil {

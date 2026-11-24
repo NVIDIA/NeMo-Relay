@@ -439,7 +439,7 @@ func TestObservabilityPluginActivatesDerivedLogsAndExplicitMetrics(t *testing.T)
 			Name:      "example.go.plugin.requests",
 			Kind:      MetricKindCounter,
 			ValueType: MetricValueTypeU64,
-			Value:     uint64(1),
+			Value:     json.Number("1"),
 		}}), "EmitMetric failed")
 	})
 	if err := closeTestPluginHost(); err != nil {

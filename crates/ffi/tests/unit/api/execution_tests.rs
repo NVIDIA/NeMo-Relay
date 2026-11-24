@@ -63,7 +63,7 @@ fn execution_context_reaches_c_middleware_but_not_arguments_or_events() {
             let mut out = ptr::null_mut();
             let status = if let Some(value) = supplied {
                 let context = cstring(value);
-                nemo_relay_tool_call_execute_with_context(
+                nemo_relay_tool_call_execute(
                     name.as_ptr(),
                     args.as_ptr(),
                     tool_exec_cb,
@@ -76,11 +76,12 @@ fn execution_context_reaches_c_middleware_but_not_arguments_or_events() {
                     call_id.as_ptr(),
                     0,
                     context.as_ptr(),
+                    ptr::null(),
                     &mut out,
                 )
             } else {
-                // Original ABI still works and omits the new callback field.
-                nemo_relay_tool_call_execute_with_options(
+                // Omitted application context leaves the callback envelope unchanged.
+                nemo_relay_tool_call_execute(
                     name.as_ptr(),
                     args.as_ptr(),
                     tool_exec_cb,
@@ -92,6 +93,8 @@ fn execution_context_reaches_c_middleware_but_not_arguments_or_events() {
                     ptr::null(),
                     call_id.as_ptr(),
                     0,
+                    ptr::null(),
+                    ptr::null(),
                     &mut out,
                 )
             };
@@ -193,6 +196,15 @@ fn execution_context_validation_releases_c_callback_without_running_middleware_o
         let name = cstring("ffi_invalid_context_tool");
         let args = cstring("{}");
         let cases = [
+            // Resource refusal must precede even the JSON parser's syntax error.
+            (
+                format!("{{\"data\":{{\"value\":\"{}", "x".repeat(1_048_576)),
+                NemoRelayStatus::InvalidArg,
+            ),
+            (
+                json!({"data":{"value":"x".repeat(1_048_576)}}).to_string(),
+                NemoRelayStatus::InvalidArg,
+            ),
             ("{".to_string(), NemoRelayStatus::InvalidJson),
             ("null".to_string(), NemoRelayStatus::InvalidArg),
             ("[]".to_string(), NemoRelayStatus::InvalidArg),
@@ -211,7 +223,7 @@ fn execution_context_validation_releases_c_callback_without_running_middleware_o
             let input = cstring(&input);
             let mut out = ptr::null_mut();
             assert_status!(
-                nemo_relay_tool_call_execute_with_context(
+                nemo_relay_tool_call_execute(
                     name.as_ptr(),
                     args.as_ptr(),
                     effect,
@@ -224,6 +236,7 @@ fn execution_context_validation_releases_c_callback_without_running_middleware_o
                     ptr::null(),
                     0,
                     input.as_ptr(),
+                    ptr::null(),
                     &mut out,
                 ),
                 expected
@@ -269,6 +282,10 @@ fn test_ffi_tool_execute_parent_data_and_error_paths() {
                 1,
                 data.as_ptr(),
                 metadata.as_ptr(),
+                ptr::null(),
+                0,
+                ptr::null(),
+                std::ptr::null(),
                 &mut out_json,
             ),
             NemoRelayStatus::Ok
@@ -288,6 +305,10 @@ fn test_ffi_tool_execute_parent_data_and_error_paths() {
                 1,
                 data.as_ptr(),
                 invalid_json.as_ptr(),
+                ptr::null(),
+                0,
+                ptr::null(),
+                std::ptr::null(),
                 &mut out_json,
             ),
             NemoRelayStatus::InvalidJson
@@ -304,6 +325,10 @@ fn test_ffi_tool_execute_parent_data_and_error_paths() {
                 0,
                 ptr::null(),
                 ptr::null(),
+                ptr::null(),
+                0,
+                ptr::null(),
+                std::ptr::null(),
                 &mut out_json,
             ),
             NemoRelayStatus::Internal
@@ -344,7 +369,7 @@ fn test_ffi_tool_execute_v2_propagates_tool_call_id_and_legacy_omits_it() {
         let mut out_json = ptr::null_mut();
 
         assert_status!(
-            nemo_relay_tool_call_execute_v2(
+            nemo_relay_tool_call_execute(
                 managed_name.as_ptr(),
                 args.as_ptr(),
                 tool_exec_cb,
@@ -355,6 +380,9 @@ fn test_ffi_tool_execute_v2_propagates_tool_call_id_and_legacy_omits_it() {
                 ptr::null(),
                 ptr::null(),
                 tool_call_id.as_ptr(),
+                0,
+                ptr::null(),
+                std::ptr::null(),
                 &mut out_json,
             ),
             NemoRelayStatus::Ok
@@ -372,6 +400,10 @@ fn test_ffi_tool_execute_v2_propagates_tool_call_id_and_legacy_omits_it() {
                 0,
                 ptr::null(),
                 ptr::null(),
+                ptr::null(),
+                0,
+                ptr::null(),
+                std::ptr::null(),
                 &mut out_json,
             ),
             NemoRelayStatus::Ok
@@ -380,7 +412,7 @@ fn test_ffi_tool_execute_v2_propagates_tool_call_id_and_legacy_omits_it() {
 
         let invalid_utf8 = [0xff_u8, 0];
         assert_status!(
-            nemo_relay_tool_call_execute_v2(
+            nemo_relay_tool_call_execute(
                 managed_name.as_ptr(),
                 args.as_ptr(),
                 tool_exec_cb,
@@ -391,6 +423,9 @@ fn test_ffi_tool_execute_v2_propagates_tool_call_id_and_legacy_omits_it() {
                 ptr::null(),
                 ptr::null(),
                 invalid_utf8.as_ptr().cast(),
+                0,
+                ptr::null(),
+                std::ptr::null(),
                 &mut out_json,
             ),
             NemoRelayStatus::InvalidUtf8
@@ -465,8 +500,11 @@ fn test_ffi_llm_execute_codec_parent_and_error_paths() {
                 Some(codec_encode_cb),
                 ptr::null_mut(),
                 None,
+                std::ptr::null(),
                 ptr::null(),
-                &mut out_json,
+                0,
+                std::ptr::null(),
+                &mut out_json
             ),
             NemoRelayStatus::Ok
         );
@@ -490,8 +528,11 @@ fn test_ffi_llm_execute_codec_parent_and_error_paths() {
                 Some(codec_encode_cb),
                 ptr::null_mut(),
                 None,
+                std::ptr::null(),
                 ptr::null(),
-                &mut out_json,
+                0,
+                std::ptr::null(),
+                &mut out_json
             ),
             NemoRelayStatus::InvalidJson
         );
@@ -511,8 +552,11 @@ fn test_ffi_llm_execute_codec_parent_and_error_paths() {
                 Some(codec_encode_cb),
                 ptr::null_mut(),
                 None,
+                std::ptr::null(),
                 ptr::null(),
-                &mut out_json,
+                0,
+                std::ptr::null(),
+                &mut out_json
             ),
             NemoRelayStatus::InvalidUtf8
         );
@@ -532,8 +576,11 @@ fn test_ffi_llm_execute_codec_parent_and_error_paths() {
                 Some(codec_encode_cb),
                 ptr::null_mut(),
                 None,
+                std::ptr::null(),
                 ptr::null(),
-                &mut out_json,
+                0,
+                std::ptr::null(),
+                &mut out_json
             ),
             NemoRelayStatus::Internal
         );
@@ -566,7 +613,7 @@ fn test_ffi_llm_stream_execute_response_codec_defaults_and_error_paths() {
         let metadata = cstring(r#"{"trace":"stream"}"#);
         let model_name = cstring("stream-model");
         let invalid_json = cstring("{");
-        let response_codec = api::nemo_relay_openai_chat_codec_new();
+        let response_codec = api::nemo_relay_codec_new(0, std::ptr::null());
         let mut stream = ptr::null_mut();
         let mut chunk = ptr::null_mut();
 
@@ -574,7 +621,8 @@ fn test_ffi_llm_stream_execute_response_codec_defaults_and_error_paths() {
             nemo_relay_llm_stream_call_execute(
                 name.as_ptr(),
                 request.as_ptr(),
-                llm_exec_openai_chat_cb,
+                Some(llm_exec_openai_chat_cb),
+                None,
                 ptr::null_mut(),
                 None,
                 None,
@@ -590,8 +638,11 @@ fn test_ffi_llm_stream_execute_response_codec_defaults_and_error_paths() {
                 None,
                 ptr::null_mut(),
                 None,
+                std::ptr::null(),
                 response_codec,
-                &mut stream,
+                0,
+                std::ptr::null(),
+                &mut stream
             ),
             NemoRelayStatus::Ok
         );
@@ -609,7 +660,8 @@ fn test_ffi_llm_stream_execute_response_codec_defaults_and_error_paths() {
             nemo_relay_llm_stream_call_execute(
                 name.as_ptr(),
                 request.as_ptr(),
-                llm_exec_openai_chat_cb,
+                Some(llm_exec_openai_chat_cb),
+                None,
                 ptr::null_mut(),
                 None,
                 None,
@@ -625,8 +677,11 @@ fn test_ffi_llm_stream_execute_response_codec_defaults_and_error_paths() {
                 None,
                 ptr::null_mut(),
                 None,
+                std::ptr::null(),
                 response_codec,
-                &mut stream,
+                0,
+                std::ptr::null(),
+                &mut stream
             ),
             NemoRelayStatus::InvalidJson
         );
@@ -634,7 +689,8 @@ fn test_ffi_llm_stream_execute_response_codec_defaults_and_error_paths() {
             nemo_relay_llm_stream_call_execute(
                 name.as_ptr(),
                 request.as_ptr(),
-                llm_exec_fail_cb,
+                Some(llm_exec_fail_cb),
+                None,
                 ptr::null_mut(),
                 None,
                 None,
@@ -650,8 +706,11 @@ fn test_ffi_llm_stream_execute_response_codec_defaults_and_error_paths() {
                 None,
                 ptr::null_mut(),
                 None,
+                std::ptr::null(),
                 response_codec,
-                &mut stream,
+                0,
+                std::ptr::null(),
+                &mut stream
             ),
             NemoRelayStatus::Internal
         );
@@ -674,7 +733,7 @@ fn test_ffi_registration_and_exporter_error_paths() {
 
     unsafe {
         assert_status!(
-            nemo_relay_scope_stack_create(ptr::null_mut()),
+            nemo_relay_scope_stack_create(ptr::null(), ptr::null_mut()),
             NemoRelayStatus::NullPointer
         );
         assert_status!(
@@ -800,9 +859,10 @@ fn test_ffi_registration_and_exporter_error_paths() {
             nemo_relay_register_llm_stream_execution_intercept(
                 global_llm_stream_exec.as_ptr(),
                 1,
-                llm_exec_intercept_cb,
-                ptr::null_mut(),
+                Some(llm_exec_intercept_cb),
                 None,
+                ptr::null_mut(),
+                None
             ),
             NemoRelayStatus::Ok
         );
@@ -1030,9 +1090,10 @@ fn test_ffi_registration_and_exporter_error_paths() {
                 scope_uuid.as_ptr(),
                 scope_llm_stream_exec.as_ptr(),
                 1,
-                llm_exec_intercept_cb,
-                ptr::null_mut(),
+                Some(llm_exec_intercept_cb),
                 None,
+                ptr::null_mut(),
+                None
             ),
             NemoRelayStatus::Ok
         );
@@ -1074,7 +1135,10 @@ fn test_ffi_registration_and_exporter_error_paths() {
                 agent.as_ptr(),
                 version.as_ptr(),
                 ptr::null(),
-                &mut exporter,
+                std::ptr::null(),
+                std::ptr::null(),
+                std::ptr::null(),
+                &mut exporter
             ),
             NemoRelayStatus::Ok
         );
@@ -1084,7 +1148,10 @@ fn test_ffi_registration_and_exporter_error_paths() {
                 agent.as_ptr(),
                 version.as_ptr(),
                 ptr::null(),
-                ptr::null_mut(),
+                std::ptr::null(),
+                std::ptr::null(),
+                std::ptr::null(),
+                ptr::null_mut()
             ),
             NemoRelayStatus::NullPointer
         );
@@ -1149,7 +1216,7 @@ fn execution_options_validate_bits_and_release_callback_on_failure() {
         let args = cstring(r#"{"value":2}"#);
         let mut out = ptr::null_mut();
         assert_status!(
-            nemo_relay_tool_call_execute_with_options(
+            nemo_relay_tool_call_execute(
                 name.as_ptr(),
                 args.as_ptr(),
                 tool_exec_cb,
@@ -1163,6 +1230,8 @@ fn execution_options_validate_bits_and_release_callback_on_failure() {
                 NEMO_RELAY_SKIP_CONDITIONAL_EXECUTION
                     | NEMO_RELAY_SKIP_REQUEST_INTERCEPTS
                     | NEMO_RELAY_SKIP_EXECUTION_INTERCEPTS,
+                ptr::null(),
+                std::ptr::null(),
                 &mut out,
             ),
             NemoRelayStatus::Ok
@@ -1170,7 +1239,7 @@ fn execution_options_validate_bits_and_release_callback_on_failure() {
         assert_eq!(returned_json(out)["annotation"]["source"], json!("ffi"));
         let frees_before = *lock_unpoisoned(plugin_frees());
         assert_status!(
-            nemo_relay_tool_call_execute_with_options(
+            nemo_relay_tool_call_execute(
                 name.as_ptr(),
                 args.as_ptr(),
                 tool_exec_cb,
@@ -1182,6 +1251,8 @@ fn execution_options_validate_bits_and_release_callback_on_failure() {
                 ptr::null(),
                 ptr::null(),
                 8,
+                ptr::null(),
+                std::ptr::null(),
                 &mut out,
             ),
             NemoRelayStatus::InvalidArg
@@ -1232,10 +1303,11 @@ fn llm_execution_options_release_resources_on_validation_failure() {
                     if encode { Some(codec_encode_cb) } else { None };
                 let status = if streaming {
                     let mut out = ptr::null_mut();
-                    let status = nemo_relay_llm_stream_call_execute_with_options(
+                    let status = nemo_relay_llm_stream_call_execute(
                         name.as_ptr(),
                         request.as_ptr(),
-                        llm_exec_cb,
+                        Some(llm_exec_cb),
+                        None,
                         func_data,
                         Some(execution_options_count_free),
                         Some(collector_cb),
@@ -1251,15 +1323,17 @@ fn llm_execution_options_release_resources_on_validation_failure() {
                         encode,
                         codec_data,
                         Some(execution_options_count_free),
+                        std::ptr::null(),
                         ptr::null(),
                         skip_stages,
+                        std::ptr::null(),
                         &mut out,
                     );
                     assert!(out.is_null());
                     status
                 } else {
                     let mut out = ptr::null_mut();
-                    let status = nemo_relay_llm_call_execute_with_options(
+                    let status = nemo_relay_llm_call_execute(
                         name.as_ptr(),
                         request.as_ptr(),
                         llm_exec_cb,
@@ -1274,8 +1348,10 @@ fn llm_execution_options_release_resources_on_validation_failure() {
                         encode,
                         codec_data,
                         Some(execution_options_count_free),
+                        std::ptr::null(),
                         ptr::null(),
                         skip_stages,
+                        std::ptr::null(),
                         &mut out,
                     );
                     assert!(out.is_null());
@@ -1304,6 +1380,49 @@ fn llm_execution_options_release_resources_on_validation_failure() {
                     "stream callbacks"
                 );
             }
+        }
+        nemo_relay_scope_stack_free(stack);
+    }
+}
+
+#[test]
+fn execution_context_accepts_c_boundary_whitespace_and_escaped_values() {
+    let _lock = TEST_MUTEX.lock().unwrap_or_else(|error| error.into_inner());
+    reset_globals();
+    let overhead = r#"{"data":{"value":""}}"#.len();
+    let inputs = [
+        json!({"data":{"value":"x".repeat(16_384-overhead)}}).to_string(),
+        format!(r#"{{"data":{{"value":"{}"}}}}"#, r"\u0061".repeat(3_000)),
+        format!("{}{{}}{}", " ".repeat(20_000), " ".repeat(20_000)),
+    ];
+    unsafe {
+        let stack = fresh_scope_stack();
+        let name = cstring("c-context-admission");
+        let arguments = cstring("{}");
+        for input in inputs {
+            let context = cstring(&input);
+            let mut output = ptr::null_mut();
+            assert_status!(
+                nemo_relay_tool_call_execute(
+                    name.as_ptr(),
+                    arguments.as_ptr(),
+                    tool_exec_cb,
+                    ptr::null_mut(),
+                    None,
+                    ptr::null(),
+                    0,
+                    ptr::null(),
+                    ptr::null(),
+                    ptr::null(),
+                    0,
+                    context.as_ptr(),
+                    ptr::null(),
+                    &mut output,
+                ),
+                NemoRelayStatus::Ok
+            );
+            assert!(!output.is_null());
+            nemo_relay_string_free(output);
         }
         nemo_relay_scope_stack_free(stack);
     }

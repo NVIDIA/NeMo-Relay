@@ -17,13 +17,12 @@ use std::sync::{Arc, OnceLock};
 use std::time::Duration;
 
 use crate::callable::{
-    NemoRelayCodecDecodeFn, NemoRelayCodecEncodeFn, NemoRelayCollectorCb,
-    NemoRelayConditionalMiddlewareGuardrailCb, NemoRelayEventMetadataInjectorCb,
-    NemoRelayEventSanitizeCb, NemoRelayEventSubscriberCb, NemoRelayFinalizerCb, NemoRelayFreeFn,
-    NemoRelayLlmConditionalCb, NemoRelayLlmExecCb, NemoRelayLlmExecInterceptCb,
+    NemoRelayCodecDecodeFn, NemoRelayCodecEncodeFn, NemoRelayConditionalMiddlewareGuardrailCb,
+    NemoRelayEventMetadataInjectorCb, NemoRelayEventSanitizeCb, NemoRelayEventSubscriberCb,
+    NemoRelayFreeFn, NemoRelayLlmConditionalCb, NemoRelayLlmExecCb, NemoRelayLlmExecInterceptCb,
     NemoRelayLlmRequestInterceptCb, NemoRelayLlmSanitizeRequestCb, NemoRelayLlmSanitizeResponseCb,
-    NemoRelayPluginRegisterCb, NemoRelayPluginValidateCb, NemoRelayToolConditionalCb,
-    NemoRelayToolExecCb, NemoRelayToolExecInterceptCb, NemoRelayToolSanitizeCb, wrap_codec_fn,
+    NemoRelayPluginRegisterCb, NemoRelayToolConditionalCb, NemoRelayToolExecCb,
+    NemoRelayToolExecInterceptCb, NemoRelayToolSanitizeCb, wrap_codec_fn,
     wrap_conditional_middleware_guardrail_fn, wrap_event_metadata_injector_fn,
     wrap_event_sanitize_fn, wrap_event_subscriber, wrap_llm_conditional_fn, wrap_llm_exec_fn,
     wrap_llm_exec_intercept_fn, wrap_llm_request_intercept_fn, wrap_llm_sanitize_request_fn,
@@ -206,10 +205,14 @@ use {
 };
 
 mod adaptive;
+mod cancellation;
+pub use cancellation::*;
+mod codec;
 mod content;
 mod diagnostics;
 mod event_registry;
 mod llm;
+pub use codec::*;
 mod llm_registry;
 mod observability;
 pub use diagnostics::*;
@@ -218,6 +221,8 @@ mod runtime_registry;
 mod scope;
 mod scope_registry;
 mod scope_stack;
+pub(crate) mod stream_source;
+pub use stream_source::*;
 mod tool_lifecycle;
 mod tool_registry;
 
@@ -547,15 +552,14 @@ pub unsafe extern "C" fn nemo_relay_llm_request_intercepts(
     }
 }
 
-/// Allocate canonical JSON for a C LLM request-intercept callback result.
+/// Allocate canonical JSON for a C LLM request-intercept callback result,
+/// including optional plugin-neutral optimization contributions.
 ///
-/// `annotated_json` may be null. `pending_marks_json` may be null, in which
-/// case an empty list is serialized. When used by a
-/// `NemoRelayLlmRequestInterceptCb`, assign the successful output to the
-/// callback's `out_outcome_json`; ownership transfers to Relay when the
-/// callback returns, so the callback must not free or reuse it. Outside a
-/// callback, the caller owns the returned string and must release it with
-/// `nemo_relay_string_free`.
+/// `annotated_json`, `pending_marks_json`, and
+/// `optimization_contributions_json` may be null. Null list pointers serialize
+/// as empty lists. Contributions use the canonical
+/// `LlmOptimizationContribution` JSON shape; custom `kind` strings and unknown
+/// top-level fields are preserved.
 ///
 /// # Safety
 ///
@@ -566,42 +570,6 @@ pub unsafe extern "C" fn nemo_relay_llm_request_intercepts(
 /// `nemo_relay_string_free`.
 #[unsafe(no_mangle)]
 pub unsafe extern "C" fn nemo_relay_llm_request_intercept_outcome_json_new(
-    request: *const FfiLLMRequest,
-    annotated_json: *const c_char,
-    pending_marks_json: *const c_char,
-    out_outcome_json: *mut *mut c_char,
-) -> NemoRelayStatus {
-    unsafe {
-        nemo_relay_llm_request_intercept_outcome_json_new_v2(
-            request,
-            annotated_json,
-            pending_marks_json,
-            std::ptr::null(),
-            out_outcome_json,
-        )
-    }
-}
-
-/// Allocate canonical JSON for a C LLM request-intercept callback result,
-/// including optional plugin-neutral optimization contributions.
-///
-/// `annotated_json`, `pending_marks_json`, and
-/// `optimization_contributions_json` may be null. Null list pointers serialize
-/// as empty lists. Contributions use the canonical
-/// `LlmOptimizationContribution` JSON shape; custom `kind` strings and unknown
-/// top-level fields are preserved. The existing unversioned helper remains
-/// ABI-compatible and behaves as though this function received a null
-/// `optimization_contributions_json` pointer.
-///
-/// # Safety
-///
-/// `request` must point to a live `FfiLLMRequest`, optional JSON inputs must
-/// be valid null-terminated strings when non-null, and `out_outcome_json` must
-/// be writable. A successful output must either be transferred through a
-/// callback's `out_outcome_json` or freed by its caller with
-/// `nemo_relay_string_free`.
-#[unsafe(no_mangle)]
-pub unsafe extern "C" fn nemo_relay_llm_request_intercept_outcome_json_new_v2(
     request: *const FfiLLMRequest,
     annotated_json: *const c_char,
     pending_marks_json: *const c_char,

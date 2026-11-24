@@ -4474,3 +4474,67 @@ def test_application_context_matches_shared_schema_vectors(case: dict[str, Any])
         if case["value"] is not None:
             with pytest.raises(WorkerSdkError):
                 ToolExecutionContext("lookup", {}, execution_context=case["value"])
+
+
+@pytest.mark.parametrize(
+    "number, rust_spelling",
+    [
+        (1e-7, "1e-7"),
+        (1e-6, "1e-6"),
+        (1e-5, "0.00001"),
+        (1e16, "1e+16"),
+        (1.0, "1.0"),
+        (-0.0, "-0.0"),
+        (5e-324, "5e-324"),
+        (1.7976931348623157e308, "1.7976931348623157e+308"),
+    ],
+)
+def test_context_float_boundary_matches_rust(number, rust_spelling) -> None:
+    from dataclasses import replace
+
+    envelope_bytes = len('{"data":{"number":' + rust_spelling + ',"padding":""}}')
+    supplied = {"data": {"number": number, "padding": "x" * (16_384 - envelope_bytes)}}
+    context = ToolExecutionContext("float-boundary", {}, execution_context=supplied)
+    assert context.execution_context == supplied
+    assert replace(context, args={"changed": True}).execution_context == supplied
+    supplied["data"]["padding"] += "x"
+    with pytest.raises(WorkerSdkError, match="16384 serialized bytes"):
+        ToolExecutionContext("float-over-boundary", {}, execution_context=supplied)
+
+
+@pytest.mark.parametrize("invalid", [float("nan"), float("inf"), -float("inf")])
+def test_context_snapshot_refuses_nonfinite_numbers(invalid) -> None:
+    with pytest.raises(WorkerSdkError, match="invalid application execution context"):
+        ToolExecutionContext("finite-context", {}, execution_context={"data": {"value": invalid}})
+
+
+def test_context_snapshot_preserves_stored_primitive_subclass_values() -> None:
+    class CustomString(str):
+        def __str__(self):
+            pytest.fail("snapshot must use the stored string")
+
+    class CustomInteger(int):
+        def __int__(self):
+            pytest.fail("snapshot must use the stored integer")
+
+    class CustomFloat(float):
+        def __float__(self):
+            pytest.fail("snapshot must use the stored float")
+
+    supplied = {
+        "data": {CustomString("label"): CustomString("value"), "integer": CustomInteger(1), "float": CustomFloat(1e-7)}
+    }
+    context = ToolExecutionContext("primitive-values", {}, execution_context=supplied)
+    assert context.execution_context == {"data": {"label": "value", "integer": 1, "float": 1e-7}}
+
+
+def test_context_snapshot_translates_integer_conversion_limit() -> None:
+    import sys
+
+    original_limit = sys.get_int_max_str_digits()
+    try:
+        sys.set_int_max_str_digits(640)
+        with pytest.raises(WorkerSdkError, match="invalid application execution context"):
+            ToolExecutionContext("integer-conversion", {}, execution_context={"data": {"value": 10**700}})
+    finally:
+        sys.set_int_max_str_digits(original_limit)

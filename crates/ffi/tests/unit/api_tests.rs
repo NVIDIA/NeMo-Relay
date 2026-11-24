@@ -133,7 +133,19 @@ unsafe fn nemo_relay_event(
     data_json: *const c_char,
     metadata_json: *const c_char,
 ) -> NemoRelayStatus {
-    unsafe { api::nemo_relay_event(name, parent, data_json, metadata_json, ptr::null()) }
+    unsafe {
+        api::nemo_relay_event(
+            name,
+            parent,
+            data_json,
+            ptr::null(),
+            metadata_json,
+            ptr::null(),
+            std::ptr::null(),
+            std::ptr::null(),
+            ptr::null(),
+        )
+    }
 }
 
 #[allow(clippy::too_many_arguments)]
@@ -193,6 +205,8 @@ unsafe fn nemo_relay_llm_call(
             data_json,
             metadata_json,
             model_name,
+            std::ptr::null(),
+            std::ptr::null(),
             ptr::null(),
             out,
         )
@@ -206,7 +220,15 @@ unsafe fn nemo_relay_llm_call_end(
     metadata_json: *const c_char,
 ) -> NemoRelayStatus {
     unsafe {
-        api::nemo_relay_llm_call_end(handle, response_json, data_json, metadata_json, ptr::null())
+        api::nemo_relay_llm_call_end(
+            handle,
+            response_json,
+            data_json,
+            metadata_json,
+            std::ptr::null(),
+            std::ptr::null(),
+            ptr::null(),
+        )
     }
 }
 
@@ -241,7 +263,7 @@ unsafe fn returned_json(ptr: *mut c_char) -> Json {
 unsafe fn fresh_scope_stack() -> *mut FfiScopeStack {
     let mut stack = ptr::null_mut();
     assert_eq!(
-        unsafe { nemo_relay_scope_stack_create(&mut stack) },
+        unsafe { nemo_relay_scope_stack_create(ptr::null(), &mut stack) },
         NemoRelayStatus::Ok
     );
     assert!(!stack.is_null());
@@ -290,12 +312,7 @@ fn propagation_context_json_round_trips_through_the_ffi() {
     .unwrap();
     let mut w3c_stack = ptr::null_mut();
     assert_eq!(
-        unsafe {
-            crate::api::nemo_relay_scope_stack_create_from_propagation_json(
-                w3c_payload.as_ptr(),
-                &mut w3c_stack,
-            )
-        },
+        unsafe { crate::api::nemo_relay_scope_stack_create(w3c_payload.as_ptr(), &mut w3c_stack,) },
         NemoRelayStatus::Ok
     );
     unsafe { nemo_relay_scope_stack_free(w3c_stack) };
@@ -303,12 +320,7 @@ fn propagation_context_json_round_trips_through_the_ffi() {
     let payload = CString::new(context.to_string()).unwrap();
     let mut stack = ptr::null_mut();
     assert_eq!(
-        unsafe {
-            crate::api::nemo_relay_scope_stack_create_from_propagation_json(
-                payload.as_ptr(),
-                &mut stack,
-            )
-        },
+        unsafe { crate::api::nemo_relay_scope_stack_create(payload.as_ptr(), &mut stack,) },
         NemoRelayStatus::Ok
     );
     assert!(!stack.is_null());
@@ -328,10 +340,7 @@ fn propagation_context_json_round_trips_through_the_ffi() {
         let payload = CString::new(invalid_context).unwrap();
         let mut rejected_stack = ptr::null_mut();
         let status = unsafe {
-            crate::api::nemo_relay_scope_stack_create_from_propagation_json(
-                payload.as_ptr(),
-                &mut rejected_stack,
-            )
+            crate::api::nemo_relay_scope_stack_create(payload.as_ptr(), &mut rejected_stack)
         };
         assert_eq!(status, expected_status);
         assert!(rejected_stack.is_null());

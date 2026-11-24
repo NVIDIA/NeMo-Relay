@@ -33,6 +33,7 @@ mod api_tests;
 mod callable_extra_tests;
 #[path = "../unit/callable_tests.rs"]
 mod callable_tests;
+mod codec_tests;
 #[path = "../coverage/convert_tests.rs"]
 mod convert_coverage_tests;
 #[path = "../coverage/diagnostics_tests.rs"]
@@ -41,6 +42,8 @@ mod diagnostics_tests;
 mod error_coverage_tests;
 mod plugin_activation_tests;
 mod scope_stack_coverage_tests;
+mod stream_source_tests;
+mod surface_parity_tests;
 #[path = "../support/mod.rs"]
 mod test_support;
 #[path = "../unit/types_tests.rs"]

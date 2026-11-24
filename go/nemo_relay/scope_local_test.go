@@ -65,10 +65,9 @@ func executeScopeLocalToolPassthrough(name, payload string) error {
 }
 
 func executeScopeLocalLLMPassthrough(name string, request map[string]interface{}) error {
-	_, err := LlmCallExecute(name, request,
-		func(nativeJSON json.RawMessage) (json.RawMessage, error) {
-			return json.RawMessage(`{"ok":true}`), nil
-		},
+	_, err := LlmCallExecute(name, requestForTest(request), func(nativeJSON json.RawMessage) (json.RawMessage, error) {
+		return json.RawMessage(`{"ok":true}`), nil
+	},
 	)
 	return err
 }
@@ -961,7 +960,7 @@ func TestScopeLocalLlmSanitizeRequestGuardrailAffectsEvent(t *testing.T) {
 		handle, _ := PushScope("llm_scope_guard", ScopeTypeAgent)
 		defer PopScope(handle)
 		err := ScopeRegisterLlmSanitizeRequestGuardrail(handle.UUID(), "scope_llm_san_req", 1,
-			func(request LLMRequestDTO, _ LLMSanitizeRequestContext) (LLMRequestDTO, bool) {
+			func(request LLMRequest, _ LLMSanitizeRequestContext) (LLMRequest, bool) {
 				var m map[string]interface{}
 				json.Unmarshal(request.Content, &m)
 				m["scope_llm_sanitized"] = true
@@ -974,7 +973,7 @@ func TestScopeLocalLlmSanitizeRequestGuardrailAffectsEvent(t *testing.T) {
 		}
 
 		request := map[string]interface{}{"headers": map[string]interface{}{}, "content": map[string]interface{}{"model": "test"}}
-		_, err = LlmCallExecute("scope_llm_guard_test", request, func(nativeJSON json.RawMessage) (json.RawMessage, error) {
+		_, err = LlmCallExecute("scope_llm_guard_test", requestForTest(request), func(nativeJSON json.RawMessage) (json.RawMessage, error) {
 			return json.RawMessage(`{"done": true}`), nil
 		})
 		if err != nil {
@@ -1005,7 +1004,7 @@ func TestScopeLocalLlmConditionalGuardrail(t *testing.T) {
 			t.Fatalf("ScopeRegisterLlmConditionalExecutionGuardrail failed: %v", err)
 		}
 		request := map[string]interface{}{"headers": map[string]interface{}{}, "content": map[string]interface{}{"model": "test"}}
-		_, err = LlmCallExecute("blocked_scope_llm", request, func(nativeJSON json.RawMessage) (json.RawMessage, error) { return json.RawMessage(`{}`), nil })
+		_, err = LlmCallExecute("blocked_scope_llm", requestForTest(request), func(nativeJSON json.RawMessage) (json.RawMessage, error) { return json.RawMessage(`{}`), nil })
 		if err == nil {
 			t.Fatal("expected guardrail rejection from scope-local LLM conditional")
 		}
@@ -1119,7 +1118,7 @@ func assertScopeLocalLLMWrappersDeregister(t *testing.T, scopeUUID string, reque
 		&sanitizeRequestCalls,
 		func() error {
 			return ScopeRegisterLlmSanitizeRequestGuardrail(scopeUUID, "llm_scope_san_req", 1,
-				func(request LLMRequestDTO, _ LLMSanitizeRequestContext) (LLMRequestDTO, bool) {
+				func(request LLMRequest, _ LLMSanitizeRequestContext) (LLMRequest, bool) {
 					sanitizeRequestCalls++
 					return request, false
 				},
@@ -1173,7 +1172,7 @@ func assertScopeLocalLLMWrappersDeregister(t *testing.T, scopeUUID string, reque
 		&requestInterceptCalls,
 		func() error {
 			return ScopeRegisterLlmRequestIntercept(scopeUUID, "llm_scope_req_int", 1, false,
-				func(name string, request LLMRequestDTO, annotated json.RawMessage) (LLMRequestInterceptOutcome, error) {
+				func(name string, request LLMRequest, annotated json.RawMessage) (LLMRequestInterceptOutcome, error) {
 					requestInterceptCalls++
 					return LLMRequestInterceptOutcome{Request: request, AnnotatedRequest: annotated}, nil
 				},
@@ -1206,24 +1205,21 @@ func assertScopeLocalLLMWrappersDeregister(t *testing.T, scopeUUID string, reque
 func assertScopeLocalLLMStreamWrapperDeregisters(t *testing.T, scopeUUID string, request map[string]interface{}) {
 	t.Helper()
 
-	err := ScopeRegisterLlmStreamExecutionIntercept(scopeUUID, "llm_scope_stream_int", 1,
-		func(requestJSON json.RawMessage, _ LLMExecutionContext, next func(json.RawMessage) (json.RawMessage, error)) (json.RawMessage, error) {
-			nextResult, err := next(requestJSON)
-			if err != nil {
-				return nil, err
-			}
-			return json.RawMessage(`{"scope_intercepted":true,"next":` + string(nextResult) + `}`), nil
-		},
+	err := ScopeRegisterLlmStreamExecutionIntercept(scopeUUID, "llm_scope_stream_int", 1, LLMExecutionInterceptFunc(func(requestJSON json.RawMessage, _ LLMExecutionContext, next func(json.RawMessage) (json.RawMessage, error)) (json.RawMessage, error) {
+		nextResult, err := next(requestJSON)
+		if err != nil {
+			return nil, err
+		}
+		return json.RawMessage(`{"scope_intercepted":true,"next":` + string(nextResult) + `}`), nil
+	}).AsStream(),
 	)
 	if err != nil {
 		t.Fatalf("ScopeRegisterLlmStreamExecutionIntercept failed: %v", err)
 	}
 
-	stream, err := LlmStreamCallExecute("llm_scope_stream_int_call", request,
-		func(nativeJSON json.RawMessage) (json.RawMessage, error) {
-			return json.RawMessage(`{"streamed":true}`), nil
-		},
-		nil, nil,
+	stream, err := LlmStreamCallExecute("llm_scope_stream_int_call", requestForTest(request), LLMExecutionFunc(func(nativeJSON json.RawMessage) (json.RawMessage, error) {
+		return json.RawMessage(`{"streamed":true}`), nil
+	}).AsStream(), nil, nil,
 	)
 	if err != nil {
 		t.Fatalf("LlmStreamCallExecute with stream intercept failed: %v", err)
