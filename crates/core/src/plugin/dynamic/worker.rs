@@ -2908,16 +2908,23 @@ where
     F: Future + Send,
     F::Output: Send,
 {
-    if tokio::runtime::Handle::try_current().is_ok() {
-        let handle = handle.clone();
-        std::thread::scope(|scope| {
-            scope
-                .spawn(move || handle.block_on(future))
-                .join()
-                .expect("worker callback blocking thread panicked")
-        })
-    } else {
-        handle.block_on(future)
+    match tokio::runtime::Handle::try_current() {
+        // Gate callbacks run from host RPC handlers on the worker-host runtime, and the
+        // callback's gRPC call, I/O, and timeout need that runtime's threads. Hand this thread's
+        // scheduler slot to another thread first, or callers on every worker deadlock it.
+        Ok(current) if current.runtime_flavor() == tokio::runtime::RuntimeFlavor::MultiThread => {
+            tokio::task::block_in_place(|| handle.block_on(future))
+        }
+        Ok(_) => {
+            let handle = handle.clone();
+            std::thread::scope(|scope| {
+                scope
+                    .spawn(move || handle.block_on(future))
+                    .join()
+                    .expect("worker callback blocking thread panicked")
+            })
+        }
+        Err(_) => handle.block_on(future),
     }
 }
 
