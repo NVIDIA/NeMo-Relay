@@ -3291,7 +3291,10 @@ impl Session {
         let subagent_name = format!("subagent:{subagent_id}");
         let mut metadata = merge_metadata(
             event.metadata,
-            json!({ "nemo_relay_scope_role": "subagent" }),
+            json!({
+                "nemo_relay_scope_role": "subagent",
+                "session_id": self.session_id,
+            }),
         );
         if self.agent_kind == AgentKind::ClaudeCode
             && let Some(object) = metadata.as_object_mut()

@@ -6345,6 +6345,143 @@ async fn codex_child_turn_and_tool_inherit_delegated_agent_identity() {
 }
 
 #[tokio::test]
+async fn claude_code_sessions_keep_one_conversation_id_per_session_on_gen_ai_spans() {
+    let _guard = PLUGIN_CONFIG_TEST_LOCK.lock().await;
+    let subscriber_name = "cli-session-conversation-id-per-session";
+    let (subscriber, exporter) = make_gen_ai_test_subscriber(subscriber_name);
+    subscriber.register(subscriber_name).unwrap();
+    let manager = SessionManager::new(session_test_config());
+    let sessions = [
+        ("conversation-session-1", "worker-1"),
+        ("conversation-session-2", "worker-2"),
+    ];
+    for (session_id, subagent_id) in sessions {
+        let hook_metadata = |hook: &str| json!({ "hook_event_name": hook });
+        manager
+            .apply_events(
+                &HeaderMap::new(),
+                vec![
+                    NormalizedEvent::AgentStarted(SessionEvent {
+                        session_id: session_id.into(),
+                        agent_kind: AgentKind::ClaudeCode,
+                        event_name: "SessionStart".into(),
+                        payload: json!({}),
+                        metadata: hook_metadata("SessionStart"),
+                    }),
+                    NormalizedEvent::PromptSubmitted(SessionEvent {
+                        session_id: session_id.into(),
+                        agent_kind: AgentKind::ClaudeCode,
+                        event_name: "UserPromptSubmit".into(),
+                        payload: json!({ "prompt": "work" }),
+                        metadata: hook_metadata("UserPromptSubmit"),
+                    }),
+                    NormalizedEvent::SubagentStarted(SubagentEvent {
+                        session_id: session_id.into(),
+                        agent_kind: AgentKind::ClaudeCode,
+                        event_name: "SubagentStart".into(),
+                        subagent_id: subagent_id.into(),
+                        payload: json!({}),
+                        metadata: hook_metadata("SubagentStart"),
+                    }),
+                    NormalizedEvent::ToolStarted(ToolEvent {
+                        session_id: session_id.into(),
+                        agent_kind: AgentKind::ClaudeCode,
+                        event_name: "PreToolUse".into(),
+                        tool_call_id: "call-1".into(),
+                        tool_name: "Bash".into(),
+                        subagent_id: Some(subagent_id.into()),
+                        arguments: json!({ "command": "ls" }),
+                        result: Value::Null,
+                        status: None,
+                        payload: json!({}),
+                        metadata: hook_metadata("PreToolUse"),
+                    }),
+                    NormalizedEvent::ToolEnded(ToolEvent {
+                        session_id: session_id.into(),
+                        agent_kind: AgentKind::ClaudeCode,
+                        event_name: "PostToolUse".into(),
+                        tool_call_id: "call-1".into(),
+                        tool_name: "Bash".into(),
+                        subagent_id: Some(subagent_id.into()),
+                        arguments: Value::Null,
+                        result: json!({ "stdout": "" }),
+                        status: None,
+                        payload: json!({}),
+                        metadata: hook_metadata("PostToolUse"),
+                    }),
+                ],
+            )
+            .await
+            .unwrap();
+        let prep = manager
+            .prepare_gateway_call(
+                &HeaderMap::new(),
+                llm_start_with_messages_task(session_id, "work"),
+            )
+            .await
+            .unwrap();
+        execute_prepared_llm(
+            &manager,
+            prep,
+            json!({
+                "model": "claude-test",
+                "content": [{"type": "text", "text": "Done."}],
+                "stop_reason": "end_turn"
+            }),
+        )
+        .await;
+    }
+    manager.close_all("test_shutdown").await.unwrap();
+    flush_subscribers().unwrap();
+    subscriber.force_flush().unwrap();
+    assert!(subscriber.deregister(subscriber_name).unwrap());
+
+    let spans = exporter.get_finished_spans().unwrap();
+    let mut attributed_spans = 0;
+    let mut trace_ids = HashSet::new();
+    for (session_id, subagent_id) in sessions {
+        let subagent_span_name = format!("invoke_agent subagent:{subagent_id}");
+        let trace_id = spans
+            .iter()
+            .find(|span| span.name == subagent_span_name)
+            .map(|span| span.span_context.trace_id())
+            .expect("expected the session's subagent span");
+        assert!(trace_ids.insert(trace_id), "{session_id}: {spans:?}");
+        let session_spans: Vec<_> = spans
+            .iter()
+            .filter(|span| span.span_context.trace_id() == trace_id)
+            .collect();
+        attributed_spans += session_spans.len();
+        let operations: HashSet<String> = session_spans
+            .iter()
+            .filter_map(|span| {
+                attr_map(&span.attributes)
+                    .get("gen_ai.operation.name")
+                    .cloned()
+            })
+            .collect();
+        assert_eq!(
+            operations,
+            HashSet::from([
+                "invoke_agent".to_string(),
+                "execute_tool".to_string(),
+                "chat".to_string(),
+            ]),
+            "{session_id}: {session_spans:?}"
+        );
+        assert!(
+            session_spans.iter().all(|span| {
+                attr_map(&span.attributes).get("gen_ai.conversation.id")
+                    == Some(&session_id.to_string())
+            }),
+            "{session_id}: {session_spans:?}"
+        );
+    }
+    assert_eq!(attributed_spans, spans.len(), "{spans:?}");
+    subscriber.shutdown().unwrap();
+}
+
+#[tokio::test]
 async fn gateway_child_turn_uses_only_explicit_agent_identity() {
     let _guard = PLUGIN_CONFIG_TEST_LOCK.lock().await;
     let subscriber_name = "cli-unnamed-gateway-child-turn";
@@ -6394,10 +6531,7 @@ async fn gateway_child_turn_uses_only_explicit_agent_identity() {
     let spans = exporter.get_finished_spans().unwrap();
     let child = spans
         .iter()
-        .find(|span| {
-            span.name == "invoke_agent subagent:worker"
-                && !attr_map(&span.attributes).contains_key("gen_ai.conversation.id")
-        })
+        .find(|span| span.name == "invoke_agent subagent:worker")
         .expect("expected child Agent span");
     let turn = spans
         .iter()
