@@ -186,6 +186,10 @@ impl std::error::Error for CallbackCauseIds {}
 pub(crate) fn last_error_as_flow_error(fallback: &str) -> FlowError {
     let message = last_error_message().unwrap_or_else(|| fallback.to_owned());
     let ids = LAST_ERROR_CAUSE_IDS.with_borrow(Clone::clone);
+    flow_error_with_callback_causes(message, ids)
+}
+
+pub(crate) fn flow_error_with_callback_causes(message: String, ids: Vec<u64>) -> FlowError {
     if ids.is_empty() {
         return FlowError::Internal(message);
     }

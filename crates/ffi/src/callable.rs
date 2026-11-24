@@ -43,8 +43,8 @@ use nemo_relay_types::error::{FlowError, Result};
 
 use crate::convert::json_to_c_string;
 use crate::error::{
-    NemoRelayStatus, clear_last_error, last_error_as_flow_error, last_error_message,
-    set_last_error, status_from_error,
+    NemoRelayStatus, callback_cause_ids, clear_last_error, flow_error_with_callback_causes,
+    last_error_as_flow_error, last_error_message, set_last_error, status_from_error,
 };
 use crate::types::{FfiEvent, FfiLLMRequest, FfiPluginContext};
 
@@ -961,9 +961,16 @@ pub fn wrap_llm_stream_exec_intercept_fn(
                         if let Some(mut tail) = tail
                             && let Err(cleanup_error) = tail.close().await
                         {
-                            return Err(FlowError::Internal(format!(
-                                "{error}; stream cleanup also failed: {cleanup_error}"
-                            )));
+                            let mut cause_ids = callback_cause_ids(&error);
+                            for id in callback_cause_ids(&cleanup_error) {
+                                if !cause_ids.contains(&id) {
+                                    cause_ids.push(id);
+                                }
+                            }
+                            return Err(flow_error_with_callback_causes(
+                                format!("{error}; stream cleanup also failed: {cleanup_error}"),
+                                cause_ids,
+                            ));
                         }
                         Err(error)
                     }

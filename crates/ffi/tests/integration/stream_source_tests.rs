@@ -264,6 +264,7 @@ fn source_close_emits_events_in_its_creation_context_without_a_read() {
 
 struct FailingCleanupStream {
     closed: Arc<AtomicUsize>,
+    failure: FlowError,
 }
 impl tokio_stream::Stream for FailingCleanupStream {
     type Item = Result<Json, FlowError>;
@@ -280,7 +281,8 @@ impl nemo_relay_types::api::runtime::LlmStreamInner for FailingCleanupStream {
     ) -> std::pin::Pin<Box<dyn std::future::Future<Output = Result<(), FlowError>> + Send + '_>>
     {
         self.closed.fetch_add(1, Ordering::SeqCst);
-        Box::pin(async { Err(FlowError::Internal("source cleanup failed".into())) })
+        let failure = self.failure.clone();
+        Box::pin(async move { Err(failure) })
     }
 }
 unsafe extern "C" fn fail_after_next(
@@ -294,6 +296,9 @@ unsafe extern "C" fn fail_after_next(
     let value = unsafe { next(request, next_context) };
     unsafe { nemo_relay_string_free(value) };
     set_last_error("interceptor failed");
+    unsafe {
+        nemo_relay_set_last_error_cause_ids([11, 12].as_ptr(), 2);
+    }
     ptr::null_mut()
 }
 
@@ -303,14 +308,29 @@ fn single_value_adapter_preserves_interceptor_and_cleanup_failures() {
         .enable_all()
         .build()
         .unwrap();
+    unsafe extern "C" fn cleanup_failure(_: *mut libc::c_void, _: *const c_char) -> *mut c_char {
+        set_last_error("source cleanup failed");
+        unsafe {
+            nemo_relay_set_last_error_cause_ids([12, 13].as_ptr(), 2);
+        }
+        ptr::null_mut()
+    }
+    let callback = wrap_llm_exec_fn(cleanup_failure, ptr::null_mut(), None);
+    let failure = runtime
+        .block_on(callback(LlmRequest {
+            headers: Default::default(),
+            content: Json::Null,
+        }))
+        .unwrap_err();
     let closed = Arc::new(AtomicUsize::new(0));
     let source_closed = closed.clone();
     let next: LlmStreamExecutionNextFn = Arc::new(move |_| {
         let closed = source_closed.clone();
+        let failure = failure.clone();
         Box::pin(async move {
             Ok(
                 nemo_relay_runtime::api::runtime::LlmJsonStream::from_closeable(
-                    FailingCleanupStream { closed },
+                    FailingCleanupStream { closed, failure },
                 ),
             )
         })
@@ -332,6 +352,17 @@ fn single_value_adapter_preserves_interceptor_and_cleanup_failures() {
     assert!(message.contains("interceptor failed"), "{message}");
     assert!(message.contains("source cleanup failed"), "{message}");
     assert_eq!(closed.load(Ordering::SeqCst), 1);
+    assert_eq!(
+        message,
+        "internal error: internal error: interceptor failed; stream cleanup also failed: internal error: source cleanup failed"
+    );
+    assert_eq!(status_from_error(&error), NemoRelayStatus::Internal);
+    let mut count = 0;
+    let ids = unsafe { nemo_relay_last_error_cause_ids(&mut count) };
+    assert_eq!(
+        unsafe { std::slice::from_raw_parts(ids, count) },
+        &[11, 12, 13]
+    );
 }
 
 #[test]
