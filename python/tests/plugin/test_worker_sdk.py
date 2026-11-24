@@ -7,8 +7,10 @@ from __future__ import annotations
 
 import asyncio
 import contextlib
+import io
 import json
 import os
+import queue
 import socket
 import tempfile
 from collections.abc import AsyncIterator
@@ -3473,14 +3475,22 @@ async def test_host_liveness_watcher_reports_eof(monkeypatch: pytest.MonkeyPatch
     read_fd, write_fd = os.pipe()
     shutdown_event = asyncio.Event()
     forced_exit = plugin_api.threading.Event()
+    reads_started: queue.SimpleQueue[int | None] = queue.SimpleQueue()
+
+    class ObservedPipe(io.FileIO):
+        def read(self, size: int | None = -1, /) -> bytes:
+            reads_started.put(size)
+            return super().read(size)
+
+    monkeypatch.setattr(plugin_api.os, "fdopen", lambda fd, mode, buffering: ObservedPipe(fd, mode))
     monkeypatch.setattr(plugin_api.os, "_exit", lambda code: forced_exit.set())
     monkeypatch.setattr(plugin_api, "_HOST_LOSS_EXIT_DELAY_SECONDS", 0.0)
     watcher = plugin_api._start_host_liveness_watcher(read_fd, asyncio.get_running_loop(), shutdown_event)
     try:
-        await asyncio.sleep(0)
+        assert await asyncio.to_thread(reads_started.get, timeout=1) == 1
         assert not shutdown_event.is_set()
         os.write(write_fd, b"x")
-        await asyncio.sleep(0)
+        assert await asyncio.to_thread(reads_started.get, timeout=1) == 1
         assert not shutdown_event.is_set()
         os.close(write_fd)
         write_fd = -1
