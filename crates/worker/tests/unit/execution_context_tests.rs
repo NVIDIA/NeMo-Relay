@@ -428,3 +428,163 @@ async fn shutdown_aborts_active_invocations() {
     late_task.abort();
     assert!(late_task.await.unwrap_err().is_cancelled());
 }
+
+fn gate_test_plugin() -> Arc<dyn WorkerPlugin> {
+    struct TestPlugin;
+
+    impl WorkerPlugin for TestPlugin {
+        fn plugin_id(&self) -> &str {
+            "test.gate"
+        }
+
+        fn register(&self, _ctx: &mut PluginContext, _config: &Json) -> Result<()> {
+            Ok(())
+        }
+    }
+
+    Arc::new(TestPlugin)
+}
+
+fn shutting_down_service(handlers: WorkerHandlers) -> WorkerService {
+    let (shutdown, _) = watch::channel(true);
+    WorkerService {
+        plugin: gate_test_plugin(),
+        runtime: disconnected_runtime(),
+        handlers: Arc::new(Mutex::new(handlers)),
+        active_invocations: Arc::new(Mutex::new(HashMap::new())),
+        next_invocation_generation: Arc::new(AtomicU64::new(1)),
+        shutdown,
+    }
+}
+
+fn gate_invoke_request(registration_name: &str, surface: RegistrationSurface) -> InvokeRequest {
+    InvokeRequest {
+        activation_id: "activation".into(),
+        invocation_id: "invoke-1".into(),
+        registration_name: registration_name.into(),
+        surface: surface as i32,
+        continuation_id: "next-1".into(),
+        scope: None,
+        auth_token: "token".into(),
+        payload: None,
+    }
+}
+
+#[tokio::test]
+async fn gated_invocation_runs_only_after_release() {
+    use std::sync::atomic::AtomicBool;
+
+    for release in [false, true] {
+        let ran = Arc::new(AtomicBool::new(false));
+        let flag = Arc::clone(&ran);
+        let (completion_tx, mut completion_rx) = watch::channel(false);
+        let (task, start) = spawn_gated_invocation(
+            async move {
+                flag.store(true, Ordering::SeqCst);
+                "ran"
+            },
+            "not started",
+            InvocationCompletion::new(completion_tx),
+        );
+        tokio::task::yield_now().await;
+        assert!(!ran.load(Ordering::SeqCst));
+        if release {
+            start.send(()).unwrap();
+        } else {
+            drop(start);
+        }
+        let outcome = task.await.unwrap();
+        assert_eq!(outcome, if release { "ran" } else { "not started" });
+        assert_eq!(ran.load(Ordering::SeqCst), release);
+        completion_rx.changed().await.unwrap();
+        assert!(*completion_rx.borrow());
+    }
+}
+
+#[tokio::test]
+async fn invoke_after_shutdown_is_unavailable_and_skips_the_callback() {
+    use std::sync::atomic::AtomicBool;
+
+    let ran = Arc::new(AtomicBool::new(false));
+    let flag = Arc::clone(&ran);
+    let mut handlers = WorkerHandlers::default();
+    handlers.subscribers.insert(
+        "subscriber".into(),
+        Arc::new(move |_event: &Event| flag.store(true, Ordering::SeqCst)),
+    );
+    let service = shutting_down_service(handlers);
+    let event = Event::Mark(nemo_relay_types::api::event::MarkEvent::new(
+        nemo_relay_types::api::event::BaseEvent::builder()
+            .name("gated")
+            .data(serde_json::json!({}))
+            .build(),
+        None,
+        None,
+    ));
+    let mut request = gate_invoke_request("subscriber", RegistrationSurface::Subscriber);
+    request.payload = Some(nemo_relay_worker_proto::v1::invoke_request::Payload::Event(
+        json_envelope("nemo.relay.Event@1", &event).unwrap(),
+    ));
+    let error = service.invoke(Request::new(request)).await.unwrap_err();
+    assert_eq!(error.code(), tonic::Code::Unavailable);
+    for _ in 0..8 {
+        tokio::task::yield_now().await;
+    }
+    assert!(!ran.load(Ordering::SeqCst));
+    assert!(service.active_invocations.lock().unwrap().is_empty());
+}
+
+#[tokio::test]
+async fn invoke_stream_after_shutdown_is_unavailable_and_skips_the_handler() {
+    use std::sync::atomic::AtomicBool;
+
+    let ran = Arc::new(AtomicBool::new(false));
+    let flag = Arc::clone(&ran);
+    let mut handlers = WorkerHandlers::default();
+    handlers.llm_stream_executions.insert(
+        "stream".into(),
+        Arc::new(move |_model: &str, _request, _context, _next| {
+            flag.store(true, Ordering::SeqCst);
+            Box::pin(async { Err(WorkerSdkError::Callback("unused".into())) })
+        }),
+    );
+    let service = shutting_down_service(handlers);
+    let llm_request = LlmRequest {
+        headers: Default::default(),
+        content: serde_json::json!({"prompt": "hello"}),
+    };
+    let mut request =
+        gate_invoke_request("stream", RegistrationSurface::LlmStreamExecutionIntercept);
+    request.payload = Some(nemo_relay_worker_proto::v1::invoke_request::Payload::Llm(
+        nemo_relay_worker_proto::v1::LlmInvocation {
+            model_name: "model".into(),
+            request: Some(json_envelope(LLM_REQUEST_SCHEMA, &llm_request).unwrap()),
+            annotated_request: None,
+            response: None,
+            sanitize_context: None,
+            execution_codec_context: Some(Box::new(
+                nemo_relay_worker_proto::v1::LlmExecutionCodecContext {
+                    request: Some(nemo_relay_worker_proto::v1::LlmSanitizeRequestContext {
+                        codec: Some(nemo_relay_worker_proto::v1::LlmCodecIdentity {
+                            kind: LlmCodecKind::Unspecified as i32,
+                            id: None,
+                        }),
+                        codec_capability_id: None,
+                    }),
+                    response: None,
+                },
+            )),
+        },
+    ));
+    let error = service
+        .invoke_stream(Request::new(request))
+        .await
+        .err()
+        .expect("a stream invocation is rejected during shutdown");
+    assert_eq!(error.code(), tonic::Code::Unavailable);
+    for _ in 0..8 {
+        tokio::task::yield_now().await;
+    }
+    assert!(!ran.load(Ordering::SeqCst));
+    assert!(service.active_invocations.lock().unwrap().is_empty());
+}

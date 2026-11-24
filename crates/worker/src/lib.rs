@@ -2187,6 +2187,31 @@ impl<F: Future> Future for InvocationFuture<F> {
     }
 }
 
+fn spawn_gated_invocation<F>(
+    future: F,
+    not_started: F::Output,
+    completion: Arc<InvocationCompletion>,
+) -> (
+    tokio::task::JoinHandle<F::Output>,
+    tokio::sync::oneshot::Sender<()>,
+)
+where
+    F: Future + Send + 'static,
+    F::Output: Send + 'static,
+{
+    let (start_tx, start_rx) = tokio::sync::oneshot::channel();
+    let task = tokio::spawn(InvocationFuture {
+        future: Box::pin(async move {
+            if start_rx.await.is_err() {
+                return not_started;
+            }
+            future.await
+        }),
+        _completion: completion,
+    });
+    (task, start_tx)
+}
+
 struct ActiveInvocationGuard {
     active_invocations: Arc<Mutex<HashMap<String, ActiveInvocation>>>,
     invocation_id: String,
@@ -2396,10 +2421,11 @@ impl PluginWorker for WorkerService {
         service.runtime.callback_name = Some(request.registration_name.clone());
         let (completion_tx, completion_rx) = watch::channel(false);
         let completion = InvocationCompletion::new(completion_tx);
-        let task = tokio::spawn(InvocationFuture {
-            future: Box::pin(async move { service.invoke_inner(request).await }),
-            _completion: Arc::clone(&completion),
-        });
+        let (task, start) = spawn_gated_invocation(
+            async move { service.invoke_inner(request).await },
+            cancelled_invoke_response(),
+            Arc::clone(&completion),
+        );
         let abort_handle = task.abort_handle();
         let generation = match self.track_invocation(
             &invocation_id,
@@ -2414,6 +2440,7 @@ impl PluginWorker for WorkerService {
             }
         };
         completion.track(self, &invocation_id, generation);
+        let _ = start.send(());
         let mut abort_on_drop = AbortTaskOnDrop::new(abort_handle);
         let response = match task.await {
             Ok(response) => response,
@@ -2485,8 +2512,8 @@ impl PluginWorker for WorkerService {
         let open_completion = Arc::clone(&completion);
         let open_scope = scope.clone();
         let open_callback = callback_name.clone();
-        let open_task = tokio::spawn(InvocationFuture {
-            future: Box::pin(async move {
+        let (open_task, open_start) = spawn_gated_invocation(
+            async move {
                 TASK_CALLBACK_NAME
                     .scope(
                         Some(open_callback),
@@ -2498,9 +2525,12 @@ impl PluginWorker for WorkerService {
                         }),
                     )
                     .await
-            }),
-            _completion: open_completion,
-        });
+            },
+            Err(WorkerSdkError::Callback(
+                "stream invocation was cancelled before it started".into(),
+            )),
+            open_completion,
+        );
         let open_abort_handle = open_task.abort_handle();
         let generation = match self.track_invocation(
             &invocation_id,
@@ -2515,6 +2545,7 @@ impl PluginWorker for WorkerService {
             }
         };
         completion.track(self, &invocation_id, generation);
+        let _ = open_start.send(());
         let mut abort_on_drop = AbortTaskOnDrop::new(open_abort_handle);
         let stream = match open_task.await {
             Ok(Ok(stream)) => stream,
