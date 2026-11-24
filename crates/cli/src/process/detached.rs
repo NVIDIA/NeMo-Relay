@@ -458,21 +458,16 @@ fn spawn_with_handle_list(
             None
         };
         if let Some(error) = error {
-            if let Err(cleanup) = child.start_kill().and_then(|()| child.wait().map(|_| ())) {
-                log::error!(target: "nemo_relay.bootstrap", event = "worker_breakaway_cleanup_failed",
-                    process_id = child.id(), error_kind = "io";
-                    "Failed to clean up worker after breakaway verification: {cleanup}");
-            }
-            return Err(error);
+            return Err(abandon_spawned_child(&mut child, error));
         }
     }
     let job_handle = job.0;
     // SAFETY: Both handles are live; the suspended process has not run yet.
     if unsafe { AssignProcessToJobObject(job_handle, child.process) } == 0 {
-        let error = windows_spawn_error("AssignProcessToJobObject detached child");
-        let _ = child.start_kill();
-        let _ = child.wait();
-        return Err(error);
+        return Err(abandon_spawned_child(
+            &mut child,
+            windows_spawn_error("AssignProcessToJobObject detached child"),
+        ));
     }
     child.job = Some(job);
     let mut child_handle = std::ptr::null_mut();
@@ -490,19 +485,29 @@ fn spawn_with_handle_list(
         )
     } == 0
     {
-        let error = windows_spawn_error("DuplicateHandle detached child Job Object");
-        let _ = child.start_kill();
-        let _ = child.wait();
-        return Err(error);
+        return Err(abandon_spawned_child(
+            &mut child,
+            windows_spawn_error("DuplicateHandle detached child Job Object"),
+        ));
     }
     // SAFETY: `thread` is the suspended primary thread returned by CreateProcessW.
     if unsafe { ResumeThread(child.thread) } == u32::MAX {
-        let error = windows_spawn_error("ResumeThread detached child");
-        let _ = child.start_kill();
-        let _ = child.wait();
-        return Err(error);
+        return Err(abandon_spawned_child(
+            &mut child,
+            windows_spawn_error("ResumeThread detached child"),
+        ));
     }
     Ok(child)
+}
+
+#[cfg(windows)]
+fn abandon_spawned_child(child: &mut DetachedChild, error: std::io::Error) -> std::io::Error {
+    if let Err(cleanup) = child.start_kill().and_then(|()| child.wait().map(|_| ())) {
+        log::error!(target: "nemo_relay.bootstrap", event = "detached_spawn_cleanup_failed",
+            process_id = child.id(), error_kind = "io";
+            "Failed to clean up detached child after a spawn failure: {cleanup}");
+    }
+    error
 }
 
 #[cfg(windows)]
