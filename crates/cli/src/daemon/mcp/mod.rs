@@ -471,9 +471,10 @@ impl WorkerChild {
                 child,
                 process_group,
             } => {
-                if let Some(group) = *process_group
-                    && leader_has_exited(group)?
-                {
+                if let Some(group) = *process_group {
+                    if !leader_has_exited(group)? {
+                        return Ok(None);
+                    }
                     signal_process_group(group)?;
                     *process_group = None;
                 }
