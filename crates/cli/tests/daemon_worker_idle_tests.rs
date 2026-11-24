@@ -28,6 +28,7 @@ struct Capture(Arc<Mutex<CapturedOutput>>);
 struct CapturedOutput {
     bytes: Vec<u8>,
     error: Option<String>,
+    finished: bool,
 }
 
 impl Capture {
@@ -53,8 +54,16 @@ impl Capture {
                     }
                 }
             }
+            destination.0.lock().unwrap().finished = true;
         });
         capture
+    }
+
+    async fn finished(&self) {
+        wait_until("captured output to reach EOF", || {
+            self.0.lock().unwrap().finished.then_some(())
+        })
+        .await;
     }
 
     fn text(&self) -> String {
@@ -687,10 +696,11 @@ async fn plugin_child_exits_after_orderly_worker_exit_without_a_launcher() {
         exited,
         "the plugin and its child exit after orderly worker exit"
     );
-    let stopped: Vec<Value> = daemon
-        .mcp_logs
-        .lock()
-        .unwrap()
+    let captures: Vec<Capture> = daemon.mcp_logs.lock().unwrap().clone();
+    for capture in &captures {
+        capture.finished().await;
+    }
+    let stopped: Vec<Value> = captures
         .iter()
         .flat_map(|capture| capture.events("worker_stopped"))
         .filter(|event| event["target"] == "nemo_relay.daemon.worker")
