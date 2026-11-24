@@ -159,12 +159,14 @@ impl ProcessIdentity {
     }
 
     fn cleanup(self) {
+        let _ = self.kill();
+    }
+
+    fn kill(self) -> bool {
         let system = processes(&[self.pid]);
-        if let Some(process) = system.process(self.pid)
-            && process.start_time() == self.started
-        {
-            let _ = process.kill();
-        }
+        system
+            .process(self.pid)
+            .is_some_and(|process| process.start_time() == self.started && process.kill())
     }
 }
 
@@ -655,8 +657,12 @@ async fn plugin_child_exits_after_abrupt_worker_death_without_a_launcher() {
         worker.present() && plugin.present() && child.present(),
         "the published worker tree outlives its launcher"
     );
-    worker.cleanup();
-    let exited = gone_within(&[worker, plugin, child], Instant::now() + EXIT_WAIT).await;
+    assert!(worker.kill(), "the worker is killed abruptly");
+    wait_until("abrupt Relay worker exit", || {
+        (!worker.present()).then_some(())
+    })
+    .await;
+    let exited = gone_within(&[plugin, child], Instant::now() + EXIT_WAIT).await;
     child.cleanup();
     assert!(
         exited,
@@ -673,6 +679,7 @@ async fn plugin_child_exits_after_orderly_worker_exit_without_a_launcher() {
     let plugin = daemon.descendants[0];
     let worker = daemon.descendants[1];
     daemon.release_gate();
+    daemon.ready().await;
     mcp.finish().await;
     let exited = gone_within(&[worker, plugin, child], Instant::now() + EXIT_WAIT).await;
     child.cleanup();
@@ -680,6 +687,17 @@ async fn plugin_child_exits_after_orderly_worker_exit_without_a_launcher() {
         exited,
         "the plugin and its child exit after orderly worker exit"
     );
+    let stopped: Vec<Value> = daemon
+        .mcp_logs
+        .lock()
+        .unwrap()
+        .iter()
+        .flat_map(|capture| capture.events("worker_stopped"))
+        .filter(|event| event["target"] == "nemo_relay.daemon.worker")
+        .collect();
+    assert_eq!(stopped.len(), 1, "the worker logs one orderly stop");
+    assert_eq!(stopped[0]["fields"]["outcome"], "success");
+    assert_eq!(stopped[0]["fields"]["reason"], "drained");
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
