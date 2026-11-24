@@ -1927,6 +1927,7 @@ dependencies = [
  "http-body",
  "hyper-util",
  "jsonschema",
+ "libc",
  "libloading",
  "log",
  "nemo-relay-plugin",
