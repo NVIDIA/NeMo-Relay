@@ -1,8 +1,8 @@
 ---
 title: "Type Alias Nemo Relay Codec Encode Fn"
 sidebar-title: "NemoRelayCodecEncodeFn"
-description: "Nullable version of `NemoRelayCodecEncodeCb` for use as an optional parameter in FFI execute functions. Pass null to indicate no codec."
-position: 28
+description: "Nullable version of `NemoRelayCodecEncodeCb` for use as an optional parameter in FFI execute functions. Supply decode and encode together, or pass null for both. Use a request codec handle or this callback pair, never both."
+position: 29
 ---
 {/* SPDX-FileCopyrightText: Copyright (c) 2026, NVIDIA CORPORATION & AFFILIATES. All rights reserved.
 SPDX-License-Identifier: Apache-2.0 */}
@@ -11,7 +11,7 @@ Generated from `cargo doc --no-deps -p nemo-relay-builtins -p nemo-relay-diagnos
 
 <pre className="rust-signature"><code dangerouslySetInnerHTML={{"__html": "pub type NemoRelayCodecEncodeFn = <a href=\"https://doc.rust-lang.org/1.96.1/core/option/enum.Option.html\">Option</a>&lt;unsafe extern \"C\" <a href=\"https://doc.rust-lang.org/1.96.1/std/primitive.fn.html\">fn</a>(user_data: <a href=\"https://doc.rust-lang.org/1.96.1/std/primitive.pointer.html\">*mut </a><a href=\"https://doc.rust-lang.org/1.96.1/core/ffi/enum.c_void.html\">c_void</a>, annotated_json: <a href=\"https://doc.rust-lang.org/1.96.1/std/primitive.pointer.html\">*const </a><a href=\"https://doc.rust-lang.org/1.96.1/core/ffi/primitives/type.c_char.html\">c_char</a>, original_request: <a href=\"https://doc.rust-lang.org/1.96.1/std/primitive.pointer.html\">*const </a><a href=\"../types/struct-ffillmrequest\">FfiLLMRequest</a>) -&gt; <a href=\"https://doc.rust-lang.org/1.96.1/std/primitive.pointer.html\">*mut </a><a href=\"https://doc.rust-lang.org/1.96.1/core/ffi/primitives/type.c_char.html\">c_char</a>&gt;;"}} /></pre>
 
-Nullable version of [`NemoRelayCodecEncodeCb`](/reference/api/rust-library-reference/nemo-relay-ffi/callable/type-nemorelaycodecencodecb) for use as an optional parameter in FFI execute functions. Pass null to indicate no codec.
+Nullable version of [`NemoRelayCodecEncodeCb`](/reference/api/rust-library-reference/nemo-relay-ffi/callable/type-nemorelaycodecencodecb) for use as an optional parameter in FFI execute functions. Supply decode and encode together, or pass null for both. Use a request codec handle or this callback pair, never both.
 
 ## Aliased Type
 

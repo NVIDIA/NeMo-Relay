@@ -2,7 +2,7 @@
 title: "Function nemo_relay_otel_subscriber_free"
 sidebar-title: "nemo_relay_otel_subscriber_free"
 description: "Free an OpenTelemetry subscriber handle previously returned by an OpenTelemetry subscriber constructor."
-position: 74
+position: 85
 ---
 {/* SPDX-FileCopyrightText: Copyright (c) 2026, NVIDIA CORPORATION & AFFILIATES. All rights reserved.
 SPDX-License-Identifier: Apache-2.0 */}
@@ -15,4 +15,4 @@ Free an OpenTelemetry subscriber handle previously returned by an OpenTelemetry 
 
 ## Safety
 
-`ptr` must be a valid pointer returned by `nemo_relay_otel_subscriber_create` or `nemo_relay_otel_subscriber_create_with_projection_options_v4`, or null.
+`ptr` must be a valid pointer returned by `nemo_relay_otel_subscriber_create`, or null.

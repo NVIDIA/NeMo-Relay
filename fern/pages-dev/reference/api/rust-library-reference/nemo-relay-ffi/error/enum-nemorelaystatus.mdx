@@ -21,6 +21,7 @@ Generated from `cargo doc --no-deps -p nemo-relay-builtins -p nemo-relay-diagnos
     InvalidJson = 7,
     InvalidUtf8 = 8,
     InvalidArg = 9,
+    Cancelled = 10,
 }
 ```
 
@@ -89,6 +90,12 @@ A C string argument contained invalid UTF-8.
 <pre className="rust-signature"><code dangerouslySetInnerHTML={{"__html": "InvalidArg = 9"}} /></pre>
 
 A function argument had an invalid value (e.g. malformed UUID).
+
+### `Cancelled = 10`
+
+<pre className="rust-signature"><code dangerouslySetInnerHTML={{"__html": "Cancelled = 10"}} /></pre>
+
+A managed execution was cancelled.
 
 ## Trait Implementations
 

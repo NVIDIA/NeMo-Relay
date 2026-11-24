@@ -2,7 +2,7 @@
 title: "Function nemo_relay_stream_next"
 sidebar-title: "nemo_relay_stream_next"
 description: "Poll the next chunk from a streaming LLM response. Blocks until a chunk is available."
-position: 222
+position: 221
 ---
 {/* SPDX-FileCopyrightText: Copyright (c) 2026, NVIDIA CORPORATION & AFFILIATES. All rights reserved.
 SPDX-License-Identifier: Apache-2.0 */}
@@ -17,8 +17,8 @@ Poll the next chunk from a streaming LLM response. Blocks until a chunk is avail
 
 - `1`: A chunk was written to `*out_chunk`. Caller must free with `nemo_relay_string_free`.
 - `0`: The stream is complete (no more chunks).
-- `-1`: An error occurred. Call `nemo_relay_last_error` for details. A call from inside this stream's own collector or finalizer fails this way instead of waiting on itself.
+- `-1`: An error occurred. Call `nemo_relay_last_error` for details.
 
 ## Safety
 
-`stream` and `out_chunk` must be valid, non-null pointers.
+`stream` and `out_chunk` must be valid, non-null pointers. Call this outside owned callbacks. Managed-stream control from a callback is invalid.

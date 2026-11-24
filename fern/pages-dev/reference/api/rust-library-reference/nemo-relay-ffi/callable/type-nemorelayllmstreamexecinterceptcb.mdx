@@ -1,0 +1,14 @@
+---
+title: "Type Alias Nemo Relay LlmStream Exec Intercept Cb"
+sidebar-title: "NemoRelayLlmStreamExecInterceptCb"
+description: "Transform a complete stream. Return the owned continuation source or an owned replacement source. Never free or reuse a source after returning it to Relay."
+position: 48
+---
+{/* SPDX-FileCopyrightText: Copyright (c) 2026, NVIDIA CORPORATION & AFFILIATES. All rights reserved.
+SPDX-License-Identifier: Apache-2.0 */}
+
+Generated from `cargo doc --no-deps -p nemo-relay-builtins -p nemo-relay-diagnostics -p nemo-relay-logging -p nemo-relay-plugin-host -p nemo-relay-codecs -p nemo-relay -p nemo-relay-runtime -p nemo-relay-model-pricing -p nemo-relay-resource-metrics -p nemo-relay-observability -p nemo-relay-adaptive -p nemo-relay-pii-redaction -p nemo-relay-ffi -p nemo-relay-types -p nemo-relay-plugin -p nemo-relay-worker-proto -p nemo-relay-worker`.
+
+<pre className="rust-signature"><code dangerouslySetInnerHTML={{"__html": "pub type NemoRelayLlmStreamExecInterceptCb = unsafe extern \"C\" <a href=\"https://doc.rust-lang.org/1.96.1/std/primitive.fn.html\">fn</a>(user_data: <a href=\"https://doc.rust-lang.org/1.96.1/std/primitive.pointer.html\">*mut </a><a href=\"https://doc.rust-lang.org/1.96.1/core/ffi/enum.c_void.html\">c_void</a>, name: <a href=\"https://doc.rust-lang.org/1.96.1/std/primitive.pointer.html\">*const </a><a href=\"https://doc.rust-lang.org/1.96.1/core/ffi/primitives/type.c_char.html\">c_char</a>, request_json: <a href=\"https://doc.rust-lang.org/1.96.1/std/primitive.pointer.html\">*const </a><a href=\"https://doc.rust-lang.org/1.96.1/core/ffi/primitives/type.c_char.html\">c_char</a>, context: <a href=\"struct-nemorelayllmexecutioncontext\">NemoRelayLlmExecutionContext</a>, next: <a href=\"type-nemorelayllmstreamexecnextfn\">NemoRelayLlmStreamExecNextFn</a>, next_context: <a href=\"https://doc.rust-lang.org/1.96.1/std/primitive.pointer.html\">*mut </a><a href=\"https://doc.rust-lang.org/1.96.1/core/ffi/enum.c_void.html\">c_void</a>) -&gt; <a href=\"https://doc.rust-lang.org/1.96.1/std/primitive.pointer.html\">*mut </a><a href=\"../api/struct-ffillmstreamsource\">FfiLlmStreamSource</a>;"}} /></pre>
+
+Transform a complete stream. Return the owned continuation source or an owned replacement source. Never free or reuse a source after returning it to Relay.

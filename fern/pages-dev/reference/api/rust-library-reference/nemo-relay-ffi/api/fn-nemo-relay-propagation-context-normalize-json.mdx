@@ -2,7 +2,7 @@
 title: "Function nemo_relay_propagation_context_normalize_json"
 sidebar-title: "nemo_relay_propagation_context_normalize_json"
 description: "Validate and canonicalize propagation-context JSON for transport."
-position: 156
+position: 152
 ---
 {/* SPDX-FileCopyrightText: Copyright (c) 2026, NVIDIA CORPORATION & AFFILIATES. All rights reserved.
 SPDX-License-Identifier: Apache-2.0 */}
@@ -17,4 +17,4 @@ Invalid W3C headers are discarded while valid Relay causal UUIDs are retained. T
 
 ## Safety
 
-`context_json` must point to a valid NUL-terminated C string and `out` must be a valid, writable pointer to a C-string output slot.
+`context_json` must be null or point to a valid NUL-terminated C string. `out` must be a valid, writable pointer to a C-string output slot.

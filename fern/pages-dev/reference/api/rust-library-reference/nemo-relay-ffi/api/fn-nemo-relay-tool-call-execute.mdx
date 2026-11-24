@@ -1,19 +1,19 @@
 ---
 title: "Function nemo_relay_tool_call_execute"
 sidebar-title: "nemo_relay_tool_call_execute"
-description: "Execute a tool call end-to-end: run conditional-execution guardrails (on raw args), then request intercepts, sanitize-request guardrails, execution intercepts, the callback, and sanitize-response guardrails. On rejection, only a standalone Mark event is emitted (no Start/End pair) and `GuardrailRejected` is returned. Blocks the calling thread until completion."
-position: 225
+description: "Execute a tool call end-to-end with an optional external tool call ID."
+position: 229
 ---
 {/* SPDX-FileCopyrightText: Copyright (c) 2026, NVIDIA CORPORATION & AFFILIATES. All rights reserved.
 SPDX-License-Identifier: Apache-2.0 */}
 
 Generated from `cargo doc --no-deps -p nemo-relay-builtins -p nemo-relay-diagnostics -p nemo-relay-logging -p nemo-relay-plugin-host -p nemo-relay-codecs -p nemo-relay -p nemo-relay-runtime -p nemo-relay-model-pricing -p nemo-relay-resource-metrics -p nemo-relay-observability -p nemo-relay-adaptive -p nemo-relay-pii-redaction -p nemo-relay-ffi -p nemo-relay-types -p nemo-relay-plugin -p nemo-relay-worker-proto -p nemo-relay-worker`.
 
-<pre className="rust-signature"><code dangerouslySetInnerHTML={{"__html": "#[unsafe(no_mangle)]pub unsafe extern \"C\" fn nemo_relay_tool_call_execute(\n    name: <a href=\"https://doc.rust-lang.org/1.96.1/std/primitive.pointer.html\">*const </a><a href=\"https://doc.rust-lang.org/1.96.1/core/ffi/primitives/type.c_char.html\">c_char</a>,\n    args_json: <a href=\"https://doc.rust-lang.org/1.96.1/std/primitive.pointer.html\">*const </a><a href=\"https://doc.rust-lang.org/1.96.1/core/ffi/primitives/type.c_char.html\">c_char</a>,\n    func: <a href=\"../callable/type-nemorelaytoolexeccb\">NemoRelayToolExecCb</a>,\n    func_user_data: <a href=\"https://doc.rust-lang.org/1.96.1/std/primitive.pointer.html\">*mut </a><a href=\"https://doc.rust-lang.org/1.96.1/core/ffi/enum.c_void.html\">c_void</a>,\n    func_free: <a href=\"../callable/type-nemorelayfreefn\">NemoRelayFreeFn</a>,\n    parent: <a href=\"https://doc.rust-lang.org/1.96.1/std/primitive.pointer.html\">*const </a><a href=\"../types/struct-ffiscopehandle\">FfiScopeHandle</a>,\n    attributes: <a href=\"https://doc.rust-lang.org/1.96.1/std/primitive.u32.html\">u32</a>,\n    data_json: <a href=\"https://doc.rust-lang.org/1.96.1/std/primitive.pointer.html\">*const </a><a href=\"https://doc.rust-lang.org/1.96.1/core/ffi/primitives/type.c_char.html\">c_char</a>,\n    metadata_json: <a href=\"https://doc.rust-lang.org/1.96.1/std/primitive.pointer.html\">*const </a><a href=\"https://doc.rust-lang.org/1.96.1/core/ffi/primitives/type.c_char.html\">c_char</a>,\n    out: <a href=\"https://doc.rust-lang.org/1.96.1/std/primitive.pointer.html\">*mut </a><a href=\"https://doc.rust-lang.org/1.96.1/std/primitive.pointer.html\">*mut </a><a href=\"https://doc.rust-lang.org/1.96.1/core/ffi/primitives/type.c_char.html\">c_char</a>,\n) -&gt; <a href=\"../error/enum-nemorelaystatus\">NemoRelayStatus</a>"}} /></pre>
+<pre className="rust-signature"><code dangerouslySetInnerHTML={{"__html": "#[unsafe(no_mangle)]pub unsafe extern \"C\" fn nemo_relay_tool_call_execute(\n    name: <a href=\"https://doc.rust-lang.org/1.96.1/std/primitive.pointer.html\">*const </a><a href=\"https://doc.rust-lang.org/1.96.1/core/ffi/primitives/type.c_char.html\">c_char</a>,\n    args_json: <a href=\"https://doc.rust-lang.org/1.96.1/std/primitive.pointer.html\">*const </a><a href=\"https://doc.rust-lang.org/1.96.1/core/ffi/primitives/type.c_char.html\">c_char</a>,\n    func: <a href=\"../callable/type-nemorelaytoolexeccb\">NemoRelayToolExecCb</a>,\n    func_user_data: <a href=\"https://doc.rust-lang.org/1.96.1/std/primitive.pointer.html\">*mut </a><a href=\"https://doc.rust-lang.org/1.96.1/core/ffi/enum.c_void.html\">c_void</a>,\n    func_free: <a href=\"../callable/type-nemorelayfreefn\">NemoRelayFreeFn</a>,\n    parent: <a href=\"https://doc.rust-lang.org/1.96.1/std/primitive.pointer.html\">*const </a><a href=\"../types/struct-ffiscopehandle\">FfiScopeHandle</a>,\n    attributes: <a href=\"https://doc.rust-lang.org/1.96.1/std/primitive.u32.html\">u32</a>,\n    data_json: <a href=\"https://doc.rust-lang.org/1.96.1/std/primitive.pointer.html\">*const </a><a href=\"https://doc.rust-lang.org/1.96.1/core/ffi/primitives/type.c_char.html\">c_char</a>,\n    metadata_json: <a href=\"https://doc.rust-lang.org/1.96.1/std/primitive.pointer.html\">*const </a><a href=\"https://doc.rust-lang.org/1.96.1/core/ffi/primitives/type.c_char.html\">c_char</a>,\n    tool_call_id: <a href=\"https://doc.rust-lang.org/1.96.1/std/primitive.pointer.html\">*const </a><a href=\"https://doc.rust-lang.org/1.96.1/core/ffi/primitives/type.c_char.html\">c_char</a>,\n    skip_stages: <a href=\"https://doc.rust-lang.org/1.96.1/std/primitive.u32.html\">u32</a>,\n    cancellation: <a href=\"https://doc.rust-lang.org/1.96.1/std/primitive.pointer.html\">*const </a><a href=\"struct-fficancellation\">FfiCancellation</a>,\n    out: <a href=\"https://doc.rust-lang.org/1.96.1/std/primitive.pointer.html\">*mut </a><a href=\"https://doc.rust-lang.org/1.96.1/std/primitive.pointer.html\">*mut </a><a href=\"https://doc.rust-lang.org/1.96.1/core/ffi/primitives/type.c_char.html\">c_char</a>,\n) -&gt; <a href=\"../error/enum-nemorelaystatus\">NemoRelayStatus</a>"}} /></pre>
 
-Execute a tool call end-to-end: run conditional-execution guardrails (on raw args), then request intercepts, sanitize-request guardrails, execution intercepts, the callback, and sanitize-response guardrails. On rejection, only a standalone Mark event is emitted (no Start/End pair) and `GuardrailRejected` is returned. Blocks the calling thread until completion.
+Execute a tool call end-to-end with an optional external tool call ID.
 
-This legacy entry point does not accept an external tool call ID. Use `nemo_relay_tool_call_execute_v2` to record one on the managed Start and End events.
+This runs conditional-execution guardrails (on raw args), then request intercepts, sanitize-request guardrails, execution intercepts, the callback, and sanitize-response guardrails. On rejection, only a standalone Mark event is emitted (no Start/End pair) and `GuardrailRejected` is returned. Blocks the calling thread until completion.
 
 ## Parameters
 
@@ -26,8 +26,12 @@ This legacy entry point does not accept an external tool call ID. Use `nemo_rela
 - `attributes`: Bitfield of tool attributes.
 - `data_json`: Optional JSON data, or null.
 - `metadata_json`: Optional JSON metadata, or null.
-- `out`: On success, receives a serialized `ToolExecutionResult` as a JSON C string. Caller must free it with `nemo_relay_string_free`.
+- `tool_call_id`: Optional null-terminated external correlation ID recorded on both managed lifecycle events, or null.
+- `out`: On success, receives the result as a JSON C string. Caller must free with `nemo_relay_string_free`.
+- `skip_stages`: Bitwise OR of `NEMO_RELAY_SKIP_*` constants. Zero runs all middleware stages. Unknown bits return `InvalidArg`. Event sanitization, codecs, trace context, and completion still run.
+
+Relay owns callback data when the call starts. It releases the data even if validation fails.
 
 ## Safety
 
-`name`, `args_json`, and `out` must be valid, non-null pointers.
+`name`, `args_json`, and `out` must be valid, non-null pointers. Optional pointer arguments may be null; when non-null, they must be valid for reads for the duration of the call.
