@@ -860,6 +860,8 @@ mod ffi_coverage_support;
 mod coverage_sweeps_tests;
 #[path = "api/execution_tests.rs"]
 mod execution_tests;
+#[path = "api/llm_application_context_tests.rs"]
+mod llm_application_context_tests;
 #[path = "api/plugin_tests.rs"]
 mod plugin_tests;
 #[path = "api/registry_tests.rs"]
