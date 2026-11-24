@@ -16,6 +16,8 @@ import (
 
 // LLMApplicationExecutionContext carries application data for one LLM invocation.
 // A nil Data map omits data; an allocated empty map preserves {"data":{}}.
+// Raw Data values share a 4 MiB input limit, including whitespace and aliases,
+// before normalization enforces the 16 KiB serialized context limit.
 type LLMApplicationExecutionContext struct {
 	Data map[string]json.RawMessage `json:"data,omitempty"`
 }
@@ -25,7 +27,11 @@ func (value LLMApplicationExecutionContext) MarshalJSON() ([]byte, error) {
 	return marshalLLMApplicationContext(value)
 }
 
-const maximumLLMApplicationContextBytes = 16_384
+const (
+	maximumLLMApplicationContextBytes         = 16_384
+	maximumLLMApplicationContextRawBytes      = 4 << 20
+	maximumLLMApplicationContextSpellingBytes = 6 * maximumLLMApplicationContextBytes
+)
 
 func llmContextBudgetCharge(remaining *int, amount int) error {
 	if amount > *remaining {
@@ -160,7 +166,8 @@ func llmContextNumber(value json.Number) (string, error) {
 }
 
 // compactLLMContextInput discards padding before retaining input. The lexical
-// budget bounds decoded content; the separate spelling cap bounds parser work.
+// budget bounds decoded content; the separate spelling cap bounds parser input.
+// marshalLLMApplicationContext bounds aggregate raw bytes before scanning values.
 func compactLLMContextInput(raw []byte, remainingWork *int) ([]byte, error) {
 	if err := checkLLMContextInputBudget(raw, 2, remainingWork); err != nil {
 		return nil, err
@@ -179,7 +186,7 @@ func compactLLMContextInput(raw []byte, remainingWork *int) ([]byte, error) {
 		if !quoted && (b == ' ' || b == '\n' || b == '\r' || b == '\t') {
 			continue
 		}
-		if len(compact) >= 6*maximumLLMApplicationContextBytes {
+		if len(compact) >= maximumLLMApplicationContextSpellingBytes {
 			return nil, fmt.Errorf("LLM execution context input exceeds parsing budget")
 		}
 		compact = append(compact, b)
@@ -300,6 +307,15 @@ func marshalLLMApplicationContext(value LLMApplicationExecutionContext) ([]byte,
 	remaining := maximumLLMApplicationContextBytes - len(`{"data":{}}`) - max(0, len(value.Data)-1)
 	if remaining < 0 {
 		return nil, fmt.Errorf("LLM execution context exceeds 16384 serialized bytes")
+	}
+	// Charge original lengths before any content scan. Aliases and whitespace
+	// count on every occurrence, even when normalization retains very little.
+	remainingRawBytes := maximumLLMApplicationContextRawBytes
+	for _, raw := range value.Data {
+		if len(raw) > remainingRawBytes {
+			return nil, fmt.Errorf("LLM execution context raw input exceeds 4194304 bytes")
+		}
+		remainingRawBytes -= len(raw)
 	}
 	fields := make(map[string]any)
 	remainingWork := maximumLLMApplicationContextBytes

@@ -3772,7 +3772,10 @@ async def test_llm_context_wire_limits_recovery_and_float_boundary(streaming):
     assert calls[-1] == {"data": {"😀": [1e308, "😀"]}}
 
 
-@pytest.mark.parametrize("number, normalized_size", [("1e1", 4), ("1e-5", 7), ("1e-7", 4), ("-0", 4), ("1e308", 6)])
+@pytest.mark.parametrize(
+    "number, normalized_size",
+    [("1e1", 4), ("1e16", 5), ("1.5e16", 7), ("1e-5", 7), ("1e-7", 4), ("-0", 4), ("1e308", 6)],
+)
 def test_llm_context_normalized_number_size_boundaries(number, normalized_size):
     prefix = b'{"data":{"number":' + number.encode() + b',"pad":"'
     suffix = b'"}}'

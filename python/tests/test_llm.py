@@ -5,6 +5,7 @@
 
 import asyncio
 import contextvars
+import copy
 import subprocess
 import sys
 import textwrap
@@ -2464,9 +2465,10 @@ class _CancelledAsyncIter:
 @pytest.mark.parametrize("supplied", [None, {}, {"data": {}}, {"data": {"private": "llm-context-sentinel"}}])
 async def test_llm_application_context_isolated_snapshot_and_nested_calls(streaming, supplied):
     seen = []
+    expected = copy.deepcopy(supplied)
 
     async def inner(name, request, context, next_call):
-        seen.append((name, context.execution_context))
+        seen.append((name, copy.deepcopy(context.execution_context)))
         return await next_call(request)
 
     async def outer(name, request, context, next_call):
@@ -2498,7 +2500,8 @@ async def test_llm_application_context_isolated_snapshot_and_nested_calls(stream
             assert await llm.execute(
                 "parent", make_request(), lambda request: {"ok": True}, execution_context=supplied
             ) == {"ok": True}
-        assert seen == [("nested", None), ("parent", supplied)]
+        assert supplied == expected
+        assert seen == [("nested", None), ("parent", expected)]
     finally:
         deregister("application-outer")
         intercepts.deregister_llm_execution("application-inner")
@@ -2560,6 +2563,25 @@ async def test_llm_context_rejects_nonfinite_numbers_before_middleware(streaming
                     "invalid-context", make_request(), provider, execution_context={"data": {"number": number}}
                 )
         assert calls == []
-        await llm.execute("recovery", make_request(), lambda request: {})
+        valid_context = {"data": {"recovery": True}}
+        if streaming:
+
+            async def recovery_provider(request):
+                calls.append("provider")
+                yield {"recovered": True}
+
+            stream = await llm.stream_execute(
+                "recovery",
+                make_request(),
+                recovery_provider,
+                lambda chunk: None,
+                lambda: {},
+                execution_context=valid_context,
+            )
+            assert [chunk async for chunk in stream] == [{"recovered": True}]
+            assert calls == ["intercept", "provider"]
+        else:
+            assert await llm.execute("recovery", make_request(), provider, execution_context=valid_context) == {}
+            assert calls == ["intercept", "provider"]
     finally:
         deregister("nonfinite-context")

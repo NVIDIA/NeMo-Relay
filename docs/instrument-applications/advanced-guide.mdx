@@ -361,6 +361,14 @@ serialized context is limited to 16 KiB of UTF-8 JSON and 64 nested object or
 array levels, counting the root object as level 1. Invalid context fails before
 middleware or provider execution, including when execution intercepts are disabled.
 
+The Go binding also bounds raw `json.RawMessage` input before normalization:
+
+- Each value is limited to 98,304 bytes after insignificant whitespace is removed.
+- The combined original length of all values is limited to 4 MiB, including
+  whitespace. Shared values count each time they appear in the map.
+- A shared lexical work budget counts input content even when a later duplicate
+  member replaces it. A small normalized context can therefore still be rejected.
+
 Only execution intercepts receive this separate value. Each intercept receives
 an isolated snapshot, and `next(request)` cannot replace it. Nested managed calls
 receive no context unless their caller supplies it explicitly. Relay does not
@@ -380,6 +388,8 @@ binary cannot use the new library safely.
 
 Native ABI and worker protocol version identifiers stay the same. Rebuild language
 bindings, native plugins, and workers with the matching SDK.
+Workers do not negotiate support for this context field. Intercepts that require
+context for a policy decision must reject its absence.
 
 ### Node.js Callback Failures
 
