@@ -157,13 +157,18 @@ class LlmSanitizeResponseContext:
 LlmRequestContext: TypeAlias = LlmSanitizeRequestContext
 LlmResponseContext: TypeAlias = LlmSanitizeResponseContext
 
+class _LlmApplicationExecutionContext(TypedDict, total=False):
+    data: dict[str, _Json]
+
 class LlmExecutionContext:
-    """Codec capabilities for one managed LLM execution intercept invocation."""
+    """Codec capabilities and application data for one managed LLM execution invocation."""
 
     @property
     def request_codec(self) -> LlmRequestContext: ...
     @property
     def response_codec(self) -> LlmResponseContext | None: ...
+    @property
+    def execution_context(self) -> _LlmApplicationExecutionContext | None: ...
 
 class LlmSanitizeRequestCodec:
     def decode(self, request: LLMRequest) -> AnnotatedLLMRequest: ...
@@ -2335,6 +2340,7 @@ def llm_call_execute(
     codec: object | None = None,
     response_codec: object | None = None,
     execution_options: ExecutionOptions | None = None,
+    execution_context: _LlmApplicationExecutionContext | None = None,
 ) -> Awaitable[_Json]:
     """Execute a non-streaming LLM call through native middleware.
 
@@ -2378,6 +2384,7 @@ def llm_stream_call_execute(
     codec: object | None = None,
     response_codec: object | None = None,
     execution_options: ExecutionOptions | None = None,
+    execution_context: _LlmApplicationExecutionContext | None = None,
 ) -> Awaitable[LlmStream]:
     """Execute a streaming LLM call through native middleware.
 

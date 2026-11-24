@@ -1776,6 +1776,7 @@ fn test_ffi_llm_execute_and_stream_shape_and_out_error_paths() {
                 ptr::null(),
                 0,
                 std::ptr::null(),
+                std::ptr::null(),
                 ptr::null_mut()
             ),
             NemoRelayStatus::NullPointer
@@ -1800,6 +1801,7 @@ fn test_ffi_llm_execute_and_stream_shape_and_out_error_paths() {
                 std::ptr::null(),
                 ptr::null(),
                 0,
+                std::ptr::null(),
                 std::ptr::null(),
                 &mut out
             ),
@@ -1836,6 +1838,7 @@ fn test_ffi_llm_execute_and_stream_shape_and_out_error_paths() {
                 ptr::null(),
                 0,
                 std::ptr::null(),
+                std::ptr::null(),
                 ptr::null_mut()
             ),
             NemoRelayStatus::NullPointer
@@ -1865,6 +1868,7 @@ fn test_ffi_llm_execute_and_stream_shape_and_out_error_paths() {
                 std::ptr::null(),
                 ptr::null(),
                 0,
+                std::ptr::null(),
                 std::ptr::null(),
                 &mut stream
             ),
@@ -2498,6 +2502,7 @@ fn test_ffi_llm_execute_and_stream_additional_input_paths() {
                 ptr::null(),
                 0,
                 std::ptr::null(),
+                std::ptr::null(),
                 &mut out_json
             ),
             NemoRelayStatus::InvalidUtf8
@@ -2522,6 +2527,7 @@ fn test_ffi_llm_execute_and_stream_additional_input_paths() {
                 ptr::null(),
                 0,
                 std::ptr::null(),
+                std::ptr::null(),
                 &mut out_json
             ),
             NemoRelayStatus::InvalidJson
@@ -2546,6 +2552,7 @@ fn test_ffi_llm_execute_and_stream_additional_input_paths() {
                 ptr::null(),
                 0,
                 std::ptr::null(),
+                std::ptr::null(),
                 &mut out_json
             ),
             NemoRelayStatus::InvalidJson
@@ -2569,6 +2576,7 @@ fn test_ffi_llm_execute_and_stream_additional_input_paths() {
                 std::ptr::null(),
                 response_codec,
                 0,
+                std::ptr::null(),
                 std::ptr::null(),
                 &mut out_json
             ),
@@ -2603,6 +2611,7 @@ fn test_ffi_llm_execute_and_stream_additional_input_paths() {
                 ptr::null(),
                 0,
                 std::ptr::null(),
+                std::ptr::null(),
                 &mut stream
             ),
             NemoRelayStatus::InvalidUtf8
@@ -2632,6 +2641,7 @@ fn test_ffi_llm_execute_and_stream_additional_input_paths() {
                 ptr::null(),
                 0,
                 std::ptr::null(),
+                std::ptr::null(),
                 &mut stream
             ),
             NemoRelayStatus::InvalidJson
@@ -2660,6 +2670,7 @@ fn test_ffi_llm_execute_and_stream_additional_input_paths() {
                 std::ptr::null(),
                 ptr::null(),
                 0,
+                std::ptr::null(),
                 std::ptr::null(),
                 &mut stream
             ),
@@ -2690,6 +2701,7 @@ fn test_ffi_llm_execute_and_stream_additional_input_paths() {
                 ptr::null(),
                 0,
                 std::ptr::null(),
+                std::ptr::null(),
                 &mut stream
             ),
             NemoRelayStatus::InvalidUtf8
@@ -2718,6 +2730,7 @@ fn test_ffi_llm_execute_and_stream_additional_input_paths() {
                 std::ptr::null(),
                 ptr::null(),
                 0,
+                std::ptr::null(),
                 std::ptr::null(),
                 &mut stream
             ),
@@ -4545,6 +4558,7 @@ fn stream_callbacks_keep_the_scope_stack_of_their_call() {
                 ptr::null(),
                 0,
                 std::ptr::null(),
+                std::ptr::null(),
                 &mut stream
             ),
             NemoRelayStatus::Ok
@@ -4752,6 +4766,7 @@ fn stream_callbacks_honor_an_explicit_thread_binding() {
                 ptr::null(),
                 0,
                 std::ptr::null(),
+                std::ptr::null(),
                 &mut stream
             ),
             NemoRelayStatus::Ok
@@ -4842,6 +4857,7 @@ fn stream_cancel_stops_the_producer_without_waiting() {
                 ptr::null(),
                 0,
                 std::ptr::null(),
+                std::ptr::null(),
                 &mut stream
             ),
             NemoRelayStatus::Ok
@@ -4882,6 +4898,7 @@ fn stream_cancel_stops_the_producer_without_waiting() {
                 std::ptr::null(),
                 ptr::null(),
                 0,
+                std::ptr::null(),
                 std::ptr::null(),
                 &mut unpolled
             ),

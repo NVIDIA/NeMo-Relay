@@ -103,6 +103,7 @@ impl TryFrom<wire::InvokeRequest> for CallbackInvocation {
                     CallbackPayload::Llm(Box::new(LlmPayload {
                         model_name: v.model_name,
                         request: v.request,
+                        execution_context: v.execution_context,
                         request_codec: v.request_codec,
                         response_codec: v.response_codec,
                         ..Default::default()
@@ -136,6 +137,7 @@ impl From<wire::InvokeStreamRequest> for CallbackInvocation {
             payload: Some(CallbackPayload::Llm(Box::new(LlmPayload {
                 model_name: v.model_name,
                 request: v.request,
+                execution_context: v.execution_context,
                 request_codec: v.request_codec,
                 ..Default::default()
             }))),

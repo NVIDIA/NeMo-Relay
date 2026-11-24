@@ -214,6 +214,7 @@ fn invocation(surface: Surface, value: Json) -> Invocation {
 }
 fn invocation_context() -> abi::v1_0::Context {
     abi::v1_0::Context {
+        execution_context: None,
         scope: scope(),
         request_codec: Option::None,
         response_codec: Option::None,

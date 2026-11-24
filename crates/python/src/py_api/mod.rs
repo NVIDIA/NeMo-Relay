@@ -1370,8 +1370,9 @@ fn llm_call_end(
     model_name: "str | None"=None,
     codec: "object | None"=None,
     response_codec: "object | None"=None,
-    execution_options: "ExecutionOptions | None"=None
-) -> "object", text_signature = "(name: str, request: LlmRequest, func: object, *, handle: ScopeHandle | None = None, attributes: LlmAttributes | None = None, data: object | None = None, metadata: object | None = None, model_name: str | None = None, codec: object | None = None, response_codec: object | None = None, execution_options: ExecutionOptions | None = None) -> object")]
+    execution_options: "ExecutionOptions | None"=None,
+    execution_context: "object | None"=None
+) -> "object", text_signature = "(name: str, request: LlmRequest, func: object, *, handle: ScopeHandle | None = None, attributes: LlmAttributes | None = None, data: object | None = None, metadata: object | None = None, model_name: str | None = None, codec: object | None = None, response_codec: object | None = None, execution_options: ExecutionOptions | None = None, execution_context: object | None = None) -> object")]
 #[allow(clippy::too_many_arguments)]
 fn llm_call_execute<'py>(
     py: Python<'py>,
@@ -1386,7 +1387,10 @@ fn llm_call_execute<'py>(
     codec: Option<&Bound<'py, PyAny>>,
     response_codec: Option<&Bound<'py, PyAny>>,
     execution_options: Option<PyExecutionOptions>,
+    execution_context: Option<&Bound<'py, PyAny>>,
 ) -> PyResult<Bound<'py, PyAny>> {
+    let execution_context =
+        crate::llm_application_context::py_application_execution_context(execution_context)?;
     let execution_options = execution_options.map(Into::into).unwrap_or_default();
     let attrs = attributes
         .map(|a| a.inner)
@@ -1413,6 +1417,7 @@ fn llm_call_execute<'py>(
                         .request(request.inner)
                         .func(default_fn)
                         .execution_options(execution_options)
+                        .execution_context_opt(execution_context)
                         .parent(parent_handle)
                         .attributes(attrs)
                         .data_opt(data_json)
@@ -1483,8 +1488,9 @@ fn llm_call_execute<'py>(
     model_name: "str | None"=None,
     codec: "object | None"=None,
     response_codec: "object | None"=None,
-    execution_options: "ExecutionOptions | None"=None
-) -> "object", text_signature = "(name: str, request: LlmRequest, func: object, collector: object, finalizer: object, *, handle: ScopeHandle | None = None, attributes: LlmAttributes | None = None, data: object | None = None, metadata: object | None = None, model_name: str | None = None, codec: object | None = None, response_codec: object | None = None, execution_options: ExecutionOptions | None = None) -> object")]
+    execution_options: "ExecutionOptions | None"=None,
+    execution_context: "object | None"=None
+) -> "object", text_signature = "(name: str, request: LlmRequest, func: object, collector: object, finalizer: object, *, handle: ScopeHandle | None = None, attributes: LlmAttributes | None = None, data: object | None = None, metadata: object | None = None, model_name: str | None = None, codec: object | None = None, response_codec: object | None = None, execution_options: ExecutionOptions | None = None, execution_context: object | None = None) -> object")]
 #[allow(clippy::too_many_arguments)]
 fn llm_stream_call_execute<'py>(
     py: Python<'py>,
@@ -1501,7 +1507,10 @@ fn llm_stream_call_execute<'py>(
     codec: Option<&Bound<'py, PyAny>>,
     response_codec: Option<&Bound<'py, PyAny>>,
     execution_options: Option<PyExecutionOptions>,
+    execution_context: Option<&Bound<'py, PyAny>>,
 ) -> PyResult<Bound<'py, PyAny>> {
+    let execution_context =
+        crate::llm_application_context::py_application_execution_context(execution_context)?;
     let execution_options = execution_options.map(Into::into).unwrap_or_default();
     let attrs = attributes
         .map(|a| a.inner)
@@ -1534,6 +1543,7 @@ fn llm_stream_call_execute<'py>(
                             .request(request.inner)
                             .func(default_fn)
                             .execution_options(execution_options)
+                            .execution_context_opt(execution_context)
                             .collector(collector_fn)
                             .finalizer(finalizer_fn)
                             .parent(parent_handle)

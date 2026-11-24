@@ -328,6 +328,59 @@ originating tool call. See
 [Tool Execution Intercept Outcomes](/reference/tool-execution-intercept-outcomes)
 for the per-binding contract.
 
+### LLM Application Execution Context
+
+Plugin authors can read application-supplied data alongside the codec capabilities
+in `LlmExecutionContext`. The data stays separate from provider requests and event
+metadata. Both unary and streaming managed calls accept this optional envelope:
+
+```json
+{"data": {"com.example.review": {"reference": "review-123"}}}
+```
+
+The LLM type is independent of the tool application context:
+
+| Surface | Supply context | Read context in an execution intercept |
+| --- | --- | --- |
+| Rust | `api::llm::ApplicationExecutionContext` on `LlmCallExecuteParams.execution_context` or `LlmStreamCallExecuteParams.execution_context` | `context.execution_context()` |
+| Python | `LlmApplicationExecutionContext` through `llm.execute(..., execution_context=value)` or `llm.stream_execute(...)` | `context.execution_context` |
+| Node.js | `LlmApplicationExecutionContext` through `executionContext` in `typedLlmExecute` or `typedLlmStreamExecute` options | `context.executionContext` |
+| Go | `WithLLMApplicationExecutionContext(&LLMApplicationExecutionContext{...})` on `LlmCallExecute` or `LlmStreamCallExecute` | `context.ExecutionContext` |
+| C | `execution_context_json` immediately before `cancellation` on either managed LLM execute function | `context.execution_context_json` |
+| Rust native and gRPC plugins | Host-supplied context; SDKs export `LlmApplicationExecutionContext` | `context.execution_context()` |
+| Python gRPC plugins | Host-supplied `LlmApplicationExecutionContext` | `context.execution_context` |
+
+Python `typed.llm_execute` and `typed.llm_stream_execute` also forward the
+`execution_context` keyword. The native Node.js execute functions accept
+`executionContext` after `executionOptions`.
+
+The optional `data` field must be an object. Application keys belong inside it;
+unknown top-level fields, scalar envelopes, and `data: null` are invalid. Omitting
+context, supplying `{}`, and supplying `{"data": {}}` are distinct. The complete
+serialized context is limited to 16 KiB of UTF-8 JSON and 64 nested object or
+array levels, counting the root object as level 1. Invalid context fails before
+middleware or provider execution, including when execution intercepts are disabled.
+
+Only execution intercepts receive this separate value. Each intercept receives
+an isolated snapshot, and `next(request)` cannot replace it. Nested managed calls
+receive no context unless their caller supplies it explicitly. Relay does not
+copy the context into provider requests, lifecycle events, results, or telemetry.
+The existing request and response codec capabilities remain available in the same
+intercept context; streaming contexts have no response codec capability.
+
+Relay validates the envelope and resource limits. Applications and middleware own
+the meaning and validation of `data`; a review reference does not itself establish
+authorization. Avoid copying private context into requests or events.
+
+C callers must update calls to `nemo_relay_llm_call_execute` and
+`nemo_relay_llm_stream_call_execute`: insert `execution_context_json` immediately
+before `cancellation`, using `NULL` when omitting context. Rebuild against the
+updated header. The existing function symbols have changed signatures; an older
+binary cannot use the new library safely.
+
+Native ABI and worker protocol version identifiers stay the same. Rebuild language
+bindings, native plugins, and workers with the matching SDK.
+
 ### Node.js Callback Failures
 
 Node.js guardrail and request-intercept callbacks can return direct values or

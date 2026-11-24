@@ -4377,3 +4377,161 @@ describe('process exit with queued codec callbacks', () => {
     );
   });
 });
+
+describe('LLM application execution context', () => {
+  const identity = { toJson: (value) => value, fromJson: (value) => value };
+  const request = { headers: {}, content: { model: 'test-model' } };
+  for (const streaming of [false, true]) {
+    it(`preserves isolated context through ${streaming ? 'streaming' : 'unary'} intercepts`, async () => {
+      const { typedLlmExecute, typedLlmStreamExecute } = require('../dist/typed.js');
+      const seen = [];
+      const order = [];
+      const register = streaming ? registerLlmStreamExecutionIntercept : registerLlmExecutionIntercept;
+      const deregister = streaming ? deregisterLlmStreamExecutionIntercept : deregisterLlmExecutionIntercept;
+      register('application-context-outer', 1, async (request, context, next) => {
+        order.push('outer');
+        if (context.executionContext) context.executionContext.data = { changed: true };
+        return next(request);
+      });
+      register('application-context-inner', 2, async (request, context, next) => {
+        order.push('inner');
+        seen.push(context.executionContext);
+        return next(request);
+      });
+      try {
+        for (const supplied of [null, {}, { data: {} }, { data: { private: 'sentinel' } }]) {
+          if (streaming) {
+            const stream = await typedLlmStreamExecute(
+              'context',
+              request,
+              async function* () {
+                yield { chunk: 1 };
+              },
+              () => {},
+              () => ({}),
+              identity,
+              identity,
+              { executionContext: supplied },
+            );
+            assert.deepEqual(await stream.next(), { chunk: 1 });
+            assert.equal(await stream.next(), null);
+          } else {
+            assert.deepEqual(
+              await typedLlmExecute('context', request, () => ({ ok: true }), identity, { executionContext: supplied }),
+              { ok: true },
+            );
+          }
+          assert.deepEqual(seen.at(-1), supplied);
+          assert.deepEqual(order.splice(0), ['outer', 'inner']);
+        }
+      } finally {
+        deregister('application-context-outer');
+        deregister('application-context-inner');
+      }
+    });
+  }
+  it('rejects invalid contexts before calling the provider and ignores inherited properties', async () => {
+    const { typedLlmExecute } = require('../dist/typed.js');
+    for (const value of [[], { unknown: 1 }, { data: null }, { data: [] }, { data: { huge: 'x'.repeat(16384) } }]) {
+      await assert.rejects(
+        typedLlmExecute('invalid', request, () => assert.fail('provider ran'), identity, { executionContext: value }),
+      );
+    }
+    let supplied = {};
+    for (let i = 0; i < 2000; i++) supplied = { child: supplied };
+    await assert.rejects(
+      typedLlmExecute('deep', request, () => assert.fail('provider ran'), identity, { executionContext: supplied }),
+    );
+    registerLlmExecutionIntercept('application-own-context', 1, async (request, context, next) => {
+      assert.deepEqual(context.executionContext, { data: { own: true } });
+      return next(request);
+    });
+    try {
+      await typedLlmExecute('own', request, () => ({}), identity, {
+        executionContext: { data: Object.assign(Object.create({ inherited: true }), { own: true }) },
+      });
+    } finally {
+      deregisterLlmExecutionIntercept('application-own-context');
+    }
+  });
+});
+
+describe('LLM context Unicode integrity', () => {
+  for (const streaming of [false, true]) {
+    it(`preserves literal object keys in ${streaming ? 'streaming' : 'unary'} contexts`, async () => {
+      const { typedLlmExecute, typedLlmStreamExecute } = require('../dist/typed.js');
+      const identity = { toJson: (value) => value, fromJson: (value) => value };
+      const supplied = JSON.parse(
+        '{"data":{"__proto__":{"approved":true},"nested":[{"__proto__":null,"nul\\u0000key":"value"}]}}',
+      );
+      const register = streaming ? registerLlmStreamExecutionIntercept : registerLlmExecutionIntercept;
+      const deregister = streaming ? deregisterLlmStreamExecutionIntercept : deregisterLlmExecutionIntercept;
+      let calls = 0;
+      register('literal-context-keys', 1, async (request, context, next) => {
+        calls++;
+        assert.deepEqual(context.executionContext, supplied);
+        assert.equal(Object.getPrototypeOf(context.executionContext.data), Object.prototype);
+        assert.equal(Object.hasOwn(context.executionContext.data, '__proto__'), true);
+        assert.equal(context.executionContext.data.approved, undefined);
+        assert.equal(Object.hasOwn(context.executionContext.data.nested[0], '__proto__'), true);
+        return next(request);
+      });
+      try {
+        const request = { headers: {}, content: {} };
+        if (streaming) {
+          const stream = await typedLlmStreamExecute(
+            'literal-keys',
+            request,
+            async function* () {
+              yield {};
+            },
+            () => {},
+            () => ({}),
+            identity,
+            identity,
+            { executionContext: supplied },
+          );
+          assert.deepEqual(await stream.next(), {});
+          assert.equal(await stream.next(), null);
+        } else {
+          await typedLlmExecute('literal-keys', request, () => ({}), identity, { executionContext: supplied });
+        }
+        assert.equal(calls, 1);
+      } finally {
+        deregister('literal-context-keys');
+      }
+    });
+  }
+
+  it('rejects unpaired surrogates without running middleware or the provider', async () => {
+    const { typedLlmExecute } = require('../dist/typed.js');
+    const identity = { toJson: (v) => v, fromJson: (v) => v };
+    const request = { headers: {}, content: {} };
+    let middlewareCalls = 0;
+    registerLlmExecutionIntercept('unicode-context', 1, async (request, context, next) => {
+      middlewareCalls++;
+      return next(request);
+    });
+    try {
+      for (const data of [{ ['\uD800']: 1, ['\uFFFD']: 2 }, { value: '\uD800' }, { value: '\uDC00' }]) {
+        await assert.rejects(
+          typedLlmExecute('invalid-unicode', request, () => assert.fail('provider ran'), identity, {
+            executionContext: { data },
+          }),
+          /unpaired UTF-16 surrogate/,
+        );
+      }
+      assert.equal(middlewareCalls, 0);
+      const data = { ['\uD83D\uDE00']: '\uD83D\uDE00', ['\uFFFD']: '\uFFFD' };
+      registerLlmExecutionIntercept('unicode-roundtrip', 2, async (request, context, next) => {
+        assert.deepEqual(context.executionContext, { data });
+        return next(request);
+      });
+      await typedLlmExecute('valid-unicode', request, () => ({}), identity, { executionContext: { data } });
+      assert.equal(middlewareCalls, 1);
+    } finally {
+      deregisterLlmExecutionIntercept('unicode-context');
+      deregisterLlmExecutionIntercept('unicode-roundtrip');
+    }
+  });
+});

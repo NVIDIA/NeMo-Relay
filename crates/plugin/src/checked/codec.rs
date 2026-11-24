@@ -109,10 +109,23 @@ impl LlmResponseContext {
     }
 }
 pub struct LlmExecutionContext {
+    execution_context: Option<nemo_relay_types::api::llm::ApplicationExecutionContext>,
     request_codec: LlmRequestContext,
     response_codec: Option<LlmResponseContext>,
 }
 impl LlmExecutionContext {
+    pub(super) fn with_execution_context(mut self, value: Option<abi::Json>) -> Result<Self> {
+        self.execution_context = value.map(decode).transpose()?;
+        Ok(self)
+    }
+
+    /// Application data supplied for this invocation only.
+    pub fn execution_context(
+        &self,
+    ) -> Option<&nemo_relay_types::api::llm::ApplicationExecutionContext> {
+        self.execution_context.as_ref()
+    }
+
     /// Build invocation codec context with an optional response capability for unary execution.
     pub(super) fn new(req: Option<a::CodecBox>, res: Option<a::CodecBox>) -> Result<Self> {
         let (codec, resolved) = request(req)?;
@@ -124,6 +137,7 @@ impl LlmExecutionContext {
             None
         };
         Ok(Self {
+            execution_context: None,
             request_codec,
             response_codec,
         })

@@ -14,6 +14,8 @@ Public data types:
     Json: Any JSON-serializable Python value.
     Event: A Relay event represented as a JSON object.
     LlmRequest: A Relay LLM request represented as a JSON object.
+    LlmApplicationExecutionContext: Invocation-local application data supplied
+        separately from provider requests to LLM execution intercepts.
     AnnotatedLlmRequest: An annotated Relay LLM request represented as a JSON
         object.
     PendingMarkSpec: A mark Relay emits under its managed lifecycle scope.
@@ -70,6 +72,7 @@ import importlib
 import inspect
 import ipaddress
 import json
+import math
 import os
 import platform
 import stat
@@ -295,6 +298,81 @@ class WorkerResponseCodec:
         return await self._runtime._decode_llm_codec_response(self._capability_id, self._invocation_id, response)
 
 
+class LlmApplicationExecutionContext(TypedDict, total=False):
+    """Application-owned data for one LLM invocation; structural validity grants no authority."""
+
+    data: dict[str, Json]
+
+
+def _llm_context_number_size(number: int | float) -> int:
+    """Size a finite JSON number with serde_json's float formatting thresholds."""
+    text = repr(number)
+    if "e" not in text:
+        return len(text)
+    mantissa, exponent_text = text.split("e")
+    exponent = int(exponent_text)
+    if -5 <= exponent <= 15:
+        sign = int(mantissa.startswith("-"))
+        digits = len(mantissa.lstrip("-").replace(".", ""))
+        point = exponent + 1
+        if point <= 0:
+            return sign + 2 - point + digits
+        if point >= digits:
+            return sign + point + 2  # Preserve the float's trailing .0.
+        return sign + digits + 1
+    # Rust omits zero padding in exponents, keeping the sign for positive ones.
+    return len(mantissa) + 1 + len(str(exponent)) + int(exponent >= 0)
+
+
+def _llm_application_execution_context(invocation: Any) -> LlmApplicationExecutionContext | None:
+    if not invocation.HasField("execution_context"):
+        return None
+    raw = invocation.execution_context.json
+    try:
+        value = _protocol.unpack_llm_context(raw)
+    except (ValueError, RecursionError) as error:
+        raise WorkerSdkError(str(error)) from error
+    if (
+        not isinstance(value, dict)
+        or value.keys() - {"data"}
+        or ("data" in value and not isinstance(value["data"], dict))
+    ):
+        raise WorkerSdkError("invalid LLM application execution context")
+    pending = [(value, 1)]
+    remaining_bytes = 16_384
+    while pending:
+        child, depth = pending.pop()
+        if isinstance(child, (dict, list)):
+            if depth > 64:
+                raise WorkerSdkError("LLM execution context exceeds 64 container levels")
+            if isinstance(child, dict):
+                pending.extend((key, depth + 1) for key in child)
+            size = 2 + max(0, len(child) - 1) + (len(child) if isinstance(child, dict) else 0)
+            children = child.values() if isinstance(child, dict) else child
+            pending.extend((item, depth + 1) for item in children)
+        elif child is None:
+            size = 4
+        elif isinstance(child, bool):
+            size = 4 if child else 5
+        elif isinstance(child, (int, float)):
+            try:
+                finite = math.isfinite(child)
+            except OverflowError:
+                finite = False
+            if not finite:
+                raise WorkerSdkError("LLM execution context contains an out-of-range number")
+            size = _llm_context_number_size(child)
+        elif isinstance(child, str):
+            try:
+                size = len(json.dumps(child, ensure_ascii=False).encode("utf-8"))
+            except UnicodeEncodeError as error:
+                raise WorkerSdkError("LLM execution context contains an unpaired UTF-16 surrogate") from error
+        remaining_bytes -= size
+        if remaining_bytes < 0:
+            raise WorkerSdkError("LLM execution context exceeds 16384 serialized bytes")
+    return value
+
+
 @dataclass(frozen=True)
 class LlmExecutionContext:
     """Directional codec context for one LLM execution invocation.
@@ -306,6 +384,7 @@ class LlmExecutionContext:
 
     request_codec: LlmRequestContext
     response_codec: LlmResponseContext | None
+    execution_context: LlmApplicationExecutionContext | None = field(default=None, repr=False)
 
 
 def _codec_identity(codec: Any) -> LlmCodecIdentity:
@@ -350,6 +429,7 @@ def _llm_execution_context(
     return LlmExecutionContext(
         request_codec=request_context,
         response_codec=response_context,
+        execution_context=_llm_application_execution_context(invocation),
     )
 
 

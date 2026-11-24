@@ -3662,6 +3662,137 @@ async def test_serve_plugin_announces_tcp_endpoint_and_accepts_health_shutdown(
                 await task
 
 
+@pytest.mark.parametrize("streaming", [False, True])
+@pytest.mark.parametrize("supplied", [None, {}, {"data": {}}, {"data": {"private": "sentinel"}}])
+def test_llm_application_context_worker_roundtrip(streaming, supplied):
+    invocation = worker_pb.InvokeStreamRequest() if streaming else runtime_pb.LlmExecutionInvocation()
+    if supplied is not None:
+        invocation.execution_context.CopyFrom(plugin_api._protocol.pack(common_pb.JsonValue, supplied))
+    assert plugin_api._llm_application_execution_context(invocation) == supplied
+
+
+@pytest.mark.parametrize("value", [{"unknown": {}}, {"data": None}, {"data": []}, {"data": {"huge": "x" * 16384}}])
+def test_llm_application_context_worker_rejects_invalid(value):
+    invocation = runtime_pb.LlmExecutionInvocation(
+        execution_context=plugin_api._protocol.pack(common_pb.JsonValue, value)
+    )
+    with pytest.raises(WorkerSdkError, match="execution context"):
+        plugin_api._llm_application_execution_context(invocation)
+
+
+@pytest.mark.parametrize("streaming", [False, True])
+async def test_llm_context_wire_limits_recovery_and_float_boundary(streaming):
+    calls = []
+
+    class ContextPlugin(WorkerPlugin):
+        plugin_id = "tests.context_limits"
+
+        def register(self, ctx, config):
+            def unary(name, request, context, next_call):
+                calls.append(context.execution_context)
+                return {}
+
+            async def stream(name, request, context, next_call):
+                calls.append(context.execution_context)
+                yield {}
+
+            ctx.register_llm_execution_intercept("context", unary)
+            ctx.register_llm_stream_execution_intercept("context-stream", stream)
+
+    service = _service(ContextPlugin(), RecordingHostStub())
+    await _register(service)
+
+    def wire(raw):
+        fields = dict(
+            invocation_id="context-limits",
+            registration_name="context-stream" if streaming else "context",
+            credentials=common_pb.Credentials(activation_id=ACTIVATION_ID, auth_token=AUTH_TOKEN),
+        )
+        invocation = runtime_pb.LlmExecutionInvocation(
+            request=_protocol_request(),
+            continuation_id="next",
+            model_name="model",
+            request_codec=runtime_pb.LlmCodecContext(codec=_wire_codec()),
+            response_codec=runtime_pb.LlmCodecContext(codec=_wire_codec()),
+            execution_context=common_pb.JsonValue(json=raw),
+        )
+        if streaming:
+            return worker_pb.InvokeStreamRequest(
+                **fields,
+                request=invocation.request,
+                continuation_id="next",
+                request_codec=invocation.request_codec,
+                execution_context=invocation.execution_context,
+            )
+        return worker_pb.InvokeRequest(**fields, llm_execution_intercept=invocation)
+
+    async def invoke(raw, *, valid=True):
+        if streaming:
+            results = [item async for item in service.InvokeStream(wire(raw), AbortContext())]
+        else:
+            results = [await service.Invoke(wire(raw), AbortContext())]
+        assert results
+        for result in results:
+            assert result.HasField("error") != valid, result
+        return results
+
+    for raw, message in [
+        (b'{"data":{"value":"' + b"x" * 1_048_576 + b'"}}', "16384 serialized bytes"),
+        (b'{"data":{"value":' + b"[" * 1100 + b"null" + b"]" * 1100 + b"}}", "64 container levels"),
+    ]:
+        before = len(calls)
+        with pytest.raises(GrpcAbort) as error:
+            await invoke(raw)
+        assert error.value.code == plugin_api.grpc.StatusCode.INVALID_ARGUMENT
+        assert message in error.value.details
+        assert len(calls) == before
+        await invoke(b'{"data":{"recovery":true}}')
+        assert calls[-1] == {"data": {"recovery": True}}
+    prefix = b'{"data":{"number":1e-7,"pad":"'
+    suffix = b'"}}'
+    raw = prefix + b"x" * (16384 - len(prefix) - len(suffix)) + suffix
+    await invoke(raw)
+    assert calls[-1]["data"]["number"] == 1e-7
+    for raw in [
+        b'{"data":{"values":[' + b",".join([b"1e1"] * 4000) + b"]}}",
+        b'{"data":{"value":[1e400]}}',
+        b'{"data":{"value":-1e400}}',
+        b'{"data":{"value":' + b"9" * 400 + b"}}",
+        b'{"data":{"value":"\\ud800"}}',
+        b'{"data":{"value":"\\udfff"}}',
+        b'{"data":{"nested":{"\\ud800":true}}}',
+    ]:
+        before = len(calls)
+        results = await invoke(raw, valid=False)
+        assert all("LLM execution context" in result.error.message for result in results)
+        assert len(calls) == before
+        await invoke(b'{"data":{"recovery":true}}')
+        assert calls[-1] == {"data": {"recovery": True}}
+    await invoke(b'{"data":{"\\ud83d\\ude00":[1e308,"\\ud83d\\ude00"]}}')
+    assert calls[-1] == {"data": {"😀": [1e308, "😀"]}}
+
+
+@pytest.mark.parametrize("number, normalized_size", [("1e1", 4), ("1e-5", 7), ("1e-7", 4), ("-0", 4), ("1e308", 6)])
+def test_llm_context_normalized_number_size_boundaries(number, normalized_size):
+    prefix = b'{"data":{"number":' + number.encode() + b',"pad":"'
+    suffix = b'"}}'
+    padding = 16384 - len(prefix) - len(suffix) - (normalized_size - len(number))
+    for extra in (0, 1):
+        invocation = runtime_pb.LlmExecutionInvocation(
+            execution_context=common_pb.JsonValue(json=prefix + b"x" * (padding + extra) + suffix)
+        )
+        if extra:
+            with pytest.raises(WorkerSdkError, match="16384 serialized bytes"):
+                plugin_api._llm_application_execution_context(invocation)
+        else:
+            context = plugin_api._llm_application_execution_context(invocation)
+            assert context["data"]["number"] == float(number)
+
+
+def _protocol_request():
+    return plugin_api._protocol.pack(llm_pb.LlmRequest, {"headers": {}, "content": {}})
+
+
 def _service(plugin: WorkerPlugin, host_stub: RecordingHostStub) -> _WorkerService:
     runtime = PluginRuntime(activation_id=ACTIVATION_ID, auth_token=AUTH_TOKEN, host_stub=host_stub)
     return _WorkerService(plugin, runtime, asyncio.Event())

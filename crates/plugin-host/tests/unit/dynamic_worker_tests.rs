@@ -6446,6 +6446,7 @@ fn received_invocation(v: pb::InvokeRequest) -> PreparedInvocation {
     let mut continuation_id = String::new();
     let llm = |request, response, request_codec, response_codec, annotated_request, model_name| {
         transport::LlmInvocation {
+            execution_context: None,
             model_name,
             request,
             response,
@@ -6498,6 +6499,7 @@ fn received_invocation(v: pb::InvokeRequest) -> PreparedInvocation {
         I::LlmSanitizeRequestGuardrail(v) => (
             S::LlmSanitizeRequestGuardrail,
             invoke_request_payload::Payload::Llm(Box::new(transport::LlmInvocation {
+                execution_context: None,
                 model_name: String::new(),
                 request: v.request,
                 response: None,
@@ -6511,6 +6513,7 @@ fn received_invocation(v: pb::InvokeRequest) -> PreparedInvocation {
         I::LlmSanitizeResponseGuardrail(v) => (
             S::LlmSanitizeResponseGuardrail,
             invoke_request_payload::Payload::Llm(Box::new(transport::LlmInvocation {
+                execution_context: None,
                 model_name: String::new(),
                 request: None,
                 response: v.response,
@@ -6547,14 +6550,18 @@ fn received_invocation(v: pb::InvokeRequest) -> PreparedInvocation {
             continuation_id = v.continuation_id;
             (
                 S::LlmExecutionIntercept,
-                invoke_request_payload::Payload::Llm(Box::new(llm(
-                    v.request,
-                    None,
-                    v.request_codec,
-                    v.response_codec,
-                    None,
-                    v.model_name,
-                ))),
+                invoke_request_payload::Payload::Llm(Box::new({
+                    let mut invocation = llm(
+                        v.request,
+                        None,
+                        v.request_codec,
+                        v.response_codec,
+                        None,
+                        v.model_name,
+                    );
+                    invocation.execution_context = v.execution_context;
+                    invocation
+                })),
             )
         }
         I::ConditionalMiddlewareGuardrail(v) => (
@@ -6593,6 +6600,7 @@ fn received_stream_invocation(v: pb::InvokeStreamRequest) -> PreparedInvocation 
         continuation_id: v.continuation_id,
         payload: Some(invoke_request_payload::Payload::Llm(Box::new(
             transport::LlmInvocation {
+                execution_context: v.execution_context,
                 model_name: v.model_name,
                 request: v.request,
                 response: None,
@@ -6707,6 +6715,7 @@ impl WorkerPluginCallback {
                     capability_id: None,
                 };
                 invoke_request_payload::Payload::Llm(Box::new(transport::LlmInvocation {
+                    execution_context: None,
                     model_name: "model".into(),
                     request: Some(encode_wire(&valid_llm_request()).expect("valid test request")),
                     response: None,
@@ -7621,4 +7630,76 @@ async fn content_inspection_authenticates_projects_and_validates_selection() {
             .code(),
         tonic::Code::FailedPrecondition
     );
+}
+
+#[tokio::test]
+async fn llm_application_context_reaches_unary_and_streaming_worker_wire() {
+    let seen = Arc::new(Mutex::new(Vec::new()));
+    let unary_seen = seen.clone();
+    let stream_seen = seen.clone();
+    let (callback, _shutdown) = fake_callback_service_with_stream(
+        move |request| {
+            let Some(invoke_request_payload::Payload::Llm(payload)) = request.payload else {
+                panic!("LLM payload")
+            };
+            unary_seen.lock().unwrap().push(
+                payload
+                    .execution_context
+                    .map(|value| conversions::decode::<Json, _>(value).unwrap()),
+            );
+            InvokeResponse {
+                result: Some(InvokeResult::LlmResponse(
+                    json_envelope(JSON_SCHEMA, &json!({"ok": true})).unwrap(),
+                )),
+            }
+        },
+        move |request| {
+            let Some(invoke_request_payload::Payload::Llm(payload)) = request.payload else {
+                panic!("LLM payload")
+            };
+            stream_seen.lock().unwrap().push(
+                payload
+                    .execution_context
+                    .map(|value| conversions::decode::<Json, _>(value).unwrap()),
+            );
+            Box::pin(futures_util::stream::empty()) as FakeInvokeStream
+        },
+    )
+    .await;
+    for value in [
+        None,
+        Some(json!({})),
+        Some(json!({"data": {}})),
+        Some(json!({"data": {"private": "sentinel"}})),
+    ] {
+        let application = value.clone().map(|value| {
+            nemo_relay_types::api::llm::ApplicationExecutionContext::try_from(value).unwrap()
+        });
+        callback
+            .invoke_llm_execution(
+                "application-context",
+                "model",
+                valid_llm_request(),
+                LlmExecutionContext::for_non_streaming(None, None)
+                    .with_execution_context(application.clone()),
+                Arc::new(|_| Box::pin(async { Ok(json!(null)) })),
+            )
+            .await
+            .unwrap();
+        let mut stream = callback
+            .invoke_llm_stream_execution(
+                "application-context",
+                "model",
+                valid_llm_request(),
+                LlmExecutionContext::for_streaming(None).with_execution_context(application),
+                Arc::new(|_| {
+                    Box::pin(async { Ok(LlmJsonStream::new(futures_util::stream::empty())) })
+                }),
+            )
+            .await
+            .unwrap();
+        assert!(stream.next().await.is_none());
+        let records = seen.lock().unwrap();
+        assert_eq!(&records[records.len() - 2..], &[value.clone(), value]);
+    }
 }

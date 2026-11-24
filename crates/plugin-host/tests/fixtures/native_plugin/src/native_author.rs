@@ -330,9 +330,15 @@ fn register_fixture_llm_stream_execution(
 ) -> nemo_relay_plugin::Result<()> {
     ctx.register_llm_stream_execution_intercept("fixture_llm_stream_execution", 0, {
         let runtime = runtime.clone();
-        move |_name, request, _context, next| {
+        move |_name, request, context, next| {
             let runtime = runtime.clone();
             async move {
+                if request.content["inspect_application_context"].as_bool() == Some(true) {
+                    let application = context.execution_context().ok_or("missing LLM application context")?;
+                    if application.to_json() != json!({"data": {"review": "native-context-sentinel"}}) {
+                        return Err("LLM application context was changed in native transport".into());
+                    }
+                }
                 if request.content["native_http_error"].as_bool() == Some(true) {
                     return Err(nemo_relay_plugin::http_error_message(
                         403,
@@ -765,9 +771,15 @@ fn register_fixture_llm_guardrails(
     )?;
     ctx.register_llm_execution_intercept("fixture_llm_execution", 0, {
         let runtime = runtime.clone();
-        move |_name, request, _context, next| {
+        move |_name, request, context, next| {
             let runtime = runtime.clone();
             async move {
+                if request.content["inspect_application_context"].as_bool() == Some(true) {
+                    let application = context.execution_context().ok_or("missing LLM application context")?;
+                    if application.to_json() != json!({"data": {"review": "native-context-sentinel"}}) {
+                        return Err("LLM application context was changed in native transport".into());
+                    }
+                }
                 if request.content["native_http_error"].as_bool() == Some(true) {
                     return Err(nemo_relay_plugin::http_error_message(
                         403,

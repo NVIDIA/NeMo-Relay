@@ -355,6 +355,12 @@ Arguments:
 Return:
     JSON payload passed to later request intercepts and tool execution.
 """
+
+class LlmApplicationExecutionContext(TypedDict, total=False):
+    """Optional invocation-local payload supplied only to LLM execution intercepts."""
+
+    data: dict[str, Json]
+
 ToolExecutionIntercept: TypeAlias = Callable[
     [ToolExecutionContext, Callable[[Json], Awaitable[ToolExecutionResult[Json]]]],
     ToolExecutionInterceptOutcome | Awaitable[ToolExecutionInterceptOutcome],

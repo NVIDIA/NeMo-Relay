@@ -412,6 +412,7 @@ fn missing_provider_releases_all_transferred_callback_state() {
             ptr::null(),
             ptr::null(),
             0,
+            std::ptr::null(),
             ptr::null(),
             &mut stream,
         )

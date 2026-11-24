@@ -471,3 +471,20 @@ they can only call Relay APIs that emit observability events.
 ## Documentation
 
 Refer to the [NeMo Relay documentation](https://docs.nvidia.com/nemo/relay).
+
+## LLM Application Execution Context
+
+Both `nemo_relay_llm_call_execute` and `nemo_relay_llm_stream_call_execute`
+accept `execution_context_json` immediately before `cancellation`. Pass null to
+omit context, or a JSON envelope such as `{"data":{"review":"review-123"}}`.
+Execution intercepts read the borrowed `context.execution_context_json` pointer;
+copy its contents before the callback returns if needed.
+
+The envelope accepts only an optional object-valued `data` field and is limited
+to 16 KiB serialized JSON and 64 container levels. `{}` and `{"data":{}}` are
+valid and distinct from omission. Invalid values fail before middleware or the
+provider executes. Context is not automatically recorded in events, sent to
+providers, or inherited by nested calls. Rebuild experimental C consumers with
+the updated header and insert the context argument at each call site, using
+`NULL` to omit it. Existing function signatures change; older binaries must be
+rebuilt. The ABI version identifier stays the same.

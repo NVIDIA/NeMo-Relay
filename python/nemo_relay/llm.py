@@ -33,7 +33,7 @@ from collections.abc import AsyncIterator, Awaitable, Callable, Mapping
 from datetime import datetime
 from typing import TYPE_CHECKING
 
-from nemo_relay import Json
+from nemo_relay import Json, LlmApplicationExecutionContext
 from nemo_relay._context import ensure_scope_stack
 from nemo_relay._native import (
     ExecutionOptions,
@@ -216,6 +216,7 @@ def execute(
     codec: LlmCodec | None = None,
     response_codec: LlmResponseCodec | None = None,
     execution_options: ExecutionOptions | None = None,
+    execution_context: LlmApplicationExecutionContext | None = None,
 ) -> Awaitable[Json]:
     """Run an LLM call through the managed middleware pipeline.
 
@@ -245,6 +246,9 @@ def execute(
             ``AnnotatedLLMRequest`` values to request intercepts.
         response_codec: Optional response codec used to attach a normalized
             response to the emitted ``LLMEnd`` event for observability.
+        execution_context: Optional LLM application envelope exposed only to execution
+            intercepts. Limited to 16 KiB and 64 container levels; not inherited
+            by nested calls or automatically recorded in events.
         execution_options: Choose which middleware stages run for this call.
             Omit this option to run all stages. Turning off conditional execution
             skips its checks. Relay still sanitizes event data, uses codecs,
@@ -302,6 +306,7 @@ def execute(
         codec=codec,
         response_codec=response_codec,
         execution_options=execution_options,
+        execution_context=execution_context,
     )
 
 
@@ -320,6 +325,7 @@ def stream_execute(
     codec: LlmCodec | None = None,
     response_codec: LlmResponseCodec | None = None,
     execution_options: ExecutionOptions | None = None,
+    execution_context: LlmApplicationExecutionContext | None = None,
 ) -> Awaitable[LlmStream]:
     """Run a streaming LLM call through the managed middleware pipeline.
 
@@ -343,6 +349,9 @@ def stream_execute(
             ``AnnotatedLLMRequest`` values to request intercepts.
         response_codec: Optional response codec used to attach a normalized
             final response to the emitted ``LLMEnd`` event for observability.
+        execution_context: Optional LLM application envelope exposed only to execution
+            intercepts. Limited to 16 KiB and 64 container levels; not inherited
+            by nested calls or automatically recorded in events.
         execution_options: Choose which middleware stages run for this call.
             Omit this option to run all stages. Turning off conditional execution
             skips its checks. Relay still sanitizes event data, uses codecs,
@@ -422,6 +431,7 @@ def stream_execute(
         codec=codec,
         response_codec=response_codec,
         execution_options=execution_options,
+        execution_context=execution_context,
     )
 
 

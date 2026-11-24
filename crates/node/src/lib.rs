@@ -23,6 +23,7 @@ mod diagnostics;
 mod environment;
 mod error;
 mod json;
+mod llm_application_context;
 mod promise_call;
 mod stream;
 mod types;

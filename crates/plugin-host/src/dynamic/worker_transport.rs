@@ -30,6 +30,7 @@ pub(crate) struct ToolInvocation {
 }
 #[derive(Clone)]
 pub(crate) struct LlmInvocation {
+    pub execution_context: Option<wire::JsonValue>,
     pub model_name: String,
     pub request: Option<wire::LlmRequest>,
     pub annotated_request: Option<wire::AnnotatedLlmRequest>,
@@ -123,6 +124,7 @@ impl PreparedInvocation {
                         .execution_codec_context
                         .ok_or_else(|| missing("execution codec context"))?;
                     I::LlmExecutionIntercept(wire::LlmExecutionInvocation {
+                        execution_context: v.execution_context,
                         model_name: v.model_name,
                         request: v.request,
                         continuation_id: self.continuation_id,
@@ -159,6 +161,7 @@ impl PreparedInvocation {
             .execution_codec_context
             .ok_or_else(|| missing("stream request codec"))?;
         Ok(wire::InvokeStreamRequest {
+            execution_context: v.execution_context,
             credentials: Some(wire::Credentials {
                 activation_id: self.activation_id,
                 auth_token: self.auth_token,

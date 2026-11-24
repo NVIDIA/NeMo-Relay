@@ -815,6 +815,7 @@ async fn retained_middleware_and_gate_proxies_release_foreign_state_on_shutdown(
         owner.clone(),
         callback,
         Call {
+            execution_context: None,
             surface: a::Surface::ToolRequestIntercept,
             name: "retained".into(),
             value: abi::Json::Null,

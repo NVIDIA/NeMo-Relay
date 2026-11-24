@@ -538,3 +538,17 @@ limits bound the complete input and projection. Shutdown activations fail
 inspection. Old hosts return `UNIMPLEMENTED`; SDKs expose this explicitly without
 running independent extraction policies locally. Existing v1 methods, fields,
 and protocol/version identities are unchanged.
+
+## LLM Application Execution Context
+
+`LlmExecutionInvocation.execution_context` and
+`InvokeStreamRequest.execution_context` carry an optional `JsonValue` containing
+an LLM application envelope with an optional object-valued `data` field. Unknown
+envelope fields are invalid. Preserve absence, `{}`, and `{"data":{}}` distinctly.
+The context has a 16 KiB serialized JSON limit and at most 64 object/array levels.
+
+Only execution middleware receives this value. It is separate from the provider
+request, codec capabilities, event metadata, and continuation input; nested calls
+do not inherit it. SDKs validate the envelope before invoking user callbacks.
+Relay does not interpret application data as authorization. The worker contract
+version stays `1.0.0`; rebuild hosts and workers with the matching SDK.

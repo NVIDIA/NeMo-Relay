@@ -253,6 +253,8 @@ def test_runtime_struct_fields_are_all_modeled(contract):
 # Open application data is intentional; new entries require contract review.
 OPEN_JSON_FIELDS = frozenset(
     """
+    LlmExecutionInvocation.execution_context
+    InvokeStreamRequest.execution_context
     AnnotatedLlmRequest.api_specific
     AnnotatedLlmResponse.api_specific
     AnnotatedLlmRequest.extra

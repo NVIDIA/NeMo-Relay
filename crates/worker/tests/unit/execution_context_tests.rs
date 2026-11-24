@@ -652,3 +652,82 @@ async fn invalid_metric_measurements_are_rejected_before_contacting_the_host() {
         .unwrap_err();
     assert!(matches!(error, WorkerSdkError::InvalidInput(_)));
 }
+
+#[test]
+fn llm_application_context_worker_preserves_empty_and_validates_envelope() {
+    let codec = wire::LlmCodecContext {
+        codec: Some(wire::LlmCodecReference {
+            kind: "none".into(),
+            id: None,
+        }),
+        capability_id: None,
+    };
+    for value in [
+        None,
+        Some(serde_json::json!({})),
+        Some(serde_json::json!({"data": {}})),
+        Some(serde_json::json!({"data": {"private": "sentinel"}})),
+    ] {
+        let payload = LlmPayload {
+            execution_context: value
+                .as_ref()
+                .map(|value| conversions::encode(value.clone()).unwrap()),
+            request_codec: Some(codec.clone()),
+            ..Default::default()
+        };
+        let context = payload
+            .execution_context(&disconnected_runtime(), "invocation", false)
+            .unwrap();
+        assert_eq!(
+            context.execution_context().map(|value| value.to_json()),
+            value
+        );
+        assert!(!format!("{context:?}").contains("sentinel"));
+    }
+    let payload = LlmPayload {
+        execution_context: Some(conversions::encode(serde_json::json!({"data": null})).unwrap()),
+        request_codec: Some(codec),
+        ..Default::default()
+    };
+    assert!(
+        payload
+            .execution_context(&disconnected_runtime(), "invocation", false)
+            .is_err()
+    );
+}
+
+#[test]
+fn llm_context_decoder_refuses_wire_limits_and_recovers() {
+    for raw in [
+        format!("{{\"data\":{{\"value\":\"{}\"}}}}", "x".repeat(1_048_576)),
+        format!(
+            "{{\"data\":{{\"value\":{}null{}}}}}",
+            "[".repeat(1100),
+            "]".repeat(1100)
+        ),
+    ] {
+        let mut payload = LlmPayload {
+            execution_context: Some(wire::JsonValue {
+                json: raw.into_bytes(),
+            }),
+            request_codec: Some(wire::LlmCodecContext {
+                codec: Some(wire::LlmCodecReference {
+                    kind: "none".into(),
+                    id: None,
+                }),
+                capability_id: None,
+            }),
+            ..Default::default()
+        };
+        let error = payload
+            .execution_context(&disconnected_runtime(), "invocation", false)
+            .unwrap_err();
+        assert!(error.to_string().contains("LLM execution context exceeds"));
+        payload.execution_context = Some(wire::JsonValue {
+            json: br#"{"data":{"recovery":true}}"#.to_vec(),
+        });
+        payload
+            .execution_context(&disconnected_runtime(), "invocation", false)
+            .unwrap();
+    }
+}

@@ -683,8 +683,11 @@ async fn sdk_cdylib_assert_behavior() {
                     .name("native-fixture-llm-execute")
                     .request(LlmRequest {
                         headers: Map::new(),
-                        content: json!({ "prompt": "managed", "inspect_scope_stack": true }),
+                        content: json!({ "prompt": "managed", "inspect_scope_stack": true, "inspect_application_context": true }),
                     })
+                    .execution_context(nemo_relay_types::api::llm::ApplicationExecutionContext::try_from(
+                        json!({"data": {"review": "native-context-sentinel"}})
+                    ).unwrap())
                     .func(Arc::new(|request| {
                         Box::pin(async move {
                             Ok(json!({
@@ -922,8 +925,11 @@ async fn sdk_cdylib_assert_behavior() {
                     .name("native-fixture-llm-stream")
                     .request(LlmRequest {
                         headers: Map::new(),
-                        content: json!({ "prompt": "stream", "inspect_scope_stack": true }),
+                        content: json!({ "prompt": "stream", "inspect_scope_stack": true, "inspect_application_context": true }),
                     })
+                    .execution_context(nemo_relay_types::api::llm::ApplicationExecutionContext::try_from(
+                        json!({"data": {"review": "native-context-sentinel"}})
+                    ).unwrap())
                     .func(Arc::new(|request| {
                         Box::pin(async move {
                             Ok(LlmJsonStream::new(tokio_stream::iter(vec![

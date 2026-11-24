@@ -35,6 +35,8 @@ Public data types:
     Event: A Relay event represented as a JSON object.
     EventSanitizeFields: Mutable event observability fields.
     LlmRequest: A Relay LLM request represented as a JSON object.
+    LlmApplicationExecutionContext: Invocation-local application data supplied
+        separately from provider requests to LLM execution intercepts.
     LlmCodecIdentity: Typed discriminator for the active LLM codec.
     LlmRequestContext: Request codec context supplied to an LLM execution
         intercept.
@@ -119,6 +121,7 @@ from ._api import (
     EventSanitizeCallback,
     EventSanitizeFields,
     Json,
+    LlmApplicationExecutionContext,
     LlmCodecIdentity,
     LlmConditionalCallback,
     LlmExecutionCallback,
@@ -213,6 +216,7 @@ __all__ = [
     "LlmCodecIdentity",
     "LlmExecutionCallback",
     "LlmExecutionContext",
+    "LlmApplicationExecutionContext",
     "LogSeverity",
     "MetricKind",
     "MetricMeasurement",

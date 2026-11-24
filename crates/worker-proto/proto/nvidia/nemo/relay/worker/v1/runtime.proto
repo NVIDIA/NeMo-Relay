@@ -200,6 +200,8 @@ message LlmRequestInvocation {
 
 // Unary LLM execution input with request and response codec access.
 message LlmExecutionInvocation {
+  // Optional LLM application context; absent and an empty object remain distinct.
+  JsonValue execution_context = 6;
   // Model identity associated with the managed LLM operation.
   string model_name = 1;
   // Required provider request supplied to this callback, continuation, or codec operation.

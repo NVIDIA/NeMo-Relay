@@ -1098,7 +1098,8 @@ impl PluginContext<'_> {
                         LlmExecutionContext::new(
                             i.context.request_codec,
                             i.context.response_codec,
-                        )?,
+                        )?
+                        .with_execution_context(i.context.execution_context)?,
                         LlmNext(Arc::new(_next.ok_or("missing LLM continuation")?)),
                     )
                     .await?;
@@ -1147,7 +1148,8 @@ impl PluginContext<'_> {
                             LlmExecutionContext::new(
                                 i.context.request_codec,
                                 i.context.response_codec,
-                            )?,
+                            )?
+                            .with_execution_context(i.context.execution_context)?,
                             LlmStreamNext {
                                 next: Arc::new(next),
                                 sources: sources.clone(),

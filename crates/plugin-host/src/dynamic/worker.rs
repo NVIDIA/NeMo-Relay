@@ -2892,6 +2892,9 @@ impl WorkerPluginCallback {
         let Some(invoke_request_payload::Payload::Llm(llm)) = invoke.payload.as_mut() else {
             unreachable!("LLM execution invocation must have an LLM payload");
         };
+        llm.execution_context = context
+            .execution_context()
+            .map(|context| encode_json(JSON_SCHEMA, &context.to_json()));
         llm.execution_codec_context = Some(Box::new(ProtoLlmExecutionCodecContext {
             request: Some(request),
             response,
@@ -5466,6 +5469,7 @@ fn invoke_request_payload_llm(
 ) -> FlowResult<invoke_request_payload::Payload> {
     Ok(invoke_request_payload::Payload::Llm(Box::new(
         LlmInvocation {
+            execution_context: None,
             model_name: model_name.into(),
             request: request.as_ref().map(encode_wire).transpose()?,
             annotated_request: annotated_request.as_ref().map(encode_wire).transpose()?,

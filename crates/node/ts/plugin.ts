@@ -31,6 +31,7 @@ export type {
   EventMetadataValue,
   LlmCodecIdentity,
   LlmExecutionContext,
+  LlmApplicationExecutionContext,
   LlmOptimizationContribution,
   LlmOptimizationDataSchema,
   LlmOptimizationModel,

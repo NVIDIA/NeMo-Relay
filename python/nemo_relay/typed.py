@@ -654,6 +654,7 @@ async def llm_execute(
     codec: LlmCodec | None = None,
     response_codec: LlmResponseCodec | None = None,
     execution_options: ExecutionOptions | None = None,
+    execution_context: llm.LlmApplicationExecutionContext | None = None,
 ) -> TResponse: ...
 
 
@@ -672,6 +673,7 @@ async def llm_execute(
     codec: LlmCodec | None = None,
     response_codec: LlmResponseCodec | None = None,
     execution_options: ExecutionOptions | None = None,
+    execution_context: llm.LlmApplicationExecutionContext | None = None,
 ) -> TResponse: ...
 
 
@@ -689,6 +691,7 @@ async def llm_execute(
     codec: LlmCodec | None = None,
     response_codec: LlmResponseCodec | None = None,
     execution_options: ExecutionOptions | None = None,
+    execution_context: llm.LlmApplicationExecutionContext | None = None,
 ) -> TResponse:
     """Run ``nemo_relay.llm.execute`` and decode the returned response type.
 
@@ -710,6 +713,9 @@ async def llm_execute(
             request intercepts.
         response_codec: Optional observability codec used to attach an
             annotated response to the emitted ``LLMEnd`` event.
+        execution_context: Optional LLM application envelope exposed only to execution
+            intercepts. Limited to 16 KiB and 64 container levels; not inherited
+            by nested calls or automatically recorded in events.
         execution_options: Choose which middleware stages run for this call.
             Omit this option to run all stages. Turning off conditional execution
             skips its checks. Relay still sanitizes event data, uses codecs,
@@ -764,6 +770,7 @@ async def llm_execute(
         codec=codec,
         response_codec=response_codec,
         execution_options=execution_options,
+        execution_context=execution_context,
     )
     return response_json_codec.from_json(json_result)
 
@@ -786,6 +793,7 @@ async def llm_stream_execute(
     codec: LlmCodec | None = None,
     response_codec: LlmResponseCodec | None = None,
     execution_options: ExecutionOptions | None = None,
+    execution_context: llm.LlmApplicationExecutionContext | None = None,
 ) -> LlmStream:  # SONAR_IGNORE_STOP
     """Run ``nemo_relay.llm.stream_execute`` with typed chunks and final output.
 
@@ -812,6 +820,9 @@ async def llm_stream_execute(
             request intercepts.
         response_codec: Optional observability codec used to attach an
             annotated response to the emitted ``LLMEnd`` event.
+        execution_context: Optional LLM application envelope exposed only to execution
+            intercepts. Limited to 16 KiB and 64 container levels; not inherited
+            by nested calls or automatically recorded in events.
         execution_options: Choose which middleware stages run for this call.
             Omit this option to run all stages. Turning off conditional execution
             skips its checks. Relay still sanitizes event data, uses codecs,
@@ -904,6 +915,7 @@ async def llm_stream_execute(
         codec=codec,
         response_codec=response_codec,
         execution_options=execution_options,
+        execution_context=execution_context,
     )
 
 

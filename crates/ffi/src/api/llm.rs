@@ -464,6 +464,8 @@ fn parse_execute_inputs(raw: RawExecuteInputs) -> Result<ParsedExecuteInputs, Ne
 /// - `out`: On success, receives the response as a JSON C string. Caller must
 ///   free with `nemo_relay_string_free`.
 ///
+/// - `execution_context_json`: Optional LLM application context JSON; null omits it.
+///   Limited to 16 KiB and 64 container levels; exposed only to execution intercepts.
 /// - `skip_stages`: Bitwise OR of `NEMO_RELAY_SKIP_*` constants. Zero runs all
 ///   middleware stages. Unknown bits return `InvalidArg`. Event sanitization,
 ///   codecs, trace context, and completion still run.
@@ -491,6 +493,7 @@ pub unsafe extern "C" fn nemo_relay_llm_call_execute(
     request_codec: *const FfiCodecHandle,
     response_codec: *const FfiCodecHandle,
     skip_stages: u32,
+    execution_context_json: *const c_char,
     cancellation: *const super::FfiCancellation,
     out: *mut *mut c_char,
 ) -> NemoRelayStatus {
@@ -534,6 +537,10 @@ pub unsafe extern "C" fn nemo_relay_llm_call_execute(
             }
         }
     };
+    let execution_context = match parse_application_context(execution_context_json) {
+        Ok(context) => context,
+        Err(status) => return status,
+    };
     let execution_options = match super::execution_options(skip_stages) {
         Ok(options) => options,
         Err(status) => return status,
@@ -569,6 +576,7 @@ pub unsafe extern "C" fn nemo_relay_llm_call_execute(
                     .request(parsed.request)
                     .func(default_fn)
                     .execution_options(execution_options)
+                    .execution_context_opt(execution_context)
                     .parent_opt(parsed.parent_handle)
                     .attributes(parsed.attrs)
                     .data_opt(parsed.data)
@@ -733,6 +741,8 @@ async fn forward_stream_to_channel(
 /// - `model_name`: Optional LLM model identifier, or null.
 /// - `out`: On success, receives a heap-allocated `FfiStream`.
 ///
+/// - `execution_context_json`: Optional LLM application context JSON; null omits it.
+///   Limited to 16 KiB and 64 container levels; exposed only to execution intercepts.
 /// - `skip_stages`: Bitwise OR of `NEMO_RELAY_SKIP_*` constants. Zero runs all
 ///   middleware stages. Unknown bits return `InvalidArg`. Event sanitization,
 ///   codecs, trace context, and completion still run.
@@ -766,6 +776,7 @@ pub unsafe extern "C" fn nemo_relay_llm_stream_call_execute(
     request_codec: *const FfiCodecHandle,
     response_codec: *const FfiCodecHandle,
     skip_stages: u32,
+    execution_context_json: *const c_char,
     cancellation: *const super::FfiCancellation,
     out: *mut *mut FfiStream,
 ) -> NemoRelayStatus {
@@ -829,6 +840,10 @@ pub unsafe extern "C" fn nemo_relay_llm_stream_call_execute(
             }
         }
     };
+    let execution_context = match parse_application_context(execution_context_json) {
+        Ok(context) => context,
+        Err(status) => return status,
+    };
     let execution_options = match super::execution_options(skip_stages) {
         Ok(options) => options,
         Err(status) => return status,
@@ -866,6 +881,7 @@ pub unsafe extern "C" fn nemo_relay_llm_stream_call_execute(
                         .request(parsed.request)
                         .func(default_fn)
                         .execution_options(execution_options)
+                        .execution_context_opt(execution_context)
                         .collector(wrapped_collector)
                         .finalizer(LlmFinalizer::Fallible(wrapped_finalizer))
                         .parent_opt(parsed.parent_handle)
@@ -1068,4 +1084,104 @@ pub unsafe extern "C" fn nemo_relay_stream_free(stream: *mut FfiStream) {
     if !stream.is_null() {
         drop(unsafe { Box::from_raw(stream) });
     }
+}
+
+fn parse_application_context(
+    pointer: *const c_char,
+) -> Result<Option<nemo_relay_types::api::llm::ApplicationExecutionContext>, NemoRelayStatus> {
+    use nemo_relay_types::api::llm::ApplicationExecutionContext;
+    if pointer.is_null() {
+        return Ok(None);
+    }
+    // The public entry point requires a readable NUL-terminated C string.
+    let input = unsafe { std::ffi::CStr::from_ptr(pointer) }
+        .to_str()
+        .map_err(|_| {
+            set_last_error("invalid execution context UTF-8");
+            NemoRelayStatus::InvalidJson
+        })?;
+    context_input_budget(input.as_bytes()).map_err(|message| {
+        set_last_error(message);
+        NemoRelayStatus::InvalidArg
+    })?;
+    let value: serde_json::Value = serde_json::from_str(input).map_err(|_| {
+        set_last_error("invalid execution context JSON");
+        NemoRelayStatus::InvalidJson
+    })?;
+    ApplicationExecutionContext::try_from(value)
+        .map(Some)
+        .map_err(|error| {
+            set_last_error(&error.to_string());
+            NemoRelayStatus::InvalidArg
+        })
+}
+
+fn context_input_budget(input: &[u8]) -> Result<(), &'static str> {
+    let mut remaining_bytes = 16_384_usize;
+    let mut depth = 0_usize;
+    let mut quoted = false;
+    let mut index = 0;
+    while let Some(&byte) = input.get(index) {
+        index += 1;
+        let charge = if quoted {
+            match byte {
+                b'"' => {
+                    quoted = false;
+                    0
+                }
+                b'\\' => match input.get(index) {
+                    Some(b'u') => {
+                        index = index.saturating_add(5);
+                        // One decoded byte is a safe lower bound, even for
+                        // paired surrogates. Exact size is checked after parsing.
+                        1
+                    }
+                    Some(b'/') => {
+                        index += 1;
+                        1
+                    }
+                    Some(_) => {
+                        index += 1;
+                        2
+                    }
+                    None => 0,
+                },
+                _ => 1,
+            }
+        } else {
+            match byte {
+                b' ' | b'\n' | b'\r' | b'\t' => 0,
+                b'"' => {
+                    quoted = true;
+                    2
+                }
+                b'{' | b'[' => {
+                    depth += 1;
+                    if depth > 64 {
+                        return Err("LLM execution context exceeds 64 container levels");
+                    }
+                    1
+                }
+                b'}' | b']' => {
+                    depth = depth.saturating_sub(1);
+                    1
+                }
+                b'-' | b'0'..=b'9' => {
+                    // Number spelling can be longer than its normalized value.
+                    // serde_json parses numbers without constructing a JSON string.
+                    while input.get(index).is_some_and(|byte| {
+                        matches!(byte, b'0'..=b'9' | b'.' | b'e' | b'E' | b'+' | b'-')
+                    }) {
+                        index += 1;
+                    }
+                    1
+                }
+                _ => 1,
+            }
+        };
+        remaining_bytes = remaining_bytes
+            .checked_sub(charge)
+            .ok_or("LLM execution context exceeds 16384 serialized bytes")?;
+    }
+    Ok(())
 }

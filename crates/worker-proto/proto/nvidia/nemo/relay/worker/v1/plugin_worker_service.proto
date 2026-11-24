@@ -215,6 +215,8 @@ message InvokeResponse {
 
 // Streaming is a distinct method with a request-only codec context.
 message InvokeStreamRequest {
+  // Optional LLM application context; absent and an empty object remain distinct.
+  JsonValue execution_context = 9;
   // Required activation credentials; invalid authentication fails before the operation executes.
   Credentials credentials = 1 [(buf.validate.field).required = true];
   // Nonempty host-issued invocation identity, unique among active callbacks.
