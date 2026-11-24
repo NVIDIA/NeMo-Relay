@@ -100,10 +100,11 @@ pub(crate) fn span_kind(event: &EventView<'_>) -> SpanKind {
 
 #[doc(hidden)]
 pub fn start_attributes(event: &EventView<'_>) -> Vec<KeyValue> {
-    if !has_gen_ai_semantics(event) {
-        return Vec::new();
-    }
     let mut attributes = Vec::new();
+    push_conversation_attribute(&mut attributes, event);
+    if !has_gen_ai_semantics(event) {
+        return attributes;
+    }
     attributes.push(KeyValue::new(
         semconv::GEN_AI_OPERATION_NAME,
         operation_name(event),
@@ -111,21 +112,17 @@ pub fn start_attributes(event: &EventView<'_>) -> Vec<KeyValue> {
 
     match event.scope_type() {
         Some(ScopeType::Agent) => {
-            push_conversation_attribute(&mut attributes, event);
             push_agent_attributes(&mut attributes, event);
         }
         Some(ScopeType::Custom) if is_agent_turn(event) => {
-            push_conversation_attribute(&mut attributes, event);
             push_explicit_internal_agent_attributes(&mut attributes, event);
         }
         Some(ScopeType::Llm) => {
             push_provider_and_server_attributes(&mut attributes, event);
-            push_conversation_attribute(&mut attributes, event);
             push_llm_request_attributes(&mut attributes, event);
             push_tool_definitions(&mut attributes, event);
         }
         Some(ScopeType::Tool) => {
-            push_conversation_attribute(&mut attributes, event);
             push_tool_attributes(&mut attributes, event);
             push_tool_content(
                 &mut attributes,
@@ -276,7 +273,9 @@ pub(crate) fn push_conversation_attribute(attributes: &mut Vec<KeyValue>, event:
             "session_id",
             "thread_id",
         ],
-    ) {
+    )
+    .or_else(|| event.propagation_root_uuid().map(|root| root.to_string()))
+    {
         attributes.push(KeyValue::new(
             semconv::GEN_AI_CONVERSATION_ID,
             conversation_id,

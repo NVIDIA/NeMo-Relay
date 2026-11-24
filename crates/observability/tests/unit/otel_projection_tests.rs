@@ -950,6 +950,56 @@ fn gen_ai_projection_emits_provider_reasoning_token_usage() {
 }
 
 #[test]
+fn gen_ai_projection_uses_the_propagation_root_as_the_conversation_id_fallback() {
+    let root_uuid = Uuid::now_v7();
+    for scope_type in [
+        ScopeType::Agent,
+        ScopeType::Llm,
+        ScopeType::Tool,
+        ScopeType::Embedder,
+        ScopeType::Retriever,
+        ScopeType::Function,
+        ScopeType::Custom,
+    ] {
+        let mut event = make_start_event(Uuid::now_v7(), None, "scope", scope_type, None);
+        event.set_propagation_root_uuid(Some(root_uuid));
+        let attributes = attr_map(&crate::test_support::otel_genai::start_attributes(&event));
+        assert_eq!(
+            attributes.get("gen_ai.conversation.id"),
+            Some(&root_uuid.to_string()),
+            "{scope_type:?}"
+        );
+
+        let unrooted = make_start_event(Uuid::now_v7(), None, "scope", scope_type, None);
+        let attributes = attr_map(&crate::test_support::otel_genai::start_attributes(
+            &unrooted,
+        ));
+        assert!(
+            !attributes.contains_key("gen_ai.conversation.id"),
+            "{scope_type:?}"
+        );
+    }
+
+    let mut explicit = make_start_event_with_metadata(
+        Uuid::now_v7(),
+        None,
+        "agent",
+        json!({ "conversation_id": "conversation-1" }),
+    );
+    explicit.set_propagation_root_uuid(Some(root_uuid));
+    let attributes = attr_map(&crate::test_support::otel_genai::start_attributes(
+        &explicit,
+    ));
+    assert_eq!(attributes["gen_ai.conversation.id"], "conversation-1");
+
+    let mut function = make_start_event(Uuid::now_v7(), None, "step", ScopeType::Function, None);
+    function.set_propagation_root_uuid(Some(root_uuid));
+    let attributes = crate::test_support::otel_genai::start_attributes(&function);
+    assert_eq!(attributes.len(), 1);
+    assert_eq!(attributes[0].key.as_str(), "gen_ai.conversation.id");
+}
+
+#[test]
 fn gen_ai_projection_emits_only_span_specific_attributes() {
     let common = json!({
         "provider": "openai",
@@ -1007,6 +1057,7 @@ fn gen_ai_projection_emits_only_span_specific_attributes() {
             ScopeType::Embedder,
             "embed",
             [
+                "gen_ai.conversation.id",
                 "gen_ai.operation.name",
                 "gen_ai.provider.name",
                 "gen_ai.request.model",
@@ -1019,6 +1070,7 @@ fn gen_ai_projection_emits_only_span_specific_attributes() {
             ScopeType::Retriever,
             "retrieve",
             [
+                "gen_ai.conversation.id",
                 "gen_ai.data_source.id",
                 "gen_ai.operation.name",
                 "gen_ai.provider.name",
@@ -1042,13 +1094,6 @@ fn gen_ai_projection_emits_only_span_specific_attributes() {
             .map(|attribute| attribute.key.as_str())
             .collect::<BTreeSet<_>>();
         assert_eq!(actual, expected.iter().copied().collect());
-        assert!(attributes.iter().all(|attribute| {
-            attribute.key.as_str() != "gen_ai.conversation.id"
-                || matches!(
-                    scope_type,
-                    ScopeType::Agent | ScopeType::Llm | ScopeType::Tool
-                )
-        }));
         if scope_type == ScopeType::Retriever {
             let top_k = attributes
                 .iter()
