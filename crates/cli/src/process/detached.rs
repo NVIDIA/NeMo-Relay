@@ -160,6 +160,8 @@ pub(crate) struct DetachedChild {
 }
 
 #[cfg(windows)]
+// SAFETY: The process, thread, and Job Object handles are owned by this value and are only
+// used through it.
 unsafe impl Send for DetachedChild {}
 
 #[cfg(windows)]
@@ -330,12 +332,10 @@ fn spawn_with_handle_list(
 ) -> std::io::Result<DetachedChild> {
     use std::ffi::c_void;
     use std::os::windows::io::AsRawHandle;
-    use windows_sys::Win32::Foundation::{
-        DUPLICATE_SAME_ACCESS, DuplicateHandle, HANDLE, HANDLE_FLAG_INHERIT, SetHandleInformation,
-    };
+    use windows_sys::Win32::Foundation::{HANDLE, HANDLE_FLAG_INHERIT, SetHandleInformation};
     use windows_sys::Win32::System::Threading::{
         CREATE_UNICODE_ENVIRONMENT, CreateProcessW, EXTENDED_STARTUPINFO_PRESENT,
-        GetCurrentProcess, InitializeProcThreadAttributeList, PROC_THREAD_ATTRIBUTE_HANDLE_LIST,
+        InitializeProcThreadAttributeList, PROC_THREAD_ATTRIBUTE_HANDLE_LIST,
         PROC_THREAD_ATTRIBUTE_JOB_LIST, PROCESS_INFORMATION, STARTF_USESTDHANDLES, STARTUPINFOEXW,
         UpdateProcThreadAttribute,
     };
@@ -463,27 +463,37 @@ fn spawn_with_handle_list(
     if worker && limited_lifetime {
         log::warn!(target: "nemo_relay.bootstrap", event = "worker_lifetime_limited", reason = "windows_job_breakaway_denied"; "Worker remains scoped to the host job; host shutdown can require reactivation");
     }
-    let mut child_handle = std::ptr::null_mut();
-    // SAFETY: The pseudo current-process handle, the owned process handle, and the output
-    // pointer are valid. The duplicate belongs to the child process and closes with it.
+    if let Err(error) = keep_job_alive_with_child(&child) {
+        return Err(abandon_spawned_child(&mut child, error));
+    }
+    Ok(child)
+}
+
+#[cfg(windows)]
+fn keep_job_alive_with_child(child: &DetachedChild) -> std::io::Result<()> {
+    use windows_sys::Win32::Foundation::{DUPLICATE_SAME_ACCESS, DuplicateHandle};
+    use windows_sys::Win32::System::Threading::GetCurrentProcess;
+
+    let mut child_held_job = std::ptr::null_mut();
+    // SAFETY: The pseudo current-process handle, the owned job and process handles, and the
+    // output pointer are valid. The duplicate belongs to the child process and closes with it.
     if unsafe {
         DuplicateHandle(
             GetCurrentProcess(),
             child.job.0,
             child.process,
-            &mut child_handle,
+            &mut child_held_job,
             0,
             0,
             DUPLICATE_SAME_ACCESS,
         )
     } == 0
     {
-        return Err(abandon_spawned_child(
-            &mut child,
-            windows_spawn_error("DuplicateHandle detached child Job Object"),
+        return Err(windows_spawn_error(
+            "DuplicateHandle detached child Job Object",
         ));
     }
-    Ok(child)
+    Ok(())
 }
 
 #[cfg(windows)]

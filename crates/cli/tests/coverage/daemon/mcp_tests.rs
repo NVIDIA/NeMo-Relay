@@ -749,9 +749,11 @@ async fn restrictive_external_job_fixture() {
         let mut in_job = 0;
         // SAFETY: Both handles are live and the output pointer is valid.
         let queried = unsafe { IsProcessInJob(worker, raw_job, &mut in_job) };
-        // SAFETY: The handle has termination and synchronization rights.
+        // SAFETY: The handle has termination rights.
         let terminated = unsafe { TerminateProcess(worker, 1) };
+        // SAFETY: The handle has synchronization rights and is still open.
         let waited = unsafe { WaitForSingleObject(worker, 5000) };
+        // SAFETY: The handle was opened above and is not used after this call.
         unsafe { CloseHandle(worker) };
         assert_ne!(queried, 0);
         assert_ne!(
