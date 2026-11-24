@@ -344,7 +344,7 @@ When breakaway is unavailable and the host permits nested assignment, the
 gateway remains scoped to the host job and can exit before the normal idle reuse
 window. If the host rejects nested assignment, persistent bootstrap stops and
 explains the conflict instead of running without process-tree cleanup
-guarantees.
+guarantees. Managed workers launched for MCP hosts follow the same rule.
 
 The compatibility fingerprint covers resolved provider, exporter, dynamic
 plugin, and relevant environment settings without exposing their values in the

@@ -155,7 +155,8 @@ pub(crate) type DetachedChild = Child;
 pub(crate) struct DetachedChild {
     process: windows_sys::Win32::Foundation::HANDLE,
     thread: windows_sys::Win32::Foundation::HANDLE,
-    job: Option<JobObject>,
+    job: JobObject,
+    waiter: std::sync::Arc<ProcessWaiter>,
     id: u32,
 }
 
@@ -170,6 +171,66 @@ struct ProcessWaiter(windows_sys::Win32::Foundation::HANDLE);
 #[cfg(windows)]
 // SAFETY: The wrapper owns a duplicated process handle that only the waiting thread uses.
 unsafe impl Send for ProcessWaiter {}
+
+#[cfg(windows)]
+// SAFETY: Waiting on a live process handle is thread-safe, and the wrapper never mutates it.
+unsafe impl Sync for ProcessWaiter {}
+
+#[cfg(windows)]
+const JOB_DRAIN_POLL_INTERVAL: std::time::Duration = std::time::Duration::from_millis(20);
+
+#[cfg(windows)]
+fn duplicate_process_handle(
+    process: windows_sys::Win32::Foundation::HANDLE,
+) -> std::io::Result<ProcessWaiter> {
+    use windows_sys::Win32::Foundation::{DUPLICATE_SAME_ACCESS, DuplicateHandle};
+    use windows_sys::Win32::System::Threading::GetCurrentProcess;
+
+    let mut duplicate = std::ptr::null_mut();
+    // SAFETY: The pseudo current-process handle, the live process handle, and the output
+    // pointer are valid for this call.
+    if unsafe {
+        DuplicateHandle(
+            GetCurrentProcess(),
+            process,
+            GetCurrentProcess(),
+            &mut duplicate,
+            0,
+            0,
+            DUPLICATE_SAME_ACCESS,
+        )
+    } == 0
+    {
+        return Err(windows_spawn_error("DuplicateHandle process wait"));
+    }
+    Ok(ProcessWaiter(duplicate))
+}
+
+#[cfg(windows)]
+fn job_has_active_processes(job: &JobObject) -> std::io::Result<bool> {
+    use windows_sys::Win32::System::JobObjects::{
+        JOBOBJECT_BASIC_ACCOUNTING_INFORMATION, JobObjectBasicAccountingInformation,
+        QueryInformationJobObject,
+    };
+
+    let mut accounting = JOBOBJECT_BASIC_ACCOUNTING_INFORMATION::default();
+    // SAFETY: `job.0` is live and the buffer matches the requested information class.
+    if unsafe {
+        QueryInformationJobObject(
+            job.0,
+            JobObjectBasicAccountingInformation,
+            std::ptr::from_mut(&mut accounting).cast(),
+            std::mem::size_of::<JOBOBJECT_BASIC_ACCOUNTING_INFORMATION>() as u32,
+            std::ptr::null_mut(),
+        )
+    } == 0
+    {
+        return Err(windows_spawn_error(
+            "QueryInformationJobObject active processes",
+        ));
+    }
+    Ok(accounting.ActiveProcesses != 0)
+}
 
 #[cfg(windows)]
 const DETACHED_EXIT_TIMEOUT: std::time::Duration = std::time::Duration::from_secs(5);
@@ -239,22 +300,10 @@ impl DetachedChild {
     }
 
     pub(crate) fn start_kill(&mut self) -> std::io::Result<()> {
-        if let Some(job) = &self.job {
-            // SAFETY: `job` is the private Job Object owned by this value.
-            if unsafe { windows_sys::Win32::System::JobObjects::TerminateJobObject(job.0, 1) } == 0
-            {
-                return Err(windows_spawn_error("TerminateJobObject detached child"));
-            }
-            return Ok(());
-        }
-        // SAFETY: The process handle is owned and remains live throughout this call.
-        if unsafe { windows_sys::Win32::System::Threading::TerminateProcess(self.process, 1) } == 0
+        // SAFETY: `self.job` is the private Job Object owned by this value.
+        if unsafe { windows_sys::Win32::System::JobObjects::TerminateJobObject(self.job.0, 1) } == 0
         {
-            let error = std::io::Error::last_os_error();
-            if self.try_wait()?.is_some() {
-                return Ok(());
-            }
-            return Err(error);
+            return Err(windows_spawn_error("TerminateJobObject detached child"));
         }
         Ok(())
     }
@@ -263,29 +312,8 @@ impl DetachedChild {
         &mut self,
         timeout: std::time::Duration,
     ) -> std::io::Result<Option<std::process::ExitStatus>> {
-        use windows_sys::Win32::Foundation::{DUPLICATE_SAME_ACCESS, DuplicateHandle};
-        use windows_sys::Win32::System::Threading::GetCurrentProcess;
-
-        let waiter = {
-            let mut duplicate = std::ptr::null_mut();
-            // SAFETY: The pseudo current-process handle, the owned process handle, and the
-            // output pointer are valid for this call.
-            if unsafe {
-                DuplicateHandle(
-                    GetCurrentProcess(),
-                    self.process,
-                    GetCurrentProcess(),
-                    &mut duplicate,
-                    0,
-                    0,
-                    DUPLICATE_SAME_ACCESS,
-                )
-            } == 0
-            {
-                return Err(windows_spawn_error("DuplicateHandle process wait"));
-            }
-            ProcessWaiter(duplicate)
-        };
+        let deadline = tokio::time::Instant::now() + timeout;
+        let waiter = std::sync::Arc::clone(&self.waiter);
         let signaled = tokio::task::spawn_blocking(move || waiter.wait(timeout))
             .await
             .map_err(|error| {
@@ -294,6 +322,12 @@ impl DetachedChild {
         if !signaled {
             return Ok(None);
         }
+        while job_has_active_processes(&self.job)? {
+            if tokio::time::Instant::now() >= deadline {
+                return Ok(None);
+            }
+            tokio::time::sleep(JOB_DRAIN_POLL_INTERVAL).await;
+        }
         self.try_wait()
     }
 
@@ -301,10 +335,17 @@ impl DetachedChild {
         &mut self,
         timeout: std::time::Duration,
     ) -> std::io::Result<Option<std::process::ExitStatus>> {
-        if wait_for_process(self.process, timeout)? {
-            return self.try_wait();
+        let deadline = std::time::Instant::now() + timeout;
+        if !wait_for_process(self.process, timeout)? {
+            return Ok(None);
         }
-        Ok(None)
+        while job_has_active_processes(&self.job)? {
+            if std::time::Instant::now() >= deadline {
+                return Ok(None);
+            }
+            std::thread::sleep(JOB_DRAIN_POLL_INTERVAL);
+        }
+        self.try_wait()
     }
 
     pub(crate) fn wait(&mut self) -> std::io::Result<std::process::ExitStatus> {
@@ -355,17 +396,18 @@ fn spawn_with_handle_list(
     let launcher_job = current_launcher_job()?;
     let (creation_flags, limited_lifetime) =
         windows_creation_flags(launcher_job.as_ref().map(|job| job.limit_flags));
-    let host_scoped = limited_lifetime
+    if limited_lifetime
         && launcher_job
             .as_ref()
-            .is_some_and(|job| job.ui_restrictions != 0);
-    let job = if host_scoped {
-        None
-    } else {
-        Some(create_job_object()?)
-    };
-    let job_list = job.as_ref().map(|job| [job.0]);
-    let attribute_count = 1 + u32::from(job_list.is_some());
+            .is_some_and(|job| job.ui_restrictions != 0)
+    {
+        return Err(std::io::Error::new(
+            std::io::ErrorKind::Unsupported,
+            "the host Job Object sets UI restrictions and denies breakaway, so Relay cannot create the private Job Object that process-tree cleanup requires",
+        ));
+    }
+    let job = create_job_object()?;
+    let job_list = [job.0];
     let program = wide_nul(command.get_program());
     let handles = [
         stdin.as_raw_handle().cast::<c_void>(),
@@ -386,14 +428,7 @@ fn spawn_with_handle_list(
 
     let mut attribute_bytes = 0;
     // SAFETY: A null first call obtains the required allocation size.
-    unsafe {
-        InitializeProcThreadAttributeList(
-            std::ptr::null_mut(),
-            attribute_count,
-            0,
-            &mut attribute_bytes,
-        )
-    };
+    unsafe { InitializeProcThreadAttributeList(std::ptr::null_mut(), 2, 0, &mut attribute_bytes) };
     if attribute_bytes == 0 {
         return Err(windows_spawn_error(
             "InitializeProcThreadAttributeList sizing",
@@ -403,14 +438,8 @@ fn spawn_with_handle_list(
     let mut attribute_storage = vec![0_usize; words];
     let attribute_pointer = attribute_storage.as_mut_ptr().cast::<c_void>();
     // SAFETY: The aligned allocation has the size returned by the sizing call.
-    if unsafe {
-        InitializeProcThreadAttributeList(
-            attribute_pointer,
-            attribute_count,
-            0,
-            &mut attribute_bytes,
-        )
-    } == 0
+    if unsafe { InitializeProcThreadAttributeList(attribute_pointer, 2, 0, &mut attribute_bytes) }
+        == 0
     {
         return Err(windows_spawn_error("InitializeProcThreadAttributeList"));
     }
@@ -430,23 +459,20 @@ fn spawn_with_handle_list(
     {
         return Err(windows_spawn_error("UpdateProcThreadAttribute handle list"));
     }
-    if let Some(job_list) = &job_list {
-        // SAFETY: `job_list` holds the live Job Object handle until the attribute list is
-        // deleted.
-        if unsafe {
-            UpdateProcThreadAttribute(
-                attribute_list.0,
-                0,
-                PROC_THREAD_ATTRIBUTE_JOB_LIST as usize,
-                job_list.as_ptr().cast(),
-                std::mem::size_of::<HANDLE>(),
-                std::ptr::null_mut(),
-                std::ptr::null(),
-            )
-        } == 0
-        {
-            return Err(windows_spawn_error("UpdateProcThreadAttribute job list"));
-        }
+    // SAFETY: `job_list` holds the live Job Object handle until the attribute list is deleted.
+    if unsafe {
+        UpdateProcThreadAttribute(
+            attribute_list.0,
+            0,
+            PROC_THREAD_ATTRIBUTE_JOB_LIST as usize,
+            job_list.as_ptr().cast(),
+            std::mem::size_of::<HANDLE>(),
+            std::ptr::null_mut(),
+            std::ptr::null(),
+        )
+    } == 0
+    {
+        return Err(windows_spawn_error("UpdateProcThreadAttribute job list"));
     }
 
     let mut command_line = Vec::new();
@@ -492,17 +518,26 @@ fn spawn_with_handle_list(
     if let Some(error) = create_error {
         return Err(error);
     }
+    let waiter = match duplicate_process_handle(process.hProcess) {
+        Ok(waiter) => std::sync::Arc::new(waiter),
+        Err(error) => {
+            // SAFETY: Both handles were returned by CreateProcessW and are unused after this
+            // point. Dropping `job` closes its only handle, and kill-on-close ends the child.
+            unsafe {
+                windows_sys::Win32::Foundation::CloseHandle(process.hThread);
+                windows_sys::Win32::Foundation::CloseHandle(process.hProcess);
+            }
+            return Err(error);
+        }
+    };
     let mut child = DetachedChild {
         process: process.hProcess,
         thread: process.hThread,
         job,
+        waiter,
         id: process.dwProcessId,
     };
-    let retained = match &child.job {
-        Some(job) => keep_job_alive_with_child(child.process, job),
-        None => Ok(()),
-    };
-    if let Err(error) = retained {
+    if let Err(error) = keep_job_alive_with_child(&child) {
         return Err(abandon_spawned_child(&mut child, error));
     }
     if limited_lifetime {
@@ -512,22 +547,11 @@ fn spawn_with_handle_list(
             log::warn!(target: "nemo_relay.bootstrap", event = "gateway_lifetime_limited", reason = "windows_job_breakaway_denied"; "The shared gateway lifetime is limited to the host job");
         }
     }
-    if host_scoped {
-        let event = if worker {
-            "worker_tree_ownership_unavailable"
-        } else {
-            "gateway_tree_ownership_unavailable"
-        };
-        log::warn!(target: "nemo_relay.bootstrap", event = event, reason = "windows_ui_restricted_job"; "The launcher's Job Object sets UI restrictions, so the detached child shares it without a private Job Object");
-    }
     Ok(child)
 }
 
 #[cfg(windows)]
-fn keep_job_alive_with_child(
-    process: windows_sys::Win32::Foundation::HANDLE,
-    job: &JobObject,
-) -> std::io::Result<()> {
+fn keep_job_alive_with_child(child: &DetachedChild) -> std::io::Result<()> {
     use windows_sys::Win32::Foundation::{DUPLICATE_SAME_ACCESS, DuplicateHandle};
     use windows_sys::Win32::System::Threading::GetCurrentProcess;
 
@@ -537,8 +561,8 @@ fn keep_job_alive_with_child(
     if unsafe {
         DuplicateHandle(
             GetCurrentProcess(),
-            job.0,
-            process,
+            child.job.0,
+            child.process,
             &mut child_held_job,
             0,
             0,
