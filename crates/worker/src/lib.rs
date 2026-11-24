@@ -2187,14 +2187,31 @@ impl<F: Future> Future for InvocationFuture<F> {
     }
 }
 
+struct InvocationGate {
+    start: Option<tokio::sync::oneshot::Sender<()>>,
+    abort_handle: tokio::task::AbortHandle,
+}
+
+impl InvocationGate {
+    fn open(mut self) {
+        if let Some(start) = self.start.take() {
+            let _ = start.send(());
+        }
+    }
+}
+
+impl Drop for InvocationGate {
+    fn drop(&mut self) {
+        if self.start.is_some() {
+            self.abort_handle.abort();
+        }
+    }
+}
+
 fn spawn_gated_invocation<F>(
     future: F,
-    not_started: F::Output,
     completion: Arc<InvocationCompletion>,
-) -> (
-    tokio::task::JoinHandle<F::Output>,
-    tokio::sync::oneshot::Sender<()>,
-)
+) -> (tokio::task::JoinHandle<F::Output>, InvocationGate)
 where
     F: Future + Send + 'static,
     F::Output: Send + 'static,
@@ -2202,14 +2219,18 @@ where
     let (start_tx, start_rx) = tokio::sync::oneshot::channel();
     let task = tokio::spawn(InvocationFuture {
         future: Box::pin(async move {
-            if start_rx.await.is_err() {
-                return not_started;
+            match start_rx.await {
+                Ok(()) => future.await,
+                Err(_) => std::future::pending().await,
             }
-            future.await
         }),
         _completion: completion,
     });
-    (task, start_tx)
+    let gate = InvocationGate {
+        start: Some(start_tx),
+        abort_handle: task.abort_handle(),
+    };
+    (task, gate)
 }
 
 struct ActiveInvocationGuard {
@@ -2421,26 +2442,15 @@ impl PluginWorker for WorkerService {
         service.runtime.callback_name = Some(request.registration_name.clone());
         let (completion_tx, completion_rx) = watch::channel(false);
         let completion = InvocationCompletion::new(completion_tx);
-        let (task, start) = spawn_gated_invocation(
+        let (task, gate) = spawn_gated_invocation(
             async move { service.invoke_inner(request).await },
-            cancelled_invoke_response(),
             Arc::clone(&completion),
         );
         let abort_handle = task.abort_handle();
-        let generation = match self.track_invocation(
-            &invocation_id,
-            abort_handle.clone(),
-            None,
-            completion_rx,
-        ) {
-            Ok(generation) => generation,
-            Err(err) => {
-                task.abort();
-                return Err(err);
-            }
-        };
+        let generation =
+            self.track_invocation(&invocation_id, abort_handle.clone(), None, completion_rx)?;
         completion.track(self, &invocation_id, generation);
-        let _ = start.send(());
+        gate.open();
         let mut abort_on_drop = AbortTaskOnDrop::new(abort_handle);
         let response = match task.await {
             Ok(response) => response,
@@ -2512,7 +2522,7 @@ impl PluginWorker for WorkerService {
         let open_completion = Arc::clone(&completion);
         let open_scope = scope.clone();
         let open_callback = callback_name.clone();
-        let (open_task, open_start) = spawn_gated_invocation(
+        let (open_task, open_gate) = spawn_gated_invocation(
             async move {
                 TASK_CALLBACK_NAME
                     .scope(
@@ -2526,26 +2536,17 @@ impl PluginWorker for WorkerService {
                     )
                     .await
             },
-            Err(WorkerSdkError::Callback(
-                "stream invocation was cancelled before it started".into(),
-            )),
             open_completion,
         );
         let open_abort_handle = open_task.abort_handle();
-        let generation = match self.track_invocation(
+        let generation = self.track_invocation(
             &invocation_id,
             open_abort_handle.clone(),
             Some(stream_cancel_tx.clone()),
             completion_rx.clone(),
-        ) {
-            Ok(generation) => generation,
-            Err(err) => {
-                open_task.abort();
-                return Err(err);
-            }
-        };
+        )?;
         completion.track(self, &invocation_id, generation);
-        let _ = open_start.send(());
+        open_gate.open();
         let mut abort_on_drop = AbortTaskOnDrop::new(open_abort_handle);
         let stream = match open_task.await {
             Ok(Ok(stream)) => stream,

@@ -471,31 +471,30 @@ fn gate_invoke_request(registration_name: &str, surface: RegistrationSurface) ->
 }
 
 #[tokio::test]
-async fn gated_invocation_runs_only_after_release() {
+async fn gated_invocation_runs_after_open_and_aborts_on_drop() {
     use std::sync::atomic::AtomicBool;
 
-    for release in [false, true] {
+    for open in [false, true] {
         let ran = Arc::new(AtomicBool::new(false));
         let flag = Arc::clone(&ran);
         let (completion_tx, mut completion_rx) = watch::channel(false);
-        let (task, start) = spawn_gated_invocation(
+        let (task, gate) = spawn_gated_invocation(
             async move {
                 flag.store(true, Ordering::SeqCst);
                 "ran"
             },
-            "not started",
             InvocationCompletion::new(completion_tx),
         );
         tokio::task::yield_now().await;
         assert!(!ran.load(Ordering::SeqCst));
-        if release {
-            start.send(()).unwrap();
+        if open {
+            gate.open();
+            assert_eq!(task.await.unwrap(), "ran");
         } else {
-            drop(start);
+            drop(gate);
+            assert!(task.await.unwrap_err().is_cancelled());
         }
-        let outcome = task.await.unwrap();
-        assert_eq!(outcome, if release { "ran" } else { "not started" });
-        assert_eq!(ran.load(Ordering::SeqCst), release);
+        assert_eq!(ran.load(Ordering::SeqCst), open);
         completion_rx.changed().await.unwrap();
         assert!(*completion_rx.borrow());
     }
