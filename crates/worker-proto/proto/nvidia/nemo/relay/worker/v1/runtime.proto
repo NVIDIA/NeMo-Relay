@@ -124,6 +124,14 @@ message ToolValueInvocation {
   JsonValue value = 2 [(buf.validate.field).required = true];
 }
 
+// Concrete invocation-local context. The envelope is owned by Relay so future built-in
+// fields do not collide with application-defined keys.
+message ApplicationExecutionContext {
+  // Optional application-owned JSON object. Middleware defines its schema and trust policy.
+  // Absence differs from an explicitly empty object; its contents grant no authority.
+  JsonObject data = 1;
+}
+
 // Managed tool execution input and its invocation-scoped continuation.
 message ToolExecutionInvocation {
   // Tool identity associated with the managed tool operation.
@@ -134,6 +142,11 @@ message ToolExecutionInvocation {
   optional string tool_call_id = 3;
   // Host-issued continuation bound to the active callback; reject expired or foreign identities.
   string continuation_id = 4 [(buf.validate.field).string = {min_len: 1}];
+  // Host-owned per-call object, separate from arguments and event metadata.
+  // Every 1.0 worker must preserve this field in its execution callback when present.
+  // The value remains optional; absence means no context, while an empty object is present.
+  // Application-defined keys belong under data; context presence grants no authority.
+  ApplicationExecutionContext execution_context = 5;
 }
 
 // Asks a conditional callback whether selected middleware registrations may execute.

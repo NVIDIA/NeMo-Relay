@@ -8,6 +8,12 @@ export type JsonObject = { [Key in string]: JsonValue };
 export type JsonArray = JsonValue[] | readonly JsonValue[];
 export type JsonValue = JsonPrimitive | JsonObject | JsonArray;
 export type Json = JsonValue;
+/** Concrete invocation context; application-owned JSON belongs inside data. */
+export interface ApplicationExecutionContext {
+  /** Opaque application fields. Middleware validates their schema and meaning. */
+  data?: JsonObject;
+}
+
 export type LlmRequestShape = {
   headers: JsonObject;
   content: Json;

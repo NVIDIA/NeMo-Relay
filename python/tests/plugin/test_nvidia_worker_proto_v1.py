@@ -308,6 +308,7 @@ OPEN_JSON_FIELDS = frozenset(
     ToolCallItem.arguments
     ToolCallItem.extra
     ToolExecutionInvocation.args
+    ApplicationExecutionContext.data
     ToolExecutionResult.annotation
     ToolExecutionResult.result
     ToolNextRequest.value

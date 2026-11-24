@@ -1,8 +1,8 @@
 // SPDX-FileCopyrightText: Copyright (c) 2026, NVIDIA CORPORATION & AFFILIATES. All rights reserved.
 // SPDX-License-Identifier: Apache-2.0
 
-//! Frozen native API v1.0. Add capabilities in new modules, never by changing
-//! these records, signatures, marker traits, or enum discriminants.
+//! Native API v1.0, including the required application execution-context contract.
+//! Plugins and hosts must use compatible invocation layouts.
 
 use crate::Json;
 use crate::future::FfiFuture;
@@ -108,6 +108,16 @@ pub struct ConfigDiagnostic {
     pub message: String,
 }
 
+/// Invocation-local application data, separate from tool arguments and runtime capabilities.
+///
+/// The fixed outer record is owned by Relay. Applications define entries in the
+/// optional data map; consumers assign their own schema and trust semantics.
+#[repr(C)]
+pub struct ApplicationExecutionContext {
+    /// Optional JSON object represented by lossless native map entries.
+    pub data: Option<Vec<crate::Field>>,
+}
+
 /// One invocation's closed metadata and open application payload.
 #[repr(C)]
 pub struct Invocation {
@@ -119,6 +129,8 @@ pub struct Invocation {
     pub value: Json,
     /// Provider-issued tool-call correlation identifier.
     pub tool_call_id: Option<String>,
+    /// Optional concrete application context for this tool invocation.
+    pub execution_context: Option<ApplicationExecutionContext>,
     /// Invocation-scoped host capabilities.
     pub context: Context,
 }

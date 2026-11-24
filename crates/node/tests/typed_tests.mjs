@@ -233,6 +233,43 @@ describe('adaptive typed helpers', () => {
 // ===========================================================================
 
 describe('typedToolExecute', () => {
+  it('forwards host execution context independently of encoded arguments', async () => {
+    const host = {
+      data: {
+        audit: { label: 'typed-host-context' },
+        host_approval: {
+          version: 1,
+          source: 'application',
+          approval_id: 'review-123',
+          tool_name: 'typed_context',
+          approved_arguments: { value: 1 },
+          extra: { retained: true },
+        },
+      },
+    };
+    let seen;
+    registerToolExecutionIntercept('typed_execution_context', 1, async (context, next) => {
+      seen = context.executionContext;
+      const downstream = await next(context.args);
+      return { result: downstream.result };
+    });
+    try {
+      const pending = typedToolExecute(
+        'typed_context',
+        { value: 1 },
+        (args) => ({ result: args }),
+        new JsonPassthrough(),
+        new JsonPassthrough(),
+        { executionContext: host },
+      );
+      host.data.audit.label = 'changed';
+      assert.deepEqual(await pending, { result: { value: 1 } });
+      assert.deepEqual(seen, { data: { ...host.data, audit: { label: 'typed-host-context' } } });
+    } finally {
+      deregisterToolExecutionIntercept('typed_execution_context');
+    }
+  });
+
   it('basic roundtrip with JsonPassthrough', async () => {
     const passthrough = new JsonPassthrough();
     const result = await typedToolExecute(

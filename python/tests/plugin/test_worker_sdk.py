@@ -12,6 +12,7 @@ import os
 import socket
 import tempfile
 from collections.abc import AsyncIterator
+from dataclasses import replace
 from datetime import datetime, timezone
 from pathlib import Path
 from types import SimpleNamespace
@@ -132,8 +133,10 @@ class _LlmPayload(_Fixture):
 
 
 class _ToolPayload(_Fixture):
-    def __init__(self, tool_name="lookup", value=None, tool_call_id=None):
-        super().__init__(tool_name=tool_name, value=value, tool_call_id=tool_call_id)
+    def __init__(self, tool_name="lookup", value=None, tool_call_id=None, execution_context=None):
+        super().__init__(
+            tool_name=tool_name, value=value, tool_call_id=tool_call_id, execution_context=execution_context
+        )
 
 
 def _wire_codec(kind="none", id=None):
@@ -817,6 +820,7 @@ async def test_health_handshake_validate_register_and_all_surfaces(service: _Wor
     assert handshake.identity.protocol.name == WORKER_PROTOCOL
     assert handshake.identity.sdk_version == plugin_api._SDK_VERSION
     assert set(handshake.supported_surfaces) == set(_all_expected_surfaces())
+    assert handshake.identity.protocol.version == plugin_api._protocol.VERSION
 
     validate = await service.Validate(
         worker_pb.ValidateRequest(
@@ -923,6 +927,16 @@ def test_encode_payload_decode_rejects_non_standard_constants(payload: bytes) ->
     envelope = common_pb.JsonValue(json=payload)
     with pytest.raises(WorkerSdkError, match="non-standard JSON constant"):
         _decode_payload(envelope, "json value")
+
+
+@pytest.mark.parametrize("version", ["0.11.1", "2.0.0"])
+async def test_handshake_requires_the_exact_worker_contract_version(service: _WorkerService, version: str) -> None:
+    request = _handshake_request()
+    request.protocol.version = version
+    with pytest.raises(GrpcAbort) as error:
+        await service.Handshake(request, AbortContext())
+    assert error.value.code == grpc.StatusCode.INVALID_ARGUMENT
+    assert "protocol.version" in error.value.details
 
 
 @pytest.mark.parametrize("payload", [b"{", b"\xff"])
@@ -3890,6 +3904,7 @@ def _invoke_request(
                 args=tool.value,
                 tool_call_id=tool.tool_call_id,
                 continuation_id=continuation_id,
+                execution_context=tool.execution_context,
             )
         else:
             fields[surface_name] = runtime_pb.ToolValueInvocation(tool_name=tool.tool_name, value=tool.value)
@@ -4049,7 +4064,10 @@ def _all_expected_surfaces() -> list[int]:
     ]
 
 
-async def test_tool_execution_intercept_receives_tool_call_id() -> None:
+@pytest.mark.parametrize(
+    "execution_context", [None, {}, {"data": {}}, {"data": {"operation": {"attempt": 1}, "integer": 2**64 - 1}}]
+)
+async def test_required_worker_contract_delivers_context_without_feature_negotiation(execution_context) -> None:
     seen: dict[str, Json] = {}
 
     class ContextPlugin(WorkerPlugin):
@@ -4062,12 +4080,21 @@ async def test_tool_execution_intercept_receives_tool_call_id() -> None:
                 seen["tool_name"] = context.tool_name
                 seen["arguments"] = context.args
                 seen["tool_call_id"] = context.tool_call_id
+                seen["execution_context"] = context.execution_context
+                if context.execution_context is not None:
+                    changed = cast(dict[str, Json], context.execution_context)
+                    changed["changed"] = True
+                    assert context.execution_context == execution_context
                 downstream = await next_call.call(context.args)
                 return ToolExecutionInterceptOutcome(result=downstream.result)
 
             ctx.register_tool_execution_intercept("context", tool_execution)
 
     service = _service(ContextPlugin(), RecordingHostStub())
+    handshake_request = _handshake_request()
+    handshake_request.plugin_id = "tests.context"
+    handshake = await service.Handshake(handshake_request, AbortContext())
+    assert handshake.identity.protocol.version == plugin_api._protocol.VERSION
     await _register(service)
     response = await service.Invoke(
         _invoke_request(
@@ -4078,6 +4105,13 @@ async def test_tool_execution_intercept_receives_tool_call_id() -> None:
                 tool_name="lookup",
                 value=_encode_payload(common_pb.JsonValue, {"query": "relay"}),
                 tool_call_id="worker-call-9",
+                execution_context=(
+                    runtime_pb.ApplicationExecutionContext(
+                        data=_encode_payload(common_pb.JsonObject, execution_context["data"])
+                    )
+                    if execution_context is not None and "data" in execution_context
+                    else (runtime_pb.ApplicationExecutionContext() if execution_context is not None else None)
+                ),
             ),
         ),
         AbortContext(),
@@ -4087,6 +4121,60 @@ async def test_tool_execution_intercept_receives_tool_call_id() -> None:
     assert seen["tool_name"] == "lookup"
     assert seen["arguments"] == {"query": "relay"}
     assert seen["tool_call_id"] == "worker-call-9"
+    assert seen["execution_context"] == execution_context
+
+
+def test_tool_execution_context_is_a_private_defensive_snapshot() -> None:
+    original = {"data": {"operation": {"attempt": 1}}}
+    context = ToolExecutionContext("lookup", {}, execution_context=original)
+    original["data"]["operation"]["attempt"] = 2
+    returned = cast(dict[str, Json], context.execution_context)
+    returned["data"]["operation"]["attempt"] = 3
+    assert context.execution_context == {"data": {"operation": {"attempt": 1}}}
+    assert "attempt" not in repr(context)
+    with pytest.raises((AttributeError, TypeError)):
+        setattr(context, "execution_context", {})
+
+
+@pytest.mark.parametrize("supplied", [None, {"data": {"operation": {"attempt": 1}}}])
+def test_tool_execution_context_replace_preserves_context(supplied: dict[str, Json] | None) -> None:
+    context = ToolExecutionContext("lookup", {"query": "before"}, "call-1", execution_context=supplied)
+
+    updated = replace(context, args={"query": "after"})
+
+    assert context.args == {"query": "before"}
+    assert updated.args == {"query": "after"}
+    assert updated.tool_name == "lookup"
+    assert updated.tool_call_id == "call-1"
+    assert updated.execution_context == supplied
+    if supplied is not None:
+        supplied["data"]["operation"]["attempt"] = 2
+        returned = cast(dict[str, Json], updated.execution_context)
+        returned["data"]["operation"]["attempt"] = 3
+        assert context.execution_context == {"data": {"operation": {"attempt": 1}}}
+        assert updated.execution_context == {"data": {"operation": {"attempt": 1}}}
+
+
+def test_tool_execution_context_replace_can_replace_or_clear_context() -> None:
+    original = ToolExecutionContext("lookup", {}, execution_context=cast(Any, {"data": {"operation": {"attempt": 1}}}))
+    supplied = {"data": {"operation": {"attempt": 2}}}
+
+    updated = replace(original, execution_context=supplied)
+    cleared = replace(updated, execution_context=None)
+    supplied["data"]["operation"]["attempt"] = 3
+    returned = cast(dict[str, Json], updated.execution_context)
+    returned["data"]["operation"]["attempt"] = 4
+
+    assert original.execution_context == {"data": {"operation": {"attempt": 1}}}
+    assert updated.execution_context == {"data": {"operation": {"attempt": 2}}}
+    assert cleared.execution_context is None
+
+
+@pytest.mark.parametrize("invalid", [[], "not-an-object", True])
+def test_tool_execution_context_replace_rejects_invalid_context(invalid: Json) -> None:
+    context = ToolExecutionContext("lookup", {})
+    with pytest.raises(WorkerSdkError, match="tool execution context must be an object"):
+        replace(context, execution_context=invalid)
 
 
 async def test_tool_execution_intercept_tool_call_id_is_none_when_absent() -> None:
@@ -4417,3 +4505,282 @@ def test_protocol_repeated_enum_round_trip() -> None:
     message.kinds.append(999)
     with pytest.raises(ValueError, match="unknown RegistrationSurface"):
         plugin_api._protocol.unpack(message)
+
+
+@pytest.mark.parametrize(
+    "application_data",
+    [
+        {},
+        {"host_approval": None},
+        {"host_approval": {"decision": "denied", "version": 2}},
+        {"source": "application", "custom": [1, None, True]},
+    ],
+)
+def test_application_data_is_opaque_to_relay(application_data: dict[str, Json]) -> None:
+    supplied = {"data": application_data}
+    context = ToolExecutionContext("lookup", {}, execution_context=supplied)
+    assert context.execution_context == supplied
+    assert replace(context, args={"changed": True}).execution_context == supplied
+
+
+@pytest.mark.parametrize(
+    "invalid",
+    [
+        {"host_approval": {}},
+        {"unknown": 1},
+        {"data": None},
+        {"data": []},
+        {"data": "text"},
+        {"data": True},
+    ],
+)
+def test_concrete_context_rejects_unknown_fields_and_nonobject_data(invalid: Json) -> None:
+    with pytest.raises(WorkerSdkError, match="invalid application execution context"):
+        ToolExecutionContext("lookup", {}, execution_context=invalid)
+
+
+def test_context_checks_limits_before_recursive_snapshot() -> None:
+    value: dict[str, Json] = {}
+    for _ in range(2_000):
+        value = {"child": value}
+    with pytest.raises(WorkerSdkError, match="64 container levels"):
+        ToolExecutionContext("lookup", {}, execution_context={"data": value})
+    with pytest.raises(WorkerSdkError, match="16384 serialized bytes"):
+        ToolExecutionContext("lookup", {}, execution_context={"data": {"extension": "x" * 16_384}})
+
+
+def test_context_resource_budget_checks_serialized_bytes_and_large_integers() -> None:
+    overhead_bytes = len(json.dumps({"data": {"value": ""}}, separators=(",", ":")).encode("utf-8"))
+    boundary = {"data": {"value": "x" * (16_384 - overhead_bytes)}}
+    context = ToolExecutionContext("lookup", {}, execution_context=boundary)
+    assert context.execution_context == boundary
+    for supplied in (
+        {"data": {"value": boundary["data"]["value"] + "x"}},
+        {"data": {"value": "\0" * 3_000}},
+        {"data": {"value": 1 << 100_000}},
+    ):
+        with pytest.raises(WorkerSdkError, match="16384 serialized bytes"):
+            ToolExecutionContext("lookup", {}, execution_context=supplied)
+
+
+def test_context_resource_budget_bounds_shared_container_expansion() -> None:
+    class CountedList(list):
+        expanded_visits = 0
+
+        def __iter__(self):
+            for value in super().__iter__():
+                type(self).expanded_visits += 1
+                if type(self).expanded_visits > 16_384:
+                    raise AssertionError("context traversal exceeded its resource budget")
+                yield value
+
+    shared = CountedList([None, None])
+    small_context = {"data": {"value": [shared, shared]}}
+    context = ToolExecutionContext("lookup", {}, execution_context=small_context)
+    assert context.execution_context == small_context
+    supplied = None
+    for _ in range(18):
+        supplied = CountedList([supplied, supplied])
+    CountedList.expanded_visits = 0
+    with pytest.raises(WorkerSdkError, match="16384 serialized bytes"):
+        ToolExecutionContext("lookup", {}, execution_context={"data": {"value": supplied}})
+    assert 0 < CountedList.expanded_visits <= 16_384
+
+
+@pytest.mark.parametrize(
+    "case",
+    json.loads(
+        (
+            Path(__file__).resolve().parents[3] / "crates/types/tests/fixtures/application_execution_context.json"
+        ).read_text()
+    ),
+    ids=lambda case: case["name"],
+)
+def test_application_context_matches_shared_schema_vectors(case: dict[str, Any]) -> None:
+    if case["valid"]:
+        result = ToolExecutionContext("lookup", {}, execution_context=case["value"])
+        assert result.execution_context == case["value"]
+    else:
+        # None is omission at the public optional argument, not a supplied JSON
+        # null. Exercise the structural validator directly for that vector.
+        with pytest.raises(WorkerSdkError):
+            plugin_api._validate_application_execution_context(case["value"])
+        if case["value"] is not None:
+            with pytest.raises(WorkerSdkError):
+                ToolExecutionContext("lookup", {}, execution_context=case["value"])
+
+
+@pytest.mark.parametrize(
+    "number, rust_spelling",
+    [
+        (1e-7, "1e-7"),
+        (1e-6, "1e-6"),
+        (1e-5, "0.00001"),
+        (1e16, "1e+16"),
+        (1.0, "1.0"),
+        (-0.0, "-0.0"),
+        (5e-324, "5e-324"),
+        (1.7976931348623157e308, "1.7976931348623157e+308"),
+    ],
+)
+def test_context_float_boundary_matches_rust(number, rust_spelling) -> None:
+    from dataclasses import replace
+
+    envelope_bytes = len('{"data":{"number":' + rust_spelling + ',"padding":""}}')
+    supplied = {"data": {"number": number, "padding": "x" * (16_384 - envelope_bytes)}}
+    context = ToolExecutionContext("float-boundary", {}, execution_context=supplied)
+    assert context.execution_context == supplied
+    assert replace(context, args={"changed": True}).execution_context == supplied
+    supplied["data"]["padding"] += "x"
+    with pytest.raises(WorkerSdkError, match="16384 serialized bytes"):
+        ToolExecutionContext("float-over-boundary", {}, execution_context=supplied)
+
+
+@pytest.mark.parametrize("invalid", [float("nan"), float("inf"), -float("inf")])
+def test_context_snapshot_refuses_nonfinite_numbers(invalid) -> None:
+    with pytest.raises(WorkerSdkError, match="invalid application execution context"):
+        ToolExecutionContext("finite-context", {}, execution_context={"data": {"value": invalid}})
+
+
+def test_context_snapshot_preserves_stored_primitive_subclass_values() -> None:
+    class CustomString(str):
+        def __str__(self):
+            pytest.fail("snapshot must use the stored string")
+
+    class CustomInteger(int):
+        def __int__(self):
+            pytest.fail("snapshot must use the stored integer")
+
+    class CustomFloat(float):
+        def __float__(self):
+            pytest.fail("snapshot must use the stored float")
+
+    supplied = {
+        "data": {CustomString("label"): CustomString("value"), "integer": CustomInteger(1), "float": CustomFloat(1e-7)}
+    }
+    context = ToolExecutionContext("primitive-values", {}, execution_context=supplied)
+    assert context.execution_context == {"data": {"label": "value", "integer": 1, "float": 1e-7}}
+
+
+def test_context_snapshot_translates_integer_conversion_limit() -> None:
+    import sys
+
+    original_limit = sys.get_int_max_str_digits()
+    try:
+        sys.set_int_max_str_digits(640)
+        with pytest.raises(WorkerSdkError, match="invalid application execution context"):
+            ToolExecutionContext("integer-conversion", {}, execution_context={"data": {"value": 10**700}})
+    finally:
+        sys.set_int_max_str_digits(original_limit)
+
+
+async def test_context_wire_limits_reject_before_callbacks_and_recover_over_grpc() -> None:
+    seen = []
+
+    class ContextBudgetPlugin(WorkerPlugin):
+        plugin_id = "tests.context_budget"
+
+        def register(self, ctx: PluginContext, config: Json) -> None:
+            async def execute(context: ToolExecutionContext, next_call: ToolNext):
+                seen.append(context.execution_context)
+                return ToolExecutionInterceptOutcome(result=context.execution_context)
+
+            ctx.register_tool_execution_intercept("context_budget", execute)
+
+    server = grpc.aio.server()
+    port = server.add_insecure_port("127.0.0.1:0")
+    assert port != 0
+    channel = grpc.aio.insecure_channel(f"127.0.0.1:{port}")
+    runtime = PluginRuntime(
+        activation_id=ACTIVATION_ID,
+        auth_token=AUTH_TOKEN,
+        host_stub=plugin_api.host_grpc.RelayHostRuntimeServiceStub(channel),
+    )
+    service = _WorkerService(ContextBudgetPlugin(), runtime, asyncio.Event())
+    plugin_api.worker_grpc.add_PluginWorkerServiceServicer_to_server(service, server)
+    await server.start()
+    stub = plugin_api.worker_grpc.PluginWorkerServiceStub(channel)
+    try:
+        registered = await stub.Register(_register_request(plugin_id="tests.context_budget"), timeout=5)
+        assert not registered.HasField("error")
+
+        async def invoke(raw: bytes | dict[str, bytes]):
+            fields = raw if isinstance(raw, dict) else {"value": raw}
+            request = _invoke_request(
+                "context_budget",
+                common_pb.REGISTRATION_SURFACE_TOOL_EXECUTION_INTERCEPT,
+                tool=_ToolPayload(
+                    tool_name="context_budget",
+                    value=common_pb.JsonValue(json=b"{}"),
+                    execution_context=runtime_pb.ApplicationExecutionContext(
+                        data=common_pb.JsonObject(
+                            fields={key: common_pb.JsonValue(json=value) for key, value in fields.items()}
+                        )
+                    ),
+                ),
+            )
+            return await stub.Invoke(request, timeout=5)
+
+        for raw, expected in [
+            (b'"' + b"x" * 1_048_576 + b'"', "16384 serialized bytes"),
+            (b"[" * 1_100 + b"null" + b"]" * 1_100, "64 container levels"),
+            ({str(index): b"null" for index in range(20_000)}, "16384 serialized bytes"),
+        ]:
+            before = len(seen)
+            with pytest.raises(grpc.aio.AioRpcError) as refused:
+                await invoke(raw)
+            assert refused.value.code() == grpc.StatusCode.INVALID_ARGUMENT
+            assert expected in refused.value.details()
+            assert len(seen) == before
+            response = await invoke(b"true")
+            assert not response.HasField("error")
+            assert seen[-1] == {"data": {"value": True}}
+            assert len(seen) == before + 1
+
+        overhead = len(b'{"data":{"value":""}}')
+        await invoke(b'"' + b"x" * (16_384 - overhead) + b'"')
+        assert len(seen[-1]["data"]["value"]) == 16_384 - overhead
+        with pytest.raises(grpc.aio.AioRpcError, match="16384 serialized bytes"):
+            await invoke(b'"' + b"x" * (16_384 - overhead + 1) + b'"')
+        escaped = b'"' + b"\\u0061" * 3_000 + b'"'
+        assert not (await invoke(escaped)).HasField("error")
+        assert seen[-1] == {"data": {"value": "a" * 3_000}}
+        before = len(seen)
+        exact_refusal = await invoke(b'"' + b"\\u0000" * 3_000 + b'"')
+        assert exact_refusal.error.code == "worker.sdk_error"
+        assert "16384 serialized bytes" in exact_refusal.error.message
+        assert len(seen) == before
+        assert not (await invoke(b"true")).HasField("error")
+        for levels in [64, 65]:
+            raw = b"[" * (levels - 2) + b"null" + b"]" * (levels - 2)
+            if levels == 64:
+                assert not (await invoke(raw)).HasField("error")
+            else:
+                with pytest.raises(grpc.aio.AioRpcError, match="64 container levels"):
+                    await invoke(raw)
+    finally:
+        await channel.close()
+        await server.stop(0)
+
+
+def test_context_wire_preflight_avoids_materializing_oversized_json() -> None:
+    import tracemalloc
+
+    raw = b'"' + b"x" * 1_048_576 + b'"'
+    value = runtime_pb.ApplicationExecutionContext(
+        data=common_pb.JsonObject(
+            fields={
+                "value": common_pb.JsonValue(json=raw),
+            }
+        )
+    )
+    tracemalloc.start()
+    try:
+        with pytest.raises(WorkerSdkError, match="16384 serialized bytes"):
+            plugin_api._application_execution_context_from_proto(value)
+        _, peak = tracemalloc.get_traced_memory()
+    finally:
+        tracemalloc.stop()
+    # A protobuf field can expose an owned bytes buffer; no decoded megabyte
+    # string or copied context may be added on top of that wire representation.
+    assert peak < len(raw) + 256 * 1024

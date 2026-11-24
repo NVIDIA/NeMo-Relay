@@ -1367,6 +1367,7 @@ pub struct PyToolExecutionContext {
     tool_name: String,
     args: Arc<Py<PyAny>>,
     tool_call_id: Option<String>,
+    execution_context: Option<nemo_relay_types::api::tool::ApplicationExecutionContext>,
 }
 
 #[pymethods]
@@ -1390,6 +1391,16 @@ impl PyToolExecutionContext {
         self.tool_call_id.as_deref()
     }
 
+    /// A fresh copy of the host-supplied invocation context, or `None`.
+    /// This is separate from arguments and event metadata and grants no authority.
+    #[getter]
+    fn execution_context(&self, py: Python<'_>) -> PyResult<Option<Py<PyAny>>> {
+        self.execution_context
+            .as_ref()
+            .map(|value| json_to_py(py, &value.to_json()))
+            .transpose()
+    }
+
     fn __repr__(&self) -> String {
         format!(
             "ToolExecutionContext(tool_name={:?}, tool_call_id={:?})",
@@ -1404,6 +1415,7 @@ impl PyToolExecutionContext {
             tool_name: inner.tool_name().to_string(),
             args: Arc::new(json_to_py(py, inner.args())?),
             tool_call_id: inner.tool_call_id().map(str::to_string),
+            execution_context: inner.execution_context().cloned(),
         })
     }
 }

@@ -1435,7 +1435,8 @@ where
 /// for tool execution intercepts.
 ///
 /// The callback receives a `ToolExecutionContext` carrying the tool name, the
-/// arguments entering this intercept, and the managed `tool_call_id`.
+/// arguments entering this intercept, the managed `tool_call_id`, and optional
+/// invocation-local host `execution_context` separate from arguments and events.
 pub fn wrap_py_tool_exec_intercept_fn(
     py_fn: Py<PyAny>,
 ) -> nemo_relay_runtime::api::runtime::ToolExecutionFn {

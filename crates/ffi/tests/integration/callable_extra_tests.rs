@@ -7,6 +7,7 @@ use super::*;
 use std::ptr;
 
 use nemo_relay_runtime::api::runtime::ToolExecutionContext;
+use nemo_relay_runtime::api::tool::ToolExecutionResult;
 use tokio_stream::StreamExt;
 
 use super::test_support::resolve;
@@ -170,6 +171,58 @@ fn make_request() -> LlmRequest {
     LlmRequest {
         headers: serde_json::Map::new(),
         content: json!({"model": "test-model"}),
+    }
+}
+
+#[test]
+fn tool_intercept_delivers_optional_execution_context_to_foreign_code() {
+    // A C continuation blocks while polling Rust, as in the managed FFI API.
+    let runtime = tokio::runtime::Builder::new_multi_thread()
+        .worker_threads(1)
+        .enable_all()
+        .build()
+        .unwrap();
+    unsafe extern "C" fn callback(
+        user_data: *mut libc::c_void,
+        context_json: *const c_char,
+        next_fn: NemoRelayToolExecNextFn,
+        next_ctx: *mut libc::c_void,
+    ) -> *mut c_char {
+        let observed: Json =
+            serde_json::from_str(unsafe { CStr::from_ptr(context_json) }.to_str().unwrap())
+                .unwrap();
+        // The test retains this storage until the wrapper and future finish.
+        *unsafe { &*user_data.cast::<Mutex<Option<Json>>>() }
+            .lock()
+            .unwrap() = Some(observed);
+        let args = CString::new(r#"{"changed":true}"#).unwrap();
+        unsafe { next_fn(args.as_ptr(), next_ctx) }
+    }
+
+    for supplied in [
+        None,
+        Some(json!({})),
+        Some(json!({"data": {}})),
+        Some(json!({"data": {"review": {"reference": "example"}}})),
+    ] {
+        let observed = Arc::new(Mutex::new(None::<Json>));
+        let next: ToolExecutionNextFn = Arc::new(move |args| {
+            Box::pin(async move {
+                Ok(ToolExecutionResult {
+                    result: args,
+                    annotation: None,
+                })
+            })
+        });
+        let intercept =
+            wrap_tool_exec_intercept_fn(callback, Arc::as_ptr(&observed).cast_mut().cast(), None);
+        let context = ToolExecutionContext::new("example", json!({}))
+            .with_execution_context(supplied.clone().map(|value| value.try_into().unwrap()));
+        let outcome = runtime.block_on(intercept(context, next)).unwrap();
+        assert_eq!(outcome.result, json!({"changed":true}));
+        let captured = observed.lock().unwrap().take().unwrap();
+        assert_eq!(captured.get("execution_context"), supplied.as_ref());
+        assert_eq!(captured["args"], json!({}));
     }
 }
 

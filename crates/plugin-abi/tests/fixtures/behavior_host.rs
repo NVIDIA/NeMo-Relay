@@ -204,14 +204,10 @@ fn next(counts: &Arc<Counts>) -> ContinuationBox {
     ContinuationBox::new(Next(counts.clone()))
 }
 fn invocation(surface: Surface, value: Json) -> Invocation {
-    Invocation {
-        surface,
-        name: "fixture".into(),
-        value,
-        tool_call_id: Option::Some("call-id".into()),
-        context: invocation_context(),
-    }
+    // The host supplies the record from its own checked interface generation.
+    super::native_test_invocation(surface, value, invocation_context())
 }
+
 fn invocation_context() -> abi::v1_0::Context {
     abi::v1_0::Context {
         execution_context: None,

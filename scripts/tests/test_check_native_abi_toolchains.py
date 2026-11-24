@@ -49,6 +49,30 @@ class NativeAbiToolchainPathTests(unittest.TestCase):
                     self.assertIn(plugin.parent, {current / "debug", self.comparison / "debug"})
                 self.assertEqual(host_directories, {current / "debug", self.comparison / "debug"})
 
+    def test_matrix_covers_both_compilers_with_matching_interface_generations(self):
+        """Every compiler pairing exercises only compatible interface generations."""
+        with patch.dict(os.environ, {}, clear=True):
+            matrix.main()
+        commands = self.run_command.call_args_list[3:]
+        self.assertEqual(len(commands), 16)
+        actual = set()
+        for command in commands:
+            host, library = map(Path, command.args[0])
+            generation = library.stem.removeprefix("lib").removeprefix("nemo_relay_native_abi_fixture_")
+            actual.add((host.parent, host.name.removesuffix(".exe"), library.parent, generation))
+        directories = (self.root / "target/native-abi-fixtures/debug", self.comparison / "debug")
+        expected = {
+            (host_directory, "nemo-relay-native-abi-fixture-" + host, library_directory, generation)
+            for host_directory in directories
+            for library_directory in directories
+            for host, generations in (
+                ("future-host", ("baseline", "future")),
+                ("package-next-host", ("current", "package_next")),
+            )
+            for generation in generations
+        }
+        self.assertEqual(actual, expected)
+
     def test_toolchain_paths_cannot_become_build_targets(self):
         """Keep path-based toolchains inside the fixture root while passing their paths to rustup."""
         targets = set()

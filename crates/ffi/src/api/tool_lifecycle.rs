@@ -194,6 +194,183 @@ pub unsafe extern "C" fn nemo_relay_tool_call_end(
     }
 }
 
+fn parse_application_context(
+    pointer: *const c_char,
+) -> Result<Option<nemo_relay_types::api::tool::ApplicationExecutionContext>, NemoRelayStatus> {
+    use nemo_relay_types::api::tool::ApplicationExecutionContext;
+    if pointer.is_null() {
+        return Ok(None);
+    }
+    // The public entry point requires a readable NUL-terminated C string.
+    let input = unsafe { std::ffi::CStr::from_ptr(pointer) }
+        .to_str()
+        .map_err(|_| {
+            set_last_error("invalid execution context UTF-8");
+            NemoRelayStatus::InvalidJson
+        })?;
+    context_input_budget(input.as_bytes()).map_err(|message| {
+        set_last_error(message);
+        NemoRelayStatus::InvalidArg
+    })?;
+    let value: serde_json::Value = serde_json::from_str(input).map_err(|_| {
+        set_last_error("invalid execution context JSON");
+        NemoRelayStatus::InvalidJson
+    })?;
+    ApplicationExecutionContext::try_from(value)
+        .map(Some)
+        .map_err(|error| {
+            set_last_error(&error.to_string());
+            NemoRelayStatus::InvalidArg
+        })
+}
+
+fn context_input_budget(input: &[u8]) -> Result<(), &'static str> {
+    use nemo_relay_types::api::tool::application_context::{
+        ApplicationExecutionContextError, preflight_context_json,
+    };
+    preflight_context_json(input, 0, &mut 16_384).map_err(|error| match error {
+        ApplicationExecutionContextError::TooDeep => {
+            "tool execution context exceeds 64 container levels"
+        }
+        ApplicationExecutionContextError::TooLarge => {
+            "tool execution context exceeds 16384 serialized bytes"
+        }
+        ApplicationExecutionContextError::InvalidSchema => "invalid application execution context",
+    })
+}
+
+/// Normalize application context from borrowed UTF-8 bytes to bounded JSON.
+///
+/// Validates the complete context before returning an owned JSON string of at
+/// most 16 KiB. Does not require runtime initialization. The caller must release
+/// the result with `nemo_relay_string_free`. On failure, `out` is set to null.
+///
+/// # Safety
+/// `input` must be readable for `input_length` bytes for this call; the library
+/// does not retain it. `out` must be non-null and writable. The input length
+/// must not exceed `isize::MAX`.
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn nemo_relay_application_execution_context_normalize_json(
+    input: *const u8,
+    input_length: usize,
+    out: *mut *mut c_char,
+) -> NemoRelayStatus {
+    use nemo_relay_types::api::tool::ApplicationExecutionContext;
+    clear_last_error();
+    if out.is_null() {
+        set_last_error("out pointer is null");
+        return NemoRelayStatus::NullPointer;
+    }
+    unsafe { *out = std::ptr::null_mut() };
+    if input.is_null() || input_length > isize::MAX as usize {
+        set_last_error("invalid execution context input buffer");
+        return NemoRelayStatus::InvalidArg;
+    }
+    let input = unsafe { std::slice::from_raw_parts(input, input_length) };
+    if let Err(message) = context_input_budget(input) {
+        set_last_error(message);
+        return NemoRelayStatus::InvalidArg;
+    }
+    let value = match serde_json::from_slice::<serde_json::Value>(input) {
+        Ok(value) => value,
+        Err(_) => {
+            set_last_error("invalid execution context JSON");
+            return NemoRelayStatus::InvalidJson;
+        }
+    };
+    match ApplicationExecutionContext::try_from(value) {
+        Ok(value) => {
+            unsafe { *out = json_to_c_string(&value.to_json()) };
+            NemoRelayStatus::Ok
+        }
+        Err(error) => {
+            set_last_error(&error.to_string());
+            NemoRelayStatus::InvalidArg
+        }
+    }
+}
+
+/// Normalize one application-data value within the enclosing context budget.
+///
+/// `maximum_serialized_bytes` must be between one and 16384. The context root
+/// and its data object count as two enclosing containers. The caller charges
+/// envelope, key and separator bytes separately. On failure, `out` is null.
+/// Release a successful result with `nemo_relay_string_free`.
+///
+/// # Safety
+/// `input` must be readable for `input_length` bytes during this call, with
+/// length at most `isize::MAX`. `out` must be non-null and writable. The library
+/// does not retain the borrowed input.
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn nemo_relay_application_execution_context_value_normalize_json(
+    input: *const u8,
+    input_length: usize,
+    maximum_serialized_bytes: usize,
+    out: *mut *mut c_char,
+) -> NemoRelayStatus {
+    use nemo_relay_types::api::tool::application_context::preflight_context_json;
+    clear_last_error();
+    if out.is_null() {
+        set_last_error("out pointer is null");
+        return NemoRelayStatus::NullPointer;
+    }
+    unsafe { *out = std::ptr::null_mut() };
+    if input.is_null()
+        || input_length > isize::MAX as usize
+        || !(1..=16_384).contains(&maximum_serialized_bytes)
+    {
+        set_last_error("invalid application context value buffer or budget");
+        return NemoRelayStatus::InvalidArg;
+    }
+    let input = unsafe { std::slice::from_raw_parts(input, input_length) };
+    let mut remaining_bytes = maximum_serialized_bytes;
+    if let Err(error) = preflight_context_json(input, 2, &mut remaining_bytes) {
+        set_last_error(&error.to_string());
+        return NemoRelayStatus::InvalidArg;
+    }
+    let value = match serde_json::from_slice::<serde_json::Value>(input) {
+        Ok(value) => value,
+        Err(_) => {
+            set_last_error("invalid application context value JSON");
+            return NemoRelayStatus::InvalidJson;
+        }
+    };
+    // The preflight bounds strings/containers; serde_json parses numeric tokens
+    // directly from the borrowed input. Exact serialized size remains separate.
+    let mut encoded = ContextValueWriter {
+        output: Vec::new(),
+        remaining: maximum_serialized_bytes,
+    };
+    if serde_json::to_writer(&mut encoded, &value).is_err() {
+        set_last_error("tool execution context exceeds 16384 serialized bytes");
+        return NemoRelayStatus::InvalidArg;
+    }
+    let encoded = std::ffi::CString::new(encoded.output)
+        .expect("serialized JSON escapes embedded NUL characters");
+    unsafe { *out = encoded.into_raw() };
+    NemoRelayStatus::Ok
+}
+
+struct ContextValueWriter {
+    output: Vec<u8>,
+    remaining: usize,
+}
+
+impl std::io::Write for ContextValueWriter {
+    fn write(&mut self, buffer: &[u8]) -> std::io::Result<usize> {
+        self.remaining = self
+            .remaining
+            .checked_sub(buffer.len())
+            .ok_or_else(|| std::io::Error::other("context value exceeds its byte budget"))?;
+        self.output.extend_from_slice(buffer);
+        Ok(buffer.len())
+    }
+
+    fn flush(&mut self) -> std::io::Result<()> {
+        Ok(())
+    }
+}
+
 /// Execute a tool call end-to-end with an optional external tool call ID.
 ///
 /// This runs conditional-execution guardrails (on raw args), then request
@@ -214,6 +391,11 @@ pub unsafe extern "C" fn nemo_relay_tool_call_end(
 /// - `metadata_json`: Optional JSON metadata, or null.
 /// - `tool_call_id`: Optional null-terminated external correlation ID recorded
 ///   on both managed lifecycle events, or null.
+/// - `execution_context_json`: Optional application context JSON, separate from
+///   business arguments and event metadata. Null omits context. A supplied object
+///   is limited to 16 KiB serialized JSON and 64 container levels. It reaches
+///   execution middleware only and is not inherited by nested calls.
+/// - `cancellation`: Optional cancellation signal, or null.
 /// - `out`: On success, receives the result as a JSON C string. Caller must free
 ///   with `nemo_relay_string_free`.
 ///
@@ -240,6 +422,7 @@ pub unsafe extern "C" fn nemo_relay_tool_call_execute(
     metadata_json: *const c_char,
     tool_call_id: *const c_char,
     skip_stages: u32,
+    execution_context_json: *const c_char,
     cancellation: *const super::FfiCancellation,
     out: *mut *mut c_char,
 ) -> NemoRelayStatus {
@@ -284,6 +467,11 @@ pub unsafe extern "C" fn nemo_relay_tool_call_execute(
         }
     };
 
+    let execution_context = match parse_application_context(execution_context_json) {
+        Ok(context) => context,
+        Err(status) => return status,
+    };
+
     let default_fn: ToolExecutionNextFn = Arc::new(move |args| exec_fn(args));
 
     let cancellation = unsafe { cancellation.as_ref() }.cloned();
@@ -301,6 +489,7 @@ pub unsafe extern "C" fn nemo_relay_tool_call_execute(
                     .data_opt(data)
                     .metadata_opt(metadata)
                     .tool_call_id_opt(tool_call_id)
+                    .execution_context_opt(execution_context)
                     .build(),
             )
             .await

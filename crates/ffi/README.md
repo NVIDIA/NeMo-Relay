@@ -198,6 +198,41 @@ long-running callback work therefore occupy that thread and can reduce
 middleware throughput. The FFI does not expose completion-based middleware
 registration.
 
+## Application Execution Context
+
+Use `nemo_relay_tool_call_execute` to pass an optional application JSON object
+to tool execution middleware separately from business arguments. Pass
+`execution_context_json` immediately before the optional cancellation signal:
+
+```c
+NemoRelayStatus status = nemo_relay_tool_call_execute(
+    "write_file", args_json, execute_file, user_data, free_user_data,
+    NULL, 0, NULL, NULL, "provider-call-123", 0,
+    "{\"data\":{\"application_review\":{\"reference\":\"review-123\"}}}",
+    NULL, &out
+);
+```
+
+Here `args_json`, `execute_file`, `user_data`, `free_user_data`, and `out` are
+application-owned variables following the existing managed-call contract.
+The execution-intercept callback receives the object as `execution_context`
+in its context JSON. Its `next` callback accepts only business arguments;
+changing those arguments does not replace execution context.
+
+A null pointer omits context, while `"{}"` supplies an empty object. JSON null,
+non-object values, malformed JSON, values larger than 16 KiB serialized JSON,
+and nesting deeper than 64 containers fail before middleware or tool execution.
+The root object counts as the first container. Relay releases callback data
+even when validation fails. Pass a null context pointer for calls without
+application context. Rebuild C consumers against the matching generated header
+when updating this experimental ABI.
+
+Context is invocation-local and is not automatically copied into tool arguments,
+business callback parameters, lifecycle events, or nested calls. It is data from
+the application, not proof of approval; the application and middleware must
+verify any authorization claim themselves. See the
+[execution-context contract](../../docs/reference/tool-execution-intercept-outcomes.mdx#application-execution-context).
+
 ## Event Metadata Injection
 
 An event metadata injector receives a borrowed `FfiEvent` and returns a

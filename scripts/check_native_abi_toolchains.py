@@ -48,10 +48,10 @@ def main() -> None:
     )
     prefix, suffix = ("", ".dll") if os.name == "nt" else ("lib", ".dylib" if platform.system() == "Darwin" else ".so")
     executable = "nemo-relay-native-abi-fixture-future-host" + (".exe" if os.name == "nt" else "")
-    # Both future hosts must accept each unchanged plugin binary, regardless of compiler.
+    # Frozen future hosts accept frozen-generation binaries from either compiler.
     for host_directory in (current, comparison):
         for plugin_directory in (current, comparison):
-            for plugin in ("baseline", "future", "package_next"):
+            for plugin in ("baseline", "future"):
                 run(
                     [
                         str(host_directory / executable),
@@ -61,11 +61,11 @@ def main() -> None:
                     environment,
                 )
 
-    # Alternate package releases also accept frozen binaries from both compilers.
+    # Alternate package releases accept the current schema from both compilers.
     executable = "nemo-relay-native-abi-fixture-package-next-host" + (".exe" if os.name == "nt" else "")
     for host_directory in (current, comparison):
         for plugin_directory in (current, comparison):
-            for plugin in ("baseline", "package_next"):
+            for plugin in ("current", "package_next"):
                 run(
                     [
                         str(host_directory / executable),

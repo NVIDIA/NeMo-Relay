@@ -11,7 +11,12 @@ import platform
 import shutil
 import statistics
 import subprocess
+import sys
 from pathlib import Path
+
+# Support both direct CLI execution and imports by the repository test suite.
+sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
+from native_abi_contract import read_contract  # noqa: E402
 
 
 def command(args, cwd, *, capture=False):
@@ -25,6 +30,7 @@ def command(args, cwd, *, capture=False):
 def prepare(source, directory):
     """Build an isolated host and plugin from one checkout and return their run metadata."""
     checked = "nemo-relay-plugin-abi" in (source / "crates/plugin/Cargo.toml").read_text()
+    native_api = read_contract(source) if checked else "1"
     directory.mkdir(parents=True, exist_ok=True)
     (directory / "Cargo.toml").write_text("""[workspace]
 resolver = "2"
@@ -91,7 +97,7 @@ id = "bench.native"
 kind = "rust_dynamic"
 [compat]
 relay = ">=1.0.0,<2.0"
-native_api = "{"v1.0" if checked else "1"}"
+native_api = "{native_api}"
 [defaults]
 enabled = false
 [capabilities]

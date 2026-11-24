@@ -15,7 +15,7 @@ use nemo_relay_plugin::{
         v1_0 as a,
     },
     abi_executor::{ComponentExecutor, DirectCancellation},
-    abi_value::{from_abi, into_abi},
+    abi_value::{from_abi, into_abi, to_abi},
 };
 use nemo_relay_runtime::api::{
     registry::{
@@ -992,6 +992,7 @@ fn invocation(
             name,
             value,
             tool_call_id: id,
+            execution_context: None,
             context: a::Context {
                 execution_context: None,
                 scope: owner.scope(),
@@ -1638,7 +1639,7 @@ pub fn apply_registration(
                 let callback = callback.clone();
                 Box::pin(async move {
                     owner.ensure()?;
-                    let (i, _life) = invocation(
+                    let (mut i, _life) = invocation(
                         &owner,
                         surface,
                         context.tool_name().to_owned(),
@@ -1647,6 +1648,19 @@ pub fn apply_registration(
                         None,
                         None,
                     );
+                    i.execution_context =
+                        context
+                            .execution_context()
+                            .map(|context| a::ApplicationExecutionContext {
+                                data: context.data.as_ref().map(|data| {
+                                    data.iter()
+                                        .map(|(key, value)| abi::Field {
+                                            key: key.clone(),
+                                            value: to_abi(value),
+                                        })
+                                        .collect()
+                                }),
+                            });
                     let (lease, _guard) = MiddlewareContinuationLease::capture();
                     let downstream = DownstreamErrors::default();
                     let next = a::ContinuationBox::new(Continuation {

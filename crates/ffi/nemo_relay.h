@@ -3642,6 +3642,40 @@ NemoRelayStatus nemo_relay_tool_call_end(const struct FfiToolHandle *handle,
                                          const int64_t *timestamp_unix_micros);
 
 /**
+ * Normalize application context from borrowed UTF-8 bytes to bounded JSON.
+ *
+ * Validates the complete context before returning an owned JSON string of at
+ * most 16 KiB. Does not require runtime initialization. The caller must release
+ * the result with `nemo_relay_string_free`. On failure, `out` is set to null.
+ *
+ * # Safety
+ * `input` must be readable for `input_length` bytes for this call; the library
+ * does not retain it. `out` must be non-null and writable. The input length
+ * must not exceed `isize::MAX`.
+ */
+NemoRelayStatus nemo_relay_application_execution_context_normalize_json(const uint8_t *input,
+                                                                        uintptr_t input_length,
+                                                                        char **out);
+
+/**
+ * Normalize one application-data value within the enclosing context budget.
+ *
+ * `maximum_serialized_bytes` must be between one and 16384. The context root
+ * and its data object count as two enclosing containers. The caller charges
+ * envelope, key and separator bytes separately. On failure, `out` is null.
+ * Release a successful result with `nemo_relay_string_free`.
+ *
+ * # Safety
+ * `input` must be readable for `input_length` bytes during this call, with
+ * length at most `isize::MAX`. `out` must be non-null and writable. The library
+ * does not retain the borrowed input.
+ */
+NemoRelayStatus nemo_relay_application_execution_context_value_normalize_json(const uint8_t *input,
+                                                                              uintptr_t input_length,
+                                                                              uintptr_t maximum_serialized_bytes,
+                                                                              char **out);
+
+/**
  * Execute a tool call end-to-end with an optional external tool call ID.
  *
  * This runs conditional-execution guardrails (on raw args), then request
@@ -3662,6 +3696,11 @@ NemoRelayStatus nemo_relay_tool_call_end(const struct FfiToolHandle *handle,
  * - `metadata_json`: Optional JSON metadata, or null.
  * - `tool_call_id`: Optional null-terminated external correlation ID recorded
  *   on both managed lifecycle events, or null.
+ * - `execution_context_json`: Optional application context JSON, separate from
+ *   business arguments and event metadata. Null omits context. A supplied object
+ *   is limited to 16 KiB serialized JSON and 64 container levels. It reaches
+ *   execution middleware only and is not inherited by nested calls.
+ * - `cancellation`: Optional cancellation signal, or null.
  * - `out`: On success, receives the result as a JSON C string. Caller must free
  *   with `nemo_relay_string_free`.
  *
@@ -3687,6 +3726,7 @@ NemoRelayStatus nemo_relay_tool_call_execute(const char *name,
                                              const char *metadata_json,
                                              const char *tool_call_id,
                                              uint32_t skip_stages,
+                                             const char *execution_context_json,
                                              const struct FfiCancellation *cancellation,
                                              char **out);
 

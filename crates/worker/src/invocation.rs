@@ -61,6 +61,11 @@ impl TryFrom<wire::InvokeRequest> for CallbackInvocation {
                         tool_name: v.tool_name,
                         value: required_json::<Json>(v.args, "tool args")?,
                         tool_call_id: v.tool_call_id,
+                        execution_context: v
+                            .execution_context
+                            .as_ref()
+                            .map(decode_wire)
+                            .transpose()?,
                     }),
                 )
             }
@@ -150,5 +155,6 @@ fn tool(v: wire::ToolValueInvocation) -> Result<CallbackPayload> {
         tool_name: v.tool_name,
         value: required_json::<Json>(v.value, "tool value")?,
         tool_call_id: None,
+        execution_context: None,
     }))
 }

@@ -13,6 +13,7 @@ import subprocess
 import sys
 from pathlib import Path
 from types import ModuleType
+from unittest.mock import AsyncMock, Mock, call
 
 import pytest
 
@@ -79,6 +80,7 @@ def test_displayed_sources_match_registered_examples():
             source_extension = "ts" if language == "nodejs" and name in REFERENCE_NAMES else extension
             expected.add((GUIDES / "_code" / language / f"{filename}.{source_extension}").resolve())
     expected.add((EXAMPLES / "tool_result_message.py").resolve())
+    expected.add((EXAMPLES / "application_execution_context.py").resolve())
     displayed = set()
     for page in GUIDES.glob("*.mdx"):
         content = page.read_text(encoding="utf-8")
@@ -340,3 +342,147 @@ async def test_example_callback_failure_closes_call_and_agent(name, category, su
     assert assert_pair(subscribed_events, category, call_name)["parent_uuid"] == agent["uuid"]
     subscriber_name = "instrumentation-check" if name == "tool_call" else "llm-check"
     assert subscriber_name not in {registration.local_name for registration in list_runtime_registrations()}
+
+
+@pytest.fixture
+def application_review_example():
+    program = example("application_execution_context")
+    yield program
+    nemo_relay.intercepts.deregister_tool_execution("application-review")
+    nemo_relay.intercepts.deregister_tool_execution("documentation.approval-downstream")
+    nemo_relay.intercepts.deregister_tool_execution("documentation.rewrite-approved-arguments")
+
+
+def mock_host_approval():
+    """An explicit test double, not a receipt format or production authenticator."""
+    receipt = object()
+    approved_args = {"path": "notes.txt", "content": "hello"}
+
+    def verify(candidate, name, arguments):
+        if candidate is not receipt or name != "files.write" or arguments != approved_args:
+            raise PermissionError("host approval does not cover this operation")
+        return {
+            "version": 1,
+            "source": "test.application",
+            "approval_id": "test-receipt",
+            "tool_name": name,
+            "approved_arguments": dict(arguments),
+        }
+
+    def covers(assertion, name, arguments):
+        # The test's application boundary is trusted; arbitrary source strings
+        # arriving from an untrusted caller would not establish that trust.
+        return bool(
+            assertion
+            and assertion["source"] == "test.application"
+            and assertion["tool_name"] == name
+            and assertion["approved_arguments"] == arguments
+        )
+
+    return receipt, approved_args, Mock(side_effect=verify), covers
+
+
+async def test_existing_approval_skips_only_component_review(application_review_example):
+    receipt, arguments, verify, covers = mock_host_approval()
+    review = AsyncMock()
+    implementation = AsyncMock(return_value=nemo_relay.ToolExecutionResult({"written": True}, {"audit": "kept"}))
+    downstream_calls = []
+
+    async def downstream(context, next_call):
+        downstream_calls.append(context.tool_name)
+        result = await next_call(context.args)
+        return nemo_relay.ToolExecutionInterceptOutcome(result.result, annotation=result.annotation)
+
+    application_review_example.register_application_review(covers, review)
+    nemo_relay.intercepts.register_tool_execution("documentation.approval-downstream", 20, downstream)
+    result = await application_review_example.execute_after_application_approval(
+        "files.write", arguments, receipt, implementation, validate_existing_approval=verify
+    )
+    assert result.result == {"written": True}
+    assert result.annotation == {"audit": "kept"}
+    assert verify.call_args_list == [call(receipt, "files.write", arguments)] * 2
+    review.assert_not_awaited()
+    implementation.assert_awaited_once_with(arguments)
+    assert downstream_calls == ["files.write"]
+
+
+async def test_invalid_host_receipt_stops_before_middleware(application_review_example):
+    _receipt, arguments, verify, covers = mock_host_approval()
+    review, implementation = AsyncMock(), AsyncMock()
+    matcher = Mock(side_effect=covers)
+    application_review_example.register_application_review(matcher, review)
+    with pytest.raises(PermissionError, match="host approval does not cover"):
+        await application_review_example.execute_after_application_approval(
+            "files.write", arguments, object(), implementation, validate_existing_approval=verify
+        )
+    matcher.assert_not_called()
+    review.assert_not_awaited()
+    implementation.assert_not_awaited()
+
+
+@pytest.mark.parametrize(
+    "claim",
+    [
+        "absent",
+        "untrusted-source",
+        "wrong-tool",
+        "wrong-arguments",
+        "null",
+        "missing-field",
+        "denied",
+    ],
+)
+async def test_approval_claim_cannot_downgrade_to_normal_review(application_review_example, claim):
+    receipt, arguments, verify, covers = mock_host_approval()
+    assertion = verify(receipt, "files.write", arguments)
+    if claim == "untrusted-source":
+        assertion["source"] = "untrusted.application"
+    elif claim == "wrong-tool":
+        assertion["tool_name"] = "other.tool"
+    elif claim == "wrong-arguments":
+        assertion["approved_arguments"] = {"path": "different.txt"}
+    elif claim == "null":
+        assertion = None
+    elif claim == "missing-field":
+        del assertion["approval_id"]
+    elif claim == "denied":
+        assertion["decision"] = "denied"
+    review = AsyncMock(side_effect=PermissionError("component review denied"))
+    implementation = AsyncMock()
+    application_review_example.register_application_review(covers, review)
+    with pytest.raises(PermissionError):
+        await nemo_relay.tools.execute(
+            "files.write",
+            arguments,
+            implementation,
+            execution_context=None if claim == "absent" else {"data": {"host_approval": assertion}},
+        )
+    if claim == "absent":
+        review.assert_awaited_once_with("files.write", arguments)
+    else:
+        review.assert_not_awaited()
+    implementation.assert_not_awaited()
+
+
+@pytest.mark.parametrize("priority", [5, 20])
+async def test_rewritten_arguments_cannot_expand_human_approval(application_review_example, priority):
+    receipt, arguments, verify, covers = mock_host_approval()
+    review, implementation = AsyncMock(), AsyncMock()
+
+    async def rewrite(context, next_call):
+        result = await next_call({**context.args, "path": "different.txt"})
+        return nemo_relay.ToolExecutionInterceptOutcome(result.result, annotation=result.annotation)
+
+    application_review_example.register_application_review(covers, review)
+    nemo_relay.intercepts.register_tool_execution("documentation.rewrite-approved-arguments", priority, rewrite)
+    refusal = "Application approval is invalid" if priority == 5 else "host approval does not cover"
+    with pytest.raises(PermissionError, match=refusal):
+        await application_review_example.execute_after_application_approval(
+            "files.write", arguments, receipt, implementation, validate_existing_approval=verify
+        )
+    expected_verifications = [call(receipt, "files.write", arguments)]
+    if priority == 20:
+        expected_verifications.append(call(receipt, "files.write", {**arguments, "path": "different.txt"}))
+    assert verify.call_args_list == expected_verifications
+    review.assert_not_awaited()
+    implementation.assert_not_awaited()

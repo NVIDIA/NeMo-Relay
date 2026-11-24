@@ -140,6 +140,8 @@ def validate_json(value: Any) -> None:
     if name in (f"{PACKAGE}.LlmExecutionInvocation", f"{PACKAGE}.InvokeStreamRequest"):
         if value.HasField("execution_context"):
             validate_llm_context_input(value.execution_context.json)
+    if name == f"{PACKAGE}.ApplicationExecutionContext":
+        preflight_application_execution_context(value)
     if name == f"{PACKAGE}.JsonValue":
         json.loads(value.json.decode("utf-8"), parse_constant=_invalid_constant)
     elif name == "google.protobuf.Timestamp":
@@ -518,3 +520,54 @@ def unpack(value: Any, *, _field_names: dict[str, str] | None = None) -> Any:
     if name == "Usage":
         _normalize_usage_cache_writes(body)
     return body
+
+
+def preflight_application_execution_context(value: Any) -> None:
+    """Bound context JSON strings and containers before creating decoded values."""
+    if not value.HasField("data"):
+        return
+    fields = value.data.fields
+    remaining = 16_384 - len(b'{"data":{}}') - max(0, len(fields) - 1)
+    for key, field in fields.items():
+        if len(key) + 3 > remaining:
+            raise ValueError("tool execution context exceeds 16384 serialized bytes")
+        remaining -= len(key.encode("utf-8")) + 3
+        remaining = _preflight_context_json(field.json, remaining)
+    if remaining < 0:
+        raise ValueError("tool execution context exceeds 16384 serialized bytes")
+
+
+def _preflight_context_json(input_bytes: bytes, remaining: int) -> int:
+    depth, quoted, index = 2, False, 0
+    while index < len(input_bytes):
+        character = input_bytes[index]
+        index += 1
+        amount = 1
+        if quoted:
+            if character == 34:
+                quoted, amount = False, 0
+            elif character == 92 and index < len(input_bytes):
+                escaped = input_bytes[index]
+                index += 1
+                if escaped == 117:
+                    index += 4
+                    amount = 1
+                elif escaped != 47:
+                    amount = 2
+        elif character in (32, 10, 13, 9):
+            amount = 0
+        elif character == 34:
+            quoted, amount = True, 2
+        elif character in (123, 91):
+            depth += 1
+            if depth > 64:
+                raise ValueError("tool execution context exceeds 64 container levels")
+        elif character in (125, 93):
+            depth -= 1
+        elif character == 45 or 48 <= character <= 57:
+            while index < len(input_bytes) and input_bytes[index] in b"0123456789.eE+-":
+                index += 1
+        remaining -= amount
+        if remaining < 0:
+            raise ValueError("tool execution context exceeds 16384 serialized bytes")
+    return remaining

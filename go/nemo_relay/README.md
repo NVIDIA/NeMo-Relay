@@ -78,6 +78,42 @@ native thread, so blocking I/O and other long-running callback work occupy that
 thread and can reduce middleware throughput. The Go binding does not provide
 completion-based middleware registration.
 
+## Application Execution Context
+
+Use `WithApplicationExecutionContext` on a managed tool call to give execution
+middleware application-owned information separately from the tool's arguments:
+
+```go
+result, err := nemo.ToolCallExecute(
+    "write_file",
+    json.RawMessage(`{"path":"notes.txt","content":"hello"}`),
+    executeWrite,
+    nemo.WithApplicationExecutionContext(&nemo.ApplicationExecutionContext{
+        Data: map[string]json.RawMessage{
+            "host_approval": json.RawMessage(`{"approval_id":"review-123","source":"application"}`),
+        },
+    }),
+)
+```
+
+Here `executeWrite` is the application's tool callback. Middleware reads the
+separate object from `ctx.ExecutionContext`; the business callback receives
+only the tool arguments. Context is not automatically added to lifecycle
+events or inherited by nested calls. Application assertions are not proof of
+approval: middleware must decide which application sources and claims it trusts.
+
+`ApplicationExecutionContext` reserves outer fields for the Relay API. Application
+fields belong in its `Data` map; middleware owns their schema, interpretation and
+trust checks. Relay does not interpret approval claims or other application data.
+`WithToolExecutionContext(json.RawMessage(...))` remains available
+for raw JSON producers and follows the same runtime schema validation.
+
+The option snapshots its input and can be reused. A nil value omits context;
+`{}` supplies an empty context and `{"data":{}}` explicitly supplies empty application data. Unknown outer fields and non-object `data` are rejected. Relay rejects invalid or non-object JSON, objects
+over 16 KiB of serialized JSON, and nesting beyond 64 container levels before
+middleware or execution. Manual `ToolCall` and `ToolCallEnd` reject this option.
+Build the matching C FFI library when updating this source-first binding.
+
 ## LLM Codecs and Child Scope Stacks
 
 Use `WithLLMCodec` with an owned built-in codec handle or a custom `CodecFunc`.

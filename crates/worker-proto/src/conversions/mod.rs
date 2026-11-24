@@ -152,6 +152,56 @@ impl WireValue<pb::JsonObject> for Json {
     }
 }
 
+impl WireValue<pb::ApplicationExecutionContext>
+    for nemo_relay_types::api::tool::ApplicationExecutionContext
+{
+    fn to_wire(self) -> Result<pb::ApplicationExecutionContext> {
+        let context = self
+            .into_validated()
+            .map_err(|_| ConversionError("invalid application execution context".into()))?;
+        let data = context
+            .data
+            .map(|fields| Json::Object(fields.into_iter().collect()).to_wire())
+            .transpose()?;
+        Ok(pb::ApplicationExecutionContext { data })
+    }
+
+    fn from_wire(value: pb::ApplicationExecutionContext) -> Result<Self> {
+        let mut remaining_bytes = 16_384_usize;
+        if let Some(data) = &value.data {
+            let overhead = br#"{"data":{}}"#
+                .len()
+                .saturating_add(data.fields.len().saturating_sub(1));
+            remaining_bytes = remaining_bytes.checked_sub(overhead).ok_or_else(|| {
+                ConversionError("tool execution context exceeds 16384 serialized bytes".into())
+            })?;
+            for (key, value) in &data.fields {
+                remaining_bytes = remaining_bytes
+                    .checked_sub(key.len().saturating_add(3))
+                    .ok_or_else(|| {
+                        ConversionError(
+                            "tool execution context exceeds 16384 serialized bytes".into(),
+                        )
+                    })?;
+                nemo_relay_types::api::tool::application_context::preflight_context_json(
+                    &value.json,
+                    2,
+                    &mut remaining_bytes,
+                )
+                .map_err(|error| ConversionError(error.to_string()))?;
+            }
+        }
+        let data = value
+            .data
+            .map(Json::from_wire)
+            .transpose()
+            .map_err(|_| ConversionError("invalid application execution context".into()))?;
+        let envelope = Json::Object(data.into_iter().map(|data| ("data".into(), data)).collect());
+        Self::try_from(envelope)
+            .map_err(|_| ConversionError("invalid application execution context".into()))
+    }
+}
+
 impl WireValue<pb::JsonArray> for Json {
     fn to_wire(self) -> Result<pb::JsonArray> {
         let Json::Array(values) = self else {

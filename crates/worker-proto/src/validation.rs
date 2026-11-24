@@ -45,6 +45,9 @@ fn validate_json(message: &DynamicMessage) -> Result<(), String> {
         nemo_relay_types::api::llm::ApplicationExecutionContext::validate_json_input(raw)
             .map_err(|error| error.to_string())?;
     }
+    if name == "nvidia.nemo.relay.worker.v1.ApplicationExecutionContext" {
+        preflight_application_context(message)?;
+    }
     if name == "google.protobuf.Timestamp" || name == "google.protobuf.Duration" {
         let seconds = message
             .get_field_by_name("seconds")
@@ -104,4 +107,46 @@ fn validate_value(value: &Value) -> Result<(), String> {
         }
         _ => Ok(()),
     }
+}
+
+fn preflight_application_context(message: &DynamicMessage) -> Result<(), String> {
+    let Some(data) = message.get_field_by_name("data") else {
+        return Ok(());
+    };
+    let Value::Message(data) = data.as_ref() else {
+        return Ok(());
+    };
+    let Some(fields) = data.get_field_by_name("fields") else {
+        return Ok(());
+    };
+    let Value::Map(fields) = fields.as_ref() else {
+        return Ok(());
+    };
+    let mut remaining_bytes = 16_384_usize
+        .checked_sub(
+            br#"{"data":{}}"#
+                .len()
+                .saturating_add(fields.len().saturating_sub(1)),
+        )
+        .ok_or("tool execution context exceeds 16384 serialized bytes")?;
+    for (key, value) in fields {
+        let prost_reflect::MapKey::String(key) = key else {
+            continue;
+        };
+        remaining_bytes = remaining_bytes
+            .checked_sub(key.len().saturating_add(3))
+            .ok_or("tool execution context exceeds 16384 serialized bytes")?;
+        if let Value::Message(value) = value
+            && let Some(bytes) = value.get_field_by_name("json")
+            && let Value::Bytes(bytes) = bytes.as_ref()
+        {
+            nemo_relay_types::api::tool::application_context::preflight_context_json(
+                bytes,
+                2,
+                &mut remaining_bytes,
+            )
+            .map_err(|error| error.to_string())?;
+        }
+    }
+    Ok(())
 }

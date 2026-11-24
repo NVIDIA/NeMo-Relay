@@ -2,6 +2,57 @@
 // SPDX-License-Identifier: Apache-2.0
 
 use super::*;
+use serde_json::json;
+
+#[test]
+fn tool_context_decoding_preserves_optional_objects_independently_of_args() {
+    // Maximum host-admitted nesting must survive the actual worker wire decoder.
+    let mut nested_arrays = Json::Null;
+    let mut nested_objects = Json::Null;
+    for _ in 2..64 {
+        nested_arrays = json!([nested_arrays]);
+        nested_objects = json!({"nested": nested_objects});
+    }
+    for context in [
+        None,
+        Some(json!({})),
+        Some(json!({"data": {"operation": {"attempt": 1}, "integer": u64::MAX}})),
+        Some(json!({"data": {"nested": nested_arrays}})),
+        Some(json!({"data": {"nested": nested_objects}})),
+    ] {
+        let invocation = wire::InvokeRequest {
+            invocation_id: "invocation".into(),
+            registration_name: "tool".into(),
+            invocation: Some(wire::invoke_request::Invocation::ToolExecutionIntercept(
+                wire::ToolExecutionInvocation {
+                    tool_name: "lookup".into(),
+                    args: Some(
+                        encode_wire::<_, wire::JsonValue>(&json!({"query": "test"})).unwrap(),
+                    ),
+                    tool_call_id: Some("call".into()),
+                    continuation_id: "next".into(),
+                    execution_context: context.clone().map(|value| {
+                        encode_wire(
+                            &nemo_relay_types::api::tool::ApplicationExecutionContext::try_from(
+                                value,
+                            )
+                            .unwrap(),
+                        )
+                        .unwrap()
+                    }),
+                },
+            )),
+            ..Default::default()
+        };
+        let invocation = CallbackInvocation::try_from(invocation).unwrap();
+        let payload = tool_payload(invocation.payload).unwrap();
+        assert_eq!(payload.value, json!({"query": "test"}));
+        assert_eq!(
+            payload.execution_context.map(|value| value.to_json()),
+            context
+        );
+    }
+}
 
 #[test]
 fn endpoint_announcement_creates_parents_and_reports_conflicting_paths() {

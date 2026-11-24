@@ -1034,6 +1034,7 @@ describe('LLM guardrails', () => {
     const modulePath = path.join(nodeDir, 'dist', 'index.js');
     const script = `
       import { createRequire } from 'node:module';
+      import { setImmediate, setTimeout } from 'node:timers/promises';
       const require = createRequire(${JSON.stringify(path.join(nodeDir, 'package.json'))});
       const lib = require(${JSON.stringify(modulePath)});
       const codec = new lib.OpenAIChatCodec();
@@ -1053,7 +1054,7 @@ describe('LLM guardrails', () => {
           content: { model: 'test-model', messages: [] },
         },
         async function* () {
-          await new Promise((resolve) => setTimeout(resolve, 25));
+          await setTimeout(25);
         },
         null,
         () => ({ model: 'test-model', choices: [] }),
@@ -1069,27 +1070,27 @@ describe('LLM guardrails', () => {
       const weak = new WeakRef(stream);
       stream = null;
       let collected = false;
-      for (let index = 0; index < 100; index += 1) {
+      const collectionDeadline = performance.now() + 10_000;
+      while (!collected && performance.now() < collectionDeadline) {
+        // A WeakRef read keeps its referent alive until the end of the turn.
+        await setTimeout(10);
         global.gc();
-        await new Promise((resolve) => setImmediate(resolve));
-        if (weak.deref() === undefined) {
-          collected = true;
-          break;
-        }
-        await new Promise((resolve) => setImmediate(resolve));
+        await setImmediate();
+        collected = weak.deref() === undefined;
       }
       if (!collected) {
         throw new Error('unfinished custom-codec stream was not garbage collected');
       }
-      for (let index = 0; index < 100 && !ended; index += 1) {
-        global.gc();
-        await new Promise((resolve) => setImmediate(resolve));
+      // Native cleanup and subscriber delivery can outlive collection of the handle.
+      const cleanupDeadline = performance.now() + 10_000;
+      while (!ended && performance.now() < cleanupDeadline) {
+        await setTimeout(10);
       }
       if (!ended) {
         throw new Error('early-dropped custom-codec stream did not finish cleanup');
       }
       lib.deregisterSubscriber('early_drop_custom_codec_stream_events');
-      await new Promise((resolve) => setImmediate(resolve));
+      await setImmediate();
     `;
     execFileSync(process.execPath, ['--expose-gc', '--input-type=module', '--eval', script], {
       stdio: 'inherit',

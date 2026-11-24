@@ -478,11 +478,19 @@ describe('Tool execute', () => {
     }
   });
 
-  it('generated execute declarations expose an additive trailing toolCallId', () => {
+  it('generated execute declarations preserve toolCallId and append executionContext', () => {
     const declarations = readFileSync(new URL('../binding.d.ts', import.meta.url), 'utf8');
 
     assert.match(declarations, /toolCallExecute<[^\n]*metadata\?: TMetadata \| null,[^\n]*toolCallId\?: string/);
     assert.match(declarations, /toolCallExecuteAsync<[^\n]*metadata\?: TMetadata \| null,[^\n]*toolCallId\?: string/);
+    assert.match(
+      declarations,
+      /toolCallExecute<[^\n]*executionOptions\?:[^\n]*executionContext\?: ApplicationExecutionContext \| null\)/,
+    );
+    assert.match(
+      declarations,
+      /toolCallExecuteAsync<[^\n]*executionOptions\?:[^\n]*executionContext\?: ApplicationExecutionContext \| null\)/,
+    );
   });
 
   it('generated execution-intercept declarations use context and next parameters', () => {
@@ -490,7 +498,7 @@ describe('Tool execute', () => {
 
     assert.match(
       declarations,
-      /export interface ToolExecutionContext \{[\s\S]*?toolName: string[\s\S]*?args: Json[\s\S]*?toolCallId: string \| null/,
+      /export interface ToolExecutionContext \{[\s\S]*?toolName: string[\s\S]*?args: Json[\s\S]*?toolCallId: string \| null[\s\S]*?executionContext: ApplicationExecutionContext \| null/,
     );
     assert.match(
       declarations,
@@ -505,10 +513,7 @@ describe('Tool execute', () => {
       /export type ToolExecutionInterceptOutcomeCompatible<T>[\s\S]*?K extends 'pendingMarks'[\s\S]*?PendingMarksProperty<T\[K\]>/,
     );
     assert.doesNotMatch(declarations, /import\('\.\/plugin'\)\.PendingMarkSpec/);
-    assert.match(
-      declarations,
-      /The context\n \* exposes `toolName`, `args`, and `toolCallId`; `toolCallId` is `null` when/,
-    );
+    assert.match(declarations, /The context\n \* exposes `toolName`, `args`, `toolCallId`, and `executionContext`/);
   });
 
   it('async execute surfaces plain string rejections', async () => {
@@ -900,6 +905,323 @@ describe('Tool intercepts', () => {
     assert.equal(seen.toolName, 'ctx_tool');
     assert.equal(seen.toolCallId, 'node-call-abc');
     assert.deepEqual(seen.args, { x: 10 });
+  });
+
+  for (const execute of [toolCallExecute, toolCallExecuteAsync]) {
+    it(`${execute.name} isolates host execution context from arguments, nested calls, and events`, async () => {
+      const seen = [];
+      const events = [];
+      const host = { data: { review: { state: 'host-only-sentinel' } } };
+      registerSubscriber('node_execution_context_events', (event) => events.push(event));
+      registerToolExecutionIntercept('node_execution_context_outer', 1, async (context, next) => {
+        if (context.toolName === 'execution_context_parent') {
+          assert.deepEqual(context.executionContext, { data: { review: { state: 'host-only-sentinel' } } });
+          context.executionContext.data.review.state = 'modified';
+          await toolCallExecuteAsync('execution_context_nested', {}, (args) => ({ result: args }));
+        }
+        const downstream = await next(context.args);
+        return { result: downstream.result };
+      });
+      registerToolExecutionIntercept('node_execution_context_inner', 2, async (context, next) => {
+        seen.push({ name: context.toolName, context: context.executionContext });
+        const downstream = await next({ ...context.args, rewritten: true });
+        return { result: downstream.result };
+      });
+      try {
+        const pending = execute(
+          'execution_context_parent',
+          { value: 1 },
+          (args) => ({ result: args }),
+          null,
+          null,
+          null,
+          null,
+          null,
+          null,
+          host,
+        );
+        host.data.review.state = 'changed-by-caller';
+        assert.deepEqual(await pending, { result: { value: 1, rewritten: true } });
+        await execute('execution_context_omitted', {}, (args) => ({ result: args }));
+        await flushSubscribers();
+        assert.deepEqual(seen, [
+          { name: 'execution_context_nested', context: null },
+          { name: 'execution_context_parent', context: { data: { review: { state: 'host-only-sentinel' } } } },
+          { name: 'execution_context_omitted', context: null },
+        ]);
+        assert.ok(!JSON.stringify(events).includes('host-only-sentinel'));
+      } finally {
+        deregisterToolExecutionIntercept('node_execution_context_outer');
+        deregisterToolExecutionIntercept('node_execution_context_inner');
+        deregisterSubscriber('node_execution_context_events');
+      }
+    });
+  }
+
+  it('preserves omitted context, empty context and explicitly empty data', async () => {
+    const seen = [];
+    registerToolExecutionIntercept('node_empty_data_context', 1, async (context, next) => {
+      seen.push(context.executionContext);
+      const downstream = await next(context.args);
+      return { result: downstream.result };
+    });
+    try {
+      for (const supplied of [undefined, null, {}, { data: {} }]) {
+        await toolCallExecuteAsync(
+          'empty_context',
+          {},
+          (args) => ({ result: args }),
+          null,
+          null,
+          null,
+          null,
+          null,
+          null,
+          supplied,
+        );
+      }
+      assert.deepEqual(seen, [null, null, {}, { data: {} }]);
+    } finally {
+      deregisterToolExecutionIntercept('node_empty_data_context');
+    }
+  });
+
+  it('preserves opaque prototype-like, NUL and Unicode execution-context keys as own data', async () => {
+    const supplied = JSON.parse(
+      '{"__proto__":{"injected":true},"constructor":{"label":"opaque"},"nested":[{"__proto__":{"nested":true},"nul\\u0000key":1,"雪":2}]}',
+    );
+    let observed;
+    registerToolExecutionIntercept('node_context_opaque_keys', 1, async (context, next) => {
+      observed = context.executionContext;
+      const downstream = await next(context.args);
+      return { result: downstream.result };
+    });
+    try {
+      await toolCallExecuteAsync('opaque_keys', {}, (args) => ({ result: args }), null, null, null, null, null, null, {
+        data: supplied,
+      });
+      assert.deepEqual(observed, { data: supplied });
+      observed = observed.data;
+      assert.equal(Object.hasOwn(observed, '__proto__'), true);
+      assert.equal(Object.hasOwn(observed, 'constructor'), true);
+      assert.equal(Object.getPrototypeOf(observed), Object.prototype);
+      assert.equal(Object.getPrototypeOf(observed.nested), Array.prototype);
+      assert.equal(Object.getPrototypeOf(observed.nested[0]), Object.prototype);
+      assert.equal(Object.hasOwn(observed.nested[0], '__proto__'), true);
+      assert.equal(observed.nested[0]['nul\u0000key'], 1);
+      assert.equal(observed.nested[0]['雪'], 2);
+      assert.equal({}.injected, undefined);
+      assert.equal({}.nested, undefined);
+    } finally {
+      deregisterToolExecutionIntercept('node_context_opaque_keys');
+    }
+  });
+
+  it('does not promote inherited, hidden or symbol claims into host execution context', async () => {
+    const context = Object.create({ inheritedApproval: true });
+    context.ownValue = 'retained';
+    context.nested = Object.assign(Object.create({ nestedApproval: true }), { value: 1 });
+    Object.defineProperty(context, 'hiddenApproval', { value: true, enumerable: false });
+    context[Symbol('private')] = true;
+    const sparse = new Array(1);
+    Object.setPrototypeOf(sparse, Object.create(Array.prototype, { 0: { value: true, enumerable: true } }));
+    context.array = sparse;
+    let observed;
+    registerToolExecutionIntercept('node_context_own_input', 1, async (call, next) => {
+      observed = call.executionContext;
+      const downstream = await next(call.args);
+      return { result: downstream.result };
+    });
+    try {
+      await toolCallExecuteAsync('own_input', {}, (args) => ({ result: args }), null, null, null, null, null, null, {
+        data: context,
+      });
+      assert.deepEqual(observed, { data: { ownValue: 'retained', nested: { value: 1 }, array: [null] } });
+      observed = observed.data;
+      assert.equal(observed.inheritedApproval, undefined);
+      assert.equal(observed.nested.nestedApproval, undefined);
+      assert.equal(Object.getPrototypeOf(observed), Object.prototype);
+    } finally {
+      deregisterToolExecutionIntercept('node_context_own_input');
+    }
+  });
+
+  it('rejects invalid host execution context before intercepts or execution', async () => {
+    let calls = 0;
+    registerToolExecutionIntercept('node_invalid_execution_context', 1, async (context, next) => {
+      calls++;
+      const downstream = await next(context.args);
+      return { result: downstream.result };
+    });
+    try {
+      const cyclic = {};
+      cyclic.self = cyclic;
+      for (const context of [
+        [],
+        'text',
+        1,
+        true,
+        { host_approval: {} },
+        { unexpected: true },
+        { data: null },
+        { data: [] },
+        { data: 'text' },
+        { data: true },
+        { data: { value: 'x'.repeat(16384) } },
+        { data: { sparse: new Array(1_000_001) } },
+        { data: cyclic },
+      ]) {
+        await assert.rejects(async () =>
+          toolCallExecuteAsync(
+            'invalid_context',
+            {},
+            () => {
+              calls++;
+              return { result: null };
+            },
+            null,
+            null,
+            null,
+            null,
+            null,
+            null,
+            context,
+          ),
+        );
+      }
+      assert.equal(calls, 0);
+    } finally {
+      deregisterToolExecutionIntercept('node_invalid_execution_context');
+    }
+  });
+
+  it('context resource budget enforces byte and depth boundaries before callbacks', async () => {
+    const callbackCalls = [];
+    const execute = (supplied, argumentsValue = {}) =>
+      toolCallExecuteAsync(
+        'context-budget',
+        argumentsValue,
+        (argumentsValue) => {
+          callbackCalls.push('tool');
+          return toolResult(argumentsValue);
+        },
+        null,
+        null,
+        null,
+        null,
+        null,
+        null,
+        supplied,
+      );
+    registerToolExecutionIntercept('context-resource-budget-boundary', 1, async (context, next) => {
+      callbackCalls.push('intercept');
+      const downstream = await next(context.args);
+      return { result: downstream.result };
+    });
+    try {
+      const overheadBytes = Buffer.byteLength(JSON.stringify({ data: { value: '' } }), 'utf8');
+      const boundary = { data: { value: 'x'.repeat(16_384 - overheadBytes) } };
+      assert.equal(Buffer.byteLength(JSON.stringify(boundary), 'utf8'), 16_384);
+      await execute(boundary);
+      assert.deepEqual(callbackCalls, ['intercept', 'tool']);
+      let value = null;
+      for (let index = 0; index < 62; index++) value = [value];
+      await execute({ data: { value } });
+      callbackCalls.length = 0;
+      for (const supplied of [
+        { data: { value: boundary.data.value + 'x' } },
+        { data: { value: '\0'.repeat(3_000) } },
+        { data: { value: [value] } },
+      ]) {
+        await assert.rejects(async () => execute(supplied), /16384|nesting depth/);
+        assert.deepEqual(callbackCalls, []);
+      }
+      const ordinaryArguments = { value: 'x'.repeat(20_000) };
+      assert.deepEqual((await execute(null, ordinaryArguments)).result, ordinaryArguments);
+      assert.deepEqual(callbackCalls, ['intercept', 'tool']);
+    } finally {
+      deregisterToolExecutionIntercept('context-resource-budget-boundary');
+    }
+  });
+
+  it('context resource budget stops repeated string getters before callbacks', async () => {
+    let getterCalls = 0;
+    let callbackCalls = 0;
+    const chunks = new Array(10_000);
+    const sharedText = 'x'.repeat(4_096);
+    for (let index = 0; index < chunks.length; index++) {
+      Object.defineProperty(chunks, index, {
+        enumerable: true,
+        get() {
+          getterCalls++;
+          return sharedText;
+        },
+      });
+    }
+    registerToolExecutionIntercept('context-resource-budget-strings', 1, async (context, next) => {
+      callbackCalls++;
+      const downstream = await next(context.args);
+      return { result: downstream.result };
+    });
+    try {
+      await assert.rejects(
+        async () =>
+          toolCallExecuteAsync(
+            'context-budget',
+            {},
+            () => {
+              callbackCalls++;
+              return toolResult(null);
+            },
+            null,
+            null,
+            null,
+            null,
+            null,
+            null,
+            { data: { chunks } },
+          ),
+        /16384/,
+      );
+      assert.equal(getterCalls, 4);
+      assert.equal(callbackCalls, 0);
+    } finally {
+      deregisterToolExecutionIntercept('context-resource-budget-strings');
+    }
+  });
+
+  it('context resource budget ignores keys deleted by an earlier getter', async () => {
+    const removedKey = 'x'.repeat(20_000);
+    const supplied = {
+      get retained() {
+        delete this[removedKey];
+        return 1;
+      },
+      [removedKey]: true,
+    };
+    let observed;
+    registerToolExecutionIntercept('context-resource-budget-removed-key', 1, async (context, next) => {
+      observed = context.executionContext;
+      const downstream = await next(context.args);
+      return { result: downstream.result };
+    });
+    try {
+      await toolCallExecuteAsync(
+        'context-budget',
+        {},
+        (argumentsValue) => toolResult(argumentsValue),
+        null,
+        null,
+        null,
+        null,
+        null,
+        null,
+        { data: supplied },
+      );
+      assert.deepEqual(observed, { data: { retained: 1 } });
+    } finally {
+      deregisterToolExecutionIntercept('context-resource-budget-removed-key');
+    }
   });
 
   it('execution intercept sees null toolCallId when absent', async () => {
@@ -1753,6 +2075,52 @@ describe('Tool intercepts', () => {
       );
     } finally {
       deregisterToolConditionalExecutionGuardrail('node_tool_cond_allow');
+    }
+  });
+});
+
+describe('execution context Unicode integrity', () => {
+  it('rejects unpaired surrogates before callbacks and preserves valid context strings', async () => {
+    const observed = [];
+    const calls = [];
+    registerToolExecutionIntercept('context-utf16-integrity', 1, async (context, next) => {
+      calls.push('intercept');
+      observed.push(context.executionContext);
+      const result = await next(context.args);
+      return { result: result.result };
+    });
+    const execute = (context) =>
+      toolCallExecuteAsync(
+        'context-utf16-integrity',
+        {},
+        () => {
+          calls.push('tool');
+          return { result: true };
+        },
+        null,
+        null,
+        null,
+        null,
+        null,
+        null,
+        context,
+      );
+    try {
+      for (const context of [
+        { data: { '\uD800': false, '\uFFFD': true } },
+        { data: { '\uDC00': false } },
+        { data: { value: '\uD800' } },
+        { data: { value: '\uDC00' } },
+      ]) {
+        await assert.rejects(async () => execute(context), /valid UTF-16/);
+        assert.deepEqual(calls, []);
+      }
+      const valid = { data: { '\uFFFD': true, '\uD83D\uDE00': '雪\u0000\uD83D\uDE00' } };
+      assert.equal((await execute(valid)).result, true);
+      assert.deepEqual(observed, [valid]);
+      assert.deepEqual(calls, ['intercept', 'tool']);
+    } finally {
+      deregisterToolExecutionIntercept('context-utf16-integrity');
     }
   });
 });
