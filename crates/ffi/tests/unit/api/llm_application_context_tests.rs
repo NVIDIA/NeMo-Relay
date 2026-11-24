@@ -180,7 +180,31 @@ unsafe fn execute(
     status
 }
 
-unsafe fn register_capture(streaming: bool, name: &CStr, probe: &Probe) {
+struct CaptureRegistration<'a> {
+    streaming: bool,
+    name: CString,
+    _probe: &'a Probe,
+}
+
+impl Drop for CaptureRegistration<'_> {
+    fn drop(&mut self) {
+        // Cleanup must not panic while a failed assertion unwinds.
+        unsafe {
+            if self.streaming {
+                let _ =
+                    api::nemo_relay_deregister_llm_stream_execution_intercept(self.name.as_ptr());
+            } else {
+                let _ = api::nemo_relay_deregister_llm_execution_intercept(self.name.as_ptr());
+            }
+        }
+    }
+}
+
+unsafe fn register_capture<'a>(
+    streaming: bool,
+    name: &CStr,
+    probe: &'a Probe,
+) -> CaptureRegistration<'a> {
     let status = if streaming {
         unsafe {
             api::nemo_relay_register_llm_stream_execution_intercept(
@@ -204,15 +228,11 @@ unsafe fn register_capture(streaming: bool, name: &CStr, probe: &Probe) {
         }
     };
     assert_status!(status, NemoRelayStatus::Ok);
-}
-
-unsafe fn deregister_capture(streaming: bool, name: &CStr) {
-    let status = if streaming {
-        unsafe { api::nemo_relay_deregister_llm_stream_execution_intercept(name.as_ptr()) }
-    } else {
-        unsafe { api::nemo_relay_deregister_llm_execution_intercept(name.as_ptr()) }
-    };
-    assert_status!(status, NemoRelayStatus::Ok);
+    CaptureRegistration {
+        streaming,
+        name: name.to_owned(),
+        _probe: probe,
+    }
 }
 
 #[test]
@@ -271,7 +291,7 @@ fn ffi_llm_context_rejection_releases_resources_and_recovers() {
         for streaming in [false, true] {
             let intercept = Probe::default();
             let name = cstring("context-admission");
-            register_capture(streaming, &name, &intercept);
+            let _registration = register_capture(streaming, &name, &intercept);
             for (input, expected_status, message) in &invalid {
                 for skip in [0, api::NEMO_RELAY_SKIP_EXECUTION_INTERCEPTS] {
                     let resources = Resources::default();
@@ -305,7 +325,6 @@ fn ffi_llm_context_rejection_releases_resources_and_recovers() {
                     );
                 }
             }
-            deregister_capture(streaming, &name);
         }
         nemo_relay_scope_stack_free(stack);
     }
@@ -340,7 +359,7 @@ fn ffi_llm_context_preserves_shapes_unicode_and_exact_boundaries() {
         for streaming in [false, true] {
             let intercept = Probe::default();
             let name = cstring("context-roundtrip");
-            register_capture(streaming, &name, &intercept);
+            let _registration = register_capture(streaming, &name, &intercept);
             for input in inputs {
                 let expected = input.map(|text| serde_json::from_str::<Json>(text).unwrap());
                 let input = input.map(cstring);
@@ -358,7 +377,29 @@ fn ffi_llm_context_preserves_shapes_unicode_and_exact_boundaries() {
                     usize::from(streaming)
                 );
             }
-            deregister_capture(streaming, &name);
+        }
+        nemo_relay_scope_stack_free(stack);
+    }
+}
+
+#[test]
+fn ffi_llm_context_registration_cleans_up_on_unwind() {
+    let _lock = TEST_MUTEX.lock().unwrap_or_else(|e| e.into_inner());
+    reset_globals();
+    unsafe {
+        let stack = fresh_scope_stack();
+        for streaming in [false, true] {
+            let intercept = Probe::default();
+            let name = cstring("context-unwind");
+            let result = std::panic::catch_unwind(|| {
+                let _registration = register_capture(streaming, &name, &intercept);
+                panic!("simulate a failed assertion");
+            });
+            assert!(result.is_err());
+            let resources = Resources::default();
+            assert_status!(execute(streaming, None, 0, &resources), NemoRelayStatus::Ok);
+            assert_eq!(intercept.calls.load(Ordering::SeqCst), 0);
+            assert_eq!(resources.provider.calls.load(Ordering::SeqCst), 1);
         }
         nemo_relay_scope_stack_free(stack);
     }
