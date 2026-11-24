@@ -16,8 +16,15 @@ typedef struct NemoRelayLlmSanitizeRequestContext { uint32_t codec_kind; const c
 typedef struct NemoRelayLlmSanitizeResponseContext { uint32_t codec_kind; const char* codec_id; const FfiLlmSanitizeResponseCodec* codec; } NemoRelayLlmSanitizeResponseContext;
 typedef NemoRelayLlmSanitizeRequestContext NemoRelayLlmRequestContext;
 typedef NemoRelayLlmSanitizeResponseContext NemoRelayLlmResponseContext;
-typedef struct NemoRelayLlmExecutionContext { NemoRelayLlmRequestContext request_codec; const NemoRelayLlmResponseContext* response_codec; } NemoRelayLlmExecutionContext;
+typedef struct FfiLlmOptimizationRecorder FfiLlmOptimizationRecorder;
+typedef struct NemoRelayLlmExecutionContext { NemoRelayLlmRequestContext request_codec; const NemoRelayLlmResponseContext* response_codec; const FfiLlmOptimizationRecorder* optimization_recorder; } NemoRelayLlmExecutionContext;
 
+typedef struct FfiLlmStreamSource FfiLlmStreamSource;
+typedef FfiLlmStreamSource* (*NemoRelayLlmStreamExecCb)(void*, const char*);
+typedef FfiLlmStreamSource* (*NemoRelayLlmStreamExecNextFn)(const char*, void*);
+typedef FfiLlmStreamSource* (*NemoRelayLlmStreamExecInterceptCb)(void*, const char*, const char*, NemoRelayLlmExecutionContext, NemoRelayLlmStreamExecNextFn, void*);
+extern FfiLlmStreamSource* goLlmStreamExecTrampoline(void*, const char*);
+extern FfiLlmStreamSource* goLlmStreamInterceptTrampoline(void*, const char*, const char*, NemoRelayLlmExecutionContext, NemoRelayLlmStreamExecNextFn, void*);
 typedef void (*NemoRelayFreeFn)(void* user_data);
 typedef char* (*NemoRelayPluginValidateCb)(void* user_data, const char* plugin_config_json);
 typedef int32_t (*NemoRelayPluginRegisterCb)(void* user_data, const char* plugin_config_json, FfiPluginContext* ctx);
@@ -61,7 +68,7 @@ extern int32_t nemo_relay_plugin_context_register_llm_conditional_execution_guar
 extern int32_t nemo_relay_plugin_context_register_llm_request_intercept(FfiPluginContext* ctx, const char* name, int32_t priority, _Bool break_chain, NemoRelayLlmRequestInterceptCb cb, void* user_data, NemoRelayFreeFn free_fn);
 extern int32_t nemo_relay_plugin_context_register_tool_request_intercept(FfiPluginContext* ctx, const char* name, int32_t priority, _Bool break_chain, NemoRelayToolSanitizeFn cb, void* user_data, NemoRelayFreeFn free_fn);
 extern int32_t nemo_relay_plugin_context_register_llm_execution_intercept(FfiPluginContext* ctx, const char* name, int32_t priority, NemoRelayLlmExecInterceptCb cb, void* user_data, NemoRelayFreeFn free_fn);
-extern int32_t nemo_relay_plugin_context_register_llm_stream_execution_intercept(FfiPluginContext* ctx, const char* name, int32_t priority, NemoRelayLlmExecInterceptCb cb, void* user_data, NemoRelayFreeFn free_fn);
+extern int32_t nemo_relay_plugin_context_register_llm_stream_execution_intercept(FfiPluginContext* ctx, const char* name, int32_t priority, NemoRelayLlmExecInterceptCb cb, NemoRelayLlmStreamExecInterceptCb, void* user_data, NemoRelayFreeFn free_fn);
 extern int32_t nemo_relay_plugin_context_register_tool_execution_intercept(FfiPluginContext* ctx, const char* name, int32_t priority, NemoRelayToolExecInterceptCb cb, void* user_data, NemoRelayFreeFn free_fn);
 
 extern char* goPluginValidateTrampoline(void*, const char*);
@@ -881,19 +888,24 @@ func (ctx *PluginContext) RegisterLlmExecutionIntercept(name string, priority in
 }
 
 // RegisterLlmStreamExecutionIntercept registers a streaming LLM execution intercept for this component.
-func (ctx *PluginContext) RegisterLlmStreamExecutionIntercept(name string, priority int32, fn LLMExecutionInterceptFunc) error {
+func (ctx *PluginContext) RegisterLlmStreamExecutionIntercept(name string, priority int32, fn LLMStreamExecutionInterceptFunc) error {
 	if ctx == nil || ctx.ptr == nil {
 		return errors.New(errPluginContextClosed)
 	}
+	if fn == nil {
+		return errors.New("stream interceptor is nil")
+	}
+	streamFn := fn
 	cName := C.CString(name)
 	defer C.free(unsafe.Pointer(cName))
-	userData := registerClosure(fn)
+	userData := registerClosure(streamFn)
 	return callStatus(func() C.int32_t {
 		return C.nemo_relay_plugin_context_register_llm_stream_execution_intercept(
 			ctx.ptr,
 			cName,
 			C.int32_t(priority),
-			(C.NemoRelayLlmExecInterceptCb)(C.goLlmExecInterceptTrampoline),
+			nil,
+			(C.NemoRelayLlmStreamExecInterceptCb)(C.goLlmStreamInterceptTrampoline),
 			userData,
 			(C.NemoRelayFreeFn)(C.goFreeTrampoline),
 		)

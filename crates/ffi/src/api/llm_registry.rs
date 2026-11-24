@@ -307,16 +307,37 @@ pub unsafe extern "C" fn nemo_relay_deregister_llm_execution_intercept(
 pub unsafe extern "C" fn nemo_relay_register_llm_stream_execution_intercept(
     name: *const c_char,
     priority: i32,
-    exec_cb: NemoRelayLlmExecInterceptCb,
+    exec_cb: crate::callable::NemoRelayOptionalLlmExecInterceptCb,
+    stream_cb: crate::callable::NemoRelayOptionalLlmStreamExecInterceptCb,
     exec_user_data: *mut libc::c_void,
     exec_free: NemoRelayFreeFn,
 ) -> NemoRelayStatus {
     clear_last_error();
+    let data_owner = crate::callable::UserData::new(exec_user_data, exec_free);
     let name = match c_str_to_string(name) {
         Ok(s) => s,
         Err(status) => return status,
     };
-    let exec = wrap_llm_stream_exec_intercept_fn(exec_cb, exec_user_data, exec_free);
+    let (exec_user_data, exec_free) = data_owner.into_parts();
+    let exec = match stream_cb {
+        Some(callback) => crate::callable::wrap_llm_stream_source_intercept_fn(
+            callback,
+            exec_user_data,
+            exec_free,
+        ),
+        None => match exec_cb {
+            Some(callback) => {
+                wrap_llm_stream_exec_intercept_fn(callback, exec_user_data, exec_free)
+            }
+            None => {
+                if let Some(free) = exec_free {
+                    unsafe { free(exec_user_data) };
+                }
+                crate::error::set_last_error("a streaming interceptor callback is required");
+                return NemoRelayStatus::InvalidArg;
+            }
+        },
+    };
     match core_registry_api::register_llm_stream_execution_intercept(&name, priority, exec) {
         Ok(()) => NemoRelayStatus::Ok,
         Err(e) => status_from_error(&e),

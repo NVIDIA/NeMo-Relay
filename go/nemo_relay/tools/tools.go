@@ -20,6 +20,7 @@
 package tools
 
 import (
+	"context"
 	"encoding/json"
 
 	"github.com/NVIDIA/NeMo-Relay/go/nemo_relay"
@@ -59,4 +60,9 @@ func RequestIntercepts(name string, args json.RawMessage) (json.RawMessage, erro
 // reason if blocked. This is a shorthand for [nemo_relay.ToolConditionalExecution].
 func ConditionalExecution(name string, args json.RawMessage) error {
 	return nemo_relay.ToolConditionalExecution(name, args)
+}
+
+// ExecuteContext runs a managed tool call with cancellation and deadlines.
+func ExecuteContext(ctx context.Context, name string, args json.RawMessage, fn func(context.Context, json.RawMessage) (nemo_relay.ToolExecutionResult, error), opts ...nemo_relay.ToolCallOption) (nemo_relay.ToolExecutionResult, error) {
+	return nemo_relay.ToolCallExecuteContext(ctx, name, args, fn, opts...)
 }

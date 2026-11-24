@@ -145,3 +145,39 @@ func BuildCacheTelemetryEvent(input CacheTelemetryEventInput) (*CacheTelemetryEv
 func SetLatencySensitivity(value uint32) error {
 	return nemo_relay.SetLatencySensitivity(value)
 }
+
+// CacheMissReasonKind mirrors the native cache telemetry contract.
+type CacheMissReasonKind = nemo_relay.CacheMissReasonKind
+
+// CacheMissReason mirrors the native cache telemetry contract.
+type CacheMissReason = nemo_relay.CacheMissReason
+
+// CacheMissEvidence mirrors the native cache telemetry contract.
+type CacheMissEvidence = nemo_relay.CacheMissEvidence
+
+// CacheMissDiagnosis mirrors the native cache telemetry contract.
+type CacheMissDiagnosis = nemo_relay.CacheMissDiagnosis
+
+// CacheMissPrefixMismatchEvidence mirrors the native cache telemetry contract.
+type CacheMissPrefixMismatchEvidence = nemo_relay.CacheMissPrefixMismatchEvidence
+
+// CacheMissBelowMinimumThresholdEvidence mirrors the native cache telemetry contract.
+type CacheMissBelowMinimumThresholdEvidence = nemo_relay.CacheMissBelowMinimumThresholdEvidence
+
+// CacheMissRetentionExpiredEvidence mirrors the native cache telemetry contract.
+type CacheMissRetentionExpiredEvidence = nemo_relay.CacheMissRetentionExpiredEvidence
+
+// CacheMissUnknownEvidence mirrors the native cache telemetry contract.
+type CacheMissUnknownEvidence = nemo_relay.CacheMissUnknownEvidence
+
+const (
+	CacheMissReasonPrefixMismatch        = nemo_relay.CacheMissReasonPrefixMismatch
+	CacheMissReasonBelowMinimumThreshold = nemo_relay.CacheMissReasonBelowMinimumThreshold
+	CacheMissReasonRetentionExpired      = nemo_relay.CacheMissReasonRetentionExpired
+	CacheMissReasonRoutingMismatch       = nemo_relay.CacheMissReasonRoutingMismatch
+	CacheMissReasonEvicted               = nemo_relay.CacheMissReasonEvicted
+	CacheMissReasonUnsupportedFeature    = nemo_relay.CacheMissReasonUnsupportedFeature
+	CacheMissReasonColdStart             = nemo_relay.CacheMissReasonColdStart
+	CacheMissReasonUnknown               = nemo_relay.CacheMissReasonUnknown
+	CacheMissReasonOther                 = nemo_relay.CacheMissReasonOther
+)

@@ -141,7 +141,19 @@ unsafe fn nemo_relay_event(
     data_json: *const c_char,
     metadata_json: *const c_char,
 ) -> NemoRelayStatus {
-    unsafe { api::nemo_relay_event(name, parent, data_json, metadata_json, ptr::null()) }
+    unsafe {
+        api::nemo_relay_event(
+            name,
+            parent,
+            data_json,
+            ptr::null(),
+            metadata_json,
+            ptr::null(),
+            std::ptr::null(),
+            std::ptr::null(),
+            ptr::null(),
+        )
+    }
 }
 
 #[allow(clippy::too_many_arguments)]
@@ -201,6 +213,8 @@ unsafe fn nemo_relay_llm_call(
             data_json,
             metadata_json,
             model_name,
+            std::ptr::null(),
+            std::ptr::null(),
             ptr::null(),
             out,
         )
@@ -214,7 +228,15 @@ unsafe fn nemo_relay_llm_call_end(
     metadata_json: *const c_char,
 ) -> NemoRelayStatus {
     unsafe {
-        api::nemo_relay_llm_call_end(handle, response_json, data_json, metadata_json, ptr::null())
+        api::nemo_relay_llm_call_end(
+            handle,
+            response_json,
+            data_json,
+            metadata_json,
+            std::ptr::null(),
+            std::ptr::null(),
+            ptr::null(),
+        )
     }
 }
 
@@ -249,7 +271,7 @@ unsafe fn returned_json(ptr: *mut c_char) -> Json {
 unsafe fn fresh_scope_stack() -> *mut FfiScopeStack {
     let mut stack = ptr::null_mut();
     assert_eq!(
-        unsafe { nemo_relay_scope_stack_create(&mut stack) },
+        unsafe { nemo_relay_scope_stack_create(ptr::null(), &mut stack) },
         NemoRelayStatus::Ok
     );
     assert!(!stack.is_null());
@@ -679,7 +701,7 @@ mod registry_tests;
 fn scope_stack_api_round_trip() {
     let mut stack: *mut FfiScopeStack = ptr::null_mut();
 
-    let create_status = unsafe { nemo_relay_scope_stack_create(&mut stack) };
+    let create_status = unsafe { nemo_relay_scope_stack_create(ptr::null(), &mut stack) };
     assert_eq!(create_status, NemoRelayStatus::Ok);
     assert!(!stack.is_null());
 
@@ -715,7 +737,7 @@ fn llm_request_accessors_round_trip() {
 
 #[test]
 fn scope_stack_create_reports_null_pointer_errors() {
-    let status = unsafe { nemo_relay_scope_stack_create(ptr::null_mut()) };
+    let status = unsafe { nemo_relay_scope_stack_create(ptr::null(), ptr::null_mut()) };
     assert_eq!(status, NemoRelayStatus::NullPointer);
 
     let message = unsafe { CStr::from_ptr(nemo_relay_last_error()) }
@@ -734,15 +756,17 @@ fn atof_exporter_writes_raw_jsonl_events() {
     let filename = cstring("events.jsonl");
     let mut exporter: *mut FfiAtofExporter = ptr::null_mut();
 
+    let exporter_config = cstring(
+        &json!({
+            "type": "file",
+            "output_directory": output_directory.to_str().unwrap(),
+            "mode": mode.to_str().unwrap(),
+            "filename": filename.to_str().unwrap(),
+        })
+        .to_string(),
+    );
     assert_eq!(
-        unsafe {
-            api::nemo_relay_atof_exporter_create(
-                output_directory.as_ptr(),
-                mode.as_ptr(),
-                filename.as_ptr(),
-                &mut exporter,
-            )
-        },
+        unsafe { api::nemo_relay_atof_exporter_create(exporter_config.as_ptr(), &mut exporter) },
         NemoRelayStatus::Ok
     );
     assert!(!exporter.is_null());
@@ -831,15 +855,17 @@ fn atof_exporter_runtime_diagnostics_json_reports_the_snapshot_and_null_pointers
     let mode = cstring("overwrite");
     let filename = cstring("events.jsonl");
     let mut exporter: *mut FfiAtofExporter = ptr::null_mut();
+    let exporter_config = cstring(
+        &json!({
+            "type": "file",
+            "output_directory": output_directory.to_str().unwrap(),
+            "mode": mode.to_str().unwrap(),
+            "filename": filename.to_str().unwrap(),
+        })
+        .to_string(),
+    );
     assert_eq!(
-        unsafe {
-            api::nemo_relay_atof_exporter_create(
-                output_directory.as_ptr(),
-                mode.as_ptr(),
-                filename.as_ptr(),
-                &mut exporter,
-            )
-        },
+        unsafe { api::nemo_relay_atof_exporter_create(exporter_config.as_ptr(), &mut exporter) },
         NemoRelayStatus::Ok
     );
 
@@ -879,35 +905,28 @@ fn atof_exporter_create_from_json_reports_string_statuses() {
     let mut exporter: *mut FfiAtofExporter = ptr::null_mut();
 
     assert_eq!(
-        unsafe { api::nemo_relay_atof_exporter_create_from_json(ptr::null(), &mut exporter) },
+        unsafe { api::nemo_relay_atof_exporter_create(ptr::null(), &mut exporter) },
         NemoRelayStatus::NullPointer
     );
 
     let invalid_utf8 = [0xff_u8, 0];
     assert_eq!(
         unsafe {
-            api::nemo_relay_atof_exporter_create_from_json(
-                invalid_utf8.as_ptr().cast(),
-                &mut exporter,
-            )
+            api::nemo_relay_atof_exporter_create(invalid_utf8.as_ptr().cast(), &mut exporter)
         },
         NemoRelayStatus::InvalidUtf8
     );
 
     let invalid_json = cstring("{");
     assert_eq!(
-        unsafe {
-            api::nemo_relay_atof_exporter_create_from_json(invalid_json.as_ptr(), &mut exporter)
-        },
+        unsafe { api::nemo_relay_atof_exporter_create(invalid_json.as_ptr(), &mut exporter) },
         NemoRelayStatus::InvalidJson
     );
 
     let invalid_sink =
         cstring(r#"{"type":"stream","url":"http://localhost/events","transport":"websocket"}"#);
     assert_eq!(
-        unsafe {
-            api::nemo_relay_atof_exporter_create_from_json(invalid_sink.as_ptr(), &mut exporter)
-        },
+        unsafe { api::nemo_relay_atof_exporter_create(invalid_sink.as_ptr(), &mut exporter) },
         NemoRelayStatus::InvalidArg
     );
 }

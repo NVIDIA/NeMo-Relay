@@ -78,15 +78,116 @@ native thread, so blocking I/O and other long-running callback work occupy that
 thread and can reduce middleware throughput. The Go binding does not provide
 completion-based middleware registration.
 
+## LLM Codecs and Child Scope Stacks
+
+Use `WithLLMCodec` with an owned built-in codec handle or a custom `CodecFunc`.
+Built-ins include `NewOpenAIChatCodec`, `NewOpenAIResponsesCodec`,
+`NewAnthropicMessagesCodec`, `NewGeminiGenerateContentCodec`, and
+`NewOCIGenAIChatCodec`. Handles expose `Decode`, `Encode`, and `DecodeResponse`
+for standalone JSON transformations. `Encode` returns an `LLMRequest` with
+headers and content. Built-in handles preserve their codec identity in sanitizer
+and execution-intercept contexts.
+
+Pass the normalized JSON from `Decode` or `DecodeResponse` to
+`InspectLLMContent` to read its content. The returned snapshot owns its parts
+and source locations. It stays valid after the codec closes or the callback
+returns. `Text()` joins text and refusal parts. Tool and media payloads remain
+available as typed parts and do not contribute display text.
+
+`NewCustomCodec(request, response)` creates an owned request codec, response
+codec, or both. Request callbacks provide `Decode` and `Encode` together.
+Response decoders receive provider JSON and return annotated response JSON.
+Callbacks must support concurrent calls. `NewCustomResponseCodec` is a
+response-only helper. Use `WithLLMCodec` and `WithLLMResponseCodec` to select
+owned handles. Call `codec.Close()` to release a handle. Active calls keep their
+own references. You can call `Close` more than once. Other operations on a
+closed handle return an error.
+
+Manual `LlmCall` accepts a request codec. `LlmCallEnd` accepts a response codec.
+Use `WithLLMAnnotatedRequest` on Start or `WithLLMAnnotatedResponse` on End when
+the integration already has an annotation. Managed execute functions reject
+these options. The following example uses codecs with a manual call:
+
+```go
+codec := nemo_relay.NewOpenAIChatCodec()
+defer codec.Close()
+handle, err := nemo_relay.LlmCall("chat", request, nemo_relay.WithLLMCodec(codec))
+if err != nil {
+    return err
+}
+// Call the provider to get response JSON.
+return nemo_relay.LlmCallEnd(handle, response, nemo_relay.WithLLMResponseCodec(codec))
+```
+
+Inside an execution intercept, call
+`context.RecordOptimizationContribution(contribution)` to attach optimization
+evidence to the managed call. It returns acceptance and an error. A false
+acceptance value leaves provider execution unaffected. The context expires when
+the callback returns. Later use returns `ErrLLMCodecExpired`. Call
+`context.RetainOptimizationRecorder()` before returning to obtain an owned
+recorder for decisions made during later stream reads. Store it with the source,
+record from `Next`, and release it with `Close`. Recording after the managed
+call ends returns false.
+
+Call `ForkScopeStack()` in a bound parent goroutine before starting child work.
+It saves the current parent and creates a separate child stack. Use
+`child.Run(...)` in the child goroutine and call `child.Close()` after the child
+finishes. Scope-local registrations are not copied.
+
+## Streaming and Context Cancellation
+
+`LlmStreamCallExecute` accepts `LLMStreamExecutionFunc`, which opens an owned
+`LLMStreamSource`. A source implements this interface:
+
+```go
+type LLMStreamSource interface {
+    Next(context.Context) (json.RawMessage, error)
+    Close() error
+}
+```
+
+`Next` returns one chunk or `io.EOF` and must honor context cancellation. Relay
+serializes reads and closes the source once, after reads finish. Close errors
+reach the managed stream's `Close`.
+
+Owned callbacks must follow their argument, result, and ownership rules. They
+can use the capabilities passed to them, such as a continuation, codec,
+recorder, upstream source, or `PluginContext`. They can also emit observability
+events. Other Relay API calls are invalid within these callbacks. This includes:
+
+- Starting managed calls or controlling managed streams.
+- Changing scopes or adding registrations outside a supplied `PluginContext`.
+- Flushing or shutting down subscribers.
+
+Close managed streams and flush subscribers from outside owned callbacks.
+
+Register `LLMStreamExecutionInterceptFunc` for all calls, an active scope, or a
+plugin to wrap a complete source. The returned source can wait until a read to
+call `next(request)`. This continuation stays valid until the returned source
+closes. Interceptors own sources returned by `next` and must close any they
+discard. Existing single-value execution callbacks remain usable through
+`LLMExecutionFunc(fn).AsStream()` and
+`LLMExecutionInterceptFunc(fn).AsStream()`, preserving the remaining upstream
+chunks.
+
+Use `LlmCallExecuteContext`, `ToolCallExecuteContext`, and
+`LlmStreamCallExecuteContext` for cancellation and deadlines. Context-aware
+unary providers receive the same context and must cancel their provider work
+when the context ends. Relay cannot force callback code to stop. The streaming
+context covers setup and subsequent reads. `stream.NextContext(ctx)` adds a
+deadline to one wait. Cancelling it closes the entire stream. The context APIs
+preserve `context.Canceled` and `context.DeadlineExceeded`. The `llm` and
+`tools` shorthand packages expose matching context methods.
+
 ## Event Metadata Injection
 
 Use `RegisterEventMetadataInjector` for application-wide metadata. The callback
 receives an owned event snapshot and returns proposed additions. Relay validates
 the map, preserves existing metadata, and applies injectors in priority order.
-Returning an error rejects only that callback's additions; the event is still
-delivered.
+Returning an error rejects only that callback's additions. Relay still delivers
+the event.
 
-The following Go example registers application-wide metadata injection:
+The following Go example registers a metadata injector for all events:
 
 ```go
 err := nemo.RegisterEventMetadataInjector(
@@ -127,7 +228,7 @@ if err := nemo.EmitEvent(
 
 if err := nemo.EmitMetric("cache-entries", []nemo.MetricMeasurement{{
 	Name: "example.cache.entries", Kind: nemo.MetricKindGauge,
-	ValueType: nemo.MetricValueTypeU64, Value: uint64(900),
+	ValueType: nemo.MetricValueTypeU64, Value: json.Number("900"),
 }}); err != nil {
 	log.Fatal(err)
 }
@@ -294,3 +395,135 @@ func main() {
 	fmt.Println(string(result.Result))
 }
 ```
+
+
+## Errors
+
+Native calls that return a status code include a `*RelayError` in the error
+chain. It includes the native code and message. Use these Go helpers to inspect it:
+
+- Check a status with `errors.Is(err, nemo.ErrAlreadyExists)`.
+- Read `Code` and `Message` with `errors.As(err, &nativeError)`.
+- Check native cancellation with `errors.Is(err, context.Canceled)`.
+
+Pointer-returning C calls and stream iteration failures provide a message
+without a status code. These errors use `StatusUnknown` and match
+`ErrUnknownStatus`. Go validation can return other error types. Context-aware
+provider errors keep their Go error causes. Stream read, collector, finalizer,
+and cleanup errors also keep their Go causes. If `Close` combines failures,
+the returned error includes every selected cause. Use `errors.Is` or `errors.As` to inspect them. Retries keep
+the cause of the selected failure, even when several errors share a message.
+
+## Requests and Handle Fields
+
+`LLMRequest` is the Go request type for lifecycle calls, codecs, and middleware.
+Its `Headers` and `Content` fields hold JSON. To create a request directly,
+supply a headers object and content in the provider's format:
+
+```go
+request := nemo_relay.LLMRequest{
+    Headers: json.RawMessage(`{}`),
+    Content: json.RawMessage(`{"model":"example-model","messages":[]}`),
+}
+```
+
+You can also call `NewLLMRequest(headers, content)` with two `json.RawMessage`
+values. It validates the JSON and returns `(LLMRequest, error)`. Check the error
+before using the request. The constructor uses these defaults:
+
+- Nil headers become an empty JSON object.
+- Nil content becomes JSON null.
+
+Request sanitizer results and callback-scoped request codecs use the same
+defaults. To omit observability data from a request sanitizer, return `omit =
+true`.
+
+JSON serialization errors keep their Go error cause. Native validation errors
+return `*RelayError` with `StatusUnknown`. The constructor releases its internal
+C request handle before returning.
+
+Scope, tool, and LLM handles provide these fields:
+
+- `StartedAt()` returns an RFC 3339 string, as `Event.Timestamp()` does.
+- `Data()` and `Metadata()` return JSON, or nil if the field is absent.
+- `ToolHandle.ToolCallID()` returns the tool call ID.
+- `LLMHandle.ModelName()` returns the model name.
+
+The string getters return an empty string if the field is absent. These getters
+read stored handle fields. Event sanitizers do not change these values.
+
+## Event and Export Options
+
+`EmitEvent` accepts these category options:
+
+- `WithEventCategory` accepts an `EventCategory` constant or a custom string.
+- `WithEventCategoryProfile(json.RawMessage(...))` sets a profile. Relay
+  validates known fields and keeps unknown keys. Nil omits the profile.
+
+`NewAtifExporter` accepts these options:
+
+- `WithAtifTrajectoryID` sets the trajectory ID. It defaults to the session ID.
+- `WithAtifToolDefinitions` sets the agent's tool definitions. Nil omits the
+  field. A non-nil empty slice exports an empty array.
+- `WithAtifAgentExtra` sets extra agent JSON. Nil omits the field.
+
+`MetricMeasurement.Value` uses `json.Number` to keep integer precision. Set
+`ValueType` to the matching native numeric type. Relay checks that the value
+fits the metric's allowed range. Metric attributes use
+`map[string]json.RawMessage`. Plugin configuration, event metadata, and
+structured logging fields accept maps with values of different types.
+
+## Stream Results and Cleanup
+
+Streaming collectors return `error`. Finalizers return `(json.RawMessage,
+error)`. Use these return values to report failures:
+
+- A collector error stops collection. `Next` returns the error, or `Close`
+  returns it if `Next` has not delivered it.
+- A finalizer error reaches `Close`. Relay marks the end event as `ERROR` and
+  omits the aggregate. It discards any partial result returned with the error.
+- A successful nil finalizer result means JSON null.
+
+Provider cleanup restores the scope and trace context from source creation. This
+also applies during cancellation. Events emitted by the source's `Close` keep
+their LLM parent and pass through the scope's event sanitizers.
+
+An `.AsStream()` interceptor closes its previous upstream source before calling
+`next` again. If cleanup fails, `next` returns that error without opening
+another source. If the interceptor also fails, the returned error includes both
+failures.
+
+Call the managed stream's `Close` outside owned callbacks to ensure provider
+cleanup runs. If a stream becomes unreachable, garbage collection cancels its
+provider context and releases its native handle. A live parent context does not
+keep the stream alive. This also applies if a provider source or factory holds a
+reference to the stream. Garbage collection can skip provider callbacks whose Go
+state is no longer live, so use explicit `Close` to ensure they run.
+
+## Cache Telemetry
+
+Cache telemetry has optional `*CacheMissReason` and `*CacheMissDiagnosis`
+fields. `CacheMissReason.Reason` uses the native reason constants. Set
+`Description` when the reason is `CacheMissReasonOther`.
+
+Use a type switch on `diagnosis.Evidence` to read one of these evidence types:
+
+- `*CacheMissPrefixMismatchEvidence`
+- `*CacheMissBelowMinimumThresholdEvidence`
+- `*CacheMissRetentionExpiredEvidence`
+- `*CacheMissUnknownEvidence`
+
+These types keep the native `reason` and `kind` JSON tags, including zero
+values. The `adaptive` shorthand package also exports these types.
+
+## Optimization Records for Manual Calls
+
+Manual LLM calls can record optimization evidence:
+
+1. After `LlmCall`, call `handle.RetainOptimizationRecorder()`.
+2. Call the recorder's `RecordOptimizationContribution` method.
+3. Call the recorder's `Close` method when finished.
+
+Closing a recorder releases that reference. `LlmCallEnd` ends recording, emits
+the recorded marks, and completes the summary. Later records return false
+without an error. Retaining another recorder does not reopen recording.

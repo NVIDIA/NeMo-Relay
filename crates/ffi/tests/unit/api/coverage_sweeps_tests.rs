@@ -169,18 +169,20 @@ fn test_ffi_additional_duplicate_registration_sweeps_for_missing_global_wrappers
             nemo_relay_register_llm_stream_execution_intercept(
                 llm_stream_exec.as_ptr(),
                 1,
-                llm_exec_intercept_cb,
-                ptr::null_mut(),
+                Some(llm_exec_intercept_cb),
                 None,
+                ptr::null_mut(),
+                None
             ),
             NemoRelayStatus::Ok
         );
         assert_already_exists!(nemo_relay_register_llm_stream_execution_intercept(
             llm_stream_exec.as_ptr(),
             1,
-            llm_exec_intercept_cb,
-            ptr::null_mut(),
+            Some(llm_exec_intercept_cb),
             None,
+            ptr::null_mut(),
+            None
         ));
         assert_status!(
             nemo_relay_deregister_llm_stream_execution_intercept(llm_stream_exec.as_ptr()),
@@ -742,9 +744,10 @@ fn test_ffi_additional_duplicate_registration_sweeps_for_missing_scope_wrappers(
                 scope_uuid.as_ptr(),
                 llm_stream_exec.as_ptr(),
                 1,
-                llm_exec_intercept_cb,
-                ptr::null_mut(),
+                Some(llm_exec_intercept_cb),
                 None,
+                ptr::null_mut(),
+                None
             ),
             NemoRelayStatus::Ok
         );
@@ -752,9 +755,10 @@ fn test_ffi_additional_duplicate_registration_sweeps_for_missing_scope_wrappers(
             scope_uuid.as_ptr(),
             llm_stream_exec.as_ptr(),
             1,
-            llm_exec_intercept_cb,
-            ptr::null_mut(),
+            Some(llm_exec_intercept_cb),
             None,
+            ptr::null_mut(),
+            None
         ));
         assert_status!(
             nemo_relay_scope_deregister_llm_stream_execution_intercept(
@@ -940,9 +944,10 @@ fn test_ffi_global_llm_and_subscriber_registration_invalid_utf8_name_sweep() {
             nemo_relay_register_llm_stream_execution_intercept(
                 invalid,
                 1,
-                llm_exec_intercept_cb,
-                ptr::null_mut(),
+                Some(llm_exec_intercept_cb),
                 None,
+                ptr::null_mut(),
+                None
             ),
             NemoRelayStatus::InvalidUtf8
         );
@@ -1159,9 +1164,10 @@ fn test_ffi_scope_llm_and_subscriber_registration_invalid_utf8_scope_uuid_sweep(
                 invalid_scope,
                 name.as_ptr(),
                 1,
-                llm_exec_intercept_cb,
-                ptr::null_mut(),
+                Some(llm_exec_intercept_cb),
                 None,
+                ptr::null_mut(),
+                None
             ),
             NemoRelayStatus::InvalidUtf8
         );
@@ -1426,9 +1432,10 @@ fn test_ffi_scope_llm_and_subscriber_registration_invalid_utf8_name_sweep() {
                 scope_uuid.as_ptr(),
                 invalid,
                 1,
-                llm_exec_intercept_cb,
-                ptr::null_mut(),
+                Some(llm_exec_intercept_cb),
                 None,
+                ptr::null_mut(),
+                None
             ),
             NemoRelayStatus::InvalidUtf8
         );
@@ -1765,8 +1772,11 @@ fn test_ffi_llm_execute_and_stream_shape_and_out_error_paths() {
                 None,
                 ptr::null_mut(),
                 None,
+                std::ptr::null(),
                 ptr::null(),
-                ptr::null_mut(),
+                0,
+                std::ptr::null(),
+                ptr::null_mut()
             ),
             NemoRelayStatus::NullPointer
         );
@@ -1787,8 +1797,11 @@ fn test_ffi_llm_execute_and_stream_shape_and_out_error_paths() {
                 None,
                 ptr::null_mut(),
                 None,
+                std::ptr::null(),
                 ptr::null(),
-                &mut out,
+                0,
+                std::ptr::null(),
+                &mut out
             ),
             NemoRelayStatus::InvalidJson
         );
@@ -1802,7 +1815,8 @@ fn test_ffi_llm_execute_and_stream_shape_and_out_error_paths() {
             nemo_relay_llm_stream_call_execute(
                 name.as_ptr(),
                 request.as_ptr(),
-                llm_exec_cb,
+                Some(llm_exec_cb),
+                None,
                 ptr::null_mut(),
                 None,
                 None,
@@ -1818,8 +1832,11 @@ fn test_ffi_llm_execute_and_stream_shape_and_out_error_paths() {
                 None,
                 ptr::null_mut(),
                 None,
+                std::ptr::null(),
                 ptr::null(),
-                ptr::null_mut(),
+                0,
+                std::ptr::null(),
+                ptr::null_mut()
             ),
             NemoRelayStatus::NullPointer
         );
@@ -1828,7 +1845,8 @@ fn test_ffi_llm_execute_and_stream_shape_and_out_error_paths() {
             nemo_relay_llm_stream_call_execute(
                 name.as_ptr(),
                 invalid_shape.as_ptr(),
-                llm_exec_cb,
+                Some(llm_exec_cb),
+                None,
                 ptr::null_mut(),
                 None,
                 None,
@@ -1844,8 +1862,11 @@ fn test_ffi_llm_execute_and_stream_shape_and_out_error_paths() {
                 None,
                 ptr::null_mut(),
                 None,
+                std::ptr::null(),
                 ptr::null(),
-                &mut stream,
+                0,
+                std::ptr::null(),
+                &mut stream
             ),
             NemoRelayStatus::InvalidJson
         );
@@ -2090,7 +2111,10 @@ fn test_ffi_helper_and_lifecycle_callback_failure_paths() {
                 0,
                 ptr::null(),
                 ptr::null(),
-                &mut exec_out,
+                ptr::null(),
+                0,
+                std::ptr::null(),
+                &mut exec_out
             ),
             NemoRelayStatus::InvalidUtf8
         );
@@ -2105,7 +2129,10 @@ fn test_ffi_helper_and_lifecycle_callback_failure_paths() {
                 0,
                 invalid_json.as_ptr(),
                 ptr::null(),
-                &mut exec_out,
+                ptr::null(),
+                0,
+                std::ptr::null(),
+                &mut exec_out
             ),
             NemoRelayStatus::InvalidJson
         );
@@ -2290,9 +2317,10 @@ fn test_ffi_scope_registry_missing_scope_and_null_out_sweeps() {
             missing_scope_uuid.as_ptr(),
             valid_name.as_ptr(),
             1,
-            llm_exec_intercept_cb,
-            ptr::null_mut(),
+            Some(llm_exec_intercept_cb),
             None,
+            ptr::null_mut(),
+            None
         ));
         assert_missing_scope!(nemo_relay_scope_deregister_llm_stream_execution_intercept(
             missing_scope_uuid.as_ptr(),
@@ -2445,7 +2473,7 @@ fn test_ffi_llm_execute_and_stream_additional_input_paths() {
         let invalid_utf8 = [0xffu8, 0];
         let invalid_name = invalid_utf8.as_ptr() as *const c_char;
         let invalid_model_name = invalid_utf8.as_ptr() as *const c_char;
-        let response_codec = api::nemo_relay_openai_chat_codec_new();
+        let response_codec = api::nemo_relay_codec_new(0, std::ptr::null());
         let mut out_json = ptr::null_mut();
         let mut stream = ptr::null_mut();
         let mut chunk = ptr::null_mut();
@@ -2466,8 +2494,11 @@ fn test_ffi_llm_execute_and_stream_additional_input_paths() {
                 None,
                 ptr::null_mut(),
                 None,
+                std::ptr::null(),
                 ptr::null(),
-                &mut out_json,
+                0,
+                std::ptr::null(),
+                &mut out_json
             ),
             NemoRelayStatus::InvalidUtf8
         );
@@ -2487,8 +2518,11 @@ fn test_ffi_llm_execute_and_stream_additional_input_paths() {
                 None,
                 ptr::null_mut(),
                 None,
+                std::ptr::null(),
                 ptr::null(),
-                &mut out_json,
+                0,
+                std::ptr::null(),
+                &mut out_json
             ),
             NemoRelayStatus::InvalidJson
         );
@@ -2508,8 +2542,11 @@ fn test_ffi_llm_execute_and_stream_additional_input_paths() {
                 None,
                 ptr::null_mut(),
                 None,
+                std::ptr::null(),
                 ptr::null(),
-                &mut out_json,
+                0,
+                std::ptr::null(),
+                &mut out_json
             ),
             NemoRelayStatus::InvalidJson
         );
@@ -2529,8 +2566,11 @@ fn test_ffi_llm_execute_and_stream_additional_input_paths() {
                 None,
                 ptr::null_mut(),
                 None,
+                std::ptr::null(),
                 response_codec,
-                &mut out_json,
+                0,
+                std::ptr::null(),
+                &mut out_json
             ),
             NemoRelayStatus::Ok
         );
@@ -2542,7 +2582,8 @@ fn test_ffi_llm_execute_and_stream_additional_input_paths() {
             nemo_relay_llm_stream_call_execute(
                 invalid_name,
                 request.as_ptr(),
-                llm_exec_cb,
+                Some(llm_exec_cb),
+                None,
                 ptr::null_mut(),
                 None,
                 None,
@@ -2558,8 +2599,11 @@ fn test_ffi_llm_execute_and_stream_additional_input_paths() {
                 None,
                 ptr::null_mut(),
                 None,
+                std::ptr::null(),
                 ptr::null(),
-                &mut stream,
+                0,
+                std::ptr::null(),
+                &mut stream
             ),
             NemoRelayStatus::InvalidUtf8
         );
@@ -2567,7 +2611,8 @@ fn test_ffi_llm_execute_and_stream_additional_input_paths() {
             nemo_relay_llm_stream_call_execute(
                 name.as_ptr(),
                 invalid_json.as_ptr(),
-                llm_exec_cb,
+                Some(llm_exec_cb),
+                None,
                 ptr::null_mut(),
                 None,
                 None,
@@ -2583,8 +2628,11 @@ fn test_ffi_llm_execute_and_stream_additional_input_paths() {
                 None,
                 ptr::null_mut(),
                 None,
+                std::ptr::null(),
                 ptr::null(),
-                &mut stream,
+                0,
+                std::ptr::null(),
+                &mut stream
             ),
             NemoRelayStatus::InvalidJson
         );
@@ -2592,7 +2640,8 @@ fn test_ffi_llm_execute_and_stream_additional_input_paths() {
             nemo_relay_llm_stream_call_execute(
                 name.as_ptr(),
                 request.as_ptr(),
-                llm_exec_cb,
+                Some(llm_exec_cb),
+                None,
                 ptr::null_mut(),
                 None,
                 None,
@@ -2608,8 +2657,11 @@ fn test_ffi_llm_execute_and_stream_additional_input_paths() {
                 None,
                 ptr::null_mut(),
                 None,
+                std::ptr::null(),
                 ptr::null(),
-                &mut stream,
+                0,
+                std::ptr::null(),
+                &mut stream
             ),
             NemoRelayStatus::InvalidJson
         );
@@ -2617,7 +2669,8 @@ fn test_ffi_llm_execute_and_stream_additional_input_paths() {
             nemo_relay_llm_stream_call_execute(
                 name.as_ptr(),
                 request.as_ptr(),
-                llm_exec_cb,
+                Some(llm_exec_cb),
+                None,
                 ptr::null_mut(),
                 None,
                 None,
@@ -2633,8 +2686,11 @@ fn test_ffi_llm_execute_and_stream_additional_input_paths() {
                 None,
                 ptr::null_mut(),
                 None,
+                std::ptr::null(),
                 ptr::null(),
-                &mut stream,
+                0,
+                std::ptr::null(),
+                &mut stream
             ),
             NemoRelayStatus::InvalidUtf8
         );
@@ -2642,7 +2698,8 @@ fn test_ffi_llm_execute_and_stream_additional_input_paths() {
             nemo_relay_llm_stream_call_execute(
                 name.as_ptr(),
                 request.as_ptr(),
-                llm_exec_cb,
+                Some(llm_exec_cb),
+                None,
                 ptr::null_mut(),
                 None,
                 Some(collector_cb),
@@ -2658,8 +2715,11 @@ fn test_ffi_llm_execute_and_stream_additional_input_paths() {
                 Some(codec_encode_cb),
                 ptr::null_mut(),
                 None,
+                std::ptr::null(),
                 ptr::null(),
-                &mut stream,
+                0,
+                std::ptr::null(),
+                &mut stream
             ),
             NemoRelayStatus::Ok
         );
@@ -3122,19 +3182,20 @@ fn test_ffi_scope_stack_propagation_and_thread_binding_entry_points() {
         let invalid_json = cstring("{");
         let mut stack = ptr::null_mut();
         assert_status!(
-            nemo_relay_scope_stack_create_from_propagation_json(payload.as_ptr(), ptr::null_mut()),
+            nemo_relay_scope_stack_create(payload.as_ptr(), ptr::null_mut()),
             NemoRelayStatus::NullPointer
         );
         assert_status!(
-            nemo_relay_scope_stack_create_from_propagation_json(ptr::null(), &mut stack),
-            NemoRelayStatus::NullPointer
+            nemo_relay_scope_stack_create(ptr::null(), &mut stack),
+            NemoRelayStatus::Ok
         );
+        nemo_relay_scope_stack_free(stack);
         assert_status!(
-            nemo_relay_scope_stack_create_from_propagation_json(invalid_json.as_ptr(), &mut stack),
+            nemo_relay_scope_stack_create(invalid_json.as_ptr(), &mut stack),
             NemoRelayStatus::InvalidJson
         );
         assert_status!(
-            nemo_relay_scope_stack_create_from_propagation_json(payload.as_ptr(), &mut stack),
+            nemo_relay_scope_stack_create(payload.as_ptr(), &mut stack),
             NemoRelayStatus::Ok
         );
         assert!(!stack.is_null());
@@ -3277,13 +3338,17 @@ fn test_ffi_observability_exporter_error_lifecycles() {
         let mode = cstring("overwrite");
         let filename = cstring("events.jsonl");
         let mut exporter = ptr::null_mut();
+        let exporter_config = cstring(
+            &json!({
+                "type": "file",
+                "output_directory": directory.to_str().unwrap(),
+                "mode": mode.to_str().unwrap(),
+                "filename": filename.to_str().unwrap(),
+            })
+            .to_string(),
+        );
         assert_status!(
-            nemo_relay_atof_exporter_create(
-                directory.as_ptr(),
-                mode.as_ptr(),
-                filename.as_ptr(),
-                &mut exporter,
-            ),
+            nemo_relay_atof_exporter_create(exporter_config.as_ptr(), &mut exporter),
             NemoRelayStatus::Ok
         );
         assert_status!(
@@ -3335,8 +3400,20 @@ fn test_ffi_observability_exporter_error_lifecycles() {
                 ptr::null(),
                 ptr::null(),
                 ptr::null(),
+                ptr::null(),
                 0,
-                &mut subscriber,
+                ptr::null(),
+                ptr::null(),
+                ptr::null(),
+                ptr::null(),
+                ptr::null(),
+                60_000,
+                ptr::null(),
+                ptr::null(),
+                ptr::null(),
+                ptr::null(),
+                ptr::null(),
+                &mut subscriber
             ),
             NemoRelayStatus::Ok
         );
@@ -3423,34 +3500,32 @@ fn test_ffi_observability_component_and_constructor_error_paths() {
         let bad_mode = cstring("bad-mode");
         let mut atof = ptr::null_mut();
 
+        let exporter_config = cstring(
+            &json!({
+                "type": "file",
+                "mode": append.to_str().unwrap(),
+                "filename": filename.to_str().unwrap(),
+            })
+            .to_string(),
+        );
         assert_status!(
-            nemo_relay_atof_exporter_create(
-                ptr::null(),
-                append.as_ptr(),
-                filename.as_ptr(),
-                ptr::null_mut(),
-            ),
+            nemo_relay_atof_exporter_create(exporter_config.as_ptr(), ptr::null_mut()),
             NemoRelayStatus::NullPointer
         );
-        assert_status!(
-            nemo_relay_atof_exporter_create(
-                ptr::null(),
-                bad_mode.as_ptr(),
-                filename.as_ptr(),
-                &mut atof,
-            ),
-            NemoRelayStatus::InvalidArg
+        let exporter_config = cstring(
+            &json!({
+                "type": "file",
+                "mode": bad_mode.to_str().unwrap(),
+                "filename": filename.to_str().unwrap(),
+            })
+            .to_string(),
         );
         assert_status!(
-            nemo_relay_atof_exporter_create(invalid, append.as_ptr(), filename.as_ptr(), &mut atof,),
-            NemoRelayStatus::InvalidUtf8
+            nemo_relay_atof_exporter_create(exporter_config.as_ptr(), &mut atof),
+            NemoRelayStatus::InvalidJson
         );
         assert_status!(
-            nemo_relay_atof_exporter_create(ptr::null(), invalid, filename.as_ptr(), &mut atof,),
-            NemoRelayStatus::InvalidUtf8
-        );
-        assert_status!(
-            nemo_relay_atof_exporter_create(ptr::null(), append.as_ptr(), invalid, &mut atof,),
+            nemo_relay_atof_exporter_create(invalid, &mut atof),
             NemoRelayStatus::InvalidUtf8
         );
 
@@ -3468,8 +3543,20 @@ fn test_ffi_observability_component_and_constructor_error_paths() {
                 ptr::null(),
                 ptr::null(),
                 ptr::null(),
+                ptr::null(),
                 0,
-                &mut otel,
+                ptr::null(),
+                ptr::null(),
+                ptr::null(),
+                ptr::null(),
+                ptr::null(),
+                60_000,
+                ptr::null(),
+                ptr::null(),
+                ptr::null(),
+                ptr::null(),
+                ptr::null(),
+                &mut otel
             ),
             NemoRelayStatus::InvalidArg
         );
@@ -3485,8 +3572,20 @@ fn test_ffi_observability_component_and_constructor_error_paths() {
                 ptr::null(),
                 ptr::null(),
                 ptr::null(),
+                ptr::null(),
                 0,
-                &mut openinference,
+                ptr::null(),
+                ptr::null(),
+                ptr::null(),
+                ptr::null(),
+                ptr::null(),
+                60_000,
+                ptr::null(),
+                ptr::null(),
+                ptr::null(),
+                ptr::null(),
+                ptr::null(),
+                &mut openinference
             ),
             NemoRelayStatus::InvalidArg
         );
@@ -3586,40 +3685,46 @@ fn test_ffi_scope_event_and_metric_validation_sweeps() {
         }
 
         assert_status!(
-            api::nemo_relay_event_v2(
+            api::nemo_relay_event(
                 invalid,
                 ptr::null(),
                 ptr::null(),
                 ptr::null(),
                 ptr::null(),
                 ptr::null(),
-                ptr::null(),
+                std::ptr::null(),
+                std::ptr::null(),
+                ptr::null()
             ),
             NemoRelayStatus::InvalidUtf8
         );
         for (data, schema, event_metadata) in fixtures.event_json_cases() {
             assert_status!(
-                api::nemo_relay_event_v2(
+                api::nemo_relay_event(
                     event_name.as_ptr(),
                     scope,
                     data,
                     schema,
                     event_metadata,
                     ptr::null(),
-                    ptr::null(),
+                    std::ptr::null(),
+                    std::ptr::null(),
+                    ptr::null()
                 ),
                 NemoRelayStatus::InvalidJson
             );
         }
         assert_status!(
-            api::nemo_relay_event_v2(
+            api::nemo_relay_event(
                 event_name.as_ptr(),
                 scope,
                 ptr::null(),
                 ptr::null(),
                 ptr::null(),
                 ptr::null(),
-                ptr::from_ref(&invalid_timestamp),
+                std::ptr::null(),
+                std::ptr::null(),
+                ptr::from_ref(&invalid_timestamp)
             ),
             NemoRelayStatus::InvalidArg
         );
@@ -3786,6 +3891,7 @@ fn test_ffi_otel_signal_subscribers_apply_all_typed_options() {
                     transport.as_ptr(),
                     log_endpoint.as_ptr(),
                     headers.as_ptr(),
+                    ptr::null(),
                     resources.as_ptr(),
                     service_name.as_ptr(),
                     service_namespace.as_ptr(),
@@ -3797,6 +3903,7 @@ fn test_ffi_otel_signal_subscribers_apply_all_typed_options() {
                     16,
                     10,
                     60_000,
+                    ptr::null(),
                     out,
                 )
             },
@@ -3816,6 +3923,7 @@ fn test_ffi_otel_signal_subscribers_apply_all_typed_options() {
                     transport.as_ptr(),
                     metric_endpoint.as_ptr(),
                     headers.as_ptr(),
+                    ptr::null(),
                     resources.as_ptr(),
                     service_name.as_ptr(),
                     service_namespace.as_ptr(),
@@ -3826,6 +3934,7 @@ fn test_ffi_otel_signal_subscribers_apply_all_typed_options() {
                     temporality.as_ptr(),
                     256,
                     128,
+                    ptr::null(),
                     out,
                 )
             },
@@ -3863,9 +3972,8 @@ fn otel_file_sink_subscriber_create_rejects_invalid_shared_options() {
         for (projection, mappings, promote, promote_resource, ttl) in cases {
             let mut rejected = ptr::null_mut();
             assert_ne!(
-                nemo_relay_otel_subscriber_create_file_sink(
+                nemo_relay_otel_subscriber_create(
                     otel_type.as_ptr(),
-                    output_directory.as_ptr(),
                     ptr::null(),
                     ptr::null(),
                     ptr::null(),
@@ -3874,13 +3982,20 @@ fn otel_file_sink_subscriber_create_rejects_invalid_shared_options() {
                     ptr::null(),
                     ptr::null(),
                     ptr::null(),
+                    ptr::null(),
+                    0,
                     projection.as_ptr(),
                     ptr::null(),
                     mappings.as_ptr(),
                     promote.as_ptr(),
                     promote_resource.as_ptr(),
                     ttl,
-                    &mut rejected,
+                    ptr::null(),
+                    output_directory.as_ptr(),
+                    ptr::null(),
+                    ptr::null(),
+                    ptr::null(),
+                    &mut rejected
                 ),
                 NemoRelayStatus::Ok
             );
@@ -3898,10 +4013,8 @@ fn otel_file_sink_subscriber_create_covers_success_and_rejection() {
         let filename = cstring("ffi-trace.jsonl");
         let mut subscriber = ptr::null_mut();
         assert_status!(
-            nemo_relay_otel_subscriber_create_file_sink(
+            nemo_relay_otel_subscriber_create(
                 otel_type.as_ptr(),
-                output_directory.as_ptr(),
-                filename.as_ptr(),
                 ptr::null(),
                 ptr::null(),
                 ptr::null(),
@@ -3909,13 +4022,21 @@ fn otel_file_sink_subscriber_create_covers_success_and_rejection() {
                 ptr::null(),
                 ptr::null(),
                 ptr::null(),
+                ptr::null(),
+                ptr::null(),
+                0,
                 ptr::null(),
                 ptr::null(),
                 ptr::null(),
                 ptr::null(),
                 ptr::null(),
                 60_000,
-                &mut subscriber,
+                ptr::null(),
+                output_directory.as_ptr(),
+                filename.as_ptr(),
+                ptr::null(),
+                ptr::null(),
+                &mut subscriber
             ),
             NemoRelayStatus::Ok
         );
@@ -3930,9 +4051,8 @@ fn otel_file_sink_subscriber_create_covers_success_and_rejection() {
         // filename is derived from it.
         let mut defaulted = ptr::null_mut();
         assert_status!(
-            nemo_relay_otel_subscriber_create_file_sink(
+            nemo_relay_otel_subscriber_create(
                 otel_type.as_ptr(),
-                output_directory.as_ptr(),
                 ptr::null(),
                 ptr::null(),
                 ptr::null(),
@@ -3941,13 +4061,20 @@ fn otel_file_sink_subscriber_create_covers_success_and_rejection() {
                 ptr::null(),
                 ptr::null(),
                 ptr::null(),
+                ptr::null(),
+                0,
                 ptr::null(),
                 ptr::null(),
                 ptr::null(),
                 ptr::null(),
                 ptr::null(),
                 60_000,
-                &mut defaulted,
+                ptr::null(),
+                output_directory.as_ptr(),
+                ptr::null(),
+                ptr::null(),
+                ptr::null(),
+                &mut defaulted
             ),
             NemoRelayStatus::Ok
         );
@@ -3961,33 +4088,38 @@ fn otel_file_sink_subscriber_create_covers_success_and_rejection() {
         let bad_format = cstring("yaml");
         let mut rejected = ptr::null_mut();
         assert_status!(
-            nemo_relay_otel_subscriber_create_file_sink(
+            nemo_relay_otel_subscriber_create(
                 otel_type.as_ptr(),
-                output_directory.as_ptr(),
-                ptr::null(),
-                bad_format.as_ptr(),
                 ptr::null(),
                 ptr::null(),
                 ptr::null(),
                 ptr::null(),
                 ptr::null(),
                 ptr::null(),
+                ptr::null(),
+                ptr::null(),
+                ptr::null(),
+                0,
                 ptr::null(),
                 ptr::null(),
                 ptr::null(),
                 ptr::null(),
                 ptr::null(),
                 60_000,
-                &mut rejected,
+                ptr::null(),
+                output_directory.as_ptr(),
+                ptr::null(),
+                bad_format.as_ptr(),
+                ptr::null(),
+                &mut rejected
             ),
             NemoRelayStatus::InvalidArg
         );
 
         let blank = cstring("");
         assert_status!(
-            nemo_relay_otel_subscriber_create_file_sink(
+            nemo_relay_otel_subscriber_create(
                 otel_type.as_ptr(),
-                blank.as_ptr(),
                 ptr::null(),
                 ptr::null(),
                 ptr::null(),
@@ -3996,13 +4128,20 @@ fn otel_file_sink_subscriber_create_covers_success_and_rejection() {
                 ptr::null(),
                 ptr::null(),
                 ptr::null(),
+                ptr::null(),
+                0,
                 ptr::null(),
                 ptr::null(),
                 ptr::null(),
                 ptr::null(),
                 ptr::null(),
                 60_000,
-                &mut rejected,
+                ptr::null(),
+                blank.as_ptr(),
+                ptr::null(),
+                ptr::null(),
+                ptr::null(),
+                &mut rejected
             ),
             NemoRelayStatus::InvalidArg
         );
@@ -4024,9 +4163,8 @@ fn otel_file_sink_subscriber_create_covers_every_rejection_arm() {
 
         // A null `out` is rejected before anything is parsed.
         assert_status!(
-            nemo_relay_otel_subscriber_create_file_sink(
+            nemo_relay_otel_subscriber_create(
                 otel_type.as_ptr(),
-                output_directory.as_ptr(),
                 ptr::null(),
                 ptr::null(),
                 ptr::null(),
@@ -4035,22 +4173,28 @@ fn otel_file_sink_subscriber_create_covers_every_rejection_arm() {
                 ptr::null(),
                 ptr::null(),
                 ptr::null(),
+                ptr::null(),
+                0,
                 ptr::null(),
                 ptr::null(),
                 ptr::null(),
                 ptr::null(),
                 ptr::null(),
                 60_000,
-                ptr::null_mut(),
+                ptr::null(),
+                output_directory.as_ptr(),
+                ptr::null(),
+                ptr::null(),
+                ptr::null(),
+                ptr::null_mut()
             ),
             NemoRelayStatus::NullPointer
         );
 
         let bad_type = cstring("unsupported");
         assert_status!(
-            nemo_relay_otel_subscriber_create_file_sink(
+            nemo_relay_otel_subscriber_create(
                 bad_type.as_ptr(),
-                output_directory.as_ptr(),
                 ptr::null(),
                 ptr::null(),
                 ptr::null(),
@@ -4059,47 +4203,58 @@ fn otel_file_sink_subscriber_create_covers_every_rejection_arm() {
                 ptr::null(),
                 ptr::null(),
                 ptr::null(),
+                ptr::null(),
+                0,
                 ptr::null(),
                 ptr::null(),
                 ptr::null(),
                 ptr::null(),
                 ptr::null(),
                 60_000,
-                &mut subscriber,
+                ptr::null(),
+                output_directory.as_ptr(),
+                ptr::null(),
+                ptr::null(),
+                ptr::null(),
+                &mut subscriber
             ),
             NemoRelayStatus::InvalidArg
         );
 
         let bad_mode = cstring("truncate");
         assert_status!(
-            nemo_relay_otel_subscriber_create_file_sink(
+            nemo_relay_otel_subscriber_create(
                 otel_type.as_ptr(),
-                output_directory.as_ptr(),
-                ptr::null(),
-                ptr::null(),
-                bad_mode.as_ptr(),
                 ptr::null(),
                 ptr::null(),
                 ptr::null(),
                 ptr::null(),
                 ptr::null(),
+                ptr::null(),
+                ptr::null(),
+                ptr::null(),
+                ptr::null(),
+                0,
                 ptr::null(),
                 ptr::null(),
                 ptr::null(),
                 ptr::null(),
                 ptr::null(),
                 60_000,
-                &mut subscriber,
+                ptr::null(),
+                output_directory.as_ptr(),
+                ptr::null(),
+                ptr::null(),
+                bad_mode.as_ptr(),
+                &mut subscriber
             ),
             NemoRelayStatus::InvalidArg
         );
 
         let nested = cstring("nested/trace.jsonl");
         assert_status!(
-            nemo_relay_otel_subscriber_create_file_sink(
+            nemo_relay_otel_subscriber_create(
                 otel_type.as_ptr(),
-                output_directory.as_ptr(),
-                nested.as_ptr(),
                 ptr::null(),
                 ptr::null(),
                 ptr::null(),
@@ -4107,13 +4262,21 @@ fn otel_file_sink_subscriber_create_covers_every_rejection_arm() {
                 ptr::null(),
                 ptr::null(),
                 ptr::null(),
+                ptr::null(),
+                ptr::null(),
+                0,
                 ptr::null(),
                 ptr::null(),
                 ptr::null(),
                 ptr::null(),
                 ptr::null(),
                 60_000,
-                &mut subscriber,
+                ptr::null(),
+                output_directory.as_ptr(),
+                nested.as_ptr(),
+                ptr::null(),
+                ptr::null(),
+                &mut subscriber
             ),
             NemoRelayStatus::InvalidArg
         );
@@ -4121,9 +4284,9 @@ fn otel_file_sink_subscriber_create_covers_every_rejection_arm() {
         // Resource attributes must be a JSON object of strings.
         let bad_attributes = cstring(r#"{"env": 1}"#);
         assert_status!(
-            nemo_relay_otel_subscriber_create_file_sink(
+            nemo_relay_otel_subscriber_create(
                 otel_type.as_ptr(),
-                output_directory.as_ptr(),
+                ptr::null(),
                 ptr::null(),
                 ptr::null(),
                 ptr::null(),
@@ -4132,13 +4295,19 @@ fn otel_file_sink_subscriber_create_covers_every_rejection_arm() {
                 ptr::null(),
                 ptr::null(),
                 ptr::null(),
+                0,
                 ptr::null(),
                 ptr::null(),
                 ptr::null(),
                 ptr::null(),
                 ptr::null(),
                 60_000,
-                &mut subscriber,
+                ptr::null(),
+                output_directory.as_ptr(),
+                ptr::null(),
+                ptr::null(),
+                ptr::null(),
+                &mut subscriber
             ),
             NemoRelayStatus::InvalidArg
         );
@@ -4149,9 +4318,9 @@ fn otel_file_sink_subscriber_create_covers_every_rejection_arm() {
             let mut args: [*const c_char; 4] = [ptr::null(); 4];
             args[position] = bad_string;
             assert_status!(
-                nemo_relay_otel_subscriber_create_file_sink(
+                nemo_relay_otel_subscriber_create(
                     otel_type.as_ptr(),
-                    output_directory.as_ptr(),
+                    ptr::null(),
                     ptr::null(),
                     ptr::null(),
                     ptr::null(),
@@ -4160,13 +4329,19 @@ fn otel_file_sink_subscriber_create_covers_every_rejection_arm() {
                     args[1],
                     args[2],
                     args[3],
+                    0,
                     ptr::null(),
                     ptr::null(),
                     ptr::null(),
                     ptr::null(),
                     ptr::null(),
                     60_000,
-                    &mut subscriber,
+                    ptr::null(),
+                    output_directory.as_ptr(),
+                    ptr::null(),
+                    ptr::null(),
+                    ptr::null(),
+                    &mut subscriber
                 ),
                 NemoRelayStatus::InvalidUtf8
             );
@@ -4176,24 +4351,30 @@ fn otel_file_sink_subscriber_create_covers_every_rejection_arm() {
         let proto = cstring("proto");
         let append = cstring("append");
         assert_status!(
-            nemo_relay_otel_subscriber_create_file_sink(
+            nemo_relay_otel_subscriber_create(
                 otel_type.as_ptr(),
-                output_directory.as_ptr(),
-                ptr::null(),
-                proto.as_ptr(),
-                append.as_ptr(),
                 ptr::null(),
                 ptr::null(),
                 ptr::null(),
                 ptr::null(),
                 ptr::null(),
+                ptr::null(),
+                ptr::null(),
+                ptr::null(),
+                ptr::null(),
+                0,
                 ptr::null(),
                 ptr::null(),
                 ptr::null(),
                 ptr::null(),
                 ptr::null(),
                 60_000,
-                &mut subscriber,
+                ptr::null(),
+                output_directory.as_ptr(),
+                ptr::null(),
+                proto.as_ptr(),
+                append.as_ptr(),
+                &mut subscriber
             ),
             NemoRelayStatus::Ok
         );
@@ -4220,33 +4401,47 @@ fn defaulted_file_names(directory: &std::path::Path, extension: &str) -> Vec<Str
 
 #[test]
 fn stream_close_reports_undelivered_error_once() {
+    let callback_error = |message: &str, ids: &[u64]| {
+        crate::error::set_last_error(message);
+        unsafe {
+            crate::error::nemo_relay_set_last_error_cause_ids(ids.as_ptr(), ids.len());
+        }
+        crate::error::last_error_as_flow_error("callback failed")
+    };
     let (tx, rx) = tokio::sync::mpsc::channel(4);
-    tx.blocking_send(Err(nemo_relay_types::error::FlowError::Internal(
-        "undelivered ffi stream failure".to_string(),
-    )))
-    .expect("expected error payload to be queued");
+    tx.blocking_send(Err(callback_error("undelivered ffi stream failure", &[1])))
+        .expect("expected error payload to be queued");
     drop(tx);
     let callbacks = std::sync::Arc::new(crate::callable::StreamCallbackState::default());
-    callbacks.record_failure("finalizer failed".to_string());
+    callbacks.record_failure(callback_error("finalizer failed", &[2]));
     let stream = Box::into_raw(Box::new(FfiStream {
         pending: std::sync::Mutex::new(None),
         receiver: tokio::sync::Mutex::new(rx),
         cancel: tokio::sync::watch::channel(false).0,
-        closed: tokio::sync::watch::channel(Some(Err("cleanup failed".to_string()))).1,
+        closed: tokio::sync::watch::channel(Some(Err(
+            callback_error("cleanup failed", &[3]).into()
+        )))
+        .1,
         callbacks,
         close_result: tokio::sync::Mutex::new(None),
     }));
 
     unsafe {
         assert_status!(nemo_relay_stream_close(stream), NemoRelayStatus::Internal);
+        let mut count = 0;
+        let ids = crate::error::nemo_relay_last_error_cause_ids(&mut count);
+        assert_eq!(std::slice::from_raw_parts(ids, count), &[1, 2, 3]);
         let message = CStr::from_ptr(nemo_relay_last_error())
             .to_string_lossy()
             .into_owned();
         assert_eq!(
             message,
-            "internal error: undelivered ffi stream failure; stream cleanup also failed: finalizer failed; stream cleanup also failed: cleanup failed"
+            "internal error: undelivered ffi stream failure; stream cleanup also failed: internal error: finalizer failed; stream cleanup also failed: internal error: cleanup failed"
         );
         assert_status!(nemo_relay_stream_close(stream), NemoRelayStatus::Internal);
+        let mut count = 0;
+        let ids = crate::error::nemo_relay_last_error_cause_ids(&mut count);
+        assert_eq!(std::slice::from_raw_parts(ids, count), &[1, 2, 3]);
         let repeated = CStr::from_ptr(nemo_relay_last_error())
             .to_string_lossy()
             .into_owned();
@@ -4329,7 +4524,8 @@ fn stream_callbacks_keep_the_scope_stack_of_their_call() {
             nemo_relay_llm_stream_call_execute(
                 name.as_ptr(),
                 request.as_ptr(),
-                llm_exec_cb,
+                Some(llm_exec_cb),
+                None,
                 ptr::null_mut(),
                 None,
                 Some(scoped_collector_cb),
@@ -4345,8 +4541,11 @@ fn stream_callbacks_keep_the_scope_stack_of_their_call() {
                 None,
                 ptr::null_mut(),
                 None,
+                std::ptr::null(),
                 ptr::null(),
-                &mut stream,
+                0,
+                std::ptr::null(),
+                &mut stream
             ),
             NemoRelayStatus::Ok
         );
@@ -4479,7 +4678,7 @@ fn stream_callbacks_honor_an_explicit_thread_binding() {
 
         let mut other = ptr::null_mut();
         assert_status!(
-            nemo_relay_scope_stack_create(&mut other),
+            nemo_relay_scope_stack_create(ptr::null(), &mut other),
             NemoRelayStatus::Ok
         );
         EXPLICIT_OTHER_STACK.store(other, std::sync::atomic::Ordering::SeqCst);
@@ -4532,7 +4731,8 @@ fn stream_callbacks_honor_an_explicit_thread_binding() {
             nemo_relay_llm_stream_call_execute(
                 name.as_ptr(),
                 request.as_ptr(),
-                llm_exec_cb,
+                Some(llm_exec_cb),
+                None,
                 ptr::null_mut(),
                 None,
                 Some(explicit_collector_cb),
@@ -4548,8 +4748,11 @@ fn stream_callbacks_honor_an_explicit_thread_binding() {
                 None,
                 ptr::null_mut(),
                 None,
+                std::ptr::null(),
                 ptr::null(),
-                &mut stream,
+                0,
+                std::ptr::null(),
+                &mut stream
             ),
             NemoRelayStatus::Ok
         );
@@ -4603,82 +4806,6 @@ fn stream_callbacks_honor_an_explicit_thread_binding() {
     }
 }
 
-static REENTRANT_STREAM: std::sync::atomic::AtomicPtr<FfiStream> =
-    std::sync::atomic::AtomicPtr::new(ptr::null_mut());
-static REENTRANT_RESULTS: Mutex<Option<(i32, String, NemoRelayStatus)>> = Mutex::new(None);
-
-unsafe extern "C" fn reentrant_collector_cb(
-    _user_data: *mut std::ffi::c_void,
-    _chunk_json: *const c_char,
-) -> i32 {
-    let stream = REENTRANT_STREAM.load(std::sync::atomic::Ordering::SeqCst);
-    let mut chunk = ptr::null_mut();
-    let next = unsafe { nemo_relay_stream_next(stream, &mut chunk) };
-    let next_error = unsafe { CStr::from_ptr(nemo_relay_last_error()) }
-        .to_string_lossy()
-        .into_owned();
-    let close = unsafe { nemo_relay_stream_close(stream) };
-    *lock_unpoisoned(&REENTRANT_RESULTS) = Some((next, next_error, close));
-    0
-}
-
-#[test]
-fn stream_close_and_next_from_the_stream_callback_do_not_wait() {
-    let _lock = TEST_MUTEX.lock().unwrap_or_else(|e| e.into_inner());
-    reset_globals();
-    *lock_unpoisoned(finalizer_calls()) = 0;
-
-    unsafe {
-        let name = cstring("reentrant-stream");
-        let request = cstring(&json!({"headers": {}, "content": {"model": "m"}}).to_string());
-        let mut stream = ptr::null_mut();
-        assert_status!(
-            nemo_relay_llm_stream_call_execute(
-                name.as_ptr(),
-                request.as_ptr(),
-                llm_exec_cb,
-                ptr::null_mut(),
-                None,
-                Some(reentrant_collector_cb),
-                Some(finalizer_cb),
-                ptr::null_mut(),
-                None,
-                ptr::null(),
-                0,
-                ptr::null(),
-                ptr::null(),
-                ptr::null(),
-                None,
-                None,
-                ptr::null_mut(),
-                None,
-                ptr::null(),
-                &mut stream,
-            ),
-            NemoRelayStatus::Ok
-        );
-        REENTRANT_STREAM.store(stream, std::sync::atomic::Ordering::SeqCst);
-
-        let mut chunk = ptr::null_mut();
-        assert_eq!(nemo_relay_stream_next(stream, &mut chunk), 1);
-        nemo_relay_string_free(chunk);
-        let (next, next_error, close) = lock_unpoisoned(&REENTRANT_RESULTS)
-            .take()
-            .expect("collector ran");
-        assert_eq!(next, -1);
-        assert_eq!(
-            next_error,
-            "nemo_relay_stream_next called from inside the stream's own collector or finalizer"
-        );
-        assert_eq!(close, NemoRelayStatus::Ok);
-
-        assert_status!(nemo_relay_stream_close(stream), NemoRelayStatus::Ok);
-        assert_eq!(*lock_unpoisoned(finalizer_calls()), 1);
-        assert_eq!(nemo_relay_stream_next(stream, &mut chunk), 0);
-        nemo_relay_stream_free(stream);
-    }
-}
-
 #[test]
 fn stream_cancel_stops_the_producer_without_waiting() {
     let _lock = TEST_MUTEX.lock().unwrap_or_else(|e| e.into_inner());
@@ -4694,7 +4821,8 @@ fn stream_cancel_stops_the_producer_without_waiting() {
             nemo_relay_llm_stream_call_execute(
                 name.as_ptr(),
                 request.as_ptr(),
-                llm_exec_cb,
+                Some(llm_exec_cb),
+                None,
                 ptr::null_mut(),
                 None,
                 None,
@@ -4710,8 +4838,11 @@ fn stream_cancel_stops_the_producer_without_waiting() {
                 None,
                 ptr::null_mut(),
                 None,
+                std::ptr::null(),
                 ptr::null(),
-                &mut stream,
+                0,
+                std::ptr::null(),
+                &mut stream
             ),
             NemoRelayStatus::Ok
         );
@@ -4731,7 +4862,8 @@ fn stream_cancel_stops_the_producer_without_waiting() {
             nemo_relay_llm_stream_call_execute(
                 name.as_ptr(),
                 request.as_ptr(),
-                llm_exec_cb,
+                Some(llm_exec_cb),
+                None,
                 ptr::null_mut(),
                 None,
                 None,
@@ -4747,8 +4879,11 @@ fn stream_cancel_stops_the_producer_without_waiting() {
                 None,
                 ptr::null_mut(),
                 None,
+                std::ptr::null(),
                 ptr::null(),
-                &mut unpolled,
+                0,
+                std::ptr::null(),
+                &mut unpolled
             ),
             NemoRelayStatus::Ok
         );

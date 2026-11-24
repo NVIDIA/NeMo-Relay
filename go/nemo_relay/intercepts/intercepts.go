@@ -108,7 +108,7 @@ func DeregisterLlmExecution(name string) error {
 // codec context, and a next function. Call next to continue the chain or skip
 // it to short-circuit. This is a shorthand for
 // [nemo_relay.RegisterLlmStreamExecutionIntercept].
-func RegisterLlmStreamExecution(name string, priority int32, execFn nemo_relay.LLMExecutionInterceptFunc) error {
+func RegisterLlmStreamExecution(name string, priority int32, execFn nemo_relay.LLMStreamExecutionInterceptFunc) error {
 	return nemo_relay.RegisterLlmStreamExecutionIntercept(name, priority, execFn)
 }
 
@@ -183,7 +183,7 @@ func ScopeDeregisterLlmExecution(scopeUUID, name string) error {
 // ScopeRegisterLlmStreamExecution registers a scope-local streaming LLM
 // execution intercept following the middleware chain pattern. This is a shorthand
 // for [nemo_relay.ScopeRegisterLlmStreamExecutionIntercept].
-func ScopeRegisterLlmStreamExecution(scopeUUID, name string, priority int32, execFn nemo_relay.LLMExecutionInterceptFunc) error {
+func ScopeRegisterLlmStreamExecution(scopeUUID, name string, priority int32, execFn nemo_relay.LLMStreamExecutionInterceptFunc) error {
 	return nemo_relay.ScopeRegisterLlmStreamExecutionIntercept(scopeUUID, name, priority, execFn)
 }
 

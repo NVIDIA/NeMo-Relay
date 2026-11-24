@@ -361,21 +361,16 @@ fn test_valid_free_functions_and_none_backed_accessors() {
 }
 
 #[test]
-fn test_llm_request_new_invalid_inputs_fall_back_to_defaults() {
-    let invalid_headers = CString::new(r#"["not-an-object"]"#).unwrap();
-    let invalid_content = CString::new("{").unwrap();
-    let request_ptr =
-        unsafe { nemo_relay_llm_request_new(invalid_headers.as_ptr(), invalid_content.as_ptr()) };
-    assert!(!request_ptr.is_null());
-    assert_eq!(
-        take_string(unsafe { nemo_relay_llm_request_headers(request_ptr) }),
-        Some("{}".into())
-    );
-    assert_eq!(
-        take_string(unsafe { nemo_relay_llm_request_content(request_ptr) }),
-        Some("null".into())
-    );
-    unsafe { nemo_relay_llm_request_free(request_ptr) };
+fn test_llm_request_new_rejects_invalid_inputs() {
+    for (headers, content) in [
+        (c"[\"not-an-object\"]", c"{}"),
+        (c"{", c"{}"),
+        (c"{}", c"{"),
+    ] {
+        let request = unsafe { nemo_relay_llm_request_new(headers.as_ptr(), content.as_ptr()) };
+        assert!(request.is_null());
+        assert!(error::last_error_message().is_some());
+    }
 }
 
 #[test]
@@ -773,10 +768,15 @@ fn test_annotated_event_accessors_and_codec_handles() {
     assert!(unsafe { nemo_relay_event_annotated_request(&scope_event) }.is_null());
     assert!(unsafe { nemo_relay_event_annotated_response(&scope_event) }.is_null());
 
-    let openai_chat = api::nemo_relay_openai_chat_codec_new();
-    let openai_responses = api::nemo_relay_openai_responses_codec_new();
-    let anthropic = api::nemo_relay_anthropic_messages_codec_new();
-    let gemini = api::nemo_relay_gemini_generate_content_codec_new();
+    let openai_chat =
+        unsafe { api::nemo_relay_codec_new(NEMO_RELAY_CODEC_OPENAI_CHAT, std::ptr::null()) };
+    let openai_responses =
+        unsafe { api::nemo_relay_codec_new(NEMO_RELAY_CODEC_OPENAI_RESPONSES, std::ptr::null()) };
+    let anthropic =
+        unsafe { api::nemo_relay_codec_new(NEMO_RELAY_CODEC_ANTHROPIC_MESSAGES, std::ptr::null()) };
+    let gemini = unsafe {
+        api::nemo_relay_codec_new(NEMO_RELAY_CODEC_GEMINI_GENERATE_CONTENT, std::ptr::null())
+    };
     assert!(!openai_chat.is_null());
     assert!(!openai_responses.is_null());
     assert!(!anthropic.is_null());
@@ -826,4 +826,65 @@ fn test_event_accessor_none_and_null_pointer_paths_for_annotations() {
         category_profile: None,
     }));
     assert!(unsafe { nemo_relay_event_annotated_response(&plain_end) }.is_null());
+}
+
+#[test]
+fn codec_constructor_rejects_unknown_provider_and_clears_error_on_success() {
+    assert!(unsafe { api::nemo_relay_codec_new(u32::MAX - 1, std::ptr::null()) }.is_null());
+    let message = unsafe { CStr::from_ptr(crate::error::nemo_relay_last_error()) };
+    assert_eq!(message.to_str().unwrap(), "unknown codec provider");
+    let handle =
+        unsafe { api::nemo_relay_codec_new(NEMO_RELAY_CODEC_OPENAI_CHAT, std::ptr::null()) };
+    assert!(!handle.is_null());
+    assert!(crate::error::nemo_relay_last_error().is_null());
+    unsafe { nemo_relay_codec_free(handle) };
+}
+
+fn assert_handle_inspection_null_guards() {
+    unsafe {
+        assert!(nemo_relay_scope_handle_started_at(std::ptr::null()).is_null());
+        assert!(nemo_relay_tool_handle_started_at(std::ptr::null()).is_null());
+        assert!(nemo_relay_llm_handle_started_at(std::ptr::null()).is_null());
+        assert!(nemo_relay_tool_handle_data(std::ptr::null()).is_null());
+        assert!(nemo_relay_tool_handle_metadata(std::ptr::null()).is_null());
+        assert!(nemo_relay_tool_handle_tool_call_id(std::ptr::null()).is_null());
+        assert!(nemo_relay_llm_handle_data(std::ptr::null()).is_null());
+        assert!(nemo_relay_llm_handle_metadata(std::ptr::null()).is_null());
+        assert!(nemo_relay_llm_handle_model_name(std::ptr::null()).is_null());
+    }
+}
+
+#[test]
+fn test_handle_inspection_null_and_absent_fields() {
+    assert_handle_inspection_null_guards();
+    unsafe {
+        let tool = FfiToolHandle(ToolHandle::builder().name("absent").build());
+        assert!(nemo_relay_tool_handle_data(&tool).is_null());
+        assert!(nemo_relay_tool_handle_metadata(&tool).is_null());
+        assert!(nemo_relay_tool_handle_tool_call_id(&tool).is_null());
+        let llm = FfiLLMHandle(LlmHandle::builder().name("absent").build());
+        assert!(nemo_relay_llm_handle_data(&llm).is_null());
+        assert!(nemo_relay_llm_handle_metadata(&llm).is_null());
+        assert!(nemo_relay_llm_handle_model_name(&llm).is_null());
+        let tool = FfiToolHandle(
+            ToolHandle::builder()
+                .name("explicit-null")
+                .data(Json::Null)
+                .metadata(Json::Null)
+                .tool_call_id("")
+                .build(),
+        );
+        assert_eq!(
+            take_string(nemo_relay_tool_handle_data(&tool)).as_deref(),
+            Some("null")
+        );
+        assert_eq!(
+            take_string(nemo_relay_tool_handle_metadata(&tool)).as_deref(),
+            Some("null")
+        );
+        assert_eq!(
+            take_string(nemo_relay_tool_handle_tool_call_id(&tool)).as_deref(),
+            Some("")
+        );
+    }
 }

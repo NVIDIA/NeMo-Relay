@@ -81,6 +81,7 @@ fn test_ffi_llm_request_intercept_outcome_json_allocation_and_validation() {
                 request,
                 ptr::null(),
                 marks.as_ptr(),
+                ptr::null(),
                 &mut outcome_json,
             )
         },
@@ -96,7 +97,7 @@ fn test_ffi_llm_request_intercept_outcome_json_allocation_and_validation() {
     let malformed_contributions = cstring(r#"[{"producer":1}]"#);
     assert_status!(
         unsafe {
-            api::nemo_relay_llm_request_intercept_outcome_json_new_v2(
+            api::nemo_relay_llm_request_intercept_outcome_json_new(
                 request,
                 ptr::null(),
                 ptr::null(),
@@ -114,7 +115,7 @@ fn test_ffi_llm_request_intercept_outcome_json_allocation_and_validation() {
     ));
     assert_status!(
         unsafe {
-            api::nemo_relay_llm_request_intercept_outcome_json_new_v2(
+            api::nemo_relay_llm_request_intercept_outcome_json_new(
                 request,
                 ptr::null(),
                 ptr::null(),
@@ -138,6 +139,7 @@ fn test_ffi_llm_request_intercept_outcome_json_allocation_and_validation() {
                 request,
                 ptr::null(),
                 malformed_marks.as_ptr(),
+                ptr::null(),
                 &mut outcome_json,
             )
         },
@@ -151,6 +153,7 @@ fn test_ffi_llm_request_intercept_outcome_json_allocation_and_validation() {
                 ptr::null(),
                 ptr::null(),
                 ptr::null(),
+                ptr::null(),
                 &mut outcome_json,
             )
         },
@@ -159,7 +162,7 @@ fn test_ffi_llm_request_intercept_outcome_json_allocation_and_validation() {
     assert!(outcome_json.is_null());
     assert_status!(
         unsafe {
-            api::nemo_relay_llm_request_intercept_outcome_json_new_v2(
+            api::nemo_relay_llm_request_intercept_outcome_json_new(
                 ptr::null(),
                 ptr::null(),
                 ptr::null(),
@@ -959,7 +962,10 @@ fn test_ffi_tool_lifecycle_execute_and_helpers() {
                 0,
                 ptr::null(),
                 ptr::null(),
-                &mut execute_out,
+                ptr::null(),
+                0,
+                std::ptr::null(),
+                &mut execute_out
             ),
             NemoRelayStatus::Ok
         );
@@ -995,7 +1001,7 @@ fn test_ffi_tool_lifecycle_execute_and_helpers() {
                 mark_name.as_ptr(),
                 ptr::null(),
                 mark_data.as_ptr(),
-                mark_metadata.as_ptr(),
+                mark_metadata.as_ptr()
             ),
             NemoRelayStatus::Ok
         );
@@ -1141,7 +1147,11 @@ fn test_ffi_manual_lifecycle_timestamps_accept_unix_micros() {
                 scope,
                 ptr::null(),
                 ptr::null(),
-                &timestamps[1],
+                ptr::null(),
+                ptr::null(),
+                std::ptr::null(),
+                std::ptr::null(),
+                &timestamps[1]
             ),
             NemoRelayStatus::Ok
         );
@@ -1188,8 +1198,10 @@ fn test_ffi_manual_lifecycle_timestamps_accept_unix_micros() {
                 ptr::null(),
                 ptr::null(),
                 ptr::null(),
+                std::ptr::null(),
+                std::ptr::null(),
                 &timestamps[4],
-                &mut llm,
+                &mut llm
             ),
             NemoRelayStatus::Ok
         );
@@ -1200,7 +1212,9 @@ fn test_ffi_manual_lifecycle_timestamps_accept_unix_micros() {
                 llm_response.as_ptr(),
                 ptr::null(),
                 ptr::null(),
-                &timestamps[5],
+                std::ptr::null(),
+                std::ptr::null(),
+                &timestamps[5]
             ),
             NemoRelayStatus::Ok
         );
@@ -1306,6 +1320,10 @@ fn test_ffi_manual_lifecycle_timestamps_reject_out_of_range_unix_micros() {
             scope,
             ptr::null(),
             ptr::null(),
+            ptr::null(),
+            ptr::null(),
+            std::ptr::null(),
+            std::ptr::null(),
             &invalid_timestamp,
         ));
 
@@ -1372,6 +1390,8 @@ fn test_ffi_manual_lifecycle_timestamps_reject_out_of_range_unix_micros() {
             ptr::null(),
             ptr::null(),
             ptr::null(),
+            std::ptr::null(),
+            std::ptr::null(),
             &invalid_timestamp,
             &mut invalid_llm,
         ));
@@ -1388,8 +1408,10 @@ fn test_ffi_manual_lifecycle_timestamps_reject_out_of_range_unix_micros() {
                 ptr::null(),
                 ptr::null(),
                 ptr::null(),
+                std::ptr::null(),
+                std::ptr::null(),
                 ptr::null(),
-                &mut llm,
+                &mut llm
             ),
             NemoRelayStatus::Ok
         );
@@ -1399,6 +1421,8 @@ fn test_ffi_manual_lifecycle_timestamps_reject_out_of_range_unix_micros() {
             llm_response.as_ptr(),
             ptr::null(),
             ptr::null(),
+            std::ptr::null(),
+            std::ptr::null(),
             &invalid_timestamp,
         ));
         assert_status!(
@@ -1407,7 +1431,9 @@ fn test_ffi_manual_lifecycle_timestamps_reject_out_of_range_unix_micros() {
                 llm_response.as_ptr(),
                 ptr::null(),
                 ptr::null(),
-                ptr::null(),
+                std::ptr::null(),
+                std::ptr::null(),
+                ptr::null()
             ),
             NemoRelayStatus::Ok
         );
@@ -1517,14 +1543,16 @@ fn test_ffi_event_v2_and_metric_mark_contracts() {
         let metadata = cstring(r#"{"nemo_relay.log.severity":"debug"}"#);
         let warning = types::NEMO_RELAY_LOG_SEVERITY_WARN;
         assert_status!(
-            api::nemo_relay_event_v2(
+            api::nemo_relay_event(
                 log_name.as_ptr(),
                 ptr::null(),
                 data.as_ptr(),
                 schema.as_ptr(),
                 metadata.as_ptr(),
                 ptr::from_ref(&warning),
-                ptr::null(),
+                std::ptr::null(),
+                std::ptr::null(),
+                ptr::null()
             ),
             NemoRelayStatus::Ok
         );
@@ -1608,28 +1636,32 @@ fn test_ffi_event_v2_and_metric_mark_contracts() {
         let invalid_metadata = cstring("[]");
         let info = types::NEMO_RELAY_LOG_SEVERITY_INFO;
         assert_status!(
-            api::nemo_relay_event_v2(
+            api::nemo_relay_event(
                 log_name.as_ptr(),
                 ptr::null(),
                 ptr::null(),
                 ptr::null(),
                 invalid_metadata.as_ptr(),
                 ptr::from_ref(&info),
-                ptr::null(),
+                std::ptr::null(),
+                std::ptr::null(),
+                ptr::null()
             ),
             NemoRelayStatus::InvalidArg
         );
 
         let invalid_severity: types::NemoRelayLogSeverity = i32::MAX;
         assert_status!(
-            api::nemo_relay_event_v2(
+            api::nemo_relay_event(
                 log_name.as_ptr(),
                 ptr::null(),
                 ptr::null(),
                 ptr::null(),
                 ptr::null(),
                 ptr::from_ref(&invalid_severity),
-                ptr::null(),
+                std::ptr::null(),
+                std::ptr::null(),
+                ptr::null()
             ),
             NemoRelayStatus::InvalidArg
         );
@@ -1844,7 +1876,10 @@ fn test_ffi_additional_null_and_invalid_json_paths() {
                 0,
                 ptr::null(),
                 ptr::null(),
-                ptr::null_mut(),
+                ptr::null(),
+                0,
+                std::ptr::null(),
+                ptr::null_mut()
             ),
             NemoRelayStatus::NullPointer
         );
@@ -1859,7 +1894,10 @@ fn test_ffi_additional_null_and_invalid_json_paths() {
                 0,
                 ptr::null(),
                 ptr::null(),
-                &mut out_json,
+                ptr::null(),
+                0,
+                std::ptr::null(),
+                &mut out_json
             ),
             NemoRelayStatus::InvalidJson
         );
@@ -1952,8 +1990,11 @@ fn test_ffi_additional_null_and_invalid_json_paths() {
                 None,
                 ptr::null_mut(),
                 None,
+                std::ptr::null(),
                 ptr::null(),
-                ptr::null_mut(),
+                0,
+                std::ptr::null(),
+                ptr::null_mut()
             ),
             NemoRelayStatus::NullPointer
         );
@@ -1973,8 +2014,11 @@ fn test_ffi_additional_null_and_invalid_json_paths() {
                 None,
                 ptr::null_mut(),
                 None,
+                std::ptr::null(),
                 ptr::null(),
-                &mut out_json,
+                0,
+                std::ptr::null(),
+                &mut out_json
             ),
             NemoRelayStatus::InvalidJson
         );
@@ -1983,7 +2027,8 @@ fn test_ffi_additional_null_and_invalid_json_paths() {
             nemo_relay_llm_stream_call_execute(
                 name.as_ptr(),
                 request.as_ptr(),
-                llm_exec_cb,
+                Some(llm_exec_cb),
+                None,
                 ptr::null_mut(),
                 None,
                 None,
@@ -1999,8 +2044,11 @@ fn test_ffi_additional_null_and_invalid_json_paths() {
                 None,
                 ptr::null_mut(),
                 None,
+                std::ptr::null(),
                 ptr::null(),
-                ptr::null_mut(),
+                0,
+                std::ptr::null(),
+                ptr::null_mut()
             ),
             NemoRelayStatus::NullPointer
         );
@@ -2008,7 +2056,8 @@ fn test_ffi_additional_null_and_invalid_json_paths() {
             nemo_relay_llm_stream_call_execute(
                 name.as_ptr(),
                 invalid_request_shape.as_ptr(),
-                llm_exec_cb,
+                Some(llm_exec_cb),
+                None,
                 ptr::null_mut(),
                 None,
                 None,
@@ -2024,8 +2073,11 @@ fn test_ffi_additional_null_and_invalid_json_paths() {
                 None,
                 ptr::null_mut(),
                 None,
+                std::ptr::null(),
                 ptr::null(),
-                &mut stream,
+                0,
+                std::ptr::null(),
+                &mut stream
             ),
             NemoRelayStatus::InvalidJson
         );

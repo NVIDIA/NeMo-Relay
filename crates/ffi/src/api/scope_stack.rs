@@ -58,37 +58,6 @@ pub unsafe extern "C" fn nemo_relay_current_scope_stack_snapshot_json(
 // Scope stack isolation
 // ---------------------------------------------------------------------------
 
-/// Create a new isolated scope stack with its own root scope.
-///
-/// Each scope stack is independent: scopes pushed on one do not appear on another.
-/// Use `nemo_relay_scope_stack_set_thread` to bind a stack to the current thread
-/// before making other NeMo Relay API calls.
-///
-/// # Parameters
-/// - `out`: On success, receives a heap-allocated `FfiScopeStack` that must be
-///   freed with `nemo_relay_scope_stack_free`.
-///
-/// # Returns
-/// - Returns [`NemoRelayStatus::Ok`] on success and writes the new scope stack
-///   to `out`.
-/// - Returns [`NemoRelayStatus::NullPointer`] when `out` is null.
-///
-/// # Safety
-/// `out` must be a valid, non-null pointer.
-#[unsafe(no_mangle)]
-pub unsafe extern "C" fn nemo_relay_scope_stack_create(
-    out: *mut *mut FfiScopeStack,
-) -> NemoRelayStatus {
-    clear_last_error();
-    if out.is_null() {
-        set_last_error("out pointer is null");
-        return NemoRelayStatus::NullPointer;
-    }
-    let handle = create_scope_stack();
-    unsafe { *out = Box::into_raw(Box::new(FfiScopeStack(handle))) };
-    NemoRelayStatus::Ok
-}
-
 /// Serialize the current causal parent as a versioned propagation context.
 ///
 /// The returned JSON must be freed with `nemo_relay_string_free`.
@@ -224,7 +193,7 @@ pub unsafe extern "C" fn nemo_relay_capture_traceparent(out: *mut *mut c_char) -
 /// The returned string must be freed with `nemo_relay_string_free`.
 ///
 /// # Safety
-/// `context_json` must point to a valid NUL-terminated C string and `out` must
+/// `context_json` must be null or point to a valid NUL-terminated C string. `out` must
 /// be a valid, writable pointer to a C-string output slot.
 #[unsafe(no_mangle)]
 pub unsafe extern "C" fn nemo_relay_propagation_context_to_traceparent(
@@ -258,7 +227,7 @@ pub unsafe extern "C" fn nemo_relay_propagation_context_to_traceparent(
 /// The returned JSON must be freed with `nemo_relay_string_free`.
 ///
 /// # Safety
-/// `context_json` must point to a valid NUL-terminated C string and `out` must
+/// `context_json` must be null or point to a valid NUL-terminated C string. `out` must
 /// be a valid, writable pointer to a C-string output slot.
 #[unsafe(no_mangle)]
 pub unsafe extern "C" fn nemo_relay_propagation_context_normalize_json(
@@ -289,13 +258,16 @@ pub unsafe extern "C" fn nemo_relay_propagation_context_normalize_json(
     }
 }
 
-/// Create an isolated scope stack from propagation-context JSON.
+/// Create an isolated scope stack, optionally from propagation-context JSON.
+///
+/// Pass null to create a new root scope. Free the result with
+/// `nemo_relay_scope_stack_free`.
 ///
 /// # Safety
-/// `context_json` must point to a valid NUL-terminated C string and `out` must
+/// `context_json` must be null or point to a valid NUL-terminated C string. `out` must
 /// be a valid, writable pointer to a scope-stack output slot.
 #[unsafe(no_mangle)]
-pub unsafe extern "C" fn nemo_relay_scope_stack_create_from_propagation_json(
+pub unsafe extern "C" fn nemo_relay_scope_stack_create(
     context_json: *const c_char,
     out: *mut *mut FfiScopeStack,
 ) -> NemoRelayStatus {
@@ -303,6 +275,10 @@ pub unsafe extern "C" fn nemo_relay_scope_stack_create_from_propagation_json(
     if out.is_null() {
         set_last_error("out pointer is null");
         return NemoRelayStatus::NullPointer;
+    }
+    if context_json.is_null() {
+        unsafe { *out = Box::into_raw(Box::new(FfiScopeStack(create_scope_stack()))) };
+        return NemoRelayStatus::Ok;
     }
     let value = match c_str_to_string(context_json) {
         Ok(value) => value,

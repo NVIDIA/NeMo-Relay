@@ -28,7 +28,133 @@ binding consumes it through CGo.
 > to validate shutdown, ownership, and error handling before it can be promoted
 > to a stable contract.
 
+## ABI and Constructors
+
+The C ABI has one signature for each operation. Exported names have no version
+suffix. Rebuild native consumers with the generated header when you update this
+experimental ABI.
+
+Constructors include the following functions:
+
+- `nemo_relay_scope_stack_create` accepts optional propagation-context JSON.
+  Null creates a new root scope.
+- `nemo_relay_atof_exporter_create` accepts the complete `AtofExporterConfig`
+  JSON object, including file and stream destinations.
+- `nemo_relay_otel_subscriber_create` accepts all event mapping, header, parent trace,
+  and TLS settings. A non-null output directory selects OTLP file export.
+  Null selects network export. Log and metric subscribers each have their own
+  constructor with complete settings and optional TLS.
+- `nemo_relay_codec_new(provider, callbacks)` selects one of five built-in
+  request/response codecs, including OCI GenAI, with a null callback pointer.
+  `NEMO_RELAY_CODEC_CUSTOM` accepts `NemoRelayCodecCallbacks` for custom request
+  codecs, response decoders, or both. Release the result with
+  `nemo_relay_codec_free`.
+  Relay owns the callback state when the call starts, even if validation fails.
+  Its destructor runs once after all native codec references are released.
+
+Managed tool, LLM, and streaming LLM execute functions accept `skip_stages`
+directly. Pass zero to run all middleware stages.
+
+## LLM Codecs and Optimization Evidence
+
+`nemo_relay_codec_decode`, `nemo_relay_codec_encode`, and
+`nemo_relay_codec_decode_response` operate on owned codec handles. Encode
+returns complete request JSON containing both `headers` and `content`. Free
+returned strings with `nemo_relay_string_free` and check null results with
+`nemo_relay_last_error`. Custom request encode callbacks continue to return only
+the content JSON. Relay keeps the original headers.
+
+Managed LLM calls accept a borrowed request-codec handle or request callbacks.
+Passing both returns `InvalidArg`. Request decode and encode callbacks must be
+supplied together. A response-codec handle can refer to a built-in codec or a
+custom response decoder. A handle must support the direction requested. Native
+calls retain the codec references they need after returning.
+
+Manual `nemo_relay_llm_call` accepts a request codec. `nemo_relay_llm_call_end`
+accepts a response codec. Both accept optional annotation JSON computed by the
+caller. These options affect observability and the codec context passed to
+sanitizers. They do not change the provider's request or response.
+
+An execution intercept receives a borrowed `optimization_recorder` in its
+`NemoRelayLlmExecutionContext`. Call `nemo_relay_llm_optimization_record` with
+contribution JSON in the runtime format and a boolean output to record evidence
+on that managed call. A false output means Relay did not accept the record. This
+does not fail the call. The borrowed recorder and other context pointers expire
+when the callback returns. Retain a recorder with
+`nemo_relay_llm_optimization_recorder_retain` before returning to record
+evidence later during stream reads. Release the recorder with
+`nemo_relay_llm_optimization_recorder_free`. Recording ends with the managed
+call. Later records return false.
+
+## LLM Content Inspection
+
+`nemo_relay_inspect_llm_content_json` reads normalized JSON from a codec. It can
+select content from a request, response, message, or standalone content value.
+Use the `NEMO_RELAY_CONTENT_SOURCE_*` and `NEMO_RELAY_CONTENT_SELECT_*` constants
+to choose the source and selection.
+
+The result contains ordered parts, source locations, and text parts. An absent
+selection returns success with a null output. A selected item with no text still
+returns a snapshot. Free each non-null result with `nemo_relay_string_free`.
+
+## Streaming Sources and Cancellation
+
+`nemo_relay_stream_source_create` constructs an owned, pull-based source from
+read, cancel, close, and free callbacks. The callbacks follow these rules:
+
+- Read returns 1 and an owned JSON string for a chunk, 0 for EOF, or -1 after
+  setting the last error. Reads run one at a time on blocking workers. They keep
+  the active Relay scope and trace context.
+- Cancel returns promptly and unblocks a pending read.
+- Close runs once after reads stop. Its events use the scope captured when the
+  source was created, even if the caller later changes scopes.
+- Free runs once after close and after the last native reference is released.
+
+Owned callbacks must follow their argument, result, and ownership rules. They
+can use the capabilities passed to them, such as a continuation, codec,
+recorder, upstream source, or plugin context. They can also emit observability
+events. Other Relay API calls are invalid within these callbacks. This includes:
+
+- Starting managed calls or controlling managed streams.
+- Changing scopes or adding registrations outside a supplied plugin context.
+- Flushing or shutting down subscribers.
+
+Cancel and close managed streams from outside owned callbacks.
+
+Pass a `NemoRelayOptionalLlmStreamExecCb` factory to the existing
+`nemo_relay_llm_stream_call_execute` operation, with a null single-value
+callback. The factory returns its owned source and transfers ownership to Relay.
+The single-value provider route remains available for callers that produce one
+JSON value.
+
+Global, scope-local, and plugin-context stream intercept registrations accept a
+`NemoRelayOptionalLlmStreamExecInterceptCb`. It receives a continuation that returns a
+complete source. Return that source or a replacement to Relay. Close and free
+any owned source that is discarded. To open the upstream source after the
+interceptor returns, retain its next-context with
+`nemo_relay_stream_continuation_retain`, invoke it with
+`nemo_relay_stream_continuation_call`, and release it with
+`nemo_relay_stream_continuation_free`. Retained continuations keep their
+original scope and trace context. Callback-scoped codec capabilities still
+expire. Language bindings can use `nemo_relay_stream_continuation_callback_data`
+during an interceptor callback to borrow user data for the managed stream's
+collector and finalizer. Retained continuations keep that state alive, even if
+both optional callbacks are null.
+
+Create a cancellation signal with `nemo_relay_cancellation_create` and pass it
+to managed tool or LLM execution, or streaming setup. Another thread can call
+`nemo_relay_cancellation_cancel`. Callbacks can poll
+`nemo_relay_cancellation_is_cancelled`. Callbacks must cooperate with
+cancellation. Relay waits for running foreign callbacks to return before
+releasing their state. A cancelled managed operation returns
+`NEMO_RELAY_STATUS_CANCELLED`. Release the signal with
+`nemo_relay_cancellation_free` after foreign users have stopped. After streaming
+setup completes, use `nemo_relay_stream_cancel` or close the returned stream to
+stop consumption and await producer cleanup.
+
 ## Why Use It?
+
+Use the FFI for these tasks:
 
 - **Expose NeMo Relay to native consumers**: Call the shared Rust runtime from
   C-compatible hosts and downstream language bindings.
@@ -41,6 +167,8 @@ binding consumes it through CGo.
 
 ## What You Get
 
+The FFI provides these features:
+
 - **Exported `nemo_relay_*` symbols**: APIs for scopes, tool calls, LLM calls,
   middleware, subscribers, plugins, observability exporters, and scope stack
   isolation.
@@ -51,8 +179,8 @@ binding consumes it through CGo.
   `openinference` trace subscriber. Independently managed log and metric
   subscribers use `nemo_relay_otel_log_subscriber_create` and
   `nemo_relay_otel_metric_subscriber_create`.
-- **Structured marks and metrics**: `nemo_relay_event_v2` adds optional data
-  schema JSON and `NemoRelayLogSeverity` to the compatible mark API.
+- **Structured marks and metrics**: `nemo_relay_event` accepts optional data
+  schema JSON and `NemoRelayLogSeverity`.
   `nemo_relay_metric_json` and `nemo_relay_metric` emit atomically validated
   Relay metric measurements.
 - **Generated header**: A committed `nemo_relay.h` file for C-compatible
@@ -84,19 +212,12 @@ The following C example registers application-wide metadata injection:
 ```c
 #include <stdio.h>
 #include <stdlib.h>
-#include <string.h>
 
 static char *inject_metadata(void *user_data, const FfiEvent *event) {
     (void)user_data;
     (void)event;
     const char payload[] = "{\"application.region\":\"us-central\"}";
-    char *result = malloc(sizeof(payload));
-    if (result == NULL) {
-        nemo_relay_set_last_error_message("failed to allocate injector result");
-        return NULL;
-    }
-    memcpy(result, payload, sizeof(payload));
-    return result;
+    return nemo_relay_string_clone(payload);
 }
 
 NemoRelayStatus status = nemo_relay_register_event_metadata_injector(
@@ -116,8 +237,8 @@ if (status != NEMO_RELAY_STATUS_OK) {
 
 Use `nemo_relay_scope_register_event_metadata_injector` for an active scope or
 `nemo_relay_plugin_context_register_event_metadata_injector` during plugin
-registration. The corresponding deregistration functions remove future
-invocations; scope and plugin cleanup also remove their owned registrations.
+registration. The matching deregistration functions prevent future calls. Scope
+and plugin cleanup also remove registrations that they own.
 
 ## OTLP Logs and Metrics
 
@@ -147,15 +268,15 @@ if (nemo_relay_plugin_initialize(config_json, NULL, &activation, &report_json) !
 }
 ```
 
-Use `nemo_relay_event_v2` for a schema-tagged log mark and
-`nemo_relay_metric_json` for an atomically validated metric group. The legacy
-`nemo_relay_event` function remains valid for untyped marks:
+Use `nemo_relay_event` for a schema-tagged log mark and `nemo_relay_metric_json`
+for an atomically validated metric group. Pass null schema and severity pointers
+to emit an untyped mark:
 
 ```c
 NemoRelayLogSeverity severity = NEMO_RELAY_LOG_SEVERITY_WARN;
-nemo_relay_event_v2(
+nemo_relay_event(
     "cache-nearly-full", NULL, "{\"entries\":900}",
-    "{\"name\":\"example.cache\",\"version\":\"1\"}", NULL, &severity, NULL
+    "{\"name\":\"example.cache\",\"version\":\"1\"}", NULL, &severity, NULL, NULL, NULL
 );
 nemo_relay_metric_json(
     "cache-entries", NULL,
@@ -194,11 +315,11 @@ bool metrics_registered = false;
 /* Equivalent explicit OTLP/HTTP paths are /v1/logs and /v1/metrics, respectively. */
 if (!relay_ok(nemo_relay_otel_log_subscriber_create(
     "http_binary", "http://localhost:4318", NULL, NULL, NULL, NULL, NULL, NULL,
-    0, "info", 0, 0, 0, &logs
+    NULL, 0, "info", 0, 0, 0, 60000, NULL, &logs
 ))) goto cleanup;
 if (!relay_ok(nemo_relay_otel_metric_subscriber_create(
     "http_binary", "http://localhost:4318", NULL, NULL, NULL, NULL, NULL, NULL,
-    0, 0, "cumulative", 0, 0, &metrics
+    NULL, 0, 0, "cumulative", 0, 0, NULL, &metrics
 ))) goto cleanup;
 if (!relay_ok(nemo_relay_otel_log_subscriber_register(logs, "otlp-logs"))) goto cleanup;
 logs_registered = true;
@@ -264,6 +385,89 @@ platform:
 Use the FFI surface only when you need a native ABI. Rust, Python, and Node.js
 applications should prefer the supported packages for those languages.
 
+## Event and Export Options
+
+`nemo_relay_event` accepts an optional category string and category-profile JSON
+before its timestamp argument. Categories can use custom strings. Relay
+validates known profile fields and keeps unknown keys. Pass null to omit a
+field.
+
+`nemo_relay_atif_exporter_create` accepts these optional fields before its
+output pointer:
+
+- `trajectory_id` sets the trajectory ID. Null uses the session ID.
+- `tool_definitions_json` sets a JSON array of agent tool definitions.
+- `agent_extra_json` sets extra agent JSON.
+
+Null JSON pointers omit the matching agent fields.
+
+## Callback Error Causes
+
+Language bindings can attach opaque IDs to a callback failure:
+
+- Set the message with `nemo_relay_set_last_error_message`.
+- Pass an array of nonzero IDs and its length to
+  `nemo_relay_set_last_error_cause_ids` on the same thread. Relay copies the array.
+  Pass a length of zero to clear the IDs.
+- Call `nemo_relay_last_error_cause_ids` with a pointer to the output count.
+  Read the IDs with the error message on the calling thread. An empty list
+  returns null and sets the count to zero.
+
+The returned array is borrowed. Do not free it. Copy it before changing the
+error message or cause IDs. The binding owns the data behind each ID. Relay
+carries every selected cause across worker threads, including combined stream
+cleanup failures. Setting or clearing the error message clears the IDs. These
+helpers do not change the error text.
+
+## Requests and Handle Fields
+
+`nemo_relay_llm_request_new` validates request JSON. Headers must be a JSON
+object or JSON null. Omitted or JSON-null headers become an empty object.
+Omitted content becomes JSON null. On failure, the function returns null and
+sets `nemo_relay_last_error()`. Read that message at once on the same thread.
+
+Handle getters provide these fields:
+
+- `nemo_relay_{scope,tool,llm}_handle_started_at` returns an RFC 3339 start time.
+- Tool and LLM handles provide `_data` and `_metadata` JSON getters.
+- `nemo_relay_tool_handle_tool_call_id` returns the tool call ID.
+- `nemo_relay_llm_handle_model_name` returns the model name.
+
+Free each non-null result with `nemo_relay_string_free`. A null handle or absent
+field returns null. An explicit JSON null returns the string `"null"`. These
+getters read stored handle fields. Event sanitizers do not change these values.
+
+## Optimization Records for Manual Calls
+
+Use these steps to record evidence for a manual LLM call:
+
+1. Call `nemo_relay_llm_handle_retain_optimization_recorder(handle, &recorder)`.
+   Check the status before using the output. Failure clears a non-null output
+   slot.
+2. Record evidence with `nemo_relay_llm_optimization_record`.
+3. Release each owned recorder with
+   `nemo_relay_llm_optimization_recorder_free`.
+
+The recorder stays valid after its original handle is freed. Ending the LLM call
+ends recording. Later records return success with `accepted = false`.
+
+## Callback Ownership and Cleanup
+
+Allocate callback result strings with `nemo_relay_string_clone`. Relay frees
+these strings after use. Callbacks can use this helper and the error helpers
+required by their contracts.
+
+Stream-source cancel and close callbacks restore the scope and trace context
+from source creation. This also applies on blocking workers and before the first
+read. Cleanup events keep their original parent and pass through the scope's
+event middleware.
+
+Optional callbacks use `NemoRelayOptional*` function-pointer types and accept
+`NULL`. Streaming execution takes ownership of all callback state when the call
+starts. This includes codec state if provider validation fails. Owned callbacks
+follow the rules in “Streaming Sources and Cancellation.” Beyond those rules,
+they can only call Relay APIs that emit observability events.
+
 ## Documentation
 
-NeMo Relay Documentation: https://docs.nvidia.com/nemo/relay
+Refer to the [NeMo Relay documentation](https://docs.nvidia.com/nemo/relay).

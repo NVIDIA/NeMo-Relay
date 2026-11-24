@@ -4,6 +4,7 @@
 package nemo_relay
 
 import (
+	"encoding/json"
 	"os"
 	"runtime"
 	"testing"
@@ -55,4 +56,31 @@ func crossSchedulerBoundary(rounds int) {
 		<-handoff
 		runtime.Gosched()
 	}
+}
+
+// requestForTest builds a typed request from JSON fixtures used across tests.
+func requestForTest(value any) LLMRequest {
+	if request, ok := value.(LLMRequest); ok {
+		return request
+	}
+	payload, err := json.Marshal(value)
+	if err != nil {
+		panic(err)
+	}
+	var request LLMRequest
+	if err := json.Unmarshal(payload, &request); err != nil {
+		panic(err)
+	}
+	return request
+}
+
+func jsonForTest(value any) json.RawMessage {
+	if value == nil {
+		return nil
+	}
+	payload, err := json.Marshal(value)
+	if err != nil {
+		panic(err)
+	}
+	return payload
 }

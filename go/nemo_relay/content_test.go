@@ -119,3 +119,47 @@ func TestInspectLLMContentErrors(t *testing.T) {
 		}
 	}
 }
+
+func TestOwnedCodecContentSnapshotsOutliveHandle(t *testing.T) {
+	codec := NewOpenAIChatCodec()
+	defer codec.Close()
+	request := LLMRequest{Content: json.RawMessage(`{"messages":[{"role":"user","content":"hello"}]}`)}
+	annotation, err := codec.Decode(request)
+	if err != nil {
+		t.Fatal(err)
+	}
+	requestView, err := InspectLLMContent(ContentSourceRequest, annotation, ContentSelectLastMessage, 0)
+	if err != nil {
+		t.Fatal(err)
+	}
+	encoded, err := codec.Encode(annotation, request)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if string(encoded.Headers) != `{}` {
+		t.Fatalf("request headers changed: %s", encoded.Headers)
+	}
+	response := json.RawMessage(`{"choices":[{"message":{"role":"assistant","content":"answer","refusal":"refused"},"finish_reason":"stop"}]}`)
+	responseAnnotation, err := codec.DecodeResponse(response)
+	if err != nil {
+		t.Fatal(err)
+	}
+	responseView, err := InspectLLMContent(ContentSourceResponse, responseAnnotation, ContentSelectOutput, 0)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := codec.Close(); err != nil {
+		t.Fatal(err)
+	}
+	clear(annotation)
+	clear(responseAnnotation)
+	if text, ok := requestView.Text(); !ok || text != "hello" {
+		t.Fatalf("request snapshot text=(%q, %t)", text, ok)
+	}
+	if text, ok := responseView.Text(); !ok || text != "answer\nrefused" {
+		t.Fatalf("response snapshot text=(%q, %t)", text, ok)
+	}
+	if len(responseView.Parts) != 2 || responseView.Parts[0].Kind != ContentKindText || responseView.Parts[1].Kind != ContentKindRefusal {
+		t.Fatalf("response content kinds changed: %+v", responseView.Parts)
+	}
+}

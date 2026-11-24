@@ -301,7 +301,7 @@ fn test_ffi_event_metadata_injector_registries_and_failure_paths() {
 
         let cleanup_name = cstring("ffi-event-metadata-cleanup");
         assert_status!(
-            nemo_relay_event(cleanup_name.as_ptr(), ptr::null(), ptr::null(), ptr::null(),),
+            nemo_relay_event(cleanup_name.as_ptr(), ptr::null(), ptr::null(), ptr::null()),
             NemoRelayStatus::Ok
         );
         assert_status!(nemo_relay_flush_subscribers(), NemoRelayStatus::Ok);
@@ -510,7 +510,7 @@ fn test_ffi_event_sanitizer_registries_and_error_paths() {
                 mark_name.as_ptr(),
                 scope,
                 original.as_ptr(),
-                original.as_ptr(),
+                original.as_ptr()
             ),
             NemoRelayStatus::Ok
         );
@@ -556,7 +556,7 @@ fn test_ffi_event_sanitizer_registries_and_error_paths() {
                 invalid_mark.as_ptr(),
                 ptr::null(),
                 original.as_ptr(),
-                original.as_ptr(),
+                original.as_ptr()
             ),
             NemoRelayStatus::Ok
         );
@@ -636,7 +636,7 @@ fn test_ffi_event_sanitizer_registries_and_error_paths() {
                 local_mark_name.as_ptr(),
                 child,
                 original.as_ptr(),
-                original.as_ptr(),
+                original.as_ptr()
             ),
             NemoRelayStatus::Ok
         );
@@ -878,13 +878,25 @@ fn test_ffi_open_telemetry_subscriber_lifecycle_and_errors() {
                 ptr::null(),
                 endpoint.as_ptr(),
                 headers.as_ptr(),
+                ptr::null(),
                 resource_attributes.as_ptr(),
                 service_name.as_ptr(),
                 service_namespace.as_ptr(),
                 service_version.as_ptr(),
                 instrumentation_scope.as_ptr(),
                 1250,
-                ptr::null_mut(),
+                ptr::null(),
+                ptr::null(),
+                ptr::null(),
+                ptr::null(),
+                ptr::null(),
+                60_000,
+                ptr::null(),
+                ptr::null(),
+                ptr::null(),
+                ptr::null(),
+                ptr::null(),
+                ptr::null_mut()
             ),
             NemoRelayStatus::NullPointer
         );
@@ -894,13 +906,25 @@ fn test_ffi_open_telemetry_subscriber_lifecycle_and_errors() {
                 invalid_transport.as_ptr(),
                 endpoint.as_ptr(),
                 headers.as_ptr(),
+                ptr::null(),
                 resource_attributes.as_ptr(),
                 service_name.as_ptr(),
                 service_namespace.as_ptr(),
                 service_version.as_ptr(),
                 instrumentation_scope.as_ptr(),
                 1250,
-                &mut subscriber,
+                ptr::null(),
+                ptr::null(),
+                ptr::null(),
+                ptr::null(),
+                ptr::null(),
+                60_000,
+                ptr::null(),
+                ptr::null(),
+                ptr::null(),
+                ptr::null(),
+                ptr::null(),
+                &mut subscriber
             ),
             NemoRelayStatus::InvalidArg
         );
@@ -910,13 +934,25 @@ fn test_ffi_open_telemetry_subscriber_lifecycle_and_errors() {
                 ptr::null(),
                 endpoint.as_ptr(),
                 invalid_headers.as_ptr(),
+                ptr::null(),
                 resource_attributes.as_ptr(),
                 service_name.as_ptr(),
                 service_namespace.as_ptr(),
                 service_version.as_ptr(),
                 instrumentation_scope.as_ptr(),
                 1250,
-                &mut subscriber,
+                ptr::null(),
+                ptr::null(),
+                ptr::null(),
+                ptr::null(),
+                ptr::null(),
+                60_000,
+                ptr::null(),
+                ptr::null(),
+                ptr::null(),
+                ptr::null(),
+                ptr::null(),
+                &mut subscriber
             ),
             NemoRelayStatus::InvalidArg
         );
@@ -926,13 +962,25 @@ fn test_ffi_open_telemetry_subscriber_lifecycle_and_errors() {
                 ptr::null(),
                 endpoint.as_ptr(),
                 headers.as_ptr(),
+                ptr::null(),
                 invalid_resource_attributes.as_ptr(),
                 service_name.as_ptr(),
                 service_namespace.as_ptr(),
                 service_version.as_ptr(),
                 instrumentation_scope.as_ptr(),
                 1250,
-                &mut subscriber,
+                ptr::null(),
+                ptr::null(),
+                ptr::null(),
+                ptr::null(),
+                ptr::null(),
+                60_000,
+                ptr::null(),
+                ptr::null(),
+                ptr::null(),
+                ptr::null(),
+                ptr::null(),
+                &mut subscriber
             ),
             NemoRelayStatus::InvalidArg
         );
@@ -942,13 +990,25 @@ fn test_ffi_open_telemetry_subscriber_lifecycle_and_errors() {
                 grpc_transport.as_ptr(),
                 endpoint.as_ptr(),
                 headers.as_ptr(),
+                ptr::null(),
                 resource_attributes.as_ptr(),
                 service_name.as_ptr(),
                 service_namespace.as_ptr(),
                 service_version.as_ptr(),
                 instrumentation_scope.as_ptr(),
                 1250,
-                &mut subscriber,
+                ptr::null(),
+                ptr::null(),
+                ptr::null(),
+                ptr::null(),
+                ptr::null(),
+                60_000,
+                ptr::null(),
+                ptr::null(),
+                ptr::null(),
+                ptr::null(),
+                ptr::null(),
+                &mut subscriber
             ),
             NemoRelayStatus::Ok
         );
@@ -961,13 +1021,25 @@ fn test_ffi_open_telemetry_subscriber_lifecycle_and_errors() {
                 ptr::null(),
                 endpoint.as_ptr(),
                 headers.as_ptr(),
+                ptr::null(),
                 resource_attributes.as_ptr(),
                 service_name.as_ptr(),
                 service_namespace.as_ptr(),
                 service_version.as_ptr(),
                 instrumentation_scope.as_ptr(),
                 1250,
-                &mut subscriber,
+                ptr::null(),
+                ptr::null(),
+                ptr::null(),
+                ptr::null(),
+                ptr::null(),
+                60_000,
+                ptr::null(),
+                ptr::null(),
+                ptr::null(),
+                ptr::null(),
+                ptr::null(),
+                &mut subscriber
             ),
             NemoRelayStatus::Ok
         );
@@ -1030,13 +1102,15 @@ fn test_ffi_open_telemetry_log_and_metric_subscriber_construction() {
                 ptr::null(),
                 ptr::null(),
                 ptr::null(),
+                ptr::null(),
                 0,
                 ptr::null(),
                 0,
                 0,
                 0,
                 60_000,
-                ptr::null_mut(),
+                ptr::null(),
+                ptr::null_mut()
             ),
             NemoRelayStatus::NullPointer
         );
@@ -1050,13 +1124,15 @@ fn test_ffi_open_telemetry_log_and_metric_subscriber_construction() {
                 ptr::null(),
                 ptr::null(),
                 ptr::null(),
+                ptr::null(),
                 0,
                 invalid.as_ptr(),
                 0,
                 0,
                 0,
                 60_000,
-                &mut log_subscriber,
+                ptr::null(),
+                &mut log_subscriber
             ),
             NemoRelayStatus::InvalidArg
         );
@@ -1070,13 +1146,15 @@ fn test_ffi_open_telemetry_log_and_metric_subscriber_construction() {
                 ptr::null(),
                 ptr::null(),
                 ptr::null(),
+                ptr::null(),
                 0,
                 ptr::null(),
                 0,
                 0,
                 0,
                 60_000,
-                &mut log_subscriber,
+                ptr::null(),
+                &mut log_subscriber
             ),
             NemoRelayStatus::Ok
         );
@@ -1119,12 +1197,14 @@ fn test_ffi_open_telemetry_log_and_metric_subscriber_construction() {
                 ptr::null(),
                 ptr::null(),
                 ptr::null(),
+                ptr::null(),
                 0,
                 0,
                 ptr::null(),
                 0,
                 0,
-                ptr::null_mut(),
+                ptr::null(),
+                ptr::null_mut()
             ),
             NemoRelayStatus::NullPointer
         );
@@ -1138,12 +1218,14 @@ fn test_ffi_open_telemetry_log_and_metric_subscriber_construction() {
                 ptr::null(),
                 ptr::null(),
                 ptr::null(),
+                ptr::null(),
                 0,
                 0,
                 invalid.as_ptr(),
                 0,
                 0,
-                &mut metric_subscriber,
+                ptr::null(),
+                &mut metric_subscriber
             ),
             NemoRelayStatus::InvalidArg
         );
@@ -1157,12 +1239,14 @@ fn test_ffi_open_telemetry_log_and_metric_subscriber_construction() {
                 ptr::null(),
                 ptr::null(),
                 ptr::null(),
+                ptr::null(),
                 0,
                 0,
                 ptr::null(),
                 0,
                 0,
-                &mut metric_subscriber,
+                ptr::null(),
+                &mut metric_subscriber
             ),
             NemoRelayStatus::Ok
         );
@@ -1220,13 +1304,15 @@ fn test_ffi_open_telemetry_log_and_metric_subscribers_export_signals() {
                 ptr::null(),
                 ptr::null(),
                 ptr::null(),
+                ptr::null(),
                 0,
                 ptr::null(),
                 0,
                 0,
                 0,
                 60_000,
-                &mut log_subscriber,
+                ptr::null(),
+                &mut log_subscriber
             ),
             NemoRelayStatus::Ok
         );
@@ -1240,12 +1326,14 @@ fn test_ffi_open_telemetry_log_and_metric_subscribers_export_signals() {
                 ptr::null(),
                 ptr::null(),
                 ptr::null(),
+                ptr::null(),
                 0,
                 0,
                 ptr::null(),
                 0,
                 0,
-                &mut metric_subscriber,
+                ptr::null(),
+                &mut metric_subscriber
             ),
             NemoRelayStatus::Ok
         );
@@ -1268,14 +1356,16 @@ fn test_ffi_open_telemetry_log_and_metric_subscribers_export_signals() {
         let log_name = cstring("ffi_exported_log");
         let severity = types::NEMO_RELAY_LOG_SEVERITY_ERROR;
         assert_status!(
-            api::nemo_relay_event_v2(
+            api::nemo_relay_event(
                 log_name.as_ptr(),
                 ptr::null(),
                 ptr::null(),
                 ptr::null(),
                 ptr::null(),
                 ptr::from_ref(&severity),
-                ptr::null(),
+                std::ptr::null(),
+                std::ptr::null(),
+                ptr::null()
             ),
             NemoRelayStatus::Ok
         );
@@ -1376,8 +1466,20 @@ fn test_ffi_open_telemetry_subscribers_return_runtime_diagnostics() {
                 ptr::null(),
                 ptr::null(),
                 ptr::null(),
+                ptr::null(),
                 0,
-                &mut trace_subscriber,
+                ptr::null(),
+                ptr::null(),
+                ptr::null(),
+                ptr::null(),
+                ptr::null(),
+                60_000,
+                ptr::null(),
+                ptr::null(),
+                ptr::null(),
+                ptr::null(),
+                ptr::null(),
+                &mut trace_subscriber
             ),
             NemoRelayStatus::Ok
         );
@@ -1391,13 +1493,15 @@ fn test_ffi_open_telemetry_subscribers_return_runtime_diagnostics() {
                 ptr::null(),
                 ptr::null(),
                 ptr::null(),
+                ptr::null(),
                 0,
                 ptr::null(),
                 0,
                 0,
                 0,
                 60_000,
-                &mut log_subscriber,
+                ptr::null(),
+                &mut log_subscriber
             ),
             NemoRelayStatus::Ok
         );
@@ -1411,12 +1515,14 @@ fn test_ffi_open_telemetry_subscribers_return_runtime_diagnostics() {
                 ptr::null(),
                 ptr::null(),
                 ptr::null(),
+                ptr::null(),
                 0,
                 0,
                 ptr::null(),
                 0,
                 0,
-                &mut metric_subscriber,
+                ptr::null(),
+                &mut metric_subscriber
             ),
             NemoRelayStatus::Ok
         );
@@ -1442,14 +1548,16 @@ fn test_ffi_open_telemetry_subscribers_return_runtime_diagnostics() {
         let data = cstring(r#"{"measurements":[]}"#);
         let data_schema = cstring(r#"{"name":"nemo.relay.metric_measurements","version":"999"}"#);
         assert_status!(
-            api::nemo_relay_event_v2(
+            api::nemo_relay_event(
                 event_name.as_ptr(),
                 ptr::null(),
                 data.as_ptr(),
                 data_schema.as_ptr(),
                 ptr::null(),
                 ptr::null(),
-                ptr::null(),
+                std::ptr::null(),
+                std::ptr::null(),
+                ptr::null()
             ),
             NemoRelayStatus::Ok
         );
@@ -1556,8 +1664,20 @@ fn test_ffi_open_telemetry_typed_required_fields_and_gen_ai_wire_output() {
                     ptr::null(),
                     ptr::null(),
                     ptr::null(),
+                    ptr::null(),
                     0,
-                    &mut subscriber,
+                    ptr::null(),
+                    ptr::null(),
+                    ptr::null(),
+                    ptr::null(),
+                    ptr::null(),
+                    60_000,
+                    ptr::null(),
+                    ptr::null(),
+                    ptr::null(),
+                    ptr::null(),
+                    ptr::null(),
+                    &mut subscriber
                 ),
                 NemoRelayStatus::InvalidArg
             );
@@ -1577,8 +1697,20 @@ fn test_ffi_open_telemetry_typed_required_fields_and_gen_ai_wire_output() {
                 ptr::null(),
                 ptr::null(),
                 ptr::null(),
+                ptr::null(),
                 0,
-                &mut subscriber,
+                ptr::null(),
+                ptr::null(),
+                ptr::null(),
+                ptr::null(),
+                ptr::null(),
+                60_000,
+                ptr::null(),
+                ptr::null(),
+                ptr::null(),
+                ptr::null(),
+                ptr::null(),
+                &mut subscriber
             ),
             NemoRelayStatus::Ok
         );
@@ -1669,13 +1801,25 @@ fn test_ffi_open_inference_subscriber_lifecycle_and_errors() {
                 ptr::null(),
                 endpoint.as_ptr(),
                 headers.as_ptr(),
+                ptr::null(),
                 resource_attributes.as_ptr(),
                 service_name.as_ptr(),
                 service_namespace.as_ptr(),
                 service_version.as_ptr(),
                 instrumentation_scope.as_ptr(),
                 1250,
-                ptr::null_mut(),
+                ptr::null(),
+                ptr::null(),
+                ptr::null(),
+                ptr::null(),
+                ptr::null(),
+                60_000,
+                ptr::null(),
+                ptr::null(),
+                ptr::null(),
+                ptr::null(),
+                ptr::null(),
+                ptr::null_mut()
             ),
             NemoRelayStatus::NullPointer
         );
@@ -1685,13 +1829,25 @@ fn test_ffi_open_inference_subscriber_lifecycle_and_errors() {
                 invalid_transport.as_ptr(),
                 endpoint.as_ptr(),
                 headers.as_ptr(),
+                ptr::null(),
                 resource_attributes.as_ptr(),
                 service_name.as_ptr(),
                 service_namespace.as_ptr(),
                 service_version.as_ptr(),
                 instrumentation_scope.as_ptr(),
                 1250,
-                &mut subscriber,
+                ptr::null(),
+                ptr::null(),
+                ptr::null(),
+                ptr::null(),
+                ptr::null(),
+                60_000,
+                ptr::null(),
+                ptr::null(),
+                ptr::null(),
+                ptr::null(),
+                ptr::null(),
+                &mut subscriber
             ),
             NemoRelayStatus::InvalidArg
         );
@@ -1701,13 +1857,25 @@ fn test_ffi_open_inference_subscriber_lifecycle_and_errors() {
                 ptr::null(),
                 endpoint.as_ptr(),
                 invalid_headers.as_ptr(),
+                ptr::null(),
                 resource_attributes.as_ptr(),
                 service_name.as_ptr(),
                 service_namespace.as_ptr(),
                 service_version.as_ptr(),
                 instrumentation_scope.as_ptr(),
                 1250,
-                &mut subscriber,
+                ptr::null(),
+                ptr::null(),
+                ptr::null(),
+                ptr::null(),
+                ptr::null(),
+                60_000,
+                ptr::null(),
+                ptr::null(),
+                ptr::null(),
+                ptr::null(),
+                ptr::null(),
+                &mut subscriber
             ),
             NemoRelayStatus::InvalidArg
         );
@@ -1717,13 +1885,25 @@ fn test_ffi_open_inference_subscriber_lifecycle_and_errors() {
                 ptr::null(),
                 endpoint.as_ptr(),
                 headers.as_ptr(),
+                ptr::null(),
                 invalid_resource_attributes.as_ptr(),
                 service_name.as_ptr(),
                 service_namespace.as_ptr(),
                 service_version.as_ptr(),
                 instrumentation_scope.as_ptr(),
                 1250,
-                &mut subscriber,
+                ptr::null(),
+                ptr::null(),
+                ptr::null(),
+                ptr::null(),
+                ptr::null(),
+                60_000,
+                ptr::null(),
+                ptr::null(),
+                ptr::null(),
+                ptr::null(),
+                ptr::null(),
+                &mut subscriber
             ),
             NemoRelayStatus::InvalidArg
         );
@@ -1733,13 +1913,25 @@ fn test_ffi_open_inference_subscriber_lifecycle_and_errors() {
                 grpc_transport.as_ptr(),
                 endpoint.as_ptr(),
                 headers.as_ptr(),
+                ptr::null(),
                 resource_attributes.as_ptr(),
                 service_name.as_ptr(),
                 service_namespace.as_ptr(),
                 service_version.as_ptr(),
                 instrumentation_scope.as_ptr(),
                 1250,
-                &mut subscriber,
+                ptr::null(),
+                ptr::null(),
+                ptr::null(),
+                ptr::null(),
+                ptr::null(),
+                60_000,
+                ptr::null(),
+                ptr::null(),
+                ptr::null(),
+                ptr::null(),
+                ptr::null(),
+                &mut subscriber
             ),
             NemoRelayStatus::Ok
         );
@@ -1752,13 +1944,25 @@ fn test_ffi_open_inference_subscriber_lifecycle_and_errors() {
                 ptr::null(),
                 endpoint.as_ptr(),
                 headers.as_ptr(),
+                ptr::null(),
                 resource_attributes.as_ptr(),
                 service_name.as_ptr(),
                 service_namespace.as_ptr(),
                 service_version.as_ptr(),
                 instrumentation_scope.as_ptr(),
                 1250,
-                &mut subscriber,
+                ptr::null(),
+                ptr::null(),
+                ptr::null(),
+                ptr::null(),
+                ptr::null(),
+                60_000,
+                ptr::null(),
+                ptr::null(),
+                ptr::null(),
+                ptr::null(),
+                ptr::null(),
+                &mut subscriber
             ),
             NemoRelayStatus::Ok
         );
@@ -2057,9 +2261,10 @@ fn test_ffi_registration_name_and_uuid_error_sweep() {
         assert_null_pointer!(nemo_relay_register_llm_stream_execution_intercept(
             ptr::null(),
             1,
-            llm_exec_intercept_cb,
-            ptr::null_mut(),
+            Some(llm_exec_intercept_cb),
             None,
+            ptr::null_mut(),
+            None
         ));
         assert_null_pointer!(nemo_relay_deregister_llm_stream_execution_intercept(
             ptr::null()
@@ -2208,9 +2413,10 @@ fn test_ffi_registration_name_and_uuid_error_sweep() {
             invalid_scope_uuid.as_ptr(),
             ptr::null(),
             1,
-            llm_exec_intercept_cb,
-            ptr::null_mut(),
+            Some(llm_exec_intercept_cb),
             None,
+            ptr::null_mut(),
+            None
         ));
         assert_invalid_arg!(nemo_relay_scope_deregister_llm_stream_execution_intercept(
             invalid_scope_uuid.as_ptr(),
@@ -2582,7 +2788,10 @@ fn test_ffi_duplicate_registration_sweep_and_helper_callbacks() {
                 agent.as_ptr(),
                 version.as_ptr(),
                 ptr::null(),
-                &mut exporter,
+                std::ptr::null(),
+                std::ptr::null(),
+                std::ptr::null(),
+                &mut exporter
             ),
             NemoRelayStatus::NullPointer
         );
@@ -2592,7 +2801,10 @@ fn test_ffi_duplicate_registration_sweep_and_helper_callbacks() {
                 ptr::null(),
                 version.as_ptr(),
                 ptr::null(),
-                &mut exporter,
+                std::ptr::null(),
+                std::ptr::null(),
+                std::ptr::null(),
+                &mut exporter
             ),
             NemoRelayStatus::NullPointer
         );
@@ -2602,7 +2814,10 @@ fn test_ffi_duplicate_registration_sweep_and_helper_callbacks() {
                 agent.as_ptr(),
                 ptr::null(),
                 ptr::null(),
-                &mut exporter,
+                std::ptr::null(),
+                std::ptr::null(),
+                std::ptr::null(),
+                &mut exporter
             ),
             NemoRelayStatus::NullPointer
         );
@@ -2612,7 +2827,10 @@ fn test_ffi_duplicate_registration_sweep_and_helper_callbacks() {
                 agent.as_ptr(),
                 version.as_ptr(),
                 ptr::null(),
-                &mut exporter,
+                std::ptr::null(),
+                std::ptr::null(),
+                std::ptr::null(),
+                &mut exporter
             ),
             NemoRelayStatus::Ok
         );
@@ -2663,6 +2881,7 @@ fn test_ffi_duplicate_registration_sweep_and_helper_callbacks() {
             intercept_name.as_ptr(),
             request.as_ptr(),
             NemoRelayLlmExecutionContext {
+                optimization_recorder: std::ptr::null(),
                 request_codec: NemoRelayLlmRequestContext {
                     codec_kind: NemoRelayLlmSanitizeCodecKind::None,
                     codec_id: ptr::null(),
@@ -2842,7 +3061,7 @@ fn test_ffi_registration_table_sweep_for_remaining_wrappers() {
         );
         assert_global_execution_sweep!(
             "table_llm_stream_exec",
-            nemo_relay_register_llm_stream_execution_intercept,
+            register_stream_sweep,
             nemo_relay_deregister_llm_stream_execution_intercept,
             llm_exec_intercept_cb
         );
@@ -2885,7 +3104,7 @@ fn test_ffi_registration_table_sweep_for_remaining_wrappers() {
         assert_scope_execution_sweep!(
             scope_uuid,
             "table_scope_llm_stream_exec",
-            nemo_relay_scope_register_llm_stream_execution_intercept,
+            scope_register_stream_sweep,
             nemo_relay_scope_deregister_llm_stream_execution_intercept,
             llm_exec_intercept_cb
         );
@@ -2901,7 +3120,10 @@ fn test_ffi_registration_table_sweep_for_remaining_wrappers() {
                 agent.as_ptr(),
                 version.as_ptr(),
                 ptr::null(),
-                &mut exporter,
+                std::ptr::null(),
+                std::ptr::null(),
+                std::ptr::null(),
+                &mut exporter
             ),
             NemoRelayStatus::Ok
         );
@@ -3003,7 +3225,10 @@ fn test_ffi_llm_execute_stream_and_atif_exporter() {
                 agent.as_ptr(),
                 version.as_ptr(),
                 model_name.as_ptr(),
-                &mut exporter,
+                std::ptr::null(),
+                std::ptr::null(),
+                std::ptr::null(),
+                &mut exporter
             ),
             NemoRelayStatus::Ok
         );
@@ -3101,8 +3326,11 @@ fn test_ffi_llm_execute_stream_and_atif_exporter() {
                 None,
                 ptr::null_mut(),
                 None,
+                std::ptr::null(),
                 ptr::null(),
-                &mut execute_out,
+                0,
+                std::ptr::null(),
+                &mut execute_out
             ),
             NemoRelayStatus::Ok
         );
@@ -3118,7 +3346,8 @@ fn test_ffi_llm_execute_stream_and_atif_exporter() {
             nemo_relay_llm_stream_call_execute(
                 llm_name.as_ptr(),
                 request.as_ptr(),
-                llm_exec_cb,
+                Some(llm_exec_cb),
+                None,
                 ptr::null_mut(),
                 None,
                 Some(collector_cb),
@@ -3134,8 +3363,11 @@ fn test_ffi_llm_execute_stream_and_atif_exporter() {
                 None,
                 ptr::null_mut(),
                 None,
+                std::ptr::null(),
                 ptr::null(),
-                &mut stream,
+                0,
+                std::ptr::null(),
+                &mut stream
             ),
             NemoRelayStatus::Ok
         );
@@ -3311,5 +3543,44 @@ fn conditional_middleware_guardrail_ffi_toggles_existing_registration() {
             nemo_relay_deregister_tool_request_intercept(target_name.as_ptr()),
             NemoRelayStatus::Ok
         );
+    }
+}
+
+unsafe fn register_stream_sweep(
+    name: *const c_char,
+    priority: i32,
+    callback: NemoRelayLlmExecInterceptCb,
+    data: *mut libc::c_void,
+    free: NemoRelayFreeFn,
+) -> NemoRelayStatus {
+    unsafe {
+        nemo_relay_register_llm_stream_execution_intercept(
+            name,
+            priority,
+            Some(callback),
+            None,
+            data,
+            free,
+        )
+    }
+}
+unsafe fn scope_register_stream_sweep(
+    scope: *const c_char,
+    name: *const c_char,
+    priority: i32,
+    callback: NemoRelayLlmExecInterceptCb,
+    data: *mut libc::c_void,
+    free: NemoRelayFreeFn,
+) -> NemoRelayStatus {
+    unsafe {
+        nemo_relay_scope_register_llm_stream_execution_intercept(
+            scope,
+            name,
+            priority,
+            Some(callback),
+            None,
+            data,
+            free,
+        )
     }
 }

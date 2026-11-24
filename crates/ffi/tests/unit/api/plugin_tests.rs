@@ -231,7 +231,7 @@ fn test_ffi_plugin_context_event_metadata_injector_is_rolled_back() {
         rollback_registrations(&mut registrations);
         let cleanup_name = cstring("ffi-plugin-metadata-cleanup");
         assert_status!(
-            nemo_relay_event(cleanup_name.as_ptr(), ptr::null(), ptr::null(), ptr::null(),),
+            nemo_relay_event(cleanup_name.as_ptr(), ptr::null(), ptr::null(), ptr::null()),
             NemoRelayStatus::Ok
         );
         assert_status!(nemo_relay_flush_subscribers(), NemoRelayStatus::Ok);
@@ -613,9 +613,10 @@ fn test_ffi_plugin_context_helpers_cover_null_and_success_paths() {
                 ptr::null_mut(),
                 llm_name.as_ptr(),
                 1,
-                llm_exec_intercept_cb,
-                ptr::null_mut(),
+                Some(llm_exec_intercept_cb),
                 None,
+                ptr::null_mut(),
+                None
             ),
             NemoRelayStatus::NullPointer
         );
@@ -752,9 +753,10 @@ fn test_ffi_plugin_context_helpers_cover_null_and_success_paths() {
                 &mut ctx,
                 llm_name.as_ptr(),
                 1,
-                llm_exec_intercept_cb,
-                ptr::null_mut(),
+                Some(llm_exec_intercept_cb),
                 None,
+                ptr::null_mut(),
+                None
             ),
             NemoRelayStatus::Ok
         );
@@ -1041,9 +1043,10 @@ fn test_ffi_plugin_context_helpers_reject_invalid_utf8_names_in_bulk() {
                 &mut ctx,
                 invalid_name,
                 1,
-                llm_exec_intercept_cb,
-                ptr::null_mut(),
+                Some(llm_exec_intercept_cb),
                 None,
+                ptr::null_mut(),
+                None
             )
         );
         assert_invalid_name_status!(nemo_relay_plugin_context_register_tool_execution_intercept(
@@ -1310,9 +1313,10 @@ fn test_ffi_plugin_context_helpers_reject_duplicate_names_in_bulk() {
                 &mut ctx,
                 llm_stream_exec.as_ptr(),
                 1,
-                llm_exec_intercept_cb,
-                ptr::null_mut(),
+                Some(llm_exec_intercept_cb),
                 None,
+                ptr::null_mut(),
+                None
             ),
             NemoRelayStatus::Ok
         );
@@ -1321,9 +1325,10 @@ fn test_ffi_plugin_context_helpers_reject_duplicate_names_in_bulk() {
                 &mut ctx,
                 llm_stream_exec.as_ptr(),
                 2,
-                llm_exec_intercept_cb,
-                ptr::null_mut(),
+                Some(llm_exec_intercept_cb),
                 None,
+                ptr::null_mut(),
+                None
             )
         );
 
@@ -1376,8 +1381,20 @@ fn test_ffi_specialized_subscriber_and_exporter_default_and_invalid_name_paths()
                 ptr::null(),
                 ptr::null(),
                 ptr::null(),
+                ptr::null(),
                 0,
-                &mut otel_subscriber,
+                ptr::null(),
+                ptr::null(),
+                ptr::null(),
+                ptr::null(),
+                ptr::null(),
+                60_000,
+                ptr::null(),
+                ptr::null(),
+                ptr::null(),
+                ptr::null(),
+                ptr::null(),
+                &mut otel_subscriber
             ),
             NemoRelayStatus::Ok
         );
@@ -1428,8 +1445,20 @@ fn test_ffi_specialized_subscriber_and_exporter_default_and_invalid_name_paths()
                 ptr::null(),
                 ptr::null(),
                 ptr::null(),
+                ptr::null(),
                 0,
-                &mut oi_subscriber,
+                ptr::null(),
+                ptr::null(),
+                ptr::null(),
+                ptr::null(),
+                ptr::null(),
+                60_000,
+                ptr::null(),
+                ptr::null(),
+                ptr::null(),
+                ptr::null(),
+                ptr::null(),
+                &mut oi_subscriber
             ),
             NemoRelayStatus::Ok
         );
@@ -1478,7 +1507,10 @@ fn test_ffi_specialized_subscriber_and_exporter_default_and_invalid_name_paths()
                 agent.as_ptr(),
                 version.as_ptr(),
                 ptr::null(),
-                &mut exporter,
+                std::ptr::null(),
+                std::ptr::null(),
+                std::ptr::null(),
+                &mut exporter
             ),
             NemoRelayStatus::Ok
         );
@@ -1522,10 +1554,11 @@ fn test_ffi_otel_projection_options_accept_and_validate_legacy_controls() {
         let mappings = c"[{\"key\":\"nemo_relay.model_name\",\"alias\":\"model.alias\"}]";
         let mut subscriber: *mut FfiOpenTelemetrySubscriber = ptr::null_mut();
         assert_status!(
-            nemo_relay_otel_subscriber_create_with_projection_options(
+            nemo_relay_otel_subscriber_create(
                 c"full".as_ptr(),
                 ptr::null(),
                 endpoint.as_ptr(),
+                ptr::null(),
                 ptr::null(),
                 ptr::null(),
                 ptr::null(),
@@ -1536,7 +1569,15 @@ fn test_ffi_otel_projection_options_accept_and_validate_legacy_controls() {
                 c"tool".as_ptr(),
                 exclusions.as_ptr(),
                 mappings.as_ptr(),
-                &mut subscriber,
+                ptr::null(),
+                ptr::null(),
+                60_000,
+                ptr::null(),
+                ptr::null(),
+                ptr::null(),
+                ptr::null(),
+                ptr::null(),
+                &mut subscriber
             ),
             NemoRelayStatus::Ok
         );
@@ -1545,10 +1586,11 @@ fn test_ffi_otel_projection_options_accept_and_validate_legacy_controls() {
         let invalid_mappings = c"[{\"key\":\"\",\"alias\":\"model.alias\"}]";
         let mut invalid_subscriber: *mut FfiOpenTelemetrySubscriber = ptr::null_mut();
         assert_status!(
-            nemo_relay_otel_subscriber_create_with_projection_options(
+            nemo_relay_otel_subscriber_create(
                 c"full".as_ptr(),
                 ptr::null(),
                 endpoint.as_ptr(),
+                ptr::null(),
                 ptr::null(),
                 ptr::null(),
                 ptr::null(),
@@ -1559,7 +1601,15 @@ fn test_ffi_otel_projection_options_accept_and_validate_legacy_controls() {
                 c"inherit".as_ptr(),
                 ptr::null(),
                 invalid_mappings.as_ptr(),
-                &mut invalid_subscriber,
+                ptr::null(),
+                ptr::null(),
+                60_000,
+                ptr::null(),
+                ptr::null(),
+                ptr::null(),
+                ptr::null(),
+                ptr::null(),
+                &mut invalid_subscriber
             ),
             NemoRelayStatus::InvalidArg
         );
@@ -1577,10 +1627,11 @@ fn test_ffi_otel_projection_options_v2_accepts_and_validates_metadata_prefixes()
         let valid_prefixes = c"[\"nv.\",\"host_\"]";
         let mut subscriber: *mut FfiOpenTelemetrySubscriber = ptr::null_mut();
         assert_status!(
-            nemo_relay_otel_subscriber_create_with_projection_options_v2(
+            nemo_relay_otel_subscriber_create(
                 c"full".as_ptr(),
                 ptr::null(),
                 endpoint.as_ptr(),
+                ptr::null(),
                 ptr::null(),
                 ptr::null(),
                 ptr::null(),
@@ -1592,7 +1643,14 @@ fn test_ffi_otel_projection_options_v2_accepts_and_validates_metadata_prefixes()
                 ptr::null(),
                 ptr::null(),
                 valid_prefixes.as_ptr(),
-                &mut subscriber,
+                ptr::null(),
+                60_000,
+                ptr::null(),
+                ptr::null(),
+                ptr::null(),
+                ptr::null(),
+                ptr::null(),
+                &mut subscriber
             ),
             NemoRelayStatus::Ok
         );
@@ -1604,10 +1662,11 @@ fn test_ffi_otel_projection_options_v2_accepts_and_validates_metadata_prefixes()
         ] {
             let mut invalid_subscriber: *mut FfiOpenTelemetrySubscriber = ptr::null_mut();
             assert_status!(
-                nemo_relay_otel_subscriber_create_with_projection_options_v2(
+                nemo_relay_otel_subscriber_create(
                     c"full".as_ptr(),
                     ptr::null(),
                     endpoint.as_ptr(),
+                    ptr::null(),
                     ptr::null(),
                     ptr::null(),
                     ptr::null(),
@@ -1619,7 +1678,14 @@ fn test_ffi_otel_projection_options_v2_accepts_and_validates_metadata_prefixes()
                     ptr::null(),
                     ptr::null(),
                     prefixes,
-                    &mut invalid_subscriber,
+                    ptr::null(),
+                    60_000,
+                    ptr::null(),
+                    ptr::null(),
+                    ptr::null(),
+                    ptr::null(),
+                    ptr::null(),
+                    &mut invalid_subscriber
                 ),
                 expected_status
             );
@@ -1637,10 +1703,11 @@ fn test_ffi_otel_projection_options_v3_configures_completed_context_ttl() {
         let endpoint = c"http://localhost:4318/v1/traces";
         let mut subscriber: *mut FfiOpenTelemetrySubscriber = ptr::null_mut();
         assert_status!(
-            nemo_relay_otel_subscriber_create_with_projection_options_v3(
+            nemo_relay_otel_subscriber_create(
                 c"full".as_ptr(),
                 ptr::null(),
                 endpoint.as_ptr(),
+                ptr::null(),
                 ptr::null(),
                 ptr::null(),
                 ptr::null(),
@@ -1652,8 +1719,14 @@ fn test_ffi_otel_projection_options_v3_configures_completed_context_ttl() {
                 ptr::null(),
                 ptr::null(),
                 ptr::null(),
+                ptr::null(),
                 750,
-                &mut subscriber,
+                ptr::null(),
+                ptr::null(),
+                ptr::null(),
+                ptr::null(),
+                ptr::null(),
+                &mut subscriber
             ),
             NemoRelayStatus::Ok
         );
@@ -1661,10 +1734,11 @@ fn test_ffi_otel_projection_options_v3_configures_completed_context_ttl() {
 
         let mut invalid_subscriber: *mut FfiOpenTelemetrySubscriber = ptr::null_mut();
         assert_status!(
-            nemo_relay_otel_subscriber_create_with_projection_options_v3(
+            nemo_relay_otel_subscriber_create(
                 c"full".as_ptr(),
                 ptr::null(),
                 endpoint.as_ptr(),
+                ptr::null(),
                 ptr::null(),
                 ptr::null(),
                 ptr::null(),
@@ -1676,8 +1750,14 @@ fn test_ffi_otel_projection_options_v3_configures_completed_context_ttl() {
                 ptr::null(),
                 ptr::null(),
                 ptr::null(),
+                ptr::null(),
                 0,
-                &mut invalid_subscriber,
+                ptr::null(),
+                ptr::null(),
+                ptr::null(),
+                ptr::null(),
+                ptr::null(),
+                &mut invalid_subscriber
             ),
             NemoRelayStatus::InvalidArg
         );
@@ -1694,7 +1774,7 @@ fn test_ffi_otel_projection_options_v5_accepts_and_validates_resource_metadata_p
         let endpoint = c"http://localhost:4318/v1/traces";
         let mut subscriber: *mut FfiOpenTelemetrySubscriber = ptr::null_mut();
         assert_status!(
-            nemo_relay_otel_subscriber_create_with_projection_options_v5(
+            nemo_relay_otel_subscriber_create(
                 c"full".as_ptr(),
                 ptr::null(),
                 endpoint.as_ptr(),
@@ -1712,7 +1792,12 @@ fn test_ffi_otel_projection_options_v5_accepts_and_validates_resource_metadata_p
                 ptr::null(),
                 c"[\"deployment.\"]".as_ptr(),
                 60_000,
-                &mut subscriber,
+                ptr::null(),
+                ptr::null(),
+                ptr::null(),
+                ptr::null(),
+                ptr::null(),
+                &mut subscriber
             ),
             NemoRelayStatus::Ok
         );
@@ -1720,7 +1805,7 @@ fn test_ffi_otel_projection_options_v5_accepts_and_validates_resource_metadata_p
 
         let mut invalid_subscriber: *mut FfiOpenTelemetrySubscriber = ptr::null_mut();
         assert_status!(
-            nemo_relay_otel_subscriber_create_with_projection_options_v5(
+            nemo_relay_otel_subscriber_create(
                 c"full".as_ptr(),
                 ptr::null(),
                 endpoint.as_ptr(),
@@ -1738,7 +1823,12 @@ fn test_ffi_otel_projection_options_v5_accepts_and_validates_resource_metadata_p
                 ptr::null(),
                 c"[\"\"]".as_ptr(),
                 60_000,
-                &mut invalid_subscriber,
+                ptr::null(),
+                ptr::null(),
+                ptr::null(),
+                ptr::null(),
+                ptr::null(),
+                &mut invalid_subscriber
             ),
             NemoRelayStatus::InvalidArg
         );
@@ -1760,7 +1850,7 @@ fn test_ffi_otel_projection_options_v4_accepts_header_env_and_keeps_values_secre
         std::env::set_var(variable, "Bearer activation-value");
         let mut subscriber: *mut FfiOpenTelemetrySubscriber = ptr::null_mut();
         assert_status!(
-            nemo_relay_otel_subscriber_create_with_projection_options_v4(
+            nemo_relay_otel_subscriber_create(
                 c"full".as_ptr(),
                 ptr::null(),
                 endpoint.as_ptr(),
@@ -1776,8 +1866,14 @@ fn test_ffi_otel_projection_options_v4_accepts_header_env_and_keeps_values_secre
                 ptr::null(),
                 ptr::null(),
                 ptr::null(),
+                ptr::null(),
                 60_000,
-                &mut subscriber,
+                ptr::null(),
+                ptr::null(),
+                ptr::null(),
+                ptr::null(),
+                ptr::null(),
+                &mut subscriber
             ),
             NemoRelayStatus::Ok
         );
@@ -1786,7 +1882,7 @@ fn test_ffi_otel_projection_options_v4_accepts_header_env_and_keeps_values_secre
         std::env::set_var(variable, format!("{secret}\ninvalid"));
         let mut invalid_subscriber: *mut FfiOpenTelemetrySubscriber = ptr::null_mut();
         assert_status!(
-            nemo_relay_otel_subscriber_create_with_projection_options_v4(
+            nemo_relay_otel_subscriber_create(
                 c"full".as_ptr(),
                 ptr::null(),
                 endpoint.as_ptr(),
@@ -1802,8 +1898,14 @@ fn test_ffi_otel_projection_options_v4_accepts_header_env_and_keeps_values_secre
                 ptr::null(),
                 ptr::null(),
                 ptr::null(),
+                ptr::null(),
                 60_000,
-                &mut invalid_subscriber,
+                ptr::null(),
+                ptr::null(),
+                ptr::null(),
+                ptr::null(),
+                ptr::null(),
+                &mut invalid_subscriber
             ),
             NemoRelayStatus::Internal
         );
@@ -1838,13 +1940,25 @@ fn test_ffi_specialized_constructor_invalid_utf8_and_malformed_json_sweep() {
                 ptr::null(),
                 endpoint.as_ptr(),
                 malformed_json.as_ptr(),
+                ptr::null(),
                 valid_attrs.as_ptr(),
                 service.as_ptr(),
                 namespace.as_ptr(),
                 version.as_ptr(),
                 scope.as_ptr(),
                 1,
-                &mut otel,
+                ptr::null(),
+                ptr::null(),
+                ptr::null(),
+                ptr::null(),
+                ptr::null(),
+                60_000,
+                ptr::null(),
+                ptr::null(),
+                ptr::null(),
+                ptr::null(),
+                ptr::null(),
+                &mut otel
             ),
             NemoRelayStatus::InvalidJson
         );
@@ -1854,13 +1968,25 @@ fn test_ffi_specialized_constructor_invalid_utf8_and_malformed_json_sweep() {
                 ptr::null(),
                 endpoint.as_ptr(),
                 valid_headers.as_ptr(),
+                ptr::null(),
                 malformed_json.as_ptr(),
                 service.as_ptr(),
                 namespace.as_ptr(),
                 version.as_ptr(),
                 scope.as_ptr(),
                 1,
-                &mut otel,
+                ptr::null(),
+                ptr::null(),
+                ptr::null(),
+                ptr::null(),
+                ptr::null(),
+                60_000,
+                ptr::null(),
+                ptr::null(),
+                ptr::null(),
+                ptr::null(),
+                ptr::null(),
+                &mut otel
             ),
             NemoRelayStatus::InvalidJson
         );
@@ -1920,13 +2046,25 @@ fn test_ffi_specialized_constructor_invalid_utf8_and_malformed_json_sweep() {
                     transport,
                     endpoint_ptr,
                     valid_headers.as_ptr(),
+                    ptr::null(),
                     valid_attrs.as_ptr(),
                     service_ptr,
                     namespace_ptr,
                     version_ptr,
                     scope_ptr,
                     1,
-                    &mut otel,
+                    ptr::null(),
+                    ptr::null(),
+                    ptr::null(),
+                    ptr::null(),
+                    ptr::null(),
+                    60_000,
+                    ptr::null(),
+                    ptr::null(),
+                    ptr::null(),
+                    ptr::null(),
+                    ptr::null(),
+                    &mut otel
                 ),
                 NemoRelayStatus::InvalidUtf8
             );
@@ -1939,13 +2077,25 @@ fn test_ffi_specialized_constructor_invalid_utf8_and_malformed_json_sweep() {
                 ptr::null(),
                 endpoint.as_ptr(),
                 malformed_json.as_ptr(),
+                ptr::null(),
                 valid_attrs.as_ptr(),
                 service.as_ptr(),
                 namespace.as_ptr(),
                 version.as_ptr(),
                 scope.as_ptr(),
                 1,
-                &mut openinference,
+                ptr::null(),
+                ptr::null(),
+                ptr::null(),
+                ptr::null(),
+                ptr::null(),
+                60_000,
+                ptr::null(),
+                ptr::null(),
+                ptr::null(),
+                ptr::null(),
+                ptr::null(),
+                &mut openinference
             ),
             NemoRelayStatus::InvalidJson
         );
@@ -1955,13 +2105,25 @@ fn test_ffi_specialized_constructor_invalid_utf8_and_malformed_json_sweep() {
                 ptr::null(),
                 endpoint.as_ptr(),
                 valid_headers.as_ptr(),
+                ptr::null(),
                 malformed_json.as_ptr(),
                 service.as_ptr(),
                 namespace.as_ptr(),
                 version.as_ptr(),
                 scope.as_ptr(),
                 1,
-                &mut openinference,
+                ptr::null(),
+                ptr::null(),
+                ptr::null(),
+                ptr::null(),
+                ptr::null(),
+                60_000,
+                ptr::null(),
+                ptr::null(),
+                ptr::null(),
+                ptr::null(),
+                ptr::null(),
+                &mut openinference
             ),
             NemoRelayStatus::InvalidJson
         );
@@ -2021,13 +2183,25 @@ fn test_ffi_specialized_constructor_invalid_utf8_and_malformed_json_sweep() {
                     transport,
                     endpoint_ptr,
                     valid_headers.as_ptr(),
+                    ptr::null(),
                     valid_attrs.as_ptr(),
                     service_ptr,
                     namespace_ptr,
                     version_ptr,
                     scope_ptr,
                     1,
-                    &mut openinference,
+                    ptr::null(),
+                    ptr::null(),
+                    ptr::null(),
+                    ptr::null(),
+                    ptr::null(),
+                    60_000,
+                    ptr::null(),
+                    ptr::null(),
+                    ptr::null(),
+                    ptr::null(),
+                    ptr::null(),
+                    &mut openinference
                 ),
                 NemoRelayStatus::InvalidUtf8
             );
@@ -2059,7 +2233,10 @@ fn test_ffi_specialized_constructor_invalid_utf8_and_malformed_json_sweep() {
                     agent_ptr,
                     version_ptr,
                     model_ptr,
-                    &mut exporter,
+                    std::ptr::null(),
+                    std::ptr::null(),
+                    std::ptr::null(),
+                    &mut exporter
                 ),
                 NemoRelayStatus::InvalidUtf8
             );
