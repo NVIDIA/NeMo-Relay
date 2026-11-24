@@ -437,10 +437,76 @@ fn signal_process_group(process_group: libc::pid_t) -> std::io::Result<()> {
         return Ok(());
     }
     #[cfg(target_vendor = "apple")]
-    if error.raw_os_error() == Some(libc::EPERM) {
+    if error.raw_os_error() == Some(libc::EPERM) && !group_has_live_members(process_group)? {
         return Ok(());
     }
     Err(error)
+}
+
+#[cfg(target_vendor = "apple")]
+const PROC_PGRP_ONLY: u32 = 2;
+
+#[cfg(target_vendor = "apple")]
+fn group_has_live_members(group: libc::pid_t) -> std::io::Result<bool> {
+    let group_id = u32::try_from(group).map_err(|_| {
+        std::io::Error::new(
+            std::io::ErrorKind::InvalidInput,
+            "process group id is negative",
+        )
+    })?;
+    // SAFETY: A null buffer asks libproc for the byte count the member list needs.
+    let needed = unsafe { libc::proc_listpids(PROC_PGRP_ONLY, group_id, std::ptr::null_mut(), 0) };
+    if needed < 0 {
+        return Err(std::io::Error::last_os_error());
+    }
+    let mut members =
+        vec![0 as libc::pid_t; needed as usize / std::mem::size_of::<libc::pid_t>() + 8];
+    let capacity = libc::c_int::try_from(members.len() * std::mem::size_of::<libc::pid_t>())
+        .map_err(|_| {
+            std::io::Error::new(
+                std::io::ErrorKind::InvalidInput,
+                "process group member list is too large",
+            )
+        })?;
+    // SAFETY: `members` is a writable buffer of `capacity` bytes for the duration of the call.
+    let written = unsafe {
+        libc::proc_listpids(
+            PROC_PGRP_ONLY,
+            group_id,
+            members.as_mut_ptr().cast(),
+            capacity,
+        )
+    };
+    if written < 0 {
+        return Err(std::io::Error::last_os_error());
+    }
+    members.truncate(written as usize / std::mem::size_of::<libc::pid_t>());
+    for member in members.into_iter().filter(|member| *member != 0) {
+        // SAFETY: `proc_bsdinfo` is a plain C struct for which all-zero bytes are a valid value.
+        let mut info: libc::proc_bsdinfo = unsafe { std::mem::zeroed() };
+        let size = std::mem::size_of::<libc::proc_bsdinfo>() as libc::c_int;
+        // SAFETY: `info` is valid for `size` bytes of writes.
+        let returned = unsafe {
+            libc::proc_pidinfo(
+                member,
+                libc::PROC_PIDTBSDINFO,
+                0,
+                std::ptr::from_mut(&mut info).cast(),
+                size,
+            )
+        };
+        if returned == size {
+            if info.pbi_status != libc::SZOMB {
+                return Ok(true);
+            }
+            continue;
+        }
+        let error = std::io::Error::last_os_error();
+        if error.raw_os_error() != Some(libc::ESRCH) {
+            return Ok(true);
+        }
+    }
+    Ok(false)
 }
 
 #[cfg(unix)]
