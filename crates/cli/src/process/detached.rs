@@ -155,7 +155,7 @@ pub(crate) type DetachedChild = Child;
 pub(crate) struct DetachedChild {
     process: windows_sys::Win32::Foundation::HANDLE,
     thread: windows_sys::Win32::Foundation::HANDLE,
-    job: JobObject,
+    job: Option<JobObject>,
     id: u32,
 }
 
@@ -239,10 +239,22 @@ impl DetachedChild {
     }
 
     pub(crate) fn start_kill(&mut self) -> std::io::Result<()> {
-        // SAFETY: `self.job` is the private Job Object owned by this value.
-        if unsafe { windows_sys::Win32::System::JobObjects::TerminateJobObject(self.job.0, 1) } == 0
+        if let Some(job) = &self.job {
+            // SAFETY: `job` is the private Job Object owned by this value.
+            if unsafe { windows_sys::Win32::System::JobObjects::TerminateJobObject(job.0, 1) } == 0
+            {
+                return Err(windows_spawn_error("TerminateJobObject detached child"));
+            }
+            return Ok(());
+        }
+        // SAFETY: The process handle is owned and remains live throughout this call.
+        if unsafe { windows_sys::Win32::System::Threading::TerminateProcess(self.process, 1) } == 0
         {
-            return Err(windows_spawn_error("TerminateJobObject detached child"));
+            let error = std::io::Error::last_os_error();
+            if self.try_wait()?.is_some() {
+                return Ok(());
+            }
+            return Err(error);
         }
         Ok(())
     }
@@ -343,28 +355,18 @@ fn spawn_with_handle_list(
     let launcher_job = current_launcher_job()?;
     let (creation_flags, limited_lifetime) =
         windows_creation_flags(launcher_job.as_ref().map(|job| job.limit_flags));
-    if let Some(job) = &launcher_job
-        && limited_lifetime
-        && job.ui_restrictions != 0
-    {
-        return Err(std::io::Error::new(
-            std::io::ErrorKind::Unsupported,
-            "the launcher's Job Object sets UI restrictions and denies breakaway, so a detached child cannot own a Job Object",
-        ));
-    }
-    let program = wide_nul(command.get_program());
-    let lifetime_limit = if limited_lifetime {
-        Some("windows_job_breakaway_denied")
-    } else if worker
-        && launcher_job.is_some()
-        && breakaway_leaves_child_in_an_ancestor_job(&program, creation_flags)?
-    {
-        Some("windows_parent_job_retained")
-    } else {
+    let host_scoped = limited_lifetime
+        && launcher_job
+            .as_ref()
+            .is_some_and(|job| job.ui_restrictions != 0);
+    let job = if host_scoped {
         None
+    } else {
+        Some(create_job_object()?)
     };
-    let job = create_job_object()?;
-    let job_list = [job.0];
+    let job_list = job.as_ref().map(|job| [job.0]);
+    let attribute_count = 1 + u32::from(job_list.is_some());
+    let program = wide_nul(command.get_program());
     let handles = [
         stdin.as_raw_handle().cast::<c_void>(),
         stdout.as_raw_handle().cast::<c_void>(),
@@ -384,7 +386,14 @@ fn spawn_with_handle_list(
 
     let mut attribute_bytes = 0;
     // SAFETY: A null first call obtains the required allocation size.
-    unsafe { InitializeProcThreadAttributeList(std::ptr::null_mut(), 2, 0, &mut attribute_bytes) };
+    unsafe {
+        InitializeProcThreadAttributeList(
+            std::ptr::null_mut(),
+            attribute_count,
+            0,
+            &mut attribute_bytes,
+        )
+    };
     if attribute_bytes == 0 {
         return Err(windows_spawn_error(
             "InitializeProcThreadAttributeList sizing",
@@ -394,8 +403,14 @@ fn spawn_with_handle_list(
     let mut attribute_storage = vec![0_usize; words];
     let attribute_pointer = attribute_storage.as_mut_ptr().cast::<c_void>();
     // SAFETY: The aligned allocation has the size returned by the sizing call.
-    if unsafe { InitializeProcThreadAttributeList(attribute_pointer, 2, 0, &mut attribute_bytes) }
-        == 0
+    if unsafe {
+        InitializeProcThreadAttributeList(
+            attribute_pointer,
+            attribute_count,
+            0,
+            &mut attribute_bytes,
+        )
+    } == 0
     {
         return Err(windows_spawn_error("InitializeProcThreadAttributeList"));
     }
@@ -415,20 +430,23 @@ fn spawn_with_handle_list(
     {
         return Err(windows_spawn_error("UpdateProcThreadAttribute handle list"));
     }
-    // SAFETY: `job_list` holds the live Job Object handle until the attribute list is deleted.
-    if unsafe {
-        UpdateProcThreadAttribute(
-            attribute_list.0,
-            0,
-            PROC_THREAD_ATTRIBUTE_JOB_LIST as usize,
-            job_list.as_ptr().cast(),
-            std::mem::size_of::<HANDLE>(),
-            std::ptr::null_mut(),
-            std::ptr::null(),
-        )
-    } == 0
-    {
-        return Err(windows_spawn_error("UpdateProcThreadAttribute job list"));
+    if let Some(job_list) = &job_list {
+        // SAFETY: `job_list` holds the live Job Object handle until the attribute list is
+        // deleted.
+        if unsafe {
+            UpdateProcThreadAttribute(
+                attribute_list.0,
+                0,
+                PROC_THREAD_ATTRIBUTE_JOB_LIST as usize,
+                job_list.as_ptr().cast(),
+                std::mem::size_of::<HANDLE>(),
+                std::ptr::null_mut(),
+                std::ptr::null(),
+            )
+        } == 0
+        {
+            return Err(windows_spawn_error("UpdateProcThreadAttribute job list"));
+        }
     }
 
     let mut command_line = Vec::new();
@@ -480,79 +498,36 @@ fn spawn_with_handle_list(
         job,
         id: process.dwProcessId,
     };
-    if let Err(error) = keep_job_alive_with_child(&child) {
+    let retained = match &child.job {
+        Some(job) => keep_job_alive_with_child(child.process, job),
+        None => Ok(()),
+    };
+    if let Err(error) = retained {
         return Err(abandon_spawned_child(&mut child, error));
     }
-    match lifetime_limit {
-        Some(reason) if worker => {
-            log::warn!(target: "nemo_relay.bootstrap", event = "worker_lifetime_limited", reason = reason; "Worker remains scoped to the host job; host shutdown can require reactivation");
+    if limited_lifetime {
+        if worker {
+            log::warn!(target: "nemo_relay.bootstrap", event = "worker_lifetime_limited", reason = "windows_job_breakaway_denied"; "Worker remains scoped to the host job; host shutdown can require reactivation");
+        } else {
+            log::warn!(target: "nemo_relay.bootstrap", event = "gateway_lifetime_limited", reason = "windows_job_breakaway_denied"; "The shared gateway lifetime is limited to the host job");
         }
-        Some(reason) => {
-            log::warn!(target: "nemo_relay.bootstrap", event = "gateway_lifetime_limited", reason = reason; "The shared gateway lifetime is limited to the host job");
-        }
-        None => {}
+    }
+    if host_scoped {
+        let event = if worker {
+            "worker_tree_ownership_unavailable"
+        } else {
+            "gateway_tree_ownership_unavailable"
+        };
+        log::warn!(target: "nemo_relay.bootstrap", event = event, reason = "windows_ui_restricted_job"; "The launcher's Job Object sets UI restrictions, so the detached child shares it without a private Job Object");
     }
     Ok(child)
 }
 
 #[cfg(windows)]
-fn breakaway_leaves_child_in_an_ancestor_job(
-    program: &[u16],
-    creation_flags: u32,
-) -> std::io::Result<bool> {
-    use windows_sys::Win32::Foundation::CloseHandle;
-    use windows_sys::Win32::System::JobObjects::IsProcessInJob;
-    use windows_sys::Win32::System::Threading::{
-        CREATE_SUSPENDED, CreateProcessW, PROCESS_INFORMATION, STARTUPINFOW, TerminateProcess,
-    };
-
-    let mut command_line = program.to_vec();
-    let startup = STARTUPINFOW {
-        cb: std::mem::size_of::<STARTUPINFOW>() as u32,
-        ..Default::default()
-    };
-    let mut process = PROCESS_INFORMATION::default();
-    // SAFETY: Every pointer references initialized storage that remains live for this call. The
-    // suspended probe never runs and is terminated below.
-    if unsafe {
-        CreateProcessW(
-            program.as_ptr(),
-            command_line.as_mut_ptr(),
-            std::ptr::null(),
-            std::ptr::null(),
-            0,
-            creation_flags | CREATE_SUSPENDED,
-            std::ptr::null_mut(),
-            std::ptr::null(),
-            &startup,
-            &mut process,
-        )
-    } == 0
-    {
-        return Err(windows_spawn_error("CreateProcessW job retention probe"));
-    }
-    let mut in_job = 0;
-    // SAFETY: The probe process handle is owned here and the output pointer is valid.
-    let queried = unsafe { IsProcessInJob(process.hProcess, std::ptr::null_mut(), &mut in_job) };
-    let query_error =
-        (queried == 0).then(|| windows_spawn_error("IsProcessInJob job retention probe"));
-    // SAFETY: The probe handles were returned by CreateProcessW and are owned here.
-    let terminated = unsafe { TerminateProcess(process.hProcess, 0) };
-    let terminate_error =
-        (terminated == 0).then(|| windows_spawn_error("TerminateProcess job retention probe"));
-    // SAFETY: Both handles are owned and unused after this point.
-    unsafe {
-        CloseHandle(process.hThread);
-        CloseHandle(process.hProcess);
-    }
-    if let Some(error) = query_error.or(terminate_error) {
-        return Err(error);
-    }
-    Ok(in_job != 0)
-}
-
-#[cfg(windows)]
-fn keep_job_alive_with_child(child: &DetachedChild) -> std::io::Result<()> {
+fn keep_job_alive_with_child(
+    process: windows_sys::Win32::Foundation::HANDLE,
+    job: &JobObject,
+) -> std::io::Result<()> {
     use windows_sys::Win32::Foundation::{DUPLICATE_SAME_ACCESS, DuplicateHandle};
     use windows_sys::Win32::System::Threading::GetCurrentProcess;
 
@@ -562,8 +537,8 @@ fn keep_job_alive_with_child(child: &DetachedChild) -> std::io::Result<()> {
     if unsafe {
         DuplicateHandle(
             GetCurrentProcess(),
-            child.job.0,
-            child.process,
+            job.0,
+            process,
             &mut child_held_job,
             0,
             0,
