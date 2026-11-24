@@ -194,7 +194,11 @@ changes for each agent you deploy.
   turns. The 1.0.0 bundle also enables request-class hints. Relay uses
   those hints to keep internal calls from changing the main turn's output.
 - **Codex.** Relay requires `codex-cli` 0.150.0 or later. The new bundle
-  adds `SessionEnd` and `Interrupt` hooks to close interrupted turns.
+  adds `SessionEnd` and `Interrupt` hooks to close interrupted turns. Its
+  MCP server sets `cwd` to the dispatcher command's directory, so Codex can
+  start it after a session's folder is deleted. Daemon workers it starts
+  resolve relative file outputs against that directory; configure absolute,
+  writable destinations for them.
 - **Pi.** Relay requires Pi 1.6.0 or later. The new bundle changes provider
   routing, preserves nested tool calls, and adds lifecycle and dialog
   timing. The canonical bundle also changes when policy-denial termination
@@ -205,7 +209,12 @@ personal Relay-managed integrations, run `nemo-relay integrations refresh`.
 For a managed deployment, generate a bundle in a new directory using the
 same daemon address, dispatcher, platform, and agents. Deploy it and
 provision the new SHA-256 digest separately. Update the launch paths,
-including Pi's `-e` path and Claude's plugin and settings paths.
+including Pi's `-e` path and Claude's plugin and settings paths. For Codex,
+replace the marketplace copy from the replacement bundle, then rerun
+`codex plugin add nemo-relay-managed-v1@nemo-relay-managed` as each user,
+restart Codex, and review and trust the replacement Relay hooks. Codex does
+not refresh an installed plugin whose version is unchanged, and its hook trust
+covers the plugin's contents.
 Use the generation and validation commands in
 [Distribute Immutable Managed Settings](/daemon/configuration#distribute-immutable-managed-settings).
 

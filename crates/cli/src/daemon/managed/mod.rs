@@ -482,6 +482,7 @@ fn render_codex(spec: &ManagedBundleSpec) -> Result<Vec<RenderedArtifact>, CliEr
     let mcp = json!({
         "nemo-relay": {
             "command": spec.dispatcher_command,
+            "cwd": dispatcher_directory(spec),
             "args": ["daemon", "mcp", "--daemon-address", spec.daemon_address],
             "env_vars": [ROUTE_TOKEN_ENV],
             "required": true,
@@ -517,6 +518,24 @@ fn render_codex(spec: &ManagedBundleSpec) -> Result<Vec<RenderedArtifact>, CliEr
             settings.into_bytes(),
         ),
     ])
+}
+
+/// Returns the dispatcher's parent directory, keeping its separators.
+fn dispatcher_directory(spec: &ManagedBundleSpec) -> String {
+    let command = spec.dispatcher_command.as_str();
+    let separators: &[char] = match spec.platform {
+        ManagedPlatform::Windows => &['/', '\\'],
+        ManagedPlatform::Linux | ManagedPlatform::Macos => &['/'],
+    };
+    // validate_dispatcher accepts only absolute file paths, so a separator exists.
+    let separator = command
+        .rfind(separators)
+        .expect("validated absolute dispatcher");
+    let drive_root = matches!(spec.platform, ManagedPlatform::Windows)
+        && separator == 2
+        && command.as_bytes()[1] == b':';
+    let is_root = separator == 0 || drive_root;
+    command[..if is_root { separator + 1 } else { separator }].to_owned()
 }
 
 fn render_claude(spec: &ManagedBundleSpec) -> Result<Vec<RenderedArtifact>, CliError> {
@@ -796,7 +815,10 @@ fn validate_dispatcher(command: &str, platform: ManagedPlatform) -> Result<(), C
                 .any(|root| path == *root || path.starts_with(&format!("{root}/")))
         }
     };
-    let points_to_directory = normalized.ends_with('/');
+    let points_to_directory = normalized.ends_with('/')
+        || (matches!(platform, ManagedPlatform::Windows)
+            && normalized.starts_with("//")
+            && parts.clone().count() < 3);
     if command.is_empty()
         || !absolute
         || !platform_separators_are_valid
