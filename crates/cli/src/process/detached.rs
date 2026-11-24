@@ -155,7 +155,7 @@ pub(crate) type DetachedChild = Child;
 pub(crate) struct DetachedChild {
     process: windows_sys::Win32::Foundation::HANDLE,
     thread: windows_sys::Win32::Foundation::HANDLE,
-    job: Option<JobObject>,
+    job: JobObject,
     id: u32,
 }
 
@@ -237,21 +237,10 @@ impl DetachedChild {
     }
 
     pub(crate) fn start_kill(&mut self) -> std::io::Result<()> {
-        if let Some(job) = &self.job {
-            // SAFETY: `job` is the private Job Object owned by this value.
-            if unsafe { windows_sys::Win32::System::JobObjects::TerminateJobObject(job.0, 1) } == 0
-            {
-                return Err(windows_spawn_error("TerminateJobObject detached child"));
-            }
-            return Ok(());
-        }
-        // SAFETY: The process handle is owned and remains live throughout this call.
-        if unsafe { windows_sys::Win32::System::Threading::TerminateProcess(self.process, 1) } == 0
+        // SAFETY: `self.job` is the private Job Object owned by this value.
+        if unsafe { windows_sys::Win32::System::JobObjects::TerminateJobObject(self.job.0, 1) } == 0
         {
-            if self.try_wait()?.is_some() {
-                return Ok(());
-            }
-            return Err(std::io::Error::last_os_error());
+            return Err(windows_spawn_error("TerminateJobObject detached child"));
         }
         Ok(())
     }
@@ -465,11 +454,10 @@ fn spawn_with_handle_list(
     if let Some(error) = create_error {
         return Err(error);
     }
-    let job_handle = job.0;
     let mut child = DetachedChild {
         process: process.hProcess,
         thread: process.hThread,
-        job: Some(job),
+        job,
         id: process.dwProcessId,
     };
     if worker && limited_lifetime {
@@ -481,7 +469,7 @@ fn spawn_with_handle_list(
     if unsafe {
         DuplicateHandle(
             GetCurrentProcess(),
-            job_handle,
+            child.job.0,
             child.process,
             &mut child_handle,
             0,
