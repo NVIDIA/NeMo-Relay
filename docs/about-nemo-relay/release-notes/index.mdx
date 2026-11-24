@@ -1,7 +1,7 @@
 ---
 title: "Release Notes for NVIDIA NeMo Relay"
 sidebar-title: "Release Notes"
-description: "Review highlights, compatibility updates, fixed known issues, and current known issues for NVIDIA NeMo Relay 0.11."
+description: "Review changes in NVIDIA NeMo Relay 1.0.0 and fixes from the 0.11 patch releases."
 template-library-version: "1.0.0"
 position: 7
 ---
@@ -28,320 +28,226 @@ Relay](/about-nemo-relay/overview).
 For the full release history, including individual pull requests, refer to
 [GitHub Releases](https://github.com/NVIDIA/NeMo-Relay/releases).
 
-## Release 0.11.0
+## Release 1.0.0
 
-NeMo Relay 0.11.0 includes the changes below. They cover updates since 0.10.0
-and fixes from the 0.10 patch releases. For the full release history, refer to
-[GitHub Releases](https://github.com/NVIDIA/NeMo-Relay/releases).
+NeMo Relay 1.0.0 adds per-call middleware controls, app context for
+execution intercepts, and new plugin contracts. This page covers changes
+since the 0.11.0 tag. Each topic identifies changes that first shipped
+in a 0.11 patch release. For the full list, refer to the
+[comparison from 0.11.0 to main](https://github.com/NVIDIA/NeMo-Relay/compare/0.11.0...main),
+the [0.11.1 release](https://github.com/NVIDIA/NeMo-Relay/releases/tag/0.11.1),
+and the [0.11.2 release](https://github.com/NVIDIA/NeMo-Relay/releases/tag/0.11.2).
 
 ### Compatibility and Migration
 
 <Warning title="Review the Upgrade Steps">
 
-Upgrades from 0.10.0 can change hook failure behavior, provider access, worker
-configuration, and stream error handling. Review the
-[Migration Guides](/reference/migration-guides) before updating a deployment.
+Upgrade the SDKs you use and rebuild native plugins, workers, and C or
+Go consumers for the target host. Replace older managed coding-agent
+bundles before deploying the upgrade. Follow the
+[Migration Guides](/reference/migration-guides) for steps and checks.
 
 </Warning>
 
-The main compatibility changes affect these areas:
+Review these changes for the features you use.
 
-- The built-in `nemo_guardrails` plugin and `guardrails-remote` Cargo feature
-  have been removed. Remove existing component entries and Rust feature
-  references before upgrading. No replacement plugin is included. Refer to
-  [Remove Built-In NeMo Guardrails Configuration](/reference/migration-guides#remove-built-in-nemo-guardrails-configuration).
-- Node.js applications and package workflows require Node.js 24.13.1 or later.
-- LangChain and LangGraph tool results use the `nemo.relay.tool_result@1`
-  JSON wrapper. It holds display content, failure status, and result values
-  with their types. Custom Python objects stay with the call that returned
-  them. Review how custom middleware and subscribers read tool calls and results.
-  Refer to [Normalized Tool Results](/reference/tool-execution-intercept-outcomes#normalized-tool-results).
-- Worker messages now have size limits for sending and receiving data.
-  The default is 4 MiB per message. You can set limits by callback name.
-  Upgrade the host and worker SDKs together before using these settings. Refer to
-  [Configure Execution Message Size](/build-plugins/workers/grpc-v1-protocol#configure-execution-message-size).
-- Automatic OpenTelemetry Protocol (OTLP) logs and metrics now require HTTPS
-  for remote destinations, just like traces. This rule applies even without
-  credentials. Make configured Transport Layer Security (TLS) files available
-  when Relay checks plugins. A fatal TLS error stops an HTTP trace exporter.
-  Fix the TLS problem, then recreate the exporter to send traces again.
-- If you create `FileLogSinkConfig` directly in Rust, add the `failure_policy`
-  field or use `..Default::default()` to fill in missing fields.
-- Adaptive hints now use the settings in `inject_header` and `inject_body_path`.
-  Check these settings because they can now change requests sent to the provider.
+- Rust apps use the public SDK modules and add fields to managed call
+  parameter literals. Node.js apps use the package's public entry points
+  and stricter JSON types. TypeScript projects need version 5.7 or later.
+- Native plugins use the checked `v1.0` binary interface. Workers use the
+  typed `nvidia.nemo.relay.worker.v1` protocol. Rebuild both with the
+  matching SDK.
+- C callers use the consolidated signatures in `nemo_relay.h`. Go callers
+  use concrete request and telemetry types and explicit stream sources.
+- The response cache and tool-result cache move from `adaptive` to the
+  `nvidia.response_cache` plugin. Relay also removes the built-in
+  `nemo_guardrails` plugin and its Cargo feature.
+- Cache-write usage and prices use lists keyed by duration. Update
+  normalized usage readers and pricing catalogs.
+- Provider text helpers join eligible parts. OpenAI responses that include
+  refusals use typed parts. Redaction policies can match recursively with
+  `**`. Custom codecs must opt in to normalized redaction edits.
+- Review OpenTelemetry GenAI attribute mappings. The exporter now applies
+  mappings that earlier versions skipped.
+- Claude Code, Codex, and Pi managed bundles need replacement. Relay
+  requires Codex 0.150.0 or later and Pi 1.6.0 or later.
+
+### Runtime, Bindings, and Plugins
+
+- Managed model and tool calls can choose which middleware stages run.
+  All stages run by default. Execution intercepts can also read optional
+  app context for the current call. Relay keeps this context out of provider
+  requests, tool arguments, and automatic telemetry. Nested calls start
+  without inherited app context. Relay rejects invalid context before
+  execution. Context is limited to 16 KiB of JSON and 64 object and array levels. Refer to
+  [Configure Execution Stages per Call](/instrument-applications/advanced-guide#configure-execution-stages-per-call),
+  [tool context](https://github.com/NVIDIA/NeMo-Relay/pull/1826), and
+  [model context](https://github.com/NVIDIA/NeMo-Relay/pull/1831).
+- Apps can fork a scope stack while preserving the scope IDs and trace
+  context. Refer to [Scopes](/about-nemo-relay/concepts/scopes).
+- Rust splits the SDK, runtime, and built-in components into separate crates.
+  The CLI and bindings share the same default built-in plugin registrations.
+- The native plugin interface checks binary layouts before loading a
+  plugin. The SDK supports async registration and manages background work
+  and cleanup for each plugin. Workers use typed messages and can ask the
+  host for normalized model content.
+- The Go and C APIs add codec operations, including OCI GenAI support.
+  They also add cancellation, provider streams, optimization recording,
+  child scope stacks, and more event and export options.
+- Node.js ships a TypeScript wrapper over its native binding. The binding
+  uses Node-API 8 and preserves callback errors. It can report multiple
+  failures in an `AggregateError`. Plugin teardown runs on the plugin's
+  own thread. Python callback code and public types use shared definitions.
+- **Shipped in 0.11.1.** Python preserves explicit null values in dataclass
+  tool arguments and keeps configured log context retention. Typed model
+  streams await source cleanup, and Python reports stream finalizer errors.
+  Python type declarations match the public API and observability constructors.
+  Node.js no longer aborts at exit when codec callbacks are queued.
+- **Shipped in 0.11.2.** Go cancels the stream producer before waiting
+  for pending chunks. Node.js converts safe whole numbers to JSON integers.
+
+### Providers, Codecs, and Observability
+
+- Codecs expose normalized text, refusals, tool calls, and media. Rust
+  offers borrowed views. Python, Node.js, Go, C, and worker SDKs offer
+  snapshots. Relay preserves more OpenAI and Gemini content and checks
+  stream completion before recording a full response. Refer to
+  [Provider Codecs](/integrate-into-frameworks/provider-codecs).
+- Codecs apply redaction edits in the provider's own format and can build a
+  clean payload for export. Relay uses less memory during normalization and
+  redaction. The prompt analyzer distinguishes structured data and media and
+  starts with fresh learning samples.
+- Relay records OpenAI Chat Completions, OpenAI Responses, and Anthropic
+  in-stream failures as errors. Client-canceled gateway streams leave span
+  status unset. Canceling a buffered call releases the session. A forwarded
+  Responses terminal event can complete the stream.
+- Relay preserves Anthropic thinking and signature deltas and successful
+  managed response headers. Worker plugins preserve upstream errors and
+  cache-write durations.
+- OpenTelemetry reports HTTP collector responses that accept only part of a
+  batch. GenAI traces include reasoning parts and use the propagation root
+  for the conversation ID when no explicit ID is available. Refer to
+  [OpenTelemetry](/configure-plugins/observability/opentelemetry).
+- **Shipped in 0.11.1.** Relay reports Agent Trajectory Observability
+  Format (ATOF) stream sink diagnostics and counts matches for policies
+  that redact personally identifiable information (PII). Trajectory
+  redaction keeps tool-call correlation. OTLP supports no compression.
+  Relay avoids error spans for canceled downstream responses. Codecs accept
+  scalar provider costs, and pricing distinguishes one-hour cache writes.
+- **Shipped in 0.11.2.** Managed streams expose failures to clients and
+  preserve upstream causes in worker errors and logs. A stream can keep
+  the provider's HTTP `200` status when it fails before the first event.
+- **Shipped in 0.11.2.** OpenAI Responses keeps user history, instructions,
+  custom tool calls, and tool ownership hints. Anthropic refusals map to
+  `ContentFilter`. Null stream usage updates preserve earlier counts.
+- **Shipped in 0.11.2.** Interrupted LangGraph tool attempts record errors.
+  Slow ATIF uploads no longer block the subscriber dispatcher. Subagent
+  scope end events include closing hook metadata. Gemini OpenTelemetry
+  output usage includes thinking tokens.
+
+### CLI, Coding Agents, and Configuration
+
+- The CLI supports OpenID Connect sign-in through a browser or a device code.
+  Logout tries to revoke tokens at the issuer. Relay protects the sign-in
+  lock and shows the remaining token lifetime. Refer to
+  [Authentication](/nemo-relay-cli/authentication).
+- Administrators can define named configuration presets. Refer to
+  [Named Presets](/nemo-relay-cli/configuration#named-presets).
+- The CLI records OpenShell request receipts for model calls when available.
   Refer to
-  [Adaptive Hints](/configure-plugins/adaptive/adaptive-hints#fields).
-- Python object decoding now requires an explicit list of allowed classes to
-  restore tagged dataclass or Pydantic values.
-- Node.js streams now report provider, collector, and finalizer failures.
-  Callers must handle errors and await cleanup when they stop reading early.
-- Workers now load layered user and system configuration. Policy checks should
-  run before response caches. The default cache priority is now `150`.
-- Local hooks use verified TLS connections. Fail-closed delivery failures
-  return exit code `2`. Refresh personal hooks and restart affected processes.
-- Native plugins can use application binary interface (ABI) v8 scope snapshots.
-  Existing v7 callback layouts remain compatible. Worker snapshots require the
-  new `grpc-v1` extension.
-- Rust worker SDK error matches must handle `WorkerSdkError::Downstream`.
-  Python worker error checks must allow `WorkerSdkError` subclasses. Preserve
-  the original error so diagnostics can identify where the failure began.
-- Embedded diagnostics settings are fixed by the first initialization.
-  Restart the process to change them. Diagnostic read access can expose private
-  data and needs separate authorization.
+  [OpenShell Request Receipts](/nemo-relay-cli/gateway-reference#openshell-request-receipts).
+- Relay can list deployment models in Claude Code when Relay supplies the
+  credential. It can pass a placeholder API key when Claude needs one to
+  start. Internal calls still report usage. Main calls stay on their owning
+  turn. Hook marks keep their session metadata, and notifications no longer
+  open new turns.
+- **Shipped in 0.11.1.** The Claude Code `StopFailure` hook closes a failed
+  turn and leaves the session open for the next prompt. Managed Claude
+  bundles need replacement. Refer to
+  [Replace Managed Coding Agent Bundles](/reference/migration-guides#replace-managed-coding-agent-bundles).
+- Relay closes interrupted Codex turns with the new lifecycle hooks.
+- Pi routes chat requests by the actual provider and keeps nested MCP
+  tool calls linked to their parent. A managed deployment can opt in to
+  Pi's built-in codemode and tool search. Relay records failed compaction,
+  settled aborts, tool duration, and time spent in extension dialogs.
+  It also supports opt-in termination after policy denials. Pi reuses
+  its authenticated hook connection and stops waiting for authorization
+  when a tool call is aborted. Refer to [Pi](/nemo-relay-cli/pi).
+- Plugin validation applies the same secure defaults as loading.
+- **Shipped in 0.11.1.** Managed workers can receive selected host
+  environment variables. Relay reports blocked Unix process-group signaling
+  before launch. Provider key helpers can cache credentials when you enable
+  caching.
+- **Shipped in 0.11.2.** Daemon workers can stay active between Model
+  Context Protocol (MCP) sessions. The broker limits pending connections
+  based on how much shared capacity they use. It relaunches workers after
+  an exit notice or when the launching MCP process detects an exit.
+  Shutdown closes the listener before draining active work.
+- **Shipped in 0.11.2.** Slow model responses no longer block hook
+  delivery. Hook delivery checks TLS before buffering payloads. Doctor
+  checks plugin paths with the same symbolic link rules as the loader.
 
-### Integrations and Coding Agents
+### Documentation and Maintenance
 
-These changes improve framework support and coding-agent traces:
+- Dependency updates resolve security advisories. Build and test updates
+  improve artifact caching, package checks, release publishing, and
+  coverage. Quick Starts run end to end in CI, and Pi tests cover provider
+  routing, argument rewrites, and shell policy.
+- The docs reorganize installation, Quick Starts, and CLI workflows.
+  New or updated guides cover observability, app instrumentation,
+  capability APIs, and Switchyard model routing. Source build instructions
+  list the required Protobuf and Buf tools.
 
-- The Python Google Agent Development Kit (ADK) integration records agent runs,
-  large language model (LLM) calls, and tool calls. Relay guardrails and
-  intercepts apply to supported model and tool calls. Setup guides include
-  ADK CLI and workflow examples.
-  For the full support list, refer to
-  [Supported Models and Providers](/supported-integrations/google-adk#supported-models-and-providers).
-- Deep Agents supports `position="outer"` to record tool results after your
-  middleware changes them. The default remains `"inner"`. Refer to
-  [Middleware Ordering](/supported-integrations/deepagents#middleware-ordering).
-- Codex and Claude Code hook sessions can continue the launcher's trace through
-  `TRACEPARENT` and `TRACESTATE`. Refer to
-  [Continue the Launcher Trace](/nemo-relay-cli/gateway-reference#continue-the-launcher-trace).
-- LangChain tool schema edits now reach the model call.
-- Framework tool results retain content and handled error status. Manual LLM
-  completion preserves an explicit error status. Cache replay keeps framework
-  tool result objects and content intact.
-- Tool classification now recognizes `load_skill` as a skill tool.
-- CLI turn spans now inherit the name of their owning Agent scope.
-  Paired tool hooks use that name unless they supply an explicit name.
-  OpenTelemetry agent names and span names can change as a result.
-  Refer to [Turn Identity](/configure-plugins/observability/opentelemetry#turn-identity).
+- **Shipped in 0.11.1.** Dependency updates address security advisories.
+  Cargo uses shared workspace dependency declarations. This release fixes
+  Node.js package attribution text and code samples. Separate PII guides
+  explain configuration and redaction behavior.
+- **Shipped in 0.11.2.** Dependency updates address security advisories.
+  The latency test fixtures use observability config version 4.
+  Prerelease publishing keeps the latest stable docs in place.
 
-### Diagnostics and Observability
+## Known Issues in 1.0.0
 
-These changes help you inspect runtime behavior and manage telemetry:
+Review these limits when you plan an upgrade.
 
-- Runtime diagnostics stores counts and recent events in memory. Set storage
-  limits at startup. Readers can inspect gateways, daemons, and embedded
-  applications. Native and worker plugins can record their own internal work.
-  Memory views show diagnostic storage use and optional resource samples.
-  Collection is disabled by default. Refer to [Diagnostics](/reference/diagnostics).
-- Doctor checks OTLP file sinks, disabled components and destinations,
-  references to credentials, and personally identifiable information (PII)
-  settings. A passing HTTP check only means the collector answered.
-  It does not prove that the collector accepts your credentials or trace data.
-  Doctor does not test whether redaction removed sensitive data. Refer to
-  [Check Configuration and Exporters](/nemo-relay-cli/troubleshooting#check-configuration-and-exporters).
-- OTLP endpoints support custom certificate authorities and mutual TLS. Refer to
-  [TLS and Mutual TLS](/configure-plugins/observability/opentelemetry#tls-and-mutual-tls).
-- Python applications can configure local OTLP trace files with
-  `OpenTelemetryFileSinkConfig`. Refer to
-  [Trace File Sinks](/configure-plugins/observability/opentelemetry#trace-file-sinks).
-- Agent Trajectory Interchange Format (ATIF) exports can omit raw events and
-  full provider requests to reduce file size. Both remain included by default.
-  Remote uploads use compact JSON, with fewer spaces and line breaks.
-  Refer to [Reduce Output Size](/configure-plugins/observability/atif#reduce-output-size).
-- ATIF output uses valid content parts. Text-only step messages use strings.
-  Delivery-failure warnings identify the affected trajectory.
-- Diagnostic HTTP errors now use consistent status codes and reason fields.
-  Worker inspection reports whether a worker is missing or its diagnostics
-  endpoint is unavailable. Refer to [Diagnostics API](/reference/diagnostics/api).
-- Gemini cost estimates account for thinking and supported tool-use tokens.
-  Pricing now counts each group of input tokens once, including cached tokens.
-  It uses all input tokens to choose a pricing tier. If token counts conflict,
-  Relay does not estimate a cost. Refer to
-  [Model Pricing](/configure-plugins/model-pricing).
-
-### Providers and Request Handling
-
-These changes improve provider access and request handling:
-
-- Daemon workers support the full middleware pipeline for LLM calls.
-  This covers OpenAI Chat Completions, OpenAI Responses, and Anthropic Messages.
-  Refer to
-  [LLM Middleware](/daemon/reference#llm-middleware).
-- Provider API key helpers can supply a fresh credential for each request
-  attempt. Refer to
-  [Generate API Keys Per Request](/nemo-relay-cli/authentication#generate-api-keys-per-request).
-- OpenAI- and Anthropic-compatible model upstreams can use remote HTTP when
-  their hosts are explicitly trusted. These requests send no credential headers.
-  Prefer HTTPS. Refer to
-  [Credential-Free HTTP Model Upstreams](/nemo-relay-cli/provider-upstreams#credential-free-http-model-upstreams).
-- Provider routing checks access before using Relay-held credentials.
-- Request codecs preserve provider fields across multiple edits. Gemini request
-  edits preserve text placement. Relay also merges streamed function-call
-  arguments correctly.
-- OpenAI Responses streams retain usage and report missing terminal events.
-
-### Configuration and Deployment
-
-These changes improve setup, logging, and deployment guidance:
-
-- Operational file log sinks now support `failure_policy = "optional"`.
-  This lets Relay start even if it cannot open that log file. Refer to
-  [File Sink Startup Failure Policy](/reference/operational-logging#file-sink-startup-failure-policy).
-- Logging overrides preserve configured file sinks.
-- The configuration editor exposes more gateway, provider, logging, and plugin
-  settings. Daemon guidance now covers Kubernetes deployment planning. Refer to
-  [Interactive Setup](/nemo-relay-cli/configuration#interactive-setup) and
-  [Kubernetes Deployment Guidance](/daemon/kubernetes).
-- New quick starts cover application bindings and supported frameworks and
-  coding agents. Plugin setup guidance includes Switchyard. Refer to
-  [Quick Starts](/getting-started/quick-start) and
-  [Switchyard](/configure-plugins/switchyard).
-
-### Runtime and Plugin Reliability
-
-These changes improve scope inspection, streaming, and resource cleanup:
-
-- Scope snapshots expose the visible scope IDs and types across bindings and
-  plugin SDKs. Refer to
-  [Inspect the Visible Stack](/about-nemo-relay/concepts/scopes#inspect-the-visible-stack).
-- Plugin integrity and signature failures always prevent activation.
-- Streaming preserves Unicode characters split across transport chunks.
-  Python streams retain pending exceptions through native wakeups. Node.js
-  streams retain errors when closing overlaps a read.
-  Node.js also catches errors thrown by codec callbacks. Worker streams keep
-  middleware errors. Errors before the first chunk keep their HTTP status.
-  Failed streams no longer send a marker that reports successful completion.
-- Daemon, worker, and hook paths use less memory or avoid repeated work. Worker
-  cancellation and session-lock cleanup release resources when calls end.
-
-## Known Issues in 0.11.0
-
-The following known issues and limitations apply to NeMo Relay 0.11.0:
-
-- Diagnostics stores recent evidence in memory and can replace older events
-  when storage fills. It does not keep history after process exit. Diagnostic
-  detail can contain private data that has not been sanitized. Daemon worker
-  caches can return stale or partial pages. Check coverage, freshness, and
-  continuation fields before drawing conclusions. Refer to
-  [Diagnostics](/reference/diagnostics) and
-  [CLI and Daemon Diagnostics](/reference/diagnostics/cli).
-- Google ADK live model calls through `Runner.run_live` or
-  `RunConfig.support_cfc` have no Relay model events or middleware. Relay's
-  response cache skips ADK model calls. While personally identifiable information
-  (PII) redaction is active, Relay omits model response payloads from exported
-  model end events. Tools run by
-  the provider cannot be blocked or changed by Relay. Use `wrap_node` to record
-  full scopes for workflow steps, except steps run with `parallel_worker`.
-  Those steps have completion events rather than full step scopes. Refer to
-  [Google ADK Limitations](/supported-integrations/google-adk#limitations).
-- ChatGPT voice calls and sidebands use separate upstream settings. Call
-  creation uses the ChatGPT backend and keeps the caller's ChatGPT credential.
-  Sideband attachment uses `openai_base_url` and never receives Relay's provider
-  credentials. A custom OpenAI upstream might not support a call created on
-  ChatGPT. Relay also removes recognized ChatGPT tokens and `chatgpt-account-id`
-  from unmanaged voice sideband requests to that custom upstream. Use a sideband destination that can
-  access the call without relying on the caller's ChatGPT credential. Codex
-  Desktop connects its sideband directly to OpenAI by default. Refer to
-  [Codex Responses Compatibility](/daemon/configuration#codex-responses-compatibility).
-- OTLP collectors can return a successful response while rejecting individual
-  spans, log records, or metric data points. Relay does not report these partial
-  successes in runtime diagnostics, and flush or shutdown can still succeed.
-  Monitor the collector's rejection metrics and logs. Refer to
-  [OpenTelemetry](/configure-plugins/observability/opentelemetry#trace-batch-processor-configuration).
-- Go and the raw C foreign function interface (FFI) remain experimental. Build
-  them from source. Generated API pages focus on Rust, Python, and Node.js.
-- Local coding-agent observability depends on host hooks and provider traffic
-  reaching the local gateway. Relay cannot fully capture remote or cloud
-  execution that bypasses the local host.
-- Persistent Codex and Claude Code integrations use each user's
-  configuration and a shared loopback gateway. Use `nemo-relay run` when a
-  launch must retain project-specific configuration.
-- On Windows, a restrictive host Job Object can limit gateway reuse or prevent
-  persistent bootstrap. A Job Object controls a group of processes. If it
-  prevents a managed worker from leaving the group, the worker starts inside
-  the group and emits `worker_lifetime_limited`. Closing the host can stop that
-  worker. MCP clients can then need to reactivate the route after the broker's
-  recovery grace period. Refer to
-  [Register the MCP Lifecycle Client](/daemon/reference#register-the-mcp-lifecycle-client).
-  During startup, Codex can request `/models` before required MCP servers
-  start. Relay retries the request.
-- Codex 0.143 does not expose `SessionEnd`, and Codex multi-agent v2 encrypts
-  delegated task payloads. Relay cannot recover the task text from encrypted
-  payloads. Parent-child links depend on the agent identities and lifecycle
-  events that Codex provides. Refer to
-  [Multi-Agent Delegation Traces](/nemo-relay-cli/codex#multi-agent-delegation-traces).
-- Pi support is a proof of concept tested with 0.84.x. By default, its personal
-  extension lets work continue if the gateway is unavailable. Later extensions
-  can change arguments after Relay checks them. Unsupported provider routes
-  produce no LLM spans. This includes Google's native Gemini and Vertex APIs.
-  To route Gemini model traffic through Relay, use a provider or proxy that
-  accepts an OpenAI- or Anthropic-compatible API. Nested Pi processes appear as
-  separate sessions. SIGINT in headless mode can stop Pi before queued events
-  are sent. For details, refer to [Pi Limitations](/nemo-relay-cli/pi#limitations).
-- Authenticated managed daemon routes use passthrough while workers start or
-  recover unless the daemon uses `--require-worker`. Passthrough forwards
-  requests without worker plugins. Failed starts retry automatically, but
-  `/healthz` and MCP readiness alone do not prove policy enforcement or exporter
-  activity. Verify worker status and an observable plugin result, or require a
-  worker and handle HTTP `503` during unavailability. Refer to
+- Runtime diagnostics keeps recent evidence in memory. Records can include
+  private data. A daemon worker's cached results can be stale or partial.
+  Refer to [Diagnostics](/reference/diagnostics).
+- Go and the raw C interface remain experimental and build from source.
+  Native plugins run in the host process. Worker processes run separately
+  and share the security limits of their deployment environment.
+- Managed daemon routes can pass requests through while a worker starts or
+  recovers. Use `--require-worker` if requests must wait for worker policy
+  and handle HTTP `503` when workers are unavailable. Refer to
   [Daemon Operations](/daemon/operations).
-- Harness model requests do not read the per-user token file. Codex and
-  Claude Code send the route credential header only from their own provider
-  configuration, which they read at startup. Without that header, model requests
-  pass through without Relay telemetry. The managed v1 Pi extension reads only
-  `NEMO_RELAY_CLIENT_TOKEN` and fails to start without it, so
-  `nemo-relay doctor --managed-bundle` rejects a file-only credential for Pi
-  bundles. On Windows, `nemo-relay daemon token ensure` does not check the
-  access list of an existing token directory. Refer to
+- Remote daemons and client workers need network access to each other.
+  Proxies need WebSocket support. An idle loopback connection can fail
+  without a signal until the next operation times out. Refer to
+  [Daemon Operations](/daemon/operations).
+- Managed model requests depend on credentials from the harness. Codex
+  and Claude Code load provider settings at startup. The managed Pi
+  extension needs `NEMO_RELAY_CLIENT_TOKEN`. Refer to
   [Credential Resolution](/daemon/configuration#credential-resolution).
-- Remote daemons and client workers must be able to reach each other.
-  Proxies must support WebSockets. Loopback control connections do not send
-  periodic pings. An idle hung process can go undetected until an operation
-  times out.
-- OpenClaw provides telemetry through public hooks. Its security and
-  optimization coverage is partial because Relay does not manage its execution.
-- The personally identifiable information (PII) redaction plugin supports its
-  local backend based on fixed rules. Local-model backend configuration is
-  reserved for future work.
-- Pricing and optimization estimates depend on model names, token data, pricing
-  sources, and how current those sources are. Missing or conflicting data
-  produces partial or absent cost fields rather than zero values.
-- ATOF stream sinks and remote ATIF storage require reachable, correctly
-  configured destinations. A failed stream sink does not stop file output or
-  other active sinks.
-- ATIF omits point-in-time marks. Use ATOF for the complete mark stream.
-  The `gen_ai` OpenTelemetry projection also omits marks. The `full` and
-  `openinference` projections retain their fixed native mark handling.
-- Native dynamic plugins run in the Relay process and are not sandboxed. A
-  `grpc-v1` worker runs in a separate process, but that process is not a
-  security sandbox.
-- Do not change Python `LLMRequest` objects in place. Request middleware that
-  changes content must return a new request object.
-- Native subscriber callbacks arrive asynchronously. Flush subscribers before
-  depending on their changes, captured events, files, or exporter output.
-- OpenTelemetry endpoints use batch queues with a size limit. If a burst fills
-  a queue, the endpoint drops completed spans instead of slowing the sender.
-  This can leave an incomplete trace, including a missing root span. The SDK
-  warns on the first drop and reports the exact dropped-span count during
-  graceful shutdown. Configure `max_queue_size`, `max_export_batch_size`, and
-  `scheduled_delay_millis` independently on each endpoint, or use the standard
-  `OTEL_BSP_*` environment variables as defaults for the process. A larger
-  queue does not guarantee lossless telemetry.
-- Operational logging covers Relay-managed hooks, gateway requests, the daemon,
-  and workers. It does not yet cover every CLI command.
-- A parent handle outside the current scope stack does not keep its earlier
-  W3C context. If it belongs to a different trace, managed-call headers can
-  differ from the parent context kept by an exporter. Capture and import the
-  parent's propagation context before leaving that trace. Reusing only the
-  handle does not preserve this context.
-- Codex's built-in `openai` provider attempts a WebSocket connection before
-  falling back to HTTP streaming. Relay does not support that transport, so a
-  new session can report connection errors and take several seconds longer to
-  start. Refer to [Codex](/nemo-relay-cli/codex#persistent-plugin-install).
-- Available resource measurements depend on the platform. Initial rates can
-  be unavailable, and copies of one polling sample under multiple Agent scopes
-  must not be added together. Refer to
-  [Resource Metrics](/configure-plugins/resource-metrics).
-- Default non-paused threshold compaction and unsupported or malformed
-  Anthropic compaction traffic bypass the response cache. Selected compaction
-  support does not let Relay replay every provider response. Refer to
-  [Move the Response Cache to Its Plugin](/reference/migration-guides#move-the-response-cache-to-its-plugin-for-nemo-relay-100).
+- Coding-agent traces depend on local hooks and provider requests that reach
+  Relay. Remote execution can bypass the local integration. Pi, Google ADK,
+  and OpenClaw have provider or execution limits. Refer to
+  [Pi Limitations](/nemo-relay-cli/pi#limitations),
+  [Google ADK Limitations](/supported-integrations/google-adk#limitations),
+  and the [Support Matrix](/reference/support-matrix).
+- OpenTelemetry can drop spans when its queue fills. ATIF and the GenAI
+  projection omit point-in-time marks. Use ATOF if you need those marks.
+  Refer to [OpenTelemetry](/configure-plugins/observability/opentelemetry)
+  and [ATIF](/configure-plugins/observability/atif).
+- Pricing estimates depend on model names, token counts, and the catalog.
+  Relay can leave costs unset when those inputs are missing or conflict.
+  Refer to [Model Pricing](/configure-plugins/model-pricing).
+- Python request middleware returns a new `LLMRequest` to change content.
+  Flush native subscribers before reading output from their async callbacks.
 
 ## Previous Releases
 
-For previous release notes, release artifacts, and the complete pull request
-history, refer to [GitHub Releases](https://github.com/NVIDIA/NeMo-Relay/releases).
+For the baseline release and its artifacts, refer to the
+[0.11.0 release](https://github.com/NVIDIA/NeMo-Relay/releases/tag/0.11.0).
 
 ## Related Topics
 
