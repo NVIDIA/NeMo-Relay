@@ -560,6 +560,72 @@ async fn launcher_process_group_cleanup_preserves_detached_worker() {
     );
 }
 
+#[cfg(unix)]
+#[test]
+#[expect(
+    clippy::zombie_processes,
+    reason = "the leader exits and leaves its child behind in the process group"
+)]
+fn exiting_worker_leader_fixture() {
+    if std::env::var_os("NEMO_RELAY_TEST_EXITING_LEADER_FIXTURE").is_none() {
+        return;
+    }
+    let child = std::process::Command::new("sleep")
+        .arg("600")
+        .spawn()
+        .unwrap();
+    println!("{}", child.id());
+}
+
+#[cfg(unix)]
+#[tokio::test]
+async fn reaping_an_exited_worker_leader_signals_its_group_first() {
+    use tokio::io::AsyncBufReadExt as _;
+    let mut command = Command::new(std::env::current_exe().unwrap());
+    command
+        .args([
+            "--exact",
+            "daemon::mcp::tests::exiting_worker_leader_fixture",
+            "--nocapture",
+        ])
+        .env("NEMO_RELAY_TEST_EXITING_LEADER_FIXTURE", "1")
+        .stdout(std::process::Stdio::piped())
+        .process_group(0);
+    let mut child = command.spawn().unwrap();
+    let stdout = child.stdout.take().unwrap();
+    let mut worker = WorkerChild::try_from(child).unwrap();
+    let mut lines = tokio::io::BufReader::new(stdout).lines();
+    let grandchild: libc::pid_t = loop {
+        let line = lines
+            .next_line()
+            .await
+            .unwrap()
+            .expect("the fixture prints its child pid");
+        if let Ok(pid) = line.trim().parse() {
+            break pid;
+        }
+    };
+    let status = worker
+        .wait_for_exit(Duration::from_secs(10))
+        .await
+        .unwrap()
+        .expect("the leader exits on its own");
+    assert!(status.success());
+    tokio::time::timeout(Duration::from_secs(5), async {
+        // SAFETY: Signal zero only probes for process existence.
+        while unsafe { libc::kill(grandchild, 0) } == 0 {
+            tokio::time::sleep(Duration::from_millis(20)).await;
+        }
+    })
+    .await
+    .expect("the grandchild dies with the worker group");
+    assert_eq!(
+        std::io::Error::last_os_error().raw_os_error(),
+        Some(libc::ESRCH)
+    );
+    worker.start_kill().unwrap();
+}
+
 #[cfg(windows)]
 #[test]
 fn detached_windows_worker_process_fixture() {

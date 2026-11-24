@@ -29,6 +29,8 @@ use crate::error::CliError;
 // activation is issued.
 const ACTIVATION_WAIT_MAX: Duration = Duration::from_secs(150);
 const ACTIVATION_CLEANUP_GRACE: Duration = Duration::from_secs(5);
+#[cfg(unix)]
+const WORKER_EXIT_POLL_INTERVAL: Duration = Duration::from_millis(20);
 const WORKER_ADVERTISE_ENV: &str = "NEMO_RELAY_WORKER_ADVERTISE_ADDRESS";
 const WORKER_PORT_ENV: &str = "NEMO_RELAY_WORKER_PORT";
 
@@ -399,7 +401,7 @@ enum WorkerChild {
     Local {
         child: Child,
         #[cfg(unix)]
-        process_group: libc::pid_t,
+        process_group: Option<libc::pid_t>,
     },
     #[cfg(windows)]
     Detached {
@@ -412,9 +414,9 @@ impl TryFrom<Child> for WorkerChild {
 
     fn try_from(child: Child) -> Result<Self, Self::Error> {
         #[cfg(unix)]
-        let process_group = child.id().ok_or_else(|| {
+        let process_group = Some(child.id().ok_or_else(|| {
             std::io::Error::other("worker exited before its process group was recorded")
-        })? as libc::pid_t;
+        })? as libc::pid_t);
         Ok(Self::Local {
             child,
             #[cfg(unix)]
@@ -422,10 +424,63 @@ impl TryFrom<Child> for WorkerChild {
         })
     }
 }
+
+#[cfg(unix)]
+fn signal_process_group(process_group: libc::pid_t) -> std::io::Result<()> {
+    // SAFETY: The worker called `setsid` before exec, so its PID is the process-group ID. A
+    // negative PID addresses that group and does not dereference memory.
+    if unsafe { libc::kill(-process_group, libc::SIGKILL) } == 0 {
+        return Ok(());
+    }
+    let error = std::io::Error::last_os_error();
+    if error.raw_os_error() == Some(libc::ESRCH) {
+        return Ok(());
+    }
+    #[cfg(target_vendor = "apple")]
+    if error.raw_os_error() == Some(libc::EPERM) {
+        return Ok(());
+    }
+    Err(error)
+}
+
+#[cfg(unix)]
+fn leader_has_exited(process_group: libc::pid_t) -> std::io::Result<bool> {
+    // SAFETY: `siginfo_t` is a plain C struct for which all-zero bytes are a valid value.
+    let mut info: libc::siginfo_t = unsafe { std::mem::zeroed() };
+    // SAFETY: `info` is valid for writes. `WNOWAIT` reports the exit without reaping the
+    // leader, so its process-group ID stays reserved until the group has been signalled.
+    let waited = unsafe {
+        libc::waitid(
+            libc::P_PID,
+            process_group as libc::id_t,
+            &mut info,
+            libc::WEXITED | libc::WNOHANG | libc::WNOWAIT,
+        )
+    };
+    if waited == -1 {
+        return Err(std::io::Error::last_os_error());
+    }
+    Ok(info.si_signo == libc::SIGCHLD)
+}
+
 impl WorkerChild {
     fn try_wait(&mut self) -> std::io::Result<Option<std::process::ExitStatus>> {
         match self {
-            Self::Local { child, .. } => child.try_wait(),
+            #[cfg(unix)]
+            Self::Local {
+                child,
+                process_group,
+            } => {
+                if let Some(group) = *process_group
+                    && leader_has_exited(group)?
+                {
+                    signal_process_group(group)?;
+                    *process_group = None;
+                }
+                child.try_wait()
+            }
+            #[cfg(not(unix))]
+            Self::Local { child } => child.try_wait(),
             #[cfg(windows)]
             Self::Detached { child, .. } => child.try_wait(),
         }
@@ -433,18 +488,10 @@ impl WorkerChild {
     fn start_kill(&mut self) -> std::io::Result<()> {
         match self {
             #[cfg(unix)]
-            Self::Local { process_group, .. } => {
-                // SAFETY: The worker called `setsid` before exec, so its PID is the process-group
-                // ID. A negative PID addresses that group and does not dereference memory.
-                if unsafe { libc::kill(-*process_group, libc::SIGKILL) } == 0 {
-                    return Ok(());
-                }
-                let error = std::io::Error::last_os_error();
-                if error.raw_os_error() == Some(libc::ESRCH) {
-                    return Ok(());
-                }
-                Err(error)
-            }
+            Self::Local { process_group, .. } => match *process_group {
+                Some(group) => signal_process_group(group),
+                None => Ok(()),
+            },
             #[cfg(not(unix))]
             Self::Local { child } => child.start_kill(),
             #[cfg(windows)]
@@ -456,7 +503,26 @@ impl WorkerChild {
         timeout: Duration,
     ) -> std::io::Result<Option<std::process::ExitStatus>> {
         match self {
-            Self::Local { child, .. } => match tokio::time::timeout(timeout, child.wait()).await {
+            #[cfg(unix)]
+            Self::Local {
+                child,
+                process_group,
+            } => {
+                if let Some(group) = *process_group {
+                    let deadline = tokio::time::Instant::now() + timeout;
+                    while !leader_has_exited(group)? {
+                        if tokio::time::Instant::now() >= deadline {
+                            return Ok(None);
+                        }
+                        tokio::time::sleep(WORKER_EXIT_POLL_INTERVAL).await;
+                    }
+                    signal_process_group(group)?;
+                    *process_group = None;
+                }
+                child.wait().await.map(Some)
+            }
+            #[cfg(not(unix))]
+            Self::Local { child } => match tokio::time::timeout(timeout, child.wait()).await {
                 Ok(status) => status.map(Some),
                 Err(_) => Ok(None),
             },
@@ -516,9 +582,15 @@ impl ActivationChild {
     }
 
     async fn graceful_cleanup(&mut self) -> std::io::Result<()> {
-        let waited = self.child.wait_for_exit(ACTIVATION_CLEANUP_GRACE).await;
-        let forced = self.force_cleanup().await;
-        waited.and(forced)
+        if let Err(error) = self.child.wait_for_exit(ACTIVATION_CLEANUP_GRACE).await {
+            log::warn!(
+                target: "nemo_relay.daemon.mcp",
+                event = "worker_graceful_wait_failed",
+                error_kind = "io";
+                "Waiting for the cancelled worker to exit failed: {error}"
+            );
+        }
+        self.force_cleanup().await
     }
 }
 
