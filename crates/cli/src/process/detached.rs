@@ -170,17 +170,34 @@ struct ProcessWaiter(windows_sys::Win32::Foundation::HANDLE);
 unsafe impl Send for ProcessWaiter {}
 
 #[cfg(windows)]
-impl ProcessWaiter {
-    fn wait(&self, millis: u32) -> std::io::Result<bool> {
-        use windows_sys::Win32::Foundation::{WAIT_OBJECT_0, WAIT_TIMEOUT};
-        use windows_sys::Win32::System::Threading::WaitForSingleObject;
+const DETACHED_EXIT_TIMEOUT: std::time::Duration = std::time::Duration::from_secs(5);
 
-        // SAFETY: `self.0` is a live duplicate of the process handle owned by this value.
-        match unsafe { WaitForSingleObject(self.0, millis) } {
-            WAIT_OBJECT_0 => Ok(true),
-            WAIT_TIMEOUT => Ok(false),
-            _ => Err(std::io::Error::last_os_error()),
-        }
+#[cfg(windows)]
+fn wait_for_process(
+    process: windows_sys::Win32::Foundation::HANDLE,
+    timeout: std::time::Duration,
+) -> std::io::Result<bool> {
+    use windows_sys::Win32::Foundation::{WAIT_OBJECT_0, WAIT_TIMEOUT};
+    use windows_sys::Win32::System::Threading::WaitForSingleObject;
+
+    let millis = u32::try_from(timeout.as_millis()).map_err(|_| {
+        std::io::Error::new(
+            std::io::ErrorKind::InvalidInput,
+            "process wait timeout exceeds the Win32 millisecond range",
+        )
+    })?;
+    // SAFETY: The caller owns `process` for the duration of this call.
+    match unsafe { WaitForSingleObject(process, millis) } {
+        WAIT_OBJECT_0 => Ok(true),
+        WAIT_TIMEOUT => Ok(false),
+        _ => Err(std::io::Error::last_os_error()),
+    }
+}
+
+#[cfg(windows)]
+impl ProcessWaiter {
+    fn wait(&self, timeout: std::time::Duration) -> std::io::Result<bool> {
+        wait_for_process(self.0, timeout)
     }
 }
 
@@ -246,12 +263,6 @@ impl DetachedChild {
         use windows_sys::Win32::Foundation::{DUPLICATE_SAME_ACCESS, DuplicateHandle};
         use windows_sys::Win32::System::Threading::GetCurrentProcess;
 
-        let millis = u32::try_from(timeout.as_millis()).map_err(|_| {
-            std::io::Error::new(
-                std::io::ErrorKind::InvalidInput,
-                "process wait timeout exceeds the Win32 millisecond range",
-            )
-        })?;
         let waiter = {
             let mut duplicate = std::ptr::null_mut();
             // SAFETY: The pseudo current-process handle, the owned process handle, and the
@@ -272,7 +283,7 @@ impl DetachedChild {
             }
             ProcessWaiter(duplicate)
         };
-        let signaled = tokio::task::spawn_blocking(move || waiter.wait(millis))
+        let signaled = tokio::task::spawn_blocking(move || waiter.wait(timeout))
             .await
             .map_err(|error| {
                 std::io::Error::other(format!("process wait task failed: {error}"))
@@ -281,6 +292,16 @@ impl DetachedChild {
             return Ok(None);
         }
         self.try_wait()
+    }
+
+    pub(crate) fn wait_timeout(
+        &mut self,
+        timeout: std::time::Duration,
+    ) -> std::io::Result<Option<std::process::ExitStatus>> {
+        if wait_for_process(self.process, timeout)? {
+            return self.try_wait();
+        }
+        Ok(None)
     }
 
     pub(crate) fn wait(&mut self) -> std::io::Result<std::process::ExitStatus> {
@@ -470,7 +491,7 @@ fn spawn_with_handle_list(
     } == 0
     {
         let error = windows_spawn_error("DuplicateHandle detached child Job Object");
-        if let Err(cleanup) = child.start_kill().and_then(|()| child.wait().map(|_| ())) {
+        if let Err(cleanup) = terminate_and_reap(&mut child) {
             log::error!(target: "nemo_relay.bootstrap", event = "detached_spawn_cleanup_failed",
                 process_id = child.id(), error_kind = "io";
                 "Failed to clean up detached child after a spawn failure: {cleanup}");
@@ -478,6 +499,18 @@ fn spawn_with_handle_list(
         return Err(error);
     }
     Ok(child)
+}
+
+#[cfg(windows)]
+fn terminate_and_reap(child: &mut DetachedChild) -> std::io::Result<()> {
+    child.start_kill()?;
+    match child.wait_timeout(DETACHED_EXIT_TIMEOUT)? {
+        Some(_) => Ok(()),
+        None => Err(std::io::Error::new(
+            std::io::ErrorKind::TimedOut,
+            "detached child did not exit after its Job Object was terminated",
+        )),
+    }
 }
 
 #[cfg(windows)]
@@ -679,10 +712,11 @@ pub(crate) fn terminate_tree(child: &mut DetachedChild) {
         if unsafe { libc::kill(process_group, libc::SIGKILL) } == -1 {
             let _ = child.kill();
         }
+        let _ = child.wait();
     }
     #[cfg(windows)]
     {
-        if let Err(error) = child.start_kill() {
+        if let Err(error) = terminate_and_reap(child) {
             log::error!(
                 target: "nemo_relay.bootstrap",
                 event = "gateway_cleanup_failed",
@@ -690,14 +724,13 @@ pub(crate) fn terminate_tree(child: &mut DetachedChild) {
                 reason = "process_tree_termination_failed";
                 "Detached gateway process cleanup failed: {error}"
             );
-            return;
         }
     }
     #[cfg(not(any(unix, windows)))]
     {
         let _ = child.kill();
+        let _ = child.wait();
     }
-    let _ = child.wait();
 }
 
 #[cfg(all(test, windows))]
