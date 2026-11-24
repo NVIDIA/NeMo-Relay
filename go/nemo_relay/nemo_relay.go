@@ -1869,8 +1869,8 @@ func WithLLMResponseCodec(codec *CodecHandle) LLMCallOption {
 	}
 }
 
-// WithLLMApplicationExecutionContext snapshots context for reuse by managed calls.
-// Validation and encoding happen before the option retains application data.
+// WithLLMApplicationExecutionContext copies context for reuse by managed calls.
+// It checks and encodes the context before the option stores application data.
 func WithLLMApplicationExecutionContext(value *LLMApplicationExecutionContext) LLMCallOption {
 	var encoded []byte
 	var failure error

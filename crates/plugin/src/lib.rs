@@ -10,7 +10,7 @@
 /// Execution support for native component adapters.
 #[doc(hidden)]
 pub mod abi_executor;
-/// Invocation-local application data supplied to LLM execution intercepts.
+/// Application data passed to execution intercepts for one LLM call.
 pub use nemo_relay_types::api::llm::ApplicationExecutionContext as LlmApplicationExecutionContext;
 
 /// Independently versioned checked interface declarations.

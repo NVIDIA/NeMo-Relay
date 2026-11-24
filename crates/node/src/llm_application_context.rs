@@ -17,9 +17,9 @@ const MAXIMUM_CONTEXT_CONTAINER_DEPTH: u32 = 64;
 const MAXIMUM_CONTEXT_VALUE_COUNT: usize = 16_384;
 const MAXIMUM_CONTEXT_STRING_BYTES: usize = 16_384;
 
-/// Snapshot the new host context from own enumerable JSON properties only.
-/// Unlike the shared JSON converter, this does not promote inherited claims.
-/// Getter values are read as ordinary JSON input; no JavaScript globals are used.
+/// Copy context from its own enumerable JSON properties.
+/// Ignore inherited properties. Read getter values as JSON input.
+/// This function does not use JavaScript globals.
 pub(crate) fn execution_context_json(
     value: Option<Unknown>,
 ) -> Result<Option<ApplicationExecutionContext>> {
@@ -46,7 +46,7 @@ pub(crate) fn execution_context_json(
 }
 
 /// Convert a validated context using own data properties, including `__proto__`.
-/// The admitted context already has bounded depth and size.
+/// The context has already passed depth and size checks.
 pub(crate) fn context_json_to_js(env: &Env, value: &Value) -> napi::Result<JsArg> {
     match value {
         Value::Object(fields) => {

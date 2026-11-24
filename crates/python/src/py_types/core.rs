@@ -113,7 +113,7 @@ impl PyLlmSanitizeResponseContext {
     }
 }
 
-/// Codec capabilities and application data for one managed LLM execution invocation.
+/// Codec access and application data for one managed LLM call.
 #[pyclass(name = "LlmExecutionContext", frozen)]
 pub struct PyLlmExecutionContext {
     pub(crate) inner: LlmExecutionContext,
@@ -121,7 +121,7 @@ pub struct PyLlmExecutionContext {
 
 #[pymethods]
 impl PyLlmExecutionContext {
-    /// Application-owned context isolated from requests, events and other intercepts.
+    /// Application context kept separate from requests, events, and other intercepts.
     #[getter]
     fn execution_context(&self, py: Python<'_>) -> PyResult<Py<PyAny>> {
         match self.inner.execution_context() {

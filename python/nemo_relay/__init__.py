@@ -289,7 +289,7 @@ ToolRequestIntercept: TypeAlias = AbcCallable[[str, Json], Json | Awaitable[Json
 #: behavior. The callback receives a ``ToolExecutionContext`` and the next
 #: callable. It may await ``next(context.args)`` or short-circuit.
 class LlmApplicationExecutionContext(TypedDict, total=False):
-    """Optional invocation-local payload supplied only to LLM execution intercepts."""
+    """Optional application data for the execution intercepts of one LLM call."""
 
     data: dict[str, Json]
 

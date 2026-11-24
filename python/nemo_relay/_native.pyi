@@ -161,7 +161,7 @@ class _LlmApplicationExecutionContext(TypedDict, total=False):
     data: dict[str, _Json]
 
 class LlmExecutionContext:
-    """Codec capabilities and application data for one managed LLM execution invocation."""
+    """Codec access and application data for one managed LLM call."""
 
     @property
     def request_codec(self) -> LlmRequestContext: ...

@@ -1707,8 +1707,9 @@ NemoRelayStatus nemo_relay_llm_call_end(const struct FfiLLMHandle *handle,
  * - `out`: On success, receives the response as a JSON C string. Caller must
  *   free with `nemo_relay_string_free`.
  *
- * - `execution_context_json`: Optional LLM application context JSON; null omits it.
- *   Limited to 16 KiB and 64 container levels; exposed only to execution intercepts.
+ * - `execution_context_json`: Optional LLM application context as JSON.
+ *   Pass null to omit it. The context is limited to 16 KiB and 64 object or array
+ *   levels. Only execution intercepts receive it.
  * - `skip_stages`: Bitwise OR of `NEMO_RELAY_SKIP_*` constants. Zero runs all
  *   middleware stages. Unknown bits return `InvalidArg`. Event sanitization,
  *   codecs, trace context, and completion still run.
@@ -1766,8 +1767,9 @@ NemoRelayStatus nemo_relay_llm_call_execute(const char *name,
  * - `model_name`: Optional LLM model identifier, or null.
  * - `out`: On success, receives a heap-allocated `FfiStream`.
  *
- * - `execution_context_json`: Optional LLM application context JSON; null omits it.
- *   Limited to 16 KiB and 64 container levels; exposed only to execution intercepts.
+ * - `execution_context_json`: Optional LLM application context as JSON.
+ *   Pass null to omit it. The context is limited to 16 KiB and 64 object or array
+ *   levels. Only execution intercepts receive it.
  * - `skip_stages`: Bitwise OR of `NEMO_RELAY_SKIP_*` constants. Zero runs all
  *   middleware stages. Unknown bits return `InvalidArg`. Event sanitization,
  *   codecs, trace context, and completion still run.

@@ -475,16 +475,21 @@ Refer to the [NeMo Relay documentation](https://docs.nvidia.com/nemo/relay).
 ## LLM Application Execution Context
 
 Both `nemo_relay_llm_call_execute` and `nemo_relay_llm_stream_call_execute`
-accept `execution_context_json` immediately before `cancellation`. Pass null to
-omit context, or a JSON envelope such as `{"data":{"review":"review-123"}}`.
-Execution intercepts read the borrowed `context.execution_context_json` pointer;
-copy its contents before the callback returns if needed.
+accept `execution_context_json` immediately before `cancellation`. Pass `NULL` to
+omit context. To include context, pass a JSON object such as
+`{"data":{"review":"review-123"}}`.
 
-The envelope accepts only an optional object-valued `data` field and is limited
-to 16 KiB serialized JSON and 64 container levels. `{}` and `{"data":{}}` are
-valid and distinct from omission. Invalid values fail before middleware or the
-provider executes. Context is not automatically recorded in events, sent to
-providers, or inherited by nested calls. Rebuild experimental C consumers with
-the updated header and insert the context argument at each call site, using
-`NULL` to omit it. Existing function signatures change; older binaries must be
-rebuilt. The ABI version identifier stays the same.
+Execution intercepts read the borrowed `context.execution_context_json` pointer.
+Copy its contents before the callback returns if you need to keep the data.
+
+The context accepts only one optional field, `data`, which must be an object.
+The complete context must fit within 16 KiB when encoded as JSON. It can contain
+up to 64 nested object or array levels. The root object counts as level 1.
+Relay treats no context, `{}`, and `{"data":{}}` as three different values.
+Relay rejects invalid values before it runs middleware or the provider.
+It does not add context to events or provider requests. Nested calls do not
+inherit context.
+
+Rebuild C applications with the updated header. Add the context argument
+at each call site. Pass `NULL` to omit it. The function signatures have changed,
+so you must rebuild older binaries. The ABI version identifier stays the same.

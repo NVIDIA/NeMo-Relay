@@ -7,11 +7,11 @@ use pyo3::types::{
 };
 use pyo3::{intern, prelude::*};
 
-/// Convert bounded execution context before recursive JSON conversion can overflow.
+/// Check context limits while converting Python values to JSON.
 ///
-/// The shared Rust type validates its schema and serialized byte budget. This
-/// conversion checks the exact bytes and depth of each copied value, including
-/// cyclic containers, without reading application values a second time.
+/// The shared Rust type checks the schema and JSON size. This conversion checks
+/// the size and depth of each value as it copies it. It also rejects cycles.
+/// It reads each application value only once.
 pub(crate) fn py_application_execution_context(
     obj: Option<&Bound<'_, PyAny>>,
 ) -> PyResult<Option<nemo_relay_types::api::llm::ApplicationExecutionContext>> {

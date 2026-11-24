@@ -413,7 +413,7 @@ impl std::fmt::Debug for LlmExecutionContext {
 }
 
 impl LlmExecutionContext {
-    /// Invocation-local application data, separate from the provider request.
+    /// Application data for this call, separate from the provider request.
     pub fn execution_context(
         &self,
     ) -> Option<&nemo_relay_types::api::llm::ApplicationExecutionContext> {

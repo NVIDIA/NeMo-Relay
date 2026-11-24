@@ -14,15 +14,16 @@ import (
 	"unicode/utf8"
 )
 
-// LLMApplicationExecutionContext carries application data for one LLM invocation.
-// A nil Data map omits data; an allocated empty map preserves {"data":{}}.
-// Raw Data values share a 4 MiB input limit, including whitespace and aliases,
-// before normalization enforces the 16 KiB serialized context limit.
+// LLMApplicationExecutionContext carries application data for one LLM call.
+// A nil Data map omits data. An allocated empty map preserves {"data":{}}.
+// Raw Data values share a 4 MiB input limit, including whitespace.
+// Shared values count each time they appear in the map.
+// The context must fit within 16 KiB after conversion to a standard JSON format.
 type LLMApplicationExecutionContext struct {
 	Data map[string]json.RawMessage `json:"data,omitempty"`
 }
 
-// MarshalJSON validates the context and preserves absent versus empty data.
+// MarshalJSON validates the context and keeps omitted and empty data distinct.
 func (value LLMApplicationExecutionContext) MarshalJSON() ([]byte, error) {
 	return marshalLLMApplicationContext(value)
 }

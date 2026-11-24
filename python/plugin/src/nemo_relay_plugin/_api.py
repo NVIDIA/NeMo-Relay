@@ -299,7 +299,10 @@ class WorkerResponseCodec:
 
 
 class LlmApplicationExecutionContext(TypedDict, total=False):
-    """Application-owned data for one LLM invocation; structural validity grants no authority."""
+    """Application data for one LLM call.
+
+    Relay checks its structure. Middleware decides whether to trust its contents.
+    """
 
     data: dict[str, Json]
 

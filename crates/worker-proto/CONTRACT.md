@@ -542,13 +542,17 @@ and protocol/version identities are unchanged.
 ## LLM Application Execution Context
 
 `LlmExecutionInvocation.execution_context` and
-`InvokeStreamRequest.execution_context` carry an optional `JsonValue` containing
-an LLM application envelope with an optional object-valued `data` field. Unknown
-envelope fields are invalid. Preserve absence, `{}`, and `{"data":{}}` distinctly.
-The context has a 16 KiB serialized JSON limit and at most 64 object/array levels.
+`InvokeStreamRequest.execution_context` carry an optional `JsonValue`. This value
+must be a JSON object with only an optional `data` field. If present, `data` must
+also be an object. Reject unknown fields outside `data`. Keep no context, `{}`,
+and `{"data":{}}` as three different values.
 
-Only execution middleware receives this value. It is separate from the provider
-request, codec capabilities, event metadata, and continuation input; nested calls
-do not inherit it. SDKs validate the envelope before invoking user callbacks.
-Relay does not interpret application data as authorization. The worker contract
-version stays `1.0.0`; rebuild hosts and workers with the matching SDK.
+The complete context must fit within 16 KiB when encoded as JSON. It can contain
+up to 64 nested object or array levels. The root object counts as level 1.
+
+Only execution middleware receives this value. The context stays separate from
+the provider request, codec capabilities, event metadata, and continuation input.
+Nested calls do not inherit it. SDKs check the context before they call user
+callbacks. Relay does not treat application data as permission to perform an
+action. The worker contract version stays `1.0.0`. Rebuild hosts and workers
+with the matching SDK.

@@ -2260,8 +2260,8 @@ pub fn llm_call_end(
 /// Pass a JSON object with `headers` and `content` fields in `request`.
 /// Supply `codecDecode` and `codecEncode` together or omit both.
 /// Use `executionOptions` to choose which stages run for this call.
-/// Optional `executionContext` supplies an invocation-local LLM application envelope
-/// only to execution intercepts, separately from provider input and event metadata.
+/// Optional `executionContext` passes application data to execution intercepts
+/// for this call. The data stays separate from provider input and event metadata.
 #[allow(clippy::too_many_arguments)]
 #[napi(
     ts_generic_types = "TRequest extends LlmRequestCompatible<TRequest>, TResponse extends JsonCompatible<TResponse>, TData extends JsonCompatible<TData> = Json, TMetadata extends JsonCompatible<TMetadata> = Json, TAnnotated extends JsonCompatible<TAnnotated> = Json, TEncoded extends LlmRequestCompatible<TEncoded> = LlmRequestShape, TDecodedResponse extends JsonCompatible<TDecodedResponse> = Json",
@@ -2372,8 +2372,8 @@ fn execute_llm_call<'env>(
 /// Runs the same lifecycle as `llmCallExecute`. Supply `codecDecode` and `codecEncode`
 /// together or omit both.
 /// Use `executionOptions` to choose which stages run for this call.
-/// Optional `executionContext` supplies an invocation-local LLM application envelope
-/// only to execution intercepts, separately from provider input and event metadata.
+/// Optional `executionContext` passes application data to execution intercepts
+/// for this call. The data stays separate from provider input and event metadata.
 #[allow(clippy::too_many_arguments)]
 #[napi(
     ts_generic_types = "TRequest extends LlmRequestCompatible<TRequest>, TResponse extends JsonCompatible<TResponse>, TData extends JsonCompatible<TData> = Json, TMetadata extends JsonCompatible<TMetadata> = Json, TAnnotated extends JsonCompatible<TAnnotated> = Json, TEncoded extends LlmRequestCompatible<TEncoded> = LlmRequestShape, TDecodedResponse extends JsonCompatible<TDecodedResponse> = Json",
@@ -2457,8 +2457,8 @@ pub fn llm_call_execute_async<'env>(
 /// stop reading early must await `stream.close()`, which aborts the signal and waits
 /// for producer cleanup. Supply `codecDecode` and `codecEncode` together or omit both.
 /// Use `executionOptions` to choose which stages run for this call.
-/// Optional `executionContext` supplies an invocation-local LLM application envelope
-/// only to execution intercepts, separately from provider input and event metadata.
+/// Optional `executionContext` passes application data to execution intercepts
+/// for this call. The data stays separate from provider input and event metadata.
 #[allow(clippy::too_many_arguments)]
 #[napi(
     ts_generic_types = "TRequest extends LlmRequestCompatible<TRequest>, TChunk extends JsonCompatible<TChunk>, TAggregate extends JsonCompatible<TAggregate> = Json, TData extends JsonCompatible<TData> = Json, TMetadata extends JsonCompatible<TMetadata> = Json, TAnnotated extends JsonCompatible<TAnnotated> = Json, TEncoded extends LlmRequestCompatible<TEncoded> = LlmRequestShape, TDecodedResponse extends JsonCompatible<TDecodedResponse> = Json",

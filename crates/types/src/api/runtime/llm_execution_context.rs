@@ -1,7 +1,7 @@
 // SPDX-FileCopyrightText: Copyright (c) 2026, NVIDIA CORPORATION & AFFILIATES. All rights reserved.
 // SPDX-License-Identifier: Apache-2.0
 
-//! Invocation-scoped codec capabilities and application data for LLM execution intercepts.
+//! Codec access and application data for the execution intercepts of one LLM call.
 
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, Weak};
@@ -152,7 +152,7 @@ impl LlmExecutionContext {
         self
     }
 
-    /// Caller-supplied data; not emitted in events or inherited by nested calls.
+    /// Caller data. Relay does not add it to events or pass it to nested calls.
     #[must_use]
     pub fn execution_context(&self) -> Option<&crate::api::llm::ApplicationExecutionContext> {
         self.execution_context.as_ref()

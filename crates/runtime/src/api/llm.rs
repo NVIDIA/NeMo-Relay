@@ -243,7 +243,7 @@ pub struct LlmCallParams<'a> {
 #[derive(TypedBuilder)]
 #[builder(field_defaults(setter(strip_option(ignore_invalid, fallback_suffix = "_opt"))))]
 pub struct LlmCallExecuteParams {
-    /// Invocation-local application data exposed only to execution intercepts.
+    /// Application data for this call. Only execution intercepts receive it.
     #[builder(default)]
     pub execution_context: Option<nemo_relay_types::api::llm::ApplicationExecutionContext>,
     /// Logical provider or model family name recorded on emitted events.
@@ -284,7 +284,7 @@ pub struct LlmCallExecuteParams {
 #[derive(TypedBuilder)]
 #[builder(field_defaults(setter(strip_option(ignore_invalid, fallback_suffix = "_opt"))))]
 pub struct LlmStreamCallExecuteParams {
-    /// Invocation-local application data exposed only to execution intercepts.
+    /// Application data for this call. Only execution intercepts receive it.
     #[builder(default)]
     pub execution_context: Option<nemo_relay_types::api::llm::ApplicationExecutionContext>,
     /// Logical provider or model family name recorded on emitted events.

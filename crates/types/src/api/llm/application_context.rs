@@ -1,11 +1,11 @@
 // SPDX-FileCopyrightText: Copyright (c) 2026, NVIDIA CORPORATION & AFFILIATES. All rights reserved.
 // SPDX-License-Identifier: Apache-2.0
 
-//! Concrete Relay execution context with a separate application-owned data map.
+//! LLM execution context with a separate map for application data.
 //!
-//! Envelope validation establishes structure, never approval authenticity.
-//! Middleware owns application-data schemas and trust decisions. Application
-//! keys cannot collide with future fields of the outer Relay-owned context.
+//! Relay checks the context structure. Middleware checks application data and
+//! decides whether to trust it. Application keys stay inside the data map so
+//! they cannot conflict with future Relay fields.
 
 use std::collections::BTreeMap;
 
@@ -19,35 +19,35 @@ const MAXIMUM_CONTEXT_SERIALIZED_BYTES: usize = 16_384;
 pub const APPLICATION_EXECUTION_CONTEXT_SCHEMA: &str =
     include_str!("../../../schemas/llm-application-execution-context.schema.json");
 
-/// A non-sensitive structural refusal; input values are never included.
+/// A context validation error that does not include input values.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, thiserror::Error)]
 pub enum ApplicationExecutionContextError {
-    /// The value does not conform to the concrete context envelope schema.
+    /// The value does not match the context schema.
     #[error("LLM execution context does not match ApplicationExecutionContext JSON Schema")]
     InvalidSchema,
-    /// Nesting is bounded before serialization or cloning.
+    /// The context exceeds the nesting limit.
     #[error("LLM execution context exceeds 64 container levels (root object is level 1)")]
     TooDeep,
-    /// The entire object, including application data, exceeds the shared byte budget.
+    /// The complete context exceeds the size limit.
     #[error("LLM execution context exceeds 16384 serialized bytes")]
     TooLarge,
 }
 
-/// Concrete invocation-local context owned by Relay.
+/// Application context for one LLM call.
 ///
-/// Application-defined keys belong under [`Self::data`], not at the top level.
-/// Relay validates JSON structure and resource limits; middleware defines the
-/// meaning, schema and trust policy of application data. `{}` and `{"data":{}}`
-/// are distinct valid contexts, both different from omitting context entirely.
-/// Use [`Self::try_from`] for JSON input or [`Self::default`] for typed construction.
+/// Put application keys inside [`Self::data`]. Relay checks the JSON structure
+/// and resource limits. Middleware defines and checks the contents of `data`.
+/// No context, `{}`, and `{"data":{}}` are three different values.
+/// Use [`Self::try_from`] to read JSON input. Use [`Self::default`] to create
+/// an empty context.
 #[non_exhaustive]
 #[derive(Clone, Default, PartialEq, Serialize, Deserialize)]
 #[serde(try_from = "Json")]
 pub struct ApplicationExecutionContext {
-    /// Application-owned JSON object, isolated for each middleware invocation.
+    /// Application JSON object. Each middleware call gets its own copy.
     ///
-    /// Its contents grant no authority by themselves and are never interpreted
-    /// as built-in Relay fields. Omission differs from an explicitly empty map.
+    /// Relay does not treat these keys as built-in fields or as permission to
+    /// perform an action. Omitting data differs from passing an empty map.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub data: Option<BTreeMap<String, Json>>,
 }
@@ -107,10 +107,10 @@ impl ApplicationExecutionContext {
         serde_json::from_slice(input).map_err(|_| ApplicationExecutionContextError::InvalidSchema)
     }
 
-    /// Validate the concrete envelope, JSON data and shared resource limits.
+    /// Check the context structure, JSON data, and resource limits.
     ///
-    /// A bounded preflight runs before recursive serialization.
-    /// Error messages deliberately exclude potentially sensitive input values.
+    /// Check size and depth before encoding nested data as JSON.
+    /// Error messages do not include input values.
     pub fn validate_json(value: &Json) -> Result<(), ApplicationExecutionContextError> {
         if !value.is_object() {
             return Err(ApplicationExecutionContextError::InvalidSchema);
@@ -127,13 +127,13 @@ impl ApplicationExecutionContext {
         Ok(())
     }
 
-    /// Return the concrete JSON envelope, including application-owned data.
+    /// Return the context as JSON, including application data.
     #[must_use]
     pub fn to_json(&self) -> Json {
         serde_json::to_value(self).expect("application context contains only JSON values")
     }
 
-    /// Revalidate programmatically supplied data before managed execution.
+    /// Check data set by application code before running a managed call.
     pub fn validate(&self) -> Result<(), ApplicationExecutionContextError> {
         let mut remaining_bytes = MAXIMUM_CONTEXT_SERIALIZED_BYTES;
         if let Some(data) = &self.data {

@@ -246,9 +246,9 @@ def execute(
             ``AnnotatedLLMRequest`` values to request intercepts.
         response_codec: Optional response codec used to attach a normalized
             response to the emitted ``LLMEnd`` event for observability.
-        execution_context: Optional LLM application envelope exposed only to execution
-            intercepts. Limited to 16 KiB and 64 container levels; not inherited
-            by nested calls or automatically recorded in events.
+        execution_context: Optional application data for execution intercepts.
+            The context is limited to 16 KiB and 64 object or array levels.
+            Nested calls do not inherit it. Relay does not add it to events.
         execution_options: Choose which middleware stages run for this call.
             Omit this option to run all stages. Turning off conditional execution
             skips its checks. Relay still sanitizes event data, uses codecs,
@@ -349,9 +349,9 @@ def stream_execute(
             ``AnnotatedLLMRequest`` values to request intercepts.
         response_codec: Optional response codec used to attach a normalized
             final response to the emitted ``LLMEnd`` event for observability.
-        execution_context: Optional LLM application envelope exposed only to execution
-            intercepts. Limited to 16 KiB and 64 container levels; not inherited
-            by nested calls or automatically recorded in events.
+        execution_context: Optional application data for execution intercepts.
+            The context is limited to 16 KiB and 64 object or array levels.
+            Nested calls do not inherit it. Relay does not add it to events.
         execution_options: Choose which middleware stages run for this call.
             Omit this option to run all stages. Turning off conditional execution
             skips its checks. Relay still sanitizes event data, uses codecs,

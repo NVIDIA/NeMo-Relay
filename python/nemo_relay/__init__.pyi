@@ -357,7 +357,7 @@ Return:
 """
 
 class LlmApplicationExecutionContext(TypedDict, total=False):
-    """Optional invocation-local payload supplied only to LLM execution intercepts."""
+    """Optional application data for the execution intercepts of one LLM call."""
 
     data: dict[str, Json]
 
