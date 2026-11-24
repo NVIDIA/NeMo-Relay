@@ -2583,7 +2583,10 @@ def _start_host_liveness_watcher(
     loop: asyncio.AbstractEventLoop,
     shutdown_event: asyncio.Event,
 ) -> threading.Thread:
-    pipe = os.fdopen(os.dup(descriptor), "rb", buffering=0)
+    duplicate = os.dup(descriptor)
+    if hasattr(os, "set_blocking"):
+        os.set_blocking(duplicate, True)
+    pipe = os.fdopen(duplicate, "rb", buffering=0)
 
     def watch() -> None:
         try:

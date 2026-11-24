@@ -3494,6 +3494,32 @@ async def test_host_liveness_watcher_reports_eof(monkeypatch: pytest.MonkeyPatch
         os.close(read_fd)
 
 
+@pytest.mark.skipif(not hasattr(os, "set_blocking"), reason="pipes cannot be made non-blocking here")
+async def test_host_liveness_watcher_reads_a_nonblocking_pipe_in_blocking_mode(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    read_fd, write_fd = os.pipe()
+    os.set_blocking(read_fd, False)
+    shutdown_event = asyncio.Event()
+    forced_exit = plugin_api.threading.Event()
+    monkeypatch.setattr(plugin_api.os, "_exit", lambda code: forced_exit.set())
+    monkeypatch.setattr(plugin_api, "_HOST_LOSS_EXIT_DELAY_SECONDS", 0.0)
+    watcher = plugin_api._start_host_liveness_watcher(read_fd, asyncio.get_running_loop(), shutdown_event)
+    try:
+        assert os.get_blocking(read_fd)
+        assert not shutdown_event.is_set()
+        os.close(write_fd)
+        write_fd = -1
+        await asyncio.wait_for(shutdown_event.wait(), timeout=1)
+        assert await asyncio.to_thread(forced_exit.wait, 1)
+    finally:
+        if write_fd >= 0:
+            os.close(write_fd)
+        await asyncio.to_thread(watcher.join, 5)
+        assert not watcher.is_alive()
+        os.close(read_fd)
+
+
 async def test_host_liveness_watcher_setup_failure_propagates(monkeypatch: pytest.MonkeyPatch) -> None:
     def failing_dup(descriptor: int) -> int:
         raise OSError(f"cannot duplicate descriptor {descriptor}")
