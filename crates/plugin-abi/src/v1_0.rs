@@ -2,7 +2,7 @@
 // SPDX-License-Identifier: Apache-2.0
 
 //! Native API v1.0, including the required application execution-context contract.
-//! Development binaries must be rebuilt when this unreleased contract changes.
+//! Plugins and hosts must use compatible invocation layouts.
 
 use crate::Json;
 use crate::future::FfiFuture;

@@ -35,14 +35,13 @@ current SDK uses native contract **v1.0**; the manifest and exported descriptor
 must agree. The native contract is independent of Relay's package version and
 the worker protocol version.
 
-Relay 1.0 is unreleased. Development-baseline changes require rebuilding matching
-hosts and plugins; the version string alone does not prove binary compatibility.
-The complete ABI schema must match before a factory can be created. A plugin
-built against an incompatible earlier development schema is rejected, even when
-its manifest also declares v1.0.
+The complete ABI schema must match before a factory can be created; the version
+string alone does not prove binary compatibility. A plugin built against an
+incompatible invocation layout is rejected, even when its manifest also declares
+v1.0. Rebuild the plugin with an SDK compatible with the host.
 
-After release, published layouts, enum variants, signatures, marker traits,
-ownership rules and behavior stay fixed within each contract. Add interfaces
+Published layouts, enum variants, signatures, marker traits, ownership rules
+and behavior stay fixed within each contract. Add interfaces
 through versioned modules; breaking layout or dependency ABI changes require a
 new native major as appropriate. Dependency updates must pass the binary
 compatibility tests.
@@ -81,10 +80,9 @@ part of the tool arguments, and structural validation grants no authorization.
 See [Application Execution Context in Add Middleware](/instrument-applications/advanced-guide#application-execution-context)
 for the schema, limits, trust checks and application integration example.
 
-Plugins and hosts must use the matching unreleased v1.0 baseline. The host
-checks the complete declared contract before factory creation, so an obsolete
-binary with an incompatible invocation layout fails to load rather than losing
-execution context. Rebuild the plugin with the current SDK.
+The host checks the complete declared contract before factory creation. A plugin
+with an incompatible invocation layout fails to load. Rebuild it with an SDK
+compatible with the host.
 
 ### Runtime Scope and Mark Arguments
 

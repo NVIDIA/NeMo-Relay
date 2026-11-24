@@ -71,7 +71,7 @@ fn assert_host_accepts(host: &str, name: &str) {
         String::from_utf8_lossy(&output.stderr)
     );
 }
-/// The unreleased v1.0 schema change rejects an obsolete development binary.
+/// Reject an incompatible invocation layout before factory creation.
 #[test]
 fn obsolete_development_v1_0_schema_is_rejected_before_factory_use() {
     let error = fixture("baseline").err().unwrap();

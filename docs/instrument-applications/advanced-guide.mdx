@@ -209,9 +209,10 @@ it on the managed execute call, then read it from the middleware context:
 | C | `execution_context_json` on `nemo_relay_tool_call_execute` | Optional `execution_context` property in the callback's context JSON |
 
 Rust and Python worker SDKs expose the same optional context on their tool
-execution callback. The C entry point is additive: existing execute functions
-retain their signatures and omit context. Go rejects the option on manual
-`ToolCall` and `ToolCallEnd`, where execution middleware does not run.
+execution callback. C callers must rebuild against the updated header and pass
+`execution_context_json` immediately before `cancellation` on
+`nemo_relay_tool_call_execute`. Pass `NULL` to omit context. Go rejects the option
+on manual `ToolCall` and `ToolCallEnd`, where execution middleware does not run.
 
 `ApplicationExecutionContext` is a concrete Relay-owned object. Its optional
 `data` field is a JSON object/map for application-defined payloads. The outer
@@ -339,10 +340,10 @@ native binding; do not mix them with earlier development snapshots. Execution
 context is part of the required API contract, not an optionally detected feature.
 Use `executionContext` directly in the managed execute options.
 
-The same matching-version requirement applies to Rust, Python, Go and C. Rebuild
-bindings and workers together when the unreleased 1.0 baseline changes. This
-requirement does not replace input validation: context must still be an object
-within the size and nesting limits, and supplying it grants no authorization.
+The same matching-version requirement applies to Rust, Python, Go and C. Use
+bindings and workers that implement execution-context support. Context must still
+be an object within the size and nesting limits, and supplying it grants no
+authorization.
 
 **Worker-side compatibility checks**
 
@@ -354,11 +355,10 @@ application can still omit context on any call, and callback signatures remain
 unchanged. The handshake establishes the declared protocol contract, not
 permission to execute or proof of application approval.
 
-Relay 1.0 has not yet been released. Rebuild and repackage development workers
-with the matching SDK rather than relying on compatibility with an earlier
-development snapshot. An obsolete binary that advertises the same `1.0.0`
-identity cannot be detected by version alone; the contract requires it to be
-rebuilt. Separately versioned diagnostic contracts are unchanged.
+Rebuild and repackage workers that omit execution context with a matching SDK.
+A worker that advertises `1.0.0` but drops this field does not implement the
+contract; the handshake cannot detect that omission. Separately versioned
+diagnostic contracts are unchanged.
 
 **Native plugin compatibility**
 
@@ -367,10 +367,9 @@ on tool invocations. The SDK exposes the checked envelope through
 `context.execution_context()`. The native contract is separate from the Relay
 package version and worker protocol identity, even though all target 1.0 here.
 
-Relay 1.0 is unreleased. Rebuild native plugins with the matching SDK when this
-development baseline changes. The host checks the declared native contract and
-complete ABI schema before creating the plugin; a binary built against an
-incompatible earlier schema is rejected rather than silently losing context.
+The host checks the declared native contract and complete ABI schema before
+creating the plugin. A binary built against an incompatible invocation layout is
+rejected. Rebuild it with an SDK compatible with the host.
 See [Native ABI Reference](/build-plugins/native/native-abi-reference#application-execution-context)
 for the transport. Public C callbacks receive an optional `execution_context`
 property in their context JSON. The Go binding decodes that envelope before

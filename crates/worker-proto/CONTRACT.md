@@ -76,11 +76,9 @@ Apply these version and compatibility rules:
   context and an empty object is present context. Every worker claiming this
   contract must preserve both cases. Hosts and SDKs check protocol identity at
   activation rather than negotiating a separate context capability.
-  Before the first release, rebuild and repackage development workers with the
-  matching SDK when this baseline changes. An obsolete development binary that
-  advertises the same contract version cannot be identified by version alone;
-  it is not a supported compatibility path. Unknown-field tolerance does not
-  establish conformance with the required contract.
+  Workers must implement this field even when their declared protocol version
+  already matches. Rebuild and repackage workers that omit it. The handshake
+  cannot detect an implementation that advertises the version but drops context.
 - Provider extensions belong in explicit `extra` maps or provider-native variants.
   Unknown fields in those maps must round-trip. Encode and decode reject keys
   that shadow modeled native JSON fields, including `role` and `type`
@@ -317,9 +315,9 @@ optional data field rather than arbitrary JSON at the top level.
 
 Continuations preserve the original context; changing tool arguments does not
 change context, and nested managed calls do not inherit it. Python SDK access
-returns defensive copies. Native and worker SDKs implement the matching
-unreleased 1.0 baseline; earlier development binaries must be rebuilt. Presence
-of a version identity alone cannot prove that an obsolete binary implements it.
+returns defensive copies. Native and worker SDKs must preserve the same context
+semantics. A matching version identity alone does not prove that an implementation
+preserves the field.
 
 Use the Rust types in `nemo-relay-types` for shared plugin APIs. Keep generated
 protobuf messages, gRPC statuses, credentials, and capability IDs out of callback
@@ -512,10 +510,8 @@ this repository; no external namespace registration or governance approval is cl
 
 ## Current-Contract Checks
 
-This contract is unreleased. Tests check the current schema and its Rust and
-Python implementations. They do not compare earlier development snapshots,
-committed descriptors, or old wire bytes. After the first release, check future
-changes against that released schema.
+Tests check the current schema and its Rust and Python implementations. They do
+not establish compatibility with earlier schemas or worker binaries.
 
 Use the following checks:
 

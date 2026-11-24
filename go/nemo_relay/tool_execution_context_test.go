@@ -43,6 +43,7 @@ func TestToolExecutionContextRemainsSeparateAcrossMiddlewareAndSubsequentCalls(t
 	t.Cleanup(func() { _ = DeregisterSubscriber("execution-context-events") })
 
 	var subsequentCalls, businessCalls int
+	var outerInterceptOrder []string
 	if err := RegisterToolExecutionIntercept("execution-context-first", 1,
 		func(ctx ToolExecutionContext, next func(json.RawMessage) (ToolExecutionResult, error)) (ToolExecutionInterceptOutcome, error) {
 			if ctx.ToolName == "execution-context-subsequent" {
@@ -60,6 +61,7 @@ func TestToolExecutionContextRemainsSeparateAcrossMiddlewareAndSubsequentCalls(t
 			// This is callback-owned JSON, not a mutable reference to the context
 			// held by the runtime or supplied to the next middleware.
 			ctx.ExecutionContext.Data["approval"][0] = '!'
+			outerInterceptOrder = append(outerInterceptOrder, "first-mutated")
 			return toolExecutionOutcome(next(json.RawMessage(`{"value":2}`)))
 		}); err != nil {
 		t.Fatal(err)
@@ -67,6 +69,9 @@ func TestToolExecutionContextRemainsSeparateAcrossMiddlewareAndSubsequentCalls(t
 	t.Cleanup(func() { _ = DeregisterToolExecutionIntercept("execution-context-first") })
 	if err := RegisterToolExecutionIntercept("execution-context-second", 2,
 		func(ctx ToolExecutionContext, next func(json.RawMessage) (ToolExecutionResult, error)) (ToolExecutionInterceptOutcome, error) {
+			if ctx.ToolName == "execution-context-outer" {
+				outerInterceptOrder = append(outerInterceptOrder, "second")
+			}
 			if ctx.ToolName == "execution-context-outer" && !bytes.Equal(executionContextJSON(ctx.ExecutionContext), context) {
 				return ToolExecutionInterceptOutcome{}, fmt.Errorf("earlier middleware changed held context: %v", ctx.ExecutionContext)
 			}
@@ -86,6 +91,9 @@ func TestToolExecutionContextRemainsSeparateAcrossMiddlewareAndSubsequentCalls(t
 		}, WithToolExecutionContext(context), WithToolCallID("provider-context-call"))
 	if err != nil {
 		t.Fatal(err)
+	}
+	if !reflect.DeepEqual(outerInterceptOrder, []string{"first-mutated", "second"}) {
+		t.Fatalf("unexpected outer intercept order: %v", outerInterceptOrder)
 	}
 	if _, failure := ToolCallExecute("execution-context-subsequent", json.RawMessage(`{}`),
 		func(arguments json.RawMessage) (ToolExecutionResult, error) {
@@ -469,5 +477,173 @@ func TestApplicationContextAndCancellationCompose(test *testing.T) {
 				test.Fatalf("valid recovery failed: %s %v, calls=%d/%d", recovered.Result, failure, middlewareCalls, implementationCalls)
 			}
 		})
+	}
+}
+
+func TestToolExecutionContextDoesNotInheritContextDuringNestedCalls(test *testing.T) {
+	supplied := json.RawMessage(`{"data":{"marker":"outer-only"}}`)
+	outerIntercepts, innerIntercepts, outerCalls, innerCalls := 0, 0, 0, 0
+	name := "execution-context-nested-isolation"
+	if failure := RegisterToolExecutionIntercept(name, 1,
+		func(invocation ToolExecutionContext, next func(json.RawMessage) (ToolExecutionResult, error)) (ToolExecutionInterceptOutcome, error) {
+			switch invocation.ToolName {
+			case "execution-context-nested-outer":
+				outerIntercepts++
+				if !bytes.Equal(executionContextJSON(invocation.ExecutionContext), supplied) {
+					return ToolExecutionInterceptOutcome{}, fmt.Errorf("outer intercept received wrong context")
+				}
+				result, failure := next(invocation.Args)
+				if failure != nil {
+					return ToolExecutionInterceptOutcome{}, failure
+				}
+				if !bytes.Equal(executionContextJSON(invocation.ExecutionContext), supplied) {
+					return ToolExecutionInterceptOutcome{}, fmt.Errorf("nested execution changed outer context")
+				}
+				return toolExecutionOutcome(result, nil)
+			case "execution-context-nested-inner":
+				innerIntercepts++
+				if invocation.ExecutionContext != nil {
+					return ToolExecutionInterceptOutcome{}, fmt.Errorf("nested call inherited outer context")
+				}
+			}
+			return toolExecutionOutcome(next(invocation.Args))
+		}); failure != nil {
+		test.Fatal(failure)
+	}
+	test.Cleanup(func() { _ = DeregisterToolExecutionIntercept(name) })
+	result, failure := ToolCallExecute("execution-context-nested-outer", json.RawMessage(`{"outer":true}`),
+		func(arguments json.RawMessage) (ToolExecutionResult, error) {
+			outerCalls++
+			nested, failure := ToolCallExecute("execution-context-nested-inner", json.RawMessage(`{"inner":true}`),
+				func(arguments json.RawMessage) (ToolExecutionResult, error) {
+					innerCalls++
+					return ToolExecutionResult{Result: arguments}, nil
+				})
+			if failure != nil {
+				return ToolExecutionResult{}, failure
+			}
+			if string(nested.Result) != `{"inner":true}` {
+				return ToolExecutionResult{}, fmt.Errorf("nested call returned wrong result: %s", nested.Result)
+			}
+			return ToolExecutionResult{Result: arguments}, nil
+		}, WithToolExecutionContext(supplied))
+	if failure != nil {
+		test.Fatal(failure)
+	}
+	if string(result.Result) != `{"outer":true}` || outerIntercepts != 1 || innerIntercepts != 1 || outerCalls != 1 || innerCalls != 1 {
+		test.Fatalf("unexpected nested execution: result=%s outer intercepts/calls=%d/%d inner intercepts/calls=%d/%d", result.Result, outerIntercepts, outerCalls, innerIntercepts, innerCalls)
+	}
+}
+
+func TestApplicationContextTypedKeysRequireValidUTF8(test *testing.T) {
+	interceptCalls, toolCalls := 0, 0
+	name := "execution-context-key-validation"
+	if failure := RegisterToolExecutionIntercept(name, 1,
+		func(invocation ToolExecutionContext, next func(json.RawMessage) (ToolExecutionResult, error)) (ToolExecutionInterceptOutcome, error) {
+			interceptCalls++
+			if invocation.ExecutionContext == nil || len(invocation.ExecutionContext.Data) != 1 || string(invocation.ExecutionContext.Data["\uFFFD"]) != "true" {
+				return ToolExecutionInterceptOutcome{}, fmt.Errorf("valid replacement-character key changed")
+			}
+			return toolExecutionOutcome(next(invocation.Args))
+		}); failure != nil {
+		test.Fatal(failure)
+	}
+	test.Cleanup(func() { _ = DeregisterToolExecutionIntercept(name) })
+	implementation := func(arguments json.RawMessage) (ToolExecutionResult, error) {
+		toolCalls++
+		return ToolExecutionResult{Result: arguments}, nil
+	}
+	for scenario, fields := range map[string]map[string]json.RawMessage{
+		"invalid-key":    {string([]byte{0xff}): json.RawMessage("false")},
+		"colliding-keys": {string([]byte{0xff}): json.RawMessage("false"), "\uFFFD": json.RawMessage("true")},
+	} {
+		test.Run(scenario, func(test *testing.T) {
+			context := ApplicationExecutionContext{Data: fields}
+			if _, failure := json.Marshal(context); failure == nil || !strings.Contains(failure.Error(), "UTF-8") {
+				test.Fatalf("invalid key did not fail marshaling: %v", failure)
+			}
+			if _, failure := ToolCallExecute(name, json.RawMessage(`{}`), implementation, WithApplicationExecutionContext(&context)); failure == nil || !strings.Contains(failure.Error(), "UTF-8") {
+				test.Fatalf("invalid key did not fail managed execution: %v", failure)
+			}
+			if interceptCalls != 0 || toolCalls != 0 {
+				test.Fatalf("invalid key reached callbacks: %d/%d", interceptCalls, toolCalls)
+			}
+		})
+	}
+	valid := ApplicationExecutionContext{Data: map[string]json.RawMessage{"\uFFFD": json.RawMessage("true")}}
+	encoded, failure := json.Marshal(valid)
+	if failure != nil {
+		test.Fatal(failure)
+	}
+	var decoded ApplicationExecutionContext
+	if failure := json.Unmarshal(encoded, &decoded); failure != nil || string(decoded.Data["\uFFFD"]) != "true" || len(decoded.Data) != 1 {
+		test.Fatalf("valid key did not round trip: %s %v", encoded, failure)
+	}
+	result, failure := ToolCallExecute(name, json.RawMessage(`{}`), implementation, WithApplicationExecutionContext(&valid))
+	if failure != nil || string(result.Result) != `{}` || interceptCalls != 1 || toolCalls != 1 {
+		test.Fatalf("valid key did not execute: result=%s error=%v callbacks=%d/%d", result.Result, failure, interceptCalls, toolCalls)
+	}
+}
+
+func TestApplicationContextDuplicateKeysUseRetainedValueBudget(test *testing.T) {
+	oversized := `"` + strings.Repeat(`\u20ac`, 5_500) + `"`
+	for _, scenario := range []struct {
+		name     string
+		object   string
+		accepted bool
+	}{
+		{"overwritten-string", `{"x":` + oversized + `,"x":null}`, true},
+		{"retained-string", `{"x":null,"x":` + oversized + `}`, false},
+		{"overwritten-object", `{"x":{"child":` + oversized + `},"x":null}`, true},
+		{"equivalent-escaped-key", `{"\u0078":` + oversized + `,"x":null}`, true},
+	} {
+		for _, typed := range []bool{false, true} {
+			test.Run(fmt.Sprintf("%s/typed=%t", scenario.name, typed), func(test *testing.T) {
+				interceptCalls, toolCalls := 0, 0
+				name := "execution-context-duplicate-budget"
+				if failure := RegisterToolExecutionIntercept(name, 1,
+					func(invocation ToolExecutionContext, next func(json.RawMessage) (ToolExecutionResult, error)) (ToolExecutionInterceptOutcome, error) {
+						interceptCalls++
+						if invocation.ExecutionContext == nil {
+							return ToolExecutionInterceptOutcome{}, fmt.Errorf("missing execution context")
+						}
+						observed := invocation.ExecutionContext.Data["x"]
+						if typed {
+							var retained map[string]json.RawMessage
+							if failure := json.Unmarshal(invocation.ExecutionContext.Data["nested"], &retained); failure != nil || len(retained) != 1 {
+								return ToolExecutionInterceptOutcome{}, fmt.Errorf("invalid retained object: %v", failure)
+							}
+							observed = retained["x"]
+						}
+						if string(observed) != "null" {
+							return ToolExecutionInterceptOutcome{}, fmt.Errorf("middleware did not receive retained null: %s", observed)
+						}
+						return toolExecutionOutcome(next(invocation.Args))
+					}); failure != nil {
+					test.Fatal(failure)
+				}
+				test.Cleanup(func() { _ = DeregisterToolExecutionIntercept(name) })
+				var option ToolCallOption
+				if typed {
+					context := ApplicationExecutionContext{Data: map[string]json.RawMessage{"nested": json.RawMessage(scenario.object)}}
+					option = WithApplicationExecutionContext(&context)
+				} else {
+					option = WithToolExecutionContext(json.RawMessage(`{"data":` + scenario.object + `}`))
+				}
+				result, failure := ToolCallExecute(name, json.RawMessage(`{}`), func(arguments json.RawMessage) (ToolExecutionResult, error) {
+					toolCalls++
+					return ToolExecutionResult{Result: arguments}, nil
+				}, option)
+				if !scenario.accepted {
+					if failure == nil || !strings.Contains(failure.Error(), "16384") || interceptCalls != 0 || toolCalls != 0 {
+						test.Fatalf("retained oversize value was not refused before callbacks: %v, %d/%d", failure, interceptCalls, toolCalls)
+					}
+					return
+				}
+				if failure != nil || string(result.Result) != `{}` || interceptCalls != 1 || toolCalls != 1 {
+					test.Fatalf("valid retained context did not execute: result=%s error=%v callbacks=%d/%d", result.Result, failure, interceptCalls, toolCalls)
+				}
+			})
+		}
 	}
 }

@@ -31,12 +31,10 @@ underscores, such as `v1_0`, because Rust identifiers cannot contain dots.
 
 The current SDK builds native contract v1.0 plugins, which declare
 `compat.native_api = "v1.0"`. Native contract versions are independent of Relay
-package versions. Relay 1.0 is unreleased: rebuild matching hosts and plugins
-when this development baseline changes. The complete contract schema must
-match before the host creates a plugin; the version string alone does not
-establish binary compatibility.
+package versions. The complete contract schema must match before the host creates
+a plugin; the version string alone does not establish binary compatibility.
 
-After release, each minor retains its published interfaces and behavior.
+Each minor retains its published interfaces and behavior.
 Breaking layout or dependency ABI changes require a new native major as
 appropriate.
 
@@ -75,10 +73,9 @@ envelope's fields; middleware owns the schema and trust policy for application
 data. Structural validation does not authenticate approval assertions. See the
 [application integration guide](../../docs/instrument-applications/advanced-guide.mdx#application-execution-context).
 
-The current unreleased baseline includes execution context in native v1.0.
-An obsolete development plugin whose invocation layout predates that field is
-rejected before factory creation, even when it also declares v1.0. Rebuild the
-plugin with the matching SDK.
+The native v1.0 invocation includes execution context. A plugin built against
+an incompatible invocation layout is rejected before factory creation, even when
+it also declares v1.0. Rebuild the plugin with the matching SDK.
 
 ## Loading and Component Cleanup
 

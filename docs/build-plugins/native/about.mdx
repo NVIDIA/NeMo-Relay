@@ -35,11 +35,10 @@ Export the plugin with
 `nemo_relay_plugin!(kind = "your.plugin", || YourPlugin)`. The macro sets the
 required native contract from the SDK used to build the plugin.
 
-The current SDK builds native contract v1.0 plugins. Relay 1.0 is unreleased;
-rebuild plugins and hosts together when the development baseline changes.
-The host checks the declared contract and complete ABI schema before registration.
-After release, changes that break the published binary contract require versioned
-interfaces or a new native major as appropriate.
+The current SDK builds native contract v1.0 plugins. The host checks the declared
+contract and complete ABI schema before registration. Rebuild plugins with an
+SDK compatible with the host. Changes that break a published binary contract
+require versioned interfaces or a new native major as appropriate.
 
 Refer to [Native ABI Reference](/build-plugins/native/native-abi-reference) for
 ownership and compatibility rules and

@@ -288,13 +288,14 @@ func validateContextBudget(input []byte, parentDepth int, remaining *int) error 
 	}
 	decoder := json.NewDecoder(bytes.NewReader(input))
 	decoder.UseNumber()
-	if failure := chargeContextValue(decoder, parentDepth, remaining); failure != nil {
+	measurementRemaining := math.MaxInt
+	if failure := chargeContextValue(decoder, parentDepth, &measurementRemaining); failure != nil {
 		return failure
 	}
 	if _, failure := decoder.Token(); failure != io.EOF {
 		return fmt.Errorf("execution context must contain one JSON value")
 	}
-	return nil
+	return contextBudgetCharge(remaining, math.MaxInt-measurementRemaining)
 }
 
 func marshalApplicationContext(context ApplicationExecutionContext) ([]byte, error) {
@@ -307,6 +308,9 @@ func marshalApplicationContext(context ApplicationExecutionContext) ([]byte, err
 	}
 	processedFields := 0
 	for key, value := range context.Data {
+		if !utf8.ValidString(key) {
+			return nil, fmt.Errorf("application execution context key must be valid UTF-8")
+		}
 		if processedFields > 0 {
 			if failure := contextBudgetCharge(&remaining, 1); failure != nil {
 				return nil, failure
