@@ -13,10 +13,16 @@ LLM DTOs and attributes. Shared LLM data types.
 
 ## Structs
 
+- [ApplicationExecutionContext](/reference/api/rust-library-reference/nemo-relay-types/api/llm/struct-applicationexecutioncontext): Application context for one LLM call.
 - [LlmAttributes](/reference/api/rust-library-reference/nemo-relay-types/api/llm/struct-llmattributes): Bitflags that modify LLM-call behavior and observability.
 - [LlmRequest](/reference/api/rust-library-reference/nemo-relay-types/api/llm/struct-llmrequest): JSON-shaped LLM request payload passed through the runtime.
 - [LlmRequestInterceptOutcome](/reference/api/rust-library-reference/nemo-relay-types/api/llm/struct-llmrequestinterceptoutcome): Result of an LLM request intercept that can schedule lifecycle marks.
 
+## Enums
+
+- [ApplicationExecutionContextError](/reference/api/rust-library-reference/nemo-relay-types/api/llm/enum-applicationexecutioncontexterror): A context validation error that does not include input values.
+
 ## Constants
 
+- [APPLICATION_EXECUTION_CONTEXT_SCHEMA](/reference/api/rust-library-reference/nemo-relay-types/api/llm/constant-application-execution-context-schema): Canonical Draft 2020-12 schema shared by managed execution and worker decoding.
 - [LLM_REQUEST_INTERCEPT_OUTCOME_SCHEMA](/reference/api/rust-library-reference/nemo-relay-types/api/llm/constant-llm-request-intercept-outcome-schema): Versioned JSON envelope schema for [`LlmRequestInterceptOutcome`](/reference/api/rust-library-reference/nemo-relay-types/api/llm/struct-llmrequestinterceptoutcome).

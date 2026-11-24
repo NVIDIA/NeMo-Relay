@@ -69,6 +69,7 @@ export interface TypedLlmExecuteOptions<TData extends JsonCompatible<TData> = Js
     codec?: LlmCodec<TAnnotated, TEncoded> | null;
     responseCodec?: LlmResponseCodec<TDecodedResponse> | null;
     executionOptions?: ExecutionOptions | null;
+    executionContext?: LlmApplicationExecutionContext | null;
 }
 ```
 
@@ -86,6 +87,7 @@ export interface TypedLlmStreamExecuteOptions<TData extends JsonCompatible<TData
     codec?: LlmCodec<TAnnotated, TEncoded> | null;
     responseCodec?: LlmResponseCodec<TDecodedResponse> | null;
     executionOptions?: ExecutionOptions | null;
+    executionContext?: LlmApplicationExecutionContext | null;
 }
 ```
 

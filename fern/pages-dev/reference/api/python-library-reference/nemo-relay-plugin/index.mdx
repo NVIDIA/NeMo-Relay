@@ -219,6 +219,10 @@ async def decode(response: Json) -> Json
 
 Decode a wire response with the active host codec.
 
+### `LlmApplicationExecutionContext(TypedDict)`
+
+Application data for one LLM call.
+
 ### `LlmExecutionContext`
 
 Directional codec context for one LLM execution invocation.
@@ -228,7 +232,7 @@ Directional codec context for one LLM execution invocation.
 ##### `LlmExecutionContext`
 
 ```python
-def LlmExecutionContext(request_codec: LlmRequestContext, response_codec: LlmResponseContext | None) -> None
+def LlmExecutionContext(request_codec: LlmRequestContext, response_codec: LlmResponseContext | None, execution_context: LlmApplicationExecutionContext | None = None) -> None
 ```
 
 Create an instance.

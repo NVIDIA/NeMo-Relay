@@ -14,11 +14,11 @@ Shared middleware callback, stream, and invocation-context contracts.
 ## Modules
 
 - [callbacks](/reference/api/rust-library-reference/nemo-relay/middleware/callbacks): Middleware callback and stream contracts. Callback type aliases used by the runtime middleware pipeline.
-- [llm_execution_context](/reference/api/rust-library-reference/nemo-relay/middleware/llm_execution_context): Invocation-scoped codec context. Invocation-scoped codec context for LLM execution intercepts.
+- [llm_execution_context](/reference/api/rust-library-reference/nemo-relay/middleware/llm_execution_context): Invocation-scoped codec context. Codec access and application data for the execution intercepts of one LLM call.
 
 ## Structs
 
-- [LlmExecutionContext](/reference/api/rust-library-reference/nemo-relay/middleware/struct-llmexecutioncontext): Codec access for one LLM execution.
+- [LlmExecutionContext](/reference/api/rust-library-reference/nemo-relay/middleware/struct-llmexecutioncontext): Codec access and optional application data for one LLM execution.
 - [LlmJsonStream](/reference/api/rust-library-reference/nemo-relay/middleware/struct-llmjsonstream): Stream of JSON chunks produced by the managed streaming LLM pipeline.
 - [LlmSanitizeRequestContext](/reference/api/rust-library-reference/nemo-relay/middleware/struct-llmsanitizerequestcontext): Per-call codec identity and capability for an LLM request.
 - [LlmSanitizeResponseContext](/reference/api/rust-library-reference/nemo-relay/middleware/struct-llmsanitizeresponsecontext): Per-call codec identity and capability for an LLM response.

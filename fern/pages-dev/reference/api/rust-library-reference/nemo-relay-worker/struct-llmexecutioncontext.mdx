@@ -2,7 +2,7 @@
 title: "Struct LlmExecution Context"
 sidebar-title: "LlmExecutionContext"
 description: "Invocation-scoped codec identities and operations for an LLM execution interceptor."
-position: 18
+position: 19
 ---
 {/* SPDX-FileCopyrightText: Copyright (c) 2026, NVIDIA CORPORATION & AFFILIATES. All rights reserved.
 SPDX-License-Identifier: Apache-2.0 */}
@@ -22,6 +22,12 @@ This context identifies the codecs selected when Relay created the managed invoc
 ### `impl LlmExecutionContext`
 
 <pre className="rust-signature"><code dangerouslySetInnerHTML={{"__html": "impl <a href=\"struct-llmexecutioncontext\">LlmExecutionContext</a>"}} /></pre>
+
+#### `execution_context`
+
+<pre className="rust-signature"><code dangerouslySetInnerHTML={{"__html": "pub fn execution_context(&amp;self) -&gt; <a href=\"https://doc.rust-lang.org/1.96.1/core/option/enum.Option.html\">Option</a>&lt;&amp;<a href=\"struct-llmapplicationexecutioncontext\">ApplicationExecutionContext</a>&gt;"}} /></pre>
+
+Application data for this call, separate from the provider request.
 
 #### `request_codec`
 

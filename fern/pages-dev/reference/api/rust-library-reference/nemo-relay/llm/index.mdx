@@ -13,6 +13,7 @@ Managed and manual LLM calls.
 
 ## Structs
 
+- [ApplicationExecutionContext](/reference/api/rust-library-reference/nemo-relay/llm/struct-applicationexecutioncontext): Application context for one LLM call.
 - [ExecutionOptions](/reference/api/rust-library-reference/nemo-relay/llm/struct-executionoptions): Choose which middleware stages run for one managed call.
 - [LlmAttributes](/reference/api/rust-library-reference/nemo-relay/llm/struct-llmattributes): Bitflags that modify LLM-call behavior and observability.
 - [LlmCallEndParams](/reference/api/rust-library-reference/nemo-relay/llm/struct-llmcallendparams): Builder parameters for [`llm_call_end`](/reference/api/rust-library-reference/nemo-relay/llm/fn-llm-call-end).
@@ -23,8 +24,13 @@ Managed and manual LLM calls.
 - [LlmRequestInterceptOutcome](/reference/api/rust-library-reference/nemo-relay/llm/struct-llmrequestinterceptoutcome): Result of an LLM request intercept that can schedule lifecycle marks.
 - [LlmStreamCallExecuteParams](/reference/api/rust-library-reference/nemo-relay/llm/struct-llmstreamcallexecuteparams): Builder parameters for [`llm_stream_call_execute`](/reference/api/rust-library-reference/nemo-relay/llm/fn-llm-stream-call-execute).
 
+## Enums
+
+- [ApplicationExecutionContextError](/reference/api/rust-library-reference/nemo-relay/llm/enum-applicationexecutioncontexterror): A context validation error that does not include input values.
+
 ## Constants
 
+- [APPLICATION_EXECUTION_CONTEXT_SCHEMA](/reference/api/rust-library-reference/nemo-relay/llm/constant-application-execution-context-schema): Canonical Draft 2020-12 schema shared by managed execution and worker decoding.
 - [LLM_REQUEST_INTERCEPT_OUTCOME_SCHEMA](/reference/api/rust-library-reference/nemo-relay/llm/constant-llm-request-intercept-outcome-schema): Versioned JSON envelope schema for [`LlmRequestInterceptOutcome`](/reference/api/rust-library-reference/nemo-relay/llm/struct-llmrequestinterceptoutcome).
 
 ## Functions

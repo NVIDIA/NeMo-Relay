@@ -2,7 +2,7 @@
 title: "Struct LlmExecution Context"
 sidebar-title: "LlmExecutionContext"
 description: "API documentation for the Rust `LlmExecutionContext` struct in crate `nemo_relay_plugin`."
-position: 24
+position: 25
 ---
 {/* SPDX-FileCopyrightText: Copyright (c) 2026, NVIDIA CORPORATION & AFFILIATES. All rights reserved.
 SPDX-License-Identifier: Apache-2.0 */}
@@ -18,6 +18,12 @@ pub struct LlmExecutionContext { /* private fields */ }
 ### `impl LlmExecutionContext`
 
 <pre className="rust-signature"><code dangerouslySetInnerHTML={{"__html": "impl <a href=\"struct-llmexecutioncontext\">LlmExecutionContext</a>"}} /></pre>
+
+#### `execution_context`
+
+<pre className="rust-signature"><code dangerouslySetInnerHTML={{"__html": "pub fn execution_context(&amp;self) -&gt; <a href=\"https://doc.rust-lang.org/1.96.1/core/option/enum.Option.html\">Option</a>&lt;&amp;<a href=\"struct-llmapplicationexecutioncontext\">ApplicationExecutionContext</a>&gt;"}} /></pre>
+
+Application data supplied for this invocation only.
 
 #### `request_codec`
 

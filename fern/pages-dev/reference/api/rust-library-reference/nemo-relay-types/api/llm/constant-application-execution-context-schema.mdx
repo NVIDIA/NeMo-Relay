@@ -1,0 +1,14 @@
+---
+title: "Constant APPLICATION_EXECUTION_CONTEXT_SCHEMA"
+sidebar-title: "APPLICATION_EXECUTION_CONTEXT_SCHEMA"
+description: "Canonical Draft 2020-12 schema shared by managed execution and worker decoding."
+position: 6
+---
+{/* SPDX-FileCopyrightText: Copyright (c) 2026, NVIDIA CORPORATION & AFFILIATES. All rights reserved.
+SPDX-License-Identifier: Apache-2.0 */}
+
+Generated from `cargo doc --no-deps -p nemo-relay-builtins -p nemo-relay-diagnostics -p nemo-relay-logging -p nemo-relay-plugin-host -p nemo-relay-codecs -p nemo-relay -p nemo-relay-runtime -p nemo-relay-model-pricing -p nemo-relay-resource-metrics -p nemo-relay-observability -p nemo-relay-adaptive -p nemo-relay-pii-redaction -p nemo-relay-ffi -p nemo-relay-types -p nemo-relay-plugin -p nemo-relay-worker-proto -p nemo-relay-worker`.
+
+<pre className="rust-signature"><code dangerouslySetInnerHTML={{"__html": "pub const APPLICATION_EXECUTION_CONTEXT_SCHEMA: &amp;<a href=\"https://doc.rust-lang.org/1.96.1/std/primitive.str.html\">str</a> = \"&#123;\\n  \\\"$schema\\\": \\\"https://json-schema.org/draft/2020-12/schema\\\",\\n  \\\"$comment\\\": \\\"SPDX-FileCopyrightText: Copyright (c) 2026, NVIDIA CORPORATION &amp; AFFILIATES. All rights reserved. SPDX-License-Identifier: Apache-2.0\\\",\\n  \\\"title\\\": \\\"LlmApplicationExecutionContext\\\",\\n  \\\"description\\\": \\\"Application context for one LLM call. Put application keys inside data. Relay checks the structure. Middleware decides whether to trust the data.\\\",\\n  \\\"type\\\": \\\"object\\\",\\n  \\\"properties\\\": &#123;\\n    \\\"data\\\": &#123;\\n      \\\"type\\\": \\\"object\\\",\\n      \\\"description\\\": \\\"Optional JSON object for application data. Middleware defines and checks its contents. Omitting data differs from passing an empty object. Relay does not treat this data as permission to perform an action.\\\",\\n      \\\"additionalProperties\\\": true\\n    &#125;\\n  &#125;,\\n  \\\"additionalProperties\\\": false\\n&#125;\\n\";"}} /></pre>
+
+Canonical Draft 2020-12 schema shared by managed execution and worker decoding.
