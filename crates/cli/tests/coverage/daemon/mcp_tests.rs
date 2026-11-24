@@ -604,25 +604,10 @@ fn detached_windows_worker_launcher_fixture() {
     let stderr = std::fs::File::create(path.with_extension("stderr")).unwrap();
     if std::env::var_os("NEMO_RELAY_TEST_WINDOWS_EXPECT_BREAKAWAY_DENIED").is_some() {
         let logging = windows_worker_fixture_logging(&path.with_extension("jsonl"));
-        let (mut child, _bootstrap) =
+        let (child, _bootstrap) =
             crate::process::detached::spawn_worker_detached(&command, &stderr).unwrap();
-        use windows_sys::Win32::Foundation::CloseHandle;
-        use windows_sys::Win32::System::JobObjects::IsProcessInJob;
-        use windows_sys::Win32::System::Threading::{
-            OpenProcess, PROCESS_QUERY_LIMITED_INFORMATION,
-        };
-        // Verify confinement without changing or bypassing the enclosing job's policy.
-        let process = unsafe { OpenProcess(PROCESS_QUERY_LIMITED_INFORMATION, 0, child.id()) };
-        assert!(!process.is_null());
-        let mut in_job = 0;
-        let queried = unsafe { IsProcessInJob(process, std::ptr::null_mut(), &mut in_job) };
-        unsafe { CloseHandle(process) };
-        child.start_kill().unwrap();
-        child.wait().unwrap();
-        assert_ne!(queried, 0);
-        assert_ne!(in_job, 0, "worker escaped the restrictive parent job");
         logging.shutdown();
-        std::fs::write(path, "host_scoped").unwrap();
+        std::fs::write(path.with_extension("pid"), child.id().to_string()).unwrap();
         return;
     }
     let (child, _bootstrap) =
@@ -692,8 +677,14 @@ async fn launcher_job_cleanup_preserves_explicitly_detached_worker() {
 #[tokio::test]
 async fn restrictive_external_job_fixture() {
     use std::os::windows::io::{FromRawHandle, OwnedHandle};
-    use windows_sys::Win32::System::JobObjects::{AssignProcessToJobObject, CreateJobObjectW};
-    use windows_sys::Win32::System::Threading::GetCurrentProcess;
+    use windows_sys::Win32::Foundation::{CloseHandle, WAIT_OBJECT_0};
+    use windows_sys::Win32::System::JobObjects::{
+        AssignProcessToJobObject, CreateJobObjectW, IsProcessInJob,
+    };
+    use windows_sys::Win32::System::Threading::{
+        GetCurrentProcess, OpenProcess, PROCESS_QUERY_LIMITED_INFORMATION, PROCESS_SYNCHRONIZE,
+        PROCESS_TERMINATE, TerminateProcess, WaitForSingleObject,
+    };
     let Some(path) = std::env::var_os("NEMO_RELAY_TEST_WINDOWS_EXTERNAL_JOB") else {
         return;
     };
@@ -708,25 +699,69 @@ async fn restrictive_external_job_fixture() {
     );
     let path = std::path::PathBuf::from(path);
     let logging = windows_worker_fixture_logging(&path.with_extension("failed.jsonl"));
-    // Exercise direct breakaway denial before SupervisedChild adds a nested Relay job.
     let missing_worker = std::process::Command::new(path.with_extension("missing.exe"));
     let stderr = std::fs::File::create(path.with_extension("failed.stderr")).unwrap();
     assert!(crate::process::detached::spawn_worker_detached(&missing_worker, &stderr).is_err());
     logging.shutdown();
-    let mut command = Command::new(std::env::current_exe().unwrap());
-    command
-        .args([
-            "--exact",
-            "daemon::mcp::tests::detached_windows_worker_launcher_fixture",
-        ])
-        .env("NEMO_RELAY_TEST_WINDOWS_DETACHED_PID", &path)
-        .env("NEMO_RELAY_TEST_WINDOWS_EXPECT_BREAKAWAY_DENIED", "1")
-        .stdout(Stdio::null())
-        .stderr(Stdio::null());
-    let mut launcher = crate::process::SupervisedChild::spawn(&mut command)
-        .await
-        .unwrap();
-    assert!(launcher.wait().await.unwrap().success());
+    let launcher_args = [
+        "--exact",
+        "daemon::mcp::tests::detached_windows_worker_launcher_fixture",
+    ];
+    for (label, supervised) in [("direct", false), ("nested", true)] {
+        let base = path.with_file_name(label);
+        if supervised {
+            let mut command = Command::new(std::env::current_exe().unwrap());
+            command
+                .args(launcher_args)
+                .env("NEMO_RELAY_TEST_WINDOWS_DETACHED_PID", &base)
+                .env("NEMO_RELAY_TEST_WINDOWS_EXPECT_BREAKAWAY_DENIED", "1")
+                .stdout(Stdio::null())
+                .stderr(Stdio::null());
+            let mut launcher = crate::process::SupervisedChild::spawn(&mut command)
+                .await
+                .unwrap();
+            assert!(launcher.wait().await.unwrap().success());
+        } else {
+            let status = std::process::Command::new(std::env::current_exe().unwrap())
+                .args(launcher_args)
+                .env("NEMO_RELAY_TEST_WINDOWS_DETACHED_PID", &base)
+                .env("NEMO_RELAY_TEST_WINDOWS_EXPECT_BREAKAWAY_DENIED", "1")
+                .stdout(Stdio::null())
+                .stderr(Stdio::null())
+                .status()
+                .unwrap();
+            assert!(status.success());
+        }
+        let worker_pid: u32 = std::fs::read_to_string(base.with_extension("pid"))
+            .unwrap()
+            .trim()
+            .parse()
+            .unwrap();
+        // SAFETY: OpenProcess returns a separately owned handle, closed after the checks below.
+        let worker = unsafe {
+            OpenProcess(
+                PROCESS_QUERY_LIMITED_INFORMATION | PROCESS_TERMINATE | PROCESS_SYNCHRONIZE,
+                0,
+                worker_pid,
+            )
+        };
+        assert!(!worker.is_null());
+        let mut in_job = 0;
+        // SAFETY: Both handles are live and the output pointer is valid.
+        let queried = unsafe { IsProcessInJob(worker, raw_job, &mut in_job) };
+        // SAFETY: The handle has termination and synchronization rights.
+        let terminated = unsafe { TerminateProcess(worker, 1) };
+        let waited = unsafe { WaitForSingleObject(worker, 5000) };
+        unsafe { CloseHandle(worker) };
+        assert_ne!(queried, 0);
+        assert_ne!(
+            in_job, 0,
+            "{label} worker escaped the restrictive parent job"
+        );
+        assert_ne!(terminated, 0);
+        assert_eq!(waited, WAIT_OBJECT_0);
+    }
+    std::fs::write(path, "host_scoped").unwrap();
 }
 
 #[cfg(windows)]
@@ -735,7 +770,7 @@ async fn worker_starts_without_escaping_restrictive_external_parent_job() {
     let temp = tempfile::tempdir().unwrap();
     let path = temp.path().join("result");
     let output = tokio::time::timeout(
-        Duration::from_secs(5),
+        Duration::from_secs(20),
         Command::new(std::env::current_exe().unwrap())
             .args([
                 "--exact",
@@ -753,23 +788,30 @@ async fn worker_starts_without_escaping_restrictive_external_parent_job() {
         String::from_utf8_lossy(&output.stderr)
     );
     assert_eq!(std::fs::read_to_string(&path).unwrap(), "host_scoped");
-    let records: Vec<serde_json::Value> = std::fs::read_to_string(path.with_extension("jsonl"))
-        .unwrap()
-        .lines()
-        .map(|line| serde_json::from_str(line).unwrap())
-        .filter(|record: &serde_json::Value| record["event"] == "worker_lifetime_limited")
-        .collect();
-    assert_eq!(records.len(), 1, "only the successful launch should warn");
-    assert!(matches!(
-        records[0]["fields"]["reason"].as_str(),
-        Some("windows_job_breakaway_denied" | "windows_parent_job_retained")
-    ));
-    let failed_records = std::fs::read_to_string(path.with_extension("failed.jsonl")).unwrap();
+    let lifetime_warnings = |file: &str| -> Vec<serde_json::Value> {
+        std::fs::read_to_string(path.with_file_name(file))
+            .unwrap()
+            .lines()
+            .map(|line| serde_json::from_str(line).unwrap())
+            .filter(|record: &serde_json::Value| record["event"] == "worker_lifetime_limited")
+            .collect()
+    };
+    let direct = lifetime_warnings("direct.jsonl");
+    assert_eq!(
+        direct.len(),
+        1,
+        "a launcher whose own job denies breakaway warns once"
+    );
+    assert_eq!(
+        direct[0]["fields"]["reason"],
+        "windows_job_breakaway_denied"
+    );
     assert!(
-        failed_records.lines().all(|line| {
-            let record: serde_json::Value = serde_json::from_str(line).unwrap();
-            record["event"] != "worker_lifetime_limited"
-        }),
+        lifetime_warnings("nested.jsonl").is_empty(),
+        "a launcher whose own job permits breakaway cannot observe the external job"
+    );
+    assert!(
+        lifetime_warnings("result.failed.jsonl").is_empty(),
         "failed launches must not emit a worker lifetime warning"
     );
 }

@@ -344,14 +344,15 @@ fn spawn_with_handle_list(
     use windows_sys::Win32::Foundation::{
         DUPLICATE_SAME_ACCESS, DuplicateHandle, HANDLE, HANDLE_FLAG_INHERIT, SetHandleInformation,
     };
-    use windows_sys::Win32::System::JobObjects::{AssignProcessToJobObject, IsProcessInJob};
     use windows_sys::Win32::System::Threading::{
         CREATE_UNICODE_ENVIRONMENT, CreateProcessW, EXTENDED_STARTUPINFO_PRESENT,
         GetCurrentProcess, InitializeProcThreadAttributeList, PROC_THREAD_ATTRIBUTE_HANDLE_LIST,
-        PROCESS_INFORMATION, STARTF_USESTDHANDLES, STARTUPINFOEXW, UpdateProcThreadAttribute,
+        PROC_THREAD_ATTRIBUTE_JOB_LIST, PROCESS_INFORMATION, STARTF_USESTDHANDLES, STARTUPINFOEXW,
+        UpdateProcThreadAttribute,
     };
 
     let job = create_job_object()?;
+    let job_list = [job.0];
     let handles = [
         stdin.as_raw_handle().cast::<c_void>(),
         stdout.as_raw_handle().cast::<c_void>(),
@@ -371,7 +372,7 @@ fn spawn_with_handle_list(
 
     let mut attribute_bytes = 0;
     // SAFETY: A null first call obtains the required allocation size.
-    unsafe { InitializeProcThreadAttributeList(std::ptr::null_mut(), 1, 0, &mut attribute_bytes) };
+    unsafe { InitializeProcThreadAttributeList(std::ptr::null_mut(), 2, 0, &mut attribute_bytes) };
     if attribute_bytes == 0 {
         return Err(windows_spawn_error(
             "InitializeProcThreadAttributeList sizing",
@@ -381,7 +382,7 @@ fn spawn_with_handle_list(
     let mut attribute_storage = vec![0_usize; words];
     let attribute_pointer = attribute_storage.as_mut_ptr().cast::<c_void>();
     // SAFETY: The aligned allocation has the size returned by the sizing call.
-    if unsafe { InitializeProcThreadAttributeList(attribute_pointer, 1, 0, &mut attribute_bytes) }
+    if unsafe { InitializeProcThreadAttributeList(attribute_pointer, 2, 0, &mut attribute_bytes) }
         == 0
     {
         return Err(windows_spawn_error("InitializeProcThreadAttributeList"));
@@ -402,6 +403,22 @@ fn spawn_with_handle_list(
     {
         return Err(windows_spawn_error("UpdateProcThreadAttribute handle list"));
     }
+    // SAFETY: `job_list` holds the live Job Object handle until the attribute list is deleted.
+    if unsafe {
+        UpdateProcThreadAttribute(
+            attribute_list.0,
+            0,
+            PROC_THREAD_ATTRIBUTE_JOB_LIST as usize,
+            job_list.as_ptr().cast(),
+            std::mem::size_of::<HANDLE>(),
+            std::ptr::null_mut(),
+            std::ptr::null(),
+        )
+    } == 0
+    {
+        return Err(windows_spawn_error("UpdateProcThreadAttribute job list"));
+    }
+
     let program = wide_nul(command.get_program());
     let mut command_line = Vec::new();
     append_quoted(&mut command_line, command.get_program());
@@ -448,41 +465,16 @@ fn spawn_with_handle_list(
     if let Some(error) = create_error {
         return Err(error);
     }
+    let job_handle = job.0;
     let mut child = DetachedChild {
         process: process.hProcess,
         thread: process.hThread,
-        job: None,
+        job: Some(job),
         id: process.dwProcessId,
     };
-    if worker {
-        let mut child_in_job = 0;
-        // SAFETY: The process handle is owned here and the output pointer is valid.
-        let queried =
-            unsafe { IsProcessInJob(child.process, std::ptr::null_mut(), &mut child_in_job) };
-        if queried == 0 {
-            return Err(abandon_spawned_child(
-                &mut child,
-                windows_spawn_error("IsProcessInJob worker verification"),
-            ));
-        }
-        if child_in_job != 0 {
-            let reason = if limited_lifetime {
-                "windows_job_breakaway_denied"
-            } else {
-                "windows_parent_job_retained"
-            };
-            log::warn!(target: "nemo_relay.bootstrap", event = "worker_lifetime_limited", reason = reason; "Worker remains scoped to the host job; host shutdown can require reactivation");
-        }
+    if worker && limited_lifetime {
+        log::warn!(target: "nemo_relay.bootstrap", event = "worker_lifetime_limited", reason = "windows_job_breakaway_denied"; "Worker remains scoped to the host job; host shutdown can require reactivation");
     }
-    let job_handle = job.0;
-    // SAFETY: Both handles are live and owned by this function.
-    if unsafe { AssignProcessToJobObject(job_handle, child.process) } == 0 {
-        return Err(abandon_spawned_child(
-            &mut child,
-            windows_spawn_error("AssignProcessToJobObject detached child"),
-        ));
-    }
-    child.job = Some(job);
     let mut child_handle = std::ptr::null_mut();
     // SAFETY: The pseudo current-process handle, the owned process handle, and the output
     // pointer are valid. The duplicate belongs to the child process and closes with it.
