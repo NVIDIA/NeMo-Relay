@@ -220,6 +220,69 @@ fn content_inspection_rejects_incomplete_or_contradictory_wire_values() {
 }
 
 #[test]
+fn llm_context_wire_limits_precede_json_materialization() {
+    let codec = || pb::LlmCodecContext {
+        codec: Some(pb::LlmCodecReference {
+            kind: "none".into(),
+            id: None,
+        }),
+        capability_id: None,
+    };
+    let request = || pb::LlmRequest {
+        headers: Some(pb::JsonObject::default()),
+        content: Some(pb::JsonValue {
+            json: b"{}".to_vec(),
+        }),
+    };
+    for (json, message) in [
+        (
+            format!("{{\"data\":{{\"value\":\"{}\"}}}}", "x".repeat(1_048_576)),
+            "16384 serialized bytes",
+        ),
+        (
+            format!(
+                "{{\"data\":{{\"value\":{}null{}}}}}",
+                "[".repeat(1100),
+                "]".repeat(1100)
+            ),
+            "64 container levels",
+        ),
+    ] {
+        let unary = pb::LlmExecutionInvocation {
+            model_name: "model".into(),
+            request: Some(request()),
+            continuation_id: "next".into(),
+            request_codec: Some(codec()),
+            response_codec: Some(codec()),
+            execution_context: Some(pb::JsonValue {
+                json: json.into_bytes(),
+            }),
+        };
+        let error = validate(&unary).unwrap_err();
+        assert!(error.contains(message), "{error}");
+        let mut streaming = pb::InvokeStreamRequest {
+            credentials: Some(pb::Credentials {
+                activation_id: "act".into(),
+                auth_token: "token".into(),
+            }),
+            invocation_id: "invoke".into(),
+            registration_name: "context".into(),
+            request: Some(request()),
+            continuation_id: "next".into(),
+            request_codec: Some(codec()),
+            execution_context: unary.execution_context,
+            ..Default::default()
+        };
+        let error = validate(&streaming).unwrap_err();
+        assert!(error.contains(message), "{error}");
+        streaming.execution_context = Some(pb::JsonValue {
+            json: br#"{"data":{"recovery":true}}"#.to_vec(),
+        });
+        validate(&streaming).unwrap();
+    }
+}
+
+#[test]
 fn application_execution_context_wire_validation_checks_limits_before_json_syntax() {
     for (value, expected) in [
         (

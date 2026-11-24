@@ -25,6 +25,7 @@ use pyo3::prelude::*;
 use pyo3::types::PyModule;
 
 mod convert;
+mod llm_application_context;
 #[doc(hidden)]
 pub mod py_adaptive;
 #[doc(hidden)]

@@ -130,7 +130,7 @@ record!(ToolExecutionResultWire, ToolExecutionResult {result:Json,annotation:Opt
 record!(ToolExecutionOutcomeWire, ToolExecutionOutcome {result:ToolExecutionResult,pending_marks:Vec<Json>});
 record!(ConfigDiagnosticWire, ConfigDiagnostic {is_error:bool,code:String,component:Option<String>,field:Option<String>,message:String});
 record!(InvocationWire, Invocation {surface:Surface,name:String,value:Json,tool_call_id:Option<String>,context:Context});
-record!(ContextWire, Context {scope:ScopeBox,request_codec:Option<CodecBox>,response_codec:Option<CodecBox>});
+record!(ContextWire, Context {execution_context:Option<Json>,scope:ScopeBox,request_codec:Option<CodecBox>,response_codec:Option<CodecBox>});
 record!(
     RegistrationWire,
     Registration {

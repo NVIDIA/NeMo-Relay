@@ -701,6 +701,15 @@ fn js_llm_execution_invocation(request: LlmRequest, context: LlmExecutionContext
             None => js_value(env, Null)?,
         };
         execution.set_named_property("responseCodec", response)?;
+        execution.set_named_property(
+            "executionContext",
+            crate::llm_application_context::context_json_to_js(
+                env,
+                &context
+                    .execution_context()
+                    .map_or(Value::Null, |context| context.to_json()),
+            )?,
+        )?;
         args.set(1, detach(env, &execution))?;
         Ok(detach(env, &args))
     })

@@ -33,6 +33,18 @@ pub fn validate<M: Message + Name>(message: &M) -> Result<(), String> {
 
 fn validate_json(message: &DynamicMessage) -> Result<(), String> {
     let name = message.descriptor().full_name().to_owned();
+    if matches!(
+        name.as_str(),
+        "nvidia.nemo.relay.worker.v1.LlmExecutionInvocation"
+            | "nvidia.nemo.relay.worker.v1.InvokeStreamRequest"
+    ) && let Some(context) = message.get_field_by_name("execution_context")
+        && let Value::Message(context) = context.as_ref()
+        && let Some(raw) = context.get_field_by_name("json")
+        && let Value::Bytes(raw) = raw.as_ref()
+    {
+        nemo_relay_types::api::llm::ApplicationExecutionContext::validate_json_input(raw)
+            .map_err(|error| error.to_string())?;
+    }
     if name == "nvidia.nemo.relay.worker.v1.ApplicationExecutionContext" {
         preflight_application_context(message)?;
     }

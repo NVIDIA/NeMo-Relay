@@ -1924,3 +1924,278 @@ func TestLLMExecutionOptions(t *testing.T) {
 		t.Fatal("manual API should reject execution options")
 	}
 }
+
+func TestLLMApplicationExecutionContext(t *testing.T) {
+	for _, streaming := range []bool{false, true} {
+		t.Run(fmt.Sprint(streaming), func(t *testing.T) {
+			seen := false
+			callback := LLMExecutionInterceptFunc(func(request json.RawMessage, context LLMExecutionContext, next func(json.RawMessage) (json.RawMessage, error)) (json.RawMessage, error) {
+				if context.ExecutionContext == nil || string(context.ExecutionContext.Data["review"]) != `"application"` {
+					return nil, fmt.Errorf("missing context: %#v", context.ExecutionContext)
+				}
+				seen = true
+				return next(request)
+			})
+			if streaming {
+				if err := RegisterLlmStreamExecutionIntercept("go-application", 1, callback.AsStream()); err != nil {
+					t.Fatal(err)
+				}
+				defer DeregisterLlmStreamExecutionIntercept("go-application")
+			} else {
+				if err := RegisterLlmExecutionIntercept("go-application", 1, callback); err != nil {
+					t.Fatal(err)
+				}
+				defer DeregisterLlmExecutionIntercept("go-application")
+			}
+			option := WithLLMApplicationExecutionContext(&LLMApplicationExecutionContext{Data: map[string]json.RawMessage{"review": json.RawMessage(`"application"`)}})
+			provider := LLMExecutionFunc(func(json.RawMessage) (json.RawMessage, error) { return json.RawMessage(`{"ok":true}`), nil })
+			if streaming {
+				stream, err := LlmStreamCallExecute("context", requestForTest(makeRequest()), provider.AsStream(), nil, nil, option)
+				if err != nil {
+					t.Fatal(err)
+				}
+				if _, err := stream.Next(); err != nil {
+					t.Fatal(err)
+				}
+				if err := stream.Close(); err != nil {
+					t.Fatal(err)
+				}
+			} else {
+				if _, err := LlmCallExecute("context", requestForTest(makeRequest()), provider, option); err != nil {
+					t.Fatal(err)
+				}
+			}
+			if !seen {
+				t.Fatal("intercept did not run")
+			}
+		})
+	}
+}
+
+func TestLLMApplicationExecutionContextEmptyAndInvalid(t *testing.T) {
+	for _, data := range []map[string]json.RawMessage{nil, {}} {
+		context := &LLMApplicationExecutionContext{Data: data}
+		encoded, err := json.Marshal(context)
+		if err != nil {
+			t.Fatal(err)
+		}
+		expected := `{}`
+		if data != nil {
+			expected = `{"data":{}}`
+		}
+		if string(encoded) != expected {
+			t.Fatalf("got %s, want %s", encoded, expected)
+		}
+	}
+	var providerCalled atomic.Bool
+	_, err := LlmCallExecute("oversized", requestForTest(makeRequest()), func(json.RawMessage) (json.RawMessage, error) {
+		providerCalled.Store(true)
+		return nil, fmt.Errorf("provider ran")
+	}, WithLLMApplicationExecutionContext(&LLMApplicationExecutionContext{Data: map[string]json.RawMessage{"huge": json.RawMessage(`"` + strings.Repeat("x", 16384) + `"`)}}))
+	if err == nil {
+		t.Fatal("oversized context accepted")
+	}
+	if providerCalled.Load() {
+		t.Fatal("provider ran with oversized context")
+	}
+}
+
+func TestLLMContextSnapshotBudgetAndUnicode(t *testing.T) {
+	invalid := []LLMApplicationExecutionContext{
+		{Data: map[string]json.RawMessage{"value": {}}},
+		{Data: map[string]json.RawMessage{string([]byte{0xff}): json.RawMessage(`1`), "\uFFFD": json.RawMessage(`2`)}},
+		{Data: map[string]json.RawMessage{"value": json.RawMessage(`"\ud800"`)}},
+		{Data: map[string]json.RawMessage{"value": json.RawMessage(`"` + strings.Repeat("x", 1<<20) + `"`)}},
+	}
+	for _, value := range invalid {
+		if _, err := json.Marshal(value); err == nil {
+			t.Fatal("invalid context accepted")
+		}
+	}
+	for _, raw := range []json.RawMessage{nil, json.RawMessage(`null`), json.RawMessage(`"\uFFFD"`), json.RawMessage(`"\ud83d\ude00"`)} {
+		if _, err := json.Marshal(LLMApplicationExecutionContext{Data: map[string]json.RawMessage{"\uFFFD": raw}}); err != nil {
+			t.Fatal(err)
+		}
+	}
+	padded := &LLMApplicationExecutionContext{Data: map[string]json.RawMessage{"value": json.RawMessage(strings.Repeat(" ", 1<<20) + `{}`)}}
+	snapshot, err := marshalLLMApplicationContext(*padded)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if string(snapshot) != `{"data":{"value":{}}}` {
+		t.Fatalf("unbounded retained snapshot: %d bytes", len(snapshot))
+	}
+	option := WithLLMApplicationExecutionContext(padded)
+	padded.Data["value"] = json.RawMessage(`"changed"`)
+	for i := 0; i < 3; i++ {
+		o := &llmCallOptions{}
+		option(o)
+		if o.executionContextErr != nil {
+			t.Fatal(o.executionContextErr)
+		}
+		freeLLMOpts(o)
+	}
+	oversized := &invalid[len(invalid)-1]
+	result := testing.Benchmark(func(b *testing.B) {
+		for i := 0; i < b.N; i++ {
+			o := &llmCallOptions{}
+			WithLLMApplicationExecutionContext(oversized)(o)
+			if o.executionContextErr == nil {
+				b.Fatal("oversized context accepted")
+			}
+			freeLLMOpts(o)
+		}
+	})
+	if result.AllocedBytesPerOp() > 64*1024 {
+		t.Fatalf("oversized option copied the input: %d bytes/op", result.AllocedBytesPerOp())
+	}
+	reusable := testing.Benchmark(func(b *testing.B) {
+		for i := 0; i < b.N; i++ {
+			o := &llmCallOptions{}
+			option(o)
+			freeLLMOpts(o)
+		}
+	})
+	if reusable.AllocedBytesPerOp() > 64*1024 {
+		t.Fatalf("reusable option retained padding: %d bytes/op", reusable.AllocedBytesPerOp())
+	}
+}
+
+func TestLLMContextInterceptOrderAndReusableSnapshot(t *testing.T) {
+	order := []string{}
+	optionValue := &LLMApplicationExecutionContext{Data: map[string]json.RawMessage{"review": json.RawMessage(`"original"`)}}
+	option := WithLLMApplicationExecutionContext(optionValue)
+	optionValue.Data["review"] = json.RawMessage(`"caller-changed"`)
+	if err := RegisterLlmExecutionIntercept("context-outer", 1, func(request json.RawMessage, context LLMExecutionContext, next func(json.RawMessage) (json.RawMessage, error)) (json.RawMessage, error) {
+		order = append(order, "outer")
+		if context.ExecutionContext == nil {
+			return nil, fmt.Errorf("missing outer context")
+		}
+		context.ExecutionContext.Data["review"] = json.RawMessage(`"outer-changed"`)
+		return next(request)
+	}); err != nil {
+		t.Fatal(err)
+	}
+	defer DeregisterLlmExecutionIntercept("context-outer")
+	if err := RegisterLlmExecutionIntercept("context-inner", 2, func(request json.RawMessage, context LLMExecutionContext, next func(json.RawMessage) (json.RawMessage, error)) (json.RawMessage, error) {
+		order = append(order, "inner")
+		if context.ExecutionContext == nil {
+			return nil, fmt.Errorf("missing context")
+		}
+		if string(context.ExecutionContext.Data["review"]) != `"original"` {
+			return nil, fmt.Errorf("context mutated: %#v", context.ExecutionContext)
+		}
+		return next(request)
+	}); err != nil {
+		t.Fatal(err)
+	}
+	defer DeregisterLlmExecutionIntercept("context-inner")
+	provider := func(json.RawMessage) (json.RawMessage, error) { return json.RawMessage(`{}`), nil }
+	for i := 0; i < 2; i++ {
+		order = nil
+		if _, err := LlmCallExecute("snapshot", requestForTest(makeRequest()), provider, option); err != nil {
+			t.Fatal(err)
+		}
+		if strings.Join(order, ",") != "outer,inner" {
+			t.Fatalf("wrong intercept order: %v", order)
+		}
+	}
+}
+
+func TestLLMContextCanonicalBudgetPreservesNumbersAndRetainedFields(t *testing.T) {
+	context := LLMApplicationExecutionContext{Data: map[string]json.RawMessage{
+		"number": json.RawMessage(`1e-07`), "pad": json.RawMessage(`""`),
+	}}
+	encoded, err := marshalLLMApplicationContext(context)
+	if err != nil {
+		t.Fatal(err)
+	}
+	context.Data["pad"] = json.RawMessage(`"` + strings.Repeat("x", 16384-len(encoded)) + `"`)
+	encoded, err = marshalLLMApplicationContext(context)
+	if err != nil || len(encoded) != 16384 {
+		t.Fatalf("valid numeric boundary failed: %v, %d bytes", err, len(encoded))
+	}
+	for _, raw := range []string{`18446744073709551615`, `-9223372036854775808`} {
+		encoded, err := marshalLLMApplicationContext(LLMApplicationExecutionContext{Data: map[string]json.RawMessage{"number": json.RawMessage(raw)}})
+		if err != nil || !strings.Contains(string(encoded), raw) {
+			t.Fatalf("integer precision changed: %s, %v", encoded, err)
+		}
+	}
+	large := `"` + strings.Repeat(`\u20ac`, 5500) + `"`
+	discarded := LLMApplicationExecutionContext{Data: map[string]json.RawMessage{"value": json.RawMessage(`{"x":` + large + `,"x":null}`)}}
+	if _, err := marshalLLMApplicationContext(discarded); err != nil {
+		t.Fatalf("discarded duplicate charged: %v", err)
+	}
+	retained := LLMApplicationExecutionContext{Data: map[string]json.RawMessage{"value": json.RawMessage(`{"x":null,"x":` + large + `}`)}}
+	if _, err := marshalLLMApplicationContext(retained); err == nil {
+		t.Fatal("oversized retained member accepted")
+	}
+}
+
+func TestLLMContextSharedRawValuesShareParsingBudget(t *testing.T) {
+	// Each value retains only null, but parsing all aliased spellings would
+	// expand far beyond the invocation's input-work budget.
+	shared := json.RawMessage(`{"x":"` + strings.Repeat(`\u0061`, 5500) + `","x":null}`)
+	value := LLMApplicationExecutionContext{Data: map[string]json.RawMessage{}}
+	for i := 0; i < 100; i++ {
+		value.Data[fmt.Sprint(i)] = shared
+	}
+	if _, err := marshalLLMApplicationContext(value); err == nil {
+		t.Fatal("aliased inputs bypassed the parsing budget")
+	}
+}
+
+func TestLLMContextRejectsWhitespaceInsideTokens(t *testing.T) {
+	for _, raw := range []string{`1 2`, `t rue`, `1 . 5`, `{"a":1 2}`, "1e\n2", "n\tull"} {
+		t.Run(raw, func(t *testing.T) {
+			context := LLMApplicationExecutionContext{Data: map[string]json.RawMessage{"value": json.RawMessage(raw)}}
+			if _, err := json.Marshal(context); err == nil {
+				t.Fatal("malformed JSON accepted")
+			}
+			option := WithLLMApplicationExecutionContext(&context)
+			var providerCalled atomic.Bool
+			provider := LLMExecutionFunc(func(json.RawMessage) (json.RawMessage, error) {
+				providerCalled.Store(true)
+				return nil, fmt.Errorf("provider ran with malformed context")
+			})
+			if _, err := LlmCallExecute("invalid-context", requestForTest(makeRequest()), provider, option); err == nil {
+				t.Fatal("unary call accepted malformed context")
+			}
+			if stream, err := LlmStreamCallExecute("invalid-context", requestForTest(makeRequest()), provider.AsStream(), nil, nil, option); err == nil {
+				stream.Close()
+				t.Fatal("streaming call accepted malformed context")
+			}
+			if providerCalled.Load() {
+				t.Fatal("provider ran with malformed context")
+			}
+		})
+	}
+	for _, raw := range []string{" \n { \"a\" : [ 1, true, null, \"t rue\" ] } \t", " 1e2 \n"} {
+		context := LLMApplicationExecutionContext{Data: map[string]json.RawMessage{"value": json.RawMessage(raw)}}
+		if _, err := json.Marshal(context); err != nil {
+			t.Fatalf("valid whitespace rejected: %v", err)
+		}
+	}
+}
+
+func TestLLMContextSharedWhitespaceHasRawInputBudget(t *testing.T) {
+	// Each alias normalizes to four bytes, but all raw bytes must count toward
+	// the invocation's 4 MiB scanning limit, including insignificant padding.
+	shared := json.RawMessage(strings.Repeat(" ", (1<<20)-len("null")) + "null")
+	value := LLMApplicationExecutionContext{Data: map[string]json.RawMessage{}}
+	for i := 0; i < 4; i++ {
+		value.Data[fmt.Sprint(i)] = shared
+	}
+	if _, err := marshalLLMApplicationContext(value); err != nil {
+		t.Fatalf("raw input at limit rejected: %v", err)
+	}
+	value.Data["extra"] = json.RawMessage("0")
+	if _, err := marshalLLMApplicationContext(value); err == nil || !strings.Contains(err.Error(), "raw input") {
+		t.Fatalf("shared padding bypassed raw-input budget: %v", err)
+	}
+	// Reject by length before scanning even an invalid raw value.
+	value.Data = map[string]json.RawMessage{"value": make(json.RawMessage, (4<<20)+1)}
+	if _, err := marshalLLMApplicationContext(value); err == nil || !strings.Contains(err.Error(), "raw input") {
+		t.Fatalf("oversized raw value reached a content scan: %v", err)
+	}
+}

@@ -527,6 +527,77 @@ originating tool call. See
 [Tool Execution Intercept Outcomes](/reference/tool-execution-intercept-outcomes)
 for the per-binding contract.
 
+### LLM Application Execution Context
+
+Applications can pass data to LLM execution intercepts through
+`LlmExecutionContext`. This data stays separate from provider requests and event
+metadata. Managed calls accept this optional JSON object for both single responses
+and streams:
+
+```json
+{"data": {"com.example.review": {"reference": "review-123"}}}
+```
+
+LLM calls use their own context type. Use the following APIs to pass and read it:
+
+| Surface | Supply Context | Read Context in an Execution Intercept |
+| --- | --- | --- |
+| Rust | `api::llm::ApplicationExecutionContext` on `LlmCallExecuteParams.execution_context` or `LlmStreamCallExecuteParams.execution_context` | `context.execution_context()` |
+| Python | `LlmApplicationExecutionContext` through `llm.execute(..., execution_context=value)` or `llm.stream_execute(...)` | `context.execution_context` |
+| Node.js | `LlmApplicationExecutionContext` through `executionContext` in `typedLlmExecute` or `typedLlmStreamExecute` options | `context.executionContext` |
+| Go | `WithLLMApplicationExecutionContext(&LLMApplicationExecutionContext{...})` on `LlmCallExecute` or `LlmStreamCallExecute` | `context.ExecutionContext` |
+| C | `execution_context_json` immediately before `cancellation` on either managed LLM execute function | `context.execution_context_json` |
+| Rust native and gRPC plugins | Host-supplied context; SDKs export `LlmApplicationExecutionContext` | `context.execution_context()` |
+| Python gRPC plugins | Host-supplied `LlmApplicationExecutionContext` | `context.execution_context` |
+
+Python `typed.llm_execute` and `typed.llm_stream_execute` also forward the
+`execution_context` keyword. The native Node.js execute functions accept
+`executionContext` after `executionOptions`.
+
+Put application keys inside the optional `data` object. Relay rejects unknown
+fields outside `data`. It also rejects a context that is not an object or has
+`data` set to `null`. Relay treats no context, `{}`, and `{"data": {}}` as three
+different values.
+
+The complete context must fit within 16 KiB when encoded as UTF-8 JSON. It can
+contain up to 64 nested object or array levels. The root object counts as level 1.
+Relay rejects invalid context before it runs middleware or the provider. This
+check also applies when execution intercepts are disabled.
+
+The Go binding also limits raw `json.RawMessage` input before it converts values
+to a standard JSON format:
+
+- Each value is limited to 98,304 bytes after whitespace outside strings is removed.
+- The combined original length of all values is limited to 4 MiB, including
+  whitespace. Shared values count each time they appear in the map.
+- Go limits how much input it scans across all values. It counts duplicate object
+  members even when it keeps only the last value. It can reject a large input even
+  if the final context fits within 16 KiB.
+
+Only execution intercepts receive this context. Each intercept gets its own copy.
+Calling `next(request)` does not replace the context. Nested managed calls receive
+context only when their caller passes it. Relay does not copy the context into
+provider requests, lifecycle events, results, or telemetry.
+
+The intercept context still provides access to the request codec. It also provides
+access to the response codec for calls that return a single response. Streaming
+calls have no response codec.
+
+Relay checks the context structure and resource limits. Applications and middleware
+must define and check the contents of `data`. A review reference alone does not
+grant permission. Avoid copying private context into requests or events.
+
+Update C calls to `nemo_relay_llm_call_execute` and
+`nemo_relay_llm_stream_call_execute`. Add `execution_context_json` immediately
+before `cancellation`. Pass `NULL` to omit context. Rebuild with the updated
+header. These function signatures have changed, so older binaries cannot use
+the new library safely.
+
+The native ABI and worker protocol keep the same version numbers. Rebuild
+language bindings, native plugins, and workers with the matching SDK.
+Workers do not negotiate support for this context field. If an intercept needs
+context to make a policy decision, it must reject calls that omit context.
+
 ### Node.js Callback Failures
 
 Node.js guardrail and request-intercept callbacks can return direct values or

@@ -37,6 +37,8 @@ use std::time::{SystemTime, UNIX_EPOCH};
 use futures_util::{Stream, StreamExt};
 #[cfg(unix)]
 use hyper_util::rt::TokioIo;
+pub use nemo_relay_types::api::llm::ApplicationExecutionContext as LlmApplicationExecutionContext;
+
 pub use nemo_relay_types::Json;
 pub use nemo_relay_types::api::event::{
     DataSchema, Event, EventCategory, EventSanitizeFields, LogSeverity, METRIC_DATA_SCHEMA_NAME,
@@ -393,6 +395,7 @@ impl WorkerResponseCodec {
 /// not change these identities; codec operations reject incompatible payloads.
 #[derive(Clone)]
 pub struct LlmExecutionContext {
+    execution_context: Option<nemo_relay_types::api::llm::ApplicationExecutionContext>,
     request_codec: LlmRequestContext,
     response_codec: Option<LlmResponseContext>,
 }
@@ -411,6 +414,13 @@ impl std::fmt::Debug for LlmExecutionContext {
 }
 
 impl LlmExecutionContext {
+    /// Application data for this call, separate from the provider request.
+    pub fn execution_context(
+        &self,
+    ) -> Option<&nemo_relay_types::api::llm::ApplicationExecutionContext> {
+        self.execution_context.as_ref()
+    }
+
     /// Request codec identity and invocation-scoped operations.
     #[must_use]
     pub fn request_codec(&self) -> &LlmRequestContext {
@@ -3426,6 +3436,7 @@ struct ToolPayload {
 
 #[derive(Default)]
 struct LlmPayload {
+    execution_context: Option<wire::JsonValue>,
     model_name: String,
     request: Option<wire::LlmRequest>,
     annotated_request: Option<wire::AnnotatedLlmRequest>,
@@ -3463,6 +3474,16 @@ impl LlmPayload {
             ));
         }
         Ok(LlmExecutionContext {
+            execution_context: self
+                .execution_context
+                .as_ref()
+                .map(|value| {
+                    nemo_relay_types::api::llm::ApplicationExecutionContext::from_json_slice(
+                        &value.json,
+                    )
+                    .map_err(|error| WorkerSdkError::InvalidInput(error.to_string()))
+                })
+                .transpose()?,
             request_codec: LlmRequestContext {
                 codec: codec_identity_from_proto(request.codec.as_ref())?,
                 runtime: Some(runtime.clone()),

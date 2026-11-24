@@ -17,7 +17,7 @@ typedef struct NemoRelayLlmSanitizeResponseContext { uint32_t codec_kind; const 
 typedef NemoRelayLlmSanitizeRequestContext NemoRelayLlmRequestContext;
 typedef NemoRelayLlmSanitizeResponseContext NemoRelayLlmResponseContext;
 typedef struct FfiLlmOptimizationRecorder FfiLlmOptimizationRecorder;
-typedef struct NemoRelayLlmExecutionContext { NemoRelayLlmRequestContext request_codec; const NemoRelayLlmResponseContext* response_codec; const FfiLlmOptimizationRecorder* optimization_recorder; } NemoRelayLlmExecutionContext;
+typedef struct NemoRelayLlmExecutionContext { const char* execution_context_json; NemoRelayLlmRequestContext request_codec; const NemoRelayLlmResponseContext* response_codec; const FfiLlmOptimizationRecorder* optimization_recorder; } NemoRelayLlmExecutionContext;
 
 typedef struct FfiLlmStreamSource FfiLlmStreamSource;
 typedef FfiLlmStreamSource* (*NemoRelayLlmStreamExecCb)(void*, const char*);

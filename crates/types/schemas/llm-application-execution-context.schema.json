@@ -1,0 +1,15 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$comment": "SPDX-FileCopyrightText: Copyright (c) 2026, NVIDIA CORPORATION & AFFILIATES. All rights reserved. SPDX-License-Identifier: Apache-2.0",
+  "title": "LlmApplicationExecutionContext",
+  "description": "Application context for one LLM call. Put application keys inside data. Relay checks the structure. Middleware decides whether to trust the data.",
+  "type": "object",
+  "properties": {
+    "data": {
+      "type": "object",
+      "description": "Optional JSON object for application data. Middleware defines and checks its contents. Omitting data differs from passing an empty object. Relay does not treat this data as permission to perform an action.",
+      "additionalProperties": true
+    }
+  },
+  "additionalProperties": false
+}

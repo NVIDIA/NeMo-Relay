@@ -2881,6 +2881,7 @@ fn test_ffi_duplicate_registration_sweep_and_helper_callbacks() {
             intercept_name.as_ptr(),
             request.as_ptr(),
             NemoRelayLlmExecutionContext {
+                execution_context_json: std::ptr::null(),
                 optimization_recorder: std::ptr::null(),
                 request_codec: NemoRelayLlmRequestContext {
                     codec_kind: NemoRelayLlmSanitizeCodecKind::None,
@@ -3330,6 +3331,7 @@ fn test_ffi_llm_execute_stream_and_atif_exporter() {
                 ptr::null(),
                 0,
                 std::ptr::null(),
+                std::ptr::null(),
                 &mut execute_out
             ),
             NemoRelayStatus::Ok
@@ -3366,6 +3368,7 @@ fn test_ffi_llm_execute_stream_and_atif_exporter() {
                 std::ptr::null(),
                 ptr::null(),
                 0,
+                std::ptr::null(),
                 std::ptr::null(),
                 &mut stream
             ),

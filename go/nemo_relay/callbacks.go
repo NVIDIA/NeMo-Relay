@@ -42,7 +42,7 @@ typedef struct NemoRelayLlmSanitizeResponseContext {
 typedef NemoRelayLlmSanitizeRequestContext NemoRelayLlmRequestContext;
 typedef NemoRelayLlmSanitizeResponseContext NemoRelayLlmResponseContext;
 typedef struct FfiLlmOptimizationRecorder FfiLlmOptimizationRecorder;
-typedef struct NemoRelayLlmExecutionContext {
+typedef struct NemoRelayLlmExecutionContext { const char* execution_context_json;
 	NemoRelayLlmRequestContext request_codec;
 	const NemoRelayLlmResponseContext* response_codec; const FfiLlmOptimizationRecorder* optimization_recorder;
 } NemoRelayLlmExecutionContext;
@@ -319,11 +319,12 @@ type LLMResponseContext = LLMSanitizeResponseContext
 // ResponseCodec is available for unary execution and nil for streaming execution.
 // All capabilities expire when the callback returns.
 type LLMExecutionContext struct {
-	callContext   context.Context
-	recorder      unsafe.Pointer
-	invocation    *llmSanitizeCodecInvocation
-	RequestCodec  LLMRequestContext
-	ResponseCodec *LLMResponseContext
+	ExecutionContext *LLMApplicationExecutionContext
+	callContext      context.Context
+	recorder         unsafe.Pointer
+	invocation       *llmSanitizeCodecInvocation
+	RequestCodec     LLMRequestContext
+	ResponseCodec    *LLMResponseContext
 }
 
 // ResolveCodec returns the active callback-scoped response codec, if any.
@@ -1080,6 +1081,14 @@ func goLlmExecInterceptTrampoline(userData unsafe.Pointer, name *C.char, nativeJ
 		recorder: unsafe.Pointer(context.optimization_recorder), invocation: invocation,
 		RequestCodec: llmSanitizeRequestContextFromC(context.request_codec, invocation),
 	}
+	if context.execution_context_json != nil {
+		var application LLMApplicationExecutionContext
+		if err := json.Unmarshal([]byte(C.GoString(context.execution_context_json)), &application); err != nil {
+			setCallbackError(err)
+			return nil
+		}
+		goContext.ExecutionContext = &application
+	}
 	if context.response_codec != nil {
 		responseCodec := llmSanitizeResponseContextFromC(*context.response_codec, invocation)
 		goContext.ResponseCodec = &responseCodec
@@ -1271,6 +1280,14 @@ func goLlmStreamInterceptTrampoline(data unsafe.Pointer, name *C.char, request *
 	invocation := newLLMSanitizeCodecInvocation()
 	defer invocation.invalidate()
 	goContext := LLMExecutionContext{callContext: callContext, recorder: unsafe.Pointer(context.optimization_recorder), invocation: invocation, RequestCodec: llmSanitizeRequestContextFromC(context.request_codec, invocation)}
+	if context.execution_context_json != nil {
+		var application LLMApplicationExecutionContext
+		if err := json.Unmarshal([]byte(C.GoString(context.execution_context_json)), &application); err != nil {
+			setCallbackError(err)
+			return nil
+		}
+		goContext.ExecutionContext = &application
+	}
 	retained, err := callPointer(func() *C.FfiLlmStreamContinuation {
 		return C.nemo_relay_stream_continuation_retain((*C.FfiLlmStreamContinuation)(nextContext))
 	})

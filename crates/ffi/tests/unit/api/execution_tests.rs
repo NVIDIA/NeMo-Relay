@@ -504,6 +504,7 @@ fn test_ffi_llm_execute_codec_parent_and_error_paths() {
                 ptr::null(),
                 0,
                 std::ptr::null(),
+                std::ptr::null(),
                 &mut out_json
             ),
             NemoRelayStatus::Ok
@@ -532,6 +533,7 @@ fn test_ffi_llm_execute_codec_parent_and_error_paths() {
                 ptr::null(),
                 0,
                 std::ptr::null(),
+                std::ptr::null(),
                 &mut out_json
             ),
             NemoRelayStatus::InvalidJson
@@ -556,6 +558,7 @@ fn test_ffi_llm_execute_codec_parent_and_error_paths() {
                 ptr::null(),
                 0,
                 std::ptr::null(),
+                std::ptr::null(),
                 &mut out_json
             ),
             NemoRelayStatus::InvalidUtf8
@@ -579,6 +582,7 @@ fn test_ffi_llm_execute_codec_parent_and_error_paths() {
                 std::ptr::null(),
                 ptr::null(),
                 0,
+                std::ptr::null(),
                 std::ptr::null(),
                 &mut out_json
             ),
@@ -642,6 +646,7 @@ fn test_ffi_llm_stream_execute_response_codec_defaults_and_error_paths() {
                 response_codec,
                 0,
                 std::ptr::null(),
+                std::ptr::null(),
                 &mut stream
             ),
             NemoRelayStatus::Ok
@@ -681,6 +686,7 @@ fn test_ffi_llm_stream_execute_response_codec_defaults_and_error_paths() {
                 response_codec,
                 0,
                 std::ptr::null(),
+                std::ptr::null(),
                 &mut stream
             ),
             NemoRelayStatus::InvalidJson
@@ -709,6 +715,7 @@ fn test_ffi_llm_stream_execute_response_codec_defaults_and_error_paths() {
                 std::ptr::null(),
                 response_codec,
                 0,
+                std::ptr::null(),
                 std::ptr::null(),
                 &mut stream
             ),
@@ -1327,6 +1334,7 @@ fn llm_execution_options_release_resources_on_validation_failure() {
                         ptr::null(),
                         skip_stages,
                         std::ptr::null(),
+                        std::ptr::null(),
                         &mut out,
                     );
                     assert!(out.is_null());
@@ -1351,6 +1359,7 @@ fn llm_execution_options_release_resources_on_validation_failure() {
                         std::ptr::null(),
                         ptr::null(),
                         skip_stages,
+                        std::ptr::null(),
                         std::ptr::null(),
                         &mut out,
                     );

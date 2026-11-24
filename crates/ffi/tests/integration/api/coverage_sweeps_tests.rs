@@ -302,6 +302,7 @@ fn test_ffi_tool_and_llm_parent_utf8_and_shape_paths() {
                 ptr::null(),
                 0,
                 std::ptr::null(),
+                std::ptr::null(),
                 &mut out
             ),
             NemoRelayStatus::InvalidJson
@@ -337,6 +338,7 @@ fn test_ffi_tool_and_llm_parent_utf8_and_shape_paths() {
                 std::ptr::null(),
                 ptr::null(),
                 0,
+                std::ptr::null(),
                 std::ptr::null(),
                 &mut stream
             ),

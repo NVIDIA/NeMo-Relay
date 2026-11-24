@@ -1,7 +1,7 @@
 // SPDX-FileCopyrightText: Copyright (c) 2026, NVIDIA CORPORATION & AFFILIATES. All rights reserved.
 // SPDX-License-Identifier: Apache-2.0
 
-//! Invocation-scoped codec context for LLM execution intercepts.
+//! Codec access and application data for the execution intercepts of one LLM call.
 
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, Weak};
@@ -109,7 +109,7 @@ impl LlmResponseCodec for RevocableResponseCodec {
     }
 }
 
-/// Codec access for one LLM execution.
+/// Codec access and optional application data for one LLM execution.
 ///
 /// Request codec information is always present. Response codec access is
 /// available only for non-streaming calls because response codecs expect a
@@ -125,6 +125,7 @@ impl LlmResponseCodec for RevocableResponseCodec {
 pub struct LlmExecutionContext {
     request_codec: LlmRequestContext,
     response_codec: Option<LlmResponseContext>,
+    execution_context: Option<crate::api::llm::ApplicationExecutionContext>,
 }
 
 impl LlmExecutionContext {
@@ -137,7 +138,24 @@ impl LlmExecutionContext {
         Self {
             request_codec,
             response_codec,
+            execution_context: None,
         }
+    }
+
+    /// Attach application-owned data for this execution only.
+    #[must_use]
+    pub fn with_execution_context(
+        mut self,
+        context: Option<crate::api::llm::ApplicationExecutionContext>,
+    ) -> Self {
+        self.execution_context = context;
+        self
+    }
+
+    /// Caller data. Relay does not add it to events or pass it to nested calls.
+    #[must_use]
+    pub fn execution_context(&self) -> Option<&crate::api::llm::ApplicationExecutionContext> {
+        self.execution_context.as_ref()
     }
 
     /// Construct the context for a non-streaming managed execution.
@@ -197,7 +215,8 @@ impl LlmExecutionContext {
                 });
 
         (
-            Self::new(request_codec, response_codec),
+            Self::new(request_codec, response_codec)
+                .with_execution_context(self.execution_context.clone()),
             LlmExecutionCodecLeaseGuard {
                 gate,
                 request_codec: leased_request_codec,

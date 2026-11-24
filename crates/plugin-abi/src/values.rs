@@ -122,7 +122,7 @@ record!(ToolExecutionOutcomeWire, ToolExecutionOutcome {result:ToolExecutionResu
 record!(ConfigDiagnosticWire, ConfigDiagnostic {is_error:bool,code:String,component:Option<String>,field:Option<String>,message:String});
 record!(ApplicationExecutionContextWire, ApplicationExecutionContext {data:Option<Vec<Field>>});
 record!(InvocationWire, Invocation {surface:Surface,name:String,value:Json,tool_call_id:Option<String>,execution_context:Option<ApplicationExecutionContext>,context:Context});
-record!(ContextWire, Context {scope:ScopeBox,request_codec:Option<CodecBox>,response_codec:Option<CodecBox>});
+record!(ContextWire, Context {execution_context:Option<Json>,scope:ScopeBox,request_codec:Option<CodecBox>,response_codec:Option<CodecBox>});
 record!(
     RegistrationWire,
     Registration {

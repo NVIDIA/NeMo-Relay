@@ -2377,3 +2377,228 @@ async fn test_dropped_stream_end_keeps_fifo_position_before_later_mark() {
     deregister_llm_sanitize_response_guardrail("stream_fifo_sanitizer").unwrap();
     deregister_subscriber("stream_fifo_subscriber").unwrap();
 }
+
+#[tokio::test]
+async fn llm_application_context_is_isolated_invocation_local_and_not_observed() {
+    use nemo_relay_runtime::api::llm::ApplicationExecutionContext;
+    use nemo_relay_runtime::api::registry::{
+        deregister_llm_execution_intercept, deregister_llm_stream_execution_intercept,
+        register_llm_execution_intercept, register_llm_stream_execution_intercept,
+    };
+    let _lock = TEST_MUTEX.lock().unwrap();
+    reset_global();
+    setup_isolated_thread();
+    let seen = Arc::new(Mutex::new(Vec::new()));
+    let captured = seen.clone();
+    register_llm_execution_intercept(
+        "application-context",
+        1,
+        Arc::new(move |name, request, context, next| {
+            captured.lock().unwrap().push((
+                name.to_owned(),
+                context.execution_context().map(|value| value.to_json()),
+            ));
+            let mut snapshot = context.clone();
+            snapshot = snapshot.with_execution_context(None);
+            assert!(snapshot.execution_context().is_none());
+            Box::pin(async move {
+                if request.content["nested"] == true {
+                    llm_call_execute(
+                        LlmCallExecuteParams::builder()
+                            .name("nested")
+                            .request(make_llm_request(json!({})))
+                            .func(noop_exec_fn())
+                            .build(),
+                    )
+                    .await?;
+                }
+                next(request).await
+            })
+        }),
+    )
+    .unwrap();
+    let events = Arc::new(Mutex::new(Vec::new()));
+    let captured = events.clone();
+    register_subscriber(
+        "application-context-events",
+        Arc::new(move |event| {
+            captured.lock().unwrap().push(event.clone());
+        }),
+    )
+    .unwrap();
+    for value in [
+        None,
+        Some(json!({})),
+        Some(json!({"data": {}})),
+        Some(json!({"data": {"private": "llm-context-sentinel"}})),
+    ] {
+        let expected = value.clone();
+        llm_call_execute(
+            LlmCallExecuteParams::builder()
+                .name("parent")
+                .request(make_llm_request(json!({"nested": true})))
+                .func(noop_exec_fn())
+                .execution_context_opt(
+                    value.map(|value| ApplicationExecutionContext::try_from(value).unwrap()),
+                )
+                .build(),
+        )
+        .await
+        .unwrap();
+        let records = seen.lock().unwrap();
+        assert_eq!(records[records.len() - 2], ("parent".into(), expected));
+        assert_eq!(records.last().unwrap(), &("nested".into(), None));
+    }
+    let captured = seen.clone();
+    register_llm_stream_execution_intercept(
+        "application-stream-context",
+        1,
+        Arc::new(move |name, request, context, next| {
+            captured.lock().unwrap().push((
+                name.to_owned(),
+                context.execution_context().map(|value| value.to_json()),
+            ));
+            assert!(context.response_codec().is_none());
+            Box::pin(async move { next(request).await })
+        }),
+    )
+    .unwrap();
+    let stream_fn: LlmStreamExecutionNextFn = Arc::new(|_| {
+        Box::pin(async {
+            Ok(LlmJsonStream::new(futures::stream::iter([Ok(json!(
+                "chunk"
+            ))])))
+        })
+    });
+    let context =
+        ApplicationExecutionContext::try_from(json!({"data": {"private": "llm-context-sentinel"}}))
+            .unwrap();
+    let stream = llm_stream_call_execute(
+        LlmStreamCallExecuteParams::builder()
+            .name("stream")
+            .request(make_llm_request(json!({})))
+            .func(stream_fn)
+            .collector(|_: Json| Ok(()))
+            .finalizer(|| json!({}))
+            .execution_context(context.clone())
+            .build(),
+    )
+    .await
+    .unwrap();
+    assert_eq!(
+        stream
+            .collect::<Vec<_>>()
+            .await
+            .into_iter()
+            .map(Result::unwrap)
+            .collect::<Vec<_>>(),
+        vec![json!("chunk")]
+    );
+    assert_eq!(
+        seen.lock().unwrap().last().unwrap(),
+        &("stream".into(), Some(context.to_json()))
+    );
+    for event in captured_events_snapshot(&events) {
+        assert!(
+            !serde_json::to_string(&event)
+                .unwrap()
+                .contains("llm-context-sentinel")
+        );
+    }
+    let count = seen.lock().unwrap().len();
+    let mut invalid = ApplicationExecutionContext::default();
+    invalid.data = Some(std::collections::BTreeMap::from([(
+        "oversized".into(),
+        json!("x".repeat(16_384)),
+    )]));
+    assert!(
+        llm_call_execute(
+            LlmCallExecuteParams::builder()
+                .name("invalid")
+                .request(make_llm_request(json!({})))
+                .func(Arc::new(|_| panic!("provider must not run")))
+                .execution_context(invalid)
+                .build()
+        )
+        .await
+        .is_err()
+    );
+    assert_eq!(seen.lock().unwrap().len(), count);
+    deregister_llm_execution_intercept("application-context").unwrap();
+    deregister_llm_stream_execution_intercept("application-stream-context").unwrap();
+    deregister_subscriber("application-context-events").unwrap();
+}
+
+#[test]
+fn managed_llm_rejection_drops_deep_mutated_context_without_overflow() {
+    const CHILD: &str = "RELAY_MANAGED_LLM_CONTEXT_DROP_CHILD";
+    if std::env::var_os(CHILD).is_none() {
+        let output = std::process::Command::new(std::env::current_exe().unwrap())
+            .args([
+                "--exact",
+                "managed_llm_rejection_drops_deep_mutated_context_without_overflow",
+                "--nocapture",
+            ])
+            .env(CHILD, "1")
+            .output()
+            .unwrap();
+        assert!(
+            output.status.success(),
+            "{}",
+            String::from_utf8_lossy(&output.stderr)
+        );
+        return;
+    }
+    let runtime = tokio::runtime::Builder::new_current_thread()
+        .enable_all()
+        .build()
+        .unwrap();
+    runtime.block_on(async {
+        reset_global();
+        setup_isolated_thread();
+        for streaming in [false, true] {
+            let mut tree = json!(null);
+            for _ in 0..262_144 {
+                tree = Json::Array(vec![tree]);
+            }
+            let mut context = nemo_relay_types::api::llm::ApplicationExecutionContext::default();
+            context.data = Some(std::collections::BTreeMap::from([("value".into(), tree)]));
+            if streaming {
+                let result = llm_stream_call_execute(
+                    LlmStreamCallExecuteParams::builder()
+                        .name("invalid-deep")
+                        .request(make_llm_request(json!({})))
+                        .func(Arc::new(|_| panic!("provider must not run")))
+                        .collector(|_: Json| Ok(()))
+                        .finalizer(|| json!({}))
+                        .execution_context(context)
+                        .build(),
+                )
+                .await;
+                assert!(result.is_err());
+            } else {
+                assert!(
+                    llm_call_execute(
+                        LlmCallExecuteParams::builder()
+                            .name("invalid-deep")
+                            .request(make_llm_request(json!({})))
+                            .func(Arc::new(|_| panic!("provider must not run")))
+                            .execution_context(context)
+                            .build()
+                    )
+                    .await
+                    .is_err()
+                );
+            }
+            llm_call_execute(
+                LlmCallExecuteParams::builder()
+                    .name("recovered")
+                    .request(make_llm_request(json!({})))
+                    .func(noop_exec_fn())
+                    .build(),
+            )
+            .await
+            .unwrap();
+        }
+    });
+}

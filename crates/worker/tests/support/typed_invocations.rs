@@ -124,6 +124,7 @@ impl InvocationFixture {
                         .execution_codec_context
                         .ok_or_else(|| missing("execution codec context"))?;
                     I::LlmExecutionIntercept(pb::LlmExecutionInvocation {
+                        execution_context: None,
                         model_name: v.model_name,
                         request: v.request,
                         continuation_id: self.continuation_id,
@@ -157,6 +158,7 @@ impl InvocationFixture {
             .execution_codec_context
             .ok_or_else(|| missing("stream request codec"))?;
         Ok(pb::InvokeStreamRequest {
+            execution_context: None,
             credentials: self.credentials,
             invocation_id: self.invocation_id,
             registration_name: self.registration_name,

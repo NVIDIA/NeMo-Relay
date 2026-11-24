@@ -54,7 +54,8 @@ use nemo_relay_types::codec::response::AnnotatedLlmResponse;
 use nemo_relay_types::codec::traits::{LlmCodec, LlmResponseCodec};
 
 pub use nemo_relay_types::api::llm::{
-    LLM_REQUEST_INTERCEPT_OUTCOME_SCHEMA, LlmAttributes, LlmRequest, LlmRequestInterceptOutcome,
+    ApplicationExecutionContext, LLM_REQUEST_INTERCEPT_OUTCOME_SCHEMA, LlmAttributes, LlmRequest,
+    LlmRequestInterceptOutcome,
 };
 
 const OBSERVABILITY_CREDENTIAL_HEADERS: [&str; 7] = [
@@ -242,6 +243,9 @@ pub struct LlmCallParams<'a> {
 #[derive(TypedBuilder)]
 #[builder(field_defaults(setter(strip_option(ignore_invalid, fallback_suffix = "_opt"))))]
 pub struct LlmCallExecuteParams {
+    /// Application data for this call. Only execution intercepts receive it.
+    #[builder(default)]
+    pub execution_context: Option<nemo_relay_types::api::llm::ApplicationExecutionContext>,
     /// Logical provider or model family name recorded on emitted events.
     #[builder(setter(into))]
     pub name: String,
@@ -280,6 +284,9 @@ pub struct LlmCallExecuteParams {
 #[derive(TypedBuilder)]
 #[builder(field_defaults(setter(strip_option(ignore_invalid, fallback_suffix = "_opt"))))]
 pub struct LlmStreamCallExecuteParams {
+    /// Application data for this call. Only execution intercepts receive it.
+    #[builder(default)]
+    pub execution_context: Option<nemo_relay_types::api::llm::ApplicationExecutionContext>,
     /// Logical provider or model family name recorded on emitted events.
     #[builder(setter(into))]
     pub name: String,
@@ -1695,6 +1702,7 @@ impl Drop for ManagedLlmCompletion {
 /// value returned to the caller.
 pub async fn llm_call_execute(params: LlmCallExecuteParams) -> Result<Json> {
     let LlmCallExecuteParams {
+        execution_context: application_context,
         name,
         request,
         func,
@@ -1707,6 +1715,11 @@ pub async fn llm_call_execute(params: LlmCallExecuteParams) -> Result<Json> {
         response_codec,
         execution_options,
     } = params;
+    if let Some(context) = &application_context {
+        context
+            .validate()
+            .map_err(|error| FlowError::InvalidArgument(error.to_string()))?;
+    }
     ensure_runtime_owner()?;
     if execution_options.conditional_execution {
         let (entries, subscribers, parent_uuid, guardrail_metadata) = {
@@ -1822,7 +1835,8 @@ pub async fn llm_call_execute(params: LlmCallExecuteParams) -> Result<Json> {
     let execution_name = name.clone();
     let event_uuid = handle.uuid;
     let execution_context =
-        LlmExecutionContext::for_non_streaming(request_codec, response_codec.clone());
+        LlmExecutionContext::for_non_streaming(request_codec, response_codec.clone())
+            .with_execution_context(application_context);
     let execution = with_active_event_trace_context(
         event_uuid,
         Some(active_trace_context),
@@ -1959,6 +1973,7 @@ async fn llm_stream_call_execute_inner(
     response_completion: Option<crate::api::runtime::callbacks::LlmStreamResponseCompletionFn>,
 ) -> Result<LlmJsonStream> {
     let LlmStreamCallExecuteParams {
+        execution_context: application_context,
         name,
         request,
         func,
@@ -1974,6 +1989,11 @@ async fn llm_stream_call_execute_inner(
         response_codec,
         execution_options,
     } = params;
+    if let Some(context) = &application_context {
+        context
+            .validate()
+            .map_err(|error| FlowError::InvalidArgument(error.to_string()))?;
+    }
     ensure_runtime_owner()?;
     if execution_options.conditional_execution {
         let (entries, subscribers, parent_uuid, guardrail_metadata) = {
@@ -2089,7 +2109,8 @@ async fn llm_stream_call_execute_inner(
     let execution_name = name.clone();
     let event_uuid = handle.uuid;
     let stream_started_at = Instant::now();
-    let execution_context = LlmExecutionContext::for_streaming(request_codec);
+    let execution_context = LlmExecutionContext::for_streaming(request_codec)
+        .with_execution_context(application_context);
     let execution = with_active_event_trace_context(
         event_uuid,
         Some(active_trace_context),

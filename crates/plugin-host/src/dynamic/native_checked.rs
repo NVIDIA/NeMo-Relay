@@ -994,6 +994,7 @@ fn invocation(
             tool_call_id: id,
             execution_context: None,
             context: a::Context {
+                execution_context: None,
                 scope: owner.scope(),
                 request_codec,
                 response_codec,
@@ -1326,6 +1327,7 @@ impl Drop for HostStream {
 }
 
 struct Call {
+    execution_context: Option<abi::Json>,
     surface: a::Surface,
     name: String,
     value: abi::Json,
@@ -1341,6 +1343,7 @@ async fn unary<T: DeserializeOwned>(
     call: Call,
 ) -> Result<T> {
     let Call {
+        execution_context,
         surface,
         name,
         value,
@@ -1350,7 +1353,9 @@ async fn unary<T: DeserializeOwned>(
         next,
     } = call;
     owner.ensure()?;
-    let (invocation, _lifetime) = invocation(&owner, surface, name, value, id, request, response);
+    let (mut invocation, _lifetime) =
+        invocation(&owner, surface, name, value, id, request, response);
+    invocation.context.execution_context = execution_context;
     let (_lease, _guard) = MiddlewareContinuationLease::capture();
     let downstream = DownstreamErrors::default();
     let next = next.map(|next| {
@@ -1436,6 +1441,7 @@ pub fn apply_registration(
                         owner,
                         callback,
                         Call {
+                            execution_context: None,
                             surface,
                             name: String::new(),
                             value: encode(&*event)?,
@@ -1460,6 +1466,7 @@ pub fn apply_registration(
                         owner,
                         callback,
                         Call {
+                            execution_context: None,
                             surface,
                             name: String::new(),
                             value: encode(json!({"event":&*event,"fields":fields}))?,
@@ -1484,6 +1491,7 @@ pub fn apply_registration(
                         owner,
                         callback,
                         Call {
+                            execution_context: None,
                             surface,
                             name: String::new(),
                             value: encode(json!({"event":&*event,"fields":fields}))?,
@@ -1508,6 +1516,7 @@ pub fn apply_registration(
                         owner,
                         callback,
                         Call {
+                            execution_context: None,
                             surface,
                             name: String::new(),
                             value: encode(json!({"event":&*event,"fields":fields}))?,
@@ -1532,6 +1541,7 @@ pub fn apply_registration(
                         owner,
                         callback,
                         Call {
+                            execution_context: None,
                             surface,
                             name,
                             value: into_abi(value),
@@ -1556,6 +1566,7 @@ pub fn apply_registration(
                         owner,
                         callback,
                         Call {
+                            execution_context: None,
                             surface,
                             name,
                             value: into_abi(value),
@@ -1580,6 +1591,7 @@ pub fn apply_registration(
                         owner,
                         callback,
                         Call {
+                            execution_context: None,
                             surface,
                             name,
                             value: into_abi(value),
@@ -1605,6 +1617,7 @@ pub fn apply_registration(
                         owner,
                         callback,
                         Call {
+                            execution_context: None,
                             surface,
                             name,
                             value: into_abi(value),
@@ -1687,6 +1700,7 @@ pub fn apply_registration(
                         owner,
                         callback,
                         Call {
+                            execution_context: None,
                             surface,
                             name: String::new(),
                             value: encode(request)?,
@@ -1712,6 +1726,7 @@ pub fn apply_registration(
                         owner,
                         callback,
                         Call {
+                            execution_context: None,
                             surface,
                             name,
                             value: encode(json!({"request":request,"annotated":annotated}))?,
@@ -1736,6 +1751,7 @@ pub fn apply_registration(
                         owner,
                         callback,
                         Call {
+                            execution_context: None,
                             surface,
                             name: String::new(),
                             value: encode(request)?,
@@ -1760,6 +1776,7 @@ pub fn apply_registration(
                         owner,
                         callback,
                         Call {
+                            execution_context: None,
                             surface,
                             name: String::new(),
                             value: into_abi(response),
@@ -1785,6 +1802,10 @@ pub fn apply_registration(
                         owner,
                         callback,
                         Call {
+                            execution_context: context
+                                .execution_context()
+                                .map(encode)
+                                .transpose()?,
                             surface,
                             name,
                             value: encode(request)?,
@@ -1808,7 +1829,7 @@ pub fn apply_registration(
                 let callback = callback.clone();
                 Box::pin(async move {
                     owner.ensure()?;
-                    let (invocation, life) = invocation(
+                    let (mut invocation, life) = invocation(
                         &owner,
                         surface,
                         name,
@@ -1817,6 +1838,8 @@ pub fn apply_registration(
                         Some(context.request_codec().clone()),
                         None,
                     );
+                    invocation.context.execution_context =
+                        context.execution_context().map(encode).transpose()?;
                     let (lease, guard) = MiddlewareContinuationLease::capture();
                     let downstream = DownstreamErrors::default();
                     let next = a::ContinuationBox::new(Continuation {

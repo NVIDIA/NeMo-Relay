@@ -138,6 +138,8 @@ pub struct Invocation {
 /// Runtime capabilities are scoped to an invocation or component, not a library.
 #[repr(C)]
 pub struct Context {
+    /// Optional invocation-local LLM application context.
+    pub execution_context: Option<Json>,
     /// Retained host scope binding. Restoration is required on every poll.
     pub scope: ScopeBox,
     /// Optional request codec capability.

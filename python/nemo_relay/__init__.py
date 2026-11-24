@@ -295,9 +295,17 @@ LlmConditionalExecutionGuardrail: TypeAlias = Callable[[LLMRequest], Optional[st
 #: Arguments are the tool name and current JSON payload. The return value
 #: becomes the payload seen by later request intercepts and tool execution.
 ToolRequestIntercept: TypeAlias = AbcCallable[[str, Json], Json | Awaitable[Json]]
+
+
 #: Execution intercept callback that wraps tool execution with middleware
 #: behavior. The callback receives a ``ToolExecutionContext`` and the next
 #: callable. It may await ``next(context.args)`` or short-circuit.
+class LlmApplicationExecutionContext(TypedDict, total=False):
+    """Optional application data for the execution intercepts of one LLM call."""
+
+    data: dict[str, Json]
+
+
 ToolExecutionIntercept: TypeAlias = Callable[
     [ToolExecutionContext, Callable[[Json], Awaitable[ToolExecutionResult[Json]]]],
     ToolExecutionInterceptOutcome | Awaitable[ToolExecutionInterceptOutcome],
@@ -931,6 +939,7 @@ __all__ = [
     "LlmSanitizeResponseGuardrail",
     "LlmCodecIdentity",
     "LlmExecutionContext",
+    "LlmApplicationExecutionContext",
     "LlmRequestContext",
     "LlmResponseContext",
     "LlmSanitizeRequestContext",

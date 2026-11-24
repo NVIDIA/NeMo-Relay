@@ -3,6 +3,13 @@
 
 //! Shared LLM data types.
 
+mod application_context;
+
+pub use application_context::{
+    APPLICATION_EXECUTION_CONTEXT_SCHEMA, ApplicationExecutionContext,
+    ApplicationExecutionContextError,
+};
+
 use bitflags::bitflags;
 use serde::{Deserialize, Serialize};
 

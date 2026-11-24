@@ -218,6 +218,8 @@ pub type NemoRelayLlmResponseContext = NemoRelayLlmSanitizeResponseContext;
 /// valid only until the intercept callback returns.
 #[repr(C)]
 pub struct NemoRelayLlmExecutionContext {
+    /// Borrowed LLM application context JSON, or null when omitted.
+    pub execution_context_json: *const c_char,
     /// Active request codec identity and capability.
     pub request_codec: NemoRelayLlmRequestContext,
     /// Active unary-response codec context, or null for streaming execution.
@@ -1235,7 +1237,15 @@ fn with_ffi_llm_execution_context<T>(
     // the complete callback. Foreign code must not retain any of their pointers.
     let recorder = nemo_relay_runtime::api::optimization::current_llm_optimization_recorder()
         .map(crate::types::FfiLlmOptimizationRecorder);
+    let application_context = context
+        .execution_context()
+        .map(|context| CString::new(context.to_json().to_string()))
+        .transpose()
+        .map_err(|_| FlowError::InvalidArgument("invalid LLM execution context".into()))?;
     Ok(callback(NemoRelayLlmExecutionContext {
+        execution_context_json: application_context
+            .as_ref()
+            .map_or(std::ptr::null(), |value| value.as_ptr()),
         optimization_recorder: recorder
             .as_ref()
             .map_or(std::ptr::null(), std::ptr::from_ref),

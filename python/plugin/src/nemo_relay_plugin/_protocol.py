@@ -97,8 +97,49 @@ def validate(value: Any) -> None:
     validate_json(value)
 
 
+def validate_llm_context_input(raw: bytes) -> None:
+    """Refuse oversized or deeply nested LLM context before JSON decoding."""
+    if len(raw) > 16_384:
+        raise ValueError("LLM execution context exceeds 16384 serialized bytes")
+    depth = 0
+    quoted = False
+    escaped = False
+    for byte in raw:
+        if quoted:
+            if escaped:
+                escaped = False
+            elif byte == 92:
+                escaped = True
+            elif byte == 34:
+                quoted = False
+        elif byte == 34:
+            quoted = True
+        elif byte in (123, 91):
+            depth += 1
+            if depth > 64:
+                raise ValueError("LLM execution context exceeds 64 container levels")
+        elif byte in (125, 93):
+            depth = max(0, depth - 1)
+
+
+def unpack_llm_context(raw: bytes) -> Any:
+    """Decode bounded context with serde_json's integer ranges and negative zero."""
+    validate_llm_context_input(raw)
+
+    def integer(text: str) -> int | float:
+        number = int(text)
+        if text != "-0" and -(1 << 63) <= number <= (1 << 64) - 1:
+            return number
+        return float(text)
+
+    return json.loads(raw.decode("utf-8"), parse_int=integer, parse_constant=_invalid_constant)
+
+
 def validate_json(value: Any) -> None:
     name = value.DESCRIPTOR.full_name
+    if name in (f"{PACKAGE}.LlmExecutionInvocation", f"{PACKAGE}.InvokeStreamRequest"):
+        if value.HasField("execution_context"):
+            validate_llm_context_input(value.execution_context.json)
     if name == f"{PACKAGE}.ApplicationExecutionContext":
         preflight_application_execution_context(value)
     if name == f"{PACKAGE}.JsonValue":

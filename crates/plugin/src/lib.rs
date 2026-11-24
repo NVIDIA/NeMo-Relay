@@ -10,6 +10,9 @@
 /// Execution support for native component adapters.
 #[doc(hidden)]
 pub mod abi_executor;
+/// Application data passed to execution intercepts for one LLM call.
+pub use nemo_relay_types::api::llm::ApplicationExecutionContext as LlmApplicationExecutionContext;
+
 /// Independently versioned checked interface declarations.
 pub use nemo_relay_plugin_abi as abi;
 /// Lossless SDK JSON conversions.

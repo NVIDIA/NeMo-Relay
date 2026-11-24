@@ -2278,7 +2278,9 @@ pub fn llm_call_end(
 /// Sanitizers change event data. They do not change the result returned to the caller.
 /// Pass a JSON object with `headers` and `content` fields in `request`.
 /// Supply `codecDecode` and `codecEncode` together or omit both.
-/// Use the last `executionOptions` argument to choose which stages run for this call.
+/// Use `executionOptions` to choose which stages run for this call.
+/// Optional `executionContext` passes application data to execution intercepts
+/// for this call. The data stays separate from provider input and event metadata.
 #[allow(clippy::too_many_arguments)]
 #[napi(
     ts_generic_types = "TRequest extends LlmRequestCompatible<TRequest>, TResponse extends JsonCompatible<TResponse>, TData extends JsonCompatible<TData> = Json, TMetadata extends JsonCompatible<TMetadata> = Json, TAnnotated extends JsonCompatible<TAnnotated> = Json, TEncoded extends LlmRequestCompatible<TEncoded> = LlmRequestShape, TDecodedResponse extends JsonCompatible<TDecodedResponse> = Json",
@@ -2304,7 +2306,12 @@ pub fn llm_call_execute<'env>(
         Callback,
     >,
     execution_options: Option<ExecutionOptions>,
+    #[napi(ts_arg_type = "LlmApplicationExecutionContext | null")] execution_context: Option<
+        Unknown<'env>,
+    >,
 ) -> Result<PromiseRaw<'env, Json>> {
+    let execution_context =
+        crate::llm_application_context::execution_context_json(execution_context)?;
     let request: LlmRequest = parse_json(request.0, "LlmRequest")?;
     let func = scoped_fn(
         env,
@@ -2327,6 +2334,7 @@ pub fn llm_call_execute<'env>(
         codec_encode,
         response_codec_decode,
         execution_options,
+        execution_context,
     )
 }
 
@@ -2345,6 +2353,7 @@ fn execute_llm_call<'env>(
     codec_encode: Option<Callback>,
     response_codec_decode: Option<Callback>,
     execution_options: Option<ExecutionOptions>,
+    execution_context: Option<nemo_relay_types::api::llm::ApplicationExecutionContext>,
 ) -> Result<PromiseRaw<'env, Json>> {
     let execution_options = execution_options.map(Into::into).unwrap_or_default();
     let attrs = LlmAttributes::from_bits_truncate(attributes.unwrap_or(0));
@@ -2360,6 +2369,7 @@ fn execute_llm_call<'env>(
                 .request(request)
                 .func(func)
                 .execution_options(execution_options)
+                .execution_context_opt(execution_context)
                 .parent(parent)
                 .attributes(attrs)
                 .data_opt(opt_json(data))
@@ -2380,7 +2390,9 @@ fn execute_llm_call<'env>(
 ///
 /// Runs the same lifecycle as `llmCallExecute`. Supply `codecDecode` and `codecEncode`
 /// together or omit both.
-/// Use the last `executionOptions` argument to choose which stages run for this call.
+/// Use `executionOptions` to choose which stages run for this call.
+/// Optional `executionContext` passes application data to execution intercepts
+/// for this call. The data stays separate from provider input and event metadata.
 #[allow(clippy::too_many_arguments)]
 #[napi(
     ts_generic_types = "TRequest extends LlmRequestCompatible<TRequest>, TResponse extends JsonCompatible<TResponse>, TData extends JsonCompatible<TData> = Json, TMetadata extends JsonCompatible<TMetadata> = Json, TAnnotated extends JsonCompatible<TAnnotated> = Json, TEncoded extends LlmRequestCompatible<TEncoded> = LlmRequestShape, TDecodedResponse extends JsonCompatible<TDecodedResponse> = Json",
@@ -2409,7 +2421,12 @@ pub fn llm_call_execute_async<'env>(
         Callback,
     >,
     execution_options: Option<ExecutionOptions>,
+    #[napi(ts_arg_type = "LlmApplicationExecutionContext | null")] execution_context: Option<
+        Unknown<'env>,
+    >,
 ) -> Result<PromiseRaw<'env, Json>> {
+    let execution_context =
+        crate::llm_application_context::execution_context_json(execution_context)?;
     let request: LlmRequest = parse_json(request.0, "LlmRequest")?;
     let pa_fn = Arc::new(PromiseAwareFn::new(env, &func)?);
     let func: LlmExecutionNextFn = Arc::new(move |request| {
@@ -2434,6 +2451,7 @@ pub fn llm_call_execute_async<'env>(
         codec_encode,
         response_codec_decode,
         execution_options,
+        execution_context,
     )
 }
 
@@ -2457,7 +2475,9 @@ pub fn llm_call_execute_async<'env>(
 /// the finalizer throws or rejects, the aggregated response is `null`. Consumers that
 /// stop reading early must await `stream.close()`, which aborts the signal and waits
 /// for producer cleanup. Supply `codecDecode` and `codecEncode` together or omit both.
-/// Use the last `executionOptions` argument to choose which stages run for this call.
+/// Use `executionOptions` to choose which stages run for this call.
+/// Optional `executionContext` passes application data to execution intercepts
+/// for this call. The data stays separate from provider input and event metadata.
 #[allow(clippy::too_many_arguments)]
 #[napi(
     ts_generic_types = "TRequest extends LlmRequestCompatible<TRequest>, TChunk extends JsonCompatible<TChunk>, TAggregate extends JsonCompatible<TAggregate> = Json, TData extends JsonCompatible<TData> = Json, TMetadata extends JsonCompatible<TMetadata> = Json, TAnnotated extends JsonCompatible<TAnnotated> = Json, TEncoded extends LlmRequestCompatible<TEncoded> = LlmRequestShape, TDecodedResponse extends JsonCompatible<TDecodedResponse> = Json",
@@ -2488,7 +2508,12 @@ pub fn llm_stream_call_execute<'env>(
         Callback,
     >,
     execution_options: Option<ExecutionOptions>,
+    #[napi(ts_arg_type = "LlmApplicationExecutionContext | null")] execution_context: Option<
+        Unknown<'env>,
+    >,
 ) -> Result<PromiseRaw<'env, LlmStream>> {
+    let execution_context =
+        crate::llm_application_context::execution_context_json(execution_context)?;
     let execution_options = execution_options.map(Into::into).unwrap_or_default();
     let attrs = LlmAttributes::from_bits_truncate(attributes.unwrap_or(0));
     let context = CallContext::capture(env)?;
@@ -2523,6 +2548,7 @@ pub fn llm_stream_call_execute<'env>(
                 .request(llm_request)
                 .func(default_fn)
                 .execution_options(execution_options)
+                .execution_context_opt(execution_context)
                 .collector(wrapped_collector)
                 .finalizer(wrapped_finalizer)
                 .parent(parent)

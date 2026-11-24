@@ -35,6 +35,7 @@ fn invocation(drops: Arc<AtomicUsize>, context: Option<Json>) -> a::Invocation {
         value: Json::String("business input".into()),
         tool_call_id: Some("provider-call-123".into()),
         context: a::Context {
+            execution_context: None,
             scope: a::ScopeBox::new(Scope(drops)),
             request_codec: None,
             response_codec: None,

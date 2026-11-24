@@ -93,6 +93,7 @@ async fn shutdown_drains_stream_opening_before_closing_resources() {
         tool_call_id: Option::None,
         execution_context: None,
         context: a::Context {
+            execution_context: None,
             scope: a::ScopeBox::new(Scope),
             request_codec: Option::None,
             response_codec: Option::None,
@@ -206,6 +207,7 @@ async fn shutdown_drains_inline_and_cancelled_blocking_callbacks() {
             tool_call_id: Option::None,
             execution_context: None,
             context: a::Context {
+                execution_context: None,
                 scope: a::ScopeBox::new(Scope),
                 request_codec: Option::None,
                 response_codec: Option::None,
@@ -404,6 +406,7 @@ pub(crate) fn raw_invocation(value: Json) -> a::Invocation {
         tool_call_id: Option::Some("call-id".into()),
         execution_context: None,
         context: a::Context {
+            execution_context: None,
             scope: a::ScopeBox::new(Scope),
             request_codec: Option::None,
             response_codec: Option::None,
@@ -871,4 +874,31 @@ async fn opened_streams_report_the_downstream_close_result() {
     drop(stream);
     a::Component::shutdown(&executor).await.unwrap();
     assert_eq!(attempts.load(Ordering::SeqCst), 1);
+}
+
+#[test]
+fn llm_application_context_native_sdk_preserves_empty_and_validates_envelope() {
+    for value in [
+        serde_json::json!({}),
+        serde_json::json!({"data": {}}),
+        serde_json::json!({"data": {"private": "sentinel"}}),
+    ] {
+        let context = LlmExecutionContext::new(None, None)
+            .unwrap()
+            .with_execution_context(Some(encode(value.clone()).unwrap()))
+            .unwrap();
+        assert_eq!(context.execution_context().unwrap().to_json(), value);
+    }
+    assert!(
+        LlmExecutionContext::new(None, None)
+            .unwrap()
+            .execution_context()
+            .is_none()
+    );
+    assert!(
+        LlmExecutionContext::new(None, None)
+            .unwrap()
+            .with_execution_context(Some(encode(serde_json::json!({"data": null})).unwrap()))
+            .is_err()
+    );
 }

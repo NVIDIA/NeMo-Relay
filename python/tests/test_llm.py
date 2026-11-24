@@ -5,6 +5,7 @@
 
 import asyncio
 import contextvars
+import copy
 import subprocess
 import sys
 import textwrap
@@ -2458,3 +2459,129 @@ class _CancelledAsyncIter:
 
     async def __anext__(self):
         raise asyncio.CancelledError("iterator cancelled itself")
+
+
+@pytest.mark.parametrize("streaming", [False, True])
+@pytest.mark.parametrize("supplied", [None, {}, {"data": {}}, {"data": {"private": "llm-context-sentinel"}}])
+async def test_llm_application_context_isolated_snapshot_and_nested_calls(streaming, supplied):
+    seen = []
+    expected = copy.deepcopy(supplied)
+
+    async def inner(name, request, context, next_call):
+        seen.append((name, copy.deepcopy(context.execution_context)))
+        return await next_call(request)
+
+    async def outer(name, request, context, next_call):
+        if name == "nested":
+            return await next_call(request)
+        snapshot = context.execution_context
+        if snapshot is not None:
+            snapshot["data"] = {"changed": True}
+        await llm.execute("nested", make_request(), lambda request: {"nested": True})
+        return await next_call(request)
+
+    register = intercepts.register_llm_stream_execution if streaming else intercepts.register_llm_execution
+    deregister = intercepts.deregister_llm_stream_execution if streaming else intercepts.deregister_llm_execution
+    intercepts.register_llm_execution("application-inner", 10, inner)
+    if streaming:
+        intercepts.register_llm_stream_execution("application-stream-inner", 10, inner)
+    register("application-outer", 1, outer)
+
+    async def provider(request):
+        yield {"chunk": 1}
+
+    try:
+        if streaming:
+            stream = await llm.stream_execute(
+                "parent", make_request(), provider, lambda chunk: None, lambda: {}, execution_context=supplied
+            )
+            assert [chunk async for chunk in stream] == [{"chunk": 1}]
+        else:
+            assert await llm.execute(
+                "parent", make_request(), lambda request: {"ok": True}, execution_context=supplied
+            ) == {"ok": True}
+        assert supplied == expected
+        assert seen == [("nested", None), ("parent", expected)]
+    finally:
+        deregister("application-outer")
+        intercepts.deregister_llm_execution("application-inner")
+        if streaming:
+            intercepts.deregister_llm_stream_execution("application-stream-inner")
+
+
+@pytest.mark.parametrize("value", [[], {"unknown": {}}, {"data": None}, {"data": []}, {"data": {"huge": "x" * 16384}}])
+async def test_llm_application_context_rejected_before_callbacks(value):
+    with pytest.raises((ValueError, TypeError, RuntimeError)):
+        await llm.execute(
+            "invalid", make_request(), lambda request: pytest.fail("provider ran"), execution_context=value
+        )
+
+
+async def test_llm_application_context_bounds_python_conversion():
+    deep = {}
+    for _ in range(2000):
+        deep = {"child": deep}
+    with pytest.raises(ValueError, match="64 container levels"):
+        llm.execute("deep", make_request(), lambda request: {}, execution_context=deep)
+    shared = None
+    for _ in range(18):
+        shared = [shared, shared]
+    with pytest.raises(ValueError, match="16384 serialized bytes"):
+        llm.execute("shared", make_request(), lambda request: {}, execution_context={"data": {"value": shared}})
+
+
+@pytest.mark.parametrize("streaming", [False, True])
+@pytest.mark.parametrize("number", [float("nan"), float("inf"), -float("inf")])
+async def test_llm_context_rejects_nonfinite_numbers_before_middleware(streaming, number):
+    calls = []
+
+    async def intercept(name, request, context, next_call):
+        calls.append("intercept")
+        return await next_call(request)
+
+    register = intercepts.register_llm_stream_execution if streaming else intercepts.register_llm_execution
+    deregister = intercepts.deregister_llm_stream_execution if streaming else intercepts.deregister_llm_execution
+    register("nonfinite-context", 1, intercept)
+    try:
+
+        def provider(request):
+            calls.append("provider")
+            return {}
+
+        with pytest.raises((ValueError, TypeError, RuntimeError)):
+            if streaming:
+                await llm.stream_execute(
+                    "invalid-context",
+                    make_request(),
+                    provider,
+                    lambda chunk: None,
+                    lambda: {},
+                    execution_context={"data": {"number": number}},
+                )
+            else:
+                await llm.execute(
+                    "invalid-context", make_request(), provider, execution_context={"data": {"number": number}}
+                )
+        assert calls == []
+        valid_context = {"data": {"recovery": True}}
+        if streaming:
+
+            async def recovery_provider(request):
+                calls.append("provider")
+                yield {"recovered": True}
+
+            stream = await llm.stream_execute(
+                "recovery",
+                make_request(),
+                recovery_provider,
+                lambda chunk: None,
+                lambda: {},
+                execution_context=valid_context,
+            )
+            assert [chunk async for chunk in stream] == [{"recovered": True}]
+            assert calls == ["intercept", "provider"]
+        else:
+            assert await llm.execute("recovery", make_request(), provider, execution_context=valid_context) == {}
+            assert calls == ["intercept", "provider"]
+    finally:
+        deregister("nonfinite-context")

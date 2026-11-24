@@ -1997,6 +1997,7 @@ fn test_ffi_additional_null_and_invalid_json_paths() {
                 ptr::null(),
                 0,
                 std::ptr::null(),
+                std::ptr::null(),
                 ptr::null_mut()
             ),
             NemoRelayStatus::NullPointer
@@ -2020,6 +2021,7 @@ fn test_ffi_additional_null_and_invalid_json_paths() {
                 std::ptr::null(),
                 ptr::null(),
                 0,
+                std::ptr::null(),
                 std::ptr::null(),
                 &mut out_json
             ),
@@ -2051,6 +2053,7 @@ fn test_ffi_additional_null_and_invalid_json_paths() {
                 ptr::null(),
                 0,
                 std::ptr::null(),
+                std::ptr::null(),
                 ptr::null_mut()
             ),
             NemoRelayStatus::NullPointer
@@ -2079,6 +2082,7 @@ fn test_ffi_additional_null_and_invalid_json_paths() {
                 std::ptr::null(),
                 ptr::null(),
                 0,
+                std::ptr::null(),
                 std::ptr::null(),
                 &mut stream
             ),
