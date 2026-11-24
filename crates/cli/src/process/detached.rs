@@ -252,24 +252,26 @@ impl DetachedChild {
                 "process wait timeout exceeds the Win32 millisecond range",
             )
         })?;
-        let mut duplicate = std::ptr::null_mut();
-        // SAFETY: The pseudo current-process handle, the owned process handle, and the output
-        // pointer are valid for this call.
-        if unsafe {
-            DuplicateHandle(
-                GetCurrentProcess(),
-                self.process,
-                GetCurrentProcess(),
-                &mut duplicate,
-                0,
-                0,
-                DUPLICATE_SAME_ACCESS,
-            )
-        } == 0
-        {
-            return Err(windows_spawn_error("DuplicateHandle process wait"));
-        }
-        let waiter = ProcessWaiter(duplicate);
+        let waiter = {
+            let mut duplicate = std::ptr::null_mut();
+            // SAFETY: The pseudo current-process handle, the owned process handle, and the
+            // output pointer are valid for this call.
+            if unsafe {
+                DuplicateHandle(
+                    GetCurrentProcess(),
+                    self.process,
+                    GetCurrentProcess(),
+                    &mut duplicate,
+                    0,
+                    0,
+                    DUPLICATE_SAME_ACCESS,
+                )
+            } == 0
+            {
+                return Err(windows_spawn_error("DuplicateHandle process wait"));
+            }
+            ProcessWaiter(duplicate)
+        };
         let signaled = tokio::task::spawn_blocking(move || waiter.wait(millis))
             .await
             .map_err(|error| {
