@@ -1587,7 +1587,7 @@ func TestLlmStreamCloseWaitsForActiveCollectorBeforeFinalizing(t *testing.T) {
 	default:
 	}
 	close(allowFinalizer)
-	<-finalizerFinished
+	waitFor(finalizerFinished, "finalizer did not finish after it was released")
 	for range 2 {
 		if err := <-closeResults; err != nil {
 			t.Fatalf("Close failed: %v", err)
