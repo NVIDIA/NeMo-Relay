@@ -183,6 +183,10 @@ struct IdleDaemon {
 
 impl IdleDaemon {
     async fn start(idle_seconds: u64) -> Self {
+        Self::launch(idle_seconds, false).await
+    }
+
+    async fn launch(idle_seconds: u64, spawn_plugin_child: bool) -> Self {
         use axum::{Json, Router, routing::post};
 
         let root = tempfile::tempdir().unwrap();
@@ -247,6 +251,7 @@ impl IdleDaemon {
         let records = vec![record];
         let dynamic = vec![json!({"manifest": manifest, "config": {
             "event_metadata_injector_only": true,
+            "spawn_child": spawn_plugin_child,
             "register_gate_directory": root.path().join("gate")
         }})];
         let policies = json!({"fixture_worker": {"attestation": "integrity_only"}});
@@ -602,6 +607,73 @@ async fn cancelled_initialization_reaps_worker_and_plugin() {
     daemon.entered().await;
     mcp.cancel().await;
     daemon.descendants_exited().await;
+}
+
+fn plugin_child_identity(daemon: &IdleDaemon) -> ProcessIdentity {
+    let marker: Value = serde_json::from_slice(
+        &std::fs::read(daemon.root.path().join("gate/entered.json")).unwrap(),
+    )
+    .unwrap();
+    let pid = Pid::from_u32(
+        marker["child"]
+            .as_u64()
+            .expect("the fixture spawned a child")
+            .try_into()
+            .unwrap(),
+    );
+    let system = processes(&[pid]);
+    let process = system.process(pid).expect("plugin child exists");
+    ProcessIdentity {
+        pid,
+        started: process.start_time(),
+    }
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn plugin_child_exits_after_abrupt_worker_death_without_a_launcher() {
+    let mut daemon = IdleDaemon::launch(120, true).await;
+    let mcp = daemon.mcp().await;
+    daemon.entered().await;
+    let child = plugin_child_identity(&daemon);
+    let plugin = daemon.descendants[0];
+    let worker = daemon.descendants[1];
+    daemon.release_gate();
+    mcp.finish().await;
+    assert!(
+        worker.present() && plugin.present() && child.present(),
+        "the published worker tree outlives its launcher"
+    );
+    worker.cleanup();
+    wait_until("abrupt Relay worker exit", || {
+        (!worker.present()).then_some(())
+    })
+    .await;
+    let outcome = tokio::time::timeout(EXIT_WAIT, async {
+        wait_until("plugin and plugin child exit", || {
+            (!plugin.present() && !child.present()).then_some(())
+        })
+        .await;
+    })
+    .await;
+    child.cleanup();
+    outcome.expect("plugin child exits after abrupt host death");
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn plugin_child_exits_after_orderly_worker_exit_without_a_launcher() {
+    let mut daemon = IdleDaemon::launch(2, true).await;
+    let mcp = daemon.mcp().await;
+    daemon.entered().await;
+    let child = plugin_child_identity(&daemon);
+    daemon.release_gate();
+    mcp.finish().await;
+    daemon.descendants_exited().await;
+    let outcome = tokio::time::timeout(EXIT_WAIT, async {
+        wait_until("plugin child exit", || (!child.present()).then_some(())).await;
+    })
+    .await;
+    child.cleanup();
+    outcome.expect("plugin child exits after orderly worker exit");
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]

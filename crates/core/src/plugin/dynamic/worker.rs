@@ -507,6 +507,18 @@ impl WorkerPluginInstance {
         let Some(child) = process.as_mut() else {
             return;
         };
+        #[cfg(unix)]
+        if let Err(error) = terminate_worker_process_group(child)
+            && error != rustix::io::Errno::SRCH
+        {
+            outcome.record_error(
+                format!(
+                    "worker plugin '{}' process group kill failed: {error}",
+                    self.plugin_kind
+                ),
+                false,
+            );
+        }
         match child.try_wait() {
             Ok(Some(_)) => {
                 process.take();
@@ -1286,6 +1298,11 @@ fn spawn_worker_process(spec: WorkerProcessLaunch<'_>) -> crate::plugin::Result<
         .stdin(Stdio::piped())
         .stdout(Stdio::null())
         .stderr(Stdio::inherit());
+    #[cfg(unix)]
+    {
+        use std::os::unix::process::CommandExt;
+        command.process_group(0);
+    }
     if let Some(path) = spec.worker_endpoint_file {
         command.env("NEMO_RELAY_WORKER_ENDPOINT_FILE", path);
     }
@@ -2846,10 +2863,20 @@ impl ChildGuard {
 impl Drop for ChildGuard {
     fn drop(&mut self) {
         if let Some(mut child) = self.child.take() {
+            #[cfg(unix)]
+            let _ = terminate_worker_process_group(&child);
             let _ = child.kill();
             let _ = child.wait();
         }
     }
+}
+
+#[cfg(unix)]
+fn terminate_worker_process_group(child: &Child) -> rustix::io::Result<()> {
+    rustix::process::kill_process_group(
+        rustix::process::Pid::from_child(child),
+        rustix::process::Signal::KILL,
+    )
 }
 
 struct ActivationDirGuard {

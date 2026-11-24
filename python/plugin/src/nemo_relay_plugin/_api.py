@@ -72,7 +72,9 @@ import ipaddress
 import json
 import os
 import platform
+import signal
 import stat
+import sys
 import tempfile
 import threading
 import time
@@ -2521,8 +2523,9 @@ async def serve_plugin(plugin: _SupportsWorkerPlugin) -> None:
     Note:
         The function closes the gRPC server and both host channels during shutdown or
         cancellation. It returns after a host shutdown request, or after EOF on a
-        standard input pipe from the host. Pipe EOF exits the process two seconds
-        later, including after this function has already returned.
+        standard input pipe from the host. Pipe EOF ends the process two seconds
+        later, including after this function has already returned. A process that
+        leads its own process group takes that group down with it.
     """
     _plugin_id(plugin)
     worker_endpoint = _required_env("NEMO_RELAY_WORKER_SOCKET")
@@ -2549,6 +2552,7 @@ async def serve_plugin(plugin: _SupportsWorkerPlugin) -> None:
         diagnostic_stub=pb_grpc.RelayDiagnosticsStub(diagnostic_channel),
     )
     shutdown_event = asyncio.Event()
+    host_lost = threading.Event()
     service = _WorkerService(plugin, runtime, shutdown_event)
     server = grpc.aio.server(
         options=_worker_grpc_options(max([max_message_bytes, *by_name.values()])),
@@ -2564,7 +2568,7 @@ async def serve_plugin(plugin: _SupportsWorkerPlugin) -> None:
             path = Path(endpoint_file)
             _write_endpoint_file(path, _announced_worker_endpoint(worker_endpoint, bound_port))
         if host_pipe:
-            _start_host_liveness_watcher(0, asyncio.get_running_loop(), shutdown_event)
+            _start_host_liveness_watcher(0, asyncio.get_running_loop(), shutdown_event, host_lost)
         await shutdown_event.wait()
     finally:
         await server.stop(grace=2)
@@ -2572,6 +2576,8 @@ async def serve_plugin(plugin: _SupportsWorkerPlugin) -> None:
             await runtime._close_diagnostics()
         finally:
             await asyncio.gather(host_channel.close(), diagnostic_channel.close())
+        if host_lost.is_set():
+            _terminate_own_process_group()
 
 
 def _is_pipe(descriptor: int) -> bool:
@@ -2582,11 +2588,17 @@ def _start_host_liveness_watcher(
     descriptor: int,
     loop: asyncio.AbstractEventLoop,
     shutdown_event: asyncio.Event,
+    host_lost: threading.Event,
 ) -> threading.Thread:
     duplicate = os.dup(descriptor)
     if hasattr(os, "set_blocking"):
         os.set_blocking(duplicate, True)
     pipe = os.fdopen(duplicate, "rb", buffering=0)
+
+    def confirm_host_loss() -> None:
+        if not shutdown_event.is_set():
+            host_lost.set()
+            shutdown_event.set()
 
     def watch() -> None:
         try:
@@ -2595,13 +2607,19 @@ def _start_host_liveness_watcher(
                     pass
         finally:
             with contextlib.suppress(RuntimeError):
-                loop.call_soon_threadsafe(shutdown_event.set)
+                loop.call_soon_threadsafe(confirm_host_loss)
             time.sleep(_HOST_LOSS_EXIT_DELAY_SECONDS)
+            _terminate_own_process_group()
             os._exit(0)
 
     watcher = threading.Thread(target=watch, name="nemo-relay-host-liveness", daemon=True)
     watcher.start()
     return watcher
+
+
+def _terminate_own_process_group() -> None:
+    if sys.platform != "win32" and os.getpgrp() == os.getpid():
+        os.killpg(os.getpid(), signal.SIGKILL)
 
 
 @dataclass(slots=True)

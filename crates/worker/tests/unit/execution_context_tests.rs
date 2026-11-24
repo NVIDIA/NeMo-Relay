@@ -317,7 +317,7 @@ async fn cancellation_acknowledgement_matches_acceptance_after_cleanup() {
         for reason in ["", "stream abandoned"] {
             let task = tokio::spawn(std::future::pending::<()>());
             let (completion_tx, completion_rx) = watch::channel(false);
-            let (shutdown, _) = watch::channel(false);
+            let (shutdown, _) = watch::channel(None);
             let service = WorkerService {
                 plugin: Arc::new(TestPlugin),
                 runtime: disconnected_runtime(),
@@ -376,7 +376,7 @@ async fn shutdown_aborts_active_invocations() {
     let task = tokio::spawn(std::future::pending::<()>());
     let (_, completion) = watch::channel(false);
     let (stream_cancel, stream_cancel_rx) = watch::channel(false);
-    let (shutdown, mut shutdown_rx) = watch::channel(false);
+    let (shutdown, mut shutdown_rx) = watch::channel(None);
     let active_invocations = Arc::new(Mutex::new(HashMap::from([(
         "invocation".into(),
         ActiveInvocation {
@@ -407,7 +407,10 @@ async fn shutdown_aborts_active_invocations() {
         .into_inner();
 
     assert!(ack.accepted);
-    assert!(*shutdown_rx.borrow_and_update());
+    assert_eq!(
+        *shutdown_rx.borrow_and_update(),
+        Some(ShutdownReason::HostRequest)
+    );
     assert!(*stream_cancel_rx.borrow());
     assert!(
         active_invocations
@@ -429,6 +432,14 @@ async fn shutdown_aborts_active_invocations() {
     assert!(late_task.await.unwrap_err().is_cancelled());
 }
 
+#[test]
+fn the_first_shutdown_reason_wins() {
+    let (shutdown, receiver) = watch::channel(None);
+    request_shutdown(&shutdown, ShutdownReason::HostRequest);
+    request_shutdown(&shutdown, ShutdownReason::HostLost);
+    assert_eq!(*receiver.borrow(), Some(ShutdownReason::HostRequest));
+}
+
 fn gate_test_plugin() -> Arc<dyn WorkerPlugin> {
     struct TestPlugin;
 
@@ -446,7 +457,7 @@ fn gate_test_plugin() -> Arc<dyn WorkerPlugin> {
 }
 
 fn shutting_down_service(handlers: WorkerHandlers) -> WorkerService {
-    let (shutdown, _) = watch::channel(true);
+    let (shutdown, _) = watch::channel(Some(ShutdownReason::HostRequest));
     WorkerService {
         plugin: gate_test_plugin(),
         runtime: disconnected_runtime(),

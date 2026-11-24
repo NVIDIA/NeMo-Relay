@@ -11,7 +11,9 @@ import io
 import json
 import os
 import queue
+import signal
 import socket
+import sys
 import tempfile
 from collections.abc import AsyncIterator
 from datetime import datetime, timezone
@@ -3485,7 +3487,8 @@ async def test_host_liveness_watcher_reports_eof(monkeypatch: pytest.MonkeyPatch
     monkeypatch.setattr(plugin_api.os, "fdopen", lambda fd, mode, buffering: ObservedPipe(fd, mode))
     monkeypatch.setattr(plugin_api.os, "_exit", lambda code: forced_exit.set())
     monkeypatch.setattr(plugin_api, "_HOST_LOSS_EXIT_DELAY_SECONDS", 0.0)
-    watcher = plugin_api._start_host_liveness_watcher(read_fd, asyncio.get_running_loop(), shutdown_event)
+    host_lost = plugin_api.threading.Event()
+    watcher = plugin_api._start_host_liveness_watcher(read_fd, asyncio.get_running_loop(), shutdown_event, host_lost)
     try:
         assert await asyncio.to_thread(reads_started.get, timeout=1) == 1
         assert not shutdown_event.is_set()
@@ -3495,7 +3498,36 @@ async def test_host_liveness_watcher_reports_eof(monkeypatch: pytest.MonkeyPatch
         os.close(write_fd)
         write_fd = -1
         await asyncio.wait_for(shutdown_event.wait(), timeout=1)
+        assert host_lost.is_set()
         assert await asyncio.to_thread(forced_exit.wait, 1)
+    finally:
+        if write_fd >= 0:
+            os.close(write_fd)
+        await asyncio.to_thread(watcher.join, 5)
+        assert not watcher.is_alive()
+        os.close(read_fd)
+
+
+async def test_host_liveness_watcher_defers_to_an_earlier_shutdown_request(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    read_fd, write_fd = os.pipe()
+    shutdown_event = asyncio.Event()
+    shutdown_event.set()
+    forced_exit = plugin_api.threading.Event()
+    group_terminations: list[None] = []
+    monkeypatch.setattr(plugin_api, "_terminate_own_process_group", lambda: group_terminations.append(None))
+    monkeypatch.setattr(plugin_api.os, "_exit", lambda code: forced_exit.set())
+    monkeypatch.setattr(plugin_api, "_HOST_LOSS_EXIT_DELAY_SECONDS", 0.0)
+    host_lost = plugin_api.threading.Event()
+    watcher = plugin_api._start_host_liveness_watcher(read_fd, asyncio.get_running_loop(), shutdown_event, host_lost)
+    try:
+        os.close(write_fd)
+        write_fd = -1
+        assert await asyncio.to_thread(forced_exit.wait, 1)
+        await asyncio.sleep(0)
+        assert not host_lost.is_set()
+        assert group_terminations == [None]
     finally:
         if write_fd >= 0:
             os.close(write_fd)
@@ -3514,7 +3546,8 @@ async def test_host_liveness_watcher_reads_a_nonblocking_pipe_in_blocking_mode(
     forced_exit = plugin_api.threading.Event()
     monkeypatch.setattr(plugin_api.os, "_exit", lambda code: forced_exit.set())
     monkeypatch.setattr(plugin_api, "_HOST_LOSS_EXIT_DELAY_SECONDS", 0.0)
-    watcher = plugin_api._start_host_liveness_watcher(read_fd, asyncio.get_running_loop(), shutdown_event)
+    host_lost = plugin_api.threading.Event()
+    watcher = plugin_api._start_host_liveness_watcher(read_fd, asyncio.get_running_loop(), shutdown_event, host_lost)
     try:
         assert os.get_blocking(read_fd)
         assert not shutdown_event.is_set()
@@ -3530,13 +3563,67 @@ async def test_host_liveness_watcher_reads_a_nonblocking_pipe_in_blocking_mode(
         os.close(read_fd)
 
 
+@pytest.mark.skipif(sys.platform == "win32", reason="process groups are a Unix concept")
+async def test_host_liveness_watcher_kills_the_process_group_it_leads(monkeypatch: pytest.MonkeyPatch) -> None:
+    read_fd, write_fd = os.pipe()
+    shutdown_event = asyncio.Event()
+    forced_exit = plugin_api.threading.Event()
+    group_kills: list[tuple[int, int]] = []
+    monkeypatch.setattr(plugin_api.os, "getpgrp", os.getpid)
+    monkeypatch.setattr(plugin_api.os, "killpg", lambda pgid, sig: group_kills.append((pgid, sig)))
+    monkeypatch.setattr(plugin_api.os, "_exit", lambda code: forced_exit.set())
+    monkeypatch.setattr(plugin_api, "_HOST_LOSS_EXIT_DELAY_SECONDS", 0.0)
+    host_lost = plugin_api.threading.Event()
+    watcher = plugin_api._start_host_liveness_watcher(read_fd, asyncio.get_running_loop(), shutdown_event, host_lost)
+    try:
+        os.close(write_fd)
+        write_fd = -1
+        await asyncio.wait_for(shutdown_event.wait(), timeout=1)
+        assert await asyncio.to_thread(forced_exit.wait, 1)
+        assert group_kills == [(os.getpid(), signal.SIGKILL)]
+    finally:
+        if write_fd >= 0:
+            os.close(write_fd)
+        await asyncio.to_thread(watcher.join, 5)
+        assert not watcher.is_alive()
+        os.close(read_fd)
+
+
+@pytest.mark.skipif(sys.platform == "win32", reason="process groups are a Unix concept")
+async def test_host_liveness_watcher_leaves_a_shared_process_group_alone(monkeypatch: pytest.MonkeyPatch) -> None:
+    read_fd, write_fd = os.pipe()
+    shutdown_event = asyncio.Event()
+    forced_exit = plugin_api.threading.Event()
+    group_kills: list[tuple[int, int]] = []
+    monkeypatch.setattr(plugin_api.os, "getpgrp", lambda: os.getpid() + 1)
+    monkeypatch.setattr(plugin_api.os, "killpg", lambda pgid, sig: group_kills.append((pgid, sig)))
+    monkeypatch.setattr(plugin_api.os, "_exit", lambda code: forced_exit.set())
+    monkeypatch.setattr(plugin_api, "_HOST_LOSS_EXIT_DELAY_SECONDS", 0.0)
+    host_lost = plugin_api.threading.Event()
+    watcher = plugin_api._start_host_liveness_watcher(read_fd, asyncio.get_running_loop(), shutdown_event, host_lost)
+    try:
+        os.close(write_fd)
+        write_fd = -1
+        await asyncio.wait_for(shutdown_event.wait(), timeout=1)
+        assert await asyncio.to_thread(forced_exit.wait, 1)
+        assert group_kills == []
+    finally:
+        if write_fd >= 0:
+            os.close(write_fd)
+        await asyncio.to_thread(watcher.join, 5)
+        assert not watcher.is_alive()
+        os.close(read_fd)
+
+
 async def test_host_liveness_watcher_setup_failure_propagates(monkeypatch: pytest.MonkeyPatch) -> None:
     def failing_dup(descriptor: int) -> int:
         raise OSError(f"cannot duplicate descriptor {descriptor}")
 
     monkeypatch.setattr(plugin_api.os, "dup", failing_dup)
     with pytest.raises(OSError, match="cannot duplicate descriptor 0"):
-        plugin_api._start_host_liveness_watcher(0, asyncio.get_running_loop(), asyncio.Event())
+        plugin_api._start_host_liveness_watcher(
+            0, asyncio.get_running_loop(), asyncio.Event(), plugin_api.threading.Event()
+        )
     assert all(thread.name != "nemo-relay-host-liveness" for thread in plugin_api.threading.enumerate())
 
 
@@ -3580,14 +3667,19 @@ async def test_serve_plugin_stops_and_closes_resources_on_confirmed_host_loss(
         descriptor: int,
         loop: asyncio.AbstractEventLoop,
         shutdown_event: asyncio.Event,
+        confirmed_host_loss: plugin_api.threading.Event,
     ) -> None:
         assert descriptor == 0
 
         async def notify() -> None:
             await host_lost.wait()
+            confirmed_host_loss.set()
             shutdown_event.set()
 
         loop.create_task(notify())
+
+    group_terminations: list[None] = []
+    monkeypatch.setattr(plugin_api, "_terminate_own_process_group", lambda: group_terminations.append(None))
 
     channels = [FakeChannel(), FakeChannel()]
     pending_channels = iter(channels)
@@ -3611,6 +3703,7 @@ async def test_serve_plugin_stops_and_closes_resources_on_confirmed_host_loss(
     await asyncio.wait_for(task, timeout=1)
     assert server.stopped
     assert all(channel.closed for channel in channels)
+    assert group_terminations == [None]
 
 
 async def test_serve_plugin_closes_resources_when_endpoint_bind_fails(monkeypatch: pytest.MonkeyPatch) -> None:

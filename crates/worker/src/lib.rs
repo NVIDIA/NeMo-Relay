@@ -1974,7 +1974,7 @@ async fn serve_plugin_arc_with_endpoint_file(
         max_message_bytes,
         conditional_middleware_callbacks: Arc::new(Mutex::new(HashMap::new())),
     };
-    let (shutdown, shutdown_receiver) = watch::channel(false);
+    let (shutdown, shutdown_receiver) = watch::channel(None);
     let service = WorkerService {
         plugin,
         runtime,
@@ -1993,13 +1993,36 @@ async fn serve_plugin_arc_with_endpoint_file(
     .await
 }
 
-fn start_host_liveness_watcher(shutdown: watch::Sender<bool>) -> Result<()> {
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum ShutdownReason {
+    HostRequest,
+    HostLost,
+}
+
+fn request_shutdown(shutdown: &watch::Sender<Option<ShutdownReason>>, reason: ShutdownReason) {
+    shutdown.send_if_modified(|state| {
+        if state.is_some() {
+            return false;
+        }
+        *state = Some(reason);
+        true
+    });
+}
+
+fn finish_worker_shutdown(shutdown: &watch::Receiver<Option<ShutdownReason>>) {
+    if *shutdown.borrow() == Some(ShutdownReason::HostLost) {
+        terminate_own_process_group();
+    }
+}
+
+fn start_host_liveness_watcher(shutdown: watch::Sender<Option<ShutdownReason>>) -> Result<()> {
     std::thread::Builder::new()
         .name("nemo-relay-host-liveness".into())
         .spawn(move || {
             let _ = std::io::copy(&mut std::io::stdin(), &mut std::io::sink());
-            shutdown.send_replace(true);
+            request_shutdown(&shutdown, ShutdownReason::HostLost);
             std::thread::sleep(HOST_LOSS_EXIT_DELAY);
+            terminate_own_process_group();
             std::process::exit(0);
         })
         .map_err(|error| {
@@ -2011,12 +2034,25 @@ fn start_host_liveness_watcher(shutdown: watch::Sender<bool>) -> Result<()> {
 }
 
 #[cfg(unix)]
+fn terminate_own_process_group() {
+    use rustix::process::{Signal, getpgrp, getpid, kill_process_group};
+
+    let group = getpgrp();
+    if group == getpid() {
+        let _ = kill_process_group(group, Signal::KILL);
+    }
+}
+
+#[cfg(not(unix))]
+fn terminate_own_process_group() {}
+
+#[cfg(unix)]
 /// Binds a bounded worker service to a Unix socket or delegates to loopback TCP.
 async fn serve_worker_service(
     service: WorkerService,
     endpoint: &str,
     endpoint_file: Option<&Path>,
-    shutdown: watch::Receiver<bool>,
+    shutdown: watch::Receiver<Option<ShutdownReason>>,
     monitor_host_liveness: bool,
 ) -> Result<()> {
     if endpoint.starts_with("unix://") {
@@ -2028,14 +2064,16 @@ async fn serve_worker_service(
         if monitor_host_liveness {
             start_host_liveness_watcher(service.shutdown.clone())?;
         }
-        return Server::builder()
+        Server::builder()
             .add_service(worker_grpc_service(service))
             .serve_with_incoming_shutdown(
                 UnixListenerStream::new(listener),
-                wait_for_worker_shutdown(shutdown),
+                wait_for_worker_shutdown(shutdown.clone()),
             )
             .await
-            .map_err(|err| WorkerSdkError::Transport(err.to_string()));
+            .map_err(|err| WorkerSdkError::Transport(err.to_string()))?;
+        finish_worker_shutdown(&shutdown);
+        return Ok(());
     }
     serve_tcp_worker_service(
         service,
@@ -2052,7 +2090,7 @@ async fn serve_worker_service(
     service: WorkerService,
     endpoint: &str,
     endpoint_file: Option<&Path>,
-    shutdown: watch::Receiver<bool>,
+    shutdown: watch::Receiver<Option<ShutdownReason>>,
     monitor_host_liveness: bool,
 ) -> Result<()> {
     if endpoint.starts_with("unix://") {
@@ -2075,7 +2113,7 @@ async fn serve_tcp_worker_service(
     service: WorkerService,
     endpoint: &str,
     endpoint_file: Option<&Path>,
-    shutdown: watch::Receiver<bool>,
+    shutdown: watch::Receiver<Option<ShutdownReason>>,
     monitor_host_liveness: bool,
 ) -> Result<()> {
     let addr = parse_tcp_endpoint(endpoint)?;
@@ -2095,14 +2133,16 @@ async fn serve_tcp_worker_service(
         .add_service(worker_grpc_service(service))
         .serve_with_incoming_shutdown(
             TcpListenerStream::new(listener),
-            wait_for_worker_shutdown(shutdown),
+            wait_for_worker_shutdown(shutdown.clone()),
         )
         .await
-        .map_err(|err| WorkerSdkError::Transport(err.to_string()))
+        .map_err(|err| WorkerSdkError::Transport(err.to_string()))?;
+    finish_worker_shutdown(&shutdown);
+    Ok(())
 }
 
-async fn wait_for_worker_shutdown(mut shutdown: watch::Receiver<bool>) {
-    let _ = shutdown.wait_for(|stop| *stop).await;
+async fn wait_for_worker_shutdown(mut shutdown: watch::Receiver<Option<ShutdownReason>>) {
+    let _ = shutdown.wait_for(|reason| reason.is_some()).await;
 }
 
 /// Applies the runtime's execution limit to both sides of the worker service.
@@ -2124,7 +2164,7 @@ struct WorkerService {
     handlers: Arc<Mutex<WorkerHandlers>>,
     active_invocations: Arc<Mutex<HashMap<String, ActiveInvocation>>>,
     next_invocation_generation: Arc<AtomicU64>,
-    shutdown: watch::Sender<bool>,
+    shutdown: watch::Sender<Option<ShutdownReason>>,
 }
 
 struct ActiveInvocation {
@@ -2719,7 +2759,7 @@ impl PluginWorker for WorkerService {
         if let Some(diagnostics) = self.runtime.diagnostics.get() {
             let _ = diagnostics.close(std::time::Duration::from_secs(2)).await;
         }
-        self.shutdown.send_replace(true);
+        request_shutdown(&self.shutdown, ShutdownReason::HostRequest);
         {
             let mut invocations = self
                 .active_invocations
@@ -2829,7 +2869,7 @@ impl WorkerService {
             .active_invocations
             .lock()
             .map_err(|err| Status::internal(format!("invocation lock poisoned: {err}")))?;
-        if *self.shutdown.borrow() {
+        if self.shutdown.borrow().is_some() {
             return Err(Status::unavailable("worker is shutting down"));
         }
         if active.contains_key(invocation_id) {
