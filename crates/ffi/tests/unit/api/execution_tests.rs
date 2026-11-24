@@ -5,6 +5,255 @@
 
 use super::*;
 
+/// Observe the middleware-only envelope and forward changed business arguments.
+unsafe extern "C" fn context_capture_cb(
+    user_data: *mut libc::c_void,
+    context_json: *const c_char,
+    next_fn: NemoRelayToolExecNextFn,
+    next_ctx: *mut libc::c_void,
+) -> *mut c_char {
+    let context: Json =
+        serde_json::from_str(unsafe { CStr::from_ptr(context_json) }.to_str().unwrap()).unwrap();
+    unsafe { &*user_data.cast::<Mutex<Vec<Json>>>() }
+        .lock()
+        .unwrap()
+        .push(context.clone());
+    let mut args = context["args"].clone();
+    args["changed"] = json!(true);
+    let encoded = cstring(&args.to_string());
+    unsafe { next_fn(encoded.as_ptr(), next_ctx) }
+}
+
+#[test]
+fn execution_context_reaches_c_middleware_but_not_arguments_or_events() {
+    let _lock = TEST_MUTEX.lock().unwrap_or_else(|e| e.into_inner());
+    reset_globals();
+    let observed = Arc::new(Mutex::new(Vec::<Json>::new()));
+    unsafe {
+        let stack = fresh_scope_stack();
+        let middleware_name = cstring(&unique_name("ffi_context_middleware"));
+        let subscriber_name = cstring(&unique_name("ffi_context_events"));
+        assert_status!(
+            nemo_relay_register_tool_execution_intercept(
+                middleware_name.as_ptr(),
+                1,
+                context_capture_cb,
+                Arc::as_ptr(&observed).cast_mut().cast(),
+                None,
+            ),
+            NemoRelayStatus::Ok
+        );
+        assert_status!(
+            nemo_relay_register_subscriber(
+                subscriber_name.as_ptr(),
+                subscriber_cb,
+                ptr::null_mut(),
+                None,
+            ),
+            NemoRelayStatus::Ok
+        );
+        let name = cstring("ffi_context_tool");
+        let args = cstring(r#"{"value":2}"#);
+        let call_id = cstring("provider-context-call");
+        for supplied in [
+            Some(r#"{"data":{"review":{"reference":"context-only-marker"}}}"#),
+            Some("{}"),
+            None,
+        ] {
+            let mut out = ptr::null_mut();
+            let status = if let Some(value) = supplied {
+                let context = cstring(value);
+                nemo_relay_tool_call_execute(
+                    name.as_ptr(),
+                    args.as_ptr(),
+                    tool_exec_cb,
+                    ptr::null_mut(),
+                    None,
+                    ptr::null(),
+                    0,
+                    ptr::null(),
+                    ptr::null(),
+                    call_id.as_ptr(),
+                    0,
+                    context.as_ptr(),
+                    ptr::null(),
+                    &mut out,
+                )
+            } else {
+                // Omitted application context leaves the callback envelope unchanged.
+                nemo_relay_tool_call_execute(
+                    name.as_ptr(),
+                    args.as_ptr(),
+                    tool_exec_cb,
+                    ptr::null_mut(),
+                    None,
+                    ptr::null(),
+                    0,
+                    ptr::null(),
+                    ptr::null(),
+                    call_id.as_ptr(),
+                    0,
+                    ptr::null(),
+                    ptr::null(),
+                    &mut out,
+                )
+            };
+            assert_status!(status, NemoRelayStatus::Ok);
+            let result = returned_json(out);
+            assert_eq!(
+                result["result"],
+                json!({"value":2,"changed":true,"executed":true})
+            );
+            assert_eq!(result["annotation"], json!({"source":"ffi"}));
+        }
+        let captures = observed.lock().unwrap();
+        assert_eq!(captures.len(), 3);
+        assert_eq!(
+            captures[0]["execution_context"],
+            json!({"data":{"review":{"reference":"context-only-marker"}}})
+        );
+        assert_eq!(captures[1]["execution_context"], json!({}));
+        assert!(captures[2].get("execution_context").is_none());
+        for captured in captures.iter() {
+            assert_eq!(captured["tool_call_id"], json!("provider-context-call"));
+            assert_eq!(captured["args"], json!({"value":2}));
+        }
+        assert_status!(nemo_relay_flush_subscribers(), NemoRelayStatus::Ok);
+        let events = lock_unpoisoned(event_log());
+        assert!(!events.is_empty());
+        let serialized = serde_json::to_string(&*events).unwrap();
+        assert!(!serialized.contains("context-only-marker"));
+        assert!(!serialized.contains("execution_context"));
+        drop(events);
+        assert_status!(
+            nemo_relay_deregister_subscriber(subscriber_name.as_ptr()),
+            NemoRelayStatus::Ok
+        );
+        assert_status!(
+            nemo_relay_deregister_tool_execution_intercept(middleware_name.as_ptr()),
+            NemoRelayStatus::Ok
+        );
+        nemo_relay_scope_stack_free(stack);
+    }
+}
+
+#[test]
+fn execution_context_validation_releases_c_callback_without_running_middleware_or_effect() {
+    use std::sync::atomic::{AtomicUsize, Ordering};
+
+    struct Counts {
+        effects: AtomicUsize,
+        middleware: AtomicUsize,
+        freed: AtomicUsize,
+    }
+    unsafe extern "C" fn effect(data: *mut libc::c_void, _args: *const c_char) -> *mut c_char {
+        unsafe { &*data.cast::<Counts>() }
+            .effects
+            .fetch_add(1, Ordering::SeqCst);
+        ptr::null_mut()
+    }
+    unsafe extern "C" fn middleware(
+        data: *mut libc::c_void,
+        _context: *const c_char,
+        _next: NemoRelayToolExecNextFn,
+        _next_data: *mut libc::c_void,
+    ) -> *mut c_char {
+        unsafe { &*data.cast::<Counts>() }
+            .middleware
+            .fetch_add(1, Ordering::SeqCst);
+        ptr::null_mut()
+    }
+    unsafe extern "C" fn release(data: *mut libc::c_void) {
+        unsafe { &*data.cast::<Counts>() }
+            .freed
+            .fetch_add(1, Ordering::SeqCst);
+    }
+    let _lock = TEST_MUTEX.lock().unwrap_or_else(|e| e.into_inner());
+    reset_globals();
+    let counts = Counts {
+        effects: AtomicUsize::new(0),
+        middleware: AtomicUsize::new(0),
+        freed: AtomicUsize::new(0),
+    };
+    let data = (&counts as *const Counts).cast_mut().cast();
+    unsafe {
+        let stack = fresh_scope_stack();
+        let middleware_name = cstring(&unique_name("ffi_invalid_context"));
+        assert_status!(
+            nemo_relay_register_tool_execution_intercept(
+                middleware_name.as_ptr(),
+                1,
+                middleware,
+                data,
+                None,
+            ),
+            NemoRelayStatus::Ok
+        );
+        let mut deep = json!(true);
+        for _ in 0..65 {
+            deep = json!({"nested":deep});
+        }
+        let name = cstring("ffi_invalid_context_tool");
+        let args = cstring("{}");
+        let cases = [
+            // Resource refusal must precede even the JSON parser's syntax error.
+            (
+                format!("{{\"data\":{{\"value\":\"{}", "x".repeat(1_048_576)),
+                NemoRelayStatus::InvalidArg,
+            ),
+            (
+                json!({"data":{"value":"x".repeat(1_048_576)}}).to_string(),
+                NemoRelayStatus::InvalidArg,
+            ),
+            ("{".to_string(), NemoRelayStatus::InvalidJson),
+            ("null".to_string(), NemoRelayStatus::InvalidArg),
+            ("[]".to_string(), NemoRelayStatus::InvalidArg),
+            ("true".to_string(), NemoRelayStatus::InvalidArg),
+            (
+                r#"{"host_approval":null}"#.to_string(),
+                NemoRelayStatus::InvalidArg,
+            ),
+            (
+                json!({"value":"x".repeat(16_384)}).to_string(),
+                NemoRelayStatus::InvalidArg,
+            ),
+            (deep.to_string(), NemoRelayStatus::InvalidArg),
+        ];
+        for (index, (input, expected)) in cases.into_iter().enumerate() {
+            let input = cstring(&input);
+            let mut out = ptr::null_mut();
+            assert_status!(
+                nemo_relay_tool_call_execute(
+                    name.as_ptr(),
+                    args.as_ptr(),
+                    effect,
+                    data,
+                    Some(release),
+                    ptr::null(),
+                    0,
+                    ptr::null(),
+                    ptr::null(),
+                    ptr::null(),
+                    0,
+                    input.as_ptr(),
+                    ptr::null(),
+                    &mut out,
+                ),
+                expected
+            );
+            assert!(out.is_null());
+            assert_eq!(counts.effects.load(Ordering::SeqCst), 0);
+            assert_eq!(counts.middleware.load(Ordering::SeqCst), 0);
+            assert_eq!(counts.freed.load(Ordering::SeqCst), index + 1);
+        }
+        assert_status!(
+            nemo_relay_deregister_tool_execution_intercept(middleware_name.as_ptr()),
+            NemoRelayStatus::Ok
+        );
+        nemo_relay_scope_stack_free(stack);
+    }
+}
+
 #[test]
 fn test_ffi_tool_execute_parent_data_and_error_paths() {
     let _lock = TEST_MUTEX.lock().unwrap_or_else(|e| e.into_inner());
@@ -35,8 +284,9 @@ fn test_ffi_tool_execute_parent_data_and_error_paths() {
                 metadata.as_ptr(),
                 ptr::null(),
                 0,
+                ptr::null(),
                 std::ptr::null(),
-                &mut out_json
+                &mut out_json,
             ),
             NemoRelayStatus::Ok
         );
@@ -57,8 +307,9 @@ fn test_ffi_tool_execute_parent_data_and_error_paths() {
                 invalid_json.as_ptr(),
                 ptr::null(),
                 0,
+                ptr::null(),
                 std::ptr::null(),
-                &mut out_json
+                &mut out_json,
             ),
             NemoRelayStatus::InvalidJson
         );
@@ -76,8 +327,9 @@ fn test_ffi_tool_execute_parent_data_and_error_paths() {
                 ptr::null(),
                 ptr::null(),
                 0,
+                ptr::null(),
                 std::ptr::null(),
-                &mut out_json
+                &mut out_json,
             ),
             NemoRelayStatus::Internal
         );
@@ -129,8 +381,9 @@ fn test_ffi_tool_execute_v2_propagates_tool_call_id_and_legacy_omits_it() {
                 ptr::null(),
                 tool_call_id.as_ptr(),
                 0,
+                ptr::null(),
                 std::ptr::null(),
-                &mut out_json
+                &mut out_json,
             ),
             NemoRelayStatus::Ok
         );
@@ -149,8 +402,9 @@ fn test_ffi_tool_execute_v2_propagates_tool_call_id_and_legacy_omits_it() {
                 ptr::null(),
                 ptr::null(),
                 0,
+                ptr::null(),
                 std::ptr::null(),
-                &mut out_json
+                &mut out_json,
             ),
             NemoRelayStatus::Ok
         );
@@ -170,8 +424,9 @@ fn test_ffi_tool_execute_v2_propagates_tool_call_id_and_legacy_omits_it() {
                 ptr::null(),
                 invalid_utf8.as_ptr().cast(),
                 0,
+                ptr::null(),
                 std::ptr::null(),
-                &mut out_json
+                &mut out_json,
             ),
             NemoRelayStatus::InvalidUtf8
         );
@@ -975,8 +1230,9 @@ fn execution_options_validate_bits_and_release_callback_on_failure() {
                 NEMO_RELAY_SKIP_CONDITIONAL_EXECUTION
                     | NEMO_RELAY_SKIP_REQUEST_INTERCEPTS
                     | NEMO_RELAY_SKIP_EXECUTION_INTERCEPTS,
+                ptr::null(),
                 std::ptr::null(),
-                &mut out
+                &mut out,
             ),
             NemoRelayStatus::Ok
         );
@@ -995,8 +1251,9 @@ fn execution_options_validate_bits_and_release_callback_on_failure() {
                 ptr::null(),
                 ptr::null(),
                 8,
+                ptr::null(),
                 std::ptr::null(),
-                &mut out
+                &mut out,
             ),
             NemoRelayStatus::InvalidArg
         );
@@ -1125,5 +1382,163 @@ fn llm_execution_options_release_resources_on_validation_failure() {
             }
         }
         nemo_relay_scope_stack_free(stack);
+    }
+}
+
+#[test]
+fn execution_context_accepts_c_boundary_whitespace_and_escaped_values() {
+    let _lock = TEST_MUTEX.lock().unwrap_or_else(|error| error.into_inner());
+    reset_globals();
+    let overhead = r#"{"data":{"value":""}}"#.len();
+    let inputs = [
+        json!({"data":{"value":"x".repeat(16_384-overhead)}}).to_string(),
+        format!(r#"{{"data":{{"value":"{}"}}}}"#, r"\u0061".repeat(3_000)),
+        format!("{}{{}}{}", " ".repeat(20_000), " ".repeat(20_000)),
+    ];
+    unsafe {
+        let stack = fresh_scope_stack();
+        let name = cstring("c-context-admission");
+        let arguments = cstring("{}");
+        for input in inputs {
+            let context = cstring(&input);
+            let mut output = ptr::null_mut();
+            assert_status!(
+                nemo_relay_tool_call_execute(
+                    name.as_ptr(),
+                    arguments.as_ptr(),
+                    tool_exec_cb,
+                    ptr::null_mut(),
+                    None,
+                    ptr::null(),
+                    0,
+                    ptr::null(),
+                    ptr::null(),
+                    ptr::null(),
+                    0,
+                    context.as_ptr(),
+                    ptr::null(),
+                    &mut output,
+                ),
+                NemoRelayStatus::Ok
+            );
+            assert!(!output.is_null());
+            nemo_relay_string_free(output);
+        }
+        nemo_relay_scope_stack_free(stack);
+    }
+}
+
+#[test]
+fn application_context_normalization_validates_borrowed_buffers_and_budgets() {
+    use std::ffi::CStr;
+    use std::ptr;
+    unsafe {
+        let mut output = ptr::null_mut();
+        for input in [
+            b"{}\0{}".as_slice(),
+            b"\xff",
+            b"{} {}",
+            b"NaN",
+            b"{\"data\":null}",
+        ] {
+            let status = nemo_relay_application_execution_context_normalize_json(
+                input.as_ptr(),
+                input.len(),
+                &mut output,
+            );
+            assert_ne!(status, NemoRelayStatus::Ok);
+            assert!(output.is_null());
+        }
+        let padded = format!("{}{{}}", " ".repeat(1_048_576));
+        assert_eq!(
+            nemo_relay_application_execution_context_normalize_json(
+                padded.as_ptr(),
+                padded.len(),
+                &mut output
+            ),
+            NemoRelayStatus::Ok
+        );
+        assert_eq!(CStr::from_ptr(output).to_bytes(), b"{}");
+        nemo_relay_string_free(output);
+        output = ptr::null_mut();
+        assert_eq!(
+            nemo_relay_application_execution_context_normalize_json(ptr::null(), 0, &mut output),
+            NemoRelayStatus::InvalidArg
+        );
+        assert!(output.is_null());
+        assert_eq!(
+            nemo_relay_application_execution_context_normalize_json(
+                b"{}".as_ptr(),
+                usize::MAX,
+                &mut output
+            ),
+            NemoRelayStatus::InvalidArg
+        );
+        assert_eq!(
+            nemo_relay_application_execution_context_normalize_json(
+                b"{}".as_ptr(),
+                2,
+                ptr::null_mut()
+            ),
+            NemoRelayStatus::NullPointer
+        );
+    }
+}
+
+#[test]
+fn application_context_normalization_validates_value_budgets_and_depth() {
+    use std::ffi::CStr;
+    use std::ptr;
+    unsafe {
+        let mut output = ptr::null_mut();
+        let value = br#""\u0000""#;
+        assert_eq!(
+            nemo_relay_application_execution_context_value_normalize_json(
+                value.as_ptr(),
+                value.len(),
+                8,
+                &mut output
+            ),
+            NemoRelayStatus::Ok
+        );
+        assert_eq!(CStr::from_ptr(output).to_bytes(), value);
+        nemo_relay_string_free(output);
+        for budget in [0, 7, 16_385] {
+            output = ptr::null_mut();
+            assert_eq!(
+                nemo_relay_application_execution_context_value_normalize_json(
+                    value.as_ptr(),
+                    value.len(),
+                    budget,
+                    &mut output
+                ),
+                NemoRelayStatus::InvalidArg
+            );
+            assert!(output.is_null());
+        }
+        let value = format!("1.{}", "0".repeat(1_048_576));
+        assert_eq!(
+            nemo_relay_application_execution_context_value_normalize_json(
+                value.as_ptr(),
+                value.len(),
+                3,
+                &mut output
+            ),
+            NemoRelayStatus::Ok
+        );
+        assert_eq!(CStr::from_ptr(output).to_bytes(), b"1.0");
+        nemo_relay_string_free(output);
+        let deep = format!("{}null{}", "[".repeat(63), "]".repeat(63));
+        output = ptr::null_mut();
+        assert_eq!(
+            nemo_relay_application_execution_context_value_normalize_json(
+                deep.as_ptr(),
+                deep.len(),
+                16_384,
+                &mut output
+            ),
+            NemoRelayStatus::InvalidArg
+        );
+        assert!(output.is_null());
     }
 }

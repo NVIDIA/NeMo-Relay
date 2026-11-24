@@ -295,9 +295,21 @@ A worker registers a tool execution intercept through
 `register_tool_execution_intercept`, whose callback receives
 `(context, next_call)`. The `ToolExecutionContext` carries `tool_name`,
 `args`, and the managed `tool_call_id`, which the host sends in the
-existing `ToolInvocation.tool_call_id` protobuf field. Use it when a worker
+existing `ToolExecutionInvocation.tool_call_id` protobuf field. Use it when a worker
 completes execution itself and must still correlate its result with the
 originating tool call.
+
+An application can pass extra information to tool execution middleware through
+`execution_context`. The callback receives it in `ToolExecutionContext`, with
+application-defined fields stored in its optional `data` object. The value is separate from tool
+arguments and event metadata, and nested calls receive it only when explicitly
+supplied. Middleware must validate any approval claims before using them.
+
+Workers must preserve supplied context to implement the worker contract. Use a
+matching SDK, and rebuild workers that do not carry this field. A matching
+handshake version alone cannot detect a worker that drops context. Refer to
+[Application Execution Context](/instrument-applications/advanced-guide#application-execution-context)
+for validation limits, isolation, and an application example.
 
 `ToolNext`, `LlmNext`, and `LlmStreamNext` are host proxies identified by an opaque
 continuation ID. Calling one issues a host-runtime RPC under the scope snapshot captured

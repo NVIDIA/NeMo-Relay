@@ -91,6 +91,7 @@ async fn shutdown_drains_stream_opening_before_closing_resources() {
         name: "race".into(),
         value: abi::Json::Null,
         tool_call_id: Option::None,
+        execution_context: None,
         context: a::Context {
             scope: a::ScopeBox::new(Scope),
             request_codec: Option::None,
@@ -203,6 +204,7 @@ async fn shutdown_drains_inline_and_cancelled_blocking_callbacks() {
             name: "inline".into(),
             value: abi::Json::Null,
             tool_call_id: Option::None,
+            execution_context: None,
             context: a::Context {
                 scope: a::ScopeBox::new(Scope),
                 request_codec: Option::None,
@@ -400,6 +402,7 @@ pub(crate) fn raw_invocation(value: Json) -> a::Invocation {
         name: "raw-tool".into(),
         value: into_abi(value),
         tool_call_id: Option::Some("call-id".into()),
+        execution_context: None,
         context: a::Context {
             scope: a::ScopeBox::new(Scope),
             request_codec: Option::None,
@@ -624,6 +627,201 @@ fn invocation_codec_adapters_preserve_typed_values_and_missing_capabilities() {
             .resolve_codec()
             .is_none()
     );
+}
+
+/// Build the same typed tool callback adapter used by public registration.
+fn context_callback(executor: ComponentExecutor, callback: Arc<ContextToolFn>) -> Callback {
+    Callback {
+        executor,
+        streams: Arc::new(Mutex::new(Vec::new())),
+        unary: Some(tool_execution_callback(callback)),
+        sync: None,
+        stream: None,
+    }
+}
+fn context_invocation(value: Json, data: Option<Option<Vec<abi::Field>>>) -> a::Invocation {
+    let mut invocation = raw_invocation(value);
+    invocation.execution_context = data.map(|data| a::ApplicationExecutionContext { data });
+    invocation
+}
+
+/// The baseline native callback preserves the closed context without changing arguments.
+#[tokio::test]
+async fn native_context_preserves_optional_data_and_scope_without_changing_args() {
+    let executor = ComponentExecutor::inline("context");
+    let payload = serde_json::json!({"host_approval": {"opaque": true}, "example.audit": {"integer": u64::MAX, "unicode": "π", "nul": "\u{0000}"}});
+    let abi::Json::Object(fields) = into_abi(payload.clone()) else {
+        unreachable!()
+    };
+    for (data, expected) in [
+        (None, None),
+        (Some(None), Some(serde_json::json!({}))),
+        (
+            Some(Some(Vec::new())),
+            Some(serde_json::json!({"data": {}})),
+        ),
+        (
+            Some(Some(fields)),
+            Some(serde_json::json!({"data": payload})),
+        ),
+    ] {
+        let callback = context_callback(
+            executor.clone(),
+            Arc::new(move |context, _next| {
+                let expected = expected.clone();
+                Box::pin(async move {
+                    assert!(BOUND.get());
+                    assert_eq!(context.tool_name, "raw-tool");
+                    assert_eq!(context.tool_call_id.as_deref(), Some("call-id"));
+                    assert_eq!(context.args, serde_json::json!({"value": 1}));
+                    assert_eq!(
+                        context.execution_context.map(|value| value.to_json()),
+                        expected
+                    );
+                    tokio::task::yield_now().await;
+                    assert!(BOUND.get());
+                    Ok(ToolExecutionInterceptOutcome::annotated(
+                        context.args,
+                        serde_json::json!({"checked": true}),
+                    ))
+                })
+            }),
+        );
+        let result = a::Callback::invoke_tool(
+            &callback,
+            context_invocation(serde_json::json!({"value": 1}), data),
+            a::ContinuationBox::new(Next),
+        )
+        .await
+        .unwrap();
+        assert_eq!(
+            from_abi(result.result.result).unwrap(),
+            serde_json::json!({"value": 1})
+        );
+        assert_eq!(
+            from_abi(result.result.annotation.unwrap()).unwrap(),
+            serde_json::json!({"checked": true})
+        );
+        assert!(!BOUND.get());
+    }
+    a::Component::shutdown(&executor).await.unwrap();
+}
+
+/// Raw native maps cannot contain ambiguous duplicate keys or non-JSON numbers.
+#[tokio::test]
+async fn native_context_rejects_invalid_data_without_disclosing_input() {
+    let calls = Arc::new(AtomicUsize::new(0));
+    let observed = calls.clone();
+    let callback = context_callback(
+        ComponentExecutor::inline("invalid-context"),
+        Arc::new(move |_, _| {
+            observed.fetch_add(1, Ordering::SeqCst);
+            panic!("invalid context reached native author")
+        }),
+    );
+    for fields in [
+        vec![abi::Field {
+            key: "example.private".into(),
+            value: abi::Json::Float(f64::NAN),
+        }],
+        vec![
+            abi::Field {
+                key: "example.private".into(),
+                value: abi::Json::String("private-receipt".into()),
+            },
+            abi::Field {
+                key: "example.private".into(),
+                value: abi::Json::Null,
+            },
+        ],
+    ] {
+        let result = a::Callback::invoke_tool(
+            &callback,
+            context_invocation(Json::Null, Some(Some(fields))),
+            a::ContinuationBox::new(Next),
+        )
+        .await;
+        let error = match result {
+            Err(error) => error,
+            Ok(_) => panic!("invalid context accepted"),
+        };
+        assert_eq!(error.code, "plugin");
+        assert_eq!(error.message, "invalid application execution context");
+        assert!(!error.message.contains("private-receipt"));
+        assert_eq!(calls.load(Ordering::SeqCst), 0);
+        assert!(!BOUND.get());
+    }
+    a::Component::shutdown(&callback.executor).await.unwrap();
+}
+
+/// Reject deep raw ABI data before recursive conversion or any author callback.
+#[tokio::test]
+async fn native_context_bounds_raw_abi_depth_before_conversion() {
+    let calls = Arc::new(AtomicUsize::new(0));
+    let observed = calls.clone();
+    let callback = context_callback(
+        ComponentExecutor::inline("deep-context"),
+        Arc::new(move |_, _| {
+            observed.fetch_add(1, Ordering::SeqCst);
+            panic!("over-deep context reached native author")
+        }),
+    );
+    let mut value = abi::Json::Null;
+    for _ in 0..160 {
+        value = abi::Json::Array(vec![value]);
+    }
+    let result = a::Callback::invoke_tool(
+        &callback,
+        context_invocation(
+            Json::Null,
+            Some(Some(vec![abi::Field {
+                key: "example.deep".into(),
+                value,
+            }])),
+        ),
+        a::ContinuationBox::new(Next),
+    )
+    .await;
+    let error = match result {
+        Err(error) => error,
+        Ok(_) => panic!("deep context accepted"),
+    };
+    assert_eq!(error.code, "plugin");
+    assert_eq!(error.message, "invalid application execution context");
+    assert_eq!(calls.load(Ordering::SeqCst), 0);
+    assert!(!BOUND.get());
+    a::Component::shutdown(&callback.executor).await.unwrap();
+}
+
+/// Dropping an invocation before polling releases its scope without calling author code.
+#[tokio::test]
+async fn native_context_unpolled_drop_releases_scope_without_calling_author() {
+    struct DropScope(Arc<AtomicUsize>);
+    impl a::Scope for DropScope {
+        fn enter(&self) -> a::Result<a::ScopeLeaseBox> {
+            Scope.enter()
+        }
+        fn snapshot(&self) -> a::Result<Option<abi::Json>> {
+            Ok(None)
+        }
+    }
+    impl Drop for DropScope {
+        fn drop(&mut self) {
+            self.0.fetch_add(1, Ordering::SeqCst);
+        }
+    }
+    let dropped = Arc::new(AtomicUsize::new(0));
+    let callback = context_callback(
+        ComponentExecutor::inline("unpolled-context"),
+        Arc::new(|_, _| panic!("unpolled author called")),
+    );
+    let mut invocation = context_invocation(Json::Null, Some(None));
+    invocation.context.scope = a::ScopeBox::new(DropScope(dropped.clone()));
+    let pending = a::Callback::invoke_tool(&callback, invocation, a::ContinuationBox::new(Next));
+    drop(pending);
+    assert_eq!(dropped.load(Ordering::SeqCst), 1);
+    assert!(!BOUND.get());
+    a::Component::shutdown(&callback.executor).await.unwrap();
 }
 
 struct FailingCloseSource(Arc<AtomicUsize>);

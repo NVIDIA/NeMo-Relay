@@ -176,6 +176,73 @@ struct Callback {
     stream: Option<Arc<Streaming>>,
 }
 
+type ContextToolFn = dyn Fn(ToolExecutionContext, ToolNext) -> BoxFuture<'static, Result<ToolExecutionInterceptOutcome>>
+    + Send
+    + Sync;
+
+/// Adapt the concrete native execution context through the normal callback lane.
+fn tool_execution_callback(callback: Arc<ContextToolFn>) -> Arc<Unary> {
+    Arc::new(move |invocation, next| {
+        let callback = callback.clone();
+        Box::pin(async move {
+            if invocation.surface != a::Surface::ToolExecutionIntercept {
+                return Err("invalid native tool execution surface".into());
+            }
+            let execution_context = invocation
+                .execution_context
+                .map(|context| {
+                    let value = abi::Json::Object(
+                        context
+                            .data
+                            .into_iter()
+                            .map(|fields| abi::Field {
+                                key: "data".into(),
+                                value: abi::Json::Object(fields),
+                            })
+                            .collect(),
+                    );
+                    validate_context_depth(&value)?;
+                    let value = from_abi(value)
+                        .map_err(|_| "invalid application execution context".to_owned())?;
+                    crate::ApplicationExecutionContext::try_from(value)
+                        .map_err(|_| "invalid application execution context".to_owned())
+                })
+                .transpose()?;
+            let value = callback(
+                ToolExecutionContext {
+                    tool_name: invocation.name,
+                    args: from_abi(invocation.value)?,
+                    tool_call_id: invocation.tool_call_id,
+                    execution_context,
+                },
+                ToolNext(Arc::new(next.ok_or("missing tool continuation")?)),
+            )
+            .await?;
+            Ok(UserResult::Tool(value))
+        })
+    })
+}
+
+/// Bound direct ABI input before recursive JSON conversion and author code.
+fn validate_context_depth(value: &abi::Json) -> Result<()> {
+    let mut pending = vec![(value, 1_usize)];
+    while let Some((value, depth)) = pending.pop() {
+        match value {
+            abi::Json::Array(values) if depth <= 64 => {
+                pending.extend(values.iter().map(|value| (value, depth + 1)))
+            }
+            abi::Json::Object(fields) if depth <= 64 => {
+                pending.extend(fields.iter().map(|field| (&field.value, depth + 1)))
+            }
+            abi::Json::Array(_) | abi::Json::Object(_) => {
+                return Err("invalid application execution context".into());
+            }
+            _ => {}
+        }
+    }
+    Ok(())
+}
+
 // The host lease stays on this poll's thread. Only the scope capability and
 // suspended future move between polling threads.
 fn scoped<F: Future>(scope: a::ScopeBox, future: F) -> ScopedFuture<F> {
@@ -918,29 +985,18 @@ impl PluginContext<'_> {
         F: Fn(ToolExecutionContext, ToolNext) -> Fut + Send + Sync + 'static,
         Fut: Future<Output = Result<ToolExecutionInterceptOutcome>> + Send + 'static,
     {
-        let callback = Arc::new(callback);
+        let callback = Arc::new(move |context, next| {
+            Box::pin(callback(context, next)) as BoxFuture<'static, _>
+        });
         self.unary(
             name,
             a::Surface::ToolExecutionIntercept,
             priority,
             false,
-            Arc::new(move |i, _next| {
-                let callback = callback.clone();
-                Box::pin(async move {
-                    let value = callback(
-                        ToolExecutionContext {
-                            tool_name: i.name.to_string(),
-                            args: from_abi(i.value)?,
-                            tool_call_id: i.tool_call_id.map(|v| v.to_string()),
-                        },
-                        ToolNext(Arc::new(_next.ok_or("missing tool continuation")?)),
-                    )
-                    .await?;
-                    Ok(UserResult::Tool(value))
-                })
-            }),
+            tool_execution_callback(callback),
         )
     }
+
     /// Register an async guardrail that allows or blocks an LLM call.
     pub fn register_llm_conditional_execution_guardrail<F, Fut>(
         &mut self,

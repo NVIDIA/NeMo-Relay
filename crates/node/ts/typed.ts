@@ -8,6 +8,8 @@ import type {
   Json,
   JsonCompatible,
   JsonValue,
+  JsonObject,
+  ApplicationExecutionContext,
   LlmCodec,
   LlmRequestCompatible,
   LlmRequestShape,
@@ -24,6 +26,7 @@ export type {
   JsonCompatible,
   JsonObject,
   JsonPrimitive,
+  ApplicationExecutionContext,
   JsonValue,
   LlmCodec,
   LlmRequestCompatible,
@@ -66,6 +69,8 @@ export interface TypedToolExecuteOptions<
   data?: TData;
   metadata?: TMetadata;
   toolCallId?: string | null;
+  /** Host-supplied context for execution intercepts: at most 16 KiB and 64 object/array levels (root is level 1); never event metadata. */
+  executionContext?: ApplicationExecutionContext | null;
   executionOptions?: ExecutionOptions | null;
 }
 
@@ -136,7 +141,7 @@ function encodeToolExecutionResult<TResult, TResultJson extends JsonCompatible<T
  * @param func - The tool. It may return the result directly or in a promise.
  * @param argsCodec - Converts the arguments to and from JSON.
  * @param resultCodec - Converts the result to and from JSON.
- * @param options - Scope handle, attributes, data, metadata, and tool call id.
+ * @param options - Scope handle, attributes, data, metadata, tool call id, and host execution context.
  * @returns The decoded result and its annotation.
  * @remarks A codec error or an execution error rejects the returned promise.
  */
@@ -166,6 +171,7 @@ export async function typedToolExecute<
     options.metadata,
     options.toolCallId,
     options.executionOptions,
+    options.executionContext,
   );
   return {
     result: resultCodec.fromJson(jsonResult.result),

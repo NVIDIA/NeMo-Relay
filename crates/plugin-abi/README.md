@@ -23,22 +23,26 @@ Compatibility uses these version rules:
 | Version | Purpose |
 |---|---|
 | Relay release | The plugin's `compat.relay` range selects supported runtime releases. |
-| Native contract, such as `v1.0` | The build SDK sets the minimum host interface required by the plugin. |
+| Native contract, currently `v1.0` | The build SDK sets the minimum host interface required by the plugin. |
 | ABI dependency versions | The loader checks shared type layouts, including dependency ABI generations. |
 
 Contract names use dots: `v1.0`, `v1.1`, and `v2.0`. Rust module names use
 underscores, such as `v1_0`, because Rust identifiers cannot contain dots.
 
-A plugin built with SDK contract v1.1 requires a host that supports v1.1 or a
-later minor in major 1. A host that supports v1.1 also supports v1.0 plugins.
-Each minor keeps its published interfaces and behavior. A breaking layout or dependency ABI change
-requires a new native major.
+The current SDK builds native contract v1.0 plugins, which declare
+`compat.native_api = "v1.0"`. Native contract versions are independent of Relay
+package versions. The complete contract schema must match before the host creates
+a plugin; the version string alone does not establish binary compatibility.
+
+Each minor retains its published interfaces and behavior.
+Breaking layout or dependency ABI changes require a new native major as
+appropriate.
 
 The interface crate follows Relay's package release version. That version does
 not select the native contract or determine binary compatibility. The explicit
 contract in `src/contract.rs` is the source of truth. The build script derives the
-SDK descriptor constant from that contract and checked metadata from its frozen
-declarations.
+SDK descriptor constant from that contract and checked metadata from its
+interface declarations.
 Frozen bootstrap and module headers keep their published contract versions.
 
 ## Bootstrap and Typed Values
@@ -58,6 +62,20 @@ The recursive `Json` type carries application values without converting them to
 JSON text. SDK conversions preserve signed and unsigned integers, finite floating-point
 values, Unicode, embedded NULs, nested values, and negative zero. They reject
 non-finite numbers and duplicate object keys.
+
+## Tool Execution Context
+
+The v1.0 `Invocation` carries an optional concrete `ApplicationExecutionContext`
+separately from business arguments. Its optional `data` map uses owned lossless
+JSON fields for application payloads. The SDK exposes the checked envelope
+through `context.execution_context()` in ordinary tool middleware. Relay owns the
+envelope's fields; middleware owns the schema and trust policy for application
+data. Structural validation does not authenticate approval assertions. See the
+[application integration guide](../../docs/instrument-applications/advanced-guide.mdx#application-execution-context).
+
+The native v1.0 invocation includes execution context. A plugin built against
+an incompatible invocation layout is rejected before factory creation, even when
+it also declares v1.0. Rebuild the plugin with the matching SDK.
 
 ## Loading and Component Cleanup
 
@@ -120,11 +138,13 @@ explicit paths to the frozen `interface-v1` snapshot and keep changed contracts
 locally. Schema checks read the same files as the compiler. Keep the snapshot
 fixed so the fixtures can detect compatibility regressions.
 
-The tests load a v1.0 plugin with v1.0 and v1.1 hosts. They also check minimum
-minor versions, major versions, changed signatures, changed `Sync` requirements,
-missing modules, descriptor mismatches, and multiple libraries. Hosts and plugins
-also load unchanged v1.0 binaries built with different Cargo package major
-versions and prereleases.
+The tests load current v1.0 plugins and hosts built with different Cargo package
+versions and prereleases. Frozen earlier development snapshots remain explicit
+rejection evidence for schema mismatches; they also prove their own older host
+and plugin agree. Tests check required minor and major versions, changed
+signatures and `Sync` requirements, missing modules, descriptor mismatches and
+multiple libraries. An old host rejects the new same-version schema before
+factory creation.
 
 To refresh fixture lockfiles, run the owning workflow:
 

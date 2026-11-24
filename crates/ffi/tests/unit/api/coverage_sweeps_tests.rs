@@ -2113,8 +2113,9 @@ fn test_ffi_helper_and_lifecycle_callback_failure_paths() {
                 ptr::null(),
                 ptr::null(),
                 0,
+                ptr::null(),
                 std::ptr::null(),
-                &mut exec_out
+                &mut exec_out,
             ),
             NemoRelayStatus::InvalidUtf8
         );
@@ -2131,8 +2132,9 @@ fn test_ffi_helper_and_lifecycle_callback_failure_paths() {
                 ptr::null(),
                 ptr::null(),
                 0,
+                ptr::null(),
                 std::ptr::null(),
-                &mut exec_out
+                &mut exec_out,
             ),
             NemoRelayStatus::InvalidJson
         );

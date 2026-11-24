@@ -964,8 +964,9 @@ fn test_ffi_tool_lifecycle_execute_and_helpers() {
                 ptr::null(),
                 ptr::null(),
                 0,
+                ptr::null(),
                 std::ptr::null(),
-                &mut execute_out
+                &mut execute_out,
             ),
             NemoRelayStatus::Ok
         );
@@ -1878,8 +1879,9 @@ fn test_ffi_additional_null_and_invalid_json_paths() {
                 ptr::null(),
                 ptr::null(),
                 0,
+                ptr::null(),
                 std::ptr::null(),
-                ptr::null_mut()
+                ptr::null_mut(),
             ),
             NemoRelayStatus::NullPointer
         );
@@ -1896,8 +1898,9 @@ fn test_ffi_additional_null_and_invalid_json_paths() {
                 ptr::null(),
                 ptr::null(),
                 0,
+                ptr::null(),
                 std::ptr::null(),
-                &mut out_json
+                &mut out_json,
             ),
             NemoRelayStatus::InvalidJson
         );

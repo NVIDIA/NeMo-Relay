@@ -1159,7 +1159,20 @@ fn worker_handshake_validation_accepts_v1_and_rejects_v2() {
         .unwrap()
         .name = WORKER_PROTOCOL.into();
     validate_worker_handshake("fixture_worker", &handshake)
-        .expect("a grpc-v1 handshake response should be accepted");
+        .expect("the required 1.0 worker contract should be accepted");
+    for version in ["0.11.1", "2.0.0"] {
+        handshake
+            .identity
+            .as_mut()
+            .unwrap()
+            .protocol
+            .as_mut()
+            .unwrap()
+            .version = version.into();
+        let error = validate_worker_handshake("fixture_worker", &handshake)
+            .expect_err("another contract version must fail before registration");
+        assert!(error.to_string().contains("incompatible worker identity"));
+    }
 }
 
 #[test]
@@ -1191,6 +1204,59 @@ async fn worker_unix_connection_reports_a_missing_socket() {
         .await
         .expect_err("a missing worker socket should fail to connect");
     assert!(error.to_string().contains(&missing.display().to_string()));
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn tool_execution_context_is_forwarded_as_part_of_the_required_worker_contract() {
+    let received = Arc::new(Mutex::new(Vec::new()));
+    let (callback, _shutdown) = fake_callback_service({
+        let received = received.clone();
+        move |request| {
+            let Some(invoke_request_payload::Payload::Tool(tool)) = request.payload else {
+                panic!("expected tool payload");
+            };
+            received.lock().unwrap().push(tool.execution_context);
+            InvokeResponse {
+                result: Some(InvokeResult::ToolExecutionOutcome(
+                    ProtoToolExecutionInterceptOutcome {
+                        value: Some(pb::ToolExecutionResult {
+                            result: Some(encode_json(JSON_SCHEMA, &json!("done"))),
+                            annotation: None,
+                        }),
+                        pending_marks: Vec::new(),
+                    },
+                )),
+            }
+        }
+    })
+    .await;
+    let contexts = [
+        None,
+        Some(json!({})),
+        Some(json!({"data": {"operation": {"attempt": 1}, "integer": u64::MAX}})),
+    ];
+    for context in &contexts {
+        callback
+            .invoke_tool_execution(
+                "context",
+                "lookup",
+                json!({"query": "test"}),
+                Some("call"),
+                context.clone().map(|value| value.try_into().unwrap()),
+                Arc::new(|_| panic!("worker completes without invoking continuation")),
+            )
+            .await
+            .unwrap();
+        assert!(callback.host_state.continuations.lock().unwrap().is_empty());
+    }
+    let values = received.lock().unwrap();
+    assert_eq!(values.len(), contexts.len());
+    for (encoded, expected) in values.iter().zip(contexts) {
+        let decoded: Option<nemo_relay_types::api::tool::ApplicationExecutionContext> =
+            encoded.as_ref().map(decode_wire).transpose().unwrap();
+        let decoded = decoded.map(|value| value.to_json());
+        assert_eq!(decoded, expected);
+    }
 }
 
 #[tokio::test(flavor = "multi_thread")]
@@ -1359,6 +1425,7 @@ async fn callback_helpers_cover_worker_response_edges() {
             "lookup",
             json!({}),
             None,
+            None,
             Arc::new(|args| Box::pin(async move { Ok(ToolExecutionResult::new(args)) })),
         )
         .await
@@ -1370,6 +1437,7 @@ async fn callback_helpers_cover_worker_response_edges() {
             "tool_intercept_invalid_result",
             "lookup",
             json!({}),
+            None,
             None,
             Arc::new(|args| Box::pin(async move { Ok(ToolExecutionResult::new(args)) })),
         )
@@ -6492,6 +6560,7 @@ fn received_invocation(v: pb::InvokeRequest) -> PreparedInvocation {
                     tool_name: v.tool_name,
                     value: v.args,
                     tool_call_id: v.tool_call_id,
+                    execution_context: v.execution_context,
                 }),
             )
         }
@@ -6579,6 +6648,7 @@ fn received_tool(v: pb::ToolValueInvocation) -> invoke_request_payload::Payload 
         tool_name: v.tool_name,
         value: v.value,
         tool_call_id: None,
+        execution_context: None,
     })
 }
 fn received_stream_invocation(v: pb::InvokeStreamRequest) -> PreparedInvocation {

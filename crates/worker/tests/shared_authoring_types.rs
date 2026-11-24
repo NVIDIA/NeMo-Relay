@@ -19,6 +19,11 @@ fn native_and_worker_contexts_are_the_same_owned_domain_type() {
         tool_name: "lookup".into(),
         args: json!({"id": u64::MAX, "value": null}),
         tool_call_id: Some("provider-call".into()),
+        execution_context: Some(
+            json!({"data": {"request": {"attempt": 1}}})
+                .try_into()
+                .unwrap(),
+        ),
     };
     let worker: nemo_relay_worker::ToolExecutionContext = native.clone();
     assert_eq!(shared_tool_callback(native), shared_tool_callback(worker));

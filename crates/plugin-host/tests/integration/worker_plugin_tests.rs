@@ -3425,3 +3425,60 @@ async fn worker_multiple_component_configurations_are_isolated_and_cleaned_up() 
         );
     }
 }
+
+#[tokio::test]
+async fn python_worker_application_context_float_boundary_round_trips() {
+    use nemo_relay_types::api::tool::ApplicationExecutionContext;
+    let _guard = WORKER_PLUGIN_TEST_LOCK.lock().await;
+    let Some(environment_ref) = std::env::var_os("NEMO_RELAY_PYTHON_PLUGIN_TEST_ENVIRONMENT")
+    else {
+        eprintln!("skipping Python context boundary RPC: managed environment is unset");
+        return;
+    };
+    let (manifest_directory, manifest) = write_worker_manifest(
+        "examples.python_grpc_worker",
+        &supported_relay_requirement(),
+        "python",
+        "context_boundary:main",
+    );
+    std::fs::write(manifest_directory.path().join("context_boundary.py"), r#"
+from nemo_relay_plugin import WorkerPlugin, ToolExecutionInterceptOutcome, serve_plugin
+
+class ContextBoundary(WorkerPlugin):
+    plugin_id = "examples.python_grpc_worker"
+
+    def register(self, context, config):
+        async def inspect(invocation, next_call):
+            downstream = await next_call.call(invocation.args)
+            return ToolExecutionInterceptOutcome(result=downstream.result, annotation={"received": invocation.execution_context})
+        context.register_tool_execution_intercept("context-boundary", inspect)
+
+async def main():
+    await serve_plugin(ContextBoundary())
+"#).unwrap();
+    let cleanup =
+        load_and_initialize_python_worker(&manifest, &PathBuf::from(environment_ref), Map::new())
+            .await;
+    for number in [1e-7, 1e-6, 1e-5, 1e16, -0.0, f64::from_bits(1), f64::MAX] {
+        let mut source = json!({"data":{"number":number,"padding":""}});
+        let overhead = serde_json::to_vec(&source).unwrap().len();
+        source["data"]["padding"] = json!("x".repeat(16_384 - overhead));
+        assert_eq!(serde_json::to_vec(&source).unwrap().len(), 16_384);
+        let context = ApplicationExecutionContext::try_from(source.clone()).unwrap();
+        let result = tool_call_execute(
+            ToolCallExecuteParams::builder()
+                .name("python-context-boundary")
+                .args(json!({"tool_ran":true}))
+                .execution_context(context)
+                .func(Arc::new(|arguments| {
+                    Box::pin(async move { Ok(ToolExecutionResult::new(arguments)) })
+                }))
+                .build(),
+        )
+        .await
+        .expect("host-accepted boundary must reach the Python interceptor and tool");
+        assert_eq!(result.result, json!({"tool_ran":true}));
+        assert_eq!(result.annotation.unwrap()["received"], source);
+    }
+    drop(cleanup);
+}

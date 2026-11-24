@@ -4,7 +4,7 @@
 //! Invalid native declaration; rejection must precede construction.
 static EXPORTS: [abi::xabi::XabiExport; 0] = [];
 static MANIFEST: abi::xabi::XabiManifest = abi::xabi::XabiManifest::new(&EXPORTS);
-/// Export a valid baseline schema with only its xabi generation changed.
+/// Export the linked ABI schema with only its xabi generation changed.
 #[unsafe(no_mangle)]
 pub extern "C" fn nemo_relay_native_bootstrap() -> *const abi::bootstrap::Bootstrap {
     static HEADER: std::sync::OnceLock<abi::bootstrap::Bootstrap> = std::sync::OnceLock::new();

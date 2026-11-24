@@ -1,0 +1,238 @@
+[
+  {
+    "name": "empty context",
+    "value": {},
+    "valid": true
+  },
+  {
+    "name": "empty data",
+    "value": {
+      "data": {}
+    },
+    "valid": true
+  },
+  {
+    "name": "opaque application data",
+    "value": {
+      "data": {
+        "operation": {
+          "attempt": 1
+        },
+        "unicode": "π",
+        "nul": "\u0000",
+        "integer": 18446744073709551615
+      }
+    },
+    "valid": true
+  },
+  {
+    "name": "opaque host_approval null",
+    "value": {
+      "data": {
+        "host_approval": null
+      }
+    },
+    "valid": true
+  },
+  {
+    "name": "opaque host_approval false",
+    "value": {
+      "data": {
+        "host_approval": false
+      }
+    },
+    "valid": true
+  },
+  {
+    "name": "opaque host_approval 2",
+    "value": {
+      "data": {
+        "host_approval": 2
+      }
+    },
+    "valid": true
+  },
+  {
+    "name": "opaque host_approval \"text\"",
+    "value": {
+      "data": {
+        "host_approval": "text"
+      }
+    },
+    "valid": true
+  },
+  {
+    "name": "opaque host_approval [1, true]",
+    "value": {
+      "data": {
+        "host_approval": [
+          1,
+          true
+        ]
+      }
+    },
+    "valid": true
+  },
+  {
+    "name": "opaque host_approval {}",
+    "value": {
+      "data": {
+        "host_approval": {}
+      }
+    },
+    "valid": true
+  },
+  {
+    "name": "opaque host_approval {\"decision\": \"denied\"}",
+    "value": {
+      "data": {
+        "host_approval": {
+          "decision": "denied"
+        }
+      }
+    },
+    "valid": true
+  },
+  {
+    "name": "opaque host_approval {\"approval_id\": \"private-receipt\"}",
+    "value": {
+      "data": {
+        "host_approval": {
+          "approval_id": "private-receipt"
+        }
+      }
+    },
+    "valid": true
+  },
+  {
+    "name": "application keys do not reserve Relay fields",
+    "value": {
+      "data": {
+        "data": null,
+        "tool_call_id": false,
+        "future_field": 42
+      }
+    },
+    "valid": true
+  },
+  {
+    "name": "invalid context null",
+    "value": null,
+    "valid": false
+  },
+  {
+    "name": "invalid data null",
+    "value": {
+      "data": null
+    },
+    "valid": false
+  },
+  {
+    "name": "invalid context []",
+    "value": [],
+    "valid": false
+  },
+  {
+    "name": "invalid data []",
+    "value": {
+      "data": []
+    },
+    "valid": false
+  },
+  {
+    "name": "invalid context true",
+    "value": true,
+    "valid": false
+  },
+  {
+    "name": "invalid data true",
+    "value": {
+      "data": true
+    },
+    "valid": false
+  },
+  {
+    "name": "invalid context 1",
+    "value": 1,
+    "valid": false
+  },
+  {
+    "name": "invalid data 1",
+    "value": {
+      "data": 1
+    },
+    "valid": false
+  },
+  {
+    "name": "invalid context \"text\"",
+    "value": "text",
+    "valid": false
+  },
+  {
+    "name": "invalid data \"text\"",
+    "value": {
+      "data": "text"
+    },
+    "valid": false
+  },
+  {
+    "name": "unknown top-level host_approval",
+    "value": {
+      "host_approval": {}
+    },
+    "valid": false
+  },
+  {
+    "name": "unknown top-level alongside data host_approval",
+    "value": {
+      "data": {},
+      "host_approval": null
+    },
+    "valid": false
+  },
+  {
+    "name": "unknown top-level custom",
+    "value": {
+      "custom": {}
+    },
+    "valid": false
+  },
+  {
+    "name": "unknown top-level alongside data custom",
+    "value": {
+      "data": {},
+      "custom": null
+    },
+    "valid": false
+  },
+  {
+    "name": "unknown top-level version",
+    "value": {
+      "version": {}
+    },
+    "valid": false
+  },
+  {
+    "name": "unknown top-level alongside data version",
+    "value": {
+      "data": {},
+      "version": null
+    },
+    "valid": false
+  },
+  {
+    "name": "unknown top-level source",
+    "value": {
+      "source": {}
+    },
+    "valid": false
+  },
+  {
+    "name": "unknown top-level alongside data source",
+    "value": {
+      "data": {},
+      "source": null
+    },
+    "valid": false
+  }
+]

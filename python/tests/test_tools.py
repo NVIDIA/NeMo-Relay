@@ -18,6 +18,7 @@ import pytest
 from async_helpers import resolve_async_result
 
 from nemo_relay import (
+    ApplicationExecutionContext,
     Event,
     Json,
     MarkEvent,
@@ -652,6 +653,271 @@ class TestToolIntercepts:
         assert seen["tool_name"] == "ctx_tool"
         assert seen["tool_call_id"] == "call-abc123"
         assert seen["arguments"] == {"value": 42}
+
+    async def test_execution_context_is_private_copied_and_not_inherited(self, subscribed_events) -> None:
+        seen = []
+        host = {"data": {"review": {"state": "host-only-sentinel"}}}
+
+        async def outer(context, next_call):
+            if context.tool_name == "execution_context_parent":
+                assert context.execution_context == {"data": {"review": {"state": "host-only-sentinel"}}}
+                context.execution_context["data"]["review"]["state"] = "changed"
+                await tools.execute("execution_context_nested", {}, lambda args: ToolExecutionResult(args))
+            downstream = await next_call(context.args)
+            return ToolExecutionInterceptOutcome(downstream.result)
+
+        async def inner(context, next_call):
+            seen.append((context.tool_name, context.execution_context))
+            downstream = await next_call({**context.args, "rewritten": True})
+            return ToolExecutionInterceptOutcome(downstream.result)
+
+        intercepts.register_tool_execution("py_execution_context_outer", 1, outer)
+        intercepts.register_tool_execution("py_execution_context_inner", 2, inner)
+        try:
+            pending = tools.execute(
+                "execution_context_parent", {"value": 1}, lambda args: ToolExecutionResult(args), execution_context=host
+            )
+            host["data"]["review"]["state"] = "changed-by-caller"
+            result = await pending
+            await tools.execute("execution_context_omitted", {}, lambda args: ToolExecutionResult(args))
+            assert result.result == {"value": 1, "rewritten": True}
+            assert seen == [
+                ("execution_context_nested", None),
+                ("execution_context_parent", {"data": {"review": {"state": "host-only-sentinel"}}}),
+                ("execution_context_omitted", None),
+            ]
+            await subscribers.flush_async()
+            assert all("host-only-sentinel" not in event.to_json() for event in subscribed_events)
+        finally:
+            assert intercepts.deregister_tool_execution("py_execution_context_outer")
+            assert intercepts.deregister_tool_execution("py_execution_context_inner")
+
+    @pytest.mark.parametrize(
+        "execution_context",
+        [[], "text", 1, True, {"data": None}, {"data": []}, {"unexpected": 1}, {"data": {"value": "x" * 16384}}],
+    )
+    async def test_invalid_execution_context_rejected_before_callbacks(self, execution_context) -> None:
+        calls = []
+
+        async def observing(context, next_call):
+            calls.append("intercept")
+            downstream = await next_call(context.args)
+            return ToolExecutionInterceptOutcome(downstream.result)
+
+        intercepts.register_tool_execution("py_invalid_execution_context", 1, observing)
+        try:
+            with pytest.raises((RuntimeError, ValueError, TypeError)):
+                await tools.execute(
+                    "invalid_context",
+                    {},
+                    lambda args: calls.append("tool") or ToolExecutionResult(args),
+                    execution_context=execution_context,
+                )
+            assert calls == []
+        finally:
+            assert intercepts.deregister_tool_execution("py_invalid_execution_context")
+
+    @pytest.mark.parametrize("supplied", [None, {}, {"data": {}}])
+    async def test_execution_context_preserves_absent_and_empty_data(self, supplied) -> None:
+        seen = []
+
+        async def observing(context, next_call):
+            seen.append(context.execution_context)
+            downstream = await next_call(context.args)
+            return ToolExecutionInterceptOutcome(downstream.result)
+
+        intercepts.register_tool_execution("py_empty_data_context", 1, observing)
+        try:
+            await tools.execute("empty_context", {}, lambda args: ToolExecutionResult(args), execution_context=supplied)
+            assert seen == [supplied]
+        finally:
+            assert intercepts.deregister_tool_execution("py_empty_data_context")
+
+    async def test_application_data_is_opaque_and_roundtrips(self) -> None:
+        supplied = ApplicationExecutionContext(
+            data={
+                "host_approval": {"decision": "application-defined", "version": 2},
+                "com.example.request": {"id": "request-123"},
+            }
+        )
+        seen = []
+
+        async def observing(context, next_call):
+            seen.append(context.execution_context)
+            downstream = await next_call(context.args)
+            return ToolExecutionInterceptOutcome(downstream.result)
+
+        intercepts.register_tool_execution("py_standard_context", 1, observing)
+        try:
+            await tools.execute(
+                "standard_context", {}, lambda args: ToolExecutionResult(args), execution_context=supplied
+            )
+            assert seen == [supplied]
+        finally:
+            assert intercepts.deregister_tool_execution("py_standard_context")
+
+    @pytest.mark.parametrize("invalid", [{"host_approval": {}}, {"data": None}, {"data": []}, {"data": 1}])
+    async def test_concrete_context_rejects_unknown_fields_and_nonobject_data(self, invalid) -> None:
+        calls = []
+        with pytest.raises((ValueError, RuntimeError), match="application execution context"):
+            await tools.execute(
+                "invalid_context",
+                {},
+                lambda args: calls.append(args) or ToolExecutionResult(args),
+                execution_context=invalid,
+            )
+        assert not calls
+
+    async def test_deep_execution_context_rejected_before_recursive_conversion(self) -> None:
+        supplied = {}
+        for _ in range(2_000):
+            supplied = {"child": supplied}
+        with pytest.raises(ValueError, match="64 container levels"):
+            await tools.execute("deep_context", {}, lambda args: ToolExecutionResult(args), execution_context=supplied)
+
+    async def test_context_resource_budget_checks_serialized_bytes_before_callbacks(self) -> None:
+        import json
+
+        overhead_bytes = len(json.dumps({"data": {"value": ""}}, separators=(",", ":")).encode("utf-8"))
+        boundary = {"data": {"value": "x" * (16_384 - overhead_bytes)}}
+        callback_calls = []
+
+        async def observing(context, next_call):
+            callback_calls.append("intercept")
+            downstream = await next_call(context.args)
+            return ToolExecutionInterceptOutcome(downstream.result)
+
+        def execute(arguments):
+            callback_calls.append("tool")
+            return ToolExecutionResult(arguments)
+
+        intercepts.register_tool_execution("context-resource-budget-bytes", 1, observing)
+        try:
+            result = await tools.execute("boundary", {"value": 1}, execute, execution_context=boundary)
+            assert result.result == {"value": 1}
+            assert callback_calls == ["intercept", "tool"]
+            callback_calls.clear()
+            for supplied in (
+                {"data": {"value": boundary["data"]["value"] + "x"}},
+                {"data": {"value": "\0" * 3_000}},
+            ):
+                with pytest.raises(ValueError, match="execution context"):
+                    await tools.execute("over-budget", {}, execute, execution_context=supplied)
+                assert callback_calls == []
+            arguments = {"value": "x" * 20_000}
+            result = await tools.execute("ordinary-arguments", arguments, execute)
+            assert result.result == arguments
+            assert callback_calls == ["intercept", "tool"]
+        finally:
+            assert intercepts.deregister_tool_execution("context-resource-budget-bytes")
+
+    async def test_context_resource_budget_bounds_shared_container_expansion(self) -> None:
+        class CountedList(list):
+            expanded_visits = 0
+
+            def __getitem__(self, index):
+                type(self).expanded_visits += 1
+                if type(self).expanded_visits > 16_384:
+                    raise AssertionError("context traversal exceeded its resource budget")
+                return super().__getitem__(index)
+
+        shared = CountedList([None, None])
+        await tools.execute(
+            "small-shared-context",
+            {},
+            lambda arguments: ToolExecutionResult(arguments),
+            execution_context={"data": {"value": [shared, shared]}},
+        )
+        supplied = None
+        for _ in range(18):
+            supplied = CountedList([supplied, supplied])
+        CountedList.expanded_visits = 0
+        callback_calls = []
+        with pytest.raises(ValueError, match="16384 serialized bytes"):
+            await tools.execute(
+                "large-shared-context",
+                {},
+                lambda arguments: callback_calls.append("tool") or ToolExecutionResult(arguments),
+                execution_context={"data": {"value": supplied}},
+            )
+        assert 0 < CountedList.expanded_visits <= 16_384
+        assert callback_calls == []
+
+    @pytest.mark.parametrize("invalid", [float("nan"), float("inf"), -float("inf")])
+    async def test_context_conversion_refuses_nonfinite_numbers_before_callbacks(self, invalid) -> None:
+        calls = []
+
+        async def observe(context, next_call):
+            calls.append("intercept")
+            downstream = await next_call(context.args)
+            return ToolExecutionInterceptOutcome(downstream.result)
+
+        def execute(arguments):
+            calls.append("tool")
+            return ToolExecutionResult(arguments)
+
+        intercepts.register_tool_execution("finite-context-conversion", 1, observe)
+        try:
+            with pytest.raises(ValueError, match="invalid application execution context"):
+                await tools.execute("invalid-number", {}, execute, execution_context={"data": {"value": invalid}})
+            assert calls == []
+            await tools.execute("valid-after-number", {}, execute, execution_context={"data": {"value": None}})
+            assert calls == ["intercept", "tool"]
+        finally:
+            assert intercepts.deregister_tool_execution("finite-context-conversion")
+
+    @pytest.mark.parametrize("invalid", [b"not-json", bytearray(b"not-json")])
+    async def test_context_conversion_retains_binary_value_refusal(self, invalid) -> None:
+        calls = []
+        with pytest.raises(ValueError, match="invalid application execution context"):
+            await tools.execute(
+                "binary-context",
+                {},
+                lambda arguments: calls.append(arguments) or ToolExecutionResult(arguments),
+                execution_context={"data": {"value": invalid}},
+            )
+        assert calls == []
+
+    async def test_context_conversion_snapshots_each_sequence_value_once(self) -> None:
+        class ChangingList(list):
+            reads = 0
+
+            def __getitem__(self, index):
+                self.reads += 1
+                return None if self.reads == 1 else [None] * 20_000
+
+        class UnreadLargeList(list):
+            def __getitem__(self, index):
+                raise AssertionError("oversized child must be refused before reading its items")
+
+        source = ChangingList([None])
+        seen = []
+
+        async def observe(context, next_call):
+            seen.append(context.execution_context)
+            downstream = await next_call(context.args)
+            return ToolExecutionInterceptOutcome(downstream.result)
+
+        intercepts.register_tool_execution("single-pass-context-conversion", 1, observe)
+        try:
+            await tools.execute(
+                "changing-context",
+                {},
+                lambda value: ToolExecutionResult(value),
+                execution_context={"data": {"value": source}},
+            )
+            assert source.reads == 1
+            assert seen == [{"data": {"value": [None]}}]
+            with pytest.raises(ValueError, match="16384 serialized bytes"):
+                await tools.execute(
+                    "oversized-child",
+                    {},
+                    lambda _: pytest.fail("tool must stay uncalled"),
+                    execution_context={"data": {"value": [UnreadLargeList([None] * 20_000)]}},
+                )
+            assert len(seen) == 1
+        finally:
+            assert intercepts.deregister_tool_execution("single-pass-context-conversion")
 
     async def test_execution_intercept_tool_call_id_is_none_when_absent(self) -> None:
         seen = {}

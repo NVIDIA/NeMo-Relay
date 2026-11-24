@@ -50,7 +50,8 @@ pub use nemo_relay_types::api::registry::{
 };
 pub use nemo_relay_types::api::scope::{ScopeStackEntry, ScopeStackSnapshot, ScopeType};
 pub use nemo_relay_types::api::tool::{
-    ToolExecutionContext, ToolExecutionInterceptOutcome, ToolExecutionResult,
+    ApplicationExecutionContext, ToolExecutionContext, ToolExecutionInterceptOutcome,
+    ToolExecutionResult,
 };
 pub use nemo_relay_types::codec::content::{ContentSelection, ContentSnapshot, ContentSource};
 pub use nemo_relay_types::codec::identity::{BuiltinLlmCodec, LlmCodecIdentity};
@@ -2125,7 +2126,7 @@ impl Drop for AbortTaskOnDrop {
 
 #[tonic::async_trait]
 impl PluginWorker for WorkerService {
-    /// Authenticate the host and check plugin and protocol identity before advertising worker capabilities.
+    /// Authenticate the host and confirm the required worker contract before registration.
     async fn handshake(
         &self,
         request: Request<HandshakeRequest>,
@@ -3124,6 +3125,7 @@ impl WorkerService {
             tool_name: payload.tool_name,
             args: payload.value,
             tool_call_id: payload.tool_call_id,
+            execution_context: payload.execution_context,
         };
         let future = with_thread_scope(scope, || handler(context, next));
         tool_execution_response(future.await?)
@@ -3419,6 +3421,7 @@ struct ToolPayload {
     tool_name: String,
     value: Json,
     tool_call_id: Option<String>,
+    execution_context: Option<nemo_relay_types::api::tool::ApplicationExecutionContext>,
 }
 
 #[derive(Default)]

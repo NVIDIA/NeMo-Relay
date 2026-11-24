@@ -11,6 +11,7 @@ at an ``await``. Callback exceptions are returned to the Relay host as
 structured worker errors.
 
 Public data types:
+    ApplicationExecutionContext: Extensible, structured per-invocation application context.
     Json: Any JSON-serializable Python value.
     Event: A Relay event represented as a JSON object.
     LlmRequest: A Relay LLM request represented as a JSON object.
@@ -70,6 +71,7 @@ import importlib
 import inspect
 import ipaddress
 import json
+import math
 import os
 import platform
 import stat
@@ -81,7 +83,7 @@ from datetime import datetime, timezone
 from enum import Enum
 from importlib import metadata
 from pathlib import Path
-from typing import Any, ClassVar, Literal, NotRequired, Protocol, TypeAlias, TypedDict
+from typing import Any, ClassVar, Literal, NotRequired, Protocol, TypeAlias, TypedDict, cast
 from urllib.parse import urlsplit
 
 from . import _protocol, codecs
@@ -121,6 +123,20 @@ grpc: Any = importlib.import_module("grpc")
 
 #: Any JSON-serializable Python value accepted by the worker protocol.
 Json: TypeAlias = Any
+
+
+class ApplicationExecutionContext(TypedDict, total=False):
+    """Concrete invocation context with optional application-owned JSON data.
+
+    Relay reserves the outer fields for its API. Application-specific fields
+    belong inside ``data`` and are interpreted and validated by middleware.
+    The complete context is limited to 16 KiB and 64 object/array levels.
+    Supplying context does not establish authorization.
+    """
+
+    data: dict[str, Json]
+
+
 #: A Relay event represented as a JSON object.
 Event: TypeAlias = dict[str, Any]
 
@@ -916,6 +932,103 @@ class LlmRequestInterceptOutcome:
         }
 
 
+def _validate_application_execution_context(value: object) -> ApplicationExecutionContext:
+    """Validate and snapshot context using the Rust serializer's byte budget."""
+    remaining_bytes = 16_384
+
+    def charge(amount: int) -> None:
+        nonlocal remaining_bytes
+        remaining_bytes -= amount
+        if remaining_bytes < 0:
+            raise WorkerSdkError("tool execution context exceeds 16384 serialized bytes")
+
+    def encoded_string(text: str) -> str:
+        if len(text) > remaining_bytes:
+            raise WorkerSdkError("tool execution context exceeds 16384 serialized bytes")
+        try:
+            charge(len(json.dumps(text, ensure_ascii=False).encode("utf-8")))
+        except UnicodeError as error:
+            raise WorkerSdkError("invalid application execution context") from error
+        return str.__str__(text)
+
+    def snapshot(item: object, parent_depth: int) -> Any:
+        if isinstance(item, (dict, list)):
+            depth = parent_depth + 1
+            if depth > 64:
+                raise WorkerSdkError("tool execution context exceeds 64 container levels")
+            charge(2)
+            if len(item) > remaining_bytes + 1:
+                raise WorkerSdkError("tool execution context exceeds 16384 serialized bytes")
+            if isinstance(item, dict):
+                result = {}
+                for index, (key, child) in enumerate(item.items()):
+                    if not isinstance(key, str):
+                        raise WorkerSdkError("invalid application execution context")
+                    charge(1 + (index > 0))
+                    key = encoded_string(key)
+                    result[key] = snapshot(child, depth)
+                return result
+            result_list = []
+            for index, child in enumerate(item):
+                charge(index > 0)
+                result_list.append(snapshot(child, depth))
+            return result_list
+        if isinstance(item, str):
+            return encoded_string(item)
+        if item is None:
+            charge(4)
+            return None
+        if isinstance(item, bool):
+            charge(4 if item else 5)
+            return item
+        if isinstance(item, int):
+            if (int.bit_length(item) + 3) // 4 > remaining_bytes:
+                raise WorkerSdkError("tool execution context exceeds 16384 serialized bytes")
+            number = int.__int__(item)
+            try:
+                charge(len(str(number)))
+            except (ValueError, OverflowError) as error:
+                raise WorkerSdkError("invalid application execution context") from error
+            return number
+        if isinstance(item, float):
+            number = float.__float__(item)
+            if not math.isfinite(number):
+                raise WorkerSdkError("invalid application execution context")
+            # Both serializers use shortest-roundtrip digits. Rust uses fixed
+            # notation at exponent -5 and unpadded scientific exponents elsewhere.
+            text = repr(number)
+            if "e" in text:
+                mantissa, exponent_text = text.split("e")
+                exponent = int(exponent_text)
+                if exponent == -5:
+                    sign = "-" if mantissa.startswith("-") else ""
+                    digits = mantissa.lstrip("-").replace(".", "")
+                    text = sign + "0.0000" + digits
+                else:
+                    text = f"{mantissa}e{exponent:+d}"
+            charge(len(text))
+            return number
+        raise WorkerSdkError("invalid application execution context")
+
+    if not isinstance(value, dict):
+        raise WorkerSdkError("tool execution context must be an object")
+    copied = snapshot(value, 0)
+    if any(key != "data" for key in copied) or ("data" in copied and not isinstance(copied["data"], dict)):
+        raise WorkerSdkError("invalid application execution context")
+    return cast(ApplicationExecutionContext, copied)
+
+
+def _application_execution_context_from_proto(value: Any) -> ApplicationExecutionContext:
+    """Decode Relay's concrete context without interpreting application data."""
+    try:
+        _protocol.preflight_application_execution_context(value)
+    except ValueError as error:
+        raise WorkerSdkError(str(error)) from error
+    if value.HasField("data"):
+        return {"data": _decode_payload(value.data, "tool execution context data")}
+    return {}
+
+
 @dataclass(frozen=True, slots=True)
 class ToolExecutionContext:
     """Per-call context provided to a tool execution intercept.
@@ -924,11 +1037,31 @@ class ToolExecutionContext:
     the managed tool call, or ``None`` when the call did not record one. It lets
     an intercept that completes execution without calling
     :meth:`ToolNext.call` associate its result with the originating tool call.
+
+    ``execution_context`` is structured application context, separate from tool arguments
+    and event metadata; it grants no authority. Construction snapshots it and
+    each read returns a defensive copy. Standard ``dataclasses.replace()`` can
+    preserve, replace or clear it without sharing mutable context data.
     """
 
     tool_name: str
     args: Json
     tool_call_id: str | None = None
+    execution_context: ApplicationExecutionContext | None = field(default=None, repr=False)
+
+    def __post_init__(self) -> None:
+        # Read the stored value directly: the public getter returns a copy.
+        supplied = object.__getattribute__(self, "execution_context")
+        snapshot = _validate_application_execution_context(supplied) if supplied is not None else None
+        object.__setattr__(self, "execution_context", snapshot)
+
+    def __getattribute__(self, name: str) -> Any:
+        """Return an independent snapshot when inspecting execution context."""
+        value = object.__getattribute__(self, name)
+        # Keep this a real constructor/dataclass field so dataclasses.replace()
+        # can preserve or replace it. Only this field needs copy-on-read;
+        # existing business arguments retain their original access semantics.
+        return copy.deepcopy(value) if name == "execution_context" else value
 
 
 @dataclass(slots=True)
@@ -2975,6 +3108,11 @@ class _WorkerService(worker_grpc.PluginWorkerServiceServicer):
                     tool_name=payload.tool_name,
                     args=_decode_payload(payload.args, "tool value"),
                     tool_call_id=(payload.tool_call_id if payload.HasField("tool_call_id") else None),
+                    execution_context=(
+                        _application_execution_context_from_proto(payload.execution_context)
+                        if payload.HasField("execution_context")
+                        else None
+                    ),
                 )
                 result = await _maybe_await(
                     self._handler(self._handlers.tool_executions, request.registration_name)(
