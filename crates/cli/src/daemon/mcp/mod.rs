@@ -516,8 +516,9 @@ impl ActivationChild {
     }
 
     async fn graceful_cleanup(&mut self) -> std::io::Result<()> {
-        self.child.wait_for_exit(ACTIVATION_CLEANUP_GRACE).await?;
-        self.force_cleanup().await
+        let waited = self.child.wait_for_exit(ACTIVATION_CLEANUP_GRACE).await;
+        let forced = self.force_cleanup().await;
+        waited.and(forced)
     }
 }
 
