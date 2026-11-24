@@ -218,3 +218,70 @@ fn content_inspection_rejects_incomplete_or_contradictory_wire_values() {
     };
     assert!(validate(&explicit_null).is_ok());
 }
+
+#[test]
+fn application_execution_context_wire_validation_checks_limits_before_json_syntax() {
+    for (value, expected) in [
+        (
+            format!("\"{}\"", "x".repeat(1_048_576)),
+            "16384 serialized bytes",
+        ),
+        (
+            format!("{}null{}", "[".repeat(1_100), "]".repeat(1_100)),
+            "64 container levels",
+        ),
+    ] {
+        let context = pb::ApplicationExecutionContext {
+            data: Some(pb::JsonObject {
+                fields: [(
+                    "value".into(),
+                    pb::JsonValue {
+                        json: value.into_bytes(),
+                    },
+                )]
+                .into(),
+            }),
+        };
+        assert!(validate(&context).unwrap_err().contains(expected));
+    }
+    for levels in [64, 65] {
+        let value = format!("{}null{}", "[".repeat(levels - 2), "]".repeat(levels - 2));
+        let context = pb::ApplicationExecutionContext {
+            data: Some(pb::JsonObject {
+                fields: [(
+                    "value".into(),
+                    pb::JsonValue {
+                        json: value.into_bytes(),
+                    },
+                )]
+                .into(),
+            }),
+        };
+        assert_eq!(validate(&context).is_ok(), levels == 64);
+    }
+    let wide = pb::ApplicationExecutionContext {
+        data: Some(pb::JsonObject {
+            fields: (0..20_000)
+                .map(|index| {
+                    (
+                        index.to_string(),
+                        pb::JsonValue {
+                            json: b"null".to_vec(),
+                        },
+                    )
+                })
+                .collect(),
+        }),
+    };
+    assert!(
+        validate(&wide)
+            .unwrap_err()
+            .contains("16384 serialized bytes")
+    );
+    validate(&pb::ApplicationExecutionContext {
+        data: Some(pb::JsonObject {
+            fields: Default::default(),
+        }),
+    })
+    .unwrap();
+}

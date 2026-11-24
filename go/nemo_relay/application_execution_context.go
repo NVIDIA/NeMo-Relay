@@ -306,6 +306,19 @@ func marshalApplicationContext(context ApplicationExecutionContext) ([]byte, err
 	if len(context.Data) > remaining {
 		return nil, fmt.Errorf("tool execution context exceeds 16384 serialized bytes")
 	}
+	rawRemaining := maximumApplicationContextBytes
+	normalizeValues := false
+	for _, value := range context.Data {
+		if len(value) > rawRemaining {
+			normalizeValues = true
+			break
+		}
+		rawRemaining -= len(value)
+	}
+	var normalizedFields map[string]json.RawMessage
+	if normalizeValues {
+		normalizedFields = make(map[string]json.RawMessage, len(context.Data))
+	}
 	processedFields := 0
 	for key, value := range context.Data {
 		if !utf8.ValidString(key) {
@@ -325,12 +338,25 @@ func marshalApplicationContext(context ApplicationExecutionContext) ([]byte, err
 		if value == nil {
 			value = json.RawMessage("null")
 		}
-		failure := validateContextBudget(value, 2, &remaining)
-		if failure != nil {
+		if normalizeValues {
+			if failure := checkContextInputBudget(value, 2); failure != nil {
+				return nil, failure
+			}
+			var failure error
+			value, failure = normalizeApplicationContextValue(value, remaining)
+			if failure != nil {
+				return nil, failure
+			}
+			normalizedFields[key] = value
+		}
+		if failure := validateContextBudget(value, 2, &remaining); failure != nil {
 			return nil, failure
 		}
 		processedFields++
 	}
-	// Copy only after validation, retaining raw numeric representations and nilness.
+	if normalizeValues {
+		return json.Marshal(map[string]any{"data": normalizedFields})
+	}
+	// Copy only after validation, retaining bounded raw numbers and nilness.
 	return json.Marshal(map[string]any{"data": cloneContextFields(context.Data)})
 }

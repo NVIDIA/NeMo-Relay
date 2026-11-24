@@ -157,3 +157,83 @@ fn published_schema_conformance_vectors_match_typed_decoding() {
         );
     }
 }
+
+#[test]
+fn application_execution_context_deep_rejection_drops_iteratively() {
+    use nemo_relay_types::api::tool::application_context::ApplicationExecutionContextError;
+    const CHILD: &str = "NEMO_RELAY_DEEP_CONTEXT_DROP_CHILD";
+    if std::env::var_os(CHILD).is_none() {
+        let test_name = std::thread::current().name().unwrap().to_owned();
+        let output = std::process::Command::new(std::env::current_exe().unwrap())
+            .args(["--exact", &test_name, "--nocapture"])
+            .env(CHILD, "1")
+            .output()
+            .unwrap();
+        assert!(
+            output.status.success(),
+            "child failed: {}\n{}",
+            String::from_utf8_lossy(&output.stdout),
+            String::from_utf8_lossy(&output.stderr)
+        );
+        return;
+    }
+    for invalid_root in [false, true] {
+        let mut nested = Json::Null;
+        for _ in 0..262_144 {
+            nested = Json::Array(vec![nested]);
+        }
+        let supplied = if invalid_root {
+            nested
+        } else {
+            Json::Object(
+                [(
+                    "data".into(),
+                    Json::Object([("value".into(), nested)].into_iter().collect()),
+                )]
+                .into_iter()
+                .collect(),
+            )
+        };
+        let expected = if invalid_root {
+            ApplicationExecutionContextError::InvalidSchema
+        } else {
+            ApplicationExecutionContextError::TooDeep
+        };
+        assert_eq!(
+            ApplicationExecutionContext::try_from(supplied).unwrap_err(),
+            expected
+        );
+        let valid =
+            ApplicationExecutionContext::try_from(json!({"data": {"recovered": true}})).unwrap();
+        assert_eq!(valid.to_json(), json!({"data": {"recovered": true}}));
+    }
+}
+
+#[test]
+fn application_execution_context_input_preflight_preserves_boundaries() {
+    use nemo_relay_types::api::tool::application_context::{
+        ApplicationExecutionContextError, preflight_context_json,
+    };
+    for levels in [64, 65] {
+        let input = format!("{}null{}", "[".repeat(levels - 2), "]".repeat(levels - 2));
+        let outcome = preflight_context_json(input.as_bytes(), 2, &mut 16_384);
+        assert_eq!(
+            outcome,
+            if levels == 64 {
+                Ok(())
+            } else {
+                Err(ApplicationExecutionContextError::TooDeep)
+            }
+        );
+    }
+    let large = format!("\"{}\"", "x".repeat(1_048_576));
+    assert_eq!(
+        preflight_context_json(large.as_bytes(), 2, &mut 16_384),
+        Err(ApplicationExecutionContextError::TooLarge)
+    );
+    assert_eq!(
+        preflight_context_json(b"null", usize::MAX, &mut 16_384),
+        Err(ApplicationExecutionContextError::TooDeep)
+    );
+    preflight_context_json(br#""\u96ea\u0000""#, 2, &mut 16_384).unwrap();
+}

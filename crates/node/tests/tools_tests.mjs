@@ -2078,3 +2078,49 @@ describe('Tool intercepts', () => {
     }
   });
 });
+
+describe('execution context Unicode integrity', () => {
+  it('rejects unpaired surrogates before callbacks and preserves valid context strings', async () => {
+    const observed = [];
+    const calls = [];
+    registerToolExecutionIntercept('context-utf16-integrity', 1, async (context, next) => {
+      calls.push('intercept');
+      observed.push(context.executionContext);
+      const result = await next(context.args);
+      return { result: result.result };
+    });
+    const execute = (context) =>
+      toolCallExecuteAsync(
+        'context-utf16-integrity',
+        {},
+        () => {
+          calls.push('tool');
+          return { result: true };
+        },
+        null,
+        null,
+        null,
+        null,
+        null,
+        null,
+        context,
+      );
+    try {
+      for (const context of [
+        { data: { '\uD800': false, '\uFFFD': true } },
+        { data: { '\uDC00': false } },
+        { data: { value: '\uD800' } },
+        { data: { value: '\uDC00' } },
+      ]) {
+        await assert.rejects(async () => execute(context), /valid UTF-16/);
+        assert.deepEqual(calls, []);
+      }
+      const valid = { data: { '\uFFFD': true, '\uD83D\uDE00': '雪\u0000\uD83D\uDE00' } };
+      assert.equal((await execute(valid)).result, true);
+      assert.deepEqual(observed, [valid]);
+      assert.deepEqual(calls, ['intercept', 'tool']);
+    } finally {
+      deregisterToolExecutionIntercept('context-utf16-integrity');
+    }
+  });
+});

@@ -277,12 +277,21 @@ fn context_string(value: Unknown, remaining_string_bytes: &mut usize) -> Result<
             "tool execution context exceeds 16384 serialized bytes",
         ));
     }
-    *remaining_string_bytes = remaining_string_bytes
-        .checked_sub(string.utf8_len()?)
-        .ok_or_else(|| {
-            Error::invalid_argument("tool execution context exceeds 16384 serialized bytes")
+    let length = string.utf16_len()?;
+    let units = string.into_utf16()?;
+    let mut text = String::new();
+    for character in char::decode_utf16(units.as_slice()[..length].iter().copied()) {
+        let character = character.map_err(|_| {
+            Error::invalid_argument("execution context strings must contain valid UTF-16")
         })?;
-    Ok(string.into_utf8()?.into_owned()?)
+        *remaining_string_bytes = remaining_string_bytes
+            .checked_sub(character.len_utf8())
+            .ok_or_else(|| {
+                Error::invalid_argument("tool execution context exceeds 16384 serialized bytes")
+            })?;
+        text.push(character);
+    }
+    Ok(text)
 }
 
 fn own_context_json(

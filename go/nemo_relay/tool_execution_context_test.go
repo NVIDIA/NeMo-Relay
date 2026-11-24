@@ -647,3 +647,151 @@ func TestApplicationContextDuplicateKeysUseRetainedValueBudget(test *testing.T) 
 		}
 	}
 }
+
+func TestApplicationContextPaddedOptionsRetainBoundedIndependentSnapshots(test *testing.T) {
+	for name, input := range map[string]json.RawMessage{
+		"whitespace":   json.RawMessage(strings.Repeat(" ", 1_048_576) + `{}`),
+		"long-decimal": json.RawMessage(`{"data":{"number":1.` + strings.Repeat("0", 1_048_576) + `}}`),
+	} {
+		test.Run(name, func(test *testing.T) {
+			option := WithToolExecutionContext(input)
+			input[0] = '!'
+			var first, second toolCallOptions
+			option(&first)
+			if first.executionContextError != nil {
+				test.Fatal(first.executionContextError)
+			}
+			if len(first.executionContext) > maximumApplicationContextBytes {
+				test.Fatal("unbounded snapshot")
+			}
+			original := bytes.Clone(first.executionContext)
+			first.executionContext[0] = '!'
+			option(&second)
+			if !bytes.Equal(second.executionContext, original) {
+				test.Fatal("reused option shared mutable state")
+			}
+		})
+	}
+}
+
+func TestApplicationContextNormalizationPreservesNativeNumbers(test *testing.T) {
+	name := "context-native-number-normalization"
+	var observed json.RawMessage
+	if failure := RegisterToolExecutionIntercept(name, 1,
+		func(context ToolExecutionContext, next func(json.RawMessage) (ToolExecutionResult, error)) (ToolExecutionInterceptOutcome, error) {
+			observed = bytes.Clone(context.ExecutionContext.Data["number"])
+			result, failure := next(context.Args)
+			return ToolExecutionInterceptOutcome{Result: result.Result}, failure
+		}); failure != nil {
+		test.Fatal(failure)
+	}
+	test.Cleanup(func() { _ = DeregisterToolExecutionIntercept(name) })
+	for _, number := range []string{"18446744073709551615", "18446744073709551616", "1.00000000000000011102230246251565404236316680908203125", "1e-07", "3e+23", "-0.0", "5e-324"} {
+		test.Run(number, func(test *testing.T) {
+			execute := func(option ToolCallOption) json.RawMessage {
+				observed = nil
+				_, failure := ToolCallExecute(name, json.RawMessage(`{}`), func(arguments json.RawMessage) (ToolExecutionResult, error) {
+					return ToolExecutionResult{Result: arguments}, nil
+				}, option)
+				if failure != nil {
+					test.Fatal(failure)
+				}
+				if observed == nil {
+					test.Fatal("intercept did not run")
+				}
+				return bytes.Clone(observed)
+			}
+			raw := `{"data":{"number":` + number + `}}`
+			expected := execute(WithToolExecutionContext(json.RawMessage(raw)))
+			actual := execute(WithToolExecutionContext(json.RawMessage(strings.Repeat(" ", 1_048_576) + raw)))
+			if !bytes.Equal(actual, expected) {
+				test.Fatalf("raw normalized number changed: %s != %s", actual, expected)
+			}
+			typed := ApplicationExecutionContext{Data: map[string]json.RawMessage{
+				"number": json.RawMessage(strings.Repeat(" ", 1_048_576) + number),
+			}}
+			actual = execute(WithApplicationExecutionContext(&typed))
+			if !bytes.Equal(actual, expected) {
+				test.Fatalf("typed normalized number changed: %s != %s", actual, expected)
+			}
+		})
+	}
+}
+
+func TestApplicationContextPaddedConstructionAndApplicationAllocationsStayBounded(test *testing.T) {
+	longValue := json.RawMessage("1." + strings.Repeat("0", 1_048_576))
+	for name, construct := range map[string]func() ToolCallOption{
+		"raw-whitespace": func() ToolCallOption {
+			return WithToolExecutionContext(json.RawMessage(strings.Repeat(" ", 1_048_576) + `{}`))
+		},
+		"typed-number": func() ToolCallOption {
+			return WithApplicationExecutionContext(&ApplicationExecutionContext{Data: map[string]json.RawMessage{"number": longValue}})
+		},
+	} {
+		// Construct fixtures before measurement; only option work is charged.
+		if name == "raw-whitespace" {
+			input := json.RawMessage(strings.Repeat(" ", 1_048_576) + `{}`)
+			construct = func() ToolCallOption { return WithToolExecutionContext(input) }
+		}
+		test.Run(name, func(test *testing.T) {
+			measured := testing.Benchmark(func(benchmark *testing.B) {
+				for benchmark.Loop() {
+					retainedReviewContextOption = construct()
+				}
+			})
+			if measured.AllocedBytesPerOp() > 64*1024 {
+				test.Fatalf("construction allocated %d bytes/op", measured.AllocedBytesPerOp())
+			}
+			option := construct()
+			var accepted toolCallOptions
+			option(&accepted)
+			if accepted.executionContextError != nil {
+				test.Fatal(accepted.executionContextError)
+			}
+			if len(accepted.executionContext) > maximumApplicationContextBytes {
+				test.Fatal("typed option retained oversized representation")
+			}
+			measured = testing.Benchmark(func(benchmark *testing.B) {
+				for benchmark.Loop() {
+					var options toolCallOptions
+					option(&options)
+					if options.executionContextError != nil {
+						benchmark.Fatal(options.executionContextError)
+					}
+					if len(options.executionContext) > maximumApplicationContextBytes {
+						benchmark.Fatal("unbounded application")
+					}
+				}
+			})
+			if measured.AllocedBytesPerOp() > 64*1024 {
+				test.Fatalf("application allocated %d bytes/op", measured.AllocedBytesPerOp())
+			}
+		})
+	}
+}
+
+func TestApplicationContextOversizedNumericTokensFailWithoutGoCopies(test *testing.T) {
+	number := json.RawMessage(strings.Repeat("9", 1_048_576))
+	raw := json.RawMessage(`{"data":{"number":` + string(number) + `}}`)
+	typed := ApplicationExecutionContext{Data: map[string]json.RawMessage{"number": number}}
+	for name, construct := range map[string]func() ToolCallOption{
+		"raw":   func() ToolCallOption { return WithToolExecutionContext(raw) },
+		"typed": func() ToolCallOption { return WithApplicationExecutionContext(&typed) },
+	} {
+		test.Run(name, func(test *testing.T) {
+			measured := testing.Benchmark(func(benchmark *testing.B) {
+				for benchmark.Loop() {
+					retainedReviewContextOption = construct()
+				}
+			})
+			if measured.AllocedBytesPerOp() > 64*1024 {
+				test.Fatalf("refused number copied input: %d bytes/op", measured.AllocedBytesPerOp())
+			}
+			var refused toolCallOptions
+			retainedReviewContextOption(&refused)
+			if refused.executionContextError == nil || refused.executionContext != nil {
+				test.Fatal("out-of-range numeric input was retained")
+			}
+		})
+	}
+}

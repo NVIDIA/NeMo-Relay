@@ -49,6 +49,10 @@ def register_application_review(approval_covers_call, perform_component_review) 
     """Register a synchronous boolean trust matcher and an asynchronous reviewer.
 
     The reviewer must raise on refusal; its return value is not a decision.
+    ``perform_component_review`` checks the arguments at this middleware stage.
+    Later middleware can change them. If policy requires approval of the final
+    operation, the application must enforce that policy in the tool implementation,
+    including calls without an approval claim.
     """
 
     async def review(context, next_call):

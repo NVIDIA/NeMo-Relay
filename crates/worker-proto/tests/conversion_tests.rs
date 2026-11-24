@@ -723,3 +723,72 @@ fn content_inspection_projection_round_trips_all_typed_payloads_and_locations() 
         }
     }
 }
+
+#[test]
+fn application_execution_context_decoding_rejects_resource_limits_and_recovers() {
+    use nemo_relay_types::api::tool::ApplicationExecutionContext;
+    for (raw, expected) in [
+        (
+            format!("\"{}\"", "x".repeat(1_048_576)),
+            "16384 serialized bytes",
+        ),
+        (
+            format!("{}null{}", "[".repeat(1_100), "]".repeat(1_100)),
+            "64 container levels",
+        ),
+    ] {
+        let wire = pb::ApplicationExecutionContext {
+            data: Some(pb::JsonObject {
+                fields: [(
+                    "value".into(),
+                    pb::JsonValue {
+                        json: raw.into_bytes(),
+                    },
+                )]
+                .into(),
+            }),
+        };
+        let encoded = wire.encode_to_vec();
+        let wire = pb::ApplicationExecutionContext::decode(encoded.as_slice()).unwrap();
+        let error = decode::<ApplicationExecutionContext, _>(wire).unwrap_err();
+        assert!(error.to_string().contains(expected), "{error}");
+        assert!(!error.to_string().contains("xxxx"));
+        let valid = pb::ApplicationExecutionContext {
+            data: Some(pb::JsonObject {
+                fields: [(
+                    "value".into(),
+                    pb::JsonValue {
+                        json: b"true".to_vec(),
+                    },
+                )]
+                .into(),
+            }),
+        };
+        assert_eq!(
+            decode::<ApplicationExecutionContext, _>(valid)
+                .unwrap()
+                .to_json(),
+            json!({"data": {"value": true}})
+        );
+    }
+    let overhead = serde_json::to_vec(&json!({"data": {"value": ""}}))
+        .unwrap()
+        .len();
+    for extra in [0, 1] {
+        let wire = pb::ApplicationExecutionContext {
+            data: Some(pb::JsonObject {
+                fields: [(
+                    "value".into(),
+                    pb::JsonValue {
+                        json: serde_json::to_vec(&"x".repeat(16_384 - overhead + extra)).unwrap(),
+                    },
+                )]
+                .into(),
+            }),
+        };
+        assert_eq!(
+            decode::<ApplicationExecutionContext, _>(wire).is_ok(),
+            extra == 0
+        );
+    }
+}

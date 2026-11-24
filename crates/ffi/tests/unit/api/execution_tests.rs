@@ -1427,3 +1427,118 @@ fn execution_context_accepts_c_boundary_whitespace_and_escaped_values() {
         nemo_relay_scope_stack_free(stack);
     }
 }
+
+#[test]
+fn application_context_normalization_validates_borrowed_buffers_and_budgets() {
+    use std::ffi::CStr;
+    use std::ptr;
+    unsafe {
+        let mut output = ptr::null_mut();
+        for input in [
+            b"{}\0{}".as_slice(),
+            b"\xff",
+            b"{} {}",
+            b"NaN",
+            b"{\"data\":null}",
+        ] {
+            let status = nemo_relay_application_execution_context_normalize_json(
+                input.as_ptr(),
+                input.len(),
+                &mut output,
+            );
+            assert_ne!(status, NemoRelayStatus::Ok);
+            assert!(output.is_null());
+        }
+        let padded = format!("{}{{}}", " ".repeat(1_048_576));
+        assert_eq!(
+            nemo_relay_application_execution_context_normalize_json(
+                padded.as_ptr(),
+                padded.len(),
+                &mut output
+            ),
+            NemoRelayStatus::Ok
+        );
+        assert_eq!(CStr::from_ptr(output).to_bytes(), b"{}");
+        nemo_relay_string_free(output);
+        output = ptr::null_mut();
+        assert_eq!(
+            nemo_relay_application_execution_context_normalize_json(ptr::null(), 0, &mut output),
+            NemoRelayStatus::InvalidArg
+        );
+        assert!(output.is_null());
+        assert_eq!(
+            nemo_relay_application_execution_context_normalize_json(
+                b"{}".as_ptr(),
+                usize::MAX,
+                &mut output
+            ),
+            NemoRelayStatus::InvalidArg
+        );
+        assert_eq!(
+            nemo_relay_application_execution_context_normalize_json(
+                b"{}".as_ptr(),
+                2,
+                ptr::null_mut()
+            ),
+            NemoRelayStatus::NullPointer
+        );
+    }
+}
+
+#[test]
+fn application_context_normalization_validates_value_budgets_and_depth() {
+    use std::ffi::CStr;
+    use std::ptr;
+    unsafe {
+        let mut output = ptr::null_mut();
+        let value = br#""\u0000""#;
+        assert_eq!(
+            nemo_relay_application_execution_context_value_normalize_json(
+                value.as_ptr(),
+                value.len(),
+                8,
+                &mut output
+            ),
+            NemoRelayStatus::Ok
+        );
+        assert_eq!(CStr::from_ptr(output).to_bytes(), value);
+        nemo_relay_string_free(output);
+        for budget in [0, 7, 16_385] {
+            output = ptr::null_mut();
+            assert_eq!(
+                nemo_relay_application_execution_context_value_normalize_json(
+                    value.as_ptr(),
+                    value.len(),
+                    budget,
+                    &mut output
+                ),
+                NemoRelayStatus::InvalidArg
+            );
+            assert!(output.is_null());
+        }
+        let value = format!("1.{}", "0".repeat(1_048_576));
+        assert_eq!(
+            nemo_relay_application_execution_context_value_normalize_json(
+                value.as_ptr(),
+                value.len(),
+                3,
+                &mut output
+            ),
+            NemoRelayStatus::Ok
+        );
+        assert_eq!(CStr::from_ptr(output).to_bytes(), b"1.0");
+        nemo_relay_string_free(output);
+        let deep = format!("{}null{}", "[".repeat(63), "]".repeat(63));
+        output = ptr::null_mut();
+        assert_eq!(
+            nemo_relay_application_execution_context_value_normalize_json(
+                deep.as_ptr(),
+                deep.len(),
+                16_384,
+                &mut output
+            ),
+            NemoRelayStatus::InvalidArg
+        );
+        assert!(output.is_null());
+    }
+}

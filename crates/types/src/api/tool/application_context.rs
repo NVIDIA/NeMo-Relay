@@ -94,6 +94,19 @@ impl ApplicationExecutionContext {
         Ok(())
     }
 
+    /// Validate owned context and release rejected application values without recursion.
+    pub fn into_validated(mut self) -> Result<Self, ApplicationExecutionContextError> {
+        if let Err(error) = self.validate() {
+            if let Some(fields) = self.data.take() {
+                for value in fields.into_values() {
+                    drop_json_iteratively(value);
+                }
+            }
+            return Err(error);
+        }
+        Ok(self)
+    }
+
     /// Return the concrete JSON envelope, including application-owned data.
     #[must_use]
     pub fn to_json(&self) -> Json {
@@ -119,7 +132,10 @@ impl TryFrom<Json> for ApplicationExecutionContext {
     type Error = ApplicationExecutionContextError;
 
     fn try_from(value: Json) -> Result<Self, Self::Error> {
-        Self::validate_json(&value)?;
+        if let Err(error) = Self::validate_json(&value) {
+            drop_json_iteratively(value);
+            return Err(error);
+        }
         let raw: RawApplicationExecutionContext = serde_json::from_value(value)
             .map_err(|_| ApplicationExecutionContextError::InvalidSchema)?;
         Ok(Self { data: raw.data })
@@ -203,4 +219,91 @@ fn validate_serialized_size(
             ApplicationExecutionContextError::InvalidSchema
         }
     })
+}
+
+fn drop_json_iteratively(value: Json) {
+    let mut pending = vec![value];
+    while let Some(value) = pending.pop() {
+        match value {
+            Json::Array(values) => pending.extend(values),
+            Json::Object(fields) => pending.extend(fields.into_values()),
+            _ => {}
+        }
+    }
+}
+
+/// Check JSON byte and depth lower bounds before decoding application context.
+///
+/// This scans borrowed bytes without allocating a JSON tree. Callers must still
+/// parse JSON and validate the complete context to enforce syntax and exact size.
+/// `parent_depth` includes enclosing containers; the context root is level one.
+pub fn preflight_context_json(
+    input: &[u8],
+    parent_depth: usize,
+    remaining_bytes: &mut usize,
+) -> Result<(), ApplicationExecutionContextError> {
+    if parent_depth > 64 {
+        return Err(ApplicationExecutionContextError::TooDeep);
+    }
+    let mut depth = parent_depth;
+    let mut quoted = false;
+    let mut index = 0;
+    while let Some(&byte) = input.get(index) {
+        index += 1;
+        let charge = if quoted {
+            match byte {
+                b'"' => {
+                    quoted = false;
+                    0
+                }
+                b'\\' => match input.get(index) {
+                    Some(b'u') => {
+                        index = index.saturating_add(5);
+                        1
+                    }
+                    Some(b'/') => {
+                        index += 1;
+                        1
+                    }
+                    Some(_) => {
+                        index += 1;
+                        2
+                    }
+                    None => 0,
+                },
+                _ => 1,
+            }
+        } else {
+            match byte {
+                b' ' | b'\n' | b'\r' | b'\t' => 0,
+                b'"' => {
+                    quoted = true;
+                    2
+                }
+                b'{' | b'[' => {
+                    depth += 1;
+                    if depth > 64 {
+                        return Err(ApplicationExecutionContextError::TooDeep);
+                    }
+                    1
+                }
+                b'}' | b']' => {
+                    depth = depth.saturating_sub(1);
+                    1
+                }
+                b'-' | b'0'..=b'9' => {
+                    // Numeric spelling can be longer than the decoded value.
+                    while input.get(index).is_some_and(|byte| {
+                        matches!(byte, b'0'..=b'9' | b'.' | b'e' | b'E' | b'+' | b'-')
+                    }) {
+                        index += 1;
+                    }
+                    1
+                }
+                _ => 1,
+            }
+        };
+        charge_context_budget(remaining_bytes, charge)?;
+    }
+    Ok(())
 }

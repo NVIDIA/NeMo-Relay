@@ -535,3 +535,66 @@ fn execution_options_select_stages_and_preserve_results_and_lifecycle() {
     });
     reset_global();
 }
+
+#[test]
+fn execution_context_mutated_deep_rejection_survives_and_recovers() {
+    use crate::api::registry::register_tool_execution_intercept;
+    use nemo_relay_types::api::tool::ApplicationExecutionContext;
+    use std::sync::atomic::{AtomicUsize, Ordering};
+    const CHILD: &str = "NEMO_RELAY_MUTATED_CONTEXT_DROP_CHILD";
+    if std::env::var_os(CHILD).is_none() {
+        let test_name = std::thread::current().name().unwrap().to_owned();
+        let output = std::process::Command::new(std::env::current_exe().unwrap())
+            .args(["--exact", &test_name, "--nocapture"])
+            .env(CHILD, "1")
+            .output()
+            .unwrap();
+        assert!(
+            output.status.success(),
+            "child failed: {}\n{}",
+            String::from_utf8_lossy(&output.stdout),
+            String::from_utf8_lossy(&output.stderr)
+        );
+        return;
+    }
+    let _guard = lock_global_runtime();
+    reset_global();
+    let calls = Arc::new(AtomicUsize::new(0));
+    let intercepted = calls.clone();
+    register_tool_execution_intercept(
+        "deep-context-refusal",
+        0,
+        Arc::new(move |context, next| {
+            intercepted.fetch_add(1, Ordering::SeqCst);
+            Box::pin(async move { Ok(next(context.args().clone()).await?.into()) })
+        }),
+    )
+    .unwrap();
+    let mut nested = Json::Null;
+    for _ in 0..262_144 {
+        nested = Json::Array(vec![nested]);
+    }
+    let mut context = ApplicationExecutionContext::default();
+    context.data = Some([("value".into(), nested)].into());
+    tokio::runtime::Builder::new_current_thread().enable_all().build().unwrap().block_on(async {
+        let outcome = tool_call_execute(ToolCallExecuteParams::builder()
+            .name("invalid-deep-context").args(Json::Null).execution_context(context)
+            .func(Arc::new(|_| Box::pin(async { panic!("rejected context reached tool") })))
+            .build()).await;
+        assert!(matches!(outcome, Err(FlowError::InvalidArgument(ref message)) if message.contains("64 container levels")));
+        assert_eq!(calls.load(Ordering::SeqCst), 0);
+        let tool_calls = Arc::new(AtomicUsize::new(0));
+        let executed = tool_calls.clone();
+        let result = tool_call_execute(ToolCallExecuteParams::builder()
+            .name("valid-after-refusal").args(json!({"recovered": true}))
+            .execution_context(json!({"data": {}}).try_into().unwrap())
+            .func(Arc::new(move |_| {
+                    executed.fetch_add(1, Ordering::SeqCst);
+                    Box::pin(async move { Ok(json!({"executed": true}).into()) })
+                }))
+            .build()).await.unwrap();
+        assert_eq!(result.result, json!({"executed": true}));
+        assert_eq!(tool_calls.load(Ordering::SeqCst), 1);
+        assert_eq!(calls.load(Ordering::SeqCst), 1);
+    });
+}

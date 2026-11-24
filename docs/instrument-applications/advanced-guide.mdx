@@ -256,6 +256,9 @@ inside `data` may be any JSON value. In particular, the validity of a field name
 `host_approval` belongs to the application and its middleware, not Relay's
 transport validator.
 
+These limits bound accepted context values. Node.js property-name enumeration
+can allocate a key list before validation rejects a wide object.
+
 The entire context, including `data`, must serialize to at most **16 KiB** of
 UTF-8 JSON and contain at most **64 nested container levels**. The root object
 counts as level 1, `data` as level 2, and each nested object or array adds one
@@ -322,6 +325,11 @@ payload's required fields, numeric version and prohibition of a separate
 host/source and exact tool/arguments. A supplied claim that fails either check
 is refused without calling normal review. Relay prescribes neither the payload
 schema nor the underlying receipt or signature format.
+
+`perform_component_review` checks the arguments at this middleware stage.
+Later middleware can change them. If policy requires approval of the final
+operation, the application must enforce that policy in the tool implementation,
+including calls without an approval claim.
 
 The wrapper rechecks the receipt at callback entry, before calling
 `implementation`. If the implementation waits before writing or committing an

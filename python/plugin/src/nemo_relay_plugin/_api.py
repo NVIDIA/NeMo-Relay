@@ -1020,6 +1020,10 @@ def _validate_application_execution_context(value: object) -> ApplicationExecuti
 
 def _application_execution_context_from_proto(value: Any) -> ApplicationExecutionContext:
     """Decode Relay's concrete context without interpreting application data."""
+    try:
+        _protocol.preflight_application_execution_context(value)
+    except ValueError as error:
+        raise WorkerSdkError(str(error)) from error
     if value.HasField("data"):
         return {"data": _decode_payload(value.data, "tool execution context data")}
     return {}

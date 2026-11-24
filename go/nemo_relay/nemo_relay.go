@@ -278,6 +278,8 @@ extern int32_t nemo_relay_capture_propagation_context_with_root_json(const char*
 extern int32_t nemo_relay_capture_traceparent(char** out);
 extern int32_t nemo_relay_propagation_context_to_traceparent(const char* context_json, char** out);
 extern int32_t nemo_relay_propagation_context_normalize_json(const char* context_json, char** out);
+extern int32_t nemo_relay_application_execution_context_normalize_json(const uint8_t*, uintptr_t, char**);
+extern int32_t nemo_relay_application_execution_context_value_normalize_json(const uint8_t*, uintptr_t, uintptr_t, char**);
 extern int32_t nemo_relay_scope_stack_create(const char* context_json, FfiScopeStack** out);
 extern int32_t nemo_relay_scope_stack_set_thread(const FfiScopeStack* stack);
 extern int32_t nemo_relay_scope_stack_capture_thread(FfiThreadScopeStackBinding** out);
@@ -1277,8 +1279,16 @@ func WithToolExecutionContext(context json.RawMessage) ToolCallOption {
 	var snapshot []byte
 	var failure error
 	if context != nil {
+		if len(context) > maximumApplicationContextBytes {
+			failure = checkContextInputBudget(context, 0)
+			if failure == nil {
+				context, failure = normalizeApplicationContext(context)
+			}
+		}
 		remaining := maximumApplicationContextBytes
-		failure = validateContextBudget(context, 0, &remaining)
+		if failure == nil {
+			failure = validateContextBudget(context, 0, &remaining)
+		}
 		if failure == nil {
 			var checked ApplicationExecutionContext
 			failure = json.Unmarshal(context, &checked)
@@ -1293,6 +1303,34 @@ func WithToolExecutionContext(context json.RawMessage) ToolCallOption {
 		o.executionContextError = failure
 		o.hasExecutionContext = true
 	}
+}
+
+func normalizeApplicationContext(input []byte) (json.RawMessage, error) {
+	var output *C.char
+	failure := callStatus(func() C.int32_t {
+		return C.nemo_relay_application_execution_context_normalize_json(
+			(*C.uint8_t)(unsafe.Pointer(unsafe.SliceData(input))), C.uintptr_t(len(input)), &output)
+	})
+	runtime.KeepAlive(input)
+	if failure != nil {
+		return nil, failure
+	}
+	defer C.nemo_relay_string_free(output)
+	return json.RawMessage(C.GoString(output)), nil
+}
+
+func normalizeApplicationContextValue(input []byte, remaining int) (json.RawMessage, error) {
+	var output *C.char
+	failure := callStatus(func() C.int32_t {
+		return C.nemo_relay_application_execution_context_value_normalize_json(
+			(*C.uint8_t)(unsafe.Pointer(unsafe.SliceData(input))), C.uintptr_t(len(input)), C.uintptr_t(remaining), &output)
+	})
+	runtime.KeepAlive(input)
+	if failure != nil {
+		return nil, failure
+	}
+	defer C.nemo_relay_string_free(output)
+	return json.RawMessage(C.GoString(output)), nil
 }
 
 // WithApplicationExecutionContext snapshots typed application context for managed

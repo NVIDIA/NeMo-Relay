@@ -887,11 +887,10 @@ pub async fn tool_call_execute(params: ToolCallExecuteParams) -> Result<ToolExec
         execution_options,
         execution_context: host_execution_context,
     } = params;
-    if let Some(value) = &host_execution_context {
-        value
-            .validate()
-            .map_err(|error| FlowError::InvalidArgument(error.to_string()))?;
-    }
+    let host_execution_context = host_execution_context
+        .map(ApplicationExecutionContext::into_validated)
+        .transpose()
+        .map_err(|error| FlowError::InvalidArgument(error.to_string()))?;
     ensure_runtime_owner()?;
     if execution_options.conditional_execution {
         let (entries, subscribers, parent_uuid, guardrail_metadata) = {

@@ -4538,3 +4538,115 @@ def test_context_snapshot_translates_integer_conversion_limit() -> None:
             ToolExecutionContext("integer-conversion", {}, execution_context={"data": {"value": 10**700}})
     finally:
         sys.set_int_max_str_digits(original_limit)
+
+
+async def test_context_wire_limits_reject_before_callbacks_and_recover_over_grpc() -> None:
+    seen = []
+
+    class ContextBudgetPlugin(WorkerPlugin):
+        plugin_id = "tests.context_budget"
+
+        def register(self, ctx: PluginContext, config: Json) -> None:
+            async def execute(context: ToolExecutionContext, next_call: ToolNext):
+                seen.append(context.execution_context)
+                return ToolExecutionInterceptOutcome(result=context.execution_context)
+
+            ctx.register_tool_execution_intercept("context_budget", execute)
+
+    server = grpc.aio.server()
+    port = server.add_insecure_port("127.0.0.1:0")
+    assert port != 0
+    channel = grpc.aio.insecure_channel(f"127.0.0.1:{port}")
+    runtime = PluginRuntime(
+        activation_id=ACTIVATION_ID,
+        auth_token=AUTH_TOKEN,
+        host_stub=plugin_api.host_grpc.RelayHostRuntimeServiceStub(channel),
+    )
+    service = _WorkerService(ContextBudgetPlugin(), runtime, asyncio.Event())
+    plugin_api.worker_grpc.add_PluginWorkerServiceServicer_to_server(service, server)
+    await server.start()
+    stub = plugin_api.worker_grpc.PluginWorkerServiceStub(channel)
+    try:
+        registered = await stub.Register(_register_request(plugin_id="tests.context_budget"), timeout=5)
+        assert not registered.HasField("error")
+
+        async def invoke(raw: bytes | dict[str, bytes]):
+            fields = raw if isinstance(raw, dict) else {"value": raw}
+            request = _invoke_request(
+                "context_budget",
+                common_pb.REGISTRATION_SURFACE_TOOL_EXECUTION_INTERCEPT,
+                tool=_ToolPayload(
+                    tool_name="context_budget",
+                    value=common_pb.JsonValue(json=b"{}"),
+                    execution_context=runtime_pb.ApplicationExecutionContext(
+                        data=common_pb.JsonObject(
+                            fields={key: common_pb.JsonValue(json=value) for key, value in fields.items()}
+                        )
+                    ),
+                ),
+            )
+            return await stub.Invoke(request, timeout=5)
+
+        for raw, expected in [
+            (b'"' + b"x" * 1_048_576 + b'"', "16384 serialized bytes"),
+            (b"[" * 1_100 + b"null" + b"]" * 1_100, "64 container levels"),
+            ({str(index): b"null" for index in range(20_000)}, "16384 serialized bytes"),
+        ]:
+            before = len(seen)
+            with pytest.raises(grpc.aio.AioRpcError) as refused:
+                await invoke(raw)
+            assert refused.value.code() == grpc.StatusCode.INVALID_ARGUMENT
+            assert expected in refused.value.details()
+            assert len(seen) == before
+            response = await invoke(b"true")
+            assert not response.HasField("error")
+            assert seen[-1] == {"data": {"value": True}}
+            assert len(seen) == before + 1
+
+        overhead = len(b'{"data":{"value":""}}')
+        await invoke(b'"' + b"x" * (16_384 - overhead) + b'"')
+        assert len(seen[-1]["data"]["value"]) == 16_384 - overhead
+        with pytest.raises(grpc.aio.AioRpcError, match="16384 serialized bytes"):
+            await invoke(b'"' + b"x" * (16_384 - overhead + 1) + b'"')
+        escaped = b'"' + b"\\u0061" * 3_000 + b'"'
+        assert not (await invoke(escaped)).HasField("error")
+        assert seen[-1] == {"data": {"value": "a" * 3_000}}
+        before = len(seen)
+        exact_refusal = await invoke(b'"' + b"\\u0000" * 3_000 + b'"')
+        assert exact_refusal.error.code == "worker.sdk_error"
+        assert "16384 serialized bytes" in exact_refusal.error.message
+        assert len(seen) == before
+        assert not (await invoke(b"true")).HasField("error")
+        for levels in [64, 65]:
+            raw = b"[" * (levels - 2) + b"null" + b"]" * (levels - 2)
+            if levels == 64:
+                assert not (await invoke(raw)).HasField("error")
+            else:
+                with pytest.raises(grpc.aio.AioRpcError, match="64 container levels"):
+                    await invoke(raw)
+    finally:
+        await channel.close()
+        await server.stop(0)
+
+
+def test_context_wire_preflight_avoids_materializing_oversized_json() -> None:
+    import tracemalloc
+
+    raw = b'"' + b"x" * 1_048_576 + b'"'
+    value = runtime_pb.ApplicationExecutionContext(
+        data=common_pb.JsonObject(
+            fields={
+                "value": common_pb.JsonValue(json=raw),
+            }
+        )
+    )
+    tracemalloc.start()
+    try:
+        with pytest.raises(WorkerSdkError, match="16384 serialized bytes"):
+            plugin_api._application_execution_context_from_proto(value)
+        _, peak = tracemalloc.get_traced_memory()
+    finally:
+        tracemalloc.stop()
+    # A protobuf field can expose an owned bytes buffer; no decoded megabyte
+    # string or copied context may be added on top of that wire representation.
+    assert peak < len(raw) + 256 * 1024

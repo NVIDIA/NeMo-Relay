@@ -3630,6 +3630,40 @@ NemoRelayStatus nemo_relay_tool_call_end(const struct FfiToolHandle *handle,
                                          const int64_t *timestamp_unix_micros);
 
 /**
+ * Normalize application context from borrowed UTF-8 bytes to bounded JSON.
+ *
+ * Validates the complete context before returning an owned JSON string of at
+ * most 16 KiB. Does not require runtime initialization. The caller must release
+ * the result with `nemo_relay_string_free`. On failure, `out` is set to null.
+ *
+ * # Safety
+ * `input` must be readable for `input_length` bytes for this call; the library
+ * does not retain it. `out` must be non-null and writable. The input length
+ * must not exceed `isize::MAX`.
+ */
+NemoRelayStatus nemo_relay_application_execution_context_normalize_json(const uint8_t *input,
+                                                                        uintptr_t input_length,
+                                                                        char **out);
+
+/**
+ * Normalize one application-data value within the enclosing context budget.
+ *
+ * `maximum_serialized_bytes` must be between one and 16384. The context root
+ * and its data object count as two enclosing containers. The caller charges
+ * envelope, key and separator bytes separately. On failure, `out` is null.
+ * Release a successful result with `nemo_relay_string_free`.
+ *
+ * # Safety
+ * `input` must be readable for `input_length` bytes during this call, with
+ * length at most `isize::MAX`. `out` must be non-null and writable. The library
+ * does not retain the borrowed input.
+ */
+NemoRelayStatus nemo_relay_application_execution_context_value_normalize_json(const uint8_t *input,
+                                                                              uintptr_t input_length,
+                                                                              uintptr_t maximum_serialized_bytes,
+                                                                              char **out);
+
+/**
  * Execute a tool call end-to-end with an optional external tool call ID.
  *
  * This runs conditional-execution guardrails (on raw args), then request
