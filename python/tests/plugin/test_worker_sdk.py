@@ -66,6 +66,7 @@ from nemo_relay_plugin._api import (  # noqa: E402
     _decode_json_value,
     _decode_required_envelope,
     _grpc_target,
+    _is_pipe,
     _json_envelope,
     _json_value,
     _open_host_channel,
@@ -3470,28 +3471,48 @@ async def test_serve_plugin_closes_resources_when_server_start_fails(monkeypatch
 
 async def test_host_liveness_watcher_reports_eof(monkeypatch: pytest.MonkeyPatch) -> None:
     read_fd, write_fd = os.pipe()
-    host_lost = asyncio.Event()
+    shutdown_event = asyncio.Event()
     forced_exit = plugin_api.threading.Event()
     monkeypatch.setattr(plugin_api.os, "_exit", lambda code: forced_exit.set())
+    monkeypatch.setattr(plugin_api, "_HOST_LOSS_EXIT_DELAY_SECONDS", 0.0)
+    watcher = plugin_api._start_host_liveness_watcher(read_fd, asyncio.get_running_loop(), shutdown_event)
     try:
-        plugin_api._start_host_liveness_watcher(
-            read_fd,
-            asyncio.get_running_loop(),
-            host_lost,
-        )
         await asyncio.sleep(0)
-        assert not host_lost.is_set()
+        assert not shutdown_event.is_set()
         os.write(write_fd, b"x")
         await asyncio.sleep(0)
-        assert not host_lost.is_set()
+        assert not shutdown_event.is_set()
         os.close(write_fd)
         write_fd = -1
-        await asyncio.wait_for(host_lost.wait(), timeout=1)
-        assert await asyncio.to_thread(forced_exit.wait, 3)
+        await asyncio.wait_for(shutdown_event.wait(), timeout=1)
+        assert await asyncio.to_thread(forced_exit.wait, 1)
     finally:
-        os.close(read_fd)
         if write_fd >= 0:
             os.close(write_fd)
+        await asyncio.to_thread(watcher.join, 5)
+        assert not watcher.is_alive()
+        os.close(read_fd)
+
+
+async def test_host_liveness_watcher_setup_failure_propagates(monkeypatch: pytest.MonkeyPatch) -> None:
+    def failing_dup(descriptor: int) -> int:
+        raise OSError(f"cannot duplicate descriptor {descriptor}")
+
+    monkeypatch.setattr(plugin_api.os, "dup", failing_dup)
+    with pytest.raises(OSError, match="cannot duplicate descriptor 0"):
+        plugin_api._start_host_liveness_watcher(0, asyncio.get_running_loop(), asyncio.Event())
+    assert all(thread.name != "nemo-relay-host-liveness" for thread in plugin_api.threading.enumerate())
+
+
+def test_is_pipe_distinguishes_pipes_from_devices() -> None:
+    read_fd, write_fd = os.pipe()
+    null_fd = os.open(os.devnull, os.O_RDONLY)
+    try:
+        assert _is_pipe(read_fd)
+        assert not _is_pipe(null_fd)
+    finally:
+        for descriptor in (read_fd, write_fd, null_fd):
+            os.close(descriptor)
 
 
 async def test_serve_plugin_stops_and_closes_resources_on_confirmed_host_loss(
@@ -3522,13 +3543,13 @@ async def test_serve_plugin_stops_and_closes_resources_on_confirmed_host_loss(
     def start_host_liveness_watcher(
         descriptor: int,
         loop: asyncio.AbstractEventLoop,
-        detected: asyncio.Event,
+        shutdown_event: asyncio.Event,
     ) -> None:
         assert descriptor == 0
 
         async def notify() -> None:
             await host_lost.wait()
-            detected.set()
+            shutdown_event.set()
 
         loop.create_task(notify())
 
@@ -3541,11 +3562,11 @@ async def test_serve_plugin_stops_and_closes_resources_on_confirmed_host_loss(
     monkeypatch.setattr(plugin_api.pb_grpc, "RelayDiagnosticsStub", lambda channel: object())
     monkeypatch.setattr(plugin_api.pb_grpc, "add_PluginWorkerServicer_to_server", lambda service, server: None)
     monkeypatch.setattr(plugin_api, "_start_host_liveness_watcher", start_host_liveness_watcher)
+    monkeypatch.setattr(plugin_api, "_is_pipe", lambda descriptor: descriptor == 0)
     monkeypatch.setenv("NEMO_RELAY_WORKER_SOCKET", "tcp://127.0.0.1:0")
     monkeypatch.setenv("NEMO_RELAY_HOST_SOCKET", "http://127.0.0.1:9")
     monkeypatch.setenv("NEMO_RELAY_WORKER_ID", ACTIVATION_ID)
     monkeypatch.setenv("NEMO_RELAY_WORKER_TOKEN", AUTH_TOKEN)
-    monkeypatch.setenv("NEMO_RELAY_HOST_LIVENESS_FD", "0")
 
     task = asyncio.create_task(serve_plugin(AllSurfacesPlugin()))
     await asyncio.sleep(0)

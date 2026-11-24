@@ -671,10 +671,7 @@ async fn short_sessions_reuse_initializing_worker_and_capture_later_call() {
     let mut daemon = IdleDaemon::start(10).await;
     let first = daemon.mcp().await;
     daemon.entered().await;
-    #[cfg(unix)]
-    first.terminate().await;
-    #[cfg(windows)]
-    first.finish().await;
+    first.cancel().await;
     wait_until("initiating MCP disconnect transition", || {
         daemon
             .logs

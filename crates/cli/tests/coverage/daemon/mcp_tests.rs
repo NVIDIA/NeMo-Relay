@@ -20,7 +20,8 @@ fn pending_worker_child_fixture() {
 
 async fn pending_worker_fixture() -> (ActivationChild, SocketAddr) {
     use tokio::io::AsyncBufReadExt as _;
-    let mut child = Command::new(std::env::current_exe().unwrap())
+    let mut command = Command::new(std::env::current_exe().unwrap());
+    command
         .args([
             "--exact",
             "daemon::mcp::tests::pending_worker_child_fixture",
@@ -28,16 +29,15 @@ async fn pending_worker_fixture() -> (ActivationChild, SocketAddr) {
         ])
         .env("NEMO_RELAY_TEST_PENDING_WORKER_FIXTURE", "1")
         .stdin(std::process::Stdio::piped())
-        .stdout(std::process::Stdio::piped())
-        .spawn()
-        .unwrap();
+        .stdout(std::process::Stdio::piped());
+    #[cfg(unix)]
+    command.process_group(0);
+    let mut child = command.spawn().unwrap();
     let stdout = child.stdout.take().unwrap();
     let child = ActivationChild {
-        child: child.into(),
+        child: WorkerChild::try_from(child).unwrap(),
         published: false,
         publication_uncertain: false,
-        tree_owned: false,
-        tree_id: None,
     };
     let address = tokio::time::timeout(Duration::from_secs(10), async {
         let mut lines = tokio::io::BufReader::new(stdout).lines();
@@ -833,25 +833,23 @@ async fn launcher_sees_its_published_worker_exit() {
 
 /// A child that has already exited, standing in for a crashed worker.
 async fn exited_worker_child() -> ActivationChild {
-    let mut child = Command::new(std::env::current_exe().unwrap())
+    let mut command = Command::new(std::env::current_exe().unwrap());
+    command
         .args(["--exact", "daemon::mcp::tests::no_such_test"])
         .stdout(std::process::Stdio::null())
-        .stderr(std::process::Stdio::null())
-        .spawn()
-        .unwrap();
-    tokio::time::timeout(Duration::from_secs(10), async {
-        while child.try_wait().unwrap().is_none() {
-            tokio::time::sleep(Duration::from_millis(20)).await;
-        }
-    })
-    .await
-    .expect("the stand-in worker exits");
+        .stderr(std::process::Stdio::null());
+    #[cfg(unix)]
+    command.process_group(0);
+    let mut child = WorkerChild::try_from(command.spawn().unwrap()).unwrap();
+    child
+        .wait_for_exit(Duration::from_secs(10))
+        .await
+        .unwrap()
+        .expect("the stand-in worker exits");
     ActivationChild {
-        child: child.into(),
+        child,
         published: true,
         publication_uncertain: false,
-        tree_owned: false,
-        tree_id: None,
     }
 }
 

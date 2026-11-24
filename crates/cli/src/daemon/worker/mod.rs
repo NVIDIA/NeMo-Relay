@@ -35,7 +35,6 @@ pub(crate) async fn run(
     options: Options,
     prepared: Option<&crate::configuration::PreparedConfig>,
 ) -> Result<(), CliError> {
-    retain_activation_job()?;
     let daemon_origin = explicit_daemon_origin(&options.daemon_address)?;
     let bootstrap = read_bootstrap().await?;
     let bind = validate_bootstrap(&options, &bootstrap)?;
@@ -102,33 +101,6 @@ pub(crate) async fn run(
         },
     )
     .await
-}
-
-#[cfg(windows)]
-fn retain_activation_job() -> Result<(), CliError> {
-    use windows_sys::Win32::Foundation::{HANDLE, HANDLE_FLAG_INHERIT, SetHandleInformation};
-
-    let Some(raw) = std::env::var_os("NEMO_RELAY_WORKER_JOB_HANDLE") else {
-        return Ok(());
-    };
-    let raw = raw
-        .to_str()
-        .and_then(|value| value.parse::<usize>().ok())
-        .filter(|value| *value != 0)
-        .ok_or_else(|| CliError::Launch("invalid inherited worker Job Object handle".into()))?;
-    let handle = raw as HANDLE;
-    // The launcher whitelisted this inherited Job Object handle. Keep it open for the worker
-    // lifetime, but prevent plugin descendants from inheriting it and defeating kill-on-close.
-    // SAFETY: `handle` names the live inherited Job Object in this process.
-    if unsafe { SetHandleInformation(handle, HANDLE_FLAG_INHERIT, 0) } == 0 {
-        return Err(CliError::Io(std::io::Error::last_os_error()));
-    }
-    Ok(())
-}
-
-#[cfg(not(windows))]
-fn retain_activation_job() -> Result<(), CliError> {
-    Ok(())
 }
 
 async fn read_bootstrap() -> Result<WorkerBootstrap, CliError> {

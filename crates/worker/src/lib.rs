@@ -24,7 +24,6 @@ pub mod diagnostics;
 use std::cell::RefCell;
 use std::collections::{BTreeMap, BTreeSet, HashMap, HashSet};
 use std::future::Future;
-use std::io::Read;
 use std::net::{SocketAddr, ToSocketAddrs};
 #[cfg(unix)]
 use std::os::unix::fs::FileTypeExt;
@@ -148,6 +147,7 @@ pub type JsonStream = Pin<Box<dyn tokio_stream::Stream<Item = Result<Json>> + Se
 const JSON_SCHEMA: &str = "nemo.relay.Json@1";
 const DATA_SCHEMA_SCHEMA: &str = "nemo.relay.DataSchema@1";
 const LLM_REQUEST_SCHEMA: &str = "nemo.relay.LlmRequest@1";
+const HOST_LOSS_EXIT_DELAY: std::time::Duration = std::time::Duration::from_secs(2);
 
 tokio::task_local! {
     static TASK_SCOPE_CONTEXT: Option<ScopeContext>;
@@ -1878,7 +1878,8 @@ impl LlmStreamNext {
 ///
 /// # Errors
 /// Returns an error when required worker environment variables are missing,
-/// `NEMO_RELAY_WORKER_MAX_MESSAGE_BYTES` is invalid, or the gRPC server fails.
+/// `NEMO_RELAY_WORKER_MAX_MESSAGE_BYTES` is invalid, standard input cannot be
+/// inspected, or the gRPC server fails.
 pub async fn serve_plugin(plugin: impl WorkerPlugin) -> Result<()> {
     serve_plugin_arc(Arc::new(plugin)).await
 }
@@ -1887,7 +1888,8 @@ pub async fn serve_plugin(plugin: impl WorkerPlugin) -> Result<()> {
 ///
 /// # Errors
 /// Returns an error when required worker environment variables are missing,
-/// `NEMO_RELAY_WORKER_MAX_MESSAGE_BYTES` is invalid, or the gRPC server fails.
+/// `NEMO_RELAY_WORKER_MAX_MESSAGE_BYTES` is invalid, standard input cannot be
+/// inspected, or the gRPC server fails.
 pub async fn serve_plugin_arc(plugin: Arc<dyn WorkerPlugin>) -> Result<()> {
     let config = WorkerServerConfig {
         worker_endpoint: required_env("NEMO_RELAY_WORKER_SOCKET")?,
@@ -1899,9 +1901,42 @@ pub async fn serve_plugin_arc(plugin: Arc<dyn WorkerPlugin>) -> Result<()> {
         plugin,
         config,
         optional_env("NEMO_RELAY_WORKER_ENDPOINT_FILE").map(PathBuf::from),
-        optional_env("NEMO_RELAY_HOST_LIVENESS_FD").as_deref() == Some("0"),
+        stdin_is_host_pipe()?,
     )
     .await
+}
+
+#[cfg(unix)]
+fn stdin_is_host_pipe() -> Result<bool> {
+    use std::os::fd::AsFd;
+
+    let inspect_error = |error: std::io::Error| {
+        WorkerSdkError::Transport(format!("failed to inspect standard input: {error}"))
+    };
+    let stdin = std::io::stdin();
+    let descriptor = stdin.as_fd().try_clone_to_owned().map_err(inspect_error)?;
+    let metadata = std::fs::File::from(descriptor)
+        .metadata()
+        .map_err(inspect_error)?;
+    Ok(metadata.file_type().is_fifo())
+}
+
+#[cfg(windows)]
+fn stdin_is_host_pipe() -> Result<bool> {
+    use std::os::windows::io::AsRawHandle;
+    use windows_sys::Win32::Storage::FileSystem::{FILE_TYPE_PIPE, FILE_TYPE_UNKNOWN, GetFileType};
+
+    // SAFETY: The standard input handle is borrowed for this query.
+    let file_type = unsafe { GetFileType(std::io::stdin().as_raw_handle()) };
+    if file_type == FILE_TYPE_UNKNOWN {
+        let error = std::io::Error::last_os_error();
+        if error.raw_os_error() != Some(0) {
+            return Err(WorkerSdkError::Transport(format!(
+                "failed to inspect standard input: {error}"
+            )));
+        }
+    }
+    Ok(file_type == FILE_TYPE_PIPE)
 }
 
 /// Serves a shared worker plugin using explicit endpoint and authentication configuration.
@@ -1945,20 +1980,10 @@ async fn serve_plugin_arc_with_endpoint_file(
         std::thread::Builder::new()
             .name("nemo-relay-host-liveness".into())
             .spawn(move || {
-                let mut stdin = std::io::stdin().lock();
-                let mut buffer = [0_u8; 1];
-                loop {
-                    match stdin.read(&mut buffer) {
-                        Ok(0) | Err(_) => {
-                            let _ = shutdown.send(true);
-                            std::thread::sleep(std::time::Duration::from_secs(2));
-                            // Host death must stop a worker even when plugin code blocks a Tokio
-                            // executor thread or runtime teardown after the server future returns.
-                            std::process::exit(0);
-                        }
-                        Ok(_) => {}
-                    }
-                }
+                let _ = std::io::copy(&mut std::io::stdin(), &mut std::io::sink());
+                shutdown.send_replace(true);
+                std::thread::sleep(HOST_LOSS_EXIT_DELAY);
+                std::process::exit(0);
             })
             .map_err(|error| {
                 WorkerSdkError::Transport(format!(
@@ -2052,14 +2077,7 @@ async fn serve_tcp_worker_service(
 }
 
 async fn wait_for_worker_shutdown(mut shutdown: watch::Receiver<bool>) {
-    if *shutdown.borrow() {
-        return;
-    }
-    while shutdown.changed().await.is_ok() {
-        if *shutdown.borrow() {
-            return;
-        }
-    }
+    let _ = shutdown.wait_for(|stop| *stop).await;
 }
 
 /// Applies the runtime's execution limit to both sides of the worker service.
@@ -2643,7 +2661,7 @@ impl PluginWorker for WorkerService {
         if let Some(diagnostics) = self.runtime.diagnostics.get() {
             let _ = diagnostics.close(std::time::Duration::from_secs(2)).await;
         }
-        let _ = self.shutdown.send(true);
+        self.shutdown.send_replace(true);
         Ok(Response::new(WorkerAck {
             accepted: true,
             message: if request.reason.is_empty() {

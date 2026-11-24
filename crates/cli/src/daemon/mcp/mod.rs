@@ -396,55 +396,77 @@ fn optional_environment(name: &str) -> Result<Option<String>, CliError> {
 }
 
 enum WorkerChild {
-    Local(Child),
+    Local {
+        child: Child,
+        #[cfg(unix)]
+        process_group: libc::pid_t,
+    },
     #[cfg(windows)]
     Detached {
         child: crate::process::detached::DetachedChild,
         stdin: Option<tokio::fs::File>,
     },
 }
-impl From<Child> for WorkerChild {
-    fn from(child: Child) -> Self {
-        Self::Local(child)
+impl TryFrom<Child> for WorkerChild {
+    type Error = std::io::Error;
+
+    fn try_from(child: Child) -> Result<Self, Self::Error> {
+        #[cfg(unix)]
+        let process_group = child.id().ok_or_else(|| {
+            std::io::Error::other("worker exited before its process group was recorded")
+        })? as libc::pid_t;
+        Ok(Self::Local {
+            child,
+            #[cfg(unix)]
+            process_group,
+        })
     }
 }
 impl WorkerChild {
-    fn id(&self) -> Option<u32> {
-        match self {
-            Self::Local(child) => child.id(),
-            #[cfg(windows)]
-            Self::Detached { child, .. } => Some(child.id()),
-        }
-    }
     fn try_wait(&mut self) -> std::io::Result<Option<std::process::ExitStatus>> {
         match self {
-            Self::Local(child) => child.try_wait(),
+            Self::Local { child, .. } => child.try_wait(),
             #[cfg(windows)]
             Self::Detached { child, .. } => child.try_wait(),
         }
     }
     fn start_kill(&mut self) -> std::io::Result<()> {
         match self {
-            Self::Local(child) => child.start_kill(),
+            #[cfg(unix)]
+            Self::Local { process_group, .. } => {
+                // SAFETY: The worker called `setsid` before exec, so its PID is the process-group
+                // ID. A negative PID addresses that group and does not dereference memory.
+                if unsafe { libc::kill(-*process_group, libc::SIGKILL) } == 0 {
+                    return Ok(());
+                }
+                let error = std::io::Error::last_os_error();
+                if error.raw_os_error() == Some(libc::ESRCH) {
+                    return Ok(());
+                }
+                Err(error)
+            }
+            #[cfg(not(unix))]
+            Self::Local { child } => child.start_kill(),
             #[cfg(windows)]
             Self::Detached { child, .. } => child.start_kill(),
         }
     }
-    async fn wait_for_exit(&mut self, timeout: Duration) -> std::io::Result<bool> {
-        let deadline = tokio::time::Instant::now() + timeout;
-        loop {
-            if self.try_wait()?.is_some() {
-                return Ok(true);
-            }
-            if tokio::time::Instant::now() >= deadline {
-                return Ok(false);
-            }
-            tokio::time::sleep(Duration::from_millis(20)).await;
+    async fn wait_for_exit(
+        &mut self,
+        timeout: Duration,
+    ) -> std::io::Result<Option<std::process::ExitStatus>> {
+        match self {
+            Self::Local { child, .. } => match tokio::time::timeout(timeout, child.wait()).await {
+                Ok(status) => status.map(Some),
+                Err(_) => Ok(None),
+            },
+            #[cfg(windows)]
+            Self::Detached { child, .. } => child.wait_for_exit(timeout).await,
         }
     }
     fn take_stdin(&mut self) -> Option<std::pin::Pin<Box<dyn tokio::io::AsyncWrite + Send>>> {
         match self {
-            Self::Local(child) => child.stdin.take().map(|stdin| Box::pin(stdin) as _),
+            Self::Local { child, .. } => child.stdin.take().map(|stdin| Box::pin(stdin) as _),
             #[cfg(windows)]
             Self::Detached { stdin, .. } => stdin.take().map(|stdin| Box::pin(stdin) as _),
         }
@@ -457,8 +479,6 @@ struct ActivationChild {
     child: WorkerChild,
     published: bool,
     publication_uncertain: bool,
-    tree_owned: bool,
-    tree_id: Option<u32>,
 }
 
 struct WorkerActivationError {
@@ -478,43 +498,25 @@ impl WorkerActivationError {
 impl Drop for ActivationChild {
     fn drop(&mut self) {
         if !self.published && !self.publication_uncertain {
-            self.start_force_cleanup();
+            let _ = self.child.start_kill();
         }
     }
 }
 
 impl ActivationChild {
-    fn start_force_cleanup(&mut self) {
-        #[cfg(unix)]
-        if self.tree_owned
-            && let Some(id) = self.tree_id
-        {
-            // The launched worker called `setsid`, so its PID owns this activation's process group.
-            // SAFETY: A negative PID addresses that process group and does not dereference memory.
-            if unsafe { libc::kill(-(id as i32), libc::SIGKILL) } == 0 {
-                return;
-            }
-        }
-        let _ = self.child.start_kill();
-    }
-
     async fn force_cleanup(&mut self) -> std::io::Result<()> {
-        #[cfg(windows)]
-        if self.tree_owned
-            && let WorkerChild::Detached { child, .. } = &mut self.child
-        {
-            crate::process::detached::terminate_tree(child);
-            return Ok(());
+        self.child.start_kill()?;
+        match self.child.wait_for_exit(ACTIVATION_CLEANUP_GRACE).await? {
+            Some(_) => Ok(()),
+            None => Err(std::io::Error::new(
+                std::io::ErrorKind::TimedOut,
+                "worker did not exit after its process tree was killed",
+            )),
         }
-        self.start_force_cleanup();
-        let _ = self.child.wait_for_exit(ACTIVATION_CLEANUP_GRACE).await?;
-        Ok(())
     }
 
     async fn graceful_cleanup(&mut self) -> std::io::Result<()> {
-        let _ = self.child.wait_for_exit(ACTIVATION_CLEANUP_GRACE).await?;
-        // The process-group or Job Object can outlive its leader. Sweep it even when the Relay
-        // worker exited during the grace period so a partially initialized plugin cannot remain.
+        self.child.wait_for_exit(ACTIVATION_CLEANUP_GRACE).await?;
         self.force_cleanup().await
     }
 }
@@ -826,7 +828,7 @@ async fn launch_worker(
     #[cfg(not(windows))]
     let spawn = {
         let mut command = command;
-        command.spawn().map(WorkerChild::from)
+        command.spawn().and_then(WorkerChild::try_from)
     };
     #[cfg(windows)]
     let spawn = crate::process::detached::inherited_stderr()
@@ -856,13 +858,10 @@ async fn launch_worker(
                 error,
             )
         })?;
-    let tree_id = child.id();
     let mut child = ActivationChild {
         child,
         published: false,
         publication_uncertain: false,
-        tree_owned: true,
-        tree_id,
     };
     let transfer = async {
         let mut stdin = child

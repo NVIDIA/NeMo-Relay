@@ -1273,7 +1273,6 @@ fn spawn_worker_process(spec: WorkerProcessLaunch<'_>) -> crate::plugin::Result<
         .env("NEMO_RELAY_PLUGIN_ID", spec.plugin_id)
         .env("NEMO_RELAY_WORKER_SOCKET", spec.worker_endpoint)
         .env("NEMO_RELAY_HOST_SOCKET", spec.host_endpoint)
-        .env("NEMO_RELAY_HOST_LIVENESS_FD", "0")
         .env("NEMO_RELAY_WORKER_TOKEN", spec.auth_token)
         .env(
             WORKER_MAX_MESSAGE_BYTES_ENV,
@@ -1284,8 +1283,6 @@ fn spawn_worker_process(spec: WorkerProcessLaunch<'_>) -> crate::plugin::Result<
             serde_json::to_string(&spec.max_message_bytes.by_name)
                 .map_err(|e| PluginError::Internal(e.to_string()))?,
         )
-        // The host retains the write end. EOF on descriptor 0 is a definitive host-death signal
-        // for SDKs that opt into NEMO_RELAY_HOST_LIVENESS_FD.
         .stdin(Stdio::piped())
         .stdout(Stdio::null())
         .stderr(Stdio::inherit());

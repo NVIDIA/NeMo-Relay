@@ -28,3 +28,6 @@ tokio = { workspace = true, default-features = true, features = ["macros", "net"
 tokio-stream = { workspace = true, default-features = true, features = ["net", "sync"] }
 tonic = { workspace = true, features = ["codegen", "router", "transport"] }
 tower = { workspace = true, features = ["util"] }
+
+[target.'cfg(windows)'.dependencies]
+windows-sys = { workspace = true, features = ["Win32_Foundation", "Win32_Storage_FileSystem"] }
