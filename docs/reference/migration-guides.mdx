@@ -1,103 +1,367 @@
 ---
 title: "Migration Guides"
-description: "Migrate worker plugins and managed Claude bundles to NeMo Relay 1.0.0, or review the 0.11.0 upgrade."
+description: "Upgrade applications, plugins, and coding-agent deployments to NeMo Relay 1.0.0."
 position: 6
 ---
 {/* SPDX-FileCopyrightText: Copyright (c) 2026, NVIDIA CORPORATION & AFFILIATES. All rights reserved.
 SPDX-License-Identifier: Apache-2.0 */}
 
-Use this page to migrate worker plugins and managed Claude bundles to NeMo Relay
-1.0.0, or review the upgrade from NeMo Relay 0.10.0 to 0.11.0.
+Use this guide to upgrade from NeMo Relay 0.11 to 1.0.0. Start with the
+packages and then follow the sections for the features you use. If you
+are upgrading from 0.10, first review the
+[0.11.0 upgrade steps](#upgrade-to-nemo-relay-0110).
 
-The historical 0.11.0 guide below includes fixes from the 0.10
-patch releases. Configuration changes from earlier patch upgrades still apply.
+## Update Packages and Rust Imports
 
-Start with the package updates. Then review the sections for the features you use.
+**What changed.** The `nemo-relay` crate now exposes the public Rust SDK
+through modules such as `llm`, `tool`, `scope`, and `middleware`. Runtime
+internals and built-in components moved into their own crates. Shared
+contracts live in `nemo-relay-types`. Plugin authoring APIs live in
+`nemo-relay-plugin`.
 
-## Update OpenAI Response Redaction Policies
+**How to migrate.** Update the Relay packages you use and rebuild your app.
+Replace old `nemo_relay::api::...` imports with the matching public SDK
+modules. If you use component-specific types, add the crate that owns them.
+For example, use `nemo-relay-observability` for observability types and
+`nemo-relay-model-pricing` for pricing types. Keep the SDK and related
+Relay crates on the same release. The old `nemo_relay::observability`
+module moved to `nemo_relay_observability`. For runtime composition, use
+the public initialization and plugin APIs. Node.js apps also need the package
+updates described in the next section. Refer to the
+[Installation guide](/getting-started/installation).
 
-OpenAI Chat and OpenAI Responses codecs now represent a response containing a
-refusal as a list of typed parts, including when the refusal is an empty string.
-Text-only responses still expose a string at `/message`. Existing string
-actions selecting `/message` also sanitize the text and refusal fields in these
-OpenAI response parts. The `remove` action still removes the selected message.
+**Validate.** Run `cargo check --all-targets` for each affected Rust project.
+Start the app with its normal configuration and confirm that the built-in
+plugins you use are active.
 
-To sanitize only text or only refusals while retaining the rest of a multipart
-response, set `action = "mask"` and select `/message/*/text` or
-`/message/*/refusal` in `target_path_globs`. The default `remove` action deletes
-the matched field. Each typed part requires its text or refusal field, so the
-sanitizer omits the entire published response when that field is removed. Refer to the
-[request and response configuration example](/configure-plugins/pii-redaction/configuration#targeting-and-composition).
+## Update Node.js Imports and JSON Types
+
+**What changed.** The `nemo-relay-node` package now ships compiled TypeScript
+wrappers. The native binding is internal. TypeScript projects need version
+5.7 or later. Public types enforce JSON-compatible values and require a
+JSON object for model request headers and log fields. Resource metrics
+snapshots are read-only. The native binding now targets Node-API 8.
+Callback errors keep their original message. When an operation and
+its cleanup both fail, Relay can return an `AggregateError`. Invalid
+callbacks fail at registration or call time. General JSON inputs
+are limited to 128 levels of nesting.
+
+**How to migrate.** Import from `nemo-relay-node` and its public subpaths,
+such as `nemo-relay-node/typed` and `nemo-relay-node/plugin`. Replace imports
+that point inside the package. Upgrade TypeScript and use Node.js 24.13.1 or
+later. Convert unsupported values, such as `bigint` or functions, before
+passing them to Relay. Use plain objects for request headers and log
+fields. Copy a metrics collection before changing it. Replace
+imports of `JsLlmCodecIdentity` with `LlmCodecIdentity` from
+`nemo-relay-node/plugin`. Update error handlers that look for
+an added message prefix.
+Check `AggregateError.errors` when a call reports multiple failures.
+
+**Validate.** Run `npx tsc --noEmit` in your app. From a clean install,
+load the public imports and run a managed call and a log call.
+Confirm that non-object headers return `InvalidArg`. Test a callback
+that throws and a stream that also fails during cleanup. Confirm that
+your app reports both errors.
+
+## Update Managed Tool and Model Calls
+
+**What changed.** Rust call parameters now carry execution options and
+optional app context. Execution options control which middleware stages run.
+App context supplies data to execution intercepts for the current call.
+Relay uses distinct context types for tool calls and model calls. The Python,
+Node.js, and Go helpers expose context as an optional input.
+
+**How to migrate.** In Rust, update struct literals for
+`ToolCallExecuteParams`, `LlmCallExecuteParams`, and
+`LlmStreamCallExecuteParams`. Use `execution_options: ExecutionOptions::default()`
+to run all stages and `execution_context: None` to omit context. You can also
+use the builders, which set these defaults. When you supply context,
+put app fields inside the optional `data` object. Execution intercepts
+can read the data and apply their own trust rules. C callers must also
+update their function arguments. Refer to [Rebuild C and Go Consumers](#rebuild-c-and-go-consumers).
+
+**Validate.** Build your app and run a tool call, a non-streaming model call,
+and a streaming model call. With default options, confirm that all configured
+stages run. If you pass context, check that the current intercept reads its
+`data` object and that a nested call starts without context of its own.
+Try an invalid envelope or a context that exceeds 16 KiB of serialized
+JSON or 64 object and array levels. Confirm that Relay rejects the call
+before it runs middleware or calls the tool or provider. For stage settings, refer to
+[Configure Execution Stages per Call](/instrument-applications/advanced-guide#configure-execution-stages-per-call).
+
+## Rebuild C and Go Consumers
+
+**What changed.** The experimental C interface now has one public signature
+per operation. Relay removed versioned exports and alternate constructors.
+Execution, stream registration, event emission, exporter constructors, and
+the layout of `NemoRelayLlmExecutionContext` changed. Go now uses concrete
+request and telemetry types and explicit stream sources.
+
+**How to migrate.** For C, update callers to the signatures in the matching
+`nemo_relay.h`. Use `nemo_relay_codec_new(provider, callbacks)` to create
+codecs. Set unused optional callbacks to `NULL`. Pass
+`execution_context_json` immediately before `cancellation` in
+`nemo_relay_tool_call_execute`, `nemo_relay_llm_call_execute`, and
+`nemo_relay_llm_stream_call_execute`. Pass `NULL` to omit context, or
+pass a JSON object such as `{"data":{"request_id":"example"}}`.
+
+Use `nemo_relay_string_clone` to allocate strings that a callback returns
+to Relay. Relay takes ownership of transferred callback state when the call
+starts, including calls that fail validation. Use the supplied capabilities
+inside owned callbacks. Run scope changes, managed calls and stream control,
+general registration, flush, and shutdown outside those callbacks.
+
+For Go, make these updates before you rebuild.
+
+- Replace `LLMRequestDTO` and the old pointer-backed wrapper with
+  `LLMRequest`. Read `Headers` and `Content` as fields.
+  `NewLLMRequest` takes two `json.RawMessage` arguments and returns
+  `(LLMRequest, error)`.
+- Register providers and intercepts with `LLMStreamExecutionFunc` and
+  `LLMStreamExecutionInterceptFunc`. Return an `LLMStreamSource`, or
+  adapt a single-value callback with `.AsStream()`.
+- Update `CollectorFunc` to return `error`. Update `FinalizerFunc` to
+  return `(json.RawMessage, error)`. Handle both read and close errors.
+- Use `json.Number` for `MetricMeasurement.Value` and
+  `map[string]json.RawMessage` for its attributes. Use the concrete pointer
+  types for cache-miss reason and diagnosis. Update function references for
+  `WithLLMCodec`, which takes `RequestCodec`, and `NewAtifExporter`,
+  which takes variadic options.
+
+**Validate.** Compile and link all C consumers against the new header and
+library. Run `go test ./...` in affected Go projects. Exercise regular
+completion, cancellation, and early stream close. Confirm that cleanup
+runs and errors reach the caller. Refer to the
+[C header](https://github.com/NVIDIA/NeMo-Relay/blob/main/crates/ffi/nemo_relay.h)
+and [Go binding guide](https://github.com/NVIDIA/NeMo-Relay/blob/main/go/nemo_relay/README.md).
+
+## Rebuild Native Plugins
+
+**What changed.** The 1.0.0 native plugin interface replaces the 0.11
+binary contract with a checked `v1.0` contract. The tool invocation and
+model context records also gained app context during 1.0.0 development.
+Relay rejects binaries built against the earlier record layouts, even
+when the development builds use the same contract label.
+
+**How to migrate.** Update to the SDK that matches your target host.
+Use the `Plugin` trait and the async registration API. Export the plugin
+with `nemo_relay_plugin!`. Set `compat.native_api = "v1.0"` and use
+`load.library` in your manifest. Remove `load.symbol`. Rebuild the library,
+regenerate the artifact digests, and reinstall the bundle. Refer to
+[Build Native Plugins](/build-plugins/native/about).
+
+**Validate.** Run `nemo-relay plugins validate <plugin-id>` and confirm
+that the plugin activates on the target host. Run each callback you use.
+For execution intercepts that read app context, test a call without
+context and one with an explicit empty `data` object.
 
 ## Migrate Worker Plugins to NeMo Relay 1.0.0
 
-Upgrade the Rust host, `nemo-relay-worker`, and Python `nemo-relay-plugin` together.
-The active protocol is `nvidia.nemo.relay.worker.v1`, contract version `1.0.0`.
-Crate and wheel releases follow the Relay package version. The contract has its
-own version. Follow these steps to migrate a worker:
+**What changed.** The old `grpc-v1` schema has been replaced by
+`nvidia.nemo.relay.worker.v1`, contract version `1.0.0`. In development
+builds that already use the new contract, the same version label now also
+covers tool and model app context. An older worker can drop that data.
 
-1. Rebuild SDK workers or regenerate custom bindings from
+**How to migrate.** Upgrade the host and the `nemo-relay-worker` or
+`nemo-relay-plugin` SDK together. Follow these steps to replace each worker.
+
+1. Rebuild the worker or regenerate custom bindings from
    `crates/worker-proto/proto/nvidia/nemo/relay/worker/v1/`.
-2. Set `compat.worker_protocol = "nvidia.nemo.relay.worker.v1"` in each worker
+2. Set `compat.worker_protocol = "nvidia.nemo.relay.worker.v1"` in its
    manifest and declare `compat.relay = ">=1.0.0,<2.0"`.
-3. Recalculate artifact digests, reinstall workers, and validate activation.
+3. Recalculate the artifact digests. Remove an incompatible registration
+   with `nemo-relay plugins remove <plugin-id>` and install the new bundle.
 
-Workers with an unsupported protocol remain inspectable and removable. Their
-compatibility status is invalid. They do not block other plugin commands.
-Run `nemo-relay plugins remove <plugin-id>` to remove the old registration, then
-reinstall the rebuilt worker. Unsupported workers cannot be newly registered or
-enabled. Validation refreshes do not clear their invalid compatibility status.
-Their manifests and handshakes must use the current protocol.
+Custom workers must update service names, credentials, and message types.
+Use the protobuf `oneof` to select the callback and run schema validation
+before invoking it. Preserve the distinction between omitted context, `{}`, and
+`{"data":{}}`. Return `no_context` when a snapshot has no
+bound scope stack. Use standard gRPC status codes for runtime failures.
+Refer to the [Worker Protocol reference](/build-plugins/workers/grpc-v1-protocol).
 
-Custom workers must use the new service names, credentials, request types, and
-response types. Each invocation selects one callback type through a protobuf
-`oneof`. Run the schema validation rules before executing callbacks. Use JSON
-only for open application and provider values.
+**Validate.** Run `nemo-relay plugins validate <plugin-id>` and confirm
+activation. Exercise each registered callback. For tool and model execution
+intercepts, test calls with omitted context, an empty envelope, an empty `data`
+object, and populated context.
 
-A `no_context` snapshot result means no scope stack is bound. A missing result
-alternative is invalid. Runtime failures use standard gRPC status codes.
+## Replace Managed Coding Agent Bundles
 
-The old `grpc-v1` schema and generated bindings have been removed. Historical
-definitions remain in Git history, and no automatic adapter is provided. Refer to the
-[gRPC protocol reference](/build-plugins/workers/grpc-v1-protocol) for the contract.
+**What changed.** The generated Claude Code, Codex, and Pi bundles changed.
+Relay checks their exact content and rejects older bundles. Review the
+changes for each agent you deploy.
 
-## Update Managed Claude Bundles for NeMo Relay 1.0.0
+- **Claude Code.** The 0.11.1 bundle adds `StopFailure` to record failed
+  turns. The 1.0.0 bundle also enables request-class hints. Relay uses
+  those hints to keep internal calls from changing the main turn's output.
+- **Codex.** Relay requires `codex-cli` 0.150.0 or later. The new bundle
+  adds `SessionEnd` and `Interrupt` hooks to close interrupted turns.
+- **Pi.** Relay requires Pi 1.6.0 or later. The new bundle changes provider
+  routing, preserves nested tool calls, and adds lifecycle and dialog
+  timing. The canonical bundle also changes when policy-denial termination
+  is disabled.
 
-Generated Claude settings now enable gateway hints by default. Previously
-generated Claude bundles no longer match canonical validation. Generate a
-replacement in a new directory, redeploy it, and provision its new trusted
-digest separately. Refresh does not rewrite existing bundles. Follow
-[Distribute Immutable Managed Settings](/daemon/configuration#distribute-immutable-managed-settings)
-for the generation and validation commands. Pi-only bundles are unaffected.
-Codex bundles change too; see the next section.
+**How to migrate.** Upgrade Codex and Pi before upgrading Relay. To update
+personal Relay-managed integrations, run `nemo-relay integrations refresh`.
+For a managed deployment, generate a bundle in a new directory using the
+same daemon address, dispatcher, platform, and agents. Deploy it and
+provision the new SHA-256 digest separately. Update the launch paths,
+including Pi's `-e` path and Claude's plugin and settings paths.
+Use the generation and validation commands in
+[Distribute Immutable Managed Settings](/daemon/configuration#distribute-immutable-managed-settings).
 
-## Update Codex and Managed Codex Bundles for NeMo Relay 1.0.0
+**Validate.** Run `nemo-relay doctor --managed-bundle` with the replacement
+bundle and the deployment's validation options. Launch each agent with the
+new settings. Check that Claude API failures close the turn with an error,
+Codex interruption closes its turn, and Pi records the parent ID on a nested
+tool call. If you enable `NEMO_RELAY_PI_TERMINATE_ON_DENY=1`, test a batch
+in which policy denies every tool. Check that Pi stops automatic follow-up.
+Refer to [Pi](/nemo-relay-cli/pi) for routing and policy behavior.
 
-NeMo Relay now requires `codex-cli` 0.150.0 or newer and registers the Codex
-`SessionEnd` and `Interrupt` hooks. Upgrade Codex before upgrading Relay; Relay
-rejects older Codex versions at launch.
+## Update OpenAI Response Redaction Policies
 
-Refresh personal Relay-managed Codex integrations so they register both hooks:
+**What changed.** Rust's `system_prompt()`, `last_user_message()`, and
+`response_text()` return `Option<Cow<'_, str>>`. Text helpers now join
+eligible text and refusal parts from the selected item. OpenAI responses
+with a refusal use typed parts at `/message`, including empty refusals.
+Text-only OpenAI responses still use a string there.
 
-```bash
-nemo-relay integrations refresh
-```
+**How to migrate.** In Rust, keep the result in a variable and call
+`.as_deref()` to borrow it. Use `.map(Cow::into_owned)` to keep an owned
+string. Update consumers of OpenAI annotations to handle both a string
+and a list of parts. To mask only text or only refusals, set
+`action = "mask"` and select `/message/*/text` or `/message/*/refusal`
+in `target_path_globs`. Removing a required field causes Relay to omit
+the exported response. Refer to
+[Migrate Existing Text Helpers](/integrate-into-frameworks/provider-codecs#migrate-existing-text-helpers).
 
-To refresh only Codex, run `nemo-relay install codex --force`. Do not
-regenerate managed daemon bundles with personal install commands.
+**Validate.** Check a text-only response, a response with an empty
+refusal, and a response with multiple parts. Inspect the exported data
+and confirm that the selected parts are masked.
 
-Generated Codex bundles now include both hooks, so previously generated bundles
-containing Codex no longer match canonical validation. Generate a replacement in
-a new directory, redeploy it, and provision its new trusted digest separately.
-Refresh does not rewrite existing bundles. Follow
-[Distribute Immutable Managed Settings](/daemon/configuration#distribute-immutable-managed-settings)
-for the generation and validation commands. Claude-only and Pi-only bundles are
-unaffected by this change.
+## Update Recursive Redaction Selectors and Custom Codecs
+
+**What changed.** A whole `**` segment in `target_path_globs` matches zero
+or more path segments. A pattern such as `/metadata/**` can select the
+container and all its contents. Custom codecs must now opt in to edits
+of normalized data. Relay omits the affected telemetry payload when the
+codec cannot perform the requested edit or provide a clean projection.
+
+**How to migrate.** To match a key named `**`, use an exact pointer such
+as `target_paths = ["/metadata/**"]`. If a pattern combined other wildcards
+with that literal key, list the exact paths. Review policies that remove
+whole objects. For a custom Rust codec, expose the needed request or
+response redaction capabilities. For a source-preserving custom Python
+request codec, set `supports_request_redaction = True`. Refer to
+[Redaction Configuration](/configure-plugins/pii-redaction/configuration) and
+[Codec-Owned Redaction in Rust](/integrate-into-frameworks/provider-codecs#codec-owned-redaction-in-rust).
+
+**Validate.** Test the policy on nested objects and arrays, including a
+literal `**` key if you use one. Inspect the exported payload. Confirm
+that edits affect only the intended data and that Relay omits a payload
+when the codec cannot safely apply a required edit.
+
+## Update Adaptive Prompt Analysis
+
+**What changed.** Rust's `BlockContentType` adds `StructuredInput` and
+`Opaque`. Prompt analysis uses a new storage namespace for learned
+state. The upgraded analyzer starts learning from fresh samples.
+
+**How to migrate.** Update exhaustive matches to handle both variants.
+Allow upgraded agents to collect fresh samples before you rely on their
+learned estimates.
+
+**Validate.** Build the affected Rust code. Run representative prompts
+with structured data and media. Confirm that the upgraded analyzer
+records new samples.
+
+## Update Cache-Write Usage and Prices
+
+**What changed.** Normalized `Usage.cache_write_tokens` is now a list of
+counts by duration. Relay removed `cache_write_1h_tokens`. Pricing catalogs
+now use `cache_write_rates` in place of `cache_write_per_million` and
+`cache_write_1h_per_million`.
+
+**How to migrate.** Send each known duration in seconds. For example,
+`[{"count":100,"duration":3600}]` records 100 tokens for a one-hour
+write. Omit `duration` when it is unknown. Sum the counts when you need a
+total. In Rust, use `Usage::cache_write_total()`.
+
+In your pricing catalog, move the one-hour price to a
+`cache_write_rates` entry with `duration = 3600` and put the price in
+`per_million`. Use entries with explicit durations for other known prices.
+To set a fallback price, add an entry without `duration`. Relay uses
+that rate for unknown or unmatched durations. Update binding code that
+constructs pricing rates or tiers. Rust pricing rates and tiers now need
+an explicit clone where you keep a second owned value. Refer to
+[Model Pricing](/configure-plugins/model-pricing).
+
+**Validate.** Load the catalog and price a short write, a one-hour write,
+and a write with no duration. Check that each uses the expected rate and
+that a write with no matching rate or fallback leaves its cost unset.
+
+## Review GenAI Attribute Mappings and Stream Status
+
+**What changed.** The `gen_ai` OpenTelemetry projection now applies
+configured `attribute_mappings`. It can export aliases that older
+versions skipped. Native attributes take priority when a name matches. For
+`gen_ai.conversation.id`, Relay uses the propagation root when the event
+has no explicit conversation, session, or thread ID. Provider stream
+errors now mark the span as failed. A client cancellation before stream
+completion leaves the span status unset.
+
+**How to migrate.** Review the mappings on each `gen_ai` endpoint. Keep
+only the aliases you want to export. Remove mappings if you want the
+native projection alone. Use an explicit conversation ID if you need your
+own grouping key. Update dashboards and alerts that infer success from an
+HTTP `200` or count every incomplete stream as a provider failure. A
+managed stream can keep HTTP `200` even if it fails before its first event.
+Track the stream result as well as the HTTP status. Refer to
+[Attribute Mappings](/configure-plugins/observability/opentelemetry#attribute-mappings).
+
+**Validate.** Send a test trace and inspect it in your collector. Check
+that the expected aliases appear, that sensitive values stay out of the
+export, and that native values win when names match. Check that spans
+from one conversation group together. Test a provider stream failure and
+a client cancellation. Confirm that the provider failure is reported
+as an error and that the cancellation leaves span status unset.
+
+## Check Plugin Signature Policy
+
+**What changed.** `nemo-relay plugins validate` now applies the same
+signature policy as the runtime. It reports an unsigned plugin as invalid
+when the default policy applies.
+
+**How to migrate.** Sign the bundle and configure the trusted public key.
+For an unsigned bundle you explicitly trust, configure
+`attestation = "integrity_only"` for that plugin. Update automation to
+read the validation result because the command exit code alone does
+not indicate that a plugin is valid. Refer to
+[Discoverable Plugins](/configure-plugins/discoverable-plugins).
+
+**Validate.** Run `nemo-relay plugins validate <plugin-id>`. Confirm that
+the report marks the authorized bundle as valid. Check that the target
+host activates the same bundle with the same policy.
+
+## Remove Built-In NeMo Guardrails Configuration
+
+**What changed.** Relay removed the built-in `nemo_guardrails` plugin,
+including the local worker, remote backend, and CLI editor. Rust
+packages no longer offer the `guardrails-remote` Cargo feature.
+
+**How to migrate.** Remove `nemo_guardrails` entries from `plugins.toml`
+and your app's plugin configuration. Remove the Cargo feature from
+your Rust dependencies. Plan for any policy checks that depended on
+the removed plugin before you deploy.
+
+**Validate.** Build your app and run `nemo-relay doctor` with your
+deployment configuration. Check that Relay starts without an
+unknown-component error. Run the policy checks required by your
+deployment before you switch traffic to the upgraded host.
 
 ## Move the Response Cache to Its Plugin for NeMo Relay 1.0.0
 
-The opt-in LLM response cache and tool-result cache are no longer part of the
-built-in `adaptive` plugin. They now ship as the `nvidia.response_cache` native
+**What changed.** The built-in `adaptive` plugin has moved its opt-in LLM
+response cache and tool-result cache to the `nvidia.response_cache` native
 plugin, released from the
 [NeMo Relay Plugins repository](https://github.com/NVIDIA/NeMo-Relay-Plugins).
 
@@ -106,9 +370,9 @@ Validation rejects an `adaptive` component that still contains a
 `adaptive.response_cache_moved` for the `response_cache` field, so a cache you
 enabled is not silently turned off.
 
-The plugin bundle is not signed. Relay requires a signature by default, so the
-plugin needs an explicit trust rule before it can be enabled. Follow these
-steps to migrate a user installation:
+**How to migrate.** Add an explicit trust rule for the unsigned plugin
+bundle before you enable it. Follow these steps to migrate a user
+installation.
 
 1. Install the plugin from its exact NeMo Relay Plugins release tag without
    enabling it. Release tags use the `response-cache-plugin-<version>` form.
@@ -182,6 +446,10 @@ The binding helpers for the former section have been removed:
 
 Pass the plugin configuration as plain data with the `snake_case` keys
 listed above.
+
+**Validate.** Send two equivalent requests that are eligible for caching.
+Confirm that the second request reports a cache hit. If policy checks run
+before the cache, confirm that they still run on the second request.
 
 ## Upgrade to NeMo Relay 0.11.0
 
@@ -556,16 +824,6 @@ HTTP response status. Refer to
 [Worker Middleware and Continuations](/build-plugins/workers/middleware-and-continuations).
 
 ### Configuration and Deployment
-
-#### Remove Built-In NeMo Guardrails Configuration
-
-The built-in `nemo_guardrails` plugin has been removed, including its local
-Python worker, remote backend, CLI editor, and Rust `guardrails-remote`
-feature. Remove existing `nemo_guardrails` entries from `plugins.toml` and
-application plugin configuration, and remove the Cargo feature from Rust
-dependencies. Validation reports the removed kind as an unknown component,
-and enabled entries prevent plugin activation. No replacement plugin is
-included in this release.
 
 #### Review Configuration Loaded by Workers
 
