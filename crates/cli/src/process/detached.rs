@@ -46,7 +46,7 @@ fn append_quoted(command_line: &mut Vec<u16>, value: &std::ffi::OsStr) {
 }
 
 #[cfg(windows)]
-fn environment_block(command: &Command) -> Vec<u16> {
+fn environment_block(command: &Command, worker_job: Option<usize>) -> Vec<u16> {
     use std::collections::BTreeMap;
     use std::ffi::OsString;
     use std::os::windows::ffi::OsStrExt;
@@ -62,6 +62,13 @@ fn environment_block(command: &Command) -> Vec<u16> {
         } else {
             environment.remove(&key);
         }
+    }
+    if let Some(handle) = worker_job {
+        let name = OsString::from("NEMO_RELAY_WORKER_JOB_HANDLE");
+        environment.insert(
+            "NEMO_RELAY_WORKER_JOB_HANDLE".into(),
+            (name, OsString::from(handle.to_string())),
+        );
     }
     let mut block = Vec::new();
     for (_, (name, value)) in environment {
@@ -105,6 +112,58 @@ impl Drop for InheritedHandles {
     }
 }
 
+#[cfg(windows)]
+struct WorkerJob(windows_sys::Win32::Foundation::HANDLE);
+
+#[cfg(windows)]
+impl WorkerJob {
+    fn into_raw(self) -> windows_sys::Win32::Foundation::HANDLE {
+        let handle = self.0;
+        std::mem::forget(self);
+        handle
+    }
+}
+
+#[cfg(windows)]
+impl Drop for WorkerJob {
+    fn drop(&mut self) {
+        // SAFETY: This wrapper uniquely owns the Job Object handle.
+        unsafe { windows_sys::Win32::Foundation::CloseHandle(self.0) };
+    }
+}
+
+#[cfg(windows)]
+fn create_worker_job() -> std::io::Result<WorkerJob> {
+    use windows_sys::Win32::System::JobObjects::{
+        CreateJobObjectW, JOBOBJECT_EXTENDED_LIMIT_INFORMATION, JobObjectExtendedLimitInformation,
+        SetInformationJobObject,
+    };
+
+    // SAFETY: Null security attributes and name request a private, unnamed Job Object.
+    let handle = unsafe { CreateJobObjectW(std::ptr::null(), std::ptr::null()) };
+    if handle.is_null() {
+        return Err(windows_spawn_error("CreateJobObjectW worker activation"));
+    }
+    let job = WorkerJob(handle);
+    let mut limits = JOBOBJECT_EXTENDED_LIMIT_INFORMATION::default();
+    limits.BasicLimitInformation.LimitFlags = 0x0000_2000; // KILL_ON_JOB_CLOSE
+    // SAFETY: `job.0` is live and `limits` matches the requested information class.
+    if unsafe {
+        SetInformationJobObject(
+            job.0,
+            JobObjectExtendedLimitInformation,
+            std::ptr::from_ref(&limits).cast(),
+            std::mem::size_of::<JOBOBJECT_EXTENDED_LIMIT_INFORMATION>() as u32,
+        )
+    } == 0
+    {
+        return Err(windows_spawn_error(
+            "SetInformationJobObject worker activation",
+        ));
+    }
+    Ok(job)
+}
+
 #[cfg(not(windows))]
 pub(crate) type DetachedChild = Child;
 
@@ -112,6 +171,8 @@ pub(crate) type DetachedChild = Child;
 pub(crate) struct DetachedChild {
     process: windows_sys::Win32::Foundation::HANDLE,
     thread: windows_sys::Win32::Foundation::HANDLE,
+    job: Option<windows_sys::Win32::Foundation::HANDLE>,
+    job_assigned: bool,
     id: u32,
 }
 
@@ -146,6 +207,18 @@ impl DetachedChild {
     }
 
     pub(crate) fn start_kill(&mut self) -> std::io::Result<()> {
+        if let Some(job) = self.job
+            && self.job_assigned
+        {
+            // SAFETY: `job` is the private activation Job Object owned by this value.
+            if unsafe { windows_sys::Win32::System::JobObjects::TerminateJobObject(job, 1) } == 0 {
+                if self.try_wait()?.is_some() {
+                    return Ok(());
+                }
+                return Err(windows_spawn_error("TerminateJobObject worker cleanup"));
+            }
+            return Ok(());
+        }
         // SAFETY: The process handle is owned and remains live throughout this call.
         if unsafe { windows_sys::Win32::System::Threading::TerminateProcess(self.process, 1) } == 0
         {
@@ -186,6 +259,9 @@ impl Drop for DetachedChild {
 
         // SAFETY: Both handles were returned by CreateProcessW and are owned here.
         unsafe {
+            if let Some(job) = self.job {
+                CloseHandle(job);
+            }
             CloseHandle(self.thread);
             CloseHandle(self.process);
         }
@@ -199,6 +275,7 @@ fn spawn_with_handle_list(
     stdout: &std::fs::File,
     stderr: &std::fs::File,
     prefer_breakaway: bool,
+    own_process_tree: bool,
 ) -> std::io::Result<DetachedChild> {
     use std::ffi::c_void;
     use std::os::windows::io::AsRawHandle;
@@ -209,11 +286,15 @@ fn spawn_with_handle_list(
         STARTF_USESTDHANDLES, STARTUPINFOEXW, UpdateProcThreadAttribute,
     };
 
-    let handles = [
+    let mut job = own_process_tree.then(create_worker_job).transpose()?;
+    let mut handles = vec![
         stdin.as_raw_handle().cast::<c_void>(),
         stdout.as_raw_handle().cast::<c_void>(),
         stderr.as_raw_handle().cast::<c_void>(),
     ];
+    if let Some(job) = &job {
+        handles.push(job.0);
+    }
     let mut inherited = InheritedHandles(Vec::new());
     for handle in handles {
         if inherited.0.contains(&handle) {
@@ -268,7 +349,7 @@ fn spawn_with_handle_list(
         append_quoted(&mut command_line, argument);
     }
     command_line.push(0);
-    let environment = environment_block(command);
+    let environment = environment_block(command, job.as_ref().map(|job| job.0 as usize));
     let current_dir = command
         .get_current_dir()
         .map(|path| wide_nul(path.as_os_str()));
@@ -282,7 +363,10 @@ fn spawn_with_handle_list(
     startup.lpAttributeList = attribute_list.0;
     let mut process = PROCESS_INFORMATION::default();
     let (in_job, limits) = current_windows_job_limits();
-    let (creation_flags, limited_lifetime) = windows_creation_flags(in_job, limits);
+    let (mut creation_flags, limited_lifetime) = windows_creation_flags(in_job, limits);
+    if job.is_some() {
+        creation_flags |= windows_sys::Win32::System::Threading::CREATE_SUSPENDED;
+    }
     // SAFETY: Every pointer references initialized storage that remains live for this call.
     let created = unsafe {
         CreateProcessW(
@@ -307,8 +391,32 @@ fn spawn_with_handle_list(
     let mut child = DetachedChild {
         process: process.hProcess,
         thread: process.hThread,
+        job: job.take().map(WorkerJob::into_raw),
+        job_assigned: false,
         id: process.dwProcessId,
     };
+    if let Some(job) = child.job {
+        // The worker has not run yet, so no descendant can escape before assignment.
+        // SAFETY: Both handles are live and owned by `child`.
+        if unsafe {
+            windows_sys::Win32::System::JobObjects::AssignProcessToJobObject(job, child.process)
+        } == 0
+        {
+            let error = windows_spawn_error("AssignProcessToJobObject worker activation");
+            let _ = child.start_kill();
+            let _ = child.wait();
+            return Err(error);
+        }
+        child.job_assigned = true;
+        // SAFETY: `thread` is the suspended primary thread returned by CreateProcessW.
+        if unsafe { windows_sys::Win32::System::Threading::ResumeThread(child.thread) } == u32::MAX
+        {
+            let error = windows_spawn_error("ResumeThread worker activation");
+            let _ = child.start_kill();
+            let _ = child.wait();
+            return Err(error);
+        }
+    }
     if prefer_breakaway {
         let mut child_in_job = 0;
         // A nested parent job can retain the child even after breakaway from the immediate job.
@@ -352,7 +460,7 @@ pub(crate) fn spawn_detached(command: &mut Command) -> std::io::Result<DetachedC
         .unwrap_or_else(std::sync::PoisonError::into_inner);
     let stdin = std::fs::OpenOptions::new().read(true).open(r"\\.\NUL")?;
     let stdout = std::fs::OpenOptions::new().write(true).open(r"\\.\NUL")?;
-    spawn_with_handle_list(command, &stdin, &stdout, &stdout, false)
+    spawn_with_handle_list(command, &stdin, &stdout, &stdout, false, false)
 }
 
 /// Preserve redirected stderr; console handles cannot be used by a console-free worker.
@@ -434,7 +542,7 @@ pub(crate) fn spawn_worker_detached(
     let stdin = unsafe { std::fs::File::from_raw_handle(read) };
     let parent = unsafe { std::fs::File::from_raw_handle(write) };
     let stdout = std::fs::OpenOptions::new().write(true).open(r"\\.\NUL")?;
-    let child = spawn_with_handle_list(command, &stdin, &stdout, stderr, true)?;
+    let child = spawn_with_handle_list(command, &stdin, &stdout, stderr, true, true)?;
     Ok((child, parent))
 }
 
@@ -547,16 +655,13 @@ pub(crate) fn terminate_tree(child: &mut DetachedChild) {
     }
     #[cfg(windows)]
     {
-        let status = Command::new("taskkill")
-            .args(["/PID", &child.id().to_string(), "/T", "/F"])
-            .status();
-        if !status.is_ok_and(|status| status.success()) {
+        if let Err(error) = child.start_kill() {
             log::error!(
                 target: "nemo_relay.bootstrap",
                 event = "gateway_cleanup_failed",
                 process_id = child.id(),
-                reason = "taskkill_failed";
-                "Detached gateway process cleanup failed"
+                reason = "process_tree_termination_failed";
+                "Detached gateway process cleanup failed: {error}"
             );
             return;
         }

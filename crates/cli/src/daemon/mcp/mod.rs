@@ -28,6 +28,7 @@ use crate::error::CliError;
 // Includes the full two-minute legal drain plus reconciliation margin before a replacement
 // activation is issued.
 const ACTIVATION_WAIT_MAX: Duration = Duration::from_secs(150);
+const ACTIVATION_CLEANUP_GRACE: Duration = Duration::from_secs(5);
 const WORKER_ADVERTISE_ENV: &str = "NEMO_RELAY_WORKER_ADVERTISE_ADDRESS";
 const WORKER_PORT_ENV: &str = "NEMO_RELAY_WORKER_PORT";
 
@@ -408,6 +409,13 @@ impl From<Child> for WorkerChild {
     }
 }
 impl WorkerChild {
+    fn id(&self) -> Option<u32> {
+        match self {
+            Self::Local(child) => child.id(),
+            #[cfg(windows)]
+            Self::Detached { child, .. } => Some(child.id()),
+        }
+    }
     fn try_wait(&mut self) -> std::io::Result<Option<std::process::ExitStatus>> {
         match self {
             Self::Local(child) => child.try_wait(),
@@ -422,11 +430,16 @@ impl WorkerChild {
             Self::Detached { child, .. } => child.start_kill(),
         }
     }
-    async fn kill(&mut self) -> std::io::Result<()> {
-        match self {
-            Self::Local(child) => child.kill().await,
-            #[cfg(windows)]
-            Self::Detached { child, .. } => child.kill().await,
+    async fn wait_for_exit(&mut self, timeout: Duration) -> std::io::Result<bool> {
+        let deadline = tokio::time::Instant::now() + timeout;
+        loop {
+            if self.try_wait()?.is_some() {
+                return Ok(true);
+            }
+            if tokio::time::Instant::now() >= deadline {
+                return Ok(false);
+            }
+            tokio::time::sleep(Duration::from_millis(20)).await;
         }
     }
     fn take_stdin(&mut self) -> Option<std::pin::Pin<Box<dyn tokio::io::AsyncWrite + Send>>> {
@@ -444,6 +457,8 @@ struct ActivationChild {
     child: WorkerChild,
     published: bool,
     publication_uncertain: bool,
+    tree_owned: bool,
+    tree_id: Option<u32>,
 }
 
 struct WorkerActivationError {
@@ -463,8 +478,44 @@ impl WorkerActivationError {
 impl Drop for ActivationChild {
     fn drop(&mut self) {
         if !self.published && !self.publication_uncertain {
-            let _ = self.child.start_kill();
+            self.start_force_cleanup();
         }
+    }
+}
+
+impl ActivationChild {
+    fn start_force_cleanup(&mut self) {
+        #[cfg(unix)]
+        if self.tree_owned
+            && let Some(id) = self.tree_id
+        {
+            // The launched worker called `setsid`, so its PID owns this activation's process group.
+            // SAFETY: A negative PID addresses that process group and does not dereference memory.
+            if unsafe { libc::kill(-(id as i32), libc::SIGKILL) } == 0 {
+                return;
+            }
+        }
+        let _ = self.child.start_kill();
+    }
+
+    async fn force_cleanup(&mut self) -> std::io::Result<()> {
+        #[cfg(windows)]
+        if self.tree_owned
+            && let WorkerChild::Detached { child, .. } = &mut self.child
+        {
+            crate::process::detached::terminate_tree(child);
+            return Ok(());
+        }
+        self.start_force_cleanup();
+        let _ = self.child.wait_for_exit(ACTIVATION_CLEANUP_GRACE).await?;
+        Ok(())
+    }
+
+    async fn graceful_cleanup(&mut self) -> std::io::Result<()> {
+        let _ = self.child.wait_for_exit(ACTIVATION_CLEANUP_GRACE).await?;
+        // The process-group or Job Object can outlive its leader. Sweep it even when the Relay
+        // worker exited during the grace period so a partially initialized plugin cannot remain.
+        self.force_cleanup().await
     }
 }
 
@@ -481,7 +532,7 @@ fn route_activation_timed_out(started: tokio::time::Instant, directive: &BrokerD
 #[cfg(test)]
 async fn stop_pending_launch(launched: &mut PendingLaunch) -> Result<(), CliError> {
     if let Some((_, mut child, _)) = launched.take() {
-        child.child.kill().await.map_err(CliError::Io)?;
+        child.force_cleanup().await.map_err(CliError::Io)?;
     }
     Ok(())
 }
@@ -517,14 +568,19 @@ async fn cleanup_pending_launch(
             Ok(Ok(super::common::control::ActivationCancellation::Published)) => {
                 child.published = true
             }
-            Ok(Ok(_)) => child.child.kill().await.map_err(CliError::Io)?,
+            Ok(Ok(super::common::control::ActivationCancellation::Cancelled)) => {
+                child.graceful_cleanup().await.map_err(CliError::Io)?
+            }
+            Ok(Ok(super::common::control::ActivationCancellation::Superseded)) => {
+                child.force_cleanup().await.map_err(CliError::Io)?
+            }
             _ => {
                 // The broker may already own this child. Its grant/control deadline owns cleanup.
                 child.publication_uncertain = true;
             }
         }
     } else if !child.published {
-        child.child.kill().await.map_err(CliError::Io)?;
+        child.force_cleanup().await.map_err(CliError::Io)?;
     }
     Ok(child.published.then_some((activation_id, child)))
 }
@@ -800,10 +856,13 @@ async fn launch_worker(
                 error,
             )
         })?;
+    let tree_id = child.id();
     let mut child = ActivationChild {
         child,
         published: false,
         publication_uncertain: false,
+        tree_owned: true,
+        tree_id,
     };
     let transfer = async {
         let mut stdin = child
@@ -858,17 +917,12 @@ async fn launch_worker(
     }
     .await;
     if let Err(error) = transfer {
-        child
-            .child
-            .kill()
-            .await
-            .map_err(CliError::Io)
-            .map_err(|error| {
-                WorkerActivationError::new(
-                    WorkerActivationFailureReason::WorkerActivationCleanupFailed,
-                    error,
-                )
-            })?;
+        child.force_cleanup().await.map_err(|error| {
+            WorkerActivationError::new(
+                WorkerActivationFailureReason::WorkerActivationCleanupFailed,
+                CliError::Io(error),
+            )
+        })?;
         return Err(error);
     }
     child.publication_uncertain = true;

@@ -317,6 +317,7 @@ async fn cancellation_acknowledgement_matches_acceptance_after_cleanup() {
         for reason in ["", "stream abandoned"] {
             let task = tokio::spawn(std::future::pending::<()>());
             let (completion_tx, completion_rx) = watch::channel(false);
+            let (shutdown, _) = watch::channel(false);
             let service = WorkerService {
                 plugin: Arc::new(TestPlugin),
                 runtime: disconnected_runtime(),
@@ -332,6 +333,7 @@ async fn cancellation_acknowledgement_matches_acceptance_after_cleanup() {
                     },
                 )]))),
                 next_invocation_generation: Arc::new(AtomicU64::new(1)),
+                shutdown,
             };
             let cancellation = service.cancel_invocation(Request::new(CancelInvocationRequest {
                 activation_id: "activation".into(),

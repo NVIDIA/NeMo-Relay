@@ -24,6 +24,7 @@ pub mod diagnostics;
 use std::cell::RefCell;
 use std::collections::{BTreeMap, BTreeSet, HashMap, HashSet};
 use std::future::Future;
+use std::io::Read;
 use std::net::{SocketAddr, ToSocketAddrs};
 #[cfg(unix)]
 use std::os::unix::fs::FileTypeExt;
@@ -1898,6 +1899,7 @@ pub async fn serve_plugin_arc(plugin: Arc<dyn WorkerPlugin>) -> Result<()> {
         plugin,
         config,
         optional_env("NEMO_RELAY_WORKER_ENDPOINT_FILE").map(PathBuf::from),
+        optional_env("NEMO_RELAY_HOST_LIVENESS_FD").as_deref() == Some("0"),
     )
     .await
 }
@@ -1914,7 +1916,7 @@ pub async fn serve_plugin_arc_with_config(
     plugin: Arc<dyn WorkerPlugin>,
     config: WorkerServerConfig,
 ) -> Result<()> {
-    serve_plugin_arc_with_endpoint_file(plugin, config, None).await
+    serve_plugin_arc_with_endpoint_file(plugin, config, None, false).await
 }
 
 /// Validates the transport limit before constructing and serving the worker runtime.
@@ -1922,6 +1924,7 @@ async fn serve_plugin_arc_with_endpoint_file(
     plugin: Arc<dyn WorkerPlugin>,
     config: WorkerServerConfig,
     endpoint_file: Option<PathBuf>,
+    monitor_host_liveness: bool,
 ) -> Result<()> {
     let max_message_bytes = WorkerCallbackMessageLimits::default()
         .from_env_with_defaults()
@@ -1936,14 +1939,48 @@ async fn serve_plugin_arc_with_endpoint_file(
         max_message_bytes,
         conditional_middleware_callbacks: Arc::new(Mutex::new(HashMap::new())),
     };
+    let (shutdown, shutdown_receiver) = watch::channel(false);
+    if monitor_host_liveness {
+        let shutdown = shutdown.clone();
+        std::thread::Builder::new()
+            .name("nemo-relay-host-liveness".into())
+            .spawn(move || {
+                let mut stdin = std::io::stdin().lock();
+                let mut buffer = [0_u8; 1];
+                loop {
+                    match stdin.read(&mut buffer) {
+                        Ok(0) | Err(_) => {
+                            let _ = shutdown.send(true);
+                            std::thread::sleep(std::time::Duration::from_secs(2));
+                            // Host death must stop a worker even when plugin code blocks a Tokio
+                            // executor thread or runtime teardown after the server future returns.
+                            std::process::exit(0);
+                        }
+                        Ok(_) => {}
+                    }
+                }
+            })
+            .map_err(|error| {
+                WorkerSdkError::Transport(format!(
+                    "failed to start Relay host liveness watcher: {error}"
+                ))
+            })?;
+    }
     let service = WorkerService {
         plugin,
         runtime,
         handlers: Arc::new(Mutex::new(WorkerHandlers::default())),
         active_invocations: Arc::new(Mutex::new(HashMap::new())),
         next_invocation_generation: Arc::new(AtomicU64::new(1)),
+        shutdown,
     };
-    serve_worker_service(service, &config.worker_endpoint, endpoint_file.as_deref()).await
+    serve_worker_service(
+        service,
+        &config.worker_endpoint,
+        endpoint_file.as_deref(),
+        shutdown_receiver,
+    )
+    .await
 }
 
 #[cfg(unix)]
@@ -1952,6 +1989,7 @@ async fn serve_worker_service(
     service: WorkerService,
     endpoint: &str,
     endpoint_file: Option<&Path>,
+    shutdown: watch::Receiver<bool>,
 ) -> Result<()> {
     if endpoint.starts_with("unix://") {
         let path = parse_unix_endpoint(endpoint)?;
@@ -1961,11 +1999,14 @@ async fn serve_worker_service(
         })?;
         return Server::builder()
             .add_service(worker_grpc_service(service))
-            .serve_with_incoming(UnixListenerStream::new(listener))
+            .serve_with_incoming_shutdown(
+                UnixListenerStream::new(listener),
+                wait_for_worker_shutdown(shutdown),
+            )
             .await
             .map_err(|err| WorkerSdkError::Transport(err.to_string()));
     }
-    serve_tcp_worker_service(service, endpoint, endpoint_file).await
+    serve_tcp_worker_service(service, endpoint, endpoint_file, shutdown).await
 }
 
 #[cfg(not(unix))]
@@ -1973,13 +2014,14 @@ async fn serve_worker_service(
     service: WorkerService,
     endpoint: &str,
     endpoint_file: Option<&Path>,
+    shutdown: watch::Receiver<bool>,
 ) -> Result<()> {
     if endpoint.starts_with("unix://") {
         return Err(WorkerSdkError::InvalidInput(
             "unix endpoints are not supported on this platform".into(),
         ));
     }
-    serve_tcp_worker_service(service, endpoint, endpoint_file).await
+    serve_tcp_worker_service(service, endpoint, endpoint_file, shutdown).await
 }
 
 /// Publishes the resolved TCP endpoint and serves execution RPCs with finite caps.
@@ -1987,6 +2029,7 @@ async fn serve_tcp_worker_service(
     service: WorkerService,
     endpoint: &str,
     endpoint_file: Option<&Path>,
+    shutdown: watch::Receiver<bool>,
 ) -> Result<()> {
     let addr = parse_tcp_endpoint(endpoint)?;
     let listener = TcpListener::bind(addr)
@@ -2000,9 +2043,23 @@ async fn serve_tcp_worker_service(
     }
     Server::builder()
         .add_service(worker_grpc_service(service))
-        .serve_with_incoming(TcpListenerStream::new(listener))
+        .serve_with_incoming_shutdown(
+            TcpListenerStream::new(listener),
+            wait_for_worker_shutdown(shutdown),
+        )
         .await
         .map_err(|err| WorkerSdkError::Transport(err.to_string()))
+}
+
+async fn wait_for_worker_shutdown(mut shutdown: watch::Receiver<bool>) {
+    if *shutdown.borrow() {
+        return;
+    }
+    while shutdown.changed().await.is_ok() {
+        if *shutdown.borrow() {
+            return;
+        }
+    }
 }
 
 /// Applies the runtime's execution limit to both sides of the worker service.
@@ -2024,6 +2081,7 @@ struct WorkerService {
     handlers: Arc<Mutex<WorkerHandlers>>,
     active_invocations: Arc<Mutex<HashMap<String, ActiveInvocation>>>,
     next_invocation_generation: Arc<AtomicU64>,
+    shutdown: watch::Sender<bool>,
 }
 
 struct ActiveInvocation {
@@ -2585,9 +2643,14 @@ impl PluginWorker for WorkerService {
         if let Some(diagnostics) = self.runtime.diagnostics.get() {
             let _ = diagnostics.close(std::time::Duration::from_secs(2)).await;
         }
+        let _ = self.shutdown.send(true);
         Ok(Response::new(WorkerAck {
-            accepted: false,
-            message: "shutdown is not implemented by the Rust worker SDK yet".into(),
+            accepted: true,
+            message: if request.reason.is_empty() {
+                "shutdown accepted".into()
+            } else {
+                format!("shutdown accepted: {}", request.reason)
+            },
         }))
     }
 }

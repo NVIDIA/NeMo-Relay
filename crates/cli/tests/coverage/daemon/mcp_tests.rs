@@ -36,6 +36,8 @@ async fn pending_worker_fixture() -> (ActivationChild, SocketAddr) {
         child: child.into(),
         published: false,
         publication_uncertain: false,
+        tree_owned: false,
+        tree_id: None,
     };
     let address = tokio::time::timeout(Duration::from_secs(10), async {
         let mut lines = tokio::io::BufReader::new(stdout).lines();
@@ -848,6 +850,8 @@ async fn exited_worker_child() -> ActivationChild {
         child: child.into(),
         published: true,
         publication_uncertain: false,
+        tree_owned: false,
+        tree_id: None,
     }
 }
 

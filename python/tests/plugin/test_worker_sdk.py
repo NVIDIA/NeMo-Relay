@@ -3468,6 +3468,94 @@ async def test_serve_plugin_closes_resources_when_server_start_fails(monkeypatch
     assert all(channel.closed for channel in channels)
 
 
+async def test_host_liveness_watcher_reports_eof(monkeypatch: pytest.MonkeyPatch) -> None:
+    read_fd, write_fd = os.pipe()
+    host_lost = asyncio.Event()
+    forced_exit = plugin_api.threading.Event()
+    monkeypatch.setattr(plugin_api.os, "_exit", lambda code: forced_exit.set())
+    try:
+        plugin_api._start_host_liveness_watcher(
+            read_fd,
+            asyncio.get_running_loop(),
+            host_lost,
+        )
+        await asyncio.sleep(0)
+        assert not host_lost.is_set()
+        os.write(write_fd, b"x")
+        await asyncio.sleep(0)
+        assert not host_lost.is_set()
+        os.close(write_fd)
+        write_fd = -1
+        await asyncio.wait_for(host_lost.wait(), timeout=1)
+        assert await asyncio.to_thread(forced_exit.wait, 3)
+    finally:
+        os.close(read_fd)
+        if write_fd >= 0:
+            os.close(write_fd)
+
+
+async def test_serve_plugin_stops_and_closes_resources_on_confirmed_host_loss(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    host_lost = asyncio.Event()
+
+    class FakeChannel:
+        closed = False
+
+        async def close(self) -> None:
+            self.closed = True
+
+    class FakeServer:
+        stopped = False
+
+        def add_insecure_port(self, target: str) -> int:
+            assert target == "127.0.0.1:0"
+            return 43123
+
+        async def start(self) -> None:
+            pass
+
+        async def stop(self, grace: int) -> None:
+            assert grace == 2
+            self.stopped = True
+
+    def start_host_liveness_watcher(
+        descriptor: int,
+        loop: asyncio.AbstractEventLoop,
+        detected: asyncio.Event,
+    ) -> None:
+        assert descriptor == 0
+
+        async def notify() -> None:
+            await host_lost.wait()
+            detected.set()
+
+        loop.create_task(notify())
+
+    channels = [FakeChannel(), FakeChannel()]
+    pending_channels = iter(channels)
+    server = FakeServer()
+    monkeypatch.setattr(plugin_api.grpc.aio, "insecure_channel", lambda target, **kwargs: next(pending_channels))
+    monkeypatch.setattr(plugin_api.grpc.aio, "server", lambda **kwargs: server)
+    monkeypatch.setattr(plugin_api.pb_grpc, "RelayHostRuntimeStub", lambda channel: object())
+    monkeypatch.setattr(plugin_api.pb_grpc, "RelayDiagnosticsStub", lambda channel: object())
+    monkeypatch.setattr(plugin_api.pb_grpc, "add_PluginWorkerServicer_to_server", lambda service, server: None)
+    monkeypatch.setattr(plugin_api, "_start_host_liveness_watcher", start_host_liveness_watcher)
+    monkeypatch.setenv("NEMO_RELAY_WORKER_SOCKET", "tcp://127.0.0.1:0")
+    monkeypatch.setenv("NEMO_RELAY_HOST_SOCKET", "http://127.0.0.1:9")
+    monkeypatch.setenv("NEMO_RELAY_WORKER_ID", ACTIVATION_ID)
+    monkeypatch.setenv("NEMO_RELAY_WORKER_TOKEN", AUTH_TOKEN)
+    monkeypatch.setenv("NEMO_RELAY_HOST_LIVENESS_FD", "0")
+
+    task = asyncio.create_task(serve_plugin(AllSurfacesPlugin()))
+    await asyncio.sleep(0)
+    assert not task.done()
+    host_lost.set()
+    await asyncio.wait_for(task, timeout=1)
+    assert server.stopped
+    assert all(channel.closed for channel in channels)
+
+
 async def test_serve_plugin_closes_resources_when_endpoint_bind_fails(monkeypatch: pytest.MonkeyPatch) -> None:
     """Release both channels and the server when endpoint binding returns no port."""
 

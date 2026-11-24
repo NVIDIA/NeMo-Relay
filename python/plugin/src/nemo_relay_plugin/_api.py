@@ -74,6 +74,7 @@ import os
 import platform
 import stat
 import tempfile
+import threading
 import tomllib
 from collections.abc import AsyncGenerator, AsyncIterator, Awaitable, Callable, Generator, Iterable, Mapping
 from dataclasses import asdict, dataclass, field
@@ -2523,6 +2524,10 @@ async def serve_plugin(plugin: _SupportsWorkerPlugin) -> None:
     host_endpoint = _required_env("NEMO_RELAY_HOST_SOCKET")
     activation_id = _required_env("NEMO_RELAY_WORKER_ID")
     auth_token = _required_env("NEMO_RELAY_WORKER_TOKEN")
+    liveness_value = os.environ.get("NEMO_RELAY_HOST_LIVENESS_FD")
+    if liveness_value not in (None, "0"):
+        raise WorkerSdkError("NEMO_RELAY_HOST_LIVENESS_FD must be 0 when set")
+    liveness_fd = 0 if liveness_value == "0" else None
     endpoint_file = os.environ.get("NEMO_RELAY_WORKER_ENDPOINT_FILE")
     max_message_bytes = _worker_max_message_bytes()
     try:
@@ -2547,6 +2552,8 @@ async def serve_plugin(plugin: _SupportsWorkerPlugin) -> None:
         options=_worker_grpc_options(max([max_message_bytes, *by_name.values()])),
         interceptors=(MessageLimitInterceptor(max_message_bytes, by_name),) if by_name else (),
     )
+    shutdown_wait: asyncio.Task[None] | None = None
+    liveness_wait: asyncio.Task[None] | None = None
     try:
         pb_grpc.add_PluginWorkerServicer_to_server(service, server)
         bound_port = server.add_insecure_port(worker_target)
@@ -2556,13 +2563,59 @@ async def serve_plugin(plugin: _SupportsWorkerPlugin) -> None:
         if endpoint_file:
             path = Path(endpoint_file)
             _write_endpoint_file(path, _announced_worker_endpoint(worker_endpoint, bound_port))
-        await shutdown_event.wait()
+        if liveness_fd is None:
+            await shutdown_event.wait()
+        else:
+            host_lost = asyncio.Event()
+            _start_host_liveness_watcher(
+                liveness_fd,
+                asyncio.get_running_loop(),
+                host_lost,
+            )
+            shutdown_wait = asyncio.create_task(shutdown_event.wait())
+            liveness_wait = asyncio.create_task(host_lost.wait())
+            await asyncio.wait(
+                (shutdown_wait, liveness_wait),
+                return_when=asyncio.FIRST_COMPLETED,
+            )
     finally:
+        for task in (shutdown_wait, liveness_wait):
+            if task is not None and not task.done():
+                task.cancel()
+        if shutdown_wait is not None or liveness_wait is not None:
+            await asyncio.gather(
+                *(task for task in (shutdown_wait, liveness_wait) if task is not None),
+                return_exceptions=True,
+            )
         await server.stop(grace=2)
         try:
             await runtime._close_diagnostics()
         finally:
             await asyncio.gather(host_channel.close(), diagnostic_channel.close())
+
+
+def _start_host_liveness_watcher(
+    descriptor: int,
+    loop: asyncio.AbstractEventLoop,
+    host_lost: asyncio.Event,
+) -> None:
+    """Watch host EOF outside the event loop so blocking plugin code cannot hide host death."""
+
+    def watch() -> None:
+        try:
+            with os.fdopen(os.dup(descriptor), "rb", buffering=0) as pipe:
+                while pipe.read(1):
+                    pass
+        finally:
+            with contextlib.suppress(RuntimeError):
+                loop.call_soon_threadsafe(host_lost.set)
+            # The event loop can be blocked by a synchronous callback, or interpreter teardown
+            # can wait for callback-owned threads after serve_plugin returns. Host loss is
+            # definitive, so enforce the bound independently of cooperative cleanup.
+            threading.Event().wait(timeout=2)
+            os._exit(0)
+
+    threading.Thread(target=watch, name="nemo-relay-host-liveness", daemon=True).start()
 
 
 @dataclass(slots=True)

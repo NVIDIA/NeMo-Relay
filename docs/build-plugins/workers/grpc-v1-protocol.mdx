@@ -175,6 +175,19 @@ service RelayHostRuntime {
 }
 ```
 
+### Host Liveness
+
+Relay-launched workers receive `NEMO_RELAY_HOST_LIVENESS_FD=0`. Standard input is
+reserved as a host-owned liveness pipe for that launch. The worker must stop when
+it reads EOF because EOF confirms that the Relay host closed or exited. The Rust
+and Python worker SDKs implement this behavior.
+
+Do not infer host death from a failed RPC or gRPC connectivity state. Local
+transport failures can be transient. Custom `grpc-v1` workers can monitor the
+liveness descriptor when the environment marker is present; workers launched by
+older hosts receive no marker and continue to use the authenticated `Shutdown`
+RPC.
+
 ## Worker Service
 
 | RPC | Contract |

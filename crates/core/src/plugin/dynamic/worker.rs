@@ -404,6 +404,8 @@ impl WorkerPluginInstance {
             ),
         }
 
+        self.close_host_liveness(&mut outcome);
+
         if let Some(diagnostics) = &self.host_state.diagnostics {
             diagnostics.revoke();
         }
@@ -469,6 +471,23 @@ impl WorkerPluginInstance {
             self.teardown_started.store(false, Ordering::Release);
         }
         outcome
+    }
+
+    fn close_host_liveness(&self, outcome: &mut DynamicPluginTeardownOutcome) {
+        match self.process.lock() {
+            Ok(mut process) => {
+                if let Some(child) = process.as_mut() {
+                    child.stdin.take();
+                }
+            }
+            Err(error) => outcome.record_error(
+                format!(
+                    "worker plugin '{}' process lock poisoned while closing host liveness: {error}",
+                    self.plugin_kind
+                ),
+                false,
+            ),
+        }
     }
 
     fn stop_process_checked(&self, outcome: &mut DynamicPluginTeardownOutcome) {
@@ -1254,6 +1273,7 @@ fn spawn_worker_process(spec: WorkerProcessLaunch<'_>) -> crate::plugin::Result<
         .env("NEMO_RELAY_PLUGIN_ID", spec.plugin_id)
         .env("NEMO_RELAY_WORKER_SOCKET", spec.worker_endpoint)
         .env("NEMO_RELAY_HOST_SOCKET", spec.host_endpoint)
+        .env("NEMO_RELAY_HOST_LIVENESS_FD", "0")
         .env("NEMO_RELAY_WORKER_TOKEN", spec.auth_token)
         .env(
             WORKER_MAX_MESSAGE_BYTES_ENV,
@@ -1264,7 +1284,9 @@ fn spawn_worker_process(spec: WorkerProcessLaunch<'_>) -> crate::plugin::Result<
             serde_json::to_string(&spec.max_message_bytes.by_name)
                 .map_err(|e| PluginError::Internal(e.to_string()))?,
         )
-        .stdin(Stdio::null())
+        // The host retains the write end. EOF on descriptor 0 is a definitive host-death signal
+        // for SDKs that opt into NEMO_RELAY_HOST_LIVENESS_FD.
+        .stdin(Stdio::piped())
         .stdout(Stdio::null())
         .stderr(Stdio::inherit());
     if let Some(path) = spec.worker_endpoint_file {
