@@ -37,7 +37,7 @@ bound root-only stack returns its root. Synthetic propagated entries retain
 stored types, so a synthetic Agent root is not evidence of a known upstream
 Agent. See the [visible-stack contract](/about-nemo-relay/concepts/scopes#inspect-the-visible-stack).
 
-The getter is included in the checked v1.0 runtime interface. A revoked runtime
+The getter is included in the v1.0 native runtime interface. A revoked runtime
 returns an error. The SDK converts the owned checked result without retaining
 host buffers. Async callbacks inspect their restored binding on each read.
 
@@ -170,7 +170,7 @@ Timestamps use `SystemTime`, including times before the Unix epoch.
 
 The diagnostic snapshot is bounded and ordered by code. It is a host-level view, so it
 does not identify the plugin that recorded a diagnostic. These operations require the
-checked v1.0 runtime interface.
+v1.0 native runtime contract.
 
 `runtime_diagnostics()` reads the legacy host report. For canonical recording and
 authorized reads, use `runtime.diagnostics()` as described in

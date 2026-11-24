@@ -15,6 +15,10 @@ Author out-of-process NeMo Relay worker plugins in Python.
 
 ## Classes
 
+### `ApplicationExecutionContext(TypedDict)`
+
+Concrete invocation context with optional application-owned JSON data.
+
 ### `EventSanitizeFields(TypedDict)`
 
 Observability fields returned by event sanitizer callbacks.
@@ -538,7 +542,7 @@ Per-call context provided to a tool execution intercept.
 ##### `ToolExecutionContext`
 
 ```python
-def ToolExecutionContext(tool_name: str, args: Json, tool_call_id: str | None = None) -> None
+def ToolExecutionContext(tool_name: str, args: Json, tool_call_id: str | None = None, execution_context: ApplicationExecutionContext | None = None) -> None
 ```
 
 Create an instance.

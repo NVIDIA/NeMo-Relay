@@ -2,7 +2,7 @@
 title: "Function nemo_relay_stream_source_create"
 sidebar-title: "nemo_relay_stream_source_create"
 description: "Construct a foreign stream source. Relay owns the state when the call starts, even if it fails. The free callback runs exactly once after reads and close finish. Reads run on blocking workers. They restore the Relay middleware context so callbacks can emit observability events. Close callbacks restore the source creation scope and active trace context. Callbacks can use supplied capabilities and emit observability events. Other API calls, including managed-stream control and flushes, are invalid."
-position: 224
+position: 226
 ---
 {/* SPDX-FileCopyrightText: Copyright (c) 2026, NVIDIA CORPORATION & AFFILIATES. All rights reserved.
 SPDX-License-Identifier: Apache-2.0 */}

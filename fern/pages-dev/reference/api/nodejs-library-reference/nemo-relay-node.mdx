@@ -24,6 +24,17 @@ export * as codecs from './codecs.js';
 
 ## Interfaces
 
+### `ApplicationExecutionContext`
+
+Concrete invocation context; application-owned JSON belongs inside data.
+
+```ts
+export interface ApplicationExecutionContext {
+  /** Opaque application fields. Middleware validates their schema and meaning. */
+  data?: JsonObject;
+}
+```
+
 ### `ResourceMetricsPollingConfig`
 
 ```ts
@@ -2035,6 +2046,8 @@ export interface ToolExecutionContext {
   toolName: string
   args: Json
   toolCallId: string | null
+  /** Host-supplied invocation-local JSON object; absent is null. Not event metadata or authority. */
+  executionContext: ApplicationExecutionContext | null
 }
 ```
 
@@ -3518,7 +3531,7 @@ export declare function registerToolConditionalExecutionGuardrail(name: string, 
 
 Register a tool execution intercept following the middleware chain pattern.
 
-The `callable` receives `ToolExecutionContext` and `next`. The context exposes `toolName`, `args`, and `toolCallId`; `toolCallId` is `null` when the managed call has no provider-issued correlation identifier. Call `next(context.args)` to continue the chain, or return an outcome directly to short-circuit execution.
+The `callable` receives `ToolExecutionContext` and `next`. The context exposes `toolName`, `args`, `toolCallId`, and `executionContext`. The latter is a host-supplied JSON object or `null`, separate from event metadata and tool arguments; it grants no authorization. `toolCallId` is `null` when the call has no provider-issued correlation identifier. Call `next(context.args)` to continue the chain, or return an outcome directly to short-circuit execution.
 
 ```ts
 export declare function registerToolExecutionIntercept<TOutcome extends ToolExecutionInterceptOutcomeCompatible<TOutcome>>(name: string, priority: number, callable: (context: ToolExecutionContext, next: <TNextArgs extends JsonCompatible<TNextArgs>>(args: TNextArgs) => ToolExecutionResult | Promise<ToolExecutionResult>) => TOutcome | Promise<TOutcome>): void
@@ -3822,7 +3835,7 @@ export declare function scopeRegisterToolConditionalExecutionGuardrail(scopeUuid
 
 Register a scope-local tool execution intercept following the middleware chain pattern.
 
-The `callable` receives `ToolExecutionContext` and `next`. The context exposes `toolName`, `args`, and `toolCallId`; `toolCallId` is `null` when the managed call has no provider-issued correlation identifier. Call `next(context.args)` to continue the chain, or return an outcome directly to short-circuit execution.
+The `callable` receives `ToolExecutionContext` and `next`. The context exposes `toolName`, `args`, `toolCallId`, and `executionContext`. The latter is a host-supplied JSON object or `null`, separate from event metadata and tool arguments; it grants no authorization. `toolCallId` is `null` when the call has no provider-issued correlation identifier. Call `next(context.args)` to continue the chain, or return an outcome directly to short-circuit execution.
 
 ```ts
 export declare function scopeRegisterToolExecutionIntercept<TOutcome extends ToolExecutionInterceptOutcomeCompatible<TOutcome>>(scopeUuid: string, name: string, priority: number, callable: (context: ToolExecutionContext, next: <TNextArgs extends JsonCompatible<TNextArgs>>(args: TNextArgs) => ToolExecutionResult | Promise<ToolExecutionResult>) => TOutcome | Promise<TOutcome>): void
@@ -3914,20 +3927,20 @@ By default, this call runs these stages:
 
 1. Check conditional-execution guardrails on the original input. 2. Apply request intercepts. 3. Sanitize the request copy in the `Start` event. 4. Run execution intercepts around `func`. 5. Sanitize the response copy in the `End` event.
 
-If a guardrail rejects the call, Relay emits a standalone Mark event. It does not emit a Start/End pair. The call returns `GuardrailRejected`. Sanitizers change event data. They do not change the result returned to the caller. An optional `toolCallId` is recorded in both lifecycle events. Use the last `executionOptions` argument to choose which stages run for this call.
+If a guardrail rejects the call, Relay emits a standalone Mark event. It does not emit a Start/End pair. The call returns `GuardrailRejected`. Sanitizers change event data. They do not change the result returned to the caller. An optional `toolCallId` is recorded in both lifecycle events. Use `executionOptions` to choose which stages run for this call. Optional `executionContext` is a host-supplied JSON object (at most 16 KiB) exposed only to execution intercepts. It is not arguments or event metadata, grants no authorization, and is not inherited by nested calls.
 
 ```ts
-export declare function toolCallExecute<TArgs extends JsonCompatible<TArgs>, TResult extends ToolExecutionResultCompatible<TResult>, TData extends JsonCompatible<TData> = Json, TMetadata extends JsonCompatible<TMetadata> = Json>(name: string, args: TArgs, func: (arg: Json) => TResult, handle?: ScopeHandle | undefined | null, attributes?: number | undefined | null, data?: TData | null, metadata?: TMetadata | null, toolCallId?: string | undefined | null, executionOptions?: ExecutionOptions | undefined | null): Promise<ToolExecutionResult>
+export declare function toolCallExecute<TArgs extends JsonCompatible<TArgs>, TResult extends ToolExecutionResultCompatible<TResult>, TData extends JsonCompatible<TData> = Json, TMetadata extends JsonCompatible<TMetadata> = Json>(name: string, args: TArgs, func: (arg: Json) => TResult, handle?: ScopeHandle | undefined | null, attributes?: number | undefined | null, data?: TData | null, metadata?: TMetadata | null, toolCallId?: string | undefined | null, executionOptions?: ExecutionOptions | undefined | null, executionContext?: ApplicationExecutionContext | null): Promise<ToolExecutionResult>
 ```
 
 ### `toolCallExecuteAsync`
 
 Execute a tool call end-to-end with a callback that returns a value or a Promise.
 
-Runs the same lifecycle as `toolCallExecute`. An optional `toolCallId` is recorded in both lifecycle events. Use the last `executionOptions` argument to choose which stages run for this call.
+Runs the same lifecycle as `toolCallExecute`. An optional `toolCallId` is recorded in both lifecycle events. Use `executionOptions` to choose which stages run for this call. Optional `executionContext` is a host-supplied JSON object (at most 16 KiB) exposed only to execution intercepts. It is not arguments or event metadata, grants no authorization, and is not inherited by nested calls.
 
 ```ts
-export declare function toolCallExecuteAsync<TArgs extends JsonCompatible<TArgs>, TResult extends ToolExecutionResultCompatible<TResult>, TData extends JsonCompatible<TData> = Json, TMetadata extends JsonCompatible<TMetadata> = Json>(name: string, args: TArgs, func: (arg: Json, signal: AbortSignal) => TResult | Promise<TResult>, handle?: ScopeHandle | undefined | null, attributes?: number | undefined | null, data?: TData | null, metadata?: TMetadata | null, toolCallId?: string | undefined | null, executionOptions?: ExecutionOptions | undefined | null): Promise<ToolExecutionResult>
+export declare function toolCallExecuteAsync<TArgs extends JsonCompatible<TArgs>, TResult extends ToolExecutionResultCompatible<TResult>, TData extends JsonCompatible<TData> = Json, TMetadata extends JsonCompatible<TMetadata> = Json>(name: string, args: TArgs, func: (arg: Json, signal: AbortSignal) => TResult | Promise<TResult>, handle?: ScopeHandle | undefined | null, attributes?: number | undefined | null, data?: TData | null, metadata?: TMetadata | null, toolCallId?: string | undefined | null, executionOptions?: ExecutionOptions | undefined | null, executionContext?: ApplicationExecutionContext | null): Promise<ToolExecutionResult>
 ```
 
 ### `toolConditionalExecution`

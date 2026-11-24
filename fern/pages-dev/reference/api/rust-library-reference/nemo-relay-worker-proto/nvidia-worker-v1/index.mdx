@@ -59,6 +59,7 @@ Typed worker contract introduced alongside the legacy API.
 
 - [AnnotatedLlmRequest](/reference/api/rust-library-reference/nemo-relay-worker-proto/nvidia_worker_v1/struct-annotatedllmrequest): Normalized request structure with explicit provider-specific and extension fields.
 - [AnnotatedLlmResponse](/reference/api/rust-library-reference/nemo-relay-worker-proto/nvidia_worker_v1/struct-annotatedllmresponse): Normalized completed response, usage, pricing, and optimization evidence.
+- [ApplicationExecutionContext](/reference/api/rust-library-reference/nemo-relay-worker-proto/nvidia_worker_v1/struct-applicationexecutioncontext): Concrete invocation-local context. The envelope is owned by Relay so future built-in fields do not collide with application-defined keys.
 - [AssistantMessage](/reference/api/rust-library-reference/nemo-relay-worker-proto/nvidia_worker_v1/struct-assistantmessage): Assistant output with independently optional content and tool calls.
 - [BaseEvent](/reference/api/rust-library-reference/nemo-relay-worker-proto/nvidia_worker_v1/struct-baseevent): Common ATOF identity, propagation, timing, and application payload fields.
 - [CacheWriteTokenCounts](/reference/api/rust-library-reference/nemo-relay-worker-proto/nvidia_worker_v1/struct-cachewritetokencounts): Prompt-cache write tokens retained for one cache duration.

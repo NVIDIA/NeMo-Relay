@@ -57,6 +57,8 @@ Each function clears the thread-local error before executing and returns an [`Ne
 - [nemo_relay_adaptive_runtime_wait_for_idle](/reference/api/rust-library-reference/nemo-relay-ffi/api/fn-nemo-relay-adaptive-runtime-wait-for-idle): Wait until the adaptive telemetry drain has processed pending events.
 - [nemo_relay_adaptive_set_latency_sensitivity](/reference/api/rust-library-reference/nemo-relay-ffi/api/fn-nemo-relay-adaptive-set-latency-sensitivity): Set manual latency sensitivity on the current scope.
 - [nemo_relay_adaptive_validate_config](/reference/api/rust-library-reference/nemo-relay-ffi/api/fn-nemo-relay-adaptive-validate-config): Validate an adaptive config document and return the diagnostics report as JSON.
+- [nemo_relay_application_execution_context_normalize_json](/reference/api/rust-library-reference/nemo-relay-ffi/api/fn-nemo-relay-application-execution-context-normalize-json): Normalize application context from borrowed UTF-8 bytes to bounded JSON.
+- [nemo_relay_application_execution_context_value_normalize_json](/reference/api/rust-library-reference/nemo-relay-ffi/api/fn-nemo-relay-application-execution-context-value-normalize-json): Normalize one application-data value within the enclosing context budget.
 - [nemo_relay_atif_exporter_clear](/reference/api/rust-library-reference/nemo-relay-ffi/api/fn-nemo-relay-atif-exporter-clear): Clears all collected events from the exporter.
 - [nemo_relay_atif_exporter_create](/reference/api/rust-library-reference/nemo-relay-ffi/api/fn-nemo-relay-atif-exporter-create): Creates a new ATIF exporter.
 - [nemo_relay_atif_exporter_deregister](/reference/api/rust-library-reference/nemo-relay-ffi/api/fn-nemo-relay-atif-exporter-deregister): Deregisters the exporter subscriber.

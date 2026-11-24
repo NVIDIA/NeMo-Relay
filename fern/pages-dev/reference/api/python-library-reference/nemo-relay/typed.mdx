@@ -154,19 +154,19 @@ Restore a Python value from JSON.
 ### `tool_execute`
 
 ```python
-async def tool_execute(name: str, args: TArgs, func: Callable[[TArgs], Awaitable[ToolExecutionResult[TResult]]], args_codec: Codec[TArgs], result_codec: Codec[TResult], *, handle: ScopeHandle | None = None, attributes: ToolAttributes | None = None, data: Json | None = None, metadata: Json | None = None, tool_call_id: str | None = None, execution_options: ExecutionOptions | None = None) -> ToolExecutionResult[TResult]
+async def tool_execute(name: str, args: TArgs, func: Callable[[TArgs], Awaitable[ToolExecutionResult[TResult]]], args_codec: Codec[TArgs], result_codec: Codec[TResult], *, handle: ScopeHandle | None = None, attributes: ToolAttributes | None = None, data: Json | None = None, metadata: Json | None = None, tool_call_id: str | None = None, execution_options: ExecutionOptions | None = None, execution_context: ApplicationExecutionContext | None = None) -> ToolExecutionResult[TResult]
 ```
 
 ### `tool_execute`
 
 ```python
-async def tool_execute(name: str, args: TArgs, func: Callable[[TArgs], ToolExecutionResult[TResult]], args_codec: Codec[TArgs], result_codec: Codec[TResult], *, handle: ScopeHandle | None = None, attributes: ToolAttributes | None = None, data: Json | None = None, metadata: Json | None = None, tool_call_id: str | None = None, execution_options: ExecutionOptions | None = None) -> ToolExecutionResult[TResult]
+async def tool_execute(name: str, args: TArgs, func: Callable[[TArgs], ToolExecutionResult[TResult]], args_codec: Codec[TArgs], result_codec: Codec[TResult], *, handle: ScopeHandle | None = None, attributes: ToolAttributes | None = None, data: Json | None = None, metadata: Json | None = None, tool_call_id: str | None = None, execution_options: ExecutionOptions | None = None, execution_context: ApplicationExecutionContext | None = None) -> ToolExecutionResult[TResult]
 ```
 
 ### `tool_execute`
 
 ```python
-async def tool_execute(name: str, args: TArgs, func: Callable[[TArgs], ToolExecutionResult[TResult]] | Callable[[TArgs], Awaitable[ToolExecutionResult[TResult]]], args_codec: Codec[TArgs], result_codec: Codec[TResult], *, handle: ScopeHandle | None = None, attributes: ToolAttributes | None = None, data: Json | None = None, metadata: Json | None = None, tool_call_id: str | None = None, execution_options: ExecutionOptions | None = None) -> ToolExecutionResult[TResult]
+async def tool_execute(name: str, args: TArgs, func: Callable[[TArgs], ToolExecutionResult[TResult]] | Callable[[TArgs], Awaitable[ToolExecutionResult[TResult]]], args_codec: Codec[TArgs], result_codec: Codec[TResult], *, handle: ScopeHandle | None = None, attributes: ToolAttributes | None = None, data: Json | None = None, metadata: Json | None = None, tool_call_id: str | None = None, execution_options: ExecutionOptions | None = None, execution_context: ApplicationExecutionContext | None = None) -> ToolExecutionResult[TResult]
 ```
 
 Run `nemo_relay.tools.execute` with typed arguments and results.

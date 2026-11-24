@@ -30,14 +30,21 @@ executors.
 Declare `compat.native_api = "v1.0"` and `load.library` in the manifest. Set
 `compat.relay` to the Relay release range that the plugin supports.
 
-The export macro sets the required native minor from the build SDK. For example,
-a plugin built with SDK contract v1.1 requires a host that supports v1.1 or a
-later minor in major 1. A host that supports v1.1 also supports v1.0 plugins.
+The export macro sets the required native contract from the build SDK. The
+current SDK uses native contract **v1.0**; the manifest and exported descriptor
+must agree. The native contract is independent of Relay's package version and
+the worker protocol version.
 
-Published layouts, enum variants, signatures, marker traits, ownership rules,
-and behavior stay fixed within each contract. Add interfaces through versioned
-modules. Breaking layout or dependency ABI changes require a new native major.
-Dependency updates must pass the binary compatibility tests.
+The complete ABI schema must match before a factory can be created; the version
+string alone does not prove binary compatibility. A plugin built against an
+incompatible invocation layout is rejected, even when its manifest also declares
+v1.0. Rebuild the plugin with an SDK compatible with the host.
+
+Published layouts, enum variants, signatures, marker traits, ownership rules
+and behavior stay fixed within each contract. Add interfaces
+through versioned modules; breaking layout or dependency ABI changes require a
+new native major as appropriate. Dependency updates must pass the binary
+compatibility tests.
 
 ## Values and Capabilities
 
@@ -57,6 +64,25 @@ Adapters restore the callback's scope stack, event parentage, and codecs before
 an invocation and each future poll. After the host revokes a handle, it cannot
 perform runtime operations. Refer to
 [PluginContext](/build-plugins/fundamentals/plugin-context) for codec lifetimes.
+
+### Application Execution Context
+
+The v1.0 invocation carries optional application execution context separately
+from its business argument value. Its concrete native context contains an
+optional `data` map represented by owned lossless JSON fields. The ordinary tool
+callback and registration path carry this envelope.
+
+The SDK exposes the checked `ApplicationExecutionContext` through
+`context.execution_context()` in a Rust tool execution intercept. The outer
+context has Relay-defined fields. Applications put their payloads inside `data`,
+and middleware validates and interprets those payloads. Context never becomes
+part of the tool arguments, and structural validation grants no authorization.
+See [Application Execution Context in Add Middleware](/instrument-applications/advanced-guide#application-execution-context)
+for the schema, limits, trust checks and application integration example.
+
+The host checks the complete declared contract before factory creation. A plugin
+with an incompatible invocation layout fails to load. Rebuild it with an SDK
+compatible with the host.
 
 ### Runtime Scope and Mark Arguments
 
@@ -110,9 +136,9 @@ wakers and destructors must not panic.
 ## Verification
 
 The binary compatibility tests build fixtures in separate Cargo workspaces with
-their own lockfiles. They check v1.0 plugins on v1.1 hosts, required minor and
-major versions, missing modules, changed signatures and marker traits, and
-mismatched descriptors.
+their own lockfiles. They check the current v1.0 schema, required minor and major
+versions, missing modules, changed signatures and marker traits, and mismatched
+descriptors. Obsolete development layouts are not a supported compatibility path.
 
 Run `just build-native-abi-test-fixtures` to prepare these binaries. Use
 `just build-test-plugin-fixtures` for host and SDK tests. `just test-rust`

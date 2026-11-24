@@ -49,6 +49,8 @@ export interface TypedToolExecuteOptions<TData extends JsonCompatible<TData> = J
     data?: TData;
     metadata?: TMetadata;
     toolCallId?: string | null;
+    /** Host-supplied context for execution intercepts: at most 16 KiB and 64 object/array levels (root is level 1); never event metadata. */
+    executionContext?: ApplicationExecutionContext | null;
     executionOptions?: ExecutionOptions | null;
 }
 ```
@@ -115,7 +117,7 @@ Executes a tool call with typed arguments and result.
 - `func`: The tool. It may return the result directly or in a promise.
 - `argsCodec`: Converts the arguments to and from JSON.
 - `resultCodec`: Converts the result to and from JSON.
-- `options`: Scope handle, attributes, data, metadata, and tool call id.
+- `options`: Scope handle, attributes, data, metadata, tool call id, and host execution context.
 
 **Returns**
 
@@ -186,6 +188,7 @@ export declare function typedLlmStreamExecute<TRequest extends LlmRequestCompati
 
 ## Re-exports
 
+- `ApplicationExecutionContext`
 - `Json`
 - `JsonArray`
 - `JsonCompatible`

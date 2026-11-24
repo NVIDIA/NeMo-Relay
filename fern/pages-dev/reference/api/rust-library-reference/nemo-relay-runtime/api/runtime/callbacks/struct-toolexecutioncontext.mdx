@@ -35,6 +35,18 @@ Construct a context for a tool name and argument payload.
 
 Attach the provider-issued tool-call correlation identifier.
 
+#### `with_execution_context`
+
+<pre className="rust-signature"><code dangerouslySetInnerHTML={{"__html": "pub fn with_execution_context(\n    self,\n    execution_context: <a href=\"https://doc.rust-lang.org/1.96.1/core/option/enum.Option.html\">Option</a>&lt;<a href=\"../../tool/struct-applicationexecutioncontext\">ApplicationExecutionContext</a>&gt;,\n) -&gt; <a href=\"../struct-toolexecutioncontext\">ToolExecutionContext</a>"}} /></pre>
+
+Attach invocation-local application context, separate from tool arguments. Managed execution validates the Relay envelope and resource limits at admission. Application-specific keys and policy belong under its `data` field.
+
+#### `execution_context`
+
+<pre className="rust-signature"><code dangerouslySetInnerHTML={{"__html": "pub fn execution_context(&amp;self) -&gt; <a href=\"https://doc.rust-lang.org/1.96.1/core/option/enum.Option.html\">Option</a>&lt;&amp;<a href=\"../../tool/struct-applicationexecutioncontext\">ApplicationExecutionContext</a>&gt;"}} /></pre>
+
+Inspect the caller-supplied context. Relay assigns no authorization meaning. It is not emitted in lifecycle events or inherited by nested calls.
+
 #### `tool_name`
 
 <pre className="rust-signature"><code dangerouslySetInnerHTML={{"__html": "pub fn tool_name(&amp;self) -&gt; &amp;<a href=\"https://doc.rust-lang.org/1.96.1/std/primitive.str.html\">str</a>"}} /></pre>
