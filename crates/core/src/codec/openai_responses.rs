@@ -1627,7 +1627,7 @@ impl Default for OpenAIResponsesStreamingCodec {
 }
 
 impl super::streaming::StreamingCodec for OpenAIResponsesStreamingCodec {
-    /// Forwards a failed response before reporting its error on the next poll.
+    /// Forwards a failed response or error event before reporting its error on the next poll.
     /// Also reports early EOF if this codec's collector did not receive a final response.
     fn validate_stream(&self, stream: LlmJsonStream) -> LlmJsonStream {
         LlmJsonStream::from_closeable(ResponsesCompletionStream {
@@ -1700,10 +1700,14 @@ impl Stream for ResponsesCompletionStream {
         }
         match Pin::new(&mut this.inner).poll_next(cx) {
             Poll::Ready(Some(Ok(event))) => {
-                if !this.terminal_event_seen && is_terminal_response_event(&event) {
-                    this.terminal_event_seen = true;
-                    if event.get("type").and_then(Json::as_str) == Some("response.failed") {
+                if !this.terminal_event_seen {
+                    if event.get("type").and_then(Json::as_str) == Some("error") {
                         this.provider_error = Some(responses_stream_error(&event));
+                    } else if is_terminal_response_event(&event) {
+                        this.terminal_event_seen = true;
+                        if event.get("type").and_then(Json::as_str) == Some("response.failed") {
+                            this.provider_error = Some(responses_stream_error(&event));
+                        }
                     }
                 }
                 Poll::Ready(Some(Ok(event)))
@@ -1738,11 +1742,15 @@ impl Stream for ResponsesCompletionStream {
     }
 }
 
-/// Describes a provider failure from a terminal `response.failed` event.
+/// Describes a provider failure from a `response.failed` or standalone `error` event.
 fn responses_stream_error(event: &Json) -> FlowError {
-    let error = event
-        .get("response")
-        .and_then(|response| response.get("error"));
+    let error = if event.get("type").and_then(Json::as_str) == Some("error") {
+        Some(event)
+    } else {
+        event
+            .get("response")
+            .and_then(|response| response.get("error"))
+    };
     let code = error
         .and_then(|error| error.get("code"))
         .and_then(Json::as_str)

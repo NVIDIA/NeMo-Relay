@@ -1054,6 +1054,20 @@ async fn responses_stream_validation_checks_completion_and_preserves_close() {
         (vec![incomplete.clone()], false),
         (vec![completed, failed.clone()], false),
         (vec![incomplete, failed], false),
+        (
+            vec![
+                json!({"type": "response.completed", "response": {"status": "completed"}}),
+                json!({"type": "error", "code": "server_error", "message": "late error"}),
+            ],
+            false,
+        ),
+        (
+            vec![
+                json!({"type": "future.event"}),
+                json!({"type": "response.completed", "response": {"status": "completed"}}),
+            ],
+            false,
+        ),
     ] {
         let codec = OpenAIResponsesStreamingCodec::new();
         let close_calls = Arc::new(AtomicUsize::new(0));
@@ -1147,6 +1161,28 @@ async fn responses_stream_validation_reports_failure_before_reading_the_source_a
             LlmJsonStream::new(tokio_stream::pending()),
             "OpenAI Responses stream reported error: response failed",
         ),
+        (
+            json!({"type": "error", "code": "server_error", "message": "Generation failed", "param": null, "sequence_number": 3}),
+            make_stream(vec![]),
+            description,
+        ),
+        (
+            json!({"type": "error", "code": "server_error", "message": "Generation failed"}),
+            LlmJsonStream::new(tokio_stream::pending()),
+            description,
+        ),
+        (
+            json!({"type": "error", "code": "server_error", "message": "Generation failed"}),
+            make_stream(vec![Err(FlowError::Internal(
+                "later transport error".into(),
+            ))]),
+            description,
+        ),
+        (
+            json!({"type": "error", "code": null, "message": "Generation failed"}),
+            LlmJsonStream::new(tokio_stream::pending()),
+            "OpenAI Responses stream reported error: Generation failed",
+        ),
     ] {
         let close_calls = Arc::new(AtomicUsize::new(0));
         let source = LlmJsonStream::from_closeable(CloseTrackingStream {
@@ -1189,6 +1225,7 @@ async fn responses_sessions_keep_usage_and_flag_eof_without_terminal_events() {
         "late_snapshot",
         "terminal_without_usage",
         "provider_failure",
+        "provider_error_event",
     ] {
         let session = push_scope(
             PushScopeParams::builder()
@@ -1210,7 +1247,14 @@ async fn responses_sessions_keep_usage_and_flag_eof_without_terminal_events() {
                     "item": {"type": "message", "content": [{"type": "output_text", "text": "retained output"}]}
                 }),
             ];
-            if !(affected && scenario == "missing_terminal") {
+            if affected && scenario == "provider_error_event" {
+                chunks.push(json!({
+                    "type": "response.in_progress",
+                    "response": {"id": "resp_session", "model": "gpt-test", "status": "in_progress",
+                        "usage": {"input_tokens": 25208, "output_tokens": 356}}
+                }));
+                chunks.push(json!({"type": "error", "code": "server_error", "message": "Generation failed"}));
+            } else if !(affected && scenario == "missing_terminal") {
                 let usage = if affected && scenario == "terminal_without_usage" {
                     Json::Null
                 } else {
@@ -1259,7 +1303,12 @@ async fn responses_sessions_keep_usage_and_flag_eof_without_terminal_events() {
             for expected in expected_chunks {
                 assert_eq!(wrapper.next().await.unwrap().unwrap(), expected);
             }
-            if affected && matches!(scenario, "missing_terminal" | "provider_failure") {
+            if affected
+                && matches!(
+                    scenario,
+                    "missing_terminal" | "provider_failure" | "provider_error_event"
+                )
+            {
                 assert!(wrapper.next().await.unwrap().is_err());
             }
             assert!(wrapper.next().await.is_none());
@@ -1275,7 +1324,8 @@ async fn responses_sessions_keep_usage_and_flag_eof_without_terminal_events() {
         ends.sort_by_key(|event| event.metadata().unwrap()["call_index"].as_u64().unwrap());
         for (call, end) in ends.iter().enumerate() {
             let missing_terminal = call == 1 && scenario == "missing_terminal";
-            let provider_failure = call == 1 && scenario == "provider_failure";
+            let provider_failure =
+                call == 1 && matches!(scenario, "provider_failure" | "provider_error_event");
             let metadata = end.metadata().unwrap();
             assert_eq!(
                 metadata["otel.status_code"],

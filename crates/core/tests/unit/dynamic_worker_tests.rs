@@ -6258,3 +6258,31 @@ fn group_liveness_reports_live_members_and_ignores_zombies() {
     zombie_only.wait().unwrap();
     mixed.wait().unwrap();
 }
+
+#[test]
+fn block_on_handle_on_a_runtime_worker_keeps_that_runtime_running() {
+    // Gate callbacks block on the worker-host runtime from inside its own host RPC handlers.
+    // The awaited call needs that runtime's scheduler and timer, so blocking its only worker
+    // thread must not stall it.
+    let runtime = tokio::runtime::Builder::new_multi_thread()
+        .worker_threads(1)
+        .enable_all()
+        .build()
+        .unwrap();
+    let handle = runtime.handle().clone();
+    let (result_tx, result_rx) = std::sync::mpsc::channel();
+    runtime.spawn(async move {
+        let value = block_on_handle(&handle, async {
+            tokio::spawn(async {
+                tokio::time::sleep(std::time::Duration::from_millis(10)).await;
+                7
+            })
+            .await
+            .unwrap()
+        });
+        let _ = result_tx.send(value);
+    });
+    let result = result_rx.recv_timeout(std::time::Duration::from_secs(5));
+    runtime.shutdown_background();
+    assert_eq!(result, Ok(7));
+}

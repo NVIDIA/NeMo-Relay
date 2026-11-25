@@ -4359,6 +4359,46 @@ async fn streaming_response_delivers_the_first_chunk_once_and_completes() {
 }
 
 #[tokio::test]
+async fn responses_error_event_is_forwarded_before_a_stalled_stream_is_closed() {
+    use futures_util::StreamExt;
+    use nemo_relay::codec::openai_responses::OpenAIResponsesStreamingCodec;
+
+    let error = json!({
+        "type": "error", "code": "server_error", "message": "Generation failed",
+        "param": null, "sequence_number": 2
+    });
+    let source = LlmJsonStream::new(
+        futures_util::stream::iter([Ok(error.clone())]).chain(futures_util::stream::pending()),
+    );
+    let codec = OpenAIResponsesStreamingCodec::new();
+    let (_manager, guard) = stream_error_test_guard("responses-error-event").await;
+    let body = prepare_streaming_response_body(
+        codec.validate_stream(source),
+        ProviderRoute::OpenAiResponses,
+        guard,
+        None,
+    )
+    .await
+    .unwrap();
+    let bytes = tokio::time::timeout(Duration::from_secs(1), body.collect())
+        .await
+        .expect("provider error must finish the response without waiting for upstream EOF")
+        .unwrap()
+        .to_bytes();
+    let text = std::str::from_utf8(&bytes).unwrap();
+    let events: Vec<Value> = text
+        .lines()
+        .filter_map(|line| line.strip_prefix("data: "))
+        .map(|data| serde_json::from_str(data).unwrap())
+        .collect();
+    assert_eq!(events.len(), 2);
+    assert_eq!(events[0], error);
+    assert_eq!(events[1]["type"], "error");
+    assert_eq!(events[1]["code"], "stream_error");
+    assert_eq!(events[1]["sequence_number"], 3);
+}
+
+#[tokio::test]
 async fn streaming_response_reports_midstream_errors_in_the_provider_protocol() {
     for route in [
         ProviderRoute::OpenAiChatCompletions,
